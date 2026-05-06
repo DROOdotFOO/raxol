@@ -110,6 +110,7 @@ packages/
 ├── raxol_agent/     # AI agent framework (depends on main raxol)
 ├── raxol_mcp/       # MCP protocol: server, client, registry, tool derivation, test harness
 ├── raxol_payments/  # Agent payments: x402/MPP auto-pay, Xochi cross-chain, wallet, spending
+├── raxol_acp/       # Virtuals Agent Commerce Protocol: jobs, offerings, EIP-712 memos
 ├── raxol_liveview/  # LiveView bridge: TerminalBridge, TEALive, TerminalComponent, themes
 ├── raxol_plugin/    # Plugin SDK: use macro, API facade, testing utils, generator
 ├── raxol_speech/    # Speech surface: TTS (say/espeak), STT (Bumblebee/Whisper), voice commands
@@ -127,6 +128,7 @@ raxol_liveview --> raxol_core (+ phoenix_live_view optional)
 raxol_plugin --> raxol_core
 raxol_agent --> raxol, raxol_mcp (main does NOT depend on raxol_agent)
 raxol_payments --> raxol_agent (runtime: false, compile-time only)
+raxol_acp --> raxol_payments, raxol_mcp (runtime: false); main does NOT depend on raxol_acp
 raxol_speech --> raxol_core (+ bumblebee/nx/exla optional for STT)
 raxol_telegram --> raxol_core, raxol (optional, for Lifecycle runtime; + telegex optional)
 raxol_watch --> raxol_core (+ pigeon optional for APNS/FCM)
@@ -144,7 +146,8 @@ cd packages/raxol_terminal && MIX_ENV=test mix test    # ~1928 tests
 cd packages/raxol_sensor && MIX_ENV=test mix test      # ~55 tests
 cd packages/raxol_agent && MIX_ENV=test mix test       # ~401 tests
 cd packages/raxol_mcp && MIX_ENV=test mix test         # ~232 tests + 31 properties
-cd packages/raxol_payments && MIX_ENV=test mix test    # ~347 tests
+cd packages/raxol_payments && MIX_ENV=test mix test    # ~355 tests
+cd packages/raxol_acp && MIX_ENV=test mix test         # ~124 tests
 cd packages/raxol_liveview && MIX_ENV=test mix test    # ~50 tests
 cd packages/raxol_plugin && MIX_ENV=test mix test      # ~50 tests
 cd packages/raxol_speech && MIX_ENV=test mix test      # ~28 tests
@@ -204,6 +207,8 @@ lib/raxol/
 **Privacy & Stealth** (in `packages/raxol_payments/`): `Xochi.Stealth` implements ERC-5564/ERC-6538 stealth addresses (~300 LOC, secp256k1). ECDH derivation, view tag scanning (256x speedup), domain-separated key derivation, meta-address encode/decode. `Pxe.Client` is a JSON-RPC 2.0 client for the Aztec Private eXecution Environment (shielded settlement). `PrivacyTier` maps trust scores to privacy tiers (Glass Cube model, 6 tiers). `Zksar` verifies ZKSAR attestation proofs (6 ZK proof types). `Zksar.TrustScore` aggregates with diminishing returns. Router is attestation-aware. Riddler solver wiring (ADR-0005) is complete on both sides.
 
 **Payment Protocol Routing**: `Raxol.Payments.Router.select/1` picks the protocol. Same-chain HTTP 402 goes to x402/MPP (auto-pay). Cross-chain goes to Xochi (cash-positive, tier fees 0.10-0.30%). Privacy (stealth/shielded) also goes to Xochi. The intent flow: `get_quote/2` -> `execute/3` (wallet signs EIP-712) -> `poll_status/3`. `Xochi.Client` talks to the Xochi API (`/api/intent/quote`, `/api/intent/execute`, `/api/intent/:id/status`). Riddler solves intents behind the scenes. `Protocols.Riddler` + `Riddler.Client` give direct solver access (Commerce API, B2B only -- don't use for agent payments, it's cash-negative). See `../riddler/docs/architecture/decisions/0005-xochi-integration.md` for the rationale.
+
+**Agent Commerce Protocol** (in `packages/raxol_acp/`, pre-alpha): Elixir/OTP-native implementation of the Virtuals ACP for selling agent services on Base. One supervised `Raxol.ACP.Job.Server` per active job (mirrors `Raxol.Agent.Session` pattern: Registry-via lookup + DynamicSupervisor + transient restart). `Raxol.ACP.Job.StateMachine` is a pure module; states are `:request -> :negotiation -> :transaction -> :evaluation -> :completed` plus `:expired`. `Raxol.ACP.Job.Memo` builds + signs EIP-712 memos via `Raxol.Payments.EIP712` and any `Raxol.Payments.Wallet` impl. `Raxol.ACP.Wallet.NonceServer` serializes EVM nonce assignment via the GenServer mailbox (the integration plan claimed process-per-job avoided concurrent-Alchemy collisions; it doesn't, this does). `Raxol.ACP.ContractClient` is a behaviour with two real impls -- `InMemory` for tests, `Onchain` (RPC) for production (pending). `Raxol.ACP.ABI` is a hand-rolled Solidity encoder for the four ACP methods, verified against canonical ERC-20 selectors. `Raxol.ACP.Offering` DSL: `use Raxol.ACP.Offering, name:, price_usdc:, sla_minutes:, cluster:` injects the `Handler` behaviour and registers metadata; the `Registry` (ETS) stores offering specs. Handler integration in `Job.Server.accept_request/1` and `deliver/1` auto-invokes the configured handler module + auto-signs via the configured wallet. Self-starts via `RaxolAcp.Application` outside `:test`. Depends on raxol_payments at runtime, raxol_mcp compile-time only. Pending: `ContractClient.Onchain` (RPC + RLP/EIP-1559), `Job.Store` (ETS persistence), `Wallet.SCA`, `Seller.{Runtime, Queue, Supervisor}`, `mix raxol_acp.bench`.
 
 **Cross-repo payment method types** (canonical in Xochi `src/types/intent.ts`):
 
@@ -299,6 +304,7 @@ These namespaces are settled -- don't create new top-level alternatives:
 - `Raxol.Headless.*` - Headless session manager, EventBuilder, TextCapture, McpTools
 - `Raxol.MCP.*` - MCP protocol (server, client, registry, transports, tool derivation)
 - `Raxol.Payments.*` - Agent payments (protocols, wallets, spending, actions) in raxol_payments package
+- `Raxol.ACP.*` - Virtuals Agent Commerce Protocol (jobs, offerings, memos) in raxol_acp package
 - `Raxol.Plugin` - Plugin SDK macro (`use Raxol.Plugin`), API, testing in raxol_plugin package
 - `Raxol.Animation.*` - Animation hints (`Helpers`, `Hint`) in main raxol; CSS mapping in `Raxol.Core.Animation.Hint` (raxol_core package)
 
@@ -335,7 +341,8 @@ Configuration: `fly.toml`, Dockerfile: `docker/Dockerfile.web`
 
 ## Hex Publishing
 
-All 11 packages are published to Hex. Publish order matters (dependency chain):
+11 packages are published to Hex; `raxol_acp` is pre-alpha and not yet
+published. Publish order matters (dependency chain):
 
 ```bash
 # 1. No raxol deps (parallel)
@@ -359,6 +366,9 @@ cd packages/raxol_telegram && HEX_BUILD=1 mix deps.get && HEX_BUILD=1 mix hex.pu
 
 # 5. Depends on raxol_agent
 cd packages/raxol_payments && HEX_BUILD=1 mix deps.get && HEX_BUILD=1 mix hex.publish
+
+# 6. Depends on raxol_payments (raxol_acp -- not yet published)
+# cd packages/raxol_acp && HEX_BUILD=1 mix deps.get && HEX_BUILD=1 mix hex.publish
 ```
 
 `HEX_BUILD=1` strips `path:` and `override:` from deps so `mix hex.build` sees only Hex packages. Without it, local path deps are used for development.
