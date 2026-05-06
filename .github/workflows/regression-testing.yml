@@ -212,7 +212,7 @@ jobs:
       run: elixir scripts/analyze_performance_regression.exs
 
     - name: Upload performance artifacts
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       if: always()
       with:
         name: performance-results-${{ matrix.elixir }}-${{ matrix.otp }}
@@ -406,7 +406,7 @@ jobs:
       run: elixir scripts/analyze_memory_regression.exs ${{ matrix.scenario }}
 
     - name: Upload memory artifacts
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       if: always()
       with:
         name: memory-results-${{ matrix.scenario }}-${{ matrix.elixir }}-${{ matrix.otp }}
@@ -478,7 +478,7 @@ jobs:
         echo "All detailed reports and artifacts are available in the workflow artifacts." >> consolidated-reports/regression_summary.md
 
     - name: Upload consolidated report
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: consolidated-regression-report
         path: consolidated-reports/
@@ -666,7 +666,7 @@ jobs:
         echo "Comprehensive analysis completed"
 
     - name: Upload nightly analysis
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: nightly-comprehensive-analysis-${{ env.NIGHTLY_DATE }}
         path: regression/nightly/
