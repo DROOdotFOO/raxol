@@ -222,14 +222,14 @@ jobs:
           MIX_TEST_PARTITION: 1
 
       - name: Upload coverage
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-unit
           path: cover/unit.coverdata
 
       - name: Upload boot metrics
         if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: boot-metrics-unit
           path: _build/test/boot_metrics.json
@@ -285,7 +285,7 @@ jobs:
           MIX_TEST_PARTITION: 2
       
       - name: Upload coverage
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-integration
           path: cover/integration.coverdata
@@ -321,7 +321,7 @@ jobs:
           MIX_TEST_PARTITION: 3
       
       - name: Upload coverage
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-property
           path: cover/property.coverdata
