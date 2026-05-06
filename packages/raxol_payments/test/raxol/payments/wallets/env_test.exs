@@ -52,58 +52,6 @@ defmodule Raxol.Payments.Wallets.EnvTest do
     end
   end
 
-  describe "eip712_hash/3" do
-    test "valid typed data produces a 32-byte hash" do
-      message = %{to: "0x" <> String.duplicate("cd", 20), amount: 1000}
-
-      assert {:ok, hash} = Env.eip712_hash(@domain, @types, message)
-      assert byte_size(hash) == 32
-    end
-
-    test "invalid hex in address field returns error" do
-      message = %{to: "0xZZZZ", amount: 1000}
-
-      assert {:error, {:invalid_hex, "address"}} =
-               Env.eip712_hash(@domain, @types, message)
-    end
-
-    test "address with wrong byte length returns error" do
-      # 10 bytes instead of 20
-      short_addr = "0x" <> String.duplicate("ab", 10)
-      message = %{to: short_addr, amount: 1000}
-
-      assert {:error, {:invalid_address_length, 10}} =
-               Env.eip712_hash(@domain, @types, message)
-    end
-
-    test "invalid uint256 string returns error" do
-      types = %{"Transfer" => [{"to", "address"}, {"amount", "uint256"}]}
-      message = %{to: "0x" <> String.duplicate("cd", 20), amount: "not_a_number"}
-
-      assert {:error, {:invalid_uint256, "not_a_number"}} =
-               Env.eip712_hash(@domain, types, message)
-    end
-
-    test "invalid hex in bytes32 field returns error" do
-      types = %{"Record" => [{"hash", "bytes32"}]}
-      message = %{hash: "0xNOTHEX"}
-
-      assert {:error, {:invalid_hex, "bytes32"}} =
-               Env.eip712_hash(%{name: "Test"}, types, message)
-    end
-
-    test "field name not an existing atom does not crash" do
-      # Use a field name unlikely to exist as an atom
-      novel_field = "zzz_never_atomized_#{System.unique_integer([:positive])}"
-      types = %{"Foo" => [{novel_field, "uint256"}]}
-      # Data keyed by string -- safe_atom_get will rescue ArgumentError and return nil
-      message = %{}
-
-      assert {:ok, hash} = Env.eip712_hash(%{name: "Test"}, types, message)
-      assert byte_size(hash) == 32
-    end
-  end
-
   describe "sign_typed_data/4" do
     test "returns {:ok, signature} for valid data" do
       message = %{to: "0x" <> String.duplicate("cd", 20), amount: 1000}
@@ -113,7 +61,7 @@ defmodule Raxol.Payments.Wallets.EnvTest do
       assert byte_size(sig) == 65
     end
 
-    test "propagates eip712_hash errors for invalid address" do
+    test "propagates EIP-712 hash errors for invalid address" do
       message = %{to: "0xZZZZ", amount: 1000}
 
       assert {:error, {:invalid_hex, "address"}} =
