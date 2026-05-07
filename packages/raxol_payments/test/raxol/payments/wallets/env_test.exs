@@ -76,4 +76,57 @@ defmodule Raxol.Payments.Wallets.EnvTest do
                Env.sign_typed_data(@domain, @types, message, @test_env_var)
     end
   end
+
+  describe "sign_hash/2" do
+    @digest String.duplicate(<<0xAB>>, 32)
+
+    test "returns a 65-byte signature for a valid 32-byte digest" do
+      assert {:ok, sig} = Env.sign_hash(@digest, @test_env_var)
+      assert byte_size(sig) == 65
+    end
+
+    test "is deterministic for the same digest" do
+      {:ok, sig1} = Env.sign_hash(@digest, @test_env_var)
+      {:ok, sig2} = Env.sign_hash(@digest, @test_env_var)
+
+      assert sig1 == sig2
+    end
+
+    test "different digests yield different signatures" do
+      {:ok, sig1} = Env.sign_hash(@digest, @test_env_var)
+      other = String.duplicate(<<0xCD>>, 32)
+      {:ok, sig2} = Env.sign_hash(other, @test_env_var)
+
+      refute sig1 == sig2
+    end
+
+    test "signature is r(32) || s(32) || y_parity(0 or 1)" do
+      {:ok, <<_r::binary-size(32), _s::binary-size(32), v::8>>} =
+        Env.sign_hash(@digest, @test_env_var)
+
+      assert v in [0, 1]
+    end
+
+    test "returns error when env var not set" do
+      System.delete_env(@test_env_var)
+
+      assert {:error, {:env_not_set, @test_env_var}} =
+               Env.sign_hash(@digest, @test_env_var)
+    end
+
+    test "does NOT pre-hash (input must already be a digest)" do
+      # If sign_hash mistakenly keccak'd its input, signing the digest of
+      # "hello" would equal signing keccak256(keccak256("hello")). Verify
+      # by signing the actual digest of "hello" and comparing.
+      message = "hello"
+      pre_hashed = ExKeccak.hash_256(message)
+
+      {:ok, via_hash} = Env.sign_hash(pre_hashed, @test_env_var)
+      {:ok, via_message} = Env.sign_message(message, @test_env_var)
+
+      # Both should arrive at the same signature: sign_message hashes
+      # internally, sign_hash takes the digest. Equivalent end-state.
+      assert via_hash == via_message
+    end
+  end
 end

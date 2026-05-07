@@ -52,6 +52,16 @@ defmodule Raxol.Payments.Wallets.Op do
     GenServer.call(server, {:sign_typed_data, domain, types, message})
   end
 
+  @doc """
+  Sign a precomputed 32-byte digest. Mirrors `Raxol.Payments.Wallet.sign_hash/1`
+  with a server argument; used by EIP-1559 transaction signing.
+  """
+  @spec sign_hash(GenServer.server(), <<_::256>>) ::
+          {:ok, binary()} | {:error, term()}
+  def sign_hash(server, <<_::binary-size(32)>> = digest) do
+    GenServer.call(server, {:sign_hash, digest})
+  end
+
   # -- GenServer callbacks --
 
   @impl true
@@ -96,6 +106,17 @@ defmodule Raxol.Payments.Wallets.Op do
     case ensure_loaded(state) do
       {:ok, state} ->
         result = do_sign_typed_data(state.privkey, domain, types, message)
+        {:reply, result, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:sign_hash, digest}, _from, state) do
+    case ensure_loaded(state) do
+      {:ok, state} ->
+        result = do_sign_hash(state.privkey, digest)
         {:reply, result, state}
 
       {:error, reason} ->
@@ -164,6 +185,16 @@ defmodule Raxol.Payments.Wallets.Op do
         {:error, reason} ->
           {:error, {:sign_failed, reason}}
       end
+    end
+  end
+
+  defp do_sign_hash(privkey, <<_::binary-size(32)>> = digest) do
+    case ExSecp256k1.sign(digest, privkey) do
+      {:ok, {r, s, v}} ->
+        {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
+
+      {:error, reason} ->
+        {:error, {:sign_failed, reason}}
     end
   end
 end

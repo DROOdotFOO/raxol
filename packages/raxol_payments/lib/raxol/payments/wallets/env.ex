@@ -50,6 +50,11 @@ defmodule Raxol.Payments.Wallets.Env do
       def sign_typed_data(domain, types, message) do
         Raxol.Payments.Wallets.Env.sign_typed_data(domain, types, message, unquote(env_var))
       end
+
+      @impl true
+      def sign_hash(digest) do
+        Raxol.Payments.Wallets.Env.sign_hash(digest, unquote(env_var))
+      end
     end
   end
 
@@ -66,6 +71,9 @@ defmodule Raxol.Payments.Wallets.Env do
   def sign_typed_data(domain, types, message) do
     sign_typed_data(domain, types, message, @default_env_var)
   end
+
+  @impl true
+  def sign_hash(digest), do: sign_hash(digest, @default_env_var)
 
   @doc false
   @spec address(String.t()) :: String.t()
@@ -101,6 +109,20 @@ defmodule Raxol.Payments.Wallets.Env do
     with {:ok, privkey} <- load_key(env_var),
          {:ok, hash} <- Raxol.Payments.EIP712.hash(domain, types, message) do
       case ExSecp256k1.sign(hash, privkey) do
+        {:ok, {r, s, v}} ->
+          {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
+
+        {:error, reason} ->
+          {:error, {:sign_failed, reason}}
+      end
+    end
+  end
+
+  @doc false
+  @spec sign_hash(<<_::256>>, String.t()) :: {:ok, binary()} | {:error, term()}
+  def sign_hash(<<digest::binary-size(32)>>, env_var) do
+    with {:ok, privkey} <- load_key(env_var) do
+      case ExSecp256k1.sign(digest, privkey) do
         {:ok, {r, s, v}} ->
           {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
 
