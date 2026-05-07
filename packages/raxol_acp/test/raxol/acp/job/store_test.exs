@@ -135,6 +135,158 @@ defmodule Raxol.ACP.Job.StoreTest do
     end
   end
 
+  describe "DETS persistence (configured via :job_store_path)" do
+    # These tests do NOT touch the global supervised Store. They open a
+    # fresh DETS file directly + drive Store's init/1 against it, so we
+    # can observe encode/replay/teardown without :rest_for_one cascade
+    # restarts on every recycle. Hydration semantics are the same as a
+    # supervised restart -- it's the same `init/1` path either way.
+
+    setup do
+      tmp =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol_acp_store_#{System.unique_integer([:positive])}.dets"
+        )
+
+      on_exit(fn -> File.rm(tmp) end)
+
+      %{path: tmp}
+    end
+
+    defp open_dets!(path) do
+      {:ok, table} =
+        :dets.open_file(:raxol_acp_test_dets, type: :set, file: String.to_charlist(path))
+
+      table
+    end
+
+    defp insert_dets!(table, job_id, record) do
+      :ok = :dets.insert(table, {job_id, record})
+    end
+
+    defp close_dets!(table) do
+      _ = :dets.sync(table)
+      :ok = :dets.close(table)
+    end
+
+    test "init/1 hydrates ETS from an existing DETS file", %{path: path} do
+      record = %{
+        state: :evaluation,
+        memos: [memo(:evaluation, %{step: 3}, "tx-3")],
+        updated_at: DateTime.utc_now()
+      }
+
+      table = open_dets!(path)
+      insert_dets!(table, "hydrate-1", record)
+      close_dets!(table)
+
+      :ok = with_persistent_store(path)
+      on_exit(fn -> recycle_to_ets_only() end)
+
+      assert {:ok, %{state: :evaluation, memos: [m]}} = Store.load("hydrate-1")
+      assert m.tx_hash == "tx-3"
+    end
+
+    test "save/3 mirrors to DETS so a later open observes the record", %{path: path} do
+      :ok = with_persistent_store(path)
+      on_exit(fn -> recycle_to_ets_only() end)
+
+      :ok = Store.save("disk-1", :negotiation, [memo(:negotiation, %{step: 1}, "tx-1")])
+      :ok = recycle_to_ets_only()
+
+      table = open_dets!(path)
+      [{"disk-1", %{state: :negotiation, memos: [m]}}] = :dets.lookup(table, "disk-1")
+      close_dets!(table)
+
+      assert m.tx_hash == "tx-1"
+    end
+
+    test "delete/1 mirrors to DETS", %{path: path} do
+      :ok = with_persistent_store(path)
+      on_exit(fn -> recycle_to_ets_only() end)
+
+      :ok = Store.save("disk-2", :request, [])
+      :ok = Store.delete("disk-2")
+      :ok = recycle_to_ets_only()
+
+      table = open_dets!(path)
+      assert [] = :dets.lookup(table, "disk-2")
+      close_dets!(table)
+    end
+
+    test "clear/0 wipes DETS too", %{path: path} do
+      :ok = with_persistent_store(path)
+      on_exit(fn -> recycle_to_ets_only() end)
+
+      :ok = Store.save("disk-a", :request, [])
+      :ok = Store.save("disk-b", :request, [])
+      :ok = Store.clear()
+      :ok = recycle_to_ets_only()
+
+      table = open_dets!(path)
+      assert :dets.info(table, :size) == 0
+      close_dets!(table)
+    end
+  end
+
+  # Stop the supervised Store and wait for the supervisor to bring it
+  # back. Used by the persistence tests to flush DETS before inspecting
+  # the file.
+  defp stop_store! do
+    case Process.whereis(Store) do
+      nil ->
+        wait_for_named(Store)
+
+      pid ->
+        ref = Process.monitor(pid)
+        :ok = GenServer.stop(pid, :normal)
+
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _} -> :ok
+        after
+          2_000 -> raise "Store did not stop"
+        end
+
+        wait_for_named(Store)
+    end
+  end
+
+  # Configure DETS path + recycle Store so the new init opens a fresh
+  # DETS handle.
+  defp with_persistent_store(path) do
+    Application.put_env(:raxol_acp, :job_store_path, path)
+    stop_store!()
+  end
+
+  # Drop Store's DETS handle (terminate syncs + closes DETS) and let
+  # the supervisor restart it WITHOUT a DETS path. The DETS file
+  # becomes unlocked so the test can open it directly. Idempotent.
+  defp recycle_to_ets_only do
+    Application.delete_env(:raxol_acp, :job_store_path)
+    stop_store!()
+  end
+
+  defp wait_for_named(name, timeout_ms \\ 2_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_named(name, deadline)
+  end
+
+  defp do_wait_for_named(name, deadline) do
+    case Process.whereis(name) do
+      nil ->
+        if System.monotonic_time(:millisecond) < deadline do
+          Process.sleep(5)
+          do_wait_for_named(name, deadline)
+        else
+          raise "#{inspect(name)} never came back online"
+        end
+
+      _pid ->
+        :ok
+    end
+  end
+
   describe "Job.Server integration: transient restart" do
     test "every successful transition writes through to the Store" do
       {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.50"), <<>>)

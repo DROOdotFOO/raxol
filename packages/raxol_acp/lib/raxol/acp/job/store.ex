@@ -19,6 +19,27 @@ defmodule Raxol.ACP.Job.Store do
   GenServer (so concurrent writes don't race), reads bypass it via
   direct ETS lookups (`read_concurrency: true`).
 
+  ## Optional disk persistence
+
+  Set `:job_store_path` in `Application` config to mirror writes to a
+  DETS file. On `init/1`, the Store opens (or creates) the file and
+  replays its contents into ETS. Reads stay in-process; writes go to
+  ETS first then DETS. ETS holds the live state, DETS is the
+  durability layer.
+
+      config :raxol_acp,
+        job_store_path: "/var/lib/raxol_acp/jobs.dets"
+
+  When `:job_store_path` is unset, the Store is in-memory only --
+  records die with the supervisor. This is the appropriate default
+  for tests and for buyer-only deployments that don't need crash
+  recovery.
+
+  DETS auto-syncs on a periodic timer, and the Store's `terminate/2`
+  callback flushes + closes the file on graceful shutdown. A SIGKILL
+  can lose the most recent write window; use a real database if
+  stronger guarantees are needed.
+
   ## Caveats (v0.1)
 
   - Persistence happens after `ContractClient.submit_memo` returns
@@ -28,8 +49,6 @@ defmodule Raxol.ACP.Job.Store do
     is the backstop.
   - Records are never auto-deleted, even after terminal states. Use
     `delete/1` or `clear/0` for cleanup.
-  - In-memory only; ETS dies with the supervisor. A proper persistent
-    store (DETS, disk_log, or external db) lands in a follow-up.
   """
 
   use GenServer
@@ -112,13 +131,21 @@ defmodule Raxol.ACP.Job.Store do
   @impl true
   def init(_opts) do
     table = :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
-    {:ok, %{table: table}}
+
+    dets =
+      case Application.get_env(:raxol_acp, :job_store_path) do
+        nil -> nil
+        path when is_binary(path) -> open_dets(path, table)
+      end
+
+    {:ok, %{table: table, dets: dets}}
   end
 
   @impl true
   def handle_call({:save, job_id, state, memos}, _from, server_state) do
     record = %{state: state, memos: memos, updated_at: DateTime.utc_now()}
     true = :ets.insert(@table, {job_id, record})
+    persist(server_state.dets, job_id, record)
     {:reply, :ok, server_state}
   end
 
@@ -136,16 +163,81 @@ defmodule Raxol.ACP.Job.Store do
     }
 
     true = :ets.insert(@table, {job_id, record})
+    persist(server_state.dets, job_id, record)
     {:reply, :ok, server_state}
   end
 
   def handle_call({:delete, job_id}, _from, server_state) do
     :ets.delete(@table, job_id)
+    persist_delete(server_state.dets, job_id)
     {:reply, :ok, server_state}
   end
 
   def handle_call(:clear, _from, server_state) do
     :ets.delete_all_objects(@table)
+    persist_clear(server_state.dets)
     {:reply, :ok, server_state}
   end
+
+  @impl true
+  def terminate(_reason, %{dets: nil}), do: :ok
+
+  def terminate(_reason, %{dets: dets}) do
+    _ = :dets.sync(dets)
+    _ = :dets.close(dets)
+    :ok
+  end
+
+  # -- DETS helpers --
+
+  # Opens (or creates) the DETS file at `path`, replays every record
+  # into the live ETS table, and returns the DETS handle.
+  #
+  # Failure modes:
+  # - parent dir doesn't exist: caller error, raise loudly so misconfig
+  #   shows up at boot rather than in a silent half-broken state.
+  # - file is corrupt: :dets.open_file/2 already attempts repair; if
+  #   that fails, we propagate the error rather than silently fall
+  #   back to ETS-only.
+  defp open_dets(path, ets_table) do
+    path
+    |> Path.expand()
+    |> Path.dirname()
+    |> File.mkdir_p!()
+
+    file_charlist = path |> Path.expand() |> String.to_charlist()
+
+    case :dets.open_file(@table, type: :set, file: file_charlist) do
+      {:ok, table} ->
+        :ok =
+          :dets.foldl(
+            fn {key, value}, _acc ->
+              :ets.insert(ets_table, {key, value})
+              :ok
+            end,
+            :ok,
+            table
+          )
+
+        table
+
+      {:error, reason} ->
+        raise """
+        Raxol.ACP.Job.Store: failed to open DETS file at #{inspect(path)}
+        (reason: #{inspect(reason)}).
+
+        Either fix the path or unset :job_store_path to fall back to
+        in-memory ETS only.
+        """
+    end
+  end
+
+  defp persist(nil, _key, _value), do: :ok
+  defp persist(dets, key, value), do: :dets.insert(dets, {key, value})
+
+  defp persist_delete(nil, _key), do: :ok
+  defp persist_delete(dets, key), do: :dets.delete(dets, key)
+
+  defp persist_clear(nil), do: :ok
+  defp persist_clear(dets), do: :dets.delete_all_objects(dets)
 end

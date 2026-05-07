@@ -53,6 +53,17 @@ defmodule Raxol.ACP.Supervisor do
         base
       end
 
-    Supervisor.init(children, strategy: :rest_for_one)
+    Supervisor.init(children,
+      strategy: :rest_for_one,
+      # Defaults are 3 in 5s. Tests recycle Job.Store and Seller.*
+      # for config rotation (DETS path swap, wallet swap, etc.); a
+      # handful of recycles in setup blocks would otherwise blow
+      # through the default budget and tear down the supervisor
+      # tree mid-suite. Lift to a level that's still a hard fail in
+      # production (100 restarts/5s implies a real bug) but absorbs
+      # test churn.
+      max_restarts: 100,
+      max_seconds: 5
+    )
   end
 end
