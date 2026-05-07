@@ -1,6 +1,21 @@
 defmodule Raxol.ACP.SupervisorTest do
   use ExUnit.Case, async: false
 
+  setup do
+    # Other test files may leave global state -- terminated-but-not-yet
+    # -reaped Job.Server children, an incremented NonceServer counter
+    # -- behind. Reset the bits this file's "initially" asserts touch
+    # so the asserts hold regardless of test ordering.
+    for {_, pid, _, _} <- DynamicSupervisor.which_children(Raxol.ACP.Job.Supervisor),
+        is_pid(pid) do
+      DynamicSupervisor.terminate_child(Raxol.ACP.Job.Supervisor, pid)
+    end
+
+    Raxol.ACP.Wallet.NonceServer.reset(0)
+
+    :ok
+  end
+
   test "supervisor is alive" do
     pid = Process.whereis(Raxol.ACP.Supervisor)
     assert is_pid(pid)
