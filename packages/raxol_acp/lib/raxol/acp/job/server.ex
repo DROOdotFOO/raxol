@@ -31,7 +31,7 @@ defmodule Raxol.ACP.Job.Server do
   use GenServer
 
   alias Raxol.ACP.ContractClient
-  alias Raxol.ACP.Job.{Memo, Registry, StateMachine}
+  alias Raxol.ACP.Job.{Memo, Registry, StateMachine, Store}
 
   @type memo :: %{
           type: ContractClient.memo_type(),
@@ -54,10 +54,11 @@ defmodule Raxol.ACP.Job.Server do
           job_id: ContractClient.job_id(),
           state: StateMachine.state(),
           memos: [memo()],
-          config: config()
+          config: config(),
+          persist?: boolean()
         }
 
-  defstruct [:job_id, :state, memos: [], config: %{}]
+  defstruct [:job_id, :state, memos: [], config: %{}, persist?: true]
 
   # -- Public API --
 
@@ -85,6 +86,14 @@ defmodule Raxol.ACP.Job.Server do
   - `:request` -- the buyer's request map; passed to handler callbacks.
   - `:buyer` -- buyer address (0x string), surfaced in handler ctx.
   - `:seller` -- seller address (0x string), surfaced in handler ctx.
+
+  ## Optional persistence options
+
+  - `:persist?` -- default `true`. When true, every successful
+    transition writes through `Raxol.ACP.Job.Store`, and `init/1`
+    hydrates state + memos from the store if a prior record exists for
+    this `:job_id`. Set to `false` to bypass persistence (e.g. tests
+    that exercise raw transition semantics).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -180,15 +189,32 @@ defmodule Raxol.ACP.Job.Server do
       |> Keyword.take([:handler, :wallet, :memo_opts, :request, :buyer, :seller])
       |> Map.new()
 
-    state = %__MODULE__{
-      job_id: Keyword.fetch!(opts, :job_id),
-      state: Keyword.get(opts, :initial_state, StateMachine.initial()),
-      memos: [],
-      config: config
-    }
+    job_id = Keyword.fetch!(opts, :job_id)
+    persist? = Keyword.get(opts, :persist?, true)
+    initial = Keyword.get(opts, :initial_state, StateMachine.initial())
+    {state, memos} = hydrate(job_id, persist?, initial)
 
-    {:ok, state}
+    {:ok,
+     %__MODULE__{
+       job_id: job_id,
+       state: state,
+       memos: memos,
+       config: config,
+       persist?: persist?
+     }}
   end
+
+  # Restore prior state + memos from the Store on a transient restart.
+  # If persistence is disabled or no record exists, fall back to the
+  # caller-supplied initial state with no memo history.
+  defp hydrate(job_id, true, initial) do
+    case Store.load(job_id) do
+      {:ok, %{state: state, memos: memos}} -> {state, memos}
+      :error -> {initial, []}
+    end
+  end
+
+  defp hydrate(_job_id, false, initial), do: {initial, []}
 
   @impl true
   def handle_call({:transition, event, payload, signature}, _from, state) do
@@ -263,6 +289,7 @@ defmodule Raxol.ACP.Job.Server do
       )
 
       new_full_state = %{state | state: new_state, memos: state.memos ++ [memo]}
+      maybe_persist(new_full_state, memo)
 
       if StateMachine.terminal?(new_state) do
         {:stop, :normal, {:ok, new_state}, new_full_state}
@@ -272,6 +299,15 @@ defmodule Raxol.ACP.Job.Server do
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
+  end
+
+  # Mirror every successful transition to the Store so a transient
+  # restart can pick up where the prior process left off. No-op when
+  # persistence is disabled.
+  defp maybe_persist(%{persist?: false}, _memo), do: :ok
+
+  defp maybe_persist(%{persist?: true, job_id: job_id, state: state}, memo) do
+    Store.append_memo(job_id, state, memo)
   end
 
   # Caller can override the signature; otherwise we sign the payload

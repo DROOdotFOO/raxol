@@ -22,6 +22,7 @@ defmodule Raxol.ACP.Job.IntegrationTest do
 
   alias Raxol.ACP.{ContractClient, Job}
   alias Raxol.ACP.ContractClient.InMemory
+  alias Raxol.ACP.Job.Store
   alias Raxol.ACP.TestSupport.EchoOffering
 
   @test_env_var "RAXOL_ACP_INTEGRATION_KEY"
@@ -51,6 +52,7 @@ defmodule Raxol.ACP.Job.IntegrationTest do
     end
 
     InMemory.reset()
+    Store.clear()
     :ok
   end
 

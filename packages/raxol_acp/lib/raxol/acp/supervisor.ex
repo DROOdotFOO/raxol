@@ -19,9 +19,12 @@ defmodule Raxol.ACP.Supervisor do
   - `Raxol.ACP.Wallet.NonceServer` -- serializes EVM nonce assignment for
     the umbrella seller wallet (default-named instance)
   - `Raxol.ACP.Offering.Registry` -- declared offerings (ETS-backed)
+  - `Raxol.ACP.Job.Store` -- ETS-backed memo persistence (jobs hydrate
+    from here on transient restart)
   - `Raxol.ACP.Job.Supervisor` -- DynamicSupervisor for per-job processes
-
-  Job memo store and seller runtime are added as their modules land.
+  - `Raxol.ACP.Seller.Supervisor` -- only when
+    `config :raxol_acp, seller_enabled: true`. Owns the Backend, the
+    Queue, and the Runtime. Buyer-only deployments leave it off.
   """
 
   use Supervisor
@@ -35,12 +38,20 @@ defmodule Raxol.ACP.Supervisor do
   def init(_opts) do
     initial_nonce = Application.get_env(:raxol_acp, :initial_nonce, 0)
 
-    children = [
+    base = [
       Raxol.ACP.Job.Registry,
       {Raxol.ACP.Wallet.NonceServer, [initial_nonce: initial_nonce]},
       Raxol.ACP.Offering.Registry,
+      Raxol.ACP.Job.Store,
       Raxol.ACP.Job.Supervisor
     ]
+
+    children =
+      if Application.get_env(:raxol_acp, :seller_enabled, false) do
+        base ++ [Raxol.ACP.Seller.Supervisor]
+      else
+        base
+      end
 
     Supervisor.init(children, strategy: :rest_for_one)
   end

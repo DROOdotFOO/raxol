@@ -59,6 +59,12 @@ defmodule Raxol.ACP.Offering do
     to `Decimal`.
   - `:sla_minutes` -- service-level agreement (positive integer).
   - `:cluster` -- ACP cluster tag (e.g. `"on_chain"`, `"information"`).
+  - `:wallet` -- optional `Raxol.Payments.Wallet` impl module. Overrides
+    the `Seller.Queue` default for this offering only. Most sellers use
+    one wallet for everything; leave unset.
+  - `:memo_opts` -- optional `[chain_id:, verifying_contract:]` keyword.
+    Overrides the `Seller.Queue` default. Pair with `:wallet` when an
+    offering settles on a different chain than the seller's default.
   """
 
   @doc "Return the JSON Schema for the offering's request requirements."
@@ -74,6 +80,8 @@ defmodule Raxol.ACP.Offering do
     price = Keyword.get(opts, :price_usdc)
     sla = Keyword.get(opts, :sla_minutes)
     cluster = Keyword.get(opts, :cluster)
+    wallet = Keyword.get(opts, :wallet)
+    memo_opts = Keyword.get(opts, :memo_opts)
 
     quote do
       @behaviour Raxol.ACP.Offering.Handler
@@ -83,6 +91,8 @@ defmodule Raxol.ACP.Offering do
       @offering_price unquote(__MODULE__).__coerce_price__(unquote(price))
       @offering_sla_minutes unquote(sla)
       @offering_cluster unquote(cluster)
+      @offering_wallet unquote(wallet)
+      @offering_memo_opts unquote(memo_opts)
 
       @doc "Return the offering's name (registry key)."
       @spec offering_name() :: String.t()
@@ -101,6 +111,20 @@ defmodule Raxol.ACP.Offering do
       def cluster, do: @offering_cluster
 
       @doc """
+      Return the offering's signing wallet override, or `nil` to fall
+      back to the `Seller.Queue` default.
+      """
+      @spec wallet() :: module() | nil
+      def wallet, do: @offering_wallet
+
+      @doc """
+      Return the offering's `memo_opts` override (a keyword), or `nil`
+      to fall back to the `Seller.Queue` default.
+      """
+      @spec memo_opts() :: keyword() | nil
+      def memo_opts, do: @offering_memo_opts
+
+      @doc """
       Build an `Offering.Registry.Spec` for this offering without
       submitting it to the registry.
       """
@@ -113,7 +137,9 @@ defmodule Raxol.ACP.Offering do
           sla_minutes: @offering_sla_minutes,
           cluster: @offering_cluster,
           requirements_schema: maybe_call(:requirements_schema),
-          deliverables_schema: maybe_call(:deliverables_schema)
+          deliverables_schema: maybe_call(:deliverables_schema),
+          wallet: @offering_wallet,
+          memo_opts: @offering_memo_opts
         }
       end
 

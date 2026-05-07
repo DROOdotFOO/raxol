@@ -16,8 +16,17 @@ defmodule Raxol.ACP.Offering.Registry do
         sla_minutes: 5,
         cluster: "on_chain",
         requirements_schema: %{...},      # JSON Schema map
-        deliverables_schema: %{...}
+        deliverables_schema: %{...},
+        wallet: nil,                      # optional override; nil falls back
+        memo_opts: nil                    # to Seller.Queue defaults
       }
+
+  ## Per-offering signing override
+
+  `:wallet` and `:memo_opts` are optional. When set, `Seller.Queue` uses
+  them instead of its config defaults for jobs against this offering.
+  Leave `nil` for the common case of one wallet per seller. See
+  `Raxol.ACP.Seller.Queue` for the full resolution rules.
 
   Modules using `use Raxol.ACP.Offering` get a `register/0` convenience
   that builds and submits the spec automatically. Hand-built specs work
@@ -37,7 +46,9 @@ defmodule Raxol.ACP.Offering.Registry do
       :sla_minutes,
       :cluster,
       :requirements_schema,
-      :deliverables_schema
+      :deliverables_schema,
+      :wallet,
+      :memo_opts
     ]
 
     @type t :: %__MODULE__{
@@ -47,7 +58,9 @@ defmodule Raxol.ACP.Offering.Registry do
             sla_minutes: pos_integer() | nil,
             cluster: String.t() | nil,
             requirements_schema: map() | nil,
-            deliverables_schema: map() | nil
+            deliverables_schema: map() | nil,
+            wallet: module() | nil,
+            memo_opts: keyword() | nil
           }
   end
 

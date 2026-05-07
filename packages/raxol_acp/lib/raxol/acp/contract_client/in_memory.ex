@@ -1,21 +1,28 @@
 defmodule Raxol.ACP.ContractClient.InMemory do
   @moduledoc """
-  In-process implementation of `Raxol.ACP.ContractClient` for tests.
+  In-process implementation of `Raxol.ACP.ContractClient`.
 
   Holds the simulated chain state in an `Agent`. Job ids and tx hashes
-  are deterministic synthetic strings (`"job-1"`, `"tx-1"`, ...) so test
-  assertions stay stable.
+  are deterministic synthetic strings (`"job-1"`, `"tx-1"`, ...) so
+  callers get reproducible identifiers.
 
   This is NOT a mock -- it's a second real implementation of the same
   behaviour, in the spirit of `Raxol.Payments.Wallets.Env` vs
   `Raxol.Payments.Wallets.Op`. The dispatch in
   `Raxol.ACP.ContractClient.impl/0` selects which one to use.
 
-  ## Lifecycle
+  ## When to use
 
-  Started once by `test_helper.exs`. Every test that exercises the
-  contract client should call `reset/0` in setup so prior state does
-  not leak.
+  - **Tests** -- pair with the test helper (`test_helper.exs` starts
+    one and seeds the env), call `reset/0` in setup so prior state
+    does not leak.
+  - **Bench harness** -- `mix raxol_acp.bench` drives jobs end-to-end
+    against this impl with no chain or RPC required.
+  - **Local development** -- exercise the seller stack without
+    standing up a sepolia endpoint or burning testnet USDC.
+
+  Lives in `lib/` (not `test/support/`) because the bench harness
+  needs it at runtime.
 
   ## Inspection helpers
 

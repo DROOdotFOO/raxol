@@ -5,6 +5,12 @@ ExUnit.start()
 # not a mock; see Raxol.ACP.ContractClient for the rationale.
 Application.put_env(:raxol_acp, :contract_client, Raxol.ACP.ContractClient.InMemory)
 
+# Bring up the seller stack with the in-process backend. Tests that need
+# specific Queue defaults (wallet, memo_opts, seller_address) overwrite
+# the env and recycle the Queue in their own setup.
+Application.put_env(:raxol_acp, :seller_enabled, true)
+Application.put_env(:raxol_acp, :seller_backend, Raxol.ACP.Seller.Backend.InMemory)
+
 # In :test the OTP application's :mod is not declared, so neither the
 # supervisor nor the InMemory contract client auto-start. Bring them up
 # explicitly for the test run.

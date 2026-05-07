@@ -4,6 +4,7 @@ defmodule Raxol.ACP.Job.ServerTest do
   alias Raxol.ACP.ContractClient
   alias Raxol.ACP.ContractClient.InMemory
   alias Raxol.ACP.Job
+  alias Raxol.ACP.Job.Store
 
   @seller "0x" <> String.duplicate("ab", 20)
   @sig <<0xDE, 0xAD>>
@@ -18,6 +19,7 @@ defmodule Raxol.ACP.Job.ServerTest do
     end
 
     InMemory.reset()
+    Store.clear()
     :ok
   end
 
