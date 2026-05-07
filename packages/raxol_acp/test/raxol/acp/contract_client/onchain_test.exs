@@ -135,6 +135,87 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
       assert_received {:rpc_call, "eth_getTransactionReceipt", _}
     end
 
+    test "decodes the job id from a JobCreated event when configured" do
+      signature = "JobCreated(uint256)"
+      Application.put_env(:raxol_acp, :create_job_event_signature, signature)
+
+      on_exit(fn -> Application.delete_env(:raxol_acp, :create_job_event_signature) end)
+
+      install_stub(fn req ->
+        case req["method"] do
+          "eth_getTransactionCount" ->
+            ok_response(req, "0x5")
+
+          "eth_feeHistory" ->
+            ok_response(req, %{
+              "baseFeePerGas" => [
+                "0x3b9aca00",
+                "0x3b9aca00",
+                "0x3b9aca00",
+                "0x3b9aca00",
+                "0x3b9aca00"
+              ],
+              "gasUsedRatio" => [0.5, 0.5, 0.5, 0.5],
+              "oldestBlock" => "0x10",
+              "reward" => [["0x59682f00"], ["0x59682f00"], ["0x59682f00"], ["0x59682f00"]]
+            })
+
+          "eth_estimateGas" ->
+            ok_response(req, "0x5208")
+
+          "eth_sendRawTransaction" ->
+            ok_response(req, "0x" <> String.duplicate("ab", 32))
+
+          "eth_getTransactionReceipt" ->
+            ok_response(req, %{
+              "status" => "0x1",
+              "transactionHash" => Enum.at(req["params"], 0),
+              "blockNumber" => "0x100",
+              "logs" => [
+                %{
+                  "address" => @contract,
+                  "topics" => [
+                    Raxol.ACP.Onchain.LogDecoder.event_topic(signature),
+                    "0x" <> String.duplicate("0", 62) <> "2a"
+                  ],
+                  "data" => "0x"
+                }
+              ]
+            })
+        end
+      end)
+
+      assert {:ok, "0x2a"} = Onchain.create_job(@seller, Decimal.new("1.00"), <<>>)
+    end
+
+    test "falls back to tx hash when the event is configured but missing from logs" do
+      Application.put_env(:raxol_acp, :create_job_event_signature, "JobCreated(uint256)")
+
+      on_exit(fn -> Application.delete_env(:raxol_acp, :create_job_event_signature) end)
+
+      handler_id = "placeholder-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:raxol, :acp, :onchain, :placeholder_job_id],
+        fn _e, _m, metadata, _ -> send(test_pid, {:placeholder, metadata}) end,
+        nil
+      )
+
+      try do
+        # Default handler returns a receipt with empty logs.
+        install_stub(default_handler(self()))
+
+        assert {:ok, "0x" <> _ = tx_hash} =
+                 Onchain.create_job(@seller, Decimal.new("0.10"), <<>>)
+
+        assert_receive {:placeholder, %{tx_hash: ^tx_hash, reason: {:event_not_found, _}}}, 200
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
     test "errors clearly when no contract address is configured" do
       Application.put_env(:raxol_acp, :chain_overrides, %{
         mainnet: %{acp_contract_address: nil}

@@ -24,21 +24,32 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   ## v0.1 caveats (documented; not bugs)
 
-  These three are blocked on external work, not engineering:
+  These two are blocked on external work, not engineering:
 
   1. **Solidity signatures are placeholders.** The four ACP method
      selectors below are best-guess shapes. Once Virtuals' real ABIs
      are vendored in `priv/abi/`, swap these constants. The encoders,
      signing, and broadcast pipeline don't change.
-  2. **No event-log decoding for `create_job`.** The real ACP contract
-     emits a `JobCreated(uint256 jobId, ...)` event whose first
-     indexed topic is the new job ID. Until we have that ABI, this
-     impl returns the **transaction hash** as the synthetic job ID
-     and emits a telemetry warning. A `LogDecoder` follow-up will
-     swap in the real decode.
-  3. **`Chain.acp_contract_address` defaults to `nil`.** Calls will
+  2. **`Chain.acp_contract_address` defaults to `nil`.** Calls will
      fail with `:no_contract_address` until a real address is
      configured via `Raxol.ACP.Chain` overrides.
+
+  ## Job ID extraction
+
+  When `:create_job_event_signature` is configured, `create_job/3`
+  decodes the new job ID from the matching event log in the
+  transaction receipt via `Raxol.ACP.Onchain.LogDecoder`. The first
+  indexed parameter of the event is read as a `uint256` and returned
+  as a hex string (`"0x" <> hex`).
+
+  When no event signature is configured (or the event isn't found in
+  the receipt), `create_job/3` falls back to returning the
+  transaction hash as a synthetic job ID and emits the
+  `[:raxol, :acp, :onchain, :placeholder_job_id]` telemetry event.
+
+      config :raxol_acp,
+        # Vendor the real signature when ABIs land:
+        create_job_event_signature: "JobCreated(uint256,address)"
 
   ## Telemetry
 
@@ -53,7 +64,7 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   @behaviour Raxol.ACP.ContractClient
 
   alias Raxol.ACP.{ABI, Chain}
-  alias Raxol.ACP.Onchain.{RPC, Transaction}
+  alias Raxol.ACP.Onchain.{LogDecoder, RPC, Transaction}
   alias Raxol.ACP.Wallet.NonceServer
 
   # Placeholder signatures. Replace when Virtuals ABIs are vendored.
@@ -85,18 +96,40 @@ defmodule Raxol.ACP.ContractClient.Onchain do
       ])
 
     case send_tx(:create_job, call_data) do
-      {:ok, tx_hash, _receipt} ->
-        :telemetry.execute(
-          [:raxol, :acp, :onchain, :placeholder_job_id],
-          %{},
-          %{tx_hash: tx_hash}
-        )
-
-        {:ok, tx_hash}
-
-      {:error, _} = err ->
-        err
+      {:ok, tx_hash, receipt} -> {:ok, resolve_job_id(tx_hash, receipt)}
+      {:error, _} = err -> err
     end
+  end
+
+  # If a JobCreated event signature is configured, decode the job_id
+  # from the receipt logs. Otherwise (or if the event is missing), fall
+  # back to the transaction hash as a synthetic id and emit a warning.
+  defp resolve_job_id(tx_hash, receipt) do
+    case Application.get_env(:raxol_acp, :create_job_event_signature) do
+      nil ->
+        emit_placeholder(tx_hash, :no_signature_configured)
+        tx_hash
+
+      signature when is_binary(signature) ->
+        logs = Map.get(receipt, "logs", [])
+
+        case LogDecoder.extract(logs, signature, 1, :uint256) do
+          {:ok, job_id_int} ->
+            "0x" <> (job_id_int |> Integer.to_string(16) |> String.downcase())
+
+          {:error, reason} ->
+            emit_placeholder(tx_hash, reason)
+            tx_hash
+        end
+    end
+  end
+
+  defp emit_placeholder(tx_hash, reason) do
+    :telemetry.execute(
+      [:raxol, :acp, :onchain, :placeholder_job_id],
+      %{},
+      %{tx_hash: tx_hash, reason: reason}
+    )
   end
 
   @impl true
