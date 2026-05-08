@@ -1,3 +1,11 @@
+## [Unreleased]
+
+### Added
+
+- **`raxol_symphony` Phases 0-14** -- Elixir/OTP port of OpenAI Symphony. Tracker-driven coding-agent orchestrator with two runner backends (`Runners.RaxolAgent` default; `Runners.Codex` Port-based JSON-RPC for parity with upstream Symphony Elixir) and six surfaces (terminal dashboard, LiveView, MCP tools + `symphony://runs` resource, Telegram per-issue session router, Watch push, JSON `/api/v1/*`). Workflow hot-reload via `WorkflowStore`, Linear (GraphQL) + GitHub Issues (state labels) trackers, evidence framework (`Evidence.GitHub` CI/PR comments, `Evidence.Complexity` cloc/SLOC fallback, `Evidence.Recording` cast scan), in-run asciinema capture (`Evidence.Capture` writes `<workspace>/.raxol_symphony/run-<attempt>.cast` per dispatch when `recording.enabled: true`). 399 tests, 0 failures. Pre-alpha, path-dep.
+- **`raxol_acp` v0.1 (engineering complete)** -- First Elixir/OTP-native Virtuals Agent Commerce Protocol implementation. Job lifecycle (`Job.{Server, StateMachine, Memo, Store, Supervisor, Registry}`), EIP-712 typed-data memos via `Raxol.Payments.EIP712`, on-chain client (`ContractClient.Onchain` over Req JSON-RPC, EIP-1559 typed-tx signing, Yellow-Paper RLP, log decoder for `create_job` job_id extraction), Seller stack (`Backend.InMemory` + `Queue` + `Runtime` + `Supervisor`, opt-in via `:seller_enabled`), `Wallet.NonceServer` for serialized nonce assignment, `mix raxol_acp.bench` sandbox-graduation harness. Optional DETS-backed `Job.Store` durability. 256 tests, 0 failures. Pre-alpha, path-dep. External-blocked: real ACP contract ABIs, `Wallet.SCA`, `Seller.Backend.WebSocket`.
+- **`Raxol.Payments.Wallet.sign_hash/1`** -- new behaviour callback for EIP-1559 transaction signing (sign-precomputed-digest semantics). `Wallets.Env` and `Wallets.Op` both implement.
+
 ## [2.4.0] - 2026-04-14
 
 ### Added

@@ -32,6 +32,14 @@ The interesting part is the runtime, not the terminal. Your app gets crash isola
 
 One TEA module. Four surfaces. The solver agent and the human trader interact with the same widget tree through different projections. That's the pitch nothing else in this space can match.
 
+## Symphony: manage work, not agents
+
+`raxol_symphony` is an Elixir/OTP port of [OpenAI Symphony](https://github.com/openai/symphony). The orchestrator polls a tracker (Linear or GitHub Issues), claims eligible issues, isolates each in a per-issue workspace, and runs a coding agent until the work reaches a workflow-defined handoff state. Two runner backends ship: `raxol_agent` (the default, wraps `Raxol.Agent.Stream`) and the upstream `codex app-server` (Port-based JSON-RPC). Six surfaces consume the same orchestrator snapshot via PubSub: terminal dashboard, LiveView, MCP tools, Telegram inline keyboards, Watch push, and a JSON API. Evidence collection -- CI status, PR comments, complexity, asciinema replays -- ships per run.
+
+```bash
+mix raxol.symphony --workflow ./WORKFLOW.md
+```
+
 ## Install
 
 ```elixir
@@ -276,8 +284,12 @@ The structured widget tree already carries type, label, and state metadata on ev
 | [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.4"}`   | Sensor fusion (zero deps)                  |
 | [`raxol_payments`](https://hex.pm/packages/raxol_payments) | `{:raxol_payments, "~> 0.1"}` | Agent payments, Xochi cross-chain, stealth |
 | `raxol_acp` (pre-alpha)                                    | `path: "packages/raxol_acp"`  | Virtuals Agent Commerce Protocol (sell)    |
+| `raxol_symphony` (pre-alpha)                               | `path: "packages/raxol_symphony"` | Tracker-driven coding-agent orchestrator |
 | [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.4"}` | Phoenix LiveView bridge, themes, CSS       |
 | [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.4"}`   | Plugin SDK, testing, generator             |
+| [`raxol_speech`](https://hex.pm/packages/raxol_speech)     | `{:raxol_speech, "~> 0.1"}`   | TTS (say/espeak), STT (Whisper), voice cmds |
+| [`raxol_telegram`](https://hex.pm/packages/raxol_telegram) | `{:raxol_telegram, "~> 0.1"}` | Telegram bot, per-chat sessions, keyboards |
+| [`raxol_watch`](https://hex.pm/packages/raxol_watch)       | `{:raxol_watch, "~> 0.1"}`    | APNS/FCM push, glanceable summaries        |
 
 ## Development
 

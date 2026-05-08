@@ -115,7 +115,8 @@ packages/
 ├── raxol_plugin/    # Plugin SDK: use macro, API facade, testing utils, generator
 ├── raxol_speech/    # Speech surface: TTS (say/espeak), STT (Bumblebee/Whisper), voice commands
 ├── raxol_telegram/  # Telegram surface: bot handler, per-chat sessions, inline keyboard navigation
-└── raxol_watch/     # Watch surface: APNS/FCM push, glanceable summaries, tap-to-event actions
+├── raxol_watch/     # Watch surface: APNS/FCM push, glanceable summaries, tap-to-event actions
+└── raxol_symphony/  # Tracker-driven coding-agent orchestrator (port of OpenAI Symphony)
 ```
 
 **Dependency graph** (arrows = "depends on"):
@@ -132,6 +133,7 @@ raxol_acp --> raxol_payments, raxol_mcp (runtime: false); main does NOT depend o
 raxol_speech --> raxol_core (+ bumblebee/nx/exla optional for STT)
 raxol_telegram --> raxol_core, raxol (optional, for Lifecycle runtime; + telegex optional)
 raxol_watch --> raxol_core (+ pigeon optional for APNS/FCM)
+raxol_symphony --> raxol_core, raxol_agent, raxol_mcp (all optional); raxol_liveview/raxol_telegram/raxol_watch optional surfaces
 raxol_core --> telemetry (only external dep)
 raxol_sensor --> (none)
 ```
@@ -146,13 +148,14 @@ cd packages/raxol_terminal && MIX_ENV=test mix test    # ~1928 tests
 cd packages/raxol_sensor && MIX_ENV=test mix test      # ~55 tests
 cd packages/raxol_agent && MIX_ENV=test mix test       # ~401 tests
 cd packages/raxol_mcp && MIX_ENV=test mix test         # ~232 tests + 31 properties
-cd packages/raxol_payments && MIX_ENV=test mix test    # ~355 tests
-cd packages/raxol_acp && MIX_ENV=test mix test         # ~124 tests
+cd packages/raxol_payments && MIX_ENV=test mix test    # ~361 tests
+cd packages/raxol_acp && MIX_ENV=test mix test         # ~256 tests
 cd packages/raxol_liveview && MIX_ENV=test mix test    # ~50 tests
 cd packages/raxol_plugin && MIX_ENV=test mix test      # ~50 tests
 cd packages/raxol_speech && MIX_ENV=test mix test      # ~28 tests
 cd packages/raxol_telegram && MIX_ENV=test mix test    # ~34 tests
 cd packages/raxol_watch && MIX_ENV=test mix test       # ~34 tests
+cd packages/raxol_symphony && MIX_ENV=test mix test    # ~399 tests
 ```
 
 ### Core Layers (main raxol)
@@ -208,7 +211,7 @@ lib/raxol/
 
 **Payment Protocol Routing**: `Raxol.Payments.Router.select/1` picks the protocol. Same-chain HTTP 402 goes to x402/MPP (auto-pay). Cross-chain goes to Xochi (cash-positive, tier fees 0.10-0.30%). Privacy (stealth/shielded) also goes to Xochi. The intent flow: `get_quote/2` -> `execute/3` (wallet signs EIP-712) -> `poll_status/3`. `Xochi.Client` talks to the Xochi API (`/api/intent/quote`, `/api/intent/execute`, `/api/intent/:id/status`). Riddler solves intents behind the scenes. `Protocols.Riddler` + `Riddler.Client` give direct solver access (Commerce API, B2B only -- don't use for agent payments, it's cash-negative). See `../riddler/docs/architecture/decisions/0005-xochi-integration.md` for the rationale.
 
-**Agent Commerce Protocol** (in `packages/raxol_acp/`, pre-alpha): Elixir/OTP-native implementation of the Virtuals ACP for selling agent services on Base. One supervised `Raxol.ACP.Job.Server` per active job (mirrors `Raxol.Agent.Session` pattern: Registry-via lookup + DynamicSupervisor + transient restart). `Raxol.ACP.Job.StateMachine` is a pure module; states are `:request -> :negotiation -> :transaction -> :evaluation -> :completed` plus `:expired`. `Raxol.ACP.Job.Memo` builds + signs EIP-712 memos via `Raxol.Payments.EIP712` and any `Raxol.Payments.Wallet` impl. `Raxol.ACP.Wallet.NonceServer` serializes EVM nonce assignment via the GenServer mailbox (the integration plan claimed process-per-job avoided concurrent-Alchemy collisions; it doesn't, this does). `Raxol.ACP.ContractClient` is a behaviour with two real impls -- `InMemory` for tests, `Onchain` (RPC) for production (pending). `Raxol.ACP.ABI` is a hand-rolled Solidity encoder for the four ACP methods, verified against canonical ERC-20 selectors. `Raxol.ACP.Offering` DSL: `use Raxol.ACP.Offering, name:, price_usdc:, sla_minutes:, cluster:` injects the `Handler` behaviour and registers metadata; the `Registry` (ETS) stores offering specs. Handler integration in `Job.Server.accept_request/1` and `deliver/1` auto-invokes the configured handler module + auto-signs via the configured wallet. Self-starts via `RaxolAcp.Application` outside `:test`. Depends on raxol_payments at runtime, raxol_mcp compile-time only. Pending: `ContractClient.Onchain` (RPC + RLP/EIP-1559), `Job.Store` (ETS persistence), `Wallet.SCA`, `Seller.{Runtime, Queue, Supervisor}`, `mix raxol_acp.bench`.
+**Agent Commerce Protocol** (in `packages/raxol_acp/`, pre-alpha): Elixir/OTP-native implementation of the Virtuals ACP for selling agent services on Base. One supervised `Raxol.ACP.Job.Server` per active job (mirrors `Raxol.Agent.Session` pattern: Registry-via lookup + DynamicSupervisor + transient restart). `Raxol.ACP.Job.StateMachine` is a pure module; states are `:request -> :negotiation -> :transaction -> :evaluation -> :completed` plus `:expired`. `Raxol.ACP.Job.Memo` builds + signs EIP-712 memos via `Raxol.Payments.EIP712` and any `Raxol.Payments.Wallet` impl. `Raxol.ACP.Wallet.NonceServer` serializes EVM nonce assignment via the GenServer mailbox (the integration plan claimed process-per-job avoided concurrent-Alchemy collisions; it doesn't, this does). `Raxol.ACP.ContractClient` is a behaviour with two real impls -- `InMemory` for tests, `Onchain` (RPC) for production (pending). `Raxol.ACP.ABI` is a hand-rolled Solidity encoder for the four ACP methods, verified against canonical ERC-20 selectors. `Raxol.ACP.Offering` DSL: `use Raxol.ACP.Offering, name:, price_usdc:, sla_minutes:, cluster:` injects the `Handler` behaviour and registers metadata; the `Registry` (ETS) stores offering specs. Handler integration in `Job.Server.accept_request/1` and `deliver/1` auto-invokes the configured handler module + auto-signs via the configured wallet. Self-starts via `RaxolAcp.Application` outside `:test`. Depends on raxol_payments at runtime, raxol_mcp compile-time only. v0.1 engineering complete: `ContractClient.Onchain` (Req JSON-RPC + EIP-1559 typed-tx signing + Yellow-Paper RLP + log decoder for `create_job` job_id extraction), Seller stack (`Backend.InMemory` + `Queue` + `Runtime` + `Supervisor`, opt-in via `:seller_enabled`), `Job.Store` ETS+optional DETS persistence, and `mix raxol_acp.bench` sandbox-graduation harness all shipped. External-blocked: `Wallet.SCA` (needs Virtuals' SCA contract spec) and `Seller.Backend.WebSocket` (needs WS protocol spec).
 
 **Cross-repo payment method types** (canonical in Xochi `src/types/intent.ts`):
 
@@ -236,6 +239,8 @@ lib/raxol/
 **Headless Sessions**: `Raxol.Headless` is a GenServer that manages headless TEA app instances in `:agent` environment. `start/2` takes a module or file path (AST-parsed to pull out `defmodule` blocks, skipping boot code). `screenshot/1` calls `:render_frame_sync` on the engine then reads the buffer via `:get_buffer`. `send_key/3` builds an Event via `Raxol.Headless.EventBuilder` and casts to the dispatcher. `Raxol.Headless.McpTools` defines 6 MCP tools registered with `Raxol.MCP.Registry` at startup. `mix mcp.server` starts the standalone MCP server on stdio (~18ms startup).
 
 **MCP as Rendering Target** (see ADR-0012): MCP is a first-class rendering target, not bolted on. The framework derives MCP tools from the widget tree via `Raxol.MCP.ToolProvider` behaviour on each widget type (15 widgets). A focus lens (attention-aware, mouse hover tracking via `:hover` mode) filters to ~15 relevant tools per interaction. `@mcp_exclude` suppresses tool derivation for internal widgets. Model state is exposed as MCP resources via app-declared projections. `Raxol.MCP.Test` gives you a pipe-friendly test harness: `session |> type_into("field", "value") |> click("btn") |> assert_widget("status")`. Functor law property tests verify tool derivation consistency. Package: `packages/raxol_mcp/` (depends on raxol_core). The context tree assembles state from model, widgets, agents, swarm, and notifications as MCP resources, streamed as diffs.
+
+**Symphony Orchestrator** (in `packages/raxol_symphony/`): Elixir/OTP port of OpenAI Symphony. `Raxol.Symphony.Orchestrator` is a `BaseManager` GenServer that polls a tracker (Memory / Linear GraphQL / GitHub Issues), claims eligible issues via `Candidate.eligible/4`, isolates each in a per-issue workspace under `config.workspace.root`, and runs a coding agent until the workflow's terminal state. Two `Raxol.Symphony.Runner` impls: `Runners.RaxolAgent` (default, wraps `Raxol.Agent.Stream`) and `Runners.Codex` (Port-spawned `codex app-server`, JSON-RPC 2.0 over stdio with three-step handshake `initialize` -> `initialized` -> `thread/start`, then per-turn `turn/start` cycles). Six surfaces consume the orchestrator snapshot via Phoenix.PubSub: `Surfaces.Terminal` (TEA dashboard), `Surfaces.MCP` (5 tools + `symphony://runs` resource), `Surfaces.Telegram` (per-issue session router), `Surfaces.Watch` (debounced push, tap-to-approve), `Web.DashboardLive` (LiveView), and `Web.API` (JSON `/api/v1/*`). `Raxol.Symphony.Evidence.collect/3` aggregates GitHub CI + PR comments, complexity (`cloc` or SLOC fallback), and asciinema recordings; `Evidence.Capture` GenServer writes a `.cast` file per dispatched run when `recording.enabled: true`. `WorkflowStore` watches `WORKFLOW.md` via `file_system` and serves last-known-good config on parse failure. Three retry classes: continuation (1s), failure exponential (10s × 2^n, capped), stall detection (per-run `read_timeout_ms` / `turn_timeout_ms`).
 
 **Phoenix as library only**: No active web server in core. Ecto.Repo is disabled at runtime. MCP is served via `mix mcp.server` (stdio), not through Phoenix.
 
@@ -341,8 +346,8 @@ Configuration: `fly.toml`, Dockerfile: `docker/Dockerfile.web`
 
 ## Hex Publishing
 
-11 packages are published to Hex; `raxol_acp` is pre-alpha and not yet
-published. Publish order matters (dependency chain):
+11 packages are published to Hex; `raxol_acp` and `raxol_symphony` are
+pre-alpha and not yet published. Publish order matters (dependency chain):
 
 ```bash
 # 1. No raxol deps (parallel)

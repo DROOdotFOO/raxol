@@ -15,9 +15,10 @@ defmodule Raxol.Symphony.Runner do
 
   - `Raxol.Symphony.Runners.Noop` -- test-only runner with configurable
     behaviour.
-  - `Raxol.Symphony.Runners.RaxolAgent` -- DEFAULT (Phase 4); wraps the
-    `raxol_agent` Strategy + Stream API.
-  - `Raxol.Symphony.Runners.Codex` -- Phase 13; Port-based Codex app-server.
+  - `Raxol.Symphony.Runners.RaxolAgent` -- DEFAULT; wraps the `raxol_agent`
+    `Stream` API.
+  - `Raxol.Symphony.Runners.Codex` -- Port-based Codex app-server (JSON-RPC
+    2.0 over stdio, mirrors upstream Symphony Elixir).
 
   ## Sending updates back
 

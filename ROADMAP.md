@@ -37,6 +37,8 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 - **Phase 19: Watch notifications** (`raxol_watch`) -- APNS/FCM push via `pigeon`, ETS-backed device registry, 1s debounce, 160-char glanceable summaries, tap-to-event actions. 34 tests.
 - **Adaptive UI Overhaul** -- 8-rule LayoutRecommender (was 3), multi-recommendation, TrendDetector, NxModel expanded to 10 features with auto-retrain, Lifecycle integration (`adaptive: true`), 5 MCP tools. 67 tests.
 - **BorderBeam Effect** -- Three-layer animated border glow (beam stroke, inner glow, outer bloom). Four variants (colorful/mono/ocean/sunset). Terminal exponential decay, LiveView conic-gradient + mask CSS, MCP hint serialization. Pipe + prop DSL. 99 effects tests.
+- **`raxol_acp` v0.1 (engineering complete)** -- First Elixir/OTP-native Virtuals Agent Commerce Protocol implementation. Job lifecycle (`Job.{Server, StateMachine, Memo, Store}`), EIP-712 typed-data memos, on-chain client (Req JSON-RPC + EIP-1559 typed-tx + Yellow-Paper RLP + log decoder), Seller stack (`Backend.InMemory` + `Queue` + `Runtime` + `Supervisor`), DETS-optional persistence, `mix raxol_acp.bench` sandbox-graduation harness. 256 tests. Pre-alpha; external-blocked on real Virtuals ABIs + `Wallet.SCA` spec.
+- **`raxol_symphony` Phases 0-14** -- Elixir/OTP port of OpenAI Symphony. Tracker-driven coding-agent orchestrator with two runner backends (`raxol_agent` default + `codex app-server` Port-based JSON-RPC), six surfaces (terminal/LiveView/MCP/Telegram/Watch/JSON API), workflow hot-reload, evidence framework (CI status + PR comments + cloc/SLOC + asciinema), in-run asciicast capture. 399 tests. Pre-alpha; path-dep.
 
 ---
 

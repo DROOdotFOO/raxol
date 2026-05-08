@@ -13,7 +13,7 @@ defmodule Raxol.Symphony.Surfaces.MCP do
   | `symphony_get_run`        | `{issue_id}`                  | run entry, or `{status: "not_found"}`|
   | `symphony_refresh`        | none                          | `{status: "refreshed"}`              |
   | `symphony_stop_run`       | `{issue_id}`                  | `{status: "stopped"}` or error       |
-  | `symphony_get_evidence`   | `{issue_id}`                  | placeholder; full impl in Phase 14   |
+  | `symphony_get_evidence`   | `{issue_id \| identifier, ?repo, ?ref, ?issue_number}` | `{ci, pr_comments, complexity, recordings, errors}` |
 
   ## Resources
 
