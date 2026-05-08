@@ -103,9 +103,10 @@ defmodule Raxol.Symphony.Surfaces.MCP do
     orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
 
     if available?() do
-      :ok = Raxol.MCP.Registry.register_tools(registry, tools(orchestrator))
-      :ok = Raxol.MCP.Registry.register_resources(registry, resources(orchestrator))
-      :ok
+      Raxol.MCP.Registry.register_all(registry,
+        tools: tools(orchestrator),
+        resources: resources(orchestrator)
+      )
     else
       :ok
     end
@@ -242,11 +243,13 @@ defmodule Raxol.Symphony.Surfaces.MCP do
           },
           repo: %{
             type: "string",
-            description: "GitHub repo as owner/name. Inferred from workspace git when omitted."
+            description:
+              "GitHub repo as owner/name. Inferred from workspace git when omitted."
           },
           ref: %{
             type: "string",
-            description: "Git ref (branch or sha). Inferred from workspace HEAD when omitted."
+            description:
+              "Git ref (branch or sha). Inferred from workspace HEAD when omitted."
           },
           issue_number: %{
             type: "integer",
@@ -294,8 +297,11 @@ defmodule Raxol.Symphony.Surfaces.MCP do
   defp find_identifier(snapshot, id) do
     case Enum.find(snapshot.running, fn r -> r.issue_id == id end) ||
            Enum.find(snapshot.retrying, fn r -> r.issue_id == id end) do
-      %{issue_identifier: identifier} when is_binary(identifier) -> {:ok, identifier}
-      _ -> {:error, {:identifier_not_found, id}}
+      %{issue_identifier: identifier} when is_binary(identifier) ->
+        {:ok, identifier}
+
+      _ ->
+        {:error, {:identifier_not_found, id}}
     end
   end
 

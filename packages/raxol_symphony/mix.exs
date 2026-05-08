@@ -39,19 +39,20 @@ defmodule RaxolSymphony.MixProject do
       # Main raxol (Lifecycle runtime, Recording for evidence). Compile-time only --
       # runtime: false keeps :raxol out of this package's .app applications list so
       # the host (which owns raxol) controls its boot, avoiding circular OTP startup.
-      {:raxol, "~> 2.4", optional: true, runtime: false},
+      raxol_dep(:raxol, "~> 2.4", "../..", optional: true, runtime: false),
 
       # Agent runner backend. Optional at compile time so the orchestrator core
-      # can be exercised in tests with a noop runner.
-      {:raxol_agent, "~> 2.4", optional: true},
+      # can be exercised in tests with a noop runner. Local path in dev so we
+      # pick up Stream.Event / EventForwarder helpers ahead of next hex release.
+      raxol_dep(:raxol_agent, "~> 2.4", "../raxol_agent", optional: true),
 
-      # MCP surface (optional)
-      {:raxol_mcp, "~> 2.4", optional: true},
+      # MCP surface (optional). Local path in dev for ToolDef + register_all.
+      raxol_dep(:raxol_mcp, "~> 2.4", "../raxol_mcp", optional: true),
 
       # LiveView/Telegram/Watch surfaces -- all optional, gated at runtime.
-      {:raxol_liveview, "~> 2.4", optional: true},
-      {:raxol_telegram, "~> 0.1", optional: true},
-      {:raxol_watch, "~> 0.1", optional: true},
+      raxol_dep(:raxol_liveview, "~> 2.4", "../raxol_liveview", optional: true),
+      raxol_dep(:raxol_telegram, "~> 0.1", "../raxol_telegram", optional: true),
+      raxol_dep(:raxol_watch, "~> 0.1", "../raxol_watch", optional: true),
 
       # YAML front matter parsing.
       {:yaml_elixir, "~> 2.12"},
@@ -80,11 +81,14 @@ defmodule RaxolSymphony.MixProject do
     ]
   end
 
-  defp raxol_dep(name, version, path) do
+  defp raxol_dep(name, version, path, opts \\ []) do
     if System.get_env("HEX_BUILD") || !File.dir?(path) do
-      {name, version}
+      case opts do
+        [] -> {name, version}
+        opts -> {name, version, opts}
+      end
     else
-      {name, version, path: path, override: true}
+      {name, version, Keyword.merge([path: path, override: true], opts)}
     end
   end
 

@@ -42,6 +42,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
   alias Raxol.Symphony.{Config, Issue, PromptBuilder, Tracker}
 
+  # raxol_agent is optional; the EventForwarder helper landed in 2.5+.
+  # Builds against earlier versions fall through to `legacy_forward/3`.
+  @compile {:no_warn_undefined, Raxol.Agent.EventForwarder}
+
   @impl true
   def run(%Issue{} = issue, %Config{} = config, opts) do
     if raxol_agent_loaded?() do
@@ -72,7 +76,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     end
   end
 
-  defp run_turns(%Issue{} = issue, %Config{} = config, %{turn: turn, max_turns: max} = ctx)
+  defp run_turns(
+         %Issue{} = issue,
+         %Config{} = config,
+         %{turn: turn, max_turns: max} = ctx
+       )
        when turn > max do
     Logger.info(
       "symphony.runners.raxol_agent.max_turns_reached issue=#{issue.identifier} turns=#{ctx.turn - 1}"
@@ -113,8 +121,17 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
         system_prompt: ctx.system_prompt
       )
 
+    if Code.ensure_loaded?(Raxol.Agent.EventForwarder) do
+      Raxol.Agent.EventForwarder.to_parent(stream, ctx.parent, issue.id)
+    else
+      legacy_forward(stream, ctx.parent, issue.id)
+    end
+  end
+
+  # Fallback for builds where raxol_agent < 2.5 is loaded.
+  defp legacy_forward(stream, parent, issue_id) do
     Enum.reduce_while(stream, {:error, :no_done}, fn event, _acc ->
-      forward_event(ctx.parent, issue.id, event)
+      send(parent, {:run_event, issue_id, legacy_payload(event)})
 
       case event do
         {:done, _info} -> {:halt, :ok}
@@ -128,13 +145,53 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     end
   end
 
+  defp legacy_payload({:text_delta, text}),
+    do: %{event: :text_delta, message: text, timestamp: DateTime.utc_now()}
+
+  defp legacy_payload({:tool_use, %{name: name} = info}),
+    do: %{
+      event: :tool_use,
+      message: "tool_use: #{name}",
+      payload: info,
+      timestamp: DateTime.utc_now()
+    }
+
+  defp legacy_payload({:tool_result, info}),
+    do: %{event: :tool_result, payload: info, timestamp: DateTime.utc_now()}
+
+  defp legacy_payload({:turn_complete, info}),
+    do: %{
+      event: :turn_completed,
+      usage: Map.get(info, :usage, %{}),
+      timestamp: DateTime.utc_now()
+    }
+
+  defp legacy_payload({:done, info}),
+    do: %{
+      event: :turn_completed,
+      usage: Map.get(info, :usage, %{}),
+      timestamp: DateTime.utc_now()
+    }
+
+  defp legacy_payload({:error, reason}),
+    do: %{
+      event: :turn_failed,
+      message: inspect(reason),
+      timestamp: DateTime.utc_now()
+    }
+
   defp still_active?(%Issue{id: id} = issue, %Config{} = config) do
     case Tracker.fetch_issue_states_by_ids(config, [id]) do
       {:ok, [%Issue{} = refreshed]} ->
         cond do
-          Issue.terminal?(refreshed, config.tracker.terminal_states) -> :done
-          Issue.active?(refreshed, config.tracker.active_states) -> {:active, refreshed}
-          true -> :done
+          Issue.terminal?(refreshed, config.tracker.terminal_states) ->
+            :done
+
+          Issue.active?(refreshed, config.tracker.active_states) ->
+            {:active, refreshed}
+
+          true ->
+            :done
         end
 
       {:ok, []} ->
@@ -146,44 +203,6 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
         err
     end
   end
-
-  # -- Event forwarding -------------------------------------------------------
-
-  defp forward_event(parent, issue_id, event) when is_pid(parent) do
-    payload = event_to_payload(event)
-    send(parent, {:run_event, issue_id, payload})
-  end
-
-  defp event_to_payload({:text_delta, text}),
-    do: %{event: :text_delta, message: text, timestamp: DateTime.utc_now()}
-
-  defp event_to_payload({:tool_use, %{name: name} = info}),
-    do: %{
-      event: :tool_use,
-      message: "tool_use: #{name}",
-      payload: info,
-      timestamp: DateTime.utc_now()
-    }
-
-  defp event_to_payload({:tool_result, info}),
-    do: %{event: :tool_result, payload: info, timestamp: DateTime.utc_now()}
-
-  defp event_to_payload({:turn_complete, info}),
-    do: %{
-      event: :turn_completed,
-      usage: Map.get(info, :usage, %{}),
-      timestamp: DateTime.utc_now()
-    }
-
-  defp event_to_payload({:done, info}),
-    do: %{
-      event: :turn_completed,
-      usage: Map.get(info, :usage, %{}),
-      timestamp: DateTime.utc_now()
-    }
-
-  defp event_to_payload({:error, reason}),
-    do: %{event: :turn_failed, message: inspect(reason), timestamp: DateTime.utc_now()}
 
   # -- Backend resolution -----------------------------------------------------
 
@@ -244,7 +263,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
   # -- Prompt building (Liquid via PromptBuilder) -----------------------------
 
-  defp build_prompt(%Issue{} = issue, %Config{prompt_template: template}, 1, attempt) do
+  defp build_prompt(
+         %Issue{} = issue,
+         %Config{prompt_template: template},
+         1,
+         attempt
+       ) do
     case PromptBuilder.build(issue, template, attempt) do
       {:ok, rendered} ->
         rendered
@@ -279,6 +303,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   defp mock_backend, do: Raxol.Agent.Backend.Mock
 
   defp http_backend do
-    if Code.ensure_loaded?(Raxol.Agent.Backend.HTTP), do: Raxol.Agent.Backend.HTTP, else: nil
+    if Code.ensure_loaded?(Raxol.Agent.Backend.HTTP),
+      do: Raxol.Agent.Backend.HTTP,
+      else: nil
   end
 end

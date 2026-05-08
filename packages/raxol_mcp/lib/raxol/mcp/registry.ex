@@ -75,6 +75,58 @@ defmodule Raxol.MCP.Registry do
     GenServer.call(registry, {:register_tools, tools})
   end
 
+  @doc """
+  Registers tools and/or resources in one call after validating each tool
+  shape via `Raxol.MCP.ToolDef.validate/1`.
+
+  Reduces the common consumer boilerplate:
+
+      :ok = Registry.register_tools(registry, tools)
+      :ok = Registry.register_resources(registry, resources)
+
+  to a single call:
+
+      :ok = Registry.register_all(registry, tools: tools, resources: resources)
+
+  Returns `{:error, {:invalid_tool, index, reasons}}` (no tools or
+  resources registered) when validation fails.
+
+  Note: this helper requires the `Raxol.MCP.Registry` module to be loaded
+  at runtime. Consumers with `raxol_mcp` as an optional dep should still
+  gate the call with `Code.ensure_loaded?(Raxol.MCP.Registry)`. Optional
+  deps are an Elixir-level concern; no helper can paper over a missing
+  module.
+  """
+  @spec register_all(GenServer.server(), keyword()) ::
+          :ok | {:error, {:invalid_tool, non_neg_integer(), [atom()]}}
+  def register_all(registry \\ __MODULE__, opts) when is_list(opts) do
+    tools = Keyword.get(opts, :tools, [])
+    resources = Keyword.get(opts, :resources, [])
+    prompts = Keyword.get(opts, :prompts, [])
+
+    case validate_tools(tools) do
+      :ok ->
+        if tools != [], do: :ok = register_tools(registry, tools)
+        if resources != [], do: :ok = register_resources(registry, resources)
+        if prompts != [], do: :ok = register_prompts(registry, prompts)
+        :ok
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp validate_tools(tools) do
+    tools
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {tool, index}, _acc ->
+      case Raxol.MCP.ToolDef.validate(tool) do
+        :ok -> {:cont, :ok}
+        {:error, reasons} -> {:halt, {:error, {:invalid_tool, index, reasons}}}
+      end
+    end)
+  end
+
   @doc "Unregister tools by name."
   @spec unregister_tools(GenServer.server(), [String.t()]) :: :ok
   def unregister_tools(registry \\ __MODULE__, names) do
@@ -101,7 +153,9 @@ defmodule Raxol.MCP.Registry do
 
     case :ets.lookup(table, breaker_key) do
       [{_key, {:tool, ^name, _def, callback}}] ->
-        invoke_with_breaker(breaker_table, breaker_key, fn -> callback.(arguments) end)
+        invoke_with_breaker(breaker_table, breaker_key, fn ->
+          callback.(arguments)
+        end)
 
       [] ->
         {:error, :tool_not_found}
@@ -181,7 +235,9 @@ defmodule Raxol.MCP.Registry do
 
     case :ets.lookup(table, breaker_key) do
       [{_key, {:prompt, ^name, _def, callback}}] ->
-        invoke_with_breaker(breaker_table, breaker_key, fn -> callback.(arguments) end)
+        invoke_with_breaker(breaker_table, breaker_key, fn ->
+          callback.(arguments)
+        end)
 
       [] ->
         {:error, :prompt_not_found}
@@ -255,7 +311,10 @@ defmodule Raxol.MCP.Registry do
   @impl true
   def handle_call({:register_resources, resources}, _from, state) do
     for resource <- resources do
-      entry = {:resource, resource.uri, resource_definition(resource), resource.callback}
+      entry =
+        {:resource, resource.uri, resource_definition(resource),
+         resource.callback}
+
       :ets.insert(state.table, {resource_key(resource.uri), entry})
     end
 

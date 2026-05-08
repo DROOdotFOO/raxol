@@ -4,7 +4,9 @@ defmodule Raxol.MCP.RegistryTest do
   alias Raxol.MCP.Registry
 
   setup do
-    {:ok, registry} = Registry.start_link(name: :"registry_#{System.unique_integer()}")
+    {:ok, registry} =
+      Registry.start_link(name: :"registry_#{System.unique_integer()}")
+
     %{registry: registry}
   end
 
@@ -13,7 +15,9 @@ defmodule Raxol.MCP.RegistryTest do
       name: name,
       description: "A test tool",
       inputSchema: %{type: "object", properties: %{x: %{type: "string"}}},
-      callback: fn args -> {:ok, [%{type: "text", text: "got: #{inspect(args)}"}]} end
+      callback: fn args ->
+        {:ok, [%{type: "text", text: "got: #{inspect(args)}"}]}
+      end
     }
   end
 
@@ -30,7 +34,11 @@ defmodule Raxol.MCP.RegistryTest do
     test "register and list tools", %{registry: r} do
       assert Registry.list_tools(r) == []
 
-      :ok = Registry.register_tools(r, [sample_tool("tool_a"), sample_tool("tool_b")])
+      :ok =
+        Registry.register_tools(r, [
+          sample_tool("tool_a"),
+          sample_tool("tool_b")
+        ])
 
       tools = Registry.list_tools(r)
       assert length(tools) == 2
@@ -75,7 +83,8 @@ defmodule Raxol.MCP.RegistryTest do
       tool = %{sample_tool() | callback: fn args -> {:ok, args["x"]} end}
       :ok = Registry.register_tools(r, [tool])
 
-      assert {:ok, "hello"} = Registry.call_tool(r, "test_tool", %{"x" => "hello"})
+      assert {:ok, "hello"} =
+               Registry.call_tool(r, "test_tool", %{"x" => "hello"})
     end
 
     test "returns error for unknown tool", %{registry: r} do
@@ -133,21 +142,28 @@ defmodule Raxol.MCP.RegistryTest do
 
   describe "read_resource" do
     test "reads registered resource", %{registry: r} do
-      resource = %{sample_resource() | callback: fn -> {:ok, %{counter: 42}} end}
+      resource = %{
+        sample_resource()
+        | callback: fn -> {:ok, %{counter: 42}} end
+      }
+
       :ok = Registry.register_resources(r, [resource])
 
-      assert {:ok, %{counter: 42}} = Registry.read_resource(r, "raxol://test/resource")
+      assert {:ok, %{counter: 42}} =
+               Registry.read_resource(r, "raxol://test/resource")
     end
 
     test "returns error for unknown resource", %{registry: r} do
-      assert {:error, :resource_not_found} = Registry.read_resource(r, "raxol://nope")
+      assert {:error, :resource_not_found} =
+               Registry.read_resource(r, "raxol://nope")
     end
 
     test "catches callback exceptions", %{registry: r} do
       resource = %{sample_resource() | callback: fn -> raise "kaboom" end}
       :ok = Registry.register_resources(r, [resource])
 
-      assert {:error, "kaboom"} = Registry.read_resource(r, "raxol://test/resource")
+      assert {:error, "kaboom"} =
+               Registry.read_resource(r, "raxol://test/resource")
     end
   end
 
@@ -160,8 +176,8 @@ defmodule Raxol.MCP.RegistryTest do
 
       :ok = Registry.register_tools(r, [sample_tool()])
 
-      assert_receive {[:raxol, :mcp, :registry, :tools_changed], ^ref, %{count: 1},
-                      %{action: :register, names: ["test_tool"]}}
+      assert_receive {[:raxol, :mcp, :registry, :tools_changed], ^ref,
+                      %{count: 1}, %{action: :register, names: ["test_tool"]}}
     end
 
     test "emits tools_changed on unregister", %{registry: r} do
@@ -174,8 +190,50 @@ defmodule Raxol.MCP.RegistryTest do
 
       :ok = Registry.unregister_tools(r, ["test_tool"])
 
-      assert_receive {[:raxol, :mcp, :registry, :tools_changed], ^ref, %{count: 1},
-                      %{action: :unregister, names: ["test_tool"]}}
+      assert_receive {[:raxol, :mcp, :registry, :tools_changed], ^ref,
+                      %{count: 1}, %{action: :unregister, names: ["test_tool"]}}
+    end
+  end
+
+  describe "register_all/2" do
+    test "registers tools and resources together", %{registry: r} do
+      assert :ok =
+               Registry.register_all(r,
+                 tools: [sample_tool("a"), sample_tool("b")],
+                 resources: [
+                   sample_resource("raxol://x"),
+                   sample_resource("raxol://y")
+                 ]
+               )
+
+      assert length(Registry.list_tools(r)) == 2
+      assert length(Registry.list_resources(r)) == 2
+    end
+
+    test "validates each tool before submitting", %{registry: r} do
+      bad_tool = %{name: "bad"}
+
+      assert {:error, {:invalid_tool, 1, reasons}} =
+               Registry.register_all(r,
+                 tools: [sample_tool("good"), bad_tool],
+                 resources: [sample_resource()]
+               )
+
+      assert :missing_description in reasons
+      # Nothing registered when validation fails.
+      assert Registry.list_tools(r) == []
+      assert Registry.list_resources(r) == []
+    end
+
+    test "tolerates empty inputs", %{registry: r} do
+      assert :ok = Registry.register_all(r, [])
+      assert Registry.list_tools(r) == []
+      assert Registry.list_resources(r) == []
+    end
+
+    test "registers only resources when tools list is empty", %{registry: r} do
+      assert :ok = Registry.register_all(r, resources: [sample_resource()])
+      assert length(Registry.list_resources(r)) == 1
     end
   end
 end
