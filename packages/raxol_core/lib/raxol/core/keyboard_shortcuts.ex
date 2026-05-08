@@ -29,13 +29,9 @@ defmodule Raxol.Core.KeyboardShortcuts do
   Ensures the Keyboard Shortcuts server is started.
   """
   def ensure_started do
-    case Process.whereis(Server) do
-      nil ->
-        {:ok, _pid} = Server.start_link(name: Server)
-        :ok
-
-      _pid ->
-        :ok
+    case Server.start_link(name: Server) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
     end
   end
 

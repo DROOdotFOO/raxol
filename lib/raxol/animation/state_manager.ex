@@ -27,13 +27,9 @@ defmodule Raxol.Animation.StateManager do
   Called automatically when using any function.
   """
   def ensure_started do
-    case Process.whereis(StateServer) do
-      nil ->
-        {:ok, _pid} = StateServer.start_link(name: StateServer)
-        :ok
-
-      _pid ->
-        :ok
+    case StateServer.start_link(name: StateServer) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
     end
   end
 

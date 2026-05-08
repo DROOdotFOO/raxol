@@ -27,13 +27,9 @@ defmodule Raxol.Core.FocusManager do
   Called automatically when using any function.
   """
   def ensure_started do
-    case Process.whereis(Server) do
-      nil ->
-        {:ok, _pid} = Server.start_link(name: Server)
-        :ok
-
-      _pid ->
-        :ok
+    case Server.start_link(name: Server) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
     end
   end
 
