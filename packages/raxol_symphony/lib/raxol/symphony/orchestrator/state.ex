@@ -48,6 +48,8 @@ defmodule Raxol.Symphony.Orchestrator.State do
     :tracker_module,
     :task_supervisor,
     :tick_timer_ref,
+    :workflow_store,
+    :last_preflight_error,
     running: %{},
     claimed: MapSet.new(),
     retry_attempts: %{},
@@ -63,11 +65,13 @@ defmodule Raxol.Symphony.Orchestrator.State do
   ]
 
   @type t :: %__MODULE__{
-          config: Config.t(),
+          config: Config.t() | nil,
           runner_module: module() | nil,
           tracker_module: module() | nil,
           task_supervisor: GenServer.server() | nil,
           tick_timer_ref: reference() | nil,
+          workflow_store: GenServer.server() | nil,
+          last_preflight_error: term() | nil,
           running: %{optional(binary()) => running_entry()},
           claimed: MapSet.t(binary()),
           retry_attempts: %{optional(binary()) => retry_entry()},

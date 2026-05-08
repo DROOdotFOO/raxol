@@ -108,9 +108,7 @@ defmodule Raxol.Symphony.IntegrationTest do
     cfg = config(_max_turns = 1, _mock_latency_ms = 500)
 
     pid =
-      start_supervised!(
-        {Orchestrator, [config: cfg, auto_start_tick: false, name: nil]}
-      )
+      start_supervised!({Orchestrator, [config: cfg, auto_start_tick: false, name: nil]})
 
     :ok = Orchestrator.tick_now(pid)
     # 3 dispatched immediately; remaining 2 wait until slots free up.

@@ -68,6 +68,11 @@ defmodule RaxolSymphony.MixProject do
       # HTTP client for tracker adapters (Phase 6).
       {:req, "~> 0.5", optional: true},
 
+      # Web surface deps (Phase 10) -- both optional, the JSON API and
+      # LiveView dashboard are gated at compile time on these being loaded.
+      {:plug, "~> 1.14", optional: true},
+      {:phoenix_live_view, "~> 1.0 or ~> 0.20", optional: true},
+
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},

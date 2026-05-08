@@ -31,15 +31,26 @@ defmodule Raxol.Symphony.Config.Schema do
 
   @doc """
   Validates a config struct. Returns `:ok` or `{:error, reason}`.
+
+  ## Options
+
+  - `:skip_runner` -- skip the `runner.kind`/`codex.command` check. Used by
+    the orchestrator preflight when a `:runner_module` override is in place
+    (test mode, custom embedding), since the workflow's declared runner is
+    irrelevant in that case.
   """
-  @spec validate(Config.t()) :: :ok | {:error, error()}
-  def validate(%Config{} = config) do
+  @spec validate(Config.t(), keyword()) :: :ok | {:error, error()}
+  def validate(%Config{} = config, opts \\ []) do
     with :ok <- validate_tracker(config.tracker),
          :ok <- validate_polling(config.polling),
          :ok <- validate_workspace(config.workspace),
          :ok <- validate_hooks(config.hooks),
          :ok <- validate_agent(config.agent) do
-      validate_runner(config.runner, config.codex)
+      if Keyword.get(opts, :skip_runner, false) do
+        :ok
+      else
+        validate_runner(config.runner, config.codex)
+      end
     end
   end
 

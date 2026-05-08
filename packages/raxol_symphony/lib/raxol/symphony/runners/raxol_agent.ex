@@ -158,16 +158,29 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     do: %{event: :text_delta, message: text, timestamp: DateTime.utc_now()}
 
   defp event_to_payload({:tool_use, %{name: name} = info}),
-    do: %{event: :tool_use, message: "tool_use: #{name}", payload: info, timestamp: DateTime.utc_now()}
+    do: %{
+      event: :tool_use,
+      message: "tool_use: #{name}",
+      payload: info,
+      timestamp: DateTime.utc_now()
+    }
 
   defp event_to_payload({:tool_result, info}),
     do: %{event: :tool_result, payload: info, timestamp: DateTime.utc_now()}
 
   defp event_to_payload({:turn_complete, info}),
-    do: %{event: :turn_completed, usage: Map.get(info, :usage, %{}), timestamp: DateTime.utc_now()}
+    do: %{
+      event: :turn_completed,
+      usage: Map.get(info, :usage, %{}),
+      timestamp: DateTime.utc_now()
+    }
 
   defp event_to_payload({:done, info}),
-    do: %{event: :turn_completed, usage: Map.get(info, :usage, %{}), timestamp: DateTime.utc_now()}
+    do: %{
+      event: :turn_completed,
+      usage: Map.get(info, :usage, %{}),
+      timestamp: DateTime.utc_now()
+    }
 
   defp event_to_payload({:error, reason}),
     do: %{event: :turn_failed, message: inspect(reason), timestamp: DateTime.utc_now()}

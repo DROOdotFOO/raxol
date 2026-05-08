@@ -23,7 +23,10 @@ defmodule Raxol.Symphony.PromptBuilderTest do
   describe "build/3 -- happy paths" do
     test "renders simple variable substitution" do
       assert {:ok, rendered} =
-               PromptBuilder.build(issue(), "Working on {{ issue.identifier }} -- {{ issue.title }}.")
+               PromptBuilder.build(
+                 issue(),
+                 "Working on {{ issue.identifier }} -- {{ issue.title }}."
+               )
 
       assert rendered == "Working on MT-1 -- Refactor X."
     end

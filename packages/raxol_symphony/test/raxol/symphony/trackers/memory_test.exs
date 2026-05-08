@@ -115,24 +115,25 @@ defmodule Raxol.Symphony.Trackers.MemoryTest do
                Tracker.fetch_candidate_issues(config)
     end
 
-    test "linear stub returns :not_implemented" do
+    test "dispatches to Linear adapter when kind is \"linear\"" do
       config =
         Config.from_workflow(%{
-          config: %{tracker: %{kind: "linear", api_key: "x", project_slug: "demo"}},
+          config: %{tracker: %{kind: "linear", api_key: nil, project_slug: "demo"}},
           prompt_template: ""
         })
 
-      assert {:error, :not_implemented} = Tracker.fetch_candidate_issues(config)
+      # Real adapter surfaces its own validation error rather than :not_implemented.
+      assert {:error, :missing_tracker_api_key} = Tracker.fetch_candidate_issues(config)
     end
 
-    test "github stub returns :not_implemented" do
+    test "dispatches to GitHub adapter when kind is \"github\"" do
       config =
         Config.from_workflow(%{
-          config: %{tracker: %{kind: "github", api_key: "x"}},
+          config: %{tracker: %{kind: "github", api_key: nil}},
           prompt_template: ""
         })
 
-      assert {:error, :not_implemented} = Tracker.fetch_candidate_issues(config)
+      assert {:error, :missing_tracker_api_key} = Tracker.fetch_candidate_issues(config)
     end
   end
 end

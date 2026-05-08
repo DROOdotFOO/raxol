@@ -32,8 +32,15 @@ defmodule Raxol.Symphony.Orchestrator do
   use GenServer
   require Logger
 
-  alias Raxol.Symphony.{Issue, Runner, Tracker, Workspace}
-  alias Raxol.Symphony.Orchestrator.{Candidate, Retry, State}
+  alias Raxol.Symphony.Config.Schema
+  alias Raxol.Symphony.Issue
+  alias Raxol.Symphony.Orchestrator.Candidate
+  alias Raxol.Symphony.Orchestrator.Retry
+  alias Raxol.Symphony.Orchestrator.State
+  alias Raxol.Symphony.Runner
+  alias Raxol.Symphony.Tracker
+  alias Raxol.Symphony.WorkflowStore
+  alias Raxol.Symphony.Workspace
 
   # -- Client API -------------------------------------------------------------
 
@@ -75,7 +82,15 @@ defmodule Raxol.Symphony.Orchestrator do
 
   @impl true
   def init(opts) do
-    config = Keyword.fetch!(opts, :config)
+    workflow_store = Keyword.get(opts, :workflow_store)
+
+    config =
+      case {Keyword.get(opts, :config), workflow_store} do
+        {%_{} = cfg, _} -> cfg
+        {nil, store} when not is_nil(store) -> WorkflowStore.get(store)
+        {nil, nil} -> raise ArgumentError, ":config or :workflow_store is required"
+      end
+
     runner_module = Keyword.get(opts, :runner_module)
     tracker_module = Keyword.get(opts, :tracker_module)
     task_supervisor = Keyword.get(opts, :task_supervisor)
@@ -85,7 +100,8 @@ defmodule Raxol.Symphony.Orchestrator do
       config: config,
       runner_module: runner_module,
       tracker_module: tracker_module,
-      task_supervisor: task_supervisor
+      task_supervisor: task_supervisor,
+      workflow_store: workflow_store
     }
 
     state = if auto_start_tick, do: schedule_tick(state, 0), else: state
@@ -111,7 +127,12 @@ defmodule Raxol.Symphony.Orchestrator do
       entry ->
         Process.demonitor(entry.worker_ref, [:flush])
         Process.exit(entry.worker_pid, :kill)
-        new_state = remove_running(state, issue_id, :stopped_by_user)
+
+        new_state =
+          state
+          |> remove_running(issue_id, :stopped_by_user)
+          |> notify_listeners(:worker_stopped)
+
         {:reply, :ok, new_state}
     end
   end
@@ -163,11 +184,51 @@ defmodule Raxol.Symphony.Orchestrator do
   # -- Tick / dispatch --------------------------------------------------------
 
   defp run_tick(%State{} = state) do
-    state
-    |> reconcile()
-    |> dispatch_candidates()
-    |> notify_listeners(:tick_completed)
+    case preflight(state) do
+      {:ok, state} ->
+        state
+        |> reconcile()
+        |> dispatch_candidates()
+        |> notify_listeners(:tick_completed)
+
+      {:error, reason, state} ->
+        Logger.warning("symphony.orchestrator.preflight_failed reason=#{inspect(reason)}")
+        notify_listeners(state, {:preflight_failed, reason})
+    end
   end
+
+  # SPEC s6.3: re-validate the workflow config before each dispatch tick.
+  # Pulls the latest cached config from the WorkflowStore (if wired) so
+  # hot-reloaded edits take effect on the next tick. On failure, the
+  # in-memory config is preserved and dispatch is skipped this tick.
+  defp preflight(%State{workflow_store: nil} = state) do
+    case Schema.validate(state.config, validate_opts(state)) do
+      :ok -> {:ok, %State{state | last_preflight_error: nil}}
+      {:error, reason} -> {:error, reason, %State{state | last_preflight_error: reason}}
+    end
+  end
+
+  defp preflight(%State{workflow_store: store} = state) do
+    case WorkflowStore.get(store) do
+      nil ->
+        {:error, :no_workflow_config, %State{state | last_preflight_error: :no_workflow_config}}
+
+      latest_config ->
+        case Schema.validate(latest_config, validate_opts(state)) do
+          :ok ->
+            {:ok, %State{state | config: latest_config, last_preflight_error: nil}}
+
+          {:error, reason} ->
+            {:error, reason, %State{state | last_preflight_error: reason}}
+        end
+    end
+  end
+
+  # When the orchestrator was started with an explicit runner_module override
+  # (typical in tests and embedded use), the workflow's declared `runner.kind`
+  # is irrelevant -- skip that check during preflight.
+  defp validate_opts(%State{runner_module: nil}), do: []
+  defp validate_opts(%State{}), do: [skip_runner: true]
 
   defp dispatch_candidates(%State{} = state) do
     case Tracker.fetch_candidate_issues(state.config) do
