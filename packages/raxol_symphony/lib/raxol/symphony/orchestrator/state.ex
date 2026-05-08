@@ -19,6 +19,7 @@ defmodule Raxol.Symphony.Orchestrator.State do
           last_message: binary() | nil,
           last_event_at_ms: integer() | nil,
           turn_count: non_neg_integer(),
+          capture_pid: pid() | nil,
           tokens: %{
             input_tokens: non_neg_integer(),
             output_tokens: non_neg_integer(),

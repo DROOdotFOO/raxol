@@ -24,6 +24,7 @@ defmodule Raxol.Symphony.Config do
     :agent,
     :codex,
     :runner,
+    :recording,
     :workflow_path,
     :prompt_template
   ]
@@ -36,6 +37,7 @@ defmodule Raxol.Symphony.Config do
           agent: map(),
           codex: map(),
           runner: map(),
+          recording: map(),
           workflow_path: Path.t() | nil,
           prompt_template: binary()
         }
@@ -52,6 +54,8 @@ defmodule Raxol.Symphony.Config do
   @default_turn_timeout_ms 3_600_000
   @default_read_timeout_ms 5_000
   @default_stall_timeout_ms 300_000
+  @default_recording_width 132
+  @default_recording_height 50
 
   @doc """
   Builds a typed config struct from a parsed workflow.
@@ -70,6 +74,7 @@ defmodule Raxol.Symphony.Config do
       agent: agent(raw),
       codex: codex(raw),
       runner: runner(raw),
+      recording: recording(raw),
       workflow_path: workflow_path,
       prompt_template: prompt
     }
@@ -185,6 +190,19 @@ defmodule Raxol.Symphony.Config do
     %{
       kind: kind,
       agent: Map.get(section, :agent, %{})
+    }
+  end
+
+  # Raxol extension: per-run asciicast capture. When `enabled: true`, the
+  # orchestrator writes `<workspace>/.raxol_symphony/run-<attempt>.cast`
+  # for each dispatched run.
+  defp recording(raw) do
+    section = Map.get(raw, :recording, %{})
+
+    %{
+      enabled: Map.get(section, :enabled, false),
+      width: Map.get(section, :width, @default_recording_width),
+      height: Map.get(section, :height, @default_recording_height)
     }
   end
 

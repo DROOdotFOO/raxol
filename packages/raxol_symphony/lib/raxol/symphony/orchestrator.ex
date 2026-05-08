@@ -33,6 +33,7 @@ defmodule Raxol.Symphony.Orchestrator do
   require Logger
 
   alias Raxol.Symphony.Config.Schema
+  alias Raxol.Symphony.Evidence.Capture
   alias Raxol.Symphony.Issue
   alias Raxol.Symphony.Orchestrator.Candidate
   alias Raxol.Symphony.Orchestrator.Retry
@@ -68,6 +69,18 @@ defmodule Raxol.Symphony.Orchestrator do
   @spec stop_run(GenServer.server(), binary()) :: :ok | {:error, :not_running}
   def stop_run(server \\ __MODULE__, issue_id) do
     GenServer.call(server, {:stop_run, issue_id})
+  end
+
+  @doc """
+  Returns the loaded `Raxol.Symphony.Config` struct.
+
+  Used by the MCP and LiveView surfaces when they need to reach beyond the
+  per-run snapshot (e.g., to look up `workspace.root` for evidence
+  collection).
+  """
+  @spec get_config(GenServer.server()) :: Raxol.Symphony.Config.t()
+  def get_config(server \\ __MODULE__) do
+    GenServer.call(server, :get_config)
   end
 
   @doc """
@@ -140,6 +153,10 @@ defmodule Raxol.Symphony.Orchestrator do
   def handle_call(:tick_now, _from, %State{} = state) do
     new_state = run_tick(state)
     {:reply, :ok, new_state}
+  end
+
+  def handle_call(:get_config, _from, %State{} = state) do
+    {:reply, state.config, state}
   end
 
   @impl true
@@ -244,9 +261,7 @@ defmodule Raxol.Symphony.Orchestrator do
   defp dispatch_issue(%State{} = state, %Issue{} = issue, attempt) do
     with {:ok, runner_mod} <- runner_module(state),
          {:ok, %{path: workspace_path}} <- Workspace.ensure(state.config, issue.identifier) do
-      task = spawn_worker_task(state, runner_mod, issue, attempt, workspace_path)
-      entry = build_running_entry(issue, attempt, workspace_path, task)
-      register_running(state, issue, entry)
+      do_dispatch_issue(state, issue, attempt, runner_mod, workspace_path)
     else
       {:error, reason} ->
         Logger.warning(
@@ -256,6 +271,35 @@ defmodule Raxol.Symphony.Orchestrator do
         schedule_failure_retry(state, issue, attempt || 0, reason)
     end
   end
+
+  defp do_dispatch_issue(state, issue, attempt, runner_mod, workspace_path) do
+    capture_pid = maybe_start_capture(state, issue, attempt, workspace_path)
+    task = spawn_worker_task(state, runner_mod, issue, attempt, workspace_path)
+    entry = build_running_entry(issue, attempt, workspace_path, task, capture_pid)
+    register_running(state, issue, entry)
+  end
+
+  defp maybe_start_capture(
+         %State{config: %{recording: %{enabled: true} = rec}},
+         issue,
+         attempt,
+         workspace_path
+       ) do
+    case Capture.start_link(
+           path: Capture.path_for(workspace_path, attempt),
+           width: rec.width,
+           height: rec.height,
+           title: issue.identifier
+         ) do
+      {:ok, pid} ->
+        pid
+
+      _ ->
+        nil
+    end
+  end
+
+  defp maybe_start_capture(_state, _issue, _attempt, _workspace_path), do: nil
 
   defp spawn_worker_task(%State{} = state, runner_mod, %Issue{} = issue, attempt, workspace_path) do
     parent = self()
@@ -278,7 +322,7 @@ defmodule Raxol.Symphony.Orchestrator do
     )
   end
 
-  defp build_running_entry(%Issue{} = issue, attempt, workspace_path, task) do
+  defp build_running_entry(%Issue{} = issue, attempt, workspace_path, task, capture_pid) do
     %{
       issue: issue,
       attempt: attempt,
@@ -291,6 +335,7 @@ defmodule Raxol.Symphony.Orchestrator do
       last_message: nil,
       last_event_at_ms: nil,
       turn_count: 0,
+      capture_pid: capture_pid,
       tokens: State.empty_tokens()
     }
   end
@@ -304,6 +349,7 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp handle_worker_exit(%State{} = state, issue_id, reason) do
     entry = Map.fetch!(state.running, issue_id)
+    Capture.stop(entry.capture_pid)
     state = record_runtime(state, entry)
     state = %State{state | running: Map.delete(state.running, issue_id)}
 
@@ -349,6 +395,8 @@ defmodule Raxol.Symphony.Orchestrator do
         state
 
       entry ->
+        Capture.stop(entry.capture_pid)
+
         state
         |> record_runtime(entry)
         |> Map.put(:running, Map.delete(state.running, issue_id))
@@ -558,6 +606,7 @@ defmodule Raxol.Symphony.Orchestrator do
         state
 
       entry ->
+        Capture.record(entry.capture_pid, event)
         updated = update_entry_from_event(entry, event)
         %State{state | running: Map.put(state.running, issue_id, updated)}
     end

@@ -232,16 +232,41 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
   # -- symphony_get_evidence --------------------------------------------------
 
   describe "symphony_get_evidence" do
-    test "returns the Phase 14 placeholder", %{registry: registry} do
+    test "errors when neither issue_id nor identifier is supplied", %{registry: registry} do
       orch = start_orchestrator()
       register(registry, orch)
 
-      assert {:ok, %{status: "not_implemented", message: msg}} =
+      assert {:ok, %{status: "error"}} =
+               Registry.call_tool(registry, "symphony_get_evidence", %{})
+    end
+
+    test "errors when issue_id is unknown to the orchestrator", %{registry: registry} do
+      orch = start_orchestrator()
+      register(registry, orch)
+
+      assert {:ok, %{status: "error", message: msg}} =
                Registry.call_tool(registry, "symphony_get_evidence", %{
-                 "issue_id" => "a"
+                 "issue_id" => "ghost"
                })
 
-      assert msg =~ "Phase 14"
+      assert msg =~ "identifier_not_found"
+    end
+
+    test "collects evidence using the supplied identifier", %{registry: registry} do
+      orch = start_orchestrator()
+      register(registry, orch)
+
+      # No GitHub creds, no cloc, no recordings -- but the call should still
+      # return :ok with empty/error fields populated.
+      assert {:ok, %{status: "ok"} = result} =
+               Registry.call_tool(registry, "symphony_get_evidence", %{
+                 "identifier" => "MT-evidence",
+                 "repo" => "raxol/test"
+               })
+
+      assert result.repo == "raxol/test"
+      assert result.workspace =~ "MT-evidence"
+      assert is_map(result.errors)
     end
   end
 

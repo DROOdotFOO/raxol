@@ -36,7 +36,8 @@ defmodule Raxol.Symphony.Surfaces.MCP do
   -- when raxol_mcp is not present, `register/1` is a no-op returning `:ok`.
   """
 
-  alias Raxol.Symphony.Orchestrator
+  alias Raxol.Symphony.{Evidence, Orchestrator, PathSafety}
+  alias Raxol.Symphony.Evidence.Subject
 
   @compile {:no_warn_undefined, [Raxol.MCP.Registry]}
 
@@ -213,29 +214,131 @@ defmodule Raxol.Symphony.Surfaces.MCP do
     }
   end
 
-  defp get_evidence_tool(_orch) do
+  defp get_evidence_tool(orch) do
     %{
       name: "symphony_get_evidence",
       description: """
-      Returns evidence for a completed run -- CI status, PR comments, complexity
-      metrics, and asciinema replay refs. Currently a placeholder; full
-      implementation lands in Phase 14.
+      Collects evidence for a Symphony run -- CI status, recent PR comments,
+      code complexity, and asciinema replay refs -- by combining outputs from
+      the GitHub, Complexity, and Recording backends.
+
+      The orchestrator infers `identifier` from `issue_id` when the run is
+      still tracked (running or in retry). Pass `identifier` directly to
+      collect evidence for runs the orchestrator has forgotten. `repo`,
+      `ref`, and `issue_number` are inferred from the workspace's git
+      configuration when omitted.
       """,
       inputSchema: %{
         type: "object",
         properties: %{
-          issue_id: %{type: "string", description: "Issue ID for the completed run."}
-        },
-        required: ["issue_id"]
-      },
-      callback: fn _args ->
-        %{
-          status: "not_implemented",
-          message: "symphony_get_evidence ships in Phase 14 (evidence collection)"
+          issue_id: %{
+            type: "string",
+            description: "Tracker-internal issue ID."
+          },
+          identifier: %{
+            type: "string",
+            description:
+              "Tracker identifier (e.g. \"MT-1\"). Falls back when issue_id is unknown."
+          },
+          repo: %{
+            type: "string",
+            description: "GitHub repo as owner/name. Inferred from workspace git when omitted."
+          },
+          ref: %{
+            type: "string",
+            description: "Git ref (branch or sha). Inferred from workspace HEAD when omitted."
+          },
+          issue_number: %{
+            type: "integer",
+            description: "Numeric PR/issue number for comment lookup."
+          }
         }
-      end
+      },
+      callback: fn args -> evidence_response(orch, args) end
     }
   end
+
+  defp evidence_response(orch, args) do
+    with {:ok, identifier} <- resolve_identifier(orch, args),
+         {:ok, config} <- safe_get_config(orch),
+         {:ok, workspace} <- compute_workspace(config, identifier) do
+      subject = build_subject(workspace, args)
+      evidence = Evidence.collect(config, subject)
+      Map.put(Evidence.to_map(evidence), :status, "ok")
+    else
+      {:error, reason} -> %{status: "error", message: format_reason(reason)}
+    end
+  end
+
+  defp resolve_identifier(orch, args) do
+    explicit = args["identifier"] || args[:identifier]
+
+    if is_binary(explicit) and byte_size(explicit) > 0 do
+      {:ok, explicit}
+    else
+      resolve_identifier_via_snapshot(orch, args)
+    end
+  end
+
+  defp resolve_identifier_via_snapshot(orch, args) do
+    with {:ok, id} <- fetch_id(args),
+         snapshot <- safe_snapshot(orch),
+         {:ok, identifier} <- find_identifier(snapshot, id) do
+      {:ok, identifier}
+    else
+      :error -> {:error, :issue_id_or_identifier_required}
+      other -> other
+    end
+  end
+
+  defp find_identifier(snapshot, id) do
+    case Enum.find(snapshot.running, fn r -> r.issue_id == id end) ||
+           Enum.find(snapshot.retrying, fn r -> r.issue_id == id end) do
+      %{issue_identifier: identifier} when is_binary(identifier) -> {:ok, identifier}
+      _ -> {:error, {:identifier_not_found, id}}
+    end
+  end
+
+  defp safe_get_config(orch) do
+    case safe_call(fn -> Orchestrator.get_config(orch) end) do
+      {:ok, %_{} = config} -> {:ok, config}
+      _ -> {:error, :orchestrator_unavailable}
+    end
+  end
+
+  defp compute_workspace(config, identifier) do
+    PathSafety.workspace_path(config.workspace.root, identifier)
+  end
+
+  defp build_subject(workspace, args) do
+    explicit_repo = args["repo"] || args[:repo]
+    explicit_ref = args["ref"] || args[:ref]
+    explicit_issue = args["issue_number"] || args[:issue_number]
+
+    workspace
+    |> Subject.from_workspace()
+    |> maybe_replace(:repo, explicit_repo)
+    |> maybe_replace(:ref, explicit_ref)
+    |> maybe_replace(:issue_number, normalize_issue_number(explicit_issue))
+  end
+
+  defp maybe_replace(subject, _key, nil), do: subject
+  defp maybe_replace(subject, key, value), do: Map.put(subject, key, value)
+
+  defp normalize_issue_number(nil), do: nil
+  defp normalize_issue_number(n) when is_integer(n) and n > 0, do: n
+
+  defp normalize_issue_number(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} when n > 0 -> n
+      _ -> nil
+    end
+  end
+
+  defp normalize_issue_number(_), do: nil
+
+  defp format_reason(reason) when is_binary(reason), do: reason
+  defp format_reason(reason), do: inspect(reason)
 
   # -- Helpers ----------------------------------------------------------------
 
