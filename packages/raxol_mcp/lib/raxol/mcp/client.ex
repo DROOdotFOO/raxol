@@ -25,7 +25,7 @@ defmodule Raxol.MCP.Client do
   decompose them.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -132,8 +132,8 @@ defmodule Raxol.MCP.Client do
 
   # -- Server Callbacks ---------------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     name = Keyword.fetch!(opts, :name)
     command = Keyword.fetch!(opts, :command)
     args = Keyword.get(opts, :args, [])
@@ -157,7 +157,7 @@ defmodule Raxol.MCP.Client do
     {:ok, state, {:continue, :spawn_server}}
   end
 
-  @impl true
+  @impl GenServer
   def handle_continue(:spawn_server, state) do
     charlist_env =
       Enum.map(state.env, fn {k, v} ->
@@ -185,35 +185,35 @@ defmodule Raxol.MCP.Client do
     send_initialize(state)
   end
 
-  @impl true
-  def handle_call(:list_tools, _from, %{status: :ready, tools: tools} = state)
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:list_tools, _from, %{status: :ready, tools: tools} = state)
       when is_list(tools) do
     {:reply, {:ok, tools}, state}
   end
 
-  def handle_call(:list_tools, from, %{status: :ready} = state) do
+  def handle_manager_call(:list_tools, from, %{status: :ready} = state) do
     {state, id} = next_id(state)
     state = register_pending(state, id, from)
     send_request(state, id, "tools/list", %{})
     {:noreply, state}
   end
 
-  def handle_call(:list_tools, _from, state) do
+  def handle_manager_call(:list_tools, _from, state) do
     {:reply, {:error, {:not_ready, state.status}}, state}
   end
 
-  def handle_call({:call_tool, tool_name, arguments}, from, %{status: :ready} = state) do
+  def handle_manager_call({:call_tool, tool_name, arguments}, from, %{status: :ready} = state) do
     {state, id} = next_id(state)
     state = register_pending(state, id, from)
     send_request(state, id, "tools/call", %{name: tool_name, arguments: arguments})
     {:noreply, state}
   end
 
-  def handle_call({:call_tool, _tool, _args}, _from, state) do
+  def handle_manager_call({:call_tool, _tool, _args}, _from, state) do
     {:reply, {:error, {:not_ready, state.status}}, state}
   end
 
-  def handle_call(:status, _from, state) do
+  def handle_manager_call(:status, _from, state) do
     info = %{
       name: state.name,
       status: state.status,
@@ -224,16 +224,16 @@ defmodule Raxol.MCP.Client do
     {:reply, info, state}
   end
 
-  @impl true
-  def handle_info({port, {:data, {:eol, line}}}, %{port: port} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({port, {:data, {:eol, line}}}, %{port: port} = state) do
     handle_line(line, state)
   end
 
-  def handle_info({port, {:data, {:noeol, chunk}}}, %{port: port} = state) do
+  def handle_manager_info({port, {:data, {:noeol, chunk}}}, %{port: port} = state) do
     {:noreply, %{state | buffer: state.buffer <> chunk}}
   end
 
-  def handle_info({port, {:exit_status, code}}, %{port: port} = state) do
+  def handle_manager_info({port, {:exit_status, code}}, %{port: port} = state) do
     Logger.warning("[MCP.Client] Server #{state.name} exited with status #{code}")
 
     Enum.each(state.pending, fn {_id, from} ->
@@ -243,9 +243,9 @@ defmodule Raxol.MCP.Client do
     {:noreply, %{state | port: nil, status: :closed, pending: %{}}}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
-  @impl true
+  @impl GenServer
   def terminate(_reason, %{port: port} = _state) when is_port(port) do
     Port.close(port)
     :ok

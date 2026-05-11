@@ -23,7 +23,7 @@ defmodule Raxol.MCP.Transport.Stdio do
       Logger.configure_backend(:console, device: :standard_error)
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -58,8 +58,8 @@ defmodule Raxol.MCP.Transport.Stdio do
 
   # -- GenServer Callbacks -------------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     server = Keyword.get(opts, :server, Server)
     io_device = Keyword.get(opts, :io_device, :stdio)
     output_device = Keyword.get(opts, :output_device, :stdio)
@@ -73,7 +73,7 @@ defmodule Raxol.MCP.Transport.Stdio do
     {:ok, state, {:continue, :start_reader}}
   end
 
-  @impl true
+  @impl GenServer
   def handle_continue(:start_reader, state) do
     # Subscribe to server notifications
     Server.subscribe(state.server, self())
@@ -89,8 +89,8 @@ defmodule Raxol.MCP.Transport.Stdio do
     {:noreply, %{state | reader_ref: ref}}
   end
 
-  @impl true
-  def handle_info({:stdio_line, line}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:stdio_line, line}, state) do
     case Protocol.decode(line) do
       {:ok, message} ->
         try do
@@ -117,22 +117,22 @@ defmodule Raxol.MCP.Transport.Stdio do
     {:noreply, state}
   end
 
-  def handle_info({:mcp_notification, notification}, state) do
+  def handle_manager_info({:mcp_notification, notification}, state) do
     write_response(state.output_device, notification)
     {:noreply, state}
   end
 
-  def handle_info({:stdio_eof, _reason}, state) do
+  def handle_manager_info({:stdio_eof, _reason}, state) do
     Logger.info("[MCP.Stdio] Input stream closed, stopping")
     {:stop, :normal, state}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{reader_ref: ref} = state) do
+  def handle_manager_info({:DOWN, ref, :process, _pid, reason}, %{reader_ref: ref} = state) do
     Logger.info("[MCP.Stdio] Reader process exited: #{inspect(reason)}")
     {:stop, :normal, state}
   end
 
-  def handle_info(_msg, state) do
+  def handle_manager_info(_msg, state) do
     {:noreply, state}
   end
 

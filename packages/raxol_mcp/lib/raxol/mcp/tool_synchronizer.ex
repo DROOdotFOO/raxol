@@ -24,7 +24,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
       )
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -88,8 +88,8 @@ defmodule Raxol.MCP.ToolSynchronizer do
 
   # -- GenServer callbacks --
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     registry = Keyword.fetch!(opts, :registry)
     dispatcher_pid = Keyword.fetch!(opts, :dispatcher_pid)
     session_id = Keyword.fetch!(opts, :session_id)
@@ -123,8 +123,8 @@ defmodule Raxol.MCP.ToolSynchronizer do
     {:ok, %{state | current_resource_uris: resource_uris}}
   end
 
-  @impl true
-  def handle_cast({:view_tree_updated, view_tree, model}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:view_tree_updated, view_tree, model}, state) do
     # Debounce: cancel previous timer, start new one
     if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
 
@@ -132,20 +132,20 @@ defmodule Raxol.MCP.ToolSynchronizer do
     {:noreply, %{state | pending_view_tree: view_tree, pending_model: model, debounce_ref: ref}}
   end
 
-  def handle_cast({:view_tree_updated, view_tree}, state) do
+  def handle_manager_cast({:view_tree_updated, view_tree}, state) do
     if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
 
     ref = Process.send_after(self(), :debounce_fire, @debounce_ms)
     {:noreply, %{state | pending_view_tree: view_tree, debounce_ref: ref}}
   end
 
-  def handle_cast({:sync_now, view_tree}, state) do
+  def handle_manager_cast({:sync_now, view_tree}, state) do
     if state.debounce_ref, do: Process.cancel_timer(state.debounce_ref)
     new_state = do_sync(view_tree, state.pending_model || state.current_model, state)
     {:noreply, %{new_state | debounce_ref: nil, pending_view_tree: nil, pending_model: nil}}
   end
 
-  def handle_cast({:focus_changed, widget_id}, state) do
+  def handle_manager_cast({:focus_changed, widget_id}, state) do
     if widget_id != state.focused_id do
       emit_behavior_event(:pane_focus, %{widget_id: widget_id, source: :keyboard})
       {:noreply, %{state | focused_id: widget_id}}
@@ -154,7 +154,7 @@ defmodule Raxol.MCP.ToolSynchronizer do
     end
   end
 
-  def handle_cast({:hover_changed, widget_id}, state) do
+  def handle_manager_cast({:hover_changed, widget_id}, state) do
     if widget_id != state.hover_id do
       emit_behavior_event(:pane_focus, %{widget_id: widget_id, source: :mouse})
       {:noreply, %{state | hover_id: widget_id}}
@@ -163,21 +163,21 @@ defmodule Raxol.MCP.ToolSynchronizer do
     end
   end
 
-  @impl true
-  def handle_info(:debounce_fire, %{pending_view_tree: nil} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info(:debounce_fire, %{pending_view_tree: nil} = state) do
     {:noreply, %{state | debounce_ref: nil}}
   end
 
-  def handle_info(:debounce_fire, state) do
+  def handle_manager_info(:debounce_fire, state) do
     new_state =
       do_sync(state.pending_view_tree, state.pending_model || state.current_model, state)
 
     {:noreply, %{new_state | debounce_ref: nil, pending_view_tree: nil, pending_model: nil}}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
-  @impl true
+  @impl GenServer
   def terminate(_reason, state) do
     :telemetry.detach(state.telemetry_handler_id)
 

@@ -35,7 +35,7 @@ defmodule Raxol.MCP.Registry do
       Registry.register_resources(registry, resources)
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.MCP.CircuitBreaker
 
@@ -260,8 +260,8 @@ defmodule Raxol.MCP.Registry do
 
   # -- GenServer Callbacks -------------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     table_name = Keyword.get(opts, :table_name, :raxol_mcp_registry)
 
     table =
@@ -277,8 +277,8 @@ defmodule Raxol.MCP.Registry do
     {:ok, %{table: table, breaker_table: breaker_table}}
   end
 
-  @impl true
-  def handle_call({:register_tools, tools}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:register_tools, tools}, _from, state) do
     for tool <- tools do
       entry = {:tool, tool.name, tool_definition(tool), tool.callback}
       :ets.insert(state.table, {tool_key(tool.name), entry})
@@ -293,8 +293,8 @@ defmodule Raxol.MCP.Registry do
     {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_call({:unregister_tools, names}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:unregister_tools, names}, _from, state) do
     for name <- names do
       :ets.delete(state.table, tool_key(name))
     end
@@ -308,8 +308,8 @@ defmodule Raxol.MCP.Registry do
     {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_call({:register_resources, resources}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:register_resources, resources}, _from, state) do
     for resource <- resources do
       entry =
         {:resource, resource.uri, resource_definition(resource),
@@ -321,8 +321,8 @@ defmodule Raxol.MCP.Registry do
     {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_call({:unregister_resources, uris}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:unregister_resources, uris}, _from, state) do
     for uri <- uris do
       :ets.delete(state.table, resource_key(uri))
     end
@@ -330,8 +330,8 @@ defmodule Raxol.MCP.Registry do
     {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_call({:register_prompts, prompts}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:register_prompts, prompts}, _from, state) do
     for prompt <- prompts do
       entry = {:prompt, prompt.name, prompt_definition(prompt), prompt.callback}
       :ets.insert(state.table, {prompt_key(prompt.name), entry})
@@ -340,8 +340,8 @@ defmodule Raxol.MCP.Registry do
     {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_call({:unregister_prompts, names}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:unregister_prompts, names}, _from, state) do
     for name <- names do
       :ets.delete(state.table, prompt_key(name))
     end

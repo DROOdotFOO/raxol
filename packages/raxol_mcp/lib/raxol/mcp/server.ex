@@ -26,7 +26,7 @@ defmodule Raxol.MCP.Server do
   subscribe via `subscribe/2` and receive `{:mcp_notification, map()}` messages.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -95,20 +95,20 @@ defmodule Raxol.MCP.Server do
 
   # -- GenServer Callbacks -------------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     registry = Keyword.get(opts, :registry, Registry)
     {:ok, %__MODULE__{registry: registry}}
   end
 
-  @impl true
-  def handle_call({:handle_message, message}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:handle_message, message}, _from, state) do
     {response, state} = dispatch(message, state)
     {:reply, {:reply, response}, state}
   end
 
-  @impl true
-  def handle_cast({:subscribe, pid}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:subscribe, pid}, state) do
     if pid in state.subscribers do
       {:noreply, state}
     else
@@ -117,18 +117,18 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  def handle_cast({:notify, method, params}, state) do
+  def handle_manager_cast({:notify, method, params}, state) do
     notification = Protocol.notification(method, params)
     broadcast(state.subscribers, notification)
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
     {:noreply, %{state | subscribers: List.delete(state.subscribers, pid)}}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
   # -- Dispatch -----------------------------------------------------------------
 
