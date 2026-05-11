@@ -68,7 +68,7 @@ The `Ledger` is an ETS-backed GenServer that tracks cumulative spend. `SpendingH
 
 ## Agent Actions
 
-Five actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
+Eight actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
 
 | Action | What it does |
 |--------|-------------|
@@ -77,6 +77,42 @@ Five actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs
 | `payment_transfer` | Execute a payment |
 | `payment_spending_status` | Current spend vs limits |
 | `payment_list_history` | Transaction history for this session |
+| `payment_create_mandate` | Issue a Xochi delegation envelope from this wallet |
+| `payment_list_mandates` | List locally-stored Mandates (as member or as agent) |
+| `payment_revoke_mandate` | Locally delete a stored Mandate (Xochi KV unaffected) |
+
+## Mandate (Xochi Delegation Envelope)
+
+`Raxol.Payments.Mandate` is a per-request EIP-712 envelope that lets an AI agent transact on Xochi under a human Member's identity, inheriting that Member's Trust Tier and Privacy Level. The Member signs an envelope binding a specific agent wallet to a scoped budget; the agent presents `X-Xochi-Delegation: base64url(envelope)` on every protected Xochi call. Xochi verifies the signature server-side and decrements the budget in KV per call. No persistent session.
+
+The schema mirrors `xochi/packages/shared/src/eip712.ts:182-263` exactly (snake_case fields, `string[]` scopes, chainId pinned to 1, zero verifyingContract for off-chain). The Elixir digest is verified byte-for-byte against viem's `hashTypedData`.
+
+```elixir
+alias Raxol.Payments.Mandate
+
+{:ok, m} = Mandate.build(%{
+  human_wallet: member_wallet.address(),
+  agent_wallet: "0x...",
+  scopes: ["quote", "execute"],
+  max_amount_usd: 1000,
+  max_calls: 50,
+  expires_at: System.system_time(:second) + 3600
+})
+{:ok, signed} = Mandate.sign(m, member_wallet)
+:ok = Mandate.Store.put(signed)
+```
+
+On the agent's outbound HTTP path:
+
+```elixir
+Req.new(url: "https://api.xochi.fi/api/intent/quote")
+|> Raxol.Payments.Req.Mandate.attach(agent_wallet: agent_addr)
+|> Req.post(json: quote_body)
+```
+
+`Mandate.Store` is a singleton (named ETS tables); start exactly one per node. Optional DETS persistence via `:mandate_store_path` in `config :raxol_payments`. Mandate is **orthogonal** to `SpendingPolicy`/`Ledger`: those govern operator-set session budgets locally; Mandate is a credential carried to Xochi for tier inheritance.
+
+v1 follows the locked design at `xochi/docs/planning/agent-auth.md`. Server-side revoke endpoint, on-chain registry, Verified-Agent metadata, issuer browser UI, and auto-rotation on exhaustion are deferred.
 
 ## AutoPay (Req Plugin)
 
@@ -94,7 +130,7 @@ client = Req.new(base_url: "https://api.example.com")
 
 Standalone package at `packages/raxol_payments/`. Depends on `raxol_agent` at compile time only (`runtime: false`) for the Action macro and CommandHook behaviour. Runtime deps: `req`, `ex_secp256k1`, `ex_keccak`, `jason`, `decimal`.
 
-94 tests, 0 failures.
+408 tests, 0 failures.
 
 ## See Also
 

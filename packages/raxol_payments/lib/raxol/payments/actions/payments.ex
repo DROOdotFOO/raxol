@@ -25,7 +25,10 @@ defmodule Raxol.Payments.Actions.Payments do
     Raxol.Payments.Actions.Payments.GetQuote,
     Raxol.Payments.Actions.Payments.Transfer,
     Raxol.Payments.Actions.Payments.SpendingStatus,
-    Raxol.Payments.Actions.Payments.ListHistory
+    Raxol.Payments.Actions.Payments.ListHistory,
+    Raxol.Payments.Actions.Payments.CreateMandate,
+    Raxol.Payments.Actions.Payments.ListMandates,
+    Raxol.Payments.Actions.Payments.RevokeMandate
   ]
 
   @doc "Returns all payment action modules."

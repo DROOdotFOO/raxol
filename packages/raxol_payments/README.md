@@ -1,6 +1,6 @@
 # Raxol Payments
 
-Agent payment protocols for Elixir. Autonomous agents that can pay for things -- x402/MPP auto-pay, Xochi cross-chain intents, stealth addresses, ZKSAR attestation, spending controls.
+Agent payment protocols for Elixir. Autonomous agents that can pay for things -- x402/MPP auto-pay, Xochi cross-chain intents, stealth addresses, ZKSAR attestation, Xochi Mandate delegation, spending controls.
 
 ## Install
 
@@ -21,6 +21,7 @@ Agent payment protocols for Elixir. Autonomous agents that can pay for things --
 - **Router** -- auto-select protocol based on chain, privacy, trust score
 - **SpendingPolicy + Ledger** -- per-request/session/lifetime spending limits
 - **PXE Bridge** -- Aztec Private eXecution Environment client (JSON-RPC 2.0)
+- **Mandate** -- Xochi delegation envelopes (per-request EIP-712 auth, agent inherits Member's tier). Verified byte-for-byte against viem's `hashTypedData`. See `Raxol.Payments.Mandate`, `Mandate.Store`, `Req.Mandate` plugin, and the `payment_create_mandate` / `payment_list_mandates` / `payment_revoke_mandate` agent actions.
 
 ## Quick Start
 
@@ -49,5 +50,8 @@ plugin = AgentPlugin.auto_pay(
 - `Raxol.Payments.PrivacyTier` -- trust score to tier mapping
 - `Raxol.Payments.Zksar` -- attestation proof verification
 - `Raxol.Payments.Xochi.Stealth` -- ERC-5564/6538 implementation
+- `Raxol.Payments.Mandate` -- Xochi delegation envelope (EIP-712-signed, per-request)
+- `Raxol.Payments.Mandate.Store` -- singleton ETS + optional DETS holder for envelopes
+- `Raxol.Payments.Req.Mandate` -- Req plugin attaching `X-Xochi-Delegation` on outbound Xochi calls
 
 See [Agentic Commerce docs](../../docs/features/AGENTIC_COMMERCE.md) for the full design.
