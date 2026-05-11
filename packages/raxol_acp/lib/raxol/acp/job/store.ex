@@ -56,7 +56,7 @@ defmodule Raxol.ACP.Job.Store do
     `delete/1` or `clear/0` for cleanup.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.ACP.Job.{Server, StateMachine}
 
@@ -133,8 +133,8 @@ defmodule Raxol.ACP.Job.Store do
 
   # -- GenServer callbacks --
 
-  @impl true
-  def init(_opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(_opts) do
     table = :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
 
     dets =
@@ -146,15 +146,15 @@ defmodule Raxol.ACP.Job.Store do
     {:ok, %{table: table, dets: dets}}
   end
 
-  @impl true
-  def handle_call({:save, job_id, state, memos}, _from, server_state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:save, job_id, state, memos}, _from, server_state) do
     record = %{state: state, memos: memos, updated_at: DateTime.utc_now()}
     true = :ets.insert(@table, {job_id, record})
     persist(server_state.dets, job_id, record)
     {:reply, :ok, server_state}
   end
 
-  def handle_call({:append_memo, job_id, state, memo}, _from, server_state) do
+  def handle_manager_call({:append_memo, job_id, state, memo}, _from, server_state) do
     prior_memos =
       case :ets.lookup(@table, job_id) do
         [{^job_id, %{memos: m}}] -> m
@@ -172,19 +172,19 @@ defmodule Raxol.ACP.Job.Store do
     {:reply, :ok, server_state}
   end
 
-  def handle_call({:delete, job_id}, _from, server_state) do
+  def handle_manager_call({:delete, job_id}, _from, server_state) do
     :ets.delete(@table, job_id)
     persist_delete(server_state.dets, job_id)
     {:reply, :ok, server_state}
   end
 
-  def handle_call(:clear, _from, server_state) do
+  def handle_manager_call(:clear, _from, server_state) do
     :ets.delete_all_objects(@table)
     persist_clear(server_state.dets)
     {:reply, :ok, server_state}
   end
 
-  @impl true
+  @impl GenServer
   def terminate(_reason, %{dets: nil}), do: :ok
 
   def terminate(_reason, %{dets: dets}) do

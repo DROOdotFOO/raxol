@@ -33,7 +33,7 @@ defmodule Raxol.ACP.Offering.Registry do
   too -- pass any map matching the struct shape to `register/1`.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   defmodule Spec do
     @moduledoc "Struct describing one ACP offering registration."
@@ -121,14 +121,14 @@ defmodule Raxol.ACP.Offering.Registry do
 
   # -- GenServer callbacks --
 
-  @impl true
-  def init(_opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(_opts) do
     table = :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
     {:ok, %{table: table}}
   end
 
-  @impl true
-  def handle_call({:register, %Spec{name: name} = spec}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:register, %Spec{name: name} = spec}, _from, state) do
     reply =
       case :ets.lookup(@table, name) do
         [] ->
@@ -142,12 +142,12 @@ defmodule Raxol.ACP.Offering.Registry do
     {:reply, reply, state}
   end
 
-  def handle_call({:deregister, name}, _from, state) do
+  def handle_manager_call({:deregister, name}, _from, state) do
     :ets.delete(@table, name)
     {:reply, :ok, state}
   end
 
-  def handle_call(:clear, _from, state) do
+  def handle_manager_call(:clear, _from, state) do
     :ets.delete_all_objects(@table)
     {:reply, :ok, state}
   end

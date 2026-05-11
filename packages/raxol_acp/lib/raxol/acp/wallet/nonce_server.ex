@@ -34,7 +34,7 @@ defmodule Raxol.ACP.Wallet.NonceServer do
   by `Raxol.ACP.Supervisor` for the umbrella seller wallet.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   @type server :: GenServer.server()
 
@@ -92,19 +92,19 @@ defmodule Raxol.ACP.Wallet.NonceServer do
 
   # -- GenServer callbacks --
 
-  @impl true
-  def init(state), do: {:ok, state}
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(state), do: {:ok, state}
 
-  @impl true
-  def handle_call(:get_next, _from, %{nonce: n} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:get_next, _from, %{nonce: n} = state) do
     {:reply, n, %{state | nonce: n + 1}}
   end
 
-  def handle_call(:peek, _from, %{nonce: n} = state) do
+  def handle_manager_call(:peek, _from, %{nonce: n} = state) do
     {:reply, n, state}
   end
 
-  def handle_call({:reset, n}, _from, state) do
+  def handle_manager_call({:reset, n}, _from, state) do
     {:reply, :ok, %{state | nonce: n}}
   end
 end

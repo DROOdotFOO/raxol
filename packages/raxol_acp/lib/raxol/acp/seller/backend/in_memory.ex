@@ -23,7 +23,7 @@ defmodule Raxol.ACP.Seller.Backend.InMemory do
 
   @behaviour Raxol.ACP.Seller.Backend
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   # -- Public API --
 
@@ -73,28 +73,28 @@ defmodule Raxol.ACP.Seller.Backend.InMemory do
   # -- GenServer callbacks --
 
   @impl GenServer
-  def init(_opts) do
+  def init_manager(_opts) do
     {:ok, %{subscribers: %{}}}
   end
 
   @impl GenServer
-  def handle_call({:subscribe, pid}, _from, state) do
+  def handle_manager_call({:subscribe, pid}, _from, state) do
     {:reply, :ok, put_subscriber(state, pid)}
   end
 
-  def handle_call({:unsubscribe, pid}, _from, state) do
+  def handle_manager_call({:unsubscribe, pid}, _from, state) do
     {:reply, :ok, drop_subscriber(state, pid)}
   end
 
-  def handle_call(:subscriber_count, _from, state) do
+  def handle_manager_call(:subscriber_count, _from, state) do
     {:reply, map_size(state.subscribers), state}
   end
 
-  def handle_call(:subscribers, _from, state) do
+  def handle_manager_call(:subscribers, _from, state) do
     {:reply, Map.keys(state.subscribers), state}
   end
 
-  def handle_call({:publish, event}, _from, state) do
+  def handle_manager_call({:publish, event}, _from, state) do
     for {pid, _ref} <- state.subscribers do
       send(pid, {:acp_event, event})
     end
@@ -102,13 +102,13 @@ defmodule Raxol.ACP.Seller.Backend.InMemory do
     {:reply, :ok, state}
   end
 
-  def handle_call(:reset, _from, state) do
+  def handle_manager_call(:reset, _from, state) do
     for {_pid, ref} <- state.subscribers, do: Process.demonitor(ref, [:flush])
     {:reply, :ok, %{state | subscribers: %{}}}
   end
 
   @impl GenServer
-  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+  def handle_manager_info({:DOWN, ref, :process, pid, _reason}, state) do
     case state.subscribers do
       %{^pid => ^ref} -> {:noreply, %{state | subscribers: Map.delete(state.subscribers, pid)}}
       _ -> {:noreply, state}

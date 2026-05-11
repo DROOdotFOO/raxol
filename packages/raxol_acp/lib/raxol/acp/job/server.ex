@@ -28,7 +28,7 @@ defmodule Raxol.ACP.Job.Server do
   `%{job_id, from, to, memo_type, tx_hash}`.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.ACP.ContractClient
   alias Raxol.ACP.Job.{Memo, Registry, StateMachine, Store}
@@ -182,8 +182,8 @@ defmodule Raxol.ACP.Job.Server do
 
   # -- GenServer callbacks --
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     config =
       opts
       |> Keyword.take([:handler, :wallet, :memo_opts, :request, :buyer, :seller])
@@ -216,12 +216,12 @@ defmodule Raxol.ACP.Job.Server do
 
   defp hydrate(_job_id, false, initial), do: {initial, []}
 
-  @impl true
-  def handle_call({:transition, event, payload, signature}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:transition, event, payload, signature}, _from, state) do
     do_transition(state, event, payload, signature)
   end
 
-  def handle_call(:accept_request, _from, state) do
+  def handle_manager_call(:accept_request, _from, state) do
     with {:ok, %{handler: handler, request: request}} <- need(state.config, [:handler, :request]) do
       case handler.handle_request(request, ctx(state)) do
         {:accept, response} ->
@@ -235,11 +235,11 @@ defmodule Raxol.ACP.Job.Server do
     end
   end
 
-  def handle_call({:accept_payment, payload, signature}, _from, state) do
+  def handle_manager_call({:accept_payment, payload, signature}, _from, state) do
     sign_or_use(state, :accept_payment, payload, signature)
   end
 
-  def handle_call(:deliver, _from, state) do
+  def handle_manager_call(:deliver, _from, state) do
     with {:ok, %{handler: handler, request: request}} <- need(state.config, [:handler, :request]) do
       case handler.handle_deliver(request, ctx(state)) do
         {:deliver, deliverable} ->
@@ -253,13 +253,13 @@ defmodule Raxol.ACP.Job.Server do
     end
   end
 
-  def handle_call({:approve, payload, signature}, _from, state) do
+  def handle_manager_call({:approve, payload, signature}, _from, state) do
     sign_or_use(state, :approve, payload, signature)
   end
 
-  def handle_call(:get_state, _from, state), do: {:reply, state, state}
-  def handle_call(:current_state, _from, state), do: {:reply, state.state, state}
-  def handle_call(:memos, _from, state), do: {:reply, state.memos, state}
+  def handle_manager_call(:get_state, _from, state), do: {:reply, state, state}
+  def handle_manager_call(:current_state, _from, state), do: {:reply, state.state, state}
+  def handle_manager_call(:memos, _from, state), do: {:reply, state.memos, state}
 
   # -- Private --
 

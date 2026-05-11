@@ -23,7 +23,7 @@ defmodule Raxol.ACP.Seller.Runtime do
     don't carry one).
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.ACP.Seller.{Backend, Queue}
 
@@ -36,8 +36,8 @@ defmodule Raxol.ACP.Seller.Runtime do
   @spec backend() :: module()
   def backend, do: GenServer.call(__MODULE__, :backend)
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     backend =
       Keyword.get(opts, :backend) ||
         Application.get_env(:raxol_acp, :seller_backend) ||
@@ -53,11 +53,11 @@ defmodule Raxol.ACP.Seller.Runtime do
     {:ok, %{backend: backend}}
   end
 
-  @impl true
-  def handle_call(:backend, _from, state), do: {:reply, state.backend, state}
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:backend, _from, state), do: {:reply, state.backend, state}
 
-  @impl true
-  def handle_info({:acp_event, event}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:acp_event, event}, state) do
     :telemetry.execute(
       [:raxol, :acp, :seller, :runtime, :event_received],
       %{},
@@ -69,5 +69,5 @@ defmodule Raxol.ACP.Seller.Runtime do
     {:noreply, state}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 end

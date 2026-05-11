@@ -62,7 +62,7 @@ defmodule Raxol.ACP.Seller.Queue do
     `:unknown_event`, `:wallet_unconfigured`.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.ACP.Job
   alias Raxol.ACP.Offering.Registry, as: OfferingRegistry
@@ -93,11 +93,11 @@ defmodule Raxol.ACP.Seller.Queue do
 
   # -- GenServer callbacks --
 
-  @impl true
-  def init(_opts), do: {:ok, %{}}
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(_opts), do: {:ok, %{}}
 
-  @impl true
-  def handle_cast({:dispatch, event}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:dispatch, event}, state) do
     handle_event(event, read_defaults())
     {:noreply, state}
   end
