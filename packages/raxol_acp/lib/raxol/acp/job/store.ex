@@ -17,7 +17,12 @@ defmodule Raxol.ACP.Job.Store do
 
   Same pattern as `Raxol.ACP.Offering.Registry`: writes go through the
   GenServer (so concurrent writes don't race), reads bypass it via
-  direct ETS lookups (`read_concurrency: true`).
+  direct ETS lookups (`read_concurrency: true`). The ETS table is named
+  after this module (`@table __MODULE__`), so the Store is effectively
+  a **singleton** -- start at most one per node. The same constraint
+  applies to `Raxol.Payments.Mandate.Store`. If multi-tenant deployments
+  become a requirement, thread the table name through `init/1` so each
+  instance owns distinct tables.
 
   ## Optional disk persistence
 
