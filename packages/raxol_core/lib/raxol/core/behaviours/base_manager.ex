@@ -92,7 +92,10 @@ defmodule Raxol.Core.Behaviours.BaseManager do
       defp normalize_and_split_opts(opts),
         do: Raxol.Core.Utils.GenServerHelpers.split_server_opts(opts)
 
-      defp normalize_init_result({:ok, state}), do: {:ok, state}
+      defp normalize_init_result({:ok, _state} = ok), do: ok
+      defp normalize_init_result({:ok, _state, _extra} = ok), do: ok
+      defp normalize_init_result({:stop, _reason} = stop), do: stop
+      defp normalize_init_result(:ignore), do: :ignore
 
       # All callbacks are overridable
       defoverridable start_link: 1,

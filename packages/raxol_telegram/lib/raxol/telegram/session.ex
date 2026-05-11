@@ -9,7 +9,7 @@ defmodule Raxol.Telegram.Session do
   The session auto-stops after an idle timeout (default 10 minutes).
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -30,10 +30,6 @@ defmodule Raxol.Telegram.Session do
     :last_html
   ]
 
-  def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts)
-  end
-
   @doc """
   Dispatches an event to this session's TEA lifecycle.
   """
@@ -51,10 +47,10 @@ defmodule Raxol.Telegram.Session do
     GenServer.cast(pid, {:render, html, keyboard})
   end
 
-  # -- GenServer Callbacks --
+  # -- BaseManager Callbacks --
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     app_module = Keyword.fetch!(opts, :app_module)
     chat_id = Keyword.fetch!(opts, :chat_id)
     idle_timeout = Keyword.get(opts, :idle_timeout, @default_idle_timeout)
@@ -91,8 +87,8 @@ defmodule Raxol.Telegram.Session do
     end
   end
 
-  @impl true
-  def handle_cast({:dispatch, event}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:dispatch, event}, state) do
     if state.dispatcher_pid do
       GenServer.cast(state.dispatcher_pid, {:dispatch, event})
     end
@@ -100,23 +96,23 @@ defmodule Raxol.Telegram.Session do
     {:noreply, reset_idle_timer(state)}
   end
 
-  def handle_cast({:render, html, keyboard}, state) do
+  def handle_manager_cast({:render, html, keyboard}, state) do
     new_state = do_send_or_edit(html, keyboard, state)
     {:noreply, new_state}
   end
 
-  @impl true
-  def handle_info({:io_write, render_data}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:io_write, render_data}, state) do
     {html, keyboard} = format_render_data(render_data)
     new_state = do_send_or_edit(html, keyboard, state)
     {:noreply, new_state}
   end
 
-  def handle_info(:idle_timeout, state) do
+  def handle_manager_info(:idle_timeout, state) do
     {:stop, :normal, state}
   end
 
-  def handle_info(_, state), do: {:noreply, state}
+  def handle_manager_info(_, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do

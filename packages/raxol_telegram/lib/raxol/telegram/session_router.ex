@@ -6,7 +6,7 @@ defmodule Raxol.Telegram.SessionRouter do
   sessions on demand. Sessions auto-expire after idle timeout.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   @idle_timeout_ms 10 * 60 * 1000
   @default_max_sessions 1000
@@ -21,7 +21,7 @@ defmodule Raxol.Telegram.SessionRouter do
     last_start: %{}
   ]
 
-  def start_link(opts) do
+  def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
@@ -67,17 +67,17 @@ defmodule Raxol.Telegram.SessionRouter do
     GenServer.call(__MODULE__, {:get_session, chat_id})
   end
 
-  # -- GenServer Callbacks --
+  # -- BaseManager Callbacks --
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     app_module = Keyword.fetch!(opts, :app_module)
     max_sessions = Keyword.get(opts, :max_sessions, @default_max_sessions)
     {:ok, %__MODULE__{app_module: app_module, max_sessions: max_sessions}}
   end
 
-  @impl true
-  def handle_call({:route, chat_id, event}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:route, chat_id, event}, _from, state) do
     with {:ok, pid, new_state} <- ensure_session(chat_id, state) do
       Raxol.Telegram.Session.dispatch(pid, event)
       {:reply, :ok, new_state}
@@ -86,28 +86,28 @@ defmodule Raxol.Telegram.SessionRouter do
     end
   end
 
-  def handle_call({:start_session, chat_id}, _from, state) do
+  def handle_manager_call({:start_session, chat_id}, _from, state) do
     case ensure_session(chat_id, state) do
       {:ok, pid, new_state} -> {:reply, {:ok, pid}, new_state}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
-  def handle_call({:stop_session, chat_id}, _from, state) do
+  def handle_manager_call({:stop_session, chat_id}, _from, state) do
     new_state = do_stop_session(chat_id, state)
     {:reply, :ok, new_state}
   end
 
-  def handle_call(:session_count, _from, state) do
+  def handle_manager_call(:session_count, _from, state) do
     {:reply, map_size(state.sessions), state}
   end
 
-  def handle_call({:get_session, chat_id}, _from, state) do
+  def handle_manager_call({:get_session, chat_id}, _from, state) do
     {:reply, Map.get(state.sessions, chat_id), state}
   end
 
-  @impl true
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
     # Find and remove the dead session
     chat_id =
       Enum.find_value(state.sessions, fn
@@ -129,7 +129,7 @@ defmodule Raxol.Telegram.SessionRouter do
     {:noreply, new_state}
   end
 
-  def handle_info(_, state), do: {:noreply, state}
+  def handle_manager_info(_, state), do: {:noreply, state}
 
   # -- Private --
 
