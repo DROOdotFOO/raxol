@@ -10,18 +10,20 @@ defmodule Raxol.ACP.Job.StateMachineTest do
   end
 
   describe "states/0 and events/0" do
-    test "states includes all six states" do
+    test "states cover the seven canonical AcpJobPhase values" do
       assert :request in StateMachine.states()
       assert :negotiation in StateMachine.states()
       assert :transaction in StateMachine.states()
       assert :evaluation in StateMachine.states()
       assert :completed in StateMachine.states()
+      assert :rejected in StateMachine.states()
       assert :expired in StateMachine.states()
     end
 
-    test "events includes all five events" do
+    test "events cover all defined transitions" do
       assert StateMachine.events() == [
                :accept_request,
+               :reject,
                :accept_payment,
                :deliver,
                :approve,
@@ -31,8 +33,9 @@ defmodule Raxol.ACP.Job.StateMachineTest do
   end
 
   describe "terminal?/1" do
-    test "true for :completed and :expired" do
+    test "true for :completed, :rejected, and :expired" do
       assert StateMachine.terminal?(:completed)
+      assert StateMachine.terminal?(:rejected)
       assert StateMachine.terminal?(:expired)
     end
 
@@ -41,6 +44,52 @@ defmodule Raxol.ACP.Job.StateMachineTest do
       refute StateMachine.terminal?(:negotiation)
       refute StateMachine.terminal?(:transaction)
       refute StateMachine.terminal?(:evaluation)
+    end
+  end
+
+  describe ":reject from :request" do
+    test "transitions to :rejected" do
+      assert StateMachine.next(:request, :reject) == {:ok, :rejected}
+    end
+
+    test "is not allowed once past :request" do
+      assert {:error, {:invalid_transition, :negotiation, :reject}} =
+               StateMachine.next(:negotiation, :reject)
+
+      assert {:error, {:invalid_transition, :transaction, :reject}} =
+               StateMachine.next(:transaction, :reject)
+    end
+
+    test ":rejected is terminal" do
+      assert StateMachine.terminal?(:rejected)
+
+      for event <- StateMachine.events() do
+        assert {:error, _} = StateMachine.next(:rejected, event)
+      end
+    end
+  end
+
+  describe "phase_id/1 and from_phase_id/1 (canonical Virtuals enum)" do
+    test "round-trips every state" do
+      for state <- StateMachine.states() do
+        id = StateMachine.phase_id(state)
+        assert {:ok, ^state} = StateMachine.from_phase_id(id)
+      end
+    end
+
+    test "matches the openclaw-acp enum values" do
+      assert StateMachine.phase_id(:request) == 0
+      assert StateMachine.phase_id(:negotiation) == 1
+      assert StateMachine.phase_id(:transaction) == 2
+      assert StateMachine.phase_id(:evaluation) == 3
+      assert StateMachine.phase_id(:completed) == 4
+      assert StateMachine.phase_id(:rejected) == 5
+      assert StateMachine.phase_id(:expired) == 6
+    end
+
+    test "from_phase_id/1 rejects unknown ids" do
+      assert :error = StateMachine.from_phase_id(7)
+      assert :error = StateMachine.from_phase_id(-1)
     end
   end
 
