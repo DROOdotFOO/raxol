@@ -11,7 +11,7 @@ defmodule Raxol.Speech.Recognizer do
     * `:compiler` - Nx compiler (default: `EXLA` if available)
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   @compile {:no_warn_undefined, [Bumblebee, Nx.Serving, EXLA]}
 
@@ -53,8 +53,8 @@ defmodule Raxol.Speech.Recognizer do
 
   # -- GenServer --
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     model_name = Keyword.get(opts, :model, @default_model)
 
     serving =
@@ -67,16 +67,16 @@ defmodule Raxol.Speech.Recognizer do
     {:ok, %__MODULE__{serving: serving, model_name: model_name}}
   end
 
-  @impl true
-  def handle_call({:get_serving, _audio_data}, _from, %{serving: nil} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:get_serving, _audio_data}, _from, %{serving: nil} = state) do
     {:reply, {:error, :bumblebee_not_available}, state}
   end
 
-  def handle_call({:get_serving, _audio_data}, _from, state) do
+  def handle_manager_call({:get_serving, _audio_data}, _from, state) do
     {:reply, {:ok, state.serving}, state}
   end
 
-  def handle_call(:available?, _from, state) do
+  def handle_manager_call(:available?, _from, state) do
     {:reply, state.serving != nil, state}
   end
 

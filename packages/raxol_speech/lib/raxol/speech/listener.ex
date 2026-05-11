@@ -13,7 +13,7 @@ defmodule Raxol.Speech.Listener do
     * `:dispatcher_pid` - where to send recognized events (optional)
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.Speech.{InputAdapter, Recognizer}
 
@@ -60,8 +60,8 @@ defmodule Raxol.Speech.Listener do
 
   @allowed_record_binaries ~w(sox rec arecord parecord ffmpeg)
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     sample_rate = Keyword.get(opts, :sample_rate, @default_sample_rate)
 
     record_cmd =
@@ -89,12 +89,12 @@ defmodule Raxol.Speech.Listener do
      }}
   end
 
-  @impl true
-  def handle_call(:start_recording, _from, %{port: port} = state) when port != nil do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:start_recording, _from, %{port: port} = state) when port != nil do
     {:reply, {:error, :already_recording}, state}
   end
 
-  def handle_call(:start_recording, _from, state) do
+  def handle_manager_call(:start_recording, _from, state) do
     case state.record_cmd do
       nil ->
         {:reply, {:error, :no_record_command}, state}
@@ -108,11 +108,11 @@ defmodule Raxol.Speech.Listener do
     end
   end
 
-  def handle_call(:stop_recording, _from, %{port: nil} = state) do
+  def handle_manager_call(:stop_recording, _from, %{port: nil} = state) do
     {:reply, {:error, :not_recording}, state}
   end
 
-  def handle_call(:stop_recording, _from, state) do
+  def handle_manager_call(:stop_recording, _from, state) do
     if state.duration_timer, do: Process.cancel_timer(state.duration_timer)
     close_port(state.port)
 
@@ -137,12 +137,12 @@ defmodule Raxol.Speech.Listener do
     {:reply, result, state}
   end
 
-  def handle_call(:recording?, _from, state) do
+  def handle_manager_call(:recording?, _from, state) do
     {:reply, state.port != nil, state}
   end
 
-  @impl true
-  def handle_info({port, {:data, chunk}}, %{port: port} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({port, {:data, chunk}}, %{port: port} = state) do
     new_size = state.audio_size + byte_size(chunk)
 
     if new_size > state.max_bytes do
@@ -160,15 +160,15 @@ defmodule Raxol.Speech.Listener do
     end
   end
 
-  def handle_info({port, {:exit_status, _}}, %{port: port} = state) do
+  def handle_manager_info({port, {:exit_status, _}}, %{port: port} = state) do
     {:noreply, %{state | port: nil}}
   end
 
-  def handle_info(:max_duration_reached, %{port: nil} = state) do
+  def handle_manager_info(:max_duration_reached, %{port: nil} = state) do
     {:noreply, %{state | duration_timer: nil}}
   end
 
-  def handle_info(:max_duration_reached, state) do
+  def handle_manager_info(:max_duration_reached, state) do
     require Logger
 
     Logger.warning(
@@ -179,7 +179,7 @@ defmodule Raxol.Speech.Listener do
     {:noreply, %{state | port: nil, duration_timer: nil}}
   end
 
-  def handle_info(_, state), do: {:noreply, state}
+  def handle_manager_info(_, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do

@@ -11,7 +11,7 @@ defmodule Raxol.Speech.TTS.OsSay do
 
   @behaviour Raxol.Speech.TTS.Backend
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -38,15 +38,15 @@ defmodule Raxol.Speech.TTS.OsSay do
     GenServer.call(__MODULE__, :speaking?)
   end
 
-  # -- GenServer --
+  # -- BaseManager --
 
-  @impl true
-  def init(_opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(_opts) do
     {:ok, %{port: nil, os_cmd: detect_command()}}
   end
 
-  @impl true
-  def handle_call({:speak, text}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:speak, text}, _from, state) do
     state = kill_current(state)
 
     case state.os_cmd do
@@ -62,24 +62,24 @@ defmodule Raxol.Speech.TTS.OsSay do
     end
   end
 
-  def handle_call(:stop, _from, state) do
+  def handle_manager_call(:stop, _from, state) do
     {:reply, :ok, kill_current(state)}
   end
 
-  def handle_call(:speaking?, _from, state) do
+  def handle_manager_call(:speaking?, _from, state) do
     {:reply, state.port != nil, state}
   end
 
-  @impl true
-  def handle_info({port, {:exit_status, _}}, %{port: port} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({port, {:exit_status, _}}, %{port: port} = state) do
     {:noreply, %{state | port: nil}}
   end
 
-  def handle_info({port, {:data, _}}, %{port: port} = state) do
+  def handle_manager_info({port, {:data, _}}, %{port: port} = state) do
     {:noreply, state}
   end
 
-  def handle_info(_, state), do: {:noreply, state}
+  def handle_manager_info(_, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
