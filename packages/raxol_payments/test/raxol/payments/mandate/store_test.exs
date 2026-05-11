@@ -20,8 +20,10 @@ defmodule Raxol.Payments.Mandate.StoreTest do
     :ok
   end
 
-  defp safe_stop_store do
-    case GenServer.whereis(Store) do
+  defp safe_stop_store, do: safe_stop(Store)
+
+  defp safe_stop(server) do
+    case GenServer.whereis(server) do
       nil ->
         :ok
 
@@ -143,6 +145,47 @@ defmodule Raxol.Payments.Mandate.StoreTest do
       assert {:ok, ^live} = Store.get(live.envelope_hash)
       assert :error = Store.get(dead1.envelope_hash)
       assert :error = Store.get(dead2.envelope_hash)
+    end
+  end
+
+  describe "multi-instance" do
+    test "two named stores hold disjoint state" do
+      {:ok, _} = Store.start_link(name: :buyer_mandates)
+      {:ok, _} = Store.start_link(name: :seller_mandates)
+
+      try do
+        Store.clear(:buyer_mandates)
+        Store.clear(:seller_mandates)
+
+        buyer = signed_mandate(%{agent_wallet: "0x" <> String.duplicate("aa", 20)})
+        seller = signed_mandate(%{agent_wallet: "0x" <> String.duplicate("bb", 20)})
+
+        :ok = Store.put(buyer, :buyer_mandates)
+        :ok = Store.put(seller, :seller_mandates)
+
+        assert {:ok, ^buyer} = Store.get(buyer.envelope_hash, :buyer_mandates)
+        assert :error = Store.get(buyer.envelope_hash, :seller_mandates)
+
+        assert {:ok, ^seller} = Store.get(seller.envelope_hash, :seller_mandates)
+        assert :error = Store.get(seller.envelope_hash, :buyer_mandates)
+
+        assert [_] = Store.list_for_agent(buyer.agent_wallet, :buyer_mandates)
+        assert Store.list_for_agent(buyer.agent_wallet, :seller_mandates) == []
+      after
+        safe_stop(:buyer_mandates)
+        safe_stop(:seller_mandates)
+      end
+    end
+
+    test "rejects an unnamed (anonymous) start" do
+      # GenServer.start_link with no name -> registered_name lookup yields []
+      # -> init_manager raises.
+      Process.flag(:trap_exit, true)
+
+      result =
+        GenServer.start_link(Store, [])
+
+      assert {:error, _} = result
     end
   end
 

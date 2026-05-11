@@ -17,28 +17,36 @@ defmodule Raxol.ACP.Job.Store do
 
   Same pattern as `Raxol.ACP.Offering.Registry`: writes go through the
   GenServer (so concurrent writes don't race), reads bypass it via
-  direct ETS lookups (`read_concurrency: true`). The ETS table is named
-  after this module (`@table __MODULE__`), so the Store is effectively
-  a **singleton** -- start at most one per node. The same constraint
-  applies to `Raxol.Payments.Mandate.Store`. If multi-tenant deployments
-  become a requirement, thread the table name through `init/1` so each
-  instance owns distinct tables.
+  direct ETS lookups (`read_concurrency: true`).
+
+  ETS table names are derived from the GenServer's registered name,
+  so **multiple Store instances can coexist on one node** by passing
+  a distinct `:name` to `start_link/1`:
+
+      {:ok, _} = Store.start_link(name: :primary_jobs)
+      {:ok, _} = Store.start_link(name: :archive_jobs)
+      :ok = Store.save(job_id, :completed, memos, :primary_jobs)
+
+  When `:name` is omitted, the Store registers as `Raxol.ACP.Job.Store`
+  (the singleton default).
 
   ## Optional disk persistence
 
-  Set `:job_store_path` in `Application` config to mirror writes to a
-  DETS file. On `init/1`, the Store opens (or creates) the file and
-  replays its contents into ETS. Reads stay in-process; writes go to
-  ETS first then DETS. ETS holds the live state, DETS is the
-  durability layer.
+  Per-instance DETS path via the `:dets_path` option:
+
+      {:ok, _} = Store.start_link(name: :primary_jobs,
+                                  dets_path: "/var/lib/raxol_acp/primary.dets")
+
+  For the singleton, `:job_store_path` in `Application` config remains
+  the global default:
 
       config :raxol_acp,
         job_store_path: "/var/lib/raxol_acp/jobs.dets"
 
-  When `:job_store_path` is unset, the Store is in-memory only --
-  records die with the supervisor. This is the appropriate default
-  for tests and for buyer-only deployments that don't need crash
-  recovery.
+  An explicit `:dets_path` opt always wins over the Application config.
+  When neither is set, the Store is in-memory only -- records die with
+  the supervisor. This is the appropriate default for tests and for
+  buyer-only deployments that don't need crash recovery.
 
   DETS auto-syncs on a periodic timer, and the Store's `terminate/2`
   callback flushes + closes the file on graceful shutdown. A SIGKILL
@@ -53,7 +61,7 @@ defmodule Raxol.ACP.Job.Store do
     will retry the transition. The state machine + chain idempotency
     is the backstop.
   - Records are never auto-deleted, even after terminal states. Use
-    `delete/1` or `clear/0` for cleanup.
+    `delete/2` or `clear/1` for cleanup.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -66,22 +74,20 @@ defmodule Raxol.ACP.Job.Store do
           updated_at: DateTime.t()
         }
 
-  @table __MODULE__
-
   # -- Public API --
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   @doc """
   Persist a complete job snapshot. Overwrites any existing record.
   """
-  @spec save(binary(), StateMachine.state(), [Server.memo()]) :: :ok
-  def save(job_id, state, memos)
+  @spec save(binary(), StateMachine.state(), [Server.memo()], GenServer.server()) :: :ok
+  def save(job_id, state, memos, server \\ __MODULE__)
       when is_binary(job_id) and is_atom(state) and is_list(memos) do
-    GenServer.call(__MODULE__, {:save, job_id, state, memos})
+    GenServer.call(server, {:save, job_id, state, memos})
   end
 
   @doc """
@@ -89,10 +95,10 @@ defmodule Raxol.ACP.Job.Store do
 
   If no prior record exists, creates one with `[memo]` as the history.
   """
-  @spec append_memo(binary(), StateMachine.state(), Server.memo()) :: :ok
-  def append_memo(job_id, state, memo)
+  @spec append_memo(binary(), StateMachine.state(), Server.memo(), GenServer.server()) :: :ok
+  def append_memo(job_id, state, memo, server \\ __MODULE__)
       when is_binary(job_id) and is_atom(state) and is_map(memo) do
-    GenServer.call(__MODULE__, {:append_memo, job_id, state, memo})
+    GenServer.call(server, {:append_memo, job_id, state, memo})
   end
 
   @doc """
@@ -101,62 +107,68 @@ defmodule Raxol.ACP.Job.Store do
   Direct ETS lookup -- safe to call from any process. Returns
   `{:ok, record}` if present, `:error` otherwise.
   """
-  @spec load(binary()) :: {:ok, record()} | :error
-  def load(job_id) when is_binary(job_id) do
-    case :ets.lookup(@table, job_id) do
+  @spec load(binary(), atom()) :: {:ok, record()} | :error
+  def load(job_id, server \\ __MODULE__) when is_binary(job_id) do
+    case :ets.lookup(table(server), job_id) do
       [{^job_id, record}] -> {:ok, record}
       [] -> :error
     end
   end
 
   @doc "List the job IDs of all persisted jobs, in unspecified order."
-  @spec list_jobs() :: [binary()]
-  def list_jobs do
-    @table
+  @spec list_jobs(atom()) :: [binary()]
+  def list_jobs(server \\ __MODULE__) do
+    server
+    |> table()
     |> :ets.tab2list()
     |> Enum.map(fn {job_id, _record} -> job_id end)
   end
 
   @doc "Count persisted job records."
-  @spec count() :: non_neg_integer()
-  def count, do: :ets.info(@table, :size)
+  @spec count(atom()) :: non_neg_integer()
+  def count(server \\ __MODULE__), do: :ets.info(table(server), :size)
 
   @doc "Remove a job's record. Idempotent: returns `:ok` even if absent."
-  @spec delete(binary()) :: :ok
-  def delete(job_id) when is_binary(job_id) do
-    GenServer.call(__MODULE__, {:delete, job_id})
+  @spec delete(binary(), GenServer.server()) :: :ok
+  def delete(job_id, server \\ __MODULE__) when is_binary(job_id) do
+    GenServer.call(server, {:delete, job_id})
   end
 
   @doc "Wipe every record. Intended for tests."
-  @spec clear() :: :ok
-  def clear, do: GenServer.call(__MODULE__, :clear)
+  @spec clear(GenServer.server()) :: :ok
+  def clear(server \\ __MODULE__), do: GenServer.call(server, :clear)
+
+  @doc "Derived ETS table name for a given Store server name."
+  @spec table(atom()) :: atom()
+  def table(server) when is_atom(server), do: server
 
   # -- GenServer callbacks --
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def init_manager(_opts) do
-    table = :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
+  def init_manager(opts) do
+    name = registered_name!()
+    ets_table = :ets.new(table(name), [:named_table, :public, :set, read_concurrency: true])
 
     dets =
-      case Application.get_env(:raxol_acp, :job_store_path) do
+      case dets_path(opts) do
         nil -> nil
-        path when is_binary(path) -> open_dets(path, table)
+        path when is_binary(path) -> open_dets(path, ets_table)
       end
 
-    {:ok, %{table: table, dets: dets}}
+    {:ok, %{table: ets_table, dets: dets}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:save, job_id, state, memos}, _from, server_state) do
     record = %{state: state, memos: memos, updated_at: DateTime.utc_now()}
-    true = :ets.insert(@table, {job_id, record})
+    true = :ets.insert(server_state.table, {job_id, record})
     persist(server_state.dets, job_id, record)
     {:reply, :ok, server_state}
   end
 
   def handle_manager_call({:append_memo, job_id, state, memo}, _from, server_state) do
     prior_memos =
-      case :ets.lookup(@table, job_id) do
+      case :ets.lookup(server_state.table, job_id) do
         [{^job_id, %{memos: m}}] -> m
         [] -> []
       end
@@ -167,19 +179,19 @@ defmodule Raxol.ACP.Job.Store do
       updated_at: DateTime.utc_now()
     }
 
-    true = :ets.insert(@table, {job_id, record})
+    true = :ets.insert(server_state.table, {job_id, record})
     persist(server_state.dets, job_id, record)
     {:reply, :ok, server_state}
   end
 
   def handle_manager_call({:delete, job_id}, _from, server_state) do
-    :ets.delete(@table, job_id)
+    :ets.delete(server_state.table, job_id)
     persist_delete(server_state.dets, job_id)
     {:reply, :ok, server_state}
   end
 
   def handle_manager_call(:clear, _from, server_state) do
-    :ets.delete_all_objects(@table)
+    :ets.delete_all_objects(server_state.table)
     persist_clear(server_state.dets)
     {:reply, :ok, server_state}
   end
@@ -191,6 +203,30 @@ defmodule Raxol.ACP.Job.Store do
     _ = :dets.sync(dets)
     _ = :dets.close(dets)
     :ok
+  end
+
+  # -- Private: name + DETS resolution --
+
+  defp registered_name! do
+    case Process.info(self(), :registered_name) do
+      {:registered_name, name} when is_atom(name) ->
+        name
+
+      _ ->
+        raise """
+        Raxol.ACP.Job.Store must be started with a registered :name
+        (an atom) so its ETS table can be derived. Use
+        `Store.start_link(name: :my_store)` or rely on the default
+        (`Raxol.ACP.Job.Store`).
+        """
+    end
+  end
+
+  defp dets_path(opts) do
+    case Keyword.get(opts, :dets_path) do
+      nil -> Application.get_env(:raxol_acp, :job_store_path)
+      path -> path
+    end
   end
 
   # -- DETS helpers --
@@ -212,7 +248,7 @@ defmodule Raxol.ACP.Job.Store do
 
     file_charlist = path |> Path.expand() |> String.to_charlist()
 
-    case :dets.open_file(@table, type: :set, file: file_charlist) do
+    case :dets.open_file(ets_table, type: :set, file: file_charlist) do
       {:ok, table} ->
         :ok =
           :dets.foldl(
@@ -231,8 +267,8 @@ defmodule Raxol.ACP.Job.Store do
         Raxol.ACP.Job.Store: failed to open DETS file at #{inspect(path)}
         (reason: #{inspect(reason)}).
 
-        Either fix the path or unset :job_store_path to fall back to
-        in-memory ETS only.
+        Either fix the path or remove :dets_path / :job_store_path to
+        fall back to in-memory ETS only.
         """
     end
   end

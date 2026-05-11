@@ -12,8 +12,18 @@ defmodule Raxol.Payments.Mandate.Store do
 
   Same pattern as `Raxol.ACP.Job.Store`: a GenServer owns writes,
   reads bypass through ETS directly with `read_concurrency: true`.
-  ETS tables are named after this module, so the Store is effectively
-  a **singleton** -- start at most one per node.
+
+  ETS table names are derived from the GenServer's registered name,
+  so **multiple Store instances can coexist on one node** by passing
+  a distinct `:name` to `start_link/1`:
+
+      {:ok, _} = Store.start_link(name: :buyer_mandates)
+      {:ok, _} = Store.start_link(name: :seller_mandates)
+      :ok = Store.put(envelope, :buyer_mandates)
+      mandates = Store.list_for_agent("0x...", :seller_mandates)
+
+  When `:name` is omitted, the Store registers as `Raxol.Payments.Mandate.Store`
+  (the singleton default).
 
   Primary key: `envelope_hash` (32-byte binary). Secondary indices:
 
@@ -22,24 +32,22 @@ defmodule Raxol.Payments.Mandate.Store do
 
   ## Optional DETS
 
-  Set `:mandate_store_path` in `Application` config to mirror writes
-  to a DETS file. On `init/1`, the Store opens (or creates) the file
-  and replays its contents into the primary ETS table; secondary
-  indices are rebuilt from the replayed rows.
+  Per-instance DETS persistence via the `:dets_path` option:
 
-      config :raxol_payments,
-        mandate_store_path: "/var/lib/raxol_payments/mandates.dets"
+      {:ok, _} = Store.start_link(name: :my_store, dets_path: "/var/lib/raxol/my.dets")
 
-  When unset, the Store is in-memory only.
+  For the singleton case, `:mandate_store_path` in `Application` config
+  still works as a global default:
+
+      config :raxol_payments, mandate_store_path: "/var/lib/raxol_payments/mandates.dets"
+
+  An explicit `:dets_path` opt always wins over the Application config.
+  When neither is set, the Store is in-memory only.
   """
 
   use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.Payments.Mandate
-
-  @primary __MODULE__
-  @by_agent :"#{__MODULE__}.ByAgent"
-  @by_member :"#{__MODULE__}.ByMember"
 
   # -- Public API --
 
@@ -59,21 +67,22 @@ defmodule Raxol.Payments.Mandate.Store do
   def put(%Mandate{} = m, server), do: GenServer.call(server, {:put, m})
 
   @doc "Look up a Mandate by its envelope_hash. Direct ETS read."
-  @spec get(<<_::256>>) :: {:ok, Mandate.t()} | :error
-  def get(envelope_hash) when is_binary(envelope_hash) do
-    case :ets.lookup(@primary, envelope_hash) do
+  @spec get(<<_::256>>, atom()) :: {:ok, Mandate.t()} | :error
+  def get(envelope_hash, server \\ __MODULE__) when is_binary(envelope_hash) do
+    case :ets.lookup(primary_table(server), envelope_hash) do
       [{^envelope_hash, mandate}] -> {:ok, mandate}
       [] -> :error
     end
   end
 
   @doc "List every Mandate addressed to the given agent_wallet."
-  @spec list_for_agent(String.t()) :: [Mandate.t()]
-  def list_for_agent(agent_wallet) when is_binary(agent_wallet) do
-    @by_agent
+  @spec list_for_agent(String.t(), atom()) :: [Mandate.t()]
+  def list_for_agent(agent_wallet, server \\ __MODULE__) when is_binary(agent_wallet) do
+    server
+    |> by_agent_table()
     |> :ets.lookup(String.downcase(agent_wallet))
     |> Enum.flat_map(fn {_, hash} ->
-      case get(hash) do
+      case get(hash, server) do
         {:ok, m} -> [m]
         :error -> []
       end
@@ -81,12 +90,13 @@ defmodule Raxol.Payments.Mandate.Store do
   end
 
   @doc "List every Mandate issued by the given human_wallet."
-  @spec list_for_member(String.t()) :: [Mandate.t()]
-  def list_for_member(human_wallet) when is_binary(human_wallet) do
-    @by_member
+  @spec list_for_member(String.t(), atom()) :: [Mandate.t()]
+  def list_for_member(human_wallet, server \\ __MODULE__) when is_binary(human_wallet) do
+    server
+    |> by_member_table()
     |> :ets.lookup(String.downcase(human_wallet))
     |> Enum.flat_map(fn {_, hash} ->
-      case get(hash) do
+      case get(hash, server) do
         {:ok, m} -> [m]
         :error -> []
       end
@@ -108,46 +118,67 @@ defmodule Raxol.Payments.Mandate.Store do
   def clear(server \\ __MODULE__), do: GenServer.call(server, :clear)
 
   @doc "Return every stored Mandate, in unspecified order."
-  @spec list_all() :: [Mandate.t()]
-  def list_all do
-    @primary
+  @spec list_all(atom()) :: [Mandate.t()]
+  def list_all(server \\ __MODULE__) do
+    server
+    |> primary_table()
     |> :ets.tab2list()
     |> Enum.map(fn {_hash, m} -> m end)
   end
 
+  @doc """
+  Derived ETS table names. Public for tests + tooling; the runtime
+  uses these internally.
+  """
+  @spec primary_table(atom()) :: atom()
+  def primary_table(server) when is_atom(server), do: server
+
+  @spec by_agent_table(atom()) :: atom()
+  def by_agent_table(server) when is_atom(server), do: :"#{server}.ByAgent"
+
+  @spec by_member_table(atom()) :: atom()
+  def by_member_table(server) when is_atom(server), do: :"#{server}.ByMember"
+
   # -- BaseManager callbacks --
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def init_manager(_opts) do
-    :ets.new(@primary, [:named_table, :public, :set, read_concurrency: true])
-    :ets.new(@by_agent, [:named_table, :public, :bag, read_concurrency: true])
-    :ets.new(@by_member, [:named_table, :public, :bag, read_concurrency: true])
+  def init_manager(opts) do
+    name = registered_name!()
+    tables = %{
+      primary: primary_table(name),
+      by_agent: by_agent_table(name),
+      by_member: by_member_table(name)
+    }
+
+    :ets.new(tables.primary, [:named_table, :public, :set, read_concurrency: true])
+    :ets.new(tables.by_agent, [:named_table, :public, :bag, read_concurrency: true])
+    :ets.new(tables.by_member, [:named_table, :public, :bag, read_concurrency: true])
 
     dets =
-      case Application.get_env(:raxol_payments, :mandate_store_path) do
+      case dets_path(opts) do
         nil -> nil
-        path when is_binary(path) -> open_dets(path)
+        path when is_binary(path) -> open_dets(path, tables)
       end
 
-    {:ok, %{dets: dets}}
+    {:ok, %{tables: tables, dets: dets}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:put, %Mandate{} = m}, _from, state) do
     # If there's a prior entry, scrub its secondary indices first to
     # avoid stale (wallet, hash) pairs from accumulating across re-puts.
-    drop_secondary_indices(m.envelope_hash)
+    drop_secondary_indices(state.tables, m.envelope_hash)
 
-    :ets.insert(@primary, {m.envelope_hash, m})
-    :ets.insert(@by_agent, {m.agent_wallet, m.envelope_hash})
-    :ets.insert(@by_member, {m.human_wallet, m.envelope_hash})
+    :ets.insert(state.tables.primary, {m.envelope_hash, m})
+    :ets.insert(state.tables.by_agent, {m.agent_wallet, m.envelope_hash})
+    :ets.insert(state.tables.by_member, {m.human_wallet, m.envelope_hash})
     persist(state.dets, m.envelope_hash, m)
     {:reply, :ok, state}
   end
 
   def handle_manager_call({:delete, hash}, _from, state) do
-    drop_secondary_indices(hash)
-    :ets.delete(@primary, hash)
+    drop_secondary_indices(state.tables, hash)
+    :ets.delete(state.tables.primary, hash)
     persist_delete(state.dets, hash)
     {:reply, :ok, state}
   end
@@ -156,13 +187,13 @@ defmodule Raxol.Payments.Mandate.Store do
     now = System.system_time(:second)
 
     expired =
-      @primary
+      state.tables.primary
       |> :ets.tab2list()
       |> Enum.filter(fn {_, m} -> Mandate.expired?(m, now) end)
 
     Enum.each(expired, fn {hash, _m} ->
-      drop_secondary_indices(hash)
-      :ets.delete(@primary, hash)
+      drop_secondary_indices(state.tables, hash)
+      :ets.delete(state.tables.primary, hash)
       persist_delete(state.dets, hash)
     end)
 
@@ -170,14 +201,14 @@ defmodule Raxol.Payments.Mandate.Store do
   end
 
   def handle_manager_call(:clear, _from, state) do
-    :ets.delete_all_objects(@primary)
-    :ets.delete_all_objects(@by_agent)
-    :ets.delete_all_objects(@by_member)
+    :ets.delete_all_objects(state.tables.primary)
+    :ets.delete_all_objects(state.tables.by_agent)
+    :ets.delete_all_objects(state.tables.by_member)
     persist_clear(state.dets)
     {:reply, :ok, state}
   end
 
-  @impl true
+  @impl GenServer
   def terminate(_reason, %{dets: nil}), do: :ok
 
   def terminate(_reason, %{dets: dets}) do
@@ -186,13 +217,37 @@ defmodule Raxol.Payments.Mandate.Store do
     :ok
   end
 
+  # -- Private: name + DETS resolution --
+
+  defp registered_name! do
+    case Process.info(self(), :registered_name) do
+      {:registered_name, name} when is_atom(name) ->
+        name
+
+      _ ->
+        raise """
+        Raxol.Payments.Mandate.Store must be started with a registered
+        :name (an atom) so its ETS tables can be derived. Use
+        `Store.start_link(name: :my_store)` or rely on the default
+        (`Raxol.Payments.Mandate.Store`).
+        """
+    end
+  end
+
+  defp dets_path(opts) do
+    case Keyword.get(opts, :dets_path) do
+      nil -> Application.get_env(:raxol_payments, :mandate_store_path)
+      path -> path
+    end
+  end
+
   # -- Private: secondary index maintenance --
 
-  defp drop_secondary_indices(hash) do
-    case :ets.lookup(@primary, hash) do
+  defp drop_secondary_indices(tables, hash) do
+    case :ets.lookup(tables.primary, hash) do
       [{^hash, %Mandate{} = prior}] ->
-        :ets.match_delete(@by_agent, {prior.agent_wallet, hash})
-        :ets.match_delete(@by_member, {prior.human_wallet, hash})
+        :ets.match_delete(tables.by_agent, {prior.agent_wallet, hash})
+        :ets.match_delete(tables.by_member, {prior.human_wallet, hash})
 
       [] ->
         :ok
@@ -201,7 +256,9 @@ defmodule Raxol.Payments.Mandate.Store do
 
   # -- Private: DETS --
 
-  defp open_dets(path) do
+  # DETS table identity is the same atom as the primary ETS table so
+  # consumers see one logical store per name.
+  defp open_dets(path, tables) do
     path
     |> Path.expand()
     |> Path.dirname()
@@ -209,14 +266,14 @@ defmodule Raxol.Payments.Mandate.Store do
 
     file_charlist = path |> Path.expand() |> String.to_charlist()
 
-    case :dets.open_file(@primary, type: :set, file: file_charlist) do
+    case :dets.open_file(tables.primary, type: :set, file: file_charlist) do
       {:ok, table} ->
         :ok =
           :dets.foldl(
             fn {hash, %Mandate{} = m}, _acc ->
-              :ets.insert(@primary, {hash, m})
-              :ets.insert(@by_agent, {m.agent_wallet, hash})
-              :ets.insert(@by_member, {m.human_wallet, hash})
+              :ets.insert(tables.primary, {hash, m})
+              :ets.insert(tables.by_agent, {m.agent_wallet, hash})
+              :ets.insert(tables.by_member, {m.human_wallet, hash})
               :ok
             end,
             :ok,
@@ -230,8 +287,8 @@ defmodule Raxol.Payments.Mandate.Store do
         Raxol.Payments.Mandate.Store: failed to open DETS file at #{inspect(path)}
         (reason: #{inspect(reason)}).
 
-        Either fix the path or unset :mandate_store_path to fall back
-        to in-memory ETS only.
+        Either fix the path or remove :dets_path / :mandate_store_path
+        to fall back to in-memory ETS only.
         """
     end
   end
