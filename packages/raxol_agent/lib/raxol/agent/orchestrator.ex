@@ -12,7 +12,7 @@ defmodule Raxol.Agent.Orchestrator do
   - `:takeover` -- directly controlling an agent's terminal
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -141,13 +141,13 @@ defmodule Raxol.Agent.Orchestrator do
 
   # -- Server ------------------------------------------------------------------
 
-  @impl true
-  def init(_opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(_opts) do
     {:ok, %__MODULE__{event_log: CircularBuffer.new(@max_event_log)}}
   end
 
-  @impl true
-  def handle_call(
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(
         {:spawn_agent, agent_id, agent_module, opts},
         _from,
         %__MODULE__{} = state
@@ -171,7 +171,7 @@ defmodule Raxol.Agent.Orchestrator do
     end
   end
 
-  def handle_call({:kill_agent, agent_id}, _from, %__MODULE__{} = state) do
+  def handle_manager_call({:kill_agent, agent_id}, _from, %__MODULE__{} = state) do
     case Map.get(state.agents, agent_id) do
       nil ->
         {:reply, {:error, :not_found}, state}
@@ -188,7 +188,7 @@ defmodule Raxol.Agent.Orchestrator do
     end
   end
 
-  def handle_call({:focus_pane, pane_id}, _from, %__MODULE__{} = state) do
+  def handle_manager_call({:focus_pane, pane_id}, _from, %__MODULE__{} = state) do
     if Map.has_key?(state.pane_layout, pane_id) do
       {:reply, :ok, %__MODULE__{state | focused_pane: pane_id}}
     else
@@ -196,7 +196,7 @@ defmodule Raxol.Agent.Orchestrator do
     end
   end
 
-  def handle_call(:pilot_takeover, _from, %__MODULE__{} = state) do
+  def handle_manager_call(:pilot_takeover, _from, %__MODULE__{} = state) do
     with {:ok, pane_id} <- require_focused_pane(state),
          {:ok, pid} <- require_agent(state, pane_id) do
       _ = AgentProcess.takeover(pid)
@@ -211,7 +211,7 @@ defmodule Raxol.Agent.Orchestrator do
     end
   end
 
-  def handle_call(:pilot_release, _from, %__MODULE__{} = state) do
+  def handle_manager_call(:pilot_release, _from, %__MODULE__{} = state) do
     with {:ok, pane_id} <- require_focused_pane(state),
          {:ok, pid} <- require_agent(state, pane_id) do
       _ = AgentProcess.release(pid)
@@ -226,7 +226,7 @@ defmodule Raxol.Agent.Orchestrator do
     end
   end
 
-  def handle_call({:send_input, input}, _from, %__MODULE__{} = state) do
+  def handle_manager_call({:send_input, input}, _from, %__MODULE__{} = state) do
     case {state.pilot_mode, state.focused_pane} do
       {:takeover, pane_id} when not is_nil(pane_id) ->
         case Map.get(state.pane_layout, pane_id) do
@@ -250,7 +250,7 @@ defmodule Raxol.Agent.Orchestrator do
     end
   end
 
-  def handle_call(
+  def handle_manager_call(
         {:send_directive, agent_id, directive},
         _from,
         %__MODULE__{} = state
@@ -265,7 +265,7 @@ defmodule Raxol.Agent.Orchestrator do
     end
   end
 
-  def handle_call(:get_layout, _from, %__MODULE__{} = state) do
+  def handle_manager_call(:get_layout, _from, %__MODULE__{} = state) do
     layout = %{
       panes: state.pane_layout,
       focused: state.focused_pane,
@@ -276,7 +276,7 @@ defmodule Raxol.Agent.Orchestrator do
     {:reply, layout, state}
   end
 
-  def handle_call(:get_statuses, _from, %__MODULE__{} = state) do
+  def handle_manager_call(:get_statuses, _from, %__MODULE__{} = state) do
     statuses =
       state.agents
       |> Enum.map(fn {agent_id, pid} ->
@@ -294,30 +294,30 @@ defmodule Raxol.Agent.Orchestrator do
     {:reply, statuses, state}
   end
 
-  def handle_call(:accept_recommendation, _from, %__MODULE__{} = state) do
+  def handle_manager_call(:accept_recommendation, _from, %__MODULE__{} = state) do
     resolve_recommendation(state, :accepted)
   end
 
-  def handle_call(:reject_recommendation, _from, %__MODULE__{} = state) do
+  def handle_manager_call(:reject_recommendation, _from, %__MODULE__{} = state) do
     resolve_recommendation(state, :rejected)
   end
 
-  def handle_call(:get_pending_recommendation, _from, %__MODULE__{} = state) do
+  def handle_manager_call(:get_pending_recommendation, _from, %__MODULE__{} = state) do
     {:reply, state.pending_recommendation, state}
   end
 
-  def handle_call({:subscribe, pid}, _from, %__MODULE__{} = state) do
+  def handle_manager_call({:subscribe, pid}, _from, %__MODULE__{} = state) do
     Process.monitor(pid)
 
     {:reply, :ok, %__MODULE__{state | subscribers: MapSet.put(state.subscribers, pid)}}
   end
 
-  def handle_call(_msg, _from, %__MODULE__{} = state) do
+  def handle_manager_call(_msg, _from, %__MODULE__{} = state) do
     {:reply, {:error, :unknown_call}, state}
   end
 
-  @impl true
-  def handle_cast({:broadcast_directive, directive}, %__MODULE__{} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:broadcast_directive, directive}, %__MODULE__{} = state) do
     Enum.each(state.agents, fn {_id, pid} ->
       AgentProcess.send_directive(pid, directive)
     end)
@@ -325,10 +325,10 @@ defmodule Raxol.Agent.Orchestrator do
     {:noreply, state}
   end
 
-  def handle_cast(_msg, %__MODULE__{} = state), do: {:noreply, state}
+  def handle_manager_cast(_msg, %__MODULE__{} = state), do: {:noreply, state}
 
-  @impl true
-  def handle_info(
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info(
         {:agent_query, agent_id, %Protocol{} = msg},
         %__MODULE__{} = state
       ) do
@@ -338,7 +338,7 @@ defmodule Raxol.Agent.Orchestrator do
     {:noreply, state}
   end
 
-  def handle_info({:layout_recommendation, rec}, %__MODULE__{} = state) do
+  def handle_manager_info({:layout_recommendation, rec}, %__MODULE__{} = state) do
     state =
       %__MODULE__{state | pending_recommendation: rec}
       |> log_event({:recommendation_pending, rec.id})
@@ -347,7 +347,7 @@ defmodule Raxol.Agent.Orchestrator do
     {:noreply, state}
   end
 
-  def handle_info({:DOWN, _ref, :process, pid, reason}, %__MODULE__{} = state) do
+  def handle_manager_info({:DOWN, _ref, :process, pid, reason}, %__MODULE__{} = state) do
     case Enum.find(state.agents, fn {_, p} -> p == pid end) do
       {agent_id, _} ->
         Logger.warning("[Orchestrator] Agent #{agent_id} died: #{inspect(reason)}")
@@ -360,7 +360,7 @@ defmodule Raxol.Agent.Orchestrator do
     end
   end
 
-  def handle_info(_msg, %__MODULE__{} = state), do: {:noreply, state}
+  def handle_manager_info(_msg, %__MODULE__{} = state), do: {:noreply, state}
 
   # -- Private -----------------------------------------------------------------
 

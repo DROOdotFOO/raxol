@@ -7,7 +7,7 @@ defmodule Raxol.Agent.Session do
   `Raxol.Agent.Registry` for discovery by other agents.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -74,8 +74,8 @@ defmodule Raxol.Agent.Session do
     end
   end
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     app_module = Keyword.fetch!(opts, :app_module)
     id = Keyword.fetch!(opts, :id)
     team_id = Keyword.get(opts, :team_id)
@@ -103,8 +103,8 @@ defmodule Raxol.Agent.Session do
      }}
   end
 
-  @impl true
-  def handle_cast({:send_message, message}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:send_message, message}, state) do
     case get_dispatcher(state.lifecycle_pid) do
       nil ->
         :ok
@@ -119,11 +119,11 @@ defmodule Raxol.Agent.Session do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_cast(_msg, state), do: {:noreply, state}
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast(_msg, state), do: {:noreply, state}
 
-  @impl true
-  def handle_call(:get_model, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:get_model, _from, state) do
     result =
       case get_dispatcher(state.lifecycle_pid) do
         nil -> {:error, :no_dispatcher}
@@ -133,8 +133,8 @@ defmodule Raxol.Agent.Session do
     {:reply, result, state}
   end
 
-  @impl true
-  def handle_call(:get_view_tree, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:get_view_tree, _from, state) do
     result =
       case get_dispatcher(state.lifecycle_pid) do
         nil -> {:error, :no_dispatcher}
@@ -144,8 +144,8 @@ defmodule Raxol.Agent.Session do
     {:reply, result, state}
   end
 
-  @impl true
-  def handle_call(:get_semantic_view, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:get_semantic_view, _from, state) do
     result =
       case get_dispatcher(state.lifecycle_pid) do
         nil ->
@@ -164,12 +164,12 @@ defmodule Raxol.Agent.Session do
     {:reply, result, state}
   end
 
-  @impl true
-  def handle_call(_msg, _from, state),
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(_msg, _from, state),
     do: {:reply, {:error, :unknown_call}, state}
 
-  @impl true
-  def handle_info({:DOWN, _ref, :process, pid, reason}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:DOWN, _ref, :process, pid, reason}, state) do
     if pid == state.lifecycle_pid do
       Logger.warning(
         "[Agent.Session] Lifecycle for #{inspect(state.id)} crashed: #{inspect(reason)}"
@@ -181,9 +181,9 @@ defmodule Raxol.Agent.Session do
     end
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
-  @impl true
+  @impl GenServer
   def terminate(_reason, state) do
     if state.lifecycle_pid && Process.alive?(state.lifecycle_pid) do
       Raxol.Core.Runtime.Lifecycle.stop(state.lifecycle_pid)

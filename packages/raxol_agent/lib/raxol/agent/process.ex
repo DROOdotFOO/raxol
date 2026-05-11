@@ -13,7 +13,7 @@ defmodule Raxol.Agent.Process do
   calls `ContextStore.load/1` then `restore_context/1` to resume.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -145,8 +145,8 @@ defmodule Raxol.Agent.Process do
 
   # -- Server ------------------------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     agent_id = Keyword.fetch!(opts, :agent_id)
     agent_module = Keyword.fetch!(opts, :agent_module)
     backend = Keyword.get(opts, :backend, Raxol.Agent.Backend.Mock)
@@ -200,35 +200,35 @@ defmodule Raxol.Agent.Process do
     {:ok, %{state | tick_ref: tick_ref}}
   end
 
-  @impl true
-  def handle_info(:tick, %{status: status} = state)
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info(:tick, %{status: status} = state)
       when status in [:paused, :taken_over] do
     # Don't run the loop when paused or taken over, but keep the timer
     {:noreply, %{state | tick_ref: schedule_tick(state.tick_ms)}}
   end
 
-  def handle_info(:tick, state) do
+  def handle_manager_info(:tick, state) do
     state = run_cycle(state)
     {:noreply, %{state | tick_ref: schedule_tick(state.tick_ms)}}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
-  @impl true
-  def handle_cast({:directive, directive}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:directive, directive}, state) do
     state = handle_directive(directive, state)
     {:noreply, state}
   end
 
-  def handle_cast({:push_event, event}, state) do
+  def handle_manager_cast({:push_event, event}, state) do
     buffer = [event | state.event_buffer] |> Enum.take(@max_event_buffer)
     {:noreply, %{state | event_buffer: buffer}}
   end
 
-  def handle_cast(_msg, state), do: {:noreply, state}
+  def handle_manager_cast(_msg, state), do: {:noreply, state}
 
-  @impl true
-  def handle_call(:takeover, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:takeover, _from, state) do
     state = %{state | status: :taken_over}
 
     agent_state =
@@ -245,7 +245,7 @@ defmodule Raxol.Agent.Process do
     {:reply, :ok, %{state | agent_state: agent_state}}
   end
 
-  def handle_call(:release, _from, state) do
+  def handle_manager_call(:release, _from, state) do
     agent_state =
       if function_exported?(state.agent_module, :on_resume, 1) do
         case state.agent_module.on_resume(state.agent_state) do
@@ -261,7 +261,7 @@ defmodule Raxol.Agent.Process do
     {:reply, :ok, state}
   end
 
-  def handle_call(:get_status, _from, state) do
+  def handle_manager_call(:get_status, _from, state) do
     status = %{
       agent_id: state.agent_id,
       module: state.agent_module,
@@ -274,11 +274,11 @@ defmodule Raxol.Agent.Process do
     {:reply, status, state}
   end
 
-  def handle_call(_msg, _from, state) do
+  def handle_manager_call(_msg, _from, state) do
     {:reply, {:error, :unknown_call}, state}
   end
 
-  @impl true
+  @impl GenServer
   def terminate(_reason, state) do
     save_context(state)
     :ok

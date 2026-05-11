@@ -31,7 +31,7 @@ defmodule Raxol.Agent.LSPContext do
   newline-delimited JSON-RPC messages with Content-Length headers.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -210,8 +210,8 @@ defmodule Raxol.Agent.LSPContext do
 
   # -- Server Callbacks ---------------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     command = Keyword.fetch!(opts, :command)
     args = Keyword.get(opts, :args, [])
     env = Keyword.get(opts, :env, [])
@@ -230,7 +230,7 @@ defmodule Raxol.Agent.LSPContext do
     {:ok, state, {:continue, :spawn_server}}
   end
 
-  @impl true
+  @impl GenServer
   def handle_continue(:spawn_server, state) do
     charlist_env =
       Enum.map(state.env, fn {k, v} ->
@@ -258,17 +258,17 @@ defmodule Raxol.Agent.LSPContext do
     end
   end
 
-  @impl true
-  def handle_call({:diagnostics, uri}, _from, %{status: :ready} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:diagnostics, uri}, _from, %{status: :ready} = state) do
     diags = Map.get(state.diagnostics_cache, uri, [])
     {:reply, {:ok, diags}, state}
   end
 
-  def handle_call({:diagnostics, _uri}, _from, state) do
+  def handle_manager_call({:diagnostics, _uri}, _from, state) do
     {:reply, {:error, {:not_ready, state.status}}, state}
   end
 
-  def handle_call({:symbols, uri}, from, %{status: :ready} = state) do
+  def handle_manager_call({:symbols, uri}, from, %{status: :ready} = state) do
     {state, id} = next_id(state)
     state = register_pending(state, id, from, :symbols)
 
@@ -280,11 +280,11 @@ defmodule Raxol.Agent.LSPContext do
     {:noreply, state}
   end
 
-  def handle_call({:symbols, _uri}, _from, state) do
+  def handle_manager_call({:symbols, _uri}, _from, state) do
     {:reply, {:error, {:not_ready, state.status}}, state}
   end
 
-  def handle_call({:hover, uri, line, character}, from, %{status: :ready} = state) do
+  def handle_manager_call({:hover, uri, line, character}, from, %{status: :ready} = state) do
     {state, id} = next_id(state)
     state = register_pending(state, id, from, :hover)
 
@@ -297,11 +297,11 @@ defmodule Raxol.Agent.LSPContext do
     {:noreply, state}
   end
 
-  def handle_call({:hover, _uri, _line, _char}, _from, state) do
+  def handle_manager_call({:hover, _uri, _line, _char}, _from, state) do
     {:reply, {:error, {:not_ready, state.status}}, state}
   end
 
-  def handle_call(:status, _from, state) do
+  def handle_manager_call(:status, _from, state) do
     info = %{
       status: state.status,
       root_uri: state.root_uri,
@@ -312,12 +312,12 @@ defmodule Raxol.Agent.LSPContext do
     {:reply, info, state}
   end
 
-  @impl true
-  def handle_info({port, {:data, data}}, %{port: port} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({port, {:data, data}}, %{port: port} = state) do
     handle_data(state.buffer <> data, state)
   end
 
-  def handle_info({port, {:exit_status, code}}, %{port: port} = state) do
+  def handle_manager_info({port, {:exit_status, code}}, %{port: port} = state) do
     Logger.warning("[LSPContext] Server exited with status #{code}")
 
     Enum.each(state.pending, fn
@@ -328,9 +328,9 @@ defmodule Raxol.Agent.LSPContext do
     {:noreply, %{state | port: nil, status: :closed, pending: %{}}}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
-  @impl true
+  @impl GenServer
   def terminate(_reason, %{port: port}) when is_port(port) do
     send_request_fire_and_forget(%{port: port}, "shutdown", %{})
     send_notification(%{port: port}, "exit", %{})

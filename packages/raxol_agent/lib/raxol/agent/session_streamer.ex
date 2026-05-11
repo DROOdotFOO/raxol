@@ -35,7 +35,7 @@ defmodule Raxol.Agent.SessionStreamer do
   - `{:error, reason}` -- error occurred
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -99,14 +99,14 @@ defmodule Raxol.Agent.SessionStreamer do
 
   # -- Server Callbacks ---------------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     max_history = Keyword.get(opts, :max_history, 100)
     {:ok, %__MODULE__{max_history: max_history}}
   end
 
-  @impl true
-  def handle_call({:subscribe, session_id, pid}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:subscribe, session_id, pid}, _from, state) do
     Process.monitor(pid)
 
     subs =
@@ -117,7 +117,7 @@ defmodule Raxol.Agent.SessionStreamer do
     {:reply, :ok, %{state | subscriptions: subs}}
   end
 
-  def handle_call({:unsubscribe, session_id, pid}, _from, state) do
+  def handle_manager_call({:unsubscribe, session_id, pid}, _from, state) do
     subs =
       Map.update(state.subscriptions, session_id, MapSet.new(), fn set ->
         MapSet.delete(set, pid)
@@ -126,7 +126,7 @@ defmodule Raxol.Agent.SessionStreamer do
     {:reply, :ok, %{state | subscriptions: subs}}
   end
 
-  def handle_call({:history, session_id}, _from, state) do
+  def handle_manager_call({:history, session_id}, _from, state) do
     events =
       case Map.get(state.history, session_id) do
         nil -> []
@@ -136,15 +136,15 @@ defmodule Raxol.Agent.SessionStreamer do
     {:reply, events, state}
   end
 
-  def handle_call(:list_sessions, _from, state) do
+  def handle_manager_call(:list_sessions, _from, state) do
     sessions =
       for {id, set} <- state.subscriptions, MapSet.size(set) > 0, do: id
 
     {:reply, sessions, state}
   end
 
-  @impl true
-  def handle_cast({:emit, session_id, event}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:emit, session_id, event}, state) do
     # Broadcast to subscribers
     subscribers = Map.get(state.subscriptions, session_id, MapSet.new())
 
@@ -165,8 +165,8 @@ defmodule Raxol.Agent.SessionStreamer do
     {:noreply, %{state | history: history}}
   end
 
-  @impl true
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
     # Remove dead subscriber from all sessions
     subs =
       Map.new(state.subscriptions, fn {session_id, set} ->
@@ -176,7 +176,7 @@ defmodule Raxol.Agent.SessionStreamer do
     {:noreply, %{state | subscriptions: subs}}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
   defp enqueue_bounded(queue, item, max) do
     queue = :queue.in(item, queue)
