@@ -335,15 +335,6 @@ defmodule Raxol.Core.Renderer.Views.Table do
     end
   end
 
-  # Group handle_call clauses together
-  def handle_call({:update_props, _new_props}, _from, state) do
-    {:reply, :not_implemented, state}
-  end
-
-  def handle_call({:get_state}, _from, state) do
-    {:reply, :not_implemented, state}
-  end
-
   # Helper to pad cell content to the column width
   defp pad_cell_content(value, col) do
     case component?(value) do

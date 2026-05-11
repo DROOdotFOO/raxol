@@ -465,8 +465,9 @@ defmodule Raxol.Core.StateManager do
   defp merge_managed_state(state1, state2, _opts),
     do: {:ok, Map.merge(state1, state2)}
 
-  defp get_managed_process_state(_key, _opts), do: {:error, :not_implemented}
+  defp get_managed_process_state(key, _opts), do: ProcessStrategy.get(key)
 
-  defp set_managed_process_state(_key, _value, _opts),
-    do: {:error, :not_implemented}
+  defp set_managed_process_state(key, value, _opts) do
+    ProcessStrategy.update(key, fn _prior -> value end)
+  end
 end

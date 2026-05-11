@@ -114,18 +114,6 @@ defmodule Raxol.Terminal.Sync.SyncServerTest do
       assert resolved.value == "new"
     end
 
-    test ~c"custom strategy", %{pid: pid} do
-      {:ok, sync_id} =
-        SyncServer.create_sync(:state, [conflict_resolution: :custom], pid)
-
-      conflicts = [
-        {%{value: "old"}, 1000, 1},
-        {%{value: "new"}, 2000, 2}
-      ]
-
-      assert {:error, :not_implemented} =
-               SyncServer.resolve_conflicts(sync_id, conflicts, [], pid)
-    end
   end
 
   describe "error handling" do

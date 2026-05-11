@@ -22,7 +22,7 @@ defmodule Raxol.Terminal.Sync.SyncServer do
         }
   @type sync_config :: %{
           consistency: :strong | :eventual,
-          conflict_resolution: :last_write_wins | :version_based | :custom,
+          conflict_resolution: :last_write_wins | :version_based,
           timeout: non_neg_integer(),
           retry_count: non_neg_integer()
         }
@@ -326,14 +326,8 @@ defmodule Raxol.Terminal.Sync.SyncServer do
 
   defp do_resolve_conflicts(conflicts, strategy) do
     case strategy do
-      :last_write_wins ->
-        resolve_last_write_wins(conflicts)
-
-      :version_based ->
-        resolve_version_based(conflicts)
-
-      :custom ->
-        resolve_custom(conflicts)
+      :last_write_wins -> resolve_last_write_wins(conflicts)
+      :version_based -> resolve_version_based(conflicts)
     end
   end
 
@@ -349,10 +343,5 @@ defmodule Raxol.Terminal.Sync.SyncServer do
       {data, _, _} -> {:ok, data}
       nil -> {:error, :no_conflicts}
     end
-  end
-
-  defp resolve_custom(_conflicts) do
-    # Implement custom conflict resolution strategy
-    {:error, :not_implemented}
   end
 end

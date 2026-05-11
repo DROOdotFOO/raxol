@@ -193,7 +193,7 @@ defmodule Raxol.Core.Metrics.VisualizerTest do
       assert String.contains?(csv_data, "Timestamp,Value")
     end
 
-    test "returns error for PNG export (not implemented)" do
+    test "rejects unsupported export formats" do
       metrics = [
         %{
           timestamp: DateTime.utc_now() |> DateTime.to_unix(:millisecond),
@@ -203,8 +203,9 @@ defmodule Raxol.Core.Metrics.VisualizerTest do
 
       assert {:ok, chart_id, _} = Visualizer.create_chart(metrics)
 
-      assert {:ok, {:error, :not_implemented}} =
-               Visualizer.export_chart(chart_id, :png)
+      assert_raise FunctionClauseError, fn ->
+        Visualizer.export_chart(chart_id, :png)
+      end
     end
   end
 

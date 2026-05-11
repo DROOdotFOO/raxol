@@ -68,7 +68,7 @@ defmodule Raxol.Core.Metrics.Visualizer do
   @doc """
   Exports chart data in the specified format.
   """
-  def export_chart(chart_id, format) when format in [:json, :csv, :png] do
+  def export_chart(chart_id, format) when format in [:json, :csv] do
     GenServer.call(__MODULE__, {:export_chart, chart_id, format})
   end
 
@@ -400,15 +400,9 @@ defmodule Raxol.Core.Metrics.Visualizer do
     Float.round(value, 2)
   end
 
-  @spec export_chart_data(map(), :json | :csv | :png) ::
-          String.t() | {:error, :not_implemented}
-  defp export_chart_data(chart, format) do
-    case format do
-      :json -> Jason.encode!(chart)
-      :csv -> export_to_csv(chart)
-      :png -> export_to_png(chart)
-    end
-  end
+  @spec export_chart_data(map(), :json | :csv) :: String.t()
+  defp export_chart_data(chart, :json), do: Jason.encode!(chart)
+  defp export_chart_data(chart, :csv), do: export_to_csv(chart)
 
   defp export_to_csv(chart) do
     headers = ["Timestamp", "Value"]
@@ -429,9 +423,4 @@ defmodule Raxol.Core.Metrics.Visualizer do
     |> Enum.map_join("\n", &Enum.join(&1, ","))
   end
 
-  defp export_to_png(_chart) do
-    # This would typically use a library like Chart.js or similar
-    # to render the chart to a PNG file
-    {:error, :not_implemented}
-  end
 end

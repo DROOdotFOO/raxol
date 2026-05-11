@@ -70,8 +70,16 @@ defmodule Raxol.Core.Runtime.Plugins.Loader do
 
   @impl Raxol.Core.Runtime.Plugins.LoaderBehaviour
   def list_available_plugins(opts \\ []) do
-    # Simple implementation - returns empty list for now
-    GenServer.call(__MODULE__, {:list_available_plugins, opts})
+    case Keyword.get(opts, :plugin_dirs, []) do
+      [] ->
+        []
+
+      dirs when is_list(dirs) ->
+        case discover_plugins(dirs) do
+          {:ok, plugins} -> plugins
+          {:error, _} -> []
+        end
+    end
   end
 
   @impl Raxol.Core.Runtime.Plugins.LoaderBehaviour

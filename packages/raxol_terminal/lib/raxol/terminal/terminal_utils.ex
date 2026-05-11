@@ -124,14 +124,6 @@ defmodule Raxol.Terminal.TerminalUtils do
   end
 
   @doc """
-  Returns the current cursor position, if available.
-  """
-  @spec cursor_position :: {:error, :not_implemented}
-  def cursor_position do
-    {:error, :not_implemented}
-  end
-
-  @doc """
   Detects terminal dimensions using :io.columns and :io.rows.
   Returns {:ok, width, height} or {:error, reason}.
   """
