@@ -32,7 +32,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
   from any other context.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
   require Logger
 
   alias Raxol.Symphony.Orchestrator
@@ -113,8 +113,8 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
 
   # -- GenServer callbacks ----------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     orch = Keyword.get(opts, :orchestrator, Raxol.Symphony.Orchestrator)
     push_fn = Keyword.get(opts, :push_fn, &default_push/1)
 
@@ -133,18 +133,18 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
     {:ok, state}
   end
 
-  @impl true
-  def handle_call(:config, _from, state), do: {:reply, state, state}
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:config, _from, state), do: {:reply, state, state}
 
-  @impl true
-  def handle_cast(:push_snapshot, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast(:push_snapshot, state) do
     snapshot = safe_snapshot(state.orchestrator)
     push(state, Formatter.snapshot_notification(snapshot))
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info({:symphony_event, name, snapshot}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:symphony_event, name, snapshot}, state) do
     case Formatter.event_notification(name, snapshot) do
       :skip ->
         :ok
@@ -156,7 +156,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
     {:noreply, state}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
   # -- Internals --------------------------------------------------------------
 

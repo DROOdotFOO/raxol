@@ -29,7 +29,7 @@ defmodule Raxol.Symphony.Orchestrator do
   - `tick_now/1` -- (test-only) synchronously runs a single tick.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
   require Logger
 
   alias Raxol.Symphony.Config.Schema
@@ -93,8 +93,8 @@ defmodule Raxol.Symphony.Orchestrator do
 
   # -- GenServer callbacks ----------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     workflow_store = Keyword.get(opts, :workflow_store)
 
     config =
@@ -122,17 +122,17 @@ defmodule Raxol.Symphony.Orchestrator do
     {:ok, state}
   end
 
-  @impl true
-  def handle_call(:snapshot, _from, %State{} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:snapshot, _from, %State{} = state) do
     {:reply, build_snapshot(state), state}
   end
 
-  def handle_call({:subscribe, pid}, _from, %State{} = state) do
+  def handle_manager_call({:subscribe, pid}, _from, %State{} = state) do
     Process.monitor(pid)
     {:reply, :ok, %State{state | listeners: MapSet.put(state.listeners, pid)}}
   end
 
-  def handle_call({:stop_run, issue_id}, _from, %State{} = state) do
+  def handle_manager_call({:stop_run, issue_id}, _from, %State{} = state) do
     case Map.get(state.running, issue_id) do
       nil ->
         {:reply, {:error, :not_running}, state}
@@ -150,23 +150,23 @@ defmodule Raxol.Symphony.Orchestrator do
     end
   end
 
-  def handle_call(:tick_now, _from, %State{} = state) do
+  def handle_manager_call(:tick_now, _from, %State{} = state) do
     new_state = run_tick(state)
     {:reply, :ok, new_state}
   end
 
-  def handle_call(:get_config, _from, %State{} = state) do
+  def handle_manager_call(:get_config, _from, %State{} = state) do
     {:reply, state.config, state}
   end
 
-  @impl true
-  def handle_cast(:refresh, %State{} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast(:refresh, %State{} = state) do
     new_state = run_tick(state)
     {:noreply, schedule_next_tick(new_state)}
   end
 
-  @impl true
-  def handle_info(:tick, %State{} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info(:tick, %State{} = state) do
     new_state =
       state
       |> Map.put(:tick_timer_ref, nil)
@@ -176,12 +176,12 @@ defmodule Raxol.Symphony.Orchestrator do
     {:noreply, new_state}
   end
 
-  def handle_info({:retry_fire, issue_id}, %State{} = state) do
+  def handle_manager_info({:retry_fire, issue_id}, %State{} = state) do
     new_state = handle_retry_fire(state, issue_id)
     {:noreply, new_state}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %State{} = state) do
+  def handle_manager_info({:DOWN, ref, :process, _pid, reason}, %State{} = state) do
     case find_running_by_ref(state, ref) do
       nil ->
         # Maybe a listener; drop it from listeners.
@@ -192,11 +192,11 @@ defmodule Raxol.Symphony.Orchestrator do
     end
   end
 
-  def handle_info({:run_event, issue_id, event}, %State{} = state) do
+  def handle_manager_info({:run_event, issue_id, event}, %State{} = state) do
     {:noreply, integrate_run_event(state, issue_id, event)}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
   # -- Tick / dispatch --------------------------------------------------------
 

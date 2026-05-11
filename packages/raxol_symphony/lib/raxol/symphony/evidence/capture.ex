@@ -24,7 +24,7 @@ defmodule Raxol.Symphony.Evidence.Capture do
   is never blocked by recording failures.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -99,8 +99,8 @@ defmodule Raxol.Symphony.Evidence.Capture do
   # GenServer callbacks
   # ---------------------------------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     path = Keyword.fetch!(opts, :path)
     width = Keyword.get(opts, :width, @default_width)
     height = Keyword.get(opts, :height, @default_height)
@@ -126,10 +126,10 @@ defmodule Raxol.Symphony.Evidence.Capture do
     end
   end
 
-  @impl true
-  def handle_cast({:record, _event, _at_us}, %{io: nil} = state), do: {:noreply, state}
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:record, _event, _at_us}, %{io: nil} = state), do: {:noreply, state}
 
-  def handle_cast({:record, event, at_us}, %{io: io, start_us: start_us} = state) do
+  def handle_manager_cast({:record, event, at_us}, %{io: io, start_us: start_us} = state) do
     elapsed_seconds = (at_us - start_us) / 1_000_000.0
     text = format_event(event)
 
@@ -137,7 +137,7 @@ defmodule Raxol.Symphony.Evidence.Capture do
     {:noreply, state}
   end
 
-  @impl true
+  @impl GenServer
   def terminate(_reason, %{io: nil}), do: :ok
 
   def terminate(_reason, %{io: io}) do

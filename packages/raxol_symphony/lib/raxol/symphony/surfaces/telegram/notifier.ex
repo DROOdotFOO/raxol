@@ -23,7 +23,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
   re-enable for debugging.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
   require Logger
 
   alias Raxol.Symphony.Orchestrator
@@ -60,8 +60,8 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
 
   # -- GenServer callbacks ----------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     orch = Keyword.get(opts, :orchestrator, Raxol.Symphony.Orchestrator)
     chat_ids = Keyword.get(opts, :chat_ids, [])
     send_fn = Keyword.get(opts, :send_fn, &default_send/3)
@@ -88,23 +88,23 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
     {:ok, state}
   end
 
-  @impl true
-  def handle_call(:config, _from, state), do: {:reply, state, state}
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:config, _from, state), do: {:reply, state, state}
 
-  @impl true
-  def handle_cast(:push_snapshot, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast(:push_snapshot, state) do
     snapshot = safe_snapshot(state.orchestrator)
     {text, keyboard} = Formatter.snapshot_message(snapshot)
     broadcast(state, text, keyboard)
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info({:symphony_event, name, snapshot}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:symphony_event, name, snapshot}, state) do
     handle_event(state, name, snapshot)
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
   # -- Internals --------------------------------------------------------------
 

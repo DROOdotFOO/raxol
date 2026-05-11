@@ -39,7 +39,7 @@ defmodule Raxol.Symphony.WorkflowStore do
       )
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
   require Logger
 
   alias Raxol.Symphony.Config
@@ -115,8 +115,8 @@ defmodule Raxol.Symphony.WorkflowStore do
 
   # -- GenServer callbacks ----------------------------------------------------
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     state = %__MODULE__{
       path: Keyword.get(opts, :path),
       config: Keyword.get(opts, :config),
@@ -129,33 +129,33 @@ defmodule Raxol.Symphony.WorkflowStore do
     {:ok, state}
   end
 
-  @impl true
-  def handle_call(:get, _from, %__MODULE__{} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:get, _from, %__MODULE__{} = state) do
     {:reply, state.config, state}
   end
 
-  def handle_call(:reload, _from, %__MODULE__{} = state) do
+  def handle_manager_call(:reload, _from, %__MODULE__{} = state) do
     case do_reload(state) do
       {:ok, new_state} -> {:reply, {:ok, new_state.config}, new_state}
       {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
     end
   end
 
-  def handle_call({:subscribe, pid}, _from, %__MODULE__{} = state) do
+  def handle_manager_call({:subscribe, pid}, _from, %__MODULE__{} = state) do
     Process.monitor(pid)
     {:reply, :ok, %__MODULE__{state | listeners: MapSet.put(state.listeners, pid)}}
   end
 
-  def handle_call(:last_error, _from, %__MODULE__{} = state) do
+  def handle_manager_call(:last_error, _from, %__MODULE__{} = state) do
     {:reply, state.last_error, state}
   end
 
-  def handle_call(:watching?, _from, %__MODULE__{} = state) do
+  def handle_manager_call(:watching?, _from, %__MODULE__{} = state) do
     {:reply, state.watcher_enabled, state}
   end
 
-  @impl true
-  def handle_info({:file_event, _watcher, {changed_path, _events}}, %__MODULE__{} = state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:file_event, _watcher, {changed_path, _events}}, %__MODULE__{} = state) do
     if matches_workflow?(state.path, changed_path) do
       ref = make_ref()
       Process.send_after(self(), {:debounced_reload, ref}, state.debounce_ms)
@@ -165,12 +165,12 @@ defmodule Raxol.Symphony.WorkflowStore do
     end
   end
 
-  def handle_info({:file_event, _watcher, :stop}, %__MODULE__{} = state) do
+  def handle_manager_info({:file_event, _watcher, :stop}, %__MODULE__{} = state) do
     Logger.warning("symphony.workflow_store.watcher_stopped path=#{inspect(state.path)}")
     {:noreply, %__MODULE__{state | watcher_pid: nil, watcher_enabled: false}}
   end
 
-  def handle_info({:debounced_reload, ref}, %__MODULE__{debounce_ref: ref} = state) do
+  def handle_manager_info({:debounced_reload, ref}, %__MODULE__{debounce_ref: ref} = state) do
     case do_reload(state) do
       {:ok, new_state} ->
         notify_listeners(new_state)
@@ -182,15 +182,15 @@ defmodule Raxol.Symphony.WorkflowStore do
   end
 
   # Stale debounce -- a newer one superseded it.
-  def handle_info({:debounced_reload, _stale_ref}, %__MODULE__{} = state) do
+  def handle_manager_info({:debounced_reload, _stale_ref}, %__MODULE__{} = state) do
     {:noreply, state}
   end
 
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, %__MODULE__{} = state) do
+  def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, %__MODULE__{} = state) do
     {:noreply, %__MODULE__{state | listeners: MapSet.delete(state.listeners, pid)}}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_manager_info(_msg, state), do: {:noreply, state}
 
   # -- Internals --------------------------------------------------------------
 
