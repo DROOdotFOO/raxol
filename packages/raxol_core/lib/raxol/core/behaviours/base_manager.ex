@@ -95,7 +95,8 @@ defmodule Raxol.Core.Behaviours.BaseManager do
       defp normalize_init_result({:ok, state}), do: {:ok, state}
 
       # All callbacks are overridable
-      defoverridable init_manager: 1,
+      defoverridable start_link: 1,
+                     init_manager: 1,
                      handle_manager_call: 3,
                      handle_manager_cast: 2,
                      handle_manager_info: 2,

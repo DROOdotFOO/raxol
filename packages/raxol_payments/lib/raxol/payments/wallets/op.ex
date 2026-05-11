@@ -18,17 +18,11 @@ defmodule Raxol.Payments.Wallets.Op do
       Raxol.Payments.Wallets.Op.sign_message(pid, message)
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   @default_chain_id 8453
 
   # -- Public API --
-
-  @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts) do
-    name = Keyword.get(opts, :name)
-    GenServer.start_link(__MODULE__, opts, name: name)
-  end
 
   @spec address(GenServer.server()) :: String.t()
   def address(server) do
@@ -62,10 +56,10 @@ defmodule Raxol.Payments.Wallets.Op do
     GenServer.call(server, {:sign_hash, digest})
   end
 
-  # -- GenServer callbacks --
+  # -- BaseManager callbacks --
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     op_ref = Keyword.fetch!(opts, :op_ref)
     chain = Keyword.get(opts, :chain_id, @default_chain_id)
 
@@ -79,19 +73,19 @@ defmodule Raxol.Payments.Wallets.Op do
     {:ok, state}
   end
 
-  @impl true
-  def handle_call(:address, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:address, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} -> {:reply, state.address, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
-  def handle_call(:chain_id, _from, state) do
+  def handle_manager_call(:chain_id, _from, state) do
     {:reply, state.chain_id, state}
   end
 
-  def handle_call({:sign_message, message}, _from, state) do
+  def handle_manager_call({:sign_message, message}, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} ->
         result = do_sign_message(state.privkey, message)
@@ -102,7 +96,7 @@ defmodule Raxol.Payments.Wallets.Op do
     end
   end
 
-  def handle_call({:sign_typed_data, domain, types, message}, _from, state) do
+  def handle_manager_call({:sign_typed_data, domain, types, message}, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} ->
         result = do_sign_typed_data(state.privkey, domain, types, message)
@@ -113,7 +107,7 @@ defmodule Raxol.Payments.Wallets.Op do
     end
   end
 
-  def handle_call({:sign_hash, digest}, _from, state) do
+  def handle_manager_call({:sign_hash, digest}, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} ->
         result = do_sign_hash(state.privkey, digest)

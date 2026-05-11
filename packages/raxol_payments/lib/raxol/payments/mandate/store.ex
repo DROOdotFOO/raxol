@@ -33,7 +33,7 @@ defmodule Raxol.Payments.Mandate.Store do
   When unset, the Store is in-memory only.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.Payments.Mandate
 
@@ -115,10 +115,10 @@ defmodule Raxol.Payments.Mandate.Store do
     |> Enum.map(fn {_hash, m} -> m end)
   end
 
-  # -- GenServer callbacks --
+  # -- BaseManager callbacks --
 
-  @impl true
-  def init(_opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(_opts) do
     :ets.new(@primary, [:named_table, :public, :set, read_concurrency: true])
     :ets.new(@by_agent, [:named_table, :public, :bag, read_concurrency: true])
     :ets.new(@by_member, [:named_table, :public, :bag, read_concurrency: true])
@@ -132,8 +132,8 @@ defmodule Raxol.Payments.Mandate.Store do
     {:ok, %{dets: dets}}
   end
 
-  @impl true
-  def handle_call({:put, %Mandate{} = m}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:put, %Mandate{} = m}, _from, state) do
     # If there's a prior entry, scrub its secondary indices first to
     # avoid stale (wallet, hash) pairs from accumulating across re-puts.
     drop_secondary_indices(m.envelope_hash)
@@ -145,14 +145,14 @@ defmodule Raxol.Payments.Mandate.Store do
     {:reply, :ok, state}
   end
 
-  def handle_call({:delete, hash}, _from, state) do
+  def handle_manager_call({:delete, hash}, _from, state) do
     drop_secondary_indices(hash)
     :ets.delete(@primary, hash)
     persist_delete(state.dets, hash)
     {:reply, :ok, state}
   end
 
-  def handle_call(:sweep_expired, _from, state) do
+  def handle_manager_call(:sweep_expired, _from, state) do
     now = System.system_time(:second)
 
     expired =
@@ -169,7 +169,7 @@ defmodule Raxol.Payments.Mandate.Store do
     {:reply, length(expired), state}
   end
 
-  def handle_call(:clear, _from, state) do
+  def handle_manager_call(:clear, _from, state) do
     :ets.delete_all_objects(@primary)
     :ets.delete_all_objects(@by_agent)
     :ets.delete_all_objects(@by_member)

@@ -23,7 +23,7 @@ defmodule Raxol.Payments.Ledger do
       end
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.Payments.SpendingPolicy
 
@@ -36,12 +36,6 @@ defmodule Raxol.Payments.Ledger do
         }
 
   # -- Public API --
-
-  @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []) do
-    name = Keyword.get(opts, :name)
-    GenServer.start_link(__MODULE__, opts, name: name)
-  end
 
   @doc """
   Record a completed payment.
@@ -99,10 +93,10 @@ defmodule Raxol.Payments.Ledger do
     GenServer.call(server, {:totals, agent_id, policy})
   end
 
-  # -- GenServer callbacks --
+  # -- BaseManager callbacks --
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     table_name = Keyword.get(opts, :table_name, :raxol_payments_ledger)
 
     table =
@@ -115,8 +109,8 @@ defmodule Raxol.Payments.Ledger do
     {:ok, %{table: table}}
   end
 
-  @impl true
-  def handle_cast({:record, agent_id, amount, metadata}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:record, agent_id, amount, metadata}, state) do
     entry = %{
       agent_id: agent_id,
       amount: amount,
@@ -129,13 +123,13 @@ defmodule Raxol.Payments.Ledger do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_call({:check, agent_id, amount, policy}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:check, agent_id, amount, policy}, _from, state) do
     result = do_check_budget(state.table, agent_id, amount, policy)
     {:reply, result, state}
   end
 
-  def handle_call({:try_spend, agent_id, amount, policy, metadata}, _from, state) do
+  def handle_manager_call({:try_spend, agent_id, amount, policy, metadata}, _from, state) do
     case do_check_budget(state.table, agent_id, amount, policy) do
       :ok ->
         entry = %{
@@ -154,7 +148,7 @@ defmodule Raxol.Payments.Ledger do
     end
   end
 
-  def handle_call({:history, agent_id, opts}, _from, state) do
+  def handle_manager_call({:history, agent_id, opts}, _from, state) do
     result =
       state.table
       |> get_entries(agent_id)
@@ -164,7 +158,7 @@ defmodule Raxol.Payments.Ledger do
     {:reply, result, state}
   end
 
-  def handle_call({:totals, agent_id, policy}, _from, state) do
+  def handle_manager_call({:totals, agent_id, policy}, _from, state) do
     entries = get_entries(state.table, agent_id)
     now = System.system_time(:millisecond)
     window_start = now - policy.session_window_ms
