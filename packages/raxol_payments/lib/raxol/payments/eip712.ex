@@ -181,10 +181,42 @@ defmodule Raxol.Payments.EIP712 do
   defp encode_value("bool", true), do: {:ok, <<1::unsigned-big-256>>}
   defp encode_value("bool", false), do: {:ok, <<0::unsigned-big-256>>}
 
+  # EIP-712 dynamic array: encodeData(T[]) = keccak256(concat(encodeData(T)_i)).
+  # For a `string[]` field, each element gets `keccak256(s_i)` first (the
+  # `encode_value("string", _)` clause above), then those 32-byte hashes
+  # are concatenated and hashed again. The same recursion handles
+  # `address[]`, `uint256[]`, `bytes32[]`, and `bool[]` correctly.
+  defp encode_value(type, value) when is_binary(type) and is_list(value) do
+    case array_element_type(type) do
+      {:ok, element_type} -> encode_array(element_type, value)
+      :error -> {:error, {:list_for_scalar_type, type}}
+    end
+  end
+
   defp encode_value(_type, nil), do: {:ok, <<0::unsigned-big-256>>}
 
   defp encode_value(_type, value) when is_binary(value) do
     {:ok, pad_left(value, 32)}
+  end
+
+  defp array_element_type(type) do
+    case String.split(type, "[]", parts: 2) do
+      [element_type, ""] when element_type != "" -> {:ok, element_type}
+      _ -> :error
+    end
+  end
+
+  defp encode_array(element_type, values) do
+    Enum.reduce_while(values, {:ok, <<>>}, fn v, {:ok, acc} ->
+      case encode_value(element_type, v) do
+        {:ok, encoded} -> {:cont, {:ok, <<acc::binary, encoded::binary>>}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, concatenated} -> {:ok, ExKeccak.hash_256(concatenated)}
+      err -> err
+    end
   end
 
   defp pad_left(bytes, size) do

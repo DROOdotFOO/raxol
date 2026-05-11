@@ -116,4 +116,55 @@ defmodule Raxol.Payments.EIP712Test do
       assert h1 != h2
     end
   end
+
+  describe "dynamic array types (T[])" do
+    test "string[] hashes per EIP-712 array rule" do
+      types = %{"Box" => [{"tags", "string[]"}]}
+      domain = %{name: "Test"}
+
+      assert {:ok, h1} = EIP712.hash(domain, types, %{tags: ["a", "b"]})
+      assert {:ok, h2} = EIP712.hash(domain, types, %{tags: ["b", "a"]})
+      assert {:ok, h3} = EIP712.hash(domain, types, %{tags: ["a", "b"]})
+
+      # Order matters: ["a","b"] != ["b","a"]
+      assert h1 != h2
+      # Determinism: same input -> same hash
+      assert h1 == h3
+    end
+
+    test "address[] encodes each element as 32-byte padded address" do
+      types = %{"Roster" => [{"members", "address[]"}]}
+
+      assert {:ok, _h} =
+               EIP712.hash(%{name: "Test"}, types, %{
+                 members: [
+                   "0x1111111111111111111111111111111111111111",
+                   "0x2222222222222222222222222222222222222222"
+                 ]
+               })
+    end
+
+    test "uint256[] handles integer elements" do
+      types = %{"Bag" => [{"amounts", "uint256[]"}]}
+
+      assert {:ok, h1} =
+               EIP712.hash(%{name: "Test"}, types, %{amounts: [1, 2, 3]})
+
+      assert {:ok, h2} =
+               EIP712.hash(%{name: "Test"}, types, %{amounts: [3, 2, 1]})
+
+      assert h1 != h2
+    end
+
+    test "empty array hashes to keccak256(<<>>)" do
+      types = %{"Box" => [{"tags", "string[]"}]}
+      assert {:ok, h_empty} = EIP712.hash(%{name: "Test"}, types, %{tags: []})
+      assert byte_size(h_empty) == 32
+    end
+
+    test "rejects a non-array type given a list value" do
+      types = %{"X" => [{"name", "string"}]}
+      assert {:error, _} = EIP712.hash(%{name: "Test"}, types, %{name: ["a", "b"]})
+    end
+  end
 end

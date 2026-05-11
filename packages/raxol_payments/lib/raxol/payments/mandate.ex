@@ -85,9 +85,6 @@ defmodule Raxol.Payments.Mandate do
   @domain_chain_id 1
   @zero_address "0x0000000000000000000000000000000000000000"
 
-  @mandate_type_string "Mandate(address human_wallet,address agent_wallet,string[] scopes,uint256 max_amount_usd,uint256 max_calls,uint256 expires_at,bytes32 nonce)"
-  @domain_type_string "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
-
   @doc """
   Build an unsigned Mandate, validating fields against the Xochi Zod
   constraints in `xochi/packages/shared/src/schemas.ts:197-211`.
@@ -185,35 +182,15 @@ defmodule Raxol.Payments.Mandate do
   end
 
   @doc """
-  Compute the EIP-712 digest of a Mandate message.
-
-  Implements the standard EIP-712 sequence:
-
-      keccak256(0x19 || 0x01 || domainSeparator || hashStruct(message))
-
-  where `hashStruct` for `Mandate` encodes the `string[]` scopes field
-  as `keccak256(concat(keccak256(s_i) for s_i in scopes))` per EIP-712
-  array rules. The existing `Raxol.Payments.EIP712` module only handles
-  scalar types, which is why this is computed locally.
+  Compute the EIP-712 digest of a Mandate message via
+  `Raxol.Payments.EIP712.hash/3`. The `string[]` scopes field is
+  encoded per EIP-712 array rules
+  (`keccak256(concat(keccak256(s_i)))`) by the shared encoder.
   """
   @spec digest(t()) :: {:ok, <<_::256>>} | {:error, term()}
   def digest(%__MODULE__{} = m) do
-    with {:ok, human_bytes} <- decode_address(m.human_wallet),
-         {:ok, agent_bytes} <- decode_address(m.agent_wallet),
-         {:ok, nonce_bytes} <- decode_bytes32(m.nonce) do
-      type_hash = ExKeccak.hash_256(@mandate_type_string)
-      scopes_hash = hash_string_array(m.scopes)
-
-      struct_data =
-        <<type_hash::binary, pad_left(human_bytes, 32)::binary, pad_left(agent_bytes, 32)::binary,
-          scopes_hash::binary, m.max_amount_usd::unsigned-big-256, m.max_calls::unsigned-big-256,
-          m.expires_at::unsigned-big-256, nonce_bytes::binary>>
-
-      struct_hash = ExKeccak.hash_256(struct_data)
-      domain_separator = compute_domain_separator()
-
-      {:ok, ExKeccak.hash_256(<<0x19, 0x01, domain_separator::binary, struct_hash::binary>>)}
-    end
+    {domain, types, message} = typed_data(m)
+    Raxol.Payments.EIP712.hash(domain, types, message)
   end
 
   @doc """
@@ -411,51 +388,6 @@ defmodule Raxol.Payments.Mandate do
       nonce: Map.get(msg, "nonce")
     }
   end
-
-  # -- Private: EIP-712 --
-
-  defp compute_domain_separator do
-    domain_type_hash = ExKeccak.hash_256(@domain_type_string)
-    name_hash = ExKeccak.hash_256(@domain_name)
-    version_hash = ExKeccak.hash_256(@domain_version)
-    {:ok, contract_bytes} = decode_address(@zero_address)
-
-    data =
-      <<domain_type_hash::binary, name_hash::binary, version_hash::binary,
-        @domain_chain_id::unsigned-big-256, pad_left(contract_bytes, 32)::binary>>
-
-    ExKeccak.hash_256(data)
-  end
-
-  defp hash_string_array(scopes) do
-    inner = Enum.map_join(scopes, "", &ExKeccak.hash_256/1)
-    ExKeccak.hash_256(inner)
-  end
-
-  defp decode_address("0x" <> hex) when byte_size(hex) == 40 do
-    case Base.decode16(hex, case: :mixed) do
-      {:ok, bytes} -> {:ok, bytes}
-      :error -> {:error, :invalid_address_hex}
-    end
-  end
-
-  defp decode_address(_), do: {:error, :invalid_address_format}
-
-  defp decode_bytes32("0x" <> hex) when byte_size(hex) == 64 do
-    case Base.decode16(hex, case: :mixed) do
-      {:ok, bytes} -> {:ok, bytes}
-      :error -> {:error, :invalid_bytes32_hex}
-    end
-  end
-
-  defp decode_bytes32(_), do: {:error, :invalid_bytes32_format}
-
-  defp pad_left(bytes, size) when byte_size(bytes) <= size do
-    padding = size - byte_size(bytes)
-    <<0::size(padding * 8), bytes::binary>>
-  end
-
-  defp pad_left(bytes, size), do: binary_part(bytes, byte_size(bytes) - size, size)
 
   # -- Private: signature --
 
