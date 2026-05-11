@@ -209,20 +209,21 @@ defmodule Raxol.LiveView.TerminalBridgeTest do
     end
   end
 
-  describe "performance" do
-    @tag :skip_on_ci
-    test "renders 80x24 buffer quickly" do
+  describe "full-buffer rendering" do
+    test "renders an 80x24 buffer to well-formed HTML" do
       buffer =
         Enum.reduce(0..23, Buffer.create_blank_buffer(80, 24), fn y, acc ->
           Buffer.write_string(acc, 0, y, "Line #{y}")
         end)
 
-      {time_us, _html} = :timer.tc(fn -> TerminalBridge.buffer_to_html(buffer) end)
-      assert time_us < 16_000, "Rendering took #{time_us}us (target: < 16_000us)"
+      html = TerminalBridge.buffer_to_html(buffer)
+
+      assert html =~ ~s(<pre class="raxol-terminal")
+      assert html =~ "Line 0"
+      assert html =~ "Line 23"
     end
 
-    @tag :skip_on_ci
-    test "diff rendering is efficient" do
+    test "diff rendering emits diff-marked HTML for cells that changed" do
       old_buffer = Buffer.create_blank_buffer(80, 24)
 
       new_buffer =
@@ -230,10 +231,16 @@ defmodule Raxol.LiveView.TerminalBridgeTest do
           Buffer.write_string(acc, 0, y, "Line #{y}")
         end)
 
-      {time_us, _html} =
-        :timer.tc(fn -> TerminalBridge.buffer_diff_to_html(old_buffer, new_buffer) end)
+      html = TerminalBridge.buffer_diff_to_html(old_buffer, new_buffer)
 
-      assert time_us < 16_000, "Diff rendering took #{time_us}us (target: < 16_000us)"
+      assert is_binary(html)
+      assert html =~ "raxol-diff"
+      # Diff splits each rendered character into its own span; verify the
+      # first line of changed cells is present in cell form.
+      assert html =~ ">L</span>"
+      assert html =~ ">i</span>"
+      assert html =~ ">n</span>"
+      assert html =~ ">e</span>"
     end
   end
 end

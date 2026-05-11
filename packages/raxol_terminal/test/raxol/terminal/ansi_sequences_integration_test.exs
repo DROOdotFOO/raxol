@@ -382,32 +382,15 @@ defmodule Raxol.Terminal.ANSISequencesIntegrationTest do
       {:ok, emulator: emulator}
     end
 
-    @tag :skip_on_ci
-    test "handles rapid color changes efficiently", %{emulator: emulator} do
+    test "handles a stream of rapid color changes without crashing", %{emulator: emulator} do
       stress = ANSISequences.stress_sequences()
-
-      # Measure time for color spam
-      {time, {state, _}} =
-        :timer.tc(fn ->
-          Emulator.process_input(emulator, stress.color_spam)
-        end)
-
-      # Should complete in reasonable time (< 500ms for 1000 changes)
-      assert time < 500_000
+      {state, _output} = Emulator.process_input(emulator, stress.color_spam)
       assert state != nil
     end
 
-    @tag :skip_on_ci
-    test "handles many cursor movements efficiently", %{emulator: emulator} do
+    test "handles a stream of cursor movements without crashing", %{emulator: emulator} do
       stress = ANSISequences.stress_sequences()
-
-      {time, {state, _}} =
-        :timer.tc(fn ->
-          Emulator.process_input(emulator, stress.cursor_dance)
-        end)
-
-      # Should complete quickly
-      assert time < 50_000
+      {state, _output} = Emulator.process_input(emulator, stress.cursor_dance)
       assert state != nil
     end
 

@@ -1,6 +1,5 @@
 defmodule Raxol.Terminal.Emulator.StateStackTest do
   use ExUnit.Case
-  # # @tag :skip # Temporarily skip due to persistent UndefinedFunctionError
 
   alias Raxol.Terminal.ANSI.TextFormatting
   alias Raxol.Terminal.Cursor.Manager
