@@ -7,7 +7,7 @@ defmodule Raxol.Watch.Notifier do
   budgets. Respects per-device mute and priority-only preferences.
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   require Logger
 
@@ -24,7 +24,7 @@ defmodule Raxol.Watch.Notifier do
     pending: nil
   ]
 
-  def start_link(opts) do
+  def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
@@ -42,10 +42,10 @@ defmodule Raxol.Watch.Notifier do
     GenServer.call(__MODULE__, :flush)
   end
 
-  # -- GenServer --
+  # -- BaseManager --
 
-  @impl true
-  def init(opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(opts) do
     push_backend = Keyword.get(opts, :push_backend, Raxol.Watch.Push.Noop)
     ref = make_ref()
 
@@ -60,24 +60,24 @@ defmodule Raxol.Watch.Notifier do
     {:ok, %__MODULE__{push_backend: push_backend, subscription_ref: ref}}
   end
 
-  @impl true
-  def handle_call(:flush, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:flush, _from, state) do
     {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_cast({:push_all, notification}, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:push_all, notification}, state) do
     do_push_all(notification, state)
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info({:announcement_added, _ref, message}, state) when is_binary(message) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:announcement_added, _ref, message}, state) when is_binary(message) do
     notification = Formatter.format_announcement(message)
     {:noreply, debounce_push(notification, state)}
   end
 
-  def handle_info({:announcement_added, _ref, %{message: message, priority: priority}}, state) do
+  def handle_manager_info({:announcement_added, _ref, %{message: message, priority: priority}}, state) do
     notification = Formatter.format_announcement(message, priority)
 
     if priority == :high do
@@ -89,21 +89,21 @@ defmodule Raxol.Watch.Notifier do
     end
   end
 
-  def handle_info({:announcement_added, _ref, %{message: message}}, state) do
+  def handle_manager_info({:announcement_added, _ref, %{message: message}}, state) do
     notification = Formatter.format_announcement(message)
     {:noreply, debounce_push(notification, state)}
   end
 
-  def handle_info(:flush_pending, %{pending: nil} = state) do
+  def handle_manager_info(:flush_pending, %{pending: nil} = state) do
     {:noreply, state}
   end
 
-  def handle_info(:flush_pending, %{pending: notification} = state) do
+  def handle_manager_info(:flush_pending, %{pending: notification} = state) do
     do_push_all(notification, state)
     {:noreply, %{state | pending: nil, debounce_timer: nil}}
   end
 
-  def handle_info(_, state), do: {:noreply, state}
+  def handle_manager_info(_, state), do: {:noreply, state}
 
   # -- Private --
 

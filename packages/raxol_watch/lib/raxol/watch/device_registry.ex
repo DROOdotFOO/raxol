@@ -9,14 +9,14 @@ defmodule Raxol.Watch.DeviceRegistry do
   directly for performance (`:protected` table with `read_concurrency`).
   """
 
-  use GenServer
+  use Raxol.Core.Behaviours.BaseManager
 
   @table __MODULE__
 
   defstruct []
 
-  def start_link(_opts \\ []) do
-    GenServer.start_link(__MODULE__, [], name: __MODULE__)
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc """
@@ -56,10 +56,10 @@ defmodule Raxol.Watch.DeviceRegistry do
     :ets.info(@table, :size)
   end
 
-  # -- GenServer --
+  # -- BaseManager --
 
-  @impl true
-  def init(_opts) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def init_manager(_opts) do
     case :ets.whereis(@table) do
       :undefined ->
         :ets.new(@table, [:named_table, :set, :protected, read_concurrency: true])
@@ -71,8 +71,8 @@ defmodule Raxol.Watch.DeviceRegistry do
     {:ok, %__MODULE__{}}
   end
 
-  @impl true
-  def handle_call({:register, device_token, platform, opts}, _from, state) do
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call({:register, device_token, platform, opts}, _from, state) do
     prefs = %{
       muted: Keyword.get(opts, :muted, false),
       high_priority_only: Keyword.get(opts, :high_priority_only, false)
@@ -82,7 +82,7 @@ defmodule Raxol.Watch.DeviceRegistry do
     {:reply, :ok, state}
   end
 
-  def handle_call({:unregister, device_token}, _from, state) do
+  def handle_manager_call({:unregister, device_token}, _from, state) do
     :ets.delete(@table, device_token)
     {:reply, :ok, state}
   end
