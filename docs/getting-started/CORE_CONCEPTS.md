@@ -142,97 +142,47 @@ html = TerminalBridge.buffer_to_html(buffer)
 
 ## State Management
 
-Raxol supports multiple patterns depending on your needs:
-
-- **TEA / `Raxol.start_link`**: Most apps. Interactive TUIs with keyboard input, subscriptions, and the View DSL. Start here.
-- **Pure Functional**: One-off renders, scripts, testing. No loop, no process.
-- **GenServer**: Multi-user apps, servers, distributed state. Wrap a buffer in a supervised process.
-- **Phoenix LiveView**: Web apps. Render a buffer to HTML in the browser.
-
-### Pure Functional (simplest)
-
-No state, just transformations:
+**TEA is the canonical app model.** A Raxol application is a single module with `init/1`, `update/2`, and `view/1`, started via `Raxol.start_link/2`. One model, one update function, one view. Don't reach for alternatives unless TEA genuinely doesn't fit.
 
 ```elixir
-defmodule SimpleRender do
-  alias Raxol.Core.{Buffer, Box}
+defmodule MyApp do
+  use Raxol.Core.Runtime.Application
 
-  def render(data) do
-    Buffer.create_blank_buffer(80, 24)
-    |> Box.draw_box(0, 0, 80, 24, :single)
-    |> Buffer.write_at(10, 5, "Count: #{data.count}")
-    |> Buffer.to_string()
+  def init(_ctx), do: %{count: 0}
+
+  def update(:inc, model), do: {%{model | count: model.count + 1}, []}
+
+  def view(model) do
+    column do
+      [text("Count: #{model.count}"), button("+", on_click: :inc)]
+    end
   end
+
+  def subscribe(_model), do: []
 end
+
+Raxol.start_link(MyApp)
 ```
 
-Good for scripts, one-off renders, testing.
+The same module renders to terminal, browser (LiveView via `Raxol.LiveView.TEALive`), SSH, and the MCP agent surface without changes. That's the whole point — one source of truth, four projections.
 
-### Stateful Loop
+### When you don't need TEA
 
-Maintain state in a loop:
+Two narrow cases call for something else:
+
+**Pure rendering from a script.** You have data, you want a string. No loop, no input, no process. Use the buffer API directly:
 
 ```elixir
-defmodule StatefulApp do
-  def run do
-    initial_state = %{count: 0, buffer: create_initial_buffer()}
-    loop(initial_state)
-  end
-
-  defp loop(state) do
-    new_state = handle_input(state)
-    new_buffer = render(new_state)
-    diff = Renderer.render_diff(state.buffer, new_buffer)
-    IO.write(Renderer.apply_diff(diff))
-    loop(%{new_state | buffer: new_buffer})
-  end
-end
+Buffer.create_blank_buffer(80, 24)
+|> Box.draw_box(0, 0, 80, 24, :single)
+|> Buffer.write_at(10, 5, "Count: #{data.count}")
+|> Buffer.to_string()
+|> IO.puts()
 ```
 
-Good for interactive CLIs, games, monitoring tools.
+**You're embedding rendering inside an existing OTP process.** If you already have a GenServer or LiveView mount where Raxol is just one widget surface among many, you can call buffer ops directly from `handle_call` / `handle_event`. But if the *application* is the UI, wrap it in TEA and use a [`Raxol.LiveView.TEALive`](../cookbook/LIVEVIEW_INTEGRATION.md) mount or [`Raxol.SSH.serve/2`](../cookbook/SSH_DEPLOYMENT.md) instead — you'll get crash isolation, hot reload, and the agent surface for free.
 
-### GenServer
-
-OTP for concurrent state management:
-
-```elixir
-defmodule TerminalServer do
-  use GenServer
-  alias Raxol.Core.{Buffer, Renderer}
-
-  def init(_) do
-    {:ok, %{buffer: Buffer.create_blank_buffer(80, 24), data: %{}}}
-  end
-
-  def handle_call({:update, data}, _from, state) do
-    new_buffer = render(data)
-    diff = Renderer.render_diff(state.buffer, new_buffer)
-    {:reply, diff, %{state | buffer: new_buffer, data: data}}
-  end
-end
-```
-
-Good for multi-user applications, web servers, distributed systems.
-
-### Phoenix LiveView
-
-```elixir
-defmodule MyAppWeb.TerminalLive do
-  use MyAppWeb, :live_view
-
-  def mount(_params, _session, socket) do
-    {:ok, assign(socket, buffer: create_initial_buffer(), count: 0)}
-  end
-
-  def handle_event("increment", _, socket) do
-    new_count = socket.assigns.count + 1
-    new_buffer = update_buffer(socket.assigns.buffer, new_count)
-    {:noreply, assign(socket, buffer: new_buffer, count: new_count)}
-  end
-end
-```
-
-Good for web applications, dashboards, remote terminals.
+Avoid hand-rolling your own `loop(state)` recursive function. That was a pre-Raxol pattern; OTP supervision and TEA's update loop subsume it.
 
 ---
 

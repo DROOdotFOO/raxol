@@ -20,7 +20,7 @@ mix raxol.bench --quick            # Shorter runs
 
 ## Latest Results
 
-Measured on Apple M1 Pro, Elixir 1.19.0 / OTP 26.
+Measured on Apple M1 Pro, Elixir 1.19.0 / OTP 27.
 
 ### Core Operations
 

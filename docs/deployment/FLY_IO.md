@@ -142,20 +142,11 @@ Backups: app state via Fly.io snapshots, config in git, DB via Fly.io PostgreSQL
 
 ## Domain Setup
 
-Current: `raxol.io` (default). Custom domain `raxol.io` purchased, needs DNS config.
+`raxol.io` is the live custom domain (set as `PHX_HOST` in `fly.toml`). To recreate or rotate certificates:
 
 ```bash
 flyctl certs create raxol.io
 flyctl certs show raxol.io
-```
-
-DNS records:
-```
-# A Record
-raxol.io -> [Fly.io IP]
-
-# CNAME (alternative)
-raxol.io -> raxol.io
 ```
 
 ## Cost

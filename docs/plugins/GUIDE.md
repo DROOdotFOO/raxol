@@ -43,7 +43,7 @@ defmodule YourApp.Plugins.MyPlugin do
 end
 ```
 
-See [TEMPLATES.md](TEMPLATES.md) for complete working examples.
+See [PLUGIN_TEMPLATES.md](PLUGIN_TEMPLATES.md) for complete working examples.
 
 ## Plugin Lifecycle
 

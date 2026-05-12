@@ -13,7 +13,8 @@ mix setup
 
 ### Manual Setup
 ```bash
-# Requirements: Elixir 1.19+, Erlang/OTP 27+, Node.js 20+, PostgreSQL 15+
+# Requirements: Elixir 1.19+, Erlang/OTP 27+
+# Optional: Node.js 20+ and PostgreSQL 15+ (only needed for Phoenix/asset builds)
 mix deps.get
 mix compile
 ```
@@ -174,9 +175,8 @@ mix raxol.check               # Run all quality checks before committing
 ```
 
 ### Code Standards
-- 98.7%+ test coverage
-- Zero compilation warnings
-- All checks must pass
+- Zero compilation warnings (`--warnings-as-errors` in CI)
+- All `mix raxol.check` steps must pass
 - Functional patterns
 
 ## Build & Release

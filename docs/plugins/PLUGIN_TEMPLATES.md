@@ -1,7 +1,5 @@
 # Plugin Templates
 
-**Version**: v1.6.0
-
 Templates for common plugin types, based on existing plugins in the Raxol ecosystem.
 
 ## Basic Plugin Template

@@ -130,8 +130,6 @@ client = Req.new(base_url: "https://api.example.com")
 
 Standalone package at `packages/raxol_payments/`. Depends on `raxol_agent` at compile time only (`runtime: false`) for the Action macro and CommandHook behaviour. Runtime deps: `req`, `ex_secp256k1`, `ex_keccak`, `jason`, `decimal`.
 
-408 tests, 0 failures.
-
 ## See Also
 
 - [Agent Framework](AGENT_FRAMEWORK.md) -- how agents work (TEA, sessions, teams, commands)
