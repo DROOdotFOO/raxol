@@ -51,7 +51,6 @@ defmodule Raxol.Core.Behaviours.BaseManager do
       @impl GenServer
       def init(opts) do
         init_manager(opts)
-        |> normalize_init_result()
       end
 
       @impl GenServer
@@ -91,11 +90,6 @@ defmodule Raxol.Core.Behaviours.BaseManager do
       # Splits GenServer opts from init args
       defp normalize_and_split_opts(opts),
         do: Raxol.Core.Utils.GenServerHelpers.split_server_opts(opts)
-
-      defp normalize_init_result({:ok, _state} = ok), do: ok
-      defp normalize_init_result({:ok, _state, _extra} = ok), do: ok
-      defp normalize_init_result({:stop, _reason} = stop), do: stop
-      defp normalize_init_result(:ignore), do: :ignore
 
       # All callbacks are overridable
       defoverridable start_link: 1,

@@ -422,5 +422,4 @@ defmodule Raxol.Core.Metrics.Visualizer do
     [headers | rows]
     |> Enum.map_join("\n", &Enum.join(&1, ","))
   end
-
 end
