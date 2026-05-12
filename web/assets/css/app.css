@@ -112,7 +112,6 @@
   .name-sky-sm {
     @apply font-mono font-semibold;
     font-size: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);
-    color: #58a1c6;
     letter-spacing: 0.01em;
   }
 
@@ -718,6 +717,219 @@ html, body {
 
 .cursor-blink {
   animation: cursorBlink 1s step-end infinite;
+}
+
+/* =============================================================================
+   Hero stat grid (under hero, terax-inspired)
+   ============================================================================= */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--panel-border);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  .stat-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.stat-cell {
+  background: rgba(10, 10, 12, 0.55);
+  padding: 1.25rem 1rem;
+  text-align: center;
+  font-family: 'Fira Code', monospace;
+}
+
+.stat-value {
+  display: block;
+  font-size: clamp(1.6rem, 1.3rem + 0.9vw, 2.1rem);
+  font-weight: 600;
+  color: var(--axol-coral);
+  letter-spacing: 0.02em;
+  line-height: 1;
+  margin-bottom: 0.45rem;
+}
+
+.stat-label {
+  display: block;
+  font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+}
+
+/* =============================================================================
+   Section numeral + eyebrow (deep-dive section header)
+   ============================================================================= */
+
+.section-numeral {
+  font-family: 'Fira Code', monospace;
+  font-size: clamp(2.5rem, 2rem + 2.2vw, 3.75rem);
+  font-weight: 300;
+  color: rgba(255, 205, 156, 0.16);
+  letter-spacing: -0.02em;
+  line-height: 1;
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.section-eyebrow {
+  font-family: 'Fira Code', monospace;
+  font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--axol-coral);
+  margin-bottom: 0.75rem;
+  display: block;
+}
+
+/* =============================================================================
+   Surface chips (multi-surface deep dive)
+   ============================================================================= */
+
+.surface-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+@media (min-width: 768px) {
+  .surface-grid { grid-template-columns: repeat(4, 1fr); }
+}
+
+.surface-chip {
+  background: rgba(10, 10, 12, 0.5);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 1.1rem 1.1rem 1rem;
+  font-family: 'Fira Code', monospace;
+  transition: all var(--duration-normal) var(--ease-smooth);
+}
+
+.surface-chip:hover {
+  border-color: var(--coral-25);
+  background: rgba(10, 10, 12, 0.7);
+  transform: translateY(-1px);
+}
+
+.surface-chip__name {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--axol-coral);
+  margin-bottom: 0.6rem;
+}
+
+.surface-chip__cmd {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+/* =============================================================================
+   FAQ accordion (native <details>)
+   ============================================================================= */
+
+.faq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.faq-item {
+  background: rgba(10, 10, 12, 0.4);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 1.1rem 1.4rem;
+  transition: border-color var(--duration-normal) var(--ease-smooth);
+}
+
+.faq-item:hover { border-color: var(--panel-border-hover); }
+
+.faq-item summary {
+  cursor: pointer;
+  font-family: 'Fira Code', monospace;
+  font-size: clamp(0.85rem, 0.8rem + 0.25vw, 0.95rem);
+  color: var(--pearl-cream);
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary::marker { display: none; content: ''; }
+
+.faq-item summary::after {
+  content: '+';
+  color: var(--axol-coral);
+  font-size: 1.15rem;
+  line-height: 1;
+  transition: transform var(--duration-normal) var(--ease-smooth);
+}
+
+.faq-item[open] summary::after { content: '\2212'; }
+
+.faq-item__body {
+  margin-top: 0.875rem;
+  padding-top: 0.875rem;
+  border-top: 1px solid var(--panel-border);
+  font-family: 'Fira Code', monospace;
+  font-size: clamp(0.78rem, 0.73rem + 0.25vw, 0.85rem);
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+/* =============================================================================
+   Feature card numeric index (small label above title)
+   ============================================================================= */
+
+.feature-card__index {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+  display: block;
+}
+
+/* =============================================================================
+   Package card copy button (visible on hover)
+   ============================================================================= */
+
+.pkg-copy-btn {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  opacity: 0;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  background: rgba(10, 10, 12, 0.6);
+  border: 1px solid var(--panel-border);
+  padding: 0.2rem 0.55rem;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: opacity var(--duration-normal) var(--ease-smooth),
+              color var(--duration-normal) var(--ease-smooth),
+              border-color var(--duration-normal) var(--ease-smooth);
+}
+
+.panel:hover .pkg-copy-btn { opacity: 1; }
+.pkg-copy-btn:hover {
+  color: var(--axol-coral);
+  border-color: var(--coral-25);
 }
 
 /* =============================================================================
