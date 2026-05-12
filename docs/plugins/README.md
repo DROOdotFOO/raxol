@@ -6,11 +6,11 @@ This directory covers plugin development for the Raxol terminal emulator.
 
 ### [GUIDE.md](GUIDE.md) - Development Guide
 
-Plugin development from basics to advanced: quick start, lifecycle states and transitions, event system and commands, capabilities (UI, keyboard, status line), performance, and error handling.
+Plugin development from basics to advanced: quick start, lifecycle states, event system, the manifest schema, security analysis, and process isolation.
 
-### [TEMPLATES.md](TEMPLATES.md) - Templates
+### [PLUGIN_TEMPLATES.md](PLUGIN_TEMPLATES.md) - Templates
 
-Working templates for common plugin types: basic, UI (interactive panels), background (periodic tasks), and file system (file watching).
+Working templates for common plugin types: basic, background (periodic tasks), and file system (file watching).
 
 ### [TESTING.md](TESTING.md) - Testing Guide
 
@@ -19,7 +19,7 @@ Testing strategies: unit and integration tests, event filtering tests, property-
 ## Quick Start
 
 1. Read [GUIDE.md](GUIDE.md) for the full lifecycle and development model
-2. Pick a template from [TEMPLATES.md](TEMPLATES.md)
+2. Pick a template from [PLUGIN_TEMPLATES.md](PLUGIN_TEMPLATES.md)
 3. Write tests using patterns from [TESTING.md](TESTING.md)
 
 ## Example Plugins

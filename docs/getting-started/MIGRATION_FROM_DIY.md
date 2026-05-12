@@ -139,7 +139,7 @@ Adapters add overhead. Benchmark both paths -- if the adapter is > 2x slower, co
 
 ## Incremental Migration
 
-**Phase 1:** Add `{:raxol, "~> 2.3"}` to deps. Run tests, ensure no conflicts.
+**Phase 1:** Add `{:raxol, "~> 2.4"}` to deps. Run tests, ensure no conflicts.
 
 **Phase 2:** Create adapters. Write round-trip tests to verify conversions preserve data.
 

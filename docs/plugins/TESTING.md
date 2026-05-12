@@ -10,7 +10,7 @@ Guide to testing Raxol plugins -- unit, integration, and property-based approach
 # In your plugin's mix.exs
 defp deps do
   [
-    {:raxol, "~> 2.3", only: [:dev, :test]},
+    {:raxol, "~> 2.4", only: [:dev, :test]},
     {:mox, "~> 1.0", only: :test}  # For mocking
   ]
 end
@@ -45,44 +45,19 @@ defmodule MyPluginTest do
     test "returns valid manifest structure" do
       manifest = MyPlugin.manifest()
 
+      assert is_binary(manifest.id)
       assert is_binary(manifest.name)
       assert is_binary(manifest.version)
-      assert is_binary(manifest.description)
       assert is_binary(manifest.author)
-
-      assert is_map(manifest.dependencies)
-      assert Map.has_key?(manifest.dependencies, "raxol-core")
-
-      assert is_list(manifest.capabilities)
-      assert Enum.all?(manifest.capabilities, &is_atom/1)
-
-      assert manifest.trust_level in [:trusted, :sandboxed, :untrusted]
-
-      assert is_map(manifest.config_schema)
+      assert is_atom(manifest.module)
+      assert is_list(manifest.depends_on)
+      assert is_list(manifest.provides)
+      assert Enum.all?(manifest.provides, &is_atom/1)
     end
 
     test "version follows semantic versioning" do
       manifest = MyPlugin.manifest()
-      version = manifest.version
-
-      assert Regex.match?(~r/^\d+\.\d+\.\d+(-[\w\d\.-]+)?$/, version)
-    end
-
-    test "capabilities are valid" do
-      manifest = MyPlugin.manifest()
-
-      valid_capabilities = [
-        :ui_overlay, :keyboard_input, :command_execution,
-        :file_system_access, :network_access, :status_line,
-        :theme_provider, :file_watcher, :command_handler
-      ]
-
-      invalid_capabilities =
-        manifest.capabilities
-        |> Enum.reject(&(&1 in valid_capabilities))
-
-      assert invalid_capabilities == [],
-        "Invalid capabilities found: #{inspect(invalid_capabilities)}"
+      assert Regex.match?(~r/^\d+\.\d+\.\d+(-[\w\d\.-]+)?$/, manifest.version)
     end
   end
 
@@ -168,8 +143,7 @@ defmodule MyPluginCommandTest do
       Enum.each(commands, fn {name, function, arity} ->
         assert is_atom(name)
         assert is_atom(function)
-        assert is_integer(arity)
-        assert arity >= 2
+        assert is_integer(arity) and arity >= 0
 
         assert function_exported?(MyPlugin, function, arity)
       end)
@@ -502,17 +476,14 @@ defmodule MyPluginIntegrationTest do
       end)
     end
 
-    test "plugin resource limits are enforced" do
+    test "plugin stays within its resource budget" do
       manifest = MyPlugin.manifest()
+      budget = Map.get(manifest, :resource_budget, %{})
 
-      if manifest.trust_level != :trusted do
-        {:ok, status} = PluginManager.get_plugin_status("my-plugin")
+      {:ok, status} = PluginManager.get_plugin_status("my-plugin")
 
-        memory_mb = status.performance_metrics.memory_usage_mb
-        assert memory_mb < 100, "Plugin using too much memory: #{memory_mb}MB"
-
-        cpu_percent = status.performance_metrics.cpu_usage_percent
-        assert cpu_percent < 50, "Plugin using too much CPU: #{cpu_percent}%"
+      if max_mb = budget[:max_memory_mb] do
+        assert status.performance_metrics.memory_usage_mb < max_mb
       end
     end
   end
@@ -550,32 +521,6 @@ defmodule MyPluginTerminalTest do
       end)
     end
 
-    test "plugin UI renders correctly" do
-      manifest = MyPlugin.manifest()
-
-      if :ui_overlay in manifest.capabilities do
-        config = %{enabled: true}
-        {:ok, state} = MyPlugin.init(config)
-
-        case MyPlugin.render_overlay(state, 80, 24) do
-          {:ok, lines} ->
-            assert is_list(lines)
-            assert length(lines) <= 24
-
-            Enum.each(lines, fn line ->
-              assert is_map(line)
-              assert Map.has_key?(line, :text)
-              assert is_binary(line.text)
-            end)
-
-          {:error, reason} ->
-            flunk("UI rendering failed: #{reason}")
-
-          :not_implemented ->
-            :ok
-        end
-      end
-    end
   end
 end
 ```
@@ -640,25 +585,20 @@ defmodule Raxol.PluginTestHelpers do
   end
 
   def assert_valid_manifest(manifest) do
-    required_fields = [:name, :version, :description, :author]
+    string_fields = [:id, :name, :version, :author]
 
-    Enum.each(required_fields, fn field ->
-      assert Map.has_key?(manifest, field),
-        "Missing required field: #{field}"
-      assert is_binary(Map.get(manifest, field)),
-        "Field #{field} should be a string"
+    Enum.each(string_fields, fn field ->
+      assert Map.has_key?(manifest, field), "Missing required field: #{field}"
+      assert is_binary(Map.get(manifest, field)), "Field #{field} should be a string"
     end)
 
-    if Map.has_key?(manifest, :capabilities) do
-      assert is_list(manifest.capabilities)
-      Enum.each(manifest.capabilities, fn cap ->
-        assert is_atom(cap), "Capabilities should be atoms"
-      end)
-    end
+    assert is_atom(manifest.module), "module should be the plugin module atom"
 
-    if Map.has_key?(manifest, :dependencies) do
-      assert is_map(manifest.dependencies)
-    end
+    provides = Map.get(manifest, :provides, [])
+    assert is_list(provides) and Enum.all?(provides, &is_atom/1)
+
+    depends_on = Map.get(manifest, :depends_on, [])
+    assert is_list(depends_on)
   end
 end
 ```

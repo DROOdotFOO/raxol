@@ -9,8 +9,8 @@ Implemented
 The terminal subsystem had accumulated duplicates and dead code through organic growth:
 
 - **Duplicate formatting**: `Raxol.Terminal.FormattingManager`, `Raxol.Terminal.Formatting.FormattingManager`, and scattered inline helpers all doing overlapping things.
-- **Redundant mode managers**: `Mode.ModeManager`, `Modes.ModeStateManager`, `Cursor.OptimizedCursorManager` -- three modules for what should be one concern.
-- **11 unused screen_buffer modules**: `cloud.ex`, `csi.ex`, `file_watcher.ex`, `metrics.ex`, `mode.ex`, `output.ex`, `preferences.ex`, `scroll.ex`, `system.ex`, `theme.ex`, `visualizer.ex` -- stubs with minimal or no usage.
+- **Redundant mode managers**: `Mode.ModeManager`, `Modes.ModeStateManager`, `Cursor.OptimizedCursorManager`. Three modules for what should be one concern.
+- **11 unused screen_buffer modules**: `cloud.ex`, `csi.ex`, `file_watcher.ex`, `metrics.ex`, `mode.ex`, `output.ex`, `preferences.ex`, `scroll.ex`, `system.ex`, `theme.ex`, `visualizer.ex`. Stubs with minimal or no usage.
 - **No unified caching strategy** across terminal operations.
 
 This made it unclear which module to use, created subtle behavioral differences between duplicate code paths, and made the codebase harder to contribute to.

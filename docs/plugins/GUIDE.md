@@ -13,15 +13,13 @@ defmodule YourApp.Plugins.MyPlugin do
   # 1. Define manifest
   def manifest do
     %{
-      name: "my-plugin",
+      id: "my-plugin",
+      name: "My Plugin",
       version: "1.0.0",
-      description: "Brief description",
       author: "Your Name",
-      dependencies: %{"raxol-core" => "~> 1.5"},
-      capabilities: [:ui_panel, :keyboard_input],
-      config_schema: %{
-        hotkey: %{type: :string, default: "ctrl+p"}
-      }
+      module: __MODULE__,
+      description: "Brief description",
+      provides: [:keyboard_input]
     }
   end
 
@@ -102,45 +100,31 @@ end
 
 ## Plugin Manifest
 
+The manifest is built into a `Raxol.Core.Runtime.Plugins.Manifest` struct. Supported fields:
+
 ```elixir
 def manifest do
   %{
     # Required
-    name: "unique-name",              # Kebab-case
-    version: "1.0.0",                 # Semantic versioning
-    description: "What it does",
+    id: "unique-id",                    # Kebab-case identifier
+    name: "Display Name",
+    version: "1.0.0",                   # Semantic versioning
     author: "Your Name",
+    module: __MODULE__,
 
-    # Dependencies
-    dependencies: %{
-      "raxol-core" => "~> 1.5",
-      "other-plugin" => "~> 2.0"
-    },
-
-    # Capabilities
-    capabilities: [
-      :ui_panel,        # Renders UI panels
-      :keyboard_input,  # Handles keyboard
-      :shell_command,   # Executes commands
-      :file_system,     # Accesses filesystem
-      :file_watcher,    # Watches files
-      :status_line,     # Status line integration
-      :theme_provider   # Provides themes
-    ],
-
-    # Configuration
-    config_schema: %{
-      field: %{
-        type: :string,           # :string, :integer, :boolean, :list, :map
-        default: "value",
-        description: "Purpose",
-        required: false,
-        enum: ["a", "b"]        # Valid values (optional)
-      }
-    }
+    # Optional
+    description: "What it does",
+    api_version: "1.0",                 # Defaults to "1.0"
+    depends_on: ["other-plugin-id"],    # Other plugin IDs
+    conflicts_with: [],
+    provides: [:keyboard_input],        # Informational tags
+    requires: [],                       # Required runtime services
+    resource_budget: %{}                # Optional resource limits
   }
 end
 ```
+
+There is no `dependencies:` map for Hex packages, no `capabilities:` enforcement, no `trust_level:` field, and no `config_schema:`. Plugin config is whatever map the host passes to `init/1`.
 
 ## Event System
 
@@ -221,33 +205,19 @@ Filter errors are logged but don't stop event propagation. Filters run under `Pl
 
 ## Capabilities
 
-### UI Panel
+Plugins declare what they offer in the manifest's `provides:` list. The list is informational -- the runtime does not enforce a fixed allowlist. Common values used by host code: `:command_handler`, `:keyboard_input`, `:status_line`, `:file_watcher`, `:theme_provider`.
 
-```elixir
-def render_panel(state, width, height) do
-  [
-    %{text: "Header", style: bold()},
-    %{text: "Content", style: normal()}
-  ]
-  |> pad_to_height(height, width)
-end
-```
+There is no UI rendering callback on the Plugin behaviour. Plugins influence the UI by emitting commands or events that an app or component consumes. To embed widgets, build a `Raxol.UI.Components.Base.Component` and have the plugin update its model.
 
 ### Keyboard Input
 
 ```elixir
-capabilities: [:keyboard_input]
+def manifest do
+  %{provides: [:keyboard_input], ...}
+end
 
 def filter_event({:key_press, hotkey}, state) when hotkey == state.config.hotkey do
   {:ok, {:plugin_event, :activated}}
-end
-```
-
-### Status Line
-
-```elixir
-def get_status_line(state) do
-  "Plugin: #{state.count} items"
 end
 ```
 
@@ -267,7 +237,7 @@ end
 
 ## State Management
 
-Plugin state is managed through an ETS-backed `StateManager` for concurrent access and crash recovery. Each plugin's state is isolated. State updates from `handle_event/2` are automatically persisted.
+Plugin state is managed through an ETS-backed `StateManager` for concurrent access and crash recovery. Each plugin's state is isolated. State updates from `filter_event/2` and `handle_command/3` are automatically persisted.
 
 State persists across hot reloads. If a plugin crashes, its last known state is preserved and restored on restart.
 
@@ -303,7 +273,7 @@ case CapabilityDetector.validate_against_policy(MyPlugin, policy) do
 end
 ```
 
-Declare capabilities in your manifest to pass validation -- they must match what the bytecode analyzer detects.
+The bytecode analyzer detects what the plugin actually does. Validation compares those detected capabilities against the policy, regardless of what the manifest claims.
 
 ## Process Isolation
 

@@ -151,7 +151,7 @@ end
 
 3. **Refactor test_helper.exs** - Move global process starts to helper functions. Let individual tests opt in to needed services.
 
-4. **Add test utilities** - Create `TestHelpers.start_test_registry/0` and `TestHelpers.start_test_event_manager/0`.
+4. **Add test utilities** - Extend `Raxol.Test.IsolationHelper` with `start_test_registry/0` and `start_test_event_manager/0`.
 
 ### Low
 

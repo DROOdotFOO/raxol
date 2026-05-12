@@ -122,8 +122,8 @@ text("Warning", style: [:bold, :underline])
 text("Error", style: %{fg: :red, bold: true})
 text("Success", style: %{fg: :green, bg: :black})
 
-# With explicit fg/bg
-text(content: "Custom", fg: :cyan, bg: :blue)
+# fg/bg also work as keyword opts
+text("Custom", fg: :cyan, bg: :blue)
 ```
 
 Style atoms: `:bold`, `:dim`, `:italic`, `:underline`, `:strikethrough`, `:reverse`.

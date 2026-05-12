@@ -44,7 +44,6 @@ mix raxol.check --skip test            # skip specific checks
 
 ```bash
 mix test --cover
-mix coveralls.html
 ```
 
 ## Test Tags
@@ -56,9 +55,16 @@ Tests are tagged to allow selective exclusion. The standard run excludes `:slow`
 |-----|---------|
 | `@tag :docker` | Requires termbox2 NIF or Docker (excluded when `SKIP_TERMBOX2_TESTS=true`) |
 | `@tag :skip_on_ci` | Skip in CI (also excluded when `SKIP_TERMBOX2_TESTS=true`) |
+| `@tag :skip_on_windows` | Skip on Windows |
 | `@tag :unix_only` | Unix/macOS only, excluded on Windows |
 | `@tag :slow` | Long-running tests |
 | `@tag :integration` | Full-stack integration tests |
+| `@tag :flaky` | Known flaky tests (excluded by default) |
+| `@tag :requires_terminal` | Needs a real terminal (excluded in CI) |
+| `@tag :tmp_dir` | Allocates a temp dir; fixture-managed |
+| `@tag :event_manager` | Touches the global event manager |
+| `@tag :notification` | Touches the global notification manager |
+| `@tag :gpg` | Requires `gpg` on `PATH` |
 
 Run only a specific tag:
 

@@ -39,20 +39,14 @@ mix run scripts/quality/check_duplicate_filenames.exs --fix-suggestions
 - Provides contextual rename suggestions
 - Exit codes for CI/CD integration
 
-### 2. Mix Task
-**Location:** `lib/mix/tasks/raxol.check.duplicates.ex`
+### 2. Mix Task (planned)
+
+A `mix raxol.check.duplicates` task is planned but not yet built. The intended interface is:
 
 ```bash
-# Basic usage
-mix raxol.check.duplicates
-
-# Show suggested fixes
-mix raxol.check.duplicates --suggest-fixes
-
-# Strict mode (fails build on duplicates)
-mix raxol.check.duplicates --strict
-
-# Exclude specific files
+mix raxol.check.duplicates                  # basic
+mix raxol.check.duplicates --suggest-fixes  # show suggested renames
+mix raxol.check.duplicates --strict         # fail build on duplicates
 mix raxol.check.duplicates --exclude "mix.exs,README.md"
 ```
 
@@ -154,28 +148,8 @@ focus_server.ex
 
 ## Integration with Development Workflow
 
-### Pre-commit Hook
-Add to `.git/hooks/pre-commit`:
-
-```bash
-#!/bin/sh
-mix raxol.check.duplicates --strict
-```
-
-### CI/CD Integration
-Add to your CI pipeline:
-
-```bash
-# In your CI script
-mix raxol.check.duplicates --strict
-if [ $? -ne 0 ]; then
-  echo "[FAIL] Duplicate filename check failed"
-  exit 1
-fi
-```
-
 ### Editor Integration
-Most editors support Credo integration, so the duplicate filename check will appear inline as you develop.
+The Credo check runs inline in editors that integrate with Credo. Once `mix raxol.check.duplicates` ships, it can be wired into a pre-commit hook or CI pipeline.
 
 ## Example Output
 
@@ -207,4 +181,4 @@ Credo integration is implemented. The standalone script and mix task described a
 
 False positives: add files to `exclude_files`. Legacy code: use `--exclude` while refactoring.
 
-When adding new files: use descriptive, contextual names and run `mix raxol.check.duplicates` before committing.
+When adding new files: use descriptive, contextual names and let `mix credo` flag duplicates before committing.

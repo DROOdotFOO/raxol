@@ -46,7 +46,7 @@ mix raxol.check --quick       # Skip dialyzer
 
 ### Development
 ```bash
-mix raxol.playground   # Component playground (29 widget demos)
+mix raxol.playground   # Component playground (30 widget demos)
 mix raxol.repl         # Interactive REPL with sandboxing
 iex -S mix            # Interactive shell
 ```
@@ -57,7 +57,10 @@ PLT cached in `priv/plts/` for faster reruns.
 
 ### Commands
 ```bash
-mix dialyzer                  # Run analysis (builds PLT if needed)
+mix dialyzer.setup            # Build the PLT
+mix dialyzer.check            # Run analysis against the PLT
+mix dialyzer.clean            # Remove the PLT
+mix dialyzer                  # Plain run (also works)
 mix dialyzer --format short   # Compact output
 ```
 
@@ -144,9 +147,11 @@ mix raxol.flamegraph          # Generate flame graph
 
 ### Profiling
 ```bash
-mix raxol.perf                # Performance monitoring
-mix raxol.perf.monitor        # Live performance monitor
-mix raxol.flamegraph          # Generate flame graph
+mix raxol.perf analyze        # Analyze current performance
+mix raxol.perf monitor        # Live monitoring
+mix raxol.perf memory         # Memory analysis
+mix raxol.perf report         # Generate report
+mix raxol.flamegraph <module> # Generate flame graph SVG
 ```
 
 ### Benchmarking

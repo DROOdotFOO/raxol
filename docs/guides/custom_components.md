@@ -181,7 +181,7 @@ Here's how the built-in Checkbox is structured (simplified):
 
 ```elixir
 defmodule Raxol.UI.Components.Input.Checkbox do
-  @behaviour Raxol.UI.Components.Base.Component
+  use Raxol.UI.Components.Base.Component
 
   @impl true
   def init(props) do

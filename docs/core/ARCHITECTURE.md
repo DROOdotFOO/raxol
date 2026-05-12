@@ -95,7 +95,7 @@ Platform-detected backend writes ANSI escape sequences:
 
 ### MCP as Rendering Target (ADR-0012)
 
-MCP is a first-class rendering target alongside terminal, LiveView, and SSH. Instead of rendering pixels, it renders capabilities -- tools and resources derived from the widget tree:
+MCP is a first-class rendering target alongside terminal, LiveView, and SSH. Instead of rendering pixels, it renders capabilities: tools and resources derived from the widget tree.
 
 ```
 view(model) -> widget tree -> ToolProvider per widget -> MCP tool set

@@ -21,7 +21,7 @@ Build a runtime plugin system on Elixir's native code loading with lifecycle man
 
 ### Architecture
 
-**Plugin Manager** (`lib/raxol/core/runtime/plugins/manager.ex`) -- central coordinator for plugin lifecycle. Maintains state, metadata, and dependency graphs. Handles hot loading/unloading.
+**Plugin Manager** (`lib/raxol/core/runtime/plugins/manager.ex`): central coordinator for plugin lifecycle. Maintains state, metadata, and dependency graphs. Handles hot loading and unloading.
 
 **Plugin Behaviour** (`lib/raxol/core/runtime/plugins/plugin.ex`):
 
@@ -132,11 +132,11 @@ Raxol.Plugins.unload("plugin_name")
 
 **External process plugins** -- high IPC overhead and integration complexity.
 
-**Embedded scripting languages** -- security risks and performance penalty.
+**Embedded scripting languages**: security risks and performance penalty.
 
-**Microservice-based extensions** -- over-engineering for a terminal framework.
+**Microservice-based extensions**: over-engineering for a terminal framework.
 
-The runtime approach gives us the best balance of flexibility, performance, and security while using Elixir's native strengths in hot code swapping and fault tolerance.
+The runtime approach lets plugins hot-load without process restarts and uses BEAM bytecode analysis to gate sensitive operations, both of which fall out of Elixir's native code-loading and supervision.
 
 ## References
 

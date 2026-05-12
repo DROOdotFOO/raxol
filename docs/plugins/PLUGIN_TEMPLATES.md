@@ -12,337 +12,56 @@ The minimal structure for a Raxol plugin:
 defmodule Raxol.Plugins.MyBasicPlugin do
   @moduledoc """
   Basic template for Raxol plugins.
-
-  Replace MyBasicPlugin with your plugin name and implement the desired functionality.
   """
 
-  @behaviour Raxol.Core.Runtime.Plugins.Plugin
+  use Raxol.Plugin
 
   require Logger
 
-  # Plugin manifest - always required
   def manifest do
     %{
-      name: "my-basic-plugin",
+      id: "my-basic-plugin",
+      name: "My Basic Plugin",
       version: "1.0.0",
-      description: "A basic plugin template",
       author: "Your Name",
-      license: "MIT",
-      api_version: "2.0",
-      dependencies: %{
-        "raxol-core" => "~> 1.5"
-      },
-      capabilities: [:command_handler],
-      trust_level: :trusted,
-      config_schema: %{
-        enabled: %{type: :boolean, default: true},
-        debug: %{type: :boolean, default: false}
-      }
+      module: __MODULE__,
+      description: "A basic plugin template",
+      depends_on: [],
+      provides: [:command_handler]
     }
   end
 
-  # Plugin state structure
-  defstruct [
-    :config,
-    :enabled,
-    :data
-  ]
+  defstruct [:config, :enabled, :data]
 
-  # Required callbacks
+  @impl true
   def init(config) do
-    state = %__MODULE__{
-      config: config,
-      enabled: true,
-      data: %{}
-    }
-
-    Logger.info("[MyBasicPlugin] Initialized with config: #{inspect(config)}")
+    state = %__MODULE__{config: config, enabled: true, data: %{}}
+    Logger.info("[MyBasicPlugin] Initialized")
     {:ok, state}
   end
 
-  def terminate(_reason, _state) do
-    Logger.info("[MyBasicPlugin] Terminated")
-    :ok
-  end
-
-  def enable(state) do
-    Logger.info("[MyBasicPlugin] Enabled")
-    {:ok, %{state | enabled: true}}
-  end
-
-  def disable(state) do
-    Logger.info("[MyBasicPlugin] Disabled")
-    {:ok, %{state | enabled: false}}
-  end
-
-  # Optional callbacks
-  def filter_event(event, state) do
-    # Default: pass all events through unchanged
-    {:ok, event}
-  end
-
+  @impl true
   def handle_command(:hello, _args, state) do
-    message = "Hello from #{__MODULE__}!"
-    Logger.info(message)
-    {:ok, state, message}
+    {:ok, state, "Hello from #{__MODULE__}!"}
   end
 
   def handle_command(command, _args, state) do
     {:error, "Unknown command: #{command}", state}
   end
 
-  def get_commands do
-    [{:hello, :handle_command, 3}]
-  end
+  @impl true
+  def get_commands, do: [{:hello, :handle_command, 1}]
 end
 ```
 
-## UI Plugin Template
+## UI in Plugins
 
-For plugins that create interactive UI components:
+There is no UI rendering callback on the `Raxol.Core.Runtime.Plugins.Plugin` behaviour. Plugins do not render to the screen directly. Two ways to get UI from a plugin:
 
-```elixir
-defmodule Raxol.Plugins.MyUIPlugin do
-  @moduledoc """
-  Template for plugins that create interactive UI components.
-  """
+1. **Emit commands or events** that a host app or widget consumes (`handle_command/3` returns the third element as the result).
+2. **Run a companion `Raxol.UI.Components.Base.Component`** in the app and let the plugin update its model via the command/event channel.
 
-  @behaviour Raxol.Core.Runtime.Plugins.Plugin
-
-  require Logger
-
-  def manifest do
-    %{
-      name: "my-ui-plugin",
-      version: "1.0.0",
-      description: "Interactive UI plugin template",
-      author: "Your Name",
-      api_version: "2.0",
-      dependencies: %{
-        "raxol-core" => "~> 1.5"
-      },
-      capabilities: [:ui_overlay, :keyboard_input, :command_handler],
-      trust_level: :trusted,
-      config_schema: %{
-        hotkey: %{type: :string, default: "ctrl+u"},
-        max_items: %{type: :integer, default: 10, min: 1, max: 100},
-        theme: %{type: :string, default: "dark", enum: ["dark", "light", "auto"]}
-      }
-    }
-  end
-
-  defstruct [
-    :config,
-    :visible,
-    :selected_index,
-    :items,
-    :search_query,
-    :emulator_pid
-  ]
-
-  def init(config) do
-    state = %__MODULE__{
-      config: config,
-      visible: false,
-      selected_index: 0,
-      items: [],
-      search_query: "",
-      emulator_pid: nil
-    }
-
-    {:ok, state}
-  end
-
-  def terminate(_reason, state) do
-    if state.emulator_pid do
-      send(state.emulator_pid, {:plugin_terminated, __MODULE__})
-    end
-    :ok
-  end
-
-  def enable(state) do
-    {:ok, %{state | visible: false}}
-  end
-
-  def disable(state) do
-    {:ok, %{state | visible: false}}
-  end
-
-  def filter_event({:key_press, key}, %{visible: true} = state) do
-    new_state = case key do
-      "escape" ->
-        %{state | visible: false}
-
-      "enter" ->
-        execute_selected_item(state)
-
-      "up" ->
-        move_selection(state, -1)
-
-      "down" ->
-        move_selection(state, 1)
-
-      char when byte_size(char) == 1 ->
-        new_query = state.search_query <> char
-        %{state | search_query: new_query}
-        |> update_filtered_items()
-
-      _ ->
-        state
-    end
-
-    {:ok, {:plugin_event, {:ui_updated, new_state}}}
-  end
-
-  def filter_event({:key_press, hotkey}, %{config: %{hotkey: hotkey}} = state) do
-    new_state = %{state | visible: not state.visible}
-    |> load_items_if_needed()
-
-    {:ok, {:plugin_event, {:ui_toggled, new_state.visible}}}
-  end
-
-  def filter_event(event, _state) do
-    {:ok, event}
-  end
-
-  def handle_command(:show, _args, state) do
-    new_state = %{state | visible: true} |> load_items_if_needed()
-    {:ok, new_state, :shown}
-  end
-
-  def handle_command(:hide, _args, state) do
-    new_state = %{state | visible: false}
-    {:ok, new_state, :hidden}
-  end
-
-  def handle_command(:toggle, _args, state) do
-    new_state = %{state | visible: not state.visible}
-    |> load_items_if_needed()
-
-    {:ok, new_state, if(new_state.visible, do: :shown, else: :hidden)}
-  end
-
-  def get_commands do
-    [
-      {:show, :handle_command, 3},
-      {:hide, :handle_command, 3},
-      {:toggle, :handle_command, 3}
-    ]
-  end
-
-  # UI rendering (called by terminal renderer)
-  def render_overlay(%{visible: true} = state, width, height) do
-    lines = [
-      render_header(state, width),
-      render_search_box(state, width),
-      render_separator(width)
-    ] ++ render_items(state, width, height - 3)
-
-    {:ok, lines}
-  end
-
-  def render_overlay(_state, _width, _height) do
-    {:ok, []}
-  end
-
-  # Private functions
-  defp move_selection(state, direction) do
-    max_index = max(0, length(state.items) - 1)
-    new_index = state.selected_index + direction
-    new_index = max(0, min(new_index, max_index))
-
-    %{state | selected_index: new_index}
-  end
-
-  defp execute_selected_item(%{items: items, selected_index: index} = state) do
-    case Enum.at(items, index) do
-      nil ->
-        state
-      item ->
-        Logger.info("Executing: #{inspect(item)}")
-        %{state | visible: false}
-    end
-  end
-
-  defp load_items_if_needed(%{visible: true, items: []} = state) do
-    items = load_available_items(state.config)
-    %{state | items: items}
-  end
-
-  defp load_items_if_needed(state), do: state
-
-  defp load_available_items(_config) do
-    # Replace with your actual item loading
-    [
-      %{name: "Item 1", action: :action1},
-      %{name: "Item 2", action: :action2},
-      %{name: "Item 3", action: :action3}
-    ]
-  end
-
-  defp update_filtered_items(%{search_query: ""} = state) do
-    items = load_available_items(state.config)
-    %{state | items: items, selected_index: 0}
-  end
-
-  defp update_filtered_items(%{search_query: query} = state) do
-    all_items = load_available_items(state.config)
-
-    filtered_items =
-      all_items
-      |> Enum.filter(fn item ->
-        String.contains?(String.downcase(item.name), String.downcase(query))
-      end)
-
-    %{state | items: filtered_items, selected_index: 0}
-  end
-
-  defp render_header(_state, width) do
-    title = " My UI Plugin "
-    padding = max(0, width - String.length(title)) |> div(2)
-
-    %{
-      text: String.pad_leading(title, width - padding) |> String.pad_trailing(width),
-      style: %{bold: true, bg_color: :blue, fg_color: :white}
-    }
-  end
-
-  defp render_search_box(%{search_query: query}, width) do
-    search_text = " Search: #{query}"
-
-    %{
-      text: String.pad_trailing(search_text, width),
-      style: %{bg_color: :gray}
-    }
-  end
-
-  defp render_separator(width) do
-    %{
-      text: String.duplicate("-", width),
-      style: %{fg_color: :gray}
-    }
-  end
-
-  defp render_items(state, width, available_height) do
-    state.items
-    |> Enum.take(available_height)
-    |> Enum.with_index()
-    |> Enum.map(fn {item, index} ->
-      selected = index == state.selected_index
-      prefix = if selected, do: "> ", else: "  "
-      text = prefix <> item.name
-
-      %{
-        text: String.pad_trailing(text, width),
-        style: %{
-          bg_color: if(selected, do: :cyan, else: :default),
-          fg_color: if(selected, do: :black, else: :white)
-        }
-      }
-    end)
-  end
-end
-```
+If you need to embed visible widgets, build them as components -- see [Custom Components](../guides/custom_components.md).
 
 ## Background Task Plugin Template
 
@@ -355,27 +74,19 @@ defmodule Raxol.Plugins.MyBackgroundPlugin do
   """
 
   use GenServer
-  @behaviour Raxol.Core.Runtime.Plugins.Plugin
+  use Raxol.Plugin
 
   require Logger
 
   def manifest do
     %{
-      name: "my-background-plugin",
+      id: "my-background-plugin",
+      name: "My Background Plugin",
       version: "1.0.0",
-      description: "Background task plugin template",
       author: "Your Name",
-      api_version: "2.0",
-      dependencies: %{
-        "raxol-core" => "~> 1.5"
-      },
-      capabilities: [:status_line, :command_handler, :file_system_access],
-      trust_level: :trusted,
-      config_schema: %{
-        update_interval_ms: %{type: :integer, default: 5000, min: 1000},
-        watch_path: %{type: :string, default: "."},
-        enabled: %{type: :boolean, default: true}
-      }
+      module: __MODULE__,
+      description: "Background task plugin template",
+      provides: [:status_line, :command_handler]
     }
   end
 
@@ -570,28 +281,19 @@ defmodule Raxol.Plugins.MyFileSystemPlugin do
   """
 
   use GenServer
-  @behaviour Raxol.Core.Runtime.Plugins.Plugin
+  use Raxol.Plugin
 
   require Logger
 
   def manifest do
     %{
-      name: "my-filesystem-plugin",
+      id: "my-filesystem-plugin",
+      name: "My FileSystem Plugin",
       version: "1.0.0",
-      description: "File system monitoring plugin template",
       author: "Your Name",
-      api_version: "2.0",
-      dependencies: %{
-        "raxol-core" => "~> 1.5"
-      },
-      capabilities: [:file_system_access, :file_watcher, :command_handler],
-      trust_level: :trusted,
-      config_schema: %{
-        watch_directories: %{type: :list, default: ["."]},
-        watch_patterns: %{type: :list, default: ["**/*.ex", "**/*.exs"]},
-        ignore_patterns: %{type: :list, default: ["**/.git/**", "**/node_modules/**"]},
-        max_file_size_mb: %{type: :integer, default: 10}
-      }
+      module: __MODULE__,
+      description: "File system monitoring plugin template",
+      provides: [:file_watcher, :command_handler]
     }
   end
 
@@ -843,18 +545,13 @@ defmodule MyPluginTest do
     test "returns valid manifest structure" do
       manifest = MyPlugin.manifest()
 
+      assert is_binary(manifest.id)
       assert is_binary(manifest.name)
       assert is_binary(manifest.version)
-      assert is_binary(manifest.description)
       assert is_binary(manifest.author)
-      assert is_map(manifest.dependencies)
-      assert is_list(manifest.capabilities)
-      assert manifest.trust_level in [:trusted, :sandboxed, :untrusted]
-    end
-
-    test "has required dependencies" do
-      manifest = MyPlugin.manifest()
-      assert Map.has_key?(manifest.dependencies, "raxol-core")
+      assert is_atom(manifest.module)
+      assert is_list(manifest.provides)
+      assert is_list(manifest.depends_on)
     end
   end
 
@@ -971,7 +668,7 @@ Pick the template that fits your needs:
 - **Background Plugin** -- Periodic tasks and monitoring
 - **File System Plugin** -- File watching and directory operations
 
-Then customize it: replace placeholder names, implement your logic, add dependencies to the manifest, and set the right capabilities.
+Then customize it: replace placeholder names, implement your logic, list your `provides:` capabilities, and declare any plugin `depends_on:` IDs.
 
 Test everything. Use the test template as a starting point, cover all lifecycle states, verify command handling, and test event filtering if you implemented it.
 

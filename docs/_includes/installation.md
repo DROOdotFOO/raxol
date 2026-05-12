@@ -1,7 +1,7 @@
 ## Installation
 
 ```elixir
-{:raxol, "~> 2.3"}
+{:raxol, "~> 2.4"}
 ```
 
 ```bash

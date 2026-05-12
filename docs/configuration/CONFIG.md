@@ -6,13 +6,14 @@ Raxol uses TOML files for configuration, managed by `Raxol.Config` (backed by Un
 
 ```bash
 config/
-├── raxol.toml                    # Main config
-├── raxol.example.toml           # All options documented
+├── raxol.toml                    # Main config (you create this; copy from the example)
+├── raxol.example.toml            # All options documented
 └── environments/
-    ├── development.toml         # Dev overrides
-    ├── test.toml               # Test settings
-    └── production.toml         # Production settings
+    ├── development.toml          # Dev overrides
+    └── production.toml           # Production overrides
 ```
+
+Test settings live in `config/test.exs`, not a TOML file.
 
 ### Loading Order
 

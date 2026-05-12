@@ -1,11 +1,11 @@
 # ADR-0012: MCP as Rendering Target
 
 ## Status
-Proposed -- 2026-04-05
+Accepted -- 2026-04-05. Implemented in `packages/raxol_mcp/` (ToolProvider, FocusLens, ContextTree, structured screenshots, stdio + SSE transports).
 
 ## Context
 
-Raxol's MCP integration is held together with duct tape. Six tools get injected into Tidewave's ETS table via `:sys.replace_state` at startup, with a retry loop polling up to 10 times. A bash script proxies stdio to HTTP because Claude Code needs stdio and Tidewave speaks HTTP. The tools are low-level -- raw keystrokes and plain-text screenshots. It works, but it's dev-only, fragile, and coupled to Tidewave's internals. One upstream change and it breaks.
+Raxol's MCP integration is held together with duct tape. Six tools get injected into Tidewave's ETS table via `:sys.replace_state` at startup, with a retry loop polling up to 10 times. A bash script proxies stdio to HTTP because Claude Code needs stdio and Tidewave speaks HTTP. The tools are low-level: raw keystrokes and plain-text screenshots. It works in dev only, and it's coupled to Tidewave's internals. One upstream change and it breaks.
 
 The codebase already supports multiple rendering targets. TEA apps render to terminal (`:react`), browser (`:liveview`), templates (`:heex`), or raw output (`:raw`). The accessibility system tracks widget types, labels, and focus chains. The agent framework has its own MCP client for consuming external servers. All the pieces exist. They just aren't connected.
 
