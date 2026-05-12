@@ -41,8 +41,7 @@ packages/raxol_terminal/priv/*.so
 priv/termbox2_nif.so
 
 # Claude Code local configuration (user-specific, not shared)
-.claude/settings.local.json
-.claude/worktrees/**
+.claude/
 
 # Archive artifacts (mix archive.build) and Hex package tarballs (mix hex.build).
 *.ez
