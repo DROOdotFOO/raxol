@@ -5,21 +5,25 @@
 [![CI](https://github.com/DROOdotFOO/raxol/actions/workflows/ci-unified.yml/badge.svg?branch=master)](https://github.com/DROOdotFOO/raxol/actions/workflows/ci-unified.yml)
 [![Hex](https://img.shields.io/hexpm/v/raxol.svg)](https://hex.pm/packages/raxol)
 
-Write one app. Render it to a terminal, a browser, or an agent.
+Write one app. Render it to a terminal, a browser, an SSH session, or an agent.
 
 Your application is a single [TEA](https://guide.elm-lang.org/architecture/) module (`init`, `update`, `view`) running as an [OTP](https://en.wikipedia.org/wiki/Open_Telecom_Platform) GenServer. Raxol renders that module to four surfaces from one codebase:
 
 ```
-                          +---> termbox2 NIF (terminal)
+                          +---> Terminal (termbox2 NIF)
                           |
-  TEA module (GenServer) -+---> Phoenix LiveView (browser)
+  TEA module (GenServer) -+---> Browser (Phoenix LiveView)
                           |
-                          +---> SSH daemon (remote terminal)
+                          +---> SSH (Erlang :ssh)
                           |
-                          +---> MCP tools (agents)
+                          +---> Agent (MCP tools)
 ```
 
-The interesting part is the runtime, not the terminal. Your app gets crash isolation per component, hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured widget trees instead of scraping pixels. Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define agent-UI wire formats. Raxol is the runtime that renders all four surfaces from one source module.
+The interesting part is the runtime, not the terminal.
+
+Your app gets crash isolation per component, hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured widget trees instead of scraping pixels.
+
+Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define agent-UI wire formats. Raxol is the runtime that renders all four surfaces from one source module.
 
 ## Built with Raxol
 
@@ -44,7 +48,7 @@ ssh bbs.foglet.io
 
 Marketing site at [bbs.foglet.io](https://bbs.foglet.io). Brendan stress-tested raxol's SSH path early on with detailed bug reports; foglet-bbs is what shook out the other end.
 
-## Symphony: manage work, not agents
+## Symphony
 
 `raxol_symphony` is an Elixir/OTP port of [OpenAI Symphony](https://github.com/openai/symphony). The orchestrator polls a tracker (Linear or GitHub Issues), claims eligible issues, isolates each in a per-issue workspace, and runs a coding agent until the work reaches a workflow-defined handoff state. Two runner backends ship: `raxol_agent` (the default, wraps `Raxol.Agent.Stream`) and the upstream `codex app-server` (Port-based JSON-RPC). Six surfaces consume the same orchestrator snapshot via PubSub: terminal dashboard, LiveView, MCP tools, Telegram inline keyboards, Watch push, and a JSON API. Evidence collection -- CI status, PR comments, complexity, asciinema replays -- ships per run.
 
@@ -151,29 +155,9 @@ session
 
 ## Why OTP matters here
 
-Raxol's interface runtime is built on the BEAM, a VM originally designed for telephone switches. Systems that couldn't go down, couldn't lose state, and had to hot-swap code on live calls. Those constraints turn out to be exactly right for multi-surface apps.
+Raxol's interface runtime is built on the BEAM, a VM originally designed for telephone switches: systems that couldn't go down, couldn't lose state, and had to hot-swap code on live calls. Those constraints turn out to be exactly right for multi-surface apps. Crash one widget, the rest stays up. Ship a fix, sessions don't drop. Cluster across regions, the framework already knows how to.
 
-| What you need                         | Raxol                          | Building it yourself                   |
-| ------------------------------------- | ------------------------------ | -------------------------------------- |
-| Same UI for human + agent             | one TEA module, four renderers | two codebases, glue layer, drift       |
-| Crash one widget, keep the rest up    | OTP supervisor per component   | process-per-widget, DIY restart        |
-| Deploy a fix without closing sessions | hot code reload                | full restart, reconnect                |
-| Replay an incident from recording     | asciinema v2 session capture   | build your own                         |
-| Multi-region coordination             | libcluster + CRDTs             | DIY discovery, DIY conflict resolution |
-
-For the TUI-framework audience, here's the comparison you'd expect:
-
-| Capability                     | Raxol | Ratatui | Bubble Tea |       Textual       | Ink |
-| ------------------------------ | :---: | :-----: | :--------: | :-----------------: | :-: |
-| Crash isolation per component  |  yes  |   --    |     --     |         --          | --  |
-| Hot code reload (no restart)   |  yes  |   --    |     --     |         --          | --  |
-| Same app in terminal + browser |  yes  |   --    |     --     |       partial       | --  |
-| Built-in SSH serving           |  yes  |   --    |  via lib   |         --          | --  |
-| AI agent runtime               |  yes  |   --    |     --     |         --          | --  |
-| Distributed clustering (CRDTs) |  yes  |   --    |     --     |         --          | --  |
-| Time-travel debugging          |  yes  |   --    |     --     | partial<sup>1</sup> | --  |
-
-<sup>1</sup> Textual has devtools with CSS inspection, but not state-level time-travel.
+See [Why OTP](docs/WHY_OTP.md) for the full breakdown, including a comparison against Ratatui, Bubble Tea, Textual, and Ink.
 
 ## Try it
 
@@ -181,60 +165,15 @@ For the TUI-framework audience, here's the comparison you'd expect:
 git clone https://github.com/DROOdotFOO/raxol.git
 cd raxol && mix deps.get
 mix raxol.playground          # 30 live demos, browse/search/filter
-mix raxol.playground --ssh    # same thing, served over SSH (port 2222)
 ```
 
-The flagship demo is a live BEAM dashboard with scheduler utilization, memory sparklines, and a process table, all updating in real time:
+The flagship demo is a live BEAM dashboard with scheduler utilization, memory sparklines, and a process table:
 
 ```bash
 mix run examples/demo.exs
 ```
 
-More examples:
-
-```bash
-mix run examples/getting_started/counter.exs    # Minimal counter
-mix run examples/apps/file_browser.exs           # File browser with tree nav
-mix run examples/apps/todo_app.ex                # Todo list
-mix run examples/agents/code_review_agent.exs    # AI agent analyzing files
-mix run examples/agents/agent_team.exs           # Coordinator + worker agents
-mix run examples/agents/ai_cockpit.exs           # Multi-agent AI cockpit (mock)
-FREE_AI=true mix run examples/agents/ai_cockpit.exs  # Real AI via LLM7.io (free)
-mix run examples/swarm/cluster_demo.exs          # CRDT state sync demo
-```
-
-Other tools:
-
-```bash
-mix raxol.repl                                    # Sandboxed REPL (--sandbox strict)
-mix phx.server                                    # Web playground at /playground
-```
-
-See [examples/README.md](examples/README.md) for the full learning path.
-
-## Features
-
-**Process isolation.** Wrap any widget in `process_component/2` and it runs in its own process. Crashes restart cleanly; the rest of the UI stays up.
-
-**Hot code reload.** Change your `view/1`, save, the running app picks it up. No restart.
-
-**Widgets and layout.** Button, TextInput, Table, Tree, Modal, SelectList, Checkbox, Sparkline, Charts. Keyboard-navigable with focus management. Flexbox and CSS Grid, nested freely. Virtual DOM diffing with damage tracking.
-
-**Theming.** Named colors, RGB, 256-color, and hex, downsampled to the terminal's capability. Inline images via Kitty, Sixel, and iTerm2.
-
-**SSH serving.** `Raxol.SSH.serve(MyApp, port: 2222)`. Each connection gets its own supervised process.
-
-**LiveView bridge.** Same TEA app renders in Phoenix LiveView. Animation hints declared in `view/1` become CSS transitions automatically, with `prefers-reduced-motion` respected.
-
-**Distributed swarm.** CRDTs (LWW registers, OR-sets), node monitoring, seniority-based election. Discovery via libcluster with gossip, epmd, DNS, or Tailscale.
-
-**Sensor fusion.** Poll sensors, fuse readings with weighted averaging, render gauges and sparklines. Self-adapting layout tracks usage and recommends changes.
-
-**Time-travel debugging.** Snapshots every `update/2` cycle: step back, forward, jump, restore. Zero cost when disabled.
-
-**Session recording.** Captures to asciinema v2 `.cast` files with pause, seek, speed control, and auto-save on crash.
-
-**Sandboxed REPL.** `mix raxol.repl` with three safety levels. AST-based scanning blocks dangerous operations; safe for SSH exposure in strict mode.
+See [examples/README.md](examples/README.md) for the full learning path, including agent examples, swarm demos, and the sandboxed REPL.
 
 ## Performance
 
@@ -285,23 +224,7 @@ The structured widget tree already carries type, label, and state metadata on ev
 - [Recording & Replay](docs/features/RECORDING_REPLAY.md)
 - [Why OTP](docs/WHY_OTP.md)
 
-**Standalone packages** (grab just the subsystem you need):
-
-| Package                                                    | Hex                           | What                                       |
-| ---------------------------------------------------------- | ----------------------------- | ------------------------------------------ |
-| [`raxol_core`](https://hex.pm/packages/raxol_core)         | `{:raxol_core, "~> 2.4"}`     | Behaviours, events, config, plugins        |
-| [`raxol_terminal`](https://hex.pm/packages/raxol_terminal) | `{:raxol_terminal, "~> 2.4"}` | Terminal emulation, termbox2 NIF           |
-| [`raxol_mcp`](https://hex.pm/packages/raxol_mcp)           | `{:raxol_mcp, "~> 2.4"}`      | MCP server, client, registry, test harness |
-| [`raxol_agent`](https://hex.pm/packages/raxol_agent)       | `{:raxol_agent, "~> 2.4"}`    | AI agent framework                         |
-| [`raxol_sensor`](https://hex.pm/packages/raxol_sensor)     | `{:raxol_sensor, "~> 2.4"}`   | Sensor fusion (zero deps)                  |
-| [`raxol_payments`](https://hex.pm/packages/raxol_payments) | `{:raxol_payments, "~> 0.1"}` | Agent payments, Xochi cross-chain, stealth |
-| `raxol_acp` (pre-alpha)                                    | `path: "packages/raxol_acp"`  | Virtuals Agent Commerce Protocol (sell)    |
-| `raxol_symphony` (pre-alpha)                               | `path: "packages/raxol_symphony"` | Tracker-driven coding-agent orchestrator |
-| [`raxol_liveview`](https://hex.pm/packages/raxol_liveview) | `{:raxol_liveview, "~> 2.4"}` | Phoenix LiveView bridge, themes, CSS       |
-| [`raxol_plugin`](https://hex.pm/packages/raxol_plugin)     | `{:raxol_plugin, "~> 2.4"}`   | Plugin SDK, testing, generator             |
-| [`raxol_speech`](https://hex.pm/packages/raxol_speech)     | `{:raxol_speech, "~> 0.1"}`   | TTS (say/espeak), STT (Whisper), voice cmds |
-| [`raxol_telegram`](https://hex.pm/packages/raxol_telegram) | `{:raxol_telegram, "~> 0.1"}` | Telegram bot, per-chat sessions, keyboards |
-| [`raxol_watch`](https://hex.pm/packages/raxol_watch)       | `{:raxol_watch, "~> 0.1"}`    | APNS/FCM push, glanceable summaries        |
+**Standalone packages**: grab just the subsystem you need. See [PACKAGES.md](docs/PACKAGES.md) for the full table.
 
 ## Development
 
