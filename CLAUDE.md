@@ -55,11 +55,11 @@ Working examples: `counter.exs`, `getting_started/todo_app.exs`, `apps/todo_app.
 
 Agent examples: `agents/code_review_agent.exs` (single agent with shell commands), `agents/agent_team.exs` (coordinator + worker team pattern), `agents/ai_cockpit.exs` (multi-agent AI cockpit with real LLM streaming -- mock by default, `FREE_AI=true` for LLM7.io, supports Anthropic/OpenAI/Ollama/Groq).
 
-Sensor examples: `sensor_hud_demo.exs` (3 mock sensors with gauge, sparkline, threat HUD widgets).
+Sensor examples: `sensor_hud_demo.exs` (3 mock sensors with gauge, sparkline, threat HUD Components).
 
 Adaptive examples: `adaptive_ui_demo.exs` (behavior tracking, layout recommendations, feedback loop).
 
-Playground: `mix raxol.playground` -- interactive widget catalog with 30 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Demos are self-contained TEA apps in `lib/raxol/playground/demos/`. Chart demos use View DSL functions directly. SSH mode: `mix raxol.playground --ssh` serves the playground over SSH (port 2222 by default). Production SSH enabled via `RAXOL_SSH_PLAYGROUND=true` env var in fly.toml.
+Playground: `mix raxol.playground` -- interactive Component catalog with 30 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Demos are self-contained TEA apps in `lib/raxol/playground/demos/`. Chart demos use View DSL functions directly. SSH mode: `mix raxol.playground --ssh` serves the playground over SSH (port 2222 by default). Production SSH enabled via `RAXOL_SSH_PLAYGROUND=true` env var in fly.toml.
 
 ### Development
 
@@ -71,7 +71,7 @@ mix docs                      # Generate documentation
 
 ### Headless MCP Tools
 
-`mix mcp.server` starts the MCP server on stdio (for Claude Code integration). Six Raxol-specific tools are registered at startup: `raxol_start`, `raxol_screenshot`, `raxol_send_key`, `raxol_get_model`, `raxol_stop`, `raxol_list`. Tools are auto-derived from the widget tree via `Raxol.MCP.ToolProvider` -- each interactive widget exposes semantic actions (e.g., Button exposes `click`, TextInput exposes `type_into`/`clear`/`get_value`). Set `mcp_exclude: true` in widget attrs to suppress tool derivation for internal widgets.
+`mix mcp.server` starts the MCP server on stdio (for Claude Code integration). Six Raxol-specific tools are registered at startup: `raxol_start`, `raxol_screenshot`, `raxol_send_key`, `raxol_get_model`, `raxol_stop`, `raxol_list`. Tools are auto-derived from the Component tree via `Raxol.MCP.ToolProvider` -- each interactive Component exposes semantic actions (e.g., Button exposes `click`, TextInput exposes `type_into`/`clear`/`get_value`). Set `mcp_exclude: true` in Component attrs to suppress tool derivation for internal Components.
 
 ### Development Scripts
 
@@ -163,7 +163,7 @@ cd packages/raxol_symphony && MIX_ENV=test mix test
 ```
 lib/raxol/
 ├── ui/              # Multi-framework UI
-│   ├── components/  # Widgets: TextInput, Table, Button, Modal, SelectList, Checkbox, Tree, etc.
+│   ├── components/  # Components: TextInput, Table, Button, Modal, SelectList, Checkbox, Tree, etc.
 │   ├── charts/      # Streaming charts: LineChart, ScatterChart, BarChart, Heatmap, BrailleCanvas
 │   ├── layout/      # Flexbox/CSS grid engines, Preparer (two-phase), ScrollContent (lazy scroll)
 │   ├── rendering/   # UI rendering (TreeDiffer, Composer, Painter, DamageTracker, etc.)
@@ -180,7 +180,7 @@ lib/raxol/
 │   ├── discovery.ex   # libcluster wrapper with strategy presets
 │   ├── strategy/      # Custom libcluster strategies (Tailscale)
 │   └── crdt/          # LWWRegister, ORSet (pure functional)
-├── playground/      # Interactive widget catalog (30 demos, 8 categories)
+├── playground/      # Interactive Component catalog (30 demos, 8 categories)
 ├── ssh/             # SSH serving
 ├── repl/            # Interactive REPL
 ├── performance/     # Performance monitoring, profiling, caching

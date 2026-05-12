@@ -141,7 +141,7 @@ The View DSL provides macros for building layouts:
 column style: %{gap: 1} do ... end    # Vertical stack
 row style: %{gap: 2} do ... end        # Horizontal stack
 
-# Widgets
+# Components
 text("Hello", style: [:bold])          # Text with styling
 button("Click", on_click: :msg)        # Clickable button
 text_input(value: v, placeholder: "")  # Text input
@@ -189,11 +189,11 @@ mix run --no-halt
 
 That counter is a complete Raxol app -- `init/update/view` is the whole API. Everything else builds on this loop.
 
-Try `mix raxol.playground` for an interactive catalog of 30 widget demos you can browse, search, and filter. It's the fastest way to see what's available.
+Try `mix raxol.playground` for an interactive catalog of 30 Component demos you can browse, search, and filter. It's the fastest way to see what's available.
 
 **Next steps:**
 
-- [Widget Gallery](WIDGET_GALLERY.md) -- All widgets with examples
+- [Component Gallery](COMPONENT_GALLERY.md) -- All Components with examples
 - [Core Concepts](CORE_CONCEPTS.md) -- Buffers, rendering pipeline, and how it all fits together
 - [Building Apps](../cookbook/BUILDING_APPS.md) -- Patterns for real apps (state machines, scrollable lists, keyboard shortcuts)
 

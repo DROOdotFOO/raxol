@@ -94,7 +94,7 @@ Raxol.UI.Theming.ThemeManager.set_theme(:nord)
 
 ### Component-level theming
 
-Widgets read theme styles via `Raxol.UI.Theming.Theme.component_style/2`. In a TEA app, apply theme styles in `view/1`:
+Components read theme styles via `Raxol.UI.Theming.Theme.component_style/2`. In a TEA module, apply theme styles in `view/1`:
 
 ```elixir
 def view(model) do
@@ -124,7 +124,7 @@ component_styles: %{
 }
 ```
 
-The `FocusHelper` module resolves the correct style based on widget state.
+The `FocusHelper` module resolves the correct style based on Component state.
 
 ### Built-in themes
 

@@ -1,6 +1,6 @@
 # Telegram Surface
 
-`raxol_telegram` runs a TEA app as a Telegram bot. Each chat gets a session with its own TEA model; inline keyboards become button widgets; HTML `<pre>` blocks render the buffer.
+`raxol_telegram` runs a TEA app as a Telegram bot. Each chat gets a session with its own TEA model; inline keyboards become Button Components; HTML `<pre>` blocks render the buffer.
 
 ## Quick Start
 
@@ -32,7 +32,7 @@ Send a message to the bot from an allowed chat and the supervisor spawns a `Sess
 | Event                  | What happens                                  |
 | ---------------------- | --------------------------------------------- |
 | Text message           | `InputAdapter` converts to `{:paste, text}`   |
-| Inline button callback | Converted to widget click event               |
+| Inline button callback | Converted to Component click event            |
 | `/start`               | Session restart                               |
 | 10min silence          | Session terminates, model dropped             |
 
@@ -41,7 +41,7 @@ Send a message to the bot from an allowed chat and the supervisor spawns a `Sess
 `OutputAdapter` takes the screen buffer and produces a Telegram message:
 
 - Buffer -> HTML `<pre>` block (with monospace styling preserved)
-- Interactive widgets -> inline keyboard buttons in document order
+- Interactive Components -> inline keyboard buttons in document order
 
 Message edit dedup prevents redundant API calls when the rendered output doesn't change between updates.
 

@@ -30,7 +30,7 @@ def view(model) -> view_tree                  # Declarative UI
 def subscribe(model) -> [subscription]        # External events
 ```
 
-The runtime calls `view(model)` after every `update`, diffs the result against the previous view tree, and renders only what changed. This is the same virtual DOM idea from React, but for terminals.
+The runtime calls `view(model)` after every `update`, diffs the resulting Element tree against the previous one, and renders only what changed. Same diffing idea as React's virtual DOM, but the Element tree describes terminal cells, not HTML nodes.
 
 ## Layer Stack
 
@@ -91,18 +91,18 @@ Platform-detected backend writes ANSI escape sequences:
 - **Browser**: LiveView bridge via PubSub (`Raxol.LiveView.TEALive` in `raxol_liveview` package). When positioned elements carry animation hints, `TerminalBridge.animation_css/1` emits CSS `transition` rules targeting `data-raxol-id` selectors, plus a `prefers-reduced-motion` media query. The browser handles interpolation client-side instead of re-rendering every frame from the server.
 - **SSH**: Erlang `:ssh` module (`Raxol.SSH.Server`)
 - **Telegram**: Buffer-to-plaintext via an `io_writer` callback (`Raxol.Core.Runtime.Rendering.Backends.render_to_telegram/2`)
-- **MCP**: Tool/resource derivation from widget tree (`Raxol.MCP.Server`, see ADR-0012). `StructuredScreenshot` includes animation hints in JSON widget summaries so agents can reason about animated state.
+- **MCP**: Tool/resource derivation from Component tree (`Raxol.MCP.Server`, see ADR-0012). `StructuredScreenshot` includes animation hints in JSON Component summaries so agents can reason about animated state.
 
 ### MCP as Rendering Target (ADR-0012)
 
-MCP is a first-class rendering target alongside terminal, LiveView, and SSH. Instead of rendering pixels, it renders capabilities: tools and resources derived from the widget tree.
+MCP is a first-class rendering target alongside terminal, LiveView, and SSH. Instead of rendering pixels, it renders capabilities: tools and resources derived from the Component tree.
 
 ```
-view(model) -> widget tree -> ToolProvider per widget -> MCP tool set
-                            -> app projections       -> MCP resources
+view(model) -> Component tree -> ToolProvider per Component -> MCP tool set
+                              -> app projections            -> MCP resources
 ```
 
-Each widget type implements `Raxol.MCP.ToolProvider`, mapping its state to MCP tools (e.g., TextInput -> type_into/clear/get_value, Table -> sort/filter/select_row). A focus lens filters to ~10 relevant tools per interaction. The context tree assembles model, widgets, agents, swarm topology, and notifications into browsable MCP resources.
+Each Component type implements `Raxol.MCP.ToolProvider`, mapping its state to MCP tools (e.g., TextInput -> type_into/clear/get_value, Table -> sort/filter/select_row). A focus lens filters to ~10 relevant tools per interaction. The context tree assembles model, Components, agents, swarm topology, and notifications into browsable MCP resources.
 
 This means every Raxol app is AI-controllable with zero glue code. Package: `raxol_mcp` (depends on `raxol_core`). See `docs/adr/0012-mcp-as-rendering-target.md` for full details.
 
@@ -133,12 +133,12 @@ Application Supervisor
 ├── Rendering.Engine -- view -> layout -> render -> output
 ├── ThemeManager -- ETS-backed theme registry
 ├── I18nServer -- ETS-backed translations
-└── [ProcessComponent supervisors] -- optional per-widget processes
+└── [ProcessComponent supervisors] -- optional per-Component processes
 ```
 
 ### Process-Per-Component (Optional)
 
-Any widget can run in its own process via `process_component/2`:
+Any Component can run in its own process via `process_component/2`:
 
 ```elixir
 process_component(ExpensiveChart, data: sensor_feed)
@@ -190,5 +190,5 @@ The component gets its own GenServer under a DynamicSupervisor. If it crashes, i
 
 - [Buffer API](./BUFFER_API.md)
 - [Quickstart Guide](../getting-started/QUICKSTART.md)
-- [Widget Gallery](../getting-started/WIDGET_GALLERY.md)
+- [Component Gallery](../getting-started/COMPONENT_GALLERY.md)
 - [Theming Cookbook](../cookbook/THEMING.md)

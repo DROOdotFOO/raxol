@@ -72,4 +72,4 @@ mix raxol.playground --ssh          # SSH mode (port 2222)
 
 - [Quickstart Guide](../docs/getting-started/QUICKSTART.md) -- Build your first app step by step
 - [Core Concepts](../docs/getting-started/CORE_CONCEPTS.md) -- Architecture and design philosophy
-- [Widget Gallery](../docs/getting-started/WIDGET_GALLERY.md) -- All widgets with examples
+- [Component Gallery](../docs/getting-started/COMPONENT_GALLERY.md) -- All Components with examples

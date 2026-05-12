@@ -7,7 +7,7 @@ Complete guide to Raxol -- multi-surface application runtime for Elixir.
 - [Why OTP](WHY_OTP.md) -- why the BEAM runtime changes what's possible
 - [Quickstart](getting-started/QUICKSTART.md) -- build your first terminal app
 - [Core Concepts](getting-started/CORE_CONCEPTS.md) -- architecture and design
-- [Widget Gallery](getting-started/WIDGET_GALLERY.md) -- all widgets with examples
+- [Component Gallery](getting-started/COMPONENT_GALLERY.md) -- all Components with examples
 
 ## Cookbook
 
@@ -57,7 +57,7 @@ Complete guide to Raxol -- multi-surface application runtime for Elixir.
 ## Examples
 
 - [Examples Learning Path](../examples/README.md) -- runnable examples, beginner to advanced
-- `mix raxol.playground` -- interactive widget catalog with 30 demos
+- `mix raxol.playground` -- interactive Component catalog with 30 demos
 
 ## Resources
 

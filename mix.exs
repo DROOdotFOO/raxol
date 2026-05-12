@@ -419,7 +419,7 @@ defmodule Raxol.MixProject do
         {"ROADMAP.md", [title: "Roadmap"]},
         {".github/CONTRIBUTING.md", [title: "Contributing"]},
         {"docs/getting-started/QUICKSTART.md", [title: "Quickstart"]},
-        {"docs/getting-started/WIDGET_GALLERY.md", [title: "Widget Gallery"]},
+        {"docs/getting-started/COMPONENT_GALLERY.md", [title: "Component Gallery"]},
         {"docs/getting-started/CORE_CONCEPTS.md", [title: "Core Concepts"]},
         {"docs/getting-started/MIGRATION_FROM_DIY.md",
          [title: "Migration Guide"]},
@@ -453,7 +453,7 @@ defmodule Raxol.MixProject do
           README.md
           docs/getting-started/QUICKSTART.md
           docs/getting-started/CORE_CONCEPTS.md
-          docs/getting-started/WIDGET_GALLERY.md
+          docs/getting-started/COMPONENT_GALLERY.md
           docs/getting-started/MIGRATION_FROM_DIY.md
         ),
         Architecture: ~w(

@@ -5,7 +5,7 @@ Practical recipes for building terminal applications with Raxol.
 ## Guides
 
 - [Building Apps](BUILDING_APPS.md) -- TEA patterns, state machines, scrollable lists, key chords, testing
-- [Custom Components](CUSTOM_COMPONENTS.md) -- author your own widgets
+- [Custom Components](CUSTOM_COMPONENTS.md) -- author your own Components
 - [Configuration](CONFIG.md) -- TOML config, environment overrides
 - [SSH Deployment](SSH_DEPLOYMENT.md) -- Serve apps over SSH, production setup, Fly.io
 - [Theming](THEMING.md) -- Terminal colors, theme system, LiveView CSS, accessibility

@@ -56,10 +56,10 @@ end
 
 There is no UI rendering callback on the `Raxol.Core.Runtime.Plugins.Plugin` behaviour. Plugins do not render to the screen directly. Two ways to get UI from a plugin:
 
-1. **Emit commands or events** that a host app or widget consumes (`handle_command/3` returns the third element as the result).
+1. **Emit commands or events** that a host app or Component consumes (`handle_command/3` returns the third element as the result).
 2. **Run a companion `Raxol.UI.Components.Base.Component`** in the app and let the plugin update its model via the command/event channel.
 
-If you need to embed visible widgets, build them as components -- see [Custom Components](../cookbook/CUSTOM_COMPONENTS.md).
+If you need to embed visible Components, build them via the Component behaviour -- see [Custom Components](../cookbook/CUSTOM_COMPONENTS.md).
 
 ## Background Task Plugin Template
 

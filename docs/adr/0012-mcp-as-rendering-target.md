@@ -7,13 +7,13 @@ Accepted -- 2026-04-05. Implemented in `packages/raxol_mcp/` (ToolProvider, Focu
 
 Raxol's MCP integration is held together with duct tape. Six tools get injected into Tidewave's ETS table via `:sys.replace_state` at startup, with a retry loop polling up to 10 times. A bash script proxies stdio to HTTP because Claude Code needs stdio and Tidewave speaks HTTP. The tools are low-level: raw keystrokes and plain-text screenshots. It works in dev only, and it's coupled to Tidewave's internals. One upstream change and it breaks.
 
-The codebase already supports multiple rendering targets. TEA apps render to terminal (`:react`), browser (`:liveview`), templates (`:heex`), or raw output (`:raw`). The accessibility system tracks widget types, labels, and focus chains. The agent framework has its own MCP client for consuming external servers. All the pieces exist. They just aren't connected.
+The codebase already supports multiple rendering targets. TEA modules render to terminal (`:react`), browser (`:liveview`), templates (`:heex`), or raw output (`:raw`). The accessibility system tracks Component types, labels, and focus chains. The agent framework has its own MCP client for consuming external servers. All the pieces exist. They just aren't connected.
 
-The real problem: MCP shouldn't be bolted onto the side. Every Raxol app is a structured widget tree with typed interactions. An AI controlling a Raxol app shouldn't send raw "j" keystrokes and parse text screenshots. It should see the widget tree, call semantic actions (click this button, type into this field), and browse model state -- the same way the terminal renderer sees cells and the LiveView renderer sees components.
+The real problem: MCP shouldn't be bolted onto the side. Every Raxol app is a structured Component tree with typed interactions. An AI controlling a Raxol app shouldn't send raw "j" keystrokes and parse text screenshots. It should see the Component tree, call semantic actions (click this button, type into this field), and browse model state -- the same way the terminal renderer sees cells and the LiveView renderer sees DOM nodes.
 
 ## Decision
 
-Treat MCP as a first-class rendering target. The framework derives the MCP surface -- tools, resources, prompts -- automatically from the widget tree and model. App authors write zero MCP glue code. Build a TUI app, get an AI interface for free.
+Treat MCP as a first-class rendering target. The framework derives the MCP surface -- tools, resources, prompts -- automatically from the Component tree and model. App authors write zero MCP glue code. Build a TUI app, get an AI interface for free.
 
 ### Category Theory Framing
 
@@ -23,7 +23,7 @@ This isn't a metaphor. The rendering targets are literally functors from the sam
 TEA Model Category M = (States, Messages, compose, id)
 
 F_term  : M -> TerminalOutput     (view -> cells -> ANSI)
-F_mcp   : M -> ToolSet+Resources  (view -> widget tree -> tools)
+F_mcp   : M -> ToolSet+Resources  (view -> Component tree -> tools)
 F_tg    : M -> TelegramMessages   (model -> formatted messages)
 F_voice : M -> SpeechOutput       (model -> spoken announcements)
 F_watch : M -> WatchFace          (model -> compact display)
@@ -59,17 +59,17 @@ Works in dev, test, and prod. No Tidewave dependency.
 
 **2. ToolProvider behaviour** (automatic tool derivation)
 
-Each widget type implements `Raxol.MCP.ToolProvider`:
+Each Component type implements `Raxol.MCP.ToolProvider`:
 
 ```elixir
-@callback mcp_tools(widget_state :: map()) :: [tool_def()]
+@callback mcp_tools(component_state :: map()) :: [tool_def()]
 @callback handle_tool_call(name :: String.t(), args :: map(), state :: map()) ::
   {:ok, result()} | {:error, reason()}
 ```
 
-Built-in implementations for all existing widgets:
+Built-in implementations for all existing Components:
 
-| Widget | Tools | What They Are |
+| Component | Tools | What They Are |
 |--------|-------|---------------|
 | TextInput | type_into, clear, get_value | String state morphisms |
 | Button | click | Terminal morphism (triggers effect) |
@@ -81,19 +81,19 @@ Built-in implementations for all existing widgets:
 | Chart | set_range, get_data, annotate | Visualization state morphisms |
 | Viewport | scroll_to, get_visible_range | Window function on content |
 
-A tree walker traverses the `view(model)` output, collects tools from each widget, namespaces by widget ID (`widget.search_input.type_into`), and registers with `MCP.Registry`. Tool set updates on every render via `tools/list_changed` notification.
+A tree walker traverses the `view(model)` output, collects tools from each Component, namespaces by Component ID (`component.search_input.type_into`), and registers with `MCP.Registry`. Tool set updates on every render via `tools/list_changed` notification.
 
 **3. Focus lens** (attention-aware tool filtering)
 
 A complex UI could expose 100+ tools. LLM tool selection degrades past ~20. The MCP server applies an attention-aware filter:
 
-- Default: tools for focused widget + neighbors + global tools (5-10 total)
+- Default: tools for focused Component + neighbors + global tools (5-10 total)
 - `discover_tools` meta-tool for searching the full set by capability
-- `@mcp_exclude` attribute to suppress derivation on specific widgets
-- Mouse tracking feeds into the lens: hover/click events update which widget region has attention, even before keyboard focus moves there
-  - Pre-exposes tools for the widget under the cursor (anticipatory surfacing)
+- `@mcp_exclude` attribute to suppress derivation on specific Components
+- Mouse tracking feeds into the lens: hover/click events update which Component region has attention, even before keyboard focus moves there
+  - Pre-exposes tools for the Component under the cursor (anticipatory surfacing)
   - Effects system (`Raxol.Effects`) renders visual feedback on hover targets -- highlights, glow, cursor trails
-  - BehaviorTracker records mouse patterns (per-widget dwell, click frequency) feeding adaptive layout recommendations
+  - BehaviorTracker records mouse patterns (per-Component dwell, click frequency) feeding adaptive layout recommendations
 
 **4. App-declared model projections** (MCP resources)
 
@@ -116,8 +116,8 @@ Assembled on demand from multiple sources:
 ```
 Context Tree
 +-- Model State (TEA model, via projections)
-+-- Widget Tree (types, IDs, bounds, focus, attention)
-|   +-- Available Tools (derived from widgets)
++-- Component Tree (types, IDs, bounds, focus, attention)
+|   +-- Available Tools (derived from Components)
 |   +-- Focus Chain (tab order, mouse attention)
 +-- Agent State (models, health, pending commands)
 +-- Swarm Topology (nodes, roles, latency)
@@ -169,7 +169,7 @@ The "single source of truth" isn't a single location -- it's the global section.
 - Works in all environments, not just dev
 - Decoupled from Tidewave -- owned transport, no ETS hacking
 - Same architecture extends to Telegram, speech, watch (more functors, same model)
-- Test harness falls out naturally (semantic widget assertions without terminal emulation)
+- Test harness falls out naturally (semantic Component assertions without terminal emulation)
 - Category-theoretic foundation gives us testable invariants (functor laws as property tests)
 - Mouse tracking improves both human UX (hover effects) and AI UX (anticipatory tools)
 
@@ -178,14 +178,14 @@ The "single source of truth" isn't a single location -- it's the global section.
 - New package to maintain (raxol_mcp)
 - Dynamic tool sets are unusual for MCP clients -- some may not handle `tools/list_changed`
 - Focus lens adds complexity (what's "focused" in a headless session?)
-- ToolProvider behaviour is another thing widget authors need to know about
+- ToolProvider behaviour is another thing Component authors need to know about
 
 ### Mitigation
 
 - raxol_mcp depends only on raxol_core, small surface area
 - Fallback to static tool list for clients that don't support dynamic tools
 - Headless sessions default to "all tools visible" (no focus lens)
-- Built-in ToolProvider for all standard widgets; custom widgets inherit sensible defaults
+- Built-in ToolProvider for all standard Components; custom Components inherit sensible defaults
 - Mouse tracking is opt-in (terminals that don't support it simply don't send events)
 
 ## Validation
@@ -203,7 +203,7 @@ The "single source of truth" isn't a single location -- it's the global section.
 - Headless session manager: `lib/raxol/headless.ex`
 - Agent MCP client: `packages/raxol_agent/lib/raxol/agent/mcp_client.ex`
 - Accessibility system: `packages/raxol_core/lib/raxol/core/accessibility/`
-- Widget components: `lib/raxol/ui/components/`
+- Component implementations: `lib/raxol/ui/components/`
 - Tidewave endpoint: `lib/raxol/endpoint.ex`
 - Effects system: `lib/raxol/effects/`
 - Adaptive system: `lib/raxol/adaptive/`

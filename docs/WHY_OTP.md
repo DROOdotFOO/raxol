@@ -7,8 +7,8 @@ Most UI frameworks implement crash recovery with try/catch, state management wit
 | OTP concept   | TUI equivalent            | What you get                                                     |
 | ------------- | ------------------------- | ---------------------------------------------------------------- |
 | GenServer     | Elm update loop           | `init/1 -> update/2 -> view/1`, managed by the runtime           |
-| Process       | Component                 | Each widget can run in its own process                           |
-| Supervisor    | Crash recovery            | A widget crashes, it restarts. The rest of the UI doesn't notice |
+| Process       | Component                 | Each Component can run in its own process                        |
+| Supervisor    | Crash recovery            | A Component crashes, it restarts. The rest of the UI doesn't notice |
 | Hot code swap | Live reload               | Change `view/1`, save, running app updates. No restart           |
 | `:ssh`        | SSH serving               | Built into Erlang. No dep, no daemon, just `:ssh.daemon`         |
 | `libcluster`  | Node discovery            | Gossip, DNS, Tailscale. Nodes find each other automatically      |
@@ -58,7 +58,7 @@ Nodes are BEAM nodes. Messages are Erlang messages. CRDTs merge with pure functi
 
 ### Three rendering targets
 
-A TEA app is `init/1`, `update/2`, `view/1`. The rendering target is a runtime decision:
+A TEA module is `init/1`, `update/2`, `view/1`. The rendering target is a runtime decision:
 
 - **Terminal**: Lifecycle renders to a screen buffer, diffs, writes ANSI
 - **Browser**: `Raxol.LiveView.TEALive` hosts the same module in Phoenix, bridges events
@@ -68,7 +68,7 @@ One app, three outputs.
 
 ### AI agents
 
-An agent is a TEA app where input comes from LLMs. Same `init/update/view`, same supervision. The framework is ~300 lines because most of it is OTP:
+An agent is a TEA module where input comes from LLMs. Same `init/update/view`, same supervision. The framework is ~300 lines because most of it is OTP:
 
 - `Agent.Session` is a GenServer wrapping Lifecycle
 - `Agent.Team` is a Supervisor

@@ -2,10 +2,10 @@
 
 Raxol provides two levels for building reusable UI:
 
-1. **View helpers** -- Private functions in your TEA app that return element trees. Start here.
-2. **Component behaviour** -- `Raxol.UI.Components.Base.Component` for stateful, reusable widgets with lifecycle hooks.
+1. **View helpers** -- Private functions in your TEA module that return element trees. Start here.
+2. **Component behaviour** -- `Raxol.UI.Components.Base.Component` for stateful, reusable Components with lifecycle hooks.
 
-Most apps only need view helpers. Use the component behaviour when you need internal state, event handling, or want to publish a reusable widget.
+Most apps only need view helpers. Use the Component behaviour when you need internal state, event handling, or want to publish a reusable Component.
 
 ---
 
@@ -86,7 +86,7 @@ View helpers are composable, testable (call them and inspect the return value), 
 
 ## Component Behaviour
 
-For widgets that need their own state and event handling, use the component behaviour. Built-in widgets like `Button`, `TextInput`, `Checkbox`, `Table`, `SelectList`, and `Modal` all use this pattern.
+For Components that need their own state and event handling, use the Component behaviour. Built-in Components like `Button`, `TextInput`, `Checkbox`, `Table`, `SelectList`, and `Modal` all use this pattern.
 
 ### The Behaviour
 
@@ -163,7 +163,7 @@ end
 Components are used via their module's `init/1`, `handle_event/3`, and `render/2`:
 
 ```elixir
-# In your TEA app's init/1:
+# In your TEA module's init/1:
 {:ok, counter_state} = MyApp.Components.Counter.init(%{initial: 10})
 model = %{counter: counter_state}
 
@@ -302,17 +302,17 @@ end
 | Need | Approach |
 |------|----------|
 | Panel, section, formatted output | View helper (private function) |
-| Reusable widget with internal state | Component behaviour |
-| One-off stateful widget in your app | Keep state in your TEA model |
-| Crash-isolated widget | `process_component(MyWidget, props)` |
+| Reusable Component with internal state | Component behaviour |
+| One-off stateful Component in your app | Keep state in your TEA model |
+| Crash-isolated Component | `process_component(MyComponent, props)` |
 
-Start with view helpers. Graduate to the component behaviour when you find yourself passing state and event handlers around manually.
+Start with view helpers. Graduate to the Component behaviour when you find yourself passing state and event handlers around manually.
 
 ---
 
 ## Further Reading
 
-- [Widget Gallery](../getting-started/WIDGET_GALLERY.md) -- All built-in widgets with examples
+- [Component Gallery](../getting-started/COMPONENT_GALLERY.md) -- All built-in Components with examples
 - [Building Apps](../cookbook/BUILDING_APPS.md) -- TEA patterns and recipes
 - [Examples](../../examples/README.md) -- Runnable examples from beginner to advanced
 - Built-in components to study: `lib/raxol/ui/components/input/` and `lib/raxol/ui/components/display/`

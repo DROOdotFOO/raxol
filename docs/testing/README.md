@@ -74,9 +74,9 @@ Run only a specific tag:
 MIX_ENV=test mix test --only integration
 ```
 
-## Testing TEA Apps
+## Testing TEA Modules
 
-TEA apps have pure `init/1`, `update/2`, and `view/1` functions. Test them directly
+TEA modules have pure `init/1`, `update/2`, and `view/1` functions. Test them directly
 without any rendering infrastructure:
 
 ```elixir

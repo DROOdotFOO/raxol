@@ -123,7 +123,7 @@ Raxol.Sensor.Supervisor.start_link(
 )
 ```
 
-## HUD Widgets
+## HUD Components
 
 `Raxol.Sensor.HUD` has pure functions that turn sensor data into terminal cells. Each returns `[{x, y, char, fg, bg, attrs}]` tuples for the rendering pipeline.
 
@@ -193,7 +193,7 @@ Fusion restarts fresh on crash. Feeds are independent of each other.
 
 ## Example
 
-`examples/sensor_hud_demo.exs` has 3 mock sensors wired to gauge, sparkline, and threat widgets:
+`examples/sensor_hud_demo.exs` has 3 mock sensors wired to gauge, sparkline, and threat Components:
 
 ```bash
 mix run examples/sensor_hud_demo.exs

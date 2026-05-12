@@ -1,6 +1,6 @@
 # Agent Framework
 
-An agent is a TEA app where input comes from LLMs and tools instead of a keyboard. Same `init/update/view` loop, same OTP supervision, same crash isolation -- the "user" is an AI model issuing commands and processing results.
+An agent is a TEA module where input comes from LLMs and tools instead of a keyboard. Same `init/update/view` loop, same OTP supervision, same crash isolation -- the "user" is an AI model issuing commands and processing results.
 
 For agent payment capabilities (wallets, spending controls, cross-chain transfers), see [Agentic Commerce](AGENTIC_COMMERCE.md).
 

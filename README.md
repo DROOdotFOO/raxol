@@ -21,7 +21,7 @@ Your application is a single [TEA](https://guide.elm-lang.org/architecture/) mod
 
 The interesting part is the runtime, not the terminal.
 
-Your app gets crash isolation per component, hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured widget trees instead of scraping pixels.
+Your app gets crash isolation per Component, hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured Component trees instead of scraping pixels.
 
 Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define agent-UI wire formats. Raxol is the runtime that renders all four surfaces from one source module.
 
@@ -36,7 +36,7 @@ Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define 
 - **Solver agent surface** lets Riddler's sub-2ms solver consume auto-derived MCP tools to bid on intents
 - **Ops cockpit** runs a BEAM dashboard with sensor fusion on solver health, validator peers, settlement latency
 
-One TEA module. Four surfaces. The solver agent and the human trader interact with the same widget tree through different projections. That's the pitch nothing else in this space can match.
+One TEA module. Four surfaces. The solver agent and the human trader interact with the same Component tree through different projections. That's the pitch nothing else in this space can match.
 
 ### foglet-bbs
 
@@ -134,9 +134,9 @@ Three protocols behind one interface: x402 (Coinbase HTTP 402, same-chain), MPP 
 
 ## Agent surface (MCP)
 
-Every interactive widget automatically exposes MCP tools. Button gives you `click`, TextInput gives you `type_into`/`clear`/`get_value`. A focus lens tracks what's relevant and filters to ~15 tools per interaction, so agents work with a contextual slice of the widget tree rather than a flat dump of every possible action.
+Every interactive Component automatically exposes MCP tools. Button gives you `click`, TextInput gives you `type_into`/`clear`/`get_value`. A focus lens tracks what's relevant and filters to ~15 tools per interaction, so agents work with a contextual slice of the Component tree rather than a flat dump of every possible action.
 
-Where A2UI and AG-UI define how agents talk to UIs at the wire level, raxol generates both the UI and the agent surface from a single widget tree. Same source of truth, two projections.
+Where A2UI and AG-UI define how agents talk to UIs at the wire level, raxol generates both the UI and the agent surface from a single Component tree. Same source of truth, two projections.
 
 ```elixir
 import Raxol.MCP.Test
@@ -155,7 +155,7 @@ session
 
 ## Why OTP matters here
 
-Raxol's interface runtime is built on the BEAM, a VM originally designed for telephone switches: systems that couldn't go down, couldn't lose state, and had to hot-swap code on live calls. Those constraints turn out to be exactly right for multi-surface apps. Crash one widget, the rest stays up. Ship a fix, sessions don't drop. Cluster across regions, the framework already knows how to.
+Raxol's interface runtime is built on the BEAM, a VM originally designed for telephone switches: systems that couldn't go down, couldn't lose state, and had to hot-swap code on live calls. Those constraints turn out to be exactly right for multi-surface apps. Crash one Component, the rest stays up. Ship a fix, sessions don't drop. Cluster across regions, the framework already knows how to.
 
 See [Why OTP](docs/WHY_OTP.md) for the full breakdown, including a comparison against Ratatui, Bubble Tea, Textual, and Ink.
 
@@ -190,7 +190,7 @@ Unix/macOS backend uses a termbox2 NIF; Windows uses a pure Elixir driver (usabl
 
 ## Accessibility
 
-The structured widget tree already carries type, label, and state metadata on every widget. That's semantically richer than a pixel buffer, so screen reader support is a serialization step on top of existing structure rather than a redesign. On the roadmap, tracked, contributions welcome.
+The structured Component tree already carries type, label, and state metadata on every Component. That's semantically richer than a pixel buffer, so screen reader support is a serialization step on top of existing structure rather than a redesign. On the roadmap, tracked, contributions welcome.
 
 ## Documentation
 
@@ -198,7 +198,7 @@ The structured widget tree already carries type, label, and state metadata on ev
 
 - [Quickstart](docs/getting-started/QUICKSTART.md)
 - [Core Concepts](docs/getting-started/CORE_CONCEPTS.md)
-- [Widget Gallery](docs/getting-started/WIDGET_GALLERY.md)
+- [Component Gallery](docs/getting-started/COMPONENT_GALLERY.md)
 
 **Cookbook**
 

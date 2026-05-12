@@ -180,7 +180,7 @@ Buffer.create_blank_buffer(80, 24)
 |> IO.puts()
 ```
 
-**You're embedding rendering inside an existing OTP process.** If you already have a GenServer or LiveView mount where Raxol is just one widget surface among many, you can call buffer ops directly from `handle_call` / `handle_event`. But if the *application* is the UI, wrap it in TEA and use a [`Raxol.LiveView.TEALive`](../cookbook/LIVEVIEW_INTEGRATION.md) mount or [`Raxol.SSH.serve/2`](../cookbook/SSH_DEPLOYMENT.md) instead — you'll get crash isolation, hot reload, and the agent surface for free.
+**You're embedding rendering inside an existing OTP process.** If you already have a GenServer or LiveView mount where Raxol is just one Component surface among many, you can call buffer ops directly from `handle_call` / `handle_event`. But if the *application* is the UI, wrap it in TEA and use a [`Raxol.LiveView.TEALive`](../cookbook/LIVEVIEW_INTEGRATION.md) mount or [`Raxol.SSH.serve/2`](../cookbook/SSH_DEPLOYMENT.md) instead — you'll get crash isolation, hot reload, and the agent surface for free.
 
 Avoid hand-rolling your own `loop(state)` recursive function. That was a pre-Raxol pattern; OTP supervision and TEA's update loop subsume it.
 

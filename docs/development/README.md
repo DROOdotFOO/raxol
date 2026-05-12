@@ -47,7 +47,7 @@ mix raxol.check --quick       # Skip dialyzer
 
 ### Development
 ```bash
-mix raxol.playground   # Component playground (30 widget demos)
+mix raxol.playground   # Component playground (30 demos)
 mix raxol.repl         # Interactive REPL with sandboxing
 iex -S mix            # Interactive shell
 ```

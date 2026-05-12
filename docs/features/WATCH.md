@@ -49,7 +49,7 @@ When a user taps a notification, `ActionHandler` translates the action into a Ra
 
 | Action         | Event                  |
 | -------------- | ---------------------- |
-| Default tap    | Focus the announced widget |
+| Default tap    | Focus the announced Component |
 | "Approve"      | Click the linked button    |
 | "Dismiss"      | Send `:dismiss` message    |
 | Shift+Tab      | "Previous" navigation      |

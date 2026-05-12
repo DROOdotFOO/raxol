@@ -20,7 +20,7 @@ Coding-agent orchestrator. Polls a tracker (Linear, GitHub, Memory), claims elig
 
 ### [MCP](MCP.md)
 
-MCP as a first-class rendering target. Widget tree -> auto-derived tools, focus lens, structured screenshots, pipe-friendly test harness.
+MCP as a first-class rendering target. Component tree -> auto-derived tools, focus lens, structured screenshots, pipe-friendly test harness.
 
 ### [Plugin SDK](PLUGIN_SDK.md)
 

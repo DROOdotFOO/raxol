@@ -1,6 +1,6 @@
-# Widget Gallery
+# Component Gallery
 
-All widgets are available via the View DSL after `use Raxol.Core.Runtime.Application`. Layout containers (`column`, `row`, `box`) use `do` block syntax. Everything else is a plain function call.
+All Components are available via the View DSL after `use Raxol.Core.Runtime.Application`. Layout containers (`column`, `row`, `box`) use `do` block syntax. Everything else is a plain function call.
 
 To see them all running: `mix raxol.playground` (interactive demos across all categories).
 
@@ -8,7 +8,7 @@ To see them all running: `mix raxol.playground` (interactive demos across all ca
 
 ## Layout
 
-Layout widgets arrange children on screen. These are the skeleton of every Raxol UI.
+Layout Components arrange children on screen. These are the skeleton of every Raxol UI.
 
 ### column
 
@@ -106,11 +106,11 @@ Options: `direction` (`:horizontal` or `:vertical`), `ratio` (tuple, default `{1
 
 ## Text & Display
 
-Widgets for showing information to the user. These are all display-only -- no user interaction.
+Components for showing information to the user. These are all display-only -- no user interaction.
 
 ### text
 
-Styled text content. The most basic widget.
+Styled text content. The most basic Component.
 
 ```elixir
 # Style atoms
@@ -281,7 +281,7 @@ Options: `protocol` (`:kitty`, `:iterm2`, `:sixel` -- auto-detected if omitted),
 
 ## Input
 
-Widgets that accept user interaction. These handle keyboard events and fire callbacks.
+Components that accept user interaction. These handle keyboard events and fire callbacks.
 
 ### button
 
@@ -432,7 +432,7 @@ Features: cursor movement, shift-select, undo/redo history, line wrapping.
 
 ## Overlay
 
-Widgets that float above the main content.
+Components that float above the main content.
 
 ### modal
 
@@ -624,7 +624,7 @@ Run any component in its own supervised process for crash isolation. If it crash
 
 ```elixir
 # In your view:
-process_component(MyExpensiveWidget, %{path: "/var/log"})
+process_component(MyExpensiveComponent, %{path: "/var/log"})
 ```
 
 ### focus_ring
@@ -666,7 +666,7 @@ All component modules follow the same pattern: `init/1` -> `handle_event/3` -> `
 
 ## Quick Reference
 
-| Widget        | DSL function      | Component module       | Interactive? |
+| Component     | DSL function      | Module path            | Interactive? |
 | ------------- | ----------------- | ---------------------- | ------------ |
 | column        | `column do`       | --                     | No           |
 | row           | `row do`          | --                     | No           |
@@ -718,6 +718,6 @@ mix run examples/demo.exs
 # Simple starting point
 mix run examples/getting_started/counter.exs
 
-# Full widget showcase
+# Full Component showcase
 mix run examples/apps/showcase_app.exs
 ```

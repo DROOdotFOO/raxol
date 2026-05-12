@@ -1,6 +1,6 @@
 # MCP as a Rendering Target
 
-Most frameworks bolt MCP on as a side channel. Raxol treats it as a first-class rendering target alongside terminal, browser, and SSH. The widget tree is the source of truth; MCP tools and resources are projections of it. See [ADR-0012](../adr/0012-mcp-as-rendering-target.md) for the design rationale.
+Most frameworks bolt MCP on as a side channel. Raxol treats it as a first-class rendering target alongside terminal, browser, and SSH. The Component tree is the source of truth; MCP tools and resources are projections of it. See [ADR-0012](../adr/0012-mcp-as-rendering-target.md) for the design rationale.
 
 ## Quick Start
 
@@ -8,7 +8,7 @@ Most frameworks bolt MCP on as a side channel. Raxol treats it as a first-class 
 mix mcp.server
 ```
 
-This starts an MCP server on stdio, with tools auto-derived from your app's widget tree. Wire it into Claude Code or any MCP client.
+This starts an MCP server on stdio, with tools auto-derived from your app's Component tree. Wire it into Claude Code or any MCP client.
 
 ```elixir
 # In your app
@@ -41,16 +41,16 @@ Each interactive widget implements `Raxol.MCP.ToolProvider`. The protocol expose
 | `Table`      | `select_row`, `sort_by`, `filter`             |
 | `Tree`       | `expand`, `collapse`, `select_node`           |
 
-Add `@mcp_exclude true` to a widget's attrs to suppress tool derivation -- useful for internal scaffolding widgets that shouldn't show up in the agent's action menu.
+Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation -- useful for internal scaffolding Components that shouldn't show up in the agent's action menu.
 
 ## Focus Lens
 
-A widget tree with 50 widgets generates 100+ tools. That's too many for an LLM to reason about. The focus lens filters to ~15 tools per interaction based on:
+A Component tree with 50 Components generates 100+ tools. That's too many for an LLM to reason about. The focus lens filters to ~15 tools per interaction based on:
 
-- Current focused widget
+- Current focused Component
 - Mouse hover (in `:hover` focus mode)
-- Modal stack (modals shadow background widgets)
-- Recently interacted-with widgets
+- Modal stack (modals shadow background Components)
+- Recently interacted-with Components
 
 ```elixir
 {:ok, tools} = Raxol.MCP.FocusLens.relevant_tools(session)
@@ -101,7 +101,7 @@ The harness goes through the same MCP transport as a real client, so what your t
 `Raxol.MCP.ContextTree` assembles a unified view of state from:
 
 - TEA model
-- Widget tree (with focus lens applied)
+- Component tree (with focus lens applied)
 - Active agents (`Raxol.Agent.Registry`)
 - Swarm state (when distributed)
 - Pending notifications
@@ -110,7 +110,7 @@ The tree is streamed as diffs over the MCP connection -- agents track changes in
 
 ## Property Tests
 
-`Raxol.MCP.ToolProvider` is functor-law-tested: tool derivation commutes with widget composition. If you compose two widgets, the derived tools are the same as the tools you'd get by deriving them separately and merging. This catches bugs where a wrapping widget would accidentally hide tools from a child.
+`Raxol.MCP.ToolProvider` is functor-law-tested: tool derivation commutes with Component composition. If you compose two Components, the derived tools are the same as the tools you'd get by deriving them separately and merging. This catches bugs where a wrapping Component would accidentally hide tools from a child.
 
 ## What This Enables
 

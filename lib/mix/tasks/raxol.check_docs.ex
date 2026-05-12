@@ -18,7 +18,7 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
     README.md
     CLAUDE.md
     docs/README.md
-    docs/getting-started/WIDGET_GALLERY.md
+    docs/getting-started/COMPONENT_GALLERY.md
     docs/features/README.md
   ]
 
