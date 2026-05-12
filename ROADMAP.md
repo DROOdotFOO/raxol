@@ -24,7 +24,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 - **Phase 10: MCP Protocol Hardening** -- Full MCP spec coverage (prompts, logging, completion), notifications, circuit breaker, chart ToolProviders, agent bridge, Tidewave removed
 - **Phase 11: MCP Resources + Context Tree** -- ResourceProvider behaviour, ResourceRouter, ContextTree, StructuredScreenshot, model projection diffs, resource subscriptions
 - **Phase 12: MCP Widget + Agent Coverage** -- `@mcp_exclude` attribute, FocusLens hover mode, ToolSynchronizer focus/hover tracking, HoverHighlight effect
-- **Phase 13: MCP Test Harness** -- Pipe-friendly test API (`click`, `type_into`, `assert_widget`, `assert_tool_available`), session lifecycle, functor law property tests (10 properties)
+- **Phase 13: MCP Test Harness** -- Pipe-friendly test API (`click`, `type_into`, `assert_component`, `assert_tool_available`), session lifecycle, functor law property tests (10 properties)
 - **Agent Payments (Phase A)** -- x402/MPP auto-pay, wallets (env + 1Password), spending controls, 5 agent actions
 - **Phase 14B: Xochi Integration** -- Xochi as default agent protocol for cross-chain (cash-positive, tier fees 0.10-0.30%). Riddler solves behind the scenes. Full intent flow: quote -> sign -> execute -> poll. Router prefers Xochi for cross-chain and privacy. 94 tests.
 - **Phase 14C: PXE-Bridge Integration** -- Aztec Private eXecution Environment as settlement target for high-trust privacy tiers. PXE client (JSON-RPC 2.0), schemas, PrivacyTier (Glass Cube, 6 tiers), Router settlement routing. 51 tests.

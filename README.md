@@ -108,7 +108,7 @@ mix run examples/getting_started/counter.exs
 # live "/counter", Raxol.LiveView.TEALive, app: Counter
 
 # MCP (an agent clicks the "+" button)
-# session |> click("+") |> assert_widget("Count: 1")
+# session |> click("+") |> assert_component("Count: 1")
 ```
 
 The GUI-vs-TUI debate is a rendering argument. Whether your app can be consumed by agents at the same time is a runtime problem, and that's what raxol solves.
@@ -147,7 +147,7 @@ session = start_session(MyApp)
 session
 |> type_into("search", "elixir")
 |> click("submit")
-|> assert_widget("results", fn w -> w[:content] != nil end)
+|> assert_component("results", fn c -> c[:content] != nil end)
 |> stop_session()
 ```
 

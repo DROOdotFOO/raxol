@@ -22,16 +22,16 @@ session = Raxol.MCP.Test.start_session(MyApp)
 session
 |> type_into("search", "elixir")
 |> click("submit")
-|> assert_widget("results", fn w -> w[:content] != nil end)
+|> assert_component("results", fn c -> c[:content] != nil end)
 ```
 
-The agent sees a structured widget tree, not a flat screenshot. It picks the action it wants from a typed schema.
+The agent sees a structured Component tree, not a flat screenshot. It picks the action it wants from a typed schema.
 
 ## Tool Derivation
 
-Each interactive widget implements `Raxol.MCP.ToolProvider`. The protocol exposes semantic actions per widget:
+Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exposes semantic actions per Component:
 
-| Widget       | Actions                                       |
+| Component    | Actions                                       |
 | ------------ | --------------------------------------------- |
 | `Button`     | `click`                                       |
 | `TextInput`  | `type_into`, `clear`, `get_value`             |
@@ -89,7 +89,7 @@ test "submit flow" do
   |> type_into("email", "user@example.com")
   |> type_into("password", "secret")
   |> click("submit")
-  |> assert_widget("status", fn w -> w.content == "Logged in" end)
+  |> assert_component("status", fn c -> c.content == "Logged in" end)
   |> stop_session()
 end
 ```

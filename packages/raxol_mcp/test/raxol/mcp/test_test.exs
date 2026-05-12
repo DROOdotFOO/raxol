@@ -224,30 +224,30 @@ defmodule Raxol.MCP.TestTest do
     end
   end
 
-  describe "get_widget/2" do
-    test "finds widget by ID", %{session: session} do
-      widget = Test.get_widget(session, "name_input")
-      assert widget != nil
-      assert widget[:type] == :text_input
-      assert widget[:id] == "name_input"
+  describe "get_component/2" do
+    test "finds Component by ID", %{session: session} do
+      component = Test.get_component(session, "name_input")
+      assert component != nil
+      assert component[:type] == :text_input
+      assert component[:id] == "name_input"
     end
 
-    test "returns nil for missing widget", %{session: session} do
-      assert Test.get_widget(session, "nonexistent") == nil
+    test "returns nil for missing Component", %{session: session} do
+      assert Test.get_component(session, "nonexistent") == nil
     end
 
-    test "finds nested widget", %{session: session} do
-      widget = Test.get_widget(session, "submit_btn")
-      assert widget != nil
-      assert widget[:type] == :button
+    test "finds nested Component", %{session: session} do
+      component = Test.get_component(session, "submit_btn")
+      assert component != nil
+      assert component[:type] == :button
     end
   end
 
-  describe "get_structured_widgets/1" do
-    test "returns widget summaries", %{session: session} do
-      widgets = Test.get_structured_widgets(session)
-      assert is_list(widgets)
-      assert length(widgets) > 0
+  describe "get_structured_components/1" do
+    test "returns Component summaries", %{session: session} do
+      components = Test.get_structured_components(session)
+      assert is_list(components)
+      assert length(components) > 0
     end
   end
 
@@ -358,52 +358,52 @@ defmodule Raxol.MCP.TestTest do
     end
   end
 
-  describe "assert_widget/2,3" do
-    test "passes when widget exists", %{session: session} do
-      assert_widget(session, "name_input")
+  describe "assert_component/2,3" do
+    test "passes when Component exists", %{session: session} do
+      assert_component(session, "name_input")
     end
 
-    test "fails when widget missing", %{session: session} do
-      assert_raise ExUnit.AssertionError, ~r/Expected widget.*to exist/, fn ->
-        assert_widget(session, "nonexistent")
+    test "fails when Component missing", %{session: session} do
+      assert_raise ExUnit.AssertionError, ~r/Expected Component.*to exist/, fn ->
+        assert_component(session, "nonexistent")
       end
     end
 
     test "passes with matching predicate", %{session: session} do
-      assert_widget(session, "name_input", fn w -> w[:type] == :text_input end)
+      assert_component(session, "name_input", fn w -> w[:type] == :text_input end)
     end
 
     test "fails with non-matching predicate", %{session: session} do
       assert_raise ExUnit.AssertionError, ~r/did not match predicate/, fn ->
-        assert_widget(session, "name_input", fn w -> w[:type] == :button end)
+        assert_component(session, "name_input", fn w -> w[:type] == :button end)
       end
     end
 
     test "is pipe-friendly", %{session: session} do
       result =
         session
-        |> assert_widget("name_input")
-        |> assert_widget("submit_btn")
-        |> assert_widget("agree_chk")
+        |> assert_component("name_input")
+        |> assert_component("submit_btn")
+        |> assert_component("agree_chk")
 
       assert %Session{} = result
     end
   end
 
-  describe "refute_widget/2" do
-    test "passes when widget missing", %{session: session} do
-      refute_widget(session, "nonexistent")
+  describe "refute_component/2" do
+    test "passes when Component missing", %{session: session} do
+      refute_component(session, "nonexistent")
     end
 
-    test "fails when widget exists", %{session: session} do
+    test "fails when Component exists", %{session: session} do
       assert_raise ExUnit.AssertionError, ~r/not to exist/, fn ->
-        refute_widget(session, "name_input")
+        refute_component(session, "name_input")
       end
     end
   end
 
   describe "assert_screenshot_matches/2" do
-    test "passes when all expected widgets found", %{session: session} do
+    test "passes when all expected Components found", %{session: session} do
       assert_screenshot_matches(session, [
         %{type: :text_input, id: "name_input"},
         %{type: :button, id: "submit_btn"}
@@ -416,7 +416,7 @@ defmodule Raxol.MCP.TestTest do
       ])
     end
 
-    test "fails when expected widget missing", %{session: session} do
+    test "fails when expected Component missing", %{session: session} do
       assert_raise ExUnit.AssertionError, ~r/not found in tree/, fn ->
         assert_screenshot_matches(session, [
           %{type: :text_input, id: "nonexistent_input"}
@@ -454,7 +454,7 @@ defmodule Raxol.MCP.TestTest do
       session
       |> assert_tool_available("name_input.type_into")
       |> Test.type_into("name_input", "Bob")
-      |> assert_widget("name_input")
+      |> assert_component("name_input")
       |> Test.click("submit_btn")
       |> assert_tool_available("submit_btn.click")
       |> refute_tool_available("disabled_btn.click")

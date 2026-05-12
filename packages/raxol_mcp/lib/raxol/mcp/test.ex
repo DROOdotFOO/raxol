@@ -16,13 +16,13 @@ defmodule Raxol.MCP.Test do
         session
         |> type_into("search_input", "elixir")
         |> click("search_btn")
-        |> assert_widget("results_table", fn w -> w[:content] != nil end)
+        |> assert_component("results_table", fn c -> c[:content] != nil end)
         |> stop_session()
       end
 
   ## How It Works
 
-  `start_session/2` spins up a headless TEA app (via `Raxol.Headless`),
+  `start_session/2` spins up a headless TEA module (via `Raxol.Headless`),
   a per-session `Raxol.MCP.Registry`, and a `ToolSynchronizer` that
   auto-derives MCP tools from the view tree. Interaction helpers like
   `click/2` and `type_into/3` call tools through the registry, exercising
@@ -47,7 +47,7 @@ defmodule Raxol.MCP.Test do
   # -- Session Lifecycle -------------------------------------------------------
 
   @doc """
-  Start a headless MCP test session for the given TEA app module.
+  Start a headless MCP test session for the given TEA module.
 
   Returns a `%Session{}` struct that flows through all pipe-friendly helpers.
 
@@ -117,39 +117,39 @@ defmodule Raxol.MCP.Test do
   # -- Pipe-Friendly Interaction Helpers ---------------------------------------
 
   @doc """
-  Click a button widget by ID.
+  Click a Button Component by ID.
 
-  Calls the `widget_id.click` tool through the MCP registry.
+  Calls the `component_id.click` tool through the MCP registry.
 
       session |> click("submit_btn")
   """
   @spec click(Session.t(), String.t()) :: Session.t()
-  def click(%Session{} = session, widget_id) do
-    call_tool!(session, "#{widget_id}.click", %{})
+  def click(%Session{} = session, component_id) do
+    call_tool!(session, "#{component_id}.click", %{})
   end
 
   @doc """
-  Type text into an input widget by ID.
+  Type text into an input Component by ID.
 
-  Calls the `widget_id.type_into` tool through the MCP registry.
+  Calls the `component_id.type_into` tool through the MCP registry.
 
       session |> type_into("search_input", "elixir")
   """
   @spec type_into(Session.t(), String.t(), String.t()) :: Session.t()
-  def type_into(%Session{} = session, widget_id, text) do
-    call_tool!(session, "#{widget_id}.type_into", %{"text" => text})
+  def type_into(%Session{} = session, component_id, text) do
+    call_tool!(session, "#{component_id}.type_into", %{"text" => text})
   end
 
   @doc """
-  Clear an input widget by ID.
+  Clear an input Component by ID.
 
-  Calls the `widget_id.clear` tool through the MCP registry.
+  Calls the `component_id.clear` tool through the MCP registry.
 
       session |> clear("search_input")
   """
   @spec clear(Session.t(), String.t()) :: Session.t()
-  def clear(%Session{} = session, widget_id) do
-    call_tool!(session, "#{widget_id}.clear", %{})
+  def clear(%Session{} = session, component_id) do
+    call_tool!(session, "#{component_id}.clear", %{})
   end
 
   @doc """
@@ -158,8 +158,8 @@ defmodule Raxol.MCP.Test do
       session |> select("results_table", %{"index" => 0})
   """
   @spec select(Session.t(), String.t(), map()) :: Session.t()
-  def select(%Session{} = session, widget_id, args \\ %{}) do
-    call_tool!(session, "#{widget_id}.select_row", args)
+  def select(%Session{} = session, component_id, args \\ %{}) do
+    call_tool!(session, "#{component_id}.select_row", args)
   end
 
   @doc """
@@ -168,8 +168,8 @@ defmodule Raxol.MCP.Test do
       session |> toggle("remember_me")
   """
   @spec toggle(Session.t(), String.t()) :: Session.t()
-  def toggle(%Session{} = session, widget_id) do
-    call_tool!(session, "#{widget_id}.toggle", %{})
+  def toggle(%Session{} = session, component_id) do
+    call_tool!(session, "#{component_id}.toggle", %{})
   end
 
   @doc """
@@ -177,7 +177,7 @@ defmodule Raxol.MCP.Test do
 
   Returns the session for piping. Raises on failure.
 
-      session |> call_tool("widget_id.action", %{"key" => "value"})
+      session |> call_tool("component_id.action", %{"key" => "value"})
   """
   @spec call_tool(Session.t(), String.t(), map()) :: Session.t()
   def call_tool(%Session{} = session, tool_name, args \\ %{}) do
@@ -188,7 +188,7 @@ defmodule Raxol.MCP.Test do
   Send a key event to the session via Headless.
 
   This bypasses MCP tools -- use for navigation (Tab, Escape, arrow keys)
-  that don't map to widget tools.
+  that don't map to Component tools.
 
       session |> send_key(:tab) |> send_key("q", ctrl: true)
   """
@@ -260,26 +260,26 @@ defmodule Raxol.MCP.Test do
   end
 
   @doc """
-  Find a widget by ID in the current view tree.
+  Find a Component by ID in the current view tree.
 
-  Returns the structured widget summary or `nil` if not found.
+  Returns the structured Component summary or `nil` if not found.
   """
-  @spec get_widget(Session.t(), String.t()) :: map() | nil
-  def get_widget(%Session{} = session, widget_id) do
-    widgets = get_structured_widgets(session)
-    find_widget_by_id(widgets, widget_id)
+  @spec get_component(Session.t(), String.t()) :: map() | nil
+  def get_component(%Session{} = session, component_id) do
+    components = get_structured_components(session)
+    find_component_by_id(components, component_id)
   end
 
   @doc """
-  Get the structured widget tree (all widgets as summaries).
+  Get the structured Component tree (all Components as summaries).
   """
-  @spec get_structured_widgets(Session.t()) :: [StructuredScreenshot.widget_summary()]
-  def get_structured_widgets(%Session{} = session) do
+  @spec get_structured_components(Session.t()) :: [StructuredScreenshot.widget_summary()]
+  def get_structured_components(%Session{} = session) do
     uri = "raxol://session/#{session.id}/widgets"
 
     case Registry.read_resource(session.registry, uri) do
-      {:ok, widgets} when is_list(widgets) ->
-        widgets
+      {:ok, components} when is_list(components) ->
+        components
 
       {:ok, data} when is_map(data) ->
         StructuredScreenshot.from_view_tree(data)
@@ -307,14 +307,14 @@ defmodule Raxol.MCP.Test do
     end
   end
 
-  defp find_widget_by_id(widgets, target_id) when is_list(widgets) do
-    Enum.find_value(widgets, fn widget ->
+  defp find_component_by_id(components, target_id) when is_list(components) do
+    Enum.find_value(components, fn component ->
       cond do
-        to_string(widget[:id]) == to_string(target_id) ->
-          widget
+        to_string(component[:id]) == to_string(target_id) ->
+          component
 
-        is_list(widget[:children]) ->
-          find_widget_by_id(widget[:children], target_id)
+        is_list(component[:children]) ->
+          find_component_by_id(component[:children], target_id)
 
         true ->
           nil
@@ -322,5 +322,5 @@ defmodule Raxol.MCP.Test do
     end)
   end
 
-  defp find_widget_by_id(_, _), do: nil
+  defp find_component_by_id(_, _), do: nil
 end

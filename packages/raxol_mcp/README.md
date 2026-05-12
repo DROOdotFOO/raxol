@@ -17,7 +17,7 @@ MCP (Model Context Protocol) server and client for Elixir. JSON-RPC 2.0 protocol
 - **ToolProvider** -- auto-derive MCP tools from widget trees (15 widgets)
 - **FocusLens** -- attention-aware tool filtering (focused/all/hover modes)
 - **ResourceProvider** -- expose TEA model state as MCP resources
-- **Test Harness** -- pipe-friendly API (`click`, `type_into`, `assert_widget`), functor law property tests
+- **Test Harness** -- pipe-friendly API (`click`, `type_into`, `assert_component`), functor law property tests
 - **Circuit Breaker** -- 3-state ETS machine for flaky tool callbacks
 
 ## Quick Start

@@ -8,7 +8,7 @@ defmodule Raxol.MCP.Test.Assertions do
       session
       |> click("btn")
       |> assert_tool_available("btn.click")
-      |> assert_widget("status", fn w -> w[:content] == "done" end)
+      |> assert_component("status", fn c -> c[:content] == "done" end)
 
   ## Usage
 
@@ -20,35 +20,35 @@ defmodule Raxol.MCP.Test.Assertions do
   alias Raxol.MCP.Test
 
   @doc """
-  Asserts a widget with the given ID exists in the current view tree.
+  Asserts a Component with the given ID exists in the current view tree.
 
-  Optionally takes a predicate function to check widget properties.
+  Optionally takes a predicate function to check Component properties.
 
-      assert_widget(session, "search_input")
-      assert_widget(session, "counter", fn w -> w[:content] == "5" end)
+      assert_component(session, "search_input")
+      assert_component(session, "counter", fn c -> c[:content] == "5" end)
   """
-  defmacro assert_widget(session, widget_id, predicate \\ nil) do
+  defmacro assert_component(session, component_id, predicate \\ nil) do
     predicate_check =
       if predicate do
         quote do
           predicate_fn = unquote(predicate)
 
           ExUnit.Assertions.assert(
-            predicate_fn.(widget),
-            "Widget '#{widget_id}' did not match predicate. Widget: #{inspect(widget)}"
+            predicate_fn.(component),
+            "Component '#{component_id}' did not match predicate. Component: #{inspect(component)}"
           )
         end
       end
 
     quote do
       session = unquote(session)
-      widget_id = unquote(widget_id)
-      widget = Test.get_widget(session, widget_id)
+      component_id = unquote(component_id)
+      component = Test.get_component(session, component_id)
 
       ExUnit.Assertions.assert(
-        widget != nil,
-        "Expected widget '#{widget_id}' to exist in view tree, but it was not found. " <>
-          "Widgets: #{inspect(Test.get_structured_widgets(session) |> collect_ids())}"
+        component != nil,
+        "Expected Component '#{component_id}' to exist in view tree, but it was not found. " <>
+          "Components: #{inspect(Test.get_structured_components(session) |> collect_ids())}"
       )
 
       unquote(predicate_check)
@@ -58,19 +58,19 @@ defmodule Raxol.MCP.Test.Assertions do
   end
 
   @doc """
-  Asserts a widget with the given ID does NOT exist in the view tree.
+  Asserts a Component with the given ID does NOT exist in the view tree.
 
-      refute_widget(session, "deleted_item")
+      refute_component(session, "deleted_item")
   """
-  defmacro refute_widget(session, widget_id) do
+  defmacro refute_component(session, component_id) do
     quote do
       session = unquote(session)
-      widget_id = unquote(widget_id)
-      widget = Test.get_widget(session, widget_id)
+      component_id = unquote(component_id)
+      component = Test.get_component(session, component_id)
 
       ExUnit.Assertions.refute(
-        widget != nil,
-        "Expected widget '#{widget_id}' not to exist, but found: #{inspect(widget)}"
+        component != nil,
+        "Expected Component '#{component_id}' not to exist, but found: #{inspect(component)}"
       )
 
       session
@@ -160,10 +160,10 @@ defmodule Raxol.MCP.Test.Assertions do
   end
 
   @doc """
-  Asserts the structured widget tree matches an expected shape.
+  Asserts the structured Component tree matches an expected shape.
 
   The expected value is a list of maps with `:type` and optionally `:id`.
-  Uses subset matching -- each expected widget must appear somewhere
+  Uses subset matching -- each expected Component must appear somewhere
   in the actual tree.
 
       assert_screenshot_matches(session, [
@@ -174,20 +174,20 @@ defmodule Raxol.MCP.Test.Assertions do
   defmacro assert_screenshot_matches(session, expected) do
     quote do
       session = unquote(session)
-      actual = Test.get_structured_widgets(session)
+      actual = Test.get_structured_components(session)
       expected = unquote(expected)
 
-      for expected_widget <- expected do
+      for expected_component <- expected do
         found =
-          find_matching_widget(
+          find_matching_component(
             actual,
-            expected_widget[:type],
-            expected_widget[:id]
+            expected_component[:type],
+            expected_component[:id]
           )
 
         ExUnit.Assertions.assert(
           found != nil,
-          "Expected widget #{inspect(expected_widget)} not found in tree. " <>
+          "Expected Component #{inspect(expected_component)} not found in tree. " <>
             "Actual: #{inspect(actual)}"
         )
       end
@@ -221,17 +221,17 @@ defmodule Raxol.MCP.Test.Assertions do
   # -- Helper functions (not macros, used inside macro expansions) -------------
 
   @doc false
-  def find_matching_widget(widgets, type, id) when is_list(widgets) do
-    Enum.find_value(widgets, fn widget ->
-      type_matches = type == nil or widget[:type] == type
-      id_matches = id == nil or to_string(widget[:id]) == to_string(id)
+  def find_matching_component(components, type, id) when is_list(components) do
+    Enum.find_value(components, fn component ->
+      type_matches = type == nil or component[:type] == type
+      id_matches = id == nil or to_string(component[:id]) == to_string(id)
 
       cond do
         type_matches and id_matches ->
-          widget
+          component
 
-        is_list(widget[:children]) ->
-          find_matching_widget(widget[:children], type, id)
+        is_list(component[:children]) ->
+          find_matching_component(component[:children], type, id)
 
         true ->
           nil
@@ -239,13 +239,13 @@ defmodule Raxol.MCP.Test.Assertions do
     end)
   end
 
-  def find_matching_widget(_, _, _), do: nil
+  def find_matching_component(_, _, _), do: nil
 
   @doc false
-  def collect_ids(widgets) when is_list(widgets) do
-    Enum.flat_map(widgets, fn widget ->
-      own = if widget[:id], do: [widget[:id]], else: []
-      children = collect_ids(widget[:children] || [])
+  def collect_ids(components) when is_list(components) do
+    Enum.flat_map(components, fn component ->
+      own = if component[:id], do: [component[:id]], else: []
+      children = collect_ids(component[:children] || [])
       own ++ children
     end)
   end
