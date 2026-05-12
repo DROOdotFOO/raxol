@@ -42,6 +42,8 @@ MIX_ENV=test mix compile   # or MIX_ENV=dev mix compile
 | [sensor_hud](sensor_hud_demo.exs) | Sensor feeds, fusion, HUD widget rendering | `mix run examples/sensor_hud_demo.exs` |
 | [adaptive_ui](adaptive_ui_demo.exs) | Behavior tracking, layout recommendations, feedback | `mix run examples/adaptive_ui_demo.exs` |
 | [ssh_counter](ssh/ssh_counter.exs) | SSH serving, per-connection process isolation | `mix run examples/ssh/ssh_counter.exs` |
+| [hot_reload_demo](dev/hot_reload_demo.exs) | Hot code reload, no-restart updates to `view/1` | `iex -S mix run examples/dev/hot_reload_demo.exs` |
+| [process_component_demo](components/process_component_demo.exs) | Per-widget process isolation with `process_component/2` | `mix run examples/components/process_component_demo.exs` |
 | [cluster_demo](swarm/cluster_demo.exs) | CRDTs (LWW, OR-Set), swarm topology, overlay sync | `mix run examples/swarm/cluster_demo.exs` |
 
 ## Interactive Playground

@@ -63,7 +63,7 @@ The audit confirmed existing GenServers (ConfigServer, MetricsCollector) already
 
 1. Create consolidated modules (done)
 2. Add deprecation notices to old modules (done)
-3. Update internal callers (in progress)
+3. Update internal callers (done)
 4. Remove deprecated modules in v3.0 (future)
 
 ## Consequences

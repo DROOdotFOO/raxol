@@ -25,10 +25,12 @@ MIX_ENV=test mix test --max-failures 5
 Each extracted package has its own test suite:
 
 ```bash
-cd packages/raxol_core     && MIX_ENV=test mix test   # ~719 tests
-cd packages/raxol_terminal && MIX_ENV=test mix test   # ~1874 tests
-cd packages/raxol_sensor   && MIX_ENV=test mix test   # ~55 tests
-cd packages/raxol_agent    && MIX_ENV=test mix test   # ~378 tests
+cd packages/raxol_core     && MIX_ENV=test mix test
+cd packages/raxol_terminal && MIX_ENV=test mix test
+cd packages/raxol_sensor   && MIX_ENV=test mix test
+cd packages/raxol_agent    && MIX_ENV=test mix test
+# ... plus raxol_mcp, raxol_payments, raxol_liveview, raxol_plugin,
+# raxol_speech, raxol_telegram, raxol_watch, raxol_acp, raxol_symphony
 ```
 
 ### All quality checks

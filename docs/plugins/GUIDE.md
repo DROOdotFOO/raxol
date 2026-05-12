@@ -1,49 +1,37 @@
 # Plugin Development Guide
 
-How to build Raxol plugins with lifecycle management, event filtering, and process isolation.
+How to build Raxol plugins with lifecycle management, event filtering, and process isolation. The canonical entry point is `use Raxol.Plugin` from the [`raxol_plugin`](../features/PLUGIN_SDK.md) package; the underlying `Raxol.Core.Runtime.Plugins.Plugin` behaviour stays a runtime concern.
 
 ## Quick Start
 
 ```elixir
 defmodule YourApp.Plugins.MyPlugin do
-  @behaviour Raxol.Core.Runtime.Plugins.Plugin
-  use GenServer
-  require Logger
+  use Raxol.Plugin,
+    name: "my_plugin",
+    version: "1.0.0",
+    description: "Brief description"
 
-  # 1. Define manifest
-  def manifest do
-    %{
-      id: "my-plugin",
-      name: "My Plugin",
-      version: "1.0.0",
-      author: "Your Name",
-      module: __MODULE__,
-      description: "Brief description",
-      provides: [:keyboard_input]
-    }
-  end
-
-  # 2. Define state
-  defstruct [:config, :data, :timers]
-
-  # 3. Implement required callbacks
   @impl true
   def init(config) do
-    {:ok, %__MODULE__{config: config}}
+    {:ok, %{config: config}}
   end
 
   @impl true
-  def enable(state), do: {:ok, state}
-
-  @impl true
-  def disable(state), do: {:ok, state}
-
-  @impl true
-  def terminate(_reason, _state), do: :ok
+  def handle_event({:key, %{key: :tab}}, state) do
+    {:ok, state}
+  end
 end
 ```
 
-See [PLUGIN_TEMPLATES.md](PLUGIN_TEMPLATES.md) for complete working examples.
+`use Raxol.Plugin` sets the behaviour, builds the manifest from the macro args, and provides six overridable defaults (`init/1`, `enable/1`, `disable/1`, `terminate/2`, `handle_event/2`, `handle_command/2`). Override only what you need.
+
+For a scaffolded project:
+
+```bash
+mix raxol.gen.plugin my_plugin
+```
+
+See [PLUGIN_TEMPLATES.md](PLUGIN_TEMPLATES.md) for complete working examples, including stateful plugins, event filtering, and timer-driven plugins.
 
 ## Plugin Lifecycle
 
