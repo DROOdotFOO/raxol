@@ -21,7 +21,9 @@ Your application is a single [TEA](https://guide.elm-lang.org/architecture/) mod
 
 The interesting part is the runtime, not the terminal. Your app gets crash isolation per component, hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured widget trees instead of scraping pixels. Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define agent-UI wire formats. Raxol is the runtime that renders all four surfaces from one source module.
 
-## Built with Raxol: Xochi
+## Built with Raxol
+
+### Xochi
 
 [Xochi](https://xochi.fi) is a private cross-chain DEX: intent-based swaps across 5 chains, sub-3s settlement, stealth addresses by default, ZKSAR compliance proofs. Its entire trading surface is raxol:
 
@@ -31,6 +33,16 @@ The interesting part is the runtime, not the terminal. Your app gets crash isola
 - **Ops cockpit** runs a BEAM dashboard with sensor fusion on solver health, validator peers, settlement latency
 
 One TEA module. Four surfaces. The solver agent and the human trader interact with the same widget tree through different projections. That's the pitch nothing else in this space can match.
+
+### foglet-bbs
+
+[foglet-bbs](https://github.com/bmanturner/foglet-bbs) is a retro-inspired bulletin board system, SSH-only, by [Brendan Turner](https://foglet.io). Drop in:
+
+```bash
+ssh bbs.foglet.io
+```
+
+Marketing site at [bbs.foglet.io](https://bbs.foglet.io). Brendan stress-tested raxol's SSH path early on with detailed bug reports; foglet-bbs is what shook out the other end.
 
 ## Symphony: manage work, not agents
 
