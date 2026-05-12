@@ -4,7 +4,7 @@
 
 Accepted -- Revised
 
-> **Note:** The code examples below reflect the original design proposal. The implemented API uses `Raxol.UI.Components.Base.Component` -- see [Custom Components](../guides/custom_components.md) for current usage.
+> **Note:** The code examples below reflect the original design proposal. The implemented API uses `Raxol.UI.Components.Base.Component` -- see [Custom Components](../cookbook/CUSTOM_COMPONENTS.md) for current usage.
 
 ## Context
 

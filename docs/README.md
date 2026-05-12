@@ -40,7 +40,7 @@ Complete guide to Raxol -- multi-surface application runtime for Elixir.
 
 ## Guides
 
-- [Custom Components](guides/custom_components.md)
+- [Custom Components](cookbook/CUSTOM_COMPONENTS.md)
 - [Migration from DIY](getting-started/MIGRATION_FROM_DIY.md)
 
 ## Reference
@@ -52,7 +52,7 @@ Complete guide to Raxol -- multi-surface application runtime for Elixir.
 - [Benchmarks](bench/)
 - [Development](development/README.md) -- setup, commands, troubleshooting
 - [Testing](testing/README.md) -- running tests, helpers, property-based testing
-- [Configuration](configuration/CONFIG.md) -- TOML config, environment overrides
+- [Configuration](cookbook/CONFIG.md) -- TOML config, environment overrides
 
 ## Examples
 

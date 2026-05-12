@@ -59,7 +59,7 @@ There is no UI rendering callback on the `Raxol.Core.Runtime.Plugins.Plugin` beh
 1. **Emit commands or events** that a host app or widget consumes (`handle_command/3` returns the third element as the result).
 2. **Run a companion `Raxol.UI.Components.Base.Component`** in the app and let the plugin update its model via the command/event channel.
 
-If you need to embed visible widgets, build them as components -- see [Custom Components](../guides/custom_components.md).
+If you need to embed visible widgets, build them as components -- see [Custom Components](../cookbook/CUSTOM_COMPONENTS.md).
 
 ## Background Task Plugin Template
 

@@ -155,6 +155,4 @@ end
 
 ## References
 
-- [Functional Programming Migration Guide](../guides/FUNCTIONAL_PROGRAMMING_MIGRATION.md)
-- [Error Handling Style Guide](../ERROR_HANDLING_GUIDE.md)
 - Performance benchmarks: `test/performance/`
