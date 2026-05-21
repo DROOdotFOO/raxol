@@ -51,8 +51,7 @@ defmodule Raxol.Watch.Formatter do
   def format_model_summary(title \\ @default_title, projections) do
     body =
       projections
-      |> Enum.map(fn {label, value} -> "#{label}: #{value}" end)
-      |> Enum.join("\n")
+      |> Enum.map_join("\n", fn {label, value} -> "#{label}: #{value}" end)
       |> truncate()
 
     %{

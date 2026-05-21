@@ -1,7 +1,7 @@
 defmodule Raxol.Watch.NotifierTest do
   use ExUnit.Case
 
-  alias Raxol.Watch.{DeviceRegistry, Notifier, Formatter, Push.Noop}
+  alias Raxol.Watch.{DeviceRegistry, Formatter, Notifier, Push.Noop}
 
   setup do
     start_supervised!(Noop)

@@ -12,9 +12,10 @@ defmodule Raxol.Watch.Push.Noop do
   require Logger
 
   @mix_env if Code.ensure_loaded?(Mix), do: Mix.env(), else: :prod
+  @warn_on_start @mix_env not in [:test, :dev]
 
   def start_link(_opts \\ []) do
-    if @mix_env not in [:test, :dev] do
+    if @warn_on_start do
       Logger.warning("Raxol.Watch.Push.Noop is running outside test/dev -- push notifications will be silently discarded. Configure a real backend (APNS/FCM) for production.")
     end
 

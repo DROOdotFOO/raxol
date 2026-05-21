@@ -133,9 +133,9 @@ defmodule Raxol.Watch.Notifier do
   defp do_push_all(notification, state) do
     devices =
       DeviceRegistry.list_devices()
-      |> Enum.reject(fn {_, _, prefs} -> prefs[:muted] end)
       |> Enum.reject(fn {_, _, prefs} ->
-        prefs[:high_priority_only] and notification.priority != :high
+        prefs[:muted] or
+          (prefs[:high_priority_only] and notification.priority != :high)
       end)
 
     backend = state.push_backend
