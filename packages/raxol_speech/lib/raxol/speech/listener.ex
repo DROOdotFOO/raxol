@@ -103,6 +103,12 @@ defmodule Raxol.Speech.Listener do
         port = Port.open({:spawn_executable, cmd}, [:binary, :exit_status, args: args])
         timer = Process.send_after(self(), :max_duration_reached, state.max_duration_ms)
 
+        :telemetry.execute(
+          [:raxol_speech, :listener, :recording, :started],
+          %{system_time: System.system_time()},
+          %{max_duration_ms: state.max_duration_ms, max_bytes: state.max_bytes}
+        )
+
         {:reply, :ok,
          %{state | port: port, audio_chunks: [], audio_size: 0, duration_timer: timer}}
     end
@@ -117,11 +123,19 @@ defmodule Raxol.Speech.Listener do
     close_port(state.port)
 
     audio = state.audio_chunks |> Enum.reverse() |> IO.iodata_to_binary()
+    audio_bytes = byte_size(audio)
+
+    :telemetry.execute(
+      [:raxol_speech, :listener, :recording, :stopped],
+      %{audio_bytes: audio_bytes},
+      %{reason: :explicit}
+    )
+
     state = %{state | port: nil, audio_chunks: [], audio_size: 0, duration_timer: nil}
 
     # Transcribe
     result =
-      if byte_size(audio) > 0 do
+      if audio_bytes > 0 do
         case Recognizer.recognize(audio) do
           {:ok, text} ->
             maybe_dispatch(text, state.dispatcher_pid)
@@ -153,6 +167,12 @@ defmodule Raxol.Speech.Listener do
         "Listener: max audio buffer size (#{state.max_bytes} bytes) reached, stopping recording"
       )
 
+      :telemetry.execute(
+        [:raxol_speech, :listener, :recording, :stopped],
+        %{audio_bytes: new_size},
+        %{reason: :max_bytes_exceeded, max_bytes: state.max_bytes}
+      )
+
       close_port(state.port)
       {:noreply, %{state | port: nil}}
     else
@@ -173,6 +193,12 @@ defmodule Raxol.Speech.Listener do
 
     Logger.warning(
       "Listener: max recording duration (#{state.max_duration_ms}ms) reached, stopping recording"
+    )
+
+    :telemetry.execute(
+      [:raxol_speech, :listener, :recording, :stopped],
+      %{audio_bytes: state.audio_size},
+      %{reason: :max_duration_reached, max_duration_ms: state.max_duration_ms}
     )
 
     close_port(state.port)

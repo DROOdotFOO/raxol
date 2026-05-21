@@ -68,7 +68,36 @@ def stop, do: :ok
 def speaking?, do: false
 ```
 
-Use `Raxol.Speech.TTS.Noop` for testing.
+Use `Raxol.Speech.TTS.Noop` for testing. `Raxol.Speech.TTS.Sanitize.strip_control_chars/1` is exposed so custom backends can share the same input contract (C0/C1 control chars stripped, tabs/newlines preserved).
+
+### Telemetry
+
+Attach to these events to observe TTS and STT lifecycle:
+
+| Event | Measurements | Metadata |
+|-------|--------------|----------|
+| `[:raxol_speech, :tts, :speak, :start]` | `system_time` | `source, backend, byte_size, priority` |
+| `[:raxol_speech, :tts, :speak, :stop]` | `duration` | `source, backend, byte_size, priority, result` |
+| `[:raxol_speech, :tts, :speak, :exception]` | `duration` | `kind, reason, stacktrace, ...` |
+| `[:raxol_speech, :tts, :stopped]` | `%{}` | `source` |
+| `[:raxol_speech, :tts, :interrupted]` | `%{}` | `priority, backend` |
+| `[:raxol_speech, :recognize, :start]` | `system_time` | `audio_bytes` |
+| `[:raxol_speech, :recognize, :stop]` | `duration` | `audio_bytes, success, text` (or `error`) |
+| `[:raxol_speech, :listener, :recording, :started]` | `system_time` | `max_duration_ms, max_bytes` |
+| `[:raxol_speech, :listener, :recording, :stopped]` | `audio_bytes` | `reason: :explicit \| :max_duration_reached \| :max_bytes_exceeded` |
+
+`source` on `:tts.speak` is `:api` for direct `Speaker.speak/1` calls, `:announcement` for accessibility-driven speech.
+
+### Live Test
+
+`examples/speech_demo.exs` exercises TTS + STT on the dev machine. Requires `say` (macOS, built-in) or `espeak`/`espeak-ng` (Linux), plus `sox` on PATH for STT.
+
+```bash
+cd packages/raxol_speech
+mix run --no-halt examples/speech_demo.exs           # TTS + 3s recording + transcription
+SKIP_STT=1 mix run --no-halt examples/speech_demo.exs # TTS only
+STT_DURATION_MS=5000 mix run --no-halt examples/speech_demo.exs
+```
 
 See [main docs](../../README.md) for the full Raxol framework.
 

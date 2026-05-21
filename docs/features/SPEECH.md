@@ -5,10 +5,11 @@
 ## TTS
 
 ```elixir
-Raxol.Speech.Speaker.say("Document saved")
+Raxol.Speech.Speaker.speak("Document saved")
+Raxol.Speech.Speaker.stop_speaking()
 ```
 
-The `Speaker` GenServer subscribes to Accessibility announcements at startup. Anything the framework announces (focus changes, validation errors, status updates) gets spoken automatically if `Speaker` is in the supervision tree.
+The `Speaker` GenServer subscribes to Accessibility announcements at startup. Anything the framework announces (focus changes, validation errors, status updates) gets spoken automatically if `Speaker` is in the supervision tree. High-priority announcements interrupt current speech.
 
 Backends behind `Raxol.Speech.TTS.Backend`:
 
@@ -25,29 +26,37 @@ config :raxol_speech,
 
 ## STT
 
+Push-to-talk: `start_recording/0` opens the mic, `stop_recording/0` closes it and runs transcription.
+
 ```elixir
-Raxol.Speech.Listener.listen(max_duration_ms: 5000)
+:ok = Raxol.Speech.Listener.start_recording()
 # ... user speaks ...
-# Returns {:ok, "open file readme"} when transcription completes
+{:ok, "open file readme"} = Raxol.Speech.Listener.stop_recording()
 ```
 
-`Listener` captures from the mic via a `sox` Port, bounded by `max_duration` and `max_bytes`. `Recognizer` runs Whisper through Bumblebee in a background Task. The two are wired `:rest_for_one` -- if Recognizer crashes, Listener restarts with it.
+`Listener` captures from the mic via a `sox` Port, bounded by `max_duration_ms` and `max_bytes` (configured at `start_link/1` time, defaults 5 min / 10 MB). `Recognizer` runs Whisper through Bumblebee in a background Task. The two are wired `:rest_for_one` -- if Recognizer crashes, Listener restarts with it.
 
-Optional deps: `bumblebee`, `nx`, `exla`. Without them, STT is a no-op.
+Optional deps: `bumblebee`, `nx`, `exla`. Without them, `Recognizer.recognize/1` returns `{:error, :bumblebee_not_available}`.
 
 ## Voice Commands
 
-`InputAdapter` maps transcribed phrases to Raxol events. 21 default commands ship out of the box:
+`InputAdapter` maps transcribed phrases to Raxol events. 20 default phrases ship out of the box (see `InputAdapter.default_commands/0` for the full list):
 
-| Phrase         | Event                            |
-| -------------- | -------------------------------- |
-| "tab"          | Tab key                          |
-| "enter"        | Enter key                        |
-| "escape"       | Escape key                       |
-| "up", "down"   | Arrow keys                       |
-| "page up"      | Page Up                          |
-| "paste"        | Paste from clipboard             |
-| "type X"       | Paste `X` as text                |
+| Phrase                         | Event                                |
+| ------------------------------ | ------------------------------------ |
+| "tab" / "next"                 | Tab                                  |
+| "previous"                     | Shift+Tab                            |
+| "enter"                        | Enter                                |
+| "escape"                       | Escape                               |
+| "backspace"                    | Backspace                            |
+| "up" / "down" / "left" / "right" | Arrow keys                         |
+| "page up" / "page down"        | Page Up / Page Down                  |
+| "scroll up" / "scroll down"    | `k` / `j`                            |
+| "space"                        | Space char                           |
+| "yes" / "no" / "help"          | `y` / `n` / `h`                      |
+| "quit" / "exit"                | `q`                                  |
+
+Any phrase that is not a recognized command falls through to a `:paste` event with the original text as payload -- so dictating prose injects it verbatim.
 
 Custom commands extend the map:
 

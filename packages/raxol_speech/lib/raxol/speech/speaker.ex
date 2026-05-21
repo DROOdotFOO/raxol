@@ -55,28 +55,36 @@ defmodule Raxol.Speech.Speaker do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:speak, text}, _from, state) do
-    result = state.tts_backend.speak(text)
+    result = do_speak(state.tts_backend, text, %{source: :api})
     {:reply, result, state}
   end
 
   def handle_manager_call(:stop, _from, state) do
     state.tts_backend.stop()
+    :telemetry.execute([:raxol_speech, :tts, :stopped], %{}, %{source: :api})
     {:reply, :ok, state}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:announcement_added, _ref, message}, state) when is_binary(message) do
+  def handle_manager_info({:announcement_added, _ref, %{message: message, priority: :high}}, state) do
     if should_speak?() do
-      state.tts_backend.speak(message)
+      state.tts_backend.stop()
+
+      :telemetry.execute(
+        [:raxol_speech, :tts, :interrupted],
+        %{},
+        %{priority: :high, backend: state.tts_backend}
+      )
+
+      do_speak(state.tts_backend, message, %{source: :announcement, priority: :high})
     end
 
     {:noreply, state}
   end
 
-  def handle_manager_info({:announcement_added, _ref, %{message: message, priority: :high}}, state) do
+  def handle_manager_info({:announcement_added, _ref, %{message: message, priority: priority}}, state) do
     if should_speak?() do
-      state.tts_backend.stop()
-      state.tts_backend.speak(message)
+      do_speak(state.tts_backend, message, %{source: :announcement, priority: priority})
     end
 
     {:noreply, state}
@@ -84,13 +92,22 @@ defmodule Raxol.Speech.Speaker do
 
   def handle_manager_info({:announcement_added, _ref, %{message: message}}, state) do
     if should_speak?() do
-      state.tts_backend.speak(message)
+      do_speak(state.tts_backend, message, %{source: :announcement, priority: :normal})
     end
 
     {:noreply, state}
   end
 
   def handle_manager_info(_, state), do: {:noreply, state}
+
+  defp do_speak(backend, text, base_meta) do
+    meta = Map.merge(base_meta, %{backend: backend, byte_size: byte_size(text)})
+
+    :telemetry.span([:raxol_speech, :tts, :speak], meta, fn ->
+      result = backend.speak(text)
+      {result, Map.put(meta, :result, result)}
+    end)
+  end
 
   # -- Private --
 

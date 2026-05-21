@@ -83,20 +83,26 @@ defmodule Raxol.Speech.Recognizer do
   # -- Private --
 
   defp do_transcribe(serving, audio_data) do
-    start = System.monotonic_time(:millisecond)
+    meta = %{audio_bytes: byte_size(audio_data)}
 
-    result =
-      try do
-        output = Nx.Serving.run(serving, {:binary, audio_data})
-        text = extract_text(output)
-        {:ok, text}
-      rescue
-        e -> {:error, Exception.message(e)}
-      end
+    :telemetry.span([:raxol_speech, :recognize], meta, fn ->
+      result =
+        try do
+          output = Nx.Serving.run(serving, {:binary, audio_data})
+          text = extract_text(output)
+          {:ok, text}
+        rescue
+          e -> {:error, Exception.message(e)}
+        end
 
-    duration = System.monotonic_time(:millisecond) - start
-    emit_telemetry(result, duration)
-    result
+      stop_meta =
+        case result do
+          {:ok, text} -> Map.merge(meta, %{success: true, text: text})
+          {:error, reason} -> Map.merge(meta, %{success: false, error: reason})
+        end
+
+      {result, stop_meta}
+    end)
   end
 
   defp bumblebee_available? do
@@ -142,20 +148,4 @@ defmodule Raxol.Speech.Recognizer do
   defp extract_text(%{chunks: [%{text: text} | _]}), do: String.trim(text)
   defp extract_text(%{results: [%{text: text} | _]}), do: String.trim(text)
   defp extract_text(_), do: ""
-
-  defp emit_telemetry(result, duration_ms) do
-    if Code.ensure_loaded?(:telemetry) do
-      text =
-        case result do
-          {:ok, t} -> t
-          _ -> ""
-        end
-
-      :telemetry.execute(
-        [:raxol, :speech, :recognized],
-        %{duration_ms: duration_ms},
-        %{text: text, success: match?({:ok, _}, result)}
-      )
-    end
-  end
 end

@@ -24,7 +24,7 @@ defmodule Raxol.Speech.TTS.OsSay do
     if byte_size(text) > @max_text_length do
       {:error, :text_too_long}
     else
-      GenServer.call(__MODULE__, {:speak, sanitize_text(text)})
+      GenServer.call(__MODULE__, {:speak, Raxol.Speech.TTS.Sanitize.strip_control_chars(text)})
     end
   end
 
@@ -99,11 +99,6 @@ defmodule Raxol.Speech.TTS.OsSay do
     end
 
     %{state | port: nil}
-  end
-
-  # Strip control characters (keep printable text, newlines, tabs)
-  defp sanitize_text(text) do
-    String.replace(text, ~r/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/, "")
   end
 
   defp detect_command do
