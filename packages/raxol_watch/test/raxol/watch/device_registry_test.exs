@@ -66,4 +66,22 @@ defmodule Raxol.Watch.DeviceRegistryTest do
       assert length(DeviceRegistry.list_devices(:fcm)) == 1
     end
   end
+
+  describe "clear_all/0" do
+    test "removes every registered device" do
+      DeviceRegistry.register("a", :apns)
+      DeviceRegistry.register("b", :fcm)
+      assert DeviceRegistry.device_count() == 2
+
+      assert :ok = DeviceRegistry.clear_all()
+
+      assert DeviceRegistry.device_count() == 0
+      assert DeviceRegistry.list_devices() == []
+    end
+
+    test "is a no-op on an empty registry" do
+      assert :ok = DeviceRegistry.clear_all()
+      assert DeviceRegistry.device_count() == 0
+    end
+  end
 end

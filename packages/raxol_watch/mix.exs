@@ -1,7 +1,7 @@
 defmodule RaxolWatch.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
@@ -35,6 +35,7 @@ defmodule RaxolWatch.MixProject do
   defp deps do
     [
       raxol_dep(:raxol_core, "~> 2.4", "../raxol_core"),
+      {:telemetry, "~> 1.3"},
 
       # Push notifications (optional -- only needed with real APNS/FCM)
       {:pigeon, "~> 2.0", optional: true},
@@ -43,7 +44,8 @@ defmodule RaxolWatch.MixProject do
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:stream_data, "~> 1.1", only: [:dev, :test]}
     ]
   end
 

@@ -17,11 +17,12 @@ children = [
 Register a device:
 
 ```elixir
-Raxol.Watch.DeviceRegistry.register("user-123", %{
-  platform: :apns,
-  token: "device-token-here"
-})
+# register(device_token, :apns | :fcm, opts)
+Raxol.Watch.DeviceRegistry.register("device-token-here", :apns)
+Raxol.Watch.DeviceRegistry.register("wear-os-token", :fcm, high_priority_only: true)
 ```
+
+Supported opts: `muted: false`, `high_priority_only: false`.
 
 When the app announces something via Accessibility, registered devices get a push.
 
@@ -45,16 +46,28 @@ Parallel send across devices via `Task.async_stream`. Failures log per-device bu
 
 ## Tap Actions
 
-When a user taps a notification, `ActionHandler` translates the action into a Raxol event:
+When a user taps a notification, `ActionHandler.handle_action/2` translates the action ID into a `Raxol.Core.Events.Event`. Default mapping:
 
-| Action         | Event                  |
-| -------------- | ---------------------- |
-| Default tap    | Focus the announced Component |
-| "Approve"      | Click the linked button    |
-| "Dismiss"      | Send `:dismiss` message    |
-| Shift+Tab      | "Previous" navigation      |
+| Action ID     | Event                                |
+| ------------- | ------------------------------------ |
+| `details`     | `:key` with `key: :enter`            |
+| `acknowledge` | `:key` with `key: :enter`            |
+| `pause`       | `:key` with `char: " "` (space)      |
+| `quit`        | `:key` with `char: "q"`              |
+| `next`        | `:key` with `key: :tab`              |
+| `previous`    | `:key` with `key: :tab, modifiers: [:shift]` |
+| `dismiss`     | `nil` (no event emitted)             |
 
-Actions are declared per notification via accessibility metadata.
+Pass `action_map:` to merge in custom bindings:
+
+```elixir
+Raxol.Watch.ActionHandler.handle_action("snooze",
+  action_map: %{"snooze" => {:key, %{key: :char, char: "s"}}}
+)
+```
+
+`Formatter` attaches `details` + `dismiss` to normal notifications, and
+`acknowledge` + `details` + `dismiss` to high-priority ones.
 
 ## Formatting
 

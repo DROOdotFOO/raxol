@@ -1,51 +1,73 @@
 defmodule Raxol.Watch.Push.FCM do
   @moduledoc """
-  Firebase Cloud Messaging backend via Pigeon.
+  Firebase Cloud Messaging backend via Pigeon 2.x.
 
-  Converts Raxol notification payloads to FCM format and delivers
-  them via `Pigeon.FCM`. Requires Pigeon to be configured with
-  valid FCM credentials.
+  Pigeon 2.x requires consumers to define an FCM dispatcher module
+  (`use Pigeon.Dispatcher, otp_app: :your_app`) and a Goth worker for
+  service-account auth. This backend forwards to a configured
+  dispatcher via `Pigeon.push/3`.
+
+  ## Configuration
+
+      config :raxol_watch, Raxol.Watch.Push.FCM,
+        dispatcher: MyApp.FCM
   """
 
   @behaviour Raxol.Watch.Push.Backend
 
-  @compile {:no_warn_undefined, [Pigeon.FCM, Pigeon.FCM.Notification]}
+  @compile {:no_warn_undefined, [Pigeon, Pigeon.FCM.Notification]}
 
   @impl true
   def push(device_token, notification) do
-    if Code.ensure_loaded?(Pigeon.FCM) do
+    with {:ok, dispatcher} <- fetch_dispatcher(),
+         true <- pigeon_loaded?() do
       fcm_notification = build_notification(device_token, notification)
 
-      case Pigeon.FCM.push(fcm_notification) do
+      case Pigeon.push(dispatcher, fcm_notification) do
         %{response: :success} -> :ok
         %{response: reason} -> {:error, reason}
         other -> {:error, other}
       end
     else
-      {:error, :pigeon_not_available}
+      false -> {:error, :pigeon_not_available}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp pigeon_loaded? do
+    Code.ensure_loaded?(Pigeon) and Code.ensure_loaded?(Pigeon.FCM.Notification)
+  end
+
+  defp fetch_dispatcher do
+    case :raxol_watch
+         |> Application.get_env(__MODULE__, [])
+         |> Keyword.get(:dispatcher) do
+      nil -> {:error, :no_fcm_dispatcher_configured}
+      dispatcher -> {:ok, dispatcher}
     end
   end
 
   defp build_notification(device_token, %{title: title, body: body} = notif) do
-    priority = if notif[:priority] == :high, do: "high", else: "normal"
+    high? = notif[:priority] == :high
 
     actions =
       notif
       |> Map.get(:actions, [])
       |> Enum.map(fn %{id: id, label: label} -> %{"id" => id, "label" => label} end)
 
-    Pigeon.FCM.Notification.new(device_token, %{
-      "notification" => %{"title" => title, "body" => body},
-      "android" => %{
-        "priority" => priority,
+    %Pigeon.FCM.Notification{
+      target: {:token, device_token},
+      notification: %{"title" => title, "body" => body},
+      android: %{
+        "priority" => if(high?, do: "HIGH", else: "NORMAL"),
         "notification" => %{
           "click_action" => Map.get(notif, :category, "raxol_alert")
         }
       },
-      "data" => %{
+      data: %{
         "category" => Map.get(notif, :category, "raxol_alert"),
         "actions" => Jason.encode!(actions)
       }
-    })
+    }
   end
 end

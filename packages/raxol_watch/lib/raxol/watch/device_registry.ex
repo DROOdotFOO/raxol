@@ -32,10 +32,17 @@ defmodule Raxol.Watch.DeviceRegistry do
     GenServer.call(__MODULE__, {:register, device_token, platform, opts})
   end
 
-  @doc "Unregisters a device."
-  @spec unregister(String.t()) :: :ok
-  def unregister(device_token) do
-    GenServer.call(__MODULE__, {:unregister, device_token})
+  @doc """
+  Unregisters a device.
+
+  The optional `reason` is forwarded to the
+  `[:raxol_watch, :device, :unregistered]` telemetry event. Use
+  `:delivery_failed` when removing a token after APNS/FCM reports it as
+  invalid; the default `:explicit` covers user-initiated removal (logout).
+  """
+  @spec unregister(String.t(), atom()) :: :ok
+  def unregister(device_token, reason \\ :explicit) when is_atom(reason) do
+    GenServer.call(__MODULE__, {:unregister, device_token, reason})
   end
 
   @doc "Lists all registered devices."
@@ -54,6 +61,15 @@ defmodule Raxol.Watch.DeviceRegistry do
   @spec device_count() :: non_neg_integer()
   def device_count do
     :ets.info(@table, :size)
+  end
+
+  @doc """
+  Removes every registered device. Useful on user logout, or to reset state
+  between tests.
+  """
+  @spec clear_all() :: :ok
+  def clear_all do
+    GenServer.call(__MODULE__, :clear_all)
   end
 
   # -- BaseManager --
@@ -79,11 +95,38 @@ defmodule Raxol.Watch.DeviceRegistry do
     }
 
     :ets.insert(@table, {device_token, platform, prefs})
+
+    :telemetry.execute(
+      [:raxol_watch, :device, :registered],
+      %{system_time: System.system_time()},
+      %{token: device_token, platform: platform, prefs: prefs}
+    )
+
     {:reply, :ok, state}
   end
 
-  def handle_manager_call({:unregister, device_token}, _from, state) do
+  def handle_manager_call({:unregister, device_token, reason}, _from, state) do
     :ets.delete(@table, device_token)
+
+    :telemetry.execute(
+      [:raxol_watch, :device, :unregistered],
+      %{system_time: System.system_time()},
+      %{token: device_token, reason: reason}
+    )
+
+    {:reply, :ok, state}
+  end
+
+  def handle_manager_call(:clear_all, _from, state) do
+    count = :ets.info(@table, :size)
+    :ets.delete_all_objects(@table)
+
+    :telemetry.execute(
+      [:raxol_watch, :device, :cleared],
+      %{count: count},
+      %{}
+    )
+
     {:reply, :ok, state}
   end
 end

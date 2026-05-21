@@ -17,6 +17,20 @@ defmodule Raxol.Watch.Notifier do
 
   @debounce_ms 1000
 
+  # Permanent delivery failures: the device token should be removed from
+  # the registry so we don't keep paying for failing pushes. Transient
+  # failures (rate limit, server error) leave the device registered.
+  @permanent_failure_reasons MapSet.new([
+                               # APNS
+                               :bad_device_token,
+                               :device_token_not_for_topic,
+                               :unregistered,
+                               :expired_token,
+                               # FCM
+                               :invalid_argument,
+                               :sender_id_mismatch
+                             ])
+
   defstruct [
     :push_backend,
     :subscription_ref,
@@ -72,21 +86,15 @@ defmodule Raxol.Watch.Notifier do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:announcement_added, _ref, message}, state) when is_binary(message) do
-    notification = Formatter.format_announcement(message)
-    {:noreply, debounce_push(notification, state)}
+  def handle_manager_info({:announcement_added, _ref, %{message: message, priority: :high}}, state) do
+    notification = Formatter.format_announcement(message, :high)
+    do_push_all(notification, state)
+    {:noreply, %{state | pending: nil}}
   end
 
   def handle_manager_info({:announcement_added, _ref, %{message: message, priority: priority}}, state) do
     notification = Formatter.format_announcement(message, priority)
-
-    if priority == :high do
-      # High priority: push immediately, skip debounce
-      do_push_all(notification, state)
-      {:noreply, %{state | pending: nil}}
-    else
-      {:noreply, debounce_push(notification, state)}
-    end
+    {:noreply, debounce_push(notification, state)}
   end
 
   def handle_manager_info({:announcement_added, _ref, %{message: message}}, state) do
@@ -108,7 +116,16 @@ defmodule Raxol.Watch.Notifier do
   # -- Private --
 
   defp debounce_push(notification, state) do
-    if state.debounce_timer, do: Process.cancel_timer(state.debounce_timer)
+    if state.debounce_timer do
+      Process.cancel_timer(state.debounce_timer)
+
+      :telemetry.execute(
+        [:raxol_watch, :notifier, :coalesced],
+        %{count: 1},
+        %{priority: notification.priority}
+      )
+    end
+
     timer = Process.send_after(self(), :flush_pending, @debounce_ms)
     %{state | pending: notification, debounce_timer: timer}
   end
@@ -126,14 +143,7 @@ defmodule Raxol.Watch.Notifier do
     devices
     |> Task.async_stream(
       fn {token, platform, _prefs} ->
-        case backend.push(token, notification) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("Push failed for #{platform} device #{String.slice(token, 0..7)}...: #{inspect(reason)}")
-            {:error, reason}
-        end
+        push_one(backend, token, platform, notification)
       end,
       max_concurrency: 10,
       timeout: 10_000,
@@ -147,4 +157,36 @@ defmodule Raxol.Watch.Notifier do
         :ok
     end)
   end
+
+  defp push_one(backend, token, platform, notification) do
+    meta = %{
+      token: token,
+      platform: platform,
+      priority: notification.priority,
+      backend: backend
+    }
+
+    :telemetry.span([:raxol_watch, :push], meta, fn ->
+      result = backend.push(token, notification)
+      handle_push_result(result, token, platform)
+      {result, Map.put(meta, :result, result)}
+    end)
+  end
+
+  defp handle_push_result(:ok, _token, _platform), do: :ok
+
+  defp handle_push_result({:error, reason}, token, platform) do
+    Logger.warning(
+      "Push failed for #{platform} device #{redact(token)}: #{inspect(reason)}"
+    )
+
+    if MapSet.member?(@permanent_failure_reasons, reason) do
+      DeviceRegistry.unregister(token, :delivery_failed)
+    end
+
+    :ok
+  end
+
+  defp redact(<<head::binary-size(8), _rest::binary>>), do: head <> "..."
+  defp redact(other), do: inspect(other)
 end
