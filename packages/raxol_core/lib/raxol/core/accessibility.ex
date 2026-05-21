@@ -536,7 +536,16 @@ defmodule Raxol.Core.Accessibility do
 
   @doc """
   Subscribe to announcement events. Returns :ok.
-  The subscriber will receive `{:announcement_added, ref, message}` messages.
+
+  The subscriber will receive `{:announcement_added, ref, announcement}`
+  messages, where `announcement` is a map of the form:
+
+      %{
+        message: String.t(),
+        priority: :high | :medium | :low | :normal,
+        interrupt: boolean(),
+        timestamp: integer()
+      }
   """
   @spec subscribe_to_announcements(reference()) :: :ok
   def subscribe_to_announcements(ref) do

@@ -108,7 +108,7 @@ defmodule Raxol.Core.Accessibility.Announcements do
     # add_announcement/2 returns :ok from GenServer.cast
     :ok = Server.add_announcement(announcement, user_preferences_pid_or_name)
 
-    send_announcement_to_subscribers(message)
+    send_announcement_to_subscribers(announcement)
     :ok = EventManager.dispatch(:accessibility_announce, %{message: message})
 
     :ok
@@ -162,15 +162,15 @@ defmodule Raxol.Core.Accessibility.Announcements do
 
   # --- Private Functions ---
 
-  @spec send_announcement_to_subscribers(String.t()) :: :ok
-  defp send_announcement_to_subscribers(message) do
+  @spec send_announcement_to_subscribers(map()) :: :ok
+  defp send_announcement_to_subscribers(announcement) do
     subscriptions = get_subscriptions()
 
     Enum.each(subscriptions, fn {ref, pid} ->
       send_to_alive_process(
         Process.alive?(pid),
         pid,
-        {:announcement_added, ref, message}
+        {:announcement_added, ref, announcement}
       )
     end)
   end

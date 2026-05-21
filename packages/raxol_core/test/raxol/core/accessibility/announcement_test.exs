@@ -29,7 +29,10 @@ defmodule Raxol.Core.Accessibility.AnnouncementTest do
       :ok = Accessibility.subscribe_to_announcements(ref)
 
       Accessibility.announce("Test announcement", [], pref_pid)
-      assert_receive {:announcement_added, ^ref, "Test announcement"}, 1000
+
+      assert_receive {:announcement_added, ^ref,
+                      %{message: "Test announcement", priority: :normal, interrupt: false}},
+                     1000
 
       :ok = Accessibility.unsubscribe_from_announcements(ref)
     end
@@ -43,8 +46,8 @@ defmodule Raxol.Core.Accessibility.AnnouncementTest do
       Accessibility.announce("First", [], pref_pid)
       Accessibility.announce("Second", [], pref_pid)
 
-      assert_receive {:announcement_added, ^ref, "First"}, 1000
-      assert_receive {:announcement_added, ^ref, "Second"}, 1000
+      assert_receive {:announcement_added, ^ref, %{message: "First"}}, 1000
+      assert_receive {:announcement_added, ^ref, %{message: "Second"}}, 1000
 
       assert Accessibility.get_next_announcement(pref_pid) == "First"
       assert Accessibility.get_next_announcement(pref_pid) == "Second"
@@ -58,7 +61,7 @@ defmodule Raxol.Core.Accessibility.AnnouncementTest do
       :ok = Accessibility.subscribe_to_announcements(ref)
 
       Accessibility.announce("Test", [], pref_pid)
-      assert_receive {:announcement_added, ^ref, "Test"}, 1000
+      assert_receive {:announcement_added, ^ref, %{message: "Test"}}, 1000
 
       Accessibility.clear_announcements()
       assert_receive {:announcements_cleared, ^ref}, 1000
@@ -98,6 +101,28 @@ defmodule Raxol.Core.Accessibility.AnnouncementTest do
       Accessibility.announce("Interrupting", [interrupt: true], pref_pid)
       assert Accessibility.get_next_announcement(pref_pid) == "Interrupting"
       assert Accessibility.get_next_announcement(pref_pid) == nil
+    end
+
+    test "announce/2 broadcasts priority and interrupt to subscribers", %{
+      pref_pid: pref_pid
+    } do
+      ref = System.unique_integer([:positive])
+      :ok = Accessibility.subscribe_to_announcements(ref)
+
+      Accessibility.announce("urgent", [priority: :high, interrupt: true], pref_pid)
+
+      assert_receive {:announcement_added, ^ref,
+                      %{
+                        message: "urgent",
+                        priority: :high,
+                        interrupt: true,
+                        timestamp: ts
+                      }},
+                     1000
+
+      assert is_integer(ts)
+
+      :ok = Accessibility.unsubscribe_from_announcements(ref)
     end
 
     test "announce/2 respects :silence_announcements setting", %{
