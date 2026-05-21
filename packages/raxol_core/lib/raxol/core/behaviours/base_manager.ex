@@ -92,7 +92,8 @@ defmodule Raxol.Core.Behaviours.BaseManager do
         do: Raxol.Core.Utils.GenServerHelpers.split_server_opts(opts)
 
       # All callbacks are overridable
-      defoverridable start_link: 1,
+      defoverridable start_link: 0,
+                     start_link: 1,
                      init_manager: 1,
                      handle_manager_call: 3,
                      handle_manager_cast: 2,
