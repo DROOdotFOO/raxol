@@ -132,7 +132,7 @@ defmodule Raxol.Telegram.Session do
   # -- Private --
 
   # Lifecycle io_writer callback delivers render data in several shapes:
-  #   - %{buffer: buffer, view_tree: tree} -- full render with widget tree
+  #   - %{buffer: buffer, view_tree: tree} -- full render with Component tree
   #   - %{buffer: buffer}                 -- buffer-only render (no tree)
   #   - binary string                     -- raw text output
   #   - other                             -- fallback placeholder

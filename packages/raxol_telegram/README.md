@@ -43,7 +43,7 @@ The bot handles `/start` and `/stop` commands. Other messages and inline keyboar
 1. Each Telegram chat gets an independent TEA lifecycle (session)
 2. The screen buffer renders as `<pre>` HTML in Telegram messages
 3. Navigation uses inline keyboards (arrows, tab, enter, quit)
-4. Button widgets in the view tree become additional keyboard buttons
+4. Button Components in the view tree become additional inline keyboard buttons
 5. Sessions auto-expire after 10 minutes of inactivity
 6. Message editing avoids spam (re-renders edit the existing message)
 
@@ -53,6 +53,31 @@ The `SessionRouter` enforces a configurable `max_sessions` cap (default: 1000) t
 
 ```elixir
 {Raxol.Telegram.SessionRouter, app_module: MyApp, max_sessions: 500}
+```
+
+Per-chat rate-limit cooldown entries (5s window after the last session start) are auto-purged on every new session, so memory stays bounded under high chat churn. `Raxol.Telegram.SessionRouter.stats/0` reports current session count + cooldown-map size; `purge_stale_cooldowns/0` is exposed as an ops tool too.
+
+### Telemetry
+
+Attach to these events for observability:
+
+| Event | Measurements | Metadata |
+|-------|--------------|----------|
+| `[:raxol_telegram, :bot, :received]` | `system_time` | `chat_id, kind: :message \| :callback, byte_size \| data` |
+| `[:raxol_telegram, :bot, :denied]` | `system_time` | `chat_id, kind` |
+| `[:raxol_telegram, :session, :started]` | `system_time` | `chat_id` |
+| `[:raxol_telegram, :session, :rejected]` | `system_time` | `chat_id, reason: :max_sessions_reached \| :rate_limited` |
+| `[:raxol_telegram, :session, :stopped]` | `system_time` | `chat_id, reason: :explicit \| :process_down` (with `down_reason`) |
+
+### Live Test
+
+`examples/telegram_demo.exs` runs a real Telegram bot against a counter TEA app. Requires a token from @BotFather:
+
+```bash
+cd packages/raxol_telegram
+TELEGRAM_BOT_TOKEN=<your-token> \
+  TELEGRAM_ALLOWED_CHAT_IDS=123456789 \
+  mix run --no-halt examples/telegram_demo.exs
 ```
 
 See [main docs](../../README.md) for the full Raxol framework.

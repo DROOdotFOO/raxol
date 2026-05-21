@@ -24,4 +24,20 @@ defmodule Raxol.Telegram.BotTest do
       assert :ok = Bot.handle_update(%{})
     end
   end
+
+  describe "allowed_chat_ids robustness" do
+    test "non-list allowed_chat_ids denies all (does not crash)" do
+      update = %{message: %{text: "hi", chat: %{id: 42}}}
+      # Misconfiguration: a single integer instead of a list.
+      assert :ok = Bot.handle_update(update, allowed_chat_ids: 42)
+      assert :ok = Bot.handle_update(update, allowed_chat_ids: "42")
+      assert :ok = Bot.handle_update(update, allowed_chat_ids: %{42 => true})
+    end
+
+    test "explicit nil allowed_chat_ids allows everyone" do
+      # Unknown command path so we don't need SessionRouter running.
+      update = %{message: %{text: "/notarealcmd", chat: %{id: 1}}}
+      assert :ok = Bot.handle_update(update, allowed_chat_ids: nil)
+    end
+  end
 end

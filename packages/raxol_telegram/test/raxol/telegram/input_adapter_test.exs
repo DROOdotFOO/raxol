@@ -41,7 +41,7 @@ defmodule Raxol.Telegram.InputAdapterTest do
     test "translates button callback" do
       event = InputAdapter.translate_callback("btn:submit")
       assert event.type == :click
-      assert event.data.widget_id == "submit"
+      assert event.data.component_id == "submit"
     end
 
     test "returns nil for unknown callback" do

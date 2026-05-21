@@ -67,6 +67,27 @@ defmodule Raxol.Telegram.SessionRouter do
     GenServer.call(__MODULE__, {:get_session, chat_id})
   end
 
+  @doc """
+  Returns router stats: active session count and the size of the
+  per-chat rate-limit cooldown map. Useful for monitoring memory.
+  """
+  @spec stats() :: %{sessions: non_neg_integer(), last_start_entries: non_neg_integer()}
+  def stats do
+    GenServer.call(__MODULE__, :stats)
+  end
+
+  @doc """
+  Drops rate-limit cooldown entries older than the cooldown window.
+
+  Called automatically whenever a new session is tracked, so the
+  cooldown map cannot grow faster than session creation rate. Expose
+  it as an ops tool too -- safe to call at any time.
+  """
+  @spec purge_stale_cooldowns() :: non_neg_integer()
+  def purge_stale_cooldowns do
+    GenServer.call(__MODULE__, :purge_stale_cooldowns)
+  end
+
   # -- BaseManager Callbacks --
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -106,8 +127,22 @@ defmodule Raxol.Telegram.SessionRouter do
     {:reply, Map.get(state.sessions, chat_id), state}
   end
 
+  def handle_manager_call(:stats, _from, state) do
+    {:reply,
+     %{
+       sessions: map_size(state.sessions),
+       last_start_entries: map_size(state.last_start)
+     }, state}
+  end
+
+  def handle_manager_call(:purge_stale_cooldowns, _from, state) do
+    new_state = purge_last_start(state)
+    dropped = map_size(state.last_start) - map_size(new_state.last_start)
+    {:reply, dropped, new_state}
+  end
+
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
+  def handle_manager_info({:DOWN, _ref, :process, pid, reason}, state) do
     # Find and remove the dead session
     chat_id =
       Enum.find_value(state.sessions, fn
@@ -117,6 +152,8 @@ defmodule Raxol.Telegram.SessionRouter do
 
     new_state =
       if chat_id do
+        emit(:stopped, %{chat_id: chat_id, reason: :process_down, down_reason: reason})
+
         %{
           state
           | sessions: Map.delete(state.sessions, chat_id),
@@ -138,9 +175,11 @@ defmodule Raxol.Telegram.SessionRouter do
       nil ->
         cond do
           map_size(state.sessions) >= state.max_sessions ->
+            emit(:rejected, %{chat_id: chat_id, reason: :max_sessions_reached})
             {:error, :max_sessions_reached}
 
           rate_limited?(chat_id, state) ->
+            emit(:rejected, %{chat_id: chat_id, reason: :rate_limited})
             {:error, :rate_limited}
 
           true ->
@@ -174,12 +213,28 @@ defmodule Raxol.Telegram.SessionRouter do
   defp track_session(state, chat_id, pid) do
     ref = Process.monitor(pid)
 
-    %{
-      state
-      | sessions: Map.put(state.sessions, chat_id, pid),
-        monitors: Map.put(state.monitors, chat_id, ref),
-        last_start: Map.put(state.last_start, chat_id, System.monotonic_time(:millisecond))
-    }
+    emit(:started, %{chat_id: chat_id})
+
+    state
+    |> purge_last_start()
+    |> Map.update!(:sessions, &Map.put(&1, chat_id, pid))
+    |> Map.update!(:monitors, &Map.put(&1, chat_id, ref))
+    |> Map.update!(
+      :last_start,
+      &Map.put(&1, chat_id, System.monotonic_time(:millisecond))
+    )
+  end
+
+  defp purge_last_start(state) do
+    now = System.monotonic_time(:millisecond)
+    cutoff = now - @session_cooldown_ms
+
+    fresh =
+      state.last_start
+      |> Enum.filter(fn {_chat_id, ts} -> ts >= cutoff end)
+      |> Map.new()
+
+    %{state | last_start: fresh}
   end
 
   defp do_stop_session(chat_id, state) do
@@ -199,11 +254,21 @@ defmodule Raxol.Telegram.SessionRouter do
           ref -> Process.demonitor(ref, [:flush])
         end
 
+        emit(:stopped, %{chat_id: chat_id, reason: :explicit})
+
         %{
           state
           | sessions: Map.delete(state.sessions, chat_id),
             monitors: Map.delete(state.monitors, chat_id)
         }
     end
+  end
+
+  defp emit(event, metadata) do
+    :telemetry.execute(
+      [:raxol_telegram, :session, event],
+      %{system_time: System.system_time()},
+      metadata
+    )
   end
 end

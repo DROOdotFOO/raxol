@@ -24,13 +24,13 @@ defmodule Raxol.Telegram.InputAdapter do
   ## Formats
 
     * `"key:<name>"` -- key event (char or special key)
-    * `"btn:<widget_id>"` -- button click (mapped to :click event)
+    * `"btn:<component_id>"` -- button click (mapped to :click event)
 
   ## Examples
 
       translate_callback("key:q")     #=> Event with char "q"
       translate_callback("key:up")    #=> Event with key :up
-      translate_callback("btn:submit") #=> Event with type :click
+      translate_callback("btn:submit") #=> Event{type: :click, data: %{component_id: "submit"}}
   """
   @spec translate_callback(String.t()) :: Event.t() | nil
   def translate_callback("key:" <> key_name) do
@@ -49,8 +49,8 @@ defmodule Raxol.Telegram.InputAdapter do
     end
   end
 
-  def translate_callback("btn:" <> widget_id) do
-    Event.new(:click, %{widget_id: widget_id})
+  def translate_callback("btn:" <> component_id) do
+    Event.new(:click, %{component_id: component_id})
   end
 
   def translate_callback(_), do: nil

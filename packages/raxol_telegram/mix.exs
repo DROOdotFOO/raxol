@@ -1,7 +1,7 @@
 defmodule RaxolTelegram.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
@@ -36,6 +36,7 @@ defmodule RaxolTelegram.MixProject do
     [
       # Core dependency (Events, Behaviours)
       raxol_dep(:raxol_core, "~> 2.4", "../raxol_core"),
+      {:telemetry, "~> 1.3"},
 
       # Main raxol (Lifecycle runtime -- required for Session to start TEA apps)
       # Optional at compile time; Session guards with Code.ensure_loaded? at runtime.
@@ -51,7 +52,8 @@ defmodule RaxolTelegram.MixProject do
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:stream_data, "~> 1.1", only: [:dev, :test]}
     ]
   end
 
