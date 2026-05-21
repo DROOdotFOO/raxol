@@ -99,11 +99,13 @@ defmodule Raxol.Telegram.SessionRouter do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:route, chat_id, event}, _from, state) do
-    with {:ok, pid, new_state} <- ensure_session(chat_id, state) do
-      Raxol.Telegram.Session.dispatch(pid, event)
-      {:reply, :ok, new_state}
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
+    case ensure_session(chat_id, state) do
+      {:ok, pid, new_state} ->
+        Raxol.Telegram.Session.dispatch(pid, event)
+        {:reply, :ok, new_state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
