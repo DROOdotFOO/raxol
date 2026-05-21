@@ -17,7 +17,7 @@ defmodule Raxol.Speech.Listener do
 
   alias Raxol.Speech.{InputAdapter, Recognizer}
 
-  @default_sample_rate 16000
+  @default_sample_rate 16_000
   # 5 minutes max recording, ~9.6MB at 16kHz/16-bit/mono
   @default_max_duration_ms 5 * 60 * 1000
   # 10MB max audio buffer

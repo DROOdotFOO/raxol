@@ -12,9 +12,10 @@ defmodule Raxol.Speech.TTS.Noop do
   require Logger
 
   @mix_env if Code.ensure_loaded?(Mix), do: Mix.env(), else: :prod
+  @warn_on_start @mix_env not in [:test, :dev]
 
   def start_link(_opts \\ []) do
-    if @mix_env not in [:test, :dev] do
+    if @warn_on_start do
       Logger.warning(
         "Raxol.Speech.TTS.Noop is running outside test/dev -- speech will be silently discarded. Configure a real backend (OsSay) for production."
       )
