@@ -77,12 +77,20 @@ defmodule Raxol.ACP.ContractClient.InMemory do
   end
 
   @impl true
-  def submit_memo(job_id, type, payload, signature)
-      when is_binary(job_id) and is_atom(type) and is_map(payload) and is_binary(signature) do
+  def create_memo(job_id, content, memo_type, is_secured, next_phase)
+      when is_binary(job_id) and is_binary(content) and is_atom(memo_type) and
+             is_boolean(is_secured) and is_atom(next_phase) do
     Agent.get_and_update(__MODULE__, fn state ->
       with_job(state, job_id, fn job, state ->
         tx_hash = next_tx_hash(state)
-        memo = %{type: type, payload: payload, signature: signature, tx_hash: tx_hash}
+
+        memo = %{
+          content: content,
+          memo_type: memo_type,
+          is_secured: is_secured,
+          next_phase: next_phase,
+          tx_hash: tx_hash
+        }
 
         new_job = Map.update!(job, :memos, &(&1 ++ [memo]))
         bump_tx({{:ok, tx_hash}, put_job(state, job_id, new_job)})

@@ -6,16 +6,24 @@ defmodule Raxol.ACP.Job.Server do
   `Raxol.ACP.Job.Registry`. Two layers of API:
 
   - **Low-level** -- `transition/4` accepts event + payload + opaque
-    signature. Validates against `Raxol.ACP.Job.StateMachine`, submits
-    a memo via `Raxol.ACP.ContractClient`, appends to memo history,
-    emits telemetry. Caller owns signing.
+    signature. Validates against `Raxol.ACP.Job.StateMachine`, creates
+    an on-chain memo via `Raxol.ACP.ContractClient`, appends to memo
+    history, emits telemetry.
 
   - **Orchestration** -- `accept_request/1`, `deliver/1`,
     `accept_payment/3`, `approve/3`. Active when the server is
     configured with a `:handler` (any module implementing
-    `Raxol.ACP.Offering.Handler`) and a `:wallet`. The orchestration
-    helpers invoke the handler at the right state, sign the result via
-    `Raxol.ACP.Job.Memo`, and fire the next transition.
+    `Raxol.ACP.Offering.Handler`). The orchestration helpers invoke
+    the handler at the right state and fire the next transition.
+
+  ## Signatures
+
+  The `signature` argument on `transition/4`, `accept_payment/3`, and
+  `approve/3` is the **buyer's** authorization (e.g. ERC-3009 for
+  payments) and is kept in the local memo log for record-keeping. It
+  is NOT sent on-chain by `createMemo` -- the canonical ACP contract
+  does not accept a separate memo signature; the transaction itself
+  is signed by the calling wallet.
 
   Terminates with `:normal` on a transition into a terminal state
   (`:completed` or `:expired`). Combined with the transient restart in
@@ -31,20 +39,21 @@ defmodule Raxol.ACP.Job.Server do
   use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.ACP.ContractClient
-  alias Raxol.ACP.Job.{Memo, Registry, StateMachine, Store}
+  alias Raxol.ACP.Job.{MemoType, Registry, StateMachine, Store}
 
   @type memo :: %{
-          type: ContractClient.memo_type(),
-          payload: map(),
-          signature: binary(),
+          next_phase: StateMachine.state(),
+          memo_type: MemoType.t(),
+          content: String.t(),
+          is_secured: boolean(),
+          payload: map() | nil,
+          signature: binary() | nil,
           tx_hash: ContractClient.tx_hash(),
           transitioned_at: DateTime.t()
         }
 
   @type config :: %{
           optional(:handler) => module(),
-          optional(:wallet) => module(),
-          optional(:memo_opts) => keyword(),
           optional(:request) => map(),
           optional(:buyer) => String.t(),
           optional(:seller) => String.t()
@@ -80,9 +89,6 @@ defmodule Raxol.ACP.Job.Server do
   works.
 
   - `:handler` -- module implementing `Raxol.ACP.Offering.Handler`.
-  - `:wallet` -- module implementing `Raxol.Payments.Wallet`.
-  - `:memo_opts` -- keyword passed to `Raxol.ACP.Job.Memo.build_and_sign/5`
-    (must include `:chain_id` and `:verifying_contract`).
   - `:request` -- the buyer's request map; passed to handler callbacks.
   - `:buyer` -- buyer address (0x string), surfaced in handler ctx.
   - `:seller` -- seller address (0x string), surfaced in handler ctx.
@@ -114,11 +120,10 @@ defmodule Raxol.ACP.Job.Server do
 
   @doc """
   Invoke the configured handler's `handle_request/2` callback. On
-  `{:accept, response}`, sign the response and fire `:accept_request`
-  (advancing to `:negotiation`). On `{:reject, reason}`, fire `:expire`.
+  `{:accept, response}`, fire `:accept_request` (advancing to
+  `:negotiation`). On `{:reject, reason}`, fire `:expire`.
 
-  Requires `:handler`, `:wallet`, `:memo_opts`, and `:request` in the
-  server's config.
+  Requires `:handler` and `:request` in the server's config.
   """
   @spec accept_request(GenServer.server() | binary()) ::
           {:ok, StateMachine.state()} | {:error, term()}
@@ -130,10 +135,9 @@ defmodule Raxol.ACP.Job.Server do
   Buyer-side: record the buyer's payment authorization and advance to
   `:transaction`.
 
-  If `payload` is supplied, it becomes the memo body (the buyer's
-  signed authorization). If `signature` is `nil`, the server signs the
-  payload itself via the configured wallet -- useful in tests; in
-  production, the buyer's signature is what matters.
+  If `payload` is supplied, it becomes the memo content. `signature`
+  is the buyer's authorization (e.g. ERC-3009); stored in the local
+  memo log for record-keeping but not sent on-chain.
   """
   @spec accept_payment(GenServer.server() | binary(), map(), binary() | nil) ::
           {:ok, StateMachine.state()} | {:error, term()}
@@ -143,8 +147,8 @@ defmodule Raxol.ACP.Job.Server do
 
   @doc """
   Invoke the configured handler's `handle_deliver/2` callback. On
-  `{:deliver, deliverable}`, sign the deliverable and fire `:deliver`
-  (advancing to `:evaluation`). On `{:error, reason}`, fire `:expire`.
+  `{:deliver, deliverable}`, fire `:deliver` (advancing to
+  `:evaluation`). On `{:error, reason}`, fire `:expire`.
   """
   @spec deliver(GenServer.server() | binary()) ::
           {:ok, StateMachine.state()} | {:error, term()}
@@ -186,7 +190,7 @@ defmodule Raxol.ACP.Job.Server do
   def init_manager(opts) do
     config =
       opts
-      |> Keyword.take([:handler, :wallet, :memo_opts, :request, :buyer, :seller])
+      |> Keyword.take([:handler, :request, :buyer, :seller])
       |> Map.new()
 
     job_id = Keyword.fetch!(opts, :job_id)
@@ -225,10 +229,10 @@ defmodule Raxol.ACP.Job.Server do
     with {:ok, %{handler: handler, request: request}} <- need(state.config, [:handler, :request]) do
       case handler.handle_request(request, ctx(state)) do
         {:accept, response} ->
-          sign_and_transition(state, :accept_request, response)
+          do_transition(state, :accept_request, response, nil)
 
         {:reject, reason} ->
-          sign_and_transition(state, :expire, %{reason: inspect(reason)})
+          do_transition(state, :expire, %{reason: inspect(reason)}, nil)
       end
     else
       {:error, _} = err -> {:reply, err, state}
@@ -236,17 +240,17 @@ defmodule Raxol.ACP.Job.Server do
   end
 
   def handle_manager_call({:accept_payment, payload, signature}, _from, state) do
-    sign_or_use(state, :accept_payment, payload, signature)
+    do_transition(state, :accept_payment, payload, signature)
   end
 
   def handle_manager_call(:deliver, _from, state) do
     with {:ok, %{handler: handler, request: request}} <- need(state.config, [:handler, :request]) do
       case handler.handle_deliver(request, ctx(state)) do
         {:deliver, deliverable} ->
-          sign_and_transition(state, :deliver, deliverable)
+          do_transition(state, :deliver, deliverable, nil)
 
         {:error, reason} ->
-          sign_and_transition(state, :expire, %{reason: inspect(reason)})
+          do_transition(state, :expire, %{reason: inspect(reason)}, nil)
       end
     else
       {:error, _} = err -> {:reply, err, state}
@@ -254,7 +258,7 @@ defmodule Raxol.ACP.Job.Server do
   end
 
   def handle_manager_call({:approve, payload, signature}, _from, state) do
-    sign_or_use(state, :approve, payload, signature)
+    do_transition(state, :approve, payload, signature)
   end
 
   def handle_manager_call(:get_state, _from, state), do: {:reply, state, state}
@@ -264,13 +268,18 @@ defmodule Raxol.ACP.Job.Server do
   # -- Private --
 
   defp do_transition(state, event, payload, signature) do
+    memo_type = memo_type_for_event(event)
+    content = encode_content(payload)
+
     with {:ok, new_state} <- StateMachine.next(state.state, event),
-         memo_type = new_state,
          {:ok, tx_hash} <-
-           ContractClient.submit_memo(state.job_id, memo_type, payload, signature) do
+           ContractClient.create_memo(state.job_id, content, memo_type, false, new_state) do
       memo = %{
-        type: memo_type,
-        payload: payload,
+        next_phase: new_state,
+        memo_type: memo_type,
+        content: content,
+        is_secured: false,
+        payload: ensure_payload(payload),
         signature: signature,
         tx_hash: tx_hash,
         transitioned_at: DateTime.utc_now()
@@ -284,6 +293,7 @@ defmodule Raxol.ACP.Job.Server do
           from: state.state,
           to: new_state,
           memo_type: memo_type,
+          next_phase: new_state,
           tx_hash: tx_hash
         }
       )
@@ -310,27 +320,20 @@ defmodule Raxol.ACP.Job.Server do
     Store.append_memo(job_id, state, memo)
   end
 
-  # Caller can override the signature; otherwise we sign the payload
-  # ourselves with the configured wallet. Both paths require the
-  # state machine to accept the event from the current state.
-  defp sign_or_use(state, event, payload, nil), do: sign_and_transition(state, event, payload)
+  # Default memo type per event. Payment/approval steps reference a
+  # transaction hash; everything else is a free-form message. Callers
+  # who need a different `MemoType` (e.g. an image_url for a deliverable)
+  # should call ContractClient.create_memo/5 directly.
+  defp memo_type_for_event(:accept_payment), do: :txhash
+  defp memo_type_for_event(:approve), do: :txhash
+  defp memo_type_for_event(_), do: :message
 
-  defp sign_or_use(state, event, payload, signature) when is_binary(signature) do
-    do_transition(state, event, payload, signature)
-  end
+  defp encode_content(nil), do: ""
+  defp encode_content(payload) when is_binary(payload), do: payload
+  defp encode_content(payload) when is_map(payload), do: Jason.encode!(payload)
 
-  defp sign_and_transition(state, event, payload) do
-    with {:ok, %{wallet: wallet, memo_opts: memo_opts}} <-
-           need(state.config, [:wallet, :memo_opts]),
-         {:ok, new_state} <- StateMachine.next(state.state, event),
-         payload_hash <- payload_hash(payload),
-         {:ok, %{signature: signature}} <-
-           Memo.build_and_sign(state.job_id, new_state, payload_hash, wallet, memo_opts) do
-      do_transition(state, event, payload, signature)
-    else
-      {:error, _} = err -> {:reply, err, state}
-    end
-  end
+  defp ensure_payload(payload) when is_map(payload), do: payload
+  defp ensure_payload(_), do: nil
 
   defp ctx(state) do
     %{
@@ -346,17 +349,5 @@ defmodule Raxol.ACP.Job.Server do
       [] -> {:ok, Map.take(config, keys)}
       missing -> {:error, {:config_missing, missing}}
     end
-  end
-
-  # Canonicalize the payload as keccak256 of its JSON encoding. This is
-  # a v0.1 placeholder -- the real ACP contract may require a different
-  # canonicalization. The Node SDK parity test (planned in the v0.1
-  # milestone) is the canonical correctness check.
-  defp payload_hash(payload) when is_map(payload) do
-    "0x" <>
-      (payload
-       |> Jason.encode!()
-       |> ExKeccak.hash_256()
-       |> Base.encode16(case: :lower))
   end
 end

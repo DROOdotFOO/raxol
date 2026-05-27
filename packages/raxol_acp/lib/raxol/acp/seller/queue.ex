@@ -8,36 +8,18 @@ defmodule Raxol.ACP.Seller.Queue do
   message). The Queue translates each event into the right
   `Raxol.ACP.Job.Server` interaction.
 
-  ## Wallet + memo_opts resolution (hybrid)
-
-  Per-offering overrides win, with the Queue's defaults (read from
-  `Application` config at start) as the fallback. Concretely, on every
-  `:job_offered` dispatch:
-
-      wallet    = spec.wallet    || queue_default_wallet
-      memo_opts = spec.memo_opts || queue_default_memo_opts
-
-  Most sellers run one wallet for everything and leave the spec fields
-  `nil`. An offering that needs to settle on a different chain sets
-  both fields on its `use Raxol.ACP.Offering` line.
-
-  ## Configuration (read per dispatch)
+  ## Configuration
 
       config :raxol_acp,
-        seller_wallet: MyApp.Wallet,                  # Raxol.Payments.Wallet impl
-        seller_memo_opts: [chain_id: 8453,
-                           verifying_contract: "0x..."],
-        seller_address: "0x..."                       # 0x string
+        seller_address: "0x..."   # 0x string, surfaced in handler ctx
 
-  Defaults are read from `Application` on every dispatch, not cached at
-  start. This keeps the Queue cheap to re-key at runtime (e.g. rotate
-  the seller wallet without restarting the supervision tree).
+  Read from `Application` on every dispatch (not cached) so the seller
+  address can be rotated without restarting the supervision tree.
 
   ## Events handled
 
-  - `:job_offered` -- start a `Job.Server` under `Job.Supervisor` with
-    the resolved wallet/memo_opts/address, then call
-    `Job.Server.accept_request/1`. The handler decides accept vs.
+  - `:job_offered` -- start a `Job.Server` under `Job.Supervisor`, then
+    call `Job.Server.accept_request/1`. The handler decides accept vs.
     reject; the Queue does not policy-gate.
   - `:payment_received` -- look up the running `Job.Server` and call
     `accept_payment/3`. The Queue does NOT auto-deliver afterwards;
@@ -59,7 +41,7 @@ defmodule Raxol.ACP.Seller.Queue do
   - `[:raxol, :acp, :seller, :queue, :dropped]` -- event dropped.
     Metadata: `%{type, job_id, reason}` where reason is one of
     `:offering_not_registered`, `:job_not_running`, `:start_failed`,
-    `:unknown_event`, `:wallet_unconfigured`.
+    `:unknown_event`.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -84,11 +66,7 @@ defmodule Raxol.ACP.Seller.Queue do
   end
 
   @doc "Inspect the Queue's currently resolved defaults from Application config."
-  @spec defaults() :: %{
-          wallet: module() | nil,
-          memo_opts: keyword() | nil,
-          seller_address: String.t() | nil
-        }
+  @spec defaults() :: %{seller_address: String.t() | nil}
   def defaults, do: read_defaults()
 
   # -- GenServer callbacks --
@@ -103,11 +81,7 @@ defmodule Raxol.ACP.Seller.Queue do
   end
 
   defp read_defaults do
-    %{
-      wallet: Application.get_env(:raxol_acp, :seller_wallet),
-      memo_opts: Application.get_env(:raxol_acp, :seller_memo_opts),
-      seller_address: Application.get_env(:raxol_acp, :seller_address)
-    }
+    %{seller_address: Application.get_env(:raxol_acp, :seller_address)}
   end
 
   # -- Event handlers --
@@ -116,8 +90,7 @@ defmodule Raxol.ACP.Seller.Queue do
     %{job_id: job_id, offering: name} = event
 
     with {:ok, spec} <- lookup_offering(name, job_id),
-         {:ok, wallet, memo_opts} <- resolve_signing(spec, state, job_id),
-         {:ok, _pid} <- start_job(event, spec, wallet, memo_opts, state) do
+         {:ok, _pid} <- start_job(event, spec, state) do
       _ = Job.Server.accept_request(job_id)
       emit(:dispatched, %{type: :job_offered, job_id: job_id, offering: name})
     end
@@ -188,28 +161,13 @@ defmodule Raxol.ACP.Seller.Queue do
     end
   end
 
-  defp resolve_signing(spec, state, job_id) do
-    wallet = spec.wallet || state.wallet
-    memo_opts = spec.memo_opts || state.memo_opts
-
-    if wallet do
-      {:ok, wallet, memo_opts}
-    else
-      emit(:dropped, %{type: :job_offered, job_id: job_id, reason: :wallet_unconfigured})
-
-      :error
-    end
-  end
-
-  defp start_job(event, spec, wallet, memo_opts, state) do
+  defp start_job(event, spec, state) do
     %{job_id: job_id, request: request} = event
     buyer = Map.get(event, :buyer)
 
     opts = [
       job_id: job_id,
       handler: spec.handler,
-      wallet: wallet,
-      memo_opts: memo_opts || [],
       request: request,
       buyer: buyer,
       seller: state.seller_address

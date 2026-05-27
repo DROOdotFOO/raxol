@@ -91,6 +91,7 @@ defmodule Raxol.ACP.ABI do
   # -- Static encoders (always 32 bytes) --
 
   defp encode_static("uint256", value), do: encode_uint256(value)
+  defp encode_static("uint8", value) when is_integer(value) and value in 0..255, do: encode_uint256(value)
   defp encode_static("address", value), do: encode_address(value)
   defp encode_static("bytes32", value), do: encode_bytes32(value)
   defp encode_static("bool", true), do: <<1::unsigned-big-256>>

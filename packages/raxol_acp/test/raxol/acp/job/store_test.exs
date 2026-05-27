@@ -298,7 +298,7 @@ defmodule Raxol.ACP.Job.StoreTest do
                Job.Server.transition(job_id, :accept_request, %{step: 1}, @sig)
 
       assert {:ok, %{state: :negotiation, memos: [memo]}} = Store.load(job_id)
-      assert memo.type == :negotiation
+      assert memo.next_phase == :negotiation
       assert memo.payload == %{step: 1}
       assert memo.tx_hash == "tx-1"
 
@@ -306,7 +306,7 @@ defmodule Raxol.ACP.Job.StoreTest do
                Job.Server.transition(job_id, :accept_payment, %{step: 2}, @sig)
 
       assert {:ok, %{state: :transaction, memos: [_, m2]}} = Store.load(job_id)
-      assert m2.type == :transaction
+      assert m2.next_phase == :transaction
       assert m2.tx_hash == "tx-2"
     end
 
@@ -343,7 +343,7 @@ defmodule Raxol.ACP.Job.StoreTest do
       assert Job.Server.current_state(job_id) == :transaction
 
       memos = Job.Server.memos(job_id)
-      assert Enum.map(memos, & &1.type) == [:negotiation, :transaction]
+      assert Enum.map(memos, & &1.next_phase) == [:negotiation, :transaction]
       assert Enum.map(memos, & &1.payload) == [%{step: 1}, %{step: 2}]
 
       # The lifecycle continues correctly from the hydrated state.
@@ -351,7 +351,7 @@ defmodule Raxol.ACP.Job.StoreTest do
                Job.Server.transition(job_id, :deliver, %{step: 3}, @sig)
 
       assert {:ok, %{state: :evaluation, memos: [_, _, m3]}} = Store.load(job_id)
-      assert m3.type == :evaluation
+      assert m3.next_phase == :evaluation
     end
   end
 

@@ -6,22 +6,10 @@ defmodule Raxol.ACP.Bench.RunnerTest do
   alias Raxol.ACP.Offering.Registry, as: OfferingRegistry
   alias Raxol.ACP.TestSupport.SellerHelper
 
-  @env_var "RAXOL_ACP_BENCH_PRIVKEY"
-  @anvil_test_key "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-  @memo_opts [chain_id: 8453, verifying_contract: "0x" <> String.duplicate("ab", 20)]
-
   setup do
-    System.put_env(@env_var, @anvil_test_key)
-    on_exit(fn -> System.delete_env(@env_var) end)
-
     OfferingRegistry.clear()
 
-    :ok =
-      SellerHelper.reset_seller(
-        wallet: Raxol.ACP.Bench.Wallet,
-        memo_opts: @memo_opts,
-        seller_address: "0x" <> String.duplicate("11", 20)
-      )
+    :ok = SellerHelper.reset_seller(seller_address: "0x" <> String.duplicate("11", 20))
 
     {:ok, _spec} = Raxol.ACP.Bench.Offering.register()
 

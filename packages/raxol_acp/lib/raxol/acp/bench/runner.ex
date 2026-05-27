@@ -330,8 +330,7 @@ defmodule Raxol.ACP.Bench.Runner do
   defp verify_persisted(job_id) do
     with {:ok, %{state: :completed, memos: memos}} <- Store.load(job_id),
          :ok <- check_memo_count(memos),
-         :ok <- check_memo_types(memos),
-         :ok <- check_memo_signatures(memos),
+         :ok <- check_memo_phases(memos),
          :ok <- check_chain_memos(job_id) do
       :ok
     else
@@ -346,34 +345,25 @@ defmodule Raxol.ACP.Bench.Runner do
     {:error, {:verify_persisted, {:wrong_memo_count, length(memos)}}}
   end
 
-  @expected_memo_types [:negotiation, :transaction, :evaluation, :completed]
+  @expected_memo_phases [:negotiation, :transaction, :evaluation, :completed]
 
-  defp check_memo_types(memos) do
-    actual = Enum.map(memos, & &1.type)
+  defp check_memo_phases(memos) do
+    actual = Enum.map(memos, & &1.next_phase)
 
-    if actual == @expected_memo_types do
+    if actual == @expected_memo_phases do
       :ok
     else
-      {:error, {:verify_persisted, {:wrong_memo_types, actual}}}
-    end
-  end
-
-  defp check_memo_signatures(memos) do
-    if Enum.all?(memos, &(byte_size(&1.signature) == 65)) do
-      :ok
-    else
-      sizes = Enum.map(memos, &byte_size(&1.signature))
-      {:error, {:verify_persisted, {:bad_signatures, sizes}}}
+      {:error, {:verify_persisted, {:wrong_memo_phases, actual}}}
     end
   end
 
   defp check_chain_memos(job_id) do
-    types = ChainInMem.list_memos(job_id) |> Enum.map(& &1.type)
+    phases = ChainInMem.list_memos(job_id) |> Enum.map(& &1.next_phase)
 
-    if types == @expected_memo_types do
+    if phases == @expected_memo_phases do
       :ok
     else
-      {:error, {:verify_persisted, {:chain_memos_mismatch, types}}}
+      {:error, {:verify_persisted, {:chain_memos_mismatch, phases}}}
     end
   end
 

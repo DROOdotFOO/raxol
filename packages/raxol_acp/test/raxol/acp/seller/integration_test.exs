@@ -2,8 +2,7 @@ defmodule Raxol.ACP.Seller.IntegrationTest do
   @moduledoc """
   End-to-end seller test: events injected through `Backend.InMemory`
   drive a job from `:request` through `:completed` with all four memos
-  signed by a real `Raxol.Payments.Wallets.Env` wallet and persisted to
-  the Store.
+  written via `ContractClient.create_memo/5` and persisted to the Store.
 
   Exercises the full path:
 
@@ -11,7 +10,7 @@ defmodule Raxol.ACP.Seller.IntegrationTest do
         -> Runtime ({:acp_event, _})
         -> Queue.dispatch/1
         -> Job.Supervisor.start_job/1 (or routing to existing pid)
-        -> Job.Server (handler invocation, wallet signing, ContractClient, Store)
+        -> Job.Server (handler invocation, ContractClient, Store)
   """
 
   use ExUnit.Case, async: false
@@ -24,28 +23,15 @@ defmodule Raxol.ACP.Seller.IntegrationTest do
   alias Raxol.ACP.Seller.Backend.InMemory, as: BackendInMem
   alias Raxol.ACP.TestSupport.{EchoOffering, SellerHelper}
 
-  @env_var "RAXOL_ACP_SELLER_INTEGRATION_KEY"
-  @privkey "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-  @memo_opts [chain_id: 8453, verifying_contract: "0x" <> String.duplicate("ab", 20)]
   @seller "0x" <> String.duplicate("11", 20)
   @buyer "0x" <> String.duplicate("22", 20)
 
-  defmodule Wallet do
-    use Raxol.Payments.Wallets.Env,
-      env_var: "RAXOL_ACP_SELLER_INTEGRATION_KEY",
-      chain_id: 8453
-  end
-
   setup do
-    System.put_env(@env_var, @privkey)
     OfferingRegistry.clear()
     ContractInMem.reset()
     Store.clear()
 
-    on_exit(fn -> System.delete_env(@env_var) end)
-
-    :ok =
-      SellerHelper.reset_seller(wallet: Wallet, memo_opts: @memo_opts, seller_address: @seller)
+    :ok = SellerHelper.reset_seller(seller_address: @seller)
 
     {:ok, _spec} = EchoOffering.register()
     :ok
@@ -155,9 +141,15 @@ defmodule Raxol.ACP.Seller.IntegrationTest do
     :ok = wait_for_state(job_id, :completed)
     :ok = wait_unregistered(job_id)
 
-    # All four memos are persisted, in order, with real EIP-712 sigs.
+    # All four memos are persisted, in order.
     assert {:ok, %{memos: memos, state: :completed}} = Store.load(job_id)
-    assert Enum.map(memos, & &1.type) == [:negotiation, :transaction, :evaluation, :completed]
+
+    assert Enum.map(memos, & &1.next_phase) == [
+             :negotiation,
+             :transaction,
+             :evaluation,
+             :completed
+           ]
 
     assert Enum.map(memos, & &1.payload) == [
              %{"text" => "ping"},
@@ -166,10 +158,8 @@ defmodule Raxol.ACP.Seller.IntegrationTest do
              %{ok: true}
            ]
 
-    for memo <- memos, do: assert(byte_size(memo.signature) == 65)
-
     # And the chain-side InMemory contract client recorded matching memos.
-    assert Enum.map(ContractInMem.list_memos(job_id), & &1.type) ==
+    assert Enum.map(ContractInMem.list_memos(job_id), & &1.next_phase) ==
              [:negotiation, :transaction, :evaluation, :completed]
   end
 
@@ -192,6 +182,6 @@ defmodule Raxol.ACP.Seller.IntegrationTest do
     :ok = wait_unregistered(job_id)
 
     assert {:ok, %{state: :expired, memos: [_negotiation, expire]}} = Store.load(job_id)
-    assert expire.type == :expired
+    assert expire.next_phase == :expired
   end
 end

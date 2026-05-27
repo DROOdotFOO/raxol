@@ -47,25 +47,30 @@ defmodule Raxol.ACP.ContractClientTest do
     end
   end
 
-  describe "submit_memo/4 (delegated)" do
+  describe "create_memo/5 (delegated)" do
     test "appends memos in submission order with synthetic tx_hashes" do
       {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("1.00"), <<>>)
 
       assert {:ok, "tx-1"} =
-               ContractClient.submit_memo(job_id, :request, %{x: 1}, <<0xAA>>)
+               ContractClient.create_memo(job_id, "first", :message, false, :negotiation)
 
       assert {:ok, "tx-2"} =
-               ContractClient.submit_memo(job_id, :negotiation, %{x: 2}, <<0xBB>>)
+               ContractClient.create_memo(job_id, "second", :txhash, true, :transaction)
 
       memos = InMemory.list_memos(job_id)
       assert length(memos) == 2
-      assert [%{type: :request}, %{type: :negotiation}] = memos
+
+      assert [
+               %{memo_type: :message, next_phase: :negotiation, content: "first", is_secured: false},
+               %{memo_type: :txhash, next_phase: :transaction, content: "second", is_secured: true}
+             ] = memos
+
       assert Enum.map(memos, & &1.tx_hash) == ["tx-1", "tx-2"]
     end
 
     test "errors on unknown job" do
       assert {:error, {:no_such_job, "job-bogus"}} =
-               ContractClient.submit_memo("job-bogus", :request, %{}, <<>>)
+               ContractClient.create_memo("job-bogus", "x", :message, false, :negotiation)
     end
   end
 
@@ -102,7 +107,7 @@ defmodule Raxol.ACP.ContractClientTest do
     test "tx-1, tx-2, tx-3 across mixed methods" do
       {:ok, j} = ContractClient.create_job(@seller, Decimal.new("1.00"), <<>>)
 
-      assert {:ok, "tx-1"} = ContractClient.submit_memo(j, :request, %{}, <<>>)
+      assert {:ok, "tx-1"} = ContractClient.create_memo(j, "x", :message, false, :negotiation)
       assert {:ok, "tx-2"} = ContractClient.pay_and_accept_requirement(j, <<>>)
       assert {:ok, "tx-3"} = ContractClient.complete_job(j, <<0::256>>)
     end

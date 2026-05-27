@@ -69,19 +69,10 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   # Placeholder signatures. Replace when Virtuals ABIs are vendored.
   @sig_create_job "createJob(address,uint256,bytes)"
-  @sig_submit_memo "submitMemo(uint256,uint8,bytes,bytes)"
+  # Canonical: `InteractionLedger.createMemo(uint256,string,uint8,bool,uint8)`.
+  @sig_create_memo "createMemo(uint256,string,uint8,bool,uint8)"
   @sig_complete_job "completeJob(uint256,bytes32)"
   @sig_pay_and_accept "payAndAcceptRequirement(uint256,bytes)"
-
-  # Memo type indexing matches the ACP state machine ordering.
-  @memo_type_index %{
-    request: 0,
-    negotiation: 1,
-    transaction: 2,
-    evaluation: 3,
-    completed: 4,
-    expired: 5
-  }
 
   # -- Behaviour callbacks --
 
@@ -133,24 +124,22 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   end
 
   @impl true
-  def submit_memo(job_id, memo_type, payload, signature)
-      when is_binary(job_id) and is_atom(memo_type) and is_map(payload) and
-             is_binary(signature) do
-    type_idx =
-      Map.get(@memo_type_index, memo_type) ||
-        raise ArgumentError, "unknown memo type: #{inspect(memo_type)}"
-
-    payload_bytes = Jason.encode!(payload)
+  def create_memo(job_id, content, memo_type, is_secured, next_phase)
+      when is_binary(job_id) and is_binary(content) and is_atom(memo_type) and
+             is_boolean(is_secured) and is_atom(next_phase) do
+    memo_type_uint8 = Raxol.ACP.Job.MemoType.to_uint8(memo_type)
+    next_phase_uint8 = Raxol.ACP.Job.StateMachine.phase_id(next_phase)
 
     call_data =
-      ABI.encode_call(@sig_submit_memo, [
+      ABI.encode_call(@sig_create_memo, [
         {"uint256", job_id_to_uint256(job_id)},
-        {"uint256", type_idx},
-        {"bytes", payload_bytes},
-        {"bytes", signature}
+        {"string", content},
+        {"uint8", memo_type_uint8},
+        {"bool", is_secured},
+        {"uint8", next_phase_uint8}
       ])
 
-    case send_tx(:submit_memo, call_data) do
+    case send_tx(:create_memo, call_data) do
       {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
       {:error, _} = err -> err
     end

@@ -9,22 +9,13 @@ defmodule Raxol.ACP.Seller.QueueTest do
   alias Raxol.ACP.Seller.Queue
   alias Raxol.ACP.TestSupport.{EchoOffering, SellerHelper}
 
-  @env_var "RAXOL_ACP_QUEUE_TEST_KEY"
-  @privkey "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-  @memo_opts [chain_id: 8453, verifying_contract: "0x" <> String.duplicate("ab", 20)]
   @seller "0x" <> String.duplicate("11", 20)
   @buyer "0x" <> String.duplicate("22", 20)
 
-  defmodule Wallet do
-    use Raxol.Payments.Wallets.Env, env_var: "RAXOL_ACP_QUEUE_TEST_KEY", chain_id: 8453
-  end
-
   setup do
-    System.put_env(@env_var, @privkey)
     OfferingRegistry.clear()
     InMemory.reset()
     Store.clear()
-    on_exit(fn -> System.delete_env(@env_var) end)
     :ok
   end
 
@@ -85,17 +76,15 @@ defmodule Raxol.ACP.Seller.QueueTest do
     end
   end
 
-  describe "hybrid wallet resolution: defaults from config" do
+  describe ":job_offered dispatch" do
     setup do
-      :ok =
-        SellerHelper.reset_seller(wallet: Wallet, memo_opts: @memo_opts, seller_address: @seller)
-
+      :ok = SellerHelper.reset_seller(seller_address: @seller)
       :ok = attach_telemetry([:dispatched, :dropped])
       {:ok, _spec} = EchoOffering.register()
       :ok
     end
 
-    test ":job_offered uses Queue defaults when the spec has no override" do
+    test "starts a Job.Server, accepts the request, and persists the negotiation memo" do
       {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
 
       Queue.dispatch(%{
@@ -113,100 +102,14 @@ defmodule Raxol.ACP.Seller.QueueTest do
       :ok = wait_for_state(job_id, :negotiation)
 
       assert {:ok, %{state: :negotiation, memos: [memo]}} = Store.load(job_id)
-      assert memo.type == :negotiation
-      assert byte_size(memo.signature) == 65
-    end
-  end
-
-  describe "hybrid wallet resolution: per-offering override beats default" do
-    defmodule OverrideWallet do
-      use Raxol.Payments.Wallets.Env, env_var: "RAXOL_ACP_QUEUE_TEST_KEY", chain_id: 1
-    end
-
-    defmodule OverrideOffering do
-      use Raxol.ACP.Offering,
-        name: "test.override",
-        wallet: OverrideWallet,
-        memo_opts: [chain_id: 1, verifying_contract: "0x" <> String.duplicate("cd", 20)]
-
-      @impl Raxol.ACP.Offering.Handler
-      def handle_request(req, _ctx), do: {:accept, req}
-      @impl Raxol.ACP.Offering.Handler
-      def handle_deliver(req, _ctx), do: {:deliver, req}
-    end
-
-    setup do
-      :ok =
-        SellerHelper.reset_seller(
-          wallet: Wallet,
-          memo_opts: @memo_opts,
-          seller_address: @seller
-        )
-
-      :ok = attach_telemetry([:dispatched])
-      {:ok, _} = OverrideOffering.register()
-      :ok
-    end
-
-    test "the spec's wallet+memo_opts replace the Queue default" do
-      assert OverrideOffering.spec().wallet == OverrideWallet
-
-      assert OverrideOffering.spec().memo_opts == [
-               chain_id: 1,
-               verifying_contract: "0x" <> String.duplicate("cd", 20)
-             ]
-
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
-
-      Queue.dispatch(%{
-        type: :job_offered,
-        job_id: job_id,
-        offering: "test.override",
-        request: %{"x" => 1},
-        buyer: @buyer
-      })
-
-      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dispatched],
-                      %{offering: "test.override"}},
-                     500
-
-      :ok = wait_for_state(job_id, :negotiation)
-    end
-  end
-
-  describe "missing wallet" do
-    setup do
-      :ok = SellerHelper.reset_seller([])
-      :ok = attach_telemetry([:dropped])
-      {:ok, _spec} = EchoOffering.register()
-      :ok
-    end
-
-    test "drops :job_offered when neither default nor spec provides a wallet" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
-
-      Queue.dispatch(%{
-        type: :job_offered,
-        job_id: job_id,
-        offering: "test.echo",
-        request: %{"text" => "ping"},
-        buyer: @buyer
-      })
-
-      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
-                      %{type: :job_offered, reason: :wallet_unconfigured}},
-                     200
-
-      assert Job.Registry.whereis(job_id) == :undefined
-      assert :error = Store.load(job_id)
+      assert memo.next_phase == :negotiation
+      assert memo.memo_type == :message
     end
   end
 
   describe "unknown offering" do
     setup do
-      :ok =
-        SellerHelper.reset_seller(wallet: Wallet, memo_opts: @memo_opts, seller_address: @seller)
-
+      :ok = SellerHelper.reset_seller(seller_address: @seller)
       :ok = attach_telemetry([:dropped])
       :ok
     end
@@ -230,9 +133,7 @@ defmodule Raxol.ACP.Seller.QueueTest do
 
   describe "events for non-running jobs" do
     setup do
-      :ok =
-        SellerHelper.reset_seller(wallet: Wallet, memo_opts: @memo_opts, seller_address: @seller)
-
+      :ok = SellerHelper.reset_seller(seller_address: @seller)
       :ok = attach_telemetry([:dropped])
       :ok
     end

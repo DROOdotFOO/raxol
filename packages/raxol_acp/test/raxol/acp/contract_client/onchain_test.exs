@@ -276,17 +276,15 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
     end
   end
 
-  describe "submit_memo/4" do
-    test "encodes a uint256 type index from the memo type atom" do
+  describe "create_memo/5" do
+    test "encodes content + uint8 memo_type and nextPhase" do
       events = self()
       install_stub(default_handler(events))
 
       job_id = "0x" <> Integer.to_string(123, 16)
-      payload = %{"step" => 1}
-      sig = String.duplicate(<<0xAA>>, 65)
 
       assert {:ok, "0x" <> _} =
-               Onchain.submit_memo(job_id, :negotiation, payload, sig)
+               Onchain.create_memo(job_id, "hello", :message, false, :negotiation)
 
       assert_received {:rpc_call, "eth_sendRawTransaction", _}
     end

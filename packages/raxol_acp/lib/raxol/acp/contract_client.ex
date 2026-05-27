@@ -37,13 +37,13 @@ defmodule Raxol.ACP.ContractClient do
   @type tx_hash :: binary()
   @type seller_address :: String.t()
   @type price_usdc :: Decimal.t()
-  @type memo_type :: :request | :negotiation | :transaction | :evaluation | :completed
-  @type signature :: binary()
+  @type memo_type :: Raxol.ACP.Job.MemoType.t()
+  @type job_phase :: Raxol.ACP.Job.StateMachine.state()
 
   @callback create_job(seller_address(), price_usdc(), binary()) ::
               {:ok, job_id()} | {:error, term()}
 
-  @callback submit_memo(job_id(), memo_type(), map(), signature()) ::
+  @callback create_memo(job_id(), String.t(), memo_type(), boolean(), job_phase()) ::
               {:ok, tx_hash()} | {:error, term()}
 
   @callback complete_job(job_id(), binary()) ::
@@ -58,10 +58,20 @@ defmodule Raxol.ACP.ContractClient do
           {:ok, job_id()} | {:error, term()}
   def create_job(seller, price, data), do: impl().create_job(seller, price, data)
 
-  @spec submit_memo(job_id(), memo_type(), map(), signature()) ::
+  @doc """
+  Create an on-chain memo. Mirrors `InteractionLedger.createMemo` from
+  the Virtuals ACP contract:
+
+      createMemo(uint256 jobId, string content, uint8 memoType,
+                 bool isSecured, uint8 nextPhase) -> uint256 memoId
+
+  `memo_type` is an atom from `Raxol.ACP.Job.MemoType`; `next_phase` is
+  the state-machine atom the memo transitions the job to.
+  """
+  @spec create_memo(job_id(), String.t(), memo_type(), boolean(), job_phase()) ::
           {:ok, tx_hash()} | {:error, term()}
-  def submit_memo(job_id, type, payload, signature),
-    do: impl().submit_memo(job_id, type, payload, signature)
+  def create_memo(job_id, content, memo_type, is_secured, next_phase),
+    do: impl().create_memo(job_id, content, memo_type, is_secured, next_phase)
 
   @spec complete_job(job_id(), binary()) :: {:ok, tx_hash()} | {:error, term()}
   def complete_job(job_id, deliverable_hash),

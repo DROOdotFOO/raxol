@@ -78,8 +78,10 @@ defmodule Raxol.ACP.Job.ServerTest do
       assert Job.Server.current_state(job_id) == :negotiation
 
       [memo] = Job.Server.memos(job_id)
-      assert memo.type == :negotiation
+      assert memo.next_phase == :negotiation
+      assert memo.memo_type == :message
       assert memo.payload == %{ack: true}
+      assert Jason.decode!(memo.content) == %{"ack" => true}
       assert memo.signature == @sig
       assert memo.tx_hash == "tx-1"
     end
@@ -119,7 +121,14 @@ defmodule Raxol.ACP.Job.ServerTest do
 
       # The InMemory contract client recorded all four memos against the job
       memos = InMemory.list_memos(job_id)
-      assert Enum.map(memos, & &1.type) == [:negotiation, :transaction, :evaluation, :completed]
+
+      assert Enum.map(memos, & &1.next_phase) == [
+               :negotiation,
+               :transaction,
+               :evaluation,
+               :completed
+             ]
+
       assert Enum.map(memos, & &1.tx_hash) == ["tx-1", "tx-2", "tx-3", "tx-4"]
     end
 
@@ -133,7 +142,7 @@ defmodule Raxol.ACP.Job.ServerTest do
   end
 
   describe "telemetry" do
-    test "emits [:raxol, :acp, :job, :transition] with from/to/memo_type metadata" do
+    test "emits [:raxol, :acp, :job, :transition] with from/to/memo_type/next_phase metadata" do
       {_pid, job_id} = start_job()
 
       handler_id = "job-telemetry-#{System.unique_integer([:positive])}"
@@ -152,7 +161,8 @@ defmodule Raxol.ACP.Job.ServerTest do
 
         assert_receive {:telemetry, %{from: :request, to: :negotiation} = meta}, 500
         assert meta.job_id == job_id
-        assert meta.memo_type == :negotiation
+        assert meta.memo_type == :message
+        assert meta.next_phase == :negotiation
         assert meta.tx_hash == "tx-1"
       after
         :telemetry.detach(handler_id)

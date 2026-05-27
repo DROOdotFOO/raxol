@@ -55,7 +55,7 @@ defmodule Raxol.ACP.Job.Store do
 
   ## Caveats (v0.1)
 
-  - Persistence happens after `ContractClient.submit_memo` returns
+  - Persistence happens after `ContractClient.create_memo` returns
     `{:ok, _}`. If the server crashes between submit and persist, the
     memo is on chain but the store does not know -- a restarted server
     will retry the transition. The state machine + chain idempotency

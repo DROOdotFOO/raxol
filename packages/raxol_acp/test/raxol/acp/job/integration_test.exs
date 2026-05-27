@@ -8,14 +8,13 @@ defmodule Raxol.ACP.Job.IntegrationTest do
   - `Raxol.ACP.ContractClient` (InMemory impl)
   - `Raxol.ACP.Job.Supervisor` + `Job.Server` + `Job.Registry`
   - `Raxol.ACP.Job.StateMachine` validation
-  - `Raxol.ACP.Job.Memo` EIP-712 signing via a real
-    `Raxol.Payments.Wallets.Env` wallet
+  - `Raxol.ACP.ContractClient.create_memo/5` on every transition
 
   Drives one full ACP job (request -> negotiation -> transaction ->
   evaluation -> completed) using `EchoOffering` as the seller's
   handler. Asserts memos accumulated in submission order, payloads
-  contain handler outputs, signatures are real (65 bytes), final state
-  is `:completed`, and the server terminates cleanly.
+  contain handler outputs, final state is `:completed`, and the
+  server terminates cleanly.
   """
 
   use ExUnit.Case, async: false
@@ -25,25 +24,11 @@ defmodule Raxol.ACP.Job.IntegrationTest do
   alias Raxol.ACP.Job.Store
   alias Raxol.ACP.TestSupport.EchoOffering
 
-  @test_env_var "RAXOL_ACP_INTEGRATION_KEY"
-  @test_privkey "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-  @verifying_contract "0x" <> String.duplicate("ab", 20)
-  @memo_opts [chain_id: 8453, verifying_contract: @verifying_contract]
   @seller "0x" <> String.duplicate("11", 20)
   @buyer "0x" <> String.duplicate("22", 20)
   @request %{"text" => "ping"}
 
-  defmodule Wallet do
-    use Raxol.Payments.Wallets.Env,
-      env_var: "RAXOL_ACP_INTEGRATION_KEY",
-      chain_id: 8453
-  end
-
   setup do
-    System.put_env(@test_env_var, @test_privkey)
-
-    on_exit(fn -> System.delete_env(@test_env_var) end)
-
     # Clear any leftover Job.Server processes so synthetic "job-N" ids
     # from InMemory's counter don't collide with old registrations.
     for {_, pid, _, _} <- DynamicSupervisor.which_children(Job.Supervisor),
@@ -84,8 +69,6 @@ defmodule Raxol.ACP.Job.IntegrationTest do
       Job.Supervisor.start_job(
         job_id: job_id,
         handler: EchoOffering,
-        wallet: Wallet,
-        memo_opts: @memo_opts,
         request: @request,
         buyer: @buyer,
         seller: @seller
@@ -94,8 +77,8 @@ defmodule Raxol.ACP.Job.IntegrationTest do
     {pid, job_id}
   end
 
-  describe "full lifecycle: request -> completed via handler + wallet" do
-    test "every transition produces a real signed memo with handler output" do
+  describe "full lifecycle: request -> completed via handler" do
+    test "every transition produces an on-chain memo with handler output" do
       {pid, job_id} = start_configured_job()
       ref = Process.monitor(pid)
 
@@ -104,16 +87,18 @@ defmodule Raxol.ACP.Job.IntegrationTest do
       assert {:ok, :negotiation} = Job.Server.accept_request(job_id)
 
       # 2. Buyer's payment lands -- payload is the buyer's signed auth.
-      # In tests we let the server sign with our wallet for convenience.
+      buyer_sig = <<0xCA, 0xFE>>
+
       assert {:ok, :transaction} =
-               Job.Server.accept_payment(job_id, %{auth: "buyer-payment-blob"})
+               Job.Server.accept_payment(job_id, %{auth: "buyer-payment-blob"}, buyer_sig)
 
       # 3. Seller delivers -- handler.handle_deliver runs, echoes the
       # request as %{"echo" => "ping"}.
       assert {:ok, :evaluation} = Job.Server.deliver(job_id)
 
       # 4. Buyer (acting as evaluator) approves -- terminal transition.
-      assert {:ok, :completed} = Job.Server.approve(job_id, %{ok: true})
+      approve_sig = <<0xBE, 0xEF>>
+      assert {:ok, :completed} = Job.Server.approve(job_id, %{ok: true}, approve_sig)
 
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
       wait_unregistered(job_id)
@@ -121,20 +106,19 @@ defmodule Raxol.ACP.Job.IntegrationTest do
       # The InMemory contract client recorded all four memos in order.
       memos = InMemory.list_memos(job_id)
 
-      assert Enum.map(memos, & &1.type) ==
+      assert Enum.map(memos, & &1.next_phase) ==
                [:negotiation, :transaction, :evaluation, :completed]
 
-      # Each memo's payload reflects the right phase.
-      [neg, tx, eval, comp] = memos
-      assert neg.payload == @request
-      assert tx.payload == %{auth: "buyer-payment-blob"}
-      assert eval.payload == %{"echo" => "ping"}
-      assert comp.payload == %{ok: true}
+      # Payment and approval transitions use :txhash; the rest are :message.
+      assert Enum.map(memos, & &1.memo_type) ==
+               [:message, :txhash, :message, :txhash]
 
-      # All signatures are real EIP-712 (65 bytes), not placeholder bytes.
-      for memo <- memos do
-        assert byte_size(memo.signature) == 65
-      end
+      # Each memo's content reflects the right phase (JSON-encoded payload).
+      [neg, tx, eval, comp] = memos
+      assert Jason.decode!(neg.content) == @request
+      assert Jason.decode!(tx.content) == %{"auth" => "buyer-payment-blob"}
+      assert Jason.decode!(eval.content) == %{"echo" => "ping"}
+      assert Jason.decode!(comp.content) == %{"ok" => true}
     end
 
     test "rejecting in handle_request fires :expire instead of :accept_request" do
@@ -152,8 +136,6 @@ defmodule Raxol.ACP.Job.IntegrationTest do
         Job.Supervisor.start_job(
           job_id: job_id,
           handler: RejectOffering,
-          wallet: Wallet,
-          memo_opts: @memo_opts,
           request: @request
         )
 
@@ -163,8 +145,8 @@ defmodule Raxol.ACP.Job.IntegrationTest do
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
 
       [memo] = InMemory.list_memos(job_id)
-      assert memo.type == :expired
-      assert memo.payload == %{reason: ":not_today"}
+      assert memo.next_phase == :expired
+      assert Jason.decode!(memo.content) == %{"reason" => ":not_today"}
     end
 
     test "deliver error from handler fires :expire" do
@@ -182,8 +164,6 @@ defmodule Raxol.ACP.Job.IntegrationTest do
         Job.Supervisor.start_job(
           job_id: job_id,
           handler: BrokenOffering,
-          wallet: Wallet,
-          memo_opts: @memo_opts,
           request: @request
         )
 
@@ -203,7 +183,7 @@ defmodule Raxol.ACP.Job.IntegrationTest do
       assert :request in missing
     end
 
-    test "accept_payment without wallet falls back to caller signature" do
+    test "buyer signature is preserved in the local memo log" do
       {:ok, job_id} =
         ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
 
@@ -211,18 +191,15 @@ defmodule Raxol.ACP.Job.IntegrationTest do
         Job.Supervisor.start_job(
           job_id: job_id,
           handler: EchoOffering,
-          wallet: Wallet,
-          memo_opts: @memo_opts,
           request: @request
         )
 
       {:ok, :negotiation} = Job.Server.accept_request(job_id)
 
-      # Caller-supplied signature path bypasses the wallet entirely.
       assert {:ok, :transaction} =
                Job.Server.accept_payment(job_id, %{}, <<0xCA, 0xFE>>)
 
-      [_negotiation, transaction] = InMemory.list_memos(job_id)
+      [_negotiation, transaction] = Job.Server.memos(job_id)
       assert transaction.signature == <<0xCA, 0xFE>>
     end
   end
