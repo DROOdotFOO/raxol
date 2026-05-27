@@ -54,13 +54,17 @@ defmodule Raxol.Recording.PlayerTest do
         started_at: DateTime.utc_now(),
         events: [
           {0, :output, "a"},
-          {100_000, :output, "b"}
+          {5_000_000, :output, "b"}
         ]
       }
 
-      # At 100x speed, 100ms delay becomes 1ms
-      {time_us, :ok} = :timer.tc(fn -> Player.play(session, [speed: 100.0] ++ @play_opts) end)
-      assert time_us < 500_000
+      # At 100x speed, 5s delay becomes 50ms. If the multiplier were ignored,
+      # this would take ~5s. Threshold leaves headroom for slow CI runners
+      # (macOS GitHub runners can add ~1s of ExUnit/JIT overhead).
+      {time_us, :ok} =
+        :timer.tc(fn -> Player.play(session, [speed: 100.0] ++ @play_opts) end)
+
+      assert time_us < 2_500_000
     end
   end
 end
