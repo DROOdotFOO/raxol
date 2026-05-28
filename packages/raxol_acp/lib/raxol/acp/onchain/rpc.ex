@@ -137,6 +137,16 @@ defmodule Raxol.ACP.Onchain.RPC do
   end
 
   @doc """
+  Execute a read-only `eth_call`. `tx` is a call object (`:to`, `:data`,
+  optional `:from`/`:value`). Returns the raw result hex string.
+  """
+  @spec eth_call(client(), map(), String.t() | non_neg_integer()) ::
+          {:ok, String.t()} | {:error, term()}
+  def eth_call(client, tx, block \\ "latest") do
+    call(client, "eth_call", [encode_call_object(tx), encode_block_tag(block)])
+  end
+
+  @doc """
   Return the chain's recent fee history for EIP-1559 fee suggestion.
 
   `block_count` is how many blocks of history to fetch. `newest_block`

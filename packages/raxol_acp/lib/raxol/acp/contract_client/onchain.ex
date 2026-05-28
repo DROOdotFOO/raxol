@@ -20,7 +20,20 @@ defmodule Raxol.ACP.ContractClient.Onchain do
         contract_client: Raxol.ACP.ContractClient.Onchain,
         rpc: [url: "https://sepolia.base.org"],
         chain: :sepolia,
-        wallet: MyApp.Wallet                # any Raxol.Payments.Wallet impl
+        onchain_wallet: MyApp.Wallet        # any Raxol.Payments.Wallet impl
+
+  ## Two wallet paths (selected by capability)
+
+  - **EOA** (`Raxol.Payments.Wallets.Env`/`Op`): the call is signed as
+    an EIP-1559 transaction and broadcast via `eth_sendRawTransaction`.
+  - **Smart Contract Account** (`Raxol.ACP.Wallet.SCA`, what Virtuals
+    agents use): the call is wrapped in the account's `execute(...)`,
+    built into an ERC-4337 UserOperation, sponsored by the Alchemy gas
+    manager (gasless), signed by the session key, and submitted to a
+    bundler. Detected via `send_sponsored_user_operation/2` so the same
+    `:onchain_wallet` slot serves both. The EntryPoint nonce is fetched
+    with `getNonce(account, key)`; the job-id / receipt handling below
+    is identical -- the bundler receipt embeds the on-chain tx receipt.
 
   ## v0.1 caveats (documented; not bugs)
 
@@ -53,9 +66,11 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   ## Telemetry
 
-  - `[:raxol, :acp, :onchain, :tx_sent]` -- after broadcast.
+  - `[:raxol, :acp, :onchain, :tx_sent]` -- after an EOA broadcast.
     Metadata: `%{method, tx_hash, gas_limit, max_fee_per_gas}`
-  - `[:raxol, :acp, :onchain, :tx_mined]` -- after receipt.
+  - `[:raxol, :acp, :onchain, :user_op_sent]` -- after an SCA bundler
+    submission. Metadata: `%{method, user_op_hash, tx_hash}`
+  - `[:raxol, :acp, :onchain, :tx_mined]` -- after receipt (both paths).
     Metadata: `%{method, tx_hash, block_number, status}`
   - `[:raxol, :acp, :onchain, :placeholder_job_id]` -- emitted by
     `create_job/3` while the LogDecoder TODO is open.
@@ -66,6 +81,9 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   alias Raxol.ACP.{ABI, Chain}
   alias Raxol.ACP.Onchain.{LogDecoder, RPC, Transaction}
   alias Raxol.ACP.Wallet.NonceServer
+  alias Raxol.ACP.Wallet.SCA.{ModularAccount, UserOp}
+
+  @sig_get_nonce "getNonce(address,uint192)"
 
   # Placeholder signatures. Replace when Virtuals ABIs are vendored.
   @sig_create_job "createJob(address,uint256,bytes)"
@@ -187,12 +205,85 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   # -- Send pipeline --
 
+  # Two transaction paths share this entry point:
+  #
+  #   * EOA wallets (`Wallets.Env`/`Op`) sign an EIP-1559 transaction
+  #     and broadcast it directly (`send_with/3`).
+  #   * Smart Contract Account wallets (`Raxol.ACP.Wallet.SCA`) wrap the
+  #     call in `execute(...)`, build an ERC-4337 UserOperation, sponsor
+  #     it via the Alchemy gas manager, sign, and submit to a bundler
+  #     (`send_via_sca/3`). Selected by capability so config stays in
+  #     the single `:onchain_wallet` slot.
   defp send_tx(method, call_data) do
-    with {:ok, ctx} <- build_context(),
-         {:ok, tx_hash, receipt} <- send_with(ctx, method, call_data) do
+    with {:ok, ctx} <- build_context() do
+      if sca_wallet?(ctx.wallet) do
+        send_via_sca(ctx, method, call_data)
+      else
+        send_with(ctx, method, call_data)
+      end
+    end
+  end
+
+  defp sca_wallet?(wallet), do: function_exported?(wallet, :send_sponsored_user_operation, 2)
+
+  # -- SCA / ERC-4337 path --
+
+  defp send_via_sca(ctx, method, call_data) do
+    account = ctx.wallet.address()
+    exec_calldata = ModularAccount.execute_calldata(ctx.contract_address, 0, call_data)
+    wallet_opts = sca_wallet_opts()
+
+    with {:ok, nonce} <- entrypoint_nonce(ctx, account),
+         op = %UserOp{sender: account, nonce: nonce, call_data: exec_calldata},
+         {:ok, op_hash} <- ctx.wallet.send_sponsored_user_operation(op, wallet_opts),
+         {:ok, uo_receipt} <- ctx.wallet.await_user_operation(op_hash, wallet_opts) do
+      receipt = Map.get(uo_receipt, "receipt", uo_receipt)
+      tx_hash = Map.get(receipt, "transactionHash") || op_hash
+
+      :telemetry.execute(
+        [:raxol, :acp, :onchain, :user_op_sent],
+        %{},
+        %{method: method, user_op_hash: op_hash, tx_hash: tx_hash}
+      )
+
+      emit_mined(method, tx_hash, receipt, sca_status(uo_receipt))
       {:ok, tx_hash, receipt}
     end
   end
+
+  defp sca_status(%{"success" => true}), do: :success
+  defp sca_status(%{"success" => false}), do: :failure
+  defp sca_status(_), do: :unknown
+
+  # Bundler/paymaster calls normally use the SCA wallet's own configured
+  # URLs. Tests inject a stub by setting `:sca_rpc` (a `%Req.Request{}`
+  # or a keyword passed to `Req.new/1`), which we thread through as the
+  # `:req` opt so both legs hit the stub. Returns `[]` in production.
+  defp sca_wallet_opts do
+    case Application.get_env(:raxol_acp, :sca_rpc) do
+      nil -> []
+      %Req.Request{} = req -> [req: req]
+      opts when is_list(opts) -> [req: Req.new(opts)]
+    end
+  end
+
+  # EntryPoint.getNonce(account, key) -> full 256-bit nonce. The key
+  # encodes the validating session entity (see ModularAccount.nonce_key).
+  defp entrypoint_nonce(ctx, account) do
+    key = ctx.wallet.nonce_key()
+
+    call_data =
+      ABI.encode_call(@sig_get_nonce, [{"address", account}, {"uint192", key}])
+
+    case RPC.eth_call(ctx.client, %{to: ctx.wallet.entry_point(), data: call_data}) do
+      {:ok, hex} -> {:ok, decode_uint256(hex)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp decode_uint256("0x" <> ""), do: 0
+  defp decode_uint256("0x" <> hex), do: String.to_integer(hex, 16)
+  defp decode_uint256(_), do: 0
 
   defp send_with(ctx, method, call_data) do
     with {:ok, nonce} <- nonce(ctx),

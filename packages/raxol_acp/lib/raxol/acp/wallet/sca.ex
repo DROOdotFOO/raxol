@@ -159,6 +159,20 @@ defmodule Raxol.ACP.Wallet.SCA do
       @doc "The configured EntryPoint address."
       @spec entry_point() :: String.t()
       def entry_point, do: unquote(entry_point)
+
+      @doc "The configured bundler URL (resolving `{:system, var}`)."
+      @spec bundler_url() :: {:ok, String.t()} | {:error, term()}
+      def bundler_url, do: Raxol.ACP.Wallet.SCA.resolve_bundler_url(unquote(bundler_url))
+
+      @doc """
+      Poll the bundler for a UserOperation receipt by its hash. Returns
+      the bundler receipt (which embeds the on-chain tx receipt + logs).
+      """
+      @spec await_user_operation(String.t(), keyword()) ::
+              {:ok, map()} | {:error, term()}
+      def await_user_operation(op_hash, opts \\ []) do
+        Raxol.ACP.Wallet.SCA.await_user_operation(op_hash, unquote(bundler_url), opts)
+      end
     end
   end
 
@@ -244,6 +258,22 @@ defmodule Raxol.ACP.Wallet.SCA do
     end
   end
 
+  @doc false
+  @spec await_user_operation(String.t(), String.t() | {:system, String.t()} | nil, keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def await_user_operation(op_hash, bundler_url, opts) do
+    configured = Keyword.get(opts, :bundler_url, bundler_url)
+
+    with {:ok, url} <- resolve_bundler_url(configured) do
+      Bundler.wait_for_receipt(url, op_hash, opts)
+    end
+  end
+
+  @doc false
+  @spec resolve_bundler_url(String.t() | {:system, String.t()} | nil) ::
+          {:ok, String.t()} | {:error, term()}
+  def resolve_bundler_url(url), do: resolve_url(url, :no_bundler_url)
+
   # -- Helpers --
 
   # viem's hashMessage: keccak256("\x19Ethereum Signed Message:\n" <> len <> data).
@@ -260,8 +290,6 @@ defmodule Raxol.ACP.Wallet.SCA do
   end
 
   defp normalize_v(<<_::binary-size(64), _v::8>> = sig), do: sig
-
-  defp resolve_bundler_url(url), do: resolve_url(url, :no_bundler_url)
 
   # Resolve a URL that may be a literal string, a `{:system, var}`
   # env-var reference, or nil (returns the supplied error atom).
