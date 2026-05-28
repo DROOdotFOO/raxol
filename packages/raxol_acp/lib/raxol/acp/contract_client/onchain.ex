@@ -294,26 +294,52 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     wallet_opts = sca_wallet_opts()
 
     with {:ok, nonce} <- entrypoint_nonce(ctx, account),
-         op = %UserOp{sender: account, nonce: nonce, call_data: exec_calldata},
+         {:ok, init_code} <- maybe_init_code(ctx, account),
+         op = %UserOp{
+           sender: account,
+           nonce: nonce,
+           call_data: exec_calldata,
+           init_code: init_code
+         },
          {:ok, op_hash} <- ctx.wallet.send_sponsored_user_operation(op, wallet_opts),
          {:ok, uo_receipt} <- ctx.wallet.await_user_operation(op_hash, wallet_opts) do
-      receipt = Map.get(uo_receipt, "receipt", uo_receipt)
-      tx_hash = Map.get(receipt, "transactionHash") || op_hash
-
-      :telemetry.execute(
-        [:raxol, :acp, :onchain, :user_op_sent],
-        %{},
-        %{method: method, user_op_hash: op_hash, tx_hash: tx_hash}
-      )
-
-      emit_mined(method, tx_hash, receipt, sca_status(uo_receipt))
-      {:ok, tx_hash, receipt}
+      finish_sca(method, op_hash, uo_receipt)
     end
+  end
+
+  defp finish_sca(method, op_hash, uo_receipt) do
+    receipt = Map.get(uo_receipt, "receipt", uo_receipt)
+    tx_hash = Map.get(receipt, "transactionHash") || op_hash
+
+    :telemetry.execute(
+      [:raxol, :acp, :onchain, :user_op_sent],
+      %{},
+      %{method: method, user_op_hash: op_hash, tx_hash: tx_hash}
+    )
+
+    emit_mined(method, tx_hash, receipt, sca_status(uo_receipt))
+    {:ok, tx_hash, receipt}
   end
 
   defp sca_status(%{"success" => true}), do: :success
   defp sca_status(%{"success" => false}), do: :failure
   defp sca_status(_), do: :unknown
+
+  # On the account's first transaction it isn't deployed yet, so the
+  # UserOp must carry the factory `initCode` that self-deploys it. We
+  # check `eth_getCode`; once deployed, subsequent ops omit initCode.
+  # Requires the wallet to expose `deploy_init_code/0` (SCA wallets do).
+  defp maybe_init_code(ctx, account) do
+    if function_exported?(ctx.wallet, :deploy_init_code, 0) do
+      case RPC.deployed?(ctx.client, account) do
+        {:ok, true} -> {:ok, <<>>}
+        {:ok, false} -> {:ok, ctx.wallet.deploy_init_code()}
+        {:error, _} = err -> err
+      end
+    else
+      {:ok, <<>>}
+    end
+  end
 
   # Bundler/paymaster calls normally use the SCA wallet's own configured
   # URLs. Tests inject a stub by setting `:sca_rpc` (a `%Req.Request{}`

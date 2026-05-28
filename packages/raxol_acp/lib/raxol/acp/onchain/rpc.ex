@@ -147,6 +147,25 @@ defmodule Raxol.ACP.Onchain.RPC do
   end
 
   @doc """
+  Return the deployed bytecode at `address` (0x-prefixed hex). An
+  undeployed account returns `"0x"`. Use `deployed?/2` for a boolean.
+  """
+  @spec get_code(client(), String.t(), String.t() | non_neg_integer()) ::
+          {:ok, String.t()} | {:error, term()}
+  def get_code(client, "0x" <> _ = address, block \\ "latest") do
+    call(client, "eth_getCode", [address, encode_block_tag(block)])
+  end
+
+  @doc "True if `address` has deployed bytecode on chain."
+  @spec deployed?(client(), String.t()) :: {:ok, boolean()} | {:error, term()}
+  def deployed?(client, address) do
+    case get_code(client, address) do
+      {:ok, code} -> {:ok, code not in ["0x", "0x0", ""]}
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
   Return the chain's recent fee history for EIP-1559 fee suggestion.
 
   `block_count` is how many blocks of history to fetch. `newest_block`

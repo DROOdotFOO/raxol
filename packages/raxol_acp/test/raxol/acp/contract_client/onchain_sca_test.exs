@@ -68,7 +68,10 @@ defmodule Raxol.ACP.ContractClient.OnchainSCATest do
   end
 
   # One plug for the node RPC + bundler + paymaster, keyed on method.
-  defp install_stub(events) do
+  # `:deployed` controls what eth_getCode reports for the SCA.
+  defp install_stub(events, opts \\ []) do
+    deployed = Keyword.get(opts, :deployed, true)
+
     plug = fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       req = Jason.decode!(body)
@@ -79,6 +82,9 @@ defmodule Raxol.ACP.ContractClient.OnchainSCATest do
           # EntryPoint.getNonce -> uint256 (key 0x101 in high bits, seq 0)
           "eth_call" ->
             "0x" <> (0x101 |> Integer.to_string(16) |> String.pad_leading(64, "0"))
+
+          "eth_getCode" ->
+            if deployed, do: "0x60806040", else: "0x"
 
           "alchemy_requestGasAndPaymasterAndData" ->
             @gm_result
@@ -143,8 +149,29 @@ defmodule Raxol.ACP.ContractClient.OnchainSCATest do
       assert execute_wrapped?(user_op["callData"])
       assert String.starts_with?(user_op["signature"], "0xff00")
 
+      # Account already deployed -> no factory/initCode on the UserOp.
+      refute Map.has_key?(user_op, "factory")
+
       # And we polled for the UserOp receipt.
       assert_received {:rpc_call, "eth_getUserOperationReceipt", _}
+    end
+
+    test "attaches factory initCode when the account is not yet deployed" do
+      events = self()
+      install_stub(events, deployed: false)
+
+      assert {:ok, @tx_hash} =
+               Onchain.create_memo("42", "hello", :message, false, :negotiation)
+
+      assert_received {:rpc_call, "eth_getCode", _}
+      assert_received {:rpc_call, "eth_sendUserOperation", [user_op, _ep]}
+
+      # v0.7 splits initCode into factory + factoryData; the factory is
+      # the MAv2 factory and factoryData is createSemiModularAccount(...).
+      assert user_op["factory"] ==
+               String.downcase(Raxol.ACP.Wallet.SCA.ModularAccount.factory_address())
+
+      assert String.starts_with?(user_op["factoryData"], "0x")
     end
 
     test "create_job routes through SCA and returns the inner tx hash" do

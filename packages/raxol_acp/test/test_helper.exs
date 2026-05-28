@@ -1,4 +1,9 @@
-ExUnit.start()
+# `:live_chain` tests spin up a real Anvil node + deploy a stub contract
+# and exercise the on-chain pipeline end-to-end. They need foundry
+# (anvil + cast) installed and are slow, so they're opt-in:
+#
+#     mix test --include live_chain
+ExUnit.start(exclude: [:live_chain])
 
 # Configure the in-memory contract client for the test run. The test/support
 # impl is the second real implementation of the ContractClient behaviour --
