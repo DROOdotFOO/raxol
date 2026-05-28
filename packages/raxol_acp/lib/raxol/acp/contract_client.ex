@@ -92,6 +92,50 @@ defmodule Raxol.ACP.ContractClient do
   @callback claim_budget(job_id()) ::
               {:ok, tx_hash()} | {:error, term()}
 
+  @doc """
+  Set the escrow budget in a specific ERC-20 token. Mirrors
+  `ACPSimple.setBudgetWithPaymentToken`:
+
+      setBudgetWithPaymentToken(uint256 jobId, uint256 amount, address token)
+
+  Use this instead of `set_budget/2` when the job settles in a token
+  other than the contract's default (e.g. a non-USDC stablecoin).
+  """
+  @callback set_budget_with_payment_token(job_id(), amount_usdc(), address()) ::
+              {:ok, tx_hash()} | {:error, term()}
+
+  @doc """
+  Confirm receipt of an x402 (HTTP 402) payment for a job. Mirrors
+  `ACPSimple.confirmX402PaymentReceived`:
+
+      confirmX402PaymentReceived(uint256 jobId)
+  """
+  @callback confirm_x402_payment_received(job_id()) ::
+              {:ok, tx_hash()} | {:error, term()}
+
+  @doc """
+  Create a payable memo -- a memo that moves funds as part of a phase
+  transition. Mirrors `ACPSimple.createPayableMemo`:
+
+      createPayableMemo(uint256 jobId, string content, address token,
+                        uint256 amount, address recipient,
+                        uint256 feeAmount, uint8 feeType, uint8 memoType,
+                        uint8 nextPhase, uint256 expiredAt) -> uint256
+
+  `opts` keys:
+
+  - `:token` (required) -- ERC-20 token address
+  - `:amount` (required) -- `Decimal`, scaled to the token's 6 decimals
+  - `:recipient` (required) -- payout address
+  - `:fee_amount` -- `Decimal`, default `0`
+  - `:fee_type` -- `Raxol.ACP.Job.FeeType` atom, default `:no_fee`
+  - `:memo_type` -- `Raxol.ACP.Job.MemoType` atom, default `:payable_request`
+  - `:next_phase` -- state-machine atom (required)
+  - `:expired_at` -- unix timestamp, default `0` (no expiry)
+  """
+  @callback create_payable_memo(job_id(), String.t(), keyword()) ::
+              {:ok, tx_hash()} | {:error, term()}
+
   # -- Delegating API --
 
   @spec create_job(address(), address(), non_neg_integer()) ::
@@ -123,6 +167,20 @@ defmodule Raxol.ACP.ContractClient do
 
   @spec claim_budget(job_id()) :: {:ok, tx_hash()} | {:error, term()}
   def claim_budget(job_id), do: impl().claim_budget(job_id)
+
+  @spec set_budget_with_payment_token(job_id(), amount_usdc(), address()) ::
+          {:ok, tx_hash()} | {:error, term()}
+  def set_budget_with_payment_token(job_id, amount, token),
+    do: impl().set_budget_with_payment_token(job_id, amount, token)
+
+  @spec confirm_x402_payment_received(job_id()) :: {:ok, tx_hash()} | {:error, term()}
+  def confirm_x402_payment_received(job_id),
+    do: impl().confirm_x402_payment_received(job_id)
+
+  @spec create_payable_memo(job_id(), String.t(), keyword()) ::
+          {:ok, tx_hash()} | {:error, term()}
+  def create_payable_memo(job_id, content, opts),
+    do: impl().create_payable_memo(job_id, content, opts)
 
   @doc """
   Return the configured implementation module.

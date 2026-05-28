@@ -316,6 +316,42 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
     end
   end
 
+  describe "set_budget_with_payment_token/3" do
+    test "encodes job id + amount + token and sends a tx" do
+      install_stub(default_handler(self()))
+      token = "0x" <> String.duplicate("ee", 20)
+
+      assert {:ok, "0x" <> _} =
+               Onchain.set_budget_with_payment_token("42", Decimal.new("2.50"), token)
+    end
+  end
+
+  describe "confirm_x402_payment_received/1" do
+    test "encodes the job id + sends a tx" do
+      install_stub(default_handler(self()))
+      assert {:ok, "0x" <> _} = Onchain.confirm_x402_payment_received("42")
+    end
+  end
+
+  describe "create_payable_memo/3" do
+    test "encodes the 10-arg payable memo and sends a tx" do
+      events = self()
+      install_stub(default_handler(events))
+
+      assert {:ok, "0x" <> _} =
+               Onchain.create_payable_memo("42", "settle",
+                 token: "0x" <> String.duplicate("ee", 20),
+                 amount: Decimal.new("1.00"),
+                 recipient: "0x" <> String.duplicate("ff", 20),
+                 fee_type: :percentage_fee,
+                 memo_type: :payable_transfer,
+                 next_phase: :completed
+               )
+
+      assert_received {:rpc_call, "eth_sendRawTransaction", _}
+    end
+  end
+
   describe "telemetry" do
     test "emits :tx_sent and :tx_mined for a successful broadcast" do
       install_stub(default_handler(self()))

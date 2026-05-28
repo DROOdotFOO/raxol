@@ -68,8 +68,9 @@ defmodule Raxol.ACP.ContractClient.InMemory do
         evaluator: evaluator,
         expired_at: expired_at,
         budget: nil,
+        payment_token: nil,
+        x402_confirmed: false,
         memos: [],
-        signs: [],
         claimed: false
       }
 
@@ -131,6 +132,58 @@ defmodule Raxol.ACP.ContractClient.InMemory do
         bump_tx({{:ok, tx_hash}, put_job(state, job_id, new_job)})
       end)
     end)
+  end
+
+  @impl true
+  def set_budget_with_payment_token(job_id, %Decimal{} = amount, token)
+      when is_binary(job_id) and is_binary(token) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      with_job(state, job_id, fn job, state ->
+        tx_hash = next_tx_hash(state)
+        new_job = %{job | budget: amount, payment_token: token}
+        bump_tx({{:ok, tx_hash}, put_job(state, job_id, new_job)})
+      end)
+    end)
+  end
+
+  @impl true
+  def confirm_x402_payment_received(job_id) when is_binary(job_id) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      with_job(state, job_id, fn job, state ->
+        tx_hash = next_tx_hash(state)
+        new_job = %{job | x402_confirmed: true}
+        bump_tx({{:ok, tx_hash}, put_job(state, job_id, new_job)})
+      end)
+    end)
+  end
+
+  @impl true
+  def create_payable_memo(job_id, content, opts)
+      when is_binary(job_id) and is_binary(content) and is_list(opts) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      with_job(state, job_id, fn job, state ->
+        tx_hash = next_tx_hash(state)
+        memo = payable_memo(content, opts, tx_hash)
+        new_job = Map.update!(job, :memos, &(&1 ++ [memo]))
+        bump_tx({{:ok, tx_hash}, put_job(state, job_id, new_job)})
+      end)
+    end)
+  end
+
+  defp payable_memo(content, opts, tx_hash) do
+    %{
+      content: content,
+      token: Keyword.fetch!(opts, :token),
+      amount: Keyword.fetch!(opts, :amount),
+      recipient: Keyword.fetch!(opts, :recipient),
+      fee_amount: Keyword.get(opts, :fee_amount, Decimal.new(0)),
+      fee_type: Keyword.get(opts, :fee_type, :no_fee),
+      memo_type: Keyword.get(opts, :memo_type, :payable_request),
+      next_phase: Keyword.fetch!(opts, :next_phase),
+      expired_at: Keyword.get(opts, :expired_at, 0),
+      payable: true,
+      tx_hash: tx_hash
+    }
   end
 
   # -- Inspection --

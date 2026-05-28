@@ -128,6 +128,78 @@ defmodule Raxol.ACP.ContractClientTest do
     end
   end
 
+  describe "set_budget_with_payment_token/3 (delegated)" do
+    test "records the budget and the token address" do
+      {:ok, job_id} = new_job()
+      token = "0x" <> String.duplicate("ee", 20)
+
+      assert {:ok, "tx-1"} =
+               ContractClient.set_budget_with_payment_token(job_id, Decimal.new("2.50"), token)
+
+      job = InMemory.get_job(job_id)
+      assert Decimal.equal?(job.budget, Decimal.new("2.50"))
+      assert job.payment_token == token
+    end
+  end
+
+  describe "confirm_x402_payment_received/1 (delegated)" do
+    test "marks the job's x402 payment confirmed" do
+      {:ok, job_id} = new_job()
+      assert {:ok, "tx-1"} = ContractClient.confirm_x402_payment_received(job_id)
+      assert InMemory.get_job(job_id).x402_confirmed
+    end
+  end
+
+  describe "create_payable_memo/3 (delegated)" do
+    test "records a payable memo with token/amount/recipient and defaults" do
+      {:ok, job_id} = new_job()
+      token = "0x" <> String.duplicate("ee", 20)
+      recipient = "0x" <> String.duplicate("ff", 20)
+
+      assert {:ok, "tx-1"} =
+               ContractClient.create_payable_memo(job_id, "settle",
+                 token: token,
+                 amount: Decimal.new("1.00"),
+                 recipient: recipient,
+                 next_phase: :transaction
+               )
+
+      [memo] = InMemory.list_memos(job_id)
+      assert memo.payable
+      assert memo.token == token
+      assert Decimal.equal?(memo.amount, Decimal.new("1.00"))
+      assert memo.recipient == recipient
+      assert memo.next_phase == :transaction
+      # Defaults
+      assert memo.fee_type == :no_fee
+      assert memo.memo_type == :payable_request
+      assert Decimal.equal?(memo.fee_amount, Decimal.new(0))
+      assert memo.expired_at == 0
+    end
+
+    test "honors explicit fee_type, memo_type, fee_amount, expired_at" do
+      {:ok, job_id} = new_job()
+
+      assert {:ok, "tx-1"} =
+               ContractClient.create_payable_memo(job_id, "settle",
+                 token: "0x" <> String.duplicate("ee", 20),
+                 amount: Decimal.new("1.00"),
+                 recipient: "0x" <> String.duplicate("ff", 20),
+                 fee_amount: Decimal.new("0.05"),
+                 fee_type: :percentage_fee,
+                 memo_type: :payable_transfer,
+                 next_phase: :completed,
+                 expired_at: 9_999_999_999
+               )
+
+      [memo] = InMemory.list_memos(job_id)
+      assert memo.fee_type == :percentage_fee
+      assert memo.memo_type == :payable_transfer
+      assert Decimal.equal?(memo.fee_amount, Decimal.new("0.05"))
+      assert memo.expired_at == 9_999_999_999
+    end
+  end
+
   describe "tx_hash counter is global across all calls" do
     test "tx-1, tx-2, tx-3 across mixed methods" do
       {:ok, j} = new_job()

@@ -35,17 +35,18 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     with `getNonce(account, key)`; the job-id / receipt handling below
     is identical -- the bundler receipt embeds the on-chain tx receipt.
 
-  ## v0.1 caveats (documented; not bugs)
+  ## Method selectors
 
-  These two are blocked on external work, not engineering:
+  The ACP method selectors below are the **canonical** `ACPSimple`
+  signatures, taken from the vendored ABI at
+  `priv/abi/acp_simple.json` (extracted from
+  `@virtuals-protocol/acp-node`).
 
-  1. **Solidity signatures are placeholders.** The four ACP method
-     selectors below are best-guess shapes. Once Virtuals' real ABIs
-     are vendored in `priv/abi/`, swap these constants. The encoders,
-     signing, and broadcast pipeline don't change.
-  2. **`Chain.acp_contract_address` defaults to `nil`.** Calls will
-     fail with `:no_contract_address` until a real address is
-     configured via `Raxol.ACP.Chain` overrides.
+  ## Remaining caveat (external, not engineering)
+
+  **`Chain.acp_contract_address` defaults to `nil`.** Calls fail with
+  `:no_contract_address` until the deployed ACP contract address is
+  configured via `Raxol.ACP.Chain` overrides.
 
   ## Job ID extraction
 
@@ -61,7 +62,6 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   `[:raxol, :acp, :onchain, :placeholder_job_id]` telemetry event.
 
       config :raxol_acp,
-        # Vendor the real signature when ABIs land:
         create_job_event_signature: "JobCreated(uint256,address)"
 
   ## Telemetry
@@ -88,9 +88,12 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   # Canonical ACPSimple selectors (ABI vendored at priv/abi/acp_simple.json).
   @sig_create_job "createJob(address,address,uint256)"
   @sig_set_budget "setBudget(uint256,uint256)"
+  @sig_set_budget_token "setBudgetWithPaymentToken(uint256,uint256,address)"
   @sig_create_memo "createMemo(uint256,string,uint8,bool,uint8)"
+  @sig_create_payable_memo "createPayableMemo(uint256,string,address,uint256,address,uint256,uint8,uint8,uint8,uint256)"
   @sig_sign_memo "signMemo(uint256,bool,string)"
   @sig_claim_budget "claimBudget(uint256)"
+  @sig_confirm_x402 "confirmX402PaymentReceived(uint256)"
 
   # -- Behaviour callbacks --
 
@@ -206,6 +209,59 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   defp memo_id_to_uint256(memo_id) when is_integer(memo_id) and memo_id >= 0, do: memo_id
   defp memo_id_to_uint256(memo_id) when is_binary(memo_id), do: job_id_to_uint256(memo_id)
+
+  @impl true
+  def set_budget_with_payment_token(job_id, %Decimal{} = amount, token)
+      when is_binary(job_id) and is_binary(token) do
+    call_data =
+      ABI.encode_call(@sig_set_budget_token, [
+        {"uint256", job_id_to_uint256(job_id)},
+        {"uint256", decimal_to_uint256(amount)},
+        {"address", token}
+      ])
+
+    case send_tx(:set_budget_with_payment_token, call_data) do
+      {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
+      {:error, _} = err -> err
+    end
+  end
+
+  @impl true
+  def confirm_x402_payment_received(job_id) when is_binary(job_id) do
+    call_data = ABI.encode_call(@sig_confirm_x402, [{"uint256", job_id_to_uint256(job_id)}])
+
+    case send_tx(:confirm_x402_payment_received, call_data) do
+      {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
+      {:error, _} = err -> err
+    end
+  end
+
+  @impl true
+  def create_payable_memo(job_id, content, opts)
+      when is_binary(job_id) and is_binary(content) and is_list(opts) do
+    call_data =
+      ABI.encode_call(@sig_create_payable_memo, payable_memo_args(job_id, content, opts))
+
+    case send_tx(:create_payable_memo, call_data) do
+      {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp payable_memo_args(job_id, content, opts) do
+    [
+      {"uint256", job_id_to_uint256(job_id)},
+      {"string", content},
+      {"address", Keyword.fetch!(opts, :token)},
+      {"uint256", decimal_to_uint256(Keyword.fetch!(opts, :amount))},
+      {"address", Keyword.fetch!(opts, :recipient)},
+      {"uint256", decimal_to_uint256(Keyword.get(opts, :fee_amount, Decimal.new(0)))},
+      {"uint8", Raxol.ACP.Job.FeeType.to_uint8(Keyword.get(opts, :fee_type, :no_fee))},
+      {"uint8", Raxol.ACP.Job.MemoType.to_uint8(Keyword.get(opts, :memo_type, :payable_request))},
+      {"uint8", Raxol.ACP.Job.StateMachine.phase_id(Keyword.fetch!(opts, :next_phase))},
+      {"uint256", Keyword.get(opts, :expired_at, 0)}
+    ]
+  end
 
   # -- Send pipeline --
 
