@@ -85,32 +85,59 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   @sig_get_nonce "getNonce(address,uint192)"
 
-  # Canonical ACPSimple selectors (ABI vendored at priv/abi/acp_simple.json).
+  # Canonical selectors. Most are identical between V1 ACPSimple
+  # (priv/abi/acp_simple.json) and V2 ACPRouter (priv/abi/acp_router.json).
+  # `createJob` and `createPayableMemo` differ -- see acp_version/0.
   @sig_create_job "createJob(address,address,uint256)"
+  @sig_create_job_v2 "createJob(address,address,uint256,address,uint256,string)"
   @sig_set_budget "setBudget(uint256,uint256)"
   @sig_set_budget_token "setBudgetWithPaymentToken(uint256,uint256,address)"
   @sig_create_memo "createMemo(uint256,string,uint8,bool,uint8)"
   @sig_create_payable_memo "createPayableMemo(uint256,string,address,uint256,address,uint256,uint8,uint8,uint8,uint256)"
+  @sig_create_payable_memo_v2 "createPayableMemo(uint256,string,address,uint256,address,uint256,uint8,uint8,uint256,bool,uint8)"
   @sig_sign_memo "signMemo(uint256,bool,string)"
   @sig_claim_budget "claimBudget(uint256)"
   @sig_confirm_x402 "confirmX402PaymentReceived(uint256)"
+
+  # Which deployed ACP contract the selectors target. `:v1` (ACPSimple,
+  # default) or `:v2` (ACPRouter). Set the matching contract address via
+  # `Raxol.ACP.Chain` overrides when running V2.
+  defp acp_version, do: Application.get_env(:raxol_acp, :acp_version, :v1)
 
   # -- Behaviour callbacks --
 
   @impl true
   def create_job(provider, evaluator, expired_at)
       when is_binary(provider) and is_binary(evaluator) and is_integer(expired_at) do
-    call_data =
-      ABI.encode_call(@sig_create_job, [
-        {"address", provider},
-        {"address", evaluator},
-        {"uint256", expired_at}
-      ])
+    call_data = create_job_calldata(acp_version(), provider, evaluator, expired_at)
 
     case send_tx(:create_job, call_data) do
       {:ok, tx_hash, receipt} -> {:ok, resolve_job_id(tx_hash, receipt)}
       {:error, _} = err -> err
     end
+  end
+
+  defp create_job_calldata(:v1, provider, evaluator, expired_at) do
+    ABI.encode_call(@sig_create_job, [
+      {"address", provider},
+      {"address", evaluator},
+      {"uint256", expired_at}
+    ])
+  end
+
+  # V2 createJob folds payment token + budget + metadata into the call.
+  # We default the token to the chain's USDC, budget 0 (set later via
+  # `set_budget/2`), and empty metadata -- keeping the create_job/3
+  # behaviour stable across versions.
+  defp create_job_calldata(:v2, provider, evaluator, expired_at) do
+    ABI.encode_call(@sig_create_job_v2, [
+      {"address", provider},
+      {"address", evaluator},
+      {"uint256", expired_at},
+      {"address", chain_config().usdc_address},
+      {"uint256", 0},
+      {"string", ""}
+    ])
   end
 
   @impl true
@@ -239,16 +266,41 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   @impl true
   def create_payable_memo(job_id, content, opts)
       when is_binary(job_id) and is_binary(content) and is_list(opts) do
-    call_data =
-      ABI.encode_call(@sig_create_payable_memo, payable_memo_args(job_id, content, opts))
+    {sig, args} = payable_memo_call(acp_version(), job_id, content, opts)
 
-    case send_tx(:create_payable_memo, call_data) do
+    case send_tx(:create_payable_memo, ABI.encode_call(sig, args)) do
       {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
       {:error, _} = err -> err
     end
   end
 
-  defp payable_memo_args(job_id, content, opts) do
+  # V1 order ends `..., nextPhase, expiredAt`. V2 inserts `isSecured`
+  # and reorders to `..., expiredAt, isSecured, nextPhase`.
+  defp payable_memo_call(:v1, job_id, content, opts) do
+    args =
+      payable_memo_head(job_id, content, opts) ++
+        [
+          {"uint8", Raxol.ACP.Job.StateMachine.phase_id(Keyword.fetch!(opts, :next_phase))},
+          {"uint256", Keyword.get(opts, :expired_at, 0)}
+        ]
+
+    {@sig_create_payable_memo, args}
+  end
+
+  defp payable_memo_call(:v2, job_id, content, opts) do
+    args =
+      payable_memo_head(job_id, content, opts) ++
+        [
+          {"uint256", Keyword.get(opts, :expired_at, 0)},
+          {"bool", Keyword.get(opts, :is_secured, false)},
+          {"uint8", Raxol.ACP.Job.StateMachine.phase_id(Keyword.fetch!(opts, :next_phase))}
+        ]
+
+    {@sig_create_payable_memo_v2, args}
+  end
+
+  # The leading 8 args are identical across V1/V2.
+  defp payable_memo_head(job_id, content, opts) do
     [
       {"uint256", job_id_to_uint256(job_id)},
       {"string", content},
@@ -257,9 +309,7 @@ defmodule Raxol.ACP.ContractClient.Onchain do
       {"address", Keyword.fetch!(opts, :recipient)},
       {"uint256", decimal_to_uint256(Keyword.get(opts, :fee_amount, Decimal.new(0)))},
       {"uint8", Raxol.ACP.Job.FeeType.to_uint8(Keyword.get(opts, :fee_type, :no_fee))},
-      {"uint8", Raxol.ACP.Job.MemoType.to_uint8(Keyword.get(opts, :memo_type, :payable_request))},
-      {"uint8", Raxol.ACP.Job.StateMachine.phase_id(Keyword.fetch!(opts, :next_phase))},
-      {"uint256", Keyword.get(opts, :expired_at, 0)}
+      {"uint8", Raxol.ACP.Job.MemoType.to_uint8(Keyword.get(opts, :memo_type, :payable_request))}
     ]
   end
 

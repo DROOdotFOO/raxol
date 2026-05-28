@@ -390,4 +390,44 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
       end
     end
   end
+
+  # With :acp_version :v2 the selectors switch to the ACPRouter shapes:
+  # createJob gains paymentToken/budget/metadata and createPayableMemo
+  # reorders + adds isSecured. The stub returns 0x..01 for any call, so
+  # a successful run proves the V2 encoding path executes end to end.
+  describe ":acp_version :v2 (ACPRouter)" do
+    setup do
+      Application.put_env(:raxol_acp, :acp_version, :v2)
+      on_exit(fn -> Application.delete_env(:raxol_acp, :acp_version) end)
+      :ok
+    end
+
+    test "create_job uses the 6-arg V2 selector and mines" do
+      events = self()
+      install_stub(default_handler(events))
+
+      assert {:ok, "0x" <> _} = Onchain.create_job(@seller, @seller, 9_999_999_999)
+      assert_received {:rpc_call, "eth_sendRawTransaction", _}
+    end
+
+    test "create_payable_memo uses the 11-arg V2 selector and mines" do
+      install_stub(default_handler(self()))
+
+      assert {:ok, "0x" <> _} =
+               Onchain.create_payable_memo("42", "settle",
+                 token: "0x" <> String.duplicate("ee", 20),
+                 amount: Decimal.new("1.00"),
+                 recipient: "0x" <> String.duplicate("ff", 20),
+                 is_secured: true,
+                 next_phase: :completed
+               )
+    end
+
+    test "shared methods (create_memo/sign_memo/claim_budget) work unchanged on V2" do
+      install_stub(default_handler(self()))
+      assert {:ok, "0x" <> _} = Onchain.create_memo("42", "hi", :message, false, :negotiation)
+      assert {:ok, "0x" <> _} = Onchain.sign_memo(1, true, "ok")
+      assert {:ok, "0x" <> _} = Onchain.claim_budget("42")
+    end
+  end
 end
