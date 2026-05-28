@@ -2,19 +2,26 @@ defmodule Raxol.ACP.Chain do
   @moduledoc """
   Static chain configuration for the ACP supported networks.
 
-  Returns one configuration map per network. Anything that varies in
-  test/dev (e.g. local Anvil RPC URL, contract address that has not
-  been deployed yet) is overridable through application config:
+  Addresses and URLs below are the canonical Virtuals values, taken
+  from `@virtuals-protocol/acp-node`'s `baseAcpConfig` /
+  `baseSepoliaAcpConfig` (V1) and verified on-chain via Blockscout.
+
+  Anything that varies in test/dev (e.g. a local Anvil RPC URL) is
+  overridable through application config:
 
       config :raxol_acp,
         chain_overrides: %{
           sepolia: %{rpc_url: "http://localhost:8545"}
         }
 
-  The actual ACP contract addresses, x402 facilitator URL, and USDC
-  token addresses must be filled in once Virtuals publishes the
-  `BASE_MAINNET_ACP_X402_CONFIG_V2` constants. v0.1 ships with the
-  well-known USDC addresses and a placeholder for the ACP contract.
+  ## Contract version (V1 vs V2)
+
+  `acp_contract_address` points at the **V1 `ACPSimple`** proxy, which
+  is what `Raxol.ACP.ContractClient.Onchain`'s selectors and the
+  vendored `priv/abi/acp_simple.json` target. Virtuals also runs a
+  newer **V2 `ACPRouter`** (Base mainnet `0xa6C9BA866992cfD7fd6460ba912bfa405adA9df0`)
+  with a different ABI -- not wired here; using it would require the
+  V2 ABI/selectors.
   """
 
   @type network :: :mainnet | :sepolia
@@ -24,6 +31,7 @@ defmodule Raxol.ACP.Chain do
           rpc_url: String.t(),
           usdc_address: String.t(),
           acp_contract_address: String.t() | nil,
+          acp_socket_url: String.t() | nil,
           x402_facilitator_url: String.t() | nil
         }
 
@@ -33,9 +41,11 @@ defmodule Raxol.ACP.Chain do
     rpc_url: "https://mainnet.base.org",
     # USDC on Base mainnet
     usdc_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    # Filled in once we vendor BASE_MAINNET_ACP_X402_CONFIG_V2
-    acp_contract_address: nil,
-    x402_facilitator_url: nil
+    # V1 ACPSimple proxy (impl 0x48c15725...); verified on Basescan
+    acp_contract_address: "0x6a1FE26D54ab0d3E1e3168f2e0c0cDa5cC0A0A4A",
+    # Virtuals ACP Socket.IO endpoint
+    acp_socket_url: "https://acpx.virtuals.io",
+    x402_facilitator_url: "https://acp-x402.virtuals.io"
   }
 
   @sepolia %{
@@ -44,8 +54,10 @@ defmodule Raxol.ACP.Chain do
     rpc_url: "https://sepolia.base.org",
     # USDC on Base Sepolia
     usdc_address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-    acp_contract_address: nil,
-    x402_facilitator_url: nil
+    # V1 ACPSimple proxy (impl 0xF9663D54...); verified on Basescan
+    acp_contract_address: "0x8Db6B1c839Fc8f6bd35777E194677B67b4D51928",
+    acp_socket_url: "https://acpx.virtuals.gg",
+    x402_facilitator_url: "https://dev-acp-x402.virtuals.io"
   }
 
   @doc "Return the configuration map for `:mainnet`, with overrides applied."

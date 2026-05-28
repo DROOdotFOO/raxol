@@ -9,29 +9,35 @@ defmodule Raxol.ACP.ChainTest do
   end
 
   describe "mainnet/0" do
-    test "returns Base mainnet config with all required keys" do
+    test "returns Base mainnet config with the canonical V1 ACPSimple address" do
       config = Chain.mainnet()
 
       assert config.chain_id == 8453
       assert config.name == "Base Mainnet"
       assert String.starts_with?(config.rpc_url, "https://")
       assert String.match?(config.usdc_address, ~r/^0x[0-9a-fA-F]{40}$/)
-      assert Map.has_key?(config, :acp_contract_address)
-      assert Map.has_key?(config, :x402_facilitator_url)
+      # Verified on-chain: V1 ACPSimple proxy on Base.
+      assert config.acp_contract_address == "0x6a1FE26D54ab0d3E1e3168f2e0c0cDa5cC0A0A4A"
+      assert config.acp_socket_url == "https://acpx.virtuals.io"
+      assert config.x402_facilitator_url == "https://acp-x402.virtuals.io"
     end
   end
 
   describe "sepolia/0" do
-    test "returns Base sepolia config with chain_id 84532" do
+    test "returns Base sepolia config with the canonical V1 ACPSimple address" do
       config = Chain.sepolia()
 
       assert config.chain_id == 84_532
       assert config.name == "Base Sepolia"
       assert String.match?(config.usdc_address, ~r/^0x[0-9a-fA-F]{40}$/)
+      assert config.acp_contract_address == "0x8Db6B1c839Fc8f6bd35777E194677B67b4D51928"
+      assert config.acp_socket_url == "https://acpx.virtuals.gg"
+      assert config.x402_facilitator_url == "https://dev-acp-x402.virtuals.io"
     end
 
-    test "mainnet and sepolia have distinct USDC addresses" do
+    test "mainnet and sepolia have distinct USDC + ACP addresses" do
       assert Chain.mainnet().usdc_address != Chain.sepolia().usdc_address
+      assert Chain.mainnet().acp_contract_address != Chain.sepolia().acp_contract_address
     end
   end
 
