@@ -50,7 +50,7 @@ defmodule Raxol.ACP.Wallet.SCA do
   `EntryPoint.getNonce`).
   """
 
-  alias Raxol.ACP.Wallet.SCA.{Bundler, ModularAccount, UserOp}
+  alias Raxol.ACP.Wallet.SCA.{Bundler, ModularAccount, Paymaster, UserOp}
 
   @default_entry_point "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 
@@ -61,6 +61,9 @@ defmodule Raxol.ACP.Wallet.SCA do
     entity_id = Keyword.get(opts, :signer_entity_id, 0)
     bundler_url = Keyword.get(opts, :bundler_url)
     entry_point = Keyword.get(opts, :entry_point, @default_entry_point)
+    paymaster_policy_id = Keyword.get(opts, :paymaster_policy_id)
+    # Alchemy multiplexes bundler + paymaster on one URL; default to it.
+    paymaster_url = Keyword.get(opts, :paymaster_url, bundler_url)
 
     quote do
       @behaviour Raxol.Payments.Wallet
@@ -122,6 +125,35 @@ defmodule Raxol.ACP.Wallet.SCA do
           unquote(chain),
           opts
         )
+      end
+
+      @doc """
+      Fill gas + paymaster data via the Alchemy gas manager, returning
+      a sponsored UserOp ready to sign and send. Requires
+      `:paymaster_policy_id` in config.
+      """
+      @spec sponsor(Raxol.ACP.Wallet.SCA.UserOp.t(), keyword()) ::
+              {:ok, Raxol.ACP.Wallet.SCA.UserOp.t()} | {:error, term()}
+      def sponsor(op, opts \\ []) do
+        Raxol.ACP.Wallet.SCA.sponsor(
+          op,
+          unquote(paymaster_url),
+          unquote(paymaster_policy_id),
+          unquote(entry_point),
+          opts
+        )
+      end
+
+      @doc """
+      One-shot gasless send: sponsor via the gas manager, then sign and
+      submit to the bundler. Requires `:paymaster_policy_id`.
+      """
+      @spec send_sponsored_user_operation(Raxol.ACP.Wallet.SCA.UserOp.t(), keyword()) ::
+              {:ok, String.t()} | {:error, term()}
+      def send_sponsored_user_operation(op, opts \\ []) do
+        with {:ok, sponsored} <- sponsor(op, opts) do
+          send_user_operation(sponsored, opts)
+        end
       end
 
       @doc "The configured EntryPoint address."
@@ -194,6 +226,24 @@ defmodule Raxol.ACP.Wallet.SCA do
     end
   end
 
+  @doc false
+  @spec sponsor(
+          UserOp.t(),
+          String.t() | {:system, String.t()} | nil,
+          String.t() | nil,
+          String.t(),
+          keyword()
+        ) :: {:ok, UserOp.t()} | {:error, term()}
+  def sponsor(_op, _url, nil, _entry_point, _opts), do: {:error, :no_paymaster_policy_id}
+
+  def sponsor(op, paymaster_url, policy_id, entry_point, opts) do
+    configured = Keyword.get(opts, :paymaster_url, paymaster_url)
+
+    with {:ok, url} <- resolve_url(configured, :no_paymaster_url) do
+      Paymaster.sponsor(url, policy_id, entry_point, op, opts)
+    end
+  end
+
   # -- Helpers --
 
   # viem's hashMessage: keccak256("\x19Ethereum Signed Message:\n" <> len <> data).
@@ -211,14 +261,18 @@ defmodule Raxol.ACP.Wallet.SCA do
 
   defp normalize_v(<<_::binary-size(64), _v::8>> = sig), do: sig
 
-  defp resolve_bundler_url(nil), do: {:error, :no_bundler_url}
+  defp resolve_bundler_url(url), do: resolve_url(url, :no_bundler_url)
 
-  defp resolve_bundler_url({:system, var}) do
+  # Resolve a URL that may be a literal string, a `{:system, var}`
+  # env-var reference, or nil (returns the supplied error atom).
+  defp resolve_url(nil, missing_error), do: {:error, missing_error}
+
+  defp resolve_url({:system, var}, _missing_error) do
     case System.get_env(var) do
       nil -> {:error, {:env_not_set, var}}
       url -> {:ok, url}
     end
   end
 
-  defp resolve_bundler_url(url) when is_binary(url), do: {:ok, url}
+  defp resolve_url(url, _missing_error) when is_binary(url), do: {:ok, url}
 end

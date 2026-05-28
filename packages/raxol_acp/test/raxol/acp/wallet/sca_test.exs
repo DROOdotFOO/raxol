@@ -19,7 +19,8 @@ defmodule Raxol.ACP.Wallet.SCATest do
       chain_id: 8453,
       signer: Raxol.ACP.Wallet.SCATest.SessionKey,
       signer_entity_id: 1,
-      entry_point: "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
+      entry_point: "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+      paymaster_policy_id: "186aaa4a-5f57-4156-83fb-e456365a8820"
   end
 
   setup do
@@ -144,6 +145,95 @@ defmodule Raxol.ACP.Wallet.SCATest do
     test "errors when no bundler url is configured or passed" do
       op = %UserOp{sender: @account}
       assert {:error, :no_bundler_url} = Account.send_user_operation(op)
+    end
+  end
+
+  describe "sponsor/2 + send_sponsored_user_operation/2" do
+    @gm_result %{
+      "paymaster" => "0xabababababababababababababababababababab",
+      "paymasterData" => "0xcafe",
+      "paymasterVerificationGasLimit" => "0x7530",
+      "paymasterPostOpGasLimit" => "0x2710",
+      "callGasLimit" => "0xc350",
+      "verificationGasLimit" => "0x186a0",
+      "preVerificationGas" => "0x5208",
+      "maxFeePerGas" => "0x3b9aca00",
+      "maxPriorityFeePerGas" => "0x3b9aca00"
+    }
+
+    defp json_rpc_plug(result) do
+      fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        %{"id" => id} = Jason.decode!(body)
+        payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => result})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, payload)
+      end
+    end
+
+    test "sponsor fills gas + paymaster from the gas manager" do
+      op = %UserOp{sender: @account, nonce: 0, call_data: <<0x12>>}
+
+      assert {:ok, sponsored} =
+               Account.sponsor(op,
+                 paymaster_url: "http://alchemy.test",
+                 req: Req.new(plug: json_rpc_plug(@gm_result))
+               )
+
+      assert sponsored.paymaster == "0xabababababababababababababababababababab"
+      assert sponsored.call_gas_limit == 50_000
+      assert sponsored.max_fee_per_gas == 1_000_000_000
+    end
+
+    test "errors when no policy id is configured" do
+      defmodule NoPolicyAccount do
+        use Raxol.ACP.Wallet.SCA,
+          account_address: "0x1234567890123456789012345678901234567890",
+          chain_id: 8453,
+          signer: Raxol.ACP.Wallet.SCATest.SessionKey,
+          signer_entity_id: 1
+      end
+
+      assert {:error, :no_paymaster_policy_id} =
+               NoPolicyAccount.sponsor(%UserOp{sender: @account})
+    end
+
+    test "send_sponsored_user_operation sponsors then signs then sends" do
+      op = %UserOp{sender: @account, nonce: 0, call_data: <<0x12>>}
+      test_pid = self()
+
+      # One plug serving both the gas manager and the bundler, keyed on
+      # the JSON-RPC method.
+      plug = fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        send(test_pid, {:rpc, decoded["method"]})
+
+        result =
+          case decoded["method"] do
+            "alchemy_requestGasAndPaymasterAndData" -> @gm_result
+            "eth_sendUserOperation" -> "0xfeedface"
+          end
+
+        payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => decoded["id"], "result" => result})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, payload)
+      end
+
+      assert {:ok, "0xfeedface"} =
+               Account.send_sponsored_user_operation(op,
+                 paymaster_url: "http://alchemy.test",
+                 bundler_url: "http://alchemy.test",
+                 req: Req.new(plug: plug)
+               )
+
+      # Both legs were called, in order.
+      assert_received {:rpc, "alchemy_requestGasAndPaymasterAndData"}
+      assert_received {:rpc, "eth_sendUserOperation"}
     end
   end
 

@@ -116,6 +116,22 @@ defmodule Raxol.ACP.Wallet.SCA.ModularAccount do
   @spec pack_uo_signature(binary()) :: binary()
   def pack_uo_signature(sig) when is_binary(sig), do: <<0xFF, 0x00>> <> sig
 
+  # The fixed dummy validation signature the SDK's getDummySignature
+  # returns (a syntactically-valid but unusable 65-byte sig). Used only
+  # for gas estimation / paymaster requests, never broadcast.
+  @dummy_validation_sig Base.decode16!(
+                          "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0000000000000000000000000000000007AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1C",
+                          case: :mixed
+                        )
+
+  @doc """
+  The packed dummy UserOperation signature used for gas estimation and
+  the Alchemy paymaster request, before the real signature is known.
+  Matches `getDummySignature` from `@account-kit/smart-contracts`.
+  """
+  @spec dummy_uo_signature() :: binary()
+  def dummy_uo_signature, do: pack_uo_signature(@dummy_validation_sig)
+
   @doc """
   Wrap a raw ECDSA signature for an EIP-1271 (off-chain) signature from
   a single-signer entity.
