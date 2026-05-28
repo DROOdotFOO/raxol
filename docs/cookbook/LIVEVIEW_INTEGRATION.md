@@ -259,7 +259,7 @@ end
 
 ## Performance: Diff Rendering
 
-`TerminalComponent` diffs buffers automatically on each render -- you do not need to track `previous_buffer` yourself. Simply assign the new buffer and the component handles the rest:
+`TerminalComponent` diffs buffers automatically on each render, so you do not need to track `previous_buffer` yourself. Simply assign the new buffer and the component handles the rest:
 
 ```elixir
 def handle_info(:tick, socket) do
@@ -295,7 +295,7 @@ end
 
 ## Animation Hints
 
-When a TEA app uses `Raxol.Animation.Helpers.animate/2` in its `view/1`, the rendering engine passes those hints through to `TerminalBridge`, which emits CSS `transition` rules targeting `data-raxol-id` selectors. The browser handles interpolation -- no per-frame server re-renders needed.
+When a TEA app uses `Raxol.Animation.Helpers.animate/2` in its `view/1`, the rendering engine passes those hints through to `TerminalBridge`, which emits CSS `transition` rules targeting `data-raxol-id` selectors. The browser handles interpolation, with no per-frame server re-renders needed.
 
 ```elixir
 import Raxol.Animation.Helpers
@@ -317,7 +317,7 @@ The generated HTML includes `data-raxol-id="panel"` on the relevant spans, and a
 }
 ```
 
-`stagger/2` adds incrementing delays across a list of elements. `sequence/2` chains animations on a single element so they play one after another. Both are pure functions that attach metadata -- they don't start server-side timers.
+`stagger/2` adds incrementing delays across a list of elements. `sequence/2` chains animations on a single element so they play one after another. Both are pure functions that attach metadata; they don't start server-side timers.
 
 The terminal backend ignores hints entirely and relies on server-computed frames via `Animation.Framework`. MCP includes hints in `StructuredScreenshot` JSON so agents can see what's animating.
 
@@ -345,9 +345,9 @@ The terminal backend ignores hints entirely and relies on server-computed frames
 
 ## Examples
 
-- `examples/liveview/tea_counter_live.ex` -- TEA app rendered in the browser
-- `examples/liveview/basic_terminal_live.ex` -- Raw buffer approach
-- `examples/liveview/01_simple_terminal/` -- Step-by-step simple terminal
+- `examples/liveview/tea_counter_live.ex`: TEA app rendered in the browser
+- `examples/liveview/basic_terminal_live.ex`: Raw buffer approach
+- `examples/liveview/01_simple_terminal/`: Step-by-step simple terminal
 
 ## Next Steps
 

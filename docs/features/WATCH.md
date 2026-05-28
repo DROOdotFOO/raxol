@@ -38,7 +38,7 @@ When the app announces something via Accessibility, registered devices get a pus
 
 ## Debouncing
 
-`Notifier` subscribes to Accessibility events with a 1s debounce. Multiple rapid announcements coalesce into one push -- useful when a form change emits five field-validation announcements in 200ms.
+`Notifier` subscribes to Accessibility events with a 1s debounce. Multiple rapid announcements coalesce into one push, useful when a form change emits five field-validation announcements in 200ms.
 
 High-priority announcements (errors, alerts) bypass the debounce and push immediately.
 
@@ -71,7 +71,7 @@ Raxol.Watch.ActionHandler.handle_action("snooze",
 
 ## Formatting
 
-`Formatter` truncates content to 160 chars (using `String.length`, so emoji are counted correctly) and maps Raxol priority levels to APNS/FCM priority fields. Buffer content is stripped to plain text -- styling doesn't survive the trip.
+`Formatter` truncates content to 160 chars (using `String.length`, so emoji are counted correctly) and maps Raxol priority levels to APNS/FCM priority fields. Buffer content is stripped to plain text; styling doesn't survive the trip.
 
 ## Device Registry
 
@@ -81,5 +81,5 @@ Devices don't expire automatically. Hook `unregister/1` into your auth layer whe
 
 ## See Also
 
-- [Telegram](TELEGRAM.md) -- richer messaging surface
-- [Speech](SPEECH.md) -- the other accessibility-driven surface
+- [Telegram](TELEGRAM.md): richer messaging surface
+- [Speech](SPEECH.md): the other accessibility-driven surface

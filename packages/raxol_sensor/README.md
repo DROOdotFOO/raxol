@@ -5,13 +5,13 @@ Sensor fusion framework for Elixir built on OTP. Poll sensors, fuse readings wit
 ## Install
 
 ```elixir
-{:raxol_sensor, "~> 2.3"}
+{:raxol_sensor, "~> 2.4"}
 ```
 
 Optional Nx backend for vectorized fusion:
 
 ```elixir
-{:raxol_sensor, "~> 2.3"},
+{:raxol_sensor, "~> 2.4"},
 {:nx, "~> 0.9"}
 ```
 
@@ -55,10 +55,10 @@ HUD.threat(:network, level: :warning, label: "High latency")
 
 ## Architecture
 
-- `Sensor.Behaviour` -- Sensor callback + Reading struct
-- `Sensor.Feed` -- Polling, buffering, error escalation
-- `Sensor.Fusion` -- Batching, weighted averaging, thresholds
-- `Sensor.HUD` -- Gauge, sparkline, threat, minimap widgets
-- `Sensor.Supervisor` -- rest_for_one supervision tree
+- `Sensor.Behaviour`: Sensor callback + Reading struct
+- `Sensor.Feed`: Polling, buffering, error escalation
+- `Sensor.Fusion`: Batching, weighted averaging, thresholds
+- `Sensor.HUD`: Gauge, sparkline, threat, minimap widgets
+- `Sensor.Supervisor`: rest_for_one supervision tree
 
 See [main docs](../../README.md) for full examples and the sensor fusion guide.

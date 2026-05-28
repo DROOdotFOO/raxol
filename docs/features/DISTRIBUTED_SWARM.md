@@ -5,10 +5,10 @@ Cluster BEAM nodes with automatic discovery, track their health, elect a command
 ## Quick Start
 
 ```elixir
-# Gossip -- LAN multicast, no config needed
+# Gossip: LAN multicast, no config needed
 {:ok, _} = Raxol.Swarm.Discovery.start_link(strategy: :gossip)
 
-# Tailscale -- encrypted mesh, tag-filtered
+# Tailscale: encrypted mesh, tag-filtered
 {:ok, _} = Raxol.Swarm.Discovery.start_link(
   strategy: :tailscale,
   node_basename: "raxol",
@@ -108,7 +108,7 @@ alias Raxol.Swarm.CRDT.LWWRegister
 reg = LWWRegister.new("initial_value")
 reg = LWWRegister.update(reg, "new_value")
 
-# Merge from another node -- highest timestamp wins
+# Merge from another node: highest timestamp wins
 merged = LWWRegister.merge(local_reg, remote_reg)
 value = LWWRegister.value(merged)
 ```

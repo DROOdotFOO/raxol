@@ -10,9 +10,9 @@ Implements [`SPEC.md`](https://github.com/openai/symphony/blob/main/SPEC.md).
 
 ## Status
 
-Phases 0-14 complete; 399 tests pass. Two runner backends -- `raxol_agent`
+Phases 0-14 complete; 399 tests pass. Two runner backends ship: `raxol_agent`
 (default, wraps `Raxol.Agent.Stream`) and `codex app-server` (Port-based
-JSON-RPC for parity with upstream Symphony Elixir) -- and six surfaces
+JSON-RPC for parity with upstream Symphony Elixir). Six surfaces
 (terminal dashboard, LiveView, MCP, Telegram, Watch, JSON API). Evidence
 collection (CI status, PR comments, complexity, asciinema replays) ships
 per run. Pre-alpha until live workflow validation against a real Linear /

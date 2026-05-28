@@ -34,15 +34,15 @@ Build a runtime plugin system on Elixir's native code loading with lifecycle man
 @callback handle_command(command :: command(), state :: state()) :: {:ok, state()} | {:error, any()}
 ```
 
-**Lifecycle Management** (`lib/raxol/core/runtime/plugins/lifecycle.ex`) -- handles dependency ordering, circular dependency detection, rollback on failure, and graceful degradation.
+**Lifecycle Management** (`lib/raxol/core/runtime/plugins/lifecycle.ex`): handles dependency ordering, circular dependency detection, rollback on failure, and graceful degradation.
 
-**State Management** (`lib/raxol/core/runtime/plugins/state_manager.ex`) -- isolates plugin state from core state. Provides transactional updates, snapshots for rollback, and persistence across reloads.
+**State Management** (`lib/raxol/core/runtime/plugins/state_manager.ex`): isolates plugin state from core state. Provides transactional updates, snapshots for rollback, and persistence across reloads.
 
-**Process Isolation** (`lib/raxol/core/runtime/plugins/plugin_supervisor.ex`) -- crash isolation via Task.Supervisor. Configurable timeouts (default 5000ms). Individual failure isolation.
+**Process Isolation** (`lib/raxol/core/runtime/plugins/plugin_supervisor.ex`): crash isolation via Task.Supervisor. Configurable timeouts (default 5000ms). Individual failure isolation.
 
-**Dependency Management** (`lib/raxol/core/runtime/plugins/dependency_manager.ex`) -- topological sorting for load order, circular dependency detection, version compatibility checking.
+**Dependency Management** (`lib/raxol/core/runtime/plugins/dependency_manager.ex`): topological sorting for load order, circular dependency detection, version compatibility checking.
 
-**Security** -- BEAM bytecode analysis detects security-sensitive operations (file access, network access, code injection, system commands). Configurable policies validate plugins before loading. Capability-based permissions with audit logging.
+**Security**: BEAM bytecode analysis detects security-sensitive operations (file access, network access, code injection, system commands). Configurable policies validate plugins before loading. Capability-based permissions with audit logging.
 
 ### Writing a Plugin
 
@@ -128,9 +128,9 @@ Raxol.Plugins.unload("plugin_name")
 
 ## Alternatives Considered
 
-**Static plugin loading** -- requires restart for changes. Poor dev experience.
+**Static plugin loading**: requires restart for changes. Poor dev experience.
 
-**External process plugins** -- high IPC overhead and integration complexity.
+**External process plugins**: high IPC overhead and integration complexity.
 
 **Embedded scripting languages**: security risks and performance penalty.
 

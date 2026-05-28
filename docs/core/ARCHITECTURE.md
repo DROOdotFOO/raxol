@@ -56,9 +56,9 @@ Produces: `%{type: :column, children: [%{type: :text, ...}, %{type: :row, ...}],
 `Raxol.UI.Layout.Preparer` walks the element tree and pre-measures all text nodes via `Raxol.UI.TextMeasure`, producing a `PreparedElement` tree with cached display widths. This is the "prepare" phase of a two-phase prepare/layout architecture (inspired by [Pretext](https://github.com/nicklockwood/Pretext)):
 
 - Text measurement handles CJK double-width characters, fullwidth symbols, and combining characters correctly via `Raxol.Terminal.CharacterHandling`
-- On terminal resize, only the layout phase re-runs -- text measurements are cached and reused when content hasn't changed
+- On terminal resize, only the layout phase re-runs; text measurements are cached and reused when content hasn't changed
 - `prepare_incremental/2` compares content hashes to skip re-measurement of unchanged nodes
-- `PreparedElement` also carries `animation_hints` -- declarative metadata attached via `Raxol.Animation.Helpers.animate/2` in `view/1`. These hints flow through to backends untouched; the Preparer just preserves them alongside measurements
+- `PreparedElement` also carries `animation_hints`, declarative metadata attached via `Raxol.Animation.Helpers.animate/2` in `view/1`. These hints flow through to backends untouched; the Preparer just preserves them alongside measurements
 
 ### 3. Layout Engine -> Positioned Elements
 
@@ -76,7 +76,7 @@ Produces: `%{type: :column, children: [%{type: :text, ...}, %{type: :row, ...}],
 {x, y, char, fg_color, bg_color, attrs}
 ```
 
-Each cell is one character at one position with its styling. Cell x-positions account for character display width -- CJK characters advance x by 2, not 1.
+Each cell is one character at one position with its styling. Cell x-positions account for character display width: CJK characters advance x by 2, not 1.
 
 ### 5. Screen Buffer -> Diff
 
@@ -127,13 +127,13 @@ Every Raxol app runs as a supervision tree:
 
 ```
 Application Supervisor
-├── Lifecycle (GenServer) -- owns the TEA loop
-├── Dispatcher (GenServer) -- event routing
-├── FocusManager (GenServer) -- tab order, focus state
-├── Rendering.Engine -- view -> layout -> render -> output
-├── ThemeManager -- ETS-backed theme registry
-├── I18nServer -- ETS-backed translations
-└── [ProcessComponent supervisors] -- optional per-Component processes
+├── Lifecycle (GenServer): owns the TEA loop
+├── Dispatcher (GenServer): event routing
+├── FocusManager (GenServer): tab order, focus state
+├── Rendering.Engine: view -> layout -> render -> output
+├── ThemeManager: ETS-backed theme registry
+├── I18nServer: ETS-backed translations
+└── [ProcessComponent supervisors]: optional per-Component processes
 ```
 
 ### Process-Per-Component (Optional)
@@ -158,7 +158,7 @@ The component gets its own GenServer under a DynamicSupervisor. If it crashes, i
 - **Synchronized output**: Uses DEC mode 2026 (`\e[?2026h`) to batch terminal writes, preventing flicker.
 - **Damage tracking**: `DamageTracker` computes rectangular dirty regions. `RenderBatcher` coalesces rapid updates into single frames at 60fps.
 - **Color downsampling**: `Raxol.Style.Colors.Adaptive` detects terminal capabilities and maps 24-bit colors to 256 or 16 colors automatically.
-- **Lazy scroll content**: `ScrollContent` behaviour enables cursor-based streaming for large datasets in `Viewport` -- only the visible slice is materialized.
+- **Lazy scroll content**: `ScrollContent` behaviour enables cursor-based streaming for large datasets in `Viewport`; only the visible slice is materialized.
 
 ## Terminal Compatibility
 

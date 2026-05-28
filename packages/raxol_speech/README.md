@@ -22,7 +22,7 @@ For speech-to-text, add the optional ML dependencies:
 ## Usage
 
 ```elixir
-# In your supervision tree -- TTS only
+# In your supervision tree (TTS only)
 children = [
   {Raxol.Speech.Supervisor, tts_backend: Raxol.Speech.TTS.OsSay}
 ]

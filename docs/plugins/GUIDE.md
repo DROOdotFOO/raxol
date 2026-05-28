@@ -185,7 +185,7 @@ end
 
 Plugins without explicit priority default to `1000`.
 
-Dependencies are automatically sorted -- dependent plugins see events after their dependencies have processed them.
+Dependencies are automatically sorted, so dependent plugins see events after their dependencies have processed them.
 
 ### Error Handling in Filters
 
@@ -193,7 +193,7 @@ Filter errors are logged but don't stop event propagation. Filters run under `Pl
 
 ## Capabilities
 
-Plugins declare what they offer in the manifest's `provides:` list. The list is informational -- the runtime does not enforce a fixed allowlist. Common values used by host code: `:command_handler`, `:keyboard_input`, `:status_line`, `:file_watcher`, `:theme_provider`.
+Plugins declare what they offer in the manifest's `provides:` list. The list is informational; the runtime does not enforce a fixed allowlist. Common values used by host code: `:command_handler`, `:keyboard_input`, `:status_line`, `:file_watcher`, `:theme_provider`.
 
 There is no UI rendering callback on the Plugin behaviour. Plugins influence the UI by emitting commands or events that an app or Component consumes. To embed Components, build a `Raxol.UI.Components.Base.Component` and have the plugin update its model.
 

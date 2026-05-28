@@ -8,7 +8,7 @@ Implemented (Retroactive Documentation)
 
 A terminal UI framework with component trees, cross-component communication, web continuity, and real-time collaboration needs something more than "each component holds its own state." But OTP processes are too heavy for individual UI components, and a single mutable global state invites race conditions.
 
-We needed state management that handles component lifecycles, shared state between distant components, efficient re-renders, terminal-web continuity, multi-user collaboration, and time-travel debugging -- while feeling familiar to developers coming from React.
+We needed state management that handles component lifecycles, shared state between distant components, efficient re-renders, terminal-web continuity, multi-user collaboration, and time-travel debugging, while feeling familiar to developers coming from React.
 
 ## Decision
 
@@ -153,13 +153,13 @@ User Actions -> Action Creators -> Store Dispatch -> Reducers -> New State -> Co
 
 ## Alternatives Considered
 
-**Component state only** -- no mechanism for cross-component communication.
+**Component state only**: no mechanism for cross-component communication.
 
-**Event bus only** -- hard to reason about state changes and debug.
+**Event bus only**: hard to reason about state changes and debug.
 
-**Actor model state** -- OTP processes too heavy for UI component state.
+**Actor model state**: OTP processes too heavy for UI component state.
 
-**Mutable global state** -- race conditions, unpredictable mutations.
+**Mutable global state**: race conditions, unpredictable mutations.
 
 The multi-layered approach gives the right tool for each scenario while keeping things consistent.
 

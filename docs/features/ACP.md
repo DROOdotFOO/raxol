@@ -14,7 +14,7 @@ Every job is a state machine. One supervised `Job.Server` runs per active job:
             (any state) -> :expired
 ```
 
-`Raxol.ACP.Job.StateMachine` is a pure module -- no GenServer, no side effects. `Job.Server` calls into it for transitions and persists the result via `Job.Store`.
+`Raxol.ACP.Job.StateMachine` is a pure module with no GenServer and no side effects. `Job.Server` calls into it for transitions and persists the result via `Job.Store`.
 
 ```elixir
 {:ok, job_id} = Raxol.ACP.Job.Server.start(
@@ -63,23 +63,23 @@ Each phase emits an EIP-712 typed-data memo signed by the agent's wallet. Built 
 
 `Raxol.ACP.ContractClient` is a behaviour with two implementations:
 
-- `InMemory` -- for tests. No network, deterministic.
-- `Onchain` -- production. Req-based JSON-RPC, EIP-1559 typed transactions, Yellow-Paper RLP encoding, log decoder for `create_job` to extract the job id.
+- `InMemory`: for tests. No network, deterministic.
+- `Onchain`: production. Req-based JSON-RPC, EIP-1559 typed transactions, Yellow-Paper RLP encoding, log decoder for `create_job` to extract the job id.
 
 `Raxol.ACP.ABI` hand-rolls the Solidity encoder for the four ACP methods. Selectors verified byte-for-byte against canonical ERC-20.
 
 ## Nonce Serialization
 
-The `Raxol.ACP.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox. The original integration plan claimed process-per-job avoided concurrent-Alchemy collisions -- it doesn't. NonceServer does.
+The `Raxol.ACP.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox. The original integration plan claimed process-per-job avoided concurrent-Alchemy collisions, but it doesn't. NonceServer does.
 
 ## Seller Stack
 
 Opt-in via `:seller_enabled` in config:
 
-- `Backend.InMemory` -- in-process request queue (default)
-- `Queue` -- bounded mailbox, backpressure
-- `Runtime` -- worker pool dispatching to handlers
-- `Supervisor` -- ties it all together
+- `Backend.InMemory`: in-process request queue (default)
+- `Queue`: bounded mailbox, backpressure
+- `Runtime`: worker pool dispatching to handlers
+- `Supervisor`: ties it all together
 
 `Backend.WebSocket` (talking to Virtuals' relayer) is on the roadmap. The protocol spec is available via the `virtuals-protocol-acp` skill.
 
@@ -87,7 +87,7 @@ Opt-in via `:seller_enabled` in config:
 
 External dependencies still pending:
 
-- `Wallet.SCA` -- needs Virtuals' SCA contract spec
+- `Wallet.SCA`: needs Virtuals' SCA contract spec
 - Real Virtuals ABIs (current encoder uses placeholder method ids)
 - WebSocket protocol implementation
 
@@ -95,5 +95,5 @@ External dependencies still pending:
 
 ## See Also
 
-- [Agentic Commerce](AGENTIC_COMMERCE.md) -- the buyer side (raxol_payments)
-- [Agent Framework](AGENT_FRAMEWORK.md) -- the runtime hosting the seller
+- [Agentic Commerce](AGENTIC_COMMERCE.md): the buyer side (raxol_payments)
+- [Agent Framework](AGENT_FRAMEWORK.md): the runtime hosting the seller

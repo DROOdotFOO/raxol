@@ -1,7 +1,7 @@
 # ADR-0012: MCP as Rendering Target
 
 ## Status
-Accepted -- 2026-04-05. Implemented in `packages/raxol_mcp/` (ToolProvider, FocusLens, ContextTree, structured screenshots, stdio + SSE transports).
+Accepted, 2026-04-05. Implemented in `packages/raxol_mcp/` (ToolProvider, FocusLens, ContextTree, structured screenshots, stdio + SSE transports).
 
 ## Context
 
@@ -9,11 +9,11 @@ Raxol's MCP integration is held together with duct tape. Six tools get injected 
 
 The codebase already supports multiple rendering targets. TEA modules render to terminal (`:react`), browser (`:liveview`), templates (`:heex`), or raw output (`:raw`). The accessibility system tracks Component types, labels, and focus chains. The agent framework has its own MCP client for consuming external servers. All the pieces exist. They just aren't connected.
 
-The real problem: MCP shouldn't be bolted onto the side. Every Raxol app is a structured Component tree with typed interactions. An AI controlling a Raxol app shouldn't send raw "j" keystrokes and parse text screenshots. It should see the Component tree, call semantic actions (click this button, type into this field), and browse model state -- the same way the terminal renderer sees cells and the LiveView renderer sees DOM nodes.
+The real problem: MCP shouldn't be bolted onto the side. Every Raxol app is a structured Component tree with typed interactions. An AI controlling a Raxol app shouldn't send raw "j" keystrokes and parse text screenshots. It should see the Component tree, call semantic actions (click this button, type into this field), and browse model state, the same way the terminal renderer sees cells and the LiveView renderer sees DOM nodes.
 
 ## Decision
 
-Treat MCP as a first-class rendering target. The framework derives the MCP surface -- tools, resources, prompts -- automatically from the Component tree and model. App authors write zero MCP glue code. Build a TUI app, get an AI interface for free.
+Treat MCP as a first-class rendering target. The framework derives the MCP surface (tools, resources, prompts) automatically from the Component tree and model. App authors write zero MCP glue code. Build a TUI app, get an AI interface for free.
 
 ### Category Theory Framing
 
@@ -41,11 +41,11 @@ We use the theory for design and tests, not in the code. No `Functor` behaviours
 
 New extracted package owning all MCP protocol concerns:
 
-- `Raxol.MCP.Server` -- JSON-RPC 2.0 GenServer, tool/resource/prompt registry
-- `Raxol.MCP.Transport.Stdio` -- for CLI tools (Claude Code, etc.)
-- `Raxol.MCP.Transport.SSE` -- for HTTP/remote (Plug-based, no Phoenix dep)
-- `Raxol.MCP.Registry` -- ETS-backed, anything can register tools/resources
-- Absorbs `Agent.McpClient` -- client and server live together
+- `Raxol.MCP.Server`: JSON-RPC 2.0 GenServer, tool/resource/prompt registry
+- `Raxol.MCP.Transport.Stdio`: for CLI tools (Claude Code, etc.)
+- `Raxol.MCP.Transport.SSE`: for HTTP/remote (Plug-based, no Phoenix dep)
+- `Raxol.MCP.Registry`: ETS-backed, anything can register tools/resources
+- Absorbs `Agent.McpClient`: client and server live together
 
 Depends on `raxol_core` only. Same level as `raxol_terminal` in the dep graph:
 
@@ -92,7 +92,7 @@ A complex UI could expose 100+ tools. LLM tool selection degrades past ~20. The 
 - `@mcp_exclude` attribute to suppress derivation on specific Components
 - Mouse tracking feeds into the lens: hover/click events update which Component region has attention, even before keyboard focus moves there
   - Pre-exposes tools for the Component under the cursor (anticipatory surfacing)
-  - Effects system (`Raxol.Effects`) renders visual feedback on hover targets -- highlights, glow, cursor trails
+  - Effects system (`Raxol.Effects`) renders visual feedback on hover targets: highlights, glow, cursor trails
   - BehaviorTracker records mouse patterns (per-Component dwell, click frequency) feeding adaptive layout recommendations
 
 **4. App-declared model projections** (MCP resources)
@@ -107,7 +107,7 @@ end
 
 Simple flat maps get auto-exposed (one level). Nested structures require explicit projection functions. Exposed as MCP resources at `raxol://session/{id}/model/{key}`.
 
-The model is internal state -- not everything should be public. Projections are the "sections" the app publishes (presheaf interpretation: the app chooses which local state becomes globally visible).
+The model is internal state, and not everything should be public. Projections are the "sections" the app publishes (presheaf interpretation: the app chooses which local state becomes globally visible).
 
 **5. Context tree** (unified state view)
 
@@ -125,7 +125,7 @@ Context Tree
 +-- Session Metadata (pilot mode, dimensions, uptime)
 ```
 
-Exposed as MCP resources. Streamed as diffs via SSE transport. Different agents see different subsets based on role and permissions (the presheaf structure -- each consumer gets a consistent projection).
+Exposed as MCP resources. Streamed as diffs via SSE transport. Different agents see different subsets based on role and permissions (the presheaf structure, where each consumer gets a consistent projection).
 
 **6. Agent-MCP symmetry**
 
@@ -144,7 +144,7 @@ The same functor pattern extends to additional surfaces:
 - Speech interface (`raxol_speech`): accessibility announcement queue -> spoken output, push-to-talk transcription -> TEA messages. Local Whisper for cockpit mode.
 - Watch: compact glance display, tap to acknowledge alerts.
 
-Not always in the gundam. Phone in pocket, watch on wrist. Agents keep running -- these bridges are remote viewports into the same model.
+Not always in the gundam. Phone in pocket, watch on wrist. Agents keep running; these bridges are remote viewports into the same model.
 
 ### Distributed State (Context Presheaf)
 
@@ -158,7 +158,7 @@ P(node_A ^ B) = state shared between A and B
 restriction   = CRDT merge operation
 ```
 
-The "single source of truth" isn't a single location -- it's the global section. Every agent has a local view; CRDT merge guarantees convergence. This is why ORSet and LWWRegister are the right primitives for swarm state.
+The "single source of truth" isn't a single location; it's the global section. Every agent has a local view; CRDT merge guarantees convergence. This is why ORSet and LWWRegister are the right primitives for swarm state.
 
 ## Consequences
 
@@ -167,7 +167,7 @@ The "single source of truth" isn't a single location -- it's the global section.
 - Every Raxol app is AI-controllable with zero extra code
 - Semantic interactions (click_button, type_into) instead of raw keystrokes
 - Works in all environments, not just dev
-- Decoupled from Tidewave -- owned transport, no ETS hacking
+- Decoupled from Tidewave: owned transport, no ETS hacking
 - Same architecture extends to Telegram, speech, watch (more functors, same model)
 - Test harness falls out naturally (semantic Component assertions without terminal emulation)
 - Category-theoretic foundation gives us testable invariants (functor laws as property tests)
@@ -176,7 +176,7 @@ The "single source of truth" isn't a single location -- it's the global section.
 ### Negative
 
 - New package to maintain (raxol_mcp)
-- Dynamic tool sets are unusual for MCP clients -- some may not handle `tools/list_changed`
+- Dynamic tool sets are unusual for MCP clients; some may not handle `tools/list_changed`
 - Focus lens adds complexity (what's "focused" in a headless session?)
 - ToolProvider behaviour is another thing Component authors need to know about
 

@@ -19,7 +19,7 @@ mix raxol.playground --ssh
 
 ### Flagship Demo
 
-Live BEAM dashboard -- scheduler utilization, memory sparklines, process table:
+Live BEAM dashboard with scheduler utilization, memory sparklines, and a process table:
 
 ```bash
 mix run examples/demo.exs
@@ -52,9 +52,9 @@ Use the demo recording script to capture asciinema recordings and convert to GIF
 
 ## More Examples
 
-- `examples/getting_started/counter.exs` -- minimal TEA counter
-- `examples/apps/todo_app.ex` -- todo list
-- `examples/apps/file_browser.exs` -- file browser with tree nav
-- `examples/agents/code_review_agent.exs` -- single AI agent
-- `examples/agents/agent_team.exs` -- coordinator + worker agents
-- `examples/adaptive_ui_demo.exs` -- behavior tracking and layout recommendations
+- `examples/getting_started/counter.exs`: minimal TEA counter
+- `examples/apps/todo_app.ex`: todo list
+- `examples/apps/file_browser.exs`: file browser with tree nav
+- `examples/agents/code_review_agent.exs`: single AI agent
+- `examples/agents/agent_team.exs`: coordinator + worker agents
+- `examples/adaptive_ui_demo.exs`: behavior tracking and layout recommendations

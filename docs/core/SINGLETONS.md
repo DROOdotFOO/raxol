@@ -3,7 +3,7 @@
 This document catalogs every named-singleton (`name: __MODULE__`) process in
 the Raxol codebase, classifies each as **intentional** or **questionable**,
 and records the reasoning. Issues #228 and #229 surfaced because the runtime
-had *latent* singletons -- modules registered as VM-wide names that were
+had *latent* singletons: modules registered as VM-wide names that were
 actually meant to support multiple concurrent instances. This audit makes
 the contract explicit so the same class of bug can't repeat without a
 deliberate decision.
@@ -24,7 +24,7 @@ singleton is a constraint on that surface.
 
 ## Policy
 
-1. **Supervisors** may use `name: __MODULE__` -- canonical and harmless.
+1. **Supervisors** may use `name: __MODULE__`; canonical and harmless.
 2. **VM-wide services** (config, registries, accessibility queues, rate
    limiters, dev tools) may use `name: __MODULE__`. Document the "why this
    is one-per-VM" reasoning here.
@@ -84,7 +84,7 @@ allowlist below.
 | Module | Concern |
 |--------|---------|
 | `Raxol.Demo.SessionManager` | Manages demo sessions, but registered VM-wide. Two demo apps would collide. Likely OK in practice, but confirm. |
-| `Raxol.Core.Metrics.MetricsCollector` | Metrics collector is VM-wide -- intentional, but per-Lifecycle metric isolation may be wanted. |
+| `Raxol.Core.Metrics.MetricsCollector` | Metrics collector is VM-wide (intentional), but per-Lifecycle metric isolation may be wanted. |
 | `Raxol.Recording.Recorder` | Singleton recorder; multi-session recording would interleave. Investigate before exposing recording over SSH. |
 | `Raxol.Terminal.Buffer.SafeManager` | Registered as `__MODULE__` but the underlying module is `ScreenBuffer.Manager`. Buffer-per-emulator scenarios may want per-instance. |
 
@@ -106,5 +106,5 @@ follow the `:agent`/`:liveview`/`:ssh` pattern in
 
 ## Related
 
-- #228 -- Dispatcher singleton blocked concurrent SSH (fixed in #232)
-- #229 -- PluginManager `already_started` adoption (fixed in #233)
+- #228: Dispatcher singleton blocked concurrent SSH (fixed in #232)
+- #229: PluginManager `already_started` adoption (fixed in #233)

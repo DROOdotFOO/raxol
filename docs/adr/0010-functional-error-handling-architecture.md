@@ -12,11 +12,11 @@ The goal was to replace imperative patterns with functional alternatives while m
 
 ## Options Considered
 
-**Keep existing try/catch** -- no migration effort, but performance issues and inconsistent errors persist.
+**Keep existing try/catch**: no migration effort, but performance issues and inconsistent errors persist.
 
-**Gradual migration** -- lower risk but leaves the codebase inconsistent during a long transition.
+**Gradual migration**: lower risk but leaves the codebase inconsistent during a long transition.
 
-**Complete functional transformation** (chosen) -- consistent patterns, optimal performance, clear architecture. Requires significant migration effort.
+**Complete functional transformation** (chosen): consistent patterns, optimal performance, clear architecture. Requires significant migration effort.
 
 ## Decision
 
@@ -53,13 +53,13 @@ end
 
 Seven caches targeting hot paths:
 
-1. **Component Cache** -- 70% improvement in UI rendering
-2. **Layout Cache** -- 50% improvement in layout calculations
-3. **Theme Resolution Cache** -- 60% improvement in style lookups
-4. **Text Wrapping Cache** -- 45% improvement in text operations
-5. **Terminal Operations Cache** -- 30% improvement in buffer operations
-6. **Style Processor Cache** -- 40% improvement in CSS-like processing
-7. **Unified LRU Cache** -- shared infrastructure for all of the above
+1. **Component Cache**: 70% improvement in UI rendering
+2. **Layout Cache**: 50% improvement in layout calculations
+3. **Theme Resolution Cache**: 60% improvement in style lookups
+4. **Text Wrapping Cache**: 45% improvement in text operations
+5. **Terminal Operations Cache**: 30% improvement in buffer operations
+6. **Style Processor Cache**: 40% improvement in CSS-like processing
+7. **Unified LRU Cache**: shared infrastructure for all of the above
 
 ### Migration Pattern
 

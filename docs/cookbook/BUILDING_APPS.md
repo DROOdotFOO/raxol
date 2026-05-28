@@ -13,7 +13,7 @@ You've built a counter. Now let's look at patterns you'll reach for in real apps
 Keep your model flat. Derive display values in `view/1`, not `update/2`:
 
 ```elixir
-# Model -- just raw data
+# Model: just raw data
 %{
   items: ["milk", "eggs", "bread"],
   cursor: 0,
@@ -354,7 +354,7 @@ end
 
 ### Test your update function
 
-`update/2` is a pure function -- test it directly:
+`update/2` is a pure function, so test it directly:
 
 ```elixir
 test "increment increases count" do
@@ -402,7 +402,7 @@ end
 
 ## Next Steps
 
-- [SSH Deployment](./SSH_DEPLOYMENT.md) -- Serve apps over SSH
-- [Theming](./THEMING.md) -- Custom color schemes
-- [Performance](./PERFORMANCE_OPTIMIZATION.md) -- 60fps techniques
-- [Component Gallery](../getting-started/COMPONENT_GALLERY.md) -- All Components with examples
+- [SSH Deployment](./SSH_DEPLOYMENT.md): Serve apps over SSH
+- [Theming](./THEMING.md): Custom color schemes
+- [Performance](./PERFORMANCE_OPTIMIZATION.md): 60fps techniques
+- [Component Gallery](../getting-started/COMPONENT_GALLERY.md): All Components with examples

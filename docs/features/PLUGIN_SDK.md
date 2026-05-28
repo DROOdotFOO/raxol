@@ -1,6 +1,6 @@
 # Plugin SDK
 
-`raxol_plugin` is the developer-facing SDK over the 40-module plugin system in `raxol_core`. If you're writing a plugin, this is the package you depend on. If you're consuming plugins from your app, you don't need it -- the runtime is in `raxol_core`.
+`raxol_plugin` is the developer-facing SDK over the 40-module plugin system in `raxol_core`. If you're writing a plugin, this is the package you depend on. If you're consuming plugins from your app, you don't need it; the runtime is in `raxol_core`.
 
 ## Quick Start
 
@@ -83,12 +83,12 @@ end
 
 ## What's in `raxol_core`
 
-The 40-module runtime (plugin manager, dependency resolver, lifecycle, capability detector, security audit, permission mode, ETS cache, etc.) lives in `raxol_core`. You generally don't touch it directly -- the SDK is the contract.
+The 40-module runtime (plugin manager, dependency resolver, lifecycle, capability detector, security audit, permission mode, ETS cache, etc.) lives in `raxol_core`. You generally don't touch it directly; the SDK is the contract.
 
 The split exists so apps that *use* plugins don't need to depend on the SDK that *creates* them.
 
 ## See Also
 
-- [GUIDE](../plugins/GUIDE.md) -- step-by-step plugin authoring
-- [PLUGIN_TEMPLATES](../plugins/PLUGIN_TEMPLATES.md) -- ready-made starters
-- [TESTING](../plugins/TESTING.md) -- in-depth testing patterns
+- [GUIDE](../plugins/GUIDE.md): step-by-step plugin authoring
+- [PLUGIN_TEMPLATES](../plugins/PLUGIN_TEMPLATES.md): ready-made starters
+- [TESTING](../plugins/TESTING.md): in-depth testing patterns

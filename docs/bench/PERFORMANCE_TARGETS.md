@@ -16,17 +16,17 @@ Current performance measurements and goals for Raxol.
 
 ## Details
 
-**Parser** -- 0.17-1.25 us per operation, which translates to 800K-5.8M ops/sec depending on input complexity.
+**Parser**: 0.17-1.25 us per operation, which translates to 800K-5.8M ops/sec depending on input complexity.
 
-**Rendering** -- 265-283 us per frame. That's ~3,500 FPS of headroom, well within the 60 FPS budget (16.67ms).
+**Rendering**: 265-283 us per frame. That's ~3,500 FPS of headroom, well within the 60 FPS budget (16.67ms).
 
-**Memory** -- ~2.8MB per session. Roughly 350 concurrent sessions per GB of RAM.
+**Memory**: ~2.8MB per session. Roughly 350 concurrent sessions per GB of RAM.
 
-**Startup** -- Under 10ms cold start. Hot reload for component updates is under 1ms.
+**Startup**: Under 10ms cold start. Hot reload for component updates is under 1ms.
 
-**Response** -- Sub-2ms for all operations. Input handling is under 1ms, screen refresh under 2ms.
+**Response**: Sub-2ms for all operations. Input handling is under 1ms, screen refresh under 2ms.
 
-**Plugins** -- ~10ms average load time. Message passing adds < 100us overhead. Hot reload works without downtime.
+**Plugins**: ~10ms average load time. Message passing adds < 100us overhead. Hot reload works without downtime.
 
 ## Running Benchmarks
 

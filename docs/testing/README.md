@@ -195,7 +195,7 @@ end
 
 Existing property test files:
 
-- `test/property/parser_property_test.exs` -- ANSI parser
-- `test/property/ui_component_property_test.exs` -- Button, TextInput, Flexbox, Grid
-- `test/property/core_property_test.exs` -- core data structures
-- `test/property/parser_edge_cases_test.exs` -- parser edge cases
+- `test/property/parser_property_test.exs`: ANSI parser
+- `test/property/ui_component_property_test.exs`: Button, TextInput, Flexbox, Grid
+- `test/property/core_property_test.exs`: core data structures
+- `test/property/parser_edge_cases_test.exs`: parser edge cases

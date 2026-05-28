@@ -22,7 +22,7 @@ evaluator = Evaluator.new()
 
 {:ok, result, evaluator} = Evaluator.eval(evaluator, "x = 1 + 2")
 result.value      # => 3
-result.output     # => "" (captured IO -- empty here)
+result.output     # => "" (captured IO, empty here)
 result.formatted  # => "3"
 
 # Bindings carry over

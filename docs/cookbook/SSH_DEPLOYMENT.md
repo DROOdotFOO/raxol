@@ -1,7 +1,7 @@
 # SSH Deployment
 
-Serve Raxol apps over SSH. Each connection gets its own process -- one app, many users.
-This is one of the things that falls out naturally from running on the BEAM -- Erlang's SSH server does the heavy lifting.
+Serve Raxol apps over SSH. Each connection gets its own process: one app, many users.
+This is one of the things that falls out naturally from running on the BEAM, where Erlang's SSH server does the heavy lifting.
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ Connect from any machine:
 ssh localhost -p 2222
 ```
 
-No client-side dependencies. Any SSH client works -- PuTTY, OpenSSH, even `ssh` from a phone.
+No client-side dependencies. Any SSH client works: PuTTY, OpenSSH, even `ssh` from a phone.
 
 ## Full Example
 
@@ -91,7 +91,7 @@ SSH Client  --->  :ssh.daemon (Erlang)
 1. Erlang's built-in `:ssh` module handles the SSH protocol
 2. The SSH CLI handler translates SSH channel events to Raxol events
 3. The SSH session manager creates a per-connection Lifecycle process
-4. Your app runs identically to local mode -- same `init/update/view`
+4. Your app runs identically to local mode, with the same `init/update/view`
 
 Each connection is isolated. One user's crash doesn't affect others.
 
@@ -178,16 +178,16 @@ ssh your-app.fly.dev -p 2222
 
 ## Use Cases
 
-SSH beats web dashboards when you want zero client setup -- no HTTPS certs, no browser, works over slow networks, instant startup. Same `init/update/view` whether local, over SSH, or in a browser.
+SSH beats web dashboards when you want zero client setup: no HTTPS certs, no browser, works over slow networks, instant startup. Same `init/update/view` whether local, over SSH, or in a browser.
 
-- **Shared dashboards** -- Deploy a monitoring dashboard. Anyone with SSH access can view it.
-- **Remote admin tools** -- Database inspection, log viewers, config editors -- all in the terminal.
-- **Pair programming** -- Multiple users connected to the same app. Each sees independent state (or share state via PubSub).
-- **IoT/embedded** -- Run on a Raspberry Pi. SSH in from anywhere to check sensor readings.
-- **Bastion host UIs** -- Replace clunky web admin panels with fast terminal interfaces.
+- **Shared dashboards**: Deploy a monitoring dashboard. Anyone with SSH access can view it.
+- **Remote admin tools**: Database inspection, log viewers, config editors, all in the terminal.
+- **Pair programming**: Multiple users connected to the same app. Each sees independent state (or share state via PubSub).
+- **IoT/embedded**: Run on a Raspberry Pi. SSH in from anywhere to check sensor readings.
+- **Bastion host UIs**: Replace clunky web admin panels with fast terminal interfaces.
 
 ## Next Steps
 
-- [Building Apps](./BUILDING_APPS.md) -- TEA patterns and recipes
-- [Theming](./THEMING.md) -- Custom color schemes
-- [Architecture](../core/ARCHITECTURE.md) -- How the render pipeline works
+- [Building Apps](./BUILDING_APPS.md): TEA patterns and recipes
+- [Theming](./THEMING.md): Custom color schemes
+- [Architecture](../core/ARCHITECTURE.md): How the render pipeline works

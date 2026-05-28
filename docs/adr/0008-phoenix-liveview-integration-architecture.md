@@ -6,7 +6,7 @@ Implemented (Retroactive Documentation)
 
 ## Context
 
-Terminal apps traditionally live in local command-line environments. A web interface adds remote access, collaboration, cross-platform consistency, and the ability to embed terminal UIs in web applications. But the integration is tricky -- terminal interactions need low-latency bidirectional communication, state must stay synchronized, and web exposure brings security concerns.
+Terminal apps traditionally live in local command-line environments. A web interface adds remote access, collaboration, cross-platform consistency, and the ability to embed terminal UIs in web applications. But the integration is tricky: terminal interactions need low-latency bidirectional communication, state must stay synchronized, and web exposure brings security concerns.
 
 Previous approaches (VNC, iframes, custom WebSocket protocols, server-side rendering) all fall short on either latency, integration quality, or real-time interaction.
 
@@ -160,13 +160,13 @@ Only changed regions get re-rendered. Rate limiting prevents abuse. Visible regi
 
 ## Alternatives Considered
 
-**Static server-side rendering** -- no real-time interaction.
+**Static server-side rendering**: no real-time interaction.
 
-**Pure WebSocket implementation** -- more complex than LiveView, worse Phoenix integration.
+**Pure WebSocket implementation**: more complex than LiveView, worse Phoenix integration.
 
-**SPA** -- requires separate API server and complex state sync.
+**SPA**: requires separate API server and complex state sync.
 
-**VNC/screen sharing** -- high latency, poor UX, no integration.
+**VNC/screen sharing**: high latency, poor UX, no integration.
 
 LiveView gives us the best balance of performance, developer experience, and feature richness while building on Phoenix's proven real-time infrastructure.
 

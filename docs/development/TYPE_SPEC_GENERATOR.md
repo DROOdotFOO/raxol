@@ -14,11 +14,11 @@ mix raxol.gen.specs lib/raxol/terminal --recursive
 
 ### Options
 
-- `--dry-run` -- preview without modifying files
-- `--recursive` -- process all `.ex` files recursively
-- `--filter PATTERN` -- only functions matching the pattern
-- `--interactive` -- confirm each spec before adding
-- `--backup` -- create `.backup` files before modifying
+- `--dry-run`: preview without modifying files
+- `--recursive`: process all `.ex` files recursively
+- `--filter PATTERN`: only functions matching the pattern
+- `--interactive`: confirm each spec before adding
+- `--backup`: create `.backup` files before modifying
 
 ### Examples
 
@@ -109,7 +109,7 @@ mix raxol.gen.specs lib/critical.ex --dry-run
 mix raxol.gen.specs lib/critical.ex --backup
 ```
 
-Work incrementally -- do core modules first, then expand:
+Work incrementally: do core modules first, then expand:
 
 ```bash
 mix raxol.gen.specs lib/raxol/core --recursive

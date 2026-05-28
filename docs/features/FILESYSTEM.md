@@ -1,6 +1,6 @@
 # Virtual File System
 
-An in-memory filesystem that's purely functional -- immutable struct, O(1) path lookups, zero side effects. Good for sandboxed environments, agent workspaces, and poking around in the REPL.
+An in-memory filesystem that's purely functional: immutable struct, O(1) path lookups, zero side effects. Good for sandboxed environments, agent workspaces, and poking around in the REPL.
 
 ## Core API
 
@@ -105,7 +105,7 @@ alias Raxol.Agent.Action.Pipeline
 )
 ```
 
-The updated VFS flows through the pipeline on its own -- each action's result gets merged into the next action's params.
+The updated VFS flows through the pipeline on its own: each action's result gets merged into the next action's params.
 
 ## Internals
 
@@ -115,4 +115,4 @@ There are also formatting helpers: `format_ls/3` for styled directory listings a
 
 ## Playground Demo
 
-`mix raxol.playground` has a VFS demo with a shell-like interface -- `ls`, `cd`, `cat`, `pwd`, `mkdir`, `rm`, `tree`, and `help` all work.
+`mix raxol.playground` has a VFS demo with a shell-like interface: `ls`, `cd`, `cat`, `pwd`, `mkdir`, `rm`, `tree`, and `help` all work.

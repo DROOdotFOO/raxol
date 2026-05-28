@@ -144,13 +144,13 @@ Telemetry-based metrics for operation latency and memory consumption via `:telem
 
 ## Alternatives Considered
 
-**Actor-based buffer cells** -- per-cell actors have too much memory and message passing overhead.
+**Actor-based buffer cells**: per-cell actors have too much memory and message passing overhead.
 
-**Database-backed buffer** -- too much latency for terminal-speed updates.
+**Database-backed buffer**: too much latency for terminal-speed updates.
 
-**Memory-mapped files** -- platform-specific, complex GC interaction.
+**Memory-mapped files**: platform-specific, complex GC interaction.
 
-**Immutable data structures only** -- performance penalty too high for terminal-frequency mutations.
+**Immutable data structures only**: performance penalty too high for terminal-frequency mutations.
 
 ## References
 

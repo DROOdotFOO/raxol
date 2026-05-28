@@ -244,11 +244,11 @@ text("...", fg: :black, bg: :yellow)   # ~10.2:1
 
 ## Examples
 
-- `examples/demo.exs` -- Flagship demo using Synthwave '84 mapped to ANSI
-- `examples/advanced/color_system_demo.ex` -- Color system with adaptive downsampling
+- `examples/demo.exs`: Flagship demo using Synthwave '84 mapped to ANSI
+- `examples/advanced/color_system_demo.ex`: Color system with adaptive downsampling
 
 ## Next Steps
 
-- [Building Apps](./BUILDING_APPS.md) -- TEA patterns and recipes
-- [SSH Deployment](./SSH_DEPLOYMENT.md) -- Serve apps over SSH
-- [Performance](./PERFORMANCE_OPTIMIZATION.md) -- 60fps techniques
+- [Building Apps](./BUILDING_APPS.md): TEA patterns and recipes
+- [SSH Deployment](./SSH_DEPLOYMENT.md): Serve apps over SSH
+- [Performance](./PERFORMANCE_OPTIMIZATION.md): 60fps techniques

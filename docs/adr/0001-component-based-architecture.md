@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted -- Revised
+Accepted (Revised)
 
-> **Note:** The code examples below reflect the original design proposal. The implemented API uses `Raxol.UI.Components.Base.Component` -- see [Custom Components](../cookbook/CUSTOM_COMPONENTS.md) for current usage.
+> **Note:** The code examples below reflect the original design proposal. The implemented API uses `Raxol.UI.Components.Base.Component`; see [Custom Components](../cookbook/CUSTOM_COMPONENTS.md) for current usage.
 
 ## Context
 
@@ -16,11 +16,11 @@ Raxol uses a component-based architecture modeled after React and Phoenix LiveVi
 
 The key pieces:
 
-1. **Declarative components** -- UI is a function of state
-2. **Virtual terminal** -- an in-memory representation of the screen, diffed before rendering
-3. **Lifecycle hooks** -- mount, update, render, unmount
-4. **Props and state** -- clear separation between component inputs and internal state
-5. **Unified event system** -- keyboard, mouse, and custom events all handled the same way
+1. **Declarative components**: UI is a function of state
+2. **Virtual terminal**: an in-memory representation of the screen, diffed before rendering
+3. **Lifecycle hooks**: mount, update, render, unmount
+4. **Props and state**: clear separation between component inputs and internal state
+5. **Unified event system**: keyboard, mouse, and custom events all handled the same way
 
 ## Implementation
 

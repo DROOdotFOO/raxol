@@ -13,8 +13,8 @@ The `Speaker` GenServer subscribes to Accessibility announcements at startup. An
 
 Backends behind `Raxol.Speech.TTS.Backend`:
 
-- `OsSay` -- macOS `say`, Linux `espeak`. Sanitizes input (strips control chars, caps at 10KB).
-- `Noop` -- swallows speech. Default in test and CI.
+- `OsSay`: macOS `say`, Linux `espeak`. Sanitizes input (strips control chars, caps at 10KB).
+- `Noop`: swallows speech. Default in test and CI.
 
 Pick a backend in config:
 
@@ -34,7 +34,7 @@ Push-to-talk: `start_recording/0` opens the mic, `stop_recording/0` closes it an
 {:ok, "open file readme"} = Raxol.Speech.Listener.stop_recording()
 ```
 
-`Listener` captures from the mic via a `sox` Port, bounded by `max_duration_ms` and `max_bytes` (configured at `start_link/1` time, defaults 5 min / 10 MB). `Recognizer` runs Whisper through Bumblebee in a background Task. The two are wired `:rest_for_one` -- if Recognizer crashes, Listener restarts with it.
+`Listener` captures from the mic via a `sox` Port, bounded by `max_duration_ms` and `max_bytes` (configured at `start_link/1` time, defaults 5 min / 10 MB). `Recognizer` runs Whisper through Bumblebee in a background Task. The two are wired `:rest_for_one`: if Recognizer crashes, Listener restarts with it.
 
 Optional deps: `bumblebee`, `nx`, `exla`. Without them, `Recognizer.recognize/1` returns `{:error, :bumblebee_not_available}`.
 
@@ -56,7 +56,7 @@ Optional deps: `bumblebee`, `nx`, `exla`. Without them, `Recognizer.recognize/1`
 | "yes" / "no" / "help"          | `y` / `n` / `h`                      |
 | "quit" / "exit"                | `q`                                  |
 
-Any phrase that is not a recognized command falls through to a `:paste` event with the original text as payload -- so dictating prose injects it verbatim.
+Any phrase that is not a recognized command falls through to a `:paste` event with the original text as payload, so dictating prose injects it verbatim.
 
 Custom commands extend the map:
 
@@ -73,5 +73,5 @@ config :raxol_speech, :voice_commands, %{
 
 ## See Also
 
-- [Watch](WATCH.md) -- the other accessibility-aware surface (push notifications)
-- [Accessibility](#) -- announcements that Speaker subscribes to
+- [Watch](WATCH.md): the other accessibility-aware surface (push notifications)
+- [Accessibility](#): announcements that Speaker subscribes to

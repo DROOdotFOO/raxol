@@ -37,11 +37,11 @@ run `mix deps.get`, and `Raxol.ACP.Supervisor` boots automatically.
 
 See `Raxol.ACP.Supervisor` for the supervision tree. Subsystems:
 
-- **Job lifecycle** -- `Raxol.ACP.Job.{Server, Supervisor, Registry, StateMachine, Store}`. One `:gen_server` per active job, registered by job ID, with ETS-backed memo persistence so a node restart resumes mid-flight. States are `:request -> :negotiation -> :transaction -> :evaluation -> :completed` plus `:rejected` and `:expired`. Memos are on-chain `createMemo` calls (no off-chain signing); `Job.MemoType`/`Job.FeeType` are the canonical enums.
-- **Offering** -- `Raxol.ACP.Offering.{Handler, Registry, DSL}`. Define an offering with `use Raxol.ACP.Offering`; it becomes a registered Job Offering on Virtuals.
-- **Contract client** -- `Raxol.ACP.ContractClient` behaviour matching the real `ACPSimple` (V1) / `ACPRouter` (V2) write surface, switched via `:acp_version`. Two impls: `InMemory` (tests) and `Onchain` (Req JSON-RPC + EIP-1559 typed-tx). Real ABIs vendored under `priv/abi/`; verified Base addresses in `Raxol.ACP.Chain`.
-- **SCA wallet** -- `Raxol.ACP.Wallet.SCA` is a full ERC-4337 v0.7 / Alchemy Modular Account v2 stack (UserOp, bundler, paymaster, counterfactual CREATE2 provisioning, session keys). `Onchain` detects an SCA wallet and routes writes through sponsored UserOps, self-deploying on the first tx. Live-validated against the real on-chain EntryPoint on a Base fork.
-- **Seller runtime** -- `Raxol.ACP.Seller.{Runtime, Queue, Supervisor}` plus `Backend.{InMemory, WebSocket}`. The WebSocket backend speaks Socket.IO v4 / Engine.IO over `Mint.WebSocket`; the runtime dispatches incoming jobs to the queue.
+- **Job lifecycle**: `Raxol.ACP.Job.{Server, Supervisor, Registry, StateMachine, Store}`. One `:gen_server` per active job, registered by job ID, with ETS-backed memo persistence so a node restart resumes mid-flight. States are `:request -> :negotiation -> :transaction -> :evaluation -> :completed` plus `:rejected` and `:expired`. Memos are on-chain `createMemo` calls (no off-chain signing); `Job.MemoType`/`Job.FeeType` are the canonical enums.
+- **Offering**: `Raxol.ACP.Offering.{Handler, Registry, DSL}`. Define an offering with `use Raxol.ACP.Offering`; it becomes a registered Job Offering on Virtuals.
+- **Contract client**: `Raxol.ACP.ContractClient` behaviour matching the real `ACPSimple` (V1) / `ACPRouter` (V2) write surface, switched via `:acp_version`. Two impls: `InMemory` (tests) and `Onchain` (Req JSON-RPC + EIP-1559 typed-tx). Real ABIs vendored under `priv/abi/`; verified Base addresses in `Raxol.ACP.Chain`.
+- **SCA wallet**: `Raxol.ACP.Wallet.SCA` is a full ERC-4337 v0.7 / Alchemy Modular Account v2 stack (UserOp, bundler, paymaster, counterfactual CREATE2 provisioning, session keys). `Onchain` detects an SCA wallet and routes writes through sponsored UserOps, self-deploying on the first tx. Live-validated against the real on-chain EntryPoint on a Base fork.
+- **Seller runtime**: `Raxol.ACP.Seller.{Runtime, Queue, Supervisor}` plus `Backend.{InMemory, WebSocket}`. The WebSocket backend speaks Socket.IO v4 / Engine.IO over `Mint.WebSocket`; the runtime dispatches incoming jobs to the queue.
 
 ## Dependencies
 

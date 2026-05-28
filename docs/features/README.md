@@ -76,4 +76,4 @@ Visual trails and glow with configurable colors, presets, and smooth interpolati
 
 ## Performance
 
-Full frame in 2.1ms on M1 Pro -- 13% of the 60fps budget. See [benchmarks](../bench/README.md) for methodology.
+Full frame in 2.1ms on M1 Pro, 13% of the 60fps budget. See [benchmarks](../bench/README.md) for methodology.

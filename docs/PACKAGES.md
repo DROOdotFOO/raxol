@@ -60,7 +60,7 @@ raxol_core     --> telemetry (only external dep)
 raxol_sensor   --> (none)
 ```
 
-The main `raxol` package does not depend on `raxol_agent`, `raxol_acp`, or any of the surface packages -- you opt into those.
+The main `raxol` package does not depend on `raxol_agent`, `raxol_acp`, or any of the surface packages. You opt into those.
 
 ## Publishing
 

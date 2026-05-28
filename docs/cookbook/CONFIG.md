@@ -17,8 +17,8 @@ Test settings live in `config/test.exs`, not a TOML file.
 
 ### Loading Order
 
-1. `config/raxol.toml` -- base
-2. `config/environments/{env}.toml` -- environment overrides
+1. `config/raxol.toml`: base
+2. `config/environments/{env}.toml`: environment overrides
 3. Runtime overrides via `Config.set/2`
 
 Later values win.
@@ -305,9 +305,9 @@ end
 
 Built-in validation covers:
 
-- Terminal dimensions -- must be positive integers
-- Performance settings -- cache size, worker pool size must be positive
-- Security settings -- session timeout, max sessions must be positive
+- Terminal dimensions: must be positive integers
+- Performance settings: cache size, worker pool size must be positive
+- Security settings: session timeout, max sessions must be positive
 
 Extend validation by modifying `validate_config/1` in `Raxol.Config`.
 
@@ -388,4 +388,4 @@ mix run -e "File.read!('config/raxol.toml') |> Toml.decode!()"
 value = Raxol.Config.get([:section, :key], default: "fallback")
 ```
 
-**Performance:** Config values are cached in memory. Keep files under 1MB and avoid storing large data blobs -- use references to external files instead.
+**Performance:** Config values are cached in memory. Keep files under 1MB and avoid storing large data blobs. Use references to external files instead.

@@ -106,7 +106,7 @@ Options: `direction` (`:horizontal` or `:vertical`), `ratio` (tuple, default `{1
 
 ## Text & Display
 
-Components for showing information to the user. These are all display-only -- no user interaction.
+Components for showing information to the user. These are all display-only, with no user interaction.
 
 ### text
 
@@ -176,7 +176,7 @@ The component module (`Raxol.UI.Components.Display.Table`) supports much more wh
 
 ### tree
 
-Hierarchical tree view with expand/collapse. Component module only -- not available as a View DSL function.
+Hierarchical tree view with expand/collapse. Component module only (not available as a View DSL function).
 
 ```elixir
 alias Raxol.UI.Components.Display.Tree
@@ -275,7 +275,7 @@ image(src: "logo.png", width: 30, height: 15)
 image(src: raw_png_binary, protocol: :kitty, preserve_aspect: true)
 ```
 
-Options: `protocol` (`:kitty`, `:iterm2`, `:sixel` -- auto-detected if omitted), `preserve_aspect` (default true).
+Options: `protocol` (`:kitty`, `:iterm2`, `:sixel`, auto-detected if omitted), `preserve_aspect` (default true).
 
 ---
 
@@ -511,7 +511,7 @@ alias Raxol.UI.Components.Display.Progress
 ```
 
 ```elixir
-# Spinner (stateless utility -- call each frame)
+# Spinner (stateless utility, call each frame)
 alias Raxol.UI.Components.Progress.Spinner
 
 # Available styles: :dots, :line, :circle, :arrow, :bounce,
@@ -522,7 +522,7 @@ frame = Spinner.spinner(:tick, 0, style: :dots, text: "Loading...")
 | Module              | Use case                                                  |
 | ------------------- | --------------------------------------------------------- |
 | `Progress.Bar`      | Determinate progress with known completion                |
-| `Progress.Spinner`  | Indeterminate -- something is happening, unknown duration |
+| `Progress.Spinner`  | Indeterminate: something is happening, unknown duration   |
 | `Progress.Circular` | Circular/ring-style progress indicator                    |
 
 ---
@@ -533,7 +533,7 @@ Streaming data visualization. All chart functions render braille or block charac
 
 ### sparkline
 
-Minimal inline chart -- a line with no axes or legend.
+Minimal inline chart: a line with no axes or legend.
 
 ```elixir
 sparkline(data: model.cpu_history, width: 30, height: 3, color: :green)
@@ -639,7 +639,7 @@ Options: `color`, `width`, `offset`, `style` (`:solid`), `components` (list of c
 
 ## Using Components Directly
 
-The View DSL functions cover most needs. When you need full control -- handling events, managing component state, accessing all options -- use the component modules directly:
+The View DSL functions cover most needs. When you need full control (handling events, managing component state, accessing all options) use the component modules directly:
 
 ```elixir
 alias Raxol.UI.Components.Input.TextInput

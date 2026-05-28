@@ -10,7 +10,7 @@ Status: pre-alpha. Not yet on Hex; use the path dep at `packages/raxol_symphony/
 mix raxol.symphony --workflow ./WORKFLOW.md
 ```
 
-`WORKFLOW.md` defines tracker source, eligibility rules, retry policy, and per-issue runner config. It's hot-reloaded via `file_system` -- editing it doesn't restart the orchestrator. Last-known-good is served if a save leaves the file in an invalid state.
+`WORKFLOW.md` defines tracker source, eligibility rules, retry policy, and per-issue runner config. It's hot-reloaded via `file_system`, so editing it doesn't restart the orchestrator. Last-known-good is served if a save leaves the file in an invalid state.
 
 ## Architecture
 
@@ -44,12 +44,12 @@ Pick a runner per workflow. Mix-and-match isn't supported in a single run.
 
 Every surface subscribes to the same orchestrator snapshot via Phoenix.PubSub, so they stay consistent without per-surface state:
 
-- **Terminal** -- TEA dashboard listing active runs and their state.
-- **LiveView** -- `/symphony` mounts the same dashboard in the browser.
-- **MCP** -- 5 tools (`list_runs`, `get_run`, `pause_run`, etc) plus `symphony://runs` as an MCP resource.
-- **Telegram** -- per-issue session, inline keyboards, approval prompts.
-- **Watch** -- debounced push to APNS/FCM, tap-to-approve actions.
-- **JSON API** -- `/api/v1/runs`, `/api/v1/runs/:id`. Read-only by default.
+- **Terminal**: TEA dashboard listing active runs and their state.
+- **LiveView**: `/symphony` mounts the same dashboard in the browser.
+- **MCP**: 5 tools (`list_runs`, `get_run`, `pause_run`, etc) plus `symphony://runs` as an MCP resource.
+- **Telegram**: per-issue session, inline keyboards, approval prompts.
+- **Watch**: debounced push to APNS/FCM, tap-to-approve actions.
+- **JSON API**: `/api/v1/runs`, `/api/v1/runs/:id`. Read-only by default.
 
 ## Evidence Collection
 
@@ -104,5 +104,5 @@ retry:
 
 ## See Also
 
-- [Agent Framework](AGENT_FRAMEWORK.md) -- the runtime each agent runs in
-- [MCP](MCP.md) -- how the orchestrator's MCP surface is derived
+- [Agent Framework](AGENT_FRAMEWORK.md): the runtime each agent runs in
+- [MCP](MCP.md): how the orchestrator's MCP surface is derived

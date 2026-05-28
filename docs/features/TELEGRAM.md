@@ -24,13 +24,13 @@ defmodule MyApp.TelegramHandler do
 end
 ```
 
-The bot token belongs to Telegex's own config (`config :telegex, token: ...`), not to `:raxol_telegram`. `allowed_chat_ids` is passed at the `handle_update/2` call site -- there is no app-env config for it.
+The bot token belongs to Telegex's own config (`config :telegex, token: ...`), not to `:raxol_telegram`. `allowed_chat_ids` is passed at the `handle_update/2` call site; there is no app-env config for it.
 
 Send a message to the bot from an allowed chat and the router spawns a `Session` for that chat. The session hosts a Lifecycle with `environment: :telegram`.
 
 ## Access Control
 
-`allowed_chat_ids` is optional. If set, the `Bot` update handler drops messages from other chats before they reach the router. Leave it out to accept all chats -- not recommended unless the bot is public-facing.
+`allowed_chat_ids` is optional. If set, the `Bot` update handler drops messages from other chats before they reach the router. Leave it out to accept all chats, not recommended unless the bot is public-facing.
 
 ## Session Lifecycle
 
@@ -57,11 +57,11 @@ Message edit dedup prevents redundant API calls when the rendered output doesn't
 
 ## Security
 
-`telegex` is an optional dep. Without it the surface compiles but does nothing -- useful for environments where Telegram isn't wanted.
+`telegex` is an optional dep. Without it the surface compiles but does nothing, useful for environments where Telegram isn't wanted.
 
 The bot token is the only secret. Don't commit it; load via `System.fetch_env!/1` at runtime.
 
 ## See Also
 
-- [Watch](WATCH.md) -- another push surface for mobile
-- [Agent Framework](AGENT_FRAMEWORK.md) -- if your bot is an agent, use this stack
+- [Watch](WATCH.md): another push surface for mobile
+- [Agent Framework](AGENT_FRAMEWORK.md): if your bot is an agent, use this stack

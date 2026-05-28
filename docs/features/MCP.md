@@ -41,7 +41,7 @@ Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exp
 | `Table`      | `select_row`, `sort_by`, `filter`             |
 | `Tree`       | `expand`, `collapse`, `select_node`           |
 
-Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation -- useful for internal scaffolding Components that shouldn't show up in the agent's action menu.
+Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation, useful for internal scaffolding Components that shouldn't show up in the agent's action menu.
 
 ## Focus Lens
 
@@ -72,7 +72,7 @@ defmodule MyApp do
 end
 ```
 
-The MCP client can read `myapp://state/cart` to inspect what the agent is working with. Updates stream as diffs through `Raxol.MCP.Diff` -- the agent doesn't need to re-fetch the full state every turn.
+The MCP client can read `myapp://state/cart` to inspect what the agent is working with. Updates stream as diffs through `Raxol.MCP.Diff`, so the agent doesn't need to re-fetch the full state every turn.
 
 ## Test Harness
 
@@ -106,7 +106,7 @@ The harness goes through the same MCP transport as a real client, so what your t
 - Swarm state (when distributed)
 - Pending notifications
 
-The tree is streamed as diffs over the MCP connection -- agents track changes incrementally rather than polling.
+The tree is streamed as diffs over the MCP connection, so agents track changes incrementally rather than polling.
 
 ## Property Tests
 
@@ -118,6 +118,6 @@ The same TEA module the human uses, the agent uses too. Same source of truth, di
 
 ## See Also
 
-- [ADR-0012](../adr/0012-mcp-as-rendering-target.md) -- design rationale
-- [Agent Framework](AGENT_FRAMEWORK.md) -- agents that consume MCP
-- [Symphony](SYMPHONY.md) -- orchestrator that exposes its own MCP surface
+- [ADR-0012](../adr/0012-mcp-as-rendering-target.md): design rationale
+- [Agent Framework](AGENT_FRAMEWORK.md): agents that consume MCP
+- [Symphony](SYMPHONY.md): orchestrator that exposes its own MCP surface

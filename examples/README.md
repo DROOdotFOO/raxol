@@ -11,7 +11,7 @@ MIX_ENV=test mix compile   # or MIX_ENV=dev mix compile
 
 ## Learning Path
 
-### Beginner -- TEA Fundamentals
+### Beginner: TEA Fundamentals
 
 | Example | What you'll learn | Run |
 |---------|-------------------|-----|
@@ -21,7 +21,7 @@ MIX_ENV=test mix compile   # or MIX_ENV=dev mix compile
 | [subscriptions](scripts/subscriptions.exs) | Multiple independent subscriptions | `mix run examples/scripts/subscriptions.exs` |
 | [event_handling](scripts/event_handling.exs) | Event struct shapes, pattern matching order | `mix run examples/scripts/event_handling.exs` |
 
-### Intermediate -- Patterns & Architecture
+### Intermediate: Patterns & Architecture
 
 | Example | What you'll learn | Run |
 |---------|-------------------|-----|
@@ -31,7 +31,7 @@ MIX_ENV=test mix compile   # or MIX_ENV=dev mix compile
 | [01_hello_buffer](core/01_hello_buffer/main.exs) | Raw buffer API underneath the View DSL | `mix run examples/core/01_hello_buffer/main.exs` |
 | [line_chart](charts/line_chart_demo.exs) | Braille rendering, ViewBridge for chart cells | `mix run examples/charts/line_chart_demo.exs` |
 
-### Advanced -- Agents, Sensors, Distributed Systems
+### Advanced: Agents, Sensors, Distributed Systems
 
 | Example | What you'll learn | Run |
 |---------|-------------------|-----|
@@ -57,19 +57,19 @@ mix raxol.playground --ssh          # SSH mode (port 2222)
 
 ## Directory Guide
 
-- `getting_started/` -- First examples: TEA callbacks, events, state
-- `scripts/` -- Focused concept demos: subscriptions, event shapes
-- `apps/` -- Multi-section apps: showcase, todo, file browser
-- `agents/` -- AI agent framework: single agent, teams, cockpit
-- `charts/` -- Streaming charts: line, scatter, bar, heatmap
-- `core/` -- Low-level buffer and renderer API
-- `ssh/` -- Serving apps over SSH
-- `swarm/` -- Distributed CRDTs, discovery, topology
-- `components/` -- Individual widget demos
-- `advanced/` -- Advanced patterns
+- `getting_started/`: First examples: TEA callbacks, events, state
+- `scripts/`: Focused concept demos: subscriptions, event shapes
+- `apps/`: Multi-section apps: showcase, todo, file browser
+- `agents/`: AI agent framework: single agent, teams, cockpit
+- `charts/`: Streaming charts: line, scatter, bar, heatmap
+- `core/`: Low-level buffer and renderer API
+- `ssh/`: Serving apps over SSH
+- `swarm/`: Distributed CRDTs, discovery, topology
+- `components/`: Individual widget demos
+- `advanced/`: Advanced patterns
 
 ## Related
 
-- [Quickstart Guide](../docs/getting-started/QUICKSTART.md) -- Build your first app step by step
-- [Core Concepts](../docs/getting-started/CORE_CONCEPTS.md) -- Architecture and design philosophy
-- [Component Gallery](../docs/getting-started/COMPONENT_GALLERY.md) -- All Components with examples
+- [Quickstart Guide](../docs/getting-started/QUICKSTART.md): Build your first app step by step
+- [Core Concepts](../docs/getting-started/CORE_CONCEPTS.md): Architecture and design philosophy
+- [Component Gallery](../docs/getting-started/COMPONENT_GALLERY.md): All Components with examples

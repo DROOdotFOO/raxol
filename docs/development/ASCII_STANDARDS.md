@@ -5,45 +5,45 @@ Bracketed ASCII tags replace emojis throughout the codebase. Keeps output profes
 ## Patterns
 
 ### Status
-- `[OK]` -- success, completed
-- `[WARN]` -- warning
-- `[ERROR]` -- error
-- `[CRIT]` -- critical
-- `[INFO]` -- informational
+- `[OK]`: success, completed
+- `[WARN]`: warning
+- `[ERROR]`: error
+- `[CRIT]`: critical
+- `[INFO]`: informational
 
 ### Actions
-- `[EDIT]` -- edit
-- `[DEL]` -- delete
-- `[SAVE]` -- save
-- `[LOAD]` -- load
-- `[COPY]` -- copy
+- `[EDIT]`: edit
+- `[DEL]`: delete
+- `[SAVE]`: save
+- `[LOAD]`: load
+- `[COPY]`: copy
 
 ### System
-- `[SYS]` -- system
-- `[CPU]` -- CPU
-- `[MEM]` -- memory
-- `[DISK]` -- disk
-- `[NET]` -- network
+- `[SYS]`: system
+- `[CPU]`: CPU
+- `[MEM]`: memory
+- `[DISK]`: disk
+- `[NET]`: network
 
 ### UI Components
-- `[BTN]` -- button
-- `[FORM]` -- form
-- `[TEXT]` -- text
-- `[DATA]` -- data display
-- `[CHART]` -- chart/graph
-- `[NAV]` -- navigation
+- `[BTN]`: button
+- `[FORM]`: form
+- `[TEXT]`: text
+- `[DATA]`: data display
+- `[CHART]`: chart/graph
+- `[NAV]`: navigation
 
 ### Development
-- `[TEST]` -- testing
-- `[BENCH]` -- benchmarking
-- `[PERF]` -- performance
-- `[BUILD]` -- build process
+- `[TEST]`: testing
+- `[BENCH]`: benchmarking
+- `[PERF]`: performance
+- `[BUILD]`: build process
 
 ### Workflow
-- `[ANALYSIS]` -- analysis
-- `[REPORT]` -- report generation
-- `[REGR]` -- regression
-- `[IMPR]` -- improvement
+- `[ANALYSIS]`: analysis
+- `[REPORT]`: report generation
+- `[REGR]`: regression
+- `[IMPR]`: improvement
 
 ## Rules
 

@@ -2,8 +2,8 @@
 
 Raxol provides two levels for building reusable UI:
 
-1. **View helpers** -- Private functions in your TEA module that return element trees. Start here.
-2. **Component behaviour** -- `Raxol.UI.Components.Base.Component` for stateful, reusable Components with lifecycle hooks.
+1. **View helpers**: Private functions in your TEA module that return element trees. Start here.
+2. **Component behaviour**: `Raxol.UI.Components.Base.Component` for stateful, reusable Components with lifecycle hooks.
 
 Most apps only need view helpers. Use the Component behaviour when you need internal state, event handling, or want to publish a reusable Component.
 
@@ -11,7 +11,7 @@ Most apps only need view helpers. Use the Component behaviour when you need inte
 
 ## View Helpers (Recommended Start)
 
-Extract parts of your `view/1` into private functions. These are plain Elixir -- no special framework support needed.
+Extract parts of your `view/1` into private functions. These are plain Elixir, with no special framework support needed.
 
 ```elixir
 defmodule MyApp do
@@ -47,9 +47,9 @@ defmodule MyApp do
   @impl true
   def subscribe(_model), do: []
 
-  # -- View helpers --
+  # View helpers
   # These are just functions returning element trees.
-  # No special behaviour, no lifecycle -- plain Elixir.
+  # No special behaviour, no lifecycle. Plain Elixir.
 
   defp header(title) do
     box style: %{border: :double, width: :fill, padding: 0} do
@@ -80,7 +80,7 @@ defmodule MyApp do
 end
 ```
 
-View helpers are composable, testable (call them and inspect the return value), and require zero boilerplate. Use them for panels, status bars, formatted tables, help text -- anything that's a pure function of data.
+View helpers are composable, testable (call them and inspect the return value), and require zero boilerplate. Use them for panels, status bars, formatted tables, help text, anything that's a pure function of data.
 
 ---
 
@@ -275,7 +275,7 @@ Return `{new_state, commands}` or `:passthrough` to let the event bubble up.
 
 ### Testing
 
-Components are plain modules -- test them directly:
+Components are plain modules, so test them directly:
 
 ```elixir
 test "checkbox toggles on space" do
@@ -312,7 +312,7 @@ Start with view helpers. Graduate to the Component behaviour when you find yours
 
 ## Further Reading
 
-- [Component Gallery](../getting-started/COMPONENT_GALLERY.md) -- All built-in Components with examples
-- [Building Apps](../cookbook/BUILDING_APPS.md) -- TEA patterns and recipes
-- [Examples](../../examples/README.md) -- Runnable examples from beginner to advanced
+- [Component Gallery](../getting-started/COMPONENT_GALLERY.md): All built-in Components with examples
+- [Building Apps](../cookbook/BUILDING_APPS.md): TEA patterns and recipes
+- [Examples](../../examples/README.md): Runnable examples from beginner to advanced
 - Built-in components to study: `lib/raxol/ui/components/input/` and `lib/raxol/ui/components/display/`

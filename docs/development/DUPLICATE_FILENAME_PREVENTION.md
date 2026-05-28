@@ -54,9 +54,9 @@ In `.credo.exs`:
 
 Options:
 
-- `exclude_files` -- files to ignore (default: `["mix.exs", "README.md", ".gitignore"]`)
-- `max_duplicates` -- maximum allowed duplicates before flagging (default: `1`)
-- `include_tests` -- whether to check test files (default: `true`)
+- `exclude_files`: files to ignore (default: `["mix.exs", "README.md", ".gitignore"]`)
+- `max_duplicates`: maximum allowed duplicates before flagging (default: `1`)
+- `include_tests`: whether to check test files (default: `true`)
 
 ## Problematic Patterns
 

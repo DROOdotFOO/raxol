@@ -1,6 +1,6 @@
 # Plugin Testing
 
-Guide to testing Raxol plugins -- unit, integration, and property-based approaches.
+Guide to testing Raxol plugins: unit, integration, and property-based approaches.
 
 ## Setup
 

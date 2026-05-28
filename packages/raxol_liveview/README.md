@@ -2,7 +2,7 @@
 
 Phoenix LiveView integration for Raxol terminal applications.
 
-Render any TEA app in a browser via Phoenix LiveView, with real-time updates over WebSocket. Same `init/1`, `update/2`, `view/1` callbacks -- no code changes needed.
+Render any TEA app in a browser via Phoenix LiveView, with real-time updates over WebSocket. The same `init/1`, `update/2`, `view/1` callbacks work, no code changes needed.
 
 ## Install
 
@@ -51,7 +51,7 @@ Or embed as a component:
   theme={:synthwave84} />
 ```
 
-CSS asset at `priv/static/raxol_terminal.css` -- include in your layout.
+Include the CSS asset at `priv/static/raxol_terminal.css` in your layout.
 
 ## Tests
 

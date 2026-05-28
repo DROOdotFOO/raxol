@@ -12,10 +12,10 @@ Raxol needs terminal emulation that also supports web deployment via Phoenix Liv
 
 A layered architecture that separates emulation from I/O and rendering.
 
-1. **Core Emulator** -- pure Elixir VT100/ANSI/xterm implementation
-2. **Driver Layer** -- pluggable backends (TTY, web, mock, test)
-3. **Renderer Layer** -- separate rendering from emulation logic
-4. **Extension System** -- plugin architecture for additional features
+1. **Core Emulator**: pure Elixir VT100/ANSI/xterm implementation
+2. **Driver Layer**: pluggable backends (TTY, web, mock, test)
+3. **Renderer Layer**: separate rendering from emulation logic
+4. **Extension System**: plugin architecture for additional features
 
 ## Implementation
 
@@ -73,15 +73,15 @@ The emulator core has zero dependencies on OS APIs, terminal I/O, rendering libr
 ### Feature Modules
 
 ```elixir
-# Sixel graphics -- pure Elixir parser, renderers handle display
+# Sixel graphics: pure Elixir parser, renderers handle display
 defmodule Raxol.Terminal.ANSI.SixelGraphics do
 end
 
-# Mouse -- unified handling across backends
+# Mouse: unified handling across backends
 defmodule Raxol.Terminal.Mouse.Manager do
 end
 
-# Unicode -- grapheme clusters, wide chars, emoji with fallbacks
+# Unicode: grapheme clusters, wide chars, emoji with fallbacks
 defmodule Raxol.Terminal.Unicode do
 end
 ```

@@ -242,7 +242,7 @@ All functions use defensive programming. Out-of-bounds coordinates are silently 
 
 ## Thread Safety
 
-All modules are pure functional -- no shared state. Safe for concurrent use. No GenServers or processes. Immutable data structures throughout. Works in any context (LiveView, Phoenix, CLI, scripts).
+All modules are pure functional with no shared state. Safe for concurrent use. No GenServers or processes. Immutable data structures throughout. Works in any context (LiveView, Phoenix, CLI, scripts).
 
 ## See Also
 

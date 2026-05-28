@@ -15,8 +15,8 @@ Current setup:
 - Force HTTPS, connection pooling (soft/hard: 1000)
 
 **Config files:**
-- `fly.toml` -- app config
-- `docker/Dockerfile.web` -- multi-stage Docker build
+- `fly.toml`: app config
+- `docker/Dockerfile.web`: multi-stage Docker build
 - Release command: `/app/bin/migrate`
 
 **Deploy:**
@@ -34,7 +34,7 @@ Static file CDN. Configured but not required for primary functionality.
 
 - Deploys `web/priv/static` via `.github/workflows/deploy-web.yml`
 - Triggered on push to `master`
-- No backend, no WebSocket, no LiveView -- static files only
+- No backend, no WebSocket, no LiveView (static files only)
 - Good for marketing pages, docs hosting, reducing Fly.io bandwidth
 
 ## GitHub Pages (Metrics)
@@ -92,10 +92,10 @@ flyctl secrets set DATABASE_URL=...
 ```
 
 **GitHub Actions workflows:**
-- `.github/workflows/ci-unified.yml` -- tests and quality
-- `.github/workflows/deploy-web.yml` -- Cloudflare Pages
-- `.github/workflows/performance-tracking.yml` -- metrics
-- `.github/workflows/security.yml` -- security scanning
+- `.github/workflows/ci-unified.yml`: tests and quality
+- `.github/workflows/deploy-web.yml`: Cloudflare Pages
+- `.github/workflows/performance-tracking.yml`: metrics
+- `.github/workflows/security.yml`: security scanning
 
 ## Environment Config
 

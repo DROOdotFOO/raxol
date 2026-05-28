@@ -17,11 +17,11 @@ end
 
 | Module | Purpose |
 |--------|---------|
-| `Raxol.Plugin` | `use` macro -- sets behaviour, 6 overridable callback defaults, `init/1` required |
+| `Raxol.Plugin` | `use` macro: sets behaviour, 6 overridable callback defaults, `init/1` required |
 | `Raxol.Plugin.API` | Public facade: load, unload, enable, disable, list, get_state, reload (all try/catch guarded) |
 | `Raxol.Plugin.Manifest` | Cross-package manifest builder with `validate/1` |
 | `Raxol.Plugin.Testing` | ExUnit helpers: `setup_plugin`, `assert_handles_event`, `simulate_lifecycle` |
-| `mix raxol.gen.plugin` | Generator -- creates plugin module + test file skeleton |
+| `mix raxol.gen.plugin` | Generator: creates plugin module + test file skeleton |
 
 ## Quick Start
 

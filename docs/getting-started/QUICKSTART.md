@@ -101,8 +101,8 @@ end
 
 **What's happening here?**
 
-- `init/1` returns a plain map -- that's your entire app state
-- `update/2` pattern-matches on messages and returns `{new_state, commands}` -- the empty list `[]` means "no side effects"
+- `init/1` returns a plain map, which is your entire app state
+- `update/2` pattern-matches on messages and returns `{new_state, commands}`. The empty list `[]` means "no side effects"
 - `view/1` builds the UI from state using the View DSL macros (`column`, `row`, `box`)
 - `command(:quit)` is a built-in command that tells the runtime to shut down
 
@@ -126,7 +126,7 @@ init(context) --+--> model
 ```
 
 1. `init/1` sets up your initial state (the "model")
-2. `view/1` renders the UI -- it's called after every state change
+2. `view/1` renders the UI; it's called after every state change
 3. `update/2` handles messages (keyboard events, button clicks, timers)
 4. `subscribe/1` sets up recurring events (timers, external data)
 
@@ -187,35 +187,35 @@ mix run --no-halt
 
 ## What You Just Built
 
-That counter is a complete Raxol app -- `init/update/view` is the whole API. Everything else builds on this loop.
+That counter is a complete Raxol app: `init/update/view` is the whole API. Everything else builds on this loop.
 
 Try `mix raxol.playground` for an interactive catalog of 30 Component demos you can browse, search, and filter. It's the fastest way to see what's available.
 
 **Next steps:**
 
-- [Component Gallery](COMPONENT_GALLERY.md) -- All Components with examples
-- [Core Concepts](CORE_CONCEPTS.md) -- Buffers, rendering pipeline, and how it all fits together
-- [Building Apps](../cookbook/BUILDING_APPS.md) -- Patterns for real apps (state machines, scrollable lists, keyboard shortcuts)
+- [Component Gallery](COMPONENT_GALLERY.md): All Components with examples
+- [Core Concepts](CORE_CONCEPTS.md): Buffers, rendering pipeline, and how it all fits together
+- [Building Apps](../cookbook/BUILDING_APPS.md): Patterns for real apps (state machines, scrollable lists, keyboard shortcuts)
 
 ### Explore Further
 
 These features set Raxol apart:
 
-**SSH App Serving** -- Serve your app over SSH. Each connection gets its own process:
+**SSH App Serving**: Serve your app over SSH. Each connection gets its own process:
 
 ```bash
 mix run examples/ssh/ssh_counter.exs
 # Then: ssh localhost -p 2222
 ```
 
-**Hot Code Reload** -- Edit your view function while the app is running:
+**Hot Code Reload**: Edit your view function while the app is running:
 
 ```bash
 iex -S mix run examples/dev/hot_reload_demo.exs
-# Edit the view/1 function and save -- UI updates automatically
+# Edit the view/1 function and save; UI updates automatically
 ```
 
-**Crash Isolation** -- Components run in separate processes. One crash doesn't take down the app:
+**Crash Isolation**: Components run in separate processes. One crash doesn't take down the app:
 
 ```bash
 mix run examples/components/process_component_demo.exs
@@ -223,6 +223,6 @@ mix run examples/components/process_component_demo.exs
 
 Working examples to study:
 
-- `examples/getting_started/counter.exs` -- the counter from this page
-- `examples/demo.exs` -- flagship demo with dashboard, sparklines, live stats
-- `examples/apps/todo_app.ex` -- a complete todo list app
+- `examples/getting_started/counter.exs`: the counter from this page
+- `examples/demo.exs`: flagship demo with dashboard, sparklines, live stats
+- `examples/apps/todo_app.ex`: a complete todo list app

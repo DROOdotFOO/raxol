@@ -6,14 +6,14 @@ Implemented
 
 ## Context
 
-The initial parser clocked in at 648 us/op -- far too slow for a terminal framework that needs to handle syntax highlighting, colored log output, progress bars, and sixel graphics in real time. The bottleneck was GenServer overhead for what are fundamentally simple parsing operations.
+The initial parser clocked in at 648 us/op, far too slow for a terminal framework that needs to handle syntax highlighting, colored log output, progress bars, and sixel graphics in real time. The bottleneck was GenServer overhead for what are fundamentally simple parsing operations.
 
 ## Decision
 
 We introduced a dual-architecture approach:
 
-1. **EmulatorLite** -- a GenServer-free, pure functional parser for hot paths
-2. **Regular Emulator** -- the full-featured GenServer for stateful operations
+1. **EmulatorLite**: a GenServer-free, pure functional parser for hot paths
+2. **Regular Emulator**: the full-featured GenServer for stateful operations
 3. **Pattern matching over map lookups** for SGR code processing
 
 ## Implementation
@@ -32,7 +32,7 @@ def process_sgr(params, state) do
 end
 ```
 
-### After (3.3 us/op -- 196x faster)
+### After (3.3 us/op, 196x faster)
 
 ```elixir
 def process_sgr([], state), do: state

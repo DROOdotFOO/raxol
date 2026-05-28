@@ -20,7 +20,7 @@ assert cell.char == "e"
 
 **Performance optimizations.** Diff rendering (50x faster updates), benchmarking suite, memory profiling, automated regression detection.
 
-You can adopt Raxol incrementally -- your existing code keeps working.
+You can adopt Raxol incrementally; your existing code keeps working.
 
 ---
 
@@ -133,7 +133,7 @@ defmodule MyApp.BufferAdapter do
 end
 ```
 
-Adapters add overhead. Benchmark both paths -- if the adapter is > 2x slower, consider Strategy 3 or 4.
+Adapters add overhead. Benchmark both paths. If the adapter is > 2x slower, consider Strategy 3 or 4.
 
 ---
 
@@ -145,7 +145,7 @@ Adapters add overhead. Benchmark both paths -- if the adapter is > 2x slower, co
 
 **Phase 3:** If you're using Phoenix, use `Raxol.LiveView.TerminalComponent` for web rendering. Keep your buffer code, convert via adapter.
 
-**Phase 4:** Gradually replace custom components -- box drawing, text rendering, diffing -- with Raxol equivalents.
+**Phase 4:** Gradually replace custom components (box drawing, text rendering, diffing) with Raxol equivalents.
 
 **Phase 5:** Once confidence is high, remove old code and adapters.
 

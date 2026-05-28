@@ -201,19 +201,19 @@ If termbox2_nif fails to load:
 
 ### IOTerminal Issues
 
-**No color output** -- make sure ANSI is enabled:
+**No color output**: make sure ANSI is enabled:
 
 ```elixir
 Application.put_env(:elixir, :ansi_enabled, true)
 ```
 
-**Windows issues** -- needs Windows 10+ with VT100 support enabled:
+**Windows issues**: needs Windows 10+ with VT100 support enabled:
 
 ```
 reg add HKCU\Console /v VirtualTerminalLevel /t REG_DWORD /d 1
 ```
 
-**Raw mode not working** -- requires OTP 28+. Check with `elixir --version`.
+**Raw mode not working**: requires OTP 28+. Check with `elixir --version`.
 
 ### Checking Current Backend
 

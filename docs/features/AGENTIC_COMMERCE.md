@@ -1,6 +1,6 @@
 # Agentic Commerce
 
-Agents that can pay for things. `raxol_payments` gives any Raxol agent autonomous payment capabilities -- balance checks, quotes, transfers, spending limits -- across chains and protocols.
+Agents that can pay for things. `raxol_payments` gives any Raxol agent autonomous payment capabilities (balance checks, quotes, transfers, spending limits) across chains and protocols.
 
 ## How It Works
 
@@ -29,8 +29,8 @@ Ledger records the spend
 
 Two wallet implementations behind the `Raxol.Payments.Wallet` behaviour:
 
-- `Wallets.Env` -- private key from an environment variable. Simple, good for dev and CI.
-- `Wallets.Op` -- private key fetched from 1Password via a GenServer. No plaintext key on disk.
+- `Wallets.Env`: private key from an environment variable. Simple, good for dev and CI.
+- `Wallets.Op`: private key fetched from 1Password via a GenServer. No plaintext key on disk.
 
 Both expose `address/1`, `sign/2`, and `balance/2`.
 
@@ -42,7 +42,7 @@ Handles HTTP 402 Payment Required responses. The server says "pay me X to addres
 
 ### MPP (Machine Payments Protocol)
 
-Stripe/Tempo's protocol for machine-to-machine payments. Same HTTP 402 flow, different wire format. The `AutoPay` Req plugin handles both x402 and MPP automatically -- just add it as a response step.
+Stripe/Tempo's protocol for machine-to-machine payments. Same HTTP 402 flow, different wire format. The `AutoPay` Req plugin handles both x402 and MPP automatically; just add it as a response step.
 
 ### Xochi
 
@@ -50,9 +50,9 @@ Intent-based cross-chain settlement. The agent says "I want to pay 10 USDC on Ba
 
 Flow: `get_quote/2` -> `execute/3` (wallet signs EIP-712 intent) -> `poll_status/3`.
 
-Xochi is the default for cross-chain and privacy (stealth addresses, shielded transfers). It's cash-positive by design -- the protocol takes a fee, the agent pays it, done.
+Xochi is the default for cross-chain and privacy (stealth addresses, shielded transfers). It's cash-positive by design: the protocol takes a fee, the agent pays it, done.
 
-### Riddler (direct solver -- B2B only)
+### Riddler (direct solver, B2B only)
 
 Direct access to Riddler's Commerce API for bulk/institutional flows. Cash-negative for the protocol (solver subsidizes execution), so don't use it for agent payments. It exists for B2B integrations where the business relationship justifies the economics.
 
@@ -64,7 +64,7 @@ Three layers of limits in `SpendingPolicy`:
 - **Per-session**: rolling total within one agent session
 - **Lifetime**: hard cap across all sessions
 
-The `Ledger` is an ETS-backed GenServer that tracks cumulative spend. `SpendingHook` implements the `CommandHook` behaviour from raxol_agent -- it runs before every command and can deny execution if limits would be exceeded.
+The `Ledger` is an ETS-backed GenServer that tracks cumulative spend. `SpendingHook` implements the `CommandHook` behaviour from raxol_agent. It runs before every command and can deny execution if limits would be exceeded.
 
 ## Agent Actions
 
@@ -132,5 +132,5 @@ Standalone package at `packages/raxol_payments/`. Depends on `raxol_agent` at co
 
 ## See Also
 
-- [Agent Framework](AGENT_FRAMEWORK.md) -- how agents work (TEA, sessions, teams, commands)
-- [Distributed Swarm](DISTRIBUTED_SWARM.md) -- multi-node agent coordination
+- [Agent Framework](AGENT_FRAMEWORK.md): how agents work (TEA, sessions, teams, commands)
+- [Distributed Swarm](DISTRIBUTED_SWARM.md): multi-node agent coordination

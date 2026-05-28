@@ -220,9 +220,9 @@ The Driver (`lib/raxol/terminal/driver.ex`) handles this automatically:
 
 Potential optimizations, none currently needed:
 
-- **Native Windows Console API NIF** -- would match Unix performance (~50us) but requires C compilation on Windows.
-- **DirectWrite integration** -- GPU-accelerated text rendering with better font support.
-- **ConPTY support** -- modern Windows pseudo-console, available in Windows 10 1809+.
+- **Native Windows Console API NIF**: would match Unix performance (~50us) but requires C compilation on Windows.
+- **DirectWrite integration**: GPU-accelerated text rendering with better font support.
+- **ConPTY support**: modern Windows pseudo-console, available in Windows 10 1809+.
 
 ## Resources
 

@@ -50,7 +50,7 @@ Marketing site at [bbs.foglet.io](https://bbs.foglet.io). Brendan stress-tested 
 
 ## Symphony
 
-`raxol_symphony` is an Elixir/OTP port of [OpenAI Symphony](https://github.com/openai/symphony). The orchestrator polls a tracker (Linear or GitHub Issues), claims eligible issues, isolates each in a per-issue workspace, and runs a coding agent until the work reaches a workflow-defined handoff state. Two runner backends ship: `raxol_agent` (the default, wraps `Raxol.Agent.Stream`) and the upstream `codex app-server` (Port-based JSON-RPC). Six surfaces consume the same orchestrator snapshot via PubSub: terminal dashboard, LiveView, MCP tools, Telegram inline keyboards, Watch push, and a JSON API. Evidence collection -- CI status, PR comments, complexity, asciinema replays -- ships per run.
+`raxol_symphony` is an Elixir/OTP port of [OpenAI Symphony](https://github.com/openai/symphony). The orchestrator polls a tracker (Linear or GitHub Issues), claims eligible issues, isolates each in a per-issue workspace, and runs a coding agent until the work reaches a workflow-defined handoff state. Two runner backends ship: `raxol_agent` (the default, wraps `Raxol.Agent.Stream`) and the upstream `codex app-server` (Port-based JSON-RPC). Six surfaces consume the same orchestrator snapshot via PubSub: terminal dashboard, LiveView, MCP tools, Telegram inline keyboards, Watch push, and a JSON API. Evidence collection (CI status, PR comments, complexity, asciinema replays) ships per run.
 
 ```bash
 mix raxol.symphony --workflow ./WORKFLOW.md

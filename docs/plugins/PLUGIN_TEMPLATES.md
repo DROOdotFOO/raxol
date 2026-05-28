@@ -59,7 +59,7 @@ There is no UI rendering callback on the `Raxol.Core.Runtime.Plugins.Plugin` beh
 1. **Emit commands or events** that a host app or Component consumes (`handle_command/3` returns the third element as the result).
 2. **Run a companion `Raxol.UI.Components.Base.Component`** in the app and let the plugin update its model via the command/event channel.
 
-If you need to embed visible Components, build them via the Component behaviour -- see [Custom Components](../cookbook/CUSTOM_COMPONENTS.md).
+If you need to embed visible Components, build them via the Component behaviour. See [Custom Components](../cookbook/CUSTOM_COMPONENTS.md).
 
 ## Background Task Plugin Template
 
@@ -661,10 +661,10 @@ end
 
 Pick the template that fits your needs:
 
-- **Basic Plugin** -- Simple functionality, no UI
-- **UI Plugin** -- Interactive overlays and panels
-- **Background Plugin** -- Periodic tasks and monitoring
-- **File System Plugin** -- File watching and directory operations
+- **Basic Plugin**: Simple functionality, no UI
+- **UI Plugin**: Interactive overlays and panels
+- **Background Plugin**: Periodic tasks and monitoring
+- **File System Plugin**: File watching and directory operations
 
 Then customize it: replace placeholder names, implement your logic, list your `provides:` capabilities, and declare any plugin `depends_on:` IDs.
 
