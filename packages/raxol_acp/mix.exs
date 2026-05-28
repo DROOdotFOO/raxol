@@ -45,6 +45,7 @@ defmodule RaxolAcp.MixProject do
       {:jason, "~> 1.4"},
       {:decimal, "~> 2.0"},
       {:mint_web_socket, "~> 1.0"},
+      {:cowboy, "~> 2.10"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}

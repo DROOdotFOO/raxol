@@ -12,10 +12,11 @@ defmodule Raxol.ACP.Seller.Backend do
   - `Raxol.ACP.Seller.Backend.InMemory` -- subscribers are notified when
     a caller calls `publish/1`. Used by tests and by the bench harness.
     A second real impl, not a mock.
-  - `Raxol.ACP.Seller.Backend.WebSocket` -- live `mint_web_socket`
-    connection to the ACP backend's notification socket. (Lands with
-    `ContractClient.Onchain` in a follow-up; both need a live endpoint
-    to be testable.)
+  - `Raxol.ACP.Seller.Backend.WebSocket` -- live Socket.IO v4 connection
+    to the Virtuals ACP notification socket. Speaks the Engine.IO +
+    Socket.IO wire format over `mint_web_socket`'s WebSocket-only
+    transport. See `Raxol.ACP.Seller.Backend.WebSocket.Protocol` for
+    the codec.
 
   Pick the impl with:
 
