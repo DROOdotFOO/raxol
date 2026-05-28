@@ -85,27 +85,41 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   @sig_get_nonce "getNonce(address,uint192)"
 
-  # Placeholder signatures. Replace when Virtuals ABIs are vendored.
-  @sig_create_job "createJob(address,uint256,bytes)"
-  # Canonical: `InteractionLedger.createMemo(uint256,string,uint8,bool,uint8)`.
+  # Canonical ACPSimple selectors (ABI vendored at priv/abi/acp_simple.json).
+  @sig_create_job "createJob(address,address,uint256)"
+  @sig_set_budget "setBudget(uint256,uint256)"
   @sig_create_memo "createMemo(uint256,string,uint8,bool,uint8)"
-  @sig_complete_job "completeJob(uint256,bytes32)"
-  @sig_pay_and_accept "payAndAcceptRequirement(uint256,bytes)"
+  @sig_sign_memo "signMemo(uint256,bool,string)"
+  @sig_claim_budget "claimBudget(uint256)"
 
   # -- Behaviour callbacks --
 
   @impl true
-  def create_job(seller, %Decimal{} = price_usdc, data)
-      when is_binary(seller) and is_binary(data) do
+  def create_job(provider, evaluator, expired_at)
+      when is_binary(provider) and is_binary(evaluator) and is_integer(expired_at) do
     call_data =
       ABI.encode_call(@sig_create_job, [
-        {"address", seller},
-        {"uint256", decimal_to_uint256(price_usdc)},
-        {"bytes", data}
+        {"address", provider},
+        {"address", evaluator},
+        {"uint256", expired_at}
       ])
 
     case send_tx(:create_job, call_data) do
       {:ok, tx_hash, receipt} -> {:ok, resolve_job_id(tx_hash, receipt)}
+      {:error, _} = err -> err
+    end
+  end
+
+  @impl true
+  def set_budget(job_id, %Decimal{} = amount) when is_binary(job_id) do
+    call_data =
+      ABI.encode_call(@sig_set_budget, [
+        {"uint256", job_id_to_uint256(job_id)},
+        {"uint256", decimal_to_uint256(amount)}
+      ])
+
+    case send_tx(:set_budget, call_data) do
+      {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
       {:error, _} = err -> err
     end
   end
@@ -164,44 +178,34 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   end
 
   @impl true
-  def complete_job(job_id, deliverable_hash)
-      when is_binary(job_id) and is_binary(deliverable_hash) do
+  def sign_memo(memo_id, approved, reason)
+      when (is_binary(memo_id) or is_integer(memo_id)) and is_boolean(approved) and
+             is_binary(reason) do
     call_data =
-      ABI.encode_call(@sig_complete_job, [
-        {"uint256", job_id_to_uint256(job_id)},
-        {"bytes32", to_hex_bytes32(deliverable_hash)}
+      ABI.encode_call(@sig_sign_memo, [
+        {"uint256", memo_id_to_uint256(memo_id)},
+        {"bool", approved},
+        {"string", reason}
       ])
 
-    case send_tx(:complete_job, call_data) do
+    case send_tx(:sign_memo, call_data) do
       {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
       {:error, _} = err -> err
     end
   end
-
-  # ABI's bytes32 encoder takes a hex string. Accept either:
-  #   - raw 32-byte binary -> hex-encode
-  #   - 0x-prefixed 64-char hex -> pass through
-  #   - bare 64-char hex -> pass through
-  defp to_hex_bytes32(<<bytes::binary-size(32)>>),
-    do: "0x" <> Base.encode16(bytes, case: :lower)
-
-  defp to_hex_bytes32("0x" <> hex) when byte_size(hex) == 64, do: "0x" <> hex
-  defp to_hex_bytes32(hex) when is_binary(hex) and byte_size(hex) == 64, do: hex
 
   @impl true
-  def pay_and_accept_requirement(job_id, authorization)
-      when is_binary(job_id) and is_binary(authorization) do
-    call_data =
-      ABI.encode_call(@sig_pay_and_accept, [
-        {"uint256", job_id_to_uint256(job_id)},
-        {"bytes", authorization}
-      ])
+  def claim_budget(job_id) when is_binary(job_id) do
+    call_data = ABI.encode_call(@sig_claim_budget, [{"uint256", job_id_to_uint256(job_id)}])
 
-    case send_tx(:pay_and_accept_requirement, call_data) do
+    case send_tx(:claim_budget, call_data) do
       {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
       {:error, _} = err -> err
     end
   end
+
+  defp memo_id_to_uint256(memo_id) when is_integer(memo_id) and memo_id >= 0, do: memo_id
+  defp memo_id_to_uint256(memo_id) when is_binary(memo_id), do: job_id_to_uint256(memo_id)
 
   # -- Send pipeline --
 

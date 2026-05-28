@@ -24,7 +24,7 @@ defmodule Raxol.ACP.Job.ServerTest do
   end
 
   defp start_job(opts \\ []) do
-    {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.50"), <<>>)
+    {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
     opts = Keyword.put(opts, :job_id, job_id)
     {:ok, pid} = Job.Supervisor.start_job(opts)
     {pid, job_id}

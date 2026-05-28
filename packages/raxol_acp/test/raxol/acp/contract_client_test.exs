@@ -4,12 +4,16 @@ defmodule Raxol.ACP.ContractClientTest do
   alias Raxol.ACP.ContractClient
   alias Raxol.ACP.ContractClient.InMemory
 
-  @seller "0x" <> String.duplicate("ab", 20)
+  @provider "0x" <> String.duplicate("ab", 20)
+  @evaluator "0x" <> String.duplicate("cd", 20)
+  @expired_at 9_999_999_999
 
   setup do
     InMemory.reset()
     :ok
   end
+
+  defp new_job, do: ContractClient.create_job(@provider, @evaluator, @expired_at)
 
   describe "impl/0" do
     test "returns the configured impl" do
@@ -32,24 +36,38 @@ defmodule Raxol.ACP.ContractClientTest do
   end
 
   describe "create_job/3 (delegated)" do
-    test "returns a synthetic job_id and tracks the job" do
-      assert {:ok, "job-1"} = ContractClient.create_job(@seller, Decimal.new("0.50"), <<1, 2>>)
-      assert {:ok, "job-2"} = ContractClient.create_job(@seller, Decimal.new("1.00"), <<3, 4>>)
+    test "returns a synthetic job_id and tracks provider/evaluator/expiry" do
+      assert {:ok, "job-1"} = new_job()
+      assert {:ok, "job-2"} = new_job()
 
       assert InMemory.list_jobs() == ["job-1", "job-2"]
 
       job1 = InMemory.get_job("job-1")
-      assert job1.seller == @seller
-      assert Decimal.equal?(job1.price, Decimal.new("0.50"))
-      assert job1.data == <<1, 2>>
+      assert job1.provider == @provider
+      assert job1.evaluator == @evaluator
+      assert job1.expired_at == @expired_at
+      assert job1.budget == nil
       assert job1.memos == []
-      refute job1.completed
+      refute job1.claimed
+    end
+  end
+
+  describe "set_budget/2 (delegated)" do
+    test "records the budget in USDC" do
+      {:ok, job_id} = new_job()
+      assert {:ok, "tx-1"} = ContractClient.set_budget(job_id, Decimal.new("0.50"))
+      assert Decimal.equal?(InMemory.get_job(job_id).budget, Decimal.new("0.50"))
+    end
+
+    test "errors on unknown job" do
+      assert {:error, {:no_such_job, "nope"}} =
+               ContractClient.set_budget("nope", Decimal.new("1.00"))
     end
   end
 
   describe "create_memo/5 (delegated)" do
     test "appends memos in submission order with synthetic tx_hashes" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("1.00"), <<>>)
+      {:ok, job_id} = new_job()
 
       assert {:ok, "tx-1"} =
                ContractClient.create_memo(job_id, "first", :message, false, :negotiation)
@@ -61,8 +79,18 @@ defmodule Raxol.ACP.ContractClientTest do
       assert length(memos) == 2
 
       assert [
-               %{memo_type: :message, next_phase: :negotiation, content: "first", is_secured: false},
-               %{memo_type: :txhash, next_phase: :transaction, content: "second", is_secured: true}
+               %{
+                 memo_type: :message,
+                 next_phase: :negotiation,
+                 content: "first",
+                 is_secured: false
+               },
+               %{
+                 memo_type: :txhash,
+                 next_phase: :transaction,
+                 content: "second",
+                 is_secured: true
+               }
              ] = memos
 
       assert Enum.map(memos, & &1.tx_hash) == ["tx-1", "tx-2"]
@@ -74,55 +102,52 @@ defmodule Raxol.ACP.ContractClientTest do
     end
   end
 
-  describe "complete_job/2 (delegated)" do
-    test "marks job completed and records the deliverable hash" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("1.00"), <<>>)
-      hash = :crypto.hash(:sha256, "deliverable")
+  describe "sign_memo/3 (delegated)" do
+    test "records the sign (approve/reject + reason) keyed by memo id" do
+      {:ok, _job_id} = new_job()
 
-      assert {:ok, "tx-1"} = ContractClient.complete_job(job_id, hash)
+      assert {:ok, "tx-1"} = ContractClient.sign_memo(7, true, "looks good")
+      assert {:ok, "tx-2"} = ContractClient.sign_memo(8, false, "missing data")
 
-      job = InMemory.get_job(job_id)
-      assert job.completed
-      assert job.deliverable_hash == hash
-    end
-
-    test "errors on unknown job" do
-      assert {:error, {:no_such_job, "nope"}} =
-               ContractClient.complete_job("nope", <<0::256>>)
+      assert [
+               %{memo_id: 7, approved: true, reason: "looks good"},
+               %{memo_id: 8, approved: false, reason: "missing data"}
+             ] = InMemory.list_signs()
     end
   end
 
-  describe "pay_and_accept_requirement/2 (delegated)" do
-    test "records the authorization payload" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("1.00"), <<>>)
-      auth = <<0xDE, 0xAD, 0xBE, 0xEF>>
+  describe "claim_budget/1 (delegated)" do
+    test "marks the job claimed" do
+      {:ok, job_id} = new_job()
+      assert {:ok, "tx-1"} = ContractClient.claim_budget(job_id)
+      assert InMemory.get_job(job_id).claimed
+    end
 
-      assert {:ok, "tx-1"} = ContractClient.pay_and_accept_requirement(job_id, auth)
-
-      assert InMemory.get_job(job_id).payment_authorization == auth
+    test "errors on unknown job" do
+      assert {:error, {:no_such_job, "nope"}} = ContractClient.claim_budget("nope")
     end
   end
 
   describe "tx_hash counter is global across all calls" do
     test "tx-1, tx-2, tx-3 across mixed methods" do
-      {:ok, j} = ContractClient.create_job(@seller, Decimal.new("1.00"), <<>>)
+      {:ok, j} = new_job()
 
-      assert {:ok, "tx-1"} = ContractClient.create_memo(j, "x", :message, false, :negotiation)
-      assert {:ok, "tx-2"} = ContractClient.pay_and_accept_requirement(j, <<>>)
-      assert {:ok, "tx-3"} = ContractClient.complete_job(j, <<0::256>>)
+      assert {:ok, "tx-1"} = ContractClient.set_budget(j, Decimal.new("1.00"))
+      assert {:ok, "tx-2"} = ContractClient.create_memo(j, "x", :message, false, :negotiation)
+      assert {:ok, "tx-3"} = ContractClient.claim_budget(j)
     end
   end
 
   describe "reset/0" do
     test "wipes all state" do
-      {:ok, _} = ContractClient.create_job(@seller, Decimal.new("1.00"), <<>>)
+      {:ok, _} = new_job()
       assert InMemory.list_jobs() != []
 
       InMemory.reset()
       assert InMemory.list_jobs() == []
 
       # Counters reset too -- next job_id is "job-1" again
-      assert {:ok, "job-1"} = ContractClient.create_job(@seller, Decimal.new("1.00"), <<>>)
+      assert {:ok, "job-1"} = new_job()
     end
   end
 end

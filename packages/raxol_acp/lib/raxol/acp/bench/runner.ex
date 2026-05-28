@@ -241,8 +241,14 @@ defmodule Raxol.ACP.Bench.Runner do
   defp stage_job_id(_, _ctx), do: "<unknown>"
 
   defp create_job(ctx) do
-    case ContractClient.create_job(ctx.seller, ctx.price, <<>>) do
-      {:ok, job_id} -> {:ok, job_id}
+    # provider = seller, evaluator = buyer, expiry one hour out. The
+    # budget is set separately, mirroring the real ACPSimple flow.
+    expired_at = System.os_time(:second) + 3600
+
+    with {:ok, job_id} <- ContractClient.create_job(ctx.seller, ctx.buyer, expired_at),
+         {:ok, _tx} <- ContractClient.set_budget(job_id, ctx.price) do
+      {:ok, job_id}
+    else
       {:error, reason} -> {:error, {:create_job, reason}}
     end
   end

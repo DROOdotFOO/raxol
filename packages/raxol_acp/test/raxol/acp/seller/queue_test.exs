@@ -85,7 +85,7 @@ defmodule Raxol.ACP.Seller.QueueTest do
     end
 
     test "starts a Job.Server, accepts the request, and persists the negotiation memo" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
+      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
 
       Queue.dispatch(%{
         type: :job_offered,
@@ -115,7 +115,7 @@ defmodule Raxol.ACP.Seller.QueueTest do
     end
 
     test "drops :job_offered when the offering is not registered" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
+      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
 
       Queue.dispatch(%{
         type: :job_offered,

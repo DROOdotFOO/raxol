@@ -63,7 +63,7 @@ defmodule Raxol.ACP.Job.IntegrationTest do
 
   defp start_configured_job do
     {:ok, job_id} =
-      ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
+      ContractClient.create_job(@seller, @seller, 9_999_999_999)
 
     {:ok, pid} =
       Job.Supervisor.start_job(
@@ -130,7 +130,7 @@ defmodule Raxol.ACP.Job.IntegrationTest do
         def handle_deliver(_req, _ctx), do: {:deliver, %{}}
       end
 
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
+      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
 
       {:ok, pid} =
         Job.Supervisor.start_job(
@@ -158,7 +158,7 @@ defmodule Raxol.ACP.Job.IntegrationTest do
         def handle_deliver(_req, _ctx), do: {:error, :upstream_down}
       end
 
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
+      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
 
       {:ok, _} =
         Job.Supervisor.start_job(
@@ -175,7 +175,7 @@ defmodule Raxol.ACP.Job.IntegrationTest do
 
   describe "config validation" do
     test "accept_request without :handler returns config_missing" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
+      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
       {:ok, _} = Job.Supervisor.start_job(job_id: job_id)
 
       assert {:error, {:config_missing, missing}} = Job.Server.accept_request(job_id)
@@ -185,7 +185,7 @@ defmodule Raxol.ACP.Job.IntegrationTest do
 
     test "buyer signature is preserved in the local memo log" do
       {:ok, job_id} =
-        ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
+        ContractClient.create_job(@seller, @seller, 9_999_999_999)
 
       {:ok, _} =
         Job.Supervisor.start_job(
@@ -206,7 +206,7 @@ defmodule Raxol.ACP.Job.IntegrationTest do
 
   describe "low-level transition/4 still works" do
     test "raw transition path bypasses handler entirely" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.01"), <<>>)
+      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
       {:ok, _} = Job.Supervisor.start_job(job_id: job_id)
 
       assert {:ok, :negotiation} =

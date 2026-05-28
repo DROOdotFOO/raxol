@@ -289,7 +289,7 @@ defmodule Raxol.ACP.Job.StoreTest do
 
   describe "Job.Server integration: transient restart" do
     test "every successful transition writes through to the Store" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.50"), <<>>)
+      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
       {:ok, _pid} = Job.Supervisor.start_job(job_id: job_id)
 
       assert :error = Store.load(job_id)
@@ -311,7 +311,7 @@ defmodule Raxol.ACP.Job.StoreTest do
     end
 
     test ":persist? false bypasses the Store" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.50"), <<>>)
+      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
       {:ok, _pid} = Job.Supervisor.start_job(job_id: job_id, persist?: false)
 
       assert {:ok, :negotiation} =
@@ -321,7 +321,7 @@ defmodule Raxol.ACP.Job.StoreTest do
     end
 
     test "transient restart hydrates state + memos from the Store" do
-      {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.50"), <<>>)
+      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
       {:ok, pid} = Job.Supervisor.start_job(job_id: job_id)
 
       # Drive the job two transitions in.

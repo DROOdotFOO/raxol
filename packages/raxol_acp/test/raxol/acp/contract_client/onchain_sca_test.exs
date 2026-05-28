@@ -151,7 +151,7 @@ defmodule Raxol.ACP.ContractClient.OnchainSCATest do
       events = self()
       install_stub(events)
 
-      assert {:ok, @tx_hash} = Onchain.create_job(@sca_account, Decimal.new("0.50"), <<0xDE>>)
+      assert {:ok, @tx_hash} = Onchain.create_job(@sca_account, @sca_account, 9_999_999_999)
 
       assert_received {:rpc_call, "eth_sendUserOperation", [user_op, _ep]}
       assert execute_wrapped?(user_op["callData"])

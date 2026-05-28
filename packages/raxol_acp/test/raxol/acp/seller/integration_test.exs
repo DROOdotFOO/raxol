@@ -101,7 +101,7 @@ defmodule Raxol.ACP.Seller.IntegrationTest do
   end
 
   test "full lifecycle: events drive the job from :request to :completed" do
-    {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.50"), <<>>)
+    {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
 
     # 1. Buyer offers a job to our seller.
     BackendInMem.publish(%{
@@ -164,7 +164,7 @@ defmodule Raxol.ACP.Seller.IntegrationTest do
   end
 
   test "expiration event drives a non-terminal job to :expired" do
-    {:ok, job_id} = ContractClient.create_job(@seller, Decimal.new("0.10"), <<>>)
+    {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
 
     BackendInMem.publish(%{
       type: :job_offered,

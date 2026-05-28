@@ -1,6 +1,11 @@
 defmodule Raxol.ACP.ContractClient do
   @moduledoc """
-  Behaviour and dispatcher for the four ACP contract methods on Base.
+  Behaviour and dispatcher for the ACP contract methods on Base.
+
+  Mirrors the write surface of the deployed `ACPSimple` /
+  `InteractionLedger` contract (ABI vendored at
+  `priv/abi/acp_simple.json`): `create_job`, `set_budget`,
+  `create_memo`, `sign_memo`, `claim_budget`.
 
   ## Why a behaviour, not a hard-coded RPC client
 
@@ -26,7 +31,7 @@ defmodule Raxol.ACP.ContractClient do
 
   Callers use the delegating functions on this module:
 
-      {:ok, job_id} = Raxol.ACP.ContractClient.create_job(seller, price, data)
+      {:ok, job_id} = Raxol.ACP.ContractClient.create_job(provider, evaluator, expired_at)
 
   Job ids and transaction hashes are opaque binaries; format depends on
   the impl (Onchain returns 0x-prefixed lowercase hex; InMemory returns
@@ -34,29 +39,68 @@ defmodule Raxol.ACP.ContractClient do
   """
 
   @type job_id :: binary()
+  @type memo_id :: binary() | non_neg_integer()
   @type tx_hash :: binary()
-  @type seller_address :: String.t()
-  @type price_usdc :: Decimal.t()
+  @type address :: String.t()
+  @type amount_usdc :: Decimal.t()
   @type memo_type :: Raxol.ACP.Job.MemoType.t()
   @type job_phase :: Raxol.ACP.Job.StateMachine.state()
 
-  @callback create_job(seller_address(), price_usdc(), binary()) ::
+  @doc """
+  Create a job. Mirrors `ACPSimple.createJob`:
+
+      createJob(address provider, address evaluator, uint256 expiredAt)
+        -> uint256 jobId
+
+  `provider` is the seller agent, `evaluator` the address that signs
+  off on the deliverable (often the buyer), and `expired_at` a unix
+  timestamp after which the job expires.
+  """
+  @callback create_job(address(), address(), non_neg_integer()) ::
               {:ok, job_id()} | {:error, term()}
+
+  @doc """
+  Set the escrow budget for a job. Mirrors `ACPSimple.setBudget`:
+
+      setBudget(uint256 jobId, uint256 amount)
+
+  `amount` is in USDC; it is scaled to the token's 6 decimals on chain.
+  """
+  @callback set_budget(job_id(), amount_usdc()) ::
+              {:ok, tx_hash()} | {:error, term()}
 
   @callback create_memo(job_id(), String.t(), memo_type(), boolean(), job_phase()) ::
               {:ok, tx_hash()} | {:error, term()}
 
-  @callback complete_job(job_id(), binary()) ::
+  @doc """
+  Sign (approve or reject) a memo. Mirrors `ACPSimple.signMemo`:
+
+      signMemo(uint256 memoId, bool isApproved, string reason)
+
+  This is how a counterparty accepts a request, approves a deliverable,
+  or rejects either with a reason.
+  """
+  @callback sign_memo(memo_id(), boolean(), String.t()) ::
               {:ok, tx_hash()} | {:error, term()}
 
-  @callback pay_and_accept_requirement(job_id(), binary()) ::
+  @doc """
+  Claim the escrowed budget for a completed job. Mirrors
+  `ACPSimple.claimBudget`:
+
+      claimBudget(uint256 jobId)
+  """
+  @callback claim_budget(job_id()) ::
               {:ok, tx_hash()} | {:error, term()}
 
   # -- Delegating API --
 
-  @spec create_job(seller_address(), price_usdc(), binary()) ::
+  @spec create_job(address(), address(), non_neg_integer()) ::
           {:ok, job_id()} | {:error, term()}
-  def create_job(seller, price, data), do: impl().create_job(seller, price, data)
+  def create_job(provider, evaluator, expired_at),
+    do: impl().create_job(provider, evaluator, expired_at)
+
+  @spec set_budget(job_id(), amount_usdc()) :: {:ok, tx_hash()} | {:error, term()}
+  def set_budget(job_id, amount), do: impl().set_budget(job_id, amount)
 
   @doc """
   Create an on-chain memo. Mirrors `InteractionLedger.createMemo` from
@@ -73,14 +117,12 @@ defmodule Raxol.ACP.ContractClient do
   def create_memo(job_id, content, memo_type, is_secured, next_phase),
     do: impl().create_memo(job_id, content, memo_type, is_secured, next_phase)
 
-  @spec complete_job(job_id(), binary()) :: {:ok, tx_hash()} | {:error, term()}
-  def complete_job(job_id, deliverable_hash),
-    do: impl().complete_job(job_id, deliverable_hash)
+  @spec sign_memo(memo_id(), boolean(), String.t()) :: {:ok, tx_hash()} | {:error, term()}
+  def sign_memo(memo_id, approved, reason),
+    do: impl().sign_memo(memo_id, approved, reason)
 
-  @spec pay_and_accept_requirement(job_id(), binary()) ::
-          {:ok, tx_hash()} | {:error, term()}
-  def pay_and_accept_requirement(job_id, authorization),
-    do: impl().pay_and_accept_requirement(job_id, authorization)
+  @spec claim_budget(job_id()) :: {:ok, tx_hash()} | {:error, term()}
+  def claim_budget(job_id), do: impl().claim_budget(job_id)
 
   @doc """
   Return the configured implementation module.

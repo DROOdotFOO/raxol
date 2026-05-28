@@ -120,7 +120,7 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
       install_stub(default_handler(events))
 
       assert {:ok, "0x" <> _ = tx_hash} =
-               Onchain.create_job(@seller, Decimal.new("0.50"), <<0xDE, 0xAD>>)
+               Onchain.create_job(@seller, @seller, 9_999_999_999)
 
       assert byte_size(tx_hash) == 66
 
@@ -185,7 +185,7 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
         end
       end)
 
-      assert {:ok, "0x2a"} = Onchain.create_job(@seller, Decimal.new("1.00"), <<>>)
+      assert {:ok, "0x2a"} = Onchain.create_job(@seller, @seller, 9_999_999_999)
     end
 
     test "falls back to tx hash when the event is configured but missing from logs" do
@@ -208,7 +208,7 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
         install_stub(default_handler(self()))
 
         assert {:ok, "0x" <> _ = tx_hash} =
-                 Onchain.create_job(@seller, Decimal.new("0.10"), <<>>)
+                 Onchain.create_job(@seller, @seller, 9_999_999_999)
 
         assert_receive {:placeholder, %{tx_hash: ^tx_hash, reason: {:event_not_found, _}}}, 200
       after
@@ -224,7 +224,7 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
       install_stub(default_handler(self()))
 
       assert {:error, :no_contract_address} =
-               Onchain.create_job(@seller, Decimal.new("1.00"), <<>>)
+               Onchain.create_job(@seller, @seller, 9_999_999_999)
     end
 
     test "errors clearly when no wallet is configured" do
@@ -232,7 +232,7 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
       install_stub(default_handler(self()))
 
       assert {:error, :no_wallet_configured} =
-               Onchain.create_job(@seller, Decimal.new("1.00"), <<>>)
+               Onchain.create_job(@seller, @seller, 9_999_999_999)
     end
 
     test "surfaces tx revert as {:error, {:tx_reverted, hash}}" do
@@ -272,7 +272,7 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
       end)
 
       assert {:error, {:tx_reverted, "0x" <> _}} =
-               Onchain.create_job(@seller, Decimal.new("0.10"), <<>>)
+               Onchain.create_job(@seller, @seller, 9_999_999_999)
     end
   end
 
@@ -290,29 +290,29 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
     end
   end
 
-  describe "complete_job/2" do
-    test "accepts a 0x-prefixed hex bytes32" do
+  describe "set_budget/2" do
+    test "encodes job id + USDC amount and sends a tx" do
       install_stub(default_handler(self()))
-
-      hash = "0x" <> String.duplicate("bb", 32)
-      assert {:ok, "0x" <> _} = Onchain.complete_job("42", hash)
-    end
-
-    test "accepts a raw 32-byte binary" do
-      install_stub(default_handler(self()))
-
-      hash = String.duplicate(<<0xCC>>, 32)
-      assert {:ok, "0x" <> _} = Onchain.complete_job("42", hash)
+      assert {:ok, "0x" <> _} = Onchain.set_budget("42", Decimal.new("0.50"))
     end
   end
 
-  describe "pay_and_accept_requirement/2" do
-    test "encodes authorization bytes + sends a tx" do
+  describe "sign_memo/3" do
+    test "encodes memo id + approval bool + reason string" do
       install_stub(default_handler(self()))
+      assert {:ok, "0x" <> _} = Onchain.sign_memo(7, true, "looks good")
+    end
 
-      auth = <<0x01, 0x02, 0x03, 0x04>>
+    test "accepts a string memo id" do
+      install_stub(default_handler(self()))
+      assert {:ok, "0x" <> _} = Onchain.sign_memo("0x2a", false, "rejected")
+    end
+  end
 
-      assert {:ok, "0x" <> _} = Onchain.pay_and_accept_requirement("99", auth)
+  describe "claim_budget/1" do
+    test "encodes the job id + sends a tx" do
+      install_stub(default_handler(self()))
+      assert {:ok, "0x" <> _} = Onchain.claim_budget("99")
     end
   end
 
@@ -335,7 +335,7 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
       )
 
       try do
-        assert {:ok, _} = Onchain.create_job(@seller, Decimal.new("0.10"), <<>>)
+        assert {:ok, _} = Onchain.create_job(@seller, @seller, 9_999_999_999)
 
         assert_receive {:telemetry, [:raxol, :acp, :onchain, :tx_sent],
                         %{method: :create_job, gas_limit: gas}},

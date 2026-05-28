@@ -37,11 +37,12 @@ defmodule Raxol.ACP.ContractClient.InMemory do
 
   @type state :: %{
           jobs: %{binary() => map()},
+          signs: [map()],
           job_counter: non_neg_integer(),
           tx_counter: non_neg_integer()
         }
 
-  @initial_state %{jobs: %{}, job_counter: 0, tx_counter: 0}
+  @initial_state %{jobs: %{}, signs: [], job_counter: 0, tx_counter: 0}
 
   # -- Lifecycle --
 
@@ -57,22 +58,34 @@ defmodule Raxol.ACP.ContractClient.InMemory do
   # -- Behaviour callbacks --
 
   @impl true
-  def create_job(seller, price, data) when is_binary(seller) and is_binary(data) do
+  def create_job(provider, evaluator, expired_at)
+      when is_binary(provider) and is_binary(evaluator) and is_integer(expired_at) do
     Agent.get_and_update(__MODULE__, fn %{job_counter: n, jobs: jobs} = state ->
       job_id = "job-#{n + 1}"
 
       job = %{
-        seller: seller,
-        price: price,
-        data: data,
+        provider: provider,
+        evaluator: evaluator,
+        expired_at: expired_at,
+        budget: nil,
         memos: [],
-        deliverable_hash: nil,
-        payment_authorization: nil,
-        completed: false
+        signs: [],
+        claimed: false
       }
 
       new_state = %{state | job_counter: n + 1, jobs: Map.put(jobs, job_id, job)}
       {{:ok, job_id}, new_state}
+    end)
+  end
+
+  @impl true
+  def set_budget(job_id, %Decimal{} = amount) when is_binary(job_id) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      with_job(state, job_id, fn job, state ->
+        tx_hash = next_tx_hash(state)
+        new_job = %{job | budget: amount}
+        bump_tx({{:ok, tx_hash}, put_job(state, job_id, new_job)})
+      end)
     end)
   end
 
@@ -99,24 +112,22 @@ defmodule Raxol.ACP.ContractClient.InMemory do
   end
 
   @impl true
-  def complete_job(job_id, deliverable_hash)
-      when is_binary(job_id) and is_binary(deliverable_hash) do
+  def sign_memo(memo_id, approved, reason)
+      when (is_binary(memo_id) or is_integer(memo_id)) and is_boolean(approved) and
+             is_binary(reason) do
     Agent.get_and_update(__MODULE__, fn state ->
-      with_job(state, job_id, fn job, state ->
-        tx_hash = next_tx_hash(state)
-        new_job = %{job | deliverable_hash: deliverable_hash, completed: true}
-        bump_tx({{:ok, tx_hash}, put_job(state, job_id, new_job)})
-      end)
+      tx_hash = next_tx_hash(state)
+      sign = %{memo_id: memo_id, approved: approved, reason: reason, tx_hash: tx_hash}
+      bump_tx({{:ok, tx_hash}, %{state | signs: [sign | state.signs]}})
     end)
   end
 
   @impl true
-  def pay_and_accept_requirement(job_id, authorization)
-      when is_binary(job_id) and is_binary(authorization) do
+  def claim_budget(job_id) when is_binary(job_id) do
     Agent.get_and_update(__MODULE__, fn state ->
       with_job(state, job_id, fn job, state ->
         tx_hash = next_tx_hash(state)
-        new_job = %{job | payment_authorization: authorization}
+        new_job = %{job | claimed: true}
         bump_tx({{:ok, tx_hash}, put_job(state, job_id, new_job)})
       end)
     end)
@@ -132,6 +143,11 @@ defmodule Raxol.ACP.ContractClient.InMemory do
   @spec get_job(binary()) :: map() | nil
   def get_job(job_id) do
     Agent.get(__MODULE__, fn %{jobs: jobs} -> Map.get(jobs, job_id) end)
+  end
+
+  @spec list_signs() :: [map()]
+  def list_signs do
+    Agent.get(__MODULE__, fn %{signs: signs} -> Enum.reverse(signs) end)
   end
 
   @spec list_memos(binary()) :: [map()]
