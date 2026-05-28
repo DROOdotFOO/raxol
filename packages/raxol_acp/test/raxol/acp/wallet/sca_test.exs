@@ -68,6 +68,13 @@ defmodule Raxol.ACP.Wallet.SCATest do
       expected = Raxol.ACP.Wallet.SCA.Provisioning.deploy_init_code(SessionKey.address(), 0)
       assert Account.deploy_init_code() == expected
     end
+
+    test "own_session_key_install_calldata/1 registers the session key at its entity" do
+      expected =
+        Raxol.ACP.Wallet.SCA.Provisioning.install_session_key_calldata(SessionKey.address(), 1)
+
+      assert Account.own_session_key_install_calldata() == expected
+    end
   end
 
   describe "sign_user_op_hash/1" do

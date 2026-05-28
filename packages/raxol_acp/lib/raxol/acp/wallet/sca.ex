@@ -133,6 +133,21 @@ defmodule Raxol.ACP.Wallet.SCA do
         Raxol.ACP.Wallet.SCA.Provisioning.deploy_init_code(unquote(signer).address(), salt)
       end
 
+      @doc """
+      `installValidation` calldata that registers this wallet's own
+      session key (the configured signer at `signer_entity_id`) on the
+      account. Wrap in `execute(account, 0, calldata)` and send as a
+      UserOp signed by the owner.
+      """
+      @spec own_session_key_install_calldata(keyword()) :: binary()
+      def own_session_key_install_calldata(opts \\ []) do
+        Raxol.ACP.Wallet.SCA.Provisioning.install_session_key_calldata(
+          unquote(signer).address(),
+          unquote(entity_id),
+          opts
+        )
+      end
+
       @doc "Sign and send a UserOperation via the configured bundler."
       @spec send_user_operation(Raxol.ACP.Wallet.SCA.UserOp.t(), keyword()) ::
               {:ok, String.t()} | {:error, term()}

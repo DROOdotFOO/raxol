@@ -31,13 +31,20 @@ defmodule Raxol.ACP.Wallet.SCA.Provisioning do
   transaction; the EntryPoint invokes the factory, which CREATE2-
   deploys the account at the predicted address.
 
+  ## Session-key registration
+
+  `install_session_key_calldata/3` builds the `installValidation` call
+  that registers a session key on the single-signer validation module
+  as a new entity. Wrap it in the account's `execute(...)` and send it
+  as a UserOp signed by the owner. In production Virtuals' `acp setup`
+  usually does this; the helper exists for self-provisioning.
+
   ## Provisioning vs. raxol
 
   In production an agent's SMA is usually deployed and its session key
   registered by Virtuals' `acp setup`. These helpers let raxol (a)
-  compute the agent's address up front and (b) self-deploy on first use
-  when running against its own factory. Session-key installation
-  (`installValidation`) is not yet built -- see the module TODO.
+  compute the agent's address up front, (b) self-deploy on first use,
+  and (c) register a session key against its own account.
   """
 
   alias Raxol.ACP.ABI
@@ -47,6 +54,9 @@ defmodule Raxol.ACP.Wallet.SCA.Provisioning do
   @sma_fallback_entity_id 0xFFFFFFFF
 
   @create_sma_sig "createSemiModularAccount(address,uint256)"
+  @install_validation_sig "installValidation(bytes25,bytes4[],bytes,bytes[])"
+  # installValidation has 4 args -> 4 head words.
+  @head_size 4 * 32
 
   # Account Kit's SMA proxy creation bytecode, split around the
   # implementation address and the trailing immutable args (owner).
@@ -97,7 +107,79 @@ defmodule Raxol.ACP.Wallet.SCA.Provisioning do
     factory_bytes <> factory_call
   end
 
+  @doc """
+  Build the `installValidation` calldata that registers `signer` as a
+  new session-key entity on the single-signer validation module:
+
+      installValidation(bytes25 validationConfig, bytes4[] selectors,
+                        bytes installData, bytes[] hooks)
+
+  Wrap the result in the account's `execute(account, 0, calldata)` and
+  send it as a UserOp signed by the owner.
+
+  `validationConfig` packs `moduleAddress(20) || entityId(uint32) ||
+  flags(1)`, where flags = userOp(1) | signature(2) | global(4).
+  `installData` is the module's `onInstall` payload,
+  `abi.encode(uint32 entityId, address signer)`.
+
+  Options:
+  - `:global` (default `true`), `:user_op_validation` (default `true`),
+    `:signature_validation` (default `true`) -- the validation flags.
+
+  This builds the common case only: **no** selectors and **no** hooks
+  (empty arrays), which is what a global session key needs.
+  """
+  @spec install_session_key_calldata(String.t(), non_neg_integer(), keyword()) :: binary()
+  def install_session_key_calldata(signer, entity_id, opts \\ [])
+      when is_binary(signer) and is_integer(entity_id) and entity_id in 0..0xFFFFFFFF do
+    module = decode_address!(ModularAccount.single_signer_validation_address())
+    validation_config = module <> <<entity_id::unsigned-big-32>> <> <<validation_flags(opts)>>
+
+    # single-signer onInstall data: abi.encode(uint32 entityId, address signer)
+    install_data =
+      <<entity_id::unsigned-big-256>> <> <<0::96, decode_address!(signer)::binary-size(20)>>
+
+    selector = ABI.function_selector(@install_validation_sig)
+
+    # Head (4 words): bytes25 (right-padded), then offsets to the three
+    # dynamic args. Tail: empty selectors[], installData bytes, empty hooks[].
+    # Tail layout, by offset (relative to the start of the args):
+    #   selectors[]  @ head_size            -> 1 word (length 0)
+    #   installData  @ head_size + 32       -> 1 length word + data
+    #   hooks[]      @ head_size + 32 + 32 + len(installData)
+    selectors_off = @head_size
+    install_off = @head_size + 32
+    hooks_off = @head_size + 32 + 32 + byte_size(install_data)
+
+    head =
+      pad_right_word(validation_config) <>
+        word(selectors_off) <>
+        word(install_off) <>
+        word(hooks_off)
+
+    tail =
+      word(0) <>
+        word(byte_size(install_data)) <>
+        install_data <>
+        word(0)
+
+    selector <> head <> tail
+  end
+
   # -- Internal --
+
+  defp validation_flags(opts) do
+    user_op = if Keyword.get(opts, :user_op_validation, true), do: 1, else: 0
+    signature = if Keyword.get(opts, :signature_validation, true), do: 2, else: 0
+    global = if Keyword.get(opts, :global, true), do: 4, else: 0
+    user_op + signature + global
+  end
+
+  defp word(n), do: <<n::unsigned-big-256>>
+
+  defp pad_right_word(bin) when byte_size(bin) <= 32 do
+    bin <> <<0::size((32 - byte_size(bin)) * 8)>>
+  end
 
   defp decode_address!("0x" <> hex), do: decode_address!(hex)
 
