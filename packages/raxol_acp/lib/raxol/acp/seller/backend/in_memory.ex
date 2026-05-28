@@ -70,14 +70,14 @@ defmodule Raxol.ACP.Seller.Backend.InMemory do
     GenServer.call(__MODULE__, :subscriber_count)
   end
 
-  # -- GenServer callbacks --
+  # -- BaseManager callbacks --
 
-  @impl GenServer
+  @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(_opts) do
     {:ok, %{subscribers: %{}}}
   end
 
-  @impl GenServer
+  @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:subscribe, pid}, _from, state) do
     {:reply, :ok, put_subscriber(state, pid)}
   end
@@ -107,7 +107,7 @@ defmodule Raxol.ACP.Seller.Backend.InMemory do
     {:reply, :ok, %{state | subscribers: %{}}}
   end
 
-  @impl GenServer
+  @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:DOWN, ref, :process, pid, _reason}, state) do
     case state.subscribers do
       %{^pid => ^ref} -> {:noreply, %{state | subscribers: Map.delete(state.subscribers, pid)}}

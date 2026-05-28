@@ -73,7 +73,9 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   - `[:raxol, :acp, :onchain, :tx_mined]` -- after receipt (both paths).
     Metadata: `%{method, tx_hash, block_number, status}`
   - `[:raxol, :acp, :onchain, :placeholder_job_id]` -- emitted by
-    `create_job/3` while the LogDecoder TODO is open.
+    `create_job/3` when no `:create_job_event_signature` is configured
+    (or the event is absent from the receipt) and it falls back to the
+    tx hash as the job id.
   """
 
   @behaviour Raxol.ACP.ContractClient
@@ -621,11 +623,10 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   end
 
   defp job_id_to_uint256(job_id) when is_binary(job_id) do
-    # Per the InMemory client, job ids are opaque strings. The Onchain
-    # impl currently returns the tx_hash hex as the job id (see the
-    # placeholder_job_id caveat in the moduledoc). When LogDecoder
-    # lands and the real JobCreated event surfaces a uint256, we'll
-    # parse it directly.
+    # Job ids are hex uint256 when LogDecoder resolved a real JobCreated
+    # event, or the tx hash when it fell back (see the placeholder_job_id
+    # caveat in the moduledoc). Both parse cleanly here; opaque InMemory
+    # ids hash into 32 bytes so the pipeline still works under tests.
     case parse_uint256(job_id) do
       {:ok, n} ->
         n
