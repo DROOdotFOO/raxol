@@ -43,6 +43,10 @@ defmodule Raxol.ACP.Wallet.SCA.ModularAccount do
 
   @factory "0x00000000000017c61b5bEe81050EC8eFc9c6fecd"
   @implementation "0x00000000000002377B26b1EdA7b0BC371C60DD4f"
+  # Semi-Modular Account v2 bytecode (storage variant) -- the proxy
+  # implementation used for counterfactual address prediction of the
+  # default account type. (getDefaultSMAV2BytecodeAddress)
+  @sma_bytecode "0x000000000000c5A9089039570Dd36455b5C07383"
   @single_signer_validation "0x00000000000099DE0BF6fA90dEB851E2A2df7d83"
 
   # uint128 max -- parallel key fits in (152 - 32 - 8) bits but we only
@@ -63,6 +67,10 @@ defmodule Raxol.ACP.Wallet.SCA.ModularAccount do
   @doc "Canonical single-signer validation module address."
   @spec single_signer_validation_address() :: String.t()
   def single_signer_validation_address, do: @single_signer_validation
+
+  @doc "Semi-Modular Account v2 bytecode (impl) address for SMA prediction."
+  @spec sma_bytecode_address() :: String.t()
+  def sma_bytecode_address, do: @sma_bytecode
 
   @doc """
   ABI-encode a call to `execute(address target, uint256 value, bytes data)`.

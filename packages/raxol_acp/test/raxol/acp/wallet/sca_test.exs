@@ -57,6 +57,19 @@ defmodule Raxol.ACP.Wallet.SCATest do
     end
   end
 
+  describe "provisioning helpers" do
+    test "predicted_address/1 derives the SMA address from the session key" do
+      expected = Raxol.ACP.Wallet.SCA.Provisioning.predict_address(SessionKey.address(), 0)
+      assert Account.predicted_address() == expected
+      assert Account.predicted_address(0) == expected
+    end
+
+    test "deploy_init_code/1 is factory ++ createSemiModularAccount(session_key, salt)" do
+      expected = Raxol.ACP.Wallet.SCA.Provisioning.deploy_init_code(SessionKey.address(), 0)
+      assert Account.deploy_init_code() == expected
+    end
+  end
+
   describe "sign_user_op_hash/1" do
     test "produces a globally-validated UO signature recoverable to the session key" do
       uo_hash = :crypto.hash(:sha256, "user-op")

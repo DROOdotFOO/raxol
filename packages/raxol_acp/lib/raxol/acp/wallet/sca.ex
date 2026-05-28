@@ -113,6 +113,26 @@ defmodule Raxol.ACP.Wallet.SCA do
         Raxol.ACP.Wallet.SCA.ModularAccount.nonce_key(unquote(entity_id), true, parallel_key)
       end
 
+      @doc """
+      Counterfactual SMA address for this wallet's session key as owner
+      at `salt` (default 0). Should match `address/0` when the account
+      was deployed by this signer with the same salt.
+      """
+      @spec predicted_address(non_neg_integer()) :: String.t()
+      def predicted_address(salt \\ 0) do
+        Raxol.ACP.Wallet.SCA.Provisioning.predict_address(unquote(signer).address(), salt)
+      end
+
+      @doc """
+      ERC-4337 `initCode` that self-deploys this account on its first
+      UserOperation. Set it on the UserOp via `%UserOp{init_code: ...}`
+      when the account is not yet deployed on chain.
+      """
+      @spec deploy_init_code(non_neg_integer()) :: binary()
+      def deploy_init_code(salt \\ 0) do
+        Raxol.ACP.Wallet.SCA.Provisioning.deploy_init_code(unquote(signer).address(), salt)
+      end
+
       @doc "Sign and send a UserOperation via the configured bundler."
       @spec send_user_operation(Raxol.ACP.Wallet.SCA.UserOp.t(), keyword()) ::
               {:ok, String.t()} | {:error, term()}
