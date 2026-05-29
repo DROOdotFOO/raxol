@@ -38,7 +38,10 @@ defmodule Raxol.Agent.Strategy.ReAct do
       tools = ToolConverter.to_tool_definitions(actions)
       opts = Keyword.merge(backend_opts, tools: tools)
 
-      initial_messages = build_initial_messages(system_prompt, prompt)
+      initial_messages =
+        system_prompt
+        |> build_initial_messages(prompt)
+        |> maybe_enrich_memory(context, prompt)
 
       case run_loop(initial_messages, backend, opts, actions, context, max_iter, 0) do
         {:ok, answer, tool_results} ->
@@ -53,6 +56,10 @@ defmodule Raxol.Agent.Strategy.ReAct do
           error
       end
     end
+  end
+
+  defp maybe_enrich_memory(messages, context, query) do
+    Raxol.Agent.Memory.Manager.enrich_messages(messages, Map.get(context, :memory), query)
   end
 
   # -- Loop ------------------------------------------------------------------

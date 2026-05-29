@@ -137,6 +137,8 @@ defmodule Raxol.Agent.Stream do
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
     context = Keyword.get(opts, :context, %{})
 
+    messages = maybe_enrich_memory(messages, context)
+
     tools = ToolConverter.to_tool_definitions(actions)
     tool_opts = Keyword.merge(backend_opts, tools: tools)
 
@@ -469,6 +471,22 @@ defmodule Raxol.Agent.Stream do
   end
 
   defp build_messages(messages, _opts) when is_list(messages), do: messages
+
+  defp maybe_enrich_memory(messages, context) do
+    Raxol.Agent.Memory.Manager.enrich_messages(
+      messages,
+      Map.get(context, :memory),
+      last_user_content(messages)
+    )
+  end
+
+  defp last_user_content(messages) do
+    messages
+    |> Enum.reverse()
+    |> Enum.find_value("", fn msg ->
+      if Map.get(msg, :role) == :user, do: Map.get(msg, :content)
+    end)
+  end
 
   defp format_tool_text(tool_calls) do
     names =

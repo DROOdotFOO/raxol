@@ -72,13 +72,28 @@ defmodule Raxol.Agent do
       def command_hooks, do: []
 
       @doc """
+      Returns the cross-session memory provider for this agent, or `nil`.
+
+      Override to return a `Raxol.Agent.Memory` provider module (e.g.
+      `Raxol.Agent.Memory.Store.Ets`). When set, memory actions are exposed
+      automatically and the agent should put
+      `Raxol.Agent.Memory.provider_context(provider, agent_id)` under
+      `context[:memory]` when invoking a Strategy or `Raxol.Agent.Stream`.
+      Defaults to `nil` (memory disabled).
+      """
+      def memory_provider, do: nil
+
+      @doc """
       Returns a list of Action modules available to this agent.
 
       Used by `Agent.Process` with a Strategy to determine which
       Actions can be invoked. Override to expose Actions as tools.
-      Return `[]` to disable (default).
+      Defaults to the memory actions when `memory_provider/0` is set,
+      otherwise `[]`.
       """
-      def available_actions, do: []
+      def available_actions do
+        if memory_provider(), do: Raxol.Agent.Actions.Memory.actions(), else: []
+      end
 
       defoverridable init: 1,
                      update: 2,
@@ -91,6 +106,7 @@ defmodule Raxol.Agent do
                      terminate: 2,
                      compaction_config: 0,
                      command_hooks: 0,
+                     memory_provider: 0,
                      available_actions: 0
 
       @doc false
