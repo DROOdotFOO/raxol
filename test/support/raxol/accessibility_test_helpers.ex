@@ -118,23 +118,18 @@ defmodule Raxol.AccessibilityTestHelpers do
   defmacro assert_announced(expected, opts \\ []) do
     exact = Keyword.get(opts, :exact, false)
     context = Keyword.get(opts, :context, "")
+    timeout = Keyword.get(opts, :timeout, 500)
 
     quote do
-      # Give the handler time to process the event
-      Process.sleep(20)
-
-      # Try ETS table first, fall back to process dictionary
+      # Announcements are delivered asynchronously via EventManager. Poll until
+      # the expected announcement arrives rather than sleeping a fixed interval,
+      # which raced on slower CI runners.
       announcements =
-        case :ets.whereis(:accessibility_test_announcements) do
-          :undefined ->
-            ProcessStore.get(:accessibility_test_announcements, [])
-
-          tid ->
-            case :ets.lookup(tid, :announcements) do
-              [{:announcements, msgs}] -> msgs
-              [] -> []
-            end
-        end
+        Raxol.AccessibilityTestHelpers.wait_for_announcement(
+          unquote(expected),
+          unquote(exact),
+          unquote(timeout)
+        )
 
       Raxol.AccessibilityTestHelpers.validate_announcement_match(
         unquote(exact),
@@ -144,6 +139,48 @@ defmodule Raxol.AccessibilityTestHelpers do
       )
     end
   end
+
+  @doc false
+  def read_announcements do
+    case :ets.whereis(:accessibility_test_announcements) do
+      :undefined ->
+        ProcessStore.get(:accessibility_test_announcements, [])
+
+      tid ->
+        case :ets.lookup(tid, :announcements) do
+          [{:announcements, msgs}] -> msgs
+          [] -> []
+        end
+    end
+  end
+
+  @doc false
+  def wait_for_announcement(expected, exact, timeout) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_for_announcement(expected, exact, deadline)
+  end
+
+  defp do_wait_for_announcement(expected, exact, deadline) do
+    announcements = read_announcements()
+
+    cond do
+      announcement_present?(announcements, expected, exact) ->
+        announcements
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        announcements
+
+      true ->
+        Process.sleep(10)
+        do_wait_for_announcement(expected, exact, deadline)
+    end
+  end
+
+  defp announcement_present?(announcements, expected, true),
+    do: Enum.member?(announcements, expected)
+
+  defp announcement_present?(announcements, expected, false),
+    do: Enum.any?(announcements, &String.contains?(&1, expected))
 
   @doc """
   Assert that no announcements were made to the screen reader.
