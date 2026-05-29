@@ -39,6 +39,8 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 - **BorderBeam Effect**: Three-layer animated border glow (beam stroke, inner glow, outer bloom). Four variants (colorful/mono/ocean/sunset). Terminal exponential decay, LiveView conic-gradient + mask CSS, MCP hint serialization. Pipe + prop DSL. 99 effects tests.
 - **`raxol_acp` v0.1 (pre-alpha)**: First Elixir/OTP-native Virtuals Agent Commerce Protocol implementation, canonically aligned to the deployed Base contracts and live-validated against a Base fork. Job lifecycle (`Job.{Server, StateMachine, Store, Supervisor, Registry}`), on-chain `createMemo` calls (no off-chain signing), version-aware `ContractClient` (`ACPSimple` v1 / `ACPRouter` v2), full ERC-4337 SCA wallet (Alchemy Modular Account v2: sponsored UserOps, counterfactual deploy, session keys), Seller stack (`Backend.{InMemory, WebSocket}` over Socket.IO + `Queue` + `Runtime`), `Job.Store` DETS-optional persistence, `mix raxol_acp.bench`. Real ABIs and verified Base addresses vendored. 256 tests. Pre-alpha until a single graduated offering on Base mainnet.
 - **`raxol_symphony` Phases 0-14**: Elixir/OTP port of OpenAI Symphony. Tracker-driven coding-agent orchestrator with two runner backends (`raxol_agent` default + `codex app-server` Port-based JSON-RPC), six surfaces (terminal/LiveView/MCP/Telegram/Watch/JSON API), workflow hot-reload, evidence framework (CI status + PR comments + cloc/SLOC + asciinema), in-run asciicast capture. 399 tests. Pre-alpha; path-dep.
+- **Video Render Target** (hermes-agent pickup): One TEA module to MP4/WebM/GIF. Frames computed server-side at a virtual animation clock (`Raxol.Animation.Clock`), themed HTML via `TerminalBridge` rasterized through headless Chrome, encoded with FFmpeg. `Raxol.Recording.Video` (`frame_html`/`render_frame`/`capture_frame`/`capture_clip`), a swappable `Rasterizer` (zero-dep HeadlessChrome plus warm-pool ChromicPDF, ~6x faster), `Headless.get_buffer/1`, and `mix raxol.render`.
+- **Cross-Session Agent Memory** (hermes-agent pickup): Opt-in, per-agent persistent memory behind a pluggable `Raxol.Agent.Memory` behaviour. Default `Memory.Store.Ets` is a self-contained ETS+DETS store (no deps) with BM25-lite + recency + tag ranking over a token inverted index. Automatic pre-turn recall injected into the system prompt (`Manager.enrich_messages`) plus explicit `memory_remember`/`recall`/`forget` actions; wired into `Stream`/`ReAct` and exposed via `use Raxol.Agent` `memory_provider/0`. 25 tests. User model, auto-capture, and the recall-MCP bridge deferred.
 
 ---
 
@@ -55,16 +57,15 @@ The twelve stable packages are published to Hex: the mature framework packages a
 
 ### Targeting Next: Agent & Creative
 
-Capabilities identified by studying [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). The BEAM gives several of these a more natural home than Hermes's single-process Python: real concurrency, crash isolation, and a native frame engine.
+Capabilities identified by studying [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). The BEAM gives several of these a more natural home than Hermes's single-process Python: real concurrency, crash isolation, and a native frame engine. **Shipped from this set:** the Video Render Target and Cross-Session Agent Memory (see What's Done). Remaining:
 
 | Target | What | Status |
 | ------ | ---- | ------ |
-| Video render target | One TEA module to MP4/WebM/GIF: frames computed server-side at a virtual clock, themed HTML rasterized via headless Chrome, encoded with FFmpeg. Adds `video` alongside terminal/LiveView/SSH/MCP. | In progress (tracer) |
 | Self-improving skill loop | `Curator` BaseManager plus a per-turn background review: agents author, patch, consolidate, and archive their own skills (agentskills.io format), built on the existing `PermissionHook` + `Agent.Session` primitives. | Planned |
-| Cross-session memory + user model | `Raxol.Agent.Memory` behaviour with pluggable providers, a prefetch/sync lifecycle, FTS session search, and an optional user model; bridges the existing recall MCP. | Planned |
 | Agent cron scheduler | Per-agent natural-language scheduled automations that deliver to existing surfaces, generalizing Symphony's polling loop. | Planned |
 | Agent Client Protocol adapter | Put `raxol_agent` inside Zed/VS Code/JetBrains agent panels. ACP here is the Agent *Client* Protocol, distinct from `raxol_acp` (Agent *Commerce* Protocol). | Planned |
 | Creative-media agent actions | `image_generate`/`video_generate`/`tts`/`transcribe` as `raxol_agent` Actions behind a backend-agnostic provider behaviour. | Planned |
+| Memory: user model + auto-capture + MCP bridge | Extend Cross-Session Memory with a dialectic user model, optional post-turn auto-capture, and a provider that bridges to the external recall MCP server. | Planned |
 
 ### AI Backend Providers
 
