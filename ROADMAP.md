@@ -53,6 +53,19 @@ The twelve stable packages are published to Hex: the mature framework packages a
 | Graduate `raxol_acp`      | Live run on Base mainnet with one offering, then the first Hex release | Medium |
 | Graduate `raxol_symphony` | Live workflow against a real Linear/GitHub repo, then Hex reservation  | Medium |
 
+### Targeting Next: Agent & Creative
+
+Capabilities identified by studying [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). The BEAM gives several of these a more natural home than Hermes's single-process Python: real concurrency, crash isolation, and a native frame engine.
+
+| Target | What | Status |
+| ------ | ---- | ------ |
+| Video render target | One TEA module to MP4/WebM/GIF: frames computed server-side at a virtual clock, themed HTML rasterized via headless Chrome, encoded with FFmpeg. Adds `video` alongside terminal/LiveView/SSH/MCP. | In progress (tracer) |
+| Self-improving skill loop | `Curator` BaseManager plus a per-turn background review: agents author, patch, consolidate, and archive their own skills (agentskills.io format), built on the existing `PermissionHook` + `Agent.Session` primitives. | Planned |
+| Cross-session memory + user model | `Raxol.Agent.Memory` behaviour with pluggable providers, a prefetch/sync lifecycle, FTS session search, and an optional user model; bridges the existing recall MCP. | Planned |
+| Agent cron scheduler | Per-agent natural-language scheduled automations that deliver to existing surfaces, generalizing Symphony's polling loop. | Planned |
+| Agent Client Protocol adapter | Put `raxol_agent` inside Zed/VS Code/JetBrains agent panels. ACP here is the Agent *Client* Protocol, distinct from `raxol_acp` (Agent *Commerce* Protocol). | Planned |
+| Creative-media agent actions | `image_generate`/`video_generate`/`tts`/`transcribe` as `raxol_agent` Actions behind a backend-agnostic provider behaviour. | Planned |
+
 ### AI Backend Providers
 
 Supported now:

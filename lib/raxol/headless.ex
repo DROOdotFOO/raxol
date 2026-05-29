@@ -79,6 +79,18 @@ defmodule Raxol.Headless do
     GenServer.call(__MODULE__, {:screenshot, id}, 5_000)
   end
 
+  @doc """
+  Returns the raw screen buffer for the session's current frame.
+
+  Unlike `screenshot/1`, which returns a text capture, this returns the
+  `Raxol.Core.Buffer` itself, preserving per-cell style for downstream
+  rendering targets such as the LiveView-to-video pipeline.
+  """
+  @spec get_buffer(atom()) :: {:ok, map()} | {:error, term()}
+  def get_buffer(id) do
+    GenServer.call(__MODULE__, {:get_buffer, id}, 5_000)
+  end
+
   @doc "Sends a key event to the session's dispatcher."
   @spec send_key(atom(), String.t() | atom(), keyword()) ::
           :ok | {:error, term()}
@@ -148,6 +160,17 @@ defmodule Raxol.Headless do
       {:ok, session} ->
         result = take_screenshot(session)
         {:reply, result, state}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_buffer, id}, _from, state) do
+    case get_session(state, id) do
+      {:ok, session} ->
+        {:reply, take_buffer(session), state}
 
       error ->
         {:reply, error, state}
@@ -381,6 +404,18 @@ defmodule Raxol.Headless do
 
         error ->
           error
+      end
+    end)
+  end
+
+  defp take_buffer(session) do
+    with_engine(session, fn engine_pid ->
+      GenServer.call(engine_pid, :render_frame_sync)
+
+      case GenServer.call(engine_pid, :get_buffer) do
+        {:ok, buffer} when not is_nil(buffer) -> {:ok, buffer}
+        {:ok, nil} -> {:error, :no_buffer}
+        error -> error
       end
     end)
   end
