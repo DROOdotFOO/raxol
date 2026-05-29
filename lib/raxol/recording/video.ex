@@ -158,32 +158,41 @@ defmodule Raxol.Recording.Video do
     ensure_headless_started()
     start_opts = Keyword.take(opts, [:id, :width, :height])
 
-    with {:ok, id} <- Raxol.Headless.start(module_or_path, start_opts) do
-      dir =
-        Path.join(
-          System.tmp_dir!(),
-          "raxol_clip_#{System.unique_integer([:positive])}"
-        )
+    # Drive a deterministic virtual clock so animations are frame-accurate
+    # regardless of how long rasterization actually takes.
+    Raxol.Animation.Clock.freeze(0)
 
-      File.mkdir_p!(dir)
+    try do
+      with {:ok, id} <- Raxol.Headless.start(module_or_path, start_opts) do
+        dir =
+          Path.join(
+            System.tmp_dir!(),
+            "raxol_clip_#{System.unique_integer([:positive])}"
+          )
 
-      try do
-        Process.sleep(Keyword.get(opts, :settle_ms, 80))
-        frames = max(1, round(duration_ms / 1000 * fps))
-        dt = max(1, div(1000, fps))
+        File.mkdir_p!(dir)
 
-        with :ok <- render_frames(id, dir, frames, dt, events, settle, opts) do
-          Raxol.Recording.Video.Encoder.encode(dir, fps, output, opts)
+        try do
+          Process.sleep(Keyword.get(opts, :settle_ms, 80))
+          frames = max(1, round(duration_ms / 1000 * fps))
+          dt = max(1, div(1000, fps))
+
+          with :ok <- render_frames(id, dir, frames, dt, events, settle, opts) do
+            Raxol.Recording.Video.Encoder.encode(dir, fps, output, opts)
+          end
+        after
+          Raxol.Headless.stop(id)
+          File.rm_rf(dir)
         end
-      after
-        Raxol.Headless.stop(id)
-        File.rm_rf(dir)
       end
+    after
+      Raxol.Animation.Clock.unfreeze()
     end
   end
 
   defp render_frames(id, dir, frames, dt, events, settle, opts) do
     Enum.reduce_while(0..(frames - 1), :ok, fn n, _acc ->
+      Raxol.Animation.Clock.freeze(n * dt)
       inject_due_events(id, events, n * dt, dt, settle)
 
       case capture_frame_png(id, n, dir, opts) do
@@ -224,15 +233,16 @@ defmodule Raxol.Recording.Video do
 
   defp ensure_headless_started do
     case Process.whereis(Raxol.Headless) do
-      nil ->
-        case Raxol.Headless.start_link([]) do
-          {:ok, _pid} -> :ok
-          {:error, {:already_started, _pid}} -> :ok
-          other -> other
-        end
+      nil -> start_headless()
+      _pid -> :ok
+    end
+  end
 
-      _pid ->
-        :ok
+  defp start_headless do
+    case Raxol.Headless.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      other -> other
     end
   end
 

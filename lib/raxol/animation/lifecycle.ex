@@ -85,7 +85,7 @@ defmodule Raxol.Animation.Lifecycle do
     # Build animation instance
     instance = %{
       animation: adapted_animation,
-      start_time: System.system_time(:millisecond),
+      start_time: Raxol.Animation.Clock.now(),
       on_complete: Map.get(opts, :on_complete),
       context: Map.get(opts, :context),
       notify_pid: notify_pid
@@ -189,7 +189,7 @@ defmodule Raxol.Animation.Lifecycle do
       instance ->
         animation = instance.animation
         start_time = instance.start_time
-        now = System.system_time(:millisecond)
+        now = Raxol.Animation.Clock.now()
         elapsed = now - start_time
         duration = animation.duration
 

@@ -40,7 +40,7 @@ defmodule Raxol.Animation.AnimationProcessor do
         active_animations_before
       )
 
-    now = System.system_time(:millisecond)
+    now = Raxol.Animation.Clock.now()
 
     # After re-adaptation, fetch active animations again in case any were updated or removed
     active_animations = StateManager.get_active_animations()

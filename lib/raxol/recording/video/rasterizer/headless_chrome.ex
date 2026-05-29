@@ -71,13 +71,11 @@ defmodule Raxol.Recording.Video.Rasterizer.HeadlessChrome do
     end
   end
 
-  defp chrome_binary do
-    Enum.find_value(@candidates, fn candidate ->
-      if String.contains?(candidate, "/") do
-        if File.exists?(candidate), do: candidate
-      else
-        System.find_executable(candidate)
-      end
-    end)
+  defp chrome_binary, do: Enum.find_value(@candidates, &resolve_candidate/1)
+
+  defp resolve_candidate("/" <> _rest = path) do
+    if File.exists?(path), do: path
   end
+
+  defp resolve_candidate(name), do: System.find_executable(name)
 end
