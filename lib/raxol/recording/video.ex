@@ -38,7 +38,11 @@ defmodule Raxol.Recording.Video do
         "ui-monospace, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace"
       )
 
-    body = TerminalBridge.buffer_to_html(buffer, theme: theme, use_inline_styles: true)
+    body =
+      TerminalBridge.buffer_to_html(buffer,
+        theme: theme,
+        use_inline_styles: true
+      )
 
     """
     <!doctype html>
@@ -149,44 +153,55 @@ defmodule Raxol.Recording.Video do
   @spec capture_clip(module() | Path.t(), keyword()) ::
           {:ok, Path.t()} | {:error, term()}
   def capture_clip(module_or_path, opts \\ []) do
-    fps = Keyword.get(opts, :fps, 10)
-    duration_ms = Keyword.get(opts, :duration_ms, 2_000)
-    output = Keyword.get(opts, :output, "raxol_clip.gif")
-    events = normalize_events(Keyword.get(opts, :events, []))
-    settle = Keyword.get(opts, :event_settle_ms, 40)
-
     ensure_headless_started()
-    start_opts = Keyword.take(opts, [:id, :width, :height])
 
     # Drive a deterministic virtual clock so animations are frame-accurate
     # regardless of how long rasterization actually takes.
     Raxol.Animation.Clock.freeze(0)
 
     try do
-      with {:ok, id} <- Raxol.Headless.start(module_or_path, start_opts) do
-        dir =
-          Path.join(
-            System.tmp_dir!(),
-            "raxol_clip_#{System.unique_integer([:positive])}"
-          )
-
-        File.mkdir_p!(dir)
-
-        try do
-          Process.sleep(Keyword.get(opts, :settle_ms, 80))
-          frames = max(1, round(duration_ms / 1000 * fps))
-          dt = max(1, div(1000, fps))
-
-          with :ok <- render_frames(id, dir, frames, dt, events, settle, opts) do
-            Raxol.Recording.Video.Encoder.encode(dir, fps, output, opts)
-          end
-        after
-          Raxol.Headless.stop(id)
-          File.rm_rf(dir)
-        end
-      end
+      do_capture_clip(module_or_path, opts)
     after
       Raxol.Animation.Clock.unfreeze()
+    end
+  end
+
+  defp do_capture_clip(module_or_path, opts) do
+    start_opts = Keyword.take(opts, [:id, :width, :height])
+
+    with {:ok, id} <- Raxol.Headless.start(module_or_path, start_opts) do
+      run_session(id, opts)
+    end
+  end
+
+  defp run_session(id, opts) do
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "raxol_clip_#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(dir)
+
+    try do
+      render_and_encode(id, dir, opts)
+    after
+      Raxol.Headless.stop(id)
+      File.rm_rf(dir)
+    end
+  end
+
+  defp render_and_encode(id, dir, opts) do
+    Process.sleep(Keyword.get(opts, :settle_ms, 80))
+    fps = Keyword.get(opts, :fps, 10)
+    frames = max(1, round(Keyword.get(opts, :duration_ms, 2_000) / 1000 * fps))
+    dt = max(1, div(1000, fps))
+    events = normalize_events(Keyword.get(opts, :events, []))
+    settle = Keyword.get(opts, :event_settle_ms, 40)
+    output = Keyword.get(opts, :output, "raxol_clip.gif")
+
+    with :ok <- render_frames(id, dir, frames, dt, events, settle, opts) do
+      Raxol.Recording.Video.Encoder.encode(dir, fps, output, opts)
     end
   end
 

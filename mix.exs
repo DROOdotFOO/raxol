@@ -251,7 +251,9 @@ defmodule Raxol.MixProject do
       # Image processing (for terminal image rendering)
       {:mogrify, "~> 0.9.3", optional: true},
       # Charts and plots
-      {:contex, "~> 0.5.0", optional: true}
+      {:contex, "~> 0.5.0", optional: true},
+      # Headless-Chrome rasterizer for the video render target (warm session pool)
+      {:chromic_pdf, "~> 1.17", optional: true}
     ]
   end
 

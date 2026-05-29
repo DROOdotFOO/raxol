@@ -41,13 +41,38 @@ defmodule Raxol.Recording.Video.Encoder do
   end
 
   defp ffmpeg_args(".webm", pattern, fps, output) do
-    ["-y", "-framerate", "#{fps}", "-i", pattern,
-     "-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p", "-vf", @even, output]
+    [
+      "-y",
+      "-framerate",
+      "#{fps}",
+      "-i",
+      pattern,
+      "-c:v",
+      "libvpx-vp9",
+      "-pix_fmt",
+      "yuv420p",
+      "-vf",
+      @even,
+      output
+    ]
   end
 
-  defp ffmpeg_args(ext, pattern, fps, output) when ext in [".mp4", ".m4v", ""] do
-    ["-y", "-framerate", "#{fps}", "-i", pattern,
-     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", @even, output]
+  defp ffmpeg_args(ext, pattern, fps, output)
+       when ext in [".mp4", ".m4v", ""] do
+    [
+      "-y",
+      "-framerate",
+      "#{fps}",
+      "-i",
+      pattern,
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-vf",
+      @even,
+      output
+    ]
   end
 
   defp ffmpeg_args(_ext, pattern, fps, output) do
