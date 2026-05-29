@@ -46,7 +46,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ### Ship It
 
-The stable packages are published to Hex at v2.4.0. `raxol_acp` and `raxol_symphony` stay pre-alpha and unpublished until they graduate.
+The twelve stable packages are published to Hex: the mature framework packages at v2.4.0 and the newer payment and surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) at v0.1.0. `raxol_acp` and `raxol_symphony` stay pre-alpha and unpublished until they graduate.
 
 | Task                      | Description                                                            | Effort |
 | ------------------------- | --------------------------------------------------------------------- | ------ |

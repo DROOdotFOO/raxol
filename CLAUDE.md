@@ -346,8 +346,9 @@ Configuration: `fly.toml`, Dockerfile: `docker/Dockerfile.web`
 
 ## Hex Publishing
 
-11 packages are published to Hex; `raxol_acp` and `raxol_symphony` are
-pre-alpha and not yet published. Publish order matters (dependency chain):
+12 packages are published to Hex (the main `raxol` package plus 11
+subsystems); `raxol_acp` and `raxol_symphony` are pre-alpha and not yet
+published. Publish order matters (dependency chain):
 
 ```bash
 # 1. No raxol deps (parallel)
