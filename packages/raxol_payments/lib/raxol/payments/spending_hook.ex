@@ -25,11 +25,12 @@ defmodule Raxol.Payments.SpendingHook do
   @compile {:no_warn_undefined, Raxol.Agent.CommandHook}
   @behaviour Raxol.Agent.CommandHook
 
-  alias Raxol.Payments.{Ledger, SpendingPolicy}
+  alias Raxol.Payments.{Ledger, PolicyGate, SpendingPolicy}
 
   @type config :: %{
-          ledger: GenServer.server(),
-          policy: SpendingPolicy.t()
+          required(:ledger) => GenServer.server(),
+          required(:policy) => SpendingPolicy.t(),
+          optional(:on_confirm) => PolicyGate.confirm_fn()
         }
 
   @doc """
@@ -84,15 +85,24 @@ defmodule Raxol.Payments.SpendingHook do
 
       {amount, domain} ->
         agent_id = Map.get(context, :agent_id, :unknown)
+        gate_opts = [on_confirm: Map.get(config, :on_confirm)]
 
-        with true <- SpendingPolicy.domain_approved?(config.policy, domain),
-             :ok <- Ledger.check_budget(config.ledger, agent_id, amount, config.policy),
-             false <- SpendingPolicy.requires_confirmation?(config.policy, amount) do
+        with :ok <-
+               PolicyGate.evaluate(config.policy, amount, domain, gate_opts),
+             :ok <-
+               Ledger.check_budget(
+                 config.ledger,
+                 agent_id,
+                 amount,
+                 config.policy
+               ) do
           {:ok, command}
         else
-          false -> {:deny, {:domain_not_approved, domain}}
-          true -> {:deny, {:requires_confirmation, amount, domain}}
-          {:over_limit, limit_type} -> {:deny, {:over_budget, limit_type, amount}}
+          {:deny, _reason} = denied ->
+            denied
+
+          {:over_limit, limit_type} ->
+            {:deny, {:over_budget, limit_type, amount}}
         end
     end
   end
@@ -101,7 +111,9 @@ defmodule Raxol.Payments.SpendingHook do
 
   # Payment info is attached to command data as a tagged map.
   # The auto-pay plugin wraps the original data with payment metadata.
-  defp extract_payment_info(%{data: %{__payment__: %{amount: amount, domain: domain}}}) do
+  defp extract_payment_info(%{
+         data: %{__payment__: %{amount: amount, domain: domain}}
+       }) do
     {amount, domain}
   end
 

@@ -26,11 +26,17 @@ defmodule Raxol.Payments.Req.AutoPay do
   - `:wallet` (required) -- module implementing `Raxol.Payments.Wallet`
   - `:protocols` -- list of protocol atoms, default `[:x402, :mpp]`
   - `:ledger` -- Ledger server for budget tracking (optional)
-  - `:policy` -- `SpendingPolicy` struct (required if ledger given)
+  - `:policy` -- `SpendingPolicy` struct; when set, `approved_domains` and
+    `require_confirmation_above` are enforced against the request URL host
+    before the wallet is asked to sign
   - `:agent_id` -- identifier for ledger tracking (required if ledger given)
+  - `:on_confirm` -- 2-arity function `(amount, domain) -> :approve | :deny`
+    called when `policy.require_confirmation_above` is exceeded. Runs
+    synchronously inside the Req response step. Absent or non-`:approve`
+    return denies the payment.
   """
 
-  alias Raxol.Payments.{Protocol, Ledger, SpendingPolicy}
+  alias Raxol.Payments.{Ledger, PolicyGate, Protocol, SpendingPolicy}
 
   @default_protocols [:x402, :mpp]
 
@@ -50,7 +56,7 @@ defmodule Raxol.Payments.Req.AutoPay do
     headers = Raxol.Payments.Headers.flatten(response.headers)
 
     with {:ok, protocol_mod, challenge} <- detect_and_parse(protocols, headers),
-         :ok <- try_spend_budget(protocol_mod, challenge, opts),
+         :ok <- try_spend_budget(protocol_mod, challenge, request, opts),
          {:ok, payment_headers} <- protocol_mod.build_payment(challenge, wallet) do
       # Build retry request: add payment headers and strip the auto_pay step
       # to prevent infinite loops if the server returns 402 again.
@@ -60,7 +66,8 @@ defmodule Raxol.Payments.Req.AutoPay do
         |> remove_auto_pay_step()
 
       case Req.Request.run(retry_request) do
-        {_req, %Req.Response{status: status} = paid_response} when status in 200..299 ->
+        {_req, %Req.Response{status: status} = paid_response}
+        when status in 200..299 ->
           {request, paid_response}
 
         {_req, %Req.Response{} = failed_response} ->
@@ -68,18 +75,59 @@ defmodule Raxol.Payments.Req.AutoPay do
 
         {:error, reason} ->
           {request,
-           %{response | body: %{error: :payment_retry_failed, reason: sanitize_error(reason)}}}
+           %{
+             response
+             | body: %{
+                 error: :payment_retry_failed,
+                 reason: sanitize_error(reason)
+               }
+           }}
       end
     else
-      {:error, :no_matching_protocol} ->
-        {request, response}
-
-      {:error, {:over_budget, limit_type, _amount}} ->
-        {request, %{response | body: %{error: :budget_exceeded, limit: limit_type}}}
-
-      {:error, reason} ->
-        {request, %{response | body: %{error: :payment_failed, reason: sanitize_error(reason)}}}
+      error -> handle_failure(error, request, response)
     end
+  end
+
+  defp handle_failure({:error, :no_matching_protocol}, request, response),
+    do: {request, response}
+
+  defp handle_failure(
+         {:error, {:over_budget, limit_type, _amount}},
+         request,
+         response
+       ),
+       do:
+         {request,
+          %{response | body: %{error: :budget_exceeded, limit: limit_type}}}
+
+  defp handle_failure(
+         {:error, {:gate_denied, {:domain_not_approved, domain}}},
+         request,
+         response
+       ),
+       do:
+         {request,
+          %{response | body: %{error: :domain_not_approved, domain: domain}}}
+
+  defp handle_failure(
+         {:error, {:gate_denied, {:requires_confirmation, amount, domain}}},
+         request,
+         response
+       ) do
+    body = %{error: :requires_confirmation, amount: amount, domain: domain}
+    {request, %{response | body: body}}
+  end
+
+  defp handle_failure(
+         {:error, {:gate_denied, :missing_host}},
+         request,
+         response
+       ),
+       do: {request, %{response | body: %{error: :missing_host}}}
+
+  defp handle_failure({:error, reason}, request, response) do
+    body = %{error: :payment_failed, reason: sanitize_error(reason)}
+    {request, %{response | body: body}}
   end
 
   defp handle_response(req_response, _opts), do: req_response
@@ -99,30 +147,67 @@ defmodule Raxol.Payments.Req.AutoPay do
     end)
   end
 
-  @spec try_spend_budget(module(), map(), keyword()) :: :ok | {:error, term()}
-  defp try_spend_budget(protocol_mod, challenge, opts) do
-    case {Keyword.get(opts, :ledger), Keyword.get(opts, :policy)} do
-      {nil, _} ->
-        :ok
+  @spec try_spend_budget(module(), map(), Req.Request.t(), keyword()) ::
+          :ok | {:error, term()}
+  defp try_spend_budget(protocol_mod, challenge, request, opts) do
+    amount = protocol_mod.amount(challenge)
+    host = request_host(request)
+    policy = Keyword.get(opts, :policy)
 
-      {_ledger, nil} ->
-        :ok
-
-      {ledger, %SpendingPolicy{} = policy} ->
-        agent_id = Keyword.get(opts, :agent_id, :unknown)
-        amount = protocol_mod.amount(challenge)
-
-        metadata = %{
-          protocol: protocol_mod.name(),
-          domain: "pending"
-        }
-
-        case Ledger.try_spend(ledger, agent_id, amount, policy, metadata) do
-          :ok -> :ok
-          {:over_limit, limit_type} -> {:error, {:over_budget, limit_type, amount}}
-        end
+    with :ok <- enforce_policy_gate(policy, amount, host, opts) do
+      enforce_budget(protocol_mod, amount, host, opts)
     end
   end
+
+  defp enforce_policy_gate(nil, _amount, _host, _opts), do: :ok
+
+  defp enforce_policy_gate(%SpendingPolicy{} = _policy, _amount, host, _opts)
+       when host in [nil, ""],
+       do: {:error, {:gate_denied, :missing_host}}
+
+  defp enforce_policy_gate(%SpendingPolicy{} = policy, amount, host, opts) do
+    case PolicyGate.evaluate(policy, amount, host,
+           on_confirm: Keyword.get(opts, :on_confirm)
+         ) do
+      :ok -> :ok
+      {:deny, reason} -> {:error, {:gate_denied, reason}}
+    end
+  end
+
+  defp enforce_budget(protocol_mod, amount, host, opts) do
+    with %_{} = policy <- Keyword.get(opts, :policy) || :no_policy,
+         ledger when not is_nil(ledger) <- Keyword.get(opts, :ledger) do
+      agent_id = Keyword.get(opts, :agent_id, :unknown)
+
+      metadata = %{
+        protocol: protocol_mod.name(),
+        domain: host
+      }
+
+      case Ledger.try_spend(ledger, agent_id, amount, policy, metadata) do
+        :ok ->
+          :ok
+
+        {:over_limit, limit_type} ->
+          {:error, {:over_budget, limit_type, amount}}
+      end
+    else
+      _ -> :ok
+    end
+  end
+
+  defp request_host(%Req.Request{url: %URI{host: host}})
+       when is_binary(host) and host != "",
+       do: host
+
+  defp request_host(%Req.Request{url: url}) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{host: host} when is_binary(host) and host != "" -> host
+      _ -> nil
+    end
+  end
+
+  defp request_host(_), do: nil
 
   defp add_payment_headers(request, headers) do
     Enum.reduce(headers, request, fn {key, value}, req ->
