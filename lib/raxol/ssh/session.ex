@@ -11,6 +11,7 @@ defmodule Raxol.SSH.Session do
 
   require Raxol.Core.Runtime.Log
 
+  alias Raxol.Core.Runtime.Backpressure
   alias Raxol.SSH.IOAdapter
 
   defstruct [
@@ -101,8 +102,17 @@ defmodule Raxol.SSH.Session do
 
   defp dispatch_events(lifecycle_pid, events) do
     case get_dispatcher(lifecycle_pid) do
-      nil -> :ok
-      pid -> Enum.each(events, &GenServer.cast(pid, {:dispatch, &1}))
+      nil ->
+        :ok
+
+      pid ->
+        Enum.each(events, fn event ->
+          _ =
+            Backpressure.cast(pid, {:dispatch, event},
+              label: :ssh_input,
+              policy: :call_when_full
+            )
+        end)
     end
   end
 

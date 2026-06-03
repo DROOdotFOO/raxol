@@ -33,6 +33,7 @@ defmodule Raxol.Core.Runtime.Events.DispatcherTest do
   setup do
     # Ensure UserPreferences is started for tests
     prefs_opts = [name: Raxol.Core.UserPreferences, test_mode?: true]
+
     case Raxol.Core.UserPreferences.start_link(prefs_opts) do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> :ok
@@ -102,7 +103,11 @@ defmodule Raxol.Core.Runtime.Events.DispatcherTest do
 
       # Fix: update takes message and model, returns {model, commands}
       # Events now arrive as raw %Event{} structs
-      Mox.expect(ApplicationMock, :update, fn %Event{type: :key, data: %{key: :enter}}, model ->
+      Mox.expect(ApplicationMock, :update, fn %Event{
+                                                type: :key,
+                                                data: %{key: :enter}
+                                              },
+                                              model ->
         {%{model | count: model.count + 1},
          [%Command{type: :system, data: {:test_cmd, []}}]}
       end)
@@ -141,6 +146,88 @@ defmodule Raxol.Core.Runtime.Events.DispatcherTest do
         # Verify all Mox expectations
         Mox.verify!()
         # Stop processes gracefully, ignoring if already dead
+        try do
+          GenServer.stop(mock_pm_pid)
+        catch
+          :exit, _ -> :ok
+        end
+
+        try do
+          Raxol.Core.Runtime.TestCommandModule.stop()
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+    end
+
+    test ~c"handle_call :dispatch (ADR-0013 PR-C) mirrors cast: applies same state transition" do
+      # Mirror of the cast test above; only the invocation method differs.
+      # Sending {:dispatch, event} via GenServer.call must produce the
+      # same model change and command execution as via cast.
+      {:ok, mock_pm_pid} = Mock.PluginManager.start_link([])
+
+      {:ok, _test_command_agent} =
+        Raxol.Core.Runtime.TestCommandModule.start_link()
+
+      initial_state = %{
+        app_module: ApplicationMock,
+        model: %{count: 0},
+        runtime_pid: self(),
+        width: 80,
+        height: 24,
+        focused: true,
+        debug_mode: false,
+        plugin_manager: mock_pm_pid,
+        command_registry_table: Raxol.Core.Runtime.TestCommandModule,
+        pubsub_server: Phoenix.PubSub,
+        rendering_engine: Raxol.Core.Runtime.Rendering.Engine,
+        initial_commands: []
+      }
+
+      Mox.expect(ApplicationMock, :init, fn _opts -> {:ok, %{count: 0}} end)
+
+      event = %Event{
+        type: :key,
+        data: %{key: :enter, state: :pressed, modifiers: []}
+      }
+
+      Mox.expect(ApplicationMock, :handle_event, fn ^event -> event end)
+
+      Mox.expect(ApplicationMock, :update, fn %Event{
+                                                type: :key,
+                                                data: %{key: :enter}
+                                              },
+                                              model ->
+        {%{model | count: model.count + 1},
+         [%Command{type: :system, data: {:test_cmd, []}}]}
+      end)
+
+      {:ok, dispatcher} =
+        Dispatcher.start_link(self(), initial_state,
+          command_module: Raxol.Core.Runtime.TestCommandModule
+        )
+
+      Mox.allow(ApplicationMock, self(), dispatcher)
+
+      # The call path -- backpressure helper escalates here when the
+      # dispatcher mailbox is hot. The reply must be :ok and the
+      # state must transition identically to the cast path.
+      assert :ok = GenServer.call(dispatcher, {:dispatch, event})
+
+      current_state = :sys.get_state(dispatcher)
+      assert current_state.model.count == 1
+
+      executed_commands =
+        Raxol.Core.Runtime.TestCommandModule.get_executed_commands()
+
+      assert length(executed_commands) == 1
+      [{command, _context}] = executed_commands
+      assert command.type == :system
+      assert command.data == {:test_cmd, []}
+
+      on_exit(fn ->
+        Mox.verify!()
+
         try do
           GenServer.stop(mock_pm_pid)
         catch

@@ -18,6 +18,7 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   """
 
   use GenServer
+  alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Core.Runtime.Lifecycle.{Initializer, Shutdown}
   alias Raxol.Core.Runtime.Log
 
@@ -258,7 +259,11 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   @impl true
   def handle_info({:layout_recommendation, _rec} = msg, state) do
     if state.dispatcher_pid do
-      GenServer.cast(state.dispatcher_pid, {:dispatch, msg})
+      _ =
+        Backpressure.cast(state.dispatcher_pid, {:dispatch, msg},
+          label: :lifecycle_layout_rec,
+          policy: :call_when_full
+        )
     end
 
     {:noreply, state}

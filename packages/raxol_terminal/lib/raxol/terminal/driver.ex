@@ -20,6 +20,7 @@ defmodule Raxol.Terminal.Driver do
   # import Bitwise
 
   alias Raxol.Core.Events.Event
+  alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Terminal.ANSI.InputParser
   alias Raxol.Terminal.Driver.Dispatch
   alias Raxol.Terminal.Driver.EventTranslator
@@ -94,7 +95,9 @@ defmodule Raxol.Terminal.Driver do
   def init_manager(opts) do
     # Extract dispatcher_pid from opts - handle both keyword list and raw value
     dispatcher_pid = extract_dispatcher_pid(opts)
-    mouse_enabled = if is_list(opts), do: Keyword.get(opts, :mouse, true), else: true
+
+    mouse_enabled =
+      if is_list(opts), do: Keyword.get(opts, :mouse, true), else: true
 
     Raxol.Core.Runtime.Log.info(
       "[#{__MODULE__}] init called with dispatcher: #{inspect(dispatcher_pid)}"
@@ -151,7 +154,9 @@ defmodule Raxol.Terminal.Driver do
       {_, _, nil} ->
         # No dispatcher — this is the Application supervisor's placeholder Driver.
         # Don't set up the terminal; the Lifecycle's Driver will do that.
-        Raxol.Core.Runtime.Log.info("[TerminalDriver] No dispatcher, skipping terminal setup.")
+        Raxol.Core.Runtime.Log.info(
+          "[TerminalDriver] No dispatcher, skipping terminal setup."
+        )
 
         {:ok, state}
 
@@ -251,7 +256,9 @@ defmodule Raxol.Terminal.Driver do
         {:termbox_event, event_map},
         %{termbox_state: :initialized, dispatcher_pid: dispatcher_pid} = state
       ) do
-    Raxol.Core.Runtime.Log.debug("Received termbox event: #{inspect(event_map)}")
+    Raxol.Core.Runtime.Log.debug(
+      "Received termbox event: #{inspect(event_map)}"
+    )
 
     case EventTranslator.translate(event_map) do
       {:ok, %Event{} = event} ->
@@ -265,7 +272,9 @@ defmodule Raxol.Terminal.Driver do
 
       :ignore ->
         # Event type we don't care about
-        Raxol.Core.Runtime.Log.debug("[Driver] Ignoring termbox event: #{inspect(event_map)}")
+        Raxol.Core.Runtime.Log.debug(
+          "[Driver] Ignoring termbox event: #{inspect(event_map)}"
+        )
 
         {:noreply, state}
 
@@ -333,9 +342,16 @@ defmodule Raxol.Terminal.Driver do
       "[TerminalDriver.handle_cast - :test_input] Parsed event: #{inspect(event)}"
     )
 
-    Raxol.Core.Runtime.Log.debug("[TEST] Dispatching simulated event: #{inspect(event)}")
+    Raxol.Core.Runtime.Log.debug(
+      "[TEST] Dispatching simulated event: #{inspect(event)}"
+    )
 
-    GenServer.cast(state.dispatcher_pid, {:dispatch, event})
+    _ =
+      Backpressure.cast(state.dispatcher_pid, {:dispatch, event},
+        label: :driver_input,
+        policy: :call_when_full
+      )
+
     {:noreply, state}
   end
 
@@ -414,7 +430,9 @@ defmodule Raxol.Terminal.Driver do
     _ = if state.flush_timer, do: Process.cancel_timer(state.flush_timer)
 
     if InputBuffer.incomplete_escape?(buffer) do
-      timer = Process.send_after(self(), :flush_input_buffer, @input_buffer_flush_ms)
+      timer =
+        Process.send_after(self(), :flush_input_buffer, @input_buffer_flush_ms)
+
       {:noreply, %{state | input_buffer: buffer, flush_timer: timer}}
     else
       flush_buffer(%{state | input_buffer: buffer, flush_timer: nil})
@@ -454,7 +472,9 @@ defmodule Raxol.Terminal.Driver do
   end
 
   def terminate(_reason, _state) do
-    Raxol.Core.Runtime.Log.info("Terminal Driver terminating (not initialized).")
+    Raxol.Core.Runtime.Log.info(
+      "Terminal Driver terminating (not initialized)."
+    )
 
     :ok
   end

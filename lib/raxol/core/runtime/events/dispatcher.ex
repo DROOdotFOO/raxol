@@ -381,44 +381,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
 
   @impl true
   def handle_manager_cast({:dispatch, event}, state) do
-    Raxol.Core.Runtime.Log.debug(
-      "[Dispatcher] handle_cast :dispatch event: #{inspect(event)}"
-    )
-
-    # Record input events for session recording (zero-coupling)
-    DispatcherHooks.maybe_record_input(event)
-
-    # Delegate to the main event handling logic using do_dispatch_event
-    case do_dispatch_event(event, state) do
-      {:ok, new_state, _commands} ->
-        # Broadcast event globally if successfully handled by app logic
-        # Ensure event.type and event.data are appropriate for broadcast
-        broadcast_event_if_valid(event.type, event.data)
-
-        {:noreply, new_state}
-
-      {:quit, new_state} ->
-        # Handle quit events by stopping the dispatcher
-        {:stop, :normal, new_state}
-
-      {:error, reason} ->
-        Raxol.Core.Runtime.Log.error_with_stacktrace(
-          "[Dispatcher] Error handling event in handle_cast",
-          reason,
-          nil,
-          %{module: __MODULE__, event: event, state: state}
-        )
-
-        {:noreply, state}
-
-      other ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "[Dispatcher] Unexpected return from do_dispatch_event in handle_cast",
-          %{module: __MODULE__, event: event, state: state, other: other}
-        )
-
-        {:noreply, state}
-    end
+    dispatch_full_event(event, state)
   end
 
   @impl true
@@ -567,6 +530,37 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     Raxol.Core.Runtime.Log.warning_with_context(label, context)
   end
 
+  # ADR-0013 PR-C: call-mode mirrors of the :dispatch cast clauses.
+  # Backpressure escalates to GenServer.call/3 when the mailbox is hot;
+  # the work is identical, only the reply contract differs.
+
+  @impl true
+  def handle_manager_call(
+        {:dispatch, {:agent_message, _from, _payload} = msg},
+        _from_caller,
+        state
+      ) do
+    Raxol.Core.Runtime.Log.debug(
+      "[Dispatcher] handle_call :dispatch agent_message: #{inspect(msg)}"
+    )
+
+    msg |> dispatch_raw_message(state) |> to_call_reply()
+  end
+
+  @impl true
+  def handle_manager_call(
+        {:dispatch, {:layout_recommendation, _rec} = msg},
+        _from_caller,
+        state
+      ) do
+    msg |> dispatch_raw_message(state) |> to_call_reply()
+  end
+
+  @impl true
+  def handle_manager_call({:dispatch, event}, _from_caller, state) do
+    event |> dispatch_full_event(state) |> to_call_reply()
+  end
+
   @impl true
   def handle_manager_call(:get_plugin_manager, _from, state) do
     {:reply, {:ok, state.plugin_manager_struct}, state}
@@ -677,6 +671,48 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
         {:noreply, state}
     end
   end
+
+  # Shared work for the generic {:dispatch, event} path. Returns a
+  # standard GenServer cast reply tuple; to_call_reply/1 reshapes it
+  # for the call clause (ADR-0013 PR-C).
+  defp dispatch_full_event(event, state) do
+    Raxol.Core.Runtime.Log.debug(
+      "[Dispatcher] dispatching event: #{inspect(event)}"
+    )
+
+    # Record input events for session recording (zero-coupling)
+    DispatcherHooks.maybe_record_input(event)
+
+    case do_dispatch_event(event, state) do
+      {:ok, new_state, _commands} ->
+        broadcast_event_if_valid(event.type, event.data)
+        {:noreply, new_state}
+
+      {:quit, new_state} ->
+        {:stop, :normal, new_state}
+
+      {:error, reason} ->
+        Raxol.Core.Runtime.Log.error_with_stacktrace(
+          "[Dispatcher] Error handling event",
+          reason,
+          nil,
+          %{module: __MODULE__, event: event, state: state}
+        )
+
+        {:noreply, state}
+
+      other ->
+        Raxol.Core.Runtime.Log.warning_with_context(
+          "[Dispatcher] Unexpected return from do_dispatch_event",
+          %{module: __MODULE__, event: event, state: state, other: other}
+        )
+
+        {:noreply, state}
+    end
+  end
+
+  defp to_call_reply({:noreply, state}), do: {:reply, :ok, state}
+  defp to_call_reply({:stop, reason, state}), do: {:stop, reason, :ok, state}
 
   defp setup_subscriptions(state) do
     try do

@@ -32,6 +32,7 @@ defmodule Raxol.Headless do
 
   require Raxol.Core.Runtime.Log
 
+  alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Headless.EventBuilder
   alias Raxol.Headless.TextCapture
 
@@ -423,7 +424,13 @@ defmodule Raxol.Headless do
   defp dispatch_key(session, key, opts) do
     with_dispatcher(session, fn dispatcher_pid ->
       event = EventBuilder.key(key, opts)
-      GenServer.cast(dispatcher_pid, {:dispatch, event})
+
+      _ =
+        Backpressure.cast(dispatcher_pid, {:dispatch, event},
+          label: :headless_dispatch,
+          policy: :call_when_full
+        )
+
       :ok
     end)
   end
