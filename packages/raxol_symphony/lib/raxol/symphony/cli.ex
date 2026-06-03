@@ -22,7 +22,8 @@ defmodule Raxol.Symphony.CLI do
           headless: boolean(),
           watch: boolean(),
           surface_module: module() | nil,
-          auto_start_tick: boolean()
+          auto_start_tick: boolean(),
+          ssh: keyword() | nil
         ]
 
   @type result ::
@@ -40,6 +41,9 @@ defmodule Raxol.Symphony.CLI do
     `true`.
   - `:surface_module` (module) -- override the default
     `Raxol.Symphony.Surfaces.Terminal`. Useful in tests.
+  - `:ssh` (keyword) -- when present, serve the dashboard over SSH
+    instead of in the current terminal. Required keys: `:port`,
+    `:max_connections`. Implies `headless: false`.
   """
   @spec start(opts()) :: result()
   def start(opts) do
@@ -47,17 +51,12 @@ defmodule Raxol.Symphony.CLI do
     headless? = Keyword.get(opts, :headless, false)
     watch? = Keyword.get(opts, :watch, true)
     surface_module = Keyword.get(opts, :surface_module, default_surface())
+    ssh_opts = Keyword.get(opts, :ssh)
 
     with {:ok, expanded_path} <- expand_path(workflow),
          {:ok, _config} <- Config.load_and_validate(expanded_path),
-         {:ok, sup} <- start_supervisor(expanded_path, watch?, opts) do
-      surface =
-        if headless? do
-          nil
-        else
-          start_surface(surface_module)
-        end
-
+         {:ok, sup} <- start_supervisor(expanded_path, watch?, opts),
+         {:ok, surface} <- start_surface_or_ssh(surface_module, headless?, ssh_opts) do
       {:ok, %{supervisor: sup, surface: surface}}
     end
   end
@@ -105,6 +104,32 @@ defmodule Raxol.Symphony.CLI do
   end
 
   defp default_surface, do: Raxol.Symphony.Surfaces.Terminal
+
+  defp start_surface_or_ssh(_module, true, _ssh), do: {:ok, nil}
+
+  defp start_surface_or_ssh(module, false, nil), do: {:ok, start_surface(module)}
+
+  defp start_surface_or_ssh(module, false, ssh_opts) when is_list(ssh_opts) do
+    if Code.ensure_loaded?(Raxol.SSH) and function_exported?(Raxol.SSH, :serve, 2) do
+      port = Keyword.fetch!(ssh_opts, :port)
+      max = Keyword.fetch!(ssh_opts, :max_connections)
+
+      case Raxol.SSH.serve(module, port: port, max_connections: max) do
+        {:ok, pid} ->
+          Mix.shell().info(
+            "Symphony dashboard SSH server listening on port #{port}. " <>
+              "Connect: ssh localhost -p #{port}"
+          )
+
+          {:ok, pid}
+
+        {:error, _} = err ->
+          err
+      end
+    else
+      {:error, :ssh_unavailable}
+    end
+  end
 
   defp start_surface(module) do
     if Code.ensure_loaded?(Raxol) and function_exported?(Raxol, :start_link, 2) do

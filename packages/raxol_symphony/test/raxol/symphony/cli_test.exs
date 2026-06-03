@@ -118,4 +118,42 @@ defmodule Raxol.Symphony.CLITest do
                CLI.run(workflow: "/nope/WORKFLOW.md", headless: true)
     end
   end
+
+  describe "ssh option" do
+    test "returns :ssh_unavailable when Raxol.SSH module is not loaded", %{dir: dir} do
+      if Code.ensure_loaded?(Raxol.SSH) do
+        # Raxol.SSH is on the load path (likely because the optional :raxol
+        # dep is compiled). The unavailable path is exercised in
+        # environments without the dep -- skip here.
+        :ok
+      else
+        path = write_workflow(dir, @workflow)
+
+        assert {:error, :ssh_unavailable} =
+                 CLI.start(
+                   workflow: path,
+                   watch: false,
+                   auto_start_tick: false,
+                   ssh: [port: 22_223, max_connections: 1]
+                 )
+
+        stop_supervisor()
+      end
+    end
+
+    test "headless: true takes precedence over :ssh", %{dir: dir} do
+      path = write_workflow(dir, @workflow)
+
+      assert {:ok, %{surface: nil}} =
+               CLI.start(
+                 workflow: path,
+                 headless: true,
+                 watch: false,
+                 auto_start_tick: false,
+                 ssh: [port: 22_223, max_connections: 1]
+               )
+
+      stop_supervisor()
+    end
+  end
 end
