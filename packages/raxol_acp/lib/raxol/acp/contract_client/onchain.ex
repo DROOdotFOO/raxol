@@ -257,6 +257,14 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   @impl true
   def confirm_x402_payment_received(job_id) when is_binary(job_id) do
+    confirm_x402_payment_received(job_id, acp_version())
+  end
+
+  # V1 ACPSimple has `confirmX402PaymentReceived(uint256)`. The V2
+  # ACPRouter ABI dropped it -- V2 uses `createX402Job` + the facilitator
+  # callback instead. Calling the V1 selector against a V2 router would
+  # silently encode garbage, so fail fast.
+  defp confirm_x402_payment_received(job_id, :v1) do
     call_data = ABI.encode_call(@sig_confirm_x402, [{"uint256", job_id_to_uint256(job_id)}])
 
     case send_tx(:confirm_x402_payment_received, call_data) do
@@ -264,6 +272,9 @@ defmodule Raxol.ACP.ContractClient.Onchain do
       {:error, _} = err -> err
     end
   end
+
+  defp confirm_x402_payment_received(_job_id, :v2),
+    do: {:error, :unsupported_in_v2}
 
   @impl true
   def create_payable_memo(job_id, content, opts)
@@ -527,8 +538,12 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     end
   end
 
-  defp contract_address(%{acp_contract_address: nil}), do: {:error, :no_contract_address}
-  defp contract_address(%{acp_contract_address: addr}), do: {:ok, addr}
+  defp contract_address(chain), do: contract_address(chain, acp_version())
+
+  defp contract_address(%{acp_contract_address: nil}, :v1), do: {:error, :no_contract_address}
+  defp contract_address(%{acp_contract_address: addr}, :v1), do: {:ok, addr}
+  defp contract_address(%{acp_router_address: nil}, :v2), do: {:error, :no_router_address}
+  defp contract_address(%{acp_router_address: addr}, :v2), do: {:ok, addr}
 
   defp wallet_module do
     case Application.get_env(:raxol_acp, :onchain_wallet) do

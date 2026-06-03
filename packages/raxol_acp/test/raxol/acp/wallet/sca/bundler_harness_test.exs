@@ -53,9 +53,21 @@ defmodule Raxol.ACP.Wallet.SCA.BundlerHarnessTest do
       bundler_url: "http://stub.invalid"
   end
 
+  # Session key for the entity-1 path. Anvil pre-funded key #1.
+  @session_anvil_key "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+  @session_addr "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+  @session_env_var "RAXOL_ACP_SESSION_KEY"
+
+  defmodule SessionSigner do
+    use Raxol.Payments.Wallets.Env,
+      env_var: "RAXOL_ACP_SESSION_KEY",
+      chain_id: 8453
+  end
+
   setup_all do
     ensure_foundry!()
     System.put_env(@env_var, @anvil_key)
+    System.put_env(@session_env_var, @session_anvil_key)
 
     fork_url = System.get_env("RAXOL_ACP_FORK_URL", "https://mainnet.base.org")
     port = 8599
@@ -129,6 +141,85 @@ defmodule Raxol.ACP.Wallet.SCA.BundlerHarnessTest do
     # 6. The account is now deployed and the UserOp event reports success.
     assert deployed?(rpc, sca)
     assert out =~ @user_op_event_topic
+  end
+
+  test "session-key (entity 1) UserOp after owner deploy + installValidation", %{rpc: rpc} do
+    sca = Provisioning.predict_address(@owner, 1)
+
+    refute deployed?(rpc, sca)
+    cast(["rpc", "anvil_setBalance", sca, "0xDE0B6B3A7640000", "--rpc-url", rpc])
+
+    # 1. Owner deploys + registers session key in a single UserOp.
+    install_data =
+      Raxol.ACP.Wallet.SCA.Provisioning.install_session_key_calldata(@session_addr, 1)
+
+    {nonce_hex, 0} =
+      cast([
+        "call",
+        @entry_point,
+        "getNonce(address,uint192)(uint256)",
+        sca,
+        "#{ModularAccount.nonce_key(0, true)}",
+        "--rpc-url",
+        rpc
+      ])
+
+    nonce0 = nonce_hex |> String.split() |> hd() |> String.to_integer()
+
+    deploy_op = %UserOp{
+      sender: sca,
+      nonce: nonce0,
+      init_code: Provisioning.deploy_init_code(@owner, 1),
+      call_data: ModularAccount.execute_calldata(sca, 0, install_data),
+      call_gas_limit: 800_000,
+      verification_gas_limit: 1_500_000,
+      pre_verification_gas: 200_000,
+      max_fee_per_gas: 2_000_000_000,
+      max_priority_fee_per_gas: 1_000_000_000
+    }
+
+    deploy_hash = UserOp.hash(deploy_op, @entry_point, 8453)
+    {:ok, owner_sig} = Account.sign_user_op_hash(deploy_hash)
+    deploy_op = UserOp.put_signature(deploy_op, owner_sig)
+
+    {out, 0} = submit_handle_ops(rpc, deploy_op)
+    assert out =~ ~r/status\s+1/
+    assert out =~ @user_op_event_topic
+    assert deployed?(rpc, sca)
+
+    # 2. Session-key signed UserOp -- entity 1 -- targets a harmless call.
+    {nonce1_hex, 0} =
+      cast([
+        "call",
+        @entry_point,
+        "getNonce(address,uint192)(uint256)",
+        sca,
+        "#{ModularAccount.nonce_key(1, true)}",
+        "--rpc-url",
+        rpc
+      ])
+
+    nonce1 = nonce1_hex |> String.split() |> hd() |> String.to_integer()
+
+    session_op = %UserOp{
+      sender: sca,
+      nonce: nonce1,
+      init_code: <<>>,
+      call_data: ModularAccount.execute_calldata(@owner, 0, <<>>),
+      call_gas_limit: 300_000,
+      verification_gas_limit: 800_000,
+      pre_verification_gas: 200_000,
+      max_fee_per_gas: 2_000_000_000,
+      max_priority_fee_per_gas: 1_000_000_000
+    }
+
+    session_hash = UserOp.hash(session_op, @entry_point, 8453)
+    {:ok, session_sig} = Raxol.ACP.Wallet.SCA.sign_user_op_hash(session_hash, SessionSigner)
+    session_op = UserOp.put_signature(session_op, session_sig)
+
+    {out2, 0} = submit_handle_ops(rpc, session_op)
+    assert out2 =~ ~r/status\s+1/
+    assert out2 =~ @user_op_event_topic
   end
 
   # -- Harness plumbing --

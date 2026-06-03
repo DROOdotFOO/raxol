@@ -109,9 +109,14 @@ defmodule Raxol.ACP.ContractClient do
   `ACPSimple.confirmX402PaymentReceived`:
 
       confirmX402PaymentReceived(uint256 jobId)
+
+  V1-only: the V2 `ACPRouter` ABI dropped this method (V2 uses
+  `createX402Job` + facilitator callback instead). Implementations
+  running against `:acp_version :v2` should return
+  `{:error, :unsupported_in_v2}`.
   """
   @callback confirm_x402_payment_received(job_id()) ::
-              {:ok, tx_hash()} | {:error, term()}
+              {:ok, tx_hash()} | {:error, :unsupported_in_v2 | term()}
 
   @doc """
   Create a payable memo -- a memo that moves funds as part of a phase

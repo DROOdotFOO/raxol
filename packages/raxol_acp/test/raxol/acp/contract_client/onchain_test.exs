@@ -227,6 +227,58 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
                Onchain.create_job(@seller, @seller, 9_999_999_999)
     end
 
+    test "v2 routes to acp_router_address instead of acp_contract_address" do
+      v2_router = "0x" <> String.duplicate("99", 20)
+
+      Application.put_env(:raxol_acp, :acp_version, :v2)
+
+      Application.put_env(:raxol_acp, :chain_overrides, %{
+        mainnet: %{acp_contract_address: @contract, acp_router_address: v2_router}
+      })
+
+      on_exit(fn -> Application.delete_env(:raxol_acp, :acp_version) end)
+
+      test_pid = self()
+
+      install_stub(fn req ->
+        case req["method"] do
+          "eth_sendRawTransaction" = method ->
+            send(test_pid, {:raw_tx, req["params"]})
+            default_handler(test_pid).(Map.put(req, "method", method))
+
+          _ ->
+            default_handler(test_pid).(req)
+        end
+      end)
+
+      _ = Onchain.create_job(@seller, @seller, 9_999_999_999)
+
+      assert_receive {:raw_tx, [tx_hex]}, 1_000
+      # The destination address (`to`) appears in the signed RLP. Easiest
+      # invariant to check: the v2 router hex is embedded and the v1
+      # contract hex is not.
+      v2_hex = String.downcase(String.trim_leading(v2_router, "0x"))
+      v1_hex = String.downcase(String.trim_leading(@contract, "0x"))
+      tx_down = String.downcase(tx_hex)
+      assert String.contains?(tx_down, v2_hex)
+      refute String.contains?(tx_down, v1_hex)
+    end
+
+    test "v2 errors clearly when acp_router_address is nil" do
+      Application.put_env(:raxol_acp, :acp_version, :v2)
+
+      Application.put_env(:raxol_acp, :chain_overrides, %{
+        mainnet: %{acp_contract_address: @contract, acp_router_address: nil}
+      })
+
+      on_exit(fn -> Application.delete_env(:raxol_acp, :acp_version) end)
+
+      install_stub(default_handler(self()))
+
+      assert {:error, :no_router_address} =
+               Onchain.create_job(@seller, @seller, 9_999_999_999)
+    end
+
     test "errors clearly when no wallet is configured" do
       Application.delete_env(:raxol_acp, :onchain_wallet)
       install_stub(default_handler(self()))
@@ -330,6 +382,16 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
     test "encodes the job id + sends a tx" do
       install_stub(default_handler(self()))
       assert {:ok, "0x" <> _} = Onchain.confirm_x402_payment_received("42")
+    end
+
+    test "returns :unsupported_in_v2 when acp_version is :v2" do
+      Application.put_env(:raxol_acp, :acp_version, :v2)
+      on_exit(fn -> Application.delete_env(:raxol_acp, :acp_version) end)
+
+      install_stub(default_handler(self()))
+
+      assert {:error, :unsupported_in_v2} =
+               Onchain.confirm_x402_payment_received("42")
     end
   end
 

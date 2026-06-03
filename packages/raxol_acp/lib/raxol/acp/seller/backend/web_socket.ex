@@ -12,14 +12,21 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket do
   ## Configuration
 
       config :raxol_acp,
+        chain: :mainnet,
         seller_backend: Raxol.ACP.Seller.Backend.WebSocket,
-        seller_backend_url: "https://acpx.virtuals.io",
         seller_backend_auth: %{walletAddress: "0x..."}
 
-  `seller_backend_url` defaults to `"https://acpx.virtuals.io"` (the
-  Virtuals production socket per
-  `@virtuals-protocol/acp-node@0.3.0-beta.40`). `seller_backend_auth`
-  is the Socket.IO auth payload; `nil` connects anonymously.
+  URL resolution order (first match wins):
+
+  1. Explicit `:url` opt to `start_link/1`
+  2. `:raxol_acp, :seller_backend_url` application env
+  3. `acp_socket_url` field on the configured chain
+     (`Raxol.ACP.Chain.mainnet/0` -> `https://acpx.virtuals.io`,
+     `Raxol.ACP.Chain.sepolia/0` -> `https://acpx.virtuals.gg`)
+  4. Hardcoded mainnet fallback `https://acpx.virtuals.io`
+
+  `seller_backend_auth` is the Socket.IO auth payload; `nil` connects
+  anonymously.
 
   ## Event translation
 
@@ -44,11 +51,12 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket do
 
   @behaviour Raxol.ACP.Seller.Backend
 
+  alias Raxol.ACP.Chain
   alias Raxol.ACP.Seller.Backend.WebSocket.Connection
 
   require Logger
 
-  @default_url "https://acpx.virtuals.io"
+  @fallback_url "https://acpx.virtuals.io"
 
   defstruct subscribers: %{},
             connection: nil,
@@ -83,7 +91,7 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket do
 
   @impl GenServer
   def init(opts) do
-    url = Keyword.get(opts, :url) || Application.get_env(:raxol_acp, :seller_backend_url, @default_url)
+    url = resolve_url(opts)
     auth = Keyword.get(opts, :auth) || Application.get_env(:raxol_acp, :seller_backend_auth)
 
     conn_opts = [
@@ -121,6 +129,26 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket do
   end
 
   def terminate(_reason, _state), do: :ok
+
+  @doc false
+  # Exposed for unit tests; not part of the public API.
+  def resolve_url(opts) do
+    cond do
+      url = Keyword.get(opts, :url) -> url
+      url = Application.get_env(:raxol_acp, :seller_backend_url) -> url
+      url = chain_socket_url() -> url
+      true -> @fallback_url
+    end
+  end
+
+  @doc false
+  def chain_socket_url do
+    case Application.get_env(:raxol_acp, :chain, :mainnet) do
+      :mainnet -> Chain.mainnet()[:acp_socket_url]
+      :sepolia -> Chain.sepolia()[:acp_socket_url]
+      _other -> nil
+    end
+  end
 
   @impl GenServer
   def handle_call({:subscribe, pid}, _from, state) do

@@ -180,4 +180,45 @@ defmodule Raxol.ACP.Seller.Backend.WebSocketTest do
       assert Connection.phase(conn) == :ready
     end
   end
+
+  describe "resolve_url/1 precedence" do
+    setup do
+      on_exit(fn ->
+        Application.delete_env(:raxol_acp, :seller_backend_url)
+        Application.delete_env(:raxol_acp, :chain)
+      end)
+
+      :ok
+    end
+
+    test "explicit opt wins over env and chain" do
+      Application.put_env(:raxol_acp, :seller_backend_url, "https://env.example")
+      Application.put_env(:raxol_acp, :chain, :sepolia)
+      assert WebSocket.resolve_url(url: "https://opt.example") == "https://opt.example"
+    end
+
+    test "env wins over chain when no explicit opt" do
+      Application.put_env(:raxol_acp, :seller_backend_url, "https://env.example")
+      Application.put_env(:raxol_acp, :chain, :sepolia)
+      assert WebSocket.resolve_url([]) == "https://env.example"
+    end
+
+    test "chain.mainnet acp_socket_url used when env unset" do
+      Application.delete_env(:raxol_acp, :seller_backend_url)
+      Application.put_env(:raxol_acp, :chain, :mainnet)
+      assert WebSocket.resolve_url([]) == "https://acpx.virtuals.io"
+    end
+
+    test "chain.sepolia acp_socket_url used when env unset" do
+      Application.delete_env(:raxol_acp, :seller_backend_url)
+      Application.put_env(:raxol_acp, :chain, :sepolia)
+      assert WebSocket.resolve_url([]) == "https://acpx.virtuals.gg"
+    end
+
+    test "unknown chain falls back to hardcoded mainnet URL" do
+      Application.delete_env(:raxol_acp, :seller_backend_url)
+      Application.put_env(:raxol_acp, :chain, :goerli)
+      assert WebSocket.resolve_url([]) == "https://acpx.virtuals.io"
+    end
+  end
 end

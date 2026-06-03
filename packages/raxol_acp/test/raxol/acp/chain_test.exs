@@ -18,6 +18,7 @@ defmodule Raxol.ACP.ChainTest do
       assert String.match?(config.usdc_address, ~r/^0x[0-9a-fA-F]{40}$/)
       # Verified on-chain: V1 ACPSimple proxy on Base.
       assert config.acp_contract_address == "0x6a1FE26D54ab0d3E1e3168f2e0c0cDa5cC0A0A4A"
+      assert config.acp_router_address == "0xa6C9BA866992cfD7fd6460ba912bfa405adA9df0"
       assert config.acp_socket_url == "https://acpx.virtuals.io"
       assert config.x402_facilitator_url == "https://acp-x402.virtuals.io"
     end
@@ -31,6 +32,8 @@ defmodule Raxol.ACP.ChainTest do
       assert config.name == "Base Sepolia"
       assert String.match?(config.usdc_address, ~r/^0x[0-9a-fA-F]{40}$/)
       assert config.acp_contract_address == "0x8Db6B1c839Fc8f6bd35777E194677B67b4D51928"
+      # No verified V2 deployment on sepolia
+      assert config.acp_router_address == nil
       assert config.acp_socket_url == "https://acpx.virtuals.gg"
       assert config.x402_facilitator_url == "https://dev-acp-x402.virtuals.io"
     end
