@@ -50,19 +50,60 @@ defmodule Raxol.Payments.Protocols.X402Test do
     end
 
     test "returns error for missing header" do
-      assert {:error, {:missing_header, "payment-required"}} = X402.parse_challenge([])
+      assert {:error, {:missing_header, "payment-required"}} =
+               X402.parse_challenge([])
     end
   end
 
   describe "amount/1" do
-    test "returns Decimal from string price" do
-      challenge = %{price: "1000000"}
-      assert Decimal.equal?(X402.amount(challenge), Decimal.new("1000000"))
+    test "normalizes USDC atomic units to human decimals on Base" do
+      challenge = %{
+        price: 1_000_000,
+        currency: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        network: "eip155:8453"
+      }
+
+      assert Decimal.equal?(X402.amount(challenge), Decimal.new("1"))
     end
 
-    test "returns Decimal from integer price" do
-      challenge = %{price: 500}
-      assert Decimal.equal?(X402.amount(challenge), Decimal.new("500"))
+    test "10_000 USDC atomic = 0.01 human" do
+      challenge = %{
+        price: 10_000,
+        currency: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        network: "eip155:8453"
+      }
+
+      assert Decimal.equal?(X402.amount(challenge), Decimal.new("0.01"))
+    end
+
+    test "WETH (18 decimals) on Base normalizes correctly" do
+      challenge = %{
+        price: Integer.pow(10, 18),
+        currency: "0x4200000000000000000000000000000000000006",
+        network: "eip155:8453"
+      }
+
+      assert Decimal.equal?(X402.amount(challenge), Decimal.new("1"))
+    end
+
+    test "unknown asset defaults to 6 decimals (USDC-safe)" do
+      challenge = %{
+        price: 1_000_000,
+        currency: "0x" <> String.duplicate("dd", 20),
+        network: "eip155:8453"
+      }
+
+      assert Decimal.equal?(X402.amount(challenge), Decimal.new("1"))
+    end
+
+    test "accepts string price" do
+      challenge = %{
+        price: "10000",
+        currency: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        network: "eip155:8453"
+      }
+
+      assert Decimal.equal?(X402.amount(challenge), Decimal.new("0.01"))
     end
   end
 

@@ -56,7 +56,11 @@ defmodule Raxol.Payments.Protocol do
   @doc """
   Extract the payment amount from a parsed challenge.
 
-  Used by the spending policy to check budget before signing.
+  Returns the amount in **human-decimal units** (e.g. `1.00` means
+  $1.00 USDC, not `1_000_000` atomic units). Implementations are
+  expected to normalize via `Raxol.Payments.Assets.to_human/2` using
+  the challenge's asset metadata. The `SpendingPolicy` caps are
+  written in the same units.
   """
   @callback amount(challenge :: challenge()) :: Decimal.t()
 

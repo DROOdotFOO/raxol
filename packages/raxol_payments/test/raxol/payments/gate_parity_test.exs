@@ -190,11 +190,19 @@ defmodule Raxol.Payments.GateParityTest do
     end
   end
 
+  # The Hook path sees `amount` directly in human-decimal units; the AutoPay
+  # path receives the same logical amount as an x402 atomic-unit challenge
+  # and normalizes via Assets.to_human. To keep parity meaningful, we scale
+  # the challenge value by 10^6 (USDC decimals) using the real Base USDC
+  # contract so both paths end up comparing the same human amount.
   defp x402_challenge(amount) do
+    atomic =
+      amount |> Decimal.mult(Decimal.new(1_000_000)) |> Decimal.to_integer()
+
     %{
-      "maxAmountRequired" => Decimal.to_string(amount),
+      "maxAmountRequired" => atomic,
       "payTo" => "0x" <> String.duplicate("cd", 20),
-      "asset" => "0x" <> String.duplicate("ef", 20),
+      "asset" => "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
       "network" => "eip155:8453",
       "nonce" => "0x" <> String.duplicate("12", 32),
       "validAfter" => 0,

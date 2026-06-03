@@ -37,7 +37,8 @@ defmodule Raxol.Payments.Protocols.X402 do
     with {:ok, encoded} <- Headers.require(headers, "payment-required"),
          {:ok, json} <- Base.decode64(encoded),
          {:ok, decoded} when is_map(decoded) <- Jason.decode(json),
-         price when not is_nil(price) <- decoded["maxAmountRequired"] || decoded["price"],
+         price when not is_nil(price) <-
+           decoded["maxAmountRequired"] || decoded["price"],
          :ok <- validate_positive_amount(price),
          pay_to when not is_nil(pay_to) <- decoded["payTo"] || decoded["pay_to"],
          :ok <- validate_address(pay_to) do
@@ -60,7 +61,8 @@ defmodule Raxol.Payments.Protocols.X402 do
   end
 
   @impl true
-  @spec build_payment(map(), module()) :: {:ok, Headers.headers()} | {:error, term()}
+  @spec build_payment(map(), module()) ::
+          {:ok, Headers.headers()} | {:error, term()}
   def build_payment(challenge, wallet) do
     domain = %{
       name: "USD Coin",
@@ -129,9 +131,10 @@ defmodule Raxol.Payments.Protocols.X402 do
   @impl true
   @spec amount(map()) :: Decimal.t()
   def amount(challenge) do
-    challenge.price
-    |> to_string()
-    |> Decimal.new()
+    decimals =
+      Raxol.Payments.Assets.decimals(challenge.network, challenge.currency)
+
+    Raxol.Payments.Assets.to_human(challenge.price, decimals)
   end
 
   # -- Private --
@@ -147,7 +150,8 @@ defmodule Raxol.Payments.Protocols.X402 do
 
   defp chain_id_from_network(chain_id) when is_integer(chain_id), do: chain_id
 
-  defp normalize_amount(amount) when is_integer(amount) and amount >= 0, do: amount
+  defp normalize_amount(amount) when is_integer(amount) and amount >= 0,
+    do: amount
 
   defp normalize_amount(amount) when is_binary(amount) do
     case Integer.parse(amount) do
@@ -169,13 +173,21 @@ defmodule Raxol.Payments.Protocols.X402 do
     |> then(&("0x" <> &1))
   end
 
-  defp validate_positive_amount(amount) when is_integer(amount) and amount > 0, do: :ok
-  defp validate_positive_amount(amount) when is_float(amount) and amount > 0, do: :ok
+  defp validate_positive_amount(amount) when is_integer(amount) and amount > 0,
+    do: :ok
+
+  defp validate_positive_amount(amount) when is_float(amount) and amount > 0,
+    do: :ok
 
   defp validate_positive_amount(amount) when is_binary(amount) do
     case Decimal.parse(amount) do
-      {dec, ""} -> if Decimal.positive?(dec), do: :ok, else: {:error, {:invalid_amount, amount}}
-      _ -> {:error, {:invalid_amount, amount}}
+      {dec, ""} ->
+        if Decimal.positive?(dec),
+          do: :ok,
+          else: {:error, {:invalid_amount, amount}}
+
+      _ ->
+        {:error, {:invalid_amount, amount}}
     end
   rescue
     Decimal.Error -> {:error, {:invalid_amount, amount}}
@@ -186,7 +198,9 @@ defmodule Raxol.Payments.Protocols.X402 do
   @address_regex ~r/\A0x[0-9a-fA-F]{40}\z/
 
   defp validate_address(addr) when is_binary(addr) do
-    if Regex.match?(@address_regex, addr), do: :ok, else: {:error, {:invalid_address, addr}}
+    if Regex.match?(@address_regex, addr),
+      do: :ok,
+      else: {:error, {:invalid_address, addr}}
   end
 
   defp validate_address(addr), do: {:error, {:invalid_address, addr}}

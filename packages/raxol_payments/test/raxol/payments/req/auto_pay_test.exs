@@ -216,7 +216,8 @@ defmodule Raxol.Payments.Req.AutoPayTest do
           policy: policy,
           agent_id: :test
         )
-        |> Req.Request.prepend_request_steps(stub: stub_402(100))
+        # 100_000_000 atomic = 100 USDC, exceeds the 50-dollar threshold.
+        |> Req.Request.prepend_request_steps(stub: stub_402(100_000_000))
 
       resp = Req.Request.run!(req)
 
@@ -243,7 +244,7 @@ defmodule Raxol.Payments.Req.AutoPayTest do
           agent_id: :test,
           on_confirm: fn _amount, _domain -> :approve end
         )
-        |> Req.Request.prepend_request_steps(stub: stub_402(100))
+        |> Req.Request.prepend_request_steps(stub: stub_402(100_000_000))
 
       _resp = Req.Request.run!(req)
       assert_received :wallet_signed
@@ -266,7 +267,7 @@ defmodule Raxol.Payments.Req.AutoPayTest do
           agent_id: :test,
           on_confirm: fn _amount, _domain -> :deny end
         )
-        |> Req.Request.prepend_request_steps(stub: stub_402(100))
+        |> Req.Request.prepend_request_steps(stub: stub_402(100_000_000))
 
       resp = Req.Request.run!(req)
 

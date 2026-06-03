@@ -69,7 +69,8 @@ defmodule Raxol.Payments.Protocols.MPP do
   end
 
   @impl true
-  @spec build_payment(map(), module()) :: {:ok, Headers.headers()} | {:error, term()}
+  @spec build_payment(map(), module()) ::
+          {:ok, Headers.headers()} | {:error, term()}
   def build_payment(challenge, wallet) do
     credential =
       %{
@@ -86,7 +87,11 @@ defmodule Raxol.Payments.Protocols.MPP do
     case wallet.sign_message(Jason.encode!(credential)) do
       {:ok, signature} ->
         signed_credential =
-          Map.put(credential, :signature, "0x" <> Base.encode16(signature, case: :lower))
+          Map.put(
+            credential,
+            :signature,
+            "0x" <> Base.encode16(signature, case: :lower)
+          )
 
         encoded = Base.encode64(Jason.encode!(signed_credential))
         {:ok, [{"authorization", "Payment " <> encoded}]}
@@ -119,6 +124,11 @@ defmodule Raxol.Payments.Protocols.MPP do
 
   @impl true
   @spec amount(map()) :: Decimal.t()
+  # MPP's server-side unit convention is ambiguous (Stripe uses cents,
+  # other implementations vary). For now we passthrough what the server
+  # sends and trust callers to write `SpendingPolicy` caps in the same
+  # convention as the targeted MPP server. Revisit with `Assets.to_human`
+  # once we integrate a concrete MPP service.
   def amount(challenge) do
     challenge.amount
     |> to_string()
@@ -140,13 +150,21 @@ defmodule Raxol.Payments.Protocols.MPP do
     end
   end
 
-  defp validate_positive_amount(amount) when is_integer(amount) and amount > 0, do: :ok
-  defp validate_positive_amount(amount) when is_float(amount) and amount > 0, do: :ok
+  defp validate_positive_amount(amount) when is_integer(amount) and amount > 0,
+    do: :ok
+
+  defp validate_positive_amount(amount) when is_float(amount) and amount > 0,
+    do: :ok
 
   defp validate_positive_amount(amount) when is_binary(amount) do
     case Decimal.parse(amount) do
-      {dec, ""} -> if Decimal.positive?(dec), do: :ok, else: {:error, {:invalid_amount, amount}}
-      _ -> {:error, {:invalid_amount, amount}}
+      {dec, ""} ->
+        if Decimal.positive?(dec),
+          do: :ok,
+          else: {:error, {:invalid_amount, amount}}
+
+      _ ->
+        {:error, {:invalid_amount, amount}}
     end
   rescue
     Decimal.Error -> {:error, {:invalid_amount, amount}}
