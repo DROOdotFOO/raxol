@@ -78,13 +78,13 @@ defmodule Raxol.Watch.Push.APNS do
       }
       |> maybe_put_sound(high?)
 
-    %Pigeon.APNS.Notification{
+    struct(Pigeon.APNS.Notification,
       device_token: device_token,
       topic: topic,
       priority: if(high?, do: 10, else: 5),
       push_type: "alert",
       payload: %{"aps" => aps}
-    }
+    )
   end
 
   defp maybe_put_sound(aps, true), do: Map.put(aps, "sound", "default")

@@ -55,7 +55,7 @@ defmodule Raxol.Watch.Push.FCM do
       |> Map.get(:actions, [])
       |> Enum.map(fn %{id: id, label: label} -> %{"id" => id, "label" => label} end)
 
-    %Pigeon.FCM.Notification{
+    struct(Pigeon.FCM.Notification,
       target: {:token, device_token},
       notification: %{"title" => title, "body" => body},
       android: %{
@@ -68,6 +68,6 @@ defmodule Raxol.Watch.Push.FCM do
         "category" => Map.get(notif, :category, "raxol_alert"),
         "actions" => Jason.encode!(actions)
       }
-    }
+    )
   end
 end
