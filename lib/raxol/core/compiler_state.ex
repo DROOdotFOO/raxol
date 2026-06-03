@@ -1,223 +1,84 @@
 defmodule Raxol.Core.CompilerState do
   @moduledoc """
-  Thread-safe ETS table management for parallel compilation.
+  Thread-safe ETS table management for Raxol's plugin command registry.
 
-  Fixes race conditions causing: "table identifier does not refer to an existing ETS table"
-  during parallel compilation processes accessing shared ETS tables.
-
-  REFACTORED: All try/rescue blocks replaced with functional patterns.
+  Atomic ETS operations are guarded with `try/rescue ArgumentError` to cover
+  the race window where another process deletes the table between the
+  existence check and the operation. ETS lookup/insert/delete are atomic and
+  microsecond-scale; no process isolation is needed.
   """
+
+  @default_opts [:named_table, :public, :set, {:read_concurrency, true}]
 
   @doc """
-  Ensure ETS table exists with safe concurrency.
+  Ensures an ETS table exists, creating it if missing.
 
-  This function handles race conditions where multiple processes might try to create
-  the same ETS table simultaneously during parallel compilation.
+  Idempotent. Returns `:ok` if the table already exists or was created.
   """
-  def ensure_table(
-        name,
-        opts \\ [:named_table, :public, :set, {:read_concurrency, true}]
-      ) do
+  @spec ensure_table(atom() | :ets.tid(), list()) ::
+          :ok | {:error, term()}
+  def ensure_table(name, opts \\ @default_opts) do
     case :ets.info(name) do
-      :undefined ->
-        # Use a functional approach with safe_create_table
-        safe_create_table(name, opts)
-
-      _ ->
-        # Table already exists
-        :ok
+      :undefined -> create_table(name, opts)
+      _ -> :ok
     end
   end
 
   @doc """
-  Safe ETS lookup with existence check.
-
-  Performs ETS lookup operations with proper error handling for cases where
-  the table might have been deleted by another process.
+  Safe ETS lookup. Returns `{:ok, rows}` or `{:error, :table_not_found}`.
   """
+  @spec safe_lookup(atom() | :ets.tid(), term()) ::
+          {:ok, list()} | {:error, :table_not_found}
   def safe_lookup(table, key) do
-    with {:exists, true} <- {:exists, table_exists?(table)},
-         {:ok, result} <- perform_safe_lookup(table, key) do
-      {:ok, result}
-    else
-      {:exists, false} -> {:error, :table_not_found}
-      {:error, reason} -> {:error, reason}
-    end
+    {:ok, :ets.lookup(table, key)}
+  rescue
+    ArgumentError -> {:error, :table_not_found}
   end
 
   @doc """
-  Safe ETS insert with existence check.
-
-  Performs ETS insert operations with proper error handling for cases where
-  the table might have been deleted by another process.
+  Safe ETS insert. Returns `:ok` or `{:error, :table_not_found}`.
   """
+  @spec safe_insert(atom() | :ets.tid(), tuple() | [tuple()]) ::
+          :ok | {:error, :table_not_found}
   def safe_insert(table, data) do
-    with {:exists, true} <- {:exists, table_exists?(table)},
-         :ok <- perform_safe_insert(table, data) do
-      :ok
-    else
-      {:exists, false} -> {:error, :table_not_found}
-      {:error, reason} -> {:error, reason}
-    end
+    _ = :ets.insert(table, data)
+    :ok
+  rescue
+    ArgumentError -> {:error, :table_not_found}
   end
 
   @doc """
-  Safe ETS delete with existence check.
-
-  Performs ETS delete operations with proper error handling for cases where
-  the table might have been deleted by another process.
+  Safe ETS delete by key. Returns `:ok` or `{:error, :table_not_found}`.
   """
+  @spec safe_delete(atom() | :ets.tid(), term()) ::
+          :ok | {:error, :table_not_found}
   def safe_delete(table, key) do
-    with {:exists, true} <- {:exists, table_exists?(table)},
-         :ok <- perform_safe_delete(table, key) do
-      :ok
-    else
-      {:exists, false} -> {:error, :table_not_found}
-      {:error, reason} -> {:error, reason}
-    end
+    _ = :ets.delete(table, key)
+    :ok
+  rescue
+    ArgumentError -> {:error, :table_not_found}
   end
 
   @doc """
-  Safe ETS table deletion with existence check.
-
-  Deletes an entire ETS table with proper error handling.
+  Safe ETS table deletion. Returns `:ok` or `{:error, :table_not_found}`.
   """
+  @spec safe_delete_table(atom() | :ets.tid()) ::
+          :ok | {:error, :table_not_found}
   def safe_delete_table(table) do
-    with {:exists, true} <- {:exists, table_exists?(table)},
-         :ok <- perform_safe_delete_table(table) do
-      :ok
-    else
-      {:exists, false} -> {:error, :table_not_found}
-      {:error, reason} -> {:error, reason}
-    end
+    _ = :ets.delete(table)
+    :ok
+  rescue
+    ArgumentError -> {:error, :table_not_found}
   end
 
-  # Private helper functions
-
-  defp table_exists?(table) do
-    :ets.info(table) != :undefined
-  end
-
-  defp safe_create_table(name, opts) do
-    # Use Task to isolate potential crashes and handle race conditions
-    task =
-      Task.async(fn ->
-        _ = :ets.new(name, opts)
-        :ok
-      end)
-
-    task
-    |> Task.yield(100)
-    |> Kernel.||(Task.shutdown(task, :brutal_kill))
-    |> handle_create_result(name)
-  end
-
-  defp handle_create_result({:ok, :ok}, _name), do: :ok
-
-  defp handle_create_result(nil, name),
-    do: fallback_check(name, :creation_timeout)
-
-  defp handle_create_result({:exit, {:badarg, _}}, name),
-    do: fallback_check(name, :creation_failed)
-
-  defp handle_create_result({:exit, reason}, name),
-    do: fallback_check(name, {:creation_error, reason})
-
-  defp fallback_check(name, error_reason) do
-    if table_exists?(name), do: :ok, else: {:error, error_reason}
-  end
-
-  @spec perform_safe_lookup(atom() | :ets.tid(), term()) ::
-          {:ok, list()} | {:error, term()}
-  defp perform_safe_lookup(table, key) do
-    # Use Task to isolate potential ETS crashes
-    task =
-      Task.async(fn ->
-        :ets.lookup(table, key)
-      end)
-
-    case Task.yield(task, 100) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} ->
-        {:ok, result}
-
-      nil ->
-        {:error, :lookup_timeout}
-
-      {:exit, {:badarg, _}} ->
-        # Table was deleted during operation
-        {:error, :table_not_found}
-
-      {:exit, reason} ->
-        {:error, {:lookup_error, reason}}
-    end
-  end
-
-  defp perform_safe_insert(table, data) do
-    # Use Task to isolate potential ETS crashes
-    task =
-      Task.async(fn ->
-        :ets.insert(table, data)
-      end)
-
-    case Task.yield(task, 100) || Task.shutdown(task, :brutal_kill) do
-      {:ok, true} ->
-        :ok
-
-      nil ->
-        {:error, :insert_timeout}
-
-      {:exit, {:badarg, _}} ->
-        # Table was deleted during operation
-        {:error, :table_not_found}
-
-      {:exit, reason} ->
-        {:error, {:insert_error, reason}}
-    end
-  end
-
-  defp perform_safe_delete(table, key) do
-    # Use Task to isolate potential ETS crashes
-    task =
-      Task.async(fn ->
-        :ets.delete(table, key)
-      end)
-
-    case Task.yield(task, 100) || Task.shutdown(task, :brutal_kill) do
-      {:ok, true} ->
-        :ok
-
-      nil ->
-        {:error, :delete_timeout}
-
-      {:exit, {:badarg, _}} ->
-        # Table was deleted during operation
-        {:error, :table_not_found}
-
-      {:exit, reason} ->
-        {:error, {:delete_error, reason}}
-    end
-  end
-
-  defp perform_safe_delete_table(table) do
-    # Use Task to isolate potential ETS crashes
-    task =
-      Task.async(fn ->
-        :ets.delete(table)
-      end)
-
-    case Task.yield(task, 100) || Task.shutdown(task, :brutal_kill) do
-      {:ok, true} ->
-        :ok
-
-      nil ->
-        {:error, :delete_table_timeout}
-
-      {:exit, {:badarg, _}} ->
-        # Table already deleted
-        {:error, :table_not_found}
-
-      {:exit, reason} ->
-        {:error, {:delete_table_error, reason}}
-    end
+  defp create_table(name, opts) do
+    _ = :ets.new(name, opts)
+    :ok
+  rescue
+    ArgumentError ->
+      # Another process created the table between our check and ours
+      if :ets.info(name) != :undefined,
+        do: :ok,
+        else: {:error, :creation_failed}
   end
 end
