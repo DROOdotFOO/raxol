@@ -45,6 +45,47 @@ defmodule Raxol.Payments.ConfirmTest do
     end
   end
 
+  describe "terminal/1 timeout" do
+    test "denies after timeout_ms when no input arrives" do
+      # A real device that simply never delivers a line. We use a Port that
+      # opens a process which sleeps -- it stays alive but never writes.
+      hanging_pid =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      Process.unlink(hanging_pid)
+
+      cb = Confirm.terminal(device: hanging_pid, timeout_ms: 50)
+
+      started = System.monotonic_time(:millisecond)
+      decision = cb.(Decimal.new("10"), "api.example.com")
+      elapsed = System.monotonic_time(:millisecond) - started
+
+      assert decision == :deny
+      assert elapsed >= 50
+      assert elapsed < 1000, "timeout took #{elapsed}ms, should be near 50"
+
+      send(hanging_pid, :stop)
+    end
+
+    test "still approves promptly when input arrives well under timeout" do
+      {:ok, io} = StringIO.open("y\n")
+      cb = Confirm.terminal(device: io, timeout_ms: 5_000)
+      assert cb.(Decimal.new("10"), "api.example.com") == :approve
+      StringIO.close(io)
+    end
+
+    test "timeout: :infinity keeps the old wait-forever behavior" do
+      {:ok, io} = StringIO.open("y\n")
+      cb = Confirm.terminal(device: io, timeout_ms: :infinity)
+      assert cb.(Decimal.new("10"), "api.example.com") == :approve
+      StringIO.close(io)
+    end
+  end
+
   defp run_terminal(input) do
     {:ok, io} = StringIO.open(input)
     cb = Confirm.terminal(device: io)

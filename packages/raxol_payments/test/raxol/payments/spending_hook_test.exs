@@ -5,7 +5,9 @@ defmodule Raxol.Payments.SpendingHookTest do
   alias Raxol.Core.Runtime.Command
 
   setup do
-    {:ok, ledger} = Ledger.start_link(table_name: :"hook_ledger_#{:erlang.unique_integer()}")
+    {:ok, ledger} =
+      Ledger.start_link(table_name: :"hook_ledger_#{:erlang.unique_integer()}")
+
     policy = SpendingPolicy.dev()
 
     SpendingHook.set_config(%{
@@ -19,12 +21,16 @@ defmodule Raxol.Payments.SpendingHookTest do
   describe "pre_execute/2" do
     test "allows non-payment commands" do
       command = %Command{type: :none, data: nil}
-      assert {:ok, ^command} = SpendingHook.pre_execute(command, %{agent_id: :test})
+
+      assert {:ok, ^command} =
+               SpendingHook.pre_execute(command, %{agent_id: :test})
     end
 
     test "allows async commands without payment data" do
       command = %Command{type: :async, data: fn _ -> :ok end}
-      assert {:ok, ^command} = SpendingHook.pre_execute(command, %{agent_id: :test})
+
+      assert {:ok, ^command} =
+               SpendingHook.pre_execute(command, %{agent_id: :test})
     end
 
     test "denies commands with unapproved domain" do
@@ -44,10 +50,92 @@ defmodule Raxol.Payments.SpendingHookTest do
     test "denies commands over per-request budget" do
       command = %Command{
         type: :async,
-        data: %{__payment__: %{amount: Decimal.new("999.00"), domain: "api.test.com"}}
+        data: %{
+          __payment__: %{amount: Decimal.new("999.00"), domain: "api.test.com"}
+        }
       }
 
       assert {:deny, {:over_budget, :per_request, _}} =
+               SpendingHook.pre_execute(command, %{agent_id: :test})
+    end
+
+    test "denies above confirmation threshold when no on_confirm is set" do
+      config = SpendingHook.get_config()
+
+      policy = %{
+        config.policy
+        | per_request_max: Decimal.new("1000"),
+          session_max: Decimal.new("1000"),
+          lifetime_max: Decimal.new("1000"),
+          require_confirmation_above: Decimal.new("5")
+      }
+
+      SpendingHook.set_config(%{config | policy: policy})
+
+      command = %Command{
+        type: :async,
+        data: %{
+          __payment__: %{amount: Decimal.new("10.00"), domain: "api.test.com"}
+        }
+      }
+
+      assert {:deny, {:requires_confirmation, _amount, "api.test.com"}} =
+               SpendingHook.pre_execute(command, %{agent_id: :test})
+    end
+
+    test "allows above threshold when on_confirm approves" do
+      config = SpendingHook.get_config()
+
+      policy = %{
+        config.policy
+        | per_request_max: Decimal.new("1000"),
+          session_max: Decimal.new("1000"),
+          lifetime_max: Decimal.new("1000"),
+          require_confirmation_above: Decimal.new("5")
+      }
+
+      SpendingHook.set_config(
+        config
+        |> Map.put(:policy, policy)
+        |> Map.put(:on_confirm, fn _amount, _domain -> :approve end)
+      )
+
+      command = %Command{
+        type: :async,
+        data: %{
+          __payment__: %{amount: Decimal.new("10.00"), domain: "api.test.com"}
+        }
+      }
+
+      assert {:ok, ^command} =
+               SpendingHook.pre_execute(command, %{agent_id: :test})
+    end
+
+    test "denies above threshold when on_confirm denies" do
+      config = SpendingHook.get_config()
+
+      policy = %{
+        config.policy
+        | per_request_max: Decimal.new("1000"),
+          session_max: Decimal.new("1000"),
+          lifetime_max: Decimal.new("1000"),
+          require_confirmation_above: Decimal.new("5")
+      }
+
+      SpendingHook.set_config(
+        config
+        |> Map.put(:policy, policy)
+        |> Map.put(:on_confirm, fn _amount, _domain -> :deny end)
+      )
+
+      command = %Command{
+        type: :async,
+        data: %{
+          __payment__: %{amount: Decimal.new("10.00"), domain: "api.test.com"}
+        }
+      }
+
+      assert {:deny, {:requires_confirmation, _, _}} =
                SpendingHook.pre_execute(command, %{agent_id: :test})
     end
   end
@@ -65,7 +153,9 @@ defmodule Raxol.Payments.SpendingHookTest do
         }
       }
 
-      assert {:ok, :result} = SpendingHook.post_execute(command, :result, %{agent_id: :test})
+      assert {:ok, :result} =
+               SpendingHook.post_execute(command, :result, %{agent_id: :test})
+
       :timer.sleep(10)
 
       entries = Ledger.get_history(ledger, :test)

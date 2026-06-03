@@ -40,11 +40,18 @@ defmodule Raxol.Payments.Confirm do
   Treats anything starting with `y` (case-insensitive) as `:approve`,
   everything else (including an empty answer or EOF) as `:deny`.
 
-  Optional `:device` selects an IO device other than `:stdio`.
+  ## Options
+
+  - `:device` -- IO device, default `:stdio`.
+  - `:timeout_ms` -- max time to wait for an answer, default `60_000`.
+    On timeout the callback denies. Pass `:infinity` to wait forever
+    (the old behavior); only safe when you know there's a real human
+    on a real TTY.
   """
   @spec terminal(keyword()) :: callback()
   def terminal(opts \\ []) do
     device = Keyword.get(opts, :device, :stdio)
+    timeout = Keyword.get(opts, :timeout_ms, 60_000)
 
     fn amount, domain ->
       prompt =
@@ -63,8 +70,21 @@ defmodule Raxol.Payments.Confirm do
           "? [y/N] "
         ])
 
-      answer = IO.gets(device, prompt)
-      classify(answer)
+      read_with_timeout(device, prompt, timeout)
+    end
+  end
+
+  defp read_with_timeout(device, prompt, :infinity) do
+    IO.gets(device, prompt) |> classify()
+  end
+
+  defp read_with_timeout(device, prompt, timeout_ms)
+       when is_integer(timeout_ms) do
+    task = Task.async(fn -> IO.gets(device, prompt) end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, answer} -> classify(answer)
+      _ -> :deny
     end
   end
 
