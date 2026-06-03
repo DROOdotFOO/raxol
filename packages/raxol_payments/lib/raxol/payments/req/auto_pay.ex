@@ -88,6 +88,8 @@ defmodule Raxol.Payments.Req.AutoPay do
     end
   end
 
+  defp handle_response(req_response, _opts), do: req_response
+
   defp handle_failure({:error, :no_matching_protocol}, request, response),
     do: {request, response}
 
@@ -129,8 +131,6 @@ defmodule Raxol.Payments.Req.AutoPay do
     body = %{error: :payment_failed, reason: sanitize_error(reason)}
     {request, %{response | body: body}}
   end
-
-  defp handle_response(req_response, _opts), do: req_response
 
   @spec detect_and_parse([atom()], Raxol.Payments.Headers.headers()) ::
           {:ok, module(), map()} | {:error, :no_matching_protocol}

@@ -93,6 +93,67 @@ defmodule Raxol.Payments.Ledger do
     GenServer.call(server, {:totals, agent_id, policy})
   end
 
+  @doc """
+  Subscribe the calling process to new ledger entries.
+
+  Every successful `try_spend` or `record_spend` sends `{:ledger_entry, entry}`
+  to the subscriber. The subscription is monitored, so the Ledger cleans up
+  when the subscriber dies.
+
+  Optional `:agent_id` filters to entries for one agent.
+  """
+  @spec subscribe(GenServer.server(), keyword()) :: :ok
+  def subscribe(server, opts \\ []) do
+    GenServer.call(server, {:subscribe, self(), Keyword.get(opts, :agent_id)})
+  end
+
+  @doc """
+  Spawn a printer that prints every ledger entry to `:stdio` (or another device).
+
+  Returns the watcher pid. `Process.exit(pid, :kill)` to stop, or let the
+  Ledger's death take it down via the monitor.
+
+      iex> {:ok, ledger} = Raxol.Payments.Ledger.start_link()
+      iex> Raxol.Payments.Ledger.tail(ledger)
+  """
+  @spec tail(GenServer.server(), keyword()) :: pid()
+  def tail(server, opts \\ []) do
+    parent = self()
+    agent_filter = Keyword.get(opts, :agent_id)
+    device = Keyword.get(opts, :device, :stdio)
+
+    spawn_link(fn ->
+      :ok = subscribe(server, agent_id: agent_filter)
+      send(parent, {:ledger_tail_ready, self()})
+      tail_loop(device)
+    end)
+  end
+
+  defp tail_loop(device) do
+    receive do
+      {:ledger_entry, entry} ->
+        line =
+          IO.ANSI.format([
+            :cyan,
+            "[ledger] ",
+            :reset,
+            inspect(entry.agent_id),
+            " ",
+            :bright,
+            Decimal.to_string(entry.amount),
+            " ",
+            entry.currency,
+            :reset,
+            " ",
+            inspect(Map.take(entry.metadata, [:protocol, :domain, :to])),
+            "\n"
+          ])
+
+        IO.write(device, line)
+        tail_loop(device)
+    end
+  end
+
   # -- BaseManager callbacks --
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -106,20 +167,14 @@ defmodule Raxol.Payments.Ledger do
         read_concurrency: true
       ])
 
-    {:ok, %{table: table}}
+    {:ok, %{table: table, subscribers: %{}}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:record, agent_id, amount, metadata}, state) do
-    entry = %{
-      agent_id: agent_id,
-      amount: amount,
-      currency: Map.get(metadata, :currency, "USDC"),
-      timestamp_ms: System.system_time(:millisecond),
-      metadata: metadata
-    }
-
+    entry = build_entry(agent_id, amount, metadata)
     :ets.insert(state.table, {agent_id, entry})
+    notify_subscribers(state.subscribers, entry)
     {:noreply, state}
   end
 
@@ -132,20 +187,20 @@ defmodule Raxol.Payments.Ledger do
   def handle_manager_call({:try_spend, agent_id, amount, policy, metadata}, _from, state) do
     case do_check_budget(state.table, agent_id, amount, policy) do
       :ok ->
-        entry = %{
-          agent_id: agent_id,
-          amount: amount,
-          currency: Map.get(metadata, :currency, "USDC"),
-          timestamp_ms: System.system_time(:millisecond),
-          metadata: metadata
-        }
-
+        entry = build_entry(agent_id, amount, metadata)
         :ets.insert(state.table, {agent_id, entry})
+        notify_subscribers(state.subscribers, entry)
         {:reply, :ok, state}
 
       {:over_limit, _} = over ->
         {:reply, over, state}
     end
+  end
+
+  def handle_manager_call({:subscribe, pid, agent_filter}, _from, state) do
+    ref = Process.monitor(pid)
+    subscribers = Map.put(state.subscribers, ref, {pid, agent_filter})
+    {:reply, :ok, %{state | subscribers: subscribers}}
   end
 
   def handle_manager_call({:history, agent_id, opts}, _from, state) do
@@ -173,7 +228,33 @@ defmodule Raxol.Payments.Ledger do
     {:reply, %{session: session_total, lifetime: lifetime_total}, state}
   end
 
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    {:noreply, %{state | subscribers: Map.delete(state.subscribers, ref)}}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
   # -- Private --
+
+  defp build_entry(agent_id, amount, metadata) do
+    %{
+      agent_id: agent_id,
+      amount: amount,
+      currency: Map.get(metadata, :currency, "USDC"),
+      timestamp_ms: System.system_time(:millisecond),
+      metadata: metadata
+    }
+  end
+
+  defp notify_subscribers(subscribers, entry) do
+    Enum.each(subscribers, fn
+      {_ref, {pid, nil}} -> send(pid, {:ledger_entry, entry})
+      {_ref, {pid, agent_id}} when agent_id == entry.agent_id ->
+        send(pid, {:ledger_entry, entry})
+      _ -> :ok
+    end)
+  end
 
   defp do_check_budget(table, agent_id, amount, policy) do
     with :ok <- check_per_request(amount, policy),
