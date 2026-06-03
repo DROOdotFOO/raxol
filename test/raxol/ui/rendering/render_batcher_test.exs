@@ -659,4 +659,47 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
       assert final_stats.updates_batched == 6
     end
   end
+
+  describe "backpressure telemetry (ADR-0013)" do
+    setup do
+      batcher_name = :"bp_batcher_#{System.unique_integer([:positive])}"
+
+      {:ok, pid} =
+        RenderBatcher.start_link(name: batcher_name, frame_interval_ms: 100)
+
+      handler_id = "rb_bp_#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:raxol, :runtime, :backpressure],
+        fn _name, measurements, metadata, _ ->
+          send(test_pid, {:bp_telemetry, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn ->
+        :telemetry.detach(handler_id)
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      end)
+
+      {:ok, %{batcher: batcher_name}}
+    end
+
+    test "submit_update emits backpressure telemetry with the batcher label",
+         %{batcher: batcher} do
+      tree = %{type: :container}
+      diff = {:update, [], %{type: :content}}
+
+      assert :ok = RenderBatcher.submit_update(tree, diff, :medium, batcher)
+
+      assert_receive {:bp_telemetry, %{queue_len: _},
+                      %{
+                        label: :render_batcher_submit,
+                        policy: :drop_when_full,
+                        decision: :cast
+                      }}
+    end
+  end
 end

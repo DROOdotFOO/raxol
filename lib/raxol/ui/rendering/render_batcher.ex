@@ -11,6 +11,7 @@ defmodule Raxol.UI.Rendering.RenderBatcher do
   """
 
   use Raxol.Core.Behaviours.BaseManager
+  alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Core.Runtime.Log
 
   alias Raxol.UI.Rendering.DamageTracker
@@ -40,6 +41,13 @@ defmodule Raxol.UI.Rendering.RenderBatcher do
   @doc """
   Submits a render update to the batcher.
   Updates are accumulated until the next frame flush.
+
+  Adopts ADR-0013 `:drop_when_full` backpressure: when the batcher's
+  mailbox exceeds the watermark, the update is dropped and the next
+  non-dropped update's diff naturally subsumes it. Drops surface via
+  `[:raxol, :runtime, :backpressure]` telemetry with
+  `label: :render_batcher_submit`. The return value remains `:ok`
+  regardless of the delivery decision.
   """
   @spec submit_update(
           tree :: map(),
@@ -53,11 +61,16 @@ defmodule Raxol.UI.Rendering.RenderBatcher do
         priority \\ :medium,
         batcher \\ __MODULE__
       ) do
-    GenServer.cast(
-      batcher,
-      {:submit_update, tree, diff_result, priority,
-       System.monotonic_time(:millisecond)}
-    )
+    _ =
+      Backpressure.cast(
+        batcher,
+        {:submit_update, tree, diff_result, priority,
+         System.monotonic_time(:millisecond)},
+        label: :render_batcher_submit,
+        policy: :drop_when_full
+      )
+
+    :ok
   end
 
   @doc """
