@@ -308,61 +308,46 @@ defmodule Raxol.Terminal.Session do
     }
   end
 
-  # Safe execution functions using Task
+  # Safe execution helpers
 
   defp safe_get_screen_buffer(emulator, width, height) do
-    task =
-      Task.async(fn ->
-        # Access main buffer directly since we know new emulators default to main buffer
-        emulator.main_screen_buffer
-      end)
-
-    case Task.yield(task, 100) || Task.shutdown(task, :brutal_kill) do
-      {:ok, buffer} when not is_nil(buffer) ->
-        buffer
-
-      _ ->
-        ScreenBuffer.new(width, height)
-    end
+    emulator.main_screen_buffer || ScreenBuffer.new(width, height)
   end
 
   defp safe_register_session(id, state) do
-    task =
-      Task.async(fn ->
-        Raxol.Core.GlobalRegistry.register(:sessions, id, state)
-      end)
+    Raxol.Core.GlobalRegistry.register(:sessions, id, state)
+    :ok
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.error(
+        "Failed to register session #{id}: #{Exception.message(error)}"
+      )
 
-    case Task.yield(task, 100) || Task.shutdown(task, :brutal_kill) do
-      {:ok, _} ->
-        :ok
+      :ok
+  catch
+    :exit, reason ->
+      Raxol.Core.Runtime.Log.error(
+        "Failed to register session #{id}: #{inspect(reason)}"
+      )
 
-      _ ->
-        Raxol.Core.Runtime.Log.error("Failed to register session: timeout or error")
-
-        :ok
-    end
+      :ok
   end
 
   defp safe_process_input(state, input) do
-    task =
-      Task.async(fn ->
-        case EmulatorStruct.process_input(state.emulator, input) do
-          {new_emulator, _output}
-          when is_struct(new_emulator, EmulatorStruct) ->
-            %{state | emulator: new_emulator}
-
-          _ ->
-            state
-        end
-      end)
-
-    case Task.yield(task, 1000) || Task.shutdown(task, :brutal_kill) do
-      {:ok, new_state} ->
-        new_state
+    case EmulatorStruct.process_input(state.emulator, input) do
+      {new_emulator, _output} when is_struct(new_emulator, EmulatorStruct) ->
+        %{state | emulator: new_emulator}
 
       _ ->
         state
     end
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.error(
+        "Failed to process input for session #{state.id}: #{Exception.message(error)}"
+      )
+
+      state
   end
 
   defp safe_save_session_async(state) do
