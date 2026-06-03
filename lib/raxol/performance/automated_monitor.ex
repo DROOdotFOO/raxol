@@ -322,7 +322,14 @@ defmodule Raxol.Performance.AutomatedMonitor do
 
   defp collect_baseline_metrics do
     # Initialize ETS table for telemetry storage if needed
-    _ = :ets.new(:performance_telemetry, [:named_table, :public, :bag])
+    _ =
+      :ets.new(:performance_telemetry, [
+        :named_table,
+        :public,
+        :bag,
+        write_concurrency: true,
+        read_concurrency: true
+      ])
 
     # Give system time to collect some data
     :timer.sleep(5000)

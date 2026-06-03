@@ -43,7 +43,7 @@ defmodule Raxol.Core.Performance do
     # Create ETS table if it doesn't exist
     _ =
       if :ets.whereis(@table) == :undefined do
-        :ets.new(@table, [:named_table, :public, :set])
+        :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
       end
 
     :ets.insert(@table, {:start_time, System.monotonic_time(:millisecond)})

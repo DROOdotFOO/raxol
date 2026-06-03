@@ -42,7 +42,13 @@ defmodule Raxol.Terminal.Registry do
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
     # Use ETS table for efficient lookups
-    table = :ets.new(:terminal_registry, [:named_table, :public, :set])
+    table =
+      :ets.new(:terminal_registry, [
+        :named_table,
+        :public,
+        :set,
+        read_concurrency: true
+      ])
     {:ok, %{table: table, name: Keyword.get(opts, :name, __MODULE__)}}
   end
 
