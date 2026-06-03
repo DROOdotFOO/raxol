@@ -41,15 +41,25 @@ defmodule Raxol.Config.Loader do
 
   @doc """
   Loads configuration from environment variables with a prefix.
+
+  Env vars whose key segments do not exist as atoms in the schema are
+  skipped with a debug log (prevents `String.to_atom` atom-table leak
+  from arbitrary OS env input).
   """
   def load_environment(prefix \\ "RAXOL_") do
+    ensure_schema_atoms_loaded()
+
     env_vars =
       System.get_env()
       |> Enum.filter(fn {key, _} -> String.starts_with?(key, prefix) end)
-      |> Enum.map(fn {key, value} ->
-        parsed_key = parse_env_key(key, prefix)
-        parsed_value = parse_env_value(value)
-        {parsed_key, parsed_value}
+      |> Enum.flat_map(fn {key, value} ->
+        case parse_env_key(key, prefix) do
+          nil ->
+            []
+
+          parsed_key ->
+            [{parsed_key, parse_env_value(value)}]
+        end
       end)
 
     config = build_nested_config(env_vars)
@@ -299,9 +309,14 @@ defmodule Raxol.Config.Loader do
   defp normalize_config(_), do: {:error, :invalid_config_format}
 
   defp atomize_keys(map) when is_map(map) do
-    Map.new(map, fn {key, value} ->
-      {atomize_key(key), atomize_keys(value)}
+    map
+    |> Enum.flat_map(fn {key, value} ->
+      case atomize_key(key) do
+        nil -> []
+        atom_key -> [{atom_key, atomize_keys(value)}]
+      end
     end)
+    |> Map.new()
   end
 
   defp atomize_keys(list) when is_list(list),
@@ -309,7 +324,17 @@ defmodule Raxol.Config.Loader do
 
   defp atomize_keys(value), do: value
 
-  defp atomize_key(key) when is_binary(key), do: String.to_atom(key)
+  defp atomize_key(key) when is_binary(key) do
+    case safe_to_existing_atom(key) do
+      nil ->
+        Log.debug("[Loader] Skipping unknown config key: #{inspect(key)}")
+        nil
+
+      atom ->
+        atom
+    end
+  end
+
   defp atomize_key(key), do: key
 
   defp normalize_values(map) when is_map(map) do
@@ -370,11 +395,38 @@ defmodule Raxol.Config.Loader do
   end
 
   defp parse_env_key(key, prefix) do
-    key
-    |> String.replace_prefix(prefix, "")
-    |> String.downcase()
-    |> String.split("__")
-    |> Enum.map(&String.to_atom/1)
+    atoms =
+      key
+      |> String.replace_prefix(prefix, "")
+      |> String.downcase()
+      |> String.split("__")
+      |> Enum.map(&safe_to_existing_atom/1)
+
+    if Enum.any?(atoms, &is_nil/1) do
+      Log.debug(
+        "[Loader] Skipping env var with unknown schema key: #{inspect(key)}"
+      )
+
+      nil
+    else
+      atoms
+    end
+  end
+
+  # Returns the matching atom or nil. Forces the Schema modules to load
+  # first so every literal atom in the schema source is interned in the
+  # global atom table before `to_existing_atom` checks against it.
+  defp safe_to_existing_atom(key) when is_binary(key) do
+    ensure_schema_atoms_loaded()
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp ensure_schema_atoms_loaded do
+    _ = Code.ensure_loaded?(Raxol.Config.Schema)
+    _ = Code.ensure_loaded?(Raxol.Config.Schema.Definitions)
+    :ok
   end
 
   defp parse_env_value(value) do

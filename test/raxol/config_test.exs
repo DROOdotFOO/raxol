@@ -35,6 +35,36 @@ defmodule Raxol.ConfigTest do
       parsed_path = parse_env_key(key, "RAXOL_")
       assert parsed_path == expected_path
     end
+
+    test "load_environment skips env vars with keys not in the schema" do
+      # Pick an env var name unlikely to exist anywhere else and that
+      # contains a segment that is definitely NOT a schema atom.
+      attacker_segment =
+        "raxol_loader_test_unknown_#{System.unique_integer([:positive])}"
+
+      env_var = "RAXOL_" <> String.upcase(attacker_segment)
+      System.put_env(env_var, "value")
+
+      on_exit(fn -> System.delete_env(env_var) end)
+
+      # Verify the attacker segment is NOT already a known atom before
+      # the loader runs. If it is, the test prereq is invalid.
+      refute_existing_atom(attacker_segment)
+
+      assert {:ok, config} = Loader.load_environment("RAXOL_")
+
+      # Config should not contain a key built from the unknown segment.
+      refute_existing_atom(attacker_segment)
+      assert config == %{} or not Map.has_key?(config, :unknown_segment)
+    end
+
+    test "load_environment includes env vars with known schema keys" do
+      System.put_env("RAXOL_TERMINAL__WIDTH", "120")
+      on_exit(fn -> System.delete_env("RAXOL_TERMINAL__WIDTH") end)
+
+      assert {:ok, config} = Loader.load_environment("RAXOL_")
+      assert get_in(config, [:terminal, :width]) == 120
+    end
   end
 
   describe "configuration schema" do
@@ -196,5 +226,16 @@ defmodule Raxol.ConfigTest do
     |> String.downcase()
     |> String.split("__")
     |> Enum.map(&String.to_atom/1)
+  end
+
+  # Asserts a binary is NOT an existing atom in the VM atom table.
+  # If the binary is already interned, the test prerequisite is invalid
+  # and the assertion is removed from this test's contract -- without
+  # this guard the loader could "pass" by accident.
+  defp refute_existing_atom(binary) do
+    _ = String.to_existing_atom(binary)
+    flunk("Expected #{inspect(binary)} to not be an existing atom")
+  rescue
+    ArgumentError -> :ok
   end
 end
