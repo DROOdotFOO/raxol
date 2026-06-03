@@ -182,7 +182,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hd", cursor_pos: 1})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, "ello worl", []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, "ello worl", []},
+          state,
+          default_context()
+        )
 
       assert new_state.value == "hello world"
       assert new_state.cursor_pos == 10
@@ -194,7 +198,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", cursor_pos: 3})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :backspace, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :backspace, []},
+          state,
+          default_context()
+        )
 
       assert new_state.value == "helo"
       assert new_state.cursor_pos == 2
@@ -204,7 +212,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", cursor_pos: 0})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :backspace, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :backspace, []},
+          state,
+          default_context()
+        )
 
       assert new_state.value == "hello"
       assert new_state.cursor_pos == 0
@@ -214,7 +226,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", cursor_pos: 5})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :backspace, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :backspace, []},
+          state,
+          default_context()
+        )
 
       assert new_state.value == "hell"
       assert new_state.cursor_pos == 4
@@ -224,7 +240,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "x", cursor_pos: 1})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :backspace, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :backspace, []},
+          state,
+          default_context()
+        )
 
       assert new_state.value == ""
       assert new_state.cursor_pos == 0
@@ -236,7 +256,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", cursor_pos: 1})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :delete, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :delete, []},
+          state,
+          default_context()
+        )
 
       assert new_state.value == "hllo"
       assert new_state.cursor_pos == 1
@@ -246,7 +270,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", cursor_pos: 5})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :delete, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :delete, []},
+          state,
+          default_context()
+        )
 
       assert new_state.value == "hello"
       assert new_state.cursor_pos == 5
@@ -256,7 +284,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", cursor_pos: 0})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :delete, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :delete, []},
+          state,
+          default_context()
+        )
 
       assert new_state.value == "ello"
       assert new_state.cursor_pos == 0
@@ -266,7 +298,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "x", cursor_pos: 0})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :delete, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :delete, []},
+          state,
+          default_context()
+        )
 
       assert new_state.value == ""
       assert new_state.cursor_pos == 0
@@ -278,7 +314,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", cursor_pos: 3})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :arrow_left, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :arrow_left, []},
+          state,
+          default_context()
+        )
 
       assert new_state.cursor_pos == 2
       assert new_state.value == "hello"
@@ -288,7 +328,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", cursor_pos: 0})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :arrow_left, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :arrow_left, []},
+          state,
+          default_context()
+        )
 
       assert new_state.cursor_pos == 0
     end
@@ -297,7 +341,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", cursor_pos: 2})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :arrow_right, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :arrow_right, []},
+          state,
+          default_context()
+        )
 
       assert new_state.cursor_pos == 3
       assert new_state.value == "hello"
@@ -307,7 +355,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", cursor_pos: 5})
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :arrow_right, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :arrow_right, []},
+          state,
+          default_context()
+        )
 
       assert new_state.cursor_pos == 5
     end
@@ -315,7 +367,8 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
 
   describe "handle_event/3 - home and end" do
     test "home moves cursor to position 0 and resets scroll" do
-      state = create_state(%{value: "hello world", cursor_pos: 8, scroll_offset: 3})
+      state =
+        create_state(%{value: "hello world", cursor_pos: 8, scroll_offset: 3})
 
       {:noreply, new_state} =
         TextField.handle_event({:keypress, :home, []}, state, default_context())
@@ -350,7 +403,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hello", disabled: true, cursor_pos: 3})
 
       {returned_state, commands} =
-        TextField.handle_event({:keypress, :backspace, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :backspace, []},
+          state,
+          default_context()
+        )
 
       assert returned_state.value == "hello"
       assert commands == []
@@ -381,10 +438,15 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
 
   describe "handle_event/3 - mouse click" do
     test "mouse click positions cursor based on column" do
-      state = create_state(%{value: "hello world", cursor_pos: 0, scroll_offset: 0})
+      state =
+        create_state(%{value: "hello world", cursor_pos: 0, scroll_offset: 0})
 
       {result, commands} =
-        TextField.handle_event({:mouse, {:click, {0, 5}}}, state, default_context())
+        TextField.handle_event(
+          {:mouse, {:click, {0, 5}}},
+          state,
+          default_context()
+        )
 
       # update/2 returns {:noreply, new_state}, so the result is that tuple
       {:noreply, new_state} = result
@@ -396,7 +458,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       state = create_state(%{value: "hi", cursor_pos: 0, scroll_offset: 0})
 
       {result, _commands} =
-        TextField.handle_event({:mouse, {:click, {0, 10}}}, state, default_context())
+        TextField.handle_event(
+          {:mouse, {:click, {0, 10}}},
+          state,
+          default_context()
+        )
 
       {:noreply, new_state} = result
       assert new_state.cursor_pos == 2
@@ -427,7 +493,8 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
 
   describe "update/2 - move_cursor_to" do
     test "moves cursor to specified column" do
-      state = create_state(%{value: "hello world", cursor_pos: 0, scroll_offset: 0})
+      state =
+        create_state(%{value: "hello world", cursor_pos: 0, scroll_offset: 0})
 
       {:noreply, new_state} = TextField.update({:move_cursor_to, {0, 5}}, state)
 
@@ -437,13 +504,19 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
     test "clamps cursor to text length when column exceeds text" do
       state = create_state(%{value: "hi", cursor_pos: 0, scroll_offset: 0})
 
-      {:noreply, new_state} = TextField.update({:move_cursor_to, {0, 100}}, state)
+      {:noreply, new_state} =
+        TextField.update({:move_cursor_to, {0, 100}}, state)
 
       assert new_state.cursor_pos == 2
     end
 
     test "accounts for scroll offset when positioning cursor" do
-      state = create_state(%{value: "a very long text string", cursor_pos: 0, scroll_offset: 5})
+      state =
+        create_state(%{
+          value: "a very long text string",
+          cursor_pos: 0,
+          scroll_offset: 5
+        })
 
       {:noreply, new_state} = TextField.update({:move_cursor_to, {0, 3}}, state)
 
@@ -471,7 +544,13 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
     end
 
     test "updates width and clamps scroll_offset" do
-      state = create_state(%{value: "hello", cursor_pos: 0, scroll_offset: 3, width: 20})
+      state =
+        create_state(%{
+          value: "hello",
+          cursor_pos: 0,
+          scroll_offset: 3,
+          width: 20
+        })
 
       new_state = TextField.update({:update_props, %{width: 10}}, state)
 
@@ -491,10 +570,187 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
     end
   end
 
+  describe "CJK characterization (graphemes vs cells)" do
+    # These tests pin current behavior for double-width characters. The
+    # data model is grapheme-indexed (cursor_pos, scroll_offset) while
+    # `width` is conceptually cells -- mismatched units cause clipping
+    # and scroll bugs. See TODO refactor backlog and the planned
+    # cell-aware redesign.
+
+    test "inserting a CJK char advances cursor by 1 grapheme (not 2 cells)" do
+      state = create_state(%{value: "", cursor_pos: 0, width: 10})
+
+      {:noreply, s1} =
+        TextField.handle_event({:keypress, "你", []}, state, default_context())
+
+      assert s1.value == "你"
+      assert s1.cursor_pos == 1
+    end
+
+    test "backspace on CJK removes one grapheme (not two bytes)" do
+      state = create_state(%{value: "你好", cursor_pos: 2, width: 10})
+
+      {:noreply, s1} =
+        TextField.handle_event(
+          {:keypress, :backspace, []},
+          state,
+          default_context()
+        )
+
+      assert s1.value == "你"
+      assert s1.cursor_pos == 1
+    end
+
+    test "arrow_left moves cursor by 1 grapheme over CJK" do
+      state = create_state(%{value: "你好世界", cursor_pos: 3, width: 10})
+
+      {:noreply, s1} =
+        TextField.handle_event(
+          {:keypress, :arrow_left, []},
+          state,
+          default_context()
+        )
+
+      assert s1.cursor_pos == 2
+      # The grapheme to the left of the new cursor is "你好"; the cell
+      # span the cursor crossed is 2, but cursor_pos decremented by 1.
+    end
+
+    # BUG (cell-vs-grapheme mismatch): visible_value uses String.slice
+    # with width as a grapheme count. Four CJK chars are 8 cells but
+    # render as if they fit in a 5-cell window. The redesign must
+    # truncate by cells, not graphemes.
+    test "render with CJK overflowing width emits more cells than width allows (BUG)" do
+      state =
+        create_state(%{
+          value: "你好世界",
+          cursor_pos: 4,
+          focused: true,
+          width: 5,
+          style: %{color: "#fff", background: "#000"}
+        })
+
+      rendered =
+        TextField.render(state, %{theme: %{text_field: %{layout: %{}}}})
+
+      [left, cursor, right] = rendered.children
+      # Current: left contains all 4 graphemes = 8 display cells in a
+      # 5-cell field. The redesign should produce a left of at most
+      # ~2 graphemes (4 cells) plus the cursor.
+      assert left.content == "你好世界"
+      assert cursor.content == "|"
+      assert right.content == ""
+    end
+
+    # BUG: cursor placement within window is computed in graphemes
+    # (cursor_pos - scroll_offset). With CJK before the cursor, the
+    # rendered cursor sits at the wrong cell column.
+    test "render places cursor by grapheme index even for double-width left side (BUG)" do
+      state =
+        create_state(%{
+          value: "你好ab",
+          # cursor between 好 and a
+          cursor_pos: 2,
+          focused: true,
+          width: 20,
+          style: %{color: "#fff", background: "#000"}
+        })
+
+      rendered =
+        TextField.render(state, %{theme: %{text_field: %{layout: %{}}}})
+
+      [left, _cursor, right] = rendered.children
+      # Current: left = "你好" (2 graphemes = 4 cells). Renders cursor
+      # at column 2 visually because consumers measure left in graphemes.
+      # Cell-aware redesign should still produce left="你好" here, but
+      # consumers must know it occupies 4 columns.
+      assert left.content == "你好"
+      assert right.content == "ab"
+    end
+  end
+
+  describe "emoji characterization (1 grapheme, 2 cells)" do
+    # Single emoji and ZWJ-compound emoji are single graphemes but
+    # double-width (and ZWJ sequences are many bytes). The TextField
+    # currently treats them as single-cell units in scroll math.
+
+    test "inserting an emoji advances cursor by 1 grapheme" do
+      state = create_state(%{value: "", cursor_pos: 0, width: 10})
+
+      {:noreply, s1} =
+        TextField.handle_event({:keypress, "🎉", []}, state, default_context())
+
+      assert s1.value == "🎉"
+      assert s1.cursor_pos == 1
+    end
+
+    test "inserting a ZWJ compound emoji advances cursor by 1 grapheme" do
+      state = create_state(%{value: "", cursor_pos: 0, width: 10})
+
+      {:noreply, s1} =
+        TextField.handle_event(
+          {:keypress, "👨‍👩‍👧", []},
+          state,
+          default_context()
+        )
+
+      assert s1.value == "👨‍👩‍👧"
+      assert s1.cursor_pos == 1
+      # The ZWJ sequence is 18 bytes / 1 grapheme / 2 cells; the
+      # cursor_pos lands on the right side of the family glyph.
+    end
+
+    test "backspace deletes a whole ZWJ emoji (not part of it)" do
+      zwj = "👨‍👩‍👧"
+
+      state =
+        create_state(%{value: "a" <> zwj <> "b", cursor_pos: 2, width: 10})
+
+      {:noreply, s1} =
+        TextField.handle_event(
+          {:keypress, :backspace, []},
+          state,
+          default_context()
+        )
+
+      assert s1.value == "ab"
+      assert s1.cursor_pos == 1
+    end
+
+    # BUG: same overflow class as CJK -- visible_value is sliced by
+    # grapheme count; emoji width is ignored.
+    test "render with emoji overflowing width emits more cells than width allows (BUG)" do
+      # 5 emojis = 10 cells, width = 6
+      value = String.duplicate("🎉", 5)
+
+      state =
+        create_state(%{
+          value: value,
+          cursor_pos: 5,
+          focused: true,
+          width: 6,
+          style: %{color: "#fff", background: "#000"}
+        })
+
+      rendered =
+        TextField.render(state, %{theme: %{text_field: %{layout: %{}}}})
+
+      [left, _cursor, _right] = rendered.children
+      # Current: left contains all 5 emojis = 10 cells in a 6-cell field.
+      assert left.content == value
+    end
+  end
+
   describe "scroll offset behavior" do
     test "typing past visible width increases scroll offset" do
       # width=5, so only 5 chars visible at a time
-      state = create_state(%{value: "abcd", cursor_pos: 4, width: 5, scroll_offset: 0})
+      state =
+        create_state(%{
+          value: "abcd",
+          cursor_pos: 4,
+          width: 5,
+          scroll_offset: 0
+        })
 
       # Type a character that puts cursor at position 5 (beyond width-1=4)
       {:noreply, s1} =
@@ -513,18 +769,34 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
     end
 
     test "arrow_left scrolls back when cursor moves before scroll window" do
-      state = create_state(%{value: "abcdefghij", cursor_pos: 5, width: 5, scroll_offset: 5})
+      state =
+        create_state(%{
+          value: "abcdefghij",
+          cursor_pos: 5,
+          width: 5,
+          scroll_offset: 5
+        })
 
       # Move left repeatedly until cursor goes before the scroll window
       {:noreply, s1} =
-        TextField.handle_event({:keypress, :arrow_left, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :arrow_left, []},
+          state,
+          default_context()
+        )
 
       assert s1.cursor_pos == 4
       assert s1.scroll_offset == 4
     end
 
     test "home resets scroll offset to 0" do
-      state = create_state(%{value: "abcdefghij", cursor_pos: 8, width: 5, scroll_offset: 5})
+      state =
+        create_state(%{
+          value: "abcdefghij",
+          cursor_pos: 8,
+          width: 5,
+          scroll_offset: 5
+        })
 
       {:noreply, new_state} =
         TextField.handle_event({:keypress, :home, []}, state, default_context())
@@ -534,7 +806,13 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
     end
 
     test "end key adjusts scroll offset for long text" do
-      state = create_state(%{value: "abcdefghijklmnop", cursor_pos: 0, width: 5, scroll_offset: 0})
+      state =
+        create_state(%{
+          value: "abcdefghijklmnop",
+          cursor_pos: 0,
+          width: 5,
+          scroll_offset: 0
+        })
 
       {:noreply, new_state} =
         TextField.handle_event({:keypress, :end, []}, state, default_context())
@@ -546,10 +824,20 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
     end
 
     test "backspace near scroll boundary adjusts scroll offset" do
-      state = create_state(%{value: "abcdefghij", cursor_pos: 5, width: 5, scroll_offset: 5})
+      state =
+        create_state(%{
+          value: "abcdefghij",
+          cursor_pos: 5,
+          width: 5,
+          scroll_offset: 5
+        })
 
       {:noreply, new_state} =
-        TextField.handle_event({:keypress, :backspace, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :backspace, []},
+          state,
+          default_context()
+        )
 
       assert new_state.value == "abcdfghij"
       assert new_state.cursor_pos == 4
@@ -558,10 +846,20 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
     end
 
     test "delete near end of text may reduce scroll offset" do
-      state = create_state(%{value: "abcdefghij", cursor_pos: 8, width: 5, scroll_offset: 5})
+      state =
+        create_state(%{
+          value: "abcdefghij",
+          cursor_pos: 8,
+          width: 5,
+          scroll_offset: 5
+        })
 
       {:noreply, s1} =
-        TextField.handle_event({:keypress, :delete, []}, state, default_context())
+        TextField.handle_event(
+          {:keypress, :delete, []},
+          state,
+          default_context()
+        )
 
       assert s1.value == "abcdefghj"
 
