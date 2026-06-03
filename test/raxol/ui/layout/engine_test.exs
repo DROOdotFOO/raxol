@@ -2,6 +2,77 @@ defmodule Raxol.UI.Layout.EngineTest do
   use ExUnit.Case, async: true
 
   alias Raxol.UI.Layout.Engine
+  alias Raxol.UI.Layout.Preparer
+
+  describe "apply_layout/3 with prepared_tree" do
+    test "produces same output as apply_layout/2 for a simple text view" do
+      view = %{
+        type: :view,
+        children: [
+          %{type: :label, attrs: [content: "Hello, World!"]}
+        ]
+      }
+
+      dimensions = %{width: 80, height: 24}
+      prepared = Preparer.prepare(view)
+
+      assert Engine.apply_layout(view, dimensions) ==
+               Engine.apply_layout(view, dimensions, prepared)
+    end
+
+    test "produces same output as apply_layout/2 for a flex column" do
+      view = %{
+        type: :view,
+        children: [
+          %{
+            type: :flex,
+            direction: :column,
+            children: [
+              %{type: :text, content: "Hello"},
+              %{type: :text, content: "World"}
+            ]
+          }
+        ]
+      }
+
+      dimensions = %{width: 40, height: 10}
+      prepared = Preparer.prepare(view)
+
+      assert Engine.apply_layout(view, dimensions) ==
+               Engine.apply_layout(view, dimensions, prepared)
+    end
+
+    test "produces same output as apply_layout/2 for a panel with children" do
+      view = %{
+        type: :view,
+        children: [
+          %{
+            type: :panel,
+            attrs: %{title: "Panel"},
+            children: [
+              %{type: :label, attrs: [content: "Inside"]}
+            ]
+          }
+        ]
+      }
+
+      dimensions = %{width: 80, height: 24}
+      prepared = Preparer.prepare(view)
+
+      assert Engine.apply_layout(view, dimensions) ==
+               Engine.apply_layout(view, dimensions, prepared)
+    end
+
+    test "does not leak measurement cache into process dictionary" do
+      view = %{type: :view, children: [%{type: :text, content: "x"}]}
+      dimensions = %{width: 20, height: 5}
+      prepared = Preparer.prepare(view)
+
+      Process.delete(:raxol_measurement_cache)
+      _ = Engine.apply_layout(view, dimensions, prepared)
+      refute Process.get(:raxol_measurement_cache)
+    end
+  end
 
   describe "apply_layout/2" do
     test "applies layout to a simple view" do

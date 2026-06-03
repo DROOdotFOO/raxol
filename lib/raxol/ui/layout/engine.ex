@@ -107,31 +107,20 @@ defmodule Raxol.UI.Layout.Engine do
   @spec apply_layout(element(), dimensions(), PreparedElement.t() | nil) ::
           [positioned_element()]
   def apply_layout(view, dimensions, prepared_tree \\ nil) do
-    # Build a flat lookup from element identity to cached measurements.
-    # Uses :erlang.phash2 on the element map as key so measure_element
-    # can look up without threading the cache through every call site.
-    if prepared_tree do
-      cache = build_measurement_cache(prepared_tree)
-      Process.put(:raxol_measurement_cache, cache)
-    end
-
-    # Start with the full screen as available space
+    # Start with the full screen as available space; carry the prepared
+    # measurement cache through the recursion so leaf measure functions
+    # can look up cached widths/heights instead of re-measuring.
     available_space = %{
       x: 0,
       y: 0,
       width: dimensions.width,
-      height: dimensions.height
+      height: dimensions.height,
+      prepared_cache: build_measurement_cache(prepared_tree)
     }
 
-    # Process the view tree
-    result =
-      process_element(view, available_space, [])
-      |> List.flatten()
-
-    # Clean up process dictionary
-    Process.delete(:raxol_measurement_cache)
-
-    result
+    view
+    |> process_element(available_space, [])
+    |> List.flatten()
   end
 
   # Build a flat map from element content hash to {measured_width, measured_height}.
@@ -637,9 +626,9 @@ defmodule Raxol.UI.Layout.Engine do
   end
 
   # Handles new widget format (flat maps with :content/:children, no :attrs)
-  def measure_element(%{type: :text, content: content}, _available_space)
+  def measure_element(%{type: :text, content: content}, available_space)
       when is_binary(content) do
-    case lookup_prepared(:text, content) do
+    case lookup_in_cache(available_space[:prepared_cache], :text, content) do
       {w, h} ->
         %{width: w, height: h}
 
@@ -664,9 +653,9 @@ defmodule Raxol.UI.Layout.Engine do
   # Checkbox with top-level :label key (new View DSL format)
   def measure_element(
         %{type: :checkbox, label: label} = _element,
-        _available_space
+        available_space
       ) do
-    Elements.measure(:checkbox, %{label: label || ""})
+    Elements.measure(:checkbox, %{label: label || ""}, available_space[:prepared_cache])
   end
 
   # TextInput with top-level :value/:placeholder keys (new View DSL format)
@@ -751,7 +740,7 @@ defmodule Raxol.UI.Layout.Engine do
   defp measure_element_by_type(type, element, attrs_map, available_space) do
     case type do
       type when type in [:text, :label, :box, :checkbox] ->
-        Elements.measure(type, attrs_map)
+        Elements.measure(type, attrs_map, available_space[:prepared_cache])
 
       type when type in [:button, :text_input] ->
         Inputs.measure(type, attrs_map, available_space)
@@ -828,18 +817,17 @@ defmodule Raxol.UI.Layout.Engine do
   @doc """
   Looks up cached measurements for an element from the prepare phase.
 
-  Returns `{width, height}` if cached, or `nil` if not found.
+  The cache is built by `build_measurement_cache/1` and lives on
+  `available_space.prepared_cache` for the duration of `apply_layout/3`.
+  Returns `{width, height}` if the entry exists, otherwise `nil`.
   """
-  def lookup_prepared(type, content) do
-    case Process.get(:raxol_measurement_cache) do
-      cache when is_map(cache) ->
-        hash = :erlang.phash2(content)
-        Map.get(cache, {type, hash})
-
-      _ ->
-        nil
-    end
+  @spec lookup_in_cache(map() | nil, atom(), term()) ::
+          {non_neg_integer(), non_neg_integer()} | nil
+  def lookup_in_cache(cache, type, content) when is_map(cache) do
+    Map.get(cache, {type, :erlang.phash2(content)})
   end
+
+  def lookup_in_cache(_cache, _type, _content), do: nil
 
   defp convert_attrs_to_map(attrs) when is_list(attrs), do: Map.new(attrs)
   defp convert_attrs_to_map(attrs), do: attrs
