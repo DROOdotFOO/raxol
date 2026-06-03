@@ -79,35 +79,28 @@ defmodule Raxol.Payments.SpendingHook do
 
   defp check_payment_command(%{type: type} = command, context, config)
        when type in [:async, :shell] do
-    case extract_payment_info(command) do
-      nil ->
-        {:ok, command}
-
-      {amount, domain} ->
-        agent_id = Map.get(context, :agent_id, :unknown)
-        gate_opts = [on_confirm: Map.get(config, :on_confirm)]
-
-        with :ok <-
-               PolicyGate.evaluate(config.policy, amount, domain, gate_opts),
-             :ok <-
-               Ledger.check_budget(
-                 config.ledger,
-                 agent_id,
-                 amount,
-                 config.policy
-               ) do
-          {:ok, command}
-        else
-          {:deny, _reason} = denied ->
-            denied
-
-          {:over_limit, limit_type} ->
-            {:deny, {:over_budget, limit_type, amount}}
-        end
-    end
+    command
+    |> extract_payment_info()
+    |> apply_gate(command, context, config)
   end
 
   defp check_payment_command(command, _context, _config), do: {:ok, command}
+
+  defp apply_gate(nil, command, _context, _config), do: {:ok, command}
+
+  defp apply_gate({amount, domain}, command, context, config) do
+    agent_id = Map.get(context, :agent_id, :unknown)
+    gate_opts = [on_confirm: Map.get(config, :on_confirm)]
+
+    with :ok <- PolicyGate.evaluate(config.policy, amount, domain, gate_opts),
+         :ok <-
+           Ledger.check_budget(config.ledger, agent_id, amount, config.policy) do
+      {:ok, command}
+    else
+      {:deny, _reason} = denied -> denied
+      {:over_limit, limit_type} -> {:deny, {:over_budget, limit_type, amount}}
+    end
+  end
 
   # Payment info is attached to command data as a tagged map.
   # The auto-pay plugin wraps the original data with payment metadata.

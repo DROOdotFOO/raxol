@@ -89,7 +89,10 @@ defmodule Raxol.Payments.EchoServer do
     conn
     |> put_resp_header("payment-required", encoded)
     |> put_resp_content_type("application/json")
-    |> send_resp(402, Jason.encode!(%{error: "payment required", challenge: challenge}))
+    |> send_resp(
+      402,
+      Jason.encode!(%{error: "payment required", challenge: challenge})
+    )
   end
 
   defp respond_after_verify(conn, encoded, opts) do
@@ -106,7 +109,10 @@ defmodule Raxol.Payments.EchoServer do
       {:error, reason} ->
         conn
         |> put_resp_content_type("application/json")
-        |> send_resp(402, Jason.encode!(%{error: "payment invalid", reason: inspect(reason)}))
+        |> send_resp(
+          402,
+          Jason.encode!(%{error: "payment invalid", reason: inspect(reason)})
+        )
     end
   end
 
@@ -123,28 +129,48 @@ defmodule Raxol.Payments.EchoServer do
   # is well-formed. This does NOT recover the signer or settle on-chain --
   # the goal is to prove the agent built a valid x402 payload, not to move
   # money. For real settlement, route through an x402 facilitator.
-  defp verify_payment(%{"signature" => sig, "message" => msg, "network" => net}, opts)
+  defp verify_payment(
+         %{"signature" => sig, "message" => msg, "network" => net},
+         opts
+       )
        when is_binary(sig) and is_map(msg) and is_binary(net) do
-    cond do
-      net != Keyword.fetch!(opts, :network) ->
-        {:error, {:wrong_network, net}}
-
-      not signature_well_formed?(sig) ->
-        {:error, :malformed_signature}
-
-      msg["to"] != Keyword.fetch!(opts, :pay_to) ->
-        {:error, {:wrong_recipient, msg["to"]}}
-
-      msg["value"] != Keyword.fetch!(opts, :amount) and
-          to_string(msg["value"]) != to_string(Keyword.fetch!(opts, :amount)) ->
-        {:error, {:wrong_amount, msg["value"]}}
-
-      true ->
-        :ok
+    with :ok <- check_network(net, opts),
+         :ok <- check_signature(sig),
+         :ok <- check_recipient(msg, opts),
+         :ok <- check_amount(msg, opts) do
+      :ok
     end
   end
 
   defp verify_payment(_, _), do: {:error, :missing_fields}
+
+  defp check_network(net, opts) do
+    expected = Keyword.fetch!(opts, :network)
+    if net == expected, do: :ok, else: {:error, {:wrong_network, net}}
+  end
+
+  defp check_signature(sig) do
+    if signature_well_formed?(sig),
+      do: :ok,
+      else: {:error, :malformed_signature}
+  end
+
+  defp check_recipient(msg, opts) do
+    expected = Keyword.fetch!(opts, :pay_to)
+
+    if msg["to"] == expected,
+      do: :ok,
+      else: {:error, {:wrong_recipient, msg["to"]}}
+  end
+
+  defp check_amount(msg, opts) do
+    expected = Keyword.fetch!(opts, :amount)
+    actual = msg["value"]
+
+    if actual == expected or to_string(actual) == to_string(expected),
+      do: :ok,
+      else: {:error, {:wrong_amount, actual}}
+  end
 
   defp signature_well_formed?("0x" <> hex) do
     byte_size(hex) == 130 and String.match?(hex, ~r/^[0-9a-fA-F]+$/)
@@ -158,7 +184,8 @@ defmodule Raxol.Payments.EchoServer do
       "payTo" => Keyword.fetch!(opts, :pay_to),
       "asset" => Keyword.fetch!(opts, :asset),
       "network" => Keyword.fetch!(opts, :network),
-      "nonce" => "0x" <> Base.encode16(:crypto.strong_rand_bytes(32), case: :lower),
+      "nonce" =>
+        "0x" <> Base.encode16(:crypto.strong_rand_bytes(32), case: :lower),
       "validAfter" => 0,
       "validBefore" => System.system_time(:second) + 3600
     }
@@ -166,7 +193,8 @@ defmodule Raxol.Payments.EchoServer do
 
   defp build_receipt(payload) do
     %{
-      "transactionHash" => "0x" <> Base.encode16(:crypto.strong_rand_bytes(32), case: :lower),
+      "transactionHash" =>
+        "0x" <> Base.encode16(:crypto.strong_rand_bytes(32), case: :lower),
       "network" => payload["network"],
       "success" => true,
       "settledBy" => "echo_server"

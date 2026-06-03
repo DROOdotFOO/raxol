@@ -316,16 +316,11 @@ defmodule Raxol.Payments.Ledger do
     }
   end
 
-  defp notify_subscribers(subscribers, entry) do
+  defp notify_subscribers(subscribers, %{agent_id: agent_id} = entry) do
     Enum.each(subscribers, fn
-      {_ref, {pid, nil}} ->
-        send(pid, {:ledger_entry, entry})
-
-      {_ref, {pid, agent_id}} when agent_id == entry.agent_id ->
-        send(pid, {:ledger_entry, entry})
-
-      _ ->
-        :ok
+      {_ref, {pid, nil}} -> send(pid, {:ledger_entry, entry})
+      {_ref, {pid, ^agent_id}} -> send(pid, {:ledger_entry, entry})
+      _ -> :ok
     end)
   end
 

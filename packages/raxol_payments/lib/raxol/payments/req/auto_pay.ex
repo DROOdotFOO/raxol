@@ -175,24 +175,33 @@ defmodule Raxol.Payments.Req.AutoPay do
   end
 
   defp enforce_budget(protocol_mod, amount, host, opts) do
-    with %_{} = policy <- Keyword.get(opts, :policy) || :no_policy,
-         ledger when not is_nil(ledger) <- Keyword.get(opts, :ledger) do
-      agent_id = Keyword.get(opts, :agent_id, :unknown)
+    do_enforce_budget(
+      Keyword.get(opts, :policy),
+      Keyword.get(opts, :ledger),
+      protocol_mod,
+      amount,
+      host,
+      opts
+    )
+  end
 
-      metadata = %{
-        protocol: protocol_mod.name(),
-        domain: host
-      }
+  defp do_enforce_budget(nil, _ledger, _proto, _amount, _host, _opts), do: :ok
+  defp do_enforce_budget(_policy, nil, _proto, _amount, _host, _opts), do: :ok
 
-      case Ledger.try_spend(ledger, agent_id, amount, policy, metadata) do
-        :ok ->
-          :ok
+  defp do_enforce_budget(
+         %SpendingPolicy{} = policy,
+         ledger,
+         protocol_mod,
+         amount,
+         host,
+         opts
+       ) do
+    agent_id = Keyword.get(opts, :agent_id, :unknown)
+    metadata = %{protocol: protocol_mod.name(), domain: host}
 
-        {:over_limit, limit_type} ->
-          {:error, {:over_budget, limit_type, amount}}
-      end
-    else
-      _ -> :ok
+    case Ledger.try_spend(ledger, agent_id, amount, policy, metadata) do
+      :ok -> :ok
+      {:over_limit, limit_type} -> {:error, {:over_budget, limit_type, amount}}
     end
   end
 
