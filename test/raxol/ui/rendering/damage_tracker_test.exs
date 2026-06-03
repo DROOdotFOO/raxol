@@ -43,7 +43,11 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
         ]
       }
 
-      diffs = [{0, {:replace, %{type: :label, text: "Changed"}}}, {1, :no_change}]
+      diffs = [
+        {0, {:replace, %{type: :label, text: "Changed"}}},
+        {1, :no_change}
+      ]
+
       changes = %{type: :indexed_children, diffs: diffs}
 
       damage = DamageTracker.compute_damage({:update, [], changes}, tree)
@@ -54,15 +58,20 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
 
       root_damage = damage[[]]
       assert root_damage.type == :structure
-      assert root_damage.priority == :medium  # Not too many diffs
+      # Not too many diffs
+      assert root_damage.priority == :medium
 
       child_damage = damage[[0]]
       assert child_damage.path == [0]
-      assert child_damage.type == :structure  # Replace operation
+      # Replace operation
+      assert child_damage.type == :structure
     end
 
     test "computes damage for keyed children operations" do
-      tree = %{type: :container, keyed_children: %{a: %{text: "A"}, b: %{text: "B"}}}
+      tree = %{
+        type: :container,
+        keyed_children: %{a: %{text: "A"}, b: %{text: "B"}}
+      }
 
       ops = [:insert, :delete, :move]
       changes = %{type: :keyed_children, ops: ops}
@@ -78,17 +87,55 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
       assert root_damage.priority in [:low, :medium]
     end
 
+    test "stores nested paths in reversed form (leaf-first) per moduledoc" do
+      # Caller-supplied parent path is [0] (forward); the diff adds a
+      # child at index 1. The internal representation reverses both,
+      # so the child damage key is [1, 0] (leaf 1 head, root step 0 tail).
+      tree = %{
+        type: :container,
+        children: [
+          %{
+            type: :container,
+            children: [%{type: :label, text: "A"}, %{type: :label, text: "B"}]
+          }
+        ]
+      }
+
+      diffs = [{1, {:replace, %{type: :label, text: "Changed"}}}]
+      changes = %{type: :indexed_children, diffs: diffs}
+
+      damage = DamageTracker.compute_damage({:update, [0], changes}, tree)
+
+      # Base damage at the diff's path -- reversed [0] is still [0].
+      assert Map.has_key?(damage, [0])
+      # Child damage at forward [0, 1] is stored at reversed [1, 0].
+      assert Map.has_key?(damage, [1, 0])
+
+      child = damage[[1, 0]]
+      assert child.path == [1, 0]
+      assert child.type == :structure
+
+      # Forward-path consumers reverse to recover the original order.
+      assert Enum.reverse(child.path) == [0, 1]
+    end
+
     test "handles large numbers of changes for high priority" do
-      tree = %{type: :container, children: Enum.map(1..15, fn i -> %{text: "Item #{i}"} end)}
+      tree = %{
+        type: :container,
+        children: Enum.map(1..15, fn i -> %{text: "Item #{i}"} end)
+      }
 
       # Create many diffs to trigger high priority
-      diffs = Enum.map(0..14, fn i -> {i, {:update, [], %{text: "Changed #{i}"}}} end)
+      diffs =
+        Enum.map(0..14, fn i -> {i, {:update, [], %{text: "Changed #{i}"}}} end)
+
       changes = %{type: :indexed_children, diffs: diffs}
 
       damage = DamageTracker.compute_damage({:update, [], changes}, tree)
 
       root_damage = damage[[]]
-      assert root_damage.priority == :high  # >10 diffs should be high priority
+      # >10 diffs should be high priority
+      assert root_damage.priority == :high
     end
   end
 
@@ -140,28 +187,41 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
 
     test "correctly compares priority values" do
       low_damage = %{path: [0], type: :content, priority: :low, bounds: nil}
-      medium_damage = %{path: [0], type: :layout, priority: :medium, bounds: nil}
+
+      medium_damage = %{
+        path: [0],
+        type: :layout,
+        priority: :medium,
+        bounds: nil
+      }
+
       high_damage = %{path: [0], type: :structure, priority: :high, bounds: nil}
 
       # High should win over medium
-      result1 = DamageTracker.merge_damage(
-        %{[0] => medium_damage},
-        %{[0] => high_damage}
-      )
+      result1 =
+        DamageTracker.merge_damage(
+          %{[0] => medium_damage},
+          %{[0] => high_damage}
+        )
+
       assert result1[[0]].priority == :high
 
       # Medium should win over low
-      result2 = DamageTracker.merge_damage(
-        %{[0] => low_damage},
-        %{[0] => medium_damage}
-      )
+      result2 =
+        DamageTracker.merge_damage(
+          %{[0] => low_damage},
+          %{[0] => medium_damage}
+        )
+
       assert result2[[0]].priority == :medium
 
       # High should win over low
-      result3 = DamageTracker.merge_damage(
-        %{[0] => low_damage},
-        %{[0] => high_damage}
-      )
+      result3 =
+        DamageTracker.merge_damage(
+          %{[0] => low_damage},
+          %{[0] => high_damage}
+        )
+
       assert result3[[0]].priority == :high
     end
   end
@@ -175,12 +235,18 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
     test "keeps damage regions that intersect viewport", %{viewport: viewport} do
       damage = %{
         [0] => %{
-          path: [0], type: :content, priority: :medium,
-          bounds: %{x: 100, y: 100, width: 200, height: 100}  # Inside viewport
+          path: [0],
+          type: :content,
+          priority: :medium,
+          # Inside viewport
+          bounds: %{x: 100, y: 100, width: 200, height: 100}
         },
         [1] => %{
-          path: [1], type: :layout, priority: :low,
-          bounds: %{x: 1000, y: 100, width: 100, height: 50}  # Outside viewport
+          path: [1],
+          type: :layout,
+          priority: :low,
+          # Outside viewport
+          bounds: %{x: 1000, y: 100, width: 100, height: 50}
         }
       }
 
@@ -205,8 +271,11 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
       # Test edge of viewport
       edge_damage = %{
         [0] => %{
-          path: [0], type: :content, priority: :medium,
-          bounds: %{x: 790, y: 590, width: 20, height: 20}  # Overlaps edge
+          path: [0],
+          type: :content,
+          priority: :medium,
+          # Overlaps edge
+          bounds: %{x: 790, y: 590, width: 20, height: 20}
         }
       }
 
@@ -216,8 +285,11 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
       # Test just outside viewport
       outside_damage = %{
         [0] => %{
-          path: [0], type: :content, priority: :medium,
-          bounds: %{x: 801, y: 601, width: 10, height: 10}  # Just outside
+          path: [0],
+          type: :content,
+          priority: :medium,
+          # Just outside
+          bounds: %{x: 801, y: 601, width: 10, height: 10}
         }
       }
 
@@ -228,8 +300,11 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
     test "handles zero-sized regions", %{viewport: viewport} do
       zero_damage = %{
         [0] => %{
-          path: [0], type: :content, priority: :medium,
-          bounds: %{x: 100, y: 100, width: 0, height: 0}  # Zero size
+          path: [0],
+          type: :content,
+          priority: :medium,
+          # Zero size
+          bounds: %{x: 100, y: 100, width: 0, height: 0}
         }
       }
 
@@ -337,7 +412,9 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
     test "estimates bounds for text labels" do
       # This tests the private estimate_node_bounds function indirectly
       tree = %{type: :label, attrs: %{text: "Hello World"}}
-      damage = DamageTracker.compute_damage({:update, [], %{type: :content}}, tree)
+
+      damage =
+        DamageTracker.compute_damage({:update, [], %{type: :content}}, tree)
 
       region = damage[[]]
       assert region.bounds != nil
@@ -355,16 +432,20 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
         ]
       }
 
-      damage = DamageTracker.compute_damage({:update, [], %{type: :structure}}, tree)
+      damage =
+        DamageTracker.compute_damage({:update, [], %{type: :structure}}, tree)
 
       region = damage[[]]
       assert region.bounds != nil
-      assert region.bounds.height > 40  # Should account for multiple children
+      # Should account for multiple children
+      assert region.bounds.height > 40
     end
 
     test "handles nodes with explicit dimensions" do
       tree = %{type: :container, attrs: %{width: 400, height: 200}}
-      damage = DamageTracker.compute_damage({:update, [], %{type: :layout}}, tree)
+
+      damage =
+        DamageTracker.compute_damage({:update, [], %{type: :layout}}, tree)
 
       region = damage[[]]
       # The current implementation uses generic bounds for all nodes
@@ -376,7 +457,8 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
   describe "arithmetic operations in damage tracking" do
     test "correctly calculates intersection mathematics" do
       # Test region intersection calculations
-      viewport = %{x: 100, y: 50, width: 300, height: 200}  # 100-400, 50-250
+      # 100-400, 50-250
+      viewport = %{x: 100, y: 50, width: 300, height: 200}
 
       test_cases = [
         # Completely inside
@@ -394,13 +476,15 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
         # Partially overlapping (right edge)
         {%{x: 375, y: 100, width: 50, height: 50}, true},
         # Edge case - touching but not overlapping
-        {%{x: 400, y: 100, width: 50, height: 50}, false},
+        {%{x: 400, y: 100, width: 50, height: 50}, false}
       ]
 
       for {region_bounds, should_intersect} <- test_cases do
         damage = %{
           [0] => %{
-            path: [0], type: :content, priority: :medium,
+            path: [0],
+            type: :content,
+            priority: :medium,
             bounds: region_bounds
           }
         }
@@ -408,9 +492,11 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
         filtered = DamageTracker.filter_viewport_damage(damage, viewport)
 
         if should_intersect do
-          assert Map.has_key?(filtered, [0]), "Expected intersection for bounds #{inspect(region_bounds)}"
+          assert Map.has_key?(filtered, [0]),
+                 "Expected intersection for bounds #{inspect(region_bounds)}"
         else
-          refute Map.has_key?(filtered, [0]), "Expected no intersection for bounds #{inspect(region_bounds)}"
+          refute Map.has_key?(filtered, [0]),
+                 "Expected no intersection for bounds #{inspect(region_bounds)}"
         end
       end
     end
@@ -418,10 +504,14 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
     test "handles arithmetic edge cases in bounds calculations" do
       # Test with zero and negative dimensions
       edge_cases = [
-        %{x: 0, y: 0, width: 0, height: 100},    # Zero width
-        %{x: 0, y: 0, width: 100, height: 0},    # Zero height
-        %{x: -50, y: 0, width: 100, height: 50}, # Negative position
-        %{x: 0, y: -25, width: 50, height: 100}, # Negative Y position
+        # Zero width
+        %{x: 0, y: 0, width: 0, height: 100},
+        # Zero height
+        %{x: 0, y: 0, width: 100, height: 0},
+        # Negative position
+        %{x: -50, y: 0, width: 100, height: 50},
+        # Negative Y position
+        %{x: 0, y: -25, width: 50, height: 100}
       ]
 
       viewport = %{x: 0, y: 0, width: 200, height: 200}
@@ -461,24 +551,39 @@ defmodule Raxol.UI.Rendering.DamageTrackerTest do
       tree = %{type: :container}
 
       # Test indexed children priority logic
-      few_diffs = %{type: :indexed_children, diffs: Enum.map(0..5, &{&1, :change})}
-      many_diffs = %{type: :indexed_children, diffs: Enum.map(0..15, &{&1, :change})}
+      few_diffs = %{
+        type: :indexed_children,
+        diffs: Enum.map(0..5, &{&1, :change})
+      }
+
+      many_diffs = %{
+        type: :indexed_children,
+        diffs: Enum.map(0..15, &{&1, :change})
+      }
 
       damage1 = DamageTracker.compute_damage({:update, [], few_diffs}, tree)
       damage2 = DamageTracker.compute_damage({:update, [], many_diffs}, tree)
 
-      assert damage1[[]].priority == :medium  # <= 10 diffs
-      assert damage2[[]].priority == :high    # > 10 diffs
+      # <= 10 diffs
+      assert damage1[[]].priority == :medium
+      # > 10 diffs
+      assert damage2[[]].priority == :high
 
       # Test keyed children priority logic
       few_ops = %{type: :keyed_children, ops: [:insert, :delete]}
-      many_ops = %{type: :keyed_children, ops: Enum.map(0..10, fn _ -> :move end)}
+
+      many_ops = %{
+        type: :keyed_children,
+        ops: Enum.map(0..10, fn _ -> :move end)
+      }
 
       damage3 = DamageTracker.compute_damage({:update, [], few_ops}, tree)
       damage4 = DamageTracker.compute_damage({:update, [], many_ops}, tree)
 
-      assert damage3[[]].priority == :medium  # <= 5 ops
-      assert damage4[[]].priority == :high    # > 5 ops
+      # <= 5 ops
+      assert damage3[[]].priority == :medium
+      # > 5 ops
+      assert damage4[[]].priority == :high
     end
   end
 end

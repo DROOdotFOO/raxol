@@ -8,6 +8,19 @@ defmodule Raxol.UI.Rendering.DamageTracker do
   - `:layout` - Size or position changed
   - `:style` - Visual styling changed
   - `:structure` - Child nodes added/removed/reordered
+
+  ## Path representation
+
+  Paths stored in the `damage_map` keys and in each `region.path` are
+  **reversed**: the leaf index is at the head of the list and the root
+  step is at the tail. A forward path `[0, 1, 2]` (root -> child 0 ->
+  grandchild 1 -> great-grandchild 2) appears here as `[2, 1, 0]`.
+
+  This lets path construction stay O(1) per step (`[idx | rev_path]`
+  prepend) and lets `get_node_at_rev_path/2` walk without an extra
+  reversal. Consumers that need a forward path can call
+  `Enum.reverse/1`; `compute_damage/2` accepts forward-ordered input
+  paths from callers and reverses them once on entry.
   """
 
   @type damage_type :: :content | :layout | :style | :structure
@@ -46,17 +59,21 @@ defmodule Raxol.UI.Rendering.DamageTracker do
   end
 
   def compute_damage({:update, path, changes}, tree) do
+    # Reverse the caller-supplied forward path once on entry; from here
+    # on, paths flow as rev_paths (leaf head, root tail).
+    rev_path = Enum.reverse(path)
+
     base_damage = %{
-      path => %{
-        path: path,
+      rev_path => %{
+        path: rev_path,
         type: classify_change_type(changes),
-        bounds: estimate_node_bounds(get_node_at_path(tree, path)),
+        bounds: estimate_node_bounds(get_node_at_rev_path(tree, rev_path)),
         priority: calculate_priority(changes)
       }
     }
 
     # Add child damage regions for complex changes
-    child_damage = extract_child_damage(changes, path, tree)
+    child_damage = extract_child_damage(changes, rev_path, tree)
     Map.merge(base_damage, child_damage)
   end
 
@@ -146,64 +163,62 @@ defmodule Raxol.UI.Rendering.DamageTracker do
 
   defp extract_child_damage(
          %{type: :indexed_children, diffs: diffs},
-         parent_path,
+         parent_rev_path,
          tree
        ) do
-    diffs
-    |> Enum.map(fn {idx, diff} ->
-      # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
-      child_path = parent_path ++ [idx]
-      child_node = get_node_at_path(tree, child_path)
+    Map.new(diffs, fn {idx, diff} ->
+      child_rev_path = [idx | parent_rev_path]
+      child_node = get_node_at_rev_path(tree, child_rev_path)
 
-      {child_path,
+      {child_rev_path,
        %{
-         path: child_path,
+         path: child_rev_path,
          type: classify_diff_type(diff),
          bounds: estimate_node_bounds(child_node),
          priority: :medium
        }}
     end)
-    |> Map.new()
   end
 
   defp extract_child_damage(
          %{type: :keyed_children, ops: ops},
-         parent_path,
+         parent_rev_path,
          _tree
        ) do
     ops
     |> Enum.with_index()
-    |> Enum.map(fn {_op, idx} ->
-      # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
-      child_path = parent_path ++ [idx]
+    |> Map.new(fn {_op, idx} ->
+      child_rev_path = [idx | parent_rev_path]
 
-      {child_path,
+      {child_rev_path,
        %{
-         path: child_path,
+         path: child_rev_path,
          type: :structure,
          # Keyed operations may not have predictable bounds
          bounds: nil,
          priority: :medium
        }}
     end)
-    |> Map.new()
   end
 
-  defp extract_child_damage(_other, _parent_path, _tree), do: %{}
+  defp extract_child_damage(_other, _parent_rev_path, _tree), do: %{}
 
   defp classify_diff_type({:replace, _}), do: :structure
   defp classify_diff_type({:update, _, _}), do: :content
   defp classify_diff_type(_), do: :content
 
-  defp get_node_at_path(tree, []), do: tree
+  # Tail-first walker for reversed paths. Recurses on the parent's
+  # rev_path to locate the parent node, then takes the child at the
+  # leaf index. No reversal needed; matches the storage convention
+  # documented in the moduledoc.
+  defp get_node_at_rev_path(tree, []), do: tree
 
-  defp get_node_at_path(%{children: children}, [idx | rest])
-       when is_list(children) do
-    child = Enum.at(children, idx)
-    get_node_at_path(child, rest)
+  defp get_node_at_rev_path(tree, [idx | parent_rev]) do
+    case get_node_at_rev_path(tree, parent_rev) do
+      %{children: children} when is_list(children) -> Enum.at(children, idx)
+      _ -> nil
+    end
   end
-
-  defp get_node_at_path(_tree, _path), do: nil
 
   defp estimate_tree_bounds(%{attrs: %{width: w, height: h}}),
     do: %{x: 0, y: 0, width: w, height: h}
