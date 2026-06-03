@@ -16,6 +16,10 @@ defmodule Raxol.Demo.Dashboard do
   import Raxol.Animation.Helpers
 
   @panels [:runtime, :schedulers, :log, :processes]
+  @next_panel Map.new(Enum.zip(@panels, tl(@panels) ++ [hd(@panels)]))
+  @prev_panel Map.new(
+                Enum.zip(@panels, [List.last(@panels) | Enum.drop(@panels, -1)])
+              )
   @spark ~w(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
   @bar_fill "█"
   @bar_empty "░"
@@ -490,15 +494,8 @@ defmodule Raxol.Demo.Dashboard do
 
   # -- Navigation --
 
-  defp next_panel(current) do
-    idx = Enum.find_index(@panels, &(&1 == current))
-    Enum.at(@panels, rem(idx + 1, length(@panels)))
-  end
-
-  defp prev_panel(current) do
-    idx = Enum.find_index(@panels, &(&1 == current))
-    Enum.at(@panels, rem(idx - 1 + length(@panels), length(@panels)))
-  end
+  defp next_panel(current), do: Map.fetch!(@next_panel, current)
+  defp prev_panel(current), do: Map.fetch!(@prev_panel, current)
 
   # -- Formatting --
 

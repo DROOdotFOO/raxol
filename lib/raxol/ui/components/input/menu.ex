@@ -225,46 +225,24 @@ defmodule Raxol.UI.Components.Input.Menu do
   end
 
   defp next_enabled(visible, cursor) do
-    ids =
-      Enum.map(visible, fn {item, _} ->
-        {item.id, Map.get(item, :disabled, false)}
-      end)
+    case Enum.drop_while(visible, fn {item, _} -> item.id != cursor end) do
+      [_current | rest] ->
+        Enum.find_value(rest, cursor, fn {item, _} ->
+          if Map.get(item, :disabled, false), do: nil, else: item.id
+        end)
 
-    case Enum.find_index(ids, fn {id, _} -> id == cursor end) do
-      nil ->
+      [] ->
         cursor
-
-      idx ->
-        ids
-        |> Enum.drop(idx + 1)
-        |> Enum.find(fn {_id, disabled} -> not disabled end)
-        |> case do
-          {id, _} -> id
-          nil -> cursor
-        end
     end
   end
 
   defp prev_enabled(visible, cursor) do
-    ids =
-      Enum.map(visible, fn {item, _} ->
-        {item.id, Map.get(item, :disabled, false)}
-      end)
-
-    case Enum.find_index(ids, fn {id, _} -> id == cursor end) do
-      nil ->
-        cursor
-
-      idx ->
-        ids
-        |> Enum.take(idx)
-        |> Enum.reverse()
-        |> Enum.find(fn {_id, disabled} -> not disabled end)
-        |> case do
-          {id, _} -> id
-          nil -> cursor
-        end
-    end
+    visible
+    |> Enum.take_while(fn {item, _} -> item.id != cursor end)
+    |> Enum.reverse()
+    |> Enum.find_value(cursor, fn {item, _} ->
+      if Map.get(item, :disabled, false), do: nil, else: item.id
+    end)
   end
 
   defp first_enabled_in(visible) do

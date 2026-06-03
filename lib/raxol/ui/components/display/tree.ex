@@ -208,20 +208,24 @@ defmodule Raxol.UI.Components.Display.Tree do
   end
 
   defp next_in_list(visible, cursor) do
-    ids = Enum.map(visible, fn {node, _} -> node.id end)
-
-    case Enum.find_index(ids, &(&1 == cursor)) do
-      nil -> cursor
-      idx -> Enum.at(ids, min(idx + 1, length(ids) - 1))
+    case Enum.drop_while(visible, fn {node, _} -> node.id != cursor end) do
+      [_current, {next, _} | _] -> next.id
+      _ -> cursor
     end
   end
 
   defp prev_in_list(visible, cursor) do
-    ids = Enum.map(visible, fn {node, _} -> node.id end)
-
-    case Enum.find_index(ids, &(&1 == cursor)) do
-      nil -> cursor
-      idx -> Enum.at(ids, max(idx - 1, 0))
+    visible
+    |> Enum.reduce_while({:searching, cursor}, fn {node, _}, {_, prev} ->
+      if node.id == cursor do
+        {:halt, {:found, prev}}
+      else
+        {:cont, {:searching, node.id}}
+      end
+    end)
+    |> case do
+      {:found, prev_id} -> prev_id
+      _ -> cursor
     end
   end
 
