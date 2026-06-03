@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-06-03. Implementation deferred to follow-up PRs (see Rollout).
+Implemented, 2026-06-03. Helper landed in `aacfe55f` (PR-A), RenderBatcher adoption in `b9aef61f` (PR-B), Driver/Headless/Lifecycle/SSH adoption + Dispatcher call-mode mirror clauses in `6aa8abab` (PR-C).
 
 ## Context
 
