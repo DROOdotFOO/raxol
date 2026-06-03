@@ -3,7 +3,16 @@ defmodule Raxol.UI.Components.Input.TextField do
   A text field component for single-line text input.
 
   It supports validation, placeholders, masks, and styling.
+
+  ## Unicode and display width
+
+  The cursor (`cursor_pos`) and scroll position (`scroll_offset`) are
+  grapheme indices, while `width` is measured in display cells. Internal
+  helpers translate between the two so CJK characters, emoji, and ZWJ
+  sequences scroll and clip on cell boundaries instead of grapheme counts.
+  Cell width is sourced from `Raxol.UI.TextMeasure` (single source of truth).
   """
+  alias Raxol.UI.TextMeasure
   alias Raxol.UI.Theming.Theme
 
   @behaviour Raxol.UI.Components.Base.Component
@@ -77,14 +86,17 @@ defmodule Raxol.UI.Components.Input.TextField do
     cursor_pos =
       clamp(updated_state.cursor_pos, 0, String.length(updated_state.value))
 
-    # Clamp scroll_offset if width changed
     width = Map.get(updated_state, :width, 20)
 
+    # Reconcile scroll_offset with the (possibly new) value/width/cursor
+    # using the cell-aware policy. Avoids ASCII-only String.length math
+    # that would corrupt scroll under CJK or emoji content.
     scroll_offset =
-      clamp(
-        updated_state.scroll_offset,
-        0,
-        max(0, String.length(updated_state.value) - width)
+      adjust_scroll_offset(
+        cursor_pos,
+        width,
+        updated_state.value,
+        updated_state.scroll_offset
       )
 
     %{
@@ -219,25 +231,24 @@ defmodule Raxol.UI.Components.Input.TextField do
      }}
   end
 
-  defp handle_keypress(state, :delete, _modifiers, _context)
-       when state.cursor_pos >= byte_size(state.value) do
-    {:noreply, state}
-  end
-
   defp handle_keypress(state, :delete, _modifiers, _context) do
-    {left, right} = String.split_at(state.value, state.cursor_pos)
-    new_value = left <> String.slice(right, 1, String.length(right) - 1)
-    width = Map.get(state, :width, 20)
+    if state.cursor_pos >= String.length(state.value) do
+      {:noreply, state}
+    else
+      {left, right} = String.split_at(state.value, state.cursor_pos)
+      new_value = left <> String.slice(right, 1, String.length(right) - 1)
+      width = Map.get(state, :width, 20)
 
-    new_scroll_offset =
-      adjust_scroll_offset(
-        state.cursor_pos,
-        width,
-        new_value,
-        state.scroll_offset
-      )
+      new_scroll_offset =
+        adjust_scroll_offset(
+          state.cursor_pos,
+          width,
+          new_value,
+          state.scroll_offset
+        )
 
-    {:noreply, %{state | value: new_value, scroll_offset: new_scroll_offset}}
+      {:noreply, %{state | value: new_value, scroll_offset: new_scroll_offset}}
+    end
   end
 
   defp handle_keypress(state, :arrow_left, _modifiers, _context) do
@@ -374,11 +385,11 @@ defmodule Raxol.UI.Components.Input.TextField do
   defp get_final_value(false, _placeholder, display_value), do: display_value
 
   defp slice_visible_value(true, final_value, _scroll_offset, width) do
-    String.slice(final_value, 0, width)
+    truncate_to_cells(final_value, 0, width)
   end
 
   defp slice_visible_value(false, final_value, scroll_offset, width) do
-    String.slice(final_value, scroll_offset, width)
+    truncate_to_cells(final_value, scroll_offset, width)
   end
 
   defp build_text_children(
@@ -423,10 +434,17 @@ defmodule Raxol.UI.Components.Input.TextField do
   end
 
   defp build_focused_children(state, visible_value, merged_style) do
-    width = Map.get(state, :width, 20)
     scroll_offset = state.scroll_offset || 0
-    cursor_in_window = state.cursor_pos - scroll_offset
-    cursor_in_window = clamp(cursor_in_window, 0, width)
+    # cursor_in_window is a grapheme count within the visible substring,
+    # clamped to the visible substring's grapheme length (not `width`,
+    # which is in cells and would mis-bound the split).
+    cursor_in_window =
+      clamp(
+        state.cursor_pos - scroll_offset,
+        0,
+        String.length(visible_value)
+      )
+
     {left, right} = String.split_at(visible_value, cursor_in_window)
 
     cursor_style = %{
@@ -456,23 +474,67 @@ defmodule Raxol.UI.Components.Input.TextField do
 
   defp clamp(value, lo, hi), do: Raxol.Core.Utils.Math.clamp(value, lo, hi)
 
-  # Helper to keep the cursor visible in the window
+  # --- Cell-aware scroll / display helpers ---
+
+  # Keep the cursor's cell position within the visible window. `cursor_pos`
+  # and `scroll_offset` are grapheme indices; `width` is cells. All decisions
+  # are made in cell space, then translated back to a grapheme scroll_offset.
   defp adjust_scroll_offset(cursor_pos, width, value, scroll_offset) do
-    calculate_new_scroll_offset(cursor_pos, width, value, scroll_offset)
+    cursor_cell = cell_offset_at(value, cursor_pos)
+    scroll_cell = cell_offset_at(value, scroll_offset)
+    total_cells = TextMeasure.display_width(value)
+
+    cond do
+      cursor_cell < scroll_cell ->
+        cursor_pos
+
+      cursor_cell > scroll_cell + width - 1 ->
+        grapheme_index_at_cell(value, cursor_cell - width + 1)
+
+      total_cells - scroll_cell < width ->
+        grapheme_index_at_cell(value, max(0, total_cells - width))
+
+      true ->
+        scroll_offset
+    end
   end
 
-  defp calculate_new_scroll_offset(cursor_pos, _width, _value, scroll_offset)
-       when cursor_pos < scroll_offset,
-       do: cursor_pos
+  # Cell offset of the boundary BEFORE the grapheme at `grapheme_index`.
+  # Equivalent to "sum of display widths of graphemes [0, grapheme_index)".
+  defp cell_offset_at(value, grapheme_index) do
+    value
+    |> String.slice(0, grapheme_index)
+    |> TextMeasure.display_width()
+  end
 
-  defp calculate_new_scroll_offset(cursor_pos, width, _value, scroll_offset)
-       when cursor_pos > scroll_offset + width - 1,
-       do: cursor_pos - width + 1
+  # Smallest grapheme index whose cell offset is >= `target_cell`. Used to
+  # translate a cell-space scroll target back to a grapheme index. If a
+  # wide character straddles `target_cell`, the index lands on that
+  # grapheme (never inside it).
+  defp grapheme_index_at_cell(_value, target_cell) when target_cell <= 0, do: 0
 
-  defp calculate_new_scroll_offset(_cursor_pos, width, value, scroll_offset)
-       when byte_size(value) - scroll_offset < width,
-       do: max(0, String.length(value) - width)
+  defp grapheme_index_at_cell(value, target_cell) do
+    {idx, _cells} =
+      value
+      |> String.graphemes()
+      |> Enum.reduce_while({0, 0}, fn g, {idx, cells} ->
+        if cells >= target_cell do
+          {:halt, {idx, cells}}
+        else
+          {:cont, {idx + 1, cells + TextMeasure.display_width(g)}}
+        end
+      end)
 
-  defp calculate_new_scroll_offset(_cursor_pos, _width, _value, scroll_offset),
-    do: scroll_offset
+    idx
+  end
+
+  # Take graphemes from `start_grapheme` forward, accumulating until the
+  # next grapheme would exceed `max_cells`. A trailing wide char that
+  # would straddle the right edge is dropped (no partial-cell display).
+  defp truncate_to_cells(value, start_grapheme, max_cells) do
+    value
+    |> String.slice(start_grapheme..-1//1)
+    |> TextMeasure.split_at_display_width(max_cells)
+    |> elem(0)
+  end
 end

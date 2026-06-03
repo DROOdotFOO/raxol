@@ -616,11 +616,11 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       # span the cursor crossed is 2, but cursor_pos decremented by 1.
     end
 
-    # BUG (cell-vs-grapheme mismatch): visible_value uses String.slice
-    # with width as a grapheme count. Four CJK chars are 8 cells but
-    # render as if they fit in a 5-cell window. The redesign must
-    # truncate by cells, not graphemes.
-    test "render with CJK overflowing width emits more cells than width allows (BUG)" do
+    test "render with CJK truncates the visible value by cells, not graphemes" do
+      # With cursor at the end (cell 8) and scroll_offset still 0 (state
+      # constructed inconsistently), the render still respects the width
+      # in cells: only the prefix that fits in 5 cells is shown. 你=2,
+      # 好=2 -> 4 cells fit; 世 (would be cell 6) is clipped.
       state =
         create_state(%{
           value: "你好世界",
@@ -634,18 +634,12 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
         TextField.render(state, %{theme: %{text_field: %{layout: %{}}}})
 
       [left, cursor, right] = rendered.children
-      # Current: left contains all 4 graphemes = 8 display cells in a
-      # 5-cell field. The redesign should produce a left of at most
-      # ~2 graphemes (4 cells) plus the cursor.
-      assert left.content == "你好世界"
+      assert left.content == "你好"
       assert cursor.content == "|"
       assert right.content == ""
     end
 
-    # BUG: cursor placement within window is computed in graphemes
-    # (cursor_pos - scroll_offset). With CJK before the cursor, the
-    # rendered cursor sits at the wrong cell column.
-    test "render places cursor by grapheme index even for double-width left side (BUG)" do
+    test "render splits visible value at cursor's grapheme index" do
       state =
         create_state(%{
           value: "你好ab",
@@ -660,10 +654,6 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
         TextField.render(state, %{theme: %{text_field: %{layout: %{}}}})
 
       [left, _cursor, right] = rendered.children
-      # Current: left = "你好" (2 graphemes = 4 cells). Renders cursor
-      # at column 2 visually because consumers measure left in graphemes.
-      # Cell-aware redesign should still produce left="你好" here, but
-      # consumers must know it occupies 4 columns.
       assert left.content == "你好"
       assert right.content == "ab"
     end
@@ -717,10 +707,8 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
       assert s1.cursor_pos == 1
     end
 
-    # BUG: same overflow class as CJK -- visible_value is sliced by
-    # grapheme count; emoji width is ignored.
-    test "render with emoji overflowing width emits more cells than width allows (BUG)" do
-      # 5 emojis = 10 cells, width = 6
+    test "render with emoji truncates the visible value by cells" do
+      # 5 emojis = 10 cells, width = 6 -> only 3 emojis (6 cells) fit.
       value = String.duplicate("🎉", 5)
 
       state =
@@ -736,8 +724,56 @@ defmodule Raxol.UI.Components.Input.TextFieldTest do
         TextField.render(state, %{theme: %{text_field: %{layout: %{}}}})
 
       [left, _cursor, _right] = rendered.children
-      # Current: left contains all 5 emojis = 10 cells in a 6-cell field.
-      assert left.content == value
+      assert left.content == String.duplicate("🎉", 3)
+    end
+  end
+
+  describe "cell-aware scrolling under CJK input" do
+    test "typing CJK characters past visible width scrolls to keep cursor in view" do
+      # width=5 cells; each CJK = 2 cells
+      state =
+        create_state(%{value: "", cursor_pos: 0, scroll_offset: 0, width: 5})
+
+      keys = ["你", "好", "世", "界"]
+
+      final =
+        Enum.reduce(keys, state, fn k, s ->
+          {:noreply, ns} =
+            TextField.handle_event({:keypress, k, []}, s, default_context())
+
+          ns
+        end)
+
+      assert final.value == "你好世界"
+      assert final.cursor_pos == 4
+      # Cursor cell is 8; with width=5 the cursor must land within
+      # [scroll_cell, scroll_cell + 4]. The cell-aware policy scrolls
+      # so the cursor sits at the rightmost visible cell.
+      assert final.scroll_offset > 0
+    end
+
+    test "scrolled CJK field renders only the cells inside the window" do
+      # Pre-state: scroll already adjusted so the cursor is at the right
+      # edge of a 5-cell window.
+      state =
+        create_state(%{
+          value: "你好世界",
+          cursor_pos: 4,
+          scroll_offset: 2,
+          focused: true,
+          width: 5,
+          style: %{color: "#fff", background: "#000"}
+        })
+
+      rendered =
+        TextField.render(state, %{theme: %{text_field: %{layout: %{}}}})
+
+      [left, _cursor, right] = rendered.children
+      # Visible graphemes [2..] are "世界" (4 cells, fits in 5-cell window).
+      # Cursor is at grapheme 4 (end), so left holds the whole visible
+      # string and right is empty.
+      assert left.content == "世界"
+      assert right.content == ""
     end
   end
 
