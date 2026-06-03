@@ -32,12 +32,16 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
           | {:update, [integer()], any()}
   def diff_trees(old_tree, new_tree), do: do_diff_trees(old_tree, new_tree, [])
 
-  defp do_diff_trees(nil, nil, _path), do: :no_change
-  defp do_diff_trees(nil, new, _path), do: {:replace, new}
-  defp do_diff_trees(_old, nil, _path), do: {:replace, nil}
-  defp do_diff_trees(old, new, _path) when old == new, do: :no_change
+  # `rev_path` is the path to the current node, stored in reverse so we can
+  # prepend the next index in O(1). It is reversed once at the output
+  # boundaries (`process_child_diffs`, `select_keyed_diff_result`) so callers
+  # still see the public path in forward order.
+  defp do_diff_trees(nil, nil, _rev_path), do: :no_change
+  defp do_diff_trees(nil, new, _rev_path), do: {:replace, new}
+  defp do_diff_trees(_old, nil, _rev_path), do: {:replace, nil}
+  defp do_diff_trees(old, new, _rev_path) when old == new, do: :no_change
 
-  defp do_diff_trees(%{type: t1} = _old, %{type: t2} = new, _path)
+  defp do_diff_trees(%{type: t1} = _old, %{type: t2} = new, _rev_path)
        when t1 != t2 do
     {:replace, new}
   end
@@ -45,7 +49,7 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
   defp do_diff_trees(
          %{type: type, children: old_children} = _old,
          %{type: type, children: new_children} = _new,
-         path
+         rev_path
        ) do
     attempt_keyed_diff =
       are_children_consistently_keyed?(old_children) &&
@@ -56,7 +60,7 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
         attempt_keyed_diff,
         old_children,
         new_children,
-        path
+        rev_path
       )
 
     case children_diff_result do
@@ -66,14 +70,14 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
   end
 
   # Fallback for non-map nodes or nodes without :children that are not identical
-  defp do_diff_trees(_old, new, _path), do: {:replace, new}
+  defp do_diff_trees(_old, new, _rev_path), do: {:replace, new}
 
-  defp perform_children_diff(true, old_children, new_children, path) do
-    perform_keyed_children_diff(old_children, new_children, path)
+  defp perform_children_diff(true, old_children, new_children, rev_path) do
+    perform_keyed_children_diff(old_children, new_children, rev_path)
   end
 
-  defp perform_children_diff(false, old_children, new_children, path) do
-    perform_non_keyed_children_diff(old_children, new_children, path)
+  defp perform_children_diff(false, old_children, new_children, rev_path) do
+    perform_non_keyed_children_diff(old_children, new_children, rev_path)
   end
 
   # Helper to check if a list of children is consistently keyed
@@ -117,52 +121,33 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
 
   defp validate_key_presence(true, _child, _list_name), do: :ok
 
-  defp perform_non_keyed_children_diff(old_children, new_children, path) do
+  defp perform_non_keyed_children_diff(old_children, new_children, rev_path) do
     child_diffs =
       zip_longest(old_children, new_children)
       |> Enum.with_index()
       |> Enum.map(fn
         {{old_child, new_child}, idx} ->
-          # The path for `do_diff_trees` here is the path *to the child node itself*.
-          # So, it's `path ++ [idx]`.
-          # The `path` argument of `perform_non_keyed_children_diff` is path_to_parent.
-          # The diff from `do_diff_trees` will be relative to this child.
-          # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
-          case do_diff_trees(old_child, new_child, path ++ [idx]) do
+          case do_diff_trees(old_child, new_child, [idx | rev_path]) do
             :no_change -> nil
             diff_for_child_at_idx -> {idx, diff_for_child_at_idx}
           end
       end)
       |> Enum.reject(&is_nil/1)
 
-    process_child_diffs(child_diffs, path)
+    process_child_diffs(child_diffs, rev_path)
   end
 
-  defp process_child_diffs([], _path) do
-    # We need to return the unchanged tree, but we only have the children here
-    # This should be handled by the caller
-    :no_change
-  end
+  defp process_child_diffs([], _rev_path), do: :no_change
 
-  defp process_child_diffs(child_diffs, path) do
-    # `path` here is path_to_parent.
-    # `diffs` contains tuples `{original_child_idx, diff_for_child_at_idx}`.
-    # `diff_for_child_at_idx` could be {:replace, new_content_for_child} or
-    # {:update, child_path_segment, grandchild_changes} if child had changed.
-    # The `child_path_segment` in such an internal update would be relative to the child,
-    # so if child was at path `P` and its own child at index `C` changed, the path in that
-    # internal diff would be `[C]`.
-    # The path stored in `{idx, diff}` should reflect the *full path to changed*
-    # if the diff is an :update.
-    # However, `do_diff_trees` already returns paths like `path ++ [idx]` if it's an update.
-    # So `diff_for_child_at_idx` will contain the correct full path if it's an update.
-    {:update, path, %{type: :indexed_children, diffs: child_diffs}}
+  defp process_child_diffs(child_diffs, rev_path) do
+    {:update, Enum.reverse(rev_path),
+     %{type: :indexed_children, diffs: child_diffs}}
   end
 
   defp perform_keyed_children_diff(
          old_children_list,
          new_children_list,
-         path_to_parent
+         rev_path_to_parent
        ) do
     old_children_map_by_key =
       build_children_map_by_key(old_children_list, "old_children_list")
@@ -186,7 +171,7 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
       ops,
       old_children_list,
       new_keys_ordered,
-      path_to_parent
+      rev_path_to_parent
     )
   end
 
@@ -281,7 +266,7 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
          ops,
          old_children_list,
          new_keys_ordered,
-         path_to_parent
+         rev_path_to_parent
        ) do
     has_structural_changes = ops != []
     old_keys_ordered = Enum.map(old_children_list || [], & &1[:key])
@@ -292,7 +277,7 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
       order_changed,
       ops,
       new_keys_ordered,
-      path_to_parent
+      rev_path_to_parent
     )
   end
 
@@ -301,7 +286,7 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
          false,
          _ops,
          _new_keys_ordered,
-         _path_to_parent
+         _rev_path_to_parent
        ) do
     :no_change
   end
@@ -311,9 +296,9 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
          true,
          _ops,
          new_keys_ordered,
-         path_to_parent
+         rev_path_to_parent
        ) do
-    {:update, path_to_parent,
+    {:update, Enum.reverse(rev_path_to_parent),
      %{type: :keyed_children, ops: [{:key_reorder, new_keys_ordered}]}}
   end
 
@@ -322,7 +307,7 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
          _order_changed,
          ops,
          new_keys_ordered,
-         path_to_parent
+         rev_path_to_parent
        ) do
     # Partition ops so that :key_reorder is always last
     {_reorder_ops, other_ops} =
@@ -333,7 +318,9 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
 
     # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
     all_ops = other_ops ++ [{:key_reorder, new_keys_ordered}]
-    {:update, path_to_parent, %{type: :keyed_children, ops: all_ops}}
+
+    {:update, Enum.reverse(rev_path_to_parent),
+     %{type: :keyed_children, ops: all_ops}}
   end
 
   defp zip_longest(a, b), do: Raxol.Core.Utils.List.zip_longest(a, b)
