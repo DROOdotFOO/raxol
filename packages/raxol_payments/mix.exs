@@ -44,6 +44,7 @@ defmodule RaxolPayments.MixProject do
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:stream_data, "~> 1.0", only: [:dev, :test]},
       # Optional: only needed when running EchoServer (`mix raxol_payments.echo`).
       {:plug, "~> 1.16", optional: true},
       {:plug_cowboy, "~> 2.7", optional: true}
