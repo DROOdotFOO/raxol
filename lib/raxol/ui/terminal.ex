@@ -121,8 +121,9 @@ defmodule Raxol.UI.Terminal do
     # Get terminal width
     width = get_terminal_size().width
 
-    # Calculate padding
-    padding = max(0, div(width - String.length(text), 2))
+    # Calculate padding from display width so CJK/emoji center correctly
+    padding =
+      max(0, div(width - Raxol.UI.TextMeasure.display_width(text), 2))
 
     # Print with padding
     print(String.duplicate(" ", padding) <> text, opts)
