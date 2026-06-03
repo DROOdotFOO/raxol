@@ -411,14 +411,18 @@ defmodule Raxol.UI.Components.Table do
         :prev_page
 
       String.contains?(button_id, "_sort_") ->
-        column_id =
-          button_id |> String.replace(~r/.*_sort_/, "") |> String.to_atom()
-
-        {:sort, column_id}
+        parse_sort_button(button_id)
 
       true ->
         :unknown
     end
+  end
+
+  defp parse_sort_button(button_id) do
+    column_str = String.replace(button_id, ~r/.*_sort_/, "")
+    {:sort, String.to_existing_atom(column_str)}
+  rescue
+    ArgumentError -> :unknown
   end
 
   defp handle_next_page_click(%{options: %{paginate: true}} = state) do

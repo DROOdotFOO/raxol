@@ -151,37 +151,42 @@ defmodule Raxol.UI.Components.Modal.Rendering do
 
   @doc "Renders text input field."
   def render_text_input(field, common_props) do
-    text_input_props =
-      Map.merge(common_props, %{
-        "value" => field.value || "",
-        "on_change" => {:field_update, field.id}
-      })
-
-    # Convert Map to Keyword list for text_input function
-    keyword_props =
-      Enum.map(text_input_props, fn {k, v} ->
-        {String.to_atom(to_string(k)), v}
-      end)
-
-    Raxol.View.Elements.text_input(keyword_props)
+    common_props
+    |> Map.merge(%{
+      value: field.value || "",
+      on_change: {:field_update, field.id}
+    })
+    |> to_safe_keyword()
+    |> Raxol.View.Elements.text_input()
   end
 
   @doc "Renders checkbox field."
   def render_checkbox(field, common_props) do
-    checkbox_props =
-      Map.merge(common_props, %{
-        "checked" => field.value == true,
-        "label" => "",
-        "on_toggle" => {:field_update, field.id}
-      })
+    common_props
+    |> Map.merge(%{
+      checked: field.value == true,
+      label: "",
+      on_toggle: {:field_update, field.id}
+    })
+    |> to_safe_keyword()
+    |> Raxol.View.Elements.checkbox()
+  end
 
-    # Convert Map to Keyword list for checkbox function
-    keyword_props =
-      Enum.map(checkbox_props, fn {k, v} ->
-        {String.to_atom(to_string(k)), v}
-      end)
+  # Normalizes a map of mixed atom/string keys to a keyword list. String keys
+  # are resolved via String.to_existing_atom; unknown keys are dropped rather
+  # than minted as new atoms (avoids the String.to_atom memory-leak class).
+  defp to_safe_keyword(map) do
+    Enum.flat_map(map, fn
+      {k, v} when is_atom(k) ->
+        [{k, v}]
 
-    Raxol.View.Elements.checkbox(keyword_props)
+      {k, v} when is_binary(k) ->
+        try do
+          [{String.to_existing_atom(k), v}]
+        rescue
+          ArgumentError -> []
+        end
+    end)
   end
 
   @doc "Renders dropdown field."
