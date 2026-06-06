@@ -655,7 +655,11 @@ defmodule Raxol.UI.Layout.Engine do
         %{type: :checkbox, label: label} = _element,
         available_space
       ) do
-    Elements.measure(:checkbox, %{label: label || ""}, available_space[:prepared_cache])
+    Elements.measure(
+      :checkbox,
+      %{label: label || ""},
+      available_space[:prepared_cache]
+    )
   end
 
   # TextInput with top-level :value/:placeholder keys (new View DSL format)
