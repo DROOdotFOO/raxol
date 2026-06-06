@@ -1,4 +1,4 @@
-FROM arm64v8/ubuntu:24.04
+FROM arm64v8/ubuntu:26.04
 
 # Set noninteractive installation
 ENV DEBIAN_FRONTEND=noninteractive
