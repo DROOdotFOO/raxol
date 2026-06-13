@@ -129,4 +129,99 @@ defmodule Raxol.Payments.Protocols.X402Test do
       assert {:error, :no_receipt} = X402.parse_receipt([])
     end
   end
+
+  describe "build_payment/2 USDC domain resolution" do
+    # Captures the domain passed to sign_typed_data so we can assert that
+    # build_payment looks up the per-chain USDC name/version rather than
+    # using a hardcoded "USD Coin".
+    defmodule CaptureWallet do
+      @moduledoc false
+      @behaviour Raxol.Payments.Wallet
+      @impl true
+      def address, do: "0x" <> String.duplicate("ab", 20)
+      @impl true
+      def chain_id, do: 8453
+      @impl true
+      def sign_message(_msg), do: {:ok, <<0::512>>}
+      @impl true
+      def sign_typed_data(domain, _types, _message) do
+        Process.put(:captured_domain, domain)
+        {:ok, <<0::512>>}
+      end
+
+      @impl true
+      def sign_hash(_digest), do: {:ok, <<0::520>>}
+    end
+
+    defp challenge_for(chain_id, currency) do
+      %{
+        price: 1_000_000,
+        currency: currency,
+        network: "eip155:#{chain_id}",
+        pay_to: "0x" <> String.duplicate("cd", 20),
+        nonce: "0x" <> String.duplicate("12", 32),
+        valid_after: 0,
+        valid_before: 9_999_999_999,
+        extra: %{}
+      }
+    end
+
+    test "Base mainnet (8453) resolves to 'USD Coin'" do
+      challenge =
+        challenge_for(8453, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+
+      assert {:ok, _} = X402.build_payment(challenge, CaptureWallet)
+
+      assert %{
+               name: "USD Coin",
+               version: "2",
+               chainId: 8453,
+               verifyingContract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+             } = Process.get(:captured_domain)
+    end
+
+    test "Base Sepolia (84532) resolves to 'USDC' instead of hardcoded 'USD Coin'" do
+      challenge =
+        challenge_for(84_532, "0x036CbD53842c5426634e7929541eC2318f3dCF7e")
+
+      assert {:ok, _} = X402.build_payment(challenge, CaptureWallet)
+
+      assert %{
+               name: "USDC",
+               version: "2",
+               chainId: 84_532,
+               verifyingContract: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+             } = Process.get(:captured_domain)
+    end
+
+    test "Ethereum Sepolia (11155111) resolves to 'USDC'" do
+      challenge =
+        challenge_for(11_155_111, "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238")
+
+      assert {:ok, _} = X402.build_payment(challenge, CaptureWallet)
+
+      assert %{name: "USDC", version: "2", chainId: 11_155_111} =
+               Process.get(:captured_domain)
+    end
+
+    test "Optimism Sepolia (11155420) resolves to 'USDC'" do
+      challenge =
+        challenge_for(11_155_420, "0x5fd84259d66Cd46123540766Be93DFE6D43130D7")
+
+      assert {:ok, _} = X402.build_payment(challenge, CaptureWallet)
+
+      assert %{name: "USDC", version: "2", chainId: 11_155_420} =
+               Process.get(:captured_domain)
+    end
+
+    test "Arbitrum Sepolia (421614) resolves to 'USD Coin' (verified on-chain)" do
+      challenge =
+        challenge_for(421_614, "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d")
+
+      assert {:ok, _} = X402.build_payment(challenge, CaptureWallet)
+
+      assert %{name: "USD Coin", version: "2", chainId: 421_614} =
+               Process.get(:captured_domain)
+    end
+  end
 end
