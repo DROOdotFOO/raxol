@@ -44,12 +44,15 @@ defmodule Raxol.UI.Layout.Engine do
   @typedoc """
   Available space for a layout pass. Origin (`x`, `y`) and extent
   (`width`, `height`) all in cell units relative to the viewport.
+  Additional keys (e.g. `:prepared_cache` for the Pretext measurement
+  cache) may also be present; only the four geometry keys are required.
   """
   @type space :: %{
           required(:x) => non_neg_integer(),
           required(:y) => non_neg_integer(),
           required(:width) => non_neg_integer(),
-          required(:height) => non_neg_integer()
+          required(:height) => non_neg_integer(),
+          optional(atom()) => any()
         }
 
   @typedoc """
@@ -244,10 +247,20 @@ defmodule Raxol.UI.Layout.Engine do
       when is_binary(content) do
     style_map = style_to_map(Map.get(element, :style, %{}))
 
+    # A text element may carry a relative `:position` offset in its style
+    # (chart cells emitted by `Raxol.UI.Charts.ViewBridge` use this to draw
+    # cells at specific (x, y) coordinates inside the container's space).
+    # Apply the offset so the cell lands where the chart asked.
+    {dx, dy} =
+      case Map.get(style_map, :position) || Map.get(element, :position) do
+        {x, y} when is_integer(x) and is_integer(y) -> {x, y}
+        _ -> {0, 0}
+      end
+
     text_element = %{
       type: :text,
-      x: space.x,
-      y: space.y,
+      x: space.x + dx,
+      y: space.y + dy,
       text: content,
       fg: Map.get(element, :fg),
       bg: Map.get(element, :bg),
@@ -266,6 +279,29 @@ defmodule Raxol.UI.Layout.Engine do
     text = Map.get(attrs, :label, "Button")
     component_attrs = Map.put(attrs, :component_type, :button)
     build_button_elements(text, component_attrs, space) ++ acc
+  end
+
+  # New-DSL form: `text_input(value: ..., placeholder: ...)` builds an
+  # element with top-level keys instead of `:attrs`. Rewrite into the
+  # `:attrs`-shaped form and forward.
+  def process_element(%{type: :text_input} = element, space, acc)
+      when not is_map_key(element, :attrs) do
+    attrs =
+      element
+      |> Map.take([
+        :value,
+        :placeholder,
+        :on_change,
+        :aria_label,
+        :aria_description,
+        :style,
+        :fg,
+        :bg
+      ])
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    process_element(Map.put(element, :attrs, attrs), space, acc)
   end
 
   def process_element(%{type: :text_input, attrs: attrs} = _element, space, acc) do
@@ -373,6 +409,15 @@ defmodule Raxol.UI.Layout.Engine do
 
     children_acc = process_children(children, inner_space, [])
     [box_element | children_acc] ++ acc
+  end
+
+  # Chart widget types are emitted by `Components.chart/1` as :box elements
+  # whose `:type` is overridden to one of these atoms so MCP ToolProvider
+  # can discover them. Layout-wise they behave identically to :box, so
+  # rewrite the type and forward.
+  def process_element(%{type: type} = element, space, acc)
+      when type in [:line_chart, :bar_chart, :scatter_chart, :heatmap] do
+    process_element(%{element | type: :box}, space, acc)
   end
 
   # Process button elements in new View DSL format (no :attrs key)

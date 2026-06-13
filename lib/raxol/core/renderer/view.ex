@@ -65,7 +65,7 @@ defmodule Raxol.Core.Renderer.View do
   @doc "Creates a new box view with padding and optional border."
   def box(opts \\ []) do
     validate_keyword_opts(opts, "View.box")
-    Box.new(opts)
+    Box.new(promote_do_to_children(opts))
   end
 
   defmacro box(opts, do: block) do
@@ -86,7 +86,7 @@ defmodule Raxol.Core.Renderer.View do
   @doc "Creates a new row layout."
   def row(opts \\ []) do
     validate_keyword_opts(opts, "View.row")
-    Flex.row(opts)
+    Flex.row(promote_do_to_children(opts))
   end
 
   defmacro row(opts, do: block) do
@@ -244,8 +244,29 @@ defmodule Raxol.Core.Renderer.View do
 
   @doc "Creates a new column layout."
   def column(opts) do
-    Raxol.Core.Renderer.View.Layout.Flex.column(opts)
+    Raxol.Core.Renderer.View.Layout.Flex.column(promote_do_to_children(opts))
   end
+
+  @doc """
+  Routes an inline `do:` keyword to `:children` so that callers can write
+  `column(style: ..., do: child_list)` and have the children flow through
+  the runtime function path the same way `column do ... end` flows through
+  the macro path.
+
+  Without this, Elixir parses `column(style: ..., do: child_list)` as a
+  single-arg call with a kwlist, matches `def column/1`, and the
+  downstream layout function never sees the children — silently rendering
+  an empty container. The dynamic-children bug that broke 10+ playground
+  demos at once.
+  """
+  def promote_do_to_children(opts) when is_list(opts) do
+    case Keyword.pop(opts, :do) do
+      {nil, opts} -> opts
+      {block, opts} -> Keyword.put_new(opts, :children, List.wrap(block))
+    end
+  end
+
+  def promote_do_to_children(opts), do: opts
 
   defmacro column(opts, do: block) do
     quote do
