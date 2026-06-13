@@ -8,7 +8,7 @@ defmodule Raxol.Watch.FormatterPropertyTest do
 
   describe "format_announcement/2 length invariants" do
     property "body length never exceeds max_body_length for any input" do
-      check all message <- string(:utf8) do
+      check all(message <- string(:utf8)) do
         notif = Formatter.format_announcement(message)
         assert String.length(notif.body) <= @max
       end
@@ -17,8 +17,10 @@ defmodule Raxol.Watch.FormatterPropertyTest do
     property "short messages are passed through verbatim" do
       # Filter to messages whose grapheme count fits, since the
       # implementation's cap is in graphemes (visual width).
-      check all message <- string(:utf8),
-                String.length(message) <= @max do
+      check all(
+              message <- string(:utf8),
+              String.length(message) <= @max
+            ) do
         notif = Formatter.format_announcement(message)
         assert notif.body == message
       end
@@ -27,7 +29,7 @@ defmodule Raxol.Watch.FormatterPropertyTest do
     property "long messages are truncated to exactly max_body_length with ellipsis" do
       # ASCII guarantees grapheme count == codepoint count == byte count,
       # so min_length here lines up with the implementation's grapheme cap.
-      check all message <- string(:ascii, min_length: @max + 1, max_length: @max * 2) do
+      check all(message <- string(:ascii, min_length: @max + 1, max_length: @max * 2)) do
         notif = Formatter.format_announcement(message)
         assert String.ends_with?(notif.body, "...")
         assert String.length(notif.body) == @max
@@ -37,20 +39,23 @@ defmodule Raxol.Watch.FormatterPropertyTest do
 
   describe "format_announcement/2 priority" do
     property "any priority atom produces a notification with a known push priority" do
-      check all priority <- one_of([
+      check all(
+              priority <-
+                one_of([
                   constant(:high),
                   constant(:medium),
                   constant(:low),
                   constant(:normal),
                   atom(:alphanumeric)
-                ]) do
+                ])
+            ) do
         notif = Formatter.format_announcement("msg", priority)
         assert notif.priority in [:high, :normal, :silent]
       end
     end
 
     property "high priority always emits the acknowledge action" do
-      check all message <- string(:utf8, max_length: 50) do
+      check all(message <- string(:utf8, max_length: 50)) do
         notif = Formatter.format_announcement(message, :high)
         action_ids = Enum.map(notif.actions, & &1.id)
         assert "acknowledge" in action_ids
@@ -58,12 +63,15 @@ defmodule Raxol.Watch.FormatterPropertyTest do
     end
 
     property "high priority sets badge to 1, others to 0" do
-      check all priority <- one_of([
+      check all(
+              priority <-
+                one_of([
                   constant(:medium),
                   constant(:low),
                   constant(:normal),
                   atom(:alphanumeric)
-                ]) do
+                ])
+            ) do
         assert Formatter.format_announcement("m", priority).badge == 0
       end
 
@@ -73,14 +81,14 @@ defmodule Raxol.Watch.FormatterPropertyTest do
 
   describe "format_model_summary/2 length invariants" do
     property "body length never exceeds max_body_length for any projections list" do
-      check all projections <- projections_gen() do
+      check all(projections <- projections_gen()) do
         notif = Formatter.format_model_summary("title", projections)
         assert String.length(notif.body) <= @max
       end
     end
 
     property "small summaries preserve every label and value verbatim" do
-      check all projections <- list_of(short_projection(), max_length: 3) do
+      check all(projections <- list_of(short_projection(), max_length: 3)) do
         notif = Formatter.format_model_summary("title", projections)
 
         # If the rendered body fits under the cap, every label and value
@@ -95,7 +103,7 @@ defmodule Raxol.Watch.FormatterPropertyTest do
     end
 
     property "default title is Raxol when no title is given" do
-      check all projections <- list_of(short_projection(), max_length: 3) do
+      check all(projections <- list_of(short_projection(), max_length: 3)) do
         assert Formatter.format_model_summary(projections).title == "Raxol"
       end
     end

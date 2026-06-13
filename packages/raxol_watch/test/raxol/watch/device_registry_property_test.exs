@@ -31,9 +31,11 @@ defmodule Raxol.Watch.DeviceRegistryPropertyTest do
 
   describe "round-trip" do
     property "register then list_devices contains the device with its prefs" do
-      check all token <- token_gen(),
-                platform <- platform_gen(),
-                opts <- prefs_gen() do
+      check all(
+              token <- token_gen(),
+              platform <- platform_gen(),
+              opts <- prefs_gen()
+            ) do
         clear_table()
         :ok = DeviceRegistry.register(token, platform, opts)
 
@@ -44,8 +46,10 @@ defmodule Raxol.Watch.DeviceRegistryPropertyTest do
     end
 
     property "register then unregister leaves the table empty" do
-      check all token <- token_gen(),
-                platform <- platform_gen() do
+      check all(
+              token <- token_gen(),
+              platform <- platform_gen()
+            ) do
         clear_table()
         :ok = DeviceRegistry.register(token, platform)
         :ok = DeviceRegistry.unregister(token)
@@ -55,8 +59,10 @@ defmodule Raxol.Watch.DeviceRegistryPropertyTest do
     end
 
     property "re-register with new prefs overwrites the prior entry" do
-      check all token <- token_gen(),
-                platform <- platform_gen() do
+      check all(
+              token <- token_gen(),
+              platform <- platform_gen()
+            ) do
         clear_table()
         :ok = DeviceRegistry.register(token, platform, muted: true)
         :ok = DeviceRegistry.register(token, platform, muted: false)
@@ -69,8 +75,10 @@ defmodule Raxol.Watch.DeviceRegistryPropertyTest do
 
   describe "invariants over batches" do
     property "device_count always equals length of list_devices" do
-      check all tokens_and_platforms <-
-                  list_of(tuple({token_gen(), platform_gen()}), max_length: 20) do
+      check all(
+              tokens_and_platforms <-
+                list_of(tuple({token_gen(), platform_gen()}), max_length: 20)
+            ) do
         clear_table()
 
         # de-duplicate tokens so each register adds a row, not overwrites
@@ -83,8 +91,10 @@ defmodule Raxol.Watch.DeviceRegistryPropertyTest do
     end
 
     property "list_devices(platform) is exactly the subset of list_devices() for that platform" do
-      check all entries <-
-                  list_of(tuple({token_gen(), platform_gen()}), max_length: 15) do
+      check all(
+              entries <-
+                list_of(tuple({token_gen(), platform_gen()}), max_length: 15)
+            ) do
         clear_table()
 
         unique = Enum.uniq_by(entries, fn {tok, _} -> tok end)
@@ -109,9 +119,11 @@ defmodule Raxol.Watch.DeviceRegistryPropertyTest do
     end
 
     property "unregistering an unknown token never affects existing entries" do
-      check all known <- token_gen(),
-                unknown <- token_gen(),
-                known != unknown do
+      check all(
+              known <- token_gen(),
+              unknown <- token_gen(),
+              known != unknown
+            ) do
         clear_table()
         :ok = DeviceRegistry.register(known, :apns)
         before = DeviceRegistry.list_devices()

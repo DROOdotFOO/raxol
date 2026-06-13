@@ -58,6 +58,81 @@ Raxol.Watch.Notifier.push_to_all(notification)
 
 The Notifier also subscribes to `Raxol.Core.Accessibility` announcements automatically. High-priority alerts push immediately; normal alerts are debounced (1 second) to respect watch battery.
 
+### Rich Notification Payloads
+
+Mirroring the watch surface capabilities Telegram shipped on Apple Watch / Wear OS in June 2026, `Formatter` builds notifications with optional voice, image, sticker, location, and long-body attachments. Every constructor preserves the full text under `:body_long` while keeping `:body` truncated to 160 chars for the watch-face glance.
+
+```elixir
+# Voice message
+Raxol.Watch.Formatter.format_audio("Alice", "Voice message",
+  "https://cdn.example.com/voice.m4a")
+
+# Photo or video thumbnail
+Raxol.Watch.Formatter.format_image("Build", "Screenshot attached",
+  "https://cdn.example.com/build.png", media_type: :photo)
+
+# Sticker
+Raxol.Watch.Formatter.format_sticker("Bob", "(sticker)",
+  "https://cdn.example.com/sticker.png")
+
+# Geographic location with optional label
+Raxol.Watch.Formatter.format_location("Alice", "Meeting spot",
+  %{lat: 37.7749, lng: -122.4194, label: "SF"})
+
+# Long-form message
+Raxol.Watch.Formatter.format_long_message("Build",
+  String.duplicate("...detailed log...", 100))
+
+# Chat-style (long body + chat tap-back actions)
+Raxol.Watch.Formatter.format_chat_message("Alice", "Hey, you free?")
+```
+
+**APNS / FCM payload encoding.** Phase W1 extends the `notification` shape; W2 / W3 (APNS `attachment-url` / FCM `notification.image` field mapping) are not yet wired in `Push.APNS` and `Push.FCM`. The new payload fields ride along in the notification map for consumer-facing telemetry and `Push.Backend` implementations to opt into. The host iOS / Wear OS app is responsible for downloading and attaching media (requires `UNNotificationServiceExtension` on iOS).
+
+### Chat Tap-Back Actions
+
+The default action map now includes chat-style actions alongside the existing navigation set:
+
+| Action ID | Event type | Data shape |
+|-----------|------------|------------|
+| `pause`   | `:key`     | `%{key: :char, char: " "}` |
+| `details` | `:key`     | `%{key: :enter}` |
+| `next`    | `:key`     | `%{key: :tab}` |
+| `mute`    | `:custom`  | `%{action: :mute}` |
+| `pin`     | `:custom`  | `%{action: :pin}` |
+| `delete`  | `:custom`  | `%{action: :delete}` |
+| `dismiss` | `nil`      | (no event) |
+
+TEA apps pattern-match on `event.type` and `event.data.action` to handle chat tap-backs. The dispatcher channel (`{:watch_action, event}`) is unchanged so existing handlers keep working.
+
+### Quick-Reply (Text Input)
+
+iOS `UNTextInputNotificationAction` and Android `RemoteInput` prompt the user for text before the action arrives back. `handle_reply_action/3` and `dispatch_reply/3` translate the action ID + typed text into an `:reply` event:
+
+```elixir
+# Handler-only (returns the Event):
+event = Raxol.Watch.ActionHandler.handle_reply_action("reply", "Sounds good!")
+# %Event{type: :reply, data: %{action: "reply", text: "Sounds good!"}}
+
+# Or dispatch through the configured channel:
+Raxol.Watch.ActionHandler.dispatch_reply("reply", "Sounds good!", to: MyApp.TEA)
+# Sends {:watch_action, %Event{type: :reply, ...}} to MyApp.TEA
+```
+
+### Notification Categories
+
+`Raxol.Watch.Categories` exposes the iOS `UNNotificationCategory` and Android notification-action data the host apps need to register at launch. Pure data, no platform calls:
+
+```elixir
+# Host iOS app passes this to UNUserNotificationCenter.setNotificationCategories
+ios_payload = Raxol.Watch.Categories.ios_categories()
+
+# Host Android app reads per-category action arrays
+chat_actions = Raxol.Watch.Categories.android_actions("raxol_chat")
+```
+
+Three category buckets matching the `:category` field on notifications: `"raxol_alert"`, `"raxol_status"`, `"raxol_chat"` (with `reply` text-input action).
+
 ### Tap Actions
 
 Watch notification actions map back to Raxol events via `ActionHandler`:

@@ -16,7 +16,9 @@ defmodule Raxol.Watch.Push.Noop do
 
   def start_link(_opts \\ []) do
     if @warn_on_start do
-      Logger.warning("Raxol.Watch.Push.Noop is running outside test/dev -- push notifications will be silently discarded. Configure a real backend (APNS/FCM) for production.")
+      Logger.warning(
+        "Raxol.Watch.Push.Noop is running outside test/dev -- push notifications will be silently discarded. Configure a real backend (APNS/FCM) for production."
+      )
     end
 
     Agent.start_link(fn -> [] end, name: __MODULE__)

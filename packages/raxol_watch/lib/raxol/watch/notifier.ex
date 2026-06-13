@@ -86,13 +86,19 @@ defmodule Raxol.Watch.Notifier do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:announcement_added, _ref, %{message: message, priority: :high}}, state) do
+  def handle_manager_info(
+        {:announcement_added, _ref, %{message: message, priority: :high}},
+        state
+      ) do
     notification = Formatter.format_announcement(message, :high)
     do_push_all(notification, state)
     {:noreply, %{state | pending: nil}}
   end
 
-  def handle_manager_info({:announcement_added, _ref, %{message: message, priority: priority}}, state) do
+  def handle_manager_info(
+        {:announcement_added, _ref, %{message: message, priority: priority}},
+        state
+      ) do
     notification = Formatter.format_announcement(message, priority)
     {:noreply, debounce_push(notification, state)}
   end
@@ -176,9 +182,7 @@ defmodule Raxol.Watch.Notifier do
   defp handle_push_result(:ok, _token, _platform), do: :ok
 
   defp handle_push_result({:error, reason}, token, platform) do
-    Logger.warning(
-      "Push failed for #{platform} device #{redact(token)}: #{inspect(reason)}"
-    )
+    Logger.warning("Push failed for #{platform} device #{redact(token)}: #{inspect(reason)}")
 
     if MapSet.member?(@permanent_failure_reasons, reason) do
       DeviceRegistry.unregister(token, :delivery_failed)

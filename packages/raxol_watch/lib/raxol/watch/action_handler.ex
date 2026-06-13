@@ -20,6 +20,9 @@ defmodule Raxol.Watch.ActionHandler do
     "quit" => {:key, %{key: :char, char: "q"}},
     "next" => {:key, %{key: :tab}},
     "previous" => {:key, %{key: :tab, modifiers: [:shift]}},
+    "mute" => {:custom, %{action: :mute}},
+    "pin" => {:custom, %{action: :pin}},
+    "delete" => {:custom, %{action: :delete}},
     "dismiss" => nil
   }
 
@@ -44,8 +47,40 @@ defmodule Raxol.Watch.ActionHandler do
     actions = merge_actions(opts)
 
     case Map.get(actions, action_id) do
-      {:key, data} -> Event.new(:key, data)
+      {type, data} when is_atom(type) and is_map(data) -> Event.new(type, data)
       nil -> nil
+    end
+  end
+
+  @doc """
+  Translates a quick-reply action plus the user's typed text into an
+  `Event.new(:reply, %{action: action_id, text: text})`.
+
+  Used by iOS `UNTextInputNotificationAction` and Android `RemoteInput`,
+  where the OS prompts the user for text and delivers the typed string
+  alongside the action ID.
+  """
+  @spec handle_reply_action(String.t(), String.t(), keyword()) :: Event.t()
+  def handle_reply_action(action_id, text, _opts \\ [])
+      when is_binary(action_id) and is_binary(text) do
+    Event.new(:reply, %{action: action_id, text: text})
+  end
+
+  @doc """
+  Translates a quick-reply, then routes the resulting Event via the
+  configured dispatcher (same channel as `dispatch/2`).
+
+  Consumers receive `{:watch_action, %Event{type: :reply, ...}}` and can
+  pattern-match on `event.type == :reply`.
+  """
+  @spec dispatch_reply(String.t(), String.t(), keyword()) ::
+          {:ok, Event.t()} | {:error, term(), Event.t()}
+  def dispatch_reply(action_id, text, opts \\ []) do
+    event = handle_reply_action(action_id, text, opts)
+
+    case resolve_dispatcher(opts) do
+      nil -> {:error, :no_dispatcher, event}
+      dispatcher -> do_dispatch(dispatcher, event)
     end
   end
 

@@ -10,14 +10,15 @@ defmodule Raxol.Watch.TelemetryTest do
     start_supervised!({Notifier, push_backend: Noop})
     Noop.clear()
 
-    ref = :telemetry_test.attach_event_handlers(self(), [
-      [:raxol_watch, :device, :registered],
-      [:raxol_watch, :device, :unregistered],
-      [:raxol_watch, :device, :cleared],
-      [:raxol_watch, :push, :start],
-      [:raxol_watch, :push, :stop],
-      [:raxol_watch, :notifier, :coalesced]
-    ])
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [
+        [:raxol_watch, :device, :registered],
+        [:raxol_watch, :device, :unregistered],
+        [:raxol_watch, :device, :cleared],
+        [:raxol_watch, :push, :start],
+        [:raxol_watch, :push, :stop],
+        [:raxol_watch, :notifier, :coalesced]
+      ])
 
     on_exit(fn -> :telemetry.detach(ref) end)
 
@@ -46,8 +47,7 @@ defmodule Raxol.Watch.TelemetryTest do
       DeviceRegistry.register("tok", :fcm)
       DeviceRegistry.unregister("tok")
 
-      assert_receive {[:raxol_watch, :device, :unregistered], _ref, _,
-                      %{reason: :explicit}}
+      assert_receive {[:raxol_watch, :device, :unregistered], _ref, _, %{reason: :explicit}}
     end
 
     test "clear_all emits [:raxol_watch, :device, :cleared] with count" do
