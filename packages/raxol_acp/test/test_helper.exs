@@ -5,6 +5,13 @@
 #     mix test --include live_chain
 ExUnit.start(exclude: [:live_chain, :live_bundler])
 
+# Tests tagged :cli_signer spawn the riddler-permit2-erc3009 CLI as a
+# black-box buyer-side signer. Skipped by default unless RIDDLER_CLI_DIR
+# is set.
+unless System.get_env("RIDDLER_CLI_DIR") do
+  ExUnit.configure(exclude: [:cli_signer])
+end
+
 # Configure the in-memory contract client for the test run. The test/support
 # impl is the second real implementation of the ContractClient behaviour --
 # not a mock; see Raxol.ACP.ContractClient for the rationale.
