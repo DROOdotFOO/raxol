@@ -289,6 +289,17 @@ defmodule Raxol.ACP.Onchain.RPC do
   defp encode_data(<<>>), do: "0x"
   defp encode_data(bin) when is_binary(bin), do: "0x" <> Base.encode16(bin, case: :lower)
 
+  @doc """
+  Escape hatch for arbitrary JSON-RPC methods this module doesn't wrap
+  explicitly (e.g. `eth_getLogs`, `eth_getBlockByNumber`).
+
+  Returns the raw `result` field on success. Callers handle decoding.
+  """
+  @spec request(client(), String.t(), list()) :: {:ok, term()} | {:error, term()}
+  def request(client, method, params \\ []) do
+    call(client, method, params)
+  end
+
   # -- Core call --
 
   defp call(client, method, params) do
