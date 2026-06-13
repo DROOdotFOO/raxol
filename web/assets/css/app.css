@@ -3,6 +3,39 @@
 @import "tailwindcss/utilities";
 
 /* =============================================================================
+   Monaspace variable fonts (self-hosted, SIL OFL 1.1)
+   Argon -> mono (UI + buttons + nav)
+   Neon  -> body (paragraph copy)
+   Xenon -> heading (H1-H3, name-coral)
+   Variable weight range 200-800, italic via slant axis (variable on the source
+   but we use the upright cut here).
+   ============================================================================= */
+
+@font-face {
+  font-family: 'Monaspace Argon';
+  src: url('/fonts/MonaspaceArgon-Var.woff2') format('woff2-variations');
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Monaspace Neon';
+  src: url('/fonts/MonaspaceNeon-Var.woff2') format('woff2-variations');
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Monaspace Xenon';
+  src: url('/fonts/MonaspaceXenon-Var.woff2') format('woff2-variations');
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* =============================================================================
    Reusable Utility Classes (Tailwind @layer components)
    These replace repeated inline style= patterns across LiveViews.
    ============================================================================= */
@@ -11,14 +44,14 @@
   /* --- Nav / header links with hover --- */
   .nav-link {
     @apply font-mono text-sm tracking-wide transition-colors;
-    color: rgba(232, 228, 220, 0.5);
+    color: var(--text-muted);
   }
   .nav-link:hover { color: #e8e4dc; }
 
   /* Footer / dimmer links */
   .footer-link {
     @apply font-mono transition-colors;
-    color: rgba(232, 228, 220, 0.4);
+    color: var(--text-dim);
   }
   .footer-link:hover { color: #e8e4dc; }
 
@@ -32,7 +65,7 @@
   /* Subtle link (for demo back-links etc) */
   .subtle-link {
     @apply font-mono transition-colors;
-    color: rgba(232, 228, 220, 0.4);
+    color: var(--text-dim);
   }
   .subtle-link:hover { color: #e8e4dc; }
 
@@ -60,7 +93,7 @@
   .body-text {
     @apply font-mono leading-relaxed;
     font-size: clamp(0.85rem, 0.8rem + 0.25vw, 0.95rem);
-    color: rgba(232, 228, 220, 0.5);
+    color: var(--text-muted);
   }
 
   .body-text-dim {
@@ -92,7 +125,7 @@
     @apply font-mono uppercase;
     font-size: 0.65rem;
     letter-spacing: 0.1em;
-    color: rgba(232, 228, 220, 0.4);
+    color: var(--text-dim);
   }
 
   /* --- Name/title text (sky or coral colored) --- */
@@ -117,14 +150,14 @@
 
   /* --- Bar / chrome backgrounds --- */
   .surface-bar {
-    background: rgba(18, 18, 26, 0.85);
+    background: var(--panel-bg);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border-bottom: 1px solid rgba(168, 154, 128, 0.12);
+    border-bottom: 1px solid var(--panel-border);
   }
 
   .surface-bar-subtle {
-    background: rgba(18, 18, 26, 0.7);
+    background: var(--panel-bg-subtle);
     border-bottom: 1px solid rgba(168, 154, 128, 0.08);
   }
 
@@ -137,14 +170,14 @@
   .toggle-btn {
     @apply font-mono px-3 py-1 rounded transition-colors;
     font-size: 0.7rem;
-    border: 1px solid rgba(168, 154, 128, 0.12);
-    color: rgba(232, 228, 220, 0.4);
+    border: 1px solid var(--panel-border);
+    color: var(--text-dim);
     background: transparent;
   }
 
   .toggle-btn:hover {
-    border-color: rgba(168, 154, 128, 0.2);
-    color: rgba(232, 228, 220, 0.6);
+    border-color: var(--panel-border-hover);
+    color: var(--text-secondary);
   }
 
   .toggle-btn[aria-pressed="true"],
@@ -165,7 +198,7 @@
     @apply font-mono px-3 py-1.5 rounded;
     font-size: 0.75rem;
     background: rgba(10, 10, 12, 0.5);
-    border: 1px solid rgba(168, 154, 128, 0.12);
+    border: 1px solid var(--panel-border);
     color: #e8e4dc;
   }
 
@@ -180,18 +213,33 @@
   .view-toggle {
     @apply flex p-0.5 rounded;
     background: rgba(10, 10, 12, 0.5);
-    border: 1px solid rgba(168, 154, 128, 0.12);
+    border: 1px solid var(--panel-border);
   }
 
   .view-toggle-btn {
     @apply font-mono px-3 py-1 rounded transition-colors;
     font-size: 0.75rem;
-    color: rgba(232, 228, 220, 0.4);
+    color: var(--text-dim);
   }
 
   .view-toggle-btn--active {
-    background: rgba(168, 154, 128, 0.12);
+    background: var(--panel-border);
     color: #e8e4dc;
+  }
+
+  /* --- Sidebar component picker rows --- */
+  .sidebar-row--active {
+    border-color: rgba(88, 161, 198, 0.3);
+    background: rgba(88, 161, 198, 0.08);
+  }
+
+  /* --- Users panel rows + avatar swatch (color is dynamic per user) --- */
+  .user-row {
+    border-bottom: 1px solid rgba(168, 154, 128, 0.06);
+  }
+  .user-avatar {
+    background-color: var(--user-color, var(--gold));
+    font-size: 0.65rem;
   }
 }
 
@@ -200,48 +248,57 @@
    Xochi-sibling: dark-native, monospace-first, warm-on-cold.
    ============================================================================= */
 
+/*
+ * CSS variables for values the Tailwind utility layer can't reach:
+ * @keyframes, linear-gradient stops, box-shadow definitions, and the
+ * atmospheric pearls / orbs that animate via filter() rules. Color
+ * tokens that have Tailwind config equivalents (axol-coral, sky, pearl,
+ * panel, border-subtle, ...) live in tailwind.config.js as the single
+ * source of truth; the vars below are duplicated only for the cases
+ * where CSS @apply / @keyframes need a literal color expression.
+ */
 :root {
+  /* --- Type stacks (mirrored as font-mono/heading/body in Tailwind) --- */
+  --font-mono: 'Monaspace Argon', 'Fira Code', Monaco, Menlo, 'Courier New', monospace;
+  --font-heading: 'Monaspace Xenon', 'Monaspace Argon', 'Fira Code', Monaco, monospace;
+  --font-body: 'Monaspace Neon', 'Monaspace Argon', 'Fira Code', Monaco, monospace;
+
   /* --- Backgrounds --- */
   --obsidian: #0a0a0c;
   --deep-night: #12121a;
   --shadow-deep: #12012c;
 
-  /* --- Text --- */
+  /* --- Text scale (mirrored as text-pearl-{N} in Tailwind) --- */
   --pearl-cream: #e8e4dc;
-  --crypto-frost: #fdfff9;
   --text-secondary: rgba(232, 228, 220, 0.6);
   --text-muted: rgba(232, 228, 220, 0.5);
   --text-dim: rgba(232, 228, 220, 0.4);
   --text-ghost: rgba(232, 228, 220, 0.25);
 
-  /* --- Accents --- */
+  /* --- Accent colors (mirrored in Tailwind) --- */
   --axol-coral: #ffcd9c;
   --coral-red: #e58476;
   --sky: #58a1c6;
-  --indigo-deep: #28338b;
   --gold: #a89a80;
 
-  /* --- Accent scales --- */
+  /* --- Accent alpha scales used inside @keyframes / box-shadow --- */
   --coral-10: rgba(255, 205, 156, 0.1);
-  --coral-15: rgba(255, 205, 156, 0.15);
   --coral-25: rgba(255, 205, 156, 0.25);
   --coral-40: rgba(255, 205, 156, 0.4);
   --sky-10: rgba(88, 161, 198, 0.1);
-  --sky-15: rgba(88, 161, 198, 0.15);
   --sky-25: rgba(88, 161, 198, 0.25);
   --gold-08: rgba(168, 154, 128, 0.08);
   --gold-12: rgba(168, 154, 128, 0.12);
-  --gold-20: rgba(168, 154, 128, 0.2);
   --gold-40: rgba(168, 154, 128, 0.4);
 
-  /* --- Panels --- */
+  /* --- Panels (mirrored in Tailwind) --- */
   --panel-bg: rgba(18, 18, 26, 0.85);
   --panel-bg-elevated: rgba(18, 18, 26, 0.9);
   --panel-bg-subtle: rgba(18, 18, 26, 0.7);
   --panel-border: rgba(168, 154, 128, 0.12);
   --panel-border-hover: rgba(168, 154, 128, 0.2);
 
-  /* --- Pearls (atmospheric) --- */
+  /* --- Atmospheric pearls (used by .pearl-bg gradient stops) --- */
   --pearl-violet: rgba(40, 51, 139, 0.4);
   --pearl-green: rgba(88, 161, 198, 0.5);
   --pearl-pink: rgba(229, 132, 118, 0.5);
@@ -255,21 +312,10 @@
   --duration-normal: 250ms;
   --duration-slow: 400ms;
 
-  /* --- Atmosphere control --- */
+  /* --- Atmosphere opacity --- */
   --grain-opacity: 0.03;
   --atmosphere-opacity: 0.4;
   --orb-opacity: 0.12;
-
-  /* --- Legacy compat (playground pages) --- */
-  --raxol-primary: #58a1c6;
-  --raxol-primary-dark: #28338b;
-  --raxol-success: #58a1c6;
-  --raxol-warning: #ffcd9c;
-  --raxol-error: #e58476;
-  --raxol-gray-50: #f9fafb;
-  --raxol-gray-100: #f3f4f6;
-  --raxol-gray-800: #1f2937;
-  --raxol-gray-900: #111827;
 }
 
 /* =============================================================================
@@ -280,7 +326,7 @@ html, body {
   height: 100%;
   margin: 0;
   padding: 0;
-  font-family: 'Fira Code', 'Monaspace Neon', Monaco, Menlo, 'Courier New', monospace;
+  font-family: var(--font-body);
   background: var(--obsidian);
   color: var(--pearl-cream);
 }
@@ -422,6 +468,7 @@ html, body {
   mask-composite: exclude;
   opacity: 0;
   transition: opacity var(--duration-normal) var(--ease-smooth);
+  pointer-events: none;
 }
 
 .panel--glow:hover::before {
@@ -437,7 +484,7 @@ html, body {
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1.5rem;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);
   font-weight: 500;
   text-transform: uppercase;
@@ -463,7 +510,7 @@ html, body {
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1.5rem;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);
   font-weight: 500;
   text-transform: uppercase;
@@ -488,7 +535,7 @@ html, body {
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1.5rem;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);
   font-weight: 500;
   text-transform: uppercase;
@@ -522,39 +569,97 @@ html, body {
 }
 
 .terminal-chrome-bar {
-  background: rgba(18, 18, 26, 0.95);
-  padding: 0.625rem 1rem;
+  background: var(--panel-bg-strong, rgba(18, 18, 26, 0.95));
+  padding: 0.5rem 1rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
   border-bottom: 1px solid var(--panel-border);
+  font-family: var(--font-mono);
+  font-size: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);
+  letter-spacing: 0.05em;
 }
 
-.terminal-chrome-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+.terminal-chrome-prompt {
+  color: var(--axol-coral);
+  font-weight: 600;
 }
-
-.terminal-chrome-dot--red { background: #e58476; }
-.terminal-chrome-dot--yellow { background: #ffcd9c; }
-.terminal-chrome-dot--green { background: #58a1c6; }
 
 .terminal-chrome-title {
   color: var(--text-muted);
-  font-size: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);
-  font-family: 'Fira Code', monospace;
-  letter-spacing: 0.05em;
-  margin-left: 0.75rem;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
 
 .terminal-chrome-body {
   padding: 1.25rem;
-  font-family: 'Fira Code', Monaco, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.85rem;
   line-height: 1.7;
   color: var(--pearl-cream);
 }
+
+/* Compact variant used by .copyable-command. */
+.copyable-command { padding: 0; }
+.copyable-command__body { padding: 0.75rem 1.25rem; }
+
+/* =============================================================================
+   Syntax highlighting (Makeup -> synthwave84 palette)
+
+   Makeup emits Pygments-style class names (.kd, .nc, .ss, etc.) without a
+   parent class. Scope under .syntax-elixir so other Makeup output (ex_doc,
+   tutorials) is unaffected. Default token color is pearl; only the tokens
+   that historically had a distinct color in the hand-rolled highlight get
+   an override here.
+   ============================================================================= */
+
+/* <pre> wrapper around .syntax-elixir blocks. */
+.code-block {
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.7;
+}
+
+.syntax-elixir { color: var(--pearl-cream); }
+.syntax-elixir .k,
+.syntax-elixir .kd,
+.syntax-elixir .kn,
+.syntax-elixir .kr { color: var(--axol-coral); }
+.syntax-elixir .nc,
+.syntax-elixir .nf,
+.syntax-elixir .nb { color: var(--sky); }
+.syntax-elixir .ss { color: var(--coral-red); }
+.syntax-elixir .s,
+.syntax-elixir .s1,
+.syntax-elixir .s2,
+.syntax-elixir .sb,
+.syntax-elixir .sc,
+.syntax-elixir .sd,
+.syntax-elixir .sh,
+.syntax-elixir .si { color: var(--gold); }
+.syntax-elixir .na,
+.syntax-elixir .c,
+.syntax-elixir .c1,
+.syntax-elixir .cm,
+.syntax-elixir .cp { color: var(--gold); }
+
+.copy-chip {
+  font-family: var(--font-mono);
+  font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
+  color: var(--text-ghost);
+  border: 1px solid var(--panel-border);
+  padding: 0.2rem 0.5rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  background: none;
+}
+.copy-chip:hover { color: var(--pearl-cream); }
 
 /* =============================================================================
    SSH Hero Command
@@ -563,7 +668,7 @@ html, body {
 .ssh-hero {
   position: relative;
   display: inline-block;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: clamp(1rem, 0.9rem + 0.5vw, 1.15rem);
   color: var(--axol-coral);
   padding: 1rem 2rem;
@@ -594,7 +699,7 @@ html, body {
   display: inline-flex;
   align-items: center;
   padding: 0.25rem 0.75rem;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
   font-weight: 600;
   text-transform: uppercase;
@@ -698,7 +803,7 @@ html, body {
 /* Category tags */
 .category-tag {
   padding: 0.25rem 0.75rem;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
   font-weight: 500;
   text-transform: uppercase;
@@ -741,7 +846,7 @@ html, body {
   background: rgba(10, 10, 12, 0.55);
   padding: 1.25rem 1rem;
   text-align: center;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
 }
 
 .stat-value {
@@ -767,7 +872,7 @@ html, body {
    ============================================================================= */
 
 .section-numeral {
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: clamp(2.5rem, 2rem + 2.2vw, 3.75rem);
   font-weight: 300;
   color: rgba(255, 205, 156, 0.16);
@@ -778,7 +883,7 @@ html, body {
 }
 
 .section-eyebrow {
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -806,7 +911,7 @@ html, body {
   border: 1px solid var(--panel-border);
   border-radius: 8px;
   padding: 1.1rem 1.1rem 1rem;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   transition: all var(--duration-normal) var(--ease-smooth);
 }
 
@@ -855,7 +960,7 @@ html, body {
 
 .faq-item summary {
   cursor: pointer;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: clamp(0.85rem, 0.8rem + 0.25vw, 0.95rem);
   color: var(--pearl-cream);
   list-style: none;
@@ -882,7 +987,7 @@ html, body {
   margin-top: 0.875rem;
   padding-top: 0.875rem;
   border-top: 1px solid var(--panel-border);
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: clamp(0.78rem, 0.73rem + 0.25vw, 0.85rem);
   line-height: 1.7;
   color: var(--text-secondary);
@@ -893,7 +998,7 @@ html, body {
    ============================================================================= */
 
 .feature-card__index {
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: 0.62rem;
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -911,7 +1016,7 @@ html, body {
   top: 0.75rem;
   right: 0.75rem;
   opacity: 0;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: 0.6rem;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -937,7 +1042,7 @@ html, body {
    ============================================================================= */
 
 .playground-container {
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
 }
 
 .component-item {
@@ -962,7 +1067,7 @@ html, body {
 }
 
 .editor textarea {
-  font-family: 'Fira Code', Monaco, Menlo, 'Courier New', monospace;
+  font-family: var(--font-mono);
   line-height: 1.6;
   tab-size: 2;
   background: var(--obsidian);
@@ -1000,7 +1105,7 @@ html, body {
   padding: 16px 8px;
   text-align: right;
   user-select: none;
-  font-family: 'Fira Code', Monaco, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.6;
   min-width: 50px;
@@ -1019,7 +1124,7 @@ html, body {
 }
 
 .error-panel {
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   background: var(--obsidian);
   border-top: 1px solid var(--coral-red);
 }
@@ -1031,7 +1136,7 @@ html, body {
 }
 
 .terminal-output {
-  font-family: 'Fira Code', Monaco, 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 14px;
   line-height: 1.6;
   white-space: pre;
@@ -1044,17 +1149,17 @@ html, body {
 /* REPL */
 .repl-container {
   background: var(--obsidian);
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
 }
 
 .repl-history {
   scrollbar-width: thin;
-  scrollbar-color: rgba(168, 154, 128, 0.2) var(--obsidian);
+  scrollbar-color: var(--panel-border-hover) var(--obsidian);
 }
 
 .repl-history::-webkit-scrollbar { width: 8px; }
 .repl-history::-webkit-scrollbar-track { background: var(--obsidian); }
-.repl-history::-webkit-scrollbar-thumb { background: rgba(168, 154, 128, 0.2); border-radius: 4px; }
+.repl-history::-webkit-scrollbar-thumb { background: var(--panel-border-hover); border-radius: 4px; }
 
 .repl-entry {
   animation: fadeIn 0.3s ease-out;
@@ -1080,7 +1185,7 @@ html, body {
   border: 1px solid var(--panel-border);
   border-radius: 4px;
   font-size: 11px;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   color: var(--text-secondary);
 }
 
@@ -1131,7 +1236,7 @@ html, body {
   font-weight: 500;
   background: transparent;
   color: var(--pearl-cream);
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
 }
 
 .command-results {
@@ -1157,7 +1262,7 @@ html, body {
 .command-details { flex: 1; min-width: 0; }
 .command-title { font-weight: 500; color: var(--pearl-cream); }
 .command-description { font-size: 14px; color: var(--text-muted); margin-top: 2px; }
-.command-shortcut { font-size: 12px; color: var(--text-dim); font-family: 'Fira Code', monospace; }
+.command-shortcut { font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
 
 /* Resize Handle */
 .resize-handle {
@@ -1245,7 +1350,7 @@ html, body {
   padding: 0.5rem 1rem;
   border-radius: 0.5rem;
   font-size: 0.875rem;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
   z-index: 10;
   animation: fadeIn 0.3s;
   backdrop-filter: blur(8px);
@@ -1357,7 +1462,7 @@ html, body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Override default black cell backgrounds -- the container sets the theme bg,
+/* Override default black cell backgrounds. The container sets the theme bg,
    cells should be transparent unless they have a non-default background. */
 .raxol-terminal span[style*="background-color: #000000"],
 .raxol-terminal span[style*="background-color:#000000"] {

@@ -6,8 +6,6 @@ defmodule RaxolPlaygroundWeb.DemoLive do
 
   use RaxolPlaygroundWeb, :live_view
 
-  require Logger
-
   alias Raxol.Playground.Catalog
   alias RaxolPlaygroundWeb.Playground.{DemoLifecycle, Helpers}
 
@@ -16,17 +14,22 @@ defmodule RaxolPlaygroundWeb.DemoLive do
   @demo_timeout_ms :timer.minutes(30)
 
   # -- Mount --
+  #
+  # mount sets up state that survives across patch navigation between demos
+  # (theme, code-panel visibility, presence). The actual demo lifecycle is
+  # started in handle_params/3 so that prev/next via `<.link patch=...>`
+  # swap demos in-place without remounting (and without reconnecting the
+  # LiveSocket).
 
   @impl true
-  def mount(%{"demo" => name}, _session, socket) do
-    component = Catalog.get_component(name)
-    {prev_comp, next_comp} = neighbor_components(name)
-
+  def mount(%{"demo" => _name}, _session, socket) do
     socket =
       socket
-      |> assign(:component, component)
-      |> assign(:prev_component, prev_comp)
-      |> assign(:next_component, next_comp)
+      |> assign(:component, nil)
+      |> assign(:prev_component, nil)
+      |> assign(:next_component, nil)
+      |> assign(:demo_position, nil)
+      |> assign(:demo_total, nil)
       |> assign(:terminal_html, false)
       |> assign(:lifecycle_pid, nil)
       |> assign(:topic, nil)
@@ -35,7 +38,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
       |> assign(:show_code, false)
       |> assign(:demo_error, nil)
       |> assign(:demo_timer, nil)
-      |> then(&DemoLifecycle.start_demo(&1, component, timeout_ms: @demo_timeout_ms))
+      |> assign(:auto_focus, true)
 
     {:ok, socket}
   end
@@ -51,6 +54,36 @@ defmodule RaxolPlaygroundWeb.DemoLive do
 
     {:ok, socket}
   end
+
+  # -- Handle Params (drives demo swap on initial mount AND patch navigation) --
+
+  @impl true
+  def handle_params(%{"demo" => name}, _uri, socket) do
+    current = socket.assigns[:component]
+
+    if current && current.name == name do
+      {:noreply, socket}
+    else
+      component = Catalog.get_component(name)
+      pos = catalog_position(name)
+
+      socket =
+        socket
+        |> DemoLifecycle.stop_demo()
+        |> assign(:component, component)
+        |> assign(:prev_component, pos.prev)
+        |> assign(:next_component, pos.next)
+        |> assign(:demo_position, pos.position)
+        |> assign(:demo_total, pos.total)
+        |> assign(:demo_error, nil)
+        |> DemoLifecycle.maybe_push_reset()
+        |> DemoLifecycle.start_demo(component, timeout_ms: @demo_timeout_ms)
+
+      {:noreply, DemoLifecycle.maybe_push_error(socket)}
+    end
+  end
+
+  def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
   # -- Events --
 
@@ -68,10 +101,10 @@ defmodule RaxolPlaygroundWeb.DemoLive do
   def handle_event("keydown", params, socket) do
     if socket.assigns[:lifecycle_pid] do
       event = Raxol.LiveView.InputAdapter.translate_key_event(params)
-      DemoLifecycle.dispatch_to_lifecycle(socket.assigns.lifecycle_pid, event)
+      {:noreply, DemoLifecycle.dispatch_event(socket, event)}
+    else
+      {:noreply, socket}
     end
-
-    {:noreply, socket}
   end
 
   def handle_event("retry_demo", _params, socket) do
@@ -81,10 +114,10 @@ defmodule RaxolPlaygroundWeb.DemoLive do
       socket
       |> DemoLifecycle.stop_demo()
       |> assign(:demo_error, nil)
-      |> maybe_push_reset()
+      |> DemoLifecycle.maybe_push_reset()
       |> DemoLifecycle.start_demo(comp, timeout_ms: @demo_timeout_ms)
 
-    {:noreply, maybe_push_error(socket)}
+    {:noreply, DemoLifecycle.maybe_push_error(socket)}
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
@@ -92,50 +125,17 @@ defmodule RaxolPlaygroundWeb.DemoLive do
   # -- Info --
 
   @impl true
-  def handle_info({:render_update, html}, socket) do
-    {:noreply,
-     socket
-     |> assign(:terminal_html, true)
-     |> push_event("terminal_html", %{html: html})}
-  end
+  def handle_info({:render_update, html}, socket),
+    do: {:noreply, DemoLifecycle.render_update(socket, html)}
 
-  def handle_info({:render_update, html, _animation_css}, socket) do
-    {:noreply,
-     socket
-     |> assign(:terminal_html, true)
-     |> push_event("terminal_html", %{html: html})}
-  end
+  def handle_info({:render_update, html, _animation_css}, socket),
+    do: {:noreply, DemoLifecycle.render_update(socket, html)}
 
-  def handle_info(:demo_timeout, socket) do
-    Logger.info("Demo session timed out")
+  def handle_info(:demo_timeout, socket),
+    do: {:noreply, DemoLifecycle.demo_timeout(socket)}
 
-    socket =
-      DemoLifecycle.stop_demo(socket)
-      |> assign(demo_error: "Session timed out. Click Retry to restart.")
-      |> maybe_push_error()
-
-    {:noreply, socket}
-  end
-
-  def handle_info({:DOWN, _ref, :process, pid, reason}, socket) do
-    if pid == socket.assigns[:lifecycle_pid] do
-      name =
-        if socket.assigns[:component],
-          do: socket.assigns.component.name,
-          else: "unknown"
-
-      Logger.warning("Demo #{name} crashed: #{inspect(reason)}")
-
-      socket =
-        socket
-        |> assign(lifecycle_pid: nil, demo_error: "Demo crashed. Click Retry.")
-        |> maybe_push_error()
-
-      {:noreply, socket}
-    else
-      {:noreply, socket}
-    end
-  end
+  def handle_info({:DOWN, _ref, :process, pid, reason}, socket),
+    do: {:noreply, DemoLifecycle.lifecycle_down(socket, pid, reason)}
 
   def handle_info(_msg, socket), do: {:noreply, socket}
 
@@ -150,15 +150,12 @@ defmodule RaxolPlaygroundWeb.DemoLive do
   @impl true
   def render(%{component: nil} = assigns) do
     ~H"""
-    <div class="atmosphere" aria-hidden="true">
-      <div class="pearl-bg"></div>
-      <div class="dark-overlay"></div>
-    </div>
+    <.atmosphere />
 
-    <div class="relative min-h-screen" style="z-index: 2;">
+    <div class="relative min-h-screen z-10">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div class="text-center mb-8">
-          <h1 class="font-mono font-bold tracking-wide mb-4" style="font-size: clamp(1.5rem, 1.25rem + 1vw, 2.5rem); color: #e8e4dc;">
+          <h1 class="font-mono font-bold tracking-wide mb-4 text-pearl" style="font-size: clamp(1.5rem, 1.25rem + 1vw, 2.5rem);">
             <a href="/" class="brand-link">Raxol</a> Interactive Demos
           </h1>
           <p class="font-mono body-text">
@@ -193,34 +190,44 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     assigns = assign(assigns, :theme_bg, theme_bg)
 
     ~H"""
-    <div class="h-screen flex flex-col" style="background: var(--obsidian);">
+    <div class="h-screen flex flex-col bg-obsidian">
       <!-- Header -->
-      <div class="px-6 py-4 surface-bar">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center space-x-4">
-            <a href="/demos" class="font-mono text-sm subtle-link">&larr; All Demos</a>
-            <div>
+      <div class="px-8 py-5 surface-bar">
+        <div class="flex items-center justify-between gap-8">
+          <div class="flex items-center gap-6 min-w-0">
+            <a href="/demos" class="font-mono text-sm subtle-link whitespace-nowrap" aria-label="Back to all demos">&larr; Back</a>
+            <div class="min-w-0">
               <div class="flex items-center gap-3">
-                <h1 class="font-mono font-semibold" style="font-size: clamp(1rem, 0.9rem + 0.5vw, 1.25rem); color: #e8e4dc;"><%= @component.name %></h1>
+                <h1 class="font-mono font-semibold text-pearl truncate" style="font-size: clamp(1rem, 0.9rem + 0.5vw, 1.25rem);"><%= @component.name %></h1>
                 <.complexity_badge level={@component.complexity} />
+                <span :if={@demo_position && @demo_total} class="font-mono text-pearl-40 text-sm whitespace-nowrap" aria-label={"Demo #{@demo_position} of #{@demo_total}"}>
+                  <%= @demo_position %> / <%= @demo_total %>
+                </span>
               </div>
-              <p class="font-mono detail-text"><%= @component.description %></p>
+              <p class="font-mono detail-text truncate"><%= @component.description %></p>
             </div>
           </div>
 
-          <div class="flex items-center space-x-3">
-            <%!-- Prev/Next navigation --%>
-            <nav class="hidden md:flex items-center gap-2 font-mono" style="font-size: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);" aria-label="Demo navigation">
-              <%= if @prev_component do %>
-                <a href={"/demos/#{@prev_component}"} class="btn-secondary" style="padding: 0.375rem 0.75rem; font-size: inherit;" aria-label={"Previous demo: #{@prev_component}"}>
-                  &larr; <%= @prev_component %>
-                </a>
-              <% end %>
-              <%= if @next_component do %>
-                <a href={"/demos/#{@next_component}"} class="btn-secondary" style="padding: 0.375rem 0.75rem; font-size: inherit;" aria-label={"Next demo: #{@next_component}"}>
-                  <%= @next_component %> &rarr;
-                </a>
-              <% end %>
+          <div class="flex items-center gap-4 flex-wrap">
+            <%!-- Prev/Next navigation. Patch-based so the LiveView stays
+                 mounted and only the demo lifecycle swaps. --%>
+            <nav class="flex items-center gap-2 font-mono text-sm" aria-label="Demo navigation">
+              <.link
+                :if={@prev_component}
+                patch={"/demos/#{@prev_component}"}
+                class="btn-secondary toggle-btn-sm"
+                aria-label={"Previous demo: #{@prev_component}"}
+              >
+                &larr; <%= @prev_component %>
+              </.link>
+              <.link
+                :if={@next_component}
+                patch={"/demos/#{@next_component}"}
+                class="btn-secondary toggle-btn-sm"
+                aria-label={"Next demo: #{@next_component}"}
+              >
+                <%= @next_component %> &rarr;
+              </.link>
             </nav>
 
             <.theme_selector
@@ -230,7 +237,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
             />
             <button
               phx-click="toggle_code"
-              class={"toggle-btn #{if @show_code, do: "toggle-btn--active"}"}
+              class={["toggle-btn", @show_code && "toggle-btn--active"]}
             >
               Code
             </button>
@@ -242,55 +249,51 @@ defmodule RaxolPlaygroundWeb.DemoLive do
       <div class="flex-1 flex overflow-hidden">
         <div class="flex-1 flex flex-col">
           <.terminal_chrome title={"#{@component.name} Demo"} />
+          <%!-- Outer themeable shell: morphdom owns its attributes so theme
+               changes can re-paint the background. Inner element is the
+               hook-controlled terminal whose innerHTML we mark as ignored
+               so demo frames survive across re-renders. --%>
           <div
-            id="demo-terminal"
-            phx-hook="RaxolTerminal"
-            phx-keydown="keydown"
-            class="flex-1 overflow-auto p-4 font-mono text-sm"
+            class="flex-1 overflow-auto"
             style={"background: #{@theme_bg};"}
             data-theme={@terminal_theme}
-            tabindex="0"
-            role="application"
-            aria-label={"#{@component.name} interactive demo"}
           >
             <%= if @demo_error do %>
-              <div class="py-8 text-center font-mono">
+              <div class="p-4 py-8 text-center font-mono">
                 <p class="mb-4 text-coral-red"><%= @demo_error %></p>
                 <button phx-click="retry_demo" class="btn-primary">
                   Retry
                 </button>
               </div>
             <% else %>
-              <%!-- Terminal HTML injected by RaxolTerminal hook via push_event --%>
-              <%= if not @terminal_html do %>
+              <div
+                id="demo-terminal"
+                phx-hook="RaxolTerminal"
+                phx-keydown="keydown"
+                phx-update="ignore"
+                class="h-full p-4 font-mono text-sm"
+                tabindex="0"
+                role="application"
+                aria-roledescription="Interactive terminal"
+                aria-label={"#{@component.name} demo"}
+                aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Enter Space Tab"
+              >
+                <%!-- Initial state; hook overwrites on first terminal_html event.
+                     Press '/' anywhere to refocus this terminal. --%>
                 <%= if @lifecycle_pid do %>
                   <div class="py-8 text-center font-mono text-pearl-40" role="status">
                     <div class="loading-spinner mb-3 mx-auto"></div>
-                    <p>Starting demo...</p>
+                    <p>Starting demo... <span class="text-pearl-25">(press / to focus)</span></p>
                   </div>
                 <% else %>
                   <.terminal_fallback description={@component.description} />
                 <% end %>
-              <% end %>
+              </div>
             <% end %>
           </div>
         </div>
 
         <.code_panel show={@show_code} code={@component.code_snippet} />
-      </div>
-
-      <%!-- Mobile prev/next (hidden on desktop, shown at bottom) --%>
-      <div class="md:hidden flex items-center justify-between px-6 py-3 font-mono border-t border-subtle bg-panel" style="font-size: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);">
-        <%= if @prev_component do %>
-          <a href={"/demos/#{@prev_component}"} class="text-pearl-50">&larr; <%= @prev_component %></a>
-        <% else %>
-          <span></span>
-        <% end %>
-        <%= if @next_component do %>
-          <a href={"/demos/#{@next_component}"} class="text-pearl-50"><%= @next_component %> &rarr;</a>
-        <% else %>
-          <span></span>
-        <% end %>
       </div>
 
       <.ssh_callout variant={:footer} />
@@ -300,30 +303,16 @@ defmodule RaxolPlaygroundWeb.DemoLive do
 
   # -- Helpers --
 
-  defp maybe_push_reset(socket) do
-    if socket.assigns.terminal_html do
-      push_event(socket, "terminal_reset", %{})
-    else
-      assign(socket, :terminal_html, false)
-    end
-  end
-
-  defp maybe_push_error(socket) do
-    if socket.assigns.terminal_html && socket.assigns.demo_error do
-      push_event(socket, "terminal_error", %{message: socket.assigns.demo_error})
-    else
-      socket
-    end
-  end
-
-  defp neighbor_components(name) do
+  defp catalog_position(name) do
     all = Catalog.list_components()
     names = Enum.map(all, & &1.name)
     idx = Enum.find_index(names, &(&1 == name))
+    total = length(names)
 
     prev_name = if idx && idx > 0, do: Enum.at(names, idx - 1)
-    next_name = if idx && idx < length(names) - 1, do: Enum.at(names, idx + 1)
+    next_name = if idx && idx < total - 1, do: Enum.at(names, idx + 1)
+    position = if idx, do: idx + 1
 
-    {prev_name, next_name}
+    %{prev: prev_name, next: next_name, position: position, total: total}
   end
 end

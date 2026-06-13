@@ -10,6 +10,7 @@ module.exports = {
         // Core surfaces
         obsidian: '#0a0a0c',
         'deep-night': '#12121a',
+        'synthwave-bg': '#241b2f',
 
         // Text
         pearl: {
@@ -56,8 +57,11 @@ module.exports = {
         // Surfaces (for bg-)
         'panel': 'rgba(18, 18, 26, 0.85)',
         'panel-elevated': 'rgba(18, 18, 26, 0.9)',
+        'panel-strong': 'rgba(18, 18, 26, 0.95)',
         'panel-subtle': 'rgba(18, 18, 26, 0.7)',
         'inset': 'rgba(10, 10, 12, 0.5)',
+        'obsidian-80': 'rgba(10, 10, 12, 0.8)',
+        'obsidian-85': 'rgba(10, 10, 12, 0.85)',
       },
       borderColor: {
         'subtle': 'rgba(168, 154, 128, 0.12)',
@@ -65,9 +69,11 @@ module.exports = {
         'subtle-faint': 'rgba(168, 154, 128, 0.08)',
       },
       fontFamily: {
-        mono: ['"Fira Code"', '"Monaspace Argon"', 'Monaco', 'Menlo', '"Courier New"', 'monospace'],
-        heading: ['"Monaspace Xenon"', '"Fira Code"', 'Monaco', 'monospace'],
-        body: ['"Monaspace Neon"', '"Fira Code"', 'Monaco', 'monospace'],
+        // Mirror the :root --font-* vars in app.css. Monaspace is self-hosted;
+        // Fira Code is the runtime fallback before the variable .woff2 swaps in.
+        mono: ['"Monaspace Argon"', '"Fira Code"', 'Monaco', 'Menlo', '"Courier New"', 'monospace'],
+        heading: ['"Monaspace Xenon"', '"Monaspace Argon"', '"Fira Code"', 'Monaco', 'monospace'],
+        body: ['"Monaspace Neon"', '"Monaspace Argon"', '"Fira Code"', 'Monaco', 'monospace'],
       },
       fontSize: {
         'xs': 'clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem)',

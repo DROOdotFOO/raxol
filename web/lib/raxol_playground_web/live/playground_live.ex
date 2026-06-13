@@ -6,8 +6,6 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
 
   use RaxolPlaygroundWeb, :live_view
 
-  require Logger
-
   alias Raxol.Playground.Catalog
   alias RaxolPlaygroundWeb.Playground.{DemoLifecycle, Helpers}
   alias RaxolPlaygroundWeb.Presence, as: PlaygroundPresence
@@ -50,6 +48,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
       |> assign(:themes, @themes)
       |> assign(:demo_error, nil)
       |> assign(:demo_timer, nil)
+      |> assign(:auto_focus, true)
       |> DemoLifecycle.start_demo(selected,
         timeout_ms: @demo_timeout_ms,
         topic_prefix: "playground"
@@ -125,22 +124,22 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
       socket
       |> DemoLifecycle.stop_demo()
       |> assign(:demo_error, nil)
-      |> maybe_push_reset()
+      |> DemoLifecycle.maybe_push_reset()
       |> DemoLifecycle.start_demo(comp,
         timeout_ms: @demo_timeout_ms,
         topic_prefix: "playground"
       )
 
-    {:noreply, maybe_push_error(socket)}
+    {:noreply, DemoLifecycle.maybe_push_error(socket)}
   end
 
   def handle_event("keydown", params, socket) do
     if socket.assigns[:lifecycle_pid] do
       event = Raxol.LiveView.InputAdapter.translate_key_event(params)
-      DemoLifecycle.dispatch_to_lifecycle(socket.assigns.lifecycle_pid, event)
+      {:noreply, DemoLifecycle.dispatch_event(socket, event)}
+    else
+      {:noreply, socket}
     end
-
-    {:noreply, socket}
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
@@ -150,26 +149,14 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
   # =========================================================================
 
   @impl true
-  def handle_info({:render_update, html}, socket) do
-    {:noreply,
-     socket
-     |> assign(:terminal_html, true)
-     |> push_event("terminal_html", %{html: html})}
-  end
+  def handle_info({:render_update, html}, socket),
+    do: {:noreply, DemoLifecycle.render_update(socket, html)}
 
-  def handle_info({:render_update, html, _animation_css}, socket) do
-    {:noreply,
-     socket
-     |> assign(:terminal_html, true)
-     |> push_event("terminal_html", %{html: html})}
-  end
+  def handle_info({:render_update, html, _animation_css}, socket),
+    do: {:noreply, DemoLifecycle.render_update(socket, html)}
 
-  def handle_info(
-        %Phoenix.Socket.Broadcast{event: "presence_diff"},
-        socket
-      ) do
-    {:noreply, assign(socket, :online_users, PlaygroundPresence.list_users())}
-  end
+  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket),
+    do: {:noreply, assign(socket, :online_users, PlaygroundPresence.list_users())}
 
   def handle_info(
         {:playground_event, :component_selected, %{component: name, user_id: from}},
@@ -185,36 +172,11 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     end
   end
 
-  def handle_info(:demo_timeout, socket) do
-    Logger.info("Playground session timed out")
+  def handle_info(:demo_timeout, socket),
+    do: {:noreply, DemoLifecycle.demo_timeout(socket)}
 
-    socket =
-      DemoLifecycle.stop_demo(socket)
-      |> assign(demo_error: "Session timed out. Click Retry to restart.")
-      |> maybe_push_error()
-
-    {:noreply, socket}
-  end
-
-  def handle_info({:DOWN, _ref, :process, pid, reason}, socket) do
-    if pid == socket.assigns[:lifecycle_pid] do
-      name =
-        if socket.assigns[:selected],
-          do: socket.assigns.selected.name,
-          else: "unknown"
-
-      Logger.warning("Playground demo #{name} crashed: #{inspect(reason)}")
-
-      socket =
-        socket
-        |> assign(lifecycle_pid: nil, demo_error: "Demo crashed. Click Retry.")
-        |> maybe_push_error()
-
-      {:noreply, socket}
-    else
-      {:noreply, socket}
-    end
-  end
+  def handle_info({:DOWN, _ref, :process, pid, reason}, socket),
+    do: {:noreply, DemoLifecycle.lifecycle_down(socket, pid, reason)}
 
   def handle_info(_msg, socket), do: {:noreply, socket}
 
@@ -234,7 +196,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     assigns = assign(assigns, :theme_bg, theme_bg)
 
     ~H"""
-    <div class="playground-container h-screen flex flex-col" style="background: var(--obsidian);">
+    <div class="playground-container h-screen flex flex-col bg-obsidian">
       <%!-- Header --%>
       <div class="px-6 py-3 surface-bar">
         <div class="flex items-center justify-between">
@@ -242,7 +204,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
             <h1 class="name-coral">
               Raxol Playground
             </h1>
-            <span class="hidden sm:flex items-center gap-2 font-mono" style="font-size: 0.65rem; color: rgba(232, 228, 220, 0.35); letter-spacing: 0.05em;">
+            <span class="hidden sm:flex items-center gap-2 font-mono text-pearl-35 tracking-wide" style="font-size: 0.65rem;">
               <a href="/" class="subtle-link">Home</a>
               <span>|</span>
               <a href="/gallery" class="subtle-link">Gallery</a>
@@ -258,18 +220,18 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
 
             <button
               phx-click="toggle_users_panel"
-              class={"flex items-center gap-2 toggle-btn #{if @show_users_panel, do: "toggle-btn--active"}"}
+              class={["flex items-center gap-2 toggle-btn", @show_users_panel && "toggle-btn--active"]}
             >
               <span><%= length(@online_users) %> online</span>
               <%= if length(@online_users) > 1 do %>
-                <span class="w-2 h-2 rounded-full animate-pulse" style="background: #58a1c6;"></span>
+                <span class="w-2 h-2 rounded-full animate-pulse bg-sky"></span>
               <% end %>
             </button>
 
             <button
               phx-click="toggle_shortcuts"
-              class="font-mono px-3 py-1.5 rounded transition-colors"
-              style="font-size: 0.7rem; border: 1px solid rgba(168, 154, 128, 0.12); color: rgba(232, 228, 220, 0.4);"
+              class="font-mono px-3 py-1.5 rounded border border-subtle text-pearl-40 transition-colors"
+              style="font-size: 0.7rem;"
               aria-label="Keyboard shortcuts"
             >
               ?
@@ -293,34 +255,44 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
           <div class="flex-1 flex flex-col lg:flex-row overflow-hidden">
             <div class="flex-1 flex flex-col">
               <.terminal_chrome title={if @selected, do: @selected.name <> " Demo", else: "Terminal"} />
+              <%!-- Outer themeable shell: morphdom owns its attributes so theme
+                   changes can re-paint the background. Inner element is the
+                   hook-controlled terminal whose innerHTML we mark as ignored
+                   so demo frames survive across re-renders. --%>
               <div
-                id="playground-terminal"
-                phx-hook="RaxolTerminal"
-                phx-keydown="keydown"
-                class="flex-1 overflow-auto p-4 font-mono text-sm"
+                class="flex-1 overflow-auto"
                 style={"background: #{@theme_bg};"}
                 data-theme={@terminal_theme}
-                tabindex="0"
-                role="application"
-                aria-label="Interactive demo terminal"
               >
                 <%= if @demo_error do %>
-                  <div class="py-8 text-center font-mono">
+                  <div class="p-4 py-8 text-center font-mono">
                     <p class="mb-4 text-coral-red"><%= @demo_error %></p>
                     <button phx-click="retry_demo" class="btn-primary">Retry</button>
                   </div>
                 <% else %>
-                  <%!-- Terminal HTML injected by RaxolTerminal hook via push_event --%>
-                  <%= if not @terminal_html do %>
+                  <div
+                    id="playground-terminal"
+                    phx-hook="RaxolTerminal"
+                    phx-keydown="keydown"
+                    phx-update="ignore"
+                    class="h-full p-4 font-mono text-sm"
+                    tabindex="0"
+                    role="application"
+                    aria-roledescription="Interactive terminal"
+                    aria-label="Component demo"
+                    aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Enter Space Tab"
+                  >
+                    <%!-- Initial state; hook overwrites on first terminal_html event.
+                         Press '/' anywhere to refocus this terminal. --%>
                     <%= if @lifecycle_pid do %>
                       <div class="py-8 text-center font-mono text-pearl-40" role="status">
                         <div class="loading-spinner mb-3 mx-auto"></div>
-                        <p>Starting demo...</p>
+                        <p>Starting demo... <span class="text-pearl-25">(press / to focus)</span></p>
                       </div>
                     <% else %>
                       <.terminal_fallback description={if @selected, do: @selected.description} />
                     <% end %>
-                  <% end %>
+                  </div>
                 <% end %>
               </div>
             </div>
@@ -355,19 +327,20 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
 
   defp sidebar(assigns) do
     ~H"""
-    <aside
-      class={"overflow-y-auto transition-all duration-200 bg-panel-subtle #{if @sidebar_collapsed, do: "w-28", else: "w-72"}"}
-      style="border-right: 1px solid rgba(168, 154, 128, 0.08);"
-    >
+    <aside class={[
+      "overflow-y-auto transition-all duration-200 bg-panel-subtle border-r border-subtle-faint",
+      @sidebar_collapsed && "w-28",
+      not @sidebar_collapsed && "w-72"
+    ]}>
       <div class="p-3">
         <div class="flex items-center justify-between mb-3">
           <%= if not @sidebar_collapsed do %>
-            <h2 class="font-mono font-semibold" style="font-size: 0.8rem; color: #e8e4dc; letter-spacing: 0.05em;">Components</h2>
+            <h2 class="font-mono font-semibold text-pearl tracking-wide" style="font-size: 0.8rem;">Components</h2>
           <% end %>
           <button
             phx-click="toggle_sidebar"
-            class="font-mono p-2 rounded transition-colors"
-            style="font-size: 0.75rem; color: rgba(232, 228, 220, 0.4);"
+            class="font-mono p-2 rounded transition-colors text-pearl-40"
+            style="font-size: 0.75rem;"
             title={if @sidebar_collapsed, do: "Expand sidebar", else: "Collapse sidebar"}
             aria-label={if @sidebar_collapsed, do: "Expand sidebar", else: "Collapse sidebar"}
             aria-expanded={not @sidebar_collapsed}
@@ -393,15 +366,18 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
             <%= for comp <- @components do %>
               <button
                 type="button"
-                class="w-full text-left p-2 rounded transition-colors font-mono"
-                style={"border: 1px solid #{if @selected && @selected.name == comp.name, do: "rgba(88, 161, 198, 0.3)", else: "transparent"}; background: #{if @selected && @selected.name == comp.name, do: "rgba(88, 161, 198, 0.08)", else: "transparent"};"}
+                class={[
+                  "w-full text-left p-2 rounded transition-colors font-mono border",
+                  selected?(@selected, comp) && "sidebar-row--active",
+                  not selected?(@selected, comp) && "border-transparent"
+                ]}
                 phx-click="select_component"
                 phx-value-component={comp.name}
                 role="option"
-                aria-selected={@selected && @selected.name == comp.name}
+                aria-selected={selected?(@selected, comp)}
               >
-                <div class="font-medium" style={"font-size: 0.8rem; color: #{if @selected && @selected.name == comp.name, do: "#58a1c6", else: "#e8e4dc"};"}><%= comp.name %></div>
-                <div style="font-size: 0.65rem; color: rgba(232, 228, 220, 0.35); line-height: 1.4;"><%= comp.description %></div>
+                <div class={["font-medium", if(selected?(@selected, comp), do: "text-sky", else: "text-pearl")]} style="font-size: 0.8rem;"><%= comp.name %></div>
+                <div class="text-pearl-35" style="font-size: 0.65rem; line-height: 1.4;"><%= comp.description %></div>
               </button>
             <% end %>
           </div>
@@ -410,15 +386,18 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
             <%= for comp <- @components do %>
               <button
                 type="button"
-                class="w-full text-left px-2 py-1.5 rounded transition-colors font-mono"
-                style={"border: 1px solid #{if @selected && @selected.name == comp.name, do: "rgba(88, 161, 198, 0.3)", else: "transparent"}; background: #{if @selected && @selected.name == comp.name, do: "rgba(88, 161, 198, 0.08)", else: "transparent"};"}
+                class={[
+                  "w-full text-left px-2 py-1.5 rounded transition-colors font-mono border",
+                  selected?(@selected, comp) && "sidebar-row--active",
+                  not selected?(@selected, comp) && "border-transparent"
+                ]}
                 phx-click="select_component"
                 phx-value-component={comp.name}
-                title={"#{comp.name} -- #{comp.description}"}
+                title={"#{comp.name}: #{comp.description}"}
                 role="option"
-                aria-selected={@selected && @selected.name == comp.name}
+                aria-selected={selected?(@selected, comp)}
               >
-                <div class="truncate" style="font-size: 0.7rem; color: rgba(232, 228, 220, 0.6);"><%= comp.name %></div>
+                <div class="truncate text-pearl-60" style="font-size: 0.7rem;"><%= comp.name %></div>
               </button>
             <% end %>
           </div>
@@ -428,13 +407,16 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     """
   end
 
+  defp selected?(nil, _comp), do: false
+  defp selected?(selected, comp), do: selected.name == comp.name
+
   defp toolbar(assigns) do
     ~H"""
     <div class="px-4 py-2 surface-toolbar">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
           <%= if @selected do %>
-            <span class="font-mono font-semibold" style="font-size: 0.8rem; color: #e8e4dc;"><%= @selected.name %></span>
+            <span class="font-mono font-semibold text-pearl" style="font-size: 0.8rem;"><%= @selected.name %></span>
             <.complexity_badge level={@selected.complexity} />
             <span class="font-mono label-text-dim"><%= Helpers.category_label(@selected.category) %></span>
           <% end %>
@@ -449,7 +431,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
 
           <button
             phx-click="toggle_code"
-            class={"toggle-btn #{if @show_code, do: "toggle-btn--active"}"}
+            class={["toggle-btn", @show_code && "toggle-btn--active"]}
           >
             Code
           </button>
@@ -462,12 +444,11 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
   defp shortcuts_overlay(assigns) do
     ~H"""
     <div
-      class="fixed inset-0 flex items-center justify-center z-50"
-      style="background: rgba(10, 10, 12, 0.8); backdrop-filter: blur(4px);"
+      class="fixed inset-0 flex items-center justify-center z-50 bg-obsidian-80 backdrop-blur-sm"
       phx-click="toggle_shortcuts"
     >
-      <div class="panel panel--elevated p-6" style="max-width: 28rem; width: 100%;">
-        <h3 class="font-mono font-semibold mb-4" style="font-size: 0.9rem; color: #e8e4dc; letter-spacing: 0.05em;">Keyboard Shortcuts</h3>
+      <div class="panel panel--elevated p-6 w-full max-w-md">
+        <h3 class="font-mono font-semibold mb-4 text-pearl tracking-wide" style="font-size: 0.9rem;">Keyboard Shortcuts</h3>
         <div class="space-y-2 font-mono" style="font-size: 0.75rem;">
           <div class="flex justify-between gap-8">
             <span class="text-pearl-60">Navigate components</span>
@@ -506,22 +487,21 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     ~H"""
     <div class="fixed right-4 top-16 w-72 panel panel--elevated z-50">
       <div class="p-4 flex justify-between items-center border-b border-subtle">
-        <h3 class="font-mono font-semibold" style="font-size: 0.8rem; color: #e8e4dc;">Online (<%= length(@online_users) %>)</h3>
-        <button phx-click="toggle_users_panel" class="font-mono" style="color: rgba(232, 228, 220, 0.4); font-size: 1rem;">
+        <h3 class="font-mono font-semibold text-pearl" style="font-size: 0.8rem;">Online (<%= length(@online_users) %>)</h3>
+        <button phx-click="toggle_users_panel" class="font-mono text-pearl-40 text-base">
           &times;
         </button>
       </div>
 
-      <div class="p-3" style="border-bottom: 1px solid rgba(168, 154, 128, 0.08);">
+      <div class="p-3 border-b border-subtle-faint">
         <label class="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
             checked={@sync_enabled}
             phx-click="toggle_sync"
-            class="rounded"
-            style="accent-color: #58a1c6;"
+            class="rounded accent-sky"
           />
-          <span class="font-mono" style="font-size: 0.75rem; color: rgba(232, 228, 220, 0.6);">Sync with others</span>
+          <span class="font-mono text-pearl-60" style="font-size: 0.75rem;">Sync with others</span>
         </label>
         <p class="font-mono mt-1 caption-text">
           Selections sync across sessions when enabled
@@ -530,29 +510,29 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
 
       <div class="max-h-64 overflow-y-auto">
         <%= if @online_users == [] do %>
-          <div class="p-4 text-center font-mono" style="font-size: 0.75rem; color: rgba(232, 228, 220, 0.35);">No other users online</div>
+          <div class="p-4 text-center font-mono text-pearl-35" style="font-size: 0.75rem;">No other users online</div>
         <% else %>
           <ul>
             <%= for user <- @online_users do %>
-              <li class="p-3 flex items-center gap-3" style="border-bottom: 1px solid rgba(168, 154, 128, 0.06);">
+              <li class="p-3 flex items-center gap-3 user-row">
                 <div
-                  class="w-7 h-7 rounded-full flex items-center justify-center text-white font-mono"
-                  style={"background-color: #{user.color}; font-size: 0.65rem; font-weight: 600;"}
+                  class="w-7 h-7 rounded-full flex items-center justify-center text-white font-mono font-semibold user-avatar"
+                  style={"--user-color: #{user.color};"}
                 >
                   <%= String.first(user.name) %>
                 </div>
                 <div class="flex-1 min-w-0">
-                  <span class="font-mono font-medium" style={"font-size: 0.75rem; color: #{if user.user_id == @user_id, do: "#58a1c6", else: "#e8e4dc"};"}>
+                  <span class={["font-mono font-medium", if(user.user_id == @user_id, do: "text-sky", else: "text-pearl")]} style="font-size: 0.75rem;">
                     <%= user.name %>
                     <%= if user.user_id == @user_id, do: "(you)" %>
                   </span>
                   <%= if user.current_component do %>
-                    <div class="font-mono truncate" style="font-size: 0.6rem; color: rgba(232, 228, 220, 0.35);">
+                    <div class="font-mono truncate text-pearl-35" style="font-size: 0.6rem;">
                       Viewing: <%= user.current_component %>
                     </div>
                   <% end %>
                 </div>
-                <div class="w-2 h-2 rounded-full" style="background: #58a1c6;"></div>
+                <div class="w-2 h-2 rounded-full bg-sky"></div>
               </li>
             <% end %>
           </ul>
@@ -594,37 +574,15 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
   end
 
   defp switch_demo(socket, comp) do
-    socket =
-      socket
-      |> DemoLifecycle.stop_demo()
-      |> assign(:selected, comp)
-      |> assign(:demo_error, nil)
-      |> maybe_push_reset()
-      |> DemoLifecycle.start_demo(comp,
-        timeout_ms: @demo_timeout_ms,
-        topic_prefix: "playground"
-      )
-
-    maybe_push_error(socket)
-  end
-
-  # Once the hook owns display (terminal_html=true), push state changes
-  # through it instead of the template. This avoids morphdom trying to
-  # patch DOM that the hook replaced via innerHTML.
-  defp maybe_push_reset(socket) do
-    if socket.assigns.terminal_html do
-      push_event(socket, "terminal_reset", %{})
-    else
-      assign(socket, :terminal_html, false)
-    end
-  end
-
-  # If start_demo set an error and the hook owns display, push it.
-  defp maybe_push_error(socket) do
-    if socket.assigns.terminal_html && socket.assigns.demo_error do
-      push_event(socket, "terminal_error", %{message: socket.assigns.demo_error})
-    else
-      socket
-    end
+    socket
+    |> DemoLifecycle.stop_demo()
+    |> assign(:selected, comp)
+    |> assign(:demo_error, nil)
+    |> DemoLifecycle.maybe_push_reset()
+    |> DemoLifecycle.start_demo(comp,
+      timeout_ms: @demo_timeout_ms,
+      topic_prefix: "playground"
+    )
+    |> DemoLifecycle.maybe_push_error()
   end
 end

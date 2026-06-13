@@ -74,12 +74,9 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="atmosphere" aria-hidden="true">
-      <div class="pearl-bg"></div>
-      <div class="dark-overlay"></div>
-    </div>
+    <.atmosphere />
 
-    <div class="relative min-h-screen" style="z-index: 2;">
+    <div class="relative min-h-screen z-10">
       <%!-- Header --%>
       <header class="surface-bar">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -99,14 +96,14 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
                 <button
                   phx-click="toggle_view"
                   phx-value-mode="grid"
-                  class={"view-toggle-btn #{if @view_mode == "grid", do: "view-toggle-btn--active"}"}
+                  class={["view-toggle-btn", @view_mode == "grid" && "view-toggle-btn--active"]}
                 >
                   Grid
                 </button>
                 <button
                   phx-click="toggle_view"
                   phx-value-mode="list"
-                  class={"view-toggle-btn #{if @view_mode == "list", do: "view-toggle-btn--active"}"}
+                  class={["view-toggle-btn", @view_mode == "list" && "view-toggle-btn--active"]}
                 >
                   List
                 </button>
@@ -138,7 +135,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
                 <button
                   phx-click="filter_category"
                   phx-value-category="all"
-                  class={"category-tag cursor-pointer transition-colors #{if @active_category == nil, do: "toggle-btn--active"}"}
+                  class={["category-tag cursor-pointer transition-colors", @active_category == nil && "toggle-btn--active"]}
                 >
                   All
                 </button>
@@ -146,7 +143,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
                   <button
                     phx-click="filter_category"
                     phx-value-category={cat}
-                    class={"category-tag cursor-pointer transition-colors #{if @active_category == cat, do: "toggle-btn--active"}"}
+                    class={["category-tag cursor-pointer transition-colors", @active_category == cat && "toggle-btn--active"]}
                   >
                     <%= Helpers.category_label(cat) %>
                   </button>

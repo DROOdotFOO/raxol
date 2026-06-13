@@ -124,6 +124,12 @@ Hooks.RaxolTerminal = {
         '<p>Starting demo...</p></div>'
     })
 
+    // Server can ask us to focus after patch navigation between demos
+    this.handleEvent("focus_terminal", () => {
+      this.el.focus()
+      if (!this.noScroll) this.scrollToBottom()
+    })
+
     // Demo error: show message with retry button
     this.handleEvent("terminal_error", ({message}) => {
       this.el.innerHTML =
@@ -163,12 +169,50 @@ let liveSocket = new LiveSocket("/live", Socket, {
 // Global keyboard shortcuts
 document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', (e) => {
+    // Skip when typing in a real form field; we don't want to hijack search
+    // boxes or text inputs the user is actively using.
+    const ae = document.activeElement
+    const tag = ae && ae.tagName
+    const inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+      (ae && ae.isContentEditable)
+
     // Cmd+K or Ctrl+K for search
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
       e.preventDefault()
       const searchInput = document.querySelector('input[placeholder="Search..."]') ||
         document.querySelector('input[placeholder="Search components..."]')
       if (searchInput) searchInput.focus()
+      return
+    }
+
+    // "/" focuses the demo terminal so users can type without first clicking
+    // the rendered text input. Skip when typing in a real form field, when a
+    // modifier is held, or when the terminal is already focused.
+    if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !inField) {
+      const terminal = document.querySelector('#demo-terminal') ||
+        document.querySelector('#playground-terminal')
+      if (terminal && document.activeElement !== terminal) {
+        e.preventDefault()
+        terminal.focus()
+      }
+      return
+    }
+
+    // "[" / "]" navigate prev/next on /demos/{name}. Bracket keys are not
+    // used as input by any catalog demo. When the terminal has focus we let
+    // the keystroke through to the demo (some future demo may want them).
+    if ((e.key === '[' || e.key === ']') && !e.metaKey && !e.ctrlKey && !e.altKey && !inField) {
+      const terminal = document.querySelector('#demo-terminal')
+      if (terminal && document.activeElement === terminal) return
+
+      const sel = e.key === '['
+        ? 'a[aria-label^="Previous demo:"]'
+        : 'a[aria-label^="Next demo:"]'
+      const link = document.querySelector(sel)
+      if (link) {
+        e.preventDefault()
+        link.click()
+      }
     }
   })
 })
