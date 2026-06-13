@@ -64,10 +64,13 @@ defmodule Raxol.Payments.Protocols.X402 do
   @spec build_payment(map(), module()) ::
           {:ok, Headers.headers()} | {:error, term()}
   def build_payment(challenge, wallet) do
+    chain_id = chain_id_from_network(challenge.network)
+    %{name: name, version: version} = Raxol.Payments.Assets.UsdcDomains.lookup(chain_id)
+
     domain = %{
-      name: "USD Coin",
-      version: "2",
-      chainId: chain_id_from_network(challenge.network),
+      name: name,
+      version: version,
+      chainId: chain_id,
       verifyingContract: challenge.currency
     }
 
