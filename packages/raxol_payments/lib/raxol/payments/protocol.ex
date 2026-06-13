@@ -75,6 +75,7 @@ defmodule Raxol.Payments.Protocol do
   def resolve(:mpp), do: Raxol.Payments.Protocols.MPP
   def resolve(:riddler), do: Raxol.Payments.Protocols.Riddler
   def resolve(:xochi), do: Raxol.Payments.Protocols.Xochi
+  def resolve(:permit2), do: Raxol.Payments.Protocols.Permit2
 
   def resolve(module) when is_atom(module) do
     if Code.ensure_loaded?(module) and function_exported?(module, :detect?, 2) do

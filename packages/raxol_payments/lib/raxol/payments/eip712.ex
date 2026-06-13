@@ -86,10 +86,39 @@ defmodule Raxol.Payments.EIP712 do
     %{"EIP712Domain" => fields}
   end
 
+  # EIP-712 primary type detection: the primary is the unique type that
+  # is NOT referenced as a field type by any other type in the map.
+  # For a single-struct types map, that's just the only key. For nested
+  # structs (e.g. Permit2 PermitWitnessTransferFrom referencing
+  # TokenPermissions and OriginPullWitness), this picks the outer type
+  # deterministically regardless of Elixir map iteration order.
   defp primary_type(types) do
-    types
-    |> Map.keys()
-    |> List.first()
+    all_names = MapSet.new(Map.keys(types))
+
+    referenced =
+      types
+      |> Map.values()
+      |> Enum.flat_map(fn fields ->
+        Enum.map(fields, fn {_name, type} -> base_type(type) end)
+      end)
+      |> MapSet.new()
+
+    candidates = MapSet.difference(all_names, referenced)
+
+    case MapSet.to_list(candidates) do
+      [primary] ->
+        primary
+
+      [] ->
+        # Cycles or zero candidates: fall back to insertion-ish order so
+        # single-type maps keep working.
+        types |> Map.keys() |> List.first()
+
+      multiple ->
+        raise ArgumentError,
+              "EIP-712 types map is ambiguous: multiple root types #{inspect(multiple)}. " <>
+                "Every type should be referenced by exactly one other, except the primary."
+    end
   end
 
   # EIP-712: hashStruct(s) = keccak256(typeHash || encodeData(s))
@@ -103,18 +132,57 @@ defmodule Raxol.Payments.EIP712 do
     end
   end
 
+  # EIP-712: encodeType(s) = enc(s) ++ enc(t_1) ++ ... ++ enc(t_n)
+  # where t_i are struct types referenced (transitively) by s, sorted
+  # alphabetically by name and deduplicated. Without the referenced types
+  # appended, nested structs like Permit2 PermitWitnessTransferFrom produce
+  # a typeHash ethers v5 won't match.
   defp encode_type(type_name, types) do
+    primary = type_string(type_name, types)
+
+    referenced =
+      type_name
+      |> collect_referenced_types(types, MapSet.new())
+      |> MapSet.delete(type_name)
+      |> Enum.sort()
+      |> Enum.map_join("", &type_string(&1, types))
+
+    ExKeccak.hash_256(primary <> referenced)
+  end
+
+  defp type_string(type_name, types) do
     fields = Map.get(types, type_name, [])
 
-    type_string =
-      type_name <>
-        "(" <>
-        (fields
-         |> Enum.map(fn {name, type} -> "#{type} #{name}" end)
-         |> Enum.join(",")) <>
-        ")"
+    type_name <>
+      "(" <>
+      Enum.map_join(fields, ",", fn {name, type} -> "#{type} #{name}" end) <>
+      ")"
+  end
 
-    ExKeccak.hash_256(type_string)
+  defp collect_referenced_types(type_name, types, seen) do
+    if MapSet.member?(seen, type_name) do
+      seen
+    else
+      seen = MapSet.put(seen, type_name)
+      fields = Map.get(types, type_name, [])
+
+      Enum.reduce(fields, seen, fn {_name, type}, acc ->
+        base = base_type(type)
+
+        if Map.has_key?(types, base) do
+          collect_referenced_types(base, types, acc)
+        else
+          acc
+        end
+      end)
+    end
+  end
+
+  defp base_type(type) when is_binary(type) do
+    case String.split(type, "[", parts: 2) do
+      [base, _] -> base
+      [base] -> base
+    end
   end
 
   defp encode_data(type_name, data, types) do
@@ -124,7 +192,7 @@ defmodule Raxol.Payments.EIP712 do
     |> Enum.reduce_while(<<>>, fn {name, type}, acc ->
       value = Map.get(data, name) || safe_atom_get(data, name)
 
-      case encode_value(type, value) do
+      case encode_value(type, value, types) do
         {:ok, encoded} -> {:cont, <<acc::binary, encoded::binary>>}
         {:error, _} = err -> {:halt, err}
       end
@@ -137,6 +205,55 @@ defmodule Raxol.Payments.EIP712 do
     Map.get(data, String.to_existing_atom(name))
   rescue
     ArgumentError -> nil
+  end
+
+  # Nested struct field: hashStruct(value) becomes the 32-byte encoded
+  # value at this slot. Required for Permit2 PermitWitnessTransferFrom
+  # (`TokenPermissions permitted`, `OriginPullWitness witness`) and any
+  # other EIP-712 type that references another struct.
+  defp encode_value(type, value, types) when is_binary(type) and is_map(value) do
+    if Map.has_key?(types, type) do
+      hash_struct(type, value, types)
+    else
+      encode_value(type, value)
+    end
+  end
+
+  # Array of structs: each element is hashed via hash_struct/3, the
+  # resulting 32-byte hashes are concatenated, and the concatenation is
+  # hashed once more (EIP-712 dynamic array rule).
+  defp encode_value(type, value, types) when is_binary(type) and is_list(value) do
+    case array_element_type(type) do
+      {:ok, element_type} ->
+        cond do
+          Map.has_key?(types, element_type) ->
+            encode_struct_array(element_type, value, types)
+
+          true ->
+            encode_value(type, value)
+        end
+
+      :error ->
+        encode_value(type, value)
+    end
+  end
+
+  # Delegate everything else to the existing arity-2 implementation. The
+  # arity-3 entry point exists only to thread `types` through for the
+  # nested-struct cases above.
+  defp encode_value(type, value, _types), do: encode_value(type, value)
+
+  defp encode_struct_array(element_type, values, types) do
+    Enum.reduce_while(values, {:ok, <<>>}, fn v, {:ok, acc} ->
+      case hash_struct(element_type, v, types) do
+        {:ok, h} -> {:cont, {:ok, <<acc::binary, h::binary>>}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, concatenated} -> {:ok, ExKeccak.hash_256(concatenated)}
+      err -> err
+    end
   end
 
   defp encode_value("address", value) when is_binary(value) do
