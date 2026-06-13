@@ -2,7 +2,7 @@
 
 Canonical terminology for Raxol. When writing docs, marketing copy, error
 messages, or talking to other contributors, use these terms. Aliases listed in
-each table are _the wrong term_ -- avoid them, even when they sound natural.
+each table are _the wrong term_. Avoid them, even when they sound natural.
 
 This file is grouped by domain area. Each table lists the canonical term, a
 one-sentence definition, and aliases that mean the same thing but should not be
@@ -15,7 +15,7 @@ disambiguation is load-bearing.
 
 | Term           | Definition                                                                                               | Aliases to avoid                              |
 | -------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| **TEA**        | The Elm Architecture: the canonical shape of a Raxol application -- `init/1`, `update/2`, `view/1`.      | MVU, Elm-style                                |
+| **TEA**        | The Elm Architecture: the canonical shape of a Raxol application (`init/1`, `update/2`, `view/1`).       | MVU, Elm-style                                |
 | **TEA module** | An Elixir module that implements the TEA callbacks. The unit of authoring.                               | TEA app, application module, component module |
 | **Model**      | The application's state. Returned by `init/1`, transformed by `update/2`, rendered by `view/1`.          | state, store, app state                       |
 | **Message**    | An input passed to `update/2`. Triggers a state transition.                                              | event, action, msg                            |
@@ -62,7 +62,7 @@ disambiguation is load-bearing.
 ### Relationships
 
 - One TEA module renders to many Surfaces (1:N).
-- Each Surface owns its own Lifecycle process (1:1) -- surfaces never share
+- Each Surface owns its own Lifecycle process (1:1); surfaces never share
   Lifecycle state, even for the same module.
 
 ### Example dialogue
@@ -203,7 +203,7 @@ a Component.
 
 - **Tool** (MCP context) vs **Action** (Agent context): MCP Tools are _exposed
   outward_ to AI clients; Agent Actions are _callable inward_ by an Agent's
-  own LLM Backend. They often map 1:1 in practice -- but say "MCP tool"
+  own LLM Backend. They often map 1:1 in practice, but say "MCP tool"
   when the consumer is external, "agent action" when the consumer is the
   Agent's own LLM.
 
@@ -281,7 +281,7 @@ a Component.
 | **Replay**    | (1) Session recording playback; (2) time-travel state restore                | **Replay** = recording. **Restore** = time travel.                                                                          |
 | **Swarm**     | (1) Distributed multi-node subsystem; (2) any group of agents                | **Swarm** = distribution. **Agent Team** = local supervision.                                                               |
 | **Component** | Raxol UI building block; React's "component" overlaps but is unrelated       | Use **Component** (matches the behaviour name). When the audience is web-heavy, say "Raxol Component" once to disambiguate. |
-| **Surface**   | Rendering target -- vs "backend" / "channel" / "frontend"                    | **Surface**. Never "channel" (that's a Phoenix concept) or "backend".                                                       |
+| **Surface**   | Rendering target (vs "backend" / "channel" / "frontend")                     | **Surface**. Never "channel" (that's a Phoenix concept) or "backend".                                                       |
 
 ---
 
@@ -289,11 +289,11 @@ a Component.
 
 When writing for the website, README, or Hex docs:
 
-- "One app, four surfaces." Don't say "one codebase, four targets" -- the
+- "One app, four surfaces." Don't say "one codebase, four targets"; the
   surfaces concept is the whole point.
-- "Agents are TEA apps." Don't say "agents are processes" -- everything in BEAM
+- "Agents are TEA apps." Don't say "agents are processes". Everything in BEAM
   is a process, the news is the _shape_.
-- "Zero install via SSH." Don't say "no setup needed" -- the specific
+- "Zero install via SSH." Don't say "no setup needed"; the specific
   affordance is SSH-based, not vague no-setup magic.
 - "Crash isolation." Use this as a noun phrase. Don't say "fault tolerance"
   unless paired with concrete OTP mechanics; "crash isolation" is the

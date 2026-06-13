@@ -6,13 +6,13 @@ Implemented, 2026-06-03. Helper landed in `aacfe55f` (PR-A), RenderBatcher adopt
 
 ## Context
 
-Raxol's hot-path event dispatch uses unbounded `GenServer.cast` at three sites. The dispatcher mailbox can grow without observable signal under per-keystroke load (typing, mouse motion, animation frames). The refactor backlog item #3 -- and CLAUDE.md's project guidance ("when in doubt, use `call` over `cast`, to ensure back-pressure") -- both flag this as a real concern.
+Raxol's hot-path event dispatch uses unbounded `GenServer.cast` at three sites. The dispatcher mailbox can grow without observable signal under per-keystroke load (typing, mouse motion, animation frames). The refactor backlog item #3, plus CLAUDE.md's project guidance ("when in doubt, use `call` over `cast`, to ensure back-pressure"), both flag this as a real concern.
 
 The three sites and their characteristics:
 
-- `lib/raxol/ui/rendering/render_batcher.ex:50` -- `submit_update/4` casts `{:submit_update, tree, diff_result, priority, ts}` per UI update. The receiver coalesces into frame batches; dropped updates merge naturally into the next batch.
-- `lib/raxol/core/runtime/events/dispatcher.ex:383` -- `handle_manager_cast({:dispatch, event}, state)` consumes the dispatch. The sender is the terminal driver (`packages/raxol_terminal/lib/raxol/terminal/driver.ex:338`). Every keystroke / mouse / focus / paste event goes through here. Dropping events corrupts user input; ordering matters.
-- `lib/raxol/headless.ex:423` -- `dispatch_key/3` casts `{:dispatch, event}` to the dispatcher from Headless / MCP / agent tests. Same ordering and loss-intolerance as the live driver path.
+- `lib/raxol/ui/rendering/render_batcher.ex:50`: `submit_update/4` casts `{:submit_update, tree, diff_result, priority, ts}` per UI update. The receiver coalesces into frame batches; dropped updates merge naturally into the next batch.
+- `lib/raxol/core/runtime/events/dispatcher.ex:383`: `handle_manager_cast({:dispatch, event}, state)` consumes the dispatch. The sender is the terminal driver (`packages/raxol_terminal/lib/raxol/terminal/driver.ex:338`). Every keystroke / mouse / focus / paste event goes through here. Dropping events corrupts user input; ordering matters.
+- `lib/raxol/headless.ex:423`: `dispatch_key/3` casts `{:dispatch, event}` to the dispatcher from Headless / MCP / agent tests. Same ordering and loss-intolerance as the live driver path.
 
 The first two refactor waves (commits `723f085b..898ac5e0` and `37dc1298..69c0a934`) cleared cheap mechanical wins (ETS hints, Task wrappers, `String.to_atom`, pdict caches). This is the highest-risk remaining item: changing cast/call semantics alters the timing of the event loop and could regress UX or break property invariants. It earns its own ADR before any code lands.
 
@@ -24,10 +24,10 @@ A naive "cast becomes call everywhere" change makes every keystroke synchronous 
 
 The repo already uses `Process.info(pid, :message_queue_len)` in two places:
 
-- `lib/raxol/memory/optimizer.ex:78-82` -- triggers memory triage when a process has `message_queue_len > 1000`.
-- `lib/raxol/core/error_recovery/recovery_wrapper.ex:279` -- probes `self()` for diagnostics.
+- `lib/raxol/memory/optimizer.ex:78-82`: triggers memory triage when a process has `message_queue_len > 1000`.
+- `lib/raxol/core/error_recovery/recovery_wrapper.ex:279`: probes `self()` for diagnostics.
 
-We are not inventing a new probe -- we are wrapping an existing one in a policy.
+We are not inventing a new probe. We are wrapping an existing one in a policy.
 
 ## Decision
 
@@ -72,9 +72,9 @@ Options:
 
 Return values:
 
-- `:ok` -- the message was delivered (via cast or call).
-- `{:dropped, :overflow}` -- watermark exceeded under `:drop_when_full`.
-- `{:dropped, :no_proc}` -- target is not alive (race; the caller treats this as a no-op).
+- `:ok`: the message was delivered (via cast or call).
+- `{:dropped, :overflow}`: watermark exceeded under `:drop_when_full`.
+- `{:dropped, :no_proc}`: target is not alive (race; the caller treats this as a no-op).
 
 ### Per-site policy
 
@@ -119,7 +119,7 @@ Default `1_000` matches `lib/raxol/memory/optimizer.ex`. The number is informed 
 
 Three layers:
 
-**1. Unit tests** -- `test/raxol/core/runtime/backpressure_test.exs`. Cover each policy at known watermarks with a controllable target GenServer that holds its mailbox open. Asserts:
+**1. Unit tests** in `test/raxol/core/runtime/backpressure_test.exs`. Cover each policy at known watermarks with a controllable target GenServer that holds its mailbox open. Asserts:
 
 - Below watermark: every call decides `:cast`, `:ok` returned, target receives the message.
 - Above watermark, `:drop_when_full`: returns `{:dropped, :overflow}`, target does not receive the message.
@@ -127,12 +127,12 @@ Three layers:
 - Dead target: returns `{:dropped, :no_proc}` regardless of policy.
 - Telemetry: every invocation emits exactly one event with correct metadata.
 
-**2. Property test** -- `test/property/backpressure_ordering_test.exs`. StreamData generates an event sequence of length 1..1000 with random policy switches. Asserts:
+**2. Property test** in `test/property/backpressure_ordering_test.exs`. StreamData generates an event sequence of length 1..1000 with random policy switches. Asserts:
 
 - Under `:call_when_full` and `:fail_when_full`, the order observed by the target equals the order sent by the caller.
 - Under `:drop_when_full`, the order observed equals the order sent **minus the dropped subset** (no reordering, only deletion).
 
-**3. Load test** -- `test/performance/backpressure_load_test.exs`, tagged `:slow`. Saturates a controllable dispatcher and asserts:
+**3. Load test** in `test/performance/backpressure_load_test.exs`, tagged `:slow`. Saturates a controllable dispatcher and asserts:
 
 - Watermark triggers under genuine overload (sustained 10k events/sec for 1s).
 - Telemetry drop rate matches expected drop rate within tolerance.
@@ -160,13 +160,13 @@ Each PR is individually revertable.
 
 ## Consequences
 
-The three hot-path sites become observable (telemetry on every cast). UX gains a bounded-latency guarantee under overload (input stalls instead of growing the mailbox). The repo gains a reusable backpressure pattern that future hot paths can adopt -- if a fourth or fifth call site emerges, the cost is one helper call plus a policy choice.
+The three hot-path sites become observable (telemetry on every cast). UX gains a bounded-latency guarantee under overload (input stalls instead of growing the mailbox). The repo gains a reusable backpressure pattern that future hot paths can adopt. If a fourth or fifth call site emerges, the cost is one helper call plus a policy choice.
 
 The cost is one new module (~80 LOC including docs and specs), one property test, one load test, and roughly a dozen call-site edits.
 
 ## References
 
-- `lib/raxol/memory/optimizer.ex:78-82` -- prior art for queue-depth probing.
-- `lib/raxol/core/error_recovery/recovery_wrapper.ex:279` -- prior art for `Process.info(:message_queue_len)`.
-- `lib/raxol/core/runtime/rendering/engine.ex:277` -- existing telemetry shape `[:raxol, :runtime, :*]`.
-- CLAUDE.md, "OTP / Process Communication" section -- "When in doubt, use `call` over `cast`, to ensure back-pressure".
+- `lib/raxol/memory/optimizer.ex:78-82`: prior art for queue-depth probing.
+- `lib/raxol/core/error_recovery/recovery_wrapper.ex:279`: prior art for `Process.info(:message_queue_len)`.
+- `lib/raxol/core/runtime/rendering/engine.ex:277`: existing telemetry shape `[:raxol, :runtime, :*]`.
+- CLAUDE.md, "OTP / Process Communication" section: "When in doubt, use `call` over `cast`, to ensure back-pressure".
