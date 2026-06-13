@@ -47,27 +47,81 @@ defmodule Raxol.Watch.Push.FCM do
     end
   end
 
-  defp build_notification(device_token, %{title: title, body: body} = notif) do
+  defp build_notification(device_token, notif) do
     high? = notif[:priority] == :high
-
-    actions =
-      notif
-      |> Map.get(:actions, [])
-      |> Enum.map(fn %{id: id, label: label} -> %{"id" => id, "label" => label} end)
 
     struct(Pigeon.FCM.Notification,
       target: {:token, device_token},
-      notification: %{"title" => title, "body" => body},
+      notification: build_notification_object(notif),
       android: %{
         "priority" => if(high?, do: "HIGH", else: "NORMAL"),
         "notification" => %{
           "click_action" => Map.get(notif, :category, "raxol_alert")
         }
       },
-      data: %{
-        "category" => Map.get(notif, :category, "raxol_alert"),
-        "actions" => Jason.encode!(actions)
-      }
+      data: build_data_payload(notif)
     )
   end
+
+  @doc """
+  Builds the FCM `notification` object: `title`, `body`, and `image` when
+  the notification carries an `image_url`. FCM auto-downloads the image
+  on Wear OS notifications.
+
+  Public so consumers can introspect the payload; tests use it to assert
+  shape without Pigeon mocking.
+  """
+  @spec build_notification_object(map()) :: map()
+  def build_notification_object(%{title: title, body: body} = notif) do
+    base = %{"title" => title, "body" => body}
+
+    case notif[:image_url] do
+      nil -> base
+      "" -> base
+      url when is_binary(url) -> Map.put(base, "image", url)
+    end
+  end
+
+  @doc """
+  Builds the FCM `data` payload. Always carries `category` and `actions`
+  (JSON-encoded list of `{id, label}` maps). Optionally adds
+  `raxol_audio_url`, `raxol_media_type`, `raxol_location` (JSON-encoded
+  `{lat, lng, label?}` map), and `raxol_body_long`.
+
+  All FCM data values must be strings, so the location map is JSON-encoded
+  for the host Wear OS app to parse.
+  """
+  @spec build_data_payload(map()) :: %{required(String.t()) => String.t()}
+  def build_data_payload(notif) do
+    actions =
+      notif
+      |> Map.get(:actions, [])
+      |> Enum.map(fn %{id: id, label: label} -> %{"id" => id, "label" => label} end)
+
+    %{
+      "category" => Map.get(notif, :category, "raxol_alert"),
+      "actions" => Jason.encode!(actions)
+    }
+    |> maybe_put_string("raxol_audio_url", notif[:audio_url])
+    |> maybe_put_string("raxol_media_type", media_type_string(notif[:media_type]))
+    |> maybe_put_json("raxol_location", notif[:location])
+    |> maybe_put_distinct_string("raxol_body_long", notif[:body_long], notif[:body])
+  end
+
+  defp media_type_string(nil), do: nil
+  defp media_type_string(atom) when is_atom(atom), do: Atom.to_string(atom)
+
+  defp maybe_put_string(map, _key, nil), do: map
+  defp maybe_put_string(map, _key, ""), do: map
+  defp maybe_put_string(map, key, value) when is_binary(value), do: Map.put(map, key, value)
+
+  defp maybe_put_json(map, _key, nil), do: map
+  defp maybe_put_json(map, key, value), do: Map.put(map, key, Jason.encode!(value))
+
+  defp maybe_put_distinct_string(map, _key, nil, _other), do: map
+  defp maybe_put_distinct_string(map, _key, "", _other), do: map
+  defp maybe_put_distinct_string(map, _key, same, same), do: map
+
+  defp maybe_put_distinct_string(map, key, value, _other) when is_binary(value),
+    do: Map.put(map, key, value)
 end

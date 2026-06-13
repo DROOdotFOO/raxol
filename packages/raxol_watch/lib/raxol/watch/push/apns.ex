@@ -67,7 +67,35 @@ defmodule Raxol.Watch.Push.APNS do
     |> Keyword.get(key)
   end
 
-  defp build_notification(device_token, topic, %{title: title, body: body} = notif) do
+  defp build_notification(device_token, topic, notification) do
+    high? = notification[:priority] == :high
+
+    struct(Pigeon.APNS.Notification,
+      device_token: device_token,
+      topic: topic,
+      priority: if(high?, do: 10, else: 5),
+      push_type: "alert",
+      payload: build_payload(notification)
+    )
+  end
+
+  @doc """
+  Builds the JSON-shaped APNS payload for a notification.
+
+  Returns a map with the conventional `"aps"` key plus any rich-payload
+  fields (`raxol.audio_url`, `raxol.image_url`, `raxol.media_type`,
+  `raxol.location`, `raxol.body_long`) at the top level for the host iOS
+  app's `UNNotificationServiceExtension` to consume.
+
+  `mutable-content: 1` is set whenever audio or image is present, so the
+  host extension knows to fetch the attachment. `interruption-level:
+  "time-sensitive"` is set for high-priority notifications (iOS 15+).
+
+  Public so consumers can introspect the payload (e.g. in tests). The
+  Pigeon-side `Notification` struct assembly stays private.
+  """
+  @spec build_payload(map()) :: map()
+  def build_payload(%{title: title, body: body} = notif) do
     high? = notif[:priority] == :high
 
     aps =
@@ -77,16 +105,47 @@ defmodule Raxol.Watch.Push.APNS do
         "category" => Map.get(notif, :category, "raxol_alert")
       }
       |> maybe_put_sound(high?)
+      |> maybe_put_interruption_level(high?)
+      |> maybe_put_mutable_content(notif)
 
-    struct(Pigeon.APNS.Notification,
-      device_token: device_token,
-      topic: topic,
-      priority: if(high?, do: 10, else: 5),
-      push_type: "alert",
-      payload: %{"aps" => aps}
-    )
+    Map.merge(%{"aps" => aps}, build_custom_data(notif))
   end
 
   defp maybe_put_sound(aps, true), do: Map.put(aps, "sound", "default")
   defp maybe_put_sound(aps, false), do: aps
+
+  defp maybe_put_interruption_level(aps, true),
+    do: Map.put(aps, "interruption-level", "time-sensitive")
+
+  defp maybe_put_interruption_level(aps, false), do: aps
+
+  defp maybe_put_mutable_content(aps, notif) do
+    if has_media?(notif), do: Map.put(aps, "mutable-content", 1), else: aps
+  end
+
+  defp has_media?(notif) do
+    is_binary(notif[:audio_url]) or is_binary(notif[:image_url])
+  end
+
+  defp build_custom_data(notif) do
+    []
+    |> maybe_add("raxol.audio_url", notif[:audio_url])
+    |> maybe_add("raxol.image_url", notif[:image_url])
+    |> maybe_add("raxol.media_type", media_type_string(notif[:media_type]))
+    |> maybe_add("raxol.location", notif[:location])
+    |> maybe_add_distinct("raxol.body_long", notif[:body_long], notif[:body])
+    |> Map.new()
+  end
+
+  defp media_type_string(nil), do: nil
+  defp media_type_string(atom) when is_atom(atom), do: Atom.to_string(atom)
+
+  defp maybe_add(acc, _key, nil), do: acc
+  defp maybe_add(acc, _key, ""), do: acc
+  defp maybe_add(acc, key, value), do: [{key, value} | acc]
+
+  defp maybe_add_distinct(acc, _key, nil, _other), do: acc
+  defp maybe_add_distinct(acc, _key, "", _other), do: acc
+  defp maybe_add_distinct(acc, _key, same, same), do: acc
+  defp maybe_add_distinct(acc, key, value, _other), do: [{key, value} | acc]
 end

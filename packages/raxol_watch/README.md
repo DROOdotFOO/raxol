@@ -87,7 +87,21 @@ Raxol.Watch.Formatter.format_long_message("Build",
 Raxol.Watch.Formatter.format_chat_message("Alice", "Hey, you free?")
 ```
 
-**APNS / FCM payload encoding.** Phase W1 extends the `notification` shape; W2 / W3 (APNS `attachment-url` / FCM `notification.image` field mapping) are not yet wired in `Push.APNS` and `Push.FCM`. The new payload fields ride along in the notification map for consumer-facing telemetry and `Push.Backend` implementations to opt into. The host iOS / Wear OS app is responsible for downloading and attaching media (requires `UNNotificationServiceExtension` on iOS).
+**APNS encoding (W2).** `Raxol.Watch.Push.APNS.build_payload/1` emits the JSON payload with:
+
+  * `mutable-content: 1` whenever `audio_url` or `image_url` is set, so the host iOS app's `UNNotificationServiceExtension` knows to fetch the attachment.
+  * `interruption-level: "time-sensitive"` for high-priority notifications (iOS 15+, surfaces past Focus modes).
+  * `aps.sound: "default"` for high priority.
+  * Custom data keys at the top level: `raxol.audio_url`, `raxol.image_url`, `raxol.media_type` ("sticker" | "photo" | "video_thumb"), `raxol.location` (the `{lat, lng, label?}` map), `raxol.body_long` (only when distinct from `body`).
+
+**FCM encoding (W3).** `Raxol.Watch.Push.FCM.build_notification_object/1` adds the `image` field to the FCM notification when `image_url` is set (Wear OS auto-downloads). `build_data_payload/1` JSON-encodes the actions list and adds:
+
+  * `raxol_audio_url` (string)
+  * `raxol_media_type` (string)
+  * `raxol_location` (JSON-encoded map; FCM data values must be strings)
+  * `raxol_body_long` (only when distinct from `body`)
+
+The host iOS / Wear OS app is responsible for actually downloading the media and rendering the rich UI. `UNNotificationServiceExtension` on iOS, `NotificationCompat` + `BigPictureStyle` / `MessagingStyle` on Wear OS.
 
 ### Chat Tap-Back Actions
 
