@@ -56,6 +56,19 @@ defmodule Raxol.ACP.ABI do
     function_selector(signature) <> encode_args(args)
   end
 
+  @doc """
+  ABI-encode argument tuples without a leading function selector.
+
+  Useful for encoding the trailing `bytes data` parameter of ACP hook
+  calls (e.g. `FundTransferHook` uses
+  `abi.encode(uint256 transferAmount, address destination)` as its
+  `setBudget` data).
+
+  Accepts the same `[{type, value}]` shape as `encode_call/2`.
+  """
+  @spec encode_args([{String.t(), term()}]) :: binary()
+  def encode_args(args) when is_list(args), do: do_encode_args(args)
+
   # -- Internal --
 
   # Solidity ABI head/tail encoding:
@@ -63,7 +76,7 @@ defmodule Raxol.ACP.ABI do
   #     offset placeholders for dynamic types)
   #   for each arg: emit a static word into head OR an offset word that
   #     points into the tail; dynamic payloads are appended to tail.
-  defp encode_args(args) do
+  defp do_encode_args(args) do
     head_size = length(args) * @word_size
 
     {heads, tails, _final_offset} =
