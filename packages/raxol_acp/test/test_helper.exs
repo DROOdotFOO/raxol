@@ -3,7 +3,7 @@
 # (anvil + cast) installed and are slow, so they're opt-in:
 #
 #     mix test --include live_chain
-ExUnit.start(exclude: [:live_chain, :live_bundler])
+ExUnit.start(exclude: [:live_chain, :live_bundler, :live_acp_dev])
 
 # Configure the in-memory contract client for the test run. The test/support
 # impl is the second real implementation of the ContractClient behaviour --
