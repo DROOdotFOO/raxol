@@ -166,11 +166,16 @@ defmodule Raxol.ACP.Wallet.SCA.BundlerHarnessTest do
 
     nonce0 = nonce_hex |> String.split() |> hd() |> String.to_integer()
 
+    # call_data is the installValidation calldata directly -- NOT wrapped
+    # in execute(sca, 0, ...). MAv2 SMA rejects self-calls with
+    # SelfCallRecursionDepthExceeded() (AA23 / selector 0x54ff929d). The
+    # EntryPoint dispatches userOp.call_data straight to sender, so the
+    # SCA's installValidation runs on itself without any wrapper.
     deploy_op = %UserOp{
       sender: sca,
       nonce: nonce0,
       init_code: Provisioning.deploy_init_code(@owner, 1),
-      call_data: ModularAccount.execute_calldata(sca, 0, install_data),
+      call_data: install_data,
       call_gas_limit: 800_000,
       verification_gas_limit: 1_500_000,
       pre_verification_gas: 200_000,
