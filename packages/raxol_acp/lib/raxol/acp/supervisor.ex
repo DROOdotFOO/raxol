@@ -13,15 +13,17 @@ defmodule Raxol.ACP.Supervisor do
   - The seller WebSocket can crash and restart independently of jobs in
     flight.
 
-  ## Children (v0.1)
+  ## Children (v0.2)
 
-  - `Raxol.ACP.Job.Registry` -- per-job process lookup
+  - `Raxol.ACP.Job.Registry` -- per-job process lookup (v1)
+  - `Raxol.ACP.JobSession.Registry` -- per-`{chain_id, job_id}` lookup (v2)
   - `Raxol.ACP.Wallet.NonceServer` -- serializes EVM nonce assignment for
     the umbrella seller wallet (default-named instance)
   - `Raxol.ACP.Offering.Registry` -- declared offerings (ETS-backed)
-  - `Raxol.ACP.Job.Store` -- ETS-backed memo persistence (jobs hydrate
-    from here on transient restart)
-  - `Raxol.ACP.Job.Supervisor` -- DynamicSupervisor for per-job processes
+  - `Raxol.ACP.Job.Store` -- ETS-backed memo persistence (v1 jobs
+    hydrate from here on transient restart)
+  - `Raxol.ACP.Job.Supervisor` -- DynamicSupervisor for v1 per-job processes
+  - `Raxol.ACP.JobSession.Supervisor` -- DynamicSupervisor for v2 sessions
   - `Raxol.ACP.Seller.Supervisor` -- only when
     `config :raxol_acp, seller_enabled: true`. Owns the Backend, the
     Queue, and the Runtime. Buyer-only deployments leave it off.
@@ -40,10 +42,12 @@ defmodule Raxol.ACP.Supervisor do
 
     base = [
       Raxol.ACP.Job.Registry,
+      Raxol.ACP.JobSession.Registry,
       {Raxol.ACP.Wallet.NonceServer, [initial_nonce: initial_nonce]},
       Raxol.ACP.Offering.Registry,
       Raxol.ACP.Job.Store,
-      Raxol.ACP.Job.Supervisor
+      Raxol.ACP.Job.Supervisor,
+      Raxol.ACP.JobSession.Supervisor
     ]
 
     children =
