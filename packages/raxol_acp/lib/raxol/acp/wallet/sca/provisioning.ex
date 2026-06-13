@@ -35,9 +35,16 @@ defmodule Raxol.ACP.Wallet.SCA.Provisioning do
 
   `install_session_key_calldata/3` builds the `installValidation` call
   that registers a session key on the single-signer validation module
-  as a new entity. Wrap it in the account's `execute(...)` and send it
-  as a UserOp signed by the owner. In production Virtuals' `acp setup`
-  usually does this; the helper exists for self-provisioning.
+  as a new entity. Use the result **directly** as `UserOp.call_data` --
+  the EntryPoint calls `sender.<call_data>`, which is exactly
+  `account.installValidation(...)`.
+
+  **Do NOT wrap it in `ModularAccount.execute_calldata(account, 0, ...)`.**
+  MAv2 SMA forbids self-calls (`execute(self, 0, ...)`) and reverts with
+  `SelfCallRecursionDepthExceeded()` during validation -- the bundler
+  surfaces this as "AA23 reverted" with selector `0x54ff929d`. In
+  production Virtuals' `acp setup` usually does this; the helper exists
+  for self-provisioning.
 
   ## Provisioning vs. raxol
 
@@ -114,8 +121,12 @@ defmodule Raxol.ACP.Wallet.SCA.Provisioning do
       installValidation(bytes25 validationConfig, bytes4[] selectors,
                         bytes installData, bytes[] hooks)
 
-  Wrap the result in the account's `execute(account, 0, calldata)` and
-  send it as a UserOp signed by the owner.
+  Use the result directly as `UserOp.call_data` and send it as a UserOp
+  signed by the owner. Do NOT wrap it in `execute(account, 0, calldata)`
+  -- MAv2 rejects self-calls with `SelfCallRecursionDepthExceeded()`
+  (AA23 / selector 0x54ff929d). The EntryPoint dispatches the userOp's
+  call_data directly to the sender, so `installValidation` is invoked
+  on the account itself without any wrapper.
 
   `validationConfig` packs `moduleAddress(20) || entityId(uint32) ||
   flags(1)`, where flags = userOp(1) | signature(2) | global(4).
