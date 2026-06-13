@@ -49,6 +49,10 @@ defmodule RaxolTelegram.MixProject do
       # JSON processing
       {:jason, "~> 1.4"},
 
+      # HTTP client for Bot API 10.1 sendRichMessage (Telegex 1.8 lacks coverage)
+      # Optional at runtime; Sender returns {:error, :req_not_available} if absent.
+      {:req, "~> 0.5", optional: true},
+
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},

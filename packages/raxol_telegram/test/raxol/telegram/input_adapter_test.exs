@@ -85,4 +85,71 @@ defmodule Raxol.Telegram.InputAdapterTest do
       assert InputAdapter.translate_text(nil) == nil
     end
   end
+
+  describe "translate_join_request/1" do
+    test "atom-keyed payload produces full applicant map" do
+      req = %{
+        from: %{
+          id: 99,
+          username: "alice",
+          first_name: "Alice",
+          last_name: "Doe"
+        },
+        chat: %{id: 42},
+        query_id: "ABC",
+        bio: "hello",
+        invite_link: %{invite_link: "https://t.me/+xyz"}
+      }
+
+      assert InputAdapter.translate_join_request(req) == %{
+               user_id: 99,
+               chat_id: 42,
+               query_id: "ABC",
+               username: "alice",
+               first_name: "Alice",
+               last_name: "Doe",
+               bio: "hello",
+               invite_link: "https://t.me/+xyz"
+             }
+    end
+
+    test "string-keyed payload (raw JSON shape) produces the same map" do
+      req = %{
+        "from" => %{"id" => 99, "username" => "alice"},
+        "chat" => %{"id" => 42},
+        "bio" => "hello"
+      }
+
+      assert %{user_id: 99, chat_id: 42, username: "alice", bio: "hello"} =
+               InputAdapter.translate_join_request(req)
+    end
+
+    test "missing optional fields default to nil" do
+      req = %{from: %{id: 99}, chat: %{id: 42}}
+
+      assert InputAdapter.translate_join_request(req) == %{
+               user_id: 99,
+               chat_id: 42,
+               query_id: nil,
+               username: nil,
+               first_name: nil,
+               last_name: nil,
+               bio: nil,
+               invite_link: nil
+             }
+    end
+
+    test "extracts invite_link from a string-typed field too" do
+      req = %{from: %{id: 1}, chat: %{id: 1}, invite_link: "https://t.me/+abc"}
+      assert %{invite_link: "https://t.me/+abc"} = InputAdapter.translate_join_request(req)
+    end
+
+    test "returns nil for malformed input" do
+      assert InputAdapter.translate_join_request(%{}) == nil
+      assert InputAdapter.translate_join_request(%{from: %{}}) == nil
+      assert InputAdapter.translate_join_request(%{chat: %{id: 1}}) == nil
+      assert InputAdapter.translate_join_request("not a map") == nil
+      assert InputAdapter.translate_join_request(nil) == nil
+    end
+  end
 end

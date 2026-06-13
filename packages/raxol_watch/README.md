@@ -5,6 +5,12 @@
 
 Watch notification bridge for Raxol. Pushes glanceable summaries and accessibility announcements to Apple Watch (APNS) and Wear OS (FCM). Tap actions route back as events to the TEA app.
 
+## What this is for
+
+A 90-day platform digest (HN + GitHub + Reddit) found near-zero developer-facing framework activity in the Apple Watch / Wear OS notification space. Almost everything there is end-user product (mirror apps like WearBridge, complications, custom watch faces) or generic gateways (Prism, ntfy). Server-side push integration that actually understands an application model is unowned.
+
+`raxol_watch` fills that gap. It treats the watch as one more rendering target for a TEA app: model state and accessibility announcements project into platform-appropriate notification payloads. APNS and FCM differences (priority levels, attachment URLs, action categories) are encoded in `Push.Backend` implementations, not pushed onto consumers. Delivery failures auto-prune dead device tokens. Debounced normal-priority pushes respect watch battery; high-priority bypasses debouncing. Telegram's own watch apps (announced 2026-06) ship voice / media / location / chat actions on the device. `raxol_watch` mirrors that capability surface on the server side, so your TEA app's announcements can carry the same payload shapes.
+
 ## Install
 
 ```elixir

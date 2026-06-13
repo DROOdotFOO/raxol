@@ -33,8 +33,7 @@ defmodule Raxol.Telegram.TelemetryTest do
         allowed_chat_ids: [99]
       )
 
-      assert_receive {[:raxol_telegram, :bot, :denied], _ref, _,
-                      %{chat_id: 42, kind: :message}}
+      assert_receive {[:raxol_telegram, :bot, :denied], _ref, _, %{chat_id: 42, kind: :message}}
     end
 
     test "received fires for an allowed callback query" do

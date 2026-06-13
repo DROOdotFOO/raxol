@@ -90,4 +90,70 @@ defmodule Raxol.Telegram.InputAdapter do
   end
 
   def translate_text(_), do: nil
+
+  @doc """
+  Translates a Telegram `chat_join_request` update payload into the
+  applicant map shape consumed by `Raxol.Telegram.Guardian.screen/1`.
+
+  Accepts either a `Telegex.Type.ChatJoinRequest` struct or a raw map
+  with atom or string keys. Returns `nil` for malformed input.
+
+  ## Example
+
+      iex> req = %{from: %{id: 99, username: "alice"}, chat: %{id: 42}, bio: "hi"}
+      iex> Raxol.Telegram.InputAdapter.translate_join_request(req)
+      %{
+        user_id: 99,
+        chat_id: 42,
+        query_id: nil,
+        username: "alice",
+        first_name: nil,
+        last_name: nil,
+        bio: "hi",
+        invite_link: nil
+      }
+  """
+  @spec translate_join_request(map()) :: map() | nil
+  def translate_join_request(%{from: %{id: user_id} = from, chat: %{id: chat_id}} = req)
+      when is_integer(user_id) and is_integer(chat_id) do
+    %{
+      user_id: user_id,
+      chat_id: chat_id,
+      query_id: lookup(req, :query_id),
+      username: lookup(from, :username),
+      first_name: lookup(from, :first_name),
+      last_name: lookup(from, :last_name),
+      bio: lookup(req, :bio),
+      invite_link: extract_invite_link(req)
+    }
+  end
+
+  def translate_join_request(
+        %{"from" => %{"id" => user_id} = from, "chat" => %{"id" => chat_id}} = req
+      )
+      when is_integer(user_id) and is_integer(chat_id) do
+    %{
+      user_id: user_id,
+      chat_id: chat_id,
+      query_id: lookup(req, "query_id"),
+      username: lookup(from, "username"),
+      first_name: lookup(from, "first_name"),
+      last_name: lookup(from, "last_name"),
+      bio: lookup(req, "bio"),
+      invite_link: extract_invite_link(req)
+    }
+  end
+
+  def translate_join_request(_), do: nil
+
+  defp lookup(map, key) when is_map(map), do: Map.get(map, key)
+
+  defp extract_invite_link(req) when is_map(req) do
+    case lookup(req, :invite_link) || lookup(req, "invite_link") do
+      %{invite_link: link} -> link
+      %{"invite_link" => link} -> link
+      link when is_binary(link) -> link
+      _ -> nil
+    end
+  end
 end

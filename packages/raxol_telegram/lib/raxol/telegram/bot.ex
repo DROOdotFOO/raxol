@@ -15,7 +15,7 @@ defmodule Raxol.Telegram.Bot do
   silently ignored. When omitted or `nil`, all chats are allowed.
   """
 
-  alias Raxol.Telegram.{InputAdapter, SessionRouter}
+  alias Raxol.Telegram.{Guardian, InputAdapter, SessionRouter}
 
   require Logger
 
@@ -79,11 +79,41 @@ defmodule Raxol.Telegram.Bot do
     end
   end
 
+  def handle_update(%{chat_join_request: %{} = req}, opts) do
+    case InputAdapter.translate_join_request(req) do
+      nil ->
+        :ok
+
+      applicant ->
+        if chat_allowed?(applicant.chat_id, opts) do
+          emit_guardian(:received, %{chat_id: applicant.chat_id, user_id: applicant.user_id})
+
+          guardian =
+            Keyword.get(opts, :guardian) || Application.get_env(:raxol_telegram, :guardian)
+
+          decision = Guardian.decide(applicant, guardian)
+          _ = Guardian.apply_decision(applicant, decision, opts)
+          :ok
+        else
+          emit_guardian(:denied, %{chat_id: applicant.chat_id, user_id: applicant.user_id})
+          :ok
+        end
+    end
+  end
+
   def handle_update(_, _opts), do: :ok
 
   defp emit(event, metadata) do
     :telemetry.execute(
       [:raxol_telegram, :bot, event],
+      %{system_time: System.system_time()},
+      metadata
+    )
+  end
+
+  defp emit_guardian(sub_event, metadata) do
+    :telemetry.execute(
+      [:raxol_telegram, :guardian, sub_event],
       %{system_time: System.system_time()},
       metadata
     )
