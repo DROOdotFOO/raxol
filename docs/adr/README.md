@@ -19,6 +19,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0011](0011-terminal-module-consolidation.md) | Terminal Module Consolidation | Implemented | 2025-02-27 |
 | [0012](0012-mcp-as-rendering-target.md) | MCP as Rendering Target | Implemented | 2026-04-05 |
 | [0013](0013-event-dispatch-backpressure.md) | Event-dispatch Backpressure | Implemented | 2026-06-03 |
+| [0014](0014-telegram-ai-guardian.md) | Telegram AI Guardian admin behaviour | Accepted | 2026-06-13 |
 
 ## Template
 
@@ -78,6 +79,7 @@ They preserve context for why decisions were made, help new contributors underst
 ### Performance
 - [0002: Parser Performance Optimization](0002-parser-performance-optimization.md)
 - [0009: High-Performance Buffer Management](0009-high-performance-buffer-management.md)
+- [0013: Event-dispatch Backpressure](0013-event-dispatch-backpressure.md)
 
 ### Web Integration
 - [0008: Phoenix LiveView Integration Architecture](0008-phoenix-liveview-integration-architecture.md)
@@ -90,7 +92,8 @@ They preserve context for why decisions were made, help new contributors underst
 
 ### AI & MCP
 - [0012: MCP as Rendering Target](0012-mcp-as-rendering-target.md)
+- [0014: Telegram AI Guardian admin behaviour](0014-telegram-ai-guardian.md)
 
 ## Coverage
 
-10 ADRs covering core framework, performance, web integration, extensibility, state management, code quality, and AI/MCP architecture.
+12 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, and surface-specific admin patterns. (Numbers 0004 and 0006 are withdrawn placeholders.)
