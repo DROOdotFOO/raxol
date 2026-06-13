@@ -16,15 +16,22 @@ defmodule Raxol.ACP.Chain do
 
   ## Contract version (V1 vs V2)
 
-  `acp_contract_address` points at the **V1 `ACPSimple`** proxy and
-  `acp_router_address` at the newer **V2 `ACPRouter`**. Callers should
-  not pick the address directly; `Raxol.ACP.ContractClient.Onchain`
-  resolves the right one from `Application.get_env(:raxol_acp,
-  :acp_version, :v1)` so flipping the version is a single switch.
+  Three contract families coexist here during the v1 -> v2 transition:
 
-  V2 sepolia address is currently `nil` (no confirmed deployment
-  vendored). Setting `acp_version: :v2` with `chain: :sepolia` raises
-  unless `chain_overrides` supplies an `acp_router_address`.
+  - **`acp_contract_address`** -- V1 `ACPSimple` proxy. Sunsetted upstream
+    on 2026-06-01 but kept here while raxol_acp's v1 modules still call
+    into it. Set `acp_version: :v1` to use this path.
+  - **`acp_router_address`** -- the legacy "v2 ACPRouter" hop (Base
+    mainnet only). Obsolete; do not use for new work. The address stays
+    so existing dashboards / event indexers don't break.
+  - **`acp_core_address`** -- the real v2 ACP Core contract, paired with
+    `fund_transfer_hook_address`, `multi_hook_router_address`,
+    `subscription_hook_address`, and `subscription_state_address`. Use
+    this with `acp_version: :v2` (the future default).
+
+  Callers should not pick the address directly;
+  `Raxol.ACP.ContractClient.Onchain` resolves the right one from
+  `Application.get_env(:raxol_acp, :acp_version, :v1)`.
   """
 
   @type network :: :mainnet | :sepolia
@@ -35,7 +42,13 @@ defmodule Raxol.ACP.Chain do
           usdc_address: String.t(),
           acp_contract_address: String.t() | nil,
           acp_router_address: String.t() | nil,
+          acp_core_address: String.t() | nil,
+          fund_transfer_hook_address: String.t() | nil,
+          multi_hook_router_address: String.t() | nil,
+          subscription_hook_address: String.t() | nil,
+          subscription_state_address: String.t() | nil,
           acp_socket_url: String.t() | nil,
+          acp_server_url: String.t() | nil,
           x402_facilitator_url: String.t() | nil
         }
 
@@ -43,14 +56,23 @@ defmodule Raxol.ACP.Chain do
     chain_id: 8453,
     name: "Base Mainnet",
     rpc_url: "https://mainnet.base.org",
-    # USDC on Base mainnet
+    # USDC on Base mainnet (canonical Circle deployment)
     usdc_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    # V1 ACPSimple proxy (impl 0x48c15725...); verified on Basescan
+    # V1 ACPSimple proxy (impl 0x48c15725...). Sunsetted in v2; kept for
+    # back-compat during the transition.
     acp_contract_address: "0x6a1FE26D54ab0d3E1e3168f2e0c0cDa5cC0A0A4A",
-    # V2 ACPRouter on Base mainnet
+    # Legacy v1 ACPRouter -- interim hop, obsolete in true v2.
     acp_router_address: "0xa6C9BA866992cfD7fd6460ba912bfa405adA9df0",
-    # Virtuals ACP Socket.IO endpoint
+    # ACP v2 core contract -- verified against
+    # https://github.com/Virtual-Protocol/acp-node-v2/blob/main/src/core/constants.ts
+    acp_core_address: "0x238E541BfefD82238730D00a2208E5497F1832E0",
+    fund_transfer_hook_address: "0x0EaD25150985Bce0B4925c54E4ee1D856381A86B",
+    multi_hook_router_address: "0x77F67252a8d3A6b049f4383FD50Fb9Bf784D29D1",
+    subscription_hook_address: "0xD087363615f36F2b0265Bb4AC78Cd730C6C0cc1D",
+    subscription_state_address: "0x52c2C68f4f7fF3C70760E3D0B9b2FA91CFE443Ad",
+    # Legacy Socket.IO endpoint (v1). v2 uses SSE via acp_server_url.
     acp_socket_url: "https://acpx.virtuals.io",
+    acp_server_url: "https://api.acp.virtuals.io",
     x402_facilitator_url: "https://acp-x402.virtuals.io"
   }
 
@@ -58,13 +80,20 @@ defmodule Raxol.ACP.Chain do
     chain_id: 84_532,
     name: "Base Sepolia",
     rpc_url: "https://sepolia.base.org",
-    # USDC on Base Sepolia
+    # Canonical Circle Sepolia USDC. Note: the Virtuals v2 SDK uses a
+    # Virtuals-specific test USDC (0xECc22a8F...) -- override via
+    # :chain_overrides if you need the Virtuals test deployment.
     usdc_address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-    # V1 ACPSimple proxy (impl 0xF9663D54...); verified on Basescan
     acp_contract_address: "0x8Db6B1c839Fc8f6bd35777E194677B67b4D51928",
-    # No verified V2 deployment on sepolia at time of writing.
     acp_router_address: nil,
+    # ACP v2 contracts on Base Sepolia (verified against acp-node-v2 source).
+    acp_core_address: "0x0b93793923CD5De81850aF8604a233f3f24d461e",
+    fund_transfer_hook_address: "0xbbeC2c985F9483473B9e0Da0704395943034266B",
+    multi_hook_router_address: "0x5Af0589bD265d2B5Abb617570Ceef8f34Ac6BcdD",
+    subscription_hook_address: "0x6eA4c9C6dA120B193e3C2249CCA81ead3Cfb318f",
+    subscription_state_address: "0x6f254046aA8A9c253f839eb64Da1FE284930100F",
     acp_socket_url: "https://acpx.virtuals.gg",
+    acp_server_url: "https://api-dev.acp.virtuals.io",
     x402_facilitator_url: "https://dev-acp-x402.virtuals.io"
   }
 
