@@ -167,4 +167,65 @@ defmodule Raxol.Payments.SpendingHookTest do
       assert {:ok, :result} = SpendingHook.post_execute(command, :result, %{})
     end
   end
+
+  alias Raxol.Payments.Directive.Pay
+
+  describe "pre_execute/2 with Pay directive" do
+    test "denies Pay with unapproved domain" do
+      config = SpendingHook.get_config()
+      policy = %{config.policy | approved_domains: ["allowed.com"]}
+      SpendingHook.set_config(%{config | policy: policy})
+
+      pay =
+        Pay.new(
+          amount: Decimal.new("0.01"),
+          domain: "evil.com",
+          perform: fn -> {:ok, :ignored} end
+        )
+
+      assert {:deny, {:domain_not_approved, "evil.com"}} =
+               SpendingHook.pre_execute(pay, %{agent_id: :test})
+    end
+
+    test "denies Pay over per-request budget" do
+      pay =
+        Pay.new(
+          amount: Decimal.new("999.00"),
+          domain: "api.test.com",
+          perform: fn -> {:ok, :ignored} end
+        )
+
+      assert {:deny, {:over_budget, :per_request, _}} =
+               SpendingHook.pre_execute(pay, %{agent_id: :test})
+    end
+
+    test "allows Pay within budget" do
+      pay =
+        Pay.new(
+          amount: Decimal.new("0.01"),
+          domain: "api.test.com",
+          perform: fn -> {:ok, :ignored} end
+        )
+
+      assert {:ok, ^pay} = SpendingHook.pre_execute(pay, %{agent_id: :test})
+    end
+  end
+
+  describe "post_execute/3 with Pay directive" do
+    test "records payment using agent_id field", %{ledger: ledger} do
+      pay =
+        Pay.new(
+          amount: Decimal.new("0.02"),
+          domain: "api.test.com",
+          agent_id: :pay_test,
+          perform: fn -> {:ok, :ignored} end
+        )
+
+      assert {:ok, :result} = SpendingHook.post_execute(pay, :result, %{})
+
+      :timer.sleep(10)
+      entries = Ledger.get_history(ledger, :pay_test)
+      assert length(entries) == 1
+    end
+  end
 end

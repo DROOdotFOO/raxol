@@ -25,6 +25,7 @@ defmodule Raxol.Payments.SpendingHook do
   @compile {:no_warn_undefined, Raxol.Agent.CommandHook}
   @behaviour Raxol.Agent.CommandHook
 
+  alias Raxol.Payments.Directive.Pay
   alias Raxol.Payments.{Ledger, PolicyGate, SpendingPolicy}
 
   @type config :: %{
@@ -77,6 +78,10 @@ defmodule Raxol.Payments.SpendingHook do
 
   # -- Private --
 
+  defp check_payment_command(%Pay{} = pay, context, config) do
+    apply_gate({pay.amount, pay.domain}, pay, context, config)
+  end
+
   defp check_payment_command(%{type: type} = command, context, config)
        when type in [:async, :shell] do
     command
@@ -111,6 +116,11 @@ defmodule Raxol.Payments.SpendingHook do
   end
 
   defp extract_payment_info(_command), do: nil
+
+  defp maybe_record_payment(%Pay{} = pay, _result, config) do
+    agent_id = pay.agent_id || Map.get(pay.meta, :agent_id, :unknown)
+    Ledger.record_spend(config.ledger, agent_id, pay.amount, pay.meta)
+  end
 
   defp maybe_record_payment(
          %{data: %{__payment__: %{amount: amount} = meta}},
