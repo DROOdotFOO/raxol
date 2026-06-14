@@ -131,13 +131,24 @@ defmodule Raxol.Core.Events.TelemetryAdapter do
       %{trace_id: nil} ->
         metadata
 
-      %{trace_id: trace_id, span_id: span_id, parent_span_id: parent_span_id} ->
+      %{
+        trace_id: trace_id,
+        span_id: span_id,
+        parent_span_id: parent_span_id,
+        causation_id: causation_id
+      } ->
         metadata
         |> Map.put(:trace_id, trace_id)
         |> Map.put(:span_id, span_id)
         |> maybe_put_parent_span(parent_span_id)
+        |> maybe_put_causation(causation_id)
     end
   end
+
+  defp maybe_put_causation(metadata, nil), do: metadata
+
+  defp maybe_put_causation(metadata, id),
+    do: Map.put(metadata, :causation_id, id)
 
   @spec maybe_put_parent_span(
           %{

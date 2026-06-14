@@ -30,6 +30,15 @@ defmodule Raxol.Core.Telemetry.TraceContext do
   - `:raxol_span_id` - Current span identifier
   - `:raxol_parent_span_id` - Parent span for nested operations
   - `:raxol_span_stack` - Stack of span IDs for nesting
+  - `:raxol_causation_id` - Id of the event/span that caused the current work
+
+  ## Causation vs parent span
+
+  `parent_span_id` reflects synchronous nesting (a span starts inside
+  another). `causation_id` reflects asynchronous handoff (an event
+  caused this work to happen, possibly across processes or messages).
+  Both can hold values simultaneously and serve different debugging
+  needs.
 
   ## Integration
 
@@ -39,11 +48,13 @@ defmodule Raxol.Core.Telemetry.TraceContext do
 
   @type trace_id :: String.t()
   @type span_id :: String.t()
+  @type causation_id :: String.t()
 
   @type context :: %{
           trace_id: trace_id() | nil,
           span_id: span_id() | nil,
-          parent_span_id: span_id() | nil
+          parent_span_id: span_id() | nil,
+          causation_id: causation_id() | nil
         }
 
   @doc """
@@ -143,8 +154,29 @@ defmodule Raxol.Core.Telemetry.TraceContext do
     %{
       trace_id: Process.get(:raxol_trace_id),
       span_id: Process.get(:raxol_span_id),
-      parent_span_id: Process.get(:raxol_parent_span_id)
+      parent_span_id: Process.get(:raxol_parent_span_id),
+      causation_id: Process.get(:raxol_causation_id)
     }
+  end
+
+  @doc """
+  Sets the causation id for the current process.
+
+  Use this when handing work off across messages or processes: the
+  sender's `span_id` becomes the receiver's `causation_id`, forming a
+  chain independent of synchronous span nesting.
+
+  Passing `nil` clears the causation id.
+  """
+  @spec set_causation(causation_id() | nil) :: context()
+  def set_causation(nil) do
+    Process.delete(:raxol_causation_id)
+    current()
+  end
+
+  def set_causation(id) when is_binary(id) do
+    Process.put(:raxol_causation_id, id)
+    current()
   end
 
   @doc """
@@ -158,6 +190,7 @@ defmodule Raxol.Core.Telemetry.TraceContext do
     Process.delete(:raxol_span_id)
     Process.delete(:raxol_parent_span_id)
     Process.delete(:raxol_span_stack)
+    Process.delete(:raxol_causation_id)
     :ok
   end
 
@@ -253,6 +286,7 @@ defmodule Raxol.Core.Telemetry.TraceContext do
     |> maybe_put("x-trace-id", ctx.trace_id)
     |> maybe_put("x-span-id", ctx.span_id)
     |> maybe_put("x-parent-span-id", ctx.parent_span_id)
+    |> maybe_put("x-causation-id", ctx.causation_id)
   end
 
   @doc """
@@ -266,6 +300,7 @@ defmodule Raxol.Core.Telemetry.TraceContext do
   def from_headers(headers) when is_map(headers) do
     trace_id = Map.get(headers, "x-trace-id")
     parent_span_id = Map.get(headers, "x-span-id")
+    causation_id = Map.get(headers, "x-causation-id")
 
     _ =
       if trace_id do
@@ -273,6 +308,10 @@ defmodule Raxol.Core.Telemetry.TraceContext do
 
         if parent_span_id do
           Process.put(:raxol_parent_span_id, parent_span_id)
+        end
+
+        if causation_id do
+          Process.put(:raxol_causation_id, causation_id)
         end
       end
 
