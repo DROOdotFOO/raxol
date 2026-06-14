@@ -87,6 +87,24 @@ defmodule Raxol.Agent.SessionTest do
     def update(_msg, model), do: {model, Command.none()}
   end
 
+  defmodule DirectiveShellAgent do
+    use Raxol.Agent
+
+    alias Raxol.Agent.Directive
+
+    def init(_context), do: %{results: [], status: :idle}
+
+    def update({:agent_message, _from, {:run, cmd}}, model) do
+      {%{model | status: :running}, [Directive.shell(cmd)]}
+    end
+
+    def update({:command_result, {:shell_result, result}}, model) do
+      {%{model | results: [result | model.results], status: :done}, []}
+    end
+
+    def update(_msg, model), do: {model, []}
+  end
+
   setup do
     start_supervised!({Registry, keys: :unique, name: Raxol.Agent.Registry})
 
@@ -179,6 +197,22 @@ defmodule Raxol.Agent.SessionTest do
       [result] = model.results
       assert result.exit_status == 0
       assert String.contains?(result.output, "hello_agent")
+    end
+
+    @tag :unix_only
+    test "agent executes shell directives and receives results" do
+      {:ok, _pid} =
+        Session.start_link(app_module: DirectiveShellAgent, id: :directive_shell)
+
+      Session.send_message(:directive_shell, {:run, "echo hello_directive"})
+      Process.sleep(500)
+
+      {:ok, model} = Session.get_model(:directive_shell)
+      assert model.status == :done
+      assert length(model.results) == 1
+      [result] = model.results
+      assert result.exit_status == 0
+      assert String.contains?(result.output, "hello_directive")
     end
   end
 

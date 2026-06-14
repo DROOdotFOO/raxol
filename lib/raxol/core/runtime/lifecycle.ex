@@ -18,6 +18,9 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   """
 
   use GenServer
+
+  @compile {:no_warn_undefined, Raxol.Agent.Directive.Executor}
+
   alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Core.Runtime.Lifecycle.{Initializer, Shutdown}
   alias Raxol.Core.Runtime.Log
@@ -423,13 +426,24 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   end
 
   defp execute_initial_command(command, context) do
-    if match?(%Raxol.Core.Runtime.Command{}, command) do
-      Raxol.Core.Runtime.Command.execute(command, context)
-    else
-      Log.error(
-        "Invalid initial command found: #{inspect(command)}. Expected %Raxol.Core.Runtime.Command{}."
-      )
+    cond do
+      match?(%Raxol.Core.Runtime.Command{}, command) ->
+        Raxol.Core.Runtime.Command.execute(command, context)
+
+      directive?(command) ->
+        Raxol.Agent.Directive.Executor.execute(command, context)
+
+      true ->
+        Log.error(
+          "Invalid initial effect found: #{inspect(command)}. Expected %Raxol.Core.Runtime.Command{} or a directive struct."
+        )
     end
+  end
+
+  defp directive?(effect) do
+    is_struct(effect) and
+      Code.ensure_loaded?(Raxol.Agent.Directive.Executor) and
+      Raxol.Agent.Directive.Executor.impl_for(effect) != nil
   end
 
   defp log_waiting_status(state) do
