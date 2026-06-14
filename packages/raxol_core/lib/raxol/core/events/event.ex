@@ -397,4 +397,57 @@ defmodule Raxol.Core.Events.Event do
       %Raxol.Core.Events.Event{type: :key, data: unquote(data_pattern)}
     end
   end
+
+  # -- CloudEvents v1.0 interop --
+
+  @type_prefix "raxol."
+
+  @doc """
+  Convert an Event to a `Raxol.Core.Events.CloudEvent`.
+
+  The CloudEvents `type` is `"raxol.<atom>"`. The `source` defaults to
+  the `:event_source` application env (or `"raxol://localhost"`).
+
+  ## Options
+
+    * `:source` - override the source URI for this conversion
+  """
+  @spec to_cloud_event(t(), keyword()) :: Raxol.Core.Events.CloudEvent.t()
+  def to_cloud_event(%__MODULE__{} = event, opts \\ []) do
+    source =
+      Keyword.get(opts, :source) ||
+        Application.get_env(:raxol_core, :event_source, "raxol://localhost")
+
+    Raxol.Core.Events.CloudEvent.new(
+      @type_prefix <> Atom.to_string(event.type),
+      source,
+      data: event.data,
+      time: event.timestamp
+    )
+  end
+
+  @doc """
+  Build an Event from a `Raxol.Core.Events.CloudEvent`.
+
+  Returns `{:error, :unknown_event_type}` if the CloudEvents `type` does
+  not strip to a known atom in the current VM (existing-atoms only, to
+  avoid memory-leak risk on external input).
+  """
+  @spec from_cloud_event(Raxol.Core.Events.CloudEvent.t()) ::
+          {:ok, t()} | {:error, :unknown_event_type}
+  def from_cloud_event(%Raxol.Core.Events.CloudEvent{} = ce) do
+    raw =
+      case ce.type do
+        @type_prefix <> rest -> rest
+        other -> other
+      end
+
+    try do
+      atom = String.to_existing_atom(raw)
+      timestamp = ce.time || DateTime.utc_now()
+      {:ok, new(atom, ce.data, timestamp)}
+    rescue
+      ArgumentError -> {:error, :unknown_event_type}
+    end
+  end
 end
