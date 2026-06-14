@@ -38,8 +38,10 @@ defmodule Raxol.Agent.Action.ToolConverter do
 
   Returns `{:ok, result}` or `{:error, reason}`.
   """
+  @type effect :: Raxol.Core.Runtime.Command.t() | Raxol.Agent.Directive.t()
+
   @spec dispatch_tool_call(map(), [module()], map()) ::
-          {:ok, map()} | {:ok, map(), [Raxol.Core.Runtime.Command.t()]} | {:error, term()}
+          {:ok, map()} | {:ok, map(), [effect()]} | {:error, term()}
   def dispatch_tool_call(tool_call, action_modules, context \\ %{}) do
     name = Map.get(tool_call, "name") || Map.get(tool_call, :name)
     raw_args = Map.get(tool_call, "arguments") || Map.get(tool_call, :arguments, %{})

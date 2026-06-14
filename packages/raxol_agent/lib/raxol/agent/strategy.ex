@@ -13,9 +13,10 @@ defmodule Raxol.Agent.Strategy do
   @type command :: {module(), map()} | [{module(), map()}]
   @type state :: map()
   @type context :: map()
+  @type effect :: Raxol.Core.Runtime.Command.t() | Raxol.Agent.Directive.t()
   @type result ::
           {:ok, state()}
-          | {:ok, state(), [Raxol.Core.Runtime.Command.t()]}
+          | {:ok, state(), [effect()]}
           | {:error, term()}
 
   @doc """
