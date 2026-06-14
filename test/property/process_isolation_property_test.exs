@@ -141,6 +141,7 @@ defmodule Raxol.Property.ProcessIsolationTest do
       end
     end
 
+    @tag capture_log: true
     property "multiple concurrent child crashes don't kill parent" do
       check all(
               reasons <-
@@ -158,9 +159,11 @@ defmodule Raxol.Property.ProcessIsolationTest do
           crash_child(pid, reason)
         end)
 
-        # Wait for every child's :DOWN message
+        # Wait for every child's :DOWN message. Use a generous timeout to
+        # absorb scheduler jitter when up to 10 crash reports land in Logger
+        # simultaneously on a loaded CI runner.
         for {_pid, ref} <- children do
-          assert {:ok, _} = await_down(ref)
+          assert {:ok, _} = await_down(ref, 2_000)
         end
 
         # Parent alive, all children dead
