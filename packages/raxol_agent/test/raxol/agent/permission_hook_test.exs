@@ -220,4 +220,64 @@ defmodule Raxol.Agent.PermissionHookTest do
       assert is_binary(reason)
     end
   end
+
+  alias Raxol.Agent.Directive
+
+  describe "authorize/3 with directives" do
+    test "allows permitted directive types" do
+      policy = PermissionHook.policy(:full_access)
+
+      assert :allow ==
+               PermissionHook.authorize(Directive.shell("ls"), policy, @context)
+    end
+
+    test "denies restricted directive types" do
+      policy = PermissionHook.policy(:read_only)
+
+      assert {:deny, reason} =
+               PermissionHook.authorize(Directive.shell("ls"), policy, @context)
+
+      assert String.contains?(reason, ":shell")
+    end
+
+    test "Directive.send_agent allowed in :send_only mode" do
+      policy = PermissionHook.policy(:send_only)
+
+      assert :allow ==
+               PermissionHook.authorize(
+                 Directive.send_agent(:t, :hello),
+                 policy,
+                 @context
+               )
+    end
+
+    test "Directive.async allowed in :send_only mode" do
+      policy = PermissionHook.policy(:send_only)
+
+      assert :allow ==
+               PermissionHook.authorize(
+                 Directive.async(fn _s -> :ok end),
+                 policy,
+                 @context
+               )
+    end
+
+    test "Directive.schedule (mapped to :delay) allowed in :read_only mode" do
+      policy = PermissionHook.policy(:read_only)
+
+      assert :allow ==
+               PermissionHook.authorize(
+                 Directive.schedule(50, :tick),
+                 policy,
+                 @context
+               )
+    end
+
+    test "Directive.stop (mapped to :quit) allowed in :read_only mode" do
+      policy = PermissionHook.policy(:read_only)
+
+      assert :allow ==
+               PermissionHook.authorize(Directive.stop(), policy, @context)
+    end
+  end
 end
