@@ -35,7 +35,9 @@ defmodule Raxol.Agent.Session do
   def start_link(opts) do
     id = Keyword.fetch!(opts, :id)
 
-    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {Raxol.Agent.Registry, id}})
+    GenServer.start_link(__MODULE__, opts,
+      name: {:via, Registry, {Raxol.Agent.Registry, id}}
+    )
   end
 
   @doc "Send a message into the agent's TEA loop."
@@ -92,7 +94,9 @@ defmodule Raxol.Agent.Session do
     Process.unlink(lifecycle_pid)
     Process.monitor(lifecycle_pid)
 
-    Logger.info("[Agent.Session] Started agent #{inspect(id)} (#{inspect(app_module)})")
+    Logger.info(
+      "[Agent.Session] Started agent #{inspect(id)} (#{inspect(app_module)})"
+    )
 
     {:ok,
      %__MODULE__{
@@ -104,23 +108,37 @@ defmodule Raxol.Agent.Session do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast({:send_message, message, metadata}, state)
+      when is_map(metadata) do
+    forward_to_dispatcher(state, message, metadata)
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:send_message, message}, state) do
+    forward_to_dispatcher(state, message, %{})
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast(_msg, state), do: {:noreply, state}
+
+  defp forward_to_dispatcher(state, message, metadata) do
     case get_dispatcher(state.lifecycle_pid) do
       nil ->
         :ok
 
       dispatcher_pid ->
-        GenServer.cast(
-          dispatcher_pid,
-          {:dispatch, {:agent_message, state.id, message}}
-        )
+        payload = {:agent_message, state.id, message}
+
+        cast =
+          if map_size(metadata) == 0,
+            do: {:dispatch, payload},
+            else: {:dispatch, payload, metadata}
+
+        GenServer.cast(dispatcher_pid, cast)
     end
 
     {:noreply, state}
   end
-
-  @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_cast(_msg, state), do: {:noreply, state}
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call(:get_model, _from, state) do

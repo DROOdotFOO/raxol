@@ -101,13 +101,20 @@ defimpl Raxol.Agent.Directive.Executor, for: Raxol.Agent.Directive.SendAgent do
   def execute(%SendAgent{target_id: target_id, message: message}, context) do
     with pid when is_pid(pid) <- Process.whereis(Raxol.Agent.Registry),
          [{agent_pid, _}] <- Registry.lookup(Raxol.Agent.Registry, target_id) do
-      GenServer.cast(agent_pid, {:send_message, message})
+      GenServer.cast(agent_pid, {:send_message, message, causation_metadata()})
     else
       _ ->
         send(
           context.pid,
           {:command_result, {:send_agent_error, :not_found, target_id}}
         )
+    end
+  end
+
+  defp causation_metadata do
+    case Raxol.Core.Telemetry.TraceContext.current() do
+      %{span_id: span_id} when is_binary(span_id) -> %{causation_id: span_id}
+      _ -> %{}
     end
   end
 end

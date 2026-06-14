@@ -119,6 +119,19 @@ defmodule Raxol.Agent.SessionTest do
     def update(_msg, model), do: {model, []}
   end
 
+  defmodule CausationCaptureAgent do
+    use Raxol.Agent
+
+    def init(_context), do: %{captured: nil}
+
+    def update({:agent_message, _from, :capture}, model) do
+      ctx = Raxol.Core.Telemetry.TraceContext.current()
+      {%{model | captured: ctx.causation_id}, []}
+    end
+
+    def update(_msg, model), do: {model, []}
+  end
+
   setup do
     start_supervised!({Registry, keys: :unique, name: Raxol.Agent.Registry})
 
@@ -242,6 +255,30 @@ defmodule Raxol.Agent.SessionTest do
       [result] = model.results
       assert result.exit_status == 0
       assert String.contains?(result.output, "bare_directive")
+    end
+  end
+
+  describe "causation propagation" do
+    test "causation_id in send_message metadata reaches update/2" do
+      {:ok, pid} =
+        Session.start_link(app_module: CausationCaptureAgent, id: :causation_capture)
+
+      GenServer.cast(pid, {:send_message, :capture, %{causation_id: "upstream-xyz"}})
+      Process.sleep(200)
+
+      {:ok, model} = Session.get_model(:causation_capture)
+      assert model.captured == "upstream-xyz"
+    end
+
+    test "absent metadata leaves causation_id nil" do
+      {:ok, _pid} =
+        Session.start_link(app_module: CausationCaptureAgent, id: :causation_absent)
+
+      Session.send_message(:causation_absent, :capture)
+      Process.sleep(200)
+
+      {:ok, model} = Session.get_model(:causation_absent)
+      assert model.captured == nil
     end
   end
 
