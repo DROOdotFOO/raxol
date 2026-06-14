@@ -77,6 +77,8 @@ defmodule Raxol.Core.Runtime.Application do
   initialization and after each state update.
   """
 
+  @compile {:no_warn_undefined, Raxol.Agent.Directive.Executor}
+
   @type context :: map()
   @type state :: term()
   @type message :: term()
@@ -312,8 +314,14 @@ defmodule Raxol.Core.Runtime.Application do
       {new_model, commands} when is_map(new_model) and is_list(commands) ->
         {:ok, {new_model, commands}}
 
-      {new_model, %Raxol.Core.Runtime.Command{} = cmd} when is_map(new_model) ->
-        {:ok, {new_model, [cmd]}}
+      {new_model, effect} when is_map(new_model) and is_struct(effect) ->
+        normalize_single_effect(
+          app_module,
+          new_model,
+          effect,
+          message,
+          current_model
+        )
 
       invalid_return ->
         log_invalid_update_result(
@@ -325,6 +333,34 @@ defmodule Raxol.Core.Runtime.Application do
 
         {:error, :invalid_update_result}
     end
+  end
+
+  defp normalize_single_effect(
+         app_module,
+         new_model,
+         effect,
+         message,
+         current_model
+       ) do
+    if known_effect?(effect) do
+      {:ok, {new_model, [effect]}}
+    else
+      log_invalid_update_result(
+        app_module,
+        {new_model, effect},
+        message,
+        current_model
+      )
+
+      {:error, :invalid_update_result}
+    end
+  end
+
+  defp known_effect?(%Raxol.Core.Runtime.Command{}), do: true
+
+  defp known_effect?(effect) do
+    Code.ensure_loaded?(Raxol.Agent.Directive.Executor) and
+      Raxol.Agent.Directive.Executor.impl_for(effect) != nil
   end
 
   defp log_missing_update_callback(app_module, message, current_model) do

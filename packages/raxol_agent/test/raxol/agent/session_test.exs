@@ -90,12 +90,26 @@ defmodule Raxol.Agent.SessionTest do
   defmodule DirectiveShellAgent do
     use Raxol.Agent
 
-    alias Raxol.Agent.Directive
-
     def init(_context), do: %{results: [], status: :idle}
 
     def update({:agent_message, _from, {:run, cmd}}, model) do
       {%{model | status: :running}, [Directive.shell(cmd)]}
+    end
+
+    def update({:command_result, {:shell_result, result}}, model) do
+      {%{model | results: [result | model.results], status: :done}, []}
+    end
+
+    def update(_msg, model), do: {model, []}
+  end
+
+  defmodule BareDirectiveAgent do
+    use Raxol.Agent
+
+    def init(_context), do: %{results: [], status: :idle}
+
+    def update({:agent_message, _from, {:run, cmd}}, model) do
+      {%{model | status: :running}, Directive.shell(cmd)}
     end
 
     def update({:command_result, {:shell_result, result}}, model) do
@@ -213,6 +227,21 @@ defmodule Raxol.Agent.SessionTest do
       [result] = model.results
       assert result.exit_status == 0
       assert String.contains?(result.output, "hello_directive")
+    end
+
+    @tag :unix_only
+    test "bare directive struct (not wrapped in list) is normalized" do
+      {:ok, _pid} =
+        Session.start_link(app_module: BareDirectiveAgent, id: :bare_directive)
+
+      Session.send_message(:bare_directive, {:run, "echo bare_directive"})
+      Process.sleep(500)
+
+      {:ok, model} = Session.get_model(:bare_directive)
+      assert model.status == :done
+      [result] = model.results
+      assert result.exit_status == 0
+      assert String.contains?(result.output, "bare_directive")
     end
   end
 
