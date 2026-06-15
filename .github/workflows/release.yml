@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Cache Mix dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             deps
