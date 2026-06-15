@@ -114,17 +114,41 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
 
   alias Raxol.Workflow.Checkpoint
 
-  defp pg_url, do: System.get_env("RAXOL_WORKFLOW_PG_URL")
+  # Reads RAXOL_WORKFLOW_PG_URL first, then falls back to the
+  # POSTGRES_* discrete env vars (the shape CI sets up).
+  defp pg_conn_opts do
+    case System.get_env("RAXOL_WORKFLOW_PG_URL") do
+      nil -> postgres_env_opts()
+      url -> parse_uri(url)
+    end
+  end
+
+  defp postgres_env_opts do
+    host = System.get_env("POSTGRES_HOST")
+    db = System.get_env("POSTGRES_DB")
+
+    if host && db do
+      [
+        hostname: host,
+        port: String.to_integer(System.get_env("POSTGRES_PORT") || "5432"),
+        username: System.get_env("POSTGRES_USER") || "postgres",
+        password: System.get_env("POSTGRES_PASSWORD") || "postgres",
+        database: db
+      ]
+    else
+      nil
+    end
+  end
 
   defp start_conn! do
-    case pg_url() do
+    case pg_conn_opts() do
       nil ->
         flunk(
-          "RAXOL_WORKFLOW_PG_URL not set; integration tests need a live Postgres instance"
+          "Postgres connection not configured; set RAXOL_WORKFLOW_PG_URL or POSTGRES_HOST + POSTGRES_DB"
         )
 
-      url ->
-        {:ok, conn} = Postgrex.start_link(parse_uri(url))
+      opts ->
+        {:ok, conn} = Postgrex.start_link(opts)
         conn
     end
   end
