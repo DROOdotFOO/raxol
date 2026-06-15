@@ -4,13 +4,15 @@ defmodule Raxol.Workflow.Compiled do
 
   Returned by `Raxol.Workflow.Graph.compile/2`. The struct is opaque
   in the sense that consumers should not construct or pattern-match on
-  its fields directly; the runtime API
-  (`invoke/3`, `async_invoke/3`, `stream_events/3`, `resume/3`) is
-  added in a follow-up PR and will be the only supported interface.
+  its fields directly; the runtime API exposed here is the supported
+  interface.
 
-  The current PR ships the container only so the `Graph.compile/2`
-  return type is stable and the surface area can be reviewed
-  separately from the runtime implementation.
+  ## Runtime entry points
+
+    * `invoke/3` -- synchronous execution. Ships in this PR.
+    * `async_invoke/3` -- spawn a run under a DynamicSupervisor. Follow-up PR.
+    * `stream_events/3` -- lazy CloudEvent stream of run progress. Follow-up PR.
+    * `resume/3` -- consume an interrupt, continue from the checkpointed step. Follow-up PR.
   """
 
   @type opts :: %{
@@ -31,4 +33,15 @@ defmodule Raxol.Workflow.Compiled do
 
   @enforce_keys [:id, :nodes, :edges_by_source, :opts]
   defstruct [:id, :nodes, :edges_by_source, :opts]
+
+  @doc """
+  Run the compiled graph synchronously.
+
+  Delegates to `Raxol.Workflow.Runtime.invoke/3`. See that module for
+  the full result-tuple contract and the supported `opts`.
+  """
+  @spec invoke(t(), any(), keyword()) :: Raxol.Workflow.Runtime.result()
+  def invoke(%__MODULE__{} = compiled, initial_state, opts \\ []) do
+    Raxol.Workflow.Runtime.invoke(compiled, initial_state, opts)
+  end
 end
