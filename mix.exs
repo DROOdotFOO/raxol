@@ -303,7 +303,7 @@ defmodule Raxol.MixProject do
       # MIME type detection (removed - unused)
       # {:mimerl, "~> 1.4"},
       # HTTP client (for optional integrations)
-      {:httpoison, "~> 2.2", optional: true},
+      {:httpoison, "~> 3.0", optional: true},
       # Localization
       {:gettext, "~> 1.0"},
       # File system watching
