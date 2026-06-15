@@ -28,6 +28,8 @@ defmodule Raxol.Workflow.Runtime do
   alias Raxol.Workflow.Node, as: WorkflowNode
   alias Raxol.Workflow.Node.{BehaviourNode, FunctionNode, TypedNode}
 
+  @executed_key :__raxol_workflow_executed__
+
   @start :__start__
   @end_ :__end__
 
@@ -60,6 +62,8 @@ defmodule Raxol.Workflow.Runtime do
       count_offset: count_offset
     } = prepare_invocation(compiled, initial_state, opts)
 
+    Process.put(@executed_key, [])
+
     try do
       emit_run_event(:started, %{run_id: run_id, graph_id: compiled.id})
 
@@ -71,10 +75,12 @@ defmodule Raxol.Workflow.Runtime do
         start_count,
         resume_from
       )
+      |> maybe_compensate_on_error(compiled, run_id)
       |> wrap_outcome(run_id, compiled.id, count_offset)
     after
       _ = TraceContext.clear()
       Scratchpad.clear()
+      Process.delete(@executed_key)
     end
   end
 
@@ -245,6 +251,80 @@ defmodule Raxol.Workflow.Runtime do
     )
   end
 
+  defp track_executed(node) do
+    Process.put(@executed_key, [node | Process.get(@executed_key, [])])
+  end
+
+  defp executed_nodes, do: Process.get(@executed_key, [])
+
+  # Under failure_policy: :compensate, the runtime walks the executed
+  # nodes in reverse and runs each one's compensate function. The
+  # state threads through compensations so an earlier compensation
+  # sees the result of a later one. Compensation errors are surfaced
+  # through node.compensated telemetry but do not displace the run's
+  # original failure reason.
+  defp maybe_compensate_on_error(
+         {:error, reason, state, count},
+         compiled,
+         run_id
+       ) do
+    if Map.get(compiled.opts, :failure_policy) == :compensate do
+      new_state = run_compensations(executed_nodes(), state, compiled, run_id)
+      {:error, reason, new_state, count}
+    else
+      {:error, reason, state, count}
+    end
+  end
+
+  defp maybe_compensate_on_error(other, _compiled, _run_id), do: other
+
+  defp run_compensations(nodes, state, compiled, run_id) do
+    Enum.reduce(nodes, state, fn node, acc_state ->
+      case do_compensate(node, acc_state) do
+        {:ok, next_state} ->
+          emit_node_event(:compensated, %{
+            run_id: run_id,
+            graph_id: compiled.id,
+            node_id: WorkflowNode.id(node),
+            result: :ok
+          })
+
+          next_state
+
+        {:error, comp_reason} ->
+          emit_node_event(:compensated, %{
+            run_id: run_id,
+            graph_id: compiled.id,
+            node_id: WorkflowNode.id(node),
+            result: {:error, comp_reason}
+          })
+
+          acc_state
+      end
+    end)
+  end
+
+  defp do_compensate(%FunctionNode{compensate_fun: nil}, state),
+    do: {:ok, state}
+
+  defp do_compensate(%FunctionNode{compensate_fun: fun}, state) do
+    fun.(state)
+  rescue
+    e -> {:error, {:exception, Exception.message(e)}}
+  end
+
+  defp do_compensate(%BehaviourNode{module: mod, opts: opts}, state) do
+    if function_exported?(mod, :compensate, 2) do
+      mod.compensate(state, opts)
+    else
+      {:ok, state}
+    end
+  rescue
+    e -> {:error, {:exception, Exception.message(e)}}
+  end
+
+  defp do_compensate(%TypedNode{}, state), do: {:ok, state}
+
   defp wrap_outcome({:ok, final_state, count}, run_id, graph_id, offset) do
     nodes_executed = count - offset
 
@@ -325,6 +405,7 @@ defmodule Raxol.Workflow.Runtime do
        ) do
     case attempt_node_with_retry(compiled, current_id, state, run_id, 1) do
       {:node_ok, new_state, _tag} ->
+        track_executed(Map.fetch!(compiled.nodes, current_id))
         persist_checkpoint(compiled, current_id, new_state, run_id, count)
 
         traverse(

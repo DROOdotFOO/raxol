@@ -47,20 +47,36 @@ defmodule Raxol.Workflow.Node do
 
   @doc """
   Called by the runtime's failure policy when `failure_policy: :compensate`
-  is set and an earlier node has already succeeded. Default is a no-op.
+  is set and the run errors after this node already succeeded. Receives
+  the current state (potentially modified by later compensations) and
+  returns either an updated state via `{:ok, new_state}` or an error
+  via `{:error, reason}`. Compensation errors are surfaced through
+  `node.compensated` telemetry but do not displace the run's original
+  failure reason. Default is a no-op that leaves the state untouched.
   """
   @callback compensate(state :: state(), opts :: keyword()) ::
-              :ok | {:error, any()}
+              {:ok, state()} | {:error, any()}
 
   @optional_callbacks init: 1, compensate: 2
 
   defmodule FunctionNode do
-    @moduledoc "A node backed by a 1-arity function."
+    @moduledoc """
+    A node backed by a 1-arity function.
 
-    @type t :: %__MODULE__{id: Raxol.Workflow.Node.id(), fun: (any() -> any())}
+    The optional `:compensate_fun` is invoked when the run fails under
+    `failure_policy: :compensate` and this node had already succeeded.
+    It receives the current state and returns
+    `{:ok, new_state} | {:error, reason}`.
+    """
+
+    @type t :: %__MODULE__{
+            id: Raxol.Workflow.Node.id(),
+            fun: (any() -> any()),
+            compensate_fun: (any() -> {:ok, any()} | {:error, any()}) | nil
+          }
 
     @enforce_keys [:id, :fun]
-    defstruct [:id, :fun]
+    defstruct [:id, :fun, compensate_fun: nil]
   end
 
   defmodule BehaviourNode do
@@ -97,6 +113,23 @@ defmodule Raxol.Workflow.Node do
   @spec function(id(), (state() -> result())) :: FunctionNode.t()
   def function(id, fun) when is_function(fun, 1),
     do: %FunctionNode{id: id, fun: fun}
+
+  @doc """
+  Construct a `FunctionNode` with an optional compensation function.
+
+  The compensation runs in reverse order under
+  `failure_policy: :compensate` when the run fails after this node
+  succeeded. It must be a 1-arity function returning
+  `{:ok, new_state} | {:error, reason}`.
+  """
+  @spec function(
+          id(),
+          (state() -> result()),
+          (state() -> {:ok, state()} | {:error, any()})
+        ) :: FunctionNode.t()
+  def function(id, fun, compensate_fun)
+      when is_function(fun, 1) and is_function(compensate_fun, 1),
+      do: %FunctionNode{id: id, fun: fun, compensate_fun: compensate_fun}
 
   @doc "Construct a `BehaviourNode`."
   @spec behaviour(id(), module(), keyword()) :: BehaviourNode.t()
