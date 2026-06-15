@@ -44,14 +44,20 @@ defmodule Raxol.Workflow.ResumeTest do
       assert state == %{prepared: true}
     end
 
-    test "checkpoint exists for the predecessor node (prep) but not for approve",
+    test "checkpoints exist for :__start__ and :prep but not :approve",
          ctx do
       compiled = approval_graph(ctx.saver)
       {:interrupted, run_id, _, _} = Compiled.invoke(compiled, %{})
 
       {:ok, checkpoints} = Ets.list(ctx.config, run_id, 10)
-      assert length(checkpoints) == 1
-      assert hd(checkpoints).metadata.node_id == :prep
+      assert length(checkpoints) == 2
+      latest = hd(checkpoints)
+      assert latest.metadata.node_id == :prep
+
+      node_ids =
+        checkpoints |> Enum.map(& &1.metadata.node_id) |> Enum.sort()
+
+      assert node_ids == [:__start__, :prep]
     end
   end
 
@@ -77,9 +83,9 @@ defmodule Raxol.Workflow.ResumeTest do
       {:ok, _, _} = Compiled.resume(compiled, run_id, :approved)
 
       {:ok, checkpoints} = Ets.list(ctx.config, run_id, 10)
-      # prep (initial) + approve + finalize = 3
+      # :__start__ (initial) + prep + approve + finalize = 4
       node_ids = Enum.map(checkpoints, & &1.metadata.node_id) |> Enum.sort()
-      assert node_ids == [:approve, :finalize, :prep]
+      assert node_ids == [:__start__, :approve, :finalize, :prep]
     end
 
     test "resume continues to {:ok, _} when the resume value is accepted",
@@ -130,6 +136,52 @@ defmodule Raxol.Workflow.ResumeTest do
                g2: :gate2_ok,
                done: true
              }
+    end
+  end
+
+  describe "first-node-interrupt resume" do
+    test "resume works when the very first real node interrupts", ctx do
+      {:ok, compiled} =
+        Graph.new(:first_gate)
+        |> Graph.add_node(:gate, fn s ->
+          d = Workflow.interrupt(:wait_for_approval)
+          {:ok, Map.put(s, :gate, d)}
+        end)
+        |> Graph.add_node(:done, fn s -> {:ok, Map.put(s, :done, true)} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_edge(:gate, :done)
+        |> Graph.add_edge(:done, :__end__)
+        |> Graph.compile(saver: ctx.saver)
+
+      {:interrupted, run_id, state, :wait_for_approval} =
+        Compiled.invoke(compiled, %{init: true})
+
+      assert state == %{init: true}
+
+      assert {:ok, final, meta} =
+               Compiled.resume(compiled, run_id, :approved)
+
+      assert final == %{init: true, gate: :approved, done: true}
+      assert meta.run_id == run_id
+    end
+
+    test "the initial __start__ checkpoint carries the initial state", ctx do
+      {:ok, compiled} =
+        Graph.new(:first_gate_state)
+        |> Graph.add_node(:gate, fn _ -> {:interrupt, :pause} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_edge(:gate, :__end__)
+        |> Graph.compile(saver: ctx.saver)
+
+      {:interrupted, run_id, _, :pause} =
+        Compiled.invoke(compiled, %{seeded: :value})
+
+      {:ok, checkpoints} = Ets.list(ctx.config, run_id, 10)
+      assert length(checkpoints) == 1
+      [initial] = checkpoints
+      assert initial.step == 0
+      assert initial.metadata.node_id == :__start__
+      assert initial.state == %{seeded: :value}
     end
   end
 
