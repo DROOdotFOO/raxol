@@ -17,6 +17,8 @@ defmodule Raxol.Workflow.Compiled do
 
   @type opts :: %{
           optional(:failure_policy) => :retry | :halt | :compensate,
+          optional(:max_attempts) => pos_integer(),
+          optional(:retry_backoff_ms) => non_neg_integer(),
           optional(:step_timeout_ms) => non_neg_integer(),
           optional(:run_timeout_ms) => non_neg_integer(),
           optional(:saver) => module()
