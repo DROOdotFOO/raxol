@@ -3,12 +3,15 @@ defmodule Raxol.Workflow.Checkpoint.Saver do
   Behaviour for `Raxol.Workflow.Checkpoint` persistence.
 
   Implementations decide the storage medium (ETS, DETS, Postgrex,
-  etc.). Two adapters ship with raxol:
+  etc.). Three adapters ship with raxol:
 
     * `Raxol.Workflow.Checkpoint.Saver.Ets` -- in-process, named
       ETS table. Default for tests and short-lived runs.
     * `Raxol.Workflow.Checkpoint.Saver.Dets` -- file-backed
       GenServer. Default for runs that should survive BEAM restarts.
+    * `Raxol.Workflow.Checkpoint.Saver.Postgrex` -- Postgres-backed
+      via the optional `:postgrex` dependency. Default for runs that
+      need to be visible across BEAM nodes.
 
   ## Append-only contract
 
