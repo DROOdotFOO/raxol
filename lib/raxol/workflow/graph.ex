@@ -139,7 +139,8 @@ defmodule Raxol.Workflow.Graph do
     * `:run_timeout_ms` -- total run timeout (default `3_600_000`)
     * `:saver` -- `Raxol.Workflow.Checkpoint.Saver` module (defaults to `Ets`)
 
-  These options are stored on `Compiled` and consumed by the runtime.
+  These options are stored on `Compiled` and consumed by
+  `Raxol.Workflow.Runtime`.
   """
   @spec compile(t(), keyword()) ::
           {:ok, Compiled.t()}

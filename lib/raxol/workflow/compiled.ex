@@ -9,10 +9,14 @@ defmodule Raxol.Workflow.Compiled do
 
   ## Runtime entry points
 
-    * `invoke/3` -- synchronous execution. Ships in this PR.
-    * `async_invoke/3` -- spawn a run under a DynamicSupervisor. Follow-up PR.
-    * `stream_events/3` -- lazy CloudEvent stream of run progress. Follow-up PR.
-    * `resume/3` -- consume an interrupt, continue from the checkpointed step. Follow-up PR.
+    * `invoke/3` -- synchronous execution.
+    * `async_invoke/3` -- spawn a run in a separate process and return
+      a `{:ok, %{run_id, pid, ref}}` handle.
+    * `stream_events/3` -- lazy `CloudEvent` stream of run progress.
+    * `resume/4` -- consume an interrupt, continue from the
+      checkpointed step.
+    * `async_resume/4` -- async variant of `resume/4`.
+    * `resume_events/4` -- streaming variant of `resume/4`.
   """
 
   @type opts :: %{
