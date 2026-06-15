@@ -130,13 +130,13 @@ defmodule Raxol.Symphony.Surfaces.TerminalTest do
     test "q returns :quit command" do
       model = Terminal.build_model([])
       {^model, [cmd]} = Terminal.update(key_event("q"), model)
-      assert cmd.type == :quit or match?(%{value: :quit}, cmd)
+      assert match?(%Raxol.Core.Runtime.Directive.Stop{}, cmd)
     end
 
     test "Ctrl+C returns :quit command" do
       model = Terminal.build_model([])
       {^model, [cmd]} = Terminal.update(key_event("c", ctrl: true), model)
-      assert cmd.type == :quit or match?(%{value: :quit}, cmd)
+      assert match?(%Raxol.Core.Runtime.Directive.Stop{}, cmd)
     end
 
     test "j moves selection down" do
