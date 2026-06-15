@@ -18,6 +18,8 @@ defmodule Raxol.Workflow.Runtime do
 
   alias Raxol.Core.Runtime.Directive
   alias Raxol.Core.Telemetry.TraceContext
+  alias Raxol.Workflow.Checkpoint
+  alias Raxol.Workflow.Checkpoint.Saver
   alias Raxol.Workflow.Compiled
   alias Raxol.Workflow.Edge.ConditionalEdge
   alias Raxol.Workflow.Edge.Edge, as: StaticEdge
@@ -312,8 +314,35 @@ defmodule Raxol.Workflow.Runtime do
     })
 
     _ = TraceContext.end_span()
+    persist_checkpoint(compiled, current_id, new_state, run_id, count)
     traverse(compiled, current_id, new_state, run_id, deadline_us, count + 1)
   end
+
+  defp persist_checkpoint(compiled, current_id, state, run_id, count) do
+    case Saver.normalize(Map.get(compiled.opts, :saver)) do
+      nil ->
+        :ok
+
+      {saver_module, saver_config} ->
+        checkpoint =
+          Checkpoint.new(
+            thread_id: run_id,
+            step: count,
+            state: state,
+            parent_step: parent_step_for(count),
+            metadata: %{
+              node_id: current_id,
+              run_id: run_id,
+              graph_id: compiled.id
+            }
+          )
+
+        saver_module.put(saver_config, run_id, checkpoint)
+    end
+  end
+
+  defp parent_step_for(0), do: nil
+  defp parent_step_for(count) when count > 0, do: count - 1
 
   # --- Node execution ---
 
