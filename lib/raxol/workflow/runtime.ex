@@ -50,14 +50,13 @@ defmodule Raxol.Workflow.Runtime do
   """
   @spec invoke(Compiled.t(), any(), keyword()) :: result()
   def invoke(%Compiled{} = compiled, initial_state, opts \\ []) do
-    run_id = Keyword.get_lazy(opts, :run_id, &generate_run_id/0)
-    deadline_us = monotonic_us() + resolve_timeout(opts, compiled) * 1_000
-    resume_from = Keyword.get(opts, :resume_from)
-    initial_count = Keyword.get(opts, :initial_step, 0)
-    resume_values = Keyword.get(opts, :resume_values, [])
-
-    _ = TraceContext.start_trace()
-    maybe_seed_scratchpad(run_id, resume_values)
+    %{
+      run_id: run_id,
+      deadline_us: deadline_us,
+      resume_from: resume_from,
+      start_count: start_count,
+      count_offset: count_offset
+    } = prepare_invocation(compiled, initial_state, opts)
 
     try do
       emit_run_event(:started, %{run_id: run_id, graph_id: compiled.id})
@@ -67,13 +66,83 @@ defmodule Raxol.Workflow.Runtime do
         initial_state,
         run_id,
         deadline_us,
-        initial_count,
+        start_count,
         resume_from
       )
-      |> wrap_outcome(run_id, compiled.id)
+      |> wrap_outcome(run_id, compiled.id, count_offset)
     after
       _ = TraceContext.clear()
       Scratchpad.clear()
+    end
+  end
+
+  defp prepare_invocation(compiled, initial_state, opts) do
+    run_id = Keyword.get_lazy(opts, :run_id, &generate_run_id/0)
+    deadline_us = monotonic_us() + resolve_timeout(opts, compiled) * 1_000
+    resume_from = Keyword.get(opts, :resume_from)
+    initial_count = Keyword.get(opts, :initial_step, 0)
+    resume_values = Keyword.get(opts, :resume_values, [])
+
+    _ = TraceContext.start_trace()
+    maybe_seed_scratchpad(run_id, resume_values)
+
+    start_count =
+      maybe_persist_initial_checkpoint(
+        compiled,
+        initial_state,
+        run_id,
+        resume_from,
+        initial_count
+      )
+
+    %{
+      run_id: run_id,
+      deadline_us: deadline_us,
+      resume_from: resume_from,
+      start_count: start_count,
+      count_offset: start_count - initial_count
+    }
+  end
+
+  # Fresh runs pre-checkpoint the initial state at step 0 with
+  # node_id: :__start__. This lets `resume/4` work when the very first
+  # node interrupts (otherwise there would be no predecessor checkpoint
+  # to hydrate). Resumes (resume_from != nil or initial_count > 0) skip
+  # this so the existing step 0 checkpoint is not overwritten.
+  defp maybe_persist_initial_checkpoint(
+         compiled,
+         initial_state,
+         run_id,
+         nil,
+         0
+       ) do
+    persist_initial_checkpoint(compiled, initial_state, run_id)
+    1
+  end
+
+  defp maybe_persist_initial_checkpoint(_, _, _, _, initial_count),
+    do: initial_count
+
+  defp persist_initial_checkpoint(compiled, state, run_id) do
+    case Saver.normalize(Map.get(compiled.opts, :saver)) do
+      nil ->
+        :ok
+
+      {saver_module, saver_config} ->
+        checkpoint =
+          Checkpoint.new(
+            thread_id: run_id,
+            step: 0,
+            state: state,
+            parent_step: nil,
+            metadata: %{
+              node_id: @start,
+              run_id: run_id,
+              graph_id: compiled.id
+            }
+          )
+
+        saver_module.put(saver_config, run_id, checkpoint)
     end
   end
 
@@ -155,32 +224,43 @@ defmodule Raxol.Workflow.Runtime do
     )
   end
 
-  defp wrap_outcome({:ok, final_state, count}, run_id, graph_id) do
+  defp wrap_outcome({:ok, final_state, count}, run_id, graph_id, offset) do
+    nodes_executed = count - offset
+
     emit_run_event(:completed, %{
       run_id: run_id,
       graph_id: graph_id,
-      nodes_executed: count
+      nodes_executed: nodes_executed
     })
 
-    {:ok, final_state, %{run_id: run_id, nodes_executed: count}}
+    {:ok, final_state, %{run_id: run_id, nodes_executed: nodes_executed}}
   end
 
-  defp wrap_outcome({:interrupted, state, value, count}, run_id, graph_id) do
+  defp wrap_outcome(
+         {:interrupted, state, value, count},
+         run_id,
+         graph_id,
+         offset
+       ) do
+    nodes_executed = count - offset
+
     emit_run_event(:interrupted, %{
       run_id: run_id,
       graph_id: graph_id,
-      nodes_executed: count,
+      nodes_executed: nodes_executed,
       value: value
     })
 
     {:interrupted, run_id, state, value}
   end
 
-  defp wrap_outcome({:error, reason, state, count}, run_id, graph_id) do
+  defp wrap_outcome({:error, reason, state, count}, run_id, graph_id, offset) do
+    nodes_executed = count - offset
+
     emit_run_event(:failed, %{
       run_id: run_id,
       graph_id: graph_id,
-      nodes_executed: count,
+      nodes_executed: nodes_executed,
       reason: reason
     })
 

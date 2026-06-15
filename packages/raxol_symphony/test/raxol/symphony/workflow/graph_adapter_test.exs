@@ -125,12 +125,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       {:ok, checkpoints} =
         Raxol.Workflow.Checkpoint.Saver.Ets.list(%{table: table}, meta.run_id, 10)
 
-      # One per successful node = 5
-      assert length(checkpoints) == 5
+      # :__start__ initial + one per successful node = 6
+      assert length(checkpoints) == 6
 
       node_ids = checkpoints |> Enum.map(& &1.metadata.node_id) |> Enum.sort()
 
       assert node_ids == [
+               :__start__,
                :candidate_selection,
                :completion,
                :evidence_collection,

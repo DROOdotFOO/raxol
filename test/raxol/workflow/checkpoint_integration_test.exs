@@ -28,15 +28,15 @@ defmodule Raxol.Workflow.CheckpointIntegrationTest do
   end
 
   describe "runtime writes checkpoints when :saver is configured" do
-    test "one checkpoint per successful node", ctx do
+    test "one checkpoint per successful node plus initial __start__", ctx do
       compiled = two_node_graph(ctx.saver)
       {:ok, _final, meta} = Compiled.invoke(compiled, %{})
 
       {:ok, checkpoints} = Ets.list(ctx.config, meta.run_id, 10)
-      assert length(checkpoints) == 2
+      assert length(checkpoints) == 3
 
       steps = checkpoints |> Enum.map(& &1.step) |> Enum.sort()
-      assert steps == [0, 1]
+      assert steps == [0, 1, 2]
     end
 
     test "checkpoints carry node_id, run_id, graph_id metadata", ctx do
@@ -51,14 +51,29 @@ defmodule Raxol.Workflow.CheckpointIntegrationTest do
       assert md.node_id in [:a, :b]
     end
 
+    test "initial checkpoint at step 0 is :__start__ with the initial state",
+         ctx do
+      compiled = two_node_graph(ctx.saver)
+      {:ok, _final, meta} = Compiled.invoke(compiled, %{seed: 1})
+
+      {:ok, all} = Ets.list(ctx.config, meta.run_id, 10)
+      [initial] = Enum.filter(all, &(&1.step == 0))
+
+      assert initial.metadata.node_id == :__start__
+      assert initial.state == %{seed: 1}
+      assert initial.parent_step == nil
+    end
+
     test "checkpoint state reflects the state after each node", ctx do
       compiled = two_node_graph(ctx.saver)
       {:ok, _final, meta} = Compiled.invoke(compiled, %{})
 
-      {:ok, [latest, earlier]} = Ets.list(ctx.config, meta.run_id, 10)
+      {:ok, all} = Ets.list(ctx.config, meta.run_id, 10)
+      ordered = Enum.sort_by(all, & &1.step)
+      [_initial, after_a, after_b] = ordered
 
-      assert earlier.state == %{a: true}
-      assert latest.state == %{a: true, b: true}
+      assert after_a.state == %{a: true}
+      assert after_b.state == %{a: true, b: true}
     end
 
     test "parent_step chains through the run", ctx do
@@ -70,6 +85,7 @@ defmodule Raxol.Workflow.CheckpointIntegrationTest do
 
       assert Enum.at(ordered, 0).parent_step == nil
       assert Enum.at(ordered, 1).parent_step == 0
+      assert Enum.at(ordered, 2).parent_step == 1
     end
 
     test "no checkpoints when :saver is absent", ctx do
@@ -100,8 +116,10 @@ defmodule Raxol.Workflow.CheckpointIntegrationTest do
       {:interrupted, run_id, _state, :wait} = Compiled.invoke(compiled, %{})
 
       {:ok, checkpoints} = Ets.list(ctx.config, run_id, 10)
-      assert length(checkpoints) == 1
-      assert hd(checkpoints).state == %{a: true}
+      assert length(checkpoints) == 2
+      latest = hd(checkpoints)
+      assert latest.metadata.node_id == :a
+      assert latest.state == %{a: true}
     end
 
     test "error: no checkpoint for the failing node, prior ones preserved",
@@ -118,12 +136,10 @@ defmodule Raxol.Workflow.CheckpointIntegrationTest do
 
       {:error, :boom, _state} = Compiled.invoke(compiled, %{})
 
-      # Only :a's checkpoint should exist (we don't have the run_id
-      # in the error tuple, so list across the thread the runtime
-      # used; we sniff via the Ets table contents).
+      # :__start__ initial + :a; no checkpoint for the failing :b.
       table = ctx.config.table
       all = :ets.tab2list(table)
-      assert length(all) == 1
+      assert length(all) == 2
     end
   end
 end
