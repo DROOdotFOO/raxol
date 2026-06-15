@@ -19,8 +19,8 @@ defmodule Raxol.Workflow.Node do
     * `{:interrupt, value}` -- pause the run for human-in-the-loop resume
     * `{:error, reason}` -- fail (handled by the workflow's failure policy)
 
-  The runtime is added in a follow-up PR; this module only defines the
-  descriptor shapes and behaviour so the `Graph` builder can carry them.
+  FunctionNodes also accept an optional 1-arity compensation function
+  that runs in reverse order under `failure_policy: :compensate`.
   """
 
   @type id :: atom() | binary()
@@ -157,9 +157,6 @@ defprotocol Raxol.Workflow.Node.Executor do
   implementing this protocol. Mirrors the
   `Raxol.Core.Runtime.Directive.Executor` shape: same callback name,
   same result tuple, same telemetry surface.
-
-  The runtime is added in a follow-up PR; this protocol is declared
-  now so the `Graph` builder can carry typed-node references.
   """
 
   @spec execute(t(), state :: any(), opts :: keyword()) ::

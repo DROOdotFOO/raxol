@@ -1,19 +1,33 @@
 defmodule Raxol.Workflow.Runtime do
   @moduledoc """
-  Synchronous execution runtime for `Raxol.Workflow.Compiled` graphs.
+  Execution runtime for `Raxol.Workflow.Compiled` graphs.
 
-  Implements the synchronous `invoke/3` path described in ADR-0015.
-  Walks the graph from `:__start__` to `:__end__`, executes each node
-  according to its descriptor type, dispatches any returned directives
-  through `Raxol.Core.Runtime.Directive.Executor`, and emits per-node
-  telemetry with full Phase 24 trace context (trace_id, span_id,
-  parent_span_id, causation_id) propagated through `TraceContext`.
+  Implements the synchronous `invoke/3` and `resume/4` paths described
+  in ADR-0015. Walks the graph from `:__start__` to `:__end__`,
+  executes each node according to its descriptor type, dispatches any
+  returned directives through `Raxol.Core.Runtime.Directive.Executor`,
+  and emits per-node telemetry with full Phase 24 trace context
+  (trace_id, span_id, parent_span_id, causation_id) propagated through
+  `TraceContext`.
 
-  Async invocation (`async_invoke`, `stream_events`), checkpoint
-  persistence, interrupt/resume, joins, and channel reducers land in
-  follow-up PRs. This module only implements the synchronous,
-  no-checkpoint path; the runtime catches `:interrupt` results and
-  returns them to the caller without persisting state.
+  ## Capabilities
+
+    * Per-attempt span + telemetry, with retry under
+      `failure_policy: :retry` (configurable `max_attempts` and
+      `retry_backoff_ms`).
+    * Saga-style compensation under `failure_policy: :compensate`,
+      walking executed nodes in reverse and emitting `node.compensated`
+      events.
+    * Optional `Checkpoint.Saver`-backed durability. Fresh runs
+      pre-checkpoint the initial state at step 0 so resumes work even
+      when the very first node interrupts.
+    * Human-in-the-loop pauses via `Workflow.interrupt/1` and
+      `Compiled.resume/4`.
+
+  Async wrappers (`async_invoke`, `stream_events`, `async_resume`,
+  `resume_events`) live in `Raxol.Workflow.Async`. Joins
+  (`add_join/4`) and channel reducers (`add_channel/4`) are still
+  follow-ups: the runtime is single-branch sequential today.
   """
 
   alias Raxol.Core.Runtime.Directive
