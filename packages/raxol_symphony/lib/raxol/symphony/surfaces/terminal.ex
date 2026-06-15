@@ -129,8 +129,8 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
 
     defp handle_key(message, model) do
       case message do
-        key_match("q") -> {model, [command(:quit)]}
-        key_match("c", ctrl: true) -> {model, [command(:quit)]}
+        key_match("q") -> {model, [Directive.stop()]}
+        key_match("c", ctrl: true) -> {model, [Directive.stop()]}
         key_match("r") -> handle_refresh(model)
         key_match("j") -> handle_scroll(model, +1)
         key_match("k") -> handle_scroll(model, -1)
