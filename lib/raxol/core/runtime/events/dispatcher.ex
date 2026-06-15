@@ -362,7 +362,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       "[Dispatcher] handle_cast :dispatch agent_message: #{inspect(msg)}"
     )
 
-    dispatch_raw_message(msg, state)
+    with_dispatch_span(fn -> dispatch_raw_message(msg, state) end)
   end
 
   @impl true
@@ -375,7 +375,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     )
 
     # Agent messages go directly to update/2, bypassing event/plugin pipeline
-    dispatch_raw_message(msg, state)
+    with_dispatch_span(fn -> dispatch_raw_message(msg, state) end)
   end
 
   @impl true
@@ -552,7 +552,9 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       "[Dispatcher] handle_call :dispatch agent_message: #{inspect(msg)}"
     )
 
-    msg |> dispatch_raw_message(state) |> to_call_reply()
+    with_dispatch_span(fn ->
+      msg |> dispatch_raw_message(state) |> to_call_reply()
+    end)
   end
 
   @impl true
@@ -854,4 +856,18 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   end
 
   defp apply_causation(_), do: :ok
+
+  # Wrap an agent-message dispatch in a fresh span so that any
+  # outbound Directive.SendAgent emitted from update/2 can attach
+  # `causation_id == current().span_id` to its cast metadata. Without
+  # this, multi-hop causation chains would collapse to the trace root.
+  defp with_dispatch_span(fun) do
+    _ = Raxol.Core.Telemetry.TraceContext.start_span("agent.dispatch")
+
+    try do
+      fun.()
+    after
+      _ = Raxol.Core.Telemetry.TraceContext.end_span()
+    end
+  end
 end

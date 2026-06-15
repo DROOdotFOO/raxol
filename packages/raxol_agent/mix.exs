@@ -44,7 +44,8 @@ defmodule RaxolAgent.MixProject do
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:stream_data, "~> 1.0", only: [:dev, :test]}
     ]
   end
 
@@ -71,7 +72,7 @@ defmodule RaxolAgent.MixProject do
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
-        "Docs" => "https://hexdocs.pm/raxol_agent",
+        "Docs" => "https://hexdocs.pm/raxol_agent"
       },
       maintainers: ["Raxol Team"]
     ]
