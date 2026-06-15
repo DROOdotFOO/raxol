@@ -162,12 +162,7 @@ defmodule Raxol.Workflow.Async do
   # --- Stream resource lifecycle ---
 
   defp start_stream(compiled, initial_state, opts) do
-    %{
-      handler_id: handler_id,
-      source: source,
-      timeout_ms: timeout_ms,
-      run_id: run_id
-    } =
+    %{handler_id: handler_id, timeout_ms: timeout_ms, run_id: run_id} =
       attach_stream_handler(opts)
 
     runtime_opts =
