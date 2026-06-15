@@ -32,6 +32,8 @@ defmodule Raxol.Workflow.Runtime do
   @end_ :__end__
 
   @default_run_timeout_ms 60_000
+  @default_max_attempts 3
+  @default_retry_backoff_ms 100
 
   @type result ::
           {:ok, state :: any(), meta :: map()}
@@ -321,6 +323,57 @@ defmodule Raxol.Workflow.Runtime do
          deadline_us,
          count
        ) do
+    case attempt_node_with_retry(compiled, current_id, state, run_id, 1) do
+      {:node_ok, new_state, _tag} ->
+        persist_checkpoint(compiled, current_id, new_state, run_id, count)
+
+        traverse(
+          compiled,
+          current_id,
+          new_state,
+          run_id,
+          deadline_us,
+          count + 1
+        )
+
+      {:interrupt, value, state_at_interrupt} ->
+        {:interrupted, state_at_interrupt, value, count + 1}
+
+      {:error, reason, state_at_error} ->
+        {:error, reason, state_at_error, count + 1}
+    end
+  end
+
+  # Retry loop. Each attempt gets its own span + telemetry events; on
+  # transient {:error, _} (including rescued exceptions and
+  # {:invalid_result, _}) we sleep with exponential backoff and try
+  # again, up to the configured max_attempts. Per-attempt telemetry
+  # makes attempt counts and retry latencies observable.
+  defp attempt_node_with_retry(compiled, current_id, state, run_id, attempt) do
+    case execute_node_once(compiled, current_id, state, run_id) do
+      {:error, _reason, _state} = err ->
+        max = retry_max_attempts(compiled)
+
+        if retry?(compiled) and attempt < max do
+          Process.sleep(compute_backoff(retry_backoff_ms(compiled), attempt))
+
+          attempt_node_with_retry(
+            compiled,
+            current_id,
+            state,
+            run_id,
+            attempt + 1
+          )
+        else
+          err
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp execute_node_once(compiled, current_id, state, run_id) do
     node = Map.fetch!(compiled.nodes, current_id)
     span_name = "workflow.node.#{inspect(current_id)}"
     _ = TraceContext.start_span(span_name)
@@ -334,141 +387,116 @@ defmodule Raxol.Workflow.Runtime do
     })
 
     try do
-      handle_node_result(
+      finalize_attempt(
         run_node(node, state),
         compiled,
         current_id,
         state,
         run_id,
-        deadline_us,
-        count,
         started_us
       )
     rescue
       e ->
-        _ = TraceContext.end_span()
         message = Exception.message(e)
 
-        emit_node_event(:failed, %{
-          run_id: run_id,
-          graph_id: compiled.id,
-          node_id: current_id,
-          duration_us: monotonic_us() - started_us,
+        end_span_and_emit(:failed, compiled, current_id, run_id, started_us, %{
           reason: {:exception, message}
         })
 
-        {:error, {:exception, message}, state, count + 1}
+        {:error, {:exception, message}, state}
     catch
       :throw, {:__workflow_interrupt__, value} ->
-        handle_node_result(
-          {:interrupt, value},
+        end_span_and_emit(
+          :completed,
           compiled,
           current_id,
-          state,
           run_id,
-          deadline_us,
-          count,
-          started_us
+          started_us,
+          %{
+            result_type: :interrupt
+          }
         )
+
+        {:interrupt, value, state}
     end
   end
 
-  defp handle_node_result(
+  defp finalize_attempt(
          {:ok, new_state},
          compiled,
          current_id,
          _state,
          run_id,
-         deadline_us,
-         count,
          started_us
        ) do
-    finish_node_ok(
-      compiled,
-      current_id,
-      new_state,
-      run_id,
-      deadline_us,
-      count,
-      started_us,
-      :ok
-    )
+    end_span_and_emit(:completed, compiled, current_id, run_id, started_us, %{
+      result_type: :ok
+    })
+
+    {:node_ok, new_state, :ok}
   end
 
-  defp handle_node_result(
+  defp finalize_attempt(
          {:effects, directives, new_state},
          compiled,
          current_id,
          _state,
          run_id,
-         deadline_us,
-         count,
          started_us
        )
        when is_list(directives) do
     dispatch_effects(directives)
 
-    finish_node_ok(
-      compiled,
-      current_id,
-      new_state,
-      run_id,
-      deadline_us,
-      count,
-      started_us,
-      :effects
-    )
+    end_span_and_emit(:completed, compiled, current_id, run_id, started_us, %{
+      result_type: :effects
+    })
+
+    {:node_ok, new_state, :effects}
   end
 
-  defp handle_node_result(
+  defp finalize_attempt(
          {:interrupt, value},
          compiled,
          current_id,
          state,
          run_id,
-         _deadline_us,
-         count,
          started_us
        ) do
     end_span_and_emit(:completed, compiled, current_id, run_id, started_us, %{
       result_type: :interrupt
     })
 
-    {:interrupted, state, value, count + 1}
+    {:interrupt, value, state}
   end
 
-  defp handle_node_result(
+  defp finalize_attempt(
          {:error, reason},
          compiled,
          current_id,
          state,
          run_id,
-         _deadline_us,
-         count,
          started_us
        ) do
     end_span_and_emit(:failed, compiled, current_id, run_id, started_us, %{
       reason: reason
     })
 
-    {:error, reason, state, count + 1}
+    {:error, reason, state}
   end
 
-  defp handle_node_result(
+  defp finalize_attempt(
          other,
          compiled,
          current_id,
          state,
          run_id,
-         _deadline_us,
-         count,
          started_us
        ) do
     end_span_and_emit(:failed, compiled, current_id, run_id, started_us, %{
       reason: {:invalid_result, other}
     })
 
-    {:error, {:invalid_result, other}, state, count + 1}
+    {:error, {:invalid_result, other}, state}
   end
 
   defp end_span_and_emit(kind, compiled, current_id, run_id, started_us, extra) do
@@ -488,28 +516,20 @@ defmodule Raxol.Workflow.Runtime do
     )
   end
 
-  defp finish_node_ok(
-         compiled,
-         current_id,
-         new_state,
-         run_id,
-         deadline_us,
-         count,
-         started_us,
-         tag
-       ) do
-    emit_node_event(:completed, %{
-      run_id: run_id,
-      graph_id: compiled.id,
-      node_id: current_id,
-      duration_us: monotonic_us() - started_us,
-      result_type: tag
-    })
+  defp retry?(compiled),
+    do: Map.get(compiled.opts, :failure_policy, :halt) == :retry
 
-    _ = TraceContext.end_span()
-    persist_checkpoint(compiled, current_id, new_state, run_id, count)
-    traverse(compiled, current_id, new_state, run_id, deadline_us, count + 1)
-  end
+  defp retry_max_attempts(compiled),
+    do: Map.get(compiled.opts, :max_attempts, @default_max_attempts)
+
+  defp retry_backoff_ms(compiled),
+    do: Map.get(compiled.opts, :retry_backoff_ms, @default_retry_backoff_ms)
+
+  # Exponential backoff: base * 2^(attempt - 1). attempt is the
+  # just-failed attempt number, so the first retry (attempt 1 -> 2)
+  # waits `base`, the second waits `2 * base`, and so on.
+  defp compute_backoff(base_ms, attempt) when attempt >= 1,
+    do: base_ms * Bitwise.bsl(1, attempt - 1)
 
   defp persist_checkpoint(compiled, current_id, state, run_id, count) do
     case Saver.normalize(Map.get(compiled.opts, :saver)) do

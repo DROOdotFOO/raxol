@@ -110,12 +110,16 @@ defmodule Raxol.Workflow.Graph do
   ## Options
 
     * `:failure_policy` -- one of `:retry`, `:halt`, `:compensate` (default `:halt`)
+    * `:max_attempts` -- when `:failure_policy` is `:retry`, the
+      maximum number of attempts per node (default `3`). Includes the
+      initial attempt; `1` disables retries.
+    * `:retry_backoff_ms` -- base backoff delay between retries; each
+      subsequent retry doubles (default `100`).
     * `:step_timeout_ms` -- per-node timeout (default `60_000`)
     * `:run_timeout_ms` -- total run timeout (default `3_600_000`)
     * `:saver` -- `Raxol.Workflow.Checkpoint.Saver` module (defaults to `Ets`)
 
-  These options are stored on `Compiled` and consumed by the runtime
-  in a follow-up PR.
+  These options are stored on `Compiled` and consumed by the runtime.
   """
   @spec compile(t(), keyword()) ::
           {:ok, Compiled.t()}
@@ -135,7 +139,7 @@ defmodule Raxol.Workflow.Graph do
          opts:
            opts
            |> Keyword.take(
-             ~w(failure_policy step_timeout_ms run_timeout_ms saver)a
+             ~w(failure_policy max_attempts retry_backoff_ms step_timeout_ms run_timeout_ms saver)a
            )
            |> Map.new()
        }}
