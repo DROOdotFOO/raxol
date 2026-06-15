@@ -37,7 +37,6 @@ defmodule Raxol.Agent do
       import Raxol.Core.Renderer.View, except: [view: 1]
       alias Raxol.Agent.Directive
       alias Raxol.Core.Events.Event
-      alias Raxol.Core.Runtime.Command
 
       def init(_), do: %{}
       def update(_, state), do: {state, []}

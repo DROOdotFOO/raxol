@@ -43,9 +43,8 @@ defmodule Raxol.Agent.CommandHook do
 
   alias Raxol.Agent.Directive
   alias Raxol.Agent.Directive.{Async, SendAgent, Shell}
-  alias Raxol.Core.Runtime.Command
 
-  @type effect :: Command.t() | Directive.t()
+  @type effect :: Directive.t()
 
   @type hook_context :: %{
           agent_id: term(),
@@ -114,13 +113,13 @@ defmodule Raxol.Agent.CommandHook do
   end
 
   @doc """
-  Wrap a list of commands, applying pre/post hooks around each execution.
+  Wrap a list of directives, applying pre/post hooks around each execution.
 
-  Returns a new list of commands where hookable types (`:shell`, `:async`,
-  `:system`, `:send_agent`) are wrapped to run hooks. Non-hookable types
-  (`:none`, `:quit`, `:delay`, etc.) pass through unchanged.
+  Returns a new list where hookable directives (`Async`, `Shell`,
+  `SendAgent`) are wrapped to run hooks. Other directives pass through
+  unchanged.
 
-  Denied commands are replaced with a `:none` command that sends a
+  Denied directives are replaced with an `Async` directive that sends a
   `{:command_denied, type, reason}` result back to the agent.
   """
   @spec wrap_commands([effect()], [module()], hook_context()) :: [effect()]
@@ -128,13 +127,6 @@ defmodule Raxol.Agent.CommandHook do
 
   def wrap_commands(commands, hooks, context) do
     Enum.map(commands, &maybe_wrap(&1, hooks, context))
-  end
-
-  @hookable_command_types [:shell, :async, :system, :send_agent, :task]
-
-  defp maybe_wrap(%Command{type: type} = command, hooks, context)
-       when type in @hookable_command_types do
-    apply_hooks(command, hooks, context)
   end
 
   defp maybe_wrap(%Async{} = directive, hooks, context),
@@ -153,12 +145,6 @@ defmodule Raxol.Agent.CommandHook do
       {:ok, effect} -> wrap_with_post_hooks(effect, hooks, context)
       {:deny, reason} -> build_denial(effect, reason)
     end
-  end
-
-  defp build_denial(%Command{type: type}, reason) do
-    Command.new(:async, fn sender ->
-      sender.({:command_denied, type, reason})
-    end)
   end
 
   defp build_denial(directive, reason) do
@@ -181,16 +167,6 @@ defmodule Raxol.Agent.CommandHook do
     end
   end
 
-  defp do_wrap_post(%Command{type: :async} = command, hooks, context) do
-    original_fun = command.data
-    %{command | data: wrap_sender_fun(original_fun, command, hooks, context)}
-  end
-
-  defp do_wrap_post(%Command{type: :task} = command, hooks, context) do
-    original_fun = command.data
-    %{command | data: wrap_task_fun(original_fun, command, hooks, context)}
-  end
-
   defp do_wrap_post(%Async{fun: fun} = directive, hooks, context) do
     %{directive | fun: wrap_sender_fun(fun, directive, hooks, context)}
   end
@@ -208,17 +184,6 @@ defmodule Raxol.Agent.CommandHook do
       case run_post_hooks(hooks, effect, result, context) do
         {:ok, modified} -> sender.(modified)
         {:error, reason} -> sender.({:hook_error, reason})
-      end
-    end
-  end
-
-  defp wrap_task_fun(original_fun, effect, hooks, context) do
-    fn ->
-      result = original_fun.()
-
-      case run_post_hooks(hooks, effect, result, context) do
-        {:ok, modified} -> modified
-        {:error, reason} -> {:hook_error, reason}
       end
     end
   end

@@ -48,7 +48,7 @@ defmodule EditorExample do
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: ch}}
       when is_binary(ch) ->

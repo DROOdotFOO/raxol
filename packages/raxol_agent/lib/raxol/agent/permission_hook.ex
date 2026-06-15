@@ -43,7 +43,7 @@ defmodule Raxol.Agent.PermissionHook do
   @behaviour Raxol.Agent.CommandHook
 
   alias Raxol.Agent.Directive
-  alias Raxol.Core.Runtime.Command
+  alias Raxol.Core.Runtime.Directive, as: CoreDirective
 
   @type mode ::
           :read_only
@@ -52,8 +52,8 @@ defmodule Raxol.Agent.PermissionHook do
           | :full_access
           | :allow
 
-  @type effect :: Command.t() | Directive.t()
-  @type prompter :: (effect(), map() -> boolean())
+  @type effect :: Directive.t()
+  @type prompter :: (directive_type :: atom(), map() -> boolean())
 
   @type t :: %__MODULE__{
           mode: mode(),
@@ -116,13 +116,9 @@ defmodule Raxol.Agent.PermissionHook do
   end
 
   @doc """
-  Check whether a command is authorized under the given policy.
+  Check whether a directive is authorized under the given policy.
   """
   @spec authorize(effect(), t(), map()) :: :allow | {:deny, String.t()}
-  def authorize(%Command{type: type}, %__MODULE__{} = policy, context) do
-    check_type(type, policy, context)
-  end
-
   def authorize(directive, %__MODULE__{} = policy, context) when is_struct(directive) do
     check_type(effect_type(directive), policy, context)
   end
@@ -138,9 +134,9 @@ defmodule Raxol.Agent.PermissionHook do
   defp effect_type(%Directive.Async{}), do: :async
   defp effect_type(%Directive.Shell{}), do: :shell
   defp effect_type(%Directive.SendAgent{}), do: :send_agent
-  defp effect_type(%Directive.Schedule{}), do: :delay
-  defp effect_type(%Directive.Spawn{}), do: :task
-  defp effect_type(%Directive.Stop{}), do: :quit
+  defp effect_type(%CoreDirective.Schedule{}), do: :delay
+  defp effect_type(%CoreDirective.Spawn{}), do: :task
+  defp effect_type(%CoreDirective.Stop{}), do: :quit
 
   @doc """
   Returns the minimum permission mode required for a command type.
@@ -199,9 +195,7 @@ defmodule Raxol.Agent.PermissionHook do
 
   defp maybe_prompt(type, %{prompter: prompter}, context)
        when is_function(prompter, 2) do
-    command = %Command{type: type, data: nil}
-
-    if prompter.(command, context) do
+    if prompter.(type, context) do
       :allow
     else
       {:deny, "Permission denied by prompter for :#{type}"}

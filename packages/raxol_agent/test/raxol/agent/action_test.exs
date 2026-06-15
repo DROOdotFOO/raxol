@@ -73,7 +73,7 @@ defmodule Raxol.Agent.ActionTest do
 
     @impl true
     def run(%{msg: msg}, _context) do
-      cmd = %Raxol.Core.Runtime.Command{type: :delay, data: {:reminder, 1000}}
+      cmd = Raxol.Core.Runtime.Directive.schedule(1000, :reminder)
       {:ok, %{sent: msg}, [cmd]}
     end
   end
@@ -128,7 +128,8 @@ defmodule Raxol.Agent.ActionTest do
     end
 
     test "passes through commands from run/2" do
-      assert {:ok, %{sent: "hi"}, [%{type: :delay}]} = WithCommands.call(%{msg: "hi"})
+      assert {:ok, %{sent: "hi"}, [%Raxol.Core.Runtime.Directive.Schedule{}]} =
+               WithCommands.call(%{msg: "hi"})
     end
 
     test "works with no schema" do

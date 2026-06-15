@@ -20,7 +20,7 @@ defmodule Raxol.HeadlessTest do
           {%{model | panel: :b}, []}
 
         %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-          {model, [command(:quit)]}
+          {model, [Directive.stop()]}
 
         %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "="}} ->
           {%{model | count: model.count + 1}, []}

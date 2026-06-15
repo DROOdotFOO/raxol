@@ -57,7 +57,7 @@ defmodule Raxol.Payments.Directive.Pay do
   end
 end
 
-defimpl Raxol.Agent.Directive.Executor, for: Raxol.Payments.Directive.Pay do
+defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Payments.Directive.Pay do
   alias Raxol.Payments.Directive.Pay
 
   def execute(%Pay{perform: perform}, context) do

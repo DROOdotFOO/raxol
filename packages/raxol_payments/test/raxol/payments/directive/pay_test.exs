@@ -1,7 +1,7 @@
 defmodule Raxol.Payments.Directive.PayTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.Agent.Directive.Executor
+  alias Raxol.Core.Runtime.Directive.Executor
   alias Raxol.Payments.Directive.Pay
 
   describe "new/1" do

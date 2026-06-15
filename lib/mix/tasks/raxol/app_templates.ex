@@ -26,10 +26,10 @@ defmodule Mix.Raxol.AppTemplates do
       def update(message, model) do
         case message do
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-            {model, [command(:quit)]}
+            {model, [Directive.stop()]}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}} ->
-            {model, [command(:quit)]}
+            {model, [Directive.stop()]}
 
           _ ->
             {model, []}
@@ -76,10 +76,10 @@ defmodule Mix.Raxol.AppTemplates do
             {%{model | count: model.count - 1}, []}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-            {model, [command(:quit)]}
+            {model, [Directive.stop()]}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}} ->
-            {model, [command(:quit)]}
+            {model, [Directive.stop()]}
 
           _ -> {model, []}
         end
@@ -159,10 +159,10 @@ defmodule Mix.Raxol.AppTemplates do
             {%{model | todos: todos, selected: min(model.selected, max(0, length(todos) - 1))}, []}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} when model.mode == :normal ->
-            {model, [command(:quit)]}
+            {model, [Directive.stop()]}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}} ->
-            {model, [command(:quit)]}
+            {model, [Directive.stop()]}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "a"}} when model.mode == :normal ->
             update(:start_input, model)
@@ -275,10 +275,10 @@ defmodule Mix.Raxol.AppTemplates do
             {%{model | stats: stats, tick: model.tick + 1}, []}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-            {model, [command(:quit)]}
+            {model, [Directive.stop()]}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}} ->
-            {model, [command(:quit)]}
+            {model, [Directive.stop()]}
 
           %Raxol.Core.Events.Event{type: :key, data: %{key: :tab}} ->
             update(:next_panel, model)

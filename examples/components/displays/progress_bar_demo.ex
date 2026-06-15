@@ -40,13 +40,13 @@ defmodule Raxol.Examples.ProgressBarDemo do
         {%{model | basic: 0, block: 0, custom: 0, running: true}, []}
 
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       _ ->
         {model, []}

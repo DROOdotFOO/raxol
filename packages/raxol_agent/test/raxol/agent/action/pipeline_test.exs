@@ -31,7 +31,7 @@ defmodule Raxol.Agent.Action.PipelineTest do
 
     @impl true
     def run(%{value: v}, _ctx) do
-      cmd = %Raxol.Core.Runtime.Command{type: :delay, data: {:tick, 100}}
+      cmd = Raxol.Core.Runtime.Directive.schedule(100, :tick)
       {:ok, %{value: v + 1}, [cmd]}
     end
   end

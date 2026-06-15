@@ -41,7 +41,7 @@ defmodule Raxol.Agent.Action do
 
   @type params :: map()
   @type context :: map()
-  @type effect :: Raxol.Core.Runtime.Command.t() | Raxol.Agent.Directive.t()
+  @type effect :: Raxol.Agent.Directive.t()
   @type result ::
           {:ok, map()}
           | {:ok, map(), [effect()]}

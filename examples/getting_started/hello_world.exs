@@ -46,14 +46,14 @@ defmodule HelloWorld do
         # command(:quit) is a built-in command that tells the runtime to
         # shut down gracefully. Commands are data returned from update/2,
         # not imperative calls -- this is how TEA isolates side effects.
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       # Modifier keys appear in the data map: ctrl, alt, shift
       %Raxol.Core.Events.Event{
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       # Catch-all: ignore any message we don't handle.
       # Always return {model, []} to keep the loop running.

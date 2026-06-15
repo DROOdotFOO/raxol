@@ -65,7 +65,7 @@ defmodule ProcessComponentDemo do
   def update(message, model) do
     case message do
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c"}} ->
         {%{model | status: "Widget crashed! It will restart on next render."},

@@ -47,7 +47,7 @@ defmodule CounterExample do
       # Keyboard events arrive as Event structs (different from atoms).
       # Both sources feed into the same update/2 -- TEA unifies all input.
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "="}} ->
         {%{model | count: model.count + 1}, []}
@@ -59,7 +59,7 @@ defmodule CounterExample do
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       _ ->
         {model, []}

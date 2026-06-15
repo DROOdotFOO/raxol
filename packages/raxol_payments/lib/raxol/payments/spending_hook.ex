@@ -82,16 +82,7 @@ defmodule Raxol.Payments.SpendingHook do
     apply_gate({pay.amount, pay.domain}, pay, context, config)
   end
 
-  defp check_payment_command(%{type: type} = command, context, config)
-       when type in [:async, :shell] do
-    command
-    |> extract_payment_info()
-    |> apply_gate(command, context, config)
-  end
-
   defp check_payment_command(command, _context, _config), do: {:ok, command}
-
-  defp apply_gate(nil, command, _context, _config), do: {:ok, command}
 
   defp apply_gate({amount, domain}, command, context, config) do
     agent_id = Map.get(context, :agent_id, :unknown)
@@ -107,28 +98,9 @@ defmodule Raxol.Payments.SpendingHook do
     end
   end
 
-  # Payment info is attached to command data as a tagged map.
-  # The auto-pay plugin wraps the original data with payment metadata.
-  defp extract_payment_info(%{
-         data: %{__payment__: %{amount: amount, domain: domain}}
-       }) do
-    {amount, domain}
-  end
-
-  defp extract_payment_info(_command), do: nil
-
   defp maybe_record_payment(%Pay{} = pay, _result, config) do
     agent_id = pay.agent_id || Map.get(pay.meta, :agent_id, :unknown)
     Ledger.record_spend(config.ledger, agent_id, pay.amount, pay.meta)
-  end
-
-  defp maybe_record_payment(
-         %{data: %{__payment__: %{amount: amount} = meta}},
-         _result,
-         config
-       ) do
-    agent_id = Map.get(meta, :agent_id, :unknown)
-    Ledger.record_spend(config.ledger, agent_id, amount, meta)
   end
 
   defp maybe_record_payment(_command, _result, _config), do: :ok

@@ -2,8 +2,9 @@ defmodule Raxol.Agent.DirectiveTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Agent.Directive
-  alias Raxol.Agent.Directive.{Async, Schedule, SendAgent, Shell, Spawn, Stop}
-  alias Raxol.Agent.Directive.Executor
+  alias Raxol.Agent.Directive.{Async, SendAgent, Shell}
+  alias Raxol.Core.Runtime.Directive.{Schedule, Spawn, Stop}
+  alias Raxol.Core.Runtime.Directive.Executor
 
   describe "constructors" do
     test "async/1 builds an Async struct" do
