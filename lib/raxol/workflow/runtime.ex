@@ -24,6 +24,7 @@ defmodule Raxol.Workflow.Runtime do
   alias Raxol.Workflow.Edge.ConditionalEdge
   alias Raxol.Workflow.Edge.Edge, as: StaticEdge
   alias Raxol.Workflow.Edge.GuardedEdge
+  alias Raxol.Workflow.Execution.Scratchpad
   alias Raxol.Workflow.Node, as: WorkflowNode
   alias Raxol.Workflow.Node.{BehaviourNode, FunctionNode, TypedNode}
 
@@ -51,18 +52,99 @@ defmodule Raxol.Workflow.Runtime do
   def invoke(%Compiled{} = compiled, initial_state, opts \\ []) do
     run_id = Keyword.get_lazy(opts, :run_id, &generate_run_id/0)
     deadline_us = monotonic_us() + resolve_timeout(opts, compiled) * 1_000
+    resume_from = Keyword.get(opts, :resume_from)
+    initial_count = Keyword.get(opts, :initial_step, 0)
+    resume_values = Keyword.get(opts, :resume_values, [])
 
     _ = TraceContext.start_trace()
+    maybe_seed_scratchpad(run_id, resume_values)
 
     try do
       emit_run_event(:started, %{run_id: run_id, graph_id: compiled.id})
 
       compiled
-      |> step(@start, initial_state, run_id, deadline_us, 0)
+      |> start_or_resume(
+        initial_state,
+        run_id,
+        deadline_us,
+        initial_count,
+        resume_from
+      )
       |> wrap_outcome(run_id, compiled.id)
     after
       _ = TraceContext.clear()
+      Scratchpad.clear()
     end
+  end
+
+  defp start_or_resume(compiled, state, run_id, deadline_us, count, nil) do
+    step(compiled, @start, state, run_id, deadline_us, count)
+  end
+
+  defp start_or_resume(compiled, state, run_id, deadline_us, count, resume_node)
+       when is_atom(resume_node) or is_binary(resume_node) do
+    # The resume node already executed on the prior run; just traverse
+    # outgoing edges to find the next node to execute.
+    traverse(compiled, resume_node, state, run_id, deadline_us, count)
+  end
+
+  defp maybe_seed_scratchpad(_run_id, []), do: :ok
+
+  defp maybe_seed_scratchpad(run_id, values),
+    do: Scratchpad.init(run_id, values)
+
+  @doc """
+  Resume an interrupted run from its latest checkpoint.
+
+  Reads the latest checkpoint for `run_id` via the configured Saver,
+  hydrates the state, seeds the scratchpad with `resume_value`, and
+  continues execution from the node *after* the checkpoint's node
+  (which is the node that interrupted on the prior run). Re-invokes
+  `interrupt/1` from inside that node returns the resume value
+  instead of throwing.
+
+  Returns the same result tuple shape as `invoke/3`.
+
+  ## Errors
+
+    * `{:error, :no_saver_configured, nil}` when the graph has no Saver
+    * `{:error, :no_checkpoint, nil}` when the thread has no recorded
+      checkpoints
+  """
+  @spec resume(Compiled.t(), binary(), any(), keyword()) ::
+          result() | {:error, :no_saver_configured | :no_checkpoint, nil}
+  def resume(%Compiled{} = compiled, run_id, resume_value, opts \\ [])
+      when is_binary(run_id) do
+    case Saver.normalize(Map.get(compiled.opts, :saver)) do
+      nil ->
+        {:error, :no_saver_configured, nil}
+
+      {saver_module, saver_config} ->
+        case saver_module.get_latest(saver_config, run_id) do
+          {:ok, %Checkpoint{} = checkpoint} ->
+            resume_with_checkpoint(
+              compiled,
+              checkpoint,
+              resume_value,
+              run_id,
+              opts
+            )
+
+          {:error, :not_found} ->
+            {:error, :no_checkpoint, nil}
+        end
+    end
+  end
+
+  defp resume_with_checkpoint(compiled, checkpoint, resume_value, run_id, opts) do
+    resume_opts =
+      opts
+      |> Keyword.put(:run_id, run_id)
+      |> Keyword.put(:resume_from, checkpoint.metadata.node_id)
+      |> Keyword.put(:initial_step, checkpoint.step + 1)
+      |> Keyword.put(:resume_values, [resume_value])
+
+    invoke(compiled, checkpoint.state, resume_opts)
   end
 
   defp resolve_timeout(opts, compiled) do
@@ -177,6 +259,18 @@ defmodule Raxol.Workflow.Runtime do
         })
 
         {:error, {:exception, message}, state, count + 1}
+    catch
+      :throw, {:__workflow_interrupt__, value} ->
+        handle_node_result(
+          {:interrupt, value},
+          compiled,
+          current_id,
+          state,
+          run_id,
+          deadline_us,
+          count,
+          started_us
+        )
     end
   end
 

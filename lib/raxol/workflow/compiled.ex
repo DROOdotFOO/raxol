@@ -67,4 +67,17 @@ defmodule Raxol.Workflow.Compiled do
   def stream_events(%__MODULE__{} = compiled, initial_state, opts \\ []) do
     Raxol.Workflow.Async.stream_events(compiled, initial_state, opts)
   end
+
+  @doc """
+  Resume an interrupted run.
+
+  Delegates to `Raxol.Workflow.Runtime.resume/4`. See that module for
+  the full result-tuple contract and error tuples.
+  """
+  @spec resume(t(), binary(), any(), keyword()) ::
+          Raxol.Workflow.Runtime.result()
+          | {:error, :no_saver_configured | :no_checkpoint, nil}
+  def resume(%__MODULE__{} = compiled, run_id, resume_value, opts \\ []) do
+    Raxol.Workflow.Runtime.resume(compiled, run_id, resume_value, opts)
+  end
 end
