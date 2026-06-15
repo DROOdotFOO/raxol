@@ -49,7 +49,12 @@ defmodule Raxol.Core.Telemetry.TraceContextTest do
     test "returns nil fields when no trace started" do
       ctx = TraceContext.current()
 
-      assert ctx == %{trace_id: nil, span_id: nil, parent_span_id: nil}
+      assert ctx == %{
+               trace_id: nil,
+               span_id: nil,
+               parent_span_id: nil,
+               causation_id: nil
+             }
     end
 
     test "returns active context after start_trace" do
@@ -300,6 +305,61 @@ defmodule Raxol.Core.Telemetry.TraceContextTest do
       ctx = TraceContext.from_headers(%{})
 
       assert ctx.trace_id == nil
+    end
+
+    test "round-trips causation_id through headers" do
+      _ = TraceContext.start_trace()
+      _ = TraceContext.set_causation("caused-by-event-42")
+
+      headers = TraceContext.to_headers()
+      assert headers["x-causation-id"] == "caused-by-event-42"
+
+      TraceContext.clear()
+      _ = TraceContext.from_headers(headers)
+
+      assert TraceContext.current().causation_id == "caused-by-event-42"
+    end
+  end
+
+  describe "causation_id" do
+    test "current/0 includes causation_id field defaulting to nil" do
+      ctx = TraceContext.current()
+      assert Map.has_key?(ctx, :causation_id)
+      assert ctx.causation_id == nil
+    end
+
+    test "set_causation/1 stores the id in the current process" do
+      _ = TraceContext.start_trace()
+      _ = TraceContext.set_causation("event-99")
+
+      assert TraceContext.current().causation_id == "event-99"
+    end
+
+    test "set_causation(nil) clears the id" do
+      _ = TraceContext.start_trace()
+      _ = TraceContext.set_causation("event-99")
+      _ = TraceContext.set_causation(nil)
+
+      assert TraceContext.current().causation_id == nil
+    end
+
+    test "clear/0 removes causation_id" do
+      _ = TraceContext.start_trace()
+      _ = TraceContext.set_causation("event-99")
+      :ok = TraceContext.clear()
+
+      assert TraceContext.current().causation_id == nil
+    end
+
+    test "causation_id is independent of parent_span_id" do
+      _ = TraceContext.start_trace()
+      _ = TraceContext.set_causation("upstream-span")
+      _ = TraceContext.start_span("child")
+
+      ctx = TraceContext.current()
+      assert ctx.causation_id == "upstream-span"
+      assert is_binary(ctx.parent_span_id)
+      refute ctx.parent_span_id == ctx.causation_id
     end
   end
 end

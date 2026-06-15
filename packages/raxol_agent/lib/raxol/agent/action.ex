@@ -41,9 +41,10 @@ defmodule Raxol.Agent.Action do
 
   @type params :: map()
   @type context :: map()
+  @type effect :: Raxol.Core.Runtime.Command.t() | Raxol.Agent.Directive.t()
   @type result ::
           {:ok, map()}
-          | {:ok, map(), [Raxol.Core.Runtime.Command.t()]}
+          | {:ok, map(), [effect()]}
           | {:error, term()}
 
   @doc "Execute the action with validated params and context."

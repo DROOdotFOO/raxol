@@ -12,6 +12,8 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   require Raxol.Core.Runtime.Command
   require Raxol.Core.UserPreferences
 
+  @compile {:no_warn_undefined, Raxol.Agent.Directive.Executor}
+
   alias Raxol.Core.Events.Event
   alias Raxol.Core.FocusManager
   alias Raxol.Core.Runtime.Application
@@ -824,17 +826,26 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     )
 
     Enum.each(commands, fn command ->
-      case command do
-        %Command{} = cmd ->
-          command_module.execute(cmd, context)
+      cond do
+        match?(%Command{}, command) ->
+          command_module.execute(command, context)
 
-        _ ->
+        directive?(command) ->
+          Raxol.Agent.Directive.Executor.execute(command, context)
+
+        true ->
           Raxol.Core.Runtime.Log.warning_with_context(
-            "[#{__MODULE__}] Invalid command format: #{inspect(command)}. Expected %Raxol.Core.Runtime.Command{}. Ignoring.",
+            "[#{__MODULE__}] Invalid effect format: #{inspect(command)}. Expected %Raxol.Core.Runtime.Command{} or a directive struct. Ignoring.",
             %{command: command}
           )
       end
     end)
+  end
+
+  defp directive?(effect) do
+    is_struct(effect) and
+      Code.ensure_loaded?(Raxol.Agent.Directive.Executor) and
+      Raxol.Agent.Directive.Executor.impl_for(effect) != nil
   end
 
   defp test_env?, do: Code.ensure_loaded?(Mix) and Mix.env() == :test

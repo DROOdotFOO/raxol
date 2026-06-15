@@ -27,8 +27,10 @@ defmodule Raxol.Agent.Action.Pipeline do
 
   Returns `{:ok, final_state, all_commands}` or `{:error, {step_module, reason}}`.
   """
+  @type effect :: Raxol.Core.Runtime.Command.t() | Raxol.Agent.Directive.t()
+
   @spec run(pipeline(), map(), map()) ::
-          {:ok, map(), [Raxol.Core.Runtime.Command.t()]} | {:error, {module(), term()}}
+          {:ok, map(), [effect()]} | {:error, {module(), term()}}
   def run(steps, initial_params, context \\ %{}) do
     Enum.reduce_while(steps, {:ok, initial_params, []}, fn step, {:ok, state, cmds} ->
       {module, step_params} = normalize_step(step)
