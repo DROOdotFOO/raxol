@@ -20,7 +20,7 @@ defmodule CommandsExample do
     case message do
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "t"}} ->
         id = model.next_id
-        task = Raxol.Core.Runtime.Command.task(fn -> {id, do_work()} end)
+        task = Directive.spawn(fn -> {id, do_work()} end)
         {%{model | next_id: id + 1, pending: model.pending + 1}, [task]}
 
       {:task_result, {id, result}} ->
@@ -29,13 +29,13 @@ defmodule CommandsExample do
         {%{model | results: results, pending: model.pending - 1}, []}
 
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       _ ->
         {model, []}

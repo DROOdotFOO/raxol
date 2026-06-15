@@ -39,14 +39,14 @@ defmodule EventHandlingExample do
 
       # Named character: data.key is :char and data.char is a binary string
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       # Modifier key: ctrl: true appears in the data map
       %Raxol.Core.Events.Event{
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       # Any printable character: `is_binary(ch)` guard ensures ch is text,
       # not an atom like :enter or :esc. Order matters -- this must come

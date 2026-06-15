@@ -77,8 +77,6 @@ defmodule Raxol.Core.Runtime.Application do
   initialization and after each state update.
   """
 
-  @compile {:no_warn_undefined, Raxol.Agent.Directive.Executor}
-
   @type context :: map()
   @type state :: term()
   @type message :: term()
@@ -158,7 +156,7 @@ defmodule Raxol.Core.Runtime.Application do
 
       import Raxol.Core.Events.Event, only: [key_match: 1, key_match: 2]
       alias Raxol.Core.Events.Event
-      alias Raxol.Core.Runtime.Command
+      alias Raxol.Core.Runtime.Directive
       alias Raxol.Core.Runtime.Subscription
 
       # Default implementations
@@ -169,10 +167,6 @@ defmodule Raxol.Core.Runtime.Application do
 
       # Allow overriding
       defoverridable init: 1, update: 2, view: 1, subscribe: 1
-
-      # Helper functions
-      def command(cmd), do: Command.new(cmd)
-      def batch(cmds) when is_list(cmds), do: Command.batch(cmds)
 
       def subscribe_to_events(events) when is_list(events) do
         Subscription.events(events)
@@ -356,11 +350,9 @@ defmodule Raxol.Core.Runtime.Application do
     end
   end
 
-  defp known_effect?(%Raxol.Core.Runtime.Command{}), do: true
-
   defp known_effect?(effect) do
-    Code.ensure_loaded?(Raxol.Agent.Directive.Executor) and
-      Raxol.Agent.Directive.Executor.impl_for(effect) != nil
+    is_struct(effect) and
+      Raxol.Core.Runtime.Directive.Executor.impl_for(effect) != nil
   end
 
   defp log_missing_update_callback(app_module, message, current_model) do

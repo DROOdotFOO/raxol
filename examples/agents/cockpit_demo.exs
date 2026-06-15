@@ -63,7 +63,7 @@ defmodule CockpitDemo.FileScanner do
     }
 
     case new_model.remaining do
-      [_ | _] -> {new_model, [Command.delay(:scan_next, @scan_delay_ms)]}
+      [_ | _] -> {new_model, [Directive.schedule(@scan_delay_ms, :scan_next)]}
       [] -> {%{new_model | current: nil, status: :done}, []}
     end
   end
@@ -74,7 +74,7 @@ defmodule CockpitDemo.FileScanner do
     case model.remaining do
       [file | rest] ->
         {%{model | remaining: rest, current: file},
-         [Command.shell("wc -l < #{file}")]}
+         [Directive.shell("wc -l < #{file}")]}
 
       [] ->
         {%{model | current: nil, status: :done}, []}
@@ -122,8 +122,11 @@ defmodule CockpitDemo.CodeAnalyzer do
     }
 
     case new_model.remaining do
-      [_ | _] -> {new_model, [Command.delay(:analyze_next, @analyze_delay_ms)]}
-      [] -> {%{new_model | current: nil, status: :done}, []}
+      [_ | _] ->
+        {new_model, [Directive.schedule(@analyze_delay_ms, :analyze_next)]}
+
+      [] ->
+        {%{new_model | current: nil, status: :done}, []}
     end
   end
 
@@ -133,7 +136,7 @@ defmodule CockpitDemo.CodeAnalyzer do
     case model.remaining do
       [file | rest] ->
         {%{model | remaining: rest, current: file},
-         [Command.shell("grep -c '@moduledoc' #{file} 2>/dev/null; true")]}
+         [Directive.shell("grep -c '@moduledoc' #{file} 2>/dev/null; true")]}
 
       [] ->
         {%{model | current: nil, status: :done}, []}
@@ -179,7 +182,7 @@ defmodule CockpitDemo.SystemMonitor do
          stats: stats,
          history: history,
          proc_history: proc_history
-     }, [Command.delay(:tick, @monitor_tick_ms)]}
+     }, [Directive.schedule(@monitor_tick_ms, :tick)]}
   end
 end
 
@@ -192,16 +195,16 @@ defmodule CockpitDemo.ChaosWorker do
   def init(_ctx), do: %{tasks_done: 0, status: :idle}
 
   def update({:agent_message, _from, :start}, model) do
-    {%{model | status: :working}, [Command.shell("echo ok")]}
+    {%{model | status: :working}, [Directive.shell("echo ok")]}
   end
 
   def update({:command_result, :next_task}, model) do
-    {model, [Command.shell("echo task_#{model.tasks_done + 1}")]}
+    {model, [Directive.shell("echo task_#{model.tasks_done + 1}")]}
   end
 
   def update({:command_result, {:shell_result, _}}, model) do
     {%{model | tasks_done: model.tasks_done + 1},
-     [Command.delay(:next_task, @task_delay_ms)]}
+     [Directive.schedule(@task_delay_ms, :next_task)]}
   end
 
   def update(_msg, model), do: {model, []}
@@ -215,7 +218,7 @@ defmodule CockpitDemo.DepChecker do
 
   def update({:agent_message, _from, :start}, model) do
     {%{model | status: :checking},
-     [Command.shell("mix deps 2>/dev/null | grep -c 'ok'")]}
+     [Directive.shell("mix deps 2>/dev/null | grep -c 'ok'")]}
   end
 
   def update({:command_result, {:shell_result, %{output: out}}}, model) do
@@ -331,13 +334,13 @@ defmodule CockpitDemo do
         handle_tick(model)
 
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{type: :resize, data: %{width: w, height: h}} ->
         {%{model | width: w, height: h}, []}

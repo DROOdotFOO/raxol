@@ -8,7 +8,7 @@ defmodule Raxol.Payments.GateParityTest do
 
   use ExUnit.Case, async: false
 
-  alias Raxol.Core.Runtime.Command
+  alias Raxol.Payments.Directive.Pay
   alias Raxol.Payments.{Ledger, Req.AutoPay, SpendingHook, SpendingPolicy}
 
   defmodule TestWallet do
@@ -113,12 +113,14 @@ defmodule Raxol.Payments.GateParityTest do
     try do
       SpendingHook.set_config(%{ledger: ledger, policy: policy})
 
-      command = %Command{
-        type: :async,
-        data: %{__payment__: %{amount: amount, domain: host}}
-      }
+      pay =
+        Pay.new(
+          amount: amount,
+          domain: host,
+          perform: fn -> {:ok, :ignored} end
+        )
 
-      case SpendingHook.pre_execute(command, %{agent_id: :parity}) do
+      case SpendingHook.pre_execute(pay, %{agent_id: :parity}) do
         {:ok, _} -> :allow
         {:deny, {kind, _domain}} -> {:deny, kind}
         {:deny, {kind, _, _}} -> {:deny, kind}

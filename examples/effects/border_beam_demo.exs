@@ -67,10 +67,10 @@ defmodule BorderBeamDemo do
         {%{model | active: not model.active}, []}
 
       %{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %{type: :key, data: %{key: :char, char: "c", ctrl: true}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       _ ->
         {model, []}

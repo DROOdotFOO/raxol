@@ -188,7 +188,7 @@ defmodule Mix.Tasks.Raxol.DemoTest do
 
         event = %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}}
         {_model, commands} = module.update(event, model)
-        assert [%Raxol.Core.Runtime.Command{type: :quit}] = commands
+        assert [%Raxol.Core.Runtime.Directive.Stop{}] = commands
       end
     end
   end

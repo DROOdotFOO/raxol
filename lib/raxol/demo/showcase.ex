@@ -52,10 +52,10 @@ defmodule Raxol.Demo.Showcase do
   defp handle_global_keys(message, model) do
     case message do
       key_match("q") ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       key_match("c", ctrl: true) ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       key_match(:char, char: n) when n in ["1", "2", "3", "4", "5"] ->
         {%{model | tab: String.to_integer(n) - 1}, []}

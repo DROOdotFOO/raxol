@@ -19,8 +19,6 @@ defmodule Raxol.Core.Runtime.Lifecycle do
 
   use GenServer
 
-  @compile {:no_warn_undefined, Raxol.Agent.Directive.Executor}
-
   alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Core.Runtime.Lifecycle.{Initializer, Shutdown}
   alias Raxol.Core.Runtime.Log
@@ -80,7 +78,7 @@ defmodule Raxol.Core.Runtime.Lifecycle do
     * `:width` - Terminal width (default: 80).
     * `:height` - Terminal height (default: 24).
     * `:debug` - Enable debug mode (default: false).
-    * `:initial_commands` - A list of `Raxol.Core.Runtime.Command` structs to execute on startup.
+    * `:initial_commands` - A list of directive structs to execute on startup.
     * `:plugin_manager_opts` - Options to pass to the PluginManager's start_link function.
     * `:adaptive` - Enable adaptive UI (layout recommendations from behavior tracking). Default: false.
     * `:alternate_screen` - Enter the alternate screen buffer on startup (DECSET 1049). Prevents TUI frames from polluting the client's scrollback. Default: false.
@@ -426,24 +424,18 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   end
 
   defp execute_initial_command(command, context) do
-    cond do
-      match?(%Raxol.Core.Runtime.Command{}, command) ->
-        Raxol.Core.Runtime.Command.execute(command, context)
-
-      directive?(command) ->
-        Raxol.Agent.Directive.Executor.execute(command, context)
-
-      true ->
-        Log.error(
-          "Invalid initial effect found: #{inspect(command)}. Expected %Raxol.Core.Runtime.Command{} or a directive struct."
-        )
+    if directive?(command) do
+      Raxol.Core.Runtime.Directive.Executor.execute(command, context)
+    else
+      Log.error(
+        "Invalid initial effect found: #{inspect(command)}. Expected a directive struct."
+      )
     end
   end
 
   defp directive?(effect) do
     is_struct(effect) and
-      Code.ensure_loaded?(Raxol.Agent.Directive.Executor) and
-      Raxol.Agent.Directive.Executor.impl_for(effect) != nil
+      Raxol.Core.Runtime.Directive.Executor.impl_for(effect) != nil
   end
 
   defp log_waiting_status(state) do

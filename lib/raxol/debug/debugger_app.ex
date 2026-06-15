@@ -76,7 +76,7 @@ defmodule Raxol.Debug.DebuggerApp do
   defp handle_jump_mode(message, model) do
     case message do
       key_match("c", ctrl: true) ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       key_match(:char, char: ch) when ch in ~w(0 1 2 3 4 5 6 7 8 9) ->
         {%{model | jump_buffer: model.jump_buffer <> ch}, []}
@@ -101,8 +101,8 @@ defmodule Raxol.Debug.DebuggerApp do
 
   defp handle_quit_keys(message, model) do
     case message do
-      key_match("q") -> {model, [command(:quit)]}
-      key_match("c", ctrl: true) -> {model, [command(:quit)]}
+      key_match("q") -> {model, [Directive.stop()]}
+      key_match("c", ctrl: true) -> {model, [Directive.stop()]}
       _ -> nil
     end
   end

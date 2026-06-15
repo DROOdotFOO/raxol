@@ -1,27 +1,4 @@
-defprotocol Raxol.Agent.Directive.Executor do
-  @moduledoc """
-  Protocol for executing `Raxol.Agent.Directive` structs.
-
-  External packages register their own directive types by defining a struct
-  and implementing this protocol for it.
-
-  ## Context
-
-  The `context` map carries at minimum:
-
-    * `:pid` - process to receive `{:command_result, payload}` messages
-    * `:runtime_pid` - process to receive runtime-level signals (e.g. quit)
-
-  Effect messages land at `context.pid` as `{:command_result, payload}`.
-  Consumers rely on the asynchronous result message rather than the return
-  value of `execute/2`.
-  """
-
-  @spec execute(t(), context :: map()) :: any()
-  def execute(directive, context)
-end
-
-defimpl Raxol.Agent.Directive.Executor, for: Raxol.Agent.Directive.Async do
+defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.Async do
   alias Raxol.Agent.Directive.Async
 
   def execute(%Async{fun: fun}, context) do
@@ -38,7 +15,7 @@ defimpl Raxol.Agent.Directive.Executor, for: Raxol.Agent.Directive.Async do
   end
 end
 
-defimpl Raxol.Agent.Directive.Executor, for: Raxol.Agent.Directive.Shell do
+defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.Shell do
   alias Raxol.Agent.Directive.Shell
 
   def execute(%Shell{command: command, opts: opts}, context) do
@@ -95,7 +72,7 @@ defimpl Raxol.Agent.Directive.Executor, for: Raxol.Agent.Directive.Shell do
   end
 end
 
-defimpl Raxol.Agent.Directive.Executor, for: Raxol.Agent.Directive.SendAgent do
+defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.SendAgent do
   alias Raxol.Agent.Directive.SendAgent
 
   def execute(%SendAgent{target_id: target_id, message: message}, context) do
@@ -116,32 +93,5 @@ defimpl Raxol.Agent.Directive.Executor, for: Raxol.Agent.Directive.SendAgent do
       %{span_id: span_id} when is_binary(span_id) -> %{causation_id: span_id}
       _ -> %{}
     end
-  end
-end
-
-defimpl Raxol.Agent.Directive.Executor, for: Raxol.Agent.Directive.Schedule do
-  alias Raxol.Agent.Directive.Schedule
-
-  def execute(%Schedule{interval_ms: interval_ms, payload: payload}, context) do
-    Process.send_after(context.pid, {:command_result, payload}, interval_ms)
-  end
-end
-
-defimpl Raxol.Agent.Directive.Executor, for: Raxol.Agent.Directive.Spawn do
-  alias Raxol.Agent.Directive.Spawn
-
-  def execute(%Spawn{fun: fun}, context) do
-    Task.start(fn ->
-      result = fun.()
-      send(context.pid, {:command_result, result})
-    end)
-  end
-end
-
-defimpl Raxol.Agent.Directive.Executor, for: Raxol.Agent.Directive.Stop do
-  alias Raxol.Agent.Directive.Stop
-
-  def execute(%Stop{}, context) do
-    send(context.runtime_pid, :quit_runtime)
   end
 end

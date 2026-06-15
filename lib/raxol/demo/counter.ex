@@ -31,10 +31,10 @@ defmodule Raxol.Demo.Counter do
         {%{model | count: model.count - 1}, []}
 
       key_match("q") ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       key_match("c", ctrl: true) ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       _ ->
         {model, []}

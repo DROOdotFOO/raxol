@@ -43,13 +43,13 @@ defmodule SnakeGame do
         {%{model | direction: next_dir(model.direction, :right)}, []}
 
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       :tick ->
         {move_snake(model), []}

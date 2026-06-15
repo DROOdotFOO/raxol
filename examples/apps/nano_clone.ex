@@ -52,13 +52,13 @@ defmodule Examples.Editor.NanoClone do
         type: :key,
         data: %{key: :char, char: "x", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       # Navigation
       %Raxol.Core.Events.Event{type: :key, data: %{key: :key_up}} ->

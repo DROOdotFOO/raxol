@@ -49,13 +49,13 @@ defmodule TodoExample do
       # -- Quit --
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}}
       when model.mode == :normal ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       # -- Normal mode: navigation --
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "j"}}

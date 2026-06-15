@@ -215,30 +215,6 @@ defmodule Raxol.Core.Runtime.ApplicationTest do
   end
 
   describe "helper functions" do
-    test ~c"command/1 creates a command" do
-      cmd = TestApp.command(:test_command)
-      assert is_struct(cmd)
-
-      assert Map.has_key?(cmd, :type),
-             "Expected cmd to be a struct or map with :type key, got: #{inspect(cmd)}"
-
-      assert cmd.type == :test_command
-    end
-
-    test ~c"batch/1 creates a batch command" do
-      cmd1 = TestApp.command(:cmd1)
-      cmd2 = TestApp.command(:cmd2)
-
-      batch = TestApp.batch([cmd1, cmd2])
-      assert is_struct(batch)
-
-      assert Map.has_key?(batch, :type),
-             "Expected batch to be a struct or map with :type key, got: #{inspect(batch)}"
-
-      assert batch.type == :batch
-      assert length(batch.data) == 2
-    end
-
     test ~c"subscribe_to_events/1 creates event subscription" do
       events = [:event1, :event2]
       subscription = TestApp.subscribe_to_events(events)

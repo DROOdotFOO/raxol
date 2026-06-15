@@ -65,8 +65,8 @@ defmodule Raxol.Demo.Dashboard do
   defp handle_action(message, model) do
     case message do
       key_match(" ") -> handle_pause_toggle(model)
-      key_match("q") -> {model, [command(:quit)]}
-      key_match("c", ctrl: true) -> {model, [command(:quit)]}
+      key_match("q") -> {model, [Directive.stop()]}
+      key_match("c", ctrl: true) -> {model, [Directive.stop()]}
       _ -> {model, []}
     end
   end

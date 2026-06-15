@@ -27,7 +27,7 @@ defmodule Raxol.Agent.Action.Pipeline do
 
   Returns `{:ok, final_state, all_commands}` or `{:error, {step_module, reason}}`.
   """
-  @type effect :: Raxol.Core.Runtime.Command.t() | Raxol.Agent.Directive.t()
+  @type effect :: Raxol.Agent.Directive.t()
 
   @spec run(pipeline(), map(), map()) ::
           {:ok, map(), [effect()]} | {:error, {module(), term()}}

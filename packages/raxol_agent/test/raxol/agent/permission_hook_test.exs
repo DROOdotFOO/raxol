@@ -1,8 +1,8 @@
 defmodule Raxol.Agent.PermissionHookTest do
   use ExUnit.Case, async: true
 
+  alias Raxol.Agent.Directive
   alias Raxol.Agent.PermissionHook
-  alias Raxol.Core.Runtime.Command
 
   @context %{agent_id: :test, agent_module: nil}
 
@@ -14,7 +14,7 @@ defmodule Raxol.Agent.PermissionHookTest do
     end
 
     test "accepts a prompter function" do
-      prompter = fn _cmd, _ctx -> true end
+      prompter = fn _type, _ctx -> true end
       policy = PermissionHook.policy(:read_only, prompter: prompter)
       assert policy.prompter == prompter
     end
@@ -85,46 +85,79 @@ defmodule Raxol.Agent.PermissionHookTest do
   end
 
   describe "authorize/3" do
-    test "allows permitted command types" do
+    test "allows permitted directive types" do
       policy = PermissionHook.policy(:full_access)
 
       assert :allow ==
-               PermissionHook.authorize(Command.shell("ls"), policy, @context)
+               PermissionHook.authorize(Directive.shell("ls"), policy, @context)
     end
 
-    test "denies restricted command types" do
+    test "denies restricted directive types" do
       policy = PermissionHook.policy(:read_only)
 
       assert {:deny, reason} =
-               PermissionHook.authorize(Command.shell("ls"), policy, @context)
+               PermissionHook.authorize(Directive.shell("ls"), policy, @context)
 
       assert is_binary(reason)
       assert String.contains?(reason, ":shell")
     end
 
-    test "always allows :none regardless of mode" do
-      policy = PermissionHook.policy(:read_only)
-
-      assert :allow ==
-               PermissionHook.authorize(Command.none(), policy, @context)
-    end
-
-    test "prompter can escalate a denied command" do
+    test "prompter can escalate a denied directive" do
       policy =
-        PermissionHook.policy(:read_only, prompter: fn _cmd, _ctx -> true end)
+        PermissionHook.policy(:read_only, prompter: fn _type, _ctx -> true end)
 
       assert :allow ==
-               PermissionHook.authorize(Command.shell("ls"), policy, @context)
+               PermissionHook.authorize(Directive.shell("ls"), policy, @context)
     end
 
     test "prompter can reject escalation" do
       policy =
-        PermissionHook.policy(:read_only, prompter: fn _cmd, _ctx -> false end)
+        PermissionHook.policy(:read_only, prompter: fn _type, _ctx -> false end)
 
       assert {:deny, reason} =
-               PermissionHook.authorize(Command.shell("ls"), policy, @context)
+               PermissionHook.authorize(Directive.shell("ls"), policy, @context)
 
       assert String.contains?(reason, "prompter")
+    end
+
+    test "Directive.send_agent allowed in :send_only mode" do
+      policy = PermissionHook.policy(:send_only)
+
+      assert :allow ==
+               PermissionHook.authorize(
+                 Directive.send_agent(:t, :hello),
+                 policy,
+                 @context
+               )
+    end
+
+    test "Directive.async allowed in :send_only mode" do
+      policy = PermissionHook.policy(:send_only)
+
+      assert :allow ==
+               PermissionHook.authorize(
+                 Directive.async(fn _s -> :ok end),
+                 policy,
+                 @context
+               )
+    end
+
+    test "Directive.schedule (mapped to :delay) allowed in :read_only mode" do
+      policy = PermissionHook.policy(:read_only)
+
+      assert :allow ==
+               PermissionHook.authorize(
+                 Directive.schedule(50, :tick),
+                 policy,
+                 @context
+               )
+    end
+
+    test "Directive.stop (mapped to :quit) allowed in :read_only mode" do
+      policy = PermissionHook.policy(:read_only)
+
+      assert :allow ==
+               PermissionHook.authorize(Directive.stop(), policy, @context)
     end
   end
 
@@ -179,105 +212,45 @@ defmodule Raxol.Agent.PermissionHookTest do
   end
 
   describe "pre_execute/2 (CommandHook integration)" do
-    test "allows commands when policy permits" do
+    test "allows directives when policy permits" do
       PermissionHook.new(:full_access)
-      command = Command.shell("ls")
-      assert {:ok, ^command} = PermissionHook.pre_execute(command, @context)
+      effect = Directive.shell("ls")
+      assert {:ok, ^effect} = PermissionHook.pre_execute(effect, @context)
     end
 
-    test "denies commands when policy restricts" do
+    test "denies directives when policy restricts" do
       PermissionHook.new(:read_only)
-      command = Command.shell("rm -rf /")
-      assert {:deny, reason} = PermissionHook.pre_execute(command, @context)
+      effect = Directive.shell("rm -rf /")
+      assert {:deny, reason} = PermissionHook.pre_execute(effect, @context)
       assert is_binary(reason)
     end
   end
 
   describe "integration with CommandHook.wrap_commands/3" do
-    test "denied commands produce denial notifications" do
+    test "denied directives produce denial notifications" do
       PermissionHook.new(:read_only)
 
-      commands = [Command.shell("ls"), Command.none()]
+      effects = [Directive.shell("ls"), Directive.stop()]
 
       wrapped =
         Raxol.Agent.CommandHook.wrap_commands(
-          commands,
+          effects,
           [PermissionHook],
           @context
         )
 
-      # shell should be wrapped as denial, none should pass through
-      [denied_cmd, pass_cmd] = wrapped
+      # shell should be wrapped as denial Async, stop should pass through
+      [denied, pass_through] = wrapped
 
-      assert denied_cmd.type == :async
-      assert pass_cmd.type == :none
+      assert %Directive.Async{} = denied
+      assert %Raxol.Core.Runtime.Directive.Stop{} = pass_through
 
       # Execute the denial wrapper
       sender = fn msg -> send(self(), {:sent, msg}) end
-      denied_cmd.data.(sender)
+      denied.fun.(sender)
 
       assert_received {:sent, {:command_denied, :shell, reason}}
       assert is_binary(reason)
-    end
-  end
-
-  alias Raxol.Agent.Directive
-
-  describe "authorize/3 with directives" do
-    test "allows permitted directive types" do
-      policy = PermissionHook.policy(:full_access)
-
-      assert :allow ==
-               PermissionHook.authorize(Directive.shell("ls"), policy, @context)
-    end
-
-    test "denies restricted directive types" do
-      policy = PermissionHook.policy(:read_only)
-
-      assert {:deny, reason} =
-               PermissionHook.authorize(Directive.shell("ls"), policy, @context)
-
-      assert String.contains?(reason, ":shell")
-    end
-
-    test "Directive.send_agent allowed in :send_only mode" do
-      policy = PermissionHook.policy(:send_only)
-
-      assert :allow ==
-               PermissionHook.authorize(
-                 Directive.send_agent(:t, :hello),
-                 policy,
-                 @context
-               )
-    end
-
-    test "Directive.async allowed in :send_only mode" do
-      policy = PermissionHook.policy(:send_only)
-
-      assert :allow ==
-               PermissionHook.authorize(
-                 Directive.async(fn _s -> :ok end),
-                 policy,
-                 @context
-               )
-    end
-
-    test "Directive.schedule (mapped to :delay) allowed in :read_only mode" do
-      policy = PermissionHook.policy(:read_only)
-
-      assert :allow ==
-               PermissionHook.authorize(
-                 Directive.schedule(50, :tick),
-                 policy,
-                 @context
-               )
-    end
-
-    test "Directive.stop (mapped to :quit) allowed in :read_only mode" do
-      policy = PermissionHook.policy(:read_only)
-
-      assert :allow ==
-               PermissionHook.authorize(Directive.stop(), policy, @context)
     end
   end
 end

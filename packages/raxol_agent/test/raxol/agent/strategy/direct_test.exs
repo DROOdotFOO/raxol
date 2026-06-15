@@ -31,7 +31,7 @@ defmodule Raxol.Agent.Strategy.DirectTest do
 
     @impl true
     def run(_params, _ctx) do
-      cmd = %Raxol.Core.Runtime.Command{type: :delay, data: {:ping, 100}}
+      cmd = Raxol.Core.Runtime.Directive.schedule(100, :ping)
       {:ok, %{notified: true}, [cmd]}
     end
   end
@@ -57,7 +57,7 @@ defmodule Raxol.Agent.Strategy.DirectTest do
     test "passes through commands" do
       assert {:ok, state, [cmd]} = Direct.execute({WithCommand, %{}}, %{}, %{})
       assert state.notified == true
-      assert cmd.type == :delay
+      assert %Raxol.Core.Runtime.Directive.Schedule{} = cmd
     end
 
     test "returns error on failure" do

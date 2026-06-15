@@ -9,15 +9,11 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   require Logger
   require Raxol.Core.Runtime.Log
   require Raxol.Core.Events.Event
-  require Raxol.Core.Runtime.Command
   require Raxol.Core.UserPreferences
-
-  @compile {:no_warn_undefined, Raxol.Agent.Directive.Executor}
 
   alias Raxol.Core.Events.Event
   alias Raxol.Core.FocusManager
   alias Raxol.Core.Runtime.Application
-  alias Raxol.Core.Runtime.Command
   alias Raxol.Core.Runtime.Events.Bubbler
   alias Raxol.Core.Runtime.Events.DispatcherHooks
   alias Raxol.Core.UserPreferences
@@ -37,7 +33,6 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
               plugin_manager_struct: nil,
               command_registry_table: nil,
               current_theme_id: :default,
-              command_module: Raxol.Core.Runtime.Command,
               view_tree: nil,
               layout: [],
               rendering_engine: nil,
@@ -48,9 +43,6 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # BaseManager provides start_link/1 and start_link/2 automatically
   # Custom start_link to handle the runtime_pid and initial_state parameters
   def start_link(runtime_pid, initial_state, opts \\ []) do
-    command_module =
-      Keyword.get(opts, :command_module, Raxol.Core.Runtime.Command)
-
     server_opts =
       case Keyword.get(opts, :name, __MODULE__) do
         nil -> []
@@ -59,13 +51,13 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
 
     GenServer.start_link(
       __MODULE__,
-      {runtime_pid, initial_state, command_module},
+      {runtime_pid, initial_state},
       server_opts
     )
   end
 
   @impl true
-  def init_manager({runtime_pid, initial_state, command_module}) do
+  def init_manager({runtime_pid, initial_state}) do
     state = %State{
       runtime_pid: runtime_pid,
       app_module: initial_state.app_module,
@@ -79,7 +71,6 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       command_registry_table: initial_state.command_registry_table,
       rendering_engine: Map.get(initial_state, :rendering_engine),
       current_theme_id: safe_get_theme_id(),
-      command_module: command_module,
       time_travel: Map.get(initial_state, :time_travel),
       cycle_profiler: Map.get(initial_state, :cycle_profiler)
     }
@@ -149,7 +140,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
 
       {:commands, commands} ->
         context = build_command_context(state)
-        process_commands(commands, context, state.command_module)
+        process_commands(commands, context)
         send(state.runtime_pid, :render_needed)
         {:ok, state, commands}
 
@@ -217,7 +208,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
 
   defp process_successful_update(state, updated_model, commands) do
     context = build_command_context(state)
-    process_commands(commands, context, state.command_module)
+    process_commands(commands, context)
 
     updated_state = handle_theme_update(state, updated_model)
     send(state.runtime_pid, :render_needed)
@@ -522,7 +513,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     context = build_command_context(state)
 
     case Raxol.Core.ErrorHandling.safe_call(fn ->
-           process_commands(commands, context, state.command_module)
+           process_commands(commands, context)
          end) do
       {:ok, _} ->
         :ok
@@ -834,33 +825,26 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
 
   # --- Command Processing ---
 
-  defp process_commands(commands, context, command_module)
-       when is_list(commands) do
+  defp process_commands(commands, context) when is_list(commands) do
     Raxol.Core.Runtime.Log.debug(
       "[Dispatcher.process_commands] Processing commands: #{inspect(commands)} with context: #{inspect(context)}"
     )
 
     Enum.each(commands, fn command ->
-      cond do
-        match?(%Command{}, command) ->
-          command_module.execute(command, context)
-
-        directive?(command) ->
-          Raxol.Agent.Directive.Executor.execute(command, context)
-
-        true ->
-          Raxol.Core.Runtime.Log.warning_with_context(
-            "[#{__MODULE__}] Invalid effect format: #{inspect(command)}. Expected %Raxol.Core.Runtime.Command{} or a directive struct. Ignoring.",
-            %{command: command}
-          )
+      if directive?(command) do
+        Raxol.Core.Runtime.Directive.Executor.execute(command, context)
+      else
+        Raxol.Core.Runtime.Log.warning_with_context(
+          "[#{__MODULE__}] Invalid effect format: #{inspect(command)}. Expected a directive struct. Ignoring.",
+          %{command: command}
+        )
       end
     end)
   end
 
   defp directive?(effect) do
     is_struct(effect) and
-      Code.ensure_loaded?(Raxol.Agent.Directive.Executor) and
-      Raxol.Agent.Directive.Executor.impl_for(effect) != nil
+      Raxol.Core.Runtime.Directive.Executor.impl_for(effect) != nil
   end
 
   defp test_env?, do: Code.ensure_loaded?(Mix) and Mix.env() == :test

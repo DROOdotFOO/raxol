@@ -29,14 +29,14 @@ defmodule Raxol.Demo.Todo do
   end
 
   @impl true
-  def update(key_match("c", ctrl: true), model), do: {model, [command(:quit)]}
+  def update(key_match("c", ctrl: true), model), do: {model, [Directive.stop()]}
 
   def update(message, %{mode: :input} = model), do: handle_input(message, model)
   def update(message, model), do: handle_normal(message, model)
 
   defp handle_normal(message, model), do: apply_normal_key(message, model)
 
-  defp apply_normal_key(key_match("q"), model), do: {model, [command(:quit)]}
+  defp apply_normal_key(key_match("q"), model), do: {model, [Directive.stop()]}
 
   defp apply_normal_key(key_match(:down), model),
     do: {move_cursor(model, 1), []}

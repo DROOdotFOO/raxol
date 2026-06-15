@@ -2,7 +2,7 @@
 defmodule MockApp do
   @behaviour Raxol.Core.Runtime.Application
   alias Raxol.Core.Events.Event
-  alias Raxol.Core.Runtime.Command
+  alias Raxol.Core.Runtime.Directive
 
   @impl Raxol.Core.Runtime.Application
   def init(_context), do: %{count: 0, last_clipboard: nil}
@@ -14,7 +14,7 @@ defmodule MockApp do
 
   @impl Raxol.Core.Runtime.Application
   def update({:event, %Event{type: :key, data: %{char: <<17>>}}}, model) do
-    {model, [%Command{type: :quit}]}
+    {model, [Directive.stop()]}
   end
 
   @impl Raxol.Core.Runtime.Application

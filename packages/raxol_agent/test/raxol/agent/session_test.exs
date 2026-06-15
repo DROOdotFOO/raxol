@@ -13,14 +13,14 @@ defmodule Raxol.Agent.SessionTest do
     end
 
     def update({:agent_message, from, {:increment, n}}, model) do
-      {%{model | count: model.count + n, messages: [{from, n} | model.messages]}, Command.none()}
+      {%{model | count: model.count + n, messages: [{from, n} | model.messages]}, []}
     end
 
     def update({:agent_message, _from, :get_count}, model) do
-      {model, Command.none()}
+      {model, []}
     end
 
-    def update(_msg, model), do: {model, Command.none()}
+    def update(_msg, model), do: {model, []}
 
     def view(model) do
       column do
@@ -38,7 +38,7 @@ defmodule Raxol.Agent.SessionTest do
     def init(_context), do: %{results: [], status: :idle}
 
     def update({:agent_message, _from, {:run, cmd}}, model) do
-      {%{model | status: :running}, [Command.shell(cmd)]}
+      {%{model | status: :running}, [Directive.shell(cmd)]}
     end
 
     def update({:command_result, {:shell_result, result}}, model) do
@@ -56,7 +56,7 @@ defmodule Raxol.Agent.SessionTest do
     def update({:agent_message, _from, :start_work}, model) do
       {%{model | status: :working},
        [
-         Command.async(fn sender ->
+         Directive.async(fn sender ->
            sender.({:progress, 50})
            sender.({:progress, 100})
            sender.({:done, :ok})
@@ -81,10 +81,10 @@ defmodule Raxol.Agent.SessionTest do
     def init(_context), do: %{value: 0}
 
     def update({:agent_message, _from, {:set, v}}, model) do
-      {%{model | value: v}, Command.none()}
+      {%{model | value: v}, []}
     end
 
-    def update(_msg, model), do: {model, Command.none()}
+    def update(_msg, model), do: {model, []}
   end
 
   defmodule DirectiveShellAgent do

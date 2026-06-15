@@ -101,7 +101,7 @@ defmodule Raxol.Playground.App do
   defp handle_search(message, model) do
     case message do
       key_match("c", ctrl: true) ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       key_match(:char, char: ch) ->
         new_search = (model.search || "") <> ch
@@ -123,10 +123,10 @@ defmodule Raxol.Playground.App do
   defp handle_normal(message, model) do
     case message do
       key_match("q") ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       key_match("c", ctrl: true) ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       key_match(:tab) ->
         {cycle_focus(model), []}

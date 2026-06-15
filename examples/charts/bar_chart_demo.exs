@@ -20,7 +20,7 @@ defmodule BarChartDemo do
         {%{model | tick: model.tick + 1}, []}
 
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       _ ->
         {model, []}

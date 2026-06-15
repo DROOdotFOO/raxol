@@ -1,11 +1,10 @@
 defmodule Raxol.Agent.Directive do
   @moduledoc """
-  Extensible struct-based effect descriptors for raxol agents.
+  Agent-specific effect directives.
 
-  Each directive is a bare struct with a `Raxol.Agent.Directive.Executor`
-  protocol implementation that the runtime invokes to perform the effect.
-  External packages define their own directive structs and protocol impls
-  without modifying this module.
+  Each directive is a bare struct with a
+  `Raxol.Core.Runtime.Directive.Executor` protocol implementation that the
+  runtime invokes to perform the effect.
 
   ## Built-in directives
 
@@ -14,9 +13,16 @@ defmodule Raxol.Agent.Directive do
   | `Async` | Spawn a task with a sender callback for multi-message replies |
   | `Shell` | Run a shell command via Port, return structured exit/output |
   | `SendAgent` | Route a message to another agent by id (via Registry) |
-  | `Schedule` | Send a message after a delay (Process.send_after) |
-  | `Spawn` | Spawn a task whose return value is sent back once |
-  | `Stop` | Signal the runtime to stop |
+
+  ## Re-exported from `Raxol.Core.Runtime.Directive`
+
+  These shared directives need no agent context; agent code can use them
+  through this module's helpers for convenience or call the core module
+  directly:
+
+    * `schedule/2` - delegates to `Raxol.Core.Runtime.Directive.schedule/2`
+    * `spawn/1` - delegates to `Raxol.Core.Runtime.Directive.spawn_task/1`
+    * `stop/1` - delegates to `Raxol.Core.Runtime.Directive.stop/1`
 
   ## Examples
 
@@ -27,13 +33,10 @@ defmodule Raxol.Agent.Directive do
 
       Directive.shell("ls -la", timeout: 5_000)
       Directive.send_agent("worker-1", {:task, payload})
-      Directive.schedule(1_000, :tick)
-      Directive.spawn(fn -> {:result, expensive_op()} end)
-      Directive.stop()
 
   ## Execution
 
-      Raxol.Agent.Directive.Executor.execute(directive, %{
+      Raxol.Core.Runtime.Directive.Executor.execute(directive, %{
         pid: self(),
         runtime_pid: runtime_pid
       })
@@ -41,16 +44,14 @@ defmodule Raxol.Agent.Directive do
   Result messages arrive at `context.pid` as `{:command_result, payload}`.
   """
 
-  alias __MODULE__.{Async, Schedule, SendAgent, Shell, Spawn, Stop}
+  alias __MODULE__.{Async, SendAgent, Shell}
+  alias Raxol.Core.Runtime.Directive, as: CoreDirective
 
   @type t ::
           Async.t()
-          | Schedule.t()
           | SendAgent.t()
           | Shell.t()
-          | Spawn.t()
-          | Stop.t()
-          | struct()
+          | CoreDirective.t()
 
   defmodule Async do
     @moduledoc """
@@ -98,44 +99,7 @@ defmodule Raxol.Agent.Directive do
     defstruct [:target_id, :message]
   end
 
-  defmodule Schedule do
-    @moduledoc """
-    Send a message after the given delay (in milliseconds) as
-    `{:command_result, payload}`.
-    """
-
-    @type t :: %__MODULE__{interval_ms: non_neg_integer(), payload: term()}
-
-    @enforce_keys [:interval_ms, :payload]
-    defstruct [:interval_ms, :payload]
-  end
-
-  defmodule Spawn do
-    @moduledoc """
-    Spawn a Task that invokes `fun/0` and sends its return value back as
-    `{:command_result, result}`. Use `Async` instead when the task needs
-    to send multiple messages.
-    """
-
-    @type t :: %__MODULE__{fun: (-> any())}
-
-    @enforce_keys [:fun]
-    defstruct [:fun]
-  end
-
-  defmodule Stop do
-    @moduledoc """
-    Signal the runtime to stop. Sends `:quit_runtime` to `context.runtime_pid`.
-    """
-
-    @type t :: %__MODULE__{reason: term()}
-
-    defstruct reason: :normal
-  end
-
-  @doc """
-  Construct an Async directive with a sender-callback function.
-  """
+  @doc "Construct an Async directive with a sender-callback function."
   @spec async((Async.sender() -> any())) :: Async.t()
   def async(fun) when is_function(fun, 1), do: %Async{fun: fun}
 
@@ -152,31 +116,20 @@ defmodule Raxol.Agent.Directive do
     %Shell{command: command, opts: opts}
   end
 
-  @doc """
-  Construct a SendAgent directive.
-  """
+  @doc "Construct a SendAgent directive."
   @spec send_agent(term(), term()) :: SendAgent.t()
   def send_agent(target_id, message),
     do: %SendAgent{target_id: target_id, message: message}
 
-  @doc """
-  Construct a Schedule directive. `interval_ms` must be non-negative.
-  """
-  @spec schedule(non_neg_integer(), term()) :: Schedule.t()
-  def schedule(interval_ms, payload)
-      when is_integer(interval_ms) and interval_ms >= 0 do
-    %Schedule{interval_ms: interval_ms, payload: payload}
-  end
+  @doc "Delegates to `Raxol.Core.Runtime.Directive.schedule/2`."
+  @spec schedule(non_neg_integer(), term()) :: CoreDirective.Schedule.t()
+  defdelegate schedule(interval_ms, payload), to: CoreDirective
 
-  @doc """
-  Construct a Spawn directive with a no-arg function.
-  """
-  @spec spawn((-> any())) :: Spawn.t()
-  def spawn(fun) when is_function(fun, 0), do: %Spawn{fun: fun}
+  @doc "Delegates to `Raxol.Core.Runtime.Directive.spawn_task/1`."
+  @spec spawn((-> any())) :: CoreDirective.Spawn.t()
+  def spawn(fun) when is_function(fun, 0), do: CoreDirective.spawn_task(fun)
 
-  @doc """
-  Construct a Stop directive.
-  """
-  @spec stop(term()) :: Stop.t()
-  def stop(reason \\ :normal), do: %Stop{reason: reason}
+  @doc "Delegates to `Raxol.Core.Runtime.Directive.stop/1`."
+  @spec stop(term()) :: CoreDirective.Stop.t()
+  defdelegate stop(reason \\ :normal), to: CoreDirective
 end

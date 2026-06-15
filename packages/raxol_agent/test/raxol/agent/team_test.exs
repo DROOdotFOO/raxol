@@ -11,14 +11,14 @@ defmodule Raxol.Agent.TeamTest do
     def init(_context), do: %{role: :coordinator, messages: [], dispatched: 0}
 
     def update({:agent_message, from, {:report, data}}, model) do
-      {%{model | messages: [{from, data} | model.messages]}, Command.none()}
+      {%{model | messages: [{from, data} | model.messages]}, []}
     end
 
     def update({:agent_message, _from, {:dispatch_to, worker_id, task}}, model) do
-      {%{model | dispatched: model.dispatched + 1}, [Command.send_agent(worker_id, task)]}
+      {%{model | dispatched: model.dispatched + 1}, [Directive.send_agent(worker_id, task)]}
     end
 
-    def update(_msg, model), do: {model, Command.none()}
+    def update(_msg, model), do: {model, []}
   end
 
   defmodule WorkerAgent do
@@ -27,14 +27,14 @@ defmodule Raxol.Agent.TeamTest do
     def init(_context), do: %{role: :worker, tasks_done: 0, last_task: nil}
 
     def update({:agent_message, _from, {:task, description}}, model) do
-      {%{model | tasks_done: model.tasks_done + 1, last_task: description}, Command.none()}
+      {%{model | tasks_done: model.tasks_done + 1, last_task: description}, []}
     end
 
     def update({:agent_message, _from, :do_task}, model) do
-      {%{model | tasks_done: model.tasks_done + 1}, Command.none()}
+      {%{model | tasks_done: model.tasks_done + 1}, []}
     end
 
-    def update(_msg, model), do: {model, Command.none()}
+    def update(_msg, model), do: {model, []}
   end
 
   setup do

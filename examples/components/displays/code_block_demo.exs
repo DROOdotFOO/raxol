@@ -64,13 +64,13 @@ defmodule CodeBlockDemo do
   def update(message, model) do
     case message do
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{
         type: :key,
         data: %{key: :char, char: "c", ctrl: true}
       } ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "n"}} ->
         next = rem(model.current + 1, length(model.samples))
