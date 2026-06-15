@@ -65,6 +65,26 @@ defmodule Raxol.Workflow.Graph do
     put_node(graph, node)
   end
 
+  @doc """
+  Add a `FunctionNode` with an optional compensation function.
+
+  Convenience for `add_node/3 |> Node.function/3`. The
+  `compensate_fun` runs in reverse order under
+  `failure_policy: :compensate` when the run errors after this node
+  succeeded. It receives the current state and returns
+  `{:ok, new_state} | {:error, reason}`.
+  """
+  @spec add_node(
+          t(),
+          Node.id(),
+          (any() -> any()),
+          (any() -> {:ok, any()} | {:error, any()})
+        ) :: t()
+  def add_node(%__MODULE__{} = graph, id, fun, compensate_fun)
+      when is_function(fun, 1) and is_function(compensate_fun, 1) do
+    put_node(graph, Node.function(id, fun, compensate_fun))
+  end
+
   @doc "Add a static edge from `from` to `to`."
   @spec add_edge(t(), Node.id(), Node.id()) :: t()
   def add_edge(%__MODULE__{} = graph, from, to)
