@@ -44,4 +44,27 @@ defmodule Raxol.Workflow.Compiled do
   def invoke(%__MODULE__{} = compiled, initial_state, opts \\ []) do
     Raxol.Workflow.Runtime.invoke(compiled, initial_state, opts)
   end
+
+  @doc """
+  Spawn the run in a background process; return an immediate handle.
+
+  Delegates to `Raxol.Workflow.Async.async_invoke/3`. See that module
+  for the returned handle shape and the supported `opts`.
+  """
+  @spec async_invoke(t(), any(), keyword()) ::
+          {:ok, %{run_id: binary(), pid: pid(), ref: reference()}}
+  def async_invoke(%__MODULE__{} = compiled, initial_state, opts \\ []) do
+    Raxol.Workflow.Async.async_invoke(compiled, initial_state, opts)
+  end
+
+  @doc """
+  Return a lazy `Stream` of `Raxol.Core.Events.CloudEvent` structs
+  emitted by the run.
+
+  Delegates to `Raxol.Workflow.Async.stream_events/3`.
+  """
+  @spec stream_events(t(), any(), keyword()) :: Enumerable.t()
+  def stream_events(%__MODULE__{} = compiled, initial_state, opts \\ []) do
+    Raxol.Workflow.Async.stream_events(compiled, initial_state, opts)
+  end
 end

@@ -47,7 +47,7 @@ defmodule Raxol.Workflow.Runtime do
   """
   @spec invoke(Compiled.t(), any(), keyword()) :: result()
   def invoke(%Compiled{} = compiled, initial_state, opts \\ []) do
-    run_id = generate_run_id()
+    run_id = Keyword.get_lazy(opts, :run_id, &generate_run_id/0)
     deadline_us = monotonic_us() + resolve_timeout(opts, compiled) * 1_000
 
     _ = TraceContext.start_trace()
@@ -426,7 +426,9 @@ defmodule Raxol.Workflow.Runtime do
 
   # --- Misc ---
 
-  defp generate_run_id do
+  @doc "Generate a fresh 16-character hex run id."
+  @spec generate_run_id() :: binary()
+  def generate_run_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
 
