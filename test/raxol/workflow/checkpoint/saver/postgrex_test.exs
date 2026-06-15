@@ -148,8 +148,9 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
         )
 
       opts ->
-        {:ok, conn} = Postgrex.start_link(opts)
-        conn
+        # start_supervised so the connection survives the test process
+        # exit and stays alive for the test's on_exit cleanup callbacks.
+        start_supervised!({Postgrex, opts})
     end
   end
 
