@@ -42,6 +42,7 @@ defmodule Raxol.Agent.PermissionHook do
 
   @behaviour Raxol.Agent.CommandHook
 
+  alias Raxol.Agent.Directive
   alias Raxol.Core.Runtime.Command
 
   @type mode ::
@@ -51,7 +52,8 @@ defmodule Raxol.Agent.PermissionHook do
           | :full_access
           | :allow
 
-  @type prompter :: (Command.t(), map() -> boolean())
+  @type effect :: Command.t() | Directive.t()
+  @type prompter :: (effect(), map() -> boolean())
 
   @type t :: %__MODULE__{
           mode: mode(),
@@ -116,14 +118,29 @@ defmodule Raxol.Agent.PermissionHook do
   @doc """
   Check whether a command is authorized under the given policy.
   """
-  @spec authorize(Command.t(), t(), map()) :: :allow | {:deny, String.t()}
+  @spec authorize(effect(), t(), map()) :: :allow | {:deny, String.t()}
   def authorize(%Command{type: type}, %__MODULE__{} = policy, context) do
+    check_type(type, policy, context)
+  end
+
+  def authorize(directive, %__MODULE__{} = policy, context) when is_struct(directive) do
+    check_type(effect_type(directive), policy, context)
+  end
+
+  defp check_type(type, %__MODULE__{} = policy, context) do
     if MapSet.member?(policy.denied_types, type) do
       maybe_prompt(type, policy, context)
     else
       :allow
     end
   end
+
+  defp effect_type(%Directive.Async{}), do: :async
+  defp effect_type(%Directive.Shell{}), do: :shell
+  defp effect_type(%Directive.SendAgent{}), do: :send_agent
+  defp effect_type(%Directive.Schedule{}), do: :delay
+  defp effect_type(%Directive.Spawn{}), do: :task
+  defp effect_type(%Directive.Stop{}), do: :quit
 
   @doc """
   Returns the minimum permission mode required for a command type.

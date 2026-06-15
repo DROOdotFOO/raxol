@@ -18,14 +18,14 @@ defmodule Raxol.Agent do
         end
 
         def update({:agent_message, _from, {:analyze, file}}, model) do
-          {%{model | status: :working}, Command.async(fn sender ->
+          {%{model | status: :working}, Directive.async(fn sender ->
             result = do_analysis(file)
             sender.({:analysis_done, result})
           end)}
         end
 
         def update({:command_result, {:analysis_done, result}}, model) do
-          {%{model | findings: [result | model.findings], status: :idle}, Command.none()}
+          {%{model | findings: [result | model.findings], status: :idle}, []}
         end
       end
   """
@@ -35,11 +35,12 @@ defmodule Raxol.Agent do
       @behaviour Raxol.Core.Runtime.Application
 
       import Raxol.Core.Renderer.View, except: [view: 1]
+      alias Raxol.Agent.Directive
       alias Raxol.Core.Events.Event
       alias Raxol.Core.Runtime.Command
 
       def init(_), do: %{}
-      def update(_, state), do: {state, Command.none()}
+      def update(_, state), do: {state, []}
       def view(_model), do: nil
       def subscribe(_), do: []
       def subscriptions(_), do: []
@@ -110,13 +111,13 @@ defmodule Raxol.Agent do
                      available_actions: 0
 
       @doc false
-      def async(fun), do: Command.async(fun)
+      def async(fun), do: Directive.async(fun)
 
       @doc false
-      def shell(command, opts \\ []), do: Command.shell(command, opts)
+      def shell(command, opts \\ []), do: Directive.shell(command, opts)
 
       @doc false
-      def send_agent(target, message), do: Command.send_agent(target, message)
+      def send_agent(target, message), do: Directive.send_agent(target, message)
 
       @doc "Run an action synchronously. Returns `{:ok, result}` or `{:error, reason}`."
       @spec run_action(module(), map(), map()) ::
@@ -126,9 +127,9 @@ defmodule Raxol.Agent do
       end
 
       @doc "Run an action asynchronously. Result arrives as `{:command_result, {:action_result, module, result}}`."
-      @spec run_action_async(module(), map(), map()) :: Command.t()
+      @spec run_action_async(module(), map(), map()) :: Directive.Async.t()
       def run_action_async(action_module, params, context \\ %{}) do
-        Command.async(fn sender ->
+        Directive.async(fn sender ->
           case action_module.call(params, context) do
             {:ok, result} ->
               sender.({:action_result, action_module, result})
@@ -143,9 +144,9 @@ defmodule Raxol.Agent do
       end
 
       @doc "Run a pipeline asynchronously. Result arrives as `{:command_result, {:pipeline_result, result}}`."
-      @spec run_pipeline_async([module()], map(), map()) :: Command.t()
+      @spec run_pipeline_async([module()], map(), map()) :: Directive.Async.t()
       def run_pipeline_async(steps, params, context \\ %{}) do
-        Command.async(fn sender ->
+        Directive.async(fn sender ->
           case Raxol.Agent.Action.Pipeline.run(steps, params, context) do
             {:ok, result, _commands} ->
               sender.({:pipeline_result, result})

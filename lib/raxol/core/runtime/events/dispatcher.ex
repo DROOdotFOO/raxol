@@ -361,6 +361,21 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
 
   @impl true
   def handle_manager_cast(
+        {:dispatch, {:agent_message, _from, _payload} = msg, metadata},
+        state
+      )
+      when is_map(metadata) do
+    apply_causation(metadata)
+
+    Raxol.Core.Runtime.Log.debug(
+      "[Dispatcher] handle_cast :dispatch agent_message: #{inspect(msg)}"
+    )
+
+    dispatch_raw_message(msg, state)
+  end
+
+  @impl true
+  def handle_manager_cast(
         {:dispatch, {:agent_message, _from, _payload} = msg},
         state
       ) do
@@ -849,4 +864,10 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   end
 
   defp test_env?, do: Code.ensure_loaded?(Mix) and Mix.env() == :test
+
+  defp apply_causation(%{causation_id: id}) when is_binary(id) do
+    Raxol.Core.Telemetry.TraceContext.set_causation(id)
+  end
+
+  defp apply_causation(_), do: :ok
 end

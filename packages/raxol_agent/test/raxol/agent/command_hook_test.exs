@@ -193,4 +193,90 @@ defmodule Raxol.Agent.CommandHookTest do
       assert {"echo modified: ls", _opts} = wrapped.data
     end
   end
+
+  alias Raxol.Agent.Directive
+  alias Raxol.Agent.Directive.{Async, SendAgent, Shell}
+
+  defmodule DenyDirectiveShellHook do
+    @behaviour CommandHook
+
+    @impl true
+    def pre_execute(%Shell{}, _context), do: {:deny, :shell_not_allowed}
+    def pre_execute(effect, _context), do: {:ok, effect}
+  end
+
+  defmodule DirectiveAuditHook do
+    @behaviour CommandHook
+
+    @impl true
+    def pre_execute(effect, context) do
+      send(context.test_pid, {:pre, struct_tag(effect)})
+      {:ok, effect}
+    end
+
+    @impl true
+    def post_execute(effect, result, context) do
+      send(context.test_pid, {:post, struct_tag(effect), result})
+      {:ok, result}
+    end
+
+    defp struct_tag(%Async{}), do: :async
+    defp struct_tag(%Shell{}), do: :shell
+    defp struct_tag(%SendAgent{}), do: :send_agent
+  end
+
+  describe "wrap_commands/3 with directives" do
+    test "non-hookable directives (Schedule, Spawn) pass through" do
+      effects = [Directive.schedule(50, :tick), Directive.spawn(fn -> :ok end)]
+      assert effects == CommandHook.wrap_commands(effects, [DenyDirectiveShellHook], @context)
+    end
+
+    test "denied shell directive becomes async denial" do
+      effects = [Directive.shell("rm -rf /")]
+      [wrapped] = CommandHook.wrap_commands(effects, [DenyDirectiveShellHook], @context)
+
+      assert %Async{} = wrapped
+
+      sender = fn msg -> send(self(), {:sent, msg}) end
+      wrapped.fun.(sender)
+
+      assert_received {:sent, {:command_denied, :shell, :shell_not_allowed}}
+    end
+
+    test "allowed async directive executes with post-hooks" do
+      original = Directive.async(fn sender -> sender.(:original_result) end)
+      context = Map.put(@context, :test_pid, self())
+
+      [wrapped] = CommandHook.wrap_commands([original], [DirectiveAuditHook], context)
+
+      assert %Async{} = wrapped
+
+      sender = fn msg -> send(self(), {:sent, msg}) end
+      wrapped.fun.(sender)
+
+      assert_received {:pre, :async}
+      assert_received {:post, :async, :original_result}
+      assert_received {:sent, :original_result}
+    end
+
+    test "shell directive passes through pre-hooks but no post-hook wrap" do
+      effects = [Directive.shell("ls")]
+      context = Map.put(@context, :test_pid, self())
+
+      [wrapped] = CommandHook.wrap_commands(effects, [DirectiveAuditHook], context)
+
+      assert %Shell{command: "ls"} = wrapped
+      assert_received {:pre, :shell}
+    end
+
+    test "send_agent directive passes through pre-hooks" do
+      effects = [Directive.send_agent(:target, :hello)]
+      context = Map.put(@context, :test_pid, self())
+
+      [wrapped] = CommandHook.wrap_commands(effects, [DirectiveAuditHook], context)
+
+      assert %SendAgent{target_id: :target, message: :hello} = wrapped
+      assert_received {:pre, :send_agent}
+    end
+  end
 end

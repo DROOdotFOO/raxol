@@ -41,14 +41,18 @@ defmodule Raxol.Agent.CommandHook do
   - `{:ok, result}` -- post-hook, optionally modify result
   """
 
+  alias Raxol.Agent.Directive
+  alias Raxol.Agent.Directive.{Async, SendAgent, Shell}
   alias Raxol.Core.Runtime.Command
+
+  @type effect :: Command.t() | Directive.t()
 
   @type hook_context :: %{
           agent_id: term(),
           agent_module: module()
         }
 
-  @type pre_result :: {:ok, Command.t()} | {:deny, term()}
+  @type pre_result :: {:ok, effect()} | {:deny, term()}
   @type post_result :: {:ok, term()} | {:error, term()}
 
   @doc """
@@ -57,7 +61,7 @@ defmodule Raxol.Agent.CommandHook do
   Return `{:ok, command}` to allow (optionally modify the command),
   or `{:deny, reason}` to block execution.
   """
-  @callback pre_execute(command :: Command.t(), context :: hook_context()) ::
+  @callback pre_execute(command :: effect(), context :: hook_context()) ::
               pre_result()
 
   @doc """
@@ -66,7 +70,7 @@ defmodule Raxol.Agent.CommandHook do
   Return `{:ok, result}` to pass through (optionally modify the result).
   """
   @callback post_execute(
-              command :: Command.t(),
+              command :: effect(),
               result :: term(),
               context :: hook_context()
             ) :: post_result()
@@ -79,7 +83,7 @@ defmodule Raxol.Agent.CommandHook do
   Hooks are evaluated in order. The first `:deny` short-circuits the chain.
   Each hook may modify the command before passing it to the next.
   """
-  @spec run_pre_hooks([module()], Command.t(), hook_context()) :: pre_result()
+  @spec run_pre_hooks([module()], effect(), hook_context()) :: pre_result()
   def run_pre_hooks([], command, _context), do: {:ok, command}
 
   def run_pre_hooks([hook | rest], command, context) do
@@ -94,7 +98,7 @@ defmodule Raxol.Agent.CommandHook do
 
   Hooks are evaluated in order. Each hook may modify the result.
   """
-  @spec run_post_hooks([module()], Command.t(), term(), hook_context()) ::
+  @spec run_post_hooks([module()], effect(), term(), hook_context()) ::
           post_result()
   def run_post_hooks([], _command, result, _context), do: {:ok, result}
 
@@ -119,73 +123,103 @@ defmodule Raxol.Agent.CommandHook do
   Denied commands are replaced with a `:none` command that sends a
   `{:command_denied, type, reason}` result back to the agent.
   """
-  @spec wrap_commands([Command.t()], [module()], hook_context()) :: [
-          Command.t()
-        ]
+  @spec wrap_commands([effect()], [module()], hook_context()) :: [effect()]
   def wrap_commands(commands, [], _context), do: commands
 
   def wrap_commands(commands, hooks, context) do
     Enum.map(commands, &maybe_wrap(&1, hooks, context))
   end
 
-  @hookable_types [:shell, :async, :system, :send_agent, :task]
+  @hookable_command_types [:shell, :async, :system, :send_agent, :task]
 
   defp maybe_wrap(%Command{type: type} = command, hooks, context)
-       when type in @hookable_types do
-    case run_pre_hooks(hooks, command, context) do
-      {:ok, command} ->
-        wrap_with_post_hooks(command, hooks, context)
+       when type in @hookable_command_types do
+    apply_hooks(command, hooks, context)
+  end
 
-      {:deny, reason} ->
-        Command.new(:async, fn sender ->
-          sender.({:command_denied, type, reason})
-        end)
+  defp maybe_wrap(%Async{} = directive, hooks, context),
+    do: apply_hooks(directive, hooks, context)
+
+  defp maybe_wrap(%Shell{} = directive, hooks, context),
+    do: apply_hooks(directive, hooks, context)
+
+  defp maybe_wrap(%SendAgent{} = directive, hooks, context),
+    do: apply_hooks(directive, hooks, context)
+
+  defp maybe_wrap(effect, _hooks, _context), do: effect
+
+  defp apply_hooks(effect, hooks, context) do
+    case run_pre_hooks(hooks, effect, context) do
+      {:ok, effect} -> wrap_with_post_hooks(effect, hooks, context)
+      {:deny, reason} -> build_denial(effect, reason)
     end
   end
 
-  defp maybe_wrap(command, _hooks, _context), do: command
+  defp build_denial(%Command{type: type}, reason) do
+    Command.new(:async, fn sender ->
+      sender.({:command_denied, type, reason})
+    end)
+  end
 
-  defp wrap_with_post_hooks(command, hooks, context) do
+  defp build_denial(directive, reason) do
+    type = effect_type(directive)
+
+    Directive.async(fn sender ->
+      sender.({:command_denied, type, reason})
+    end)
+  end
+
+  defp effect_type(%Async{}), do: :async
+  defp effect_type(%Shell{}), do: :shell
+  defp effect_type(%SendAgent{}), do: :send_agent
+
+  defp wrap_with_post_hooks(effect, hooks, context) do
     if Enum.any?(hooks, &function_exported?(&1, :post_execute, 3)) do
-      case command.type do
-        :async ->
-          original_fun = command.data
-
-          wrapped_fun = fn sender ->
-            wrapped_sender = fn result ->
-              case run_post_hooks(hooks, command, result, context) do
-                {:ok, modified_result} -> sender.(modified_result)
-                {:error, reason} -> sender.({:hook_error, reason})
-              end
-            end
-
-            original_fun.(wrapped_sender)
-          end
-
-          %{command | data: wrapped_fun}
-
-        :task ->
-          original_fun = command.data
-
-          wrapped_fun = fn ->
-            result = original_fun.()
-
-            case run_post_hooks(hooks, command, result, context) do
-              {:ok, modified_result} -> modified_result
-              {:error, reason} -> {:hook_error, reason}
-            end
-          end
-
-          %{command | data: wrapped_fun}
-
-        _ ->
-          # :shell, :system, :send_agent -- post-hooks can't easily wrap
-          # these since they use Port/GenServer internally. Pre-hooks
-          # are sufficient for these types.
-          command
-      end
+      do_wrap_post(effect, hooks, context)
     else
-      command
+      effect
+    end
+  end
+
+  defp do_wrap_post(%Command{type: :async} = command, hooks, context) do
+    original_fun = command.data
+    %{command | data: wrap_sender_fun(original_fun, command, hooks, context)}
+  end
+
+  defp do_wrap_post(%Command{type: :task} = command, hooks, context) do
+    original_fun = command.data
+    %{command | data: wrap_task_fun(original_fun, command, hooks, context)}
+  end
+
+  defp do_wrap_post(%Async{fun: fun} = directive, hooks, context) do
+    %{directive | fun: wrap_sender_fun(fun, directive, hooks, context)}
+  end
+
+  defp do_wrap_post(effect, _hooks, _context), do: effect
+
+  defp wrap_sender_fun(original_fun, effect, hooks, context) do
+    fn sender ->
+      original_fun.(build_wrapped_sender(sender, effect, hooks, context))
+    end
+  end
+
+  defp build_wrapped_sender(sender, effect, hooks, context) do
+    fn result ->
+      case run_post_hooks(hooks, effect, result, context) do
+        {:ok, modified} -> sender.(modified)
+        {:error, reason} -> sender.({:hook_error, reason})
+      end
+    end
+  end
+
+  defp wrap_task_fun(original_fun, effect, hooks, context) do
+    fn ->
+      result = original_fun.()
+
+      case run_post_hooks(hooks, effect, result, context) do
+        {:ok, modified} -> modified
+        {:error, reason} -> {:hook_error, reason}
+      end
     end
   end
 end
