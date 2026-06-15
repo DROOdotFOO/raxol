@@ -88,7 +88,7 @@ jobs:
         otp-version: ${{ matrix.otp }}
 
     - name: Cache dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           _build
@@ -100,7 +100,7 @@ jobs:
           deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-
 
     - name: Cache PLT files
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: priv/plts
         key: plt-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('mix.lock') }}
@@ -200,7 +200,7 @@ jobs:
     - name: Download cached baselines
       if: github.event_name == 'push'
       continue-on-error: true
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: regression/performance/baselines
         key: performance-baseline-${{ github.ref_name }}-${{ github.sha }}
@@ -221,7 +221,7 @@ jobs:
 
     - name: Cache performance baselines
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: regression/performance/baselines
         key: performance-baseline-${{ github.ref_name }}-${{ github.sha }}
@@ -259,7 +259,7 @@ jobs:
         otp-version: ${{ matrix.otp }}
 
     - name: Cache dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           _build
@@ -394,7 +394,7 @@ jobs:
     - name: Download cached memory baselines
       if: github.event_name == 'push'
       continue-on-error: true
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: regression/memory/baselines
         key: memory-baseline-${{ github.ref_name }}-${{ matrix.scenario }}-${{ github.sha }}
@@ -415,7 +415,7 @@ jobs:
 
     - name: Cache memory baselines
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: regression/memory/baselines
         key: memory-baseline-${{ github.ref_name }}-${{ matrix.scenario }}-${{ github.sha }}
