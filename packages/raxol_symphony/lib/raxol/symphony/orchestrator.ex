@@ -40,8 +40,10 @@ defmodule Raxol.Symphony.Orchestrator do
   alias Raxol.Symphony.Orchestrator.State
   alias Raxol.Symphony.Runner
   alias Raxol.Symphony.Tracker
+  alias Raxol.Symphony.Workflow.GraphAdapter
   alias Raxol.Symphony.WorkflowStore
   alias Raxol.Symphony.Workspace
+  alias Raxol.Workflow.Compiled, as: WorkflowCompiled
 
   # -- Client API -------------------------------------------------------------
 
@@ -99,9 +101,14 @@ defmodule Raxol.Symphony.Orchestrator do
 
     config =
       case {Keyword.get(opts, :config), workflow_store} do
-        {%_{} = cfg, _} -> cfg
-        {nil, store} when not is_nil(store) -> WorkflowStore.get(store)
-        {nil, nil} -> raise ArgumentError, ":config or :workflow_store is required"
+        {%_{} = cfg, _} ->
+          cfg
+
+        {nil, store} when not is_nil(store) ->
+          WorkflowStore.get(store)
+
+        {nil, nil} ->
+          raise ArgumentError, ":config or :workflow_store is required"
       end
 
     runner_module = Keyword.get(opts, :runner_module)
@@ -181,7 +188,10 @@ defmodule Raxol.Symphony.Orchestrator do
     {:noreply, new_state}
   end
 
-  def handle_manager_info({:DOWN, ref, :process, _pid, reason}, %State{} = state) do
+  def handle_manager_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %State{} = state
+      ) do
     case find_running_by_ref(state, ref) do
       nil ->
         # Maybe a listener; drop it from listeners.
@@ -209,7 +219,10 @@ defmodule Raxol.Symphony.Orchestrator do
         |> notify_listeners(:tick_completed)
 
       {:error, reason, state} ->
-        Logger.warning("symphony.orchestrator.preflight_failed reason=#{inspect(reason)}")
+        Logger.warning(
+          "symphony.orchestrator.preflight_failed reason=#{inspect(reason)}"
+        )
+
         notify_listeners(state, {:preflight_failed, reason})
     end
   end
@@ -220,20 +233,25 @@ defmodule Raxol.Symphony.Orchestrator do
   # in-memory config is preserved and dispatch is skipped this tick.
   defp preflight(%State{workflow_store: nil} = state) do
     case Schema.validate(state.config, validate_opts(state)) do
-      :ok -> {:ok, %State{state | last_preflight_error: nil}}
-      {:error, reason} -> {:error, reason, %State{state | last_preflight_error: reason}}
+      :ok ->
+        {:ok, %State{state | last_preflight_error: nil}}
+
+      {:error, reason} ->
+        {:error, reason, %State{state | last_preflight_error: reason}}
     end
   end
 
   defp preflight(%State{workflow_store: store} = state) do
     case WorkflowStore.get(store) do
       nil ->
-        {:error, :no_workflow_config, %State{state | last_preflight_error: :no_workflow_config}}
+        {:error, :no_workflow_config,
+         %State{state | last_preflight_error: :no_workflow_config}}
 
       latest_config ->
         case Schema.validate(latest_config, validate_opts(state)) do
           :ok ->
-            {:ok, %State{state | config: latest_config, last_preflight_error: nil}}
+            {:ok,
+             %State{state | config: latest_config, last_preflight_error: nil}}
 
           {:error, reason} ->
             {:error, reason, %State{state | last_preflight_error: reason}}
@@ -250,7 +268,9 @@ defmodule Raxol.Symphony.Orchestrator do
   defp dispatch_candidates(%State{} = state) do
     case Tracker.fetch_candidate_issues(state.config) do
       {:ok, issues} ->
-        eligible = Candidate.eligible(issues, state.config, state.running, state.claimed)
+        eligible =
+          Candidate.eligible(issues, state.config, state.running, state.claimed)
+
         Enum.reduce(eligible, state, &dispatch_issue(&2, &1, _attempt = nil))
 
       {:error, _reason} ->
@@ -260,7 +280,8 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp dispatch_issue(%State{} = state, %Issue{} = issue, attempt) do
     with {:ok, runner_mod} <- runner_module(state),
-         {:ok, %{path: workspace_path}} <- Workspace.ensure(state.config, issue.identifier) do
+         {:ok, %{path: workspace_path}} <-
+           Workspace.ensure(state.config, issue.identifier) do
       do_dispatch_issue(state, issue, attempt, runner_mod, workspace_path)
     else
       {:error, reason} ->
@@ -275,7 +296,10 @@ defmodule Raxol.Symphony.Orchestrator do
   defp do_dispatch_issue(state, issue, attempt, runner_mod, workspace_path) do
     capture_pid = maybe_start_capture(state, issue, attempt, workspace_path)
     task = spawn_worker_task(state, runner_mod, issue, attempt, workspace_path)
-    entry = build_running_entry(issue, attempt, workspace_path, task, capture_pid)
+
+    entry =
+      build_running_entry(issue, attempt, workspace_path, task, capture_pid)
+
     register_running(state, issue, entry)
   end
 
@@ -301,28 +325,102 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp maybe_start_capture(_state, _issue, _attempt, _workspace_path), do: nil
 
-  defp spawn_worker_task(%State{} = state, runner_mod, %Issue{} = issue, attempt, workspace_path) do
+  defp spawn_worker_task(
+         %State{} = state,
+         runner_mod,
+         %Issue{} = issue,
+         attempt,
+         workspace_path
+       ) do
     parent = self()
     config = state.config
 
     Task.Supervisor.async_nolink(
       task_supervisor(state),
       fn ->
-        runner_opts = [
-          parent: parent,
-          attempt: attempt,
-          workspace_path: workspace_path
-        ]
-
-        case runner_mod.run(issue, config, runner_opts) do
-          :ok -> :ok
-          {:error, reason} -> exit({:runner_error, reason})
-        end
+        run_worker_payload(
+          config.workflow_mode,
+          config,
+          runner_mod,
+          issue,
+          attempt,
+          workspace_path,
+          parent
+        )
       end
     )
   end
 
-  defp build_running_entry(%Issue{} = issue, attempt, workspace_path, task, capture_pid) do
+  defp run_worker_payload(
+         :graph,
+         config,
+         runner_mod,
+         issue,
+         attempt,
+         workspace_path,
+         parent
+       ) do
+    case GraphAdapter.from_workflow([]) do
+      {:ok, compiled} ->
+        state =
+          GraphAdapter.initial_state(
+            config: config,
+            runner_module: runner_mod,
+            candidates: [issue],
+            candidate: issue,
+            parent_pid: parent,
+            attempt: attempt,
+            workspace_path: workspace_path
+          )
+
+        graph_outcome(WorkflowCompiled.invoke(compiled, state))
+
+      {:error, reason} ->
+        exit({:graph_compile_failed, reason})
+    end
+  end
+
+  defp run_worker_payload(
+         _mode,
+         config,
+         runner_mod,
+         issue,
+         attempt,
+         workspace_path,
+         parent
+       ) do
+    runner_opts = [
+      parent: parent,
+      attempt: attempt,
+      workspace_path: workspace_path
+    ]
+
+    case runner_mod.run(issue, config, runner_opts) do
+      :ok -> :ok
+      {:error, reason} -> exit({:runner_error, reason})
+    end
+  end
+
+  defp graph_outcome({:ok, %{run_result: :ok}, _meta}), do: :ok
+
+  defp graph_outcome({:ok, %{run_result: {:error, reason}}, _meta}),
+    do: exit({:runner_error, reason})
+
+  defp graph_outcome({:ok, _final, _meta}), do: :ok
+
+  defp graph_outcome({:error, reason, _state}),
+    do: exit({:graph_runtime_error, reason})
+
+  defp graph_outcome({:interrupted, _run_id, _state, value}),
+    do: exit({:graph_interrupted, value})
+
+  defp build_running_entry(
+         %Issue{} = issue,
+         attempt,
+         workspace_path,
+         task,
+         capture_pid
+       ) do
     %{
       issue: issue,
       attempt: attempt,
@@ -405,7 +503,9 @@ defmodule Raxol.Symphony.Orchestrator do
   end
 
   defp record_runtime(%State{} = state, entry) do
-    elapsed_seconds = (System.monotonic_time(:millisecond) - entry.started_at) / 1_000
+    elapsed_seconds =
+      (System.monotonic_time(:millisecond) - entry.started_at) / 1_000
+
     totals = state.codex_totals
     new_totals = Map.update!(totals, :seconds_running, &(&1 + elapsed_seconds))
     %State{state | codex_totals: new_totals}
@@ -417,12 +517,28 @@ defmodule Raxol.Symphony.Orchestrator do
     schedule_retry(state, issue, attempt, Retry.continuation_delay_ms(), nil)
   end
 
-  defp schedule_failure_retry(%State{} = state, %Issue{} = issue, attempt, error) do
-    delay = Retry.failure_delay_ms(max(attempt, 1), state.config.agent.max_retry_backoff_ms)
+  defp schedule_failure_retry(
+         %State{} = state,
+         %Issue{} = issue,
+         attempt,
+         error
+       ) do
+    delay =
+      Retry.failure_delay_ms(
+        max(attempt, 1),
+        state.config.agent.max_retry_backoff_ms
+      )
+
     schedule_retry(state, issue, attempt, delay, error)
   end
 
-  defp schedule_retry(%State{} = state, %Issue{} = issue, attempt, delay_ms, error) do
+  defp schedule_retry(
+         %State{} = state,
+         %Issue{} = issue,
+         attempt,
+         delay_ms,
+         error
+       ) do
     state = cancel_retry(state, issue.id)
     timer_ref = Process.send_after(self(), {:retry_fire, issue.id}, delay_ms)
     due_at_ms = System.monotonic_time(:millisecond) + delay_ms
@@ -450,10 +566,17 @@ defmodule Raxol.Symphony.Orchestrator do
 
       %{timer_ref: ref} when is_reference(ref) ->
         Process.cancel_timer(ref)
-        %State{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}
+
+        %State{
+          state
+          | retry_attempts: Map.delete(state.retry_attempts, issue_id)
+        }
 
       _ ->
-        %State{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}
+        %State{
+          state
+          | retry_attempts: Map.delete(state.retry_attempts, issue_id)
+        }
     end
   end
 
@@ -465,7 +588,10 @@ defmodule Raxol.Symphony.Orchestrator do
   end
 
   defp retry_with_fresh_state(%State{} = state, issue_id, retry_entry) do
-    state = %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}
+    state = %{
+      state
+      | retry_attempts: Map.delete(state.retry_attempts, issue_id)
+    }
 
     case Tracker.fetch_issue_states_by_ids(state.config, [issue_id]) do
       {:ok, [%Issue{} = issue]} ->
@@ -479,7 +605,11 @@ defmodule Raxol.Symphony.Orchestrator do
     end
   end
 
-  defp retry_with_refreshed_issue(%State{} = state, %Issue{} = issue, retry_entry) do
+  defp retry_with_refreshed_issue(
+         %State{} = state,
+         %Issue{} = issue,
+         retry_entry
+       ) do
     cond do
       Issue.terminal?(issue, state.config.tracker.terminal_states) ->
         %{state | claimed: MapSet.delete(state.claimed, issue.id)}
@@ -524,11 +654,21 @@ defmodule Raxol.Symphony.Orchestrator do
       state
     else
       now = System.monotonic_time(:millisecond)
-      Enum.reduce(state.running, state, &maybe_terminate_stalled(&1, &2, now, stall_timeout))
+
+      Enum.reduce(
+        state.running,
+        state,
+        &maybe_terminate_stalled(&1, &2, now, stall_timeout)
+      )
     end
   end
 
-  defp maybe_terminate_stalled({issue_id, entry}, %State{} = acc, now, stall_timeout) do
+  defp maybe_terminate_stalled(
+         {issue_id, entry},
+         %State{} = acc,
+         now,
+         stall_timeout
+       ) do
     last = entry.last_event_at_ms || entry.started_at
 
     if now - last > stall_timeout do
@@ -546,7 +686,13 @@ defmodule Raxol.Symphony.Orchestrator do
     Process.demonitor(entry.worker_ref, [:flush])
     Process.exit(entry.worker_pid, :kill)
     new_acc = remove_running(acc, issue_id, :stalled)
-    schedule_failure_retry(new_acc, entry.issue, (entry.attempt || 0) + 1, :stalled)
+
+    schedule_failure_retry(
+      new_acc,
+      entry.issue,
+      (entry.attempt || 0) + 1,
+      :stalled
+    )
   end
 
   defp reconcile_tracker_states(%State{} = state) do
@@ -615,10 +761,17 @@ defmodule Raxol.Symphony.Orchestrator do
   defp update_entry_from_event(entry, event) do
     %{
       entry
-      | last_event: Map.get(event, :event) || Map.get(event, "event") || entry.last_event,
-        last_message: Map.get(event, :message) || Map.get(event, "message") || entry.last_message,
+      | last_event:
+          Map.get(event, :event) || Map.get(event, "event") || entry.last_event,
+        last_message:
+          Map.get(event, :message) || Map.get(event, "message") ||
+            entry.last_message,
         last_event_at_ms: System.monotonic_time(:millisecond),
-        tokens: merge_tokens(entry.tokens, Map.get(event, :usage) || Map.get(event, "usage")),
+        tokens:
+          merge_tokens(
+            entry.tokens,
+            Map.get(event, :usage) || Map.get(event, "usage")
+          ),
         turn_count: entry.turn_count + maybe_turn_increment(event)
     }
   end
@@ -640,7 +793,8 @@ defmodule Raxol.Symphony.Orchestrator do
           (Map.get(usage, :input_tokens) || Map.get(usage, "input_tokens") || 0),
       output_tokens:
         current.output_tokens +
-          (Map.get(usage, :output_tokens) || Map.get(usage, "output_tokens") || 0),
+          (Map.get(usage, :output_tokens) || Map.get(usage, "output_tokens") ||
+             0),
       total_tokens:
         current.total_tokens +
           (Map.get(usage, :total_tokens) || Map.get(usage, "total_tokens") || 0)
@@ -725,10 +879,14 @@ defmodule Raxol.Symphony.Orchestrator do
     %State{state | tick_timer_ref: ref}
   end
 
-  defp runner_module(%State{runner_module: nil, config: config}), do: Runner.resolve(config)
+  defp runner_module(%State{runner_module: nil, config: config}),
+    do: Runner.resolve(config)
+
   defp runner_module(%State{runner_module: mod}), do: {:ok, mod}
 
-  defp task_supervisor(%State{task_supervisor: nil}), do: Raxol.Symphony.TaskSupervisor
+  defp task_supervisor(%State{task_supervisor: nil}),
+    do: Raxol.Symphony.TaskSupervisor
+
   defp task_supervisor(%State{task_supervisor: sup}), do: sup
 
   defp find_running_by_ref(%State{running: running}, ref) do

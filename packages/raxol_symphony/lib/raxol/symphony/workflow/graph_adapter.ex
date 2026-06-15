@@ -42,12 +42,18 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
       `Raxol.Symphony.Tracker.fetch_candidate_issues/1` semantics; the
       default uses the config's tracker kind.
 
-  ## Out of scope (deferred to a follow-up PR)
+  ## Orchestrator integration
 
-  - Wiring `workflow_mode: :graph` into the `Orchestrator` GenServer.
-    This adapter ships the translation function; the orchestrator
-    integration is opt-in via a separate PR so the default prompt-only
-    behavior stays unchanged.
+  Setting `workflow_mode: :graph` in the workflow config flips the
+  `Raxol.Symphony.Orchestrator` worker payload to invoke through this
+  adapter. The orchestrator pre-seeds `:candidates`, `:candidate`,
+  `:parent_pid`, `:attempt`, and `:workspace_path` in the initial
+  state; `tracker_poll` short-circuits when `:candidates` is already
+  set so the orchestrator's eligibility decision is not overwritten
+  by a second tracker round-trip.
+
+  ## Out of scope (deferred to follow-up PRs)
+
   - Interrupt-based pauses on runner dispatch. The runner is invoked
     synchronously (`Runner.run/3` returns `:ok | {:error, _}`), so this
     PR does not exercise `Workflow.interrupt/1`. A follow-up can wrap
@@ -79,7 +85,10 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
           optional(:run_result) => :ok | {:error, term()},
           optional(:evidence) => Evidence.t(),
           optional(:completed_at) => DateTime.t(),
-          optional(:runner_module) => module() | nil
+          optional(:runner_module) => module() | nil,
+          optional(:parent_pid) => pid(),
+          optional(:attempt) => non_neg_integer() | nil,
+          optional(:workspace_path) => Path.t()
         }
 
   @doc """
@@ -108,7 +117,12 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
 
   defp compile_opts(opts) do
     opts
-    |> Keyword.take([:saver, :failure_policy, :step_timeout_ms, :run_timeout_ms])
+    |> Keyword.take([
+      :saver,
+      :failure_policy,
+      :step_timeout_ms,
+      :run_timeout_ms
+    ])
   end
 
   @doc """
@@ -120,13 +134,32 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
   """
   @spec initial_state(keyword()) :: state()
   def initial_state(opts) do
-    %{
+    base = %{
       config: Keyword.fetch!(opts, :config),
       runner_module: Keyword.get(opts, :runner_module)
     }
+
+    base
+    |> maybe_put(:candidates, Keyword.get(opts, :candidates))
+    |> maybe_put(:candidate, Keyword.get(opts, :candidate))
+    |> maybe_put(:parent_pid, Keyword.get(opts, :parent_pid))
+    |> maybe_put(:attempt, Keyword.get(opts, :attempt))
+    |> maybe_put(:workspace_path, Keyword.get(opts, :workspace_path))
   end
 
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
   # --- Node bodies ---
+
+  # When the orchestrator pre-seeds `:candidates` (workflow_mode :graph
+  # routes one orchestrator-chosen issue per worker), skip the tracker
+  # round-trip entirely. The orchestrator already ran its eligibility
+  # gate; re-polling would race and could overwrite the pre-seeded list.
+  defp tracker_poll_node(%{candidates: pre_seeded} = state)
+       when is_list(pre_seeded) and pre_seeded != [] do
+    {:ok, state}
+  end
 
   defp tracker_poll_node(state) do
     case Tracker.fetch_candidate_issues(state.config) do
@@ -152,14 +185,20 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     {:ok, Map.put(state, :run_result, {:error, :no_candidate})}
   end
 
-  defp runner_dispatch_node(%{candidate: %Issue{} = issue, config: config} = state) do
-    runner_opts = if state.runner_module, do: [runner_module: state.runner_module], else: []
+  defp runner_dispatch_node(
+         %{candidate: %Issue{} = issue, config: config} = state
+       ) do
+    runner_opts =
+      if state.runner_module, do: [runner_module: state.runner_module], else: []
+
+    parent = Map.get(state, :parent_pid, self())
+    attempt = Map.get(state, :attempt) || 1
 
     with {:ok, runner_module} <- Runner.resolve(config, runner_opts) do
       result =
         runner_module.run(issue, config,
-          parent: self(),
-          attempt: 1,
+          parent: parent,
+          attempt: attempt,
           workspace_path: Map.get(state, :workspace_path, "")
         )
 

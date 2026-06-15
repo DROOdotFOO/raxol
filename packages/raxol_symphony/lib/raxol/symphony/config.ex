@@ -25,6 +25,7 @@ defmodule Raxol.Symphony.Config do
     :codex,
     :runner,
     :recording,
+    :workflow_mode,
     :workflow_path,
     :prompt_template
   ]
@@ -38,12 +39,19 @@ defmodule Raxol.Symphony.Config do
           codex: map(),
           runner: map(),
           recording: map(),
+          workflow_mode: :default | :graph,
           workflow_path: Path.t() | nil,
           prompt_template: binary()
         }
 
   @default_active_states ["Todo", "In Progress"]
-  @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+  @default_terminal_states [
+    "Closed",
+    "Cancelled",
+    "Canceled",
+    "Duplicate",
+    "Done"
+  ]
   @default_linear_endpoint "https://api.linear.app/graphql"
   @default_polling_interval_ms 30_000
   @default_hooks_timeout_ms 60_000
@@ -64,8 +72,14 @@ defmodule Raxol.Symphony.Config do
   `Raxol.Symphony.Workflow.load/1`. `workflow_path` is used to resolve
   relative paths (e.g., a relative `workspace.root`).
   """
-  @spec from_workflow(%{config: map(), prompt_template: binary()}, Path.t() | nil) :: t()
-  def from_workflow(%{config: raw, prompt_template: prompt}, workflow_path \\ nil) do
+  @spec from_workflow(
+          %{config: map(), prompt_template: binary()},
+          Path.t() | nil
+        ) :: t()
+  def from_workflow(
+        %{config: raw, prompt_template: prompt},
+        workflow_path \\ nil
+      ) do
     %__MODULE__{
       tracker: tracker(raw),
       polling: polling(raw),
@@ -75,6 +89,7 @@ defmodule Raxol.Symphony.Config do
       codex: codex(raw),
       runner: runner(raw),
       recording: recording(raw),
+      workflow_mode: workflow_mode(raw),
       workflow_path: workflow_path,
       prompt_template: prompt
     }
@@ -102,11 +117,14 @@ defmodule Raxol.Symphony.Config do
 
     %{
       kind: kind,
-      endpoint: resolve_value(Map.get(section, :endpoint, default_endpoint(kind))),
-      api_key: resolve_value(Map.get(section, :api_key, default_api_key_env(kind))),
+      endpoint:
+        resolve_value(Map.get(section, :endpoint, default_endpoint(kind))),
+      api_key:
+        resolve_value(Map.get(section, :api_key, default_api_key_env(kind))),
       project_slug: resolve_value(Map.get(section, :project_slug)),
       active_states: Map.get(section, :active_states, @default_active_states),
-      terminal_states: Map.get(section, :terminal_states, @default_terminal_states)
+      terminal_states:
+        Map.get(section, :terminal_states, @default_terminal_states)
     }
   end
 
@@ -163,7 +181,9 @@ defmodule Raxol.Symphony.Config do
       max_retry_backoff_ms:
         Map.get(section, :max_retry_backoff_ms, @default_max_retry_backoff_ms),
       max_concurrent_agents_by_state:
-        normalize_state_map(Map.get(section, :max_concurrent_agents_by_state, %{}))
+        normalize_state_map(
+          Map.get(section, :max_concurrent_agents_by_state, %{})
+        )
     }
   end
 
@@ -175,9 +195,12 @@ defmodule Raxol.Symphony.Config do
       approval_policy: Map.get(section, :approval_policy),
       thread_sandbox: Map.get(section, :thread_sandbox),
       turn_sandbox_policy: Map.get(section, :turn_sandbox_policy),
-      turn_timeout_ms: Map.get(section, :turn_timeout_ms, @default_turn_timeout_ms),
-      read_timeout_ms: Map.get(section, :read_timeout_ms, @default_read_timeout_ms),
-      stall_timeout_ms: Map.get(section, :stall_timeout_ms, @default_stall_timeout_ms)
+      turn_timeout_ms:
+        Map.get(section, :turn_timeout_ms, @default_turn_timeout_ms),
+      read_timeout_ms:
+        Map.get(section, :read_timeout_ms, @default_read_timeout_ms),
+      stall_timeout_ms:
+        Map.get(section, :stall_timeout_ms, @default_stall_timeout_ms)
     }
   end
 
@@ -191,6 +214,21 @@ defmodule Raxol.Symphony.Config do
       kind: kind,
       agent: Map.get(section, :agent, %{})
     }
+  end
+
+  # Raxol extension: opt-in workflow mode. `:default` runs the prompt-only
+  # path the orchestrator has shipped since SPEC s7. `:graph` routes each
+  # dispatched worker through `Raxol.Symphony.Workflow.GraphAdapter` so the
+  # 5-stage pipeline (tracker_poll, candidate_selection, runner_dispatch,
+  # evidence_collection, completion) executes through main raxol's Phase 25
+  # workflow runtime: per-node telemetry, optional checkpoints, and a
+  # resumable execution boundary around each node.
+  defp workflow_mode(raw) do
+    case Map.get(raw, :workflow_mode, "default") do
+      "graph" -> :graph
+      :graph -> :graph
+      _ -> :default
+    end
   end
 
   # Raxol extension: per-run asciicast capture. When `enabled: true`, the
@@ -264,7 +302,9 @@ defmodule Raxol.Symphony.Config do
 
   defp normalize_state_map(_), do: %{}
 
-  defp normalize_state_key(k) when is_atom(k), do: k |> Atom.to_string() |> String.downcase()
+  defp normalize_state_key(k) when is_atom(k),
+    do: k |> Atom.to_string() |> String.downcase()
+
   defp normalize_state_key(k) when is_binary(k), do: String.downcase(k)
   defp normalize_state_key(k), do: k
 end
