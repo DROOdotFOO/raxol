@@ -184,23 +184,42 @@ defmodule Raxol.Workflow.Runtime do
           result() | {:error, :no_saver_configured | :no_checkpoint, nil}
   def resume(%Compiled{} = compiled, run_id, resume_value, opts \\ [])
       when is_binary(run_id) do
+    case preflight_resume(compiled, run_id) do
+      {:ok, checkpoint} ->
+        resume_with_checkpoint(
+          compiled,
+          checkpoint,
+          resume_value,
+          run_id,
+          opts
+        )
+
+      {:error, reason} ->
+        {:error, reason, nil}
+    end
+  end
+
+  @doc """
+  Look up the latest checkpoint for `run_id` via the configured Saver,
+  without applying it. Used by `Raxol.Workflow.Async` to surface
+  resume preconditions synchronously before spawning a worker.
+
+  Returns `{:ok, checkpoint}` when a checkpoint is found,
+  `{:error, :no_saver_configured}` when the graph has no Saver, or
+  `{:error, :no_checkpoint}` when no checkpoint exists for `run_id`.
+  """
+  @spec preflight_resume(Compiled.t(), binary()) ::
+          {:ok, Checkpoint.t()}
+          | {:error, :no_saver_configured | :no_checkpoint}
+  def preflight_resume(%Compiled{} = compiled, run_id) when is_binary(run_id) do
     case Saver.normalize(Map.get(compiled.opts, :saver)) do
       nil ->
-        {:error, :no_saver_configured, nil}
+        {:error, :no_saver_configured}
 
       {saver_module, saver_config} ->
         case saver_module.get_latest(saver_config, run_id) do
-          {:ok, %Checkpoint{} = checkpoint} ->
-            resume_with_checkpoint(
-              compiled,
-              checkpoint,
-              resume_value,
-              run_id,
-              opts
-            )
-
-          {:error, :not_found} ->
-            {:error, :no_checkpoint, nil}
+          {:ok, %Checkpoint{} = checkpoint} -> {:ok, checkpoint}
+          {:error, :not_found} -> {:error, :no_checkpoint}
         end
     end
   end

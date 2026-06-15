@@ -80,4 +80,27 @@ defmodule Raxol.Workflow.Compiled do
   def resume(%__MODULE__{} = compiled, run_id, resume_value, opts \\ []) do
     Raxol.Workflow.Runtime.resume(compiled, run_id, resume_value, opts)
   end
+
+  @doc """
+  Spawn a resume in a background process; return an immediate handle.
+
+  Delegates to `Raxol.Workflow.Async.async_resume/4`.
+  """
+  @spec async_resume(t(), binary(), any(), keyword()) ::
+          {:ok, %{run_id: binary(), pid: pid(), ref: reference()}}
+          | {:error, :no_saver_configured | :no_checkpoint, nil}
+  def async_resume(%__MODULE__{} = compiled, run_id, resume_value, opts \\ []) do
+    Raxol.Workflow.Async.async_resume(compiled, run_id, resume_value, opts)
+  end
+
+  @doc """
+  Return a lazy `Stream` of `Raxol.Core.Events.CloudEvent` structs
+  emitted by the resume invocation.
+
+  Delegates to `Raxol.Workflow.Async.resume_events/4`.
+  """
+  @spec resume_events(t(), binary(), any(), keyword()) :: Enumerable.t()
+  def resume_events(%__MODULE__{} = compiled, run_id, resume_value, opts \\ []) do
+    Raxol.Workflow.Async.resume_events(compiled, run_id, resume_value, opts)
+  end
 end

@@ -74,6 +74,39 @@ defmodule Raxol.Workflow.Async do
   end
 
   @doc """
+  Spawn a resume in a separate process and return a handle immediately.
+
+  Mirrors `async_invoke/3` but for the resume path. Looks up the
+  latest checkpoint for `run_id` synchronously before spawning so the
+  resume preconditions surface as a regular error tuple rather than
+  hiding inside a normal-exit `:DOWN` message.
+
+  Returns `{:ok, %{run_id, pid, ref}}` on success or one of:
+
+    * `{:error, :no_saver_configured, nil}` -- graph has no Saver
+    * `{:error, :no_checkpoint, nil}` -- no checkpoint for `run_id`
+  """
+  @spec async_resume(Compiled.t(), binary(), any(), keyword()) ::
+          {:ok, %{run_id: binary(), pid: pid(), ref: reference()}}
+          | {:error, :no_saver_configured | :no_checkpoint, nil}
+  def async_resume(%Compiled{} = compiled, run_id, resume_value, opts \\ [])
+      when is_binary(run_id) do
+    case Runtime.preflight_resume(compiled, run_id) do
+      {:ok, _checkpoint} ->
+        pid =
+          spawn(fn ->
+            Runtime.resume(compiled, run_id, resume_value, opts)
+          end)
+
+        ref = Process.monitor(pid)
+        {:ok, %{run_id: run_id, pid: pid, ref: ref}}
+
+      {:error, reason} ->
+        {:error, reason, nil}
+    end
+  end
+
+  @doc """
   Run the graph and return a lazy `Stream` of `CloudEvent` structs.
 
   Each emitted telemetry event (run.started, node.started,
@@ -100,10 +133,94 @@ defmodule Raxol.Workflow.Async do
     )
   end
 
+  @doc """
+  Resume a run and return a lazy `Stream` of `CloudEvent` structs.
+
+  Mirrors `stream_events/3` but for the resume path. The stream
+  carries telemetry events emitted during the resume invocation only;
+  events emitted during the original (interrupted) run are not
+  replayed.
+
+  Preconditions (no saver, no checkpoint) raise `ArgumentError` from
+  the stream start function rather than yielding an empty stream that
+  the consumer would block on. Callers that want a tuple-shaped
+  preflight should use `async_resume/4`.
+
+  Accepts the same options as `stream_events/3`.
+  """
+  @spec resume_events(Compiled.t(), binary(), any(), keyword()) ::
+          Enumerable.t()
+  def resume_events(%Compiled{} = compiled, run_id, resume_value, opts \\ [])
+      when is_binary(run_id) do
+    Stream.resource(
+      fn -> start_resume_stream(compiled, run_id, resume_value, opts) end,
+      &pull_next/1,
+      &cleanup/1
+    )
+  end
+
   # --- Stream resource lifecycle ---
 
   defp start_stream(compiled, initial_state, opts) do
-    run_id = Runtime.generate_run_id()
+    %{
+      handler_id: handler_id,
+      source: source,
+      timeout_ms: timeout_ms,
+      run_id: run_id
+    } =
+      attach_stream_handler(opts)
+
+    runtime_opts =
+      opts
+      |> Keyword.put(:run_id, run_id)
+      |> Keyword.drop([:timeout_ms, :source])
+
+    pid = spawn(fn -> Runtime.invoke(compiled, initial_state, runtime_opts) end)
+    ref = Process.monitor(pid)
+
+    %{
+      run_id: run_id,
+      handler_id: handler_id,
+      pid: pid,
+      ref: ref,
+      timeout_ms: timeout_ms,
+      terminal_received: false
+    }
+  end
+
+  defp start_resume_stream(compiled, run_id, resume_value, opts) do
+    case Runtime.preflight_resume(compiled, run_id) do
+      {:ok, _checkpoint} ->
+        %{handler_id: handler_id, timeout_ms: timeout_ms} =
+          attach_stream_handler(Keyword.put(opts, :run_id, run_id))
+
+        runtime_opts = Keyword.drop(opts, [:timeout_ms, :source, :run_id])
+
+        pid =
+          spawn(fn ->
+            Runtime.resume(compiled, run_id, resume_value, runtime_opts)
+          end)
+
+        ref = Process.monitor(pid)
+
+        %{
+          run_id: run_id,
+          handler_id: handler_id,
+          pid: pid,
+          ref: ref,
+          timeout_ms: timeout_ms,
+          terminal_received: false
+        }
+
+      {:error, reason} ->
+        raise ArgumentError,
+              "resume_events preflight failed: #{inspect(reason)}; " <>
+                "use async_resume/4 for a tuple-shaped result"
+    end
+  end
+
+  defp attach_stream_handler(opts) do
+    run_id = Keyword.get_lazy(opts, :run_id, &Runtime.generate_run_id/0)
     consumer_pid = self()
     handler_id = "workflow_stream_" <> run_id
     timeout_ms = Keyword.get(opts, :timeout_ms, 60_000)
@@ -120,25 +237,11 @@ defmodule Raxol.Workflow.Async do
       %{run_id: run_id, consumer_pid: consumer_pid, source: source}
     )
 
-    runtime_opts =
-      opts
-      |> Keyword.put(:run_id, run_id)
-      |> Keyword.drop([:timeout_ms, :source])
-
-    pid =
-      spawn(fn ->
-        Runtime.invoke(compiled, initial_state, runtime_opts)
-      end)
-
-    ref = Process.monitor(pid)
-
     %{
       run_id: run_id,
       handler_id: handler_id,
-      pid: pid,
-      ref: ref,
-      timeout_ms: timeout_ms,
-      terminal_received: false
+      source: source,
+      timeout_ms: timeout_ms
     }
   end
 
