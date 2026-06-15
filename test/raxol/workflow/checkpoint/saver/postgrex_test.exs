@@ -148,8 +148,10 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
         )
 
       opts ->
-        # start_supervised so the connection survives the test process
-        # exit and stays alive for the test's on_exit cleanup callbacks.
+        # start_supervised so the connection is cleaned up at the end
+        # of each test without the test process needing to manage it.
+        # Tables use unique names per test for isolation, so DROP TABLE
+        # cleanup is not necessary.
         start_supervised!({Postgrex, opts})
     end
   end
@@ -184,11 +186,6 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
       conn = start_conn!()
       table = unique_table()
       Postgrex.query!(conn, Saver.create_table_sql(table), [])
-
-      on_exit(fn ->
-        Postgrex.query!(conn, "DROP TABLE IF EXISTS #{table}", [])
-      end)
-
       config = %{conn: conn, table: table}
 
       ckpt =
@@ -211,11 +208,6 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
       conn = start_conn!()
       table = unique_table()
       Postgrex.query!(conn, Saver.create_table_sql(table), [])
-
-      on_exit(fn ->
-        Postgrex.query!(conn, "DROP TABLE IF EXISTS #{table}", [])
-      end)
-
       config = %{conn: conn, table: table}
 
       ckpt =
@@ -239,11 +231,6 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
       conn = start_conn!()
       table = unique_table()
       Postgrex.query!(conn, Saver.create_table_sql(table), [])
-
-      on_exit(fn ->
-        Postgrex.query!(conn, "DROP TABLE IF EXISTS #{table}", [])
-      end)
-
       config = %{conn: conn, table: table}
 
       for step <- 0..5 do
@@ -272,11 +259,6 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
       conn = start_conn!()
       table = unique_table()
       Postgrex.query!(conn, Saver.create_table_sql(table), [])
-
-      on_exit(fn ->
-        Postgrex.query!(conn, "DROP TABLE IF EXISTS #{table}", [])
-      end)
-
       config = %{conn: conn, table: table}
 
       for step <- 0..2 do
@@ -302,11 +284,6 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
       conn = start_conn!()
       table = unique_table()
       Postgrex.query!(conn, Saver.create_table_sql(table), [])
-
-      on_exit(fn ->
-        Postgrex.query!(conn, "DROP TABLE IF EXISTS #{table}", [])
-      end)
-
       config = %{conn: conn, table: table}
 
       Saver.put(
