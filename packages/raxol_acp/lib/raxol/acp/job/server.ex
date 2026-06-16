@@ -34,12 +34,35 @@ defmodule Raxol.ACP.Job.Server do
   Emits `[:raxol, :acp, :job, :transition]` on every successful
   transition with metadata
   `%{job_id, from, to, memo_type, tx_hash}`.
+
+  ## Workflow-backed mode (ADR-0016 Phase A)
+
+  Pass `via_workflow: true` (or set
+  `Application.put_env(:raxol_acp, :job_via_workflow, true)`) to route
+  transitions through `Raxol.ACP.Job.Workflow` instead of the inline
+  state machine. The public API is unchanged; internally the
+  Phase 25 `Raxol.Workflow` runtime drives each transition, writes a
+  checkpoint to the configured Saver after every memo, and emits
+  per-node telemetry on `[:raxol, :workflow, :*]` in addition to the
+  legacy `[:raxol, :acp, :job, :transition]` event. On a transient
+  restart the new process hydrates from the Saver's latest
+  checkpoint, matching the existing Store-hydration behavior.
+
+  Saver selection:
+
+      Application.put_env(:raxol_acp, :job_workflow_saver,
+        {Raxol.Workflow.Checkpoint.Saver.Dets, %{name: MyDets}})
+
+  Defaults to `Saver.Ets` with a shared named table when no override
+  is configured.
   """
 
   use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.ACP.ContractClient
   alias Raxol.ACP.Job.{MemoType, Registry, StateMachine, Store}
+  alias Raxol.ACP.Job.Workflow, as: JobWorkflow
+  alias Raxol.Workflow.Compiled, as: WorkflowCompiled
 
   @type memo :: %{
           next_phase: StateMachine.state(),
@@ -64,10 +87,20 @@ defmodule Raxol.ACP.Job.Server do
           state: StateMachine.state(),
           memos: [memo()],
           config: config(),
-          persist?: boolean()
+          persist?: boolean(),
+          via_workflow?: boolean(),
+          compiled: WorkflowCompiled.t() | nil
         }
 
-  defstruct [:job_id, :state, memos: [], config: %{}, persist?: true]
+  defstruct [
+    :job_id,
+    :state,
+    :compiled,
+    memos: [],
+    config: %{},
+    persist?: true,
+    via_workflow?: false
+  ]
 
   # -- Public API --
 
@@ -112,7 +145,12 @@ defmodule Raxol.ACP.Job.Server do
   payload and signature. Low-level entry point used by both
   orchestration helpers and tests that want to bypass the handler.
   """
-  @spec transition(GenServer.server() | binary(), StateMachine.event(), map(), binary()) ::
+  @spec transition(
+          GenServer.server() | binary(),
+          StateMachine.event(),
+          map(),
+          binary()
+        ) ::
           {:ok, StateMachine.state()} | {:error, term()}
   def transition(server, event, payload, signature) do
     GenServer.call(resolve(server), {:transition, event, payload, signature})
@@ -196,7 +234,21 @@ defmodule Raxol.ACP.Job.Server do
     job_id = Keyword.fetch!(opts, :job_id)
     persist? = Keyword.get(opts, :persist?, true)
     initial = Keyword.get(opts, :initial_state, StateMachine.initial())
-    {state, memos} = hydrate(job_id, persist?, initial)
+
+    via_workflow? =
+      Keyword.get(
+        opts,
+        :via_workflow,
+        Application.get_env(:raxol_acp, :job_via_workflow, false)
+      )
+
+    {state, memos, compiled} =
+      if via_workflow? do
+        hydrate_via_workflow(job_id, persist?, initial)
+      else
+        {s, ms} = hydrate(job_id, persist?, initial)
+        {s, ms, nil}
+      end
 
     {:ok,
      %__MODULE__{
@@ -204,9 +256,59 @@ defmodule Raxol.ACP.Job.Server do
        state: state,
        memos: memos,
        config: config,
-       persist?: persist?
+       persist?: persist?,
+       via_workflow?: via_workflow?,
+       compiled: compiled
      }}
   end
+
+  # Workflow-backed hydration. Compiles the canonical ACP graph and
+  # either resumes from a prior checkpoint or invokes the workflow
+  # fresh to create the initial __start__ checkpoint. State is read
+  # back from the workflow runtime so it stays the single source of
+  # truth while the legacy Store is kept in sync via mirror writes
+  # for backward compatibility.
+  defp hydrate_via_workflow(job_id, persist?, _initial) do
+    saver = if persist?, do: configured_workflow_saver(), else: nil
+    {:ok, compiled} = JobWorkflow.compile(maybe_saver_opts(saver))
+
+    workflow_state = ensure_workflow_run(compiled, saver, job_id)
+    {workflow_state.current_state, workflow_state.memos, compiled}
+  end
+
+  defp ensure_workflow_run(compiled, saver, job_id) do
+    case load_workflow_state(saver, job_id) do
+      {:ok, state} ->
+        state
+
+      :not_found ->
+        initial_state = JobWorkflow.initial_state(job_id)
+
+        case WorkflowCompiled.invoke(compiled, initial_state, run_id: job_id) do
+          {:interrupted, _run_id, state, _value} -> state
+        end
+    end
+  end
+
+  defp load_workflow_state(nil, _job_id), do: :not_found
+
+  defp load_workflow_state({mod, cfg}, job_id) do
+    case mod.get_latest(cfg, job_id) do
+      {:ok, ckpt} -> {:ok, ckpt.state}
+      {:error, :not_found} -> :not_found
+    end
+  end
+
+  defp configured_workflow_saver do
+    Application.get_env(
+      :raxol_acp,
+      :job_workflow_saver,
+      {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: :raxol_acp_job_workflow}}
+    )
+  end
+
+  defp maybe_saver_opts(nil), do: []
+  defp maybe_saver_opts(saver), do: [saver: saver]
 
   # Restore prior state + memos from the Store on a transient restart.
   # If persistence is disabled or no record exists, fall back to the
@@ -221,12 +323,17 @@ defmodule Raxol.ACP.Job.Server do
   defp hydrate(_job_id, false, initial), do: {initial, []}
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_call({:transition, event, payload, signature}, _from, state) do
+  def handle_manager_call(
+        {:transition, event, payload, signature},
+        _from,
+        state
+      ) do
     do_transition(state, event, payload, signature)
   end
 
   def handle_manager_call(:accept_request, _from, state) do
-    with {:ok, %{handler: handler, request: request}} <- need(state.config, [:handler, :request]) do
+    with {:ok, %{handler: handler, request: request}} <-
+           need(state.config, [:handler, :request]) do
       case handler.handle_request(request, ctx(state)) do
         {:accept, response} ->
           do_transition(state, :accept_request, response, nil)
@@ -244,7 +351,8 @@ defmodule Raxol.ACP.Job.Server do
   end
 
   def handle_manager_call(:deliver, _from, state) do
-    with {:ok, %{handler: handler, request: request}} <- need(state.config, [:handler, :request]) do
+    with {:ok, %{handler: handler, request: request}} <-
+           need(state.config, [:handler, :request]) do
       case handler.handle_deliver(request, ctx(state)) do
         {:deliver, deliverable} ->
           do_transition(state, :deliver, deliverable, nil)
@@ -262,18 +370,101 @@ defmodule Raxol.ACP.Job.Server do
   end
 
   def handle_manager_call(:get_state, _from, state), do: {:reply, state, state}
-  def handle_manager_call(:current_state, _from, state), do: {:reply, state.state, state}
-  def handle_manager_call(:memos, _from, state), do: {:reply, state.memos, state}
+
+  def handle_manager_call(:current_state, _from, state),
+    do: {:reply, state.state, state}
+
+  def handle_manager_call(:memos, _from, state),
+    do: {:reply, state.memos, state}
 
   # -- Private --
 
   defp do_transition(state, event, payload, signature) do
+    if state.via_workflow? do
+      do_transition_via_workflow(state, event, payload, signature)
+    else
+      do_transition_legacy(state, event, payload, signature)
+    end
+  end
+
+  # Workflow-backed transition path. The state-machine guard mirrors
+  # the legacy one so callers see the same `{:error, {:invalid_transition, _, _}}`
+  # shape for events that the current phase does not accept. Successful
+  # transitions delegate to `Compiled.resume/4`; on terminal phase, the
+  # workflow returns `{:ok, _, _}` and the GenServer stops with `:normal`.
+  defp do_transition_via_workflow(state, event, payload, signature) do
+    case StateMachine.next(state.state, event) do
+      {:ok, _next_state} ->
+        dispatch_workflow_resume(state, event, payload, signature)
+
+      {:error, _} = err ->
+        {:reply, err, state}
+    end
+  end
+
+  defp dispatch_workflow_resume(state, event, payload, signature) do
+    case WorkflowCompiled.resume(
+           state.compiled,
+           state.job_id,
+           {event, payload, signature}
+         ) do
+      {:interrupted, _run_id, new_wf_state, _value} ->
+        finalize_workflow_transition(state, new_wf_state, terminal?: false)
+
+      {:ok, new_wf_state, _meta} ->
+        finalize_workflow_transition(state, new_wf_state, terminal?: true)
+
+      {:error, reason, _wf_state} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp finalize_workflow_transition(state, new_wf_state, terminal?: terminal?) do
+    new_memo = List.last(new_wf_state.memos)
+
+    new_full_state = %{
+      state
+      | state: new_wf_state.current_state,
+        memos: new_wf_state.memos
+    }
+
+    if state.persist? and new_memo do
+      Store.append_memo(state.job_id, new_wf_state.current_state, new_memo)
+    end
+
+    :telemetry.execute(
+      [:raxol, :acp, :job, :transition],
+      %{},
+      %{
+        job_id: state.job_id,
+        from: state.state,
+        to: new_wf_state.current_state,
+        memo_type: new_memo && new_memo.memo_type,
+        next_phase: new_wf_state.current_state,
+        tx_hash: new_memo && new_memo.tx_hash
+      }
+    )
+
+    if terminal? do
+      {:stop, :normal, {:ok, new_wf_state.current_state}, new_full_state}
+    else
+      {:reply, {:ok, new_wf_state.current_state}, new_full_state}
+    end
+  end
+
+  defp do_transition_legacy(state, event, payload, signature) do
     memo_type = memo_type_for_event(event)
     content = encode_content(payload)
 
     with {:ok, new_state} <- StateMachine.next(state.state, event),
          {:ok, tx_hash} <-
-           ContractClient.create_memo(state.job_id, content, memo_type, false, new_state) do
+           ContractClient.create_memo(
+             state.job_id,
+             content,
+             memo_type,
+             false,
+             new_state
+           ) do
       memo = %{
         next_phase: new_state,
         memo_type: memo_type,
