@@ -227,6 +227,73 @@ defmodule Raxol.Symphony.Web.DashboardLiveTest do
     end
   end
 
+  describe "handle_event/3 -- callback" do
+    test "sym:refresh sets last_action to 'refresh requested'" do
+      orch = start_orchestrator()
+      socket = socket_with_orch(orch)
+
+      {:noreply, new_socket} =
+        DashboardLive.handle_event("callback", %{"data" => "sym:refresh"}, socket)
+
+      assert new_socket.assigns.last_action == "refresh requested"
+    end
+
+    test "sym:stop:<id> stops the run and notes 'stopped'" do
+      orch = start_orchestrator()
+      socket = socket_with_orch(orch)
+      seed_running_issue(orch, "a", "MT-1")
+
+      {:noreply, new_socket} =
+        DashboardLive.handle_event("callback", %{"data" => "sym:stop:a"}, socket)
+
+      assert new_socket.assigns.last_action == "stopped"
+    end
+
+    test "sym:resume:<id>:<decision> notes 'resumed (decision)'" do
+      orch = start_orchestrator()
+      socket = socket_with_orch(orch)
+
+      Memory.put_issue(%Issue{id: "a", identifier: "MT-1", title: "T", state: "Todo"})
+
+      Noop.Director.set(
+        "MT-1",
+        {:pause_then, :awaiting_review, %{seq: 1}, {:succeed_after, 0}}
+      )
+
+      :ok = Orchestrator.tick_now(orch)
+
+      # Wait for the run to park.
+      deadline = System.monotonic_time(:millisecond) + 500
+
+      do_wait = fn
+        do_wait, deadline ->
+          if Map.has_key?(Orchestrator.paused(orch), "a") do
+            :ok
+          else
+            if System.monotonic_time(:millisecond) >= deadline,
+              do: flunk("wait timed out"),
+              else: (Process.sleep(20); do_wait.(do_wait, deadline))
+          end
+      end
+
+      do_wait.(do_wait, deadline)
+
+      {:noreply, new_socket} =
+        DashboardLive.handle_event("callback", %{"data" => "sym:resume:a:approved"}, socket)
+
+      assert new_socket.assigns.last_action == "resumed (approved)"
+    end
+
+    test "unknown callback string notes 'noop:'" do
+      socket = socket_with_orch(:foo)
+
+      {:noreply, new_socket} =
+        DashboardLive.handle_event("callback", %{"data" => "garbage"}, socket)
+
+      assert new_socket.assigns.last_action == "noop: garbage"
+    end
+  end
+
   describe "handle_event/3 -- unknown" do
     test "no-op for unrecognized events" do
       socket = socket_with_orch(:foo)

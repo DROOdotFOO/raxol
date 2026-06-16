@@ -23,6 +23,9 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
 
     - `phx-click="refresh"` -- triggers `Orchestrator.refresh/1`
     - `phx-click="stop_run"` with `phx-value-issue_id` -- terminates a run
+    - `phx-click="callback"` with `phx-value-data="sym:..."` -- dispatches
+      via `Raxol.Symphony.Web.CallbackRouter`; share vocabulary with the
+      Telegram and Watch surfaces (e.g. `sym:resume:<id>:approved`)
 
     ## Test seam
 
@@ -88,7 +91,32 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
        |> refresh_assigns()}
     end
 
+    def handle_event("callback", %{"data" => raw}, socket) do
+      result =
+        Raxol.Symphony.Web.CallbackRouter.handle_callback(raw,
+          orchestrator: socket.assigns.orchestrator
+        )
+
+      {:noreply,
+       socket
+       |> assign(:last_action, format_callback_result(raw, result))
+       |> refresh_assigns()}
+    end
+
     def handle_event(_evt, _params, socket), do: {:noreply, socket}
+
+    defp format_callback_result(raw, :noop), do: "noop: #{raw}"
+    defp format_callback_result(_raw, {:ok, :refresh}), do: "refresh requested"
+    defp format_callback_result(_raw, {:ok, :listed}), do: "snapshot refreshed"
+    defp format_callback_result(_raw, {:ok, :stopped}), do: "stopped"
+    defp format_callback_result(_raw, {:ok, {:resumed, decision}}),
+      do: "resumed (#{decision})"
+
+    defp format_callback_result(_raw, {:ok, {:run_detail, id}}),
+      do: "detail requested for #{id}"
+
+    defp format_callback_result(_raw, {:error, reason}),
+      do: "error: #{inspect(reason)}"
 
     # -- Render ---------------------------------------------------------------
 
@@ -168,6 +196,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
                   <th style="padding: 4px;">Paused</th>
                   <th style="padding: 4px;">Last event</th>
                   <th style="padding: 4px;">Last message</th>
+                  <th style="padding: 4px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -178,6 +207,18 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
                     <td style="padding: 4px;">{format_ms(paused[:paused_ms_ago] || 0)}</td>
                     <td style="padding: 4px;">{format_event(paused[:last_event])}</td>
                     <td style="padding: 4px;">{paused[:last_message] || ""}</td>
+                    <td style="padding: 4px;">
+                      <button
+                        phx-click="callback"
+                        phx-value-data={"sym:resume:" <> paused.issue_id <> ":approved"}
+                        type="button"
+                      >approve</button>
+                      <button
+                        phx-click="callback"
+                        phx-value-data={"sym:resume:" <> paused.issue_id <> ":rejected"}
+                        type="button"
+                      >reject</button>
+                    </td>
                   </tr>
                 <% end %>
               </tbody>
