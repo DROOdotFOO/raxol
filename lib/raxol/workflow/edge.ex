@@ -72,22 +72,54 @@ defmodule Raxol.Workflow.Edge do
     defstruct [:from, :chooser, :candidates]
   end
 
-  @type t :: Edge.t() | GuardedEdge.t() | ConditionalEdge.t()
+  defmodule JoinEdge do
+    @moduledoc """
+    Barrier descriptor for a join node.
+
+    Created by `Raxol.Workflow.Graph.add_join/4`. The runtime treats
+    the `target` node as a barrier: it executes the target's body once,
+    with a merged state built from each upstream branch's terminal
+    state. Upstream completions are tracked per-run; the join fires
+    when every `upstream` id has committed.
+
+    `from/1` returns the `target` (the join's own node id, where the
+    edge "lives" in the source-keyed index); `targets/1` returns
+    `[target]` -- the join has no outgoing destination of its own,
+    static or guarded edges from `target` carry the run forward.
+    """
+
+    @type t :: %__MODULE__{
+            target: Raxol.Workflow.Node.id(),
+            upstream: [Raxol.Workflow.Node.id()],
+            reducer: (([map()]) -> map()) | nil,
+            timeout_ms: pos_integer() | nil
+          }
+
+    @enforce_keys [:target, :upstream]
+    defstruct [:target, :upstream, reducer: nil, timeout_ms: nil]
+  end
+
+  @type t :: Edge.t() | GuardedEdge.t() | ConditionalEdge.t() | JoinEdge.t()
 
   @doc "Return the source node id of any edge type."
   @spec from(t()) :: Raxol.Workflow.Node.id()
   def from(%Edge{from: f}), do: f
   def from(%GuardedEdge{from: f}), do: f
   def from(%ConditionalEdge{from: f}), do: f
+  def from(%JoinEdge{target: t}), do: t
 
   @doc """
   Return the list of possible target node ids for any edge type.
-  `ConditionalEdge` returns its declared candidate set.
+  `ConditionalEdge` returns its declared candidate set. `JoinEdge`
+  returns the join's own node id -- consumed by `compile/2`'s
+  reachability validation, which treats the join as a sink for its
+  upstream branches.
   """
   @spec targets(t()) :: [Raxol.Workflow.Node.id()]
   def targets(%Edge{to: t}), do: [t]
   def targets(%GuardedEdge{to: t}), do: [t]
   def targets(%ConditionalEdge{candidates: cs}), do: cs
+  def targets(%JoinEdge{target: t}), do: [t]
 
   @doc "The reserved start-node id."
   @spec start_id() :: atom()

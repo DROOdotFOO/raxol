@@ -30,20 +30,23 @@ defmodule Raxol.Workflow.Graph do
   with reachability and absence-of-orphans.
   """
 
+  alias Raxol.Workflow.Channel
   alias Raxol.Workflow.Compiled
   alias Raxol.Workflow.Edge
   alias Raxol.Workflow.Edge.ConditionalEdge
   alias Raxol.Workflow.Edge.Edge, as: StaticEdge
   alias Raxol.Workflow.Edge.GuardedEdge
+  alias Raxol.Workflow.Edge.JoinEdge
   alias Raxol.Workflow.Node
 
   @type t :: %__MODULE__{
           id: atom() | binary(),
           nodes: %{Node.id() => Node.t()},
-          edges: [Edge.t()]
+          edges: [Edge.t()],
+          channels: %{(atom() | binary()) => Channel.t()}
         }
 
-  defstruct id: nil, nodes: %{}, edges: []
+  defstruct id: nil, nodes: %{}, edges: [], channels: %{}
 
   @start :__start__
   @end_ :__end__
@@ -120,6 +123,76 @@ defmodule Raxol.Workflow.Graph do
   end
 
   @doc """
+  Declare a typed reducer for a state-map key.
+
+  Channels are metadata only -- no nodes or edges are added. At a
+  join, the runtime applies each channel's `with` reducer pairwise
+  across all branch contributions to the channel's `into` key.
+
+  Options:
+
+    * `:into` -- the state-map key the reducer writes to. Required.
+    * `:with` -- a 2-arity reducer `(left, right) -> merged`. Required.
+
+  Channel `name`s must be unique within a graph.
+  """
+  @spec add_channel(t(), atom() | binary(), keyword()) :: t()
+  def add_channel(%__MODULE__{channels: channels} = graph, name, opts)
+      when (is_atom(name) or is_binary(name)) and is_list(opts) do
+    into = Keyword.fetch!(opts, :into)
+    reducer = Keyword.fetch!(opts, :with)
+
+    unless is_function(reducer, 2) do
+      raise ArgumentError, "channel :with must be a 2-arity function"
+    end
+
+    %{
+      graph
+      | channels: Map.put(channels, name, %Channel{name: name, into: into, with: reducer})
+    }
+  end
+
+  @doc """
+  Mark `target` as a join (barrier) node fed by the listed `upstream`
+  branches.
+
+  The runtime holds at the join until every node id in `upstream` has
+  committed a result on the same run. It then merges each branch's
+  terminal state (per any declared `add_channel/3` reducer; last-write-wins
+  by branch order for keys without a channel), runs the `target` node's
+  body once with the merged state, and continues from `target`'s outgoing
+  edges.
+
+  Options:
+
+    * `:reduce` -- explicit `(list_of_branch_states -> merged_state)`
+      that overrides per-channel + last-write-wins. Default: nil.
+    * `:timeout_ms` -- max wall-clock to wait for all branches before
+      failing with `{:branch_timeout, missing}`. Default: inherits the
+      run's `:run_timeout_ms`.
+
+  `compile/2` validates that `target` and every `upstream` id refer to
+  declared nodes.
+  """
+  @spec add_join(t(), Node.id(), [Node.id()], keyword()) :: t()
+  def add_join(%__MODULE__{} = graph, target, upstream, opts \\ [])
+      when is_list(upstream) and upstream != [] do
+    reducer = Keyword.get(opts, :reduce)
+    timeout = Keyword.get(opts, :timeout_ms)
+
+    if reducer != nil and not is_function(reducer, 1) do
+      raise ArgumentError, "join :reduce must be a 1-arity function"
+    end
+
+    put_edge(graph, %JoinEdge{
+      target: target,
+      upstream: upstream,
+      reducer: reducer,
+      timeout_ms: timeout
+    })
+  end
+
+  @doc """
   Freeze the graph for execution.
 
   Runs the full validation pipeline (no orphan nodes, every node
@@ -151,12 +224,16 @@ defmodule Raxol.Workflow.Graph do
          :ok <- validate_edges_reference_known_nodes(graph),
          :ok <- validate_no_orphans(graph),
          :ok <- validate_reachable_from_start(graph),
-         :ok <- validate_paths_to_end(graph) do
+         :ok <- validate_paths_to_end(graph),
+         :ok <- validate_joins(graph) do
       {:ok,
        %Compiled{
          id: graph.id,
          nodes: graph.nodes,
          edges_by_source: index_edges_by_source(graph.edges),
+         channels: graph.channels,
+         joins_by_node: index_joins_by_target(graph.edges),
+         joins_by_upstream: index_joins_by_upstream(graph.edges),
          opts:
            opts
            |> Keyword.take(
@@ -174,6 +251,12 @@ defmodule Raxol.Workflow.Graph do
           | {:orphan_nodes, [Node.id()]}
           | {:unreachable_from_start, [Node.id()]}
           | {:cannot_reach_end, [Node.id()]}
+          | {:join_target_unknown, Node.id()}
+          | {:join_upstream_unknown, Node.id(), [Node.id()]}
+          | {:join_upstream_shared, [Node.id()]}
+          | {:join_target_unknown, Node.id()}
+          | {:join_upstream_unknown, Node.id(), [Node.id()]}
+          | {:join_upstream_shared, Node.id(), [Node.id()]}
 
   # --- Builder helpers ---
 
@@ -203,6 +286,23 @@ defmodule Raxol.Workflow.Graph do
 
   defp index_edges_by_source(edges) do
     Enum.group_by(edges, &Edge.from/1)
+  end
+
+  defp index_joins_by_target(edges) do
+    edges
+    |> Enum.filter(&match?(%JoinEdge{}, &1))
+    |> Map.new(fn %JoinEdge{target: t} = je -> {t, je} end)
+  end
+
+  # Builds an upstream-id -> JoinEdge index so the runtime can look up
+  # "which join does this branch flow into" by the branch's entry node
+  # (the candidate id from the fan-out's ConditionalEdge).
+  defp index_joins_by_upstream(edges) do
+    edges
+    |> Enum.filter(&match?(%JoinEdge{}, &1))
+    |> Enum.reduce(%{}, fn %JoinEdge{upstream: ups} = je, acc ->
+      Enum.reduce(ups, acc, fn up, inner -> Map.put(inner, up, je) end)
+    end)
   end
 
   # --- Validation ---
@@ -289,6 +389,56 @@ defmodule Raxol.Workflow.Graph do
       :ok
     else
       {:error, {:cannot_reach_end, Enum.sort(cannot)}}
+    end
+  end
+
+  defp validate_joins(%__MODULE__{nodes: nodes, edges: edges}) do
+    joins = Enum.filter(edges, &match?(%JoinEdge{}, &1))
+    known = nodes |> Map.keys() |> MapSet.new()
+
+    with :ok <- validate_join_targets(joins, known),
+         :ok <- validate_join_upstreams(joins, known) do
+      validate_join_upstream_uniqueness(joins)
+    end
+  end
+
+  defp validate_join_targets(joins, known) do
+    case Enum.find(joins, fn %JoinEdge{target: t} -> not MapSet.member?(known, t) end) do
+      nil -> :ok
+      %JoinEdge{target: t} -> {:error, {:join_target_unknown, t}}
+    end
+  end
+
+  defp validate_join_upstreams(joins, known) do
+    bad =
+      Enum.find_value(joins, fn %JoinEdge{target: t, upstream: ups} ->
+        unknown = Enum.reject(ups, &MapSet.member?(known, &1))
+        if unknown == [], do: nil, else: {t, Enum.sort(unknown)}
+      end)
+
+    case bad do
+      nil -> :ok
+      {target, unknown} -> {:error, {:join_upstream_unknown, target, unknown}}
+    end
+  end
+
+  # Each upstream node belongs to at most one join: a branch ends at
+  # exactly one barrier. Two joins sharing an upstream is a config error.
+  defp validate_join_upstream_uniqueness(joins) do
+    {_seen, shared} =
+      Enum.reduce(joins, {%{}, []}, fn %JoinEdge{target: t, upstream: ups}, {seen, dupes} ->
+        Enum.reduce(ups, {seen, dupes}, fn up, {s, d} ->
+          case Map.get(s, up) do
+            nil -> {Map.put(s, up, t), d}
+            ^t -> {s, d}
+            _other -> {s, [t | d]}
+          end
+        end)
+      end)
+
+    case shared do
+      [] -> :ok
+      targets -> {:error, {:join_upstream_shared, Enum.sort(Enum.uniq(targets))}}
     end
   end
 

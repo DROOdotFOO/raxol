@@ -34,11 +34,28 @@ defmodule Raxol.Workflow.Compiled do
           edges_by_source: %{
             Raxol.Workflow.Node.id() => [Raxol.Workflow.Edge.t()]
           },
+          channels: %{
+            (atom() | binary()) => Raxol.Workflow.Channel.t()
+          },
+          joins_by_node: %{
+            Raxol.Workflow.Node.id() => Raxol.Workflow.Edge.JoinEdge.t()
+          },
+          joins_by_upstream: %{
+            Raxol.Workflow.Node.id() => Raxol.Workflow.Edge.JoinEdge.t()
+          },
           opts: opts()
         }
 
   @enforce_keys [:id, :nodes, :edges_by_source, :opts]
-  defstruct [:id, :nodes, :edges_by_source, :opts]
+  defstruct [
+    :id,
+    :nodes,
+    :edges_by_source,
+    :opts,
+    channels: %{},
+    joins_by_node: %{},
+    joins_by_upstream: %{}
+  ]
 
   @doc """
   Run the compiled graph synchronously.
