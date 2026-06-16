@@ -6,9 +6,9 @@
 # What you'll learn:
 #   - `use Raxol.Agent` gives you TEA + agent-specific commands
 #   - Agents receive {:agent_message, from, payload} for inter-agent comms
-#   - Command.shell(cmd) runs a shell command; result arrives as
+#   - Directive.shell(cmd) runs a shell command; result arrives as
 #     {:command_result, {:shell_result, %{output: ..., exit_status: ...}}}
-#   - Command.async(fn sender -> ... end) runs async work; the sender
+#   - Directive.async(fn sender -> ... end) runs async work; the sender
 #     callback delivers results back to update/2
 #   - Agents are TEA apps where input comes from tools/messages, not keyboard
 #
@@ -19,8 +19,8 @@ Logger.configure(level: :warning)
 
 defmodule CodeReviewAgent do
   # `use Raxol.Agent` imports everything from Raxol.Core.Runtime.Application
-  # plus agent-specific helpers: Command.shell/1, Command.async/1,
-  # Command.send_agent/2, Command.quit/0.
+  # plus agent-specific helpers: Directive.shell/1, Directive.async/1,
+  # Directive.send_agent/2, Directive.stop/0.
   use Raxol.Agent
 
   @impl true
@@ -42,7 +42,7 @@ defmodule CodeReviewAgent do
     case model.files do
       [file | rest] ->
         {%{model | current_file: file, files: rest, status: :reading},
-         [Command.shell("wc -l < #{file}")]}
+         [Directive.shell("wc -l < #{file}")]}
 
       [] ->
         {%{model | status: :done}, []}
@@ -64,15 +64,15 @@ defmodule CodeReviewAgent do
     case model.files do
       [next | rest] ->
         {%{new_model | current_file: next, files: rest},
-         [Command.shell("wc -l < #{next}")]}
+         [Directive.shell("wc -l < #{next}")]}
 
       [] ->
-        # Command.async runs a function in a spawned process. The sender
+        # Directive.async runs a function in a spawned process. The sender
         # callback delivers results back to this agent's update/2 as
         # {:command_result, whatever_you_pass_to_sender}.
         {%{new_model | status: :analyzing},
          [
-           Command.async(fn sender ->
+           Directive.async(fn sender ->
              Process.sleep(100)
 
              sender.(
@@ -93,7 +93,7 @@ defmodule CodeReviewAgent do
       IO.puts("  #{f.file}: #{f.line_count}")
     end)
 
-    {%{model | status: :done}, [Command.quit()]}
+    {%{model | status: :done}, [Directive.stop()]}
   end
 
   @impl true

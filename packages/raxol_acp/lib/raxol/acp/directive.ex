@@ -4,10 +4,9 @@ defmodule Raxol.ACP.Directive do
 
   Each struct is a semantic, observable representation of one
   `Raxol.ACP.ContractClient` write. Returning a directive from an
-  agent's `update/2` (instead of a `Raxol.Core.Runtime.Command.async/1`
-  closure) lets external observers see the intent: "this agent is
-  creating a memo on job X" rather than "this agent is running some
-  opaque async closure".
+  agent's `update/2` (instead of a bare async closure) lets external
+  observers see the intent: "this agent is creating a memo on job X"
+  rather than "this agent is running some opaque async closure".
 
   ## Built-in directives
 
@@ -136,7 +135,14 @@ defmodule Raxol.ACP.Directive do
           }
 
     @enforce_keys [:job_id, :content, :memo_type, :next_phase]
-    defstruct [:job_id, :content, :memo_type, :next_phase, is_secured: false, meta: %{}]
+    defstruct [
+      :job_id,
+      :content,
+      :memo_type,
+      :next_phase,
+      is_secured: false,
+      meta: %{}
+    ]
   end
 
   defmodule CreatePayableMemo do
@@ -221,7 +227,8 @@ defmodule Raxol.ACP.Directive do
   end
 
   @doc "Construct a `SetBudgetWithPaymentToken` directive."
-  @spec set_budget_with_payment_token(keyword()) :: SetBudgetWithPaymentToken.t()
+  @spec set_budget_with_payment_token(keyword()) ::
+          SetBudgetWithPaymentToken.t()
   def set_budget_with_payment_token(opts) do
     %SetBudgetWithPaymentToken{
       job_id: Keyword.fetch!(opts, :job_id),

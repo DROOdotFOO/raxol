@@ -9,7 +9,7 @@
 #     (Lumo > Anthropic > Kimi > OpenAI > Ollama > LLM7 > Mock)
 #   - Agent + Dashboard pattern: headless agents do work, a TEA app
 #     polls their models for display (analyst + summarizer + dashboard)
-#   - Streaming via Command.async: sender callback delivers {:chunk, text}
+#   - Streaming via Directive.async: sender callback delivers {:chunk, text}
 #     incrementally, then {:done, response} when complete
 #   - Pilot takeover: dashboard captures keyboard input and forwards
 #     user questions to the analyst agent for follow-up
@@ -117,7 +117,7 @@ defmodule AICockpit.MockStream do
 
     Improvement: A declarative `backend:` option in `use Raxol.Agent, \
     backend: HTTP` could auto-wire AI backend config, reducing the \
-    boilerplate of manual Command.async calls for LLM integration.\
+    boilerplate of manual Directive.async calls for LLM integration.\
     """,
     "session.ex" => """
     Purpose: GenServer wrapper that hosts a TEA agent within the \
@@ -150,7 +150,7 @@ defmodule AICockpit.MockStream do
     to the agent's update/2, enabling real-time streaming without \
     any framework changes.
 
-    Improvement: A dedicated `Command.stream/2` convenience wrapping \
+    Improvement: A dedicated `Directive.stream/2` convenience wrapping \
     the async+sender pattern for AI backends would reduce agent \
     boilerplate from ~10 lines to 1.\
     """,
@@ -186,7 +186,7 @@ defmodule AICockpit.MockStream do
   pattern (subscriptions, view rendering, time-travel debugging) \
   works with agents out of the box.
 
-  The streaming capability through Command.async sender callbacks \
+  The streaming capability through Directive.async sender callbacks \
   is particularly elegant -- the same mechanism that handles shell \
   command output also handles LLM token streaming.\
   """
@@ -281,7 +281,7 @@ defmodule AICockpit.Analyst do
        | findings: [finding | model.findings],
          status: :done,
          history: history
-     }, [Command.send_agent(:summarizer, {:finding, finding})]}
+     }, [Directive.send_agent(:summarizer, {:finding, finding})]}
   end
 
   def update({:command_result, {:error, reason}}, model) do
@@ -356,7 +356,7 @@ defmodule AICockpit.Analyst do
   end
 
   defp call_backend(messages) do
-    Command.async(fn sender ->
+    Directive.async(fn sender ->
       case AICockpit.Config.detect_backend() do
         {:http, opts} ->
           stream_with_backend(Raxol.Agent.Backend.HTTP, messages, opts, sender)
@@ -781,7 +781,7 @@ end
 # -- Boot ---------------------------------------------------------------------
 # Architecture: two headless agents (analyst, summarizer) + one TEA dashboard.
 # The dashboard polls agent models every 200ms for display. Agents communicate
-# via Command.send_agent -- when the analyst finishes a file, it sends the
+# via Directive.send_agent -- when the analyst finishes a file, it sends the
 # finding to the summarizer.
 
 # Ensure agent registry

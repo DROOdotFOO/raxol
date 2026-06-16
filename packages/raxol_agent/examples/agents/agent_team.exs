@@ -5,7 +5,7 @@
 #
 # What you'll learn:
 #   - Agent.Team is an OTP Supervisor for agent groups (crash isolation)
-#   - Command.send_agent(target, msg) routes messages via Registry
+#   - Directive.send_agent(target, msg) routes messages via Registry
 #   - Coordinator/worker pattern: coordinator assigns, workers report back
 #   - Each agent is a separate process with its own TEA loop
 #
@@ -22,12 +22,12 @@ defmodule FileAnalyzer do
   def init(_context), do: %{analyzed: 0}
 
   # Worker receives work assignment with a reply_to address.
-  # Uses Command.async to do file I/O off the TEA loop.
+  # Uses Directive.async to do file I/O off the TEA loop.
   @impl true
   def update({:agent_message, _from, {:analyze, file, reply_to}}, model) do
     {%{model | analyzed: model.analyzed + 1},
      [
-       Command.async(fn sender ->
+       Directive.async(fn sender ->
          line_count =
            case File.read(file) do
              {:ok, content} -> content |> String.split("\n") |> length()
@@ -49,10 +49,10 @@ defmodule FileAnalyzer do
   end
 
   # When async work completes, send the report to the coordinator.
-  # Command.send_agent routes through the Registry by agent :id.
+  # Directive.send_agent routes through the Registry by agent :id.
   @impl true
   def update({:command_result, {:report_to, reply_to, report}}, model) do
-    {model, [Command.send_agent(reply_to, {:file_report, report})]}
+    {model, [Directive.send_agent(reply_to, {:file_report, report})]}
   end
 
   @impl true
@@ -80,7 +80,7 @@ defmodule ReviewCoordinator do
       |> Enum.with_index()
       |> Enum.map(fn {file, idx} ->
         worker = Enum.at(model.workers, rem(idx, length(model.workers)))
-        Command.send_agent(worker, {:analyze, file, :coordinator})
+        Directive.send_agent(worker, {:analyze, file, :coordinator})
       end)
 
     IO.puts(
@@ -119,7 +119,7 @@ defmodule ReviewCoordinator do
       IO.puts("======================")
 
       {%{model | reports: new_reports, pending: 0, status: :done},
-       [Command.quit()]}
+       [Directive.stop()]}
     else
       IO.puts(
         "[coordinator] Report received for #{report.file} (#{remaining} remaining)"

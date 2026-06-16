@@ -312,7 +312,7 @@ defmodule ReactAgent do
 
   def update(%{type: :key, data: %{key: "q"}}, model) do
     IO.puts("\nBye!")
-    {model, [Command.quit()]}
+    {model, [Directive.stop()]}
   end
 
   def update(_msg, model), do: {model, []}
@@ -347,7 +347,7 @@ defmodule ReactAgent do
   end
 
   defp run_action_async_react(prompt, backend, backend_opts) do
-    Command.async(fn sender ->
+    Directive.async(fn sender ->
       case ReAct.execute(
              {nil, %{prompt: prompt}},
              %{},

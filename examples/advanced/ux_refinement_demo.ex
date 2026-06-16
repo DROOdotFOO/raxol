@@ -23,7 +23,6 @@ defmodule Raxol.Examples.UXRefinementDemo do
   alias Raxol.Core.UXRefinement
   alias Raxol.Core.FocusManager
   alias Raxol.UI.Components.FocusRing
-  alias Raxol.Core.Runtime.Command
   alias Raxol.View.Elements, as: UI
   alias Raxol.Core.Runtime.ProcessStore
   require Raxol.Core.Runtime.Log
