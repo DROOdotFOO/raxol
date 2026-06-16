@@ -1,11 +1,11 @@
 defmodule Raxol.ACP.Job.Workflow do
   @moduledoc """
-  Phase 25 `Raxol.Workflow` graph mirroring `Raxol.ACP.Job.StateMachine`.
+  `Raxol.Workflow` graph mirroring `Raxol.ACP.Job.StateMachine`.
 
-  Phase A of the ADR-0016 migration: this module compiles a graph
+  Compiles a graph
   that has the same state-machine shape as the current `Job.Server`
   implementation. Each transition dispatches exactly one
-  `Raxol.ACP.Directive.CreateMemo` (Phase 24 D-6), the workflow
+  `Raxol.ACP.Directive.CreateMemo`, the workflow
   checkpoints after every memo write, and waiting phases interrupt
   to wait for the next inbound event.
 
@@ -221,7 +221,7 @@ defmodule Raxol.ACP.Job.Workflow do
   @doc """
   Canonical list of pause-reason atoms emitted by `wait_*` nodes.
 
-  Surfaces the contract documented in ADR-0017 so dashboards and
+  Surfaces the pause-reason contract so dashboards and
   filters can enumerate the expected reasons without scraping the
   module source. Order mirrors the ACP phase ladder.
   """
@@ -287,7 +287,7 @@ defmodule Raxol.ACP.Job.Workflow do
   # A memo node fires one `Raxol.ACP.Directive.CreateMemo` for the
   # phase it is named after, appends a memo record to state, advances
   # `current_state`, and clears the pending fields. No interrupts;
-  # this node is retry-safe. Phase 24 D-6: the on-chain call routes
+  # this node is retry-safe. The on-chain call routes
   # through the directive protocol so the canonical operation is the
   # Directive struct, not the raw ContractClient call.
 
