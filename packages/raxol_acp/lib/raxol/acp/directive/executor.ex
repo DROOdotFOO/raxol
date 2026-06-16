@@ -1,6 +1,8 @@
 defmodule Raxol.ACP.Directive.Helper do
   @moduledoc false
 
+  alias Raxol.Core.Runtime.Directive.Executor
+
   @doc """
   Run `fun/0` in a Task, route success to `{:command_result, {success_tag, payload}}`,
   errors to `{:command_result, {error_tag, reason}}`, and any raise to
@@ -26,6 +28,68 @@ defmodule Raxol.ACP.Directive.Helper do
       end
     end)
   end
+
+  @doc """
+  Dispatch a Directive and block until its `{:command_result, ...}` reply
+  arrives, unwrapping the success/error tag pair into `{:ok, payload}` or
+  `{:error, reason}`.
+
+  Used inside `Raxol.Workflow` node bodies that need the directive's
+  result inline (e.g. `Raxol.ACP.Job.Workflow.write_memo/2` needs the
+  tx_hash before appending the memo to state). Async callers should
+  invoke `Raxol.Core.Runtime.Directive.Executor.execute/2` directly
+  and listen for `{:command_result, ...}` themselves.
+
+  The success/error tags are derived from the directive's struct
+  module via the per-directive `result_tags/0` reflection (each
+  `defimpl` in this file declares its own pair). A 30s default
+  timeout matches the previous synchronous `ContractClient.*` call
+  timeouts under JSON-RPC.
+  """
+  @spec execute_sync(struct(), keyword()) :: {:ok, term()} | {:error, term()}
+  def execute_sync(directive, opts \\ []) when is_struct(directive) do
+    timeout_ms = Keyword.get(opts, :timeout_ms, 30_000)
+    {success_tag, error_tag} = result_tags!(directive)
+
+    Executor.execute(directive, %{pid: self(), runtime_pid: self()})
+
+    receive do
+      {:command_result, {^success_tag, payload}} -> {:ok, payload}
+      {:command_result, {^error_tag, reason}} -> {:error, reason}
+    after
+      timeout_ms -> {:error, {:directive_timeout, directive.__struct__}}
+    end
+  end
+
+  # Per-directive (success, error) message-tag pair, mirroring the
+  # `Helper.run_async/4` call in each `defimpl` below. Centralized so
+  # `execute_sync/2` can derive the receive pattern from the directive
+  # struct alone.
+  defp result_tags!(%Raxol.ACP.Directive.CreateJob{}),
+    do: {:acp_create_job_result, :acp_create_job_error}
+
+  defp result_tags!(%Raxol.ACP.Directive.SetBudget{}),
+    do: {:acp_set_budget_result, :acp_set_budget_error}
+
+  defp result_tags!(%Raxol.ACP.Directive.SetBudgetWithPaymentToken{}),
+    do:
+      {:acp_set_budget_with_payment_token_result,
+       :acp_set_budget_with_payment_token_error}
+
+  defp result_tags!(%Raxol.ACP.Directive.CreateMemo{}),
+    do: {:acp_create_memo_result, :acp_create_memo_error}
+
+  defp result_tags!(%Raxol.ACP.Directive.CreatePayableMemo{}),
+    do: {:acp_create_payable_memo_result, :acp_create_payable_memo_error}
+
+  defp result_tags!(%Raxol.ACP.Directive.SignMemo{}),
+    do: {:acp_sign_memo_result, :acp_sign_memo_error}
+
+  defp result_tags!(%Raxol.ACP.Directive.ClaimBudget{}),
+    do: {:acp_claim_budget_result, :acp_claim_budget_error}
+
+  defp result_tags!(%Raxol.ACP.Directive.ConfirmX402Payment{}),
+    do: {:acp_confirm_x402_result, :acp_confirm_x402_error}
 end
 
 defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.ACP.Directive.CreateJob do

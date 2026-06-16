@@ -80,6 +80,8 @@ defmodule Raxol.ACP.Job.Workflow do
   """
 
   alias Raxol.ACP.ContractClient
+  alias Raxol.ACP.Directive
+  alias Raxol.ACP.Directive.Helper, as: DirectiveHelper
   alias Raxol.ACP.Job.StateMachine
   alias Raxol.Workflow
   alias Raxol.Workflow.Compiled
@@ -281,10 +283,12 @@ defmodule Raxol.ACP.Job.Workflow do
 
   # --- Memo node bodies ---
   #
-  # A memo node fires one `ContractClient.create_memo` for the
+  # A memo node fires one `Raxol.ACP.Directive.CreateMemo` for the
   # phase it is named after, appends a memo record to state, advances
   # `current_state`, and clears the pending fields. No interrupts;
-  # this node is retry-safe.
+  # this node is retry-safe. Phase 24 D-6: the on-chain call routes
+  # through the directive protocol so the canonical operation is the
+  # Directive struct, not the raw ContractClient call.
 
   defp memo_node(next_phase) do
     fn state -> write_memo(state, next_phase) end
@@ -297,13 +301,16 @@ defmodule Raxol.ACP.Job.Workflow do
     memo_type = memo_type_for_event(event)
     content = encode_content(payload)
 
-    case ContractClient.create_memo(
-           state.job_id,
-           content,
-           memo_type,
-           false,
-           next_phase
-         ) do
+    directive =
+      Directive.create_memo(
+        job_id: state.job_id,
+        content: content,
+        memo_type: memo_type,
+        is_secured: false,
+        next_phase: next_phase
+      )
+
+    case DirectiveHelper.execute_sync(directive) do
       {:ok, tx_hash} ->
         memo = %{
           next_phase: next_phase,
