@@ -58,6 +58,107 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
     GenServer.call(server, :config)
   end
 
+  @doc """
+  Dispatch a `sym:`-namespace callback string from a Telegram
+  inline-keyboard tap.
+
+  Mirrors `Raxol.Symphony.Surfaces.Watch.Notifier.handle_action/2`:
+  parses via `Raxol.Symphony.OperatorCallback` and dispatches to the
+  orchestrator (refresh / stop / resume) or the notifier (list /
+  per-run detail message push).
+
+  ## Options
+
+    * `:orchestrator` -- orchestrator pid or name; defaults to
+      `Raxol.Symphony.Orchestrator`.
+    * `:notifier` -- notifier pid or name for callbacks that push
+      a message (`sym:list`, `sym:run:<id>`); defaults to
+      `__MODULE__`. Pass `nil` to make those callbacks `:noop`.
+
+  ## Return shape
+
+      :noop
+      | {:ok, :refresh | :listed | :stopped | {:resumed, decision} | {:run_pushed, id}}
+      | {:error, :not_running | :not_paused | :orchestrator_unavailable}
+  """
+  @spec handle_callback(binary(), keyword()) ::
+          :noop
+          | {:ok,
+             :refresh
+             | :listed
+             | :stopped
+             | {:resumed, binary()}
+             | {:run_pushed, binary()}}
+          | {:error, atom()}
+  def handle_callback(callback_data, opts \\ []) when is_binary(callback_data) do
+    orch = Keyword.get(opts, :orchestrator, Raxol.Symphony.Orchestrator)
+    notifier = Keyword.get(opts, :notifier, __MODULE__)
+
+    callback_data
+    |> Raxol.Symphony.OperatorCallback.parse()
+    |> dispatch(orch, notifier)
+  end
+
+  defp dispatch(:refresh, orch, _notifier), do: do_refresh(orch)
+  defp dispatch(:list, orch, notifier), do: do_list(orch, notifier)
+  defp dispatch(:dismiss, _orch, _notifier), do: :noop
+  defp dispatch({:stop, id}, orch, _notifier), do: do_stop(orch, id)
+  defp dispatch({:run_detail, id}, orch, notifier), do: do_run_detail(orch, notifier, id)
+  defp dispatch({:approve, _id}, _orch, _notifier), do: :noop
+  defp dispatch({:resume, id, decision}, orch, _notifier), do: do_resume(orch, id, decision)
+  defp dispatch({:unknown, _raw}, _orch, _notifier), do: :noop
+
+  defp do_refresh(orch) do
+    _ = safe_call(fn -> Orchestrator.refresh(orch) end)
+    {:ok, :refresh}
+  end
+
+  defp do_list(_orch, nil), do: :noop
+
+  defp do_list(_orch, notifier) do
+    case safe_call(fn -> push_snapshot(notifier) end) do
+      {:ok, _} -> {:ok, :listed}
+      _ -> {:error, :notifier_unavailable}
+    end
+  end
+
+  defp do_stop(orch, id) do
+    case safe_call(fn -> Orchestrator.stop_run(orch, id) end) do
+      {:ok, :ok} -> {:ok, :stopped}
+      {:ok, {:error, reason}} -> {:error, reason}
+      _ -> {:error, :orchestrator_unavailable}
+    end
+  end
+
+  defp do_resume(orch, id, decision) do
+    case safe_call(fn -> Orchestrator.resume_run(orch, id, decision) end) do
+      {:ok, :ok} -> {:ok, {:resumed, decision}}
+      {:ok, {:error, reason}} -> {:error, reason}
+      _ -> {:error, :orchestrator_unavailable}
+    end
+  end
+
+  defp do_run_detail(_orch, nil, _id), do: :noop
+
+  defp do_run_detail(orch, notifier, id) do
+    case safe_call(fn -> Orchestrator.snapshot(orch) end) do
+      {:ok, snapshot} ->
+        entry =
+          (snapshot[:running] || []) ++ (snapshot[:paused] || []) ++ (snapshot[:retrying] || [])
+          |> Enum.find(&(Map.get(&1, :issue_id) == id))
+
+        if entry do
+          GenServer.cast(notifier, {:push_run_detail, entry})
+          {:ok, {:run_pushed, id}}
+        else
+          {:error, :not_found}
+        end
+
+      _ ->
+        {:error, :orchestrator_unavailable}
+    end
+  end
+
   # -- GenServer callbacks ----------------------------------------------------
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -95,6 +196,17 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
   def handle_manager_cast(:push_snapshot, state) do
     snapshot = safe_snapshot(state.orchestrator)
     {text, keyboard} = Formatter.snapshot_message(snapshot)
+    broadcast(state, text, keyboard)
+    {:noreply, state}
+  end
+
+  def handle_manager_cast({:push_run_detail, entry}, state) do
+    {text, keyboard} =
+      case Map.get(entry, :interrupt_reason) do
+        nil -> Formatter.run_message(entry)
+        _reason -> Formatter.paused_run_message(entry)
+      end
+
     broadcast(state, text, keyboard)
     {:noreply, state}
   end

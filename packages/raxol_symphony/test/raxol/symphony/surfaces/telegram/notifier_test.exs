@@ -192,4 +192,140 @@ defmodule Raxol.Symphony.Surfaces.Telegram.NotifierTest do
       assert cfg.include_ticks? == false
     end
   end
+
+  # -- handle_callback/2 ----------------------------------------------------
+
+  describe "handle_callback/2" do
+    defp wait_paused(orch, issue_id, timeout_ms \\ 500) do
+      deadline = System.monotonic_time(:millisecond) + timeout_ms
+      do_wait(deadline, fn -> Map.has_key?(Orchestrator.paused(orch), issue_id) end)
+    end
+
+    defp do_wait(deadline, fun) do
+      if fun.() do
+        :ok
+      else
+        if System.monotonic_time(:millisecond) >= deadline,
+          do: flunk("wait timed out"),
+          else: (Process.sleep(20); do_wait(deadline, fun))
+      end
+    end
+
+    test "sym:refresh triggers Orchestrator.refresh and reports :refresh" do
+      orch = start_orchestrator()
+
+      assert {:ok, :refresh} =
+               Notifier.handle_callback("sym:refresh", orchestrator: orch)
+    end
+
+    test "sym:list pushes a snapshot via the notifier" do
+      orch = start_orchestrator()
+      notifier = start_notifier(orch, [42], self())
+
+      assert {:ok, :listed} =
+               Notifier.handle_callback("sym:list",
+                 orchestrator: orch,
+                 notifier: notifier
+               )
+
+      assert_receive {:tg, 42, _text, _keyboard}, 200
+    end
+
+    test "sym:list with no notifier returns :noop" do
+      orch = start_orchestrator()
+
+      assert :noop =
+               Notifier.handle_callback("sym:list",
+                 orchestrator: orch,
+                 notifier: nil
+               )
+    end
+
+    test "sym:stop:<id> stops a running issue" do
+      orch = start_orchestrator()
+      seed_running_issue(orch, "a", "MT-1")
+
+      assert {:ok, :stopped} =
+               Notifier.handle_callback("sym:stop:a", orchestrator: orch)
+
+      assert Orchestrator.snapshot(orch).counts.running == 0
+    end
+
+    test "sym:stop:<id> surfaces :not_running for an unknown issue" do
+      orch = start_orchestrator()
+
+      assert {:error, :not_running} =
+               Notifier.handle_callback("sym:stop:ghost", orchestrator: orch)
+    end
+
+    test "sym:resume:<id>:<decision> calls Orchestrator.resume_run/3" do
+      orch = start_orchestrator()
+
+      Memory.put_issue(%Issue{id: "a", identifier: "MT-1", title: "T", state: "Todo"})
+
+      Noop.Director.set(
+        "MT-1",
+        {:pause_then, :awaiting_review, %{seq: 1}, {:succeed_after, 0}}
+      )
+
+      :ok = Orchestrator.tick_now(orch)
+      wait_paused(orch, "a")
+
+      assert {:ok, {:resumed, "approved"}} =
+               Notifier.handle_callback("sym:resume:a:approved", orchestrator: orch)
+    end
+
+    test "sym:resume on an unknown issue returns :not_paused" do
+      orch = start_orchestrator()
+
+      assert {:error, :not_paused} =
+               Notifier.handle_callback("sym:resume:ghost:approved",
+                 orchestrator: orch
+               )
+    end
+
+    test "sym:run:<id> pushes a per-run detail message" do
+      orch = start_orchestrator()
+      notifier = start_notifier(orch, [7], self())
+      seed_running_issue(orch, "a", "MT-1")
+
+      assert {:ok, {:run_pushed, "a"}} =
+               Notifier.handle_callback("sym:run:a",
+                 orchestrator: orch,
+                 notifier: notifier
+               )
+
+      assert_receive {:tg, 7, text, _keyboard}, 200
+      assert text =~ "MT-1"
+    end
+
+    test "sym:run:<id> for unknown issue returns :not_found" do
+      orch = start_orchestrator()
+      notifier = start_notifier(orch, [7], self())
+
+      assert {:error, :not_found} =
+               Notifier.handle_callback("sym:run:ghost",
+                 orchestrator: orch,
+                 notifier: notifier
+               )
+    end
+
+    test "sym:dismiss is a noop" do
+      assert :noop = Notifier.handle_callback("sym:dismiss")
+    end
+
+    test "sym:approve:<id> is a noop (legacy)" do
+      assert :noop = Notifier.handle_callback("sym:approve:any_id")
+    end
+
+    test "unknown callback strings are noops" do
+      assert :noop = Notifier.handle_callback("not-a-symphony-action")
+      assert :noop = Notifier.handle_callback("sym:weird")
+    end
+
+    test "unreachable orchestrator surfaces :orchestrator_unavailable" do
+      assert {:error, :orchestrator_unavailable} =
+               Notifier.handle_callback("sym:stop:any", orchestrator: :nonexistent)
+    end
+  end
 end
