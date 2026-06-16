@@ -97,7 +97,13 @@ defmodule Raxol.ACP.DirectiveTest do
         next_phase: :transaction
       ]
 
-      d = Directive.create_payable_memo(job_id: "job-1", content: "pay", opts: opts)
+      d =
+        Directive.create_payable_memo(
+          job_id: "job-1",
+          content: "pay",
+          opts: opts
+        )
+
       assert %CreatePayableMemo{opts: ^opts} = d
     end
 
@@ -106,11 +112,16 @@ defmodule Raxol.ACP.DirectiveTest do
                Directive.sign_memo(memo_id: 42, approved: true, reason: "ok")
 
       assert %SignMemo{memo_id: "memo-1"} =
-               Directive.sign_memo(memo_id: "memo-1", approved: false, reason: "no")
+               Directive.sign_memo(
+                 memo_id: "memo-1",
+                 approved: false,
+                 reason: "no"
+               )
     end
 
     test "claim_budget/1 and confirm_x402_payment/1 require job_id" do
-      assert %ClaimBudget{job_id: "job-1"} = Directive.claim_budget(job_id: "job-1")
+      assert %ClaimBudget{job_id: "job-1"} =
+               Directive.claim_budget(job_id: "job-1")
 
       assert %ConfirmX402Payment{job_id: "job-1"} =
                Directive.confirm_x402_payment(job_id: "job-1")
@@ -142,7 +153,9 @@ defmodule Raxol.ACP.DirectiveTest do
       d = Directive.set_budget(job_id: job_id, amount: Decimal.new("2.5"))
 
       Executor.execute(d, ctx())
-      assert_receive {:command_result, {:acp_set_budget_result, "tx-" <> _}}, 1_000
+
+      assert_receive {:command_result, {:acp_set_budget_result, "tx-" <> _}},
+                     1_000
     end
 
     test "missing job replies with acp_set_budget_error" do
@@ -165,7 +178,8 @@ defmodule Raxol.ACP.DirectiveTest do
 
       Executor.execute(d, ctx())
 
-      assert_receive {:command_result, {:acp_set_budget_with_payment_token_result, "tx-" <> _}},
+      assert_receive {:command_result,
+                      {:acp_set_budget_with_payment_token_result, "tx-" <> _}},
                      1_000
     end
   end
@@ -183,7 +197,9 @@ defmodule Raxol.ACP.DirectiveTest do
         )
 
       Executor.execute(d, ctx())
-      assert_receive {:command_result, {:acp_create_memo_result, "tx-" <> _}}, 1_000
+
+      assert_receive {:command_result, {:acp_create_memo_result, "tx-" <> _}},
+                     1_000
     end
 
     test "errors when job not found" do
@@ -218,7 +234,8 @@ defmodule Raxol.ACP.DirectiveTest do
 
       Executor.execute(d, ctx())
 
-      assert_receive {:command_result, {:acp_create_payable_memo_result, "tx-" <> _}},
+      assert_receive {:command_result,
+                      {:acp_create_payable_memo_result, "tx-" <> _}},
                      1_000
     end
   end
@@ -227,13 +244,17 @@ defmodule Raxol.ACP.DirectiveTest do
     test "signs an approval" do
       d = Directive.sign_memo(memo_id: "memo-1", approved: true, reason: "ok")
       Executor.execute(d, ctx())
-      assert_receive {:command_result, {:acp_sign_memo_result, "tx-" <> _}}, 1_000
+
+      assert_receive {:command_result, {:acp_sign_memo_result, "tx-" <> _}},
+                     1_000
     end
 
     test "signs a rejection" do
       d = Directive.sign_memo(memo_id: 7, approved: false, reason: "no")
       Executor.execute(d, ctx())
-      assert_receive {:command_result, {:acp_sign_memo_result, "tx-" <> _}}, 1_000
+
+      assert_receive {:command_result, {:acp_sign_memo_result, "tx-" <> _}},
+                     1_000
     end
   end
 
@@ -242,13 +263,17 @@ defmodule Raxol.ACP.DirectiveTest do
       {:ok, job_id} = InMemory.create_job("0xa", "0xb", 1_700_000_000)
       d = Directive.claim_budget(job_id: job_id)
       Executor.execute(d, ctx())
-      assert_receive {:command_result, {:acp_claim_budget_result, "tx-" <> _}}, 1_000
+
+      assert_receive {:command_result, {:acp_claim_budget_result, "tx-" <> _}},
+                     1_000
     end
 
     test "errors when job not found" do
       d = Directive.claim_budget(job_id: "missing")
       Executor.execute(d, ctx())
-      assert_receive {:command_result, {:acp_claim_budget_error, _reason}}, 1_000
+
+      assert_receive {:command_result, {:acp_claim_budget_error, _reason}},
+                     1_000
     end
   end
 
@@ -257,7 +282,9 @@ defmodule Raxol.ACP.DirectiveTest do
       {:ok, job_id} = InMemory.create_job("0xa", "0xb", 1_700_000_000)
       d = Directive.confirm_x402_payment(job_id: job_id)
       Executor.execute(d, ctx())
-      assert_receive {:command_result, {:acp_confirm_x402_result, "tx-" <> _}}, 1_000
+
+      assert_receive {:command_result, {:acp_confirm_x402_result, "tx-" <> _}},
+                     1_000
     end
   end
 
@@ -272,7 +299,8 @@ defmodule Raxol.ACP.DirectiveTest do
         d = Directive.claim_budget(job_id: "job-1")
         Executor.execute(d, ctx())
 
-        assert_receive {:command_result, {:acp_claim_budget_error, {:exception, msg}}},
+        assert_receive {:command_result,
+                        {:acp_claim_budget_error, {:exception, msg}}},
                        1_000
 
         assert is_binary(msg)
@@ -283,4 +311,34 @@ defmodule Raxol.ACP.DirectiveTest do
   end
 
   defp ctx, do: %{pid: self(), runtime_pid: self()}
+
+  describe "Helper.execute_sync/2 (Phase 24 D-6)" do
+    alias Raxol.ACP.Directive.Helper
+
+    test "unwraps the async {:command_result, ...} reply into {:ok, payload}" do
+      {:ok, job_id} = InMemory.create_job("0xa", "0xb", 1_700_000_000)
+
+      d =
+        Directive.create_memo(
+          job_id: job_id,
+          content: "ack",
+          memo_type: :message,
+          next_phase: :negotiation
+        )
+
+      assert {:ok, "tx-" <> _} = Helper.execute_sync(d)
+    end
+
+    test "surfaces {:error, reason} when the contract client returns one" do
+      d =
+        Directive.create_memo(
+          job_id: "ghost-job",
+          content: "ack",
+          memo_type: :message,
+          next_phase: :negotiation
+        )
+
+      assert {:error, _reason} = Helper.execute_sync(d)
+    end
+  end
 end

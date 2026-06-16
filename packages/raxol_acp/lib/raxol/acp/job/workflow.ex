@@ -4,10 +4,10 @@ defmodule Raxol.ACP.Job.Workflow do
 
   Phase A of the ADR-0016 migration: this module compiles a graph
   that has the same state-machine shape as the current `Job.Server`
-  implementation. Each transition fires exactly one
-  `ContractClient.create_memo` call, the workflow checkpoints after
-  every memo write, and waiting phases interrupt to wait for the
-  next inbound event.
+  implementation. Each transition dispatches exactly one
+  `Raxol.ACP.Directive.CreateMemo` (Phase 24 D-6), the workflow
+  checkpoints after every memo write, and waiting phases interrupt
+  to wait for the next inbound event.
 
   ## Topology
 
@@ -30,10 +30,11 @@ defmodule Raxol.ACP.Job.Workflow do
     * `:wait_*` -- pure interrupt; no side effects. On first invocation
       it throws to pause the run; on resume it pops the event tuple
       from the scratchpad and writes it into state.
-    * `:memo_*` -- side-effecting call to
-      `Raxol.ACP.ContractClient.create_memo/5`. No interrupt. Eligible
-      for `failure_policy: :retry` because re-running it does not
-      re-pop the scratchpad.
+    * `:memo_*` -- side-effecting dispatch of a
+      `Raxol.ACP.Directive.CreateMemo` through
+      `Raxol.ACP.Directive.Helper.execute_sync/2`. No interrupt.
+      Eligible for `failure_policy: :retry` because re-running it does
+      not re-pop the scratchpad.
 
   Combining them in one node would break retry: the workflow's
   retry loop re-runs the whole node body, and `Workflow.interrupt/1`
