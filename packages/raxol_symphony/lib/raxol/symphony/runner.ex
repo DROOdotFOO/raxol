@@ -82,6 +82,7 @@ defmodule Raxol.Symphony.Runner do
   1. `:runner_module` option (used by tests).
   2. `config.runner.kind` mapping:
      - `"raxol_agent"` -> `Raxol.Symphony.Runners.RaxolAgent`
+     - `"raxol_agent_session"` -> `Raxol.Symphony.Runners.RaxolAgentSession`
      - `"codex"` -> `Raxol.Symphony.Runners.Codex`
      - `"noop"` -> `Raxol.Symphony.Runners.Noop`
   """
@@ -95,6 +96,9 @@ defmodule Raxol.Symphony.Runner do
 
   defp resolve_from_config(%Config{runner: %{kind: "raxol_agent"}}),
     do: {:ok, Raxol.Symphony.Runners.RaxolAgent}
+
+  defp resolve_from_config(%Config{runner: %{kind: "raxol_agent_session"}}),
+    do: {:ok, Raxol.Symphony.Runners.RaxolAgentSession}
 
   defp resolve_from_config(%Config{runner: %{kind: "codex"}}),
     do: {:ok, Raxol.Symphony.Runners.Codex}

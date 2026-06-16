@@ -1,0 +1,55 @@
+defmodule Raxol.Symphony.TestSupport.SessionAgentSucceed do
+  @moduledoc """
+  TEA agent module for the Session-backed runner tests.
+
+  On `:symphony_start`, emits one `:turn_complete` event then `:done`.
+  """
+
+  def init(_args), do: {%{session_id: nil, done?: false}, []}
+
+  def update({:agent_message, _, {:symphony_start, payload}}, model) do
+    session_id = payload.session_id
+
+    if Code.ensure_loaded?(Raxol.Agent.SessionStreamer) do
+      Raxol.Agent.SessionStreamer.emit(session_id, {:turn_complete, %{tokens: %{total: 5}}})
+      Raxol.Agent.SessionStreamer.emit(session_id, {:done, %{result: :ok}})
+    end
+
+    {Map.merge(model, %{session_id: session_id, done?: true}), []}
+  end
+
+  def update(_msg, model), do: {model, []}
+
+  def view(_model), do: %{type: :text, content: "ok"}
+end
+
+defmodule Raxol.Symphony.TestSupport.SessionAgentErrors do
+  @moduledoc """
+  TEA agent module that emits a `:error` event on `:symphony_start`.
+  """
+
+  def init(_args), do: {%{}, []}
+
+  def update({:agent_message, _, {:symphony_start, payload}}, model) do
+    if Code.ensure_loaded?(Raxol.Agent.SessionStreamer) do
+      Raxol.Agent.SessionStreamer.emit(payload.session_id, {:error, :backend_unavailable})
+    end
+
+    {model, []}
+  end
+
+  def update(_msg, model), do: {model, []}
+
+  def view(_model), do: %{type: :text, content: "err"}
+end
+
+defmodule Raxol.Symphony.TestSupport.SessionAgentSilent do
+  @moduledoc """
+  TEA agent module that never emits anything; used to verify the
+  Session-backed runner's timeout behavior.
+  """
+
+  def init(_args), do: {%{}, []}
+  def update(_msg, model), do: {model, []}
+  def view(_model), do: %{type: :text, content: "silent"}
+end
