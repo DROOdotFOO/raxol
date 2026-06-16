@@ -715,11 +715,17 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
   defp agent_tracker_cache_ttl_ms(_), do: 30_000
 
-  defp agent_thread_log(%Config{runner: %{agent: agent}}) do
-    Raxol.Agent.ThreadLog.normalize(Map.get(agent, :thread_log))
+  defp agent_thread_log(%Config{runner: %{agent: agent}} = config) do
+    case Raxol.Agent.ThreadLog.normalize(Map.get(agent, :thread_log)) do
+      nil -> Raxol.Symphony.AgentMetadata.read(agent_module(config)).thread_log
+      tuple -> tuple
+    end
   end
 
   defp agent_thread_log(_), do: nil
+
+  defp agent_module(%Config{runner: %{agent: agent}}), do: Map.get(agent, :module)
+  defp agent_module(_), do: nil
 
   defp build_thread_id(%Issue{id: id}, attempt) when not is_nil(id) do
     "symphony-agent-" <> to_string(id) <> "-" <> to_string(attempt || 0)
@@ -734,11 +740,15 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
   defp agent_policies(_), do: []
 
-  defp agent_sandboxes(%Config{runner: %{agent: agent}}) do
-    case Map.get(agent, :sandboxes, []) do
-      list when is_list(list) -> list
-      _ -> []
-    end
+  defp agent_sandboxes(%Config{runner: %{agent: agent}} = config) do
+    direct =
+      case Map.get(agent, :sandboxes, []) do
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    module_declared = Raxol.Symphony.AgentMetadata.read(agent_module(config)).sandboxes
+    direct ++ module_declared
   end
 
   defp agent_sandboxes(_), do: []
