@@ -1,10 +1,10 @@
 defmodule Raxol.Core.ErrorTemplates do
   @moduledoc """
-  Enhanced error message templates for Phase 4.3 Error Experience.
+  Enhanced error message templates for Error Experience.
 
   Provides contextual, actionable error messages that reference:
-  - Phase 3 performance optimizations and targets
-  - Phase 4.2 development tools for debugging
+  - performance optimizations and targets
+  - development tools for debugging
   - Specific fix suggestions with confidence ratings
   - Interactive recovery workflows
   """
@@ -13,7 +13,7 @@ defmodule Raxol.Core.ErrorTemplates do
   @type error_template :: %{
           title: String.t(),
           description: String.t(),
-          phase3_context: String.t() | nil,
+          optimization_context: String.t() | nil,
           suggested_actions: [String.t()],
           related_tools: [atom()],
           recovery_steps: [String.t()],
@@ -25,14 +25,14 @@ defmodule Raxol.Core.ErrorTemplates do
     :parser_slow => %{
       title: "Parser Performance Below Target",
       description: """
-      ANSI sequence parsing is taking longer than the Phase 3 target of 3.3μs/op.
+      ANSI sequence parsing is taking longer than the performance target of 3.3μs/op.
 
       Current performance may indicate:
       - Complex nested sequences overwhelming the parser
       - Parser state cache misses
       - Memory pressure affecting allocation speed
       """,
-      phase3_context: "Phase 3 target: 3.3μs/op average parsing time",
+      optimization_context: "performance target: 3.3μs/op average parsing time",
       suggested_actions: [
         "mix raxol.analyze --depth comprehensive --benchmark",
         "mix raxol.profile --module Raxol.Terminal.ANSI.Parser",
@@ -48,9 +48,9 @@ defmodule Raxol.Core.ErrorTemplates do
       confidence: 0.9
     },
     :memory_limit_exceeded => %{
-      title: "Memory Usage Exceeds Phase 3 Target",
+      title: "Memory Usage Exceeds Memory Target",
       description: """
-      Application memory usage has exceeded the Phase 3 optimization target of 2.8MB per session.
+      Application memory usage has exceeded the optimization target of 2.8MB per session.
 
       This may indicate:
       - Buffer pooling not properly configured
@@ -58,7 +58,7 @@ defmodule Raxol.Core.ErrorTemplates do
       - ETS table growth beyond expected bounds
       - Render batching queues accumulating
       """,
-      phase3_context: "Phase 3 target: 2.8MB maximum memory per session",
+      optimization_context: "performance target: 2.8MB maximum memory per session",
       suggested_actions: [
         "mix raxol.debug --trace \"*\" --memory-threshold 2.8MB",
         "Enable automatic buffer pooling optimization",
@@ -77,7 +77,7 @@ defmodule Raxol.Core.ErrorTemplates do
     :render_batch_overflow => %{
       title: "Render Batch Queue Overflow",
       description: """
-      The render batching system from Phase 3 optimizations has exceeded capacity.
+      The render batching system from performance optimizations has exceeded capacity.
 
       Possible causes:
       - Too many rapid UI updates overwhelming the batcher
@@ -85,7 +85,7 @@ defmodule Raxol.Core.ErrorTemplates do
       - Adaptive frame rate not throttling effectively
       - Component optimization markers missing
       """,
-      phase3_context: "Phase 3 render batching with adaptive frame rate system",
+      optimization_context: "render batching with adaptive frame rate system",
       suggested_actions: [
         "mix raxol.debug --trace \"Raxol.UI.Rendering.*\"",
         "Check components for @raxol_optimized attribute",
@@ -106,9 +106,9 @@ defmodule Raxol.Core.ErrorTemplates do
   # Component lifecycle error templates
   @component_templates %{
     :missing_optimization_marker => %{
-      title: "Component Missing Phase 3 Optimizations",
+      title: "Component Missing Optimization Markers",
       description: """
-      Component created without Phase 3 optimization markers.
+      Component created without optimization markers.
 
       Components should include:
       - @raxol_optimized true attribute
@@ -116,12 +116,12 @@ defmodule Raxol.Core.ErrorTemplates do
       - Render batching compatibility
       - Proper lifecycle hooks
       """,
-      phase3_context:
-        "Phase 3 requires @raxol_optimized attribute for performance tracking",
+      optimization_context:
+        "Optimization requires @raxol_optimized attribute for performance tracking",
       suggested_actions: [
         "Add @raxol_optimized true to component module",
         "mix raxol.gen.component YourComponent --optimized",
-        "Review component against Phase 3 patterns",
+        "Review component against optimization patterns",
         "Update existing components with optimization markers"
       ],
       related_tools: [:raxol_gen_component],
@@ -136,15 +136,15 @@ defmodule Raxol.Core.ErrorTemplates do
     :component_lifecycle_error => %{
       title: "Component Lifecycle Integration Issue",
       description: """
-      Component lifecycle hooks are not properly integrated with Phase 3 optimizations.
+      Component lifecycle hooks are not properly integrated with performance optimizations.
 
       Common issues:
       - Missing damage tracking callbacks
       - Render batching not implemented
       - State updates bypassing optimization layer
       """,
-      phase3_context:
-        "Phase 3 requires proper lifecycle integration for optimizations",
+      optimization_context:
+        "Optimization requires proper lifecycle integration for optimizations",
       suggested_actions: [
         "Review component lifecycle implementation",
         "mix raxol.debug --component YourComponent",
@@ -172,8 +172,8 @@ defmodule Raxol.Core.ErrorTemplates do
       - Unsupported sequence type
       - Performance degradation affecting parser
       """,
-      phase3_context:
-        "Phase 3 parser optimizations target 3.3μs/op with full ANSI compliance",
+      optimization_context:
+        "parser optimizations target 3.3μs/op with full ANSI compliance",
       suggested_actions: [
         "mix raxol.analyze --target lib/raxol/terminal/ansi/",
         "Check sequence against ANSI standards",
@@ -192,7 +192,7 @@ defmodule Raxol.Core.ErrorTemplates do
     :terminal_buffer_overflow => %{
       title: "Terminal Buffer Capacity Exceeded",
       description: """
-      Terminal buffer has exceeded capacity limits set by Phase 3 optimizations.
+      Terminal buffer has exceeded capacity limits set by performance optimizations.
 
       This may indicate:
       - Buffer pooling not properly limiting growth
@@ -200,8 +200,8 @@ defmodule Raxol.Core.ErrorTemplates do
       - Memory pressure detection not triggering
       - ETS table growth beyond expected bounds
       """,
-      phase3_context:
-        "Phase 3 buffer pooling should prevent overflow through memory management",
+      optimization_context:
+        "buffer pooling should prevent overflow through memory management",
       suggested_actions: [
         "Enable buffer pooling memory pressure detection",
         "mix raxol.debug --memory --buffer-stats",
@@ -222,9 +222,9 @@ defmodule Raxol.Core.ErrorTemplates do
   # Development tool integration error templates
   @tool_templates %{
     :tool_integration_failed => %{
-      title: "Phase 4.2 Development Tool Integration Failed",
+      title: "development tool Integration Failed",
       description: """
-      Failed to integrate with Phase 4.2 development tools for enhanced debugging.
+      Failed to integrate with development tools for enhanced debugging.
 
       Possible issues:
       - Mix tasks not properly installed
@@ -232,8 +232,8 @@ defmodule Raxol.Core.ErrorTemplates do
       - Compilation errors preventing tool loading
       - Permissions issues with tool execution
       """,
-      phase3_context:
-        "Phase 4.2 tools provide insights into Phase 3 optimizations",
+      optimization_context:
+        "development tools provide insights into performance optimizations",
       suggested_actions: [
         "Verify mix raxol.* tasks are available with 'mix help'",
         "Check compilation errors with 'mix compile'",
@@ -277,7 +277,7 @@ defmodule Raxol.Core.ErrorTemplates do
   end
 
   @doc """
-  Generate a formatted error message with Phase 3/4 context.
+  Generate a formatted error message with optimization context.
   """
   def format_error_message(template, _context \\ %{}) do
     """
@@ -286,8 +286,8 @@ defmodule Raxol.Core.ErrorTemplates do
 
     #{template.description}
 
-    #{if template.phase3_context do
-      IO.ANSI.blue() <> "Phase 3 Context:" <> IO.ANSI.reset() <> "\n" <> template.phase3_context <> "\n"
+    #{if template.optimization_context do
+      IO.ANSI.blue() <> "Optimization Context:" <> IO.ANSI.reset() <> "\n" <> template.optimization_context <> "\n"
     else
       ""
     end}
@@ -410,7 +410,7 @@ defmodule Raxol.Core.ErrorTemplates do
     adjustments = [
       if(Map.has_key?(context, :performance_metrics), do: 0.1, else: 0),
       if(Map.has_key?(context, :component_name), do: 0.05, else: 0),
-      if(Map.has_key?(context, :phase3_context), do: 0.1, else: 0)
+      if(Map.has_key?(context, :optimization_context), do: 0.1, else: 0)
     ]
 
     adjusted = base_confidence + Enum.sum(adjustments)
@@ -425,10 +425,10 @@ defmodule Raxol.Core.ErrorTemplates do
 
       Error type: #{error_type}
 
-      This error can be investigated using the Phase 4.2 development tools
-      that provide insights into Phase 3 performance optimizations.
+      This error can be investigated using the development tools
+      that provide insights into performance optimizations.
       """,
-      phase3_context: "Use Phase 4.2 tools to investigate performance impact",
+      optimization_context: "Use development tools to investigate performance impact",
       suggested_actions: [
         "mix raxol.debug --trace \"*\"",
         "mix raxol.analyze --target .",
@@ -438,7 +438,7 @@ defmodule Raxol.Core.ErrorTemplates do
       recovery_steps: [
         "1. Start debug console to investigate",
         "2. Check recent code changes",
-        "3. Verify Phase 3 optimizations are working",
+        "3. Verify performance optimizations are working",
         "4. Review error logs for patterns"
       ],
       confidence: 0.5

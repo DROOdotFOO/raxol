@@ -19,7 +19,7 @@ defmodule Raxol.Core.ErrorPatternLearner.Persistence do
     struct(struct_module, %{
       patterns: patterns,
       suggestion_success_rates: %{},
-      phase3_correlations: initial_phase3_correlations(),
+      optimization_correlations: initial_optimization_correlations(),
       prediction_models: %{},
       learning_enabled: true,
       last_cleanup: DateTime.utc_now()
@@ -33,7 +33,7 @@ defmodule Raxol.Core.ErrorPatternLearner.Persistence do
     data = %{
       patterns: state.patterns,
       suggestion_success_rates: state.suggestion_success_rates,
-      phase3_correlations: state.phase3_correlations,
+      optimization_correlations: state.optimization_correlations,
       last_updated: DateTime.utc_now()
     }
 
@@ -60,7 +60,7 @@ defmodule Raxol.Core.ErrorPatternLearner.Persistence do
     data = %{
       patterns: state.patterns,
       suggestion_success_rates: state.suggestion_success_rates,
-      phase3_correlations: state.phase3_correlations,
+      optimization_correlations: state.optimization_correlations,
       export_timestamp: DateTime.utc_now()
     }
 
@@ -79,8 +79,8 @@ defmodule Raxol.Core.ErrorPatternLearner.Persistence do
     end
   end
 
-  @doc "Returns the initial phase3 correlations map."
-  def initial_phase3_correlations do
+  @doc "Returns the initial optimization correlations map."
+  def initial_optimization_correlations do
     %{parser: 0.0, memory: 0.0, render: 0.0, optimization: 0.0}
   end
 
@@ -100,12 +100,12 @@ defmodule Raxol.Core.ErrorPatternLearner.Persistence do
 
   defp export_to_csv(data) do
     headers =
-      "signature,frequency,successful_fixes,failure_modes,phase3_correlation\n"
+      "signature,frequency,successful_fixes,failure_modes,optimization_correlation\n"
 
     rows =
       data.patterns
       |> Enum.map_join("\n", fn {signature, pattern} ->
-        "#{signature},#{pattern.frequency},#{length(pattern.successful_fixes)},#{length(pattern.failure_modes)},#{pattern.phase3_correlation}"
+        "#{signature},#{pattern.frequency},#{length(pattern.successful_fixes)},#{length(pattern.failure_modes)},#{pattern.optimization_correlation}"
       end)
 
     headers <> rows
@@ -126,7 +126,7 @@ defmodule Raxol.Core.ErrorPatternLearner.Persistence do
       contexts: data["contexts"] || [],
       successful_fixes: data["successful_fixes"] || [],
       failure_modes: data["failure_modes"] || [],
-      phase3_correlation: data["phase3_correlation"] || 0.0,
+      optimization_correlation: data["optimization_correlation"] || 0.0,
       prediction_confidence: data["prediction_confidence"] || 0.5,
       first_seen: parse_datetime(data["first_seen"]),
       last_seen: parse_datetime(data["last_seen"])
