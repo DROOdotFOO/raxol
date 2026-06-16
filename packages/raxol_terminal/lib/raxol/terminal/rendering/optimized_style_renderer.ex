@@ -1,6 +1,6 @@
 defmodule Raxol.Terminal.Rendering.OptimizedStyleRenderer do
   @moduledoc """
-  Phase 3 optimized terminal renderer with efficient style handling.
+  Optimized terminal renderer with efficient style handling.
 
   Key optimizations:
   1. Pre-compiled style patterns at compile time

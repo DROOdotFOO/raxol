@@ -277,7 +277,7 @@ defmodule Raxol.Terminal.Input.InputProcessor do
 
   defp key_mod_code_and_prefix(modifiers) do
     # The test expects "2;5A" for shift+ctrl+A
-    # Let's use 2 for shift, 5 for ctrl, 3 for alt, etc.
+    # Use 2 for shift, 5 for ctrl, 3 for alt, etc.
     # This is a simplification for the test's expected output
     prefix = 2
 
