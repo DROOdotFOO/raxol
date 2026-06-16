@@ -59,6 +59,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   require Logger
 
   alias Raxol.Symphony.{Config, Issue, PromptBuilder, Tracker}
+  alias Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow
+  alias Raxol.Workflow.Compiled
 
   # raxol_agent is optional; the EventForwarder helper landed in 2.5+.
   # Builds against earlier versions fall through to `legacy_forward/3`.
@@ -66,10 +68,129 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
   @impl true
   def run(%Issue{} = issue, %Config{} = config, opts) do
-    if raxol_agent_loaded?() do
-      do_run(issue, config, opts)
-    else
-      {:error, :raxol_agent_not_loaded}
+    cond do
+      not raxol_agent_loaded?() ->
+        {:error, :raxol_agent_not_loaded}
+
+      workflow_mode?(config) ->
+        run_via_workflow(issue, config, opts)
+
+      true ->
+        do_run(issue, config, opts)
+    end
+  end
+
+  # --- Workflow-envelope path (Phase 6) ---
+
+  defp workflow_mode?(%Config{runner: %{agent: agent}}) do
+    Map.get(agent, :workflow_mode) == true
+  end
+
+  defp workflow_mode?(_), do: false
+
+  defp run_via_workflow(%Issue{} = issue, %Config{} = config, opts) do
+    resume_token = Keyword.get(opts, :resume_token)
+    resume_value = Keyword.get(opts, :resume_value)
+
+    with {:ok, backend, backend_opts} <- resolve_backend(config),
+         {:ok, compiled} <- AgentWorkflow.compile(workflow_compile_opts(config)) do
+      case resume_token do
+        %{workflow_run_id: run_id} when not is_nil(run_id) and not is_nil(resume_value) ->
+          compiled
+          |> Compiled.resume(run_id, resume_value)
+          |> translate_workflow_result(issue)
+
+        _ ->
+          run_id = generate_workflow_run_id(issue, opts)
+          state = build_workflow_state(issue, config, opts, backend, backend_opts)
+
+          compiled
+          |> Compiled.invoke(state, run_id: run_id)
+          |> translate_workflow_result(issue)
+      end
+    end
+  end
+
+  defp workflow_compile_opts(%Config{runner: %{agent: agent}}) do
+    # The workflow runtime's Compiled.resume/4 requires a Saver
+    # (otherwise it returns {:error, :no_saver_configured, _}). Default
+    # to a shared in-memory ETS table; consumers wanting BEAM-restart
+    # durability override via agent.workflow_saver, typically to
+    # `{Raxol.Workflow.Checkpoint.Saver.Dets, %{name: ...}}` or the
+    # Postgrex equivalent.
+    saver =
+      Map.get(agent, :workflow_saver) ||
+        {Raxol.Workflow.Checkpoint.Saver.Ets,
+         %{table: :raxol_symphony_agent_workflow}}
+
+    [saver: saver]
+  end
+
+  defp build_workflow_state(issue, config, opts, backend, backend_opts) do
+    parent = Keyword.fetch!(opts, :parent)
+    attempt = Keyword.get(opts, :attempt)
+
+    %{
+      issue: issue,
+      config: config,
+      parent: parent,
+      attempt: attempt,
+      backend: backend,
+      backend_opts: backend_opts,
+      system_prompt: agent_string(config, :system_prompt),
+      pause_detector: agent_pause_detector(config),
+      turn: 1,
+      max_turns: config.agent.max_turns,
+      body: &__MODULE__.__workflow_turn_body__/1
+    }
+  end
+
+  defp generate_workflow_run_id(%Issue{id: id}, opts) do
+    attempt = Keyword.get(opts, :attempt) || 0
+    "agent-#{id}-#{attempt}-#{:erlang.unique_integer([:positive])}"
+  end
+
+  defp translate_workflow_result({:ok, state, _meta}, _issue) do
+    case Map.get(state, :run_result) do
+      {:error, reason} -> {:error, reason}
+      _ -> :ok
+    end
+  end
+
+  defp translate_workflow_result({:interrupted, run_id, _state, reason}, issue) do
+    {:pause, reason,
+     %{
+       workflow_run_id: run_id,
+       issue_id: issue.id,
+       paused_via: :workflow
+     }}
+  end
+
+  defp translate_workflow_result({:error, reason, _state}, _issue) do
+    {:error, reason}
+  end
+
+  defp translate_workflow_result({:error, reason}, _issue) do
+    {:error, reason}
+  end
+
+  @doc false
+  def __workflow_turn_body__(state) do
+    prompt = build_prompt(state.issue, state.config, state.turn, state.attempt)
+
+    case run_one_turn(state.issue, prompt, state) do
+      :ok ->
+        case still_active?(state.issue, state.config) do
+          {:active, refreshed} -> {:continue, %{state | issue: refreshed}}
+          :done -> :done
+          {:error, _} -> :done
+        end
+
+      {:pause, _reason, _token} = pause ->
+        pause
+
+      {:error, _reason} = err ->
+        err
     end
   end
 
