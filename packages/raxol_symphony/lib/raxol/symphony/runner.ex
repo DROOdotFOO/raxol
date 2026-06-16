@@ -10,6 +10,13 @@ defmodule Raxol.Symphony.Runner do
     to re-check whether the issue is still active.
   - Fails (returns `{:error, reason}`); the orchestrator schedules an
     exponential-backoff retry.
+  - Pauses (returns `{:pause, interrupt_reason :: atom(), token :: term()}`);
+    the orchestrator parks the run in its `paused` map and does NOT schedule
+    a retry. A subsequent `Raxol.Symphony.Orchestrator.resume_run/3` call
+    re-dispatches the runner with `:resume_token` (the prior `token`) and
+    `:resume_value` (the caller-supplied resume payload) in `opts`. The
+    runner is responsible for serializing whatever state it needs into the
+    `token` so a fresh process can pick up where the prior one left off.
 
   Available implementations:
 
@@ -39,10 +46,14 @@ defmodule Raxol.Symphony.Runner do
   @type opts :: [
           parent: pid(),
           attempt: pos_integer() | nil,
-          workspace_path: Path.t()
+          workspace_path: Path.t(),
+          resume_token: term() | nil,
+          resume_value: term() | nil
         ]
 
-  @callback run(Issue.t(), Config.t(), opts()) :: :ok | {:error, term()}
+  @type result :: :ok | {:error, term()} | {:pause, atom(), term()}
+
+  @callback run(Issue.t(), Config.t(), opts()) :: result()
 
   @doc """
   Resolves the runner module from config, with optional override.

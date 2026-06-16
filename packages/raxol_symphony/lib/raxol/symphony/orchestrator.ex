@@ -74,6 +74,21 @@ defmodule Raxol.Symphony.Orchestrator do
   end
 
   @doc """
+  Resume a paused run by re-dispatching its runner.
+
+  The runner is invoked with `:resume_token` (the `token` it returned in its
+  prior `{:pause, _, token}` result) and `:resume_value` (caller-supplied
+  payload describing the external event the run was waiting on) in `opts`.
+
+  Returns `{:error, :not_paused}` if no paused entry exists for `issue_id`.
+  """
+  @spec resume_run(GenServer.server(), binary(), term()) ::
+          :ok | {:error, :not_paused}
+  def resume_run(server \\ __MODULE__, issue_id, resume_value) do
+    GenServer.call(server, {:resume_run, issue_id, resume_value})
+  end
+
+  @doc """
   Returns the loaded `Raxol.Symphony.Config` struct.
 
   Used by the MCP and LiveView surfaces when they need to reach beyond the
@@ -157,6 +172,26 @@ defmodule Raxol.Symphony.Orchestrator do
     end
   end
 
+  def handle_manager_call(
+        {:resume_run, issue_id, resume_value},
+        _from,
+        %State{} = state
+      ) do
+    case Map.get(state.paused, issue_id) do
+      nil ->
+        {:reply, {:error, :not_paused}, state}
+
+      paused_entry ->
+        new_state =
+          state
+          |> Map.put(:paused, Map.delete(state.paused, issue_id))
+          |> dispatch_resumption(paused_entry, resume_value)
+          |> notify_listeners(:run_resumed)
+
+        {:reply, :ok, new_state}
+    end
+  end
+
   def handle_manager_call(:tick_now, _from, %State{} = state) do
     new_state = run_tick(state)
     {:reply, :ok, new_state}
@@ -204,6 +239,13 @@ defmodule Raxol.Symphony.Orchestrator do
 
   def handle_manager_info({:run_event, issue_id, event}, %State{} = state) do
     {:noreply, integrate_run_event(state, issue_id, event)}
+  end
+
+  def handle_manager_info(
+        {:run_paused, issue_id, interrupt_reason, token},
+        %State{} = state
+      ) do
+    {:noreply, mark_running_paused(state, issue_id, interrupt_reason, token)}
   end
 
   def handle_manager_info(_msg, state), do: {:noreply, state}
@@ -395,9 +437,24 @@ defmodule Raxol.Symphony.Orchestrator do
       workspace_path: workspace_path
     ]
 
+    run_runner(runner_mod, issue, config, runner_opts)
+  end
+
+  defp run_runner(runner_mod, %Issue{} = issue, config, runner_opts) do
     case runner_mod.run(issue, config, runner_opts) do
-      :ok -> :ok
-      {:error, reason} -> exit({:runner_error, reason})
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        exit({:runner_error, reason})
+
+      {:pause, interrupt_reason, token} when is_atom(interrupt_reason) ->
+        parent = Keyword.fetch!(runner_opts, :parent)
+        send(parent, {:run_paused, issue.id, interrupt_reason, token})
+        :ok
+
+      other ->
+        exit({:runner_bad_return, other})
     end
   end
 
@@ -434,6 +491,7 @@ defmodule Raxol.Symphony.Orchestrator do
       last_event_at_ms: nil,
       turn_count: 0,
       capture_pid: capture_pid,
+      pending_pause: nil,
       tokens: State.empty_tokens()
     }
   end
@@ -452,6 +510,9 @@ defmodule Raxol.Symphony.Orchestrator do
     state = %State{state | running: Map.delete(state.running, issue_id)}
 
     case reason do
+      :normal when entry.pending_pause != nil ->
+        park_paused(state, entry, entry.pending_pause)
+
       :normal ->
         # Continuation retry: re-check after a short fixed delay.
         Logger.info(
@@ -485,6 +546,119 @@ defmodule Raxol.Symphony.Orchestrator do
         |> schedule_failure_retry(entry.issue, next_attempt, other)
         |> notify_listeners(:worker_exit_abnormal)
     end
+  end
+
+  # Pause is signalled by a {:run_paused, ...} message arriving from the
+  # worker BEFORE its :normal exit (same-process message order
+  # guarantees this). We record the pause intent on the running entry;
+  # handle_worker_exit reads it from the entry when :DOWN :normal lands.
+  defp mark_running_paused(%State{} = state, issue_id, interrupt_reason, token) do
+    case Map.get(state.running, issue_id) do
+      nil ->
+        state
+
+      entry ->
+        updated = Map.put(entry, :pending_pause, {interrupt_reason, token})
+        %State{state | running: Map.put(state.running, issue_id, updated)}
+    end
+  end
+
+  defp park_paused(%State{} = state, entry, {interrupt_reason, token}) do
+    Logger.info(
+      "symphony.orchestrator.worker_paused issue=#{entry.issue.identifier} " <>
+        "reason=#{inspect(interrupt_reason)}"
+    )
+
+    paused_entry = %{
+      issue: entry.issue,
+      attempt: entry.attempt,
+      workspace_path: entry.workspace_path,
+      interrupt_reason: interrupt_reason,
+      resume_token: token,
+      paused_at: System.monotonic_time(:millisecond),
+      last_event: entry.last_event,
+      last_message: entry.last_message,
+      turn_count: entry.turn_count,
+      tokens: entry.tokens
+    }
+
+    state
+    |> Map.put(:paused, Map.put(state.paused, entry.issue.id, paused_entry))
+    |> notify_listeners(:worker_paused)
+  end
+
+  defp dispatch_resumption(%State{} = state, paused_entry, resume_value) do
+    issue = paused_entry.issue
+
+    with {:ok, runner_mod} <- runner_module(state) do
+      capture_pid =
+        maybe_start_capture(
+          state,
+          issue,
+          paused_entry.attempt,
+          paused_entry.workspace_path
+        )
+
+      task =
+        spawn_resume_worker_task(
+          state,
+          runner_mod,
+          issue,
+          paused_entry.attempt,
+          paused_entry.workspace_path,
+          paused_entry.resume_token,
+          resume_value
+        )
+
+      entry =
+        issue
+        |> build_running_entry(
+          paused_entry.attempt,
+          paused_entry.workspace_path,
+          task,
+          capture_pid
+        )
+        |> Map.put(:turn_count, paused_entry.turn_count)
+        |> Map.put(:tokens, paused_entry.tokens)
+
+      register_running(state, issue, entry)
+    else
+      {:error, reason} ->
+        Logger.warning(
+          "symphony.orchestrator.resume_failed issue=#{issue.identifier} " <>
+            "reason=#{inspect(reason)}"
+        )
+
+        schedule_failure_retry(state, issue, (paused_entry.attempt || 0) + 1, reason)
+    end
+  end
+
+  defp spawn_resume_worker_task(
+         %State{} = state,
+         runner_mod,
+         %Issue{} = issue,
+         attempt,
+         workspace_path,
+         resume_token,
+         resume_value
+       ) do
+    parent = self()
+    config = state.config
+
+    Task.Supervisor.async_nolink(
+      task_supervisor(state),
+      fn ->
+        runner_opts = [
+          parent: parent,
+          attempt: attempt,
+          workspace_path: workspace_path,
+          resume_token: resume_token,
+          resume_value: resume_value
+        ]
+
+        run_runner(runner_mod, issue, config, runner_opts)
+      end
+    )
   end
 
   defp remove_running(%State{} = state, issue_id, _reason) do
@@ -810,10 +984,12 @@ defmodule Raxol.Symphony.Orchestrator do
       generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
       counts: %{
         running: map_size(state.running),
-        retrying: map_size(state.retry_attempts)
+        retrying: map_size(state.retry_attempts),
+        paused: map_size(state.paused)
       },
       running: Enum.map(state.running, &snapshot_running(&1, now_ms)),
       retrying: Enum.map(state.retry_attempts, &snapshot_retry(&1, now_ms)),
+      paused: Enum.map(state.paused, &snapshot_paused(&1, now_ms)),
       codex_totals: state.codex_totals,
       rate_limits: state.codex_rate_limits
     }
@@ -839,6 +1015,20 @@ defmodule Raxol.Symphony.Orchestrator do
       attempt: entry.attempt,
       due_in_ms: max(entry.due_at_ms - now_ms, 0),
       error: inspect_error(entry.error)
+    }
+  end
+
+  defp snapshot_paused({_id, entry}, now_ms) do
+    %{
+      issue_id: entry.issue.id,
+      issue_identifier: entry.issue.identifier,
+      interrupt_reason: entry.interrupt_reason,
+      paused_ms_ago: now_ms - entry.paused_at,
+      attempt: entry.attempt,
+      turn_count: entry.turn_count,
+      last_event: entry.last_event,
+      last_message: entry.last_message,
+      tokens: entry.tokens
     }
   end
 

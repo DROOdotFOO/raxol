@@ -20,6 +20,7 @@ defmodule Raxol.Symphony.Orchestrator.State do
           last_event_at_ms: integer() | nil,
           turn_count: non_neg_integer(),
           capture_pid: pid() | nil,
+          pending_pause: {atom(), term()} | nil,
           tokens: %{
             input_tokens: non_neg_integer(),
             output_tokens: non_neg_integer(),
@@ -34,6 +35,23 @@ defmodule Raxol.Symphony.Orchestrator.State do
           due_at_ms: integer(),
           timer_ref: reference() | nil,
           error: term() | nil
+        }
+
+  @type paused_entry :: %{
+          issue: Issue.t(),
+          attempt: non_neg_integer() | nil,
+          workspace_path: Path.t(),
+          interrupt_reason: atom(),
+          resume_token: term(),
+          paused_at: integer(),
+          last_event: atom() | binary() | nil,
+          last_message: binary() | nil,
+          turn_count: non_neg_integer(),
+          tokens: %{
+            input_tokens: non_neg_integer(),
+            output_tokens: non_neg_integer(),
+            total_tokens: non_neg_integer()
+          }
         }
 
   @type codex_totals :: %{
@@ -54,6 +72,7 @@ defmodule Raxol.Symphony.Orchestrator.State do
     running: %{},
     claimed: MapSet.new(),
     retry_attempts: %{},
+    paused: %{},
     completed: MapSet.new(),
     codex_totals: %{
       input_tokens: 0,
@@ -76,6 +95,7 @@ defmodule Raxol.Symphony.Orchestrator.State do
           running: %{optional(binary()) => running_entry()},
           claimed: MapSet.t(binary()),
           retry_attempts: %{optional(binary()) => retry_entry()},
+          paused: %{optional(binary()) => paused_entry()},
           completed: MapSet.t(binary()),
           codex_totals: codex_totals(),
           codex_rate_limits: term() | nil,
