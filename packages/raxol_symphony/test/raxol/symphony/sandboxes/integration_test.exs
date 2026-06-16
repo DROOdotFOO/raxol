@@ -140,6 +140,55 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
     end
   end
 
+  describe "BudgetCap cost-from-event" do
+    test "spend accumulates from turn_completed event usage" do
+      Memory.put_issue(%{issue() | state: "In Progress"})
+
+      table = :"integ_bc_evt_#{:erlang.unique_integer([:positive])}"
+
+      sandbox = %BudgetCap{
+        cap: 1_000_000,
+        cost_per_turn: 1,
+        cost_fn: &BudgetCap.tokens_from_usage/1,
+        bucket_table: table
+      }
+
+      cfg = config([sandbox], 2)
+
+      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+
+      # Mock backend emits {input_tokens, output_tokens}. Two turns ran
+      # (max_turns = 2), so spend = sum of both turns' (input + output).
+      # The exact total depends on the mock's token counter; assert > 0
+      # to verify the wire-up without depending on internals.
+      assert BudgetCap.spend(table, "issue-1") > 0
+
+      # The fixed-per-turn path is NOT taken when cost_fn is set: spend
+      # should not be exactly 2 (cost_per_turn=1 * 2 turns), it should
+      # reflect actual token usage from the mock backend.
+      assert BudgetCap.spend(table, "issue-1") != 2
+    end
+
+    test "settle is :noop when cost_fn is unset (back-compat)" do
+      Memory.put_issue(%{issue() | state: "In Progress"})
+
+      table = :"integ_bc_fixed_#{:erlang.unique_integer([:positive])}"
+
+      sandbox = %BudgetCap{
+        cap: 1000,
+        cost_per_turn: 1,
+        bucket_table: table
+      }
+
+      cfg = config([sandbox], 3)
+
+      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+
+      # Three turns charged at cost_per_turn=1 = 3.
+      assert BudgetCap.spend(table, "issue-1") == 3
+    end
+  end
+
   describe "Chain composition" do
     test "rate limit + time window: first-deny wins" do
       Memory.put_issue(%{issue() | state: "Done"})

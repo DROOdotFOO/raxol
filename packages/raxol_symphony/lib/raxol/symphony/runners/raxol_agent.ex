@@ -350,6 +350,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
         {:error, reason} -> {[], nil, reason}
       end
 
+    settle_sandbox_costs(sandboxes, events, turn_payload, state.issue.id)
+
     last_event_name =
       case List.last(events) do
         %{event: ev} -> ev
@@ -565,6 +567,43 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   end
 
   defp apply_detector(_, _), do: :continue
+
+  # Settles cost-from-event mode on any %Raxol.Symphony.Sandboxes.BudgetCap{}
+  # in the chain. No-op when the sandbox has no `cost_fn` set or when the
+  # turn produced no `:turn_completed` events.
+  defp settle_sandbox_costs([], _events, _payload, _issue_id), do: :ok
+  defp settle_sandbox_costs(_sandboxes, [], _payload, _issue_id), do: :ok
+
+  defp settle_sandbox_costs(sandboxes, events, payload, issue_id) do
+    completed = Enum.filter(events, &turn_completed_event?/1)
+
+    Enum.each(sandboxes, fn sandbox ->
+      Enum.each(completed, fn event ->
+        case settle_one(sandbox, event, payload) do
+          {:ok, new_total} ->
+            :telemetry.execute(
+              [:raxol, :symphony, :sandbox, :settled],
+              %{spend: new_total},
+              %{agent_id: issue_id, action: :turn}
+            )
+
+          :noop ->
+            :ok
+        end
+      end)
+    end)
+
+    :ok
+  end
+
+  defp settle_one(%Raxol.Symphony.Sandboxes.BudgetCap{} = sandbox, event, payload) do
+    Raxol.Symphony.Sandboxes.BudgetCap.settle(sandbox, event, payload)
+  end
+
+  defp settle_one(_sandbox, _event, _payload), do: :noop
+
+  defp turn_completed_event?(%{event: :turn_completed}), do: true
+  defp turn_completed_event?(_), do: false
 
   # Fallback for builds where raxol_agent < 2.5 is loaded.
   defp legacy_forward(stream, parent, issue_id) do

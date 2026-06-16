@@ -10,6 +10,7 @@ defmodule Raxol.Symphony.Sandboxes.BudgetCapTest do
     %BudgetCap{
       cap: Keyword.get(opts, :cap, 3),
       cost_per_turn: Keyword.get(opts, :cost_per_turn, 1),
+      cost_fn: Keyword.get(opts, :cost_fn),
       id_fn: Keyword.get(opts, :id_fn, &BudgetCap.default_id_fn/1),
       bucket_table: Keyword.get(opts, :bucket_table, unique_table())
     }
@@ -92,6 +93,160 @@ defmodule Raxol.Symphony.Sandboxes.BudgetCapTest do
       assert :ok = authorize(sb, %{issue_id: "iss-1"}, :shell)
       assert :ok = authorize(sb, %{issue_id: "iss-1"}, :send_agent)
       assert :ok = authorize(sb, %{issue_id: "iss-1"}, :async)
+    end
+  end
+
+  describe "cost-from-event mode (cost_fn set)" do
+    test "authorize does not charge -- spend stays at 0 across turns" do
+      sb = sandbox(cap: 100, cost_per_turn: 1, cost_fn: &BudgetCap.tokens_from_usage/1)
+
+      assert :ok = authorize(sb, %{issue_id: "iss-1"})
+      assert :ok = authorize(sb, %{issue_id: "iss-1"})
+      assert :ok = authorize(sb, %{issue_id: "iss-1"})
+
+      assert BudgetCap.spend(sb.bucket_table, "iss-1") == 0
+    end
+
+    test "cost_per_turn still gates as a deny-floor against the cap" do
+      # remaining = cap - current. cost_per_turn (10) <= remaining (10) passes.
+      sb = sandbox(cap: 10, cost_per_turn: 10, cost_fn: &BudgetCap.tokens_from_usage/1)
+      assert :ok = authorize(sb, %{issue_id: "iss-1"})
+
+      # Settle a heavy turn that blows past the cap.
+      assert {:ok, 50} =
+               BudgetCap.settle(
+                 sb,
+                 %{event: :turn_completed, usage: %{total_tokens: 50}},
+                 %{issue_id: "iss-1"}
+               )
+
+      # cost_per_turn (10) > remaining cap room (10 - 50 = -40). Deny.
+      assert {:deny, :budget_exceeded} = authorize(sb, %{issue_id: "iss-1"})
+    end
+
+    test "settle/3 accumulates costs across events" do
+      sb = sandbox(cap: 1000, cost_per_turn: 1, cost_fn: &BudgetCap.tokens_from_usage/1)
+
+      assert {:ok, 30} =
+               BudgetCap.settle(
+                 sb,
+                 %{event: :turn_completed, usage: %{total_tokens: 30}},
+                 %{issue_id: "iss-1"}
+               )
+
+      assert {:ok, 75} =
+               BudgetCap.settle(
+                 sb,
+                 %{event: :turn_completed, usage: %{total_tokens: 45}},
+                 %{issue_id: "iss-1"}
+               )
+
+      assert BudgetCap.spend(sb.bucket_table, "iss-1") == 75
+    end
+
+    test "settle/3 is :noop without a cost_fn" do
+      sb = sandbox(cap: 100, cost_per_turn: 1)
+
+      assert :noop =
+               BudgetCap.settle(
+                 sb,
+                 %{event: :turn_completed, usage: %{total_tokens: 30}},
+                 %{issue_id: "iss-1"}
+               )
+    end
+
+    test "settle/3 is :noop when id_fn returns nil" do
+      sb = sandbox(cap: 100, cost_per_turn: 1, cost_fn: &BudgetCap.tokens_from_usage/1)
+
+      assert :noop =
+               BudgetCap.settle(
+                 sb,
+                 %{event: :turn_completed, usage: %{total_tokens: 30}},
+                 %{}
+               )
+    end
+
+    test "settle/3 is :noop when cost_fn returns 0" do
+      sb = sandbox(cap: 100, cost_per_turn: 1, cost_fn: fn _ -> 0 end)
+
+      assert :noop =
+               BudgetCap.settle(
+                 sb,
+                 %{event: :turn_completed},
+                 %{issue_id: "iss-1"}
+               )
+    end
+
+    test "settle/3 is :noop when cost_fn returns a non-integer" do
+      sb = sandbox(cap: 100, cost_per_turn: 1, cost_fn: fn _ -> :bogus end)
+
+      assert :noop =
+               BudgetCap.settle(
+                 sb,
+                 %{event: :turn_completed},
+                 %{issue_id: "iss-1"}
+               )
+    end
+  end
+
+  describe "tokens_from_usage/1" do
+    test "reads :total_tokens (atom key)" do
+      assert BudgetCap.tokens_from_usage(%{usage: %{total_tokens: 42}}) == 42
+    end
+
+    test "reads \"total_tokens\" (string key)" do
+      assert BudgetCap.tokens_from_usage(%{"usage" => %{"total_tokens" => 42}}) == 42
+    end
+
+    test "sums :input_tokens + :output_tokens when total absent" do
+      assert BudgetCap.tokens_from_usage(%{usage: %{input_tokens: 10, output_tokens: 17}}) ==
+               27
+    end
+
+    test "sums string-keyed input + output when total absent" do
+      assert BudgetCap.tokens_from_usage(%{
+               "usage" => %{"input_tokens" => 10, "output_tokens" => 17}
+             }) == 27
+    end
+
+    test "returns 0 when no usage key" do
+      assert BudgetCap.tokens_from_usage(%{event: :turn_completed}) == 0
+    end
+
+    test "returns 0 for non-maps" do
+      assert BudgetCap.tokens_from_usage(:atom) == 0
+      assert BudgetCap.tokens_from_usage(nil) == 0
+    end
+
+    test "negative values clamp to 0" do
+      assert BudgetCap.tokens_from_usage(%{usage: %{input_tokens: -5, output_tokens: 10}}) ==
+               10
+    end
+  end
+
+  describe "record/3" do
+    test "atomically adds a positive amount" do
+      sb = sandbox()
+
+      assert 10 = BudgetCap.record(sb.bucket_table, "iss-1", 10)
+      assert 25 = BudgetCap.record(sb.bucket_table, "iss-1", 15)
+
+      assert BudgetCap.spend(sb.bucket_table, "iss-1") == 25
+    end
+
+    test "zero amount is a no-op" do
+      sb = sandbox()
+
+      assert 0 = BudgetCap.record(sb.bucket_table, "iss-1", 0)
+      assert BudgetCap.spend(sb.bucket_table, "iss-1") == 0
+    end
+
+    test "negative amount is a no-op (does not refund)" do
+      sb = sandbox()
+      _ = BudgetCap.record(sb.bucket_table, "iss-1", 10)
+
+      assert 10 = BudgetCap.record(sb.bucket_table, "iss-1", -5)
+      assert BudgetCap.spend(sb.bucket_table, "iss-1") == 10
     end
   end
 
