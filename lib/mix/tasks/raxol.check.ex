@@ -44,8 +44,17 @@ defmodule Mix.Tasks.Raxol.Check do
 
   @shortdoc "Run comprehensive quality checks"
 
-  @all_checks [:compile, :format, :credo, :dialyzer, :security, :docs, :test]
-  @quick_checks [:compile, :format, :credo, :docs, :test]
+  @all_checks [
+    :lockfile,
+    :compile,
+    :format,
+    :credo,
+    :dialyzer,
+    :security,
+    :docs,
+    :test
+  ]
+  @quick_checks [:lockfile, :compile, :format, :credo, :docs, :test]
 
   @impl Mix.Task
   def run(args) do
@@ -116,6 +125,30 @@ defmodule Mix.Tasks.Raxol.Check do
     |> String.split(",")
     |> Enum.map(&String.trim/1)
     |> Enum.map(&String.to_atom/1)
+  end
+
+  defp run_check(:lockfile) do
+    Mix.shell().info(Colors.subsection_header("Lockfile check"))
+
+    case Mix.shell().cmd("mix deps.get --check-locked") do
+      0 ->
+        Mix.shell().info(
+          "    " <> Colors.format_success("mix.lock is consistent with mix.exs")
+        )
+
+        {:lockfile, :ok}
+
+      _ ->
+        Mix.shell().error(
+          "    " <>
+            Colors.format_error(
+              "mix.lock is out of date",
+              "run `mix deps.get` and commit the updated mix.lock"
+            )
+        )
+
+        {:lockfile, :error}
+    end
   end
 
   defp run_check(:compile) do

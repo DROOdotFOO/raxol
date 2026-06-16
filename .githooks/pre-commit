@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Blocks commits that change mix.exs/mix.lock without a consistent lockfile.
+# Catches the failure mode where a dep is added or a transitive bump drifts
+# the root mix.lock but it is not committed, which only surfaces in CI's
+# `mix deps.get --check-locked` step after the push to master.
+#
+# Installed via `git config core.hooksPath .githooks` (run by `mix setup`).
+set -euo pipefail
+
+staged="$(git diff --cached --name-only --diff-filter=ACM)"
+
+if ! printf '%s\n' "$staged" | grep -qE '(^|/)mix\.(exs|lock)$'; then
+  exit 0
+fi
+
+echo "pre-commit: verifying mix.lock is consistent (mix.exs/mix.lock staged)..."
+
+if output="$(mix deps.get --check-locked 2>&1)"; then
+  exit 0
+fi
+
+echo "$output" >&2
+cat >&2 <<'MSG'
+
+pre-commit: mix.lock is out of date.
+
+  Run `mix deps.get` and stage the updated mix.lock, then commit again:
+
+    mix deps.get && git add mix.lock
+
+  (Bypass with `git commit --no-verify` only if you know why.)
+MSG
+exit 1
