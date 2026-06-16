@@ -32,12 +32,14 @@ defmodule Raxol.Workflow.Runtime do
 
   alias Raxol.Core.Runtime.Directive
   alias Raxol.Core.Telemetry.TraceContext
+  alias Raxol.Workflow.Channel
   alias Raxol.Workflow.Checkpoint
   alias Raxol.Workflow.Checkpoint.Saver
   alias Raxol.Workflow.Compiled
   alias Raxol.Workflow.Edge.ConditionalEdge
   alias Raxol.Workflow.Edge.Edge, as: StaticEdge
   alias Raxol.Workflow.Edge.GuardedEdge
+  alias Raxol.Workflow.Edge.JoinEdge
   alias Raxol.Workflow.Execution.Scratchpad
   alias Raxol.Workflow.Node, as: WorkflowNode
   alias Raxol.Workflow.Node.{BehaviourNode, FunctionNode, TypedNode}
@@ -799,8 +801,11 @@ defmodule Raxol.Workflow.Runtime do
     outgoing = Map.get(compiled.edges_by_source, current_id, [])
 
     case pick_next(outgoing, state) do
-      {:ok, next_id} ->
+      {:ok, next_id} when is_atom(next_id) or is_binary(next_id) ->
         step(compiled, next_id, state, run_id, deadline_us, count)
+
+      {:ok, branch_ids} when is_list(branch_ids) ->
+        fan_out(compiled, branch_ids, state, run_id, deadline_us, count)
 
       :no_match ->
         {:error, {:no_outgoing_edge_matched, current_id}, state, count}
@@ -830,9 +835,132 @@ defmodule Raxol.Workflow.Runtime do
           {:error, {:chooser_returned_unknown_candidate, id, candidates}}
         end
 
+      ids when is_list(ids) and ids != [] ->
+        validate_fan_out_ids(ids, candidates)
+
       other ->
         {:error, {:chooser_returned_non_id, other}}
     end
+  end
+
+  defp pick_next([%JoinEdge{} | rest], state), do: pick_next(rest, state)
+
+  defp validate_fan_out_ids(ids, candidates) do
+    case Enum.find(ids, fn id -> id not in candidates end) do
+      nil -> {:ok, ids}
+      bad -> {:error, {:chooser_returned_unknown_candidate, bad, candidates}}
+    end
+  end
+
+  # --- Fan-out / Join ---
+  #
+  # Phase A scope per ADR-0019: branches are single-node bodies feeding
+  # a join target via a static edge. Each branch starts from the same
+  # initial state; branch terminal states are merged per any registered
+  # `Channel` (or explicit join `:reduce` reducer), default last-write-
+  # wins by branch index for unkeyed state-map keys, then the join
+  # target's body runs once with the merged state.
+  #
+  # Branch execution is serial in this slice. Concurrent execution via
+  # `Task.async_stream`, per-branch retry/compensate/pause, and the
+  # `branch_id` telemetry tag are deferred to follow-up work.
+
+  defp fan_out(compiled, branch_ids, state, run_id, deadline_us, count) do
+    case join_for_branches(compiled, branch_ids) do
+      nil ->
+        {:error, {:fan_out_without_join, branch_ids}, state, count}
+
+      %JoinEdge{} = join ->
+        case run_branches_serially(
+               compiled,
+               branch_ids,
+               state,
+               run_id,
+               deadline_us,
+               count
+             ) do
+          {:ok, branch_states, new_count} ->
+            merged = merge_branch_states(branch_states, join, compiled.channels)
+            step(compiled, join.target, merged, run_id, deadline_us, new_count)
+
+          {:error, _reason, _state, _count} = err ->
+            err
+        end
+    end
+  end
+
+  # Each branch entry id must be the upstream of a single declared join.
+  # Compile-time validation guarantees that fact; this just picks the
+  # JoinEdge by lookup. If branches map to different joins, the first
+  # branch's join wins (compile-time validation rejects mismatches).
+  defp join_for_branches(compiled, [first | _rest]) do
+    Map.get(compiled.joins_by_upstream, first)
+  end
+
+  defp run_branches_serially(compiled, branch_ids, state, run_id, deadline_us, count) do
+    Enum.reduce_while(branch_ids, {:ok, [], count}, fn id, {:ok, acc, c} ->
+      cond do
+        monotonic_us() >= deadline_us ->
+          {:halt, {:error, :run_timeout, state, c}}
+
+        true ->
+          case attempt_node_with_retry(compiled, id, state, run_id, 1) do
+            {:node_ok, branch_state, _tag} ->
+              track_executed(Map.fetch!(compiled.nodes, id))
+              persist_checkpoint(compiled, id, branch_state, run_id, c)
+              {:cont, {:ok, [branch_state | acc], c + 1}}
+
+            {:interrupt, _value, _state_at_interrupt} ->
+              {:halt, {:error, {:pause_in_branch_not_supported, id}, state, c}}
+
+            {:error, reason, state_at_error} ->
+              {:halt, {:error, reason, state_at_error, c + 1}}
+          end
+      end
+    end)
+    |> case do
+      {:ok, acc, c} -> {:ok, Enum.reverse(acc), c}
+      {:error, _, _, _} = err -> err
+    end
+  end
+
+  defp merge_branch_states(branch_states, %JoinEdge{reducer: reducer}, _channels)
+       when is_function(reducer, 1) do
+    reducer.(branch_states)
+  end
+
+  defp merge_branch_states([first | rest], %JoinEdge{reducer: nil}, channels) do
+    channel_index = channel_index_by_key(channels)
+
+    Enum.reduce(rest, first, fn next_state, acc ->
+      reduce_branch_into(acc, next_state, channel_index)
+    end)
+  end
+
+  defp channel_index_by_key(channels) do
+    channels
+    |> Map.values()
+    |> Map.new(fn %Channel{into: key} = c -> {key, c} end)
+  end
+
+  defp reduce_branch_into(left, right, channel_index) do
+    Enum.reduce(Map.keys(right), left, fn key, acc ->
+      case Map.fetch(right, key) do
+        :error ->
+          acc
+
+        {:ok, right_val} ->
+          case Map.get(channel_index, key) do
+            %Channel{with: reducer} ->
+              Map.update(acc, key, right_val, fn left_val ->
+                reducer.(left_val, right_val)
+              end)
+
+            nil ->
+              Map.put(acc, key, right_val)
+          end
+      end
+    end)
   end
 
   # --- Effect dispatch ---
