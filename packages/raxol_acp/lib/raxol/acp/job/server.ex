@@ -217,7 +217,7 @@ defmodule Raxol.ACP.Job.Server do
   def memos(server), do: GenServer.call(resolve(server), :memos)
 
   @typedoc """
-  Dashboard row returned by `list_paused/0,1`. ADR-0017 contract: one
+  Dashboard row returned by `list_paused/0,1`. One
   row per job whose latest workflow checkpoint carries an
   `:interrupt_reason`. Resuming a paused job removes it from the next
   query.
