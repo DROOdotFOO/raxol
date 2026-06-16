@@ -32,6 +32,29 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           pause_detector: {MyApp.PauseDetector, :detect}
           tracker_cache: {Raxol.Agent.Cache.Ets, %{table: :tracker_cache}}
           tracker_cache_ttl_ms: 30_000
+          thread_log: {Raxol.Agent.ThreadLog.Ets, %{table: :agent_thread_log}}
+
+  ## Thread log (audit trail)
+
+  Optional: set `agent.thread_log` to a `Raxol.Agent.ThreadLog`
+  adapter tuple (or a bare module) and the runner appends a
+  per-run audit trail:
+
+    * one `:state_snapshot` event per completed turn carrying
+      `%{turn, event_count, last_event}`;
+    * one `:message` event with `%{event: :resumed, resume_value}`
+      every time `Workflow.interrupt/1` returns a value (i.e. the
+      operator resumed the run).
+
+  Thread id is `"symphony-agent-<issue.id>-<attempt>"`. Pauses
+  themselves are NOT logged here -- they are already covered by
+  `[:raxol, :workflow, :run, :paused]` telemetry, and double-writing
+  them would duplicate on each re-entry of the after-node body.
+  Subscribe to telemetry for pause/resume lifecycle observability;
+  use this ThreadLog for "what did this run actually do".
+
+  Default `nil` thread_log is a no-op (`{:ok, :no_log}` per the
+  `Raxol.Agent.ThreadLog` dispatcher's contract).
 
   ## Tracker result caching
 
@@ -171,6 +194,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       # `__workflow_still_active__/1`.
       tracker_cache: agent_tracker_cache(config),
       tracker_cache_ttl_ms: agent_tracker_cache_ttl_ms(config),
+      # Optional thread-log adapter. `agent.thread_log` is a
+      # `{module, config}` tuple (or `nil`). Events are appended at
+      # turn boundaries; see the moduledoc "Thread log" section.
+      thread_log: agent_thread_log(config),
+      thread_id: build_thread_id(issue, attempt),
       # Module-function refs the workflow nodes call. Kept in state so
       # the multi-node AgentWorkflow.run_turn/1 and after_turn/3 don't
       # have to depend on this module directly (which would create a
@@ -229,7 +257,31 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
         system_prompt: state.system_prompt
       )
 
-    collect_with_detector(stream, state.parent, state.issue.id, state.pause_detector)
+    {events, pause_request} =
+      collect_with_detector(stream, state.parent, state.issue.id, state.pause_detector)
+
+    # Append a state_snapshot per completed turn. Idempotent at the
+    # ThreadLog level (each call gets a fresh monotonic sequence).
+    last_event_name =
+      case List.last(events) do
+        %{event: ev} -> ev
+        _ -> nil
+      end
+
+    _ =
+      Raxol.Agent.ThreadLog.append(
+        Map.get(state, :thread_log),
+        Map.get(state, :thread_id, "symphony-agent-unknown"),
+        :state_snapshot,
+        %{
+          turn: state.turn,
+          event_count: length(events),
+          last_event: last_event_name,
+          paused: pause_request != nil
+        }
+      )
+
+    {events, pause_request}
   end
 
   defp collect_with_detector(stream, parent, issue_id, detector) do
@@ -545,6 +597,16 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   end
 
   defp agent_tracker_cache_ttl_ms(_), do: 30_000
+
+  defp agent_thread_log(%Config{runner: %{agent: agent}}) do
+    Raxol.Agent.ThreadLog.normalize(Map.get(agent, :thread_log))
+  end
+
+  defp agent_thread_log(_), do: nil
+
+  defp build_thread_id(%Issue{id: id}, attempt) when not is_nil(id) do
+    "symphony-agent-" <> to_string(id) <> "-" <> to_string(attempt || 0)
+  end
 
   # -- Prompt building (Liquid via PromptBuilder) -----------------------------
 

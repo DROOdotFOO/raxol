@@ -65,6 +65,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow do
 
   alias Raxol.Workflow.{Compiled, Graph}
 
+  # Optional dep -- consumers wire it via agent.thread_log; the
+  # dispatcher's nil branch silently no-ops, so the appends below are
+  # safe even when raxol_agent isn't loaded.
+  @compile {:no_warn_undefined, Raxol.Agent.ThreadLog}
+
   @doc """
   Build and compile the multi-node turn-loop graph for
   `max_turns` (>= 1).
@@ -144,6 +149,17 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow do
       case state.pause_request do
         {:pause, reason, _token} ->
           resume_value = Raxol.Workflow.interrupt(reason)
+
+          # Reached here only on the resume path -- interrupt/1
+          # threw on the first pass. Log the resume decision.
+          _ =
+            Raxol.Agent.ThreadLog.append(
+              Map.get(state, :thread_log),
+              Map.get(state, :thread_id, "symphony-agent-unknown"),
+              :message,
+              %{event: :resumed, interrupt_reason: reason, resume_value: resume_value, turn: n}
+            )
+
           %{state | pause_request: nil, last_resume_value: resume_value}
 
         nil ->
