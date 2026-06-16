@@ -46,6 +46,7 @@ defmodule Raxol.Workflow.Runtime do
 
   @executed_key :__raxol_workflow_executed__
   @branch_id_key :__raxol_workflow_branch_id__
+  @fan_out_key :__raxol_workflow_fan_out__
 
   @start :__start__
   @end_ :__end__
@@ -281,24 +282,178 @@ defmodule Raxol.Workflow.Runtime do
   defp resume_with_checkpoint(compiled, checkpoint, resume_value, run_id, opts) do
     resume_mode = resume_mode_for(checkpoint)
     interrupt_reason = Map.get(checkpoint.metadata, :interrupt_reason)
+    branch_id = Map.get(checkpoint.metadata, :branch_id)
 
     emit_run_event(:resumed, %{
       run_id: run_id,
       graph_id: compiled.id,
       node_id: checkpoint.metadata.node_id,
+      branch_id: branch_id,
       interrupt_reason: interrupt_reason,
       resume_mode: resume_mode
     })
 
-    resume_opts =
-      opts
-      |> Keyword.put(:run_id, run_id)
-      |> Keyword.put(:resume_from, checkpoint.metadata.node_id)
-      |> Keyword.put(:resume_mode, resume_mode)
-      |> Keyword.put(:initial_step, checkpoint.step + 1)
-      |> Keyword.put(:resume_values, [resume_value])
+    if branch_id != nil do
+      resume_in_branch(compiled, checkpoint, branch_id, resume_value, run_id, opts)
+    else
+      resume_opts =
+        opts
+        |> Keyword.put(:run_id, run_id)
+        |> Keyword.put(:resume_from, checkpoint.metadata.node_id)
+        |> Keyword.put(:resume_mode, resume_mode)
+        |> Keyword.put(:initial_step, checkpoint.step + 1)
+        |> Keyword.put(:resume_values, [resume_value])
 
-    invoke(compiled, checkpoint.state, resume_opts)
+      invoke(compiled, checkpoint.state, resume_opts)
+    end
+  end
+
+  # Resume a per-branch pause. The pause checkpoint's state carries a
+  # `@fan_out_key` continuation describing every branch's outcome from
+  # the first run. We re-enter the paused branch from its paused inner
+  # node (scratchpad seeded with the resume value so `interrupt/1`
+  # returns immediately), walk it to the join target, then check for
+  # any other paused branches. If another is still paused: re-augment
+  # state with the updated continuation, persist the next pause
+  # checkpoint, surface `{:interrupted, _, _}` again. If all branches
+  # have completed: clear the continuation, merge per channels, run the
+  # join body, continue traversing from the join target.
+  defp resume_in_branch(
+         compiled,
+         checkpoint,
+         {join_target, paused_index},
+         resume_value,
+         run_id,
+         opts
+       ) do
+    augmented_state = checkpoint.state
+    continuation = Map.get(augmented_state, @fan_out_key)
+    paused_node_id = checkpoint.metadata.node_id
+
+    deadline_us = monotonic_us() + resolve_timeout(opts, compiled) * 1_000
+    initial_count = checkpoint.step + 1
+
+    Process.put(@executed_key, [])
+    _ = TraceContext.start_trace()
+    maybe_seed_scratchpad(run_id, [resume_value])
+
+    try do
+      finish_branch_then_continue(
+        compiled,
+        continuation,
+        {join_target, paused_index},
+        paused_node_id,
+        run_id,
+        deadline_us,
+        initial_count
+      )
+      |> maybe_compensate_on_error(compiled, run_id)
+      |> wrap_outcome(run_id, compiled.id, 0)
+    after
+      _ = TraceContext.clear()
+      Scratchpad.clear()
+      Process.delete(@executed_key)
+      Process.delete(@branch_id_key)
+    end
+  end
+
+  defp finish_branch_then_continue(
+         compiled,
+         continuation,
+         {join_target, paused_index},
+         paused_node_id,
+         run_id,
+         deadline_us,
+         count
+       ) do
+    {:paused, ^paused_node_id, state_at_interrupt, _reason} =
+      Enum.at(continuation.slots, paused_index)
+
+    result =
+      with_branch_id({join_target, paused_index}, fn ->
+        step_branch(
+          compiled,
+          paused_node_id,
+          state_at_interrupt,
+          run_id,
+          deadline_us,
+          count,
+          join_target
+        )
+      end)
+
+    case result do
+      {:branch_done, branch_state, new_count} ->
+        updated = update_slot(continuation, paused_index, {:done, branch_state})
+        process_next_after_resume(compiled, updated, run_id, deadline_us, new_count)
+
+      {:branch_paused, value, state_at_interrupt2, paused_node_id2, new_count} ->
+        new_slot = {:paused, paused_node_id2, state_at_interrupt2, value}
+        updated = update_slot(continuation, paused_index, new_slot)
+        re_interrupt_for_branch_pause(compiled, updated, run_id, new_count)
+
+      {:error, _reason, _state, _count} = err ->
+        err
+    end
+  end
+
+  defp process_next_after_resume(compiled, continuation, run_id, deadline_us, count) do
+    case first_paused_slot(continuation.slots) do
+      nil ->
+        finalize_join(compiled, continuation, run_id, deadline_us, count)
+
+      _ ->
+        re_interrupt_for_branch_pause(compiled, continuation, run_id, count)
+    end
+  end
+
+  defp finalize_join(compiled, continuation, run_id, deadline_us, count) do
+    branch_states = Enum.map(continuation.slots, fn {:done, st} -> st end)
+    join = Map.fetch!(compiled.joins_by_node, continuation.join_target)
+    merged = merge_branch_states(branch_states, join, compiled.channels)
+
+    # Continuation served its purpose; strip it before continuing from
+    # the join so downstream sequential nodes don't see runtime
+    # bookkeeping.
+    cleaned = Map.delete(merged, @fan_out_key)
+
+    step(compiled, continuation.join_target, cleaned, run_id, deadline_us, count)
+  end
+
+  defp re_interrupt_for_branch_pause(compiled, continuation, run_id, count) do
+    {next_idx, next_node, _state, reason} = first_paused_slot(continuation.slots)
+    augmented_state = Map.put(continuation.source_state, @fan_out_key, continuation)
+
+    _ =
+      with_branch_id({continuation.join_target, next_idx}, fn ->
+        case persist_pause_checkpoint(
+               compiled,
+               next_node,
+               augmented_state,
+               run_id,
+               count,
+               reason
+             ) do
+          :ok ->
+            emit_run_event(:paused, %{
+              run_id: run_id,
+              graph_id: compiled.id,
+              node_id: next_node,
+              branch_id: {continuation.join_target, next_idx},
+              interrupt_reason: reason,
+              paused_at: DateTime.utc_now()
+            })
+
+          :no_saver ->
+            :ok
+        end
+      end)
+
+    {:interrupted, augmented_state, reason, count}
+  end
+
+  defp update_slot(continuation, index, new_slot) do
+    %{continuation | slots: List.replace_at(continuation.slots, index, new_slot)}
   end
 
   # A checkpoint with `:interrupt_reason` in metadata is a pause
@@ -907,22 +1062,101 @@ defmodule Raxol.Workflow.Runtime do
         {:error, {:fan_out_without_join, branch_ids}, state, count}
 
       %JoinEdge{} = join ->
-        case run_branches_serially(
-               compiled,
-               branch_ids,
-               state,
-               run_id,
-               deadline_us,
-               count
-             ) do
-          {:ok, branch_states, new_count} ->
+        result =
+          run_branches_serially(
+            compiled,
+            branch_ids,
+            state,
+            run_id,
+            deadline_us,
+            count
+          )
+
+        case result do
+          {:all_done, branch_states, new_count} ->
             merged = merge_branch_states(branch_states, join, compiled.channels)
             step(compiled, join.target, merged, run_id, deadline_us, new_count)
+
+          {:has_paused, slots, new_count} ->
+            interrupt_for_branch_pause(
+              compiled,
+              branch_ids,
+              join,
+              state,
+              slots,
+              run_id,
+              new_count
+            )
 
           {:error, _reason, _state, _count} = err ->
             err
         end
     end
+  end
+
+  # When any branch in a fan-out paused, stash the continuation in the
+  # run state under `@fan_out_key`, persist a pause checkpoint tagged
+  # with the FIRST paused branch's index + inner node id, emit the
+  # `:paused` run event, and surface `{:interrupted, augmented_state,
+  # value, count}` so the runtime walks it back to the caller as
+  # `{:interrupted, run_id, _, value}`. The continuation describes every
+  # branch's outcome so resume picks up exactly where this run left off.
+  defp interrupt_for_branch_pause(
+         compiled,
+         branch_ids,
+         %JoinEdge{target: join_target},
+         source_state,
+         slots,
+         run_id,
+         count
+       ) do
+    continuation = %{
+      source_state: source_state,
+      join_target: join_target,
+      branch_ids: branch_ids,
+      slots: slots
+    }
+
+    augmented_state = Map.put(source_state, @fan_out_key, continuation)
+
+    {paused_index, paused_node_id, _state_at_pause, interrupt_reason} =
+      first_paused_slot(slots)
+
+    _ =
+      with_branch_id({join_target, paused_index}, fn ->
+        case persist_pause_checkpoint(
+               compiled,
+               paused_node_id,
+               augmented_state,
+               run_id,
+               count,
+               interrupt_reason
+             ) do
+          :ok ->
+            emit_run_event(:paused, %{
+              run_id: run_id,
+              graph_id: compiled.id,
+              node_id: paused_node_id,
+              branch_id: {join_target, paused_index},
+              interrupt_reason: interrupt_reason,
+              paused_at: DateTime.utc_now()
+            })
+
+          :no_saver ->
+            :ok
+        end
+      end)
+
+    {:interrupted, augmented_state, interrupt_reason, count}
+  end
+
+  defp first_paused_slot(slots) do
+    slots
+    |> Enum.with_index()
+    |> Enum.find_value(fn
+      {{:paused, node_id, state, reason}, idx} -> {idx, node_id, state, reason}
+      _ -> nil
+    end)
   end
 
   # Each branch entry id must be the upstream of a single declared join.
@@ -933,6 +1167,20 @@ defmodule Raxol.Workflow.Runtime do
     Map.get(compiled.joins_by_upstream, first)
   end
 
+  # Runs each branch from the initial state. Branches that complete
+  # become `{:done, terminal_state}` slots; branches that pause become
+  # `{:paused, paused_node_id, state_at_pause, interrupt_reason}` slots
+  # (subsequent branches still run after the pause). Returns either:
+  #
+  #   {:all_done, branch_states_in_order, new_count}
+  #   {:has_paused, slots, new_count}
+  #   {:error, reason, state, count}
+  #
+  # `slots` shape: `[{:done, _} | {:paused, _, _, _}]` keyed by branch
+  # index. The fan-out coordinator builds a `:pending` list of any
+  # branches not reached when iteration short-circuits; not used here
+  # since serial execution always reaches all branches even past a
+  # pause (Phase A scope).
   defp run_branches_serially(compiled, branch_ids, state, run_id, deadline_us, count) do
     join_target =
       case Map.get(compiled.joins_by_upstream, hd(branch_ids)) do
@@ -942,7 +1190,7 @@ defmodule Raxol.Workflow.Runtime do
 
     branch_ids
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, [], count}, fn {id, index}, {:ok, acc, c} ->
+    |> Enum.reduce_while({:ok, [], count}, fn {id, index}, {:ok, slots, c} ->
       cond do
         monotonic_us() >= deadline_us ->
           {:halt, {:error, :run_timeout, state, c}}
@@ -955,7 +1203,12 @@ defmodule Raxol.Workflow.Runtime do
 
           case result do
             {:branch_done, branch_state, new_count} ->
-              {:cont, {:ok, [branch_state | acc], new_count}}
+              {:cont, {:ok, [{:done, branch_state} | slots], new_count}}
+
+            {:branch_paused, value, state_at_interrupt, paused_node_id, new_count} ->
+              {:cont,
+               {:ok, [{:paused, paused_node_id, state_at_interrupt, value} | slots],
+                new_count}}
 
             {:error, _reason, _state, _count} = err ->
               {:halt, err}
@@ -963,8 +1216,17 @@ defmodule Raxol.Workflow.Runtime do
       end
     end)
     |> case do
-      {:ok, acc, c} -> {:ok, Enum.reverse(acc), c}
-      {:error, _, _, _} = err -> err
+      {:ok, slots, c} ->
+        ordered = Enum.reverse(slots)
+
+        if Enum.any?(ordered, &match?({:paused, _, _, _}, &1)) do
+          {:has_paused, ordered, c}
+        else
+          {:all_done, Enum.map(ordered, fn {:done, st} -> st end), c}
+        end
+
+      {:error, _, _, _} = err ->
+        err
     end
   end
 
@@ -1006,8 +1268,8 @@ defmodule Raxol.Workflow.Runtime do
           halt_at
         )
 
-      {:interrupt, _value, _state_at_interrupt} ->
-        {:error, {:pause_in_branch_not_supported, current_id}, state, count}
+      {:interrupt, value, state_at_interrupt} ->
+        {:branch_paused, value, state_at_interrupt, current_id, count + 1}
 
       {:error, reason, state_at_error} ->
         {:error, reason, state_at_error, count + 1}
