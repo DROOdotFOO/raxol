@@ -6,6 +6,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
 
   alias Raxol.Symphony.TestSupport.{
     SessionAgentErrors,
+    SessionAgentPausesResumes,
     SessionAgentSilent,
     SessionAgentSucceed
   }
@@ -87,6 +88,61 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
 
       assert {:error, :session_timeout} =
                RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: nil)
+    end
+  end
+
+  describe "pause" do
+    test "agent emits :paused -> runner returns {:pause, reason, token} with session_id" do
+      cfg = config(%{module: SessionAgentPausesResumes})
+
+      assert {:pause, :awaiting_review, token} =
+               RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: 1)
+
+      assert is_binary(token.session_id)
+      assert token.step == "first-half"
+
+      # Session must still be alive (no `stop_session` on pause path).
+      assert [{_pid, _}] = Registry.lookup(Raxol.Agent.Registry, token.session_id)
+
+      # Clean up the orphan session manually so subsequent tests don't
+      # see it.
+      [{pid, _}] = Registry.lookup(Raxol.Agent.Registry, token.session_id)
+      DynamicSupervisor.terminate_child(Raxol.Agent.DynSup, pid)
+    end
+  end
+
+  describe "resume" do
+    test "resume_token + resume_value re-attaches and completes" do
+      cfg = config(%{module: SessionAgentPausesResumes})
+
+      assert {:pause, :awaiting_review, token} =
+               RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: 7)
+
+      # Resume.
+      assert :ok =
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 attempt: 7,
+                 resume_token: token,
+                 resume_value: :approved
+               )
+
+      # Resume produced a :turn_complete event before :done.
+      assert_received {:run_event, "issue-1", %{event: :turn_complete}}
+    end
+
+    test "resume on a missing session returns :session_not_found" do
+      cfg = config(%{module: SessionAgentSucceed})
+
+      ghost_token = %{session_id: "no-such-session-#{:erlang.unique_integer([:positive])}"}
+
+      assert {:error, :session_not_found} =
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 attempt: nil,
+                 resume_token: ghost_token,
+                 resume_value: :approved
+               )
     end
   end
 

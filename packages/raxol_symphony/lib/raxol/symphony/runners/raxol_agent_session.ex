@@ -52,9 +52,27 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
   ## Pause/resume
 
-  Not yet wired. The Session-side pause contract is a future
-  follow-up; for now any pause-style return from this runner is
-  treated as an abnormal exit.
+  The agent signals a pause by emitting:
+
+      Raxol.Agent.SessionStreamer.emit(session_id, {:paused, %{
+        reason: :awaiting_buyer_payment,
+        token: %{...arbitrary runner-side context...}
+      }})
+
+  The runner returns `{:pause, reason, token}` where `token` carries
+  the `session_id` so the orchestrator's later `resume_run/3` call
+  can re-attach to the same live Session. The Session is started
+  under `Raxol.Agent.DynSup`, so it survives the worker exit that
+  follows the pause return.
+
+  On resume the runner sends:
+
+      {:symphony_resume, %{resume_value: rv, session_id: id}}
+
+  into the same Session's mailbox and loops for events as before.
+  If the Session is no longer in the Registry (e.g. the BEAM
+  restarted), resume returns `{:error, :session_not_found}` and
+  the orchestrator's retry-on-error path kicks in.
   """
 
   @behaviour Raxol.Symphony.Runner
@@ -70,6 +88,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
   @impl Runner
   def run(%Issue{} = issue, %Config{} = config, opts) do
+    resume_token = Keyword.get(opts, :resume_token)
+    resume_value = Keyword.get(opts, :resume_value)
+
     cond do
       not raxol_agent_loaded?() ->
         {:error, :raxol_agent_not_loaded}
@@ -77,12 +98,18 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
       is_nil(agent_module(config)) ->
         {:error, :agent_module_required}
 
+      resume_token_present?(resume_token) ->
+        resume_run(issue, config, opts, resume_token, resume_value)
+
       true ->
-        do_run(issue, config, opts)
+        fresh_run(issue, config, opts)
     end
   end
 
-  defp do_run(%Issue{} = issue, %Config{} = config, opts) do
+  defp resume_token_present?(%{session_id: id}) when is_binary(id), do: true
+  defp resume_token_present?(_), do: false
+
+  defp fresh_run(%Issue{} = issue, %Config{} = config, opts) do
     parent = Keyword.fetch!(opts, :parent)
     attempt = Keyword.get(opts, :attempt)
     module = agent_module(config)
@@ -94,17 +121,59 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     with :ok <- ensure_session_streamer(),
          :ok <- subscribe(session_id),
          {:ok, _pid} <- start_session(session_id, module) do
-      try do
-        seed_agent(session_id, issue, config, attempt)
-        loop(session_id, issue.id, parent, timeout_ms)
-      after
-        unsubscribe(session_id)
-        stop_session(session_id)
+      seed_agent(session_id, issue, config, attempt)
+
+      case loop(session_id, issue.id, parent, timeout_ms) do
+        :ok ->
+          finalize(session_id, :ok)
+
+        {:error, _} = err ->
+          finalize(session_id, err)
+
+        {:pause, _, _} = pause ->
+          # Session keeps running under DynSup; runner detaches only.
+          unsubscribe(session_id)
+          pause
       end
     else
       {:error, reason} ->
+        unsubscribe(session_id)
+        stop_session(session_id)
         {:error, {:session_setup_failed, reason}}
     end
+  end
+
+  defp resume_run(%Issue{} = issue, %Config{} = config, opts, resume_token, resume_value) do
+    parent = Keyword.fetch!(opts, :parent)
+    timeout_ms = session_timeout_ms(config)
+    %{session_id: session_id} = resume_token
+
+    case Registry.lookup(Raxol.Agent.Registry, session_id) do
+      [] ->
+        {:error, :session_not_found}
+
+      [{_pid, _}] ->
+        with :ok <- ensure_session_streamer(),
+             :ok <- subscribe(session_id) do
+          send_resume(session_id, resume_value)
+
+          case loop(session_id, issue.id, parent, timeout_ms) do
+            :ok -> finalize(session_id, :ok)
+            {:error, _} = err -> finalize(session_id, err)
+            {:pause, _, _} = pause ->
+              unsubscribe(session_id)
+              pause
+          end
+        else
+          {:error, reason} -> {:error, {:session_setup_failed, reason}}
+        end
+    end
+  end
+
+  defp finalize(session_id, result) do
+    unsubscribe(session_id)
+    stop_session(session_id)
+    result
   end
 
   # -- Loop --
@@ -116,6 +185,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
       {:session_event, ^session_id, {:error, reason}} ->
         {:error, reason}
+
+      {:session_event, ^session_id, {:paused, info}} ->
+        reason = Map.get(info, :reason, :awaiting_external)
+        token = Map.get(info, :token, %{})
+        full_token = Map.put(token, :session_id, session_id)
+        {:pause, reason, full_token}
 
       {:session_event, ^session_id, event} ->
         send(parent, {:run_event, issue_id, event_payload(event)})
@@ -167,18 +242,43 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   end
 
   defp start_session(session_id, module) do
-    Raxol.Agent.Session.start_link(id: session_id, app_module: module)
+    # Start the Session under DynSup so it survives the worker exit
+    # that follows a `{:pause, ...}` return; resume re-attaches by
+    # looking up `session_id` in the Registry.
+    spec = {Raxol.Agent.Session, [id: session_id, app_module: module]}
+
+    case DynamicSupervisor.start_child(Raxol.Agent.DynSup, spec) do
+      {:ok, pid} -> {:ok, pid}
+      {:ok, pid, _info} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      {:error, reason} -> {:error, {:start_child, reason}}
+    end
   catch
-    :exit, reason -> {:error, {:start_link, reason}}
+    :exit, reason -> {:error, {:start_child, reason}}
+  end
+
+  defp send_resume(session_id, resume_value) do
+    Raxol.Agent.Session.send_message(session_id, {
+      :symphony_resume,
+      %{session_id: session_id, resume_value: resume_value}
+    })
+
+    :ok
   end
 
   defp stop_session(session_id) do
     case Registry.lookup(Raxol.Agent.Registry, session_id) do
       [{pid, _}] ->
-        try do
-          GenServer.stop(pid, :normal, 1_000)
-        catch
-          :exit, _ -> :ok
+        case DynamicSupervisor.terminate_child(Raxol.Agent.DynSup, pid) do
+          :ok ->
+            :ok
+
+          {:error, :not_found} ->
+            try do
+              GenServer.stop(pid, :normal, 1_000)
+            catch
+              :exit, _ -> :ok
+            end
         end
 
       [] ->
