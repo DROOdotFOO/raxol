@@ -20,6 +20,8 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0012](0012-mcp-as-rendering-target.md) | MCP as Rendering Target | Implemented | 2026-04-05 |
 | [0013](0013-event-dispatch-backpressure.md) | Event-dispatch Backpressure | Implemented | 2026-06-03 |
 | [0014](0014-telegram-ai-guardian.md) | Telegram AI Guardian admin behaviour | Accepted | 2026-06-13 |
+| [0015](0015-workflow-graph.md) | Workflow Graph (`Raxol.Workflow.*`) | Accepted | 2026-06-15 |
+| [0016](0016-acp-job-workflow.md) | raxol_acp Job migration to `Raxol.Workflow` | Proposed | 2026-06-16 |
 
 ## Template
 
@@ -94,6 +96,10 @@ They preserve context for why decisions were made, help new contributors underst
 - [0012: MCP as Rendering Target](0012-mcp-as-rendering-target.md)
 - [0014: Telegram AI Guardian admin behaviour](0014-telegram-ai-guardian.md)
 
+### Orchestration
+- [0015: Workflow Graph](0015-workflow-graph.md)
+- [0016: raxol_acp Job migration to Workflow](0016-acp-job-workflow.md)
+
 ## Coverage
 
-12 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, and surface-specific admin patterns. (Numbers 0004 and 0006 are withdrawn placeholders.)
+14 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, and orchestration. (Numbers 0004 and 0006 are withdrawn placeholders.)
