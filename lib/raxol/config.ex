@@ -244,7 +244,7 @@ defmodule Raxol.Config do
 
   @spec export_to_toml(config_map(), String.t()) :: :ok | {:error, File.posix()}
   defp export_to_toml(config, file_path) do
-    # Since Toml library doesn't support encoding, we'll create a simple TOML writer
+    # Toml has no encoder; this writes simple TOML
     content = generate_toml(config)
     File.write(file_path, content)
   end

@@ -91,7 +91,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver do
   Return up to `limit` paused threads, newest-paused-first.
 
   A thread is "paused" when its latest checkpoint carries
-  `:interrupt_reason` in metadata (ADR-0017). Resuming a paused thread
+  `:interrupt_reason` in metadata. Resuming a paused thread
   writes a follow-up checkpoint with no `:interrupt_reason`, which
   implicitly removes the thread from this query's result set.
 

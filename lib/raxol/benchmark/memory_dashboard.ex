@@ -4,7 +4,7 @@ defmodule Raxol.Benchmark.MemoryDashboard do
   @moduledoc """
   Advanced memory benchmarking dashboard and reporting system.
 
-  Phase 3 Implementation: Provides comprehensive visual memory analysis:
+  Provides comprehensive visual memory analysis:
   - Interactive memory usage charts
   - Memory regression trend analysis
   - Cross-platform memory comparison

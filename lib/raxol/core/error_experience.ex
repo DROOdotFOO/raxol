@@ -645,7 +645,7 @@ defmodule Raxol.Core.ErrorExperience do
   end
 
   defp store_error_report(report) do
-    # Store in tmp for now - in production would use proper storage
+    # Writes the report under /tmp
     reports_dir = "/tmp/raxol_error_reports"
     File.mkdir_p!(reports_dir)
 

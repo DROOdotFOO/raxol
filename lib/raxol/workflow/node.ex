@@ -15,7 +15,7 @@ defmodule Raxol.Workflow.Node do
   Node functions return one of:
 
     * `{:ok, state}` -- proceed with the new state
-    * `{:effects, [directive], state}` -- emit Phase 24 directives and proceed
+    * `{:effects, [directive], state}` -- emit directives and proceed
     * `{:interrupt, value}` -- pause the run for human-in-the-loop resume
     * `{:error, reason}` -- fail (handled by the workflow's failure policy)
 

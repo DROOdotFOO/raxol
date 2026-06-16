@@ -10,7 +10,7 @@ defmodule Raxol.Workflow.Async do
     * consume the run's progress as a lazy `Stream` of
       `Raxol.Core.Events.CloudEvent` structs (`stream_events/3`)
 
-  This module ships the synchronous-spawn shape from ADR-0015. A
+  This module ships the synchronous-spawn shape. A
   `Raxol.Workflow.RunSupervisor` (DynamicSupervisor) for production
   hardening is a follow-up; the API here is supervisor-agnostic, so
   swapping to a supervised spawn does not break existing callers.
@@ -111,7 +111,7 @@ defmodule Raxol.Workflow.Async do
 
   Each emitted telemetry event (run.started, node.started,
   node.completed, etc.) is converted to a `Raxol.Core.Events.CloudEvent`
-  using the Phase 24 envelope and pushed onto the stream in the order
+  using the directive envelope and pushed onto the stream in the order
   the runtime emits it. The stream terminates after the first run-level
   terminal event (`completed`, `interrupted`, or `failed`).
 

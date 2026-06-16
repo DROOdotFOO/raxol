@@ -433,7 +433,7 @@ defmodule Raxol.Plugins.Examples.GitIntegrationPlugin do
 
   defp start_file_watcher(_repo_path) do
     # This would integrate with a file watching system
-    # For now, we'll rely on the timer-based refresh
+    # Relies on the timer-based refresh
     nil
   end
 
