@@ -187,5 +187,73 @@ defmodule Raxol.Symphony.Surfaces.Watch.NotifierTest do
       assert {:error, :orchestrator_unavailable} =
                Notifier.handle_action("sym:stop:any", orchestrator: :nonexistent)
     end
+
+    test "sym:list maps to refresh (snapshot trigger)" do
+      orch = start_orchestrator()
+      assert {:ok, :refresh} = Notifier.handle_action("sym:list", orchestrator: orch)
+    end
+
+    test "sym:run:<id> is a noop (no detail surface in Watch yet)" do
+      assert :noop = Notifier.handle_action("sym:run:iss-1", orchestrator: :foo)
+    end
+
+    test "sym:resume:<id>:<decision> calls Orchestrator.resume_run/3" do
+      orch = start_orchestrator()
+
+      # Park a paused run via the Noop director so resume_run/3 has
+      # something to drive.
+      Memory.put_issue(%Issue{id: "a", identifier: "MT-1", title: "T", state: "Todo"})
+
+      Noop.Director.set(
+        "MT-1",
+        {:pause_then, :awaiting_review, %{seq: 1}, {:succeed_after, 0}}
+      )
+
+      :ok = Orchestrator.tick_now(orch)
+      wait_paused(orch, "a")
+
+      assert {:ok, {:resumed, "approved"}} =
+               Notifier.handle_action("sym:resume:a:approved", orchestrator: orch)
+
+      wait_unparked(orch, "a")
+      snap = Orchestrator.snapshot(orch)
+      assert snap.counts.paused == 0
+    end
+
+    test "sym:resume on an unknown issue surfaces :not_paused" do
+      orch = start_orchestrator()
+
+      assert {:error, :not_paused} =
+               Notifier.handle_action("sym:resume:ghost:approved", orchestrator: orch)
+    end
+  end
+
+  defp wait_paused(orch, issue_id, timeout_ms \\ 500) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    do_wait(deadline, fn ->
+      Map.has_key?(Orchestrator.paused(orch), issue_id)
+    end)
+  end
+
+  defp wait_unparked(orch, issue_id, timeout_ms \\ 500) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    do_wait(deadline, fn ->
+      not Map.has_key?(Orchestrator.paused(orch), issue_id)
+    end)
+  end
+
+  defp do_wait(deadline, fun) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("wait timed out")
+      else
+        Process.sleep(20)
+        do_wait(deadline, fun)
+      end
+    end
   end
 end

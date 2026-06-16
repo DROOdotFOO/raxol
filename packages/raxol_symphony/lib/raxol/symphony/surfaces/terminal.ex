@@ -408,10 +408,7 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     defp format_event(binary) when is_binary(binary), do: binary
     defp format_event(other), do: inspect(other)
 
-    defp format_reason(nil), do: "(unspecified)"
-    defp format_reason(atom) when is_atom(atom), do: Atom.to_string(atom)
-    defp format_reason(binary) when is_binary(binary), do: binary
-    defp format_reason(other), do: inspect(other)
+    defp format_reason(reason), do: Raxol.Symphony.PauseReason.format(reason)
 
     defp format_ms(ms) when is_integer(ms) and ms < 1_000, do: "#{ms}ms"
     defp format_ms(ms) when is_integer(ms) and ms < 60_000, do: "#{div(ms, 1000)}s"

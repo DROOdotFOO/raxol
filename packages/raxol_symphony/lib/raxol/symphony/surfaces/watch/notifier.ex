@@ -82,16 +82,18 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
     orch = Keyword.get(opts, :orchestrator, Raxol.Symphony.Orchestrator)
 
     action_id
-    |> String.split(":")
+    |> Raxol.Symphony.OperatorCallback.parse()
     |> dispatch_action(orch)
   end
 
-  defp dispatch_action(["sym", "refresh"], orch), do: do_refresh(orch)
-  defp dispatch_action(["sym", "stop", id], orch), do: do_stop(orch, id)
-  defp dispatch_action(["sym", "approve", _id], orch), do: do_approve(orch)
-  defp dispatch_action(["sym", "approve"], orch), do: do_approve(orch)
-  defp dispatch_action(["sym", "dismiss"], _orch), do: :noop
-  defp dispatch_action(_, _orch), do: :noop
+  defp dispatch_action(:refresh, orch), do: do_refresh(orch)
+  defp dispatch_action(:list, orch), do: do_refresh(orch)
+  defp dispatch_action(:dismiss, _orch), do: :noop
+  defp dispatch_action({:stop, id}, orch), do: do_stop(orch, id)
+  defp dispatch_action({:run_detail, _id}, _orch), do: :noop
+  defp dispatch_action({:approve, _id}, orch), do: do_approve(orch)
+  defp dispatch_action({:resume, id, decision}, orch), do: do_resume(orch, id, decision)
+  defp dispatch_action({:unknown, _raw}, _orch), do: :noop
 
   defp do_refresh(orch) do
     _ = safe_call(fn -> Orchestrator.refresh(orch) end)
@@ -106,6 +108,14 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
   defp do_stop(orch, id) do
     case safe_call(fn -> Orchestrator.stop_run(orch, id) end) do
       {:ok, :ok} -> {:ok, :stopped}
+      {:ok, {:error, reason}} -> {:error, reason}
+      _ -> {:error, :orchestrator_unavailable}
+    end
+  end
+
+  defp do_resume(orch, id, decision) do
+    case safe_call(fn -> Orchestrator.resume_run(orch, id, decision) end) do
+      {:ok, :ok} -> {:ok, {:resumed, decision}}
       {:ok, {:error, reason}} -> {:error, reason}
       _ -> {:error, :orchestrator_unavailable}
     end

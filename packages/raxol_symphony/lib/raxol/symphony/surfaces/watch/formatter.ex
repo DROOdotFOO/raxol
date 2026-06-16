@@ -234,10 +234,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   defp refresh_action, do: %{id: "sym:refresh", label: "Refresh"}
   defp dismiss_action, do: %{id: "sym:dismiss", label: "Dismiss"}
 
-  defp format_reason(nil), do: "(unspecified)"
-  defp format_reason(atom) when is_atom(atom), do: Atom.to_string(atom)
-  defp format_reason(b) when is_binary(b), do: b
-  defp format_reason(other), do: inspect(other)
+  defp format_reason(reason), do: Raxol.Symphony.PauseReason.format(reason)
 
   defp truncate(text) when is_binary(text) do
     if String.length(text) <= @max_body_length do

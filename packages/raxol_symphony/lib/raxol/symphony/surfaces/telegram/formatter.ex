@@ -310,10 +310,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
   defp format_event(b) when is_binary(b), do: b
   defp format_event(other), do: inspect(other)
 
-  defp format_reason(nil), do: "(unspecified)"
-  defp format_reason(atom) when is_atom(atom), do: Atom.to_string(atom)
-  defp format_reason(b) when is_binary(b), do: b
-  defp format_reason(other), do: inspect(other)
+  defp format_reason(reason), do: Raxol.Symphony.PauseReason.format(reason)
 
   defp format_ms(ms) when is_integer(ms) and ms < 1_000, do: "#{ms}ms"
 
