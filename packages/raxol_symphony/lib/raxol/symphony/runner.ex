@@ -106,6 +106,9 @@ defmodule Raxol.Symphony.Runner do
   defp resolve_from_config(%Config{runner: %{kind: "noop"}}),
     do: {:ok, Raxol.Symphony.Runners.Noop}
 
+  defp resolve_from_config(%Config{runner: %{kind: "review"}}),
+    do: {:ok, Raxol.Symphony.Runners.Review}
+
   defp resolve_from_config(%Config{runner: %{kind: kind}}),
     do: {:error, {:unsupported_runner_kind, kind}}
 end
