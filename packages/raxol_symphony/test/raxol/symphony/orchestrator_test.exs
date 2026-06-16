@@ -203,9 +203,10 @@ defmodule Raxol.Symphony.OrchestratorTest do
       snap = Orchestrator.snapshot(pid)
 
       assert is_binary(snap.generated_at)
-      assert snap.counts == %{running: 0, retrying: 0}
+      assert snap.counts == %{running: 0, retrying: 0, paused: 0}
       assert snap.running == []
       assert snap.retrying == []
+      assert snap.paused == []
       assert is_map(snap.codex_totals)
     end
 
@@ -216,6 +217,104 @@ defmodule Raxol.Symphony.OrchestratorTest do
       :ok = Orchestrator.tick_now(pid)
 
       assert_receive {:symphony_event, :tick_completed, %{counts: _}}, 500
+    end
+  end
+
+  describe "pause / resume" do
+    test "runner returning {:pause, reason, token} parks the run", %{
+      config: config
+    } do
+      Memory.put_issue(issue("a", "MT-1", "Todo"))
+      Noop.Director.set("MT-1", {:pause, :awaiting_review, %{pr: 42}})
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+
+      wait_until(fn -> Orchestrator.snapshot(pid).counts.paused == 1 end)
+
+      snap = Orchestrator.snapshot(pid)
+      assert snap.counts.running == 0
+      assert snap.counts.paused == 1
+      assert [paused] = snap.paused
+      assert paused.issue_id == "a"
+      assert paused.issue_identifier == "MT-1"
+      assert paused.interrupt_reason == :awaiting_review
+      assert is_integer(paused.paused_ms_ago) and paused.paused_ms_ago >= 0
+    end
+
+    test "subscribers receive :worker_paused event with the paused run", %{
+      config: config
+    } do
+      Memory.put_issue(issue("a", "MT-2", "Todo"))
+      Noop.Director.set("MT-2", {:pause, :awaiting_ci, "token-1"})
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.subscribe(pid)
+      :ok = Orchestrator.tick_now(pid)
+
+      assert_receive {:symphony_event, :worker_paused, snap}, 500
+      assert snap.counts.paused == 1
+      assert [%{interrupt_reason: :awaiting_ci}] = snap.paused
+    end
+
+    test "resume_run/3 re-dispatches the runner with the resume value", %{
+      config: config
+    } do
+      Memory.put_issue(issue("a", "MT-3", "Todo"))
+
+      Noop.Director.set(
+        "MT-3",
+        {:pause_then, :awaiting_review, "rt", {:succeed_after, 10}}
+      )
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+
+      wait_until(fn -> Orchestrator.snapshot(pid).counts.paused == 1 end)
+
+      assert :ok = Orchestrator.resume_run(pid, "a", :approved)
+
+      # After resume the run goes back to :running, then completes
+      # (continuation retry scheduled like any normal-exit worker).
+      wait_until(fn ->
+        snap = Orchestrator.snapshot(pid)
+        snap.counts.paused == 0 and snap.counts.running == 0
+      end)
+
+      snap = Orchestrator.snapshot(pid)
+      assert snap.counts.retrying == 1
+    end
+
+    test "resume_run/3 returns {:error, :not_paused} for unknown issue_id", %{
+      config: config
+    } do
+      pid = start_orchestrator(config)
+      assert {:error, :not_paused} = Orchestrator.resume_run(pid, "ghost", :any)
+    end
+
+    test "paused run carries turn_count + tokens accumulated before the pause",
+         %{config: config} do
+      Memory.put_issue(issue("a", "MT-4", "Todo"))
+
+      Noop.Director.set(
+        "MT-4",
+        {:emit,
+         [
+           %{
+             event: :turn_completed,
+             usage: %{input_tokens: 10, output_tokens: 20, total_tokens: 30}
+           }
+         ], {:pause, :awaiting_human, nil}}
+      )
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+
+      wait_until(fn -> Orchestrator.snapshot(pid).counts.paused == 1 end)
+
+      [paused] = Orchestrator.snapshot(pid).paused
+      assert paused.turn_count == 1
+      assert paused.tokens.total_tokens == 30
     end
   end
 end
