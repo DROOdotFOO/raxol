@@ -29,6 +29,24 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           system_prompt: "You are a software engineer..."
           # actions: list of fully-qualified action modules (Phase 4: ignored;
           # tool use lands in a later phase together with hook integration)
+          pause_detector: {MyApp.PauseDetector, :detect}
+
+  ## Pause detection
+
+  When `agent.pause_detector` is set, the runner consults the detector
+  on every event in the agent stream. The detector signature is:
+
+      detect(event :: term()) ::
+        :continue
+        | {:pause, interrupt_reason :: atom(), resume_token :: term()}
+
+  Returning `:continue` falls through to the normal forwarding path.
+  Returning `{:pause, reason, token}` halts stream consumption and
+  bubbles up as a `{:pause, ...}` return from `run/3`; the orchestrator
+  then parks the run (see `Raxol.Symphony.Orchestrator.handle_worker_exit`).
+
+  Detection is bypassed when `agent.pause_detector` is `nil`, falling
+  back to the legacy `EventForwarder.to_parent/3` path with no overhead.
 
   ## Compile-time optionality
 
@@ -69,6 +87,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           backend: backend,
           backend_opts: backend_opts,
           system_prompt: agent_string(config, :system_prompt),
+          pause_detector: agent_pause_detector(config),
           turn: 1,
           max_turns: config.agent.max_turns
         }
@@ -95,6 +114,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
     case run_one_turn(issue, prompt, ctx) do
       :ok -> continue_or_finish(issue, config, ctx)
+      {:pause, _reason, _token} = pause -> pause
       {:error, reason} -> {:error, reason}
     end
   end
@@ -121,12 +141,56 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
         system_prompt: ctx.system_prompt
       )
 
-    if Code.ensure_loaded?(Raxol.Agent.EventForwarder) do
-      Raxol.Agent.EventForwarder.to_parent(stream, ctx.parent, issue.id)
-    else
-      legacy_forward(stream, ctx.parent, issue.id)
+    cond do
+      ctx.pause_detector ->
+        forward_with_detector(stream, ctx.parent, issue.id, ctx.pause_detector)
+
+      Code.ensure_loaded?(Raxol.Agent.EventForwarder) ->
+        Raxol.Agent.EventForwarder.to_parent(stream, ctx.parent, issue.id)
+
+      true ->
+        legacy_forward(stream, ctx.parent, issue.id)
     end
   end
+
+  # Pause-detector aware stream enumeration. Forwards every event the
+  # same way `legacy_forward/3` does, but on each iteration also
+  # consults the detector. If the detector returns `{:pause, _, _}`,
+  # we stop pulling the stream and bubble the pause tuple up to
+  # `run_turns/3` -> `run/3`, which the orchestrator parks via its
+  # `:run_paused` handler.
+  defp forward_with_detector(stream, parent, issue_id, detector) do
+    Enum.reduce_while(stream, {:error, :no_done}, fn event, _acc ->
+      send(parent, {:run_event, issue_id, legacy_payload(event)})
+
+      case apply_detector(detector, event) do
+        {:pause, reason, token} when is_atom(reason) ->
+          {:halt, {:pause, reason, token}}
+
+        _ ->
+          case event do
+            {:done, _info} -> {:halt, :ok}
+            {:error, reason} -> {:halt, {:error, reason}}
+            _ -> {:cont, {:error, :no_done}}
+          end
+      end
+    end)
+    |> case do
+      :ok -> :ok
+      {:pause, _, _} = pause -> pause
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp apply_detector({mod, fun}, event) when is_atom(mod) and is_atom(fun) do
+    apply(mod, fun, [event])
+  end
+
+  defp apply_detector(fun, event) when is_function(fun, 1) do
+    fun.(event)
+  end
+
+  defp apply_detector(_, _), do: :continue
 
   # Fallback for builds where raxol_agent < 2.5 is loaded.
   defp legacy_forward(stream, parent, issue_id) do
@@ -259,6 +323,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       value when is_binary(value) -> value
       _ -> nil
     end
+  end
+
+  defp agent_pause_detector(%Config{runner: %{agent: agent}}) do
+    Map.get(agent, :pause_detector)
   end
 
   # -- Prompt building (Liquid via PromptBuilder) -----------------------------

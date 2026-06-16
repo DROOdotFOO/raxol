@@ -47,6 +47,31 @@ defmodule Raxol.Symphony.IntegrationTest do
     do_wait_until(deadline, fun)
   end
 
+  # Race-tolerant assertion: dispatch happened iff within timeout_ms the issue
+  # was either seen running OR landed in retrying (worker finished + queued).
+  defp dispatched?(pid, issue_id, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_dispatched?(pid, issue_id, deadline)
+  end
+
+  defp do_dispatched?(pid, issue_id, deadline) do
+    snap = Orchestrator.snapshot(pid)
+
+    seen_running? = Enum.any?(snap.running, &(&1.issue_id == issue_id))
+    seen_retrying? = Enum.any?(snap.retrying, &(&1.issue_id == issue_id))
+
+    if seen_running? or seen_retrying? do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        false
+      else
+        Process.sleep(5)
+        do_dispatched?(pid, issue_id, deadline)
+      end
+    end
+  end
+
   defp do_wait_until(deadline, fun) do
     if fun.() do
       :ok
@@ -83,7 +108,11 @@ defmodule Raxol.Symphony.IntegrationTest do
     Memory.transition("a", "Todo")
 
     :ok = Orchestrator.tick_now(pid)
-    assert Orchestrator.snapshot(pid).counts.running == 1
+    # Dispatch happened: assert we either saw running=1 within the next 50ms
+    # window, OR the worker already finished and is queued for continuation
+    # retry. Either is proof that tick dispatched. (The mock backend can
+    # finish in <1ms, so a strict running==1 assertion is racy.)
+    assert dispatched?(pid, "a", 50)
 
     # Move to Done so the runner's still_active? returns :done after turn 1.
     Memory.transition("a", "Done")

@@ -50,6 +50,11 @@ defmodule Raxol.Symphony.Runners.Noop do
     :ok
   end
 
+  defp do_run({:hold, ms}, _issue, _parent) do
+    Process.sleep(ms)
+    :ok
+  end
+
   defp do_run({:fail_after, ms, reason}, _issue, _parent) do
     Process.sleep(ms)
     {:error, reason}

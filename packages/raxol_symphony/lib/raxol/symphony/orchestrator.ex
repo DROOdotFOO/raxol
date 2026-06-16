@@ -36,6 +36,7 @@ defmodule Raxol.Symphony.Orchestrator do
   alias Raxol.Symphony.Evidence.Capture
   alias Raxol.Symphony.Issue
   alias Raxol.Symphony.Orchestrator.Candidate
+  alias Raxol.Symphony.Orchestrator.PausedSaver
   alias Raxol.Symphony.Orchestrator.Retry
   alias Raxol.Symphony.Orchestrator.State
   alias Raxol.Symphony.Runner
@@ -146,13 +147,16 @@ defmodule Raxol.Symphony.Orchestrator do
     tracker_module = Keyword.get(opts, :tracker_module)
     task_supervisor = Keyword.get(opts, :task_supervisor)
     auto_start_tick = Keyword.get(opts, :auto_start_tick, true)
+    paused_saver = Keyword.get(opts, :paused_saver)
 
     state = %State{
       config: config,
       runner_module: runner_module,
       tracker_module: tracker_module,
       task_supervisor: task_supervisor,
-      workflow_store: workflow_store
+      workflow_store: workflow_store,
+      paused_saver: paused_saver,
+      paused: PausedSaver.load_all(paused_saver)
     }
 
     state = if auto_start_tick, do: schedule_tick(state, 0), else: state
@@ -171,11 +175,9 @@ defmodule Raxol.Symphony.Orchestrator do
   end
 
   def handle_manager_call({:stop_run, issue_id}, _from, %State{} = state) do
-    case Map.get(state.running, issue_id) do
-      nil ->
-        {:reply, {:error, :not_running}, state}
-
-      entry ->
+    cond do
+      Map.has_key?(state.running, issue_id) ->
+        entry = Map.fetch!(state.running, issue_id)
         Process.demonitor(entry.worker_ref, [:flush])
         Process.exit(entry.worker_pid, :kill)
 
@@ -185,6 +187,20 @@ defmodule Raxol.Symphony.Orchestrator do
           |> notify_listeners(:worker_stopped)
 
         {:reply, :ok, new_state}
+
+      Map.has_key?(state.paused, issue_id) ->
+        forget_paused(state.paused_saver, issue_id)
+
+        new_state =
+          state
+          |> Map.put(:paused, Map.delete(state.paused, issue_id))
+          |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
+          |> notify_listeners(:worker_stopped)
+
+        {:reply, :ok, new_state}
+
+      true ->
+        {:reply, {:error, :not_running}, state}
     end
   end
 
@@ -198,6 +214,8 @@ defmodule Raxol.Symphony.Orchestrator do
         {:reply, {:error, :not_paused}, state}
 
       paused_entry ->
+        forget_paused(state.paused_saver, issue_id)
+
         new_state =
           state
           |> Map.put(:paused, Map.delete(state.paused, issue_id))
@@ -602,9 +620,37 @@ defmodule Raxol.Symphony.Orchestrator do
       tokens: entry.tokens
     }
 
+    persist_paused(state.paused_saver, entry.issue.id, paused_entry)
+
     state
     |> Map.put(:paused, Map.put(state.paused, entry.issue.id, paused_entry))
     |> notify_listeners(:worker_paused)
+  end
+
+  defp persist_paused(saver, issue_id, paused_entry) do
+    case PausedSaver.put(saver, issue_id, paused_entry) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "symphony.orchestrator.paused_saver_put_failed issue=#{issue_id} " <>
+            "reason=#{inspect(reason)}"
+        )
+    end
+  end
+
+  defp forget_paused(saver, issue_id) do
+    case PausedSaver.delete(saver, issue_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "symphony.orchestrator.paused_saver_delete_failed issue=#{issue_id} " <>
+            "reason=#{inspect(reason)}"
+        )
+    end
   end
 
   defp dispatch_resumption(%State{} = state, paused_entry, resume_value) do

@@ -91,6 +91,72 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
     end
   end
 
+  describe "pause_detector" do
+    test "always-pause detector returns {:pause, _, _} from run/3" do
+      Memory.put_issue(%{issue() | state: "Todo"})
+
+      detector = fn _event ->
+        {:pause, :awaiting_buyer_payment, %{seq: 1}}
+      end
+
+      cfg = config(%{pause_detector: detector})
+
+      assert {:pause, :awaiting_buyer_payment, %{seq: 1}} =
+               RaxolAgent.run(issue(), cfg, parent: self())
+    end
+
+    test ":continue from detector falls through to normal completion" do
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      detector = fn _event -> :continue end
+      cfg = config(%{pause_detector: detector})
+
+      assert :ok = RaxolAgent.run(issue(), cfg, parent: self())
+      assert_received {:run_event, "issue-1", %{event: :turn_completed}}
+    end
+
+    test "{module, fun} detector form is supported" do
+      Memory.put_issue(%{issue() | state: "Todo"})
+
+      cfg =
+        config(%{pause_detector: {__MODULE__, :__test_always_pause__}})
+
+      assert {:pause, :awaiting_delivery, :tok} =
+               RaxolAgent.run(issue(), cfg, parent: self())
+    end
+
+    test "detector only fires on a matching event tag" do
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      # Pause only on tool_use; mock backend emits text_delta + turn_complete,
+      # so this run should reach :ok normally.
+      detector = fn
+        {:tool_use, _} -> {:pause, :awaiting_buyer_payment, :tok}
+        _ -> :continue
+      end
+
+      cfg = config(%{pause_detector: detector})
+
+      assert :ok = RaxolAgent.run(issue(), cfg, parent: self())
+    end
+
+    test "events fire before the detector decides to pause" do
+      Memory.put_issue(%{issue() | state: "Todo"})
+
+      detector = fn _event -> {:pause, :awaiting_evaluator_approval, :tok} end
+      cfg = config(%{pause_detector: detector})
+
+      _ = RaxolAgent.run(issue(), cfg, parent: self())
+
+      # At least one event should have been forwarded to parent before the
+      # detector halted stream consumption.
+      assert_received {:run_event, "issue-1", _}
+    end
+  end
+
+  @doc false
+  def __test_always_pause__(_event), do: {:pause, :awaiting_delivery, :tok}
+
   describe "compile-time absence" do
     test "returns :raxol_agent_not_loaded when stream module missing" do
       # Re-define the runner's stream_module/0 via a process-dictionary hack?
