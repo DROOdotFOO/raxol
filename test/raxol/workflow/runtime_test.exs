@@ -248,6 +248,8 @@ defmodule Raxol.Workflow.RuntimeTest do
         [:raxol, :workflow, :run, :started],
         [:raxol, :workflow, :run, :completed],
         [:raxol, :workflow, :run, :interrupted],
+        [:raxol, :workflow, :run, :paused],
+        [:raxol, :workflow, :run, :resumed],
         [:raxol, :workflow, :run, :failed],
         [:raxol, :workflow, :node, :started],
         [:raxol, :workflow, :node, :completed],
@@ -306,7 +308,7 @@ defmodule Raxol.Workflow.RuntimeTest do
       assert is_binary(trace_id) and is_binary(span_id)
     end
 
-    test "interrupt emits run.interrupted" do
+    test "interrupt emits run.interrupted with interrupt_reason lifted (ADR-0017)" do
       {:ok, compiled} =
         Graph.new(:pause)
         |> Graph.add_node(:pause, fn _ -> {:interrupt, :wait} end)
@@ -317,7 +319,85 @@ defmodule Raxol.Workflow.RuntimeTest do
       Compiled.invoke(compiled, %{})
 
       assert_receive {:tel, [:raxol, :workflow, :run, :interrupted], _,
-                      %{value: :wait, nodes_executed: 1}}
+                      %{
+                        value: :wait,
+                        interrupt_reason: :wait,
+                        nodes_executed: 1
+                      }}
+    end
+
+    test "with a saver, interrupt also emits run.paused after the pause checkpoint commits" do
+      table = :"runtime_telemetry_paused_#{:erlang.unique_integer([:positive])}"
+
+      on_exit(fn ->
+        if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+      end)
+
+      {:ok, compiled} =
+        Graph.new(:paused_event)
+        |> Graph.add_node(:gate, fn _ -> {:interrupt, :need_approval} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_edge(:gate, :__end__)
+        |> Graph.compile(
+          saver: {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+        )
+
+      Compiled.invoke(compiled, %{})
+
+      assert_receive {:tel, [:raxol, :workflow, :run, :paused], _,
+                      %{
+                        node_id: :gate,
+                        interrupt_reason: :need_approval,
+                        paused_at: %DateTime{}
+                      }}
+    end
+
+    test "resume emits run.resumed carrying the original interrupt_reason" do
+      table =
+        :"runtime_telemetry_resumed_#{:erlang.unique_integer([:positive])}"
+
+      on_exit(fn ->
+        if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+      end)
+
+      {:ok, compiled} =
+        Graph.new(:resumed_event)
+        |> Graph.add_node(:gate, fn s ->
+          decision = Raxol.Workflow.interrupt(:need_decision)
+          {:ok, Map.put(s, :decision, decision)}
+        end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_edge(:gate, :__end__)
+        |> Graph.compile(
+          saver: {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+        )
+
+      {:interrupted, run_id, _, _} = Compiled.invoke(compiled, %{})
+
+      Compiled.resume(compiled, run_id, :approved)
+
+      assert_receive {:tel, [:raxol, :workflow, :run, :resumed], _,
+                      %{
+                        node_id: :gate,
+                        interrupt_reason: :need_decision,
+                        resume_mode: :reenter
+                      }}
+    end
+
+    test "with no saver, run.paused does not fire" do
+      {:ok, compiled} =
+        Graph.new(:no_saver_paused)
+        |> Graph.add_node(:gate, fn _ -> {:interrupt, :ignore} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_edge(:gate, :__end__)
+        |> Graph.compile()
+
+      Compiled.invoke(compiled, %{})
+
+      # :interrupted still fires (back-compat), but :paused does not
+      # because there is no durable pause state to announce.
+      assert_receive {:tel, [:raxol, :workflow, :run, :interrupted], _, _}
+      refute_received {:tel, [:raxol, :workflow, :run, :paused], _, _}
     end
 
     test "node error emits run.failed" do

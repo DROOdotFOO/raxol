@@ -1,6 +1,8 @@
 defmodule Raxol.ACP.Seller.QueueTest do
   use ExUnit.Case, async: false
 
+  import Raxol.ACP.TestSupport.WorkflowSetup
+
   alias Raxol.ACP.ContractClient
   alias Raxol.ACP.ContractClient.InMemory
   alias Raxol.ACP.Job
@@ -11,6 +13,8 @@ defmodule Raxol.ACP.Seller.QueueTest do
 
   @seller "0x" <> String.duplicate("11", 20)
   @buyer "0x" <> String.duplicate("22", 20)
+
+  setup :with_isolated_workflow_saver
 
   setup do
     OfferingRegistry.clear()

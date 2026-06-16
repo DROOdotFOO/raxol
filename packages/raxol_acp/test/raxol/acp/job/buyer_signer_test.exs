@@ -11,6 +11,8 @@ defmodule Raxol.ACP.Job.BuyerSignerTest do
 
   use ExUnit.Case, async: false
 
+  import Raxol.ACP.TestSupport.WorkflowSetup
+
   alias Raxol.ACP.ContractClient
   alias Raxol.ACP.ContractClient.InMemory
   alias Raxol.ACP.Job
@@ -22,6 +24,7 @@ defmodule Raxol.ACP.Job.BuyerSignerTest do
   @buyer "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
   @seller "0xc6E555dfcC47e4A3bfecd6879570044ADc0270ff"
   @deadline 1_900_000_000
+  @bootstrap_sig <<0xAA, 0xBB>>
 
   setup_all do
     case resolve_cli_dir() do
@@ -29,6 +32,8 @@ defmodule Raxol.ACP.Job.BuyerSignerTest do
       cli_dir -> {:ok, cli_dir: cli_dir}
     end
   end
+
+  setup :with_isolated_workflow_saver
 
   setup do
     # Terminate any leftover Job.Server children so synthetic ids don't
@@ -134,7 +139,11 @@ defmodule Raxol.ACP.Job.BuyerSignerTest do
 
   defp start_job_in_negotiation do
     {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
-    {:ok, pid} = Job.Supervisor.start_job(job_id: job_id, initial_state: :negotiation)
+    {:ok, pid} = Job.Supervisor.start_job(job_id: job_id)
+
+    {:ok, :negotiation} =
+      Job.Server.transition(job_id, :accept_request, %{}, @bootstrap_sig)
+
     {job_id, pid}
   end
 

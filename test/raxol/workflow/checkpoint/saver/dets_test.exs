@@ -80,6 +80,49 @@ defmodule Raxol.Workflow.Checkpoint.Saver.DetsTest do
     end
   end
 
+  describe "list_paused (ADR-0017)" do
+    defp make_paused(thread_id, step, reason, paused_at, state \\ %{}) do
+      Checkpoint.new(
+        thread_id: thread_id,
+        step: step,
+        state: state,
+        metadata: %{
+          node_id: :awaiting,
+          interrupt_reason: reason,
+          paused_at: paused_at
+        }
+      )
+    end
+
+    test "returns paused threads, newest-paused-first", %{config: config} do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      t1 = ~U[2026-01-01 00:01:00Z]
+
+      Dets.put(config, "a", make_paused("a", 0, :awaiting_payment, t0))
+      Dets.put(config, "b", make_paused("b", 0, :awaiting_approval, t1))
+      Dets.put(config, "c", make_cp("c", 0))
+
+      assert {:ok, rows} = Dets.list_paused(config, 10)
+      assert length(rows) == 2
+
+      [first | _] = rows
+      assert first.thread_id == "b"
+      assert first.interrupt_reason == :awaiting_approval
+      assert first.paused_at == t1
+    end
+
+    test "a resumed thread (newer non-pause checkpoint) is excluded",
+         %{config: config} do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      Dets.put(config, "paused", make_paused("paused", 0, :awaiting_x, t0))
+      Dets.put(config, "resumed", make_paused("resumed", 0, :awaiting_x, t0))
+      Dets.put(config, "resumed", make_cp("resumed", 1, %{done: true}))
+
+      assert {:ok, [row]} = Dets.list_paused(config, 10)
+      assert row.thread_id == "paused"
+    end
+  end
+
   describe "durability across server restart" do
     test "checkpoints persist when the GenServer restarts", %{
       config: %{name: name} = config

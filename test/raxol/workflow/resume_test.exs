@@ -44,20 +44,22 @@ defmodule Raxol.Workflow.ResumeTest do
       assert state == %{prepared: true}
     end
 
-    test "checkpoints exist for :__start__ and :prep but not :approve",
+    test "checkpoints include a pause marker at the interrupting node (ADR-0017)",
          ctx do
       compiled = approval_graph(ctx.saver)
       {:interrupted, run_id, _, _} = Compiled.invoke(compiled, %{})
 
       {:ok, checkpoints} = Ets.list(ctx.config, run_id, 10)
-      assert length(checkpoints) == 2
+      assert length(checkpoints) == 3
       latest = hd(checkpoints)
-      assert latest.metadata.node_id == :prep
+      assert latest.metadata.node_id == :approve
+      assert latest.metadata.interrupt_reason == :awaiting_approval
+      assert %DateTime{} = latest.metadata.paused_at
 
       node_ids =
         checkpoints |> Enum.map(& &1.metadata.node_id) |> Enum.sort()
 
-      assert node_ids == [:__start__, :prep]
+      assert node_ids == [:__start__, :approve, :prep]
     end
   end
 
@@ -83,9 +85,15 @@ defmodule Raxol.Workflow.ResumeTest do
       {:ok, _, _} = Compiled.resume(compiled, run_id, :approved)
 
       {:ok, checkpoints} = Ets.list(ctx.config, run_id, 10)
-      # :__start__ (initial) + prep + approve + finalize = 4
+      # ADR-0017: :__start__ + :prep + :approve (paused) + :approve
+      # (resumed-success) + :finalize = 5 checkpoints. The two
+      # :approve entries are at different steps; the latest has no
+      # :interrupt_reason in metadata.
       node_ids = Enum.map(checkpoints, & &1.metadata.node_id) |> Enum.sort()
-      assert node_ids == [:__start__, :approve, :finalize, :prep]
+      assert node_ids == [:__start__, :approve, :approve, :finalize, :prep]
+
+      latest = hd(checkpoints)
+      refute Map.has_key?(latest.metadata, :interrupt_reason)
     end
 
     test "resume continues to {:ok, _} when the resume value is accepted",
@@ -176,12 +184,18 @@ defmodule Raxol.Workflow.ResumeTest do
       {:interrupted, run_id, _, :pause} =
         Compiled.invoke(compiled, %{seeded: :value})
 
+      # ADR-0017: __start__ at step 0 plus a pause checkpoint for :gate at
+      # step 1. Initial state is preserved on the __start__ row.
       {:ok, checkpoints} = Ets.list(ctx.config, run_id, 10)
-      assert length(checkpoints) == 1
-      [initial] = checkpoints
+      assert length(checkpoints) == 2
+
+      initial = Enum.find(checkpoints, &(&1.metadata.node_id == :__start__))
       assert initial.step == 0
-      assert initial.metadata.node_id == :__start__
       assert initial.state == %{seeded: :value}
+
+      paused = Enum.find(checkpoints, &(&1.metadata.node_id == :gate))
+      assert paused.step == 1
+      assert paused.metadata.interrupt_reason == :pause
     end
   end
 

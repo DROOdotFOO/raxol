@@ -85,7 +85,13 @@ defmodule Raxol.ACP.Job.Workflow do
   alias Raxol.Workflow.Compiled
   alias Raxol.Workflow.Graph
 
-  @type event :: :accept_request | :accept_payment | :deliver | :approve | :reject | :expire
+  @type event ::
+          :accept_request
+          | :accept_payment
+          | :deliver
+          | :approve
+          | :reject
+          | :expire
   @type resume_value :: {event(), payload :: any(), signature :: binary() | nil}
 
   @type state :: %{
@@ -173,7 +179,8 @@ defmodule Raxol.ACP.Job.Workflow do
     [
       failure_policy: :retry,
       max_attempts: Keyword.get(opts, :max_attempts, @default_max_attempts),
-      retry_backoff_ms: Keyword.get(opts, :retry_backoff_ms, @default_retry_backoff_ms)
+      retry_backoff_ms:
+        Keyword.get(opts, :retry_backoff_ms, @default_retry_backoff_ms)
     ]
     |> maybe_put_saver(opts)
   end
@@ -202,9 +209,33 @@ defmodule Raxol.ACP.Job.Workflow do
   # those fields to pick the destination `:memo_*` node.
 
   defp wait_request(state), do: pop_event(state, :awaiting_request_response)
-  defp wait_negotiation(state), do: pop_event(state, :awaiting_payment)
+  defp wait_negotiation(state), do: pop_event(state, :awaiting_buyer_payment)
   defp wait_transaction(state), do: pop_event(state, :awaiting_delivery)
-  defp wait_evaluation(state), do: pop_event(state, :awaiting_approval)
+
+  defp wait_evaluation(state),
+    do: pop_event(state, :awaiting_evaluator_approval)
+
+  @doc """
+  Canonical list of pause-reason atoms emitted by `wait_*` nodes.
+
+  Surfaces the contract documented in ADR-0017 so dashboards and
+  filters can enumerate the expected reasons without scraping the
+  module source. Order mirrors the ACP phase ladder.
+  """
+  @spec pause_reasons() :: [
+          :awaiting_request_response
+          | :awaiting_buyer_payment
+          | :awaiting_delivery
+          | :awaiting_evaluator_approval
+        ]
+  def pause_reasons do
+    [
+      :awaiting_request_response,
+      :awaiting_buyer_payment,
+      :awaiting_delivery,
+      :awaiting_evaluator_approval
+    ]
+  end
 
   # The wait node always returns `{:ok, _}` so that the workflow's
   # `failure_policy: :retry` does not re-enter `Workflow.interrupt/1`
@@ -231,7 +262,9 @@ defmodule Raxol.ACP.Job.Workflow do
 
   # --- Conditional-edge choosers ---
 
-  defp route_from_request(%{pending_event: :accept_request}), do: :memo_negotiation
+  defp route_from_request(%{pending_event: :accept_request}),
+    do: :memo_negotiation
+
   defp route_from_request(%{pending_event: :reject}), do: :memo_rejected
   defp route_from_request(_), do: :memo_expired
 

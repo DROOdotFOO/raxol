@@ -101,7 +101,7 @@ defmodule Raxol.Workflow.CheckpointIntegrationTest do
       assert {:ok, []} = Ets.list(ctx.config, meta.run_id, 10)
     end
 
-    test "interrupt: only checkpoints up to the interrupting node's predecessor",
+    test "interrupt: pause checkpoint marks the interrupting node (ADR-0017)",
          ctx do
       compiled =
         Graph.new(:pause)
@@ -116,10 +116,12 @@ defmodule Raxol.Workflow.CheckpointIntegrationTest do
       {:interrupted, run_id, _state, :wait} = Compiled.invoke(compiled, %{})
 
       {:ok, checkpoints} = Ets.list(ctx.config, run_id, 10)
-      assert length(checkpoints) == 2
+      # __start__ at step 0, :a success at step 1, :b pause at step 2.
+      assert length(checkpoints) == 3
       latest = hd(checkpoints)
-      assert latest.metadata.node_id == :a
-      assert latest.state == %{a: true}
+      assert latest.metadata.node_id == :b
+      assert latest.metadata.interrupt_reason == :wait
+      assert %DateTime{} = latest.metadata.paused_at
     end
 
     test "error: no checkpoint for the failing node, prior ones preserved",

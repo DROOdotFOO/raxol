@@ -119,6 +119,24 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Ets do
     :ok
   end
 
+  @impl true
+  def list_paused(config, limit) when is_integer(limit) and limit > 0 do
+    table = ensure_table(config)
+
+    latest_per_thread =
+      :ets.foldl(
+        &Raxol.Workflow.Checkpoint.Saver.accumulate_latest_per_thread/2,
+        %{},
+        table
+      )
+
+    {:ok,
+     Raxol.Workflow.Checkpoint.Saver.paused_rows_from_latest(
+       latest_per_thread,
+       limit
+     )}
+  end
+
   defp do_delete(table, thread_id, key) do
     case :ets.prev(table, key) do
       :"$end_of_table" ->

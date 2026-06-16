@@ -1,6 +1,8 @@
 defmodule Raxol.ACP.Job.ServerTest do
   use ExUnit.Case, async: false
 
+  import Raxol.ACP.TestSupport.WorkflowSetup
+
   alias Raxol.ACP.ContractClient
   alias Raxol.ACP.ContractClient.InMemory
   alias Raxol.ACP.Job
@@ -8,6 +10,8 @@ defmodule Raxol.ACP.Job.ServerTest do
 
   @seller "0x" <> String.duplicate("ab", 20)
   @sig <<0xDE, 0xAD>>
+
+  setup :with_isolated_workflow_saver
 
   setup do
     # Terminate any leftover Job.Server children from prior tests so the
@@ -62,8 +66,12 @@ defmodule Raxol.ACP.Job.ServerTest do
       assert Job.Server.memos(job_id) == []
     end
 
-    test "respects :initial_state override" do
-      {_pid, job_id} = start_job(initial_state: :negotiation)
+    test "advances to :negotiation after :accept_request" do
+      {_pid, job_id} = start_job()
+
+      assert {:ok, :negotiation} =
+               Job.Server.transition(job_id, :accept_request, %{}, @sig)
+
       assert Job.Server.current_state(job_id) == :negotiation
     end
   end

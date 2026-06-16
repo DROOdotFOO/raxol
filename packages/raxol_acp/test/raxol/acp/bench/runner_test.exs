@@ -1,10 +1,14 @@
 defmodule Raxol.ACP.Bench.RunnerTest do
   use ExUnit.Case, async: false
 
+  import Raxol.ACP.TestSupport.WorkflowSetup
+
   alias Raxol.ACP.Bench.Runner
   alias Raxol.ACP.Bench.Runner.{Outcome, Summary}
   alias Raxol.ACP.Offering.Registry, as: OfferingRegistry
   alias Raxol.ACP.TestSupport.SellerHelper
+
+  setup :with_isolated_workflow_saver
 
   setup do
     OfferingRegistry.clear()

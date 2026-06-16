@@ -1,6 +1,8 @@
 defmodule Raxol.ACP.Job.StoreTest do
   use ExUnit.Case, async: false
 
+  import Raxol.ACP.TestSupport.WorkflowSetup
+
   alias Raxol.ACP.ContractClient
   alias Raxol.ACP.ContractClient.InMemory
   alias Raxol.ACP.Job
@@ -8,6 +10,8 @@ defmodule Raxol.ACP.Job.StoreTest do
 
   @seller "0x" <> String.duplicate("ab", 20)
   @sig <<0xDE, 0xAD>>
+
+  setup :with_isolated_workflow_saver
 
   setup do
     for {_, pid, _, _} <- DynamicSupervisor.which_children(Job.Supervisor),

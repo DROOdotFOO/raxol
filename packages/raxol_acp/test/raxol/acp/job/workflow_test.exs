@@ -100,7 +100,7 @@ defmodule Raxol.ACP.Job.WorkflowTest do
       assert is_binary(run_id)
 
       # 2) Buyer accepts the request -> memo_negotiation writes, pauses at wait_negotiation
-      {:interrupted, ^run_id, after_neg, :awaiting_payment} =
+      {:interrupted, ^run_id, after_neg, :awaiting_buyer_payment} =
         Compiled.resume(compiled, run_id, {:accept_request, %{step: 1}, nil})
 
       assert after_neg.current_state == :negotiation
@@ -119,7 +119,7 @@ defmodule Raxol.ACP.Job.WorkflowTest do
       assert m2.signature == "sig"
 
       # 4) Delivery -> memo_evaluation
-      {:interrupted, ^run_id, after_eval, :awaiting_approval} =
+      {:interrupted, ^run_id, after_eval, :awaiting_evaluator_approval} =
         Compiled.resume(compiled, run_id, {:deliver, %{url: "ipfs://x"}, nil})
 
       assert after_eval.current_state == :evaluation

@@ -33,20 +33,17 @@ defmodule Raxol.ACP.Job.Server do
 
   Emits `[:raxol, :acp, :job, :transition]` on every successful
   transition with metadata
-  `%{job_id, from, to, memo_type, tx_hash}`.
+  `%{job_id, from, to, memo_type, tx_hash}`. The underlying
+  `Raxol.Workflow` runtime also emits per-node telemetry on
+  `[:raxol, :workflow, :*]`.
 
-  ## Workflow-backed mode (ADR-0016 Phase A)
+  ## Persistence
 
-  Pass `via_workflow: true` (or set
-  `Application.put_env(:raxol_acp, :job_via_workflow, true)`) to route
-  transitions through `Raxol.ACP.Job.Workflow` instead of the inline
-  state machine. The public API is unchanged; internally the
-  Phase 25 `Raxol.Workflow` runtime drives each transition, writes a
-  checkpoint to the configured Saver after every memo, and emits
-  per-node telemetry on `[:raxol, :workflow, :*]` in addition to the
-  legacy `[:raxol, :acp, :job, :transition]` event. On a transient
-  restart the new process hydrates from the Saver's latest
-  checkpoint, matching the existing Store-hydration behavior.
+  Each transition runs through a `Raxol.ACP.Job.Workflow` graph, which
+  writes a checkpoint to the configured Saver after every memo. On a
+  transient restart the new process hydrates from the Saver's latest
+  checkpoint. The legacy `Raxol.ACP.Job.Store` continues to receive
+  mirror writes for any consumer that reads from it.
 
   Saver selection:
 
@@ -54,7 +51,8 @@ defmodule Raxol.ACP.Job.Server do
         {Raxol.Workflow.Checkpoint.Saver.Dets, %{name: MyDets}})
 
   Defaults to `Saver.Ets` with a shared named table when no override
-  is configured.
+  is configured. When `persist?: false`, an ephemeral per-server ETS
+  table is minted and torn down on `terminate/2`.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -62,6 +60,7 @@ defmodule Raxol.ACP.Job.Server do
   alias Raxol.ACP.ContractClient
   alias Raxol.ACP.Job.{MemoType, Registry, StateMachine, Store}
   alias Raxol.ACP.Job.Workflow, as: JobWorkflow
+  alias Raxol.Workflow.Checkpoint.Saver, as: WorkflowSaver
   alias Raxol.Workflow.Compiled, as: WorkflowCompiled
 
   @type memo :: %{
@@ -88,18 +87,18 @@ defmodule Raxol.ACP.Job.Server do
           memos: [memo()],
           config: config(),
           persist?: boolean(),
-          via_workflow?: boolean(),
-          compiled: WorkflowCompiled.t() | nil
+          compiled: WorkflowCompiled.t(),
+          ephemeral_saver_table: atom() | nil
         }
 
   defstruct [
     :job_id,
     :state,
     :compiled,
+    :ephemeral_saver_table,
     memos: [],
     config: %{},
-    persist?: true,
-    via_workflow?: false
+    persist?: true
   ]
 
   # -- Public API --
@@ -110,10 +109,6 @@ defmodule Raxol.ACP.Job.Server do
   ## Required options
 
   - `:job_id` -- the ACP job id (binary or integer).
-
-  ## Optional state options
-
-  - `:initial_state` -- defaults to `StateMachine.initial/0`.
 
   ## Optional orchestration options
 
@@ -217,6 +212,73 @@ defmodule Raxol.ACP.Job.Server do
   @spec memos(GenServer.server() | binary()) :: [memo()]
   def memos(server), do: GenServer.call(resolve(server), :memos)
 
+  @typedoc """
+  Dashboard row returned by `list_paused/0,1`. ADR-0017 contract: one
+  row per job whose latest workflow checkpoint carries an
+  `:interrupt_reason`. Resuming a paused job removes it from the next
+  query.
+  """
+  @type paused_job :: %{
+          job_id: ContractClient.job_id(),
+          interrupt_reason: atom(),
+          paused_at: DateTime.t() | nil,
+          state: StateMachine.state(),
+          memos: [memo()]
+        }
+
+  @doc """
+  Enumerate ACP jobs that are currently paused waiting on an external
+  event (buyer payment, evaluator approval, etc.).
+
+  Reads through the configured workflow Saver (see
+  `Application.put_env(:raxol_acp, :job_workflow_saver, ...)`) and
+  hydrates each pause checkpoint's state back into the dashboard row.
+  Only workflow-backed jobs (`via_workflow: true`) appear; legacy
+  GenServer-state jobs do not pause and are therefore not in scope.
+
+  ## Options
+
+    * `:limit` -- maximum rows to return (default: 100).
+    * `:reason` -- filter the returned rows by `interrupt_reason`
+      (e.g. `:awaiting_buyer_payment`). Default returns all reasons.
+  """
+  @spec list_paused() :: [paused_job()]
+  def list_paused, do: list_paused([])
+
+  @spec list_paused(keyword()) :: [paused_job()]
+  def list_paused(opts) when is_list(opts) do
+    limit = Keyword.get(opts, :limit, 100)
+    reason_filter = Keyword.get(opts, :reason)
+
+    case WorkflowSaver.normalize(configured_workflow_saver()) do
+      nil ->
+        []
+
+      saver_tuple ->
+        {:ok, rows} = WorkflowSaver.list_paused(saver_tuple, limit)
+
+        rows
+        |> Enum.map(&to_paused_job/1)
+        |> Enum.filter(&matches?(&1, reason_filter))
+    end
+  end
+
+  defp to_paused_job(row) do
+    wf_state = row.state
+
+    %{
+      job_id: Map.get(wf_state, :job_id) || row.thread_id,
+      interrupt_reason: row.interrupt_reason,
+      paused_at: row.paused_at,
+      state: Map.get(wf_state, :current_state, StateMachine.initial()),
+      memos: Map.get(wf_state, :memos, [])
+    }
+  end
+
+  defp matches?(_row, nil), do: true
+  defp matches?(%{interrupt_reason: reason}, reason), do: true
+  defp matches?(_row, _reason), do: false
+
   defp resolve(pid) when is_pid(pid), do: pid
   defp resolve(name) when is_atom(name), do: name
   defp resolve(job_id) when is_binary(job_id), do: Registry.via(job_id)
@@ -233,22 +295,8 @@ defmodule Raxol.ACP.Job.Server do
 
     job_id = Keyword.fetch!(opts, :job_id)
     persist? = Keyword.get(opts, :persist?, true)
-    initial = Keyword.get(opts, :initial_state, StateMachine.initial())
 
-    via_workflow? =
-      Keyword.get(
-        opts,
-        :via_workflow,
-        Application.get_env(:raxol_acp, :job_via_workflow, false)
-      )
-
-    {state, memos, compiled} =
-      if via_workflow? do
-        hydrate_via_workflow(job_id, persist?, initial)
-      else
-        {s, ms} = hydrate(job_id, persist?, initial)
-        {s, ms, nil}
-      end
+    {state, memos, compiled, ephemeral_table} = hydrate(job_id, persist?)
 
     {:ok,
      %__MODULE__{
@@ -257,23 +305,38 @@ defmodule Raxol.ACP.Job.Server do
        memos: memos,
        config: config,
        persist?: persist?,
-       via_workflow?: via_workflow?,
-       compiled: compiled
+       compiled: compiled,
+       ephemeral_saver_table: ephemeral_table
      }}
   end
 
-  # Workflow-backed hydration. Compiles the canonical ACP graph and
-  # either resumes from a prior checkpoint or invokes the workflow
-  # fresh to create the initial __start__ checkpoint. State is read
-  # back from the workflow runtime so it stays the single source of
-  # truth while the legacy Store is kept in sync via mirror writes
-  # for backward compatibility.
-  defp hydrate_via_workflow(job_id, persist?, _initial) do
-    saver = if persist?, do: configured_workflow_saver(), else: nil
-    {:ok, compiled} = JobWorkflow.compile(maybe_saver_opts(saver))
+  # Compile the canonical ACP graph and either resume from a prior
+  # checkpoint or invoke the workflow fresh to create the initial
+  # __start__ checkpoint. State is read back from the workflow runtime
+  # so it stays the single source of truth while the legacy
+  # `Raxol.ACP.Job.Store` is kept in sync via mirror writes.
+  #
+  # When `persist?` is false we still need a Saver because
+  # `Compiled.resume/4` requires one (`{:error, :no_saver_configured, _}`
+  # otherwise). Mint a process-private ETS table for the lifetime of
+  # this GenServer; it is deleted in `terminate/2`.
+  defp hydrate(job_id, persist?) do
+    {saver, ephemeral_table} =
+      if persist? do
+        {configured_workflow_saver(), nil}
+      else
+        table =
+          :"raxol_acp_job_wf_ephemeral_#{:erlang.unique_integer([:positive])}"
+
+        {{Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}, table}
+      end
+
+    {:ok, compiled} = JobWorkflow.compile(saver: saver)
 
     workflow_state = ensure_workflow_run(compiled, saver, job_id)
-    {workflow_state.current_state, workflow_state.memos, compiled}
+
+    {workflow_state.current_state, workflow_state.memos, compiled,
+     ephemeral_table}
   end
 
   defp ensure_workflow_run(compiled, saver, job_id) do
@@ -290,8 +353,6 @@ defmodule Raxol.ACP.Job.Server do
     end
   end
 
-  defp load_workflow_state(nil, _job_id), do: :not_found
-
   defp load_workflow_state({mod, cfg}, job_id) do
     case mod.get_latest(cfg, job_id) do
       {:ok, ckpt} -> {:ok, ckpt.state}
@@ -307,20 +368,25 @@ defmodule Raxol.ACP.Job.Server do
     )
   end
 
-  defp maybe_saver_opts(nil), do: []
-  defp maybe_saver_opts(saver), do: [saver: saver]
+  @impl GenServer
+  def terminate(_reason, %__MODULE__{ephemeral_saver_table: nil}), do: :ok
 
-  # Restore prior state + memos from the Store on a transient restart.
-  # If persistence is disabled or no record exists, fall back to the
-  # caller-supplied initial state with no memo history.
-  defp hydrate(job_id, true, initial) do
-    case Store.load(job_id) do
-      {:ok, %{state: state, memos: memos}} -> {state, memos}
-      :error -> {initial, []}
+  def terminate(_reason, %__MODULE__{ephemeral_saver_table: table}) do
+    case :ets.whereis(table) do
+      :undefined ->
+        :ok
+
+      _ref ->
+        try do
+          :ets.delete(table)
+          :ok
+        rescue
+          ArgumentError -> :ok
+        end
     end
   end
 
-  defp hydrate(_job_id, false, initial), do: {initial, []}
+  def terminate(_reason, _state), do: :ok
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call(
@@ -379,20 +445,11 @@ defmodule Raxol.ACP.Job.Server do
 
   # -- Private --
 
+  # The state-machine guard short-circuits with `{:error, {:invalid_transition, _, _}}`
+  # for events the current phase does not accept. Successful transitions
+  # delegate to `Compiled.resume/4`; on terminal phase, the workflow
+  # returns `{:ok, _, _}` and the GenServer stops with `:normal`.
   defp do_transition(state, event, payload, signature) do
-    if state.via_workflow? do
-      do_transition_via_workflow(state, event, payload, signature)
-    else
-      do_transition_legacy(state, event, payload, signature)
-    end
-  end
-
-  # Workflow-backed transition path. The state-machine guard mirrors
-  # the legacy one so callers see the same `{:error, {:invalid_transition, _, _}}`
-  # shape for events that the current phase does not accept. Successful
-  # transitions delegate to `Compiled.resume/4`; on terminal phase, the
-  # workflow returns `{:ok, _, _}` and the GenServer stops with `:normal`.
-  defp do_transition_via_workflow(state, event, payload, signature) do
     case StateMachine.next(state.state, event) do
       {:ok, _next_state} ->
         dispatch_workflow_resume(state, event, payload, signature)
@@ -451,80 +508,6 @@ defmodule Raxol.ACP.Job.Server do
       {:reply, {:ok, new_wf_state.current_state}, new_full_state}
     end
   end
-
-  defp do_transition_legacy(state, event, payload, signature) do
-    memo_type = memo_type_for_event(event)
-    content = encode_content(payload)
-
-    with {:ok, new_state} <- StateMachine.next(state.state, event),
-         {:ok, tx_hash} <-
-           ContractClient.create_memo(
-             state.job_id,
-             content,
-             memo_type,
-             false,
-             new_state
-           ) do
-      memo = %{
-        next_phase: new_state,
-        memo_type: memo_type,
-        content: content,
-        is_secured: false,
-        payload: ensure_payload(payload),
-        signature: signature,
-        tx_hash: tx_hash,
-        transitioned_at: DateTime.utc_now()
-      }
-
-      :telemetry.execute(
-        [:raxol, :acp, :job, :transition],
-        %{},
-        %{
-          job_id: state.job_id,
-          from: state.state,
-          to: new_state,
-          memo_type: memo_type,
-          next_phase: new_state,
-          tx_hash: tx_hash
-        }
-      )
-
-      new_full_state = %{state | state: new_state, memos: state.memos ++ [memo]}
-      maybe_persist(new_full_state, memo)
-
-      if StateMachine.terminal?(new_state) do
-        {:stop, :normal, {:ok, new_state}, new_full_state}
-      else
-        {:reply, {:ok, new_state}, new_full_state}
-      end
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
-    end
-  end
-
-  # Mirror every successful transition to the Store so a transient
-  # restart can pick up where the prior process left off. No-op when
-  # persistence is disabled.
-  defp maybe_persist(%{persist?: false}, _memo), do: :ok
-
-  defp maybe_persist(%{persist?: true, job_id: job_id, state: state}, memo) do
-    Store.append_memo(job_id, state, memo)
-  end
-
-  # Default memo type per event. Payment/approval steps reference a
-  # transaction hash; everything else is a free-form message. Callers
-  # who need a different `MemoType` (e.g. an image_url for a deliverable)
-  # should call ContractClient.create_memo/5 directly.
-  defp memo_type_for_event(:accept_payment), do: :txhash
-  defp memo_type_for_event(:approve), do: :txhash
-  defp memo_type_for_event(_), do: :message
-
-  defp encode_content(nil), do: ""
-  defp encode_content(payload) when is_binary(payload), do: payload
-  defp encode_content(payload) when is_map(payload), do: Jason.encode!(payload)
-
-  defp ensure_payload(payload) when is_map(payload), do: payload
-  defp ensure_payload(_), do: nil
 
   defp ctx(state) do
     %{

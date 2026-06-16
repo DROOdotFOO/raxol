@@ -45,6 +45,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Dets do
   use GenServer
 
   alias Raxol.Workflow.Checkpoint
+  alias Raxol.Workflow.Checkpoint.Saver
 
   # --- Public API ---
 
@@ -86,6 +87,11 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Dets do
   @impl Raxol.Workflow.Checkpoint.Saver
   def delete_thread(config, thread_id) do
     GenServer.call(server_name(config), {:delete_thread, thread_id})
+  end
+
+  @impl Raxol.Workflow.Checkpoint.Saver
+  def list_paused(config, limit) when is_integer(limit) and limit > 0 do
+    GenServer.call(server_name(config), {:list_paused, limit})
   end
 
   # --- GenServer callbacks ---
@@ -138,6 +144,11 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Dets do
     {:reply, :ok, state}
   end
 
+  def handle_call({:list_paused, limit}, _from, %{table: table} = state) do
+    reply = {:ok, list_paused_rows(table, limit)}
+    {:reply, reply, state}
+  end
+
   # --- Private helpers ---
 
   defp server_name(config), do: Map.fetch!(config, :name)
@@ -167,5 +178,18 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Dets do
   defp delete_thread_entries(table, thread_id) do
     pattern = {{thread_id, :_}, :_}
     :dets.match_delete(table, pattern)
+  end
+
+  # Full DETS file scan keeping the highest-step checkpoint per
+  # thread_id, then handing off to the shared Saver pipeline to filter
+  # for `:interrupt_reason` and sort newest-paused-first. Acceptable
+  # for ADR-0017 because DETS deployments are pre-alpha and job counts
+  # are bounded; high-throughput consumers should choose the Postgrex
+  # saver which uses an indexed query.
+  defp list_paused_rows(table, limit) do
+    latest_per_thread =
+      :dets.foldl(&Saver.accumulate_latest_per_thread/2, %{}, table)
+
+    Saver.paused_rows_from_latest(latest_per_thread, limit)
   end
 end

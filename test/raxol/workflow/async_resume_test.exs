@@ -63,7 +63,9 @@ defmodule Raxol.Workflow.AsyncResumeTest do
       node_ids =
         checkpoints |> Enum.map(& &1.metadata.node_id) |> Enum.sort()
 
-      assert node_ids == [:__start__, :done, :gate, :prep]
+      # ADR-0017: pause checkpoint at :gate plus the resume's success
+      # checkpoint at :gate, hence the duplicate.
+      assert node_ids == [:__start__, :done, :gate, :gate, :prep]
     end
 
     test "returns {:error, :no_saver_configured, nil} when no saver wired" do

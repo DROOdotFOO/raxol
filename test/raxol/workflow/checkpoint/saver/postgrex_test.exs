@@ -7,13 +7,20 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
     test "produces the canonical schema for the default table" do
       sql = Saver.create_table_sql()
       assert sql =~ "CREATE TABLE IF NOT EXISTS raxol_workflow_checkpoints"
-      assert sql =~ "thread_id   text NOT NULL"
-      assert sql =~ "step        integer NOT NULL"
-      assert sql =~ "parent_step integer"
-      assert sql =~ "state       bytea NOT NULL"
-      assert sql =~ "metadata    bytea NOT NULL"
-      assert sql =~ "created_at  timestamptz NOT NULL DEFAULT now()"
+      assert sql =~ ~r/thread_id\s+text NOT NULL/
+      assert sql =~ ~r/step\s+integer NOT NULL/
+      assert sql =~ ~r/parent_step\s+integer/
+      assert sql =~ ~r/state\s+bytea NOT NULL/
+      assert sql =~ ~r/metadata\s+bytea NOT NULL/
+      assert sql =~ ~r/interrupt_reason text/
+      assert sql =~ ~r/paused_at\s+timestamptz/
+      assert sql =~ ~r/created_at\s+timestamptz NOT NULL DEFAULT now\(\)/
       assert sql =~ "PRIMARY KEY (thread_id, step)"
+
+      assert sql =~
+               "CREATE INDEX IF NOT EXISTS raxol_workflow_checkpoints_paused_idx"
+
+      assert sql =~ "WHERE interrupt_reason IS NOT NULL"
     end
 
     test "honors a custom table name" do
@@ -46,9 +53,27 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
     test "uses ON CONFLICT DO NOTHING for the append-only contract" do
       sql = Saver.insert_sql("raxol_workflow_checkpoints")
       assert sql =~ "INSERT INTO raxol_workflow_checkpoints"
-      assert sql =~ "(thread_id, step, parent_step, state, metadata)"
-      assert sql =~ "VALUES ($1, $2, $3, $4, $5)"
+
+      assert sql =~
+               "(thread_id, step, parent_step, state, metadata, interrupt_reason, paused_at)"
+
+      assert sql =~ "VALUES ($1, $2, $3, $4, $5, $6, $7)"
       assert sql =~ "ON CONFLICT (thread_id, step) DO NOTHING"
+    end
+  end
+
+  describe "select_paused_sql/1" do
+    test "filters to threads whose latest checkpoint carries an interrupt_reason" do
+      sql = Saver.select_paused_sql("checkpoints")
+      # DISTINCT ON picks one row per thread (the highest step); the
+      # outer filter excludes threads whose latest checkpoint has no
+      # interrupt_reason, which is how resumes implicitly remove a
+      # thread from the result set.
+      assert sql =~ "DISTINCT ON (thread_id)"
+      assert sql =~ "ORDER BY thread_id, step DESC"
+      assert sql =~ "WHERE latest.interrupt_reason IS NOT NULL"
+      assert sql =~ "ORDER BY latest.paused_at DESC NULLS LAST"
+      assert sql =~ "LIMIT $1"
     end
   end
 

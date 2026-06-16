@@ -19,6 +19,8 @@ defmodule Raxol.ACP.Job.IntegrationTest do
 
   use ExUnit.Case, async: false
 
+  import Raxol.ACP.TestSupport.WorkflowSetup
+
   alias Raxol.ACP.{ContractClient, Job}
   alias Raxol.ACP.ContractClient.InMemory
   alias Raxol.ACP.Job.Store
@@ -27,6 +29,8 @@ defmodule Raxol.ACP.Job.IntegrationTest do
   @seller "0x" <> String.duplicate("11", 20)
   @buyer "0x" <> String.duplicate("22", 20)
   @request %{"text" => "ping"}
+
+  setup :with_isolated_workflow_saver
 
   setup do
     # Clear any leftover Job.Server processes so synthetic "job-N" ids

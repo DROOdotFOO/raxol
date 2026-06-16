@@ -72,6 +72,7 @@ defmodule Raxol.Workflow.Runtime do
       run_id: run_id,
       deadline_us: deadline_us,
       resume_from: resume_from,
+      resume_mode: resume_mode,
       start_count: start_count,
       count_offset: count_offset
     } = prepare_invocation(compiled, initial_state, opts)
@@ -87,7 +88,8 @@ defmodule Raxol.Workflow.Runtime do
         run_id,
         deadline_us,
         start_count,
-        resume_from
+        resume_from,
+        resume_mode
       )
       |> maybe_compensate_on_error(compiled, run_id)
       |> wrap_outcome(run_id, compiled.id, count_offset)
@@ -102,6 +104,7 @@ defmodule Raxol.Workflow.Runtime do
     run_id = Keyword.get_lazy(opts, :run_id, &generate_run_id/0)
     deadline_us = monotonic_us() + resolve_timeout(opts, compiled) * 1_000
     resume_from = Keyword.get(opts, :resume_from)
+    resume_mode = Keyword.get(opts, :resume_mode, :traverse)
     initial_count = Keyword.get(opts, :initial_step, 0)
     resume_values = Keyword.get(opts, :resume_values, [])
 
@@ -121,6 +124,7 @@ defmodule Raxol.Workflow.Runtime do
       run_id: run_id,
       deadline_us: deadline_us,
       resume_from: resume_from,
+      resume_mode: resume_mode,
       start_count: start_count,
       count_offset: start_count - initial_count
     }
@@ -168,15 +172,39 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  defp start_or_resume(compiled, state, run_id, deadline_us, count, nil) do
+  defp start_or_resume(compiled, state, run_id, deadline_us, count, nil, _mode) do
     step(compiled, @start, state, run_id, deadline_us, count)
   end
 
-  defp start_or_resume(compiled, state, run_id, deadline_us, count, resume_node)
+  defp start_or_resume(
+         compiled,
+         state,
+         run_id,
+         deadline_us,
+         count,
+         resume_node,
+         :traverse
+       )
        when is_atom(resume_node) or is_binary(resume_node) do
-    # The resume node already executed on the prior run; just traverse
-    # outgoing edges to find the next node to execute.
+    # The resume node already executed successfully on the prior run; just
+    # traverse outgoing edges to find the next node to execute.
     traverse(compiled, resume_node, state, run_id, deadline_us, count)
+  end
+
+  defp start_or_resume(
+         compiled,
+         state,
+         run_id,
+         deadline_us,
+         count,
+         resume_node,
+         :reenter
+       )
+       when is_atom(resume_node) or is_binary(resume_node) do
+    # The resume node interrupted on the prior run; the scratchpad has
+    # been seeded with the resume value, so re-execute the node and let
+    # `Workflow.interrupt/1` return that value instead of throwing.
+    step(compiled, resume_node, state, run_id, deadline_us, count)
   end
 
   defp maybe_seed_scratchpad(_run_id, []), do: :ok
@@ -247,15 +275,37 @@ defmodule Raxol.Workflow.Runtime do
   end
 
   defp resume_with_checkpoint(compiled, checkpoint, resume_value, run_id, opts) do
+    resume_mode = resume_mode_for(checkpoint)
+    interrupt_reason = Map.get(checkpoint.metadata, :interrupt_reason)
+
+    emit_run_event(:resumed, %{
+      run_id: run_id,
+      graph_id: compiled.id,
+      node_id: checkpoint.metadata.node_id,
+      interrupt_reason: interrupt_reason,
+      resume_mode: resume_mode
+    })
+
     resume_opts =
       opts
       |> Keyword.put(:run_id, run_id)
       |> Keyword.put(:resume_from, checkpoint.metadata.node_id)
+      |> Keyword.put(:resume_mode, resume_mode)
       |> Keyword.put(:initial_step, checkpoint.step + 1)
       |> Keyword.put(:resume_values, [resume_value])
 
     invoke(compiled, checkpoint.state, resume_opts)
   end
+
+  # A checkpoint with `:interrupt_reason` in metadata is a pause
+  # checkpoint: the node interrupted on the prior run and the runtime
+  # must re-execute it. A normal successful-node checkpoint resumes by
+  # traversing past the node, matching pre-ADR-0017 semantics.
+  defp resume_mode_for(%Checkpoint{metadata: %{interrupt_reason: reason}})
+       when not is_nil(reason),
+       do: :reenter
+
+  defp resume_mode_for(_checkpoint), do: :traverse
 
   defp resolve_timeout(opts, compiled) do
     Keyword.get(
@@ -363,7 +413,8 @@ defmodule Raxol.Workflow.Runtime do
       run_id: run_id,
       graph_id: graph_id,
       nodes_executed: nodes_executed,
-      value: value
+      value: value,
+      interrupt_reason: value
     })
 
     {:interrupted, run_id, state, value}
@@ -432,11 +483,50 @@ defmodule Raxol.Workflow.Runtime do
         )
 
       {:interrupt, value, state_at_interrupt} ->
-        {:interrupted, state_at_interrupt, value, count + 1}
+        handle_interrupt(
+          compiled,
+          current_id,
+          state_at_interrupt,
+          value,
+          run_id,
+          count
+        )
 
       {:error, reason, state_at_error} ->
         {:error, reason, state_at_error, count + 1}
     end
+  end
+
+  # ADR-0017: on interrupt, write a pause checkpoint with
+  # `interrupt_reason` and `paused_at` in metadata so the run is
+  # enumerable through `Saver.list_paused/2` and so resume knows to
+  # re-enter the same node (versus traversing past it). The `:paused`
+  # run event fires after the pause checkpoint commits; with no Saver
+  # configured the event is suppressed because there is no durable
+  # pause state to announce.
+  defp handle_interrupt(compiled, current_id, state, value, run_id, count) do
+    case persist_pause_checkpoint(
+           compiled,
+           current_id,
+           state,
+           run_id,
+           count,
+           value
+         ) do
+      :ok ->
+        emit_run_event(:paused, %{
+          run_id: run_id,
+          graph_id: compiled.id,
+          node_id: current_id,
+          interrupt_reason: value,
+          paused_at: DateTime.utc_now()
+        })
+
+      :no_saver ->
+        :ok
+    end
+
+    {:interrupted, state, value, count + 1}
   end
 
   # Retry loop. Each attempt gets its own span + telemetry events; on
@@ -646,6 +736,45 @@ defmodule Raxol.Workflow.Runtime do
           )
 
         saver_module.put(saver_config, run_id, checkpoint)
+    end
+  end
+
+  # Pause checkpoint: same structure as a normal node checkpoint, plus
+  # `interrupt_reason` and `paused_at` in metadata so
+  # `Saver.list_paused/2` can enumerate suspended runs and so
+  # `resume_mode_for/1` routes resume back into the same node. Returns
+  # `:ok` on commit or `:no_saver` so the caller can suppress the
+  # `:paused` lifecycle event when there is no durable pause state.
+  defp persist_pause_checkpoint(
+         compiled,
+         current_id,
+         state,
+         run_id,
+         count,
+         reason
+       ) do
+    case Saver.normalize(Map.get(compiled.opts, :saver)) do
+      nil ->
+        :no_saver
+
+      {saver_module, saver_config} ->
+        checkpoint =
+          Checkpoint.new(
+            thread_id: run_id,
+            step: count,
+            state: state,
+            parent_step: parent_step_for(count),
+            metadata: %{
+              node_id: current_id,
+              run_id: run_id,
+              graph_id: compiled.id,
+              interrupt_reason: reason,
+              paused_at: DateTime.utc_now()
+            }
+          )
+
+        saver_module.put(saver_config, run_id, checkpoint)
+        :ok
     end
   end
 

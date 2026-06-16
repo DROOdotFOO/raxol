@@ -1,12 +1,16 @@
 defmodule Raxol.ACP.Job.ServerWorkflowTest do
   use ExUnit.Case, async: false
 
+  import Raxol.ACP.TestSupport.WorkflowSetup
+
   alias Raxol.ACP.ContractClient
   alias Raxol.ACP.ContractClient.InMemory
   alias Raxol.ACP.Job
 
   @seller "0x" <> String.duplicate("ab", 20)
   @sig "0x" <> String.duplicate("ff", 65)
+
+  setup :with_isolated_workflow_saver
 
   setup do
     for {_, pid, _, _} <- DynamicSupervisor.which_children(Job.Supervisor),
@@ -19,27 +23,13 @@ defmodule Raxol.ACP.Job.ServerWorkflowTest do
     :ok
   end
 
-  defp ets_saver do
-    table = :"acp_server_wf_#{:erlang.unique_integer([:positive])}"
-
-    on_exit(fn ->
-      if :ets.whereis(table) != :undefined, do: :ets.delete(table)
-    end)
-
-    {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
-  end
-
   defp start_workflow_job(opts \\ []) do
     {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
 
     {:ok, _pid} =
       Job.Supervisor.start_job(
         Keyword.merge(
-          [
-            job_id: job_id,
-            via_workflow: true,
-            persist?: true
-          ],
+          [job_id: job_id, persist?: true],
           opts
         )
       )
@@ -48,16 +38,6 @@ defmodule Raxol.ACP.Job.ServerWorkflowTest do
   end
 
   describe "Job.Server with :via_workflow true: parity with the legacy path" do
-    setup do
-      saver = ets_saver()
-      Application.put_env(:raxol_acp, :job_workflow_saver, saver)
-
-      on_exit(fn ->
-        Application.delete_env(:raxol_acp, :job_workflow_saver)
-      end)
-
-      {:ok, saver: saver}
-    end
 
     test "happy path: request -> negotiation -> transaction -> evaluation -> completed" do
       job_id = start_workflow_job()
@@ -169,23 +149,6 @@ defmodule Raxol.ACP.Job.ServerWorkflowTest do
   end
 
   describe "workflow-mode hydration on restart" do
-    setup do
-      saver = ets_saver()
-      # Pre-create the ETS table from this test process so it
-      # outlives the Job.Server we will kill below. Job.Server
-      # checkpoints stored here survive the :transient restart.
-      {Raxol.Workflow.Checkpoint.Saver.Ets, cfg} = saver
-      Raxol.Workflow.Checkpoint.Saver.Ets.ensure_table(cfg)
-
-      Application.put_env(:raxol_acp, :job_workflow_saver, saver)
-
-      on_exit(fn ->
-        Application.delete_env(:raxol_acp, :job_workflow_saver)
-      end)
-
-      {:ok, saver: saver}
-    end
-
     test "a restarted server hydrates state and memos from the Workflow's Saver" do
       job_id = start_workflow_job()
 

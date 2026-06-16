@@ -103,4 +103,72 @@ defmodule Raxol.Workflow.Checkpoint.Saver.EtsTest do
       assert :ok = Ets.delete_thread(config, "ghost")
     end
   end
+
+  describe "list_paused (ADR-0017)" do
+    defp make_paused(thread_id, step, reason, paused_at, state \\ %{}) do
+      Checkpoint.new(
+        thread_id: thread_id,
+        step: step,
+        state: state,
+        metadata: %{
+          node_id: :awaiting,
+          interrupt_reason: reason,
+          paused_at: paused_at
+        }
+      )
+    end
+
+    test "returns paused threads with structured rows", %{config: config} do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      t1 = ~U[2026-01-01 00:01:00Z]
+
+      Ets.put(config, "a", make_cp("a", 0))
+      Ets.put(config, "a", make_paused("a", 1, :awaiting_payment, t0, %{n: 1}))
+      Ets.put(config, "b", make_cp("b", 0))
+      Ets.put(config, "b", make_paused("b", 1, :awaiting_approval, t1, %{n: 2}))
+
+      assert {:ok, rows} = Ets.list_paused(config, 10)
+      assert length(rows) == 2
+
+      ids = Enum.map(rows, & &1.thread_id) |> Enum.sort()
+      assert ids == ["a", "b"]
+
+      [first | _] = rows
+      # Newest-paused-first: "b" paused at t1 wins.
+      assert first.thread_id == "b"
+      assert first.interrupt_reason == :awaiting_approval
+      assert first.paused_at == t1
+      assert first.state == %{n: 2}
+    end
+
+    test "excludes threads whose latest checkpoint has no interrupt_reason",
+         %{config: config} do
+      t0 = ~U[2026-01-01 00:00:00Z]
+
+      # Thread "a" is currently paused.
+      Ets.put(config, "a", make_paused("a", 0, :awaiting_payment, t0))
+      # Thread "b" was paused but resumed (later checkpoint clears the
+      # pause marker by having no :interrupt_reason in metadata).
+      Ets.put(config, "b", make_paused("b", 0, :awaiting_payment, t0))
+      Ets.put(config, "b", make_cp("b", 1))
+
+      assert {:ok, [row]} = Ets.list_paused(config, 10)
+      assert row.thread_id == "a"
+    end
+
+    test "respects the limit", %{config: config} do
+      for i <- 0..4 do
+        ts = DateTime.add(~U[2026-01-01 00:00:00Z], i, :second)
+        Ets.put(config, "t#{i}", make_paused("t#{i}", 0, :awaiting_x, ts))
+      end
+
+      assert {:ok, rows} = Ets.list_paused(config, 2)
+      assert length(rows) == 2
+    end
+
+    test "returns empty when nothing is paused", %{config: config} do
+      Ets.put(config, "a", make_cp("a", 0))
+      assert {:ok, []} = Ets.list_paused(config, 10)
+    end
+  end
 end

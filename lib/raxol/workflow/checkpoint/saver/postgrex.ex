@@ -29,20 +29,38 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
   ## Schema
 
   Run the SQL returned by `create_table_sql/1` once (e.g. via Ecto
-  migration or `psql`) before the first run:
+  migration or `psql`) before the first run. The table has two
+  nullable columns — `interrupt_reason` and `paused_at` — populated
+  only when the runtime writes a pause checkpoint (ADR-0017). A
+  partial index over them keeps `list_paused/2` queries fast even
+  when the active-runs table is large.
 
       iex> Raxol.Workflow.Checkpoint.Saver.Postgrex.create_table_sql()
       \"\"\"
       CREATE TABLE IF NOT EXISTS raxol_workflow_checkpoints (
-        thread_id   text NOT NULL,
-        step        integer NOT NULL,
-        parent_step integer,
-        state       bytea NOT NULL,
-        metadata    bytea NOT NULL,
-        created_at  timestamptz NOT NULL DEFAULT now(),
+        thread_id        text NOT NULL,
+        step             integer NOT NULL,
+        parent_step      integer,
+        state            bytea NOT NULL,
+        metadata         bytea NOT NULL,
+        interrupt_reason text,
+        paused_at        timestamptz,
+        created_at       timestamptz NOT NULL DEFAULT now(),
         PRIMARY KEY (thread_id, step)
-      )
+      );
+      CREATE INDEX IF NOT EXISTS raxol_workflow_checkpoints_paused_idx
+        ON raxol_workflow_checkpoints (paused_at DESC)
+        WHERE interrupt_reason IS NOT NULL;
       \"\"\"
+
+  Pre-ADR-0017 deployments can migrate with:
+
+      ALTER TABLE raxol_workflow_checkpoints
+        ADD COLUMN interrupt_reason text,
+        ADD COLUMN paused_at        timestamptz;
+      CREATE INDEX raxol_workflow_checkpoints_paused_idx
+        ON raxol_workflow_checkpoints (paused_at DESC)
+        WHERE interrupt_reason IS NOT NULL;
 
   ## Append-only contract
 
@@ -64,6 +82,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
   @compile {:no_warn_undefined, Postgrex}
 
   alias Raxol.Workflow.Checkpoint
+  alias Raxol.Workflow.Checkpoint.Saver
 
   @default_table "raxol_workflow_checkpoints"
   @safe_identifier ~r/\A[a-zA-Z_][a-zA-Z0-9_]{0,62}\z/
@@ -83,7 +102,9 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
            step,
            parent_step,
            :erlang.term_to_binary(state),
-           :erlang.term_to_binary(metadata)
+           :erlang.term_to_binary(metadata),
+           interrupt_reason_text(metadata),
+           Map.get(metadata || %{}, :paused_at)
          ]) do
       {:ok, _result} -> :ok
       {:error, reason} -> {:error, reason}
@@ -132,6 +153,20 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
     end
   end
 
+  @impl true
+  def list_paused(config, limit) when is_integer(limit) and limit > 0 do
+    ensure_postgrex_loaded!()
+    {conn, table} = conn_and_table(config)
+
+    case Postgrex.query(conn, select_paused_sql(table), [limit]) do
+      {:ok, %{rows: rows}} ->
+        {:ok, Enum.map(rows, &row_to_paused_row/1)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   @doc """
   Returns the `CREATE TABLE IF NOT EXISTS` SQL for the checkpoint
   table. Run once as part of the consumer's migration step.
@@ -142,17 +177,28 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
   @spec create_table_sql(String.t()) :: String.t()
   def create_table_sql(table \\ @default_table) do
     table = quote_identifier!(table)
+    # PostgreSQL identifiers cap at 63 chars and are silently truncated
+    # beyond that. Truncate explicitly here so the generated DDL stays
+    # deterministic across long table names without re-running the
+    # 63-char validator (the input table was already validated and
+    # the `_paused_idx` suffix is constant).
+    index_name = String.slice("#{table}_paused_idx", 0, 63)
 
     """
     CREATE TABLE IF NOT EXISTS #{table} (
-      thread_id   text NOT NULL,
-      step        integer NOT NULL,
-      parent_step integer,
-      state       bytea NOT NULL,
-      metadata    bytea NOT NULL,
-      created_at  timestamptz NOT NULL DEFAULT now(),
+      thread_id        text NOT NULL,
+      step             integer NOT NULL,
+      parent_step      integer,
+      state            bytea NOT NULL,
+      metadata         bytea NOT NULL,
+      interrupt_reason text,
+      paused_at        timestamptz,
+      created_at       timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (thread_id, step)
-    )
+    );
+    CREATE INDEX IF NOT EXISTS #{index_name}
+      ON #{table} (paused_at DESC)
+      WHERE interrupt_reason IS NOT NULL;
     """
   end
 
@@ -163,8 +209,9 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
     table = quote_identifier!(table)
 
     """
-    INSERT INTO #{table} (thread_id, step, parent_step, state, metadata)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO #{table}
+      (thread_id, step, parent_step, state, metadata, interrupt_reason, paused_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (thread_id, step) DO NOTHING
     """
   end
@@ -200,6 +247,32 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
     table = quote_identifier!(table)
 
     "DELETE FROM #{table} WHERE thread_id = $1\n"
+  end
+
+  # Paused-runs query. `DISTINCT ON (thread_id) ... ORDER BY thread_id,
+  # step DESC` collapses each thread to its latest checkpoint inside a
+  # single atomic scan, so a concurrent resume that just committed a
+  # follow-up checkpoint (clearing `interrupt_reason`) is filtered out
+  # correctly. The outer `WHERE interrupt_reason IS NOT NULL` plus the
+  # partial index keeps the scan O(paused) instead of O(all).
+  @doc false
+  def select_paused_sql(table) do
+    table = quote_identifier!(table)
+
+    """
+    SELECT thread_id, step, parent_step, state, metadata, created_at,
+           interrupt_reason, paused_at
+    FROM (
+      SELECT DISTINCT ON (thread_id)
+        thread_id, step, parent_step, state, metadata, created_at,
+        interrupt_reason, paused_at
+      FROM #{table}
+      ORDER BY thread_id, step DESC
+    ) latest
+    WHERE latest.interrupt_reason IS NOT NULL
+    ORDER BY latest.paused_at DESC NULLS LAST
+    LIMIT $1
+    """
   end
 
   # --- Helpers ---
@@ -242,4 +315,44 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
       created_at: created_at
     }
   end
+
+  # `interrupt_reason` and `paused_at` come back as denormalized
+  # columns alongside the canonical bytea metadata; we trust the
+  # metadata blob (it survived term_to_binary round-trip) for the
+  # paused-row's reason and timestamp so the original Erlang term is
+  # preserved rather than the `inspect/1`-text column.
+  defp row_to_paused_row([
+         thread_id,
+         step,
+         parent_step,
+         state_bin,
+         metadata_bin,
+         created_at,
+         _interrupt_reason_text,
+         _paused_at_col
+       ]) do
+    checkpoint = %Checkpoint{
+      thread_id: thread_id,
+      step: step,
+      parent_step: parent_step,
+      state: :erlang.binary_to_term(state_bin),
+      metadata: :erlang.binary_to_term(metadata_bin),
+      created_at: created_at
+    }
+
+    Saver.to_paused_row(checkpoint)
+  end
+
+  # The SQL column `interrupt_reason` is text-typed so a partial index
+  # can target it directly. The canonical reason term stays in the
+  # bytea metadata blob; this is the queryable projection used only for
+  # `WHERE interrupt_reason IS NOT NULL` filtering.
+  defp interrupt_reason_text(metadata) when is_map(metadata) do
+    case Map.get(metadata, :interrupt_reason) do
+      nil -> nil
+      reason -> inspect(reason)
+    end
+  end
+
+  defp interrupt_reason_text(_), do: nil
 end
