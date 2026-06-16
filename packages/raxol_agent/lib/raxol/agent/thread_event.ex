@@ -16,7 +16,7 @@ defmodule Raxol.Agent.ThreadEvent do
   | `:message` | the message string or struct | a raw conversation message preserved before compaction |
   | `:state_snapshot` | the agent state map | a periodic snapshot for audit / replay |
   | `:summary` | the compactor's summary string | the marker left when `ContextCompactor` summarized older messages |
-  | `:sandbox_deny` | `%{dimension, reason}` | record a sandbox denial (see ADR-0020) |
+  | `:sandbox_deny` | `%{dimension, reason}` | record a sandbox denial |
   | `:policy_result` | `%{policy, decision, ...}` | record a policy outcome (cache hit, retry attempt, timeout, ...) |
 
   Adapters MAY round-trip arbitrary additional kinds; the canonical
@@ -25,7 +25,7 @@ defmodule Raxol.Agent.ThreadEvent do
   ## Metadata
 
   Arbitrary map. The framework attaches `:causation_id` when
-  available (chained from the Phase 24 CloudEvents envelope). Callers
+  available (chained from the CloudEvents envelope). Callers
   may attach anything; adapters preserve it verbatim.
   """
 

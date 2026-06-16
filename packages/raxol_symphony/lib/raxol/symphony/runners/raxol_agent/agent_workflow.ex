@@ -1,7 +1,7 @@
 defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow do
   @moduledoc """
   Multi-node `Raxol.Workflow` graph that wraps the `RaxolAgent` turn
-  loop with per-turn checkpointing (Phase 7, supersedes the Phase 6
+  loop with per-turn checkpointing (supersedes the earlier
   single-node MVP).
 
   ## Topology
@@ -27,8 +27,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow do
   ## Why split per turn
 
   The workflow runtime checkpoints state **before** a node body runs.
-  Phase 6's single-node graph re-ran the in-flight LLM turn on resume
-  because the checkpoint reset to "before turn 1". Phase 7 puts the
+  The earlier single-node graph re-ran the in-flight LLM turn on resume
+  because the checkpoint reset to "before turn 1". Splitting per turn puts the
   interrupt in `:after_turn_N` so resume re-runs the after node
   (cheap: tracker check + decision) but never the LLM stream from
   `:turn_N`.

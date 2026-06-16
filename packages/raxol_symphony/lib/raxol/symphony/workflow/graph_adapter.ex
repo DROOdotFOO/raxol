@@ -1,9 +1,9 @@
 defmodule Raxol.Symphony.Workflow.GraphAdapter do
   @moduledoc """
   Builds a `Raxol.Workflow.Graph` that represents the canonical Symphony
-  pipeline using main raxol's Phase 25 workflow primitive.
+  pipeline using main raxol's workflow primitive.
 
-  This adapter is the opt-in path described in ADR-0015. The default
+  This adapter is the opt-in path. The default
   Symphony orchestrator runs the prompt-only path through `Orchestrator`;
   consumers that want graph-shaped execution call `from_workflow/2` to
   build a compiled graph and dispatch it through `Raxol.Workflow.Compiled`

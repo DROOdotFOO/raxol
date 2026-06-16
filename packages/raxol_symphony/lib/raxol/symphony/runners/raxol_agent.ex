@@ -27,8 +27,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           base_url: https://api.anthropic.com
           max_tokens: 4096
           system_prompt: "You are a software engineer..."
-          # actions: list of fully-qualified action modules (Phase 4: ignored;
-          # tool use lands in a later phase together with hook integration)
+          # actions: list of fully-qualified action modules (currently ignored;
+          # tool use lands later together with hook integration)
           pause_detector: {MyApp.PauseDetector, :detect}
           tracker_cache: {Raxol.Agent.Cache.Ets, %{table: :tracker_cache}}
           tracker_cache_ttl_ms: 30_000
@@ -58,7 +58,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   On deny: emits `[:raxol, :symphony, :sandbox, :denied]` telemetry
   and skips the turn (empty events, no pause). The orchestrator's
   retry layer handles whole-run failure. Same graceful degradation
-  as Policy failures (Phase 12).
+  as Policy failures.
 
   Default `[]` (empty list) skips authorization entirely.
 
@@ -170,7 +170,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     end
   end
 
-  # --- Workflow-envelope path (Phase 6) ---
+  # --- Workflow-envelope path ---
 
   defp workflow_mode?(%Config{runner: %{agent: agent}}) do
     Map.get(agent, :workflow_mode) == true
@@ -295,7 +295,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     {:error, reason}
   end
 
-  # --- Multi-node helpers (Phase 7) ---
+  # --- Multi-node helpers ---
   #
   # Called from `AgentWorkflow.run_turn/1`. Runs one turn and returns
   # `{events_list, pause_request_or_nil}`. The detector is consulted

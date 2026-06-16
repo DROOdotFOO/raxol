@@ -19,8 +19,8 @@ defprotocol Raxol.Agent.Sandbox do
   - `Raxol.Agent.Sandbox.Async` -- gates
     `Raxol.Agent.Directive.Async` (wholesale allow / deny).
 
-  Filesystem, Network, and Resource dimensions are sketched in
-  ADR-0020 but defer to a follow-up because their enforcement layer
+  Filesystem, Network, and Resource dimensions are planned
+  but deferred to a follow-up because their enforcement layer
   is different (Action integration for filesystem / network;
   OS-level quotas for Resource).
 
