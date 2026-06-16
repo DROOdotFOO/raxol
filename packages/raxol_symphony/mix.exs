@@ -46,6 +46,12 @@ defmodule RaxolSymphony.MixProject do
       # pick up Stream.Event / EventForwarder helpers ahead of next hex release.
       raxol_dep(:raxol_agent, "~> 2.4", "../raxol_agent", optional: true),
 
+      # raxol_acp is pulled in test env ONLY to exercise the canonical
+      # cross-package auto-resume flow (Job.Server transition telemetry ->
+      # Resumer -> Orchestrator.resume_run). Symphony does not depend on
+      # ACP at runtime or compile time outside tests.
+      raxol_dep(:raxol_acp, "~> 0.2-pre", "../raxol_acp", only: :test),
+
       # MCP surface (optional). Local path in dev for ToolDef + register_all.
       raxol_dep(:raxol_mcp, "~> 2.4", "../raxol_mcp", optional: true),
 
