@@ -547,7 +547,7 @@ defmodule Raxol.Terminal.Extension.ExtensionServer do
 
   defp auto_load_extensions(state) do
     # In a real implementation, this would scan extension_paths and auto-load
-    # For testing, we'll just return the state as-is
+    # Returns the state as-is for testing
     state
   end
 

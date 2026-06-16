@@ -282,7 +282,7 @@ defmodule Raxol.Terminal.Config.Application do
   # Get the default terminal process PID
   defp default_terminal_pid do
     # This would actually look up the terminal process
-    # For now, we'll just return nil as a placeholder
+    # Returns nil as a placeholder
     nil
   end
 

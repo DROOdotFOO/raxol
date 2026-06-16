@@ -2,7 +2,7 @@ defmodule Raxol.Terminal.ANSI.CachedParser do
   @moduledoc """
   Optimized ANSI parser with caching for common sequences.
 
-  Phase 1 optimization to reduce memory overhead and improve
+  Reduces memory overhead and improves
   performance for frequently used escape sequences.
   """
 
@@ -176,7 +176,7 @@ defmodule Raxol.Terminal.ANSI.CachedParser do
   # Original parsing logic for non-cached sequences
   # (Simplified version - delegates to original parser for complex cases)
   defp parse_bytes(input, _text_acc, _acc) do
-    # For Phase 1, delegate to original parser
+    # Delegate to the original parser
     # This ensures correctness while we optimize the common cases
     Raxol.Terminal.ANSI.Parser.parse(input)
     |> Enum.reverse()

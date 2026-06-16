@@ -96,7 +96,7 @@ defmodule Raxol.Terminal.Clipboard.Manager do
   """
   def clear do
     # This would typically interact with the system clipboard
-    # For now, we'll just return :ok
+    # Returns :ok
     :ok
   end
 
@@ -105,7 +105,7 @@ defmodule Raxol.Terminal.Clipboard.Manager do
   """
   def copy(content, _format \\ :text) when is_binary(content) do
     # This would typically interact with the system clipboard
-    # For now, we'll just return :ok
+    # Returns :ok
     :ok
   end
 
@@ -114,7 +114,7 @@ defmodule Raxol.Terminal.Clipboard.Manager do
   """
   def paste(_format \\ :text) do
     # This would typically interact with the system clipboard
-    # For now, we'll return an empty string
+    # Returns an empty string
     ""
   end
 end
