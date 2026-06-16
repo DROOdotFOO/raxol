@@ -45,6 +45,7 @@ defmodule Raxol.Workflow.Runtime do
   alias Raxol.Workflow.Node.{BehaviourNode, FunctionNode, TypedNode}
 
   @executed_key :__raxol_workflow_executed__
+  @branch_id_key :__raxol_workflow_branch_id__
 
   @start :__start__
   @end_ :__end__
@@ -166,7 +167,8 @@ defmodule Raxol.Workflow.Runtime do
             metadata: %{
               node_id: @start,
               run_id: run_id,
-              graph_id: compiled.id
+              graph_id: compiled.id,
+              branch_id: nil
             }
           )
 
@@ -322,6 +324,30 @@ defmodule Raxol.Workflow.Runtime do
   end
 
   defp executed_nodes, do: Process.get(@executed_key, [])
+
+  # Per ADR-0019: every checkpoint + `:node` telemetry event carries an
+  # optional `branch_id`. `nil` for sequential paths (every node in
+  # any graph without a fan-out). Inside a parallel branch it is
+  # `{join_target, branch_index}` where `branch_index` is the upstream
+  # position passed to `add_join/4` (zero-indexed). The Process slot
+  # makes the value available to every helper downstream of `fan_out/6`
+  # without threading it through every signature.
+  defp current_branch_id, do: Process.get(@branch_id_key)
+
+  defp with_branch_id(branch_id, fun) when is_function(fun, 0) do
+    prior = Process.get(@branch_id_key)
+    Process.put(@branch_id_key, branch_id)
+
+    try do
+      fun.()
+    after
+      if prior == nil do
+        Process.delete(@branch_id_key)
+      else
+        Process.put(@branch_id_key, prior)
+      end
+    end
+  end
 
   # Under failure_policy: :compensate, the runtime walks the executed
   # nodes in reverse and runs each one's compensate function. The
@@ -570,7 +596,8 @@ defmodule Raxol.Workflow.Runtime do
     emit_node_event(:started, %{
       run_id: run_id,
       graph_id: compiled.id,
-      node_id: current_id
+      node_id: current_id,
+      branch_id: current_branch_id()
     })
 
     try do
@@ -696,7 +723,8 @@ defmodule Raxol.Workflow.Runtime do
           run_id: run_id,
           graph_id: compiled.id,
           node_id: current_id,
-          duration_us: monotonic_us() - started_us
+          duration_us: monotonic_us() - started_us,
+          branch_id: current_branch_id()
         },
         extra
       )
@@ -733,7 +761,8 @@ defmodule Raxol.Workflow.Runtime do
             metadata: %{
               node_id: current_id,
               run_id: run_id,
-              graph_id: compiled.id
+              graph_id: compiled.id,
+              branch_id: current_branch_id()
             }
           )
 
@@ -770,6 +799,7 @@ defmodule Raxol.Workflow.Runtime do
               node_id: current_id,
               run_id: run_id,
               graph_id: compiled.id,
+              branch_id: current_branch_id(),
               interrupt_reason: reason,
               paused_at: DateTime.utc_now()
             }
@@ -898,16 +928,33 @@ defmodule Raxol.Workflow.Runtime do
   end
 
   defp run_branches_serially(compiled, branch_ids, state, run_id, deadline_us, count) do
-    Enum.reduce_while(branch_ids, {:ok, [], count}, fn id, {:ok, acc, c} ->
+    join_target =
+      case Map.get(compiled.joins_by_upstream, hd(branch_ids)) do
+        %JoinEdge{target: t} -> t
+        nil -> nil
+      end
+
+    branch_ids
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, [], count}, fn {id, index}, {:ok, acc, c} ->
       cond do
         monotonic_us() >= deadline_us ->
           {:halt, {:error, :run_timeout, state, c}}
 
         true ->
-          case attempt_node_with_retry(compiled, id, state, run_id, 1) do
+          attempt =
+            with_branch_id({join_target, index}, fn ->
+              attempt_node_with_retry(compiled, id, state, run_id, 1)
+            end)
+
+          case attempt do
             {:node_ok, branch_state, _tag} ->
               track_executed(Map.fetch!(compiled.nodes, id))
-              persist_checkpoint(compiled, id, branch_state, run_id, c)
+
+              with_branch_id({join_target, index}, fn ->
+                persist_checkpoint(compiled, id, branch_state, run_id, c)
+              end)
+
               {:cont, {:ok, [branch_state | acc], c + 1}}
 
             {:interrupt, _value, _state_at_interrupt} ->

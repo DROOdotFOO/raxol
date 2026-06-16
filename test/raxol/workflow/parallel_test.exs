@@ -220,6 +220,106 @@ defmodule Raxol.Workflow.ParallelTest do
     end
   end
 
+  describe "branch_id in checkpoint metadata" do
+    test "per-branch checkpoints carry branch_id; sequential ones carry nil" do
+      table = :"branch_id_ckpt_#{:erlang.unique_integer([:positive])}"
+      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+
+      graph =
+        Graph.new(:bid)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:scout_a, fn s -> {:ok, Map.put(s, :a, 1)} end)
+        |> Graph.add_node(:scout_b, fn s -> {:ok, Map.put(s, :b, 2)} end)
+        |> Graph.add_node(:report, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:scout_a, :scout_b], fn _ ->
+          [:scout_a, :scout_b]
+        end)
+        |> Graph.add_edge(:scout_a, :report)
+        |> Graph.add_edge(:scout_b, :report)
+        |> Graph.add_join(:report, [:scout_a, :scout_b])
+        |> Graph.add_edge(:report, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph, saver: saver)
+      {:ok, _final, meta} = Compiled.invoke(compiled, %{})
+
+      {:ok, checkpoints} =
+        Raxol.Workflow.Checkpoint.Saver.Ets.list(%{table: table}, meta.run_id, 50)
+
+      by_node =
+        Map.new(checkpoints, fn ck -> {ck.metadata.node_id, ck.metadata.branch_id} end)
+
+      # Branch nodes carry {join_target, branch_index}.
+      assert by_node[:scout_a] == {:report, 0}
+      assert by_node[:scout_b] == {:report, 1}
+
+      # Sequential nodes (gate, report) carry nil.
+      assert by_node[:gate] == nil
+      assert by_node[:report] == nil
+    end
+  end
+
+  describe "branch_id in :node telemetry" do
+    test ":node events carry branch_id for branch nodes, nil for sequential" do
+      handler_id = "branch_id_telemetry_#{:erlang.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:raxol, :workflow, :node, :started],
+          [:raxol, :workflow, :node, :completed]
+        ],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:node_event, metadata.node_id, metadata.branch_id})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      graph =
+        Graph.new(:tlb)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:b0, fn s -> {:ok, Map.put(s, :b0, true)} end)
+        |> Graph.add_node(:b1, fn s -> {:ok, Map.put(s, :b1, true)} end)
+        |> Graph.add_node(:b2, fn s -> {:ok, Map.put(s, :b2, true)} end)
+        |> Graph.add_node(:merge, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:b0, :b1, :b2], fn _ -> [:b0, :b1, :b2] end)
+        |> Graph.add_edge(:b0, :merge)
+        |> Graph.add_edge(:b1, :merge)
+        |> Graph.add_edge(:b2, :merge)
+        |> Graph.add_join(:merge, [:b0, :b1, :b2])
+        |> Graph.add_edge(:merge, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+      {:ok, _final, _meta} = Compiled.invoke(compiled, %{})
+
+      # Gather all events emitted during the run.
+      events = drain_node_events([])
+
+      # Each branch node fired with {:merge, index}.
+      assert {:b0, {:merge, 0}} in events
+      assert {:b1, {:merge, 1}} in events
+      assert {:b2, {:merge, 2}} in events
+
+      # Sequential nodes (gate, merge) fired with nil.
+      assert {:gate, nil} in events
+      assert {:merge, nil} in events
+    end
+
+    defp drain_node_events(acc) do
+      receive do
+        {:node_event, node_id, branch_id} ->
+          drain_node_events([{node_id, branch_id} | acc])
+      after
+        50 -> acc
+      end
+    end
+  end
+
   describe "back-compat" do
     test "sequential graph with a single-id chooser still works unchanged" do
       graph =
