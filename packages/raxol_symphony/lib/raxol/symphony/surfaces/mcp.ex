@@ -2,15 +2,17 @@ defmodule Raxol.Symphony.Surfaces.MCP do
   @moduledoc """
   MCP tool + resource surface for the Symphony orchestrator.
 
-  Exposes 5 tools and 1 resource so remote operators (and other agents)
+  Exposes 7 tools and 1 resource so remote operators (and other agents)
   can introspect and control Symphony via any MCP client.
 
   ## Tools
 
   | Name                      | Args                          | Returns                              |
   |---------------------------|-------------------------------|--------------------------------------|
-  | `symphony_list_runs`      | none                          | `{counts, running, retrying, codex_totals, generated_at}` |
-  | `symphony_get_run`        | `{issue_id}`                  | run entry, or `{status: "not_found"}`|
+  | `symphony_list_runs`      | none                          | `{counts, running, retrying, paused, codex_totals, generated_at}` |
+  | `symphony_get_run`        | `{issue_id}`                  | run entry (running/retrying/paused), or `{status: "not_found"}`|
+  | `symphony_list_paused`    | none                          | `{counts.paused, paused: [{issue_id, interrupt_reason, paused_ms_ago, ...}]}` |
+  | `symphony_resume_run`     | `{issue_id, decision}`        | `{status: "resumed"}` or `{status: "not_paused"}` |
   | `symphony_refresh`        | none                          | `{status: "refreshed"}`              |
   | `symphony_stop_run`       | `{issue_id}`                  | `{status: "stopped"}` or error       |
   | `symphony_get_evidence`   | `{issue_id \| identifier, ?repo, ?ref, ?issue_number}` | `{ci, pr_comments, complexity, recordings, errors}` |
@@ -53,6 +55,8 @@ defmodule Raxol.Symphony.Surfaces.MCP do
   @tool_names [
     "symphony_list_runs",
     "symphony_get_run",
+    "symphony_list_paused",
+    "symphony_resume_run",
     "symphony_refresh",
     "symphony_stop_run",
     "symphony_get_evidence"
@@ -66,6 +70,8 @@ defmodule Raxol.Symphony.Surfaces.MCP do
     [
       list_runs_tool(orchestrator),
       get_run_tool(orchestrator),
+      list_paused_tool(orchestrator),
+      resume_run_tool(orchestrator),
       refresh_tool(orchestrator),
       stop_run_tool(orchestrator),
       get_evidence_tool(orchestrator)
@@ -167,6 +173,65 @@ defmodule Raxol.Symphony.Surfaces.MCP do
       callback: fn args ->
         case fetch_id(args) do
           {:ok, id} -> get_run_response(orch, id)
+          :error -> %{status: "error", message: "issue_id required"}
+        end
+      end
+    }
+  end
+
+  defp list_paused_tool(orch) do
+    %{
+      name: "symphony_list_paused",
+      description: """
+      Returns Symphony runs that are currently paused waiting on an external
+      decision (operator approval, awaiting CI, awaiting PR review, etc).
+      Each entry carries `interrupt_reason`, `paused_ms_ago`, `last_event`,
+      `last_message`, and the accumulated `tokens` from before the pause.
+
+      Pair with `symphony_resume_run` to unblock a paused run.
+      """,
+      inputSchema: %{type: "object", properties: %{}},
+      callback: fn _args ->
+        snapshot = safe_snapshot(orch)
+
+        %{
+          counts: %{paused: snapshot.counts[:paused] || 0},
+          paused: snapshot.paused || [],
+          generated_at: snapshot.generated_at
+        }
+      end
+    }
+  end
+
+  defp resume_run_tool(orch) do
+    %{
+      name: "symphony_resume_run",
+      description: """
+      Resumes a paused Symphony run by re-dispatching its runner with the
+      operator's decision. The decision is passed verbatim to the runner as
+      its `:resume_value`; for Codex approval pauses this is typically
+      `"approved"` or `"rejected"`.
+
+      Returns `{status: "resumed"}` on success or `{status: "not_paused"}`
+      when the issue is unknown or not currently paused.
+      """,
+      inputSchema: %{
+        type: "object",
+        properties: %{
+          issue_id: %{
+            type: "string",
+            description: "Tracker-internal issue ID of the paused run."
+          },
+          decision: %{
+            description:
+              "Operator's decision payload. Forwarded to the runner as :resume_value."
+          }
+        },
+        required: ["issue_id", "decision"]
+      },
+      callback: fn args ->
+        case fetch_id(args) do
+          {:ok, id} -> resume_run_response(orch, id, fetch_decision(args))
           :error -> %{status: "error", message: "issue_id required"}
         end
       end
@@ -361,8 +426,15 @@ defmodule Raxol.Symphony.Surfaces.MCP do
     snapshot = safe_snapshot(orch)
 
     case find_by_issue_id(snapshot.running, id) do
-      nil -> retrying_or_not_found(snapshot, id)
+      nil -> paused_or_retrying_or_not_found(snapshot, id)
       run -> %{status: "running", run: run}
+    end
+  end
+
+  defp paused_or_retrying_or_not_found(snapshot, id) do
+    case find_by_issue_id(snapshot.paused || [], id) do
+      nil -> retrying_or_not_found(snapshot, id)
+      paused -> %{status: "paused", run: paused}
     end
   end
 
@@ -375,6 +447,28 @@ defmodule Raxol.Symphony.Surfaces.MCP do
 
   defp find_by_issue_id(list, id) do
     Enum.find(list, fn run -> run.issue_id == id end)
+  end
+
+  defp fetch_decision(args) when is_map(args) do
+    case Map.get(args, "decision", Map.get(args, :decision)) do
+      nil -> nil
+      decision -> decision
+    end
+  end
+
+  defp fetch_decision(_), do: nil
+
+  defp resume_run_response(orch, id, decision) do
+    case safe_call(fn -> Orchestrator.resume_run(orch, id, decision) end) do
+      {:ok, :ok} ->
+        %{status: "resumed", issue_id: id}
+
+      {:ok, {:error, :not_paused}} ->
+        %{status: "not_paused", issue_id: id}
+
+      _ ->
+        %{status: "error", issue_id: id, message: "orchestrator unavailable"}
+    end
   end
 
   defp stop_run_response(orch, id) do
@@ -398,9 +492,10 @@ defmodule Raxol.Symphony.Surfaces.MCP do
       _ ->
         %{
           generated_at: nil,
-          counts: %{running: 0, retrying: 0},
+          counts: %{running: 0, retrying: 0, paused: 0},
           running: [],
           retrying: [],
+          paused: [],
           codex_totals: %{
             input_tokens: 0,
             output_tokens: 0,

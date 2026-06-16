@@ -27,7 +27,11 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
   defp config do
     Config.from_workflow(%{
       config: %{
-        tracker: %{kind: "memory", active_states: ["Todo"], terminal_states: ["Done"]},
+        tracker: %{
+          kind: "memory",
+          active_states: ["Todo"],
+          terminal_states: ["Done"]
+        },
         polling: %{interval_ms: 60_000},
         agent: %{max_concurrent_agents: 3, max_retry_backoff_ms: 60_000},
         codex: %{stall_timeout_ms: 0},
@@ -59,7 +63,13 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
   end
 
   defp seed_running_issue(orch, id, identifier) do
-    Memory.put_issue(%Issue{id: id, identifier: identifier, title: "T", state: "Todo"})
+    Memory.put_issue(%Issue{
+      id: id,
+      identifier: identifier,
+      title: "T",
+      state: "Todo"
+    })
+
     Noop.Director.set(identifier, {:hold, 200})
     :ok = Orchestrator.tick_now(orch)
     assert_running(orch, identifier)
@@ -73,7 +83,7 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
   # -- Registration -----------------------------------------------------------
 
   describe "register/1" do
-    test "registers all 5 tools and 1 resource", %{registry: registry} do
+    test "registers all 7 tools and 1 resource", %{registry: registry} do
       orch = start_orchestrator()
       register(registry, orch)
 
@@ -124,11 +134,15 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
   # -- symphony_list_runs -----------------------------------------------------
 
   describe "symphony_list_runs" do
-    test "returns the empty snapshot when no runs are active", %{registry: registry} do
+    test "returns the empty snapshot when no runs are active", %{
+      registry: registry
+    } do
       orch = start_orchestrator()
       register(registry, orch)
 
-      assert {:ok, snapshot} = Registry.call_tool(registry, "symphony_list_runs", %{})
+      assert {:ok, snapshot} =
+               Registry.call_tool(registry, "symphony_list_runs", %{})
+
       assert snapshot.counts.running == 0
       assert snapshot.running == []
     end
@@ -138,7 +152,9 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
       register(registry, orch)
       seed_running_issue(orch, "a", "MT-1")
 
-      assert {:ok, snapshot} = Registry.call_tool(registry, "symphony_list_runs", %{})
+      assert {:ok, snapshot} =
+               Registry.call_tool(registry, "symphony_list_runs", %{})
+
       assert snapshot.counts.running == 1
       assert [%{issue_identifier: "MT-1"}] = snapshot.running
     end
@@ -153,7 +169,9 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
       seed_running_issue(orch, "a", "MT-1")
 
       assert {:ok, %{status: "running", run: run}} =
-               Registry.call_tool(registry, "symphony_get_run", %{"issue_id" => "a"})
+               Registry.call_tool(registry, "symphony_get_run", %{
+                 "issue_id" => "a"
+               })
 
       assert run.issue_identifier == "MT-1"
     end
@@ -172,7 +190,9 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
       register(registry, orch)
 
       assert {:ok, %{status: "not_found", issue_id: "ghost"}} =
-               Registry.call_tool(registry, "symphony_get_run", %{"issue_id" => "ghost"})
+               Registry.call_tool(registry, "symphony_get_run", %{
+                 "issue_id" => "ghost"
+               })
     end
 
     test "returns error when issue_id is missing", %{registry: registry} do
@@ -189,12 +209,134 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
   # -- symphony_refresh -------------------------------------------------------
 
   describe "symphony_refresh" do
-    test "calls Orchestrator.refresh/1 and returns refreshed status", %{registry: registry} do
+    test "calls Orchestrator.refresh/1 and returns refreshed status", %{
+      registry: registry
+    } do
       orch = start_orchestrator()
       register(registry, orch)
 
       assert {:ok, %{status: "refreshed"}} =
                Registry.call_tool(registry, "symphony_refresh", %{})
+    end
+  end
+
+  # -- symphony_list_paused / symphony_resume_run / get_run paused ---------
+
+  defp seed_paused_issue(orch, id, identifier, reason) do
+    Memory.put_issue(%Issue{
+      id: id,
+      identifier: identifier,
+      title: "P",
+      state: "Todo"
+    })
+
+    Noop.Director.set(identifier, {:pause, reason, "tok-#{identifier}"})
+    :ok = Orchestrator.tick_now(orch)
+
+    deadline = System.monotonic_time(:millisecond) + 500
+
+    Stream.repeatedly(fn ->
+      snap = Orchestrator.snapshot(orch)
+      {snap.counts.paused, snap.paused}
+    end)
+    |> Enum.find(fn {count, _} ->
+      count >= 1 or System.monotonic_time(:millisecond) > deadline
+    end)
+  end
+
+  describe "symphony_list_paused" do
+    test "returns an empty list when no runs are paused", %{registry: registry} do
+      orch = start_orchestrator()
+      register(registry, orch)
+
+      assert {:ok, %{counts: %{paused: 0}, paused: []}} =
+               Registry.call_tool(registry, "symphony_list_paused", %{})
+    end
+
+    test "returns paused entries with interrupt_reason + paused_ms_ago",
+         %{registry: registry} do
+      orch = start_orchestrator()
+      register(registry, orch)
+      seed_paused_issue(orch, "a", "MT-1", :awaiting_review)
+
+      assert {:ok, %{counts: %{paused: 1}, paused: [entry]}} =
+               Registry.call_tool(registry, "symphony_list_paused", %{})
+
+      assert entry.issue_id == "a"
+      assert entry.issue_identifier == "MT-1"
+      assert entry.interrupt_reason == :awaiting_review
+      assert is_integer(entry.paused_ms_ago) and entry.paused_ms_ago >= 0
+    end
+  end
+
+  describe "symphony_resume_run" do
+    test "resumes a paused run and reports resumed", %{registry: registry} do
+      orch = start_orchestrator()
+      register(registry, orch)
+
+      Memory.put_issue(%Issue{
+        id: "a",
+        identifier: "MT-1",
+        title: "P",
+        state: "Todo"
+      })
+
+      Noop.Director.set(
+        "MT-1",
+        {:pause_then, :awaiting_review, "tok-MT-1", {:succeed_after, 10}}
+      )
+
+      :ok = Orchestrator.tick_now(orch)
+
+      deadline = System.monotonic_time(:millisecond) + 500
+
+      Stream.repeatedly(fn -> Orchestrator.snapshot(orch).counts.paused end)
+      |> Enum.find(fn count ->
+        count >= 1 or System.monotonic_time(:millisecond) > deadline
+      end)
+
+      assert {:ok, %{status: "resumed", issue_id: "a"}} =
+               Registry.call_tool(registry, "symphony_resume_run", %{
+                 "issue_id" => "a",
+                 "decision" => "approved"
+               })
+    end
+
+    test "reports not_paused when the issue is unknown", %{registry: registry} do
+      orch = start_orchestrator()
+      register(registry, orch)
+
+      assert {:ok, %{status: "not_paused", issue_id: "ghost"}} =
+               Registry.call_tool(registry, "symphony_resume_run", %{
+                 "issue_id" => "ghost",
+                 "decision" => "approved"
+               })
+    end
+
+    test "errors on missing issue_id", %{registry: registry} do
+      orch = start_orchestrator()
+      register(registry, orch)
+
+      assert {:ok, %{status: "error"}} =
+               Registry.call_tool(registry, "symphony_resume_run", %{
+                 "decision" => "approved"
+               })
+    end
+  end
+
+  describe "symphony_get_run paused" do
+    test "finds a paused run and reports status: paused", %{registry: registry} do
+      orch = start_orchestrator()
+      register(registry, orch)
+      seed_paused_issue(orch, "a", "MT-1", :awaiting_review)
+
+      assert {:ok, %{status: "paused", run: run}} =
+               Registry.call_tool(registry, "symphony_get_run", %{
+                 "issue_id" => "a"
+               })
+
+      assert run.issue_identifier == "MT-1"
+      assert run.interrupt_reason == :awaiting_review
     end
   end
 
@@ -207,17 +349,23 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
       seed_running_issue(orch, "a", "MT-1")
 
       assert {:ok, %{status: "stopped", issue_id: "a"}} =
-               Registry.call_tool(registry, "symphony_stop_run", %{"issue_id" => "a"})
+               Registry.call_tool(registry, "symphony_stop_run", %{
+                 "issue_id" => "a"
+               })
 
       assert Orchestrator.snapshot(orch).counts.running == 0
     end
 
-    test "reports not_running when the issue isn't active", %{registry: registry} do
+    test "reports not_running when the issue isn't active", %{
+      registry: registry
+    } do
       orch = start_orchestrator()
       register(registry, orch)
 
       assert {:ok, %{status: "not_running"}} =
-               Registry.call_tool(registry, "symphony_stop_run", %{"issue_id" => "ghost"})
+               Registry.call_tool(registry, "symphony_stop_run", %{
+                 "issue_id" => "ghost"
+               })
     end
 
     test "errors on missing issue_id", %{registry: registry} do
@@ -232,7 +380,9 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
   # -- symphony_get_evidence --------------------------------------------------
 
   describe "symphony_get_evidence" do
-    test "errors when neither issue_id nor identifier is supplied", %{registry: registry} do
+    test "errors when neither issue_id nor identifier is supplied", %{
+      registry: registry
+    } do
       orch = start_orchestrator()
       register(registry, orch)
 
@@ -240,7 +390,9 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
                Registry.call_tool(registry, "symphony_get_evidence", %{})
     end
 
-    test "errors when issue_id is unknown to the orchestrator", %{registry: registry} do
+    test "errors when issue_id is unknown to the orchestrator", %{
+      registry: registry
+    } do
       orch = start_orchestrator()
       register(registry, orch)
 
@@ -252,7 +404,9 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
       assert msg =~ "identifier_not_found"
     end
 
-    test "collects evidence using the supplied identifier", %{registry: registry} do
+    test "collects evidence using the supplied identifier", %{
+      registry: registry
+    } do
       orch = start_orchestrator()
       register(registry, orch)
 
@@ -273,12 +427,16 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
   # -- Resource: symphony://runs ---------------------------------------------
 
   describe "symphony://runs resource" do
-    test "returns the snapshot via Registry.read_resource/2", %{registry: registry} do
+    test "returns the snapshot via Registry.read_resource/2", %{
+      registry: registry
+    } do
       orch = start_orchestrator()
       register(registry, orch)
       seed_running_issue(orch, "a", "MT-1")
 
-      assert {:ok, snapshot} = Registry.read_resource(registry, "symphony://runs")
+      assert {:ok, snapshot} =
+               Registry.read_resource(registry, "symphony://runs")
+
       assert snapshot.counts.running == 1
     end
   end
@@ -286,10 +444,14 @@ defmodule Raxol.Symphony.Surfaces.MCPTest do
   # -- Orchestrator unavailable ----------------------------------------------
 
   describe "graceful degradation" do
-    test "list_runs returns an empty snapshot when orchestrator is down", %{registry: registry} do
+    test "list_runs returns an empty snapshot when orchestrator is down", %{
+      registry: registry
+    } do
       register(registry, :nonexistent_orchestrator)
 
-      assert {:ok, snap} = Registry.call_tool(registry, "symphony_list_runs", %{})
+      assert {:ok, snap} =
+               Registry.call_tool(registry, "symphony_list_runs", %{})
+
       assert snap.orchestrator_unavailable == true
       assert snap.counts.running == 0
     end
