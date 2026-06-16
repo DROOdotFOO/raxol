@@ -89,6 +89,22 @@ defmodule Raxol.Symphony.Orchestrator do
   end
 
   @doc """
+  Return the full paused map keyed by `issue_id`.
+
+  Each value is the in-memory `paused_entry` map (see
+  `Raxol.Symphony.Orchestrator.State.paused_entry`), including the
+  caller-supplied `:resume_token`. Used by
+  `Raxol.Symphony.Resumer` to scan for matches against incoming
+  telemetry events; the standard snapshot summary at
+  `snapshot/1` deliberately strips the token to avoid leaking
+  runner-internal state to dashboard subscribers.
+  """
+  @spec paused(GenServer.server()) :: %{optional(binary()) => map()}
+  def paused(server \\ __MODULE__) do
+    GenServer.call(server, :paused)
+  end
+
+  @doc """
   Returns the loaded `Raxol.Symphony.Config` struct.
 
   Used by the MCP and LiveView surfaces when they need to reach beyond the
@@ -199,6 +215,10 @@ defmodule Raxol.Symphony.Orchestrator do
 
   def handle_manager_call(:get_config, _from, %State{} = state) do
     {:reply, state.config, state}
+  end
+
+  def handle_manager_call(:paused, _from, %State{} = state) do
+    {:reply, state.paused, state}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
