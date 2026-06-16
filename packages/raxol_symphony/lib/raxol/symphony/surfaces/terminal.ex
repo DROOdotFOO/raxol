@@ -6,10 +6,12 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     Polls `Orchestrator.snapshot/1` on a fixed cadence (default 500ms) and
     renders the SPEC s13 status into terminal panes:
 
-    - **Header bar** -- counts (running, retrying), generated-at timestamp,
-      preflight error indicator.
+    - **Header bar** -- counts (running, paused, retrying), generated-at
+      timestamp, preflight error indicator.
     - **Active runs table** -- one row per running issue with state,
       turn count, last event, and runtime.
+    - **Paused runs table** -- one row per paused issue with interrupt
+      reason, paused-ago timer, and last event.
     - **Pending retries table** -- one row per scheduled retry with attempt
       number, due-in countdown, and last error.
     - **Help footer** -- key bindings.
@@ -106,9 +108,10 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     def empty_snapshot do
       %{
         generated_at: nil,
-        counts: %{running: 0, retrying: 0},
+        counts: %{running: 0, retrying: 0, paused: 0},
         running: [],
         retrying: [],
+        paused: [],
         codex_totals: %{
           input_tokens: 0,
           output_tokens: 0,
@@ -203,6 +206,8 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
           spacer(size: 1),
           running_panel(model),
           spacer(size: 1),
+          paused_panel(model),
+          spacer(size: 1),
           retrying_panel(model),
           spacer(size: 1),
           footer(model)
@@ -212,13 +217,16 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
 
     defp header(model) do
       counts = model.snapshot.counts
+      paused = counts[:paused] || 0
       preflight = preflight_indicator(model)
 
       box style: %{border: :single, width: :fill, padding: 0} do
         row style: %{gap: 2, justify_content: :space_between} do
           [
             text("  symphony", style: [:bold], fg: :cyan),
-            text("running #{counts.running}  retrying #{counts.retrying}",
+            text(
+              "running #{counts.running}  paused #{paused}  " <>
+                "retrying #{counts.retrying}",
               style: [:bold]
             ),
             text(preflight, fg: preflight_color(model)),
@@ -285,6 +293,43 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
           "#{pad(entry.state, 14)} t=#{pad(to_string(entry.turn_count), 3)}  " <>
           "#{pad(last_event, 24)}  #{runtime}",
         fg: if(selected?, do: :yellow, else: :white)
+      )
+    end
+
+    defp paused_panel(model) do
+      box style: %{border: :single, width: :fill, padding: 1} do
+        column style: %{gap: 0} do
+          [
+            text("Paused (awaiting external decision)",
+              style: [:bold],
+              fg: :cyan
+            ),
+            divider(char: "-")
+            | paused_rows(model)
+          ]
+        end
+      end
+    end
+
+    defp paused_rows(%{snapshot: %{paused: nil}}),
+      do: [text("  (none)", style: [:dim])]
+
+    defp paused_rows(%{snapshot: %{paused: []}}),
+      do: [text("  (none)", style: [:dim])]
+
+    defp paused_rows(model), do: Enum.map(model.snapshot.paused, &paused_row/1)
+
+    defp paused_row(entry) do
+      reason = format_reason(entry[:interrupt_reason])
+      paused_ago = format_ms(entry[:paused_ms_ago] || 0)
+      last_event = format_event(entry[:last_event])
+
+      text(
+        "  #{pad(entry.issue_identifier, 8)} " <>
+          "#{pad(reason, 24)}  " <>
+          "paused #{pad(paused_ago, 8)}  " <>
+          last_event,
+        fg: :yellow
       )
     end
 
@@ -362,6 +407,11 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     defp format_event(atom) when is_atom(atom), do: Atom.to_string(atom)
     defp format_event(binary) when is_binary(binary), do: binary
     defp format_event(other), do: inspect(other)
+
+    defp format_reason(nil), do: "(unspecified)"
+    defp format_reason(atom) when is_atom(atom), do: Atom.to_string(atom)
+    defp format_reason(binary) when is_binary(binary), do: binary
+    defp format_reason(other), do: inspect(other)
 
     defp format_ms(ms) when is_integer(ms) and ms < 1_000, do: "#{ms}ms"
     defp format_ms(ms) when is_integer(ms) and ms < 60_000, do: "#{div(ms, 1000)}s"

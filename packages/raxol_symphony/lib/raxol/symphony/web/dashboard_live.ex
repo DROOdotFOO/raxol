@@ -4,9 +4,9 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     Phoenix LiveView dashboard for the Symphony orchestrator (Phase 10).
 
     Mounts the orchestrator subscription, refreshes the snapshot every
-    second, and renders running + retrying tables in HTML. Mirrors the data
-    shape served by `Raxol.Symphony.Web.API` and the terminal surface so all
-    three converge on the same SPEC s13 snapshot.
+    second, and renders running + paused + retrying tables in HTML.
+    Mirrors the data shape served by `Raxol.Symphony.Web.API` and the
+    terminal surface so all three converge on the same SPEC s13 snapshot.
 
     ## Usage
 
@@ -101,6 +101,8 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
           <div>
             <span>running {counts(@snapshot).running}</span>
             &nbsp;
+            <span>paused {counts(@snapshot)[:paused] || 0}</span>
+            &nbsp;
             <span>retrying {counts(@snapshot).retrying}</span>
             &nbsp;
             <button phx-click="refresh" type="button" style="margin-left: 1rem;">refresh</button>
@@ -144,6 +146,38 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
                         stop
                       </button>
                     </td>
+                  </tr>
+                <% end %>
+              </tbody>
+            </table>
+          <% end %>
+        </section>
+
+        <section style="margin-bottom: 1.5rem;">
+          <h2 style="font-size: 1rem; margin-bottom: 0.5rem;">
+            Paused (awaiting external decision)
+          </h2>
+          <%= if Enum.empty?(@snapshot[:paused] || []) do %>
+            <p style="color: #888;">No paused runs</p>
+          <% else %>
+            <table style="width: 100%; border-collapse: collapse;">
+              <thead>
+                <tr style="text-align: left; border-bottom: 1px solid #444;">
+                  <th style="padding: 4px;">Issue</th>
+                  <th style="padding: 4px;">Reason</th>
+                  <th style="padding: 4px;">Paused</th>
+                  <th style="padding: 4px;">Last event</th>
+                  <th style="padding: 4px;">Last message</th>
+                </tr>
+              </thead>
+              <tbody>
+                <%= for paused <- @snapshot[:paused] || [] do %>
+                  <tr style="border-bottom: 1px solid #222;">
+                    <td style="padding: 4px;">{paused.issue_identifier}</td>
+                    <td style="padding: 4px;">{format_reason(paused[:interrupt_reason])}</td>
+                    <td style="padding: 4px;">{format_ms(paused[:paused_ms_ago] || 0)}</td>
+                    <td style="padding: 4px;">{format_event(paused[:last_event])}</td>
+                    <td style="padding: 4px;">{paused[:last_message] || ""}</td>
                   </tr>
                 <% end %>
               </tbody>
@@ -216,9 +250,10 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     def empty_snapshot do
       %{
         generated_at: nil,
-        counts: %{running: 0, retrying: 0},
+        counts: %{running: 0, retrying: 0, paused: 0},
         running: [],
         retrying: [],
+        paused: [],
         codex_totals: %{
           input_tokens: 0,
           output_tokens: 0,
@@ -256,6 +291,11 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     defp format_event(atom) when is_atom(atom), do: Atom.to_string(atom)
     defp format_event(binary) when is_binary(binary), do: binary
     defp format_event(other), do: inspect(other)
+
+    defp format_reason(nil), do: "(unspecified)"
+    defp format_reason(atom) when is_atom(atom), do: Atom.to_string(atom)
+    defp format_reason(binary) when is_binary(binary), do: binary
+    defp format_reason(other), do: inspect(other)
 
     defp format_ms(ms) when is_integer(ms) and ms < 1_000, do: "#{ms}ms"
     defp format_ms(ms) when is_integer(ms) and ms < 60_000, do: "#{div(ms, 1000)}s"
