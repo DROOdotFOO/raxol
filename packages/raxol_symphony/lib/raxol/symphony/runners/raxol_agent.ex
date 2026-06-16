@@ -33,6 +33,31 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           tracker_cache: {Raxol.Agent.Cache.Ets, %{table: :tracker_cache}}
           tracker_cache_ttl_ms: 30_000
           thread_log: {Raxol.Agent.ThreadLog.Ets, %{table: :agent_thread_log}}
+          policies:
+            [Raxol.Agent.Policy.Timeout.new(30_000),
+             Raxol.Agent.Policy.Retry.exponential(max_attempts: 3, base_ms: 200)]
+
+  ## Per-turn policies
+
+  Optional: set `agent.policies` to a list of `Raxol.Agent.Policy`
+  structs (Retry, Timeout, Cache) and the runner wraps each LLM
+  turn with `Raxol.Agent.PolicyApplier.apply/3` in the
+  workflow_mode path. The wrap is per-turn -- a transient failure
+  retries that turn, a wall-clock timeout aborts it, and a cache
+  hit short-circuits the agent stream entirely.
+
+  Telemetry `[:raxol, :agent, :policy, :applied]` fires once per
+  turn wrapped; `[:raxol, :agent, :policy, :retry_attempt]`,
+  `:retry_exhausted`, `:timeout`, `:cache_hit`, `:cache_miss` fire
+  on the corresponding decisions.
+
+  Policy failures (retries exhausted, timeout) currently advance
+  the turn with empty events + no pause_request rather than
+  failing the run -- the orchestrator's retry layer handles
+  whole-run failure. Surfacing per-turn errors into a hard
+  `{:error, _}` return is a follow-up.
+
+  Default `[]` (empty list) skips the wrap entirely.
 
   ## Thread log (audit trail)
 
@@ -199,6 +224,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       # turn boundaries; see the moduledoc "Thread log" section.
       thread_log: agent_thread_log(config),
       thread_id: build_thread_id(issue, attempt),
+      # Optional per-turn `Raxol.Agent.Policy` list. Default `[]`
+      # leaves the turn body unwrapped; non-empty wraps each LLM
+      # turn via `PolicyApplier.apply/3`.
+      policies: agent_policies(config),
       # Module-function refs the workflow nodes call. Kept in state so
       # the multi-node AgentWorkflow.run_turn/1 and after_turn/3 don't
       # have to depend on this module directly (which would create a
@@ -249,16 +278,35 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   @doc false
   def __workflow_collect_turn__(state) do
     prompt = build_prompt(state.issue, state.config, state.turn, state.attempt)
+    policies = Map.get(state, :policies, [])
 
-    stream =
-      stream_module().run(prompt,
-        backend: state.backend,
-        backend_opts: state.backend_opts,
-        system_prompt: state.system_prompt
-      )
+    op = fn _params ->
+      stream =
+        stream_module().run(prompt,
+          backend: state.backend,
+          backend_opts: state.backend_opts,
+          system_prompt: state.system_prompt
+        )
+
+      {:ok,
+       collect_with_detector(stream, state.parent, state.issue.id, state.pause_detector)}
+    end
 
     {events, pause_request} =
-      collect_with_detector(stream, state.parent, state.issue.id, state.pause_detector)
+      case Raxol.Agent.PolicyApplier.apply(policies, op, %{
+             turn: state.turn,
+             issue_id: state.issue.id
+           }) do
+        {:ok, {events, pause_request}} ->
+          {events, pause_request}
+
+        {:error, _reason} ->
+          # Policies couldn't recover (retries exhausted / timeout).
+          # Advance with empty turn output; the orchestrator's retry
+          # layer handles whole-run failure. Surfacing per-turn error
+          # to a hard {:error, _} from the workflow is a follow-up.
+          {[], nil}
+      end
 
     # Append a state_snapshot per completed turn. Idempotent at the
     # ThreadLog level (each call gets a fresh monotonic sequence).
@@ -607,6 +655,15 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   defp build_thread_id(%Issue{id: id}, attempt) when not is_nil(id) do
     "symphony-agent-" <> to_string(id) <> "-" <> to_string(attempt || 0)
   end
+
+  defp agent_policies(%Config{runner: %{agent: agent}}) do
+    case Map.get(agent, :policies, []) do
+      list when is_list(list) -> list
+      _ -> []
+    end
+  end
+
+  defp agent_policies(_), do: []
 
   # -- Prompt building (Liquid via PromptBuilder) -----------------------------
 
