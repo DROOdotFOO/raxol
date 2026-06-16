@@ -38,8 +38,17 @@ defmodule Raxol.Symphony.Runners.Codex do
 
   When `approval_policy == "never"`, command-execution / file-change /
   exec-command / apply-patch approvals are auto-approved. Any other policy
-  surfaces the approval as `{:error, {:approval_required, decision}}` so a
-  surface (terminal/Telegram/Watch/MCP) can prompt an operator.
+  surfaces the approval to the orchestrator as
+  `{:pause, :awaiting_approval, %{decision: ..., issue_id: ..., turn: ..., paused_at: ...}}`,
+  which `Raxol.Symphony.Orchestrator` parks via `park_paused/4`. An
+  operator drives the resolution with
+  `Orchestrator.resume_run(pid, issue_id, decision)`; on resume the runner
+  starts a fresh Codex session and re-enters the turn loop (the prior
+  stdio session is gone, so conversational context is not preserved
+  across the pause -- the agent re-decides what to do given the
+  operator's `:approved | :rejected` choice). An `:awaiting_approval`
+  run event is emitted at the moment of the pause and a `:resumed`
+  event when the orchestrator dispatches the resumption.
 
   Tool calls (`item/tool/call`) currently respond with an "unsupported"
   result; dynamic-tool registration lands in a follow-up.
@@ -57,8 +66,12 @@ defmodule Raxol.Symphony.Runners.Codex do
     parent = Keyword.fetch!(opts, :parent)
     attempt = Keyword.get(opts, :attempt)
     workspace_path = Keyword.fetch!(opts, :workspace_path)
+    resume_value = Keyword.get(opts, :resume_value)
+    resume_token = Keyword.get(opts, :resume_token)
 
     with :ok <- check_codex_installed(config) do
+      maybe_emit_resumed(parent, issue, resume_value, resume_token)
+
       do_run(issue, config, %{
         parent: parent,
         attempt: attempt,
@@ -67,6 +80,28 @@ defmodule Raxol.Symphony.Runners.Codex do
         max_turns: config.agent.max_turns
       })
     end
+  end
+
+  # Operator-driven resume: announce that the run is starting over with
+  # the supplied decision. The orchestrator parks paused runs with the
+  # original `resume_token` (the pause payload) so observers can
+  # correlate which approval the decision applied to.
+  defp maybe_emit_resumed(_parent, _issue, nil, _token), do: :ok
+
+  defp maybe_emit_resumed(parent, %Issue{} = issue, resume_value, resume_token)
+       when is_pid(parent) do
+    send(
+      parent,
+      {:run_event, issue.id,
+       %{
+         event: :resumed,
+         message: "resumed with decision=#{inspect(resume_value)}",
+         payload: %{decision: resume_value, resume_token: resume_token},
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    :ok
   end
 
   defp do_run(%Issue{} = issue, %Config{} = config, ctx) do
@@ -105,10 +140,54 @@ defmodule Raxol.Symphony.Runners.Codex do
       {:ok, next_session} ->
         continue_or_finish(next_session, issue, config, ctx)
 
+      {:error, {:approval_required, decision}} ->
+        pause_for_approval(decision, issue, ctx)
+
       {:error, _} = err ->
         err
     end
   end
+
+  # Convert a non-auto-approve approval request from `Session.run_turn`
+  # into an orchestrator-level pause. The token captures the decision
+  # payload so an operator inspecting the snapshot sees exactly what
+  # they are approving (e.g. the proposed shell command or file edit).
+  defp pause_for_approval(decision, %Issue{} = issue, ctx) do
+    Logger.info(
+      "symphony.runners.codex.awaiting_approval issue=#{issue.identifier} " <>
+        "turn=#{ctx.turn} decision=#{inspect(decision)}"
+    )
+
+    send(
+      ctx.parent,
+      {:run_event, issue.id,
+       %{
+         event: :awaiting_approval,
+         message: approval_summary(decision),
+         payload: decision,
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    {:pause, :awaiting_approval,
+     %{
+       decision: decision,
+       issue_id: issue.id,
+       turn: ctx.turn,
+       paused_at: DateTime.utc_now()
+     }}
+  end
+
+  defp approval_summary(decision) when is_binary(decision),
+    do: "awaiting operator approval (#{decision})"
+
+  defp approval_summary(%{"type" => type}) when is_binary(type),
+    do: "awaiting approval for #{type}"
+
+  defp approval_summary(%{type: type}) when is_atom(type) or is_binary(type),
+    do: "awaiting approval for #{type}"
+
+  defp approval_summary(_), do: "awaiting operator approval"
 
   defp continue_or_finish(session, %Issue{} = issue, %Config{} = config, ctx) do
     case still_active?(issue, config) do
@@ -127,9 +206,14 @@ defmodule Raxol.Symphony.Runners.Codex do
     case Tracker.fetch_issue_states_by_ids(config, [id]) do
       {:ok, [%Issue{} = refreshed]} ->
         cond do
-          Issue.terminal?(refreshed, config.tracker.terminal_states) -> :done
-          Issue.active?(refreshed, config.tracker.active_states) -> {:active, refreshed}
-          true -> :done
+          Issue.terminal?(refreshed, config.tracker.terminal_states) ->
+            :done
+
+          Issue.active?(refreshed, config.tracker.active_states) ->
+            {:active, refreshed}
+
+          true ->
+            :done
         end
 
       {:ok, []} ->
@@ -144,13 +228,16 @@ defmodule Raxol.Symphony.Runners.Codex do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp check_codex_installed(%Config{codex: %{command: command}}) when is_binary(command) do
+  defp check_codex_installed(%Config{codex: %{command: command}})
+       when is_binary(command) do
     case primary_executable(command) do
       nil ->
         {:error, :codex_not_installed}
 
       exe ->
-        if System.find_executable(exe), do: :ok, else: {:error, :codex_not_installed}
+        if System.find_executable(exe),
+          do: :ok,
+          else: {:error, :codex_not_installed}
     end
   end
 
@@ -184,7 +271,12 @@ defmodule Raxol.Symphony.Runners.Codex do
     send(parent, {:run_event, issue_id, event})
   end
 
-  defp build_prompt(%Issue{} = issue, %Config{prompt_template: template}, 1, attempt) do
+  defp build_prompt(
+         %Issue{} = issue,
+         %Config{prompt_template: template},
+         1,
+         attempt
+       ) do
     case PromptBuilder.build(issue, template, attempt) do
       {:ok, rendered} ->
         rendered

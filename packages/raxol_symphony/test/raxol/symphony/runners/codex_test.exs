@@ -15,7 +15,12 @@ defmodule Raxol.Symphony.Runners.CodexTest do
   end
 
   defp make_workspace do
-    path = Path.join(System.tmp_dir!(), "codex_runner_test_#{System.unique_integer([:positive])}")
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "codex_runner_test_#{System.unique_integer([:positive])}"
+      )
+
     File.mkdir_p!(path)
     path
   end
@@ -57,7 +62,8 @@ defmodule Raxol.Symphony.Runners.CodexTest do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
-      {:run_event, ^issue_id, event} -> do_collect(issue_id, deadline, [event | acc])
+      {:run_event, ^issue_id, event} ->
+        do_collect(issue_id, deadline, [event | acc])
     after
       remaining -> Enum.reverse(acc)
     end
@@ -65,7 +71,9 @@ defmodule Raxol.Symphony.Runners.CodexTest do
 
   describe "single-turn happy path" do
     @tag :unix_only
-    test "runs to completion and emits text_delta + turn_completed", %{workspace: workspace} do
+    test "runs to completion and emits text_delta + turn_completed", %{
+      workspace: workspace
+    } do
       System.put_env("FAKE_CODEX_MODE", "happy")
       Memory.put_issue(%{issue() | state: "Done"})
 
@@ -78,10 +86,19 @@ defmodule Raxol.Symphony.Runners.CodexTest do
 
       events = collect_events("issue-1", 100)
       assert Enum.any?(events, &(&1.event == :session_started))
-      assert Enum.any?(events, &(&1.event == :text_delta and &1.message == "hello"))
+
+      assert Enum.any?(
+               events,
+               &(&1.event == :text_delta and &1.message == "hello")
+             )
 
       [completed | _] = Enum.filter(events, &(&1.event == :turn_completed))
-      assert completed.usage == %{input_tokens: 0, output_tokens: 0, total_tokens: 42}
+
+      assert completed.usage == %{
+               input_tokens: 0,
+               output_tokens: 0,
+               total_tokens: 42
+             }
     after
       System.delete_env("FAKE_CODEX_MODE")
     end
@@ -89,7 +106,9 @@ defmodule Raxol.Symphony.Runners.CodexTest do
 
   describe "multi-turn continuation" do
     @tag :unix_only
-    test "loops until max_turns when issue stays active", %{workspace: workspace} do
+    test "loops until max_turns when issue stays active", %{
+      workspace: workspace
+    } do
       System.put_env("FAKE_CODEX_MODE", "happy")
       Memory.put_issue(%{issue() | state: "In Progress"})
 
@@ -108,7 +127,9 @@ defmodule Raxol.Symphony.Runners.CodexTest do
     end
 
     @tag :unix_only
-    test "stops after one turn when tracker reports terminal state", %{workspace: workspace} do
+    test "stops after one turn when tracker reports terminal state", %{
+      workspace: workspace
+    } do
       System.put_env("FAKE_CODEX_MODE", "happy")
       Memory.put_issue(%{issue() | state: "Done"})
 
@@ -142,7 +163,12 @@ defmodule Raxol.Symphony.Runners.CodexTest do
                )
 
       events = collect_events("issue-1", 100)
-      assert Enum.any?(events, &(&1.event == :tool_use and &1.message =~ "linear_graphql"))
+
+      assert Enum.any?(
+               events,
+               &(&1.event == :tool_use and &1.message =~ "linear_graphql")
+             )
+
       assert Enum.any?(events, &(&1.event == :turn_completed))
     after
       System.delete_env("FAKE_CODEX_MODE")
@@ -163,8 +189,76 @@ defmodule Raxol.Symphony.Runners.CodexTest do
                )
 
       events = collect_events("issue-1", 100)
-      assert Enum.any?(events, &(&1.event == :blocked and &1.message =~ "approval"))
+
+      assert Enum.any?(
+               events,
+               &(&1.event == :blocked and &1.message =~ "approval")
+             )
+
       assert Enum.any?(events, &(&1.event == :turn_completed))
+    after
+      System.delete_env("FAKE_CODEX_MODE")
+    end
+
+    @tag :unix_only
+    test "returns {:pause, :awaiting_approval, token} when approval_policy != never",
+         %{workspace: workspace} do
+      System.put_env("FAKE_CODEX_MODE", "approval")
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      cfg = config()
+      cfg = put_in(cfg.codex.approval_policy, "request")
+
+      assert {:pause, :awaiting_approval, token} =
+               Codex.run(issue(), cfg,
+                 parent: self(),
+                 attempt: nil,
+                 workspace_path: workspace
+               )
+
+      assert token.issue_id == "issue-1"
+      assert token.turn == 1
+      assert %DateTime{} = token.paused_at
+      # decision is the auto-approve-answer string Codex would have sent
+      # if approval_policy were :never -- e.g. "acceptForSession" or
+      # "approved_for_session" depending on the approval kind.
+      assert is_binary(token.decision)
+
+      events = collect_events("issue-1", 100)
+
+      assert Enum.any?(
+               events,
+               &(&1.event == :awaiting_approval and &1.message =~ "approval")
+             )
+    after
+      System.delete_env("FAKE_CODEX_MODE")
+    end
+
+    @tag :unix_only
+    test "resume_value triggers a :resumed event with the operator's decision",
+         %{workspace: workspace} do
+      System.put_env("FAKE_CODEX_MODE", "happy")
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      cfg = config()
+
+      assert :ok =
+               Codex.run(issue(), cfg,
+                 parent: self(),
+                 attempt: nil,
+                 workspace_path: workspace,
+                 resume_value: :approved,
+                 resume_token: %{decision: %{"type" => "exec_command"}}
+               )
+
+      events = collect_events("issue-1", 100)
+
+      assert Enum.any?(
+               events,
+               &(&1.event == :resumed and
+                   &1.payload.decision == :approved and
+                   &1.message =~ "approved")
+             )
     after
       System.delete_env("FAKE_CODEX_MODE")
     end
@@ -172,7 +266,9 @@ defmodule Raxol.Symphony.Runners.CodexTest do
 
   describe "failure modes" do
     @tag :unix_only
-    test "turn/failed surfaces as {:error, {:turn_failed, params}}", %{workspace: workspace} do
+    test "turn/failed surfaces as {:error, {:turn_failed, params}}", %{
+      workspace: workspace
+    } do
       System.put_env("FAKE_CODEX_MODE", "fail")
       Memory.put_issue(%{issue() | state: "Done"})
 
@@ -214,7 +310,9 @@ defmodule Raxol.Symphony.Runners.CodexTest do
       workspace: workspace
     } do
       assert {:error, :codex_not_installed} =
-               Codex.run(issue(), config(command: "definitely-not-a-real-binary-xyz123"),
+               Codex.run(
+                 issue(),
+                 config(command: "definitely-not-a-real-binary-xyz123"),
                  parent: self(),
                  attempt: nil,
                  workspace_path: workspace
