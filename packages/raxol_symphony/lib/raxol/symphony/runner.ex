@@ -56,6 +56,25 @@ defmodule Raxol.Symphony.Runner do
   @callback run(Issue.t(), Config.t(), opts()) :: result()
 
   @doc """
+  Declare the canonical set of interrupt-reason atoms this runner can
+  emit in its `{:pause, reason, token}` returns.
+
+  Optional. Implementing it documents the runner's pause vocabulary
+  and lets `Raxol.Symphony.PauseReason.awaiting?/1` mechanically
+  enforce the ADR-0018 `:awaiting_<subject>` convention via the
+  shared convention test.
+
+  Runners whose reasons are entirely user-supplied (e.g.
+  `Raxol.Symphony.Runners.Noop`, `Raxol.Symphony.Runners.RaxolAgent`
+  when the operator wires a `pause_detector`) should NOT implement
+  this callback -- the convention is enforced on the caller's
+  side, not the runner's.
+  """
+  @callback pause_reasons() :: [atom()]
+
+  @optional_callbacks pause_reasons: 0
+
+  @doc """
   Resolves the runner module from config, with optional override.
 
   Resolution order:

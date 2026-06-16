@@ -61,7 +61,10 @@ defmodule Raxol.Symphony.Runners.Codex do
   alias Raxol.Symphony.{Config, Issue, PromptBuilder, Tracker}
   alias Raxol.Symphony.Runners.Codex.Session
 
-  @impl true
+  @impl Raxol.Symphony.Runner
+  def pause_reasons, do: [:awaiting_approval]
+
+  @impl Raxol.Symphony.Runner
   def run(%Issue{} = issue, %Config{} = config, opts) do
     parent = Keyword.fetch!(opts, :parent)
     attempt = Keyword.get(opts, :attempt)
