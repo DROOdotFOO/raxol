@@ -1,7 +1,7 @@
 defmodule Raxol.Symphony.OperatorCallback do
   @moduledoc """
   Canonical parser + builder for the `sym:` operator-action callback
-  namespace from ADR-0018.
+  namespace.
 
   Channels (Telegram inline keyboards, Watch notification actions,
   MCP `symphony_resume_run` tool, future Slack/Discord/SMS bots)
@@ -14,7 +14,7 @@ defmodule Raxol.Symphony.OperatorCallback do
   - `build_*` and `parse/1` are round-trip safe: a callback you
     construct on one channel parses identically on another.
 
-  ## Vocabulary (ADR-0018 §3)
+  ## Vocabulary
 
   | Callback                          | Returned                              |
   | --------------------------------- | ------------------------------------- |
@@ -113,8 +113,8 @@ defmodule Raxol.Symphony.OperatorCallback do
     do: "sym:run:" <> issue_id
 
   @doc """
-  Build a legacy approve callback string for `issue_id`. ADR-0018
-  documents this as legacy; new channels SHOULD use `build_resume/2`
+  Build a legacy approve callback string for `issue_id`. This is
+  documented as legacy; new channels SHOULD use `build_resume/2`
   with `"approved"` instead.
   """
   @spec build_approve(binary()) :: String.t()

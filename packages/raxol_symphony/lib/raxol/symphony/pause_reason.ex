@@ -3,7 +3,7 @@ defmodule Raxol.Symphony.PauseReason do
   Canonical formatter and registry for paused-run interrupt reasons.
 
   Codifies the vocabulary half of the operator-flow contract from
-  ADR-0018: pause reasons are atoms in the `:awaiting_<subject>`
+  Pause reasons are atoms in the `:awaiting_<subject>`
   shape, where `<subject>` names the *external party* the run is
   waiting on. Surfaces (Terminal, LiveView, Telegram, Watch, MCP)
   display them through `format/1`; the same fallback chain runs
@@ -13,9 +13,9 @@ defmodule Raxol.Symphony.PauseReason do
   open-coded across the surfaces. They all agreed by coincidence;
   this module makes the agreement deliberate.
 
-  ## ADR-0018 canonical set
+  ## Canonical set
 
-  The atoms documented as canonical at the time ADR-0018 was written:
+  The atoms documented as canonical:
 
       iex> Raxol.Symphony.PauseReason.canonical()
       [
@@ -64,7 +64,7 @@ defmodule Raxol.Symphony.PauseReason do
   @type t :: atom() | binary() | nil | term()
 
   @doc """
-  Canonical list of interrupt-reason atoms documented in ADR-0018.
+  Canonical list of interrupt-reason atoms.
 
   Used by tests to enforce the convention; surfaces should NOT
   filter on this list -- the vocabulary is open.

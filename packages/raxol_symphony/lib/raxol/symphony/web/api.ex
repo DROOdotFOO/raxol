@@ -1,7 +1,7 @@
 if Code.ensure_loaded?(Plug.Router) do
   defmodule Raxol.Symphony.Web.API do
     @moduledoc """
-    JSON API for the Symphony orchestrator (Phase 10).
+    JSON API for the Symphony orchestrator.
 
     A `Plug.Router` exposing four endpoints. Mount it from any host Plug
     pipeline:

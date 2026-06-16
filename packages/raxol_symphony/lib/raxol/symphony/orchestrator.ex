@@ -1115,8 +1115,8 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp drop_listener_by_ref(%State{} = state, _ref) do
     # We do not track ref->pid mapping; on listener crash we simply leave the
-    # entry in the set (sends to dead pids are no-ops). For Phase 3 this is
-    # acceptable; Phase 7+ may switch to Phoenix.PubSub.
+    # entry in the set (sends to dead pids are no-ops). This is
+    # acceptable; a future version may switch to Phoenix.PubSub.
     state
   end
 
