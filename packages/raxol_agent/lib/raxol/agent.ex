@@ -72,6 +72,28 @@ defmodule Raxol.Agent do
       def command_hooks, do: []
 
       @doc """
+      Returns a list of `Raxol.Agent.Sandbox` structs declaring the
+      isolation dimensions that gate this agent's directives.
+
+      Defaults to `[]` (no sandboxing). When non-empty, consumers
+      using `Raxol.Agent.effective_hooks/1` get
+      `Raxol.Agent.SandboxHook` prepended automatically to the
+      `command_hooks/0` chain.
+      """
+      def sandbox, do: []
+
+      @doc """
+      Returns the `Raxol.Agent.ThreadLog` adapter (`{module, config}`
+      or bare module) for durable audit, or `nil` to disable.
+
+      When non-nil, consumers wire
+      `Raxol.Agent.ThreadLogRouter.attach/3` at agent startup so
+      every policy decision and sandbox denial lands as a durable
+      event keyed on the agent's id.
+      """
+      def thread_log, do: nil
+
+      @doc """
       Returns the cross-session memory provider for this agent, or `nil`.
 
       Override to return a `Raxol.Agent.Memory` provider module (e.g.
@@ -106,6 +128,8 @@ defmodule Raxol.Agent do
                      terminate: 2,
                      compaction_config: 0,
                      command_hooks: 0,
+                     sandbox: 0,
+                     thread_log: 0,
                      memory_provider: 0,
                      available_actions: 0
 
@@ -155,6 +179,52 @@ defmodule Raxol.Agent do
           end
         end)
       end
+    end
+  end
+
+  # --- Module-level helpers (callable without `use Raxol.Agent`) ----------
+
+  @doc """
+  Return the effective hook chain for `agent_module`: prepends
+  `Raxol.Agent.SandboxHook` to `agent_module.command_hooks/0` when
+  the agent declares a non-empty `sandbox/0`.
+
+  Consumers wiring an agent into a runtime (Symphony's
+  `Runners.RaxolAgent`, the Agent.Session helper, etc) should pass
+  the result here as the hook list rather than reading
+  `command_hooks/0` directly.
+
+  Falls back to `[]` when `agent_module` doesn't export either
+  callback (e.g. an agent built without `use Raxol.Agent`).
+  """
+  @spec effective_hooks(module()) :: [module()]
+  def effective_hooks(agent_module) when is_atom(agent_module) do
+    base = safe_call(agent_module, :command_hooks, [], [])
+    sandboxes = safe_call(agent_module, :sandbox, [], [])
+
+    case sandboxes do
+      [] -> base
+      _list -> [Raxol.Agent.SandboxHook | base]
+    end
+  end
+
+  @doc """
+  Return the normalized `Raxol.Agent.ThreadLog` adapter tuple from
+  `agent_module.thread_log/0`, or `nil` when the agent doesn't
+  declare one. Useful for `Raxol.Agent.ThreadLogRouter.attach/3`.
+  """
+  @spec thread_log_adapter(module()) :: {module(), map()} | nil
+  def thread_log_adapter(agent_module) when is_atom(agent_module) do
+    agent_module
+    |> safe_call(:thread_log, [], nil)
+    |> Raxol.Agent.ThreadLog.normalize()
+  end
+
+  defp safe_call(module, fun, args, default) do
+    if function_exported?(module, fun, length(args)) do
+      apply(module, fun, args)
+    else
+      default
     end
   end
 end
