@@ -233,8 +233,6 @@ defmodule Raxol.ACP.Job.Server do
   Reads through the configured workflow Saver (see
   `Application.put_env(:raxol_acp, :job_workflow_saver, ...)`) and
   hydrates each pause checkpoint's state back into the dashboard row.
-  Only workflow-backed jobs (`via_workflow: true`) appear; legacy
-  GenServer-state jobs do not pause and are therefore not in scope.
 
   ## Options
 
