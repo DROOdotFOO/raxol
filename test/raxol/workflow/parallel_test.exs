@@ -320,6 +320,197 @@ defmodule Raxol.Workflow.ParallelTest do
     end
   end
 
+  describe "multi-node branches" do
+    test "each branch walks a 2-node sub-graph before reaching the join" do
+      graph =
+        Graph.new(:multi2)
+        |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
+        |> Graph.add_node(:scout_a, fn s -> {:ok, Map.put(s, :a, 1)} end)
+        |> Graph.add_node(:scout_a_squared, fn s -> {:ok, Map.put(s, :a, s.a * s.a)} end)
+        |> Graph.add_node(:scout_b, fn s -> {:ok, Map.put(s, :b, 10)} end)
+        |> Graph.add_node(:scout_b_doubled, fn s -> {:ok, Map.put(s, :b, s.b * 2)} end)
+        |> Graph.add_node(:report, fn s ->
+          {:ok, Map.put(s, :total, s.a + s.b)}
+        end)
+        |> Graph.add_edge(:__start__, :fan_out)
+        |> Graph.add_conditional_edge(:fan_out, [:scout_a, :scout_b], fn _ ->
+          [:scout_a, :scout_b]
+        end)
+        |> Graph.add_edge(:scout_a, :scout_a_squared)
+        |> Graph.add_edge(:scout_a_squared, :report)
+        |> Graph.add_edge(:scout_b, :scout_b_doubled)
+        |> Graph.add_edge(:scout_b_doubled, :report)
+        |> Graph.add_join(:report, [:scout_a, :scout_b])
+        |> Graph.add_edge(:report, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+      {:ok, final, _meta} = Compiled.invoke(compiled, %{})
+
+      # scout_a path: 1, then squared = 1.
+      # scout_b path: 10, then doubled = 20.
+      # Merged + report: 1 + 20 = 21.
+      assert final.a == 1
+      assert final.b == 20
+      assert final.total == 21
+    end
+
+    test "branches with mixed depths still reach the join" do
+      graph =
+        Graph.new(:mixed_depths)
+        |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
+        |> Graph.add_node(:short, fn s -> {:ok, Map.put(s, :short, true)} end)
+        |> Graph.add_node(:medium_1, fn s -> {:ok, Map.put(s, :m1, true)} end)
+        |> Graph.add_node(:medium_2, fn s -> {:ok, Map.put(s, :m2, true)} end)
+        |> Graph.add_node(:long_1, fn s -> {:ok, Map.put(s, :l1, true)} end)
+        |> Graph.add_node(:long_2, fn s -> {:ok, Map.put(s, :l2, true)} end)
+        |> Graph.add_node(:long_3, fn s -> {:ok, Map.put(s, :l3, true)} end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :fan_out)
+        |> Graph.add_conditional_edge(:fan_out, [:short, :medium_1, :long_1], fn _ ->
+          [:short, :medium_1, :long_1]
+        end)
+        |> Graph.add_edge(:short, :join)
+        |> Graph.add_edge(:medium_1, :medium_2)
+        |> Graph.add_edge(:medium_2, :join)
+        |> Graph.add_edge(:long_1, :long_2)
+        |> Graph.add_edge(:long_2, :long_3)
+        |> Graph.add_edge(:long_3, :join)
+        |> Graph.add_join(:join, [:short, :medium_1, :long_1])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+      {:ok, final, _meta} = Compiled.invoke(compiled, %{})
+
+      assert final.short == true
+      assert final.m1 == true
+      assert final.m2 == true
+      assert final.l1 == true
+      assert final.l2 == true
+      assert final.l3 == true
+    end
+
+    test "every node in a multi-node branch carries the same branch_id in checkpoint metadata" do
+      table = :"multi_bid_#{:erlang.unique_integer([:positive])}"
+      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+
+      graph =
+        Graph.new(:multi_bid)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:a1, fn s -> {:ok, Map.put(s, :a1, true)} end)
+        |> Graph.add_node(:a2, fn s -> {:ok, Map.put(s, :a2, true)} end)
+        |> Graph.add_node(:b1, fn s -> {:ok, Map.put(s, :b1, true)} end)
+        |> Graph.add_node(:b2, fn s -> {:ok, Map.put(s, :b2, true)} end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:a1, :b1], fn _ -> [:a1, :b1] end)
+        |> Graph.add_edge(:a1, :a2)
+        |> Graph.add_edge(:a2, :join)
+        |> Graph.add_edge(:b1, :b2)
+        |> Graph.add_edge(:b2, :join)
+        |> Graph.add_join(:join, [:a1, :b1])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph, saver: saver)
+      {:ok, _final, meta} = Compiled.invoke(compiled, %{})
+
+      {:ok, checkpoints} =
+        Raxol.Workflow.Checkpoint.Saver.Ets.list(%{table: table}, meta.run_id, 50)
+
+      by_node =
+        Map.new(checkpoints, fn ck -> {ck.metadata.node_id, ck.metadata.branch_id} end)
+
+      # Branch A: both a1 and a2 share {:join, 0}.
+      assert by_node[:a1] == {:join, 0}
+      assert by_node[:a2] == {:join, 0}
+
+      # Branch B: both b1 and b2 share {:join, 1}.
+      assert by_node[:b1] == {:join, 1}
+      assert by_node[:b2] == {:join, 1}
+
+      # Sequential nodes carry nil.
+      assert by_node[:gate] == nil
+      assert by_node[:join] == nil
+    end
+
+    test "a mid-branch node failure surfaces the error to the run" do
+      graph =
+        Graph.new(:branch_fail)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:a1, fn s -> {:ok, Map.put(s, :a1, true)} end)
+        |> Graph.add_node(:a2_bomb, fn _s -> {:error, :a2_boom} end)
+        |> Graph.add_node(:b1, fn s -> {:ok, Map.put(s, :b1, true)} end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:a1, :b1], fn _ -> [:a1, :b1] end)
+        |> Graph.add_edge(:a1, :a2_bomb)
+        |> Graph.add_edge(:a2_bomb, :join)
+        |> Graph.add_edge(:b1, :join)
+        |> Graph.add_join(:join, [:a1, :b1])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+      assert {:error, :a2_boom, _state} = Compiled.invoke(compiled, %{})
+    end
+
+    test "a mid-branch interrupt surfaces :pause_in_branch_not_supported with the inner node id" do
+      graph =
+        Graph.new(:branch_pause)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:a1, fn s -> {:ok, Map.put(s, :a1, true)} end)
+        |> Graph.add_node(:a2_pause, fn _s -> Raxol.Workflow.interrupt(:awaiting_review) end)
+        |> Graph.add_node(:b1, fn s -> {:ok, Map.put(s, :b1, true)} end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:a1, :b1], fn _ -> [:a1, :b1] end)
+        |> Graph.add_edge(:a1, :a2_pause)
+        |> Graph.add_edge(:a2_pause, :join)
+        |> Graph.add_edge(:b1, :join)
+        |> Graph.add_join(:join, [:a1, :b1])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+
+      assert {:error, {:pause_in_branch_not_supported, :a2_pause}, _state} =
+               Compiled.invoke(compiled, %{})
+    end
+
+    test "nested fan-out inside a branch is rejected" do
+      graph =
+        Graph.new(:nested_rejected)
+        |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
+        |> Graph.add_node(:scout_a, fn s -> {:ok, Map.put(s, :a, true)} end)
+        |> Graph.add_node(:scout_b, fn s -> {:ok, Map.put(s, :b, true)} end)
+        |> Graph.add_node(:inner_fan, fn s -> {:ok, s} end)
+        |> Graph.add_node(:inner_x, fn s -> {:ok, Map.put(s, :x, true)} end)
+        |> Graph.add_node(:inner_y, fn s -> {:ok, Map.put(s, :y, true)} end)
+        |> Graph.add_node(:inner_join, fn s -> {:ok, s} end)
+        |> Graph.add_node(:outer_join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :fan_out)
+        |> Graph.add_conditional_edge(:fan_out, [:scout_a, :scout_b], fn _ ->
+          [:scout_a, :scout_b]
+        end)
+        |> Graph.add_edge(:scout_a, :inner_fan)
+        |> Graph.add_conditional_edge(:inner_fan, [:inner_x, :inner_y], fn _ ->
+          [:inner_x, :inner_y]
+        end)
+        |> Graph.add_edge(:inner_x, :inner_join)
+        |> Graph.add_edge(:inner_y, :inner_join)
+        |> Graph.add_join(:inner_join, [:inner_x, :inner_y])
+        |> Graph.add_edge(:inner_join, :outer_join)
+        |> Graph.add_edge(:scout_b, :outer_join)
+        |> Graph.add_join(:outer_join, [:scout_a, :scout_b])
+        |> Graph.add_edge(:outer_join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+
+      # scout_a's traverse hits an interior conditional_edge that returns
+      # a list -- not supported in Phase A.
+      assert {:error, {:nested_fan_out_unsupported, :inner_fan}, _state} =
+               Compiled.invoke(compiled, %{})
+    end
+  end
+
   describe "back-compat" do
     test "sequential graph with a single-id chooser still works unchanged" do
       graph =

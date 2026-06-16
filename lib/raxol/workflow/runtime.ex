@@ -884,16 +884,22 @@ defmodule Raxol.Workflow.Runtime do
 
   # --- Fan-out / Join ---
   #
-  # Phase A scope per ADR-0019: branches are single-node bodies feeding
-  # a join target via a static edge. Each branch starts from the same
-  # initial state; branch terminal states are merged per any registered
-  # `Channel` (or explicit join `:reduce` reducer), default last-write-
-  # wins by branch index for unkeyed state-map keys, then the join
-  # target's body runs once with the merged state.
+  # Per ADR-0019: each branch is a sub-graph rooted at one of the
+  # `add_conditional_edge` candidates and terminating when its next
+  # traversal step would enter the join target. Multi-node branches
+  # walk through any combination of static/guarded/conditional edges
+  # internally; the only restriction is that an interior conditional
+  # edge cannot itself return a list (nested fan-out is rejected).
+  # Branches start from the same initial state; branch terminal states
+  # are merged per any registered `Channel` (or explicit join `:reduce`
+  # reducer), default last-write-wins by branch index for unkeyed
+  # state-map keys, then the join target's body runs once with the
+  # merged state.
   #
   # Branch execution is serial in this slice. Concurrent execution via
-  # `Task.async_stream`, per-branch retry/compensate/pause, and the
-  # `branch_id` telemetry tag are deferred to follow-up work.
+  # `Task.async_stream`, per-branch pause, and per-branch compensate
+  # are deferred to follow-up work; pause inside a branch surfaces as
+  # `{:error, {:pause_in_branch_not_supported, current_id}}`.
 
   defp fan_out(compiled, branch_ids, state, run_id, deadline_us, count) do
     case join_for_branches(compiled, branch_ids) do
@@ -942,32 +948,90 @@ defmodule Raxol.Workflow.Runtime do
           {:halt, {:error, :run_timeout, state, c}}
 
         true ->
-          attempt =
+          result =
             with_branch_id({join_target, index}, fn ->
-              attempt_node_with_retry(compiled, id, state, run_id, 1)
+              step_branch(compiled, id, state, run_id, deadline_us, c, join_target)
             end)
 
-          case attempt do
-            {:node_ok, branch_state, _tag} ->
-              track_executed(Map.fetch!(compiled.nodes, id))
+          case result do
+            {:branch_done, branch_state, new_count} ->
+              {:cont, {:ok, [branch_state | acc], new_count}}
 
-              with_branch_id({join_target, index}, fn ->
-                persist_checkpoint(compiled, id, branch_state, run_id, c)
-              end)
-
-              {:cont, {:ok, [branch_state | acc], c + 1}}
-
-            {:interrupt, _value, _state_at_interrupt} ->
-              {:halt, {:error, {:pause_in_branch_not_supported, id}, state, c}}
-
-            {:error, reason, state_at_error} ->
-              {:halt, {:error, reason, state_at_error, c + 1}}
+            {:error, _reason, _state, _count} = err ->
+              {:halt, err}
           end
       end
     end)
     |> case do
       {:ok, acc, c} -> {:ok, Enum.reverse(acc), c}
       {:error, _, _, _} = err -> err
+    end
+  end
+
+  # --- Branch sub-execution walker ---
+  #
+  # `step_branch/7` mirrors `step/6` but takes `halt_at` as an explicit
+  # param. When the next traversal step would enter `halt_at` (the join
+  # target), the walker returns `{:branch_done, state, count}` without
+  # executing the target. The outer fan-out coordinator runs the join
+  # body once with the merged state.
+
+  defp step_branch(_compiled, @end_, state, _run_id, _deadline_us, count, halt_at) do
+    {:error, {:branch_reached_end_before_join, halt_at}, state, count}
+  end
+
+  defp step_branch(compiled, current_id, state, run_id, deadline_us, count, halt_at) do
+    cond do
+      monotonic_us() >= deadline_us ->
+        {:error, :run_timeout, state, count}
+
+      true ->
+        execute_branch_node(compiled, current_id, state, run_id, deadline_us, count, halt_at)
+    end
+  end
+
+  defp execute_branch_node(compiled, current_id, state, run_id, deadline_us, count, halt_at) do
+    case attempt_node_with_retry(compiled, current_id, state, run_id, 1) do
+      {:node_ok, new_state, _tag} ->
+        track_executed(Map.fetch!(compiled.nodes, current_id))
+        persist_checkpoint(compiled, current_id, new_state, run_id, count)
+
+        traverse_branch(
+          compiled,
+          current_id,
+          new_state,
+          run_id,
+          deadline_us,
+          count + 1,
+          halt_at
+        )
+
+      {:interrupt, _value, _state_at_interrupt} ->
+        {:error, {:pause_in_branch_not_supported, current_id}, state, count}
+
+      {:error, reason, state_at_error} ->
+        {:error, reason, state_at_error, count + 1}
+    end
+  end
+
+  defp traverse_branch(compiled, current_id, state, run_id, deadline_us, count, halt_at) do
+    outgoing = Map.get(compiled.edges_by_source, current_id, [])
+
+    case pick_next(outgoing, state) do
+      {:ok, ^halt_at} ->
+        {:branch_done, state, count}
+
+      {:ok, next_id} when is_atom(next_id) or is_binary(next_id) ->
+        step_branch(compiled, next_id, state, run_id, deadline_us, count, halt_at)
+
+      {:ok, _ids_list} when is_list(_ids_list) ->
+        {:error, {:nested_fan_out_unsupported, current_id}, state, count}
+
+      :no_match ->
+        {:error, {:no_outgoing_edge_matched, current_id}, state, count}
+
+      {:error, reason} ->
+        {:error, reason, state, count}
     end
   end
 
