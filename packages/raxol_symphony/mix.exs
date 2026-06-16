@@ -69,6 +69,10 @@ defmodule RaxolSymphony.MixProject do
       # HTTP client for tracker adapters (Phase 6).
       {:req, "~> 0.5", optional: true},
 
+      # PostgreSQL driver for the paused-runs Postgrex saver. Optional;
+      # consumers must add :postgrex and supervise a connection.
+      {:postgrex, "~> 0.17", optional: true},
+
       # Web surface deps (Phase 10) -- both optional, the JSON API and
       # LiveView dashboard are gated at compile time on these being loaded.
       {:plug, "~> 1.14", optional: true},
