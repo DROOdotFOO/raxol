@@ -453,7 +453,7 @@ defmodule Raxol.Workflow.ParallelTest do
       assert {:error, :a2_boom, _state} = Compiled.invoke(compiled, %{})
     end
 
-    test "a mid-branch interrupt surfaces :pause_in_branch_not_supported with the inner node id" do
+    test "a mid-branch interrupt surfaces as a run-level interrupt with branch_id" do
       graph =
         Graph.new(:branch_pause)
         |> Graph.add_node(:gate, fn s -> {:ok, s} end)
@@ -471,8 +471,19 @@ defmodule Raxol.Workflow.ParallelTest do
 
       {:ok, compiled} = Graph.compile(graph)
 
-      assert {:error, {:pause_in_branch_not_supported, :a2_pause}, _state} =
+      assert {:interrupted, _run_id, state, :awaiting_review} =
                Compiled.invoke(compiled, %{})
+
+      # Run state carries a fan-out continuation: branch A paused at
+      # :a2_pause, branch B completed.
+      continuation = state.__raxol_workflow_fan_out__
+      assert continuation.join_target == :join
+      assert continuation.branch_ids == [:a1, :b1]
+
+      assert [
+               {:paused, :a2_pause, %{a1: true}, :awaiting_review},
+               {:done, %{b1: true}}
+             ] = continuation.slots
     end
 
     test "nested fan-out inside a branch is rejected" do
@@ -508,6 +519,124 @@ defmodule Raxol.Workflow.ParallelTest do
       # a list -- not supported in Phase A.
       assert {:error, {:nested_fan_out_unsupported, :inner_fan}, _state} =
                Compiled.invoke(compiled, %{})
+    end
+  end
+
+  describe "per-branch pause + resume" do
+    test "Compiled.resume completes a paused branch and merges with siblings" do
+      table = :"pb_pause_#{:erlang.unique_integer([:positive])}"
+      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+
+      graph =
+        Graph.new(:pb1)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:a1, fn s -> {:ok, Map.put(s, :a1, true)} end)
+        |> Graph.add_node(:a2_pause, fn s ->
+          decision = Raxol.Workflow.interrupt(:awaiting_review)
+          {:ok, Map.put(s, :decision, decision)}
+        end)
+        |> Graph.add_node(:b1, fn s -> {:ok, Map.put(s, :b1, true)} end)
+        |> Graph.add_node(:join, fn s -> {:ok, Map.put(s, :joined, true)} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:a1, :b1], fn _ -> [:a1, :b1] end)
+        |> Graph.add_edge(:a1, :a2_pause)
+        |> Graph.add_edge(:a2_pause, :join)
+        |> Graph.add_edge(:b1, :join)
+        |> Graph.add_join(:join, [:a1, :b1])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph, saver: saver)
+
+      assert {:interrupted, run_id, _state, :awaiting_review} =
+               Compiled.invoke(compiled, %{})
+
+      # Resume with an :approved decision; branch A finishes, merges
+      # with branch B, runs the join body, ends cleanly.
+      assert {:ok, final, _meta} = Compiled.resume(compiled, run_id, :approved)
+
+      assert final.a1 == true
+      assert final.b1 == true
+      assert final.decision == :approved
+      assert final.joined == true
+      refute Map.has_key?(final, :__raxol_workflow_fan_out__)
+    end
+
+    test "branch_id is set on the pause checkpoint's metadata" do
+      table = :"pb_meta_#{:erlang.unique_integer([:positive])}"
+      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+
+      graph =
+        Graph.new(:pb2)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:a, fn s -> {:ok, Map.put(s, :a, true)} end)
+        |> Graph.add_node(:b_pause, fn _s -> Raxol.Workflow.interrupt(:awaiting_b) end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:a, :b_pause], fn _ -> [:a, :b_pause] end)
+        |> Graph.add_edge(:a, :join)
+        |> Graph.add_edge(:b_pause, :join)
+        |> Graph.add_join(:join, [:a, :b_pause])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph, saver: saver)
+      {:interrupted, run_id, _state, _} = Compiled.invoke(compiled, %{})
+
+      {:ok, latest} = Raxol.Workflow.Runtime.preflight_resume(compiled, run_id)
+
+      # The latest checkpoint is the pause; metadata carries branch_id
+      # for the paused branch (index 1 because :b_pause was the second
+      # entry in the upstream list).
+      assert latest.metadata.branch_id == {:join, 1}
+      assert latest.metadata.node_id == :b_pause
+      assert latest.metadata.interrupt_reason == :awaiting_b
+    end
+
+    test "two paused branches resume one at a time" do
+      table = :"pb_two_#{:erlang.unique_integer([:positive])}"
+      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+
+      graph =
+        Graph.new(:pb3)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:a_pause, fn s ->
+          v = Raxol.Workflow.interrupt(:awaiting_a)
+          {:ok, Map.put(s, :a_decision, v)}
+        end)
+        |> Graph.add_node(:b_pause, fn s ->
+          v = Raxol.Workflow.interrupt(:awaiting_b)
+          {:ok, Map.put(s, :b_decision, v)}
+        end)
+        |> Graph.add_node(:join, fn s -> {:ok, Map.put(s, :joined, true)} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:a_pause, :b_pause], fn _ ->
+          [:a_pause, :b_pause]
+        end)
+        |> Graph.add_edge(:a_pause, :join)
+        |> Graph.add_edge(:b_pause, :join)
+        |> Graph.add_join(:join, [:a_pause, :b_pause])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph, saver: saver)
+
+      # First run: both branches pause. Surfaces the FIRST paused
+      # branch (index 0, :a_pause, reason :awaiting_a).
+      assert {:interrupted, run_id, _state, :awaiting_a} = Compiled.invoke(compiled, %{})
+
+      # Resume :a_pause with :approved_a. Branch B is still paused, so
+      # the resume itself interrupts again -- this time for :b_pause.
+      assert {:interrupted, ^run_id, _state2, :awaiting_b} =
+               Compiled.resume(compiled, run_id, :approved_a)
+
+      # Resume :b_pause with :approved_b. Both branches now complete;
+      # the join body runs and the run finishes.
+      assert {:ok, final, _meta} = Compiled.resume(compiled, run_id, :approved_b)
+
+      assert final.a_decision == :approved_a
+      assert final.b_decision == :approved_b
+      assert final.joined == true
     end
   end
 
