@@ -24,6 +24,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0016](0016-acp-job-workflow.md) | raxol_acp Job migration to `Raxol.Workflow` | Implemented (Phase A + B) | 2026-06-16 |
 | [0017](0017-acp-workflow-paused-jobs.md) | Workflow paused-run query and pause-checkpoint contract | Implemented | 2026-06-16 |
 | [0018](0018-operator-flow-contract.md) | Operator-flow contract for paused runs | Proposed | 2026-06-16 |
+| [0019](0019-workflow-concurrency.md) | Workflow concurrency (`add_join/4` + `add_channel/4`) | Proposed | 2026-06-16 |
 
 ## Template
 
@@ -103,7 +104,8 @@ They preserve context for why decisions were made, help new contributors underst
 - [0016: raxol_acp Job migration to Workflow](0016-acp-job-workflow.md)
 - [0017: Workflow paused-run query and pause-checkpoint contract](0017-acp-workflow-paused-jobs.md)
 - [0018: Operator-flow contract for paused runs](0018-operator-flow-contract.md)
+- [0019: Workflow concurrency (joins + channels)](0019-workflow-concurrency.md)
 
 ## Coverage
 
-16 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, and the cross-layer operator-flow contract. (Numbers 0004 and 0006 are withdrawn placeholders.)
+17 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, and Workflow concurrency. (Numbers 0004 and 0006 are withdrawn placeholders.)
