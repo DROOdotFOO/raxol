@@ -21,7 +21,9 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0013](0013-event-dispatch-backpressure.md) | Event-dispatch Backpressure | Implemented | 2026-06-03 |
 | [0014](0014-telegram-ai-guardian.md) | Telegram AI Guardian admin behaviour | Accepted | 2026-06-13 |
 | [0015](0015-workflow-graph.md) | Workflow Graph (`Raxol.Workflow.*`) | Accepted | 2026-06-15 |
-| [0016](0016-acp-job-workflow.md) | raxol_acp Job migration to `Raxol.Workflow` | Proposed | 2026-06-16 |
+| [0016](0016-acp-job-workflow.md) | raxol_acp Job migration to `Raxol.Workflow` | Implemented (Phase A + B) | 2026-06-16 |
+| [0017](0017-acp-workflow-paused-jobs.md) | Workflow paused-run query and pause-checkpoint contract | Implemented | 2026-06-16 |
+| [0018](0018-operator-flow-contract.md) | Operator-flow contract for paused runs | Proposed | 2026-06-16 |
 
 ## Template
 
@@ -99,7 +101,9 @@ They preserve context for why decisions were made, help new contributors underst
 ### Orchestration
 - [0015: Workflow Graph](0015-workflow-graph.md)
 - [0016: raxol_acp Job migration to Workflow](0016-acp-job-workflow.md)
+- [0017: Workflow paused-run query and pause-checkpoint contract](0017-acp-workflow-paused-jobs.md)
+- [0018: Operator-flow contract for paused runs](0018-operator-flow-contract.md)
 
 ## Coverage
 
-14 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, and orchestration. (Numbers 0004 and 0006 are withdrawn placeholders.)
+16 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, and the cross-layer operator-flow contract. (Numbers 0004 and 0006 are withdrawn placeholders.)
