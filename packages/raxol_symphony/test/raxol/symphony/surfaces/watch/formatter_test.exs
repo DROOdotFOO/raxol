@@ -86,7 +86,10 @@ defmodule Raxol.Symphony.Surfaces.Watch.FormatterTest do
 
   describe "run_notification/1" do
     test "produces tap-to-stop and tap-to-approve actions for the run" do
-      n = Formatter.run_notification(run(issue_id: "iss_42", issue_identifier: "MT-42"))
+      n =
+        Formatter.run_notification(
+          run(issue_id: "iss_42", issue_identifier: "MT-42")
+        )
 
       assert n.title == "Symphony: MT-42"
       assert n.category == "symphony_run"
@@ -111,13 +114,102 @@ defmodule Raxol.Symphony.Surfaces.Watch.FormatterTest do
     end
   end
 
+  # -- paused rendering ------------------------------------------------------
+
+  defp paused(opts) do
+    Map.merge(
+      %{
+        issue_id: "iss_p",
+        issue_identifier: "MT-P",
+        interrupt_reason: :awaiting_review,
+        paused_ms_ago: 12_000,
+        last_event: :awaiting_approval,
+        last_message: nil
+      },
+      Map.new(opts)
+    )
+  end
+
+  describe "event_notification/2 :worker_paused" do
+    test "high-priority with Approve+Reject actions when paused head is present" do
+      snap =
+        snapshot(%{
+          counts: %{running: 0, retrying: 0, paused: 1},
+          paused: [paused(interrupt_reason: :awaiting_evaluator_approval)]
+        })
+
+      n = Formatter.event_notification(:worker_paused, snap)
+
+      assert n.category == "symphony_paused"
+      assert n.priority == :high
+      assert n.title =~ "PAUSED"
+      assert n.badge == 1
+      assert n.body =~ "MT-P"
+      assert n.body =~ "awaiting_evaluator_approval"
+
+      action_ids = Enum.map(n.actions, & &1.id)
+      assert "sym:resume:iss_p:approved" in action_ids
+      assert "sym:resume:iss_p:rejected" in action_ids
+      assert "sym:dismiss" in action_ids
+    end
+
+    test "falls back to refresh + dismiss when paused list is empty" do
+      snap = snapshot(%{counts: %{running: 0, retrying: 0, paused: 0}})
+      n = Formatter.event_notification(:worker_paused, snap)
+
+      assert n.priority == :high
+      assert n.body =~ "Refresh"
+
+      action_ids = Enum.map(n.actions, & &1.id)
+      refute Enum.any?(action_ids, &String.starts_with?(&1, "sym:resume:"))
+      assert "sym:refresh" in action_ids
+    end
+  end
+
+  describe "paused_notification/1" do
+    test "renders Approve+Reject for a single paused entry" do
+      n =
+        Formatter.paused_notification(
+          paused(
+            issue_id: "iss_99",
+            issue_identifier: "MT-99",
+            interrupt_reason: :awaiting_buyer_payment
+          )
+        )
+
+      assert n.title == "Symphony PAUSED: MT-99"
+      assert n.category == "symphony_paused"
+      assert n.priority == :high
+      assert n.body =~ "awaiting_buyer_payment"
+
+      action_ids = Enum.map(n.actions, & &1.id)
+      assert "sym:resume:iss_99:approved" in action_ids
+      assert "sym:resume:iss_99:rejected" in action_ids
+    end
+  end
+
+  describe "snapshot_notification/1 with paused" do
+    test "body and badge reflect paused count" do
+      snap = snapshot(%{counts: %{running: 1, retrying: 2, paused: 3}})
+      n = Formatter.snapshot_notification(snap)
+
+      assert n.body =~ "paused 3"
+      assert n.badge == 3
+    end
+  end
+
   # -- truncation -------------------------------------------------------------
 
   describe "truncation" do
     test "bodies are truncated to max_body_length()" do
       long_reason = String.duplicate("x", 500)
 
-      n = Formatter.event_notification({:preflight_failed, long_reason}, snapshot())
+      n =
+        Formatter.event_notification(
+          {:preflight_failed, long_reason},
+          snapshot()
+        )
+
       assert String.length(n.body) <= Formatter.max_body_length()
     end
   end

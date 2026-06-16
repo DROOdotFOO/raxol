@@ -27,6 +27,8 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   dispatch:
 
   - `sym:approve:<issue_id>` -- "tap-to-approve" for blocked runs
+  - `sym:resume:<issue_id>:approved` -- resume a paused run with approval
+  - `sym:resume:<issue_id>:rejected` -- resume a paused run with rejection
   - `sym:stop:<issue_id>` -- terminate a run
   - `sym:refresh` -- request orchestrator tick
   - `sym:dismiss` -- dismiss the notification (no orchestrator side effects)
@@ -53,7 +55,10 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   def event_notification(:worker_exit_normal, snapshot) do
     %{
       title: "Symphony",
-      body: truncate("Run completed. running #{counts(snapshot).running}, retrying #{counts(snapshot).retrying}"),
+      body:
+        truncate(
+          "Run completed. running #{counts(snapshot).running}, retrying #{counts(snapshot).retrying}"
+        ),
       category: "symphony_completed",
       actions: [refresh_action(), dismiss_action()],
       priority: :silent,
@@ -64,7 +69,10 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   def event_notification(:worker_exit_abnormal, snapshot) do
     %{
       title: "Symphony",
-      body: truncate("Run failed -- queued for retry. retrying #{counts(snapshot).retrying}"),
+      body:
+        truncate(
+          "Run failed -- queued for retry. retrying #{counts(snapshot).retrying}"
+        ),
       category: "symphony_failure",
       actions: [refresh_action(), dismiss_action()],
       priority: :normal,
@@ -86,7 +94,10 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   def event_notification({:preflight_failed, reason}, _snapshot) do
     %{
       title: "Symphony BLOCKED",
-      body: truncate("Workflow validation failed: #{inspect(reason)}. Dispatch paused."),
+      body:
+        truncate(
+          "Workflow validation failed: #{inspect(reason)}. Dispatch paused."
+        ),
       category: "symphony_blocker",
       actions: [
         %{id: "sym:approve", label: "Approve"},
@@ -96,6 +107,49 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
       priority: :high,
       badge: 1
     }
+  end
+
+  def event_notification(:worker_paused, snapshot) do
+    head = snapshot |> Map.get(:paused, []) |> List.first()
+    paused_count = counts(snapshot)[:paused] || 0
+
+    {body, actions} = paused_event_body(head, paused_count)
+
+    %{
+      title: "Symphony PAUSED",
+      body: truncate(body),
+      category: "symphony_paused",
+      actions: actions,
+      priority: :high,
+      badge: paused_count
+    }
+  end
+
+  defp paused_event_body(nil, _count) do
+    {"A run is paused. Tap Refresh to see details.",
+     [refresh_action(), dismiss_action()]}
+  end
+
+  defp paused_event_body(head, _count) do
+    reason = format_reason(head[:interrupt_reason])
+
+    body =
+      "#{head.issue_identifier} paused -- #{reason}. " <>
+        "Tap to approve or reject."
+
+    actions = [
+      %{
+        id: "sym:resume:#{head.issue_id}:approved",
+        label: "Approve"
+      },
+      %{
+        id: "sym:resume:#{head.issue_id}:rejected",
+        label: "Reject"
+      },
+      dismiss_action()
+    ]
+
+    {body, actions}
   end
 
   def event_notification(_other, _snapshot), do: :skip
@@ -121,18 +175,50 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
     }
   end
 
+  @doc """
+  Builds a per-paused notification with Approve / Reject actions. Mirrors
+  `run_notification/1` for entries that have moved into the paused set.
+  """
+  @spec paused_notification(map()) :: notification()
+  def paused_notification(entry) when is_map(entry) do
+    reason = format_reason(entry[:interrupt_reason])
+
+    %{
+      title: "Symphony PAUSED: #{entry.issue_identifier}",
+      body: truncate("#{reason}. Tap to approve or reject."),
+      category: "symphony_paused",
+      actions: [
+        %{
+          id: "sym:resume:#{entry.issue_id}:approved",
+          label: "Approve"
+        },
+        %{
+          id: "sym:resume:#{entry.issue_id}:rejected",
+          label: "Reject"
+        },
+        dismiss_action()
+      ],
+      priority: :high,
+      badge: 1
+    }
+  end
+
   @doc "Builds a snapshot summary suitable for an on-demand `/status` push."
   @spec snapshot_notification(map()) :: notification()
   def snapshot_notification(snapshot) do
     c = counts(snapshot)
+    paused = c[:paused] || 0
 
     %{
       title: "Symphony",
-      body: truncate("running #{c.running}, retrying #{c.retrying}"),
+      body:
+        truncate(
+          "running #{c.running}, paused #{paused}, retrying #{c.retrying}"
+        ),
       category: "symphony_status",
       actions: [refresh_action(), dismiss_action()],
       priority: :silent,
-      badge: 0
+      badge: paused
     }
   end
 
@@ -143,10 +229,15 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   # -- Helpers ----------------------------------------------------------------
 
   defp counts(%{counts: c}), do: c
-  defp counts(_), do: %{running: 0, retrying: 0}
+  defp counts(_), do: %{running: 0, retrying: 0, paused: 0}
 
   defp refresh_action, do: %{id: "sym:refresh", label: "Refresh"}
   defp dismiss_action, do: %{id: "sym:dismiss", label: "Dismiss"}
+
+  defp format_reason(nil), do: "(unspecified)"
+  defp format_reason(atom) when is_atom(atom), do: Atom.to_string(atom)
+  defp format_reason(b) when is_binary(b), do: b
+  defp format_reason(other), do: inspect(other)
 
   defp truncate(text) when is_binary(text) do
     if String.length(text) <= @max_body_length do

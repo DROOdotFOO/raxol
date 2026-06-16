@@ -60,7 +60,9 @@ defmodule Raxol.Symphony.Surfaces.Telegram.FormatterTest do
       snap =
         empty_snapshot(%{
           counts: %{running: 1, retrying: 0},
-          running: [run(state: "In Progress", turn_count: 4, started_ms_ago: 60_000)]
+          running: [
+            run(state: "In Progress", turn_count: 4, started_ms_ago: 60_000)
+          ]
         })
 
       {text, _kb} = Formatter.snapshot_message(snap)
@@ -75,12 +77,18 @@ defmodule Raxol.Symphony.Surfaces.Telegram.FormatterTest do
         for i <- 1..5,
             do: run(issue_id: "id#{i}", issue_identifier: "MT-#{i}")
 
-      snap = empty_snapshot(%{counts: %{running: 5, retrying: 0}, running: runs})
+      snap =
+        empty_snapshot(%{counts: %{running: 5, retrying: 0}, running: runs})
 
       {_text, [stop_row, refresh_row]} = Formatter.snapshot_message(snap)
 
       assert length(stop_row) == 3
-      assert Enum.all?(stop_row, &String.starts_with?(&1.callback_data, "sym:stop:"))
+
+      assert Enum.all?(
+               stop_row,
+               &String.starts_with?(&1.callback_data, "sym:stop:")
+             )
+
       assert refresh_row == [%{text: "Refresh", callback_data: "sym:refresh"}]
     end
 
@@ -114,8 +122,12 @@ defmodule Raxol.Symphony.Surfaces.Telegram.FormatterTest do
     end
 
     test "caps the displayed runs and retries" do
-      runs = for i <- 1..20, do: run(issue_id: "id#{i}", issue_identifier: "MT-#{i}")
-      retries = for i <- 1..20, do: retry(issue_id: "rid#{i}", issue_identifier: "RT-#{i}")
+      runs =
+        for i <- 1..20, do: run(issue_id: "id#{i}", issue_identifier: "MT-#{i}")
+
+      retries =
+        for i <- 1..20,
+            do: retry(issue_id: "rid#{i}", issue_identifier: "RT-#{i}")
 
       snap =
         empty_snapshot(%{
@@ -127,8 +139,11 @@ defmodule Raxol.Symphony.Surfaces.Telegram.FormatterTest do
       {text, _} = Formatter.snapshot_message(snap)
 
       # Default cap is 8 each.
-      run_lines = text |> String.split("\n") |> Enum.count(&String.contains?(&1, "MT-"))
-      retry_lines = text |> String.split("\n") |> Enum.count(&String.contains?(&1, "RT-"))
+      run_lines =
+        text |> String.split("\n") |> Enum.count(&String.contains?(&1, "MT-"))
+
+      retry_lines =
+        text |> String.split("\n") |> Enum.count(&String.contains?(&1, "RT-"))
 
       assert run_lines <= 8
       assert retry_lines <= 8
@@ -202,6 +217,118 @@ defmodule Raxol.Symphony.Surfaces.Telegram.FormatterTest do
 
     test "unknown events are dropped" do
       assert :skip = Formatter.event_message(:something_weird, empty_snapshot())
+    end
+
+    test ":worker_paused surfaces Approve/Reject buttons for the head paused" do
+      snap =
+        empty_snapshot(%{
+          counts: %{running: 0, retrying: 0, paused: 1},
+          paused: [paused(interrupt_reason: :awaiting_review)]
+        })
+
+      assert {text, [[approve, reject], [refresh]]} =
+               Formatter.event_message(:worker_paused, snap)
+
+      assert text =~ "A run is paused"
+      assert text =~ "awaiting_review"
+      assert approve.callback_data == "sym:resume:iss_p:approved"
+      assert reject.callback_data == "sym:resume:iss_p:rejected"
+      assert refresh.callback_data == "sym:refresh"
+    end
+  end
+
+  # -- paused rendering ------------------------------------------------------
+
+  defp paused(opts) do
+    Map.merge(
+      %{
+        issue_id: "iss_p",
+        issue_identifier: "MT-P",
+        interrupt_reason: :awaiting_review,
+        paused_ms_ago: 12_000,
+        last_event: :awaiting_approval,
+        last_message: nil
+      },
+      Map.new(opts)
+    )
+  end
+
+  describe "snapshot_message/1 paused" do
+    test "includes paused count and section when paused entries exist" do
+      snap =
+        empty_snapshot(%{
+          counts: %{running: 0, retrying: 0, paused: 2},
+          paused: [
+            paused(issue_id: "p1", issue_identifier: "MT-A"),
+            paused(
+              issue_id: "p2",
+              issue_identifier: "MT-B",
+              interrupt_reason: :awaiting_buyer_payment
+            )
+          ]
+        })
+
+      {text, _kb} = Formatter.snapshot_message(snap)
+
+      assert text =~ "paused: <b>2</b>"
+      assert text =~ "<b>Paused</b>"
+      assert text =~ "MT-A"
+      assert text =~ "awaiting_review"
+      assert text =~ "MT-B"
+      assert text =~ "awaiting_buyer_payment"
+    end
+
+    test "keyboard includes Approve buttons (max 3) for paused entries" do
+      runs = [run(issue_id: "r1", issue_identifier: "MT-1")]
+
+      paused_entries =
+        for i <- 1..5,
+            do: paused(issue_id: "p#{i}", issue_identifier: "MT-P#{i}")
+
+      snap =
+        empty_snapshot(%{
+          counts: %{running: 1, retrying: 0, paused: 5},
+          running: runs,
+          paused: paused_entries
+        })
+
+      {_text, keyboard} = Formatter.snapshot_message(snap)
+
+      approve_row =
+        Enum.find(keyboard, fn row ->
+          Enum.any?(row, &String.starts_with?(&1.callback_data, "sym:resume:"))
+        end)
+
+      assert is_list(approve_row)
+      assert length(approve_row) == 3
+
+      assert Enum.all?(
+               approve_row,
+               &(&1.callback_data =~ ~r/^sym:resume:p\d:approved$/)
+             )
+    end
+  end
+
+  describe "paused_run_message/1" do
+    test "renders a per-paused detail with Approve + Reject buttons" do
+      entry =
+        paused(
+          issue_id: "iss_99",
+          issue_identifier: "MT-99",
+          interrupt_reason: :awaiting_evaluator_approval,
+          paused_ms_ago: 5_000,
+          last_message: "Awaiting evaluator review"
+        )
+
+      {text, [[approve, reject], [refresh]]} =
+        Formatter.paused_run_message(entry)
+
+      assert text =~ "Paused MT-99"
+      assert text =~ "awaiting_evaluator_approval"
+      assert text =~ "Awaiting evaluator review"
+      assert approve.callback_data == "sym:resume:iss_99:approved"
+      assert reject.callback_data == "sym:resume:iss_99:rejected"
+      assert refresh.callback_data == "sym:list"
     end
   end
 end
