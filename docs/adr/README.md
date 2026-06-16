@@ -25,6 +25,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0017](0017-acp-workflow-paused-jobs.md) | Workflow paused-run query and pause-checkpoint contract | Implemented | 2026-06-16 |
 | [0018](0018-operator-flow-contract.md) | Operator-flow contract for paused runs | Proposed | 2026-06-16 |
 | [0019](0019-workflow-concurrency.md) | Workflow concurrency (`add_join/4` + `add_channel/4`) | Proposed | 2026-06-16 |
+| [0020](0020-agent-sandbox-thread-policies.md) | Phase 26: Agent Sandbox, Thread log, declarative Policies | Proposed | 2026-06-16 |
 
 ## Template
 
@@ -106,6 +107,9 @@ They preserve context for why decisions were made, help new contributors underst
 - [0018: Operator-flow contract for paused runs](0018-operator-flow-contract.md)
 - [0019: Workflow concurrency (joins + channels)](0019-workflow-concurrency.md)
 
+### Agent stack
+- [0020: Phase 26 — Agent Sandbox, Thread log, declarative Policies](0020-agent-sandbox-thread-policies.md)
+
 ## Coverage
 
-17 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, and Workflow concurrency. (Numbers 0004 and 0006 are withdrawn placeholders.)
+18 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, and the agent-stack sandbox + audit + policies primitive. (Numbers 0004 and 0006 are withdrawn placeholders.)
