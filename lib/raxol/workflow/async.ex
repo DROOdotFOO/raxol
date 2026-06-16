@@ -225,12 +225,16 @@ defmodule Raxol.Workflow.Async do
         Application.get_env(:raxol, :workflow_event_source, "raxol://workflow")
       end)
 
-    :telemetry.attach_many(
-      handler_id,
-      @all_events,
-      &handle_stream_event/4,
-      %{run_id: run_id, consumer_pid: consumer_pid, source: source}
-    )
+    # `:telemetry.attach_many/4` returns `:ok | {:error, :already_exists}`.
+    # The handler_id includes a unique run_id, so collisions don't happen
+    # in normal operation; underscore so dialyzer is satisfied.
+    _ =
+      :telemetry.attach_many(
+        handler_id,
+        @all_events,
+        &handle_stream_event/4,
+        %{run_id: run_id, consumer_pid: consumer_pid, source: source}
+      )
 
     %{
       run_id: run_id,
@@ -256,7 +260,7 @@ defmodule Raxol.Workflow.Async do
   end
 
   defp cleanup(state) do
-    :telemetry.detach(state.handler_id)
+    _ = :telemetry.detach(state.handler_id)
 
     Process.demonitor(state.ref, [:flush])
 

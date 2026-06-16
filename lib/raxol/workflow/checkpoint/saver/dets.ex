@@ -112,7 +112,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Dets do
 
   @impl GenServer
   def terminate(_reason, %{table: table}) do
-    :dets.close(table)
+    _ = :dets.close(table)
     :ok
   end
 
@@ -122,7 +122,10 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Dets do
         _from,
         %{table: table} = state
       ) do
-    :dets.insert_new(table, {{thread_id, step}, checkpoint})
+    # `:dets.insert_new/2` returns `true` (inserted) or `false` (key
+    # exists). The append-only Saver contract is "duplicate writes are
+    # no-ops" so we intentionally ignore the boolean.
+    _ = :dets.insert_new(table, {{thread_id, step}, checkpoint})
     {:reply, :ok, state}
   end
 
@@ -140,7 +143,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Dets do
 
   @impl GenServer
   def handle_call({:delete_thread, thread_id}, _from, %{table: table} = state) do
-    delete_thread_entries(table, thread_id)
+    _ = delete_thread_entries(table, thread_id)
     {:reply, :ok, state}
   end
 

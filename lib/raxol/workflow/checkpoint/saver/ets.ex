@@ -44,13 +44,16 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Ets do
 
     case :ets.whereis(table) do
       :undefined ->
-        :ets.new(table, [
-          :ordered_set,
-          :public,
-          :named_table,
-          read_concurrency: true,
-          write_concurrency: true
-        ])
+        _ =
+          :ets.new(table, [
+            :ordered_set,
+            :public,
+            :named_table,
+            read_concurrency: true,
+            write_concurrency: true
+          ])
+
+        :ok
 
       _ref ->
         :ok
@@ -62,7 +65,9 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Ets do
   @impl true
   def put(config, thread_id, %Checkpoint{step: step} = checkpoint) do
     table = ensure_table(config)
-    :ets.insert_new(table, {{thread_id, step}, checkpoint})
+    # `:ets.insert_new/2` returns `true`/`false`; duplicate writes are
+    # intentional no-ops per the append-only Saver contract.
+    _ = :ets.insert_new(table, {{thread_id, step}, checkpoint})
     :ok
   end
 
