@@ -30,6 +30,23 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           # actions: list of fully-qualified action modules (Phase 4: ignored;
           # tool use lands in a later phase together with hook integration)
           pause_detector: {MyApp.PauseDetector, :detect}
+          tracker_cache: {Raxol.Agent.Cache.Ets, %{table: :tracker_cache}}
+          tracker_cache_ttl_ms: 30_000
+
+  ## Tracker result caching
+
+  Optional: set `agent.tracker_cache` to a `{module, config}` tuple
+  (or a bare `Raxol.Agent.Cache`-impl module) and the runner will
+  cache `still_active?` results between turn boundaries. Cache key is
+  `{:tracker, issue.id}`; default TTL is 30s, overridden by
+  `agent.tracker_cache_ttl_ms`. The cache is opt-in: leaving
+  `tracker_cache` unset preserves the existing per-turn-boundary
+  query behavior.
+
+  Trade-off: with caching enabled, a tracker state change during the
+  TTL window is not seen until the TTL expires. Use a short TTL for
+  fast-moving issue queues; use no cache (default) when freshness
+  matters more than HTTP cost.
 
   ## Pause detection
 
@@ -148,12 +165,18 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       last_resume_value: nil,
       run_result: nil,
       next_step: nil,
+      # Optional tracker-result cache. `agent.tracker_cache` is a
+      # `{module, config}` tuple (or `nil` for no caching) and
+      # `agent.tracker_cache_ttl_ms` controls expiry. See
+      # `__workflow_still_active__/1`.
+      tracker_cache: agent_tracker_cache(config),
+      tracker_cache_ttl_ms: agent_tracker_cache_ttl_ms(config),
       # Module-function refs the workflow nodes call. Kept in state so
       # the multi-node AgentWorkflow.run_turn/1 and after_turn/3 don't
       # have to depend on this module directly (which would create a
       # compile cycle).
       turn_body_fn: &__MODULE__.__workflow_collect_turn__/1,
-      still_active_fn: &__MODULE__.__workflow_still_active__/2
+      still_active_fn: &__MODULE__.__workflow_still_active__/1
     }
   end
 
@@ -236,7 +259,24 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   end
 
   @doc false
-  def __workflow_still_active__(issue, config), do: still_active?(issue, config)
+  def __workflow_still_active__(%{tracker_cache: nil} = state) do
+    still_active?(state.issue, state.config)
+  end
+
+  def __workflow_still_active__(%{tracker_cache: cache, issue: issue, config: config} = state) do
+    key = {:tracker, issue.id}
+
+    case Raxol.Agent.Cache.get(cache, key) do
+      {:ok, cached} ->
+        cached
+
+      :miss ->
+        result = still_active?(issue, config)
+        ttl = Map.get(state, :tracker_cache_ttl_ms, 30_000)
+        :ok = Raxol.Agent.Cache.put(cache, key, result, ttl)
+        result
+    end
+  end
 
   defp do_run(%Issue{} = issue, %Config{} = config, opts) do
     parent = Keyword.fetch!(opts, :parent)
@@ -493,6 +533,18 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   defp agent_pause_detector(%Config{runner: %{agent: agent}}) do
     Map.get(agent, :pause_detector)
   end
+
+  defp agent_tracker_cache(%Config{runner: %{agent: agent}}) do
+    Raxol.Agent.Cache.normalize(Map.get(agent, :tracker_cache))
+  end
+
+  defp agent_tracker_cache(_), do: nil
+
+  defp agent_tracker_cache_ttl_ms(%Config{runner: %{agent: agent}}) do
+    Map.get(agent, :tracker_cache_ttl_ms, 30_000)
+  end
+
+  defp agent_tracker_cache_ttl_ms(_), do: 30_000
 
   # -- Prompt building (Liquid via PromptBuilder) -----------------------------
 

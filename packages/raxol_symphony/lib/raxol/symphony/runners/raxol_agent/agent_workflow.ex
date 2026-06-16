@@ -150,10 +150,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow do
           state
       end
 
-    # Tracker check.
+    # Tracker check. The helper receives the whole state so it can
+    # consult ancillary fields (e.g., the optional tracker cache).
     still_active_fn = state.still_active_fn
 
-    case still_active_fn.(state.issue, state.config) do
+    case still_active_fn.(state) do
       :done ->
         {:ok, %{state | run_result: :ok, next_step: :end}}
 
