@@ -2,7 +2,7 @@ defmodule Raxol.Telegram.Guardian.MCPTools do
   @moduledoc """
   Optional MCP tool exports for `Raxol.Telegram.Guardian`.
 
-  Symmetric with ADR-0012 (MCP as rendering target): treats Guardian's
+  Following the MCP-as-rendering-target model, treats Guardian's
   decision boundary as a first-class MCP surface so external agents can
   observe and override join-request screening without protocol glue.
 
@@ -14,7 +14,7 @@ defmodule Raxol.Telegram.Guardian.MCPTools do
     * `telegram_guardian_screen`: runs `Guardian.decide/2` on a synthetic
       applicant without Bot API side effects (useful for testing screeners)
     * `telegram_guardian_list_pending`: returns `[]` in v1; persistence
-      lands in v2 per ADR-0014
+      lands in v2
 
   ## Wiring
 
@@ -166,7 +166,7 @@ defmodule Raxol.Telegram.Guardian.MCPTools do
       name: "telegram_guardian_list_pending",
       description:
         "Returns applicants currently mid-:ask_mini_app decision. " <>
-          "v1 always returns [] (pending-applicants persistence deferred to v2 per ADR-0014).",
+          "v1 always returns [] (pending-applicants persistence deferred to v2).",
       inputSchema: %{
         type: "object",
         properties: %{

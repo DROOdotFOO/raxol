@@ -19,7 +19,7 @@ defmodule Raxol.Telegram.Poll do
       send_poll(chat_id, "Which doc?",
         [
           "Plain text option",
-          link_option("Read ADR-0014", "https://github.com/example/adr/0014"),
+          link_option("Read the docs", "https://github.com/example/docs"),
           %{
             text: "See the source",
             entities: [link_entity(4, 3, "https://github.com/example")]
