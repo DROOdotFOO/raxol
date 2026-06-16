@@ -10,7 +10,7 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
 
   alias Raxol.Symphony.{Config, Issue}
   alias Raxol.Symphony.Runners.RaxolAgent
-  alias Raxol.Symphony.Sandboxes.{TimeOfDayWindow, TurnRateLimit}
+  alias Raxol.Symphony.Sandboxes.{BudgetCap, TimeOfDayWindow, TurnRateLimit}
   alias Raxol.Symphony.Trackers.Memory
 
   setup do
@@ -114,6 +114,29 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
 
       # No turns streamed.
       refute_received {:run_event, "issue-1", %{event: :turn_completed}}
+    end
+  end
+
+  describe "BudgetCap" do
+    test "denies once cumulative spend hits the cap" do
+      Memory.put_issue(%{issue() | state: "In Progress"})
+      attach_denied(self())
+
+      sandbox = %BudgetCap{
+        cap: 1,
+        cost_per_turn: 1,
+        bucket_table: :"integ_bc_#{:erlang.unique_integer([:positive])}"
+      }
+
+      cfg = config([sandbox], 3)
+
+      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+
+      # First turn allowed; budget hits the cap mid-second-turn.
+      assert_received {:run_event, "issue-1", %{event: :turn_completed}}
+
+      assert_receive {:denied, %{reason: :budget_exceeded}}, 200
+      assert_receive {:denied, %{reason: :budget_exceeded}}, 200
     end
   end
 
