@@ -105,17 +105,17 @@ defmodule Raxol.Core.ErrorExperienceTest do
       assert report.context == enhanced.context
       assert report.suggestions_used == []
       assert report.resolution_outcome == :pending
-      assert is_map(report.phase3_metrics)
+      assert is_map(report.optimization_metrics)
     end
 
-    test "includes phase3 metrics in report" do
+    test "includes optimization metrics in report" do
       error = %RuntimeError{message: "memory usage exceeded 2.8MB target"}
       enhanced = ErrorExperience.classify_and_enhance(error, %{memory_mb: 3.5})
 
       report = ErrorExperience.generate_error_report(enhanced)
 
-      assert is_map(report.phase3_metrics)
-      refute Enum.empty?(report.phase3_metrics)
+      assert is_map(report.optimization_metrics)
+      refute Enum.empty?(report.optimization_metrics)
     end
   end
 
@@ -199,7 +199,7 @@ defmodule Raxol.Core.ErrorExperienceTest do
       guided_suggestion = List.first(guided_suggestions)
       assert guided_suggestion.confidence > 0.0
       assert is_binary(guided_suggestion.action)
-      assert guided_suggestion.phase3_context != nil
+      assert guided_suggestion.optimization_context != nil
     end
 
     test "includes related tools in suggestions" do

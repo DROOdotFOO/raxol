@@ -2,16 +2,16 @@ defmodule Raxol.Core.ErrorExperience do
   @moduledoc """
   Enhanced error experience system for Raxol applications.
 
-  Phase 4.3 enhancement that provides intelligent error handling with:
-  - Contextual fix suggestions based on Phase 3 optimizations
-  - Integration with Phase 4.2 development tools
+  Intelligent error handling with:
+  - Contextual fix suggestions based on performance optimizations
+  - Integration with development tools
   - Pattern learning for common error scenarios
   - Interactive error recovery workflows
 
   ## Features
 
   - Smart error classification with performance context
-  - Automatic fix suggestions using Phase 3 knowledge
+  - Automatic fix suggestions using performance knowledge
   - Integration with `mix raxol.analyze` and `mix raxol.debug`
   - Error pattern learning and prevention
   - Interactive recovery console
@@ -37,7 +37,7 @@ defmodule Raxol.Core.ErrorExperience do
           action: String.t() | nil,
           confidence: float(),
           related_tools: [atom()],
-          phase3_context: map() | nil
+          optimization_context: map() | nil
         }
 
   @type enhanced_error :: %{
@@ -51,7 +51,7 @@ defmodule Raxol.Core.ErrorExperience do
           recovery_options: [atom()]
         }
 
-  # Error patterns learned from Phase 3 work
+  # Error patterns learned from performance tuning
   @performance_patterns %{
     slow_parsing: %{
       indicators: [:timeout, :performance_warning, "parser took"],
@@ -62,7 +62,7 @@ defmodule Raxol.Core.ErrorExperience do
           action: "mix raxol.analyze --depth comprehensive --benchmark",
           confidence: 0.9,
           related_tools: [:raxol_analyze, :raxol_profile],
-          phase3_context: %{optimization: "parser_caching", target: "3.3μs/op"}
+          optimization_context: %{optimization: "parser_caching", target: "3.3μs/op"}
         }
       ]
     },
@@ -75,7 +75,7 @@ defmodule Raxol.Core.ErrorExperience do
           action: "Enable buffer pooling and garbage collection optimization",
           confidence: 0.8,
           related_tools: [:raxol_debug, :raxol_profile],
-          phase3_context: %{optimization: "buffer_pooling", target: "2.8MB"}
+          optimization_context: %{optimization: "buffer_pooling", target: "2.8MB"}
         }
       ]
     },
@@ -88,7 +88,7 @@ defmodule Raxol.Core.ErrorExperience do
           action: "mix raxol.debug --trace \"Raxol.UI.Rendering.*\"",
           confidence: 0.85,
           related_tools: [:raxol_debug, :raxol_analyze],
-          phase3_context: %{
+          optimization_context: %{
             optimization: "render_batching",
             system: "damage_tracking"
           }
@@ -103,10 +103,10 @@ defmodule Raxol.Core.ErrorExperience do
   def handle_enhanced_error(error, context \\ %{}) do
     enhanced = classify_and_enhance(error, context)
 
-    # Log with Phase 3 context
+    # Log with optimization context
     log_enhanced_error(enhanced)
 
-    # Trigger appropriate Phase 4.2 tools if available
+    # Trigger appropriate development tools if available
     _ = maybe_trigger_analysis_tools(enhanced)
 
     # Return enhanced error for interactive handling
@@ -114,7 +114,7 @@ defmodule Raxol.Core.ErrorExperience do
   end
 
   @doc """
-  Classify error and provide enhancement based on Phase 3 patterns.
+  Classify error and provide enhancement based on optimization patterns.
   """
   def classify_and_enhance(error, context) do
     category = classify_error(error, context)
@@ -174,7 +174,7 @@ defmodule Raxol.Core.ErrorExperience do
       context: enhanced_error.context,
       suggestions_used: [],
       resolution_outcome: :pending,
-      phase3_metrics: extract_phase3_metrics(enhanced_error)
+      optimization_metrics: extract_optimization_metrics(enhanced_error)
     }
 
     store_error_report(report)
@@ -190,7 +190,7 @@ defmodule Raxol.Core.ErrorExperience do
     {:performance, ["memory", "allocation", "buffer"]},
     {:performance, ["timeout", "slow", "latency"]},
     {:compilation, ["compilation", "syntax"]},
-    {:optimization, ["optimization", "phase3"]}
+    {:optimization, ["optimization"]}
   ]
 
   @spec classify_error(term(), map()) ::
@@ -220,7 +220,7 @@ defmodule Raxol.Core.ErrorExperience do
   end
 
   defp generate_suggestions(error, category, context) do
-    # Pattern-based suggestions from Phase 3 experience
+    # Pattern-based suggestions from prior experience
     pattern_suggestions = find_pattern_suggestions(error)
 
     # Category-specific suggestions
@@ -258,11 +258,11 @@ defmodule Raxol.Core.ErrorExperience do
     base_suggestions = [
       %{
         type: :guided,
-        description: "Analyze performance with Phase 3 tools",
+        description: "Analyze performance with performance tools",
         action: "mix raxol.analyze --target . --benchmark",
         confidence: 0.8,
         related_tools: [:raxol_analyze],
-        phase3_context: %{component: "performance_analyzer"}
+        optimization_context: %{component: "performance_analyzer"}
       },
       %{
         type: :guided,
@@ -270,7 +270,7 @@ defmodule Raxol.Core.ErrorExperience do
         action: "mix raxol.profile --live --threshold 1",
         confidence: 0.8,
         related_tools: [:raxol_profile],
-        phase3_context: %{component: "interactive_profiler"}
+        optimization_context: %{component: "interactive_profiler"}
       }
     ]
 
@@ -278,11 +278,11 @@ defmodule Raxol.Core.ErrorExperience do
     if Map.get(context, :memory_usage, 0) > 2_800_000 do
       memory_suggestion = %{
         type: :automatic,
-        description: "Memory usage exceeds Phase 3 target (2.8MB)",
+        description: "Memory usage exceeds performance target (2.8MB)",
         action: "Enable buffer pooling optimization",
         confidence: 0.9,
         related_tools: [:raxol_debug],
-        phase3_context: %{target: "2.8MB", current: context.memory_usage}
+        optimization_context: %{target: "2.8MB", current: context.memory_usage}
       }
 
       [memory_suggestion | base_suggestions]
@@ -299,7 +299,7 @@ defmodule Raxol.Core.ErrorExperience do
         action: "mix raxol.debug --trace \"Raxol.UI.Rendering.*\"",
         confidence: 0.85,
         related_tools: [:raxol_debug],
-        phase3_context: %{
+        optimization_context: %{
           system: "damage_tracking",
           optimization: "render_batching"
         }
@@ -310,7 +310,7 @@ defmodule Raxol.Core.ErrorExperience do
         action: "Verify @raxol_optimized attribute is set",
         confidence: 0.7,
         related_tools: [:raxol_gen_component],
-        phase3_context: %{pattern: "optimization_marker"}
+        optimization_context: %{pattern: "optimization_marker"}
       }
     ]
   end
@@ -323,7 +323,7 @@ defmodule Raxol.Core.ErrorExperience do
         action: "mix raxol.analyze --depth comprehensive",
         confidence: 0.8,
         related_tools: [:raxol_analyze],
-        phase3_context: %{target: "3.3μs/op", component: "ansi_parser"}
+        optimization_context: %{target: "3.3μs/op", component: "ansi_parser"}
       }
     ]
   end
@@ -332,11 +332,11 @@ defmodule Raxol.Core.ErrorExperience do
     [
       %{
         type: :documentation,
-        description: "Review Phase 3 optimization guide",
-        action: "Check docs/performance/phase3_optimizations.md",
+        description: "Review optimization guide",
+        action: "Check docs/performance/optimizations.md",
         confidence: 0.6,
         related_tools: [],
-        phase3_context: %{documentation: "phase3_guide"}
+        optimization_context: %{documentation: "optimization_guide"}
       }
     ]
   end
@@ -349,7 +349,7 @@ defmodule Raxol.Core.ErrorExperience do
         action: "mix raxol.debug",
         confidence: 0.5,
         related_tools: [:raxol_debug],
-        phase3_context: nil
+        optimization_context: nil
       }
     ]
   end
@@ -381,7 +381,7 @@ defmodule Raxol.Core.ErrorExperience do
         ["ansi_parsing", "parser_state_caching"]
 
       :optimization ->
-        ["phase3_all"]
+        ["all_optimizations"]
 
       _ ->
         []
@@ -403,14 +403,14 @@ defmodule Raxol.Core.ErrorExperience do
     base_context =
       Map.merge(context, %{
         category: category,
-        phase: "4.3_error_experience",
+        subsystem: "error_experience",
         tools_available: available_tools()
       })
 
     case category do
       :performance ->
         Map.merge(base_context, %{
-          phase3_targets: %{parser: "3.3μs/op", memory: "2.8MB"},
+          optimization_targets: %{parser: "3.3μs/op", memory: "2.8MB"},
           analysis_tools: [:raxol_analyze, :raxol_profile]
         })
 
@@ -460,7 +460,7 @@ defmodule Raxol.Core.ErrorExperience do
 
     if enhanced_error.related_optimizations != [] do
       Log.info(
-        "Related Phase 3 Optimizations: #{Enum.join(enhanced_error.related_optimizations, ", ")}"
+        "Related Optimizations: #{Enum.join(enhanced_error.related_optimizations, ", ")}"
       )
     end
 
@@ -486,8 +486,8 @@ defmodule Raxol.Core.ErrorExperience do
         "   Confidence: #{confidence_bar} (#{trunc(suggestion.confidence * 100)}%)"
       )
 
-      if suggestion.phase3_context do
-        Log.info("   Phase 3 Context: #{inspect(suggestion.phase3_context)}")
+      if suggestion.optimization_context do
+        Log.info("   Optimization Context: #{inspect(suggestion.optimization_context)}")
       end
 
       Log.info("")
@@ -503,9 +503,9 @@ defmodule Raxol.Core.ErrorExperience do
 
     Log.info("Impact Level: #{enhanced_error.performance_impact}")
 
-    if enhanced_error.context[:phase3_targets] do
-      targets = enhanced_error.context[:phase3_targets]
-      Log.info("Phase 3 Targets: #{inspect(targets)}")
+    if enhanced_error.context[:optimization_targets] do
+      targets = enhanced_error.context[:optimization_targets]
+      Log.info("Optimization Targets: #{inspect(targets)}")
     end
 
     Log.info(
@@ -554,7 +554,7 @@ defmodule Raxol.Core.ErrorExperience do
     profile: "Start interactive profiler",
     optimize: "Apply automatic optimizations",
     debug_render: "Debug rendering pipeline",
-    check_optimizations: "Check Phase 3 optimizations",
+    check_optimizations: "Check performance optimizations",
     analyze_parser: "Analyze parser performance",
     check_ansi: "Check ANSI sequence handling"
   }
@@ -601,7 +601,7 @@ defmodule Raxol.Core.ErrorExperience do
       category: enhanced_error.category,
       performance_impact: enhanced_error.performance_impact,
       suggestions_count: length(enhanced_error.suggestions),
-      phase3_context: enhanced_error.context[:phase3_targets]
+      optimization_context: enhanced_error.context[:optimization_targets]
     )
 
     :ok
@@ -627,9 +627,9 @@ defmodule Raxol.Core.ErrorExperience do
     end
   end
 
-  defp extract_phase3_metrics(enhanced_error) do
+  defp extract_optimization_metrics(enhanced_error) do
     %{
-      targets_referenced: enhanced_error.context[:phase3_targets],
+      targets_referenced: enhanced_error.context[:optimization_targets],
       optimizations_involved: enhanced_error.related_optimizations,
       tools_suggested:
         enhanced_error.suggestions

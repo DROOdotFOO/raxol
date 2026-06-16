@@ -170,7 +170,7 @@ defmodule Raxol.Core.ErrorPatternLearner.Predictor do
           action: fix,
           confidence: 0.7,
           related_tools: [],
-          phase3_context: %{
+          optimization_context: %{
             source: "learned_pattern",
             frequency: pattern.frequency
           }
