@@ -91,9 +91,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   defp run_via_workflow(%Issue{} = issue, %Config{} = config, opts) do
     resume_token = Keyword.get(opts, :resume_token)
     resume_value = Keyword.get(opts, :resume_value)
+    max_turns = config.agent.max_turns
 
     with {:ok, backend, backend_opts} <- resolve_backend(config),
-         {:ok, compiled} <- AgentWorkflow.compile(workflow_compile_opts(config)) do
+         {:ok, compiled} <-
+           AgentWorkflow.compile(max_turns, workflow_compile_opts(config)) do
       case resume_token do
         %{workflow_run_id: run_id} when not is_nil(run_id) and not is_nil(resume_value) ->
           compiled
@@ -141,7 +143,17 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       pause_detector: agent_pause_detector(config),
       turn: 1,
       max_turns: config.agent.max_turns,
-      body: &__MODULE__.__workflow_turn_body__/1
+      last_events: [],
+      pause_request: nil,
+      last_resume_value: nil,
+      run_result: nil,
+      next_step: nil,
+      # Module-function refs the workflow nodes call. Kept in state so
+      # the multi-node AgentWorkflow.run_turn/1 and after_turn/3 don't
+      # have to depend on this module directly (which would create a
+      # compile cycle).
+      turn_body_fn: &__MODULE__.__workflow_collect_turn__/1,
+      still_active_fn: &__MODULE__.__workflow_still_active__/2
     }
   end
 
@@ -174,25 +186,57 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     {:error, reason}
   end
 
+  # --- Multi-node helpers (Phase 7) ---
+  #
+  # Called from `AgentWorkflow.run_turn/1`. Runs one turn and returns
+  # `{events_list, pause_request_or_nil}`. The detector is consulted
+  # per event; the FIRST event that yields `{:pause, ...}` queues the
+  # pause but stream consumption continues -- pausing fires at the
+  # turn boundary inside `:after_turn_N`, so the LLM turn is never
+  # re-run on resume.
+
   @doc false
-  def __workflow_turn_body__(state) do
+  def __workflow_collect_turn__(state) do
     prompt = build_prompt(state.issue, state.config, state.turn, state.attempt)
 
-    case run_one_turn(state.issue, prompt, state) do
-      :ok ->
-        case still_active?(state.issue, state.config) do
-          {:active, refreshed} -> {:continue, %{state | issue: refreshed}}
-          :done -> :done
-          {:error, _} -> :done
+    stream =
+      stream_module().run(prompt,
+        backend: state.backend,
+        backend_opts: state.backend_opts,
+        system_prompt: state.system_prompt
+      )
+
+    collect_with_detector(stream, state.parent, state.issue.id, state.pause_detector)
+  end
+
+  defp collect_with_detector(stream, parent, issue_id, detector) do
+    Enum.reduce(stream, {[], nil}, fn event, {events, pause_acc} ->
+      send(parent, {:run_event, issue_id, legacy_payload(event)})
+      payload = legacy_payload(event)
+      events = [payload | events]
+
+      pause_acc =
+        case pause_acc do
+          nil ->
+            case apply_detector(detector, event) do
+              {:pause, reason, token} when is_atom(reason) ->
+                {:pause, reason, token}
+
+              _ ->
+                nil
+            end
+
+          existing ->
+            existing
         end
 
-      {:pause, _reason, _token} = pause ->
-        pause
-
-      {:error, _reason} = err ->
-        err
-    end
+      {events, pause_acc}
+    end)
+    |> then(fn {events, pause_acc} -> {Enum.reverse(events), pause_acc} end)
   end
+
+  @doc false
+  def __workflow_still_active__(issue, config), do: still_active?(issue, config)
 
   defp do_run(%Issue{} = issue, %Config{} = config, opts) do
     parent = Keyword.fetch!(opts, :parent)

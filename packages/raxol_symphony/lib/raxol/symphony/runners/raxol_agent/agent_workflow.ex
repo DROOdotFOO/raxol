@@ -1,137 +1,180 @@
 defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow do
   @moduledoc """
-  Single-node `Raxol.Workflow` graph that wraps the existing
-  `Raxol.Symphony.Runners.RaxolAgent` turn loop.
-
-  Opt-in via `agent.workflow_mode: true`. When set, the runner
-  dispatches each run through `Compiled.invoke/resume` instead of
-  calling `RaxolAgent.run_turns/3` directly. Pause detection inside
-  the agent stream calls `Raxol.Workflow.interrupt/1` (which the
-  workflow runtime catches, surfaces as `{:interrupted, run_id, _,
-  reason}`, and checkpoints to the configured Saver).
-
-  ## Why the envelope is opt-in
-
-  The workflow runtime adds two things:
-
-    1. **Durable resume across BEAM restart** -- the workflow Saver
-       can be Dets/Postgrex, in which case a paused run survives
-       process death.
-    2. **Symmetric pause API** -- the runner's `{:pause, ...}` return
-       and the orchestrator's `resume_run/3` are wired around
-       `Workflow.interrupt/1` instead of synthetic tuples, matching
-       the pattern `Raxol.ACP.Job.Workflow` uses.
-
-  In return it costs an extra LLM call per pause (see "Limitation"
-  below). The default detector path (no envelope) avoids both.
+  Multi-node `Raxol.Workflow` graph that wraps the `RaxolAgent` turn
+  loop with per-turn checkpointing (Phase 7, supersedes the Phase 6
+  single-node MVP).
 
   ## Topology
 
-      __start__ -> :run_turns -> __end__
+  Compiled per-run, parameterized by `max_turns`:
 
-  One node. The node body wraps `RaxolAgent.run_turns/3` plus the
-  pause-detector logic the runner already has, but routes pauses
-  through `Workflow.interrupt/1` rather than synthetic returns.
+      __start__
+        -> :turn_1 -> :after_turn_1
+                       [continue] -> :turn_2 -> :after_turn_2
+                                                  ...
+                                                    -> :turn_N -> :after_turn_N
+                                                                    -> __end__
+                       [end]      -> __end__
 
-  ## Limitation: single-node graph re-runs the in-flight turn on resume
+  Each `:turn_N` node runs ONE turn (build prompt, pull stream,
+  forward events). Each `:after_turn_N` node:
 
-  The Workflow runtime checkpoints state **before** the node body
-  starts. On resume, the SAME node body re-runs with the pre-node
-  state -- which for this MVP envelope means re-running the
-  in-flight turn (re-building the prompt, re-pulling the LLM stream).
+    1. Refreshes the issue via the tracker (`still_active?`).
+    2. If a pause was queued during turn_N, calls
+       `Raxol.Workflow.interrupt/1`.
+    3. Decides whether to continue to `:turn_{N+1}` or end.
 
-  This is acceptable for many cases (test runs, deterministic
-  prompts, idempotent tool calls) but adds latency + cost when
-  pauses are frequent. The Phase 7 follow-up splits the graph into
-  `turn_1, after_turn_1, turn_2, after_turn_2, ...` nodes so the
-  resume re-runs only the lightweight `after_turn_N` decision node,
-  not the LLM turn itself.
+  ## Why split per turn
+
+  The workflow runtime checkpoints state **before** a node body runs.
+  Phase 6's single-node graph re-ran the in-flight LLM turn on resume
+  because the checkpoint reset to "before turn 1". Phase 7 puts the
+  interrupt in `:after_turn_N` so resume re-runs the after node
+  (cheap: tracker check + decision) but never the LLM stream from
+  `:turn_N`.
 
   ## State
 
-  The workflow state is the same `ctx` map `RaxolAgent.do_run/3`
-  builds, plus a `:run_result` slot the node writes when it finishes
-  (one of `:ok`, `:max_turns_reached`, `{:error, reason}`).
+      %{
+        # Static across the run
+        issue, config, parent, attempt,
+        backend, backend_opts, system_prompt, pause_detector,
+        max_turns,
 
-  ## Resume semantics
+        # Mutated per turn
+        turn,                # 1..max_turns, advanced in after_turn_N
+        last_events,         # list of stream events from the most recent turn
+        pause_request,       # {:pause, reason, token} | nil; queued in turn_N
+        last_resume_value,   # set when after_turn_N resumes
 
-  `Raxol.Workflow.interrupt/1` returns the resume value on the
-  second pass. The node body stashes it in `state.last_resume_value`
-  so the next prompt builder can incorporate the operator's
-  decision. The current implementation just passes through; richer
-  prompt threading is a future addition.
+        # Filled when the loop terminates
+        run_result,          # :ok | :max_turns_reached | {:error, reason}
+        next_step            # :next | :end -- read by conditional edges
+      }
+
+  ## Detector contract
+
+  In multi-node mode the detector is consulted per-event during
+  `turn_N`. If any event causes a `{:pause, reason, token}`, the
+  pause is QUEUED (state.pause_request) and stream consumption
+  continues to completion. The pause fires at the turn boundary
+  inside `after_turn_N`. This means the turn's tail events are
+  still forwarded before the run pauses; this is a deliberate
+  trade-off so that resuming never has to re-run the LLM call.
   """
 
   alias Raxol.Workflow.{Compiled, Graph}
 
-  @typedoc """
-  The accumulated agent run state passed between turn iterations
-  inside the single node body.
-  """
-  @type state :: %{
-          required(:issue) => term(),
-          required(:config) => term(),
-          required(:parent) => pid(),
-          required(:attempt) => non_neg_integer() | nil,
-          required(:backend) => module(),
-          required(:backend_opts) => keyword(),
-          required(:system_prompt) => binary() | nil,
-          required(:pause_detector) => term() | nil,
-          required(:turn) => pos_integer(),
-          required(:max_turns) => pos_integer(),
-          required(:body) => (state() -> :ok | {:error, term()} | {:pause, atom(), term()}),
-          optional(:run_result) => :ok | :max_turns_reached | {:error, term()},
-          optional(:last_resume_value) => term()
-        }
-
   @doc """
-  Build and compile the single-node turn-loop graph.
+  Build and compile the multi-node turn-loop graph for
+  `max_turns` (>= 1).
 
-  `opts` is forwarded to `Raxol.Workflow.Graph.compile/2`; the most
-  load-bearing one is `:saver`, which controls whether paused runs
-  are durable across the BEAM restart. The default (no `:saver`)
-  uses an in-memory checkpoint store that survives the orchestrator
-  process but not the BEAM.
+  `opts` forwards to `Graph.compile/2`. The most load-bearing one is
+  `:saver`; the runner defaults to an in-memory ETS saver if the
+  consumer hasn't set `agent.workflow_saver`.
   """
-  @spec compile(keyword()) :: {:ok, Compiled.t()} | {:error, term()}
-  def compile(opts \\ []) do
-    Graph.new(:raxol_agent_turn_loop)
-    |> Graph.add_node(:run_turns, &run_turns_node/1)
-    |> Graph.add_edge(:__start__, :run_turns)
-    |> Graph.add_edge(:run_turns, :__end__)
-    |> Graph.compile(opts)
+  @spec compile(pos_integer(), keyword()) :: {:ok, Compiled.t()} | {:error, term()}
+  def compile(max_turns, opts \\ []) when is_integer(max_turns) and max_turns >= 1 do
+    g = Graph.new(:raxol_agent_turn_loop)
+
+    # __start__ -> :turn_1
+    g = Graph.add_edge(g, :__start__, turn_node(1))
+
+    # Per-turn pair of nodes: :turn_N -> :after_turn_N
+    g =
+      Enum.reduce(1..max_turns, g, fn n, g ->
+        g
+        |> Graph.add_node(turn_node(n), &__MODULE__.run_turn/1)
+        |> Graph.add_node(after_node(n), build_after_node_body(n, max_turns))
+        |> Graph.add_edge(turn_node(n), after_node(n))
+      end)
+
+    # Conditional fan-out from :after_turn_N to either :turn_{N+1} or __end__.
+    g =
+      Enum.reduce(1..(max_turns - 1)//1, g, fn n, g ->
+        Graph.add_conditional_edge(
+          g,
+          after_node(n),
+          [turn_node(n + 1), :__end__],
+          fn state ->
+            if Map.get(state, :next_step) == :next,
+              do: turn_node(n + 1),
+              else: :__end__
+          end
+        )
+      end)
+
+    # Final after-turn always goes to __end__.
+    g = Graph.add_edge(g, after_node(max_turns), :__end__)
+
+    Graph.compile(g, opts)
   end
 
-  # --- Node body ---
+  # --- Node id builders ---
 
-  defp run_turns_node(state) do
-    iterate(state)
+  defp turn_node(n), do: :"turn_#{n}"
+  defp after_node(n), do: :"after_turn_#{n}"
+
+  # --- Turn node body ---
+  #
+  # Runs one LLM turn: build prompt, pull stream, forward events,
+  # consult detector PER EVENT. Pause requests are queued (not
+  # acted on) so the stream is consumed to completion. The next
+  # node (:after_turn_N) handles the pause.
+
+  @doc false
+  def run_turn(state) do
+    body_fn = state.turn_body_fn
+    {events, pause_request} = body_fn.(state)
+    {:ok, %{state | last_events: events, pause_request: pause_request}}
   end
 
-  defp iterate(%{turn: t, max_turns: max} = state) when t > max do
-    {:ok, Map.put(state, :run_result, :max_turns_reached)}
+  # --- After-turn node body ---
+
+  defp build_after_node_body(n, max_turns) do
+    fn state -> after_turn(state, n, max_turns) end
   end
 
-  defp iterate(state) do
-    case state.body.(state) do
-      {:continue, new_state} ->
-        # One turn completed successfully + tracker says continue.
-        iterate(%{new_state | turn: new_state.turn + 1})
+  @doc false
+  def after_turn(state, n, max_turns) do
+    # Pause check FIRST so the operator's decision can override the
+    # tracker (e.g., reject the run early). interrupt/1 throws on
+    # first pass, returns the resume value on resume.
+    state =
+      case state.pause_request do
+        {:pause, reason, _token} ->
+          resume_value = Raxol.Workflow.interrupt(reason)
+          %{state | pause_request: nil, last_resume_value: resume_value}
 
+        nil ->
+          state
+      end
+
+    # Tracker check.
+    still_active_fn = state.still_active_fn
+
+    case still_active_fn.(state.issue, state.config) do
       :done ->
-        # Tracker reported the issue terminal mid-loop. Finish clean.
-        {:ok, Map.put(state, :run_result, :ok)}
+        {:ok, %{state | run_result: :ok, next_step: :end}}
 
-      {:pause, reason, _detector_token} when is_atom(reason) ->
-        # Interrupt the run. interrupt/1 throws on the first pass and
-        # the workflow runtime catches + checkpoints. On resume the
-        # scratchpad pops the resume value and execution continues
-        # here.
-        resume_value = Raxol.Workflow.interrupt(reason)
-        iterate(%{state | turn: state.turn + 1, last_resume_value: resume_value})
+      {:error, _reason} ->
+        # Tracker unavailable -- end this run; the orchestrator will retry.
+        {:ok, %{state | run_result: :ok, next_step: :end}}
 
-      {:error, reason} ->
-        {:ok, Map.put(state, :run_result, {:error, reason})}
+      {:active, refreshed} ->
+        cond do
+          n >= max_turns ->
+            {:ok,
+             %{
+               state
+               | issue: refreshed,
+                 run_result: :max_turns_reached,
+                 next_step: :end
+             }}
+
+          true ->
+            {:ok, %{state | turn: n + 1, issue: refreshed, next_step: :next}}
+        end
     end
   end
 end
