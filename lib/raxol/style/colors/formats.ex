@@ -96,7 +96,7 @@ defmodule Raxol.Style.Colors.Formats do
   @spec rgb_to_ansi({byte(), byte(), byte()}) :: pos_integer()
   def rgb_to_ansi({r, g, b})
       when r in 0..255//1 and g in 0..255//1 and b in 0..255//1 do
-    # For now, we'll use a simple approximation
+    # Uses a simple approximation
     # This could be improved with a more sophisticated color matching algorithm
     find_closest_ansi_256(r, g, b)
   end

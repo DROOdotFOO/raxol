@@ -538,7 +538,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     Raxol.Core.Runtime.Log.warning_with_context(label, context)
   end
 
-  # ADR-0013 PR-C: call-mode mirrors of the :dispatch cast clauses.
+  # Call-mode mirrors of the :dispatch cast clauses.
   # Backpressure escalates to GenServer.call/3 when the mailbox is hot;
   # the work is identical, only the reply contract differs.
 
@@ -684,7 +684,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
 
   # Shared work for the generic {:dispatch, event} path. Returns a
   # standard GenServer cast reply tuple; to_call_reply/1 reshapes it
-  # for the call clause (ADR-0013 PR-C).
+  # for the call clause.
   defp dispatch_full_event(event, state) do
     Raxol.Core.Runtime.Log.debug(
       "[Dispatcher] dispatching event: #{inspect(event)}"

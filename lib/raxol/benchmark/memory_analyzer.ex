@@ -4,7 +4,7 @@ defmodule Raxol.Benchmark.MemoryAnalyzer do
   @moduledoc """
   Advanced memory pattern analysis for Raxol benchmarks.
 
-  Phase 3 Implementation: Provides deep memory analysis including:
+  Provides deep memory analysis including:
   - Peak vs. sustained memory usage patterns
   - Garbage collection behavior analysis
   - Memory fragmentation detection
@@ -205,7 +205,7 @@ defmodule Raxol.Benchmark.MemoryAnalyzer do
 
   defp calculate_efficiency_score(benchmark_results) do
     # Memory efficiency = (useful work / memory allocated)
-    # For simplicity, we'll use inverse of memory variance as efficiency
+    # Approximates efficiency as the inverse of memory variance
     memory_values = extract_memory_values(benchmark_results)
 
     if length(memory_values) > 1 do

@@ -186,7 +186,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Dets do
   # Full DETS file scan keeping the highest-step checkpoint per
   # thread_id, then handing off to the shared Saver pipeline to filter
   # for `:interrupt_reason` and sort newest-paused-first. Acceptable
-  # for ADR-0017 because DETS deployments are pre-alpha and job counts
+  # because DETS deployments are pre-alpha and job counts
   # are bounded; high-throughput consumers should choose the Postgrex
   # saver which uses an indexed query.
   defp list_paused_rows(table, limit) do

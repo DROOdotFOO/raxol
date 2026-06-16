@@ -2,7 +2,7 @@ defmodule Raxol.Benchmark.MemoryDSL do
   @moduledoc """
   Enhanced DSL for memory benchmarking with advanced assertions.
 
-  Phase 3 Implementation: Provides memory-specific assertions and analysis:
+  Provides memory-specific assertions and analysis:
   - assert_memory_peak/2 - Peak memory usage assertions
   - assert_memory_sustained/2 - Sustained memory usage assertions
   - assert_gc_pressure/2 - Garbage collection pressure assertions

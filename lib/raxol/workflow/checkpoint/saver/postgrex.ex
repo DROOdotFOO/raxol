@@ -31,7 +31,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
   Run the SQL returned by `create_table_sql/1` once (e.g. via Ecto
   migration or `psql`) before the first run. The table has two
   nullable columns — `interrupt_reason` and `paused_at` — populated
-  only when the runtime writes a pause checkpoint (ADR-0017). A
+  only when the runtime writes a pause checkpoint. A
   partial index over them keeps `list_paused/2` queries fast even
   when the active-runs table is large.
 
@@ -53,7 +53,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
         WHERE interrupt_reason IS NOT NULL;
       \"\"\"
 
-  Pre-ADR-0017 deployments can migrate with:
+  Earlier deployments can migrate with:
 
       ALTER TABLE raxol_workflow_checkpoints
         ADD COLUMN interrupt_reason text,

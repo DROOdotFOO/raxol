@@ -4,7 +4,7 @@ defmodule Mix.Tasks.Raxol.Bench.Memory do
   @moduledoc """
   Enhanced memory benchmarking task for Raxol terminal emulator.
 
-  Phase 2 Implementation: Terminal-specific memory scenarios with meaningful allocations.
+  Terminal-specific memory scenarios with meaningful allocations.
 
   Usage:
     mix raxol.bench.memory                    # Run all memory benchmarks

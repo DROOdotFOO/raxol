@@ -2,11 +2,11 @@ defmodule Raxol.Workflow.Runtime do
   @moduledoc """
   Execution runtime for `Raxol.Workflow.Compiled` graphs.
 
-  Implements the synchronous `invoke/3` and `resume/4` paths described
-  in ADR-0015. Walks the graph from `:__start__` to `:__end__`,
+  Implements the synchronous `invoke/3` and `resume/4` paths.
+  Walks the graph from `:__start__` to `:__end__`,
   executes each node according to its descriptor type, dispatches any
   returned directives through `Raxol.Core.Runtime.Directive.Executor`,
-  and emits per-node telemetry with full Phase 24 trace context
+  and emits per-node telemetry with full trace context
   (trace_id, span_id, parent_span_id, causation_id) propagated through
   `TraceContext`.
 
@@ -300,7 +300,7 @@ defmodule Raxol.Workflow.Runtime do
   # A checkpoint with `:interrupt_reason` in metadata is a pause
   # checkpoint: the node interrupted on the prior run and the runtime
   # must re-execute it. A normal successful-node checkpoint resumes by
-  # traversing past the node, matching pre-ADR-0017 semantics.
+  # traversing past the node, matching the original traversal semantics.
   defp resume_mode_for(%Checkpoint{metadata: %{interrupt_reason: reason}})
        when not is_nil(reason),
        do: :reenter
@@ -497,7 +497,7 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  # ADR-0017: on interrupt, write a pause checkpoint with
+  # On interrupt, write a pause checkpoint with
   # `interrupt_reason` and `paused_at` in metadata so the run is
   # enumerable through `Saver.list_paused/2` and so resume knows to
   # re-enter the same node (versus traversing past it). The `:paused`

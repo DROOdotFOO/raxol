@@ -42,7 +42,7 @@ defmodule Raxol.UI.Rendering.RenderBatcher do
   Submits a render update to the batcher.
   Updates are accumulated until the next frame flush.
 
-  Adopts ADR-0013 `:drop_when_full` backpressure: when the batcher's
+  Uses `:drop_when_full` backpressure: when the batcher's
   mailbox exceeds the watermark, the update is dropped and the next
   non-dropped update's diff naturally subsumes it. Drops surface via
   `[:raxol, :runtime, :backpressure]` telemetry with

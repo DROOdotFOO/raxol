@@ -415,7 +415,7 @@ defmodule Raxol.UI.Layout.Table do
       |> Map.put(:width, measurements.width)
       |> Map.put(:height, measurements.height)
 
-    # For now, return just the enriched table element (tests expect this)
+    # Returns the enriched table element
     # Cell positioning can be handled by a different layer if needed
     [enriched_table]
   end

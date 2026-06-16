@@ -210,13 +210,13 @@ defmodule Raxol.UI.Theming.PaletteRegistry do
 
   defp load_palettes_from_storage do
     # This would load from a JSON file or database
-    # For now, return empty map - implement persistence as needed
+    # Returns an empty map; persistence is not implemented
     %{}
   end
 
   defp save_palettes_to_storage(palettes, storage_path) do
     # This would save to a JSON file or database
-    # For now, just log - implement persistence as needed
+    # Logs only; persistence is not implemented
     Log.debug("Would save #{map_size(palettes)} palettes to #{storage_path}")
 
     :ok

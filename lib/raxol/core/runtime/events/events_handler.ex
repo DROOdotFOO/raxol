@@ -124,7 +124,7 @@ defmodule Raxol.Core.Runtime.Events.Handler do
 
   defp put_handler(id, handler) do
     # Create a simple module and function name for EventManager registration
-    # Since EventManager expects (event_type, module, function), we'll register
+    # EventManager expects (event_type, module, function), so register
     # a generic handler that can invoke the function-based handlers
     Enum.each(handler.event_types, fn event_type ->
       Raxol.Core.Events.EventManager.register_handler(

@@ -155,7 +155,7 @@ defmodule Raxol.CLI.ErrorFormatter do
     lines = ["  Impact: #{enhanced.performance_impact}"]
 
     lines =
-      case enhanced.context[:phase3_targets] do
+      case enhanced.context[:optimization_targets] do
         nil ->
           lines
 
