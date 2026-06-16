@@ -235,6 +235,8 @@ defmodule Raxol.Symphony.OrchestratorTest do
       snap = Orchestrator.snapshot(pid)
       assert snap.counts.running == 0
       assert snap.counts.paused == 1
+      # Paused entries must NOT trigger continuation/failure retries.
+      assert snap.counts.retrying == 0
       assert [paused] = snap.paused
       assert paused.issue_id == "a"
       assert paused.issue_identifier == "MT-1"
