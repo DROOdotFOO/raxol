@@ -130,8 +130,24 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow do
   @doc false
   def run_turn(state) do
     body_fn = state.turn_body_fn
-    {events, pause_request} = body_fn.(state)
-    {:ok, %{state | last_events: events, pause_request: pause_request}}
+
+    case body_fn.(state) do
+      {:ok, events, pause_request} ->
+        {:ok, %{state | last_events: events, pause_request: pause_request}}
+
+      {:error, reason} ->
+        # Hard turn failure (e.g. PolicyApplier exhausted retries or
+        # the timeout policy aborted). Surface to state so after_turn
+        # short-circuits straight to __end__ and the runner translates
+        # the workflow result back into {:error, reason} from run/3.
+        {:ok,
+         %{
+           state
+           | last_events: [],
+             pause_request: nil,
+             run_result: {:error, reason}
+         }}
+    end
   end
 
   # --- After-turn node body ---
@@ -142,6 +158,18 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow do
 
   @doc false
   def after_turn(state, n, max_turns) do
+    # If the turn body failed hard (PolicyApplier exhausted retries,
+    # timeout, etc.) -- run_result is set and we short-circuit to
+    # __end__ without consulting the tracker or the pause queue.
+    # The runner's translate_workflow_result surfaces this back to
+    # the orchestrator as {:error, reason} from run/3.
+    case Map.get(state, :run_result) do
+      {:error, _} -> {:ok, %{state | next_step: :end}}
+      _ -> do_after_turn(state, n, max_turns)
+    end
+  end
+
+  defp do_after_turn(state, n, max_turns) do
     # Pause check FIRST so the operator's decision can override the
     # tracker (e.g., reject the run early). interrupt/1 throws on
     # first pass, returns the resume value on resume.

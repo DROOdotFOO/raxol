@@ -311,7 +311,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     sandboxes = Map.get(state, :sandboxes, [])
     turn_payload = %{turn: state.turn, issue_id: state.issue.id}
 
-    {events, pause_request} =
+    result =
       case Raxol.Agent.Sandbox.Chain.authorize(
              sandboxes,
              :turn,
@@ -333,11 +333,23 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
             }
           )
 
-          {[], nil}
+          # Sandbox deny is NOT a hard failure -- it's an intentional
+          # "this turn does not happen" decision. Return as success
+          # with empty events so the orchestrator's failure-retry
+          # ladder is not triggered (a retry would just be denied
+          # again). Operators observe the deny through telemetry.
+          {:ok, [], nil}
       end
 
-    # Append a state_snapshot per completed turn. Idempotent at the
-    # ThreadLog level (each call gets a fresh monotonic sequence).
+    # Append a state_snapshot per completed turn (including failed
+    # turns so the audit trail captures what happened). The error
+    # field surfaces above; success has it as nil.
+    {events, pause_request, error} =
+      case result do
+        {:ok, events, pause_request} -> {events, pause_request, nil}
+        {:error, reason} -> {[], nil, reason}
+      end
+
     last_event_name =
       case List.last(events) do
         %{event: ev} -> ev
@@ -353,11 +365,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           turn: state.turn,
           event_count: length(events),
           last_event: last_event_name,
-          paused: pause_request != nil
+          paused: pause_request != nil,
+          error: error
         }
       )
 
-    {events, pause_request}
+    result
   end
 
   defp run_authorized_turn(state, prompt, policies, turn_payload) do
@@ -375,14 +388,16 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
     case Raxol.Agent.PolicyApplier.apply(policies, op, turn_payload) do
       {:ok, {events, pause_request}} ->
-        {events, pause_request}
+        {:ok, events, pause_request}
 
-      {:error, _reason} ->
-        # Policies couldn't recover (retries exhausted / timeout).
-        # Advance with empty turn output; the orchestrator's retry
-        # layer handles whole-run failure. Surfacing per-turn error
-        # to a hard {:error, _} from the workflow is a follow-up.
-        {[], nil}
+      {:error, reason} ->
+        # Policies could not recover (retries exhausted / wall-clock
+        # timeout). Unlike a sandbox deny, this IS a hard failure --
+        # surface it as `{:error, _}` so AgentWorkflow.run_turn sets
+        # state.run_result and the runner's translate_workflow_result
+        # propagates {:error, ...} back to the orchestrator (which
+        # then schedules a failure retry with exponential backoff).
+        {:error, {:policy_failed, reason}}
     end
   end
 
