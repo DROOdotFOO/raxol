@@ -36,6 +36,31 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           policies:
             [Raxol.Agent.Policy.Timeout.new(30_000),
              Raxol.Agent.Policy.Retry.exponential(max_attempts: 3, base_ms: 200)]
+          sandboxes:
+            [%MyApp.TurnBudgetSandbox{max_turns_per_hour: 60},
+             %MyApp.PromptDenyListSandbox{patterns: [~r/SECRET/]}]
+
+  ## Per-turn sandboxes
+
+  Optional: set `agent.sandboxes` to a list of structs implementing
+  the `Raxol.Agent.Sandbox` protocol. Before each turn's stream
+  pull, the runner walks the chain via `Sandbox.Chain.authorize/4`
+  with action `:turn` and payload `%{turn, issue_id}`. The first
+  deny short-circuits.
+
+  The Symphony runner's built-in action is `:turn`; the `Sandbox`
+  dimensions documented in `raxol_agent` (`Shell`, `SendAgent`,
+  `Async`) abstain for `:turn` so they compose harmlessly. Consumers
+  ship their own structs implementing `Raxol.Agent.Sandbox` to
+  express Symphony-specific policies (per-issue rate limit,
+  prompt deny-list, time-of-day window, ...).
+
+  On deny: emits `[:raxol, :symphony, :sandbox, :denied]` telemetry
+  and skips the turn (empty events, no pause). The orchestrator's
+  retry layer handles whole-run failure. Same graceful degradation
+  as Policy failures (Phase 12).
+
+  Default `[]` (empty list) skips authorization entirely.
 
   ## Per-turn policies
 
@@ -228,6 +253,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       # leaves the turn body unwrapped; non-empty wraps each LLM
       # turn via `PolicyApplier.apply/3`.
       policies: agent_policies(config),
+      # Optional per-turn `Raxol.Agent.Sandbox` chain. Default `[]`
+      # skips authorization; non-empty walks the chain via
+      # `Sandbox.Chain.authorize/4` before each turn's stream pull.
+      sandboxes: agent_sandboxes(config),
       # Module-function refs the workflow nodes call. Kept in state so
       # the multi-node AgentWorkflow.run_turn/1 and after_turn/3 don't
       # have to depend on this module directly (which would create a
@@ -279,32 +308,31 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   def __workflow_collect_turn__(state) do
     prompt = build_prompt(state.issue, state.config, state.turn, state.attempt)
     policies = Map.get(state, :policies, [])
-
-    op = fn _params ->
-      stream =
-        stream_module().run(prompt,
-          backend: state.backend,
-          backend_opts: state.backend_opts,
-          system_prompt: state.system_prompt
-        )
-
-      {:ok,
-       collect_with_detector(stream, state.parent, state.issue.id, state.pause_detector)}
-    end
+    sandboxes = Map.get(state, :sandboxes, [])
+    turn_payload = %{turn: state.turn, issue_id: state.issue.id}
 
     {events, pause_request} =
-      case Raxol.Agent.PolicyApplier.apply(policies, op, %{
-             turn: state.turn,
-             issue_id: state.issue.id
-           }) do
-        {:ok, {events, pause_request}} ->
-          {events, pause_request}
+      case Raxol.Agent.Sandbox.Chain.authorize(
+             sandboxes,
+             :turn,
+             turn_payload,
+             %{agent_id: state.issue.id, agent_module: __MODULE__}
+           ) do
+        :ok ->
+          run_authorized_turn(state, prompt, policies, turn_payload)
 
-        {:error, _reason} ->
-          # Policies couldn't recover (retries exhausted / timeout).
-          # Advance with empty turn output; the orchestrator's retry
-          # layer handles whole-run failure. Surfacing per-turn error
-          # to a hard {:error, _} from the workflow is a follow-up.
+        {:deny, reason} ->
+          :telemetry.execute(
+            [:raxol, :symphony, :sandbox, :denied],
+            %{},
+            %{
+              agent_id: state.issue.id,
+              action: :turn,
+              reason: reason,
+              turn: state.turn
+            }
+          )
+
           {[], nil}
       end
 
@@ -330,6 +358,32 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       )
 
     {events, pause_request}
+  end
+
+  defp run_authorized_turn(state, prompt, policies, turn_payload) do
+    op = fn _params ->
+      stream =
+        stream_module().run(prompt,
+          backend: state.backend,
+          backend_opts: state.backend_opts,
+          system_prompt: state.system_prompt
+        )
+
+      {:ok,
+       collect_with_detector(stream, state.parent, state.issue.id, state.pause_detector)}
+    end
+
+    case Raxol.Agent.PolicyApplier.apply(policies, op, turn_payload) do
+      {:ok, {events, pause_request}} ->
+        {events, pause_request}
+
+      {:error, _reason} ->
+        # Policies couldn't recover (retries exhausted / timeout).
+        # Advance with empty turn output; the orchestrator's retry
+        # layer handles whole-run failure. Surfacing per-turn error
+        # to a hard {:error, _} from the workflow is a follow-up.
+        {[], nil}
+    end
   end
 
   defp collect_with_detector(stream, parent, issue_id, detector) do
@@ -664,6 +718,15 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   end
 
   defp agent_policies(_), do: []
+
+  defp agent_sandboxes(%Config{runner: %{agent: agent}}) do
+    case Map.get(agent, :sandboxes, []) do
+      list when is_list(list) -> list
+      _ -> []
+    end
+  end
+
+  defp agent_sandboxes(_), do: []
 
   # -- Prompt building (Liquid via PromptBuilder) -----------------------------
 
