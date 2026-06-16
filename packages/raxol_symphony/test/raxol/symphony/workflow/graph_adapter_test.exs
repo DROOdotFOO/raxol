@@ -37,7 +37,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
   end
 
   describe "from_workflow/1" do
-    test "builds a compiled graph with the five canonical nodes", _ctx do
+    test "builds a compiled graph with the six canonical nodes", _ctx do
       assert {:ok, compiled} = GraphAdapter.from_workflow([])
 
       node_ids = Map.keys(compiled.nodes) |> Enum.sort()
@@ -47,6 +47,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
                :completion,
                :evidence_collection,
                :runner_dispatch,
+               :runner_wait,
                :tracker_poll
              ]
     end
@@ -107,6 +108,44 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       assert {:error, :simulated} = final.run_result
       assert final.evidence != nil
       assert %DateTime{} = final.completed_at
+    end
+
+    test "runner pause surfaces as {:interrupted, ...}; resume completes the run", ctx do
+      Memory.put_issue(issue("p1", "MT-P1", "Todo"))
+
+      Noop.Director.set(
+        "MT-P1",
+        {:pause_then, :awaiting_review, %{phase: 1}, {:succeed_after, 0}}
+      )
+
+      table = :"adapter_pause_#{:erlang.unique_integer([:positive])}"
+      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+
+      {:ok, compiled} = GraphAdapter.from_workflow(saver: saver)
+      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      # First invoke: runner pauses, runner_wait interrupts.
+      assert {:interrupted, run_id, paused_state, interrupt_value} =
+               Compiled.invoke(compiled, state)
+
+      assert interrupt_value == {:awaiting_review, %{phase: 1}}
+      assert paused_state.runner_pause == {:awaiting_review, %{phase: 1}}
+      assert paused_state.run_result == nil
+
+      # Resume with an :approved value; runner re-runs with the resume context
+      # and now hits the {:succeed_after, 0} action queued by Director.
+      assert {:ok, final, meta} = Compiled.resume(compiled, run_id, :approved)
+
+      assert final.run_result == :ok
+      assert final.runner_pause == nil
+      assert final.runner_pending_resume == nil
+      assert final.evidence != nil
+      assert %DateTime{} = final.completed_at
+
+      # Meta from resume reports only the nodes the resume executed
+      # (runner_wait completion + runner_dispatch re-run + evidence + completion).
+      assert meta.nodes_executed >= 4
     end
 
     test "checkpoints written when saver is configured", ctx do

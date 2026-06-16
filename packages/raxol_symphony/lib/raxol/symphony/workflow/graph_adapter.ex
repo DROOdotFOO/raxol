@@ -11,22 +11,34 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
 
   ## Canonical pipeline
 
-  The graph wires the five stages the orchestrator already implements
-  inline into discrete nodes the workflow runtime can checkpoint
-  individually:
+  The graph wires the orchestrator's inline stages into discrete nodes
+  the workflow runtime can checkpoint individually:
 
       :__start__ -> :tracker_poll -> :candidate_selection
-        -> :runner_dispatch -> :evidence_collection -> :completion -> :__end__
+        -> :runner_dispatch -> [:runner_wait -> :runner_dispatch] *
+        -> :evidence_collection -> :completion -> :__end__
+
+  `:runner_dispatch` and `:runner_wait` form a pause/resume loop: when
+  the runner returns `{:pause, reason, token}`, `:runner_dispatch`
+  stashes the pause context and routes to `:runner_wait`, which calls
+  `Raxol.Workflow.interrupt/1` so the runtime checkpoints + surfaces
+  `{:interrupted, run_id, state, {reason, token}}` to the caller. On
+  `Compiled.resume/3` the wait node pops the resume value, stashes it
+  in state, and routes back to `:runner_dispatch`, which re-invokes the
+  runner with `resume_token` + `resume_value` opts. The loop continues
+  until the runner returns `:ok` or `{:error, _}`.
 
   Each node accumulates fields into the workflow state map:
 
-  | Node                  | Reads                  | Writes                |
-  | --------------------- | ---------------------- | --------------------- |
-  | `tracker_poll`        | `config`               | `candidates`          |
-  | `candidate_selection` | `candidates`           | `candidate`           |
-  | `runner_dispatch`     | `candidate`, `config`  | `run_result`          |
-  | `evidence_collection` | `candidate`, `config`  | `evidence`            |
-  | `completion`          | `run_result`,`evidence`| `completed_at`        |
+  | Node                  | Reads                          | Writes                |
+  | --------------------- | ------------------------------ | --------------------- |
+  | `tracker_poll`        | `config`                       | `candidates`          |
+  | `candidate_selection` | `candidates`                   | `candidate`           |
+  | `runner_dispatch`     | `candidate`, `config`,         | `run_result` *or*     |
+  |                       | `runner_pending_resume`        | `runner_pause`        |
+  | `runner_wait`         | `runner_pause`                 | `runner_pending_resume` |
+  | `evidence_collection` | `candidate`, `config`          | `evidence`            |
+  | `completion`          | `run_result`,`evidence`        | `completed_at`        |
 
   ## Required runtime opts
 
@@ -54,11 +66,6 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
 
   ## Out of scope (deferred to follow-up PRs)
 
-  - Interrupt-based pauses on runner dispatch. The runner is invoked
-    synchronously (`Runner.run/3` returns `:ok | {:error, _}`), so this
-    PR does not exercise `Workflow.interrupt/1`. A follow-up can wrap
-    long-running runners with an interrupt-and-resume mechanism keyed
-    on the orchestrator's existing `:run_event` messages.
   - Per-node tracker / runner overrides via custom node bodies. The
     adapter ships one canonical shape; richer composition is a later
     concern.
@@ -83,6 +90,8 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
           optional(:candidates) => [Issue.t()],
           optional(:candidate) => Issue.t() | nil,
           optional(:run_result) => :ok | {:error, term()},
+          optional(:runner_pause) => {atom(), term()} | nil,
+          optional(:runner_pending_resume) => {term(), term()} | nil,
           optional(:evidence) => Evidence.t(),
           optional(:completed_at) => DateTime.t(),
           optional(:runner_module) => module() | nil,
@@ -104,16 +113,27 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     |> Graph.add_node(:tracker_poll, &tracker_poll_node/1)
     |> Graph.add_node(:candidate_selection, &candidate_selection_node/1)
     |> Graph.add_node(:runner_dispatch, &runner_dispatch_node/1)
+    |> Graph.add_node(:runner_wait, &runner_wait_node/1)
     |> Graph.add_node(:evidence_collection, &evidence_collection_node/1)
     |> Graph.add_node(:completion, &completion_node/1)
     |> Graph.add_edge(:__start__, :tracker_poll)
     |> Graph.add_edge(:tracker_poll, :candidate_selection)
     |> Graph.add_edge(:candidate_selection, :runner_dispatch)
-    |> Graph.add_edge(:runner_dispatch, :evidence_collection)
+    |> Graph.add_conditional_edge(
+      :runner_dispatch,
+      [:runner_wait, :evidence_collection],
+      &choose_after_runner_dispatch/1
+    )
+    |> Graph.add_edge(:runner_wait, :runner_dispatch)
     |> Graph.add_edge(:evidence_collection, :completion)
     |> Graph.add_edge(:completion, :__end__)
     |> Graph.compile(compile_opts(opts))
   end
+
+  defp choose_after_runner_dispatch(%{runner_pause: pause}) when not is_nil(pause),
+    do: :runner_wait
+
+  defp choose_after_runner_dispatch(_state), do: :evidence_collection
 
   defp compile_opts(opts) do
     opts
@@ -182,7 +202,10 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
   end
 
   defp runner_dispatch_node(%{candidate: nil} = state) do
-    {:ok, Map.put(state, :run_result, {:error, :no_candidate})}
+    {:ok,
+     state
+     |> Map.put(:run_result, {:error, :no_candidate})
+     |> Map.put(:runner_pause, nil)}
   end
 
   defp runner_dispatch_node(
@@ -193,18 +216,63 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
 
     parent = Map.get(state, :parent_pid, self())
     attempt = Map.get(state, :attempt) || 1
+    workspace = Map.get(state, :workspace_path, "")
+
+    {resume_token, resume_value, state} = consume_pending_resume(state)
+
+    base_opts = [parent: parent, attempt: attempt, workspace_path: workspace]
+    run_opts = maybe_put_resume_opts(base_opts, resume_token, resume_value)
 
     with {:ok, runner_module} <- Runner.resolve(config, runner_opts) do
-      result =
-        runner_module.run(issue, config,
-          parent: parent,
-          attempt: attempt,
-          workspace_path: Map.get(state, :workspace_path, "")
-        )
-
-      {:ok, Map.put(state, :run_result, result)}
+      result = runner_module.run(issue, config, run_opts)
+      {:ok, store_runner_result(state, result)}
     end
   end
+
+  defp maybe_put_resume_opts(opts, nil, nil), do: opts
+
+  defp maybe_put_resume_opts(opts, token, value) do
+    opts ++ [resume_token: token, resume_value: value]
+  end
+
+  defp consume_pending_resume(%{runner_pending_resume: {token, value}} = state) do
+    {token, value, Map.put(state, :runner_pending_resume, nil)}
+  end
+
+  defp consume_pending_resume(state), do: {nil, nil, state}
+
+  defp store_runner_result(state, {:pause, reason, token}) when is_atom(reason) do
+    state
+    |> Map.put(:runner_pause, {reason, token})
+    |> Map.put(:run_result, nil)
+  end
+
+  defp store_runner_result(state, result) do
+    state
+    |> Map.put(:run_result, result)
+    |> Map.put(:runner_pause, nil)
+  end
+
+  defp runner_wait_node(%{runner_pause: {reason, token}} = state) do
+    # `interrupt/1` throws on first execution; the runtime catches the
+    # throw, persists `state_before_node` (which carries `runner_pause`),
+    # and surfaces `{:interrupted, run_id, state, {reason, token}}` to
+    # the caller. On `Compiled.resume/3` this node re-runs with the
+    # caller's resume value in the scratchpad; `interrupt/1` returns it
+    # without throwing.
+    resume_value = Raxol.Workflow.interrupt({reason, token})
+
+    {:ok,
+     state
+     |> Map.put(:runner_pending_resume, {token, resume_value})
+     |> Map.put(:runner_pause, nil)}
+  end
+
+  # Defensive: a misconfigured run reaches the wait node without a
+  # `:runner_pause` set (e.g. the chooser was bypassed). Treat the
+  # absence as `:ok` and fall through; the next dispatch sees no
+  # pending_resume and runs the runner fresh.
+  defp runner_wait_node(state), do: {:ok, state}
 
   defp evidence_collection_node(%{candidate: nil} = state) do
     {:ok, Map.put(state, :evidence, nil)}
