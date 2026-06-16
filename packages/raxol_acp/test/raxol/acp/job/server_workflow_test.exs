@@ -37,8 +37,7 @@ defmodule Raxol.ACP.Job.ServerWorkflowTest do
     job_id
   end
 
-  describe "Job.Server with :via_workflow true: parity with the legacy path" do
-
+  describe "Job.Server: workflow-backed transitions" do
     test "happy path: request -> negotiation -> transaction -> evaluation -> completed" do
       job_id = start_workflow_job()
 
@@ -55,7 +54,7 @@ defmodule Raxol.ACP.Job.ServerWorkflowTest do
                Job.Server.transition(job_id, :approve, %{step: 4}, @sig)
     end
 
-    test "memo history mirrors the legacy path's record shape" do
+    test "memo history record shape" do
       job_id = start_workflow_job()
 
       Job.Server.transition(job_id, :accept_request, %{step: 1}, @sig)
@@ -75,7 +74,7 @@ defmodule Raxol.ACP.Job.ServerWorkflowTest do
       assert m2.memo_type == :txhash
     end
 
-    test "invalid event for current phase returns the legacy error tuple" do
+    test "invalid event for current phase returns {:error, {:invalid_transition, _, _}}" do
       job_id = start_workflow_job()
 
       assert {:error, {:invalid_transition, :request, :deliver}} =

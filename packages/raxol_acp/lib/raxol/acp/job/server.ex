@@ -42,8 +42,9 @@ defmodule Raxol.ACP.Job.Server do
   Each transition runs through a `Raxol.ACP.Job.Workflow` graph, which
   writes a checkpoint to the configured Saver after every memo. On a
   transient restart the new process hydrates from the Saver's latest
-  checkpoint. The legacy `Raxol.ACP.Job.Store` continues to receive
-  mirror writes for any consumer that reads from it.
+  checkpoint. `Raxol.ACP.Job.Store` receives mirror writes on every
+  transition so consumers reading from the Store (the bench runner,
+  the seller queue, downstream dashboards) see the same view.
 
   Saver selection:
 
@@ -124,10 +125,13 @@ defmodule Raxol.ACP.Job.Server do
   ## Optional persistence options
 
   - `:persist?` -- default `true`. When true, every successful
-    transition writes through `Raxol.ACP.Job.Store`, and `init/1`
-    hydrates state + memos from the store if a prior record exists for
-    this `:job_id`. Set to `false` to bypass persistence (e.g. tests
-    that exercise raw transition semantics).
+    transition mirrors to `Raxol.ACP.Job.Store` and writes a
+    workflow checkpoint to the configured Saver
+    (`Application.put_env(:raxol_acp, :job_workflow_saver, ...)`).
+    On a transient restart the new process hydrates state + memos
+    from the Saver. Set to `false` for tests that exercise raw
+    transition semantics; a per-process ephemeral ETS Saver is
+    minted automatically so `Compiled.resume/4` still works.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -311,8 +315,8 @@ defmodule Raxol.ACP.Job.Server do
   # Compile the canonical ACP graph and either resume from a prior
   # checkpoint or invoke the workflow fresh to create the initial
   # __start__ checkpoint. State is read back from the workflow runtime
-  # so it stays the single source of truth while the legacy
-  # `Raxol.ACP.Job.Store` is kept in sync via mirror writes.
+  # so it stays the single source of truth; `Raxol.ACP.Job.Store` is
+  # kept in sync via mirror writes for consumers that read from it.
   #
   # When `persist?` is false we still need a Saver because
   # `Compiled.resume/4` requires one (`{:error, :no_saver_configured, _}`
