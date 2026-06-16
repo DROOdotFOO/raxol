@@ -1,7 +1,25 @@
 defmodule Raxol.Agent.AIBackendTest do
   use ExUnit.Case, async: true
 
+  alias Raxol.Agent.AIBackend
   alias Raxol.Agent.Backend.Mock
+
+  defmodule InternalLoopBackend do
+    @behaviour Raxol.Agent.AIBackend
+
+    @impl true
+    def complete(_messages, _opts), do: {:ok, %{content: "", usage: %{}, metadata: %{}}}
+    @impl true
+    def available?, do: true
+    @impl true
+    def name, do: "Internal Loop"
+    @impl true
+    def capabilities, do: [:completion, :tool_use]
+    @impl true
+    def handles_tools_internally?, do: true
+    @impl true
+    def max_context_tokens, do: 200_000
+  end
 
   describe "Mock backend" do
     test "returns default response" do
@@ -69,6 +87,24 @@ defmodule Raxol.Agent.AIBackendTest do
       assert Mock.name() == "Mock Backend"
       assert :completion in Mock.capabilities()
       assert :streaming in Mock.capabilities()
+    end
+  end
+
+  describe "capability negotiation" do
+    test "handles_tools_internally?/1 defaults to false for backends without the callback" do
+      refute AIBackend.handles_tools_internally?(Mock)
+    end
+
+    test "handles_tools_internally?/1 returns the backend's value when implemented" do
+      assert AIBackend.handles_tools_internally?(InternalLoopBackend)
+    end
+
+    test "max_context_tokens/1 defaults to nil for backends without the callback" do
+      assert AIBackend.max_context_tokens(Mock) == nil
+    end
+
+    test "max_context_tokens/1 returns the backend's value when implemented" do
+      assert AIBackend.max_context_tokens(InternalLoopBackend) == 200_000
     end
   end
 end
