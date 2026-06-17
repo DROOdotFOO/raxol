@@ -34,6 +34,8 @@ defmodule RaxolPayments.MixProject do
     [
       # Compile-time only: Action macro, CommandHook behaviour, Command struct
       raxol_dep(:raxol_agent, "~> 2.4", "../raxol_agent", runtime: false),
+      # Raxol.Core.Stores.Dets/Naming back Raxol.Payments.Mandate.Store
+      raxol_dep(:raxol_core, "~> 2.4", "../raxol_core", []),
       {:req, "~> 0.5"},
       {:ex_secp256k1, "~> 0.8"},
       {:ex_keccak, "~> 0.7"},

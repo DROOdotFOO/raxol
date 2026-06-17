@@ -67,6 +67,7 @@ defmodule Raxol.ACP.Job.Store do
   use Raxol.Core.Behaviours.BaseManager
 
   alias Raxol.ACP.Job.{Server, StateMachine}
+  alias Raxol.Core.Stores.{Dets, Naming}
 
   @type record :: %{
           state: StateMachine.state(),
@@ -146,13 +147,13 @@ defmodule Raxol.ACP.Job.Store do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
-    name = registered_name!()
+    name = Naming.registered_name!(__MODULE__)
     ets_table = :ets.new(table(name), [:named_table, :public, :set, read_concurrency: true])
 
     dets =
-      case dets_path(opts) do
+      case Dets.resolve_path(opts, :raxol_acp, :job_store_path) do
         nil -> nil
-        path when is_binary(path) -> open_dets(path, ets_table)
+        path -> Dets.open!(ets_table, path, fn {key, value} -> :ets.insert(ets_table, {key, value}) end)
       end
 
     {:ok, %{table: ets_table, dets: dets}}
@@ -162,7 +163,7 @@ defmodule Raxol.ACP.Job.Store do
   def handle_manager_call({:save, job_id, state, memos}, _from, server_state) do
     record = %{state: state, memos: memos, updated_at: DateTime.utc_now()}
     true = :ets.insert(server_state.table, {job_id, record})
-    persist(server_state.dets, job_id, record)
+    Dets.put(server_state.dets, job_id, record)
     {:reply, :ok, server_state}
   end
 
@@ -180,105 +181,22 @@ defmodule Raxol.ACP.Job.Store do
     }
 
     true = :ets.insert(server_state.table, {job_id, record})
-    persist(server_state.dets, job_id, record)
+    Dets.put(server_state.dets, job_id, record)
     {:reply, :ok, server_state}
   end
 
   def handle_manager_call({:delete, job_id}, _from, server_state) do
     :ets.delete(server_state.table, job_id)
-    persist_delete(server_state.dets, job_id)
+    Dets.delete(server_state.dets, job_id)
     {:reply, :ok, server_state}
   end
 
   def handle_manager_call(:clear, _from, server_state) do
     :ets.delete_all_objects(server_state.table)
-    persist_clear(server_state.dets)
+    Dets.clear(server_state.dets)
     {:reply, :ok, server_state}
   end
 
   @impl GenServer
-  def terminate(_reason, %{dets: nil}), do: :ok
-
-  def terminate(_reason, %{dets: dets}) do
-    _ = :dets.sync(dets)
-    _ = :dets.close(dets)
-    :ok
-  end
-
-  # -- Private: name + DETS resolution --
-
-  defp registered_name! do
-    case Process.info(self(), :registered_name) do
-      {:registered_name, name} when is_atom(name) ->
-        name
-
-      _ ->
-        raise """
-        Raxol.ACP.Job.Store must be started with a registered :name
-        (an atom) so its ETS table can be derived. Use
-        `Store.start_link(name: :my_store)` or rely on the default
-        (`Raxol.ACP.Job.Store`).
-        """
-    end
-  end
-
-  defp dets_path(opts) do
-    case Keyword.get(opts, :dets_path) do
-      nil -> Application.get_env(:raxol_acp, :job_store_path)
-      path -> path
-    end
-  end
-
-  # -- DETS helpers --
-
-  # Opens (or creates) the DETS file at `path`, replays every record
-  # into the live ETS table, and returns the DETS handle.
-  #
-  # Failure modes:
-  # - parent dir doesn't exist: caller error, raise loudly so misconfig
-  #   shows up at boot rather than in a silent half-broken state.
-  # - file is corrupt: :dets.open_file/2 already attempts repair; if
-  #   that fails, we propagate the error rather than silently fall
-  #   back to ETS-only.
-  defp open_dets(path, ets_table) do
-    path
-    |> Path.expand()
-    |> Path.dirname()
-    |> File.mkdir_p!()
-
-    file_charlist = path |> Path.expand() |> String.to_charlist()
-
-    case :dets.open_file(ets_table, type: :set, file: file_charlist) do
-      {:ok, table} ->
-        :ok =
-          :dets.foldl(
-            fn {key, value}, _acc ->
-              :ets.insert(ets_table, {key, value})
-              :ok
-            end,
-            :ok,
-            table
-          )
-
-        table
-
-      {:error, reason} ->
-        raise """
-        Raxol.ACP.Job.Store: failed to open DETS file at #{inspect(path)}
-        (reason: #{inspect(reason)}).
-
-        Either fix the path or remove :dets_path / :job_store_path to
-        fall back to in-memory ETS only.
-        """
-    end
-  end
-
-  defp persist(nil, _key, _value), do: :ok
-  defp persist(dets, key, value), do: :dets.insert(dets, {key, value})
-
-  defp persist_delete(nil, _key), do: :ok
-  defp persist_delete(dets, key), do: :dets.delete(dets, key)
-
-  defp persist_clear(nil), do: :ok
-  defp persist_clear(dets), do: :dets.delete_all_objects(dets)
+  def terminate(_reason, server_state), do: Dets.close(server_state.dets)
 end

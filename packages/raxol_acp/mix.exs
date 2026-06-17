@@ -39,6 +39,8 @@ defmodule RaxolAcp.MixProject do
   defp deps do
     [
       raxol_dep(:raxol_payments, "~> 0.1", "../raxol_payments", []),
+      # Raxol.Core.Stores.Dets/Naming back Raxol.ACP.Job.Store
+      raxol_dep(:raxol_core, "~> 2.4", "../raxol_core", []),
       raxol_dep(:raxol_mcp, "~> 2.4", "../raxol_mcp", runtime: false),
       # Compile-time only: Directive.Executor protocol for Raxol.ACP.Directive.* impls
       raxol_dep(:raxol_agent, "~> 2.4", "../raxol_agent", runtime: false),
