@@ -106,15 +106,29 @@ defmodule Raxol.Agent do
       def memory_provider, do: nil
 
       @doc """
+      Returns the procedural-memory (skills) provider for this agent, or `nil`.
+
+      Override to return a `Raxol.Agent.Skills.Store`-compatible module. When
+      set, the skill actions (`skills_list`, `skill_view`, `skill_manage`) are
+      exposed automatically and the agent should put
+      `Raxol.Agent.Skills.provider_context(provider)` under `context[:skills]`
+      when invoking a Strategy or `Raxol.Agent.Stream`. Defaults to `nil`
+      (skills disabled).
+      """
+      def skills_provider, do: nil
+
+      @doc """
       Returns a list of Action modules available to this agent.
 
       Used by `Agent.Process` with a Strategy to determine which
       Actions can be invoked. Override to expose Actions as tools.
-      Defaults to the memory actions when `memory_provider/0` is set,
-      otherwise `[]`.
+      Defaults to the memory actions when `memory_provider/0` is set and the
+      skill actions when `skills_provider/0` is set, otherwise `[]`.
       """
       def available_actions do
-        if memory_provider(), do: Raxol.Agent.Actions.Memory.actions(), else: []
+        memory = if memory_provider(), do: Raxol.Agent.Actions.Memory.actions(), else: []
+        skills = if skills_provider(), do: Raxol.Agent.Actions.Skills.actions(), else: []
+        memory ++ skills
       end
 
       defoverridable init: 1,
@@ -131,6 +145,7 @@ defmodule Raxol.Agent do
                      sandbox: 0,
                      thread_log: 0,
                      memory_provider: 0,
+                     skills_provider: 0,
                      available_actions: 0
 
       @doc false

@@ -39,6 +39,7 @@ defmodule RaxolAgent.MixProject do
       raxol_dep(:raxol_mcp, "~> 2.4", "../raxol_mcp"),
       {:circular_buffer, "~> 1.0"},
       {:jason, "~> 1.4"},
+      {:yaml_elixir, "~> 2.12"},
       {:req, "~> 0.5", optional: true},
 
       # Dev/test only
