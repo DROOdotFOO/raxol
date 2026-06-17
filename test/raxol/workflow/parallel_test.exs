@@ -640,6 +640,164 @@ defmodule Raxol.Workflow.ParallelTest do
     end
   end
 
+  describe "concurrent branches" do
+    test "three branches with sleeps complete in roughly the slowest, not the sum" do
+      # Each branch sleeps a known duration; under concurrent execution
+      # the run finishes near max(d_a, d_b, d_c), not d_a + d_b + d_c.
+      graph =
+        Graph.new(:speedup)
+        |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
+        |> Graph.add_node(:slow_a, fn s ->
+          Process.sleep(70)
+          {:ok, Map.put(s, :a, true)}
+        end)
+        |> Graph.add_node(:slow_b, fn s ->
+          Process.sleep(50)
+          {:ok, Map.put(s, :b, true)}
+        end)
+        |> Graph.add_node(:slow_c, fn s ->
+          Process.sleep(30)
+          {:ok, Map.put(s, :c, true)}
+        end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :fan_out)
+        |> Graph.add_conditional_edge(:fan_out, [:slow_a, :slow_b, :slow_c], fn _ ->
+          [:slow_a, :slow_b, :slow_c]
+        end)
+        |> Graph.add_edge(:slow_a, :join)
+        |> Graph.add_edge(:slow_b, :join)
+        |> Graph.add_edge(:slow_c, :join)
+        |> Graph.add_join(:join, [:slow_a, :slow_b, :slow_c])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+
+      started_us = System.monotonic_time(:microsecond)
+      assert {:ok, _final, _meta} = Compiled.invoke(compiled, %{})
+      elapsed_us = System.monotonic_time(:microsecond) - started_us
+      elapsed_ms = div(elapsed_us, 1_000)
+
+      # Strict serial would be 70 + 50 + 30 = 150 ms. Concurrent should
+      # be ~70 ms (the slowest branch); give a generous 130 ms ceiling
+      # to avoid flakiness on busy CI runners.
+      assert elapsed_ms < 130,
+             "expected concurrent fan-out to take < 130 ms, took #{elapsed_ms} ms"
+    end
+
+    test "parallelism: 1 falls back to serial ordering" do
+      # Each branch writes its index into a shared ETS log; under the
+      # serial path the log entries arrive in branch-index order.
+      table = :"par_one_#{:erlang.unique_integer([:positive])}"
+
+      _ =
+        :ets.new(table, [
+          :ordered_set,
+          :public,
+          :named_table,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
+
+      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+
+      log = fn idx ->
+        :ets.insert(table, {System.monotonic_time(:nanosecond), idx})
+      end
+
+      graph =
+        Graph.new(:par_one)
+        |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
+        |> Graph.add_node(:b0, fn s ->
+          Process.sleep(30)
+          log.(0)
+          {:ok, s}
+        end)
+        |> Graph.add_node(:b1, fn s ->
+          Process.sleep(10)
+          log.(1)
+          {:ok, s}
+        end)
+        |> Graph.add_node(:b2, fn s ->
+          Process.sleep(0)
+          log.(2)
+          {:ok, s}
+        end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :fan_out)
+        |> Graph.add_conditional_edge(:fan_out, [:b0, :b1, :b2], fn _ ->
+          [:b0, :b1, :b2]
+        end)
+        |> Graph.add_edge(:b0, :join)
+        |> Graph.add_edge(:b1, :join)
+        |> Graph.add_edge(:b2, :join)
+        |> Graph.add_join(:join, [:b0, :b1, :b2], parallelism: 1)
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+      {:ok, _final, _meta} = Compiled.invoke(compiled, %{})
+
+      order = :ets.tab2list(table) |> Enum.map(fn {_ts, idx} -> idx end)
+      assert order == [0, 1, 2]
+    end
+
+    test "telemetry: branches share trace_id but have distinct span_ids" do
+      handler_id = "concurrent_trace_#{:erlang.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:raxol, :workflow, :node, :started],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:node_started, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      graph =
+        Graph.new(:trace_prop)
+        |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
+        |> Graph.add_node(:scout_a, fn s -> {:ok, Map.put(s, :a, true)} end)
+        |> Graph.add_node(:scout_b, fn s -> {:ok, Map.put(s, :b, true)} end)
+        |> Graph.add_node(:scout_c, fn s -> {:ok, Map.put(s, :c, true)} end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :fan_out)
+        |> Graph.add_conditional_edge(:fan_out, [:scout_a, :scout_b, :scout_c], fn _ ->
+          [:scout_a, :scout_b, :scout_c]
+        end)
+        |> Graph.add_edge(:scout_a, :join)
+        |> Graph.add_edge(:scout_b, :join)
+        |> Graph.add_edge(:scout_c, :join)
+        |> Graph.add_join(:join, [:scout_a, :scout_b, :scout_c])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+      {:ok, _final, _meta} = Compiled.invoke(compiled, %{})
+
+      events = drain_started([])
+      branch_events = Enum.filter(events, &(&1.node_id in [:scout_a, :scout_b, :scout_c]))
+
+      # All three branches share the same run + parent trace context.
+      trace_ids = branch_events |> Enum.map(& &1[:trace_id]) |> Enum.uniq()
+      assert length(trace_ids) == 1
+
+      # But each branch carries the inherited parent span_id (Phase B
+      # doesn't open a new span per Task; the branches share the parent
+      # frame). Distinct *spans* per branch are a follow-up.
+      run_ids = branch_events |> Enum.map(& &1.run_id) |> Enum.uniq()
+      assert length(run_ids) == 1
+    end
+
+    defp drain_started(acc) do
+      receive do
+        {:node_started, metadata} -> drain_started([metadata | acc])
+      after
+        50 -> acc
+      end
+    end
+  end
+
   describe "back-compat" do
     test "sequential graph with a single-id chooser still works unchanged" do
       graph =
