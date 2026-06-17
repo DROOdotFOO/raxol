@@ -54,7 +54,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.SelfImproveTest do
       }
     }
 
-    %{config: config, ss: ss}
+    %{config: config, ss: ss, mem: mem, skills: skills}
   end
 
   describe "configured?/1" do
@@ -116,6 +116,48 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.SelfImproveTest do
       }
 
       assert :ok = SelfImprove.fire(config, %{id: 1}, [%{event: :text_delta, message: "x"}])
+    end
+  end
+
+  describe "simple run/3 path" do
+    alias Raxol.Symphony.Config
+    alias Raxol.Symphony.Issue
+    alias Raxol.Symphony.Runners.RaxolAgent
+    alias Raxol.Symphony.Trackers.Memory, as: Tracker
+
+    test "fires the hook and feeds session_search after a real turn", %{
+      ss: ss,
+      mem: mem,
+      skills: skills
+    } do
+      start_supervised!({Tracker, []})
+      issue = %Issue{id: "issue-9", identifier: "MT-9", title: "Ship it", state: "Todo"}
+      Tracker.put_issue(%{issue | state: "Done"})
+
+      config =
+        Config.from_workflow(%{
+          config: %{
+            tracker: %{kind: "memory", active_states: ["Todo"], terminal_states: ["Done"]},
+            agent: %{max_turns: 1},
+            runner: %{
+              kind: "raxol_agent",
+              agent: %{
+                backend: "mock",
+                response: "deployed via flyctl",
+                module: DemoAgent,
+                self_improve_opts: %{
+                  memory_opts: [server: mem],
+                  skills_opts: [server: skills],
+                  session_search: ss
+                }
+              }
+            }
+          },
+          prompt_template: "Work on {{ issue.identifier }}"
+        })
+
+      assert :ok = RaxolAgent.run(issue, config, parent: self())
+      assert [%{conversation_id: "issue-9"}] = SessionSearch.search(ss, "flyctl")
     end
   end
 

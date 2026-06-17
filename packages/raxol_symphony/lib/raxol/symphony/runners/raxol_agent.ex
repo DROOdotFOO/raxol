@@ -503,7 +503,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   defp run_turns(%Issue{} = issue, %Config{} = config, ctx) do
     prompt = build_prompt(issue, config, ctx.turn, ctx.attempt)
 
-    case run_one_turn(issue, prompt, ctx) do
+    case run_one_turn(issue, config, prompt, ctx) do
       :ok -> continue_or_finish(issue, config, ctx)
       {:pause, _reason, _token} = pause -> pause
       {:error, reason} -> {:error, reason}
@@ -524,7 +524,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     end
   end
 
-  defp run_one_turn(%Issue{} = issue, prompt, ctx) do
+  defp run_one_turn(%Issue{} = issue, %Config{} = config, prompt, ctx) do
     stream =
       stream_module().run(prompt,
         backend: ctx.backend,
@@ -532,6 +532,16 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
         system_prompt: ctx.system_prompt
       )
 
+    if SelfImprove.configured?(config) do
+      {result, events} = forward_collecting(stream, ctx.parent, issue.id, ctx.pause_detector)
+      SelfImprove.fire(config, issue, events)
+      result
+    else
+      forward_default(stream, ctx, issue)
+    end
+  end
+
+  defp forward_default(stream, ctx, issue) do
     cond do
       ctx.pause_detector ->
         forward_with_detector(stream, ctx.parent, issue.id, ctx.pause_detector)
@@ -543,6 +553,33 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
         legacy_forward(stream, ctx.parent, issue.id)
     end
   end
+
+  # Like `forward_with_detector` but also accumulates the forwarded payloads, so
+  # the self-improvement hook can review the turn. Used only when self-improve is
+  # configured; the default path above is untouched. A nil detector falls through
+  # (apply_detector returns `:continue`).
+  defp forward_collecting(stream, parent, issue_id, detector) do
+    {result, events} =
+      Enum.reduce_while(stream, {{:error, :no_done}, []}, fn event, {_result, acc} ->
+        send(parent, {:run_event, issue_id, legacy_payload(event)})
+        acc = [legacy_payload(event) | acc]
+        {step, result} = collect_decision(event, detector)
+        {step, {result, acc}}
+      end)
+
+    {result, Enum.reverse(events)}
+  end
+
+  defp collect_decision(event, detector) do
+    case apply_detector(detector, event) do
+      {:pause, reason, token} when is_atom(reason) -> {:halt, {:pause, reason, token}}
+      _ -> done_decision(event)
+    end
+  end
+
+  defp done_decision({:done, _info}), do: {:halt, :ok}
+  defp done_decision({:error, reason}), do: {:halt, {:error, reason}}
+  defp done_decision(_event), do: {:cont, {:error, :no_done}}
 
   # Pause-detector aware stream enumeration. Forwards every event the
   # same way `legacy_forward/3` does, but on each iteration also
