@@ -144,20 +144,19 @@ defmodule Raxol.Workflow.GraphPropertyTest do
   defp arbitrary_graph do
     gen all(
           node_count <- integer(0..6),
-          edge_count <- integer(0..10)
+          ids = for(n <- 1..node_count//1, do: String.to_atom("n_#{n}")),
+          edge_pool = [@start | ids] ++ [@end_],
+          edges <-
+            list_of(tuple({member_of(edge_pool), member_of(edge_pool)}),
+              max_length: 10
+            )
         ) do
-      ids = for n <- 1..node_count, n > 0, do: String.to_atom("n_#{n}")
-
       graph =
         Enum.reduce(ids, Graph.new(:arb), fn id, g ->
           Graph.add_node(g, id, fn s -> {:ok, s} end)
         end)
 
-      edge_pool = [@start | ids] ++ [@end_]
-
-      Enum.reduce(1..edge_count, graph, fn _, g ->
-        from = Enum.random(edge_pool)
-        to = Enum.random(edge_pool)
+      Enum.reduce(edges, graph, fn {from, to}, g ->
         Graph.add_edge(g, from, to)
       end)
     end
