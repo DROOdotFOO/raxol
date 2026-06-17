@@ -91,7 +91,7 @@ defmodule Raxol.Workflow.Edge do
     @type t :: %__MODULE__{
             target: Raxol.Workflow.Node.id(),
             upstream: [Raxol.Workflow.Node.id()],
-            reducer: (([map()]) -> map()) | nil,
+            reducer: ([map()] -> map()) | nil,
             timeout_ms: pos_integer() | nil,
             parallelism: pos_integer() | :branches
           }

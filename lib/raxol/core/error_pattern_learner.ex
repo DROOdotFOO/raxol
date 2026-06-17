@@ -140,7 +140,11 @@ defmodule Raxol.Core.ErrorPatternLearner do
       )
 
     updated_correlations =
-      update_optimization_correlations(state.optimization_correlations, error, context)
+      update_optimization_correlations(
+        state.optimization_correlations,
+        error,
+        context
+      )
 
     new_state = %{
       state

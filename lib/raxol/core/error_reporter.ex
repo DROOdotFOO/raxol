@@ -330,7 +330,10 @@ defmodule Raxol.Core.ErrorReporter do
   defp add_comprehensive_data(base_report, config, error, context) do
     base_report
     |> add_standard_data(config, error, context)
-    |> Map.put(:optimization_analysis, get_optimization_analysis(error, context))
+    |> Map.put(
+      :optimization_analysis,
+      get_optimization_analysis(error, context)
+    )
     |> Map.put(:tool_analysis, get_available_tools_analysis(error, context))
     |> Map.put(
       :recovery_options,
