@@ -148,7 +148,12 @@ defmodule Raxol.Workflow.Graph do
 
     %{
       graph
-      | channels: Map.put(channels, name, %Channel{name: name, into: into, with: reducer})
+      | channels:
+          Map.put(channels, name, %Channel{
+            name: name,
+            into: into,
+            with: reducer
+          })
     }
   end
 
@@ -170,6 +175,11 @@ defmodule Raxol.Workflow.Graph do
     * `:timeout_ms` -- max wall-clock to wait for all branches before
       failing with `{:branch_timeout, missing}`. Default: inherits the
       run's `:run_timeout_ms`.
+    * `:parallelism` -- branch execution concurrency. `:branches`
+      (default) runs every branch concurrently via `Task.async_stream`.
+      A positive integer caps `max_concurrency` (`1` selects the
+      serial path, useful when consumers need branch-index-order
+      side effects).
 
   `compile/2` validates that `target` and every `upstream` id refer to
   declared nodes.
@@ -179,16 +189,25 @@ defmodule Raxol.Workflow.Graph do
       when is_list(upstream) and upstream != [] do
     reducer = Keyword.get(opts, :reduce)
     timeout = Keyword.get(opts, :timeout_ms)
+    parallelism = Keyword.get(opts, :parallelism, :branches)
 
     if reducer != nil and not is_function(reducer, 1) do
       raise ArgumentError, "join :reduce must be a 1-arity function"
+    end
+
+    unless parallelism == :branches or
+             (is_integer(parallelism) and parallelism > 0) do
+      raise ArgumentError,
+            "join :parallelism must be :branches or a positive integer; got: " <>
+              inspect(parallelism)
     end
 
     put_edge(graph, %JoinEdge{
       target: target,
       upstream: upstream,
       reducer: reducer,
-      timeout_ms: timeout
+      timeout_ms: timeout,
+      parallelism: parallelism
     })
   end
 
@@ -403,7 +422,9 @@ defmodule Raxol.Workflow.Graph do
   end
 
   defp validate_join_targets(joins, known) do
-    case Enum.find(joins, fn %JoinEdge{target: t} -> not MapSet.member?(known, t) end) do
+    case Enum.find(joins, fn %JoinEdge{target: t} ->
+           not MapSet.member?(known, t)
+         end) do
       nil -> :ok
       %JoinEdge{target: t} -> {:error, {:join_target_unknown, t}}
     end
@@ -426,7 +447,8 @@ defmodule Raxol.Workflow.Graph do
   # exactly one barrier. Two joins sharing an upstream is a config error.
   defp validate_join_upstream_uniqueness(joins) do
     {_seen, shared} =
-      Enum.reduce(joins, {%{}, []}, fn %JoinEdge{target: t, upstream: ups}, {seen, dupes} ->
+      Enum.reduce(joins, {%{}, []}, fn %JoinEdge{target: t, upstream: ups},
+                                       {seen, dupes} ->
         Enum.reduce(ups, {seen, dupes}, fn up, {s, d} ->
           case Map.get(s, up) do
             nil -> {Map.put(s, up, t), d}
@@ -437,8 +459,11 @@ defmodule Raxol.Workflow.Graph do
       end)
 
     case shared do
-      [] -> :ok
-      targets -> {:error, {:join_upstream_shared, Enum.sort(Enum.uniq(targets))}}
+      [] ->
+        :ok
+
+      targets ->
+        {:error, {:join_upstream_shared, Enum.sort(Enum.uniq(targets))}}
     end
   end
 

@@ -58,7 +58,8 @@ defmodule Raxol.Core.ErrorTemplates do
       - ETS table growth beyond expected bounds
       - Render batching queues accumulating
       """,
-      optimization_context: "performance target: 2.8MB maximum memory per session",
+      optimization_context:
+        "performance target: 2.8MB maximum memory per session",
       suggested_actions: [
         "mix raxol.debug --trace \"*\" --memory-threshold 2.8MB",
         "Enable automatic buffer pooling optimization",
@@ -428,7 +429,8 @@ defmodule Raxol.Core.ErrorTemplates do
       This error can be investigated using the development tools
       that provide insights into performance optimizations.
       """,
-      optimization_context: "Use development tools to investigate performance impact",
+      optimization_context:
+        "Use development tools to investigate performance impact",
       suggested_actions: [
         "mix raxol.debug --trace \"*\"",
         "mix raxol.analyze --target .",

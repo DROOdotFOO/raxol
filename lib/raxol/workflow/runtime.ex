@@ -48,6 +48,10 @@ defmodule Raxol.Workflow.Runtime do
   @branch_id_key :__raxol_workflow_branch_id__
   @fan_out_key :__raxol_workflow_fan_out__
 
+  # Per-branch step offset so concurrent checkpoints don't collide on
+  # the saver's `(thread_id, step)` key.
+  @branch_step_stride 1_000_000
+
   @start :__start__
   @end_ :__end__
 
@@ -294,7 +298,14 @@ defmodule Raxol.Workflow.Runtime do
     })
 
     if branch_id != nil do
-      resume_in_branch(compiled, checkpoint, branch_id, resume_value, run_id, opts)
+      resume_in_branch(
+        compiled,
+        checkpoint,
+        branch_id,
+        resume_value,
+        run_id,
+        opts
+      )
     else
       resume_opts =
         opts
@@ -308,16 +319,6 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  # Resume a per-branch pause. The pause checkpoint's state carries a
-  # `@fan_out_key` continuation describing every branch's outcome from
-  # the first run. We re-enter the paused branch from its paused inner
-  # node (scratchpad seeded with the resume value so `interrupt/1`
-  # returns immediately), walk it to the join target, then check for
-  # any other paused branches. If another is still paused: re-augment
-  # state with the updated continuation, persist the next pause
-  # checkpoint, surface `{:interrupted, _, _}` again. If all branches
-  # have completed: clear the continuation, merge per channels, run the
-  # join body, continue traversing from the join target.
   defp resume_in_branch(
          compiled,
          checkpoint,
@@ -385,7 +386,14 @@ defmodule Raxol.Workflow.Runtime do
     case result do
       {:branch_done, branch_state, new_count} ->
         updated = update_slot(continuation, paused_index, {:done, branch_state})
-        process_next_after_resume(compiled, updated, run_id, deadline_us, new_count)
+
+        process_next_after_resume(
+          compiled,
+          updated,
+          run_id,
+          deadline_us,
+          new_count
+        )
 
       {:branch_paused, value, state_at_interrupt2, paused_node_id2, new_count} ->
         new_slot = {:paused, paused_node_id2, state_at_interrupt2, value}
@@ -397,7 +405,13 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  defp process_next_after_resume(compiled, continuation, run_id, deadline_us, count) do
+  defp process_next_after_resume(
+         compiled,
+         continuation,
+         run_id,
+         deadline_us,
+         count
+       ) do
     case first_paused_slot(continuation.slots) do
       nil ->
         finalize_join(compiled, continuation, run_id, deadline_us, count)
@@ -417,12 +431,22 @@ defmodule Raxol.Workflow.Runtime do
     # bookkeeping.
     cleaned = Map.delete(merged, @fan_out_key)
 
-    step(compiled, continuation.join_target, cleaned, run_id, deadline_us, count)
+    step(
+      compiled,
+      continuation.join_target,
+      cleaned,
+      run_id,
+      deadline_us,
+      count
+    )
   end
 
   defp re_interrupt_for_branch_pause(compiled, continuation, run_id, count) do
-    {next_idx, next_node, _state, reason} = first_paused_slot(continuation.slots)
-    augmented_state = Map.put(continuation.source_state, @fan_out_key, continuation)
+    {next_idx, next_node, _state, reason} =
+      first_paused_slot(continuation.slots)
+
+    augmented_state =
+      Map.put(continuation.source_state, @fan_out_key, continuation)
 
     _ =
       with_branch_id({continuation.join_target, next_idx}, fn ->
@@ -453,7 +477,10 @@ defmodule Raxol.Workflow.Runtime do
   end
 
   defp update_slot(continuation, index, new_slot) do
-    %{continuation | slots: List.replace_at(continuation.slots, index, new_slot)}
+    %{
+      continuation
+      | slots: List.replace_at(continuation.slots, index, new_slot)
+    }
   end
 
   # A checkpoint with `:interrupt_reason` in metadata is a pause
@@ -480,13 +507,6 @@ defmodule Raxol.Workflow.Runtime do
 
   defp executed_nodes, do: Process.get(@executed_key, [])
 
-  # Per ADR-0019: every checkpoint + `:node` telemetry event carries an
-  # optional `branch_id`. `nil` for sequential paths (every node in
-  # any graph without a fan-out). Inside a parallel branch it is
-  # `{join_target, branch_index}` where `branch_index` is the upstream
-  # position passed to `add_join/4` (zero-indexed). The Process slot
-  # makes the value available to every helper downstream of `fan_out/6`
-  # without threading it through every signature.
   defp current_branch_id, do: Process.get(@branch_id_key)
 
   defp with_branch_id(branch_id, fun) when is_function(fun, 0) do
@@ -1038,23 +1058,6 @@ defmodule Raxol.Workflow.Runtime do
   end
 
   # --- Fan-out / Join ---
-  #
-  # Per ADR-0019: each branch is a sub-graph rooted at one of the
-  # `add_conditional_edge` candidates and terminating when its next
-  # traversal step would enter the join target. Multi-node branches
-  # walk through any combination of static/guarded/conditional edges
-  # internally; the only restriction is that an interior conditional
-  # edge cannot itself return a list (nested fan-out is rejected).
-  # Branches start from the same initial state; branch terminal states
-  # are merged per any registered `Channel` (or explicit join `:reduce`
-  # reducer), default last-write-wins by branch index for unkeyed
-  # state-map keys, then the join target's body runs once with the
-  # merged state.
-  #
-  # Branch execution is serial in this slice. Concurrent execution via
-  # `Task.async_stream`, per-branch pause, and per-branch compensate
-  # are deferred to follow-up work; pause inside a branch surfaces as
-  # `{:error, {:pause_in_branch_not_supported, current_id}}`.
 
   defp fan_out(compiled, branch_ids, state, run_id, deadline_us, count) do
     case join_for_branches(compiled, branch_ids) do
@@ -1063,7 +1066,8 @@ defmodule Raxol.Workflow.Runtime do
 
       %JoinEdge{} = join ->
         result =
-          run_branches_serially(
+          dispatch_branches(
+            join,
             compiled,
             branch_ids,
             state,
@@ -1094,13 +1098,6 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  # When any branch in a fan-out paused, stash the continuation in the
-  # run state under `@fan_out_key`, persist a pause checkpoint tagged
-  # with the FIRST paused branch's index + inner node id, emit the
-  # `:paused` run event, and surface `{:interrupted, augmented_state,
-  # value, count}` so the runtime walks it back to the caller as
-  # `{:interrupted, run_id, _, value}`. The continuation describes every
-  # branch's outcome so resume picks up exactly where this run left off.
   defp interrupt_for_branch_pause(
          compiled,
          branch_ids,
@@ -1159,29 +1156,56 @@ defmodule Raxol.Workflow.Runtime do
     end)
   end
 
-  # Each branch entry id must be the upstream of a single declared join.
-  # Compile-time validation guarantees that fact; this just picks the
-  # JoinEdge by lookup. If branches map to different joins, the first
-  # branch's join wins (compile-time validation rejects mismatches).
   defp join_for_branches(compiled, [first | _rest]) do
     Map.get(compiled.joins_by_upstream, first)
   end
 
-  # Runs each branch from the initial state. Branches that complete
-  # become `{:done, terminal_state}` slots; branches that pause become
-  # `{:paused, paused_node_id, state_at_pause, interrupt_reason}` slots
-  # (subsequent branches still run after the pause). Returns either:
-  #
-  #   {:all_done, branch_states_in_order, new_count}
-  #   {:has_paused, slots, new_count}
-  #   {:error, reason, state, count}
-  #
-  # `slots` shape: `[{:done, _} | {:paused, _, _, _}]` keyed by branch
-  # index. The fan-out coordinator builds a `:pending` list of any
-  # branches not reached when iteration short-circuits; not used here
-  # since serial execution always reaches all branches even past a
-  # pause (Phase A scope).
-  defp run_branches_serially(compiled, branch_ids, state, run_id, deadline_us, count) do
+  defp dispatch_branches(
+         %JoinEdge{parallelism: 1},
+         compiled,
+         branch_ids,
+         state,
+         run_id,
+         deadline_us,
+         count
+       ) do
+    run_branches_serially(
+      compiled,
+      branch_ids,
+      state,
+      run_id,
+      deadline_us,
+      count
+    )
+  end
+
+  defp dispatch_branches(
+         %JoinEdge{},
+         compiled,
+         branch_ids,
+         state,
+         run_id,
+         deadline_us,
+         count
+       ) do
+    run_branches_concurrently(
+      compiled,
+      branch_ids,
+      state,
+      run_id,
+      deadline_us,
+      count
+    )
+  end
+
+  defp run_branches_serially(
+         compiled,
+         branch_ids,
+         state,
+         run_id,
+         deadline_us,
+         count
+       ) do
     join_target =
       case Map.get(compiled.joins_by_upstream, hd(branch_ids)) do
         %JoinEdge{target: t} -> t
@@ -1198,16 +1222,26 @@ defmodule Raxol.Workflow.Runtime do
         true ->
           result =
             with_branch_id({join_target, index}, fn ->
-              step_branch(compiled, id, state, run_id, deadline_us, c, join_target)
+              step_branch(
+                compiled,
+                id,
+                state,
+                run_id,
+                deadline_us,
+                c,
+                join_target
+              )
             end)
 
           case result do
             {:branch_done, branch_state, new_count} ->
               {:cont, {:ok, [{:done, branch_state} | slots], new_count}}
 
-            {:branch_paused, value, state_at_interrupt, paused_node_id, new_count} ->
+            {:branch_paused, value, state_at_interrupt, paused_node_id,
+             new_count} ->
               {:cont,
-               {:ok, [{:paused, paused_node_id, state_at_interrupt, value} | slots],
+               {:ok,
+                [{:paused, paused_node_id, state_at_interrupt, value} | slots],
                 new_count}}
 
             {:error, _reason, _state, _count} = err ->
@@ -1230,29 +1264,236 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  # --- Branch sub-execution walker ---
-  #
-  # `step_branch/7` mirrors `step/6` but takes `halt_at` as an explicit
-  # param. When the next traversal step would enter `halt_at` (the join
-  # target), the walker returns `{:branch_done, state, count}` without
-  # executing the target. The outer fan-out coordinator runs the join
-  # body once with the merged state.
+  defp run_branches_concurrently(
+         compiled,
+         branch_ids,
+         source_state,
+         run_id,
+         deadline_us,
+         count
+       ) do
+    join_target =
+      case Map.get(compiled.joins_by_upstream, hd(branch_ids)) do
+        %JoinEdge{target: t} -> t
+        nil -> nil
+      end
 
-  defp step_branch(_compiled, @end_, state, _run_id, _deadline_us, count, halt_at) do
+    max_concurrency =
+      case Map.get(compiled.joins_by_node, join_target) do
+        %JoinEdge{parallelism: :branches} -> length(branch_ids)
+        %JoinEdge{parallelism: n} when is_integer(n) and n > 0 -> n
+        _ -> length(branch_ids)
+      end
+
+    parent_trace = TraceContext.current()
+
+    stream_timeout = max(0, div(deadline_us - monotonic_us(), 1_000))
+
+    indexed = Enum.with_index(branch_ids)
+
+    # Halt early on the first :error outcome; Task.async_stream kills
+    # the in-flight Tasks when the stream closes.
+    stream_results =
+      Task.async_stream(
+        indexed,
+        fn {branch_id, index} ->
+          run_branch_in_task(
+            compiled,
+            branch_id,
+            index,
+            source_state,
+            run_id,
+            deadline_us,
+            count,
+            join_target,
+            parent_trace
+          )
+        end,
+        ordered: true,
+        max_concurrency: max_concurrency,
+        timeout: stream_timeout,
+        on_timeout: :kill_task
+      )
+      |> Enum.reduce_while([], fn
+        {:ok, {:branch_outcome, _idx, {:error, _, _, _}, _, _}} = result, acc ->
+          {:halt, [result | acc]}
+
+        {:ok, _outcome} = result, acc ->
+          {:cont, [result | acc]}
+
+        {:exit, _reason} = result, acc ->
+          {:halt, [result | acc]}
+      end)
+      |> Enum.reverse()
+
+    fold_concurrent_results(stream_results, source_state, count)
+  end
+
+  defp run_branch_in_task(
+         compiled,
+         branch_id,
+         index,
+         source_state,
+         run_id,
+         deadline_us,
+         base_count,
+         join_target,
+         parent_trace
+       ) do
+    install_branch_trace(parent_trace)
+    Process.put(@branch_id_key, {join_target, index})
+    Process.put(@executed_key, [])
+
+    task_start_count = base_count + index * @branch_step_stride
+
+    try do
+      result =
+        TraceContext.with_span("workflow.branch.#{index}", fn ->
+          step_branch(
+            compiled,
+            branch_id,
+            source_state,
+            run_id,
+            deadline_us,
+            task_start_count,
+            join_target
+          )
+        end)
+
+      executed = Process.get(@executed_key, [])
+      {:branch_outcome, index, result, task_start_count, Enum.reverse(executed)}
+    after
+      Process.delete(@branch_id_key)
+      Process.delete(@executed_key)
+      TraceContext.clear()
+    end
+  end
+
+  defp install_branch_trace(%{trace_id: trace_id} = parent)
+       when not is_nil(trace_id) do
+    Process.put(:raxol_trace_id, trace_id)
+    Process.put(:raxol_span_id, parent.span_id)
+    Process.put(:raxol_parent_span_id, parent.parent_span_id)
+
+    if parent.causation_id do
+      Process.put(:raxol_causation_id, parent.causation_id)
+    end
+  end
+
+  defp install_branch_trace(_), do: :ok
+
+  defp fold_concurrent_results(stream_results, source_state, base_count) do
+    outcomes =
+      Enum.map(stream_results, fn
+        {:ok, {:branch_outcome, _idx, _result, _start, _executed} = outcome} ->
+          outcome
+
+        {:exit, reason} ->
+          {:task_exit, reason}
+      end)
+
+    case Enum.find(outcomes, &match?({:task_exit, _}, &1)) do
+      {:task_exit, reason} ->
+        {:error, {:branch_task_exit, reason}, source_state, base_count}
+
+      nil ->
+        sorted =
+          Enum.sort_by(outcomes, fn {:branch_outcome, idx, _, _, _} -> idx end)
+
+        Enum.each(sorted, fn {:branch_outcome, _idx, _res, _start,
+                              executed_nodes} ->
+          Enum.each(executed_nodes, &track_executed/1)
+        end)
+
+        case Enum.find(sorted, fn
+               {:branch_outcome, _, {:error, _, _, _}, _, _} -> true
+               _ -> false
+             end) do
+          {:branch_outcome, _, {:error, _, _, _} = err, _, _} ->
+            err
+
+          nil ->
+            build_slots_from_outcomes(sorted, base_count)
+        end
+    end
+  end
+
+  defp build_slots_from_outcomes(sorted_outcomes, base_count) do
+    # new_count skips past every branch stride so any pause checkpoint
+    # the caller writes is the saver's `get_latest` answer.
+    {slots, _} =
+      Enum.reduce(sorted_outcomes, {[], 0}, fn
+        {:branch_outcome, _idx, {:branch_done, branch_state, _branch_count},
+         _task_start, _exec},
+        {acc, sum} ->
+          {[{:done, branch_state} | acc], sum}
+
+        {:branch_outcome, _idx,
+         {:branch_paused, value, state_at_pause, paused_node_id, _branch_count},
+         _task_start, _exec},
+        {acc, sum} ->
+          {[{:paused, paused_node_id, state_at_pause, value} | acc], sum}
+      end)
+
+    ordered = Enum.reverse(slots)
+    new_count = base_count + length(sorted_outcomes) * @branch_step_stride
+
+    if Enum.any?(ordered, &match?({:paused, _, _, _}, &1)) do
+      {:has_paused, ordered, new_count}
+    else
+      {:all_done, Enum.map(ordered, fn {:done, st} -> st end), new_count}
+    end
+  end
+
+  # --- Branch sub-execution walker ---
+
+  defp step_branch(
+         _compiled,
+         @end_,
+         state,
+         _run_id,
+         _deadline_us,
+         count,
+         halt_at
+       ) do
     {:error, {:branch_reached_end_before_join, halt_at}, state, count}
   end
 
-  defp step_branch(compiled, current_id, state, run_id, deadline_us, count, halt_at) do
+  defp step_branch(
+         compiled,
+         current_id,
+         state,
+         run_id,
+         deadline_us,
+         count,
+         halt_at
+       ) do
     cond do
       monotonic_us() >= deadline_us ->
         {:error, :run_timeout, state, count}
 
       true ->
-        execute_branch_node(compiled, current_id, state, run_id, deadline_us, count, halt_at)
+        execute_branch_node(
+          compiled,
+          current_id,
+          state,
+          run_id,
+          deadline_us,
+          count,
+          halt_at
+        )
     end
   end
 
-  defp execute_branch_node(compiled, current_id, state, run_id, deadline_us, count, halt_at) do
+  defp execute_branch_node(
+         compiled,
+         current_id,
+         state,
+         run_id,
+         deadline_us,
+         count,
+         halt_at
+       ) do
     case attempt_node_with_retry(compiled, current_id, state, run_id, 1) do
       {:node_ok, new_state, _tag} ->
         track_executed(Map.fetch!(compiled.nodes, current_id))
@@ -1276,7 +1517,15 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  defp traverse_branch(compiled, current_id, state, run_id, deadline_us, count, halt_at) do
+  defp traverse_branch(
+         compiled,
+         current_id,
+         state,
+         run_id,
+         deadline_us,
+         count,
+         halt_at
+       ) do
     outgoing = Map.get(compiled.edges_by_source, current_id, [])
 
     case pick_next(outgoing, state) do
@@ -1284,9 +1533,17 @@ defmodule Raxol.Workflow.Runtime do
         {:branch_done, state, count}
 
       {:ok, next_id} when is_atom(next_id) or is_binary(next_id) ->
-        step_branch(compiled, next_id, state, run_id, deadline_us, count, halt_at)
+        step_branch(
+          compiled,
+          next_id,
+          state,
+          run_id,
+          deadline_us,
+          count,
+          halt_at
+        )
 
-      {:ok, _ids_list} when is_list(_ids_list) ->
+      {:ok, ids} when is_list(ids) ->
         {:error, {:nested_fan_out_unsupported, current_id}, state, count}
 
       :no_match ->
@@ -1297,7 +1554,11 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  defp merge_branch_states(branch_states, %JoinEdge{reducer: reducer}, _channels)
+  defp merge_branch_states(
+         branch_states,
+         %JoinEdge{reducer: reducer},
+         _channels
+       )
        when is_function(reducer, 1) do
     reducer.(branch_states)
   end

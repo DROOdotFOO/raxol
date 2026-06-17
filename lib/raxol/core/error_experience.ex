@@ -62,7 +62,10 @@ defmodule Raxol.Core.ErrorExperience do
           action: "mix raxol.analyze --depth comprehensive --benchmark",
           confidence: 0.9,
           related_tools: [:raxol_analyze, :raxol_profile],
-          optimization_context: %{optimization: "parser_caching", target: "3.3μs/op"}
+          optimization_context: %{
+            optimization: "parser_caching",
+            target: "3.3μs/op"
+          }
         }
       ]
     },
@@ -75,7 +78,10 @@ defmodule Raxol.Core.ErrorExperience do
           action: "Enable buffer pooling and garbage collection optimization",
           confidence: 0.8,
           related_tools: [:raxol_debug, :raxol_profile],
-          optimization_context: %{optimization: "buffer_pooling", target: "2.8MB"}
+          optimization_context: %{
+            optimization: "buffer_pooling",
+            target: "2.8MB"
+          }
         }
       ]
     },
@@ -487,7 +493,9 @@ defmodule Raxol.Core.ErrorExperience do
       )
 
       if suggestion.optimization_context do
-        Log.info("   Optimization Context: #{inspect(suggestion.optimization_context)}")
+        Log.info(
+          "   Optimization Context: #{inspect(suggestion.optimization_context)}"
+        )
       end
 
       Log.info("")

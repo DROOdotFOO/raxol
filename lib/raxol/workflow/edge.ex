@@ -91,12 +91,19 @@ defmodule Raxol.Workflow.Edge do
     @type t :: %__MODULE__{
             target: Raxol.Workflow.Node.id(),
             upstream: [Raxol.Workflow.Node.id()],
-            reducer: (([map()]) -> map()) | nil,
-            timeout_ms: pos_integer() | nil
+            reducer: ([map()] -> map()) | nil,
+            timeout_ms: pos_integer() | nil,
+            parallelism: pos_integer() | :branches
           }
 
     @enforce_keys [:target, :upstream]
-    defstruct [:target, :upstream, reducer: nil, timeout_ms: nil]
+    defstruct [
+      :target,
+      :upstream,
+      reducer: nil,
+      timeout_ms: nil,
+      parallelism: :branches
+    ]
   end
 
   @type t :: Edge.t() | GuardedEdge.t() | ConditionalEdge.t() | JoinEdge.t()
