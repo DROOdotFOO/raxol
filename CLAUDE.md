@@ -116,7 +116,8 @@ packages/
 ├── raxol_speech/    # Speech surface: TTS (say/espeak), STT (Bumblebee/Whisper), voice commands
 ├── raxol_telegram/  # Telegram surface: bot handler, per-chat sessions, inline keyboard navigation
 ├── raxol_watch/     # Watch surface: APNS/FCM push, glanceable summaries, tap-to-event actions
-└── raxol_symphony/  # Tracker-driven coding-agent orchestrator (port of OpenAI Symphony)
+├── raxol_symphony/  # Tracker-driven coding-agent orchestrator (port of OpenAI Symphony)
+└── raxol_gateway/   # Unified messaging gateway: adapter contract, per-chat sessions, DM pairing
 ```
 
 **Dependency graph** (arrows = "depends on"):
@@ -134,6 +135,7 @@ raxol_speech --> raxol_core (+ bumblebee/nx/exla optional for STT)
 raxol_telegram --> raxol_core, raxol (optional, for Lifecycle runtime; + telegex optional)
 raxol_watch --> raxol_core (+ pigeon optional for APNS/FCM)
 raxol_symphony --> raxol_core, raxol_agent, raxol_mcp (all optional); raxol_liveview/raxol_telegram/raxol_watch optional surfaces
+raxol_gateway --> raxol_core (+ raxol_agent optional, for per-chat Conversation.Log history); main does NOT depend on raxol_gateway
 raxol_core --> telemetry (only external dep)
 raxol_sensor --> (none)
 ```
@@ -156,6 +158,7 @@ cd packages/raxol_speech && MIX_ENV=test mix test
 cd packages/raxol_telegram && MIX_ENV=test mix test
 cd packages/raxol_watch && MIX_ENV=test mix test
 cd packages/raxol_symphony && MIX_ENV=test mix test
+cd packages/raxol_gateway && MIX_ENV=test mix test
 ```
 
 ### Core Layers (main raxol)
@@ -241,6 +244,8 @@ lib/raxol/
 **MCP as Rendering Target** (see ADR-0012): MCP is a first-class rendering target, not bolted on. The framework derives MCP tools from the Component tree via `Raxol.MCP.ToolProvider` behaviour on each Component type (15 Components). A focus lens (attention-aware, mouse hover tracking via `:hover` mode) filters to ~15 relevant tools per interaction. `@mcp_exclude` suppresses tool derivation for internal Components. Model state is exposed as MCP resources via app-declared projections. `Raxol.MCP.Test` gives you a pipe-friendly test harness: `session |> type_into("field", "value") |> click("btn") |> assert_component("status")`. Functor law property tests verify tool derivation consistency. Package: `packages/raxol_mcp/` (depends on raxol_core). The context tree assembles state from model, Components, agents, swarm, and notifications as MCP resources, streamed as diffs.
 
 **Symphony Orchestrator** (in `packages/raxol_symphony/`): Elixir/OTP port of OpenAI Symphony. `Raxol.Symphony.Orchestrator` is a `BaseManager` GenServer that polls a tracker (Memory / Linear GraphQL / GitHub Issues), claims eligible issues via `Candidate.eligible/4`, isolates each in a per-issue workspace under `config.workspace.root`, and runs a coding agent until the workflow's terminal state. Two `Raxol.Symphony.Runner` impls: `Runners.RaxolAgent` (default, wraps `Raxol.Agent.Stream`) and `Runners.Codex` (Port-spawned `codex app-server`, JSON-RPC 2.0 over stdio with three-step handshake `initialize` -> `initialized` -> `thread/start`, then per-turn `turn/start` cycles). Six surfaces consume the orchestrator snapshot via Phoenix.PubSub: `Surfaces.Terminal` (TEA dashboard), `Surfaces.MCP` (5 tools + `symphony://runs` resource), `Surfaces.Telegram` (per-issue session router), `Surfaces.Watch` (debounced push, tap-to-approve), `Web.DashboardLive` (LiveView), and `Web.API` (JSON `/api/v1/*`). `Raxol.Symphony.Evidence.collect/3` aggregates GitHub CI + PR comments, complexity (`cloc` or SLOC fallback), and asciinema recordings; `Evidence.Capture` GenServer writes a `.cast` file per dispatched run when `recording.enabled: true`. `WorkflowStore` watches `WORKFLOW.md` via `file_system` and serves last-known-good config on parse failure. Three retry classes: continuation (1s), failure exponential (10s × 2^n, capped), stall detection (per-run `read_timeout_ms` / `turn_timeout_ms`).
+
+**Unified Messaging Gateway** (in `packages/raxol_gateway/`, pre-alpha): one daemon connecting many chat platforms through a shared contract. `Raxol.Gateway.Adapter` is the five-callback per-platform behaviour (`connect`/`disconnect`/`platform`/`normalize_event`/`send_message`); `Adapter.InMemory` is a reference impl. `Raxol.Gateway.Route` keys sessions `agent:main:{platform}:{chat_type}:{chat_id}`. `Raxol.Gateway.SessionRouter` (BaseManager, generalizes the Telegram router) starts one `Raxol.Gateway.Session` process per chat under a `DynamicSupervisor`, with idle-timeout + per-key cooldown + max-session limits; sessions run a `Raxol.Gateway.Handler`. `Raxol.Gateway.Pairing` issues 8-char TTL DM pairing codes (per-user request cooldown, lockout after repeated failed confirms) and decides `authorize/2` in order platform-allow-all -> paired -> platform allowlist -> global allowlist -> deny. `Raxol.Gateway.Supervisor` (`:rest_for_one`) ties them together. Depends on raxol_core; raxol_agent optional (for per-chat Conversation.Log history). NOT YET IMPLEMENTED: delivery modes + cross-platform `/handoff`, concrete platform adapters (Telegram/Discord/...), and the `Lifecycle`-backed handler. See ADR-0023.
 
 **Phoenix as library only**: No active web server in core. Ecto.Repo is disabled at runtime. MCP is served via `mix mcp.server` (stdio), not through Phoenix.
 

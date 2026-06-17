@@ -15,6 +15,12 @@ refinements folded in: the platform count is version-dependent (22-24 in recent 
 own `/handoff` rebinds + summarizes rather than carrying the transcript (Raxol's persisted history
 does better), and the pairing lockout is a Raxol hardening Hermes does not document.
 
+Core implemented 2026-06-18 in `packages/raxol_gateway/`: `Adapter` behaviour (+ `Adapter.InMemory`),
+`Route` keying, `SessionRouter` + `Session` (process-per-chat under a DynamicSupervisor, idle/cooldown/
+max-session limits), `Pairing` (codes + allowlists + `authorize/2`), and `Supervisor`. Still to do
+(decision items 2 history-recording, 4 delivery + handoff, plus the concrete platform adapters and the
+`Lifecycle`-backed handler).
+
 ## Context
 
 Raxol reaches chat platforms through separate, bespoke surface packages with no shared contract and
