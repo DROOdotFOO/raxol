@@ -49,6 +49,22 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
     end
   end
 
+  describe "create_table_statements/1" do
+    test "splits the DDL into one runnable statement per command" do
+      assert [create_table, create_index] = Saver.create_table_statements()
+
+      assert create_table =~
+               "CREATE TABLE IF NOT EXISTS raxol_workflow_checkpoints"
+
+      assert create_index =~
+               "CREATE INDEX IF NOT EXISTS raxol_workflow_checkpoints_paused_idx"
+
+      # Each statement is a single command (Postgrex cannot prepare multi-command SQL).
+      refute create_table =~ ";"
+      refute create_index =~ ";"
+    end
+  end
+
   describe "insert_sql/1" do
     test "uses ON CONFLICT DO NOTHING for the append-only contract" do
       sql = Saver.insert_sql("raxol_workflow_checkpoints")
@@ -210,7 +226,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
     test "put + get_latest returns the same checkpoint" do
       conn = start_conn!()
       table = unique_table()
-      Postgrex.query!(conn, Saver.create_table_sql(table), [])
+      Saver.create_table!(conn, table)
       config = %{conn: conn, table: table}
 
       ckpt =
@@ -232,7 +248,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
     test "ON CONFLICT makes put/3 idempotent" do
       conn = start_conn!()
       table = unique_table()
-      Postgrex.query!(conn, Saver.create_table_sql(table), [])
+      Saver.create_table!(conn, table)
       config = %{conn: conn, table: table}
 
       ckpt =
@@ -255,7 +271,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
     test "list/3 returns checkpoints newest-first up to limit" do
       conn = start_conn!()
       table = unique_table()
-      Postgrex.query!(conn, Saver.create_table_sql(table), [])
+      Saver.create_table!(conn, table)
       config = %{conn: conn, table: table}
 
       for step <- 0..5 do
@@ -283,7 +299,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
     test "delete_thread/2 removes all checkpoints for the thread" do
       conn = start_conn!()
       table = unique_table()
-      Postgrex.query!(conn, Saver.create_table_sql(table), [])
+      Saver.create_table!(conn, table)
       config = %{conn: conn, table: table}
 
       for step <- 0..2 do
@@ -308,7 +324,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.PostgrexTest do
     test "two threads in the same table do not see each other's checkpoints" do
       conn = start_conn!()
       table = unique_table()
-      Postgrex.query!(conn, Saver.create_table_sql(table), [])
+      Saver.create_table!(conn, table)
       config = %{conn: conn, table: table}
 
       Saver.put(
