@@ -1291,15 +1291,17 @@ defmodule Raxol.Workflow.Runtime do
 
     try do
       result =
-        step_branch(
-          compiled,
-          branch_id,
-          source_state,
-          run_id,
-          deadline_us,
-          task_start_count,
-          join_target
-        )
+        TraceContext.with_span("workflow.branch.#{index}", fn ->
+          step_branch(
+            compiled,
+            branch_id,
+            source_state,
+            run_id,
+            deadline_us,
+            task_start_count,
+            join_target
+          )
+        end)
 
       executed = Process.get(@executed_key, [])
       {:branch_outcome, index, result, task_start_count, Enum.reverse(executed)}
