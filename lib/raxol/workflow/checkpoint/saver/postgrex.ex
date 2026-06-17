@@ -202,6 +202,37 @@ defmodule Raxol.Workflow.Checkpoint.Saver.Postgrex do
     """
   end
 
+  @doc """
+  Returns `create_table_sql/1` split into individual statements.
+
+  `create_table_sql/1` is a two-statement DDL script (table + index) suitable for
+  `psql` or a migration file. `Postgrex.query/4` uses the extended protocol, which
+  runs one command per query, so callers driving the DDL through Postgrex must run
+  each statement separately. This is the list to iterate over.
+  """
+  @spec create_table_statements(String.t()) :: [String.t()]
+  def create_table_statements(table \\ @default_table) do
+    table
+    |> create_table_sql()
+    |> String.split(";", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  @doc """
+  Create the checkpoint table and its index on `conn`.
+
+  Runs each statement from `create_table_statements/1` separately, since Postgrex
+  cannot prepare a multi-statement query. Use this instead of passing
+  `create_table_sql/1` to `Postgrex.query/4` directly.
+  """
+  @spec create_table!(term(), String.t()) :: :ok
+  def create_table!(conn, table \\ @default_table) do
+    ensure_postgrex_loaded!()
+    Enum.each(create_table_statements(table), &Postgrex.query!(conn, &1, []))
+    :ok
+  end
+
   # --- SQL builders (exposed @doc false so tests can pin the shape) ---
 
   @doc false

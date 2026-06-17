@@ -1,0 +1,84 @@
+defmodule Raxol.Agent.Backend.SelectorTest do
+  use ExUnit.Case, async: true
+
+  alias Raxol.Agent.Backend.Selector
+  alias Raxol.Agent.ExecutorConfig
+
+  describe "select/1" do
+    test "resolves HTTP-backed harnesses with a provider hint" do
+      for {harness, provider} <- [
+            anthropic: :anthropic,
+            openai: :openai,
+            kimi: :kimi,
+            ollama: :ollama
+          ] do
+        cfg = ExecutorConfig.new(harness: harness)
+        assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)
+        assert opts[:provider] == provider
+      end
+    end
+
+    test "resolves llm7 to the HTTP backend with a base_url default" do
+      cfg = ExecutorConfig.new(harness: :llm7)
+      assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)
+      assert opts[:provider] == :openai
+      assert opts[:base_url] == "https://api.llm7.io"
+    end
+
+    test "resolves lumo and mock to their dedicated backends" do
+      assert {:ok, Raxol.Agent.Backend.Lumo, _} =
+               Selector.select(ExecutorConfig.new(harness: :lumo))
+
+      assert {:ok, Raxol.Agent.Backend.Mock, _} =
+               Selector.select(ExecutorConfig.new(harness: :mock))
+    end
+
+    test "merges config model and auth over harness defaults" do
+      cfg =
+        ExecutorConfig.new(
+          harness: :anthropic,
+          model: "claude-opus-4-8",
+          auth: %{api_key: "sk-x"}
+        )
+
+      assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)
+
+      assert opts[:provider] == :anthropic
+      assert opts[:model] == "claude-opus-4-8"
+      assert opts[:api_key] == "sk-x"
+    end
+
+    test "config opts override harness defaults" do
+      cfg = ExecutorConfig.new(harness: :llm7, opts: [base_url: "https://override"])
+      assert {:ok, _, opts} = Selector.select(cfg)
+      assert opts[:base_url] == "https://override"
+    end
+
+    test "resolves native CLI harnesses to their backends" do
+      assert {:ok, Raxol.Agent.Backend.ClaudeCode, _} =
+               Selector.select(ExecutorConfig.new(harness: :claude_native))
+
+      assert {:ok, Raxol.Agent.Backend.Cursor, _} =
+               Selector.select(ExecutorConfig.new(harness: :cursor))
+    end
+
+    test "codex is reserved (served by the symphony app-server runner)" do
+      cfg = ExecutorConfig.new(harness: :codex)
+      assert {:error, {:harness_not_implemented, :codex}} = Selector.select(cfg)
+    end
+
+    test "unknown harness returns an error" do
+      cfg = ExecutorConfig.new(harness: :nonsense)
+      assert {:error, {:unknown_harness, :nonsense}} = Selector.select(cfg)
+    end
+  end
+
+  describe "supported_harnesses/0" do
+    test "lists the resolvable harnesses" do
+      supported = Selector.supported_harnesses()
+      assert :anthropic in supported
+      assert :mock in supported
+      refute :codex in supported
+    end
+  end
+end

@@ -339,4 +339,155 @@ defmodule Raxol.Agent.StreamTest do
       assert tool_count == 2
     end
   end
+
+  # -- Backend resolution (executor + model override) -------------------------
+
+  defmodule EchoModelBackend do
+    @behaviour Raxol.Agent.AIBackend
+
+    @impl true
+    def complete(_messages, opts) do
+      {:ok, %{content: "model=#{inspect(Keyword.get(opts, :model))}", usage: %{}, metadata: %{}}}
+    end
+
+    @impl true
+    def available?, do: true
+    @impl true
+    def name, do: "Echo Model"
+    @impl true
+    def capabilities, do: [:completion]
+  end
+
+  describe "backend resolution" do
+    test ":model overrides the backend_opts model" do
+      text =
+        "hi"
+        |> AgentStream.run(
+          backend: EchoModelBackend,
+          backend_opts: [model: "base"],
+          model: "override",
+          stream: false
+        )
+        |> AgentStream.collect_text()
+
+      assert text == "model=\"override\""
+    end
+
+    test "backend_opts model is used when no :model override is given" do
+      text =
+        "hi"
+        |> AgentStream.run(
+          backend: EchoModelBackend,
+          backend_opts: [model: "base"],
+          stream: false
+        )
+        |> AgentStream.collect_text()
+
+      assert text == "model=\"base\""
+    end
+
+    test ":executor selects the backend module" do
+      cfg = Raxol.Agent.ExecutorConfig.new(harness: :mock)
+
+      {:ok, info} =
+        "hi"
+        |> AgentStream.run(executor: cfg, backend_opts: [response: "from-mock"], stream: false)
+        |> AgentStream.collect()
+
+      assert info.content == "from-mock"
+    end
+
+    test ":executor takes precedence over :backend" do
+      cfg = Raxol.Agent.ExecutorConfig.new(harness: :mock)
+
+      {:ok, info} =
+        "hi"
+        |> AgentStream.run(
+          executor: cfg,
+          backend: EchoModelBackend,
+          backend_opts: [response: "from-mock"],
+          stream: false
+        )
+        |> AgentStream.collect()
+
+      # Mock (resolved from executor) wins over the explicit EchoModelBackend.
+      assert info.content == "from-mock"
+    end
+
+    test "falls back to :backend when the executor harness is unresolvable" do
+      cfg = Raxol.Agent.ExecutorConfig.new(harness: :codex)
+
+      text =
+        "hi"
+        |> AgentStream.run(
+          executor: cfg,
+          backend: EchoModelBackend,
+          backend_opts: [model: "fallback"],
+          stream: false
+        )
+        |> AgentStream.collect_text()
+
+      assert text == "model=\"fallback\""
+    end
+  end
+
+  # -- Native (vendor-owns-loop) backends -------------------------------------
+
+  defmodule FakeNativeBackend do
+    @behaviour Raxol.Agent.AIBackend
+
+    @impl true
+    def complete(_messages, opts) do
+      report(opts)
+      {:ok, %{content: "native answer", usage: %{}, metadata: %{}}}
+    end
+
+    @impl true
+    def stream(_messages, opts) do
+      report(opts)
+      {:ok, [{:chunk, "native answer"}, {:done, %{content: "native answer", usage: %{}}}]}
+    end
+
+    @impl true
+    def available?, do: true
+    @impl true
+    def name, do: "Fake Native"
+    @impl true
+    def capabilities, do: [:completion, :streaming, :tool_use]
+    @impl true
+    def handles_tools_internally?, do: true
+
+    defp report(opts) do
+      if pid = Keyword.get(opts, :test_pid), do: send(pid, {:native_opts, opts})
+    end
+  end
+
+  describe "react/2 with a native backend" do
+    test "streams the vendor output without running the framework tool loop" do
+      events =
+        AgentStream.react("hi",
+          backend: FakeNativeBackend,
+          backend_opts: [test_pid: self()],
+          actions: [AddNumbers]
+        )
+        |> Enum.to_list()
+
+      assert {:done, %{content: "native answer"}} = List.last(events)
+      assert Enum.any?(events, &match?({:text_delta, "native answer"}, &1))
+      # The vendor owns the loop, so the framework emits no tool_use events.
+      refute Enum.any?(events, &match?({:tool_use, _}, &1))
+    end
+
+    test "injects the agent's Actions into the native backend opts (for MCP)" do
+      AgentStream.react("hi",
+        backend: FakeNativeBackend,
+        backend_opts: [test_pid: self()],
+        actions: [AddNumbers]
+      )
+      |> Stream.run()
+
+      assert_receive {:native_opts, opts}
+      assert AddNumbers in Keyword.get(opts, :actions, [])
+    end
+  end
 end
