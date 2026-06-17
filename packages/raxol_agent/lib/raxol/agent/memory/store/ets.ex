@@ -33,6 +33,7 @@ defmodule Raxol.Agent.Memory.Store.Ets do
   use Raxol.Agent.Memory
 
   alias Raxol.Agent.Memory.Record
+  alias Raxol.Core.Stores.Dets
 
   @k1 1.2
   @b 0.75
@@ -102,7 +103,8 @@ defmodule Raxol.Agent.Memory.Store.Ets do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
-    tables = tables(registered_name!())
+    name = registered_name!()
+    tables = tables(name)
 
     :ets.new(tables.primary, [:named_table, :public, :set, read_concurrency: true])
     :ets.new(tables.tok, [:named_table, :public, :bag, read_concurrency: true])
@@ -111,9 +113,9 @@ defmodule Raxol.Agent.Memory.Store.Ets do
     :ets.new(tables.df, [:named_table, :public, :set, read_concurrency: true])
 
     dets =
-      case dets_path(opts) do
+      case Dets.resolve_path(opts, :raxol_agent, :memory_store_path) do
         nil -> nil
-        path when is_binary(path) -> open_dets(path, tables)
+        path -> Dets.open!(:"#{name}.Dets", path, &replay_record(tables, &1))
       end
 
     {:ok, %{tables: tables, dets: dets}}
@@ -124,20 +126,20 @@ defmodule Raxol.Agent.Memory.Store.Ets do
     deindex(state.tables, record.id)
     :ets.insert(state.tables.primary, {record.id, record})
     index(state.tables, record)
-    persist(state.dets, record.id, record)
+    Dets.put(state.dets, record.id, record)
     {:reply, {:ok, record}, state}
   end
 
   def handle_manager_call({:forget, id}, _from, state) do
     deindex(state.tables, id)
     :ets.delete(state.tables.primary, id)
-    persist_delete(state.dets, id)
+    Dets.delete(state.dets, id)
     {:reply, :ok, state}
   end
 
   def handle_manager_call(:clear, _from, state) do
     Enum.each(state.tables, fn {_key, table} -> :ets.delete_all_objects(table) end)
-    persist_clear(state.dets)
+    Dets.clear(state.dets)
     {:reply, :ok, state}
   end
 
@@ -149,13 +151,7 @@ defmodule Raxol.Agent.Memory.Store.Ets do
   end
 
   @impl GenServer
-  def terminate(_reason, %{dets: nil}), do: :ok
-
-  def terminate(_reason, %{dets: dets}) do
-    _ = :dets.sync(dets)
-    _ = :dets.close(dets)
-    :ok
-  end
+  def terminate(_reason, state), do: Dets.close(state.dets)
 
   # -- Indexing ---------------------------------------------------------------
 
@@ -329,40 +325,12 @@ defmodule Raxol.Agent.Memory.Store.Ets do
     end
   end
 
-  defp dets_path(opts) do
-    Keyword.get(opts, :dets_path) ||
-      Application.get_env(:raxol_agent, :memory_store_path)
-  end
-
-  defp open_dets(path, tables) do
-    path |> Path.expand() |> Path.dirname() |> File.mkdir_p!()
-    file = path |> Path.expand() |> String.to_charlist()
-
-    case :dets.open_file(tables.primary, type: :set, file: file) do
-      {:ok, table} ->
-        rebuild_from_dets(table, tables)
-        table
-
-      {:error, reason} ->
-        raise """
-        Raxol.Agent.Memory.Store.Ets: failed to open DETS at #{inspect(path)}
-        (#{inspect(reason)}). Fix the path or unset :dets_path /
-        :memory_store_path to run in-memory only.
-        """
-    end
-  end
-
-  defp rebuild_from_dets(dets, tables) do
-    :ok =
-      :dets.foldl(
-        fn {id, %Record{} = record}, _acc ->
-          :ets.insert(tables.primary, {id, record})
-          index(tables, record)
-          :ok
-        end,
-        :ok,
-        dets
-      )
+  # Re-index one record read back from DETS on open. The secondary indices
+  # (tok/tag/agent/df) are rebuilt from the primary records, so no stale index
+  # can outlive a restart.
+  defp replay_record(tables, {id, %Record{} = record}) do
+    :ets.insert(tables.primary, {id, record})
+    index(tables, record)
   end
 
   defp normalize_tags(tags) when is_list(tags) do
@@ -370,13 +338,4 @@ defmodule Raxol.Agent.Memory.Store.Ets do
   end
 
   defp normalize_tags(_), do: []
-
-  defp persist(nil, _id, _record), do: :ok
-  defp persist(dets, id, record), do: :dets.insert(dets, {id, record})
-
-  defp persist_delete(nil, _id), do: :ok
-  defp persist_delete(dets, id), do: :dets.delete(dets, id)
-
-  defp persist_clear(nil), do: :ok
-  defp persist_clear(dets), do: :dets.delete_all_objects(dets)
 end
