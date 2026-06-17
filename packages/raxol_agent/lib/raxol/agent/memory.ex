@@ -37,6 +37,15 @@ defmodule Raxol.Agent.Memory do
   @callback forget(id :: String.t(), opts :: keyword()) :: :ok
   @callback build_system_prompt(opts :: keyword()) :: String.t() | nil
 
+  @doc """
+  An optional per-user context block injected into the LAST user message rather
+  than the system prompt, so a per-turn refresh does not invalidate the cacheable
+  system prefix. Returns `nil` to inject nothing (the default).
+  """
+  @callback build_user_context(opts :: keyword()) :: String.t() | nil
+
+  @optional_callbacks build_user_context: 1
+
   @doc "The provider configured for this node, or nil when memory is disabled."
   @spec default_provider() :: module() | nil
   def default_provider, do: Application.get_env(:raxol_agent, :memory_provider)
@@ -52,6 +61,21 @@ defmodule Raxol.Agent.Memory do
 
   def provider_context(provider, agent_id, opts) when is_atom(provider) do
     {provider, Keyword.put(opts, :agent_id, agent_id)}
+  end
+
+  @doc """
+  Build the `{module, opts}` tuple for a stacked set of providers under
+  `context[:memory]`, scoping records to `agent_id`. Each entry is a bare
+  module or a `{module, opts}` pair. Returns `nil` for an empty list.
+  """
+  @spec stack_context([module() | {module(), keyword()}], String.t() | nil, keyword()) ::
+          {module(), keyword()} | nil
+  def stack_context(providers, agent_id, opts \\ [])
+  def stack_context([], _agent_id, _opts), do: nil
+
+  def stack_context(providers, agent_id, opts) when is_list(providers) do
+    {Raxol.Agent.Memory.Stack,
+     opts |> Keyword.put(:providers, providers) |> Keyword.put(:agent_id, agent_id)}
   end
 
   @doc "Format memory records into a system-prompt block, or nil if empty."
@@ -79,7 +103,10 @@ defmodule Raxol.Agent.Memory do
         |> Raxol.Agent.Memory.format_block()
       end
 
-      defoverridable prefetch: 2, build_system_prompt: 1
+      @impl Raxol.Agent.Memory
+      def build_user_context(_opts), do: nil
+
+      defoverridable prefetch: 2, build_system_prompt: 1, build_user_context: 1
     end
   end
 end

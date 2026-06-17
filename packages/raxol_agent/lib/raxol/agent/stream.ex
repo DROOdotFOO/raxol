@@ -155,6 +155,7 @@ defmodule Raxol.Agent.Stream do
 
     messages
     |> maybe_enrich_memory(context)
+    |> maybe_enrich_user_context(context)
     |> then(&do_completion(backend, &1, backend_opts, opts))
   end
 
@@ -163,7 +164,10 @@ defmodule Raxol.Agent.Stream do
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
     context = Keyword.get(opts, :context, %{})
 
-    messages = maybe_enrich_memory(messages, context)
+    messages =
+      messages
+      |> maybe_enrich_memory(context)
+      |> maybe_enrich_user_context(context)
 
     tools = ToolConverter.to_tool_definitions(actions)
     tool_opts = Keyword.merge(backend_opts, tools: tools)
@@ -555,6 +559,10 @@ defmodule Raxol.Agent.Stream do
       Map.get(context, :memory),
       last_user_content(messages)
     )
+  end
+
+  defp maybe_enrich_user_context(messages, context) do
+    Raxol.Agent.Memory.Manager.enrich_user_context(messages, Map.get(context, :user_context))
   end
 
   defp last_user_content(messages) do

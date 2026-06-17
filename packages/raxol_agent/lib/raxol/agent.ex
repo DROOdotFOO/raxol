@@ -106,6 +106,16 @@ defmodule Raxol.Agent do
       def memory_provider, do: nil
 
       @doc """
+      Returns a list of memory providers to stack for this agent.
+
+      Each entry is a provider module or `{module, opts}` pair. When non-empty,
+      the runtime composes them via `Raxol.Agent.Memory.stack_context/3` so the
+      built-in store and external providers run together. Defaults to `[]`
+      (use the single `memory_provider/0`).
+      """
+      def memory_providers, do: []
+
+      @doc """
       Returns the procedural-memory (skills) provider for this agent, or `nil`.
 
       Override to return a `Raxol.Agent.Skills.Store`-compatible module. When
@@ -140,7 +150,8 @@ defmodule Raxol.Agent do
       skill actions when `skills_provider/0` is set, otherwise `[]`.
       """
       def available_actions do
-        memory = if memory_provider(), do: Raxol.Agent.Actions.Memory.actions(), else: []
+        memory_on? = memory_provider() != nil or memory_providers() != []
+        memory = if memory_on?, do: Raxol.Agent.Actions.Memory.actions(), else: []
         skills = if skills_provider(), do: Raxol.Agent.Actions.Skills.actions(), else: []
         memory ++ skills
       end
@@ -159,6 +170,7 @@ defmodule Raxol.Agent do
                      sandbox: 0,
                      thread_log: 0,
                      memory_provider: 0,
+                     memory_providers: 0,
                      skills_provider: 0,
                      self_improve: 0,
                      available_actions: 0

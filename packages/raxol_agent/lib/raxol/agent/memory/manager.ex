@@ -39,4 +39,55 @@ defmodule Raxol.Agent.Memory.Manager do
     {system, rest} = Enum.split_while(messages, &(Map.get(&1, :role) == :system))
     Enum.concat([system, [mem_msg], rest])
   end
+
+  @doc """
+  Append a provider's `build_user_context/1` block to the LAST user message.
+
+  Unlike `enrich_messages/3`, which injects into the system prefix, this injects
+  into the user message so a per-turn refresh leaves the cacheable system prefix
+  untouched. A nil provider, an absent callback, or a failure is a no-op.
+  """
+  @spec enrich_user_context([map()], provider()) :: [map()]
+  def enrich_user_context(messages, nil), do: messages
+
+  def enrich_user_context(messages, {mod, opts}) when is_atom(mod) do
+    case safe_user_block(mod, opts) do
+      nil -> messages
+      "" -> messages
+      block -> append_to_last_user(messages, block)
+    end
+  end
+
+  def enrich_user_context(messages, _provider), do: messages
+
+  defp safe_user_block(mod, opts) do
+    if function_exported?(mod, :build_user_context, 1) do
+      mod.build_user_context(opts)
+    else
+      nil
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
+  defp append_to_last_user(messages, block) do
+    last_user_index =
+      messages
+      |> Enum.with_index()
+      |> Enum.filter(fn {msg, _i} -> Map.get(msg, :role) == :user end)
+      |> List.last()
+
+    case last_user_index do
+      nil ->
+        messages
+
+      {_msg, index} ->
+        List.update_at(messages, index, fn msg ->
+          existing = Map.get(msg, :content, "")
+          Map.put(msg, :content, existing <> "\n\n" <> block)
+        end)
+    end
+  end
 end
