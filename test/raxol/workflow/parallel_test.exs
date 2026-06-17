@@ -796,6 +796,75 @@ defmodule Raxol.Workflow.ParallelTest do
         50 -> acc
       end
     end
+
+    test "cancellation cascade: one branch errors -> sibling Tasks are killed" do
+      table = :"cascade_#{:erlang.unique_integer([:positive])}"
+
+      _ =
+        :ets.new(table, [
+          :ordered_set,
+          :public,
+          :named_table,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
+
+      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+
+      log = fn tag ->
+        :ets.insert(table, {System.monotonic_time(:nanosecond), tag})
+      end
+
+      graph =
+        Graph.new(:cascade)
+        |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
+        |> Graph.add_node(:fast_fail, fn _s ->
+          log.(:fast_fail_started)
+          {:error, :boom}
+        end)
+        |> Graph.add_node(:slow_a, fn s ->
+          log.(:slow_a_started)
+          Process.sleep(300)
+          log.(:slow_a_finished)
+          {:ok, Map.put(s, :a, true)}
+        end)
+        |> Graph.add_node(:slow_b, fn s ->
+          log.(:slow_b_started)
+          Process.sleep(300)
+          log.(:slow_b_finished)
+          {:ok, Map.put(s, :b, true)}
+        end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :fan_out)
+        |> Graph.add_conditional_edge(:fan_out, [:fast_fail, :slow_a, :slow_b], fn _ ->
+          [:fast_fail, :slow_a, :slow_b]
+        end)
+        |> Graph.add_edge(:fast_fail, :join)
+        |> Graph.add_edge(:slow_a, :join)
+        |> Graph.add_edge(:slow_b, :join)
+        |> Graph.add_join(:join, [:fast_fail, :slow_a, :slow_b])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+
+      started_us = System.monotonic_time(:microsecond)
+      assert {:error, :boom, _state} = Compiled.invoke(compiled, %{})
+      elapsed_ms = div(System.monotonic_time(:microsecond) - started_us, 1_000)
+
+      # Sibling sleeps are 300 ms each; cascade should kill them
+      # before either finishes. Allow up to 200 ms for scheduler jitter.
+      assert elapsed_ms < 200,
+             "expected cascade to short-circuit < 200 ms; took #{elapsed_ms} ms"
+
+      tags = :ets.tab2list(table) |> Enum.map(fn {_ts, tag} -> tag end)
+
+      # The fast-fail branch ran; the slow branches may have logged
+      # `:started` before being killed, but neither should have logged
+      # `:finished`.
+      assert :fast_fail_started in tags
+      refute :slow_a_finished in tags
+      refute :slow_b_finished in tags
+    end
   end
 
   describe "back-compat" do
