@@ -740,7 +740,7 @@ defmodule Raxol.Workflow.ParallelTest do
       assert order == [0, 1, 2]
     end
 
-    test "telemetry: branches share trace_id but have distinct span_ids" do
+    test "telemetry: branches share trace_id, get distinct per-branch parent_span_id" do
       handler_id = "concurrent_trace_#{:erlang.unique_integer([:positive])}"
       test_pid = self()
 
@@ -777,16 +777,31 @@ defmodule Raxol.Workflow.ParallelTest do
 
       events = drain_started([])
       branch_events = Enum.filter(events, &(&1.node_id in [:scout_a, :scout_b, :scout_c]))
+      sequential_events = Enum.filter(events, &(&1.node_id in [:fan_out, :join]))
 
-      # All three branches share the same run + parent trace context.
       trace_ids = branch_events |> Enum.map(& &1[:trace_id]) |> Enum.uniq()
       assert length(trace_ids) == 1
+      assert length(Enum.uniq(Enum.map(branch_events, & &1.run_id))) == 1
 
-      # But each branch carries the inherited parent span_id (Phase B
-      # doesn't open a new span per Task; the branches share the parent
-      # frame). Distinct *spans* per branch are a follow-up.
-      run_ids = branch_events |> Enum.map(& &1.run_id) |> Enum.uniq()
-      assert length(run_ids) == 1
+      # Each branch's node carries the branch's span as parent.
+      branch_parents =
+        Map.new(branch_events, fn ev -> {ev.node_id, ev[:parent_span_id]} end)
+
+      assert branch_parents[:scout_a] != nil
+      assert branch_parents[:scout_b] != nil
+      assert branch_parents[:scout_c] != nil
+
+      assert branch_parents[:scout_a] != branch_parents[:scout_b]
+      assert branch_parents[:scout_b] != branch_parents[:scout_c]
+      assert branch_parents[:scout_a] != branch_parents[:scout_c]
+
+      # Sequential nodes' parent spans are the run-level span, not any
+      # branch span.
+      sequential_parents = sequential_events |> Enum.map(& &1[:parent_span_id]) |> Enum.uniq()
+
+      refute branch_parents[:scout_a] in sequential_parents
+      refute branch_parents[:scout_b] in sequential_parents
+      refute branch_parents[:scout_c] in sequential_parents
     end
 
     defp drain_started(acc) do
