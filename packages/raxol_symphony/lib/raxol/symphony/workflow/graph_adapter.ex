@@ -135,6 +135,174 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
 
   defp choose_after_runner_dispatch(_state), do: :evidence_collection
 
+  @default_max_candidates 3
+
+  @doc """
+  Build and compile a parallel-candidate variant of the Symphony graph.
+
+  Each slot 0..N-1 runs its own dispatch + evidence sub-graph concurrently
+  via ADR-0019 fan-out. After every branch completes, an aggregate node
+  merges per-slot `run_result` / `evidence` into `:run_results` /
+  `:evidences` lists keyed by candidate id.
+
+  ## Options
+
+    * `:max_candidates` -- static branch count (default `#{@default_max_candidates}`).
+      Excess candidates beyond this slot count are ignored (the
+      orchestrator-level concurrency is unchanged).
+    * `:saver`, `:failure_policy`, `:step_timeout_ms`, `:run_timeout_ms`
+      -- same as `from_workflow/1`.
+
+  ## Limitations
+
+  Runner pauses are unsupported in this variant. If any per-slot runner
+  returns `{:pause, _, _}`, the slot records
+  `{:error, :pause_in_parallel_branch_unsupported}` and the run continues.
+  Consumers needing pause semantics on parallel candidates should split
+  their pipeline differently or stick with `from_workflow/1`.
+  """
+  @spec from_workflow_parallel(keyword()) :: {:ok, Compiled.t()} | {:error, term()}
+  def from_workflow_parallel(opts) do
+    max_candidates = Keyword.get(opts, :max_candidates, @default_max_candidates)
+    slots = 0..(max_candidates - 1) |> Enum.to_list()
+    branch_entries = Enum.map(slots, &slot_prepare_id/1)
+
+    base_graph =
+      Graph.new(:symphony_parallel)
+      |> Graph.add_node(:tracker_poll, &tracker_poll_node/1)
+      |> Graph.add_node(:fan_out_candidates, fn s -> {:ok, s} end)
+      |> Graph.add_node(:aggregate, fn s -> {:ok, aggregate_results(s, slots)} end)
+      |> Graph.add_node(:completion, &completion_node/1)
+
+    graph_with_slot_nodes =
+      Enum.reduce(slots, base_graph, fn slot, g -> add_slot_nodes(g, slot) end)
+
+    graph_with_static_edges =
+      graph_with_slot_nodes
+      |> Graph.add_edge(:__start__, :tracker_poll)
+      |> Graph.add_edge(:tracker_poll, :fan_out_candidates)
+      |> Graph.add_conditional_edge(
+        :fan_out_candidates,
+        branch_entries,
+        fn _ -> branch_entries end
+      )
+      |> Graph.add_join(:aggregate, branch_entries)
+      |> Graph.add_edge(:aggregate, :completion)
+      |> Graph.add_edge(:completion, :__end__)
+
+    full_graph =
+      Enum.reduce(slots, graph_with_static_edges, fn slot, g -> add_slot_edges(g, slot) end)
+
+    Graph.compile(full_graph, compile_opts(opts))
+  end
+
+  defp slot_prepare_id(n), do: :"slot_prepare_#{n}"
+  defp slot_dispatch_id(n), do: :"slot_dispatch_#{n}"
+  defp slot_evidence_id(n), do: :"slot_evidence_#{n}"
+
+  defp add_slot_nodes(graph, slot) do
+    graph
+    |> Graph.add_node(slot_prepare_id(slot), build_slot_prepare(slot))
+    |> Graph.add_node(slot_dispatch_id(slot), build_slot_dispatch(slot))
+    |> Graph.add_node(slot_evidence_id(slot), build_slot_evidence(slot))
+  end
+
+  defp add_slot_edges(graph, slot) do
+    graph
+    |> Graph.add_edge(slot_prepare_id(slot), slot_dispatch_id(slot))
+    |> Graph.add_edge(slot_dispatch_id(slot), slot_evidence_id(slot))
+    |> Graph.add_edge(slot_evidence_id(slot), :aggregate)
+  end
+
+  defp build_slot_prepare(slot) do
+    candidate_key = :"candidate_#{slot}"
+
+    fn state ->
+      candidates = Map.get(state, :candidates, [])
+      candidate = Enum.at(candidates, slot)
+      {:ok, Map.put(state, candidate_key, candidate)}
+    end
+  end
+
+  defp build_slot_dispatch(slot) do
+    candidate_key = :"candidate_#{slot}"
+    result_key = :"run_result_#{slot}"
+
+    fn state ->
+      case Map.get(state, candidate_key) do
+        nil ->
+          {:ok, Map.put(state, result_key, nil)}
+
+        %Issue{} = issue ->
+          runner_opts = if state.runner_module, do: [runner_module: state.runner_module], else: []
+          parent = Map.get(state, :parent_pid, self())
+          attempt = Map.get(state, :attempt) || 1
+          workspace = Map.get(state, :workspace_path, "")
+
+          with {:ok, runner_module} <- Runner.resolve(state.config, runner_opts) do
+            result =
+              runner_module.run(issue, state.config,
+                parent: parent,
+                attempt: attempt,
+                workspace_path: workspace
+              )
+
+            normalized =
+              case result do
+                {:pause, _, _} -> {:error, :pause_in_parallel_branch_unsupported}
+                other -> other
+              end
+
+            {:ok, Map.put(state, result_key, normalized)}
+          end
+      end
+    end
+  end
+
+  defp build_slot_evidence(slot) do
+    candidate_key = :"candidate_#{slot}"
+    evidence_key = :"evidence_#{slot}"
+
+    fn state ->
+      case Map.get(state, candidate_key) do
+        nil ->
+          {:ok, Map.put(state, evidence_key, nil)}
+
+        %Issue{} ->
+          subject = %{
+            workspace: Map.get(state, :workspace_path, ""),
+            repo: nil,
+            ref: nil,
+            issue_number: nil
+          }
+
+          evidence = Evidence.collect(state.config, subject, backends: [])
+          {:ok, Map.put(state, evidence_key, evidence)}
+      end
+    end
+  end
+
+  defp aggregate_results(state, slots) do
+    {run_results, evidences} =
+      Enum.reduce(slots, {[], []}, fn slot, {results, evidences} ->
+        candidate = Map.get(state, :"candidate_#{slot}")
+        run_result = Map.get(state, :"run_result_#{slot}")
+        evidence = Map.get(state, :"evidence_#{slot}")
+
+        case candidate do
+          nil ->
+            {results, evidences}
+
+          %Issue{id: id} ->
+            {[{id, run_result} | results], [{id, evidence} | evidences]}
+        end
+      end)
+
+    state
+    |> Map.put(:run_results, Enum.reverse(run_results))
+    |> Map.put(:evidences, Enum.reverse(evidences))
+  end
+
   defp compile_opts(opts) do
     opts
     |> Keyword.take([

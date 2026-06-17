@@ -179,4 +179,88 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
              ]
     end
   end
+
+  describe "from_workflow_parallel/1" do
+    test "builds a parallel graph with one branch per slot", _ctx do
+      {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 2)
+      node_ids = Map.keys(compiled.nodes) |> Enum.sort()
+
+      assert node_ids == [
+               :aggregate,
+               :completion,
+               :fan_out_candidates,
+               :slot_dispatch_0,
+               :slot_dispatch_1,
+               :slot_evidence_0,
+               :slot_evidence_1,
+               :slot_prepare_0,
+               :slot_prepare_1,
+               :tracker_poll
+             ]
+    end
+
+    test "fans out across both candidates and aggregates run_results", ctx do
+      Memory.put_issue(issue("a", "PAR-1", "Todo"))
+      Memory.put_issue(issue("b", "PAR-2", "Todo"))
+      Noop.Director.set("PAR-1", {:succeed_after, 0})
+      Noop.Director.set("PAR-2", {:succeed_after, 0})
+
+      {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 2)
+      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
+
+      results_by_id = Map.new(final.run_results)
+      assert results_by_id["a"] == :ok
+      assert results_by_id["b"] == :ok
+
+      evidences_by_id = Map.new(final.evidences)
+      assert evidences_by_id["a"] != nil
+      assert evidences_by_id["b"] != nil
+
+      assert %DateTime{} = final.completed_at
+    end
+
+    test "empty slot returns nil run_result + evidence and is skipped on aggregate", ctx do
+      Memory.put_issue(issue("solo", "PAR-3", "Todo"))
+      Noop.Director.set("PAR-3", {:succeed_after, 0})
+
+      {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 3)
+      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
+
+      # Only the one populated slot shows up; the two empty slots are
+      # filtered out by the aggregator.
+      assert [{"solo", :ok}] = final.run_results
+    end
+
+    test "per-slot runner failure surfaces in aggregated run_results", ctx do
+      Memory.put_issue(issue("ok", "PAR-4", "Todo"))
+      Memory.put_issue(issue("bad", "PAR-5", "Todo"))
+      Noop.Director.set("PAR-4", {:succeed_after, 0})
+      Noop.Director.set("PAR-5", {:fail_after, 0, :boom})
+
+      {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 2)
+      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
+
+      results_by_id = Map.new(final.run_results)
+      assert results_by_id["ok"] == :ok
+      assert results_by_id["bad"] == {:error, :boom}
+    end
+
+    test "runner pause in a parallel slot is normalized to :pause_in_parallel_branch_unsupported", ctx do
+      Memory.put_issue(issue("p", "PAR-6", "Todo"))
+      Noop.Director.set("PAR-6", {:pause, :awaiting_review, %{token: 1}})
+
+      {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 1)
+      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
+
+      assert [{"p", {:error, :pause_in_parallel_branch_unsupported}}] = final.run_results
+    end
+  end
 end
