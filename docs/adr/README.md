@@ -26,6 +26,9 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0018](0018-operator-flow-contract.md) | Operator-flow contract for paused runs | Proposed | 2026-06-16 |
 | [0019](0019-workflow-concurrency.md) | Workflow concurrency (`add_join/4` + `add_channel/4`) | Proposed | 2026-06-16 |
 | [0020](0020-agent-sandbox-thread-policies.md) | Phase 26: Agent Sandbox, Thread log, declarative Policies | Proposed | 2026-06-16 |
+| [0021](0021-self-improving-agents-skills-curation.md) | Self-improving agents: runtime skills + background curation | Proposed | 2026-06-17 |
+| [0022](0022-memory-providers-fulltext-dialectic.md) | Memory provider stack, full-text recall, dialectic user modeling | Proposed | 2026-06-17 |
+| [0023](0023-unified-messaging-gateway.md) | Unified messaging gateway (`raxol_gateway`) | Proposed | 2026-06-17 |
 
 ## Template
 
@@ -109,7 +112,10 @@ They preserve context for why decisions were made, help new contributors underst
 
 ### Agent stack
 - [0020: Phase 26 — Agent Sandbox, Thread log, declarative Policies](0020-agent-sandbox-thread-policies.md)
+- [0021: Self-improving agents: runtime skills + background curation](0021-self-improving-agents-skills-curation.md)
+- [0022: Memory provider stack, full-text recall, dialectic user modeling](0022-memory-providers-fulltext-dialectic.md)
+- [0023: Unified messaging gateway (raxol_gateway)](0023-unified-messaging-gateway.md)
 
 ## Coverage
 
-18 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, and the agent-stack sandbox + audit + policies primitive. (Numbers 0004 and 0006 are withdrawn placeholders.)
+21 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, and the unified messaging gateway. (Numbers 0004 and 0006 are withdrawn placeholders.)
