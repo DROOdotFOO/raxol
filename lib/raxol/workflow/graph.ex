@@ -148,7 +148,12 @@ defmodule Raxol.Workflow.Graph do
 
     %{
       graph
-      | channels: Map.put(channels, name, %Channel{name: name, into: into, with: reducer})
+      | channels:
+          Map.put(channels, name, %Channel{
+            name: name,
+            into: into,
+            with: reducer
+          })
     }
   end
 
@@ -190,7 +195,8 @@ defmodule Raxol.Workflow.Graph do
       raise ArgumentError, "join :reduce must be a 1-arity function"
     end
 
-    unless parallelism == :branches or (is_integer(parallelism) and parallelism > 0) do
+    unless parallelism == :branches or
+             (is_integer(parallelism) and parallelism > 0) do
       raise ArgumentError,
             "join :parallelism must be :branches or a positive integer; got: " <>
               inspect(parallelism)
@@ -416,7 +422,9 @@ defmodule Raxol.Workflow.Graph do
   end
 
   defp validate_join_targets(joins, known) do
-    case Enum.find(joins, fn %JoinEdge{target: t} -> not MapSet.member?(known, t) end) do
+    case Enum.find(joins, fn %JoinEdge{target: t} ->
+           not MapSet.member?(known, t)
+         end) do
       nil -> :ok
       %JoinEdge{target: t} -> {:error, {:join_target_unknown, t}}
     end
@@ -439,7 +447,8 @@ defmodule Raxol.Workflow.Graph do
   # exactly one barrier. Two joins sharing an upstream is a config error.
   defp validate_join_upstream_uniqueness(joins) do
     {_seen, shared} =
-      Enum.reduce(joins, {%{}, []}, fn %JoinEdge{target: t, upstream: ups}, {seen, dupes} ->
+      Enum.reduce(joins, {%{}, []}, fn %JoinEdge{target: t, upstream: ups},
+                                       {seen, dupes} ->
         Enum.reduce(ups, {seen, dupes}, fn up, {s, d} ->
           case Map.get(s, up) do
             nil -> {Map.put(s, up, t), d}
@@ -450,8 +459,11 @@ defmodule Raxol.Workflow.Graph do
       end)
 
     case shared do
-      [] -> :ok
-      targets -> {:error, {:join_upstream_shared, Enum.sort(Enum.uniq(targets))}}
+      [] ->
+        :ok
+
+      targets ->
+        {:error, {:join_upstream_shared, Enum.sort(Enum.uniq(targets))}}
     end
   end
 

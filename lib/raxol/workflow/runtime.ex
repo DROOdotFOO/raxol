@@ -298,7 +298,14 @@ defmodule Raxol.Workflow.Runtime do
     })
 
     if branch_id != nil do
-      resume_in_branch(compiled, checkpoint, branch_id, resume_value, run_id, opts)
+      resume_in_branch(
+        compiled,
+        checkpoint,
+        branch_id,
+        resume_value,
+        run_id,
+        opts
+      )
     else
       resume_opts =
         opts
@@ -379,7 +386,14 @@ defmodule Raxol.Workflow.Runtime do
     case result do
       {:branch_done, branch_state, new_count} ->
         updated = update_slot(continuation, paused_index, {:done, branch_state})
-        process_next_after_resume(compiled, updated, run_id, deadline_us, new_count)
+
+        process_next_after_resume(
+          compiled,
+          updated,
+          run_id,
+          deadline_us,
+          new_count
+        )
 
       {:branch_paused, value, state_at_interrupt2, paused_node_id2, new_count} ->
         new_slot = {:paused, paused_node_id2, state_at_interrupt2, value}
@@ -391,7 +405,13 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  defp process_next_after_resume(compiled, continuation, run_id, deadline_us, count) do
+  defp process_next_after_resume(
+         compiled,
+         continuation,
+         run_id,
+         deadline_us,
+         count
+       ) do
     case first_paused_slot(continuation.slots) do
       nil ->
         finalize_join(compiled, continuation, run_id, deadline_us, count)
@@ -411,12 +431,22 @@ defmodule Raxol.Workflow.Runtime do
     # bookkeeping.
     cleaned = Map.delete(merged, @fan_out_key)
 
-    step(compiled, continuation.join_target, cleaned, run_id, deadline_us, count)
+    step(
+      compiled,
+      continuation.join_target,
+      cleaned,
+      run_id,
+      deadline_us,
+      count
+    )
   end
 
   defp re_interrupt_for_branch_pause(compiled, continuation, run_id, count) do
-    {next_idx, next_node, _state, reason} = first_paused_slot(continuation.slots)
-    augmented_state = Map.put(continuation.source_state, @fan_out_key, continuation)
+    {next_idx, next_node, _state, reason} =
+      first_paused_slot(continuation.slots)
+
+    augmented_state =
+      Map.put(continuation.source_state, @fan_out_key, continuation)
 
     _ =
       with_branch_id({continuation.join_target, next_idx}, fn ->
@@ -447,7 +477,10 @@ defmodule Raxol.Workflow.Runtime do
   end
 
   defp update_slot(continuation, index, new_slot) do
-    %{continuation | slots: List.replace_at(continuation.slots, index, new_slot)}
+    %{
+      continuation
+      | slots: List.replace_at(continuation.slots, index, new_slot)
+    }
   end
 
   # A checkpoint with `:interrupt_reason` in metadata is a pause
@@ -1136,7 +1169,14 @@ defmodule Raxol.Workflow.Runtime do
          deadline_us,
          count
        ) do
-    run_branches_serially(compiled, branch_ids, state, run_id, deadline_us, count)
+    run_branches_serially(
+      compiled,
+      branch_ids,
+      state,
+      run_id,
+      deadline_us,
+      count
+    )
   end
 
   defp dispatch_branches(
@@ -1158,7 +1198,14 @@ defmodule Raxol.Workflow.Runtime do
     )
   end
 
-  defp run_branches_serially(compiled, branch_ids, state, run_id, deadline_us, count) do
+  defp run_branches_serially(
+         compiled,
+         branch_ids,
+         state,
+         run_id,
+         deadline_us,
+         count
+       ) do
     join_target =
       case Map.get(compiled.joins_by_upstream, hd(branch_ids)) do
         %JoinEdge{target: t} -> t
@@ -1175,16 +1222,26 @@ defmodule Raxol.Workflow.Runtime do
         true ->
           result =
             with_branch_id({join_target, index}, fn ->
-              step_branch(compiled, id, state, run_id, deadline_us, c, join_target)
+              step_branch(
+                compiled,
+                id,
+                state,
+                run_id,
+                deadline_us,
+                c,
+                join_target
+              )
             end)
 
           case result do
             {:branch_done, branch_state, new_count} ->
               {:cont, {:ok, [{:done, branch_state} | slots], new_count}}
 
-            {:branch_paused, value, state_at_interrupt, paused_node_id, new_count} ->
+            {:branch_paused, value, state_at_interrupt, paused_node_id,
+             new_count} ->
               {:cont,
-               {:ok, [{:paused, paused_node_id, state_at_interrupt, value} | slots],
+               {:ok,
+                [{:paused, paused_node_id, state_at_interrupt, value} | slots],
                 new_count}}
 
             {:error, _reason, _state, _count} = err ->
@@ -1312,7 +1369,8 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  defp install_branch_trace(%{trace_id: trace_id} = parent) when not is_nil(trace_id) do
+  defp install_branch_trace(%{trace_id: trace_id} = parent)
+       when not is_nil(trace_id) do
     Process.put(:raxol_trace_id, trace_id)
     Process.put(:raxol_span_id, parent.span_id)
     Process.put(:raxol_parent_span_id, parent.parent_span_id)
@@ -1339,9 +1397,11 @@ defmodule Raxol.Workflow.Runtime do
         {:error, {:branch_task_exit, reason}, source_state, base_count}
 
       nil ->
-        sorted = Enum.sort_by(outcomes, fn {:branch_outcome, idx, _, _, _} -> idx end)
+        sorted =
+          Enum.sort_by(outcomes, fn {:branch_outcome, idx, _, _, _} -> idx end)
 
-        Enum.each(sorted, fn {:branch_outcome, _idx, _res, _start, executed_nodes} ->
+        Enum.each(sorted, fn {:branch_outcome, _idx, _res, _start,
+                              executed_nodes} ->
           Enum.each(executed_nodes, &track_executed/1)
         end)
 
@@ -1387,21 +1447,53 @@ defmodule Raxol.Workflow.Runtime do
 
   # --- Branch sub-execution walker ---
 
-  defp step_branch(_compiled, @end_, state, _run_id, _deadline_us, count, halt_at) do
+  defp step_branch(
+         _compiled,
+         @end_,
+         state,
+         _run_id,
+         _deadline_us,
+         count,
+         halt_at
+       ) do
     {:error, {:branch_reached_end_before_join, halt_at}, state, count}
   end
 
-  defp step_branch(compiled, current_id, state, run_id, deadline_us, count, halt_at) do
+  defp step_branch(
+         compiled,
+         current_id,
+         state,
+         run_id,
+         deadline_us,
+         count,
+         halt_at
+       ) do
     cond do
       monotonic_us() >= deadline_us ->
         {:error, :run_timeout, state, count}
 
       true ->
-        execute_branch_node(compiled, current_id, state, run_id, deadline_us, count, halt_at)
+        execute_branch_node(
+          compiled,
+          current_id,
+          state,
+          run_id,
+          deadline_us,
+          count,
+          halt_at
+        )
     end
   end
 
-  defp execute_branch_node(compiled, current_id, state, run_id, deadline_us, count, halt_at) do
+  defp execute_branch_node(
+         compiled,
+         current_id,
+         state,
+         run_id,
+         deadline_us,
+         count,
+         halt_at
+       ) do
     case attempt_node_with_retry(compiled, current_id, state, run_id, 1) do
       {:node_ok, new_state, _tag} ->
         track_executed(Map.fetch!(compiled.nodes, current_id))
@@ -1425,7 +1517,15 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  defp traverse_branch(compiled, current_id, state, run_id, deadline_us, count, halt_at) do
+  defp traverse_branch(
+         compiled,
+         current_id,
+         state,
+         run_id,
+         deadline_us,
+         count,
+         halt_at
+       ) do
     outgoing = Map.get(compiled.edges_by_source, current_id, [])
 
     case pick_next(outgoing, state) do
@@ -1433,9 +1533,17 @@ defmodule Raxol.Workflow.Runtime do
         {:branch_done, state, count}
 
       {:ok, next_id} when is_atom(next_id) or is_binary(next_id) ->
-        step_branch(compiled, next_id, state, run_id, deadline_us, count, halt_at)
+        step_branch(
+          compiled,
+          next_id,
+          state,
+          run_id,
+          deadline_us,
+          count,
+          halt_at
+        )
 
-      {:ok, _ids_list} when is_list(_ids_list) ->
+      {:ok, ids} when is_list(ids) ->
         {:error, {:nested_fan_out_unsupported, current_id}, state, count}
 
       :no_match ->
@@ -1446,7 +1554,11 @@ defmodule Raxol.Workflow.Runtime do
     end
   end
 
-  defp merge_branch_states(branch_states, %JoinEdge{reducer: reducer}, _channels)
+  defp merge_branch_states(
+         branch_states,
+         %JoinEdge{reducer: reducer},
+         _channels
+       )
        when is_function(reducer, 1) do
     reducer.(branch_states)
   end
