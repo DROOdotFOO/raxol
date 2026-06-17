@@ -687,6 +687,10 @@ defmodule Raxol.Workflow.ParallelTest do
     test "parallelism: 1 falls back to serial ordering" do
       # Each branch writes its index into a shared ETS log; under the
       # serial path the log entries arrive in branch-index order.
+      # Use :erlang.unique_integer/1 as the ordered_set key so the
+      # ordering is robust even when Windows' nanosecond timer has
+      # coarse resolution (back-to-back monotonic_time calls can return
+      # the same value, which the saver's ordered_set then deduplicates).
       table = :"par_one_#{:erlang.unique_integer([:positive])}"
 
       _ =
@@ -701,24 +705,21 @@ defmodule Raxol.Workflow.ParallelTest do
       on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
 
       log = fn idx ->
-        :ets.insert(table, {System.monotonic_time(:nanosecond), idx})
+        :ets.insert(table, {:erlang.unique_integer([:monotonic, :positive]), idx})
       end
 
       graph =
         Graph.new(:par_one)
         |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
         |> Graph.add_node(:b0, fn s ->
-          Process.sleep(30)
           log.(0)
           {:ok, s}
         end)
         |> Graph.add_node(:b1, fn s ->
-          Process.sleep(10)
           log.(1)
           {:ok, s}
         end)
         |> Graph.add_node(:b2, fn s ->
-          Process.sleep(0)
           log.(2)
           {:ok, s}
         end)
@@ -827,7 +828,7 @@ defmodule Raxol.Workflow.ParallelTest do
       on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
 
       log = fn tag ->
-        :ets.insert(table, {System.monotonic_time(:nanosecond), tag})
+        :ets.insert(table, {:erlang.unique_integer([:monotonic, :positive]), tag})
       end
 
       graph =
