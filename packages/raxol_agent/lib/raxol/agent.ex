@@ -150,7 +150,7 @@ defmodule Raxol.Agent do
       skill actions when `skills_provider/0` is set, otherwise `[]`.
       """
       def available_actions do
-        memory_on? = memory_provider() != nil or memory_providers() != []
+        memory_on? = memory_provider() || not Enum.empty?(memory_providers())
         memory = if memory_on?, do: Raxol.Agent.Actions.Memory.actions(), else: []
         skills = if skills_provider(), do: Raxol.Agent.Actions.Skills.actions(), else: []
         memory ++ skills
