@@ -18,7 +18,9 @@ defmodule Raxol.Symphony.Config.Schema do
   alias Raxol.Symphony.Config
 
   @supported_tracker_kinds ~w(linear github memory)
-  @supported_runner_kinds ~w(raxol_agent codex)
+  @supported_runner_kinds ~w(raxol_agent codex review)
+  # Kinds usable as the implementer or reviewer behind a "review" runner.
+  @reviewable_kinds ~w(raxol_agent raxol_agent_session codex)
 
   @type error ::
           :missing_tracker_kind
@@ -27,6 +29,8 @@ defmodule Raxol.Symphony.Config.Schema do
           | :missing_tracker_project_slug
           | :missing_codex_command
           | {:unsupported_runner_kind, binary()}
+          | :missing_reviewer_kind
+          | :reviewer_kind_must_differ
           | {:invalid_value, atom(), term()}
 
   @doc """
@@ -45,7 +49,8 @@ defmodule Raxol.Symphony.Config.Schema do
          :ok <- validate_polling(config.polling),
          :ok <- validate_workspace(config.workspace),
          :ok <- validate_hooks(config.hooks),
-         :ok <- validate_agent(config.agent) do
+         :ok <- validate_agent(config.agent),
+         :ok <- validate_review(config.review) do
       if Keyword.get(opts, :skip_runner, false) do
         :ok
       else
@@ -116,6 +121,23 @@ defmodule Raxol.Symphony.Config.Schema do
   end
 
   defp validate_runner(_runner, _codex), do: :ok
+
+  # -- Review -----------------------------------------------------------------
+
+  defp validate_review(%{enabled: true} = review) do
+    implementer = review.implementer_kind
+    reviewer = review.reviewer_kind
+
+    cond do
+      blank?(reviewer) -> {:error, :missing_reviewer_kind}
+      reviewer == implementer -> {:error, :reviewer_kind_must_differ}
+      implementer not in @reviewable_kinds -> {:error, {:unsupported_runner_kind, implementer}}
+      reviewer not in @reviewable_kinds -> {:error, {:unsupported_runner_kind, reviewer}}
+      true -> :ok
+    end
+  end
+
+  defp validate_review(_review), do: :ok
 
   # -- Helpers ----------------------------------------------------------------
 

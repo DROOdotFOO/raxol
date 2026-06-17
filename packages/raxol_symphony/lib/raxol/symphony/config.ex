@@ -24,6 +24,7 @@ defmodule Raxol.Symphony.Config do
     :agent,
     :codex,
     :runner,
+    :review,
     :recording,
     :workflow_mode,
     :workflow_path,
@@ -38,6 +39,7 @@ defmodule Raxol.Symphony.Config do
           agent: map(),
           codex: map(),
           runner: map(),
+          review: map(),
           recording: map(),
           workflow_mode: :default | :graph,
           workflow_path: Path.t() | nil,
@@ -88,6 +90,7 @@ defmodule Raxol.Symphony.Config do
       agent: agent(raw),
       codex: codex(raw),
       runner: runner(raw),
+      review: review(raw),
       recording: recording(raw),
       workflow_mode: workflow_mode(raw),
       workflow_path: workflow_path,
@@ -117,14 +120,11 @@ defmodule Raxol.Symphony.Config do
 
     %{
       kind: kind,
-      endpoint:
-        resolve_value(Map.get(section, :endpoint, default_endpoint(kind))),
-      api_key:
-        resolve_value(Map.get(section, :api_key, default_api_key_env(kind))),
+      endpoint: resolve_value(Map.get(section, :endpoint, default_endpoint(kind))),
+      api_key: resolve_value(Map.get(section, :api_key, default_api_key_env(kind))),
       project_slug: resolve_value(Map.get(section, :project_slug)),
       active_states: Map.get(section, :active_states, @default_active_states),
-      terminal_states:
-        Map.get(section, :terminal_states, @default_terminal_states)
+      terminal_states: Map.get(section, :terminal_states, @default_terminal_states)
     }
   end
 
@@ -181,9 +181,7 @@ defmodule Raxol.Symphony.Config do
       max_retry_backoff_ms:
         Map.get(section, :max_retry_backoff_ms, @default_max_retry_backoff_ms),
       max_concurrent_agents_by_state:
-        normalize_state_map(
-          Map.get(section, :max_concurrent_agents_by_state, %{})
-        )
+        normalize_state_map(Map.get(section, :max_concurrent_agents_by_state, %{}))
     }
   end
 
@@ -195,12 +193,9 @@ defmodule Raxol.Symphony.Config do
       approval_policy: Map.get(section, :approval_policy),
       thread_sandbox: Map.get(section, :thread_sandbox),
       turn_sandbox_policy: Map.get(section, :turn_sandbox_policy),
-      turn_timeout_ms:
-        Map.get(section, :turn_timeout_ms, @default_turn_timeout_ms),
-      read_timeout_ms:
-        Map.get(section, :read_timeout_ms, @default_read_timeout_ms),
-      stall_timeout_ms:
-        Map.get(section, :stall_timeout_ms, @default_stall_timeout_ms)
+      turn_timeout_ms: Map.get(section, :turn_timeout_ms, @default_turn_timeout_ms),
+      read_timeout_ms: Map.get(section, :read_timeout_ms, @default_read_timeout_ms),
+      stall_timeout_ms: Map.get(section, :stall_timeout_ms, @default_stall_timeout_ms)
     }
   end
 
@@ -213,6 +208,23 @@ defmodule Raxol.Symphony.Config do
     %{
       kind: kind,
       agent: Map.get(section, :agent, %{})
+    }
+  end
+
+  # Raxol extension: opt-in cross-vendor review. When `enabled: true` and
+  # `runner.kind == "review"`, the Review runner implements with
+  # `implementer_kind` then pauses for a different-vendor `reviewer_kind` to
+  # review the diff (ported from omnigent's Polly cross-vendor invariant).
+  defp review(raw) do
+    section = Map.get(raw, :review, %{})
+
+    %{
+      enabled: Map.get(section, :enabled, false),
+      implementer_kind: Map.get(section, :implementer_kind, "raxol_agent"),
+      reviewer_kind: Map.get(section, :reviewer_kind),
+      candidate_kinds: Map.get(section, :candidate_kinds),
+      base_ref: Map.get(section, :base_ref),
+      acceptance: resolve_value(Map.get(section, :acceptance))
     }
   end
 
