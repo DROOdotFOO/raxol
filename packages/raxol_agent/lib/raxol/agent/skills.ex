@@ -8,9 +8,8 @@ defmodule Raxol.Agent.Skills do
   `Raxol.Agent.Actions.Skills` actions (`skills_list`, `skill_view`,
   `skill_manage`) are how an agent reaches them.
 
-  This module is the small surface a runtime needs: the configured store and the
-  `{module, opts}` tuple that goes under `context[:skills]`, mirroring
-  `Raxol.Agent.Memory.provider_context/3`.
+  Provides the configured store and the `{module, opts}` tuple that goes under
+  `context[:skills]`, mirroring `Raxol.Agent.Memory.provider_context/3`.
   """
 
   alias Raxol.Agent.Skills.Store

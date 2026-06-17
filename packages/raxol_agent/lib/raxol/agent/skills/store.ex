@@ -6,8 +6,8 @@ defmodule Raxol.Agent.Skills.Store do
   `Raxol.Agent.Skill`) plus optional supporting files. Disk is the source of
   truth; this `BaseManager` GenServer is a warm index over it. The index is
   built by scanning a managed root (writable, default `~/.raxol/skills`) and any
-  read-only `external_dirs` (default `~/.agents/skills`), so an agent sees the
-  user's existing skill library on day one.
+  read-only `external_dirs` (default `~/.agents/skills`), so an agent can read
+  the user's existing skill library.
 
   Per-skill usage telemetry (`use_count`, `view_count`, `last_used_at`, `state`,
   `pinned`) is the store's own state and is persisted to a DETS file via
@@ -31,11 +31,14 @@ defmodule Raxol.Agent.Skills.Store do
   @default_root "~/.raxol/skills"
   @default_external ["~/.agents/skills"]
 
+  @type skill_state :: :active | :stale | :archived
+
   @type usage :: %{
           use_count: non_neg_integer(),
           view_count: non_neg_integer(),
           last_used_at: integer() | nil,
-          state: :active | :stale | :archived,
+          created_at: integer() | nil,
+          state: skill_state(),
           pinned: boolean()
         }
 
@@ -92,9 +95,43 @@ defmodule Raxol.Agent.Skills.Store do
   @spec usage(String.t(), keyword()) :: {:ok, usage()} | {:error, :not_found}
   def usage(name, opts \\ []), do: GenServer.call(server(opts), {:usage, name})
 
+  @doc "Set a skill's lifecycle state (`:active`/`:stale`/`:archived`). Used by the Curator."
+  @spec set_state(String.t(), skill_state(), keyword()) :: :ok | {:error, :not_found}
+  def set_state(name, new_state, opts \\ []) when new_state in [:active, :stale, :archived] do
+    GenServer.call(server(opts), {:set_state, name, new_state})
+  end
+
+  @doc "Pin a skill so the Curator never ages or rewrites it."
+  @spec pin(String.t(), keyword()) :: :ok | {:error, :not_found}
+  def pin(name, opts \\ []), do: GenServer.call(server(opts), {:set_pinned, name, true})
+
+  @doc "Remove a skill's pin."
+  @spec unpin(String.t(), keyword()) :: :ok | {:error, :not_found}
+  def unpin(name, opts \\ []), do: GenServer.call(server(opts), {:set_pinned, name, false})
+
+  @doc """
+  Archive a managed skill: move its directory under `<root>/.archive/` and drop
+  it from the index, so it no longer appears in `list/1`. Telemetry is retained
+  with `state: :archived`.
+  """
+  @spec archive(String.t(), keyword()) :: :ok | {:error, term()}
+  def archive(name, opts \\ []), do: GenServer.call(server(opts), {:archive, name})
+
+  @doc """
+  Per-skill telemetry snapshot for every indexed skill, for the Curator to
+  decide lifecycle transitions: `name, created_by, source, state, pinned,
+  last_used_at, created_at`.
+  """
+  @spec telemetry(keyword()) :: [map()]
+  def telemetry(opts \\ []), do: GenServer.call(server(opts), :telemetry)
+
   @doc "Force a re-scan of disk into the index. Telemetry is preserved."
   @spec reload(keyword()) :: :ok
   def reload(opts \\ []), do: GenServer.call(server(opts), :reload)
+
+  @doc "The managed skills root directory (where new skills are written)."
+  @spec root(keyword()) :: String.t()
+  def root(opts \\ []), do: GenServer.call(server(opts), :root)
 
   @doc "Derived ETS table names. Public for tests and tooling."
   @spec primary_table(atom()) :: atom()
@@ -180,11 +217,35 @@ defmodule Raxol.Agent.Skills.Store do
     end
   end
 
+  def handle_manager_call({:set_state, name, new_state}, _from, state) do
+    {:reply, update_usage(state, name, &%{&1 | state: new_state}), state}
+  end
+
+  def handle_manager_call({:set_pinned, name, pinned}, _from, state) do
+    {:reply, update_usage(state, name, &%{&1 | pinned: pinned}), state}
+  end
+
+  def handle_manager_call({:archive, name}, _from, state) do
+    {:reply, do_archive(state, name), state}
+  end
+
+  def handle_manager_call(:telemetry, _from, state) do
+    rows =
+      state.primary
+      |> :ets.tab2list()
+      |> Enum.map(fn {name, entry} -> telemetry_row(state, name, entry) end)
+      |> Enum.sort_by(& &1.name)
+
+    {:reply, rows, state}
+  end
+
   def handle_manager_call(:reload, _from, state) do
     :ets.delete_all_objects(state.primary)
     scan(state)
     {:reply, :ok, state}
   end
+
+  def handle_manager_call(:root, _from, state), do: {:reply, state.root, state}
 
   @impl GenServer
   def terminate(_reason, state) do
@@ -256,6 +317,19 @@ defmodule Raxol.Agent.Skills.Store do
       :ets.delete(state.primary, name)
       :ets.delete(state.usage, name)
       Dets.delete(state.dets, name)
+      :ok
+    end
+  end
+
+  defp do_archive(state, name) do
+    with {:ok, entry} <- managed_entry(state, name) do
+      archive_root = Path.join(state.root, ".archive")
+      target = Path.join(archive_root, name)
+      File.mkdir_p!(archive_root)
+      File.rm_rf!(target)
+      File.rename!(entry.dir, target)
+      update_usage(state, name, &%{&1 | state: :archived})
+      :ets.delete(state.primary, name)
       :ok
     end
   end
@@ -338,13 +412,50 @@ defmodule Raxol.Agent.Skills.Store do
   # -- usage telemetry --------------------------------------------------------
 
   defp default_usage do
-    %{use_count: 0, view_count: 0, last_used_at: nil, state: :active, pinned: false}
+    %{
+      use_count: 0,
+      view_count: 0,
+      last_used_at: nil,
+      created_at: nil,
+      state: :active,
+      pinned: false
+    }
   end
 
   defp ensure_usage(state, name) do
     unless :ets.member(state.usage, name) do
-      put_usage(state, name, default_usage())
+      put_usage(state, name, %{default_usage() | created_at: now()})
     end
+  end
+
+  defp update_usage(state, name, fun) do
+    case usage_for(state, name) do
+      nil ->
+        if member?(state, name) do
+          put_usage(state, name, fun.(default_usage()))
+          :ok
+        else
+          {:error, :not_found}
+        end
+
+      usage ->
+        put_usage(state, name, fun.(usage))
+        :ok
+    end
+  end
+
+  defp telemetry_row(state, name, entry) do
+    usage = usage_for(state, name) || default_usage()
+
+    %{
+      name: name,
+      created_by: entry.skill.created_by,
+      source: entry.source,
+      state: usage.state,
+      pinned: usage.pinned,
+      last_used_at: usage.last_used_at,
+      created_at: usage.created_at
+    }
   end
 
   defp usage_for(state, name) do

@@ -5,7 +5,7 @@ defmodule Raxol.Agent.Actions.Skills.List do
     name: "skills_list",
     description:
       "List available skills as metadata only (name, category, description, state). " <>
-        "This is the cheap level; call skill_view with a name to read a skill's contents.",
+        "Call skill_view with a name to read a skill's contents.",
     schema: [
       input: [],
       output: [

@@ -8,6 +8,7 @@ defmodule Raxol.Agent.Supervisor do
   - `Raxol.Agent.Orchestrator` -- multi-agent coordinator
   - `Raxol.Agent.Memory.Store.Ets` -- when configured as the memory provider
   - `Raxol.Agent.Skills.Store` -- when a skills provider is configured
+  - `Raxol.Agent.Curator` -- when a `:curator` config is set
 
   Strategy is `:rest_for_one`: if the DynSup crashes, the Orchestrator
   restarts and rebuilds from ContextStore. If the Registry crashes,
@@ -28,7 +29,7 @@ defmodule Raxol.Agent.Supervisor do
         {Registry, keys: :unique, name: Raxol.Agent.Registry},
         {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one},
         Raxol.Agent.Orchestrator
-      ] ++ memory_children() ++ skills_children()
+      ] ++ memory_children() ++ skills_children() ++ curator_children()
 
     Supervisor.init(children, strategy: :rest_for_one)
   end
@@ -45,6 +46,15 @@ defmodule Raxol.Agent.Supervisor do
   defp skills_children do
     case Application.get_env(:raxol_agent, :skills_provider) do
       Raxol.Agent.Skills.Store -> [Raxol.Agent.Skills.Store]
+      _ -> []
+    end
+  end
+
+  # Start the Curator only when a :curator config (a keyword list including
+  # `:skills`) is set.
+  defp curator_children do
+    case Application.get_env(:raxol_agent, :curator) do
+      opts when is_list(opts) -> [{Raxol.Agent.Curator, opts}]
       _ -> []
     end
   end

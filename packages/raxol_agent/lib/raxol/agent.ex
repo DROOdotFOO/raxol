@@ -118,6 +118,20 @@ defmodule Raxol.Agent do
       def skills_provider, do: nil
 
       @doc """
+      Returns the self-improvement config for this agent, or `nil` to disable.
+
+      When set, the runtime calls `Raxol.Agent.SelfImprove.after_turn/3` after
+      recording each turn. A qualifying turn (succeeded, at least
+      `min_tool_calls` tool calls) spawns a background reviewer that writes
+      durable memory and `created_by: :agent` skills on an auxiliary model.
+
+          %{enabled: true, backend: module, model: term, min_tool_calls: 5}
+
+      Defaults to `nil` (self-improvement disabled).
+      """
+      def self_improve, do: nil
+
+      @doc """
       Returns a list of Action modules available to this agent.
 
       Used by `Agent.Process` with a Strategy to determine which
@@ -146,6 +160,7 @@ defmodule Raxol.Agent do
                      thread_log: 0,
                      memory_provider: 0,
                      skills_provider: 0,
+                     self_improve: 0,
                      available_actions: 0
 
       @doc false
