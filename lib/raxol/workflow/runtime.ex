@@ -48,6 +48,12 @@ defmodule Raxol.Workflow.Runtime do
   @branch_id_key :__raxol_workflow_branch_id__
   @fan_out_key :__raxol_workflow_fan_out__
 
+  # Each concurrent branch reserves a step-number range starting at
+  # `base_count + index * @branch_step_stride` so per-node checkpoints
+  # don't collide on the saver's `(thread_id, step)` key. The stride
+  # caps a branch at 1M nodes -- well above any realistic workflow.
+  @branch_step_stride 1_000_000
+
   @start :__start__
   @end_ :__end__
 
@@ -1063,7 +1069,8 @@ defmodule Raxol.Workflow.Runtime do
 
       %JoinEdge{} = join ->
         result =
-          run_branches_serially(
+          dispatch_branches(
+            join,
             compiled,
             branch_ids,
             state,
@@ -1167,6 +1174,41 @@ defmodule Raxol.Workflow.Runtime do
     Map.get(compiled.joins_by_upstream, first)
   end
 
+  # Routes between the serial walker and the `Task.async_stream`-based
+  # concurrent walker. `parallelism: 1` selects the serial path so
+  # consumers that need branch-index-order side effects can opt out of
+  # concurrency without sacrificing the rest of the fan-out machinery.
+  defp dispatch_branches(
+         %JoinEdge{parallelism: 1},
+         compiled,
+         branch_ids,
+         state,
+         run_id,
+         deadline_us,
+         count
+       ) do
+    run_branches_serially(compiled, branch_ids, state, run_id, deadline_us, count)
+  end
+
+  defp dispatch_branches(
+         %JoinEdge{},
+         compiled,
+         branch_ids,
+         state,
+         run_id,
+         deadline_us,
+         count
+       ) do
+    run_branches_concurrently(
+      compiled,
+      branch_ids,
+      state,
+      run_id,
+      deadline_us,
+      count
+    )
+  end
+
   # Runs each branch from the initial state. Branches that complete
   # become `{:done, terminal_state}` slots; branches that pause become
   # `{:paused, paused_node_id, state_at_pause, interrupt_reason}` slots
@@ -1227,6 +1269,194 @@ defmodule Raxol.Workflow.Runtime do
 
       {:error, _, _, _} = err ->
         err
+    end
+  end
+
+  # Concurrent branch execution via `Task.async_stream`. Each branch
+  # runs in its own Task; the Tasks share the run's deadline. Result
+  # slots arrive in branch-index order (`ordered: true`) so channel
+  # reducers + last-write-wins behave identically to the serial path.
+  #
+  # Each Task copies the parent's TraceContext + sets `@branch_id_key`
+  # + initializes its own `@executed_key` list. After all Tasks
+  # complete, the parent folds executed-node lists in branch-index
+  # order into its own `@executed_key` so compensation traverses
+  # branches in topological reverse.
+  defp run_branches_concurrently(
+         compiled,
+         branch_ids,
+         source_state,
+         run_id,
+         deadline_us,
+         count
+       ) do
+    join_target =
+      case Map.get(compiled.joins_by_upstream, hd(branch_ids)) do
+        %JoinEdge{target: t} -> t
+        nil -> nil
+      end
+
+    max_concurrency =
+      case Map.get(compiled.joins_by_node, join_target) do
+        %JoinEdge{parallelism: :branches} -> length(branch_ids)
+        %JoinEdge{parallelism: n} when is_integer(n) and n > 0 -> n
+        _ -> length(branch_ids)
+      end
+
+    parent_trace = TraceContext.current()
+
+    stream_timeout = max(0, div(deadline_us - monotonic_us(), 1_000))
+
+    indexed = Enum.with_index(branch_ids)
+
+    stream_results =
+      Task.async_stream(
+        indexed,
+        fn {branch_id, index} ->
+          run_branch_in_task(
+            compiled,
+            branch_id,
+            index,
+            source_state,
+            run_id,
+            deadline_us,
+            count,
+            join_target,
+            parent_trace
+          )
+        end,
+        ordered: true,
+        max_concurrency: max_concurrency,
+        timeout: stream_timeout,
+        on_timeout: :kill_task
+      )
+      |> Enum.to_list()
+
+    fold_concurrent_results(stream_results, source_state, count)
+  end
+
+  defp run_branch_in_task(
+         compiled,
+         branch_id,
+         index,
+         source_state,
+         run_id,
+         deadline_us,
+         base_count,
+         join_target,
+         parent_trace
+       ) do
+    install_branch_trace(parent_trace)
+    Process.put(@branch_id_key, {join_target, index})
+    Process.put(@executed_key, [])
+
+    task_start_count = base_count + index * @branch_step_stride
+
+    try do
+      result =
+        step_branch(
+          compiled,
+          branch_id,
+          source_state,
+          run_id,
+          deadline_us,
+          task_start_count,
+          join_target
+        )
+
+      executed = Process.get(@executed_key, [])
+      {:branch_outcome, index, result, task_start_count, Enum.reverse(executed)}
+    after
+      Process.delete(@branch_id_key)
+      Process.delete(@executed_key)
+      TraceContext.clear()
+    end
+  end
+
+  defp install_branch_trace(%{trace_id: trace_id} = parent) when not is_nil(trace_id) do
+    Process.put(:raxol_trace_id, trace_id)
+    Process.put(:raxol_span_id, parent.span_id)
+    Process.put(:raxol_parent_span_id, parent.parent_span_id)
+
+    if parent.causation_id do
+      Process.put(:raxol_causation_id, parent.causation_id)
+    end
+  end
+
+  defp install_branch_trace(_), do: :ok
+
+  # Folds `Task.async_stream` results in input order, merging
+  # per-branch `executed_nodes` into the parent's `@executed_key` so
+  # compensation walks branches in topological reverse. Returns the
+  # same shape `run_branches_serially/6` does:
+  # `{:all_done, branch_states, new_count}` |
+  # `{:has_paused, slots, new_count}` |
+  # `{:error, reason, state, count}`.
+  defp fold_concurrent_results(stream_results, source_state, base_count) do
+    outcomes =
+      Enum.map(stream_results, fn
+        {:ok, {:branch_outcome, _idx, _result, _start, _executed} = outcome} ->
+          outcome
+
+        {:exit, reason} ->
+          {:task_exit, reason}
+      end)
+
+    case Enum.find(outcomes, &match?({:task_exit, _}, &1)) do
+      {:task_exit, reason} ->
+        {:error, {:branch_task_exit, reason}, source_state, base_count}
+
+      nil ->
+        sorted = Enum.sort_by(outcomes, fn {:branch_outcome, idx, _, _, _} -> idx end)
+
+        Enum.each(sorted, fn {:branch_outcome, _idx, _res, _start, executed_nodes} ->
+          Enum.each(executed_nodes, &track_executed/1)
+        end)
+
+        case Enum.find(sorted, fn
+               {:branch_outcome, _, {:error, _, _, _}, _, _} -> true
+               _ -> false
+             end) do
+          {:branch_outcome, _, {:error, _, _, _} = err, _, _} ->
+            err
+
+          nil ->
+            build_slots_from_outcomes(sorted, base_count)
+        end
+    end
+  end
+
+  defp build_slots_from_outcomes(sorted_outcomes, base_count) do
+    # Each branch Task starts at `task_start_count = base_count + idx * STRIDE`
+    # and returns `branch_count = task_start_count + nodes_executed_in_branch`.
+    # The parent's new count after the fan-out skips past all branch strides
+    # so subsequent sequential checkpoints (including any pause checkpoint
+    # written by `interrupt_for_branch_pause`) have step numbers higher than
+    # any branch step. This keeps the saver's `get_latest` returning the
+    # most-recent commit -- if we used `base_count + sum(deltas)` here, the
+    # parent's pause checkpoint would land below the highest branch step and
+    # resume would hydrate the wrong checkpoint.
+    {slots, _} =
+      Enum.reduce(sorted_outcomes, {[], 0}, fn
+        {:branch_outcome, _idx, {:branch_done, branch_state, _branch_count},
+         _task_start, _exec},
+        {acc, sum} ->
+          {[{:done, branch_state} | acc], sum}
+
+        {:branch_outcome, _idx,
+         {:branch_paused, value, state_at_pause, paused_node_id, _branch_count},
+         _task_start, _exec},
+        {acc, sum} ->
+          {[{:paused, paused_node_id, state_at_pause, value} | acc], sum}
+      end)
+
+    ordered = Enum.reverse(slots)
+    new_count = base_count + length(sorted_outcomes) * @branch_step_stride
+
+    if Enum.any?(ordered, &match?({:paused, _, _, _}, &1)) do
+      {:has_paused, ordered, new_count}
+    else
+      {:all_done, Enum.map(ordered, fn {:done, st} -> st end), new_count}
     end
   end
 
