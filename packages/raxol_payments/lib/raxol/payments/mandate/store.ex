@@ -47,6 +47,7 @@ defmodule Raxol.Payments.Mandate.Store do
 
   use Raxol.Core.Behaviours.BaseManager
 
+  alias Raxol.Core.Stores.{Dets, Naming}
   alias Raxol.Payments.Mandate
 
   # -- Public API --
@@ -143,7 +144,7 @@ defmodule Raxol.Payments.Mandate.Store do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
-    name = registered_name!()
+    name = Naming.registered_name!(__MODULE__)
     tables = %{
       primary: primary_table(name),
       by_agent: by_agent_table(name),
@@ -155,9 +156,9 @@ defmodule Raxol.Payments.Mandate.Store do
     :ets.new(tables.by_member, [:named_table, :public, :bag, read_concurrency: true])
 
     dets =
-      case dets_path(opts) do
+      case Dets.resolve_path(opts, :raxol_payments, :mandate_store_path) do
         nil -> nil
-        path when is_binary(path) -> open_dets(path, tables)
+        path -> Dets.open!(tables.primary, path, &replay_record(tables, &1))
       end
 
     {:ok, %{tables: tables, dets: dets}}
@@ -172,14 +173,14 @@ defmodule Raxol.Payments.Mandate.Store do
     :ets.insert(state.tables.primary, {m.envelope_hash, m})
     :ets.insert(state.tables.by_agent, {m.agent_wallet, m.envelope_hash})
     :ets.insert(state.tables.by_member, {m.human_wallet, m.envelope_hash})
-    persist(state.dets, m.envelope_hash, m)
+    Dets.put(state.dets, m.envelope_hash, m)
     {:reply, :ok, state}
   end
 
   def handle_manager_call({:delete, hash}, _from, state) do
     drop_secondary_indices(state.tables, hash)
     :ets.delete(state.tables.primary, hash)
-    persist_delete(state.dets, hash)
+    Dets.delete(state.dets, hash)
     {:reply, :ok, state}
   end
 
@@ -194,7 +195,7 @@ defmodule Raxol.Payments.Mandate.Store do
     Enum.each(expired, fn {hash, _m} ->
       drop_secondary_indices(state.tables, hash)
       :ets.delete(state.tables.primary, hash)
-      persist_delete(state.dets, hash)
+      Dets.delete(state.dets, hash)
     end)
 
     {:reply, length(expired), state}
@@ -204,42 +205,12 @@ defmodule Raxol.Payments.Mandate.Store do
     :ets.delete_all_objects(state.tables.primary)
     :ets.delete_all_objects(state.tables.by_agent)
     :ets.delete_all_objects(state.tables.by_member)
-    persist_clear(state.dets)
+    Dets.clear(state.dets)
     {:reply, :ok, state}
   end
 
   @impl GenServer
-  def terminate(_reason, %{dets: nil}), do: :ok
-
-  def terminate(_reason, %{dets: dets}) do
-    _ = :dets.sync(dets)
-    _ = :dets.close(dets)
-    :ok
-  end
-
-  # -- Private: name + DETS resolution --
-
-  defp registered_name! do
-    case Process.info(self(), :registered_name) do
-      {:registered_name, name} when is_atom(name) ->
-        name
-
-      _ ->
-        raise """
-        Raxol.Payments.Mandate.Store must be started with a registered
-        :name (an atom) so its ETS tables can be derived. Use
-        `Store.start_link(name: :my_store)` or rely on the default
-        (`Raxol.Payments.Mandate.Store`).
-        """
-    end
-  end
-
-  defp dets_path(opts) do
-    case Keyword.get(opts, :dets_path) do
-      nil -> Application.get_env(:raxol_payments, :mandate_store_path)
-      path -> path
-    end
-  end
+  def terminate(_reason, state), do: Dets.close(state.dets)
 
   # -- Private: secondary index maintenance --
 
@@ -254,51 +225,14 @@ defmodule Raxol.Payments.Mandate.Store do
     end
   end
 
-  # -- Private: DETS --
+  # -- Private: DETS replay --
 
-  # DETS table identity is the same atom as the primary ETS table so
-  # consumers see one logical store per name.
-  defp open_dets(path, tables) do
-    path
-    |> Path.expand()
-    |> Path.dirname()
-    |> File.mkdir_p!()
-
-    file_charlist = path |> Path.expand() |> String.to_charlist()
-
-    case :dets.open_file(tables.primary, type: :set, file: file_charlist) do
-      {:ok, table} ->
-        :ok =
-          :dets.foldl(
-            fn {hash, %Mandate{} = m}, _acc ->
-              :ets.insert(tables.primary, {hash, m})
-              :ets.insert(tables.by_agent, {m.agent_wallet, hash})
-              :ets.insert(tables.by_member, {m.human_wallet, hash})
-              :ok
-            end,
-            :ok,
-            table
-          )
-
-        table
-
-      {:error, reason} ->
-        raise """
-        Raxol.Payments.Mandate.Store: failed to open DETS file at #{inspect(path)}
-        (reason: #{inspect(reason)}).
-
-        Either fix the path or remove :dets_path / :mandate_store_path
-        to fall back to in-memory ETS only.
-        """
-    end
+  # Re-insert a record read back from disk into all three live ETS
+  # tables, rebuilding the secondary indices. Passed to
+  # `Raxol.Core.Stores.Dets.open!/3` as the per-record replay closure.
+  defp replay_record(tables, {hash, %Mandate{} = m}) do
+    :ets.insert(tables.primary, {hash, m})
+    :ets.insert(tables.by_agent, {m.agent_wallet, hash})
+    :ets.insert(tables.by_member, {m.human_wallet, hash})
   end
-
-  defp persist(nil, _hash, _m), do: :ok
-  defp persist(dets, hash, m), do: :dets.insert(dets, {hash, m})
-
-  defp persist_delete(nil, _hash), do: :ok
-  defp persist_delete(dets, hash), do: :dets.delete(dets, hash)
-
-  defp persist_clear(nil), do: :ok
-  defp persist_clear(dets), do: :dets.delete_all_objects(dets)
 end
