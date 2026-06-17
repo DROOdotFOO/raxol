@@ -138,6 +138,19 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   Detection is bypassed when `agent.pause_detector` is `nil`, falling
   back to the legacy `EventForwarder.to_parent/3` path with no overhead.
 
+  ## Self-improvement (opt-in)
+
+  Optional: set `agent.module` to a `use Raxol.Agent` module whose
+  `self_improve/0` is enabled, plus `agent.self_improve_opts` with the running
+  store servers (`:memory_opts`, `:skills_opts`, `:user_model`,
+  `:session_search`). After each turn the runner fires
+  `Raxol.Agent.Turn.after_turn/4` via
+  `Raxol.Symphony.Runners.RaxolAgent.SelfImprove`, so the agent authors skills
+  and memory, refreshes its user model, and feeds the session-search index. It
+  runs alongside forwarding/pause/policies/sandboxes without touching them and is
+  a no-op (and never raises) when unconfigured. Currently wired in the
+  workflow-mode path; the simple path is a follow-up.
+
   ## Compile-time optionality
 
   `raxol_agent` is an optional dep. If the consumer app does not include it,
@@ -150,6 +163,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
   alias Raxol.Symphony.{Config, Issue, PromptBuilder, Tracker}
   alias Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow
+  alias Raxol.Symphony.Runners.RaxolAgent.SelfImprove
   alias Raxol.Workflow.Compiled
 
   # raxol_agent is optional; the EventForwarder helper landed in 2.5+.
@@ -212,8 +226,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     # Postgrex equivalent.
     saver =
       Map.get(agent, :workflow_saver) ||
-        {Raxol.Workflow.Checkpoint.Saver.Ets,
-         %{table: :raxol_symphony_agent_workflow}}
+        {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: :raxol_symphony_agent_workflow}}
 
     [saver: saver]
   end
@@ -372,6 +385,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
         }
       )
 
+    # Opt-in after-turn self-improvement; a no-op unless agent.module declares it.
+    SelfImprove.fire(state.config, state.issue, events)
+
     result
   end
 
@@ -384,8 +400,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           system_prompt: state.system_prompt
         )
 
-      {:ok,
-       collect_with_detector(stream, state.parent, state.issue.id, state.pause_detector)}
+      {:ok, collect_with_detector(stream, state.parent, state.issue.id, state.pause_detector)}
     end
 
     case Raxol.Agent.PolicyApplier.apply(policies, op, turn_payload) do
