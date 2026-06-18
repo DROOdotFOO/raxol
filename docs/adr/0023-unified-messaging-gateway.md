@@ -17,9 +17,11 @@ does better), and the pairing lockout is a Raxol hardening Hermes does not docum
 
 Core implemented 2026-06-18 in `packages/raxol_gateway/`: `Adapter` behaviour (+ `Adapter.InMemory`),
 `Route` keying, `SessionRouter` + `Session` (process-per-chat under a DynamicSupervisor, idle/cooldown/
-max-session limits), `Pairing` (codes + allowlists + `authorize/2`), and `Supervisor`. Still to do
-(decision items 2 history-recording, 4 delivery + handoff, plus the concrete platform adapters and the
-`Lifecycle`-backed handler).
+max-session limits), `Pairing` (codes + allowlists + `authorize/2`), and `Supervisor`. Elaborations
+landed the same day: per-chat history recording (`Session` `:log` keyed by `conversation_id`), the
+four-mode `Delivery` router (decision item 4), and `SessionRouter.handoff/3` (rebind to an existing
+`conversation_id` so history follows). Still to do: the concrete platform adapters (Telegram refactor,
+Discord, ...) and the `Lifecycle`-backed handler.
 
 ## Context
 

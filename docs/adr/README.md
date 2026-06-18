@@ -29,6 +29,11 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0021](0021-self-improving-agents-skills-curation.md) | Self-improving agents: runtime skills + background curation | Proposed | 2026-06-17 |
 | [0022](0022-memory-providers-fulltext-dialectic.md) | Memory provider stack, full-text recall, dialectic user modeling | Proposed | 2026-06-17 |
 | [0023](0023-unified-messaging-gateway.md) | Unified messaging gateway (`raxol_gateway`) | Proposed | 2026-06-17 |
+| [0024](0024-execution-backends-hibernation.md) | Pluggable execution backends and serverless hibernation | Proposed | 2026-06-18 |
+| [0025](0025-cronjob-scheduled-tasks.md) | Cronjob scheduled-task tool | Proposed | 2026-06-18 |
+| [0026](0026-execute-code-pipeline-collapse.md) | `execute_code` programmatic tool-calling | Proposed | 2026-06-18 |
+| [0027](0027-delegate-task-subagents.md) | `delegate_task` summary-only subagents | Proposed | 2026-06-18 |
+| [0028](0028-auxiliary-model-routing.md) | Auxiliary-model routing | Proposed | 2026-06-18 |
 
 ## Template
 
@@ -115,7 +120,12 @@ They preserve context for why decisions were made, help new contributors underst
 - [0021: Self-improving agents: runtime skills + background curation](0021-self-improving-agents-skills-curation.md)
 - [0022: Memory provider stack, full-text recall, dialectic user modeling](0022-memory-providers-fulltext-dialectic.md)
 - [0023: Unified messaging gateway (raxol_gateway)](0023-unified-messaging-gateway.md)
+- [0024: Pluggable execution backends and serverless hibernation](0024-execution-backends-hibernation.md)
+- [0025: Cronjob scheduled-task tool](0025-cronjob-scheduled-tasks.md)
+- [0026: execute_code programmatic tool-calling](0026-execute-code-pipeline-collapse.md)
+- [0027: delegate_task summary-only subagents](0027-delegate-task-subagents.md)
+- [0028: Auxiliary-model routing](0028-auxiliary-model-routing.md)
 
 ## Coverage
 
-21 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, and the unified messaging gateway. (Numbers 0004 and 0006 are withdrawn placeholders.)
+26 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, and the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing). (Numbers 0004 and 0006 are withdrawn placeholders.)

@@ -62,6 +62,16 @@ defmodule Raxol.Gateway.SessionRouter do
         }
   def stats(server), do: GenServer.call(server, :stats)
 
+  @doc """
+  Hand a conversation off to another platform: start a session on `to_route`
+  reusing the source session's `conversation_id` (and `:log`), so a configured
+  log resumes the same history. Returns the destination session pid.
+  """
+  @spec handoff(GenServer.server(), String.t(), Route.t()) :: {:ok, pid()} | {:error, term()}
+  def handoff(server, from_key, %Route{} = to_route) do
+    GenServer.call(server, {:handoff, from_key, to_route})
+  end
+
   # -- BaseManager callbacks --------------------------------------------------
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -71,6 +81,7 @@ defmodule Raxol.Gateway.SessionRouter do
        handler: Keyword.fetch!(opts, :handler),
        sessions_sup: Keyword.fetch!(opts, :sessions_sup),
        deliver: resolve_deliver(opts),
+       log: Keyword.get(opts, :log),
        max_sessions: Keyword.get(opts, :max_sessions, @default_max_sessions),
        idle_timeout: Keyword.get(opts, :idle_timeout, @default_idle_timeout),
        cooldown_ms: Keyword.get(opts, :cooldown_ms, @default_cooldown_ms),
@@ -116,6 +127,10 @@ defmodule Raxol.Gateway.SessionRouter do
      state}
   end
 
+  def handle_manager_call({:handoff, from_key, to_route}, _from, state) do
+    do_handoff(from_key, to_route, state)
+  end
+
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
     {:noreply, drop_pid(pid, state)}
@@ -145,7 +160,7 @@ defmodule Raxol.Gateway.SessionRouter do
         {:error, :rate_limited}
 
       true ->
-        do_start(key, route, state)
+        do_start(key, route, nil, state)
     end
   end
 
@@ -156,27 +171,55 @@ defmodule Raxol.Gateway.SessionRouter do
     end
   end
 
-  defp do_start(key, route, state) do
-    child = %{
-      id: Session,
-      start:
-        {Session, :start_link,
-         [
-           [
-             route: route,
-             handler: state.handler,
-             deliver: state.deliver,
-             idle_timeout: state.idle_timeout
-           ]
-         ]},
-      restart: :temporary
-    }
+  defp do_start(key, route, conversation_id, state) do
+    session_opts =
+      [
+        route: route,
+        handler: state.handler,
+        deliver: state.deliver,
+        idle_timeout: state.idle_timeout
+      ]
+      |> put_if(:conversation_id, conversation_id)
+      |> put_if(:log, state.log)
+
+    child = %{id: Session, start: {Session, :start_link, [session_opts]}, restart: :temporary}
 
     with {:ok, pid} <- DynamicSupervisor.start_child(state.sessions_sup, child) do
       emit(:started, %{key: key})
       {:ok, pid, track(key, pid, state)}
     end
   end
+
+  defp do_handoff(from_key, to_route, state) do
+    case Map.get(state.sessions, from_key) do
+      nil ->
+        {:reply, {:error, :no_source_session}, state}
+
+      from_pid ->
+        rebind(Session.conversation_id(from_pid), to_route, state)
+    end
+  end
+
+  # Start (or reuse) the destination session, carrying the source's
+  # conversation_id so a configured log resumes the same history. A live
+  # destination session keeps its own conversation_id (no mid-life rebind).
+  defp rebind(conversation_id, to_route, state) do
+    to_key = Route.key(to_route)
+
+    case Map.get(state.sessions, to_key) do
+      nil ->
+        case do_start(to_key, to_route, conversation_id, state) do
+          {:ok, pid, new_state} -> {:reply, {:ok, pid}, new_state}
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
+
+      pid ->
+        {:reply, {:ok, pid}, state}
+    end
+  end
+
+  defp put_if(opts, _key, nil), do: opts
+  defp put_if(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp track(key, pid, state) do
     ref = Process.monitor(pid)
