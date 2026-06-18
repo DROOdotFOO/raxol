@@ -205,10 +205,6 @@ Full frame in 2.1ms on Apple M1 Pro (Elixir 1.19 / OTP 27), which is 13% of the 
 
 Unix/macOS backend uses a termbox2 NIF; Windows uses a pure Elixir driver (usable, not yet tuned). See the [benchmark suite](docs/bench/README.md).
 
-## Accessibility
-
-The structured Component tree already carries type, label, and state metadata on every Component. That's semantically richer than a pixel buffer, so screen reader support is a serialization step on top of existing structure rather than a redesign. On the roadmap, tracked, contributions welcome.
-
 ## Documentation
 
 **Start here**

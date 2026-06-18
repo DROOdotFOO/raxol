@@ -102,7 +102,7 @@ view(model) -> Component tree -> ToolProvider per Component -> MCP tool set
                               -> app projections            -> MCP resources
 ```
 
-Each Component type implements `Raxol.MCP.ToolProvider`, mapping its state to MCP tools (e.g., TextInput -> type_into/clear/get_value, Table -> sort/filter/select_row). A focus lens filters to ~10 relevant tools per interaction. The context tree assembles model, Components, agents, swarm topology, and notifications into browsable MCP resources.
+Each Component type implements `Raxol.MCP.ToolProvider`, mapping its state to MCP tools (e.g., TextInput -> type_into/clear/get_value, Table -> sort/filter/select_row). A focus lens filters to ~15 relevant tools per interaction. The context tree assembles model, Components, agents, swarm topology, and notifications into browsable MCP resources.
 
 This means every Raxol app is AI-controllable with zero glue code. Package: `raxol_mcp` (depends on `raxol_core`). See `docs/adr/0012-mcp-as-rendering-target.md` for full details.
 
