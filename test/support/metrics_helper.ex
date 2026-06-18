@@ -529,10 +529,17 @@ defmodule Raxol.Test.MetricsHelper do
   defp stop_alert_manager_if_alive(_alert_manager), do: :ok
 
   defp stop_process_if_alive(pid, stop_func) do
-    case Process.alive?(pid) do
-      true -> stop_func.(pid)
-      false -> :ok
+    if Process.alive?(pid) do
+      # The process can exit between the alive? check and the stop call,
+      # so a :normal/:noproc exit here is expected during cleanup.
+      try do
+        stop_func.(pid)
+      catch
+        :exit, _ -> :ok
+      end
     end
+
+    :ok
   end
 
   defp handle_metric_wait_timeout(
