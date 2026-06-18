@@ -35,6 +35,8 @@ defmodule Raxol.MinimalTest do
       GenServer.stop(pid)
     end
 
+    # Wall-clock perf bound; tight enough to flake on loaded CI runners.
+    @tag :skip_on_ci
     test "measures startup time" do
       start_time = System.monotonic_time(:microsecond)
       {:ok, pid} = Raxol.Minimal.start_terminal()
