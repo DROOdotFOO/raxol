@@ -17,10 +17,18 @@ unified session keying, and DM pairing authorization.
   `Route.key/1`, with the idle-timeout, cooldown, and max-session limits.
 - `Raxol.Gateway.Pairing` -- DM pairing codes plus allowlists and the
   authorization check order.
+- `Raxol.Gateway.Delivery` -- the four outbound destinations (direct, home,
+  cross-platform, explicit target string).
 - `Raxol.Gateway.Supervisor` -- the daemon that ties them together.
+
+A session optionally records each turn to a `:log` (any
+`append(server, conversation_id, items)`, e.g. `Conversation.Log`) keyed by a
+stable `conversation_id`. `SessionRouter.handoff/3` rebinds a conversation to
+another platform's route, reusing that `conversation_id` so the log resumes the
+same history.
 
 ## Not yet implemented
 
-Delivery modes and cross-platform `/handoff`, the concrete platform adapters
-(Telegram, Discord, ...), and the `Lifecycle`-backed handler are follow-ups; see
+The concrete platform adapters (Telegram, Discord, ...) and the
+`Lifecycle`-backed handler are follow-ups; see
 `docs/adr/0023-unified-messaging-gateway.md`.
