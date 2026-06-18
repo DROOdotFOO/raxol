@@ -132,6 +132,23 @@ client = Req.new(base_url: "https://api.example.com")
 
 Three protocols behind one interface: x402 (Coinbase HTTP 402, same-chain), MPP (Stripe/Tempo machine payments), and Xochi (cross-chain intent settlement, 0.10-0.30% fees, stealth-capable). Per-request, per-session, and lifetime spending limits enforced by a ledger GenServer. See [Agentic Commerce docs](docs/features/AGENTIC_COMMERCE.md).
 
+## Agents that improve
+
+`raxol_agent` agents get more capable the longer they run. A solved task becomes a reusable `SKILL.md` on disk. When a turn finishes, an isolated reviewer runs on a cheap model and writes durable memory plus new skills without spending the live turn's latency or context budget; a Curator ages and consolidates them on an idle gate. Memory layers a fast local store under external semantic providers, full-text `session_search` recalls the raw past messages rather than summaries, and a dialectic user model builds an understanding of who you are across sessions, injected per-turn without invalidating the prompt cache.
+
+```elixir
+defmodule MyAgent do
+  use Raxol.Agent
+  def skills_provider, do: Raxol.Agent.Skills.Store
+  def self_improve, do: %{enabled: true, model: "claude-haiku-4-5", min_tool_calls: 5}
+end
+
+# Each turn records itself, then triggers background curation.
+Raxol.Agent.Turn.run(MyAgent, prompt, backend: backend, log: log, conversation_id: "issue-9")
+```
+
+`raxol_gateway` reaches chat platforms through one adapter contract: process-per-chat sessions keyed `agent:main:{platform}:{chat_type}:{chat_id}`, DM pairing for authorization, four delivery modes, and `/handoff` that moves a conversation to another platform with its history intact.
+
 ## Agent surface (MCP)
 
 Every interactive Component automatically exposes MCP tools. Button gives you `click`, TextInput gives you `type_into`/`clear`/`get_value`. A focus lens tracks what's relevant and filters to ~15 tools per interaction, so agents work with a contextual slice of the Component tree rather than a flat dump of every possible action.
