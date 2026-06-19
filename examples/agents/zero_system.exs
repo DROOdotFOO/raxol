@@ -50,7 +50,10 @@ defmodule ZeroSystem.LLM do
   def detect_backend do
     cond do
       System.get_env("FREE_AI") ->
-        {:live, base: "https://api.llm7.io/v1", key: "unused", model: System.get_env("AI_MODEL") || "gpt-4o-mini"}
+        {:live,
+         base: "https://api.llm7.io/v1",
+         key: "unused",
+         model: System.get_env("AI_MODEL") || "gpt-4o-mini"}
 
       key = System.get_env("AI_API_KEY") ->
         {:live,
@@ -85,7 +88,10 @@ defmodule ZeroSystem.LLM do
   end
 
   defp run(buf, {:live, o}) do
-    headers = if o[:key] in [nil, "unused"], do: [], else: [{"authorization", "Bearer #{o[:key]}"}]
+    headers =
+      if o[:key] in [nil, "unused"],
+        do: [],
+        else: [{"authorization", "Bearer #{o[:key]}"}]
 
     body = %{
       model: o[:model],
@@ -100,7 +106,11 @@ defmodule ZeroSystem.LLM do
               "route via Xochi (Riddler solver), clear the spend gate, sign the EIP-712 " <>
               "mandate, dispatch, and confirm. Plain text, one clause per line."
         },
-        %{role: "user", content: "Settle 25 USDC cross-chain to the recipient's stealth meta-address."}
+        %{
+          role: "user",
+          content:
+            "Settle 25 USDC cross-chain to the recipient's stealth meta-address."
+        }
       ]
     }
 
@@ -128,7 +138,10 @@ defmodule ZeroSystem.LLM do
     Agent.update(buf, fn s ->
       parts = String.split(s.partial <> data, "\n")
       {complete, [partial]} = Enum.split(parts, -1)
-      text = Enum.reduce(complete, s.text, fn line, acc -> acc <> delta(line) end)
+
+      text =
+        Enum.reduce(complete, s.text, fn line, acc -> acc <> delta(line) end)
+
       %{s | text: text, partial: partial}
     end)
   end
@@ -150,7 +163,9 @@ defmodule ZeroSystem.LLM do
 
   defp delta(_other), do: ""
 
-  defp append(buf, text), do: Agent.update(buf, fn s -> %{s | text: s.text <> text} end)
+  defp append(buf, text),
+    do: Agent.update(buf, fn s -> %{s | text: s.text <> text} end)
+
   defp finish(buf), do: Agent.update(buf, fn s -> %{s | done: true} end)
 end
 
@@ -220,12 +235,16 @@ defmodule ZeroSystem do
     }
   end
 
-  defp probe({label, module}), do: {label, if(Code.ensure_loaded?(module), do: :ok, else: :offline)}
+  defp probe({label, module}),
+    do: {label, if(Code.ensure_loaded?(module), do: :ok, else: :offline)}
 
   defp build_funnels do
     for i <- 0..(@funnel_count - 1) do
       angle = i / @funnel_count * 2 * :math.pi()
-      target = {0.5 + 0.42 * :math.cos(angle), 0.5 + 0.40 * :math.sin(angle), 0.0}
+
+      target =
+        {0.5 + 0.42 * :math.cos(angle), 0.5 + 0.40 * :math.sin(angle), 0.0}
+
       %{id: :"funnel_#{i + 1}", target: target, launch_at: i, status: :active}
     end
   end
@@ -233,11 +252,15 @@ defmodule ZeroSystem do
   # -- Tick --
 
   @impl true
-  def update(:tick, %{phase: :boot} = model), do: {advance_boot(%{model | tick: model.tick + 1}), []}
+  def update(:tick, %{phase: :boot} = model),
+    do: {advance_boot(%{model | tick: model.tick + 1}), []}
 
   def update(:tick, model) do
     model = %{model | tick: model.tick + 1, deploy_t: model.deploy_t + 1}
-    Enum.each(model.funnels, fn f -> if model.deploy_t >= f.launch_at, do: drive(f, model.deploy_t) end)
+
+    Enum.each(model.funnels, fn f ->
+      if model.deploy_t >= f.launch_at, do: drive(f, model.deploy_t)
+    end)
 
     {%{model | entities: TacticalOverlay.get_all_entities(@overlay)}
      |> poll_reasoning()
@@ -247,26 +270,52 @@ defmodule ZeroSystem do
   # -- Keys --
 
   @impl true
-  def update(%Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "s"}}, model),
-    do: {start_settle(model), []}
+  def update(
+        %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "s"}},
+        model
+      ),
+      do: {start_settle(model), []}
 
-  def update(%Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "x"}}, model),
-    do: {crash_settle(model), []}
+  def update(
+        %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "x"}},
+        model
+      ),
+      do: {crash_settle(model), []}
 
-  def update(%Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "f"}}, model),
-    do: {%{model | frozen: true} |> log(:pilot, "MANDATE REVOKED -- pilot pulled the plug"), []}
+  def update(
+        %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "f"}},
+        model
+      ),
+      do:
+        {%{model | frozen: true}
+         |> log(:pilot, "MANDATE REVOKED -- pilot pulled the plug"), []}
 
-  def update(%Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "t"}}, model) do
+  def update(
+        %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "t"}},
+        model
+      ) do
     takeover = not model.takeover
-    msg = if takeover, do: "pilot has the stick", else: "released to ZERO System"
+
+    msg =
+      if takeover, do: "pilot has the stick", else: "released to ZERO System"
+
     {%{model | takeover: takeover} |> log(:pilot, msg), []}
   end
 
-  def update(%Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}}, model),
-    do: {model, [Directive.stop()]}
+  def update(
+        %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}},
+        model
+      ),
+      do: {model, [Directive.stop()]}
 
-  def update(%Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "c", ctrl: true}}, model),
-    do: {model, [Directive.stop()]}
+  def update(
+        %Raxol.Core.Events.Event{
+          type: :key,
+          data: %{key: :char, char: "c", ctrl: true}
+        },
+        model
+      ),
+      do: {model, [Directive.stop()]}
 
   def update(_message, model), do: {model, []}
 
@@ -277,26 +326,40 @@ defmodule ZeroSystem do
     %{model | reasoning: buf.text, streaming: not buf.done}
   end
 
-  defp advance_boot(%{shown: shown, checks: checks} = model) when shown < length(checks),
-    do: %{model | shown: shown + 1}
+  defp advance_boot(%{shown: shown, checks: checks} = model)
+       when shown < length(checks),
+       do: %{model | shown: shown + 1}
 
-  defp advance_boot(%{boot_hold: h} = model) when h < @boot_hold, do: %{model | boot_hold: h + 1}
-  defp advance_boot(model), do: %{model | phase: :deploy, deploy_t: 0} |> log(:zero, "ZERO SYSTEM engaged")
+  defp advance_boot(%{boot_hold: h} = model) when h < @boot_hold,
+    do: %{model | boot_hold: h + 1}
+
+  defp advance_boot(model),
+    do:
+      %{model | phase: :deploy, deploy_t: 0}
+      |> log(:zero, "ZERO SYSTEM engaged")
 
   defp advance_phase(%{phase: :deploy} = model) do
     if model.deploy_t > @funnel_count + @deploy_ticks,
-      do: %{model | phase: :ready} |> log(:swarm, "funnels deployed -- #{@funnel_count} units in formation"),
+      do:
+        %{model | phase: :ready}
+        |> log(
+          :swarm,
+          "funnels deployed -- #{@funnel_count} units in formation"
+        ),
       else: model
   end
 
-  defp advance_phase(%{phase: :settling, settle_t: t} = model) when t >= @settle_ticks do
+  defp advance_phase(%{phase: :settling, settle_t: t} = model)
+       when t >= @settle_ticks do
     %{model | phase: :ready}
     |> ledger_add([{:debit, intent(model), @amount}])
     |> bump(@amount, 1, 1)
     |> log(:ledger, ":completed -- settled #{intent(model)} in #{secs(t)}")
   end
 
-  defp advance_phase(%{phase: :settling} = model), do: %{model | settle_t: model.settle_t + 1}
+  defp advance_phase(%{phase: :settling} = model),
+    do: %{model | settle_t: model.settle_t + 1}
+
   defp advance_phase(model), do: model
 
   # -- Settlement + ledger (mirrors Raxol.Payments.Ledger semantics) --
@@ -308,7 +371,10 @@ defmodule ZeroSystem do
 
         %{model | phase: :settling, settle_t: 0, reasoning: "", streaming: true}
         |> ledger_add([{:reserve, intent(model), @amount}])
-        |> log(:zero, "signing + dispatching #{intent(model)} (stealth, cross-chain)")
+        |> log(
+          :zero,
+          "signing + dispatching #{intent(model)} (stealth, cross-chain)"
+        )
 
       {:over_limit, reason} ->
         deny(model, @amount, reason)
@@ -323,7 +389,12 @@ defmodule ZeroSystem do
         id = intent(model)
 
         model
-        |> ledger_add([{:reserve, id, @amount}, {:crash, id}, {:resume, id}, {:debit, id, @amount}])
+        |> ledger_add([
+          {:reserve, id, @amount},
+          {:crash, id},
+          {:resume, id},
+          {:debit, id, @amount}
+        ])
         |> bump(@amount, 1, 2)
         |> knock_out_funnel()
         |> log(:ledger, "killed mid-settlement -- resumed #{id}, one debit")
@@ -339,10 +410,17 @@ defmodule ZeroSystem do
 
   defp authorize(model, amount) do
     cond do
-      amount > @policy.per_request_max -> {:over_limit, :per_request}
-      model.session_total + amount > @policy.session_max -> {:over_limit, :session}
-      model.lifetime_total + amount > @policy.lifetime_max -> {:over_limit, :lifetime}
-      true -> :ok
+      amount > @policy.per_request_max ->
+        {:over_limit, :per_request}
+
+      model.session_total + amount > @policy.session_max ->
+        {:over_limit, :session}
+
+      model.lifetime_total + amount > @policy.lifetime_max ->
+        {:over_limit, :lifetime}
+
+      true ->
+        :ok
     end
   end
 
@@ -365,26 +443,43 @@ defmodule ZeroSystem do
     }
   end
 
-  defp ledger_add(model, entries), do: %{model | ledger: Enum.take(model.ledger ++ entries, -40)}
+  defp ledger_add(model, entries),
+    do: %{model | ledger: Enum.take(model.ledger ++ entries, -40)}
 
   defp knock_out_funnel(model) do
-    case model.funnels |> Enum.reverse() |> Enum.find(&(&1.status == :active)) do
+    case model.funnels
+         |> Enum.reverse()
+         |> Enum.find(&(&1.status == :active)) do
       nil ->
         model
 
       hit ->
-        TacticalOverlay.update_entity(@overlay, hit.id, %{position: hit.target, status: :offline})
-        funnels = Enum.map(model.funnels, fn f -> if f.id == hit.id, do: %{f | status: :offline}, else: f end)
-        %{model | funnels: funnels} |> log(:swarm, "#{hit.id} offline -- formation holds")
+        TacticalOverlay.update_entity(@overlay, hit.id, %{
+          position: hit.target,
+          status: :offline
+        })
+
+        funnels =
+          Enum.map(model.funnels, fn f ->
+            if f.id == hit.id, do: %{f | status: :offline}, else: f
+          end)
+
+        %{model | funnels: funnels}
+        |> log(:swarm, "#{hit.id} offline -- formation holds")
     end
   end
 
   defp drive(funnel, deploy_t) do
     progress = min(1.0, max(0.0, (deploy_t - funnel.launch_at) / @deploy_ticks))
-    TacticalOverlay.update_entity(@overlay, funnel.id, %{position: lerp(@center, funnel.target, progress), status: funnel.status})
+
+    TacticalOverlay.update_entity(@overlay, funnel.id, %{
+      position: lerp(@center, funnel.target, progress),
+      status: funnel.status
+    })
   end
 
-  defp lerp({ax, ay, az}, {bx, by, bz}, p), do: {ax + (bx - ax) * p, ay + (by - ay) * p, az + (bz - az) * p}
+  defp lerp({ax, ay, az}, {bx, by, bz}, p),
+    do: {ax + (bx - ax) * p, ay + (by - ay) * p, az + (bz - az) * p}
 
   # -- View --
 
@@ -397,13 +492,24 @@ defmodule ZeroSystem do
 
     lines =
       [
-        text("RAXOL // MOBILE SUIT OPERATION SYSTEM", fg: :cyan, style: [:bold]),
-        text("General Unilateral Network Daemon for Autonomous Machines", fg: :cyan),
+        text("RAXOL // MOBILE SUIT OPERATION SYSTEM",
+          fg: :cyan,
+          style: [:bold]
+        ),
+        text("General Unilateral Network Daemon for Autonomous Machines",
+          fg: :cyan
+        ),
         text(""),
         text("SELF-CHECK", style: [:bold])
       ] ++ Enum.map(Enum.take(model.checks, model.shown), &check_line/1)
 
-    banner = if engaged, do: [text(""), text("  ZERO SYSTEM // ENGAGED", fg: :cyan, style: [:bold])], else: []
+    banner =
+      if engaged,
+        do: [
+          text(""),
+          text("  ZERO SYSTEM // ENGAGED", fg: :cyan, style: [:bold])
+        ],
+        else: []
 
     column style: %{padding: 1} do
       lines ++ banner
@@ -411,10 +517,16 @@ defmodule ZeroSystem do
   end
 
   defp check_line({label, :ok}),
-    do: text("  [ OK ] " <> String.pad_trailing(label, 20, ".") <> " online", fg: :green)
+    do:
+      text("  [ OK ] " <> String.pad_trailing(label, 20, ".") <> " online",
+        fg: :green
+      )
 
   defp check_line({label, :offline}),
-    do: text("  [ -- ] " <> String.pad_trailing(label, 20, ".") <> " offline", fg: :red)
+    do:
+      text("  [ -- ] " <> String.pad_trailing(label, 20, ".") <> " offline",
+        fg: :red
+      )
 
   defp cockpit_view(model) do
     column style: %{padding: 1, gap: 0} do
@@ -425,12 +537,14 @@ defmodule ZeroSystem do
           [
             box style: %{border: :single, padding: 0, width: 44} do
               column do
-                [text(" TACTICAL OVERLAY // FUNNELS", fg: :cyan)] ++ tactical(model.entities)
+                [text(" TACTICAL OVERLAY // FUNNELS", fg: :cyan)] ++
+                  tactical(model.entities)
               end
             end,
             box style: %{border: :single, padding: 0, width: 50} do
               column do
-                [text(" SPEND LEDGER // WILLPOWER", fg: :cyan)] ++ ledger_view(model)
+                [text(" SPEND LEDGER // WILLPOWER", fg: :cyan)] ++
+                  ledger_view(model)
               end
             end
           ]
@@ -438,27 +552,55 @@ defmodule ZeroSystem do
         text(""),
         box style: %{border: :single, padding: 0} do
           column do
-            [text(" ZERO SYSTEM // REASONING (#{model.backend_label})", fg: :cyan)] ++ reasoning_view(model)
+            [
+              text(" ZERO SYSTEM // REASONING (#{model.backend_label})",
+                fg: :cyan
+              )
+            ] ++ reasoning_view(model)
           end
         end,
         text(""),
         log_line(List.last(model.log) || {:boot, ""}),
-        text("  s settle   x crash mid-settlement   f revoke mandate   t takeover   q quit", style: [:dim])
+        text(
+          "  s settle   x crash mid-settlement   f revoke mandate   t takeover   q quit",
+          style: [:dim]
+        )
       ]
     end
   end
 
   defp header(model) do
-    pilot = if model.takeover, do: text("  PILOT TAKEOVER", fg: :yellow, style: [:bold]), else: text("  ZERO autonomous", fg: :green)
-    mandate = if model.frozen, do: text("  MANDATE REVOKED", fg: :red, style: [:bold]), else: text("", fg: :white)
-    clock = if model.phase == :settling, do: "  settling #{secs(model.settle_t)}", else: "  phase: #{model.phase}"
+    pilot =
+      if model.takeover,
+        do: text("  PILOT TAKEOVER", fg: :yellow, style: [:bold]),
+        else: text("  ZERO autonomous", fg: :green)
+
+    mandate =
+      if model.frozen,
+        do: text("  MANDATE REVOKED", fg: :red, style: [:bold]),
+        else: text("", fg: :white)
+
+    clock =
+      if model.phase == :settling,
+        do: "  settling #{secs(model.settle_t)}",
+        else: "  phase: #{model.phase}"
 
     row do
-      [text("RAXOL // ZERO SYSTEM", fg: :cyan, style: [:bold]), text(clock, fg: :white), pilot, mandate]
+      [
+        text("RAXOL // ZERO SYSTEM", fg: :cyan, style: [:bold]),
+        text(clock, fg: :white),
+        pilot,
+        mandate
+      ]
     end
   end
 
-  defp reasoning_view(%{reasoning: ""}), do: [text("  (press s to settle -- the ZERO System will narrate)", style: [:dim])]
+  defp reasoning_view(%{reasoning: ""}),
+    do: [
+      text("  (press s to settle -- the ZERO System will narrate)",
+        style: [:dim]
+      )
+    ]
 
   defp reasoning_view(model) do
     lines =
@@ -478,7 +620,10 @@ defmodule ZeroSystem do
     |> String.split(" ")
     |> Enum.reduce([""], fn word, [cur | rest] ->
       cand = if cur == "", do: word, else: cur <> " " <> word
-      if String.length(cand) <= width, do: [cand | rest], else: [word, cur | rest]
+
+      if String.length(cand) <= width,
+        do: [cand | rest],
+        else: [word, cur | rest]
     end)
     |> Enum.reverse()
   end
@@ -495,7 +640,11 @@ defmodule ZeroSystem do
         0..(@gw - 1)
         |> Enum.map(fn x -> Map.get(cells, {x, y}, {" ", :white}) end)
         |> Enum.chunk_by(fn {_c, fg} -> fg end)
-        |> Enum.map(fn run -> text(run |> Enum.map(&elem(&1, 0)) |> Enum.join(), fg: elem(hd(run), 1)) end)
+        |> Enum.map(fn run ->
+          text(run |> Enum.map(&elem(&1, 0)) |> Enum.join(),
+            fg: elem(hd(run), 1)
+          )
+        end)
       end
     end
   end
@@ -505,7 +654,8 @@ defmodule ZeroSystem do
     %{{cx, cy} => {"@", :cyan}}
   end
 
-  defp grid_pos({px, py, _pz}), do: {round(px * (@gw - 1)), round(py * (@gh - 1))}
+  defp grid_pos({px, py, _pz}),
+    do: {round(px * (@gw - 1)), round(py * (@gh - 1))}
 
   defp glyph(:active), do: {"*", :green}
   defp glyph(:offline), do: {"x", :red}
@@ -523,16 +673,31 @@ defmodule ZeroSystem do
     rows ++
       [
         text(""),
-        text("  debits #{model.debits}  |  ungoverned #{model.ungoverned}", fg: recon_color, style: [:bold]),
-        text("  session #{usd(model.session_total)}/#{usd(@policy.session_max)}", style: [:dim])
+        text("  debits #{model.debits}  |  ungoverned #{model.ungoverned}",
+          fg: recon_color,
+          style: [:bold]
+        ),
+        text(
+          "  session #{usd(model.session_total)}/#{usd(@policy.session_max)}",
+          style: [:dim]
+        )
       ]
   end
 
-  defp ledger_line({:reserve, id, a}), do: text("  RESERVE #{pad(id)} #{usd(a)}", fg: :cyan)
-  defp ledger_line({:debit, id, a}), do: text("  DEBIT   #{pad(id)} #{usd(a)}", fg: :green)
-  defp ledger_line({:crash, id}), do: text("  CRASH   #{pad(id)} died mid-flight", fg: :red, style: [:bold])
-  defp ledger_line({:resume, id}), do: text("  RESUME  #{pad(id)} no re-sign", fg: :cyan)
-  defp ledger_line({:denied, r, a}), do: text("  DENIED  over #{r} #{usd(a)}", fg: :red)
+  defp ledger_line({:reserve, id, a}),
+    do: text("  RESERVE #{pad(id)} #{usd(a)}", fg: :cyan)
+
+  defp ledger_line({:debit, id, a}),
+    do: text("  DEBIT   #{pad(id)} #{usd(a)}", fg: :green)
+
+  defp ledger_line({:crash, id}),
+    do: text("  CRASH   #{pad(id)} died mid-flight", fg: :red, style: [:bold])
+
+  defp ledger_line({:resume, id}),
+    do: text("  RESUME  #{pad(id)} no re-sign", fg: :cyan)
+
+  defp ledger_line({:denied, r, a}),
+    do: text("  DENIED  over #{r} #{usd(a)}", fg: :red)
 
   defp log_line({tag, msg}), do: text("  [#{tag}] #{msg}", fg: log_color(tag))
 
@@ -542,11 +707,14 @@ defmodule ZeroSystem do
   defp log_color(:pilot), do: :magenta
   defp log_color(_), do: :white
 
-  defp log(model, tag, msg), do: %{model | log: Enum.take(model.log ++ [{tag, msg}], -6)}
+  defp log(model, tag, msg),
+    do: %{model | log: Enum.take(model.log ++ [{tag, msg}], -6)}
 
   defp pad(id), do: String.pad_trailing(id, 9)
   defp usd(a), do: "$" <> :erlang.float_to_binary(a * 1.0, decimals: 2)
-  defp secs(ticks), do: :erlang.float_to_binary(ticks * @tick_ms / 1000, decimals: 1) <> "s"
+
+  defp secs(ticks),
+    do: :erlang.float_to_binary(ticks * @tick_ms / 1000, decimals: 1) <> "s"
 
   @impl true
   def subscribe(_model), do: [subscribe_interval(@tick_ms, :tick)]
@@ -554,7 +722,10 @@ defmodule ZeroSystem do
   @doc "Non-TUI smoke check: fly boot -> deploy -> settle (mock stream) -> crash."
   def smoke do
     tick = fn m -> elem(update(:tick, m), 0) end
-    ev = fn ch -> %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: ch}} end
+
+    ev = fn ch ->
+      %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: ch}}
+    end
 
     m = Enum.reduce(1..40, init(%{}), fn _, acc -> tick.(acc) end)
     {m, _} = update(ev.("s"), m)
@@ -572,7 +743,10 @@ defmodule ZeroSystem do
   end
 end
 
-{:ok, _} = Agent.start_link(fn -> %{text: "", done: true, partial: ""} end, name: ZeroSystem.reason_name())
+{:ok, _} =
+  Agent.start_link(fn -> %{text: "", done: true, partial: ""} end,
+    name: ZeroSystem.reason_name()
+  )
 
 {:ok, _overlay} =
   Raxol.Swarm.TacticalOverlay.start_link(
