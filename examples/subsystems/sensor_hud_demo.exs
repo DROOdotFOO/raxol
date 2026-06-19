@@ -13,7 +13,7 @@
 #   - Cell tuples: {x, y, char, fg, bg, attrs} -- the raw render unit
 #
 # Usage:
-#   mix run examples/sensor_hud_demo.exs
+#   mix run examples/subsystems/sensor_hud_demo.exs
 
 defmodule SensorHUDDemo do
   alias Raxol.Sensor.{MockSensor, Feed, Fusion, HUD}

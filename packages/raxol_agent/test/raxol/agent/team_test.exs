@@ -201,4 +201,99 @@ defmodule Raxol.Agent.TeamTest do
       assert [] = Registry.lookup(Raxol.Agent.Registry, :ts2_worker)
     end
   end
+
+  describe "team resilience (rest_for_one)" do
+    test "a coordinator crash restarts the coordinator and all workers" do
+      Process.flag(:trap_exit, true)
+
+      {:ok, team_pid} =
+        Team.start_link(
+          team_id: :team_rfo_1,
+          coordinator: {CoordinatorAgent, [id: :rfo1_coord]},
+          workers: [
+            {WorkerAgent, [id: :rfo1_w1]},
+            {WorkerAgent, [id: :rfo1_w2]}
+          ]
+        )
+
+      coord = await_registered(:rfo1_coord)
+      w1 = await_registered(:rfo1_w1)
+      w2 = await_registered(:rfo1_w2)
+
+      Process.exit(coord, :kill)
+
+      # rest_for_one: the coordinator and every child started after it restart.
+      wait_until(fn ->
+        restarted?(:rfo1_coord, coord) and restarted?(:rfo1_w1, w1) and
+          restarted?(:rfo1_w2, w2)
+      end)
+
+      assert registered_pid(:rfo1_coord) != coord
+      assert registered_pid(:rfo1_w1) != w1
+      assert registered_pid(:rfo1_w2) != w2
+
+      Supervisor.stop(team_pid)
+    end
+
+    test "a trailing worker crash leaves the coordinator and earlier workers stable" do
+      Process.flag(:trap_exit, true)
+
+      {:ok, team_pid} =
+        Team.start_link(
+          team_id: :team_rfo_2,
+          coordinator: {CoordinatorAgent, [id: :rfo2_coord]},
+          workers: [
+            {WorkerAgent, [id: :rfo2_w1]},
+            {WorkerAgent, [id: :rfo2_w2]}
+          ]
+        )
+
+      coord = await_registered(:rfo2_coord)
+      w1 = await_registered(:rfo2_w1)
+      w2 = await_registered(:rfo2_w2)
+
+      Process.exit(w2, :kill)
+
+      wait_until(fn -> restarted?(:rfo2_w2, w2) end)
+
+      # Only the last worker restarts; nothing before it is disturbed.
+      assert registered_pid(:rfo2_w2) != w2
+      assert registered_pid(:rfo2_coord) == coord
+      assert registered_pid(:rfo2_w1) == w1
+
+      Supervisor.stop(team_pid)
+    end
+  end
+
+  defp await_registered(id) do
+    wait_until(fn -> is_pid(registered_pid(id)) end)
+    registered_pid(id)
+  end
+
+  defp restarted?(id, old_pid) do
+    case registered_pid(id) do
+      pid when is_pid(pid) -> pid != old_pid
+      _ -> false
+    end
+  end
+
+  defp registered_pid(id) do
+    case Registry.lookup(Raxol.Agent.Registry, id) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
+  # Polls a predicate up to a bound; deterministic, no timing assertions.
+  defp wait_until(fun, attempts \\ 600)
+  defp wait_until(_fun, 0), do: flunk("condition not met in time")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(5)
+      wait_until(fun, attempts - 1)
+    end
+  end
 end

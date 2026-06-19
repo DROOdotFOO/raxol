@@ -32,6 +32,15 @@ defmodule Raxol.Agent.ProcessTest do
       {:defer, state}
     end
 
+    def receive_directive({:report_to, pid}, state) do
+      send(pid, {:agent_state, state})
+      {:ok, state}
+    end
+
+    def receive_directive({:crash, reason}, _state) do
+      raise reason
+    end
+
     def on_takeover(state) do
       {:ok, Map.put(state, :was_taken_over, true)}
     end
@@ -189,6 +198,79 @@ defmodule Raxol.Agent.ProcessTest do
       end
 
       GenServer.stop(pid)
+    end
+  end
+
+  describe "supervised crash and recover" do
+    @tag :capture_log
+    test "resumes from persisted context after a brutal kill" do
+      agent_id = :recover_seed
+      ContextStore.save(agent_id, %{tick_count: 7, observations: [], actions: ["seeded"]})
+
+      {:ok, original} = start_supervised_agent(agent_id)
+      Process.exit(original, :kill)
+
+      restarted = wait_for_restart(agent_id, original)
+      assert restarted != original
+
+      AgentProcess.send_directive(restarted, {:report_to, self()})
+      assert_receive {:agent_state, %{tick_count: 7, actions: ["seeded"]}}, 1_000
+    end
+
+    @tag :capture_log
+    test "persists the latest in-memory state when a callback crashes" do
+      agent_id = :recover_crash
+
+      {:ok, original} = start_supervised_agent(agent_id)
+
+      # Mutate state in memory (no explicit save), then crash inside a callback so
+      # terminate/2 runs save_context with the latest state.
+      AgentProcess.send_directive(original, {:set_count, 42})
+      AgentProcess.send_directive(original, {:crash, "boom"})
+
+      restarted = wait_for_restart(agent_id, original)
+      assert restarted != original
+
+      AgentProcess.send_directive(restarted, {:report_to, self()})
+      assert_receive {:agent_state, %{tick_count: 42}}, 1_000
+    end
+  end
+
+  defp start_supervised_agent(agent_id) do
+    DynamicSupervisor.start_child(
+      Raxol.Agent.DynSup,
+      {AgentProcess, agent_id: agent_id, agent_module: CounterAgent, tick_ms: 50_000}
+    )
+  end
+
+  defp wait_for_restart(agent_id, old_pid) do
+    wait_until(fn ->
+      case registered_pid(agent_id) do
+        pid when is_pid(pid) -> pid != old_pid and Process.alive?(pid)
+        _ -> false
+      end
+    end)
+
+    registered_pid(agent_id)
+  end
+
+  defp registered_pid(agent_id) do
+    case Registry.lookup(Raxol.Agent.Registry, {:process, agent_id}) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
+  # Polls a predicate up to a bound; deterministic, no timing assertions.
+  defp wait_until(fun, attempts \\ 200)
+  defp wait_until(_fun, 0), do: flunk("condition not met in time")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(5)
+      wait_until(fun, attempts - 1)
     end
   end
 end

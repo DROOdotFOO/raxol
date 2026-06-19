@@ -35,9 +35,7 @@ defmodule Raxol.Agent.Session do
   def start_link(opts) do
     id = Keyword.fetch!(opts, :id)
 
-    GenServer.start_link(__MODULE__, opts,
-      name: {:via, Registry, {Raxol.Agent.Registry, id}}
-    )
+    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {Raxol.Agent.Registry, id}})
   end
 
   @doc "Send a message into the agent's TEA loop."
@@ -82,21 +80,10 @@ defmodule Raxol.Agent.Session do
     id = Keyword.fetch!(opts, :id)
     team_id = Keyword.get(opts, :team_id)
 
-    {:ok, lifecycle_pid} =
-      Raxol.Core.Runtime.Lifecycle.start_link(app_module,
-        environment: :agent,
-        width: Raxol.Core.Defaults.terminal_width(),
-        height: Raxol.Core.Defaults.terminal_height(),
-        name: :"agent_lifecycle_#{inspect(id)}"
-      )
-
-    # Unlink so Lifecycle crashes don't kill the Session.
-    Process.unlink(lifecycle_pid)
+    lifecycle_pid = start_or_reattach_lifecycle(app_module, id)
     Process.monitor(lifecycle_pid)
 
-    Logger.info(
-      "[Agent.Session] Started agent #{inspect(id)} (#{inspect(app_module)})"
-    )
+    Logger.info("[Agent.Session] Started agent #{inspect(id)} (#{inspect(app_module)})")
 
     {:ok,
      %__MODULE__{
@@ -208,6 +195,27 @@ defmodule Raxol.Agent.Session do
     end
 
     :ok
+  end
+
+  defp start_or_reattach_lifecycle(app_module, id) do
+    opts = [
+      environment: :agent,
+      width: Raxol.Core.Defaults.terminal_width(),
+      height: Raxol.Core.Defaults.terminal_height(),
+      name: :"agent_lifecycle_#{inspect(id)}"
+    ]
+
+    case Raxol.Core.Runtime.Lifecycle.start_link(app_module, opts) do
+      {:ok, lifecycle_pid} ->
+        # A fresh lifecycle is linked to us; unlink so its crashes don't cascade.
+        Process.unlink(lifecycle_pid)
+        lifecycle_pid
+
+      {:error, {:already_started, lifecycle_pid}} ->
+        # A prior session was killed before its lifecycle was cleaned up.
+        # Reattach to the running runtime instead of failing to restart.
+        lifecycle_pid
+    end
   end
 
   defp get_dispatcher(lifecycle_pid) when is_pid(lifecycle_pid) do

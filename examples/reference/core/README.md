@@ -13,7 +13,7 @@ mix raxol.playground
 mix run examples/getting_started/counter.exs
 
 # Todo list
-mix run examples/apps/todo_app.ex
+mix run examples/getting_started/todo_app.exs
 
 # File browser with tree nav
 mix run examples/apps/file_browser.exs

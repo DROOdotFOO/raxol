@@ -1,7 +1,7 @@
 # Simple Box Drawing Example
 # Demonstrates Raxol.Core.Box module capabilities
 #
-# Run with: mix run examples/core/02_box_drawing/simple_boxes.exs
+# Run with: mix run examples/reference/core/02_box_drawing/simple_boxes.exs
 
 alias Raxol.Core.{Buffer, Box}
 

@@ -232,4 +232,80 @@ defmodule Raxol.Agent.OrchestratorTest do
       assert statuses[:s1].agent_id == :s1
     end
   end
+
+  describe "agent crash self-heal" do
+    test "rebinds to the supervisor-restarted pid after a crash", %{orch: orch} do
+      {:ok, :resilient} =
+        Orchestrator.spawn_agent(orch, :resilient, SimpleAgent, tick_ms: 50_000)
+
+      original = registered_pid(:resilient)
+      assert is_pid(original)
+
+      Process.exit(original, :kill)
+
+      # The DynamicSupervisor restarts the agent under the same Registry name.
+      wait_until(fn ->
+        case registered_pid(:resilient) do
+          pid when is_pid(pid) -> pid != original and Process.alive?(pid)
+          _ -> false
+        end
+      end)
+
+      restarted = registered_pid(:resilient)
+      assert is_pid(restarted)
+      assert restarted != original
+
+      # The orchestrator heals its own view: the agent reports a live status,
+      # not the stale-pid :dead, and its pane is retained.
+      wait_until(fn ->
+        statuses = Orchestrator.get_statuses(orch)
+        match?(%{status: status} when status != :dead, statuses[:resilient])
+      end)
+
+      statuses = Orchestrator.get_statuses(orch)
+      assert statuses[:resilient].status in [:waiting, :thinking]
+
+      layout = Orchestrator.get_layout(orch)
+      assert layout.agent_count == 1
+      assert Map.has_key?(layout.panes, :resilient)
+      assert layout.panes[:resilient].agent_pid == restarted
+    end
+
+    test "kill_agent removes the agent permanently with no restart", %{orch: orch} do
+      {:ok, :doomed_perm} =
+        Orchestrator.spawn_agent(orch, :doomed_perm, SimpleAgent, tick_ms: 50_000)
+
+      assert is_pid(registered_pid(:doomed_perm))
+
+      :ok = Orchestrator.kill_agent(orch, :doomed_perm)
+
+      layout = Orchestrator.get_layout(orch)
+      assert layout.agent_count == 0
+      refute Map.has_key?(layout.panes, :doomed_perm)
+
+      # A deliberate kill is not a crash: the supervisor does not bring it back.
+      wait_until(fn -> registered_pid(:doomed_perm) == nil end)
+      refute Map.has_key?(Orchestrator.get_statuses(orch), :doomed_perm)
+    end
+  end
+
+  defp registered_pid(agent_id) do
+    case Registry.lookup(Raxol.Agent.Registry, {:process, agent_id}) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
+  # Polls a predicate up to a bound; deterministic, no timing assertions.
+  defp wait_until(fun, attempts \\ 200)
+  defp wait_until(_fun, 0), do: flunk("condition not met in time")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(5)
+      wait_until(fun, attempts - 1)
+    end
+  end
 end

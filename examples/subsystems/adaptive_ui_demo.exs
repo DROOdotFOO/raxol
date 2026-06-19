@@ -13,7 +13,7 @@
 #   - The three components form a closed loop: track -> recommend -> feedback
 #
 # Usage:
-#   mix run examples/adaptive_ui_demo.exs
+#   mix run examples/subsystems/adaptive_ui_demo.exs
 
 defmodule AdaptiveUIDemo do
   alias Raxol.Adaptive.{BehaviorTracker, LayoutRecommender, FeedbackLoop}

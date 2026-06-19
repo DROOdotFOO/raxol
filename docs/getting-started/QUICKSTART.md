@@ -225,4 +225,4 @@ Working examples to study:
 
 - `examples/getting_started/counter.exs`: the counter from this page
 - `examples/demo.exs`: flagship demo with dashboard, sparklines, live stats
-- `examples/apps/todo_app.ex`: a complete todo list app
+- `examples/getting_started/todo_app.exs`: a keyboard-driven todo list app

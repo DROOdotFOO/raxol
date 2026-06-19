@@ -65,4 +65,4 @@ Then visit http://localhost:4000/terminal
 - Implement command processing
 - Add more interactive features
 
-See `examples/liveview/02_interactive_terminal/` for a more advanced example.
+See `examples/reference/liveview/tea_counter_live.ex` for a full TEA app in the browser.

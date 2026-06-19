@@ -9,6 +9,8 @@
 #   - `Pipeline.run/3` to compose actions sequentially
 #   - `Strategy.ReAct` for an LLM reasoning loop with tool use
 #   - `run_action/3` and `run_action_async/3` helpers in TEA agents
+#   - `Directive.shell/1` to run a shell command; the result arrives as
+#     {:command_result, {:shell_result, %{output: ..., exit_status: ...}}}
 #   - Mock backend simulates tool calls so this runs without an API key
 #
 # Default: mock (no API key needed)
@@ -18,6 +20,7 @@
 # Controls:
 #   1   run actions via Pipeline (sync, no LLM)
 #   2   run ReAct loop (LLM decides which tools to call)
+#   3   run a shell command as a tool (Directive.shell)
 #   q   quit
 
 Logger.configure(level: :warning)
@@ -301,6 +304,26 @@ defmodule ReactAgent do
     {%{model | status: :error}, []}
   end
 
+  # -- Shell demo: a tool can be a shell command, run via the agent runtime ---
+  # Directive.shell spawns a Port; the result comes back as a command_result.
+
+  def update({:agent_message, _from, :run_shell}, model) do
+    IO.puts("\n[Shell] Running `wc -l < mix.exs` via Directive.shell...")
+    {%{model | status: :shell}, [Directive.shell("wc -l < mix.exs")]}
+  end
+
+  def update({:command_result, {:shell_result, result}}, model) do
+    output = String.trim(result.output || "")
+    IO.puts("[Shell] exit #{result.exit_status}: #{output}")
+
+    {%{
+       model
+       | status: :idle,
+         last_output: "shell: #{output}",
+         results: ["shell: #{output}" | model.results]
+     }, []}
+  end
+
   # Keyboard input
   def update(%{type: :key, data: %{key: "1"}}, model) do
     update({:agent_message, :self, :run_pipeline}, model)
@@ -308,6 +331,10 @@ defmodule ReactAgent do
 
   def update(%{type: :key, data: %{key: "2"}}, model) do
     update({:agent_message, :self, :run_react}, model)
+  end
+
+  def update(%{type: :key, data: %{key: "3"}}, model) do
+    update({:agent_message, :self, :run_shell}, model)
   end
 
   def update(%{type: :key, data: %{key: "q"}}, model) do
@@ -324,7 +351,7 @@ defmodule ReactAgent do
         text("ReAct Agent Demo", style: [:bold]),
         text("Status: #{model.status}"),
         text(""),
-        text("Press 1 = Pipeline (sync)  2 = ReAct (LLM)  q = quit"),
+        text("Press 1 = Pipeline (sync)  2 = ReAct (LLM)  3 = Shell  q = quit"),
         text(""),
         text("Last output: #{model.last_output || "(none)"}")
       ]
@@ -396,5 +423,9 @@ Process.sleep(500)
 IO.puts("\n--- Demo 2: ReAct (LLM reasoning loop) ---")
 Raxol.Agent.Session.send_message(:react_agent, :run_react)
 Process.sleep(1500)
+
+IO.puts("\n--- Demo 3: Shell command as a tool (Directive.shell) ---")
+Raxol.Agent.Session.send_message(:react_agent, :run_shell)
+Process.sleep(500)
 
 IO.puts("\nDone.")

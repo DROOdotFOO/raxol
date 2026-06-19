@@ -50,10 +50,10 @@ mix dialyzer                  # Type checking
 mix run examples/getting_started/counter.exs  # Known working example (TEA model)
 ```
 
-Working examples: `counter.exs`, `getting_started/todo_app.exs`, `apps/todo_app.ex`, `apps/showcase_app.exs`, `demo.exs` (all TEA pattern).
+Working examples: `counter.exs`, `getting_started/todo_app.exs`, `apps/showcase_app.exs`, `apps/file_browser.exs`, `demo.exs` (all TEA pattern).
 `demo.exs` is the flagship demo showing dashboard layout, live stats, and OTP differentiators.
 
-Agent examples: `agents/code_review_agent.exs` (single agent with shell commands), `agents/agent_team.exs` (coordinator + worker team pattern), `agents/ai_cockpit.exs` (multi-agent AI cockpit with real LLM streaming: mock by default, `FREE_AI=true` for LLM7.io, supports Anthropic/OpenAI/Ollama/Groq).
+Agent examples: `agents/zero_system.exs` (the ZERO System cockpit -- boot self-check, swarm funnel deploy, private cross-chain settlement with streaming LLM reasoning: mock by default, `FREE_AI=true` for LLM7.io, `AI_API_KEY`/`AI_BASE_URL` for any OpenAI-compatible provider; crash-mid-settlement ledger reconcile, pilot takeover). Framework primitives run from the raxol_agent package (`packages/raxol_agent/examples/agents/`): `react_agent.exs` (Actions + ReAct strategy + tools + shell) and `agent_team.exs` (Team supervision + inter-agent messaging).
 
 Sensor examples: `sensor_hud_demo.exs` (3 mock sensors with gauge, sparkline, threat HUD Components).
 

@@ -290,7 +290,7 @@ Results on Apple Silicon:
 
 ## Examples
 
-See `examples/live_view/basic_terminal_live.ex` for a complete working example.
+See `examples/reference/liveview/01_simple_terminal/simple_terminal_live.ex` for a complete working example.
 
 ## Migration from RaxolWeb
 

@@ -193,8 +193,8 @@ Fusion restarts fresh on crash. Feeds are independent of each other.
 
 ## Example
 
-`examples/sensor_hud_demo.exs` has 3 mock sensors wired to gauge, sparkline, and threat Components:
+`examples/subsystems/sensor_hud_demo.exs` has 3 mock sensors wired to gauge, sparkline, and threat Components:
 
 ```bash
-mix run examples/sensor_hud_demo.exs
+mix run examples/subsystems/sensor_hud_demo.exs
 ```

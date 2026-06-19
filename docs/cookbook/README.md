@@ -19,5 +19,5 @@ Complete applications are in the [`examples/`](../../examples/README.md) directo
 - `examples/getting_started/counter.exs`: Minimal TEA app
 - `examples/demo.exs`: Live BEAM dashboard with sparklines
 - `examples/apps/file_browser.exs`: File browser with tree navigation
-- `examples/apps/todo_app.ex`: Todo list
+- `examples/getting_started/todo_app.exs`: Todo list (state machine modes)
 - `examples/ssh/ssh_counter.exs`: SSH-served counter
