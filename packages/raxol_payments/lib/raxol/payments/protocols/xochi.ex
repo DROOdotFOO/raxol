@@ -32,11 +32,9 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   @behaviour Raxol.Payments.Protocol
 
+  alias Raxol.Payments.Poll
   alias Raxol.Payments.Xochi.Client
   alias Raxol.Payments.Xochi.Schemas.{QuoteRequest, QuoteResponse, ExecuteRequest, IntentStatus}
-
-  @default_poll_interval_ms 2_000
-  @default_poll_timeout_ms 120_000
 
   # -- Protocol behaviour (stubs -- Xochi is not a 402 protocol) --
 
@@ -102,19 +100,31 @@ defmodule Raxol.Payments.Protocols.Xochi do
   @doc """
   Poll intent status until terminal (completed/failed/expired) or timeout.
 
-  ## Options
-
-  - `:interval_ms` -- poll interval (default: #{@default_poll_interval_ms}ms)
-  - `:timeout_ms` -- max wait time (default: #{@default_poll_timeout_ms}ms)
+  Fast-polls inside the settlement budget window, then backs off. See
+  `Raxol.Payments.Poll` for the timing options (`:budget_ms`,
+  `:fast_interval_ms`, `:slow_interval_ms`, `:timeout_ms`).
   """
   @spec poll_status(Client.config(), String.t(), keyword()) ::
           {:ok, IntentStatus.t()} | {:error, term()}
   def poll_status(config, intent_id, opts \\ []) do
-    interval = Keyword.get(opts, :interval_ms, @default_poll_interval_ms)
-    timeout = Keyword.get(opts, :timeout_ms, @default_poll_timeout_ms)
-    deadline = System.monotonic_time(:millisecond) + timeout
+    case poll_status_timed(config, intent_id, opts) do
+      {:ok, status, _elapsed_ms} -> {:ok, status}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-    do_poll(config, intent_id, interval, deadline)
+  @doc """
+  Like `poll_status/3` but also returns the elapsed milliseconds to the terminal
+  status, so the caller can report whether settlement landed within budget.
+  """
+  @spec poll_status_timed(Client.config(), String.t(), keyword()) ::
+          {:ok, IntentStatus.t(), non_neg_integer()} | {:error, term()}
+  def poll_status_timed(config, intent_id, opts \\ []) do
+    Poll.run(
+      fn -> Client.get_status(config, intent_id) end,
+      &IntentStatus.terminal?/1,
+      opts
+    )
   end
 
   @doc """
@@ -179,26 +189,5 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   defp eip712_message(eip712) do
     eip712["message"] || %{}
-  end
-
-  defp do_poll(config, intent_id, interval, deadline) do
-    case Client.get_status(config, intent_id) do
-      {:ok, %IntentStatus{} = status} ->
-        if IntentStatus.terminal?(status),
-          do: {:ok, status},
-          else: poll_or_timeout(config, intent_id, interval, deadline)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp poll_or_timeout(config, intent_id, interval, deadline) do
-    if System.monotonic_time(:millisecond) + interval > deadline do
-      {:error, :timeout}
-    else
-      Process.sleep(interval)
-      do_poll(config, intent_id, interval, deadline)
-    end
   end
 end
