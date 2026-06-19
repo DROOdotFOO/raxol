@@ -2,7 +2,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
-  alias Raxol.Payments.{Ledger, SpendingPolicy}
+  alias Raxol.Payments.{Failure, Ledger, SpendingPolicy}
   alias Raxol.Payments.Xochi.Stealth
 
   # Wallet that signals when it signs, so tests can assert the gate runs first.
@@ -187,10 +187,107 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     test "errors when stealth settlement has no recipient meta-address" do
       ctx = %{wallet: SpyWallet, xochi_config: config()}
 
-      assert {:error, :stealth_meta_address_required} =
+      assert {:error, %Failure{reason: :stealth_keys_required}} =
                ExecuteXochiIntent.run(base_params(%{recipient_meta_address: nil}), ctx)
 
       refute_received :wallet_signed
+    end
+  end
+
+  describe "ExecuteXochiIntent quote-expired retry" do
+    test "re-quotes and re-executes once when the first execute reports expiry" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/xochi/quote" ->
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_1",
+              "canSolve" => true,
+              "toAmount" => "499000",
+              "xochiFee" => "1000",
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/xochi/execute" ->
+            n = Process.get(:execute_calls, 0)
+            Process.put(:execute_calls, n + 1)
+
+            if n == 0 do
+              conn
+              |> Plug.Conn.put_resp_content_type("application/json")
+              |> Plug.Conn.send_resp(409, Jason.encode!(%{"error" => "quote_expired"}))
+            else
+              Req.Test.json(conn, %{
+                "success" => true,
+                "intentId" => "int_1",
+                "status" => "executing",
+                "stealthAddress" => "0xstealth"
+              })
+            end
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1"
+      }
+
+      assert {:ok, result} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert result.status == "executing"
+      assert Process.get(:execute_calls) == 2
+
+      # The reservation is held once across the retry, not double-charged.
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0.50"))
+    end
+
+    test "releases the reservation when the retry also fails" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/xochi/quote" ->
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_1",
+              "canSolve" => true,
+              "toAmount" => "499000",
+              "xochiFee" => "1000",
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/xochi/execute" ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(409, Jason.encode!(%{"error" => "quote_expired"}))
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1"
+      }
+
+      assert {:error, %Failure{}} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
     end
   end
 
@@ -207,7 +304,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
         agent_id: "a1"
       }
 
-      assert {:error, {:over_budget, :per_request}} =
+      assert {:error, %Failure{reason: :over_budget}} =
                ExecuteXochiIntent.run(base_params(%{}), ctx)
 
       refute_received :wallet_signed
@@ -224,12 +321,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       params =
         base_params(%{to_chain_id: 8453, settlement: "public"})
 
-      assert {:error, {:not_xochi_route, :x402}} =
+      assert {:error, %Failure{reason: :route_unsupported}} =
                ExecuteXochiIntent.run(params, ctx)
     end
 
     test "errors when wallet is missing" do
-      assert {:error, {:missing_context, :wallet}} =
+      assert {:error, %Failure{reason: :config_error}} =
                ExecuteXochiIntent.run(base_params(%{}), %{xochi_config: config()})
     end
   end
@@ -244,6 +341,40 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert result.terminal == true
       assert result.settlement_type == "stealth"
       assert result.tx_hash == "0xabc"
+      assert result.settlement_speed == "within_budget"
+    end
+
+    test "surfaces a failed intent as an error, not {:ok}" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "intentId" => "int_2",
+          "status" => "failed",
+          "error" => "no liquidity for route",
+          "terminal" => true
+        })
+      end)
+
+      ctx = %{xochi_config: config()}
+
+      assert {:error, %Failure{reason: :no_liquidity, retryable?: false} = failure} =
+               PollXochiStatus.run(%{intent_id: "int_2"}, ctx)
+
+      assert failure.message =~ "fill"
+    end
+
+    test "surfaces an expired intent as a retryable error" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "intentId" => "int_3",
+          "status" => "expired",
+          "terminal" => true
+        })
+      end)
+
+      ctx = %{xochi_config: config()}
+
+      assert {:error, %Failure{reason: :expired, retryable?: true}} =
+               PollXochiStatus.run(%{intent_id: "int_3"}, ctx)
     end
   end
 end

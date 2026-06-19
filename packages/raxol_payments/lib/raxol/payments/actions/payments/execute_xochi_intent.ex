@@ -65,12 +65,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     ]
 
   alias Raxol.Payments.Actions.SpendGate
-  alias Raxol.Payments.{Assets, Router}
+  alias Raxol.Payments.{Assets, Failure, Router}
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.{QuoteRequest, QuoteResponse}
   alias Raxol.Payments.Xochi.Stealth
 
-  @spec run(map(), map()) :: {:ok, map()} | {:error, term()}
+  @spec run(map(), map()) :: {:ok, map()} | {:error, Failure.t()}
   @impl true
   def run(params, context) do
     with {:ok, wallet} <- fetch(context, :wallet),
@@ -78,14 +78,18 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
          {:ok, request, amount} <- build_request(params, wallet) do
       settle(config, wallet, request, amount, params, context)
     end
+    |> normalize_error()
   end
+
+  defp normalize_error({:ok, _result} = ok), do: ok
+  defp normalize_error({:error, reason}), do: {:error, Failure.from(reason)}
 
   defp settle(config, wallet, request, amount, params, context) do
     with :ok <- assert_xochi_route(params),
          {:ok, quote} <- solvable_quote(config, request),
          :ok <- authorize(context, config, amount),
-         {:ok, exec} <- execute(config, quote, wallet, context, amount) do
-      {:ok, summary(request, quote, exec)}
+         {:ok, exec, filled_quote} <- execute(config, request, quote, wallet, context, amount) do
+      {:ok, summary(request, filled_quote, exec)}
     end
   end
 
@@ -178,16 +182,44 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     SpendGate.authorize(context, amount, target: {:domain, host}, metadata: %{protocol: :xochi})
   end
 
-  defp execute(config, quote, wallet, context, amount) do
+  # Load-balanced Riddler nodes occasionally miss a freshly issued quote and
+  # reject the execute as expired/not-found. Re-quote and re-execute once under
+  # the same spend reservation (same logical payment, so no second authorize).
+  defp execute(config, request, quote, wallet, context, amount) do
     case Xochi.execute(config, quote, wallet) do
       {:ok, exec} ->
-        {:ok, exec}
+        {:ok, exec, quote}
 
       {:error, reason} ->
-        SpendGate.release(context, amount, %{protocol: :xochi, reason: :execute_failed})
-        {:error, {:execute_failed, reason}}
+        if quote_expired?(reason),
+          do: retry_execute(config, request, wallet, context, amount),
+          else: release_and_error(context, amount, reason)
     end
   end
+
+  defp retry_execute(config, request, wallet, context, amount) do
+    with {:ok, quote} <- solvable_quote(config, request),
+         {:ok, exec} <- Xochi.execute(config, quote, wallet) do
+      {:ok, exec, quote}
+    else
+      {:error, reason} -> release_and_error(context, amount, reason)
+    end
+  end
+
+  defp release_and_error(context, amount, reason) do
+    SpendGate.release(context, amount, %{protocol: :xochi, reason: :execute_failed})
+    {:error, {:execute_failed, reason}}
+  end
+
+  defp quote_expired?({:http, _status, body}) when is_map(body) do
+    code = to_string(body["error"] || body["reason"] || "")
+    message = to_string(body["message"] || "")
+
+    String.contains?(code, "quote_expired") or code == "not_found" or
+      String.contains?(String.downcase(message), "expired")
+  end
+
+  defp quote_expired?(_reason), do: false
 
   # The stealth address is whatever Xochi derived and announced server-side from
   # the supplied keys. We report that authoritative value; we do not derive one
