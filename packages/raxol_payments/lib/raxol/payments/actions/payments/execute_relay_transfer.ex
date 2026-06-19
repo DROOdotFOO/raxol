@@ -13,10 +13,24 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
   destination is downgraded to public and a `:stealth_unavailable_on_tron`
   warning is attached to the result; the transfer still proceeds.
 
+  ## Funding the deposit
+
+  Three paths, picked from the quote and context:
+
+  * **Gasless (A)** -- when the quote returns a `gasless` typed-data block, the
+    wallet signs it and the signature rides on execute so the solver pulls. No
+    broadcast. (Pending Riddler support on the Tron route, axol-io/Riddler#120.)
+  * **Broadcast (B)** -- when a `:broadcaster` is in context, it sends the
+    on-chain token transfer to the deposit address. Used until the gasless pull
+    lands.
+  * **External (C)** -- otherwise the deposit address is returned for an outside
+    wallet to fund.
+
   ## Context keys
 
   * `:relay_config` -- `%{base_url:, auth_token:}` for `Relay.Client`.
-  * `:wallet` -- used only to default `from_address` when not given.
+  * `:wallet` -- defaults `from_address`; signs the gasless authorization (A).
+  * `:broadcaster` -- a `Raxol.Payments.Relay.Broadcaster` module (B).
   * `:policy`, `:ledger`, `:agent_id`, `:on_confirm` -- see `SpendGate`.
   """
 
@@ -56,6 +70,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
         transfer_id: [type: :string],
         quote_id: [type: :string],
         deposit_address: [type: :string],
+        deposit_tx_hash: [type: :string],
+        funding: [type: :string],
         status: [type: :string],
         to_amount: [type: :string],
         warnings: [type: :list]
@@ -84,8 +100,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
     with :ok <- assert_relay_route(request),
          {:ok, quote} <- fillable_quote(config, request),
          :ok <- authorize(context, config, amount),
-         {:ok, status} <- execute(config, quote, context, amount) do
-      {:ok, summary(quote, status, warnings)}
+         {:ok, signature} <- maybe_sign_gasless(quote, context, amount),
+         {:ok, status} <- execute(config, quote, signature, context, amount),
+         {:ok, deposit_tx} <- maybe_broadcast(quote, request, signature, context, amount) do
+      {:ok, summary(quote, status, warnings, signature, deposit_tx)}
     end
   end
 
@@ -174,8 +192,45 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
     SpendGate.authorize(context, amount, target: {:domain, host}, metadata: %{protocol: :relay})
   end
 
-  defp execute(config, quote, context, amount) do
-    case Relay.execute(config, quote.transfer_id, quote.quote_id) do
+  # A (gasless): sign the quote's typed data before execute so the solver pulls.
+  defp maybe_sign_gasless(%QuoteResponse{gasless: gasless}, context, amount)
+       when is_map(gasless) do
+    case Map.get(context, :wallet) do
+      nil -> release_and_error(context, amount, {:missing_context, :wallet})
+      wallet -> sign_gasless(gasless, wallet, context, amount)
+    end
+  end
+
+  defp maybe_sign_gasless(_quote, _context, _amount), do: {:ok, nil}
+
+  defp sign_gasless(gasless, wallet, context, amount) do
+    domain = eip712_domain(gasless["domain"] || %{})
+    types = eip712_types(gasless["types"] || %{})
+    message = gasless["message"] || %{}
+
+    case wallet.sign_typed_data(domain, types, message) do
+      {:ok, sig} -> {:ok, "0x" <> Base.encode16(sig, case: :lower)}
+      {:error, reason} -> release_and_error(context, amount, {:sign_failed, reason})
+    end
+  end
+
+  defp eip712_domain(d) do
+    %{
+      name: d["name"],
+      version: d["version"],
+      chainId: d["chainId"],
+      verifyingContract: d["verifyingContract"]
+    }
+  end
+
+  defp eip712_types(types) do
+    types
+    |> Map.drop(["EIP712Domain"])
+    |> Map.new(fn {name, fields} -> {name, Enum.map(fields, &{&1["name"], &1["type"]})} end)
+  end
+
+  defp execute(config, quote, signature, context, amount) do
+    case Relay.execute(config, quote.transfer_id, quote.quote_id, signature: signature) do
       {:ok, status} ->
         {:ok, status}
 
@@ -185,14 +240,68 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
     end
   end
 
-  defp summary(quote, status, warnings) do
+  # B (broadcast): if not gasless, an injected broadcaster sends the deposit on an
+  # EVM source. Runs after execute so a failure before funds move releases the
+  # reservation cleanly; raxol cannot broadcast a Tron source leg.
+  defp maybe_broadcast(_quote, _request, signature, _context, _amount) when is_binary(signature),
+    do: {:ok, nil}
+
+  defp maybe_broadcast(
+         %QuoteResponse{deposit_address: deposit} = quote,
+         request,
+         _sig,
+         context,
+         amount
+       )
+       when is_binary(deposit) do
+    broadcaster = Map.get(context, :broadcaster)
+
+    if broadcaster && not Relay.Schemas.tron_chain?(request.from_chain_id),
+      do: broadcast_deposit(broadcaster, quote, request, context, amount),
+      else: {:ok, nil}
+  end
+
+  defp maybe_broadcast(_quote, _request, _sig, _context, _amount), do: {:ok, nil}
+
+  defp broadcast_deposit(broadcaster, quote, request, context, amount) do
+    params = %{
+      transfer_id: quote.transfer_id,
+      chain_id: request.from_chain_id,
+      token: request.from_token,
+      to: quote.deposit_address,
+      amount_atomic: request.from_amount,
+      wallet: Map.get(context, :wallet)
+    }
+
+    case broadcaster.send_deposit(params) do
+      {:ok, tx_hash} ->
+        {:ok, tx_hash}
+
+      {:error, reason} ->
+        SpendGate.release(context, amount, %{protocol: :relay, reason: :deposit_broadcast_failed})
+        {:error, {:deposit_broadcast_failed, reason}}
+    end
+  end
+
+  defp release_and_error(context, amount, reason) do
+    SpendGate.release(context, amount, %{protocol: :relay, reason: :funding_failed})
+    {:error, reason}
+  end
+
+  defp summary(quote, status, warnings, signature, deposit_tx) do
     %{
       transfer_id: quote.transfer_id,
       quote_id: quote.quote_id,
       deposit_address: quote.deposit_address,
+      deposit_tx_hash: deposit_tx,
+      funding: funding_mode(signature, deposit_tx),
       status: to_string(status.status),
       to_amount: quote.to_amount,
       warnings: warnings
     }
   end
+
+  defp funding_mode(signature, _deposit_tx) when is_binary(signature), do: "gasless"
+  defp funding_mode(_signature, deposit_tx) when is_binary(deposit_tx), do: "broadcast"
+  defp funding_mode(_signature, _deposit_tx), do: "external"
 end

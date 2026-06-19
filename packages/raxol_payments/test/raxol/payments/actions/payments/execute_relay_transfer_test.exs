@@ -2,6 +2,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransferTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.Actions.Payments.{ExecuteRelayTransfer, PollRelayStatus}
+  alias Raxol.Payments.Relay.Broadcaster
   alias Raxol.Payments.{Failure, Ledger, SpendingPolicy}
 
   @tron 728_126_428
@@ -95,6 +96,115 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransferTest do
       assert result.status == "pending"
       assert result.to_amount == "499000"
       assert result.warnings == []
+      # No gasless quote and no broadcaster: the caller funds the deposit.
+      assert result.funding == "external"
+      assert result.deposit_tx_hash == nil
+    end
+  end
+
+  describe "broadcast funding (B)" do
+    test "broadcasts the deposit on an EVM source when a broadcaster is present" do
+      stub_quote_and_execute()
+
+      assert {:ok, result} =
+               ExecuteRelayTransfer.run(
+                 base_params(%{}),
+                 ctx(%{broadcaster: Broadcaster.InMemory})
+               )
+
+      assert result.funding == "broadcast"
+      assert result.deposit_tx_hash == "0xdeposit_t_1"
+
+      assert [send] = Broadcaster.InMemory.sent()
+      assert send.to == "0xdeposit"
+      assert send.amount_atomic == "500000"
+      assert send.chain_id == 8453
+    end
+
+    test "releases the reservation when the broadcast fails" do
+      stub_quote_and_execute()
+      Process.put(:relay_broadcaster_fail, :rpc_down)
+      context = ctx(%{broadcaster: Broadcaster.InMemory})
+
+      assert {:error, %Failure{}} = ExecuteRelayTransfer.run(base_params(%{}), context)
+
+      totals = Ledger.get_totals(context.ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
+    test "does not broadcast a Tron source leg (raxol cannot)" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/relay/quote" ->
+            Req.Test.json(conn, %{
+              "transfer_id" => "t_1",
+              "quote_id" => "q_1",
+              "can_fill" => true,
+              "to_amount" => "499000",
+              "deposit_address" => @tron_addr
+            })
+
+          "/relay/execute" ->
+            Req.Test.json(conn, %{"transfer_id" => "t_1", "status" => "pending"})
+        end
+      end)
+
+      params =
+        base_params(%{
+          from_chain_id: @tron,
+          to_chain_id: 8453,
+          from_token: @usdt_trc20,
+          to_token: @usdc_base,
+          to_address: "0x" <> String.duplicate("cd", 20),
+          from_address: @tron_addr
+        })
+
+      assert {:ok, result} =
+               ExecuteRelayTransfer.run(params, ctx(%{broadcaster: Broadcaster.InMemory}))
+
+      assert result.funding == "external"
+      assert Broadcaster.InMemory.sent() == []
+    end
+  end
+
+  describe "gasless funding (A)" do
+    test "signs the quote's typed data and sends the signature on execute" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/relay/quote" ->
+            Req.Test.json(conn, %{
+              "transfer_id" => "t_1",
+              "quote_id" => "q_1",
+              "can_fill" => true,
+              "to_amount" => "499000",
+              "deposit_address" => "0xdeposit",
+              "gasless" => %{
+                "domain" => %{"name" => "Permit2", "chainId" => 8453},
+                "types" => %{"Permit" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/relay/execute" ->
+            {:ok, raw, conn} = Plug.Conn.read_body(conn)
+            send(self(), {:execute_body, Jason.decode!(raw)})
+            Req.Test.json(conn, %{"transfer_id" => "t_1", "status" => "pending"})
+        end
+      end)
+
+      assert {:ok, result} =
+               ExecuteRelayTransfer.run(
+                 base_params(%{}),
+                 ctx(%{broadcaster: Broadcaster.InMemory})
+               )
+
+      assert result.funding == "gasless"
+      assert result.deposit_tx_hash == nil
+      # Gasless means no broadcast even though a broadcaster was available.
+      assert Broadcaster.InMemory.sent() == []
+
+      assert_received {:execute_body, body}
+      assert String.starts_with?(body["signature"], "0x")
     end
   end
 

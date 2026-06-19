@@ -79,8 +79,9 @@ defmodule Raxol.Payments.Failure do
   # Quote could not be filled.
   def from({:cannot_solve, reason}), do: quote_failure(reason)
 
-  # Execution wrapper: unwrap and classify the inner reason.
+  # Execution / funding wrappers: unwrap and classify the inner reason.
   def from({:execute_failed, reason}), do: from(reason)
+  def from({:deposit_broadcast_failed, reason}), do: from(reason)
 
   # HTTP error from the Xochi/Relay client.
   def from({:http, status, body}), do: http_failure(status, body)

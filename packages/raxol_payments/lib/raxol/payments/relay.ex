@@ -16,11 +16,22 @@ defmodule Raxol.Payments.Relay do
           {:ok, Raxol.Payments.Relay.Schemas.QuoteResponse.t()} | {:error, term()}
   def get_quote(config, %QuoteRequest{} = request), do: Client.get_quote(config, request)
 
-  @doc "Initiate execution of a quoted transfer. Returns the initial status."
-  @spec execute(Client.config(), String.t(), String.t()) ::
+  @doc """
+  Initiate execution of a quoted transfer. Returns the initial status.
+
+  `:signature` is the gasless authorization for a pull (nil for a deposit-address
+  transfer, the common case today).
+  """
+  @spec execute(Client.config(), String.t(), String.t(), keyword()) ::
           {:ok, StatusResponse.t()} | {:error, term()}
-  def execute(config, transfer_id, quote_id) do
-    Client.execute(config, %ExecuteRequest{transfer_id: transfer_id, quote_id: quote_id})
+  def execute(config, transfer_id, quote_id, opts \\ []) do
+    request = %ExecuteRequest{
+      transfer_id: transfer_id,
+      quote_id: quote_id,
+      signature: Keyword.get(opts, :signature)
+    }
+
+    Client.execute(config, request)
   end
 
   @doc """

@@ -128,6 +128,7 @@ defmodule Raxol.Payments.Relay.Schemas do
       :route,
       :deposit_address,
       :deposit_expires_at,
+      :gasless,
       can_fill: false,
       instant_settlement: false,
       metadata: %{}
@@ -144,6 +145,9 @@ defmodule Raxol.Payments.Relay.Schemas do
             route: map() | nil,
             deposit_address: String.t() | nil,
             deposit_expires_at: integer() | nil,
+            # EIP-712 typed data for a gasless pull, present once Riddler returns
+            # it on the Tron route (axol-io/Riddler#120). nil = deposit-address.
+            gasless: map() | nil,
             instant_settlement: boolean(),
             metadata: map()
           }
@@ -161,6 +165,7 @@ defmodule Raxol.Payments.Relay.Schemas do
         route: json["route"],
         deposit_address: json["deposit_address"],
         deposit_expires_at: json["deposit_expires_at"],
+        gasless: json["gasless"],
         instant_settlement: json["instant_settlement"] || false,
         metadata: json["metadata"] || %{}
       }
@@ -170,14 +175,23 @@ defmodule Raxol.Payments.Relay.Schemas do
   defmodule ExecuteRequest do
     @moduledoc false
     @enforce_keys [:transfer_id, :quote_id]
-    defstruct [:transfer_id, :quote_id]
+    defstruct [:transfer_id, :quote_id, :signature, :nonce]
 
-    @type t :: %__MODULE__{transfer_id: String.t(), quote_id: String.t()}
+    @type t :: %__MODULE__{
+            transfer_id: String.t(),
+            quote_id: String.t(),
+            signature: String.t() | nil,
+            nonce: integer() | nil
+          }
 
-    # Relay is deposit-address based: execute carries no signature.
+    # Deposit-address transfers carry no signature. A gasless transfer (once
+    # Riddler consumes it on the Tron route, see axol-io/Riddler#120) carries a
+    # signed authorization so the solver can pull instead of waiting on a deposit.
     @spec to_json(t()) :: map()
     def to_json(%__MODULE__{} = req) do
       %{"transfer_id" => req.transfer_id, "quote_id" => req.quote_id}
+      |> Raxol.Payments.Relay.Schemas.put_non_nil("signature", req.signature)
+      |> Raxol.Payments.Relay.Schemas.put_non_nil("nonce", req.nonce)
     end
   end
 
