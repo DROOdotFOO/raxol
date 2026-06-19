@@ -86,6 +86,20 @@ defmodule Raxol.Payments.Ledger do
   end
 
   @doc """
+  Release (refund) a previously reserved amount.
+
+  Records a compensating entry of `-amount` so a spend that was reserved via
+  `try_spend/5` but then failed downstream (e.g. an intent execution error
+  after signing was authorized) does not permanently consume budget. Session
+  and lifetime totals net back out; per-request caps are unaffected since they
+  are evaluated per call, not on the running sum.
+  """
+  @spec release(GenServer.server(), term(), Decimal.t(), map()) :: :ok
+  def release(server, agent_id, amount, metadata \\ %{}) do
+    GenServer.cast(server, {:release, agent_id, amount, metadata})
+  end
+
+  @doc """
   Get spend history for an agent.
   """
   @spec get_history(GenServer.server(), term(), keyword()) :: [entry()]
@@ -201,6 +215,14 @@ defmodule Raxol.Payments.Ledger do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:record, agent_id, amount, metadata}, state) do
     entry = build_entry(agent_id, amount, metadata)
+    :ets.insert(state.table, {agent_id, entry})
+    notify_subscribers(state.subscribers, entry)
+    {:noreply, state}
+  end
+
+  def handle_manager_cast({:release, agent_id, amount, metadata}, state) do
+    release_meta = Map.put(metadata, :type, :release)
+    entry = build_entry(agent_id, Decimal.negate(amount), release_meta)
     :ets.insert(state.table, {agent_id, entry})
     notify_subscribers(state.subscribers, entry)
     {:noreply, state}

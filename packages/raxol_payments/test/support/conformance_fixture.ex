@@ -81,6 +81,6 @@ defmodule Raxol.Payments.Test.ConformanceFixture do
   defp cli_dir_path(dir), do: Path.join([dir, "test", "fixtures", "conformance.json"])
 
   defp sibling_default do
-    Path.expand("../../../../riddler-permit2-erc3009", __DIR__)
+    Path.expand("../../../../../riddler-permit2-erc3009", __DIR__)
   end
 end

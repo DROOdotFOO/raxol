@@ -109,6 +109,43 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
       json = QuoteRequest.to_json(req)
       refute Map.has_key?(json, "attestations")
     end
+
+    test "includes stealth pub keys when set" do
+      spending = "0x02" <> String.duplicate("ab", 32)
+      viewing = "0x03" <> String.duplicate("cd", 32)
+
+      req = %QuoteRequest{
+        wallet: "0xabc",
+        from_chain_id: 1,
+        to_chain_id: 8453,
+        from_token: "0xA0b8",
+        to_token: "0x8335",
+        from_amount: "1000000",
+        settlement_preference: "stealth",
+        stealth_spending_pub_key: spending,
+        stealth_viewing_pub_key: viewing
+      }
+
+      json = QuoteRequest.to_json(req)
+      assert json["stealth_spending_pub_key"] == spending
+      assert json["stealth_viewing_pub_key"] == viewing
+    end
+
+    test "omits stealth pub keys when nil" do
+      req = %QuoteRequest{
+        wallet: "0xabc",
+        from_chain_id: 1,
+        to_chain_id: 8453,
+        from_token: "0xA0b8",
+        to_token: "0x8335",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      json = QuoteRequest.to_json(req)
+      refute Map.has_key?(json, "stealth_spending_pub_key")
+      refute Map.has_key?(json, "stealth_viewing_pub_key")
+    end
   end
 
   @valid_addr "0x" <> String.duplicate("ab", 20)
@@ -168,6 +205,52 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
       }
 
       assert {:error, {:invalid_chain_id, _}} = QuoteRequest.validate(req)
+    end
+
+    test "stealth settlement without pub keys returns error" do
+      req = %QuoteRequest{
+        wallet: @valid_addr,
+        from_chain_id: 1,
+        to_chain_id: 8453,
+        from_token: @valid_addr,
+        to_token: @valid_addr,
+        from_amount: "1000000",
+        settlement_preference: "stealth"
+      }
+
+      assert {:error, {:stealth_keys_required, _}} = QuoteRequest.validate(req)
+    end
+
+    test "stealth settlement with compressed pub keys returns :ok" do
+      req = %QuoteRequest{
+        wallet: @valid_addr,
+        from_chain_id: 1,
+        to_chain_id: 8453,
+        from_token: @valid_addr,
+        to_token: @valid_addr,
+        from_amount: "1000000",
+        settlement_preference: "stealth",
+        stealth_spending_pub_key: "0x02" <> String.duplicate("ab", 32),
+        stealth_viewing_pub_key: "0x03" <> String.duplicate("cd", 32)
+      }
+
+      assert :ok = QuoteRequest.validate(req)
+    end
+
+    test "stealth settlement with malformed pub keys returns error" do
+      req = %QuoteRequest{
+        wallet: @valid_addr,
+        from_chain_id: 1,
+        to_chain_id: 8453,
+        from_token: @valid_addr,
+        to_token: @valid_addr,
+        from_amount: "1000000",
+        settlement_preference: "stealth",
+        stealth_spending_pub_key: "0x04deadbeef",
+        stealth_viewing_pub_key: "0x03" <> String.duplicate("cd", 32)
+      }
+
+      assert {:error, {:stealth_keys_required, _}} = QuoteRequest.validate(req)
     end
   end
 

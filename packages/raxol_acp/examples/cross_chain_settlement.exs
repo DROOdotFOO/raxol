@@ -4,6 +4,11 @@
 # its own `createMemo`-style write running in a separate workflow
 # branch; a join reconciles their tx_hashes into one merged state.
 #
+# Scope: this demonstrates the workflow graph mechanics (fan-out/join) with
+# hermetic SimChain agents. For the actual cross-chain stealth settlement path
+# through Xochi (`Raxol.ACP.Xochi.Settler` -> `Raxol.Payments.Protocols.Xochi`),
+# see packages/raxol_payments/examples/crosschain_stealth_payment.exs.
+#
 # Demonstrates:
 #
 #   * `Raxol.Workflow.Graph.add_channel/3` declares a per-key reducer.

@@ -41,6 +41,8 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :to_token,
       :from_amount,
       :trust_score,
+      :stealth_spending_pub_key,
+      :stealth_viewing_pub_key,
       settlement_preference: "public",
       deadline: nil,
       slippage_bps: 50,
@@ -61,9 +63,14 @@ defmodule Raxol.Payments.Xochi.Schemas do
             deadline: integer() | nil,
             slippage_bps: non_neg_integer(),
             trust_score: non_neg_integer() | nil,
+            stealth_spending_pub_key: String.t() | nil,
+            stealth_viewing_pub_key: String.t() | nil,
             gasless: boolean(),
             attestations: [map()]
           }
+
+    # Compressed secp256k1 public key: 0x + 02/03 prefix + 32 bytes (66 hex chars).
+    @compressed_pubkey ~r/^0x0[23][a-fA-F0-9]{64}$/
 
     @spec validate(t()) :: :ok | {:error, term()}
     def validate(%__MODULE__{} = req) do
@@ -85,10 +92,27 @@ defmodule Raxol.Payments.Xochi.Schemas do
         req.to_chain_id < 1 ->
           {:error, {:invalid_chain_id, "to_chain_id must be positive"}}
 
+        req.settlement_preference == "stealth" and not stealth_keys_present?(req) ->
+          {:error,
+           {:stealth_keys_required,
+            "stealth settlement requires compressed spending and viewing public keys"}}
+
         true ->
           :ok
       end
     end
+
+    defp stealth_keys_present?(%__MODULE__{
+           stealth_spending_pub_key: spend,
+           stealth_viewing_pub_key: view
+         }) do
+      compressed_pubkey?(spend) and compressed_pubkey?(view)
+    end
+
+    defp compressed_pubkey?(key) when is_binary(key),
+      do: Regex.match?(@compressed_pubkey, key)
+
+    defp compressed_pubkey?(_), do: false
 
     @spec to_json(t()) :: map()
     def to_json(%__MODULE__{} = req) do
@@ -107,6 +131,14 @@ defmodule Raxol.Payments.Xochi.Schemas do
 
       base
       |> Raxol.Payments.Xochi.Schemas.put_non_nil("trust_score", req.trust_score)
+      |> Raxol.Payments.Xochi.Schemas.put_non_nil(
+        "stealth_spending_pub_key",
+        req.stealth_spending_pub_key
+      )
+      |> Raxol.Payments.Xochi.Schemas.put_non_nil(
+        "stealth_viewing_pub_key",
+        req.stealth_viewing_pub_key
+      )
       |> maybe_put_attestations(req.attestations)
     end
 

@@ -127,6 +127,21 @@ defmodule Raxol.Payments.Assets do
     |> Decimal.div(pow10(decimals))
   end
 
+  @doc """
+  Convert a human-decimal amount to atomic units.
+
+  E.g. `to_atomic("0.01", 6)` -> `10_000`.
+  """
+  @spec to_atomic(integer() | String.t() | Decimal.t(), pos_integer()) ::
+          non_neg_integer()
+  def to_atomic(amount, decimals) when is_integer(decimals) and decimals > 0 do
+    amount
+    |> to_decimal()
+    |> Decimal.mult(pow10(decimals))
+    |> Decimal.round(0, :down)
+    |> Decimal.to_integer()
+  end
+
   defp to_decimal(%Decimal{} = d), do: d
   defp to_decimal(n) when is_integer(n), do: Decimal.new(n)
   defp to_decimal(s) when is_binary(s), do: Decimal.new(s)
