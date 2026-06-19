@@ -30,6 +30,22 @@ defmodule Raxol.Payments.RouterTest do
       assert Router.select(protocol: :riddler, cross_chain: true) == :riddler
     end
 
+    test "routes a Tron destination to the relay rail" do
+      assert Router.select(from_chain_id: 8453, to_chain_id: 728_126_428) == :relay
+    end
+
+    test "routes a Tron source to the relay rail" do
+      assert Router.select(from_chain_id: 728_126_428, to_chain_id: 8453) == :relay
+    end
+
+    test "a Tron leg takes the relay rail even when stealth is requested" do
+      assert Router.select(to_chain_id: 728_126_428, privacy: :stealth) == :relay
+    end
+
+    test "a forced protocol still overrides Tron routing" do
+      assert Router.select(to_chain_id: 728_126_428, protocol: :xochi) == :xochi
+    end
+
     test "trust_score >= 25 auto-selects xochi via stealth" do
       assert Router.select(trust_score: 25) == :xochi
     end
