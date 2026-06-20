@@ -105,7 +105,8 @@ defmodule Raxol.Payments.FailureTest do
     end
 
     test "invalid meta-address maps to :stealth_keys_required" do
-      assert Failure.from({:invalid_meta_address, :invalid_format}).reason == :stealth_keys_required
+      assert Failure.from({:invalid_meta_address, :invalid_format}).reason ==
+               :stealth_keys_required
     end
 
     test "not_xochi_route maps to :route_unsupported" do
@@ -115,6 +116,13 @@ defmodule Raxol.Payments.FailureTest do
     test "execute_failed unwraps the inner reason" do
       f = Failure.from({:execute_failed, {:http, 503, %{}}})
       assert f.reason == :network
+    end
+
+    test "erc3009-for-non-USDC maps to :method_mismatch with a clear message" do
+      f = Failure.from({:method_mismatch, :erc3009_requires_usdc})
+      assert f.reason == :method_mismatch
+      refute f.retryable?
+      assert f.message =~ "USDC"
     end
   end
 
