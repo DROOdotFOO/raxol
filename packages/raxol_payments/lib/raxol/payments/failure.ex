@@ -37,6 +37,7 @@ defmodule Raxol.Payments.Failure do
           | :rejected
           | :stealth_keys_required
           | :sign_failed
+          | :method_mismatch
           | :invalid_request
           | :config_error
           | :network
@@ -138,6 +139,26 @@ defmodule Raxol.Payments.Failure do
 
   def from({:invalid_settlement, _} = detail),
     do: build(:invalid_request, "The settlement type is not valid.", false, detail)
+
+  # The quote's chosen payment method is wrong for the token (e.g. ERC-3009 for a
+  # non-USDC token would be a silently invalid signature).
+  def from({:method_mismatch, :erc3009_requires_usdc} = detail),
+    do:
+      build(
+        :method_mismatch,
+        "The quote selected ERC-3009, which is USDC-only, but this transfer is not USDC.",
+        false,
+        detail
+      )
+
+  def from({:method_mismatch, _} = detail),
+    do:
+      build(
+        :method_mismatch,
+        "The quote's payment method is incompatible with the transfer.",
+        false,
+        detail
+      )
 
   # Request validation.
   def from({:invalid_wallet, _} = detail), do: invalid_request(detail)

@@ -190,6 +190,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :estimated_gas_cost,
       :expiry,
       :eip712_data,
+      :payment_method,
       :error,
       can_solve: false,
       gasless: false,
@@ -206,33 +207,41 @@ defmodule Raxol.Payments.Xochi.Schemas do
             xochi_fee: String.t() | nil,
             xochi_fee_rate: String.t() | nil,
             estimated_gas_cost: String.t() | nil,
-            expiry: String.t() | nil,
+            expiry: term() | nil,
             gasless: boolean(),
             gasless_fee: String.t() | nil,
             eip712_data: map() | nil,
+            payment_method: String.t() | nil,
             settlement_options: [map()],
             error: String.t() | nil
           }
 
+    # The live Riddler response is snake_case with `eip712`; older/sim responses
+    # are camelCase with `eip712Data`. Accept both so the client does not break
+    # on the canonical (snake_case) shape. See ../xochi/RAXOL_QUOTE_CONTRACT.md.
     @spec from_json(map()) :: t()
     def from_json(json) do
       %__MODULE__{
-        intent_id: json["intentId"],
-        quote_id: json["quoteId"],
-        can_solve: json["canSolve"] || false,
-        to_amount: json["toAmount"],
-        min_to_amount: json["minToAmount"],
-        xochi_fee: json["xochiFee"],
-        xochi_fee_rate: json["xochiFeeRate"],
-        estimated_gas_cost: json["estimatedGasCost"],
-        expiry: json["expiry"],
-        gasless: json["gasless"] || false,
-        gasless_fee: json["gaslessFee"],
-        eip712_data: json["eip712Data"],
-        settlement_options: json["settlementOptions"] || [],
-        error: json["error"]
+        intent_id: pick(json, ["intent_id", "intentId"]),
+        quote_id: pick(json, ["quote_id", "quoteId"]),
+        can_solve: pick(json, ["can_solve", "canSolve"]) || false,
+        to_amount: pick(json, ["to_amount", "toAmount"]),
+        min_to_amount: pick(json, ["min_to_amount", "minToAmount"]),
+        xochi_fee: pick(json, ["xochi_fee", "xochiFee"]) || get_in(json, ["fee", "fee_amount"]),
+        xochi_fee_rate: pick(json, ["xochi_fee_rate", "xochiFeeRate"]),
+        estimated_gas_cost:
+          pick(json, ["estimated_gas_cost", "estimatedGasCost", "estimated_gas_cost_usd"]),
+        expiry: pick(json, ["expiry", "expires_at"]),
+        gasless: pick(json, ["gasless"]) || false,
+        gasless_fee: pick(json, ["gasless_fee", "gaslessFee"]),
+        eip712_data: pick(json, ["eip712", "eip712Data"]),
+        payment_method: pick(json, ["payment_method", "paymentMethod"]),
+        settlement_options: pick(json, ["settlement_options", "settlementOptions"]) || [],
+        error: pick(json, ["error", "reason"])
       }
     end
+
+    defp pick(json, keys), do: Enum.find_value(keys, fn key -> json[key] end)
   end
 
   defmodule ExecuteRequest do

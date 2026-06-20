@@ -87,11 +87,26 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   defp settle(config, wallet, request, amount, params, context) do
     with :ok <- assert_xochi_route(params),
          {:ok, quote} <- solvable_quote(config, request),
+         :ok <- assert_method(quote, request),
          :ok <- authorize(context, config, amount),
          {:ok, exec, filled_quote} <- execute(config, request, quote, wallet, context, amount) do
       {:ok, summary(request, filled_quote, exec)}
     end
   end
+
+  # Guard the server's method choice before signing: ERC-3009 is USDC-only (it
+  # signs against the USDC contract as the EIP-712 verifying contract), so an
+  # ERC-3009 quote for a non-USDC token would be a silently invalid signature.
+  defp assert_method(%QuoteResponse{payment_method: "erc3009"}, %QuoteRequest{
+         from_chain_id: chain,
+         from_token: token
+       }) do
+    if Assets.usdc?(chain, token),
+      do: :ok,
+      else: {:error, {:method_mismatch, :erc3009_requires_usdc}}
+  end
+
+  defp assert_method(_quote, _request), do: :ok
 
   defp fetch(context, key) do
     case Map.fetch(context, key) do

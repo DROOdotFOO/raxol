@@ -331,6 +331,65 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     end
   end
 
+  describe "ExecuteXochiIntent method guard" do
+    defp stub_quote_method(payment_method) do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/xochi/quote" ->
+            Req.Test.json(conn, %{
+              "intent_id" => "int_1",
+              "quote_id" => "q_1",
+              "can_solve" => true,
+              "to_amount" => "499000",
+              "payment_method" => payment_method,
+              "eip712" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/xochi/execute" ->
+            Req.Test.json(conn, %{
+              "success" => true,
+              "intentId" => "int_1",
+              "status" => "executing",
+              "stealthAddress" => "0xstealth"
+            })
+        end
+      end)
+    end
+
+    defp method_ctx do
+      %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: start_supervised!({Ledger, [name: nil]}),
+        policy: policy(),
+        agent_id: "a1"
+      }
+    end
+
+    test "rejects an ERC-3009 quote for a non-USDC token before signing" do
+      stub_quote_method("erc3009")
+      # WETH on Base, not USDC.
+      params = base_params(%{from_token: "0x4200000000000000000000000000000000000006"})
+
+      assert {:error, %Failure{reason: :method_mismatch}} =
+               ExecuteXochiIntent.run(params, method_ctx())
+
+      refute_received :wallet_signed
+    end
+
+    test "allows an ERC-3009 quote for USDC" do
+      stub_quote_method("erc3009")
+
+      assert {:ok, result} = ExecuteXochiIntent.run(base_params(%{}), method_ctx())
+      assert result.status == "executing"
+      assert_received :wallet_signed
+    end
+  end
+
   describe "PollXochiStatus" do
     test "returns the terminal status" do
       stub_quote_and_execute()

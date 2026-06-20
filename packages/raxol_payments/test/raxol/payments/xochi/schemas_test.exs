@@ -287,6 +287,50 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
       resp = QuoteResponse.from_json(json)
       assert resp.can_solve == false
     end
+
+    test "parses the live snake_case shape with eip712 and payment_method" do
+      json = %{
+        "intent_id" => "xi_1",
+        "quote_id" => "xq_1",
+        "can_solve" => true,
+        "to_amount" => "24925000",
+        "min_to_amount" => "24800375",
+        "payment_method" => "erc3009",
+        "fee" => %{"fee_amount" => "75000", "total_bps" => 30},
+        "eip712" => %{"domain" => %{"name" => "Xochi"}, "types" => %{}, "message" => %{}},
+        "settlement_options" => ["public"]
+      }
+
+      resp = QuoteResponse.from_json(json)
+
+      assert resp.intent_id == "xi_1"
+      assert resp.quote_id == "xq_1"
+      assert resp.can_solve == true
+      assert resp.to_amount == "24925000"
+      assert resp.payment_method == "erc3009"
+
+      assert resp.eip712_data == %{
+               "domain" => %{"name" => "Xochi"},
+               "types" => %{},
+               "message" => %{}
+             }
+
+      assert resp.xochi_fee == "75000"
+      assert resp.settlement_options == ["public"]
+    end
+
+    test "an unfillable snake_case quote carries reason as error" do
+      json = %{
+        "intent_id" => "i",
+        "quote_id" => "q",
+        "can_solve" => false,
+        "reason" => "no liquidity"
+      }
+
+      resp = QuoteResponse.from_json(json)
+      assert resp.can_solve == false
+      assert resp.error == "no liquidity"
+    end
   end
 
   describe "ExecuteRequest.to_json/1" do
