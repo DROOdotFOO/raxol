@@ -15,7 +15,9 @@
 set -euo pipefail
 
 RELAY_LIVE_URL="${RELAY_LIVE_URL:-https://riddler.axol.io}"
-OP_TOKEN_REF="${OP_TOKEN_REF:-op://Employee/Xochi staging RIDDLER_API_TOKEN/credential}"
+# The /relay/* routes authenticate against TRON_RELAY_API_TOKEN, which
+# ansible-riddler provisions from this 1Password item.
+OP_TOKEN_REF="${OP_TOKEN_REF:-op://Employee/Riddler Tron Relay API Token/password}"
 RELAY_LIVE_FROM_TOKEN="${RELAY_LIVE_FROM_TOKEN:-0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913}"
 RELAY_LIVE_TO_TOKEN="${RELAY_LIVE_TO_TOKEN:-TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t}"
 RELAY_LIVE_TO_ADDRESS="${RELAY_LIVE_TO_ADDRESS:-TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t}"
