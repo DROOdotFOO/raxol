@@ -42,15 +42,11 @@ defmodule DemoDiscovery do
   def get_descriptions do
     # Could be auto-generated from @moduledoc or stored in a separate config
     %{
-      form: "Simple form example with validation and focus management.",
-      ux_refinement: "Showcases focus, hints, and UX improvements.",
       accessibility: "Demonstrates various accessibility features and compliance.",
       color_system: "Comprehensive color system demonstration with themes.",
       table: "Advanced table component with sorting, filtering, and pagination.",
-      integrated_accessibility: "Integrated accessibility features (WIP).",
       keyboard_shortcuts: "Demonstrates keyboard shortcut handling and customization.",
       component_showcase: "Complete component library showcase with examples.",
-      focus_ring_showcase: "Focus ring component with various animation types.",
       select_list_showcase: "Enhanced select list with search and pagination."
     }
   end
@@ -270,10 +266,9 @@ defmodule DemoRunner do
   defp categorize_demos(demos) do
     # Define categories based on demo names or metadata
     categories = %{
-      "Basic Examples" => ["form", "table"],
-      "Advanced Features" => ["accessibility", "keyboard_shortcuts", "ux_refinement"],
-      "Showcases" => ["component_showcase", "color_system", "focus_ring_showcase"],
-      "Work in Progress" => ["integrated_accessibility"]
+      "Basic Examples" => ["table"],
+      "Advanced Features" => ["accessibility", "keyboard_shortcuts"],
+      "Showcases" => ["component_showcase", "color_system"]
     }
 
     # Group demos into categories

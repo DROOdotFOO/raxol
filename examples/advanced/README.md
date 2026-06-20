@@ -12,15 +12,11 @@ Advanced architectural patterns and large-scale application design:
 - `architecture_demo.exs` - Architectural patterns and best practices
 - `cloud_integration.exs` - Cloud service integration patterns
 - `dashboard.exs` - Dashboard architecture with multiple data sources
-- `advanced_layout_test.exs` - Complex layout management
 
 ## Advanced Concepts
 
 ### `color_system_demo.ex`
 Advanced color system management and theming.
-
-### `ux_refinement_demo.ex`
-UX optimization and refinement techniques.
 
 ### `commands.exs`
 Command pattern implementation and command handling.

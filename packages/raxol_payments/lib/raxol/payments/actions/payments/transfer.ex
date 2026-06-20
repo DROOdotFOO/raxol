@@ -1,10 +1,18 @@
 defmodule Raxol.Payments.Actions.Payments.Transfer do
+  @moduledoc """
+  Agent Action for an explicit transfer to an address.
+
+  Spending is authorized through `Raxol.Payments.Actions.SpendGate` before any
+  execution: the atomic ledger reservation and confirmation threshold are
+  enforced here. Cross-chain and stealth execution route through Xochi via
+  `Raxol.Payments.Actions.Payments.ExecuteXochiIntent`.
+  """
+
   @compile {:no_warn_undefined, Raxol.Agent.Action}
 
   use Raxol.Agent.Action,
     name: "payment_transfer",
-    description:
-      "Transfer funds to an address (explicit payment, not auto-pay)",
+    description: "Transfer funds to an address (explicit payment, not auto-pay)",
     schema: [
       input: [
         to: [
@@ -23,7 +31,7 @@ defmodule Raxol.Payments.Actions.Payments.Transfer do
       ]
     ]
 
-  alias Raxol.Payments.{Ledger, SpendingPolicy}
+  alias Raxol.Payments.Actions.SpendGate
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, term()}
   @impl true
@@ -41,18 +49,13 @@ defmodule Raxol.Payments.Actions.Payments.Transfer do
     currency = Map.get(params, :currency, "USDC")
     amount = Decimal.new(amount_str)
 
-    with :ok <- check_budget(amount, context) do
-      # Record the spend
-      if ledger = Map.get(context, :ledger) do
-        agent_id = Map.get(context, :agent_id, :unknown)
+    metadata = %{to: to, currency: currency, type: :explicit_transfer}
 
-        Ledger.record_spend(ledger, agent_id, amount, %{
-          to: to,
-          currency: currency,
-          type: :explicit_transfer
-        })
-      end
-
+    with :ok <-
+           SpendGate.authorize(context, amount,
+             target: {:address, to},
+             metadata: metadata
+           ) do
       {:ok,
        %{
          status: "pending",
@@ -60,51 +63,6 @@ defmodule Raxol.Payments.Actions.Payments.Transfer do
          to: to,
          amount: amount_str
        }}
-    end
-  end
-
-  defp check_budget(amount, context) do
-    case Map.get(context, :policy) do
-      nil ->
-        :ok
-
-      %SpendingPolicy{} = policy ->
-        with :ok <- check_confirmation(policy, amount, context) do
-          check_ledger_budget(policy, amount, context)
-        end
-    end
-  end
-
-  # Explicit transfers move to an address, not a host, so the domain gate from
-  # PolicyGate does not apply -- but the amount-based confirmation threshold
-  # does. Callers that need a confirmation UX pass `:on_confirm` in the action
-  # context (1-arity function on amount).
-  defp check_confirmation(policy, amount, context) do
-    if SpendingPolicy.requires_confirmation?(policy, amount) do
-      on_confirm = Map.get(context, :on_confirm)
-
-      if is_function(on_confirm, 1) and on_confirm.(amount) == :approve do
-        :ok
-      else
-        {:error, {:requires_confirmation, amount}}
-      end
-    else
-      :ok
-    end
-  end
-
-  defp check_ledger_budget(policy, amount, context) do
-    case Map.get(context, :ledger) do
-      nil ->
-        :ok
-
-      ledger ->
-        agent_id = Map.get(context, :agent_id, :unknown)
-
-        case Ledger.check_budget(ledger, agent_id, amount, policy) do
-          :ok -> :ok
-          {:over_limit, limit_type} -> {:error, {:over_budget, limit_type}}
-        end
     end
   end
 end

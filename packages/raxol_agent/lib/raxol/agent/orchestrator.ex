@@ -20,6 +20,7 @@ defmodule Raxol.Agent.Orchestrator do
   alias Raxol.Agent.Protocol
 
   defstruct agents: %{},
+            monitors: %{},
             pane_layout: %{},
             focused_pane: nil,
             pilot_mode: :observe,
@@ -29,6 +30,7 @@ defmodule Raxol.Agent.Orchestrator do
 
   @type t :: %__MODULE__{
           agents: %{atom() => pid()},
+          monitors: %{atom() => reference()},
           pane_layout: %{atom() => map()},
           focused_pane: atom() | nil,
           pilot_mode: :observe | :command | :takeover,
@@ -38,6 +40,8 @@ defmodule Raxol.Agent.Orchestrator do
         }
 
   @max_event_log 200
+  @rebind_recheck_ms 25
+  @rebind_max_attempts 80
   @default_pane_position %{x: 0, y: 0}
   @default_pane_dimensions %{
     width: Raxol.Core.Defaults.terminal_width(),
@@ -177,6 +181,7 @@ defmodule Raxol.Agent.Orchestrator do
         {:reply, {:error, :not_found}, state}
 
       pid ->
+        state = demonitor_agent(state, agent_id)
         _ = DynamicSupervisor.terminate_child(Raxol.Agent.DynSup, pid)
 
         state =
@@ -350,14 +355,22 @@ defmodule Raxol.Agent.Orchestrator do
   def handle_manager_info({:DOWN, _ref, :process, pid, reason}, %__MODULE__{} = state) do
     case Enum.find(state.agents, fn {_, p} -> p == pid end) do
       {agent_id, _} ->
-        Logger.warning("[Orchestrator] Agent #{agent_id} died: #{inspect(reason)}")
+        Logger.warning("[Orchestrator] Agent #{agent_id} down: #{inspect(reason)}")
 
-        state = %__MODULE__{state | agents: Map.delete(state.agents, agent_id)}
+        # The DynamicSupervisor may restart the agent under the same Registry
+        # name with a fresh pid. Give the restart a chance to land before
+        # concluding the agent is gone for good.
+        state = %__MODULE__{state | monitors: Map.delete(state.monitors, agent_id)}
+        schedule_rebind(agent_id, pid, 0)
         {:noreply, state}
 
       nil ->
         {:noreply, %__MODULE__{state | subscribers: MapSet.delete(state.subscribers, pid)}}
     end
+  end
+
+  def handle_manager_info({:rebind_agent, agent_id, old_pid, attempt}, %__MODULE__{} = state) do
+    {:noreply, rebind_agent(state, agent_id, old_pid, attempt)}
   end
 
   def handle_manager_info(_msg, %__MODULE__{} = state), do: {:noreply, state}
@@ -389,9 +402,12 @@ defmodule Raxol.Agent.Orchestrator do
       label: Keyword.get(opts, :label, to_string(agent_id))
     }
 
+    ref = Process.monitor(pid)
+
     %__MODULE__{
       state
       | agents: Map.put(state.agents, agent_id, pid),
+        monitors: Map.put(state.monitors, agent_id, ref),
         pane_layout: Map.put(state.pane_layout, agent_id, pane)
     }
   end
@@ -406,6 +422,7 @@ defmodule Raxol.Agent.Orchestrator do
     state = %__MODULE__{
       state
       | agents: Map.delete(state.agents, agent_id),
+        monitors: Map.delete(state.monitors, agent_id),
         pane_layout: Map.delete(state.pane_layout, agent_id)
     }
 
@@ -415,6 +432,76 @@ defmodule Raxol.Agent.Orchestrator do
     else
       state
     end
+  end
+
+  defp demonitor_agent(%__MODULE__{} = state, agent_id) do
+    case Map.get(state.monitors, agent_id) do
+      nil ->
+        state
+
+      ref ->
+        Process.demonitor(ref, [:flush])
+        %__MODULE__{state | monitors: Map.delete(state.monitors, agent_id)}
+    end
+  end
+
+  defp schedule_rebind(agent_id, old_pid, attempt) do
+    Process.send_after(
+      self(),
+      {:rebind_agent, agent_id, old_pid, attempt},
+      @rebind_recheck_ms
+    )
+  end
+
+  defp rebind_agent(%__MODULE__{} = state, agent_id, old_pid, attempt) do
+    # The agent may have been removed (e.g. killed) while the rebind was pending.
+    if Map.has_key?(state.agents, agent_id) do
+      case restarted_pid(agent_id, old_pid) do
+        {:ok, new_pid} ->
+          rebind_to(state, agent_id, new_pid)
+
+        :pending when attempt < @rebind_max_attempts ->
+          reschedule(state, agent_id, old_pid, attempt)
+
+        :pending ->
+          drop_agent(state, agent_id)
+      end
+    else
+      state
+    end
+  end
+
+  defp restarted_pid(agent_id, old_pid) do
+    case Registry.lookup(Raxol.Agent.Registry, {:process, agent_id}) do
+      [{pid, _}] when pid != old_pid -> if Process.alive?(pid), do: {:ok, pid}, else: :pending
+      _ -> :pending
+    end
+  end
+
+  defp rebind_to(%__MODULE__{} = state, agent_id, new_pid) do
+    ref = Process.monitor(new_pid)
+    pane = state.pane_layout |> Map.get(agent_id, %{}) |> Map.put(:agent_pid, new_pid)
+
+    %__MODULE__{
+      state
+      | agents: Map.put(state.agents, agent_id, new_pid),
+        monitors: Map.put(state.monitors, agent_id, ref),
+        pane_layout: Map.put(state.pane_layout, agent_id, pane)
+    }
+    |> log_event({:agent_restarted, agent_id})
+  end
+
+  defp reschedule(%__MODULE__{} = state, agent_id, old_pid, attempt) do
+    schedule_rebind(agent_id, old_pid, attempt + 1)
+    state
+  end
+
+  defp drop_agent(%__MODULE__{} = state, agent_id) do
+    Logger.warning("[Orchestrator] Agent #{agent_id} did not restart; removing")
+
+    state
+    |> remove_agent(agent_id)
+    |> log_event({:agent_died, agent_id})
   end
 
   defp require_focused_pane(%__MODULE__{focused_pane: nil}),

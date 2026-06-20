@@ -8,6 +8,15 @@ defmodule Raxol.ACP.Xochi.SettlerTest do
   @dst_token "0x" <> String.duplicate("22", 20)
   @destination "0x" <> String.duplicate("33", 20)
 
+  defmodule StubWallet do
+    @moduledoc false
+    def address, do: "0xfeedfacefeedfacefeedfacefeedfacefeedface"
+    def chain_id, do: 8453
+    def sign_typed_data(_d, _t, _m), do: {:ok, <<7::size(520)>>}
+    def sign_message(_), do: {:ok, <<7::size(520)>>}
+    def sign_hash(_), do: {:ok, <<7::size(520)>>}
+  end
+
   defp valid_requirement do
     %{
       "src_chain_id" => 8453,
@@ -92,6 +101,75 @@ defmodule Raxol.ACP.Xochi.SettlerTest do
       bad_req = %{valid_requirement() | "dst_token" => "bad"}
 
       assert {:error, {:invalid_to_token, _}} = settler.(settle_args(bad_req))
+    end
+  end
+
+  describe "settlement outcome handling" do
+    defp sim(status) do
+      fn conn ->
+        body =
+          case conn.request_path do
+            "/xochi/quote" ->
+              %{
+                "intentId" => "i1",
+                "quoteId" => "q1",
+                "canSolve" => true,
+                "toAmount" => "999000",
+                "eip712Data" => %{
+                  "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                  "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                  "message" => %{"amount" => 1_000_000}
+                }
+              }
+
+            "/xochi/execute" ->
+              %{"success" => true, "intentId" => "i1", "status" => "executing"}
+
+            "/xochi/status/i1" ->
+              %{"intentId" => "i1", "status" => status, "terminal" => true}
+          end
+
+        Req.Test.json(conn, body)
+      end
+    end
+
+    # The settler uses its build-time xochi_config, so the sim plug is wired there.
+    defp settler_for(status) do
+      Settler.build(
+        wallet_address: @wallet,
+        xochi_config: %{
+          base_url: "https://xochi.test",
+          auth_token: "stub",
+          req_options: [plug: sim(status)]
+        },
+        xochi_wallet: StubWallet
+      )
+    end
+
+    defp args do
+      %{
+        requirement: valid_requirement(),
+        transfer_amount_atomic: 1_000_000,
+        destination: @destination,
+        xochi_config: %{},
+        xochi_wallet: StubWallet
+      }
+    end
+
+    test "a completed intent yields a deliverable" do
+      assert {:ok, deliverable} = settler_for("completed").(args())
+      assert deliverable.intent_id == "i1"
+      assert deliverable.status == "completed"
+    end
+
+    test "a failed intent is an error, not a deliverable" do
+      assert {:error, {:settlement_failed, :failed, "i1", _}} =
+               settler_for("failed").(args())
+    end
+
+    test "an expired intent is an error, not a deliverable" do
+      assert {:error, {:settlement_failed, :expired, "i1", _}} =
+               settler_for("expired").(args())
     end
   end
 end

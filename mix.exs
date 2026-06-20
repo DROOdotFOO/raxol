@@ -448,7 +448,7 @@ defmodule Raxol.MixProject do
         {"docs/features/TIME_TRAVEL_DEBUGGING.md",
          [title: "Time-Travel Debugging"]},
         {"docs/WHY_OTP.md", [title: "Why OTP"]},
-        {"examples/core/README.md",
+        {"examples/reference/core/README.md",
          [title: "Core Examples", filename: "core-examples"]}
       ],
       groups_for_extras: [
@@ -490,7 +490,7 @@ defmodule Raxol.MixProject do
           ROADMAP.md
           .github/CONTRIBUTING.md
           LICENSE.md
-          examples/core/README.md
+          examples/reference/core/README.md
         )
       ],
       groups_for_modules: [

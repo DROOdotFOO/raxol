@@ -102,11 +102,24 @@ defmodule Raxol.ACP.Xochi.Settler do
   defp do_settle(args, wallet_address, xochi_config, xochi_wallet, poll_opts) do
     with {:ok, request} <- build_quote_request(args, wallet_address),
          {:ok, %IntentStatus{} = status} <-
-           Xochi.transfer(xochi_config, request, xochi_wallet, poll_opts),
-         {:ok, deliverable} <- to_deliverable(status) do
-      {:ok, deliverable}
+           Xochi.transfer(xochi_config, request, xochi_wallet, poll_opts) do
+      settle_result(status)
     end
   end
+
+  # Only a completed settlement yields a deliverable. A terminal :failed or
+  # :expired intent (which poll_status returns as `{:ok, status}`) must surface
+  # as an error so SolverAgent does not submit a deliverable for a settlement
+  # that never landed.
+  defp settle_result(%IntentStatus{status: :completed} = status),
+    do: to_deliverable(status)
+
+  defp settle_result(%IntentStatus{status: s, intent_id: id, error: err})
+       when s in [:failed, :expired],
+       do: {:error, {:settlement_failed, s, id, err}}
+
+  defp settle_result(%IntentStatus{status: s, intent_id: id}),
+    do: {:error, {:settlement_incomplete, s, id}}
 
   defp build_quote_request(args, wallet_address) do
     req = args.requirement

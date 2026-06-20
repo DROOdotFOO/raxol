@@ -345,9 +345,10 @@ The terminal backend ignores hints entirely and relies on server-computed frames
 
 ## Examples
 
-- `examples/liveview/tea_counter_live.ex`: TEA app rendered in the browser
-- `examples/liveview/basic_terminal_live.ex`: Raw buffer approach
-- `examples/liveview/01_simple_terminal/`: Step-by-step simple terminal
+- `examples/reference/liveview/tea_counter_live.ex`: TEA app rendered in the browser
+- `examples/reference/liveview/01_simple_terminal/`: Step-by-step simple terminal
+
+(These need a Phoenix host -- they are reference modules, not `mix run` scripts.)
 
 ## Next Steps
 

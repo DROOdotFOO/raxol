@@ -165,7 +165,9 @@ jobs:
         BASELINE_REF="${{ github.event.inputs.baseline_ref || 'origin/master' }}"
         echo "[INFO] Checking out baseline: $BASELINE_REF"
         git fetch origin
-        git checkout $BASELINE_REF
+        # -f: the benchmark build re-resolves transitive deps and dirties
+        # mix.lock; force past it (untracked benchmark outputs are unaffected).
+        git checkout -f "$BASELINE_REF"
         mix deps.get && mix compile --warnings-as-errors
 
         echo "[BENCH] Running baseline performance benchmarks..."
@@ -194,7 +196,7 @@ jobs:
         fi
         echo "[OK] Baseline benchmarks complete"
 
-        git checkout ${{ github.sha }}
+        git checkout -f ${{ github.sha }}
         mix deps.get && mix compile --warnings-as-errors
 
     - name: Download cached baselines
@@ -344,7 +346,9 @@ jobs:
         BASELINE_REF="${{ github.event.inputs.baseline_ref || 'origin/master' }}"
         echo "Checking out baseline: $BASELINE_REF"
         git fetch origin
-        git checkout $BASELINE_REF
+        # -f: the benchmark build re-resolves transitive deps and dirties
+        # mix.lock; force past it (untracked benchmark outputs are unaffected).
+        git checkout -f "$BASELINE_REF"
         mix deps.get && mix compile --warnings-as-errors
 
         echo "Running baseline memory benchmarks for scenario: ${{ matrix.scenario }}"
@@ -388,7 +392,7 @@ jobs:
 
         echo "Baseline memory benchmarks complete for ${{ matrix.scenario }}"
 
-        git checkout ${{ github.sha }}
+        git checkout -f ${{ github.sha }}
         mix deps.get && mix compile --warnings-as-errors
 
     - name: Download cached memory baselines

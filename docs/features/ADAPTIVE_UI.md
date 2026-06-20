@@ -123,5 +123,5 @@ Easing: `:linear`, `:ease_in_out`, `:ease_out`.
 ## Example
 
 ```bash
-mix run examples/adaptive_ui_demo.exs
+mix run examples/subsystems/adaptive_ui_demo.exs
 ```

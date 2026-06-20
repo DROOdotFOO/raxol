@@ -171,4 +171,59 @@ defmodule Raxol.Agent.SessionStreamerTest do
       refute :agent_1 in sessions
     end
   end
+
+  describe "cross-surface consistency" do
+    test "every subscriber observes the identical ordered sequence", %{streamer: streamer} do
+      parent = self()
+
+      sequence = [
+        {:text_delta, "thinking"},
+        {:tool_use, %{name: "search", arguments: %{}, id: "t1"}},
+        {:tool_result, %{name: "search", result: %{hits: 2}}},
+        {:state_change, %{from: :thinking, to: :acting}},
+        {:done, %{content: "answer"}}
+      ]
+
+      # Stand-ins for the surfaces that observe one agent: an SSE consumer, a
+      # watch-style consumer, and an MCP consumer.
+      surfaces = [:sse, :watch, :mcp]
+
+      collectors =
+        for surface <- surfaces do
+          spawn_link(fn ->
+            SessionStreamer.subscribe(:agent_x, streamer)
+            send(parent, {:ready, surface})
+            collected = collect_events(:agent_x, length(sequence), [])
+            send(parent, {:collected, surface, collected})
+          end)
+        end
+
+      for surface <- surfaces, do: assert_receive({:ready, ^surface})
+
+      Enum.each(sequence, fn event ->
+        SessionStreamer.emit(:agent_x, event, streamer)
+      end)
+
+      # Each surface receives the same events, in the same order, with none
+      # dropped or reordered.
+      for surface <- surfaces do
+        assert_receive {:collected, ^surface, ^sequence}, 1_000
+      end
+
+      Enum.each(collectors, fn pid ->
+        if Process.alive?(pid), do: Process.exit(pid, :normal)
+      end)
+    end
+  end
+
+  defp collect_events(_session, 0, acc), do: Enum.reverse(acc)
+
+  defp collect_events(session, remaining, acc) do
+    receive do
+      {:session_event, ^session, event} ->
+        collect_events(session, remaining - 1, [event | acc])
+    after
+      1_000 -> Enum.reverse(acc)
+    end
+  end
 end

@@ -33,8 +33,9 @@ defmodule Raxol.Payments.Xochi.Client do
   }
 
   @type config :: %{
-          base_url: String.t(),
-          auth_token: String.t()
+          :base_url => String.t(),
+          :auth_token => String.t(),
+          optional(:req_options) => keyword()
         }
 
   @type error :: {:error, {:http, integer(), term()}} | {:error, term()}
@@ -124,11 +125,13 @@ defmodule Raxol.Payments.Xochi.Client do
   defp build_req(config) do
     validate_base_url!(config.base_url)
 
-    Req.new(
+    [
       base_url: config.base_url,
       headers: [{"authorization", "Bearer #{config.auth_token}"}],
       receive_timeout: 30_000
-    )
+    ]
+    |> Keyword.merge(Map.get(config, :req_options, []))
+    |> Req.new()
   end
 
   defp validate_base_url!("https://" <> _), do: :ok

@@ -18,6 +18,7 @@ defmodule Raxol.Payments.Router do
   """
 
   alias Raxol.Payments.PrivacyTier
+  alias Raxol.Payments.Relay.Schemas, as: RelaySchemas
   alias Raxol.Payments.Zksar
 
   @type privacy :: :public | :stealth | :shielded | :auto
@@ -92,7 +93,16 @@ defmodule Raxol.Payments.Router do
         explicit -> explicit
       end
 
-    select_protocol(resolved_privacy, cross_chain)
+    # A Tron leg always routes to the Relay rail, ahead of privacy: Relay is
+    # public-only, so a stealth request to Tron is downgraded at the action.
+    if tron_leg?(opts),
+      do: :relay,
+      else: select_protocol(resolved_privacy, cross_chain)
+  end
+
+  defp tron_leg?(opts) do
+    RelaySchemas.tron_chain?(Keyword.get(opts, :from_chain_id, 0)) or
+      RelaySchemas.tron_chain?(Keyword.get(opts, :to_chain_id, 0))
   end
 
   defp resolve_privacy_from_score(opts) do

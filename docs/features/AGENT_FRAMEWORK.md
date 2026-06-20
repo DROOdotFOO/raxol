@@ -152,7 +152,8 @@ Backend detection tries each in order: Lumo -> Anthropic -> Kimi -> OpenAI -> Ol
 ## Examples
 
 ```bash
-mix run examples/agents/code_review_agent.exs    # single agent, shell commands
-mix run examples/agents/agent_team.exs            # coordinator + workers
-FREE_AI=true mix run examples/agents/ai_cockpit.exs  # multi-agent cockpit w/ real LLM
+FREE_AI=true mix run examples/agents/zero_system.exs  # ZERO System cockpit w/ live LLM reasoning
+# framework primitives run from the package (they need Raxol.Agent):
+cd packages/raxol_agent && mix run examples/agents/react_agent.exs  # Actions + ReAct + tools + shell
+cd packages/raxol_agent && mix run examples/agents/agent_team.exs   # coordinator + workers
 ```

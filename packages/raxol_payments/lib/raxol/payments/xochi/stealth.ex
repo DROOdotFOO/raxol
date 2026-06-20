@@ -87,31 +87,48 @@ defmodule Raxol.Payments.Xochi.Stealth do
   use in an ERC-5564 announcement.
   """
   @spec generate(meta_address()) :: {:ok, settlement()} | {:error, term()}
-  def generate(%{spending_pub_key: spending_pub, viewing_pub_key: viewing_pub}) do
+  def generate(meta), do: generate(meta, :crypto.strong_rand_bytes(32))
+
+  @doc """
+  Generate a stealth address using a caller-supplied ephemeral private key.
+
+  Identical to `generate/1` but deterministic: the same meta-address and
+  ephemeral key always yield the same stealth address, ephemeral public key,
+  and view tag. Used for reproducible cross-implementation conformance checks.
+  """
+  @spec generate(meta_address(), <<_::256>>) :: {:ok, settlement()} | {:error, term()}
+  def generate(
+        %{spending_pub_key: spending_pub, viewing_pub_key: viewing_pub},
+        ephemeral_priv
+      )
+      when is_binary(ephemeral_priv) and byte_size(ephemeral_priv) == 32 do
     with {:ok, spending_pub} <- normalize_pubkey(spending_pub),
          {:ok, viewing_pub} <- normalize_pubkey(viewing_pub),
-         {:ok, {ephemeral_priv, ephemeral_pub}} <- generate_keypair(),
+         {:ok, ephemeral_pub} <- derive_pubkey(ephemeral_priv),
          {:ok, shared_point} <- ec_mult(viewing_pub, ephemeral_priv) do
-      shared_compressed = compress_pubkey(shared_point)
-      hash = keccak256(shared_compressed)
-      <<view_tag::8, _rest::binary>> = hash
-
-      case derive_stealth_address(spending_pub, hash) do
-        {:ok, stealth_address} ->
-          {:ok,
-           %{
-             stealth_address: stealth_address,
-             ephemeral_pub_key: ephemeral_pub,
-             view_tag: view_tag
-           }}
-
-        {:error, _} = err ->
-          err
-      end
+      build_settlement(spending_pub, ephemeral_pub, shared_point)
     end
   end
 
-  def generate(_), do: {:error, :invalid_meta_address}
+  def generate(_, _), do: {:error, :invalid_meta_address}
+
+  defp build_settlement(spending_pub, ephemeral_pub, shared_point) do
+    hash = shared_point |> compress_pubkey() |> keccak256()
+    <<view_tag::8, _rest::binary>> = hash
+
+    case derive_stealth_address(spending_pub, hash) do
+      {:ok, stealth_address} ->
+        {:ok,
+         %{
+           stealth_address: stealth_address,
+           ephemeral_pub_key: ephemeral_pub,
+           view_tag: view_tag
+         }}
+
+      {:error, _} = err ->
+        err
+    end
+  end
 
   @doc """
   Scan announcements for payments to our stealth addresses.
@@ -320,19 +337,6 @@ defmodule Raxol.Payments.Xochi.Stealth do
   end
 
   # -- Crypto wrappers --
-
-  defp generate_keypair do
-    priv = :crypto.strong_rand_bytes(32)
-
-    case ExSecp256k1.create_public_key(priv) do
-      {:ok, pub} ->
-        {:ok, compressed} = ExSecp256k1.public_key_compress(pub)
-        {:ok, {priv, compressed}}
-
-      {:error, reason} ->
-        {:error, {:keypair_generation, reason}}
-    end
-  end
 
   defp derive_pubkey(priv_key) when byte_size(priv_key) == 32 do
     case ExSecp256k1.create_public_key(priv_key) do

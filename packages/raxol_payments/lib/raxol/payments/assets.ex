@@ -68,6 +68,14 @@ defmodule Raxol.Payments.Assets do
     137 => %{
       "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" => 6,
       "0x2791bca1f2de4661ed88a30c99a7a9449aa84174" => 6
+    },
+    # Tron mainnet (TRC-20). Keys are lowercased to match the lookup; Tron
+    # addresses are case-sensitive but USDT/USDC both use 6 decimals.
+    728_126_428 => %{
+      # USDT TRC-20
+      "tr7nhqjekqxgtci8q8zy4pl8otszgjlj6t" => 6,
+      # USDC TRC-20
+      "tekxitehnzsmse2xqrbj4w32run966rdz8" => 6
     }
   }
 
@@ -125,6 +133,21 @@ defmodule Raxol.Payments.Assets do
     amount
     |> to_decimal()
     |> Decimal.div(pow10(decimals))
+  end
+
+  @doc """
+  Convert a human-decimal amount to atomic units.
+
+  E.g. `to_atomic("0.01", 6)` -> `10_000`.
+  """
+  @spec to_atomic(integer() | String.t() | Decimal.t(), pos_integer()) ::
+          non_neg_integer()
+  def to_atomic(amount, decimals) when is_integer(decimals) and decimals > 0 do
+    amount
+    |> to_decimal()
+    |> Decimal.mult(pow10(decimals))
+    |> Decimal.round(0, :down)
+    |> Decimal.to_integer()
   end
 
   defp to_decimal(%Decimal{} = d), do: d
