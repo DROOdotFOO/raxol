@@ -20,7 +20,8 @@ gated_tags = [
      System.get_env("CONFORMANCE_FIXTURE_PATH")},
   {[:stealth_conformance], System.get_env("STEALTH_VECTORS_PATH")},
   {[:live_xochi], System.get_env("XOCHI_LIVE_URL")},
-  {[:live_relay], System.get_env("RELAY_LIVE_URL")}
+  {[:live_relay], System.get_env("RELAY_LIVE_URL")},
+  {[:live_property], System.get_env("XOCHI_LIVE_URL") || System.get_env("RELAY_LIVE_URL")}
 ]
 
 excluded =
