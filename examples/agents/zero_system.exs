@@ -1,6 +1,7 @@
 # ZERO System -- the cockpit
 #
-# The singular launch demo (see DEMO_SPEC.md). One piloted run that chains the
+# The singular launch demo (see SPECS.md "Launch Demo: ZERO System Cockpit").
+# One piloted run that chains the
 # cockpit beats and streams the agent's reasoning live:
 #
 #   boot       G.U.N.D.A.M. self-check -- probes real modules
