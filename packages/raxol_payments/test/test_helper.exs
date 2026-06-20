@@ -16,12 +16,16 @@ ExUnit.start()
 #     Xochi endpoint with a funded wallet (XOCHI_LIVE_URL).
 gated_tags = [
   {[:cli_signer, :conformance],
-   System.get_env("RIDDLER_CLI_DIR") || System.get_env("CONFORMANCE_FIXTURE_PATH")},
+   System.get_env("RIDDLER_CLI_DIR") ||
+     System.get_env("CONFORMANCE_FIXTURE_PATH")},
   {[:stealth_conformance], System.get_env("STEALTH_VECTORS_PATH")},
-  {[:live_xochi], System.get_env("XOCHI_LIVE_URL")}
+  {[:live_xochi], System.get_env("XOCHI_LIVE_URL")},
+  {[:live_relay], System.get_env("RELAY_LIVE_URL")}
 ]
 
 excluded =
-  Enum.flat_map(gated_tags, fn {tags, enabled} -> if enabled, do: [], else: tags end)
+  Enum.flat_map(gated_tags, fn {tags, enabled} ->
+    if enabled, do: [], else: tags
+  end)
 
 ExUnit.configure(exclude: excluded)

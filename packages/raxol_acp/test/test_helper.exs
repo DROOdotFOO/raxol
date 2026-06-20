@@ -1,27 +1,36 @@
-# `:live_chain` tests spin up a real Anvil node + deploy a stub contract
-# and exercise the on-chain pipeline end-to-end. They need foundry
-# (anvil + cast) installed and are slow, so they're opt-in:
+# Opt-in tags, excluded by default; enable with `mix test --include <tag>`:
+#   :live_chain / :live_bundler / :live_acp_dev -- spin up a real Anvil node and
+#     exercise the on-chain pipeline (need foundry: anvil + cast).
+#   :live_relay -- moves real funds (broadcasts an on-chain deposit).
+#   :cli_signer -- spawns the riddler-permit2-erc3009 CLI; auto-enabled when
+#     RIDDLER_CLI_DIR is set.
 #
-#     mix test --include live_chain
-ExUnit.start(exclude: [:live_chain, :live_bundler, :live_acp_dev])
+# A single ExUnit.start sets the full list; a second ExUnit.configure(exclude:)
+# would replace it rather than merge, so it is computed once here.
+live_exclude = [:live_chain, :live_bundler, :live_acp_dev, :live_relay]
+cli_exclude = if System.get_env("RIDDLER_CLI_DIR"), do: [], else: [:cli_signer]
 
-# Tests tagged :cli_signer spawn the riddler-permit2-erc3009 CLI as a
-# black-box buyer-side signer. Skipped by default unless RIDDLER_CLI_DIR
-# is set.
-unless System.get_env("RIDDLER_CLI_DIR") do
-  ExUnit.configure(exclude: [:cli_signer])
-end
+ExUnit.start(exclude: live_exclude ++ cli_exclude)
 
 # Configure the in-memory contract client for the test run. The test/support
 # impl is the second real implementation of the ContractClient behaviour --
 # not a mock; see Raxol.ACP.ContractClient for the rationale.
-Application.put_env(:raxol_acp, :contract_client, Raxol.ACP.ContractClient.InMemory)
+Application.put_env(
+  :raxol_acp,
+  :contract_client,
+  Raxol.ACP.ContractClient.InMemory
+)
 
 # Bring up the seller stack with the in-process backend. Tests that need
 # specific Queue defaults (wallet, memo_opts, seller_address) overwrite
 # the env and recycle the Queue in their own setup.
 Application.put_env(:raxol_acp, :seller_enabled, true)
-Application.put_env(:raxol_acp, :seller_backend, Raxol.ACP.Seller.Backend.InMemory)
+
+Application.put_env(
+  :raxol_acp,
+  :seller_backend,
+  Raxol.ACP.Seller.Backend.InMemory
+)
 
 # In :test the OTP application's :mod is not declared, so neither the
 # supervisor nor the InMemory contract client auto-start. Bring them up
