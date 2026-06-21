@@ -515,6 +515,37 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert_received :wallet_signed
     end
 
+    test "resumes via a ContextStore-backed checkpoint (the deployed-agent store)" do
+      # Same resume, but through the store a real agent uses: the in-flight intent
+      # rides the agent's durable context, not a throwaway ETS table.
+      Raxol.Agent.ContextStore.init()
+      store_id = :xochi_intent_recovery_test
+      on_exit(fn -> Raxol.Agent.ContextStore.delete(store_id) end)
+      store = Checkpoint.ContextStore.new(store_id)
+
+      Checkpoint.put(store, "pay-1", %{intent_id: "int_1", status: :dispatched})
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-1"
+      }
+
+      assert {:ok, result} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert result.intent_id == "int_1"
+      assert result.status == "dispatched"
+      refute_received :wallet_signed
+
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
     test "drops the checkpoint when execution fails so a retry starts clean" do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do
