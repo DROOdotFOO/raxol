@@ -18,8 +18,11 @@ alias Raxol.Recording.Recorder
 Code.require_file("examples/agents/zero_system.exs")
 Process.sleep(200)
 
-width = 80
-height = 24
+# The cockpit's two side-by-side panels are 44 + 50 cols plus gap and padding
+# (~97), and the reasoning text wraps at 86, so it needs ~100 cols. A narrower
+# capture clips the panels and wraps text off the edges.
+width = 100
+height = 32
 out = "demos/zero_system.cast"
 session = :zero_rec
 tick = 100
@@ -28,6 +31,8 @@ tick = 100
   Recorder.start_link(
     title: "RAXOL // ZERO SYSTEM",
     command: "mix run demos/record_zero_system.exs",
+    width: width,
+    height: height,
     auto_save: out
   )
 
