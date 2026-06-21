@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed, 2026-06-18. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
+Accepted, 2026-06-21 (implemented in `Raxol.Agent.Auxiliary`; `SelfImprove` and
+`UserModel` wired). Proposed 2026-06-18. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
 H2.5). Builds on `Raxol.Agent.ExecutorConfig` + `Raxol.Agent.Backend.Selector` and formalizes the
 ad-hoc auxiliary-model plumbing already present in ADR-0021's `SelfImprove`/`Curator` and ADR-0022's
 `UserModel`.

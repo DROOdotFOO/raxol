@@ -39,6 +39,7 @@ defmodule Raxol.Agent.SelfImprove do
 
   require Logger
 
+  alias Raxol.Agent.Auxiliary
   alias Raxol.Agent.Memory.Record
 
   @default_min_tool_calls 5
@@ -106,10 +107,10 @@ defmodule Raxol.Agent.SelfImprove do
           {:ok, %{memories: non_neg_integer(), skills: non_neg_integer()}}
           | {:error, term()}
   def review(items, writers, config) do
-    backend = Map.get(config, :backend, @default_backend)
+    {backend, opts} = resolve_backend(config)
     messages = build_messages(items)
 
-    with {:ok, response} <- backend.complete(messages, backend_opts(config)),
+    with {:ok, response} <- backend.complete(messages, opts),
          {:ok, decision} <- parse_decision(response) do
       {:ok,
        %{
@@ -182,6 +183,30 @@ defmodule Raxol.Agent.SelfImprove do
       nil -> base
       model -> Keyword.put(base, :model, model)
     end
+  end
+
+  # An explicit backend or model wins. Otherwise route curation through the
+  # auxiliary resolver, degrading to the default backend if no slot is available.
+  defp resolve_backend(config) do
+    if Map.has_key?(config, :backend) or Map.has_key?(config, :model) do
+      {Map.get(config, :backend, @default_backend), backend_opts(config)}
+    else
+      base = Map.get(config, :backend_opts, [])
+
+      case Auxiliary.select(:curation, aux_opts(config)) do
+        {:ok, module, opts} -> {module, Keyword.merge(base, opts)}
+        {:error, _reason} -> {@default_backend, base}
+      end
+    end
+  end
+
+  defp aux_opts(config) do
+    [
+      auxiliary: Map.get(config, :auxiliary),
+      default: Map.get(config, :default),
+      available?: Map.get(config, :available?)
+    ]
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
   # -- decision parsing -------------------------------------------------------
