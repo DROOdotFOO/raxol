@@ -216,9 +216,9 @@ defmodule Raxol.Payments.Xochi.Schemas do
             error: String.t() | nil
           }
 
-    # The live Riddler response is snake_case with `eip712`; older/sim responses
+    # The Xochi worker response is snake_case with `eip712`; older/sim responses
     # are camelCase with `eip712Data`. Accept both so the client does not break
-    # on the canonical (snake_case) shape. See ../xochi/RAXOL_QUOTE_CONTRACT.md.
+    # on the canonical (snake_case) shape. See xochi/docs/contracts/xochi-intent-api.md.
     @spec from_json(map()) :: t()
     def from_json(json) do
       %__MODULE__{

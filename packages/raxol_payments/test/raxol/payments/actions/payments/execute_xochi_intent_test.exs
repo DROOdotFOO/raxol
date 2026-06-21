@@ -73,7 +73,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
   defp stub_quote_and_execute do
     Req.Test.stub(__MODULE__, fn conn ->
       case conn.request_path do
-        "/xochi/quote" ->
+        "/api/intent/quote" ->
           Req.Test.json(conn, %{
             "intentId" => "int_1",
             "quoteId" => "q_1",
@@ -87,7 +87,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
             }
           })
 
-        "/xochi/execute" ->
+        "/api/intent/execute" ->
           Req.Test.json(conn, %{
             "success" => true,
             "intentId" => "int_1",
@@ -95,7 +95,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
             "stealthAddress" => "0xstealth"
           })
 
-        "/xochi/status/int_1" ->
+        "/api/intent/int_1/status" ->
           Req.Test.json(conn, %{
             "intentId" => "int_1",
             "status" => "completed",
@@ -139,7 +139,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     test "sends the recipient's compressed pub keys on the quote request" do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do
-          "/xochi/quote" ->
+          "/api/intent/quote" ->
             {:ok, raw, conn} = Plug.Conn.read_body(conn)
             send(self(), {:quote_body, Jason.decode!(raw)})
 
@@ -156,7 +156,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               }
             })
 
-          "/xochi/execute" ->
+          "/api/intent/execute" ->
             Req.Test.json(conn, %{
               "success" => true,
               "intentId" => "int_1",
@@ -198,7 +198,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     test "re-quotes and re-executes once when the first execute reports expiry" do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do
-          "/xochi/quote" ->
+          "/api/intent/quote" ->
             Req.Test.json(conn, %{
               "intentId" => "int_1",
               "quoteId" => "q_1",
@@ -212,7 +212,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               }
             })
 
-          "/xochi/execute" ->
+          "/api/intent/execute" ->
             n = Process.get(:execute_calls, 0)
             Process.put(:execute_calls, n + 1)
 
@@ -253,7 +253,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     test "releases the reservation when the retry also fails" do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do
-          "/xochi/quote" ->
+          "/api/intent/quote" ->
             Req.Test.json(conn, %{
               "intentId" => "int_1",
               "quoteId" => "q_1",
@@ -267,7 +267,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               }
             })
 
-          "/xochi/execute" ->
+          "/api/intent/execute" ->
             conn
             |> Plug.Conn.put_resp_content_type("application/json")
             |> Plug.Conn.send_resp(409, Jason.encode!(%{"error" => "quote_expired"}))
@@ -335,7 +335,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     defp stub_quote_method(payment_method) do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do
-          "/xochi/quote" ->
+          "/api/intent/quote" ->
             Req.Test.json(conn, %{
               "intent_id" => "int_1",
               "quote_id" => "q_1",
@@ -349,7 +349,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               }
             })
 
-          "/xochi/execute" ->
+          "/api/intent/execute" ->
             Req.Test.json(conn, %{
               "success" => true,
               "intentId" => "int_1",
@@ -549,7 +549,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     test "drops the checkpoint when execution fails so a retry starts clean" do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do
-          "/xochi/quote" ->
+          "/api/intent/quote" ->
             Req.Test.json(conn, %{
               "intentId" => "int_1",
               "quoteId" => "q_1",
@@ -563,7 +563,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               }
             })
 
-          "/xochi/execute" ->
+          "/api/intent/execute" ->
             conn
             |> Plug.Conn.put_resp_content_type("application/json")
             |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "server_error"}))

@@ -4,22 +4,21 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   `ExecuteXochiIntent` quotes, authorizes the spend, signs, and submits the
   intent; `PollXochiStatus` waits for `:completed`.
 
-  Moves real funds. The endpoint is the Riddler solver, which serves the
-  `/xochi/*` routes this client calls (the Xochi worker at api*.xochi.fi serves
-  `/api/intent/*` and is not the right target). The token is the staging-scoped
-  Riddler bearer token.
+  Moves real funds. The endpoint is the Xochi worker (`api.xochi.fi`, or
+  `api-stg.xochi.fi` for staging), which serves the `/api/intent/*` routes this
+  client calls, applies trust-tier fees, and calls the Riddler solver internally.
+  The token is the Xochi worker bearer token.
 
-  The riddler.axol.io staging endpoint serves mainnet routes only, so the
-  defaults are mainnet Base -> Arbitrum USDC at 10 USDC (the minimum order size
-  that prices on staging; smaller amounts are rejected). Settlement defaults to
+  Defaults are mainnet Base -> Arbitrum USDC at 10 USDC. Settlement defaults to
   `public`; set `XOCHI_LIVE_SETTLEMENT=stealth` with `XOCHI_LIVE_RECIPIENT_META`
-  to exercise the private path.
+  to exercise the private path. The worker returns `can_solve: false` for an
+  amount the solver cannot price, so the test asserts on `can_solve`.
 
   Tagged `:live_xochi` and excluded by default. Compiled only when the required
   env is present, so opting in without it yields no tests.
 
-      XOCHI_LIVE_URL=https://riddler.axol.io \\
-      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi staging RIDDLER_API_TOKEN/credential')" \\
+      XOCHI_LIVE_URL=https://api.xochi.fi \\
+      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi worker token/credential')" \\
       XOCHI_LIVE_KEY=0x<funded Base mainnet private key> \\
         mix test --include live_xochi test/raxol/payments/xochi/live_xochi_test.exs
 
