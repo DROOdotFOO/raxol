@@ -22,6 +22,8 @@ defmodule Raxol.Agent.UserModel do
   use Raxol.Core.Behaviours.BaseManager
   use Raxol.Agent.Memory
 
+  alias Raxol.Agent.Auxiliary
+
   @default_backend Raxol.Agent.Backend.Mock
 
   @derive_prompt """
@@ -89,9 +91,12 @@ defmodule Raxol.Agent.UserModel do
     {:ok,
      %{
        contexts: %{},
-       backend: opts[:backend] || @default_backend,
+       backend: opts[:backend],
        model: opts[:model],
-       backend_opts: opts[:backend_opts] || []
+       backend_opts: opts[:backend_opts] || [],
+       auxiliary: opts[:auxiliary],
+       default: opts[:default],
+       available?: opts[:available?]
      }}
   end
 
@@ -138,7 +143,9 @@ defmodule Raxol.Agent.UserModel do
       %{role: :user, content: transcript(items)}
     ]
 
-    case config.backend.complete(messages, backend_opts(config)) do
+    {backend, opts} = resolve_backend(config)
+
+    case backend.complete(messages, opts) do
       {:ok, %{content: content}} when is_binary(content) -> {:ok, String.trim(content)}
       {:error, reason} -> {:error, reason}
       _ -> {:error, :derive_failed}
@@ -157,8 +164,29 @@ defmodule Raxol.Agent.UserModel do
     %{
       backend: Keyword.get(opts, :backend, state.backend),
       model: Keyword.get(opts, :model, state.model),
-      backend_opts: Keyword.get(opts, :backend_opts, state.backend_opts)
+      backend_opts: Keyword.get(opts, :backend_opts, state.backend_opts),
+      auxiliary: Keyword.get(opts, :auxiliary, state.auxiliary),
+      default: Keyword.get(opts, :default, state.default),
+      available?: Keyword.get(opts, :available?, state.available?)
     }
+  end
+
+  # An explicit backend or model wins. Otherwise route the user-model task through
+  # the auxiliary resolver, degrading to the default backend if no slot is available.
+  defp resolve_backend(config) do
+    if config.backend || config.model do
+      {config.backend || @default_backend, backend_opts(config)}
+    else
+      case Auxiliary.select(:user_model, aux_opts(config)) do
+        {:ok, module, opts} -> {module, Keyword.merge(config.backend_opts, opts)}
+        {:error, _reason} -> {@default_backend, config.backend_opts}
+      end
+    end
+  end
+
+  defp aux_opts(config) do
+    [auxiliary: config.auxiliary, default: config.default, available?: config.available?]
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
   defp backend_opts(%{model: nil, backend_opts: base}), do: base

@@ -34,6 +34,17 @@ defmodule Raxol.Agent.UserModelTest do
 
       assert UserModel.get_context(s, "u1") == "existing"
     end
+
+    test "routes through the resolved slot when no backend is set", %{server: s} do
+      items = [%{type: :message, data: %{role: :user, content: "I like Rust"}}]
+
+      assert {:ok, "prefers Rust"} =
+               UserModel.refresh(s, "u2", items,
+                 auxiliary: %{user_model: %{harness: :mock, opts: [response: "prefers Rust"]}}
+               )
+
+      assert UserModel.get_context(s, "u2") == "prefers Rust"
+    end
   end
 
   describe "build_user_context/1" do

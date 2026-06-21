@@ -104,4 +104,36 @@ defmodule Raxol.Agent.SelfImproveTest do
       assert SelfImprove.after_turn(items(1), w, config(@empty)) == :spawned
     end
   end
+
+  describe "auxiliary routing" do
+    test "routes curation through the resolved slot when no backend is set", %{
+      writers: w,
+      mem: mem
+    } do
+      config = %{
+        enabled: true,
+        min_tool_calls: 1,
+        auxiliary: %{curation: %{harness: :mock, opts: [response: @decision]}}
+      }
+
+      assert {:ok, %{memories: 1, skills: 1}} = SelfImprove.review(items(1), w, config)
+
+      assert [%{content: "user prefers mise"}] =
+               MemStore.search("mise", server: mem, agent_id: "a")
+    end
+
+    test "an explicit backend overrides the slot", %{writers: w} do
+      config = %{
+        enabled: true,
+        min_tool_calls: 1,
+        backend: Mock,
+        backend_opts: [response: @empty],
+        auxiliary: %{curation: %{harness: :mock, opts: [response: @decision]}}
+      }
+
+      # The explicit backend returns @empty (0 writes). The slot's @decision would
+      # have written 1 memory + 1 skill, so 0/0 proves the slot was not consulted.
+      assert {:ok, %{memories: 0, skills: 0}} = SelfImprove.review(items(1), w, config)
+    end
+  end
 end
