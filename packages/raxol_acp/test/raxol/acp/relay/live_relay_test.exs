@@ -115,6 +115,50 @@ defmodule Raxol.ACP.Relay.LiveRelayTest do
              "live transfer #{transfer.transfer_id} ended in #{status.status}, expected completed"
     end
 
+    test "a resumed run reuses the in-flight transfer without a second deposit", %{
+      context: context,
+      from_chain: from_chain
+    } do
+      # The crash-recovery path: a checkpoint store lets a re-run of the same
+      # payment resume the dispatched transfer instead of minting a new id and
+      # broadcasting a second deposit. One real deposit; the resume moves nothing.
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      context = Map.merge(context, %{checkpoint: store, idempotency_key: "live-relay-resume"})
+
+      params = %{
+        amount: System.get_env("RELAY_LIVE_AMOUNT", "0.10"),
+        from_chain_id: from_chain,
+        to_chain_id: 728_126_428,
+        from_token: System.get_env("RELAY_LIVE_FROM_TOKEN", @usdc_base),
+        to_token: System.get_env("RELAY_LIVE_TO_TOKEN", @usdt_tron),
+        to_address: System.get_env("RELAY_LIVE_TO_ADDRESS", @usdt_tron)
+      }
+
+      assert {:ok, transfer} = ExecuteRelayTransfer.call(params, context)
+      assert transfer.funding == "broadcast"
+      assert is_binary(transfer.deposit_tx_hash), "no deposit tx broadcast"
+      charged = lifetime(context)
+
+      # The agent "restarts" and runs the same payment; recovery resumes it.
+      assert {:ok, resumed} = ExecuteRelayTransfer.call(params, context)
+
+      assert resumed.transfer_id == transfer.transfer_id,
+             "resume minted a new transfer #{resumed.transfer_id} instead of reusing #{transfer.transfer_id}"
+
+      assert Decimal.equal?(lifetime(context), charged),
+             "resume charged the ledger a second time"
+
+      assert {:ok, status} =
+               PollRelayStatus.call(%{transfer_id: transfer.transfer_id}, context)
+
+      assert status.status == "completed",
+             "live transfer #{transfer.transfer_id} ended in #{status.status}, expected completed"
+    end
+
+    defp lifetime(context) do
+      Ledger.get_totals(context.ledger, context.agent_id, context.policy).lifetime
+    end
+
     defp env_int(name, default) do
       case System.get_env(name) do
         nil -> default
