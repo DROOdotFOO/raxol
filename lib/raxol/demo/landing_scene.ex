@@ -31,6 +31,7 @@ defmodule Raxol.Demo.LandingScene do
   @frost {253, 255, 249}
   @ok {80, 220, 130}
   @rule {70, 96, 130}
+  @indigo {40, 51, 139}
 
   @script [
     {:hook, 20},
@@ -43,7 +44,8 @@ defmodule Raxol.Demo.LandingScene do
     {:payoff, 24},
     {:crash, 9},
     {:restored, 12},
-    {:done, 16}
+    {:done, 8},
+    {:hover, 20}
   ]
 
   @quote 0.18
@@ -144,11 +146,23 @@ defmodule Raxol.Demo.LandingScene do
 
   defp enter(model, :done) do
     model
-    |> add([explorer()])
+    |> add([%{kind: :explorer, hover: false}])
     |> Map.put(
       :status,
       "filled #{eth(@quote)} · pnl +0.006 · mandate #{eth(@remaining_after)} left"
     )
+  end
+
+  # The cast can't truly hover (it is playback), so the hover is scripted: a
+  # pointer lands on the explorer link and it lights up, held as the loop rests.
+  defp enter(model, :hover) do
+    lines =
+      Enum.map(model.lines, fn
+        %{kind: :explorer} = e -> %{e | hover: true}
+        other -> other
+      end)
+
+    %{model | lines: lines}
   end
 
   # view
@@ -184,9 +198,30 @@ defmodule Raxol.Demo.LandingScene do
     Enum.map(model.lines, fn
       {:settle_anim, label} -> settle_line(model, label)
       :divider -> text("  " <> String.duplicate("─", @width - 2), fg: @rule)
+      %{kind: :explorer, hover: hover} -> explorer(hover)
       %{kind: :row, segments: segs} -> row(do: Enum.map(segs, &seg/1))
       %{text: t, fg: fg, style: s} -> text(t, fg: fg, style: s)
     end)
+  end
+
+  # The explorer link: idle reads as a link (corner arrow, link color); on the
+  # scripted hover it gets a pointer and a highlight, the way it lights up under
+  # a real mouse in the live terminal.
+  defp explorer(false) do
+    text("  ↗ view on Basescan   tx #{@tx}", fg: @sky, style: [:underline])
+  end
+
+  defp explorer(true) do
+    row do
+      [
+        text("  ▸ ", fg: @coral, style: [:bold]),
+        text(" ↗ view on Basescan   tx #{@tx} ",
+          fg: @frost,
+          bg: @indigo,
+          style: [:bold, :underline]
+        )
+      ]
+    end
   end
 
   defp seg({t, fg, style}), do: text(t, fg: fg, style: style)
@@ -242,12 +277,6 @@ defmodule Raxol.Demo.LandingScene do
   defp hero(t), do: %{text: "  ▸ " <> t, fg: @coral, style: [:bold]}
   defp accent(t, fg), do: %{text: "  " <> t, fg: fg, style: []}
   defp blank, do: %{text: "", fg: @frost, style: []}
-
-  # An external explorer link: underline + the corner arrow reads as clickable;
-  # OSC 8 cmd-click in a supporting terminal is tracked in #317.
-  defp explorer do
-    %{text: "  ↗ view on Basescan   tx " <> @tx, fg: @sky, style: [:underline]}
-  end
 
   # Swap the live settle-animation row for the resolved one.
   defp resolve_settle(model) do
