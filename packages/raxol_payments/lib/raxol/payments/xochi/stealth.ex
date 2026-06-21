@@ -338,14 +338,18 @@ defmodule Raxol.Payments.Xochi.Stealth do
 
   # -- Crypto wrappers --
 
+  # ExSecp256k1's NIFs are specced `{:ok, binary()} | atom()`, but at runtime they
+  # return `{:ok, binary}` or `{:error, atom}` (the spec is loose). A catch-all
+  # `error ->` clause covers both: it matches the spec's residual `atom()` so
+  # dialyzer is satisfied, and it captures the real `{:error, _}` tuple at runtime.
   defp derive_pubkey(priv_key) when byte_size(priv_key) == 32 do
     case ExSecp256k1.create_public_key(priv_key) do
       {:ok, pub} ->
         {:ok, compressed} = ExSecp256k1.public_key_compress(pub)
         {:ok, compressed}
 
-      {:error, reason} ->
-        {:error, {:derive_pubkey, reason}}
+      error ->
+        {:error, {:derive_pubkey, error}}
     end
   end
 
@@ -356,8 +360,8 @@ defmodule Raxol.Payments.Xochi.Stealth do
           {:ok, compressed} = ExSecp256k1.public_key_compress(result)
           {:ok, compressed}
 
-        {:error, reason} ->
-          {:error, {:ec_mult, reason}}
+        error ->
+          {:error, {:ec_mult, error}}
       end
     end
   end
@@ -370,8 +374,8 @@ defmodule Raxol.Payments.Xochi.Stealth do
           {:ok, compressed} = ExSecp256k1.public_key_compress(result)
           {:ok, compressed}
 
-        {:error, reason} ->
-          {:error, {:ec_add, reason}}
+        error ->
+          {:error, {:ec_add, error}}
       end
     end
   end

@@ -3,7 +3,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransferTest do
 
   alias Raxol.Payments.Actions.Payments.{ExecuteRelayTransfer, PollRelayStatus}
   alias Raxol.Payments.Relay.Broadcaster
-  alias Raxol.Payments.{Failure, Ledger, SpendingPolicy}
+  alias Raxol.Payments.{Checkpoint, Failure, Ledger, SpendingPolicy}
 
   @tron 728_126_428
   @tron_addr "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
@@ -247,6 +247,96 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransferTest do
                  base_params(%{}),
                  ctx(%{policy: policy(%{per_request_max: Decimal.new("0.10")})})
                )
+    end
+  end
+
+  describe "idempotent recovery" do
+    test "a repeated call resumes the in-flight transfer instead of re-broadcasting" do
+      stub_quote_and_execute()
+      store = Checkpoint.ETS.new()
+
+      context =
+        ctx(%{broadcaster: Broadcaster.InMemory, checkpoint: store, idempotency_key: "pay-1"})
+
+      assert {:ok, first} = ExecuteRelayTransfer.run(base_params(%{}), context)
+      assert first.transfer_id == "t_1"
+      assert first.funding == "broadcast"
+      assert [_one] = Broadcaster.InMemory.sent()
+
+      # The process "restarts" and runs the same payment again.
+      assert {:ok, second} = ExecuteRelayTransfer.run(base_params(%{}), context)
+      assert second.transfer_id == "t_1"
+
+      # Resumed from the checkpoint: no second deposit, charged once.
+      assert [_still_one] = Broadcaster.InMemory.sent()
+      totals = Ledger.get_totals(context.ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0.50"))
+    end
+
+    test "resumes a dispatched checkpoint without re-funding (the crash window)" do
+      store = Checkpoint.ETS.new()
+
+      # An earlier run dispatched the transfer and checkpointed it, then died
+      # before confirming -- this is that surviving record.
+      Checkpoint.put(store, "pay-1", %{
+        transfer_id: "t_1",
+        quote_id: "q_1",
+        deposit_address: "0xdeposit",
+        status: :dispatched
+      })
+
+      context =
+        ctx(%{broadcaster: Broadcaster.InMemory, checkpoint: store, idempotency_key: "pay-1"})
+
+      assert {:ok, result} = ExecuteRelayTransfer.run(base_params(%{}), context)
+      assert result.transfer_id == "t_1"
+      assert result.deposit_address == "0xdeposit"
+      assert result.status == "dispatched"
+
+      # No network, no broadcast, no spend: the first run already reserved it.
+      assert Broadcaster.InMemory.sent() == []
+      totals = Ledger.get_totals(context.ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
+    test "without a checkpoint store a repeat re-runs the payment (the failure prevented)" do
+      stub_quote_and_execute()
+      context = ctx(%{broadcaster: Broadcaster.InMemory})
+
+      assert {:ok, _} = ExecuteRelayTransfer.run(base_params(%{}), context)
+      assert {:ok, _} = ExecuteRelayTransfer.run(base_params(%{}), context)
+
+      # No checkpoint, no memory of the first transfer: re-quoted, re-authorized,
+      # re-signed, charged twice. (The deposit dedupes only because this stub
+      # echoes a constant transfer_id; a live run mints a fresh one and the
+      # broadcast doubles too.)
+      totals = Ledger.get_totals(context.ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("1.00"))
+    end
+
+    test "records the in-flight transfer in the checkpoint after funding" do
+      stub_quote_and_execute()
+      store = Checkpoint.ETS.new()
+      context = ctx(%{checkpoint: store, idempotency_key: "pay-1"})
+
+      assert {:ok, _} = ExecuteRelayTransfer.run(base_params(%{}), context)
+      assert {:ok, record} = Checkpoint.fetch(store, "pay-1")
+      assert record.transfer_id == "t_1"
+    end
+
+    test "drops the checkpoint when funding fails so a retry starts clean" do
+      stub_quote_and_execute()
+      Process.put(:relay_broadcaster_fail, :rpc_down)
+      store = Checkpoint.ETS.new()
+
+      context =
+        ctx(%{broadcaster: Broadcaster.InMemory, checkpoint: store, idempotency_key: "pay-1"})
+
+      assert {:error, %Failure{}} = ExecuteRelayTransfer.run(base_params(%{}), context)
+      assert :error = Checkpoint.fetch(store, "pay-1")
+
+      totals = Ledger.get_totals(context.ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
     end
   end
 

@@ -4,22 +4,21 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   `ExecuteXochiIntent` quotes, authorizes the spend, signs, and submits the
   intent; `PollXochiStatus` waits for `:completed`.
 
-  Moves real funds. The endpoint is the Riddler solver, which serves the
-  `/xochi/*` routes this client calls (the Xochi worker at api*.xochi.fi serves
-  `/api/intent/*` and is not the right target). The token is the staging-scoped
-  Riddler bearer token.
+  Moves real funds. The endpoint is the Xochi worker (`api.xochi.fi`, or
+  `api-stg.xochi.fi` for staging), which serves the `/api/intent/*` routes this
+  client calls, applies trust-tier fees, and calls the Riddler solver internally.
+  The token is the Xochi worker bearer token.
 
-  The riddler.axol.io staging endpoint serves mainnet routes only, so the
-  defaults are mainnet Base -> Arbitrum USDC at 10 USDC (the minimum order size
-  that prices on staging; smaller amounts are rejected). Settlement defaults to
+  Defaults are mainnet Base -> Arbitrum USDC at 10 USDC. Settlement defaults to
   `public`; set `XOCHI_LIVE_SETTLEMENT=stealth` with `XOCHI_LIVE_RECIPIENT_META`
-  to exercise the private path.
+  to exercise the private path. The worker returns `can_solve: false` for an
+  amount the solver cannot price, so the test asserts on `can_solve`.
 
   Tagged `:live_xochi` and excluded by default. Compiled only when the required
   env is present, so opting in without it yields no tests.
 
-      XOCHI_LIVE_URL=https://riddler.axol.io \\
-      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi staging RIDDLER_API_TOKEN/credential')" \\
+      XOCHI_LIVE_URL=https://api.xochi.fi \\
+      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi worker token/credential')" \\
       XOCHI_LIVE_KEY=0x<funded Base mainnet private key> \\
         mix test --include live_xochi test/raxol/payments/xochi/live_xochi_test.exs
 
@@ -91,6 +90,52 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
       assert status.status == "completed",
              "live intent #{intent.intent_id} ended in #{status.status}, expected completed"
+    end
+
+    test "a resumed run reuses the in-flight intent without a second signature", %{
+      context: context
+    } do
+      # The crash-recovery path: an idempotency checkpoint lets a re-run of the
+      # same payment resume the dispatched intent instead of quoting and signing
+      # again. One real settlement; the second call must not move funds.
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      context = Map.merge(context, %{checkpoint: store, idempotency_key: "live-resume"})
+
+      params =
+        %{
+          amount: System.get_env("XOCHI_LIVE_AMOUNT", "10.00"),
+          from_chain_id: env_int("XOCHI_LIVE_FROM_CHAIN", 8453),
+          to_chain_id: env_int("XOCHI_LIVE_TO_CHAIN", 42_161),
+          from_token:
+            System.get_env("XOCHI_LIVE_FROM_TOKEN", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
+          to_token:
+            System.get_env("XOCHI_LIVE_TO_TOKEN", "0xaf88d065e77c8cc2239327c5edb3a432268e5831"),
+          settlement: System.get_env("XOCHI_LIVE_SETTLEMENT", "public")
+        }
+        |> maybe_put_recipient()
+
+      assert {:ok, intent} = ExecuteXochiIntent.call(params, context)
+      assert is_binary(intent.intent_id)
+      charged = lifetime(context)
+
+      # The agent "restarts" and runs the same payment; recovery resumes it.
+      assert {:ok, resumed} = ExecuteXochiIntent.call(params, context)
+
+      assert resumed.intent_id == intent.intent_id,
+             "resume signed a new intent #{resumed.intent_id} instead of reusing #{intent.intent_id}"
+
+      assert Decimal.equal?(lifetime(context), charged),
+             "resume charged the ledger a second time"
+
+      assert {:ok, status} = PollXochiStatus.call(%{intent_id: intent.intent_id}, context)
+      assert status.terminal == true
+
+      assert status.status == "completed",
+             "live intent #{intent.intent_id} ended in #{status.status}, expected completed"
+    end
+
+    defp lifetime(context) do
+      Ledger.get_totals(context.ledger, context.agent_id, context.policy).lifetime
     end
 
     defp maybe_put_recipient(params) do
