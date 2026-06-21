@@ -215,7 +215,10 @@ defmodule Raxol.Payments.EIP712 do
     if Map.has_key?(types, type) do
       hash_struct(type, value, types)
     else
-      encode_value(type, value)
+      # A map value whose type is not a declared struct is a malformed type
+      # definition. `encode_value/2` has no map clause, so surface a clean error
+      # rather than crashing with FunctionClauseError.
+      {:error, {:unknown_struct_type, type}}
     end
   end
 
