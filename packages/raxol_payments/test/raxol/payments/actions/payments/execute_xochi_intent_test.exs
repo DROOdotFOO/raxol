@@ -2,7 +2,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
-  alias Raxol.Payments.{Failure, Ledger, SpendingPolicy}
+  alias Raxol.Payments.{Checkpoint, Failure, Ledger, SpendingPolicy}
   alias Raxol.Payments.Xochi.Stealth
 
   # Wallet that signals when it signs, so tests can assert the gate runs first.
@@ -387,6 +387,176 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert {:ok, result} = ExecuteXochiIntent.run(base_params(%{}), method_ctx())
       assert result.status == "executing"
       assert_received :wallet_signed
+    end
+  end
+
+  describe "ExecuteXochiIntent idempotent recovery" do
+    test "a repeated call resumes the in-flight intent instead of signing again" do
+      stub_quote_and_execute()
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-1"
+      }
+
+      assert {:ok, first} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert first.intent_id == "int_1"
+      assert_received :wallet_signed
+
+      # The process "restarts" and runs the same payment again.
+      assert {:ok, second} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert second.intent_id == "int_1"
+      refute_received :wallet_signed
+
+      # Signed once, charged once.
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0.50"))
+    end
+
+    test "resumes a dispatched checkpoint without signing or charging (the crash window)" do
+      # No stub: a resume must not touch the network at all.
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      # The first run dispatched the intent and checkpointed it, then the process
+      # was killed before it could confirm -- this is that surviving record.
+      Checkpoint.put(store, "pay-1", %{
+        intent_id: "int_1",
+        quote_id: "q_1",
+        status: :dispatched
+      })
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-1"
+      }
+
+      assert {:ok, result} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert result.intent_id == "int_1"
+      assert result.status == "dispatched"
+      refute_received :wallet_signed
+
+      # Resume skips the spend gate: budget was already reserved on the first run.
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
+    test "without a checkpoint store a repeat call signs again (the failure prevented)" do
+      stub_quote_and_execute()
+      ledger = start_supervised!({Ledger, [name: nil]})
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1"
+      }
+
+      assert {:ok, _} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert_received :wallet_signed
+      assert {:ok, _} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert_received :wallet_signed
+
+      # No checkpoint, no memory of the first payment: signed twice, charged twice.
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("1.00"))
+    end
+
+    test "records the in-flight intent in the checkpoint after submitting" do
+      stub_quote_and_execute()
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-1"
+      }
+
+      assert {:ok, _} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert {:ok, record} = Checkpoint.fetch(store, "pay-1")
+      assert record.intent_id == "int_1"
+    end
+
+    test "distinct payments derive distinct keys and each signs" do
+      stub_quote_and_execute()
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store
+      }
+
+      assert {:ok, _} = ExecuteXochiIntent.run(base_params(%{amount: "0.50"}), ctx)
+      assert_received :wallet_signed
+      assert {:ok, _} = ExecuteXochiIntent.run(base_params(%{amount: "0.40"}), ctx)
+      assert_received :wallet_signed
+    end
+
+    test "drops the checkpoint when execution fails so a retry starts clean" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/xochi/quote" ->
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_1",
+              "canSolve" => true,
+              "toAmount" => "499000",
+              "xochiFee" => "1000",
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/xochi/execute" ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "server_error"}))
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store,
+        idempotency_key: "pay-1"
+      }
+
+      assert {:error, %Failure{}} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert :error = Checkpoint.fetch(store, "pay-1")
+
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
     end
   end
 

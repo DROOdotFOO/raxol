@@ -93,6 +93,52 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
              "live intent #{intent.intent_id} ended in #{status.status}, expected completed"
     end
 
+    test "a resumed run reuses the in-flight intent without a second signature", %{
+      context: context
+    } do
+      # The crash-recovery path: an idempotency checkpoint lets a re-run of the
+      # same payment resume the dispatched intent instead of quoting and signing
+      # again. One real settlement; the second call must not move funds.
+      store = Raxol.Payments.Checkpoint.ETS.new()
+      context = Map.merge(context, %{checkpoint: store, idempotency_key: "live-resume"})
+
+      params =
+        %{
+          amount: System.get_env("XOCHI_LIVE_AMOUNT", "10.00"),
+          from_chain_id: env_int("XOCHI_LIVE_FROM_CHAIN", 8453),
+          to_chain_id: env_int("XOCHI_LIVE_TO_CHAIN", 42_161),
+          from_token:
+            System.get_env("XOCHI_LIVE_FROM_TOKEN", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
+          to_token:
+            System.get_env("XOCHI_LIVE_TO_TOKEN", "0xaf88d065e77c8cc2239327c5edb3a432268e5831"),
+          settlement: System.get_env("XOCHI_LIVE_SETTLEMENT", "public")
+        }
+        |> maybe_put_recipient()
+
+      assert {:ok, intent} = ExecuteXochiIntent.call(params, context)
+      assert is_binary(intent.intent_id)
+      charged = lifetime(context)
+
+      # The agent "restarts" and runs the same payment; recovery resumes it.
+      assert {:ok, resumed} = ExecuteXochiIntent.call(params, context)
+
+      assert resumed.intent_id == intent.intent_id,
+             "resume signed a new intent #{resumed.intent_id} instead of reusing #{intent.intent_id}"
+
+      assert Decimal.equal?(lifetime(context), charged),
+             "resume charged the ledger a second time"
+
+      assert {:ok, status} = PollXochiStatus.call(%{intent_id: intent.intent_id}, context)
+      assert status.terminal == true
+
+      assert status.status == "completed",
+             "live intent #{intent.intent_id} ended in #{status.status}, expected completed"
+    end
+
+    defp lifetime(context) do
+      Ledger.get_totals(context.ledger, context.agent_id, context.policy).lifetime
+    end
+
     defp maybe_put_recipient(params) do
       case System.get_env("XOCHI_LIVE_RECIPIENT_META") do
         nil -> params
