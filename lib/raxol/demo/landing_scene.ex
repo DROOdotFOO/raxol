@@ -183,7 +183,8 @@ defmodule Raxol.Demo.LandingScene do
         ]
       end,
       text(String.duplicate("─", @width), fg: @rule),
-      text("agents spend only under a mandate a human signed, settling privately",
+      text(
+        "agents spend only under a mandate a human signed, settling privately",
         fg: @frost
       ),
       text("")
