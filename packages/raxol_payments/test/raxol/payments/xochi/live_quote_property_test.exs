@@ -1,18 +1,19 @@
 defmodule Raxol.Payments.Xochi.LiveQuotePropertyTest do
   @moduledoc """
-  Contract property against a real Xochi endpoint: a `/xochi/quote` must never
+  Contract property against the Xochi worker: a `/api/intent/quote` must never
   return a 5xx for any supported route and amount. Every response should be a
   quote (200), `can_solve: false` (200), or a classified 4xx (e.g.
   `below_min_order_size`). A 5xx means an unhandled raise in the quote handler.
 
   Quotes are read-only and move no funds, so this is safe to fuzz against
-  mainnet. Run it after a Riddler deploy to confirm the 500 class stays closed.
+  mainnet. Run it after a Xochi/Riddler deploy to confirm the 500 class stays
+  closed.
 
   Tagged `:live_property`, excluded by default, compiled only when XOCHI_LIVE_URL
   is set.
 
-      XOCHI_LIVE_URL=https://riddler.axol.io \\
-      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi staging RIDDLER_API_TOKEN/credential')" \\
+      XOCHI_LIVE_URL=https://api.xochi.fi \\
+      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi worker token/credential')" \\
         mix test --include live_property test/raxol/payments/xochi/live_quote_property_test.exs
   """
 

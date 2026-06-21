@@ -32,6 +32,20 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
   * `:wallet` -- defaults `from_address`; signs the gasless authorization (A).
   * `:broadcaster` -- a `Raxol.Payments.Relay.Broadcaster` module (B).
   * `:policy`, `:ledger`, `:agent_id`, `:on_confirm` -- see `SpendGate`.
+  * `:checkpoint` -- optional `{module, handle}` `Raxol.Payments.Checkpoint`
+    store for idempotent recovery (nil disables it).
+  * `:idempotency_key` -- optional explicit key; derived from the payment when
+    absent.
+
+  ## Idempotent recovery
+
+  The `transfer_id` is minted client-side, so a naive re-run after a crash would
+  mint a fresh one, re-quote, and re-sign or re-broadcast -- a double-spend. With
+  a `:checkpoint` store the transfer is checkpointed before the funding step;
+  a re-run of the same logical payment resumes the recorded transfer (returning
+  it to poll) instead of starting a new one. The reused `transfer_id` also lets
+  an idempotent broadcaster dedupe a retried deposit. Without a store the path is
+  unchanged.
   """
 
   @compile {:no_warn_undefined, Raxol.Agent.Action}
@@ -79,32 +93,108 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
     ]
 
   alias Raxol.Payments.Actions.SpendGate
-  alias Raxol.Payments.{Assets, Failure, Relay, Router}
+  alias Raxol.Payments.{Assets, Checkpoint, Failure, Relay, Router}
   alias Raxol.Payments.Relay.Schemas.{QuoteRequest, QuoteResponse}
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, Failure.t()}
   @impl true
   def run(params, context) do
     with {:ok, config} <- fetch(context, :relay_config),
-         {:ok, from_address} <- resolve_from_address(params, context),
-         {:ok, request, amount, warnings} <- build_request(params, from_address) do
-      settle(config, request, amount, warnings, context)
+         {:ok, from_address} <- resolve_from_address(params, context) do
+      store = Map.get(context, :checkpoint)
+      key = idempotency_key(context, params, from_address)
+
+      case Checkpoint.fetch(store, key) do
+        # Resume-before-re-fund: this transfer is already in flight from an
+        # earlier run that crashed. Return the recorded transfer to poll without
+        # minting a new id, signing, or broadcasting again.
+        {:ok, record} -> {:ok, resume_summary(record)}
+        :error -> fresh(config, params, from_address, context, store, key)
+      end
     end
     |> normalize_error()
+  end
+
+  defp fresh(config, params, from_address, context, store, key) do
+    with {:ok, request, amount, warnings} <- build_request(params, from_address) do
+      settle(config, request, amount, warnings, context, store, key)
+    end
   end
 
   defp normalize_error({:ok, _result} = ok), do: ok
   defp normalize_error({:error, reason}), do: {:error, Failure.from(reason)}
 
-  defp settle(config, request, amount, warnings, context) do
+  defp settle(config, request, amount, warnings, context, store, key) do
     with :ok <- assert_relay_route(request),
          {:ok, quote} <- fillable_quote(config, request),
-         :ok <- authorize(context, config, amount),
-         {:ok, signature} <- maybe_sign_gasless(quote, context, amount),
+         :ok <- authorize(context, config, amount) do
+      # Checkpoint the dispatched transfer before any funds move so a crash in the
+      # funding step leaves a record a resume can poll instead of re-funding.
+      Checkpoint.put(store, key, dispatched_record(quote))
+      fund(config, request, amount, warnings, context, store, key, quote)
+    end
+  end
+
+  defp fund(config, request, amount, warnings, context, store, key, quote) do
+    with {:ok, signature} <- maybe_sign_gasless(quote, context, amount),
          {:ok, status} <- execute(config, quote, signature, context, amount),
          {:ok, deposit_tx} <- maybe_broadcast(quote, request, signature, context, amount) do
-      {:ok, summary(quote, status, warnings, signature, deposit_tx)}
+      summary = summary(quote, status, warnings, signature, deposit_tx)
+      Checkpoint.put(store, key, settled_record(summary))
+      {:ok, summary}
+    else
+      # The funding helpers already released the spend reservation; drop the
+      # checkpoint too so a retry of the same payment starts clean.
+      {:error, _reason} = error ->
+        Checkpoint.delete(store, key)
+        error
     end
+  end
+
+  # The transfer_id is random, so the key is the canonical payment, not the id;
+  # an explicit key lets a caller force two identical transfers apart.
+  defp idempotency_key(context, params, from_address) do
+    case Map.get(context, :idempotency_key) do
+      key when is_binary(key) ->
+        key
+
+      _ ->
+        Checkpoint.derive_key([
+          :relay,
+          from_address,
+          Map.fetch!(params, :from_chain_id),
+          Map.fetch!(params, :to_chain_id),
+          Map.fetch!(params, :from_token),
+          Map.fetch!(params, :to_token),
+          Map.fetch!(params, :to_address),
+          Map.fetch!(params, :amount)
+        ])
+    end
+  end
+
+  defp resume_summary(%{summary: summary}) when is_map(summary), do: summary
+
+  defp resume_summary(record) do
+    %{
+      transfer_id: record.transfer_id,
+      quote_id: Map.get(record, :quote_id),
+      deposit_address: Map.get(record, :deposit_address),
+      status: to_string(Map.get(record, :status, :dispatched)),
+      warnings: []
+    }
+  end
+
+  defp dispatched_record(%QuoteResponse{} = quote) do
+    %{
+      transfer_id: quote.transfer_id,
+      quote_id: quote.quote_id,
+      deposit_address: quote.deposit_address,
+      status: :dispatched
+    }
+  end
+
+  defp settled_record(summary) do
+    %{transfer_id: summary.transfer_id, status: :in_flight, summary: summary}
   end
 
   defp fetch(context, key) do

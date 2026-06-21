@@ -9,13 +9,15 @@
 #   settle     the ZERO System streams its reasoning (mock or live LLM) while it
 #              signs + dispatches a private cross-chain payment; a stopwatch runs
 #              execute -> :completed in single-digit seconds
-#   damage     the machine is killed mid-settlement; the will holds -- the ledger
-#              resumes the same intent and reconciles to one debit while a funnel
-#              goes offline and the formation keeps fighting
+#   damage     the machine is killed mid-settlement with the intent checkpointed;
+#              the will holds -- the supervisor restarts, the resumed run finds the
+#              checkpoint and settles the same intent to one debit (no re-sign)
+#              while a funnel goes offline and the formation keeps fighting
 #   takeover   pilot and machine on the same tick
 #
 # Authenticity: funnels are real CRDT entities in Raxol.Swarm.TacticalOverlay; boot
-# lines probe real modules; the ledger models the Raxol.Payments.Ledger contract
+# lines probe real modules; the ledger and the crash-recovery checkpoint model the
+# Raxol.Payments.Ledger and Raxol.Payments.Checkpoint contracts
 # (that package is outside this demo's dep context -- it binds to the real Ledger in
 # the assembled build) and shows the invariant proven by payment_recovery_test.
 #
@@ -184,6 +186,7 @@ defmodule ZeroSystem do
   @funnel_count 6
   @deploy_ticks 7
   @settle_ticks 20
+  @crash_hold 4
   @boot_hold 6
   @amount 25.0
   @policy %{per_request_max: 50.0, session_max: 100.0, lifetime_max: 250.0}
@@ -220,6 +223,8 @@ defmodule ZeroSystem do
       deploy_t: 0,
       entities: [],
       settle_t: 0,
+      crash_t: 0,
+      checkpoint: %{},
       ledger: [],
       session_total: 0.0,
       lifetime_total: 0.0,
@@ -361,6 +366,15 @@ defmodule ZeroSystem do
   defp advance_phase(%{phase: :settling} = model),
     do: %{model | settle_t: model.settle_t + 1}
 
+  # The supervisor has restarted the killed process; the resumed run consults its
+  # checkpoint and settles the in-flight intent without signing again.
+  defp advance_phase(%{phase: :crashed, crash_t: t} = model)
+       when t >= @crash_hold,
+       do: resume_settle(model)
+
+  defp advance_phase(%{phase: :crashed} = model),
+    do: %{model | crash_t: model.crash_t + 1}
+
   defp advance_phase(model), do: model
 
   # -- Settlement + ledger (mirrors Raxol.Payments.Ledger semantics) --
@@ -384,21 +398,23 @@ defmodule ZeroSystem do
 
   defp start_settle(model), do: model
 
+  # The will under fire: reserve and dispatch the intent, checkpoint it, then take
+  # a round mid-settlement. The process dies with the intent in flight; the
+  # checkpoint survives in the store, holding the line until the resume.
   defp crash_settle(%{phase: :ready} = model) do
     case authorize(model, @amount) do
       :ok ->
         id = intent(model)
 
         model
-        |> ledger_add([
-          {:reserve, id, @amount},
-          {:crash, id},
-          {:resume, id},
-          {:debit, id, @amount}
-        ])
-        |> bump(@amount, 1, 2)
+        |> ledger_add([{:reserve, id, @amount}, {:crash, id}])
+        |> ckpt_put(idem_key(model), %{intent_id: id, status: :dispatched})
+        |> Map.merge(%{phase: :crashed, crash_t: 0})
         |> knock_out_funnel()
-        |> log(:ledger, "killed mid-settlement -- resumed #{id}, one debit")
+        |> log(
+          :ledger,
+          "killed mid-settlement -- #{id} checkpointed, process down"
+        )
 
       {:over_limit, reason} ->
         deny(model, @amount, reason)
@@ -406,6 +422,41 @@ defmodule ZeroSystem do
   end
 
   defp crash_settle(model), do: model
+
+  # Poll-before-re-sign: the resumed run finds the dispatched intent in the
+  # checkpoint and settles it to one debit. An ungoverned runtime, with no
+  # memory of the in-flight payment, would re-sign and debit twice.
+  defp resume_settle(model) do
+    key = idem_key(model)
+
+    case ckpt_fetch(model, key) do
+      {:ok, %{intent_id: id}} ->
+        model
+        |> ledger_add([{:resume, id}, {:debit, id, @amount}])
+        |> ckpt_delete(key)
+        |> bump(@amount, 1, 2)
+        |> Map.put(:phase, :ready)
+        |> log(
+          :ledger,
+          "resumed #{id} from checkpoint -- one debit, no re-sign"
+        )
+
+      :error ->
+        %{model | phase: :ready}
+    end
+  end
+
+  # In-demo model of the Raxol.Payments.Checkpoint store (put / fetch / delete),
+  # the same way the ledger below mirrors Raxol.Payments.Ledger.
+  defp ckpt_put(model, key, record),
+    do: %{model | checkpoint: Map.put(model.checkpoint, key, record)}
+
+  defp ckpt_fetch(model, key), do: Map.fetch(model.checkpoint, key)
+
+  defp ckpt_delete(model, key),
+    do: %{model | checkpoint: Map.delete(model.checkpoint, key)}
+
+  defp idem_key(model), do: "pay-" <> intent(model)
 
   defp authorize(%{frozen: true}, _amount), do: {:over_limit, :frozen}
 
@@ -582,9 +633,11 @@ defmodule ZeroSystem do
         else: text("", fg: :white)
 
     clock =
-      if model.phase == :settling,
-        do: "  settling #{secs(model.settle_t)}",
-        else: "  phase: #{model.phase}"
+      case model.phase do
+        :settling -> "  settling #{secs(model.settle_t)}"
+        :crashed -> "  DOWN -- resuming from checkpoint"
+        phase -> "  phase: #{phase}"
+      end
 
     row do
       [
@@ -733,11 +786,11 @@ defmodule ZeroSystem do
     Process.sleep(2500)
     m = Enum.reduce(1..(@settle_ticks + 2), m, fn _, acc -> tick.(acc) end)
     {m, _} = update(ev.("x"), m)
-    m = tick.(m)
+    m = Enum.reduce(1..(@crash_hold + 2), m, fn _, acc -> tick.(acc) end)
 
     IO.puts(
       "backend=#{m.backend_label} phase=#{m.phase} entities=#{length(m.entities)} " <>
-        "debits=#{m.debits} ungoverned=#{m.ungoverned} " <>
+        "debits=#{m.debits} ungoverned=#{m.ungoverned} checkpoints=#{map_size(m.checkpoint)} " <>
         "offline=#{Enum.count(m.funnels, &(&1.status == :offline))} " <>
         "reasoning_chars=#{String.length(m.reasoning)} cockpit_root=#{view(m).type}"
     )

@@ -2,22 +2,28 @@ defmodule Raxol.Payments.Xochi.Client do
   @moduledoc """
   Client for the Xochi private execution protocol.
 
-  Talks directly to Riddler's `/xochi/*` endpoints. Riddler is the solver
-  backend; agents get the cash-positive path with tier-based fees.
+  Talks to the Xochi worker's `/api/intent/*` endpoints. The worker is the sole
+  agent surface: it applies trust-tier fees and attestations, is the x402
+  boundary, and calls the Riddler solver internally. Do not target
+  `riddler.axol.io/xochi/*` directly -- that bypasses Xochi's fee/tier logic and
+  returns the raw solver quote (a thinner shape, no `can_solve`/`xochi_fee`).
 
   ## Endpoints
 
-  - `get_quote/2` -- POST /xochi/quote
-  - `execute/2` -- POST /xochi/execute
-  - `get_status/2` -- GET /xochi/status/:id
-  - `get_history/2` -- GET /xochi/history?wallet=
-  - `prepare_claim/2` -- POST /xochi/claim/prepare (client-side signing)
-  - `submit_claim/2` -- POST /xochi/claim/submit (client-side signing)
+  - `get_quote/2` -- POST /api/intent/quote
+  - `execute/2` -- POST /api/intent/execute
+  - `get_status/2` -- GET /api/intent/:id/status
+  - `get_history/2` -- GET /api/intent/history?wallet=
+  - `prepare_claim/2` -- POST /api/intent/claim/prepare
+  - `submit_claim/2` -- POST /api/intent/claim/submit
+
+  Pinned contract: `xochi/docs/contracts/xochi-intent-api.md`. It covers quote,
+  execute, and status; the history and claim paths are not in it.
 
   ## Configuration
 
       config = %{
-        base_url: "https://riddler.example.com",
+        base_url: "https://api.xochi.fi",
         auth_token: "bearer-token"
       }
 
@@ -46,7 +52,7 @@ defmodule Raxol.Payments.Xochi.Client do
     with :ok <- QuoteRequest.validate(request) do
       config
       |> build_req()
-      |> Req.post(url: "/xochi/quote", json: QuoteRequest.to_json(request))
+      |> Req.post(url: "/api/intent/quote", json: QuoteRequest.to_json(request))
       |> handle_response(&QuoteResponse.from_json/1)
     end
   end
@@ -56,7 +62,7 @@ defmodule Raxol.Payments.Xochi.Client do
   def execute(config, %ExecuteRequest{} = request) do
     config
     |> build_req()
-    |> Req.post(url: "/xochi/execute", json: ExecuteRequest.to_json(request))
+    |> Req.post(url: "/api/intent/execute", json: ExecuteRequest.to_json(request))
     |> handle_response(&ExecuteResponse.from_json/1)
   end
 
@@ -65,7 +71,7 @@ defmodule Raxol.Payments.Xochi.Client do
   def get_status(config, intent_id) do
     config
     |> build_req()
-    |> Req.get(url: "/xochi/status/#{intent_id}")
+    |> Req.get(url: "/api/intent/#{intent_id}/status")
     |> handle_response(&IntentStatus.from_json/1)
   end
 
@@ -76,7 +82,7 @@ defmodule Raxol.Payments.Xochi.Client do
 
     config
     |> build_req()
-    |> Req.get(url: "/xochi/history", params: params)
+    |> Req.get(url: "/api/intent/history", params: params)
     |> handle_response(fn body ->
       Map.get(body, "intents", [])
     end)
@@ -97,7 +103,7 @@ defmodule Raxol.Payments.Xochi.Client do
 
     config
     |> build_req()
-    |> Req.post(url: "/xochi/claim/prepare", json: json)
+    |> Req.post(url: "/api/intent/claim/prepare", json: json)
     |> handle_response(& &1)
   end
 
@@ -116,7 +122,7 @@ defmodule Raxol.Payments.Xochi.Client do
 
     config
     |> build_req()
-    |> Req.post(url: "/xochi/claim/submit", json: json)
+    |> Req.post(url: "/api/intent/claim/submit", json: json)
     |> handle_response(& &1)
   end
 

@@ -228,9 +228,8 @@ defmodule Raxol.Payments.EIP712Test do
         "Outer" => [{"inner", "Missing"}]
       }
 
-      assert_raise FunctionClauseError, fn ->
-        EIP712.hash(%{name: "Test"}, types, %{"inner" => %{"x" => 1}})
-      end
+      assert {:error, {:unknown_struct_type, "Missing"}} =
+               EIP712.hash(%{name: "Test"}, types, %{"inner" => %{"x" => 1}})
     end
 
     test "two-level nested struct hashes deterministically" do

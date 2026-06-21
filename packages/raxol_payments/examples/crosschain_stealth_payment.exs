@@ -245,7 +245,7 @@ defmodule CrosschainStealthPayment do
     fn conn ->
       body =
         case conn.request_path do
-          "/xochi/quote" ->
+          "/api/intent/quote" ->
             %{
               "intentId" => "demo_intent",
               "quoteId" => "demo_quote",
@@ -265,7 +265,7 @@ defmodule CrosschainStealthPayment do
               }
             }
 
-          "/xochi/execute" ->
+          "/api/intent/execute" ->
             %{
               "success" => true,
               "intentId" => "demo_intent",
@@ -273,7 +273,7 @@ defmodule CrosschainStealthPayment do
               "stealthAddress" => "0xstealthdemo"
             }
 
-          "/xochi/status/demo_intent" ->
+          "/api/intent/demo_intent/status" ->
             %{
               "intentId" => "demo_intent",
               "status" => "completed",

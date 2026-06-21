@@ -66,6 +66,20 @@ Three layers of limits in `SpendingPolicy`:
 
 The `Ledger` is an ETS-backed GenServer that tracks cumulative spend. `SpendingHook` implements the `CommandHook` behaviour from raxol_agent. It runs before every command and can deny execution if limits would be exceeded.
 
+## Crash Recovery
+
+Cross-chain settlement is asynchronous: there is a window between dispatching an intent (sign + submit) and confirming it landed. A crash in that window, on a runtime with no fault isolation, makes the restarted agent re-quote and sign a second time, paying twice.
+
+`Raxol.Payments.Checkpoint` closes the window. The cross-chain Actions (`ExecuteXochiIntent`, `ExecuteRelayTransfer`) checkpoint the dispatched intent before submitting it, keyed by a stable idempotency key derived from the payment. On a re-run after a crash, the Action finds the checkpoint and returns the in-flight intent for the caller to poll, instead of reserving budget and signing again. The spend is reserved and the signature released exactly once across the crash.
+
+The store is injected via `context[:checkpoint]` as a `{module, handle}` pair, so the recovery layer does not bind raxol_payments to a particular durability mechanism:
+
+- `Checkpoint.ETS` -- an ETS table; survives a process crash when owned by a process that outlives it (a supervisor, the cockpit). Used for standalone runs and the demo.
+- `Checkpoint.ContextStore` -- backed by `Raxol.Agent.ContextStore`, so a deployed agent's in-flight intent persists in the same durable store that backs its own crash recovery.
+- nil (the default) -- recovery disabled; every call quotes and signs.
+
+The relay rail keys on the logical payment rather than its client-minted `transfer_id`, so a resume reuses the same `transfer_id` and an idempotent broadcaster dedupes a retried deposit. A definite execution failure (nothing dispatched) drops the checkpoint so a later retry starts clean. Set `context[:idempotency_key]` to force two otherwise-identical payments apart.
+
 ## Agent Actions
 
 Eight actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
