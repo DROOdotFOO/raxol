@@ -130,6 +130,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
       _ ->
         Checkpoint.derive_key([
+          :xochi,
           request.wallet,
           request.from_chain_id,
           request.to_chain_id,

@@ -28,16 +28,17 @@ defmodule Raxol.Payments.Checkpoint do
 
   ## Record shape
 
-  A record is a plain map. `:intent_id` is the load-bearing field (the value a
-  resume polls). Implementations persist whatever else the caller stores; the
-  `ExecuteXochiIntent` Action stores the full result summary so a resume can
-  return it without re-deriving anything.
+  A record is a plain map whose shape the calling Action defines. The
+  load-bearing field is the id a resume polls -- `:intent_id` for the Xochi
+  intent, `:transfer_id` for the Relay transfer. Implementations persist whatever
+  else the caller stores; both payment Actions store the full result summary so a
+  resume can return it without re-deriving anything.
   """
 
   @type handle :: term()
   @type store :: {module(), handle()}
   @type key :: String.t()
-  @type record :: %{required(:intent_id) => String.t(), optional(atom()) => term()}
+  @type record :: map()
 
   @doc "Fetch the record stored under `key`, or `:error` if none."
   @callback fetch(handle(), key()) :: {:ok, record()} | :error
