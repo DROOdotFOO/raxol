@@ -87,10 +87,17 @@ end
 # The scene self-stops at ~26s; sample a touch longer to catch the final frame.
 prev = blank
 
+# The scene self-stops at ~13.5s, which tears down the session; halt sampling
+# when the engine is gone rather than crashing on the next read.
 _ =
-  Enum.reduce(1..div(28_000, tick), prev, fn _i, acc ->
+  Enum.reduce_while(1..div(20_000, tick), prev, fn _i, acc ->
     Process.sleep(tick)
-    sample.(acc)
+
+    try do
+      {:cont, sample.(acc)}
+    catch
+      :exit, _ -> {:halt, acc}
+    end
   end)
 
 session_struct = Recorder.stop()

@@ -1,20 +1,19 @@
 defmodule Raxol.Demo.LandingScene do
   @moduledoc """
-  Self-driving 80x24 hero scene for the axol.io landing page.
+  Self-driving 80x24 hero scene for the axol.io landing page (and X/GIF export).
 
-  One story on rails: a supervised agent spawns with its own wallet, takes a
-  mandate a human signed and scoped, finds an opportunity, clears the spend
-  against the mandate, and settles privately through Xochi so the trade never
-  reaches the mempool. A crash mid-run shows the supervisor restart it with the
-  mandate intact.
+  One story on rails, front-loaded so the poster frame is the thesis: a
+  supervised agent spends only under a mandate a human signed and settles
+  privately through Xochi, so the trade never reaches the mempool. A crash
+  shows the supervisor restart it with the mandate intact.
 
-  The scene advances itself on a timer and stops at the end, so a recorder
-  captures a fixed-length cast (the player adds the loop). Designed for 80x24:
-  row 1 is the title, row 24 the status line.
+  The chrome (wordmark, rule, thesis) is on screen from the first frame; the
+  beats reveal underneath at a fast cadence (~13s total). Colors are the axol
+  palette as truecolor, which a recorded cast carries verbatim.
 
-  Record it (deterministic, headless) with `demos/record_landing_scene.exs`, or
-  interactively in an 80x24 terminal with
-  `mix raxol.record -m Raxol.Demo.LandingScene --width 80 --height 24`.
+  Record it headless with `demos/record_landing_scene.exs`, or interactively in
+  an 80x24 terminal with `mix raxol.record -m Raxol.Demo.LandingScene --width 80
+  --height 24`.
   """
 
   use Raxol.Core.Runtime.Application
@@ -22,20 +21,27 @@ defmodule Raxol.Demo.LandingScene do
   @tick_ms 90
   @spinner ~w(| / - \\)
 
-  # Each phase emits its lines on entry and holds for `ticks` before the next.
-  # Budgets are in ticks (90ms each); the whole arc is ~23s.
+  # axol palette (truecolor); coral carries the brand + the privacy beats, sky is
+  # structure/chrome, frost is content, green is the one "safe" check.
+  @coral {255, 205, 156}
+  @warn {230, 132, 118}
+  @sky {88, 161, 198}
+  @frost {253, 255, 249}
+  @ok {80, 220, 130}
+
+  # Phase budgets in ticks (90ms each); the arc is ~13s with the hook held first.
   @script [
-    {:intro, 10},
-    {:spawn, 22},
-    {:wallet, 18},
-    {:mandate, 30},
-    {:opportunity, 22},
-    {:guard, 22},
-    {:settle, 36},
-    {:payoff, 40},
-    {:crash, 28},
-    {:restored, 24},
-    {:done, 34}
+    {:hook, 20},
+    {:spawn, 9},
+    {:wallet, 8},
+    {:mandate, 12},
+    {:opportunity, 9},
+    {:guard, 10},
+    {:settle, 20},
+    {:payoff, 24},
+    {:crash, 9},
+    {:restored, 12},
+    {:done, 16}
   ]
 
   @quote 0.18
@@ -44,8 +50,7 @@ defmodule Raxol.Demo.LandingScene do
 
   @impl true
   def init(_context) do
-    %{phase: :intro, t: 0, total: 0, lines: [], status: nil, done: false}
-    |> enter(:intro)
+    %{phase: :hook, t: 0, total: 0, lines: [], status: nil, done: false}
   end
 
   @impl true
@@ -54,11 +59,7 @@ defmodule Raxol.Demo.LandingScene do
   def update(:tick, model) do
     model = %{model | t: model.t + 1, total: model.total + 1}
 
-    if model.t >= budget(model.phase) do
-      advance(model)
-    else
-      {model, []}
-    end
+    if model.t >= budget(model.phase), do: advance(model), else: {model, []}
   end
 
   def update(key_match("q"), model), do: {model, [Directive.stop()]}
@@ -68,7 +69,7 @@ defmodule Raxol.Demo.LandingScene do
   @impl true
   def subscribe(_model), do: [subscribe_interval(@tick_ms, :tick)]
 
-  # -- phase machine ----------------------------------------------------------
+  # phase machine
 
   defp advance(model) do
     case next_phase(model.phase) do
@@ -78,9 +79,7 @@ defmodule Raxol.Demo.LandingScene do
   end
 
   defp next_phase(phase) do
-    @script
-    |> Enum.map(&elem(&1, 0))
-    |> next_after(phase)
+    @script |> Enum.map(&elem(&1, 0)) |> next_after(phase)
   end
 
   defp next_after([phase, next | _], phase), do: next
@@ -88,68 +87,63 @@ defmodule Raxol.Demo.LandingScene do
   defp next_after([], _phase), do: nil
 
   defp budget(phase) do
-    {_phase, ticks} = Enum.find(@script, {phase, 20}, &(elem(&1, 0) == phase))
+    {_phase, ticks} = Enum.find(@script, {phase, 16}, &(elem(&1, 0) == phase))
     ticks
   end
 
-  # Append the lines a phase reveals, and set the status line where it applies.
-  defp enter(model, :intro), do: %{model | lines: []}
+  # Each phase reveals its beat(s); the hook is just the persistent chrome.
+  defp enter(model, :hook), do: model
 
   defp enter(model, :spawn) do
-    add(model, [
-      prompt("spawn agent  market-maker-7", "supervised pid <0.412.0>  up 0ms")
-    ])
+    add(model, [pair("> spawn", "market-maker-7", "supervised · pid <0.412.0>")])
   end
 
   defp enter(model, :wallet) do
-    add(model, [prompt("wallet       0xA1..9f", "balance 4.20 ETH")])
+    add(model, [pair("> wallet", "0xA1..9f", "4.20 ETH")])
   end
 
   defp enter(model, :mandate) do
     add(model, [
-      prompt("mandate      signed by 0xHUMAN", ""),
-      dim(
-        "             spend <= #{eth(@daily)}/day   venue xochi   expires 7d"
-      ),
-      blank()
+      pair("> mandate", "signed 0xHUMAN", "<= #{eth(@daily)}/day · xochi · 7d")
     ])
   end
 
   defp enter(model, :opportunity) do
-    add(model, [line("agent: opportunity found -> quote #{eth(@quote)}", :cyan)])
+    add(model, [
+      blank(),
+      text_line("agent   opportunity -> quote #{eth(@quote)}", @frost)
+    ])
   end
 
   defp enter(model, :guard) do
     add(model, [
-      line(
-        "guard: within mandate  (#{eth(@quote)} <= #{eth(@daily)} today)  [OK]",
-        :green
-      )
+      marked("guard   #{eth(@quote)} <= #{eth(@daily)} today", "[OK]", @ok)
     ])
   end
 
-  defp enter(model, :settle) do
-    add(model, [blank(), {:settle_anim, "settle: routing through Xochi"}])
-  end
+  defp enter(model, :settle),
+    do: add(model, [{:settle_anim, "settle  routing through Xochi"}])
 
   defp enter(model, :payoff) do
     model
-    |> replace_settle("settle: routed through Xochi          private")
+    |> replace_settle("settle  routed", "private", @coral)
     |> add([
-      line("       tx never hit the mempool -- strategy stays dark", :yellow, [
-        :bold
-      ])
+      accent("        tx never hit the mempool; strategy stays dark", @coral)
     ])
   end
 
   defp enter(model, :crash) do
-    add(model, [blank(), line("!! process <0.412.0> crashed mid-run", :red)])
+    add(model, [blank(), accent("[!] <0.412.0> crashed mid-fill", @warn)])
   end
 
   defp enter(model, :restored) do
     add(model, [
-      line("-> supervisor restarted market-maker-7 <0.547.0>", :green),
-      dim("   mandate intact; resumed where it left off")
+      marked2(
+        "[+] supervisor restarted <0.547.0>",
+        "mandate intact",
+        @ok,
+        @frost
+      )
     ])
   end
 
@@ -157,67 +151,121 @@ defmodule Raxol.Demo.LandingScene do
     %{
       model
       | status:
-          "filled #{eth(@quote)}   pnl +0.006 ETH   mandate #{eth(@remaining_after)} left"
+          "filled #{eth(@quote)} · pnl +0.006 · mandate #{eth(@remaining_after)} left"
     }
   end
 
-  # -- view -------------------------------------------------------------------
+  # view
 
   @impl true
   def view(model) do
     column style: %{padding: 1, gap: 0, width: 80} do
-      Enum.concat([[title(), blank_text()], body(model), [status_row(model)]])
+      Enum.concat([chrome(), body(model), [status_row(model)]])
     end
   end
 
-  defp title do
-    text("Raxol -- agent runtime for on-chain commerce",
-      fg: :cyan,
-      style: [:bold]
-    )
+  defp chrome do
+    [
+      row do
+        [
+          text("RAXOL", fg: @coral, style: [:bold]),
+          text("   agent runtime · on-chain commerce", fg: @sky)
+        ]
+      end,
+      text(String.duplicate("-", 72), fg: @sky),
+      text("agents spend only under a mandate a human signed, settling private",
+        fg: @frost,
+        style: [:bold]
+      ),
+      text("")
+    ]
   end
 
   defp body(model) do
-    Enum.map(model.lines, fn entry ->
-      case entry do
-        {:settle_anim, base} -> settle_line(model, base)
-        %{text: t, fg: fg, style: s} -> text(t, fg: fg, style: s)
-      end
+    Enum.map(model.lines, fn
+      {:settle_anim, base} -> settle_line(model, base)
+      %{kind: :row, segments: segs} -> row(do: Enum.map(segs, &seg/1))
+      %{text: t, fg: fg, style: s} -> text(t, fg: fg, style: s)
     end)
   end
+
+  defp seg({t, fg, style}), do: text(t, fg: fg, style: style)
 
   # The settling beat animates a spinner + progress fill until the payoff resolves it.
   defp settle_line(model, base) do
     frame = Enum.at(@spinner, rem(model.total, length(@spinner)))
     pct = min(100, round(model.t / budget(:settle) * 100))
     filled = div(pct, 10)
-    bar = String.duplicate("#", filled) <> String.duplicate(".", 10 - filled)
-    text("#{base} #{frame} [#{bar}] #{pct}%", fg: :yellow)
+
+    bar =
+      String.duplicate("#", filled) <>
+        ">" <> String.duplicate(" ", max(0, 9 - filled))
+
+    row do
+      [
+        text("#{base}    ", fg: @frost),
+        text("[#{String.slice(bar, 0, 10)}] #{pct}%  #{frame}", fg: @sky)
+      ]
+    end
   end
 
   defp status_row(model) do
-    text("  " <> (model.status || ""), fg: :magenta, style: [:bold])
+    text("  " <> (model.status || ""), fg: @coral, style: [:bold])
   end
 
-  # -- line helpers -----------------------------------------------------------
+  # line builders
 
   defp add(model, entries), do: %{model | lines: model.lines ++ entries}
 
-  defp prompt(label, detail) do
-    line("> #{label}   #{detail}" |> String.trim_trailing(), :white)
+  # label (sky) + value (frost) + trailing detail (sky), aligned on columns.
+  defp pair(label, value, detail) do
+    %{
+      kind: :row,
+      segments: [
+        {String.pad_trailing(label, 11), @sky, []},
+        {String.pad_trailing(value, 18), @frost, [:bold]},
+        {detail, @sky, []}
+      ]
+    }
   end
 
-  defp line(t, fg, style \\ []), do: %{text: "  " <> t, fg: fg, style: style}
-  defp dim(t), do: %{text: "  " <> t, fg: :white, style: [:faint]}
-  defp blank, do: %{text: "", fg: :white, style: []}
-  defp blank_text, do: text("")
+  # left text (frost) + right-aligned marker (color).
+  defp marked(left, mark, mark_fg) do
+    %{
+      kind: :row,
+      segments: [
+        {String.pad_trailing(left, 44), @frost, []},
+        {mark, mark_fg, [:bold]}
+      ]
+    }
+  end
 
-  # Swap the live settle-animation line for the resolved one.
-  defp replace_settle(model, resolved) do
+  defp marked2(left, right, left_fg, right_fg) do
+    %{
+      kind: :row,
+      segments: [
+        {String.pad_trailing(left, 40), left_fg, [:bold]},
+        {right, right_fg, []}
+      ]
+    }
+  end
+
+  defp text_line(t, fg), do: %{text: t, fg: fg, style: []}
+  defp accent(t, fg), do: %{text: t, fg: fg, style: [:bold]}
+  defp blank, do: %{text: "", fg: @frost, style: []}
+
+  # Swap the live settle-animation row for the resolved one (left + right marker).
+  defp replace_settle(model, left, mark, mark_fg) do
     lines =
       Enum.map(model.lines, fn
         {:settle_anim, _} ->
-          %{text: "  " <> resolved, fg: :yellow, style: [:bold]}
+          %{
+            kind: :row,
+            segments: [
+              {String.pad_trailing(left, 44), @frost, []},
+              {mark, mark_fg, [:bold]}
+            ]
+          }
 
         other ->
           other
@@ -227,5 +275,5 @@ defmodule Raxol.Demo.LandingScene do
   end
 
   defp eth(amount),
-    do: "#{:erlang.float_to_binary(amount * 1.0, decimals: 2)} ETH"
+    do: :erlang.float_to_binary(amount * 1.0, decimals: 2) <> " ETH"
 end
