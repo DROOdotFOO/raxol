@@ -76,10 +76,10 @@ defmodule Raxol.Payments.Req.MandateTest do
       assert [_] = header
     end
 
-    test "maps /api/settlement/claim to scope stealth_claim" do
+    test "maps /api/stealth/claim to scope stealth_claim" do
       put_mandate(scopes: ["stealth_claim"])
 
-      header = header_after_step(request_with_step("https://api.xochi.fi/api/settlement/claim"))
+      header = header_after_step(request_with_step("https://api.xochi.fi/api/stealth/claim"))
       assert [_] = header
     end
 
@@ -100,7 +100,7 @@ defmodule Raxol.Payments.Req.MandateTest do
     test "does not attach when no mandate covers the requested scope" do
       put_mandate(scopes: ["execute"])
 
-      header = header_after_step(request_with_step("https://api.xochi.fi/api/settlement/claim"))
+      header = header_after_step(request_with_step("https://api.xochi.fi/api/stealth/claim"))
       assert header == []
     end
 

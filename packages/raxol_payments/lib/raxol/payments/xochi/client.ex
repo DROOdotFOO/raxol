@@ -14,18 +14,37 @@ defmodule Raxol.Payments.Xochi.Client do
   - `execute/2` -- POST /api/intent/execute
   - `get_status/2` -- GET /api/intent/:id/status
   - `get_history/2` -- GET /api/intent/history?wallet=
-  - `prepare_claim/2` -- POST /api/intent/claim/prepare
-  - `submit_claim/2` -- POST /api/intent/claim/submit
+  - `claim/2` -- POST /api/stealth/claim
 
   Pinned contract: `xochi/docs/contracts/xochi-intent-api.md`. It covers quote,
-  execute, and status; the history and claim paths are not in it.
+  execute, and status; the history and stealth claim paths live in the worker's
+  OpenAPI spec.
+
+  ## Authentication
+
+  An autonomous agent cannot mint a passkey-issued Member JWT the way a browser
+  can, so the client supports the worker's three auth modes via `:auth`:
+
+  - `{:mandate, agent_wallet}` -- a Member signs an EIP-712 delegation envelope
+    once; the agent presents `X-Xochi-Delegation` per call. Best fit for an
+    agent acting for a Member. Wires `Raxol.Payments.Req.Mandate`, which looks
+    up the soonest-expiring active mandate for the wallet. Pass plugin overrides
+    with `{:mandate, agent_wallet, opts}`.
+  - `{:x402, wallet: MyWallet}` -- Guest mode. The agent signs an EIP-3009 USDC
+    micropayment per call and sends `X-PAYMENT`. Wires `Raxol.Payments.Req.AutoPay`
+    (restricted to `:x402`), which regenerates the payment from each 402 challenge.
+  - `{:member, jwt}` -- only if a passkey-issued JWT is provisioned out of band.
 
   ## Configuration
 
-      config = %{
-        base_url: "https://api.xochi.fi",
-        auth_token: "bearer-token"
-      }
+      # Mandate (recommended for agents)
+      config = %{base_url: "https://api.xochi.fi", auth: {:mandate, "0xAgent..."}}
+
+      # Guest / x402
+      config = %{base_url: "https://api.xochi.fi", auth: {:x402, wallet: MyWallet}}
+
+      # Member JWT (legacy `:auth_token` is equivalent to `{:member, token}`)
+      config = %{base_url: "https://api.xochi.fi", auth_token: "bearer-token"}
 
       {:ok, quote} = Xochi.Client.get_quote(config, %QuoteRequest{...})
   """
@@ -38,9 +57,17 @@ defmodule Raxol.Payments.Xochi.Client do
     IntentStatus
   }
 
+  @type auth ::
+          {:member, String.t()}
+          | {:mandate, String.t()}
+          | {:mandate, String.t(), keyword()}
+          | {:x402, keyword()}
+          | :none
+
   @type config :: %{
           :base_url => String.t(),
-          :auth_token => String.t(),
+          optional(:auth) => auth(),
+          optional(:auth_token) => String.t(),
           optional(:req_options) => keyword()
         }
 
@@ -89,56 +116,80 @@ defmodule Raxol.Payments.Xochi.Client do
   end
 
   @doc """
-  Prepare an unsigned claim for client-side signing.
+  Submit a gasless stealth settlement claim.
 
-  Returns the UserOp hash for the client to sign with their stealth key.
-  No private keys are sent to the server.
+  Posts the signed claim to the worker's single stealth claim endpoint
+  (`POST /api/stealth/claim`), which sponsors it via Pimlico/ERC-4337 and
+  proxies to the Riddler solver. The agent derives stealth keys from an
+  ERC-5564 announcement and signs the claim message before calling this.
+
+  Required params (snake_case, per the pinned contract): `:stealth_address`,
+  `:recipient`, `:ephemeral_pub_key`, `:signature`. Optional: `:view_tag`.
+  Returns `{:ok, %{"tx_hash" => ..., "status" => ...}}`.
   """
-  @spec prepare_claim(config(), map()) :: {:ok, map()} | error()
-  def prepare_claim(config, %{intent_id: _, recipient_address: _} = params) do
-    json = %{
-      "intentId" => params.intent_id,
-      "recipientAddress" => params.recipient_address
-    }
+  @spec claim(config(), map()) :: {:ok, map()} | error()
+  def claim(
+        config,
+        %{
+          stealth_address: _,
+          recipient: _,
+          ephemeral_pub_key: _,
+          signature: _
+        } = params
+      ) do
+    json =
+      %{
+        "stealth_address" => params.stealth_address,
+        "recipient" => params.recipient,
+        "ephemeral_pub_key" => params.ephemeral_pub_key,
+        "signature" => params.signature
+      }
+      |> maybe_put("view_tag", Map.get(params, :view_tag))
 
     config
     |> build_req()
-    |> Req.post(url: "/api/intent/claim/prepare", json: json)
-    |> handle_response(& &1)
-  end
-
-  @doc """
-  Submit a client-signed claim to the bundler.
-
-  The client signs the hash from `prepare_claim/2` and submits
-  the signature here.
-  """
-  @spec submit_claim(config(), map()) :: {:ok, map()} | error()
-  def submit_claim(config, %{intent_id: _, signature: _} = params) do
-    json = %{
-      "intentId" => params.intent_id,
-      "signature" => params.signature
-    }
-
-    config
-    |> build_req()
-    |> Req.post(url: "/api/intent/claim/submit", json: json)
+    |> Req.post(url: "/api/stealth/claim", json: json)
     |> handle_response(& &1)
   end
 
   # -- Private --
 
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
   defp build_req(config) do
     validate_base_url!(config.base_url)
 
-    [
-      base_url: config.base_url,
-      headers: [{"authorization", "Bearer #{config.auth_token}"}],
-      receive_timeout: 30_000
-    ]
+    [base_url: config.base_url, receive_timeout: 30_000]
     |> Keyword.merge(Map.get(config, :req_options, []))
     |> Req.new()
+    |> apply_auth(auth_mode(config))
   end
+
+  # Explicit `:auth` wins; a bare legacy `:auth_token` maps to Member Bearer;
+  # otherwise the request is anonymous (the worker answers 402 with a Guest
+  # invite).
+  defp auth_mode(%{auth: auth}), do: auth
+  defp auth_mode(%{auth_token: token}) when is_binary(token), do: {:member, token}
+  defp auth_mode(_), do: :none
+
+  defp apply_auth(req, {:member, token}) do
+    Req.Request.put_header(req, "authorization", "Bearer #{token}")
+  end
+
+  defp apply_auth(req, {:mandate, agent_wallet}) do
+    apply_auth(req, {:mandate, agent_wallet, []})
+  end
+
+  defp apply_auth(req, {:mandate, agent_wallet, opts}) do
+    Raxol.Payments.Req.Mandate.attach(req, [agent_wallet: agent_wallet] ++ opts)
+  end
+
+  defp apply_auth(req, {:x402, opts}) do
+    Raxol.Payments.Req.AutoPay.attach(req, Keyword.put(opts, :protocols, [:x402]))
+  end
+
+  defp apply_auth(req, :none), do: req
 
   defp validate_base_url!("https://" <> _), do: :ok
   defp validate_base_url!("http://localhost" <> _), do: :ok

@@ -6,7 +6,8 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
 
   ## Context keys
 
-  * `:xochi_config` -- `%{base_url:, auth_token:}` for `Xochi.Client`.
+  * `:xochi_config` -- `%{base_url:, auth:}` for `Xochi.Client` (e.g.
+    `auth: {:mandate, agent_wallet}`; see `Xochi.Client` for all auth modes).
   """
 
   @compile {:no_warn_undefined, Raxol.Agent.Action}

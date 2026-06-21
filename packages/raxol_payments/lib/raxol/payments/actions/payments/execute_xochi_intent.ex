@@ -24,7 +24,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   ## Context keys
 
   * `:wallet` -- wallet module signing the EIP-712 intent.
-  * `:xochi_config` -- `%{base_url:, auth_token:}` for `Xochi.Client`.
+  * `:xochi_config` -- `%{base_url:, auth:}` for `Xochi.Client` (e.g.
+    `auth: {:mandate, agent_wallet}`; see `Xochi.Client` for all auth modes).
   * `:policy`, `:ledger`, `:agent_id`, `:on_confirm` -- see `SpendGate`.
   * `:checkpoint` -- optional `{module, handle}` `Raxol.Payments.Checkpoint`
     store for idempotent recovery (nil disables it).

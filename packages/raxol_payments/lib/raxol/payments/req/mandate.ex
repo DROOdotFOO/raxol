@@ -5,7 +5,7 @@ defmodule Raxol.Payments.Req.Mandate do
 
   The plugin maps the request path to a Mandate scope (`/api/intent/quote`
   -> `"quote"`, `/api/intent/execute` -> `"execute"`,
-  `/api/settlement/claim` -> `"stealth_claim"`), looks up the
+  `/api/stealth/claim` -> `"stealth_claim"`), looks up the
   soonest-expiring active Mandate for the agent in
   `Raxol.Payments.Mandate.Store` via `Raxol.Payments.Mandate.Check`,
   and sets `X-Xochi-Delegation` to the base64url envelope.
@@ -33,7 +33,7 @@ defmodule Raxol.Payments.Req.Mandate do
     `["xochi.fi", "api.xochi.fi"]`. Suffix match, so
     `staging.xochi.fi` works.
   - `:path_scopes` -- map of path prefix to scope. Default:
-    `%{"/api/intent/quote" => "quote", "/api/intent/execute" => "execute", "/api/settlement/claim" => "stealth_claim"}`.
+    `%{"/api/intent/quote" => "quote", "/api/intent/execute" => "execute", "/api/stealth/claim" => "stealth_claim"}`.
 
   The Mandate Store is a singleton (`Raxol.Payments.Mandate.Store`);
   start exactly one per node.
@@ -46,7 +46,7 @@ defmodule Raxol.Payments.Req.Mandate do
   @default_path_scopes %{
     "/api/intent/quote" => "quote",
     "/api/intent/execute" => "execute",
-    "/api/settlement/claim" => "stealth_claim"
+    "/api/stealth/claim" => "stealth_claim"
   }
 
   @doc "Attach the Mandate plugin to a Req request."
@@ -68,11 +68,21 @@ defmodule Raxol.Payments.Req.Mandate do
          {:ok, host} <- request_host(req),
          true <- xochi_host?(host, Keyword.get(opts, :hosts, @default_hosts)),
          {:ok, scope} <- match_scope(req, Keyword.get(opts, :path_scopes, @default_path_scopes)),
-         {:ok, mandate} <- Check.select_for_scope(scope, agent_wallet) do
+         {:ok, mandate} <- safe_select(scope, agent_wallet) do
       Mandate.to_envelope(mandate)
     else
       _ -> :skip
     end
+  end
+
+  # The Store is host-started and may be absent (raxol_payments is a library).
+  # A missing Store raises ArgumentError from the underlying :ets.lookup; treat
+  # that as "no mandate" so the request degrades to an unauthenticated call the
+  # worker answers with 402/401, rather than crashing the payment request.
+  defp safe_select(scope, agent_wallet) do
+    Check.select_for_scope(scope, agent_wallet)
+  rescue
+    ArgumentError -> {:error, :store_unavailable}
   end
 
   defp fetch_agent_wallet(opts) do
