@@ -37,7 +37,7 @@ defmodule Raxol.Payments do
       alias Raxol.Payments.Protocols.Xochi
       alias Raxol.Payments.Xochi.Schemas.QuoteRequest
 
-      config = %{base_url: "https://xochi.fi", auth_token: "..."}
+      config = %{base_url: "https://api.xochi.fi", auth: {:mandate, wallet.address()}}
 
       request = %QuoteRequest{
         wallet: wallet.address(),
