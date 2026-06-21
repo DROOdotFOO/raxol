@@ -14,6 +14,9 @@ defmodule Mix.Tasks.Raxol.Record do
       `Raxol.Core.Runtime.Application`.
     * `-o` / `--output` - Output file path (default: derived from module name).
     * `--title` - Recording title (default: module name).
+    * `--width` / `--height` - Force the cast dimensions instead of detecting the
+      terminal size, e.g. `--width 80 --height 24` for a fixed 80x24 cast.
+    * `--idle-time-limit` - Cap idle gaps between events (seconds).
 
   The recording captures all terminal output with timestamps. When the app
   exits (e.g., pressing 'q'), the session is saved as an asciinema v2 `.cast`
@@ -30,7 +33,9 @@ defmodule Mix.Tasks.Raxol.Record do
     module: :string,
     output: :string,
     title: :string,
-    idle_time_limit: :float
+    idle_time_limit: :float,
+    width: :integer,
+    height: :integer
   ]
 
   @aliases [
@@ -86,6 +91,8 @@ defmodule Mix.Tasks.Raxol.Record do
         auto_save: output
       ]
       |> maybe_add_opt(opts, :idle_time_limit)
+      |> maybe_add_opt(opts, :width)
+      |> maybe_add_opt(opts, :height)
 
     {:ok, _recorder} = Recorder.start_link(recorder_opts)
     {:ok, pid} = Raxol.start_link(module, [])
