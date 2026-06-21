@@ -6,8 +6,7 @@
 # and repaints the full frame on each change. Writes demos/raxol-showcase.cast
 # (asciicast v2, 80x24) -- the same filename the axol landing player loads.
 
-alias Raxol.Core.Buffer
-alias Raxol.Core.Renderer
+alias Raxol.Core.Style
 alias Raxol.Headless
 alias Raxol.Recording.Recorder
 
@@ -47,7 +46,9 @@ to_lines = fn screen ->
             style: %{
               fg_color: style.foreground,
               bg_color: style.background,
-              bold: style.bold
+              bold: style.bold,
+              underline: style.underline,
+              italic: style.italic
             }
           }
         end)
@@ -58,7 +59,32 @@ to_lines = fn screen ->
   %{width: screen.width, height: screen.height, lines: lines}
 end
 
-blank = Buffer.create_blank_buffer(width, height)
+# Render one line style-aware: chunk consecutive cells by identical style and
+# emit one SGR run each (with reset), so truecolor + underline + italic survive.
+# (Renderer.render_diff/2 against a blank buffer collapses each row into a single
+# run and keeps only the first cell's style, which strips all color -- the chunk
+# below is what carries the axol palette and the link's underline/italic affordance.)
+render_cells = fn cells ->
+  cells
+  |> Enum.chunk_by(& &1.style)
+  |> Enum.map_join("", fn run ->
+    text = Enum.map_join(run, "", & &1.char)
+
+    case Style.to_ansi(hd(run).style) do
+      "" -> text
+      prefix -> prefix <> text <> Style.reset()
+    end
+  end)
+end
+
+# Absolute cursor move per line (no "\n", which would stair-step in playback).
+render_frame = fn frame ->
+  frame.lines
+  |> Enum.with_index()
+  |> Enum.map_join("", fn {line, y} ->
+    "\e[#{y + 1};1H" <> render_cells.(line.cells)
+  end)
+end
 
 # Full-frame repaint on each changed frame keeps phases from overlapping; only
 # changed frames are recorded, so the cast stays small.
@@ -70,12 +96,7 @@ sample = fn prev ->
       if frame == prev do
         prev
       else
-        ansi =
-          blank
-          |> then(&Renderer.render_diff(&1, frame))
-          |> Renderer.apply_diff()
-
-        Recorder.record_output("\e[2J\e[H" <> ansi)
+        Recorder.record_output("\e[2J\e[H" <> render_frame.(frame))
         frame
       end
 
@@ -84,8 +105,8 @@ sample = fn prev ->
   end
 end
 
-# The scene self-stops at ~26s; sample a touch longer to catch the final frame.
-prev = blank
+# nil sentinel: the first sampled frame (a map) never equals it, so it renders.
+prev = nil
 
 # The scene self-stops at ~13.5s, which tears down the session; halt sampling
 # when the engine is gone rather than crashing on the next read.

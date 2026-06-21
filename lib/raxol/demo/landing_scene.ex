@@ -4,8 +4,9 @@ defmodule Raxol.Demo.LandingScene do
 
   One story on rails, front-loaded so the poster frame is the thesis: a
   supervised agent spends only under a mandate a human signed and settles
-  privately through Xochi, so the trade never reaches the mempool. A crash
-  shows the supervisor restart it with the mandate intact.
+  through Xochi's dark pool, matched off the public mempool but landing as an
+  on-chain tx anyone can open on Basescan. A crash shows the supervisor restart
+  it mid-fill with the mandate intact.
 
   The chrome (wordmark, rule, thesis) is on screen from the first frame; the
   beats reveal underneath in three grouped sections (identity, trade, proof) at
@@ -132,7 +133,7 @@ defmodule Raxol.Demo.LandingScene do
   defp enter(model, :payoff) do
     model
     |> resolve_settle()
-    |> add([blank(), hero("tx never hit the mempool; strategy stays dark")])
+    |> add([accent("matched off the public mempool -- settles on-chain", @sky)])
   end
 
   defp enter(model, :crash),
@@ -209,17 +210,17 @@ defmodule Raxol.Demo.LandingScene do
   # scripted hover it gets a pointer and a highlight, the way it lights up under
   # a real mouse in the live terminal.
   defp explorer(false) do
-    text("  ↗ view on Basescan   tx #{@tx}", fg: @sky, style: [:underline])
+    text("  ↗ basescan.org/tx/#{@tx}", fg: @coral, style: [:underline, :italic])
   end
 
   defp explorer(true) do
     row do
       [
         text("  ▸ ", fg: @coral, style: [:bold]),
-        text(" ↗ view on Basescan   tx #{@tx} ",
+        text(" ↗ basescan.org/tx/#{@tx} ",
           fg: @frost,
           bg: @indigo,
-          style: [:bold, :underline]
+          style: [:bold, :underline, :italic]
         )
       ]
     end
@@ -274,10 +275,7 @@ defmodule Raxol.Demo.LandingScene do
 
   defp seg_row(segments), do: %{kind: :row, segments: segments}
 
-  # The hero beat: a coral marker, set apart with breathing room above.
-  defp hero(t), do: %{text: "  ▸ " <> t, fg: @coral, style: [:bold]}
   defp accent(t, fg), do: %{text: "  " <> t, fg: fg, style: []}
-  defp blank, do: %{text: "", fg: @frost, style: []}
 
   # Swap the live settle-animation row for the resolved one.
   defp resolve_settle(model) do
@@ -286,8 +284,8 @@ defmodule Raxol.Demo.LandingScene do
         {:settle_anim, _} ->
           seg_row([
             {"  " <> String.pad_trailing("settle", 9), @sky, []},
-            {String.pad_trailing("routed", 33), @frost, []},
-            {"private", @coral, [:bold]}
+            {String.pad_trailing("Xochi dark pool", 33), @frost, []},
+            {"matched", @coral, [:bold]}
           ])
 
         other ->
