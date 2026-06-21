@@ -143,11 +143,12 @@ defmodule Raxol.Demo.LandingScene do
       ])
 
   defp enter(model, :done) do
-    %{
-      model
-      | status:
-          "filled #{eth(@quote)} · pnl +0.006 · mandate #{eth(@remaining_after)} left"
-    }
+    model
+    |> add([explorer()])
+    |> Map.put(
+      :status,
+      "filled #{eth(@quote)} · pnl +0.006 · mandate #{eth(@remaining_after)} left"
+    )
   end
 
   # view
@@ -242,16 +243,20 @@ defmodule Raxol.Demo.LandingScene do
   defp accent(t, fg), do: %{text: "  " <> t, fg: fg, style: []}
   defp blank, do: %{text: "", fg: @frost, style: []}
 
-  # Swap the live settle-animation row for the resolved one: the tx ref reads as a
-  # link (underlined sky), made cmd-clickable to the explorer in a real terminal.
+  # An external explorer link: underline + the corner arrow reads as clickable;
+  # OSC 8 cmd-click in a supporting terminal is tracked in #317.
+  defp explorer do
+    %{text: "  ↗ view on Basescan   tx " <> @tx, fg: @sky, style: [:underline]}
+  end
+
+  # Swap the live settle-animation row for the resolved one.
   defp resolve_settle(model) do
     lines =
       Enum.map(model.lines, fn
         {:settle_anim, _} ->
           seg_row([
             {"  " <> String.pad_trailing("settle", 9), @sky, []},
-            {"routed  ", @frost, []},
-            {String.pad_trailing("tx " <> @tx, 25), @sky, [:underline]},
+            {String.pad_trailing("routed", 33), @frost, []},
             {"private", @coral, [:bold]}
           ])
 
