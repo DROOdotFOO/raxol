@@ -61,13 +61,24 @@ to_lines = fn screen ->
   %{width: screen.width, height: screen.height, lines: lines}
 end
 
+# Repaint the whole frame each time it changes. The cockpit's phases (boot ->
+# cockpit) have different layouts, so an incremental diff would leave the prior
+# phase's text on screen; a full clear + repaint keeps frames from overlapping.
+# Only changed frames are recorded, so the cast stays small.
+blank = Buffer.create_blank_buffer(width, height)
+
 sample = fn prev ->
   case Headless.get_buffer(session) do
     {:ok, screen} ->
-      buffer = to_lines.(screen)
-      ansi = buffer |> then(&Renderer.render_diff(prev, &1)) |> Renderer.apply_diff()
-      if ansi != "", do: Recorder.record_output(ansi)
-      buffer
+      frame = to_lines.(screen)
+
+      if frame == prev do
+        prev
+      else
+        ansi = blank |> then(&Renderer.render_diff(&1, frame)) |> Renderer.apply_diff()
+        Recorder.record_output("\e[2J\e[H" <> ansi)
+        frame
+      end
 
     _ ->
       prev
@@ -81,7 +92,7 @@ play = fn prev, ms ->
   end)
 end
 
-prev = Buffer.create_blank_buffer(width, height)
+prev = blank
 
 # boot self-check -> swarm funnel deploy -> ready
 prev = play.(prev, 4500)
