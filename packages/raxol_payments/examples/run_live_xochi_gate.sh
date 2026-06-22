@@ -3,20 +3,30 @@
 #
 # The worker (api.xochi.fi) serves the /api/intent/* routes the raxol client
 # calls, applies trust-tier fees, and calls the Riddler solver internally. Auth
-# is a Member Bearer (the "Xochi worker token" in 1Password): one token covers
-# the whole quote -> execute -> poll lifecycle, which is why the gate uses Member
-# rather than per-call x402 Guest micropayments (each /status poll would pay).
+# is a long-lived Member service token in 1Password (never expires; rotate to
+# revoke): one token covers the whole quote -> execute -> poll lifecycle, which is
+# why the gate uses Member rather than per-call x402 Guest micropayments (each
+# /status poll would pay). The token is per-env:
+#   prod:    op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential (default)
+#   staging: op://Employee/Xochi staging AGENT_SERVICE_TOKENS/credential
+# Staging (api-stg.xochi.fi) has x402 disabled, so Member is the only auth path
+# there; rehearse the dry-run on staging first.
 #
 # This MOVES REAL FUNDS. Default route is a $1 (1 USDC) Base -> Optimism transfer,
 # the corridor Xochi verified fills at $1 on prod. The test file runs two cases,
 # so a full run settles ~2 USDC total (the end-to-end transfer + the crash-resume
 # transfer). Settlement defaults to public.
 #
-# Two steps, safest first:
-#   # 1. Dry run: quote-only, NO funds move. Confirms auth + the $1 fill.
-#   XOCHI_LIVE_KEY=0x<funded base key> DRY_RUN=1 ./examples/run_live_xochi_gate.sh
+# Rehearse on staging first (Member-only there; DRY_RUN needs no funds):
+#   XOCHI_LIVE_URL=https://api-stg.xochi.fi \
+#   OP_TOKEN_REF=op://Employee/Xochi staging AGENT_SERVICE_TOKENS/credential \
+#     XOCHI_LIVE_KEY=0xdummy DRY_RUN=1 ./examples/run_live_xochi_gate.sh
 #
-#   # 2. Real run: submits mainnet intents and settles.
+# Then prod, safest first:
+#   # 1. Dry run: quote-only, NO funds move. Confirms auth + the $1 fill.
+#   XOCHI_LIVE_KEY=0xdummy DRY_RUN=1 ./examples/run_live_xochi_gate.sh
+#
+#   # 2. Real run: submits mainnet intents and settles (needs a funded key).
 #   XOCHI_LIVE_KEY=0x<funded base key> ./examples/run_live_xochi_gate.sh
 #
 # Overrides: XOCHI_LIVE_URL, XOCHI_LIVE_TOKEN, XOCHI_LIVE_AMOUNT (human USDC,
@@ -26,7 +36,7 @@
 set -euo pipefail
 
 XOCHI_LIVE_URL="${XOCHI_LIVE_URL:-https://api.xochi.fi}"
-OP_TOKEN_REF="${OP_TOKEN_REF:-op://Employee/Xochi worker token/credential}"
+OP_TOKEN_REF="${OP_TOKEN_REF:-op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential}"
 XOCHI_LIVE_AMOUNT="${XOCHI_LIVE_AMOUNT:-1.00}"
 XOCHI_LIVE_FROM_CHAIN="${XOCHI_LIVE_FROM_CHAIN:-8453}"
 XOCHI_LIVE_TO_CHAIN="${XOCHI_LIVE_TO_CHAIN:-10}"
@@ -52,8 +62,11 @@ atomic="$(awk -v a="$XOCHI_LIVE_AMOUNT" 'BEGIN { printf "%d", a * 1000000 }')"
 
 printf 'preflight: quoting %s USDC %s -> %s (read-only, no funds move)...\n' \
   "$XOCHI_LIVE_AMOUNT" "$XOCHI_LIVE_FROM_CHAIN" "$XOCHI_LIVE_TO_CHAIN" >&2
-quote_body="$(printf '{"wallet":"0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045","from_chain_id":%s,"to_chain_id":%s,"from_token":"%s","to_token":"%s","from_amount":"%s","settlement_preference":"public","slippage_bps":50}' \
-  "$XOCHI_LIVE_FROM_CHAIN" "$XOCHI_LIVE_TO_CHAIN" "$XOCHI_LIVE_FROM_TOKEN" "$XOCHI_LIVE_TO_TOKEN" "$atomic")"
+# Mirror the fields Raxol.Payments.Xochi.Schemas.QuoteRequest.to_json sends;
+# `deadline` is required by the worker (a future unix ts, max 1h ahead).
+deadline="$(( $(date +%s) + 300 ))"
+quote_body="$(printf '{"wallet":"0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045","from_chain_id":%s,"to_chain_id":%s,"from_token":"%s","to_token":"%s","from_amount":"%s","settlement_preference":"public","slippage_bps":50,"deadline":%s,"gasless":false}' \
+  "$XOCHI_LIVE_FROM_CHAIN" "$XOCHI_LIVE_TO_CHAIN" "$XOCHI_LIVE_FROM_TOKEN" "$XOCHI_LIVE_TO_TOKEN" "$atomic" "$deadline")"
 probe="$(curl -sS -m 20 -w '\n%{http_code}' \
   -X POST "$XOCHI_LIVE_URL/api/intent/quote" \
   -H "authorization: Bearer $XOCHI_LIVE_TOKEN" \
