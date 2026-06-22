@@ -12,10 +12,13 @@
 # Staging (api-stg.xochi.fi) has x402 disabled, so Member is the only auth path
 # there; rehearse the dry-run on staging first.
 #
-# This MOVES REAL FUNDS. Default route is a $1 (1 USDC) Base -> Optimism transfer,
-# the corridor Xochi verified fills at $1 on prod. The test file runs two cases,
-# so a full run settles ~2 USDC total (the end-to-end transfer + the crash-resume
-# transfer). Settlement defaults to public.
+# This MOVES REAL FUNDS. Default route is a $1 (1 USDC) Base -> Arbitrum transfer.
+# The solver fills on the destination chain, and its USDC fill inventory currently
+# lives on Arbitrum (verified on-chain), so Arbitrum is the corridor a real run can
+# actually settle. The test file runs two cases, so a full run settles ~2 USDC
+# total (the end-to-end transfer + the crash-resume transfer). A passing quote
+# (can_solve) is a pricing check; only inventory on the destination guarantees a
+# real fill. Settlement defaults to public.
 #
 # Rehearse on staging first (Member-only there; DRY_RUN needs no funds):
 #   XOCHI_LIVE_URL=https://api-stg.xochi.fi \
@@ -39,9 +42,9 @@ XOCHI_LIVE_URL="${XOCHI_LIVE_URL:-https://api.xochi.fi}"
 OP_TOKEN_REF="${OP_TOKEN_REF:-op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential}"
 XOCHI_LIVE_AMOUNT="${XOCHI_LIVE_AMOUNT:-1.00}"
 XOCHI_LIVE_FROM_CHAIN="${XOCHI_LIVE_FROM_CHAIN:-8453}"
-XOCHI_LIVE_TO_CHAIN="${XOCHI_LIVE_TO_CHAIN:-10}"
+XOCHI_LIVE_TO_CHAIN="${XOCHI_LIVE_TO_CHAIN:-42161}"
 XOCHI_LIVE_FROM_TOKEN="${XOCHI_LIVE_FROM_TOKEN:-0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913}"
-XOCHI_LIVE_TO_TOKEN="${XOCHI_LIVE_TO_TOKEN:-0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85}"
+XOCHI_LIVE_TO_TOKEN="${XOCHI_LIVE_TO_TOKEN:-0xaf88d065e77c8cc2239327c5edb3a432268e5831}"
 
 if [[ -z "${XOCHI_LIVE_KEY:-}" ]]; then
   printf 'error: set XOCHI_LIVE_KEY to a funded Base mainnet (8453) private key\n' >&2
