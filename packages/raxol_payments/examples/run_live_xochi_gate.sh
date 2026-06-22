@@ -2,11 +2,22 @@
 # Run the live Xochi crosschain payment gate against the Xochi worker.
 #
 # The worker (api.xochi.fi) serves the /api/intent/* routes the raxol client
-# calls, applies trust-tier fees, and calls the Riddler solver internally. Auth
-# is a long-lived Member service token in 1Password (never expires; rotate to
-# revoke): one token covers the whole quote -> execute -> poll lifecycle, which is
-# why the gate uses Member rather than per-call x402 Guest micropayments (each
-# /status poll would pay). The token is per-env:
+# calls, applies trust-tier fees, and calls the Riddler solver internally.
+#
+# Auth (XOCHI_LIVE_AUTH, default "mandate"):
+#   mandate -- the agent-native path. The funded key signs an EIP-712 delegation
+#     envelope and self-delegates, which Raxol.Payments.Req.Mandate presents as
+#     X-Xochi-Delegation on quote/execute, inheriting the key's Member tier. The
+#     worker scopes mandates to quote/execute only, so /status polling falls back
+#     to the Member service token -- a mandate run needs BOTH the funded key and
+#     the service token.
+#   member -- drive the whole quote -> execute -> poll lifecycle off the Member
+#     service token. One token covers everything, with no per-call x402 Guest
+#     micropayment (each /status poll would otherwise pay). Required where x402 is
+#     disabled and no mandate is provisioned.
+#
+# The Member service token is a long-lived credential in 1Password (never
+# expires; rotate to revoke), per-env:
 #   prod:    op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential (default)
 #   staging: op://Employee/Xochi staging AGENT_SERVICE_TOKENS/credential
 # Staging (api-stg.xochi.fi) has x402 disabled, so Member is the only auth path
@@ -32,13 +43,15 @@
 #   # 2. Real run: submits mainnet intents and settles (needs a funded key).
 #   XOCHI_LIVE_KEY=0x<funded base key> ./examples/run_live_xochi_gate.sh
 #
-# Overrides: XOCHI_LIVE_URL, XOCHI_LIVE_TOKEN, XOCHI_LIVE_AMOUNT (human USDC,
-# default 1.00), XOCHI_LIVE_FROM_CHAIN / XOCHI_LIVE_TO_CHAIN,
-# XOCHI_LIVE_FROM_TOKEN / XOCHI_LIVE_TO_TOKEN, plus XOCHI_LIVE_SETTLEMENT=stealth
-# with XOCHI_LIVE_RECIPIENT_META for the private path.
+# Overrides: XOCHI_LIVE_AUTH (mandate|member), XOCHI_LIVE_AGENT_WALLET,
+# XOCHI_LIVE_URL, XOCHI_LIVE_TOKEN, XOCHI_LIVE_AMOUNT (human USDC, default 1.00),
+# XOCHI_LIVE_FROM_CHAIN / XOCHI_LIVE_TO_CHAIN, XOCHI_LIVE_FROM_TOKEN /
+# XOCHI_LIVE_TO_TOKEN, plus XOCHI_LIVE_SETTLEMENT=stealth with
+# XOCHI_LIVE_RECIPIENT_META for the private path.
 set -euo pipefail
 
 XOCHI_LIVE_URL="${XOCHI_LIVE_URL:-https://api.xochi.fi}"
+XOCHI_LIVE_AUTH="${XOCHI_LIVE_AUTH:-mandate}"
 OP_TOKEN_REF="${OP_TOKEN_REF:-op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential}"
 XOCHI_LIVE_AMOUNT="${XOCHI_LIVE_AMOUNT:-1.00}"
 XOCHI_LIVE_FROM_CHAIN="${XOCHI_LIVE_FROM_CHAIN:-8453}"
@@ -63,8 +76,13 @@ fi
 # USDC has 6 decimals; convert the human amount to atomic units for the probe.
 atomic="$(awk -v a="$XOCHI_LIVE_AMOUNT" 'BEGIN { printf "%d", a * 1000000 }')"
 
-printf 'preflight: quoting %s USDC %s -> %s (read-only, no funds move)...\n' \
-  "$XOCHI_LIVE_AMOUNT" "$XOCHI_LIVE_FROM_CHAIN" "$XOCHI_LIVE_TO_CHAIN" >&2
+# The preflight quote uses the Member token to confirm connectivity + can_solve
+# (and that the token polling will need is valid). In mandate mode the gate's own
+# quote/execute then authenticate via the signed X-Xochi-Delegation envelope,
+# which the Elixir test builds and exercises; signing EIP-712 in bash is not
+# practical here.
+printf 'preflight (auth=%s): quoting %s USDC %s -> %s (read-only, no funds move)...\n' \
+  "$XOCHI_LIVE_AUTH" "$XOCHI_LIVE_AMOUNT" "$XOCHI_LIVE_FROM_CHAIN" "$XOCHI_LIVE_TO_CHAIN" >&2
 # Mirror the fields Raxol.Payments.Xochi.Schemas.QuoteRequest.to_json sends;
 # `deadline` is required by the worker (a future unix ts, max 1h ahead).
 deadline="$(( $(date +%s) + 300 ))"
@@ -80,8 +98,8 @@ body="${probe%$'\n'*}"
 
 if [[ "$code" != "200" ]]; then
   printf 'preflight FAILED: quote returned http %s: %s\n' "$code" "$body" >&2
-  printf 'a 401/402 means the Member Bearer token was not accepted. Fix auth before\n' >&2
-  printf 'the real run (or wait on Xochi mandate verification). Aborting; no funds moved.\n' >&2
+  printf 'a 401/402 means the Member Bearer token was not accepted. Fix auth\n' >&2
+  printf '(check OP_TOKEN_REF matches XOCHI_LIVE_URL env). Aborting; no funds moved.\n' >&2
   exit 1
 fi
 
@@ -103,6 +121,7 @@ printf 'running the gate: this submits REAL mainnet intents and settles ~%s USDC
   "$XOCHI_LIVE_AMOUNT" >&2
 
 export XOCHI_LIVE_URL XOCHI_LIVE_TOKEN XOCHI_LIVE_KEY XOCHI_LIVE_AMOUNT \
-  XOCHI_LIVE_FROM_CHAIN XOCHI_LIVE_TO_CHAIN XOCHI_LIVE_FROM_TOKEN XOCHI_LIVE_TO_TOKEN
+  XOCHI_LIVE_FROM_CHAIN XOCHI_LIVE_TO_CHAIN XOCHI_LIVE_FROM_TOKEN XOCHI_LIVE_TO_TOKEN \
+  XOCHI_LIVE_AUTH
 exec env MIX_ENV=test mix test --include live_xochi \
   test/raxol/payments/xochi/live_xochi_test.exs

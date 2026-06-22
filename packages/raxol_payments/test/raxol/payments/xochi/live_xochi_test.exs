@@ -7,7 +7,19 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   Moves real funds. The endpoint is the Xochi worker (`api.xochi.fi`, or
   `api-stg.xochi.fi` for staging), which serves the `/api/intent/*` routes this
   client calls, applies trust-tier fees, and calls the Riddler solver internally.
-  The token is the Xochi worker bearer token.
+
+  ## Auth (`XOCHI_LIVE_AUTH`)
+
+  Defaults to `mandate`, the agent-native path: the funded gate key signs an
+  EIP-712 delegation envelope and self-delegates (it is both the Member whose
+  Trust Tier the worker applies and the agent that presents the envelope), which
+  `Raxol.Payments.Req.Mandate` attaches as `X-Xochi-Delegation` on quote and
+  execute. The worker scopes mandates to quote/execute/stealth_claim only, so
+  status polling falls back to the Member service token (`XOCHI_LIVE_TOKEN`) --
+  a mandate run therefore needs both the funded key and the service token. Set
+  `XOCHI_LIVE_AUTH=member` to drive the whole lifecycle off the Member service
+  token instead (the legacy path; the only option where x402 is disabled and no
+  mandate is provisioned).
 
   Defaults are mainnet Base -> Arbitrum USDC at 10 USDC. Settlement defaults to
   `public`; set `XOCHI_LIVE_SETTLEMENT=stealth` with `XOCHI_LIVE_RECIPIENT_META`
@@ -18,15 +30,15 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   env is present, so opting in without it yields no tests.
 
       XOCHI_LIVE_URL=https://api.xochi.fi \\
-      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi worker token/credential')" \\
+      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential')" \\
       XOCHI_LIVE_KEY=0x<funded Base mainnet private key> \\
         mix test --include live_xochi test/raxol/payments/xochi/live_xochi_test.exs
 
   Or use the runner: examples/run_live_xochi_gate.sh
 
-  Overrides: XOCHI_LIVE_FROM_CHAIN, XOCHI_LIVE_TO_CHAIN, XOCHI_LIVE_FROM_TOKEN,
-  XOCHI_LIVE_TO_TOKEN, XOCHI_LIVE_AMOUNT, XOCHI_LIVE_SETTLEMENT,
-  XOCHI_LIVE_RECIPIENT_META.
+  Overrides: XOCHI_LIVE_AUTH, XOCHI_LIVE_AGENT_WALLET, XOCHI_LIVE_FROM_CHAIN,
+  XOCHI_LIVE_TO_CHAIN, XOCHI_LIVE_FROM_TOKEN, XOCHI_LIVE_TO_TOKEN,
+  XOCHI_LIVE_AMOUNT, XOCHI_LIVE_SETTLEMENT, XOCHI_LIVE_RECIPIENT_META.
   """
 
   use ExUnit.Case, async: false
@@ -37,7 +49,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
   if System.get_env("XOCHI_LIVE_URL") && System.get_env("XOCHI_LIVE_KEY") do
     alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
-    alias Raxol.Payments.{Ledger, SpendingPolicy}
+    alias Raxol.Payments.{Ledger, Mandate, SpendingPolicy}
+    alias Raxol.Payments.Mandate.Store, as: MandateStore
 
     defmodule LiveWallet do
       @moduledoc false
@@ -47,6 +60,7 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
     setup do
       url = System.fetch_env!("XOCHI_LIVE_URL")
       host = url |> URI.parse() |> Map.get(:host)
+      member_token = System.get_env("XOCHI_LIVE_TOKEN", "")
       ledger = start_supervised!({Ledger, [name: nil]})
 
       policy = %SpendingPolicy{
@@ -57,18 +71,26 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         approved_domains: [host]
       }
 
+      {exec_config, poll_config} =
+        auth_configs(System.get_env("XOCHI_LIVE_AUTH", "mandate"), url, member_token)
+
       context = %{
         wallet: LiveWallet,
-        xochi_config: %{base_url: url, auth_token: System.get_env("XOCHI_LIVE_TOKEN", "")},
+        xochi_config: exec_config,
         ledger: ledger,
         policy: policy,
         agent_id: :live_gate
       }
 
-      {:ok, context: context}
+      # Status/history are not mandate scopes, so polling authenticates with the
+      # Member service token even when quote/execute go through a mandate.
+      {:ok, context: context, poll_context: %{context | xochi_config: poll_config}}
     end
 
-    test "agent completes a crosschain payment end-to-end", %{context: context} do
+    test "agent completes a crosschain payment end-to-end", %{
+      context: context,
+      poll_context: poll_context
+    } do
       params =
         %{
           amount: System.get_env("XOCHI_LIVE_AMOUNT", "10.00"),
@@ -86,7 +108,7 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       assert {:ok, intent} = ExecuteXochiIntent.call(params, context)
       assert is_binary(intent.intent_id)
 
-      assert {:ok, status} = PollXochiStatus.call(%{intent_id: intent.intent_id}, context)
+      assert {:ok, status} = PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context)
       assert status.terminal == true
 
       assert status.status == "completed",
@@ -96,7 +118,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
     end
 
     test "a resumed run reuses the in-flight intent without a second signature", %{
-      context: context
+      context: context,
+      poll_context: poll_context
     } do
       # The crash-recovery path: an idempotency checkpoint lets a re-run of the
       # same payment resume the dispatched intent instead of quoting and signing
@@ -131,7 +154,7 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       assert Decimal.equal?(lifetime(context), charged),
              "resume charged the ledger a second time"
 
-      assert {:ok, status} = PollXochiStatus.call(%{intent_id: intent.intent_id}, context)
+      assert {:ok, status} = PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context)
       assert status.terminal == true
 
       assert status.status == "completed",
@@ -142,6 +165,50 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
     defp lifetime(context) do
       Ledger.get_totals(context.ledger, context.agent_id, context.policy).lifetime
+    end
+
+    # Build {execute, poll} client configs for the chosen auth mode. Mandate is the
+    # agent-native default: the funded key presents an EIP-712 delegation envelope
+    # it signed itself on quote/execute, inheriting its own Member tier. Status
+    # polling is out of mandate scope, so it keeps the Member service token.
+    defp auth_configs("mandate", url, member_token) do
+      agent_wallet =
+        "XOCHI_LIVE_AGENT_WALLET"
+        |> System.get_env(LiveWallet.address())
+        |> String.downcase()
+
+      install_mandate(agent_wallet)
+
+      {%{base_url: url, auth: {:mandate, agent_wallet}},
+       %{base_url: url, auth_token: member_token}}
+    end
+
+    defp auth_configs(_member, url, member_token) do
+      config = %{base_url: url, auth_token: member_token}
+      {config, config}
+    end
+
+    # Sign and store a mandate the Req.Mandate plugin resolves by agent_wallet. The
+    # funded key self-delegates: it is the human_wallet (the EIP-712 signer whose
+    # tier the worker applies, and which must equal the quote wallet) and the
+    # presenting agent. max_amount_usd: 0 caps by call count only -- the worker
+    # prices a notional cap fee-inclusive, so a fixed cap risks tripping the gate.
+    defp install_mandate(agent_wallet) do
+      start_supervised!(MandateStore)
+
+      {:ok, mandate} =
+        Mandate.build(%{
+          human_wallet: LiveWallet.address(),
+          agent_wallet: agent_wallet,
+          scopes: ["quote", "execute"],
+          max_amount_usd: 0,
+          max_calls: 50,
+          expires_at: System.system_time(:second) + 3600
+        })
+
+      {:ok, signed} = Mandate.sign(mandate, LiveWallet)
+      :ok = Mandate.verify(signed)
+      :ok = MandateStore.put(signed)
     end
 
     defp maybe_put_recipient(params) do
