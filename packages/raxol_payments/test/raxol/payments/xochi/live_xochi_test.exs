@@ -82,6 +82,7 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         }
         |> maybe_put_recipient()
 
+      started = System.monotonic_time(:millisecond)
       assert {:ok, intent} = ExecuteXochiIntent.call(params, context)
       assert is_binary(intent.intent_id)
 
@@ -90,6 +91,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
       assert status.status == "completed",
              "live intent #{intent.intent_id} ended in #{status.status}, expected completed"
+
+      report_settlement("end-to-end", intent, status, params, started)
     end
 
     test "a resumed run reuses the in-flight intent without a second signature", %{
@@ -114,6 +117,7 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         }
         |> maybe_put_recipient()
 
+      started = System.monotonic_time(:millisecond)
       assert {:ok, intent} = ExecuteXochiIntent.call(params, context)
       assert is_binary(intent.intent_id)
       charged = lifetime(context)
@@ -132,6 +136,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
       assert status.status == "completed",
              "live intent #{intent.intent_id} ended in #{status.status}, expected completed"
+
+      report_settlement("crash-resume", intent, status, params, started)
     end
 
     defp lifetime(context) do
@@ -151,5 +157,34 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         val -> String.to_integer(val)
       end
     end
+
+    # Print the verifiable settlement artifacts so an operator running the gate can
+    # confirm the real on-chain transfer independently and eyeball end-to-end latency.
+    defp report_settlement(label, intent, status, params, started_ms) do
+      elapsed = System.monotonic_time(:millisecond) - started_ms
+
+      IO.puts("""
+
+      [live_xochi:#{label}] settled in #{elapsed}ms
+        intent_id     #{intent.intent_id}
+        status        #{status.status}
+        source tx     #{tx_line(status.tx_hash, params.from_chain_id)}
+        receiving tx  #{tx_line(status.receiving_tx_hash, params.to_chain_id)}\
+      """)
+    end
+
+    defp tx_line(nil, _chain_id), do: "(none reported)"
+
+    defp tx_line(hash, chain_id) do
+      case explorer_base(chain_id) do
+        nil -> hash
+        base -> base <> hash
+      end
+    end
+
+    defp explorer_base(8453), do: "https://basescan.org/tx/"
+    defp explorer_base(42_161), do: "https://arbiscan.io/tx/"
+    defp explorer_base(10), do: "https://optimistic.etherscan.io/tx/"
+    defp explorer_base(_), do: nil
   end
 end

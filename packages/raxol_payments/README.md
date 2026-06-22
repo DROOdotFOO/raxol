@@ -42,6 +42,14 @@ plugin = AgentPlugin.auto_pay(
 )
 ```
 
+## Examples
+
+A guided path from an offline rehearsal to a real on-chain settlement lives in
+[`examples/`](examples/README.md): `preflight.exs` (local echo server, no funds)
+-> `crosschain_stealth_payment.exs` (in-process Xochi sim, no funds) ->
+`run_live_xochi_gate.sh` (live cross-chain settlement, real funds). Start with
+the README there.
+
 ## Architecture
 
 - `Raxol.Payments.Protocol`: behaviour for payment protocol detection + signing
