@@ -14,8 +14,11 @@ defmodule Raxol.Core.ErrorRecoveryTest do
     {:ok, pid} = ErrorRecovery.start_link(name: ErrorRecovery)
 
     on_exit(fn ->
-      if Process.alive?(pid) do
+      # pid can die between the alive? check and the stop, so guard the exit.
+      try do
         GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
       end
     end)
 
