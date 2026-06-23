@@ -90,7 +90,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
         intent_id: quote_resp.intent_id,
         quote_id: quote_resp.quote_id,
         signature: signature,
-        nonce: :os.system_time(:second)
+        nonce: signed_nonce(quote_resp)
       }
 
       Client.execute(config, request)
@@ -167,6 +167,16 @@ defmodule Raxol.Payments.Protocols.Xochi do
         {:error, {:sign_failed, reason}}
     end
   end
+
+  # The execute nonce must equal the nonce in the typed data the wallet signed,
+  # so the solver recovers the same digest. The Xochi quote bakes a fixed nonce
+  # into the eip712 message (0 in the canonical XochiIntent type); echo that
+  # rather than minting a fresh value.
+  defp signed_nonce(%QuoteResponse{eip712_data: %{"message" => %{"nonce" => nonce}}})
+       when is_integer(nonce),
+       do: nonce
+
+  defp signed_nonce(_quote_resp), do: 0
 
   defp eip712_domain(eip712) do
     d = eip712["domain"] || %{}
