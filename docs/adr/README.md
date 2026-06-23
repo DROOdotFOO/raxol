@@ -116,7 +116,7 @@ They preserve context for why decisions were made, help new contributors underst
 - [0019: Workflow concurrency (joins + channels)](0019-workflow-concurrency.md)
 
 ### Agent stack
-- [0020: Phase 26 — Agent Sandbox, Thread log, declarative Policies](0020-agent-sandbox-thread-policies.md)
+- [0020: Phase 26 - Agent Sandbox, Thread log, declarative Policies](0020-agent-sandbox-thread-policies.md)
 - [0021: Self-improving agents: runtime skills + background curation](0021-self-improving-agents-skills-curation.md)
 - [0022: Memory provider stack, full-text recall, dialectic user modeling](0022-memory-providers-fulltext-dialectic.md)
 - [0023: Unified messaging gateway (raxol_gateway)](0023-unified-messaging-gateway.md)

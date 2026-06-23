@@ -46,7 +46,7 @@ Every surface subscribes to the same orchestrator snapshot via Phoenix.PubSub, s
 
 - **Terminal**: TEA dashboard listing active runs and their state.
 - **LiveView**: `/symphony` mounts the same dashboard in the browser.
-- **MCP**: 5 tools (`list_runs`, `get_run`, `pause_run`, etc) plus `symphony://runs` as an MCP resource.
+- **MCP**: 7 tools (`list_runs`, `get_run`, `resume_run`, etc) plus `symphony://runs` as an MCP resource.
 - **Telegram**: per-issue session, inline keyboards, approval prompts.
 - **Watch**: debounced push to APNS/FCM, tap-to-approve actions.
 - **JSON API**: `/api/v1/runs`, `/api/v1/runs/:id`. Read-only by default.

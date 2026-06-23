@@ -168,7 +168,7 @@ Logger.info("IOTerminal available: #{Code.ensure_loaded?(Raxol.Terminal.IOTermin
 
 ### IOTerminal
 
-Located in `lib/raxol/terminal/io_terminal.ex`. Uses `stty` and ANSI escape sequences via `IO.ANSI` for raw terminal mode, and cross-platform terminal size detection via `:io.columns/0` and `:io.rows/0`. Supports 256 colors and unicode.
+Located in `packages/raxol_terminal/lib/raxol/terminal/io_terminal.ex`. Uses `stty` and ANSI escape sequences via `IO.ANSI` for raw terminal mode, and cross-platform terminal size detection via `:io.columns/0` and `:io.rows/0`. Supports 256 colors and unicode.
 
 API:
 
@@ -187,7 +187,7 @@ IOTerminal.set_title(title)
 
 ### Backend Selection
 
-The Driver (`lib/raxol/terminal/driver.ex`) handles this automatically:
+The Driver (`packages/raxol_terminal/lib/raxol/terminal/driver.ex`) handles this automatically:
 
 ```elixir
 @termbox2_available Code.ensure_loaded?(:termbox2_nif)
@@ -229,7 +229,7 @@ Potential optimizations, none currently needed:
 - [Windows Terminal Documentation](https://docs.microsoft.com/en-us/windows/terminal/)
 - [Console Virtual Terminal Sequences](https://docs.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences)
 - [Erlang/OTP 28 Raw Mode](https://www.erlang.org/doc/apps/stdlib/shell.html)
-- [Raxol IOTerminal Tests](../../test/raxol/terminal/io_terminal_test.exs)
+- [Raxol IOTerminal Tests](../../packages/raxol_terminal/test/raxol/terminal/io_terminal_test.exs)
 
 ## Issues
 

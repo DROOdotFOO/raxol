@@ -30,10 +30,10 @@ Testing strategies: unit and integration tests, event filtering tests, property-
 
 ### Core Components
 
-- **[Plugin Manager](../../lib/raxol/core/runtime/plugins/plugin_manager.ex)** - Lifecycle and dependency management
-- **[Plugin Behaviour](../../lib/raxol/core/runtime/plugins/plugin.ex)** - Interface all plugins must implement
-- **[Plugin Reloader](../../lib/raxol/core/runtime/plugins/plugin_reloader.ex)** - Live plugin updates
-- **[Plugin Registry](../../lib/raxol/core/runtime/plugins/plugin_registry.ex)** - Plugin registration and lookup
+- **[Plugin Manager](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_manager.ex)** - Lifecycle and dependency management
+- **[Plugin Behaviour](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin.ex)** - Interface all plugins must implement
+- **[Plugin Reloader](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_reloader.ex)** - Live plugin updates
+- **[Plugin Registry](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_registry.ex)** - Plugin registration and lookup
 
 ## Create a Plugin
 

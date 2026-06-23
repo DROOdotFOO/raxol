@@ -1,4 +1,4 @@
-# ADR-0020: Phase 26 — Agent Sandbox, Thread log, declarative Policies
+# ADR-0020: Phase 26: Agent Sandbox, Thread log, declarative Policies
 
 ## Status
 
@@ -12,15 +12,15 @@ Three structural gaps emerge as the agent stack picks up real consumers:
 
 ### Gap 1: Isolation is one-dimensional
 
-`PermissionHook`'s five modes are linear: each mode is a strict superset of the one below. A consumer that wants "filesystem reads anywhere but network calls only to api.openai.com and api.anthropic.com" cannot express that. The closest fit is `:full_access` (which permits network calls everywhere) plus a per-call check inside the agent's `update/2` body — which puts policy in imperative code rather than declarative configuration. Authors of multi-agent systems (a coordinator + several worker agents) cannot give each worker a different sandbox shape without writing custom CommandHooks per worker.
+`PermissionHook`'s five modes are linear: each mode is a strict superset of the one below. A consumer that wants "filesystem reads anywhere but network calls only to api.openai.com and api.anthropic.com" cannot express that. The closest fit is `:full_access` (which permits network calls everywhere) plus a per-call check inside the agent's `update/2` body, which puts policy in imperative code rather than declarative configuration. Authors of multi-agent systems (a coordinator + several worker agents) cannot give each worker a different sandbox shape without writing custom CommandHooks per worker.
 
-The structural issue is that `PermissionHook` is a single behaviour with a single mode field. Sandbox is conceptually orthogonal — filesystem, network, shell, inter-agent messaging are independent dimensions — and the current model collapses them into one ladder. Mode `:workspace_write` permits workspace-relative file writes *and* inter-agent messaging *and* async tasks; an author who wants the first but not the second cannot get there.
+The structural issue is that `PermissionHook` is a single behaviour with a single mode field. Sandbox is conceptually orthogonal (filesystem, network, shell, inter-agent messaging are independent dimensions) and the current model collapses them into one ladder. Mode `:workspace_write` permits workspace-relative file writes *and* inter-agent messaging *and* async tasks; an author who wants the first but not the second cannot get there.
 
 ### Gap 2: No durable, cross-session audit trail
 
 The `ContextCompactor` (`packages/raxol_agent/lib/raxol/agent/context_compactor.ex`) handles in-memory session history compaction. `Agent.Process.maybe_compact_history/2` (lines 340, 372, 411-430) summarizes older messages into a continuation system message when the session goes over `compaction_config.max_tokens`. The agent's working memory holds the *summary*; the original messages are gone from process state.
 
-There is no separate, durable, append-only record of what the agent actually did. After compaction, the question "what tool calls did this agent make in the last 24 hours?" can only be answered by walking telemetry events. After process termination, even that is gone (telemetry handlers are per-session). After server restart, the message history is reconstructed from the ContextStore's ETS snapshot — which is itself ephemeral (`packages/raxol_agent/lib/raxol/agent/context_store.ex`).
+There is no separate, durable, append-only record of what the agent actually did. After compaction, the question "what tool calls did this agent make in the last 24 hours?" can only be answered by walking telemetry events. After process termination, even that is gone (telemetry handlers are per-session). After server restart, the message history is reconstructed from the ContextStore's ETS snapshot, which is itself ephemeral (`packages/raxol_agent/lib/raxol/agent/context_store.ex`).
 
 The same gap shows up in agent-to-MCP introspection: ADR-0012 made MCP a rendering target derived from the component tree, but agent activity (tool calls, directive emissions, state transitions) is not exposed as an MCP resource. An operator using Claude as an MCP client cannot ask "show me MyAgent's last 100 tool calls"; that data structurally doesn't exist as a durable record.
 
@@ -35,7 +35,7 @@ Every Action that needs retry, every tool that needs caching, every external API
 
 ### What ADR-0019 said about Phase 26
 
-ADR-0019 §17, §142 cited Phase 26 sandboxed agents explicitly as the consumer that wants parallel sub-tasks inside one workflow:
+ADR-0019 cited Phase 26 sandboxed agents explicitly as the consumer that wants parallel sub-tasks inside one workflow:
 
 > Phase 26 sandboxed agents can dispatch parallel sub-tasks (one shell command per branch, one file edit per branch) inside one workflow with uniform sandbox + thread-log + policy semantics.
 
@@ -96,7 +96,7 @@ The `authorize/4` callback is the canonical check: filesystem sandbox inspects p
 
 ### 2. `Raxol.Agent.ThreadLog` behaviour
 
-A ThreadLog is an append-only, durable, cross-session record of agent activity. Mirrors the `Raxol.Workflow.Checkpoint.Saver` shape — a behaviour with multiple adapters — but the unit of storage is a `ThreadEvent`, not a checkpoint.
+A ThreadLog is an append-only, durable, cross-session record of agent activity. Mirrors the `Raxol.Workflow.Checkpoint.Saver` shape (a behaviour with multiple adapters) but the unit of storage is a `ThreadEvent`, not a checkpoint.
 
 ```elixir
 @type thread_id :: binary()
@@ -158,7 +158,7 @@ defmodule MyAgent.FetchData do
 end
 ```
 
-The policies apply outermost-first at invocation: cache check → rate-limit check → timeout wrap → retry wrap → `Action.run/2`. The reverse order of declaration is intentional: the author lists "what I want true at the top" and the runtime peels them off in order.
+The policies apply outermost-first at invocation: cache check -> rate-limit check -> timeout wrap -> retry wrap -> `Action.run/2`. The reverse order of declaration is intentional: the author lists "what I want true at the top" and the runtime peels them off in order.
 
 **Four policy structs**:
 
@@ -219,9 +219,9 @@ The pipeline is opt-in: agents that don't declare a `sandbox/0`, `thread_log/0`,
 
 Three new event families:
 
-- `[:raxol, :agent, :sandbox, :denied]` — fires when a Sandbox returns `{:deny, reason}`. Metadata: `agent_id`, `dimension` (`:filesystem | :network | :shell | :send_agent | :resource`), `reason`, `causation_id`.
-- `[:raxol, :agent, :thread_log, :appended]` — fires after every ThreadLog write. Metadata: `agent_id`, `kind`, `sequence`. High-volume; consumers should sample.
-- `[:raxol, :agent, :policy, :*]` — `:retry_attempt`, `:retry_exhausted`, `:rate_limited`, `:cache_hit`, `:cache_miss`, `:timeout`. Metadata: `agent_id`, `action_name`, `policy_kind`, plus policy-specific fields.
+- `[:raxol, :agent, :sandbox, :denied]`: fires when a Sandbox returns `{:deny, reason}`. Metadata: `agent_id`, `dimension` (`:filesystem | :network | :shell | :send_agent | :resource`), `reason`, `causation_id`.
+- `[:raxol, :agent, :thread_log, :appended]`: fires after every ThreadLog write. Metadata: `agent_id`, `kind`, `sequence`. High-volume; consumers should sample.
+- `[:raxol, :agent, :policy, :*]`: `:retry_attempt`, `:retry_exhausted`, `:rate_limited`, `:cache_hit`, `:cache_miss`, `:timeout`. Metadata: `agent_id`, `action_name`, `policy_kind`, plus policy-specific fields.
 
 All three event families flow through Phase 24's CloudEvents envelope with `causation_id` chaining. The existing `[:raxol, :agent, :*]` event family is unchanged.
 
@@ -251,7 +251,7 @@ All three event families flow through Phase 24's CloudEvents envelope with `caus
 - **Policy composition DSL.** Policies are a list of structs in declaration order. A future "policies form a tree with conditional application" syntax is not in scope.
 - **MCP tool derivation from Actions.** ADR-0012 made MCP a rendering target from the component tree. Extending it to agent Actions (so every Action becomes a callable MCP tool automatically) is its own ADR; this ADR ships the durable backing (`agent://<agent_id>/thread`) but not the per-Action tool derivation.
 - **Audit log retention enforcement.** ThreadLog adapters don't auto-truncate. A future retention policy struct (`Policy.AuditRetention`) could land but isn't in scope.
-- **Sandbox enforcement on directives emitted from non-Action paths.** `update/2` callbacks that emit directives outside an Action invocation route through the existing CommandHook chain (which Sandboxes feed). They don't get policy application — Cache, Retry, RateLimit, Timeout are tied to the Action surface, not arbitrary directive emissions. Documented as a deliberate scope boundary.
+- **Sandbox enforcement on directives emitted from non-Action paths.** `update/2` callbacks that emit directives outside an Action invocation route through the existing CommandHook chain (which Sandboxes feed). They don't get policy application: Cache, Retry, RateLimit, Timeout are tied to the Action surface, not arbitrary directive emissions. Documented as a deliberate scope boundary.
 - **Cross-agent Cache sharing.** `Cache.Ets` is per-agent; `Cache.Postgrex` is per-config (which may be shared). Cross-agent invalidation primitives ("when AgentA writes, AgentB's cache for the same key invalidates") are out of scope.
 - **Compile-time sandbox verification.** A future dialyzer-flavored check that "this Action's body cannot escape its declared Sandbox" is interesting but speculative; not in scope.
 
@@ -273,7 +273,7 @@ Rejected. Per-dimension modules let each dimension carry its own validation sema
 
 The durable-audit-log primitive is generic. `raxol_payments` could use it for transaction logs; `raxol_acp` for memo dispatch logs.
 
-Rejected for now. The `ThreadLog` is tied to agent semantics (`kind: :tool_call | :tool_result | :message | :summary`) — the schema reflects agent activity. A generic durable log (`Raxol.AppendOnlyLog`) could be extracted later if a non-agent consumer needs it, but starting with the agent-specific shape avoids a premature abstraction.
+Rejected for now. The `ThreadLog` is tied to agent semantics (`kind: :tool_call | :tool_result | :message | :summary`): the schema reflects agent activity. A generic durable log (`Raxol.AppendOnlyLog`) could be extracted later if a non-agent consumer needs it, but starting with the agent-specific shape avoids a premature abstraction.
 
 ### Make policies first-class graph nodes (like Workflow channels)
 
@@ -302,7 +302,7 @@ How we know the design is right:
 - **Symphony's RaxolAgent runner stays green.** `packages/raxol_symphony/lib/raxol/symphony/runners/raxol_agent.ex` consumes agents through the existing surface; Phase 26 changes don't break the runner or its 444+ Symphony tests.
 - **ThreadLog round-trip:** an agent writes 100 tool calls, restarts, reads them back from `ThreadLog.Ets` (in-process persistence via the Ets table) and `ThreadLog.Dets` (cross-restart). Property test: `list/3` returns exactly what `append/2` wrote, in order, no gaps in `sequence`.
 - **Postgrex adapter is opt-in and tested via `:integration` tags (same pattern as `Saver.Postgrex`)**: gated on `RAXOL_AGENT_PG_URL` or `POSTGRES_*` env vars.
-- **Policy applier order is property-tested.** Property: applying Policy.Cache + Policy.Retry + Policy.Timeout produces identical outputs across reorderings of the policy list (modulo where caching takes effect). Specific composition order (Cache → RateLimit → Timeout → Retry → run) is documented and pinned.
+- **Policy applier order is property-tested.** Property: applying Policy.Cache + Policy.Retry + Policy.Timeout produces identical outputs across reorderings of the policy list (modulo where caching takes effect). Specific composition order (Cache -> RateLimit -> Timeout -> Retry -> run) is documented and pinned.
 
 ## References
 

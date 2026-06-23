@@ -154,9 +154,9 @@ Telemetry-based metrics for operation latency and memory consumption via `:telem
 
 ## References
 
-- [BufferServer](../../lib/raxol/terminal/buffer/buffer_server.ex)
-- [Damage Tracker](../../lib/raxol/terminal/buffer/damage_tracker.ex)
-- [Buffer Manager](../../lib/raxol/terminal/buffer/buffer_manager.ex)
+- [BufferServer](../../packages/raxol_terminal/lib/raxol/terminal/buffer/buffer_server.ex)
+- [Damage Tracker](../../packages/raxol_terminal/lib/raxol/terminal/buffer/damage_tracker.ex)
+- [Buffer Manager](../../packages/raxol_terminal/lib/raxol/terminal/buffer/buffer_manager.ex)
 
 ---
 

@@ -24,11 +24,11 @@ lib/raxol/core/events/event_manager.ex
 
 ### Standalone Script
 
-`scripts/quality/check_duplicate_filenames.exs` scans `lib/` and `test/`, categorizes duplicates by severity (`[CRITICAL]`, `[WARNING]`, `[INFO]`), suggests rename targets, and exits non-zero on findings for CI integration.
+`scripts/archived/replaced_by_mix_tasks/check_duplicate_filenames.exs` scans `lib/` and `test/`, categorizes duplicates by severity (`[CRITICAL]`, `[WARNING]`, `[INFO]`), suggests rename targets, and exits non-zero on findings for CI integration.
 
 ```bash
-mix run scripts/quality/check_duplicate_filenames.exs
-mix run scripts/quality/check_duplicate_filenames.exs --fix-suggestions
+mix run scripts/archived/replaced_by_mix_tasks/check_duplicate_filenames.exs
+mix run scripts/archived/replaced_by_mix_tasks/check_duplicate_filenames.exs --fix-suggestions
 ```
 
 ### Credo Integration

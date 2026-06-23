@@ -53,7 +53,13 @@ A Component tree with 50 Components generates 100+ tools. That's too many for an
 - Recently interacted-with Components
 
 ```elixir
-{:ok, tools} = Raxol.MCP.FocusLens.relevant_tools(session)
+tools =
+  Raxol.MCP.FocusLens.filter(all_tools,
+    mode: :focused,
+    focused_id: "search_input",
+    max_tools: 15
+  )
+
 length(tools) # ~15, not ~100
 ```
 

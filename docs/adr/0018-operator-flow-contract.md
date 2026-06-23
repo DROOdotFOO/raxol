@@ -15,7 +15,7 @@ The cost of leaving it undocumented is concrete:
 - A future surface author (Slack? Discord? web hooks for incident management? voice-driven SMS?) has to grep across `surfaces/` to derive the contract. If they get it wrong, every other channel diverges from theirs and the vocabulary fractures.
 - The vocabulary itself (`:awaiting_X` where X names the *external party* the run is waiting on) is a convention that fell out of the four ACP `pause_reasons/0` atoms plus `Codex.pause_for_approval`'s `:awaiting_approval`. It is consistent but it is implicit. The next pause reason added will either match this convention or won't, and there's no document to push on.
 - The callback shape (`sym:resume:<issue_id>:<decision>`) appears in three places (`Telegram.Formatter`, `Watch.Formatter`, `MCP.symphony_resume_run`'s description). They agree by coincidence right now. They could drift.
-- The lifecycle event ordering (`:worker_paused` → operator decision → `:worker_resumed`; or at the run level `:interrupted` → `:paused` → `:resumed`) is real semantics that consumers can rely on. None of it is written down.
+- The lifecycle event ordering (`:worker_paused` -> operator decision -> `:worker_resumed`; or at the run level `:interrupted` -> `:paused` -> `:resumed`) is real semantics that consumers can rely on. None of it is written down.
 
 This ADR makes the cross-layer pattern explicit so the next consumer doesn't have to re-derive it from the code.
 
@@ -97,7 +97,7 @@ Other operator-action callbacks in the same `sym:` namespace:
 
 A channel that renders Symphony state is obligated to render paused runs distinctly. The contract is *what*, not *how*:
 
-- The header / summary line must include the paused count separately from the running and retrying counts. (`"running 2, paused 1, retrying 0"` — not bundled into "active".)
+- The header / summary line must include the paused count separately from the running and retrying counts. (`"running 2, paused 1, retrying 0"`, not bundled into "active".)
 - The detail view must show, per paused entry: `issue_identifier`, `interrupt_reason` (via `format_reason/1` or equivalent), `paused_ms_ago`, and at least one of `last_event` or `last_message`.
 - The action surface must offer an operator-driven resume path that emits a `sym:resume:<issue_id>:<decision>` callback. The channel may add other actions (Stop, Dismiss, Refresh) but Approve+Reject (or equivalent) for paused entries is required.
 - The `empty_snapshot()` fallback (when the orchestrator is unreachable) must include `paused: []` and `counts.paused: 0` so the contract holds even under failure.
@@ -130,7 +130,7 @@ A channel that wants to expose pause state programmatically (an HTTP API, a quer
 ### What becomes possible
 
 - **New channels onboard without re-deriving the pattern.** A Slack or Discord author reads this ADR, builds a `Formatter`, and inherits the cross-channel callback shape for free.
-- **Cross-channel resolution.** An operator can pause on Watch, switch to their desk, see the same paused run on the LiveView dashboard, and resume from Telegram on their phone — all without losing context, because the `interrupt_reason` vocabulary and the issue_id are uniform.
+- **Cross-channel resolution.** An operator can pause on Watch, switch to their desk, see the same paused run on the LiveView dashboard, and resume from Telegram on their phone, all without losing context, because the `interrupt_reason` vocabulary and the issue_id are uniform.
 - **Cross-runner pause adoption.** A new runner (Anthropic-direct, OpenAI, a custom one) maps blocking operations to `{:pause, :awaiting_<subject>, token}` and gets channel surfacing for free. No surface-side changes needed.
 - **Analytics and audit.** Subscribing to `[:raxol, :workflow, :run, :paused | :resumed]` gives durable lifecycle data with `causation_id` chaining (per Phase 24). "How long was this paused before resolution?" becomes a metric.
 - **MCP-driven incident response.** Operators (or other agents) can write tools that walk paused runs and apply policies (auto-approve known-safe commands, escalate unknown ones to humans). The `interrupt_reason` vocabulary is the policy surface.
@@ -140,7 +140,7 @@ A channel that wants to expose pause state programmatically (an HTTP API, a quer
 - **The vocabulary is open.** New pause reasons land as new atoms with no registry, which means a typo (`:awating_review` vs `:awaiting_review`) ships and the offending runner emits an atom no surface filters on. Mitigation: each runner module documents its emitted atoms in the moduledoc; channel formatters' `format_reason/1` fallback prints the atom verbatim so the bug is visible.
 - **The callback shape is convention, not enforcement.** A surface author who ignores the `sym:resume:<issue_id>:<decision>` shape and rolls their own breaks cross-channel resolution. Mitigation: the ADR's "recipe" section makes the shape explicit and the three existing surfaces' code is the reference.
 - **The lifecycle event ordering is a soft contract.** The Workflow runtime *can* emit `:paused` without a preceding `:interrupted` if a future runtime change writes the pause checkpoint outside the node-catch path. Today the ordering holds because there's one code path; future changes must preserve it explicitly.
-- **Channel obligations are minimum bars.** A channel that shows only a paused count without per-entry details satisfies the letter but defeats the operator-flow purpose. Mitigation: the contract is what to show, not how — implementing reviewers can apply judgment.
+- **Channel obligations are minimum bars.** A channel that shows only a paused count without per-entry details satisfies the letter but defeats the operator-flow purpose. Mitigation: the contract is what to show, not how, so implementing reviewers can apply judgment.
 - **The `sym:approve:<issue_id>` legacy callback survives.** Used by `run_notification/1` in the Watch formatter for non-paused runs (the "Human Review" pattern), not for paused runs. Documented as legacy; phasing out tracked separately.
 
 ### What this ADR does not decide
@@ -164,7 +164,7 @@ Rejected. The vocabulary's value is the convention, not the enforcement. A regis
 
 Replace the atom with `%PauseReason{name: atom(), party: atom(), severity: atom()}` so surfaces can render structured fields rather than calling `Atom.to_string/1`.
 
-Rejected. The struct buys nothing the channel formatters' existing `format_reason/1` helpers don't already do. Severity is a surface decision (Watch wants `:high` priority on `:worker_paused`, LiveView doesn't care). Party is implicit in the atom name and varies — `:awaiting_ci` waits on a system, `:awaiting_human_approval` waits on a person; a single `:party` field flattens that distinction. The atom carries the information; the struct just hides it.
+Rejected. The struct buys nothing the channel formatters' existing `format_reason/1` helpers don't already do. Severity is a surface decision (Watch wants `:high` priority on `:worker_paused`, LiveView doesn't care). Party is implicit in the atom name and varies: `:awaiting_ci` waits on a system, `:awaiting_human_approval` waits on a person; a single `:party` field flattens that distinction. The atom carries the information; the struct just hides it.
 
 ### A different callback namespace per channel
 
@@ -176,7 +176,7 @@ Rejected. The whole point of the `sym:resume:` shape is that one router can hand
 
 Put the contract in `Telegram.Formatter`'s moduledoc, `Watch.Formatter`'s moduledoc, `MCP.symphony_list_paused`'s description, etc. Skip the ADR.
 
-Rejected. Moduledocs are great for module-local contracts but cross-layer patterns disappear into them. The pattern *between* channels — the convergence on a shared vocabulary and a shared callback shape — is exactly the thing an ADR is for. Future surface authors will read the existing moduledocs *plus* the ADR; the ADR is the single source.
+Rejected. Moduledocs are great for module-local contracts but cross-layer patterns disappear into them. The pattern *between* channels (the convergence on a shared vocabulary and a shared callback shape) is exactly the thing an ADR is for. Future surface authors will read the existing moduledocs *plus* the ADR; the ADR is the single source.
 
 ### Defer until a third runner is needed
 

@@ -98,7 +98,7 @@ The audit confirmed existing GenServers (ConfigServer, MetricsCollector) already
 
 ## References
 
-- [Terminal Format Module](../../lib/raxol/terminal/format.ex)
+- [Terminal Format Module](../../packages/raxol_terminal/lib/raxol/terminal/format.ex)
 - [Performance Cache Module](../../lib/raxol/performance/cache.ex)
 - [ADR-0003: Terminal Emulation Strategy](0003-terminal-emulation-strategy.md)
 

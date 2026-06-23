@@ -17,13 +17,19 @@ Every job is a state machine. One supervised `Job.Server` runs per active job:
 `Raxol.ACP.Job.StateMachine` is a pure module with no GenServer and no side effects. `Job.Server` calls into it for transitions and persists the result via `Job.Store`.
 
 ```elixir
-{:ok, job_id} = Raxol.ACP.Job.Server.start(
-  offering: MyOffering,
-  buyer_address: "0x...",
-  amount_usdc: 50
+{:ok, _pid} = Raxol.ACP.Job.Server.start_link(
+  job_id: "0xabc...",
+  handler: MyOffering,
+  request: %{text: "..."},
+  buyer: "0x...",
+  seller: "0x..."
 )
 
-Raxol.ACP.Job.Server.deliver(job_id, %{result: "..."})
+# Accept the buyer's request, then (once payment is escrowed) deliver.
+# Both calls invoke the handler module configured above and address the
+# server by its job id.
+{:ok, :negotiation} = Raxol.ACP.Job.Server.accept_request("0xabc...")
+{:ok, :evaluation} = Raxol.ACP.Job.Server.deliver("0xabc...")
 ```
 
 ## Offerings
@@ -38,18 +44,26 @@ defmodule Raxol.ACP.Offerings.SentimentAnalysis do
     sla_minutes: 5,
     cluster: "analytics"
 
+  # Decide whether to take the job. Return {:accept, response} to enter
+  # negotiation, or {:reject, reason} to bow out.
   @impl true
-  def handle_request(job, params) do
-    {:ok, %{sentiment: analyze(params.text)}}
+  def handle_request(request, _ctx) do
+    {:accept, %{quoted_usdc: 10, text: request.text}}
+  end
+
+  # Payment is escrowed; produce the deliverable.
+  @impl true
+  def handle_deliver(request, _ctx) do
+    {:deliver, %{sentiment: analyze(request.text)}}
   end
 end
 ```
 
-The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed `Registry`. `Job.Server.accept_request/1` and `deliver/1` auto-invoke the handler and auto-sign memos with the configured wallet.
+The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed `Registry`. `Job.Server.accept_request/1` and `deliver/1` auto-invoke the handler and submit on-chain memos with the configured wallet.
 
 ## Memos
 
-Each phase emits an EIP-712 typed-data memo signed by the agent's wallet. Built via `Raxol.ACP.Job.Memo` on top of `Raxol.Payments.EIP712` and any `Raxol.Payments.Wallet` impl.
+Each phase emits an on-chain memo via `Raxol.ACP.ContractClient.create_memo/5`, mirroring `InteractionLedger.createMemo` from the deployed contract. There is no off-chain memo signing: the canonical ACP contract does not accept a separate memo signature, the transaction itself is the proof. Memo kinds are the `Raxol.ACP.Job.MemoType` enum (uint8, ids 0..9).
 
 | Phase         | Memo contents                                |
 | ------------- | -------------------------------------------- |

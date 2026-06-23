@@ -348,7 +348,7 @@ The terminal backend ignores hints entirely and relies on server-computed frames
 - `examples/reference/liveview/tea_counter_live.ex`: TEA app rendered in the browser
 - `examples/reference/liveview/01_simple_terminal/`: Step-by-step simple terminal
 
-(These need a Phoenix host -- they are reference modules, not `mix run` scripts.)
+(These need a Phoenix host: they are reference modules, not `mix run` scripts.)
 
 ## Next Steps
 

@@ -27,7 +27,7 @@ Raxol uses a hybrid terminal backend: a native NIF when available, with automati
 `Driver.ex` checks at compile time whether the termbox2_nif module is available:
 
 ```elixir
-# lib/raxol/terminal/driver.ex:25
+# packages/raxol_terminal/lib/raxol/terminal/driver.ex
 @termbox2_available Code.ensure_loaded?(:termbox2_nif)
 ```
 

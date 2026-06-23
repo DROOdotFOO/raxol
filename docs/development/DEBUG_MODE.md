@@ -49,15 +49,16 @@ Raxol.Debug.debug_log(:parser, "ANSI sequence detected",
 ### Structured
 
 ```elixir
-Raxol.Debug.log_terminal_state(emulator, "State after input")
-Raxol.Debug.log_ansi_sequence(sequence, "Processing ESC sequence",
+Raxol.Debug.log_terminal_state(emulator, metadata: [label: "after input"])
+Raxol.Debug.log_ansi_sequence(sequence,
+  %{type: :csi, params: [31], final: ?m},
   metadata: [line: 42])
 Raxol.Debug.log_event_flow(:key_press, event_data, handler_result,
   metadata: [component: :input_handler])
 
 Raxol.Debug.log_render_metrics(%{
   frame_time_us: 16_000,
-  dirty_regions: 3,
+  dirty_regions: [{0, 0, 10, 5}, {20, 8, 12, 3}, {0, 22, 80, 2}],
   buffer_size: 1024,
   operations_count: 42
 })
@@ -72,15 +73,6 @@ result = Raxol.Debug.time_debug(:terminal, "render", fn ->
   render_terminal(buffer)
 end)
 # Output: [DEBUG] terminal - render completed in 15.3ms
-```
-
-### Inspect
-
-```elixir
-result = Raxol.Debug.inspect_debug(:parser, "parse", input, fn ->
-  parse_ansi(input)
-end)
-# Logs both input and output of the function
 ```
 
 ## Advanced
@@ -107,14 +99,22 @@ At `:detailed` or `:verbose` levels, metrics are collected every 100ms automatic
 [DEBUG] Performance: run_queue=0
 ```
 
-### Stats and Export
+### Inspecting Configuration
 
 ```elixir
-stats = Raxol.Debug.stats()
-# => %{log_count: 1523, trace_count: 342, profile_count: 89, ...}
+Raxol.Debug.debug_config()
+# => %{terminal: true, web: true, benchmark: false, parser: false,
+#      rendering: false, general: false, log_level: :debug}
 
-Raxol.Debug.clear_stats()
-Raxol.Debug.export("debug_session.json")
+Raxol.Debug.get_debug_level()
+# => :detailed
+```
+
+Toggle a single component at runtime with `enable_debug/1` and `disable_debug/1`:
+
+```elixir
+Raxol.Debug.enable_debug(:terminal)
+Raxol.Debug.disable_debug(:terminal)
 ```
 
 ## Configuration
@@ -127,7 +127,6 @@ level = "detailed"          # off, basic, detailed, verbose
 max_logs = 10000
 max_traces = 5000
 performance_sampling = 100  # ms
-export_on_error = true
 ```
 
 ### Runtime
@@ -179,11 +178,9 @@ Raxol.Debug.enable(:verbose)
 emulator
 |> process_input("\e[31mRed\e[0m")
 |> tap(fn state ->
-  Raxol.Debug.log_terminal_state(state, "After color change")
-  Raxol.Debug.log_ansi_sequence("\e[31m", "Color sequence")
+  Raxol.Debug.log_terminal_state(state, metadata: [label: "after color change"])
+  Raxol.Debug.log_ansi_sequence("\e[31m", %{type: :sgr, params: [31], final: ?m})
 end)
-
-Raxol.Debug.export("terminal_debug.json")
 ```
 
 ### Performance Analysis
@@ -196,11 +193,9 @@ for _ <- 1..100 do
     render_frame(buffer)
   end)
 end
-
-stats = Raxol.Debug.stats()
-IO.puts("Total profile count: #{stats.profile_count}")
-Raxol.Debug.export("performance_analysis.json")
 ```
+
+Each `time_debug/3` call logs its own timing line at `:verbose` level, so the durations show up inline in the log stream.
 
 ## Removing Debug Code in Production
 
@@ -258,10 +253,8 @@ Raxol.Debug.debug_log(:handler,
   "Event processed: key_press a with ctrl at #{DateTime.utc_now()}")
 ```
 
-Clean up after debugging:
+Turn debug mode back off when you are done:
 ```elixir
-Raxol.Debug.export("debug_#{Date.utc_today()}.json")
-Raxol.Debug.clear_stats()
 Raxol.Debug.disable()
 ```
 
@@ -276,31 +269,6 @@ end
 
 **Debug server not started:** Add `{Raxol.Debug, []}` to your supervision tree.
 
-**Too many logs:** Limit storage with `{Raxol.Debug, [max_logs: 1000, max_traces: 500]}` or clear periodically.
+**Too many logs:** Limit in-process storage with `{Raxol.Debug, [max_logs: 1000, max_traces: 500]}`.
 
 **Performance impact too high:** Use sampling (see above) or drop to a lower debug level.
-
-## Export Format
-
-```json
-{
-  "level": "detailed",
-  "stats": {
-    "log_count": 1523,
-    "trace_count": 342,
-    "profile_count": 89,
-    "start_time": "2024-01-15T10:00:00Z"
-  },
-  "logs": [
-    {
-      "level": "detailed",
-      "message": "Processing input",
-      "context": {},
-      "timestamp": "2024-01-15T10:00:01Z"
-    }
-  ],
-  "traces": [],
-  "profiles": {},
-  "exported_at": "2024-01-15T11:00:00Z"
-}
-```

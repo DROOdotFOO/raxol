@@ -11,7 +11,7 @@ ADR-0016 Phase A shipped a Workflow-backed implementation of the ACP Job lifecyc
 - **Paused jobs are not enumerable.** `[:raxol, :workflow, :run, :interrupted]` telemetry carries the reason, but consumers building dashboards must capture every event and maintain their own index. The Saver behaviour has no cross-thread query primitive; `list/3` is per-thread.
 - **The runtime writes no checkpoint for the interrupting node.** When a node throws `{:__workflow_interrupt__, value}`, the runtime emits `[:raxol, :workflow, :run, :interrupted]` and returns `{:interrupted, run_id, state, value}` to the caller (`lib/raxol/workflow/runtime.ex:502-516`). The latest checkpoint remains the *previous* successful node (`test/raxol/workflow/resume_test.exs:55` was the oracle for this invariant). Paused-ness is not derivable from Saver state.
 
-A seller building a "list active offers, here is what each one is waiting on" view today has to subscribe to telemetry, build an in-memory thread index, and reconcile that index against process death. The ACP semantic — "this job is paused, waiting for the buyer's signature" — is real, durable, and cross-node, but the substrate to express it queryably does not exist.
+A seller building a "list active offers, here is what each one is waiting on" view today has to subscribe to telemetry, build an in-memory thread index, and reconcile that index against process death. The ACP semantic ("this job is paused, waiting for the buyer's signature") is real, durable, and cross-node, but the substrate to express it queryably does not exist.
 
 ADR-0016 Phase B sketched a one-paragraph solution: "the seller's 'list paused jobs' view becomes a query against `Saver.list/3` filtered by jobs whose latest checkpoint metadata contains an `interrupt_reason`. Postgrex makes this a `WHERE` clause; Dets is a full scan but bounded." That sketch papered over three load-bearing details:
 
@@ -64,7 +64,7 @@ Two new telemetry events, both at the run level:
 
 The pre-existing `[:raxol, :workflow, :run, :interrupted]` continues to fire and gains an additional `interrupt_reason` key alongside the legacy `value` key. Consumers can migrate to `interrupt_reason` at their own pace; `value` is removed in the next breaking release.
 
-The three events together describe the lifecycle of a paused run as a sequence: `:interrupted` (the node threw, no durability yet) → `:paused` (the checkpoint committed) → `:resumed` (the resume is starting, before the node re-executes). Existing consumers that only care about "a run paused" can continue listening to `:interrupted`; consumers that care about durability subscribe to `:paused`.
+The three events together describe the lifecycle of a paused run as a sequence: `:interrupted` (the node threw, no durability yet) -> `:paused` (the checkpoint committed) -> `:resumed` (the resume is starting, before the node re-executes). Existing consumers that only care about "a run paused" can continue listening to `:interrupted`; consumers that care about durability subscribe to `:paused`.
 
 ### 4. New Saver callback: `list_paused/2`
 
@@ -121,7 +121,7 @@ The function lives on `Job.Server` because that module is already the public fac
 
 ### 6. Phase-typed reasons in raxol_acp
 
-`Raxol.ACP.Job.Workflow` renames the two reasons whose waiter is ambiguous in the bare-event name: `:awaiting_payment` → `:awaiting_buyer_payment` and `:awaiting_approval` → `:awaiting_evaluator_approval`. `:awaiting_request_response` (seller decides) and `:awaiting_delivery` (both sides wait) stay unchanged.
+`Raxol.ACP.Job.Workflow` renames the two reasons whose waiter is ambiguous in the bare-event name: `:awaiting_payment` -> `:awaiting_buyer_payment` and `:awaiting_approval` -> `:awaiting_evaluator_approval`. `:awaiting_request_response` (seller decides) and `:awaiting_delivery` (both sides wait) stay unchanged.
 
 A module-level `Raxol.ACP.Job.Workflow.pause_reasons/0` returns the canonical four atoms in phase-ladder order so dashboards can enumerate the expected reasons without scraping module source.
 
@@ -145,7 +145,7 @@ A module-level `Raxol.ACP.Job.Workflow.pause_reasons/0` returns the canonical fo
 
 ### What this ADR supersedes
 
-- **ADR-0016 §B's 3-reason list.** The prose said `:awaiting_buyer_payment | :awaiting_evaluator_approval | :awaiting_delivery`. The implemented contract is the four reasons in `Raxol.ACP.Job.Workflow.pause_reasons/0`: `:awaiting_request_response, :awaiting_buyer_payment, :awaiting_delivery, :awaiting_evaluator_approval`. The four-reason form is canonical; the three-reason prose was a sketch.
+- **ADR-0016 section B's 3-reason list.** The prose said `:awaiting_buyer_payment | :awaiting_evaluator_approval | :awaiting_delivery`. The implemented contract is the four reasons in `Raxol.ACP.Job.Workflow.pause_reasons/0`: `:awaiting_request_response, :awaiting_buyer_payment, :awaiting_delivery, :awaiting_evaluator_approval`. The four-reason form is canonical; the three-reason prose was a sketch.
 - **The implicit "latest checkpoint is the predecessor of the interrupting node" invariant.** After this ADR, the latest checkpoint of a paused run is the interrupting node itself, distinguished by `metadata.interrupt_reason`. Resume routes accordingly. The change is surgically scoped to checkpoints whose metadata carries the marker.
 - **`:value` as the canonical metadata key on `:interrupted`.** Both `value` and `interrupt_reason` are emitted from this PR; `value` is removed in the next breaking release. Consumers should migrate to `interrupt_reason`.
 
@@ -161,7 +161,7 @@ Rejected. The mirror is downstream of the workflow runtime's view of paused-ness
 
 When an interrupt fires, update the most recent successful checkpoint's metadata with the new `interrupt_reason` and `paused_at` keys. No new checkpoint, no resume semantics change.
 
-Rejected. The append-only contract on `Saver.put/3` is documented (`saver.ex:16-22`) and consumers — including time-travel debugging and audit-log readers — depend on it. Breaking it for this one feature is a much bigger cost than the test updates required by the chosen approach. The `:erlang.term_to_binary/1`-backed metadata blob is also not easily mutated in place across all three adapters.
+Rejected. The append-only contract on `Saver.put/3` is documented (`saver.ex:16-22`) and consumers (including time-travel debugging and audit-log readers) depend on it. Breaking it for this one feature is a much bigger cost than the test updates required by the chosen approach. The `:erlang.term_to_binary/1`-backed metadata blob is also not easily mutated in place across all three adapters.
 
 ### Scan-by-telemetry only
 

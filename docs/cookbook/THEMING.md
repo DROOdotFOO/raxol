@@ -147,7 +147,7 @@ When using the LiveView bridge, theming is applied via CSS classes on the termin
 </div>
 ```
 
-Built-in LiveView themes: `:synthwave84`, `:nord`, `:dracula`, `:monokai`, `:gruvbox`, `:solarized_dark`, `:tokyo_night`.
+Built-in LiveView themes: `:synthwave84`, `:nord`, `:dracula`, `:monokai`, `:gruvbox_dark`, `:solarized_dark`, `:tokyo_night`.
 
 ### Custom CSS theme
 

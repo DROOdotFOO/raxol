@@ -172,7 +172,7 @@ LiveView gives us the best balance of performance, developer experience, and fea
 
 ## References
 
-- [TEALive Bridge](../../lib/raxol/live_view/tea_live.ex)
+- [TEALive Bridge](../../packages/raxol_liveview/lib/raxol/live_view/tea_live.ex)
 - [Phoenix LiveView Docs](https://hexdocs.pm/phoenix_live_view/)
 
 ---
