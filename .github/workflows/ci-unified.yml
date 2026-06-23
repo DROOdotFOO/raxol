@@ -463,10 +463,12 @@ jobs:
       - name: Install macOS dependencies
         if: matrix.os == 'macos-latest'
         run: |
-          brew install openssl@3 postgresql@14
-          echo "LDFLAGS=-L$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
-          echo "CFLAGS=-I$(brew --prefix openssl@3)/include" >> $GITHUB_ENV
-          
+          # Do NOT export LDFLAGS/CFLAGS here: a global LDFLAGS clobbers the
+          # termbox2 NIF Makefile's `LDFLAGS ?= -shared`, dropping -shared so the
+          # .so links as an executable (`_main` undefined). Nothing in the build
+          # needs openssl flags; OTP ships precompiled.
+          brew install postgresql@14
+
           # Start PostgreSQL
           brew services start postgresql@14 || true
           sleep 5
