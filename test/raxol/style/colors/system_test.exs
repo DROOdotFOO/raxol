@@ -51,36 +51,14 @@ defmodule Raxol.Style.Colors.SystemTest do
       Raxol.Core.Events.EventManagerRefactoredMock
     )
 
+    # System.init/0 calls ensure_server_started/0, so the ColorSystemServer is
+    # already running by this point. It is a lazily (re)started shared singleton
+    # owned by ColorSystem, not by this test, so we neither start nor stop it
+    # here: tearing it down was the source of a whereis/stop teardown race.
     System.init()
-
-    # Start the ColorSystemServer if not already running
-    case Process.whereis(Raxol.Style.Colors.System.ColorSystemServer) do
-      nil ->
-        {:ok, _pid} =
-          Raxol.Style.Colors.System.ColorSystemServer.start_link(
-            name: Raxol.Style.Colors.System.ColorSystemServer
-          )
-
-      pid ->
-        pid
-    end
 
     # Explicitly set the process dictionary for the current theme
     Raxol.Core.Runtime.ProcessStore.put(:color_system_current_theme, :standard)
-
-    on_exit(fn ->
-      # Stop ColorSystemServer if it was started in this test
-      case Process.whereis(Raxol.Style.Colors.System.ColorSystemServer) do
-        nil ->
-          :ok
-        pid ->
-          if Process.alive?(pid) do
-            GenServer.stop(pid, :normal, 100)
-          else
-            :ok
-          end
-      end
-    end)
 
     {:ok, context}
   end

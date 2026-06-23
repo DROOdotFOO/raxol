@@ -9,12 +9,11 @@ defmodule Raxol.Workflow.Checkpoint.Saver.DetsTest do
     name = :"dets_test_#{nonce}"
     file = Path.join(System.tmp_dir!(), "raxol_workflow_dets_#{nonce}")
 
-    {:ok, pid} = Dets.start_link(name: name, file: file)
+    # :temporary so the "durability across server restart" test can stop and
+    # restart the server itself without the supervisor resurrecting it first.
+    start_supervised!({Dets, name: name, file: file}, restart: :temporary)
 
-    on_exit(fn ->
-      if Process.alive?(pid), do: Dets.stop(name)
-      File.rm(file)
-    end)
+    on_exit(fn -> File.rm(file) end)
 
     {:ok, config: %{name: name}}
   end

@@ -28,7 +28,7 @@
       # If you create your own checks, you must specify the source files for
       # them here, so they can be loaded by Credo before running the analysis.
       #
-      requires: [],
+      requires: ["./.credo/checks/unguarded_test_teardown_stop.ex"],
       #
       # If you want to enforce a style guide and need a more traditional linting
       # experience, you can change `strict` to `true` below:
@@ -141,11 +141,14 @@
         {Credo.Check.Refactor.MapInto, false},
         {Credo.Check.Refactor.VariableRebinding, false},
         {Credo.Check.Warning.MapGetUnsafePass, false},
-        {Credo.Check.Warning.UnsafeToAtom, false}
+        {Credo.Check.Warning.UnsafeToAtom, false},
 
         #
         # Custom checks can be created using `mix credo.gen.check`.
         #
+        # Flags unguarded GenServer.stop/Agent.stop in on_exit/1 teardown, the
+        # macOS-CI flake class fixed by start_supervised!.
+        {Raxol.Credo.Check.Warning.UnguardedTestTeardownStop, []}
       ]
     }
   ]

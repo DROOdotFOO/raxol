@@ -83,8 +83,9 @@ defmodule Raxol.Core.Runtime.ProcessStoreTest do
   end
 
   setup do
-    {:ok, pid} = TestStore.start_link()
-    on_exit(fn -> if Process.alive?(pid), do: Agent.stop(pid) end)
+    pid =
+      start_supervised!(%{id: TestStore, start: {TestStore, :start_link, []}})
+
     %{store: pid}
   end
 

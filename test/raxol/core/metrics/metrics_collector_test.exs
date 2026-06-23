@@ -7,22 +7,12 @@ defmodule Raxol.Core.Metrics.MetricsCollectorTest do
   alias Raxol.Core.Metrics.MetricsCollector
 
   setup do
-    # Stop any existing MetricsCollector
-    case Process.whereis(MetricsCollector) do
-      nil -> :ok
-      pid -> GenServer.stop(pid)
-    end
-
-    {:ok, pid} = MetricsCollector.start_link(name: MetricsCollector)
+    # ExUnit starts the collector and tears it down after the test, so there is
+    # no whereis/stop race in teardown.
+    start_supervised!({MetricsCollector, name: MetricsCollector})
 
     # Clear any persisted ETS data from previous runs
     MetricsCollector.clear_metrics()
-
-    on_exit(fn ->
-      if Process.alive?(pid) do
-        GenServer.stop(pid)
-      end
-    end)
 
     :ok
   end
@@ -69,7 +59,9 @@ defmodule Raxol.Core.Metrics.MetricsCollectorTest do
       # clear_metrics(), we use relaxed assertions. The key invariant is that the
       # count never exceeds the history limit (1000).
       metric_count = length(test_metrics)
-      assert metric_count <= 1000, "Expected at most 1000 metrics, got #{metric_count}"
+
+      assert metric_count <= 1000,
+             "Expected at most 1000 metrics, got #{metric_count}"
 
       # Verify at least some metrics were recorded (allows for some test interference)
       assert metric_count > 0, "Expected at least some metrics to be recorded"

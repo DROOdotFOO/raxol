@@ -5,7 +5,9 @@ defmodule Raxol.SSH.ServerTest do
 
   describe "host key generation" do
     test "generates RSA host key" do
-      dir = Path.join(System.tmp_dir!(), "raxol_ssh_test_#{:rand.uniform(100_000)}")
+      dir =
+        Path.join(System.tmp_dir!(), "raxol_ssh_test_#{:rand.uniform(100_000)}")
+
       on_exit(fn -> File.rm_rf!(dir) end)
 
       File.mkdir_p!(dir)
@@ -29,21 +31,20 @@ defmodule Raxol.SSH.ServerTest do
     @tag :integration
     test "tracks connections and enforces max" do
       port = 22_000 + :rand.uniform(1000)
-      dir = Path.join(System.tmp_dir!(), "raxol_ssh_conn_#{:rand.uniform(100_000)}")
+
+      dir =
+        Path.join(System.tmp_dir!(), "raxol_ssh_conn_#{:rand.uniform(100_000)}")
+
       on_exit(fn -> File.rm_rf!(dir) end)
 
-      {:ok, pid} =
-        Server.start_link(
-          app_module: Raxol.Playground.App,
-          port: port,
-          host_keys_dir: dir,
-          max_connections: 2,
-          name: :test_ssh_server
-        )
-
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
+      start_supervised!(
+        {Server,
+         app_module: Raxol.Playground.App,
+         port: port,
+         host_keys_dir: dir,
+         max_connections: 2,
+         name: :test_ssh_server}
+      )
 
       assert Server.connection_count(:test_ssh_server) == 0
 
@@ -53,7 +54,9 @@ defmodule Raxol.SSH.ServerTest do
       assert :ok = Server.register_connection(:test_ssh_server)
       assert Server.connection_count(:test_ssh_server) == 2
 
-      assert {:error, :max_connections} = Server.register_connection(:test_ssh_server)
+      assert {:error, :max_connections} =
+               Server.register_connection(:test_ssh_server)
+
       assert Server.connection_count(:test_ssh_server) == 2
 
       Server.unregister_connection(:test_ssh_server)
@@ -68,21 +71,20 @@ defmodule Raxol.SSH.ServerTest do
     @tag :integration
     test "unregister does not go below zero" do
       port = 22_000 + :rand.uniform(1000)
-      dir = Path.join(System.tmp_dir!(), "raxol_ssh_zero_#{:rand.uniform(100_000)}")
+
+      dir =
+        Path.join(System.tmp_dir!(), "raxol_ssh_zero_#{:rand.uniform(100_000)}")
+
       on_exit(fn -> File.rm_rf!(dir) end)
 
-      {:ok, pid} =
-        Server.start_link(
-          app_module: Raxol.Playground.App,
-          port: port,
-          host_keys_dir: dir,
-          max_connections: 10,
-          name: :test_ssh_zero
-        )
-
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
+      start_supervised!(
+        {Server,
+         app_module: Raxol.Playground.App,
+         port: port,
+         host_keys_dir: dir,
+         max_connections: 10,
+         name: :test_ssh_zero}
+      )
 
       Server.unregister_connection(:test_ssh_zero)
       Process.sleep(10)

@@ -7,20 +7,9 @@ defmodule Raxol.Core.Metrics.CloudTest do
   alias Raxol.Core.Metrics.Cloud
 
   setup do
-    # Start Cloud service with proper name registration
-    {:ok, _pid} = Cloud.start_link(name: Cloud, test_pid: self())
-
-    on_exit(fn ->
-      case Process.whereis(Cloud) do
-        nil ->
-          :ok
-
-        pid when is_pid(pid) ->
-          if Process.alive?(pid) do
-            GenServer.stop(pid, :normal, 1000)
-          end
-      end
-    end)
+    # ExUnit starts the Cloud service and tears it down after the test, so there
+    # is no whereis/stop race in teardown.
+    start_supervised!({Cloud, name: Cloud, test_pid: self()})
 
     :ok
   end
