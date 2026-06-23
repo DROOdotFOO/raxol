@@ -81,14 +81,11 @@ defmodule Raxol.Playground.DemoRenderTest do
   setup_all do
     # The Headless GenServer is started by the application supervisor in
     # prod/dev. Tests start with an empty supervision tree, so bring it up
-    # ourselves. Reuse the singleton across all demos in this file.
-    case Process.whereis(Raxol.Headless) do
-      nil ->
-        {:ok, pid} = Headless.start_link([])
-        on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
-
-      _pid ->
-        :ok
+    # ourselves and let ExUnit own its lifecycle. Reuse the singleton if another
+    # module already started it.
+    case start_supervised({Headless, []}) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
     end
 
     :ok
@@ -108,7 +105,8 @@ defmodule Raxol.Playground.DemoRenderTest do
     test "#{@component.name} renders non-empty output through full pipeline", %{
       id: id
     } do
-      assert {:ok, ^id} = Headless.start(@component.module, id: id, width: 80, height: 24)
+      assert {:ok, ^id} =
+               Headless.start(@component.module, id: id, width: 80, height: 24)
 
       # Let the Engine push its first frame through the pipeline.
       Process.sleep(@initial_settle_ms)
@@ -172,7 +170,10 @@ defmodule Raxol.Playground.DemoRenderTest do
     stripped =
       line
       |> String.trim()
-      |> String.replace(~r/[\-\─\━\━\═\│\┃\━\─\┌\┐\└\┘\├\┤\┬\┴\┼\╭\╮\╯\╰\║\╔\╗\╚\╝\╠\╣\╦\╩\╬\=\.\*\#]+/, "")
+      |> String.replace(
+        ~r/[\-\─\━\━\═\│\┃\━\─\┌\┐\└\┘\├\┤\┬\┴\┼\╭\╮\╯\╰\║\╔\╗\╚\╝\╠\╣\╦\╩\╬\=\.\*\#]+/,
+        ""
+      )
 
     String.length(stripped) >= 3
   end

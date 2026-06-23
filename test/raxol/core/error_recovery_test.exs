@@ -4,23 +4,9 @@ defmodule Raxol.Core.ErrorRecoveryTest do
   alias Raxol.Core.ErrorRecovery
 
   setup do
-    # Stop any existing ErrorRecovery
-    case Process.whereis(ErrorRecovery) do
-      nil -> :ok
-      pid -> GenServer.stop(pid)
-    end
-
-    # Start ErrorRecovery with proper name registration
-    {:ok, pid} = ErrorRecovery.start_link(name: ErrorRecovery)
-
-    on_exit(fn ->
-      # pid can die between the alive? check and the stop, so guard the exit.
-      try do
-        GenServer.stop(pid)
-      catch
-        :exit, _ -> :ok
-      end
-    end)
+    # ExUnit owns the lifecycle: it starts ErrorRecovery and tears it down after
+    # the test, so there is no whereis/stop race in teardown.
+    start_supervised!({ErrorRecovery, name: ErrorRecovery})
 
     :ok
   end

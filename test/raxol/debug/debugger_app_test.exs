@@ -5,7 +5,7 @@ defmodule Raxol.Debug.DebuggerAppTest do
 
   setup do
     name = :"tt_test_#{System.unique_integer([:positive])}"
-    {:ok, tt_pid} = TimeTravel.start_link(name: name)
+    tt_pid = start_supervised!({TimeTravel, name: name})
 
     # Record some snapshots
     TimeTravel.record(tt_pid, :init, %{count: 0}, %{count: 0})
@@ -14,13 +14,7 @@ defmodule Raxol.Debug.DebuggerAppTest do
 
     Application.put_env(:raxol, :debugger_tt_ref, tt_pid)
 
-    on_exit(fn ->
-      Application.delete_env(:raxol, :debugger_tt_ref)
-
-      if Process.alive?(tt_pid) do
-        GenServer.stop(tt_pid)
-      end
-    end)
+    on_exit(fn -> Application.delete_env(:raxol, :debugger_tt_ref) end)
 
     %{tt_pid: tt_pid}
   end

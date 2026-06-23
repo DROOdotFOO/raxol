@@ -6,41 +6,33 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
   describe "render batcher lifecycle" do
     test "starts with default frame interval" do
       batcher_name = :"test_batcher_#{System.unique_integer([:positive])}"
-      {:ok, pid} = RenderBatcher.start_link(name: batcher_name)
+      start_supervised!({RenderBatcher, name: batcher_name})
 
       stats = RenderBatcher.get_stats(batcher_name)
       assert stats.batches_processed == 0
       assert stats.updates_batched == 0
       assert stats.pending_updates == 0
       assert stats.accumulated_damage_regions == 0
-
-      GenServer.stop(pid)
     end
 
     test "accepts custom frame interval" do
       batcher_name = :"custom_batcher_#{System.unique_integer([:positive])}"
 
-      {:ok, pid} =
-        RenderBatcher.start_link(
-          name: batcher_name,
-          # 30fps
-          frame_interval_ms: 33
-        )
+      # 30fps
+      start_supervised!(
+        {RenderBatcher, name: batcher_name, frame_interval_ms: 33}
+      )
 
       # Should start successfully with custom interval
       stats = RenderBatcher.get_stats(batcher_name)
       assert is_map(stats)
-
-      GenServer.stop(pid)
     end
 
     test "accepts custom name in options" do
       batcher_name = :"custom_batch_name_#{System.unique_integer([:positive])}"
-      {:ok, pid} = RenderBatcher.start_link(name: batcher_name)
+      start_supervised!({RenderBatcher, name: batcher_name})
 
       assert RenderBatcher.get_stats(batcher_name).pending_updates == 0
-
-      GenServer.stop(pid)
     end
   end
 
@@ -48,18 +40,12 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
     setup do
       batcher_name = :"test_batch_updates_#{System.unique_integer([:positive])}"
 
-      {:ok, pid} =
-        RenderBatcher.start_link(
-          name: batcher_name,
-          # Longer interval for testing
-          frame_interval_ms: 100
-        )
+      # Longer interval for testing
+      start_supervised!(
+        {RenderBatcher, name: batcher_name, frame_interval_ms: 100}
+      )
 
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
-
-      {:ok, %{batcher: batcher_name, pid: pid}}
+      {:ok, %{batcher: batcher_name}}
     end
 
     test "accumulates updates in batch", %{batcher: batcher} do
@@ -123,18 +109,12 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
     setup do
       batcher_name = :"test_flush_#{System.unique_integer([:positive])}"
 
-      {:ok, pid} =
-        RenderBatcher.start_link(
-          name: batcher_name,
-          # Very long interval
-          frame_interval_ms: 1000
-        )
+      # Very long interval
+      start_supervised!(
+        {RenderBatcher, name: batcher_name, frame_interval_ms: 1000}
+      )
 
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
-
-      {:ok, %{batcher: batcher_name, pid: pid}}
+      {:ok, %{batcher: batcher_name}}
     end
 
     test "flushes immediately when batch size limit reached", %{
@@ -198,17 +178,11 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
     setup do
       batcher_name = :"test_force_flush_#{System.unique_integer([:positive])}"
 
-      {:ok, pid} =
-        RenderBatcher.start_link(
-          name: batcher_name,
-          frame_interval_ms: 1000
-        )
+      start_supervised!(
+        {RenderBatcher, name: batcher_name, frame_interval_ms: 1000}
+      )
 
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
-
-      {:ok, %{batcher: batcher_name, pid: pid}}
+      {:ok, %{batcher: batcher_name}}
     end
 
     test "force flush processes all pending updates", %{batcher: batcher} do
@@ -247,13 +221,9 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
   describe "frame interval adaptation" do
     setup do
       batcher_name = :"test_adaptive_#{System.unique_integer([:positive])}"
-      {:ok, pid} = RenderBatcher.start_link(name: batcher_name)
+      start_supervised!({RenderBatcher, name: batcher_name})
 
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
-
-      {:ok, %{batcher: batcher_name, pid: pid}}
+      {:ok, %{batcher: batcher_name}}
     end
 
     test "updates frame interval dynamically", %{batcher: batcher} do
@@ -284,12 +254,10 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
     test "processes batches after frame interval" do
       batcher_name = :"test_auto_batch_#{System.unique_integer([:positive])}"
 
-      {:ok, pid} =
-        RenderBatcher.start_link(
-          name: batcher_name,
-          # Short interval for testing
-          frame_interval_ms: 50
-        )
+      # Short interval for testing
+      start_supervised!(
+        {RenderBatcher, name: batcher_name, frame_interval_ms: 50}
+      )
 
       tree = %{type: :container}
       diff = {:update, [], %{type: :content}}
@@ -310,18 +278,14 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
       # The timer might not have fired yet, so check if either batched or still pending
       assert final_stats.pending_updates + final_stats.updates_batched >= 3
       assert final_stats.batches_processed >= 0
-
-      GenServer.stop(pid)
     end
 
     test "handles timer race conditions gracefully" do
       batcher_name = :"test_timer_race_#{System.unique_integer([:positive])}"
 
-      {:ok, pid} =
-        RenderBatcher.start_link(
-          name: batcher_name,
-          frame_interval_ms: 25
-        )
+      start_supervised!(
+        {RenderBatcher, name: batcher_name, frame_interval_ms: 25}
+      )
 
       tree = %{type: :container}
       diff = {:update, [], %{type: :content}}
@@ -348,21 +312,15 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
 
       assert total_handled >= 1,
              "Expected at least 1 update to be handled, got #{total_handled}"
-
-      GenServer.stop(pid)
     end
   end
 
   describe "priority-based processing" do
     setup do
       batcher_name = :"test_priority_#{System.unique_integer([:positive])}"
-      {:ok, pid} = RenderBatcher.start_link(name: batcher_name)
+      start_supervised!({RenderBatcher, name: batcher_name})
 
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
-
-      {:ok, %{batcher: batcher_name, pid: pid}}
+      {:ok, %{batcher: batcher_name}}
     end
 
     test "processes updates in priority order during flush", %{batcher: batcher} do
@@ -391,13 +349,9 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
   describe "damage accumulation and optimization" do
     setup do
       batcher_name = :"test_damage_#{System.unique_integer([:positive])}"
-      {:ok, pid} = RenderBatcher.start_link(name: batcher_name)
+      start_supervised!({RenderBatcher, name: batcher_name})
 
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
-
-      {:ok, %{batcher: batcher_name, pid: pid}}
+      {:ok, %{batcher: batcher_name}}
     end
 
     test "merges overlapping damage regions", %{batcher: batcher} do
@@ -433,13 +387,9 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
   describe "performance and edge cases" do
     setup do
       batcher_name = :"test_perf_#{System.unique_integer([:positive])}"
-      {:ok, pid} = RenderBatcher.start_link(name: batcher_name)
+      start_supervised!({RenderBatcher, name: batcher_name})
 
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
-
-      {:ok, %{batcher: batcher_name, pid: pid}}
+      {:ok, %{batcher: batcher_name}}
     end
 
     test "handles rapid update submissions", %{batcher: batcher} do
@@ -509,13 +459,9 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
   describe "arithmetic operations in batching" do
     setup do
       batcher_name = :"test_arithmetic_#{System.unique_integer([:positive])}"
-      {:ok, pid} = RenderBatcher.start_link(name: batcher_name)
+      start_supervised!({RenderBatcher, name: batcher_name})
 
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
-
-      {:ok, %{batcher: batcher_name, pid: pid}}
+      {:ok, %{batcher: batcher_name}}
     end
 
     test "correctly counts tree nodes in complex structures", %{
@@ -596,13 +542,9 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
   describe "boolean logic in batch conditions" do
     setup do
       batcher_name = :"test_boolean_#{System.unique_integer([:positive])}"
-      {:ok, pid} = RenderBatcher.start_link(name: batcher_name)
+      start_supervised!({RenderBatcher, name: batcher_name})
 
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
-
-      {:ok, %{batcher: batcher_name, pid: pid}}
+      {:ok, %{batcher: batcher_name}}
     end
 
     test "correctly evaluates compound flush conditions", %{batcher: batcher} do
@@ -664,8 +606,9 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
     setup do
       batcher_name = :"bp_batcher_#{System.unique_integer([:positive])}"
 
-      {:ok, pid} =
-        RenderBatcher.start_link(name: batcher_name, frame_interval_ms: 100)
+      start_supervised!(
+        {RenderBatcher, name: batcher_name, frame_interval_ms: 100}
+      )
 
       handler_id = "rb_bp_#{System.unique_integer([:positive])}"
       test_pid = self()
@@ -679,10 +622,7 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
         nil
       )
 
-      on_exit(fn ->
-        :telemetry.detach(handler_id)
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      end)
+      on_exit(fn -> :telemetry.detach(handler_id) end)
 
       {:ok, %{batcher: batcher_name}}
     end

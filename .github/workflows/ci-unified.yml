@@ -463,9 +463,9 @@ jobs:
       - name: Install macOS dependencies
         if: matrix.os == 'macos-latest'
         run: |
-          brew install openssl@1.1 postgresql@14
-          echo "LDFLAGS=-L$(brew --prefix openssl@1.1)/lib" >> $GITHUB_ENV
-          echo "CFLAGS=-I$(brew --prefix openssl@1.1)/include" >> $GITHUB_ENV
+          brew install openssl@3 postgresql@14
+          echo "LDFLAGS=-L$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
+          echo "CFLAGS=-I$(brew --prefix openssl@3)/include" >> $GITHUB_ENV
           
           # Start PostgreSQL
           brew services start postgresql@14 || true
