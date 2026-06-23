@@ -13,26 +13,26 @@ Proposed, 2026-06-16. Direct follow-up to ADR-0015 (Workflow Graph), which shipp
 The deferral is intentional. ADR-0015 prioritized a working runtime with checkpoints, interrupts, retry, compensate, and Postgrex durability over a richer execution model. Phase 25 shipped four months of capability inside that constraint; the deferred concurrency primitive is now the natural next chunk because every consumer that's piled on top of the runtime has the same shape:
 
 - **raxol_acp** Job.Workflow is a 10-node graph that walks one phase ladder. Cross-chain settlement (Xochi mandates, multi-party escrow) wants two on-chain calls in parallel followed by a reduction.
-- **Symphony** GraphAdapter is a 5-node strictly-sequential pipeline (`tracker_poll → candidate_selection → runner_dispatch → evidence_collection → completion` at `packages/raxol_symphony/lib/raxol/symphony/workflow/graph_adapter.ex:18-30`). The orchestrator gets concurrency at the *process* level by spawning multiple workers (`DynamicSupervisor` + `max_concurrent_agents`), each running the graph independently. The graph itself can't fan out.
+- **Symphony** GraphAdapter is a 5-node strictly-sequential pipeline (`tracker_poll -> candidate_selection -> runner_dispatch -> evidence_collection -> completion` at `packages/raxol_symphony/lib/raxol/symphony/workflow/graph_adapter.ex:18-30`). The orchestrator gets concurrency at the *process* level by spawning multiple workers (`DynamicSupervisor` + `max_concurrent_agents`), each running the graph independently. The graph itself can't fan out.
 - **Future Phase 26 sandboxed agents** will want to dispatch sub-tasks in parallel inside one workflow run rather than orchestrating that at the agent's `update/2` callback.
 
-The single existing parallel-adjacent feature is `ConditionalEdge.chooser` (in `lib/raxol/workflow/edge.ex:51-73`): its return type is documented as `(state → id | [id])` but the runtime only honors single-id returns. `runtime.ex:813-836` `pick_next/2` returns `{:ok, single_id} | :no_match | {:error, _}` — a list of ids is not destructured. That mismatch is the cleanest seam to extend.
+The single existing parallel-adjacent feature is `ConditionalEdge.chooser` (in `lib/raxol/workflow/edge.ex:51-73`): its return type is documented as `(state -> id | [id])` but the runtime only honors single-id returns. `runtime.ex:813-836` `pick_next/2` returns `{:ok, single_id} | :no_match | {:error, _}`; a list of ids is not destructured. That mismatch is the cleanest seam to extend.
 
 ### What ADR-0015 said about deferring
 
-ADR-0015 §96 quoted joins explicitly:
+ADR-0015 (joins) quoted them explicitly:
 
 > Join nodes (`add_join/4`) act as barriers: multiple incoming edges feed an N-arity reducer that produces the next state.
 
-And §98 quoted channels:
+And on channels:
 
 > Channels (`add_channel/4`) declare typed reducers between nodes. A workflow that fans out to three parallel branches each emitting a partial state can reduce them through a `Channel{:partial, into: :final, with: &Map.merge/2}` declaration.
 
-ADR-0015 §187-191 listed the deferred work plainly: distributed execution, joins, channels. Phase 25 was "make the single-branch substrate solid", and Phase 25 succeeded — `MIX_ENV=test mix test test/raxol/workflow/` passes 143/0 today.
+ADR-0015 listed the deferred work plainly: distributed execution, joins, channels. Phase 25 was "make the single-branch substrate solid", and Phase 25 succeeded: `MIX_ENV=test mix test test/raxol/workflow/` passes 143/0 today.
 
 ### Why this is a runtime change, not a library
 
-`Raxol.Workflow.Async` already provides `async_invoke/3` and `stream_events/3` for *external* concurrency — spawn a workflow run on another process, stream its events back. That doesn't help: the *graph itself* is still sequential. A consumer that wants two memo writes to happen at the same time can't express that as a graph; they have to spawn a Task inside one node's body and lose the runtime's checkpoint + retry + compensate + telemetry semantics for the parallel work. Graph-level concurrency means those semantics extend uniformly to the parallel branches.
+`Raxol.Workflow.Async` already provides `async_invoke/3` and `stream_events/3` for *external* concurrency: spawn a workflow run on another process, stream its events back. That doesn't help: the *graph itself* is still sequential. A consumer that wants two memo writes to happen at the same time can't express that as a graph; they have to spawn a Task inside one node's body and lose the runtime's checkpoint + retry + compensate + telemetry semantics for the parallel work. Graph-level concurrency means those semantics extend uniformly to the parallel branches.
 
 ### Greenfield design constraints
 
@@ -62,7 +62,7 @@ Graph.new(:partial_collect)
 |> Graph.add_edge(:report, :__end__)
 ```
 
-`add_channel/4` is metadata only — it doesn't add nodes or edges. It registers `{channel_name, %{into: key, with: reducer}}` on the Graph struct's new `channels` field. The Compiled struct picks it up.
+`add_channel/4` is metadata only: it doesn't add nodes or edges. It registers `{channel_name, %{into: key, with: reducer}}` on the Graph struct's new `channels` field. The Compiled struct picks it up.
 
 ### `add_join/4`
 
@@ -75,8 +75,8 @@ add_join(graph, target_node_id, upstream_ids, opts \\ [])
 - `target_node_id`: the join's own node id (must have been added via `add_node/3,4`).
 - `upstream_ids`: the list of branch nodes that must complete before the join runs. Must match the candidates of an earlier `add_conditional_edge` exactly (compiler validates).
 - `opts`:
-  - `:reduce` — explicit reducer `(state_list -> merged_state)`. Default: apply per-channel reducers; for keys not covered by a channel, use last-write-wins by branch order.
-  - `:timeout_ms` — max wall-clock to wait for all branches. On timeout, the join fails with `{:error, {:branch_timeout, missing_branches}}`. Default: inherit the run's `:run_timeout_ms`.
+  - `:reduce`: explicit reducer `(state_list -> merged_state)`. Default: apply per-channel reducers; for keys not covered by a channel, use last-write-wins by branch order.
+  - `:timeout_ms`: max wall-clock to wait for all branches. On timeout, the join fails with `{:error, {:branch_timeout, missing_branches}}`. Default: inherit the run's `:run_timeout_ms`.
 
 A `JoinEdge` edge type is created: `%JoinEdge{from: target_node_id, upstream: [ids], reducer: opts}`. The Compiled struct indexes it under `joins_by_node` for O(1) barrier lookup. The runtime keeps a `branch_completions` map per run keyed on `target_node_id` and counts down as branches arrive.
 
@@ -99,7 +99,7 @@ metadata: %{
 }
 ```
 
-`branch_id` is `nil` for any checkpoint that's not inside a parallel branch (which is *every* checkpoint in any existing graph — full back-compat). Inside a parallel branch, it's `{join_id, branch_index}` where `branch_index` is the position in the upstream list passed to `add_join/4`. The Saver's `list_paused/2` (per ADR-0017) returns all paused branches as separate entries; consumers can group by `run_id` to see "this run has three branches, two are awaiting CI, one is awaiting human approval."
+`branch_id` is `nil` for any checkpoint that's not inside a parallel branch (which is *every* checkpoint in any existing graph, full back-compat). Inside a parallel branch, it's `{join_id, branch_index}` where `branch_index` is the position in the upstream list passed to `add_join/4`. The Saver's `list_paused/2` (per ADR-0017) returns all paused branches as separate entries; consumers can group by `run_id` to see "this run has three branches, two are awaiting CI, one is awaiting human approval."
 
 `Saver` callback signature stays unchanged. The shape change is in metadata, which is opaque to the Saver.
 
@@ -145,12 +145,12 @@ Compile failures match the existing error tuple shape from ADR-0015's `compile/2
 
 ### What costs we accept
 
-- **Runtime complexity grows.** The sequential `step → traverse → step` loop becomes a state machine that tracks open branches per run, blocks on joins, handles per-branch failures + retries + compensations + pauses. The new code is bounded (~400 LOC of runtime + ~150 of compile-time validation + ~200 of test coverage) but it is real concurrency-aware code with race-condition surface.
+- **Runtime complexity grows.** The sequential `step -> traverse -> step` loop becomes a state machine that tracks open branches per run, blocks on joins, handles per-branch failures + retries + compensations + pauses. The new code is bounded (~400 LOC of runtime + ~150 of compile-time validation + ~200 of test coverage) but it is real concurrency-aware code with race-condition surface.
 - **`branch_id` is added to checkpoint metadata everywhere.** Existing checkpoints have `branch_id: nil` (which sequential code already handles via map access). Stored checkpoints from before this ADR don't have the field at all; reading them with the new runtime gets `nil` from `Map.get/3`. Forward compatible; not backward compatible from the new runtime's perspective.
-- **The chooser-returns-list path goes from "documented but ignored" to "load-bearing".** Any third-party Graph builder that returned lists from its chooser was previously seeing `{:error, {:chooser_returned_non_id, list}}` — and presumably has been writing single-id choosers. After this ADR, list returns become valid. No behavior change for single-id choosers.
+- **The chooser-returns-list path goes from "documented but ignored" to "load-bearing".** Any third-party Graph builder that returned lists from its chooser was previously seeing `{:error, {:chooser_returned_non_id, list}}`, and presumably has been writing single-id choosers. After this ADR, list returns become valid. No behavior change for single-id choosers.
 - **Compensation order in parallel regions is topological, not temporal.** If branch A finishes in 100ms and branch B in 50ms, and the join later fails, compensation runs A's nodes before B's (because A is the first branch in the upstream list). For most consumers this is fine; for state-dependent compensation it could matter. Documented in `failure_policy: :compensate`'s moduledoc.
 - **Saver shape change is metadata-only.** Adapters don't need to change. Pre-ADR Saver implementations that strip metadata to specific keys would silently drop `branch_id`; the documented contract is "Saver returns metadata verbatim from `put/3`" so any adapter that does that is correct.
-- **No cancellation cascade.** If branch A fails with `:halt`, branches B and C don't get killed — they finish their current node and then the run fails when their next checkpoint commits. Acceptable trade-off: cancellation cascade requires linking the parent process to each branch task, which complicates the `Task.async_stream` shape and breaks the per-attempt span isolation that retry semantics rely on. Cascaded cancellation can land as a follow-up.
+- **No cancellation cascade.** If branch A fails with `:halt`, branches B and C don't get killed; they finish their current node and then the run fails when their next checkpoint commits. Acceptable trade-off: cancellation cascade requires linking the parent process to each branch task, which complicates the `Task.async_stream` shape and breaks the per-attempt span isolation that retry semantics rely on. Cascaded cancellation can land as a follow-up.
 
 ### What this ADR does not decide
 
@@ -208,14 +208,14 @@ How we know the design is right:
 - **A reference parallel workflow lands as `test/raxol/workflow/parallel_test.exs`.** Two-branch fan-out, three-branch fan-out, mixed channel reducers, branch-failure-during-fan-out, pause-inside-branch, retry-per-branch, compensate-across-branches. ~12 tests covering the new surface.
 - **`raxol_acp` adopts joins for a cross-chain settlement demo.** ACP today doesn't need joins (each ACP job walks one chain). A demo workflow under `packages/raxol_acp/examples/` that simulates a two-chain settlement validates the API ergonomics from a real consumer's perspective.
 - **Symphony GraphAdapter stays sequential.** No changes required. The ADR-0019 work doesn't touch Symphony's graph; that adoption is a separate follow-up gated on Symphony's PausedSaver work landing.
-- **Telemetry round-trip:** a fan-out → join run emits `[:raxol, :workflow, :node, :*]` events with `branch_id` set on the parallel branches and `nil` on the rest. Property test verifies branch_id is set if and only if the node is downstream of a `ConditionalEdge` whose chooser returned a list.
+- **Telemetry round-trip:** a fan-out -> join run emits `[:raxol, :workflow, :node, :*]` events with `branch_id` set on the parallel branches and `nil` on the rest. Property test verifies branch_id is set if and only if the node is downstream of a `ConditionalEdge` whose chooser returned a list.
 - **Compile errors match the ADR-0015 shape:** structured tuples, no exceptions thrown, every invalid join configuration produces an actionable error.
 
 ## References
 
-- ADR-0015: Workflow Graph (`Raxol.Workflow.*`) — Phase 25 runtime, this ADR's predecessor
-- ADR-0017: Workflow paused-run query and pause-checkpoint contract — the metadata-extension precedent
-- ADR-0018: Operator-flow contract for paused runs — the per-channel surfacing the new branch-level events will flow through
+- ADR-0015: Workflow Graph (`Raxol.Workflow.*`): Phase 25 runtime, this ADR's predecessor
+- ADR-0017: Workflow paused-run query and pause-checkpoint contract: the metadata-extension precedent
+- ADR-0018: Operator-flow contract for paused runs: the per-channel surfacing the new branch-level events will flow through
 - `lib/raxol/workflow/runtime.ex:29-30` (the deferral comment quoted in Context)
 - `lib/raxol/workflow/runtime.ex:813-836` (`pick_next/2`, the seam)
 - `lib/raxol/workflow/edge.ex:51-73` (`ConditionalEdge`, which already accepts list-returning choosers)
@@ -223,4 +223,4 @@ How we know the design is right:
 - `lib/raxol/workflow/checkpoint.ex:31-48` (Checkpoint struct, where `branch_id` lands in metadata)
 - `packages/raxol_symphony/lib/raxol/symphony/workflow/graph_adapter.ex:18-30` (Symphony's sequential pipeline, the largest existing consumer)
 - LangGraph's channel design (referenced for naming, not constraint)
-- `caudena/beam_weaver` (cited in ADR-0015 §18; concurrency layer not adopted in Phase 25)
+- `caudena/beam_weaver` (cited in ADR-0015; concurrency layer not adopted in Phase 25)

@@ -2,95 +2,95 @@
 
 ### Fixed
 
-- **Layout engine: dynamic-children dropped from `column(opts, do: var)`** -- when callers wrote the inline keyword-list form `column(style: ..., do: items)` Elixir matched it against `def column/1` instead of `defmacro column/2`, and the `:do` key rode through into the layout function unread. `Flex.column/1` then saw `children: []` and rendered an empty container. Fix: `Raxol.Core.Renderer.View.promote_do_to_children/1` pops `:do` and re-keys it as `:children` (via `List.wrap` so single-child blocks work too); `View.column/1`, `View.row/1`, `View.box/1` all forward through it. Restored rendering for CheckboxDemo, TextAreaDemo, RadioGroupDemo.
-- **Layout engine: chart widget types dropped at layout step** -- `Components.chart/1` returns a `:box` element whose `:type` is overridden to one of `:line_chart`, `:bar_chart`, `:scatter_chart`, `:heatmap` so MCP's `ToolProvider` can discover them. The layout engine had no clauses for those types; they hit the catch-all warning and the element disappeared. Fix: added one `process_element/3` clause that rewrites the chart types to `:box` and forwards. Restored LineChart, ScatterChart, BarChart, CursorTrail, Heatmap demos.
-- **Layout engine: `style: %{position: {x, y}}` offset ignored on `:text` elements** -- chart cells emitted by `Raxol.UI.Charts.ViewBridge` carry their own relative position so each row lands at the right column. The `:text` layout clause used `space.x`, `space.y` unconditionally and stacked all cells at the same coordinate. Fix: extract `{dx, dy}` from `style.position` and add to the space origin.
-- **Layout engine: `:text_input` constructor shape mismatch** -- `Components.text_input/1` builds the element with top-level `:value` / `:placeholder` keys, but the layout clause required them inside `:attrs`. Element fell to the catch-all and dropped. Fix: added a clause that rewrites the new-DSL shape into the `:attrs`-shaped form and forwards.
+- **Layout engine: dynamic-children dropped from `column(opts, do: var)`**: when callers wrote the inline keyword-list form `column(style: ..., do: items)` Elixir matched it against `def column/1` instead of `defmacro column/2`, and the `:do` key rode through into the layout function unread. `Flex.column/1` then saw `children: []` and rendered an empty container. Fix: `Raxol.Core.Renderer.View.promote_do_to_children/1` pops `:do` and re-keys it as `:children` (via `List.wrap` so single-child blocks work too); `View.column/1`, `View.row/1`, `View.box/1` all forward through it. Restored rendering for CheckboxDemo, TextAreaDemo, RadioGroupDemo.
+- **Layout engine: chart widget types dropped at layout step**: `Components.chart/1` returns a `:box` element whose `:type` is overridden to one of `:line_chart`, `:bar_chart`, `:scatter_chart`, `:heatmap` so MCP's `ToolProvider` can discover them. The layout engine had no clauses for those types; they hit the catch-all warning and the element disappeared. Fix: added one `process_element/3` clause that rewrites the chart types to `:box` and forwards. Restored LineChart, ScatterChart, BarChart, CursorTrail, Heatmap demos.
+- **Layout engine: `style: %{position: {x, y}}` offset ignored on `:text` elements**: chart cells emitted by `Raxol.UI.Charts.ViewBridge` carry their own relative position so each row lands at the right column. The `:text` layout clause used `space.x`, `space.y` unconditionally and stacked all cells at the same coordinate. Fix: extract `{dx, dy}` from `style.position` and add to the space origin.
+- **Layout engine: `:text_input` constructor shape mismatch**: `Components.text_input/1` builds the element with top-level `:value` / `:placeholder` keys, but the layout clause required them inside `:attrs`. Element fell to the catch-all and dropped. Fix: added a clause that rewrites the new-DSL shape into the `:attrs`-shaped form and forwards.
 
 ### Added
 
-- **`test/property/layout_completeness_property_test.exs`** -- 3 properties locking down the layout-element-drop bug shape. Generates view trees (text / flex / box / chart) and asserts every `:text` content string in the input appears in the positioned-elements output. Sabotage-verified: comment out the chart-type clause and both relevant properties fail.
-- **`test/property/promote_do_to_children_property_test.exs`** -- 8 invariants for the helper above. Includes one property documenting that `[do: nil]` is intentionally indistinguishable from `[]` (because `Keyword.pop/2` can't disambiguate).
-- **`test/property/demo_update_totality_property_test.exs`** -- one property per Catalog demo (30 total). For each demo, folds random sequences of up to 30 mixed key events (chars, special keys, `:tick`, modifier combos) through `update/2` and asserts no exception plus correct `{model, commands_list}` shape. Catches state-machine edge cases that example tests don't reach (negative cursors, list overflows, unhandled tick states).
-- **`test/raxol/playground/demo_render_test.exs`** -- end-to-end render regression test that mounts every Catalog demo through `Raxol.Headless`, asserts both text-screenshot content lines and buffer cell paint coverage, and drives demos through documented key sequences (`@key_drives`) to reach state where the canonical widget content is visible. Caught the four framework bugs above on its first run.
-- **`raxol_symphony` Phases 0-14** -- Elixir/OTP port of OpenAI Symphony. Tracker-driven coding-agent orchestrator with two runner backends (`Runners.RaxolAgent` default; `Runners.Codex` Port-based JSON-RPC for parity with upstream Symphony Elixir) and six surfaces (terminal dashboard, LiveView, MCP tools + `symphony://runs` resource, Telegram per-issue session router, Watch push, JSON `/api/v1/*`). Workflow hot-reload via `WorkflowStore`, Linear (GraphQL) + GitHub Issues (state labels) trackers, evidence framework (`Evidence.GitHub` CI/PR comments, `Evidence.Complexity` cloc/SLOC fallback, `Evidence.Recording` cast scan), in-run asciinema capture (`Evidence.Capture` writes `<workspace>/.raxol_symphony/run-<attempt>.cast` per dispatch when `recording.enabled: true`). 399 tests, 0 failures. Pre-alpha, path-dep.
-- **`raxol_acp` v0.1 (engineering complete)** -- First Elixir/OTP-native Virtuals Agent Commerce Protocol implementation. Job lifecycle (`Job.{Server, StateMachine, Memo, Store, Supervisor, Registry}`), EIP-712 typed-data memos via `Raxol.Payments.EIP712`, on-chain client (`ContractClient.Onchain` over Req JSON-RPC, EIP-1559 typed-tx signing, Yellow-Paper RLP, log decoder for `create_job` job_id extraction), Seller stack (`Backend.InMemory` + `Queue` + `Runtime` + `Supervisor`, opt-in via `:seller_enabled`), `Wallet.NonceServer` for serialized nonce assignment, `mix raxol_acp.bench` sandbox-graduation harness. Optional DETS-backed `Job.Store` durability. 256 tests, 0 failures. Pre-alpha, path-dep. External-blocked: real ACP contract ABIs, `Wallet.SCA`, `Seller.Backend.WebSocket`.
-- **`Raxol.Payments.Wallet.sign_hash/1`** -- new behaviour callback for EIP-1559 transaction signing (sign-precomputed-digest semantics). `Wallets.Env` and `Wallets.Op` both implement.
-- **Workflow Graph (`Raxol.Workflow.*`, ADR-0015)** -- LangGraph-style stateful workflow primitive in main raxol: a declarative `Graph` builder with six-step structural validation, synchronous `Compiled.invoke/3` plus `async_invoke/3` and `stream_events/3`, a durable `Checkpoint.Saver` (Ets/Dets/Postgrex adapters), `Workflow.interrupt/1` human-in-the-loop with `Compiled.resume/4`, and `failure_policy: :retry | :compensate` (reverse-order saga rollback).
-- **Workflow concurrency (ADR-0019)** -- `Graph.add_channel/3` (typed reducers) and `Graph.add_join/4` (barrier); multi-node parallel branches via `Task.async_stream` (`parallelism :: pos_integer | :branches`), per-branch pause/resume, cancellation cascade, per-branch trace spans, and `branch_id` checkpoint/telemetry metadata. Real consumers: an ACP cross-chain settlement example and a Symphony parallel-candidates `GraphAdapter`.
-- **Effect system (`Raxol.Agent.Directive`)** -- struct-based directives (Async/Shell/SendAgent/Schedule/Spawn/Stop) with an `Executor` protocol replacing the closed Command tuple set; a CloudEvents v1.0 envelope (`Event.to_cloud_event/2`); `TraceContext` `causation_id` correlation.
-- **Agent-stack substrate (ADR-0020)** -- `Raxol.Agent.Cache`, `ThreadLog` (append-only audit), declarative `Policy.{Retry, Timeout, Cache}` via `PolicyApplier`, and the `Sandbox` protocol with `Sandbox.Chain` gating. Symphony's RaxolAgent runner adopts every primitive (tracker cache, thread-log audit, per-turn policies and sandboxes); a Session-backed sibling runner ships.
-- **Operator-flow contract (ADR-0018)** -- a first-class paused-run substrate end-to-end (Workflow Saver -> ACP Job -> Symphony Orchestrator -> MCP tools -> TUI/LiveView/Telegram/Watch); `Raxol.Symphony.PauseReason` consolidates reason formatting and is mechanically enforced via a `pause_reasons/0` callback.
-- **raxol_acp Workflow migration (ADR-0016)** -- `Job.Server`'s GenServer state machine replaced by a Workflow-backed implementation (`Job.Workflow`, a 10-node graph); `:via_workflow` flipped to the default.
-- **Self-improving agent loop (`raxol_agent`)** -- skills as filesystem procedural memory, an after-turn curation reviewer, and a Curator. `Raxol.Agent.Skill` parses/renders agentskills.io `SKILL.md`; `Raxol.Agent.Skills.Store` is a `BaseManager` disk index with usage telemetry persisted via `Core.Stores.Dets`, a managed root plus read-only `external_dirs` (default `~/.agents/skills`), and archive/state/pin; `skills_list`/`skill_view`/`skill_manage` Actions. `Raxol.Agent.SelfImprove.after_turn/3` spawns an isolated, unlinked reviewer on an auxiliary model that writes durable memory and `created_by: :agent` skills; `Raxol.Agent.Curator` ages `active -> stale -> archived` with interval-plus-idle gating, dry-run, and `tar.gz` backup/rollback. New `use Raxol.Agent` callbacks `skills_provider/0` and `self_improve/0`.
-- **Memory provider stack, full-text recall, dialectic user model (`raxol_agent`)** -- `Raxol.Agent.Memory.Stack` composes N memory providers (fan-out writes, merge + rerank + dedup reads); `Raxol.Agent.Memory.SessionSearch` is a BM25-lite inverted index over raw conversation items (`session_search` returns messages, not summaries); `Raxol.Agent.UserModel` derives a per-user dialectic block on an auxiliary model, injected into the last user message via the new optional `build_user_context/1` callback. New `memory_providers/0` callback.
-- **`Raxol.Agent.Turn`** -- the turn driver that assembles memory/skills/user-context/session-search context from an agent module's callbacks, records each turn to a `Conversation.Log`, and fires the after-turn self-improvement effects. Wires the loop end-to-end.
-- **`raxol_gateway` package (pre-alpha)** -- one daemon connecting many chat platforms through a shared `Gateway.Adapter` contract. `Route` keys sessions `agent:main:{platform}:{chat_type}:{chat_id}`; `SessionRouter` + `Session` run one process per chat under a `DynamicSupervisor` with idle/cooldown/max-session limits; `Pairing` issues DM codes and decides `authorize/2`; `Delivery` resolves four outbound destinations (direct, home, cross-platform, explicit `"platform:chat_id"` target); per-chat history plus `SessionRouter.handoff/3` move a conversation across platforms with its history intact. `Adapter.InMemory` is a reference adapter.
-- **Symphony opt-in self-improvement** -- `Raxol.Symphony.Runners.RaxolAgent` fires the `Agent.Turn` after-turn hook (skills curation, memory, user-model refresh, session index) on each turn when `agent.module` declares it, in both the workflow and simple run paths, without touching event forwarding, pause detection, policies, or sandboxes.
-- **ADRs 0021-0028** -- Hermes-extraction Tier 1 (self-improving agents, memory provider stack, unified messaging gateway) and Tier 2 (execution backends + hibernation, cronjob, execute_code, delegate_task, auxiliary-model routing) decision records.
-- **Idempotent crash recovery for cross-chain payment Actions (`raxol_payments`)** -- `Raxol.Payments.Checkpoint`, a nil-safe behaviour for a durable in-flight-intent store injected via `context[:checkpoint]`, with `derive_key/1` for a stable idempotency key. Three stores: `Checkpoint.ETS` (process-crash-durable), `Checkpoint.ContextStore` (backed by `Raxol.Agent.ContextStore`, so a deployed agent's in-flight intent rides the same store that backs its crash recovery), and nil (disabled, the default). `ExecuteXochiIntent` and `ExecuteRelayTransfer` checkpoint the dispatched intent before submit and resume it on a re-run after a crash (poll-before-re-sign, no second spend authorize) instead of re-quoting and signing twice; the relay rail keys on the logical payment (not the client-minted `transfer_id`) so a resume reuses the same id and an idempotent broadcaster dedupes a retried deposit. Drops the checkpoint on definite failure; protocol-tagged keys (`:xochi`/`:relay`) so a shared store can't collide. The ZERO cockpit crash beat (`examples/agents/zero_system.exs`) models the contract end-to-end. `:live_xochi` and `:live_relay` kill-and-resume gates. 24 new tests + the live variants; 0 failures.
-- **Auxiliary-model routing (`raxol_agent`, ADR-0028)** -- `Raxol.Agent.Auxiliary` routes background tasks (curation, user-model derivation, future titling/triage) to a cheap model per task kind instead of the frontier model. `resolve/2` maps a task kind to its slot's `ExecutorConfig`; `resolve_chain/2` adds the slot's fallback chain terminating at the primary executor; `select/2` walks the chain through `Backend.Selector` with an injectable availability predicate. Config is an `auxiliary:` slot map keyed by task kind with a `default_aux` catch-all. `SelfImprove` and `UserModel` consult the resolver when no explicit backend/model is set, keeping explicit config as an override; with `auxiliary:` unset every kind resolves to the primary executor.
+- **`test/property/layout_completeness_property_test.exs`**: 3 properties locking down the layout-element-drop bug shape. Generates view trees (text / flex / box / chart) and asserts every `:text` content string in the input appears in the positioned-elements output. Sabotage-verified: comment out the chart-type clause and both relevant properties fail.
+- **`test/property/promote_do_to_children_property_test.exs`**: 8 invariants for the helper above. Includes one property documenting that `[do: nil]` is intentionally indistinguishable from `[]` (because `Keyword.pop/2` can't disambiguate).
+- **`test/property/demo_update_totality_property_test.exs`**: one property per Catalog demo (30 total). For each demo, folds random sequences of up to 30 mixed key events (chars, special keys, `:tick`, modifier combos) through `update/2` and asserts no exception plus correct `{model, commands_list}` shape. Catches state-machine edge cases that example tests don't reach (negative cursors, list overflows, unhandled tick states).
+- **`test/raxol/playground/demo_render_test.exs`**: end-to-end render regression test that mounts every Catalog demo through `Raxol.Headless`, asserts both text-screenshot content lines and buffer cell paint coverage, and drives demos through documented key sequences (`@key_drives`) to reach state where the canonical widget content is visible. Caught the four framework bugs above on its first run.
+- **`raxol_symphony` Phases 0-14**: Elixir/OTP port of OpenAI Symphony. Tracker-driven coding-agent orchestrator with two runner backends (`Runners.RaxolAgent` default; `Runners.Codex` Port-based JSON-RPC for parity with upstream Symphony Elixir) and six surfaces (terminal dashboard, LiveView, MCP tools + `symphony://runs` resource, Telegram per-issue session router, Watch push, JSON `/api/v1/*`). Workflow hot-reload via `WorkflowStore`, Linear (GraphQL) + GitHub Issues (state labels) trackers, evidence framework (`Evidence.GitHub` CI/PR comments, `Evidence.Complexity` cloc/SLOC fallback, `Evidence.Recording` cast scan), in-run asciinema capture (`Evidence.Capture` writes `<workspace>/.raxol_symphony/run-<attempt>.cast` per dispatch when `recording.enabled: true`). 399 tests, 0 failures. Pre-alpha, path-dep.
+- **`raxol_acp` v0.1 (engineering complete)**: First Elixir/OTP-native Virtuals Agent Commerce Protocol implementation. Job lifecycle (`Job.{Server, StateMachine, Memo, Store, Supervisor, Registry}`), EIP-712 typed-data memos via `Raxol.Payments.EIP712`, on-chain client (`ContractClient.Onchain` over Req JSON-RPC, EIP-1559 typed-tx signing, Yellow-Paper RLP, log decoder for `create_job` job_id extraction), Seller stack (`Backend.InMemory` + `Queue` + `Runtime` + `Supervisor`, opt-in via `:seller_enabled`), `Wallet.NonceServer` for serialized nonce assignment, `mix raxol_acp.bench` sandbox-graduation harness. Optional DETS-backed `Job.Store` durability. 256 tests, 0 failures. Pre-alpha, path-dep. External-blocked: real ACP contract ABIs, `Wallet.SCA`, `Seller.Backend.WebSocket`.
+- **`Raxol.Payments.Wallet.sign_hash/1`**: new behaviour callback for EIP-1559 transaction signing (sign-precomputed-digest semantics). `Wallets.Env` and `Wallets.Op` both implement.
+- **Workflow Graph (`Raxol.Workflow.*`, ADR-0015)**: LangGraph-style stateful workflow primitive in main raxol: a declarative `Graph` builder with six-step structural validation, synchronous `Compiled.invoke/3` plus `async_invoke/3` and `stream_events/3`, a durable `Checkpoint.Saver` (Ets/Dets/Postgrex adapters), `Workflow.interrupt/1` human-in-the-loop with `Compiled.resume/4`, and `failure_policy: :retry | :compensate` (reverse-order saga rollback).
+- **Workflow concurrency (ADR-0019)**: `Graph.add_channel/3` (typed reducers) and `Graph.add_join/4` (barrier); multi-node parallel branches via `Task.async_stream` (`parallelism :: pos_integer | :branches`), per-branch pause/resume, cancellation cascade, per-branch trace spans, and `branch_id` checkpoint/telemetry metadata. Real consumers: an ACP cross-chain settlement example and a Symphony parallel-candidates `GraphAdapter`.
+- **Effect system (`Raxol.Agent.Directive`)**: struct-based directives (Async/Shell/SendAgent/Schedule/Spawn/Stop) with an `Executor` protocol replacing the closed Command tuple set; a CloudEvents v1.0 envelope (`Event.to_cloud_event/2`); `TraceContext` `causation_id` correlation.
+- **Agent-stack substrate (ADR-0020)**: `Raxol.Agent.Cache`, `ThreadLog` (append-only audit), declarative `Policy.{Retry, Timeout, Cache}` via `PolicyApplier`, and the `Sandbox` protocol with `Sandbox.Chain` gating. Symphony's RaxolAgent runner adopts every primitive (tracker cache, thread-log audit, per-turn policies and sandboxes); a Session-backed sibling runner ships.
+- **Operator-flow contract (ADR-0018)**: a first-class paused-run substrate end-to-end (Workflow Saver -> ACP Job -> Symphony Orchestrator -> MCP tools -> TUI/LiveView/Telegram/Watch); `Raxol.Symphony.PauseReason` consolidates reason formatting and is mechanically enforced via a `pause_reasons/0` callback.
+- **raxol_acp Workflow migration (ADR-0016)**: `Job.Server`'s GenServer state machine replaced by a Workflow-backed implementation (`Job.Workflow`, a 10-node graph); `:via_workflow` flipped to the default.
+- **Self-improving agent loop (`raxol_agent`)**: skills as filesystem procedural memory, an after-turn curation reviewer, and a Curator. `Raxol.Agent.Skill` parses/renders agentskills.io `SKILL.md`; `Raxol.Agent.Skills.Store` is a `BaseManager` disk index with usage telemetry persisted via `Core.Stores.Dets`, a managed root plus read-only `external_dirs` (default `~/.agents/skills`), and archive/state/pin; `skills_list`/`skill_view`/`skill_manage` Actions. `Raxol.Agent.SelfImprove.after_turn/3` spawns an isolated, unlinked reviewer on an auxiliary model that writes durable memory and `created_by: :agent` skills; `Raxol.Agent.Curator` ages `active -> stale -> archived` with interval-plus-idle gating, dry-run, and `tar.gz` backup/rollback. New `use Raxol.Agent` callbacks `skills_provider/0` and `self_improve/0`.
+- **Memory provider stack, full-text recall, dialectic user model (`raxol_agent`)**: `Raxol.Agent.Memory.Stack` composes N memory providers (fan-out writes, merge + rerank + dedup reads); `Raxol.Agent.Memory.SessionSearch` is a BM25-lite inverted index over raw conversation items (`session_search` returns messages, not summaries); `Raxol.Agent.UserModel` derives a per-user dialectic block on an auxiliary model, injected into the last user message via the new optional `build_user_context/1` callback. New `memory_providers/0` callback.
+- **`Raxol.Agent.Turn`**: the turn driver that assembles memory/skills/user-context/session-search context from an agent module's callbacks, records each turn to a `Conversation.Log`, and fires the after-turn self-improvement effects. Wires the loop end-to-end.
+- **`raxol_gateway` package (pre-alpha)**: one daemon connecting many chat platforms through a shared `Gateway.Adapter` contract. `Route` keys sessions `agent:main:{platform}:{chat_type}:{chat_id}`; `SessionRouter` + `Session` run one process per chat under a `DynamicSupervisor` with idle/cooldown/max-session limits; `Pairing` issues DM codes and decides `authorize/2`; `Delivery` resolves four outbound destinations (direct, home, cross-platform, explicit `"platform:chat_id"` target); per-chat history plus `SessionRouter.handoff/3` move a conversation across platforms with its history intact. `Adapter.InMemory` is a reference adapter.
+- **Symphony opt-in self-improvement**: `Raxol.Symphony.Runners.RaxolAgent` fires the `Agent.Turn` after-turn hook (skills curation, memory, user-model refresh, session index) on each turn when `agent.module` declares it, in both the workflow and simple run paths, without touching event forwarding, pause detection, policies, or sandboxes.
+- **ADRs 0021-0028**: Hermes-extraction Tier 1 (self-improving agents, memory provider stack, unified messaging gateway) and Tier 2 (execution backends + hibernation, cronjob, execute_code, delegate_task, auxiliary-model routing) decision records.
+- **Idempotent crash recovery for cross-chain payment Actions (`raxol_payments`)**: `Raxol.Payments.Checkpoint`, a nil-safe behaviour for a durable in-flight-intent store injected via `context[:checkpoint]`, with `derive_key/1` for a stable idempotency key. Three stores: `Checkpoint.ETS` (process-crash-durable), `Checkpoint.ContextStore` (backed by `Raxol.Agent.ContextStore`, so a deployed agent's in-flight intent rides the same store that backs its crash recovery), and nil (disabled, the default). `ExecuteXochiIntent` and `ExecuteRelayTransfer` checkpoint the dispatched intent before submit and resume it on a re-run after a crash (poll-before-re-sign, no second spend authorize) instead of re-quoting and signing twice; the relay rail keys on the logical payment (not the client-minted `transfer_id`) so a resume reuses the same id and an idempotent broadcaster dedupes a retried deposit. Drops the checkpoint on definite failure; protocol-tagged keys (`:xochi`/`:relay`) so a shared store can't collide. The ZERO cockpit crash beat (`examples/agents/zero_system.exs`) models the contract end-to-end. `:live_xochi` and `:live_relay` kill-and-resume gates. 24 new tests + the live variants; 0 failures.
+- **Auxiliary-model routing (`raxol_agent`, ADR-0028)**: `Raxol.Agent.Auxiliary` routes background tasks (curation, user-model derivation, future titling/triage) to a cheap model per task kind instead of the frontier model. `resolve/2` maps a task kind to its slot's `ExecutorConfig`; `resolve_chain/2` adds the slot's fallback chain terminating at the primary executor; `select/2` walks the chain through `Backend.Selector` with an injectable availability predicate. Config is an `auxiliary:` slot map keyed by task kind with a `default_aux` catch-all. `SelfImprove` and `UserModel` consult the resolver when no explicit backend/model is set, keeping explicit config as an override; with `auxiliary:` unset every kind resolves to the primary executor.
 
 ### Changed
 
-- **`Raxol.Agent.Memory.Store.Ets` DETS** -- migrated the hand-rolled `:dets` open/persist/delete/clear/sync/close to the shared `Raxol.Core.Stores.Dets` helper. Behaviour-preserving; the existing store tests pass unchanged.
+- **`Raxol.Agent.Memory.Store.Ets` DETS**: migrated the hand-rolled `:dets` open/persist/delete/clear/sync/close to the shared `Raxol.Core.Stores.Dets` helper. Behaviour-preserving; the existing store tests pass unchanged.
 
 ## [2.4.0] - 2026-04-14
 
 ### Added
 
-- **Phase 14B: Xochi Integration** -- Xochi as default agent-facing protocol for cross-chain payments. Cash-positive with tier-based fees (0.10-0.30%). Riddler solves intents behind the scenes.
-  - `Raxol.Payments.Xochi.Client` -- HTTP client for Xochi intent API (quote, execute, status, history)
-  - `Raxol.Payments.Xochi.Schemas` -- 5 typed structs (QuoteRequest, QuoteResponse, ExecuteRequest, ExecuteResponse, IntentStatus)
-  - `Raxol.Payments.Protocols.Xochi` -- full intent flow: `get_quote/2` -> `execute/3` (EIP-712 wallet signing) -> `poll_status/3`
-  - `Raxol.Payments.Riddler.Client` -- Commerce API client (B2B/direct solver access, not default)
-  - `Raxol.Payments.Router` -- cross-chain routes to `:xochi`, privacy to `:xochi`, same-chain stays `:x402`
-- **Phase 14C: PXE-Bridge Integration** -- Aztec Private eXecution Environment as settlement target for high-trust privacy tiers.
-  - `Raxol.Payments.Pxe.Client` -- JSON-RPC 2.0 client (aztec_createNote, aztec_getVersion, /status)
-  - `Raxol.Payments.Pxe.Schemas` -- CreateNoteParams, CreateNoteResult, HealthStatus
-  - `Raxol.Payments.PrivacyTier` -- Glass Cube model (6 tiers: open, public, standard, stealth, private, sovereign), attestation gating, downgrade logic
+- **Phase 14B: Xochi Integration**: Xochi as default agent-facing protocol for cross-chain payments. Cash-positive with tier-based fees (0.10-0.30%). Riddler solves intents behind the scenes.
+  - `Raxol.Payments.Xochi.Client`: HTTP client for Xochi intent API (quote, execute, status, history)
+  - `Raxol.Payments.Xochi.Schemas`: 5 typed structs (QuoteRequest, QuoteResponse, ExecuteRequest, ExecuteResponse, IntentStatus)
+  - `Raxol.Payments.Protocols.Xochi`: full intent flow: `get_quote/2` -> `execute/3` (EIP-712 wallet signing) -> `poll_status/3`
+  - `Raxol.Payments.Riddler.Client`: Commerce API client (B2B/direct solver access, not default)
+  - `Raxol.Payments.Router`: cross-chain routes to `:xochi`, privacy to `:xochi`, same-chain stays `:x402`
+- **Phase 14C: PXE-Bridge Integration**: Aztec Private eXecution Environment as settlement target for high-trust privacy tiers.
+  - `Raxol.Payments.Pxe.Client`: JSON-RPC 2.0 client (aztec_createNote, aztec_getVersion, /status)
+  - `Raxol.Payments.Pxe.Schemas`: CreateNoteParams, CreateNoteResult, HealthStatus
+  - `Raxol.Payments.PrivacyTier`: Glass Cube model (6 tiers: open, public, standard, stealth, private, sovereign), attestation gating, downgrade logic
   - Router settlement routing with trust-score-aware privacy depth
-- **Phase 14D: Stealth Settlement** -- Full ERC-5564/ERC-6538 in `Xochi.Stealth` (~300 LOC).
+- **Phase 14D: Stealth Settlement**: Full ERC-5564/ERC-6538 in `Xochi.Stealth` (~300 LOC).
   - ECDH stealth address derivation (secp256k1)
   - View tag scanning (256x speedup, 1:256 false positive rate)
   - Domain-separated key derivation from EVM signature
   - Meta-address encode/decode (st:eth:0x format)
   - 44 tests (32 unit + 12 e2e), stress-tested 500 round-trips at 0% failure
-- **Phase 14E: ZKSAR + Trust Tiers** -- Zero-knowledge attestation verification and trust scoring.
-  - `Raxol.Payments.Zksar` -- 6 ZK proof type verification (type, expiry, issuer, structure), batch verify, JSON parsing
-  - `Raxol.Payments.Zksar.TrustScore` -- diminishing-returns aggregation: `score = sum(weight_i / ln(rank + 1))`, capped at 100
+- **Phase 14E: ZKSAR + Trust Tiers**: Zero-knowledge attestation verification and trust scoring.
+  - `Raxol.Payments.Zksar`: 6 ZK proof type verification (type, expiry, issuer, structure), batch verify, JSON parsing
+  - `Raxol.Payments.Zksar.TrustScore`: diminishing-returns aggregation: `score = sum(weight_i / ln(rank + 1))`, capped at 100
   - PrivacyTier attestation requirements per tier, downgrade logic
   - Router attestation-aware routing with `trust_score_for/1`
-- **AutoPay wiring** -- `Backend.HTTP` accepts `:req_plugins` for transparent HTTP 402 handling. `Raxol.Payments.Req.AgentPlugin.auto_pay/1` builds the closure.
-- **Riddler solver wiring (ADR-0005)** -- Complete on both sides. 9 Xochi endpoints, fee policy (5 tiers + privacy premiums), stealth/ERC-4337 settlement, ZKSAR attestation, EIP-712 typed data. 119 Riddler tests + 347 raxol_payments tests.
-- **raxol_liveview package** -- TerminalBridge, TEALive, TerminalComponent, 5 themes, CSS asset. 37 tests.
-- **raxol_plugin package** -- `use Raxol.Plugin` macro, API facade, Manifest, Testing helpers, generator. 50 tests.
-- **Hex publishing readiness** -- All packages at v2.4.0 with LICENSE.md, README.md, package metadata, version-constrained path deps. Publishing order: raxol_sensor + raxol_core -> raxol_terminal/mcp/plugin/liveview -> raxol -> raxol_agent -> raxol_payments.
+- **AutoPay wiring**: `Backend.HTTP` accepts `:req_plugins` for transparent HTTP 402 handling. `Raxol.Payments.Req.AgentPlugin.auto_pay/1` builds the closure.
+- **Riddler solver wiring (ADR-0005)**: Complete on both sides. 9 Xochi endpoints, fee policy (5 tiers + privacy premiums), stealth/ERC-4337 settlement, ZKSAR attestation, EIP-712 typed data. 119 Riddler tests + 347 raxol_payments tests.
+- **raxol_liveview package**: TerminalBridge, TEALive, TerminalComponent, 5 themes, CSS asset. 37 tests.
+- **raxol_plugin package**: `use Raxol.Plugin` macro, API facade, Manifest, Testing helpers, generator. 50 tests.
+- **Hex publishing readiness**: All packages at v2.4.0 with LICENSE.md, README.md, package metadata, version-constrained path deps. Publishing order: raxol_sensor + raxol_core -> raxol_terminal/mcp/plugin/liveview -> raxol -> raxol_agent -> raxol_payments.
 
 ### Changed
 
-- Deprecated `Protocols.Riddler` -- now delegates to Xochi internally
+- Deprecated `Protocols.Riddler`: now delegates to Xochi internally
 - All sub-packages bumped to v2.4.0 (raxol_payments stays at 0.1.0)
 - Path deps now include version constraints (`~> 2.4`) for Hex compatibility
 
 ### Fixed
 
-- **Dashboard demo** -- `status_dot/1` used identical character for all scheduler load levels; now uses distinct ASCII indicators per threshold
-- **String.to_atom on external input** -- Replaced 6 unsafe catch-all `String.to_atom(s)` in schema parsers with explicit clauses + `:unknown`/`nil` fallback
-- **Duplicated `maybe_put/3`** -- Extracted to `Schemas.put_non_nil/3` shared helper
-- **Dialyzer specs** -- Tightened `{:error, term()}` to actual error tuple shapes in `metrics.ex`
-- **QuoteRequest validation** -- Added `validate/1` with eth address format checks
-- **Attestation filtering** -- PrivacyTier now filters attestations by `valid: true`
+- **Dashboard demo**: `status_dot/1` used identical character for all scheduler load levels; now uses distinct ASCII indicators per threshold
+- **String.to_atom on external input**: Replaced 6 unsafe catch-all `String.to_atom(s)` in schema parsers with explicit clauses + `:unknown`/`nil` fallback
+- **Duplicated `maybe_put/3`**: Extracted to `Schemas.put_non_nil/3` shared helper
+- **Dialyzer specs**: Tightened `{:error, term()}` to actual error tuple shapes in `metrics.ex`
+- **QuoteRequest validation**: Added `validate/1` with eth address format checks
+- **Attestation filtering**: PrivacyTier now filters attestations by `valid: true`
 
 ## [2.3.2] - 2026-03-30
 
 ### Added
 
-- **Headless session manager** (`Raxol.Headless`) -- GenServer managing non-interactive TEA app instances in `:agent` environment. Start from module or .exs file, take text screenshots, send keystrokes, read model state. Used by MCP tools and future test harness.
-- **MCP tools for Claude Code** -- 6 tools (`raxol_start`, `raxol_screenshot`, `raxol_send_key`, `raxol_get_model`, `raxol_stop`, `raxol_list`) injected into Tidewave at dev startup. Tidewave MCP proxy script for stdio transport.
-- **ADR-0012: MCP as Rendering Target** -- Architecture decision formalizing MCP as a first-class rendering target. Automatic tool derivation from widget tree via ToolProvider behaviour, focus lens with mouse tracking, context tree as MCP resources, agent-MCP symmetry, multi-surface cockpit vision (terminal, MCP, Telegram, speech, watch). Category theory foundations for design and property-based test invariants.
-- **SPECS.md Phases 8-11** -- raxol_mcp package, ToolProvider + tool derivation, context tree + resources, MCP test harness.
-- **Playground resize handling** -- Fixed resize event propagation in playground demos.
+- **Headless session manager** (`Raxol.Headless`): GenServer managing non-interactive TEA app instances in `:agent` environment. Start from module or .exs file, take text screenshots, send keystrokes, read model state. Used by MCP tools and future test harness.
+- **MCP tools for Claude Code**: 6 tools (`raxol_start`, `raxol_screenshot`, `raxol_send_key`, `raxol_get_model`, `raxol_stop`, `raxol_list`) injected into Tidewave at dev startup. Tidewave MCP proxy script for stdio transport.
+- **ADR-0012: MCP as Rendering Target**: Architecture decision formalizing MCP as a first-class rendering target. Automatic tool derivation from widget tree via ToolProvider behaviour, focus lens with mouse tracking, context tree as MCP resources, agent-MCP symmetry, multi-surface cockpit vision (terminal, MCP, Telegram, speech, watch). Category theory foundations for design and property-based test invariants.
+- **SPECS.md Phases 8-11**: raxol_mcp package, ToolProvider + tool derivation, context tree + resources, MCP test harness.
+- **Playground resize handling**: Fixed resize event propagation in playground demos.
 
 ### Changed
 
@@ -107,19 +107,19 @@
 
 ### Added
 
-- **Distributed swarm subsystem** -- libcluster integration with gossip, EPMD, DNS, and custom Tailscale strategy. CRDTs (LWW-Register, OR-Set) for shared state. Node health monitoring, seniority-based leader election, bandwidth-aware message routing. 11 modules, 2,100+ lines.
-- **AI agent framework** -- `use Raxol.Agent` for TEA-based agents with OTP supervision. Agent discovery via Registry, typed inter-agent messaging, headless or rendered. Three command types: async (SSE streaming), shell (Port), inter-agent. Team supervision via `Agent.Team`. Backend.HTTP streams across Anthropic, OpenAI, Ollama, Kimi, and Lumo (U2L encryption). Tiered fallback detection.
-- **Interactive playground** -- 28 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Search, filter by category/complexity, help overlay. Charts as View DSL widgets. SSH serving with `mix raxol.playground --ssh`.
-- **Time-travel debugging** -- `Raxol.start_link(MyApp, time_travel: true)` snapshots every `update/2` cycle into a circular buffer. Step back/forward, jump to any point, restore state. Recursive map diffing. Zero cost when disabled.
-- **Session recording and replay** -- Asciinema v2 format. Capture with timestamps, replay with pause/seek/speed controls. Stream replay.
-- **Sandboxed REPL** -- `Code.eval_string` with spawn_monitor timeout, IO capture via group_leader swap, persistent bindings. Three sandbox levels: unrestricted, standard, strict (whitelist-only, safe for SSH). Available as `mix raxol.repl`.
-- **Nx/Axon adaptive ML** -- Optional Nx vectorized fusion, Axon MLP recommender for layout, FeedbackLoop training. Gated behind `Code.ensure_loaded?`.
-- **Plugin system** -- Phase 1 mission plugin system (4 modules) with lifecycle management
-- **AGI Cockpit Console** -- Phase 2 cockpit with uptime panel, dependency checker, crash recovery, state machine
-- **`mix raxol.new`** -- Project generator with 4 templates (basic, phoenix, ssh, agent)
-- **`mix raxol.demo`** -- 4 built-in runnable demos
-- **`mix raxol.check`** -- Unified quality gate (format, compile, credo, dialyzer, security, test)
-- **Benchmark suite** -- Comparative benchmarks against Ratatui, BubbleTea, and Textual
+- **Distributed swarm subsystem**: libcluster integration with gossip, EPMD, DNS, and custom Tailscale strategy. CRDTs (LWW-Register, OR-Set) for shared state. Node health monitoring, seniority-based leader election, bandwidth-aware message routing. 11 modules, 2,100+ lines.
+- **AI agent framework**: `use Raxol.Agent` for TEA-based agents with OTP supervision. Agent discovery via Registry, typed inter-agent messaging, headless or rendered. Three command types: async (SSE streaming), shell (Port), inter-agent. Team supervision via `Agent.Team`. Backend.HTTP streams across Anthropic, OpenAI, Ollama, Kimi, and Lumo (U2L encryption). Tiered fallback detection.
+- **Interactive playground**: 28 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Search, filter by category/complexity, help overlay. Charts as View DSL widgets. SSH serving with `mix raxol.playground --ssh`.
+- **Time-travel debugging**: `Raxol.start_link(MyApp, time_travel: true)` snapshots every `update/2` cycle into a circular buffer. Step back/forward, jump to any point, restore state. Recursive map diffing. Zero cost when disabled.
+- **Session recording and replay**: Asciinema v2 format. Capture with timestamps, replay with pause/seek/speed controls. Stream replay.
+- **Sandboxed REPL**: `Code.eval_string` with spawn_monitor timeout, IO capture via group_leader swap, persistent bindings. Three sandbox levels: unrestricted, standard, strict (whitelist-only, safe for SSH). Available as `mix raxol.repl`.
+- **Nx/Axon adaptive ML**: Optional Nx vectorized fusion, Axon MLP recommender for layout, FeedbackLoop training. Gated behind `Code.ensure_loaded?`.
+- **Plugin system**: Phase 1 mission plugin system (4 modules) with lifecycle management
+- **AGI Cockpit Console**: Phase 2 cockpit with uptime panel, dependency checker, crash recovery, state machine
+- **`mix raxol.new`**: Project generator with 4 templates (basic, phoenix, ssh, agent)
+- **`mix raxol.demo`**: 4 built-in runnable demos
+- **`mix raxol.check`**: Unified quality gate (format, compile, credo, dialyzer, security, test)
+- **Benchmark suite**: Comparative benchmarks against Ratatui, BubbleTea, and Textual
 - **746+ new tests** across 21 modules (357 for core, 233 for runtime, 156 for plugins, 84 for converter/keyboard/engine/shutdown/initializer/scheduler)
 - Mouse click hit testing for buttons
 - Agent semantic view tree
@@ -243,7 +243,7 @@ Fixed failing GitHub Actions workflows and updated to latest Elixir/OTP versions
   - 100% test coverage: 3 parser tests, 11 graphics tests, 2 integration tests, 25+ DCS handler tests
   - Confirmed edge case handling: empty sequences, invalid colors, bounds checking, malformed DCS
   - Performance validated: ~3-5μs per pattern character, O(1) palette lookups, sparse pixel buffer
-  - Integration verified: Emulator → DCS Handler → SixelGraphics → Parser → Pixel Buffer → Screen Buffer → Cell
+  - Integration verified: Emulator -> DCS Handler -> SixelGraphics -> Parser -> Pixel Buffer -> Screen Buffer -> Cell
   - Documentation updated to reflect production-ready status with known limitations clearly defined
   - Known limitations documented: Plugin visualization integration (future), Kitty protocol (future), animations (spec limitation)
 
@@ -420,7 +420,7 @@ Four independent packages now available:
 - Core Concepts: CORE_CONCEPTS.md, MIGRATION_FROM_DIY.md
 - Cookbook: 5 practical guides (LiveView, VIM, Performance, Commands, Theming)
 - Feature docs: VIM, Parser, Search, Filesystem, Cursor Effects
-- 75% documentation reduction via DRY consolidation (5000+ lines → 1250 lines)
+- 75% documentation reduction via DRY consolidation (5000+ lines -> 1250 lines)
 - Beginner-friendly with clear migration paths
 
 ### Phase 5: Modular Package Split
@@ -596,9 +596,9 @@ Four independent packages now available:
 
 ### Examples
 
-- `unified_registry.ex` → `global_registry.ex`
-- `unified_config_manager.ex` → `config_server.ex`
-- `unified_collector.ex` → `metrics_collector.ex`
+- `unified_registry.ex` -> `global_registry.ex`
+- `unified_config_manager.ex` -> `config_server.ex`
+- `unified_collector.ex` -> `metrics_collector.ex`
 
 ## [1.15.0] - 2025-09-10
 
@@ -683,8 +683,8 @@ Four independent packages now available:
 ### Changed
 
 - **Compilation Quality**: Achieved ZERO compilation warnings (reduced from 88)
-  - Fixed all undefined function warnings (49 → 0)
-  - Resolved unused variable warnings (15 → 0)
+  - Fixed all undefined function warnings (49 -> 0)
+  - Resolved unused variable warnings (15 -> 0)
   - Fixed Logger.warn deprecation warnings
   - Created missing modules and corrected all API references
   - Full `--warnings-as-errors` compliance
@@ -742,7 +742,7 @@ Four independent packages now available:
 
 - **Performance Metrics**: Parser 3.3μs/op | Memory <2.8MB | Render <1ms
 - **Code Reduction**: 722 lines removed, 150+ duplicate patterns eliminated
-- **Module Consolidation**: 43+ modules consolidated, state management unified (16→4 managers)
+- **Module Consolidation**: 43+ modules consolidated, state management unified (16->4 managers)
 - **Documentation**: Updated README.md and CLAUDE.md with accurate commands
 
 ## [1.3.0] - 2025-09-12
@@ -1131,7 +1131,7 @@ mix credo
   - Animation: 971K FPS max, 99.5% smoothness
 
 - **Performance Breakthrough**
-  - Parser performance: 30x improvement (648μs → 3.3μs per operation)
+  - Parser performance: 30x improvement (648μs -> 3.3μs per operation)
   - EmulatorLite architecture: GenServer-free parsing path
   - SGR processor: 442x speedup using pattern matching optimization
   - All tests migrated to optimized architecture
@@ -1268,7 +1268,7 @@ mix credo
 ### Added
 
 - **Phase 8: Release Process Streamlining (COMPLETED)**
-  - Simplified `burrito.exs` configuration (127→98 lines, 23% reduction)
+  - Simplified `burrito.exs` configuration (127->98 lines, 23% reduction)
   - Added standardized mix aliases for release tasks:
     - `mix release.dev` - Development builds
     - `mix release.prod` - Production builds

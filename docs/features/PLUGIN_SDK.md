@@ -6,10 +6,7 @@
 
 ```elixir
 defmodule MyPlugin do
-  use Raxol.Plugin,
-    name: "my_plugin",
-    version: "0.1.0",
-    description: "Does a thing"
+  use Raxol.Plugin
 
   @impl true
   def init(_config) do
@@ -17,13 +14,18 @@ defmodule MyPlugin do
   end
 
   @impl true
-  def handle_event({:key, %{key: :tab}}, state) do
-    {:ok, %{state | counter: state.counter + 1}}
+  def filter_event({:key, %{key: :tab}} = event, _state) do
+    {:ok, event}
+  end
+
+  @impl true
+  def handle_command(:bump, _args, state) do
+    {:ok, %{state | counter: state.counter + 1}, :ok}
   end
 end
 ```
 
-`use Raxol.Plugin` sets the behaviour and provides six overridable defaults so you only implement what you need.
+`use Raxol.Plugin` sets the behaviour and provides six overridable defaults (`terminate/2`, `enable/1`, `disable/1`, `filter_event/2`, `handle_command/3`, `get_commands/0`) so you only implement what you need; only `init/1` is required. The `use` line takes no options. To declare plugin metadata (name, version, dependencies), build a `Raxol.Plugin.Manifest` (see [Manifests](#manifests)).
 
 ## Generator
 
@@ -31,31 +33,40 @@ end
 mix raxol.gen.plugin my_plugin
 ```
 
-Generates a plugin skeleton in `lib/raxol/plugins/my_plugin/` with manifest, behaviour, and a basic test file. Pass `--with-config` for a `Config` module, `--with-hooks` for lifecycle hooks.
+Generates a plugin module at `lib/my_plugin.ex` (the module name is underscored into the path) and a matching `test/my_plugin_test.exs` with a lifecycle smoke test. Pass a dotted name like `MyApp.Plugins.Logger` to nest the generated files.
 
 ## API Facade
 
 `Raxol.Plugin.API` wraps `Raxol.Core.Runtime.Plugins.PluginManager` with try/catch guards. Use it instead of calling the manager directly:
 
 ```elixir
-{:ok, _pid} = Raxol.Plugin.API.load("my_plugin", config: %{...})
-:ok = Raxol.Plugin.API.send_event("my_plugin", {:custom_event, data})
-{:ok, state} = Raxol.Plugin.API.get_state("my_plugin")
-Raxol.Plugin.API.unload("my_plugin")
+:ok = Raxol.Plugin.API.load(MyPlugin, %{some: "config"})
+:ok = Raxol.Plugin.API.enable(:my_plugin)
+state = Raxol.Plugin.API.get_state(:my_plugin)
+:ok = Raxol.Plugin.API.disable(:my_plugin)
+Raxol.Plugin.API.unload(:my_plugin)
 ```
 
-If the plugin crashes or doesn't exist, the API returns `{:error, reason}` rather than letting the exit propagate.
+`load/2` takes a module atom and a config map; the other functions take the plugin id (an atom). If the plugin crashes or doesn't exist, the API returns `{:error, reason}` rather than letting the exit propagate.
 
 ## Manifests
 
-`Raxol.Plugin.Manifest` builds a map of all plugins across packages at compile time. Useful for tooling that needs to know what plugins exist:
+`Raxol.Plugin.Manifest` builds a plain manifest map (not a struct, for cross-package safety) from keyword options and validates it. Use it to declare a plugin's identity, version, and dependencies:
 
 ```elixir
-Raxol.Plugin.Manifest.all()
-# => %{
-#   "my_plugin" => %{module: MyPlugin, version: "0.1.0", ...},
-#   ...
-# }
+manifest =
+  Raxol.Plugin.Manifest.new(
+    id: :my_plugin,
+    name: "My Plugin",
+    version: "0.1.0",
+    module: MyPlugin,
+    depends_on: [{:other_plugin, "~> 1.0"}]
+  )
+
+case Raxol.Plugin.Manifest.validate(manifest) do
+  :ok -> :ok
+  {:error, errors} -> IO.inspect(errors)
+end
 ```
 
 ## Testing
@@ -68,18 +79,22 @@ defmodule MyPluginTest do
   import Raxol.Plugin.Testing
 
   setup do
-    plugin = start_test_plugin(MyPlugin, config: %{})
-    {:ok, plugin: plugin}
+    {:ok, state} = setup_plugin(MyPlugin, %{})
+    {:ok, state: state}
   end
 
-  test "handles tab key", %{plugin: plugin} do
-    send_event(plugin, {:key, %{key: :tab}})
-    assert get_state(plugin).counter == 1
+  test "passes the tab key through", %{state: state} do
+    assert_handles_event(MyPlugin, {:key, %{key: :tab}}, state)
+  end
+
+  test "bump increments the counter", %{state: state} do
+    {new_state, :ok} = assert_handles_command(MyPlugin, :bump, [], state)
+    assert new_state.counter == 1
   end
 end
 ```
 
-`start_test_plugin/2` uses `start_supervised!` under the hood, so cleanup is automatic.
+The helpers exercise plugin callbacks in isolation without starting the full plugin manager, so there is no process to tear down: `setup_plugin/2` calls `init/1`, and `assert_handles_event/3` / `assert_handles_command/4` / `simulate_lifecycle/2` / `assert_halts_event/3` drive the other callbacks directly.
 
 ## What's in `raxol_core`
 

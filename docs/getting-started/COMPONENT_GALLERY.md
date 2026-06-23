@@ -172,7 +172,7 @@ table(
 )
 ```
 
-The component module (`Raxol.UI.Components.Display.Table`) supports much more when used directly: `column_widths` (`:auto` or explicit list), `border_style`, `sortable`, `filterable`, `selectable`, `striped`, `alignments`. Handles keyboard navigation for row selection.
+The component module (`Raxol.UI.Components.Table`) supports much more when used directly: `column_widths` (`:auto` or explicit list), `border_style`, `sortable`, `filterable`, `selectable`, `striped`, `alignments`. Handles keyboard navigation for row selection.
 
 ### tree
 
@@ -516,7 +516,7 @@ alias Raxol.UI.Components.Progress.Spinner
 
 # Available styles: :dots, :line, :circle, :arrow, :bounce,
 #                   :pulse, :wave, :dots3, :square, :flip
-frame = Spinner.spinner(:tick, 0, style: :dots, text: "Loading...")
+frame = Spinner.spinner("Loading...", 0, type: :dots)
 ```
 
 | Module              | Use case                                                  |
@@ -678,7 +678,7 @@ All component modules follow the same pattern: `init/1` -> `handle_event/3` -> `
 | label         | `label/1`         | --                     | No           |
 | list          | `list/1`          | --                     | No           |
 | progress      | `progress/1`      | `Display.Progress`     | No           |
-| table         | `table/1`         | `Display.Table`        | Yes          |
+| table         | `table/1`         | `Table`                | Yes          |
 | tree          | --                | `Display.Tree`         | Yes          |
 | viewport      | --                | `Display.Viewport`     | Yes          |
 | status_bar    | --                | `Display.StatusBar`    | No           |

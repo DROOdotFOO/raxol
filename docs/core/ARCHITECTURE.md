@@ -86,7 +86,7 @@ Each cell is one character at one position with its styling. Cell x-positions ac
 
 Platform-detected backend writes ANSI escape sequences:
 
-- **Unix/macOS**: Native C NIF via termbox2 (`lib/termbox2_nif/c_src/`)
+- **Unix/macOS**: Native C NIF via termbox2 (`packages/raxol_terminal/lib/termbox2_nif/c_src/`)
 - **Windows**: Pure Elixir `IOTerminal` using `IO.write/1`
 - **Browser**: LiveView bridge via PubSub (`Raxol.LiveView.TEALive` in `raxol_liveview` package). When positioned elements carry animation hints, `TerminalBridge.animation_css/1` emits CSS `transition` rules targeting `data-raxol-id` selectors, plus a `prefers-reduced-motion` media query. The browser handles interpolation client-side instead of re-rendering every frame from the server.
 - **SSH**: Erlang `:ssh` module (`Raxol.SSH.Server`)

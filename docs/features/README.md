@@ -58,7 +58,7 @@ Pure functional in-memory VFS with REPL helpers and 7 LLM-callable agent actions
 
 ### [Speech](SPEECH.md)
 
-TTS for accessibility announcements, Whisper STT, 21 default voice commands.
+TTS for accessibility announcements, Whisper STT, 20 default voice commands.
 
 ### [Telegram](TELEGRAM.md)
 

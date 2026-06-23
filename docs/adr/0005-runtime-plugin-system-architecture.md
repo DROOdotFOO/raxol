@@ -141,14 +141,14 @@ The runtime approach lets plugins hot-load without process restarts and uses BEA
 ## References
 
 - [Plugin Development Guide](../plugins/GUIDE.md)
-- [Plugin Manager](../../lib/raxol/core/runtime/plugins/plugin_manager.ex)
-- [Plugin Behaviour](../../lib/raxol/core/runtime/plugins/plugin.ex)
-- [Lifecycle Management](../../lib/raxol/core/runtime/plugins/lifecycle.ex)
-- [State Management](../../lib/raxol/core/runtime/plugins/state_manager.ex)
+- [Plugin Manager](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_manager.ex)
+- [Plugin Behaviour](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin.ex)
+- [Lifecycle Management](../../packages/raxol_core/lib/raxol/core/runtime/plugins/lifecycle.ex)
+- [State Management](../../packages/raxol_core/lib/raxol/core/runtime/plugins/state_manager.ex)
 - [Dependency Manager](../../lib/raxol/core/runtime/plugins/dependency_manager.ex)
-- [Plugin Supervisor](../../lib/raxol/core/runtime/plugins/plugin_supervisor.ex)
-- [BEAM Analyzer](../../lib/raxol/core/runtime/plugins/security/beam_analyzer.ex)
-- [Capability Detector](../../lib/raxol/core/runtime/plugins/security/capability_detector.ex)
+- [Plugin Supervisor](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_supervisor.ex)
+- [BEAM Analyzer](../../packages/raxol_core/lib/raxol/core/runtime/plugins/security/beam_analyzer.ex)
+- [Capability Detector](../../packages/raxol_core/lib/raxol/core/runtime/plugins/security/capability_detector.ex)
 
 ---
 

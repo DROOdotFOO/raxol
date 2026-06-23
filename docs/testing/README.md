@@ -30,7 +30,8 @@ cd packages/raxol_terminal && MIX_ENV=test mix test
 cd packages/raxol_sensor   && MIX_ENV=test mix test
 cd packages/raxol_agent    && MIX_ENV=test mix test
 # ... plus raxol_mcp, raxol_payments, raxol_liveview, raxol_plugin,
-# raxol_speech, raxol_telegram, raxol_watch, raxol_acp, raxol_symphony
+# raxol_speech, raxol_telegram, raxol_watch, raxol_acp, raxol_symphony,
+# raxol_gateway
 ```
 
 ### All quality checks

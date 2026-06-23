@@ -74,15 +74,15 @@ Cross-chain settlement is asynchronous: there is a window between dispatching an
 
 The store is injected via `context[:checkpoint]` as a `{module, handle}` pair, so the recovery layer does not bind raxol_payments to a particular durability mechanism:
 
-- `Checkpoint.ETS` -- an ETS table; survives a process crash when owned by a process that outlives it (a supervisor, the cockpit). Used for standalone runs and the demo.
-- `Checkpoint.ContextStore` -- backed by `Raxol.Agent.ContextStore`, so a deployed agent's in-flight intent persists in the same durable store that backs its own crash recovery.
-- nil (the default) -- recovery disabled; every call quotes and signs.
+- `Checkpoint.ETS`: an ETS table; survives a process crash when owned by a process that outlives it (a supervisor, the cockpit). Used for standalone runs and the demo.
+- `Checkpoint.ContextStore`: backed by `Raxol.Agent.ContextStore`, so a deployed agent's in-flight intent persists in the same durable store that backs its own crash recovery.
+- nil (the default): recovery disabled; every call quotes and signs.
 
 The relay rail keys on the logical payment rather than its client-minted `transfer_id`, so a resume reuses the same `transfer_id` and an idempotent broadcaster dedupes a retried deposit. A definite execution failure (nothing dispatched) drops the checkpoint so a later retry starts clean. Set `context[:idempotency_key]` to force two otherwise-identical payments apart.
 
 ## Agent Actions
 
-Eight actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
+Ten actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
 
 | Action | What it does |
 |--------|-------------|
@@ -94,6 +94,8 @@ Eight actions registered via the `Raxol.Agent.Action` behaviour, callable by LLM
 | `payment_create_mandate` | Issue a Xochi delegation envelope from this wallet |
 | `payment_list_mandates` | List locally-stored Mandates (as member or as agent) |
 | `payment_revoke_mandate` | Locally delete a stored Mandate (Xochi KV unaffected) |
+| `payment_execute_xochi_intent` | Dispatch a cross-chain Xochi intent (checkpointed) |
+| `payment_poll_xochi_status` | Poll the status of a dispatched Xochi intent |
 
 ## Mandate (Xochi Delegation Envelope)
 

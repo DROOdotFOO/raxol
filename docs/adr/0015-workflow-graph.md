@@ -60,15 +60,15 @@ We will add `Raxol.Workflow.*` to main raxol as the canonical multi-step orchest
 
 Top-level `Raxol.Workflow.*` inside main raxol. Submodules:
 
-- `Raxol.Workflow.Graph` -- immutable graph builder (the construction-time API)
-- `Raxol.Workflow.Compiled` -- the runtime API after `Graph.compile/2`
-- `Raxol.Workflow.Node` -- node descriptor structs (`FunctionNode`, `BehaviourNode`, `TypedNode`)
-- `Raxol.Workflow.Edge` -- edge descriptor structs (`Edge`, `GuardedEdge`, `ConditionalEdge`)
-- `Raxol.Workflow.Checkpoint` -- checkpoint records and `Checkpoint.Saver` behaviour
-- `Raxol.Workflow.Checkpoint.Saver.Ets`, `Raxol.Workflow.Checkpoint.Saver.Dets` -- adapters
-- `Raxol.Workflow.Execution.Scratchpad` -- per-task execution state (process dict, justified)
-- `Raxol.Workflow.Execution.Channel` -- typed channel reducers between nodes
-- `Raxol.Workflow.Interrupt` -- the throw-caught exception used to pause a run
+- `Raxol.Workflow.Graph`: immutable graph builder (the construction-time API)
+- `Raxol.Workflow.Compiled`: the runtime API after `Graph.compile/2`
+- `Raxol.Workflow.Node`: node descriptor structs (`FunctionNode`, `BehaviourNode`, `TypedNode`)
+- `Raxol.Workflow.Edge`: edge descriptor structs (`Edge`, `GuardedEdge`, `ConditionalEdge`)
+- `Raxol.Workflow.Checkpoint`: checkpoint records and `Checkpoint.Saver` behaviour
+- `Raxol.Workflow.Checkpoint.Saver.Ets`, `Raxol.Workflow.Checkpoint.Saver.Dets`: adapters
+- `Raxol.Workflow.Execution.Scratchpad`: per-task execution state (process dict, justified)
+- `Raxol.Workflow.Execution.Channel`: typed channel reducers between nodes
+- `Raxol.Workflow.Interrupt`: the throw-caught exception used to pause a run
 
 No new package. No optional Mix dep. Workflow is part of `raxol` and ships with it.
 
@@ -103,10 +103,10 @@ Channels (`add_channel/4`) declare typed reducers between nodes. A workflow that
 
 `Raxol.Workflow.Compiled` exposes four entry points:
 
-- `invoke(compiled, initial_state, opts)` -- run synchronously to completion or interrupt. Returns `{:ok, final_state}` | `{:interrupted, run_id, state}` | `{:error, reason}`.
-- `async_invoke(compiled, initial_state, opts)` -- spawn the run under `DynamicSupervisor`, return the run pid + ref. Caller subscribes to `Phoenix.PubSub` events to follow progress.
-- `stream_events(compiled, initial_state, opts)` -- returns a lazy `Stream` of `Raxol.Core.Events.CloudEvent` structs as the run progresses. Each node emits start/stop events; the stream completes when the run terminates.
-- `resume(compiled, run_id, resume_value, opts)` -- consume an interrupt: hydrate from the checkpoint, feed `resume_value` to the scratchpad's resume queue, continue execution. Returns the same shape as `invoke/3`.
+- `invoke(compiled, initial_state, opts)`: run synchronously to completion or interrupt. Returns `{:ok, final_state}` | `{:interrupted, run_id, state}` | `{:error, reason}`.
+- `async_invoke(compiled, initial_state, opts)`: spawn the run under `DynamicSupervisor`, return the run pid + ref. Caller subscribes to `Phoenix.PubSub` events to follow progress.
+- `stream_events(compiled, initial_state, opts)`: returns a lazy `Stream` of `Raxol.Core.Events.CloudEvent` structs as the run progresses. Each node emits start/stop events; the stream completes when the run terminates.
+- `resume(compiled, run_id, resume_value, opts)`: consume an interrupt: hydrate from the checkpoint, feed `resume_value` to the scratchpad's resume queue, continue execution. Returns the same shape as `invoke/3`.
 
 Failure policy (`:retry`, `:halt`, `:compensate`), per-step timeout (`step_timeout_ms`), and total run timeout (`run_timeout_ms`) are options on `compile/2`. The runtime emits CloudEvents at the boundaries: `raxol.workflow.run.started`, `raxol.workflow.node.started`, `raxol.workflow.node.completed`, `raxol.workflow.node.failed`, `raxol.workflow.run.interrupted`, `raxol.workflow.run.completed`. Each event carries `trace_id`, `span_id`, `parent_span_id`, and `causation_id` via the Phase 24 propagation; subscribers can reconstruct the full execution graph from telemetry alone.
 
@@ -129,8 +129,8 @@ Failure policy (`:retry`, `:halt`, `:compensate`), per-step timeout (`step_timeo
 
 Two adapters ship in this phase:
 
-- **Ets** -- in-process ETS table, cleared at app stop. Default for tests and short-lived runs.
-- **Dets** -- file-backed DETS, survives BEAM restarts. Default for `raxol_acp` durable jobs.
+- **Ets**: in-process ETS table, cleared at app stop. Default for tests and short-lived runs.
+- **Dets**: file-backed DETS, survives BEAM restarts. Default for `raxol_acp` durable jobs.
 
 A `Saver.Postgrex` adapter is a natural follow-up for shared deployments but is *not* in scope for Phase 25. The behaviour shape is meant to support it without modification.
 
