@@ -4,7 +4,7 @@
 
 ### [Agent Framework](AGENT_FRAMEWORK.md)
 
-AI agents as TEA apps. OTP supervision, crash isolation, inter-agent messaging, LLM streaming to Anthropic/OpenAI/Ollama/Groq/Lumo.
+AI agents as TEA apps. OTP supervision, crash isolation, inter-agent messaging, LLM streaming to Anthropic/OpenAI/Ollama/Kimi/Lumo.
 
 ### [Agentic Commerce](AGENTIC_COMMERCE.md)
 
