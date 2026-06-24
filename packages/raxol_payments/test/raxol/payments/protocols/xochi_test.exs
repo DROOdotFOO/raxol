@@ -1,5 +1,6 @@
 defmodule Raxol.Payments.Protocols.XochiTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.QuoteResponse
@@ -128,7 +129,201 @@ defmodule Raxol.Payments.Protocols.XochiTest do
     end
   end
 
+  describe "execute/3 domain parity" do
+    @anvil_key "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    @anvil_addr "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+
+    defmodule RealWallet do
+      @moduledoc false
+      use Raxol.Payments.Wallets.Env, env_var: "RAXOL_XOCHI_DOMAIN_TEST_KEY"
+    end
+
+    setup do
+      System.put_env("RAXOL_XOCHI_DOMAIN_TEST_KEY", @anvil_key)
+      on_exit(fn -> System.delete_env("RAXOL_XOCHI_DOMAIN_TEST_KEY") end)
+      :ok
+    end
+
+    test "signs the served domain verbatim when it omits verifyingContract" do
+      # Canonical 12-field XochiIntent domain has no verifyingContract.
+      types_wire = [
+        %{"name" => "intentId", "type" => "string"},
+        %{"name" => "wallet", "type" => "address"},
+        %{"name" => "nonce", "type" => "uint256"}
+      ]
+
+      message = %{"intentId" => "xi_test", "wallet" => @anvil_addr, "nonce" => 0}
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_test",
+        quote_id: "xq_test",
+        can_solve: true,
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => types_wire},
+          "message" => message
+        }
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:ok, _} = Xochi.execute(config, quote_resp, RealWallet)
+      assert_receive {:req, "POST", "/api/intent/execute", _headers, raw_body}
+      sent_sig = Jason.decode!(raw_body)["signature"]
+
+      # The signature must be over a 3-field EIP712Domain (no verifyingContract),
+      # matching what the worker and solver hash.
+      types = %{"XochiIntent" => Enum.map(types_wire, fn f -> {f["name"], f["type"]} end)}
+      domain = %{name: "Xochi", version: "1", chainId: 8453}
+      {:ok, raw} = RealWallet.sign_typed_data(domain, types, message)
+      expected_sig = "0x" <> Base.encode16(raw, case: :lower)
+
+      assert sent_sig == expected_sig
+    end
+
+    test "includes verifyingContract in the domain when the server provides it" do
+      # The legacy/9-field shape carries a verifyingContract; it must be signed
+      # into a 4-field EIP712Domain, not dropped.
+      vc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+
+      types_wire = [
+        %{"name" => "intentId", "type" => "string"},
+        %{"name" => "wallet", "type" => "address"},
+        %{"name" => "nonce", "type" => "uint256"}
+      ]
+
+      message = %{"intentId" => "xi_test", "wallet" => @anvil_addr, "nonce" => 0}
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_test",
+        quote_id: "xq_test",
+        can_solve: true,
+        eip712_data: %{
+          "domain" => %{
+            "name" => "Xochi",
+            "version" => "1",
+            "chainId" => 8453,
+            "verifyingContract" => vc
+          },
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => types_wire},
+          "message" => message
+        }
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:ok, _} = Xochi.execute(config, quote_resp, RealWallet)
+      assert_receive {:req, "POST", "/api/intent/execute", _headers, raw_body}
+      sent_sig = Jason.decode!(raw_body)["signature"]
+
+      types = %{"XochiIntent" => Enum.map(types_wire, fn f -> {f["name"], f["type"]} end)}
+      domain = %{name: "Xochi", version: "1", chainId: 8453, verifyingContract: vc}
+      {:ok, raw} = RealWallet.sign_typed_data(domain, types, message)
+
+      assert sent_sig == "0x" <> Base.encode16(raw, case: :lower)
+    end
+
+    property "signs the served typed data and echoes its nonce, for any served eip712" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      check all(served <- served_eip712_gen()) do
+        quote_resp = %QuoteResponse{
+          intent_id: served["message"]["intentId"],
+          quote_id: "xq_test",
+          can_solve: true,
+          eip712_data: served
+        }
+
+        assert {:ok, _} = Xochi.execute(config, quote_resp, RealWallet)
+        assert_receive {:req, "POST", "/api/intent/execute", _h, body}
+        decoded = Jason.decode!(body)
+
+        # 1. the execute nonce echoes the signed message nonce
+        assert decoded["nonce"] == served["message"]["nonce"]
+
+        # 2. the signature is over the canonically-rebuilt typed data (the exact
+        #    domain/types/message the worker and solver hash). Built independently
+        #    of the protocol's own construction so a regression diverges the sig.
+        types = %{
+          "XochiIntent" =>
+            Enum.map(served["types"]["XochiIntent"], fn f -> {f["name"], f["type"]} end)
+        }
+
+        {:ok, raw} =
+          RealWallet.sign_typed_data(build_domain(served["domain"]), types, served["message"])
+
+        assert decoded["signature"] == "0x" <> Base.encode16(raw, case: :lower)
+      end
+    end
+  end
+
   # -- Helpers --
+
+  defp hex_gen(len), do: StreamData.string([?0..?9, ?a..?f], length: len)
+
+  defp address_gen, do: StreamData.map(hex_gen(40), &("0x" <> &1))
+
+  defp domain_gen do
+    base =
+      StreamData.fixed_map(%{
+        "name" => StreamData.constant("Xochi"),
+        "version" => StreamData.member_of(["1", "1-prod", "1-staging"]),
+        "chainId" => StreamData.member_of([1, 8453, 42_161, 10, 137])
+      })
+
+    StreamData.one_of([
+      base,
+      StreamData.bind(base, fn d ->
+        StreamData.map(address_gen(), &Map.put(d, "verifyingContract", &1))
+      end)
+    ])
+  end
+
+  defp served_eip712_gen do
+    gen all(
+          domain <- domain_gen(),
+          intent_id <- StreamData.map(hex_gen(32), &("xi_" <> &1)),
+          wallet <- address_gen(),
+          nonce <- StreamData.integer(0..1_000_000)
+        ) do
+      %{
+        "domain" => domain,
+        "primaryType" => "XochiIntent",
+        "types" => %{
+          "XochiIntent" => [
+            %{"name" => "intentId", "type" => "string"},
+            %{"name" => "wallet", "type" => "address"},
+            %{"name" => "nonce", "type" => "uint256"}
+          ]
+        },
+        "message" => %{"intentId" => intent_id, "wallet" => wallet, "nonce" => nonce}
+      }
+    end
+  end
+
+  # Canonical EIP-712 domain: only the keys the server actually served, atom-keyed.
+  defp build_domain(d) do
+    base = %{name: d["name"], version: d["version"], chainId: d["chainId"]}
+
+    case d["verifyingContract"] do
+      nil -> base
+      vc -> Map.put(base, :verifyingContract, vc)
+    end
+  end
 
   defp quote_with_nonce(nonce) do
     %QuoteResponse{
