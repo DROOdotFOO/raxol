@@ -50,6 +50,23 @@ A guided path from an offline rehearsal to a real on-chain settlement lives in
 `run_live_xochi_gate.sh` (live cross-chain settlement, real funds). Start with
 the README there.
 
+## Relay (Tron) gasless pull
+
+The Relay rail (`Raxol.Payments.Relay`, `actions/payments/execute_relay_transfer`)
+has two EVM->Tron funding paths: **gasless (A)** -- sign the quote's `gasless`
+typed-data block, the signature rides on `/relay/execute`, no broadcast -- and
+**broadcast (B)** -- an on-chain transfer to the `deposit_address`.
+
+Path A is delivered on the Riddler side (axol-io/Riddler#120, PR #160):
+`POST /relay/quote` returns a Permit2 `gasless` block for EVM->Tron when the solver
+runs with `RELAY_GASLESS_PULL_ENABLED=true`. The client already signs it and plumbs
+the signature, so no raxol change is needed -- the `execute_relay_transfer`
+moduledoc "Pending Riddler support ... #120" note can be cleared. Caveats:
+
+- Permit2 only (USDC + other ERC-20s); ERC-3009 is deferred (axol-io/Riddler#159).
+- Riddler's `/relay/*` surface is still production-gated, so the flag stays off
+  until that unblocks; path B (broadcast) remains the working route meanwhile.
+
 ## Architecture
 
 - `Raxol.Payments.Protocol`: behaviour for payment protocol detection + signing
