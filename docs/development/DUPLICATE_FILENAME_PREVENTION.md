@@ -31,32 +31,12 @@ mix run scripts/archived/replaced_by_mix_tasks/check_duplicate_filenames.exs
 mix run scripts/archived/replaced_by_mix_tasks/check_duplicate_filenames.exs --fix-suggestions
 ```
 
-### Credo Integration
+## Status
 
-`lib/raxol/credo/duplicate_filename_check.ex` runs the same check inline during `mix credo`.
-
-```bash
-mix credo
-mix credo --only Raxol.Credo.DuplicateFilenameCheck
-```
-
-## Configuration
-
-In `.credo.exs`:
-
-```elixir
-{Raxol.Credo.DuplicateFilenameCheck, [
-  exclude_files: ["mix.exs", "README.md", ".gitignore"],
-  max_duplicates: 1,
-  include_tests: true
-]}
-```
-
-Options:
-
-- `exclude_files`: files to ignore (default: `["mix.exs", "README.md", ".gitignore"]`)
-- `max_duplicates`: maximum allowed duplicates before flagging (default: `1`)
-- `include_tests`: whether to check test files (default: `true`)
+This check is not currently wired into `mix credo` or `mix raxol.check`, and there is
+no `.credo.exs` entry for it. The archived standalone script above is the only tool;
+run it manually, or add it to a pre-commit hook or CI step. Prevention otherwise rests
+on the naming convention below.
 
 ## Problematic Patterns
 
@@ -112,6 +92,4 @@ Scanning directories: lib, test
 
 ## Workflow
 
-The Credo check runs inline in editors that integrate with Credo and during the standard `mix raxol.check` pipeline. Wire the standalone script into a pre-commit hook or CI step if you want it separate.
-
-False positives: add files to `exclude_files`. When adding new files: use descriptive, contextual names and let `mix credo` flag duplicates before committing.
+There is no automated integration today: wire the standalone script into a pre-commit hook or CI step if you want it enforced. When adding new files, use descriptive, contextual names so duplicates do not appear in the first place.
