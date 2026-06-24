@@ -19,10 +19,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
 
   * **Gasless (A)** -- when the quote returns a `gasless` typed-data block, the
     wallet signs it and the signature rides on execute so the solver pulls. No
-    broadcast. (Pending Riddler support on the Tron route, axol-io/Riddler#120.)
+    broadcast. Delivered Riddler-side (axol-io/Riddler#120, PR #160) behind
+    `RELAY_GASLESS_PULL_ENABLED`; Permit2 only (ERC-3009 deferred, Riddler#159).
   * **Broadcast (B)** -- when a `:broadcaster` is in context, it sends the
-    on-chain token transfer to the deposit address. Used until the gasless pull
-    lands.
+    on-chain token transfer to the deposit address. The default route while
+    Riddler's `/relay/*` surface stays production-gated.
   * **External (C)** -- otherwise the deposit address is returned for an outside
     wallet to fund.
 
