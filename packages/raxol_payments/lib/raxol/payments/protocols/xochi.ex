@@ -178,16 +178,19 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   defp signed_nonce(_quote_resp), do: 0
 
+  # Build the domain from exactly the keys the worker served. `verifyingContract`
+  # is only included when present: the canonical XochiIntent domain omits it, so
+  # adding a nil key would hash a 4-field EIP712Domain against the worker's
+  # 3-field one and the signature would not recover.
   defp eip712_domain(eip712) do
     d = eip712["domain"] || %{}
 
-    %{
-      name: d["name"],
-      version: d["version"],
-      chainId: d["chainId"],
-      verifyingContract: d["verifyingContract"]
-    }
+    %{name: d["name"], version: d["version"], chainId: d["chainId"]}
+    |> maybe_put_verifying_contract(d["verifyingContract"])
   end
+
+  defp maybe_put_verifying_contract(domain, nil), do: domain
+  defp maybe_put_verifying_contract(domain, vc), do: Map.put(domain, :verifyingContract, vc)
 
   defp eip712_types(eip712) do
     (eip712["types"] || %{})
