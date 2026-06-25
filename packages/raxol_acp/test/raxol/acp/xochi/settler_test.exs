@@ -107,9 +107,13 @@ defmodule Raxol.ACP.Xochi.SettlerTest do
   describe "settlement outcome handling" do
     defp sim(status) do
       fn conn ->
+        # Paths match `Raxol.Payments.Xochi.Client`: the worker endpoints
+        # (`/api/intent/*`), not the Riddler-direct `/xochi/*` paths. The
+        # bodies stay camelCase: `QuoteResponse.from_json` accepts both cases,
+        # and `ExecuteResponse`/`IntentStatus` read camelCase.
         body =
           case conn.request_path do
-            "/xochi/quote" ->
+            "/api/intent/quote" ->
               %{
                 "intentId" => "i1",
                 "quoteId" => "q1",
@@ -122,10 +126,10 @@ defmodule Raxol.ACP.Xochi.SettlerTest do
                 }
               }
 
-            "/xochi/execute" ->
+            "/api/intent/execute" ->
               %{"success" => true, "intentId" => "i1", "status" => "executing"}
 
-            "/xochi/status/i1" ->
+            "/api/intent/i1/status" ->
               %{"intentId" => "i1", "status" => status, "terminal" => true}
           end
 
