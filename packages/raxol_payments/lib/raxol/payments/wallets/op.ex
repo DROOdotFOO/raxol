@@ -20,6 +20,8 @@ defmodule Raxol.Payments.Wallets.Op do
 
   use Raxol.Core.Behaviours.BaseManager
 
+  alias Raxol.Payments.Secret
+
   @default_chain_id 8453
 
   # -- Public API --
@@ -88,7 +90,7 @@ defmodule Raxol.Payments.Wallets.Op do
   def handle_manager_call({:sign_message, message}, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} ->
-        result = do_sign_message(state.privkey, message)
+        result = do_sign_message(Secret.reveal(state.privkey), message)
         {:reply, result, state}
 
       {:error, reason} ->
@@ -99,7 +101,7 @@ defmodule Raxol.Payments.Wallets.Op do
   def handle_manager_call({:sign_typed_data, domain, types, message}, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} ->
-        result = do_sign_typed_data(state.privkey, domain, types, message)
+        result = do_sign_typed_data(Secret.reveal(state.privkey), domain, types, message)
         {:reply, result, state}
 
       {:error, reason} ->
@@ -110,7 +112,7 @@ defmodule Raxol.Payments.Wallets.Op do
   def handle_manager_call({:sign_hash, digest}, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} ->
-        result = do_sign_hash(state.privkey, digest)
+        result = do_sign_hash(Secret.reveal(state.privkey), digest)
         {:reply, result, state}
 
       {:error, reason} ->
@@ -120,14 +122,14 @@ defmodule Raxol.Payments.Wallets.Op do
 
   # -- Private --
 
-  defp ensure_loaded(%{privkey: key} = state) when is_binary(key), do: {:ok, state}
+  defp ensure_loaded(%{privkey: %Secret{}} = state), do: {:ok, state}
 
   defp ensure_loaded(%{op_ref: op_ref} = state) do
     case fetch_from_op(op_ref) do
       {:ok, privkey} ->
         {:ok, pubkey} = ExSecp256k1.create_public_key(privkey)
         address = derive_address(pubkey)
-        {:ok, %{state | privkey: privkey, address: address}}
+        {:ok, %{state | privkey: Secret.new(privkey), address: address}}
 
       {:error, reason} ->
         {:error, reason}
@@ -162,8 +164,8 @@ defmodule Raxol.Payments.Wallets.Op do
     hash = ExKeccak.hash_256(message)
 
     case ExSecp256k1.sign(hash, privkey) do
-      {:ok, {r, s, v}} ->
-        {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
+      {:ok, signature} ->
+        {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
 
       {:error, reason} ->
         {:error, {:sign_failed, reason}}
@@ -173,8 +175,8 @@ defmodule Raxol.Payments.Wallets.Op do
   defp do_sign_typed_data(privkey, domain, types, message) do
     with {:ok, hash} <- Raxol.Payments.EIP712.hash(domain, types, message) do
       case ExSecp256k1.sign(hash, privkey) do
-        {:ok, {r, s, v}} ->
-          {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
+        {:ok, signature} ->
+          {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
 
         {:error, reason} ->
           {:error, {:sign_failed, reason}}
@@ -184,8 +186,8 @@ defmodule Raxol.Payments.Wallets.Op do
 
   defp do_sign_hash(privkey, <<_::binary-size(32)>> = digest) do
     case ExSecp256k1.sign(digest, privkey) do
-      {:ok, {r, s, v}} ->
-        {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
+      {:ok, signature} ->
+        {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
 
       {:error, reason} ->
         {:error, {:sign_failed, reason}}

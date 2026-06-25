@@ -5,7 +5,26 @@ defmodule Raxol.Payments.Zksar do
   Verifies Xochi oracle-signed attestation results. The actual ZK proof
   verification (Noir UltraHonk) happens on-chain or in the Xochi oracle.
   This module verifies the oracle's signed result: type, expiry, issuer,
-  and structural integrity.
+  structural integrity, and (the security-relevant part) that the
+  attestation's ECDSA `signature` actually recovers to the claimed `issuer`
+  and that the issuer is on the caller's trusted allowlist.
+
+  Without the signature check a caller could forge an attestation by simply
+  naming a trusted `issuer`, inflating its `Raxol.Payments.Zksar.TrustScore`
+  to claim a higher `Raxol.Payments.PrivacyTier` and a lower settlement fee
+  tier than earned (and defeat the local sanctions/AML gate this module is
+  named for). `verify/2` therefore recovers the signer and requires
+  `signer == issuer in allowed_issuers` by default.
+
+  > #### Provisional digest scheme {: .warning}
+  >
+  > `attestation_digest/1` defines the bytes the oracle is assumed to sign
+  > (an EIP-191 `personal_sign` over the canonical attestation fields). This
+  > encoding has NOT yet been confirmed byte-for-byte against the live Xochi
+  > oracle signer. Verification fails closed on any mismatch, so a wrong
+  > scheme rejects real attestations (safe) rather than accepting forged ones.
+  > The scheme must still be reconciled with Xochi, and a real on-chain
+  > vector added, before enabling signature checks against production data.
 
   ## Proof Types
 
@@ -49,7 +68,12 @@ defmodule Raxol.Payments.Zksar do
         }
 
   @type verification_error ::
-          :expired | :unknown_type | :invalid_issuer | :malformed
+          :expired
+          | :unknown_type
+          | :invalid_issuer
+          | :issuer_required
+          | :invalid_signature
+          | :malformed
 
   @proof_types %{
     0x01 => :compliance,
@@ -65,12 +89,26 @@ defmodule Raxol.Payments.Zksar do
   @doc """
   Verify a single attestation proof.
 
-  Checks type code, expiry, issuer allowlist, and structural integrity.
+  Checks type code, expiry, structural integrity, the issuer allowlist, and
+  (by default) that the ECDSA `signature` recovers to the claimed `issuer`.
 
   ## Options
 
-  - `:now` -- override current time (unix seconds) for testing
-  - `:allowed_issuers` -- list of trusted oracle addresses; all accepted if nil
+  - `:now` -- override current time (unix seconds) for testing.
+  - `:allowed_issuers` -- list of trusted oracle addresses (case-insensitive).
+    Required when `:verify_signature` is on (the default): a missing allowlist
+    fails closed with `:issuer_required`, since trust cannot be established
+    without knowing which signer is trusted.
+  - `:verify_signature` -- recover the signer from `signature` and require it
+    to equal `issuer`. Defaults to `true`. Pass `false` only for structural
+    checks where no real signature is available (tests, the pre-reconciliation
+    transition window); this restores the old lenient allowlist behavior and
+    is NOT safe against forgery.
+
+  ## Errors
+
+  `:malformed | :expired | :unknown_type | :issuer_required | :invalid_issuer
+  | :invalid_signature`
   """
   @spec verify(proof(), keyword()) :: {:ok, verified_proof()} | {:error, verification_error()}
   def verify(proof, opts \\ [])
@@ -80,7 +118,8 @@ defmodule Raxol.Payments.Zksar do
 
     with :ok <- check_structure(proof),
          :ok <- check_expiry(proof, now),
-         :ok <- check_issuer(proof, opts) do
+         :ok <- check_issuer(proof, opts),
+         :ok <- check_signature(proof, opts) do
       {:ok,
        %{
          type: @proof_types[code],
@@ -128,6 +167,41 @@ defmodule Raxol.Payments.Zksar do
   @doc "All known proof type names."
   @spec proof_types() :: [proof_type()]
   def proof_types, do: Map.values(@proof_types)
+
+  @doc """
+  The 32-byte digest the oracle is assumed to sign for an attestation.
+
+  An EIP-191 `personal_sign` over the canonical, newline-joined attestation
+  fields (a domain tag, then type code, issuer, subject, issued-at,
+  expires-at, and the lowercase-hex payload). Exposed so the Xochi oracle and
+  any local signer can reproduce the exact bytes, and so the scheme can be
+  reconciled across repos (see the module note on the provisional scheme).
+  """
+  @spec attestation_digest(proof()) :: <<_::256>>
+  def attestation_digest(%{
+        type_code: type_code,
+        issuer: issuer,
+        subject: subject,
+        issued_at: issued_at,
+        expires_at: expires_at,
+        payload: payload
+      }) do
+    message =
+      Enum.join(
+        [
+          "ZKSAR-Attestation-v1",
+          Integer.to_string(type_code),
+          normalize_address(issuer),
+          normalize_address(subject),
+          Integer.to_string(issued_at),
+          Integer.to_string(expires_at),
+          Base.encode16(payload, case: :lower)
+        ],
+        "\n"
+      )
+
+    eip191_digest(message)
+  end
 
   @doc """
   Parse a proof from Xochi API JSON (camelCase).
@@ -183,11 +257,79 @@ defmodule Raxol.Payments.Zksar do
 
   defp check_issuer(proof, opts) do
     case Keyword.get(opts, :allowed_issuers) do
-      nil ->
-        :ok
-
       issuers when is_list(issuers) ->
-        if proof.issuer in issuers, do: :ok, else: {:error, :invalid_issuer}
+        if Enum.any?(issuers, &addr_eq?(&1, proof.issuer)),
+          do: :ok,
+          else: {:error, :invalid_issuer}
+
+      nil ->
+        # Trust cannot be established without a trusted-issuer allowlist. Fail
+        # closed by default; only the explicit signature-disabled escape hatch
+        # restores the old lenient "accept any issuer" behavior.
+        if Keyword.get(opts, :verify_signature, true),
+          do: {:error, :issuer_required},
+          else: :ok
     end
+  end
+
+  defp check_signature(proof, opts) do
+    if Keyword.get(opts, :verify_signature, true) do
+      case recover_signer(attestation_digest(proof), proof.signature) do
+        {:ok, recovered} ->
+          if addr_eq?(recovered, proof.issuer), do: :ok, else: {:error, :invalid_signature}
+
+        :error ->
+          {:error, :invalid_signature}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp recover_signer(digest, signature) do
+    with {:ok, {r, s, recovery_id}} <- decode_signature(signature),
+         {:ok, pubkey} <- ExSecp256k1.recover(digest, r, s, recovery_id) do
+      {:ok, pubkey_to_address(pubkey)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp decode_signature("0x" <> hex), do: decode_signature(hex)
+
+  defp decode_signature(hex) when is_binary(hex) and byte_size(hex) == 130 do
+    case Base.decode16(hex, case: :mixed) do
+      {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>} ->
+        {:ok, {r, s, normalize_recovery_id(v)}}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp decode_signature(_), do: :error
+
+  # Accept both Ethereum's 27/28 and the raw 0/1 recovery id.
+  defp normalize_recovery_id(v) when v >= 27, do: v - 27
+  defp normalize_recovery_id(v), do: v
+
+  # address = last 20 bytes of keccak256(uncompressed_public_key without 0x04 prefix)
+  defp pubkey_to_address(<<_prefix::8, key_bytes::binary-size(64)>>) do
+    <<_first_12::binary-size(12), addr::binary-size(20)>> = ExKeccak.hash_256(key_bytes)
+    "0x" <> Base.encode16(addr, case: :lower)
+  end
+
+  defp addr_eq?(a, b) when is_binary(a) and is_binary(b),
+    do: normalize_address(a) == normalize_address(b)
+
+  defp addr_eq?(_, _), do: false
+
+  defp normalize_address(addr) when is_binary(addr) do
+    addr |> String.trim() |> String.downcase() |> String.replace_prefix("0x", "")
+  end
+
+  defp eip191_digest(message) do
+    prefix = "\x19Ethereum Signed Message:\n" <> Integer.to_string(byte_size(message))
+    ExKeccak.hash_256(prefix <> message)
   end
 end

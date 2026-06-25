@@ -41,11 +41,11 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
 
   @behaviour Raxol.ACP.ProviderAdapter
 
-  alias Raxol.ACP.{ABI, Onchain.RPC, Onchain.Transaction}
+  alias Raxol.ACP.{ABI, Onchain.RPC, Onchain.Transaction, Secret}
 
   @type config :: %{
           chains: %{required(pos_integer()) => String.t()},
-          private_key: <<_::256>>,
+          private_key: Secret.t(),
           address: String.t(),
           fee_overrides: %{optional(pos_integer()) => fee_override()}
         }
@@ -82,7 +82,7 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
 
     config = %{
       chains: chains,
-      private_key: private_key,
+      private_key: Secret.new(private_key),
       address: address,
       fee_overrides: Keyword.get(opts, :fee_overrides, %{})
     }
@@ -110,7 +110,7 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
   def sign_message(%{config: %{private_key: pk}}, _chain_id, message) when is_binary(message) do
     digest = eip191_digest(message)
 
-    case ExSecp256k1.sign(digest, pk) do
+    case ExSecp256k1.sign(digest, Secret.reveal(pk)) do
       {:ok, {r, s, v}} ->
         {:ok, <<r::binary-size(32), s::binary-size(32), v + 27>>}
 
@@ -125,7 +125,7 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
 
     case Raxol.Payments.EIP712.hash(domain, types, message) do
       {:ok, digest} ->
-        case ExSecp256k1.sign(digest, pk) do
+        case ExSecp256k1.sign(digest, Secret.reveal(pk)) do
           {:ok, {r, s, v}} ->
             {:ok, <<r::binary-size(32), s::binary-size(32), v + 27>>}
 
@@ -263,7 +263,7 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
   defp sign_tx(tx, private_key) do
     digest = Transaction.signing_hash(tx)
 
-    case ExSecp256k1.sign(digest, private_key) do
+    case ExSecp256k1.sign(digest, Secret.reveal(private_key)) do
       {:ok, {r, s, v}} -> {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
       err -> err
     end
