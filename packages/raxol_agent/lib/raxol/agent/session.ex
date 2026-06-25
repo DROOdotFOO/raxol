@@ -197,12 +197,27 @@ defmodule Raxol.Agent.Session do
     :ok
   end
 
+  # Wire the agent's permission/sandbox/audit hook chain into the runtime so it
+  # runs before any Shell/Async/SendAgent directive executes. nil when the agent
+  # declares no hooks, so the runtime skips interception entirely.
+  defp build_command_interceptor(app_module, id) do
+    case Raxol.Agent.effective_hooks(app_module) do
+      [] ->
+        nil
+
+      hooks ->
+        context = %{agent_id: id, agent_module: app_module}
+        fn commands -> Raxol.Agent.CommandHook.wrap_commands(commands, hooks, context) end
+    end
+  end
+
   defp start_or_reattach_lifecycle(app_module, id) do
     opts = [
       environment: :agent,
       width: Raxol.Core.Defaults.terminal_width(),
       height: Raxol.Core.Defaults.terminal_height(),
-      name: :"agent_lifecycle_#{inspect(id)}"
+      name: :"agent_lifecycle_#{inspect(id)}",
+      command_interceptor: build_command_interceptor(app_module, id)
     ]
 
     case Raxol.Core.Runtime.Lifecycle.start_link(app_module, opts) do

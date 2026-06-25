@@ -12,6 +12,7 @@ defmodule Raxol.Payments.Actions.Payments.Transfer do
 
   use Raxol.Agent.Action,
     name: "payment_transfer",
+    sensitive: true,
     description: "Transfer funds to an address (explicit payment, not auto-pay)",
     schema: [
       input: [

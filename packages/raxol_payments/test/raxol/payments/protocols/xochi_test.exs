@@ -3,7 +3,7 @@ defmodule Raxol.Payments.Protocols.XochiTest do
   use ExUnitProperties
 
   alias Raxol.Payments.Protocols.Xochi
-  alias Raxol.Payments.Xochi.Schemas.QuoteResponse
+  alias Raxol.Payments.Xochi.Schemas.{QuoteRequest, QuoteResponse}
 
   # Signs with a fixed 65-byte signature (520 bits). The signature value is
   # irrelevant to the nonce behaviour under test; this is a signing-boundary
@@ -269,6 +269,384 @@ defmodule Raxol.Payments.Protocols.XochiTest do
         assert decoded["signature"] == "0x" <> Base.encode16(raw, case: :lower)
       end
     end
+
+    test "signs the served pull_authorization and sends it as pull_signature" do
+      pull = canonical_erc3009_pull()
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_pull",
+        quote_id: "xq_pull",
+        can_solve: true,
+        payment_method: "erc3009",
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_pull"}
+        },
+        pull_authorization: pull
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      assert {:ok, _} = Xochi.execute(config, quote_resp, RealWallet, request)
+      assert_receive {:req, "POST", "/api/intent/execute", _h, raw_body}
+      body = Jason.decode!(raw_body)
+
+      # The pull_signature is over the served pull_authorization typed data,
+      # rebuilt independently so a regression diverges the signature.
+      pull_types = %{
+        "ReceiveWithAuthorization" =>
+          Enum.map(pull["types"]["ReceiveWithAuthorization"], fn f -> {f["name"], f["type"]} end)
+      }
+
+      pull_domain = %{
+        name: "USD Coin",
+        version: "2",
+        chainId: 8453,
+        verifyingContract: pull["domain"]["verifyingContract"]
+      }
+
+      {:ok, raw} = RealWallet.sign_typed_data(pull_domain, pull_types, pull["message"])
+
+      assert body["pull_signature"] == "0x" <> Base.encode16(raw, case: :lower)
+      # Distinct payload from the intent signature.
+      assert body["pull_signature"] != body["signature"]
+    end
+
+    test "omits pull_signature when the quote carries no pull_authorization" do
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_nopull",
+        quote_id: "xq_nopull",
+        can_solve: true,
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_nopull"}
+        }
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:ok, _} = Xochi.execute(config, quote_resp, RealWallet)
+      assert_receive {:req, "POST", "/api/intent/execute", _h, raw_body}
+      refute Map.has_key?(Jason.decode!(raw_body), "pull_signature")
+    end
+
+    test "refuses to authorize a pull that exceeds the amount, retargets the token, or is not from the signer" do
+      erc3009_pull = fn overrides -> canonical_erc3009_pull(overrides) end
+
+      quote_for = fn pull ->
+        %QuoteResponse{
+          intent_id: "xi_bad",
+          quote_id: "xq_bad",
+          can_solve: true,
+          payment_method: "erc3009",
+          eip712_data: %{
+            "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+            "primaryType" => "XochiIntent",
+            "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+            "message" => %{"intentId" => "xi_bad"}
+          },
+          pull_authorization: pull
+        }
+      end
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      # value far above the intended origin amount, redirected to an attacker -- the drain vector
+      over =
+        quote_for.(
+          erc3009_pull.(%{
+            message: %{
+              "value" => "100000000",
+              "to" => "0x000000000000000000000000000000000000dEaD"
+            }
+          })
+        )
+
+      assert {:error, {:authorization_mismatch, :pull_value}} =
+               Xochi.execute(config, over, RealWallet, request)
+
+      # retargeted to a different token contract
+      wrong_token =
+        quote_for.(
+          erc3009_pull.(%{
+            domain: %{"verifyingContract" => "0x0000000000000000000000000000000000000bad"}
+          })
+        )
+
+      assert {:error, {:authorization_mismatch, :pull_token}} =
+               Xochi.execute(config, wrong_token, RealWallet, request)
+
+      # pull from someone other than the signer
+      wrong_from =
+        quote_for.(
+          erc3009_pull.(%{message: %{"from" => "0x000000000000000000000000000000000000beef"}})
+        )
+
+      assert {:error, {:authorization_mismatch, :pull_from}} =
+               Xochi.execute(config, wrong_from, RealWallet, request)
+
+      # nothing was signed or submitted for any rejected pull
+      refute_received {:req, "POST", "/api/intent/execute", _h, _b}
+    end
+
+    test "binds the pull recipient to an operator solver allowlist when configured" do
+      solver = "0x0000000000000000000000000000000000005011"
+      attacker = "0x000000000000000000000000000000000000dEaD"
+
+      pull_to = fn to -> canonical_erc3009_pull(%{message: %{"to" => to}}) end
+
+      quote_for = fn pull ->
+        %QuoteResponse{
+          intent_id: "xi_sv",
+          quote_id: "xq_sv",
+          can_solve: true,
+          payment_method: "erc3009",
+          eip712_data: %{
+            "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+            "primaryType" => "XochiIntent",
+            "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+            "message" => %{"intentId" => "xi_sv"}
+          },
+          pull_authorization: pull
+        }
+      end
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      # fail-open: with no allowlist set, any solver recipient is accepted
+      assert {:ok, _} =
+               Xochi.execute(config, quote_for.(pull_to.(solver)), RealWallet, request)
+
+      Application.put_env(:raxol_payments, :pull_solver_allowlist, [solver])
+      on_exit(fn -> Application.delete_env(:raxol_payments, :pull_solver_allowlist) end)
+
+      # an allowlisted recipient still passes
+      assert {:ok, _} =
+               Xochi.execute(config, quote_for.(pull_to.(solver)), RealWallet, request)
+
+      # a recipient outside the allowlist is rejected before any signature
+      assert {:error, {:authorization_mismatch, :pull_to}} =
+               Xochi.execute(config, quote_for.(pull_to.(attacker)), RealWallet, request)
+    end
+
+    test "binds the permit2 spender to the solver allowlist when configured" do
+      Application.put_env(:raxol_payments, :pull_solver_allowlist, [
+        "0x0000000000000000000000000000000000005011"
+      ])
+
+      on_exit(fn -> Application.delete_env(:raxol_payments, :pull_solver_allowlist) end)
+
+      # spender 0x...dEaD is not in the configured allowlist
+      pull = canonical_permit2_pull()
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_p2",
+        quote_id: "xq_p2",
+        can_solve: true,
+        payment_method: "permit2",
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_p2"}
+        },
+        pull_authorization: pull
+      }
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      config = %{base_url: "https://api.xochi.fi", auth: :none, req_options: [plug: echo_plug(self())]}
+
+      assert {:error, {:authorization_mismatch, :pull_spender}} =
+               Xochi.execute(config, quote_resp, RealWallet, request)
+
+      refute_received {:req, "POST", "/api/intent/execute", _h, _b}
+    end
+
+    test "rejects a pull whose envelope or expiry diverges from the claimed method" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      quote_for = fn pull ->
+        %QuoteResponse{
+          intent_id: "xi_env",
+          quote_id: "xq_env",
+          can_solve: true,
+          payment_method: "erc3009",
+          eip712_data: %{
+            "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+            "primaryType" => "XochiIntent",
+            "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+            "message" => %{"intentId" => "xi_env"}
+          },
+          pull_authorization: pull
+        }
+      end
+
+      # TransferWithAuthorization has the same field names but no on-chain
+      # `msg.sender == to` guard -- the validator must reject the wrong primaryType.
+      transfer_fields = [
+        %{"name" => "from", "type" => "address"},
+        %{"name" => "to", "type" => "address"},
+        %{"name" => "value", "type" => "uint256"},
+        %{"name" => "validAfter", "type" => "uint256"},
+        %{"name" => "validBefore", "type" => "uint256"},
+        %{"name" => "nonce", "type" => "bytes32"}
+      ]
+
+      transfer_auth =
+        canonical_erc3009_pull(%{
+          primary_type: "TransferWithAuthorization",
+          types: %{"TransferWithAuthorization" => transfer_fields}
+        })
+
+      assert {:error, {:authorization_mismatch, :pull_type}} =
+               Xochi.execute(config, quote_for.(transfer_auth), RealWallet, request)
+
+      # An extra signable field the validator never inspects.
+      extra =
+        canonical_erc3009_pull(%{
+          types: %{
+            "ReceiveWithAuthorization" => transfer_fields ++ [%{"name" => "evil", "type" => "address"}]
+          }
+        })
+
+      assert {:error, {:authorization_mismatch, :pull_type}} =
+               Xochi.execute(config, quote_for.(extra), RealWallet, request)
+
+      # Already-expired authorization.
+      expired = canonical_erc3009_pull(%{message: %{"validBefore" => "1"}})
+
+      assert {:error, {:authorization_mismatch, :pull_expiry}} =
+               Xochi.execute(config, quote_for.(expired), RealWallet, request)
+
+      # Standing / far-future authorization beyond the bounded window.
+      far =
+        canonical_erc3009_pull(%{
+          message: %{"validBefore" => Integer.to_string(System.system_time(:second) + 999_999)}
+        })
+
+      assert {:error, {:authorization_mismatch, :pull_expiry}} =
+               Xochi.execute(config, quote_for.(far), RealWallet, request)
+
+      refute_received {:req, "POST", "/api/intent/execute", _h, _b}
+    end
+
+    test "refuses to sign a pull authorization with no request context (execute/3)" do
+      pull = %{
+        "domain" => %{
+          "name" => "USD Coin",
+          "version" => "2",
+          "chainId" => 8453,
+          "verifyingContract" => "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+        },
+        "primaryType" => "ReceiveWithAuthorization",
+        "types" => %{
+          "ReceiveWithAuthorization" => [
+            %{"name" => "from", "type" => "address"},
+            %{"name" => "to", "type" => "address"},
+            %{"name" => "value", "type" => "uint256"}
+          ]
+        },
+        "message" => %{"from" => @anvil_addr, "to" => @anvil_addr, "value" => "1000000"}
+      }
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_noctx",
+        quote_id: "xq_noctx",
+        can_solve: true,
+        payment_method: "erc3009",
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_noctx"}
+        },
+        pull_authorization: pull
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:error, {:authorization_mismatch, :no_request_context}} =
+               Xochi.execute(config, quote_resp, RealWallet)
+
+      refute_received {:req, "POST", "/api/intent/execute", _h, _b}
+    end
   end
 
   # -- Helpers --
@@ -348,5 +726,94 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, Jason.encode!(%{"status" => "submitted"}))
     end
+  end
+
+  # A canonical ERC-3009 ReceiveWithAuthorization pull (all six signed fields, a
+  # future validBefore). `overrides` may carry :message, :domain, :primary_type,
+  # :types to exercise the envelope/expiry binding.
+  defp canonical_erc3009_pull(overrides \\ %{}) do
+    valid_before = Integer.to_string(System.system_time(:second) + 600)
+
+    message =
+      Map.merge(
+        %{
+          "from" => @anvil_addr,
+          "to" => @anvil_addr,
+          "value" => "1000000",
+          "validAfter" => "0",
+          "validBefore" => valid_before,
+          "nonce" => "0x" <> String.duplicate("00", 31) <> "01"
+        },
+        Map.get(overrides, :message, %{})
+      )
+
+    domain =
+      Map.merge(
+        %{
+          "name" => "USD Coin",
+          "version" => "2",
+          "chainId" => 8453,
+          "verifyingContract" => "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+        },
+        Map.get(overrides, :domain, %{})
+      )
+
+    %{
+      "domain" => domain,
+      "primaryType" => Map.get(overrides, :primary_type, "ReceiveWithAuthorization"),
+      "types" =>
+        Map.get(overrides, :types, %{
+          "ReceiveWithAuthorization" => [
+            %{"name" => "from", "type" => "address"},
+            %{"name" => "to", "type" => "address"},
+            %{"name" => "value", "type" => "uint256"},
+            %{"name" => "validAfter", "type" => "uint256"},
+            %{"name" => "validBefore", "type" => "uint256"},
+            %{"name" => "nonce", "type" => "bytes32"}
+          ]
+        }),
+      "message" => message
+    }
+  end
+
+  # A canonical Permit2 PermitWitnessTransferFrom pull (future deadline).
+  defp canonical_permit2_pull(overrides \\ %{}) do
+    deadline = Integer.to_string(System.system_time(:second) + 600)
+
+    message =
+      Map.merge(
+        %{
+          "permitted" => %{
+            "token" => "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "amount" => "1000000"
+          },
+          "spender" => "0x000000000000000000000000000000000000dEaD",
+          "nonce" => "1",
+          "deadline" => deadline,
+          "witness" => %{"orderId" => "0x" <> String.duplicate("00", 32)}
+        },
+        Map.get(overrides, :message, %{})
+      )
+
+    %{
+      "domain" => Map.merge(%{"chainId" => 8453}, Map.get(overrides, :domain, %{})),
+      "primaryType" => Map.get(overrides, :primary_type, "PermitWitnessTransferFrom"),
+      "types" =>
+        Map.get(overrides, :types, %{
+          "PermitWitnessTransferFrom" => [
+            %{"name" => "permitted", "type" => "TokenPermissions"},
+            %{"name" => "spender", "type" => "address"},
+            %{"name" => "nonce", "type" => "uint256"},
+            %{"name" => "deadline", "type" => "uint256"},
+            %{"name" => "witness", "type" => "OriginPullWitness"}
+          ],
+          "TokenPermissions" => [
+            %{"name" => "token", "type" => "address"},
+            %{"name" => "amount", "type" => "uint256"}
+          ],
+          "OriginPullWitness" => [%{"name" => "orderId", "type" => "bytes32"}]
+        }),
+      "message" => message
+    }
   end
 end

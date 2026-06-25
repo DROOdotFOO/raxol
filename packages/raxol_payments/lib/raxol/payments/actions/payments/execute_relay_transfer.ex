@@ -53,6 +53,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
 
   use Raxol.Agent.Action,
     name: "payment_execute_relay_transfer",
+    sensitive: true,
     description:
       "Initiate a Tron cross-chain transfer through Riddler Relay: quote, authorize the spend, and start execution. Returns the deposit address to fund and the transfer id to poll. Tron is public-only; a stealth request is downgraded with a warning.",
     schema: [

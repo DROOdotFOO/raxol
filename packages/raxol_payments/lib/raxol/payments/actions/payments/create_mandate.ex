@@ -8,6 +8,7 @@ defmodule Raxol.Payments.Actions.Payments.CreateMandate do
 
   use Raxol.Agent.Action,
     name: "payment_create_mandate",
+    sensitive: true,
     description:
       "Issue a Xochi delegation envelope: sign an EIP-712 Mandate authorizing a specific agent wallet to call scoped Xochi endpoints within a budget. Returns the base64url envelope to present in X-Xochi-Delegation.",
     schema: [

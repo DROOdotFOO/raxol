@@ -67,7 +67,33 @@ defmodule Raxol.Payments.EIP712 do
     end
   end
 
+  @doc """
+  Pack an `ExSecp256k1.sign/2` result into Ethereum's canonical 65-byte
+  signature `r || s || v`.
+
+  `ExSecp256k1.sign/2` returns the recovery id as `0` or `1`. Ethereum's
+  `ecrecover` -- and the ERC-3009 / Permit2 on-chain authorizations the Xochi
+  origin pull and x402 settlement are verified against -- require the canonical
+  `27` / `28`, returning `address(0)` for `v < 27`. Normalizing here keeps every
+  wallet's output verifiable both on-chain and off-chain (viem accepts either
+  form). Idempotent: a signature already carrying `27` / `28` is unchanged.
+  """
+  @spec pack_signature({binary(), binary(), 0..28}) :: binary()
+  def pack_signature({<<r::binary-size(32)>>, <<s::binary-size(32)>>, v})
+      when is_integer(v) do
+    <<r::binary-size(32), s::binary-size(32), canonical_v(v)::8>>
+  end
+
   # -- Private --
+
+  defp canonical_v(v) when v in [0, 1], do: v + 27
+  defp canonical_v(v) when v in [27, 28], do: v
+
+  # A secp256k1 recovery id is 0/1 (or the 27/28 Ethereum form). Anything else
+  # (an EIP-155 chain-encoded v, or a buggy signer) would silently pack a
+  # non-recovering signature, so fail loud rather than emit one.
+  defp canonical_v(v),
+    do: raise(ArgumentError, "non-canonical secp256k1 recovery id: #{inspect(v)}")
 
   defp eip712_domain_types(domain) do
     fields =

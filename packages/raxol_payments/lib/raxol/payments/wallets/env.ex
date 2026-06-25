@@ -93,8 +93,8 @@ defmodule Raxol.Payments.Wallets.Env do
       hash = ExKeccak.hash_256(message)
 
       case ExSecp256k1.sign(hash, privkey) do
-        {:ok, {r, s, v}} ->
-          {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
+        {:ok, signature} ->
+          {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
 
         {:error, reason} ->
           {:error, {:sign_failed, reason}}
@@ -109,8 +109,8 @@ defmodule Raxol.Payments.Wallets.Env do
     with {:ok, privkey} <- load_key(env_var),
          {:ok, hash} <- Raxol.Payments.EIP712.hash(domain, types, message) do
       case ExSecp256k1.sign(hash, privkey) do
-        {:ok, {r, s, v}} ->
-          {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
+        {:ok, signature} ->
+          {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
 
         {:error, reason} ->
           {:error, {:sign_failed, reason}}
@@ -123,8 +123,8 @@ defmodule Raxol.Payments.Wallets.Env do
   def sign_hash(<<digest::binary-size(32)>>, env_var) do
     with {:ok, privkey} <- load_key(env_var) do
       case ExSecp256k1.sign(digest, privkey) do
-        {:ok, {r, s, v}} ->
-          {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
+        {:ok, signature} ->
+          {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
 
         {:error, reason} ->
           {:error, {:sign_failed, reason}}

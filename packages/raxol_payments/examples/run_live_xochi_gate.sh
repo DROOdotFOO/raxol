@@ -48,6 +48,16 @@
 # XOCHI_LIVE_FROM_CHAIN / XOCHI_LIVE_TO_CHAIN, XOCHI_LIVE_FROM_TOKEN /
 # XOCHI_LIVE_TO_TOKEN, plus XOCHI_LIVE_SETTLEMENT=stealth with
 # XOCHI_LIVE_RECIPIENT_META for the private path.
+#
+# Matrix mode (XOCHI_LIVE_MATRIX=true): settle every corridor for each settlement
+# type in one run, MOVING REAL FUNDS PER CELL. Bounded by:
+#   XOCHI_LIVE_CORRIDORS    "from>to,from>to" chain ids (default 8453>42161,42161>8453)
+#   XOCHI_LIVE_SETTLEMENTS  "public,stealth" (default public; stealth needs META)
+#   XOCHI_LIVE_AMOUNT       per-cell amount
+# USDC is resolved per chain for Base/Optimism/Arbitrum. Example:
+#   XOCHI_LIVE_KEY=0x<funded> XOCHI_LIVE_MATRIX=true \
+#   XOCHI_LIVE_SETTLEMENTS=public,stealth XOCHI_LIVE_RECIPIENT_META=st:eth:0x... \
+#     ./examples/run_live_xochi_gate.sh
 set -euo pipefail
 
 XOCHI_LIVE_URL="${XOCHI_LIVE_URL:-https://api.xochi.fi}"
@@ -58,6 +68,12 @@ XOCHI_LIVE_FROM_CHAIN="${XOCHI_LIVE_FROM_CHAIN:-8453}"
 XOCHI_LIVE_TO_CHAIN="${XOCHI_LIVE_TO_CHAIN:-42161}"
 XOCHI_LIVE_FROM_TOKEN="${XOCHI_LIVE_FROM_TOKEN:-0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913}"
 XOCHI_LIVE_TO_TOKEN="${XOCHI_LIVE_TO_TOKEN:-0xaf88d065e77c8cc2239327c5edb3a432268e5831}"
+
+# Matrix mode (XOCHI_LIVE_MATRIX=true): settle every corridor x settlement type.
+# Each cell moves real funds; bounded by the corridor/settlement lists below.
+XOCHI_LIVE_MATRIX="${XOCHI_LIVE_MATRIX:-false}"
+XOCHI_LIVE_CORRIDORS="${XOCHI_LIVE_CORRIDORS:-8453>42161,42161>8453}"
+XOCHI_LIVE_SETTLEMENTS="${XOCHI_LIVE_SETTLEMENTS:-public}"
 
 if [[ -z "${XOCHI_LIVE_KEY:-}" ]]; then
   printf 'error: set XOCHI_LIVE_KEY to a funded Base mainnet (8453) private key\n' >&2
@@ -117,11 +133,22 @@ if [[ -n "${DRY_RUN:-}" ]]; then
   exit 0
 fi
 
-printf 'running the gate: this submits REAL mainnet intents and settles ~%s USDC per case...\n' \
-  "$XOCHI_LIVE_AMOUNT" >&2
-
 export XOCHI_LIVE_URL XOCHI_LIVE_TOKEN XOCHI_LIVE_KEY XOCHI_LIVE_AMOUNT \
   XOCHI_LIVE_FROM_CHAIN XOCHI_LIVE_TO_CHAIN XOCHI_LIVE_FROM_TOKEN XOCHI_LIVE_TO_TOKEN \
   XOCHI_LIVE_AUTH
+
+if [[ "$XOCHI_LIVE_MATRIX" == "true" ]]; then
+  export XOCHI_LIVE_MATRIX XOCHI_LIVE_CORRIDORS XOCHI_LIVE_SETTLEMENTS
+  if [[ -n "${XOCHI_LIVE_RECIPIENT_META:-}" ]]; then
+    export XOCHI_LIVE_RECIPIENT_META
+  fi
+  printf 'matrix mode: settling [%s] x [%s] at %s USDC each (REAL funds)...\n' \
+    "$XOCHI_LIVE_CORRIDORS" "$XOCHI_LIVE_SETTLEMENTS" "$XOCHI_LIVE_AMOUNT" >&2
+  exec env MIX_ENV=test mix test --only live_xochi_matrix \
+    test/raxol/payments/xochi/live_xochi_test.exs
+fi
+
+printf 'running the gate: this submits REAL mainnet intents and settles ~%s USDC per case...\n' \
+  "$XOCHI_LIVE_AMOUNT" >&2
 exec env MIX_ENV=test mix test --include live_xochi \
   test/raxol/payments/xochi/live_xochi_test.exs

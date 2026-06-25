@@ -32,6 +32,8 @@ defmodule Raxol.Payments.Xochi.Stealth do
   - Scheme ID 1: secp256k1 with view tags
   """
 
+  alias Raxol.Payments.Secret
+
   @erc5564_announcer "0x55649E01B5Df198D18D95b5cc5051630cfD45564"
   @erc6538_registry "0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538"
   @stealth_scheme_id 1
@@ -63,7 +65,9 @@ defmodule Raxol.Payments.Xochi.Stealth do
 
   @type stealth_payment :: %{
           announcement: announcement(),
-          stealth_priv_key: binary()
+          # The recipient's one-time spend key, wrapped so it cannot leak via
+          # logs/inspect; `Secret.reveal/1` to sign a claim with it.
+          stealth_priv_key: Secret.t()
         }
 
   # -- Public API --
@@ -311,7 +315,7 @@ defmodule Raxol.Payments.Xochi.Stealth do
         derived_address = pubkey_to_address(stealth_pub)
 
         if String.downcase(derived_address) == String.downcase(ann.stealth_address) do
-          {:ok, %{announcement: ann, stealth_priv_key: stealth_priv}}
+          {:ok, %{announcement: ann, stealth_priv_key: Secret.new(stealth_priv)}}
         else
           :skip
         end

@@ -37,6 +37,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
   use Raxol.Agent.Action,
     name: "payment_execute_xochi_intent",
+    sensitive: true,
     description:
       "Execute a cross-chain or stealth payment through Xochi: quote, authorize the spend, sign the EIP-712 intent, and submit. Returns the intent id and status to poll.",
     schema: [
@@ -274,7 +275,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   defp execute(config, request, quote, wallet, context, amount, store, key) do
     Checkpoint.put(store, key, dispatched_record(quote))
 
-    case Xochi.execute(config, quote, wallet) do
+    case Xochi.execute(config, quote, wallet, request) do
       {:ok, exec} ->
         {:ok, exec, quote}
 
@@ -290,7 +291,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
       {:ok, quote} ->
         Checkpoint.put(store, key, dispatched_record(quote))
 
-        case Xochi.execute(config, quote, wallet) do
+        case Xochi.execute(config, quote, wallet, request) do
           {:ok, exec} -> {:ok, exec, quote}
           {:error, reason} -> release_and_clear(context, amount, reason, store, key)
         end

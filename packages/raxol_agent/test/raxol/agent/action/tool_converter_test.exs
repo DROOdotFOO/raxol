@@ -2,6 +2,7 @@ defmodule Raxol.Agent.Action.ToolConverterTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Agent.Action.ToolConverter
+  alias Raxol.Agent.ToolPolicy
 
   defmodule ReadFile do
     use Raxol.Agent.Action,
@@ -35,16 +36,127 @@ defmodule Raxol.Agent.Action.ToolConverterTest do
     end
   end
 
-  @actions [ReadFile, CountLines]
+  defmodule MoveFunds do
+    use Raxol.Agent.Action,
+      name: "move_funds",
+      sensitive: true,
+      description: "Send money (sensitive)",
+      schema: [
+        input: [
+          to: [type: :string, required: true, description: "Recipient"]
+        ]
+      ]
+
+    @impl true
+    def run(%{to: to}, _ctx) do
+      {:ok, %{sent_to: to}}
+    end
+  end
+
+  @actions [ReadFile, CountLines, MoveFunds]
+
+  describe "tool authorization (H1)" do
+    test "a tool_authorizer deny blocks the action before it runs" do
+      tool_call = %{"name" => "count_lines", "arguments" => %{"text" => "a\nb"}}
+      context = %{tool_authorizer: ToolPolicy.deny_all(:blocked)}
+
+      assert {:error, {:tool_denied, "count_lines", :blocked}} =
+               ToolConverter.dispatch_tool_call(tool_call, @actions, context)
+    end
+
+    test "allowlist permits named tools and denies the rest" do
+      context = %{tool_authorizer: ToolPolicy.allowlist(["count_lines"])}
+
+      assert {:ok, _} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "count_lines", "arguments" => %{"text" => "x"}},
+                 @actions,
+                 context
+               )
+
+      assert {:error, {:tool_denied, "read_file", :not_in_allowlist}} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "read_file", "arguments" => %{"path" => "/tmp/x"}},
+                 @actions,
+                 context
+               )
+    end
+
+    test "denylist denies named tools and permits the rest" do
+      context = %{tool_authorizer: ToolPolicy.denylist(["read_file"])}
+
+      assert {:error, {:tool_denied, "read_file", :denied}} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "read_file", "arguments" => %{"path" => "/tmp/x"}},
+                 @actions,
+                 context
+               )
+
+      assert {:ok, _} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "count_lines", "arguments" => %{"text" => "x"}},
+                 @actions,
+                 context
+               )
+    end
+
+    test "no authorizer allows a non-sensitive call" do
+      assert {:ok, _} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "count_lines", "arguments" => %{"text" => "x"}},
+                 @actions,
+                 %{}
+               )
+    end
+
+    test "no authorizer denies a sensitive call by default" do
+      assert {:error, {:tool_denied, "move_funds", :sensitive_tool}} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "move_funds", "arguments" => %{"to" => "0xabc"}},
+                 @actions,
+                 %{}
+               )
+    end
+
+    test "an explicit allow_all overrides the default sensitive denial" do
+      context = %{tool_authorizer: ToolPolicy.allow_all()}
+
+      assert {:ok, _} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "move_funds", "arguments" => %{"to" => "0xabc"}},
+                 @actions,
+                 context
+               )
+    end
+
+    test "deny_sensitive permits read-only tools and denies sensitive ones" do
+      context = %{tool_authorizer: ToolPolicy.deny_sensitive()}
+
+      assert {:ok, _} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "read_file", "arguments" => %{"path" => "/tmp/x"}},
+                 @actions,
+                 context
+               )
+
+      assert {:error, {:tool_denied, "move_funds", :sensitive_tool}} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "move_funds", "arguments" => %{"to" => "0xabc"}},
+                 @actions,
+                 context
+               )
+    end
+  end
 
   describe "to_tool_definitions/1" do
     test "converts action modules to tool definitions" do
       defs = ToolConverter.to_tool_definitions(@actions)
-      assert length(defs) == 2
+      assert length(defs) == 3
 
-      [read_def, count_def] = defs
+      [read_def, count_def, move_def] = defs
       assert read_def["function"]["name"] == "read_file"
       assert count_def["function"]["name"] == "count_lines"
+      assert move_def["function"]["name"] == "move_funds"
       assert read_def["type"] == "function"
     end
 

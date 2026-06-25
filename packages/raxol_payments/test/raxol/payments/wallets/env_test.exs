@@ -61,6 +61,15 @@ defmodule Raxol.Payments.Wallets.EnvTest do
       assert byte_size(sig) == 65
     end
 
+    test "emits a canonical recovery byte (27 or 28) for on-chain ecrecover" do
+      message = %{to: "0x" <> String.duplicate("cd", 20), amount: 1000}
+
+      assert {:ok, <<_r::binary-size(32), _s::binary-size(32), v::8>>} =
+               Env.sign_typed_data(@domain, @types, message, @test_env_var)
+
+      assert v in [27, 28]
+    end
+
     test "propagates EIP-712 hash errors for invalid address" do
       message = %{to: "0xZZZZ", amount: 1000}
 
@@ -100,11 +109,14 @@ defmodule Raxol.Payments.Wallets.EnvTest do
       refute sig1 == sig2
     end
 
-    test "signature is r(32) || s(32) || y_parity(0 or 1)" do
+    test "signature is r(32) || s(32) || canonical v (27 or 28)" do
+      # The recovery byte must be Ethereum-canonical 27/28, not the raw
+      # ExSecp256k1 recovery id 0/1: on-chain ecrecover (ERC-3009 origin pull,
+      # Permit2, x402) returns address(0) for v < 27.
       {:ok, <<_r::binary-size(32), _s::binary-size(32), v::8>>} =
         Env.sign_hash(@digest, @test_env_var)
 
-      assert v in [0, 1]
+      assert v in [27, 28]
     end
 
     test "returns error when env var not set" do
