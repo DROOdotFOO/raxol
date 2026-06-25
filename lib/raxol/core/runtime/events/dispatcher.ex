@@ -37,7 +37,8 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
               layout: [],
               rendering_engine: nil,
               time_travel: nil,
-              cycle_profiler: nil
+              cycle_profiler: nil,
+              command_interceptor: nil
   end
 
   # BaseManager provides start_link/1 and start_link/2 automatically
@@ -72,7 +73,8 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       rendering_engine: Map.get(initial_state, :rendering_engine),
       current_theme_id: safe_get_theme_id(),
       time_travel: Map.get(initial_state, :time_travel),
-      cycle_profiler: Map.get(initial_state, :cycle_profiler)
+      cycle_profiler: Map.get(initial_state, :cycle_profiler),
+      command_interceptor: Map.get(initial_state, :command_interceptor)
     }
 
     send(runtime_pid, {:runtime_initialized, self()})
@@ -219,7 +221,8 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     %{
       pid: self(),
       command_registry_table: state.command_registry_table,
-      runtime_pid: state.runtime_pid
+      runtime_pid: state.runtime_pid,
+      command_interceptor: state.command_interceptor
     }
   end
 
@@ -828,6 +831,11 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # --- Command Processing ---
 
   defp process_commands(commands, context) when is_list(commands) do
+    # Security gate: an optional command interceptor (e.g. the agent
+    # permission/sandbox hook chain) may inspect, modify, or deny directives
+    # before they run. nil for non-agent surfaces, so this is a no-op there.
+    commands = apply_command_interceptor(context, commands)
+
     Raxol.Core.Runtime.Log.debug(
       "[Dispatcher.process_commands] Processing commands: #{inspect(commands)} with context: #{inspect(context)}"
     )
@@ -843,6 +851,12 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       end
     end)
   end
+
+  defp apply_command_interceptor(%{command_interceptor: fun}, commands)
+       when is_function(fun, 1),
+       do: fun.(commands)
+
+  defp apply_command_interceptor(_context, commands), do: commands
 
   defp directive?(effect) do
     is_struct(effect) and

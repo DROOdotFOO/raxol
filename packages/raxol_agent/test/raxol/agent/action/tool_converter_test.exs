@@ -2,6 +2,7 @@ defmodule Raxol.Agent.Action.ToolConverterTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Agent.Action.ToolConverter
+  alias Raxol.Agent.ToolPolicy
 
   defmodule ReadFile do
     use Raxol.Agent.Action,
@@ -36,6 +37,61 @@ defmodule Raxol.Agent.Action.ToolConverterTest do
   end
 
   @actions [ReadFile, CountLines]
+
+  describe "tool authorization (H1)" do
+    test "a tool_authorizer deny blocks the action before it runs" do
+      tool_call = %{"name" => "count_lines", "arguments" => %{"text" => "a\nb"}}
+      context = %{tool_authorizer: ToolPolicy.deny_all(:blocked)}
+
+      assert {:error, {:tool_denied, "count_lines", :blocked}} =
+               ToolConverter.dispatch_tool_call(tool_call, @actions, context)
+    end
+
+    test "allowlist permits named tools and denies the rest" do
+      context = %{tool_authorizer: ToolPolicy.allowlist(["count_lines"])}
+
+      assert {:ok, _} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "count_lines", "arguments" => %{"text" => "x"}},
+                 @actions,
+                 context
+               )
+
+      assert {:error, {:tool_denied, "read_file", :not_in_allowlist}} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "read_file", "arguments" => %{"path" => "/tmp/x"}},
+                 @actions,
+                 context
+               )
+    end
+
+    test "denylist denies named tools and permits the rest" do
+      context = %{tool_authorizer: ToolPolicy.denylist(["read_file"])}
+
+      assert {:error, {:tool_denied, "read_file", :denied}} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "read_file", "arguments" => %{"path" => "/tmp/x"}},
+                 @actions,
+                 context
+               )
+
+      assert {:ok, _} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "count_lines", "arguments" => %{"text" => "x"}},
+                 @actions,
+                 context
+               )
+    end
+
+    test "no authorizer allows the call (backward compatible)" do
+      assert {:ok, _} =
+               ToolConverter.dispatch_tool_call(
+                 %{"name" => "count_lines", "arguments" => %{"text" => "x"}},
+                 @actions,
+                 %{}
+               )
+    end
+  end
 
   describe "to_tool_definitions/1" do
     test "converts action modules to tool definitions" do

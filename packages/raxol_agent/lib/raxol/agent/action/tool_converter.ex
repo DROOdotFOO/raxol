@@ -48,10 +48,25 @@ defmodule Raxol.Agent.Action.ToolConverter do
 
     with {:ok, module} <- find_action(name, action_modules),
          {:ok, params} <- parse_arguments(raw_args, module),
-         :ok <- validate_arg_limits(params) do
+         :ok <- validate_arg_limits(params),
+         :ok <- authorize_tool(module, params, context) do
       module.call(params, context)
     end
   end
+
+  # Security gate: when the agent context carries a `:tool_authorizer`
+  # ((module, params, context) -> :ok | {:deny, reason}), consult it before
+  # running the Action so a prompt-injected LLM cannot invoke a sensitive tool.
+  # Absent -> allow (backward compatible). See `Raxol.Agent.ToolPolicy`.
+  defp authorize_tool(module, params, %{tool_authorizer: fun} = context)
+       when is_function(fun, 3) do
+    case fun.(module, params, context) do
+      :ok -> :ok
+      {:deny, reason} -> {:error, {:tool_denied, module.__action_meta__().name, reason}}
+    end
+  end
+
+  defp authorize_tool(_module, _params, _context), do: :ok
 
   @doc """
   Build a tool result message for feeding back to the LLM.
