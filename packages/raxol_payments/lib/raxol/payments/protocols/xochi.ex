@@ -241,46 +241,92 @@ defmodule Raxol.Payments.Protocols.Xochi do
          %QuoteRequest{} = request,
          wallet
        ) do
-    domain = pull["domain"] || %{}
-    message = pull["message"] || %{}
-
     case method do
-      "erc3009" -> validate_erc3009_pull(domain, message, request, wallet.address())
-      "permit2" -> validate_permit2_pull(domain, message, request)
+      "erc3009" -> validate_erc3009_pull(pull, request, wallet.address())
+      "permit2" -> validate_permit2_pull(pull, request)
       other -> {:error, {:authorization_mismatch, {:unsupported_pull_method, other}}}
     end
   end
 
+  # The wallet signs whatever typed data the quote serves, so the validator must
+  # check the served `primaryType` + `types` -- not just the `message` fields by
+  # name. Without this a hostile quote could claim `payment_method: "erc3009"`,
+  # pass the field checks, yet serve a `TransferWithAuthorization` (no on-chain
+  # `msg.sender == to` guard) or a struct carrying extra signable fields. These
+  # canonical shapes are what the agent is willing to sign.
+  @erc3009_primary_type "ReceiveWithAuthorization"
+  @erc3009_fields MapSet.new(~w(from to value validAfter validBefore nonce))
+  @permit2_primary_type "PermitWitnessTransferFrom"
+  @permit2_fields MapSet.new(~w(permitted spender nonce deadline witness))
+
   # ERC-3009 ReceiveWithAuthorization: token is the EIP-712 verifyingContract,
-  # `from` is the signer, `value` the pulled amount. The recipient (`to`) is the
-  # solver collection address; it is only bound when the operator has pinned a
-  # solver allowlist (`solver_allowed?/1` is fail-open by default, so the common
-  # case is unchanged). ERC-3009's `msg.sender == to` plus the value cap keep the
-  # unbound case bounded. See GitHub #333.
-  defp validate_erc3009_pull(domain, message, request, signer) do
+  # `from` is the signer, `value` the pulled amount, `validBefore` the expiry.
+  # The recipient (`to`) is the solver collection address; it is only bound when
+  # the operator has pinned a solver allowlist (`solver_allowed?/1` is fail-open
+  # by default). ERC-3009's `msg.sender == to` plus the value cap keep the
+  # unbound `to` bounded. See GitHub #333.
+  defp validate_erc3009_pull(pull, request, signer) do
+    domain = pull["domain"] || %{}
+    message = pull["message"] || %{}
+
     first_mismatch([
+      {:pull_type, valid_envelope?(pull, @erc3009_primary_type, @erc3009_fields)},
       {:pull_from, addr_match?(message["from"], signer)},
       {:pull_token, addr_match?(domain["verifyingContract"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
       {:pull_value, int_within?(message["value"], request.from_amount)},
-      {:pull_to, solver_allowed?(message["to"])}
+      {:pull_to, solver_allowed?(message["to"])},
+      {:pull_expiry, valid_window?(message["validBefore"])}
     ])
   end
 
-  # Permit2 PermitWitnessTransferFrom: token + amount live under `permitted`;
-  # the owner is recovered from the signature (the agent's own wallet). The
-  # `spender` is the solver; bound only when the operator pins a solver allowlist
-  # (fail-open by default). The `OriginPullWitness` already ties the permit to one
-  # intent. See GitHub #333.
-  defp validate_permit2_pull(domain, message, request) do
+  # Permit2 PermitWitnessTransferFrom: token + amount live under `permitted`,
+  # the owner is recovered from the signature (the agent's own wallet), and
+  # `deadline` bounds validity. The `spender` is the solver; bound only when the
+  # operator pins a solver allowlist (fail-open by default). The `OriginPullWitness`
+  # ties the permit to one intent on-chain. See GitHub #333.
+  defp validate_permit2_pull(pull, request) do
+    domain = pull["domain"] || %{}
+    message = pull["message"] || %{}
     permitted = message["permitted"] || %{}
 
     first_mismatch([
+      {:pull_type, valid_envelope?(pull, @permit2_primary_type, @permit2_fields)},
       {:pull_token, addr_match?(permitted["token"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
       {:pull_value, int_within?(permitted["amount"], request.from_amount)},
-      {:pull_spender, solver_allowed?(message["spender"])}
+      {:pull_spender, solver_allowed?(message["spender"])},
+      {:pull_expiry, valid_window?(message["deadline"])}
     ])
+  end
+
+  # The served envelope must be exactly the canonical struct for the method: the
+  # right `primaryType` and precisely its field set (no missing, no extra signable
+  # fields). This binds the object validated to the object signed.
+  defp valid_envelope?(pull, primary_type, fields) do
+    pull["primaryType"] == primary_type and type_field_names(pull, primary_type) == fields
+  end
+
+  defp type_field_names(pull, type_name) do
+    pull
+    |> get_in(["types", type_name])
+    |> List.wrap()
+    |> Enum.map(fn f -> f["name"] || f[:name] end)
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
+  end
+
+  # The authorization expiry must be a real future timestamp within a bounded
+  # window, so a hostile quote cannot get a long-lived / standing pull signed.
+  # Configurable via `:pull_max_validity_seconds` (default 1 hour).
+  defp valid_window?(value) do
+    now = System.system_time(:second)
+    max_ahead = Application.get_env(:raxol_payments, :pull_max_validity_seconds, 3600)
+
+    case to_uint(value) do
+      t when is_integer(t) -> t > now and t <= now + max_ahead
+      _ -> false
+    end
   end
 
   # The origin-pull recipient/spender is the solver's collection address. There
