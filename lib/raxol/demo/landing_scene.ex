@@ -25,6 +25,7 @@ defmodule Raxol.Demo.LandingScene do
   @spinner ~w(| / - \\)
   @width 76
   @tx "0x7f3a..e21"
+  @tx_url "https://basescan.org/tx/0x7f3a9c2e5b1d4a6f8c0e2b4d6a8f1c3e5b7d9f0a2c4e6b8d0f2a4c6e8b0dfe21"
 
   @coral {255, 205, 156}
   @warn {230, 132, 118}
@@ -210,7 +211,11 @@ defmodule Raxol.Demo.LandingScene do
   # scripted hover it gets a pointer and a highlight, the way it lights up under
   # a real mouse in the live terminal.
   defp explorer(false) do
-    text("  ↗ basescan.org/tx/#{@tx}", fg: @coral, style: [:underline, :italic])
+    text("  ↗ basescan.org/tx/#{@tx}",
+      fg: @coral,
+      style: [:underline, :italic],
+      link: @tx_url
+    )
   end
 
   defp explorer(true) do
@@ -220,7 +225,8 @@ defmodule Raxol.Demo.LandingScene do
         text(" ↗ basescan.org/tx/#{@tx} ",
           fg: @frost,
           bg: @indigo,
-          style: [:bold, :underline, :italic]
+          style: [:bold, :underline, :italic],
+          link: @tx_url
         )
       ]
     end

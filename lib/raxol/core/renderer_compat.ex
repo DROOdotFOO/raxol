@@ -103,10 +103,13 @@ defmodule Raxol.Core.Renderer do
       ansi_prefix = Style.to_ansi(style)
       text = chars |> Enum.reverse() |> Enum.join()
 
-      case ansi_prefix do
-        "" -> text
-        prefix -> prefix <> text <> Style.reset()
-      end
+      styled =
+        case ansi_prefix do
+          "" -> text
+          prefix -> prefix <> text <> Style.reset()
+        end
+
+      maybe_wrap_hyperlink(styled, style)
     end)
   end
 
@@ -175,10 +178,13 @@ defmodule Raxol.Core.Renderer do
   defp operation_to_ansi({:write, text, style}) do
     ansi_prefix = Style.to_ansi(style)
 
-    case ansi_prefix do
-      "" -> text
-      prefix -> prefix <> text <> Style.reset()
-    end
+    styled =
+      case ansi_prefix do
+        "" -> text
+        prefix -> prefix <> text <> Style.reset()
+      end
+
+    maybe_wrap_hyperlink(styled, style)
   end
 
   defp operation_to_ansi({:clear_line, y}) do
@@ -186,4 +192,19 @@ defmodule Raxol.Core.Renderer do
   end
 
   defp operation_to_ansi(_), do: ""
+
+  # Wrap already-styled content in an OSC 8 hyperlink when the cell style
+  # carries one (bare form, ST-terminated). Cells with no hyperlink emit
+  # exactly as before.
+  defp maybe_wrap_hyperlink(content, style) when is_map(style) do
+    case Map.get(style, :hyperlink) do
+      url when is_binary(url) and url != "" ->
+        "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
+
+      _ ->
+        content
+    end
+  end
+
+  defp maybe_wrap_hyperlink(content, _style), do: content
 end

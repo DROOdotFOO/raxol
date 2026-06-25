@@ -193,10 +193,13 @@ defmodule Raxol.Terminal.Renderer do
       chars = Enum.map_join(cells_with_same_style, "", & &1.char)
       ansi_prefix = build_ansi_prefix(style, theme)
 
-      case ansi_prefix do
-        "" -> chars
-        prefix -> prefix <> chars <> @ansi_reset
-      end
+      styled =
+        case ansi_prefix do
+          "" -> chars
+          prefix -> prefix <> chars <> @ansi_reset
+        end
+
+      maybe_wrap_hyperlink(styled, style)
     end)
   end
 
@@ -206,12 +209,34 @@ defmodule Raxol.Terminal.Renderer do
     |> Enum.map_join("", fn cell ->
       ansi_prefix = build_ansi_prefix(cell.style, theme)
 
-      case ansi_prefix do
-        "" -> cell.char
-        prefix -> prefix <> cell.char <> @ansi_reset
-      end
+      styled =
+        case ansi_prefix do
+          "" -> cell.char
+          prefix -> prefix <> cell.char <> @ansi_reset
+        end
+
+      maybe_wrap_hyperlink(styled, cell.style)
     end)
   end
+
+  # Wrap already-styled content in an OSC 8 hyperlink when the cell style
+  # carries one. Bare form `ESC ] 8 ; ; URL ST  <content>  ESC ] 8 ; ; ST`;
+  # clickable in OSC 8-aware terminals (iTerm2, kitty, WezTerm), ignored
+  # elsewhere. The SGR reset stays inside the link so colors close but the
+  # link spans the whole run.
+  defp maybe_wrap_hyperlink(content, style) do
+    case hyperlink_url(style) do
+      url when is_binary(url) and url != "" ->
+        "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
+
+      _ ->
+        content
+    end
+  end
+
+  defp hyperlink_url(%{__struct__: _} = style), do: Map.get(style, :hyperlink)
+  defp hyperlink_url(style) when is_map(style), do: Map.get(style, :hyperlink)
+  defp hyperlink_url(_style), do: nil
 
   # Build ANSI escape prefix from style and theme
   defp build_ansi_prefix(style, theme) do

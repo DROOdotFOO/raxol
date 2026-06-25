@@ -22,6 +22,12 @@ defmodule Raxol.Demo.Showcase do
     "About"
   ]
 
+  # Clickable in OSC 8-aware terminals (iTerm2, kitty, WezTerm); plain text
+  # elsewhere.
+  @site_url "https://raxol.io"
+  @docs_url "https://hexdocs.pm/raxol"
+  @repo_url "https://github.com/DROOdotFOO/raxol"
+
   @sample_table_rows [
     ["1", "Elixir", "Functional", "1.17"],
     ["2", "Rust", "Systems", "1.82"],
@@ -310,6 +316,11 @@ defmodule Raxol.Demo.Showcase do
           "Widgets: text, box, button, checkbox, table, progress, list, modal"
         ),
         text(""),
+        text("-- Links (cmd-click in supported terminals) --", style: [:bold]),
+        link_line("Website", "raxol.io", @site_url),
+        link_line("Docs", "hexdocs.pm/raxol", @docs_url),
+        link_line("Source", "github.com/DROOdotFOO/raxol", @repo_url),
+        text(""),
         text("-- Keyboard Reference --", style: [:bold]),
         text("  1-5       Switch sections"),
         text("  Tab       Next section"),
@@ -319,6 +330,15 @@ defmodule Raxol.Demo.Showcase do
         text("  =/-/r     Counter controls (section 4)")
       ]
     end
+  end
+
+  # A labelled OSC 8 hyperlink: the displayed text is cmd-clickable to `url`.
+  defp link_line(label, display, url) do
+    text("  #{String.pad_trailing(label <> ":", 9)}#{display}",
+      fg: :cyan,
+      style: [:underline],
+      link: url
+    )
   end
 
   # -- Footer --

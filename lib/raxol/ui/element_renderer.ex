@@ -255,7 +255,7 @@ defmodule Raxol.UI.ElementRenderer do
   defp render_text_if_valid_coordinates(x, y, text, style) do
     fg = resolve_fg(style)
     bg = resolve_bg(style)
-    attrs = extract_text_attrs(style)
+    attrs = extract_text_attrs(style) ++ hyperlink_attrs(style)
 
     # Width-aware text rendering - CJK/fullwidth chars advance x by 2
     text
@@ -310,5 +310,15 @@ defmodule Raxol.UI.ElementRenderer do
 
   defp extract_text_attrs(style) do
     Enum.filter(@text_attrs, fn attr -> Map.get(style, attr, false) == true end)
+  end
+
+  # An OSC 8 hyperlink rides along in the cell's attrs list as a tagged
+  # `{:hyperlink, url}` entry (keeping the 6-tuple cell shape intact). The
+  # ScreenBuffer bridge lifts it onto `cell.style.hyperlink`.
+  defp hyperlink_attrs(style) do
+    case Map.get(style, :link) || Map.get(style, :hyperlink) do
+      url when is_binary(url) and url != "" -> [{:hyperlink, url}]
+      _ -> []
+    end
   end
 end
