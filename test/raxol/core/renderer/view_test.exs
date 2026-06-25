@@ -93,7 +93,8 @@ defmodule Raxol.Core.Renderer.ViewTest do
           fg: nil,
           bg: nil,
           wrap: :none,
-          align: :left
+          align: :left,
+          link: nil
         }
       ]
 

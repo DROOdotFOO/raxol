@@ -259,7 +259,8 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
 
   defp transform_cells_for_update(cells) when is_list(cells) do
     Enum.map(cells, fn {x, y, char, fg, bg, attrs_list} ->
-      attrs_map = Enum.into(attrs_list || [], %{}, fn atom -> {atom, true} end)
+      {hyperlink, style_atoms} = split_hyperlink(attrs_list || [])
+      attrs_map = Enum.into(style_atoms, %{}, fn atom -> {atom, true} end)
 
       cell_attrs =
         %{
@@ -267,9 +268,22 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
           background: bg
         }
         |> Map.merge(Map.take(attrs_map, [:bold, :underline, :italic]))
+        |> put_hyperlink(hyperlink)
 
       cell = %Raxol.Terminal.Cell{char: char, style: cell_attrs}
       {x, y, cell}
     end)
   end
+
+  # Pull a tagged `{:hyperlink, url}` entry out of the cell attrs list; the
+  # remaining entries are plain style atoms. Returns {url_or_nil, atoms}.
+  defp split_hyperlink(attrs_list) do
+    Enum.reduce(attrs_list, {nil, []}, fn
+      {:hyperlink, url}, {_url, atoms} -> {url, atoms}
+      other, {url, atoms} -> {url, [other | atoms]}
+    end)
+  end
+
+  defp put_hyperlink(style, nil), do: style
+  defp put_hyperlink(style, url), do: Map.put(style, :hyperlink, url)
 end

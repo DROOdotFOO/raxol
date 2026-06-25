@@ -190,6 +190,9 @@ defmodule ZeroSystem do
   @boot_hold 6
   @amount 25.0
   @policy %{per_request_max: 50.0, session_max: 100.0, lifetime_max: 250.0}
+  # Each settled DEBIT line is cmd-clickable to the settlement on Basescan
+  # (OSC 8 hyperlink) in terminals that support it.
+  @settle_tx_url "https://basescan.org/tx/0x7f3a9c2e5b1d4a6f8c0e2b4d6a8f1c3e5b7d9f0a2c4e6b8d0f2a4c6e8b0dfe21"
   @center {0.5, 0.5, 0.0}
   @gw 40
   @gh 10
@@ -742,7 +745,7 @@ defmodule ZeroSystem do
     do: text("  RESERVE #{pad(id)} #{usd(a)}", fg: :cyan)
 
   defp ledger_line({:debit, id, a}),
-    do: text("  DEBIT   #{pad(id)} #{usd(a)}", fg: :green)
+    do: text("  DEBIT   #{pad(id)} #{usd(a)}", fg: :green, link: @settle_tx_url)
 
   defp ledger_line({:crash, id}),
     do: text("  CRASH   #{pad(id)} died mid-flight", fg: :red, style: [:bold])
