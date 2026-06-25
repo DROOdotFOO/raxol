@@ -7,6 +7,8 @@ defmodule Raxol.Agent.Action.ToolConverter do
   the LLM's tool call response back to the matching Action module.
   """
 
+  alias Raxol.Agent.ToolPolicy
+
   @doc """
   Convert action modules to tool definitions for LLM API calls.
 
@@ -54,19 +56,28 @@ defmodule Raxol.Agent.Action.ToolConverter do
     end
   end
 
-  # Security gate: when the agent context carries a `:tool_authorizer`
-  # ((module, params, context) -> :ok | {:deny, reason}), consult it before
-  # running the Action so a prompt-injected LLM cannot invoke a sensitive tool.
-  # Absent -> allow (backward compatible). See `Raxol.Agent.ToolPolicy`.
+  # Security gate: consult a `(module, params, context) -> :ok | {:deny, reason}`
+  # authorizer before running the Action so a prompt-injected LLM cannot invoke
+  # a sensitive tool. When the context sets `:tool_authorizer`, use it; otherwise
+  # apply the default policy, which denies Actions marked `sensitive: true`
+  # (fund-movers) while allowing read-only tools. Set a `:tool_authorizer` to
+  # override (e.g. `ToolPolicy.allow_all/0` for a trusted operator). See
+  # `Raxol.Agent.ToolPolicy`.
   defp authorize_tool(module, params, %{tool_authorizer: fun} = context)
        when is_function(fun, 3) do
+    run_authorizer(fun, module, params, context)
+  end
+
+  defp authorize_tool(module, params, context) do
+    run_authorizer(ToolPolicy.deny_sensitive(), module, params, context)
+  end
+
+  defp run_authorizer(fun, module, params, context) do
     case fun.(module, params, context) do
       :ok -> :ok
       {:deny, reason} -> {:error, {:tool_denied, module.__action_meta__().name, reason}}
     end
   end
-
-  defp authorize_tool(_module, _params, _context), do: :ok
 
   @doc """
   Build a tool result message for feeding back to the LLM.

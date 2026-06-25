@@ -37,6 +37,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
   use Raxol.Agent.Action,
     name: "payment_execute_xochi_intent",
+    sensitive: true,
     description:
       "Execute a cross-chain or stealth payment through Xochi: quote, authorize the spend, sign the EIP-712 intent, and submit. Returns the intent id and status to poll.",
     schema: [

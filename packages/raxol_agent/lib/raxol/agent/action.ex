@@ -65,6 +65,10 @@ defmodule Raxol.Agent.Action do
     schema = Keyword.get(opts, :schema, [])
     input_schema = Keyword.get(schema, :input, [])
     output_schema = Keyword.get(schema, :output, [])
+    # Marks an Action as side-effecting (e.g. moves funds). Sensitive Actions
+    # are denied on the LLM tool-call path unless the agent opts in via a
+    # `:tool_authorizer`. See `Raxol.Agent.ToolPolicy.deny_sensitive/0`.
+    sensitive = Keyword.get(opts, :sensitive, false)
 
     quote do
       @behaviour Raxol.Agent.Action
@@ -73,6 +77,7 @@ defmodule Raxol.Agent.Action do
       @__action_description__ unquote(description)
       @__action_input_schema__ unquote(Macro.escape(input_schema))
       @__action_output_schema__ unquote(Macro.escape(output_schema))
+      @__action_sensitive__ unquote(sensitive)
 
       @doc false
       def __action_meta__ do
@@ -80,7 +85,8 @@ defmodule Raxol.Agent.Action do
           name: @__action_name__,
           description: @__action_description__,
           input_schema: @__action_input_schema__,
-          output_schema: @__action_output_schema__
+          output_schema: @__action_output_schema__,
+          sensitive: @__action_sensitive__
         }
       end
 

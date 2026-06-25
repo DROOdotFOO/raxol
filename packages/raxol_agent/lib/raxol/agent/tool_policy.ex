@@ -50,6 +50,19 @@ defmodule Raxol.Agent.ToolPolicy do
     end
   end
 
+  @doc """
+  Deny Actions whose metadata marks them `sensitive: true` (fund-movers like
+  the payment Actions); allow the rest. This is the default policy applied when
+  no `:tool_authorizer` is set, so a prompt-injected LLM cannot drive a
+  sensitive tool unless the agent explicitly opts in (e.g. with `allow_all/0`).
+  """
+  @spec deny_sensitive() :: authorizer()
+  def deny_sensitive do
+    fn module, _params, _context ->
+      if sensitive?(module), do: {:deny, :sensitive_tool}, else: :ok
+    end
+  end
+
   @doc "Combine authorizers: the first `{:deny, _}` wins; otherwise `:ok`."
   @spec all([authorizer()]) :: authorizer()
   def all(authorizers) when is_list(authorizers) do
@@ -64,4 +77,7 @@ defmodule Raxol.Agent.ToolPolicy do
   end
 
   defp action_name(module), do: module.__action_meta__().name
+
+  defp sensitive?(module),
+    do: Map.get(module.__action_meta__(), :sensitive, false) == true
 end
