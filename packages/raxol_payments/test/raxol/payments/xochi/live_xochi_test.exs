@@ -39,6 +39,29 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   Overrides: XOCHI_LIVE_AUTH, XOCHI_LIVE_AGENT_WALLET, XOCHI_LIVE_FROM_CHAIN,
   XOCHI_LIVE_TO_CHAIN, XOCHI_LIVE_FROM_TOKEN, XOCHI_LIVE_TO_TOKEN,
   XOCHI_LIVE_AMOUNT, XOCHI_LIVE_SETTLEMENT, XOCHI_LIVE_RECIPIENT_META.
+
+  ## Matrix mode
+
+  `XOCHI_LIVE_MATRIX=true` adds one test that settles every configured corridor
+  for each settlement type -- the live counterpart of `settlement_matrix_test.exs`,
+  ready to fire end-to-end once Riddler's EIP-712 parity redeploys. It moves real
+  funds per cell, so it is bounded by env:
+
+  - `XOCHI_LIVE_CORRIDORS` -- `"from>to,from>to"` chain-id pairs (default
+    `"8453>42161,42161>8453"`). USDC is resolved per chain for Base/Optimism/Arbitrum.
+  - `XOCHI_LIVE_SETTLEMENTS` -- `"public,stealth"` (default `"public"`). Stealth
+    cells require `XOCHI_LIVE_RECIPIENT_META`.
+  - `XOCHI_LIVE_AMOUNT` -- per-cell amount (default `1.00`).
+
+  Run only the matrix:
+
+      XOCHI_LIVE_URL=https://api.xochi.fi \\
+      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential')" \\
+      XOCHI_LIVE_KEY=0x<funded key> \\
+      XOCHI_LIVE_MATRIX=true \\
+      XOCHI_LIVE_SETTLEMENTS=public,stealth \\
+      XOCHI_LIVE_RECIPIENT_META=st:eth:0x... \\
+        mix test --only live_xochi_matrix test/raxol/payments/xochi/live_xochi_test.exs
   """
 
   use ExUnit.Case, async: false
@@ -161,6 +184,84 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
              "live intent #{intent.intent_id} ended in #{status.status}, expected completed"
 
       report_settlement("crash-resume", intent, status, params, started)
+    end
+
+    # Opt-in matrix: settle every configured corridor for each settlement type in
+    # one run -- the live counterpart of `settlement_matrix_test.exs`. Each cell
+    # moves real funds, so it is compile-gated behind `XOCHI_LIVE_MATRIX=true` and
+    # bounded by `XOCHI_LIVE_CORRIDORS` ("from>to,from>to"; default Base<->Arbitrum),
+    # `XOCHI_LIVE_SETTLEMENTS` ("public,stealth"; default public), and
+    # `XOCHI_LIVE_AMOUNT` per cell. Stealth cells need `XOCHI_LIVE_RECIPIENT_META`.
+    # Run it alone with `--only live_xochi_matrix`.
+    if System.get_env("XOCHI_LIVE_MATRIX") == "true" do
+      @tag :live_xochi_matrix
+      test "settles every configured corridor for each settlement type", %{
+        context: context,
+        poll_context: poll_context
+      } do
+        corridors = parse_corridors(System.get_env("XOCHI_LIVE_CORRIDORS", "8453>42161,42161>8453"))
+        settlements = parse_settlements(System.get_env("XOCHI_LIVE_SETTLEMENTS", "public"))
+        amount = System.get_env("XOCHI_LIVE_AMOUNT", "1.00")
+        meta = System.get_env("XOCHI_LIVE_RECIPIENT_META")
+
+        cells = for {from, to} <- corridors, s <- settlements, do: {from, to, s}
+        IO.puts("[live_xochi:matrix] running #{length(cells)} cells at #{amount} USDC each")
+
+        for {from, to, settlement} <- cells do
+          if settlement == "stealth" and is_nil(meta),
+            do: flunk("stealth cell #{from}->#{to} needs XOCHI_LIVE_RECIPIENT_META")
+
+          params = matrix_params(from, to, settlement, amount, meta)
+          started = System.monotonic_time(:millisecond)
+
+          assert {:ok, intent} = ExecuteXochiIntent.call(params, context),
+                 "execute failed for #{from}->#{to} #{settlement}"
+
+          assert {:ok, status} =
+                   PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context)
+
+          assert status.terminal == true
+
+          assert status.status == "completed",
+                 "#{from}->#{to} #{settlement} (#{intent.intent_id}) ended #{status.status}"
+
+          report_settlement("#{from}->#{to}:#{settlement}", intent, status, params, started)
+        end
+      end
+
+      defp parse_corridors(spec) do
+        spec
+        |> String.split(",", trim: true)
+        |> Enum.map(fn pair ->
+          [from, to] = String.split(pair, ">", parts: 2)
+          {String.to_integer(String.trim(from)), String.to_integer(String.trim(to))}
+        end)
+      end
+
+      defp parse_settlements(spec),
+        do: spec |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+
+      defp matrix_params(from, to, settlement, amount, meta) do
+        params = %{
+          amount: amount,
+          from_chain_id: from,
+          to_chain_id: to,
+          from_token: usdc_for(from),
+          to_token: usdc_for(to),
+          settlement: settlement
+        }
+
+        if settlement == "stealth",
+          do: Map.put(params, :recipient_meta_address, meta),
+          else: params
+      end
+
+      defp usdc_for(8453), do: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+      defp usdc_for(10), do: "0x0b2c639c533813f4aa9d7837caf62653d097ff85"
+      defp usdc_for(42_161), do: "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+
+      defp usdc_for(chain),
+        do: raise("no USDC mapping for chain #{chain}; extend usdc_for/1 in live_xochi_test.exs")
     end
 
     defp lifetime(context) do
