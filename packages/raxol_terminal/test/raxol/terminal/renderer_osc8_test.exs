@@ -19,6 +19,9 @@ defmodule Raxol.Terminal.RendererOSC8Test do
     |> ScreenBuffer.write_char(1, 0, "o", %{hyperlink: url})
   end
 
+  defp count(haystack, needle),
+    do: haystack |> String.split(needle) |> length() |> Kernel.-(1)
+
   describe "individual rendering (default)" do
     test "wraps linked cells in OSC 8 open/close" do
       url = "https://basescan.org/tx/0xabc"
@@ -47,6 +50,51 @@ defmodule Raxol.Terminal.RendererOSC8Test do
 
       assert String.contains?(output, osc8_open(url))
       assert String.contains?(output, @osc8_close)
+    end
+  end
+
+  describe "coalescing a contiguous run into one OSC 8 pair" do
+    test "individual mode wraps a multi-cell run once, not per glyph" do
+      url = "https://raxol.io"
+      output = Renderer.render(Renderer.new(linked_buffer(url)))
+
+      assert count(output, osc8_open(url)) == 1
+      assert count(output, @osc8_close) == 1
+    end
+
+    test "one OSC 8 pair spans a run even when SGR styling varies within it" do
+      url = "https://raxol.io"
+
+      buffer =
+        ScreenBuffer.new(4, 1)
+        |> ScreenBuffer.write_char(0, 0, "g", %{hyperlink: url, foreground: :red})
+        |> ScreenBuffer.write_char(1, 0, "o", %{hyperlink: url, foreground: :blue})
+
+      output =
+        Renderer.render(Renderer.new(buffer, %{foreground: %{red: "#F00", blue: "#00F"}}))
+
+      # single hyperlink wrap...
+      assert count(output, osc8_open(url)) == 1
+      assert count(output, @osc8_close) == 1
+      # ...but two distinct SGR colors inside it
+      assert String.contains?(output, "g")
+      assert String.contains?(output, "o")
+    end
+
+    test "adjacent runs with different URLs get separate pairs" do
+      a = "https://a.example"
+      b = "https://b.example"
+
+      buffer =
+        ScreenBuffer.new(4, 1)
+        |> ScreenBuffer.write_char(0, 0, "a", %{hyperlink: a})
+        |> ScreenBuffer.write_char(1, 0, "b", %{hyperlink: b})
+
+      output = Renderer.render(Renderer.new(buffer))
+
+      assert count(output, osc8_open(a)) == 1
+      assert count(output, osc8_open(b)) == 1
+      assert count(output, @osc8_close) == 2
     end
   end
 end

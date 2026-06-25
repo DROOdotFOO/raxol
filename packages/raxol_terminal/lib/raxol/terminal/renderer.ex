@@ -178,52 +178,45 @@ defmodule Raxol.Terminal.Renderer do
   end
 
   defp render_row_optimized(row, theme, style_batching) do
-    case style_batching do
-      true -> render_batched_optimized(row, theme)
-      false -> render_individual_optimized(row, theme)
-    end
+    # Group by hyperlink first so a contiguous run of cells sharing a URL is
+    # wrapped in a single OSC 8 open/close pair, while SGR styling is free to
+    # vary within the link. Runs with no hyperlink render exactly as before.
+    row
+    |> Enum.chunk_by(&cell_hyperlink/1)
+    |> Enum.map_join("", fn chunk ->
+      chunk
+      |> render_style_runs(theme, style_batching)
+      |> maybe_wrap_hyperlink(hd(chunk).style)
+    end)
   end
 
-  # Batched rendering: group consecutive cells with the same style
-  defp render_batched_optimized(row, theme) do
-    row
+  # Render a run of cells (all sharing one hyperlink) into SGR-styled text:
+  # batched groups consecutive same-style cells, individual emits one at a time.
+  defp render_style_runs(cells, theme, true) do
+    cells
     |> Enum.chunk_by(& &1.style)
-    |> Enum.map_join("", fn cells_with_same_style ->
-      style = hd(cells_with_same_style).style
-      chars = Enum.map_join(cells_with_same_style, "", & &1.char)
-      ansi_prefix = build_ansi_prefix(style, theme)
-
-      styled =
-        case ansi_prefix do
-          "" -> chars
-          prefix -> prefix <> chars <> @ansi_reset
-        end
-
-      maybe_wrap_hyperlink(styled, style)
+    |> Enum.map_join("", fn same_style ->
+      style = hd(same_style).style
+      chars = Enum.map_join(same_style, "", & &1.char)
+      apply_sgr(build_ansi_prefix(style, theme), chars)
     end)
   end
 
-  # Individual cell rendering
-  defp render_individual_optimized(row, theme) do
-    row
-    |> Enum.map_join("", fn cell ->
-      ansi_prefix = build_ansi_prefix(cell.style, theme)
-
-      styled =
-        case ansi_prefix do
-          "" -> cell.char
-          prefix -> prefix <> cell.char <> @ansi_reset
-        end
-
-      maybe_wrap_hyperlink(styled, cell.style)
+  defp render_style_runs(cells, theme, _individual) do
+    Enum.map_join(cells, "", fn cell ->
+      apply_sgr(build_ansi_prefix(cell.style, theme), cell.char)
     end)
   end
 
-  # Wrap already-styled content in an OSC 8 hyperlink when the cell style
-  # carries one. Bare form `ESC ] 8 ; ; URL ST  <content>  ESC ] 8 ; ; ST`;
-  # clickable in OSC 8-aware terminals (iTerm2, kitty, WezTerm), ignored
-  # elsewhere. The SGR reset stays inside the link so colors close but the
-  # link spans the whole run.
+  defp apply_sgr("", content), do: content
+  defp apply_sgr(prefix, content), do: prefix <> content <> @ansi_reset
+
+  defp cell_hyperlink(cell), do: hyperlink_url(cell.style)
+
+  # Wrap already-styled content in a single OSC 8 hyperlink when the run carries
+  # one. Bare form `ESC ] 8 ; ; URL ST  <content>  ESC ] 8 ; ; ST`; clickable in
+  # OSC 8-aware terminals (iTerm2, kitty, WezTerm), ignored elsewhere. SGR may
+  # vary inside; the link spans the whole run.
   defp maybe_wrap_hyperlink(content, style) do
     case hyperlink_url(style) do
       url when is_binary(url) and url != "" ->
