@@ -62,9 +62,12 @@ jobs:
       - name: Setup OS dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install openssl@1.1 postgresql@16
-          echo "LDFLAGS=-L$(brew --prefix openssl@1.1)/lib" >> $GITHUB_ENV
-          echo "CFLAGS=-I$(brew --prefix openssl@1.1)/include" >> $GITHUB_ENV
+          # openssl@1.1 is EOL and no longer in Homebrew. Do NOT export
+          # LDFLAGS/CFLAGS for it either: a global LDFLAGS clobbers the termbox2
+          # NIF Makefile's `LDFLAGS ?= -shared`, dropping -shared so the .so links
+          # as an executable (`_main` undefined). Nothing needs openssl flags; OTP
+          # ships precompiled.
+          brew install postgresql@16
 
           brew services start postgresql@16 || true
           sleep 5
