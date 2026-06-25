@@ -28,6 +28,19 @@ defmodule Raxol.Payments.Protocols.Xochi do
   | Verified       | 50-74 | 0.20% |
   | Premium        | 75-99 | 0.15% |
   | Institutional  | 100+  | 0.10% |
+
+  ## Origin-pull solver allowlist
+
+  The origin pull authorizes the solver to collect funds from the agent wallet.
+  The pull recipient/spender is the solver's collection address; by default it is
+  not pinned (solver addresses rotate and there is no client-facing manifest). An
+  operator who knows their solver set can pin it:
+
+      config :raxol_payments, :pull_solver_allowlist, ["0xsolver...", "0xsolver2..."]
+
+  When set, a pull whose `to` (ERC-3009) or `spender` (Permit2) is not in the list
+  is rejected before any signature. When unset (the default), the address is not
+  bound. See GitHub #333.
   """
 
   @behaviour Raxol.Payments.Protocol
@@ -239,33 +252,58 @@ defmodule Raxol.Payments.Protocols.Xochi do
   end
 
   # ERC-3009 ReceiveWithAuthorization: token is the EIP-712 verifyingContract,
-  # `from` is the signer, `value` the pulled amount. The recipient (`to`, the
-  # solver collection address) is deliberately not bound here: there is no
-  # client-facing solver manifest to check it against, and ERC-3009's
-  # `msg.sender == to` plus the value cap keep the residual bounded. Tracked in
-  # GitHub #333.
+  # `from` is the signer, `value` the pulled amount. The recipient (`to`) is the
+  # solver collection address; it is only bound when the operator has pinned a
+  # solver allowlist (`solver_allowed?/1` is fail-open by default, so the common
+  # case is unchanged). ERC-3009's `msg.sender == to` plus the value cap keep the
+  # unbound case bounded. See GitHub #333.
   defp validate_erc3009_pull(domain, message, request, signer) do
     first_mismatch([
       {:pull_from, addr_match?(message["from"], signer)},
       {:pull_token, addr_match?(domain["verifyingContract"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
-      {:pull_value, int_within?(message["value"], request.from_amount)}
+      {:pull_value, int_within?(message["value"], request.from_amount)},
+      {:pull_to, solver_allowed?(message["to"])}
     ])
   end
 
   # Permit2 PermitWitnessTransferFrom: token + amount live under `permitted`;
   # the owner is recovered from the signature (the agent's own wallet). The
-  # `spender` (solver) is not bound here for the same reason as the ERC-3009
-  # recipient, and the `OriginPullWitness` already ties the permit to one intent.
-  # Tracked in GitHub #333.
+  # `spender` is the solver; bound only when the operator pins a solver allowlist
+  # (fail-open by default). The `OriginPullWitness` already ties the permit to one
+  # intent. See GitHub #333.
   defp validate_permit2_pull(domain, message, request) do
     permitted = message["permitted"] || %{}
 
     first_mismatch([
       {:pull_token, addr_match?(permitted["token"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
-      {:pull_value, int_within?(permitted["amount"], request.from_amount)}
+      {:pull_value, int_within?(permitted["amount"], request.from_amount)},
+      {:pull_spender, solver_allowed?(message["spender"])}
     ])
+  end
+
+  # The origin-pull recipient/spender is the solver's collection address. There
+  # is no client-facing solver manifest, and solver addresses rotate, so a pinned
+  # allowlist is opt-in: when the operator configures
+  # `config :raxol_payments, :pull_solver_allowlist, ["0x..."]`, the pull `to`/
+  # `spender` must be in it; when unset (the default), the address is not bound
+  # and any solver is accepted. When Xochi serves a verifiable/attested solver
+  # set in the quote, this resolver is the seam to prefer it over static config.
+  defp solver_allowed?(addr) do
+    case solver_allowlist() do
+      [] -> true
+      list -> is_binary(addr) and normalize_address(addr) in list
+    end
+  end
+
+  defp solver_allowlist do
+    :raxol_payments
+    |> Application.get_env(:pull_solver_allowlist, [])
+    |> List.wrap()
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&normalize_address/1)
+    |> Enum.reject(&(&1 == ""))
   end
 
   defp first_mismatch(checks) do
