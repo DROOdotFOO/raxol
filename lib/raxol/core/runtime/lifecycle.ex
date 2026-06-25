@@ -421,7 +421,12 @@ defmodule Raxol.Core.Runtime.Lifecycle do
       runtime_pid: self()
     }
 
-    commands = apply_command_interceptor(state.command_interceptor, state.initial_commands)
+    commands =
+      apply_command_interceptor(
+        state.command_interceptor,
+        state.initial_commands
+      )
+
     Enum.each(commands, &execute_initial_command(&1, context))
     %{state | initial_commands: []}
   end
@@ -429,7 +434,9 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   # Security gate for initial commands: mirror the Dispatcher's interceptor so an
   # agent's init/1 directives run through the same permission/sandbox hooks. nil
   # for non-agent surfaces (no-op).
-  defp apply_command_interceptor(fun, commands) when is_function(fun, 1), do: fun.(commands)
+  defp apply_command_interceptor(fun, commands) when is_function(fun, 1),
+    do: fun.(commands)
+
   defp apply_command_interceptor(_fun, commands), do: commands
 
   defp execute_initial_command(command, context) do
