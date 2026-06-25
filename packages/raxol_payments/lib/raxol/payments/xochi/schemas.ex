@@ -190,6 +190,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :estimated_gas_cost,
       :expiry,
       :eip712_data,
+      :pull_authorization,
       :payment_method,
       :error,
       can_solve: false,
@@ -211,6 +212,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
             gasless: boolean(),
             gasless_fee: String.t() | nil,
             eip712_data: map() | nil,
+            pull_authorization: map() | nil,
             payment_method: String.t() | nil,
             settlement_options: [map()],
             error: String.t() | nil
@@ -235,6 +237,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
         gasless: pick(json, ["gasless"]) || false,
         gasless_fee: pick(json, ["gasless_fee", "gaslessFee"]),
         eip712_data: pick(json, ["eip712", "eip712Data"]),
+        pull_authorization: pick(json, ["pull_authorization", "pullAuthorization"]),
         payment_method: pick(json, ["payment_method", "paymentMethod"]),
         settlement_options: pick(json, ["settlement_options", "settlementOptions"]) || [],
         error: pick(json, ["error", "reason"])

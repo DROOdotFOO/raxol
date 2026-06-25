@@ -160,6 +160,18 @@ defmodule Raxol.Payments.Failure do
         detail
       )
 
+  # The signable authorization the solver served did not match the intended
+  # transfer (wrong signer/token/chain, or a value above what was intended).
+  # Refuse to sign rather than authorize an attacker-controlled origin pull.
+  def from({:authorization_mismatch, _} = detail),
+    do:
+      build(
+        :rejected,
+        "The quote's signable authorization did not match the requested transfer; refusing to sign.",
+        false,
+        detail
+      )
+
   # Request validation.
   def from({:invalid_wallet, _} = detail), do: invalid_request(detail)
   def from({:invalid_from_token, _} = detail), do: invalid_request(detail)

@@ -84,16 +84,36 @@ defmodule Raxol.Payments.Protocols.Xochi do
   @spec execute(Client.config(), QuoteResponse.t(), module()) ::
           {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()} | {:error, term()}
   def execute(config, %QuoteResponse{} = quote_resp, wallet) do
+    execute(config, quote_resp, wallet, nil)
+  end
+
+  @doc """
+  Like `execute/3`, but binds the served `pull_authorization` to the caller's
+  intended transfer (`request`) before signing it.
+
+  The agent signs an ERC-3009/Permit2 authorization the solver serves; a hostile
+  or compromised quote endpoint could otherwise serve one that pulls the wallet's
+  full balance to an attacker. With the `request`, the origin pull is checked
+  against the intended signer, token, chain, and amount before any signature is
+  released. Pass `nil` only when there is no pull authorization to validate; a
+  pull authorization presented with a `nil` request fails closed.
+  """
+  @spec execute(Client.config(), QuoteResponse.t(), module(), QuoteRequest.t() | nil) ::
+          {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()} | {:error, term()}
+  def execute(config, %QuoteResponse{} = quote_resp, wallet, request) do
     with :ok <- validate_quote(quote_resp),
-         {:ok, signature} <- sign_quote(quote_resp, wallet) do
-      request = %ExecuteRequest{
+         :ok <- validate_pull_authorization(quote_resp, request, wallet),
+         {:ok, signature} <- sign_quote(quote_resp, wallet),
+         {:ok, pull_signature} <- sign_pull_authorization(quote_resp, wallet) do
+      exec_request = %ExecuteRequest{
         intent_id: quote_resp.intent_id,
         quote_id: quote_resp.quote_id,
         signature: signature,
-        nonce: signed_nonce(quote_resp)
+        nonce: signed_nonce(quote_resp),
+        pull_signature: pull_signature
       }
 
-      Client.execute(config, request)
+      Client.execute(config, exec_request)
     end
   end
 
@@ -137,7 +157,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
           {:ok, IntentStatus.t()} | {:error, term()}
   def transfer(config, %QuoteRequest{} = request, wallet, opts \\ []) do
     with {:ok, quote_resp} <- get_quote(config, request),
-         {:ok, exec_resp} <- execute(config, quote_resp, wallet) do
+         {:ok, exec_resp} <- execute(config, quote_resp, wallet, request) do
       poll_status(config, exec_resp.intent_id, opts)
     end
   end
@@ -167,6 +187,129 @@ defmodule Raxol.Payments.Protocols.Xochi do
         {:error, {:sign_failed, reason}}
     end
   end
+
+  # Origin pull: when the solver served a `pull_authorization`, the agent signs
+  # it (a second EIP-712) so Riddler can collect origin funds before settling.
+  # `erc3009` is ReceiveWithAuthorization (USDC domain, no approval); `permit2`
+  # is PermitWitnessTransferFrom (needs a one-time on-chain Permit2 approval the
+  # agent must already hold). Absent for non-pulling methods, in which case there
+  # is no pull signature to send.
+  defp sign_pull_authorization(%QuoteResponse{pull_authorization: nil}, _wallet), do: {:ok, nil}
+
+  defp sign_pull_authorization(%QuoteResponse{pull_authorization: pull}, wallet) do
+    domain = eip712_domain(pull)
+    types = eip712_types(pull)
+    message = eip712_message(pull)
+
+    case wallet.sign_typed_data(domain, types, message) do
+      {:ok, sig_bytes} ->
+        {:ok, "0x" <> Base.encode16(sig_bytes, case: :lower)}
+
+      {:error, reason} ->
+        {:error, {:pull_sign_failed, reason}}
+    end
+  end
+
+  # Bind the served origin-pull authorization to the caller's intended transfer
+  # before signing. The pull is an ERC-3009/Permit2 authorization to move funds
+  # out of the agent's wallet on the origin chain; a hostile or compromised quote
+  # could otherwise name an attacker recipient for the full balance, which the
+  # agent would sign blind (the SpendGate only sees the intended human amount, not
+  # the signed message). Check signer, token, chain, and that the authorized value
+  # does not exceed the intended origin amount. Fail closed on anything unexpected.
+  defp validate_pull_authorization(%QuoteResponse{pull_authorization: nil}, _request, _wallet),
+    do: :ok
+
+  defp validate_pull_authorization(%QuoteResponse{pull_authorization: _pull}, nil, _wallet),
+    do: {:error, {:authorization_mismatch, :no_request_context}}
+
+  defp validate_pull_authorization(
+         %QuoteResponse{pull_authorization: pull, payment_method: method},
+         %QuoteRequest{} = request,
+         wallet
+       ) do
+    domain = pull["domain"] || %{}
+    message = pull["message"] || %{}
+
+    case method do
+      "erc3009" -> validate_erc3009_pull(domain, message, request, wallet.address())
+      "permit2" -> validate_permit2_pull(domain, message, request)
+      other -> {:error, {:authorization_mismatch, {:unsupported_pull_method, other}}}
+    end
+  end
+
+  # ERC-3009 ReceiveWithAuthorization: token is the EIP-712 verifyingContract,
+  # `from` is the signer, `value` the pulled amount. The recipient (`to`, the
+  # solver collection address) is deliberately not bound here: there is no
+  # client-facing solver manifest to check it against, and ERC-3009's
+  # `msg.sender == to` plus the value cap keep the residual bounded. Tracked in
+  # GitHub #333.
+  defp validate_erc3009_pull(domain, message, request, signer) do
+    first_mismatch([
+      {:pull_from, addr_match?(message["from"], signer)},
+      {:pull_token, addr_match?(domain["verifyingContract"], request.from_token)},
+      {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
+      {:pull_value, int_within?(message["value"], request.from_amount)}
+    ])
+  end
+
+  # Permit2 PermitWitnessTransferFrom: token + amount live under `permitted`;
+  # the owner is recovered from the signature (the agent's own wallet). The
+  # `spender` (solver) is not bound here for the same reason as the ERC-3009
+  # recipient, and the `OriginPullWitness` already ties the permit to one intent.
+  # Tracked in GitHub #333.
+  defp validate_permit2_pull(domain, message, request) do
+    permitted = message["permitted"] || %{}
+
+    first_mismatch([
+      {:pull_token, addr_match?(permitted["token"], request.from_token)},
+      {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
+      {:pull_value, int_within?(permitted["amount"], request.from_amount)}
+    ])
+  end
+
+  defp first_mismatch(checks) do
+    case Enum.find(checks, fn {_field, ok?} -> not ok? end) do
+      nil -> :ok
+      {field, _} -> {:error, {:authorization_mismatch, field}}
+    end
+  end
+
+  defp addr_match?(a, b) when is_binary(a) and is_binary(b) do
+    normalize_address(a) == normalize_address(b)
+  end
+
+  defp addr_match?(_, _), do: false
+
+  defp normalize_address(addr) do
+    addr |> String.trim() |> String.downcase() |> String.replace_prefix("0x", "")
+  end
+
+  defp int_match?(a, b) do
+    case {to_uint(a), to_uint(b)} do
+      {n, n} when is_integer(n) -> true
+      _ -> false
+    end
+  end
+
+  # The authorized pull value must not exceed the intended origin amount.
+  defp int_within?(value, limit) do
+    case {to_uint(value), to_uint(limit)} do
+      {v, l} when is_integer(v) and is_integer(l) -> v <= l
+      _ -> false
+    end
+  end
+
+  defp to_uint(v) when is_integer(v) and v >= 0, do: v
+
+  defp to_uint(v) when is_binary(v) do
+    case Integer.parse(String.trim(v)) do
+      {n, ""} when n >= 0 -> n
+      _ -> nil
+    end
+  end
+
+  defp to_uint(_), do: nil
 
   # The execute nonce must equal the nonce in the typed data the wallet signed,
   # so the solver recovers the same digest. The Xochi quote bakes a fixed nonce

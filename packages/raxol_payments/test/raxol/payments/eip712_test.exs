@@ -273,4 +273,31 @@ defmodule Raxol.Payments.EIP712Test do
       assert "0x" <> Base.encode16(digest, case: :lower) == @expected_digest
     end
   end
+
+  describe "pack_signature/1" do
+    @r String.duplicate(<<0xAA>>, 32)
+    @s String.duplicate(<<0xBB>>, 32)
+
+    test "normalizes a 0 recovery id to canonical v = 27" do
+      assert <<r::binary-size(32), s::binary-size(32), 27>> =
+               EIP712.pack_signature({@r, @s, 0})
+
+      assert r == @r
+      assert s == @s
+    end
+
+    test "normalizes a 1 recovery id to canonical v = 28" do
+      assert <<_r::binary-size(32), _s::binary-size(32), 28>> =
+               EIP712.pack_signature({@r, @s, 1})
+    end
+
+    test "is idempotent for already-canonical 27/28" do
+      assert <<_::binary-size(64), 27>> = EIP712.pack_signature({@r, @s, 27})
+      assert <<_::binary-size(64), 28>> = EIP712.pack_signature({@r, @s, 28})
+    end
+
+    test "always produces a 65-byte signature" do
+      assert byte_size(EIP712.pack_signature({@r, @s, 0})) == 65
+    end
+  end
 end
