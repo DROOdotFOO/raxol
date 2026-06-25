@@ -1,6 +1,7 @@
 defmodule Raxol.Payments.Xochi.StealthTest do
   use ExUnit.Case, async: true
 
+  alias Raxol.Payments.Secret
   alias Raxol.Payments.Xochi.Stealth
 
   # Generate a real keypair for testing
@@ -92,7 +93,12 @@ defmodule Raxol.Payments.Xochi.StealthTest do
       assert length(payments) == 1
       payment = hd(payments)
       assert payment.announcement.stealth_address == settlement.stealth_address
-      assert byte_size(payment.stealth_priv_key) == 32
+      assert byte_size(Secret.reveal(payment.stealth_priv_key)) == 32
+
+      # the spend key is wrapped so it can't leak via inspect/logs
+      assert match?(%Secret{}, payment.stealth_priv_key)
+      key_hex = Base.encode16(Secret.reveal(payment.stealth_priv_key), case: :lower)
+      refute inspect(payment) =~ key_hex
     end
 
     test "does not match announcements for other recipients" do

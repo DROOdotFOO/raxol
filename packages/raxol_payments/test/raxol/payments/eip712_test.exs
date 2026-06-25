@@ -299,5 +299,11 @@ defmodule Raxol.Payments.EIP712Test do
     test "always produces a 65-byte signature" do
       assert byte_size(EIP712.pack_signature({@r, @s, 0})) == 65
     end
+
+    test "raises on a non-canonical recovery id rather than packing a bad signature" do
+      assert_raise ArgumentError, ~r/non-canonical/, fn ->
+        EIP712.pack_signature({@r, @s, 2})
+      end
+    end
   end
 end

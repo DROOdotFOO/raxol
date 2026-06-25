@@ -11,6 +11,7 @@ defmodule Raxol.Payments.StealthPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  alias Raxol.Payments.Secret
   alias Raxol.Payments.Xochi.Stealth
 
   # Any byte string seeds a recipient key pair via the domain-separated
@@ -54,7 +55,7 @@ defmodule Raxol.Payments.StealthPropertyTest do
       {:ok, [payment]} = Stealth.scan(spending_priv, viewing_priv, [announcement(settlement)])
 
       assert payment.announcement.stealth_address == settlement.stealth_address
-      assert byte_size(payment.stealth_priv_key) == 32
+      assert byte_size(Secret.reveal(payment.stealth_priv_key)) == 32
     end
   end
 

@@ -8,7 +8,7 @@ defmodule Raxol.Payments.Xochi.StealthE2ETest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.Xochi.Stealth
-  alias Raxol.Payments.{PrivacyTier, Router}
+  alias Raxol.Payments.{PrivacyTier, Router, Secret}
 
   defp generate_keypair do
     priv = :crypto.strong_rand_bytes(32)
@@ -47,7 +47,7 @@ defmodule Raxol.Payments.Xochi.StealthE2ETest do
       {:ok, [payment]} = Stealth.scan(spending_priv, viewing_priv, [announcement])
 
       # 5. Verify stealth private key controls the stealth address
-      {:ok, derived_pub} = ExSecp256k1.create_public_key(payment.stealth_priv_key)
+      {:ok, derived_pub} = ExSecp256k1.create_public_key(Secret.reveal(payment.stealth_priv_key))
       {:ok, compressed_pub} = ExSecp256k1.public_key_compress(derived_pub)
       # Drop 0x04 prefix from uncompressed, keccak256, take last 20 bytes
       <<_prefix::8, xy::binary>> = derived_pub
@@ -70,12 +70,12 @@ defmodule Raxol.Payments.Xochi.StealthE2ETest do
 
       # Sign a message with the stealth private key
       message = ExKeccak.hash_256("claim:#{settlement.stealth_address}")
-      {:ok, {r, s, _recovery_id}} = ExSecp256k1.sign(message, payment.stealth_priv_key)
+      {:ok, {r, s, _recovery_id}} = ExSecp256k1.sign(message, Secret.reveal(payment.stealth_priv_key))
       signature = r <> s
       assert byte_size(signature) == 64
 
       # Verify signature
-      {:ok, pub} = ExSecp256k1.create_public_key(payment.stealth_priv_key)
+      {:ok, pub} = ExSecp256k1.create_public_key(Secret.reveal(payment.stealth_priv_key))
       assert :ok = ExSecp256k1.verify(message, signature, pub)
     end
   end
@@ -116,7 +116,7 @@ defmodule Raxol.Payments.Xochi.StealthE2ETest do
       assert length(payments) == 5
 
       # Each payment has a distinct stealth private key
-      priv_keys = Enum.map(payments, & &1.stealth_priv_key)
+      priv_keys = Enum.map(payments, &Secret.reveal(&1.stealth_priv_key))
       assert length(Enum.uniq(priv_keys)) == 5
     end
   end

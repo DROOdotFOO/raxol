@@ -360,7 +360,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
   end
 
   defp addr_match?(a, b) when is_binary(a) and is_binary(b) do
-    normalize_address(a) == normalize_address(b)
+    na = normalize_address(a)
+    valid_address?(na) and na == normalize_address(b)
   end
 
   defp addr_match?(_, _), do: false
@@ -368,6 +369,11 @@ defmodule Raxol.Payments.Protocols.Xochi do
   defp normalize_address(addr) do
     addr |> String.trim() |> String.downcase() |> String.replace_prefix("0x", "")
   end
+
+  # A canonical 20-byte hex address (after `normalize_address` strips `0x`), so a
+  # bound comparison rejects a malformed value rather than matching loosely.
+  defp valid_address?(<<hex::binary-size(40)>>), do: String.match?(hex, ~r/\A[0-9a-f]{40}\z/)
+  defp valid_address?(_), do: false
 
   defp int_match?(a, b) do
     case {to_uint(a), to_uint(b)} do

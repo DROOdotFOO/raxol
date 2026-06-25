@@ -89,6 +89,12 @@ defmodule Raxol.Payments.EIP712 do
   defp canonical_v(v) when v in [0, 1], do: v + 27
   defp canonical_v(v) when v in [27, 28], do: v
 
+  # A secp256k1 recovery id is 0/1 (or the 27/28 Ethereum form). Anything else
+  # (an EIP-155 chain-encoded v, or a buggy signer) would silently pack a
+  # non-recovering signature, so fail loud rather than emit one.
+  defp canonical_v(v),
+    do: raise(ArgumentError, "non-canonical secp256k1 recovery id: #{inspect(v)}")
+
   defp eip712_domain_types(domain) do
     fields =
       [
