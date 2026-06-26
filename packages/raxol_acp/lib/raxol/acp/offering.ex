@@ -128,7 +128,7 @@ defmodule Raxol.ACP.Offering do
       # Resolve an optional callback (`requirements_schema/0`,
       # `deliverables_schema/0`) tolerantly. `function_exported?/3` is
       # unreliable during the transient state of a module's first load,
-      # so we just call and rescue.
+      # so the function is called directly and a missing one rescued.
       defp maybe_call(fun) do
         apply(__MODULE__, fun, [])
       rescue

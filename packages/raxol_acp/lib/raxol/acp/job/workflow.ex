@@ -70,14 +70,14 @@ defmodule Raxol.ACP.Job.Workflow do
   this workflow that means: the last successful `:memo_*` node wrote
   a checkpoint, the runtime resumes by traversing into the next
   `:wait_*` node, the wait node pops the scratchpad value (the new
-  event) and the run continues. Phase A's `Job.Server` facade calls
+  event) and the run continues. The `Job.Server` facade calls
   resume with the event tuple as the resume value.
 
   ## Out of scope for this module
 
-  - Wiring this graph into `Raxol.ACP.Job.Server` (Phase A PR 2).
-  - Per-phase interrupt reasons in the seller protocol (Phase B).
-  - `TypedNode` per phase (a polish refactor after Phase A stabilises).
+  - Wiring this graph into `Raxol.ACP.Job.Server`.
+  - Per-phase interrupt reasons in the seller protocol.
+  - A `TypedNode` per phase.
   """
 
   alias Raxol.ACP.ContractClient
@@ -182,8 +182,7 @@ defmodule Raxol.ACP.Job.Workflow do
     [
       failure_policy: :retry,
       max_attempts: Keyword.get(opts, :max_attempts, @default_max_attempts),
-      retry_backoff_ms:
-        Keyword.get(opts, :retry_backoff_ms, @default_retry_backoff_ms)
+      retry_backoff_ms: Keyword.get(opts, :retry_backoff_ms, @default_retry_backoff_ms)
     ]
     |> maybe_put_saver(opts)
   end
@@ -245,8 +244,8 @@ defmodule Raxol.ACP.Job.Workflow do
   # on a node whose scratchpad value has already been popped. Event
   # validation lives at the edge: unknown events route to
   # `:memo_expired` so the run terminates cleanly rather than
-  # cycling. Callers (`Job.Server` facade in Phase A PR 2) are
-  # responsible for sending valid events.
+  # cycling. Callers (the `Job.Server` facade) are responsible for
+  # sending valid events.
   defp pop_event(state, reason) do
     {event, payload, signature} =
       case Workflow.interrupt(reason) do

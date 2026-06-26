@@ -31,11 +31,7 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
         default_role: :provider
       )
 
-    {:ok,
-     transport: transport,
-     api: job_api,
-     provider: provider,
-     agent: agent}
+    {:ok, transport: transport, api: job_api, provider: provider, agent: agent}
   end
 
   defp start_solver(opts, ctx) do
@@ -191,6 +187,7 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
 
       Transport.Mock.deliver(ctx.transport, job_created_entry())
       Transport.Mock.deliver(ctx.transport, requirement_message())
+
       Transport.Mock.deliver(
         ctx.transport,
         %{
@@ -200,6 +197,7 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
           "jobId" => "42"
         }
       )
+
       Process.sleep(80)
 
       assert %{{8453, "42"} => session} = SolverAgent.sessions(solver)
@@ -218,6 +216,7 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
 
       Transport.Mock.deliver(ctx.transport, job_created_entry())
       Transport.Mock.deliver(ctx.transport, requirement_message())
+
       Transport.Mock.deliver(
         ctx.transport,
         %{
@@ -227,6 +226,7 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
           "jobId" => "42"
         }
       )
+
       Process.sleep(80)
 
       assert %{{8453, "42"} => %{status: :failed}} = SolverAgent.sessions(solver)
@@ -252,6 +252,7 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
           "jobId" => "42"
         }
       )
+
       Process.sleep(40)
 
       session = SolverAgent.session(solver, {8453, "42"})

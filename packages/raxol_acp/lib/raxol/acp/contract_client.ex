@@ -11,9 +11,8 @@ defmodule Raxol.ACP.ContractClient do
 
   Per the project's "no mocks" rule, we ship two real implementations:
 
-  - `Raxol.ACP.ContractClient.Onchain` -- hits Base mainnet/sepolia via
-    JSON-RPC. The production impl. (Lands in a follow-up chunk; not
-    included in this v0.1 cut.)
+  - `Raxol.ACP.ContractClient.Onchain` -- the production impl: hits Base
+    mainnet/sepolia via JSON-RPC, with EIP-1559 typed-tx signing.
   - `Raxol.ACP.ContractClient.InMemory` -- an Agent-backed test impl
     living in `test/support/`. Lets the job lifecycle code be tested
     without an RPC endpoint.

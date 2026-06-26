@@ -187,7 +187,8 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket.Connection do
     http_scheme = if state.scheme == :wss, do: :https, else: :http
     ws_scheme = state.scheme
 
-    with {:ok, conn} <- Mint.HTTP.connect(http_scheme, state.host, state.port, protocols: [:http1]),
+    with {:ok, conn} <-
+           Mint.HTTP.connect(http_scheme, state.host, state.port, protocols: [:http1]),
          path = state.path <> "?" <> @default_query,
          {:ok, conn, ref} <- Mint.WebSocket.upgrade(ws_scheme, conn, path, []) do
       {:ok, %{state | conn: conn, request_ref: ref}}

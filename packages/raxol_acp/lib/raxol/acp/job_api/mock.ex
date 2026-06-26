@@ -24,7 +24,11 @@ defmodule Raxol.ACP.JobApi.Mock do
   def new(opts \\ []) do
     table = :ets.new(:raxol_acp_jobapi_mock, [:set, :public])
 
-    me = Keyword.get(opts, :me, %{wallet_address: "0x" <> String.duplicate("ab", 20), name: "raxol-agent"})
+    me =
+      Keyword.get(opts, :me, %{
+        wallet_address: "0x" <> String.duplicate("ab", 20),
+        name: "raxol-agent"
+      })
 
     :ets.insert(table, {:me, me})
     :ets.insert(table, {:agents, %{}})

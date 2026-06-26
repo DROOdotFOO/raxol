@@ -178,8 +178,7 @@ defmodule Raxol.ACP.DirectiveTest do
 
       Executor.execute(d, ctx())
 
-      assert_receive {:command_result,
-                      {:acp_set_budget_with_payment_token_result, "tx-" <> _}},
+      assert_receive {:command_result, {:acp_set_budget_with_payment_token_result, "tx-" <> _}},
                      1_000
     end
   end
@@ -234,8 +233,7 @@ defmodule Raxol.ACP.DirectiveTest do
 
       Executor.execute(d, ctx())
 
-      assert_receive {:command_result,
-                      {:acp_create_payable_memo_result, "tx-" <> _}},
+      assert_receive {:command_result, {:acp_create_payable_memo_result, "tx-" <> _}},
                      1_000
     end
   end
@@ -299,8 +297,7 @@ defmodule Raxol.ACP.DirectiveTest do
         d = Directive.claim_budget(job_id: "job-1")
         Executor.execute(d, ctx())
 
-        assert_receive {:command_result,
-                        {:acp_claim_budget_error, {:exception, msg}}},
+        assert_receive {:command_result, {:acp_claim_budget_error, {:exception, msg}}},
                        1_000
 
         assert is_binary(msg)

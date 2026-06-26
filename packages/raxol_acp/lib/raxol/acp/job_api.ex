@@ -7,7 +7,7 @@ defmodule Raxol.ACP.JobApi do
   `https://api-dev.acp.virtuals.io` (testnet) for agent registry,
   active-job listing, and out-of-band deliverable posting.
 
-  The on-chain side lives behind `Raxol.ACP.ProviderAdapter` (PR D);
+  The on-chain side lives behind `Raxol.ACP.ProviderAdapter`;
   JobApi is purely off-chain HTTP.
   """
 

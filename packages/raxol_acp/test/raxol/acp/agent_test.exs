@@ -146,6 +146,7 @@ defmodule Raxol.ACP.AgentTest do
       Agent.subscribe(agent)
 
       sys = %{"kind" => "system", "chainId" => 8453, "jobId" => "msg-1", "event" => "job.created"}
+
       msg = %{
         "kind" => "message",
         "chainId" => 8453,
@@ -173,7 +174,13 @@ defmodule Raxol.ACP.AgentTest do
 
       key = {8453, "term-1"}
 
-      seed = %{"kind" => "system", "chainId" => 8453, "jobId" => "term-1", "event" => "job.created"}
+      seed = %{
+        "kind" => "system",
+        "chainId" => 8453,
+        "jobId" => "term-1",
+        "event" => "job.created"
+      }
+
       Transport.Mock.deliver(transport, seed)
       assert_receive {Agent, ^agent, _, ^seed}, 200
 
@@ -203,6 +210,7 @@ defmodule Raxol.ACP.AgentTest do
 
       Process.sleep(20)
       send(subscriber, :die)
+
       eventually(fn ->
         state = :sys.get_state(agent)
         not MapSet.member?(state.subscribers, subscriber)

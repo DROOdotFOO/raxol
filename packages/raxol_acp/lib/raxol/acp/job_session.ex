@@ -40,9 +40,8 @@ defmodule Raxol.ACP.JobSession do
 
   This module is intentionally pure -- it records intent and notifies
   listeners. Actually submitting hook calls to ACP v2's
-  `FundTransferHook` etc. lives behind `Raxol.ACP.ProviderAdapter`
-  (PR D). For now, transitions are local; a follow-up adapter wires
-  them to JSON-RPC.
+  `FundTransferHook` etc. lives behind `Raxol.ACP.ProviderAdapter`:
+  transitions here are local, and the adapter wires them to JSON-RPC.
 
   ## Entries
 
@@ -150,7 +149,12 @@ defmodule Raxol.ACP.JobSession do
           AssetToken.t(),
           String.t()
         ) :: {:ok, Status.t()} | {:error, term()}
-  def set_budget_with_fund_request(server, %AssetToken{} = budget, %AssetToken{} = transfer_amount, destination)
+  def set_budget_with_fund_request(
+        server,
+        %AssetToken{} = budget,
+        %AssetToken{} = transfer_amount,
+        destination
+      )
       when is_binary(destination) do
     transition(server, :set_budget_with_fund_request, %{
       budget: budget,
@@ -305,6 +309,7 @@ defmodule Raxol.ACP.JobSession do
   def handle_call(:status, _from, state), do: {:reply, state.status, state}
   def handle_call(:role, _from, state), do: {:reply, state.role, state}
   def handle_call(:entries, _from, state), do: {:reply, state.entries, state}
+
   def handle_call(:available_tools, _from, state),
     do: {:reply, Tools.available(state.role, state.status), state}
 

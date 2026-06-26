@@ -337,8 +337,7 @@ defmodule Raxol.ACP.Job.Server do
 
     workflow_state = ensure_workflow_run(compiled, saver, job_id)
 
-    {workflow_state.current_state, workflow_state.memos, compiled,
-     ephemeral_table}
+    {workflow_state.current_state, workflow_state.memos, compiled, ephemeral_table}
   end
 
   defp ensure_workflow_run(compiled, saver, job_id) do

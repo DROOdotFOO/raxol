@@ -2,7 +2,7 @@
 #   :live_chain / :live_bundler / :live_acp_dev -- spin up a real Anvil node and
 #     exercise the on-chain pipeline (need foundry: anvil + cast).
 #   :live_relay -- moves real funds (broadcasts an on-chain deposit).
-#   :cli_signer -- spawns the riddler-permit2-erc3009 CLI; auto-enabled when
+#   :cli_signer -- spawns the riddler-client CLI; auto-enabled when
 #     RIDDLER_CLI_DIR is set.
 #
 # A single ExUnit.start sets the full list; a second ExUnit.configure(exclude:)

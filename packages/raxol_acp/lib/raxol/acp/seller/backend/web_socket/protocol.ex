@@ -123,6 +123,7 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket.Protocol do
   """
   @spec encode_connect(map() | nil) :: binary()
   def encode_connect(nil), do: @eio_message <> @sio_connect
+
   def encode_connect(auth) when is_map(auth) do
     @eio_message <> @sio_connect <> Jason.encode!(auth)
   end
@@ -151,7 +152,10 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket.Protocol do
   defp decode_message(@sio_disconnect <> _), do: :disconnect
   defp decode_message(@sio_event <> rest), do: decode_event(rest)
   defp decode_message(@sio_ack <> rest), do: decode_ack_frame(rest)
-  defp decode_message(@sio_connect_error <> rest), do: {:connect_error, decode_optional_json(rest)}
+
+  defp decode_message(@sio_connect_error <> rest),
+    do: {:connect_error, decode_optional_json(rest)}
+
   defp decode_message(other), do: {:unknown, @eio_message <> other}
 
   # EVENT body is `<ack_id?><json_array>`. ack_id is an optional run

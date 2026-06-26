@@ -392,7 +392,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
   defp default_settle(%{requirement: req, transfer_amount_atomic: _}) do
     {:ok,
      %{
-       intent_id: "stub-intent-" <> :erlang.unique_integer([:positive]) |> to_string(),
+       intent_id: ("stub-intent-" <> :erlang.unique_integer([:positive])) |> to_string(),
        quote_id: "stub-quote",
        src_tx_hash: "0x" <> String.duplicate("a", 64),
        dst_tx_hash: "0x" <> String.duplicate("b", 64),

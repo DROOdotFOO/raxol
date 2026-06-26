@@ -105,7 +105,7 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket do
     {:ok, pid} = Connection.start_link(conn_opts)
     # Take over the link explicitly so WebSocket can drop Connection on
     # terminate without GenServer.stop's reason propagating to the outer
-    # caller. The Process.monitor is what we'll watch for restarts.
+    # caller. The Process.monitor below is what surfaces restarts.
     Process.unlink(pid)
     _ref = Process.monitor(pid)
 

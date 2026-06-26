@@ -3,7 +3,7 @@ defmodule Raxol.ACP.TestSupport.WorkflowSetup do
   ExUnit setup helpers that isolate the workflow Saver per test.
 
   Every Job.Server test that boots a `Raxol.ACP.Job.Server` under the
-  workflow path (the default since ADR-0016 Phase A flipped) must use a
+  workflow path (now the default) must use a
   fresh ETS table for the workflow Saver. Otherwise the shared default
   table (`:raxol_acp_job_workflow`) accumulates checkpoints across tests
   and stale state ghost-hydrates into fresh Job.Servers (the `InMemory`

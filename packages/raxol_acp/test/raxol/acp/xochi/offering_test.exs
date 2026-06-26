@@ -92,7 +92,13 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
 
     test "status is bounded" do
       schema = Offering.deliverable_schema()
-      assert schema["properties"]["status"]["enum"] == ["pending", "settled", "failed", "refunded"]
+
+      assert schema["properties"]["status"]["enum"] == [
+               "pending",
+               "settled",
+               "failed",
+               "refunded"
+             ]
     end
   end
 end

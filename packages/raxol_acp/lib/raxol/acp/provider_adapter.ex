@@ -12,12 +12,12 @@ defmodule Raxol.ACP.ProviderAdapter do
 
   Two concrete implementations:
 
-  - `Raxol.ACP.ProviderAdapter.Mock` (this PR) -- in-process; records
+  - `Raxol.ACP.ProviderAdapter.Mock` -- in-process; records
     every call and returns canned responses. Used by `Raxol.ACP.Agent`
     and `Raxol.ACP.HookClient` tests so the full v2 lifecycle can be
     exercised without an RPC or a wallet.
-  - `Raxol.ACP.ProviderAdapter.SCA` (follow-up PR) -- production:
-    wraps `Raxol.ACP.Wallet.SCA` so calls flow through our
+  - `Raxol.ACP.ProviderAdapter.SCA` (not yet implemented) -- production:
+    wraps `Raxol.ACP.Wallet.SCA` so calls flow through the
     Elixir-native MAv2 wallet + Alchemy paymaster + session key. No
     Privy dependency.
 
@@ -107,7 +107,8 @@ defmodule Raxol.ACP.ProviderAdapter do
   def sign_typed_data(adapter, chain_id, typed_data),
     do: adapter.adapter.sign_typed_data(adapter, chain_id, typed_data)
 
-  @spec get_transaction_receipt(adapter(), chain_id(), String.t()) :: {:ok, map() | nil} | {:error, term()}
+  @spec get_transaction_receipt(adapter(), chain_id(), String.t()) ::
+          {:ok, map() | nil} | {:error, term()}
   def get_transaction_receipt(adapter, chain_id, hash),
     do: adapter.adapter.get_transaction_receipt(adapter, chain_id, hash)
 

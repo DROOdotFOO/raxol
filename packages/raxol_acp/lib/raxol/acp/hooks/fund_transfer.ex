@@ -54,7 +54,12 @@ defmodule Raxol.ACP.Hooks.FundTransfer do
   def decode_set_budget_data(<<transfer_amount::unsigned-big-256, addr_word::binary-size(32)>>) do
     # address is right-aligned in the 32-byte word
     <<_padding::binary-size(12), addr_bytes::binary-size(20)>> = addr_word
-    {:ok, %{transfer_amount: transfer_amount, destination: "0x" <> Base.encode16(addr_bytes, case: :lower)}}
+
+    {:ok,
+     %{
+       transfer_amount: transfer_amount,
+       destination: "0x" <> Base.encode16(addr_bytes, case: :lower)
+     }}
   end
 
   def decode_set_budget_data(other) do

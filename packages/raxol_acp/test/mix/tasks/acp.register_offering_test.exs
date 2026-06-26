@@ -8,6 +8,7 @@ defmodule Mix.Tasks.Acp.RegisterOfferingTest do
       payload = RegisterOffering.build_payload(:mainnet)
 
       assert payload["network"]["chainId"] == 8453
+
       assert payload["network"]["acpCoreAddress"] ==
                "0x238E541BfefD82238730D00a2208E5497F1832E0"
 
@@ -67,7 +68,11 @@ defmodule Mix.Tasks.Acp.RegisterOfferingTest do
     test "deliverable schema has settled/failed/refunded/pending status enum" do
       payload = RegisterOffering.build_payload(:mainnet)
       enum = payload["deliverableSchema"]["properties"]["status"]["enum"]
-      assert MapSet.equal?(MapSet.new(enum), MapSet.new(["pending", "settled", "failed", "refunded"]))
+
+      assert MapSet.equal?(
+               MapSet.new(enum),
+               MapSet.new(["pending", "settled", "failed", "refunded"])
+             )
     end
 
     test "payload round-trips through JSON" do

@@ -225,9 +225,8 @@ defmodule Raxol.ACP.Job.WorkflowTest do
     # policy on a node whose scratchpad value has been consumed).
     # Unknown events route through the conditional edge's fallback
     # to :memo_expired, ending the run cleanly. The Job.Server facade
-    # in Phase A PR 2 will validate events up front via
-    # Raxol.ACP.Job.StateMachine.next/2 so unknown events never reach
-    # the workflow.
+    # validates events up front via Raxol.ACP.Job.StateMachine.next/2
+    # so unknown events never reach the workflow.
 
     test "an event not valid for the current phase routes to :memo_expired" do
       compiled = compiled(saver: ets_saver())

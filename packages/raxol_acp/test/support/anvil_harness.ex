@@ -75,11 +75,19 @@ defmodule Raxol.ACP.Test.AnvilHarness do
     ensure_foundry!()
 
     port = Keyword.get(opts, :port, 8600)
-    fork_url = Keyword.get(opts, :fork_url, System.get_env("RAXOL_ACP_FORK_URL", "https://mainnet.base.org"))
+
+    fork_url =
+      Keyword.get(
+        opts,
+        :fork_url,
+        System.get_env("RAXOL_ACP_FORK_URL", "https://mainnet.base.org")
+      )
+
     expected_chain_id = Keyword.get(opts, :chain_id, 8453)
 
     rpc = "http://127.0.0.1:#{port}"
     os_pid = spawn_anvil(fork_url, port)
+
     ExUnit.Callbacks.on_exit(fn ->
       System.cmd("kill", ["-9", "#{os_pid}"], stderr_to_stdout: true)
     end)

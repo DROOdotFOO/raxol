@@ -1,7 +1,7 @@
 defmodule Raxol.ACP.Job.BuyerSignerTest do
   @moduledoc """
   End-to-end test that exercises the buyer-side ACP authorization path:
-  the riddler-permit2-erc3009 CLI produces a buyer authorization, the
+  the riddler-client CLI produces a buyer authorization, the
   signature flows through Job.Server.accept_payment/3, and the memo log
   records it byte-for-byte.
 
@@ -48,7 +48,7 @@ defmodule Raxol.ACP.Job.BuyerSignerTest do
     :ok
   end
 
-  describe "buyer authorization via riddler-permit2-erc3009 CLI" do
+  describe "buyer authorization via riddler-client CLI" do
     test "erc3009 auth: state advances to :transaction; memo carries the signature",
          %{cli_dir: cli_dir} do
       {job_id, _pid} = start_job_in_negotiation()
@@ -170,7 +170,7 @@ defmodule Raxol.ACP.Job.BuyerSignerTest do
     candidates =
       [
         System.get_env("RIDDLER_CLI_DIR"),
-        Path.expand("../../../../../../riddler-permit2-erc3009", __DIR__)
+        Path.expand("../../../../../../riddler-client", __DIR__)
       ]
       |> Enum.reject(&is_nil/1)
 

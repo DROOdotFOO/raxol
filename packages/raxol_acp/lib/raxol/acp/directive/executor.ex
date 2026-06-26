@@ -76,9 +76,7 @@ defmodule Raxol.ACP.Directive.Helper do
     do: {:acp_set_budget_result, :acp_set_budget_error}
 
   defp result_tags!(%Raxol.ACP.Directive.SetBudgetWithPaymentToken{}),
-    do:
-      {:acp_set_budget_with_payment_token_result,
-       :acp_set_budget_with_payment_token_error}
+    do: {:acp_set_budget_with_payment_token_result, :acp_set_budget_with_payment_token_error}
 
   defp result_tags!(%Raxol.ACP.Directive.CreateMemo{}),
     do: {:acp_create_memo_result, :acp_create_memo_error}

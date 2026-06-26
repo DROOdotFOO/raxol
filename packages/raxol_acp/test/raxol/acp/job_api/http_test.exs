@@ -15,8 +15,7 @@ defmodule Raxol.ACP.JobApi.HTTPTest do
   setup_all do
     case System.fetch_env("RAXOL_ACP_AGENT_PRIVATE_KEY") do
       :error ->
-        {:skip,
-         "RAXOL_ACP_AGENT_PRIVATE_KEY not set -- skipping live Virtuals dev API tests"}
+        {:skip, "RAXOL_ACP_AGENT_PRIVATE_KEY not set -- skipping live Virtuals dev API tests"}
 
       {:ok, pk_hex} ->
         pk = decode_pk(pk_hex)

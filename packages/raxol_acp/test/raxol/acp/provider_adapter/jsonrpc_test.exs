@@ -117,7 +117,9 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPCTest do
 
       # Recover and assert the address matches.
       digest = ExKeccak.hash_256("\x19Ethereum Signed Message:\n#{byte_size(message)}" <> message)
-      {:ok, recovered_pubkey} = ExSecp256k1.recover_compact(digest, <<r::binary, s::binary>>, v - 27)
+
+      {:ok, recovered_pubkey} =
+        ExSecp256k1.recover_compact(digest, <<r::binary, s::binary>>, v - 27)
 
       <<_::binary-size(1), payload::binary-size(64)>> = recovered_pubkey
       hash = ExKeccak.hash_256(payload)
@@ -145,9 +147,13 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPCTest do
       assert {:ok, sig} = ProviderAdapter.sign_typed_data(a, 8453, typed_data)
       assert byte_size(sig) == 65
 
-      {:ok, digest} = Raxol.Payments.EIP712.hash(typed_data.domain, typed_data.types, typed_data.message)
+      {:ok, digest} =
+        Raxol.Payments.EIP712.hash(typed_data.domain, typed_data.types, typed_data.message)
+
       <<r::binary-size(32), s::binary-size(32), v::8>> = sig
-      {:ok, recovered_pubkey} = ExSecp256k1.recover_compact(digest, <<r::binary, s::binary>>, v - 27)
+
+      {:ok, recovered_pubkey} =
+        ExSecp256k1.recover_compact(digest, <<r::binary, s::binary>>, v - 27)
 
       <<_::binary-size(1), payload::binary-size(64)>> = recovered_pubkey
       hash = ExKeccak.hash_256(payload)

@@ -8,8 +8,7 @@ defmodule Raxol.ACP.Transport do
 
   - `Raxol.ACP.Transport.SSE` -- real Server-Sent Events stream from
     `api.acp.virtuals.io` (production) / `api-dev.acp.virtuals.io`
-    (testnet). The default for live deployments. (Scaffolded here;
-    wire-level details land in a follow-up PR.)
+    (testnet). The default for live deployments.
   - `Raxol.ACP.Transport.Mock` -- in-process implementation for tests.
     Lets a test drive entry deliveries without HTTP.
 

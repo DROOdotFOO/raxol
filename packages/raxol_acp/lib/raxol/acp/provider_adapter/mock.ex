@@ -26,7 +26,11 @@ defmodule Raxol.ACP.ProviderAdapter.Mock do
   def new(opts \\ []) do
     table = :ets.new(:raxol_acp_provider_mock, [:set, :public])
 
-    :ets.insert(table, {:address, Keyword.get(opts, :address, "0x" <> String.duplicate("ab", 20))})
+    :ets.insert(
+      table,
+      {:address, Keyword.get(opts, :address, "0x" <> String.duplicate("ab", 20))}
+    )
+
     :ets.insert(table, {:supported_chain_ids, Keyword.get(opts, :supported_chain_ids, [8453])})
     :ets.insert(table, {:sent_calls, []})
     :ets.insert(table, {:sent_signatures, []})
@@ -47,7 +51,8 @@ defmodule Raxol.ACP.ProviderAdapter.Mock do
   end
 
   @doc "Set the value returned by `read_contract/3` for a given `{address, signature}`."
-  @spec set_contract_read(Raxol.ACP.ProviderAdapter.adapter(), String.t(), String.t(), term()) :: :ok
+  @spec set_contract_read(Raxol.ACP.ProviderAdapter.adapter(), String.t(), String.t(), term()) ::
+          :ok
   def set_contract_read(%{config: %{table: table}}, contract_address, signature, return_value) do
     [{:contract_reads, current}] = :ets.lookup(table, :contract_reads)
     key = {String.downcase(contract_address), signature}

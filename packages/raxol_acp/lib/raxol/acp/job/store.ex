@@ -152,8 +152,11 @@ defmodule Raxol.ACP.Job.Store do
 
     dets =
       case Dets.resolve_path(opts, :raxol_acp, :job_store_path) do
-        nil -> nil
-        path -> Dets.open!(ets_table, path, fn {key, value} -> :ets.insert(ets_table, {key, value}) end)
+        nil ->
+          nil
+
+        path ->
+          Dets.open!(ets_table, path, fn {key, value} -> :ets.insert(ets_table, {key, value}) end)
       end
 
     {:ok, %{table: ets_table, dets: dets}}

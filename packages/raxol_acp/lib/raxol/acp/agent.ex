@@ -5,8 +5,8 @@ defmodule Raxol.ACP.Agent do
   Mirrors `AcpAgent` in `acp-node-v2`. Owns three injected dependencies:
 
   - **Provider** (`Raxol.ACP.ProviderAdapter`) -- the chain-facing client
-    that submits on-chain hook calls. Built in PR D; this PR accepts
-    any module/struct implementing the behaviour.
+    that submits on-chain hook calls. Any module/struct implementing the
+    behaviour is accepted.
   - **Transport** (`Raxol.ACP.Transport`) -- the SSE chat stream + REST
     messaging. `Raxol.ACP.Transport.Mock` for tests; `Raxol.ACP.Transport.SSE`
     for production.
@@ -41,7 +41,7 @@ defmodule Raxol.ACP.Agent do
 
   Inferring the agent's role per session happens lazily on the first
   entry that disambiguates it (e.g. a `budget.set` from another address
-  implies we're the client). For now the role is taken from
+  implies this agent is the client). The role is taken from
   `:default_role` or the entry's `role` field if present.
   """
 
@@ -302,8 +302,8 @@ defmodule Raxol.ACP.Agent do
 
   # For system entries with a known event type, drive the session into the
   # corresponding status by replacing state. The real on-chain transition
-  # (calling FundTransferHook etc.) lives behind ProviderAdapter in PR D --
-  # here we just mirror the canonical status the event implies.
+  # (calling FundTransferHook etc.) lives behind ProviderAdapter; this only
+  # mirrors the canonical status the event implies.
   defp propagate_to_session(session_pid, %{"kind" => "message"} = entry) do
     JobSession.send_message(
       session_pid,

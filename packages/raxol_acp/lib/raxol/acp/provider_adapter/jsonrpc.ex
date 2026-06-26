@@ -32,8 +32,8 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
 
   - **Smart-contract account flows**: this adapter signs EIP-1559
     transactions as a plain EOA. For Modular Account v2 / paymaster
-    flows, use `Raxol.ACP.ProviderAdapter.SCA` (follow-up) which
-    wraps `Raxol.ACP.Wallet.SCA`.
+    flows, use `Raxol.ACP.ProviderAdapter.SCA` (not yet implemented),
+    which wraps `Raxol.ACP.Wallet.SCA`.
   - **Batch submission**: `send_calls/3` submits one EIP-1559 tx per
     call. The SDK's batch semantics (return one hash per call)
     are preserved, but the bundling efficiencies aren't.
@@ -215,7 +215,10 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
         case RPC.fee_history(client, 5, "latest", [50]) do
           {:ok, %{"baseFeePerGas" => base_fees, "reward" => reward}} ->
             base = base_fees |> List.last() |> decode_hex_uint!()
-            prio = reward |> List.first() |> List.first() |> decode_hex_uint!() |> max(1_000_000_000)
+
+            prio =
+              reward |> List.first() |> List.first() |> decode_hex_uint!() |> max(1_000_000_000)
+
             {:ok, %{max_priority_fee_per_gas: prio, max_fee_per_gas: base * 2 + prio}}
 
           _ ->

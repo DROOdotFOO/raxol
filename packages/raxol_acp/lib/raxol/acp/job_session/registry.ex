@@ -26,13 +26,15 @@ defmodule Raxol.ACP.JobSession.Registry do
 
   @doc "Build a `:via` tuple for registering or addressing a session."
   @spec via(job_key()) :: {:via, module(), {module(), job_key()}}
-  def via({chain_id, job_id} = key) when is_integer(chain_id) and (is_binary(job_id) or is_integer(job_id)) do
+  def via({chain_id, job_id} = key)
+      when is_integer(chain_id) and (is_binary(job_id) or is_integer(job_id)) do
     {:via, Registry, {__MODULE__, key}}
   end
 
   @doc "Look up the pid of a session by `{chain_id, job_id}`."
   @spec whereis(job_key()) :: pid() | :undefined
-  def whereis({chain_id, job_id} = key) when is_integer(chain_id) and (is_binary(job_id) or is_integer(job_id)) do
+  def whereis({chain_id, job_id} = key)
+      when is_integer(chain_id) and (is_binary(job_id) or is_integer(job_id)) do
     case Registry.lookup(__MODULE__, key) do
       [{pid, _}] -> pid
       [] -> :undefined

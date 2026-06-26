@@ -165,13 +165,19 @@ defmodule Raxol.ACP.HookClient do
         hook_address: hook_address,
         hook_data: hook_data
       }) do
-    submit_single(adapter, chain_id, acp_core_address, "createJob(address,address,uint256,address,bytes)", [
-      {"address", provider},
-      {"address", evaluator},
-      {"uint256", expired_at},
-      {"address", hook_address},
-      {"bytes", hook_data}
-    ])
+    submit_single(
+      adapter,
+      chain_id,
+      acp_core_address,
+      "createJob(address,address,uint256,address,bytes)",
+      [
+        {"address", provider},
+        {"address", evaluator},
+        {"uint256", expired_at},
+        {"address", hook_address},
+        {"bytes", hook_data}
+      ]
+    )
   end
 
   # -- Internals --
@@ -201,5 +207,9 @@ defmodule Raxol.ACP.HookClient do
   defp encode_bytes32("0x" <> hex = full) when byte_size(hex) == 64, do: full
 
   defp encode_bytes32(other),
-    do: raise(ArgumentError, "bytes32 value must be 32 raw bytes or 66-char hex, got: #{inspect(other)}")
+    do:
+      raise(
+        ArgumentError,
+        "bytes32 value must be 32 raw bytes or 66-char hex, got: #{inspect(other)}"
+      )
 end

@@ -91,7 +91,8 @@ defmodule Raxol.ACP.HookClientLiveTest do
           Process.sleep(100)
           {tx_out, 0} = AnvilHarness.cast(["tx", tx_hash, "--rpc-url", rpc])
           # Extract the `input` field from cast's output and verify selector.
-          input_line = tx_out |> String.split("\n") |> Enum.find(&String.starts_with?(&1, "input"))
+          input_line =
+            tx_out |> String.split("\n") |> Enum.find(&String.starts_with?(&1, "input"))
 
           if input_line do
             assert String.contains?(input_line, selector_hex),
@@ -111,7 +112,9 @@ defmodule Raxol.ACP.HookClientLiveTest do
       # Both forms should produce identical calldata. We verify by reading the
       # transaction's input field for both calls and comparing.
       result1 = HookClient.complete(a, 8453, @acp_core, 999_999_999, @bytes32_a)
-      result2 = HookClient.complete(a, 8453, @acp_core, 999_999_999, String.duplicate(<<0xAA>>, 32))
+
+      result2 =
+        HookClient.complete(a, 8453, @acp_core, 999_999_999, String.duplicate(<<0xAA>>, 32))
 
       # Both calls should produce a tx hash (or both fail at the same point).
       assert (match?({:ok, _}, result1) and match?({:ok, _}, result2)) or

@@ -76,9 +76,7 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
           Chain.sepolia()
 
         other ->
-          Mix.raise(
-            "unknown --network #{inspect(other)}; expected :mainnet or :sepolia"
-          )
+          Mix.raise("unknown --network #{inspect(other)}; expected :mainnet or :sepolia")
       end
 
     %{

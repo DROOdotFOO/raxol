@@ -191,7 +191,9 @@ defmodule Raxol.ACP.Xochi.Offering do
   """
   @spec valid_requirement?(map()) :: boolean()
   def valid_requirement?(req) when is_map(req) do
-    required = ~w(src_chain_id dst_chain_id src_token dst_token amount_atomic destination slippage_bps)
+    required =
+      ~w(src_chain_id dst_chain_id src_token dst_token amount_atomic destination slippage_bps)
+
     Enum.all?(required, &Map.has_key?(req, &1))
   end
 

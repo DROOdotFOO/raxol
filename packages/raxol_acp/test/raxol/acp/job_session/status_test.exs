@@ -11,7 +11,15 @@ defmodule Raxol.ACP.JobSession.StatusTest do
     test "all/0 lists every status" do
       assert MapSet.equal?(
                MapSet.new(Status.all()),
-               MapSet.new([:open, :budget_set, :funded, :submitted, :completed, :rejected, :expired])
+               MapSet.new([
+                 :open,
+                 :budget_set,
+                 :funded,
+                 :submitted,
+                 :completed,
+                 :rejected,
+                 :expired
+               ])
              )
     end
   end
