@@ -28,7 +28,7 @@ defmodule Raxol.Payments.Assets.UsdcDomainsTest do
   end
 
   describe "known_chain_ids/0" do
-    test "covers every chain in the riddler-permit2-erc3009 matrix" do
+    test "covers every chain in the riddler-client matrix" do
       ids = UsdcDomains.known_chain_ids() |> MapSet.new()
 
       expected =

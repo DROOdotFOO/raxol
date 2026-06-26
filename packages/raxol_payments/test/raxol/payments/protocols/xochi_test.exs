@@ -144,6 +144,52 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       :ok
     end
 
+    test "derives a unique execute nonce from the pull authorization's bytes32 nonce" do
+      # The served XochiIntent carries no nonce, and the worker dedups replays on
+      # the execute nonce, so it must be unique per intent -- a constant 0 makes the
+      # worker reject the wallet's second non-terminal intent. Derived from the low
+      # 48 bits of the pull's server-issued nonce. High bytes 0xaa with low 6 bytes
+      # 0xffffffffffff prove only the low 48 bits are taken.
+      pull =
+        canonical_erc3009_pull(%{
+          message: %{"nonce" => "0x" <> String.duplicate("aa", 26) <> "ffffffffffff"}
+        })
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_pullnonce",
+        quote_id: "xq_pullnonce",
+        can_solve: true,
+        payment_method: "erc3009",
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_pullnonce"}
+        },
+        pull_authorization: pull
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      assert {:ok, _} = Xochi.execute(config, quote_resp, RealWallet, request)
+      assert_receive {:req, "POST", "/api/intent/execute", _headers, raw_body}
+      assert Jason.decode!(raw_body)["nonce"] == 281_474_976_710_655
+    end
+
     test "signs the served domain verbatim when it omits verifyingContract" do
       # Canonical 12-field XochiIntent domain has no verifyingContract.
       types_wire = [
@@ -513,7 +559,11 @@ defmodule Raxol.Payments.Protocols.XochiTest do
         settlement_preference: "public"
       }
 
-      config = %{base_url: "https://api.xochi.fi", auth: :none, req_options: [plug: echo_plug(self())]}
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
 
       assert {:error, {:authorization_mismatch, :pull_spender}} =
                Xochi.execute(config, quote_resp, RealWallet, request)
@@ -578,7 +628,8 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       extra =
         canonical_erc3009_pull(%{
           types: %{
-            "ReceiveWithAuthorization" => transfer_fields ++ [%{"name" => "evil", "type" => "address"}]
+            "ReceiveWithAuthorization" =>
+              transfer_fields ++ [%{"name" => "evil", "type" => "address"}]
           }
         })
 

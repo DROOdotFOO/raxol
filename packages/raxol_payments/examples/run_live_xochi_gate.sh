@@ -23,10 +23,13 @@
 # Staging (api-stg.xochi.fi) has x402 disabled, so Member is the only auth path
 # there; rehearse the dry-run on staging first.
 #
-# This MOVES REAL FUNDS. Default route is a $1 (1 USDC) Base -> Arbitrum transfer.
+# This MOVES REAL FUNDS. Default route is a $1.10 (1.10 USDC) Base -> Arbitrum
+# transfer. The solver enforces a corridor minimum of strictly more than 1.00 USDC
+# (exactly 1.00 quotes back can_solve=false with amount_below_minimum on both
+# legs), so the default sits just above the floor with margin for pricing/slippage.
 # The solver fills on the destination chain, and its USDC fill inventory currently
 # lives on Arbitrum (verified on-chain), so Arbitrum is the corridor a real run can
-# actually settle. The test file runs two cases, so a full run settles ~2 USDC
+# actually settle. The test file runs two cases, so a full run settles ~2.20 USDC
 # total (the end-to-end transfer + the crash-resume transfer). A passing quote
 # (can_solve) is a pricing check; only inventory on the destination guarantees a
 # real fill. Settlement defaults to public.
@@ -44,7 +47,8 @@
 #   XOCHI_LIVE_KEY=0x<funded base key> ./examples/run_live_xochi_gate.sh
 #
 # Overrides: XOCHI_LIVE_AUTH (mandate|member), XOCHI_LIVE_AGENT_WALLET,
-# XOCHI_LIVE_URL, XOCHI_LIVE_TOKEN, XOCHI_LIVE_AMOUNT (human USDC, default 1.00),
+# XOCHI_LIVE_URL, XOCHI_LIVE_TOKEN, XOCHI_LIVE_AMOUNT (human USDC, default 1.10;
+# the solver floor is >1.00, so 1.00 or below aborts at preflight),
 # XOCHI_LIVE_FROM_CHAIN / XOCHI_LIVE_TO_CHAIN, XOCHI_LIVE_FROM_TOKEN /
 # XOCHI_LIVE_TO_TOKEN, plus XOCHI_LIVE_SETTLEMENT=stealth with
 # XOCHI_LIVE_RECIPIENT_META for the private path.
@@ -63,7 +67,7 @@ set -euo pipefail
 XOCHI_LIVE_URL="${XOCHI_LIVE_URL:-https://api.xochi.fi}"
 XOCHI_LIVE_AUTH="${XOCHI_LIVE_AUTH:-mandate}"
 OP_TOKEN_REF="${OP_TOKEN_REF:-op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential}"
-XOCHI_LIVE_AMOUNT="${XOCHI_LIVE_AMOUNT:-1.00}"
+XOCHI_LIVE_AMOUNT="${XOCHI_LIVE_AMOUNT:-1.10}"
 XOCHI_LIVE_FROM_CHAIN="${XOCHI_LIVE_FROM_CHAIN:-8453}"
 XOCHI_LIVE_TO_CHAIN="${XOCHI_LIVE_TO_CHAIN:-42161}"
 XOCHI_LIVE_FROM_TOKEN="${XOCHI_LIVE_FROM_TOKEN:-0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913}"

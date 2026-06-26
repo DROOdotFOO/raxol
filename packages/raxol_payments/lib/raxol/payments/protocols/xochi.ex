@@ -401,29 +401,61 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   defp to_uint(_), do: nil
 
-  # The execute nonce must equal the nonce in the typed data the wallet signed,
-  # so the solver recovers the same digest. The Xochi quote bakes a fixed nonce
-  # into the eip712 message (0 in the canonical XochiIntent type); echo that
-  # rather than minting a fresh value.
+  # The execute `nonce` is the worker's replay-dedup key (wallet, nonce); it is
+  # NOT part of the intent signature -- the served XochiIntent type carries no
+  # nonce field, so the wallet never signs over it. When the signed message does
+  # embed an integer nonce, echo it. Otherwise derive a unique, deterministic
+  # value from the pull authorization's server-issued bytes32 nonce: echoing a
+  # constant 0 for every intent makes the worker reject the second non-terminal
+  # intent from a wallet ("Nonce already used"). Fall back to 0 only when neither
+  # a signed nonce nor a pull nonce is present.
   defp signed_nonce(%QuoteResponse{eip712_data: %{"message" => %{"nonce" => nonce}}})
        when is_integer(nonce),
        do: nonce
 
+  defp signed_nonce(%QuoteResponse{pull_authorization: %{"message" => %{"nonce" => nonce}}})
+       when is_binary(nonce),
+       do: replay_nonce_from(nonce)
+
   defp signed_nonce(_quote_resp), do: 0
 
+  # The pull nonce is a 32-byte hex string; take its low 48 bits as an unsigned
+  # integer -- unique per intent (server-issued) and within the worker's JS Number
+  # range (< 2^53). A malformed value falls back to 0.
+  defp replay_nonce_from("0x" <> hex), do: replay_nonce_from(hex)
+
+  defp replay_nonce_from(hex) when is_binary(hex) do
+    case Base.decode16(hex, case: :mixed) do
+      {:ok, bytes} when byte_size(bytes) >= 6 ->
+        <<low::unsigned-big-48>> = binary_part(bytes, byte_size(bytes) - 6, 6)
+        low
+
+      _ ->
+        0
+    end
+  end
+
+  defp replay_nonce_from(_), do: 0
+
   # Build the domain from exactly the keys the worker served. `verifyingContract`
-  # is only included when present: the canonical XochiIntent domain omits it, so
-  # adding a nil key would hash a 4-field EIP712Domain against the worker's
-  # 3-field one and the signature would not recover.
+  # and `salt` are only included when present: the canonical XochiIntent domain
+  # omits `verifyingContract` and carries a `salt`, so the included key set must
+  # mirror the served domain exactly -- dropping `salt` (or adding a nil
+  # verifyingContract) hashes a different EIP712Domain than the worker's and the
+  # signature does not recover.
   defp eip712_domain(eip712) do
     d = eip712["domain"] || %{}
 
     %{name: d["name"], version: d["version"], chainId: d["chainId"]}
     |> maybe_put_verifying_contract(d["verifyingContract"])
+    |> maybe_put_salt(d["salt"])
   end
 
   defp maybe_put_verifying_contract(domain, nil), do: domain
   defp maybe_put_verifying_contract(domain, vc), do: Map.put(domain, :verifyingContract, vc)
+
+  defp maybe_put_salt(domain, nil), do: domain
+  defp maybe_put_salt(domain, salt), do: Map.put(domain, :salt, salt)
 
   defp eip712_types(eip712) do
     (eip712["types"] || %{})

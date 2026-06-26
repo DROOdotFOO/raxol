@@ -44,7 +44,8 @@ defmodule Raxol.Payments.Xochi.LiveQuotePropertyTest do
     @chain_ids Map.keys(@usdc)
 
     property "quote never returns 5xx across supported routes and amounts" do
-      # Amounts span below-min (0.10), the 1 USDC floor, and larger.
+      # Amounts span below-min (0.10 and 1.00, both under the >1 USDC floor)
+      # through above-floor sizes, exercising the amount_below_minimum 4xx path.
       check all(
               from <- member_of(@chain_ids),
               to <- member_of(@chain_ids),

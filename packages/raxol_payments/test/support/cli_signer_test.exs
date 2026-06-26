@@ -8,7 +8,7 @@ defmodule Raxol.Payments.Test.CliSignerTest do
   setup do
     cwd =
       System.get_env("RIDDLER_CLI_DIR") ||
-        Path.expand("../../../../riddler-permit2-erc3009", __DIR__)
+        Path.expand("../../../../riddler-client", __DIR__)
 
     cli_available? =
       File.dir?(cwd) and File.exists?(Path.join([cwd, "src", "index.js"]))
@@ -16,7 +16,7 @@ defmodule Raxol.Payments.Test.CliSignerTest do
     if cli_available? do
       # Check whether the CLI on disk has the sign-only/acp-buyer-auth
       # subcommands we depend on. They land in
-      # https://github.com/axol-io/riddler-permit2-erc3009/pull/21; while it's
+      # https://github.com/axol-io/riddler-client/pull/21; while it's
       # unmerged, the dev checkout must be on that branch for these tests to
       # exercise the spawn path.
       has_subcommands? =
@@ -65,8 +65,7 @@ defmodule Raxol.Payments.Test.CliSignerTest do
       assert {:ok, %{result_json: result}} =
                CliSigner.acp_buyer_auth(flags,
                  cwd: cwd,
-                 private_key:
-                   "0x0000000000000000000000000000000000000000000000000000000000000001"
+                 private_key: "0x0000000000000000000000000000000000000000000000000000000000000001"
                )
 
       assert is_map(result)
@@ -89,8 +88,7 @@ defmodule Raxol.Payments.Test.CliSignerTest do
       assert {:error, {:cli_failed, code, stdout}} =
                CliSigner.run("acp-buyer-auth", [],
                  cwd: cwd,
-                 private_key:
-                   "0x0000000000000000000000000000000000000000000000000000000000000001"
+                 private_key: "0x0000000000000000000000000000000000000000000000000000000000000001"
                )
 
       assert code != 0
@@ -108,7 +106,7 @@ defmodule Raxol.Payments.Test.CliSignerTest do
     end
 
     test "boolean true emits bare flag; false drops it" do
-      # Same: cwd doesn't exist, so we just exercise the encoding logic
+      # Same: cwd doesn't exist, so this exercises the encoding logic
       # before the cwd check raises.
       assert_raise CliSigner.CliNotFoundError, fn ->
         CliSigner.run("foo", [dry_run: true, verbose: false], cwd: "/nonexistent")
@@ -118,7 +116,7 @@ defmodule Raxol.Payments.Test.CliSignerTest do
 
   describe "CliNotFoundError" do
     test "raises with a clear message when the CLI repo can't be found" do
-      assert_raise CliSigner.CliNotFoundError, ~r/Could not locate riddler-permit2-erc3009/, fn ->
+      assert_raise CliSigner.CliNotFoundError, ~r/Could not locate riddler-client/, fn ->
         CliSigner.run("help", [], cwd: "/definitely/does/not/exist")
       end
     end

@@ -9,7 +9,7 @@ defmodule Raxol.Payments.Protocols.Permit2 do
   orderId into the digest. The Permit2 contract verifies the signature
   on-chain when the solver calls `permitWitnessTransferFrom`.
 
-  Mirrors `riddler-permit2-erc3009/src/signing.js#signPermit2`. The EIP-712
+  Mirrors `riddler-client/src/signing.js#signPermit2`. The EIP-712
   domain has no `version` field (Permit2 deployed without versioning); the
   `verifyingContract` is the same universal Permit2 address on every EVM
   chain.

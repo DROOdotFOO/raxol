@@ -1,7 +1,7 @@
 defmodule Raxol.Payments.Conformance.WalletSignerParityTest do
   @moduledoc """
   Byte-for-byte parity between the wallet signer and the reference signer
-  (ethers, via the riddler-permit2-erc3009 CLI).
+  (ethers, via the riddler-client CLI).
 
   Both sign the same EIP-712 digest with the same key using deterministic
   (RFC 6979, low-s) ECDSA, so `r`, `s`, and the recovery byte `v` must be
@@ -72,8 +72,8 @@ defmodule Raxol.Payments.Conformance.WalletSignerParityTest do
   defp locate_cli do
     [
       System.get_env("RIDDLER_CLI_DIR"),
-      Path.expand("../../../../../../../riddler-permit2-erc3009", __DIR__),
-      Path.expand("../../../../../../riddler-permit2-erc3009", __DIR__)
+      Path.expand("../../../../../../../riddler-client", __DIR__),
+      Path.expand("../../../../../../riddler-client", __DIR__)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.find(fn dir ->

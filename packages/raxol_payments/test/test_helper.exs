@@ -1,6 +1,6 @@
 ExUnit.start()
 
-# Tests tagged :cli_signer spawn the riddler-permit2-erc3009 CLI. Skipped
+# Tests tagged :cli_signer spawn the riddler-client CLI. Skipped
 # by default; enable with `mix test --include cli_signer` or by setting
 # RIDDLER_CLI_DIR in the environment so the helper can find the CLI repo.
 #
@@ -8,7 +8,7 @@ ExUnit.start()
 # repo. Same skip-by-default rules as :cli_signer.
 # Each entry excludes a tag by default unless its enabling env var is set:
 #
-#   :cli_signer / :conformance -- spawn the riddler-permit2-erc3009 CLI or read
+#   :cli_signer / :conformance -- spawn the riddler-client CLI or read
 #     its shared EIP-712 fixture (RIDDLER_CLI_DIR / CONFORMANCE_FIXTURE_PATH).
 #   :stealth_conformance -- match the stealth scheme against a reference SDK
 #     fixture (STEALTH_VECTORS_PATH).

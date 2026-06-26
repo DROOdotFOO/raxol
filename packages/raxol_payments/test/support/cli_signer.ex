@@ -1,6 +1,6 @@
 defmodule Raxol.Payments.Test.CliSigner do
   @moduledoc """
-  Spawn the `riddler-permit2-erc3009` CLI as a black-box signing oracle.
+  Spawn the `riddler-client` CLI as a black-box signing oracle.
 
   The CLI emits a single `RESULT_JSON: { ... }` line on stdout for the
   sign-only and ACP buyer-auth subcommands; this module spawns the CLI
@@ -17,7 +17,7 @@ defmodule Raxol.Payments.Test.CliSigner do
 
   1. `opts[:cwd]`
   2. `System.get_env("RIDDLER_CLI_DIR")`
-  3. Sibling-directory fallback assuming `riddler-permit2-erc3009` is
+  3. Sibling-directory fallback assuming `riddler-client` is
      checked out beside this monorepo's parent.
 
   If neither `cwd` nor `RIDDLER_CLI_DIR` is set and the sibling fallback
@@ -135,16 +135,16 @@ defmodule Raxol.Payments.Test.CliSigner do
     else
       raise CliNotFoundError,
         message:
-          "Could not locate riddler-permit2-erc3009 CLI. Set RIDDLER_CLI_DIR or pass cwd: ... " <>
+          "Could not locate riddler-client CLI. Set RIDDLER_CLI_DIR or pass cwd: ... " <>
             "(tried #{inspect(cwd)})"
     end
   end
 
-  # Best-effort fallback: ../../riddler-permit2-erc3009 relative to the
+  # Best-effort fallback: ../../riddler-client relative to the
   # raxol monorepo root. Works for the common dev layout where both repos
   # live side-by-side under ~/CODE/.
   defp sibling_default do
-    Path.expand("../../../../riddler-permit2-erc3009", __DIR__)
+    Path.expand("../../../../riddler-client", __DIR__)
   end
 
   defp encode_flags(flags) do

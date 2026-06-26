@@ -398,6 +398,27 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
       assert resp.ephemeral_pub_key == "0xeph"
       assert resp.view_tag == 42
     end
+
+    test "parses the worker's snake_case shape (canonical wire format)" do
+      # Mirrors xochi handleExecuteIntent's response body (intents.ts).
+      json = %{
+        "success" => true,
+        "intent_id" => "xi_164840b490711c736ae8187ac7b48dff",
+        "status" => "executing",
+        "tx_hash" => "0xabc",
+        "stealth_address" => "0xstealth",
+        "ephemeral_pub_key" => "0xeph",
+        "view_tag" => 7
+      }
+
+      resp = ExecuteResponse.from_json(json)
+      assert resp.intent_id == "xi_164840b490711c736ae8187ac7b48dff"
+      assert resp.status == :executing
+      assert resp.tx_hash == "0xabc"
+      assert resp.stealth_address == "0xstealth"
+      assert resp.ephemeral_pub_key == "0xeph"
+      assert resp.view_tag == 7
+    end
   end
 
   describe "IntentStatus.from_json/1" do
@@ -415,6 +436,22 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
       assert status.status == :bridging
       assert status.tx_hash == "0xabc"
       assert status.terminal == false
+    end
+
+    test "parses the worker's snake_case shape (canonical wire format)" do
+      # Mirrors xochi handlePollIntentStatus's terminal response body (intents.ts).
+      json = %{
+        "intent_id" => "xi_164840b490711c736ae8187ac7b48dff",
+        "status" => "completed",
+        "tx_hash" => "0xabc",
+        "terminal" => true
+      }
+
+      status = IntentStatus.from_json(json)
+      assert status.intent_id == "xi_164840b490711c736ae8187ac7b48dff"
+      assert status.status == :completed
+      assert status.tx_hash == "0xabc"
+      assert status.terminal == true
     end
 
     test "detects terminal statuses" do

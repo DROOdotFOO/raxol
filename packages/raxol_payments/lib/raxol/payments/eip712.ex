@@ -49,8 +49,8 @@ defmodule Raxol.Payments.EIP712 do
 
   - `domain` — EIP-712 domain separator fields. Recognized keys: `:name`,
     `:version`, `:chainId` (or `:chain_id`), `:verifyingContract` (or
-    `:verifying_contract`). Only the keys present in the map are included
-    in the domain type, matching reference implementations.
+    `:verifying_contract`), and `:salt` (bytes32). Only the keys present in
+    the map are included in the domain type, matching reference implementations.
   - `types` — map of struct type names to field definitions. The first
     key in the map is treated as the primary type.
   - `message` — map of field values for the primary type.
@@ -95,6 +95,13 @@ defmodule Raxol.Payments.EIP712 do
   defp canonical_v(v),
     do: raise(ArgumentError, "non-canonical secp256k1 recovery id: #{inspect(v)}")
 
+  # EIP-712 defines exactly five domain fields, in this order: name, version,
+  # chainId, verifyingContract, salt. Only the keys present in the domain map are
+  # emitted, matching reference implementations. `salt` (bytes32) is required by
+  # contracts that domain-separate without a verifyingContract -- the Xochi
+  # XochiIntent domain is keyed by name/version/chainId/salt, so omitting it
+  # hashes a 3-field separator against the worker's 4-field one and the signature
+  # cannot recover.
   defp eip712_domain_types(domain) do
     fields =
       [
@@ -105,7 +112,8 @@ defmodule Raxol.Payments.EIP712 do
         ),
         if(Map.has_key?(domain, :verifyingContract) || Map.has_key?(domain, :verifying_contract),
           do: {"verifyingContract", "address"}
-        )
+        ),
+        if(Map.has_key?(domain, :salt), do: {"salt", "bytes32"})
       ]
       |> Enum.reject(&is_nil/1)
 

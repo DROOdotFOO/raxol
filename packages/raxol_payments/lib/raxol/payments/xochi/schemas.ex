@@ -303,20 +303,27 @@ defmodule Raxol.Payments.Xochi.Schemas do
             error: String.t() | nil
           }
 
+    # The Xochi worker's execute response is snake_case (`intent_id`, `tx_hash`,
+    # `stealth_address`, ...); older/sim responses are camelCase. Accept both, as
+    # QuoteResponse does, so the client reads the canonical worker shape -- reading
+    # only camelCase left `intent_id` nil and tripped the Action output contract.
+    # See xochi/packages/worker-lib/src/handlers/intents.ts (handleExecuteIntent).
     @spec from_json(map()) :: t()
     def from_json(json) do
       %__MODULE__{
         success: json["success"] || false,
-        intent_id: json["intentId"],
+        intent_id: pick(json, ["intent_id", "intentId"]),
         status: parse_status(json["status"]),
-        tx_hash: json["txHash"],
-        note_commitment: json["noteCommitment"],
-        stealth_address: json["stealthAddress"],
-        ephemeral_pub_key: json["ephemeralPubKey"],
-        view_tag: json["viewTag"],
+        tx_hash: pick(json, ["tx_hash", "txHash"]),
+        note_commitment: pick(json, ["note_commitment", "noteCommitment"]),
+        stealth_address: pick(json, ["stealth_address", "stealthAddress"]),
+        ephemeral_pub_key: pick(json, ["ephemeral_pub_key", "ephemeralPubKey"]),
+        view_tag: pick(json, ["view_tag", "viewTag"]),
         error: json["error"]
       }
     end
+
+    defp pick(json, keys), do: Enum.find_value(keys, fn key -> json[key] end)
 
     defp parse_status(nil), do: :unknown
     defp parse_status("pending"), do: :pending
@@ -383,27 +390,35 @@ defmodule Raxol.Payments.Xochi.Schemas do
 
     @terminal_statuses [:completed, :failed, :expired]
 
+    # The Xochi worker's status response is snake_case (`intent_id`, `tx_hash`,
+    # `terminal`, ...); older/sim responses are camelCase. Accept both so the poll
+    # reads the canonical worker shape -- reading only camelCase dropped
+    # `intent_id`/`tx_hash` (status/terminal happened to match either way). See
+    # xochi/packages/worker-lib/src/handlers/intents.ts (handlePollIntentStatus).
     @spec from_json(map()) :: t()
     def from_json(json) do
       status = parse_status(json["status"])
 
       %__MODULE__{
-        intent_id: json["intentId"],
+        intent_id: pick(json, ["intent_id", "intentId"]),
         status: status,
-        tx_hash: json["txHash"],
-        receiving_tx_hash: json["receivingTxHash"],
+        tx_hash: pick(json, ["tx_hash", "txHash"]),
+        receiving_tx_hash: pick(json, ["receiving_tx_hash", "receivingTxHash"]),
         error: json["error"],
-        updated_at: json["updatedAt"],
+        updated_at: pick(json, ["updated_at", "updatedAt"]),
         substatus: json["substatus"],
-        substatus_message: json["substatusMessage"],
-        note_commitment: json["noteCommitment"],
-        nullifier_hash: json["nullifierHash"],
-        l2_tx_hash: json["l2TxHash"],
-        settlement_type: parse_settlement_type(json["settlementType"]),
-        attestation_status: parse_attestation_status(json["attestationStatus"]),
+        substatus_message: pick(json, ["substatus_message", "substatusMessage"]),
+        note_commitment: pick(json, ["note_commitment", "noteCommitment"]),
+        nullifier_hash: pick(json, ["nullifier_hash", "nullifierHash"]),
+        l2_tx_hash: pick(json, ["l2_tx_hash", "l2TxHash"]),
+        settlement_type: parse_settlement_type(pick(json, ["settlement_type", "settlementType"])),
+        attestation_status:
+          parse_attestation_status(pick(json, ["attestation_status", "attestationStatus"])),
         terminal: json["terminal"] || status in @terminal_statuses
       }
     end
+
+    defp pick(json, keys), do: Enum.find_value(keys, fn key -> json[key] end)
 
     @spec terminal?(t()) :: boolean()
     def terminal?(%__MODULE__{terminal: t}), do: t

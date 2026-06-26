@@ -42,9 +42,13 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
   end
 
   defp atomize_domain(domain) do
-    base = %{name: domain["name"], chainId: domain["chainId"]}
-    if domain["version"], do: Map.put(base, :version, domain["version"]), else: base
+    %{name: domain["name"], chainId: domain["chainId"]}
+    |> maybe_put(:version, domain["version"])
+    |> maybe_put(:salt, domain["salt"])
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   # CLI emits types as { TypeName: [{name, type}, ...], ... }; convert to
   # the {name, type} tuple shape Raxol.Payments.EIP712 expects.

@@ -8,7 +8,7 @@ defmodule Raxol.Payments.Assets.UsdcDomains do
   `transferWithAuthorization` will reject.
 
   Values were verified on-chain via Blockscout. Source of truth for
-  cross-checking: `riddler-permit2-erc3009/src/config.js` (`usdcName`
+  cross-checking: `riddler-client/src/config.js` (`usdcName`
   and `usdcVersion` per chain).
 
   ## Example
