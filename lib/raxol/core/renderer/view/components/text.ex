@@ -13,11 +13,14 @@ defmodule Raxol.Core.Renderer.View.Components.Text do
     * `:style` - List of style atoms (e.g., [:bold, :underline])
     * `:align` - Text alignment (:left, :center, :right)
     * `:wrap` - Text wrapping mode (:none, :char, :word)
+    * `:link` - OSC 8 hyperlink URL; makes the text cmd-clickable in
+      terminals that support OSC 8 (iTerm2, kitty, WezTerm, ...)
 
   ## Examples
 
       Text.new("Hello, World!", fg: :red, style: [:bold])
       Text.new("Centered text", align: :center)
+      Text.new("0x7f3a..e21", link: "https://basescan.org/tx/0x7f3a..e21")
   """
   def new(content, opts \\ []) when is_binary(content) do
     %{
@@ -28,7 +31,8 @@ defmodule Raxol.Core.Renderer.View.Components.Text do
       bg: Keyword.get(opts, :bg),
       style: Keyword.get(opts, :style, []),
       align: Keyword.get(opts, :align, :left),
-      wrap: Keyword.get(opts, :wrap, :none)
+      wrap: Keyword.get(opts, :wrap, :none),
+      link: Keyword.get(opts, :link)
     }
   end
 

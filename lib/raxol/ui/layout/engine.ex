@@ -235,6 +235,7 @@ defmodule Raxol.UI.Layout.Engine do
       fg: Map.get(attrs_map, :fg),
       bg: Map.get(attrs_map, :bg),
       style: style_map,
+      link: Map.get(attrs_map, :link),
       # Pass original attributes through, let Renderer handle styling
       attrs: Map.put(attrs_map, :original_type, type)
     }
@@ -265,6 +266,7 @@ defmodule Raxol.UI.Layout.Engine do
       fg: Map.get(element, :fg),
       bg: Map.get(element, :bg),
       style: style_map,
+      link: Map.get(element, :link),
       attrs: %{
         style: style_map,
         id: Map.get(element, :id),

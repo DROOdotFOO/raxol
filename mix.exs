@@ -229,7 +229,7 @@ defmodule Raxol.MixProject do
       {:phoenix, "~> 1.8.1"},
       {:phoenix_pubsub, "~> 2.1"},
       {:phoenix_ecto, "~> 4.4", optional: true},
-      {:phoenix_live_view, "~> 1.1.13"},
+      {:phoenix_live_view, "~> 1.2.3"},
       {:phoenix_html, "~> 4.3"},
       {:plug_cowboy, "~> 2.7"},
       {:phoenix_live_dashboard, "~> 0.8.7", only: :dev},
