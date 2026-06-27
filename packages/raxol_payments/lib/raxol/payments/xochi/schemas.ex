@@ -288,7 +288,8 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :ephemeral_pub_key,
       :view_tag,
       :error,
-      success: false
+      success: false,
+      reconciling: false
     ]
 
     @type t :: %__MODULE__{
@@ -300,7 +301,8 @@ defmodule Raxol.Payments.Xochi.Schemas do
             stealth_address: String.t() | nil,
             ephemeral_pub_key: String.t() | nil,
             view_tag: integer() | nil,
-            error: String.t() | nil
+            error: String.t() | nil,
+            reconciling: boolean()
           }
 
     # The Xochi worker's execute response is snake_case (`intent_id`, `tx_hash`,
@@ -319,7 +321,11 @@ defmodule Raxol.Payments.Xochi.Schemas do
         stealth_address: pick(json, ["stealth_address", "stealthAddress"]),
         ephemeral_pub_key: pick(json, ["ephemeral_pub_key", "ephemeralPubKey"]),
         view_tag: pick(json, ["view_tag", "viewTag"]),
-        error: json["error"]
+        error: json["error"],
+        # In-doubt: the worker could not confirm the solver executed (a Riddler
+        # 5xx/timeout wrapped as a 200) and kept the intent non-terminal. Funds
+        # may be in flight; the caller must poll to resolve, never re-execute.
+        reconciling: pick(json, ["reconciling"]) || false
       }
     end
 

@@ -705,6 +705,37 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert {:error, %Failure{reason: :expired, retryable?: true}} =
                PollXochiStatus.run(%{intent_id: "int_3"}, ctx)
     end
+
+    # Mirrors riddler-client test-xochi.js "shielded status RESULT_JSON carries
+    # note_commitment + l2_tx_hash". A shielded (Aztec) settlement is note-based:
+    # at terminal status it announces a note commitment / nullifier / L2 tx in
+    # place of a stealth address, and an agent polling must be able to read them.
+    test "surfaces shielded note fields at terminal status" do
+      note = "0x" <> String.duplicate("ab", 32)
+      nullifier = "0x" <> String.duplicate("cd", 32)
+      l2_tx = "0x" <> String.duplicate("ef", 32)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "intentId" => "int_sh",
+          "status" => "completed",
+          "settlementType" => "shielded",
+          "noteCommitment" => note,
+          "nullifierHash" => nullifier,
+          "l2TxHash" => l2_tx,
+          "terminal" => true
+        })
+      end)
+
+      # call/2 (not run/2) so the new note fields pass the output schema.
+      assert {:ok, result} =
+               PollXochiStatus.call(%{intent_id: "int_sh"}, %{xochi_config: config()})
+
+      assert result.settlement_type == "shielded"
+      assert result.note_commitment == note
+      assert result.nullifier_hash == nullifier
+      assert result.l2_tx_hash == l2_tx
+    end
   end
 
   # The Action behaviour's `call/2` validates the output against the output
@@ -812,6 +843,54 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert is_nil(result.stealth_address)
     end
 
+    test "a clean execute reports reconciling: false" do
+      stub_quote(%{
+        "success" => true,
+        "intentId" => "int_1",
+        "status" => "executing",
+        "stealthAddress" => "0xstealth"
+      })
+
+      assert {:ok, result} = ExecuteXochiIntent.call(base_params(%{}), call_ctx())
+      assert result.reconciling == false
+    end
+
+    test "an in-doubt (reconciling) execute surfaces reconciling, not a clean success" do
+      # The worker could not confirm the solver executed (a Riddler 5xx/timeout
+      # wrapped as a 200) and kept the intent non-terminal: success=true,
+      # status=executing, reconciling=true, no tx hash. raxol must surface the
+      # in-doubt state, not report a settled payment.
+      stub_quote(%{
+        "success" => true,
+        "intent_id" => "int_1",
+        "status" => "executing",
+        "reconciling" => true
+      })
+
+      params = base_params(%{settlement: "public", recipient_meta_address: nil})
+
+      assert {:ok, result} = ExecuteXochiIntent.call(params, call_ctx())
+      assert result.status == "executing"
+      assert result.reconciling == true
+    end
+
+    test "an in-doubt stealth execute is not misreported as a missing stealth address" do
+      # A reconciling stealth execute has no stealth address yet (it appears once
+      # the intent resolves to completed via polling). That is the in-doubt state,
+      # not a privacy downgrade, so the stealth-address guard must not fail closed
+      # here -- the in-doubt is surfaced via `reconciling` instead.
+      stub_quote(%{
+        "success" => true,
+        "intent_id" => "int_1",
+        "status" => "executing",
+        "reconciling" => true
+      })
+
+      assert {:ok, result} = ExecuteXochiIntent.call(base_params(%{}), call_ctx())
+      assert result.reconciling == true
+      assert is_nil(result.stealth_address)
+    end
+
     test "an explicit nil slippage falls back to the 50 bps default, never null" do
       # A present nil must not defeat the documented default and reach the worker
       # as null (an unbounded-slippage downgrade).
@@ -871,6 +950,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert result.terminal == true
       assert is_nil(result.tx_hash)
       assert is_nil(result.settlement_type)
+      # A public/stealth settlement carries no note fields; present-nil must pass.
+      assert is_nil(result.note_commitment)
+      assert is_nil(result.nullifier_hash)
+      assert is_nil(result.l2_tx_hash)
     end
   end
 end

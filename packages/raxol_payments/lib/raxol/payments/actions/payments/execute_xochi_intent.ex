@@ -76,7 +76,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
         from_amount: [type: :string],
         to_amount: [type: :string],
         xochi_fee: [type: :string],
-        stealth_address: [type: :string]
+        stealth_address: [type: :string],
+        reconciling: [
+          type: :boolean,
+          description:
+            "True when the settlement is in doubt: the worker could not confirm the solver executed, so the intent stays non-terminal. Poll the intent status to resolve; do not re-execute."
+        ]
       ]
     ]
 
@@ -122,6 +127,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
       {:ok, summary}
     end
   end
+
+  # An in-doubt (reconciling) settlement has not landed yet: the worker could not
+  # confirm the solver executed (typically an upstream Riddler 5xx/timeout wrapped
+  # as a 200) and kept the intent non-terminal. No stealth address exists yet --
+  # it appears only once the intent resolves to completed via polling -- so the
+  # stealth-address guard below must not fire. The in-doubt state is surfaced to
+  # the caller via the summary's `reconciling` flag instead.
+  defp assert_settlement_privacy(_request, %{reconciling: true}), do: :ok
 
   # A stealth settlement must come back with the stealth address the worker
   # derived and announced. A nil there means the funds did not land on a stealth
@@ -351,7 +364,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
       from_amount: request.from_amount,
       to_amount: quote.to_amount,
       xochi_fee: quote.xochi_fee,
-      stealth_address: exec.stealth_address
+      stealth_address: exec.stealth_address,
+      # Surface the in-doubt state rather than reporting a clean success: an
+      # execute the worker could not confirm (often a wrapped upstream 5xx) is
+      # not a completed payment. Poll the intent status to resolve.
+      reconciling: exec.reconciling
     }
   end
 end
