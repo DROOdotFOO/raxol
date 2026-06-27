@@ -4,6 +4,7 @@ defmodule Raxol.Payments.Conformance.X402ConformanceTest do
   alias Raxol.Payments.Assets.UsdcDomains
   alias Raxol.Payments.EIP712
   alias Raxol.Payments.Test.ConformanceFixture
+  alias Raxol.Payments.Test.ConformanceSigner
 
   @moduletag :conformance
 
@@ -55,6 +56,27 @@ defmodule Raxol.Payments.Conformance.X402ConformanceTest do
 
         assert version == vec["domain"]["version"],
                "USDC version mismatch for chain #{chain_id}: got #{version}, expected #{vec["domain"]["version"]}"
+      end
+
+      # The digest test proves hashing parity; this proves the full
+      # hash -> sign -> pack_signature path lands on the exact bytes ethers
+      # produced and that they recover to the signer. Offline, no node.
+      test "signs + recovers identically to CLI for #{vec["name"]}" do
+        vec = @vec
+        domain = atomize_domain(vec["domain"])
+        message = parse_message(vec["message"])
+
+        assert {:ok, digest} = EIP712.hash(domain, @erc3009_types, message)
+
+        signature =
+          ConformanceSigner.sign_hex(digest, ConformanceSigner.decode_hex!(vec["private_key"]))
+
+        assert signature == vec["expected_signature"],
+               "signature mismatch for #{vec["name"]}: got #{signature}, expected #{vec["expected_signature"]}"
+
+        assert ConformanceSigner.recover_address(digest, signature) ==
+                 String.downcase(vec["expected_signer"]),
+               "recovered signer mismatch for #{vec["name"]}"
       end
     end
   end
