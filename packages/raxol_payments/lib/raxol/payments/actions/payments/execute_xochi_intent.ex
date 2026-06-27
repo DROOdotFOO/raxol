@@ -123,17 +123,19 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     end
   end
 
-  # A stealth or shielded settlement must come back with the stealth address the
-  # worker derived and announced. A nil there means the funds did not land on a
-  # stealth address -- a server fallback to public, or a hostile endpoint -- so
-  # the privacy the caller asked for was not delivered. Fail closed rather than
+  # A stealth settlement must come back with the stealth address the worker
+  # derived and announced. A nil there means the funds did not land on a stealth
+  # address -- a server fallback to public, or a hostile endpoint -- so the
+  # privacy the caller asked for was not delivered. Fail closed rather than
   # report success; the intent id rides the error so an operator can verify it.
-  # Public settlements legitimately have no stealth address.
-  defp assert_settlement_privacy(%QuoteRequest{settlement_preference: pref}, %{
+  #
+  # Public and shielded settlements legitimately have no stealth address: shielded
+  # is note-based (note_commitment / nullifier_hash), surfaced at terminal status,
+  # not an announced stealth address.
+  defp assert_settlement_privacy(%QuoteRequest{settlement_preference: "stealth"}, %{
          stealth_address: address,
          intent_id: intent_id
-       })
-       when pref in ["stealth", "shielded"] do
+       }) do
     if is_binary(address) and address != "",
       do: :ok,
       else: {:error, {:stealth_address_missing, intent_id}}

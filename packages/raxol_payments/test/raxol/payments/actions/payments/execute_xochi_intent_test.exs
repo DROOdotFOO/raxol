@@ -799,6 +799,19 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
                ExecuteXochiIntent.call(base_params(%{}), call_ctx())
     end
 
+    test "a shielded settlement succeeds without a stealth address (note-based)" do
+      # Shielded (Aztec) settlements are note-based: they carry no stealth address
+      # (note_commitment / nullifier_hash surface at terminal status), so the
+      # stealth-address guard must not apply to them.
+      stub_quote(%{"success" => true, "intentId" => "int_1", "status" => "executing"})
+
+      params = base_params(%{settlement: "shielded", recipient_meta_address: nil})
+
+      assert {:ok, result} = ExecuteXochiIntent.call(params, call_ctx())
+      assert result.intent_id == "int_1"
+      assert is_nil(result.stealth_address)
+    end
+
     test "an explicit nil slippage falls back to the 50 bps default, never null" do
       # A present nil must not defeat the documented default and reach the worker
       # as null (an unbounded-slippage downgrade).
