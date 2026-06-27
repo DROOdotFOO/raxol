@@ -31,7 +31,13 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
         settlement_speed: [type: :string],
         note_commitment: [type: :string],
         nullifier_hash: [type: :string],
-        l2_tx_hash: [type: :string]
+        l2_tx_hash: [type: :string],
+        substatus: [type: :string],
+        substatus_message: [
+          type: :string,
+          description:
+            "Solver-supplied detail on the current/terminal status (e.g. the reconcile reason behind an in-doubt settlement). Present when the worker forwards one."
+        ]
       ]
     ]
 
@@ -53,8 +59,11 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
 
           {:ok, %IntentStatus{} = status, _elapsed_ms} ->
             # Terminal but not completed (failed/expired/refunded): a failed
-            # order must surface as an error, never as {:ok, ...}.
-            {:error, Failure.from({:settlement, status.status, status.error})}
+            # order must surface as an error, never as {:ok, ...}. Fall back to
+            # the solver's substatus_message when no explicit error is set, so
+            # the reason a settlement failed (e.g. a reconcile detail) is not lost.
+            {:error,
+             Failure.from({:settlement, status.status, status.error || status.substatus_message})}
 
           {:error, reason} ->
             {:error, Failure.from(reason)}
@@ -89,7 +98,12 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
       # present-nil is treated as absent by the output schema.
       note_commitment: status.note_commitment,
       nullifier_hash: status.nullifier_hash,
-      l2_tx_hash: status.l2_tx_hash
+      l2_tx_hash: status.l2_tx_hash,
+      # Solver-supplied progress detail, when forwarded by the worker. Lets a
+      # caller see why a settlement is where it is (e.g. an in-doubt reconcile
+      # note) instead of only the coarse status. nil when none is present.
+      substatus: status.substatus,
+      substatus_message: status.substatus_message
     }
   end
 

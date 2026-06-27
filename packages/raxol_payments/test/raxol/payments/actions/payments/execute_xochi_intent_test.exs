@@ -736,6 +736,43 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert result.nullifier_hash == nullifier
       assert result.l2_tx_hash == l2_tx
     end
+
+    test "surfaces solver substatus / substatus_message on a completed status" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "intentId" => "int_1",
+          "status" => "completed",
+          "substatus" => "settled",
+          "substatus_message" => "filled from solver inventory",
+          "terminal" => true
+        })
+      end)
+
+      assert {:ok, result} =
+               PollXochiStatus.call(%{intent_id: "int_1"}, %{xochi_config: config()})
+
+      assert result.substatus == "settled"
+      assert result.substatus_message == "filled from solver inventory"
+    end
+
+    test "carries substatus_message into the error when a failed status has no explicit error" do
+      # An in-doubt settlement the reconcile sweep ultimately couldn't confirm
+      # ends `failed` with the reason in substatus_message rather than `error`.
+      # That reason must reach the caller, not be dropped.
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "intentId" => "int_4",
+          "status" => "failed",
+          "substatus_message" => "reconcile: solver did not confirm execution",
+          "terminal" => true
+        })
+      end)
+
+      assert {:error, %Failure{reason: :not_filled} = failure} =
+               PollXochiStatus.run(%{intent_id: "int_4"}, %{xochi_config: config()})
+
+      assert failure.message =~ "reconcile: solver did not confirm execution"
+    end
   end
 
   # The Action behaviour's `call/2` validates the output against the output
