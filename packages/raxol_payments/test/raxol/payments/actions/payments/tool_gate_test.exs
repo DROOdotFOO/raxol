@@ -15,8 +15,8 @@ defmodule Raxol.Payments.Actions.Payments.ToolGateTest do
     CreateMandate,
     ExecuteRelayTransfer,
     ExecuteXochiIntent,
-    GetBalance,
     GetQuote,
+    GetWalletInfo,
     ListHistory,
     ListMandates,
     PollXochiStatus,
@@ -35,7 +35,7 @@ defmodule Raxol.Payments.Actions.Payments.ToolGateTest do
 
     test "read-only Actions are not sensitive" do
       for mod <- [
-            GetBalance,
+            GetWalletInfo,
             GetQuote,
             SpendingStatus,
             ListHistory,

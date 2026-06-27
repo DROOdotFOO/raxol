@@ -10,8 +10,9 @@ defmodule Raxol.Payments.Protocol do
 
   - `Raxol.Payments.Protocols.X402` -- Coinbase x402 (ERC-3009)
   - `Raxol.Payments.Protocols.MPP` -- Stripe/Tempo Machine Payments Protocol
-  - `Raxol.Payments.Protocols.Riddler` -- cross-chain intents (deprecated, delegates to Xochi)
   - `Raxol.Payments.Protocols.Xochi` -- cross-chain private payments (agent-facing)
+  - `Raxol.Payments.Protocols.Permit2` -- Permit2 `PermitWitnessTransferFrom` signing for Riddler's `/order`
+  - `Raxol.Payments.Protocols.Riddler` -- cross-chain intents (deprecated, delegates to Xochi)
   """
 
   @type headers :: [{String.t(), String.t()}]

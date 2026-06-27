@@ -1,6 +1,6 @@
 # Agentic Commerce
 
-Agents that can pay for things. `raxol_payments` gives any Raxol agent autonomous payment capabilities (balance checks, quotes, transfers, spending limits) across chains and protocols.
+Agents that can pay for things. `raxol_payments` gives any Raxol agent autonomous payment capabilities (wallet identity, quotes, transfers, spending limits) across chains and protocols.
 
 ## How It Works
 
@@ -32,7 +32,7 @@ Two wallet implementations behind the `Raxol.Payments.Wallet` behaviour:
 - `Wallets.Env`: private key from an environment variable. Simple, good for dev and CI.
 - `Wallets.Op`: private key fetched from 1Password via a GenServer. No plaintext key on disk.
 
-Both expose `address/1`, `sign/2`, and `balance/2`.
+Both implement the `Raxol.Payments.Wallet` callbacks: `address/0`, `chain_id/0`, and three signing functions: `sign_message/1` (raw message), `sign_typed_data/3` (EIP-712 typed data), and `sign_hash/1` (precomputed 32-byte digest). The behaviour has no balance callback.
 
 ## Protocols
 
@@ -46,7 +46,11 @@ Stripe/Tempo's protocol for machine-to-machine payments. Same HTTP 402 flow, dif
 
 ### Xochi
 
-Intent-based cross-chain settlement. The agent says "I want to pay 10 USDC on Base to address X on Arbitrum," Xochi quotes a fee (0.10-0.30% depending on tier), the wallet signs the intent, and Riddler's solver network handles the actual cross-chain execution.
+Intent-based cross-chain settlement. The agent says "I want to pay 10 USDC on Base to address X on Arbitrum," Xochi quotes a fee, the wallet signs the intent, and Riddler's solver network handles the actual cross-chain execution.
+
+The fee has three additive layers rather than a single tier percentage: a solver spread plus gas floor (Riddler, never discounted), a venue fee (Xochi), and a routing fee (Raxol, which funds the token buyback, so agent volume routed through raxol feeds the flywheel). Trust discounts carve down the venue and routing layers only, leaving the solver floor identical at every tier. Headline totals run 0.10-0.40% by tier and asset (stablecoins lower, volatile assets higher), from Standard at 0.22% stable / 0.40% volatile down to Institutional at 0.10% / 0.22%.
+
+The quote will carry an optional `fee_breakdown`: the per-layer split (solver, venue, routing), price impact, gas floor, total, and `surplus_share_pct` (the solver keeps 15% of positive-slippage surplus, the user keeps 85%). The routing line is raxol's own cut, worth surfacing to agents. It stays absent until Riddler emits it and the worker forwards it, and the `QuoteResponse` schema does not parse it yet, so treat it as a forthcoming field rather than something to read today.
 
 Flow: `get_quote/2` -> `execute/3` (wallet signs EIP-712 intent) -> `poll_status/3`.
 
@@ -54,7 +58,7 @@ Xochi is the default for cross-chain and privacy (stealth addresses, shielded tr
 
 ### Riddler (direct solver, B2B only)
 
-Direct access to Riddler's Commerce API for bulk/institutional flows. Cash-negative for the protocol (solver subsidizes execution), so don't use it for agent payments. It exists for B2B integrations where the business relationship justifies the economics.
+Direct access to Riddler's Commerce API for bulk/institutional flows. Cash-negative for the protocol (solver subsidizes execution), so don't use it for agent payments. It exists for B2B integrations where the business relationship justifies the economics. The `Protocols.Riddler` module itself is deprecated and now delegates to Xochi internally; prefer `Protocols.Xochi` directly.
 
 ## Spending Controls
 
@@ -82,12 +86,12 @@ The relay rail keys on the logical payment rather than its client-minted `transf
 
 ## Agent Actions
 
-Ten actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
+Twelve actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
 
 | Action | What it does |
 |--------|-------------|
-| `payment_get_balance` | Check wallet balance on a given chain |
-| `payment_get_quote` | Get a price quote for a transfer (fees, route) |
+| `payment_get_wallet_info` | Return the agent's wallet address and chain ID |
+| `payment_get_quote` | Get a price quote for a transfer (route, fees; layered `fee_breakdown` forthcoming) |
 | `payment_transfer` | Execute a payment |
 | `payment_spending_status` | Current spend vs limits |
 | `payment_list_history` | Transaction history for this session |
@@ -96,6 +100,8 @@ Ten actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
 | `payment_revoke_mandate` | Locally delete a stored Mandate (Xochi KV unaffected) |
 | `payment_execute_xochi_intent` | Dispatch a cross-chain Xochi intent (checkpointed) |
 | `payment_poll_xochi_status` | Poll the status of a dispatched Xochi intent |
+| `payment_execute_relay_transfer` | Initiate a Tron transfer via Riddler Relay (checkpointed); Tron is public-only |
+| `payment_poll_relay_status` | Poll a dispatched relay (Tron) transfer to a terminal status |
 
 ## Mandate (Xochi Delegation Envelope)
 

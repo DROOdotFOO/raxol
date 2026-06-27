@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `payment_list_mandates`, `payment_revoke_mandate`. Local revoke
   only; Xochi's KV budget counter remains until `expires_at` (no
   server revoke endpoint per Xochi's locked design).
+- Registered the `payment_execute_relay_transfer` and
+  `payment_poll_relay_status` Actions in the default set
+  (`Raxol.Payments.Actions.Payments.actions/0`); the Tron relay rail
+  modules existed but were not aggregated.
+
+### Changed
+
+- Renamed the `payment_get_balance` Action to `payment_get_wallet_info`
+  (module `GetBalance` → `GetWalletInfo`). It returns the wallet address
+  and chain ID, not an on-chain balance, so the old name was misleading.
 
 ## [0.1.0]
 

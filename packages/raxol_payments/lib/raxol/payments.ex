@@ -19,7 +19,7 @@ defmodule Raxol.Payments do
 
       Agent -> Xochi.quote -> Xochi.execute (signed) -> Riddler fills -> settled
 
-  Tier-based fees (0.10% - 0.30%) make this revenue-positive.
+  Tier-based fees (0.10% - 0.40%, by tier and asset) make this revenue-positive.
 
   ## Quick Start
 
