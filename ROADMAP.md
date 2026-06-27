@@ -26,7 +26,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 - **Phase 12: MCP Widget + Agent Coverage**: `@mcp_exclude` attribute, FocusLens hover mode, ToolSynchronizer focus/hover tracking, HoverHighlight effect
 - **Phase 13: MCP Test Harness**: Pipe-friendly test API (`click`, `type_into`, `assert_component`, `assert_tool_available`), session lifecycle, functor law property tests (10 properties)
 - **Agent Payments (Phase A)**: x402/MPP auto-pay, wallets (env + 1Password), spending controls, 5 agent actions
-- **Phase 14B: Xochi Integration**: Xochi as default agent protocol for cross-chain (cash-positive, tier fees 0.10-0.30%). Riddler solves behind the scenes. Full intent flow: quote -> sign -> execute -> poll. Router prefers Xochi for cross-chain and privacy. 94 tests.
+- **Phase 14B: Xochi Integration**: Xochi as default agent protocol for cross-chain (cash-positive, tier fees 0.10-0.40%). Riddler solves behind the scenes. Full intent flow: quote -> sign -> execute -> poll. Router prefers Xochi for cross-chain and privacy. 94 tests.
 - **Phase 14C: PXE-Bridge Integration**: Aztec Private eXecution Environment as settlement target for high-trust privacy tiers. PXE client (JSON-RPC 2.0), schemas, PrivacyTier (Glass Cube, 6 tiers), Router settlement routing. 51 tests.
 - **Phase 14D: Stealth Settlement**: Full ERC-5564/ERC-6538 in `Xochi.Stealth` (~300 LOC). ECDH derivation, view tag scanning (256x speedup), domain-separated key derivation, meta-address encode/decode. 44 tests (32 unit + 12 e2e).
 - **Phase 14E: ZKSAR + Trust Tiers**: ZKSAR attestation verification (6 ZK proof types), diminishing-returns trust score aggregation, attestation-gated privacy tiers, privacy depth routing. 52 tests.

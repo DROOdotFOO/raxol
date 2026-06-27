@@ -12,7 +12,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   ## Usage
 
-      config = %{base_url: "https://riddler.example.com", auth_token: "..."}
+      config = %{base_url: "https://api.xochi.fi", auth: {:member, "..."}}
       wallet = MyWallet
 
       {:ok, quote} = Xochi.quote(config, %QuoteRequest{...})
@@ -21,13 +21,20 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   ## Fee Tiers
 
-  | Tier           | Score | Fee   |
-  |----------------|-------|-------|
-  | Standard       | 0-24  | 0.30% |
-  | Trusted        | 25-49 | 0.25% |
-  | Verified       | 50-74 | 0.20% |
-  | Premium        | 75-99 | 0.15% |
-  | Institutional  | 100+  | 0.10% |
+  The fee is layered: a solver spread plus gas floor (never discounted), a venue
+  fee, and a routing fee. Trust discounts carve the venue and routing layers only,
+  so the solver floor is identical at every tier. Headline totals by tier and asset:
+
+  | Tier           | Score | Stable | Volatile |
+  |----------------|-------|--------|----------|
+  | Standard       | 0-24  | 0.22%  | 0.40%    |
+  | Trusted        | 25-49 | 0.19%  | 0.35%    |
+  | Verified       | 50-74 | 0.15%  | 0.29%    |
+  | Premium        | 75-99 | 0.12%  | 0.25%    |
+  | Institutional  | 100+  | 0.10%  | 0.22%    |
+
+  A quote will carry an optional `fee_breakdown` with the per-layer split (solver,
+  venue, routing) once the worker emits it; `QuoteResponse` does not parse it yet.
 
   ## Origin-pull solver allowlist
 

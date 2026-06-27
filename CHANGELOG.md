@@ -39,7 +39,7 @@
 
 ### Added
 
-- **Phase 14B: Xochi Integration**: Xochi as default agent-facing protocol for cross-chain payments. Cash-positive with tier-based fees (0.10-0.30%). Riddler solves intents behind the scenes.
+- **Phase 14B: Xochi Integration**: Xochi as default agent-facing protocol for cross-chain payments. Cash-positive with tier-based fees (0.10-0.40%). Riddler solves intents behind the scenes.
   - `Raxol.Payments.Xochi.Client`: HTTP client for Xochi intent API (quote, execute, status, history)
   - `Raxol.Payments.Xochi.Schemas`: 5 typed structs (QuoteRequest, QuoteResponse, ExecuteRequest, ExecuteResponse, IntentStatus)
   - `Raxol.Payments.Protocols.Xochi`: full intent flow: `get_quote/2` -> `execute/3` (EIP-712 wallet signing) -> `poll_status/3`

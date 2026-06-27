@@ -5,8 +5,8 @@ defmodule Raxol.Payments.Actions.Payments do
   Exposes LLM-callable tools for explicit payment operations. These
   complement the transparent auto-pay Req plugin -- auto-pay handles
   402 flows silently, while these Actions let agents deliberately
-  inspect balances, get quotes, transfer funds, and run cross-chain
-  stealth intents through Xochi.
+  check their wallet, get quotes, transfer funds, and run cross-chain
+  stealth intents through Xochi or the Tron relay rail.
 
   ## Usage with ToolConverter
 
@@ -22,7 +22,7 @@ defmodule Raxol.Payments.Actions.Payments do
   """
 
   @actions [
-    Raxol.Payments.Actions.Payments.GetBalance,
+    Raxol.Payments.Actions.Payments.GetWalletInfo,
     Raxol.Payments.Actions.Payments.GetQuote,
     Raxol.Payments.Actions.Payments.Transfer,
     Raxol.Payments.Actions.Payments.SpendingStatus,
@@ -31,7 +31,9 @@ defmodule Raxol.Payments.Actions.Payments do
     Raxol.Payments.Actions.Payments.ListMandates,
     Raxol.Payments.Actions.Payments.RevokeMandate,
     Raxol.Payments.Actions.Payments.ExecuteXochiIntent,
-    Raxol.Payments.Actions.Payments.PollXochiStatus
+    Raxol.Payments.Actions.Payments.PollXochiStatus,
+    Raxol.Payments.Actions.Payments.ExecuteRelayTransfer,
+    Raxol.Payments.Actions.Payments.PollRelayStatus
   ]
 
   @doc "Returns all payment action modules."
