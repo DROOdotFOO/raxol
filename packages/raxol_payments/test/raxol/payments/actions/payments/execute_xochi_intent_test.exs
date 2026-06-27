@@ -81,8 +81,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
             "toAmount" => "499000",
             "xochiFee" => "1000",
             "eip712Data" => %{
-              "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-              "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+              "domain" => %{
+                "name" => "Xochi",
+                "version" => "1",
+                "chainId" => 8453
+              },
+              "types" => %{
+                "Intent" => [%{"name" => "amount", "type" => "uint256"}]
+              },
               "message" => %{"amount" => 500_000}
             }
           })
@@ -150,8 +156,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               "toAmount" => "499000",
               "xochiFee" => "1000",
               "eip712Data" => %{
-                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "domain" => %{
+                  "name" => "Xochi",
+                  "version" => "1",
+                  "chainId" => 8453
+                },
+                "types" => %{
+                  "Intent" => [%{"name" => "amount", "type" => "uint256"}]
+                },
                 "message" => %{"amount" => 500_000}
               }
             })
@@ -180,15 +192,26 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
       assert_received {:quote_body, body}
       assert body["settlement_preference"] == "stealth"
-      assert Regex.match?(~r/^0x0[23][a-f0-9]{64}$/, body["stealth_spending_pub_key"])
-      assert Regex.match?(~r/^0x0[23][a-f0-9]{64}$/, body["stealth_viewing_pub_key"])
+
+      assert Regex.match?(
+               ~r/^0x0[23][a-f0-9]{64}$/,
+               body["stealth_spending_pub_key"]
+             )
+
+      assert Regex.match?(
+               ~r/^0x0[23][a-f0-9]{64}$/,
+               body["stealth_viewing_pub_key"]
+             )
     end
 
     test "errors when stealth settlement has no recipient meta-address" do
       ctx = %{wallet: SpyWallet, xochi_config: config()}
 
       assert {:error, %Failure{reason: :stealth_keys_required}} =
-               ExecuteXochiIntent.run(base_params(%{recipient_meta_address: nil}), ctx)
+               ExecuteXochiIntent.run(
+                 base_params(%{recipient_meta_address: nil}),
+                 ctx
+               )
 
       refute_received :wallet_signed
     end
@@ -206,8 +229,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               "toAmount" => "499000",
               "xochiFee" => "1000",
               "eip712Data" => %{
-                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "domain" => %{
+                  "name" => "Xochi",
+                  "version" => "1",
+                  "chainId" => 8453
+                },
+                "types" => %{
+                  "Intent" => [%{"name" => "amount", "type" => "uint256"}]
+                },
                 "message" => %{"amount" => 500_000}
               }
             })
@@ -219,7 +248,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
             if n == 0 do
               conn
               |> Plug.Conn.put_resp_content_type("application/json")
-              |> Plug.Conn.send_resp(409, Jason.encode!(%{"error" => "quote_expired"}))
+              |> Plug.Conn.send_resp(
+                409,
+                Jason.encode!(%{"error" => "quote_expired"})
+              )
             else
               Req.Test.json(conn, %{
                 "success" => true,
@@ -261,8 +293,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               "toAmount" => "499000",
               "xochiFee" => "1000",
               "eip712Data" => %{
-                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "domain" => %{
+                  "name" => "Xochi",
+                  "version" => "1",
+                  "chainId" => 8453
+                },
+                "types" => %{
+                  "Intent" => [%{"name" => "amount", "type" => "uint256"}]
+                },
                 "message" => %{"amount" => 500_000}
               }
             })
@@ -270,7 +308,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
           "/api/intent/execute" ->
             conn
             |> Plug.Conn.put_resp_content_type("application/json")
-            |> Plug.Conn.send_resp(409, Jason.encode!(%{"error" => "quote_expired"}))
+            |> Plug.Conn.send_resp(
+              409,
+              Jason.encode!(%{"error" => "quote_expired"})
+            )
         end
       end)
 
@@ -284,7 +325,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
         agent_id: "a1"
       }
 
-      assert {:error, %Failure{}} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert {:error, %Failure{}} =
+               ExecuteXochiIntent.run(base_params(%{}), ctx)
 
       totals = Ledger.get_totals(ledger, "a1", policy())
       assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
@@ -327,7 +369,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
     test "errors when wallet is missing" do
       assert {:error, %Failure{reason: :config_error}} =
-               ExecuteXochiIntent.run(base_params(%{}), %{xochi_config: config()})
+               ExecuteXochiIntent.run(base_params(%{}), %{
+                 xochi_config: config()
+               })
     end
   end
 
@@ -343,8 +387,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               "to_amount" => "499000",
               "payment_method" => payment_method,
               "eip712" => %{
-                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "domain" => %{
+                  "name" => "Xochi",
+                  "version" => "1",
+                  "chainId" => 8453
+                },
+                "types" => %{
+                  "Intent" => [%{"name" => "amount", "type" => "uint256"}]
+                },
                 "message" => %{"amount" => 500_000}
               }
             })
@@ -373,7 +423,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     test "rejects an ERC-3009 quote for a non-USDC token before signing" do
       stub_quote_method("erc3009")
       # WETH on Base, not USDC.
-      params = base_params(%{from_token: "0x4200000000000000000000000000000000000006"})
+      params =
+        base_params(%{from_token: "0x4200000000000000000000000000000000000006"})
 
       assert {:error, %Failure{reason: :method_mismatch}} =
                ExecuteXochiIntent.run(params, method_ctx())
@@ -384,7 +435,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     test "allows an ERC-3009 quote for USDC" do
       stub_quote_method("erc3009")
 
-      assert {:ok, result} = ExecuteXochiIntent.run(base_params(%{}), method_ctx())
+      assert {:ok, result} =
+               ExecuteXochiIntent.run(base_params(%{}), method_ctx())
+
       assert result.status == "executing"
       assert_received :wallet_signed
     end
@@ -509,9 +562,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
         checkpoint: store
       }
 
-      assert {:ok, _} = ExecuteXochiIntent.run(base_params(%{amount: "0.50"}), ctx)
+      assert {:ok, _} =
+               ExecuteXochiIntent.run(base_params(%{amount: "0.50"}), ctx)
+
       assert_received :wallet_signed
-      assert {:ok, _} = ExecuteXochiIntent.run(base_params(%{amount: "0.40"}), ctx)
+
+      assert {:ok, _} =
+               ExecuteXochiIntent.run(base_params(%{amount: "0.40"}), ctx)
+
       assert_received :wallet_signed
     end
 
@@ -557,8 +615,14 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
               "toAmount" => "499000",
               "xochiFee" => "1000",
               "eip712Data" => %{
-                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "domain" => %{
+                  "name" => "Xochi",
+                  "version" => "1",
+                  "chainId" => 8453
+                },
+                "types" => %{
+                  "Intent" => [%{"name" => "amount", "type" => "uint256"}]
+                },
                 "message" => %{"amount" => 500_000}
               }
             })
@@ -566,7 +630,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
           "/api/intent/execute" ->
             conn
             |> Plug.Conn.put_resp_content_type("application/json")
-            |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "server_error"}))
+            |> Plug.Conn.send_resp(
+              500,
+              Jason.encode!(%{"error" => "server_error"})
+            )
         end
       end)
 
@@ -583,7 +650,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
         idempotency_key: "pay-1"
       }
 
-      assert {:error, %Failure{}} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+      assert {:error, %Failure{}} =
+               ExecuteXochiIntent.run(base_params(%{}), ctx)
+
       assert :error = Checkpoint.fetch(store, "pay-1")
 
       totals = Ledger.get_totals(ledger, "a1", policy())
@@ -616,7 +685,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
       ctx = %{xochi_config: config()}
 
-      assert {:error, %Failure{reason: :no_liquidity, retryable?: false} = failure} =
+      assert {:error,
+              %Failure{reason: :no_liquidity, retryable?: false} = failure} =
                PollXochiStatus.run(%{intent_id: "int_2"}, ctx)
 
       assert failure.message =~ "fill"
@@ -635,6 +705,111 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
       assert {:error, %Failure{reason: :expired, retryable?: true}} =
                PollXochiStatus.run(%{intent_id: "int_3"}, ctx)
+    end
+  end
+
+  # The Action behaviour's `call/2` validates the output against the output
+  # schema; `run/2` does not. The live Xochi gate goes through `call/2`, so these
+  # exercise the same path. Regression guard for both settlement modes: a public
+  # settlement has no stealth address (`stealth_address: nil`) and an unsettled
+  # poll has no tx hash (`tx_hash: nil`); neither nil may trip its own optional
+  # output field. The gate failed with `[stealth_address: "must be of type
+  # :string"]` because the public summary carried a nil stealth address.
+  describe "output schema via call/2 (public and stealth settlements)" do
+    defp call_ctx do
+      %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: start_supervised!({Ledger, [name: nil]}),
+        policy: policy(),
+        agent_id: "a1"
+      }
+    end
+
+    defp stub_quote(execute_json) do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_1",
+              "canSolve" => true,
+              "toAmount" => "499000",
+              "xochiFee" => "1000",
+              "eip712Data" => %{
+                "domain" => %{
+                  "name" => "Xochi",
+                  "version" => "1",
+                  "chainId" => 8453
+                },
+                "types" => %{
+                  "Intent" => [%{"name" => "amount", "type" => "uint256"}]
+                },
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/api/intent/execute" ->
+            Req.Test.json(conn, execute_json)
+        end
+      end)
+    end
+
+    test "a public cross-chain settlement passes output validation with a nil stealth address" do
+      # No stealthAddress in the execute response -> exec.stealth_address is nil,
+      # exactly the public path the live gate runs.
+      stub_quote(%{
+        "success" => true,
+        "intentId" => "int_1",
+        "status" => "executing"
+      })
+
+      params =
+        base_params(%{settlement: "public", recipient_meta_address: nil})
+
+      assert {:ok, result} = ExecuteXochiIntent.call(params, call_ctx())
+      assert result.intent_id == "int_1"
+      assert result.status == "executing"
+      assert is_nil(result.stealth_address)
+      assert_received :wallet_signed
+    end
+
+    test "a stealth settlement passes output validation with a real stealth address" do
+      stub_quote(%{
+        "success" => true,
+        "intentId" => "int_1",
+        "status" => "executing",
+        "stealthAddress" => "0xstealth"
+      })
+
+      assert {:ok, result} =
+               ExecuteXochiIntent.call(base_params(%{}), call_ctx())
+
+      assert result.intent_id == "int_1"
+      assert result.stealth_address == "0xstealth"
+      assert_received :wallet_signed
+    end
+
+    test "a completed poll with no tx hash passes output validation" do
+      # A terminal-completed status that reports neither txHash nor settlementType:
+      # both optional output fields are nil and must not trip validation.
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "intentId" => "int_1",
+          "status" => "completed",
+          "terminal" => true
+        })
+      end)
+
+      assert {:ok, result} =
+               PollXochiStatus.call(%{intent_id: "int_1"}, %{
+                 xochi_config: config()
+               })
+
+      assert result.status == "completed"
+      assert result.terminal == true
+      assert is_nil(result.tx_hash)
+      assert is_nil(result.settlement_type)
     end
   end
 end

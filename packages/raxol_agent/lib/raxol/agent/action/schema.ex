@@ -25,7 +25,8 @@ defmodule Raxol.Agent.Action.Schema do
   Returns `{:ok, validated_params}` with defaults applied,
   or `{:error, [{field, reason}]}` on failure.
   """
-  @spec validate(map(), schema()) :: {:ok, map()} | {:error, [{atom(), String.t()}]}
+  @spec validate(map(), schema()) ::
+          {:ok, map()} | {:error, [{atom(), String.t()}]}
   def validate(params, schema) when is_map(params) and is_list(schema) do
     {result, errors} =
       Enum.reduce(schema, {params, []}, fn {field, spec}, {acc, errs} ->
@@ -93,7 +94,7 @@ defmodule Raxol.Agent.Action.Schema do
     type = Keyword.get(spec, :type)
     enum_values = Keyword.get(spec, :enum)
 
-    case Map.fetch(params, field) do
+    case fetch_present(params, field) do
       {:ok, value} ->
         with :ok <- check_type(field, type, value),
              :ok <- check_enum(field, enum_values, value) do
@@ -110,6 +111,19 @@ defmodule Raxol.Agent.Action.Schema do
 
       :error ->
         {params, errors}
+    end
+  end
+
+  # A present-but-nil value is treated as absent. Optional fields therefore
+  # accept nil (there is no value to type-check), which lets an Action declare
+  # a conditional output field -- e.g. a stealth address that exists only for a
+  # stealth settlement and is nil for a public one -- without the value tripping
+  # its own output schema. A nil for a required field still reports "is required".
+  defp fetch_present(params, field) do
+    case Map.fetch(params, field) do
+      {:ok, nil} -> :error
+      {:ok, value} -> {:ok, value}
+      :error -> :error
     end
   end
 
