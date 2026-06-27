@@ -28,7 +28,10 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
         terminal: [type: :boolean],
         tx_hash: [type: :string],
         settlement_type: [type: :string],
-        settlement_speed: [type: :string]
+        settlement_speed: [type: :string],
+        note_commitment: [type: :string],
+        nullifier_hash: [type: :string],
+        l2_tx_hash: [type: :string]
       ]
     ]
 
@@ -79,7 +82,14 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
       terminal: IntentStatus.terminal?(status),
       tx_hash: status.tx_hash,
       settlement_type: status.settlement_type && to_string(status.settlement_type),
-      settlement_speed: speed(elapsed_ms, budget_ms)
+      settlement_speed: speed(elapsed_ms, budget_ms),
+      # Shielded (Aztec) settlements are note-based: the note commitment,
+      # nullifier, and L2 tx surface here at terminal status in place of an
+      # on-chain stealth address. nil for public/stealth settlements, where a
+      # present-nil is treated as absent by the output schema.
+      note_commitment: status.note_commitment,
+      nullifier_hash: status.nullifier_hash,
+      l2_tx_hash: status.l2_tx_hash
     }
   end
 
