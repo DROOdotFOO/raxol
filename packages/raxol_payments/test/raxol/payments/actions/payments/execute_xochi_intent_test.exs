@@ -685,8 +685,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
 
       ctx = %{xochi_config: config()}
 
-      assert {:error,
-              %Failure{reason: :no_liquidity, retryable?: false} = failure} =
+      assert {:error, %Failure{reason: :no_liquidity, retryable?: false} = failure} =
                PollXochiStatus.run(%{intent_id: "int_2"}, ctx)
 
       assert failure.message =~ "fill"
@@ -788,6 +787,55 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert result.intent_id == "int_1"
       assert result.stealth_address == "0xstealth"
       assert_received :wallet_signed
+    end
+
+    test "a stealth settlement that returns no stealth address fails closed" do
+      # The worker accepted a stealth request but returned no stealth address, so
+      # the funds may not be private. Reporting {:ok} here would silently defeat
+      # the privacy the caller asked for; the Action must surface an error.
+      stub_quote(%{"success" => true, "intentId" => "int_1", "status" => "executing"})
+
+      assert {:error, %Failure{reason: :stealth_address_missing, retryable?: false}} =
+               ExecuteXochiIntent.call(base_params(%{}), call_ctx())
+    end
+
+    test "an explicit nil slippage falls back to the 50 bps default, never null" do
+      # A present nil must not defeat the documented default and reach the worker
+      # as null (an unbounded-slippage downgrade).
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            {:ok, raw, conn} = Plug.Conn.read_body(conn)
+            send(self(), {:quote_body, Jason.decode!(raw)})
+
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_1",
+              "canSolve" => true,
+              "toAmount" => "499000",
+              "xochiFee" => "1000",
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/api/intent/execute" ->
+            Req.Test.json(conn, %{
+              "success" => true,
+              "intentId" => "int_1",
+              "status" => "executing",
+              "stealthAddress" => "0xstealth"
+            })
+        end
+      end)
+
+      assert {:ok, _} =
+               ExecuteXochiIntent.call(base_params(%{slippage_bps: nil}), call_ctx())
+
+      assert_received {:quote_body, body}
+      assert body["slippage_bps"] == 50
     end
 
     test "a completed poll with no tx hash passes output validation" do

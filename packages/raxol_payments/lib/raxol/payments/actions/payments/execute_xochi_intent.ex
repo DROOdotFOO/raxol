@@ -67,7 +67,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
           type: :string,
           description: "Recipient ERC-6538 stealth meta-address (st:eth:0x...)"
         ],
-        slippage_bps: [type: :integer, description: "Max slippage (default 50)"],
+        slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"],
         trust_score: [type: :integer, description: "Trust score for tier/fee"]
       ],
       output: [
@@ -115,12 +115,31 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
          :ok <- assert_method(quote, request),
          :ok <- authorize(context, config, amount),
          {:ok, exec, filled_quote} <-
-           execute(config, request, quote, wallet, context, amount, store, key) do
+           execute(config, request, quote, wallet, context, amount, store, key),
+         :ok <- assert_settlement_privacy(request, exec) do
       summary = summary(request, filled_quote, exec)
       Checkpoint.put(store, key, settled_record(summary))
       {:ok, summary}
     end
   end
+
+  # A stealth or shielded settlement must come back with the stealth address the
+  # worker derived and announced. A nil there means the funds did not land on a
+  # stealth address -- a server fallback to public, or a hostile endpoint -- so
+  # the privacy the caller asked for was not delivered. Fail closed rather than
+  # report success; the intent id rides the error so an operator can verify it.
+  # Public settlements legitimately have no stealth address.
+  defp assert_settlement_privacy(%QuoteRequest{settlement_preference: pref}, %{
+         stealth_address: address,
+         intent_id: intent_id
+       })
+       when pref in ["stealth", "shielded"] do
+    if is_binary(address) and address != "",
+      do: :ok,
+      else: {:error, {:stealth_address_missing, intent_id}}
+  end
+
+  defp assert_settlement_privacy(_request, _exec), do: :ok
 
   # An explicit key lets a caller treat two otherwise-identical payments as
   # distinct; otherwise the key is the canonical payment, so a resumed run of the
@@ -201,7 +220,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
         to_token: Map.fetch!(params, :to_token),
         from_amount: from_amount,
         settlement_preference: settlement,
-        slippage_bps: Map.get(params, :slippage_bps, 50),
+        slippage_bps: Map.get(params, :slippage_bps) || 50,
         trust_score: Map.get(params, :trust_score),
         stealth_spending_pub_key: spending_key,
         stealth_viewing_pub_key: viewing_key

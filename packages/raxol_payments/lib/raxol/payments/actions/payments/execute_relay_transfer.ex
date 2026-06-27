@@ -80,7 +80,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
           type: :string,
           description: "public | stealth | shielded (Tron is public-only)"
         ],
-        slippage_bps: [type: :integer, description: "Max slippage (default 50)"]
+        slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"]
       ],
       output: [
         transfer_id: [type: :string],
@@ -237,7 +237,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
       from_amount: from_amount,
       from_address: from_address,
       to_address: Map.fetch!(params, :to_address),
-      slippage_bps: Map.get(params, :slippage_bps, 50)
+      slippage_bps: Map.get(params, :slippage_bps) || 50
     }
 
     {:ok, request, amount, warnings}
