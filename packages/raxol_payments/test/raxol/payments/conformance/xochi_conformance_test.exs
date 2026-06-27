@@ -3,6 +3,7 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
 
   alias Raxol.Payments.EIP712
   alias Raxol.Payments.Test.ConformanceFixture
+  alias Raxol.Payments.Test.ConformanceSigner
 
   @moduletag :conformance
 
@@ -92,13 +93,15 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
         message = eip712["message"]
 
         assert {:ok, digest} = EIP712.hash(domain, types, message)
-        signature = sign_digest(digest, decode_hex!(vec["private_key"]))
-        signature_hex = "0x" <> Base.encode16(signature, case: :lower)
 
-        assert signature_hex == vec["expected_signature"],
-               "signature mismatch for #{vec["name"]}: got #{signature_hex}, expected #{vec["expected_signature"]}"
+        signature =
+          ConformanceSigner.sign_hex(digest, ConformanceSigner.decode_hex!(vec["private_key"]))
 
-        assert recover_address(digest, signature) == String.downcase(vec["expected_signer"]),
+        assert signature == vec["expected_signature"],
+               "signature mismatch for #{vec["name"]}: got #{signature}, expected #{vec["expected_signature"]}"
+
+        assert ConformanceSigner.recover_address(digest, signature) ==
+                 String.downcase(vec["expected_signer"]),
                "recovered signer mismatch for #{vec["name"]}"
       end
 
@@ -119,11 +122,12 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
       message = shielded_message("shielded")
 
       assert {:ok, digest} = EIP712.hash(@shielded_domain, @xochi_types, message)
-      signature = sign_digest(digest, decode_hex!(@canonical_key))
-      signature_hex = "0x" <> Base.encode16(signature, case: :lower)
 
-      assert signature_hex == @shielded_signature
-      assert recover_address(digest, signature) == @canonical_signer
+      signature =
+        ConformanceSigner.sign_hex(digest, ConformanceSigner.decode_hex!(@canonical_key))
+
+      assert signature == @shielded_signature
+      assert ConformanceSigner.recover_address(digest, signature) == @canonical_signer
     end
 
     test "settlementPreference is bound into the digest (public != stealth != shielded)" do
@@ -216,25 +220,4 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
       "deadline" => 1_900_000_000
     }
   end
-
-  # -- Signing / recovery (mirror production primitives) --
-
-  # Mirrors Raxol.Payments.Wallets.Env.sign_hash/2: sign the EIP-712 digest and
-  # normalize v to the on-chain-canonical 27/28. Uses the primitives directly so
-  # the test stays hermetic (no env var, async-safe).
-  defp sign_digest(digest, privkey) do
-    {:ok, signature} = ExSecp256k1.sign(digest, privkey)
-    EIP712.pack_signature(signature)
-  end
-
-  # Mirrors Raxol.Payments.Mandate signer recovery: recover the public key from
-  # the 65-byte r||s||v signature and derive the 20-byte Ethereum address.
-  defp recover_address(digest, <<r::binary-size(32), s::binary-size(32), v::8>>) do
-    {:ok, pubkey} = ExSecp256k1.recover(digest, r, s, v - 27)
-    <<_prefix::8, key_bytes::binary>> = pubkey
-    <<_first_12::binary-size(12), address_bytes::binary-size(20)>> = ExKeccak.hash_256(key_bytes)
-    "0x" <> Base.encode16(address_bytes, case: :lower)
-  end
-
-  defp decode_hex!("0x" <> hex), do: Base.decode16!(hex, case: :mixed)
 end
