@@ -124,6 +124,15 @@ defmodule Raxol.Payments.Failure do
   def from({:stealth_keys_required, _} = detail), do: stealth_keys_failure(detail)
   def from({:invalid_meta_address, _} = detail), do: stealth_keys_failure(detail)
 
+  def from({:stealth_address_missing, _} = detail),
+    do:
+      build(
+        :stealth_address_missing,
+        "The stealth settlement returned no stealth address; the payment may not be private. Verify the intent before retrying.",
+        false,
+        detail
+      )
+
   # Routing / settlement selection.
   def from({:not_xochi_route, _} = detail),
     do: build(:route_unsupported, "This transfer does not route through Xochi.", false, detail)
