@@ -240,7 +240,9 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         context: context,
         poll_context: poll_context
       } do
-        corridors = parse_corridors(System.get_env("XOCHI_LIVE_CORRIDORS", "8453>42161,42161>8453"))
+        corridors =
+          parse_corridors(System.get_env("XOCHI_LIVE_CORRIDORS", "8453>42161,42161>8453"))
+
         settlements = parse_settlements(System.get_env("XOCHI_LIVE_SETTLEMENTS", "public"))
         amount = System.get_env("XOCHI_LIVE_AMOUNT", "1.00")
         meta = System.get_env("XOCHI_LIVE_RECIPIENT_META")
