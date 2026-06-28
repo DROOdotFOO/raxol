@@ -571,6 +571,93 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       refute_received {:req, "POST", "/api/intent/execute", _h, _b}
     end
 
+    test "rejects a permit2 pull when no solver allowlist is configured (fail-closed)" do
+      # Permit2 has NO on-chain recipient guard -- the spender picks where funds go
+      # at call time -- so the pin is the only destination control and is always
+      # required. With no allowlist set, a permit2 pull is unsafe to sign.
+      pull = canonical_permit2_pull()
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_p2o",
+        quote_id: "xq_p2o",
+        can_solve: true,
+        payment_method: "permit2",
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_p2o"}
+        },
+        pull_authorization: pull
+      }
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:error, {:authorization_mismatch, :pull_spender}} =
+               Xochi.execute(config, quote_resp, RealWallet, request)
+
+      refute_received {:req, "POST", "/api/intent/execute", _h, _b}
+    end
+
+    test "rejects an erc3009 pull when pull_require_solver_pin is set and no allowlist" do
+      # ERC-3009 is bounded even unpinned (the signed `to` + on-chain msg.sender ==
+      # to), but an operator can demand a hard pin. With the flag on and no
+      # allowlist, even a well-formed pull must be rejected before any signature.
+      Application.put_env(:raxol_payments, :pull_require_solver_pin, true)
+      on_exit(fn -> Application.delete_env(:raxol_payments, :pull_require_solver_pin) end)
+
+      pull = canonical_erc3009_pull()
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_pin",
+        quote_id: "xq_pin",
+        can_solve: true,
+        payment_method: "erc3009",
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_pin"}
+        },
+        pull_authorization: pull
+      }
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:error, {:authorization_mismatch, :pull_to}} =
+               Xochi.execute(config, quote_resp, RealWallet, request)
+
+      refute_received {:req, "POST", "/api/intent/execute", _h, _b}
+    end
+
     test "rejects a pull whose envelope or expiry diverges from the claimed method" do
       config = %{
         base_url: "https://api.xochi.fi",
