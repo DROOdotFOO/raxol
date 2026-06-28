@@ -38,7 +38,18 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
   Overrides: XOCHI_LIVE_AUTH, XOCHI_LIVE_AGENT_WALLET, XOCHI_LIVE_FROM_CHAIN,
   XOCHI_LIVE_TO_CHAIN, XOCHI_LIVE_FROM_TOKEN, XOCHI_LIVE_TO_TOKEN,
-  XOCHI_LIVE_AMOUNT, XOCHI_LIVE_SETTLEMENT, XOCHI_LIVE_RECIPIENT_META.
+  XOCHI_LIVE_AMOUNT, XOCHI_LIVE_SETTLEMENT, XOCHI_LIVE_RECIPIENT_META,
+  XOCHI_LIVE_SOLVER, XOCHI_LIVE_SOLVER_PIN.
+
+  ## Solver pin
+
+  The gate enforces the origin-pull solver pin by default: the pull recipient
+  (`to` for ERC-3009, `spender` for Permit2) must equal the canonical Riddler
+  solver `0x97D447561fDe10E959E782a29411D8F89586d80b`, so a forged or MITM'd
+  quote that retargets the pull aborts before any signature. Override the pinned
+  address with `XOCHI_LIVE_SOLVER` (a solver rotation is an env change), or set
+  `XOCHI_LIVE_SOLVER_PIN=false` to disable the pin while debugging. The pin is
+  scoped to this module -- it does not change config for the rest of the suite.
 
   ## Matrix mode
 
@@ -75,12 +86,18 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
     alias Raxol.Payments.{Ledger, Mandate, SpendingPolicy}
     alias Raxol.Payments.Mandate.Store, as: MandateStore
 
+    # Riddler's universal solver (HD index-0), the address it serves as the
+    # origin-pull `to`/`spender`. The default pin; rotate via XOCHI_LIVE_SOLVER.
+    @canonical_solver "0x97D447561fDe10E959E782a29411D8F89586d80b"
+
     defmodule LiveWallet do
       @moduledoc false
       use Raxol.Payments.Wallets.Env, env_var: "XOCHI_LIVE_KEY"
     end
 
     setup do
+      pin_live_solver()
+
       url = System.fetch_env!("XOCHI_LIVE_URL")
       host = url |> URI.parse() |> Map.get(:host)
       member_token = System.get_env("XOCHI_LIVE_TOKEN", "")
@@ -109,6 +126,30 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       # Member service token even when quote/execute go through a mandate.
       {:ok, context: context, poll_context: %{context | xochi_config: poll_config}}
     end
+
+    # Enforce the origin-pull solver pin for the gate: the pull recipient/spender
+    # must equal the canonical solver, so a forged or MITM'd quote that retargets
+    # the pull aborts before any signature. Scoped here and restored on exit, so
+    # the rest of the suite keeps its own (unpinned) config. Override the address
+    # with XOCHI_LIVE_SOLVER; set XOCHI_LIVE_SOLVER_PIN=false to opt out.
+    defp pin_live_solver do
+      if System.get_env("XOCHI_LIVE_SOLVER_PIN", "true") != "false" do
+        solver = System.get_env("XOCHI_LIVE_SOLVER", @canonical_solver)
+        prior_allowlist = Application.get_env(:raxol_payments, :pull_solver_allowlist)
+        prior_require = Application.get_env(:raxol_payments, :pull_require_solver_pin)
+
+        Application.put_env(:raxol_payments, :pull_solver_allowlist, [solver])
+        Application.put_env(:raxol_payments, :pull_require_solver_pin, true)
+
+        on_exit(fn ->
+          restore_env(:pull_solver_allowlist, prior_allowlist)
+          restore_env(:pull_require_solver_pin, prior_require)
+        end)
+      end
+    end
+
+    defp restore_env(key, nil), do: Application.delete_env(:raxol_payments, key)
+    defp restore_env(key, value), do: Application.put_env(:raxol_payments, key, value)
 
     test "agent completes a crosschain payment end-to-end", %{
       context: context,

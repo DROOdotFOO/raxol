@@ -46,12 +46,20 @@
 #   # 2. Real run: submits mainnet intents and settles (needs a funded key).
 #   XOCHI_LIVE_KEY=0x<funded base key> ./examples/run_live_xochi_gate.sh
 #
+# Solver pin: the gate enforces the origin-pull solver pin by default -- the pull
+# recipient (ERC-3009 `to` / Permit2 `spender`) must equal the canonical Riddler
+# solver 0x97D447561fDe10E959E782a29411D8F89586d80b, so a forged or MITM'd quote
+# that retargets the pull aborts before signing. Override the pinned address with
+# XOCHI_LIVE_SOLVER (a solver rotation is an env change); set
+# XOCHI_LIVE_SOLVER_PIN=false to disable the pin while debugging.
+#
 # Overrides: XOCHI_LIVE_AUTH (mandate|member), XOCHI_LIVE_AGENT_WALLET,
 # XOCHI_LIVE_URL, XOCHI_LIVE_TOKEN, XOCHI_LIVE_AMOUNT (human USDC, default 1.10;
 # the solver floor is >1.00, so 1.00 or below aborts at preflight),
 # XOCHI_LIVE_FROM_CHAIN / XOCHI_LIVE_TO_CHAIN, XOCHI_LIVE_FROM_TOKEN /
-# XOCHI_LIVE_TO_TOKEN, plus XOCHI_LIVE_SETTLEMENT=stealth with
-# XOCHI_LIVE_RECIPIENT_META for the private path.
+# XOCHI_LIVE_TO_TOKEN, XOCHI_LIVE_SOLVER / XOCHI_LIVE_SOLVER_PIN for the solver
+# pin, plus XOCHI_LIVE_SETTLEMENT=stealth with XOCHI_LIVE_RECIPIENT_META for the
+# private path.
 #
 # Matrix mode (XOCHI_LIVE_MATRIX=true): settle every corridor for each settlement
 # type in one run, MOVING REAL FUNDS PER CELL. Bounded by:

@@ -525,6 +525,70 @@ defmodule Raxol.Payments.Protocols.XochiTest do
                Xochi.execute(config, quote_for.(pull_to.(attacker)), RealWallet, request)
     end
 
+    test "pins the canonical solver address the live gate uses, case-insensitively" do
+      # The live gate pins this checksummed (mixed-case) Riddler solver. The
+      # allowlist normalizes case, so a pull to the same address as the worker
+      # serves it (lowercased) passes, while any other recipient is rejected
+      # before signing -- the forged-`to` abort the gate relies on.
+      canonical = "0x97D447561fDe10E959E782a29411D8F89586d80b"
+      attacker = "0x000000000000000000000000000000000000dEaD"
+
+      Application.put_env(:raxol_payments, :pull_solver_allowlist, [canonical])
+      Application.put_env(:raxol_payments, :pull_require_solver_pin, true)
+
+      on_exit(fn ->
+        Application.delete_env(:raxol_payments, :pull_solver_allowlist)
+        Application.delete_env(:raxol_payments, :pull_require_solver_pin)
+      end)
+
+      pull_to = fn to -> canonical_erc3009_pull(%{message: %{"to" => to}}) end
+
+      quote_for = fn pull ->
+        %QuoteResponse{
+          intent_id: "xi_canon",
+          quote_id: "xq_canon",
+          can_solve: true,
+          payment_method: "erc3009",
+          eip712_data: %{
+            "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+            "primaryType" => "XochiIntent",
+            "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+            "message" => %{"intentId" => "xi_canon"}
+          },
+          pull_authorization: pull
+        }
+      end
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      # the pinned solver passes even when served lowercased
+      assert {:ok, _} =
+               Xochi.execute(
+                 config,
+                 quote_for.(pull_to.(String.downcase(canonical))),
+                 RealWallet,
+                 request
+               )
+
+      # any other recipient aborts with :pull_to
+      assert {:error, {:authorization_mismatch, :pull_to}} =
+               Xochi.execute(config, quote_for.(pull_to.(attacker)), RealWallet, request)
+    end
+
     test "binds the permit2 spender to the solver allowlist when configured" do
       Application.put_env(:raxol_payments, :pull_solver_allowlist, [
         "0x0000000000000000000000000000000000005011"
