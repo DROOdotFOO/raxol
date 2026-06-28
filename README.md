@@ -19,7 +19,7 @@ Your application is a single [TEA](https://guide.elm-lang.org/architecture/) mod
                           +---> Agent (MCP tools)
 ```
 
-The interesting part is the runtime, not the terminal.
+The interesting part is the runtime.
 
 Your app gets crash isolation per Component, hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured Component trees instead of scraping pixels.
 
@@ -71,46 +71,6 @@ Or generate a new project:
 mix raxol.new my_app
 ```
 
-## Hello World
-
-```elixir
-defmodule Counter do
-  use Raxol.Core.Runtime.Application
-
-  def init(_ctx), do: %{count: 0}
-
-  def update(:inc, model), do: {%{model | count: model.count + 1}, []}
-  def update(:dec, model), do: {%{model | count: model.count - 1}, []}
-  def update(_, model), do: {model, []}
-
-  def view(model) do
-    column style: %{padding: 1, gap: 1} do
-      [
-        text("Count: #{model.count}", style: [:bold]),
-        row style: %{gap: 1} do
-          [button("+", on_click: :inc), button("-", on_click: :dec)]
-        end
-      ]
-    end
-  end
-
-  def subscribe(_model), do: []
-end
-```
-
-That module runs three ways without changes:
-
-```bash
-# Terminal
-mix run examples/getting_started/counter.exs
-
-# LiveView (mount in your Phoenix app)
-# live "/counter", Raxol.LiveView.TEALive, app: Counter
-
-# MCP (an agent clicks the "+" button)
-# session |> click("+") |> assert_component("Count: 1")
-```
-
 The GUI-vs-TUI debate is a rendering argument. Whether your app can be consumed by agents at the same time is a runtime problem, and that's what raxol solves.
 
 ## Agents that can pay
@@ -147,7 +107,7 @@ end
 Raxol.Agent.Turn.run(MyAgent, prompt, backend: backend, log: log, conversation_id: "issue-9")
 ```
 
-`raxol_gateway` reaches chat platforms through one adapter contract: process-per-chat sessions keyed `agent:main:{platform}:{chat_type}:{chat_id}`, DM pairing for authorization, four delivery modes, and `/handoff` that moves a conversation to another platform with its history intact.
+`raxol_gateway` allows your agent to reach multiple chat platforms through one adapter contract: process-per-chat sessions keyed `agent:main:{platform}:{chat_type}:{chat_id}`, DM pairing for authorization, four delivery modes, and `/handoff` that moves a conversation to another platform with its history intact.
 
 ## Agent surface (MCP)
 
