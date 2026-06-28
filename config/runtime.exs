@@ -10,6 +10,25 @@ if config_env() == :prod do
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
     ssl: true
 
+  # Xochi origin-pull solver pin (#333). Pin the solver collection address the
+  # agent will sign pulls to, so a forged/MITM'd quote cannot redirect funds.
+  # These must equal Riddler's canonical per-chain solver addresses (the
+  # HD-derived submitter; see Riddler Xochi.Config.solver_address/1). Permit2 is
+  # fail-closed regardless; set XOCHI_PULL_REQUIRE_SOLVER_PIN=true to hard-pin
+  # ERC-3009 too once the allowlist below is populated.
+  config :raxol_payments,
+    pull_solver_allowlist:
+      [
+        "XOCHI_SOLVER_ETH",
+        "XOCHI_SOLVER_BASE",
+        "XOCHI_SOLVER_ARBITRUM",
+        "XOCHI_SOLVER_OPTIMISM"
+      ]
+      |> Enum.map(&System.get_env/1)
+      |> Enum.reject(&(is_nil(&1) or &1 == "")),
+    pull_require_solver_pin:
+      System.get_env("XOCHI_PULL_REQUIRE_SOLVER_PIN", "false") == "true"
+
   # Configure terminal settings from environment
   config :raxol, :terminal,
     default_width: String.to_integer(System.get_env("TERMINAL_WIDTH") || "80"),

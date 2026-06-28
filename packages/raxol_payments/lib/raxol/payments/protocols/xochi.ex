@@ -268,10 +268,10 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   # ERC-3009 ReceiveWithAuthorization: token is the EIP-712 verifyingContract,
   # `from` is the signer, `value` the pulled amount, `validBefore` the expiry.
-  # The recipient (`to`) is the solver collection address; it is only bound when
-  # the operator has pinned a solver allowlist (`solver_allowed?/1` is fail-open
-  # by default). ERC-3009's `msg.sender == to` plus the value cap keep the
-  # unbound `to` bounded. See GitHub #333.
+  # The recipient (`to`) is the solver collection address; it is enforced against
+  # the pinned allowlist when one is configured, and against a hard pin when
+  # `:pull_require_solver_pin` is set. With neither, an unpinned `to` is left
+  # bounded by ERC-3009's `msg.sender == to` plus the value cap. See GitHub #333.
   defp validate_erc3009_pull(pull, request, signer) do
     domain = pull["domain"] || %{}
     message = pull["message"] || %{}
@@ -282,16 +282,18 @@ defmodule Raxol.Payments.Protocols.Xochi do
       {:pull_token, addr_match?(domain["verifyingContract"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
       {:pull_value, int_within?(message["value"], request.from_amount)},
-      {:pull_to, solver_allowed?(message["to"])},
+      {:pull_to, solver_allowed?(message["to"], :erc3009)},
       {:pull_expiry, valid_window?(message["validBefore"])}
     ])
   end
 
   # Permit2 PermitWitnessTransferFrom: token + amount live under `permitted`,
   # the owner is recovered from the signature (the agent's own wallet), and
-  # `deadline` bounds validity. The `spender` is the solver; bound only when the
-  # operator pins a solver allowlist (fail-open by default). The `OriginPullWitness`
-  # ties the permit to one intent on-chain. See GitHub #333.
+  # `deadline` bounds validity. The `spender` is the solver. Unlike ERC-3009 there
+  # is no on-chain recipient guard -- the spender chooses where funds go -- so the
+  # spender pin is ALWAYS required (fail-closed): with no allowlist configured a
+  # permit2 pull is rejected before signing. The `OriginPullWitness` ties the
+  # permit to one intent on-chain. See GitHub #333.
   defp validate_permit2_pull(pull, request) do
     domain = pull["domain"] || %{}
     message = pull["message"] || %{}
@@ -302,7 +304,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
       {:pull_token, addr_match?(permitted["token"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
       {:pull_value, int_within?(permitted["amount"], request.from_amount)},
-      {:pull_spender, solver_allowed?(message["spender"])},
+      {:pull_spender, solver_allowed?(message["spender"], :permit2)},
       {:pull_expiry, valid_window?(message["deadline"])}
     ])
   end
@@ -336,19 +338,30 @@ defmodule Raxol.Payments.Protocols.Xochi do
     end
   end
 
-  # The origin-pull recipient/spender is the solver's collection address. There
-  # is no client-facing solver manifest, and solver addresses rotate, so a pinned
-  # allowlist is opt-in: when the operator configures
-  # `config :raxol_payments, :pull_solver_allowlist, ["0x..."]`, the pull `to`/
-  # `spender` must be in it; when unset (the default), the address is not bound
-  # and any solver is accepted. When Xochi serves a verifiable/attested solver
-  # set in the quote, this resolver is the seam to prefer it over static config.
-  defp solver_allowed?(addr) do
+  # The origin-pull recipient/spender is the solver's collection address.
+  # Configure the pin with
+  # `config :raxol_payments, :pull_solver_allowlist, ["0x..."]`; when set, the
+  # pull `to`/`spender` must be in it for both methods.
+  #
+  # Defaults when no allowlist is configured differ by method, because their
+  # on-chain guarantees differ: ERC-3009 binds `to` in the signed digest and the
+  # token enforces `msg.sender == to`, so an unpinned `to` stays bounded (funds can
+  # only reach the signed address) -- accepted unless `:pull_require_solver_pin` is
+  # set. Permit2 has NO on-chain recipient guard (the spender picks the recipient
+  # at call time), so the pin is the only destination control and is always
+  # required -- an unpinned permit2 pull is rejected (fail-closed).
+  #
+  # When Xochi serves a verifiable/attested solver set in the quote, this resolver
+  # is the seam to prefer it over static config. See GitHub #333.
+  defp solver_allowed?(addr, method) do
     case solver_allowlist() do
-      [] -> true
+      [] -> method == :erc3009 and not require_solver_pin?()
       list -> is_binary(addr) and normalize_address(addr) in list
     end
   end
+
+  defp require_solver_pin?,
+    do: Application.get_env(:raxol_payments, :pull_require_solver_pin, false)
 
   defp solver_allowlist do
     :raxol_payments
