@@ -379,8 +379,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       [live_xochi:#{label}] settled in #{elapsed}ms
         intent_id     #{intent.intent_id}
         status        #{status.status}
-        source tx     #{tx_line(status.tx_hash, params.from_chain_id)}
-        receiving tx  #{tx_line(status.receiving_tx_hash, params.to_chain_id)}\
+        fill tx       #{tx_line(Map.get(status, :tx_hash), params.to_chain_id)}
+        receiving tx  #{tx_line(Map.get(status, :receiving_tx_hash), params.to_chain_id)}\
       """)
     end
 
