@@ -440,9 +440,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
           else: params
       end
 
-      # Resolve a token symbol to its contract through the canonical Assets
-      # registry, so the matrix never re-hardcodes addresses and a missing entry
-      # fails loudly here instead of mis-scaling the amount on the wire.
+      # Resolve a token symbol to its contract via Assets. An unknown token
+      # raises here rather than mis-scaling the amount on the wire.
       defp token_for(chain, symbol) do
         case Assets.address(chain, symbol) do
           {:ok, address} ->

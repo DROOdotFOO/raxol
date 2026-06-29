@@ -54,7 +54,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   alias Raxol.Payments.Poll
   alias Raxol.Payments.Xochi.Client
-  alias Raxol.Payments.Xochi.Schemas.{QuoteRequest, QuoteResponse, ExecuteRequest, IntentStatus}
+  alias Raxol.Payments.Xochi.Schemas.{ExecuteRequest, IntentStatus, QuoteRequest, QuoteResponse}
 
   # -- Protocol behaviour (stubs -- Xochi is not a 402 protocol) --
 

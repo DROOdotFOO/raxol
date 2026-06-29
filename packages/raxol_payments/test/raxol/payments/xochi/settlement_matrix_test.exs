@@ -52,11 +52,10 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
 
   @pubkey_re ~r/^0x0[23][a-f0-9]{64}$/
 
-  # The solver-fillable tokens and the atomic from_amount each must produce for a
-  # 0.50 human amount. An 18-decimal WETH yields a different on-the-wire amount
-  # than a 6-decimal stablecoin; an unregistered token would silently default to
-  # 6 decimals and mis-scale by 10**12. These values are pinned independently of
-  # Assets so a decimals regression fails here.
+  # The atomic from_amount each fillable token must produce for a 0.50 human
+  # amount. An 18-decimal WETH yields a different on-the-wire amount than a
+  # 6-decimal stablecoin. Pinned independently of Assets to catch a decimals
+  # regression.
   @token_atomic %{
     "USDC" => "500000",
     "USDT" => "500000",

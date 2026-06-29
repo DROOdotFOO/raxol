@@ -3,11 +3,11 @@ defmodule Raxol.Payments.AssetsTest do
 
   alias Raxol.Payments.Assets
 
-  # The Riddler solver fills USDC, USDT, and WETH on all five canonical EVM
-  # chains. Each must be an explicit Assets entry: an unregistered token silently
-  # resolves to 6 decimals, which mis-scales an 18-decimal asset by 10**12. This
-  # pins the set so a dropped or wrong-decimal entry fails here, not in a funded
-  # live run. Addresses mirror Riddler's config/token_registry.ex (lowercased).
+  # The Riddler solver fills USDC, USDT, and WETH on all five EVM chains. Each
+  # must be a registered Assets entry: an unregistered token falls back to 6
+  # decimals, wrong for an 18-decimal token like WETH. This fixture pins the set
+  # so a dropped or wrong-decimal entry fails here. Addresses mirror Riddler's
+  # config/token_registry.ex (lowercased).
   @solver_fillable [
     # Ethereum mainnet
     {1, "USDC", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", 6},
