@@ -62,12 +62,15 @@
 # private path.
 #
 # Matrix mode (XOCHI_LIVE_MATRIX=true): settle every corridor x token x settlement
-# type in one run, MOVING REAL FUNDS PER CELL. Bounded by:
-#   XOCHI_LIVE_CORRIDORS    "from>to,from>to" chain ids (default 8453>42161,42161>8453)
-#   XOCHI_LIVE_TOKENS       "USDC,USDT,WETH" (default USDC)
-#   XOCHI_LIVE_SETTLEMENTS  "public,stealth" (default public; stealth needs META)
-#   XOCHI_LIVE_AMOUNT       per-cell stablecoin amount (default 1.10)
-#   XOCHI_LIVE_WETH_AMOUNT  per-cell WETH amount (default 0.001; 18-decimal token)
+# type in one run, MOVING REAL FUNDS PER CELL. A read-only per-cell preflight runs
+# first (quote every cell, assert can_solve + the pinned solver); it aborts before
+# any funds move if a cell fails, and is all that runs under DRY_RUN. Bounded by:
+#   XOCHI_LIVE_CORRIDORS         "from>to,from>to" chain ids (default 8453>42161,42161>8453)
+#   XOCHI_LIVE_TOKENS            "USDC,USDT,WETH" (default USDC)
+#   XOCHI_LIVE_SETTLEMENTS       "public,stealth" (default public; stealth needs META)
+#   XOCHI_LIVE_AMOUNT            per-cell stablecoin amount (default 1.10)
+#   XOCHI_LIVE_WETH_AMOUNT       per-cell WETH amount (default 0.001; 18-decimal token)
+#   XOCHI_LIVE_ALLOW_ETH_ORIGIN  set true to settle Ethereum-origin cells (default: quote-only)
 # Tokens resolve per chain via Raxol.Payments.Assets across the five EVM chains
 # (1, 10, 137, 8453, 42161). USDC pulls via ERC-3009; USDT/WETH via Permit2, which
 # needs a standing Permit2 allowance on each origin chain. Example:
@@ -144,16 +147,12 @@ fi
 
 printf 'preflight ok: can_solve=true at %s USDC.\n' "$XOCHI_LIVE_AMOUNT" >&2
 
-if [[ -n "${DRY_RUN:-}" ]]; then
-  printf 'DRY_RUN set: auth + fill confirmed, NO funds moved.\n' >&2
-  printf 're-run without DRY_RUN to submit the real mainnet intents.\n' >&2
-  exit 0
-fi
-
 export XOCHI_LIVE_URL XOCHI_LIVE_TOKEN XOCHI_LIVE_KEY XOCHI_LIVE_AMOUNT \
   XOCHI_LIVE_FROM_CHAIN XOCHI_LIVE_TO_CHAIN XOCHI_LIVE_FROM_TOKEN XOCHI_LIVE_TO_TOKEN \
   XOCHI_LIVE_AUTH
 
+# Matrix mode runs its own per-cell preflight + DRY_RUN, so branch before the
+# single-corridor DRY_RUN exit below.
 if [[ "$XOCHI_LIVE_MATRIX" == "true" ]]; then
   export XOCHI_LIVE_MATRIX XOCHI_LIVE_CORRIDORS XOCHI_LIVE_TOKENS XOCHI_LIVE_SETTLEMENTS
   if [[ -n "${XOCHI_LIVE_RECIPIENT_META:-}" ]]; then
@@ -162,10 +161,37 @@ if [[ "$XOCHI_LIVE_MATRIX" == "true" ]]; then
   if [[ -n "${XOCHI_LIVE_WETH_AMOUNT:-}" ]]; then
     export XOCHI_LIVE_WETH_AMOUNT
   fi
+  if [[ -n "${XOCHI_LIVE_ALLOW_ETH_ORIGIN:-}" ]]; then
+    export XOCHI_LIVE_ALLOW_ETH_ORIGIN
+  fi
+
+  # Per-cell preflight: quote every corridor x token read-only and assert
+  # can_solve + the pinned origin-pull solver. Catches a dead corridor,
+  # unpriceable amount, or rotated solver before any funds move.
+  printf 'matrix preflight: quoting [%s] x [%s] read-only (no funds move)...\n' \
+    "$XOCHI_LIVE_CORRIDORS" "$XOCHI_LIVE_TOKENS" >&2
+  if ! env MIX_ENV=test mix test --only live_xochi_preflight \
+      test/raxol/payments/xochi/live_xochi_test.exs; then
+    printf 'matrix preflight FAILED: a cell cannot solve or the solver pin mismatched.\n' >&2
+    printf 'No funds moved. Narrow XOCHI_LIVE_CORRIDORS / XOCHI_LIVE_TOKENS or fix the cell.\n' >&2
+    exit 1
+  fi
+
+  if [[ -n "${DRY_RUN:-}" ]]; then
+    printf 'DRY_RUN set: matrix preflight passed for every cell, NO funds moved.\n' >&2
+    exit 0
+  fi
+
   printf 'matrix mode: settling [%s] x [%s] x [%s] (REAL funds)...\n' \
     "$XOCHI_LIVE_CORRIDORS" "$XOCHI_LIVE_TOKENS" "$XOCHI_LIVE_SETTLEMENTS" >&2
   exec env MIX_ENV=test mix test --only live_xochi_matrix \
     test/raxol/payments/xochi/live_xochi_test.exs
+fi
+
+if [[ -n "${DRY_RUN:-}" ]]; then
+  printf 'DRY_RUN set: auth + fill confirmed, NO funds moved.\n' >&2
+  printf 're-run without DRY_RUN to submit the real mainnet intents.\n' >&2
+  exit 0
 fi
 
 printf 'running the gate: this submits REAL mainnet intents and settles ~%s USDC per case...\n' \

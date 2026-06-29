@@ -182,6 +182,24 @@ defmodule Raxol.Payments.Protocols.Xochi do
     end
   end
 
+  @doc """
+  Validate the served origin-pull authorization against the intended transfer
+  WITHOUT signing or executing -- the read-only counterpart of the check
+  `execute/4` runs before it signs.
+
+  Returns `:ok` when the quote's `pull_authorization` binds to `request` (signer,
+  token, chain, value, envelope type, expiry) and its `to`/`spender` satisfies the
+  configured solver pin, or `{:error, {:authorization_mismatch, field}}` otherwise.
+  A quote with no pull authorization is `:ok` -- there is nothing to pull. Lets a
+  preflight reject a forged or rotated-solver quote across every corridor before
+  any funded run, with no funds moved.
+  """
+  @spec validate_pull(QuoteResponse.t(), QuoteRequest.t(), module()) ::
+          :ok | {:error, term()}
+  def validate_pull(%QuoteResponse{} = quote_resp, %QuoteRequest{} = request, wallet) do
+    validate_pull_authorization(quote_resp, request, wallet)
+  end
+
   # -- Private --
 
   defp validate_quote(%QuoteResponse{can_solve: false, error: err}) do

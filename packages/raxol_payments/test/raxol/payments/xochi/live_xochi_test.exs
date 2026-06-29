@@ -70,6 +70,13 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
     solver's >1 USDC floor).
   - `XOCHI_LIVE_WETH_AMOUNT` -- per-cell WETH amount (default `0.001`); WETH is
     18-decimal and worth thousands per unit, so it is sized separately.
+  - `XOCHI_LIVE_ALLOW_ETH_ORIGIN` -- set to `true` to settle Ethereum-origin
+    (chain 1) cells; by default they are skipped (quote-only) for L1 gas cost.
+
+  A companion `:live_xochi_preflight` test quotes every corridor x token
+  read-only (no funds) and asserts `can_solve` plus the pinned origin-pull
+  solver, so a bad corridor, unpriceable amount, or rotated solver is caught
+  before any funded run. `examples/run_live_xochi_gate.sh` runs it first.
 
   Run only the matrix:
 
@@ -93,6 +100,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
     alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
     alias Raxol.Payments.{Assets, Ledger, Mandate, SpendingPolicy}
     alias Raxol.Payments.Mandate.Store, as: MandateStore
+    alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
+    alias Raxol.Payments.Xochi.Schemas.QuoteRequest
 
     # Riddler's universal solver (HD index-0), the address it serves as the
     # origin-pull `to`/`spender`. The default pin; rotate via XOCHI_LIVE_SOLVER.
@@ -264,27 +273,137 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         )
 
         for {from, to, token, settlement} <- cells do
-          if settlement == "stealth" and is_nil(meta),
-            do: flunk("stealth cell #{from}->#{to} #{token} needs XOCHI_LIVE_RECIPIENT_META")
-
-          amount = amount_for(token, stable_amount)
-          params = matrix_params(from, to, token, settlement, amount, meta)
           label = "#{from}->#{to}:#{token}:#{settlement}"
-          started = System.monotonic_time(:millisecond)
 
-          assert {:ok, intent} = ExecuteXochiIntent.call(params, context),
-                 "execute failed for #{label}"
+          cond do
+            settlement == "stealth" and is_nil(meta) ->
+              flunk("stealth cell #{label} needs XOCHI_LIVE_RECIPIENT_META")
 
-          assert {:ok, status} =
-                   PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context)
+            # Ethereum-origin settlement burns real L1 gas and has no confirmed
+            # instant-settlement inventory; keep it quote-only unless opted in.
+            from == 1 and System.get_env("XOCHI_LIVE_ALLOW_ETH_ORIGIN") != "true" ->
+              IO.puts(
+                "[live_xochi:matrix] SKIP #{label}: Ethereum origin is quote-only " <>
+                  "(set XOCHI_LIVE_ALLOW_ETH_ORIGIN=true to settle from L1)"
+              )
 
-          assert status.terminal == true
+            true ->
+              amount = amount_for(token, stable_amount)
+              params = matrix_params(from, to, token, settlement, amount, meta)
+              started = System.monotonic_time(:millisecond)
 
-          assert status.status == "completed",
-                 "#{label} (#{intent.intent_id}) ended #{status.status}"
+              assert {:ok, intent} = ExecuteXochiIntent.call(params, context),
+                     "execute failed for #{label}"
 
-          report_settlement(label, intent, status, params, started)
+              assert {:ok, status} =
+                       PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context)
+
+              assert status.terminal == true
+
+              assert status.status == "completed",
+                     "#{label} (#{intent.intent_id}) ended #{status.status}"
+
+              report_settlement(label, intent, status, params, started)
+          end
         end
+      end
+
+      @tag :live_xochi_preflight
+      test "every configured corridor x token quotes can_solve and serves the pinned solver", %{
+        context: context
+      } do
+        corridors =
+          parse_corridors(System.get_env("XOCHI_LIVE_CORRIDORS", "8453>42161,42161>8453"))
+
+        tokens = parse_list(System.get_env("XOCHI_LIVE_TOKENS", "USDC"))
+        stable_amount = System.get_env("XOCHI_LIVE_AMOUNT", "1.10")
+        cells = for {from, to} <- corridors, token <- tokens, do: {from, to, token}
+
+        IO.puts(
+          "[live_xochi:preflight] checking #{length(cells)} cells read-only (NO funds move)"
+        )
+
+        results =
+          Enum.map(cells, fn {from, to, token} ->
+            outcome = preflight_cell(context, from, to, token, amount_for(token, stable_amount))
+            report_preflight(from, to, token, outcome)
+            {{from, to, token}, outcome}
+          end)
+
+        failures = for {cell, {:error, reason}} <- results, do: {cell, reason}
+
+        assert failures == [],
+               "preflight failed for #{length(failures)} cell(s), no funds moved: #{inspect(failures)}"
+      end
+
+      # Quote one corridor x token read-only and confirm the solver can fill it and
+      # serves the pinned origin-pull recipient/spender. No spend gate, no signature,
+      # no execute -- nothing moves. Public settlement is enough: can_solve and the
+      # pull pin are independent of the settlement privacy.
+      defp preflight_cell(context, from, to, token, amount) do
+        config = context.xochi_config
+        wallet = context.wallet
+
+        with {:ok, request} <- preflight_request(wallet, from, to, token, amount),
+             {:ok, quote} <- XochiProtocol.get_quote(config, request),
+             :ok <- preflight_can_solve(quote),
+             :ok <- XochiProtocol.validate_pull(quote, request, wallet) do
+          {:ok, %{method: quote.payment_method, to_amount: quote.to_amount, fee: quote.xochi_fee}}
+        end
+      end
+
+      defp preflight_request(wallet, from, to, token, amount) do
+        with {:ok, from_token} <- Assets.address(from, token),
+             {:ok, to_token} <- Assets.address(to, token) do
+          decimals = Assets.decimals(from, from_token)
+          from_amount = Integer.to_string(Assets.to_atomic(Decimal.new(amount), decimals))
+
+          {:ok,
+           %QuoteRequest{
+             wallet: wallet.address(),
+             from_chain_id: from,
+             to_chain_id: to,
+             from_token: from_token,
+             to_token: to_token,
+             from_amount: from_amount,
+             settlement_preference: "public",
+             slippage_bps: 50
+           }}
+        else
+          :error -> {:error, {:unknown_token, token}}
+        end
+      end
+
+      defp preflight_can_solve(%{can_solve: true}), do: :ok
+      defp preflight_can_solve(%{error: err}), do: {:error, {:cannot_solve, err}}
+
+      defp report_preflight(from, to, token, {:ok, info}) do
+        IO.puts(
+          "  PASS #{from}->#{to} #{token} via #{info.method || "?"}" <>
+            " (to_amount #{info.to_amount}, fee #{info.fee})" <>
+            preflight_notes(from, info.method)
+        )
+      end
+
+      defp report_preflight(from, to, token, {:error, reason}) do
+        IO.puts("  FAIL #{from}->#{to} #{token}: #{inspect(reason)}")
+      end
+
+      # Per-cell operator notes that are not failures: an L1 origin costs real gas,
+      # and a Permit2 pull (USDT/WETH) needs a standing allowance the gate does not
+      # set, so a first run on a fresh wallet would revert the pull on-chain.
+      defp preflight_notes(from, method) do
+        l1 =
+          if from == 1,
+            do: " [eth-origin: L1 gas; quote-only unless XOCHI_LIVE_ALLOW_ETH_ORIGIN=true]",
+            else: ""
+
+        permit2 =
+          if method == "permit2",
+            do: " [permit2: needs a standing Permit2 allowance on chain #{from}]",
+            else: ""
+
+        l1 <> permit2
       end
 
       defp parse_corridors(spec) do
