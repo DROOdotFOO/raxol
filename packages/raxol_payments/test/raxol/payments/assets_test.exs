@@ -50,7 +50,7 @@ defmodule Raxol.Payments.AssetsTest do
     test "known?/2 is false for an unregistered contract (the silent-default trap)" do
       bogus = "0x" <> String.duplicate("ab", 20)
       refute Assets.known?(137, bogus)
-      # It still resolves to the 6-decimal default -- exactly why known?/2 exists.
+      # Decimals still falls back to 6; known?/2 reports it as unregistered.
       assert Assets.decimals(137, bogus) == 6
     end
 
@@ -70,6 +70,28 @@ defmodule Raxol.Payments.AssetsTest do
 
     test "symbols/0 is exactly the solver-fillable set" do
       assert Enum.sort(Assets.symbols()) == ["USDC", "USDT", "WETH"]
+    end
+
+    test "symbol_for/2 resolves every fillable (chain, address) back to its symbol" do
+      for {chain, symbol, address, _decimals} <- @solver_fillable do
+        assert Assets.symbol_for(chain, address) == symbol,
+               "#{address} on chain #{chain} did not resolve back to #{symbol}"
+      end
+    end
+
+    test "symbol_for/2 is the inverse of address/2 and case-insensitive" do
+      assert Assets.symbol_for(8453, "0x833589FCD6EDB6E08F4C7C32D4F71B54BDA02913") == "USDC"
+
+      assert Assets.symbol_for("eip155:42161", "0xaf88d065e77c8cc2239327c5edb3a432268e5831") ==
+               "USDC"
+    end
+
+    test "symbol_for/2 returns nil for an unregistered or cross-chain pair" do
+      # Base USDC address, but queried on Arbitrum: not the same token there.
+      assert Assets.symbol_for(42_161, "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913") == nil
+      assert Assets.symbol_for(8453, "0x" <> String.duplicate("ab", 20)) == nil
+      assert Assets.symbol_for(8453, nil) == nil
+      assert Assets.symbol_for(nil, "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913") == nil
     end
   end
 

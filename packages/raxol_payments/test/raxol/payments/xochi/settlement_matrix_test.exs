@@ -99,13 +99,17 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
       case conn.request_path do
         "/api/intent/quote" ->
           {:ok, raw, conn} = Plug.Conn.read_body(conn)
-          send(self(), {:quote_body, Jason.decode!(raw)})
+          body = Jason.decode!(raw)
+          send(self(), {:quote_body, body})
 
           Req.Test.json(conn, %{
             "intentId" => "int_1",
             "quoteId" => "q_1",
             "canSolve" => true,
-            "toAmount" => "499000",
+            # Par delivery for a same-asset corridor: echo the atomic from_amount
+            # so the delivery floor is satisfied for any token decimals (a fixed
+            # 6-decimal value is a 99.9999% haircut for an 18-decimal WETH send).
+            "toAmount" => body["from_amount"],
             "xochiFee" => "1000",
             "eip712Data" => %{
               "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},

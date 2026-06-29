@@ -1018,4 +1018,43 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       "message" => message
     }
   end
+
+  describe "origin_pull_fail_open?/2" do
+    test "an empty allowlist with the pin not required is fail-open" do
+      assert Xochi.origin_pull_fail_open?([], false)
+      assert Xochi.origin_pull_fail_open?(nil, false)
+      # Blank/non-binary entries normalize away to an empty list.
+      assert Xochi.origin_pull_fail_open?(["", "  "], false)
+      assert Xochi.origin_pull_fail_open?([nil, 123], false)
+    end
+
+    test "an empty allowlist with the pin required is fail-closed (not fail-open)" do
+      refute Xochi.origin_pull_fail_open?([], true)
+    end
+
+    test "a populated allowlist is never fail-open, pin required or not" do
+      refute Xochi.origin_pull_fail_open?(["0x97D447561fDe10E959E782a29411D8F89586d80b"], false)
+      refute Xochi.origin_pull_fail_open?(["0x97D447561fDe10E959E782a29411D8F89586d80b"], true)
+    end
+  end
+
+  describe "assert_origin_pull_pinned!/2" do
+    test "raises when fail-open" do
+      assert_raise ArgumentError, ~r/solver pin is not configured/, fn ->
+        Xochi.assert_origin_pull_pinned!([], false)
+      end
+    end
+
+    test "returns :ok when the pin is required, even with an empty allowlist" do
+      assert :ok = Xochi.assert_origin_pull_pinned!([], true)
+    end
+
+    test "returns :ok when the allowlist is populated" do
+      assert :ok =
+               Xochi.assert_origin_pull_pinned!(
+                 ["0x97D447561fDe10E959E782a29411D8F89586d80b"],
+                 false
+               )
+    end
+  end
 end

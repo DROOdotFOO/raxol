@@ -34,6 +34,7 @@ defmodule Raxol.Payments.Failure do
           | :insufficient_balance
           | :route_unsupported
           | :slippage
+          | :delivery_below_floor
           | :rejected
           | :stealth_keys_required
           | :sign_failed
@@ -177,6 +178,18 @@ defmodule Raxol.Payments.Failure do
       build(
         :rejected,
         "The quote's signable authorization did not match the requested transfer; refusing to sign.",
+        false,
+        detail
+      )
+
+  # The quote delivers less than the agent's floor (an explicit min_to_amount or
+  # the same-asset delivery floor). Refuse to sign rather than overpay into a
+  # punitive or hostile quote.
+  def from({:delivery_below_floor, _} = detail),
+    do:
+      build(
+        :delivery_below_floor,
+        "The quote delivers less than the minimum acceptable amount; refusing to sign.",
         false,
         detail
       )

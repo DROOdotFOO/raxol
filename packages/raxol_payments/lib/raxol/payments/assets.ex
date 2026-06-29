@@ -114,11 +114,9 @@ defmodule Raxol.Payments.Assets do
     "WETH" => 18
   }
 
-  # Canonical solver-fillable EVM tokens: symbol -> chain id -> lowercase address.
-  # Mirrors Riddler's config/token_registry.ex for the five supported EVM chains
-  # (Ethereum, Optimism, Polygon, Base, Arbitrum). Decimals for these live in
-  # `@addresses`; `assets_test.exs` pins both maps against one golden fixture so
-  # they cannot drift apart.
+  # Solver-fillable EVM tokens: symbol -> chain id -> lowercase address. Mirrors
+  # Riddler's config/token_registry.ex for the five supported EVM chains
+  # (Ethereum, Optimism, Polygon, Base, Arbitrum). Decimals live in `@addresses`.
   @evm_tokens %{
     "USDC" => %{
       1 => "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -142,6 +140,21 @@ defmodule Raxol.Payments.Assets do
       42_161 => "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
     }
   }
+
+  # Reverse of @evm_tokens: chain id -> %{lowercase address -> symbol}. Lets a
+  # served (chain, token) be classified back to its symbol, e.g. to detect a
+  # same-asset corridor (same token both sides) before sizing a delivery floor.
+  @symbol_by_address (for {symbol, by_chain} <- @evm_tokens,
+                          {chain, address} <- by_chain,
+                          reduce: %{} do
+                        acc ->
+                          Map.update(
+                            acc,
+                            chain,
+                            %{address => symbol},
+                            &Map.put(&1, address, symbol)
+                          )
+                      end)
 
   @doc """
   Look up decimals by chain id and ERC-20 contract address.
@@ -177,14 +190,11 @@ defmodule Raxol.Payments.Assets do
   def usdc?(_chain, _address), do: false
 
   @doc """
-  True when `(chain_id, address)` is an explicitly registered contract, i.e.
-  `decimals/2` returns a pinned value rather than the `@default_decimals`
-  fallback.
-
-  Use this to assert a solver-fillable token is known before sizing an amount:
-  an unregistered token silently resolves to 6 decimals, which mis-scales an
-  18-decimal asset like WETH by 10**12. Case-insensitive; accepts an integer
-  chain id or a CAIP-2 string. EVM only.
+  True when `(chain_id, address)` is a registered contract, i.e. `decimals/2`
+  returns a pinned value rather than the `@default_decimals` fallback. An
+  unregistered token resolves to 6 decimals, which is wrong for an 18-decimal
+  token like WETH. Case-insensitive; accepts an integer chain id or a CAIP-2
+  string. EVM only.
   """
   @spec known?(integer() | String.t() | nil, String.t() | nil) :: boolean()
   def known?(chain_id, address) when is_binary(address) and address != "" do
@@ -200,7 +210,7 @@ defmodule Raxol.Payments.Assets do
   Covers the solver-fillable set (USDC, USDT, WETH) across the five supported
   EVM chains (1, 10, 137, 8453, 42161). The symbol is case-insensitive; the
   chain id accepts an integer or a CAIP-2 string. Returns `:error` for an
-  unknown `(chain, symbol)` pair so callers fail loudly rather than guess.
+  unknown `(chain, symbol)` pair.
   """
   @spec address(integer() | String.t() | nil, String.t() | nil) ::
           {:ok, String.t()} | :error
@@ -220,6 +230,24 @@ defmodule Raxol.Payments.Assets do
   """
   @spec symbols() :: [String.t()]
   def symbols, do: Map.keys(@evm_tokens)
+
+  @doc """
+  Resolve a `(chain_id, contract_address)` back to its token symbol: the reverse
+  of `address/2`. Covers the solver-fillable set (USDC, USDT, WETH) on the five
+  EVM chains. Case-insensitive; accepts an integer chain id or a CAIP-2 string.
+  Returns `nil` for an unregistered pair, so a caller can tell "same asset" from
+  "unknown" without guessing.
+  """
+  @spec symbol_for(integer() | String.t() | nil, String.t() | nil) :: String.t() | nil
+  def symbol_for(chain_id, address) when is_binary(address) and address != "" do
+    chain = normalize_chain_id(chain_id)
+
+    @symbol_by_address
+    |> Map.get(chain, %{})
+    |> Map.get(String.downcase(address))
+  end
+
+  def symbol_for(_chain, _address), do: nil
 
   @doc """
   Look up decimals by ticker symbol. Returns `@default_decimals`

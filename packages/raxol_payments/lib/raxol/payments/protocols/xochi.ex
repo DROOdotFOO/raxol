@@ -200,6 +200,37 @@ defmodule Raxol.Payments.Protocols.Xochi do
     validate_pull_authorization(quote_resp, request, wallet)
   end
 
+  @doc """
+  True when the origin-pull solver pin would let an unverified recipient through:
+  an empty allowlist with the pin not required. In that state `validate_pull`
+  accepts any ERC-3009 `to` (Permit2 stays fail-closed regardless). The boot-time
+  `assert_origin_pull_pinned!/2` uses this to refuse a fail-open prod start.
+  """
+  @spec origin_pull_fail_open?([String.t()] | nil, boolean()) :: boolean()
+  def origin_pull_fail_open?(allowlist, require_pin?) do
+    normalize_solver_list(allowlist) == [] and require_pin? != true
+  end
+
+  @doc """
+  Raise when the origin-pull solver pin is fail-open for the given allowlist and
+  requirement flag, otherwise return `:ok`. Call at boot in a fund-moving
+  deployment so a missing solver pin halts startup instead of silently signing
+  ERC-3009 pulls to an unverified recipient. See GitHub #333.
+  """
+  @spec assert_origin_pull_pinned!([String.t()] | nil, boolean()) :: :ok
+  def assert_origin_pull_pinned!(allowlist, require_pin?) do
+    if origin_pull_fail_open?(allowlist, require_pin?) do
+      raise ArgumentError,
+            "Xochi origin-pull solver pin is not configured (fail-open): the agent " <>
+              "would sign ERC-3009 origin-pull authorizations to an unverified recipient. " <>
+              "Set XOCHI_SOLVER_BASE / XOCHI_SOLVER_ARBITRUM / XOCHI_SOLVER_OPTIMISM / " <>
+              "XOCHI_SOLVER_ETH / XOCHI_SOLVER_POLYGON to the canonical solver address(es), " <>
+              "or set XOCHI_PULL_REQUIRE_SOLVER_PIN=true. See GitHub #333."
+    end
+
+    :ok
+  end
+
   # -- Private --
 
   defp validate_quote(%QuoteResponse{can_solve: false, error: err}) do
@@ -382,8 +413,11 @@ defmodule Raxol.Payments.Protocols.Xochi do
     do: Application.get_env(:raxol_payments, :pull_require_solver_pin, false)
 
   defp solver_allowlist do
-    :raxol_payments
-    |> Application.get_env(:pull_solver_allowlist, [])
+    normalize_solver_list(Application.get_env(:raxol_payments, :pull_solver_allowlist, []))
+  end
+
+  defp normalize_solver_list(list) do
+    list
     |> List.wrap()
     |> Enum.filter(&is_binary/1)
     |> Enum.map(&normalize_address/1)
