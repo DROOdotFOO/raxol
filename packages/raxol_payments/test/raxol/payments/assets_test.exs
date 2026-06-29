@@ -3,6 +3,76 @@ defmodule Raxol.Payments.AssetsTest do
 
   alias Raxol.Payments.Assets
 
+  # The Riddler solver fills USDC, USDT, and WETH on all five canonical EVM
+  # chains. Each must be an explicit Assets entry: an unregistered token silently
+  # resolves to 6 decimals, which mis-scales an 18-decimal asset by 10**12. This
+  # pins the set so a dropped or wrong-decimal entry fails here, not in a funded
+  # live run. Addresses mirror Riddler's config/token_registry.ex (lowercased).
+  @solver_fillable [
+    # Ethereum mainnet
+    {1, "USDC", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", 6},
+    {1, "USDT", "0xdac17f958d2ee523a2206206994597c13d831ec7", 6},
+    {1, "WETH", "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", 18},
+    # Optimism
+    {10, "USDC", "0x0b2c639c533813f4aa9d7837caf62653d097ff85", 6},
+    {10, "USDT", "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", 6},
+    {10, "WETH", "0x4200000000000000000000000000000000000006", 18},
+    # Polygon
+    {137, "USDC", "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", 6},
+    {137, "USDT", "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", 6},
+    {137, "WETH", "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", 18},
+    # Base
+    {8453, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", 6},
+    {8453, "USDT", "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", 6},
+    {8453, "WETH", "0x4200000000000000000000000000000000000006", 18},
+    # Arbitrum
+    {42_161, "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", 6},
+    {42_161, "USDT", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", 6},
+    {42_161, "WETH", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1", 18}
+  ]
+
+  describe "solver-fillable token parity" do
+    test "USDC/USDT/WETH are explicitly registered on all five EVM chains" do
+      for {chain, symbol, address, _decimals} <- @solver_fillable do
+        assert Assets.known?(chain, address),
+               "#{symbol} on chain #{chain} (#{address}) is not a known Assets " <>
+                 "entry; it would silently default to 6 decimals"
+      end
+    end
+
+    test "each fillable token resolves to its correct decimals" do
+      for {chain, symbol, address, decimals} <- @solver_fillable do
+        assert Assets.decimals(chain, address) == decimals,
+               "#{symbol} on chain #{chain} resolved the wrong decimals"
+      end
+    end
+
+    test "known?/2 is false for an unregistered contract (the silent-default trap)" do
+      bogus = "0x" <> String.duplicate("ab", 20)
+      refute Assets.known?(137, bogus)
+      # It still resolves to the 6-decimal default -- exactly why known?/2 exists.
+      assert Assets.decimals(137, bogus) == 6
+    end
+
+    test "address/2 resolves each fillable (chain, symbol) to its pinned contract" do
+      for {chain, symbol, address, _decimals} <- @solver_fillable do
+        assert Assets.address(chain, symbol) == {:ok, address},
+               "#{symbol} on chain #{chain} did not resolve to #{address}"
+      end
+    end
+
+    test "address/2 returns :error for an unsupported pair" do
+      # DAI is tracked but not solver-fillable, so it is intentionally absent.
+      assert Assets.address(8453, "DAI") == :error
+      assert Assets.address(999, "USDC") == :error
+      assert Assets.address(8453, nil) == :error
+    end
+
+    test "symbols/0 is exactly the solver-fillable set" do
+      assert Enum.sort(Assets.symbols()) == ["USDC", "USDT", "WETH"]
+    end
+  end
+
   describe "decimals/2 (chain + address)" do
     test "USDC on Base resolves to 6" do
       assert Assets.decimals(8453, "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913") ==
