@@ -54,15 +54,29 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   ## Matrix mode
 
   `XOCHI_LIVE_MATRIX=true` adds one test that settles every configured corridor
-  for each settlement type -- the live counterpart of `settlement_matrix_test.exs`,
-  ready to fire end-to-end once Riddler's EIP-712 parity redeploys. It moves real
-  funds per cell, so it is bounded by env:
+  for each token and settlement type -- the live counterpart of
+  `settlement_matrix_test.exs`. It moves real funds per cell (corridor x token x
+  settlement), so it is bounded by env:
 
   - `XOCHI_LIVE_CORRIDORS` -- `"from>to,from>to"` chain-id pairs (default
-    `"8453>42161,42161>8453"`). USDC is resolved per chain for Base/Optimism/Arbitrum.
+    `"8453>42161,42161>8453"`). Tokens resolve per chain via `Raxol.Payments.Assets`
+    for the five supported EVM chains (1, 10, 137, 8453, 42161).
+  - `XOCHI_LIVE_TOKENS` -- `"USDC,USDT,WETH"` (default `"USDC"`). USDC pulls via
+    ERC-3009; USDT/WETH via Permit2 (needs a standing Permit2 allowance on each
+    origin chain).
   - `XOCHI_LIVE_SETTLEMENTS` -- `"public,stealth"` (default `"public"`). Stealth
     cells require `XOCHI_LIVE_RECIPIENT_META`.
-  - `XOCHI_LIVE_AMOUNT` -- per-cell amount (default `1.00`).
+  - `XOCHI_LIVE_AMOUNT` -- per-cell stablecoin amount (default `1.10`, above the
+    solver's >1 USDC floor).
+  - `XOCHI_LIVE_WETH_AMOUNT` -- per-cell WETH amount (default `0.001`); WETH is
+    18-decimal and worth thousands per unit, so it is sized separately.
+  - `XOCHI_LIVE_ALLOW_ETH_ORIGIN` -- set to `true` to settle Ethereum-origin
+    (chain 1) cells; by default they are skipped (quote-only) for L1 gas cost.
+
+  A companion `:live_xochi_preflight` test quotes every corridor x token
+  read-only (no funds) and asserts `can_solve` plus the pinned origin-pull
+  solver, so a bad corridor, unpriceable amount, or rotated solver is caught
+  before any funded run. `examples/run_live_xochi_gate.sh` runs it first.
 
   Run only the matrix:
 
@@ -70,6 +84,7 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential')" \\
       XOCHI_LIVE_KEY=0x<funded key> \\
       XOCHI_LIVE_MATRIX=true \\
+      XOCHI_LIVE_TOKENS=USDC,USDT,WETH \\
       XOCHI_LIVE_SETTLEMENTS=public,stealth \\
       XOCHI_LIVE_RECIPIENT_META=st:eth:0x... \\
         mix test --only live_xochi_matrix test/raxol/payments/xochi/live_xochi_test.exs
@@ -83,8 +98,10 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
   if System.get_env("XOCHI_LIVE_URL") && System.get_env("XOCHI_LIVE_KEY") do
     alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
-    alias Raxol.Payments.{Ledger, Mandate, SpendingPolicy}
+    alias Raxol.Payments.{Assets, Ledger, Mandate, SpendingPolicy}
     alias Raxol.Payments.Mandate.Store, as: MandateStore
+    alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
+    alias Raxol.Payments.Xochi.Schemas.QuoteRequest
 
     # Riddler's universal solver (HD index-0), the address it serves as the
     # origin-pull `to`/`spender`. The default pin; rotate via XOCHI_LIVE_SOLVER.
@@ -236,40 +253,157 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
     # Run it alone with `--only live_xochi_matrix`.
     if System.get_env("XOCHI_LIVE_MATRIX") == "true" do
       @tag :live_xochi_matrix
-      test "settles every configured corridor for each settlement type", %{
+      test "settles every configured corridor for each token and settlement type", %{
         context: context,
         poll_context: poll_context
       } do
         corridors =
           parse_corridors(System.get_env("XOCHI_LIVE_CORRIDORS", "8453>42161,42161>8453"))
 
-        settlements = parse_settlements(System.get_env("XOCHI_LIVE_SETTLEMENTS", "public"))
-        amount = System.get_env("XOCHI_LIVE_AMOUNT", "1.00")
+        tokens = parse_list(System.get_env("XOCHI_LIVE_TOKENS", "USDC"))
+        settlements = parse_list(System.get_env("XOCHI_LIVE_SETTLEMENTS", "public"))
+        stable_amount = System.get_env("XOCHI_LIVE_AMOUNT", "1.10")
         meta = System.get_env("XOCHI_LIVE_RECIPIENT_META")
 
-        cells = for {from, to} <- corridors, s <- settlements, do: {from, to, s}
-        IO.puts("[live_xochi:matrix] running #{length(cells)} cells at #{amount} USDC each")
+        cells =
+          for {from, to} <- corridors, token <- tokens, s <- settlements, do: {from, to, token, s}
 
-        for {from, to, settlement} <- cells do
-          if settlement == "stealth" and is_nil(meta),
-            do: flunk("stealth cell #{from}->#{to} needs XOCHI_LIVE_RECIPIENT_META")
+        IO.puts(
+          "[live_xochi:matrix] running #{length(cells)} cells (corridor x token x settlement)"
+        )
 
-          params = matrix_params(from, to, settlement, amount, meta)
-          started = System.monotonic_time(:millisecond)
+        for {from, to, token, settlement} <- cells do
+          label = "#{from}->#{to}:#{token}:#{settlement}"
 
-          assert {:ok, intent} = ExecuteXochiIntent.call(params, context),
-                 "execute failed for #{from}->#{to} #{settlement}"
+          cond do
+            settlement == "stealth" and is_nil(meta) ->
+              flunk("stealth cell #{label} needs XOCHI_LIVE_RECIPIENT_META")
 
-          assert {:ok, status} =
-                   PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context)
+            # Ethereum-origin settlement burns real L1 gas and has no confirmed
+            # instant-settlement inventory; keep it quote-only unless opted in.
+            from == 1 and System.get_env("XOCHI_LIVE_ALLOW_ETH_ORIGIN") != "true" ->
+              IO.puts(
+                "[live_xochi:matrix] SKIP #{label}: Ethereum origin is quote-only " <>
+                  "(set XOCHI_LIVE_ALLOW_ETH_ORIGIN=true to settle from L1)"
+              )
 
-          assert status.terminal == true
+            true ->
+              amount = amount_for(token, stable_amount)
+              params = matrix_params(from, to, token, settlement, amount, meta)
+              started = System.monotonic_time(:millisecond)
 
-          assert status.status == "completed",
-                 "#{from}->#{to} #{settlement} (#{intent.intent_id}) ended #{status.status}"
+              assert {:ok, intent} = ExecuteXochiIntent.call(params, context),
+                     "execute failed for #{label}"
 
-          report_settlement("#{from}->#{to}:#{settlement}", intent, status, params, started)
+              assert {:ok, status} =
+                       PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context)
+
+              assert status.terminal == true
+
+              assert status.status == "completed",
+                     "#{label} (#{intent.intent_id}) ended #{status.status}"
+
+              report_settlement(label, intent, status, params, started)
+          end
         end
+      end
+
+      @tag :live_xochi_preflight
+      test "every configured corridor x token quotes can_solve and serves the pinned solver", %{
+        context: context
+      } do
+        corridors =
+          parse_corridors(System.get_env("XOCHI_LIVE_CORRIDORS", "8453>42161,42161>8453"))
+
+        tokens = parse_list(System.get_env("XOCHI_LIVE_TOKENS", "USDC"))
+        stable_amount = System.get_env("XOCHI_LIVE_AMOUNT", "1.10")
+        cells = for {from, to} <- corridors, token <- tokens, do: {from, to, token}
+
+        IO.puts(
+          "[live_xochi:preflight] checking #{length(cells)} cells read-only (NO funds move)"
+        )
+
+        results =
+          Enum.map(cells, fn {from, to, token} ->
+            outcome = preflight_cell(context, from, to, token, amount_for(token, stable_amount))
+            report_preflight(from, to, token, outcome)
+            {{from, to, token}, outcome}
+          end)
+
+        failures = for {cell, {:error, reason}} <- results, do: {cell, reason}
+
+        assert failures == [],
+               "preflight failed for #{length(failures)} cell(s), no funds moved: #{inspect(failures)}"
+      end
+
+      # Quote one corridor x token read-only and confirm the solver can fill it and
+      # serves the pinned origin-pull recipient/spender. No spend gate, no signature,
+      # no execute -- nothing moves. Public settlement is enough: can_solve and the
+      # pull pin are independent of the settlement privacy.
+      defp preflight_cell(context, from, to, token, amount) do
+        config = context.xochi_config
+        wallet = context.wallet
+
+        with {:ok, request} <- preflight_request(wallet, from, to, token, amount),
+             {:ok, quote} <- XochiProtocol.get_quote(config, request),
+             :ok <- preflight_can_solve(quote),
+             :ok <- XochiProtocol.validate_pull(quote, request, wallet) do
+          {:ok, %{method: quote.payment_method, to_amount: quote.to_amount, fee: quote.xochi_fee}}
+        end
+      end
+
+      defp preflight_request(wallet, from, to, token, amount) do
+        with {:ok, from_token} <- Assets.address(from, token),
+             {:ok, to_token} <- Assets.address(to, token) do
+          decimals = Assets.decimals(from, from_token)
+          from_amount = Integer.to_string(Assets.to_atomic(Decimal.new(amount), decimals))
+
+          {:ok,
+           %QuoteRequest{
+             wallet: wallet.address(),
+             from_chain_id: from,
+             to_chain_id: to,
+             from_token: from_token,
+             to_token: to_token,
+             from_amount: from_amount,
+             settlement_preference: "public",
+             slippage_bps: 50
+           }}
+        else
+          :error -> {:error, {:unknown_token, token}}
+        end
+      end
+
+      defp preflight_can_solve(%{can_solve: true}), do: :ok
+      defp preflight_can_solve(%{error: err}), do: {:error, {:cannot_solve, err}}
+
+      defp report_preflight(from, to, token, {:ok, info}) do
+        IO.puts(
+          "  PASS #{from}->#{to} #{token} via #{info.method || "?"}" <>
+            " (to_amount #{info.to_amount}, fee #{info.fee})" <>
+            preflight_notes(from, info.method)
+        )
+      end
+
+      defp report_preflight(from, to, token, {:error, reason}) do
+        IO.puts("  FAIL #{from}->#{to} #{token}: #{inspect(reason)}")
+      end
+
+      # Per-cell operator notes that are not failures: an L1 origin costs real gas,
+      # and a Permit2 pull (USDT/WETH) needs a standing allowance the gate does not
+      # set, so a first run on a fresh wallet would revert the pull on-chain.
+      defp preflight_notes(from, method) do
+        l1 =
+          if from == 1,
+            do: " [eth-origin: L1 gas; quote-only unless XOCHI_LIVE_ALLOW_ETH_ORIGIN=true]",
+            else: ""
+
+        permit2 =
+          if method == "permit2",
+            do: " [permit2: needs a standing Permit2 allowance on chain #{from}]",
+            else: ""
+
+        l1 <> permit2
       end
 
       defp parse_corridors(spec) do
@@ -281,16 +415,23 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         end)
       end
 
-      defp parse_settlements(spec),
+      defp parse_list(spec),
         do: spec |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
 
-      defp matrix_params(from, to, settlement, amount, meta) do
+      # Per-token live amount. Stablecoins use XOCHI_LIVE_AMOUNT (USD-ish, default
+      # 1.10, just above the solver's >1 USDC floor). WETH is 18-decimal and worth
+      # thousands per unit, so it takes a small default well under the spend cap;
+      # override with XOCHI_LIVE_WETH_AMOUNT.
+      defp amount_for("WETH", _stable), do: System.get_env("XOCHI_LIVE_WETH_AMOUNT", "0.001")
+      defp amount_for(_token, stable), do: stable
+
+      defp matrix_params(from, to, token, settlement, amount, meta) do
         params = %{
           amount: amount,
           from_chain_id: from,
           to_chain_id: to,
-          from_token: usdc_for(from),
-          to_token: usdc_for(to),
+          from_token: token_for(from, token),
+          to_token: token_for(to, token),
           settlement: settlement
         }
 
@@ -299,12 +440,17 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
           else: params
       end
 
-      defp usdc_for(8453), do: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
-      defp usdc_for(10), do: "0x0b2c639c533813f4aa9d7837caf62653d097ff85"
-      defp usdc_for(42_161), do: "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+      # Resolve a token symbol to its contract via Assets. An unknown token
+      # raises here rather than mis-scaling the amount on the wire.
+      defp token_for(chain, symbol) do
+        case Assets.address(chain, symbol) do
+          {:ok, address} ->
+            address
 
-      defp usdc_for(chain),
-        do: raise("no USDC mapping for chain #{chain}; extend usdc_for/1 in live_xochi_test.exs")
+          :error ->
+            raise "no #{symbol} address for chain #{chain}; extend @evm_tokens in Raxol.Payments.Assets"
+        end
+      end
     end
 
     defp lifetime(context) do
@@ -393,9 +539,11 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       end
     end
 
+    defp explorer_base(1), do: "https://etherscan.io/tx/"
     defp explorer_base(8453), do: "https://basescan.org/tx/"
     defp explorer_base(42_161), do: "https://arbiscan.io/tx/"
     defp explorer_base(10), do: "https://optimistic.etherscan.io/tx/"
+    defp explorer_base(137), do: "https://polygonscan.com/tx/"
     defp explorer_base(_), do: nil
   end
 end

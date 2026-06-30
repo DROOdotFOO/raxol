@@ -55,7 +55,11 @@ defmodule Raxol.Payments.Assets do
     },
     # Optimism
     10 => %{
+      # USDC native
       "0x0b2c639c533813f4aa9d7837caf62653d097ff85" => 6,
+      # USDT
+      "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58" => 6,
+      # WETH
       "0x4200000000000000000000000000000000000006" => 18
     },
     # Arbitrum
@@ -66,8 +70,14 @@ defmodule Raxol.Payments.Assets do
     },
     # Polygon
     137 => %{
+      # USDC native
       "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" => 6,
-      "0x2791bca1f2de4661ed88a30c99a7a9449aa84174" => 6
+      # USDC.e bridged
+      "0x2791bca1f2de4661ed88a30c99a7a9449aa84174" => 6,
+      # USDT
+      "0xc2132d05d31c914a87c6611c10748aeb04b58e8f" => 6,
+      # WETH
+      "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619" => 18
     },
     # Tron mainnet (TRC-20). Keys are lowercased to match the lookup; Tron
     # addresses are case-sensitive but USDT/USDC both use 6 decimals.
@@ -104,6 +114,48 @@ defmodule Raxol.Payments.Assets do
     "WETH" => 18
   }
 
+  # Solver-fillable EVM tokens: symbol -> chain id -> lowercase address. Mirrors
+  # Riddler's config/token_registry.ex for the five supported EVM chains
+  # (Ethereum, Optimism, Polygon, Base, Arbitrum). Decimals live in `@addresses`.
+  @evm_tokens %{
+    "USDC" => %{
+      1 => "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      10 => "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+      137 => "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+      8453 => "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      42_161 => "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+    },
+    "USDT" => %{
+      1 => "0xdac17f958d2ee523a2206206994597c13d831ec7",
+      10 => "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58",
+      137 => "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+      8453 => "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",
+      42_161 => "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9"
+    },
+    "WETH" => %{
+      1 => "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      10 => "0x4200000000000000000000000000000000000006",
+      137 => "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+      8453 => "0x4200000000000000000000000000000000000006",
+      42_161 => "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
+    }
+  }
+
+  # Reverse of @evm_tokens: chain id -> %{lowercase address -> symbol}. Lets a
+  # served (chain, token) be classified back to its symbol, e.g. to detect a
+  # same-asset corridor (same token both sides) before sizing a delivery floor.
+  @symbol_by_address (for {symbol, by_chain} <- @evm_tokens,
+                          {chain, address} <- by_chain,
+                          reduce: %{} do
+                        acc ->
+                          Map.update(
+                            acc,
+                            chain,
+                            %{address => symbol},
+                            &Map.put(&1, address, symbol)
+                          )
+                      end)
+
   @doc """
   Look up decimals by chain id and ERC-20 contract address.
 
@@ -136,6 +188,66 @@ defmodule Raxol.Payments.Assets do
   end
 
   def usdc?(_chain, _address), do: false
+
+  @doc """
+  True when `(chain_id, address)` is a registered contract, i.e. `decimals/2`
+  returns a pinned value rather than the `@default_decimals` fallback. An
+  unregistered token resolves to 6 decimals, which is wrong for an 18-decimal
+  token like WETH. Case-insensitive; accepts an integer chain id or a CAIP-2
+  string. EVM only.
+  """
+  @spec known?(integer() | String.t() | nil, String.t() | nil) :: boolean()
+  def known?(chain_id, address) when is_binary(address) and address != "" do
+    chain = normalize_chain_id(chain_id)
+    Map.has_key?(Map.get(@addresses, chain, %{}), String.downcase(address))
+  end
+
+  def known?(_chain, _address), do: false
+
+  @doc """
+  Resolve a token symbol to its contract address on `chain_id`.
+
+  Covers the solver-fillable set (USDC, USDT, WETH) across the five supported
+  EVM chains (1, 10, 137, 8453, 42161). The symbol is case-insensitive; the
+  chain id accepts an integer or a CAIP-2 string. Returns `:error` for an
+  unknown `(chain, symbol)` pair.
+  """
+  @spec address(integer() | String.t() | nil, String.t() | nil) ::
+          {:ok, String.t()} | :error
+  def address(chain_id, symbol) when is_binary(symbol) do
+    chain = normalize_chain_id(chain_id)
+
+    case @evm_tokens |> Map.get(String.upcase(symbol), %{}) |> Map.get(chain) do
+      nil -> :error
+      address -> {:ok, address}
+    end
+  end
+
+  def address(_chain, _symbol), do: :error
+
+  @doc """
+  The token symbols with a resolvable `address/2` (USDC, USDT, WETH).
+  """
+  @spec symbols() :: [String.t()]
+  def symbols, do: Map.keys(@evm_tokens)
+
+  @doc """
+  Resolve a `(chain_id, contract_address)` back to its token symbol: the reverse
+  of `address/2`. Covers the solver-fillable set (USDC, USDT, WETH) on the five
+  EVM chains. Case-insensitive; accepts an integer chain id or a CAIP-2 string.
+  Returns `nil` for an unregistered pair, so a caller can tell "same asset" from
+  "unknown" without guessing.
+  """
+  @spec symbol_for(integer() | String.t() | nil, String.t() | nil) :: String.t() | nil
+  def symbol_for(chain_id, address) when is_binary(address) and address != "" do
+    chain = normalize_chain_id(chain_id)
+
+    @symbol_by_address
+    |> Map.get(chain, %{})
+    |> Map.get(String.downcase(address))
+  end
+
+  def symbol_for(_chain, _address), do: nil
 
   @doc """
   Look up decimals by ticker symbol. Returns `@default_decimals`

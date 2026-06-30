@@ -12,22 +12,34 @@ if config_env() == :prod do
 
   # Xochi origin-pull solver pin (#333). Pin the solver collection address the
   # agent will sign pulls to, so a forged/MITM'd quote cannot redirect funds.
-  # These must equal Riddler's canonical per-chain solver addresses (the
-  # HD-derived submitter; see Riddler Xochi.Config.solver_address/1). Permit2 is
-  # fail-closed regardless; set XOCHI_PULL_REQUIRE_SOLVER_PIN=true to hard-pin
-  # ERC-3009 too once the allowlist below is populated.
+  # These must equal Riddler's canonical solver address(es) (the HD-derived
+  # submitter; see Riddler Xochi.Config.solver_address/1). The allowlist is a flat
+  # set, so when one address serves every chain a single var covers all corridors;
+  # a per-chain var is here for each of the five supported chains in case they
+  # ever diverge. Permit2 is fail-closed regardless; set
+  # XOCHI_PULL_REQUIRE_SOLVER_PIN=true to hard-pin ERC-3009 too.
+  xochi_solver_allowlist =
+    ~w(XOCHI_SOLVER_ETH XOCHI_SOLVER_BASE XOCHI_SOLVER_ARBITRUM XOCHI_SOLVER_OPTIMISM XOCHI_SOLVER_POLYGON)
+    |> Enum.map(&System.get_env/1)
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+
+  xochi_require_solver_pin =
+    System.get_env("XOCHI_PULL_REQUIRE_SOLVER_PIN", "false") == "true"
+
+  # Fail closed at boot rather than sign origin pulls to an unverified recipient:
+  # a deployment that includes the payments app must pin the solver (set the
+  # XOCHI_SOLVER_* addresses, or XOCHI_PULL_REQUIRE_SOLVER_PIN=true). Guarded so a
+  # release without the payments app (the module is absent) skips the check.
+  if Code.ensure_loaded?(Raxol.Payments.Protocols.Xochi) do
+    Raxol.Payments.Protocols.Xochi.assert_origin_pull_pinned!(
+      xochi_solver_allowlist,
+      xochi_require_solver_pin
+    )
+  end
+
   config :raxol_payments,
-    pull_solver_allowlist:
-      [
-        "XOCHI_SOLVER_ETH",
-        "XOCHI_SOLVER_BASE",
-        "XOCHI_SOLVER_ARBITRUM",
-        "XOCHI_SOLVER_OPTIMISM"
-      ]
-      |> Enum.map(&System.get_env/1)
-      |> Enum.reject(&(is_nil(&1) or &1 == "")),
-    pull_require_solver_pin:
-      System.get_env("XOCHI_PULL_REQUIRE_SOLVER_PIN", "false") == "true"
+    pull_solver_allowlist: xochi_solver_allowlist,
+    pull_require_solver_pin: xochi_require_solver_pin
 
   # Configure terminal settings from environment
   config :raxol, :terminal,

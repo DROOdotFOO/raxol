@@ -12,7 +12,7 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.Actions.Payments.ExecuteXochiIntent
-  alias Raxol.Payments.{Ledger, Router, SpendingPolicy}
+  alias Raxol.Payments.{Assets, Ledger, Router, SpendingPolicy}
   alias Raxol.Payments.Xochi.Stealth
 
   # Wallet that signals when it signs, so we can assert the intent was signed.
@@ -52,6 +52,16 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
 
   @pubkey_re ~r/^0x0[23][a-f0-9]{64}$/
 
+  # The atomic from_amount each fillable token must produce for a 0.50 human
+  # amount. An 18-decimal WETH yields a different on-the-wire amount than a
+  # 6-decimal stablecoin. Pinned independently of Assets to catch a decimals
+  # regression.
+  @token_atomic %{
+    "USDC" => "500000",
+    "USDT" => "500000",
+    "WETH" => "500000000000000000"
+  }
+
   defp config do
     %{
       base_url: "https://xochi.test",
@@ -88,13 +98,17 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
       case conn.request_path do
         "/api/intent/quote" ->
           {:ok, raw, conn} = Plug.Conn.read_body(conn)
-          send(self(), {:quote_body, Jason.decode!(raw)})
+          body = Jason.decode!(raw)
+          send(self(), {:quote_body, body})
 
           Req.Test.json(conn, %{
             "intentId" => "int_1",
             "quoteId" => "q_1",
             "canSolve" => true,
-            "toAmount" => "499000",
+            # Par delivery for a same-asset corridor: echo the atomic from_amount
+            # so the delivery floor is satisfied for any token decimals (a fixed
+            # 6-decimal value is a 99.9999% haircut for an 18-decimal WETH send).
+            "toAmount" => body["from_amount"],
             "xochiFee" => "1000",
             "eip712Data" => %{
               "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
@@ -195,6 +209,33 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
         assert Regex.match?(@pubkey_re, body["stealth_viewing_pub_key"])
 
         assert Router.select(cross_chain: true, privacy: :stealth) == :xochi
+      end
+    end
+  end
+
+  describe "fillable tokens across EVM corridors" do
+    for {from, to} <- @evm_corridors, token <- ["USDC", "USDT", "WETH"] do
+      @from from
+      @to to
+      @token token
+
+      test "#{from} -> #{to} #{token}: resolves the contract and scales by token decimals" do
+        assert {:ok, from_token} = Assets.address(@from, @token)
+        assert {:ok, to_token} = Assets.address(@to, @token)
+
+        assert {:ok, result} =
+                 run(@from, @to, "public", %{from_token: from_token, to_token: to_token})
+
+        assert result.intent_id == "int_1"
+
+        assert_received :wallet_signed
+        assert_received {:quote_body, body}
+
+        assert body["from_token"] == from_token
+        assert body["to_token"] == to_token
+        # The atomic from_amount must reflect this token's decimals, not the
+        # 6-decimal default that an unregistered contract would fall back to.
+        assert body["from_amount"] == @token_atomic[@token]
       end
     end
   end

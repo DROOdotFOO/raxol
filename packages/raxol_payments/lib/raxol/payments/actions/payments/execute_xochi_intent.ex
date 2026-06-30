@@ -68,7 +68,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
           description: "Recipient ERC-6538 stealth meta-address (st:eth:0x...)"
         ],
         slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"],
-        trust_score: [type: :integer, description: "Trust score for tier/fee"]
+        trust_score: [type: :integer, description: "Trust score for tier/fee"],
+        min_to_amount: [
+          type: :string,
+          description:
+            "Optional minimum acceptable delivery, in destination-chain atomic units. A quote delivering less is rejected before signing. Authoritative for any corridor; same-asset corridors also get an automatic floor."
+        ]
       ],
       output: [
         intent_id: [type: :string],
@@ -118,6 +123,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     with :ok <- assert_xochi_route(params),
          {:ok, quote} <- solvable_quote(config, request),
          :ok <- assert_method(quote, request),
+         :ok <- assert_delivery_floor(request, quote, params),
          :ok <- authorize(context, config, amount),
          {:ok, exec, filled_quote} <-
            execute(config, request, quote, wallet, context, amount, store, key),
@@ -210,6 +216,70 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   end
 
   defp assert_method(_quote, _request), do: :ok
+
+  # Reject a quote that delivers far less than the agent sends, before any
+  # signature. The spend gate sees only the human `amount` that leaves the wallet,
+  # not the served `to_amount` that arrives; the origin-pull value cap bounds the
+  # amount out, not the ratio in. So a hostile or compromised quote endpoint could
+  # serve a punitive `to_amount` (deliver ~0 while pulling the full origin amount)
+  # and the gate would not catch it.
+  #
+  # An explicit `min_to_amount` (destination atomic units) is authoritative for
+  # any corridor. Without one, a same-asset corridor (same token symbol both
+  # sides) gets an automatic floor: delivery must be at least `:min_delivery_bps`
+  # of par (default 8000 = 80%). This is a theft backstop, not a pricing check --
+  # Xochi enforces pricing; legitimate fees and slippage stay well inside 80%. A
+  # cross-asset corridor has no on-client price, so it is bound only by an explicit
+  # `min_to_amount`.
+  defp assert_delivery_floor(%QuoteRequest{} = request, %QuoteResponse{} = quote, params) do
+    case delivery_floor(request, params) do
+      :none ->
+        :ok
+
+      {:floor, min_out} ->
+        case parse_uint(quote.to_amount) do
+          delivered when is_integer(delivered) and delivered >= min_out ->
+            :ok
+
+          _ ->
+            {:error,
+             {:delivery_below_floor, %{to_amount: quote.to_amount, min_to_amount: min_out}}}
+        end
+    end
+  end
+
+  defp delivery_floor(%QuoteRequest{} = request, params) do
+    case parse_uint(Map.get(params, :min_to_amount)) do
+      n when is_integer(n) -> {:floor, n}
+      nil -> same_asset_floor(request)
+    end
+  end
+
+  defp same_asset_floor(%QuoteRequest{} = request) do
+    from_symbol = Assets.symbol_for(request.from_chain_id, request.from_token)
+    to_symbol = Assets.symbol_for(request.to_chain_id, request.to_token)
+
+    if not is_nil(from_symbol) and from_symbol == to_symbol do
+      from_decimals = Assets.decimals(request.from_chain_id, request.from_token)
+      to_decimals = Assets.decimals(request.to_chain_id, request.to_token)
+      par_out = Assets.to_atomic(Assets.to_human(request.from_amount, from_decimals), to_decimals)
+      bps = Application.get_env(:raxol_payments, :min_delivery_bps, 8000)
+      {:floor, div(par_out * bps, 10_000)}
+    else
+      :none
+    end
+  end
+
+  defp parse_uint(v) when is_integer(v) and v >= 0, do: v
+
+  defp parse_uint(v) when is_binary(v) do
+    case Integer.parse(String.trim(v)) do
+      {n, ""} when n >= 0 -> n
+      _ -> nil
+    end
+  end
+
+  defp parse_uint(_), do: nil
 
   defp fetch(context, key) do
     case Map.fetch(context, key) do

@@ -16,6 +16,13 @@ defmodule Raxol.ACP.Seller.Supervisor do
      forwards events to the Queue. Restarted whenever the Backend
      restarts (so the subscription is re-established).
 
+  ## Offerings
+
+  On start it registers the offerings in `config :raxol_acp, :offerings`
+  (default `[Raxol.ACP.Xochi.TransferOffering]`) with
+  `Raxol.ACP.Offering.Registry` via `Raxol.ACP.Seller.Offerings`, so incoming
+  jobs resolve to a handler. Registration is idempotent across restarts.
+
   ## Opt-in
 
   This supervisor is started by `Raxol.ACP.Supervisor` only when
@@ -41,6 +48,8 @@ defmodule Raxol.ACP.Seller.Supervisor do
           config :raxol_acp, seller_backend: Raxol.ACP.Seller.Backend.InMemory
           config :raxol_acp, seller_backend: Raxol.ACP.Seller.Backend.WebSocket
         """
+
+    Raxol.ACP.Seller.Offerings.register_all()
 
     children = [
       Raxol.ACP.Seller.Queue,
