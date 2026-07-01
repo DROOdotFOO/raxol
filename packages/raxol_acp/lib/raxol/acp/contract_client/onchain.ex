@@ -298,7 +298,7 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     call_data =
       ABI.encode_call(@sig_set_budget_token, [
         {"uint256", job_id_to_uint256(job_id)},
-        {"uint256", decimal_to_uint256(amount)},
+        {"uint256", decimal_to_uint256(amount, token_decimals(token))},
         {"address", token}
       ])
 
@@ -367,13 +367,16 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   # The leading 8 args are identical across V1/V2.
   defp payable_memo_head(job_id, content, opts) do
+    token = Keyword.fetch!(opts, :token)
+    decimals = token_decimals(token)
+
     [
       {"uint256", job_id_to_uint256(job_id)},
       {"string", content},
-      {"address", Keyword.fetch!(opts, :token)},
-      {"uint256", decimal_to_uint256(Keyword.fetch!(opts, :amount))},
+      {"address", token},
+      {"uint256", decimal_to_uint256(Keyword.fetch!(opts, :amount), decimals)},
       {"address", Keyword.fetch!(opts, :recipient)},
-      {"uint256", decimal_to_uint256(Keyword.get(opts, :fee_amount, Decimal.new(0)))},
+      {"uint256", decimal_to_uint256(Keyword.get(opts, :fee_amount, Decimal.new(0)), decimals)},
       {"uint8", Raxol.ACP.Job.FeeType.to_uint8(Keyword.get(opts, :fee_type, :no_fee))},
       {"uint8", Raxol.ACP.Job.MemoType.to_uint8(Keyword.get(opts, :memo_type, :payable_request))}
     ]
@@ -488,8 +491,21 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   defp decode_uint256(_), do: 0
 
   defp send_with(ctx, method, call_data) do
-    with {:ok, nonce} <- nonce(ctx),
-         {:ok, max_fee, max_priority} <- fee_suggestion(ctx),
+    case nonce(ctx) do
+      {:ok, nonce} -> broadcast_and_await(ctx, method, call_data, nonce)
+      {:error, _} = err -> err
+    end
+  end
+
+  # The local NonceServer consumes a nonce before the tx is broadcast. If
+  # anything up to and including the broadcast fails, that nonce never landed
+  # on-chain, and leaving it consumed opens a gap that strands every later
+  # (higher-nonce) tx. Roll it back on a pre-broadcast failure so the next tx
+  # reuses it. A receipt-level outcome (revert / pending) means the tx WAS
+  # broadcast -- the nonce is spent on-chain -- so those return from the do
+  # block and never hit the rollback.
+  defp broadcast_and_await(ctx, method, call_data, nonce) do
+    with {:ok, max_fee, max_priority} <- fee_suggestion(ctx),
          {:ok, gas_limit} <- estimate_gas(ctx, call_data),
          tx <-
            Transaction.new(
@@ -507,34 +523,49 @@ defmodule Raxol.ACP.ContractClient.Onchain do
          {:ok, signature} <- ctx.wallet.sign_hash(digest),
          raw <- Transaction.serialize(tx, signature),
          {:ok, tx_hash} <- RPC.send_raw_transaction(ctx.client, raw) do
-      :telemetry.execute(
-        [:raxol, :acp, :onchain, :tx_sent],
-        %{},
-        %{
-          method: method,
-          tx_hash: tx_hash,
-          gas_limit: gas_limit,
-          max_fee_per_gas: max_fee
-        }
-      )
+      emit_tx_sent(method, tx_hash, gas_limit, max_fee)
+      await_and_finish(ctx, method, tx_hash)
+    else
+      {:error, _reason} = err ->
+        NonceServer.reset(nonce)
+        err
+    end
+  end
 
-      case RPC.await_receipt(ctx.client, tx_hash, timeout_ms: ctx.receipt_timeout_ms) do
-        {:ok, %{"status" => "0x1"} = receipt} ->
-          emit_mined(method, tx_hash, receipt, :success)
-          {:ok, tx_hash, receipt}
+  defp emit_tx_sent(method, tx_hash, gas_limit, max_fee) do
+    :telemetry.execute(
+      [:raxol, :acp, :onchain, :tx_sent],
+      %{},
+      %{method: method, tx_hash: tx_hash, gas_limit: gas_limit, max_fee_per_gas: max_fee}
+    )
+  end
 
-        {:ok, %{"status" => "0x0"} = receipt} ->
-          emit_mined(method, tx_hash, receipt, :failure)
-          {:error, {:tx_reverted, tx_hash}}
+  defp await_and_finish(ctx, method, tx_hash) do
+    case RPC.await_receipt(ctx.client, tx_hash, timeout_ms: ctx.receipt_timeout_ms) do
+      {:ok, %{"status" => "0x1"} = receipt} ->
+        emit_mined(method, tx_hash, receipt, :success)
+        {:ok, tx_hash, receipt}
 
-        {:ok, receipt} ->
-          # Older RPCs may omit "status"; treat as success but log.
-          emit_mined(method, tx_hash, receipt, :unknown)
-          {:ok, tx_hash, receipt}
+      {:ok, %{"status" => "0x0"} = receipt} ->
+        emit_mined(method, tx_hash, receipt, :failure)
+        {:error, {:tx_reverted, tx_hash}}
 
-        {:error, reason} ->
-          {:error, {:receipt_wait, reason}}
-      end
+      {:ok, receipt} ->
+        # Older RPCs may omit "status"; treat as success but log.
+        emit_mined(method, tx_hash, receipt, :unknown)
+        {:ok, tx_hash, receipt}
+
+      {:error, reason} ->
+        # The tx was broadcast (its hash is known) but no receipt arrived in the
+        # wait window. It may still mine, so surface the hash: a retry must
+        # re-query it, not re-broadcast a duplicate under a fresh nonce.
+        :telemetry.execute(
+          [:raxol, :acp, :onchain, :receipt_pending],
+          %{},
+          %{method: method, tx_hash: tx_hash}
+        )
+
+        {:error, {:receipt_pending, tx_hash, reason}}
     end
   end
 
@@ -682,12 +713,26 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   # -- Conversions --
 
-  defp decimal_to_uint256(%Decimal{} = d) do
-    # USDC is 6 decimals on Base.
+  # Scale a human `Decimal` to a token's atomic integer. USDC (the ACP default)
+  # is 6 decimals; other payment tokens are resolved from
+  # `config :raxol_acp, :token_decimals, %{"0xtoken" => 18}` (lowercased address
+  # keys), falling back to 6. A wrong scale would set an escrow budget off by
+  # orders of magnitude.
+  @default_token_decimals 6
+
+  defp decimal_to_uint256(%Decimal{} = d, decimals \\ @default_token_decimals) do
     d
-    |> Decimal.mult(Decimal.new(1_000_000))
+    |> Decimal.mult(Decimal.new(Integer.pow(10, decimals)))
     |> Decimal.round(0)
     |> Decimal.to_integer()
+  end
+
+  defp token_decimals(token) when is_binary(token) do
+    key = token |> String.trim() |> String.downcase()
+
+    :raxol_acp
+    |> Application.get_env(:token_decimals, %{})
+    |> Map.get(key, @default_token_decimals)
   end
 
   defp job_id_to_uint256(job_id) when is_binary(job_id) do

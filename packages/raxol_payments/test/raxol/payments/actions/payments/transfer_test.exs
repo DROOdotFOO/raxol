@@ -31,7 +31,9 @@ defmodule Raxol.Payments.Actions.Payments.TransferTest do
 
     ctx = %{wallet: StubWallet, ledger: ledger, policy: policy(), agent_id: "a1"}
 
-    assert {:ok, %{status: "pending", to: "0xabc", amount: "0.50"}} =
+    # "authorized" (not "pending"): the gate passed and budget is reserved, but
+    # this action does not broadcast, so nothing is in flight.
+    assert {:ok, %{status: "authorized", to: "0xabc", amount: "0.50"}} =
              Transfer.run(%{to: "0xabc", amount: "0.50"}, ctx)
 
     totals = Ledger.get_totals(ledger, "a1", policy())

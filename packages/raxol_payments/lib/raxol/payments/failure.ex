@@ -42,6 +42,7 @@ defmodule Raxol.Payments.Failure do
           | :invalid_request
           | :config_error
           | :checkpoint_required
+          | :policy_required
           | :network
           | :unknown
 
@@ -229,6 +230,17 @@ defmodule Raxol.Payments.Failure do
       build(
         :checkpoint_required,
         "A durable idempotency checkpoint is required before settling this payment, but none is configured.",
+        false,
+        detail
+      )
+
+  # A fund-moving deployment required a spending policy but none was in context.
+  # Fail closed rather than let a missing policy mean unlimited spend.
+  def from({:policy_required, _} = detail),
+    do:
+      build(
+        :policy_required,
+        "A spending policy is required for this payment, but none is configured.",
         false,
         detail
       )

@@ -65,43 +65,62 @@ defmodule Raxol.Payments.SpendingHook do
 
   @spec post_execute(map(), term(), map()) :: {:ok, term()}
   @impl Raxol.Agent.CommandHook
-  def post_execute(command, result, _context) do
+  def post_execute(command, result, context) do
     case get_config() do
       nil ->
         {:ok, result}
 
       config ->
-        maybe_record_payment(command, result, config)
+        maybe_refund_payment(command, result, config, context)
         {:ok, result}
     end
   end
 
   # -- Private --
 
+  # Reserve the spend atomically in the gate so two concurrent Pay commands
+  # cannot both pass a check before either records (the TOCTOU that a separate
+  # check-then-record opens). `try_spend` checks the caps and records in one
+  # GenServer call; `post_execute` refunds only if the command then failed.
   defp check_payment_command(%Pay{} = pay, context, config) do
-    apply_gate({pay.amount, pay.domain}, pay, context, config)
+    gate_opts = [on_confirm: Map.get(config, :on_confirm)]
+
+    with :ok <- PolicyGate.evaluate(config.policy, pay.amount, pay.domain, gate_opts),
+         :ok <-
+           Ledger.try_spend(
+             config.ledger,
+             payment_agent_id(pay, context),
+             pay.amount,
+             config.policy,
+             pay.meta || %{}
+           ) do
+      {:ok, pay}
+    else
+      {:deny, _reason} = denied -> denied
+      {:over_limit, limit_type} -> {:deny, {:over_budget, limit_type, pay.amount}}
+    end
   end
 
   defp check_payment_command(command, _context, _config), do: {:ok, command}
 
-  defp apply_gate({amount, domain}, command, context, config) do
-    agent_id = Map.get(context, :agent_id, :unknown)
-    gate_opts = [on_confirm: Map.get(config, :on_confirm)]
-
-    with :ok <- PolicyGate.evaluate(config.policy, amount, domain, gate_opts),
-         :ok <-
-           Ledger.check_budget(config.ledger, agent_id, amount, config.policy) do
-      {:ok, command}
-    else
-      {:deny, _reason} = denied -> denied
-      {:over_limit, limit_type} -> {:deny, {:over_budget, limit_type, amount}}
+  # The budget was reserved atomically in `pre_execute`. Refund it only when the
+  # command failed, so a failed payment does not permanently consume budget; a
+  # success needs no further recording. The refund uses the same agent id the
+  # reservation did so session and lifetime totals net back out.
+  defp maybe_refund_payment(%Pay{} = pay, result, config, context) do
+    if failed?(result) do
+      Ledger.release(config.ledger, payment_agent_id(pay, context), pay.amount, pay.meta || %{})
     end
+
+    :ok
   end
 
-  defp maybe_record_payment(%Pay{} = pay, _result, config) do
-    agent_id = pay.agent_id || Map.get(pay.meta, :agent_id, :unknown)
-    Ledger.record_spend(config.ledger, agent_id, pay.amount, pay.meta)
+  defp maybe_refund_payment(_command, _result, _config, _context), do: :ok
+
+  defp payment_agent_id(%Pay{} = pay, context) do
+    pay.agent_id || Map.get(pay.meta || %{}, :agent_id) || Map.get(context, :agent_id, :unknown)
   end
 
-  defp maybe_record_payment(_command, _result, _config), do: :ok
+  defp failed?({:error, _}), do: true
+  defp failed?(_), do: false
 end

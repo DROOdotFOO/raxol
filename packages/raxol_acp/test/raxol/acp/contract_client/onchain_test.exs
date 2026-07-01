@@ -480,6 +480,81 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
     end
   end
 
+  describe "nonce + receipt resilience" do
+    test "a stuck receipt returns :receipt_pending with the broadcast tx hash" do
+      Application.put_env(:raxol_acp, :onchain_receipt_timeout_ms, 30)
+      on_exit(fn -> Application.delete_env(:raxol_acp, :onchain_receipt_timeout_ms) end)
+
+      install_stub(fn req ->
+        case req["method"] do
+          "eth_getTransactionReceipt" -> ok_response(req, nil)
+          _ -> default_rpc(req)
+        end
+      end)
+
+      # The tx was broadcast; its hash rides the error so a retry re-queries it
+      # instead of re-broadcasting a duplicate under a fresh nonce.
+      assert {:error, {:receipt_pending, "0x" <> _ = tx_hash, _reason}} =
+               Onchain.set_budget("42", Decimal.new("1.00"))
+
+      assert byte_size(tx_hash) == 66
+    end
+
+    test "a broadcast failure rolls the nonce back so the next tx has no gap" do
+      NonceServer.reset(7)
+      before = NonceServer.peek()
+
+      install_stub(fn req ->
+        case req["method"] do
+          "eth_sendRawTransaction" ->
+            %{
+              "jsonrpc" => "2.0",
+              "id" => req["id"],
+              "error" => %{"code" => -32_000, "message" => "boom"}
+            }
+
+          _ ->
+            default_rpc(req)
+        end
+      end)
+
+      assert {:error, _} = Onchain.set_budget("42", Decimal.new("1.00"))
+
+      # The consumed nonce was returned; the next tx reuses it rather than
+      # leaving a gap that would strand every later transaction.
+      assert NonceServer.peek() == before
+    end
+
+    test "set_budget_with_payment_token scales by the configured token decimals" do
+      token = "0x" <> String.duplicate("ee", 20)
+      Application.put_env(:raxol_acp, :token_decimals, %{String.downcase(token) => 18})
+      on_exit(fn -> Application.delete_env(:raxol_acp, :token_decimals) end)
+
+      install_stub(default_handler(self()))
+
+      assert {:ok, _} =
+               Onchain.set_budget_with_payment_token("42", Decimal.new("1.00"), token)
+
+      assert_received {:rpc_call, "eth_sendRawTransaction", [raw]}
+      # 1.00 * 1e18 = 0x0de0b6b3a7640000, ABI-encoded as a 32-byte word.
+      one_e18 = String.duplicate("0", 49) <> "de0b6b3a7640000"
+      assert String.contains?(String.downcase(raw), one_e18)
+    end
+
+    test "set_budget_with_payment_token defaults to 6 decimals for an unconfigured token" do
+      token = "0x" <> String.duplicate("ee", 20)
+      install_stub(default_handler(self()))
+
+      assert {:ok, _} =
+               Onchain.set_budget_with_payment_token("42", Decimal.new("1.00"), token)
+
+      assert_received {:rpc_call, "eth_sendRawTransaction", [raw]}
+      # 1.00 * 1e6 = 0xf4240.
+      one_e6 = String.duplicate("0", 59) <> "f4240"
+      assert String.contains?(String.downcase(raw), one_e6)
+    end
+  end
+
   describe "telemetry" do
     test "emits :tx_sent and :tx_mined for a successful broadcast" do
       # This test asserts the broadcast telemetry, not job-id resolution; the

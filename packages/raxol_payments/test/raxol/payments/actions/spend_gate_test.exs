@@ -171,6 +171,30 @@ defmodule Raxol.Payments.Actions.SpendGateTest do
     end
   end
 
+  describe "authorize/3 require_policy" do
+    test "fails closed when a policy is required but absent" do
+      # No :policy in context -> the gate would otherwise be a no-op (unlimited).
+      ctx = context(%{require_policy: true})
+
+      assert {:error, {:policy_required, :no_spending_policy}} =
+               SpendGate.authorize(ctx, Decimal.new("0.10"), target: {:domain, "x.test"})
+    end
+
+    test "proceeds when a policy is present even with require_policy" do
+      ledger = start_ledger()
+      ctx = context(%{require_policy: true, policy: policy(), ledger: ledger})
+
+      assert :ok =
+               SpendGate.authorize(ctx, Decimal.new("0.50"),
+                 target: {:domain, "xochi.example.com"}
+               )
+    end
+
+    test "stays permissive without the flag (unchanged default)" do
+      assert :ok = SpendGate.authorize(context(%{}), Decimal.new("9999"))
+    end
+  end
+
   describe "release/2" do
     test "release nets out a prior authorize on totals" do
       ledger = start_ledger()

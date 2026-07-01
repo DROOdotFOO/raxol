@@ -39,6 +39,7 @@ defmodule Raxol.Payments.Actions.SpendGate do
           {:over_budget, atom()}
           | {:requires_confirmation, Decimal.t()}
           | {:invalid_amount, Decimal.t()}
+          | {:policy_required, atom()}
           | {:deny, PolicyGate.deny_reason()}
 
   @doc """
@@ -54,6 +55,7 @@ defmodule Raxol.Payments.Actions.SpendGate do
     target = Keyword.get(opts, :target, {:address, ""})
 
     with :ok <- validate_amount(amount),
+         :ok <- require_policy(context),
          :ok <- gate(Map.get(context, :policy), amount, target, context) do
       reserve(context, amount, opts)
     end
@@ -91,6 +93,27 @@ defmodule Raxol.Payments.Actions.SpendGate do
   end
 
   defp validate_amount(amount), do: {:error, {:invalid_amount, amount}}
+
+  # -- Policy presence --
+
+  # A missing policy makes the gate a no-op (`gate(nil, ...)` passes and the
+  # reservation is skipped), i.e. unlimited spending. That default-open posture
+  # is convenient for tests and unconfigured callers but wrong for a fund-moving
+  # deployment. `require_policy: true` (context) or
+  # `config :raxol_payments, :require_policy, true` fails closed when no
+  # `SpendingPolicy` is in context. Off by default (behaviour unchanged).
+  defp require_policy(context) do
+    if policy_required?(context) and not match?(%SpendingPolicy{}, Map.get(context, :policy)),
+      do: {:error, {:policy_required, :no_spending_policy}},
+      else: :ok
+  end
+
+  defp policy_required?(context) do
+    case Map.get(context, :require_policy) do
+      flag when is_boolean(flag) -> flag
+      _ -> Application.get_env(:raxol_payments, :require_policy, false)
+    end
+  end
 
   # -- Non-budget gate --
 
