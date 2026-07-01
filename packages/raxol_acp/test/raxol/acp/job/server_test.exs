@@ -76,6 +76,60 @@ defmodule Raxol.ACP.Job.ServerTest do
     end
   end
 
+  describe "expiry timer" do
+    test "auto-fires :expire once the deadline has passed" do
+      test_pid = self()
+      handler_id = "job-expired-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach_many(
+        handler_id,
+        [[:raxol, :acp, :job, :expired], [:raxol, :acp, :job, :transition]],
+        fn event, _m, meta, _ -> send(test_pid, {event, meta}) end,
+        nil
+      )
+
+      try do
+        now = System.system_time(:second)
+        {_pid, job_id} = start_job(expired_at: now - 1)
+
+        assert_receive {[:raxol, :acp, :job, :expired], %{from: :request}}, 1_000
+
+        assert_receive {[:raxol, :acp, :job, :transition], %{to: :expired}}, 1_000
+
+        # Reaching a terminal state stops the process (transient restart won't
+        # resurrect it), so the registration is released.
+        wait_unregistered(job_id)
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "does not fire while the deadline is still in the future" do
+      now = System.system_time(:second)
+      {_pid, job_id} = start_job(expired_at: now + 3600)
+
+      Process.sleep(50)
+      assert Job.Server.current_state(job_id) == :request
+    end
+
+    test "no timer is armed without :expired_at (unchanged behaviour)" do
+      {_pid, job_id} = start_job()
+
+      Process.sleep(50)
+      assert Job.Server.current_state(job_id) == :request
+    end
+  end
+
+  describe "reclaim/1" do
+    test "withdraws the escrowed budget through the contract client" do
+      {_pid, job_id} = start_job()
+      {:ok, _tx} = ContractClient.set_budget(job_id, Decimal.new("1.00"))
+
+      assert {:ok, "tx-" <> _} = Job.Server.reclaim(job_id)
+      assert InMemory.get_job(job_id).refunded
+    end
+  end
+
   describe "transition/4 forward path" do
     test "valid transition appends a memo and advances state" do
       {_pid, job_id} = start_job()

@@ -128,6 +128,23 @@ defmodule Raxol.ACP.ContractClientTest do
     end
   end
 
+  describe "withdraw_escrowed_funds/1 (delegated)" do
+    test "refunds the buyer and clears the budget" do
+      {:ok, job_id} = new_job()
+      {:ok, "tx-1"} = ContractClient.set_budget(job_id, Decimal.new("2.50"))
+
+      assert {:ok, "tx-2"} = ContractClient.withdraw_escrowed_funds(job_id)
+
+      job = InMemory.get_job(job_id)
+      assert job.refunded
+      assert is_nil(job.budget)
+    end
+
+    test "errors on unknown job" do
+      assert {:error, {:no_such_job, "nope"}} = ContractClient.withdraw_escrowed_funds("nope")
+    end
+  end
+
   describe "set_budget_with_payment_token/3 (delegated)" do
     test "records the budget and the token address" do
       {:ok, job_id} = new_job()

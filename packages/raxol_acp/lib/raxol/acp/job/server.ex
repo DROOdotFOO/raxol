@@ -88,6 +88,7 @@ defmodule Raxol.ACP.Job.Server do
           memos: [memo()],
           config: config(),
           persist?: boolean(),
+          expired_at: non_neg_integer() | nil,
           compiled: WorkflowCompiled.t(),
           ephemeral_saver_table: atom() | nil
         }
@@ -97,6 +98,7 @@ defmodule Raxol.ACP.Job.Server do
     :state,
     :compiled,
     :ephemeral_saver_table,
+    :expired_at,
     memos: [],
     config: %{},
     persist?: true
@@ -132,6 +134,15 @@ defmodule Raxol.ACP.Job.Server do
     from the Saver. Set to `false` for tests that exercise raw
     transition semantics; a per-process ephemeral ETS Saver is
     minted automatically so `Compiled.resume/4` still works.
+
+  ## Optional expiry
+
+  - `:expired_at` -- unix timestamp (seconds). When set, the server
+    auto-fires `:expire` once the deadline passes and the job is still
+    non-terminal, so escrowed funds do not wedge in a job whose
+    counterparty abandoned it. Pair with `reclaim/1` to withdraw the
+    escrow on-chain. Survives a transient restart (the deadline rides the
+    child spec). Omit it to keep the prior behaviour (no timer).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -203,6 +214,16 @@ defmodule Raxol.ACP.Job.Server do
   def approve(server, payload, signature \\ nil) do
     GenServer.call(resolve(server), {:approve, payload, signature})
   end
+
+  @doc """
+  Buyer-side reclaim of the escrowed budget for an expired / undelivered
+  job. Calls `Raxol.ACP.ContractClient.withdraw_escrowed_funds/1` through
+  the configured client. Intended after the job has passed its
+  `expired_at` without delivery; the on-chain contract enforces the timing.
+  """
+  @spec reclaim(GenServer.server() | binary()) ::
+          {:ok, ContractClient.tx_hash()} | {:error, term()}
+  def reclaim(server), do: GenServer.call(resolve(server), :reclaim)
 
   @doc "Return the full Job.Server struct for inspection."
   @spec get_state(GenServer.server() | binary()) :: t()
@@ -297,8 +318,11 @@ defmodule Raxol.ACP.Job.Server do
 
     job_id = Keyword.fetch!(opts, :job_id)
     persist? = Keyword.get(opts, :persist?, true)
+    expired_at = Keyword.get(opts, :expired_at)
 
     {state, memos, compiled, ephemeral_table} = hydrate(job_id, persist?)
+
+    maybe_schedule_expiry(expired_at, state)
 
     {:ok,
      %__MODULE__{
@@ -307,6 +331,7 @@ defmodule Raxol.ACP.Job.Server do
        memos: memos,
        config: config,
        persist?: persist?,
+       expired_at: expired_at,
        compiled: compiled,
        ephemeral_saver_table: ephemeral_table
      }}
@@ -444,7 +469,83 @@ defmodule Raxol.ACP.Job.Server do
   def handle_manager_call(:memos, _from, state),
     do: {:reply, state.memos, state}
 
+  def handle_manager_call(:reclaim, _from, state) do
+    result = ContractClient.impl().withdraw_escrowed_funds(to_string(state.job_id))
+    {:reply, result, state}
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info(:expiry_deadline, state) do
+    handle_expiry_tick(state, System.system_time(:second))
+  end
+
+  def handle_manager_info(_msg, state), do: {:noreply, state}
+
   # -- Private --
+
+  # -- Expiry timer --
+
+  # A job started with `:expired_at` (unix seconds) auto-fires `:expire` when
+  # the deadline passes and the job is still non-terminal, so escrowed funds do
+  # not wedge in a job whose counterparty abandoned it. Long deadlines re-arm in
+  # bounded steps so a single timer never exceeds the BEAM send_after ceiling.
+  @max_timer_ms 3_600_000
+
+  defp maybe_schedule_expiry(expired_at, state) do
+    if is_integer(expired_at) and not StateMachine.terminal?(state) do
+      schedule_expiry(expired_at, System.system_time(:second))
+    end
+
+    :ok
+  end
+
+  defp schedule_expiry(expired_at, now) do
+    remaining_ms = max(0, (expired_at - now) * 1000)
+    Process.send_after(self(), :expiry_deadline, min(remaining_ms, @max_timer_ms))
+  end
+
+  defp handle_expiry_tick(state, now) do
+    cond do
+      StateMachine.terminal?(state.state) ->
+        {:noreply, state}
+
+      is_integer(state.expired_at) and now >= state.expired_at ->
+        expire_now(state)
+
+      is_integer(state.expired_at) ->
+        schedule_expiry(state.expired_at, now)
+        {:noreply, state}
+
+      true ->
+        {:noreply, state}
+    end
+  end
+
+  # Deadline reached while still non-terminal: fire `:expire` through the
+  # workflow (writes the on-chain expired memo, the same path a handler
+  # rejection takes) and stop. Emits `[:raxol, :acp, :job, :expired]`.
+  defp expire_now(state) do
+    :telemetry.execute(
+      [:raxol, :acp, :job, :expired],
+      %{},
+      %{job_id: state.job_id, from: state.state}
+    )
+
+    case WorkflowCompiled.resume(
+           state.compiled,
+           state.job_id,
+           {:expire, %{reason: "deadline"}, nil}
+         ) do
+      {:ok, new_wf_state, _meta} ->
+        {:stop, :normal, commit_transition(state, new_wf_state)}
+
+      {:interrupted, _run_id, new_wf_state, _value} ->
+        {:noreply, commit_transition(state, new_wf_state)}
+
+      {:error, _reason, _wf_state} ->
+        {:noreply, state}
+    end
+  end
 
   # The state-machine guard short-circuits with `{:error, {:invalid_transition, _, _}}`
   # for events the current phase does not accept. Successful transitions
@@ -478,6 +579,19 @@ defmodule Raxol.ACP.Job.Server do
   end
 
   defp finalize_workflow_transition(state, new_wf_state, terminal?: terminal?) do
+    new_full_state = commit_transition(state, new_wf_state)
+
+    if terminal? do
+      {:stop, :normal, {:ok, new_wf_state.current_state}, new_full_state}
+    else
+      {:reply, {:ok, new_wf_state.current_state}, new_full_state}
+    end
+  end
+
+  # Apply a workflow transition's result to the server struct: mirror the memo
+  # to the Store, emit transition telemetry, and return the updated struct.
+  # Shared by the call-driven transition path and the expiry-timer path.
+  defp commit_transition(state, new_wf_state) do
     new_memo = List.last(new_wf_state.memos)
 
     new_full_state = %{
@@ -503,11 +617,7 @@ defmodule Raxol.ACP.Job.Server do
       }
     )
 
-    if terminal? do
-      {:stop, :normal, {:ok, new_wf_state.current_state}, new_full_state}
-    else
-      {:reply, {:ok, new_wf_state.current_state}, new_full_state}
-    end
+    new_full_state
   end
 
   defp ctx(state) do

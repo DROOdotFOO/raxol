@@ -109,6 +109,7 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   @sig_create_payable_memo_v2 "createPayableMemo(uint256,string,address,uint256,address,uint256,uint8,uint8,uint256,bool,uint8)"
   @sig_sign_memo "signMemo(uint256,bool,string)"
   @sig_claim_budget "claimBudget(uint256)"
+  @sig_withdraw_escrowed "withdrawEscrowedFunds(uint256)"
   @sig_confirm_x402 "confirmX402PaymentReceived(uint256)"
 
   # Which deployed ACP contract the selectors target. `:v1` (ACPSimple,
@@ -273,6 +274,16 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     call_data = ABI.encode_call(@sig_claim_budget, [{"uint256", job_id_to_uint256(job_id)}])
 
     case send_tx(:claim_budget, call_data) do
+      {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
+      {:error, _} = err -> err
+    end
+  end
+
+  @impl true
+  def withdraw_escrowed_funds(job_id) when is_binary(job_id) do
+    call_data = ABI.encode_call(@sig_withdraw_escrowed, [{"uint256", job_id_to_uint256(job_id)}])
+
+    case send_tx(:withdraw_escrowed_funds, call_data) do
       {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
       {:error, _} = err -> err
     end
