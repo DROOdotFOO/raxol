@@ -4,7 +4,11 @@ defmodule Raxol.Payments.Actions.Payments.RevokeMandate do
 
   v1 has no server revoke endpoint -- Xochi's KV budget counter for
   this envelope remains until `expires_at` per the agent-auth design
-  doc (2026-04-27).
+  doc (2026-04-27). When Xochi does revoke or exhaust a mandate, it
+  answers a protected call with `410 Gone`; the outbound plugin
+  (`Raxol.Payments.Req.Mandate`) prunes the local envelope on that
+  response, so a server-side revocation converges locally without this
+  Action.
   """
 
   @compile {:no_warn_undefined, Raxol.Agent.Action}
