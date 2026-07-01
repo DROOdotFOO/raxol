@@ -19,6 +19,21 @@ defmodule Raxol.Payments.LedgerPropertyTest do
     map(integer(1..100), &Decimal.new/1)
   end
 
+  defp adversarial_amount do
+    # A mix a hostile or hallucinating agent could produce: legitimate
+    # positives interleaved with zero, negatives, and non-finite Decimals.
+    one_of([
+      map(integer(1..100), &Decimal.new/1),
+      constant(Decimal.new(0)),
+      map(integer(1..100), &Decimal.new(-&1)),
+      member_of([
+        Decimal.new("NaN"),
+        Decimal.new("Infinity"),
+        Decimal.new("-Infinity")
+      ])
+    ])
+  end
+
   defp policy_with_caps do
     gen all(
           per_req <- integer(10..1_000),
@@ -43,9 +58,7 @@ defmodule Raxol.Payments.LedgerPropertyTest do
 
   defp fresh_ledger do
     {:ok, pid} =
-      Ledger.start_link(
-        table_name: :"prop_ledger_#{:erlang.unique_integer([:positive])}"
-      )
+      Ledger.start_link(table_name: :"prop_ledger_#{:erlang.unique_integer([:positive])}")
 
     pid
   end
@@ -174,6 +187,41 @@ defmodule Raxol.Payments.LedgerPropertyTest do
       after
         stop_ledger(a)
         stop_ledger(b)
+      end
+    end
+  end
+
+  property "no adversarial amount can lower the recorded total or be recorded (anti-poisoning)" do
+    check all(amounts <- list_of(adversarial_amount(), max_length: 40)) do
+      ledger = fresh_ledger()
+      policy = SpendingPolicy.unrestricted()
+
+      try do
+        {_final, decreases} =
+          Enum.reduce(amounts, {Decimal.new(0), []}, fn amount, {prev_total, viols} ->
+            _ = Ledger.try_spend(ledger, :agent_p, amount, policy)
+            total = Ledger.get_totals(ledger, :agent_p, policy).lifetime
+
+            if Decimal.compare(total, prev_total) == :lt do
+              {total, [{amount, prev_total, total} | viols]}
+            else
+              {total, viols}
+            end
+          end)
+
+        # A negative amount slipping into the ledger would net the running
+        # total downward, freeing budget headroom. The total must only ever
+        # rise or hold.
+        assert decreases == [], "recorded total decreased: #{inspect(decreases)}"
+
+        # Every entry that made it into the ledger is a real, strictly
+        # positive spend -- no zero, negative, or non-finite amount.
+        Enum.each(Ledger.get_history(ledger, :agent_p), fn entry ->
+          assert Decimal.compare(entry.amount, Decimal.new(0)) == :gt,
+                 "non-positive amount recorded: #{Decimal.to_string(entry.amount)}"
+        end)
+      after
+        stop_ledger(ledger)
       end
     end
   end

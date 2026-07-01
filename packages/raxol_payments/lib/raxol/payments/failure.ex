@@ -41,6 +41,7 @@ defmodule Raxol.Payments.Failure do
           | :method_mismatch
           | :invalid_request
           | :config_error
+          | :checkpoint_required
           | :network
           | :unknown
 
@@ -218,6 +219,18 @@ defmodule Raxol.Payments.Failure do
         "Payment is not configured: missing #{key}.",
         false,
         {:missing_context, key}
+      )
+
+  # A fund-moving deployment required a durable idempotency checkpoint but none
+  # was configured. Fail closed before signing rather than risk a double-settle
+  # on a crash-retry.
+  def from({:checkpoint_required, _} = detail),
+    do:
+      build(
+        :checkpoint_required,
+        "A durable idempotency checkpoint is required before settling this payment, but none is configured.",
+        false,
+        detail
       )
 
   # Polling timed out.

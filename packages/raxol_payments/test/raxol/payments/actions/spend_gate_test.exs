@@ -103,6 +103,74 @@ defmodule Raxol.Payments.Actions.SpendGateTest do
     end
   end
 
+  describe "authorize/3 amount validation" do
+    test "rejects a negative amount and records nothing" do
+      ledger = start_ledger()
+      ctx = context(%{policy: policy(), ledger: ledger})
+
+      assert {:error, {:invalid_amount, _}} =
+               SpendGate.authorize(ctx, Decimal.new("-1.00"),
+                 target: {:domain, "xochi.example.com"}
+               )
+
+      totals = Ledger.get_totals(ledger, "agent_1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
+    test "rejects a zero amount" do
+      ledger = start_ledger()
+      ctx = context(%{policy: policy(), ledger: ledger})
+
+      assert {:error, {:invalid_amount, _}} =
+               SpendGate.authorize(ctx, Decimal.new("0"), target: {:domain, "xochi.example.com"})
+    end
+
+    test "rejects non-finite amounts without raising" do
+      ledger = start_ledger()
+      ctx = context(%{policy: policy(), ledger: ledger})
+
+      assert {:error, {:invalid_amount, _}} =
+               SpendGate.authorize(ctx, Decimal.new("Infinity"),
+                 target: {:domain, "xochi.example.com"}
+               )
+
+      assert {:error, {:invalid_amount, _}} =
+               SpendGate.authorize(ctx, Decimal.new("NaN"),
+                 target: {:domain, "xochi.example.com"}
+               )
+    end
+
+    test "a negative authorize cannot create phantom budget headroom" do
+      ledger = start_ledger()
+      # Session cap kept high so this exercises the lifetime cap specifically.
+      pol = %{policy() | session_max: Decimal.new("100.00")}
+      ctx = context(%{policy: pol, ledger: ledger})
+
+      # Spend up to the lifetime cap of 10.00 in per-request-sized chunks.
+      for _ <- 1..10 do
+        assert :ok =
+                 SpendGate.authorize(ctx, Decimal.new("1.00"),
+                   target: {:domain, "xochi.example.com"}
+                 )
+      end
+
+      # A negative amount must not net down the total to free up headroom.
+      assert {:error, {:invalid_amount, _}} =
+               SpendGate.authorize(ctx, Decimal.new("-5.00"),
+                 target: {:domain, "xochi.example.com"}
+               )
+
+      # The lifetime cap is still enforced: no further real spend gets through.
+      assert {:error, {:over_budget, :lifetime}} =
+               SpendGate.authorize(ctx, Decimal.new("1.00"),
+                 target: {:domain, "xochi.example.com"}
+               )
+
+      totals = Ledger.get_totals(ledger, "agent_1", pol)
+      assert Decimal.equal?(totals.lifetime, Decimal.new("10.00"))
+    end
+  end
+
   describe "release/2" do
     test "release nets out a prior authorize on totals" do
       ledger = start_ledger()

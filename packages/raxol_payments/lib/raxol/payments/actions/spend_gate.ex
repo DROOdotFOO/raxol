@@ -38,6 +38,7 @@ defmodule Raxol.Payments.Actions.SpendGate do
   @type error ::
           {:over_budget, atom()}
           | {:requires_confirmation, Decimal.t()}
+          | {:invalid_amount, Decimal.t()}
           | {:deny, PolicyGate.deny_reason()}
 
   @doc """
@@ -52,7 +53,8 @@ defmodule Raxol.Payments.Actions.SpendGate do
   def authorize(context, %Decimal{} = amount, opts \\ []) when is_map(context) do
     target = Keyword.get(opts, :target, {:address, ""})
 
-    with :ok <- gate(Map.get(context, :policy), amount, target, context) do
+    with :ok <- validate_amount(amount),
+         :ok <- gate(Map.get(context, :policy), amount, target, context) do
       reserve(context, amount, opts)
     end
   end
@@ -72,6 +74,23 @@ defmodule Raxol.Payments.Actions.SpendGate do
         Ledger.release(ledger, agent_id, amount, metadata)
     end
   end
+
+  # -- Amount validation --
+
+  # A spend must be a positive, finite amount. Zero, negative, and non-finite
+  # (Infinity/NaN) amounts are rejected before any gate runs. A negative amount
+  # would otherwise pass every cap check and, once reserved, lower the running
+  # ledger total, handing back budget headroom for later real spends. In
+  # Decimal 2.x a finite value carries an integer coefficient while Infinity and
+  # NaN carry an atom, so `is_integer(coef)` gates them out without hitting the
+  # error `Decimal.compare/2` raises on NaN.
+  defp validate_amount(%Decimal{coef: coef} = amount) when is_integer(coef) do
+    if Decimal.compare(amount, 0) == :gt,
+      do: :ok,
+      else: {:error, {:invalid_amount, amount}}
+  end
+
+  defp validate_amount(amount), do: {:error, {:invalid_amount, amount}}
 
   # -- Non-budget gate --
 

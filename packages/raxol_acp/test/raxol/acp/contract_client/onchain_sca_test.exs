@@ -175,6 +175,12 @@ defmodule Raxol.ACP.ContractClient.OnchainSCATest do
     end
 
     test "create_job routes through SCA and returns the inner tx hash" do
+      # This test verifies SCA routing, not job-id resolution; the UserOp
+      # receipt carries no JobCreated event, so opt into the placeholder so
+      # create_job returns the inner tx hash.
+      Application.put_env(:raxol_acp, :allow_placeholder_job_id, true)
+      on_exit(fn -> Application.delete_env(:raxol_acp, :allow_placeholder_job_id) end)
+
       events = self()
       install_stub(events)
 

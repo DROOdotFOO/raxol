@@ -15,19 +15,21 @@ defmodule Raxol.ACP.Onchain.LogDecoder do
     encoded per the Solidity ABI head/tail rules.
   - `address` -- the contract that emitted the log.
 
-  This module covers the topic side (event signature hash, decoding
-  indexed primitives). Non-indexed parameter decoding is out of scope
-  for v0.1 -- the only ACP event we need is `JobCreated`, whose first
-  indexed parameter is the new `uint256 jobId`. Add an ABI decoder
-  here if/when an event with non-indexed payload data matters.
+  This module covers indexed primitives from `topics` (via `extract/4`)
+  and single-word non-indexed primitives from `data` (via
+  `extract_data/4`). The canonical ACPSimple `JobCreated` event carries
+  the new `uint256 jobId` as its first NON-indexed parameter (in `data`),
+  with `client`/`provider`/`evaluator` indexed, so the job id is `data`
+  word 0. Multi-word / dynamic ABI data decoding is out of scope.
 
-  ## v0.1 use case
+  ## Use case
 
   `Raxol.ACP.ContractClient.Onchain.create_job/3` uses this module to
   pull the new `jobId` out of a `JobCreated` event in the transaction
-  receipt. The exact event signature is configurable via
-  `:create_job_event_signature` so the placeholder (`JobCreated(uint256)`)
-  swaps cleanly when Virtuals' real ABI is vendored.
+  receipt. The event signature is configurable via
+  `:create_job_event_signature` and the location of the id via
+  `:create_job_id_source` (`{:data, word}` for a non-indexed id, the
+  default; `{:topic, index}` for an indexed one).
 
   ## Examples
 
@@ -177,6 +179,50 @@ defmodule Raxol.ACP.Onchain.LogDecoder do
       decode_one(raw, type)
     end
   end
+
+  @doc """
+  Find a log matching `event_signature_or_topic` and decode the
+  non-indexed parameter at `word_index` (0-based) from the log's `data`
+  as the given type.
+
+  Indexed parameters live in `topics` (use `extract/4`); non-indexed
+  parameters are ABI-encoded head-first into `data`, each occupying a
+  32-byte word. The canonical ACPSimple `JobCreated` event carries the
+  new `uint256 jobId` as its first non-indexed parameter, so the job id
+  is `data` word 0.
+
+  Returns `{:ok, value}` on success or `{:error, reason}`.
+  """
+  @spec extract_data([log()], String.t(), non_neg_integer(), :uint256 | :address | :bytes32) ::
+          {:ok, term()} | {:error, term()}
+  def extract_data(logs, event, word_index, type)
+      when is_list(logs) and is_binary(event) and is_integer(word_index) and word_index >= 0 do
+    with {:ok, log} <- find_or_error(logs, event),
+         data <- Map.get(log, "data", "0x"),
+         {:ok, word} <- data_word(data, word_index) do
+      decode_one(word, type)
+    end
+  end
+
+  @doc """
+  Return the `index`-th 32-byte word (0-based) of ABI `data` hex as a
+  0x-prefixed 64-hex-character string, suitable for the `decode_*`
+  helpers. Returns `{:error, _}` for malformed data or an out-of-range
+  index.
+  """
+  @spec data_word(String.t(), non_neg_integer()) :: {:ok, String.t()} | {:error, term()}
+  def data_word("0x" <> hex, index)
+      when is_integer(index) and index >= 0 and rem(byte_size(hex), 64) == 0 do
+    offset = index * 64
+
+    if byte_size(hex) >= offset + 64 do
+      {:ok, "0x" <> binary_part(hex, offset, 64)}
+    else
+      {:error, {:data_word_out_of_range, index}}
+    end
+  end
+
+  def data_word(other, _index), do: {:error, {:bad_data, other}}
 
   defp find_or_error(logs, event) do
     case find_event(logs, event) do

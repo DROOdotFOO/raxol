@@ -178,4 +178,55 @@ defmodule Raxol.ACP.Onchain.LogDecoderTest do
                LogDecoder.extract([log], "Foo()", 1, :uint256)
     end
   end
+
+  describe "data_word/2" do
+    test "returns the Nth 32-byte word of data" do
+      data = "0x" <> String.duplicate("0", 62) <> "2a" <> String.duplicate("0", 63) <> "7"
+
+      assert {:ok, word0} = LogDecoder.data_word(data, 0)
+      assert {:ok, 42} = LogDecoder.decode_uint256(word0)
+
+      assert {:ok, word1} = LogDecoder.data_word(data, 1)
+      assert {:ok, 7} = LogDecoder.decode_uint256(word1)
+    end
+
+    test ":data_word_out_of_range past the end" do
+      data = "0x" <> String.duplicate("0", 64)
+      assert {:error, {:data_word_out_of_range, 1}} = LogDecoder.data_word(data, 1)
+    end
+
+    test ":bad_data for a non-word-aligned or malformed data field" do
+      assert {:error, {:bad_data, _}} = LogDecoder.data_word("0xabc", 0)
+      assert {:error, {:bad_data, _}} = LogDecoder.data_word("not-hex", 0)
+    end
+  end
+
+  describe "extract_data/4" do
+    test "pulls a non-indexed uint256 from data word 0 (the real JobCreated shape)" do
+      sig = "JobCreated(uint256,address,address,address)"
+      addr = "0x" <> String.duplicate("0", 24) <> String.duplicate("11", 20)
+
+      log = %{
+        "topics" => [LogDecoder.event_topic(sig), addr, addr, addr],
+        "data" => "0x" <> String.duplicate("0", 62) <> "2a"
+      }
+
+      assert {:ok, 42} = LogDecoder.extract_data([log], sig, 0, :uint256)
+    end
+
+    test ":event_not_found when nothing matches" do
+      logs = [%{"topics" => ["0x" <> String.duplicate("0", 64)], "data" => "0x"}]
+
+      assert {:error, {:event_not_found, _}} =
+               LogDecoder.extract_data(logs, "Nope()", 0, :uint256)
+    end
+
+    test ":data_word_out_of_range when the data is too short" do
+      sig = "JobCreated(uint256,address,address,address)"
+      log = %{"topics" => [LogDecoder.event_topic(sig)], "data" => "0x"}
+
+      assert {:error, {:data_word_out_of_range, 0}} =
+               LogDecoder.extract_data([log], sig, 0, :uint256)
+    end
+  end
 end

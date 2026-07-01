@@ -50,19 +50,29 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   ## Job ID extraction
 
-  When `:create_job_event_signature` is configured, `create_job/3`
-  decodes the new job ID from the matching event log in the
-  transaction receipt via `Raxol.ACP.Onchain.LogDecoder`. The first
-  indexed parameter of the event is read as a `uint256` and returned
-  as a hex string (`"0x" <> hex`).
-
-  When no event signature is configured (or the event isn't found in
-  the receipt), `create_job/3` falls back to returning the
-  transaction hash as a synthetic job ID and emits the
-  `[:raxol, :acp, :onchain, :placeholder_job_id]` telemetry event.
+  `create_job/3` decodes the new job ID from the `JobCreated` event log
+  in the transaction receipt via `Raxol.ACP.Onchain.LogDecoder`. The
+  canonical ACPSimple event is
+  `JobCreated(uint256 jobId, address client, address provider, address evaluator)`,
+  where `jobId` is NON-indexed (in `data`) and the three addresses are
+  indexed. So the defaults read `data` word 0 as a `uint256` and return
+  it as a hex string (`"0x" <> hex`). Both the event signature and the
+  id location are overridable for other ABIs:
 
       config :raxol_acp,
-        create_job_event_signature: "JobCreated(uint256,address)"
+        create_job_event_signature: "JobCreated(uint256,address,address,address)",
+        create_job_id_source: {:data, 0}   # or {:topic, index} for an indexed id
+
+  Fails closed: when the id cannot be resolved (event absent, decode
+  error), `create_job/3` returns `{:error, {:job_id_unresolved, reason}}`
+  rather than a synthetic id, because a wrong job ID silently mis-targets
+  every downstream call. An integration harness whose stub does not emit
+  a real `JobCreated` event can opt back into the tx-hash placeholder:
+
+      config :raxol_acp, allow_placeholder_job_id: true
+
+  In that mode the fallback returns the transaction hash as the job ID and
+  emits `[:raxol, :acp, :onchain, :placeholder_job_id]`.
 
   ## Telemetry
 
@@ -114,7 +124,7 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     call_data = create_job_calldata(acp_version(), provider, evaluator, expired_at)
 
     case send_tx(:create_job, call_data) do
-      {:ok, tx_hash, receipt} -> {:ok, resolve_job_id(tx_hash, receipt)}
+      {:ok, tx_hash, receipt} -> resolve_job_id(tx_hash, receipt)
       {:error, _} = err -> err
     end
   end
@@ -156,26 +166,58 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     end
   end
 
-  # If a JobCreated event signature is configured, decode the job_id
-  # from the receipt logs. Otherwise (or if the event is missing), fall
-  # back to the transaction hash as a synthetic id and emit a warning.
+  # Resolve the new jobId from the JobCreated event in the receipt logs.
+  #
+  # The canonical ACPSimple JobCreated event carries the new uint256 jobId
+  # as its first NON-indexed parameter (in `data`), with client/provider/
+  # evaluator indexed. So the default reads `data` word 0. Both the event
+  # signature and the id source are configurable for other ABIs.
+  #
+  # Fails closed: if the id cannot be resolved, return an error rather than
+  # a synthetic tx-hash id. A tx hash returned as a job id silently
+  # mis-targets every downstream call (set_budget, create_memo,
+  # claim_budget) at the wrong uint256. An integration harness whose stub
+  # does not emit a real JobCreated event can opt back into the tx-hash
+  # placeholder with `config :raxol_acp, allow_placeholder_job_id: true`.
   defp resolve_job_id(tx_hash, receipt) do
-    case Application.get_env(:raxol_acp, :create_job_event_signature) do
-      nil ->
-        emit_placeholder(tx_hash, :no_signature_configured)
-        tx_hash
+    signature =
+      Application.get_env(
+        :raxol_acp,
+        :create_job_event_signature,
+        default_job_event_signature()
+      )
 
-      signature when is_binary(signature) ->
-        logs = Map.get(receipt, "logs", [])
+    logs = Map.get(receipt, "logs", [])
 
-        case LogDecoder.extract(logs, signature, 1, :uint256) do
-          {:ok, job_id_int} ->
-            "0x" <> (job_id_int |> Integer.to_string(16) |> String.downcase())
+    case decode_job_id(logs, signature) do
+      {:ok, job_id_int} ->
+        {:ok, "0x" <> (job_id_int |> Integer.to_string(16) |> String.downcase())}
 
-          {:error, reason} ->
-            emit_placeholder(tx_hash, reason)
-            tx_hash
-        end
+      {:error, reason} ->
+        resolve_job_id_fallback(tx_hash, reason)
+    end
+  end
+
+  # ACPSimple JobCreated(uint256 jobId, address client, address provider,
+  # address evaluator): jobId non-indexed, the other three indexed.
+  defp default_job_event_signature, do: "JobCreated(uint256,address,address,address)"
+
+  defp decode_job_id(_logs, signature) when not is_binary(signature),
+    do: {:error, :no_event_signature}
+
+  defp decode_job_id(logs, signature) do
+    case Application.get_env(:raxol_acp, :create_job_id_source, {:data, 0}) do
+      {:data, word} -> LogDecoder.extract_data(logs, signature, word, :uint256)
+      {:topic, index} -> LogDecoder.extract(logs, signature, index, :uint256)
+    end
+  end
+
+  defp resolve_job_id_fallback(tx_hash, reason) do
+    if Application.get_env(:raxol_acp, :allow_placeholder_job_id, false) do
+      emit_placeholder(tx_hash, reason)
+      {:ok, tx_hash}
+    else
+      {:error, {:job_id_unresolved, reason}}
     end
   end
 

@@ -28,6 +28,18 @@ defmodule Raxol.Payments.SpendGatePropertyTest do
     map(integer(1..150), fn n -> Decimal.div(Decimal.new(n), 100) end)
   end
 
+  defp invalid_amount do
+    one_of([
+      constant(Decimal.new(0)),
+      map(integer(1..1000), &Decimal.new(-&1)),
+      member_of([
+        Decimal.new("NaN"),
+        Decimal.new("Infinity"),
+        Decimal.new("-Infinity")
+      ])
+    ])
+  end
+
   # Unique child id so repeated property iterations don't collide on the
   # default `Ledger` child-spec id under the test supervisor.
   defp start_fresh_ledger do
@@ -52,6 +64,21 @@ defmodule Raxol.Payments.SpendGatePropertyTest do
 
       assert Decimal.compare(totals.lifetime, policy().lifetime_max) != :gt,
              "recorded #{Decimal.to_string(totals.lifetime)} > cap #{Decimal.to_string(policy().lifetime_max)}"
+    end
+  end
+
+  property "every non-positive or non-finite amount is rejected and records nothing" do
+    check all(amt <- invalid_amount()) do
+      ledger = start_fresh_ledger()
+      ctx = %{policy: policy(), ledger: ledger, agent_id: "a"}
+
+      # The gate is the choke point before any wallet signature; an amount
+      # that is not a finite positive is never a real payment and must be
+      # rejected up front, leaving the ledger untouched.
+      assert {:error, {:invalid_amount, _}} =
+               SpendGate.authorize(ctx, amt, target: {:domain, "x.test"})
+
+      assert Ledger.get_history(ledger, "a") == []
     end
   end
 
