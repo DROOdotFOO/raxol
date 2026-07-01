@@ -111,4 +111,61 @@ defmodule Raxol.REPL.SandboxTest do
       assert Enum.any?(violations, &String.contains?(&1, "not in whitelist"))
     end
   end
+
+  # The strict level guards an SSH/web-exposed REPL that may share a node with
+  # signing processes (the payments wallet GenServer, ledger). Sandboxed code
+  # must not be able to message, spawn near, or otherwise reach those processes
+  # in the milliseconds before the eval timeout fires.
+  describe "capability isolation (cannot reach signing processes)" do
+    test "denies Kernel.send to a named process (strict)" do
+      assert {:error, _} =
+               Sandbox.check(
+                 "Kernel.send(Raxol.Payments.Wallets.Op, :x)",
+                 :strict
+               )
+    end
+
+    test "denies Kernel.send to a named process (standard)" do
+      assert {:error, _} =
+               Sandbox.check(
+                 "Kernel.send(Raxol.Payments.Wallets.Op, :x)",
+                 :standard
+               )
+    end
+
+    test "denies the bare send special form" do
+      assert {:error, _} = Sandbox.check("send(SomeProc, :msg)", :strict)
+    end
+
+    test "denies spawn / spawn_link / spawn_monitor (strict)" do
+      assert {:error, _} = Sandbox.check("spawn(fn -> :ok end)", :strict)
+      assert {:error, _} = Sandbox.check("spawn_link(fn -> :ok end)", :strict)
+
+      assert {:error, _} =
+               Sandbox.check("spawn_monitor(fn -> :ok end)", :strict)
+    end
+
+    test "denies :gen_server.call (standard blocklist hole)" do
+      assert {:error, _} =
+               Sandbox.check(":gen_server.call(Wallet, :m)", :standard)
+    end
+
+    test "denies :erlang.send and :rpc.call (standard)" do
+      assert {:error, _} = Sandbox.check(":erlang.send(Wallet, :m)", :standard)
+
+      assert {:error, _} =
+               Sandbox.check(":rpc.call(node(), M, :f, [])", :standard)
+    end
+
+    test "denies Process.send / Process.whereis (standard)" do
+      assert {:error, _} = Sandbox.check("Process.whereis(Wallet)", :standard)
+
+      assert {:error, _} =
+               Sandbox.check("Process.send(Wallet, :m, [])", :standard)
+    end
+
+    test "still allows safe whitelisted computation (strict)" do
+      assert :ok = Sandbox.check("Enum.map([1, 2, 3], &(&1 * 2))", :strict)
+    end
+  end
 end

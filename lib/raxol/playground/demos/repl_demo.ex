@@ -126,7 +126,9 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   defp eval_input(model) do
     code = String.trim(model.input)
 
-    case Sandbox.check(code) do
+    # The playground is served anonymously over SSH, so the REPL demo runs at
+    # the whitelist-only strict level -- never the default standard blocklist.
+    case Sandbox.check(code, :strict) do
       :ok ->
         do_eval(model, code)
 
