@@ -23,6 +23,8 @@ defmodule Raxol.Payments.Wallets.Env do
 
   @behaviour Raxol.Payments.Wallet
 
+  alias Raxol.Payments.Secret
+
   @default_env_var "RAXOL_WALLET_KEY"
   @default_chain_id 8453
 
@@ -78,8 +80,8 @@ defmodule Raxol.Payments.Wallets.Env do
   @doc false
   @spec address(String.t()) :: String.t()
   def address(env_var) do
-    with {:ok, privkey} <- load_key(env_var),
-         {:ok, pubkey} <- ExSecp256k1.create_public_key(privkey) do
+    with {:ok, secret} <- load_key(env_var),
+         {:ok, pubkey} <- ExSecp256k1.create_public_key(Secret.reveal(secret)) do
       derive_address(pubkey)
     else
       {:error, reason} -> raise "Failed to derive address: #{inspect(reason)}"
@@ -89,10 +91,10 @@ defmodule Raxol.Payments.Wallets.Env do
   @doc false
   @spec sign_message(binary(), String.t()) :: {:ok, binary()} | {:error, term()}
   def sign_message(message, env_var) do
-    with {:ok, privkey} <- load_key(env_var) do
+    with {:ok, secret} <- load_key(env_var) do
       hash = ExKeccak.hash_256(message)
 
-      case ExSecp256k1.sign(hash, privkey) do
+      case ExSecp256k1.sign(hash, Secret.reveal(secret)) do
         {:ok, signature} ->
           {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
 
@@ -106,9 +108,9 @@ defmodule Raxol.Payments.Wallets.Env do
   @spec sign_typed_data(map(), map(), map(), String.t()) ::
           {:ok, binary()} | {:error, term()}
   def sign_typed_data(domain, types, message, env_var) do
-    with {:ok, privkey} <- load_key(env_var),
+    with {:ok, secret} <- load_key(env_var),
          {:ok, hash} <- Raxol.Payments.EIP712.hash(domain, types, message) do
-      case ExSecp256k1.sign(hash, privkey) do
+      case ExSecp256k1.sign(hash, Secret.reveal(secret)) do
         {:ok, signature} ->
           {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
 
@@ -121,8 +123,8 @@ defmodule Raxol.Payments.Wallets.Env do
   @doc false
   @spec sign_hash(<<_::256>>, String.t()) :: {:ok, binary()} | {:error, term()}
   def sign_hash(<<digest::binary-size(32)>>, env_var) do
-    with {:ok, privkey} <- load_key(env_var) do
-      case ExSecp256k1.sign(digest, privkey) do
+    with {:ok, secret} <- load_key(env_var) do
+      case ExSecp256k1.sign(digest, Secret.reveal(secret)) do
         {:ok, signature} ->
           {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
 
@@ -134,6 +136,12 @@ defmodule Raxol.Payments.Wallets.Env do
 
   # -- Private --
 
+  # The key is wrapped in `Secret` the moment it is decoded and revealed only at
+  # the signing NIF call. Even though this wallet is stateless (it re-reads the
+  # env var per call and never stores the key in process state), wrapping keeps
+  # the raw bytes out of any `with`-chain error report or crash dump between load
+  # and use. See `Raxol.Payments.Wallets.Op` for the same posture in a stateful
+  # wallet.
   defp load_key(env_var) do
     case System.get_env(env_var) do
       nil ->
@@ -144,7 +152,7 @@ defmodule Raxol.Payments.Wallets.Env do
         |> String.trim_leading("0x")
         |> Base.decode16(case: :mixed)
         |> case do
-          {:ok, key} when byte_size(key) == 32 -> {:ok, key}
+          {:ok, key} when byte_size(key) == 32 -> {:ok, Secret.new(key)}
           {:ok, key} -> {:error, {:invalid_key_length, byte_size(key)}}
           :error -> {:error, :invalid_hex}
         end

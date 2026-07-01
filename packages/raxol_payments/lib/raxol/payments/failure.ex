@@ -43,6 +43,7 @@ defmodule Raxol.Payments.Failure do
           | :config_error
           | :checkpoint_required
           | :policy_required
+          | :stranded
           | :network
           | :unknown
 
@@ -242,6 +243,18 @@ defmodule Raxol.Payments.Failure do
         :policy_required,
         "A spending policy is required for this payment, but none is configured.",
         false,
+        detail
+      )
+
+  # A poll gave up before the intent reached a terminal status. The origin funds
+  # may already have moved, so this is a reconcile case, not a clean retry: the
+  # intent id rides the error so an operator can resolve THAT intent.
+  def from({:stranded, intent_id} = detail),
+    do:
+      build(
+        :stranded,
+        "Intent #{intent_id} did not settle in the poll window and may be stranded; reconcile it before retrying.",
+        true,
         detail
       )
 
