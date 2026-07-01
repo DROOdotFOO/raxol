@@ -90,7 +90,7 @@ client = Req.new(base_url: "https://api.example.com")
 # If 402 -> wallet signs EIP-712 -> Xochi settles cross-chain -> response arrives
 ```
 
-Three protocols behind one interface: x402 (Coinbase HTTP 402, same-chain), MPP (Stripe/Tempo machine payments), and Xochi (cross-chain intent settlement, 0.10-0.40% fees, stealth-capable). Per-request, per-session, and lifetime spending limits enforced by a ledger GenServer. See [Agentic Commerce docs](docs/features/AGENTIC_COMMERCE.md).
+Five protocols behind one interface: x402 (Coinbase HTTP 402, same-chain), MPP (Stripe/Tempo machine payments), Xochi (cross-chain intent settlement, 0.10-0.40% fees, stealth-capable, the agent default), Permit2 (`PermitWitnessTransferFrom` signing for most ERC-20s), and Riddler (direct solver access, deprecated in favor of Xochi). Per-request, per-session, and lifetime spending limits enforced by a ledger GenServer. See [Agentic Commerce docs](docs/features/AGENTIC_COMMERCE.md).
 
 ## Agents that earn
 
