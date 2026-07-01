@@ -78,13 +78,17 @@ Each phase emits an on-chain memo via `Raxol.ACP.ContractClient.create_memo/5`, 
 `Raxol.ACP.ContractClient` is a behaviour with two implementations:
 
 - `InMemory`: for tests. No network, deterministic.
-- `Onchain`: production. Req-based JSON-RPC, EIP-1559 typed transactions, Yellow-Paper RLP encoding, log decoder for `create_job` to extract the job id.
+- `Onchain`: production. Req-based JSON-RPC, EIP-1559 typed transactions, Yellow-Paper RLP encoding. `create_job` resolves the new job id from the `JobCreated` event's non-indexed `data` word (overridable via `:create_job_event_signature` / `:create_job_id_source`) and fails closed (`{:error, {:job_id_unresolved, _}}`) rather than return a synthetic id that would mis-target downstream calls; an integration harness opts back into the tx-hash placeholder with `config :raxol_acp, allow_placeholder_job_id: true`. A broadcast whose receipt never arrives returns `{:receipt_pending, tx_hash, _}` (plus telemetry) so a retry re-queries rather than re-broadcasts, and token amounts scale by the token's decimals (`config :raxol_acp, :token_decimals`, default 6 for USDC).
 
-`Raxol.ACP.ABI` hand-rolls the Solidity encoder for the four ACP methods. Selectors verified byte-for-byte against canonical ERC-20.
+`Raxol.ACP.ABI` hand-rolls the Solidity encoder for the ACP methods. Selectors verified byte-for-byte against canonical ERC-20.
+
+## Escrow Expiry and Reclaim
+
+Start a `Job.Server` with `:expired_at` (unix seconds) and it arms a timer that auto-fires `:expire` once the deadline passes while the job is still non-terminal, so a job whose counterparty abandoned it does not wedge and its escrow is not stranded. The buyer reclaims the funds with `Job.Server.reclaim/1`, which calls `Raxol.ACP.ContractClient.withdraw_escrowed_funds/1` (the real `ACPSimple.withdrawEscrowedFunds`); the on-chain contract enforces that reclaim is only valid after expiry. The deadline rides the child spec, so it survives a transient restart.
 
 ## Nonce Serialization
 
-The `Raxol.ACP.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox. The original integration plan claimed process-per-job avoided concurrent-Alchemy collisions, but it doesn't. NonceServer does.
+The `Raxol.ACP.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox. The original integration plan claimed process-per-job avoided concurrent-Alchemy collisions, but it doesn't. NonceServer does. A transaction that fails before it is broadcast rolls the consumed nonce back, so the next transaction reuses it instead of leaving a gap that would strand every later transaction (the SCA path reads its nonce fresh per call and is unaffected).
 
 ## Seller Stack
 

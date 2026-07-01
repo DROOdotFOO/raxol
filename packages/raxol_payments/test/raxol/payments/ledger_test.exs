@@ -178,6 +178,67 @@ defmodule Raxol.Payments.LedgerTest do
     end
   end
 
+  describe "invalid amounts" do
+    setup do
+      policy = %SpendingPolicy{
+        per_request_max: Decimal.new("1.00"),
+        session_max: Decimal.new("5.00"),
+        session_window_ms: 60_000,
+        lifetime_max: Decimal.new("100.00")
+      }
+
+      %{policy: policy}
+    end
+
+    test "try_spend rejects a negative amount and records nothing", %{
+      ledger: ledger,
+      policy: policy
+    } do
+      assert {:over_limit, :invalid_amount} =
+               Ledger.try_spend(ledger, "agent_1", Decimal.new("-1.00"), policy)
+
+      assert Ledger.get_history(ledger, "agent_1") == []
+    end
+
+    test "try_spend rejects a zero amount", %{ledger: ledger, policy: policy} do
+      assert {:over_limit, :invalid_amount} =
+               Ledger.try_spend(ledger, "agent_1", Decimal.new("0"), policy)
+
+      assert Ledger.get_history(ledger, "agent_1") == []
+    end
+
+    test "check_budget rejects a negative amount", %{ledger: ledger, policy: policy} do
+      assert {:over_limit, :invalid_amount} =
+               Ledger.check_budget(ledger, "agent_1", Decimal.new("-0.01"), policy)
+    end
+
+    test "try_spend rejects non-finite amounts without raising", %{
+      ledger: ledger,
+      policy: policy
+    } do
+      assert {:over_limit, :invalid_amount} =
+               Ledger.try_spend(ledger, "agent_1", Decimal.new("Infinity"), policy)
+
+      assert {:over_limit, :invalid_amount} =
+               Ledger.try_spend(ledger, "agent_1", Decimal.new("NaN"), policy)
+
+      assert Ledger.get_history(ledger, "agent_1") == []
+    end
+
+    test "a rejected negative amount cannot lower a prior total", %{
+      ledger: ledger,
+      policy: policy
+    } do
+      assert :ok = Ledger.try_spend(ledger, "agent_1", Decimal.new("0.50"), policy)
+
+      assert {:over_limit, :invalid_amount} =
+               Ledger.try_spend(ledger, "agent_1", Decimal.new("-0.50"), policy)
+
+      totals = Ledger.get_totals(ledger, "agent_1", policy)
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0.50"))
+    end
+  end
+
   describe "get_totals/3" do
     test "returns session and lifetime totals", %{ledger: ledger} do
       policy = %SpendingPolicy{

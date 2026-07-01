@@ -38,6 +38,8 @@ defmodule Raxol.Payments.Actions.SpendGate do
   @type error ::
           {:over_budget, atom()}
           | {:requires_confirmation, Decimal.t()}
+          | {:invalid_amount, Decimal.t()}
+          | {:policy_required, atom()}
           | {:deny, PolicyGate.deny_reason()}
 
   @doc """
@@ -52,7 +54,9 @@ defmodule Raxol.Payments.Actions.SpendGate do
   def authorize(context, %Decimal{} = amount, opts \\ []) when is_map(context) do
     target = Keyword.get(opts, :target, {:address, ""})
 
-    with :ok <- gate(Map.get(context, :policy), amount, target, context) do
+    with :ok <- validate_amount(amount),
+         :ok <- require_policy(context),
+         :ok <- gate(Map.get(context, :policy), amount, target, context) do
       reserve(context, amount, opts)
     end
   end
@@ -70,6 +74,44 @@ defmodule Raxol.Payments.Actions.SpendGate do
       ledger ->
         agent_id = Map.get(context, :agent_id, :unknown)
         Ledger.release(ledger, agent_id, amount, metadata)
+    end
+  end
+
+  # -- Amount validation --
+
+  # A spend must be a positive, finite amount. Zero, negative, and non-finite
+  # (Infinity/NaN) amounts are rejected before any gate runs. A negative amount
+  # would otherwise pass every cap check and, once reserved, lower the running
+  # ledger total, handing back budget headroom for later real spends. In
+  # Decimal 2.x a finite value carries an integer coefficient while Infinity and
+  # NaN carry an atom, so `is_integer(coef)` gates them out without hitting the
+  # error `Decimal.compare/2` raises on NaN.
+  defp validate_amount(%Decimal{coef: coef} = amount) when is_integer(coef) do
+    if Decimal.compare(amount, 0) == :gt,
+      do: :ok,
+      else: {:error, {:invalid_amount, amount}}
+  end
+
+  defp validate_amount(amount), do: {:error, {:invalid_amount, amount}}
+
+  # -- Policy presence --
+
+  # A missing policy makes the gate a no-op (`gate(nil, ...)` passes and the
+  # reservation is skipped), i.e. unlimited spending. That default-open posture
+  # is convenient for tests and unconfigured callers but wrong for a fund-moving
+  # deployment. `require_policy: true` (context) or
+  # `config :raxol_payments, :require_policy, true` fails closed when no
+  # `SpendingPolicy` is in context. Off by default (behaviour unchanged).
+  defp require_policy(context) do
+    if policy_required?(context) and not match?(%SpendingPolicy{}, Map.get(context, :policy)),
+      do: {:error, {:policy_required, :no_spending_policy}},
+      else: :ok
+  end
+
+  defp policy_required?(context) do
+    case Map.get(context, :require_policy) do
+      flag when is_boolean(flag) -> flag
+      _ -> Application.get_env(:raxol_payments, :require_policy, false)
     end
   end
 

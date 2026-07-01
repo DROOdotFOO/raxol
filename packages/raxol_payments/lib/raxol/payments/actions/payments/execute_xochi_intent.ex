@@ -18,8 +18,17 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   and the Action runs again for the same logical payment, it finds the
   checkpoint and returns the in-flight intent for the caller to poll, rather than
   re-quoting and signing a second time. The spend is reserved and the signature
-  released exactly once across the crash. Without a checkpoint store the path is
-  unchanged: every call quotes and signs.
+  released exactly once across the crash.
+
+  Without a checkpoint store the settlement proceeds unchecked and emits
+  `[:raxol, :payments, :xochi, :unchecked_settlement]` telemetry, so a crash
+  between signing and confirming would re-quote and sign a second time. A
+  fund-moving deployment closes that window by injecting a durable `:checkpoint`
+  store (see `Raxol.Payments.Checkpoint.ContextStore`) and setting
+  `require_checkpoint: true` in context (or `config :raxol_payments,
+  :require_checkpoint, true`), which fails the Action closed with
+  `{:error, {:checkpoint_required, _}}` before any signature when no store is
+  present.
 
   ## Context keys
 
@@ -29,6 +38,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   * `:policy`, `:ledger`, `:agent_id`, `:on_confirm` -- see `SpendGate`.
   * `:checkpoint` -- optional `{module, handle}` `Raxol.Payments.Checkpoint`
     store for idempotent recovery (nil disables it).
+  * `:require_checkpoint` -- when `true`, the Action fails closed with
+    `{:error, {:checkpoint_required, _}}` unless a `:checkpoint` store is present
+    (default `false`; falls back to `config :raxol_payments, :require_checkpoint`).
   * `:idempotency_key` -- optional explicit key; derived from the payment when
     absent.
   """
@@ -101,8 +113,8 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   def run(params, context) do
     with {:ok, wallet} <- fetch(context, :wallet),
          {:ok, config} <- fetch(context, :xochi_config),
-         {:ok, request, amount} <- build_request(params, wallet) do
-      store = Map.get(context, :checkpoint)
+         {:ok, request, amount} <- build_request(params, wallet),
+         {:ok, store} <- resolve_checkpoint(context, request) do
       key = idempotency_key(context, request)
 
       case Checkpoint.fetch(store, key) do
@@ -161,6 +173,47 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   end
 
   defp assert_settlement_privacy(_request, _exec), do: :ok
+
+  # Resolve the idempotency store that lets a resumed settlement poll the
+  # in-flight intent instead of signing a second time. An explicit `:checkpoint`
+  # store in context wins. With none, a fund-moving deployment sets
+  # `require_checkpoint: true` (context) or `config :raxol_payments,
+  # :require_checkpoint, true`, so a missing store fails closed BEFORE any
+  # signature. Otherwise the settlement proceeds unchecked and emits telemetry,
+  # so the double-settle exposure on a crash-retry is observable, never silent.
+  defp resolve_checkpoint(context, request) do
+    case Map.get(context, :checkpoint) do
+      {module, _handle} = store when is_atom(module) ->
+        {:ok, store}
+
+      _ ->
+        if require_checkpoint?(context) do
+          {:error, {:checkpoint_required, :no_idempotency_store}}
+        else
+          emit_unchecked_settlement(request)
+          {:ok, nil}
+        end
+    end
+  end
+
+  defp require_checkpoint?(context) do
+    case Map.get(context, :require_checkpoint) do
+      flag when is_boolean(flag) -> flag
+      _ -> Application.get_env(:raxol_payments, :require_checkpoint, false)
+    end
+  end
+
+  defp emit_unchecked_settlement(%QuoteRequest{} = request) do
+    :telemetry.execute(
+      [:raxol, :payments, :xochi, :unchecked_settlement],
+      %{},
+      %{
+        wallet: request.wallet,
+        from_chain_id: request.from_chain_id,
+        to_chain_id: request.to_chain_id
+      }
+    )
+  end
 
   # An explicit key lets a caller treat two otherwise-identical payments as
   # distinct; otherwise the key is the canonical payment, so a resumed run of the

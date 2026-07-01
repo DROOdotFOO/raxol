@@ -41,6 +41,9 @@ defmodule Raxol.Payments.Failure do
           | :method_mismatch
           | :invalid_request
           | :config_error
+          | :checkpoint_required
+          | :policy_required
+          | :stranded
           | :network
           | :unknown
 
@@ -218,6 +221,41 @@ defmodule Raxol.Payments.Failure do
         "Payment is not configured: missing #{key}.",
         false,
         {:missing_context, key}
+      )
+
+  # A fund-moving deployment required a durable idempotency checkpoint but none
+  # was configured. Fail closed before signing rather than risk a double-settle
+  # on a crash-retry.
+  def from({:checkpoint_required, _} = detail),
+    do:
+      build(
+        :checkpoint_required,
+        "A durable idempotency checkpoint is required before settling this payment, but none is configured.",
+        false,
+        detail
+      )
+
+  # A fund-moving deployment required a spending policy but none was in context.
+  # Fail closed rather than let a missing policy mean unlimited spend.
+  def from({:policy_required, _} = detail),
+    do:
+      build(
+        :policy_required,
+        "A spending policy is required for this payment, but none is configured.",
+        false,
+        detail
+      )
+
+  # A poll gave up before the intent reached a terminal status. The origin funds
+  # may already have moved, so this is a reconcile case, not a clean retry: the
+  # intent id rides the error so an operator can resolve THAT intent.
+  def from({:stranded, intent_id} = detail),
+    do:
+      build(
+        :stranded,
+        "Intent #{intent_id} did not settle in the poll window and may be stranded; reconcile it before retrying.",
+        true,
+        detail
       )
 
   # Polling timed out.

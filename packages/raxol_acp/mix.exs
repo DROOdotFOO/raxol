@@ -50,6 +50,7 @@ defmodule RaxolAcp.MixProject do
       {:decimal, "~> 2.0"},
       {:mint_web_socket, "~> 1.0"},
       {:cowboy, "~> 2.10"},
+      {:stream_data, "~> 1.0", only: :test},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}

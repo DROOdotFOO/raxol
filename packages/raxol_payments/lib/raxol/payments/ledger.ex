@@ -49,7 +49,8 @@ defmodule Raxol.Payments.Ledger do
   Check if a payment amount fits within the spending policy.
 
   Returns `:ok` or `{:over_limit, limit_type}` where limit_type is
-  `:per_request`, `:session`, or `:lifetime`.
+  `:per_request`, `:session`, `:lifetime`, or `:invalid_amount` (a zero,
+  negative, or non-finite amount).
 
   Note: For concurrent use, prefer `try_spend/5` which atomically checks
   and records to prevent TOCTOU races.
@@ -347,13 +348,28 @@ defmodule Raxol.Payments.Ledger do
   end
 
   defp do_check_budget(table, agent_id, amount, policy) do
-    with :ok <- check_per_request(amount, policy),
+    with :ok <- check_amount_positive(amount),
+         :ok <- check_per_request(amount, policy),
          entries = get_entries(table, agent_id),
          :ok <- check_session(entries, amount, policy),
          :ok <- check_lifetime(entries, amount, policy) do
       :ok
     end
   end
+
+  # Reject non-positive or non-finite amounts before any cap check. This is the
+  # ledger-side backstop for the SpendGate guard: a negative amount recorded via
+  # `try_spend` would net down the session and lifetime totals, so it must never
+  # be admitted regardless of caller. A finite Decimal carries an integer
+  # coefficient while Infinity and NaN carry an atom (and `Decimal.compare/2`
+  # raises on NaN), so `is_integer(coef)` gates them out safely.
+  defp check_amount_positive(%Decimal{coef: coef} = amount) when is_integer(coef) do
+    if Decimal.compare(amount, 0) == :gt,
+      do: :ok,
+      else: {:over_limit, :invalid_amount}
+  end
+
+  defp check_amount_positive(_amount), do: {:over_limit, :invalid_amount}
 
   defp check_per_request(amount, policy) do
     if Decimal.compare(amount, policy.per_request_max) == :gt,

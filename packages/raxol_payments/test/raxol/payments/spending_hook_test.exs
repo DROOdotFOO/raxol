@@ -138,8 +138,10 @@ defmodule Raxol.Payments.SpendingHookTest do
     end
   end
 
-  describe "post_execute/3 with Pay directive" do
-    test "records payment using agent_id field", %{ledger: ledger} do
+  describe "atomic reserve + refund" do
+    test "the spend is reserved once in pre_execute, not double-counted in post", %{
+      ledger: ledger
+    } do
       pay =
         Pay.new(
           amount: Decimal.new("0.02"),
@@ -148,11 +150,61 @@ defmodule Raxol.Payments.SpendingHookTest do
           perform: fn -> {:ok, :ignored} end
         )
 
+      assert {:ok, ^pay} = SpendingHook.pre_execute(pay, %{})
       assert {:ok, :result} = SpendingHook.post_execute(pay, :result, %{})
 
-      :timer.sleep(10)
       entries = Ledger.get_history(ledger, :pay_test)
       assert length(entries) == 1
+      assert Decimal.equal?(hd(entries).amount, Decimal.new("0.02"))
+    end
+
+    test "post_execute refunds the reservation when the command failed", %{ledger: ledger} do
+      pay =
+        Pay.new(
+          amount: Decimal.new("0.03"),
+          domain: "api.test.com",
+          agent_id: :fail_test,
+          perform: fn -> {:error, :boom} end
+        )
+
+      assert {:ok, ^pay} = SpendingHook.pre_execute(pay, %{})
+      assert {:ok, {:error, :boom}} = SpendingHook.post_execute(pay, {:error, :boom}, %{})
+
+      # Reserve + refund net to zero, so a failed payment does not consume budget.
+      totals = Ledger.get_totals(ledger, :fail_test, SpendingPolicy.dev())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
+    test "the reservation counts against the session cap immediately (no TOCTOU window)", %{
+      ledger: ledger
+    } do
+      # pre_execute reserves atomically via try_spend, so a second Pay sees the
+      # first's spend without waiting for a post_execute record. Fill the 1.00
+      # session cap (dev policy) with reservations, then the next is denied.
+      for _ <- 1..10 do
+        pay =
+          Pay.new(
+            amount: Decimal.new("0.10"),
+            domain: "api.test.com",
+            agent_id: :seq,
+            perform: fn -> {:ok, :ignored} end
+          )
+
+        assert {:ok, ^pay} = SpendingHook.pre_execute(pay, %{})
+      end
+
+      over =
+        Pay.new(
+          amount: Decimal.new("0.10"),
+          domain: "api.test.com",
+          agent_id: :seq,
+          perform: fn -> {:ok, :ignored} end
+        )
+
+      assert {:deny, {:over_budget, :session, _}} = SpendingHook.pre_execute(over, %{})
+
+      totals = Ledger.get_totals(ledger, :seq, SpendingPolicy.dev())
+      assert Decimal.equal?(totals.session, Decimal.new("1.00"))
     end
 
     test "passes through without Pay", %{ledger: ledger} do

@@ -135,6 +135,17 @@ defmodule Raxol.ACP.ContractClient.InMemory do
   end
 
   @impl true
+  def withdraw_escrowed_funds(job_id) when is_binary(job_id) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      with_job(state, job_id, fn job, state ->
+        tx_hash = next_tx_hash(state)
+        new_job = job |> Map.put(:budget, nil) |> Map.put(:refunded, true)
+        bump_tx({{:ok, tx_hash}, put_job(state, job_id, new_job)})
+      end)
+    end)
+  end
+
+  @impl true
   def set_budget_with_payment_token(job_id, %Decimal{} = amount, token)
       when is_binary(job_id) and is_binary(token) do
     Agent.get_and_update(__MODULE__, fn state ->

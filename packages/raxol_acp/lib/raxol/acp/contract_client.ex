@@ -92,6 +92,19 @@ defmodule Raxol.ACP.ContractClient do
               {:ok, tx_hash()} | {:error, term()}
 
   @doc """
+  Reclaim the escrowed budget for an expired / undelivered job
+  (buyer-side refund). Mirrors `ACPSimple.withdrawEscrowedFunds`:
+
+      withdrawEscrowedFunds(uint256 jobId)
+
+  Callable by the buyer once the job has passed its `expired_at` without
+  delivery, so escrowed funds are not stranded when a seller abandons a
+  job. Emits `RefundedBudget` on-chain.
+  """
+  @callback withdraw_escrowed_funds(job_id()) ::
+              {:ok, tx_hash()} | {:error, term()}
+
+  @doc """
   Set the escrow budget in a specific ERC-20 token. Mirrors
   `ACPSimple.setBudgetWithPaymentToken`:
 
@@ -171,6 +184,9 @@ defmodule Raxol.ACP.ContractClient do
 
   @spec claim_budget(job_id()) :: {:ok, tx_hash()} | {:error, term()}
   def claim_budget(job_id), do: impl().claim_budget(job_id)
+
+  @spec withdraw_escrowed_funds(job_id()) :: {:ok, tx_hash()} | {:error, term()}
+  def withdraw_escrowed_funds(job_id), do: impl().withdraw_escrowed_funds(job_id)
 
   @spec set_budget_with_payment_token(job_id(), amount_usdc(), address()) ::
           {:ok, tx_hash()} | {:error, term()}

@@ -528,6 +528,61 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
       assert Decimal.equal?(totals.lifetime, Decimal.new("1.00"))
     end
 
+    test "require_checkpoint with no store fails closed before signing or charging" do
+      # No stub: the guard must trip before any network or signature.
+      ledger = start_supervised!({Ledger, [name: nil]})
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        require_checkpoint: true
+      }
+
+      assert {:error, %Failure{reason: :checkpoint_required, retryable?: false}} =
+               ExecuteXochiIntent.run(base_params(%{}), ctx)
+
+      # A missing durable checkpoint must stop the payment before it signs or
+      # reserves budget -- the whole point is to prevent a crash-retry double-pay.
+      refute_received :wallet_signed
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
+    end
+
+    test "settling without a checkpoint emits unchecked_settlement telemetry" do
+      stub_quote_and_execute()
+      ledger = start_supervised!({Ledger, [name: nil]})
+
+      handler_id = "unchecked-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:raxol, :payments, :xochi, :unchecked_settlement],
+        fn _e, _m, meta, _ -> send(test_pid, {:unchecked, meta}) end,
+        nil
+      )
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1"
+      }
+
+      try do
+        assert {:ok, _} = ExecuteXochiIntent.run(base_params(%{}), ctx)
+
+        # The unchecked settlement is observable, never silent.
+        assert_received {:unchecked, %{wallet: "0x1111111111111111111111111111111111111111"}}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
     test "records the in-flight intent in the checkpoint after submitting" do
       stub_quote_and_execute()
       ledger = start_supervised!({Ledger, [name: nil]})

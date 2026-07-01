@@ -50,19 +50,29 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   ## Job ID extraction
 
-  When `:create_job_event_signature` is configured, `create_job/3`
-  decodes the new job ID from the matching event log in the
-  transaction receipt via `Raxol.ACP.Onchain.LogDecoder`. The first
-  indexed parameter of the event is read as a `uint256` and returned
-  as a hex string (`"0x" <> hex`).
-
-  When no event signature is configured (or the event isn't found in
-  the receipt), `create_job/3` falls back to returning the
-  transaction hash as a synthetic job ID and emits the
-  `[:raxol, :acp, :onchain, :placeholder_job_id]` telemetry event.
+  `create_job/3` decodes the new job ID from the `JobCreated` event log
+  in the transaction receipt via `Raxol.ACP.Onchain.LogDecoder`. The
+  canonical ACPSimple event is
+  `JobCreated(uint256 jobId, address client, address provider, address evaluator)`,
+  where `jobId` is NON-indexed (in `data`) and the three addresses are
+  indexed. So the defaults read `data` word 0 as a `uint256` and return
+  it as a hex string (`"0x" <> hex`). Both the event signature and the
+  id location are overridable for other ABIs:
 
       config :raxol_acp,
-        create_job_event_signature: "JobCreated(uint256,address)"
+        create_job_event_signature: "JobCreated(uint256,address,address,address)",
+        create_job_id_source: {:data, 0}   # or {:topic, index} for an indexed id
+
+  Fails closed: when the id cannot be resolved (event absent, decode
+  error), `create_job/3` returns `{:error, {:job_id_unresolved, reason}}`
+  rather than a synthetic id, because a wrong job ID silently mis-targets
+  every downstream call. An integration harness whose stub does not emit
+  a real `JobCreated` event can opt back into the tx-hash placeholder:
+
+      config :raxol_acp, allow_placeholder_job_id: true
+
+  In that mode the fallback returns the transaction hash as the job ID and
+  emits `[:raxol, :acp, :onchain, :placeholder_job_id]`.
 
   ## Telemetry
 
@@ -99,6 +109,7 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   @sig_create_payable_memo_v2 "createPayableMemo(uint256,string,address,uint256,address,uint256,uint8,uint8,uint256,bool,uint8)"
   @sig_sign_memo "signMemo(uint256,bool,string)"
   @sig_claim_budget "claimBudget(uint256)"
+  @sig_withdraw_escrowed "withdrawEscrowedFunds(uint256)"
   @sig_confirm_x402 "confirmX402PaymentReceived(uint256)"
 
   # Which deployed ACP contract the selectors target. `:v1` (ACPSimple,
@@ -114,7 +125,7 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     call_data = create_job_calldata(acp_version(), provider, evaluator, expired_at)
 
     case send_tx(:create_job, call_data) do
-      {:ok, tx_hash, receipt} -> {:ok, resolve_job_id(tx_hash, receipt)}
+      {:ok, tx_hash, receipt} -> resolve_job_id(tx_hash, receipt)
       {:error, _} = err -> err
     end
   end
@@ -156,26 +167,58 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     end
   end
 
-  # If a JobCreated event signature is configured, decode the job_id
-  # from the receipt logs. Otherwise (or if the event is missing), fall
-  # back to the transaction hash as a synthetic id and emit a warning.
+  # Resolve the new jobId from the JobCreated event in the receipt logs.
+  #
+  # The canonical ACPSimple JobCreated event carries the new uint256 jobId
+  # as its first NON-indexed parameter (in `data`), with client/provider/
+  # evaluator indexed. So the default reads `data` word 0. Both the event
+  # signature and the id source are configurable for other ABIs.
+  #
+  # Fails closed: if the id cannot be resolved, return an error rather than
+  # a synthetic tx-hash id. A tx hash returned as a job id silently
+  # mis-targets every downstream call (set_budget, create_memo,
+  # claim_budget) at the wrong uint256. An integration harness whose stub
+  # does not emit a real JobCreated event can opt back into the tx-hash
+  # placeholder with `config :raxol_acp, allow_placeholder_job_id: true`.
   defp resolve_job_id(tx_hash, receipt) do
-    case Application.get_env(:raxol_acp, :create_job_event_signature) do
-      nil ->
-        emit_placeholder(tx_hash, :no_signature_configured)
-        tx_hash
+    signature =
+      Application.get_env(
+        :raxol_acp,
+        :create_job_event_signature,
+        default_job_event_signature()
+      )
 
-      signature when is_binary(signature) ->
-        logs = Map.get(receipt, "logs", [])
+    logs = Map.get(receipt, "logs", [])
 
-        case LogDecoder.extract(logs, signature, 1, :uint256) do
-          {:ok, job_id_int} ->
-            "0x" <> (job_id_int |> Integer.to_string(16) |> String.downcase())
+    case decode_job_id(logs, signature) do
+      {:ok, job_id_int} ->
+        {:ok, "0x" <> (job_id_int |> Integer.to_string(16) |> String.downcase())}
 
-          {:error, reason} ->
-            emit_placeholder(tx_hash, reason)
-            tx_hash
-        end
+      {:error, reason} ->
+        resolve_job_id_fallback(tx_hash, reason)
+    end
+  end
+
+  # ACPSimple JobCreated(uint256 jobId, address client, address provider,
+  # address evaluator): jobId non-indexed, the other three indexed.
+  defp default_job_event_signature, do: "JobCreated(uint256,address,address,address)"
+
+  defp decode_job_id(_logs, signature) when not is_binary(signature),
+    do: {:error, :no_event_signature}
+
+  defp decode_job_id(logs, signature) do
+    case Application.get_env(:raxol_acp, :create_job_id_source, {:data, 0}) do
+      {:data, word} -> LogDecoder.extract_data(logs, signature, word, :uint256)
+      {:topic, index} -> LogDecoder.extract(logs, signature, index, :uint256)
+    end
+  end
+
+  defp resolve_job_id_fallback(tx_hash, reason) do
+    if Application.get_env(:raxol_acp, :allow_placeholder_job_id, false) do
+      emit_placeholder(tx_hash, reason)
+      {:ok, tx_hash}
+    else
+      {:error, {:job_id_unresolved, reason}}
     end
   end
 
@@ -236,6 +279,16 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     end
   end
 
+  @impl true
+  def withdraw_escrowed_funds(job_id) when is_binary(job_id) do
+    call_data = ABI.encode_call(@sig_withdraw_escrowed, [{"uint256", job_id_to_uint256(job_id)}])
+
+    case send_tx(:withdraw_escrowed_funds, call_data) do
+      {:ok, tx_hash, _receipt} -> {:ok, tx_hash}
+      {:error, _} = err -> err
+    end
+  end
+
   defp memo_id_to_uint256(memo_id) when is_integer(memo_id) and memo_id >= 0, do: memo_id
   defp memo_id_to_uint256(memo_id) when is_binary(memo_id), do: job_id_to_uint256(memo_id)
 
@@ -245,7 +298,7 @@ defmodule Raxol.ACP.ContractClient.Onchain do
     call_data =
       ABI.encode_call(@sig_set_budget_token, [
         {"uint256", job_id_to_uint256(job_id)},
-        {"uint256", decimal_to_uint256(amount)},
+        {"uint256", decimal_to_uint256(amount, token_decimals(token))},
         {"address", token}
       ])
 
@@ -314,13 +367,16 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   # The leading 8 args are identical across V1/V2.
   defp payable_memo_head(job_id, content, opts) do
+    token = Keyword.fetch!(opts, :token)
+    decimals = token_decimals(token)
+
     [
       {"uint256", job_id_to_uint256(job_id)},
       {"string", content},
-      {"address", Keyword.fetch!(opts, :token)},
-      {"uint256", decimal_to_uint256(Keyword.fetch!(opts, :amount))},
+      {"address", token},
+      {"uint256", decimal_to_uint256(Keyword.fetch!(opts, :amount), decimals)},
       {"address", Keyword.fetch!(opts, :recipient)},
-      {"uint256", decimal_to_uint256(Keyword.get(opts, :fee_amount, Decimal.new(0)))},
+      {"uint256", decimal_to_uint256(Keyword.get(opts, :fee_amount, Decimal.new(0)), decimals)},
       {"uint8", Raxol.ACP.Job.FeeType.to_uint8(Keyword.get(opts, :fee_type, :no_fee))},
       {"uint8", Raxol.ACP.Job.MemoType.to_uint8(Keyword.get(opts, :memo_type, :payable_request))}
     ]
@@ -435,8 +491,21 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   defp decode_uint256(_), do: 0
 
   defp send_with(ctx, method, call_data) do
-    with {:ok, nonce} <- nonce(ctx),
-         {:ok, max_fee, max_priority} <- fee_suggestion(ctx),
+    case nonce(ctx) do
+      {:ok, nonce} -> broadcast_and_await(ctx, method, call_data, nonce)
+      {:error, _} = err -> err
+    end
+  end
+
+  # The local NonceServer consumes a nonce before the tx is broadcast. If
+  # anything up to and including the broadcast fails, that nonce never landed
+  # on-chain, and leaving it consumed opens a gap that strands every later
+  # (higher-nonce) tx. Roll it back on a pre-broadcast failure so the next tx
+  # reuses it. A receipt-level outcome (revert / pending) means the tx WAS
+  # broadcast -- the nonce is spent on-chain -- so those return from the do
+  # block and never hit the rollback.
+  defp broadcast_and_await(ctx, method, call_data, nonce) do
+    with {:ok, max_fee, max_priority} <- fee_suggestion(ctx),
          {:ok, gas_limit} <- estimate_gas(ctx, call_data),
          tx <-
            Transaction.new(
@@ -454,34 +523,49 @@ defmodule Raxol.ACP.ContractClient.Onchain do
          {:ok, signature} <- ctx.wallet.sign_hash(digest),
          raw <- Transaction.serialize(tx, signature),
          {:ok, tx_hash} <- RPC.send_raw_transaction(ctx.client, raw) do
-      :telemetry.execute(
-        [:raxol, :acp, :onchain, :tx_sent],
-        %{},
-        %{
-          method: method,
-          tx_hash: tx_hash,
-          gas_limit: gas_limit,
-          max_fee_per_gas: max_fee
-        }
-      )
+      emit_tx_sent(method, tx_hash, gas_limit, max_fee)
+      await_and_finish(ctx, method, tx_hash)
+    else
+      {:error, _reason} = err ->
+        NonceServer.reset(nonce)
+        err
+    end
+  end
 
-      case RPC.await_receipt(ctx.client, tx_hash, timeout_ms: ctx.receipt_timeout_ms) do
-        {:ok, %{"status" => "0x1"} = receipt} ->
-          emit_mined(method, tx_hash, receipt, :success)
-          {:ok, tx_hash, receipt}
+  defp emit_tx_sent(method, tx_hash, gas_limit, max_fee) do
+    :telemetry.execute(
+      [:raxol, :acp, :onchain, :tx_sent],
+      %{},
+      %{method: method, tx_hash: tx_hash, gas_limit: gas_limit, max_fee_per_gas: max_fee}
+    )
+  end
 
-        {:ok, %{"status" => "0x0"} = receipt} ->
-          emit_mined(method, tx_hash, receipt, :failure)
-          {:error, {:tx_reverted, tx_hash}}
+  defp await_and_finish(ctx, method, tx_hash) do
+    case RPC.await_receipt(ctx.client, tx_hash, timeout_ms: ctx.receipt_timeout_ms) do
+      {:ok, %{"status" => "0x1"} = receipt} ->
+        emit_mined(method, tx_hash, receipt, :success)
+        {:ok, tx_hash, receipt}
 
-        {:ok, receipt} ->
-          # Older RPCs may omit "status"; treat as success but log.
-          emit_mined(method, tx_hash, receipt, :unknown)
-          {:ok, tx_hash, receipt}
+      {:ok, %{"status" => "0x0"} = receipt} ->
+        emit_mined(method, tx_hash, receipt, :failure)
+        {:error, {:tx_reverted, tx_hash}}
 
-        {:error, reason} ->
-          {:error, {:receipt_wait, reason}}
-      end
+      {:ok, receipt} ->
+        # Older RPCs may omit "status"; treat as success but log.
+        emit_mined(method, tx_hash, receipt, :unknown)
+        {:ok, tx_hash, receipt}
+
+      {:error, reason} ->
+        # The tx was broadcast (its hash is known) but no receipt arrived in the
+        # wait window. It may still mine, so surface the hash: a retry must
+        # re-query it, not re-broadcast a duplicate under a fresh nonce.
+        :telemetry.execute(
+          [:raxol, :acp, :onchain, :receipt_pending],
+          %{},
+          %{method: method, tx_hash: tx_hash}
+        )
+
+        {:error, {:receipt_pending, tx_hash, reason}}
     end
   end
 
@@ -629,12 +713,26 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   # -- Conversions --
 
-  defp decimal_to_uint256(%Decimal{} = d) do
-    # USDC is 6 decimals on Base.
+  # Scale a human `Decimal` to a token's atomic integer. USDC (the ACP default)
+  # is 6 decimals; other payment tokens are resolved from
+  # `config :raxol_acp, :token_decimals, %{"0xtoken" => 18}` (lowercased address
+  # keys), falling back to 6. A wrong scale would set an escrow budget off by
+  # orders of magnitude.
+  @default_token_decimals 6
+
+  defp decimal_to_uint256(%Decimal{} = d, decimals \\ @default_token_decimals) do
     d
-    |> Decimal.mult(Decimal.new(1_000_000))
+    |> Decimal.mult(Decimal.new(Integer.pow(10, decimals)))
     |> Decimal.round(0)
     |> Decimal.to_integer()
+  end
+
+  defp token_decimals(token) when is_binary(token) do
+    key = token |> String.trim() |> String.downcase()
+
+    :raxol_acp
+    |> Application.get_env(:token_decimals, %{})
+    |> Map.get(key, @default_token_decimals)
   end
 
   defp job_id_to_uint256(job_id) when is_binary(job_id) do

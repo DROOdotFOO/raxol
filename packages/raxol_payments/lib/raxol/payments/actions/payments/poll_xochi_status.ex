@@ -65,6 +65,20 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
             {:error,
              Failure.from({:settlement, status.status, status.error || status.substatus_message})}
 
+          {:error, :timeout} ->
+            # A poll that never reached a terminal status is not a clean failure:
+            # the origin funds may already have been pulled while delivery stayed
+            # unconfirmed, so the intent is stranded, not failed. Emit a distinct
+            # signal so operator tooling can reconcile or close THIS intent, and
+            # carry the id in the error so the caller does not re-execute it.
+            :telemetry.execute(
+              [:raxol, :payments, :xochi, :intent_stranded],
+              %{},
+              %{intent_id: intent_id}
+            )
+
+            {:error, Failure.from({:stranded, intent_id})}
+
           {:error, reason} ->
             {:error, Failure.from(reason)}
         end

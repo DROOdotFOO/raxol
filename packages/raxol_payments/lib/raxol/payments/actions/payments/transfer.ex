@@ -1,11 +1,16 @@
 defmodule Raxol.Payments.Actions.Payments.Transfer do
   @moduledoc """
-  Agent Action for an explicit transfer to an address.
+  Agent Action that AUTHORIZES an explicit same-chain transfer to an address.
 
-  Spending is authorized through `Raxol.Payments.Actions.SpendGate` before any
-  execution: the atomic ledger reservation and confirmation threshold are
-  enforced here. Cross-chain and stealth execution route through Xochi via
-  `Raxol.Payments.Actions.Payments.ExecuteXochiIntent`.
+  This is a governance checkpoint, not an executor. It runs the spend through
+  `Raxol.Payments.Actions.SpendGate` (approved-address confirmation threshold +
+  atomic ledger reservation) and returns an `"authorized"` status. It does NOT
+  itself broadcast a transaction: this package has no same-chain EOA send rail.
+  Cross-chain and stealth transfers execute through
+  `Raxol.Payments.Actions.Payments.ExecuteXochiIntent`; a same-chain send is
+  performed by the caller's own rail after this authorization. If an authorized
+  transfer is abandoned, release the reservation with `SpendGate.release/3` so
+  the budget is not permanently consumed.
   """
 
   @compile {:no_warn_undefined, Raxol.Agent.Action}
@@ -13,7 +18,8 @@ defmodule Raxol.Payments.Actions.Payments.Transfer do
   use Raxol.Agent.Action,
     name: "payment_transfer",
     sensitive: true,
-    description: "Transfer funds to an address (explicit payment, not auto-pay)",
+    description:
+      "Authorize an explicit same-chain transfer to an address: runs the spend gate and reserves budget, but does NOT broadcast. Use payment_execute_xochi_intent to actually move funds cross-chain or with privacy.",
     schema: [
       input: [
         to: [
@@ -57,9 +63,11 @@ defmodule Raxol.Payments.Actions.Payments.Transfer do
              target: {:address, to},
              metadata: metadata
            ) do
+      # "authorized", not "pending": the spend gate passed and budget is
+      # reserved, but this action does not broadcast, so nothing is in flight.
       {:ok,
        %{
-         status: "pending",
+         status: "authorized",
          from: wallet.address(),
          to: to,
          amount: amount_str

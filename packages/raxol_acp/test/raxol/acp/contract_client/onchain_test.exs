@@ -114,16 +114,81 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
     end
   end
 
+  # Standard RPC responses for the non-receipt legs of the pipeline (nonce,
+  # fee history, gas estimate, broadcast). Receipt handling is supplied per
+  # test so each can shape the JobCreated logs it needs.
+  defp default_rpc(req) do
+    case req["method"] do
+      "eth_getTransactionCount" ->
+        ok_response(req, "0x5")
+
+      "eth_feeHistory" ->
+        ok_response(req, %{
+          "baseFeePerGas" => [
+            "0x3b9aca00",
+            "0x3b9aca00",
+            "0x3b9aca00",
+            "0x3b9aca00",
+            "0x3b9aca00"
+          ],
+          "gasUsedRatio" => [0.5, 0.5, 0.5, 0.5],
+          "oldestBlock" => "0x10",
+          "reward" => [["0x59682f00"], ["0x59682f00"], ["0x59682f00"], ["0x59682f00"]]
+        })
+
+      "eth_estimateGas" ->
+        ok_response(req, "0x5208")
+
+      "eth_sendRawTransaction" ->
+        ok_response(req, "0x" <> String.duplicate("ab", 32))
+
+      _ ->
+        ok_response(req, nil)
+    end
+  end
+
+  # A stub that emits a real ACPSimple JobCreated log: jobId 0x2a as data
+  # word 0, with client/provider/evaluator indexed.
+  defp job_created_handler(signature, addr_topic) do
+    fn req ->
+      case req["method"] do
+        "eth_getTransactionReceipt" ->
+          ok_response(req, %{
+            "status" => "0x1",
+            "transactionHash" => Enum.at(req["params"], 0),
+            "blockNumber" => "0x100",
+            "logs" => [
+              %{
+                "address" => @contract,
+                "topics" => [
+                  Raxol.ACP.Onchain.LogDecoder.event_topic(signature),
+                  addr_topic,
+                  addr_topic,
+                  addr_topic
+                ],
+                "data" => "0x" <> String.duplicate("0", 62) <> "2a"
+              }
+            ]
+          })
+
+        _ ->
+          default_rpc(req)
+      end
+    end
+  end
+
   describe "create_job/3" do
-    test "runs the full pipeline and returns the tx hash as a placeholder job id" do
+    test "fails closed with :job_id_unresolved when no JobCreated event is present" do
       events = self()
       install_stub(default_handler(events))
 
-      assert {:ok, "0x" <> _ = tx_hash} =
+      # The default handler returns a receipt with empty logs, so the jobId
+      # cannot be resolved. create_job fails closed rather than handing back a
+      # synthetic tx-hash id that would mis-target every downstream call.
+      assert {:error, {:job_id_unresolved, {:event_not_found, _}}} =
                Onchain.create_job(@seller, @seller, 9_999_999_999)
 
-      assert byte_size(tx_hash) == 66
-
+      # The full encode/sign/broadcast/await pipeline still ran.
       assert_received {:rpc_call, "eth_getTransactionCount", _}
       assert_received {:rpc_call, "eth_feeHistory", _}
       assert_received {:rpc_call, "eth_estimateGas", _}
@@ -135,37 +200,31 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
       assert_received {:rpc_call, "eth_getTransactionReceipt", _}
     end
 
-    test "decodes the job id from a JobCreated event when configured" do
-      signature = "JobCreated(uint256)"
-      Application.put_env(:raxol_acp, :create_job_event_signature, signature)
+    test "decodes the job id from the JobCreated event data word (default source)" do
+      # The real ACPSimple event is JobCreated(uint256 jobId, address client,
+      # address provider, address evaluator): jobId is NON-indexed (data word 0)
+      # and the three addresses are indexed. Defaults resolve data word 0.
+      signature = "JobCreated(uint256,address,address,address)"
+      addr_topic = "0x" <> String.duplicate("0", 24) <> String.duplicate("22", 20)
 
-      on_exit(fn -> Application.delete_env(:raxol_acp, :create_job_event_signature) end)
+      install_stub(job_created_handler(signature, addr_topic))
+
+      assert {:ok, "0x2a"} = Onchain.create_job(@seller, @seller, 9_999_999_999)
+    end
+
+    test "decodes an indexed job id when :create_job_id_source is {:topic, index}" do
+      # Some ABIs index the id. The override reads it from a topic instead.
+      signature = "JobCreated(uint256,address)"
+      Application.put_env(:raxol_acp, :create_job_event_signature, signature)
+      Application.put_env(:raxol_acp, :create_job_id_source, {:topic, 1})
+
+      on_exit(fn ->
+        Application.delete_env(:raxol_acp, :create_job_event_signature)
+        Application.delete_env(:raxol_acp, :create_job_id_source)
+      end)
 
       install_stub(fn req ->
         case req["method"] do
-          "eth_getTransactionCount" ->
-            ok_response(req, "0x5")
-
-          "eth_feeHistory" ->
-            ok_response(req, %{
-              "baseFeePerGas" => [
-                "0x3b9aca00",
-                "0x3b9aca00",
-                "0x3b9aca00",
-                "0x3b9aca00",
-                "0x3b9aca00"
-              ],
-              "gasUsedRatio" => [0.5, 0.5, 0.5, 0.5],
-              "oldestBlock" => "0x10",
-              "reward" => [["0x59682f00"], ["0x59682f00"], ["0x59682f00"], ["0x59682f00"]]
-            })
-
-          "eth_estimateGas" ->
-            ok_response(req, "0x5208")
-
-          "eth_sendRawTransaction" ->
-            ok_response(req, "0x" <> String.duplicate("ab", 32))
-
           "eth_getTransactionReceipt" ->
             ok_response(req, %{
               "status" => "0x1",
@@ -182,16 +241,23 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
                 }
               ]
             })
+
+          _ ->
+            default_rpc(req)
         end
       end)
 
       assert {:ok, "0x2a"} = Onchain.create_job(@seller, @seller, 9_999_999_999)
     end
 
-    test "falls back to tx hash when the event is configured but missing from logs" do
+    test "returns the tx-hash placeholder when opted in and the event is missing" do
+      Application.put_env(:raxol_acp, :allow_placeholder_job_id, true)
       Application.put_env(:raxol_acp, :create_job_event_signature, "JobCreated(uint256)")
 
-      on_exit(fn -> Application.delete_env(:raxol_acp, :create_job_event_signature) end)
+      on_exit(fn ->
+        Application.delete_env(:raxol_acp, :allow_placeholder_job_id)
+        Application.delete_env(:raxol_acp, :create_job_event_signature)
+      end)
 
       handler_id = "placeholder-#{System.unique_integer([:positive])}"
       test_pid = self()
@@ -414,8 +480,88 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
     end
   end
 
+  describe "nonce + receipt resilience" do
+    test "a stuck receipt returns :receipt_pending with the broadcast tx hash" do
+      Application.put_env(:raxol_acp, :onchain_receipt_timeout_ms, 30)
+      on_exit(fn -> Application.delete_env(:raxol_acp, :onchain_receipt_timeout_ms) end)
+
+      install_stub(fn req ->
+        case req["method"] do
+          "eth_getTransactionReceipt" -> ok_response(req, nil)
+          _ -> default_rpc(req)
+        end
+      end)
+
+      # The tx was broadcast; its hash rides the error so a retry re-queries it
+      # instead of re-broadcasting a duplicate under a fresh nonce.
+      assert {:error, {:receipt_pending, "0x" <> _ = tx_hash, _reason}} =
+               Onchain.set_budget("42", Decimal.new("1.00"))
+
+      assert byte_size(tx_hash) == 66
+    end
+
+    test "a broadcast failure rolls the nonce back so the next tx has no gap" do
+      NonceServer.reset(7)
+      before = NonceServer.peek()
+
+      install_stub(fn req ->
+        case req["method"] do
+          "eth_sendRawTransaction" ->
+            %{
+              "jsonrpc" => "2.0",
+              "id" => req["id"],
+              "error" => %{"code" => -32_000, "message" => "boom"}
+            }
+
+          _ ->
+            default_rpc(req)
+        end
+      end)
+
+      assert {:error, _} = Onchain.set_budget("42", Decimal.new("1.00"))
+
+      # The consumed nonce was returned; the next tx reuses it rather than
+      # leaving a gap that would strand every later transaction.
+      assert NonceServer.peek() == before
+    end
+
+    test "set_budget_with_payment_token scales by the configured token decimals" do
+      token = "0x" <> String.duplicate("ee", 20)
+      Application.put_env(:raxol_acp, :token_decimals, %{String.downcase(token) => 18})
+      on_exit(fn -> Application.delete_env(:raxol_acp, :token_decimals) end)
+
+      install_stub(default_handler(self()))
+
+      assert {:ok, _} =
+               Onchain.set_budget_with_payment_token("42", Decimal.new("1.00"), token)
+
+      assert_received {:rpc_call, "eth_sendRawTransaction", [raw]}
+      # 1.00 * 1e18 = 0x0de0b6b3a7640000, ABI-encoded as a 32-byte word.
+      one_e18 = String.duplicate("0", 49) <> "de0b6b3a7640000"
+      assert String.contains?(String.downcase(raw), one_e18)
+    end
+
+    test "set_budget_with_payment_token defaults to 6 decimals for an unconfigured token" do
+      token = "0x" <> String.duplicate("ee", 20)
+      install_stub(default_handler(self()))
+
+      assert {:ok, _} =
+               Onchain.set_budget_with_payment_token("42", Decimal.new("1.00"), token)
+
+      assert_received {:rpc_call, "eth_sendRawTransaction", [raw]}
+      # 1.00 * 1e6 = 0xf4240.
+      one_e6 = String.duplicate("0", 59) <> "f4240"
+      assert String.contains?(String.downcase(raw), one_e6)
+    end
+  end
+
   describe "telemetry" do
     test "emits :tx_sent and :tx_mined for a successful broadcast" do
+      # This test asserts the broadcast telemetry, not job-id resolution; the
+      # stub emits no JobCreated event, so opt into the placeholder path.
+      Application.put_env(:raxol_acp, :allow_placeholder_job_id, true)
+      on_exit(fn -> Application.delete_env(:raxol_acp, :allow_placeholder_job_id) end)
+
       install_stub(default_handler(self()))
 
       handler_id = "onchain-telemetry-#{System.unique_integer([:positive])}"
@@ -460,7 +606,16 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
   describe ":acp_version :v2 (ACPRouter)" do
     setup do
       Application.put_env(:raxol_acp, :acp_version, :v2)
-      on_exit(fn -> Application.delete_env(:raxol_acp, :acp_version) end)
+      # These tests prove the V2 encoding path executes; the stub emits no
+      # JobCreated event, so opt into the tx-hash placeholder to let
+      # create_job return without resolving a real jobId.
+      Application.put_env(:raxol_acp, :allow_placeholder_job_id, true)
+
+      on_exit(fn ->
+        Application.delete_env(:raxol_acp, :acp_version)
+        Application.delete_env(:raxol_acp, :allow_placeholder_job_id)
+      end)
+
       :ok
     end
 

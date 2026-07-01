@@ -248,10 +248,13 @@ defmodule Raxol.Payments.SecurityTest do
       %{ledger: ledger, policy: policy}
     end
 
-    test "zero amount passes budget check (no spend)", %{ledger: ledger, policy: policy} do
-      result = Ledger.try_spend(ledger, "agent_1", Decimal.new("0"), policy)
-      # Zero is within per_request_max (0 <= 0.10), so it should pass
-      assert result == :ok
+    test "zero amount is rejected and records nothing", %{ledger: ledger, policy: policy} do
+      # A spend must be strictly positive: zero is not a real payment and must
+      # not be admitted to the ledger.
+      assert {:over_limit, :invalid_amount} =
+               Ledger.try_spend(ledger, "agent_1", Decimal.new("0"), policy)
+
+      assert Ledger.get_history(ledger, "agent_1") == []
     end
   end
 
@@ -263,18 +266,20 @@ defmodule Raxol.Payments.SecurityTest do
       %{ledger: ledger, policy: policy}
     end
 
-    test "negative amount passes budget check (Decimal.compare quirk)", %{
+    test "negative amount is rejected before any cap check", %{
       ledger: ledger,
       policy: policy
     } do
-      # Decimal.compare("-1", "0.10") == :lt, so check_per_request passes.
-      # This documents current behavior -- negative amounts are NOT rejected
-      # by the Ledger. Protocol-level validation should catch them first.
-      result = Ledger.try_spend(ledger, "agent_1", Decimal.new("-1"), policy)
-      assert result == :ok
+      # A negative amount slips under every cap (Decimal.compare("-1", "0.10")
+      # == :lt) and, if recorded, nets the running total down to free budget
+      # headroom. The ledger rejects it outright.
+      assert {:over_limit, :invalid_amount} =
+               Ledger.try_spend(ledger, "agent_1", Decimal.new("-1"), policy)
+
+      assert Ledger.get_history(ledger, "agent_1") == []
     end
 
-    test "negative spend reduces session total", %{ledger: ledger, policy: policy} do
+    test "negative spend cannot reduce the session total", %{ledger: ledger, policy: policy} do
       # Record a legitimate spend first
       Ledger.record_spend(ledger, "agent_1", Decimal.new("0.05"), %{})
       # Small delay to ensure cast completes before call
@@ -283,12 +288,12 @@ defmodule Raxol.Payments.SecurityTest do
       totals_before = Ledger.get_totals(ledger, "agent_1", policy)
       assert Decimal.compare(totals_before.lifetime, Decimal.new("0.05")) == :eq
 
-      # Negative try_spend records and reduces the total
-      :ok = Ledger.try_spend(ledger, "agent_1", Decimal.new("-0.02"), policy)
+      # A negative try_spend is rejected, so the total is unchanged.
+      assert {:over_limit, :invalid_amount} =
+               Ledger.try_spend(ledger, "agent_1", Decimal.new("-0.02"), policy)
 
       totals_after = Ledger.get_totals(ledger, "agent_1", policy)
-      # 0.05 + (-0.02) = 0.03
-      assert Decimal.compare(totals_after.lifetime, Decimal.new("0.03")) == :eq
+      assert Decimal.compare(totals_after.lifetime, Decimal.new("0.05")) == :eq
     end
   end
 
