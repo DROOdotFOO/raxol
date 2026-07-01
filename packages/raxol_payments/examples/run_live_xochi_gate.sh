@@ -61,21 +61,29 @@
 # pin, plus XOCHI_LIVE_SETTLEMENT=stealth with XOCHI_LIVE_RECIPIENT_META for the
 # private path.
 #
-# Matrix mode (XOCHI_LIVE_MATRIX=true): settle every corridor x token x settlement
-# type in one run, MOVING REAL FUNDS PER CELL. A read-only per-cell preflight runs
-# first (quote every cell, assert can_solve + the pinned solver); it aborts before
-# any funds move if a cell fails, and is all that runs under DRY_RUN. Bounded by:
-#   XOCHI_LIVE_CORRIDORS         "from>to,from>to" chain ids (default 8453>42161,42161>8453)
-#   XOCHI_LIVE_TOKENS            "USDC,USDT,WETH" (default USDC)
+# Matrix mode (XOCHI_LIVE_MATRIX=true): validate every corridor x token x settlement
+# type in one run. A read-only per-cell preflight runs first (quote every cell,
+# assert can_solve, the served pull method per token, and the pinned solver); it
+# aborts before any funds move if a cell fails, and is all that runs under DRY_RUN.
+# The funded run then settles only the FILLABLE SUBSET: it re-quotes each cell and
+# skips (logs) any the solver cannot fill right now. Bounded by:
+#   XOCHI_LIVE_CORRIDORS         "from>to,from>to" chain ids, OR "mesh" for all 20
+#                                ordered pairs of the 5 EVM chains (default 8453>42161,42161>8453)
+#   XOCHI_LIVE_TOKENS            "USDC,USDT,WETH" (default USDC,USDT,WETH)
 #   XOCHI_LIVE_SETTLEMENTS       "public,stealth" (default public; stealth needs META)
 #   XOCHI_LIVE_AMOUNT            per-cell stablecoin amount (default 1.10)
 #   XOCHI_LIVE_WETH_AMOUNT       per-cell WETH amount (default 0.001; 18-decimal token)
 #   XOCHI_LIVE_ALLOW_ETH_ORIGIN  set true to settle Ethereum-origin cells (default: quote-only)
+#   XOCHI_LIVE_SETTLE_PERMIT2    set true to settle USDT/WETH cells in the funded run
 # Tokens resolve per chain via Raxol.Payments.Assets across the five EVM chains
-# (1, 10, 137, 8453, 42161). USDC pulls via ERC-3009; USDT/WETH via Permit2, which
-# needs a standing Permit2 allowance on each origin chain. Example:
-#   XOCHI_LIVE_KEY=0x<funded> XOCHI_LIVE_MATRIX=true XOCHI_LIVE_TOKENS=USDC,USDT,WETH \
-#   XOCHI_LIVE_SETTLEMENTS=public,stealth XOCHI_LIVE_RECIPIENT_META=st:eth:0x... \
+# (1, 10, 137, 8453, 42161). USDC pulls via ERC-3009 and settles here directly.
+# USDT/WETH pull via Permit2, which needs a standing on-chain Permit2 allowance this
+# gate does not broadcast, so USDT/WETH funded cells are skipped by default: order
+# them through raxol_acp (examples/run_live_acp_order_gate.sh, which sets the
+# allowance and settles for real), or set XOCHI_LIVE_SETTLE_PERMIT2=true once the
+# allowance is in place. Example (full 5x3 preflight + fillable USDC settlement):
+#   XOCHI_LIVE_KEY=0x<funded> XOCHI_LIVE_MATRIX=true XOCHI_LIVE_CORRIDORS=mesh \
+#   XOCHI_LIVE_TOKENS=USDC,USDT,WETH \
 #     ./examples/run_live_xochi_gate.sh
 set -euo pipefail
 
@@ -92,7 +100,7 @@ XOCHI_LIVE_TO_TOKEN="${XOCHI_LIVE_TO_TOKEN:-0xaf88d065e77c8cc2239327c5edb3a43226
 # Each cell moves real funds; bounded by the corridor/settlement lists below.
 XOCHI_LIVE_MATRIX="${XOCHI_LIVE_MATRIX:-false}"
 XOCHI_LIVE_CORRIDORS="${XOCHI_LIVE_CORRIDORS:-8453>42161,42161>8453}"
-XOCHI_LIVE_TOKENS="${XOCHI_LIVE_TOKENS:-USDC}"
+XOCHI_LIVE_TOKENS="${XOCHI_LIVE_TOKENS:-USDC,USDT,WETH}"
 XOCHI_LIVE_SETTLEMENTS="${XOCHI_LIVE_SETTLEMENTS:-public}"
 
 if [[ -z "${XOCHI_LIVE_KEY:-}" ]]; then
@@ -163,6 +171,9 @@ if [[ "$XOCHI_LIVE_MATRIX" == "true" ]]; then
   fi
   if [[ -n "${XOCHI_LIVE_ALLOW_ETH_ORIGIN:-}" ]]; then
     export XOCHI_LIVE_ALLOW_ETH_ORIGIN
+  fi
+  if [[ -n "${XOCHI_LIVE_SETTLE_PERMIT2:-}" ]]; then
+    export XOCHI_LIVE_SETTLE_PERMIT2
   fi
 
   # Per-cell preflight: quote every corridor x token read-only and assert

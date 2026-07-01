@@ -31,38 +31,66 @@ MIX_ENV=test mix run examples/crosschain_stealth_payment.exs
 
 ## 3. Graduate to live (MOVES REAL FUNDS)
 
-These submit real mainnet intents. Each runs a read-only quote preflight first
-and aborts before moving funds if auth fails or the solver cannot fill.
+Each gate runs a read-only preflight first and aborts before moving funds if auth
+fails, the solver cannot fill, or a route is dead. Under `DRY_RUN` only the
+preflight runs. Rehearse each with `DRY_RUN=1` before a funded run.
 
-**`run_live_xochi_gate.sh`** settles cross-chain through the Xochi worker.
-Defaults to a $1 Base -> Optimism USDC transfer (the corridor Xochi verified
-fills at $1). Auth is a Member Bearer (the worker token in 1Password); one token
-covers the whole quote -> execute -> poll lifecycle. Dry-run first:
+**`run_live_xochi_gate.sh`** settles cross-chain through the Xochi worker. In
+matrix mode (`XOCHI_LIVE_MATRIX=true`) it validates the full 5-chain x 3-token
+grid (Ethereum, Optimism, Polygon, Base, Arbitrum x USDC, USDT, WETH):
+the read-only preflight quotes every cell and asserts `can_solve`, the correct
+pull method per token (USDC -> ERC-3009, USDT/WETH -> Permit2), and the pinned
+Riddler solver; the funded run settles only the fillable subset. USDC settles
+here directly; USDT/WETH need a standing Permit2 allowance, so their real
+settlement is the ACP order gate below (or opt in with `XOCHI_LIVE_SETTLE_PERMIT2=true`
+once the allowance is set). Auth defaults to a self-signed mandate; `member` uses
+the worker token in 1Password.
 
 ```bash
-XOCHI_LIVE_KEY=0x<funded base key> DRY_RUN=1 ./examples/run_live_xochi_gate.sh
-XOCHI_LIVE_KEY=0x<funded base key>           ./examples/run_live_xochi_gate.sh
+# full 5x3 grid, read-only (no funds)
+XOCHI_LIVE_KEY=0x<funded> DRY_RUN=1 XOCHI_LIVE_MATRIX=true \
+  XOCHI_LIVE_CORRIDORS=mesh XOCHI_LIVE_TOKENS=USDC,USDT,WETH \
+  ./examples/run_live_xochi_gate.sh
+# settle the fillable USDC subset for real
+XOCHI_LIVE_KEY=0x<funded> XOCHI_LIVE_MATRIX=true \
+  XOCHI_LIVE_CORRIDORS=mesh XOCHI_LIVE_TOKENS=USDC ./examples/run_live_xochi_gate.sh
 ```
 
-**`run_live_relay_gate.sh`** quotes the EVM->Tron Relay path through the Riddler
-solver. A quote moves no funds, so it needs no key, just the staging token and a
-source address. The full EVM->Tron settlement (which broadcasts an on-chain
-deposit) lives in a separate raxol_acp `:live_relay` test.
+**`../../raxol_acp/examples/run_live_acp_order_gate.sh`** is the proof another
+agent can ORDER these settlements through the ACP: a buyer creates a job for the
+`xochi_cross_chain_transfer` offering and the seller settles it via Xochi for
+real. It sets the Permit2 allowance for USDT/WETH first (needs
+`XOCHI_ORDER_RPC_<chain>`), then settles the fillable subset across USDC/USDT/WETH.
 
 ```bash
-RELAY_LIVE_FROM_ADDRESS=0x<base address> ./examples/run_live_relay_gate.sh
+XOCHI_ORDER_LIVE_KEY=0x<funded> DRY_RUN=1 ./run_live_acp_order_gate.sh
+XOCHI_ORDER_LIVE_KEY=0x<funded> XOCHI_ORDER_RPC_8453=https://mainnet.base.org \
+  XOCHI_ORDER_TOKENS=USDC,USDT,WETH ./run_live_acp_order_gate.sh
+```
+
+**`run_live_relay_gate.sh`** settles a full EVM->Tron transfer through the
+Riddler Relay rail. A read-only `/relay/quote` probe runs first (all `DRY_RUN`
+runs); the real settlement broadcasts the on-chain deposit via the raxol_acp
+`:live_relay` test, so it needs a funded key and a source-chain RPC. Multiple
+source tokens settle via `RELAY_LIVE_TOKENS`.
+
+```bash
+RELAY_LIVE_FROM_ADDRESS=0x<base address> DRY_RUN=1 ./examples/run_live_relay_gate.sh
+RELAY_LIVE_FROM_ADDRESS=0x<base address> RELAY_LIVE_KEY=0x<funded> \
+  RELAY_LIVE_RPC=https://mainnet.base.org ./examples/run_live_relay_gate.sh
 ```
 
 ## The progression at a glance
 
-| Stage            | Script                            | Funds         | Target                   |
-| ---------------- | --------------------------------- | ------------- | ------------------------ |
-| Rehearse         | `preflight.exs`                   | none          | local echo server        |
-| Launch path      | `crosschain_stealth_payment.exs`  | none          | in-process Xochi sim     |
-| Live cross-chain | `run_live_xochi_gate.sh`          | real          | Xochi worker (prod)      |
-| Live Tron quote  | `run_live_relay_gate.sh`          | none (quote)  | Riddler solver (staging) |
+| Stage            | Script                            | Funds         | Target                    |
+| ---------------- | --------------------------------- | ------------- | ------------------------- |
+| Rehearse         | `preflight.exs`                   | none          | local echo server         |
+| Launch path      | `crosschain_stealth_payment.exs`  | none          | in-process Xochi sim      |
+| Live cross-chain | `run_live_xochi_gate.sh`          | real          | Xochi worker (5 chains)   |
+| Live ACP order   | `run_live_acp_order_gate.sh`      | real          | ACP job -> Xochi worker   |
+| Live Tron settle | `run_live_relay_gate.sh`          | real          | Riddler Relay (Tron)      |
 
-The live gates are tagged `:live_xochi` / `:live_relay` and excluded by default;
-they only run when their endpoint env var is set (see `test/test_helper.exs`).
-For the architecture these examples exercise, see
-[Agentic Commerce docs](../../../docs/features/AGENTIC_COMMERCE.md).
+The live gates are tagged `:live_xochi` / `:live_xochi_order` / `:live_relay` and
+excluded by default; they only run when their endpoint env var is set (see each
+package's `test/test_helper.exs`). For the architecture these examples exercise,
+see [Agentic Commerce docs](../../../docs/features/AGENTIC_COMMERCE.md).

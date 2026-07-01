@@ -104,7 +104,11 @@ defmodule Raxol.ACP.Xochi.Offering do
         "destination" => %{
           "type" => "string",
           "pattern" => "^0x[0-9a-fA-F]{40}$",
-          "description" => "Recipient address on dst_chain_id."
+          "description" =>
+            "Recipient on dst_chain_id. Not yet honored: settlement currently " <>
+              "delivers to the requester's own address on dst_chain_id. Delivery " <>
+              "to a different recipient is a future release; this field is kept " <>
+              "so requirements are forward-compatible."
         },
         "slippage_bps" => %{
           "type" => "integer",

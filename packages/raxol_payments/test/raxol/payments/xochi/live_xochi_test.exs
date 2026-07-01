@@ -59,11 +59,19 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   settlement), so it is bounded by env:
 
   - `XOCHI_LIVE_CORRIDORS` -- `"from>to,from>to"` chain-id pairs (default
-    `"8453>42161,42161>8453"`). Tokens resolve per chain via `Raxol.Payments.Assets`
-    for the five supported EVM chains (1, 10, 137, 8453, 42161).
+    `"8453>42161,42161>8453"`), or `"mesh"` for every ordered pair of the five
+    supported EVM chains (1, 10, 137, 8453, 42161). Tokens resolve per chain via
+    `Raxol.Payments.Assets`.
   - `XOCHI_LIVE_TOKENS` -- `"USDC,USDT,WETH"` (default `"USDC"`). USDC pulls via
     ERC-3009; USDT/WETH via Permit2 (needs a standing Permit2 allowance on each
-    origin chain).
+    origin chain). The preflight asserts the served pull method per token
+    (USDC -> erc3009, USDT/WETH -> permit2) read-only.
+  - `XOCHI_LIVE_SETTLE_PERMIT2` -- set to `true` to settle USDT/WETH cells in the
+    funded matrix. Off by default: those pulls need a standing Permit2 allowance
+    this gate does not broadcast, so order them through raxol_acp
+    (`run_live_acp_order_gate.sh`), which sets the allowance and settles for real.
+    The funded matrix re-quotes each cell and skips (logs) any the solver cannot
+    fill right now, settling only the fillable subset.
   - `XOCHI_LIVE_SETTLEMENTS` -- `"public,stealth"` (default `"public"`). Stealth
     cells require `XOCHI_LIVE_RECIPIENT_META`.
   - `XOCHI_LIVE_AMOUNT` -- per-cell stablecoin amount (default `1.10`, above the
@@ -287,26 +295,69 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
                   "(set XOCHI_LIVE_ALLOW_ETH_ORIGIN=true to settle from L1)"
               )
 
+            # USDT/WETH pull via Permit2, which needs a standing on-chain allowance
+            # this gate does not broadcast (raxol_payments holds no tx code). Set the
+            # allowance via the ACP order gate, then opt in with XOCHI_LIVE_SETTLE_PERMIT2.
+            permit2_token?(token) and System.get_env("XOCHI_LIVE_SETTLE_PERMIT2") != "true" ->
+              IO.puts(
+                "[live_xochi:matrix] SKIP #{label}: #{token} pulls via Permit2 and needs a " <>
+                  "standing allowance. Order it through raxol_acp (run_live_acp_order_gate.sh), " <>
+                  "or set XOCHI_LIVE_SETTLE_PERMIT2=true once the allowance is in place."
+              )
+
             true ->
-              amount = amount_for(token, stable_amount)
-              params = matrix_params(from, to, token, settlement, amount, meta)
-              started = System.monotonic_time(:millisecond)
-
-              assert {:ok, intent} = ExecuteXochiIntent.call(params, context),
-                     "execute failed for #{label}"
-
-              assert {:ok, status} =
-                       PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context)
-
-              assert status.terminal == true
-
-              assert status.status == "completed",
-                     "#{label} (#{intent.intent_id}) ended #{status.status}"
-
-              report_settlement(label, intent, status, params, started)
+              settle_fillable_cell(
+                {context, poll_context},
+                {from, to, token, settlement},
+                stable_amount,
+                meta,
+                label
+              )
           end
         end
       end
+
+      # Settle one matrix cell, but only if the solver can actually fill it now:
+      # re-quote read-only first and skip (log) a non-fillable cell instead of
+      # failing the whole run. Implements "settle the fillable subset".
+      defp settle_fillable_cell(
+             {context, poll_context},
+             {from, to, token, settlement},
+             stable_amount,
+             meta,
+             label
+           ) do
+        amount = amount_for(token, stable_amount)
+
+        case preflight_cell(context, from, to, token, amount) do
+          {:error, reason} ->
+            IO.puts(
+              "[live_xochi:matrix] SKIP #{label}: not fillable now " <>
+                "(#{inspect(reason)}); no funds moved"
+            )
+
+          {:ok, _info} ->
+            params = matrix_params(from, to, token, settlement, amount, meta)
+            settle_and_assert({context, poll_context}, params, label)
+        end
+      end
+
+      defp settle_and_assert({context, poll_context}, params, label) do
+        started = System.monotonic_time(:millisecond)
+
+        assert {:ok, intent} = ExecuteXochiIntent.call(params, context),
+               "execute failed for #{label}"
+
+        assert {:ok, status} = PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context)
+        assert status.terminal == true
+
+        assert status.status == "completed",
+               "#{label} (#{intent.intent_id}) ended #{status.status}"
+
+        report_settlement(label, intent, status, params, started)
+      end
+
+      defp permit2_token?(token), do: String.upcase(token) in ["USDT", "WETH"]
 
       @tag :live_xochi_preflight
       test "every configured corridor x token quotes can_solve and serves the pinned solver", %{
@@ -347,10 +398,23 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         with {:ok, request} <- preflight_request(wallet, from, to, token, amount),
              {:ok, quote} <- XochiProtocol.get_quote(config, request),
              :ok <- preflight_can_solve(quote),
+             :ok <- preflight_method(token, quote.payment_method),
              :ok <- XochiProtocol.validate_pull(quote, request, wallet) do
           {:ok, %{method: quote.payment_method, to_amount: quote.to_amount, fee: quote.xochi_fee}}
         end
       end
+
+      # USDC pulls via ERC-3009; USDT/WETH pull via Permit2. Asserting the served
+      # method per token catches a token routed to the wrong rail (which would
+      # otherwise fail on-chain at pull time) before any funds move.
+      defp preflight_method(token, method) do
+        want = expected_method(String.upcase(token))
+        got = method && String.downcase(method)
+        if got == want, do: :ok, else: {:error, {:method_mismatch, token, got, want}}
+      end
+
+      defp expected_method("USDC"), do: "erc3009"
+      defp expected_method(_token), do: "permit2"
 
       defp preflight_request(wallet, from, to, token, amount) do
         with {:ok, from_token} <- Assets.address(from, token),
@@ -404,6 +468,16 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
             else: ""
 
         l1 <> permit2
+      end
+
+      # The five supported EVM chains: Ethereum, Optimism, Polygon, Base, Arbitrum.
+      @evm_chains [1, 10, 137, 8453, 42_161]
+
+      # "mesh" (or "all") expands to every ordered pair of the five EVM chains (20
+      # corridors), so the preflight validates the full grid in one run. The
+      # explicit "from>to,from>to" form still works for a narrower run.
+      defp parse_corridors(spec) when spec in ["mesh", "all"] do
+        for from <- @evm_chains, to <- @evm_chains, from != to, do: {from, to}
       end
 
       defp parse_corridors(spec) do

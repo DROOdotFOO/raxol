@@ -3,9 +3,11 @@ defmodule Raxol.ACP.Relay.LiveRelayTest do
   Full EVM -> Tron transfer through the Relay rail against a real Riddler
   endpoint, funded by the on-chain deposit broadcaster.
 
-  `ExecuteRelayTransfer` quotes, authorizes the spend, and initiates execution;
-  the `OnchainBroadcaster` broadcasts the ERC-20 deposit on the source chain;
-  `PollRelayStatus` waits for `:completed`.
+  Each source token runs a read-only `/relay/quote` preflight (assert `can_fill`
+  + a deposit address) before any broadcast, then `ExecuteRelayTransfer` quotes,
+  authorizes the spend, and initiates execution; the `OnchainBroadcaster`
+  broadcasts the ERC-20 deposit on the source chain; `PollRelayStatus` waits for
+  `:completed`. Each settlement reports the deposit tx with an explorer link.
 
   Moves real funds: opt-in, excluded by default, compiled only when the required
   env is present.
@@ -16,9 +18,14 @@ defmodule Raxol.ACP.Relay.LiveRelayTest do
       RELAY_LIVE_RPC=https://mainnet.base.org \\
         mix test --include live_relay test/raxol/acp/relay/live_relay_test.exs
 
-  Defaults (Base USDC -> Tron USDT, 0.10 USDC) are overridable via
-  RELAY_LIVE_FROM_CHAIN, RELAY_LIVE_FROM_TOKEN, RELAY_LIVE_TO_TOKEN,
-  RELAY_LIVE_TO_ADDRESS, RELAY_LIVE_AMOUNT.
+  Multiple source tokens (each resolved per chain via `Raxol.Payments.Assets`)
+  settle in one run via `RELAY_LIVE_TOKENS` (default `USDC`); the destination is
+  always Tron. Defaults (Base -> Tron USDT, 0.10) are overridable via
+  RELAY_LIVE_FROM_CHAIN, RELAY_LIVE_TOKENS, RELAY_LIVE_FROM_TOKEN (a raw origin
+  address that overrides the token list), RELAY_LIVE_TO_TOKEN, RELAY_LIVE_TO_ADDRESS,
+  RELAY_LIVE_AMOUNT.
+
+  Or use the runner: ../raxol_payments/examples/run_live_relay_gate.sh
   """
 
   use ExUnit.Case, async: false
@@ -39,7 +46,10 @@ defmodule Raxol.ACP.Relay.LiveRelayTest do
       PollRelayStatus
     }
 
-    alias Raxol.Payments.{Ledger, SpendingPolicy}
+    alias Raxol.Payments.{Assets, Ledger, Relay, SpendingPolicy}
+    alias Raxol.Payments.Relay.Schemas.QuoteRequest
+
+    @tron 728_126_428
 
     defmodule LiveWallet do
       @moduledoc false
@@ -88,31 +98,46 @@ defmodule Raxol.ACP.Relay.LiveRelayTest do
       {:ok, context: context, from_chain: from_chain}
     end
 
-    test "agent completes an EVM->Tron transfer end-to-end", %{
+    test "agent completes an EVM->Tron transfer for each source token", %{
       context: context,
       from_chain: from_chain
     } do
-      params = %{
-        amount: System.get_env("RELAY_LIVE_AMOUNT", "0.10"),
-        from_chain_id: from_chain,
-        to_chain_id: 728_126_428,
-        from_token: System.get_env("RELAY_LIVE_FROM_TOKEN", @usdc_base),
-        to_token: System.get_env("RELAY_LIVE_TO_TOKEN", @usdt_tron),
-        to_address: System.get_env("RELAY_LIVE_TO_ADDRESS", @usdt_tron)
-      }
+      amount = System.get_env("RELAY_LIVE_AMOUNT", "0.10")
+      to_address = System.get_env("RELAY_LIVE_TO_ADDRESS", @usdt_tron)
+      cells = source_cells(from_chain)
 
-      assert {:ok, transfer} = ExecuteRelayTransfer.call(params, context)
-      assert transfer.funding == "broadcast"
-      assert is_binary(transfer.deposit_tx_hash), "no deposit tx broadcast"
+      # Preflight every cell read-only first: a dead corridor aborts the run
+      # before any deposit is broadcast.
+      for {src_token, label} <- cells do
+        assert {:ok, quote} = relay_quote(context, from_chain, src_token, amount, to_address)
+        assert quote.can_fill, "#{label}: relay quote not fillable: #{inspect(quote)}"
 
-      assert {:ok, status} =
-               PollRelayStatus.call(
-                 %{transfer_id: transfer.transfer_id},
-                 context
-               )
+        assert is_binary(quote.deposit_address),
+               "#{label}: relay quote returned no deposit address"
+      end
 
-      assert status.status == "completed",
-             "live transfer #{transfer.transfer_id} ended in #{status.status}, expected completed"
+      for {src_token, label} <- cells do
+        params = %{
+          amount: amount,
+          from_chain_id: from_chain,
+          to_chain_id: @tron,
+          from_token: src_token,
+          to_token: System.get_env("RELAY_LIVE_TO_TOKEN", @usdt_tron),
+          to_address: to_address
+        }
+
+        assert {:ok, transfer} = ExecuteRelayTransfer.call(params, context)
+        assert transfer.funding == "broadcast"
+        assert is_binary(transfer.deposit_tx_hash), "#{label}: no deposit tx broadcast"
+
+        assert {:ok, status} =
+                 PollRelayStatus.call(%{transfer_id: transfer.transfer_id}, context)
+
+        assert status.status == "completed",
+               "#{label}: transfer #{transfer.transfer_id} ended in #{status.status}, expected completed"
+
+        report_relay(label, transfer, status, from_chain)
+      end
     end
 
     test "a resumed run reuses the in-flight transfer without a second deposit", %{
@@ -154,6 +179,75 @@ defmodule Raxol.ACP.Relay.LiveRelayTest do
       assert status.status == "completed",
              "live transfer #{transfer.transfer_id} ended in #{status.status}, expected completed"
     end
+
+    # A raw RELAY_LIVE_FROM_TOKEN overrides the token list with one custom cell;
+    # otherwise resolve each RELAY_LIVE_TOKENS symbol to its origin address.
+    defp source_cells(from_chain) do
+      case System.get_env("RELAY_LIVE_FROM_TOKEN") do
+        nil ->
+          "RELAY_LIVE_TOKENS"
+          |> System.get_env("USDC")
+          |> parse_list()
+          |> Enum.map(&resolve_src(from_chain, &1))
+
+        addr ->
+          [{addr, "#{from_chain}:custom->Tron"}]
+      end
+    end
+
+    defp resolve_src(from_chain, token) do
+      case Assets.address(from_chain, token) do
+        {:ok, addr} -> {addr, "#{from_chain}:#{token}->Tron"}
+        :error -> flunk("no #{token} address on chain #{from_chain}; set RELAY_LIVE_FROM_TOKEN")
+      end
+    end
+
+    defp relay_quote(context, from_chain, src_token, amount, to_address) do
+      decimals = Assets.decimals(from_chain, src_token)
+      atomic = Integer.to_string(Assets.to_atomic(Decimal.new(amount), decimals))
+
+      request = %QuoteRequest{
+        transfer_id: "preflight_" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower),
+        from_chain_id: from_chain,
+        to_chain_id: @tron,
+        from_token: src_token,
+        to_token: System.get_env("RELAY_LIVE_TO_TOKEN", @usdt_tron),
+        from_amount: atomic,
+        from_address: LiveWallet.address(),
+        to_address: to_address,
+        slippage_bps: 50
+      }
+
+      Relay.get_quote(context.relay_config, request)
+    end
+
+    defp report_relay(label, transfer, status, from_chain) do
+      IO.puts("""
+
+      [live_relay:#{label}] settled
+        transfer_id   #{transfer.transfer_id}
+        status        #{status.status}
+        deposit tx    #{deposit_line(transfer.deposit_tx_hash, from_chain)}\
+      """)
+    end
+
+    defp deposit_line(nil, _chain), do: "(none reported)"
+
+    defp deposit_line(hash, chain) do
+      case explorer_base(chain) do
+        nil -> hash
+        base -> base <> hash
+      end
+    end
+
+    defp explorer_base(1), do: "https://etherscan.io/tx/"
+    defp explorer_base(8453), do: "https://basescan.org/tx/"
+    defp explorer_base(42_161), do: "https://arbiscan.io/tx/"
+    defp explorer_base(10), do: "https://optimistic.etherscan.io/tx/"
+    defp explorer_base(137), do: "https://polygonscan.com/tx/"
+    defp explorer_base(_), do: nil
+
+    defp parse_list(spec), do: spec |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
 
     defp lifetime(context) do
       Ledger.get_totals(context.ledger, context.agent_id, context.policy).lifetime

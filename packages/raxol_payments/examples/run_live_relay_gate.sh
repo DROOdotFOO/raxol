@@ -1,18 +1,33 @@
 #!/usr/bin/env bash
-# Run the live Tron Relay quote gate against the Riddler solver (read-only).
+# Settle a full EVM->Tron transfer through the Relay rail (Riddler solver).
 #
-# Riddler serves the /relay/* routes the raxol Relay client calls. A quote moves
-# no funds, so this needs no private key -- just the endpoint, the staging bearer
-# token, and the EVM source address the quote is priced for.
-#
-# The full EVM->Tron settlement (which broadcasts an on-chain deposit) is a
-# separate raxol_acp :live_relay test, since broadcasting needs the EVM tx stack.
+# A read-only /relay/quote probe validates the endpoint + token and moves no
+# funds; under DRY_RUN that is all that runs. The real settlement broadcasts an
+# on-chain ERC-20 deposit to the Riddler deposit address, so it needs the EVM tx
+# stack that lives in raxol_acp: this gate runs the raxol_acp `:live_relay` test
+# (ExecuteRelayTransfer -> OnchainBroadcaster -> PollRelayStatus), which moves
+# REAL funds. Multiple source tokens settle in one run via RELAY_LIVE_TOKENS
+# (each resolved per chain via Raxol.Payments.Assets); the destination is Tron.
 #
 # Usage (from packages/raxol_payments/):
-#   RELAY_LIVE_FROM_ADDRESS=0x<base address> ./examples/run_live_relay_gate.sh
+#   # 1. Dry run: quote probe only, NO funds move, no key needed.
+#   RELAY_LIVE_FROM_ADDRESS=0x<base address> DRY_RUN=1 ./examples/run_live_relay_gate.sh
+#
+#   # 2. Real settlement: broadcasts the deposit (needs a funded key + an RPC).
+#   RELAY_LIVE_FROM_ADDRESS=0x<base address> \
+#   RELAY_LIVE_KEY=0x<funded source-chain key> \
+#   RELAY_LIVE_RPC=https://mainnet.base.org \
+#   RELAY_LIVE_TOKENS=USDC,USDT \
+#     ./examples/run_live_relay_gate.sh
 #
 # Override the endpoint or token source with RELAY_LIVE_URL / RELAY_LIVE_TOKEN.
+# Corridor overrides: RELAY_LIVE_FROM_CHAIN, RELAY_LIVE_TOKENS,
+# RELAY_LIVE_FROM_TOKEN (a raw origin address overriding the token list),
+# RELAY_LIVE_TO_TOKEN, RELAY_LIVE_TO_ADDRESS, RELAY_LIVE_AMOUNT.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ACP_DIR="$SCRIPT_DIR/../../raxol_acp"
 
 RELAY_LIVE_URL="${RELAY_LIVE_URL:-https://riddler.axol.io}"
 # The /relay/* routes authenticate against TRON_RELAY_API_TOKEN, which
@@ -37,7 +52,7 @@ if [[ -z "${RELAY_LIVE_TOKEN:-}" ]]; then
   RELAY_LIVE_TOKEN="$(op read "$OP_TOKEN_REF")"
 fi
 
-printf 'validating relay quote endpoint (read-only, no funds move)...\n' >&2
+printf 'preflight: validating relay quote endpoint (read-only, no funds move)...\n' >&2
 quote_body="$(printf '{"transfer_id":"probe","from_chain_id":8453,"to_chain_id":728126428,"from_token":"%s","to_token":"%s","from_amount":"%s","from_address":"%s","to_address":"%s","slippage_bps":50}' \
   "$RELAY_LIVE_FROM_TOKEN" "$RELAY_LIVE_TO_TOKEN" "$RELAY_LIVE_AMOUNT" "$RELAY_LIVE_FROM_ADDRESS" "$RELAY_LIVE_TO_ADDRESS")"
 
@@ -48,12 +63,31 @@ code="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' \
   -d "$quote_body")"
 
 if [[ "$code" != "200" ]]; then
-  printf 'warning: relay quote probe returned http %s (continuing to the gate)\n' "$code" >&2
-else
-  printf 'relay quote ok (http 200). running the gate...\n' >&2
+  printf 'preflight FAILED: relay quote probe returned http %s. Fix the endpoint/token.\n' "$code" >&2
+  printf 'No funds moved. Aborting.\n' >&2
+  exit 1
 fi
 
-export RELAY_LIVE_URL RELAY_LIVE_TOKEN RELAY_LIVE_FROM_ADDRESS
+printf 'preflight ok: relay quote reachable (http 200).\n' >&2
+
+if [[ -n "${DRY_RUN:-}" ]]; then
+  printf 'DRY_RUN set: quote confirmed, NO funds moved.\n' >&2
+  printf 're-run without DRY_RUN (with RELAY_LIVE_KEY + RELAY_LIVE_RPC) to settle.\n' >&2
+  exit 0
+fi
+
+if [[ -z "${RELAY_LIVE_KEY:-}" || -z "${RELAY_LIVE_RPC:-}" ]]; then
+  printf 'error: the real settlement broadcasts an on-chain deposit and needs\n' >&2
+  printf 'RELAY_LIVE_KEY (funded source-chain key) and RELAY_LIVE_RPC (source-chain RPC).\n' >&2
+  exit 1
+fi
+
+export RELAY_LIVE_URL RELAY_LIVE_TOKEN RELAY_LIVE_FROM_ADDRESS RELAY_LIVE_KEY RELAY_LIVE_RPC
 export RELAY_LIVE_FROM_TOKEN RELAY_LIVE_TO_TOKEN RELAY_LIVE_TO_ADDRESS RELAY_LIVE_AMOUNT
+
+# The full EVM->Tron settlement broadcasts the deposit, so it runs in raxol_acp
+# (where the EIP-1559 signing / RLP / JSON-RPC stack lives).
+printf 'settling EVM->Tron for REAL (broadcasts an on-chain deposit)...\n' >&2
+cd "$ACP_DIR"
 exec env MIX_ENV=test mix test --include live_relay \
-  test/raxol/payments/relay/live_relay_test.exs
+  test/raxol/acp/relay/live_relay_test.exs
