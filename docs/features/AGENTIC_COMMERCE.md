@@ -70,6 +70,8 @@ Three layers of limits in `SpendingPolicy`:
 
 The `Ledger` is an ETS-backed GenServer that tracks cumulative spend. `SpendingHook` implements the `CommandHook` behaviour from raxol_agent. It runs before every command and can deny execution if limits would be exceeded.
 
+Both spend paths reserve atomically before signing: the `SpendGate` choke point (payment Actions) and `SpendingHook` (Pay directives) call `Ledger.try_spend`, which checks the caps and records in one step, and refund via `Ledger.release` when execution then fails, so two commands cannot both pass a check before either records. A non-positive or non-finite amount is rejected up front (it can never lower the running total). A missing policy leaves the gate permissive by default; a fund-moving deployment sets `require_policy: true` (payment context or `config :raxol_payments, :require_policy`) so `SpendGate` fails closed instead of allowing unlimited spend.
+
 ## Crash Recovery
 
 Cross-chain settlement is asynchronous: there is a window between dispatching an intent (sign + submit) and confirming it landed. A crash in that window, on a runtime with no fault isolation, makes the restarted agent re-quote and sign a second time, paying twice.
@@ -81,6 +83,8 @@ The store is injected via `context[:checkpoint]` as a `{module, handle}` pair, s
 - `Checkpoint.ETS`: an ETS table; survives a process crash when owned by a process that outlives it (a supervisor, the cockpit). Used for standalone runs and the demo.
 - `Checkpoint.ContextStore`: backed by `Raxol.Agent.ContextStore`, so a deployed agent's in-flight intent persists in the same durable store that backs its own crash recovery.
 - nil (the default): recovery disabled; every call quotes and signs.
+
+Without a checkpoint, `ExecuteXochiIntent` still proceeds but emits `[:raxol, :payments, :xochi, :unchecked_settlement]`, so the double-settle exposure is observable rather than silent. A fund-moving deployment closes the window by injecting a durable store and setting `require_checkpoint: true` (payment context or `config :raxol_payments, :require_checkpoint`), which fails the Action closed with `{:error, %Failure{reason: :checkpoint_required}}` before any signature when no store is present. A poll that never reaches a terminal status returns `%Failure{reason: :stranded}` and emits `[:raxol, :payments, :xochi, :intent_stranded]` with the intent id, so a stranded settlement is reconciled rather than blindly re-executed.
 
 The relay rail keys on the logical payment rather than its client-minted `transfer_id`, so a resume reuses the same `transfer_id` and an idempotent broadcaster dedupes a retried deposit. A definite execution failure (nothing dispatched) drops the checkpoint so a later retry starts clean. Set `context[:idempotency_key]` to force two otherwise-identical payments apart.
 
