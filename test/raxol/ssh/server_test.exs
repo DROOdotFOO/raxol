@@ -3,6 +3,46 @@ defmodule Raxol.SSH.ServerTest do
 
   alias Raxol.SSH.Server
 
+  describe "authentication (fail-closed)" do
+    test "refuses to start with no auth configured" do
+      # An SSH surface that can reach payment Actions must not be silently
+      # anonymous. With neither allow_anonymous nor authorized_keys_dir, the
+      # server refuses to start rather than accepting any connection.
+      # start_link links, and a {:stop, _} init propagates an exit signal, so
+      # trap it to inspect the {:error, reason} return.
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {:ssh_auth_required, _msg}} =
+               Server.start_link(app_module: Raxol.Playground.App, port: 0)
+    end
+
+    test "allow_anonymous yields no_auth_needed daemon opts" do
+      assert {:ok, opts} = Server.auth_daemon_opts(allow_anonymous: true)
+      assert opts[:no_auth_needed] == true
+    end
+
+    test "authorized_keys_dir yields public-key auth daemon opts" do
+      assert {:ok, opts} =
+               Server.auth_daemon_opts(authorized_keys_dir: "/etc/raxol/keys")
+
+      assert opts[:user_dir] == ~c"/etc/raxol/keys"
+      assert opts[:auth_methods] == ~c"publickey"
+      refute Keyword.has_key?(opts, :no_auth_needed)
+    end
+
+    test "no auth option fails closed" do
+      assert {:error, :ssh_auth_required} = Server.auth_daemon_opts([])
+    end
+  end
+
+  describe "host key default" do
+    test "default host keys dir is persistent, not /tmp" do
+      dir = Server.default_host_keys_dir()
+      refute String.starts_with?(dir, "/tmp")
+      assert String.contains?(dir, ".raxol")
+    end
+  end
+
   describe "host key generation" do
     test "generates RSA host key" do
       dir =
@@ -43,6 +83,7 @@ defmodule Raxol.SSH.ServerTest do
          port: port,
          host_keys_dir: dir,
          max_connections: 2,
+         allow_anonymous: true,
          name: :test_ssh_server}
       )
 
@@ -83,6 +124,7 @@ defmodule Raxol.SSH.ServerTest do
          port: port,
          host_keys_dir: dir,
          max_connections: 10,
+         allow_anonymous: true,
          name: :test_ssh_zero}
       )
 

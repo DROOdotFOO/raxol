@@ -60,7 +60,10 @@ defmodule Mix.Tasks.Raxol.Playground do
     {:ok, pid} =
       Raxol.SSH.serve(Raxol.Playground.App,
         port: port,
-        max_connections: max
+        max_connections: max,
+        # The playground is a public, read-only component catalog: anonymous
+        # access is intended. Surfaces that reach payment Actions must not.
+        allow_anonymous: true
       )
 
     ref = Process.monitor(pid)

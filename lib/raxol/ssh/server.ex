@@ -14,8 +14,20 @@ defmodule Raxol.SSH.Server do
   ## Options
 
     * `:port` - Port to listen on (default: 2222)
-    * `:host_keys_dir` - Directory for SSH host keys (default: "/tmp/raxol_ssh_keys")
+    * `:host_keys_dir` - Directory for SSH host keys (default: `~/.raxol/ssh_keys`,
+      a persistent path so keys survive restarts)
     * `:max_connections` - Maximum concurrent connections (default: 50)
+
+  ## Authentication (fail-closed)
+
+  A surface that can reach payment Actions must not be silently anonymous, so
+  authentication is required unless anonymous access is explicitly requested:
+
+    * `:allow_anonymous` - `true` accepts any connection (BBS/playground use).
+    * `:authorized_keys_dir` - a directory holding an `authorized_keys` file;
+      connections must present a listed public key.
+
+  With neither, the server refuses to start.
   """
 
   use GenServer
@@ -36,13 +48,43 @@ defmodule Raxol.SSH.Server do
 
   @spec serve(module(), keyword()) :: GenServer.on_start()
   def serve(app_module, opts \\ []) do
-    start_link(
-      app_module: app_module,
-      port: Keyword.get(opts, :port, @default_port),
-      host_keys_dir: Keyword.get(opts, :host_keys_dir, "/tmp/raxol_ssh_keys"),
-      max_connections:
-        Keyword.get(opts, :max_connections, @default_max_connections)
-    )
+    start_link([app_module: app_module] ++ opts)
+  end
+
+  @doc """
+  Default directory for SSH host keys: a persistent per-user path.
+
+  A host key under `/tmp` rotates on reboot, which trains clients to click
+  through the host-key-changed warning -- the one warning that matters. Keys
+  live under the user's home so they survive restarts.
+  """
+  @spec default_host_keys_dir() :: String.t()
+  def default_host_keys_dir, do: Path.expand("~/.raxol/ssh_keys")
+
+  @doc """
+  Build the `:ssh.daemon` authentication options, failing closed.
+
+  Returns `{:ok, opts}` for `allow_anonymous: true` (no auth) or
+  `authorized_keys_dir: dir` (public-key auth), and `{:error, :ssh_auth_required}`
+  when neither is given so the caller refuses to start an anonymous surface.
+  """
+  @spec auth_daemon_opts(keyword()) ::
+          {:ok, keyword()} | {:error, :ssh_auth_required}
+  def auth_daemon_opts(opts) do
+    anonymous? = Keyword.get(opts, :allow_anonymous, false) == true
+    keys_dir = Keyword.get(opts, :authorized_keys_dir)
+
+    cond do
+      anonymous? ->
+        {:ok, [no_auth_needed: true]}
+
+      is_binary(keys_dir) ->
+        {:ok,
+         [user_dir: String.to_charlist(keys_dir), auth_methods: ~c"publickey"]}
+
+      true ->
+        {:error, :ssh_auth_required}
+    end
   end
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -74,18 +116,40 @@ defmodule Raxol.SSH.Server do
   def init(opts) do
     app_module = Keyword.fetch!(opts, :app_module)
     port = Keyword.get(opts, :port, @default_port)
-    host_keys_dir = Keyword.get(opts, :host_keys_dir, "/tmp/raxol_ssh_keys")
+    host_keys_dir = Keyword.get(opts, :host_keys_dir, default_host_keys_dir())
 
     max_connections =
       Keyword.get(opts, :max_connections, @default_max_connections)
 
+    # Resolve authentication first: refuse to open the daemon at all when the
+    # surface would be silently anonymous.
+    case auth_daemon_opts(opts) do
+      {:ok, auth_opts} ->
+        start_daemon(
+          app_module,
+          port,
+          host_keys_dir,
+          max_connections,
+          auth_opts
+        )
+
+      {:error, :ssh_auth_required} ->
+        {:stop,
+         {:ssh_auth_required,
+          "SSH server refused to start: no authentication configured. Pass " <>
+            "allow_anonymous: true for anonymous access (e.g. a playground), or " <>
+            "authorized_keys_dir: <dir> to require public-key auth."}}
+    end
+  end
+
+  defp start_daemon(app_module, port, host_keys_dir, max_connections, auth_opts) do
     ensure_host_keys(host_keys_dir)
 
-    daemon_opts = [
-      system_dir: String.to_charlist(host_keys_dir),
-      ssh_cli: {Raxol.SSH.CLIHandler, [app_module: app_module]},
-      no_auth_needed: true
-    ]
+    daemon_opts =
+      [
+        system_dir: String.to_charlist(host_keys_dir),
+        ssh_cli: {Raxol.SSH.CLIHandler, [app_module: app_module]}
+      ] ++ auth_opts
 
     case :ssh.daemon(port, daemon_opts) do
       {:ok, daemon_ref} ->
