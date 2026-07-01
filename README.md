@@ -90,7 +90,29 @@ client = Req.new(base_url: "https://api.example.com")
 # If 402 -> wallet signs EIP-712 -> Xochi settles cross-chain -> response arrives
 ```
 
-Three protocols behind one interface: x402 (Coinbase HTTP 402, same-chain), MPP (Stripe/Tempo machine payments), and Xochi (cross-chain intent settlement, 0.10-0.40% fees, stealth-capable). Per-request, per-session, and lifetime spending limits enforced by a ledger GenServer. See [Agentic Commerce docs](docs/features/AGENTIC_COMMERCE.md).
+Five protocols behind one interface: x402 (Coinbase HTTP 402, same-chain), MPP (Stripe/Tempo machine payments), Xochi (cross-chain intent settlement, 0.10-0.40% fees, stealth-capable, the agent default), Permit2 (`PermitWitnessTransferFrom` signing for most ERC-20s), and Riddler (direct solver access, deprecated in favor of Xochi). Per-request, per-session, and lifetime spending limits enforced by a ledger GenServer. See [Agentic Commerce docs](docs/features/AGENTIC_COMMERCE.md).
+
+## Agents that earn
+
+`raxol_acp` is the sell side: an Elixir/OTP-native implementation of the [Virtuals](https://virtuals.io) Agent Commerce Protocol that lets your agent offer services on Base and get paid for them. Declare an offering, implement two callbacks, and a buyer agent can discover it, escrow funds, and settle on-chain through the job lifecycle (request -> negotiation -> transaction -> evaluation -> completed), one supervised process per job.
+
+```elixir
+defmodule CrossChainTransfer do
+  use Raxol.ACP.Offering,
+    name: "xochi_cross_chain_transfer",
+    price_usdc: "0.25",
+    sla_minutes: 10,
+    cluster: "on_chain"
+
+  @impl true
+  def handle_request(req, _ctx), do: {:accept, req}
+
+  @impl true
+  def handle_deliver(req, _ctx), do: {:deliver, settle_cross_chain(req)}
+end
+```
+
+The two halves compose: an agent sells a service through `raxol_acp` and settles it through `raxol_payments`. The shipped `xochi_cross_chain_transfer` offering does exactly that, delivering a buyer's USDC/USDT/WETH transfer across any of the 5 EVM chains via Xochi and returning the on-chain settlement tx hashes for verification. Pre-alpha (not yet on Hex).
 
 ## Agents that improve
 

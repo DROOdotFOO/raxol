@@ -60,7 +60,7 @@ defmodule Raxol.ACP.Xochi.Settler do
   """
 
   alias Raxol.Payments.Protocols.Xochi
-  alias Raxol.Payments.Xochi.Schemas.{QuoteRequest, IntentStatus}
+  alias Raxol.Payments.Xochi.Schemas.{IntentStatus, QuoteRequest}
 
   @doc """
   Build a settle_fn closure.
@@ -124,6 +124,12 @@ defmodule Raxol.ACP.Xochi.Settler do
   defp build_quote_request(args, wallet_address) do
     req = args.requirement
 
+    # Delivery goes to `wallet_address` (the requester) on the destination chain.
+    # `req["destination"]` is intentionally not honored yet: sending to a
+    # different recipient is a future capability, so for now the destination is
+    # kept equal to the funder for hardening. The field stays in the requirement
+    # (the schema and FundTransfer hook carry it) but does not retarget the
+    # settlement.
     request = %QuoteRequest{
       wallet: wallet_address,
       from_chain_id: req["src_chain_id"],
@@ -141,16 +147,17 @@ defmodule Raxol.ACP.Xochi.Settler do
     end
   end
 
+  # IntentStatus carries the origin fill as `tx_hash` and the destination arrival
+  # as `receiving_tx_hash`; the deliverable schema names them src_tx_hash /
+  # dst_tx_hash. Map them so the buyer/evaluator can verify the settlement
+  # on-chain (src_tx_hash is a required deliverable field).
   defp to_deliverable(%IntentStatus{} = status) do
     {:ok,
      %{
        intent_id: status.intent_id,
-       quote_id: Map.get(status, :quote_id),
-       src_tx_hash: Map.get(status, :src_tx_hash),
-       dst_tx_hash: Map.get(status, :dst_tx_hash),
-       status: to_string(status.status),
-       fee_atomic: Map.get(status, :fee_atomic),
-       dst_amount_atomic: Map.get(status, :to_amount) || Map.get(status, :dst_amount_atomic)
+       src_tx_hash: status.tx_hash,
+       dst_tx_hash: status.receiving_tx_hash,
+       status: to_string(status.status)
      }}
   end
 end

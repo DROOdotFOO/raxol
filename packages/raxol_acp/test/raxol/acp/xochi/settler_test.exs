@@ -130,7 +130,13 @@ defmodule Raxol.ACP.Xochi.SettlerTest do
               %{"success" => true, "intentId" => "i1", "status" => "executing"}
 
             "/api/intent/i1/status" ->
-              %{"intentId" => "i1", "status" => status, "terminal" => true}
+              %{
+                "intentId" => "i1",
+                "status" => status,
+                "terminal" => true,
+                "txHash" => "0x" <> String.duplicate("a", 64),
+                "receivingTxHash" => "0x" <> String.duplicate("b", 64)
+              }
           end
 
         Req.Test.json(conn, body)
@@ -160,10 +166,13 @@ defmodule Raxol.ACP.Xochi.SettlerTest do
       }
     end
 
-    test "a completed intent yields a deliverable" do
+    test "a completed intent yields a deliverable with the settlement tx hashes" do
       assert {:ok, deliverable} = settler_for("completed").(args())
       assert deliverable.intent_id == "i1"
       assert deliverable.status == "completed"
+      # IntentStatus tx_hash / receiving_tx_hash surface as src / dst for the buyer.
+      assert deliverable.src_tx_hash == "0x" <> String.duplicate("a", 64)
+      assert deliverable.dst_tx_hash == "0x" <> String.duplicate("b", 64)
     end
 
     test "a failed intent is an error, not a deliverable" do
