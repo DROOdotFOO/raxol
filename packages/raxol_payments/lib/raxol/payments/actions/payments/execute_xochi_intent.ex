@@ -196,10 +196,21 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     end
   end
 
+  # Fail closed by default in a deployed release: a real settlement with no
+  # durable checkpoint risks a double-settle on a crash-retry. An explicit
+  # context flag or `config :raxol_payments, :require_checkpoint` overrides;
+  # development and tests stay permissive.
   defp require_checkpoint?(context) do
     case Map.get(context, :require_checkpoint) do
-      flag when is_boolean(flag) -> flag
-      _ -> Application.get_env(:raxol_payments, :require_checkpoint, false)
+      flag when is_boolean(flag) ->
+        flag
+
+      _ ->
+        Application.get_env(
+          :raxol_payments,
+          :require_checkpoint,
+          Raxol.Payments.Deployment.production?()
+        )
     end
   end
 

@@ -101,7 +101,8 @@ defmodule Raxol.Payments.Actions.SpendGate do
   # is convenient for tests and unconfigured callers but wrong for a fund-moving
   # deployment. `require_policy: true` (context) or
   # `config :raxol_payments, :require_policy, true` fails closed when no
-  # `SpendingPolicy` is in context. Off by default (behaviour unchanged).
+  # `SpendingPolicy` is in context. In a deployed release this is the default;
+  # development and tests stay permissive.
   defp require_policy(context) do
     if policy_required?(context) and not match?(%SpendingPolicy{}, Map.get(context, :policy)),
       do: {:error, {:policy_required, :no_spending_policy}},
@@ -110,8 +111,15 @@ defmodule Raxol.Payments.Actions.SpendGate do
 
   defp policy_required?(context) do
     case Map.get(context, :require_policy) do
-      flag when is_boolean(flag) -> flag
-      _ -> Application.get_env(:raxol_payments, :require_policy, false)
+      flag when is_boolean(flag) ->
+        flag
+
+      _ ->
+        Application.get_env(
+          :raxol_payments,
+          :require_policy,
+          Raxol.Payments.Deployment.production?()
+        )
     end
   end
 
