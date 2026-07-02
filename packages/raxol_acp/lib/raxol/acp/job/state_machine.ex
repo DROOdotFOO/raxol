@@ -8,9 +8,13 @@ defmodule Raxol.ACP.Job.StateMachine do
       :request -> :negotiation -> :transaction -> :evaluation -> :completed
 
   A buyer's `:request` can be `:reject`ed by the seller (state 5 in the
-  canonical enum), and any non-terminal state can `:expire` (SLA breach
-  or buyer cancellation). `:completed`, `:rejected`, and `:expired` are
-  terminal -- no further transitions are valid.
+  canonical enum), and a delivered job can be `:reject`ed by the
+  evaluator or buyer during `:evaluation` (the deliverable is rejected).
+  Both settle to `:rejected`, so the buyer can reclaim the escrow
+  without waiting for the SLA timer. Any non-terminal state can
+  `:expire` (SLA breach or buyer cancellation). `:completed`,
+  `:rejected`, and `:expired` are terminal -- no further transitions are
+  valid.
 
   ## State -> canonical phase id mapping
 
@@ -32,7 +36,9 @@ defmodule Raxol.ACP.Job.StateMachine do
   ## Events
 
   - `:accept_request` -- seller accepts the buyer's request
-  - `:reject` -- seller rejects the buyer's request; valid only from `:request`
+  - `:reject` -- reject the job: the seller from `:request`, or the
+    evaluator/buyer from `:evaluation` (the delivered work is rejected).
+    Both settle to `:rejected`.
   - `:accept_payment` -- buyer's payment authorization is recorded;
     escrow holds funds
   - `:deliver` -- seller submits the deliverable
@@ -79,6 +85,7 @@ defmodule Raxol.ACP.Job.StateMachine do
   def next(:negotiation, :accept_payment), do: {:ok, :transaction}
   def next(:transaction, :deliver), do: {:ok, :evaluation}
   def next(:evaluation, :approve), do: {:ok, :completed}
+  def next(:evaluation, :reject), do: {:ok, :rejected}
 
   def next(state, :expire) when state in @non_terminal, do: {:ok, :expired}
 
