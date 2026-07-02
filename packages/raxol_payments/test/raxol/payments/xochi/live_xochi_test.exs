@@ -59,9 +59,9 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   settlement), so it is bounded by env:
 
   - `XOCHI_LIVE_CORRIDORS` -- `"from>to,from>to"` chain-id pairs (default
-    `"8453>42161,42161>8453"`), or `"mesh"` for every ordered pair of the five
-    supported EVM chains (1, 10, 137, 8453, 42161). Tokens resolve per chain via
-    `Raxol.Payments.Assets`.
+    `"8453>42161,42161>8453"`), or `"mesh"` for every ordered pair of the six
+    supported EVM chains (1, 10, 137, 8453, 42161, 4663). Tokens resolve per chain
+    via `Raxol.Payments.Assets`.
   - `XOCHI_LIVE_TOKENS` -- `"USDC,USDT,WETH"` (default `"USDC"`). USDC pulls via
     ERC-3009; USDT/WETH via Permit2 (needs a standing Permit2 allowance on each
     origin chain). The preflight asserts the served pull method per token
@@ -82,8 +82,15 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
     18-decimal and worth thousands per unit, so it is sized separately.
   - `XOCHI_LIVE_ALLOW_ETH_ORIGIN` -- set to `true` to settle Ethereum-origin
     (chain 1) cells; by default they are skipped (quote-only) for L1 gas cost.
+  - `XOCHI_LIVE_ALLOW_ETH_DEST` -- set to `true` to settle Ethereum-destination
+    (`*->1`) cells; by default they are skipped, because a small L1 fill pays more
+    in ETH gas than it earns in spread and drains mainnet ETH.
   - `XOCHI_LIVE_PACE_MS` -- milliseconds to wait between cells (default `1500`) so
     the sweep does not trip the worker's rate limit; set `0` to fire back-to-back.
+  - `XOCHI_LIVE_RECORD_MARGIN` -- set to `true` to record each settled fill into a
+    `Raxol.Payments.SettlementLedger` (fee vs on-chain gas) and print a per-corridor
+    margin + native-drain report after the sweep. RPC per chain defaults to public
+    endpoints, overridable via `XOCHI_LIVE_RPC_<chain_id>`.
 
   A companion `:live_xochi_preflight` test quotes every corridor x token
   read-only (no funds) and asserts `can_solve` plus the pinned origin-pull
@@ -110,7 +117,19 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
   if System.get_env("XOCHI_LIVE_URL") && System.get_env("XOCHI_LIVE_KEY") do
     alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
-    alias Raxol.Payments.{Assets, Failure, Ledger, Mandate, SpendingPolicy}
+
+    alias Raxol.Payments.{
+      Assets,
+      ChainReader,
+      Failure,
+      Ledger,
+      Mandate,
+      Prices,
+      SettlementLedger,
+      SettlementRecorder,
+      SpendingPolicy
+    }
+
     alias Raxol.Payments.Mandate.Store, as: MandateStore
     alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
     alias Raxol.Payments.Xochi.Schemas.QuoteRequest
@@ -284,6 +303,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
           "[live_xochi:matrix] running #{length(cells)} cells (corridor x token x settlement)"
         )
 
+        recorder = margin_recorder()
+
         outcomes =
           for {from, to, token, settlement} <- cells do
             label = "#{from}->#{to}:#{token}:#{settlement}"
@@ -303,6 +324,17 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
                 {:skipped, label, :eth_origin}
 
+              # Ethereum-DESTINATION fills burn real L1 gas: a small fill pays more
+              # in ETH gas than it earns in spread and drains mainnet ETH one-way.
+              # Skip by default so the probe does not bleed ETH each run.
+              to == 1 and System.get_env("XOCHI_LIVE_ALLOW_ETH_DEST") != "true" ->
+                IO.puts(
+                  "[live_xochi:matrix] SKIP #{label}: Ethereum destination is quote-only " <>
+                    "(set XOCHI_LIVE_ALLOW_ETH_DEST=true to settle to L1)"
+                )
+
+                {:skipped, label, :eth_dest}
+
               # USDT/WETH pull via Permit2, which needs a standing on-chain allowance
               # this gate does not broadcast (raxol_payments holds no tx code). Set the
               # allowance via the ACP order gate, then opt in with XOCHI_LIVE_SETTLE_PERMIT2.
@@ -321,12 +353,14 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
                   {from, to, token, settlement},
                   stable_amount,
                   meta,
-                  label
+                  label,
+                  recorder
                 )
             end
           end
 
         report_matrix_summary(outcomes)
+        print_margin_report(recorder)
       end
 
       # Tally the per-cell outcomes and fail the run only on a client FAULT -- an
@@ -383,6 +417,97 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       defp settled_list([]), do: ""
       defp settled_list(settled), do: ": " <> Enum.join(settled, ", ")
 
+      # Opt-in P&L accounting (XOCHI_LIVE_RECORD_MARGIN=true): start a settlement
+      # ledger + an on-chain reader so each settled fill's fee can be booked against
+      # the native gas it burned. Returns nil (a no-op) when the flag is off, so a
+      # normal run is unchanged.
+      defp margin_recorder do
+        if System.get_env("XOCHI_LIVE_RECORD_MARGIN") == "true" do
+          table = String.to_atom("margin_#{System.unique_integer([:positive])}")
+          ledger = start_supervised!({SettlementLedger, table_name: table})
+          reader = ChainReader.JSONRPC.new(chains: rpc_urls())
+          {ledger, reader}
+        else
+          nil
+        end
+      end
+
+      # Read-only RPC per chain for receipt lookups. Public defaults, overridable
+      # via XOCHI_LIVE_RPC_<chain_id>.
+      defp rpc_urls do
+        %{
+          1 => System.get_env("XOCHI_LIVE_RPC_1", "https://eth.llamarpc.com"),
+          10 => System.get_env("XOCHI_LIVE_RPC_10", "https://mainnet.optimism.io"),
+          137 => System.get_env("XOCHI_LIVE_RPC_137", "https://polygon-rpc.com"),
+          8453 => System.get_env("XOCHI_LIVE_RPC_8453", "https://mainnet.base.org"),
+          42_161 => System.get_env("XOCHI_LIVE_RPC_42161", "https://arb1.arbitrum.io/rpc")
+        }
+      end
+
+      # Build the closure poll_settlement calls on a completed fill. A nil recorder
+      # yields a no-op so the settle path is unchanged when accounting is off.
+      defp margin_record_fn(nil, _from, _to, _token, _params, _info),
+        do: fn _intent, _status -> :ok end
+
+      defp margin_record_fn({ledger, reader}, from, to, token, params, info) do
+        fn intent, status ->
+          SettlementRecorder.record(
+            ledger,
+            reader,
+            %{
+              intent_id: intent.intent_id,
+              from_chain_id: from,
+              to_chain_id: to,
+              token_symbol: token,
+              token_address: Map.get(params, :from_token),
+              fee_collected: Map.get(info, :fee) || 0,
+              tx_hash: Map.get(status, :tx_hash),
+              settlement_type: settlement_type_atom(params)
+            },
+            record_pending: true
+          )
+        end
+      end
+
+      defp settlement_type_atom(params) do
+        case Map.get(params, :settlement) do
+          "public" -> :public
+          "stealth" -> :stealth
+          "shielded" -> :shielded
+          _ -> nil
+        end
+      end
+
+      # Per-corridor margin + native-drain summary after a recorded sweep. USD via
+      # CoinGecko; unpriced entries degrade to raw totals ("n/a").
+      defp print_margin_report(nil), do: :ok
+
+      defp print_margin_report({ledger, _reader}) do
+        report = SettlementLedger.report(ledger, price_fn: Prices.CoinGecko.price_fn())
+
+        IO.puts("\n[live_xochi:margin] report (fee vs on-chain gas)")
+        IO.puts("  totals      #{format_agg(report.totals)}")
+
+        for {dest, agg} <- Enum.sort_by(report.destinations, &elem(&1, 0)) do
+          IO.puts("  dest #{dest}    #{format_agg(agg)}")
+        end
+
+        for {chain, wei} <- Enum.sort_by(report.drain, &elem(&1, 0)) do
+          native = wei |> Assets.to_human(18) |> Decimal.round(6) |> Decimal.to_string()
+          IO.puts("  drain #{chain}   #{native} #{Assets.native_symbol(chain)}")
+        end
+
+        :ok
+      end
+
+      defp format_agg(agg) do
+        "n=#{agg.count} fee_usd=#{fmt_usd(agg.usd_fee)} gas_usd=#{fmt_usd(agg.usd_gas)} " <>
+          "margin_usd=#{fmt_usd(agg.usd_margin)} gas_unknown=#{agg.gas_unknown_count}"
+      end
+
+      defp fmt_usd(nil), do: "n/a"
+      defp fmt_usd(%Decimal{} = d), do: "$" <> Decimal.to_string(Decimal.round(d, 4))
+
       # Settle one matrix cell, but only if the solver can actually fill it now:
       # re-quote read-only first and skip (log) a non-fillable cell instead of
       # failing the whole run. Implements "settle the fillable subset". Returns a
@@ -392,7 +517,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
              {from, to, token, settlement},
              stable_amount,
              meta,
-             label
+             label,
+             recorder
            ) do
         pace()
         amount = amount_for(token, stable_amount)
@@ -406,9 +532,10 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
             {:skipped, label, {:not_fillable, reason}}
 
-          {:ok, _info} ->
+          {:ok, info} ->
             params = matrix_params(from, to, token, settlement, amount, meta)
-            settle_cell({context, poll_context}, params, label)
+            record_fn = margin_record_fn(recorder, from, to, token, params, info)
+            settle_cell({context, poll_context}, params, label, record_fn)
         end
       end
 
@@ -428,12 +555,12 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       # reached the worker. A submitted intent that does not complete (the solver is
       # out of gas/inventory on that corridor now) is a logged SKIP; the sweep goes
       # on to the next corridor rather than aborting.
-      defp settle_cell({context, poll_context}, params, label) do
+      defp settle_cell({context, poll_context}, params, label, record_fn) do
         started = System.monotonic_time(:millisecond)
 
         case ExecuteXochiIntent.call(params, context) do
           {:ok, intent} ->
-            poll_settlement(poll_context, intent, params, label, started)
+            poll_settlement(poll_context, intent, params, label, started, record_fn)
 
           {:error, error} ->
             classify_execute_error(error, label)
@@ -496,9 +623,10 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       # successful execute is more serious -- the intent was submitted, so funds may
       # be in flight; the reason atom (e.g. :stranded) rides the outcome so the
       # summary can flag it for reconciliation.
-      defp poll_settlement(poll_context, intent, params, label, started) do
+      defp poll_settlement(poll_context, intent, params, label, started, record_fn) do
         case PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context) do
           {:ok, %{status: "completed"} = status} ->
+            record_fn.(intent, status)
             report_settlement(label, intent, status, params, started)
             {:settled, label}
 
@@ -601,7 +729,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
                :ok <- preflight_can_solve(quote),
                :ok <- preflight_method(token, quote.payment_method),
                :ok <- XochiProtocol.validate_pull(quote, request, wallet) do
-            {:ok, %{method: quote.payment_method, to_amount: quote.to_amount, fee: quote.xochi_fee}}
+            {:ok,
+             %{method: quote.payment_method, to_amount: quote.to_amount, fee: quote.xochi_fee}}
           end
 
         case result do
@@ -699,10 +828,12 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         l1 <> permit2
       end
 
-      # The five supported EVM chains: Ethereum, Optimism, Polygon, Base, Arbitrum.
-      @evm_chains [1, 10, 137, 8453, 42_161]
+      # The six supported EVM chains: Ethereum, Optimism, Polygon, Base, Arbitrum,
+      # Robinhood Chain (4663). Robinhood corridors are cross-asset (USDG on 4663,
+      # USDC/USDT/WETH elsewhere) and need a funded solver + deployed Xochi server.
+      @evm_chains [1, 10, 137, 8453, 42_161, 4663]
 
-      # "mesh" (or "all") expands to every ordered pair of the five EVM chains (20
+      # "mesh" (or "all") expands to every ordered pair of the six EVM chains (30
       # corridors), so the preflight validates the full grid in one run. The
       # explicit "from>to,from>to" form still works for a narrower run.
       defp parse_corridors(spec) when spec in ["mesh", "all"] do

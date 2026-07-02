@@ -11,7 +11,7 @@ defmodule Raxol.Core.Metrics.Cloud do
 
   use Raxol.Core.Behaviours.BaseManager
 
-  @type cloud_service :: :datadog | :prometheus | :cloudwatch
+  @type cloud_service :: :otlp | :signoz | :datadog | :prometheus | :cloudwatch
   @type cloud_config :: %{
           service: cloud_service(),
           endpoint: String.t(),
@@ -21,9 +21,11 @@ defmodule Raxol.Core.Metrics.Cloud do
           compression: boolean()
         }
 
+  # Default to OTLP (SigNoz / any OpenTelemetry collector). Datadog remains a valid
+  # pluggable backend but is no longer the default.
   @default_config %{
-    service: :datadog,
-    endpoint: "https://api.datadoghq.com/api/v1/series",
+    service: :otlp,
+    endpoint: "http://localhost:4318/v1/metrics",
     batch_size: 100,
     flush_interval: 10_000,
     compression: true
@@ -176,6 +178,11 @@ defmodule Raxol.Core.Metrics.Cloud do
     recipient = state.test_pid || self()
 
     case config.service do
+      service when service in [:otlp, :signoz] ->
+        formatted = format_for_otlp(metrics)
+        send(recipient, {:metrics_formatted, formatted})
+        send_to_otlp(config, metrics)
+
       :datadog ->
         formatted = format_for_datadog(metrics)
         send(recipient, {:metrics_formatted, formatted})
@@ -196,6 +203,11 @@ defmodule Raxol.Core.Metrics.Cloud do
     end
   end
 
+  def send_to_otlp(_config, _metrics) do
+    # Send metrics via OTLP to the collector (SigNoz / any OpenTelemetry backend)
+    :ok
+  end
+
   def send_to_datadog(_config, _metrics) do
     # Send metrics to Datadog
     :ok
@@ -209,6 +221,24 @@ defmodule Raxol.Core.Metrics.Cloud do
   def send_to_cloudwatch(_config, _metrics) do
     # Send metrics to CloudWatch
     :ok
+  end
+
+  # OTLP metrics shape (SigNoz / OpenTelemetry collector): each metric a gauge data
+  # point. A stub structure, mirroring the other formatters.
+  defp format_for_otlp(metrics) do
+    data_points =
+      Enum.map(metrics, fn metric ->
+        avg_value = Enum.sum(metric.values) / length(metric.values)
+
+        %{
+          metric: to_string(metric.name),
+          value: avg_value,
+          time_unix_nano: metric.timestamp,
+          attributes: metric.tags
+        }
+      end)
+
+    %{resource_metrics: [%{scope_metrics: [%{metrics: data_points}]}]}
   end
 
   defp format_for_datadog(metrics) do
@@ -274,7 +304,7 @@ defmodule Raxol.Core.Metrics.Cloud do
   end
 
   defp validate_service(service)
-       when service in [:datadog, :prometheus, :cloudwatch],
+       when service in [:otlp, :signoz, :datadog, :prometheus, :cloudwatch],
        do: :ok
 
   defp validate_service(_), do: {:error, :invalid_service}

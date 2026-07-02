@@ -57,6 +57,8 @@ defmodule Raxol.ACP.Supervisor do
         base
       end
 
+    children = children ++ accounting_children()
+
     Supervisor.init(children,
       strategy: :rest_for_one,
       # Defaults are 3 in 5s. Tests recycle Job.Store and Seller.*
@@ -69,5 +71,43 @@ defmodule Raxol.ACP.Supervisor do
       max_restarts: 100,
       max_seconds: 5
     )
+  end
+
+  # Settlement accounting + rebalance advisor (recommend-only). Off unless
+  # `config :raxol_acp, accounting_enabled: true`. Placed last in the child list so
+  # a crash restarts only these processes (`:rest_for_one`), never the job infra.
+  # The ledger starts first (named), then the accountant and monitor reference it.
+  defp accounting_children do
+    if Application.get_env(:raxol_acp, :accounting_enabled, false) do
+      acc = Application.get_env(:raxol_payments, :accounting, [])
+      ledger_name = Raxol.Payments.SettlementLedger
+      reader = Raxol.Payments.ChainReader.JSONRPC.new(chains: Keyword.get(acc, :rpc_urls, %{}))
+      solver = Keyword.get(acc, :solver_address)
+
+      base = [
+        {Raxol.Payments.SettlementLedger, [name: ledger_name]},
+        {Raxol.Payments.SettlementAccountant, [ledger: ledger_name, reader: reader]}
+      ]
+
+      # The monitor needs a solver address to read balances for; skip it (accounting
+      # still records) when one is not configured.
+      if solver do
+        base ++
+          [
+            {Raxol.Payments.RebalanceMonitor,
+             [
+               ledger: ledger_name,
+               reader: reader,
+               solver_address: solver,
+               interval_ms: Keyword.get(acc, :rebalance_interval_ms, 300_000),
+               price_source: Keyword.get(acc, :price_source, :none)
+             ]}
+          ]
+      else
+        base
+      end
+    else
+      []
+    end
   end
 end

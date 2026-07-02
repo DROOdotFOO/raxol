@@ -3,11 +3,11 @@ defmodule Raxol.Payments.AssetsTest do
 
   alias Raxol.Payments.Assets
 
-  # The Riddler solver fills USDC, USDT, and WETH on all five EVM chains. Each
-  # must be a registered Assets entry: an unregistered token falls back to 6
-  # decimals, wrong for an 18-decimal token like WETH. This fixture pins the set
-  # so a dropped or wrong-decimal entry fails here. Addresses mirror Riddler's
-  # config/token_registry.ex (lowercased).
+  # The Riddler solver fills USDC, USDT, and WETH on the five original EVM chains,
+  # plus USDG and WETH on Robinhood Chain (4663). Each must be a registered Assets
+  # entry: an unregistered token falls back to 6 decimals, wrong for an 18-decimal
+  # token like WETH. This fixture pins the set so a dropped or wrong-decimal entry
+  # fails here. Addresses mirror Riddler's config/token_registry.ex (lowercased).
   @solver_fillable [
     # Ethereum mainnet
     {1, "USDC", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", 6},
@@ -28,11 +28,14 @@ defmodule Raxol.Payments.AssetsTest do
     # Arbitrum
     {42_161, "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", 6},
     {42_161, "USDT", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", 6},
-    {42_161, "WETH", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1", 18}
+    {42_161, "WETH", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1", 18},
+    # Robinhood Chain (USDG is the native stablecoin; WETH also canonical)
+    {4663, "USDG", "0x5fc5360d0400a0fd4f2af552add042d716f1d168", 6},
+    {4663, "WETH", "0x0bd7d308f8e1639fab988df18a8011f41eacad73", 18}
   ]
 
   describe "solver-fillable token parity" do
-    test "USDC/USDT/WETH are explicitly registered on all five EVM chains" do
+    test "each fillable token is explicitly registered across the supported EVM chains" do
       for {chain, symbol, address, _decimals} <- @solver_fillable do
         assert Assets.known?(chain, address),
                "#{symbol} on chain #{chain} (#{address}) is not a known Assets " <>
@@ -69,7 +72,7 @@ defmodule Raxol.Payments.AssetsTest do
     end
 
     test "symbols/0 is exactly the solver-fillable set" do
-      assert Enum.sort(Assets.symbols()) == ["USDC", "USDT", "WETH"]
+      assert Enum.sort(Assets.symbols()) == ["USDC", "USDG", "USDT", "WETH"]
     end
 
     test "symbol_for/2 resolves every fillable (chain, address) back to its symbol" do
@@ -92,6 +95,23 @@ defmodule Raxol.Payments.AssetsTest do
       assert Assets.symbol_for(8453, "0x" <> String.duplicate("ab", 20)) == nil
       assert Assets.symbol_for(8453, nil) == nil
       assert Assets.symbol_for(nil, "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913") == nil
+    end
+  end
+
+  describe "Robinhood Chain USDG" do
+    @usdg "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+
+    test "USDG is a registered 6-decimal token on chain 4663" do
+      assert Assets.known?(4663, @usdg)
+      assert Assets.decimals(4663, @usdg) == 6
+      assert Assets.address(4663, "USDG") == {:ok, @usdg}
+      assert Assets.symbol_for(4663, @usdg) == "USDG"
+    end
+
+    test "USDG is not classified as USDC (pulled via Permit2, not ERC-3009)" do
+      # ERC-3009 signs against the USDC contract; USDG has no ERC-3009, so
+      # usdc?/2 must be false or the agent would sign an invalid authorization.
+      refute Assets.usdc?(4663, @usdg)
     end
   end
 

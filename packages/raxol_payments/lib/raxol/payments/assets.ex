@@ -79,6 +79,13 @@ defmodule Raxol.Payments.Assets do
       # WETH
       "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619" => 18
     },
+    # Robinhood Chain (Arbitrum Orbit L2, native gas ETH)
+    4663 => %{
+      # USDG (Global Dollar, Paxos) -- the chain's native stablecoin
+      "0x5fc5360d0400a0fd4f2af552add042d716f1d168" => 6,
+      # WETH
+      "0x0bd7d308f8e1639fab988df18a8011f41eacad73" => 18
+    },
     # Tron mainnet (TRC-20). Keys are lowercased to match the lookup; Tron
     # addresses are case-sensitive but USDT/USDC both use 6 decimals.
     728_126_428 => %{
@@ -108,6 +115,7 @@ defmodule Raxol.Payments.Assets do
     "USDC" => 6,
     "USDT" => 6,
     "USDBC" => 6,
+    "USDG" => 6,
     "PYUSD" => 6,
     "DAI" => 18,
     "ETH" => 18,
@@ -115,8 +123,10 @@ defmodule Raxol.Payments.Assets do
   }
 
   # Solver-fillable EVM tokens: symbol -> chain id -> lowercase address. Mirrors
-  # Riddler's config/token_registry.ex for the five supported EVM chains
-  # (Ethereum, Optimism, Polygon, Base, Arbitrum). Decimals live in `@addresses`.
+  # Riddler's config/token_registry.ex for the six supported EVM chains
+  # (Ethereum, Optimism, Polygon, Base, Arbitrum, Robinhood Chain). Decimals live
+  # in `@addresses`. USDG is Robinhood Chain's native stablecoin (Permit2 pull,
+  # no ERC-3009); WETH is also canonical there.
   @evm_tokens %{
     "USDC" => %{
       1 => "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -132,12 +142,16 @@ defmodule Raxol.Payments.Assets do
       8453 => "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",
       42_161 => "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9"
     },
+    "USDG" => %{
+      4663 => "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    },
     "WETH" => %{
       1 => "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
       10 => "0x4200000000000000000000000000000000000006",
       137 => "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
       8453 => "0x4200000000000000000000000000000000000006",
-      42_161 => "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
+      42_161 => "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+      4663 => "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
     }
   }
 
@@ -207,10 +221,10 @@ defmodule Raxol.Payments.Assets do
   @doc """
   Resolve a token symbol to its contract address on `chain_id`.
 
-  Covers the solver-fillable set (USDC, USDT, WETH) across the five supported
-  EVM chains (1, 10, 137, 8453, 42161). The symbol is case-insensitive; the
-  chain id accepts an integer or a CAIP-2 string. Returns `:error` for an
-  unknown `(chain, symbol)` pair.
+  Covers the solver-fillable set (USDC, USDT, WETH, plus USDG on Robinhood
+  Chain) across the six supported EVM chains (1, 10, 137, 8453, 42161, 4663).
+  The symbol is case-insensitive; the chain id accepts an integer or a CAIP-2
+  string. Returns `:error` for an unknown `(chain, symbol)` pair.
   """
   @spec address(integer() | String.t() | nil, String.t() | nil) ::
           {:ok, String.t()} | :error
@@ -233,10 +247,10 @@ defmodule Raxol.Payments.Assets do
 
   @doc """
   Resolve a `(chain_id, contract_address)` back to its token symbol: the reverse
-  of `address/2`. Covers the solver-fillable set (USDC, USDT, WETH) on the five
-  EVM chains. Case-insensitive; accepts an integer chain id or a CAIP-2 string.
-  Returns `nil` for an unregistered pair, so a caller can tell "same asset" from
-  "unknown" without guessing.
+  of `address/2`. Covers the solver-fillable set (USDC, USDT, WETH, plus USDG on
+  Robinhood Chain) on the six EVM chains. Case-insensitive; accepts an integer
+  chain id or a CAIP-2 string. Returns `nil` for an unregistered pair, so a
+  caller can tell "same asset" from "unknown" without guessing.
   """
   @spec symbol_for(integer() | String.t() | nil, String.t() | nil) :: String.t() | nil
   def symbol_for(chain_id, address) when is_binary(address) and address != "" do
@@ -248,6 +262,44 @@ defmodule Raxol.Payments.Assets do
   end
 
   def symbol_for(_chain, _address), do: nil
+
+  # Native gas token per chain: the asset the solver spends on fills and which the
+  # rebalance policy/advisor track and refuel. The symbol distinguishes ETH from
+  # POL (Polygon) so gas can be priced; all supported EVM chains use 18-decimal
+  # native.
+  @native_tokens %{
+    1 => {"ETH", 18},
+    10 => {"ETH", 18},
+    137 => {"POL", 18},
+    8453 => {"ETH", 18},
+    42_161 => {"ETH", 18},
+    # Robinhood Chain (Arbitrum Orbit L2) settles gas in ETH.
+    4663 => {"ETH", 18}
+  }
+
+  @doc """
+  The native gas token symbol for `chain_id` (e.g. `"ETH"`, `"POL"`). Accepts an
+  integer chain id or a CAIP-2 string; returns `nil` for an unknown chain.
+  """
+  @spec native_symbol(integer() | String.t() | nil) :: String.t() | nil
+  def native_symbol(chain_id) do
+    case Map.get(@native_tokens, normalize_chain_id(chain_id)) do
+      {symbol, _decimals} -> symbol
+      nil -> nil
+    end
+  end
+
+  @doc """
+  The native gas token decimals for `chain_id`. Every supported EVM chain uses
+  18; unknown chains default to 18.
+  """
+  @spec native_decimals(integer() | String.t() | nil) :: pos_integer()
+  def native_decimals(chain_id) do
+    case Map.get(@native_tokens, normalize_chain_id(chain_id)) do
+      {_symbol, decimals} -> decimals
+      nil -> 18
+    end
+  end
 
   @doc """
   Look up decimals by ticker symbol. Returns `@default_decimals`

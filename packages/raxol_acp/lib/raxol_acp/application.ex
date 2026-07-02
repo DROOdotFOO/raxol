@@ -9,9 +9,28 @@ defmodule RaxolAcp.Application do
       Raxol.ACP.Supervisor
     ]
 
-    Supervisor.start_link(children,
-      strategy: :one_for_one,
-      name: RaxolAcp.RootSupervisor
-    )
+    case Supervisor.start_link(children,
+           strategy: :one_for_one,
+           name: RaxolAcp.RootSupervisor
+         ) do
+      {:ok, _pid} = ok ->
+        maybe_attach_payments_telemetry()
+        ok
+
+      other ->
+        other
+    end
+  end
+
+  # When accounting is on, log the payment telemetry (settlement + rebalance events)
+  # via the stock handler. Gated so a deployment without accounting keeps its current
+  # (silent) behavior. Metrics export to SigNoz is OTLP -> the local OTel Collector
+  # (pending the ansible-riddler collector pipeline); wired here when that lands.
+  defp maybe_attach_payments_telemetry do
+    if Application.get_env(:raxol_acp, :accounting_enabled, false) do
+      _ = Raxol.Payments.Telemetry.LoggerHandler.attach()
+    end
+
+    :ok
   end
 end

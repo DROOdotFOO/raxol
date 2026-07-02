@@ -36,8 +36,9 @@ fails, the solver cannot fill, or a route is dead. Under `DRY_RUN` only the
 preflight runs. Rehearse each with `DRY_RUN=1` before a funded run.
 
 **`run_live_xochi_gate.sh`** settles cross-chain through the Xochi worker. In
-matrix mode (`XOCHI_LIVE_MATRIX=true`) it validates the full 5-chain x 3-token
-grid (Ethereum, Optimism, Polygon, Base, Arbitrum x USDC, USDT, WETH):
+matrix mode (`XOCHI_LIVE_MATRIX=true`) it validates the full 6-chain grid
+(Ethereum, Optimism, Polygon, Base, Arbitrum with USDC/USDT/WETH; Robinhood
+Chain with USDG/WETH):
 the read-only preflight quotes every cell and asserts `can_solve`, the correct
 pull method per token (USDC -> ERC-3009, USDT/WETH -> Permit2), and the pinned
 Riddler solver; the funded run settles only the fillable subset. USDC settles
@@ -54,6 +55,21 @@ XOCHI_LIVE_KEY=0x<funded> DRY_RUN=1 XOCHI_LIVE_MATRIX=true \
 # settle the fillable USDC subset for real
 XOCHI_LIVE_KEY=0x<funded> XOCHI_LIVE_MATRIX=true \
   XOCHI_LIVE_CORRIDORS=mesh XOCHI_LIVE_TOKENS=USDC ./examples/run_live_xochi_gate.sh
+```
+
+**`run_live_robinhood_gate.sh`** settles the Base -> Robinhood Chain USDG
+corridor. This one is cross-asset: the agent pays USDC on Base and the recipient
+receives USDG (Global Dollar) on Robinhood Chain (4663). Base has no USDG, so it
+uses the single-corridor path with an explicit origin token (Base USDC, ERC-3009)
+and destination token (Robinhood USDG); only the destination leg differs from the
+default Base->Arbitrum run. Needs Riddler/Xochi redeployed with 4663 + USDG and
+the solver funded with USDG on Robinhood Chain.
+
+```bash
+# quote-only, no funds
+XOCHI_LIVE_KEY=0xdummy DRY_RUN=1 ./examples/run_live_robinhood_gate.sh
+# real settlement (funded Base USDC key)
+XOCHI_LIVE_KEY=0x<funded base key> ./examples/run_live_robinhood_gate.sh
 ```
 
 **`../../raxol_acp/examples/run_live_acp_order_gate.sh`** is the proof another
@@ -86,7 +102,8 @@ RELAY_LIVE_FROM_ADDRESS=0x<base address> RELAY_LIVE_KEY=0x<funded> \
 | ---------------- | --------------------------------- | ------------- | ------------------------- |
 | Rehearse         | `preflight.exs`                   | none          | local echo server         |
 | Launch path      | `crosschain_stealth_payment.exs`  | none          | in-process Xochi sim      |
-| Live cross-chain | `run_live_xochi_gate.sh`          | real          | Xochi worker (5 chains)   |
+| Live cross-chain | `run_live_xochi_gate.sh`          | real          | Xochi worker (6 chains)   |
+| Live Robinhood   | `run_live_robinhood_gate.sh`      | real          | Base USDC -> RH USDG      |
 | Live ACP order   | `run_live_acp_order_gate.sh`      | real          | ACP job -> Xochi worker   |
 | Live Tron settle | `run_live_relay_gate.sh`          | real          | Riddler Relay (Tron)      |
 

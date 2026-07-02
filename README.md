@@ -29,7 +29,7 @@ Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define 
 
 ### Xochi
 
-[Xochi](https://xochi.fi) is a private cross-chain DEX: intent-based swaps across 5 chains, sub-3s settlement, stealth addresses by default, ZKSAR compliance proofs. Its entire trading surface is raxol:
+[Xochi](https://xochi.fi) is a private cross-chain DEX: intent-based swaps across 6 chains, sub-3s settlement, stealth addresses by default, ZKSAR compliance proofs. Its entire trading surface is raxol:
 
 - **Trader terminal** serves over SSH, zero install, dark-pool aesthetic
 - **Web trading UI** renders the same TEA module via LiveView
@@ -112,7 +112,7 @@ defmodule CrossChainTransfer do
 end
 ```
 
-The two halves compose: an agent sells a service through `raxol_acp` and settles it through `raxol_payments`. The shipped `xochi_cross_chain_transfer` offering does exactly that, delivering a buyer's USDC/USDT/WETH transfer across any of the 5 EVM chains via Xochi and returning the on-chain settlement tx hashes for verification. Pre-alpha (not yet on Hex).
+The two halves compose: an agent sells a service through `raxol_acp` and settles it through `raxol_payments`. The shipped `xochi_cross_chain_transfer` offering does exactly that, delivering a buyer's transfer (USDC/USDT/WETH, plus USDG on Robinhood Chain) across any of the 6 EVM chains via Xochi and returning the on-chain settlement tx hashes for verification. Pre-alpha (not yet on Hex).
 
 ## Agents that improve
 

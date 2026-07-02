@@ -176,11 +176,40 @@ defmodule Raxol.Payments.Protocols.Xochi do
   @spec transfer(Client.config(), QuoteRequest.t(), module(), keyword()) ::
           {:ok, IntentStatus.t()} | {:error, term()}
   def transfer(config, %QuoteRequest{} = request, wallet, opts \\ []) do
+    started = System.monotonic_time(:millisecond)
+
     with {:ok, quote_resp} <- get_quote(config, request),
-         {:ok, exec_resp} <- execute(config, quote_resp, wallet, request) do
-      poll_status(config, exec_resp.intent_id, opts)
+         {:ok, exec_resp} <- execute(config, quote_resp, wallet, request),
+         {:ok, status} <- poll_status(config, exec_resp.intent_id, opts) do
+      emit_settled(request, quote_resp, status, System.monotonic_time(:millisecond) - started)
+      {:ok, status}
     end
   end
+
+  # Emit a settlement-completion event carrying the quote fee + delivered amount +
+  # destination tx, so accounting can book the fill's P&L without threading a ledger
+  # through the protocol. Only on a completed terminal status. See
+  # `Raxol.Payments.Telemetry` and `Raxol.Payments.SettlementAccountant`.
+  defp emit_settled(request, quote_resp, %IntentStatus{status: :completed} = status, elapsed_ms) do
+    :telemetry.execute(
+      [:raxol, :payments, :xochi, :settled],
+      %{elapsed_ms: elapsed_ms},
+      %{
+        intent_id: status.intent_id,
+        from_chain_id: request.from_chain_id,
+        to_chain_id: request.to_chain_id,
+        from_token: request.from_token,
+        to_token: request.to_token,
+        from_amount: request.from_amount,
+        to_amount: quote_resp.to_amount,
+        xochi_fee: quote_resp.xochi_fee,
+        tx_hash: status.tx_hash,
+        settlement_type: status.settlement_type
+      }
+    )
+  end
+
+  defp emit_settled(_request, _quote_resp, _status, _elapsed_ms), do: :ok
 
   @doc """
   Validate the served origin-pull authorization against the intended transfer
@@ -224,8 +253,9 @@ defmodule Raxol.Payments.Protocols.Xochi do
             "Xochi origin-pull solver pin is not configured (fail-open): the agent " <>
               "would sign ERC-3009 origin-pull authorizations to an unverified recipient. " <>
               "Set XOCHI_SOLVER_BASE / XOCHI_SOLVER_ARBITRUM / XOCHI_SOLVER_OPTIMISM / " <>
-              "XOCHI_SOLVER_ETH / XOCHI_SOLVER_POLYGON to the canonical solver address(es), " <>
-              "or set XOCHI_PULL_REQUIRE_SOLVER_PIN=true. See GitHub #333."
+              "XOCHI_SOLVER_ETH / XOCHI_SOLVER_POLYGON / XOCHI_SOLVER_ROBINHOOD to the " <>
+              "canonical solver address(es), or set XOCHI_PULL_REQUIRE_SOLVER_PIN=true. " <>
+              "See GitHub #333."
     end
 
     :ok
