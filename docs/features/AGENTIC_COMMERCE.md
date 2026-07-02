@@ -168,6 +168,15 @@ Req.new(url: "https://api.xochi.fi/api/intent/quote")
 
 v1 follows the locked design at `xochi/docs/planning/agent-auth.md`. On the agent side, a `410 Gone` from Xochi (a revoked or exhausted envelope) prunes the local mandate through the outbound plugin and flags the response as terminal, so a server-side revocation converges locally without a manual `payment_revoke_mandate` call. The authenticated server-side revoke endpoint itself, along with the on-chain registry, Verified-Agent metadata, issuer browser UI, and auto-rotation on exhaustion, remain deferred.
 
+### Two delegation models (Mandate vs SCA session key)
+
+A deployed agent may carry two capability-delegation credentials, and they govern two different surfaces. Keep them distinct in an ops runbook so a de-authorization is complete:
+
+- **Xochi Mandate** (`Raxol.Payments.Mandate`, this package) governs Xochi API calls. A Member signs an EIP-712 envelope binding an agent wallet to a scoped budget; the agent presents it per call via `Req.Mandate`. Revoke it by letting it expire, or (once Xochi ships the revoke endpoint) by `H(envelope)`; a `410 Gone` prunes the local copy.
+- **ERC-4337 SCA session key** (`Raxol.ACP.Wallet.SCA`, in `raxol_acp`) governs Base/ACP UserOps. A session key installed on the modular account via `installValidation` signs sponsored UserOps for on-chain ACP job actions.
+
+The two are independent: revoking one does not revoke the other. An agent that must be fully de-authorized needs both its Mandate revoked or expired **and** its SCA session key uninstalled. The Mandate is a Xochi-side credential scoped to Xochi endpoints; the session key is a Base-side signer scoped to the modular account. A leaked key revoked on Xochi but still holding a valid session key can still act through the ACP path, and vice versa.
+
 ## AutoPay (Req Plugin)
 
 `Raxol.Payments.Req.AutoPay` is a Req response step. Add it to any Req client and HTTP 402 responses get handled transparently:
