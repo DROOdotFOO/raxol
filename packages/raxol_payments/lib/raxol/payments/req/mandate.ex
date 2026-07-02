@@ -40,7 +40,7 @@ defmodule Raxol.Payments.Req.Mandate do
   """
 
   alias Raxol.Payments.Mandate
-  alias Raxol.Payments.Mandate.Check
+  alias Raxol.Payments.Mandate.{Check, Store}
 
   @default_hosts ["xochi.fi", "api.xochi.fi"]
   @default_path_scopes %{
@@ -49,10 +49,64 @@ defmodule Raxol.Payments.Req.Mandate do
     "/api/stealth/claim" => "stealth_claim"
   }
 
-  @doc "Attach the Mandate plugin to a Req request."
+  @doc """
+  Attach the Mandate plugin to a Req request.
+
+  Adds a request step that presents the delegation envelope, and a response
+  step that prunes a revoked/exhausted mandate on a `410 Gone` from Xochi.
+  """
   @spec attach(Req.Request.t(), keyword()) :: Req.Request.t()
   def attach(%Req.Request{} = req, opts) do
-    Req.Request.append_request_steps(req, mandate: &maybe_attach_header(&1, opts))
+    req
+    |> Req.Request.append_request_steps(mandate: &maybe_attach_header(&1, opts))
+    |> Req.Request.append_response_steps(mandate_revocation: &maybe_prune_revoked(&1, opts))
+  end
+
+  # A 410 Gone from a Xochi host means the presented mandate was revoked or its
+  # budget exhausted server-side. Drop it from the local Store so it is never
+  # presented again, and flag the response so the caller treats it as terminal
+  # rather than a retryable transport error. This is the agent-side half of
+  # mandate revocation; the authenticated server-side revoke endpoint is Xochi's.
+  @spec maybe_prune_revoked(
+          {Req.Request.t(), Req.Response.t() | Exception.t()},
+          keyword()
+        ) :: {Req.Request.t(), Req.Response.t() | Exception.t()}
+  defp maybe_prune_revoked({%Req.Request{} = req, %Req.Response{status: 410} = resp}, opts) do
+    if xochi_host_request?(req, opts) do
+      prune_attached_mandate(req)
+      {req, Req.Response.put_private(resp, :xochi_mandate_revoked, true)}
+    else
+      {req, resp}
+    end
+  end
+
+  defp maybe_prune_revoked(pair, _opts), do: pair
+
+  defp xochi_host_request?(req, opts) do
+    case request_host(req) do
+      {:ok, host} -> xochi_host?(host, Keyword.get(opts, :hosts, @default_hosts))
+      _ -> false
+    end
+  end
+
+  defp prune_attached_mandate(req) do
+    with [envelope | _] <- Req.Request.get_header(req, "x-xochi-delegation"),
+         {:ok, mandate} <- Mandate.from_envelope(envelope),
+         hash when is_binary(hash) <- mandate.envelope_hash do
+      safe_delete(hash)
+    else
+      _ -> :ok
+    end
+  end
+
+  # The Store is host-started and may be absent; a missing process must not turn
+  # a handled 410 into a crash.
+  defp safe_delete(hash) do
+    Store.delete(hash)
+  rescue
+    ArgumentError -> :ok
+  catch
+    :exit, _ -> :ok
   end
 
   @spec maybe_attach_header(Req.Request.t(), keyword()) :: Req.Request.t()

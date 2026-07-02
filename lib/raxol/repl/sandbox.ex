@@ -52,7 +52,32 @@ defmodule Raxol.REPL.Sandbox do
     {Node, :connect, "node connection"},
     {GenServer, :call, "arbitrary GenServer interaction"},
     {GenServer, :cast, "arbitrary GenServer interaction"},
-    {Kernel, :apply, "dynamic function application"}
+    {Kernel, :apply, "dynamic function application"},
+    # Message passing / process reach: a sandboxed eval sharing a node with a
+    # signing process must not be able to message or look it up. `send` (special
+    # form) is handled separately; these close the qualified-call variants and
+    # the erlang-atom bypasses that a module whitelist alone would still permit.
+    {Kernel, :send, "message sending"},
+    {Kernel, :spawn, "process spawning"},
+    {Kernel, :spawn_link, "process spawning"},
+    {Kernel, :spawn_monitor, "process spawning"},
+    {Kernel, :exit, "process termination"},
+    {Process, :send, "message sending"},
+    {Process, :send_after, "delayed message sending"},
+    {Process, :whereis, "process lookup"},
+    {Process, :register, "process registration"},
+    {:erlang, :send, "message sending"},
+    {:erlang, :whereis, "process lookup"},
+    {:erlang, :spawn, "process spawning"},
+    {:erlang, :spawn_link, "process spawning"},
+    {:erlang, :binary_to_term, "term deserialization"},
+    {:erlang, :binary_to_atom, "dynamic atom creation"},
+    {:erlang, :list_to_atom, "dynamic atom creation"},
+    {:gen_server, :call, "arbitrary GenServer interaction"},
+    {:gen_server, :cast, "arbitrary GenServer interaction"},
+    {:rpc, :call, "remote procedure call"},
+    {:rpc, :cast, "remote procedure call"},
+    {:global, :whereis_name, "process lookup"}
   ]
 
   @allowed_strict_modules [
@@ -160,6 +185,15 @@ defmodule Raxol.REPL.Sandbox do
 
   defp check_node({:send, _, args}, _level) when is_list(args) do
     ["send is not allowed (message sending to arbitrary processes)"]
+  end
+
+  defp check_node({kind, _, args}, _level)
+       when kind in [:spawn, :spawn_link, :spawn_monitor] and is_list(args) do
+    ["#{kind} is not allowed (process spawning)"]
+  end
+
+  defp check_node({:receive, _, _}, _level) do
+    ["receive is not allowed (message interception)"]
   end
 
   defp check_node({kind, _, _}, _level)

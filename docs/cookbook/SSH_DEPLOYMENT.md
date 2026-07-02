@@ -5,11 +5,17 @@ This is one of the things that falls out naturally from running on the BEAM, whe
 
 ## Quick Start
 
-Any TEA app can be served over SSH with one line:
+Any TEA app can be served over SSH. Authentication is required unless anonymous access is explicitly requested, so a fund-bearing surface is never silently anonymous:
 
 ```elixir
-Raxol.SSH.serve(MyApp, port: 2222)
+# Public, read-only app (a dashboard, a component catalog): anonymous is fine.
+Raxol.SSH.serve(MyApp, port: 2222, allow_anonymous: true)
+
+# A surface that can reach payment Actions: require a public key.
+Raxol.SSH.serve(MyApp, port: 2222, authorized_keys_dir: "/etc/raxol/authorized")
 ```
+
+With neither option the server refuses to start. See [Authentication](#authentication) below.
 
 Connect from any machine:
 
@@ -59,8 +65,8 @@ defmodule MySshApp do
   def subscribe(_model), do: []
 end
 
-# Start SSH server
-{:ok, _} = Raxol.SSH.serve(MySshApp, port: 2222)
+# Start SSH server (a public counter demo, so anonymous access is intended)
+{:ok, _} = Raxol.SSH.serve(MySshApp, port: 2222, allow_anonymous: true)
 
 # Keep alive
 Process.sleep(:infinity)
@@ -97,16 +103,26 @@ Each connection is isolated. One user's crash doesn't affect others.
 
 ## Configuration
 
+### Authentication
+
+A surface that can reach payment Actions must not be silently anonymous, so authentication is fail-closed: pass one of two options, or the server refuses to start.
+
+- `allow_anonymous: true` accepts any connection. Use it for a public, read-only app (a dashboard, the component playground).
+- `authorized_keys_dir: "/path"` requires public-key auth. The directory holds an `authorized_keys` file listing the permitted public keys, and a connection must present a listed key.
+
+For any surface that can move funds, use `authorized_keys_dir` and bind the connection to that identity before it reaches a payment Action. Do not rely on an in-app login screen inside an otherwise-anonymous SSH session, which would put credential handling inside your `update/2` instead of the transport.
+
 ### Port and host keys
 
 ```elixir
 Raxol.SSH.serve(MyApp,
   port: 3000,
-  host_keys_dir: "/etc/raxol/ssh_keys"  # default: /tmp/raxol_ssh_keys
+  host_keys_dir: "/etc/raxol/ssh_keys",  # default: ~/.raxol/ssh_keys
+  allow_anonymous: true
 )
 ```
 
-Host keys are auto-generated on first run. For production, use a persistent directory so clients don't get host key warnings on restart.
+Host keys are auto-generated on first run under a persistent per-user directory (`~/.raxol/ssh_keys`), so clients do not get host-key-changed warnings on restart. Point `host_keys_dir` at a directory your service account owns to keep the key stable across deploys.
 
 ### Running alongside a Phoenix app
 
@@ -117,7 +133,10 @@ Add the SSH server to your supervision tree:
 def start(_type, _args) do
   children = [
     MyAppWeb.Endpoint,
-    {Raxol.SSH.Server, app_module: MyTerminalApp, port: 2222}
+    {Raxol.SSH.Server,
+     app_module: MyTerminalApp,
+     port: 2222,
+     authorized_keys_dir: "/etc/raxol/authorized"}
   ]
 
   Supervisor.start_link(children, strategy: :one_for_one)
@@ -137,6 +156,10 @@ mkdir -p /etc/raxol/ssh_keys
 ssh-keygen -t rsa -f /etc/raxol/ssh_keys/ssh_host_rsa_key -N ""
 ssh-keygen -t ecdsa -f /etc/raxol/ssh_keys/ssh_host_ecdsa_key -N ""
 ```
+
+### Isolation from signing
+
+Do not co-locate an SSH surface with a node that holds signing keys. The interactive REPL and any anonymous surface are capability-escape risks next to a wallet, so keep the payment node separate. On the signing node, call `Raxol.Payments.Deployment.assert_signing_isolated!/0` at boot: it refuses to start when `RAXOL_REPL_EXPOSED=true`. If the SSH box joins an Erlang cluster with the signing node, run distribution over TLS (`-proto_dist inet_tls` with per-node certs), never a shared magic cookie, and gate it with `Raxol.Payments.Deployment.assert_distribution_secure!/0`.
 
 ### Systemd service
 

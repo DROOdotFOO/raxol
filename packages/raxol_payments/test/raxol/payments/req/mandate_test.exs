@@ -150,4 +150,58 @@ defmodule Raxol.Payments.Req.MandateTest do
       refute header == [far_envelope]
     end
   end
+
+  describe "410 Gone revocation (agent-side)" do
+    test "prunes the local mandate and flags the response on a 410 from Xochi" do
+      mandate = put_mandate()
+      hash = mandate.envelope_hash
+      assert {:ok, _} = Store.get(hash)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        # the mandate was presented before the worker rejected it
+        assert Plug.Conn.get_req_header(conn, "x-xochi-delegation") != []
+        Plug.Conn.send_resp(conn, 410, "gone")
+      end)
+
+      {:ok, resp} =
+        Req.new(url: "https://api.xochi.fi/api/intent/quote", plug: {Req.Test, __MODULE__})
+        |> ReqMandate.attach(agent_wallet: @agent)
+        |> Req.request()
+
+      assert resp.status == 410
+      assert resp.private[:xochi_mandate_revoked] == true
+      # The revoked mandate is gone locally, so it can never be presented again.
+      assert :error = Store.get(hash)
+    end
+
+    test "does not prune on a non-410 Xochi response" do
+      mandate = put_mandate()
+      hash = mandate.envelope_hash
+
+      Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 402, "pay") end)
+
+      {:ok, resp} =
+        Req.new(url: "https://api.xochi.fi/api/intent/quote", plug: {Req.Test, __MODULE__})
+        |> ReqMandate.attach(agent_wallet: @agent)
+        |> Req.request()
+
+      assert resp.status == 402
+      refute resp.private[:xochi_mandate_revoked]
+      assert {:ok, _} = Store.get(hash)
+    end
+
+    test "does not prune on a 410 from a non-Xochi host" do
+      mandate = put_mandate()
+      hash = mandate.envelope_hash
+
+      Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 410, "gone") end)
+
+      {:ok, _resp} =
+        Req.new(url: "https://example.com/api/intent/quote", plug: {Req.Test, __MODULE__})
+        |> ReqMandate.attach(agent_wallet: @agent)
+        |> Req.request()
+
+      assert {:ok, _} = Store.get(hash)
+    end
+  end
 end

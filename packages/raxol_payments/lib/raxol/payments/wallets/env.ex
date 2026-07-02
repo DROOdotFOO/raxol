@@ -143,6 +143,12 @@ defmodule Raxol.Payments.Wallets.Env do
   # and use. See `Raxol.Payments.Wallets.Op` for the same posture in a stateful
   # wallet.
   defp load_key(env_var) do
+    with :ok <- allowed_in_deployment() do
+      decode_key(env_var)
+    end
+  end
+
+  defp decode_key(env_var) do
     case System.get_env(env_var) do
       nil ->
         {:error, {:env_not_set, env_var}}
@@ -157,6 +163,24 @@ defmodule Raxol.Payments.Wallets.Env do
           :error -> {:error, :invalid_hex}
         end
     end
+  end
+
+  # A plaintext key in an env var is fine for dev and CI but a liability in a
+  # deployed release, where it lands in process listings, crash dumps, and
+  # orchestrator config. In production this wallet refuses to load unless the
+  # operator explicitly opts in with `RAXOL_ALLOW_ENV_WALLET=true` (or
+  # `config :raxol_payments, :allow_env_wallet, true`). Use `Wallets.Op` instead.
+  defp allowed_in_deployment do
+    if Raxol.Payments.Deployment.production?() and not env_wallet_allowed?() do
+      {:error, :env_wallet_forbidden_in_production}
+    else
+      :ok
+    end
+  end
+
+  defp env_wallet_allowed? do
+    System.get_env("RAXOL_ALLOW_ENV_WALLET") == "true" or
+      Application.get_env(:raxol_payments, :allow_env_wallet, false) == true
   end
 
   defp derive_address(pubkey) do

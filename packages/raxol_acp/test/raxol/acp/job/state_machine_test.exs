@@ -47,12 +47,18 @@ defmodule Raxol.ACP.Job.StateMachineTest do
     end
   end
 
-  describe ":reject from :request" do
-    test "transitions to :rejected" do
+  describe ":reject (seller from :request, evaluator from :evaluation)" do
+    test "seller reject from :request transitions to :rejected" do
       assert StateMachine.next(:request, :reject) == {:ok, :rejected}
     end
 
-    test "is not allowed once past :request" do
+    test "evaluator/buyer reject from :evaluation transitions to :rejected" do
+      # A rejected deliverable settles the job immediately, so the buyer can
+      # reclaim escrow without waiting for the SLA timer.
+      assert StateMachine.next(:evaluation, :reject) == {:ok, :rejected}
+    end
+
+    test "is not allowed from :negotiation or :transaction" do
       assert {:error, {:invalid_transition, :negotiation, :reject}} =
                StateMachine.next(:negotiation, :reject)
 

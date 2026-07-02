@@ -343,11 +343,16 @@ defmodule Raxol.Application do
       host_keys_dir =
         System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys"
 
-      {Raxol.SSH.Server,
-       app_module: Raxol.Playground.App,
-       port: port,
-       host_keys_dir: host_keys_dir,
-       max_connections: max_connections}
+      {
+        Raxol.SSH.Server,
+        # The playground is a public, read-only component catalog: anonymous
+        # access is intended. A fund-bearing surface must set authorized_keys_dir.
+        app_module: Raxol.Playground.App,
+        port: port,
+        host_keys_dir: host_keys_dir,
+        max_connections: max_connections,
+        allow_anonymous: true
+      }
     end
   end
 

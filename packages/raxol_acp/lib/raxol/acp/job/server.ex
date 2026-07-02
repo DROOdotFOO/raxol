@@ -216,6 +216,23 @@ defmodule Raxol.ACP.Job.Server do
   end
 
   @doc """
+  Evaluator/buyer-side: reject the delivered work during `:evaluation`,
+  settling the job to `:rejected`.
+
+  Use this when an assigned evaluator (or the buyer) declines the deliverable.
+  The job settles immediately instead of waiting for the SLA timer, so the buyer
+  can reclaim the escrow via `reclaim/1`; the deliverable was rejected, so the
+  seller does not claim the budget. Same payload/signature semantics as
+  `approve/3` (the payload's `:reason` is recorded on the memo and the
+  `[:raxol, :acp, :job, :rejected]` telemetry).
+  """
+  @spec reject(GenServer.server() | binary(), map(), binary() | nil) ::
+          {:ok, StateMachine.state()} | {:error, term()}
+  def reject(server, payload, signature \\ nil) do
+    GenServer.call(resolve(server), {:reject, payload, signature})
+  end
+
+  @doc """
   Buyer-side reclaim of the escrowed budget for an expired / undelivered
   job. Calls `Raxol.ACP.ContractClient.withdraw_escrowed_funds/1` through
   the configured client. Intended after the job has passed its
@@ -313,7 +330,7 @@ defmodule Raxol.ACP.Job.Server do
   def init_manager(opts) do
     config =
       opts
-      |> Keyword.take([:handler, :request, :buyer, :seller])
+      |> Keyword.take([:handler, :request, :buyer, :seller, :evaluator])
       |> Map.new()
 
     job_id = Keyword.fetch!(opts, :job_id)
@@ -459,6 +476,10 @@ defmodule Raxol.ACP.Job.Server do
 
   def handle_manager_call({:approve, payload, signature}, _from, state) do
     do_transition(state, :approve, payload, signature)
+  end
+
+  def handle_manager_call({:reject, payload, signature}, _from, state) do
+    do_transition(state, :reject, payload, signature)
   end
 
   def handle_manager_call(:get_state, _from, state), do: {:reply, state, state}
@@ -617,14 +638,37 @@ defmodule Raxol.ACP.Job.Server do
       }
     )
 
+    maybe_emit_outcome(state, new_wf_state.current_state, new_memo)
+
     new_full_state
   end
+
+  # A graded terminal outcome (the buyer/evaluator completed or rejected the
+  # job) emits a dedicated event so reputation and ops can tell a rejection from
+  # a process crash, which emits no such event. Expiry keeps its own
+  # `[:raxol, :acp, :job, :expired]` signal on the timer path.
+  defp maybe_emit_outcome(state, to, memo) when to in [:completed, :rejected] do
+    :telemetry.execute(
+      [:raxol, :acp, :job, to],
+      %{},
+      %{
+        job_id: state.job_id,
+        from: state.state,
+        evaluator: Map.get(state.config, :evaluator),
+        reason: memo && Map.get(memo, :content),
+        tx_hash: memo && memo.tx_hash
+      }
+    )
+  end
+
+  defp maybe_emit_outcome(_state, _to, _memo), do: :ok
 
   defp ctx(state) do
     %{
       job_id: state.job_id,
       buyer: Map.get(state.config, :buyer),
       seller: Map.get(state.config, :seller),
+      evaluator: Map.get(state.config, :evaluator),
       state: state.state
     }
   end

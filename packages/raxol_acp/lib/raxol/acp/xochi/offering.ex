@@ -29,6 +29,17 @@ defmodule Raxol.ACP.Xochi.Offering do
   buyer (or an evaluator agent) can verify the cross-chain settlement
   on-chain before approving.
 
+  ## Known limitations
+
+  A `settlement_preference` of `private` is honored only on corridors that
+  support Xochi's dark-pool path. This offering does not yet surface a
+  privacy-downgrade warning when a requested-private route can only settle
+  publicly (the way the relay rail warns `:stealth_unavailable_on_tron`). This
+  is currently moot because the Xochi corridors are EVM-only and all support the
+  private path; it becomes relevant if a public-only chain (for example Tron) is
+  added, at which point a private request on that route would settle publicly and
+  should refuse or warn rather than silently downgrade.
+
   ## Marketplace registration
 
   When registering the offering at https://app.virtuals.io/acp/new, the
