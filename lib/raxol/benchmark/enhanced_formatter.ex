@@ -8,7 +8,12 @@ defmodule Raxol.Benchmark.EnhancedFormatter do
 
   alias Raxol.Benchmark.Config
 
-  @behaviour Benchee.Formatter
+  # Benchee is a bench/dev-only dependency and is absent when raxol compiles as a
+  # path dependency of another package. Declare the behaviour only when available
+  # so the compile stays warning-clean in that context.
+  if Code.ensure_loaded?(Benchee.Formatter) do
+    @behaviour Benchee.Formatter
+  end
 
   @doc """
   Format benchmark results with enhanced analysis and insights.
