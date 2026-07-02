@@ -132,28 +132,62 @@ printf 'preflight (auth=%s): quoting %s USDC %s -> %s (read-only, no funds move)
 deadline="$(( $(date +%s) + 300 ))"
 quote_body="$(printf '{"wallet":"0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045","from_chain_id":%s,"to_chain_id":%s,"from_token":"%s","to_token":"%s","from_amount":"%s","settlement_preference":"public","slippage_bps":50,"deadline":%s,"gasless":false}' \
   "$XOCHI_LIVE_FROM_CHAIN" "$XOCHI_LIVE_TO_CHAIN" "$XOCHI_LIVE_FROM_TOKEN" "$XOCHI_LIVE_TO_TOKEN" "$atomic" "$deadline")"
-probe="$(curl -sS -m 20 -w '\n%{http_code}' \
-  -X POST "$XOCHI_LIVE_URL/api/intent/quote" \
-  -H "authorization: Bearer $XOCHI_LIVE_TOKEN" \
-  -H 'content-type: application/json' \
-  -d "$quote_body")"
-code="${probe##*$'\n'}"
-body="${probe%$'\n'*}"
+# The gas/price oracle occasionally returns a transient "temporarily unavailable"
+# for a corridor that is otherwise fillable, and the worker can 5xx/429 under load.
+# Quoting is read-only (no funds move), so retry the smoke-test probe a few times
+# before aborting. A structural can_solve=false (e.g. amount_below_minimum) or an
+# auth error (401/402) still aborts at once. Tunable via
+# XOCHI_LIVE_PREFLIGHT_ATTEMPTS / XOCHI_LIVE_PREFLIGHT_BACKOFF.
+preflight_attempts="${XOCHI_LIVE_PREFLIGHT_ATTEMPTS:-5}"
+preflight_backoff="${XOCHI_LIVE_PREFLIGHT_BACKOFF:-3}"
+transient_markers='gas_price_unavailable|temporarily|unavailable|oracle|timeout'
 
-if [[ "$code" != "200" ]]; then
-  printf 'preflight FAILED: quote returned http %s: %s\n' "$code" "$body" >&2
-  printf 'a 401/402 means the Member Bearer token was not accepted. Fix auth\n' >&2
-  printf '(check OP_TOKEN_REF matches XOCHI_LIVE_URL env). Aborting; no funds moved.\n' >&2
+attempt=1
+while true; do
+  probe="$(curl -sS -m 20 -w '\n%{http_code}' \
+    -X POST "$XOCHI_LIVE_URL/api/intent/quote" \
+    -H "authorization: Bearer $XOCHI_LIVE_TOKEN" \
+    -H 'content-type: application/json' \
+    -d "$quote_body" || true)"
+  code="${probe##*$'\n'}"
+  body="${probe%$'\n'*}"
+
+  if [[ "$code" == "200" ]] && grep -qE '"can_solve"[[:space:]]*:[[:space:]]*true' <<<"$body"; then
+    printf 'preflight ok: can_solve=true at %s USDC.\n' "$XOCHI_LIVE_AMOUNT" >&2
+    break
+  fi
+
+  # A 5xx/429/connection error, or a can_solve=false carrying an oracle marker, is
+  # transient (retry). Everything else is structural (abort).
+  transient=false
+  if [[ -z "$code" || "$code" == "000" || "$code" == "429" || "$code" == 5* ]]; then
+    transient=true
+  elif [[ "$code" == "200" ]] && grep -qiE "$transient_markers" <<<"$body"; then
+    transient=true
+  fi
+
+  if [[ "$transient" == "true" && "$attempt" -lt "$preflight_attempts" ]]; then
+    printf 'preflight: transient quote (attempt %s/%s, http %s); retry in %ss...\n' \
+      "$attempt" "$preflight_attempts" "${code:-none}" "$preflight_backoff" >&2
+    attempt=$((attempt + 1))
+    sleep "$preflight_backoff"
+    continue
+  fi
+
+  if [[ "$code" != "200" ]]; then
+    printf 'preflight FAILED: quote returned http %s: %s\n' "${code:-none}" "$body" >&2
+    printf 'a 401/402 means the Member Bearer token was not accepted. Fix auth\n' >&2
+    printf '(check OP_TOKEN_REF matches XOCHI_LIVE_URL env). Aborting; no funds moved.\n' >&2
+  elif [[ "$transient" == "true" ]]; then
+    printf 'preflight FAILED: oracle stayed unavailable across %s attempts (transient):\n%s\n' \
+      "$preflight_attempts" "$body" >&2
+    printf 'a temporary worker/oracle condition, not a bad corridor -- re-run shortly.\n' >&2
+  else
+    printf 'preflight FAILED: quote ok (http 200) but can_solve != true:\n%s\n' "$body" >&2
+    printf 'the solver will not fill this corridor/amount. Aborting; no funds moved.\n' >&2
+  fi
   exit 1
-fi
-
-if ! grep -qE '"can_solve"[[:space:]]*:[[:space:]]*true' <<<"$body"; then
-  printf 'preflight FAILED: quote ok (http 200) but can_solve != true:\n%s\n' "$body" >&2
-  printf 'the solver will not fill this corridor/amount. Aborting; no funds moved.\n' >&2
-  exit 1
-fi
-
-printf 'preflight ok: can_solve=true at %s USDC.\n' "$XOCHI_LIVE_AMOUNT" >&2
+done
 
 export XOCHI_LIVE_URL XOCHI_LIVE_TOKEN XOCHI_LIVE_KEY XOCHI_LIVE_AMOUNT \
   XOCHI_LIVE_FROM_CHAIN XOCHI_LIVE_TO_CHAIN XOCHI_LIVE_FROM_TOKEN XOCHI_LIVE_TO_TOKEN \
