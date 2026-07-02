@@ -217,6 +217,43 @@ defmodule Raxol.Core.Metrics.CloudTest do
                  false
              end)
     end
+
+    test "formats metrics correctly for OTLP (SigNoz)" do
+      config = %{
+        service: :signoz,
+        endpoint: "http://localhost:4318/v1/metrics",
+        api_key: "test_key",
+        batch_size: 2,
+        flush_interval: 1000
+      }
+
+      :ok = Cloud.configure(config)
+
+      send(Cloud, {:metrics, :performance, :frame_time, 16, [:test]})
+      send(Cloud, {:metrics, :performance, :frame_time, 17, [:test]})
+
+      Process.sleep(100)
+
+      msgs = receive_n_msgs(2)
+      assert {:metrics_sent, :ok} in msgs
+
+      assert Enum.any?(msgs, fn
+               {:metrics_formatted,
+                %{
+                  resource_metrics: [
+                    %{
+                      scope_metrics: [
+                        %{metrics: [%{metric: "frame_time", value: 16.5} | _]}
+                      ]
+                    }
+                  ]
+                }} ->
+                 true
+
+               _ ->
+                 false
+             end)
+    end
   end
 
   describe "flush_metrics/0" do

@@ -4,6 +4,10 @@ defmodule Raxol.Plugins.Visualization.ImageRenderer do
   Supports both sixel and kitty protocols for terminal image rendering.
   """
 
+  # Mogrify is an optional dependency (image decode/resize). Guard the undefined
+  # warnings so the compile stays clean when it is absent.
+  @compile {:no_warn_undefined, Mogrify}
+
   require Raxol.Core.Runtime.Log
 
   alias Raxol.Plugins.Visualization.DrawingUtils

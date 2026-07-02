@@ -47,6 +47,54 @@ defmodule Raxol.Payments.Telemetry do
   | ----------- | --------- | ----------------------- |
   | `:frozen?`  | `boolean()` | new freeze state        |
 
+  ### `[:raxol, :payments, :xochi, :settled]`
+
+  Fires from `Raxol.Payments.Protocols.Xochi.transfer/4` when an intent reaches a
+  completed terminal status. Carries everything the accounting layer needs to book
+  the settlement; `Raxol.Payments.SettlementAccountant` subscribes to it.
+
+  | Measurement | Type   | Notes                        |
+  | ----------- | ------ | ---------------------------- |
+  | `:elapsed_ms` | `integer()` \\| nil | settlement latency, if known |
+
+  Metadata: `:intent_id`, `:from_chain_id`, `:to_chain_id`, `:from_token`,
+  `:to_token`, `:from_amount`, `:to_amount`, `:xochi_fee`, `:tx_hash`,
+  `:settlement_type`.
+
+  ### `[:raxol, :payments, :settlement]`
+
+  Fires when `Raxol.Payments.SettlementLedger` records a completed fill (once per
+  intent; never on a duplicate re-record).
+
+  | Measurement   | Type                 | Notes                                 |
+  | ------------- | -------------------- | ------------------------------------- |
+  | `:fee_atomic` | `Decimal.t/0`        | Fee collected, atomic units           |
+  | `:gas_wei`    | `Decimal.t/0` \\| nil | Native gas burned; nil when unknown   |
+
+  Metadata: `:intent_id`, `:from_chain_id`, `:to_chain_id`, `:token_symbol`,
+  `:gas_chain_id`, `:gas_symbol`, `:gas_status`, `:settlement_type`.
+
+  ### `[:raxol, :payments, :rebalance, :recommendation]`
+
+  Fires once per `Raxol.Payments.RebalanceAdvisor.advise/4` recommendation.
+
+  | Measurement | Type                 | Notes                            |
+  | ----------- | -------------------- | -------------------------------- |
+  | `:amount`   | `Decimal.t/0` \\| nil | USDC to convert / move, or deficit |
+
+  Metadata: `:type` (`:refuel_gas` \\| `:rebalance_usdc` \\| `:alert`) plus
+  type-specific keys (`:chain_id`, `:from_chain`, `:to_chain`, `:funding`, `:note`).
+
+  ### `[:raxol, :payments, :rebalance, :advice]`
+
+  Fires once per `advise/4` call with the recommendation counts.
+
+  | Measurement | Type   | Notes                       |
+  | ----------- | ------ | --------------------------- |
+  | `:count`    | `integer()` | total recommendations  |
+
+  Metadata: `:refuel_count`, `:rebalance_count`, `:alert_count`.
+
   ## Attaching a handler
 
       :telemetry.attach_many(
@@ -67,7 +115,11 @@ defmodule Raxol.Payments.Telemetry do
     [
       [:raxol, :payments, :spend],
       [:raxol, :payments, :over_budget],
-      [:raxol, :payments, :freeze]
+      [:raxol, :payments, :freeze],
+      [:raxol, :payments, :xochi, :settled],
+      [:raxol, :payments, :settlement],
+      [:raxol, :payments, :rebalance, :recommendation],
+      [:raxol, :payments, :rebalance, :advice]
     ]
   end
 end

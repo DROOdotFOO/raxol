@@ -59,9 +59,9 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   settlement), so it is bounded by env:
 
   - `XOCHI_LIVE_CORRIDORS` -- `"from>to,from>to"` chain-id pairs (default
-    `"8453>42161,42161>8453"`), or `"mesh"` for every ordered pair of the five
-    supported EVM chains (1, 10, 137, 8453, 42161). Tokens resolve per chain via
-    `Raxol.Payments.Assets`.
+    `"8453>42161,42161>8453"`), or `"mesh"` for every ordered pair of the six
+    supported EVM chains (1, 10, 137, 8453, 42161, 4663). Tokens resolve per chain
+    via `Raxol.Payments.Assets`.
   - `XOCHI_LIVE_TOKENS` -- `"USDC,USDT,WETH"` (default `"USDC"`). USDC pulls via
     ERC-3009; USDT/WETH via Permit2 (needs a standing Permit2 allowance on each
     origin chain). The preflight asserts the served pull method per token
@@ -71,7 +71,9 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
     this gate does not broadcast, so order them through raxol_acp
     (`run_live_acp_order_gate.sh`), which sets the allowance and settles for real.
     The funded matrix re-quotes each cell and skips (logs) any the solver cannot
-    fill right now, settling only the fillable subset.
+    fill -- at quote time, at settlement, or on a transient worker error (HTTP
+    5xx/429) -- settling only the fillable subset and failing only on a client
+    integration fault (bad signature, spend gate, solver pin, malformed request).
   - `XOCHI_LIVE_SETTLEMENTS` -- `"public,stealth"` (default `"public"`). Stealth
     cells require `XOCHI_LIVE_RECIPIENT_META`.
   - `XOCHI_LIVE_AMOUNT` -- per-cell stablecoin amount (default `1.10`, above the
@@ -80,6 +82,15 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
     18-decimal and worth thousands per unit, so it is sized separately.
   - `XOCHI_LIVE_ALLOW_ETH_ORIGIN` -- set to `true` to settle Ethereum-origin
     (chain 1) cells; by default they are skipped (quote-only) for L1 gas cost.
+  - `XOCHI_LIVE_ALLOW_ETH_DEST` -- set to `true` to settle Ethereum-destination
+    (`*->1`) cells; by default they are skipped, because a small L1 fill pays more
+    in ETH gas than it earns in spread and drains mainnet ETH.
+  - `XOCHI_LIVE_PACE_MS` -- milliseconds to wait between cells (default `1500`) so
+    the sweep does not trip the worker's rate limit; set `0` to fire back-to-back.
+  - `XOCHI_LIVE_RECORD_MARGIN` -- set to `true` to record each settled fill into a
+    `Raxol.Payments.SettlementLedger` (fee vs on-chain gas) and print a per-corridor
+    margin + native-drain report after the sweep. RPC per chain defaults to public
+    endpoints, overridable via `XOCHI_LIVE_RPC_<chain_id>`.
 
   A companion `:live_xochi_preflight` test quotes every corridor x token
   read-only (no funds) and asserts `can_solve` plus the pinned origin-pull
@@ -106,7 +117,19 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
   if System.get_env("XOCHI_LIVE_URL") && System.get_env("XOCHI_LIVE_KEY") do
     alias Raxol.Payments.Actions.Payments.{ExecuteXochiIntent, PollXochiStatus}
-    alias Raxol.Payments.{Assets, Ledger, Mandate, SpendingPolicy}
+
+    alias Raxol.Payments.{
+      Assets,
+      ChainReader,
+      Failure,
+      Ledger,
+      Mandate,
+      Prices,
+      SettlementLedger,
+      SettlementRecorder,
+      SpendingPolicy
+    }
+
     alias Raxol.Payments.Mandate.Store, as: MandateStore
     alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
     alias Raxol.Payments.Xochi.Schemas.QuoteRequest
@@ -280,53 +303,224 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
           "[live_xochi:matrix] running #{length(cells)} cells (corridor x token x settlement)"
         )
 
-        for {from, to, token, settlement} <- cells do
-          label = "#{from}->#{to}:#{token}:#{settlement}"
+        recorder = margin_recorder()
 
-          cond do
-            settlement == "stealth" and is_nil(meta) ->
-              flunk("stealth cell #{label} needs XOCHI_LIVE_RECIPIENT_META")
+        outcomes =
+          for {from, to, token, settlement} <- cells do
+            label = "#{from}->#{to}:#{token}:#{settlement}"
 
-            # Ethereum-origin settlement burns real L1 gas and has no confirmed
-            # instant-settlement inventory; keep it quote-only unless opted in.
-            from == 1 and System.get_env("XOCHI_LIVE_ALLOW_ETH_ORIGIN") != "true" ->
-              IO.puts(
-                "[live_xochi:matrix] SKIP #{label}: Ethereum origin is quote-only " <>
-                  "(set XOCHI_LIVE_ALLOW_ETH_ORIGIN=true to settle from L1)"
-              )
+            cond do
+              settlement == "stealth" and is_nil(meta) ->
+                IO.puts("[live_xochi:matrix] FAULT #{label}: needs XOCHI_LIVE_RECIPIENT_META")
+                {:fault, label, :missing_recipient_meta}
 
-            # USDT/WETH pull via Permit2, which needs a standing on-chain allowance
-            # this gate does not broadcast (raxol_payments holds no tx code). Set the
-            # allowance via the ACP order gate, then opt in with XOCHI_LIVE_SETTLE_PERMIT2.
-            permit2_token?(token) and System.get_env("XOCHI_LIVE_SETTLE_PERMIT2") != "true" ->
-              IO.puts(
-                "[live_xochi:matrix] SKIP #{label}: #{token} pulls via Permit2 and needs a " <>
-                  "standing allowance. Order it through raxol_acp (run_live_acp_order_gate.sh), " <>
-                  "or set XOCHI_LIVE_SETTLE_PERMIT2=true once the allowance is in place."
-              )
+              # Ethereum-origin settlement burns real L1 gas and has no confirmed
+              # instant-settlement inventory; keep it quote-only unless opted in.
+              from == 1 and System.get_env("XOCHI_LIVE_ALLOW_ETH_ORIGIN") != "true" ->
+                IO.puts(
+                  "[live_xochi:matrix] SKIP #{label}: Ethereum origin is quote-only " <>
+                    "(set XOCHI_LIVE_ALLOW_ETH_ORIGIN=true to settle from L1)"
+                )
 
-            true ->
-              settle_fillable_cell(
-                {context, poll_context},
-                {from, to, token, settlement},
-                stable_amount,
-                meta,
-                label
-              )
+                {:skipped, label, :eth_origin}
+
+              # Ethereum-DESTINATION fills burn real L1 gas: a small fill pays more
+              # in ETH gas than it earns in spread and drains mainnet ETH one-way.
+              # Skip by default so the probe does not bleed ETH each run.
+              to == 1 and System.get_env("XOCHI_LIVE_ALLOW_ETH_DEST") != "true" ->
+                IO.puts(
+                  "[live_xochi:matrix] SKIP #{label}: Ethereum destination is quote-only " <>
+                    "(set XOCHI_LIVE_ALLOW_ETH_DEST=true to settle to L1)"
+                )
+
+                {:skipped, label, :eth_dest}
+
+              # USDT/WETH pull via Permit2, which needs a standing on-chain allowance
+              # this gate does not broadcast (raxol_payments holds no tx code). Set the
+              # allowance via the ACP order gate, then opt in with XOCHI_LIVE_SETTLE_PERMIT2.
+              permit2_token?(token) and System.get_env("XOCHI_LIVE_SETTLE_PERMIT2") != "true" ->
+                IO.puts(
+                  "[live_xochi:matrix] SKIP #{label}: #{token} pulls via Permit2 and needs a " <>
+                    "standing allowance. Order it through raxol_acp (run_live_acp_order_gate.sh), " <>
+                    "or set XOCHI_LIVE_SETTLE_PERMIT2=true once the allowance is in place."
+                )
+
+                {:skipped, label, :permit2_allowance}
+
+              true ->
+                settle_fillable_cell(
+                  {context, poll_context},
+                  {from, to, token, settlement},
+                  stable_amount,
+                  meta,
+                  label,
+                  recorder
+                )
+            end
           end
+
+        report_matrix_summary(outcomes)
+        print_margin_report(recorder)
+      end
+
+      # Tally the per-cell outcomes and fail the run only on a client FAULT -- an
+      # intent that could not be submitted (bad signature, spend gate, solver pin).
+      # A submitted intent the solver does not fill is a logged SKIP, not a failure:
+      # the matrix settles the fillable subset, so a corridor the solver cannot fund
+      # right now must not abort the sweep. Prints a settled/skipped/fault summary.
+      defp report_matrix_summary(outcomes) do
+        settled = for {:settled, l} <- outcomes, do: l
+        skipped = for {:skipped, l, r} <- outcomes, do: {l, r}
+        faults = for {:fault, l, r} <- outcomes, do: {l, r}
+
+        transient = for {l, {:transient, _}} <- skipped, do: l
+
+        reconcile =
+          for {l, {:poll_error, r}} <- skipped, r in [:stranded, :settlement_failed], do: {l, r}
+
+        IO.puts("\n[live_xochi:matrix] summary")
+        IO.puts("  settled  #{length(settled)}#{settled_list(settled)}")
+
+        for {label, reason} <- skipped do
+          IO.puts("  skip     #{label} (#{inspect(reason)})")
+        end
+
+        for {label, reason} <- faults do
+          IO.puts("  FAULT    #{label} (#{inspect(reason)})")
+        end
+
+        IO.puts(
+          "  totals   #{length(settled)} settled, #{length(skipped)} skipped " <>
+            "(#{length(transient)} transient), #{length(faults)} fault(s)"
+        )
+
+        if transient != [] do
+          IO.puts(
+            "  note     #{length(transient)} corridor(s) hit a transient worker error; " <>
+              "re-run for a verdict: #{Enum.join(transient, ", ")}"
+          )
+        end
+
+        if reconcile != [] do
+          IO.puts(
+            "  RECONCILE #{length(reconcile)} intent(s) submitted but did not cleanly " <>
+              "settle; funds may be in flight -- check: #{inspect(reconcile)}"
+          )
+        end
+
+        assert faults == [],
+               "matrix hit #{length(faults)} client fault(s) -- our integration bug " <>
+                 "(bad signature / spend gate / solver pin / malformed request), not a " <>
+                 "solver or worker condition: #{inspect(faults)}"
+      end
+
+      defp settled_list([]), do: ""
+      defp settled_list(settled), do: ": " <> Enum.join(settled, ", ")
+
+      # Opt-in P&L accounting (XOCHI_LIVE_RECORD_MARGIN=true): start a settlement
+      # ledger + an on-chain reader so each settled fill's fee can be booked against
+      # the native gas it burned. Returns nil (a no-op) when the flag is off, so a
+      # normal run is unchanged.
+      defp margin_recorder do
+        if System.get_env("XOCHI_LIVE_RECORD_MARGIN") == "true" do
+          table = String.to_atom("margin_#{System.unique_integer([:positive])}")
+          ledger = start_supervised!({SettlementLedger, table_name: table})
+          reader = ChainReader.JSONRPC.new(chains: rpc_urls())
+          {ledger, reader}
+        else
+          nil
         end
       end
 
+      # Read-only RPC per chain for receipt lookups. Public defaults, overridable
+      # via XOCHI_LIVE_RPC_<chain_id>.
+      defp rpc_urls do
+        %{
+          1 => System.get_env("XOCHI_LIVE_RPC_1", "https://eth.llamarpc.com"),
+          10 => System.get_env("XOCHI_LIVE_RPC_10", "https://mainnet.optimism.io"),
+          137 => System.get_env("XOCHI_LIVE_RPC_137", "https://polygon-rpc.com"),
+          8453 => System.get_env("XOCHI_LIVE_RPC_8453", "https://mainnet.base.org"),
+          42_161 => System.get_env("XOCHI_LIVE_RPC_42161", "https://arb1.arbitrum.io/rpc")
+        }
+      end
+
+      # Build the closure poll_settlement calls on a completed fill. A nil recorder
+      # yields a no-op so the settle path is unchanged when accounting is off.
+      defp margin_record_fn(nil, _from, _to, _token, _params, _info),
+        do: fn _intent, _status -> :ok end
+
+      defp margin_record_fn({ledger, reader}, from, to, token, params, info) do
+        fn intent, status ->
+          SettlementRecorder.record(
+            ledger,
+            reader,
+            %{
+              intent_id: intent.intent_id,
+              from_chain_id: from,
+              to_chain_id: to,
+              token_symbol: token,
+              token_address: Map.get(params, :from_token),
+              fee_collected: Map.get(info, :fee) || 0,
+              tx_hash: Map.get(status, :tx_hash),
+              settlement_type: settlement_type_atom(params)
+            },
+            record_pending: true
+          )
+        end
+      end
+
+      defp settlement_type_atom(params) do
+        case Map.get(params, :settlement) do
+          "public" -> :public
+          "stealth" -> :stealth
+          "shielded" -> :shielded
+          _ -> nil
+        end
+      end
+
+      # Per-corridor margin + native-drain summary after a recorded sweep. USD via
+      # CoinGecko; unpriced entries degrade to raw totals ("n/a").
+      defp print_margin_report(nil), do: :ok
+
+      defp print_margin_report({ledger, _reader}) do
+        report = SettlementLedger.report(ledger, price_fn: Prices.CoinGecko.price_fn())
+
+        IO.puts("\n[live_xochi:margin] report (fee vs on-chain gas)")
+        IO.puts("  totals      #{format_agg(report.totals)}")
+
+        for {dest, agg} <- Enum.sort_by(report.destinations, &elem(&1, 0)) do
+          IO.puts("  dest #{dest}    #{format_agg(agg)}")
+        end
+
+        for {chain, wei} <- Enum.sort_by(report.drain, &elem(&1, 0)) do
+          native = wei |> Assets.to_human(18) |> Decimal.round(6) |> Decimal.to_string()
+          IO.puts("  drain #{chain}   #{native} #{Assets.native_symbol(chain)}")
+        end
+
+        :ok
+      end
+
+      defp format_agg(agg) do
+        "n=#{agg.count} fee_usd=#{fmt_usd(agg.usd_fee)} gas_usd=#{fmt_usd(agg.usd_gas)} " <>
+          "margin_usd=#{fmt_usd(agg.usd_margin)} gas_unknown=#{agg.gas_unknown_count}"
+      end
+
+      defp fmt_usd(nil), do: "n/a"
+      defp fmt_usd(%Decimal{} = d), do: "$" <> Decimal.to_string(Decimal.round(d, 4))
+
       # Settle one matrix cell, but only if the solver can actually fill it now:
       # re-quote read-only first and skip (log) a non-fillable cell instead of
-      # failing the whole run. Implements "settle the fillable subset".
+      # failing the whole run. Implements "settle the fillable subset". Returns a
+      # {:settled | :skipped | :fault, ...} outcome for the run summary.
       defp settle_fillable_cell(
              {context, poll_context},
              {from, to, token, settlement},
              stable_amount,
              meta,
-             label
+             label,
+             recorder
            ) do
+        pace()
         amount = amount_for(token, stable_amount)
 
         case preflight_cell(context, from, to, token, amount) do
@@ -336,28 +530,144 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
                 "(#{inspect(reason)}); no funds moved"
             )
 
-          {:ok, _info} ->
+            {:skipped, label, {:not_fillable, reason}}
+
+          {:ok, info} ->
             params = matrix_params(from, to, token, settlement, amount, meta)
-            settle_and_assert({context, poll_context}, params, label)
+            record_fn = margin_record_fn(recorder, from, to, token, params, info)
+            settle_cell({context, poll_context}, params, label, record_fn)
         end
       end
 
-      defp settle_and_assert({context, poll_context}, params, label) do
+      # Space out network-touching cells so a 20-corridor sweep does not trip the
+      # worker's rate limit (HTTP 429) or overload it into 5xx. Tunable via
+      # XOCHI_LIVE_PACE_MS (default 1500ms); set 0 to fire back-to-back.
+      defp pace do
+        case Integer.parse(System.get_env("XOCHI_LIVE_PACE_MS", "1500")) do
+          {ms, _} when ms > 0 -> Process.sleep(ms)
+          _ -> :ok
+        end
+      end
+
+      # Submit and settle one fillable cell, returning an outcome for the summary.
+      # A submission failure (execute returns {:error, ...}: bad signature, spend
+      # gate, solver pin) is a client FAULT that fails the run -- the intent never
+      # reached the worker. A submitted intent that does not complete (the solver is
+      # out of gas/inventory on that corridor now) is a logged SKIP; the sweep goes
+      # on to the next corridor rather than aborting.
+      defp settle_cell({context, poll_context}, params, label, record_fn) do
         started = System.monotonic_time(:millisecond)
 
-        assert {:ok, intent} = ExecuteXochiIntent.call(params, context),
-               "execute failed for #{label}"
+        case ExecuteXochiIntent.call(params, context) do
+          {:ok, intent} ->
+            poll_settlement(poll_context, intent, params, label, started, record_fn)
 
-        assert {:ok, status} = PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context)
-        assert status.terminal == true
+          {:error, error} ->
+            classify_execute_error(error, label)
+        end
+      end
 
-        assert status.status == "completed",
-               "#{label} (#{intent.intent_id}) ended #{status.status}"
+      # Client/config faults are OUR integration bug: a bad signature, a tripped
+      # spend gate, a solver-pin mismatch, a method mismatch, or a malformed
+      # request. They would break every corridor, so they fail the run. Everything
+      # else is a per-corridor or transient condition -- a worker 5xx/429 or a
+      # solver "no liquidity" -- that must not abort a multi-corridor probe.
+      @client_fault_reasons [
+        :sign_failed,
+        :method_mismatch,
+        :invalid_request,
+        :config_error,
+        :checkpoint_required,
+        :policy_required,
+        :over_budget,
+        :requires_confirmation,
+        :rejected,
+        :delivery_below_floor,
+        :stealth_keys_required,
+        :stealth_address_missing,
+        :unknown
+      ]
 
-        report_settlement(label, intent, status, params, started)
+      defp classify_execute_error(error, label) do
+        failure = Failure.from(error)
+
+        cond do
+          failure.reason in @client_fault_reasons ->
+            IO.puts("[live_xochi:matrix] FAULT #{label}: #{failure.reason} -- #{failure.message}")
+            {:fault, label, failure}
+
+          # Transient worker error (HTTP 5xx/429, timeout): the intent may or may
+          # not have been submitted before the error, so re-run for a verdict.
+          failure.retryable? ->
+            IO.puts(
+              "[live_xochi:matrix] SKIP #{label}: transient #{failure.reason} " <>
+                "(#{failure.message}); re-run to confirm this corridor"
+            )
+
+            {:skipped, label, {:transient, failure.reason}}
+
+          # The solver cannot fill this corridor now (no liquidity, unsupported
+          # route): a rejected execute moved no funds.
+          true ->
+            IO.puts(
+              "[live_xochi:matrix] SKIP #{label}: #{failure.reason} " <>
+                "(#{failure.message}); no funds moved"
+            )
+
+            {:skipped, label, {:unfillable, failure.reason}}
+        end
+      end
+
+      # Poll a submitted intent to terminal. "completed" is a real settlement; any
+      # other terminal state means the solver did not fill. A poll ERROR after a
+      # successful execute is more serious -- the intent was submitted, so funds may
+      # be in flight; the reason atom (e.g. :stranded) rides the outcome so the
+      # summary can flag it for reconciliation.
+      defp poll_settlement(poll_context, intent, params, label, started, record_fn) do
+        case PollXochiStatus.call(%{intent_id: intent.intent_id}, poll_context) do
+          {:ok, %{status: "completed"} = status} ->
+            record_fn.(intent, status)
+            report_settlement(label, intent, status, params, started)
+            {:settled, label}
+
+          {:ok, status} ->
+            IO.puts(
+              "[live_xochi:matrix] SKIP #{label}: #{intent.intent_id} ended " <>
+                "#{status.status}, not filled"
+            )
+
+            {:skipped, label, {:not_filled, status.status}}
+
+          {:error, error} ->
+            failure = Failure.from(error)
+
+            IO.puts(
+              "[live_xochi:matrix] SKIP #{label}: #{intent.intent_id} #{failure.reason} " <>
+                "-- #{failure.message}"
+            )
+
+            {:skipped, label, {:poll_error, failure.reason}}
+        end
       end
 
       defp permit2_token?(token), do: String.upcase(token) in ["USDT", "WETH"]
+
+      # Read-only preflight retries: a transient worker/oracle blip clears in
+      # seconds and quoting moves no funds, so retry a transient cell before judging
+      # it structurally unfillable.
+      @preflight_attempts 3
+      @preflight_retry_backoff_ms 1500
+
+      # Substrings marking a temporary worker/oracle condition in a can_solve error.
+      # A cannot_solve carrying one is transient (retry, do not block); every other
+      # reason is structural.
+      @transient_preflight_markers [
+        "gas_price_unavailable",
+        "temporarily",
+        "unavailable",
+        "oracle",
+        "timeout"
+      ]
 
       @tag :live_xochi_preflight
       test "every configured corridor x token quotes can_solve and serves the pinned solver", %{
@@ -383,26 +693,74 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
         failures = for {cell, {:error, reason}} <- results, do: {cell, reason}
 
-        assert failures == [],
-               "preflight failed for #{length(failures)} cell(s), no funds moved: #{inspect(failures)}"
+        {transient, blocking} =
+          Enum.split_with(failures, fn {_cell, reason} -> transient_preflight?(reason) end)
+
+        if transient != [] do
+          IO.puts(
+            "[live_xochi:preflight] #{length(transient)} transient cell(s) survived retries " <>
+              "(worker/oracle, not blocking; the funded matrix re-quotes and skips a still-" <>
+              "unpriceable cell): #{inspect(transient)}"
+          )
+        end
+
+        assert blocking == [],
+               "preflight failed for #{length(blocking)} structural cell(s) -- bad corridor, " <>
+                 "unpriceable amount, wrong pull rail, or solver-pin mismatch; no funds moved: " <>
+                 "#{inspect(blocking)}"
       end
 
       # Quote one corridor x token read-only and confirm the solver can fill it and
       # serves the pinned origin-pull recipient/spender. No spend gate, no signature,
       # no execute -- nothing moves. Public settlement is enough: can_solve and the
-      # pull pin are independent of the settlement privacy.
-      defp preflight_cell(context, from, to, token, amount) do
+      # pull pin are independent of the settlement privacy. A transient worker/oracle
+      # blip is retried (read-only, so free and safe); a structural failure returns
+      # at once.
+      defp preflight_cell(context, from, to, token, amount),
+        do: preflight_cell(context, from, to, token, amount, @preflight_attempts)
+
+      defp preflight_cell(context, from, to, token, amount, attempts_left) do
         config = context.xochi_config
         wallet = context.wallet
 
-        with {:ok, request} <- preflight_request(wallet, from, to, token, amount),
-             {:ok, quote} <- XochiProtocol.get_quote(config, request),
-             :ok <- preflight_can_solve(quote),
-             :ok <- preflight_method(token, quote.payment_method),
-             :ok <- XochiProtocol.validate_pull(quote, request, wallet) do
-          {:ok, %{method: quote.payment_method, to_amount: quote.to_amount, fee: quote.xochi_fee}}
+        result =
+          with {:ok, request} <- preflight_request(wallet, from, to, token, amount),
+               {:ok, quote} <- XochiProtocol.get_quote(config, request),
+               :ok <- preflight_can_solve(quote),
+               :ok <- preflight_method(token, quote.payment_method),
+               :ok <- XochiProtocol.validate_pull(quote, request, wallet) do
+            {:ok,
+             %{method: quote.payment_method, to_amount: quote.to_amount, fee: quote.xochi_fee}}
+          end
+
+        case result do
+          {:error, reason} when attempts_left > 1 ->
+            if transient_preflight?(reason) do
+              Process.sleep(@preflight_retry_backoff_ms)
+              preflight_cell(context, from, to, token, amount, attempts_left - 1)
+            else
+              result
+            end
+
+          _ ->
+            result
         end
       end
+
+      # A preflight error is transient only when it is a temporary worker/oracle
+      # condition -- a gas-price oracle blip or a network 5xx/429/timeout -- never a
+      # structural problem with the corridor. The default is NOT transient, so a
+      # wrong pull rail, a rotated or forged solver (authorization_mismatch), an
+      # unpriceable amount, or an unknown token always blocks the gate before funds
+      # move.
+      defp transient_preflight?(%Failure{reason: reason}), do: reason == :network
+
+      defp transient_preflight?({:cannot_solve, reason}) when is_binary(reason) do
+        down = String.downcase(reason)
+        Enum.any?(@transient_preflight_markers, &String.contains?(down, &1))
+      end
+
+      defp transient_preflight?(reason), do: Failure.from(reason).reason == :network
 
       # USDC pulls via ERC-3009; USDT/WETH pull via Permit2. Asserting the served
       # method per token catches a token routed to the wrong rail (which would
@@ -470,10 +828,12 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         l1 <> permit2
       end
 
-      # The five supported EVM chains: Ethereum, Optimism, Polygon, Base, Arbitrum.
-      @evm_chains [1, 10, 137, 8453, 42_161]
+      # The six supported EVM chains: Ethereum, Optimism, Polygon, Base, Arbitrum,
+      # Robinhood Chain (4663). Robinhood corridors are cross-asset (USDG on 4663,
+      # USDC/USDT/WETH elsewhere) and need a funded solver + deployed Xochi server.
+      @evm_chains [1, 10, 137, 8453, 42_161, 4663]
 
-      # "mesh" (or "all") expands to every ordered pair of the five EVM chains (20
+      # "mesh" (or "all") expands to every ordered pair of the six EVM chains (30
       # corridors), so the preflight validates the full grid in one run. The
       # explicit "from>to,from>to" form still works for a narrower run.
       defp parse_corridors(spec) when spec in ["mesh", "all"] do

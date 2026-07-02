@@ -1,18 +1,26 @@
 defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
   @moduledoc """
   Deterministic verification that Raxol builds, signs, and routes a settlement
-  correctly across each chain corridor for both public and stealth recipients,
-  with no live solver call (Req.Test mock).
+  correctly across every cross-chain (chain, token) pair we support, for both
+  public and stealth recipients, with no live solver call (Req.Test mock).
 
-  This proves the client half end-to-end -- request construction, ERC-5564
-  stealth key derivation, EIP-712 signing, and protocol/settlement routing --
-  for the corridors we support. The live run against Riddler is the separate
-  `:live_xochi` harness; this matrix is its always-on regression net.
+  The matrix is the full cross-product of `Raxol.Payments.Assets` endpoints:
+  every registered (chain, token) settling to every other-chain (chain, token).
+  It is therefore cross-asset by construction (e.g. Base USDC -> Robinhood Chain
+  USDG), and it auto-extends the moment a chain or token is added to `Assets`.
+  Robinhood Chain (4663, USDG + WETH) is in the grid.
+
+  This proves the client half: request construction, decimals-correct origin
+  sizing, ERC-5564 stealth key derivation, EIP-712 signing, protocol/settlement
+  routing, and the delivery-floor backstop (a same-asset corridor gets an
+  automatic 80%-of-par floor; a cross-asset corridor is bound only by an explicit
+  `min_to_amount`). The live run against Riddler is the separate `:live_xochi`
+  harness; this matrix is its always-on regression net.
   """
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.Actions.Payments.ExecuteXochiIntent
-  alias Raxol.Payments.{Assets, Ledger, Router, SpendingPolicy}
+  alias Raxol.Payments.{Assets, Failure, Ledger, Router, SpendingPolicy}
   alias Raxol.Payments.Xochi.Stealth
 
   # Wallet that signals when it signs, so we can assert the intent was signed.
@@ -30,35 +38,36 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
     def sign_hash(_), do: {:ok, <<7::size(520)>>}
   end
 
-  # Canonical USDC per chain (from Raxol.Payments.Assets).
-  @usdc %{
-    8453 => "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    10 => "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
-    42_161 => "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
-  }
-
   @base 8453
-  @optimism 10
-  @arbitrum 42_161
   @tron 728_126_428
 
-  # The EVM corridors Xochi settles (Base <-> Optimism <-> Arbitrum).
-  @evm_corridors [
-    {@base, @optimism},
-    {@optimism, @arbitrum},
-    {@arbitrum, @base},
-    {@base, @arbitrum}
-  ]
+  # The supported EVM chains and the token universe. Addresses come from the
+  # registry, so only real (chain, token) pairs become endpoints and the grid
+  # tracks `Assets` automatically.
+  @chains [1, 10, 137, 8453, 42_161, 4663]
+  @symbols Enum.sort(Assets.symbols())
+
+  @endpoints (for chain <- @chains,
+                  symbol <- @symbols,
+                  {:ok, address} <- [Assets.address(chain, symbol)],
+                  do: {chain, symbol, address})
+
+  # Every cross-chain (chain, token) -> (chain, token) pair. Cross-asset when the
+  # two symbols differ (the norm for any Robinhood corridor: USDG lives only on
+  # 4663), same-asset when they match.
+  @corridors (for {fc, fs, fa} <- @endpoints,
+                  {tc, ts, ta} <- @endpoints,
+                  fc != tc,
+                  do: {fc, fs, fa, tc, ts, ta})
 
   @pubkey_re ~r/^0x0[23][a-f0-9]{64}$/
 
-  # The atomic from_amount each fillable token must produce for a 0.50 human
-  # amount. An 18-decimal WETH yields a different on-the-wire amount than a
-  # 6-decimal stablecoin. Pinned independently of Assets to catch a decimals
-  # regression.
-  @token_atomic %{
+  # The atomic from_amount a 0.50 human amount must produce, pinned by symbol so a
+  # decimals regression (an 18-decimal WETH resolving as 6, say) fails here.
+  @atomic %{
     "USDC" => "500000",
     "USDT" => "500000",
+    "USDG" => "500000",
     "WETH" => "500000000000000000"
   }
 
@@ -70,11 +79,13 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
     }
   end
 
+  # Permissive caps: the matrix exercises build/sign/route, not spend limits
+  # (those live in spending_policy_test). 0.50 per cell stays under per_request_max.
   defp policy do
     %SpendingPolicy{
       per_request_max: Decimal.new("1.00"),
-      session_max: Decimal.new("5.00"),
-      lifetime_max: Decimal.new("100.00"),
+      session_max: Decimal.new("100000.00"),
+      lifetime_max: Decimal.new("100000.00"),
       session_window_ms: 3_600_000,
       approved_domains: ["xochi.test"]
     }
@@ -91,9 +102,11 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
     })
   end
 
-  # Capture the outbound quote request body, then return a canned quote, execute,
-  # and terminal status -- so a full run/2 completes without a live solver.
-  defp stub_settlement do
+  # Capture the outbound quote body, then return a canned quote, execute, and
+  # terminal status so a full run/2 completes without a live solver. `to_amount`
+  # overrides the delivered amount (defaults to par: echo from_amount) so the
+  # delivery-floor tests can serve a punitive quote.
+  defp stub_settlement(to_amount) do
     Req.Test.stub(__MODULE__, fn conn ->
       case conn.request_path do
         "/api/intent/quote" ->
@@ -105,10 +118,9 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
             "intentId" => "int_1",
             "quoteId" => "q_1",
             "canSolve" => true,
-            # Par delivery for a same-asset corridor: echo the atomic from_amount
-            # so the delivery floor is satisfied for any token decimals (a fixed
-            # 6-decimal value is a 99.9999% haircut for an 18-decimal WETH send).
-            "toAmount" => body["from_amount"],
+            # Par delivery: echo the atomic from_amount so a same-asset corridor
+            # clears its 80% floor at any decimals. Overridable for floor tests.
+            "toAmount" => to_amount || body["from_amount"],
             "xochiFee" => "1000",
             "eip712Data" => %{
               "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
@@ -135,22 +147,26 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
     end)
   end
 
-  defp run(from, to, settlement, extra \\ %{}) do
-    stub_settlement()
-    ledger = start_supervised!({Ledger, [name: nil]})
+  # One ledger per test, reused across every cell in the loop: start_supervised!
+  # cannot start two children with the same spec id, and the permissive caps keep
+  # the cumulative reservation well under session/lifetime limits.
+  setup do
+    %{ledger: start_supervised!({Ledger, [name: nil]})}
+  end
+
+  defp run(ledger, from_chain, from_token, to_chain, to_token, settlement, extra \\ %{}) do
+    stub_settlement(Map.get(extra, :to_amount))
 
     params =
-      Map.merge(
-        %{
-          amount: "0.50",
-          from_chain_id: from,
-          to_chain_id: to,
-          from_token: @usdc[from],
-          to_token: @usdc[to],
-          settlement: settlement
-        },
-        extra
-      )
+      %{
+        amount: "0.50",
+        from_chain_id: from_chain,
+        to_chain_id: to_chain,
+        from_token: from_token,
+        to_token: to_token,
+        settlement: settlement
+      }
+      |> Map.merge(Map.drop(extra, [:to_amount]))
 
     ctx = %{
       wallet: SpyWallet,
@@ -163,80 +179,130 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
     ExecuteXochiIntent.run(params, ctx)
   end
 
-  describe "public settlement across EVM corridors" do
-    for {from, to} <- @evm_corridors do
-      @from from
-      @to to
+  describe "the corridor grid" do
+    test "is the full cross-chain cross-product of Assets endpoints, incl. Robinhood" do
+      # 17 endpoints: USDC/USDT/WETH on 5 chains + USDG/WETH on Robinhood (4663).
+      assert length(@endpoints) == 17
+      # Every ordered cross-chain endpoint pair.
+      assert length(@corridors) == 240
 
-      test "#{from} -> #{to}: builds + signs a public intent routed to xochi" do
-        assert {:ok, result} = run(@from, @to, "public")
-        assert result.intent_id == "int_1"
+      # USDG lives only on Robinhood Chain, and shows up as both origin and dest.
+      assert (for {c, "USDG", _} <- @endpoints, do: c) == [4663]
 
-        assert_received :wallet_signed
-        assert_received {:quote_body, body}
+      assert Enum.any?(@corridors, fn {fc, fs, _, tc, _, _} ->
+               {fc, fs} == {4663, "USDG"} and tc != 4663
+             end)
 
-        assert body["settlement_preference"] == "public"
-        assert body["from_chain_id"] == @from
-        assert body["to_chain_id"] == @to
-        # public settlement carries no stealth keys
-        refute body["stealth_spending_pub_key"]
-        refute body["stealth_viewing_pub_key"]
+      assert Enum.any?(@corridors, fn {_, _, _, tc, ts, _} -> {tc, ts} == {4663, "USDG"} end)
 
-        assert Router.select(cross_chain: true, privacy: :public) == :xochi
-      end
+      # The grid is cross-asset (origin and destination symbols differ) somewhere.
+      assert Enum.any?(@corridors, fn {_, fs, _, _, ts, _} -> fs != ts end)
     end
   end
 
-  describe "stealth settlement across EVM corridors" do
-    for {from, to} <- @evm_corridors do
-      @from from
-      @to to
+  describe "public settlement across the full grid" do
+    test "every corridor builds, signs, and routes a public intent, origin-sized by decimals",
+         %{ledger: ledger} do
+      for {fc, fs, fa, tc, ts, ta} <- @corridors do
+        label = "#{fs}@#{fc} -> #{ts}@#{tc}"
 
-      test "#{from} -> #{to}: derives ERC-5564 keys, signs, routed to xochi" do
-        assert {:ok, result} =
-                 run(@from, @to, "stealth", %{recipient_meta_address: recipient_meta()})
+        assert {:ok, result} = run(ledger, fc, fa, tc, ta, "public"), "#{label}: run failed"
+        assert result.intent_id == "int_1", "#{label}: wrong intent"
 
-        assert result.intent_id == "int_1"
-
-        assert_received :wallet_signed
         assert_received {:quote_body, body}
+        assert_received :wallet_signed, "#{label}: wallet did not sign"
+
+        assert body["from_chain_id"] == fc, "#{label}: from_chain"
+        assert body["to_chain_id"] == tc, "#{label}: to_chain"
+        assert body["from_token"] == fa, "#{label}: from_token"
+        assert body["to_token"] == ta, "#{label}: to_token"
+        assert body["from_amount"] == @atomic[fs], "#{label}: origin not scaled by #{fs} decimals"
+        assert body["settlement_preference"] == "public"
+        refute body["stealth_spending_pub_key"], "#{label}: public carried stealth keys"
+      end
+
+      assert Router.select(cross_chain: true, privacy: :public) == :xochi
+    end
+  end
+
+  describe "stealth settlement across the full grid" do
+    setup do: %{meta: recipient_meta()}
+
+    test "every corridor derives ERC-5564 keys, signs, and routes a stealth intent",
+         %{ledger: ledger, meta: meta} do
+      for {fc, fs, fa, tc, ts, ta} <- @corridors do
+        label = "#{fs}@#{fc} -> #{ts}@#{tc}"
+
+        assert {:ok, result} =
+                 run(ledger, fc, fa, tc, ta, "stealth", %{recipient_meta_address: meta}),
+               "#{label}: run failed"
+
+        assert result.intent_id == "int_1", "#{label}: wrong intent"
+
+        assert_received {:quote_body, body}
+        assert_received :wallet_signed, "#{label}: wallet did not sign"
 
         assert body["settlement_preference"] == "stealth"
-        assert body["from_chain_id"] == @from
-        assert body["to_chain_id"] == @to
-        # compressed spending + viewing pub keys derived from the meta-address
-        assert Regex.match?(@pubkey_re, body["stealth_spending_pub_key"])
-        assert Regex.match?(@pubkey_re, body["stealth_viewing_pub_key"])
-
-        assert Router.select(cross_chain: true, privacy: :stealth) == :xochi
+        assert body["from_chain_id"] == fc
+        assert body["to_chain_id"] == tc
+        assert Regex.match?(@pubkey_re, body["stealth_spending_pub_key"]), "#{label}: spending key"
+        assert Regex.match?(@pubkey_re, body["stealth_viewing_pub_key"]), "#{label}: viewing key"
       end
+
+      assert Router.select(cross_chain: true, privacy: :stealth) == :xochi
     end
   end
 
-  describe "fillable tokens across EVM corridors" do
-    for {from, to} <- @evm_corridors, token <- ["USDC", "USDT", "WETH"] do
-      @from from
-      @to to
-      @token token
+  describe "delivery floor backstop" do
+    test "a same-asset corridor rejects a quote below the 80% par floor", %{ledger: ledger} do
+      {:ok, from} = Assets.address(8453, "USDC")
+      {:ok, to} = Assets.address(42_161, "USDC")
 
-      test "#{from} -> #{to} #{token}: resolves the contract and scales by token decimals" do
-        assert {:ok, from_token} = Assets.address(@from, @token)
-        assert {:ok, to_token} = Assets.address(@to, @token)
+      # par 500000, floor 400000; a 1-unit delivery is theft, rejected pre-signing.
+      assert {:error, %Failure{reason: :delivery_below_floor}} =
+               run(ledger, 8453, from, 42_161, to, "public", %{to_amount: "1"})
 
-        assert {:ok, result} =
-                 run(@from, @to, "public", %{from_token: from_token, to_token: to_token})
+      refute_received :wallet_signed
+    end
 
-        assert result.intent_id == "int_1"
+    test "the same-asset floor is denominated in the destination's decimals (WETH is 18)",
+         %{ledger: ledger} do
+      {:ok, from} = Assets.address(8453, "WETH")
+      {:ok, to} = Assets.address(42_161, "WETH")
 
-        assert_received :wallet_signed
-        assert_received {:quote_body, body}
+      # par 5e17, floor 4e17.
+      assert {:error, %Failure{reason: :delivery_below_floor}} =
+               run(ledger, 8453, from, 42_161, to, "public", %{to_amount: "300000000000000000"})
 
-        assert body["from_token"] == from_token
-        assert body["to_token"] == to_token
-        # The atomic from_amount must reflect this token's decimals, not the
-        # 6-decimal default that an unregistered contract would fall back to.
-        assert body["from_amount"] == @token_atomic[@token]
-      end
+      assert {:ok, _} =
+               run(ledger, 8453, from, 42_161, to, "public", %{to_amount: "450000000000000000"})
+    end
+
+    test "a cross-asset corridor (Base USDC -> Robinhood USDG) has no automatic floor",
+         %{ledger: ledger} do
+      {:ok, from} = Assets.address(8453, "USDC")
+      {:ok, to} = Assets.address(4663, "USDG")
+
+      # Different symbols means no on-client par; the worker enforces pricing, so a
+      # low delivery is accepted unless the caller pins min_to_amount.
+      assert {:ok, _} = run(ledger, 8453, from, 4663, to, "public", %{to_amount: "1"})
+    end
+
+    test "an explicit min_to_amount is authoritative for a cross-asset Robinhood corridor",
+         %{ledger: ledger} do
+      {:ok, from} = Assets.address(8453, "USDC")
+      {:ok, to} = Assets.address(4663, "USDG")
+
+      assert {:error, %Failure{reason: :delivery_below_floor}} =
+               run(ledger, 8453, from, 4663, to, "public", %{to_amount: "1", min_to_amount: "490000"})
+
+      refute_received :wallet_signed
+
+      assert {:ok, _} =
+               run(ledger, 8453, from, 4663, to, "public", %{
+                 to_amount: "500000",
+                 min_to_amount: "490000"
+               })
     end
   end
 

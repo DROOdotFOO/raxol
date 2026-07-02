@@ -41,6 +41,38 @@ if config_env() == :prod do
     pull_solver_allowlist: xochi_solver_allowlist,
     pull_require_solver_pin: xochi_require_solver_pin
 
+  # Settlement accounting + rebalance advisor (default off). When enabled, each
+  # Xochi settlement is booked (fee vs on-chain gas) into a SettlementLedger and the
+  # RebalanceAdvisor runs periodically. Read-only: it reads the solver's balances
+  # and receipts over public RPC and never moves funds (the Riddler auto-rebalancer
+  # executes). Enable with RAXOL_ACCOUNTING_ENABLED=true and set the RPC_* + solver
+  # address vars.
+  accounting_rpc_urls =
+    %{
+      1 => System.get_env("RPC_ETH"),
+      10 => System.get_env("RPC_OPTIMISM"),
+      137 => System.get_env("RPC_POLYGON"),
+      8453 => System.get_env("RPC_BASE"),
+      42_161 => System.get_env("RPC_ARBITRUM"),
+      4663 => System.get_env("RPC_ROBINHOOD")
+    }
+    |> Enum.reject(fn {_chain, url} -> is_nil(url) or url == "" end)
+    |> Map.new()
+
+  config :raxol_payments, :accounting,
+    rpc_urls: accounting_rpc_urls,
+    solver_address: System.get_env("XOCHI_SOLVER_ADDRESS"),
+    rebalance_interval_ms:
+      String.to_integer(
+        System.get_env("RAXOL_REBALANCE_INTERVAL_MS") || "300000"
+      ),
+    price_source:
+      String.to_atom(System.get_env("RAXOL_PRICE_SOURCE") || "coingecko")
+
+  config :raxol_acp,
+    accounting_enabled:
+      System.get_env("RAXOL_ACCOUNTING_ENABLED", "false") == "true"
+
   # Configure terminal settings from environment
   config :raxol, :terminal,
     default_width: String.to_integer(System.get_env("TERMINAL_WIDTH") || "80"),
