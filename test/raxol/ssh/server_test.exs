@@ -43,6 +43,40 @@ defmodule Raxol.SSH.ServerTest do
     end
   end
 
+  # Connection accounting is a pure function so a per-IP flood can be exercised
+  # without binding a real SSH daemon.
+  describe "connection accounting (admit/release)" do
+    @ip_a {203, 0, 113, 1}
+    @ip_b {203, 0, 113, 2}
+
+    test "admits under both the global and per-IP caps" do
+      assert {:ok, 1, per_ip} = Server.admit(0, %{}, @ip_a, 100, 2)
+      assert {:ok, 2, _} = Server.admit(1, per_ip, @ip_a, 100, 2)
+    end
+
+    test "refuses a third connection from the same peer, independent of others" do
+      per_ip = %{@ip_a => 2}
+      # Global cap is far off, but this peer is at its per-IP limit.
+      assert {:error, :ip_limit} = Server.admit(2, per_ip, @ip_a, 100, 2)
+      # A different peer is unaffected.
+      assert {:ok, 3, _} = Server.admit(2, per_ip, @ip_b, 100, 2)
+    end
+
+    test "the global cap still takes precedence" do
+      assert {:error, :max_connections} = Server.admit(100, %{}, @ip_a, 100, 2)
+    end
+
+    test "release frees a global and per-IP slot, dropping empty buckets" do
+      assert {1, %{@ip_a => 1}} = Server.release(2, %{@ip_a => 2}, @ip_a)
+      assert {0, per_ip} = Server.release(1, %{@ip_a => 1}, @ip_a)
+      refute Map.has_key?(per_ip, @ip_a)
+    end
+
+    test "release never drops below zero" do
+      assert {0, _} = Server.release(0, %{}, @ip_a)
+    end
+  end
+
   describe "host key generation" do
     test "generates RSA host key" do
       dir =

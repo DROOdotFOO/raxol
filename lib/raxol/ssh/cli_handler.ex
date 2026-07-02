@@ -6,6 +6,8 @@ defmodule Raxol.SSH.CLIHandler do
 
   defstruct [
     :app_module,
+    :server,
+    :peer_ip,
     :session_pid,
     :channel_id,
     :connection_ref,
@@ -15,22 +17,26 @@ defmodule Raxol.SSH.CLIHandler do
   @impl true
   def init(opts) do
     app_module = Keyword.fetch!(opts, :app_module)
-    {:ok, %__MODULE__{app_module: app_module}}
+    server = Keyword.get(opts, :server, Raxol.SSH.Server)
+    {:ok, %__MODULE__{app_module: app_module, server: server}}
   end
 
   @impl true
   def handle_msg({:ssh_channel_up, channel_id, connection_ref}, state) do
-    case Raxol.SSH.Server.register_connection() do
+    peer_ip = peer_ip(connection_ref)
+
+    case Raxol.SSH.Server.register_connection(state.server, peer_ip) do
       :ok ->
         {:ok,
          %{
            state
            | channel_id: channel_id,
              connection_ref: connection_ref,
+             peer_ip: peer_ip,
              registered: true
          }}
 
-      {:error, :max_connections} ->
+      {:error, _reason} ->
         _ =
           :ssh_connection.send(
             connection_ref,
@@ -106,8 +112,8 @@ defmodule Raxol.SSH.CLIHandler do
   def handle_ssh_msg(_msg, state), do: {:ok, state}
 
   @impl true
-  def terminate(_reason, %__MODULE__{registered: true}) do
-    Raxol.SSH.Server.unregister_connection()
+  def terminate(_reason, %__MODULE__{registered: true} = state) do
+    Raxol.SSH.Server.unregister_connection(state.server, state.peer_ip)
     :ok
   end
 
@@ -115,4 +121,18 @@ defmodule Raxol.SSH.CLIHandler do
 
   defp maybe_send(nil, _msg), do: :ok
   defp maybe_send(pid, msg), do: send(pid, msg)
+
+  # The peer IP scopes the per-source connection cap. Any surprise in the
+  # connection info degrades to a shared `:unknown` bucket rather than crashing
+  # the channel.
+  defp peer_ip(connection_ref) do
+    case :ssh.connection_info(connection_ref, [:peer]) do
+      [{:peer, {_name, {ip, _port}}}] -> ip
+      _ -> :unknown
+    end
+  rescue
+    _ -> :unknown
+  catch
+    _, _ -> :unknown
+  end
 end

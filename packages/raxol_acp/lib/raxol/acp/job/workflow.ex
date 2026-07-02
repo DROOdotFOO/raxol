@@ -18,7 +18,7 @@ defmodule Raxol.ACP.Job.Workflow do
               :memo_transaction -> :wait_transaction
                 :wait_transaction -[event]-> :memo_evaluation | :memo_expired
                   :memo_evaluation -> :wait_evaluation
-                    :wait_evaluation -[event]-> :memo_completed | :memo_expired
+                    :wait_evaluation -[event]-> :memo_completed | :memo_rejected | :memo_expired
                       :memo_completed -> :__end__
         :memo_rejected -> :__end__
         :memo_expired -> :__end__
@@ -170,7 +170,7 @@ defmodule Raxol.ACP.Job.Workflow do
     |> Graph.add_edge(:memo_evaluation, :wait_evaluation)
     |> Graph.add_conditional_edge(
       :wait_evaluation,
-      [:memo_completed, :memo_expired],
+      [:memo_completed, :memo_rejected, :memo_expired],
       &route_from_evaluation/1
     )
     |> Graph.add_edge(:memo_completed, :__end__)
@@ -279,6 +279,7 @@ defmodule Raxol.ACP.Job.Workflow do
   defp route_from_transaction(_), do: :memo_expired
 
   defp route_from_evaluation(%{pending_event: :approve}), do: :memo_completed
+  defp route_from_evaluation(%{pending_event: :reject}), do: :memo_rejected
   defp route_from_evaluation(_), do: :memo_expired
 
   # --- Memo node bodies ---
