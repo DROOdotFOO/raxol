@@ -12,6 +12,7 @@ defmodule RaxolAcp.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      releases: releases(),
       dialyzer: [
         ignore_warnings: ".dialyzer_ignore.exs"
       ],
@@ -24,13 +25,30 @@ defmodule RaxolAcp.MixProject do
   end
 
   def application do
-    app = [extra_applications: [:logger]]
+    app = [extra_applications: [:logger, :crypto]]
 
     if Mix.env() != :test do
       Keyword.put(app, :mod, {RaxolAcp.Application, []})
     else
       app
     end
+  end
+
+  # Slim headless release for the read-only settlement-accounting sidecar. Includes
+  # :raxol_acp + its runtime deps (:raxol_payments, :raxol_core, req, cowboy, the
+  # crypto NIFs) but NOT :raxol_terminal -- :raxol_agent/:raxol_mcp are runtime:false,
+  # so the termbox NIF never enters the release. Build with
+  # `MIX_ENV=prod mix release raxol_acp` from this package.
+  defp releases do
+    [
+      raxol_acp: [
+        include_executables_for: [:unix],
+        steps: [:assemble],
+        # runtime_tools makes :observer/:recon remote diagnostics available without
+        # starting anything at boot; everything else is pulled from the dep tree.
+        applications: [runtime_tools: :load]
+      ]
+    ]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
