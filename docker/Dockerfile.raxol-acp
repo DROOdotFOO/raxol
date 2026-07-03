@@ -1,0 +1,69 @@
+# Production image for the raxol_acp settlement-accounting sidecar.
+#
+# A slim, read-only, headless release: :raxol_acp + its runtime deps
+# (:raxol_payments, :raxol_core, req, cowboy, the rustler_precompiled crypto NIFs).
+# :raxol_agent / :raxol_mcp are runtime:false, so :raxol_terminal (the termbox C NIF)
+# is NOT in the final release -- though the BUILD still compiles it transitively,
+# since raxol_acp compile-depends on raxol_agent -> raxol -> raxol_terminal. Hence the
+# builder carries a C toolchain; the runner does not.
+#
+# Build from the repository root:
+#   docker build -f docker/Dockerfile.raxol-acp -t raxol-acp .
+#
+# Wallet-safe by construction: no private key is baked in or read at runtime; the
+# sidecar only reads balances/receipts over public RPC and never moves funds.
+
+ARG ELIXIR_IMAGE=elixir:1.19.4-otp-28
+ARG RUNNER_IMAGE=debian:bookworm-slim
+
+FROM ${ELIXIR_IMAGE} AS builder
+
+# build-essential + git: termbox2 C NIF (transitive) compiles here; ca-certificates:
+# rustler_precompiled downloads prebuilt crypto NIFs over TLS. No Node/Rust needed.
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends build-essential git ca-certificates && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+RUN mix local.hex --force && mix local.rebar --force
+
+ENV MIX_ENV="prod"
+# The transitive raxol_terminal build reads this; harmless for the acp release.
+ENV SKIP_TERMBOX2_TESTS="true"
+ENV TMPDIR="/tmp"
+
+# Build the release from the package that owns the accounting tree.
+WORKDIR /app/packages/raxol_acp
+
+RUN mix deps.get --only $MIX_ENV
+RUN mix deps.compile
+RUN mix compile
+RUN mix release raxol_acp
+
+# --- Runtime stage: no compilers, no Erlang install (ERTS ships in the release) ---
+FROM ${RUNNER_IMAGE} AS runner
+
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+      libstdc++6 openssl libncurses6 locales ca-certificates && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+
+ENV MIX_ENV="prod"
+
+WORKDIR /app
+RUN chown nobody /app
+
+COPY --from=builder --chown=nobody:root \
+     /app/packages/raxol_acp/_build/prod/rel/raxol_acp ./
+
+USER nobody
+
+ENTRYPOINT ["/app/bin/raxol_acp"]
+CMD ["start"]
