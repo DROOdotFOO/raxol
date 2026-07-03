@@ -29,11 +29,18 @@
 #   XOCHI_ORDER_LIVE_KEY=0x<funded> XOCHI_ORDER_TOKENS=USDC \
 #     ./examples/run_live_acp_order_gate.sh
 #
-#   # 3. All three tokens across the 5-chain mesh (USDT/WETH need per-chain RPC):
+#   # 3. All three tokens across the 6-chain mesh (USDT/WETH/USDG need per-chain RPC):
 #   XOCHI_ORDER_LIVE_KEY=0x<funded> XOCHI_ORDER_CORRIDORS=mesh \
 #   XOCHI_ORDER_TOKENS=USDC,USDT,WETH \
 #   XOCHI_ORDER_RPC_8453=https://mainnet.base.org \
 #   XOCHI_ORDER_RPC_42161=https://arb1.arbitrum.io/rpc \
+#     ./examples/run_live_acp_order_gate.sh
+#
+#   # 4. A Robinhood-origin order (USDG->USDC cross-asset; USDG pulls via Permit2,
+#   #    so the 4663 origin needs an RPC for the allowance broadcast):
+#   XOCHI_ORDER_LIVE_KEY=0x<funded seller w/ USDG on 4663> \
+#   XOCHI_ORDER_CORRIDORS=4663>8453 XOCHI_ORDER_TOKENS=USDC \
+#   XOCHI_ORDER_RPC_4663=https://rpc.mainnet.chain.robinhood.com \
 #     ./examples/run_live_acp_order_gate.sh
 #
 # The Member service token is a long-lived 1Password credential, per-env:

@@ -18,11 +18,15 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
   Xochi Member, and the `Settler` uses one config for quote/execute/poll. (The
   mandate path is exercised by the raxol_payments Xochi gate.)
 
-  USDC pulls via ERC-3009 and settles directly. USDT/WETH pull via Permit2 and
-  need a standing on-chain allowance, which this gate broadcasts via
+  USDC pulls via ERC-3009 and settles directly. USDT/WETH -- and USDG, the origin
+  asset for any Robinhood-origin corridor -- pull via Permit2 and need a standing
+  on-chain allowance, which this gate broadcasts via
   `Raxol.ACP.Onchain.Permit2Approver` using a JSON-RPC provider built from the
-  funded key and `XOCHI_ORDER_RPC_<chain>`. A USDT/WETH cell with no RPC for its
-  origin chain is skipped (logged), not failed.
+  funded key and `XOCHI_ORDER_RPC_<chain>`. A Permit2-origin cell with no RPC for
+  its origin chain is skipped (logged), not failed. Robinhood Chain (4663) has no
+  USDC, so a stablecoin corridor touching it is cross-asset (USDG on the Robinhood
+  leg); order a `4663->8453` USDG->USDC corridor with
+  `XOCHI_ORDER_CORRIDORS=4663>8453 XOCHI_ORDER_RPC_4663=https://rpc.mainnet.chain.robinhood.com`.
 
   Moves real funds. Tagged `:live_xochi_order` (settle) and
   `:live_xochi_order_preflight` (read-only); excluded by default and compiled
@@ -65,7 +69,10 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
 
     # Riddler's universal solver (HD index-0); the pinned origin-pull recipient.
     @canonical_solver "0x97D447561fDe10E959E782a29411D8F89586d80b"
-    @evm_chains [1, 10, 137, 8453, 42_161]
+    # The six settleable EVM chains. Robinhood Chain (4663) has no USDC, only
+    # USDG, so a stablecoin corridor touching it is cross-asset (USDG on the
+    # Robinhood leg); see leg_symbol/2. USDG pulls via Permit2, never ERC-3009.
+    @evm_chains [1, 10, 137, 8453, 42_161, 4663]
 
     defmodule LiveWallet do
       @moduledoc false
@@ -204,8 +211,8 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     end
 
     defp requirement(cfg, from, to, token) do
-      {:ok, src_token} = Assets.address(from, token)
-      {:ok, dst_token} = Assets.address(to, token)
+      {:ok, src_token} = Assets.address(from, leg_symbol(from, token))
+      {:ok, dst_token} = Assets.address(to, leg_symbol(to, token))
 
       %{
         "src_chain_id" => from,
@@ -251,8 +258,8 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     end
 
     defp quote_request(cfg, from, to, token) do
-      with {:ok, src_token} <- Assets.address(from, token),
-           {:ok, dst_token} <- Assets.address(to, token) do
+      with {:ok, src_token} <- Assets.address(from, leg_symbol(from, token)),
+           {:ok, dst_token} <- Assets.address(to, leg_symbol(to, token)) do
         {:ok,
          %QuoteRequest{
            wallet: cfg.wallet_address,
@@ -272,9 +279,9 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     # -- Permit2 allowance (USDT/WETH only) --
 
     defp ensure_permit2(from, token, owner) do
-      if permit2_token?(token) do
+      if permit2_origin?(from, token) do
         with {:ok, provider} <- provider_for(from),
-             {:ok, src_token} <- Assets.address(from, token) do
+             {:ok, src_token} <- Assets.address(from, leg_symbol(from, token)) do
           Permit2Approver.ensure_allowance(provider, from, src_token, owner)
         else
           :error -> {:error, {:unknown_token, token}}
@@ -327,7 +334,7 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     end
 
     defp amount_atomic(from, token, stable_amount) do
-      {:ok, src_token} = Assets.address(from, token)
+      {:ok, src_token} = Assets.address(from, leg_symbol(from, token))
       decimals = Assets.decimals(from, src_token)
       Integer.to_string(Assets.to_atomic(Decimal.new(amount_for(token, stable_amount)), decimals))
     end
@@ -335,7 +342,24 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     defp amount_for("WETH", _stable), do: System.get_env("XOCHI_ORDER_WETH_AMOUNT", "0.001")
     defp amount_for(_token, stable), do: stable
 
-    defp permit2_token?(token), do: String.upcase(token) in ["USDT", "WETH"]
+    # The origin pull rail: USDC pulls via ERC-3009, everything else (USDT, WETH,
+    # and Robinhood's USDG) via Permit2. Keyed on the ORIGIN leg's resolved token,
+    # so a Robinhood-origin corridor (USDG) needs a Permit2 allowance even when the
+    # logical corridor token is USDC.
+    defp permit2_origin?(from, token), do: String.upcase(leg_symbol(from, token)) != "USDC"
+
+    # Robinhood Chain (4663) carries no USDC/USDT: its only stablecoin is USDG. A
+    # stablecoin corridor touching 4663 is therefore cross-asset (USDG on the
+    # Robinhood leg, the requested stablecoin on the other) -- the fungible
+    # stablecoin group the solver fills. Every non-Robinhood leg, and WETH
+    # (canonical on 4663 too), passes through unchanged.
+    defp leg_symbol(4663, token) do
+      if stablecoin_symbol?(token), do: "USDG", else: token
+    end
+
+    defp leg_symbol(_chain, token), do: token
+
+    defp stablecoin_symbol?(token), do: String.upcase(token) in ["USDC", "USDT", "DAI", "USDG"]
 
     defp parse_corridors(spec) when spec in ["mesh", "all"] do
       for from <- @evm_chains, to <- @evm_chains, from != to, do: {from, to}
@@ -361,18 +385,28 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
 
     defp report_preflight(from, to, token, {:ok, info}) do
       IO.puts(
-        "  PASS #{from}->#{to} #{token} via #{info.method || "?"} (to_amount #{info.to_amount})"
+        "  PASS #{from}->#{to} #{asset_pair(from, to, token)} via #{info.method || "?"}" <>
+          " (to_amount #{info.to_amount})"
       )
     end
 
     defp report_preflight(from, to, token, {:soft, :cannot_solve}) do
       IO.puts(
-        "  SKIP #{from}->#{to} #{token}: solver cannot fill this cell yet (no funds needed)"
+        "  SKIP #{from}->#{to} #{asset_pair(from, to, token)}: " <>
+          "solver cannot fill this cell yet (no funds needed)"
       )
     end
 
     defp report_preflight(from, to, token, {:error, reason}) do
-      IO.puts("  FAIL #{from}->#{to} #{token}: #{inspect(reason)}")
+      IO.puts("  FAIL #{from}->#{to} #{asset_pair(from, to, token)}: #{inspect(reason)}")
+    end
+
+    # Render the corridor's asset pairing: "USDC" same-asset, "USDC->USDG" when a
+    # Robinhood leg swaps a stablecoin for USDG, so the log shows the cross-asset fill.
+    defp asset_pair(from, to, token) do
+      f = leg_symbol(from, token)
+      t = leg_symbol(to, token)
+      if f == t, do: f, else: "#{f}->#{t}"
     end
 
     defp report_settlement(label, to_chain, deliverable, started_ms) do
