@@ -32,7 +32,6 @@ defmodule Raxol.Workflow.Runtime do
 
   alias Raxol.Core.Runtime.Directive
   alias Raxol.Core.Telemetry.TraceContext
-  alias Raxol.Workflow.Channel
   alias Raxol.Workflow.Checkpoint
   alias Raxol.Workflow.Checkpoint.Saver
   alias Raxol.Workflow.Compiled
@@ -43,6 +42,7 @@ defmodule Raxol.Workflow.Runtime do
   alias Raxol.Workflow.Execution.Scratchpad
   alias Raxol.Workflow.Node, as: WorkflowNode
   alias Raxol.Workflow.Node.{BehaviourNode, FunctionNode, TypedNode}
+  alias Raxol.Workflow.Runtime.BranchMerge
 
   @executed_key :__raxol_workflow_executed__
   @branch_id_key :__raxol_workflow_branch_id__
@@ -424,7 +424,7 @@ defmodule Raxol.Workflow.Runtime do
   defp finalize_join(compiled, continuation, run_id, deadline_us, count) do
     branch_states = Enum.map(continuation.slots, fn {:done, st} -> st end)
     join = Map.fetch!(compiled.joins_by_node, continuation.join_target)
-    merged = merge_branch_states(branch_states, join, compiled.channels)
+    merged = BranchMerge.merge(branch_states, join, compiled.channels)
 
     # Continuation served its purpose; strip it before continuing from
     # the join so downstream sequential nodes don't see runtime
@@ -1078,7 +1078,7 @@ defmodule Raxol.Workflow.Runtime do
 
         case result do
           {:all_done, branch_states, new_count} ->
-            merged = merge_branch_states(branch_states, join, compiled.channels)
+            merged = BranchMerge.merge(branch_states, join, compiled.channels)
             step(compiled, join.target, merged, run_id, deadline_us, new_count)
 
           {:has_paused, slots, new_count} ->
@@ -1552,49 +1552,6 @@ defmodule Raxol.Workflow.Runtime do
       {:error, reason} ->
         {:error, reason, state, count}
     end
-  end
-
-  defp merge_branch_states(
-         branch_states,
-         %JoinEdge{reducer: reducer},
-         _channels
-       )
-       when is_function(reducer, 1) do
-    reducer.(branch_states)
-  end
-
-  defp merge_branch_states([first | rest], %JoinEdge{reducer: nil}, channels) do
-    channel_index = channel_index_by_key(channels)
-
-    Enum.reduce(rest, first, fn next_state, acc ->
-      reduce_branch_into(acc, next_state, channel_index)
-    end)
-  end
-
-  defp channel_index_by_key(channels) do
-    channels
-    |> Map.values()
-    |> Map.new(fn %Channel{into: key} = c -> {key, c} end)
-  end
-
-  defp reduce_branch_into(left, right, channel_index) do
-    Enum.reduce(Map.keys(right), left, fn key, acc ->
-      case Map.fetch(right, key) do
-        :error ->
-          acc
-
-        {:ok, right_val} ->
-          case Map.get(channel_index, key) do
-            %Channel{with: reducer} ->
-              Map.update(acc, key, right_val, fn left_val ->
-                reducer.(left_val, right_val)
-              end)
-
-            nil ->
-              Map.put(acc, key, right_val)
-          end
-      end
-    end)
   end
 
   # --- Effect dispatch ---

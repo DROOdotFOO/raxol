@@ -9,9 +9,9 @@ defmodule Raxol.Workflow.ParallelTest do
   - 3-branch fan-out with an explicit `:reduce` reducer.
   - 3-branch fan-out with a `Channel`-keyed merge.
 
-  Per-branch failure semantics, pause-inside-branch, retry-per-branch,
-  and compensate-across-branches are deferred to follow-up work and are
-  intentionally not covered here.
+  Per-branch failure and pause-inside-branch semantics are covered
+  below. Retry-per-branch and compensate-across-branches are deferred
+  to follow-up work and are intentionally not covered here.
   """
 
   use ExUnit.Case, async: false
@@ -878,6 +878,96 @@ defmodule Raxol.Workflow.ParallelTest do
       assert :fast_fail_started in tags
       refute :slow_a_finished in tags
       refute :slow_b_finished in tags
+    end
+  end
+
+  describe "serial fan-out and fan-out error edges" do
+    test "serial fan-out (parallelism: 1): a branch error surfaces to the run" do
+      graph =
+        Graph.new(:serial_err)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:a, fn s -> {:ok, Map.put(s, :a, true)} end)
+        |> Graph.add_node(:b_bomb, fn _s -> {:error, :b_boom} end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:a, :b_bomb], fn _ -> [:a, :b_bomb] end)
+        |> Graph.add_edge(:a, :join)
+        |> Graph.add_edge(:b_bomb, :join)
+        |> Graph.add_join(:join, [:a, :b_bomb], parallelism: 1)
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+      assert {:error, :b_boom, _state} = Compiled.invoke(compiled, %{})
+    end
+
+    test "serial fan-out (parallelism: 1): a branch interrupt surfaces with index-ordered slots" do
+      graph =
+        Graph.new(:serial_pause)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:a, fn s -> {:ok, Map.put(s, :a, true)} end)
+        |> Graph.add_node(:b_pause, fn _s -> Raxol.Workflow.interrupt(:need_b) end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:a, :b_pause], fn _ ->
+          [:a, :b_pause]
+        end)
+        |> Graph.add_edge(:a, :join)
+        |> Graph.add_edge(:b_pause, :join)
+        |> Graph.add_join(:join, [:a, :b_pause], parallelism: 1)
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+
+      assert {:interrupted, _run_id, state, :need_b} =
+               Compiled.invoke(compiled, %{})
+
+      continuation = state.__raxol_workflow_fan_out__
+      assert continuation.join_target == :join
+      assert continuation.branch_ids == [:a, :b_pause]
+
+      # The serial path reverses its accumulator to restore branch-index
+      # order: branch 0 done, branch 1 paused.
+      assert [
+               {:done, %{a: true}},
+               {:paused, :b_pause, %{}, :need_b}
+             ] = continuation.slots
+    end
+
+    test "a list-returning chooser with no matching join fails with :fan_out_without_join" do
+      graph =
+        Graph.new(:no_join)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:a, fn s -> {:ok, Map.put(s, :a, true)} end)
+        |> Graph.add_node(:b, fn s -> {:ok, Map.put(s, :b, true)} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:a, :b], fn _ -> [:a, :b] end)
+        |> Graph.add_edge(:a, :__end__)
+        |> Graph.add_edge(:b, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+
+      assert {:error, {:fan_out_without_join, [:a, :b]}, _state} =
+               Compiled.invoke(compiled, %{})
+    end
+
+    test "a branch routing to :__end__ before the join fails with :branch_reached_end_before_join" do
+      graph =
+        Graph.new(:end_before_join)
+        |> Graph.add_node(:gate, fn s -> {:ok, s} end)
+        |> Graph.add_node(:a, fn s -> {:ok, Map.put(s, :a, true)} end)
+        |> Graph.add_node(:b, fn s -> {:ok, Map.put(s, :b, true)} end)
+        |> Graph.add_node(:join, fn s -> {:ok, s} end)
+        |> Graph.add_edge(:__start__, :gate)
+        |> Graph.add_conditional_edge(:gate, [:a, :b], fn _ -> [:a, :b] end)
+        |> Graph.add_edge(:a, :__end__)
+        |> Graph.add_edge(:b, :join)
+        |> Graph.add_join(:join, [:a, :b])
+        |> Graph.add_edge(:join, :__end__)
+
+      {:ok, compiled} = Graph.compile(graph)
+
+      assert {:error, {:branch_reached_end_before_join, :join}, _state} =
+               Compiled.invoke(compiled, %{})
     end
   end
 
