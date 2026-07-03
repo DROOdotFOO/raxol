@@ -19,123 +19,19 @@ Your application is a single [TEA](https://guide.elm-lang.org/architecture/) mod
                           +---> Agent (MCP tools)
 ```
 
-The interesting part is the runtime.
+The interesting part is the runtime. Your app gets crash isolation per Component, hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured Component trees instead of scraping pixels. Those are BEAM properties, from a VM built for systems that can't go down, can't lose state, and hot-swap code while running.
 
-Your app gets crash isolation per Component, hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured Component trees instead of scraping pixels.
-
-Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define agent-UI wire formats. Raxol is the runtime that renders all four surfaces from one source module.
+Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define agent-UI wire formats. Raxol is the runtime that renders all four surfaces from one source module. See [Why OTP](docs/WHY_OTP.md) for the full comparison.
 
 ## Built with Raxol
 
-### Xochi
+**[Xochi](https://xochi.fi)** is a private cross-chain DEX: intent-based swaps across 6 chains, sub-3s settlement, stealth addresses by default, ZKSAR compliance proofs. Its entire trading surface is raxol. A trader terminal serves over SSH with a dark-pool aesthetic, the same TEA module renders as a LiveView web UI, a solver-agent surface lets Riddler's sub-2ms solver consume auto-derived MCP tools to bid on intents, and an ops cockpit runs sensor fusion on solver health. The solver agent and the human trader read the same Component tree through different projections.
 
-[Xochi](https://xochi.fi) is a private cross-chain DEX: intent-based swaps across 6 chains, sub-3s settlement, stealth addresses by default, ZKSAR compliance proofs. Its entire trading surface is raxol:
+**[foglet-bbs](https://github.com/bmanturner/foglet-bbs)** by [Brendan Turner](https://foglet.io) is an SSH-only retro bulletin board ([bbs.foglet.io](https://bbs.foglet.io), `ssh bbs.foglet.io`) that stress-tested raxol's SSH path into shape.
 
-- **Trader terminal** serves over SSH, zero install, dark-pool aesthetic
-- **Web trading UI** renders the same TEA module via LiveView
-- **Solver agent surface** lets Riddler's sub-2ms solver consume auto-derived MCP tools to bid on intents
-- **Ops cockpit** runs a BEAM dashboard with sensor fusion on solver health, validator peers, settlement latency
+## Agents
 
-One TEA module. Four surfaces. The solver agent and the human trader interact with the same Component tree through different projections. That's the pitch nothing else in this space can match.
-
-### foglet-bbs
-
-[foglet-bbs](https://github.com/bmanturner/foglet-bbs) is a retro-inspired bulletin board system, SSH-only, by [Brendan Turner](https://foglet.io). Drop in:
-
-```bash
-ssh bbs.foglet.io
-```
-
-Marketing site at [bbs.foglet.io](https://bbs.foglet.io). Brendan stress-tested raxol's SSH path early on with detailed bug reports; foglet-bbs is what shook out the other end.
-
-## Symphony
-
-`raxol_symphony` is an Elixir/OTP port of [OpenAI Symphony](https://github.com/openai/symphony). The orchestrator polls a tracker (Linear or GitHub Issues), claims eligible issues, isolates each in a per-issue workspace, and runs a coding agent until the work reaches a workflow-defined handoff state. Two runner backends ship: `raxol_agent` (the default, wraps `Raxol.Agent.Stream`) and the upstream `codex app-server` (Port-based JSON-RPC). Six surfaces consume the same orchestrator snapshot via PubSub: terminal dashboard, LiveView, MCP tools, Telegram inline keyboards, Watch push, and a JSON API. Evidence collection (CI status, PR comments, complexity, asciinema replays) ships per run.
-
-```bash
-mix raxol.symphony --workflow ./WORKFLOW.md
-```
-
-## Install
-
-```elixir
-# mix.exs
-def deps do
-  [{:raxol, "~> 2.4"}]
-end
-```
-
-Or generate a new project:
-
-```bash
-mix raxol.new my_app
-```
-
-The GUI-vs-TUI debate is a rendering argument. Whether your app can be consumed by agents at the same time is a runtime problem, and that's what raxol solves.
-
-## Agents that can pay
-
-`raxol_payments` gives agents wallets, spending controls, and three payment protocols. An agent hits a 402'd resource. The Req plugin handles the rest.
-
-```elixir
-# Agent auto-pays for a resource via Xochi cross-chain settlement
-client = Req.new(base_url: "https://api.example.com")
-  |> Raxol.Payments.Req.AutoPay.attach(
-    wallet: {:op, "Agent Wallet"},
-    protocol: :xochi,
-    spending_policy: %{per_request: 50_000, session: 500_000}  # in wei
-  )
-
-{:ok, response} = Req.get(client, url: "/premium-data")
-# If 402 -> wallet signs EIP-712 -> Xochi settles cross-chain -> response arrives
-```
-
-Five protocols behind one interface: x402 (Coinbase HTTP 402, same-chain), MPP (Stripe/Tempo machine payments), Xochi (cross-chain intent settlement, 0.10-0.40% fees, stealth-capable, the agent default), Permit2 (`PermitWitnessTransferFrom` signing for most ERC-20s), and Riddler (direct solver access, deprecated in favor of Xochi). Per-request, per-session, and lifetime spending limits enforced by a ledger GenServer. See [Agentic Commerce docs](docs/features/AGENTIC_COMMERCE.md).
-
-## Agents that earn
-
-`raxol_acp` is the sell side: an Elixir/OTP-native implementation of the [Virtuals](https://virtuals.io) Agent Commerce Protocol that lets your agent offer services on Base and get paid for them. Declare an offering, implement two callbacks, and a buyer agent can discover it, escrow funds, and settle on-chain through the job lifecycle (request -> negotiation -> transaction -> evaluation -> completed), one supervised process per job.
-
-```elixir
-defmodule CrossChainTransfer do
-  use Raxol.ACP.Offering,
-    name: "xochi_cross_chain_transfer",
-    price_usdc: "0.25",
-    sla_minutes: 10,
-    cluster: "on_chain"
-
-  @impl true
-  def handle_request(req, _ctx), do: {:accept, req}
-
-  @impl true
-  def handle_deliver(req, _ctx), do: {:deliver, settle_cross_chain(req)}
-end
-```
-
-The two halves compose: an agent sells a service through `raxol_acp` and settles it through `raxol_payments`. The shipped `xochi_cross_chain_transfer` offering does exactly that, delivering a buyer's transfer (USDC/USDT/WETH, plus USDG on Robinhood Chain) across any of the 6 EVM chains via Xochi and returning the on-chain settlement tx hashes for verification. Pre-alpha (not yet on Hex).
-
-## Agents that improve
-
-`raxol_agent` agents get more capable the longer they run. A solved task becomes a reusable `SKILL.md` on disk. When a turn finishes, an isolated reviewer runs on a cheap model and writes durable memory plus new skills without spending the live turn's latency or context budget; a Curator ages and consolidates them on an idle gate. Memory layers a fast local store under external semantic providers, full-text `session_search` recalls the raw past messages rather than summaries, and a dialectic user model builds an understanding of who you are across sessions, injected per-turn without invalidating the prompt cache.
-
-```elixir
-defmodule MyAgent do
-  use Raxol.Agent
-  def skills_provider, do: Raxol.Agent.Skills.Store
-  def self_improve, do: %{enabled: true, model: "claude-haiku-4-5", min_tool_calls: 5}
-end
-
-# Each turn records itself, then triggers background curation.
-Raxol.Agent.Turn.run(MyAgent, prompt, backend: backend, log: log, conversation_id: "issue-9")
-```
-
-`raxol_gateway` allows your agent to reach multiple chat platforms through one adapter contract: process-per-chat sessions keyed `agent:main:{platform}:{chat_type}:{chat_id}`, DM pairing for authorization, four delivery modes, and `/handoff` that moves a conversation to another platform with its history intact.
-
-## Agent surface (MCP)
-
-Every interactive Component automatically exposes MCP tools. Button gives you `click`, TextInput gives you `type_into`/`clear`/`get_value`. A focus lens tracks what's relevant and filters to ~15 tools per interaction, so agents work with a contextual slice of the Component tree rather than a flat dump of every possible action.
-
-Where A2UI and AG-UI define how agents talk to UIs at the wire level, raxol generates both the UI and the agent surface from a single Component tree. Same source of truth, two projections.
+Raxol is a runtime for agents as much as for humans. Every interactive Component automatically exposes MCP tools (Button gives `click`, TextInput gives `type_into`/`clear`/`get_value`), and a focus lens filters to roughly 15 relevant tools per interaction. Where A2UI and AG-UI define how agents talk to UIs at the wire level, raxol generates the UI and the agent surface from one Component tree: same source, two projections.
 
 ```elixir
 import Raxol.MCP.Test
@@ -152,11 +48,28 @@ session
 
 `mix mcp.server` starts the MCP server on stdio for Claude Code integration.
 
-## Why OTP matters here
+The agent subsystems ship as standalone packages:
 
-Raxol's interface runtime is built on the BEAM, a VM originally designed for telephone switches: systems that couldn't go down, couldn't lose state, and had to hot-swap code on live calls. Those constraints turn out to be exactly right for multi-surface apps. Crash one Component, the rest stays up. Ship a fix, sessions don't drop. Cluster across regions, the framework already knows how to.
+- **Pay** ([`raxol_payments`](docs/features/AGENTIC_COMMERCE.md)): wallets, ledger-enforced spending limits, and transparent auto-pay when an agent hits an HTTP 402, across five protocols (x402, MPP, Xochi cross-chain, Permit2, Riddler).
+- **Earn** (`raxol_acp`): the sell side. Declare an offering, implement two callbacks, and a buyer agent discovers it, escrows funds, and settles on-chain through the [Virtuals](https://virtuals.io) ACP job lifecycle (request, negotiation, transaction, evaluation, completed), one supervised process per job. Pre-alpha.
+- **Improve** ([`raxol_agent`](docs/features/AGENT_FRAMEWORK.md)): a solved task becomes a reusable `SKILL.md`. A background reviewer runs on a cheap model after each turn, writing durable memory and new skills without spending the live turn's latency or context.
+- **Reach** (`raxol_gateway`): one adapter contract to many chat platforms, process-per-chat sessions, DM pairing for authorization, and `/handoff` to move a conversation across platforms with its history intact.
+- **Orchestrate** (`raxol_symphony`): an OTP port of [OpenAI Symphony](https://github.com/openai/symphony) that polls a tracker, isolates each issue in its own workspace, and runs a coding agent, feeding six surfaces (terminal, LiveView, MCP, Telegram, Watch, JSON API) from one snapshot.
 
-See [Why OTP](docs/WHY_OTP.md) for the full breakdown, including a comparison against Ratatui, Bubble Tea, Textual, and Ink.
+## Install
+
+```elixir
+# mix.exs
+def deps do
+  [{:raxol, "~> 2.4"}]
+end
+```
+
+Or generate a new project:
+
+```bash
+mix raxol.new my_app
+```
 
 ## Try it
 
@@ -176,7 +89,7 @@ See [examples/README.md](examples/README.md) for the full learning path, includi
 
 ## Performance
 
-Full frame in 2.1ms on Apple M1 Pro (Elixir 1.19 / OTP 27), which is 13% of the 60fps budget. In a system like Xochi where the solver loop targets sub-2ms, raxol sits within that frame budget without adding overhead to the hot path.
+Full frame in 2.1ms on Apple M1 Pro (Elixir 1.19 / OTP 27), 13% of the 60fps budget.
 
 | What                              | Time    |
 | --------------------------------- | ------- |
