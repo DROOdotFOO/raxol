@@ -112,8 +112,9 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
     end
   end
 
-  # The conformance.json generator only emits `public` Xochi vectors, so the
-  # shielded (Aztec) signature is pinned directly against the CLI's own pin.
+  # The conformance.json generator emits `public` and `stealth` Xochi vectors
+  # but not `shielded` (Aztec), so the shielded signature is pinned directly
+  # against the CLI's own pin.
   # Shielded settlement is note-based and carries no stealth address; the only
   # client-side artifact is this signature, so a regression in EIP-712 hashing
   # or the settlementPreference binding is caught here without a live solver.
