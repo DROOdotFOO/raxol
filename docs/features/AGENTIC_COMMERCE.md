@@ -58,6 +58,14 @@ The quote will carry an optional `fee_breakdown`: the per-layer split (solver, v
 
 Flow: `get_quote/2` -> `execute/3` (wallet signs EIP-712 intent) -> `poll_status/3`.
 
+For a storefront that settles on a buyer's behalf, the signing and the submission split into a buyer-side half and a relay-side half:
+
+- `sign_intent/2,3` and `quote_and_sign/3` (buyer side) quote and sign the intent and return the opaque bundle `{intent_id, quote_id, signature, nonce, pull_signature}` **without submitting** -- the buyer hands this to the storefront.
+- `execute_signed/2` (relay side) posts a pre-signed bundle to Xochi **without re-signing**, so the relay never holds the buyer's key.
+- `execute/4` is the two composed: `sign_intent` then `execute_signed`.
+
+The Xochi Cross-Chain Transfer ACP offering (in `raxol_acp`, see [ACP](ACP.md)) is built on this split -- the buyer signs, raxol relays. `packages/raxol_acp/examples/buyer_signed_intent.exs` shows the buyer flow.
+
 Xochi is the default for cross-chain and privacy (stealth addresses, shielded transfers). It's cash-positive by design: the protocol takes a fee, the agent pays it, done.
 
 ### Riddler (direct solver, B2B only)

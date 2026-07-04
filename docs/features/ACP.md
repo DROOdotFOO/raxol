@@ -61,6 +61,16 @@ end
 
 The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed `Registry`. `Job.Server.accept_request/1` and `deliver/1` auto-invoke the handler and submit on-chain memos with the configured wallet.
 
+## Xochi Cross-Chain Transfer (the first offering)
+
+`Raxol.ACP.Xochi.TransferOffering` is the first offering: a **pure storefront** for cross-chain stablecoin transfers. raxol never signs or holds the buyer's funds.
+
+- The buyer quotes and signs a Xochi intent themselves (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`) and puts the signed bundle in the job requirement's `signed_intent`.
+- On delivery, `Raxol.ACP.Xochi.Settler` relays that bundle to Xochi via `execute_signed/2` (no re-signing) and polls it to settlement; the deliverable is the on-chain settlement tx hashes.
+- The transfer settles through Xochi off-escrow, so the ACP core's take never bites it. The job is a **plain job** (`hook = address(0)`); the ACP budget is only raxol's storefront fee -- **8 bps of the transfer**, set via `:fee_bps`. On completion the provider nets `budget * 0.90`.
+
+`packages/raxol_acp/examples/buyer_signed_intent.exs` shows the buyer flow and the requirement/deliverable schemas to register on the marketplace.
+
 ## Memos
 
 Each phase emits an on-chain memo via `Raxol.ACP.ContractClient.create_memo/5`, mirroring `InteractionLedger.createMemo` from the deployed contract. There is no off-chain memo signing: the canonical ACP contract does not accept a separate memo signature, the transaction itself is the proof. Memo kinds are the `Raxol.ACP.Job.MemoType` enum (uint8, ids 0..9).
@@ -88,7 +98,7 @@ Start a `Job.Server` with `:expired_at` (unix seconds) and it arms a timer that 
 
 ## Nonce Serialization
 
-The `Raxol.ACP.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox. The original integration plan claimed process-per-job avoided concurrent-Alchemy collisions, but it doesn't. NonceServer does. A transaction that fails before it is broadcast rolls the consumed nonce back, so the next transaction reuses it instead of leaving a gap that would strand every later transaction (the SCA path reads its nonce fresh per call and is unaffected).
+The `Raxol.ACP.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox, so concurrent jobs from one wallet cannot collide on a nonce. A transaction that fails before it is broadcast rolls the consumed nonce back, so the next transaction reuses it instead of leaving a gap that would strand every later transaction (the SCA path reads its nonce fresh per call and is unaffected).
 
 ## Seller Stack
 
@@ -101,15 +111,9 @@ Opt-in via `:seller_enabled` in config:
 
 `Backend.WebSocket` (talking to Virtuals' relayer) is on the roadmap. The protocol spec is available via the `virtuals-protocol-acp` skill.
 
-## What's Blocked
+## Status
 
-External dependencies still pending:
-
-- `Wallet.SCA`: needs Virtuals' SCA contract spec
-- Real Virtuals ABIs (current encoder uses placeholder method ids)
-- WebSocket protocol implementation
-
-`mix raxol_acp.bench` is a sandbox-graduation harness that runs end-to-end against the InMemory backend.
+Pre-alpha, not yet on Hex. The `Wallet.SCA` ERC-4337 stack, the real vendored ABIs (`priv/abi/`), and the `Backend.WebSocket` Socket.IO client are implemented; the on-chain paths are fork-validated against the real deployed core on Base. `mix raxol_acp.bench` runs end-to-end against the InMemory backend.
 
 ## See Also
 

@@ -43,6 +43,10 @@ See `Raxol.ACP.Supervisor` for the supervision tree. Subsystems:
 - **SCA wallet**: `Raxol.ACP.Wallet.SCA` is a full ERC-4337 v0.7 / Alchemy Modular Account v2 stack (UserOp, bundler, paymaster, counterfactual CREATE2 provisioning, session keys). `Onchain` detects an SCA wallet and routes writes through sponsored UserOps, self-deploying on the first tx. Live-validated against the real on-chain EntryPoint on a Base fork.
 - **Seller runtime**: `Raxol.ACP.Seller.{Runtime, Queue, Supervisor}` plus `Backend.{InMemory, WebSocket}`. The WebSocket backend speaks Socket.IO v4 / Engine.IO over `Mint.WebSocket`; the runtime dispatches incoming jobs to the queue.
 
+## First offering: Xochi Cross-Chain Transfer
+
+`Raxol.ACP.Xochi.TransferOffering` sells cross-chain stablecoin transfers as a **pure storefront**. The buyer quotes and signs a Xochi intent themselves (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`) and puts the signed bundle in the job requirement; on delivery `Raxol.ACP.Xochi.Settler` relays it to Xochi via `execute_signed/2` and returns the settlement tx hashes. raxol never signs or holds the transfer funds. The transfer settles off-escrow through Xochi; the ACP budget is only raxol's storefront fee (8 bps of the transfer, via `:fee_bps`). See `examples/buyer_signed_intent.exs`.
+
 ## Dependencies
 
 - `raxol_payments` for wallet signing (`Raxol.Payments.EIP712`, `Raxol.Payments.Wallet`) and Xochi cross-chain settlement
