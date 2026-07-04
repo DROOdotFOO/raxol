@@ -127,10 +127,10 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
           {:ok,
            %{
              intent_id: "int_1",
-             quote_id: "q_1",
              settlement_tx_hash: "0xabc",
              receiving_tx_hash: nil,
-             status: "settled"
+             amount_atomic: "1100000",
+             status: "completed"
            }}
         end
       )
@@ -139,9 +139,9 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
 
       assert deliverable == %{
                "intent_id" => "int_1",
-               "quote_id" => "q_1",
                "settlement_tx_hash" => "0xabc",
-               "status" => "settled"
+               "amount_atomic" => "1100000",
+               "status" => "completed"
              }
 
       refute Map.has_key?(deliverable, "receiving_tx_hash")
