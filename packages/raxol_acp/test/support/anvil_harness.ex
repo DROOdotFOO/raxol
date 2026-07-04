@@ -120,6 +120,61 @@ defmodule Raxol.ACP.Test.AnvilHarness do
     {String.trim(out), code}
   end
 
+  @doc """
+  Deal ERC-20 `amount` (base units) to `holder` on the fork by overwriting the
+  token's `balanceOf[holder]` storage slot.
+
+  `balance_slot` is the storage slot index of the `balances` mapping (Circle
+  FiatToken USDC uses slot 9). The slot for `holder` is `cast index address
+  holder balance_slot`. Verify with `erc20_balance/3` after -- a wrong slot
+  leaves the balance unchanged.
+  """
+  @spec deal_erc20(String.t(), String.t(), String.t(), non_neg_integer(), non_neg_integer()) ::
+          :ok
+  def deal_erc20(rpc, token, holder, amount, balance_slot) do
+    {slot, 0} = cast(["index", "address", holder, "#{balance_slot}"])
+    value = "0x" <> (amount |> Integer.to_string(16) |> String.pad_leading(64, "0"))
+    {_out, 0} = cast(["rpc", "anvil_setStorageAt", token, slot, value, "--rpc-url", rpc])
+    :ok
+  end
+
+  @doc "Read an ERC-20 `balanceOf(holder)` on the fork, as an integer (base units)."
+  @spec erc20_balance(String.t(), String.t(), String.t()) :: non_neg_integer()
+  def erc20_balance(rpc, token, holder) do
+    {out, 0} = cast(["call", token, "balanceOf(address)(uint256)", holder, "--rpc-url", rpc])
+    parse_uint(out)
+  end
+
+  @doc "Read a no-arg `uint256` view function (e.g. `jobCounter()(uint256)`) on the fork."
+  @spec read_uint(String.t(), String.t(), String.t()) :: non_neg_integer()
+  def read_uint(rpc, to, signature) do
+    {out, 0} = cast(["call", to, signature, "--rpc-url", rpc])
+    parse_uint(out)
+  end
+
+  @doc "Assert a transaction succeeded (receipt status 1); flunk with the status otherwise."
+  @spec assert_tx_success!(String.t(), String.t()) :: :ok
+  def assert_tx_success!(rpc, tx_hash) do
+    {status, 0} = cast(["receipt", tx_hash, "status", "--rpc-url", rpc])
+
+    if String.trim(status) in ["1", "0x1"] do
+      :ok
+    else
+      ExUnit.Assertions.flunk("tx #{tx_hash} reverted (status #{status})")
+    end
+  end
+
+  # `cast call ...(uint256)` prints the decoded decimal (occasionally with a
+  # trailing scientific-notation annotation); take the leading token.
+  defp parse_uint(out) do
+    token = out |> String.trim() |> String.split() |> List.first() || "0"
+
+    case token do
+      "0x" <> hex -> String.to_integer(hex, 16)
+      dec -> String.to_integer(dec)
+    end
+  end
+
   defp ensure_foundry! do
     unless System.find_executable("anvil") && System.find_executable("cast") do
       ExUnit.Assertions.flunk(":live_chain tests require foundry (anvil + cast) on PATH")
