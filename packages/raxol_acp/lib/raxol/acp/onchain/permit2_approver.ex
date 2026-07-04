@@ -30,8 +30,11 @@ defmodule Raxol.ACP.Onchain.Permit2Approver do
           Raxol.ACP.ProviderAdapter.get_address(provider)
         )
 
-  The provider's EOA must be the same origin address the Xochi transfer signs its
-  Permit2 authorization from, since that is the address Permit2 pulls from.
+  The EOA behind `provider` (the JSON-RPC `ProviderAdapter`) must be the origin
+  wallet that signs the Xochi Permit2 authorization, since that is the address
+  Permit2 pulls from. In the storefront model the BUYER signs and holds this
+  allowance (raxol relays the buyer's signed intent and never pulls), so pass the
+  buyer's wallet here -- not the storefront/ACP-provider wallet.
   """
 
   alias Raxol.ACP.{ABI, ProviderAdapter}
