@@ -27,8 +27,12 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
         "src_token" => @usdc_base,
         "dst_token" => @usdc_arb,
         "amount_atomic" => "1100000",
-        "destination" => "0x000000000000000000000000000000000000dEaD",
-        "slippage_bps" => 50
+        "signed_intent" => %{
+          "intent_id" => "xi_1",
+          "quote_id" => "xq_1",
+          "signature" => "0x" <> String.duplicate("11", 65),
+          "nonce" => 7
+        }
       },
       overrides
     )
@@ -113,9 +117,8 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
       assert {:error, {:settler_not_configured, missing}} =
                TransferOffering.handle_deliver(req(%{}), @ctx)
 
-      assert :wallet_address in missing
-      assert :xochi_config in missing
-      assert :xochi_wallet in missing
+      # The relay Settler needs only :xochi_config (no signing wallet).
+      assert missing == [:xochi_config]
     end
 
     test "delivers the settler's result, stringified with nils dropped" do
@@ -125,8 +128,8 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
            %{
              intent_id: "int_1",
              quote_id: "q_1",
-             src_tx_hash: "0xabc",
-             dst_tx_hash: nil,
+             settlement_tx_hash: "0xabc",
+             receiving_tx_hash: nil,
              status: "settled"
            }}
         end
@@ -137,11 +140,11 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
       assert deliverable == %{
                "intent_id" => "int_1",
                "quote_id" => "q_1",
-               "src_tx_hash" => "0xabc",
+               "settlement_tx_hash" => "0xabc",
                "status" => "settled"
              }
 
-      refute Map.has_key?(deliverable, "dst_tx_hash")
+      refute Map.has_key?(deliverable, "receiving_tx_hash")
     end
 
     test "propagates a settler error so the job expires instead of completing" do

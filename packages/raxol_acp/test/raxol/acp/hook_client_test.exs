@@ -89,13 +89,13 @@ defmodule Raxol.ACP.HookClientTest do
   end
 
   describe "create_job/4" do
-    test "encodes createJob(address,address,uint256,address,bytes)", %{adapter: a} do
+    test "encodes the deployed createJob(address,address,uint256,string,address)", %{adapter: a} do
       params = %{
         provider: "0x" <> String.duplicate("ab", 20),
         evaluator: "0x" <> String.duplicate("cd", 20),
         expired_at: 1_900_000_000,
         hook_address: "0x0EaD25150985Bce0B4925c54E4ee1D856381A86B",
-        hook_data: <<>>
+        description: "xochi transfer"
       }
 
       assert {:ok, _tx} = HookClient.create_job(a, 8453, @core, params)
@@ -103,8 +103,10 @@ defmodule Raxol.ACP.HookClientTest do
       [{8453, [call]}] = Mock.sent_calls(a)
       assert call.to == @core
 
+      # Must match the on-chain AgenticCommerceV3 selector 0x41528812, not the
+      # old (address,bytes) shape which reverts on the real core.
       expected_selector =
-        ABI.function_selector("createJob(address,address,uint256,address,bytes)")
+        ABI.function_selector("createJob(address,address,uint256,string,address)")
 
       assert <<^expected_selector::binary-size(4), _rest::binary>> = call.data
     end

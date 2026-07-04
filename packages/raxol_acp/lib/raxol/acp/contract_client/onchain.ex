@@ -481,14 +481,32 @@ defmodule Raxol.ACP.ContractClient.Onchain do
       ABI.encode_call(@sig_get_nonce, [{"address", account}, {"uint192", key}])
 
     case RPC.eth_call(ctx.client, %{to: ctx.wallet.entry_point(), data: call_data}) do
-      {:ok, hex} -> {:ok, decode_uint256(hex)}
-      {:error, _} = err -> err
+      {:ok, hex} ->
+        case decode_uint256(hex) do
+          {:ok, nonce} -> {:ok, nonce}
+          :error -> {:error, {:invalid_nonce_response, hex}}
+        end
+
+      {:error, _} = err ->
+        err
     end
   end
 
-  defp decode_uint256("0x" <> ""), do: 0
-  defp decode_uint256("0x" <> hex), do: String.to_integer(hex, 16)
-  defp decode_uint256(_), do: 0
+  # Decode an eth_call uint256 result. Fails closed on a malformed / non-hex
+  # response rather than raising (a bad RPC reply must not crash the send
+  # pipeline, nor silently become nonce 0). Exposed for tests.
+  @doc false
+  @spec decode_uint256(binary()) :: {:ok, non_neg_integer()} | :error
+  def decode_uint256("0x"), do: {:ok, 0}
+
+  def decode_uint256("0x" <> hex) do
+    case Integer.parse(hex, 16) do
+      {n, ""} when n >= 0 -> {:ok, n}
+      _ -> :error
+    end
+  end
+
+  def decode_uint256(_), do: :error
 
   defp send_with(ctx, method, call_data) do
     case nonce(ctx) do
@@ -638,23 +656,21 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   # -- Nonce / fee / gas --
 
+  # The seeding step and the counter increment must not straddle two separate
+  # NonceServer calls: a peek/reset/get_next sequence lets two concurrent
+  # first-txs both observe an unseeded counter and collide on the same nonce
+  # (and a late reset can clobber a higher counter). `get_next_if_seeded/0` +
+  # `seed_and_next/1` do the reconciliation atomically inside the GenServer,
+  # keeping the "pending" fetch outside it.
   defp nonce(ctx) do
-    address = ctx.wallet.address()
+    case NonceServer.get_next_if_seeded() do
+      {:ok, n} ->
+        {:ok, n}
 
-    case NonceServer.peek() do
-      n when is_integer(n) and n > 0 ->
-        # Local NonceServer has been seeded; trust it.
-        {:ok, NonceServer.get_next()}
-
-      _ ->
-        # Fall back to chain-side pending nonce on first use.
-        case RPC.get_transaction_count(ctx.client, address) do
-          {:ok, n} ->
-            :ok = NonceServer.reset(n)
-            {:ok, NonceServer.get_next()}
-
-          {:error, _} = err ->
-            err
+      :unseeded ->
+        case RPC.get_transaction_count(ctx.client, ctx.wallet.address()) do
+          {:ok, chain_n} -> {:ok, NonceServer.seed_and_next(chain_n)}
+          {:error, _} = err -> err
         end
     end
   end

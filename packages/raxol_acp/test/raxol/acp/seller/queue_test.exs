@@ -174,4 +174,126 @@ defmodule Raxol.ACP.Seller.QueueTest do
                      200
     end
   end
+
+  describe "malformed events" do
+    setup do
+      :ok = SellerHelper.reset_seller(seller_address: @seller)
+      :ok = attach_telemetry([:dropped])
+      :ok
+    end
+
+    test ":job_offered missing :offering drops as :malformed without crashing the Queue" do
+      Queue.dispatch(%{type: :job_offered, job_id: "x"})
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
+                      %{type: :job_offered, reason: :malformed}},
+                     200
+
+      # The Queue survived a malformed event: a follow-up is still processed.
+      Queue.dispatch(%{type: :nonsense, job_id: "y"})
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
+                      %{type: :nonsense, reason: :unknown_event}},
+                     200
+    end
+
+    test "an event with no :type drops as :malformed instead of raising in the caller" do
+      Queue.dispatch(%{job_id: "z"})
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
+                      %{reason: :malformed}},
+                     200
+    end
+  end
+
+  describe "downstream errors are not swallowed" do
+    setup do
+      :ok = SellerHelper.reset_seller(seller_address: @seller)
+      :ok = attach_telemetry([:dispatched, :dropped])
+      {:ok, _spec} = EchoOffering.register()
+      :ok
+    end
+
+    test ":approval_received on a job not in :evaluation drops as {:handler_error, _}" do
+      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
+
+      Queue.dispatch(%{
+        type: :job_offered,
+        job_id: job_id,
+        offering: "test.echo",
+        request: %{"text" => "ping"},
+        buyer: @buyer
+      })
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dispatched],
+                      %{type: :job_offered}},
+                     500
+
+      :ok = wait_for_state(job_id, :negotiation)
+
+      # approve requires :evaluation; from :negotiation it is an invalid
+      # transition, so the Job.Server returns {:error, _}. That must surface as a
+      # drop, not a silently-swallowed "dispatched".
+      Queue.dispatch(%{type: :approval_received, job_id: job_id, payload: %{}})
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
+                      %{type: :approval_received, reason: {:handler_error, _}}},
+                     500
+    end
+  end
+
+  describe "backpressure" do
+    setup do
+      :ok = SellerHelper.reset_seller(seller_address: @seller)
+      :ok = attach_telemetry([:dispatched, :dropped])
+      {:ok, _spec} = EchoOffering.register()
+
+      prev = Application.get_env(:raxol_acp, :seller_max_active_jobs)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:raxol_acp, :seller_max_active_jobs, prev),
+          else: Application.delete_env(:raxol_acp, :seller_max_active_jobs)
+      end)
+
+      :ok
+    end
+
+    test "rejects a second :job_offered once the active-job cap is reached" do
+      Application.put_env(:raxol_acp, :seller_max_active_jobs, 1)
+
+      {:ok, job_a} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
+      {:ok, job_b} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
+      assert job_a != job_b
+
+      Queue.dispatch(%{
+        type: :job_offered,
+        job_id: job_a,
+        offering: "test.echo",
+        request: %{},
+        buyer: @buyer
+      })
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dispatched],
+                      %{type: :job_offered, job_id: ^job_a}},
+                     500
+
+      :ok = wait_for_state(job_a, :negotiation)
+
+      # At the cap now; the second offer is rejected, not started.
+      Queue.dispatch(%{
+        type: :job_offered,
+        job_id: job_b,
+        offering: "test.echo",
+        request: %{},
+        buyer: @buyer
+      })
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
+                      %{type: :job_offered, job_id: ^job_b, reason: :at_capacity}},
+                     500
+
+      assert Job.Registry.whereis(job_b) == :undefined
+    end
+  end
 end

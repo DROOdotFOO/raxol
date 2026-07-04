@@ -3,12 +3,10 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
 
   alias Raxol.ACP.{Agent, ProviderAdapter, Transport, JobApi, JobSession}
   alias Raxol.ACP.Xochi.SolverAgent
-  alias Raxol.ACP.Hooks.FundTransfer
 
   @solver_wallet "0xfeedfacefeedfacefeedfacefeedfacefeedface"
   @evaluator "0x" <> String.duplicate("ed", 20)
   @acp_core "0x238E541BfefD82238730D00a2208E5497F1832E0"
-  @fund_transfer_hook "0x0EaD25150985Bce0B4925c54E4ee1D856381A86B"
 
   setup do
     for {_, pid, _, _} <- DynamicSupervisor.which_children(JobSession.Supervisor),
@@ -43,8 +41,7 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
           wallet_address: @solver_wallet,
           evaluator_address: @evaluator,
           chain_id: 8453,
-          acp_core_address: @acp_core,
-          fund_transfer_hook_address: @fund_transfer_hook
+          acp_core_address: @acp_core
         ],
         opts
       )
@@ -69,8 +66,12 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
         "src_token" => "0x" <> String.duplicate("11", 20),
         "dst_token" => "0x" <> String.duplicate("22", 20),
         "amount_atomic" => "1000000",
-        "destination" => "0x" <> String.duplicate("ab", 20),
-        "slippage_bps" => 50
+        "signed_intent" => %{
+          "intent_id" => "xi_1",
+          "quote_id" => "xq_1",
+          "signature" => "0x" <> String.duplicate("11", 65),
+          "nonce" => 7
+        }
       })
 
     %{
@@ -127,14 +128,31 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
       assert %{{8453, "42"} => %{status: :budget_proposed, budget_atomic: budget}} =
                SolverAgent.sessions(solver)
 
-      # 0.5% of 1_000_000 = 5_000.
+      # Budget is the storefront fee only: 0.5% of 1_000_000 = 5_000. The
+      # transfer flows via Xochi off-escrow, not through the ACP budget.
       assert budget == 5_000
 
       assert [{8453, [call]}] = ProviderAdapter.Mock.sent_calls(ctx.provider)
       assert call.to == @acp_core
     end
 
-    test "fee_bps clamps to a minimum of 1", ctx do
+    test "the budget is the storefront fee, a fraction of the transfer, not the transfer", ctx do
+      {:ok, solver} = start_solver([fee_bps: 50], ctx)
+      Agent.start_stream(ctx.agent)
+
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      %{{8453, "42"} => session} = SolverAgent.sessions(solver)
+
+      # The ACP escrow holds only the storefront fee; the transfer moves through
+      # Xochi. So the budget is a small fraction of the transfer, never >= it.
+      assert session.budget_atomic == 5_000
+      assert session.budget_atomic < session.transfer_amount_atomic
+    end
+
+    test "zero fee_bps yields a zero budget", ctx do
       {:ok, solver} = start_solver([fee_bps: 0], ctx)
       Agent.start_stream(ctx.agent)
 
@@ -142,7 +160,7 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
       Transport.Mock.deliver(ctx.transport, requirement_message())
       Process.sleep(60)
 
-      assert %{{8453, "42"} => %{budget_atomic: 1}} = SolverAgent.sessions(solver)
+      assert %{{8453, "42"} => %{budget_atomic: 0}} = SolverAgent.sessions(solver)
     end
 
     test "malformed requirement marks the session :failed", ctx do
@@ -176,8 +194,8 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
          %{
            intent_id: "xochi-1",
            quote_id: "q-1",
-           src_tx_hash: "0x" <> String.duplicate("a", 64),
-           dst_tx_hash: "0x" <> String.duplicate("b", 64),
+           settlement_tx_hash: "0x" <> String.duplicate("a", 64),
+           receiving_tx_hash: "0x" <> String.duplicate("b", 64),
            status: "settled"
          }}
       end
@@ -206,6 +224,44 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
 
       # Two ProviderAdapter calls: set_budget then submit.
       assert length(ProviderAdapter.Mock.sent_calls(ctx.provider)) == 2
+    end
+
+    test "job.funded settles only the funded job, not other pending sessions", ctx do
+      settle_stub = fn _ ->
+        {:ok,
+         %{
+           intent_id: "xochi-42",
+           settlement_tx_hash: "0x" <> String.duplicate("a", 64),
+           receiving_tx_hash: "0x" <> String.duplicate("b", 64),
+           status: "settled"
+         }}
+      end
+
+      {:ok, solver} = start_solver([settle_fn: settle_stub], ctx)
+      Agent.start_stream(ctx.agent)
+
+      # Two independent jobs both reach :budget_proposed.
+      Transport.Mock.deliver(ctx.transport, job_created_entry(job_id: "42"))
+      Transport.Mock.deliver(ctx.transport, requirement_message(job_id: "42"))
+      Transport.Mock.deliver(ctx.transport, job_created_entry(job_id: "77"))
+      Transport.Mock.deliver(ctx.transport, requirement_message(job_id: "77"))
+      Process.sleep(80)
+
+      assert %{status: :budget_proposed} = SolverAgent.session(solver, {8453, "42"})
+      assert %{status: :budget_proposed} = SolverAgent.session(solver, {8453, "77"})
+
+      # Fund ONLY job 42.
+      Transport.Mock.deliver(
+        ctx.transport,
+        %{"kind" => "system", "event" => "job.funded", "chainId" => 8453, "jobId" => "42"}
+      )
+
+      Process.sleep(80)
+
+      # Job 42 settled; job 77 must be untouched -- a job.funded for 42 must not
+      # settle (spend funds for) an unfunded job.
+      assert SolverAgent.session(solver, {8453, "42"}).status == :submitted
+      assert SolverAgent.session(solver, {8453, "77"}).status == :budget_proposed
     end
 
     test "settle_fn failure marks the session :failed; no submit call", ctx do
@@ -260,9 +316,9 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
     end
   end
 
-  describe "encode/decode consistency with FundTransfer" do
-    test "the on-chain set_budget call carries the right FundTransfer data", ctx do
-      {:ok, _solver} = start_solver([], ctx)
+  describe "plain job (hook = address(0))" do
+    test "set_budget is a plain setBudget with empty hook data and a fee budget", ctx do
+      {:ok, _solver} = start_solver([fee_bps: 50], ctx)
       Agent.start_stream(ctx.agent)
 
       Transport.Mock.deliver(ctx.transport, job_created_entry())
@@ -270,15 +326,19 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
       Process.sleep(60)
 
       [{8453, [call]}] = ProviderAdapter.Mock.sent_calls(ctx.provider)
-      # Extract the dynamic bytes payload from the calldata. setBudget has
-      # selector(4) + 3 head words(96) = 100 bytes; the bytes length lives at
-      # offset 96 (third head slot pointer was at offset 100 from start of
-      # encoded args, so 64 from start of all head + 4 selector).
-      # Easier: re-encode the expected hook data and find it in the calldata.
-      expected_data =
-        FundTransfer.encode_set_budget_data(1_000_000, "0x" <> String.duplicate("ab", 20))
+      assert call.to == @acp_core
 
-      assert String.contains?(call.data, expected_data)
+      # The calldata is exactly setBudget(jobId=42, amount=fee, data=<<>>) -- no
+      # FundTransfer payload. Re-encoding with the same ABI encoder pins it
+      # without hardcoding byte offsets. fee = 0.5% of 1_000_000 = 5_000.
+      expected =
+        Raxol.ACP.ABI.encode_call("setBudget(uint256,uint256,bytes)", [
+          {"uint256", 42},
+          {"uint256", 5_000},
+          {"bytes", <<>>}
+        ])
+
+      assert call.data == expected
     end
   end
 end

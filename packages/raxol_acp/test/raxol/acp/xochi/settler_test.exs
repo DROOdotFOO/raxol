@@ -3,129 +3,79 @@ defmodule Raxol.ACP.Xochi.SettlerTest do
 
   alias Raxol.ACP.Xochi.Settler
 
-  @wallet "0xfeedfacefeedfacefeedfacefeedfacefeedface"
   @src_token "0x" <> String.duplicate("11", 20)
   @dst_token "0x" <> String.duplicate("22", 20)
-  @destination "0x" <> String.duplicate("33", 20)
 
-  defmodule StubWallet do
-    @moduledoc false
-    def address, do: "0xfeedfacefeedfacefeedfacefeedfacefeedface"
-    def chain_id, do: 8453
-    def sign_typed_data(_d, _t, _m), do: {:ok, <<7::size(520)>>}
-    def sign_message(_), do: {:ok, <<7::size(520)>>}
-    def sign_hash(_), do: {:ok, <<7::size(520)>>}
+  # A buyer-signed Xochi intent bundle, as it arrives in the requirement JSON
+  # (string keys). Signature values are opaque -- raxol relays them; Riddler
+  # verifies against its persisted quote.
+  defp signed_intent(overrides \\ %{}) do
+    Map.merge(
+      %{
+        "intent_id" => "i1",
+        "quote_id" => "q1",
+        "signature" => "0x" <> String.duplicate("11", 65),
+        "nonce" => 7,
+        "pull_signature" => "0x" <> String.duplicate("22", 65)
+      },
+      overrides
+    )
   end
 
-  defp valid_requirement do
-    %{
-      "src_chain_id" => 8453,
-      "dst_chain_id" => 10,
-      "src_token" => @src_token,
-      "dst_token" => @dst_token,
-      "amount_atomic" => "1000000",
-      "destination" => @destination,
-      "slippage_bps" => 50,
-      "settlement_preference" => "public"
-    }
+  defp requirement(overrides \\ %{}) do
+    Map.merge(
+      %{
+        "src_chain_id" => 8453,
+        "dst_chain_id" => 10,
+        "src_token" => @src_token,
+        "dst_token" => @dst_token,
+        "amount_atomic" => "1000000",
+        "signed_intent" => signed_intent()
+      },
+      overrides
+    )
   end
 
-  defp settle_args(req) do
-    %{
-      requirement: req,
-      transfer_amount_atomic: 1_000_000,
-      destination: @destination,
-      xochi_config: %{base_url: "http://stub", auth_token: "stub"},
-      xochi_wallet: nil
-    }
+  # The SolverAgent threads the bundle both ways: `:signed_intent` directly and
+  # inside `:requirement`. Default args carry both.
+  defp args(overrides \\ %{}) do
+    req = requirement()
+
+    Map.merge(
+      %{
+        requirement: req,
+        signed_intent: req["signed_intent"],
+        transfer_amount_atomic: 1_000_000
+      },
+      overrides
+    )
   end
 
   describe "build/1" do
-    test "raises when required option missing" do
-      assert_raise KeyError, fn -> Settler.build(xochi_config: %{}, xochi_wallet: nil) end
+    test "raises when :xochi_config is missing" do
+      assert_raise KeyError, fn -> Settler.build([]) end
     end
 
-    test "returns a function arity-1" do
-      f =
-        Settler.build(
-          wallet_address: @wallet,
-          xochi_config: %{base_url: "http://stub"},
-          xochi_wallet: nil
-        )
-
+    test "returns a function of arity 1" do
+      f = Settler.build(xochi_config: %{base_url: "https://xochi.test"})
       assert is_function(f, 1)
     end
   end
 
-  describe "settle_fn invocation (validation only)" do
-    # The settler's first job is to build a valid QuoteRequest from the
-    # settle args. If the requirement is malformed, we expect an early
-    # error before ever talking to Xochi. The "real" Xochi.transfer call
-    # is exercised by the SolverAgent live test path; here we verify the
-    # validation layer.
-
-    test "rejects an invalid src_token in the requirement" do
-      settler =
-        Settler.build(
-          wallet_address: @wallet,
-          xochi_config: %{base_url: "http://stub"},
-          xochi_wallet: nil
-        )
-
-      bad_req = %{valid_requirement() | "src_token" => "not-an-address"}
-
-      assert {:error, {:invalid_from_token, _}} = settler.(settle_args(bad_req))
-    end
-
-    test "rejects a non-positive chain id" do
-      settler =
-        Settler.build(
-          wallet_address: @wallet,
-          xochi_config: %{base_url: "http://stub"},
-          xochi_wallet: nil
-        )
-
-      bad_req = %{valid_requirement() | "src_chain_id" => 0}
-
-      assert {:error, {:invalid_chain_id, _}} = settler.(settle_args(bad_req))
-    end
-
-    test "rejects a malformed destination" do
-      settler =
-        Settler.build(
-          wallet_address: @wallet,
-          xochi_config: %{base_url: "http://stub"},
-          xochi_wallet: nil
-        )
-
-      bad_req = %{valid_requirement() | "dst_token" => "bad"}
-
-      assert {:error, {:invalid_to_token, _}} = settler.(settle_args(bad_req))
-    end
-  end
-
-  describe "settlement outcome handling" do
-    defp sim(status) do
+  describe "relay (pure storefront: no wallet, no re-signing)" do
+    # A worker sim over the real client paths (`/api/intent/*`). No quote call --
+    # the buyer already quoted; the settler only executes (relays) and polls.
+    # camelCase bodies: ExecuteResponse/IntentStatus read camelCase.
+    defp sim(status, test_pid) do
       fn conn ->
-        # Paths match `Raxol.Payments.Xochi.Client`: the worker endpoints
-        # (`/api/intent/*`), not the Riddler-direct `/xochi/*` paths. The
-        # bodies stay camelCase: `QuoteResponse.from_json` accepts both cases,
-        # and `ExecuteResponse`/`IntentStatus` read camelCase.
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+
+        if conn.request_path == "/api/intent/execute" do
+          send(test_pid, {:relayed, Jason.decode!(raw)})
+        end
+
         body =
           case conn.request_path do
-            "/api/intent/quote" ->
-              %{
-                "intentId" => "i1",
-                "quoteId" => "q1",
-                "canSolve" => true,
-                "toAmount" => "999000",
-                "eip712Data" => %{
-                  "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
-                  "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
-                  "message" => %{"amount" => 1_000_000}
-                }
-              }
-
             "/api/intent/execute" ->
               %{"success" => true, "intentId" => "i1", "status" => "executing"}
 
@@ -143,46 +93,69 @@ defmodule Raxol.ACP.Xochi.SettlerTest do
       end
     end
 
-    # The settler uses its build-time xochi_config, so the sim plug is wired there.
     defp settler_for(status) do
       Settler.build(
-        wallet_address: @wallet,
         xochi_config: %{
           base_url: "https://xochi.test",
           auth_token: "stub",
-          req_options: [plug: sim(status)]
+          req_options: [plug: sim(status, self())]
         },
-        xochi_wallet: StubWallet
+        poll_timeout_ms: 5_000,
+        poll_interval_ms: 10
       )
     end
 
-    defp args do
-      %{
-        requirement: valid_requirement(),
-        transfer_amount_atomic: 1_000_000,
-        destination: @destination,
-        xochi_config: %{},
-        xochi_wallet: StubWallet
-      }
+    test "relays the buyer's signed bundle verbatim, without re-signing" do
+      assert {:ok, _deliverable} = settler_for("completed").(args())
+
+      # The execute POST carries the BUYER's signature, pull_signature, and
+      # nonce unchanged -- raxol signs nothing.
+      assert_receive {:relayed, relayed}
+      assert relayed["signature"] == "0x" <> String.duplicate("11", 65)
+      assert relayed["pull_signature"] == "0x" <> String.duplicate("22", 65)
+      assert relayed["nonce"] == 7
+      assert relayed["intent_id"] == "i1"
+      assert relayed["quote_id"] == "q1"
     end
 
     test "a completed intent yields a deliverable with the settlement tx hashes" do
       assert {:ok, deliverable} = settler_for("completed").(args())
       assert deliverable.intent_id == "i1"
       assert deliverable.status == "completed"
-      # IntentStatus tx_hash / receiving_tx_hash surface as src / dst for the buyer.
-      assert deliverable.src_tx_hash == "0x" <> String.duplicate("a", 64)
-      assert deliverable.dst_tx_hash == "0x" <> String.duplicate("b", 64)
+      # IntentStatus tx_hash / receiving_tx_hash surface under matching names.
+      assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+      assert deliverable.receiving_tx_hash == "0x" <> String.duplicate("b", 64)
+      # The deliverable commits the declared transfer amount.
+      assert deliverable.amount_atomic == "1000000"
+    end
+
+    test "extracts the signed intent from the requirement when not threaded directly" do
+      only_requirement = %{requirement: requirement(), transfer_amount_atomic: 1_000_000}
+      assert {:ok, deliverable} = settler_for("completed").(only_requirement)
+      assert deliverable.intent_id == "i1"
     end
 
     test "a failed intent is an error, not a deliverable" do
-      assert {:error, {:settlement_failed, :failed, "i1", _}} =
-               settler_for("failed").(args())
+      assert {:error, {:settlement_failed, :failed, "i1", _}} = settler_for("failed").(args())
     end
 
     test "an expired intent is an error, not a deliverable" do
-      assert {:error, {:settlement_failed, :expired, "i1", _}} =
-               settler_for("expired").(args())
+      assert {:error, {:settlement_failed, :expired, "i1", _}} = settler_for("expired").(args())
+    end
+
+    test "errors before any relay when the requirement carries no signed_intent" do
+      no_bundle = %{requirement: Map.delete(requirement(), "signed_intent")}
+      assert {:error, :missing_signed_intent} = settler_for("completed").(no_bundle)
+      refute_received {:relayed, _}
+    end
+
+    test "errors before any relay when the signed intent has no intent_id" do
+      bundle = Map.delete(signed_intent(), "intent_id")
+
+      assert {:error, {:invalid_signed_intent, :intent_id}} =
+               settler_for("completed").(args(%{signed_intent: bundle}))
+
+      refute_received {:relayed, _}
     end
   end
 end

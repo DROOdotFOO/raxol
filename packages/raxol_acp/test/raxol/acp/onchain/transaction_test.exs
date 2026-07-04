@@ -127,6 +127,21 @@ defmodule Raxol.ACP.Onchain.TransactionTest do
       refute Transaction.serialize(tx, sig0) == Transaction.serialize(tx, sig1)
     end
 
+    test "legacy 27/28 v normalizes to the 0/1 y-parity an EIP-1559 tx requires" do
+      tx = base_tx()
+      r = String.duplicate(<<0xAA>>, 32)
+      s = String.duplicate(<<0xBB>>, 32)
+
+      # Wallets pack signatures with v in {27, 28}; the encoded tx must carry the
+      # 0/1 y-parity, so a 27 signature serializes identically to a 0 one (and 28
+      # to 1). Without normalization the tx is undecodable by strict nodes.
+      assert Transaction.serialize(tx, r <> s <> <<27>>) ==
+               Transaction.serialize(tx, r <> s <> <<0>>)
+
+      assert Transaction.serialize(tx, r <> s <> <<28>>) ==
+               Transaction.serialize(tx, r <> s <> <<1>>)
+    end
+
     test "leading-zero r and s are stripped (canonical RLP)" do
       tx = base_tx()
       # An r/s value padded to 32 bytes with 31 leading zero bytes and

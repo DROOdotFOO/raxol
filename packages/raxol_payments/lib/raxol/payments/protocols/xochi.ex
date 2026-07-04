@@ -121,18 +121,84 @@ defmodule Raxol.Payments.Protocols.Xochi do
   @spec execute(Client.config(), QuoteResponse.t(), module(), QuoteRequest.t() | nil) ::
           {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()} | {:error, term()}
   def execute(config, %QuoteResponse{} = quote_resp, wallet, request) do
+    with {:ok, bundle} <- sign_intent(quote_resp, wallet, request) do
+      execute_signed(config, bundle)
+    end
+  end
+
+  @doc """
+  Sign a quoted intent into a relayable bundle WITHOUT executing it.
+
+  The buyer-side counterpart to `execute_signed/2`: validates the quote, signs
+  the EIP-712 intent with `wallet`, and returns the opaque bundle
+  `%{intent_id, quote_id, signature, nonce}` (plus `pull_signature` when the
+  quote carried an origin-pull authorization) to hand to a storefront/relay or
+  to `execute_signed/2` directly. Does not talk to the worker.
+  """
+  @spec sign_intent(QuoteResponse.t(), module()) :: {:ok, signed_intent()} | {:error, term()}
+  def sign_intent(quote_resp, wallet), do: sign_intent(quote_resp, wallet, nil)
+
+  @doc """
+  Like `sign_intent/2`, but binds the served `pull_authorization` to the caller's
+  intended transfer (`request`) before signing it -- see `execute/4` for why this
+  matters. Pass `nil` only when there is no pull authorization to validate; a
+  pull presented with a `nil` request fails closed.
+  """
+  @spec sign_intent(QuoteResponse.t(), module(), QuoteRequest.t() | nil) ::
+          {:ok, signed_intent()} | {:error, term()}
+  def sign_intent(%QuoteResponse{} = quote_resp, wallet, request) do
     with :ok <- validate_quote(quote_resp),
          :ok <- validate_pull_authorization(quote_resp, request, wallet),
          {:ok, signature} <- sign_quote(quote_resp, wallet),
          {:ok, pull_signature} <- sign_pull_authorization(quote_resp, wallet) do
-      exec_request = %ExecuteRequest{
-        intent_id: quote_resp.intent_id,
-        quote_id: quote_resp.quote_id,
-        signature: signature,
-        nonce: signed_nonce(quote_resp),
-        pull_signature: pull_signature
-      }
+      {:ok, build_signed_intent(quote_resp, signature, pull_signature)}
+    end
+  end
 
+  @doc """
+  Buyer-side one-shot: `get_quote/2` then `sign_intent/3`.
+
+  Fetches a quote for `request` and signs it into a relayable bundle. The buyer
+  hands the bundle to a storefront (e.g. as an ACP requirement's `signed_intent`)
+  which relays it via `execute_signed/2`; the storefront never re-signs.
+  """
+  @spec quote_and_sign(Client.config(), QuoteRequest.t(), module()) ::
+          {:ok, signed_intent()} | {:error, term()}
+  def quote_and_sign(config, %QuoteRequest{} = request, wallet) do
+    with {:ok, quote_resp} <- get_quote(config, request) do
+      sign_intent(quote_resp, wallet, request)
+    end
+  end
+
+  @typedoc """
+  A buyer's pre-signed Xochi intent bundle, as handed to the storefront relay.
+
+  Keys may be atoms (internal callers) or strings (decoded from an ACP
+  requirement). Required: `intent_id`, `quote_id`, `signature`, `nonce`.
+  Optional: `pull_signature` (nil for non-pulling methods), `aztec_proof`
+  (shielded claims).
+  """
+  @type signed_intent :: %{optional(atom() | String.t()) => term()}
+
+  @doc """
+  Relay a buyer's pre-signed intent to Xochi WITHOUT re-signing.
+
+  The storefront (pure-relay) primitive. The buyer quoted and signed the EIP-712
+  intent (and any origin-pull authorization) against Xochi itself, then handed
+  raxol the opaque bundle `{intent_id, quote_id, signature, nonce,
+  pull_signature}`. raxol posts it verbatim; Riddler verifies the signature
+  against its own server-persisted quote, so neither raxol nor the buyer can
+  forge the amount or route.
+
+  Unlike `execute/3,4`, this takes no wallet and releases no signature -- raxol
+  is never on the fund-signing path. Fails closed with
+  `{:error, {:invalid_signed_intent, field}}` on a missing or malformed field,
+  before any network call.
+  """
+  @spec execute_signed(Client.config(), signed_intent()) ::
+          {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()} | {:error, term()}
+  def execute_signed(config, signed_intent) when is_map(signed_intent) do
+    with {:ok, exec_request} <- build_signed_execute_request(signed_intent) do
       Client.execute(config, exec_request)
     end
   end
@@ -262,6 +328,78 @@ defmodule Raxol.Payments.Protocols.Xochi do
   end
 
   # -- Private --
+
+  # Assemble the relayable bundle from a signed quote. `nonce` is the worker's
+  # replay-dedup key derived from the quote (see `signed_nonce/1`); the pull
+  # signature key is present only when the quote carried an origin pull, so a
+  # non-pulling bundle serializes without a null `pull_signature`.
+  defp build_signed_intent(quote_resp, signature, pull_signature) do
+    %{
+      intent_id: quote_resp.intent_id,
+      quote_id: quote_resp.quote_id,
+      signature: signature,
+      nonce: signed_nonce(quote_resp)
+    }
+    |> put_pull_signature(pull_signature)
+  end
+
+  defp put_pull_signature(bundle, nil), do: bundle
+  defp put_pull_signature(bundle, sig), do: Map.put(bundle, :pull_signature, sig)
+
+  # Build an ExecuteRequest from a buyer-supplied bundle without signing. Fails
+  # closed on a missing/malformed field so a bad relay never reaches the worker
+  # (and never crashes on ExecuteRequest's enforced keys). Keys may be atoms or
+  # strings; `nonce` must be a non-negative integer (the worker's replay-dedup
+  # key), not a coerced string.
+  defp build_signed_execute_request(signed) do
+    with {:ok, intent_id} <- require_binary(signed, :intent_id),
+         {:ok, quote_id} <- require_binary(signed, :quote_id),
+         {:ok, signature} <- require_binary(signed, :signature),
+         {:ok, nonce} <- require_nonce(signed),
+         {:ok, pull_signature} <- optional_binary(signed, :pull_signature),
+         {:ok, aztec_proof} <- optional_binary(signed, :aztec_proof) do
+      {:ok,
+       %ExecuteRequest{
+         intent_id: intent_id,
+         quote_id: quote_id,
+         signature: signature,
+         nonce: nonce,
+         pull_signature: pull_signature,
+         aztec_proof: aztec_proof
+       }}
+    end
+  end
+
+  # A field present under either its atom or its string key.
+  defp fetch_field(map, field) do
+    case Map.fetch(map, field) do
+      {:ok, value} -> {:ok, value}
+      :error -> Map.fetch(map, Atom.to_string(field))
+    end
+  end
+
+  defp require_binary(map, field) do
+    case fetch_field(map, field) do
+      {:ok, value} when is_binary(value) and value != "" -> {:ok, value}
+      _ -> {:error, {:invalid_signed_intent, field}}
+    end
+  end
+
+  defp require_nonce(map) do
+    case fetch_field(map, :nonce) do
+      {:ok, nonce} when is_integer(nonce) and nonce >= 0 -> {:ok, nonce}
+      _ -> {:error, {:invalid_signed_intent, :nonce}}
+    end
+  end
+
+  defp optional_binary(map, field) do
+    case fetch_field(map, field) do
+      :error -> {:ok, nil}
+      {:ok, nil} -> {:ok, nil}
+      {:ok, value} when is_binary(value) and value != "" -> {:ok, value}
+      _ -> {:error, {:invalid_signed_intent, field}}
+    end
+  end
 
   defp validate_quote(%QuoteResponse{can_solve: false, error: err}) do
     {:error, {:cannot_solve, err || "no solver available"}}

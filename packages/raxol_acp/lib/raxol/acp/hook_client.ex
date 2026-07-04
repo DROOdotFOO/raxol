@@ -137,10 +137,16 @@ defmodule Raxol.ACP.HookClient do
   @doc """
   Submit `createJob(...)` on ACP Core.
 
-  v2's createJob signature (from acp-node-v2 source):
+  Matches the deployed `AgenticCommerceV3` core (Blockscout-verified on Base):
 
       createJob(address provider, address evaluator, uint256 expiredAt,
-                address hookAddress, bytes hookData)
+                string description, address hook)
+
+  `hook` is the whitelisted hook contract (e.g. the FundTransferHook).
+  Per-call hook parameters are NOT passed here -- `createJob` takes no
+  `hookData`; the hook `optParams` flow through `setBudget`/`fund`/`submit`/
+  `complete` instead. `description` is the job's human-readable string
+  (defaults to `""`).
 
   Returns the assigned jobId via a separate `getJobIdFromTxHash` call
   in the SDK; this function returns the tx hash and lets the caller
@@ -151,31 +157,37 @@ defmodule Raxol.ACP.HookClient do
           chain_id(),
           String.t(),
           %{
-            provider: String.t(),
-            evaluator: String.t(),
-            expired_at: non_neg_integer(),
-            hook_address: String.t(),
-            hook_data: binary()
+            required(:provider) => String.t(),
+            required(:evaluator) => String.t(),
+            required(:expired_at) => non_neg_integer(),
+            required(:hook_address) => String.t(),
+            optional(:description) => String.t()
           }
         ) :: {:ok, tx_hash()} | {:error, term()}
-  def create_job(adapter, chain_id, acp_core_address, %{
-        provider: provider,
-        evaluator: evaluator,
-        expired_at: expired_at,
-        hook_address: hook_address,
-        hook_data: hook_data
-      }) do
+  def create_job(
+        adapter,
+        chain_id,
+        acp_core_address,
+        %{
+          provider: provider,
+          evaluator: evaluator,
+          expired_at: expired_at,
+          hook_address: hook_address
+        } = params
+      ) do
+    description = Map.get(params, :description, "")
+
     submit_single(
       adapter,
       chain_id,
       acp_core_address,
-      "createJob(address,address,uint256,address,bytes)",
+      "createJob(address,address,uint256,string,address)",
       [
         {"address", provider},
         {"address", evaluator},
         {"uint256", expired_at},
-        {"address", hook_address},
-        {"bytes", hook_data}
+        {"string", description},
+        {"address", hook_address}
       ]
     )
   end

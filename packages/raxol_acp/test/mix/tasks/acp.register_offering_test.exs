@@ -36,13 +36,13 @@ defmodule Mix.Tasks.Acp.RegisterOfferingTest do
       payload = RegisterOffering.build_payload(:mainnet)
 
       assert payload["name"] == "xochi_cross_chain_transfer"
-      assert payload["hookKind"] == "fund_transfer"
+      assert payload["hookKind"] == "none"
       assert payload["requiredFunds"] == true
       assert payload["slaMinutes"] == 10
       assert "payments" in payload["tags"]
     end
 
-    test "requirement schema is JSON-Schema 2020-12 with the 7 required fields" do
+    test "requirement schema is JSON-Schema 2020-12 with the corridor + signed-intent fields" do
       payload = RegisterOffering.build_payload(:mainnet)
       schema = payload["requirementSchema"]
 
@@ -59,8 +59,7 @@ defmodule Mix.Tasks.Acp.RegisterOfferingTest do
                  "src_token",
                  "dst_token",
                  "amount_atomic",
-                 "destination",
-                 "slippage_bps"
+                 "signed_intent"
                ])
              )
     end

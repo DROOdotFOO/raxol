@@ -65,13 +65,23 @@ defmodule Raxol.ACP.ContractClient.OnchainLiveTest do
     Application.put_env(:raxol_acp, :onchain_wallet, Wallet)
     Application.delete_env(:raxol_acp, :rpc)
     Application.delete_env(:raxol_acp, :sca_rpc)
-    NonceServer.reset(0)
+    # The minimal stub contract returns a word for every call but emits no
+    # JobCreated event, so create_job cannot resolve a real job id. This harness
+    # validates the EOA signing/broadcast/receipt pipeline, not event decoding
+    # (that is covered against real JobCreated logs elsewhere), so opt into the
+    # documented tx-hash placeholder rather than failing closed.
+    Application.put_env(:raxol_acp, :allow_placeholder_job_id, true)
+    # Unseed so the pipeline reconciles the wallet's real nonce from the fork
+    # (the stub deploy bumped anvil account #0), exercising the seed-from-chain
+    # path rather than assuming 0.
+    NonceServer.resync()
 
     on_exit(fn ->
       System.delete_env(@env_var)
       Application.delete_env(:raxol_acp, :chain)
       Application.delete_env(:raxol_acp, :chain_overrides)
       Application.delete_env(:raxol_acp, :onchain_wallet)
+      Application.delete_env(:raxol_acp, :allow_placeholder_job_id)
     end)
 
     :ok

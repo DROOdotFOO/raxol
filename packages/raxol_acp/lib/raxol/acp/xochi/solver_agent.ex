@@ -1,27 +1,26 @@
 defmodule Raxol.ACP.Xochi.SolverAgent do
   @moduledoc """
-  Runtime that drives a Xochi cross-chain transfer ACP job from
-  acceptance through settlement.
+  Runtime that drives a Xochi cross-chain transfer ACP job from acceptance
+  through settlement, as the storefront PROVIDER.
 
-  Subscribes to a `Raxol.ACP.Agent`, filters for v2 FundTransfer jobs
-  whose `provider` is this solver's wallet address, and runs the
-  lifecycle:
+  Subscribes to a `Raxol.ACP.Agent`, filters for plain jobs whose `provider` is
+  this solver's wallet address, and runs the lifecycle:
 
-  1. **`job.created`** -- record the job, wait for the buyer's
-     requirement message.
-  2. **`message` (contentType "requirement")** -- parse the
-     requirement JSON against
-     `Raxol.ACP.Xochi.Offering.requirement_schema/0`, compute the
-     service fee (default 50 bps via `:fee_bps`), and propose the
-     budget on-chain by calling
-     `Raxol.ACP.HookClient.set_budget/6` with FundTransfer hook
-     data (transferAmount, destination).
-  3. **`budget.set`** (echoed back via SSE) -- no-op for the solver;
-     just observe.
-  4. **`job.funded`** -- run `settle_fn` (default:
-     `Raxol.Payments.Protocols.Xochi.transfer/4`) and on success
-     submit the deliverable on-chain.
-  5. **`job.completed`** -- escrow released. Cleanup local state.
+  1. **`job.created`** -- record the job, wait for the buyer's requirement
+     message.
+  2. **`message` (contentType "requirement")** -- parse the requirement JSON
+     against `Raxol.ACP.Xochi.Offering.requirement_schema/0` (which carries the
+     buyer's signed intent bundle), compute the storefront fee (default 50 bps
+     via `:fee_bps`), and propose the budget on-chain via
+     `Raxol.ACP.HookClient.set_budget/6`. This is a PLAIN job (hook =
+     `address(0)`), so `set_budget` carries no hook data -- the budget is the
+     storefront fee, not the transfer. The transfer moves through Xochi
+     off-escrow, so the ACP core's take never bites it.
+  3. **`budget.set`** (echoed back via SSE) -- no-op for the solver; observe.
+  4. **`job.funded`** -- run `settle_fn` (default: a `Raxol.ACP.Xochi.Settler`
+     relay) which relays the buyer's pre-signed intent through Xochi and, on
+     success, submits the deliverable (the settlement tx hashes) on-chain.
+  5. **`job.completed`** -- provider nets `budget*0.90`. Cleanup local state.
 
   ## Configuration
 
@@ -32,11 +31,8 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
         evaluator_address: "0xevaluator...",
         chain_id: 8453,
         acp_core_address: "0x238E541BfefD82238730D00a2208E5497F1832E0",
-        fund_transfer_hook_address: "0x0EaD25150985Bce0B4925c54E4ee1D856381A86B",
         fee_bps: 50,
-        settle_fn: &Raxol.Payments.Protocols.Xochi.transfer/4,
-        xochi_config: %{base_url: "...", auth_token: "..."},
-        xochi_wallet: MySigner
+        settle_fn: Raxol.ACP.Xochi.Settler.build(xochi_config: %{base_url: "..."})
       )
 
   ## Sessions
@@ -56,7 +52,6 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
   use GenServer
 
   alias Raxol.ACP.{Agent, HookClient}
-  alias Raxol.ACP.Hooks.FundTransfer
   alias Raxol.ACP.Xochi.Offering
 
   @type session_status ::
@@ -77,7 +72,6 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
           optional(:requirement) => map(),
           optional(:budget_atomic) => non_neg_integer(),
           optional(:transfer_amount_atomic) => non_neg_integer(),
-          optional(:destination) => String.t(),
           optional(:deliverable) => map(),
           optional(:settle_tx_hashes) => map()
         }
@@ -89,11 +83,9 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
           evaluator_address: String.t(),
           chain_id: pos_integer(),
           acp_core_address: String.t(),
-          fund_transfer_hook_address: String.t(),
           fee_bps: non_neg_integer(),
           settle_fn: fun(),
           xochi_config: map(),
-          xochi_wallet: module() | nil,
           sessions: %{Raxol.ACP.Transport.job_key() => session_state()}
         }
 
@@ -104,9 +96,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
     :evaluator_address,
     :chain_id,
     :acp_core_address,
-    :fund_transfer_hook_address,
     :xochi_config,
-    :xochi_wallet,
     settle_fn: nil,
     fee_bps: 50,
     sessions: %{}
@@ -145,11 +135,9 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
       evaluator_address: Keyword.fetch!(opts, :evaluator_address),
       chain_id: Keyword.fetch!(opts, :chain_id),
       acp_core_address: Keyword.fetch!(opts, :acp_core_address),
-      fund_transfer_hook_address: Keyword.fetch!(opts, :fund_transfer_hook_address),
       fee_bps: Keyword.get(opts, :fee_bps, 50),
       settle_fn: Keyword.get(opts, :settle_fn, &default_settle/1),
-      xochi_config: Keyword.get(opts, :xochi_config, %{}),
-      xochi_wallet: Keyword.get(opts, :xochi_wallet)
+      xochi_config: Keyword.get(opts, :xochi_config, %{})
     }
 
     :ok = Agent.subscribe(state.agent)
@@ -253,16 +241,32 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
     end
   end
 
-  defp handle_job_funded(_entry, state) do
-    # Find a session in :budget_proposed or :awaiting_fund and settle.
-    Enum.reduce(state.sessions, state, fn
-      {key, %{status: status} = s}, acc
-      when status in [:budget_proposed, :awaiting_fund] ->
-        settle(acc, key, s)
+  # Settle only the session the funded event names. A single job.funded must
+  # never fan-settle every pending session -- doing so spends real funds via
+  # settle/3 for jobs that were not funded.
+  defp handle_job_funded(entry, state) do
+    case settle_target(state.sessions, job_key(entry)) do
+      {:ok, key, session} -> settle(state, key, session)
+      :none -> state
+    end
+  end
 
-      _, acc ->
-        acc
-    end)
+  @doc false
+  # Pure routing decision behind `handle_job_funded/2`: a funded event settles
+  # the session at its own `{chain_id, job_id}` and only when that session is
+  # awaiting funding. Any other key -- absent, or in a non-fundable state --
+  # returns `:none`. Selecting anything but the named key would re-open the
+  # fan-settle hole. Exposed for property tests.
+  @spec settle_target(%{optional(Raxol.ACP.Transport.job_key()) => session_state()}, term()) ::
+          {:ok, Raxol.ACP.Transport.job_key(), session_state()} | :none
+  def settle_target(sessions, key) do
+    case Map.fetch(sessions, key) do
+      {:ok, %{status: status} = session} when status in [:budget_proposed, :awaiting_fund] ->
+        {:ok, key, session}
+
+      _ ->
+        :none
+    end
   end
 
   defp handle_job_completed(entry, state) do
@@ -293,35 +297,42 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
 
   # -- Budget proposal --
 
+  @doc false
+  # The ACP job budget is the storefront fee only -- `fee_bps` basis points of
+  # the transfer amount. The transfer itself flows through Xochi (a buyer-signed
+  # intent the storefront relays), NOT through the ACP escrow, so the escrow is
+  # never sized to the transfer -- putting the transfer through the escrow would
+  # incur the core's 5-10% take on the full amount. Exposed for property tests.
+  @spec budget_for(non_neg_integer(), non_neg_integer()) :: non_neg_integer()
+  def budget_for(transfer_atomic, fee_bps)
+      when is_integer(transfer_atomic) and transfer_atomic >= 0 and
+             is_integer(fee_bps) and fee_bps >= 0 do
+    div(transfer_atomic * fee_bps, 10_000)
+  end
+
+  # A storefront job is a PLAIN job (hook = address(0)): `set_budget` carries no
+  # hook data. The budget is the storefront fee; the transfer settles through
+  # Xochi off-escrow, so no FundTransfer hook is involved.
   defp propose_budget(state, key, session, requirement) do
     transfer_atomic = String.to_integer(requirement["amount_atomic"])
-    budget_atomic = max(div(transfer_atomic * state.fee_bps, 10_000), 1)
-    destination = requirement["destination"]
-
-    hook_data = FundTransfer.encode_set_budget_data(transfer_atomic, destination)
+    budget_atomic = budget_for(transfer_atomic, state.fee_bps)
 
     case HookClient.set_budget(
            state.provider,
            state.chain_id,
            state.acp_core_address,
            session.job_id_uint,
-           budget_atomic,
-           hook_data
+           budget_atomic
          ) do
       {:ok, tx_hash} ->
         emit(state, key, :budget_proposed, %{tx_hash: tx_hash, budget_atomic: budget_atomic})
 
-        updated = %{
-          session
-          | status: :budget_proposed
-        }
-
         updated =
-          updated
+          session
+          |> Map.put(:status, :budget_proposed)
           |> Map.put(:requirement, requirement)
           |> Map.put(:budget_atomic, budget_atomic)
           |> Map.put(:transfer_amount_atomic, transfer_atomic)
-          |> Map.put(:destination, destination)
 
         put_session(state, key, updated)
 
@@ -340,10 +351,8 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
 
     case state.settle_fn.(%{
            requirement: session.requirement,
-           transfer_amount_atomic: session.transfer_amount_atomic,
-           destination: session.destination,
-           xochi_config: state.xochi_config,
-           xochi_wallet: state.xochi_wallet
+           signed_intent: session.requirement["signed_intent"],
+           transfer_amount_atomic: session.transfer_amount_atomic
          }) do
       {:ok, %{intent_id: intent_id} = deliverable} ->
         submit_deliverable(state, key, session, deliverable, intent_id)
@@ -386,16 +395,16 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
 
   # -- Default settle (test-only) --
 
-  # In production, callers pass &Raxol.Payments.Protocols.Xochi.transfer/4
-  # via :settle_fn. The default below produces a deterministic stub so
-  # the SolverAgent can be exercised in tests without a live Xochi server.
+  # In production, callers pass a `Raxol.ACP.Xochi.Settler` relay closure via
+  # :settle_fn. The default below produces a deterministic stub so the
+  # SolverAgent can be exercised in tests without a live Xochi server.
   defp default_settle(%{requirement: req, transfer_amount_atomic: _}) do
     {:ok,
      %{
        intent_id: ("stub-intent-" <> :erlang.unique_integer([:positive])) |> to_string(),
        quote_id: "stub-quote",
-       src_tx_hash: "0x" <> String.duplicate("a", 64),
-       dst_tx_hash: "0x" <> String.duplicate("b", 64),
+       settlement_tx_hash: "0x" <> String.duplicate("a", 64),
+       receiving_tx_hash: "0x" <> String.duplicate("b", 64),
        status: "settled",
        fee_atomic: "0",
        dst_amount_atomic: req["amount_atomic"]

@@ -4,12 +4,12 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
   alias Raxol.ACP.Xochi.Offering
 
   describe "offering_metadata/0" do
-    test "is a fund-transfer offering with USDC settlement" do
+    test "is a storefront offering (plain job, no fund hook)" do
       meta = Offering.offering_metadata()
 
       assert meta.name == "xochi_cross_chain_transfer"
       assert meta.required_funds == true
-      assert meta.hook_kind == "fund_transfer"
+      assert meta.hook_kind == "none"
       assert meta.sla_minutes == 10
       assert "payments" in meta.tags
     end
@@ -31,7 +31,7 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
       assert schema["additionalProperties"] == false
     end
 
-    test "marks the 7 essential fields as required" do
+    test "marks the corridor fields plus the signed intent as required" do
       schema = Offering.requirement_schema()
       required = MapSet.new(schema["required"])
 
@@ -43,9 +43,20 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
                  "src_token",
                  "dst_token",
                  "amount_atomic",
-                 "destination",
-                 "slippage_bps"
+                 "signed_intent"
                ])
+             )
+    end
+
+    test "the signed_intent object requires the bundle fields" do
+      schema = Offering.requirement_schema()
+      bundle = schema["properties"]["signed_intent"]
+
+      assert bundle["type"] == "object"
+
+      assert MapSet.equal?(
+               MapSet.new(bundle["required"]),
+               MapSet.new(["intent_id", "quote_id", "signature", "nonce"])
              )
     end
 
@@ -58,23 +69,40 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
   end
 
   describe "valid_requirement?/1" do
-    test "accepts a minimal valid request" do
-      req = %{
+    defp minimal_req do
+      %{
         "src_chain_id" => 8453,
         "dst_chain_id" => 10,
         "src_token" => "0x" <> String.duplicate("ab", 20),
         "dst_token" => "0x" <> String.duplicate("cd", 20),
         "amount_atomic" => "1000000",
-        "destination" => "0x" <> String.duplicate("ef", 20),
-        "slippage_bps" => 50
+        "signed_intent" => %{
+          "intent_id" => "xi_1",
+          "quote_id" => "xq_1",
+          "signature" => "0x" <> String.duplicate("11", 65),
+          "nonce" => 7
+        }
       }
+    end
 
-      assert Offering.valid_requirement?(req)
+    test "accepts a minimal valid request" do
+      assert Offering.valid_requirement?(minimal_req())
     end
 
     test "rejects requests missing a required field" do
       refute Offering.valid_requirement?(%{"src_chain_id" => 8453})
       refute Offering.valid_requirement?(%{})
+      # missing the signed intent
+      refute Offering.valid_requirement?(Map.delete(minimal_req(), "signed_intent"))
+    end
+
+    test "rejects a signed_intent that is missing bundle fields or is not a map" do
+      refute Offering.valid_requirement?(%{
+               minimal_req()
+               | "signed_intent" => %{"intent_id" => "x"}
+             })
+
+      refute Offering.valid_requirement?(%{minimal_req() | "signed_intent" => "not-a-map"})
     end
 
     test "rejects non-map input" do
@@ -84,10 +112,10 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
   end
 
   describe "deliverable_schema/0" do
-    test "intent_id, src_tx_hash, status are required" do
+    test "intent_id, settlement_tx_hash, status are required" do
       schema = Offering.deliverable_schema()
       required = MapSet.new(schema["required"])
-      assert MapSet.equal?(required, MapSet.new(["intent_id", "src_tx_hash", "status"]))
+      assert MapSet.equal?(required, MapSet.new(["intent_id", "settlement_tx_hash", "status"]))
     end
 
     test "status is bounded" do
