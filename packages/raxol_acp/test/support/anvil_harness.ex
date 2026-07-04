@@ -181,7 +181,11 @@ defmodule Raxol.ACP.Test.AnvilHarness do
   def assert_tx_success!(rpc, tx_hash) do
     {status, 0} = cast(["receipt", tx_hash, "status", "--rpc-url", rpc])
 
-    if String.trim(status) in ["1", "0x1"] do
+    # `cast receipt <tx> status` prints e.g. "1 (success)" / "0 (failure)"; the
+    # leading token is the raw status.
+    leading = status |> String.trim() |> String.split() |> List.first()
+
+    if leading in ["1", "0x1"] do
       :ok
     else
       ExUnit.Assertions.flunk("tx #{tx_hash} reverted (status #{status})")
