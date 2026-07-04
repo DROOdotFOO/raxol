@@ -105,7 +105,13 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket.Protocol do
   log/telemetry and keep the connection alive.
   """
   @spec decode(binary()) :: decoded()
-  def decode(@eio_open <> rest), do: {:open, decode_json!(rest)}
+  def decode(@eio_open <> rest) do
+    case parse_json(rest) do
+      {:ok, map} when is_map(map) -> {:open, map}
+      _ -> {:unknown, @eio_open <> rest}
+    end
+  end
+
   def decode(@eio_close), do: :close
   def decode(@eio_close <> _), do: :close
   def decode(@eio_ping), do: :ping
@@ -148,28 +154,46 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket.Protocol do
 
   # -- Internal: Socket.IO packet decoder --
 
-  defp decode_message(@sio_connect <> rest), do: {:connect_ok, decode_optional_json(rest)}
+  defp decode_message(@sio_connect <> rest) do
+    case parse_json(rest) do
+      {:ok, map} when is_map(map) -> {:connect_ok, map}
+      _ -> {:unknown, @eio_message <> @sio_connect <> rest}
+    end
+  end
+
   defp decode_message(@sio_disconnect <> _), do: :disconnect
   defp decode_message(@sio_event <> rest), do: decode_event(rest)
   defp decode_message(@sio_ack <> rest), do: decode_ack_frame(rest)
 
-  defp decode_message(@sio_connect_error <> rest),
-    do: {:connect_error, decode_optional_json(rest)}
+  defp decode_message(@sio_connect_error <> rest) do
+    case parse_json(rest) do
+      {:ok, term} -> {:connect_error, term}
+      :error -> {:unknown, @eio_message <> @sio_connect_error <> rest}
+    end
+  end
 
   defp decode_message(other), do: {:unknown, @eio_message <> other}
 
-  # EVENT body is `<ack_id?><json_array>`. ack_id is an optional run
-  # of digits; if present the server wants an ACK back with that id.
+  # EVENT body is `<ack_id?><json_array>`. ack_id is an optional run of digits;
+  # if present the server wants an ACK back with that id. A non-array body or
+  # invalid JSON is surfaced as `{:unknown, raw}` rather than crashing the
+  # connection -- a malformed frame from the server must not take the link down.
   defp decode_event(body) do
     {ack_id, json} = split_leading_digits(body)
-    [name | args] = decode_json!(json)
-    {:event, name, args, ack_id}
+
+    case parse_json(json) do
+      {:ok, [name | args]} -> {:event, name, args, ack_id}
+      _ -> {:unknown, @eio_message <> @sio_event <> body}
+    end
   end
 
   defp decode_ack_frame(body) do
     {ack_id, json} = split_leading_digits(body)
-    ack_id || raise ArgumentError, "Raxol.ACP.Seller.Backend.WebSocket.Protocol: ACK without id"
-    {:ack, ack_id, decode_json!(json)}
+
+    case {ack_id, parse_json(json)} do
+      {id, {:ok, payload}} when is_integer(id) and is_list(payload) -> {:ack, id, payload}
+      _ -> {:unknown, @eio_message <> @sio_ack <> body}
+    end
   end
 
   defp split_leading_digits(body) do
@@ -179,9 +203,15 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket.Protocol do
     end
   end
 
-  defp decode_json!(""), do: %{}
-  defp decode_json!(json), do: Jason.decode!(json)
+  # Tolerant JSON parse. An empty body is the empty object (Socket.IO sends
+  # bodyless CONNECT/ACK frames); anything unparseable is `:error` so the caller
+  # can surface `{:unknown, raw}` instead of raising.
+  defp parse_json(""), do: {:ok, %{}}
 
-  defp decode_optional_json(""), do: %{}
-  defp decode_optional_json(json), do: Jason.decode!(json)
+  defp parse_json(json) do
+    case Jason.decode(json) do
+      {:ok, term} -> {:ok, term}
+      {:error, _} -> :error
+    end
+  end
 end

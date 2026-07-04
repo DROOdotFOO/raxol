@@ -38,12 +38,10 @@ defmodule Raxol.ACP.Supervisor do
 
   @impl true
   def init(_opts) do
-    initial_nonce = Application.get_env(:raxol_acp, :initial_nonce, 0)
-
     base = [
       Raxol.ACP.Job.Registry,
       Raxol.ACP.JobSession.Registry,
-      {Raxol.ACP.Wallet.NonceServer, [initial_nonce: initial_nonce]},
+      nonce_server_child(),
       Raxol.ACP.Offering.Registry,
       Raxol.ACP.Job.Store,
       Raxol.ACP.Job.Supervisor,
@@ -71,6 +69,18 @@ defmodule Raxol.ACP.Supervisor do
       max_restarts: 100,
       max_seconds: 5
     )
+  end
+
+  # Start the umbrella NonceServer seeded only when an operator has explicitly
+  # configured `:initial_nonce`. Otherwise start it unseeded so the first
+  # transaction reconciles the nonce from the chain
+  # (`eth_getTransactionCount(addr, "pending")`) rather than assuming 0 and
+  # colliding with the wallet's on-chain history.
+  defp nonce_server_child do
+    case Application.fetch_env(:raxol_acp, :initial_nonce) do
+      {:ok, n} -> {Raxol.ACP.Wallet.NonceServer, [initial_nonce: n]}
+      :error -> Raxol.ACP.Wallet.NonceServer
+    end
   end
 
   # Settlement accounting + rebalance advisor (recommend-only). Off unless

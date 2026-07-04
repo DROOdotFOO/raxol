@@ -99,13 +99,25 @@ defmodule Raxol.ACP.Onchain.Transaction do
   payload.
 
   `signature` must be a 65-byte binary in `<<r::32, s::32, v::8>>` form.
-  `v` is the y-parity (0 or 1) returned by ExSecp256k1.sign/2.
+  `v` may be the y-parity (0/1) or Ethereum's legacy 27/28 form; it is
+  normalized to the 0/1 y-parity an EIP-1559 payload requires.
   """
   @spec serialize(t(), signature()) :: binary()
   def serialize(%__MODULE__{} = tx, <<r::binary-size(32), s::binary-size(32), v::8>>) do
-    fields = unsigned_fields(tx) ++ [v, strip_leading_zero_bytes(r), strip_leading_zero_bytes(s)]
+    fields =
+      unsigned_fields(tx) ++
+        [y_parity(v), strip_leading_zero_bytes(r), strip_leading_zero_bytes(s)]
+
     <<@type_byte>> <> Rlp.encode(fields)
   end
+
+  # EIP-1559 typed transactions carry the signature y-parity (0 or 1). Wallets
+  # pack signatures in Ethereum's legacy 27/28 form (see
+  # `Raxol.Payments.EIP712.pack_signature/1`), so normalize before encoding --
+  # a 27/28 value left in the y-parity slot makes strict decoders (alloy, and
+  # thus anvil / real nodes) reject the transaction as undecodable.
+  defp y_parity(v) when v in [0, 1], do: v
+  defp y_parity(v) when v in [27, 28], do: v - 27
 
   @doc """
   Convert a 0x-prefixed (or unprefixed) hex address to a 20-byte

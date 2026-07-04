@@ -77,6 +77,65 @@ defmodule Raxol.ACP.Wallet.NonceServerTest do
     end
   end
 
+  describe "atomic seeding" do
+    test "get_next_if_seeded reports unseeded until seeded, then hands out nonces" do
+      server = start()
+      assert NonceServer.get_next_if_seeded(server) == :unseeded
+      assert NonceServer.seed_and_next(server, 7) == 7
+      assert NonceServer.get_next_if_seeded(server) == {:ok, 8}
+      assert NonceServer.get_next_if_seeded(server) == {:ok, 9}
+    end
+
+    test "an explicit initial_nonce marks the server seeded" do
+      server = start(initial_nonce: 3)
+      assert NonceServer.get_next_if_seeded(server) == {:ok, 3}
+    end
+
+    test "reset marks an unseeded server seeded" do
+      server = start()
+      assert NonceServer.get_next_if_seeded(server) == :unseeded
+      :ok = NonceServer.reset(server, 20)
+      assert NonceServer.get_next_if_seeded(server) == {:ok, 20}
+    end
+
+    test "resync marks a seeded server unseeded so the next use re-fetches" do
+      server = start(initial_nonce: 9)
+      assert NonceServer.get_next_if_seeded(server) == {:ok, 9}
+      :ok = NonceServer.resync(server)
+      assert NonceServer.get_next_if_seeded(server) == :unseeded
+      # Re-seed from a (new) chain value and carry on.
+      assert NonceServer.seed_and_next(server, 30) == 30
+      assert NonceServer.get_next_if_seeded(server) == {:ok, 31}
+    end
+
+    test "seed_and_next hands out unique nonces even when callers race on seeding" do
+      server = start()
+      chain_nonce = 5
+
+      results =
+        1..100
+        |> Task.async_stream(
+          fn _ ->
+            case NonceServer.get_next_if_seeded(server) do
+              {:ok, n} -> n
+              :unseeded -> NonceServer.seed_and_next(server, chain_nonce)
+            end
+          end,
+          max_concurrency: 50,
+          ordered: false
+        )
+        |> Enum.map(fn {:ok, n} -> n end)
+        |> Enum.sort()
+
+      # No two callers get the same nonce; the base is the chain nonce, so the
+      # 100 assignments are exactly 5..104. A racy seed would repeat a value and
+      # break this equality.
+      assert length(Enum.uniq(results)) == 100
+      assert results == Enum.to_list(5..104)
+      assert NonceServer.peek(server) == 105
+    end
+  end
+
   describe "isolation between instances" do
     test "two instances increment independently" do
       a = start(initial_nonce: 0)

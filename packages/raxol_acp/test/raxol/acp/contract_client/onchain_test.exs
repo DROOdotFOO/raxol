@@ -35,7 +35,9 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
     Application.put_env(:raxol_acp, :chain, :mainnet)
     Application.put_env(:raxol_acp, :onchain_wallet, Wallet)
 
-    NonceServer.reset(0)
+    # Start each test with an unseeded NonceServer so the first broadcast
+    # reconciles the nonce from chain (eth_getTransactionCount "pending").
+    NonceServer.resync()
 
     on_exit(fn ->
       System.delete_env(@env_var)
@@ -174,6 +176,19 @@ defmodule Raxol.ACP.ContractClient.OnchainTest do
         _ ->
           default_rpc(req)
       end
+    end
+  end
+
+  describe "decode_uint256/1 (EntryPoint nonce decoding)" do
+    test "decodes valid hex, including the empty 0x word" do
+      assert Onchain.decode_uint256("0x1a") == {:ok, 26}
+      assert Onchain.decode_uint256("0x") == {:ok, 0}
+    end
+
+    test "fails closed on malformed or non-hex input instead of raising" do
+      assert Onchain.decode_uint256("0xzz") == :error
+      assert Onchain.decode_uint256("garbage") == :error
+      assert Onchain.decode_uint256("1a") == :error
     end
   end
 

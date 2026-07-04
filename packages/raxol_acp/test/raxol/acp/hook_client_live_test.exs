@@ -60,7 +60,7 @@ defmodule Raxol.ACP.HookClientLiveTest do
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
-    test "create_job encodes createJob(address,address,uint256,address,bytes)", %{adapter: a} do
+    test "create_job encodes createJob(address,address,uint256,string,address)", %{adapter: a} do
       provider = "0x" <> String.duplicate("ab", 20)
       evaluator = "0x" <> String.duplicate("cd", 20)
 
@@ -70,7 +70,7 @@ defmodule Raxol.ACP.HookClientLiveTest do
           evaluator: evaluator,
           expired_at: 1_900_000_000,
           hook_address: @fund_transfer_hook,
-          hook_data: <<>>
+          description: "xochi transfer"
         })
 
       # Tx broadcast OK (even if execution reverts) -> proves our calldata

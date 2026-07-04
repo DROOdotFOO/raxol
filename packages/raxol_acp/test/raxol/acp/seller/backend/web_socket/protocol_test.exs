@@ -75,6 +75,19 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket.ProtocolTest do
     test "unknown socket.io subtype inside MESSAGE surfaces raw" do
       assert {:unknown, "49extra"} = Protocol.decode("49extra")
     end
+
+    test "malformed frames surface as :unknown instead of crashing" do
+      # Invalid JSON in an EVENT body.
+      assert {:unknown, "42[not json"} = Protocol.decode("42[not json")
+      # A non-array EVENT payload (Socket.IO events are always arrays).
+      assert {:unknown, ~s(42{"id":1})} = Protocol.decode(~s(42{"id":1}))
+      # An ACK frame with no id.
+      assert {:unknown, "43[true]"} = Protocol.decode("43[true]")
+      # Invalid JSON in an OPEN handshake.
+      assert {:unknown, "0{bad"} = Protocol.decode("0{bad")
+      # Invalid JSON in a CONNECT body.
+      assert {:unknown, "40{bad"} = Protocol.decode("40{bad")
+    end
   end
 
   describe "encode_pong/0" do
