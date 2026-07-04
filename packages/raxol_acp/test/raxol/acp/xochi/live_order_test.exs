@@ -4,19 +4,25 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
   seller settles it for real through Xochi + the Riddler solver.
 
   This is the end-to-end proof that the settlement services are orderable through
-  the ACP: a buyer creates a job, the seller's `Raxol.ACP.Xochi.TransferOffering`
-  accepts it and, on delivery, runs the real `Raxol.ACP.Xochi.Settler` ->
-  `Raxol.Payments.Protocols.Xochi.transfer/4`. The deliverable carries the intent
-  id and the on-chain settlement tx hashes.
+  the ACP under the PURE-STOREFRONT model: the buyer quotes and signs a Xochi
+  intent itself (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`), embeds the
+  signed bundle in the job requirement's `signed_intent`, and the seller's
+  `Raxol.ACP.Xochi.TransferOffering` accepts the job and, on delivery, relays the
+  bundle via `Raxol.ACP.Xochi.Settler` ->
+  `Raxol.Payments.Protocols.Xochi.execute_signed/2` (no re-signing) and polls it.
+  The deliverable carries the intent id and the on-chain settlement tx hashes.
+
+  Here the test plays BOTH roles: the funded `LiveWallet` is the buyer (it signs
+  the intent), and for a self-contained gate is also the job's provider address.
 
   The job orchestration uses the in-memory `ContractClient` (no live ACP escrow
   contracts); the SETTLEMENT is real and moves funds. The fuller on-chain escrow
   path (`ContractClient.Onchain` + `HookClient` + `SolverAgent`) is the existing
   `:live_chain` stack and is a separate gate.
 
-  Auth is the Member service token (`XOCHI_ORDER_LIVE_TOKEN`): the seller is a
-  Xochi Member, and the `Settler` uses one config for quote/execute/poll. (The
-  mandate path is exercised by the raxol_payments Xochi gate.)
+  Auth is the Member service token (`XOCHI_ORDER_LIVE_TOKEN`): one `xochi_config`
+  serves the buyer's quote+sign and the Settler's relay+poll. (The mandate path is
+  exercised by the raxol_payments Xochi gate.)
 
   USDC pulls via ERC-3009 and settles directly. USDT/WETH -- and USDG, the origin
   asset for any Robinhood-origin corridor -- pull via Permit2 and need a standing
@@ -32,13 +38,13 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
   `:live_xochi_order_preflight` (read-only); excluded by default and compiled
   only when the required env is present.
 
-  Funds settle to the seller wallet on the destination chain (the current
-  `Settler` delivers to the `QuoteRequest` wallet), so default the recipient to
-  the funded key's own address.
+  Funds settle to the buyer's own wallet on the destination chain -- the Xochi
+  `QuoteRequest` has no separate recipient (wallet = funder = recipient), so the
+  buyer's signed intent delivers to the funded key's own address.
 
       XOCHI_ORDER_LIVE_URL=https://api.xochi.fi \\
       XOCHI_ORDER_LIVE_TOKEN="$(op read 'op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential')" \\
-      XOCHI_ORDER_LIVE_KEY=0x<funded seller key> \\
+      XOCHI_ORDER_LIVE_KEY=0x<funded buyer key> \\
       XOCHI_ORDER_RPC_8453=https://mainnet.base.org \\
       XOCHI_ORDER_TOKENS=USDC,USDT,WETH \\
         mix test --only live_xochi_order test/raxol/acp/xochi/live_order_test.exs
@@ -47,8 +53,8 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
 
   Overrides: XOCHI_ORDER_CORRIDORS ("from>to,from>to" or "mesh"),
   XOCHI_ORDER_TOKENS, XOCHI_ORDER_AMOUNT, XOCHI_ORDER_WETH_AMOUNT,
-  XOCHI_ORDER_DESTINATION, XOCHI_ORDER_ALLOW_ETH_ORIGIN, XOCHI_ORDER_SOLVER,
-  XOCHI_ORDER_SOLVER_PIN, XOCHI_ORDER_RPC_<chain>.
+  XOCHI_ORDER_ALLOW_ETH_ORIGIN, XOCHI_ORDER_SOLVER, XOCHI_ORDER_SOLVER_PIN,
+  XOCHI_ORDER_RPC_<chain>.
   """
 
   use ExUnit.Case, async: false
@@ -87,10 +93,9 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
       wallet_address = LiveWallet.address()
       xochi_config = %{base_url: url, auth_token: token}
 
+      # The relay Settler needs only :xochi_config (it never signs).
       Application.put_env(:raxol_acp, :xochi_transfer_settler,
-        wallet_address: wallet_address,
         xochi_config: xochi_config,
-        xochi_wallet: LiveWallet,
         poll_timeout_ms: 180_000
       )
 
@@ -100,7 +105,6 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
       cfg = %{
         xochi_config: xochi_config,
         wallet_address: wallet_address,
-        destination: System.get_env("XOCHI_ORDER_DESTINATION", wallet_address),
         stable_amount: System.get_env("XOCHI_ORDER_AMOUNT", "1.10")
       }
 
@@ -175,7 +179,13 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     # -- Order one cell through the ACP job lifecycle --
 
     defp order_cell(cfg, from, to, token, label) do
-      requirement = requirement(cfg, from, to, token)
+      # The BUYER quotes + signs the Xochi intent itself; the signed bundle rides
+      # in the requirement. raxol (the offering) relays it -- it never re-signs.
+      {:ok, request} = quote_request(cfg, from, to, token)
+
+      {:ok, bundle} = XochiProtocol.quote_and_sign(cfg.xochi_config, request, LiveWallet)
+
+      requirement = requirement(cfg, from, to, token, bundle)
 
       {:ok, job_id} =
         ContractClient.create_job(cfg.wallet_address, cfg.wallet_address, future_ts())
@@ -204,13 +214,13 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
       assert is_binary(deliverable["intent_id"])
       assert deliverable["status"] in ["completed", "settled"]
 
-      assert deliverable["src_tx_hash"] =~ ~r/^0x[0-9a-fA-F]{64}$/,
+      assert deliverable["settlement_tx_hash"] =~ ~r/^0x[0-9a-fA-F]{64}$/,
              "#{label}: deliverable missing a settlement tx hash: #{inspect(deliverable)}"
 
       report_settlement(label, to, deliverable, started)
     end
 
-    defp requirement(cfg, from, to, token) do
+    defp requirement(cfg, from, to, token, bundle) do
       {:ok, src_token} = Assets.address(from, leg_symbol(from, token))
       {:ok, dst_token} = Assets.address(to, leg_symbol(to, token))
 
@@ -220,10 +230,14 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
         "src_token" => src_token,
         "dst_token" => dst_token,
         "amount_atomic" => amount_atomic(from, token, cfg.stable_amount),
-        "destination" => cfg.destination,
-        "slippage_bps" => 50,
-        "settlement_preference" => "public"
+        "signed_intent" => bundle_to_json(bundle)
       }
+    end
+
+    # The bundle from quote_and_sign/3 is atom-keyed; the ACP requirement is JSON
+    # (string keys). Stringify so valid_requirement?/execute_signed read it.
+    defp bundle_to_json(bundle) do
+      Map.new(bundle, fn {k, v} -> {to_string(k), v} end)
     end
 
     defp deliverable_from_memos(job_id, label) do
@@ -237,12 +251,24 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
 
     defp preflight_quote(cfg, from, to, token) do
       with {:ok, request} <- quote_request(cfg, from, to, token),
-           {:ok, quote} <- XochiProtocol.get_quote(cfg.xochi_config, request),
-           {:solve, true} <- {:solve, quote.can_solve},
+           {:ok, quote} <- solver_quote(cfg, request),
            :ok <- XochiProtocol.validate_pull(quote, request, LiveWallet) do
         {:ok, quote}
-      else
-        {:solve, _} -> {:error, :cannot_solve}
+      end
+    end
+
+    # A fillable quote, or a soft `:cannot_solve` when the solver reports it
+    # cannot fill this cell right now -- whether it answers 200 with
+    # can_solve:false OR a transient error whose body still says can_solve:false
+    # (e.g. 503 "Solver temporarily unavailable"). Only a fillable quote proceeds
+    # to the pull check (the hard, anti-drain solver-pin assertion). A genuine
+    # error (auth, connection, an unexpected shape) stays hard, so a real
+    # misconfiguration is not masked as a per-cell skip.
+    defp solver_quote(cfg, request) do
+      case XochiProtocol.get_quote(cfg.xochi_config, request) do
+        {:ok, %{can_solve: true} = quote} -> {:ok, quote}
+        {:ok, %{can_solve: false}} -> {:error, :cannot_solve}
+        {:error, {:http, _status, %{"can_solve" => false}}} -> {:error, :cannot_solve}
         other -> other
       end
     end
@@ -417,8 +443,8 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
       [live_xochi_order:#{label}] settled in #{elapsed}ms
         intent_id     #{deliverable["intent_id"]}
         status        #{deliverable["status"]}
-        src tx        #{tx_line(deliverable["src_tx_hash"], to_chain)}
-        dst tx        #{tx_line(deliverable["dst_tx_hash"], to_chain)}\
+        settle tx     #{tx_line(deliverable["settlement_tx_hash"], to_chain)}
+        recv tx       #{tx_line(deliverable["receiving_tx_hash"], to_chain)}\
       """)
     end
 

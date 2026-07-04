@@ -3,11 +3,13 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
   ACP offering that sells Xochi cross-chain stablecoin transfers.
 
   A buyer's job requirement names a source chain, destination chain, token,
-  amount, and destination address. `handle_request/2` accepts the job only when
-  the corridor is settleable (a solver-fillable token on a supported chain);
-  `handle_deliver/2` runs the transfer through `Raxol.ACP.Xochi.Settler`
-  (`Raxol.Payments.Protocols.Xochi`: quote, sign, execute, poll) and returns the
-  intent id and settlement tx hashes for on-chain verification.
+  amount, and its pre-signed Xochi intent bundle. `handle_request/2` accepts the
+  job only when the corridor is settleable (a solver-fillable token on a
+  supported chain); `handle_deliver/2` relays the buyer's signed intent through
+  `Raxol.ACP.Xochi.Settler`
+  (`Raxol.Payments.Protocols.Xochi.execute_signed/2`, then poll) -- raxol never
+  signs the transfer -- and returns the intent id and settlement tx hashes for
+  on-chain verification.
 
   The offering name is `"xochi_cross_chain_transfer"`, matching the marketplace
   metadata from `mix acp.register_offering`. When `:seller_enabled` is set,
@@ -19,9 +21,7 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
   `handle_deliver/2` builds a `Raxol.ACP.Xochi.Settler` from:
 
       config :raxol_acp, :xochi_transfer_settler,
-        wallet_address: "0xsolver...",
         xochi_config: %{base_url: "https://api.xochi.fi", auth_token: "..."},
-        xochi_wallet: MyWalletModule,
         poll_timeout_ms: 120_000
 
   A `:settle_fn` (a one-arg function returning `{:ok, deliverable} | {:error,
@@ -45,7 +45,7 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
   alias Raxol.ACP.Xochi.Settler
   alias Raxol.Payments.Assets
 
-  @settler_required [:wallet_address, :xochi_config, :xochi_wallet]
+  @settler_required [:xochi_config]
 
   @impl true
   def requirements_schema, do: Schema.requirement_schema()

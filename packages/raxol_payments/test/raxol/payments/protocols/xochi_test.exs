@@ -129,6 +129,266 @@ defmodule Raxol.Payments.Protocols.XochiTest do
     end
   end
 
+  describe "execute_signed/2 (storefront relay)" do
+    # raxol as pure storefront: it relays the BUYER's pre-signed intent without
+    # re-signing. There is no wallet argument -- raxol never touches the transfer
+    # funds; Riddler verifies the signature against its own persisted quote.
+    test "relays the buyer's signed bundle verbatim, without a wallet" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:ok, _} = Xochi.execute_signed(config, signed_bundle())
+      assert_receive {:req, "POST", "/api/intent/execute", _h, raw_body}
+      body = Jason.decode!(raw_body)
+
+      assert body["intent_id"] == "xi_" <> String.duplicate("a", 32)
+      assert body["quote_id"] == "xq_" <> String.duplicate("b", 32)
+      assert body["signature"] == "0x" <> String.duplicate("11", 65)
+      assert body["pull_signature"] == "0x" <> String.duplicate("22", 65)
+      assert body["nonce"] == 7
+    end
+
+    test "omits pull_signature for a non-pull bundle" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      bundle = Map.delete(signed_bundle(), :pull_signature)
+
+      assert {:ok, _} = Xochi.execute_signed(config, bundle)
+      assert_receive {:req, "POST", "/api/intent/execute", _h, raw_body}
+      refute Map.has_key?(Jason.decode!(raw_body), "pull_signature")
+    end
+
+    test "accepts a string-keyed bundle (as decoded from an ACP requirement)" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      bundle = %{
+        "intent_id" => "xi_str",
+        "quote_id" => "xq_str",
+        "signature" => "0x" <> String.duplicate("33", 65),
+        "nonce" => 9
+      }
+
+      assert {:ok, _} = Xochi.execute_signed(config, bundle)
+      assert_receive {:req, "POST", "/api/intent/execute", _h, raw_body}
+      body = Jason.decode!(raw_body)
+      assert body["intent_id"] == "xi_str"
+      assert body["nonce"] == 9
+    end
+
+    test "passes through an aztec_proof for a shielded claim" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      bundle = signed_bundle(%{aztec_proof: "0x" <> String.duplicate("ab", 64)})
+
+      assert {:ok, _} = Xochi.execute_signed(config, bundle)
+      assert_receive {:req, "POST", "/api/intent/execute", _h, raw_body}
+      assert Jason.decode!(raw_body)["aztec_proof"] == "0x" <> String.duplicate("ab", 64)
+    end
+
+    test "fails closed on a missing or malformed field, before any network call" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      for field <- [:intent_id, :quote_id, :signature] do
+        bundle = Map.delete(signed_bundle(), field)
+        assert {:error, {:invalid_signed_intent, ^field}} = Xochi.execute_signed(config, bundle)
+      end
+
+      # nonce must be a non-negative integer (the worker's replay-dedup key); a
+      # numeric string or a negative value is rejected, not coerced.
+      assert {:error, {:invalid_signed_intent, :nonce}} =
+               Xochi.execute_signed(config, signed_bundle(%{nonce: -1}))
+
+      assert {:error, {:invalid_signed_intent, :nonce}} =
+               Xochi.execute_signed(config, signed_bundle(%{nonce: "7"}))
+
+      # an empty signature is not a signature
+      assert {:error, {:invalid_signed_intent, :signature}} =
+               Xochi.execute_signed(config, signed_bundle(%{signature: ""}))
+
+      refute_received {:req, "POST", "/api/intent/execute", _h, _b}
+    end
+  end
+
+  describe "sign_intent/3 (buyer-side: quote -> sign -> bundle, no execute)" do
+    @signer_addr "0x1111111111111111111111111111111111111111"
+
+    test "returns a relayable bundle and does not POST execute" do
+      quote_resp = quote_with_nonce(42)
+
+      # No config, no network -- sign_intent never talks to the worker.
+      assert {:ok, bundle} = Xochi.sign_intent(quote_resp, SignerWallet)
+      assert bundle.intent_id == quote_resp.intent_id
+      assert bundle.quote_id == quote_resp.quote_id
+      assert bundle.nonce == 42
+      assert is_binary(bundle.signature)
+      assert String.starts_with?(bundle.signature, "0x")
+      # No pull authorization in this quote -> no pull_signature key.
+      refute Map.has_key?(bundle, :pull_signature)
+    end
+
+    test "the signed bundle relays verbatim through execute_signed" do
+      quote_resp = quote_with_nonce(42)
+      {:ok, bundle} = Xochi.sign_intent(quote_resp, SignerWallet)
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:ok, _} = Xochi.execute_signed(config, bundle)
+      assert_receive {:req, "POST", "/api/intent/execute", _h, raw}
+      body = Jason.decode!(raw)
+      assert body["signature"] == bundle.signature
+      assert body["nonce"] == 42
+      assert body["intent_id"] == quote_resp.intent_id
+      assert body["quote_id"] == quote_resp.quote_id
+    end
+
+    test "sign_intent + execute_signed produces the same POST as execute" do
+      # The extracted sign half composes back into the full execute: relaying the
+      # signed bundle yields byte-for-byte the request execute/3 would send.
+      quote_resp = quote_with_nonce(42)
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:ok, _} = Xochi.execute(config, quote_resp, SignerWallet)
+      assert_receive {:req, "POST", "/api/intent/execute", _h, direct_body}
+
+      {:ok, bundle} = Xochi.sign_intent(quote_resp, SignerWallet)
+      assert {:ok, _} = Xochi.execute_signed(config, bundle)
+      assert_receive {:req, "POST", "/api/intent/execute", _h, relayed_body}
+
+      assert Jason.decode!(direct_body) == Jason.decode!(relayed_body)
+    end
+
+    test "includes pull_signature when the quote carries an origin pull" do
+      pull = canonical_erc3009_pull(%{message: %{"from" => @signer_addr}})
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_pull",
+        quote_id: "xq_pull",
+        can_solve: true,
+        payment_method: "erc3009",
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_pull"}
+        },
+        pull_authorization: pull
+      }
+
+      request = %QuoteRequest{
+        wallet: @signer_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      assert {:ok, bundle} = Xochi.sign_intent(quote_resp, SignerWallet, request)
+      assert is_binary(bundle.pull_signature)
+      assert String.starts_with?(bundle.pull_signature, "0x")
+    end
+
+    test "rejects a quote that cannot be solved, without signing" do
+      quote_resp = %QuoteResponse{
+        intent_id: "i",
+        quote_id: "q",
+        can_solve: false,
+        error: "no liquidity"
+      }
+
+      assert {:error, {:cannot_solve, "no liquidity"}} =
+               Xochi.sign_intent(quote_resp, SignerWallet)
+    end
+
+    test "refuses to sign a served pull authorization with no request context" do
+      pull = canonical_erc3009_pull(%{message: %{"from" => @signer_addr}})
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_noctx",
+        quote_id: "xq_noctx",
+        can_solve: true,
+        payment_method: "erc3009",
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_noctx"}
+        },
+        pull_authorization: pull
+      }
+
+      assert {:error, {:authorization_mismatch, :no_request_context}} =
+               Xochi.sign_intent(quote_resp, SignerWallet)
+    end
+  end
+
+  describe "quote_and_sign/3 (buyer-side one-shot)" do
+    test "fetches a quote then signs it into a relayable bundle" do
+      quote_json = %{
+        "intentId" => "xi_qs",
+        "quoteId" => "xq_qs",
+        "canSolve" => true,
+        "eip712Data" => %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "nonce", "type" => "uint256"}]},
+          "message" => %{"nonce" => 5}
+        }
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: json_plug(quote_json)]
+      }
+
+      request = %QuoteRequest{
+        wallet: "0x1111111111111111111111111111111111111111",
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      assert {:ok, bundle} = Xochi.quote_and_sign(config, request, SignerWallet)
+      assert bundle.intent_id == "xi_qs"
+      assert bundle.quote_id == "xq_qs"
+      assert bundle.nonce == 5
+      assert is_binary(bundle.signature)
+    end
+  end
+
   describe "execute/3 domain parity" do
     @anvil_key "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
     @anvil_addr "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
@@ -919,6 +1179,22 @@ defmodule Raxol.Payments.Protocols.XochiTest do
     }
   end
 
+  # A buyer-signed intent bundle, as handed to the storefront relay. raxol
+  # relays it verbatim; there is no wallet in execute_signed/2. Signature values
+  # are opaque (Riddler verifies them against its persisted quote).
+  defp signed_bundle(overrides \\ %{}) do
+    Map.merge(
+      %{
+        intent_id: "xi_" <> String.duplicate("a", 32),
+        quote_id: "xq_" <> String.duplicate("b", 32),
+        signature: "0x" <> String.duplicate("11", 65),
+        nonce: 7,
+        pull_signature: "0x" <> String.duplicate("22", 65)
+      },
+      overrides
+    )
+  end
+
   defp echo_plug(test_pid) do
     fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -927,6 +1203,15 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, Jason.encode!(%{"status" => "submitted"}))
+    end
+  end
+
+  # Serves a fixed JSON body on any path (used to stub a quote response).
+  defp json_plug(json) do
+    fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(json))
     end
   end
 

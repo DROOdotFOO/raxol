@@ -1,16 +1,19 @@
 defmodule Raxol.ACP.Xochi.Settler do
   @moduledoc """
-  Adapter that converts `Raxol.ACP.Xochi.SolverAgent`'s `:settle_fn`
-  callback into a real `Raxol.Payments.Protocols.Xochi.transfer/4`
-  call.
+  Storefront relay: turns `Raxol.ACP.Xochi.SolverAgent`'s `:settle_fn`
+  callback into a `Raxol.Payments.Protocols.Xochi.execute_signed/2` call.
+
+  raxol is a pure storefront. The buyer quoted and signed the Xochi intent
+  against Xochi itself; the settler relays that pre-signed bundle WITHOUT
+  re-signing and polls it to settlement. raxol never signs the transfer and
+  never touches the transferred funds -- Riddler verifies the buyer's signature
+  against its own persisted quote, so the amount and route cannot be forged.
 
   ## Usage
 
       settle_fn =
         Raxol.ACP.Xochi.Settler.build(
-          wallet_address: "0xfeed...",
-          xochi_config: %{base_url: "https://riddler.axol.io", auth_token: "..."},
-          xochi_wallet: MyWallet,
+          xochi_config: %{base_url: "https://api.xochi.fi", auth_token: "..."},
           poll_timeout_ms: 120_000
         )
 
@@ -28,17 +31,18 @@ defmodule Raxol.ACP.Xochi.Settler do
         requirement: %{
           "src_chain_id" => 8453,
           "dst_chain_id" => 10,
-          "src_token"    => "0x...",
-          "dst_token"    => "0x...",
           "amount_atomic" => "1000000",
-          "destination"  => "0x...",
-          "slippage_bps" => 50,
-          "settlement_preference" => "public"
+          "signed_intent" => %{
+            "intent_id"      => "xi_...",
+            "quote_id"       => "xq_...",
+            "signature"      => "0x...",
+            "nonce"          => 7,
+            "pull_signature" => "0x..."    # optional
+          }
         },
-        transfer_amount_atomic: 1_000_000,
-        destination: "0x...",
-        xochi_config: %{...},   # passed through; same as settler config
-        xochi_wallet: MyWallet  # passed through
+        # threaded by SolverAgent (either is accepted):
+        signed_intent: %{...},             # the bundle, extracted from the requirement
+        transfer_amount_atomic: 1_000_000  # for the deliverable amount
       }
 
   ## Output shape
@@ -46,34 +50,27 @@ defmodule Raxol.ACP.Xochi.Settler do
   On settle success:
 
       {:ok, %{
-        intent_id:        "abc",
-        quote_id:         "xyz",
-        src_tx_hash:      "0x...",
-        dst_tx_hash:      "0x...",
-        status:           "settled",
-        fee_atomic:       "1000",
-        dst_amount_atomic: "999000"
+        intent_id:          "abc",
+        settlement_tx_hash: "0x...",
+        receiving_tx_hash:  "0x...",   # nil for an instant single-tx fill
+        amount_atomic:      "1000000",
+        status:             "completed"
       }}
 
-  On error: `{:error, reason}`. SolverAgent marks the session
-  `:failed` and does NOT submit a deliverable on-chain.
+  On error: `{:error, reason}`. SolverAgent marks the session `:failed` and does
+  NOT submit a deliverable on-chain.
   """
 
   alias Raxol.Payments.Protocols.Xochi
-  alias Raxol.Payments.Xochi.Schemas.{IntentStatus, QuoteRequest}
+  alias Raxol.Payments.Xochi.Schemas.IntentStatus
 
   @doc """
   Build a settle_fn closure.
 
   ## Required
 
-  - `:wallet_address` -- the solver's EOA on src chain. Used as the
-    `wallet` field of the `QuoteRequest` (Xochi pulls funds from this
-    address after the FundTransferHook payout lands).
-  - `:xochi_config` -- the Riddler/Xochi server config (base_url +
-    auth_token).
-  - `:xochi_wallet` -- a `Raxol.Payments.Wallet` module that signs the
-    XochiIntent.
+  - `:xochi_config` -- the Xochi worker config (base_url + auth). The buyer's
+    intent is relayed and polled through this endpoint.
 
   ## Optional
 
@@ -83,14 +80,12 @@ defmodule Raxol.ACP.Xochi.Settler do
   """
   @spec build(keyword()) :: (map() -> {:ok, map()} | {:error, term()})
   def build(opts) do
-    wallet_address = Keyword.fetch!(opts, :wallet_address)
     xochi_config = Keyword.fetch!(opts, :xochi_config)
-    xochi_wallet = Keyword.fetch!(opts, :xochi_wallet)
     poll_timeout = Keyword.get(opts, :poll_timeout_ms, 120_000)
     poll_interval = Keyword.get(opts, :poll_interval_ms, 2_000)
 
     fn settle_args ->
-      do_settle(settle_args, wallet_address, xochi_config, xochi_wallet,
+      do_settle(settle_args, xochi_config,
         timeout_ms: poll_timeout,
         interval_ms: poll_interval
       )
@@ -99,11 +94,33 @@ defmodule Raxol.ACP.Xochi.Settler do
 
   # -- Internal --
 
-  defp do_settle(args, wallet_address, xochi_config, xochi_wallet, poll_opts) do
-    with {:ok, request} <- build_quote_request(args, wallet_address),
+  defp do_settle(args, xochi_config, poll_opts) do
+    with {:ok, bundle} <- extract_signed_intent(args),
+         {:ok, intent_id} <- bundle_intent_id(bundle),
+         {:ok, _exec} <- Xochi.execute_signed(xochi_config, bundle),
          {:ok, %IntentStatus{} = status} <-
-           Xochi.transfer(xochi_config, request, xochi_wallet, poll_opts) do
-      settle_result(status)
+           Xochi.poll_status(xochi_config, intent_id, poll_opts) do
+      settle_result(status, args)
+    end
+  end
+
+  # The buyer's pre-signed intent bundle, threaded directly (`:signed_intent`) or
+  # carried in the requirement JSON (`requirement["signed_intent"]`). Keys may be
+  # atoms or strings; `execute_signed/2` normalizes and deep-validates them.
+  defp extract_signed_intent(%{signed_intent: bundle}) when is_map(bundle), do: {:ok, bundle}
+
+  defp extract_signed_intent(%{requirement: %{"signed_intent" => bundle}}) when is_map(bundle),
+    do: {:ok, bundle}
+
+  defp extract_signed_intent(_), do: {:error, :missing_signed_intent}
+
+  # The status is polled by the intent id the buyer signed (present under either
+  # key). `execute_signed/2` re-validates it, so an absent/blank id also fails
+  # there; checking here lets a malformed bundle fail before the relay POST.
+  defp bundle_intent_id(bundle) do
+    case bundle[:intent_id] || bundle["intent_id"] do
+      id when is_binary(id) and id != "" -> {:ok, id}
+      _ -> {:error, {:invalid_signed_intent, :intent_id}}
     end
   end
 
@@ -111,53 +128,41 @@ defmodule Raxol.ACP.Xochi.Settler do
   # :expired intent (which poll_status returns as `{:ok, status}`) must surface
   # as an error so SolverAgent does not submit a deliverable for a settlement
   # that never landed.
-  defp settle_result(%IntentStatus{status: :completed} = status),
-    do: to_deliverable(status)
+  defp settle_result(%IntentStatus{status: :completed} = status, args),
+    do: to_deliverable(status, args)
 
-  defp settle_result(%IntentStatus{status: s, intent_id: id, error: err})
+  defp settle_result(%IntentStatus{status: s, intent_id: id, error: err}, _args)
        when s in [:failed, :expired],
        do: {:error, {:settlement_failed, s, id, err}}
 
-  defp settle_result(%IntentStatus{status: s, intent_id: id}),
+  defp settle_result(%IntentStatus{status: s, intent_id: id}, _args),
     do: {:error, {:settlement_incomplete, s, id}}
 
-  defp build_quote_request(args, wallet_address) do
-    req = args.requirement
-
-    # Delivery goes to `wallet_address` (the requester) on the destination chain.
-    # `req["destination"]` is intentionally not honored yet: sending to a
-    # different recipient is a future capability, so for now the destination is
-    # kept equal to the funder for hardening. The field stays in the requirement
-    # (the schema and FundTransfer hook carry it) but does not retarget the
-    # settlement.
-    request = %QuoteRequest{
-      wallet: wallet_address,
-      from_chain_id: req["src_chain_id"],
-      to_chain_id: req["dst_chain_id"],
-      from_token: req["src_token"],
-      to_token: req["dst_token"],
-      from_amount: req["amount_atomic"],
-      slippage_bps: req["slippage_bps"] || 50,
-      settlement_preference: req["settlement_preference"] || "public"
-    }
-
-    case QuoteRequest.validate(request) do
-      :ok -> {:ok, request}
-      err -> err
-    end
-  end
-
-  # IntentStatus carries the origin fill as `tx_hash` and the destination arrival
-  # as `receiving_tx_hash`; the deliverable schema names them src_tx_hash /
-  # dst_tx_hash. Map them so the buyer/evaluator can verify the settlement
-  # on-chain (src_tx_hash is a required deliverable field).
-  defp to_deliverable(%IntentStatus{} = status) do
+  # `IntentStatus.tx_hash` is the authoritative settlement tx: for an instant fill
+  # it is the destination delivery; for a two-leg bridge it is the origin leg,
+  # with the destination arrival in `receiving_tx_hash` (nil for instant). Surface
+  # both under names that match that meaning, rather than a src/dst pair that
+  # mislabels the single instant-fill tx as the source leg. `amount_atomic` is the
+  # buyer's declared transfer amount, committed so the deliverable hash pins what
+  # was moved rather than only the tx hashes.
+  defp to_deliverable(%IntentStatus{} = status, args) do
     {:ok,
      %{
        intent_id: status.intent_id,
-       src_tx_hash: status.tx_hash,
-       dst_tx_hash: status.receiving_tx_hash,
+       settlement_tx_hash: status.tx_hash,
+       receiving_tx_hash: status.receiving_tx_hash,
+       amount_atomic: transfer_amount(args),
        status: to_string(status.status)
      }}
   end
+
+  # The deliverable's amount: the SolverAgent-threaded transfer amount, else the
+  # requirement's declared amount. It is display/audit metadata only -- the
+  # on-chain amount is fixed by the buyer's signed intent, not by this field.
+  defp transfer_amount(%{transfer_amount_atomic: n}) when is_integer(n),
+    do: Integer.to_string(n)
+
+  defp transfer_amount(%{requirement: %{"amount_atomic" => a}}), do: a
+
+  defp transfer_amount(_), do: nil
 end
