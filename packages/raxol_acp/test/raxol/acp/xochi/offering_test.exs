@@ -118,15 +118,24 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
       assert MapSet.equal?(required, MapSet.new(["intent_id", "settlement_tx_hash", "status"]))
     end
 
-    test "status is bounded" do
+    test "status is bounded to completed (a delivered job always settled)" do
       schema = Offering.deliverable_schema()
+      assert schema["properties"]["status"]["enum"] == ["completed"]
+    end
 
-      assert schema["properties"]["status"]["enum"] == [
-               "pending",
-               "settled",
-               "failed",
-               "refunded"
-             ]
+    test "the delivered fields match what the Settler produces" do
+      props = Offering.deliverable_schema()["properties"]
+
+      assert MapSet.equal?(
+               MapSet.new(Map.keys(props)),
+               MapSet.new([
+                 "intent_id",
+                 "settlement_tx_hash",
+                 "receiving_tx_hash",
+                 "amount_atomic",
+                 "status"
+               ])
+             )
     end
   end
 end

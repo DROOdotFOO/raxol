@@ -194,10 +194,6 @@ defmodule Raxol.ACP.Xochi.Offering do
           "type" => "string",
           "description" => "Xochi intent identifier returned by POST /xochi/quote."
         },
-        "quote_id" => %{
-          "type" => "string",
-          "description" => "Xochi quote identifier (audit trail)."
-        },
         "settlement_tx_hash" => %{
           "type" => "string",
           "pattern" => "^0x[0-9a-fA-F]{64}$",
@@ -213,20 +209,18 @@ defmodule Raxol.ACP.Xochi.Offering do
             "The destination-arrival transaction hash for a two-leg settlement. " <>
               "Absent (null) for an instant single-tx fill."
         },
+        "amount_atomic" => %{
+          "type" => "string",
+          "pattern" => "^[0-9]+$",
+          "description" =>
+            "The transfer amount settled, in token base units (matches the " <>
+              "requirement's amount_atomic; committed so the deliverable hash pins " <>
+              "what was moved)."
+        },
         "status" => %{
           "type" => "string",
-          "enum" => ["pending", "settled", "failed", "refunded"],
-          "description" => "Lifecycle state of the Xochi intent."
-        },
-        "fee_atomic" => %{
-          "type" => "string",
-          "pattern" => "^[0-9]+$",
-          "description" => "Xochi service fee charged in USDC base units."
-        },
-        "dst_amount_atomic" => %{
-          "type" => "string",
-          "pattern" => "^[0-9]+$",
-          "description" => "Amount actually received on dst_chain_id (post-slippage)."
+          "enum" => ["completed"],
+          "description" => "Settlement lifecycle state; a delivered job is always completed."
         }
       }
     }

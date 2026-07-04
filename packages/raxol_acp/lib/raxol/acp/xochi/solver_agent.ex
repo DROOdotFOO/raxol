@@ -10,7 +10,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
      message.
   2. **`message` (contentType "requirement")** -- parse the requirement JSON
      against `Raxol.ACP.Xochi.Offering.requirement_schema/0` (which carries the
-     buyer's signed intent bundle), compute the storefront fee (default 50 bps
+     buyer's signed intent bundle), compute the storefront fee (default 8 bps
      via `:fee_bps`), and propose the budget on-chain via
      `Raxol.ACP.HookClient.set_budget/6`. This is a PLAIN job (hook =
      `address(0)`), so `set_budget` carries no hook data -- the budget is the
@@ -31,7 +31,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
         evaluator_address: "0xevaluator...",
         chain_id: 8453,
         acp_core_address: "0x238E541BfefD82238730D00a2208E5497F1832E0",
-        fee_bps: 50,
+        fee_bps: 8,
         settle_fn: Raxol.ACP.Xochi.Settler.build(xochi_config: %{base_url: "..."})
       )
 
@@ -98,7 +98,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
     :acp_core_address,
     :xochi_config,
     settle_fn: nil,
-    fee_bps: 50,
+    fee_bps: 8,
     sessions: %{}
   ]
 
@@ -135,7 +135,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
       evaluator_address: Keyword.fetch!(opts, :evaluator_address),
       chain_id: Keyword.fetch!(opts, :chain_id),
       acp_core_address: Keyword.fetch!(opts, :acp_core_address),
-      fee_bps: Keyword.get(opts, :fee_bps, 50),
+      fee_bps: Keyword.get(opts, :fee_bps, 8),
       settle_fn: Keyword.get(opts, :settle_fn, &default_settle/1),
       xochi_config: Keyword.get(opts, :xochi_config, %{})
     }

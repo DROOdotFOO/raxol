@@ -64,14 +64,11 @@ defmodule Mix.Tasks.Acp.RegisterOfferingTest do
              )
     end
 
-    test "deliverable schema has settled/failed/refunded/pending status enum" do
+    test "deliverable schema bounds status to completed" do
       payload = RegisterOffering.build_payload(:mainnet)
       enum = payload["deliverableSchema"]["properties"]["status"]["enum"]
 
-      assert MapSet.equal?(
-               MapSet.new(enum),
-               MapSet.new(["pending", "settled", "failed", "refunded"])
-             )
+      assert enum == ["completed"]
     end
 
     test "payload round-trips through JSON" do
