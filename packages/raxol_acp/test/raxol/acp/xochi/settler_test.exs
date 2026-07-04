@@ -135,6 +135,18 @@ defmodule Raxol.ACP.Xochi.SettlerTest do
       assert deliverable.intent_id == "i1"
     end
 
+    test "relays a signed intent delivered as a JSON string (flat marketplace schema)" do
+      json = Jason.encode!(signed_intent())
+      req = Map.put(requirement(), "signed_intent", json)
+      args = %{requirement: req, transfer_amount_atomic: 1_000_000}
+
+      assert {:ok, deliverable} = settler_for("completed").(args)
+      assert deliverable.intent_id == "i1"
+      assert_receive {:relayed, relayed}
+      assert relayed["signature"] == "0x" <> String.duplicate("11", 65)
+      assert relayed["nonce"] == 7
+    end
+
     test "a failed intent is an error, not a deliverable" do
       assert {:error, {:settlement_failed, :failed, "i1", _}} = settler_for("failed").(args())
     end

@@ -60,9 +60,10 @@ defmodule Raxol.ACP.Xochi.Offering do
       display_name: "Xochi Cross-Chain Transfer",
       description:
         "Cross-chain stablecoin settlement storefront. The buyer signs a Xochi " <>
-          "intent, the storefront relays it and returns the settlement tx hashes; " <>
-          "the buyer escrows only the storefront fee (a plain job, no fund hook).",
-      required_funds: true,
+          "intent, the storefront relays it and returns the settlement tx hashes. " <>
+          "The transfer moves off-escrow via the buyer's own signed intent, so " <>
+          "raxol never takes the buyer's funds; only the storefront fee is paid.",
+      required_funds: false,
       hook_kind: "none",
       sla_minutes: 10,
       requirement_schema: requirement_schema(),
@@ -245,9 +246,27 @@ defmodule Raxol.ACP.Xochi.Offering do
 
   def valid_requirement?(_), do: false
 
-  defp valid_signed_intent?(bundle) when is_map(bundle) do
-    Enum.all?(~w(intent_id quote_id signature nonce), &Map.has_key?(bundle, &1))
+  @doc """
+  Normalize a `signed_intent` value to a map. The marketplace schema builder may
+  deliver the bundle as a nested object (a map) or, if it only supports flat
+  fields, as a JSON string; accept both. Returns `:error` for anything else.
+  """
+  @spec decode_signed_intent(term()) :: {:ok, map()} | :error
+  def decode_signed_intent(bundle) when is_map(bundle), do: {:ok, bundle}
+
+  def decode_signed_intent(bundle) when is_binary(bundle) do
+    case Jason.decode(bundle) do
+      {:ok, map} when is_map(map) -> {:ok, map}
+      _ -> :error
+    end
   end
 
-  defp valid_signed_intent?(_), do: false
+  def decode_signed_intent(_), do: :error
+
+  defp valid_signed_intent?(bundle) do
+    case decode_signed_intent(bundle) do
+      {:ok, map} -> Enum.all?(~w(intent_id quote_id signature nonce), &Map.has_key?(map, &1))
+      :error -> false
+    end
+  end
 end

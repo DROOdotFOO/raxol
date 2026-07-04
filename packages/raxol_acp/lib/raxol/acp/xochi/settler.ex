@@ -105,14 +105,23 @@ defmodule Raxol.ACP.Xochi.Settler do
   end
 
   # The buyer's pre-signed intent bundle, threaded directly (`:signed_intent`) or
-  # carried in the requirement JSON (`requirement["signed_intent"]`). Keys may be
-  # atoms or strings; `execute_signed/2` normalizes and deep-validates them.
-  defp extract_signed_intent(%{signed_intent: bundle}) when is_map(bundle), do: {:ok, bundle}
+  # carried in the requirement (`requirement["signed_intent"]`). It may be a map
+  # (a nested object) or a JSON string (a flat marketplace schema); both normalize
+  # to a map. Keys may be atoms or strings; `execute_signed/2` deep-validates them.
+  defp extract_signed_intent(%{signed_intent: bundle}) when not is_nil(bundle),
+    do: normalize_bundle(bundle)
 
-  defp extract_signed_intent(%{requirement: %{"signed_intent" => bundle}}) when is_map(bundle),
-    do: {:ok, bundle}
+  defp extract_signed_intent(%{requirement: %{"signed_intent" => bundle}}),
+    do: normalize_bundle(bundle)
 
   defp extract_signed_intent(_), do: {:error, :missing_signed_intent}
+
+  defp normalize_bundle(bundle) do
+    case Raxol.ACP.Xochi.Offering.decode_signed_intent(bundle) do
+      {:ok, map} -> {:ok, map}
+      :error -> {:error, :missing_signed_intent}
+    end
+  end
 
   # The status is polled by the intent id the buyer signed (present under either
   # key). `execute_signed/2` re-validates it, so an absent/blank id also fails

@@ -8,7 +8,9 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
       meta = Offering.offering_metadata()
 
       assert meta.name == "xochi_cross_chain_transfer"
-      assert meta.required_funds == true
+      # raxol never takes the buyer's transfer funds (off-escrow relay), so the
+      # offering does not require a fund deposit.
+      assert meta.required_funds == false
       assert meta.hook_kind == "none"
       assert meta.sla_minutes == 10
       assert "payments" in meta.tags
@@ -103,6 +105,17 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
              })
 
       refute Offering.valid_requirement?(%{minimal_req() | "signed_intent" => "not-a-map"})
+    end
+
+    test "accepts a signed_intent delivered as a JSON string (flat marketplace schema)" do
+      json = Jason.encode!(minimal_req()["signed_intent"])
+      assert Offering.valid_requirement?(%{minimal_req() | "signed_intent" => json})
+    end
+
+    test "rejects a JSON-string signed_intent that is malformed or missing keys" do
+      refute Offering.valid_requirement?(%{minimal_req() | "signed_intent" => "{not json"})
+      partial = Jason.encode!(%{"intent_id" => "x"})
+      refute Offering.valid_requirement?(%{minimal_req() | "signed_intent" => partial})
     end
 
     test "rejects non-map input" do

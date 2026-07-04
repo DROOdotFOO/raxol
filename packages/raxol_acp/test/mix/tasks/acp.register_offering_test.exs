@@ -37,7 +37,7 @@ defmodule Mix.Tasks.Acp.RegisterOfferingTest do
 
       assert payload["name"] == "xochi_cross_chain_transfer"
       assert payload["hookKind"] == "none"
-      assert payload["requiredFunds"] == true
+      assert payload["requiredFunds"] == false
       assert payload["slaMinutes"] == 10
       assert "payments" in payload["tags"]
     end
