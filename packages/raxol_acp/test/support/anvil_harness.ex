@@ -59,20 +59,40 @@ defmodule Raxol.ACP.Test.AnvilHarness do
   ]
 
   @doc """
-  Spawn an anvil fork. Returns the RPC URL.
+  Start (or attach to) an anvil fork. Returns the RPC URL.
+
+  By default spawns its own `anvil --fork-url ...` and cleans it up on exit. To
+  reuse an already-running fork instead (e.g. a persistent anvil in an OrbStack
+  container), set `RAXOL_ACP_ANVIL_RPC` to its RPC URL -- the harness attaches to
+  it (verifying the chain id), spawns nothing, and leaves it running.
 
   ## Options
 
-  - `:fork_url` -- chain to fork. Default
+  - `:fork_url` -- chain to fork when spawning. Default
     `System.get_env("RAXOL_ACP_FORK_URL", "https://mainnet.base.org")`.
-  - `:port` -- TCP port for the anvil RPC. Default `8600`. Pass a
+  - `:port` -- TCP port for the spawned anvil RPC. Default `8600`. Pass a
     unique port per test module.
   - `:chain_id` -- the chain id to expect from `eth_chainId`. Default
     `8453` (Base).
   """
   @spec start!(keyword()) :: String.t()
   def start!(opts \\ []) do
-    ensure_foundry!()
+    expected_chain_id = Keyword.get(opts, :chain_id, 8453)
+
+    rpc =
+      case System.get_env("RAXOL_ACP_ANVIL_RPC") do
+        nil -> spawn_fork(opts)
+        external -> reuse_fork(external)
+      end
+
+    wait_until_chain_id(rpc, expected_chain_id)
+    rpc
+  end
+
+  # Spawn our own anvil fork (the default). Needs anvil + cast on PATH.
+  defp spawn_fork(opts) do
+    ensure_binary!("anvil")
+    ensure_binary!("cast")
 
     port = Keyword.get(opts, :port, 8600)
 
@@ -83,16 +103,20 @@ defmodule Raxol.ACP.Test.AnvilHarness do
         System.get_env("RAXOL_ACP_FORK_URL", "https://mainnet.base.org")
       )
 
-    expected_chain_id = Keyword.get(opts, :chain_id, 8453)
-
-    rpc = "http://127.0.0.1:#{port}"
     os_pid = spawn_anvil(fork_url, port)
 
     ExUnit.Callbacks.on_exit(fn ->
       System.cmd("kill", ["-9", "#{os_pid}"], stderr_to_stdout: true)
     end)
 
-    wait_until_chain_id(rpc, expected_chain_id)
+    "http://127.0.0.1:#{port}"
+  end
+
+  # Reuse an already-running anvil fork named by RAXOL_ACP_ANVIL_RPC (e.g. a
+  # persistent fork in an OrbStack container). We neither spawn nor kill it; only
+  # `cast` is needed on PATH to talk to it.
+  defp reuse_fork(rpc) do
+    ensure_binary!("cast")
     rpc
   end
 
@@ -175,9 +199,9 @@ defmodule Raxol.ACP.Test.AnvilHarness do
     end
   end
 
-  defp ensure_foundry! do
-    unless System.find_executable("anvil") && System.find_executable("cast") do
-      ExUnit.Assertions.flunk(":live_chain tests require foundry (anvil + cast) on PATH")
+  defp ensure_binary!(bin) do
+    unless System.find_executable(bin) do
+      ExUnit.Assertions.flunk(":live_chain tests require #{bin} on PATH (install foundry)")
     end
   end
 
