@@ -125,15 +125,22 @@ defmodule Raxol.Payments.Router do
     case {Keyword.get(opts, :trust_score), Keyword.get(opts, :attestations)} do
       {nil, attestations} when is_list(attestations) and attestations != [] ->
         score = Zksar.TrustScore.aggregate(attestations)
-        Keyword.put(opts, :trust_score, min(score, @max_trust_score))
+        Keyword.put(opts, :trust_score, clamp_score(score))
 
       {score, _} when is_integer(score) ->
-        Keyword.put(opts, :trust_score, min(score, @max_trust_score))
+        Keyword.put(opts, :trust_score, clamp_score(score))
 
       _ ->
         opts
     end
   end
+
+  # A trust score is a non-negative 0..100 value, but callers can pass any
+  # integer (an explicit override, an aggregation quirk). Clamp to the valid
+  # band so an out-of-range score degrades to the nearest tier -- below 0 is
+  # the least trusted (public), above 100 the most -- rather than crashing
+  # `PrivacyTier.from_trust_score/2` or leaking a negative through `trust_score_for/1`.
+  defp clamp_score(score), do: score |> max(0) |> min(@max_trust_score)
 
   defp select_protocol(privacy, _cross_chain) when privacy in [:stealth, :shielded], do: :xochi
   defp select_protocol(_privacy, true), do: :xochi
