@@ -208,16 +208,25 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransferTest do
     end
   end
 
-  describe "stealth downgrade on Tron" do
-    test "downgrades a stealth request to public with a warning" do
-      stub_quote_and_execute()
+  describe "stealth on Tron" do
+    test "rejects a stealth request before any quote or spend, not silent downgrade" do
+      parent = self()
 
-      assert {:ok, result} =
+      # Any relay call would notify `parent`; the rejection must beat it.
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(parent, {:relay_called, conn.request_path})
+        Req.Test.json(conn, %{})
+      end)
+
+      assert {:error, %Failure{reason: :stealth_unsupported}} =
                ExecuteRelayTransfer.run(base_params(%{settlement: "stealth"}), ctx())
 
-      assert [%{code: :stealth_unavailable_on_tron}] = result.warnings
-      # The transfer still proceeded.
-      assert result.status == "pending"
+      refute_received {:relay_called, _}
+    end
+
+    test "rejects a shielded request to a Tron destination the same way" do
+      assert {:error, %Failure{reason: :stealth_unsupported}} =
+               ExecuteRelayTransfer.run(base_params(%{settlement: "shielded"}), ctx())
     end
   end
 

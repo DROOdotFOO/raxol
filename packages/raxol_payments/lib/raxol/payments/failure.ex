@@ -37,6 +37,7 @@ defmodule Raxol.Payments.Failure do
           | :delivery_below_floor
           | :rejected
           | :stealth_keys_required
+          | :stealth_unsupported
           | :sign_failed
           | :method_mismatch
           | :invalid_request
@@ -152,6 +153,17 @@ defmodule Raxol.Payments.Failure do
 
   def from({:invalid_settlement, _} = detail),
     do: build(:invalid_request, "The settlement type is not valid.", false, detail)
+
+  # Stealth/shielded settlement requested on a chain that does not support it
+  # (e.g. Tron). Fail closed; the caller must re-request with public settlement.
+  def from(:stealth_unsupported_on_chain),
+    do:
+      build(
+        :stealth_unsupported,
+        "Stealth settlement is not available on this chain; re-request with public settlement.",
+        false,
+        :stealth_unsupported_on_chain
+      )
 
   # The quote's chosen payment method is wrong for the token (e.g. ERC-3009 for a
   # non-USDC token would be a silently invalid signature).

@@ -16,22 +16,26 @@ defmodule Raxol.ACP.Chain do
 
   ## Contract version (V1 vs V2)
 
-  Three contract families coexist here during the v1 -> v2 transition:
+  Three contract families coexist here, on two INDEPENDENT axes:
 
-  - **`acp_contract_address`** -- V1 `ACPSimple` proxy. Sunsetted upstream
-    on 2026-06-01 but kept here while raxol_acp's v1 modules still call
-    into it. Set `acp_version: :v1` to use this path.
-  - **`acp_router_address`** -- the legacy "v2 ACPRouter" hop (Base
-    mainnet only). Obsolete; do not use for new work. The address stays
-    so existing dashboards / event indexers don't break.
-  - **`acp_core_address`** -- the real v2 ACP Core contract, paired with
-    `fund_transfer_hook_address`, `multi_hook_router_address`,
-    `subscription_hook_address`, and `subscription_state_address`. Use
-    this with `acp_version: :v2` (the future default).
+  - **`acp_version` (`:v1` | `:v2`)** governs only
+    `Raxol.ACP.ContractClient.Onchain`. It resolves `acp_contract_address`
+    (V1 `ACPSimple` proxy, sunsetted upstream 2026-06-01) for `:v1`, or
+    `acp_router_address` (the legacy "v2 ACPRouter" hop, Base mainnet only)
+    for `:v2`. BOTH are legacy -- `:v2` here is the ACPRouter, NOT the
+    active core. The default is `:v1`
+    (`Application.get_env(:raxol_acp, :acp_version, :v1)`); a deployment can
+    override it with `ACP_VERSION` (see `config/runtime.exs`).
+  - **`acp_core_address`** -- the real, active v2 ACP Core
+    (`AgenticCommerceV3`), paired with `fund_transfer_hook_address`,
+    `multi_hook_router_address`, `subscription_hook_address`, and
+    `subscription_state_address`. It is reached through
+    `Raxol.ACP.HookClient`, which does NOT consult `acp_version`. The Xochi
+    storefront offering runs here (plain jobs, `hook = address(0)`).
 
-  Callers should not pick the address directly;
-  `Raxol.ACP.ContractClient.Onchain` resolves the right one from
-  `Application.get_env(:raxol_acp, :acp_version, :v1)`.
+  `acp_router_address` stays only so existing dashboards / event indexers
+  don't break; do not target it for new work. Callers should not pick an
+  address directly.
   """
 
   @type network :: :mainnet | :sepolia
