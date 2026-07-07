@@ -3,8 +3,10 @@
 Elixir/OTP-native Agent Commerce Protocol (ACP) implementation for the
 [Virtuals](https://app.virtuals.io) agent marketplace.
 
-> Status: pre-alpha. Public surface is unstable. Targeting v0.1 with a
-> single graduated offering on Base mainnet.
+> Status: pre-alpha (`0.2.0-rc.0`). Public surface is unstable. The v1 memo
+> model has been retired; the v2 hook/event model (`JobSession` + `HookClient`
+> -> `AgenticCommerceV3`) is the active runtime. Targeting a single graduated
+> offering on Base mainnet.
 
 ## Why OTP for ACP
 
@@ -25,7 +27,7 @@ flaky sockets. OTP solves both at the runtime layer:
 ```elixir
 def deps do
   [
-    {:raxol_acp, "~> 0.1"}
+    {:raxol_acp, "~> 0.2-rc"}
   ]
 end
 ```
@@ -37,10 +39,10 @@ run `mix deps.get`, and `Raxol.ACP.Supervisor` boots automatically.
 
 See `Raxol.ACP.Supervisor` for the supervision tree. Subsystems:
 
-- **Job lifecycle**: `Raxol.ACP.Job.{Server, Supervisor, Registry, StateMachine, Store}`. One `:gen_server` per active job, registered by job ID, with ETS-backed memo persistence so a node restart resumes mid-flight. States are `:request -> :negotiation -> :transaction -> :evaluation -> :completed` plus `:rejected` and `:expired`. Memos are on-chain `createMemo` calls (no off-chain signing); `Job.MemoType`/`Job.FeeType` are the canonical enums.
+- **Job session**: `Raxol.ACP.JobSession` + `JobSession.{Registry, Supervisor, Status, Provider, HandlerSeam}`. One supervised process per active job, registered by `{chain_id, job_id}`. It is a pure state machine -- role-aware status, a chronological entry log, subscriber notifications, and a `[:raxol, :acp, :job_session, :transition]` telemetry event. Statuses are `:open -> :budget_set -> :funded -> :submitted -> :completed` plus `:rejected` and `:expired`. `JobSession.Provider` is the seller-side driver: it invokes the offering `Handler`, writes the on-chain hook call (the commit point -- a failed write leaves the session untouched), then mirrors the status via `apply_event/3`.
 - **Offering**: `Raxol.ACP.Offering.{Handler, Registry, DSL}`. Define an offering with `use Raxol.ACP.Offering`; it becomes a registered Job Offering on Virtuals.
-- **Contract client**: `Raxol.ACP.ContractClient` behaviour matching the real `ACPSimple` (V1) / `ACPRouter` (V2) write surface, switched via `:acp_version`. Includes `withdraw_escrowed_funds` for buyer escrow reclaim after non-delivery (paired with a `Job.Server` `:expired_at` auto-expire timer and `Job.Server.reclaim/1`). Two impls: `InMemory` (tests) and `Onchain` (Req JSON-RPC + EIP-1559 typed-tx). `Onchain.create_job` resolves the job id from the `JobCreated` non-indexed `data` word and fails closed on an unresolved id; a lost receipt returns `{:receipt_pending, tx_hash, _}` and a pre-broadcast failure rolls the nonce back. Real ABIs vendored under `priv/abi/`; verified Base addresses in `Raxol.ACP.Chain`.
-- **SCA wallet**: `Raxol.ACP.Wallet.SCA` is a full ERC-4337 v0.7 / Alchemy Modular Account v2 stack (UserOp, bundler, paymaster, counterfactual CREATE2 provisioning, session keys). `Onchain` detects an SCA wallet and routes writes through sponsored UserOps, self-deploying on the first tx. Live-validated against the real on-chain EntryPoint on a Base fork.
+- **On-chain writes**: `Raxol.ACP.HookClient` writes to the active `AgenticCommerceV3` core through an injected `Raxol.ACP.ProviderAdapter` -- `SCA` (sponsored ERC-4337 UserOps), `JSONRPC` (EOA, nonce serialized through `NonceServer`), or `Mock` (tests). `Raxol.ACP.Onchain.{RPC, Transaction, RLP}` are the EIP-1559 wire layer. Real ABIs vendored under `priv/abi/`; verified Base addresses in `Raxol.ACP.Chain`. (The v1 `ContractClient` / `ACPSimple` memo write surface and the `:acp_version` switch were retired -- see `MIGRATION_V2.md`.)
+- **SCA wallet**: `Raxol.ACP.Wallet.SCA` is a full ERC-4337 v0.7 / Alchemy Modular Account v2 stack (UserOp, bundler, paymaster, counterfactual CREATE2 provisioning, session keys). `Raxol.ACP.ProviderAdapter.SCA` detects an SCA wallet and routes writes through sponsored UserOps, self-deploying on the first tx. Live-validated against the real on-chain EntryPoint on a Base fork.
 - **Seller runtime**: `Raxol.ACP.Seller.{Runtime, Queue, Supervisor}` plus `Backend.{InMemory, WebSocket}`. The WebSocket backend speaks Socket.IO v4 / Engine.IO over `Mint.WebSocket`; the runtime dispatches incoming jobs to the queue.
 
 ## First offering: Xochi Cross-Chain Transfer

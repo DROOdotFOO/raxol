@@ -2,6 +2,8 @@
 
 ## Status
 
+**Superseded (2026-07-08)** by the seller-stack v1->v2 migration: the `Raxol.ACP.Job.Server` `:via_workflow` path this ADR extends was deleted in Phases 3-4 (#389/#391). The v2 `Raxol.ACP.JobSession` model handles pause/resume through its status + the `[:raxol, :acp, :job_session, :transition]` telemetry event, which `raxol_symphony`'s `Resumer` consumes. Retained as historical record.
+
 Proposed, 2026-06-16. Direct follow-up to ADR-0016 Phase B. ADR-0015 (Workflow Graph) and ADR-0016 (raxol_acp Job migration) are the load-bearing priors. The same PR series that ships this ADR also flips `Raxol.ACP.Job.Server`'s `:via_workflow` default to `true` and introduces a per-process ephemeral Saver for `persist?: false`; both changes follow from the contract proposed here.
 
 ## Context
