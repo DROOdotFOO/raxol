@@ -110,9 +110,11 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   @sig_withdraw_escrowed "withdrawEscrowedFunds(uint256)"
   @sig_confirm_x402 "confirmX402PaymentReceived(uint256)"
 
-  # Which deployed ACP contract the selectors target. `:v1` (ACPSimple,
-  # default) or `:v2` (ACPRouter). Set the matching contract address via
-  # `Raxol.ACP.Chain` overrides when running V2.
+  # Which deployed ACP contract this client's selectors target: `:v1`
+  # (ACPSimple, default) or `:v2` (ACPRouter). BOTH are legacy contracts --
+  # the active v2 core (AgenticCommerceV3) is reached via `Raxol.ACP.HookClient`,
+  # NOT this client, and does not consult acp_version. Override the default
+  # with ACP_VERSION (see config/runtime.exs). See `Raxol.ACP.Chain` moduledoc.
   defp acp_version, do: Application.get_env(:raxol_acp, :acp_version, :v1)
 
   # -- Behaviour callbacks --
