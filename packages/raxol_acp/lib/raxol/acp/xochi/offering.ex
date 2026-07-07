@@ -97,13 +97,21 @@ defmodule Raxol.ACP.Xochi.Offering do
         },
         "src_token" => %{
           "type" => "string",
-          "pattern" => "^0x[0-9a-fA-F]{40}$",
-          "description" => "ERC-20 address being sent on src_chain_id."
+          "pattern" =>
+            "^(0x[0-9a-fA-F]{40}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})$",
+          "description" =>
+            "Token address being sent on src_chain_id: 0x-hex (EVM), " <>
+              "Base58Check (Tron), or base58 mint (Solana). Validated " <>
+              "per-chain against the solver capability matrix before escrow."
         },
         "dst_token" => %{
           "type" => "string",
-          "pattern" => "^0x[0-9a-fA-F]{40}$",
-          "description" => "ERC-20 address to be received on dst_chain_id."
+          "pattern" =>
+            "^(0x[0-9a-fA-F]{40}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})$",
+          "description" =>
+            "Token address to be received on dst_chain_id: 0x-hex (EVM), " <>
+              "Base58Check (Tron), or base58 mint (Solana). Validated " <>
+              "per-chain against the solver capability matrix before escrow."
         },
         "amount_atomic" => %{
           "type" => "string",
@@ -156,7 +164,8 @@ defmodule Raxol.ACP.Xochi.Offering do
         },
         "destination" => %{
           "type" => "string",
-          "pattern" => "^0x[0-9a-fA-F]{40}$",
+          "pattern" =>
+            "^(0x[0-9a-fA-F]{40}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})$",
           "description" =>
             "Optional: the recipient the buyer signed into their Xochi intent, for " <>
               "the buyer's / evaluator's audit trail. raxol does not use or enforce " <>

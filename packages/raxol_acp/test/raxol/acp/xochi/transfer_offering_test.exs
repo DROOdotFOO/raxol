@@ -15,7 +15,13 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
 
   setup do
     Application.delete_env(:raxol_acp, :xochi_transfer_settler)
-    on_exit(fn -> Application.delete_env(:raxol_acp, :xochi_transfer_settler) end)
+    Raxol.Payments.Xochi.Capabilities.reset()
+
+    on_exit(fn ->
+      Application.delete_env(:raxol_acp, :xochi_transfer_settler)
+      Raxol.Payments.Xochi.Capabilities.reset()
+    end)
+
     :ok
   end
 
@@ -169,6 +175,94 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
       r = req(%{"src_token" => @usdt_base, "dst_token" => @usdt_arb})
       assert {:deliver, _} = TransferOffering.handle_deliver(r, @ctx)
       assert_received {:settle_args, %{requirement: ^r}}
+    end
+  end
+
+  describe "multi-VM corridors via the capability matrix" do
+    @tron 728_126_428
+    @usdt_tron "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+
+    # Live matrix advertising a Base -> Tron corridor (Riddler WP-E shape).
+    defp tron_matrix do
+      %{
+        "source" => "live",
+        "capabilities" => %{
+          "chains" => [
+            %{"chain_id" => 8453, "chain_name" => "Base"},
+            %{"chain_id" => @tron, "chain_name" => "Tron", "vm_type" => "tvm"}
+          ],
+          "tokens" => [
+            %{
+              "symbol" => "USDC",
+              "roles" => ["origin"],
+              "addresses" => %{"8453" => @usdc_base}
+            },
+            %{
+              "symbol" => "USDT",
+              "roles" => ["destination"],
+              "addresses" => %{Integer.to_string(@tron) => @usdt_tron}
+            }
+          ]
+        }
+      }
+    end
+
+    defp put_live_capabilities do
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(tron_matrix()))
+      end
+
+      Application.put_env(:raxol_acp, :xochi_transfer_settler,
+        xochi_config: %{base_url: "https://api.xochi.fi", req_options: [plug: plug]}
+      )
+    end
+
+    test "a base58 destination token on an advertised Tron corridor passes validation" do
+      put_live_capabilities()
+      r = req(%{"dst_chain_id" => @tron, "dst_token" => @usdt_tron})
+
+      # Validation clears (schema + addresses + corridor); the request then
+      # reaches the settler stage, i.e. it was NOT rejected before escrow.
+      assert Offering.valid_requirement?(r)
+      assert {:accept, ^r} = TransferOffering.handle_request(r, @ctx)
+    end
+
+    test "an EVM-hex token on the Tron leg is rejected as an invalid address" do
+      put_live_capabilities()
+      r = req(%{"dst_chain_id" => @tron, "dst_token" => @usdc_arb})
+
+      assert {:reject, {:invalid_address, :dst_token, @tron, @usdc_arb}} =
+               TransferOffering.handle_request(r, @ctx)
+    end
+
+    test "a base58 token on an EVM leg is rejected as an invalid address" do
+      put_live_capabilities()
+      r = req(%{"src_token" => @usdt_tron})
+
+      assert {:reject, {:invalid_address, :src_token, 8453, @usdt_tron}} =
+               TransferOffering.handle_request(r, @ctx)
+    end
+
+    test "a live matrix narrows corridors direction-aware" do
+      put_live_capabilities()
+      # USDC is origin-only in this matrix, so USDC on the destination leg
+      # of an advertised chain is unsupported (not invalid).
+      r = req(%{"dst_chain_id" => 8453, "src_chain_id" => 42_161, "src_token" => @usdc_arb})
+
+      assert {:reject, {:unsupported_src_token, 42_161, @usdc_arb}} =
+               TransferOffering.handle_request(r, @ctx)
+    end
+
+    test "without capabilities config the static fallback preserves EVM behavior" do
+      # No :xochi_transfer_settler config at all: the six-chain Assets set
+      # gates exactly as before, and Tron corridors stay unavailable.
+      assert {:reject, {:unsupported_dst_token, @tron, @usdt_tron}} =
+               TransferOffering.handle_request(
+                 req(%{"dst_chain_id" => @tron, "dst_token" => @usdt_tron}),
+                 @ctx
+               )
     end
   end
 end

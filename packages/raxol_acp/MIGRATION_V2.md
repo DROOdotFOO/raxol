@@ -13,19 +13,49 @@
 
 `raxol_acp` 0.2.0 ships the v2 surface alongside the v1 surface so existing solver code keeps working during the transition. This document tracks what's landed and what's still pending.
 
-## Status — 2026-06-13
+## Status — 2026-07-07
 
-| Area | v1 (existing) | v2 (scaffolded this PR) | v2 (TODO) |
-|------|---------------|-------------------------|-----------|
-| Chain config | `Raxol.ACP.Chain` (mainnet, sepolia, `acp_contract_address`, `acp_router_address`) | adds `acp_core_address`, `fund_transfer_hook_address`, `multi_hook_router_address`, `subscription_hook_address`, `subscription_state_address`, `acp_server_url` | — |
-| Token amounts | `Fare`/`FareAmount` (Decimal-based) | `Raxol.ACP.AssetToken` (raw integer + decimals + chain-aware) | — |
-| Event model | `onNewTask`/`onEvaluate` via Socket.IO | `Raxol.ACP.Event` type union + helpers | SSE transport, `Raxol.ACP.Agent` event dispatch |
-| Job session | `Raxol.ACP.Job.Server` (state machine) | — | `Raxol.ACP.JobSession` GenServer with `set_budget`/`fund`/`submit`/`complete`/`reject` |
-| Provider adapter | `Raxol.ACP.ContractClient.Onchain` (direct JSON-RPC) | — | `Raxol.ACP.ProviderAdapter.SCA` (Elixir-native, reuses `Raxol.ACP.Wallet.SCA`) |
-| Hook integration | (no first-class hooks) | — | `Raxol.ACP.Hooks.FundTransfer` for Xochi |
-| Xochi offering | (none) | `Raxol.ACP.Xochi.Offering` (request/deliverable schemas) | `Raxol.ACP.Xochi.SolverAgent` runtime |
-| Wallet/signer | `Raxol.ACP.Wallet.SCA` (MAv2 + session keys; `SelfCallRecursionDepthExceeded` fix in #266) | — | v2 SCA provisioning (deploy + install in two userOps, not one) |
-| Marketplace registration | — | — | `mix acp.register_offering` task |
+| Area | v1 (existing) | v2 status |
+|------|---------------|-----------|
+| Chain config | `Raxol.ACP.Chain` (`acp_contract_address`, `acp_router_address`) | **Done** — adds `acp_core_address` + hook/router/subscription addresses + `acp_server_url` |
+| Token amounts | `Fare`/`FareAmount` (Decimal-based) | **Done** — `Raxol.ACP.AssetToken` (raw integer + decimals + chain-aware) |
+| Event model | `onNewTask`/`onEvaluate` via Socket.IO | **Done** — `Raxol.ACP.Event`, SSE transport (`transport/sse/parser.ex`), `Raxol.ACP.Agent` event dispatch |
+| Job session | `Raxol.ACP.Job.Server` (memo/phase model) -- STILL LIVE | **Partial** — `Raxol.ACP.JobSession` (event/hook model, a DIFFERENT API) exists but is NOT wired into the seller `Queue`/`Runtime`/`bench`, which still drive `Job.Server`. Migration pending (see the entanglement note below). |
+| Provider adapter | `Raxol.ACP.ContractClient.Onchain` (direct JSON-RPC) | **Done** — `Raxol.ACP.ProviderAdapter.SCA` (Elixir-native, reuses `Raxol.ACP.Wallet.SCA`) |
+| Hook integration | (no first-class hooks) | **Done** — `Raxol.ACP.Hooks.FundTransfer` (note: the storefront relay offering runs plain jobs, `hook = address(0)`) |
+| Xochi offering | (none) | **Done** — `Raxol.ACP.Xochi.Offering` + `Raxol.ACP.Xochi.SolverAgent` runtime (8bps storefront fee) |
+| Wallet/signer | `Raxol.ACP.Wallet.SCA` (MAv2 + session keys) | **Done** — two-userOp v2 provisioning (`Wallet.SCA.Provisioner`: deploy + install as separate userOps) |
+| Marketplace registration | — | **Done** — `mix acp.register_offering` |
+
+**Landed (2026-07-07 wave):** `ProviderAdapter.SCA` + two-userOp `Provisioner`.
+
+## Why the "v1 hard-cut" is blocked (entanglement, found 2026-07-07)
+
+The `0.2.0` step ("remove v1") is NOT a simple deletion. Two blockers:
+
+1. **`Job.Server` is not dead v1 code -- it is the live seller-stack lifecycle.**
+   The shipped seller `Queue`/`Runtime` and `mix raxol_acp.bench` drive
+   `Job.Server.accept_request`/`accept_payment`/`approve`/`transition`/`deliver`.
+   `JobSession` is the v2 replacement but has a completely different API
+   (`set_budget`/`fund`/`submit`/`complete`/`reject`, event/hook model), so it is
+   NOT a drop-in. Deleting `Job.Server` first requires **migrating the seller
+   Queue/Runtime/bench onto `JobSession`** -- a real rewrite of the event routing,
+   its own project. Until then `Job.Server` stays.
+
+2. **The `ContractClient.Onchain` `:v1 -> :v2` flip is nearly cosmetic.** Its `:v2`
+   branch targets `acp_router_address` (legacy ACPRouter), NOT the active
+   `AgenticCommerceV3` core. The active v2 core is reached through
+   `Raxol.ACP.HookClient` (which the storefront uses) and does not consult
+   `acp_version`. So flipping the default swaps one legacy contract for another;
+   the real question is whether `ContractClient.Onchain` should be retired or
+   repointed at `AgenticCommerceV3` -- a separate decision, not part of a deletion.
+
+Prerequisite before either: staging-validate the active v2 (`AgenticCommerceV3`)
+lifecycle end-to-end (needs funds / a Base staging run).
+
+## Selecting the contract version
+
+`Raxol.ACP.ContractClient.Onchain` reads `Application.get_env(:raxol_acp, :acp_version, :v1)`; the code default is `:v1` (the sunsetted ACPSimple). `ACP_VERSION=v2` at boot (wired in `config/runtime.exs`, applies in every env) switches this client to `acp_router_address` (the legacy ACPRouter) -- NOT the active `AgenticCommerceV3` core. The active core is reached through `Raxol.ACP.HookClient`, which ignores `acp_version` entirely; the storefront offering already runs there. So `ACP_VERSION` only selects between the two legacy `ContractClient.Onchain` targets, and is useful mainly for exercising the ACPRouter path in a non-storefront context.
 
 ## Strategy
 
