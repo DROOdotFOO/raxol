@@ -30,9 +30,14 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
 
   ## Supported corridors
 
-  USDC, USDT, or WETH on Ethereum, Optimism, Polygon, Base, or Arbitrum, checked
-  against `Raxol.Payments.Assets`. Same-chain, malformed, non-positive-amount,
-  and unknown-token requests are rejected before escrow.
+  Corridors are gated by the live solver capability matrix
+  (`Raxol.Payments.Xochi.Capabilities`, direction-aware), so new solver chains
+  and tokens light up without a raxol redeploy. When the capabilities endpoint
+  is unconfigured or unreachable the gate degrades to the static
+  `Raxol.Payments.Assets` set (USDC/USDT/WETH on the six EVM chains) -- exactly
+  the pre-capabilities behavior. Same-chain, malformed, non-positive-amount,
+  per-chain-invalid-address, and unknown-token requests are rejected before
+  escrow with machine-readable reasons.
   """
 
   use Raxol.ACP.Offering,
@@ -44,6 +49,7 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
   alias Raxol.ACP.Xochi.Offering, as: Schema
   alias Raxol.ACP.Xochi.Settler
   alias Raxol.Payments.Assets
+  alias Raxol.Payments.Xochi.Capabilities
 
   @settler_required [:xochi_config]
 
@@ -72,6 +78,8 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
   # -- request validation --
 
   defp validate_requirement(req) do
+    caps = capabilities()
+
     cond do
       not Schema.valid_requirement?(req) ->
         {:error, :malformed_requirement}
@@ -82,10 +90,23 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
       not positive_amount?(req["amount_atomic"]) ->
         {:error, :non_positive_amount}
 
-      not fillable?(req["src_chain_id"], req["src_token"]) ->
+      # Per-VM address format is only enforced against a live matrix, which
+      # knows each chain's VM family. Under the EVM-only static fallback a
+      # non-EVM chain would misclassify as :evm, so we defer to corridor gating
+      # (preserving pre-capabilities behavior: a Tron leg rejects as an
+      # unsupported token, not an invalid address).
+      caps.source == :live and
+          not Capabilities.valid_address?(caps, req["src_chain_id"], req["src_token"]) ->
+        {:error, {:invalid_address, :src_token, req["src_chain_id"], req["src_token"]}}
+
+      caps.source == :live and
+          not Capabilities.valid_address?(caps, req["dst_chain_id"], req["dst_token"]) ->
+        {:error, {:invalid_address, :dst_token, req["dst_chain_id"], req["dst_token"]}}
+
+      not fillable?(caps, req["src_chain_id"], req["src_token"], :origin) ->
         {:error, {:unsupported_src_token, req["src_chain_id"], req["src_token"]}}
 
-      not fillable?(req["dst_chain_id"], req["dst_token"]) ->
+      not fillable?(caps, req["dst_chain_id"], req["dst_token"], :destination) ->
         {:error, {:unsupported_dst_token, req["dst_chain_id"], req["dst_token"]}}
 
       true ->
@@ -93,7 +114,38 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
     end
   end
 
-  defp fillable?(chain, token), do: Assets.known?(chain, token)
+  # Corridor gate: the live capability matrix decides fillability, direction
+  # aware (src must be an :origin token, dst a :destination token). The static
+  # `Assets.known?/2` gate survives two ways: `Capabilities.fallback/0` is
+  # derived from it (solver unreachable => today's behavior), and it backstops
+  # a live matrix that omits addresses for a leg the static table knows.
+  #
+  # The backstop is scoped to chains the fallback matrix advertises: `Assets`
+  # also carries non-EVM (Tron relay) addresses that the EVM-only fallback
+  # corridor set does not cover, so a non-EVM leg stays unavailable until a live
+  # matrix confirms it (fail closed).
+  defp fillable?(caps, chain, token, role) do
+    Capabilities.fillable?(caps, chain, token, role) or
+      (caps.source == :fallback and fallback_chain?(caps, chain) and
+         Assets.known?(chain, token))
+  end
+
+  defp fallback_chain?(caps, chain) do
+    Enum.any?(caps.chains, &(&1.chain_id == chain))
+  end
+
+  # Cached capability matrix. The Xochi worker base_url comes from the same
+  # `:xochi_transfer_settler` config the delivery path already requires; with
+  # no config the gate degrades to the static fallback (never the network).
+  defp capabilities do
+    :raxol_acp
+    |> Application.get_env(:xochi_transfer_settler, [])
+    |> Keyword.get(:xochi_config)
+    |> case do
+      %{base_url: _} = config -> Capabilities.get(config)
+      _ -> Capabilities.fallback()
+    end
+  end
 
   defp positive_amount?(amount) when is_binary(amount) do
     case Integer.parse(amount) do
