@@ -59,9 +59,10 @@ defmodule Raxol.ACP.JobSessionTest do
 
       assert {:ok, :funded} = JobSession.fund(client)
 
-      # Provider's session must also reach :funded for submit to work.
-      # In real life the SSE transport propagates this; here we drive it.
-      {:ok, :funded} = drive_to(provider, :funded)
+      # Provider's session must also reach :funded for submit to work. In real
+      # life the SSE transport propagates this; here we mirror it as an
+      # observed event (a provider role can't fund).
+      {:ok, :funded} = JobSession.apply_event(provider, :funded)
       assert {:ok, :submitted} = JobSession.submit(provider, %{result: "done"})
 
       {:ok, evaluator} =
@@ -198,30 +199,47 @@ defmodule Raxol.ACP.JobSessionTest do
     end
   end
 
-  # -- Helpers --
+  describe "apply_event/3 (observed system events)" do
+    test "advances status, records a :system entry, and notifies subscribers" do
+      {provider, job_id} = start_session(role: :provider)
+      :ok = JobSession.subscribe(provider)
 
-  # Drive a session through valid statuses to a target. Used to set up
-  # mid-lifecycle test states without spinning up the full transport.
-  defp drive_to(_pid, :open), do: {:ok, :open}
+      assert {:ok, :budget_set} =
+               JobSession.apply_event(provider, :budget_set, %{observed: true})
 
-  defp drive_to(pid, :budget_set) do
-    JobSession.set_budget(pid, AssetToken.usdc(0.1, 8453))
-  end
+      assert JobSession.status(provider) == :budget_set
 
-  defp drive_to(pid, :funded) do
-    case JobSession.status(pid) do
-      :open ->
-        {:ok, :budget_set} = drive_to(pid, :budget_set)
-        # provider can't fund -- elevate test state directly via initial_status
-        :sys.replace_state(pid, &Map.put(&1, :status, :funded))
-        {:ok, :funded}
+      assert Enum.any?(JobSession.entries(provider), fn e ->
+               e.kind == :system and e.event == :budget_set and e.payload == %{observed: true}
+             end)
 
-      :budget_set ->
-        :sys.replace_state(pid, &Map.put(&1, :status, :funded))
-        {:ok, :funded}
+      assert_receive {JobSession, {8453, ^job_id}, %{kind: :system, event: :budget_set}}, 500
+    end
 
-      status ->
-        {:error, {:cannot_drive_to_funded, status}}
+    test "forces a non-adjacent observed status, bypassing role gating and adjacency" do
+      # A :client cannot :submit, and open -> submitted is not an adjacent
+      # transition; an authoritative observed event applies it regardless
+      # (e.g. an Agent connecting mid-stream sees the current status).
+      {client, _} = start_session(role: :client)
+
+      assert {:ok, :submitted} = JobSession.apply_event(client, :submitted)
+      assert JobSession.status(client) == :submitted
+    end
+
+    test "stops the session on a terminal observed status" do
+      {provider, _} = start_session(role: :provider)
+      ref = Process.monitor(provider)
+
+      assert {:ok, :completed} = JobSession.apply_event(provider, :completed, %{reason: "done"})
+      assert_receive {:DOWN, ^ref, :process, ^provider, :normal}, 500
+    end
+
+    test "rejects an unknown status atom without changing state" do
+      {provider, _} = start_session(role: :provider)
+
+      assert {:error, {:unknown_status, :bogus}} = JobSession.apply_event(provider, :bogus)
+      assert JobSession.status(provider) == :open
     end
   end
+
 end

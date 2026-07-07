@@ -203,6 +203,24 @@ defmodule Raxol.ACP.JobSession do
     transition(server, :expire, %{reason: reason})
   end
 
+  @doc """
+  Apply an OBSERVED status directly, bypassing BOTH role gating and
+  adjacency validation.
+
+  Unlike the role-gated action API (`set_budget`/`fund`/`submit`/...), this
+  does not perform a transition -- it mirrors one that already settled
+  elsewhere (an on-chain or SSE event, decoded by the caller). The observed
+  event is authoritative: an Agent connecting mid-stream may jump straight
+  to the current status, so no adjacency check applies. Records a `:system`
+  entry, notifies subscribers, emits telemetry, and stops the session if
+  `status` is terminal. Rejects an unknown status atom.
+  """
+  @spec apply_event(GenServer.server() | job_key(), Status.t(), map()) ::
+          {:ok, Status.t()} | {:error, {:unknown_status, atom()}}
+  def apply_event(server, status, payload \\ %{}) when is_atom(status) and is_map(payload) do
+    GenServer.call(resolve(server), {:apply_event, status, payload})
+  end
+
   # -- Read API --
 
   @doc "Current status."
@@ -280,29 +298,20 @@ defmodule Raxol.ACP.JobSession do
   end
 
   def handle_call({:transition, action, payload}, _from, state) do
-    from_status = state.status
-
-    with :ok <- check_role(state.role, from_status, action),
+    with :ok <- check_role(state.role, state.status, action),
          {:ok, next_status} <- resolve_next_status(action),
-         :ok <- Status.validate(from_status, next_status) do
-      entry = %{
-        kind: :system,
-        event: next_status,
-        payload: payload,
-        at: DateTime.utc_now()
-      }
-
-      state = %{state | status: next_status, entries: state.entries ++ [entry]}
-      broadcast(state, entry)
-      emit_telemetry(state, action, from_status, next_status)
-
-      if Status.terminal?(next_status) do
-        {:stop, :normal, {:ok, next_status}, state}
-      else
-        {:reply, {:ok, next_status}, state}
-      end
+         :ok <- Status.validate(state.status, next_status) do
+      commit_status(state, next_status, payload, action)
     else
       {:error, _reason} = err -> {:reply, err, state}
+    end
+  end
+
+  def handle_call({:apply_event, next_status, payload}, _from, state) do
+    if next_status in Status.all() do
+      commit_status(state, next_status, payload, :apply_event)
+    else
+      {:reply, {:error, {:unknown_status, next_status}}, state}
     end
   end
 
@@ -350,6 +359,31 @@ defmodule Raxol.ACP.JobSession do
     case Status.target_status(action) do
       nil -> {:error, {:unknown_action, action}}
       status -> {:ok, status}
+    end
+  end
+
+  # Record the status change as a :system entry, notify subscribers, emit
+  # telemetry, and stop the process if the new status is terminal. Shared by
+  # the role-gated action path (`:transition`) and the observed-event path
+  # (`:apply_event`).
+  defp commit_status(state, next_status, payload, action) do
+    from_status = state.status
+
+    entry = %{
+      kind: :system,
+      event: next_status,
+      payload: payload,
+      at: DateTime.utc_now()
+    }
+
+    state = %{state | status: next_status, entries: state.entries ++ [entry]}
+    broadcast(state, entry)
+    emit_telemetry(state, action, from_status, next_status)
+
+    if Status.terminal?(next_status) do
+      {:stop, :normal, {:ok, next_status}, state}
+    else
+      {:reply, {:ok, next_status}, state}
     end
   end
 
