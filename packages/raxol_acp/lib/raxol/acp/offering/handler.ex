@@ -25,7 +25,7 @@ defmodule Raxol.ACP.Offering.Handler do
         job_id: binary(),
         buyer: String.t(),    # 0x address
         seller: String.t(),   # 0x address
-        state: atom()         # current Job.StateMachine state
+        state: atom()         # current JobSession.Status status
       }
   """
 

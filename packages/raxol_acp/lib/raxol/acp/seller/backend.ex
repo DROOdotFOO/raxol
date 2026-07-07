@@ -5,9 +5,8 @@ defmodule Raxol.ACP.Seller.Backend do
 
   ## Why a behaviour, not a single hard-coded WebSocket client
 
-  Same rationale as `Raxol.ACP.ContractClient`. The project rule is "no
-  mocks", so we ship two real implementations and pick one via
-  configuration:
+  The project rule is "no mocks", so we ship two real implementations
+  and pick one via configuration:
 
   - `Raxol.ACP.Seller.Backend.InMemory` -- subscribers are notified when
     a caller calls `publish/1`. Used by tests and by the bench harness.

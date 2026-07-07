@@ -4,12 +4,12 @@ defmodule Mix.Tasks.RaxolAcp.Bench do
   @moduledoc """
   Sandbox graduation harness for `raxol_acp`.
 
-  Boots the supervisor tree with `Raxol.ACP.ContractClient.InMemory`
-  and `Raxol.ACP.Seller.Backend.InMemory`, registers
-  `Raxol.ACP.Bench.Offering`, and drives N jobs through the full ACP
-  lifecycle (request -> negotiation -> transaction -> evaluation ->
-  completed). Reports per-job timing, longest consecutive successes,
-  and exits non-zero if the gate is not met.
+  Boots the supervisor tree with `Raxol.ACP.Seller.Backend.InMemory`,
+  registers `Raxol.ACP.Bench.Offering`, and drives N jobs through the
+  full v2 ACP lifecycle (offered -> budget_set -> funded/submitted ->
+  completed) via `Raxol.ACP.Seller.Queue` and `Raxol.ACP.JobSession`.
+  Reports per-job timing, longest consecutive successes, and exits
+  non-zero if the gate is not met.
 
   No chain or RPC required. The bench is the local validation step
   before attempting graduation against the real Virtuals sandbox.
@@ -62,7 +62,6 @@ defmodule Mix.Tasks.RaxolAcp.Bench do
     seed_privkey_if_missing()
     configure_app()
     Mix.Task.run("app.start")
-    ensure_chain_client_started()
     register_offering()
 
     summary =
@@ -88,7 +87,6 @@ defmodule Mix.Tasks.RaxolAcp.Bench do
   end
 
   defp configure_app do
-    Application.put_env(:raxol_acp, :contract_client, Raxol.ACP.ContractClient.InMemory)
     Application.put_env(:raxol_acp, :seller_enabled, true)
     Application.put_env(:raxol_acp, :seller_backend, Raxol.ACP.Seller.Backend.InMemory)
     Application.put_env(:raxol_acp, :seller_wallet, Raxol.ACP.Bench.Wallet)
@@ -99,15 +97,6 @@ defmodule Mix.Tasks.RaxolAcp.Bench do
     )
 
     Application.put_env(:raxol_acp, :seller_address, "0x" <> String.duplicate("11", 20))
-  end
-
-  # The InMemory contract client is an Agent, not a supervised child.
-  # It must be started explicitly. Idempotent: already-started is fine.
-  defp ensure_chain_client_started do
-    case Raxol.ACP.ContractClient.InMemory.start_link() do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-    end
   end
 
   defp register_offering do

@@ -14,27 +14,19 @@ defmodule Raxol.ACP.Chain do
           sepolia: %{rpc_url: "http://localhost:8545"}
         }
 
-  ## Contract version (V1 vs V2)
+  ## Active contracts
 
-  Three contract families coexist here, on two INDEPENDENT axes:
+  The active v2 path is **`acp_core_address`** -- the ACP Core
+  (`AgenticCommerceV3`), paired with `fund_transfer_hook_address`,
+  `multi_hook_router_address`, `subscription_hook_address`, and
+  `subscription_state_address`. It is reached through
+  `Raxol.ACP.HookClient`. The Xochi storefront offering runs here (plain
+  jobs, `hook = address(0)`).
 
-  - **`acp_version` (`:v1` | `:v2`)** governs only
-    `Raxol.ACP.ContractClient.Onchain`. It resolves `acp_contract_address`
-    (V1 `ACPSimple` proxy, sunsetted upstream 2026-06-01) for `:v1`, or
-    `acp_router_address` (the legacy "v2 ACPRouter" hop, Base mainnet only)
-    for `:v2`. BOTH are legacy -- `:v2` here is the ACPRouter, NOT the
-    active core. The default is `:v1`
-    (`Application.get_env(:raxol_acp, :acp_version, :v1)`); a deployment can
-    override it with `ACP_VERSION` (see `config/runtime.exs`).
-  - **`acp_core_address`** -- the real, active v2 ACP Core
-    (`AgenticCommerceV3`), paired with `fund_transfer_hook_address`,
-    `multi_hook_router_address`, `subscription_hook_address`, and
-    `subscription_state_address`. It is reached through
-    `Raxol.ACP.HookClient`, which does NOT consult `acp_version`. The Xochi
-    storefront offering runs here (plain jobs, `hook = address(0)`).
-
-  `acp_router_address` stays only so existing dashboards / event indexers
-  don't break; do not target it for new work. Callers should not pick an
+  `acp_contract_address` (the sunsetted V1 `ACPSimple` proxy, retired
+  upstream 2026-06-01) and `acp_router_address` (the legacy ACPRouter hop,
+  Base mainnet only) stay only so existing dashboards / event indexers
+  don't break; do not target them for new work. Callers should not pick an
   address directly.
   """
 

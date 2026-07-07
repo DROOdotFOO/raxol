@@ -1,6 +1,6 @@
 defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
   @moduledoc """
-  End-to-end test: a real `Raxol.ACP.Job.Server` transition fires
+  End-to-end test: a real `Raxol.ACP.JobSession` transition fires
   canonical telemetry; the `Raxol.Symphony.Resumer` watches that
   telemetry; a paused Symphony run whose `resume_on` spec matches the
   event auto-resumes.
@@ -10,50 +10,37 @@ defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
     * `Raxol.Symphony.ResumeOn.acp_pause/2` -- shape the runner emits
     * `Raxol.Symphony.Orchestrator` -- park + resume
     * `Raxol.Symphony.Resumer` -- telemetry bridge
-    * `Raxol.ACP.Job.Server` -- real event source on `[:raxol, :acp,
-      :job, :transition]`
+    * `Raxol.ACP.JobSession` -- real event source on `[:raxol, :acp,
+      :job_session, :transition]`
     * `Raxol.Symphony.Runners.Noop` -- minimal pauseable runner
+
+  The provider session drives transitions with `JobSession.apply_event/3`
+  -- the path a provider uses to mirror a status it observed settle
+  elsewhere (an on-chain fund, a client action). It emits the same
+  canonical telemetry as the role-gated action API.
   """
 
   use ExUnit.Case, async: false
 
-  alias Raxol.ACP.ContractClient
-  alias Raxol.ACP.ContractClient.InMemory
-  alias Raxol.ACP.Job
+  alias Raxol.ACP.JobSession
   alias Raxol.Symphony.{Config, Issue, Orchestrator, ResumeOn, Resumer}
   alias Raxol.Symphony.Runners.Noop
   alias Raxol.Symphony.Trackers.Memory
 
-  @acp_event [:raxol, :acp, :job, :transition]
-  @seller "0x" <> String.duplicate("ab", 20)
-  @sig <<0xDE, 0xAD>>
+  @acp_event [:raxol, :acp, :job_session, :transition]
+  @chain_id 8453
 
   setup do
-    # raxol_acp's RaxolAcp.Application auto-starts the supervision
-    # tree when the dep is loaded (it's only gated off when ACP itself
-    # is in :test env; here ACP is loaded as a dep so its app starts).
-    # If something interrupted that, fall back to start_supervised so
-    # the test always sees a live Job.Supervisor.
-    unless Process.whereis(Raxol.ACP.Job.Supervisor) do
+    # raxol_acp's RaxolAcp.Application auto-starts the supervision tree
+    # when the dep is loaded (it's only gated off when ACP itself is in
+    # :test env; here ACP is loaded as a dep so its app starts). If
+    # something interrupted that, fall back to start_supervised so the
+    # test always sees a live JobSession.Supervisor.
+    unless Process.whereis(Raxol.ACP.JobSession.Supervisor) do
       start_supervised!(Raxol.ACP.Supervisor)
     end
 
-    # The InMemory contract client is an Agent not in the supervisor
-    # tree -- ACP tests start it ad-hoc. Same pattern here: ignore
-    # :already_started if a sibling test left it running.
-    case InMemory.start_link() do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    # Clean ACP state for this test.
-    for {_, pid, _, _} <- DynamicSupervisor.which_children(Job.Supervisor),
-        is_pid(pid) do
-      DynamicSupervisor.terminate_child(Job.Supervisor, pid)
-    end
-
-    InMemory.reset()
-    Job.Store.clear()
+    terminate_sessions()
 
     # Symphony infrastructure.
     start_supervised!({Task.Supervisor, name: Raxol.Symphony.TaskSupervisor})
@@ -82,6 +69,26 @@ defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
 
   defp issue(id, identifier, state) do
     %Issue{id: id, identifier: identifier, title: "T-#{identifier}", state: state}
+  end
+
+  defp start_session(job_id) do
+    {:ok, _pid} =
+      JobSession.Supervisor.start_session(
+        chain_id: @chain_id,
+        job_id: job_id,
+        role: :provider
+      )
+
+    :ok
+  end
+
+  defp terminate_sessions do
+    for {_, pid, _, _} <- DynamicSupervisor.which_children(JobSession.Supervisor),
+        is_pid(pid) do
+      DynamicSupervisor.terminate_child(JobSession.Supervisor, pid)
+    end
+
+    :ok
   end
 
   defp start_orchestrator(config) do
@@ -134,34 +141,30 @@ defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
   end
 
   describe "ACP transition -> Resumer -> Symphony resume_run" do
-    test "a real Job.Server payment transition resumes the paused Symphony run",
+    test "a real JobSession fund transition resumes the paused Symphony run",
          %{config: config} do
-      # 1. Create a real ACP job via the InMemory contract client + Job.Server.
-      {:ok, acp_job_id} =
-        ContractClient.create_job(@seller, @seller, 9_999_999_999)
-
-      {:ok, _job_pid} = Job.Supervisor.start_job(job_id: acp_job_id)
-
-      # Advance the ACP job to :negotiation so the next :accept_payment
-      # transition is valid (state machine: request -> negotiation ->
-      # transaction).
-      {:ok, :negotiation} =
-        Job.Server.transition(acp_job_id, :accept_request, %{}, @sig)
+      # 1. Create a real ACP job session (provider role).
+      acp_job_id = "acp-#{System.unique_integer([:positive])}"
+      :ok = start_session(acp_job_id)
 
       # 2. Wire a Symphony runner to pause waiting for THIS acp_job_id to
-      # transition to :transaction. ResumeOn builds the canonical
-      # resume_token shape.
+      # transition to :funded. ResumeOn builds the canonical resume_token
+      # shape.
       Memory.put_issue(issue("a", "MT-1", "Todo"))
 
       pause_tuple =
         ResumeOn.acp_pause(acp_job_id,
-          waiting_for: :transaction,
+          waiting_for: :funded,
           reason: :awaiting_buyer_payment,
-          meta: %{step: "after-request"}
+          meta: %{step: "after-budget"}
         )
 
       assert {:pause, :awaiting_buyer_payment, pause_token} = pause_tuple
-      Noop.Director.set("MT-1", {:pause_then, :awaiting_buyer_payment, pause_token, {:succeed_after, 0}})
+
+      Noop.Director.set(
+        "MT-1",
+        {:pause_then, :awaiting_buyer_payment, pause_token, {:succeed_after, 0}}
+      )
 
       # 3. Boot the Symphony orchestrator + Resumer.
       orch = start_orchestrator(config)
@@ -179,13 +182,12 @@ defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
       assert %{"a" => entry} = paused
       assert %{resume_on: %{telemetry: @acp_event, match: match}} = entry.resume_token
       assert match.job_id == acp_job_id
-      assert match.to == :transaction
+      assert match.to == :funded
 
-      # 5. Drive the REAL ACP Job.Server forward. The Job.Server emits
-      # [:raxol, :acp, :job, :transition] telemetry; the Resumer's
+      # 5. Drive the REAL ACP JobSession forward. The session emits
+      # [:raxol, :acp, :job_session, :transition] telemetry; the Resumer's
       # handler catches it and calls Orchestrator.resume_run/3.
-      {:ok, :transaction} =
-        Job.Server.transition(acp_job_id, :accept_payment, %{}, @sig)
+      {:ok, :funded} = JobSession.apply_event({@chain_id, acp_job_id}, :funded, %{})
 
       # 6. The Symphony run auto-resumes. The Noop runner's resume
       # action is {:succeed_after, 0}, so the worker finishes normal
@@ -204,19 +206,17 @@ defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
          %{config: config} do
       # Two ACP jobs; the Symphony run waits on job A, but job B is the
       # one that transitions. The run must stay paused.
-      {:ok, job_a} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
-      {:ok, job_b} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
+      job_a = "acp-#{System.unique_integer([:positive])}"
+      job_b = "acp-#{System.unique_integer([:positive])}"
 
-      {:ok, _} = Job.Supervisor.start_job(job_id: job_a)
-      {:ok, _} = Job.Supervisor.start_job(job_id: job_b)
-
-      {:ok, :negotiation} = Job.Server.transition(job_b, :accept_request, %{}, @sig)
+      :ok = start_session(job_a)
+      :ok = start_session(job_b)
 
       Memory.put_issue(issue("a", "MT-1", "Todo"))
 
       pause_tuple =
         ResumeOn.acp_pause(job_a,
-          waiting_for: :transaction,
+          waiting_for: :funded,
           reason: :awaiting_buyer_payment
         )
 
@@ -231,27 +231,25 @@ defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
 
       # Transition job_b (the wrong one). The Resumer's subset check
       # rejects this event because match.job_id == job_a != job_b.
-      {:ok, :transaction} = Job.Server.transition(job_b, :accept_payment, %{}, @sig)
+      {:ok, :funded} = JobSession.apply_event({@chain_id, job_b}, :funded, %{})
 
       # Stay paused.
       Process.sleep(100)
       assert Orchestrator.snapshot(orch).counts.paused == 1
     end
 
-    test "a transition to a different :to phase does NOT auto-resume",
+    test "a transition to a different status does NOT auto-resume",
          %{config: config} do
-      # The Symphony run waits for :transaction. The ACP job transitions
-      # only as far as :negotiation. No match -> stays paused.
-      {:ok, acp_job_id} =
-        ContractClient.create_job(@seller, @seller, 9_999_999_999)
-
-      {:ok, _} = Job.Supervisor.start_job(job_id: acp_job_id)
+      # The Symphony run waits for :funded. The ACP job transitions only
+      # as far as :budget_set. No match -> stays paused.
+      acp_job_id = "acp-#{System.unique_integer([:positive])}"
+      :ok = start_session(acp_job_id)
 
       Memory.put_issue(issue("a", "MT-1", "Todo"))
 
       pause_tuple =
         ResumeOn.acp_pause(acp_job_id,
-          waiting_for: :transaction,
+          waiting_for: :funded,
           reason: :awaiting_buyer_payment
         )
 
@@ -264,11 +262,10 @@ defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
       :ok = Orchestrator.tick_now(orch)
       wait_until(fn -> Orchestrator.snapshot(orch).counts.paused == 1 end)
 
-      # The :accept_request transition takes the job to :negotiation,
-      # NOT :transaction. Telemetry fires but the match map's to ==
-      # :transaction so the Resumer skips it.
-      {:ok, :negotiation} =
-        Job.Server.transition(acp_job_id, :accept_request, %{}, @sig)
+      # The transition takes the job to :budget_set, NOT :funded.
+      # Telemetry fires but the match map's to == :funded so the Resumer
+      # skips it.
+      {:ok, :budget_set} = JobSession.apply_event({@chain_id, acp_job_id}, :budget_set, %{})
 
       Process.sleep(100)
       assert Orchestrator.snapshot(orch).counts.paused == 1

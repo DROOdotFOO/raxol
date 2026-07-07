@@ -9,27 +9,26 @@ defmodule Raxol.Symphony.ResumeOn do
 
       {:pause, :awaiting_buyer_payment,
        %{resume_on: %{
-           telemetry: [:raxol, :acp, :job, :transition],
-           match: %{job_id: "j-1", to: :transaction}
+           telemetry: [:raxol, :acp, :job_session, :transition],
+           match: %{job_id: "j-1", to: :funded}
          }}}
 
   With it:
 
-      acp_pause("j-1", waiting_for: :transaction, reason: :awaiting_buyer_payment)
+      acp_pause("j-1", waiting_for: :funded, reason: :awaiting_buyer_payment)
 
   ## ACP-specific helpers
 
   `acp_transition/2` covers the common "wait for ACP job X to advance
-  to state Y" case. It always targets the
-  `[:raxol, :acp, :job, :transition]` telemetry event emitted by
-  `Raxol.ACP.Job.Server` on every successful transition (see
-  `raxol_acp` Job.Server moduledoc, "Telemetry" section).
+  to status Y" case. It always targets the
+  `[:raxol, :acp, :job_session, :transition]` telemetry event emitted by
+  `Raxol.ACP.JobSession` on every status change.
 
   Compose `acp_pause/2` with `Orchestrator.resume_run/3` like so:
 
       # in a runner's run/3:
       Raxol.Symphony.ResumeOn.acp_pause("j-1",
-        waiting_for: :transaction,
+        waiting_for: :funded,
         reason: :awaiting_buyer_payment
       )
 
@@ -37,16 +36,16 @@ defmodule Raxol.Symphony.ResumeOn do
 
       Raxol.Symphony.Resumer.start_link(
         orchestrator: Raxol.Symphony.Orchestrator,
-        telemetry_event: [:raxol, :acp, :job, :transition]
+        telemetry_event: [:raxol, :acp, :job_session, :transition]
       )
 
-  When the ACP Job.Server fires `:transition` with metadata
-  `%{job_id: "j-1", to: :transaction, ...}` the Resumer calls
+  When the ACP JobSession fires `:transition` with metadata
+  `%{job_id: "j-1", to: :funded, ...}` the Resumer calls
   `Orchestrator.resume_run/3` with the event metadata as the
   resume value.
   """
 
-  @acp_transition_event [:raxol, :acp, :job, :transition]
+  @acp_transition_event [:raxol, :acp, :job_session, :transition]
 
   @type resume_on :: %{
           telemetry: [atom(), ...],
@@ -67,14 +66,14 @@ defmodule Raxol.Symphony.ResumeOn do
 
   @doc """
   Build a `resume_on` map for "wait until ACP job `job_id` transitions
-  to state `to`".
+  to status `to`".
 
-  The `:to` state is a `Raxol.ACP.Job.StateMachine.state/0` atom: one of
-  `:negotiation`, `:transaction`, `:evaluation`, `:completed`,
-  `:rejected`, `:expired`.
+  The `:to` status is a `Raxol.ACP.JobSession.Status.t/0` atom: one of
+  `:budget_set`, `:funded`, `:submitted`, `:completed`, `:rejected`,
+  `:expired`.
 
   Pass `:from` to additionally constrain the matching transition's
-  source state.
+  source status.
 
   Returns the bare `resume_on` map; wrap it in your own resume_token
   if you want to carry extra metadata, or use `acp_pause/2` to get a
@@ -82,16 +81,16 @@ defmodule Raxol.Symphony.ResumeOn do
 
   ## Examples
 
-      iex> Raxol.Symphony.ResumeOn.acp_transition("j-1", to: :transaction)
+      iex> Raxol.Symphony.ResumeOn.acp_transition("j-1", to: :funded)
       %{
-        telemetry: [:raxol, :acp, :job, :transition],
-        match: %{job_id: "j-1", to: :transaction}
+        telemetry: [:raxol, :acp, :job_session, :transition],
+        match: %{job_id: "j-1", to: :funded}
       }
 
-      iex> Raxol.Symphony.ResumeOn.acp_transition("j-2", to: :completed, from: :evaluation)
+      iex> Raxol.Symphony.ResumeOn.acp_transition("j-2", to: :completed, from: :submitted)
       %{
-        telemetry: [:raxol, :acp, :job, :transition],
-        match: %{job_id: "j-2", to: :completed, from: :evaluation}
+        telemetry: [:raxol, :acp, :job_session, :transition],
+        match: %{job_id: "j-2", to: :completed, from: :submitted}
       }
   """
   @spec acp_transition(binary() | integer(), keyword()) :: resume_on()
@@ -128,15 +127,15 @@ defmodule Raxol.Symphony.ResumeOn do
       def run(issue, _config, _opts) do
         # ... do some work ...
         Raxol.Symphony.ResumeOn.acp_pause("j-1",
-          waiting_for: :transaction,
+          waiting_for: :funded,
           reason: :awaiting_buyer_payment,
-          meta: %{step: "after-negotiation"}
+          meta: %{step: "after-budget"}
         )
       end
 
       # ==> {:pause, :awaiting_buyer_payment,
-      #      %{step: "after-negotiation",
-      #        resume_on: %{telemetry: [...], match: %{job_id: "j-1", to: :transaction}}}}
+      #      %{step: "after-budget",
+      #        resume_on: %{telemetry: [...], match: %{job_id: "j-1", to: :funded}}}}
   """
   @spec acp_pause(binary() | integer(), keyword()) :: pause_tuple()
   def acp_pause(job_id, opts) do

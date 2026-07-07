@@ -15,10 +15,10 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
   Here the test plays BOTH roles: the funded `LiveWallet` is the buyer (it signs
   the intent), and for a self-contained gate is also the job's provider address.
 
-  The job orchestration uses the in-memory `ContractClient` (no live ACP escrow
+  The job orchestration runs an in-process `JobSession` (no live ACP escrow
   contracts); the SETTLEMENT is real and moves funds. The fuller on-chain escrow
-  path (`ContractClient.Onchain` + `HookClient` + `SolverAgent`) is the existing
-  `:live_chain` stack and is a separate gate.
+  path (`HookClient` + `SolverAgent`) is the existing `:live_chain` stack and is
+  a separate gate.
 
   Auth is the Member service token (`XOCHI_ORDER_LIVE_TOKEN`): one `xochi_config`
   serves the buyer's quote+sign and the Settler's relay+poll. (The mandate path is

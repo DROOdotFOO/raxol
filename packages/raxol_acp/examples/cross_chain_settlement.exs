@@ -29,8 +29,8 @@ alias Raxol.Workflow.Graph
 # --- Two simulated chains with independent state ---
 #
 # Each chain holds its own ledger + monotonic tx counter. In production
-# these would be two `Raxol.ACP.ContractClient` impls backed by different
-# RPC endpoints (e.g., Base + Optimism); here they're plain Agents so the
+# these would be two on-chain write paths backed by different RPC
+# endpoints (e.g., Base + Optimism); here they're plain Agents so the
 # demo runs hermetically.
 
 defmodule SimChain do

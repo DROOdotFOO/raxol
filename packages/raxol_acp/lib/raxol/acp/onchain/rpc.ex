@@ -1,7 +1,9 @@
 defmodule Raxol.ACP.Onchain.RPC do
   @moduledoc """
-  Minimal Ethereum JSON-RPC 2.0 client for the methods
-  `Raxol.ACP.ContractClient.Onchain` needs.
+  Minimal Ethereum JSON-RPC 2.0 client for the methods the on-chain
+  write paths (`Raxol.ACP.ProviderAdapter.JSONRPC`,
+  `Raxol.ACP.ProviderAdapter.SCA`, `Raxol.ACP.Wallet.SCA.Provisioner`)
+  need.
 
   ## Methods supported (v0.1)
 
