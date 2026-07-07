@@ -63,10 +63,10 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
   @moduletag timeout: 600_000
 
   if System.get_env("XOCHI_ORDER_LIVE_URL") && System.get_env("XOCHI_ORDER_LIVE_KEY") do
-    alias Raxol.ACP.{ContractClient, Job}
-    alias Raxol.ACP.ContractClient.InMemory
+    alias Raxol.ACP.{AssetToken, Chain, JobSession}
     alias Raxol.ACP.Offering.Registry, as: OfferingRegistry
     alias Raxol.ACP.Onchain.Permit2Approver
+    alias Raxol.ACP.ProviderAdapter
     alias Raxol.ACP.ProviderAdapter.JSONRPC
     alias Raxol.ACP.Xochi.TransferOffering
     alias Raxol.Payments.Assets
@@ -187,29 +187,41 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
 
       requirement = requirement(cfg, from, to, token, bundle)
 
-      {:ok, job_id} =
-        ContractClient.create_job(cfg.wallet_address, cfg.wallet_address, future_ts())
+      # Drive the v2 provider directly. The job orchestration is local (a
+      # ProviderAdapter.Mock stands in for the on-chain hook writes); only the
+      # SETTLEMENT inside handle_deliver is real and moves funds.
+      chain_id = 8453
+      job_id = "live-order-#{System.unique_integer([:positive])}"
 
       {:ok, _pid} =
-        Job.Supervisor.start_job(
-          job_id: job_id,
+        JobSession.Supervisor.start_session(chain_id: chain_id, job_id: job_id, role: :provider)
+
+      provider =
+        JobSession.Provider.new(
+          session: {chain_id, job_id},
           handler: TransferOffering,
-          request: requirement,
+          adapter: ProviderAdapter.Mock.new(),
+          chain_id: chain_id,
+          acp_core_address: Chain.mainnet().acp_core_address,
+          job_id: :erlang.phash2(job_id),
           buyer: cfg.wallet_address,
           seller: cfg.wallet_address
         )
 
-      assert {:ok, :negotiation} = Job.Server.accept_request(job_id),
+      budget = AssetToken.usdc(Decimal.new("0.25"), chain_id)
+
+      assert {:ok, %{status: :budget_set}} =
+               JobSession.Provider.accept_request(provider, requirement, budget),
              "#{label}: seller rejected the request (job #{job_id})"
 
-      assert {:ok, :transaction} = Job.Server.accept_payment(job_id, %{})
+      # The client funds the escrow; mirror it before delivery.
+      {:ok, :funded} = JobSession.apply_event({chain_id, job_id}, :funded, %{})
 
       started = System.monotonic_time(:millisecond)
 
-      assert {:ok, :evaluation} = Job.Server.deliver(job_id),
+      assert {:ok, %{status: :submitted, deliverable: deliverable}} =
+               JobSession.Provider.deliver(provider, requirement),
              "#{label}: settlement did not deliver (job #{job_id}); the intent failed or expired"
-
-      deliverable = deliverable_from_memos(job_id, label)
 
       assert is_binary(deliverable["intent_id"])
       assert deliverable["status"] in ["completed", "settled"]
@@ -238,13 +250,6 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     # (string keys). Stringify so valid_requirement?/execute_signed read it.
     defp bundle_to_json(bundle) do
       Map.new(bundle, fn {k, v} -> {to_string(k), v} end)
-    end
-
-    defp deliverable_from_memos(job_id, label) do
-      case Enum.find(InMemory.list_memos(job_id), &(&1.next_phase == :evaluation)) do
-        nil -> flunk("#{label}: no evaluation memo for job #{job_id}")
-        memo -> Jason.decode!(memo.content)
-      end
     end
 
     # -- Read-only quote (fillability + solver pin) --
@@ -401,8 +406,6 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     end
 
     defp parse_list(spec), do: spec |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
-
-    defp future_ts, do: System.system_time(:second) + 3600
 
     defp decode_key("0x" <> hex), do: Base.decode16!(hex, case: :mixed)
     defp decode_key(hex), do: Base.decode16!(hex, case: :mixed)

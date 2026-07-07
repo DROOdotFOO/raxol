@@ -107,7 +107,7 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
   # -- delivery --
 
   # Use a configured `:settle_fn` as-is; otherwise build a Settler from the
-  # options. Missing options return an error instead of raising in Job.Server.
+  # options. Missing options return an error instead of raising during delivery.
   defp resolve_settler do
     opts = Application.get_env(:raxol_acp, :xochi_transfer_settler, [])
 

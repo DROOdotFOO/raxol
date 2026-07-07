@@ -39,8 +39,8 @@ defmodule Raxol.ACP.Directive.Helper do
   `{:error, reason}`.
 
   Used inside `Raxol.Workflow` node bodies that need the directive's
-  result inline (e.g. `Raxol.ACP.Job.Workflow.write_memo/2` needs the
-  tx_hash before appending the memo to state). Async callers should
+  result inline (e.g. a node that needs a `CreateMemo` directive's
+  tx_hash before advancing state). Async callers should
   invoke `Raxol.Core.Runtime.Directive.Executor.execute/2` directly
   and listen for `{:command_result, ...}` themselves.
 

@@ -7,23 +7,21 @@ defmodule Raxol.ACP.Supervisor do
   `:rest_for_one` -- if a child earlier in the start order dies, all
   children after it are restarted too. This matters because:
 
-  - The job registry must outlive any job server.
-  - A persistent memo store crash means no job server can safely continue
-    (memos would be lost on the next transition).
+  - The session registry must outlive any job session.
+  - A persistent memo store crash means dependent processes cannot safely
+    continue (memos would be lost on the next transition).
   - The seller WebSocket can crash and restart independently of jobs in
     flight.
 
   ## Children (v0.2)
 
-  - `Raxol.ACP.Job.Registry` -- per-job process lookup (v1)
-  - `Raxol.ACP.JobSession.Registry` -- per-`{chain_id, job_id}` lookup (v2)
+  - `Raxol.ACP.JobSession.Registry` -- per-`{chain_id, job_id}` lookup
   - `Raxol.ACP.Wallet.NonceServer` -- serializes EVM nonce assignment for
     the umbrella seller wallet (default-named instance)
   - `Raxol.ACP.Offering.Registry` -- declared offerings (ETS-backed)
-  - `Raxol.ACP.Job.Store` -- ETS-backed memo persistence (v1 jobs
-    hydrate from here on transient restart)
-  - `Raxol.ACP.Job.Supervisor` -- DynamicSupervisor for v1 per-job processes
-  - `Raxol.ACP.JobSession.Supervisor` -- DynamicSupervisor for v2 sessions
+  - `Raxol.ACP.Job.Store` -- ETS-backed memo persistence (retained for
+    optional JobSession persistence)
+  - `Raxol.ACP.JobSession.Supervisor` -- DynamicSupervisor for job sessions
   - `Raxol.ACP.Seller.Supervisor` -- only when
     `config :raxol_acp, seller_enabled: true`. Owns the Backend, the
     Queue, and the Runtime. Buyer-only deployments leave it off.
@@ -39,12 +37,10 @@ defmodule Raxol.ACP.Supervisor do
   @impl true
   def init(_opts) do
     base = [
-      Raxol.ACP.Job.Registry,
       Raxol.ACP.JobSession.Registry,
       nonce_server_child(),
       Raxol.ACP.Offering.Registry,
       Raxol.ACP.Job.Store,
-      Raxol.ACP.Job.Supervisor,
       Raxol.ACP.JobSession.Supervisor
     ]
 

@@ -1,24 +1,10 @@
 defmodule Raxol.ACP.Job.StoreTest do
   use ExUnit.Case, async: false
 
-  import Raxol.ACP.TestSupport.WorkflowSetup
-
-  alias Raxol.ACP.ContractClient
   alias Raxol.ACP.ContractClient.InMemory
-  alias Raxol.ACP.Job
   alias Raxol.ACP.Job.Store
 
-  @seller "0x" <> String.duplicate("ab", 20)
-  @sig <<0xDE, 0xAD>>
-
-  setup :with_isolated_workflow_saver
-
   setup do
-    for {_, pid, _, _} <- DynamicSupervisor.which_children(Job.Supervisor),
-        is_pid(pid) do
-      DynamicSupervisor.terminate_child(Job.Supervisor, pid)
-    end
-
     InMemory.reset()
     Store.clear()
     :ok
@@ -288,94 +274,6 @@ defmodule Raxol.ACP.Job.StoreTest do
 
       _pid ->
         :ok
-    end
-  end
-
-  describe "Job.Server integration: transient restart" do
-    test "every successful transition writes through to the Store" do
-      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
-      {:ok, _pid} = Job.Supervisor.start_job(job_id: job_id)
-
-      assert :error = Store.load(job_id)
-
-      assert {:ok, :negotiation} =
-               Job.Server.transition(job_id, :accept_request, %{step: 1}, @sig)
-
-      assert {:ok, %{state: :negotiation, memos: [memo]}} = Store.load(job_id)
-      assert memo.next_phase == :negotiation
-      assert memo.payload == %{step: 1}
-      assert memo.tx_hash == "tx-1"
-
-      assert {:ok, :transaction} =
-               Job.Server.transition(job_id, :accept_payment, %{step: 2}, @sig)
-
-      assert {:ok, %{state: :transaction, memos: [_, m2]}} = Store.load(job_id)
-      assert m2.next_phase == :transaction
-      assert m2.tx_hash == "tx-2"
-    end
-
-    test ":persist? false bypasses the Store" do
-      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
-      {:ok, _pid} = Job.Supervisor.start_job(job_id: job_id, persist?: false)
-
-      assert {:ok, :negotiation} =
-               Job.Server.transition(job_id, :accept_request, %{}, @sig)
-
-      assert :error = Store.load(job_id)
-    end
-
-    test "transient restart hydrates state + memos from the Store" do
-      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
-      {:ok, pid} = Job.Supervisor.start_job(job_id: job_id)
-
-      # Drive the job two transitions in.
-      assert {:ok, :negotiation} =
-               Job.Server.transition(job_id, :accept_request, %{step: 1}, @sig)
-
-      assert {:ok, :transaction} =
-               Job.Server.transition(job_id, :accept_payment, %{step: 2}, @sig)
-
-      # Crash the server with a non-normal exit. :transient restart kicks in.
-      ref = Process.monitor(pid)
-      Process.exit(pid, :kill)
-      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 500
-
-      new_pid = wait_for_new_pid(job_id, pid)
-      assert new_pid != pid
-
-      # The restarted server has hydrated from the Store, not started fresh.
-      assert Job.Server.current_state(job_id) == :transaction
-
-      memos = Job.Server.memos(job_id)
-      assert Enum.map(memos, & &1.next_phase) == [:negotiation, :transaction]
-      assert Enum.map(memos, & &1.payload) == [%{step: 1}, %{step: 2}]
-
-      # The lifecycle continues correctly from the hydrated state.
-      assert {:ok, :evaluation} =
-               Job.Server.transition(job_id, :deliver, %{step: 3}, @sig)
-
-      assert {:ok, %{state: :evaluation, memos: [_, _, m3]}} = Store.load(job_id)
-      assert m3.next_phase == :evaluation
-    end
-  end
-
-  defp wait_for_new_pid(job_id, old_pid, timeout_ms \\ 1_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_for_new_pid(job_id, old_pid, deadline)
-  end
-
-  defp do_wait_for_new_pid(job_id, old_pid, deadline) do
-    case Job.Registry.whereis(job_id) do
-      pid when is_pid(pid) and pid != old_pid ->
-        pid
-
-      _ ->
-        if System.monotonic_time(:millisecond) < deadline do
-          Process.sleep(5)
-          do_wait_for_new_pid(job_id, old_pid, deadline)
-        else
-          flunk("Job.Server for #{job_id} did not restart with a new pid in time")
-        end
     end
   end
 end
