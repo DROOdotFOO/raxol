@@ -74,6 +74,29 @@ defmodule Raxol.ACP.JobSession.StatusTest do
       assert {:error, _} = Status.validate(:budget_set, :submitted)
       assert {:error, _} = Status.validate(:funded, :completed)
     end
+
+    test "exhaustively agrees with the documented transition graph" do
+      # The canonical adjacency, mirrored here so any drift in Status's private
+      # @valid_transitions map is caught for every one of the 7x7 pairs.
+      legal = %{
+        open: [:budget_set, :expired],
+        budget_set: [:budget_set, :funded, :expired],
+        funded: [:submitted, :expired],
+        submitted: [:completed, :rejected, :expired],
+        completed: [],
+        rejected: [],
+        expired: []
+      }
+
+      for from <- Status.all(), to <- Status.all() do
+        expected =
+          if to in Map.fetch!(legal, from),
+            do: :ok,
+            else: {:error, {:invalid_transition, from, to}}
+
+        assert Status.validate(from, to) == expected, "validate(#{from}, #{to})"
+      end
+    end
   end
 
   describe "target_status/1" do

@@ -28,12 +28,23 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
   use. Tests tagged `:live_chain` (requires `anvil` on PATH) run
   against this fork.
 
+  ## Nonce management
+
+  Nonce assignment is serialized through a `Raxol.ACP.Wallet.NonceServer`
+  (the `:nonce_server` config, default the umbrella instance). Every
+  transaction takes its nonce from the server's mailbox, so two concurrent
+  `send_calls/3` for the same EOA -- e.g. two in-flight seller jobs each
+  writing a hook call -- can never sign the same nonce. A send that fails
+  before broadcast resyncs the server so the next send re-fetches the
+  pending nonce from chain and re-fills the gap. One `NonceServer` instance
+  serializes one wallet address; run one instance per wallet.
+
   ## What's NOT covered
 
   - **Smart-contract account flows**: this adapter signs EIP-1559
     transactions as a plain EOA. For Modular Account v2 / paymaster
-    flows, use `Raxol.ACP.ProviderAdapter.SCA` (not yet implemented),
-    which wraps `Raxol.ACP.Wallet.SCA`.
+    flows, use `Raxol.ACP.ProviderAdapter.SCA`, which wraps
+    `Raxol.ACP.Wallet.SCA` and uses ERC-4337 EntryPoint nonces instead.
   - **Batch submission**: `send_calls/3` submits one EIP-1559 tx per
     call. The SDK's batch semantics (return one hash per call)
     are preserved, but the bundling efficiencies aren't.
@@ -42,12 +53,14 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
   @behaviour Raxol.ACP.ProviderAdapter
 
   alias Raxol.ACP.{ABI, Onchain.RPC, Onchain.Transaction, Secret}
+  alias Raxol.ACP.Wallet.NonceServer
 
   @type config :: %{
           chains: %{required(pos_integer()) => String.t()},
           private_key: Secret.t(),
           address: String.t(),
-          fee_overrides: %{optional(pos_integer()) => fee_override()}
+          fee_overrides: %{optional(pos_integer()) => fee_override()},
+          nonce_server: GenServer.server()
         }
 
   @type fee_override :: %{
@@ -68,6 +81,14 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
   - `:fee_overrides` -- per-chain `%{max_priority_fee_per_gas,
     max_fee_per_gas}` map. Use to short-circuit fee discovery on
     test forks (anvil's default fees are zero).
+  - `:nonce_server` -- the `Raxol.ACP.Wallet.NonceServer` instance that
+    serializes nonce assignment for THIS adapter's wallet address
+    (default `Raxol.ACP.Wallet.NonceServer`, the umbrella instance the
+    supervisor starts). One instance must map to exactly one address:
+    two concurrent `send_calls/3` for the same EOA route through the
+    server's mailbox so they can never sign the same nonce. If you run
+    more than one wallet, construct each adapter with a distinct
+    `:nonce_server`.
   """
   @spec new(keyword()) :: Raxol.ACP.ProviderAdapter.adapter()
   def new(opts) do
@@ -84,7 +105,8 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
       chains: chains,
       private_key: Secret.new(private_key),
       address: address,
-      fee_overrides: Keyword.get(opts, :fee_overrides, %{})
+      fee_overrides: Keyword.get(opts, :fee_overrides, %{}),
+      nonce_server: Keyword.get(opts, :nonce_server, NonceServer)
     }
 
     %{adapter: __MODULE__, config: config}
@@ -173,20 +195,47 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
 
   defp send_each(client, adapter, chain_id, calls, private_key) do
     address = adapter.config.address
+    nonce_server = adapter.config.nonce_server
 
-    with {:ok, starting_nonce} <- RPC.get_transaction_count(client, address) do
-      {results, _next_nonce} =
-        Enum.map_reduce(calls, starting_nonce, fn call, nonce ->
-          case submit_one(client, adapter, chain_id, call, private_key, nonce) do
-            {:ok, hash} -> {{:ok, hash}, nonce + 1}
-            {:error, _} = err -> {err, nonce}
-          end
-        end)
+    results =
+      Enum.map(calls, fn call ->
+        with {:ok, nonce} <- acquire_nonce(nonce_server, client, address),
+             {:ok, hash} <- submit_one(client, adapter, chain_id, call, private_key, nonce) do
+          {:ok, hash}
+        else
+          {:error, _} = err ->
+            # The tx never reached the chain, so its nonce was not consumed.
+            # Mark the counter unseeded so the next acquisition re-fetches the
+            # pending nonce from chain and re-fills the gap -- the same self-heal
+            # the old per-send `eth_getTransactionCount` gave, now without the
+            # cross-send nonce race.
+            NonceServer.resync(nonce_server)
+            err
+        end
+      end)
 
-      case Enum.find(results, &match?({:error, _}, &1)) do
-        nil -> {:ok, Enum.map(results, fn {:ok, hash} -> hash end)}
-        err -> err
-      end
+    case Enum.find(results, &match?({:error, _}, &1)) do
+      nil -> {:ok, Enum.map(results, fn {:ok, hash} -> hash end)}
+      err -> err
+    end
+  end
+
+  # Assign the next nonce, serialized through the wallet's NonceServer so two
+  # concurrent `send_calls` for the same EOA can never sign the same nonce (the
+  # GenServer mailbox is the serialization point). When the counter is unseeded
+  # -- first use, or after a failed send reset it -- fetch the pending nonce from
+  # chain once and adopt it atomically: `seed_and_next/2` closes the first-use
+  # race so two callers that both observe `:unseeded` still receive distinct,
+  # monotonic nonces.
+  defp acquire_nonce(nonce_server, client, address) do
+    case NonceServer.get_next_if_seeded(nonce_server) do
+      {:ok, nonce} ->
+        {:ok, nonce}
+
+      :unseeded ->
+        with {:ok, chain_nonce} <- RPC.get_transaction_count(client, address) do
+          {:ok, NonceServer.seed_and_next(nonce_server, chain_nonce)}
+        end
     end
   end
 

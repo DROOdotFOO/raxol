@@ -139,6 +139,16 @@ defmodule Raxol.ACP.JobSession.ProviderTest do
       assert JobSession.status(session) == :funded
       assert ProviderAdapter.Mock.sent_calls(adapter) == []
     end
+
+    test "does not advance the session when the chain write fails" do
+      adapter = ProviderAdapter.Mock.new()
+      ProviderAdapter.Mock.set_send_calls_error(adapter, :rpc_down)
+      session = start_session(:funded)
+      p = provider(session, AcceptHandler, adapter)
+
+      assert {:error, :rpc_down} = Provider.deliver(p, %{req: 1})
+      assert JobSession.status(session) == :funded
+    end
   end
 
   describe "evaluate/2" do
@@ -172,6 +182,16 @@ defmodule Raxol.ACP.JobSession.ProviderTest do
 
       assert {:error, :evaluate_not_supported} = Provider.evaluate(p, %{result: "done"})
       assert ProviderAdapter.Mock.sent_calls(adapter) == []
+      assert JobSession.status(session) == :submitted
+    end
+
+    test "does not advance the session when the chain write fails" do
+      adapter = ProviderAdapter.Mock.new()
+      ProviderAdapter.Mock.set_send_calls_error(adapter, :rpc_down)
+      session = start_session(:submitted)
+      p = provider(session, AcceptHandler, adapter)
+
+      assert {:error, :rpc_down} = Provider.evaluate(p, %{result: "done"})
       assert JobSession.status(session) == :submitted
     end
   end
