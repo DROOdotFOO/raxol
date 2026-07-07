@@ -315,18 +315,13 @@ defmodule Raxol.ACP.Agent do
   defp propagate_to_session(session_pid, %{"kind" => "system"} = entry) do
     with type when is_binary(type) <- entry["event"] || entry["type"],
          {:ok, atom} <- Event.decode_type(type) do
-      next_status = status_for(atom)
-
-      :sys.replace_state(session_pid, fn s ->
-        Map.put(s, :status, next_status)
-      end)
-
-      # Mirror the GenServer's terminal-status behaviour. The SSE event is
-      # authoritative (the on-chain state already settled); the session
-      # process should exit :normal so the supervisor doesn't restart it.
-      if Raxol.ACP.JobSession.Status.terminal?(next_status) do
-        GenServer.stop(session_pid, :normal, 1_000)
-      end
+      # The SSE event is authoritative (the on-chain state already settled),
+      # so JobSession.apply_event mirrors the status without role/adjacency
+      # gating -- and, unlike the old :sys.replace_state hack, records the
+      # entry, notifies the session's own subscribers, and stops the process
+      # itself when the status is terminal (the agent's :DOWN handler then
+      # drops it from the registry).
+      JobSession.apply_event(session_pid, status_for(atom), %{observed_event: type})
     else
       _ -> :ok
     end
