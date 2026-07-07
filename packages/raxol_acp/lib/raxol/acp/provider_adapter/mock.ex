@@ -38,6 +38,7 @@ defmodule Raxol.ACP.ProviderAdapter.Mock do
     :ets.insert(table, {:receipts, %{}})
     :ets.insert(table, {:contract_reads, %{}})
     :ets.insert(table, {:logs, []})
+    :ets.insert(table, {:send_calls_error, nil})
 
     %{adapter: __MODULE__, config: %{table: table}}
   end
@@ -67,6 +68,17 @@ defmodule Raxol.ACP.ProviderAdapter.Mock do
     :ok
   end
 
+  @doc """
+  Make `send_calls/3` fail with `{:error, reason}`, simulating a bundler / RPC
+  failure so tests can exercise the on-chain-write-fails path. Pass `nil` to
+  clear. A failed call is not recorded in `sent_calls/1`.
+  """
+  @spec set_send_calls_error(Raxol.ACP.ProviderAdapter.adapter(), term()) :: :ok
+  def set_send_calls_error(%{config: %{table: table}}, reason) do
+    :ets.insert(table, {:send_calls_error, reason})
+    :ok
+  end
+
   @doc "All `send_calls/3` invocations in order: `[{chain_id, calls}, ...]`."
   @spec sent_calls(Raxol.ACP.ProviderAdapter.adapter()) :: [{pos_integer(), [map()]}]
   def sent_calls(%{config: %{table: table}}) do
@@ -85,9 +97,15 @@ defmodule Raxol.ACP.ProviderAdapter.Mock do
 
   @impl Raxol.ACP.ProviderAdapter
   def send_calls(%{config: %{table: table}}, chain_id, calls) do
-    record(table, :sent_calls, {chain_id, calls})
-    hashes = Enum.map(calls, fn _ -> mint_tx_hash(table) end)
-    {:ok, hashes}
+    case :ets.lookup(table, :send_calls_error) do
+      [{:send_calls_error, nil}] ->
+        record(table, :sent_calls, {chain_id, calls})
+        hashes = Enum.map(calls, fn _ -> mint_tx_hash(table) end)
+        {:ok, hashes}
+
+      [{:send_calls_error, reason}] ->
+        {:error, reason}
+    end
   end
 
   @impl Raxol.ACP.ProviderAdapter
