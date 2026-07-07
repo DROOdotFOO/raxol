@@ -43,29 +43,6 @@ defmodule Raxol.ACP.JobSession.ProviderTest do
     def handle_deliver(_req, _ctx), do: {:deliver, %{result: "done"}}
   end
 
-  # Adapter whose on-chain writes always fail -- exercises the "chain write
-  # fails, local session must not advance" path.
-  defmodule FailingAdapter do
-    @behaviour Raxol.ACP.ProviderAdapter
-    def new, do: %{adapter: __MODULE__, config: %{}}
-    @impl true
-    def send_calls(_a, _chain, _calls), do: {:error, :rpc_down}
-    @impl true
-    def sign_message(_a, _c, _m), do: {:error, :unused}
-    @impl true
-    def sign_typed_data(_a, _c, _t), do: {:error, :unused}
-    @impl true
-    def get_transaction_receipt(_a, _c, _h), do: {:error, :unused}
-    @impl true
-    def read_contract(_a, _c, _p), do: {:error, :unused}
-    @impl true
-    def get_logs(_a, _c, _f), do: {:error, :unused}
-    @impl true
-    def get_address(_a), do: "0xprovider"
-    @impl true
-    def supported_chain_ids(_a), do: [8453]
-  end
-
   defp start_session(status) do
     job_id = "job-#{System.unique_integer([:positive])}"
 
@@ -127,8 +104,10 @@ defmodule Raxol.ACP.JobSession.ProviderTest do
     end
 
     test "does not advance the session when the chain write fails" do
+      adapter = ProviderAdapter.Mock.new()
+      ProviderAdapter.Mock.set_send_calls_error(adapter, :rpc_down)
       session = start_session(:open)
-      p = provider(session, AcceptHandler, FailingAdapter.new())
+      p = provider(session, AcceptHandler, adapter)
 
       assert {:error, :rpc_down} =
                Provider.accept_request(p, %{req: 1}, AssetToken.usdc(0.25, @chain))
