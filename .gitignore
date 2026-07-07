@@ -163,6 +163,7 @@ HANDOVER.md
 *HANDOVER.md
 *Engineering Review*.md
 *_integration_plan.md
-*SECURITY_FINDINGS.md
-*_FINDINGS.md
 packages/*/doc/
+
+# Fable capabilities patch (folded into planning docs; apply during the refactoring)
+raxol-capabilities-items1-2.patch

@@ -93,9 +93,7 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   alias Raxol.ACP.{ABI, Chain}
   alias Raxol.ACP.Onchain.{LogDecoder, RPC, Transaction}
   alias Raxol.ACP.Wallet.NonceServer
-  alias Raxol.ACP.Wallet.SCA.{ModularAccount, UserOp}
-
-  @sig_get_nonce "getNonce(address,uint192)"
+  alias Raxol.ACP.Wallet.SCA.{EntryPoint, ModularAccount, UserOp}
 
   # Canonical selectors. Most are identical between V1 ACPSimple
   # (priv/abi/acp_simple.json) and V2 ACPRouter (priv/abi/acp_router.json).
@@ -112,9 +110,11 @@ defmodule Raxol.ACP.ContractClient.Onchain do
   @sig_withdraw_escrowed "withdrawEscrowedFunds(uint256)"
   @sig_confirm_x402 "confirmX402PaymentReceived(uint256)"
 
-  # Which deployed ACP contract the selectors target. `:v1` (ACPSimple,
-  # default) or `:v2` (ACPRouter). Set the matching contract address via
-  # `Raxol.ACP.Chain` overrides when running V2.
+  # Which deployed ACP contract this client's selectors target: `:v1`
+  # (ACPSimple, default) or `:v2` (ACPRouter). BOTH are legacy contracts --
+  # the active v2 core (AgenticCommerceV3) is reached via `Raxol.ACP.HookClient`,
+  # NOT this client, and does not consult acp_version. Override the default
+  # with ACP_VERSION (see config/runtime.exs). See `Raxol.ACP.Chain` moduledoc.
   defp acp_version, do: Application.get_env(:raxol_acp, :acp_version, :v1)
 
   # -- Behaviour callbacks --
@@ -474,39 +474,19 @@ defmodule Raxol.ACP.ContractClient.Onchain do
 
   # EntryPoint.getNonce(account, key) -> full 256-bit nonce. The key
   # encodes the validating session entity (see ModularAccount.nonce_key).
+  # Shared with the ProviderAdapter.SCA / Provisioner write paths via
+  # Raxol.ACP.Wallet.SCA.EntryPoint.
   defp entrypoint_nonce(ctx, account) do
-    key = ctx.wallet.nonce_key()
-
-    call_data =
-      ABI.encode_call(@sig_get_nonce, [{"address", account}, {"uint192", key}])
-
-    case RPC.eth_call(ctx.client, %{to: ctx.wallet.entry_point(), data: call_data}) do
-      {:ok, hex} ->
-        case decode_uint256(hex) do
-          {:ok, nonce} -> {:ok, nonce}
-          :error -> {:error, {:invalid_nonce_response, hex}}
-        end
-
-      {:error, _} = err ->
-        err
-    end
+    EntryPoint.get_nonce(ctx.client, ctx.wallet.entry_point(), account, ctx.wallet.nonce_key())
   end
 
   # Decode an eth_call uint256 result. Fails closed on a malformed / non-hex
   # response rather than raising (a bad RPC reply must not crash the send
-  # pipeline, nor silently become nonce 0). Exposed for tests.
+  # pipeline, nor silently become nonce 0). Exposed for tests; delegates to
+  # the shared EntryPoint helper.
   @doc false
   @spec decode_uint256(binary()) :: {:ok, non_neg_integer()} | :error
-  def decode_uint256("0x"), do: {:ok, 0}
-
-  def decode_uint256("0x" <> hex) do
-    case Integer.parse(hex, 16) do
-      {n, ""} when n >= 0 -> {:ok, n}
-      _ -> :error
-    end
-  end
-
-  def decode_uint256(_), do: :error
+  defdelegate decode_uint256(hex), to: EntryPoint
 
   defp send_with(ctx, method, call_data) do
     case nonce(ctx) do

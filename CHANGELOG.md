@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [2.5.0] - 2026-07-07
+
 ### Fixed
 
 - **Layout engine: dynamic-children dropped from `column(opts, do: var)`**: when callers wrote the inline keyword-list form `column(style: ..., do: items)` Elixir matched it against `def column/1` instead of `defmacro column/2`, and the `:do` key rode through into the layout function unread. `Flex.column/1` then saw `children: []` and rendered an empty container. Fix: `Raxol.Core.Renderer.View.promote_do_to_children/1` pops `:do` and re-keys it as `:children` (via `List.wrap` so single-child blocks work too); `View.column/1`, `View.row/1`, `View.box/1` all forward through it. Restored rendering for CheckboxDemo, TextAreaDemo, RadioGroupDemo.

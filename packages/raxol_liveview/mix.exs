@@ -1,7 +1,7 @@
 defmodule RaxolLiveView.MixProject do
   use Mix.Project
 
-  @version "2.4.0"
+  @version "2.5.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
