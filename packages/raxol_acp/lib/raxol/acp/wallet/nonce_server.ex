@@ -6,14 +6,14 @@ defmodule Raxol.ACP.Wallet.NonceServer do
 
   The Virtuals ACP integration plan claims that "process-per-job avoids
   the concurrent-Alchemy-call footgun." That is incorrect: distinct
-  PIDs do not serialize nonce assignment. Two `Raxol.ACP.Job.Server`
-  processes that race on `eth_sendRawTransaction` will produce two
-  signed transactions with the same nonce, and one will be silently
-  dropped by the RPC.
+  PIDs do not serialize nonce assignment. Two callers into
+  `Raxol.ACP.ContractClient.Onchain` that race on `eth_sendRawTransaction`
+  will produce two signed transactions with the same nonce, and one will
+  be silently dropped by the RPC.
 
-  This GenServer is the documented OTP fix. Each `Job.Server` calls
-  `get_next/1` before signing a transaction; the GenServer's mailbox
-  guarantees a strict global order.
+  This GenServer is the documented OTP fix. `Raxol.ACP.ContractClient.Onchain`
+  calls into it (`get_next_if_seeded/1` + `seed_and_next/2`) before signing a
+  transaction; the GenServer's mailbox guarantees a strict global order.
 
   ## v0.1 scope
 

@@ -1,20 +1,10 @@
 defmodule Raxol.ACP.Bench.RunnerTest do
   use ExUnit.Case, async: false
 
-  # Bench.Runner still drives the v1 `Job.Server` (explicit `deliver/1` +
-  # `current_state/1`) through the seller Queue. The Queue was re-pointed onto
-  # `JobSession.Provider`, so the runner is migrated in Phase 3 (#382), which
-  # removes this tag.
-  @moduletag skip: "Bench.Runner migrates to JobSession in Phase 3 (#382)"
-
-  import Raxol.ACP.TestSupport.WorkflowSetup
-
   alias Raxol.ACP.Bench.Runner
   alias Raxol.ACP.Bench.Runner.{Outcome, Summary}
   alias Raxol.ACP.Offering.Registry, as: OfferingRegistry
   alias Raxol.ACP.TestSupport.SellerHelper
-
-  setup :with_isolated_workflow_saver
 
   setup do
     OfferingRegistry.clear()
@@ -22,6 +12,14 @@ defmodule Raxol.ACP.Bench.RunnerTest do
     :ok = SellerHelper.reset_seller(seller_address: "0x" <> String.duplicate("11", 20))
 
     {:ok, _spec} = Raxol.ACP.Bench.Offering.register()
+
+    # Runner.run seeds the seller Queue's on-chain plumbing; clear it after
+    # each test so a later test that expects no adapter isn't polluted.
+    on_exit(fn ->
+      Application.delete_env(:raxol_acp, :seller_provider_adapter)
+      Application.delete_env(:raxol_acp, :seller_chain_id)
+      Application.delete_env(:raxol_acp, :seller_acp_core_address)
+    end)
 
     :ok
   end
@@ -124,7 +122,7 @@ defmodule Raxol.ACP.Bench.RunnerTest do
   end
 
   describe "run/1 with unknown offering" do
-    test "every job fails fast with no Job.Server started" do
+    test "every job fails fast with no JobSession started" do
       summary =
         Runner.run(
           offering: "raxol.bench.never.registered",

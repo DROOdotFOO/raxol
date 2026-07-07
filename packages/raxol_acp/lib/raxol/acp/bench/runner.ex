@@ -5,32 +5,36 @@ defmodule Raxol.ACP.Bench.Runner do
 
   ## Method
 
-  Each job traverses the full ACP lifecycle:
+  Each job traverses the full v2 ACP lifecycle, driven entirely by
+  backend events through `Raxol.ACP.Seller.Queue` ->
+  `Raxol.ACP.JobSession.Provider`:
 
-      InMemory.publish(:job_offered)        # Queue starts Job.Server,
-                                            # calls accept_request -> :negotiation
-      InMemory.publish(:payment_received)   # Queue routes to existing
-                                            # server -> :transaction
-      Job.Server.deliver(job_id)            # handler runs -> :evaluation
-      InMemory.publish(:approval_received)  # Queue routes -> :completed
+      InMemory.publish(:job_offered)        # Queue starts a provider
+                                            # JobSession, sets the budget
+                                            # on-chain -> :budget_set
+      InMemory.publish(:payment_received)   # Queue mirrors :funded and
+                                            # auto-delivers -> :submitted
+      InMemory.publish(:approval_received)  # Queue mirrors :completed
+                                            # (terminal; session stops)
 
-  The Queue intentionally does not auto-deliver after `:payment_received`
-  (handlers control delivery timing -- see `Raxol.ACP.Seller.Queue`).
-  The bench triggers `deliver/1` synchronously between events because
-  the Bench.Offering returns immediately.
+  Unlike v1, the Queue auto-delivers on `:payment_received` -- there is
+  no out-of-band `deliver/1` step.
+
+  ## On-chain writes
+
+  The Queue must be able to write hook calls on-chain. The bench seeds a
+  `Raxol.ACP.ProviderAdapter.Mock` into `:seller_provider_adapter`: the
+  Mock stands in for the bundler/RPC so a bench run never touches a real
+  chain. This is the sanctioned use of a fake -- the bench is a local
+  validation harness, not a live gate.
 
   ## Outcomes
 
-  A job is **success** iff:
+  A job is **success** iff it reaches `:completed` (observed as `:gone`,
+  the terminal session having stopped) inside `:job_timeout`, having
+  passed through `:budget_set` and `:submitted` along the way.
 
-  - It reached the `:completed` terminal state inside `:job_timeout`
-  - The final `Store.load/1` shows exactly four memos (`:negotiation`,
-    `:transaction`, `:evaluation`, `:completed`)
-  - Each memo has a 65-byte EIP-712 signature
-  - The chain-side `InMemory.list_memos/1` shows the same four types
-
-  Otherwise the job is **failure** with a tagged reason for the
-  summary.
+  Otherwise the job is **failure** with a tagged reason for the summary.
 
   ## Result shape
 
@@ -48,24 +52,27 @@ defmodule Raxol.ACP.Bench.Runner do
 
   The caller (the Mix task) must have:
 
-  - Set `:contract_client` to `Raxol.ACP.ContractClient.InMemory`
   - Set `:seller_enabled` to `true`
   - Set `:seller_backend` to `Raxol.ACP.Seller.Backend.InMemory`
-  - Configured a wallet (`:seller_wallet`, `:seller_memo_opts`,
-    `:seller_address`)
   - Started the application so the supervisor tree is live
   - Registered an offering handler (the runner does NOT register one
     itself -- pass the offering name and let the caller register
     `Raxol.ACP.Bench.Offering` or any compatible echo handler)
 
+  The runner configures the seller Queue's on-chain plumbing
+  (`:seller_provider_adapter`, `:seller_chain_id`,
+  `:seller_acp_core_address`, `:seller_address`) itself on every run.
+
   This separation keeps the Runner a pure driver and lets tests mix
   in different offerings.
   """
 
-  alias Raxol.ACP.{ContractClient, Job}
-  alias Raxol.ACP.ContractClient.InMemory, as: ChainInMem
-  alias Raxol.ACP.Job.Store
+  alias Raxol.ACP.{Chain, JobSession, ProviderAdapter}
   alias Raxol.ACP.Seller.Backend.InMemory, as: BackendInMem
+
+  # The chain the bench jobs live on. Must match the `:seller_chain_id`
+  # the runner configures so JobSession lookups resolve.
+  @chain_id 8453
 
   defmodule Outcome do
     @moduledoc "One job's outcome from a bench run."
@@ -130,10 +137,8 @@ defmodule Raxol.ACP.Bench.Runner do
   - `:gate` -- minimum consecutive successes required for the run to
     pass. Default `#{@default_gate}`.
   - `:offering` -- the registered offering name to drive. Required.
-  - `:price_usdc` -- price per job (`Decimal` or string). Default
-    `"0.01"`.
-  - `:seller` -- 0x-prefixed seller address (any string is fine for
-    the in-memory client). Default a synthetic constant.
+  - `:seller` -- 0x-prefixed seller address surfaced in handler ctx.
+    Default a synthetic constant.
   - `:buyer` -- 0x-prefixed buyer address. Default a synthetic
     constant.
   - `:request_builder` -- 1-arity fn that takes the job index (1..N)
@@ -141,23 +146,23 @@ defmodule Raxol.ACP.Bench.Runner do
     %{"i" => idx}}`.
   - `:job_timeout_ms` -- how long to wait for a job to reach
     `:completed`. Default `#{@default_job_timeout_ms}`.
-  - `:reset?` -- whether to wipe ContractClient.InMemory and Store
-    state before starting. Default `true`.
+  - `:reset?` -- whether to terminate any leftover JobSessions before
+    starting. Default `true`.
   """
   @spec run(keyword()) :: Summary.t()
   def run(opts \\ []) do
     jobs = Keyword.get(opts, :jobs, @default_jobs)
     gate = Keyword.get(opts, :gate, @default_gate)
     offering = Keyword.fetch!(opts, :offering)
-    price = price(opts)
     seller = Keyword.get(opts, :seller, @default_seller_address)
     buyer = Keyword.get(opts, :buyer, @default_buyer_address)
     builder = Keyword.get(opts, :request_builder, &default_request/1)
     timeout = Keyword.get(opts, :job_timeout_ms, @default_job_timeout_ms)
 
+    configure_seller(seller)
+
     if Keyword.get(opts, :reset?, true) do
-      ChainInMem.reset()
-      Store.clear()
+      terminate_sessions()
     end
 
     started_at = System.monotonic_time(:millisecond)
@@ -167,11 +172,10 @@ defmodule Raxol.ACP.Bench.Runner do
         run_one(%{
           idx: idx,
           offering: offering,
-          price: price,
-          seller: seller,
           buyer: buyer,
           request: builder.(idx),
-          timeout_ms: timeout
+          timeout_ms: timeout,
+          job_id: "bench-#{idx}-#{System.unique_integer([:positive])}"
         })
       end
 
@@ -194,62 +198,51 @@ defmodule Raxol.ACP.Bench.Runner do
     }
   end
 
+  # -- Seller configuration --
+
+  # Seed the seller Queue's on-chain plumbing. A fresh Mock adapter per run
+  # keeps recorded calls from accumulating across runs; the chain id must
+  # match the one the runner watches for JobSession lookups.
+  defp configure_seller(seller) do
+    Application.put_env(:raxol_acp, :seller_provider_adapter, ProviderAdapter.Mock.new())
+    Application.put_env(:raxol_acp, :seller_chain_id, @chain_id)
+    Application.put_env(:raxol_acp, :seller_acp_core_address, Chain.mainnet().acp_core_address)
+    Application.put_env(:raxol_acp, :seller_address, seller)
+    :ok
+  end
+
+  defp terminate_sessions do
+    for {_, pid, _, _} <- DynamicSupervisor.which_children(JobSession.Supervisor), is_pid(pid) do
+      DynamicSupervisor.terminate_child(JobSession.Supervisor, pid)
+    end
+
+    :ok
+  end
+
   # -- Per-job driver --
 
   defp run_one(ctx) do
     started_at = System.monotonic_time(:millisecond)
+    job_id = ctx.job_id
 
     result =
-      with {:ok, job_id} <- create_job(ctx),
-           :ok <- offer_job(ctx, job_id),
-           :ok <- wait_for_state(job_id, :negotiation, ctx.timeout_ms),
+      with :ok <- offer_job(ctx, job_id),
+           :ok <- wait_status(job_id, :budget_set, ctx.timeout_ms),
            :ok <- send_payment(job_id),
-           :ok <- wait_for_state(job_id, :transaction, ctx.timeout_ms),
-           :ok <- handler_deliver(job_id),
-           :ok <- wait_for_state(job_id, :evaluation, ctx.timeout_ms),
+           :ok <- wait_status(job_id, :submitted, ctx.timeout_ms),
            :ok <- send_approval(job_id),
-           :ok <- wait_for_state(job_id, :completed, ctx.timeout_ms),
-           :ok <- verify_persisted(job_id) do
-        {:ok, job_id}
+           :ok <- wait_status(job_id, :gone, ctx.timeout_ms) do
+        :ok
       end
 
     elapsed = System.monotonic_time(:millisecond) - started_at
 
     case result do
-      {:ok, job_id} ->
+      :ok ->
         %Outcome{job_id: job_id, status: :success, elapsed_ms: elapsed}
 
-      {:error, {stage, reason}} ->
-        %Outcome{
-          job_id: stage_job_id(stage, ctx),
-          status: :failure,
-          elapsed_ms: elapsed,
-          reason: {stage, reason}
-        }
-
       {:error, reason} ->
-        %Outcome{
-          job_id: "job-#{ctx.idx}",
-          status: :failure,
-          elapsed_ms: elapsed,
-          reason: reason
-        }
-    end
-  end
-
-  defp stage_job_id(:create_job, ctx), do: "pending-#{ctx.idx}"
-  defp stage_job_id(_, _ctx), do: "<unknown>"
-
-  defp create_job(ctx) do
-    # provider = seller, evaluator = buyer, expiry one hour out. The
-    # budget is set separately, mirroring the real ACPSimple flow.
-    expired_at = System.os_time(:second) + 3600
-
-    with {:ok, job_id} <- ContractClient.create_job(ctx.seller, ctx.buyer, expired_at),
-         {:ok, _tx} <- ContractClient.set_budget(job_id, ctx.price) do
-      {:ok, job_id}
-    else
-      {:error, reason} -> {:error, {:create_job, reason}}
+        %Outcome{job_id: job_id, status: :failure, elapsed_ms: elapsed, reason: reason}
     end
   end
 
@@ -279,111 +272,46 @@ defmodule Raxol.ACP.Bench.Runner do
     })
   end
 
-  defp handler_deliver(job_id) do
-    case Job.Server.deliver(job_id) do
-      {:ok, :evaluation} -> :ok
-      {:error, reason} -> {:error, {:deliver, reason}}
-    end
-  catch
-    :exit, reason -> {:error, {:deliver, reason}}
-  end
+  # -- Status polling --
 
-  # -- State polling --
-
-  defp wait_for_state(job_id, target, timeout_ms) do
+  defp wait_status(job_id, target, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_for_state(job_id, target, deadline)
+    do_wait_status(job_id, target, deadline)
   end
 
-  defp do_wait_for_state(job_id, target, deadline) do
-    case current_state(job_id) do
+  defp do_wait_status(job_id, target, deadline) do
+    case status(job_id) do
       ^target ->
         :ok
 
       other ->
         if System.monotonic_time(:millisecond) < deadline do
           Process.sleep(2)
-          do_wait_for_state(job_id, target, deadline)
+          do_wait_status(job_id, target, deadline)
         else
-          {:error, {:wait_for_state, %{job_id: job_id, target: target, observed: other}}}
+          {:error, {:wait_status, %{job_id: job_id, target: target, observed: other}}}
         end
     end
   end
 
-  defp current_state(job_id) do
-    case Job.Registry.whereis(job_id) do
+  # `:gone` when the session has stopped (terminal status) or never started.
+  defp status(job_id) do
+    case JobSession.Registry.whereis({@chain_id, job_id}) do
       :undefined ->
-        from_store(job_id)
+        :gone
 
       pid ->
         try do
-          Job.Server.current_state(pid)
+          JobSession.status(pid)
         catch
-          :exit, _ -> from_store(job_id)
+          :exit, _ -> :gone
         end
-    end
-  end
-
-  defp from_store(job_id) do
-    case Store.load(job_id) do
-      {:ok, %{state: state}} -> state
-      :error -> :no_record
-    end
-  end
-
-  # -- Persistence checks --
-
-  defp verify_persisted(job_id) do
-    with {:ok, %{state: :completed, memos: memos}} <- Store.load(job_id),
-         :ok <- check_memo_count(memos),
-         :ok <- check_memo_phases(memos),
-         :ok <- check_chain_memos(job_id) do
-      :ok
-    else
-      {:error, _} = err -> err
-      :error -> {:error, {:verify_persisted, :no_store_record}}
-    end
-  end
-
-  defp check_memo_count(memos) when length(memos) == 4, do: :ok
-
-  defp check_memo_count(memos) do
-    {:error, {:verify_persisted, {:wrong_memo_count, length(memos)}}}
-  end
-
-  @expected_memo_phases [:negotiation, :transaction, :evaluation, :completed]
-
-  defp check_memo_phases(memos) do
-    actual = Enum.map(memos, & &1.next_phase)
-
-    if actual == @expected_memo_phases do
-      :ok
-    else
-      {:error, {:verify_persisted, {:wrong_memo_phases, actual}}}
-    end
-  end
-
-  defp check_chain_memos(job_id) do
-    phases = ChainInMem.list_memos(job_id) |> Enum.map(& &1.next_phase)
-
-    if phases == @expected_memo_phases do
-      :ok
-    else
-      {:error, {:verify_persisted, {:chain_memos_mismatch, phases}}}
     end
   end
 
   # -- Helpers --
 
   defp default_request(idx), do: %{"payload" => %{"i" => idx}}
-
-  defp price(opts) do
-    case Keyword.get(opts, :price_usdc, "0.01") do
-      %Decimal{} = d -> d
-      n when is_integer(n) -> Decimal.new(n)
-      s when is_binary(s) -> Decimal.new(s)
-    end
-  end
 
   # Longest run of consecutive `target` values in a list of statuses.
   # Pure helper; exposed for testing.
