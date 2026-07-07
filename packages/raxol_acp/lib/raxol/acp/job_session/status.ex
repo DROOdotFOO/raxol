@@ -2,8 +2,8 @@ defmodule Raxol.ACP.JobSession.Status do
   @moduledoc """
   Status enum for a v2 ACP job session and the legal transition graph.
 
-  Replaces v1's `Raxol.ACP.Job.StateMachine` phase enum. Statuses mirror
-  `JobSession.status` in `acp-node-v2`:
+  Replaces the v1 phase-enum model. Statuses mirror `JobSession.status`
+  in `acp-node-v2`:
 
       open -> budget_set -> funded -> submitted -> completed
                                                 \\-> rejected

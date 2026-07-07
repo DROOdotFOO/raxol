@@ -11,57 +11,57 @@
 - Raw private keys → **Privy + Alchemy ERC-4337**.
 - Compliance with **ERC-8183 (Agentic Commerce)**.
 
-`raxol_acp` 0.2.0 ships the v2 surface alongside the v1 surface so existing solver code keeps working during the transition. This document tracks what's landed and what's still pending.
+`raxol_acp` 0.2.0 replaces the v1 surface with the v2 surface in place. The seller-stack migration (Phases 1-4) is complete: the memo/`Job.Server` model is gone and every path runs on the v2 `JobSession` + hook model. This document tracks what landed and what's still pending.
 
 ## Status — 2026-07-07
 
-| Area | v1 (existing) | v2 status |
+| Area | v1 (removed) | v2 status |
 |------|---------------|-----------|
-| Chain config | `Raxol.ACP.Chain` (`acp_contract_address`, `acp_router_address`) | **Done** — adds `acp_core_address` + hook/router/subscription addresses + `acp_server_url` |
+| Chain config | `Raxol.ACP.Chain` (`acp_contract_address`, `acp_router_address`) | **Done** — adds `acp_core_address` + hook/router/subscription addresses + `acp_server_url`. The legacy addresses stay only for indexer/dashboard back-compat. |
 | Token amounts | `Fare`/`FareAmount` (Decimal-based) | **Done** — `Raxol.ACP.AssetToken` (raw integer + decimals + chain-aware) |
 | Event model | `onNewTask`/`onEvaluate` via Socket.IO | **Done** — `Raxol.ACP.Event`, SSE transport (`transport/sse/parser.ex`), `Raxol.ACP.Agent` event dispatch |
-| Job session | `Raxol.ACP.Job.Server` (memo/phase model) -- STILL LIVE | **Partial** — `Raxol.ACP.JobSession` (event/hook model, a DIFFERENT API) exists but is NOT wired into the seller `Queue`/`Runtime`/`bench`, which still drive `Job.Server`. Migration pending (see the entanglement note below). |
-| Provider adapter | `Raxol.ACP.ContractClient.Onchain` (direct JSON-RPC) | **Done** — `Raxol.ACP.ProviderAdapter.SCA` (Elixir-native, reuses `Raxol.ACP.Wallet.SCA`) |
+| Job session | `Raxol.ACP.Job.Server` (memo/phase model) — **removed** | **Done** — `Raxol.ACP.JobSession` (event/hook model) is the only session runtime. The seller `Queue`/`Runtime`/`bench` drive it via `Raxol.ACP.JobSession.Provider`. |
+| On-chain writes | `Raxol.ACP.ContractClient` + `Onchain` (memo `createMemo`/`createJob` JSON-RPC) — **removed** | **Done** — `Raxol.ACP.HookClient` → `AgenticCommerceV3` via `Raxol.ACP.ProviderAdapter` (`SCA` sponsored UserOps or `JSONRPC` EOA) |
 | Hook integration | (no first-class hooks) | **Done** — `Raxol.ACP.Hooks.FundTransfer` (note: the storefront relay offering runs plain jobs, `hook = address(0)`) |
 | Xochi offering | (none) | **Done** — `Raxol.ACP.Xochi.Offering` + `Raxol.ACP.Xochi.SolverAgent` runtime (8bps storefront fee) |
 | Wallet/signer | `Raxol.ACP.Wallet.SCA` (MAv2 + session keys) | **Done** — two-userOp v2 provisioning (`Wallet.SCA.Provisioner`: deploy + install as separate userOps) |
 | Marketplace registration | — | **Done** — `mix acp.register_offering` |
 
-**Landed (2026-07-07 wave):** `ProviderAdapter.SCA` + two-userOp `Provisioner`.
+## The v1 seller-stack retirement (Phases 1-4, landed 2026-07-07)
 
-## Why the "v1 hard-cut" is blocked (entanglement, found 2026-07-07)
+The memo/`Job.Server` model was removed in four steps:
 
-The `0.2.0` step ("remove v1") is NOT a simple deletion. Two blockers:
+1. **Phase 1** — `Raxol.ACP.JobSession.Provider` driver, the seam that lets the
+   seller stack drive a v2 `JobSession` with the same call surface the Queue used.
+2. **Phase 2** — re-pointed `Raxol.ACP.Seller.Queue` off `Job.Server` onto
+   `JobSession.Provider`.
+3. **Phase 3** — migrated `mix raxol_acp.bench` and **deleted the v1
+   `Job.Server` lifecycle** (`Job.Server`, `Job.Supervisor`, their tests).
+4. **Phase 4** — retired the now-unused memo write path: `Raxol.ACP.ContractClient`
+   (behaviour + `Onchain` + `InMemory`), the `Raxol.ACP.Directive` memo/job
+   directives + their `Directive.Executor` impls, the `Job.MemoType` / `Job.FeeType`
+   enums, `Job.StateMachine` (replaced by `JobSession.Status`), `Onchain.LogDecoder`,
+   and the unused `Job.Store`. The `ACP_VERSION` / `:acp_version` switch is gone
+   with `ContractClient.Onchain` — the active core (`AgenticCommerceV3` via
+   `HookClient`) never consulted it. Chain kept the legacy addresses for indexer
+   back-compat.
 
-1. **`Job.Server` is not dead v1 code -- it is the live seller-stack lifecycle.**
-   The shipped seller `Queue`/`Runtime` and `mix raxol_acp.bench` drive
-   `Job.Server.accept_request`/`accept_payment`/`approve`/`transition`/`deliver`.
-   `JobSession` is the v2 replacement but has a completely different API
-   (`set_budget`/`fund`/`submit`/`complete`/`reject`, event/hook model), so it is
-   NOT a drop-in. Deleting `Job.Server` first requires **migrating the seller
-   Queue/Runtime/bench onto `JobSession`** -- a real rewrite of the event routing,
-   its own project. Until then `Job.Server` stays.
+The one cross-package consumer, `raxol_symphony`'s ACP auto-resume, was migrated
+to the v2 `[:raxol, :acp, :job_session, :transition]` telemetry in the same PR.
 
-2. **The `ContractClient.Onchain` `:v1 -> :v2` flip is nearly cosmetic.** Its `:v2`
-   branch targets `acp_router_address` (legacy ACPRouter), NOT the active
-   `AgenticCommerceV3` core. The active v2 core is reached through
-   `Raxol.ACP.HookClient` (which the storefront uses) and does not consult
-   `acp_version`. So flipping the default swaps one legacy contract for another;
-   the real question is whether `ContractClient.Onchain` should be retired or
-   repointed at `AgenticCommerceV3` -- a separate decision, not part of a deletion.
+## Still pending (funds-gated)
 
-Prerequisite before either: staging-validate the active v2 (`AgenticCommerceV3`)
-lifecycle end-to-end (needs funds / a Base staging run).
-
-## Selecting the contract version
-
-`Raxol.ACP.ContractClient.Onchain` reads `Application.get_env(:raxol_acp, :acp_version, :v1)`; the code default is `:v1` (the sunsetted ACPSimple). `ACP_VERSION=v2` at boot (wired in `config/runtime.exs`, applies in every env) switches this client to `acp_router_address` (the legacy ACPRouter) -- NOT the active `AgenticCommerceV3` core. The active core is reached through `Raxol.ACP.HookClient`, which ignores `acp_version` entirely; the storefront offering already runs there. So `ACP_VERSION` only selects between the two legacy `ContractClient.Onchain` targets, and is useful mainly for exercising the ACPRouter path in a non-storefront context.
+- Staging-validate the active v2 (`AgenticCommerceV3`) lifecycle end-to-end
+  against a Base fork/staging (needs funds).
+- Graduate `xochi_cross_chain_transfer` on Base mainnet.
+- The SCA `:live_bundler` end-to-end + SolverAgent-vs-staging run.
 
 ## Strategy
 
-We're replacing v1 in place inside this single package, NOT spinning up `raxol_acp_v2`. The v1 modules stay reachable under their original names (`Raxol.ACP.Job.Server`, etc.) while v2 modules go live under the new names (`Raxol.ACP.AssetToken`, `Raxol.ACP.JobSession`, `Raxol.ACP.Agent`). As each v2 module reaches parity with its v1 counterpart, we remove the v1 module in a follow-up PR.
-
-The mix version reflects the in-progress state: `0.2.0-pre.0` while scaffolding, `0.2.0-rc.N` when the v2 surface is feature-complete, `0.2.0` when v1 is removed.
+We replaced v1 in place inside this single package, NOT by spinning up
+`raxol_acp_v2`. The mix version reflects the state: `0.2.0-pre.0` while
+scaffolding, **`0.2.0-rc.0` now** that the v2 surface is feature-complete and v1
+is removed; `0.2.0` final once the funds-gated staging validation above passes.
 
 ## Why not Privy?
 

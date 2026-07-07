@@ -7,9 +7,8 @@ defmodule Raxol.ACP.Seller.Backend.InMemory do
   monitored so a dead pid is dropped automatically.
 
   Not a mock: this is a second real implementation of the behaviour,
-  same pattern as `Raxol.ACP.ContractClient.InMemory`. It is the
-  primary tool for driving end-to-end seller flows in tests and in
-  `mix raxol_acp.bench`. The live WebSocket impl lands later.
+  alongside the live WebSocket backend. It is the primary tool for
+  driving end-to-end seller flows in tests and in `mix raxol_acp.bench`.
 
   ## Usage
 

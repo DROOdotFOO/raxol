@@ -8,10 +8,9 @@ defmodule Raxol.ACP.Wallet.SCA.EntryPoint do
   `Raxol.ACP.Wallet.SCA.ModularAccount.nonce_key/3`); the low 64 bits are
   the sequence the EntryPoint maintains.
 
-  This was originally inlined in `Raxol.ACP.ContractClient.Onchain`; it is
-  extracted here so both the contract client and the
-  `Raxol.ACP.ProviderAdapter.SCA` / `Raxol.ACP.Wallet.SCA.Provisioner`
-  write paths query nonces the same way.
+  Extracted so the `Raxol.ACP.ProviderAdapter.SCA` and
+  `Raxol.ACP.Wallet.SCA.Provisioner` write paths query nonces the same
+  way.
   """
 
   alias Raxol.ACP.ABI

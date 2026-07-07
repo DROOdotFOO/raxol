@@ -8,8 +8,6 @@ defmodule Raxol.ACP.Supervisor do
   children after it are restarted too. This matters because:
 
   - The session registry must outlive any job session.
-  - A persistent memo store crash means dependent processes cannot safely
-    continue (memos would be lost on the next transition).
   - The seller WebSocket can crash and restart independently of jobs in
     flight.
 
@@ -19,8 +17,6 @@ defmodule Raxol.ACP.Supervisor do
   - `Raxol.ACP.Wallet.NonceServer` -- serializes EVM nonce assignment for
     the umbrella seller wallet (default-named instance)
   - `Raxol.ACP.Offering.Registry` -- declared offerings (ETS-backed)
-  - `Raxol.ACP.Job.Store` -- ETS-backed memo persistence (retained for
-    optional JobSession persistence)
   - `Raxol.ACP.JobSession.Supervisor` -- DynamicSupervisor for job sessions
   - `Raxol.ACP.Seller.Supervisor` -- only when
     `config :raxol_acp, seller_enabled: true`. Owns the Backend, the
@@ -40,7 +36,6 @@ defmodule Raxol.ACP.Supervisor do
       Raxol.ACP.JobSession.Registry,
       nonce_server_child(),
       Raxol.ACP.Offering.Registry,
-      Raxol.ACP.Job.Store,
       Raxol.ACP.JobSession.Supervisor
     ]
 
@@ -55,8 +50,8 @@ defmodule Raxol.ACP.Supervisor do
 
     Supervisor.init(children,
       strategy: :rest_for_one,
-      # Defaults are 3 in 5s. Tests recycle Job.Store and Seller.*
-      # for config rotation (DETS path swap, wallet swap, etc.); a
+      # Defaults are 3 in 5s. Tests recycle Seller.* for config
+      # rotation (backend swap, wallet swap, etc.); a
       # handful of recycles in setup blocks would otherwise blow
       # through the default budget and tear down the supervisor
       # tree mid-suite. Lift to a level that's still a hard fail in

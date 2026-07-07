@@ -1,7 +1,7 @@
 defmodule RaxolAcp.MixProject do
   use Mix.Project
 
-  @version "0.2.0-pre.0"
+  @version "0.2.0-rc.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
@@ -57,11 +57,8 @@ defmodule RaxolAcp.MixProject do
   defp deps do
     [
       raxol_dep(:raxol_payments, "~> 0.1", "../raxol_payments", []),
-      # Raxol.Core.Stores.Dets/Naming back Raxol.ACP.Job.Store
       raxol_dep(:raxol_core, "~> 2.4", "../raxol_core", []),
       raxol_dep(:raxol_mcp, "~> 2.4", "../raxol_mcp", runtime: false),
-      # Compile-time only: Directive.Executor protocol for Raxol.ACP.Directive.* impls
-      raxol_dep(:raxol_agent, "~> 2.4", "../raxol_agent", runtime: false),
       {:req, "~> 0.5"},
       {:ex_keccak, "~> 0.7"},
       {:jason, "~> 1.4"},

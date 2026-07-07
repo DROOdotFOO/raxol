@@ -10,8 +10,8 @@ defmodule Raxol.Payments.Mandate.Store do
 
   ## Pattern
 
-  Same pattern as `Raxol.ACP.Job.Store`: a GenServer owns writes,
-  reads bypass through ETS directly with `read_concurrency: true`.
+  A GenServer owns writes; reads bypass through ETS directly with
+  `read_concurrency: true`.
 
   ETS table names are derived from the GenServer's registered name,
   so **multiple Store instances can coexist on one node** by passing

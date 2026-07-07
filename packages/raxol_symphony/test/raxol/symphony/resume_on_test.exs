@@ -8,9 +8,9 @@ defmodule Raxol.Symphony.ResumeOnTest do
   describe "acp_transition/2" do
     test "builds a resume_on map for the default ACP transition event" do
       assert %{
-               telemetry: [:raxol, :acp, :job, :transition],
-               match: %{job_id: "j-1", to: :transaction}
-             } = ResumeOn.acp_transition("j-1", to: :transaction)
+               telemetry: [:raxol, :acp, :job_session, :transition],
+               match: %{job_id: "j-1", to: :funded}
+             } = ResumeOn.acp_transition("j-1", to: :funded)
     end
 
     test "supports integer job ids (canonical ACP shape from on-chain)" do
@@ -18,9 +18,9 @@ defmodule Raxol.Symphony.ResumeOnTest do
                ResumeOn.acp_transition(42, to: :completed)
     end
 
-    test ":from constrains the source state too" do
-      assert %{match: %{job_id: "j-2", from: :evaluation, to: :completed}} =
-               ResumeOn.acp_transition("j-2", to: :completed, from: :evaluation)
+    test ":from constrains the source status too" do
+      assert %{match: %{job_id: "j-2", from: :submitted, to: :completed}} =
+               ResumeOn.acp_transition("j-2", to: :completed, from: :submitted)
     end
 
     test "raises when :to is missing" do
@@ -32,14 +32,14 @@ defmodule Raxol.Symphony.ResumeOnTest do
     test "returns a {:pause, reason, token} tuple with a nested resume_on" do
       assert {:pause, :awaiting_buyer_payment, token} =
                ResumeOn.acp_pause("j-1",
-                 waiting_for: :transaction,
+                 waiting_for: :funded,
                  reason: :awaiting_buyer_payment
                )
 
       assert %{
                resume_on: %{
-                 telemetry: [:raxol, :acp, :job, :transition],
-                 match: %{job_id: "j-1", to: :transaction}
+                 telemetry: [:raxol, :acp, :job_session, :transition],
+                 match: %{job_id: "j-1", to: :funded}
                }
              } = token
     end
@@ -47,7 +47,7 @@ defmodule Raxol.Symphony.ResumeOnTest do
     test ":meta is merged into the token alongside :resume_on" do
       {:pause, _reason, token} =
         ResumeOn.acp_pause("j-1",
-          waiting_for: :evaluation,
+          waiting_for: :submitted,
           reason: :awaiting_delivery,
           meta: %{step: "post-payment", request_id: "req-7"}
         )
@@ -62,10 +62,10 @@ defmodule Raxol.Symphony.ResumeOnTest do
         ResumeOn.acp_pause("j-3",
           waiting_for: :completed,
           reason: :awaiting_evaluator_approval,
-          from: :evaluation
+          from: :submitted
         )
 
-      assert resume_on.match == %{job_id: "j-3", from: :evaluation, to: :completed}
+      assert resume_on.match == %{job_id: "j-3", from: :submitted, to: :completed}
     end
 
     test "raises when :waiting_for or :reason is missing" do
@@ -74,7 +74,7 @@ defmodule Raxol.Symphony.ResumeOnTest do
       end
 
       assert_raise KeyError, fn ->
-        ResumeOn.acp_pause("j-1", waiting_for: :transaction)
+        ResumeOn.acp_pause("j-1", waiting_for: :funded)
       end
     end
   end
@@ -83,20 +83,20 @@ defmodule Raxol.Symphony.ResumeOnTest do
     test "the produced resume_on matches the metadata shape the Resumer checks" do
       {:pause, _reason, token} =
         ResumeOn.acp_pause("j-1",
-          waiting_for: :transaction,
+          waiting_for: :funded,
           reason: :awaiting_buyer_payment
         )
 
-      # Simulate the metadata an ACP Job.Server transition telemetry
+      # Simulate the metadata a JobSession transition telemetry event
       # would emit: it MUST be a superset of the match map for the
       # Resumer's subset check to fire resume_run/3.
       acp_event_metadata = %{
+        chain_id: 8453,
         job_id: "j-1",
-        from: :negotiation,
-        to: :transaction,
-        memo_type: :txhash,
-        next_phase: :transaction,
-        tx_hash: "tx-1"
+        role: :provider,
+        action: :fund,
+        from: :budget_set,
+        to: :funded
       }
 
       match = token.resume_on.match

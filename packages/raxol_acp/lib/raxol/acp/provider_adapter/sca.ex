@@ -248,8 +248,7 @@ defmodule Raxol.ACP.ProviderAdapter.SCA do
 
   # Node RPC client for reads + nonce + deploy checks. The URL comes from
   # the chains map; a test stub plug is picked up from the :raxol_acp :rpc
-  # app config (mirrors ContractClient.Onchain). No private key is ever
-  # involved on this path.
+  # app config. No private key is ever involved on this path.
   defp node_client(%{chains: chains}, chain_id) do
     case Map.fetch(chains, chain_id) do
       {:ok, url} -> {:ok, RPC.client(url: url)}

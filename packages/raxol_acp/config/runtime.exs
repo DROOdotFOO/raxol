@@ -22,16 +22,3 @@ if config_env() == :prod do
   config :raxol_payments, :accounting, accounting_opts
   config :raxol_acp, accounting_enabled: accounting_enabled
 end
-
-# ACP contract version: :v1 targets the sunsetted ACPSimple/ACPRouter; :v2 the
-# active AgenticCommerceV3 core. The code default in
-# `Raxol.ACP.ContractClient.Onchain` is still :v1, so a deployment flips to the
-# active contract by setting ACP_VERSION=v2 at boot -- no code change. Unset =
-# leave the code default (tests are unaffected). This override applies in every
-# env so staging can validate the v2 lifecycle before the code default flips.
-case System.get_env("ACP_VERSION") do
-  "v2" -> config :raxol_acp, acp_version: :v2
-  "v1" -> config :raxol_acp, acp_version: :v1
-  nil -> :ok
-  other -> raise "invalid ACP_VERSION #{inspect(other)}; expected \"v1\" or \"v2\""
-end

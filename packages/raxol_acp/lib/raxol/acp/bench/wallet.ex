@@ -12,8 +12,8 @@ defmodule Raxol.ACP.Bench.Wallet do
   This wallet is for the in-memory bench only. It signs against
   `chain_id: 8453` (Base mainnet) so signatures are domain-separated
   from real production signing flows -- but no transactions ever hit
-  a real network because the bench uses
-  `Raxol.ACP.ContractClient.InMemory`.
+  a real network because the bench drives the seller stack through
+  `Raxol.ACP.ProviderAdapter.Mock`.
   """
 
   use Raxol.Payments.Wallets.Env,
