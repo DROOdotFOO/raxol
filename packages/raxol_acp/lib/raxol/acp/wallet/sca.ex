@@ -195,6 +195,19 @@ defmodule Raxol.ACP.Wallet.SCA do
       @spec entry_point() :: String.t()
       def entry_point, do: unquote(entry_point)
 
+      @doc "The configured session-key entity id (validating entity slot)."
+      @spec signer_entity_id() :: non_neg_integer()
+      def signer_entity_id, do: unquote(entity_id)
+
+      @doc """
+      The owner / session-key EOA address (the `:signer` wallet's address).
+
+      This is the EOA registered as an authorized signer entity on the
+      account, distinct from `address/0` (the SCA contract address).
+      """
+      @spec owner_address() :: String.t()
+      def owner_address, do: unquote(signer).address()
+
       @doc "The configured bundler URL (resolving `{:system, var}`)."
       @spec bundler_url() :: {:ok, String.t()} | {:error, term()}
       def bundler_url, do: Raxol.ACP.Wallet.SCA.resolve_bundler_url(unquote(bundler_url))

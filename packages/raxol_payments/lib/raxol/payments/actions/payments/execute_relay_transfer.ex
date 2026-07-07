@@ -10,8 +10,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
   `Raxol.Payments.Actions.Payments.PollRelayStatus`.
 
   Tron has no stealth settlement. A stealth or shielded request to a Tron
-  destination is downgraded to public and a `:stealth_unavailable_on_tron`
-  warning is attached to the result; the transfer still proceeds.
+  destination fails closed with `{:error, :stealth_unsupported_on_chain}` and
+  must be re-requested with public settlement, rather than silently downgrading
+  the privacy preference to public.
 
   ## Funding the deposit
 
@@ -220,43 +221,40 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
   end
 
   defp build_request(params, from_address) do
-    amount = Decimal.new(Map.fetch!(params, :amount))
-    from_chain = Map.fetch!(params, :from_chain_id)
-    from_token = Map.fetch!(params, :from_token)
     to_chain = Map.fetch!(params, :to_chain_id)
-    decimals = Assets.decimals(from_chain, from_token)
-    from_amount = Integer.to_string(Assets.to_atomic(amount, decimals))
-    warnings = downgrade_warnings(Map.get(params, :settlement, "public"), to_chain)
 
-    request = %QuoteRequest{
-      transfer_id: generate_transfer_id(),
-      from_chain_id: from_chain,
-      to_chain_id: to_chain,
-      from_token: from_token,
-      to_token: Map.fetch!(params, :to_token),
-      from_amount: from_amount,
-      from_address: from_address,
-      to_address: Map.fetch!(params, :to_address),
-      slippage_bps: Map.get(params, :slippage_bps) || 50
-    }
+    with :ok <- reject_stealth_on_tron(Map.get(params, :settlement, "public"), to_chain) do
+      amount = Decimal.new(Map.fetch!(params, :amount))
+      from_chain = Map.fetch!(params, :from_chain_id)
+      from_token = Map.fetch!(params, :from_token)
+      decimals = Assets.decimals(from_chain, from_token)
+      from_amount = Integer.to_string(Assets.to_atomic(amount, decimals))
 
-    {:ok, request, amount, warnings}
+      request = %QuoteRequest{
+        transfer_id: generate_transfer_id(),
+        from_chain_id: from_chain,
+        to_chain_id: to_chain,
+        from_token: from_token,
+        to_token: Map.fetch!(params, :to_token),
+        from_amount: from_amount,
+        from_address: from_address,
+        to_address: Map.fetch!(params, :to_address),
+        slippage_bps: Map.get(params, :slippage_bps) || 50
+      }
+
+      {:ok, request, amount, []}
+    end
   end
 
-  # Tron is public-only: a stealth/shielded request is downgraded to public and
-  # the loss of privacy is surfaced, rather than silently dropped or blocked.
-  defp downgrade_warnings(settlement, to_chain) do
+  # Tron has no stealth settlement. Fail closed on a stealth/shielded request to
+  # a Tron destination and require an explicit public re-request, rather than
+  # silently downgrading a privacy preference to public (same guardrail class as
+  # the stealth-keys-required check on the Xochi path).
+  defp reject_stealth_on_tron(settlement, to_chain) do
     if settlement in ["stealth", "shielded"] and Relay.Schemas.tron_chain?(to_chain) do
-      [
-        %{
-          code: :stealth_unavailable_on_tron,
-          message:
-            "Tron has no stealth settlement yet; this transfer was sent publicly. " <>
-              "Use an EVM destination for a private settlement."
-        }
-      ]
+      {:error, :stealth_unsupported_on_chain}
     else
-      []
+      :ok
     end
   end
 

@@ -245,6 +245,45 @@ defmodule Raxol.Payments.Assets do
   @spec symbols() :: [String.t()]
   def symbols, do: Map.keys(@evm_tokens)
 
+  # Human-readable names for the supported EVM chains, matching Riddler's
+  # `config/chain_registry.ex` naming.
+  @chain_names %{
+    1 => "Ethereum",
+    10 => "Optimism",
+    137 => "Polygon",
+    8453 => "Base",
+    42_161 => "Arbitrum One",
+    4663 => "Robinhood Chain"
+  }
+
+  @doc """
+  The EVM chain ids covered by the solver-fillable table, ascending. This is
+  the static universe `Raxol.Payments.Xochi.Capabilities.fallback/0` derives
+  from; live corridor availability comes from the capabilities endpoint.
+  """
+  @spec supported_chain_ids() :: [pos_integer()]
+  def supported_chain_ids do
+    @evm_tokens
+    |> Enum.flat_map(fn {_symbol, by_chain} -> Map.keys(by_chain) end)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  @doc "Human-readable chain name, or `\"Chain <id>\"` when unknown."
+  @spec chain_name(integer() | String.t() | nil) :: String.t()
+  def chain_name(chain_id) do
+    chain = normalize_chain_id(chain_id)
+    Map.get(@chain_names, chain, "Chain #{inspect(chain)}")
+  end
+
+  @doc """
+  The solver-fillable token table: symbol -> chain id -> lowercase address.
+  Exposed for fallback derivation; prefer `known?/2` / `address/2` for
+  lookups.
+  """
+  @spec evm_tokens() :: %{String.t() => %{pos_integer() => String.t()}}
+  def evm_tokens, do: @evm_tokens
+
   @doc """
   Resolve a `(chain_id, contract_address)` back to its token symbol: the reverse
   of `address/2`. Covers the solver-fillable set (USDC, USDT, WETH, plus USDG on
