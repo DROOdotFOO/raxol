@@ -241,4 +241,5 @@ defmodule Raxol.ACP.JobSessionTest do
       assert JobSession.status(provider) == :open
     end
   end
+
 end
