@@ -1,29 +1,48 @@
 defmodule Raxol.ACP.Seller.QueueTest do
   use ExUnit.Case, async: false
 
-  import Raxol.ACP.TestSupport.WorkflowSetup
-
-  alias Raxol.ACP.ContractClient
-  alias Raxol.ACP.ContractClient.InMemory
-  alias Raxol.ACP.Job
-  alias Raxol.ACP.Job.Store
+  alias Raxol.ACP.JobSession
   alias Raxol.ACP.Offering.Registry, as: OfferingRegistry
+  alias Raxol.ACP.ProviderAdapter
   alias Raxol.ACP.Seller.Queue
   alias Raxol.ACP.TestSupport.{EchoOffering, SellerHelper}
 
   @seller "0x" <> String.duplicate("11", 20)
   @buyer "0x" <> String.duplicate("22", 20)
-
-  setup :with_isolated_workflow_saver
+  @chain 8453
+  @core "0x238E541BfefD82238730D00a2208E5497F1832E0"
 
   setup do
+    terminate_sessions()
     OfferingRegistry.clear()
-    InMemory.reset()
-    Store.clear()
+
+    adapter = ProviderAdapter.Mock.new()
+    :ok = SellerHelper.reset_seller(seller_address: @seller)
+    Application.put_env(:raxol_acp, :seller_provider_adapter, adapter)
+    Application.put_env(:raxol_acp, :seller_chain_id, @chain)
+    Application.put_env(:raxol_acp, :seller_acp_core_address, @core)
+
+    on_exit(fn ->
+      Application.delete_env(:raxol_acp, :seller_provider_adapter)
+      Application.delete_env(:raxol_acp, :seller_chain_id)
+      Application.delete_env(:raxol_acp, :seller_acp_core_address)
+      terminate_sessions()
+    end)
+
+    {:ok, adapter: adapter}
+  end
+
+  # -- helpers --
+
+  defp terminate_sessions do
+    for {_, pid, _, _} <- DynamicSupervisor.which_children(JobSession.Supervisor), is_pid(pid) do
+      DynamicSupervisor.terminate_child(JobSession.Supervisor, pid)
+    end
+
     :ok
   end
 
-  defp attach_telemetry(events) when is_list(events) do
+  defp attach_telemetry(events) do
     handler_id = "queue-test-#{System.unique_integer([:positive])}"
     test_pid = self()
 
@@ -35,114 +54,101 @@ defmodule Raxol.ACP.Seller.QueueTest do
     )
 
     on_exit(fn -> :telemetry.detach(handler_id) end)
-
     :ok
   end
 
-  defp wait_for_state(job_id, target, timeout_ms \\ 500) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_for_state(job_id, target, deadline)
+  defp job_id, do: "job-#{System.unique_integer([:positive])}"
+
+  defp offer(job_id, overrides \\ %{}) do
+    Queue.dispatch(
+      Map.merge(
+        %{
+          type: :job_offered,
+          job_id: job_id,
+          offering: "test.echo",
+          request: %{"text" => "ping"},
+          buyer: @buyer
+        },
+        overrides
+      )
+    )
   end
 
-  defp do_wait_for_state(job_id, target, deadline) do
-    case safe_state(job_id) do
+  defp wait_status(job_id, target, timeout_ms \\ 500) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_status(job_id, target, deadline)
+  end
+
+  defp do_wait_status(job_id, target, deadline) do
+    case status(job_id) do
       ^target ->
         :ok
 
-      _ ->
+      other ->
         if System.monotonic_time(:millisecond) < deadline do
           Process.sleep(5)
-          do_wait_for_state(job_id, target, deadline)
+          do_wait_status(job_id, target, deadline)
         else
-          flunk("Job #{job_id} never reached #{target}; saw #{inspect(safe_state(job_id))}")
+          flunk("job #{job_id} never reached #{target}; saw #{inspect(other)}")
         end
     end
   end
 
-  defp safe_state(job_id) do
-    case Job.Registry.whereis(job_id) do
+  defp status(job_id) do
+    case JobSession.Registry.whereis({@chain, job_id}) do
       :undefined ->
-        from_store(job_id)
+        :gone
 
       pid ->
         try do
-          Job.Server.current_state(pid)
+          JobSession.status(pid)
         catch
-          :exit, _ -> from_store(job_id)
+          :exit, _ -> :gone
         end
     end
   end
 
-  defp from_store(job_id) do
-    case Store.load(job_id) do
-      {:ok, %{state: state}} -> state
-      :error -> :no_record
-    end
-  end
+  # -- tests --
 
   describe ":job_offered dispatch" do
     setup do
-      :ok = SellerHelper.reset_seller(seller_address: @seller)
-      :ok = attach_telemetry([:dispatched, :dropped])
+      attach_telemetry([:dispatched, :dropped])
       {:ok, _spec} = EchoOffering.register()
       :ok
     end
 
-    test "starts a Job.Server, accepts the request, and persists the negotiation memo" do
-      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
-
-      Queue.dispatch(%{
-        type: :job_offered,
-        job_id: job_id,
-        offering: "test.echo",
-        request: %{"text" => "ping"},
-        buyer: @buyer
-      })
+    test "starts a provider JobSession, sets the budget on-chain, mirrors :budget_set", %{
+      adapter: adapter
+    } do
+      jid = job_id()
+      offer(jid)
 
       assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dispatched],
                       %{type: :job_offered}},
                      500
 
-      :ok = wait_for_state(job_id, :negotiation)
+      :ok = wait_status(jid, :budget_set)
 
-      assert {:ok, %{state: :negotiation, memos: [memo]}} = Store.load(job_id)
-      assert memo.next_phase == :negotiation
-      assert memo.memo_type == :message
+      assert [{@chain, [call]}] = ProviderAdapter.Mock.sent_calls(adapter)
+      assert call.to == @core
     end
   end
 
-  describe "unknown offering" do
+  describe "drops" do
     setup do
-      :ok = SellerHelper.reset_seller(seller_address: @seller)
-      :ok = attach_telemetry([:dropped])
+      attach_telemetry([:dropped])
       :ok
     end
 
-    test "drops :job_offered when the offering is not registered" do
-      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
-
-      Queue.dispatch(%{
-        type: :job_offered,
-        job_id: job_id,
-        offering: "nope.no.such",
-        request: %{},
-        buyer: @buyer
-      })
+    test "unknown offering drops as :offering_not_registered" do
+      offer(job_id(), %{offering: "nope.no.such"})
 
       assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
                       %{type: :job_offered, reason: :offering_not_registered}},
                      200
     end
-  end
 
-  describe "events for non-running jobs" do
-    setup do
-      :ok = SellerHelper.reset_seller(seller_address: @seller)
-      :ok = attach_telemetry([:dropped])
-      :ok
-    end
-
-    test ":payment_received drops with :job_not_running for unknown job_id" do
+    test ":payment_received for an unknown job drops as :job_not_running" do
       Queue.dispatch(%{type: :payment_received, job_id: "ghost", payload: %{}})
 
       assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
@@ -150,46 +156,30 @@ defmodule Raxol.ACP.Seller.QueueTest do
                      200
     end
 
-    test ":approval_received drops with :job_not_running for unknown job_id" do
+    test ":approval_received for an unknown job drops as :job_not_running" do
       Queue.dispatch(%{type: :approval_received, job_id: "ghost", payload: %{}})
 
       assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
                       %{type: :approval_received, reason: :job_not_running}},
                      200
     end
-  end
 
-  describe "unknown event types" do
-    setup do
-      :ok = SellerHelper.reset_seller([])
-      :ok = attach_telemetry([:dropped])
-      :ok
-    end
-
-    test "are dropped with :unknown_event reason" do
+    test "an unknown event type drops as :unknown_event" do
       Queue.dispatch(%{type: :nonsense, job_id: "x"})
 
       assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
                       %{type: :nonsense, reason: :unknown_event}},
                      200
     end
-  end
 
-  describe "malformed events" do
-    setup do
-      :ok = SellerHelper.reset_seller(seller_address: @seller)
-      :ok = attach_telemetry([:dropped])
-      :ok
-    end
-
-    test ":job_offered missing :offering drops as :malformed without crashing the Queue" do
+    test ":job_offered without an offering key drops as :malformed, and the Queue survives" do
       Queue.dispatch(%{type: :job_offered, job_id: "x"})
 
       assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
                       %{type: :job_offered, reason: :malformed}},
                      200
 
-      # The Queue survived a malformed event: a follow-up is still processed.
+      # A malformed event didn't take the Queue down: a follow-up still processes.
       Queue.dispatch(%{type: :nonsense, job_id: "y"})
 
       assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
@@ -204,48 +194,42 @@ defmodule Raxol.ACP.Seller.QueueTest do
                       %{reason: :malformed}},
                      200
     end
+
+    test ":job_offered drops as :no_provider_adapter when none is configured" do
+      Application.delete_env(:raxol_acp, :seller_provider_adapter)
+      {:ok, _spec} = EchoOffering.register()
+
+      offer(job_id())
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
+                      %{type: :job_offered, reason: :no_provider_adapter}},
+                     200
+    end
   end
 
   describe "downstream errors are not swallowed" do
     setup do
-      :ok = SellerHelper.reset_seller(seller_address: @seller)
-      :ok = attach_telemetry([:dispatched, :dropped])
+      attach_telemetry([:dispatched, :dropped])
       {:ok, _spec} = EchoOffering.register()
       :ok
     end
 
-    test ":approval_received on a job not in :evaluation drops as {:handler_error, _}" do
-      {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
+    test "a failed on-chain write drops as {:handler_error, _}, not dispatched", %{
+      adapter: adapter
+    } do
+      ProviderAdapter.Mock.set_send_calls_error(adapter, :rpc_down)
 
-      Queue.dispatch(%{
-        type: :job_offered,
-        job_id: job_id,
-        offering: "test.echo",
-        request: %{"text" => "ping"},
-        buyer: @buyer
-      })
-
-      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dispatched],
-                      %{type: :job_offered}},
-                     500
-
-      :ok = wait_for_state(job_id, :negotiation)
-
-      # approve requires :evaluation; from :negotiation it is an invalid
-      # transition, so the Job.Server returns {:error, _}. That must surface as a
-      # drop, not a silently-swallowed "dispatched".
-      Queue.dispatch(%{type: :approval_received, job_id: job_id, payload: %{}})
+      offer(job_id())
 
       assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
-                      %{type: :approval_received, reason: {:handler_error, _}}},
+                      %{type: :job_offered, reason: {:handler_error, :rpc_down}}},
                      500
     end
   end
 
   describe "backpressure" do
     setup do
-      :ok = SellerHelper.reset_seller(seller_address: @seller)
-      :ok = attach_telemetry([:dispatched, :dropped])
+      attach_telemetry([:dispatched, :dropped])
       {:ok, _spec} = EchoOffering.register()
 
       prev = Application.get_env(:raxol_acp, :seller_max_active_jobs)
@@ -259,41 +243,27 @@ defmodule Raxol.ACP.Seller.QueueTest do
       :ok
     end
 
-    test "rejects a second :job_offered once the active-job cap is reached" do
+    test "rejects a second :job_offered once the active-session cap is reached" do
       Application.put_env(:raxol_acp, :seller_max_active_jobs, 1)
 
-      {:ok, job_a} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
-      {:ok, job_b} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
-      assert job_a != job_b
+      job_a = job_id()
+      job_b = job_id()
 
-      Queue.dispatch(%{
-        type: :job_offered,
-        job_id: job_a,
-        offering: "test.echo",
-        request: %{},
-        buyer: @buyer
-      })
+      offer(job_a)
 
       assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dispatched],
                       %{type: :job_offered, job_id: ^job_a}},
                      500
 
-      :ok = wait_for_state(job_a, :negotiation)
+      :ok = wait_status(job_a, :budget_set)
 
-      # At the cap now; the second offer is rejected, not started.
-      Queue.dispatch(%{
-        type: :job_offered,
-        job_id: job_b,
-        offering: "test.echo",
-        request: %{},
-        buyer: @buyer
-      })
+      offer(job_b)
 
       assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
                       %{type: :job_offered, job_id: ^job_b, reason: :at_capacity}},
                      500
 
-      assert Job.Registry.whereis(job_b) == :undefined
+      assert JobSession.Registry.whereis({@chain, job_b}) == :undefined
     end
   end
 end

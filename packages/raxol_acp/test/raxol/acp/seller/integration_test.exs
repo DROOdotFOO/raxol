@@ -1,191 +1,148 @@
 defmodule Raxol.ACP.Seller.IntegrationTest do
   @moduledoc """
-  End-to-end seller test: events injected through `Backend.InMemory`
-  drive a job from `:request` through `:completed` with all four memos
-  written via `ContractClient.create_memo/5` and persisted to the Store.
-
-  Exercises the full path:
+  End-to-end seller test: events injected through `Backend.InMemory` drive a job
+  from `:open` through `:completed` as the provider, writing the hook calls
+  on-chain via a `ProviderAdapter.Mock` (the only fake -- it stands in for the
+  bundler/RPC so CI doesn't hit a real chain) and mirroring status into the job's
+  `JobSession`.
 
       InMemory.publish/1
         -> Runtime ({:acp_event, _})
         -> Queue.dispatch/1
-        -> Job.Supervisor.start_job/1 (or routing to existing pid)
-        -> Job.Server (handler invocation, ContractClient, Store)
+        -> JobSession.Provider (handler + HookClient + JobSession)
   """
 
   use ExUnit.Case, async: false
 
-  import Raxol.ACP.TestSupport.WorkflowSetup
-
-  alias Raxol.ACP.ContractClient
-  alias Raxol.ACP.ContractClient.InMemory, as: ContractInMem
-  alias Raxol.ACP.Job
-  alias Raxol.ACP.Job.Store
+  alias Raxol.ACP.JobSession
   alias Raxol.ACP.Offering.Registry, as: OfferingRegistry
+  alias Raxol.ACP.ProviderAdapter
   alias Raxol.ACP.Seller.Backend.InMemory, as: BackendInMem
   alias Raxol.ACP.TestSupport.{EchoOffering, SellerHelper}
 
   @seller "0x" <> String.duplicate("11", 20)
   @buyer "0x" <> String.duplicate("22", 20)
-
-  setup :with_isolated_workflow_saver
+  @chain 8453
+  @core "0x238E541BfefD82238730D00a2208E5497F1832E0"
 
   setup do
+    terminate_sessions()
     OfferingRegistry.clear()
-    ContractInMem.reset()
-    Store.clear()
 
+    adapter = ProviderAdapter.Mock.new()
     :ok = SellerHelper.reset_seller(seller_address: @seller)
-
+    Application.put_env(:raxol_acp, :seller_provider_adapter, adapter)
+    Application.put_env(:raxol_acp, :seller_chain_id, @chain)
+    Application.put_env(:raxol_acp, :seller_acp_core_address, @core)
     {:ok, _spec} = EchoOffering.register()
+
+    on_exit(fn ->
+      Application.delete_env(:raxol_acp, :seller_provider_adapter)
+      Application.delete_env(:raxol_acp, :seller_chain_id)
+      Application.delete_env(:raxol_acp, :seller_acp_core_address)
+      terminate_sessions()
+    end)
+
+    {:ok, adapter: adapter}
+  end
+
+  defp terminate_sessions do
+    for {_, pid, _, _} <- DynamicSupervisor.which_children(JobSession.Supervisor), is_pid(pid) do
+      DynamicSupervisor.terminate_child(JobSession.Supervisor, pid)
+    end
+
     :ok
   end
 
-  defp wait_for_state(job_id, target, timeout_ms \\ 500) do
+  defp job_id, do: "job-#{System.unique_integer([:positive])}"
+
+  defp wait_status(job_id, target, timeout_ms \\ 1_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_for_state(job_id, target, deadline)
+    do_wait_status(job_id, target, deadline)
   end
 
-  defp do_wait_for_state(job_id, target, deadline) do
-    case current_state(job_id) do
+  defp do_wait_status(job_id, target, deadline) do
+    case status(job_id) do
       ^target ->
         :ok
 
-      _ ->
+      other ->
         if System.monotonic_time(:millisecond) < deadline do
           Process.sleep(5)
-          do_wait_for_state(job_id, target, deadline)
+          do_wait_status(job_id, target, deadline)
         else
-          flunk("Job #{job_id} never reached #{target}; saw #{inspect(current_state(job_id))}")
+          flunk("job #{job_id} never reached #{target}; saw #{inspect(other)}")
         end
     end
   end
 
-  defp current_state(job_id) do
-    case Job.Registry.whereis(job_id) do
+  defp status(job_id) do
+    case JobSession.Registry.whereis({@chain, job_id}) do
       :undefined ->
-        from_store(job_id)
+        :gone
 
       pid ->
         try do
-          Job.Server.current_state(pid)
+          JobSession.status(pid)
         catch
-          # Server is in the middle of terminating; fall back to the
-          # last persisted state, which is the same answer.
-          :exit, _ -> from_store(job_id)
+          :exit, _ -> :gone
         end
     end
   end
 
-  defp from_store(job_id) do
-    case Store.load(job_id) do
-      {:ok, %{state: state}} -> state
-      :error -> :no_record
-    end
+  defp selectors_sent(adapter) do
+    for {@chain, [call]} <- ProviderAdapter.Mock.sent_calls(adapter),
+        do: binary_part(call.data, 0, 4)
   end
 
-  defp wait_unregistered(job_id, timeout_ms \\ 500) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_unregistered(job_id, deadline)
-  end
+  test "backend events drive a job from offer to completion via hook calls", %{adapter: adapter} do
+    jid = job_id()
 
-  defp do_wait_unregistered(job_id, deadline) do
-    case Job.Registry.whereis(job_id) do
-      :undefined ->
-        :ok
-
-      _pid ->
-        if System.monotonic_time(:millisecond) < deadline do
-          Process.sleep(5)
-          do_wait_unregistered(job_id, deadline)
-        else
-          flunk("Job.Registry still has #{job_id}")
-        end
-    end
-  end
-
-  test "full lifecycle: events drive the job from :request to :completed" do
-    {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
-
-    # 1. Buyer offers a job to our seller.
+    # 1. Buyer offers -> provider sets the budget on-chain -> :budget_set.
     BackendInMem.publish(%{
       type: :job_offered,
-      job_id: job_id,
+      job_id: jid,
       offering: "test.echo",
       request: %{"text" => "ping"},
       buyer: @buyer
     })
 
-    :ok = wait_for_state(job_id, :negotiation)
+    :ok = wait_status(jid, :budget_set)
 
-    # 2. Buyer pays. The Queue routes the event to our running Job.Server,
-    #    advancing to :transaction.
-    BackendInMem.publish(%{
-      type: :payment_received,
-      job_id: job_id,
-      payload: %{auth: "buyer-payment-blob"}
-    })
+    # 2. Buyer funds -> provider delivers (submit) -> :submitted.
+    BackendInMem.publish(%{type: :payment_received, job_id: jid, payload: %{auth: "blob"}})
+    :ok = wait_status(jid, :submitted)
 
-    :ok = wait_for_state(job_id, :transaction)
+    # 3. External evaluator approves -> :completed (terminal; session stops).
+    BackendInMem.publish(%{type: :approval_received, job_id: jid, payload: %{ok: true}})
+    :ok = wait_status(jid, :gone)
 
-    # 3. The handler decides delivery timing. EchoOffering's handle_deliver
-    #    simply echoes the request, so we trigger it directly here. This is
-    #    the design: the Queue does NOT auto-deliver (handlers control
-    #    delivery, see Queue moduledoc).
-    assert {:ok, :evaluation} = Job.Server.deliver(job_id)
-
-    # 4. Buyer (or evaluator) approves. Terminal transition; Job.Server
-    #    stops with :normal.
-    BackendInMem.publish(%{
-      type: :approval_received,
-      job_id: job_id,
-      payload: %{ok: true}
-    })
-
-    :ok = wait_for_state(job_id, :completed)
-    :ok = wait_unregistered(job_id)
-
-    # All four memos are persisted, in order.
-    assert {:ok, %{memos: memos, state: :completed}} = Store.load(job_id)
-
-    assert Enum.map(memos, & &1.next_phase) == [
-             :negotiation,
-             :transaction,
-             :evaluation,
-             :completed
+    # We wrote exactly setBudget then submit; complete was the evaluator's, not ours.
+    assert selectors_sent(adapter) == [
+             Raxol.ACP.ABI.function_selector("setBudget(uint256,uint256,bytes)"),
+             Raxol.ACP.ABI.function_selector("submit(uint256,bytes32,bytes)")
            ]
-
-    assert Enum.map(memos, & &1.payload) == [
-             %{"text" => "ping"},
-             %{auth: "buyer-payment-blob"},
-             %{"echo" => "ping"},
-             %{ok: true}
-           ]
-
-    # And the chain-side InMemory contract client recorded matching memos.
-    assert Enum.map(ContractInMem.list_memos(job_id), & &1.next_phase) ==
-             [:negotiation, :transaction, :evaluation, :completed]
   end
 
-  test "expiration event drives a non-terminal job to :expired" do
-    {:ok, job_id} = ContractClient.create_job(@seller, @seller, 9_999_999_999)
+  test "an expiration event drives a non-terminal job to :expired", %{adapter: adapter} do
+    jid = job_id()
 
     BackendInMem.publish(%{
       type: :job_offered,
-      job_id: job_id,
+      job_id: jid,
       offering: "test.echo",
       request: %{"text" => "ping"},
       buyer: @buyer
     })
 
-    :ok = wait_for_state(job_id, :negotiation)
+    :ok = wait_status(jid, :budget_set)
 
-    BackendInMem.publish(%{type: :job_expired, job_id: job_id, reason: "sla_breach"})
+    BackendInMem.publish(%{type: :job_expired, job_id: jid, reason: "sla_breach"})
+    :ok = wait_status(jid, :gone)
 
-    :ok = wait_for_state(job_id, :expired)
-    :ok = wait_unregistered(job_id)
-
-    assert {:ok, %{state: :expired, memos: [_negotiation, expire]}} = Store.load(job_id)
-    assert expire.next_phase == :expired
+    # Only the setBudget was written; expiry is a status mirror, no on-chain call.
+    assert selectors_sent(adapter) == [
+             Raxol.ACP.ABI.function_selector("setBudget(uint256,uint256,bytes)")
+           ]
   end
 end
