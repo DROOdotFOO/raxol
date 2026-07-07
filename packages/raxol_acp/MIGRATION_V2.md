@@ -13,19 +13,27 @@
 
 `raxol_acp` 0.2.0 ships the v2 surface alongside the v1 surface so existing solver code keeps working during the transition. This document tracks what's landed and what's still pending.
 
-## Status — 2026-06-13
+## Status — 2026-07-07
 
-| Area | v1 (existing) | v2 (scaffolded this PR) | v2 (TODO) |
-|------|---------------|-------------------------|-----------|
-| Chain config | `Raxol.ACP.Chain` (mainnet, sepolia, `acp_contract_address`, `acp_router_address`) | adds `acp_core_address`, `fund_transfer_hook_address`, `multi_hook_router_address`, `subscription_hook_address`, `subscription_state_address`, `acp_server_url` | — |
-| Token amounts | `Fare`/`FareAmount` (Decimal-based) | `Raxol.ACP.AssetToken` (raw integer + decimals + chain-aware) | — |
-| Event model | `onNewTask`/`onEvaluate` via Socket.IO | `Raxol.ACP.Event` type union + helpers | SSE transport, `Raxol.ACP.Agent` event dispatch |
-| Job session | `Raxol.ACP.Job.Server` (state machine) | — | `Raxol.ACP.JobSession` GenServer with `set_budget`/`fund`/`submit`/`complete`/`reject` |
-| Provider adapter | `Raxol.ACP.ContractClient.Onchain` (direct JSON-RPC) | — | `Raxol.ACP.ProviderAdapter.SCA` (Elixir-native, reuses `Raxol.ACP.Wallet.SCA`) |
-| Hook integration | (no first-class hooks) | — | `Raxol.ACP.Hooks.FundTransfer` for Xochi |
-| Xochi offering | (none) | `Raxol.ACP.Xochi.Offering` (request/deliverable schemas) | `Raxol.ACP.Xochi.SolverAgent` runtime |
-| Wallet/signer | `Raxol.ACP.Wallet.SCA` (MAv2 + session keys; `SelfCallRecursionDepthExceeded` fix in #266) | — | v2 SCA provisioning (deploy + install in two userOps, not one) |
-| Marketplace registration | — | — | `mix acp.register_offering` task |
+| Area | v1 (existing) | v2 status |
+|------|---------------|-----------|
+| Chain config | `Raxol.ACP.Chain` (`acp_contract_address`, `acp_router_address`) | **Done** — adds `acp_core_address` + hook/router/subscription addresses + `acp_server_url` |
+| Token amounts | `Fare`/`FareAmount` (Decimal-based) | **Done** — `Raxol.ACP.AssetToken` (raw integer + decimals + chain-aware) |
+| Event model | `onNewTask`/`onEvaluate` via Socket.IO | **Done** — `Raxol.ACP.Event`, SSE transport (`transport/sse/parser.ex`), `Raxol.ACP.Agent` event dispatch |
+| Job session | `Raxol.ACP.Job.Server` (state machine) | **Done** — `Raxol.ACP.JobSession` GenServer (`set_budget`/`fund`/`submit`/`complete`/`reject`) |
+| Provider adapter | `Raxol.ACP.ContractClient.Onchain` (direct JSON-RPC) | **In progress** — `Raxol.ACP.ProviderAdapter.SCA` (Elixir-native, reuses `Raxol.ACP.Wallet.SCA`) |
+| Hook integration | (no first-class hooks) | **Done** — `Raxol.ACP.Hooks.FundTransfer` (note: the storefront relay offering runs plain jobs, `hook = address(0)`) |
+| Xochi offering | (none) | **Done** — `Raxol.ACP.Xochi.Offering` + `Raxol.ACP.Xochi.SolverAgent` runtime (8bps storefront fee) |
+| Wallet/signer | `Raxol.ACP.Wallet.SCA` (MAv2 + session keys) | **In progress** — two-userOp v2 provisioning (deploy + install as separate userOps) |
+| Marketplace registration | — | **Done** — `mix acp.register_offering` |
+
+**In progress (this wave):** `ProviderAdapter.SCA` + two-userOp provisioning.
+
+**Next wave (not started):** flip the `ContractClient.Onchain` code default `:v1 -> :v2`; delete the v1 modules (`Job.Server` path, the `:v1` `create_job`/`create_payable_memo`/`confirm_x402_payment_received` branches, the `:v1` contract-address branch — keep the `Chain` addresses for indexer back-compat); bump `0.2.0-pre.0 -> 0.2.0-rc.N -> 0.2.0`; graduate the `xochi_cross_chain_transfer` offering on Base mainnet.
+
+## Selecting the contract version
+
+`Raxol.ACP.ContractClient.Onchain` reads `Application.get_env(:raxol_acp, :acp_version, :v1)`; the code default is still `:v1` (the sunsetted ACPSimple). A deployment flips to the active AgenticCommerceV3 core by setting `ACP_VERSION=v2` at boot (wired in `config/runtime.exs`, applies in every env) — no code change. This lets staging validate the v2 lifecycle before the code default is flipped in the next wave.
 
 ## Strategy
 
