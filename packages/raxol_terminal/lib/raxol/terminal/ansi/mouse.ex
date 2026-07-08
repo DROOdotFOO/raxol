@@ -180,13 +180,13 @@ defmodule Raxol.Terminal.ANSI.Mouse do
     def generate_utf8_report(state) do
       {x, y} = state.position
       button_code = button_to_code(state.button_state)
-      :erlang.binary_to_list(<<27, "M", button_code, x + 32, y + 32>>)
+      :erlang.binary_to_list(<<27, "M", button_code::binary, x + 32, y + 32>>)
     end
 
     def generate_sgr_report(state) do
       {x, y} = state.position
       button_code = sgr_button_to_code(state.button_state)
-      :erlang.binary_to_list(<<27, "[<", button_code, ";", x, ";", y, "M">>)
+      :erlang.binary_to_list(<<27, "[<", button_code::binary, ";", x, ";", y, "M">>)
     end
 
     def generate_urxvt_report(state) do
@@ -196,7 +196,7 @@ defmodule Raxol.Terminal.ANSI.Mouse do
     def generate_sgr_pixels_report(state) do
       {x, y} = state.position
       button_code = sgr_button_to_code(state.button_state)
-      :erlang.binary_to_list(<<27, "[<", button_code, ";", x, ";", y, "M">>)
+      :erlang.binary_to_list(<<27, "[<", button_code::binary, ";", x, ";", y, "M">>)
     end
 
     @doc """
