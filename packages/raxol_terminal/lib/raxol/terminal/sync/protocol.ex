@@ -159,7 +159,6 @@ defmodule Raxol.Terminal.Sync.Protocol do
       :ok
     else
       {:error, reason} -> {:error, reason}
-      false -> {:error, :unknown_validation_error}
     end
   end
 

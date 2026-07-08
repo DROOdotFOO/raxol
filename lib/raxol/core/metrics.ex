@@ -114,5 +114,4 @@ defmodule Raxol.Core.Metrics do
     |> Map.delete(nil)
   end
 
-  defp normalize_metrics(data) when is_map(data), do: data
 end

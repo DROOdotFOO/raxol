@@ -114,7 +114,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     """
 
     alias Raxol.Terminal.Clipboard
-    require Raxol.Core.Runtime.Log
 
     def handle_9(emulator, data) do
       case data do
