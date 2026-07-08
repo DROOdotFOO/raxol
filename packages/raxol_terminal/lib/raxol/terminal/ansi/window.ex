@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.ANSI.Window do
   Supports window events, resizing, positioning, and state management.
   """
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Terminal.ANSI.Monitor
 
   # Type definitions

@@ -358,7 +358,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     Handles color palette OSC commands.
     """
 
-    require Raxol.Core.Runtime.Log
 
     def handle_4(emulator, data) do
       case parse_palette_command(data) do

@@ -606,7 +606,7 @@ defmodule Raxol.Terminal.ANSI.KittyGraphics do
 
   defp chunk_data_recursive(data, chunk_size, acc) do
     case data do
-      <<chunk::binary-size(chunk_size), rest::binary>> ->
+      <<chunk::binary-size(^chunk_size), rest::binary>> ->
         chunk_data_recursive(rest, chunk_size, [chunk | acc])
 
       remainder ->

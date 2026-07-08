@@ -117,7 +117,7 @@ defmodule Raxol.Terminal.ANSI.PngDecoder do
 
   defp unfilter_scanline({data, prev, rows_acc}, stride, bpp) do
     case data do
-      <<filter_type, scanline::binary-size(stride), rest::binary>> ->
+      <<filter_type, scanline::binary-size(^stride), rest::binary>> ->
         case unfilter_row(filter_type, scanline, prev, bpp) do
           {:ok, row} -> {:cont, {rest, row, [row | rows_acc]}}
           {:error, _} = err -> {:halt, err}

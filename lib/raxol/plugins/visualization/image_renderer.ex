@@ -369,7 +369,7 @@ defmodule Raxol.Plugins.Visualization.ImageRenderer do
     offset = y * stride + x * bytes_per_pixel
 
     case buffer do
-      <<_::binary-size(offset), r, g, b, _::binary>>
+      <<_::binary-size(^offset), r, g, b, _::binary>>
       when bytes_per_pixel >= 3 ->
         Cell.new_sixel(
           " ",
