@@ -63,7 +63,7 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
     test "settlement_preference is optional and bounded" do
       schema = Offering.requirement_schema()
       prop = schema["properties"]["settlement_preference"]
-      assert prop["enum"] == ["public", "private"]
+      assert prop["enum"] == ["public", "private", "stealth"]
       assert prop["default"] == "public"
     end
   end

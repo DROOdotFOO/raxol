@@ -268,7 +268,6 @@ defmodule Raxol.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false},
-      {:earmark, "~> 1.4", only: :dev},
 
       # Security scanning
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},

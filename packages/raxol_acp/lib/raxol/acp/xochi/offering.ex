@@ -61,7 +61,9 @@ defmodule Raxol.ACP.Xochi.Offering do
       description:
         "Cross-chain stablecoin settlement storefront. The buyer signs a Xochi " <>
           "intent, the storefront relays it and returns the settlement tx hashes; " <>
-          "the buyer escrows only the storefront fee (a plain job, no fund hook).",
+          "the buyer escrows only the storefront fee (a plain job, no fund hook). " <>
+          "The buyer may settle to a different recipient or an ERC-5564 stealth " <>
+          "address by signing it into their intent; the storefront relays it verbatim.",
       required_funds: true,
       hook_kind: "none",
       sla_minutes: 10,
@@ -180,10 +182,13 @@ defmodule Raxol.ACP.Xochi.Offering do
         },
         "settlement_preference" => %{
           "type" => "string",
-          "enum" => ["public", "private"],
+          "enum" => ["public", "private", "stealth"],
           "default" => "public",
           "description" =>
-            "Optional audit hint of the privacy tier the buyer signed. raxol relays " <>
+            "Optional audit hint of the privacy tier the buyer signed. \"stealth\" " <>
+              "records an ERC-5564 stealth delivery -- the buyer signed the stealth " <>
+              "spending/viewing keys and an ephemeral recipient into their Xochi " <>
+              "intent, so funds land at a stealth address they control. raxol relays " <>
               "whatever the buyer signed and does not gate on this."
         }
       }

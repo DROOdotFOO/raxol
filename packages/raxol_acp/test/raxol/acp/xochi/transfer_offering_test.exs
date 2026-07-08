@@ -81,6 +81,20 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
       r = req(%{"src_token" => @weth_base, "dst_token" => @weth_arb})
       assert {:accept, ^r} = TransferOffering.handle_request(r, @ctx)
     end
+
+    test "a stealth settlement to a different recipient is relayed, not gated (#368)" do
+      # The privacy tier and recipient live inside the buyer's opaque signed
+      # intent; the storefront relays it verbatim. So a requirement declaring
+      # settlement_preference "stealth" and a destination distinct from the
+      # funder must be accepted -- raxol has no same-owner or public-only gate.
+      r =
+        req(%{
+          "settlement_preference" => "stealth",
+          "destination" => "0x" <> String.duplicate("fe", 20)
+        })
+
+      assert {:accept, ^r} = TransferOffering.handle_request(r, @ctx)
+    end
   end
 
   describe "handle_request/2 rejects bad requests before escrow" do
