@@ -45,13 +45,6 @@ defmodule Raxol.UI.Rendering.Composer do
     %{composed_type: :primitive, value: current_layout_node}
   end
 
-  defp do_compose_recursive(nil, _previous_composed_node) do
-    Raxol.Core.Runtime.Log.debug(
-      "Composition Stage: Encountered nil layout node."
-    )
-
-    nil
-  end
 
   defp can_reuse_previous_node?(current_layout_node, previous_composed_node) do
     is_map(current_layout_node[:layout_attrs]) &&

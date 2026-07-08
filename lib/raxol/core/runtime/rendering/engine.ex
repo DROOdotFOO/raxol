@@ -705,6 +705,4 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     :ok
   end
 
-  defp update_plugin_manager_in_dispatcher(_, _),
-    do: {:error, :invalid_dispatcher}
 end

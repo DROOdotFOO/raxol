@@ -578,10 +578,6 @@ defmodule Raxol.Terminal.IO.IOServer do
     handle_buffer_manager_resize(buffer_manager, state, width, height)
   end
 
-  defp handle_buffer_manager_resize(nil, state, _width, _height) do
-    # If we can't create a buffer manager, just return the state
-    state
-  end
 
   defp handle_buffer_manager_resize(buffer_manager, state, width, height) do
     # Update buffer manager

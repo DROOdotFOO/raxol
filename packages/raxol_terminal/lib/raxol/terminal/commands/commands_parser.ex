@@ -49,7 +49,6 @@ defmodule Raxol.Terminal.Commands.CommandsParser do
     end
   end
 
-  defp parse_single_param(param), do: parse_int(param)
 
   defp parse_subparam(""), do: nil
   defp parse_subparam(subparam), do: parse_int(subparam)
