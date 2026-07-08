@@ -7,7 +7,7 @@ on:
       - 'web/**'
       - 'docs/**'
       - 'assets/**'
-      - '*.md'
+      - '**.md'
       - '.github/**'
       - '!.github/workflows/**'
   pull_request:
@@ -16,7 +16,7 @@ on:
       - 'web/**'
       - 'docs/**'
       - 'assets/**'
-      - '*.md'
+      - '**.md'
       - '.github/**'
       - '!.github/workflows/**'
   schedule:
