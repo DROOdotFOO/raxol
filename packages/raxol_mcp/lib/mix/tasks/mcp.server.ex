@@ -30,7 +30,7 @@ defmodule Mix.Tasks.Mcp.Server do
   @impl true
   def run(_args) do
     # Configure logger to stderr so it doesn't corrupt the JSON-RPC stream
-    Logger.configure_backend(:console, device: :standard_error)
+    :logger.update_handler_config(:default, :config, %{type: :standard_error})
 
     # Use lightweight MCP startup mode -- skip terminal driver, cache, Phoenix, etc.
     Application.put_env(:raxol, :skip_endpoint, true)

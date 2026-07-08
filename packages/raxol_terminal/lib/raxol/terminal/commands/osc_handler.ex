@@ -190,7 +190,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     """
 
     alias Raxol.Terminal.Colors
-    require Raxol.Core.Runtime.Log
 
     def handle_10(emulator, data) do
       case data do
