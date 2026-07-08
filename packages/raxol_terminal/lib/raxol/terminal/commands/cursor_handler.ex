@@ -405,7 +405,7 @@ defmodule Raxol.Terminal.Commands.CursorHandler do
   defp set_cursor_position(cursor, {row, col}) do
     # Try to handle any cursor type that might have row and col fields
     case cursor do
-      %{row: _, col: _} when is_map(cursor) ->
+      %{row: _, col: _} ->
         %{cursor | row: row, col: col}
 
       _ ->

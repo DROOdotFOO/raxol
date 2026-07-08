@@ -64,7 +64,7 @@ defmodule Raxol.Protocols.Phase2IntegrationTest do
 
     test "renders components using Renderable protocol" do
       component = ComponentFramework.component(__MODULE__, :button, %{text: "Click me"})
-      rendered = Renderable.render(component)
+      rendered = Renderable.render(component, [])
 
       assert String.contains?(rendered, "button Component")
       assert String.contains?(rendered, "text: \"Click me\"")
@@ -339,7 +339,7 @@ defmodule Raxol.Protocols.Phase2IntegrationTest do
       }
 
       # Test Renderable
-      rendered = Renderable.render(data)
+      rendered = Renderable.render(data, [])
       assert String.contains?(rendered, "Multi-protocol test")
 
       # Test Styleable

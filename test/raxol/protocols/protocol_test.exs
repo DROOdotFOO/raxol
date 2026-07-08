@@ -5,7 +5,7 @@ defmodule Raxol.Protocols.ProtocolTest do
 
   describe "Renderable protocol" do
     test "renders strings" do
-      assert Renderable.render("Hello, World!") == "Hello, World!"
+      assert Renderable.render("Hello, World!", []) == "Hello, World!"
       metadata = Renderable.render_metadata("Hello, World!")
       assert metadata.width == 13
       assert metadata.height == 1
@@ -13,7 +13,7 @@ defmodule Raxol.Protocols.ProtocolTest do
 
     test "renders lists" do
       list = ["item1", "item2", "item3"]
-      rendered = Renderable.render(list)
+      rendered = Renderable.render(list, [])
       assert rendered == "item1\nitem2\nitem3"
 
       metadata = Renderable.render_metadata(list)
@@ -22,7 +22,7 @@ defmodule Raxol.Protocols.ProtocolTest do
 
     test "renders maps" do
       map = %{name: "John", age: 30}
-      rendered = Renderable.render(map)
+      rendered = Renderable.render(map, [])
       assert rendered =~ "age"
       assert rendered =~ "name"
       assert rendered =~ "30"
@@ -30,19 +30,19 @@ defmodule Raxol.Protocols.ProtocolTest do
     end
 
     test "renders atoms" do
-      assert Renderable.render(:test_atom) == "test_atom"
+      assert Renderable.render(:test_atom, []) == "test_atom"
       metadata = Renderable.render_metadata(:test_atom)
       assert metadata.width == 9
     end
 
     test "renders integers" do
-      assert Renderable.render(42) == "42"
+      assert Renderable.render(42, []) == "42"
       metadata = Renderable.render_metadata(42)
       assert metadata.width == 2
     end
 
     test "renders floats" do
-      assert Renderable.render(3.14) == "3.14"
+      assert Renderable.render(3.14, []) == "3.14"
       metadata = Renderable.render_metadata(3.14)
       assert metadata.width == 4
     end
