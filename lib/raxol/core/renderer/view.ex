@@ -398,15 +398,13 @@ defmodule Raxol.Core.Renderer.View do
 
   def ensure_keyword_list(opts), do: Validation.ensure_keyword_list(opts)
 
-  defmacro ensure_keyword(opts) do
-    quote do
-      case unquote(opts) do
-        opts when is_list(opts) and opts != [] ->
-          Raxol.Core.Renderer.View.ensure_keyword_list(opts)
+  def ensure_keyword(opts) do
+    case opts do
+      opts when is_list(opts) and opts != [] ->
+        ensure_keyword_list(opts)
 
-        _opts ->
-          []
-      end
+      _opts ->
+        []
     end
   end
 end
