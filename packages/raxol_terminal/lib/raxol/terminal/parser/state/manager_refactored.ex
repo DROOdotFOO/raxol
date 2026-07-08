@@ -182,8 +182,6 @@ defmodule Raxol.Terminal.Parser.State.ManagerRefactored do
          {:ok, preprocessed} <- preprocess(validated),
          {:ok, parsed} <- do_parse(manager, preprocessed) do
       {:ok, parsed}
-    else
-      {:error, _reason} = error -> error
     end
   end
 

@@ -76,7 +76,6 @@ defmodule Raxol.Core.Runtime.Plugins.Loader do
       dirs when is_list(dirs) ->
         case discover_plugins(dirs) do
           {:ok, plugins} -> plugins
-          {:error, _} -> []
         end
     end
   end
