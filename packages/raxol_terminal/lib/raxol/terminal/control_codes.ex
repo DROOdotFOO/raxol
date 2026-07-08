@@ -6,7 +6,6 @@ defmodule Raxol.Terminal.ControlCodes do
   Relies on Emulator state and ScreenBuffer for actions.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.ANSI.CharacterSets
   alias Raxol.Terminal.Cursor.Movement

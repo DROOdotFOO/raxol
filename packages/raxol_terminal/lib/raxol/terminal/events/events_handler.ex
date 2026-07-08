@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.Events.Handler do
   Handles terminal events and dispatches them to appropriate handlers.
   """
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Terminal.ANSI.Window.Manipulation, as: WindowManipulation
 
   @doc """

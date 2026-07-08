@@ -3,7 +3,6 @@ defmodule Raxol.Plugins.EventHandler.Common do
   Common utilities and helper functions for event handling across plugins.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Plugins.Lifecycle.Dependencies
   alias Raxol.Plugins.Manager

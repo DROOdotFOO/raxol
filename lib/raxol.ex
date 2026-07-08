@@ -58,7 +58,6 @@ defmodule Raxol do
 
   alias Raxol.Core.Runtime.Application
 
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Runs a Raxol application.

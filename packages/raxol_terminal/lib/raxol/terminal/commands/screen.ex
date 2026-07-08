@@ -10,7 +10,6 @@ defmodule Raxol.Terminal.Commands.Screen do
   alias Raxol.Terminal.ScreenBuffer
   alias Raxol.Terminal.ScreenBuffer.Operations
 
-  require Raxol.Core.Runtime.Log
 
   # Use map() to accept any emulator-like struct
   @type emulator :: map()

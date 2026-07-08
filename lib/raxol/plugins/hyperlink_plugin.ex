@@ -8,7 +8,6 @@ defmodule Raxol.Plugins.HyperlinkPlugin do
   alias Raxol.Plugins.Plugin
 
   # Require Raxol.Core.Runtime.Log for logging macros
-  require Raxol.Core.Runtime.Log
 
   # Define the struct type matching the Plugin behaviour
   @type t :: %Plugin{

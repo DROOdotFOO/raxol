@@ -26,7 +26,6 @@ defmodule Mix.Tasks.Mcp.Server do
 
   use Mix.Task
 
-  require Logger
 
   @impl true
   def run(_args) do

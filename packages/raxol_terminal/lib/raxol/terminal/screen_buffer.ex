@@ -31,7 +31,6 @@ defmodule Raxol.Terminal.ScreenBuffer do
   * `Formatting` - Text formatting and styling
   """
 
-  require Logger
 
   @default_width Raxol.Core.Defaults.terminal_width()
   @default_height Raxol.Core.Defaults.terminal_height()

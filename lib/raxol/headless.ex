@@ -30,7 +30,6 @@ defmodule Raxol.Headless do
 
   use GenServer
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Headless.EventBuilder

@@ -478,7 +478,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     Handles window-related OSC commands.
     """
 
-    require Raxol.Core.Runtime.Log
 
     def handle_0(emulator, data) do
       # Set icon name and window title
@@ -546,7 +545,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     Handles selection-related OSC commands.
     """
 
-    require Raxol.Core.Runtime.Log
 
     def handle_51(emulator, data) do
       case data do

@@ -36,7 +36,6 @@ defmodule Raxol.SSH.Server do
 
   use GenServer
 
-  require Raxol.Core.Runtime.Log
 
   defstruct [
     :daemon_ref,

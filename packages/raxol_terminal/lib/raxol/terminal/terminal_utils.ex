@@ -7,7 +7,6 @@ defmodule Raxol.Terminal.TerminalUtils do
   @default_width Raxol.Core.Defaults.terminal_width()
   @default_height Raxol.Core.Defaults.terminal_height()
 
-  require Raxol.Core.Runtime.Log
 
   # Check if termbox2_nif is available at compile time
   @termbox2_available Code.ensure_loaded?(:termbox2_nif)

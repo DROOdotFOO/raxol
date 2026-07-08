@@ -10,7 +10,6 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   REFACTORED: All try/catch blocks replaced with functional error handling patterns.
   """
 
-  require Raxol.Core.Runtime.Log
   use GenServer
 
   alias Raxol.Core.Runtime.Rendering.Backends

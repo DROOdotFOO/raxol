@@ -5,7 +5,6 @@ defmodule Raxol.Core.Accessibility.Preferences do
 
   alias Raxol.Core.Events.EventManager, as: EventManager
   alias Raxol.Core.UserPreferences
-  require Raxol.Core.Runtime.Log
 
   # Default UserPreferences name
   @default_prefs_name Raxol.Core.UserPreferences

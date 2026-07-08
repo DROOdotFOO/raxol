@@ -2,7 +2,6 @@ defmodule Raxol.SSH.CLIHandler do
   @moduledoc false
   @behaviour :ssh_server_channel
 
-  require Raxol.Core.Runtime.Log
 
   defstruct [
     :app_module,

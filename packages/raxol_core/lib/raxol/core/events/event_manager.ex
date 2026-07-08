@@ -13,7 +13,6 @@ defmodule Raxol.Core.Events.EventManager do
   alias Raxol.Core.Runtime.Log
   use Raxol.Core.Behaviours.BaseManager
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Core.Events.TelemetryAdapter
 
   @type event_type :: atom()

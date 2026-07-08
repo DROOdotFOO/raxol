@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.EventHandler do
   """
 
   alias Raxol.Terminal.Emulator
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Processes a mouse event.

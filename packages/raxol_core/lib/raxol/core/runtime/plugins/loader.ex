@@ -7,7 +7,6 @@ defmodule Raxol.Core.Runtime.Plugins.Loader do
 
   @behaviour Raxol.Core.Runtime.Plugins.LoaderBehaviour
 
-  require Logger
 
   defstruct [
     :loaded_plugins,

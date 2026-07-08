@@ -3,7 +3,6 @@ defmodule Raxol.Core.Runtime.Plugins.CommandHelper do
   Handles plugin command registration and dispatch for the Plugin Manager.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Core.Runtime.Plugins.CommandRegistry
 

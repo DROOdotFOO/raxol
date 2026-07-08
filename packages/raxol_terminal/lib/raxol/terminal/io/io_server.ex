@@ -17,7 +17,6 @@ defmodule Raxol.Terminal.IO.IOServer do
   @default_scrollback Raxol.Core.Defaults.scrollback_limit()
 
   use Raxol.Core.Behaviours.BaseManager
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.{
     Commands.History,

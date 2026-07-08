@@ -5,7 +5,6 @@ defmodule Raxol.Plugins.ClipboardPlugin do
 
   @behaviour Raxol.Plugins.Plugin
 
-  require Raxol.Core.Runtime.Log
 
   # Alias the new consolidated module
   alias Raxol.System.Clipboard

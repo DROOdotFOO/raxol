@@ -11,7 +11,6 @@ defmodule Raxol.Terminal.Commands.CommandServer do
   - `CommandServer.BufferLineOps` -- insert/delete lines with scroll regions
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Commands.CommandServer.{
     BufferLineOps,

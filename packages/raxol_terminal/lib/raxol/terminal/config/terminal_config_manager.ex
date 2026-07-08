@@ -6,7 +6,6 @@ defmodule Raxol.Terminal.Config.Manager do
 
   use Raxol.Core.Behaviours.BaseManager
   alias Raxol.Terminal.{Config, Emulator}
-  require Raxol.Core.Runtime.Log
 
   @default_width Raxol.Core.Defaults.terminal_width()
   @default_height Raxol.Core.Defaults.terminal_height()

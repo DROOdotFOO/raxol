@@ -72,7 +72,6 @@ defmodule Raxol.Terminal.Renderer do
     style_cache: %{}
   ]
 
-  require Logger
 
   # ANSI escape code constants
   @ansi_reset "\e[0m"

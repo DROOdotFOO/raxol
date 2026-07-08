@@ -84,7 +84,6 @@ defmodule Raxol.Core.Runtime.Application do
   @type subscription :: term()
   @type element :: Raxol.Core.Renderer.Element.t()
 
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Initializes the application state.
@@ -197,7 +196,6 @@ defmodule Raxol.Core.Runtime.Application do
   """
   def delegate_init(app_module, context) when is_atom(app_module) do
     alias Raxol.Core.Runtime.Log
-    require Logger
 
     Log.info("[#{__MODULE__}] Delegating init to #{inspect(app_module)}...")
 

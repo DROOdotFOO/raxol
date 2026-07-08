@@ -19,7 +19,6 @@ defmodule Raxol.Animation.StateManager do
   - Support for batch operations for better performance
   """
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Animation.StateServer
 
   @doc """

@@ -16,7 +16,6 @@ defmodule Raxol.Terminal.Session do
 
   use Raxol.Core.Behaviours.BaseManager
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Env
 

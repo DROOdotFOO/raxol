@@ -4,7 +4,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginInitializer do
   """
 
   alias Raxol.Core.Runtime.Plugins.PluginCommandManager
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Initializes all plugins in the given load order.

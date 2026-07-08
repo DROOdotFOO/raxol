@@ -20,7 +20,6 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
 
   use GenServer
 
-  require Raxol.Core.Runtime.Log
 
   defstruct [:module, :state, :props, :parent_pid, :id]
 

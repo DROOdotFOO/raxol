@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.HistoryManager do
   """
 
   alias Raxol.Terminal.HistoryBuffer
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Gets the history buffer instance.

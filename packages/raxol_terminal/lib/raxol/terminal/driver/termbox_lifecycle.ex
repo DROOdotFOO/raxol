@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycle do
   Termbox NIF initialization, shutdown, and recovery helpers.
   """
 
-  require Logger
 
   alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.IOTerminal

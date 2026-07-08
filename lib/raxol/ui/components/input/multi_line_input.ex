@@ -11,7 +11,6 @@ defmodule Raxol.UI.Components.Input.MultiLineInput do
   alias Raxol.UI.Components.Input.MultiLineInput.CursorMovement
   alias Raxol.UI.Components.Input.MultiLineInput.EditOps
   alias Raxol.UI.Components.Input.MultiLineInput.SelectionOps
-  require Raxol.Core.Runtime.Log
   require Raxol.View.Elements
 
   @compile {:no_warn_undefined,

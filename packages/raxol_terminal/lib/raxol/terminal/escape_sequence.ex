@@ -6,7 +6,6 @@ defmodule Raxol.Terminal.EscapeSequence do
   into structured data representing terminal commands.
   """
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Escape.Parsers.{BaseParser, CSIParser, SCSParser}
 
   # --- Public API ---

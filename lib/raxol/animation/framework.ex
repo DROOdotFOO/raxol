@@ -56,7 +56,6 @@ defmodule Raxol.Animation.Framework do
   alias Raxol.Animation.StateManager, as: StateManager
   alias Raxol.Core.Runtime.ProcessStore
 
-  require Raxol.Core.Runtime.Log
 
   @animation_fps 30
   @animation_frame_ms round(1000 / @animation_fps)

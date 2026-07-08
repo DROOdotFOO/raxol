@@ -10,7 +10,6 @@ defmodule Raxol.Core.Runtime.Debug do
 
   @behaviour __MODULE__
 
-  require Raxol.Core.Runtime.Log
 
   @impl __MODULE__
   def debug(message), do: Raxol.Core.Runtime.Log.debug(message)

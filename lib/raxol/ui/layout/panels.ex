@@ -18,7 +18,6 @@ defmodule Raxol.UI.Layout.Panels do
   @min_panel_height 3
 
   alias Raxol.UI.Layout.Engine
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Processes a panel element, calculating layout for it and its children.

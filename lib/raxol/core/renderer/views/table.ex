@@ -14,7 +14,6 @@ defmodule Raxol.Core.Renderer.Views.Table do
   @behaviour Raxol.UI.Components.Base.Component
 
   alias Raxol.Core.Renderer.View
-  require Raxol.Core.Runtime.Log
   require Raxol.Core.Renderer.View
 
   defstruct type: :table,

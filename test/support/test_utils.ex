@@ -19,7 +19,6 @@ defmodule Raxol.Test.TestUtils do
   import ExUnit.Callbacks
 
   alias Raxol.Core.Events.Event
-  require Raxol.Core.Runtime.Log
 
   # =============================================================================
   # ENVIRONMENT SETUP & CONFIGURATION

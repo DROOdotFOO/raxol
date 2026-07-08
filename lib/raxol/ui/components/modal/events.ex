@@ -3,7 +3,6 @@ defmodule Raxol.UI.Components.Modal.Events do
   Event handling and keyboard navigation for the Modal component.
   """
 
-  require Raxol.Core.Runtime.Log
 
   @doc "Handles visible events with keyboard navigation."
   @spec handle_visible_event(any(), map()) ::

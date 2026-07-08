@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.TerminalParser do
   Handles escape sequences (CSI, OSC, DCS, etc.) and plain text.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Parser.States.CSIEntryState
   alias Raxol.Terminal.Parser.States.CSIIntermediateState

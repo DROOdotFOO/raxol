@@ -3,7 +3,6 @@ defmodule Raxol.UI.Rendering.Composer do
   Handles composition of UI rendering trees.
   """
 
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Composes a render tree or command list from the layout tree.

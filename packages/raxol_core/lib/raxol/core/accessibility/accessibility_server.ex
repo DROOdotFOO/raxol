@@ -24,7 +24,6 @@ defmodule Raxol.Core.Accessibility.AccessibilityServer do
   """
 
   use Raxol.Core.Behaviours.BaseManager
-  require Logger
 
   alias Raxol.Core.Accessibility.{
     AnnouncementQueue,

@@ -3,7 +3,6 @@ defmodule Raxol.UI.Components.Input.TextInput do
   A text input component for the Raxol UI system.
   """
 
-  require Logger
 
   alias Raxol.Core.Events.Event
   alias Raxol.UI.Components.Base.Component
@@ -40,7 +39,6 @@ defmodule Raxol.UI.Components.Input.TextInput do
           style: map()
         }
 
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Initializes the TextInput component state from the given props.

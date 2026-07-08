@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.Commands.ModeHandler do
 
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.ModeManager
-  require Raxol.Core.Runtime.Log
 
   @spec handle_h_or_l(Emulator.t(), list(integer()), String.t(), char()) ::
           {:ok, Emulator.t()} | {:error, atom(), Emulator.t()}

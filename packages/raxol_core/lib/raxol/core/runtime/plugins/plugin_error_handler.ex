@@ -3,7 +3,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginErrorHandler do
   Handles plugin error handling and logging.
   """
 
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Handles load errors for plugins.

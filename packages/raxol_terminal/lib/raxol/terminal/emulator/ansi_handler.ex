@@ -186,7 +186,6 @@ defmodule Raxol.Terminal.Emulator.ANSIHandler do
          {:cursor_horizontal_absolute, col, remaining},
          emulator
        ) do
-    require Raxol.Core.Runtime.Log
 
     Raxol.Core.Runtime.Log.debug(
       "handle_sequence_type cursor_horizontal_absolute col=#{inspect(col)}"

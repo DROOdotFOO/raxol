@@ -40,7 +40,6 @@ defmodule Mix.Tasks.Raxol.Test do
   """
 
   use Mix.Task
-  require Logger
 
   alias Raxol.CLI.Colors
 

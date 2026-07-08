@@ -29,7 +29,6 @@ defmodule Mix.Tasks.Raxol.Gen.Specs do
   """
 
   use Mix.Task
-  require Logger
 
   @shortdoc "Generate type specs for private functions"
 

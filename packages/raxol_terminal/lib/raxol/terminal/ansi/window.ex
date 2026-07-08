@@ -39,7 +39,6 @@ defmodule Raxol.Terminal.ANSI.Window do
     Handles window events for terminal control.
     """
 
-    require Raxol.Core.Runtime.Log
     alias Raxol.Terminal.ANSI.Monitor
 
     @doc """
@@ -289,7 +288,6 @@ defmodule Raxol.Terminal.ANSI.Window do
     Handles window manipulation sequences for terminal control.
     """
 
-    require Raxol.Core.Runtime.Log
     alias Raxol.Terminal.ANSI.Monitor
 
     @window_states %{

@@ -9,7 +9,6 @@ defmodule Raxol.Dev.CodeReloader do
 
   use GenServer
 
-  require Raxol.Core.Runtime.Log
 
   @debounce_ms Raxol.Core.Defaults.sync_interval_ms()
 

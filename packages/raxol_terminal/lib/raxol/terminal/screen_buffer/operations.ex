@@ -184,7 +184,6 @@ defmodule Raxol.Terminal.ScreenBuffer.Operations do
   """
   def clear_to_end_of_line(buffer) do
     {x, y} = buffer.cursor_position
-    require Raxol.Core.Runtime.Log
 
     Raxol.Core.Runtime.Log.debug(
       "[Operations.clear_to_end_of_line] cursor at (#{x}, #{y}), clearing region (#{x}, #{y}, #{buffer.width - x}, 1)"

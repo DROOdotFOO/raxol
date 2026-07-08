@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.Emulator.Style do
   Provides functions for managing character attributes, colors, and text formatting.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.ANSI.TextFormatting
   alias Raxol.Terminal.Emulator.Struct, as: EmulatorStruct

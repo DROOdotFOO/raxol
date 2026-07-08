@@ -8,7 +8,6 @@ defmodule Raxol.Plugins.ImagePlugin do
   @behaviour Raxol.Plugins.LifecycleBehaviour
   alias Raxol.Plugins.Plugin
 
-  require Raxol.Core.Runtime.Log
 
   # Suppress Dialyzer warning about argument type mismatch for handle_cells/3
   @dialyzer {:nowarn_function, handle_cells: 3}

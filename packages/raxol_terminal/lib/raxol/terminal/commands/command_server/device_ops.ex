@@ -2,7 +2,6 @@ defmodule Raxol.Terminal.Commands.CommandServer.DeviceOps do
   @moduledoc false
   @compile {:no_warn_undefined, Raxol.Terminal.Commands.CommandServer.Helpers}
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Commands.CommandServer.Helpers
   alias Raxol.Terminal.OutputManager

@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.Integration.Config do
 
   @default_scrollback Raxol.Core.Defaults.scrollback_limit()
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.{
     Config,

@@ -3,7 +3,6 @@ defmodule Raxol.Plugins.Lifecycle.ErrorHandling do
   Handles error formatting, logging, and result handling for plugin lifecycle management.
   """
 
-  require Raxol.Core.Runtime.Log
 
   def format_error(:module_not_found, module),
     do: "Module #{module} does not exist"

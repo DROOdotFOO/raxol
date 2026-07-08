@@ -7,7 +7,6 @@ defmodule Raxol.Terminal.Commands.CursorHandler do
   returning the updated emulator state.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Commands.CursorUtils
   alias Raxol.Terminal.Cursor.Manager, as: CursorManager

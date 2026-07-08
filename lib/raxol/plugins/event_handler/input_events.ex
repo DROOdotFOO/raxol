@@ -3,7 +3,6 @@ defmodule Raxol.Plugins.EventHandler.InputEvents do
   Handles input-related events for plugins.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Plugins.EventHandler.Common
   alias Raxol.Plugins.Manager

@@ -6,7 +6,6 @@ defmodule Raxol.Core.Runtime.Plugins.CommandRegistry do
   `{name, {module, function, arity}, metadata}` tuples as values.
   """
 
-  require Raxol.Core.Runtime.Log
 
   @type command_name :: String.t()
   @type command_handler :: (list(), map() -> term())

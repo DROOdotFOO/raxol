@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.Parser.States.OSCStringState do
   This state is entered when an OSC sequence is initiated.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Commands.Executor
   alias Raxol.Terminal.Emulator

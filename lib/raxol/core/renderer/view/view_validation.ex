@@ -45,7 +45,6 @@ defmodule Raxol.Core.Renderer.View.Validation do
   Validates layout dimensions and raises an error if invalid.
   """
   def validate_layout_dimensions(dimensions) do
-    require Keyword
 
     validate_keyword_list(Keyword.keyword?(dimensions), dimensions)
 

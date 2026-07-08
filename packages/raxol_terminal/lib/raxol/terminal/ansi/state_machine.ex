@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.ANSI.StateMachine do
   This module provides a more efficient alternative to regex-based parsing.
   """
 
-  require Raxol.Core.Runtime.Log
 
   # Guard macros for ANSI byte classification
   defmacro param_byte?(byte),

@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.Mouse.MouseServer do
   """
 
   use Raxol.Core.Behaviours.BaseManager
-  require Logger
 
   # Types
   @type mouse_id :: non_neg_integer()

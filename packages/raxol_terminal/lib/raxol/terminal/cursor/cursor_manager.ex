@@ -6,7 +6,6 @@ defmodule Raxol.Terminal.Cursor.Manager do
 
   use Raxol.Core.Behaviours.BaseManager
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Cursor.{Callbacks, Movement}

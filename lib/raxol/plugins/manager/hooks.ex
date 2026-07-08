@@ -4,7 +4,6 @@ defmodule Raxol.Plugins.Manager.Hooks do
   Provides functions for running various plugin hooks and collecting their results.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Plugins.Manager
 

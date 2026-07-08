@@ -14,7 +14,6 @@ defmodule Raxol.System.Updater.State.UpdaterServer do
   """
 
   use Raxol.Core.Behaviours.BaseManager
-  require Logger
 
   @update_settings_file "~/.raxol/update_settings.json"
 

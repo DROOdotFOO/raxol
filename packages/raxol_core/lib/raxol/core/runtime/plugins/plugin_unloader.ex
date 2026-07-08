@@ -4,7 +4,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginUnloader do
   """
 
   alias Raxol.Core.Runtime.Plugins.CommandRegistry
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Unloads a plugin, cleaning up commands and state.

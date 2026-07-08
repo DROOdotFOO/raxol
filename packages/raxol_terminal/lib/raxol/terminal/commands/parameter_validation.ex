@@ -1,7 +1,6 @@
 defmodule Raxol.Terminal.Commands.ParameterValidation do
   @moduledoc false
 
-  require Raxol.Core.Runtime.Log
 
   @spec get_valid_param(
           list(integer() | nil),

@@ -253,7 +253,6 @@ defmodule Raxol.UI.StyleProcessor do
   """
   def clear_cache do
     if cache_available?() do
-      require Raxol.Performance.ETSCacheManager
       Raxol.Performance.ETSCacheManager.clear_cache(:style)
     end
   end

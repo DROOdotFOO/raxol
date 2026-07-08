@@ -72,7 +72,6 @@ defmodule Mix.Tasks.Raxol.Memory.Debug do
   """
 
   use Mix.Task
-  require Logger
 
   @compile {:no_warn_undefined, Raxol.Memory.Collector}
   @compile {:no_warn_undefined, Raxol.Memory.Formatter}

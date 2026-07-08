@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.Modes.Handlers.MouseHandler do
   Manages different mouse reporting modes and their effects on the terminal.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Modes.Types.ModeTypes

@@ -19,8 +19,6 @@ defmodule Raxol.Style.Colors.System do
   * Event-driven theme changes
   """
 
-  require Raxol.Core.Runtime.Log
-  require Logger
 
   alias Raxol.Style.Colors.{Color, Utilities}
   alias Raxol.Style.Colors.System.ColorSystemServer, as: Server

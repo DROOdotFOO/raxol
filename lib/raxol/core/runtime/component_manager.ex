@@ -16,7 +16,6 @@ defmodule Raxol.Core.Runtime.ComponentManager do
   alias Raxol.Core.Runtime.Log
   use Raxol.Core.Behaviours.BaseManager
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Core.Runtime.Subscription
   alias UUID
@@ -507,7 +506,6 @@ defmodule Raxol.Core.Runtime.ComponentManager do
           :ok
 
         {:error, reason} ->
-          require Raxol.Core.Runtime.Log
 
           Raxol.Core.Runtime.Log.warning_with_context(
             "Failed to stop subscription #{inspect(sub_id)}: #{inspect(reason)}",

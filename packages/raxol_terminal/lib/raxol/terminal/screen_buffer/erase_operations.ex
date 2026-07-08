@@ -8,7 +8,6 @@ defmodule Raxol.Terminal.ScreenBuffer.EraseOperations do
 
   @default_height Raxol.Core.Defaults.terminal_height()
 
-  require Logger
 
   alias Raxol.Terminal.Cell
   alias Raxol.Terminal.Buffer.CharEditor

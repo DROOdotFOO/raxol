@@ -12,7 +12,6 @@ defmodule Raxol.System.Clipboard do
   @behaviour Raxol.Core.Clipboard.Behaviour
 
   alias Raxol.System.PortCommand
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Copies the given text to the system clipboard.
