@@ -105,12 +105,6 @@ defmodule Raxol.Core.Metrics.Config do
     end
   end
 
-  def set(key, _value)
-      when key in [:aggregation_window, :storage_backend, :retention_policies] do
-    # This clause should never be reached due to the specific clauses above
-    {:error, :invalid_key}
-  end
-
   def set(_key, _value) do
     {:error, :invalid_key}
   end
