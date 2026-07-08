@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
   """
 
   alias Raxol.Terminal.{Clipboard, Colors}
-  require Raxol.Core.Runtime.Log
 
   # Alias for backward compatibility
   def handle_osc_sequence(emulator, command, data) do

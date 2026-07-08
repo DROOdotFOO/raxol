@@ -102,7 +102,7 @@ defmodule Raxol.MCP.Transport.Stdio do
         rescue
           e ->
             Logger.error("[MCP.Stdio] Error handling message: #{Exception.message(e)}")
-            id = if is_map(message), do: Map.get(message, :id), else: nil
+            id = Map.get(message, :id)
 
             if id do
               error = Protocol.error_response(id, Protocol.internal_error(), "Internal server error")
