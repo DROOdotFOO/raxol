@@ -6,31 +6,31 @@ Status: pre-alpha. Not yet on Hex; use the path dep at `packages/raxol_acp/`.
 
 ## Job Lifecycle
 
-Every job is a state machine. One supervised `Job.Server` runs per active job:
+Every job is a state machine. One supervised `Raxol.ACP.JobSession` runs per active job, registered by `{chain_id, job_id}`:
 
 ```
-:request -> :negotiation -> :transaction -> :evaluation -> :completed
-                                                      \-> :rejected
-            (any state) -> :expired
+:open -> :budget_set -> :funded -> :submitted -> :completed
+                                            \-> :rejected
+(any non-terminal) -> :expired
 ```
 
-`Raxol.ACP.Job.StateMachine` is a pure module with no GenServer and no side effects. `Job.Server` calls into it for transitions and persists the result via `Job.Store`.
+`Raxol.ACP.JobSession.Status` is a pure module holding the status enum and the legal transition graph. `JobSession` is the GenServer: it tracks role-aware status, keeps a chronological entry log, notifies subscribers, and emits `[:raxol, :acp, :job_session, :transition]` telemetry on every change. `apply_event/3` applies an OBSERVED status (an on-chain or SSE event) directly, bypassing role and adjacency gating.
 
 ```elixir
-{:ok, _pid} = Raxol.ACP.Job.Server.start_link(
-  job_id: "0xabc...",
-  handler: MyOffering,
-  request: %{text: "..."},
-  buyer: "0x...",
-  seller: "0x..."
-)
+{:ok, _pid} =
+  Raxol.ACP.JobSession.Supervisor.start_session(
+    chain_id: 8453,
+    job_id: "job-42",
+    role: :provider
+  )
 
-# Accept the buyer's request, then (once payment is escrowed) deliver.
-# Both calls invoke the handler module configured above and address the
-# server by its job id.
-{:ok, :negotiation} = Raxol.ACP.Job.Server.accept_request("0xabc...")
-{:ok, :evaluation} = Raxol.ACP.Job.Server.deliver("0xabc...")
+# Provider actions transition the session; the Provider driver (below)
+# pairs each with the matching hook write on-chain.
+{:ok, :budget_set} = Raxol.ACP.JobSession.set_budget({8453, "job-42"}, budget)
+{:ok, :submitted} = Raxol.ACP.JobSession.submit({8453, "job-42"}, deliverable)
 ```
+
+The seller-side glue is `Raxol.ACP.JobSession.Provider`: for each lifecycle step it invokes the offering `Handler` (via `JobSession.HandlerSeam`), writes the hook call on-chain through `HookClient` + `ProviderAdapter` (the commit point -- a failed write leaves the session untouched), then mirrors the resulting status with `apply_event/3`.
 
 ## Offerings
 
@@ -44,8 +44,8 @@ defmodule Raxol.ACP.Offerings.SentimentAnalysis do
     sla_minutes: 5,
     cluster: "analytics"
 
-  # Decide whether to take the job. Return {:accept, response} to enter
-  # negotiation, or {:reject, reason} to bow out.
+  # Decide whether to take the job. Return {:accept, response} to accept
+  # and set the budget, or {:reject, reason} to bow out.
   @impl true
   def handle_request(request, _ctx) do
     {:accept, %{quoted_usdc: 10, text: request.text}}
@@ -59,7 +59,7 @@ defmodule Raxol.ACP.Offerings.SentimentAnalysis do
 end
 ```
 
-The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed `Registry`. `Job.Server.accept_request/1` and `deliver/1` auto-invoke the handler and submit on-chain memos with the configured wallet.
+The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed `Registry`. `JobSession.Provider` invokes the handler at each lifecycle step and writes the matching hook call on-chain with the configured wallet.
 
 ## Xochi Cross-Chain Transfer (the first offering)
 
@@ -71,34 +71,23 @@ The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed
 
 `packages/raxol_acp/examples/buyer_signed_intent.exs` shows the buyer flow and the requirement/deliverable schemas to register on the marketplace.
 
-## Memos
+## On-Chain Writes
 
-Each phase emits an on-chain memo via `Raxol.ACP.ContractClient.create_memo/5`, mirroring `InteractionLedger.createMemo` from the deployed contract. There is no off-chain memo signing: the canonical ACP contract does not accept a separate memo signature, the transaction itself is the proof. Memo kinds are the `Raxol.ACP.Job.MemoType` enum (uint8, ids 0..9).
+The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there is no separate memo model (the v1 `createMemo` / `Raxol.ACP.ContractClient` write surface and the `:acp_version` switch were retired -- see `MIGRATION_V2.md`). `Raxol.ACP.HookClient` exposes `set_budget` / `submit` / `complete` / `reject`, each dispatched through an injected `Raxol.ACP.ProviderAdapter`:
 
-| Phase         | Memo contents                                |
-| ------------- | -------------------------------------------- |
-| Request       | Offering id, buyer, amount, expiry           |
-| Negotiation   | Counter-offer or acceptance                  |
-| Transaction   | On-chain tx hash, amount escrowed            |
-| Evaluation    | Delivery proof, off-chain artifact pointer   |
-| Completed     | Final settlement, release-of-escrow proof    |
+- `SCA`: sponsored ERC-4337 v0.7 UserOps via `Raxol.ACP.Wallet.SCA` (Alchemy Modular Account v2 + paymaster). Self-deploys the account on the first write.
+- `JSONRPC`: a plain EOA signing EIP-1559 typed transactions (`Raxol.ACP.Onchain.{RPC, Transaction, RLP}`), with nonce assignment serialized through `Raxol.ACP.Wallet.NonceServer`.
+- `Mock`: in-process, for tests and `mix raxol_acp.bench`.
 
-## On-Chain Client
+`Raxol.ACP.ABI` hand-rolls the Solidity encoder for the ACP methods. Real ABIs are vendored under `priv/abi/`; verified Base addresses live in `Raxol.ACP.Chain` (the active `acp_core_address` plus the hook/router/subscription addresses; the legacy `acp_contract_address`/`acp_router_address` remain only for indexer back-compat).
 
-`Raxol.ACP.ContractClient` is a behaviour with two implementations:
+## Expiry
 
-- `InMemory`: for tests. No network, deterministic.
-- `Onchain`: production. Req-based JSON-RPC, EIP-1559 typed transactions, Yellow-Paper RLP encoding. `create_job` resolves the new job id from the `JobCreated` event's non-indexed `data` word (overridable via `:create_job_event_signature` / `:create_job_id_source`) and fails closed (`{:error, {:job_id_unresolved, _}}`) rather than return a synthetic id that would mis-target downstream calls; an integration harness opts back into the tx-hash placeholder with `config :raxol_acp, allow_placeholder_job_id: true`. A broadcast whose receipt never arrives returns `{:receipt_pending, tx_hash, _}` (plus telemetry) so a retry re-queries rather than re-broadcasts, and token amounts scale by the token's decimals (`config :raxol_acp, :token_decimals`, default 6 for USDC).
-
-`Raxol.ACP.ABI` hand-rolls the Solidity encoder for the ACP methods. Selectors verified byte-for-byte against canonical ERC-20.
-
-## Escrow Expiry and Reclaim
-
-Start a `Job.Server` with `:expired_at` (unix seconds) and it arms a timer that auto-fires `:expire` once the deadline passes while the job is still non-terminal, so a job whose counterparty abandoned it does not wedge and its escrow is not stranded. The buyer reclaims the funds with `Job.Server.reclaim/1`, which calls `Raxol.ACP.ContractClient.withdraw_escrowed_funds/1` (the real `ACPSimple.withdrawEscrowedFunds`); the on-chain contract enforces that reclaim is only valid after expiry. The deadline rides the child spec, so it survives a transient restart.
+`JobSession` reaches the terminal `:expired` status via `expire/2` from any non-terminal status, so a job whose counterparty abandoned it can be closed rather than left wedged. `:expired`, `:completed`, and `:rejected` are terminal -- the session process stops with `:normal` once it reaches one. On-chain escrow handling on expiry is the `AgenticCommerceV3` core's responsibility.
 
 ## Nonce Serialization
 
-The `Raxol.ACP.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox, so concurrent jobs from one wallet cannot collide on a nonce. A transaction that fails before it is broadcast rolls the consumed nonce back, so the next transaction reuses it instead of leaving a gap that would strand every later transaction (the SCA path reads its nonce fresh per call and is unaffected).
+The `Raxol.ACP.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox, so two concurrent EOA writes from one wallet can never sign the same nonce. `ProviderAdapter.JSONRPC` routes every send through it. A send that fails before broadcast resyncs the counter, so the next send re-fetches the pending nonce from chain and re-fills the gap rather than leaving a hole that would strand every later transaction. The SCA/UserOp path uses ERC-4337 EntryPoint nonces and is unaffected.
 
 ## Seller Stack
 
@@ -109,7 +98,7 @@ Opt-in via `:seller_enabled` in config:
 - `Runtime`: worker pool dispatching to handlers
 - `Supervisor`: ties it all together
 
-`Backend.WebSocket` (talking to Virtuals' relayer) is on the roadmap. The protocol spec is available via the `virtuals-protocol-acp` skill.
+`Backend.WebSocket` (Socket.IO v4 / Engine.IO over `Mint.WebSocket`, talking to Virtuals' relayer) is implemented alongside `Backend.InMemory`; the `Queue` drives `JobSession.Provider`. The protocol spec is available via the `virtuals-protocol-acp` skill.
 
 ## Status
 

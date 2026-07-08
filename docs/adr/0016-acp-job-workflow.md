@@ -2,6 +2,8 @@
 
 ## Status
 
+**Superseded (2026-07-08)** by the seller-stack v1->v2 migration (Phases 1-4, #385/#390/#388/#389/#391). `Raxol.ACP.Job.Server`, `Raxol.ACP.Job.Workflow`, `Raxol.ACP.Job.StateMachine`, `Raxol.ACP.Job.Store`, and `Raxol.ACP.ContractClient` were all deleted; the v2 runtime is `Raxol.ACP.JobSession` + `Raxol.ACP.HookClient` -> `AgenticCommerceV3` (see `packages/raxol_acp/MIGRATION_V2.md`). The decision below is retained as historical record.
+
 Proposed, 2026-06-16. Direct follow-up to ADR-0015 (Workflow Graph), which shipped the `Raxol.Workflow.*` primitive in Phase 25 and explicitly excluded the raxol_acp Job migration from its scope. This ADR makes that decision.
 
 ## Context

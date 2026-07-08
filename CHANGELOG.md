@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+### Removed
+
+- **`raxol_acp`: v1 memo model retired (seller-stack migration Phases 1-4, #385/#390/#388/#389/#391)**. Deleted `Raxol.ACP.Job.{Server, Supervisor, Registry, Workflow, StateMachine, MemoType, FeeType, Store}`, `Raxol.ACP.ContractClient` (+ `Onchain` + `InMemory`), the memo `Raxol.ACP.Directive`s + their executor, `Raxol.ACP.Onchain.LogDecoder`, and the `acp_version` / `ACP_VERSION` switch. The v2 hook/event model (`Raxol.ACP.JobSession` + `Raxol.ACP.HookClient` -> `AgenticCommerceV3` via `Raxol.ACP.ProviderAdapter`) is now the only runtime. `raxol_acp` bumped `0.2.0-pre.0 -> 0.2.0-rc.0`. Supersedes ADR-0016/0017. See `packages/raxol_acp/MIGRATION_V2.md`.
+
+### Fixed
+
+- **`raxol_acp`: EOA nonce race in `ProviderAdapter.JSONRPC` (#392)**. `send_calls/3` fetched the pending nonce inline, so two concurrent sends for one EOA signed the same nonce and the RPC silently dropped one (fund loss on retry). Nonce assignment now routes through the mailbox-serialized `Raxol.ACP.Wallet.NonceServer`; a failed send resyncs to re-fetch and re-fill the gap. The SCA/UserOp path is unaffected.
+- **`raxol_payments`: negative trust score crashed the router (#393)**. `Raxol.Payments.Router` clamped only the upper trust-score bound, so a negative `:trust_score` hit `PrivacyTier.from_trust_score/2` (no negative clause) and raised `FunctionClauseError` on the settlement path. Now clamped to `[0,100]` at the boundary.
+
+### Added
+
+- **Property tests for the money-adjacent paths above (#392/#393)**: `router_property_test` (trust-score totality / monotonicity / clamp / tier_override bounds), `ledger_release_property_test` (`Ledger.release/4` refund netting), `jsonrpc_nonce_test` (concurrent-send nonce distinctness), `job_session/telemetry_test` (pins the `[:raxol, :acp, :job_session, :transition]` cross-package contract with `raxol_symphony`), and an exhaustive `JobSession.Status.validate/2` matrix.
+
 ## [2.5.0] - 2026-07-07
 
 ### Fixed
