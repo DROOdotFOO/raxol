@@ -115,5 +115,4 @@ defmodule Raxol.Core.Metrics do
   end
 
   defp normalize_metrics(data) when is_map(data), do: data
-  defp normalize_metrics(_), do: %{}
 end

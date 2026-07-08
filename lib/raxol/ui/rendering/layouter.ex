@@ -258,7 +258,6 @@ defmodule Raxol.UI.Rendering.Layouter do
 
   defp process_keyed_child_op(_unknown_op, acc), do: acc
 
-  defp path_to_access_path([]), do: []
 
   defp path_to_access_path(path_indices) when is_list(path_indices) do
     Enum.reduce(path_indices, [], fn idx, acc ->

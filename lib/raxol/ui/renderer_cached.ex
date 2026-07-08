@@ -222,7 +222,6 @@ defmodule Raxol.UI.RendererCached do
     length(elements) > 3
   end
 
-  defp should_batch_render?(_), do: false
 
   defp cacheable_element?(nil), do: false
   defp cacheable_element?(%{no_cache: true}), do: false

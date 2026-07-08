@@ -206,5 +206,4 @@ defmodule Raxol.Core.Renderer do
     end
   end
 
-  defp maybe_wrap_hyperlink(content, _style), do: content
 end
