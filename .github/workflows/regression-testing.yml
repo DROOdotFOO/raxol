@@ -55,8 +55,8 @@ env:
   SKIP_TERMBOX2_TESTS: true
   TMPDIR: /tmp
   MIX_ENV: test
-  ELIXIR_VERSION: "1.19.0"
-  OTP_VERSION: "28.2"
+  ELIXIR_VERSION: "1.20.2"
+  OTP_VERSION: "29.0.3"
 
 jobs:
   # Performance regression testing
@@ -72,8 +72,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        elixir: ["1.19.0"]
-        otp: ["28.2"]
+        elixir: ["1.20.2"]
+        otp: ["29.0.3"]
 
     steps:
     - name: Checkout code
@@ -241,8 +241,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        elixir: ["1.19.0"]
-        otp: ["28.2"]
+        elixir: ["1.20.2"]
+        otp: ["29.0.3"]
         scenario:
           - terminal_operations
           - plugin_system

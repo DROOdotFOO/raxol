@@ -8,7 +8,7 @@ defmodule RaxolSensor.MixProject do
     [
       app: :raxol_sensor,
       version: @version,
-      elixir: "~> 1.16 or ~> 1.17 or ~> 1.18 or ~> 1.19",
+      elixir: "~> 1.16 or ~> 1.17 or ~> 1.18 or ~> 1.19 or ~> 1.20",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description: description(),

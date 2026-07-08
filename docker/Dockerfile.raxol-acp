@@ -13,7 +13,7 @@
 # Wallet-safe by construction: no private key is baked in or read at runtime; the
 # sidecar only reads balances/receipts over public RPC and never moves funds.
 
-ARG ELIXIR_IMAGE=elixir:1.19.4-otp-28
+ARG ELIXIR_IMAGE=elixir:1.20.0-otp-29
 ARG RUNNER_IMAGE=debian:bookworm-slim
 
 FROM ${ELIXIR_IMAGE} AS builder

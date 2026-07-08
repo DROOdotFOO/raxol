@@ -33,14 +33,27 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        elixir: ["1.17.3", "1.18.3", "1.19.0"]
-        otp: ["27.2", "28.2"]
+        elixir: ["1.17.3", "1.18.3", "1.19.0", "1.20.2"]
+        otp: ["27.2", "28.2", "29.0.3"]
         exclude:
-          # Exclude incompatible combinations
+          # Exclude incompatible combinations. Each Elixir runs only on an OTP it
+          # ships a precompiled build for; the sweep exercises the mix.exs range.
           - elixir: "1.17.3"
             otp: "28.2"
-          # Elixir 1.18.3 pre-compiled for OTP 27, causes Hex.State errors on OTP 28
+          - elixir: "1.17.3"
+            otp: "29.0.3"
+          # Elixir 1.18.3 pre-compiled for OTP 27, causes Hex.State errors on OTP 28+
           - elixir: "1.18.3"
+            otp: "28.2"
+          - elixir: "1.18.3"
+            otp: "29.0.3"
+          # Elixir 1.19.0 predates OTP 29; no precompiled build for that pair
+          - elixir: "1.19.0"
+            otp: "29.0.3"
+          # Elixir 1.20 is the upgrade target; sweep it on OTP 29 only
+          - elixir: "1.20.2"
+            otp: "27.2"
+          - elixir: "1.20.2"
             otp: "28.2"
     runs-on: ${{ matrix.os }}
     
