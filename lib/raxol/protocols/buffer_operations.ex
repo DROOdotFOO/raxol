@@ -47,7 +47,7 @@ defprotocol Raxol.Protocols.BufferOperations do
   The updated buffer.
   """
   @spec write(t, position, binary() | char(), style) :: t
-  def write(buffer, position, data, style \\ nil)
+  def write(buffer, position, data, style)
 
   @doc """
   Reads data from the buffer at the specified position.
@@ -63,7 +63,7 @@ defprotocol Raxol.Protocols.BufferOperations do
   The data at the specified position, or `nil` if position is out of bounds.
   """
   @spec read(t, position, non_neg_integer()) :: binary() | nil
-  def read(buffer, position, length \\ 1)
+  def read(buffer, position, length)
 
   @doc """
   Clears the buffer or a specific region.
@@ -83,7 +83,7 @@ defprotocol Raxol.Protocols.BufferOperations do
   The updated buffer.
   """
   @spec clear(t, region) :: t
-  def clear(buffer, region \\ :all)
+  def clear(buffer, region)
 
   @doc """
   Gets the dimensions of the buffer.
@@ -109,5 +109,5 @@ defprotocol Raxol.Protocols.BufferOperations do
   The updated buffer.
   """
   @spec scroll(t, :up | :down, non_neg_integer()) :: t
-  def scroll(buffer, direction, lines \\ 1)
+  def scroll(buffer, direction, lines)
 end
