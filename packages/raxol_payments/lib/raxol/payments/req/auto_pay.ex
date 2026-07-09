@@ -55,33 +55,19 @@ defmodule Raxol.Payments.Req.AutoPay do
     protocols = Keyword.get(opts, :protocols, @default_protocols)
     headers = Raxol.Payments.Headers.flatten(response.headers)
 
-    with {:ok, protocol_mod, challenge} <- detect_and_parse(protocols, headers),
-         :ok <- try_spend_budget(protocol_mod, challenge, request, opts),
-         {:ok, payment_headers} <- protocol_mod.build_payment(challenge, wallet) do
-      # Build retry request: add payment headers and strip the auto_pay step
-      # to prevent infinite loops if the server returns 402 again.
-      retry_request =
-        request
-        |> add_payment_headers(payment_headers)
-        |> remove_auto_pay_step()
+    with {:ok, protocol_mod, challenge} <- detect_and_parse(protocols, headers) do
+      amount = protocol_mod.amount(challenge)
+      host = request_host(request)
 
-      case Req.Request.run(retry_request) do
-        {_req, %Req.Response{status: status} = paid_response}
-        when status in 200..299 ->
-          {request, paid_response}
+      case reserve_budget(protocol_mod, amount, host, opts) do
+        :ok ->
+          # Budget is now reserved. Any failure past this point -- a signing
+          # failure, or a failed/errored paid retry -- must release it, or a
+          # payment that never completed would permanently consume budget.
+          settle(request, response, protocol_mod, challenge, wallet, amount, host, opts)
 
-        {_req, %Req.Response{} = failed_response} ->
-          {request, failed_response}
-
-        {:error, reason} ->
-          {request,
-           %{
-             response
-             | body: %{
-                 error: :payment_retry_failed,
-                 reason: sanitize_error(reason)
-               }
-           }}
+        {:error, _} = denied ->
+          handle_failure(denied, request, response)
       end
     else
       error -> handle_failure(error, request, response)
@@ -89,6 +75,44 @@ defmodule Raxol.Payments.Req.AutoPay do
   end
 
   defp handle_response(req_response, _opts), do: req_response
+
+  # Sign and retry under a reservation already made by `reserve_budget/4`. Every
+  # non-success exit releases the reservation first, so only a 2xx paid retry
+  # (the payment landed) keeps the budget consumed.
+  defp settle(request, response, protocol_mod, challenge, wallet, amount, host, opts) do
+    case protocol_mod.build_payment(challenge, wallet) do
+      {:ok, payment_headers} ->
+        # Build retry request: add payment headers and strip the auto_pay step
+        # to prevent infinite loops if the server returns 402 again.
+        retry_request =
+          request
+          |> add_payment_headers(payment_headers)
+          |> remove_auto_pay_step()
+
+        case Req.Request.run(retry_request) do
+          {_req, %Req.Response{status: status} = paid_response}
+          when status in 200..299 ->
+            {request, paid_response}
+
+          {_req, %Req.Response{} = failed_response} ->
+            release_budget(protocol_mod, amount, host, opts)
+            {request, failed_response}
+
+          {:error, reason} ->
+            release_budget(protocol_mod, amount, host, opts)
+            {request, payment_retry_error(response, reason)}
+        end
+
+      {:error, _} = error ->
+        # Signed nothing, so nothing was paid: refund the reservation.
+        release_budget(protocol_mod, amount, host, opts)
+        handle_failure(error, request, response)
+    end
+  end
+
+  defp payment_retry_error(response, reason) do
+    %{response | body: %{error: :payment_retry_failed, reason: sanitize_error(reason)}}
+  end
 
   defp handle_failure({:error, :no_matching_protocol}, request, response),
     do: {request, response}
@@ -98,18 +122,14 @@ defmodule Raxol.Payments.Req.AutoPay do
          request,
          response
        ),
-       do:
-         {request,
-          %{response | body: %{error: :budget_exceeded, limit: limit_type}}}
+       do: {request, %{response | body: %{error: :budget_exceeded, limit: limit_type}}}
 
   defp handle_failure(
          {:error, {:gate_denied, {:domain_not_approved, domain}}},
          request,
          response
        ),
-       do:
-         {request,
-          %{response | body: %{error: :domain_not_approved, domain: domain}}}
+       do: {request, %{response | body: %{error: :domain_not_approved, domain: domain}}}
 
   defp handle_failure(
          {:error, {:gate_denied, {:requires_confirmation, amount, domain}}},
@@ -147,15 +167,29 @@ defmodule Raxol.Payments.Req.AutoPay do
     end)
   end
 
-  @spec try_spend_budget(module(), map(), Req.Request.t(), keyword()) ::
+  # Run the policy gate then atomically reserve the budget. `:ok` means the spend
+  # is authorized and recorded; release it with `release_budget/4` if the payment
+  # then fails to complete.
+  @spec reserve_budget(module(), Decimal.t(), String.t() | nil, keyword()) ::
           :ok | {:error, term()}
-  defp try_spend_budget(protocol_mod, challenge, request, opts) do
-    amount = protocol_mod.amount(challenge)
-    host = request_host(request)
-    policy = Keyword.get(opts, :policy)
-
-    with :ok <- enforce_policy_gate(policy, amount, host, opts) do
+  defp reserve_budget(protocol_mod, amount, host, opts) do
+    with :ok <- enforce_policy_gate(Keyword.get(opts, :policy), amount, host, opts) do
       enforce_budget(protocol_mod, amount, host, opts)
+    end
+  end
+
+  # Refund a reservation made by `reserve_budget/4`. Mirrors `do_enforce_budget`'s
+  # guard: budget is only reserved when both a policy and a ledger are present, so
+  # a release fires only in that same case (no spurious refund otherwise).
+  @spec release_budget(module(), Decimal.t(), String.t() | nil, keyword()) :: :ok
+  defp release_budget(protocol_mod, amount, host, opts) do
+    with %SpendingPolicy{} <- Keyword.get(opts, :policy),
+         ledger when not is_nil(ledger) <- Keyword.get(opts, :ledger) do
+      agent_id = Keyword.get(opts, :agent_id, :unknown)
+      metadata = %{protocol: protocol_mod.name(), domain: host, reason: :payment_failed}
+      Ledger.release(ledger, agent_id, amount, metadata)
+    else
+      _ -> :ok
     end
   end
 
@@ -166,9 +200,7 @@ defmodule Raxol.Payments.Req.AutoPay do
        do: {:error, {:gate_denied, :missing_host}}
 
   defp enforce_policy_gate(%SpendingPolicy{} = policy, amount, host, opts) do
-    case PolicyGate.evaluate(policy, amount, host,
-           on_confirm: Keyword.get(opts, :on_confirm)
-         ) do
+    case PolicyGate.evaluate(policy, amount, host, on_confirm: Keyword.get(opts, :on_confirm)) do
       :ok -> :ok
       {:deny, reason} -> {:error, {:gate_denied, reason}}
     end
