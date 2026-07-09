@@ -204,7 +204,7 @@ defmodule Raxol.Core.Metrics.VisualizerTest do
       assert {:ok, chart_id, _} = Visualizer.create_chart(metrics)
 
       assert_raise FunctionClauseError, fn ->
-        Visualizer.export_chart(chart_id, :png)
+        apply(Visualizer, :export_chart, [chart_id, :png])
       end
     end
   end

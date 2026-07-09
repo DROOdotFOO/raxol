@@ -155,7 +155,7 @@ defmodule Raxol.Core.StyleTest do
     end
 
     test "raises on invalid color name" do
-      assert_raise FunctionClauseError, fn -> Style.named_color(:orange) end
+      assert_raise FunctionClauseError, fn -> apply(Style, :named_color, [:orange]) end
     end
   end
 

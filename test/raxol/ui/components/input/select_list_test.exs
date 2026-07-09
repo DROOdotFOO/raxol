@@ -83,7 +83,7 @@ defmodule Raxol.UI.Components.Input.SelectListTest do
 
     test "raises when options prop is missing" do
       assert_raise ArgumentError, ~r/requires :options/, fn ->
-        SelectList.init(%{})
+        apply(SelectList, :init, [%{}])
       end
     end
 
