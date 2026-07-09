@@ -66,10 +66,36 @@ defmodule Raxol.ACP.JobSession.Provider do
   `setBudget(job, budget)` on-chain and mirrors the session to `:budget_set`.
   On `{:reject, reason}` it makes no on-chain or local change and returns
   `{:rejected, reason}` -- the caller decides whether to expire the job.
+
+  Idempotent by the session status: `handle_request/2` + `setBudget` run only
+  from `:open`. On an already-`:budget_set` session it is a no-op returning
+  `{:ok, %{status: :budget_set, idempotent: true}}` (no second handler call or
+  on-chain write); from any other status it returns
+  `{:error, {:cannot_accept, status}}` without invoking the handler.
   """
   @spec accept_request(t(), map(), AssetToken.t()) ::
-          ok(:budget_set) | {:rejected, term()} | {:error, term()}
+          ok(:budget_set)
+          | {:ok, %{status: :budget_set, idempotent: true}}
+          | {:rejected, term()}
+          | {:error, term()}
   def accept_request(%__MODULE__{} = p, request, %AssetToken{} = budget) do
+    # Guard the side-effecting handler + on-chain `setBudget` on the current
+    # status. accept_request is the INITIAL accept: the seller's budget is fixed
+    # by the offering spec, so a re-offer never carries a new price and never
+    # means an intentional re-budget. If the session already reflects
+    # `:budget_set` -- because the write and mirror landed but the seller Queue
+    # lost its in-memory job tracking (a crash before it recorded the job) and
+    # the backend redelivered the offer, or via SSE reconciliation of the
+    # on-chain event -- a re-accept must not re-invoke the handler or re-write
+    # `setBudget`. Only `:open` runs the write.
+    case safe_status(p.session) do
+      :open -> do_accept_request(p, request, budget)
+      :budget_set -> {:ok, %{status: :budget_set, idempotent: true}}
+      other -> {:error, {:cannot_accept, other}}
+    end
+  end
+
+  defp do_accept_request(p, request, budget) do
     case HandlerSeam.invoke(p.handler, :request, request, ctx(p)) do
       {:accept, response} ->
         with {:ok, tx} <-
