@@ -196,6 +196,17 @@ defmodule Raxol.ACP.ProviderAdapter.SCATest do
 
       assert [] == drain_rpc_calls()
     end
+
+    test "a mined-but-reverted UserOp is not reported as a successful write" do
+      # The op passed validation (so it's included and the nonce is burned) but
+      # its inner execute() reverted: the receipt says success: false. Reporting
+      # {:ok, tx_hash} would let the Provider mirror a status the chain never
+      # reached; the adapter must surface the revert instead.
+      adapter = build_adapter(deployed: true, installed: true, op_success: false)
+
+      assert {:error, {:user_op_reverted, "AA23 reverted"}} =
+               ProviderAdapter.send_calls(adapter, @chain_id, [acp_call()])
+    end
   end
 
   describe "signing" do
@@ -278,8 +289,9 @@ defmodule Raxol.ACP.ProviderAdapter.SCATest do
     deployed = Keyword.get(opts, :deployed, true)
     installed = Keyword.get(opts, :installed, true)
     auto_provision = Keyword.get(opts, :auto_provision, true)
+    op_success = Keyword.get(opts, :op_success, true)
 
-    plug = install_stub(self(), deployed: deployed, installed: installed)
+    plug = install_stub(self(), deployed: deployed, installed: installed, op_success: op_success)
 
     SCA.new(
       wallet: SCAWallet,
@@ -299,6 +311,7 @@ defmodule Raxol.ACP.ProviderAdapter.SCATest do
   defp install_stub(events, opts) do
     deployed = Keyword.fetch!(opts, :deployed)
     installed = Keyword.fetch!(opts, :installed)
+    op_success = Keyword.fetch!(opts, :op_success)
     entry_point = SCAWallet.entry_point()
     single_signer = ModularAccount.single_signer_validation_address()
     owner = SessionKey.address()
@@ -323,7 +336,7 @@ defmodule Raxol.ACP.ProviderAdapter.SCATest do
             @op_hash
 
           "eth_getUserOperationReceipt" ->
-            user_op_receipt(req["params"])
+            user_op_receipt(req["params"], op_success)
 
           "eth_getTransactionReceipt" ->
             @receipt
@@ -369,8 +382,20 @@ defmodule Raxol.ACP.ProviderAdapter.SCATest do
     word_hex(key <<< 64)
   end
 
-  defp user_op_receipt([op_hash | _]) do
+  defp user_op_receipt([op_hash | _], true) do
     %{"userOpHash" => op_hash, "success" => true, "logs" => [], "receipt" => @receipt}
+  end
+
+  defp user_op_receipt([op_hash | _], false) do
+    # A UserOp included on-chain whose inner execute() reverted: success: false
+    # with the EntryPoint revert reason.
+    %{
+      "userOpHash" => op_hash,
+      "success" => false,
+      "reason" => "AA23 reverted",
+      "logs" => [],
+      "receipt" => @receipt
+    }
   end
 
   # -- Assertion helpers --
