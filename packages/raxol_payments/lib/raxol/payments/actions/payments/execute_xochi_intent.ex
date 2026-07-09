@@ -445,6 +445,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
 
     case Xochi.execute(config, quote, wallet, request) do
       {:ok, exec} ->
+        tag_dispatch(context, exec, amount)
         {:ok, exec, quote}
 
       {:error, reason} ->
@@ -460,8 +461,12 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
         Checkpoint.put(store, key, dispatched_record(quote))
 
         case Xochi.execute(config, quote, wallet, request) do
-          {:ok, exec} -> {:ok, exec, quote}
-          {:error, reason} -> release_and_clear(context, amount, reason, store, key)
+          {:ok, exec} ->
+            tag_dispatch(context, exec, amount)
+            {:ok, exec, quote}
+
+          {:error, reason} ->
+            release_and_clear(context, amount, reason, store, key)
         end
 
       {:error, reason} ->
@@ -476,6 +481,13 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
     Checkpoint.delete(store, key)
     {:error, {:execute_failed, reason}}
   end
+
+  # The intent dispatched: bind the reserved amount to its id so a later refund
+  # (observed by PollXochiStatus) releases exactly this reservation, idempotently.
+  defp tag_dispatch(context, %{intent_id: intent_id}, amount) when is_binary(intent_id),
+    do: SpendGate.tag_reservation(context, intent_id, amount)
+
+  defp tag_dispatch(_context, _exec, _amount), do: :ok
 
   defp quote_expired?({:http, _status, body}) when is_map(body) do
     code = to_string(body["error"] || body["reason"] || "")

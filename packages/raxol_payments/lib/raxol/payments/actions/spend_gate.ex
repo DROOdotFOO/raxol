@@ -77,6 +77,48 @@ defmodule Raxol.Payments.Actions.SpendGate do
     end
   end
 
+  @doc """
+  Tag the reservation just made for `amount` with the intent (or transfer) id it
+  funded, so a later refund can release it by id. Call once execution dispatches.
+  No-op when no ledger is configured. See `Ledger.tag_reservation/4`.
+  """
+  @spec tag_reservation(map(), String.t(), Decimal.t()) :: :ok
+  def tag_reservation(context, intent_id, %Decimal{} = amount) when is_map(context) do
+    case Map.get(context, :ledger) do
+      nil -> :ok
+      ledger -> Ledger.tag_reservation(ledger, agent_id(context), intent_id, amount)
+    end
+  end
+
+  @doc """
+  Idempotently release the reservation tagged for `intent_id` (a refund reversed
+  the spend). Returns `:released`, `:noop`, or `:noop` when no ledger is
+  configured. Safe to call on every observation of a refund -- a second call for
+  an already-released intent is a no-op. See `Ledger.release_by_intent/3`.
+  """
+  @spec release_by_intent(map(), String.t()) :: :released | :noop
+  def release_by_intent(context, intent_id) when is_map(context) do
+    case Map.get(context, :ledger) do
+      nil -> :noop
+      ledger -> Ledger.release_by_intent(ledger, agent_id(context), intent_id)
+    end
+  end
+
+  @doc """
+  Drop the reservation tag for `intent_id` without releasing budget (the spend
+  stands; the intent settled or failed with funds kept). No-op when no ledger is
+  configured. See `Ledger.forget_reservation/3`.
+  """
+  @spec forget_reservation(map(), String.t()) :: :ok
+  def forget_reservation(context, intent_id) when is_map(context) do
+    case Map.get(context, :ledger) do
+      nil -> :ok
+      ledger -> Ledger.forget_reservation(ledger, agent_id(context), intent_id)
+    end
+  end
+
+  defp agent_id(context), do: Map.get(context, :agent_id, :unknown)
+
   # -- Amount validation --
 
   # A spend must be a positive, finite amount. Zero, negative, and non-finite

@@ -2,12 +2,19 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
   @moduledoc """
   Agent Action that polls a Xochi intent until it reaches a terminal status.
 
-  Read-only: it does not move funds, so it does not pass through `SpendGate`.
+  It never signs or moves funds, so it does not authorize a spend. It does
+  reconcile the execute-time budget reservation at a terminal status: a refund
+  releases it (`SpendGate.release_by_intent/2`, idempotent), any other terminal
+  status forgets the tag while the spend stands. Pass the same `:ledger` and
+  `:agent_id` used for the execute for this to take effect; without them it is a
+  no-op and the reservation is left untouched.
 
   ## Context keys
 
   * `:xochi_config` -- `%{base_url:, auth:}` for `Xochi.Client` (e.g.
     `auth: {:mandate, agent_wallet}`; see `Xochi.Client` for all auth modes).
+  * `:ledger`, `:agent_id` -- optional; the `Ledger` and key from the execute, so
+    a refund releases that reservation. See `SpendGate`.
   """
 
   @compile {:no_warn_undefined, Raxol.Agent.Action}
@@ -41,6 +48,7 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
       ]
     ]
 
+  alias Raxol.Payments.Actions.SpendGate
   alias Raxol.Payments.{Failure, Poll}
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.IntentStatus
@@ -55,15 +63,28 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
 
         case Xochi.poll_status_timed(config, intent_id, opts) do
           {:ok, %IntentStatus{status: :completed} = status, elapsed_ms} ->
+            # Settled: the spend stands. Drop the reservation tag so the ledger's
+            # in-flight set stays bounded; nothing to release.
+            SpendGate.forget_reservation(context, intent_id)
             {:ok, summary(status, elapsed_ms, budget)}
 
-          {:ok, %IntentStatus{} = status, _elapsed_ms} ->
-            # Terminal but not completed (failed/expired/refunded): a failed
-            # order must surface as an error, never as {:ok, ...}. Carry the most
-            # specific reason available -- an explicit error, then the refund
-            # reason on a refund, then the solver's substatus_message -- so why a
-            # settlement failed (e.g. a reconcile detail) is never lost.
+          {:ok, %IntentStatus{status: :refunded} = status, _elapsed_ms} ->
+            # The origin funds came back. Release the execute-time budget
+            # reservation, idempotently -- a re-poll of an already-refunded intent
+            # releases nothing further -- so a refunded payment stops consuming
+            # budget. Still surfaced as an error carrying the refund reason.
+            SpendGate.release_by_intent(context, intent_id)
             reason = status.error || status.refund_reason || status.substatus_message
+            {:error, Failure.from({:settlement, :refunded, reason})}
+
+          {:ok, %IntentStatus{} = status, _elapsed_ms} ->
+            # Terminal but not completed or refunded (failed/expired): a failed
+            # order must surface as an error, never as {:ok, ...}. The origin pull
+            # may already have moved funds, so the spend stands -- forget the tag
+            # (no release), but keep the reason (an explicit error, then the
+            # solver's substatus_message) so why it failed is never lost.
+            SpendGate.forget_reservation(context, intent_id)
+            reason = status.error || status.substatus_message
             {:error, Failure.from({:settlement, status.status, reason})}
 
           {:error, :timeout} ->
