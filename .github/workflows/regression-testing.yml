@@ -168,7 +168,9 @@ jobs:
         # -f: the benchmark build re-resolves transitive deps and dirties
         # mix.lock; force past it (untracked benchmark outputs are unaffected).
         git checkout -f "$BASELINE_REF"
-        mix deps.get && mix compile --warnings-as-errors
+        # Baseline is only compiled to run benchmarks against; it may predate
+        # warning fixes on this branch, so do not gate it on warnings.
+        mix deps.get && mix compile
 
         echo "[BENCH] Running baseline performance benchmarks..."
         if [ -f "bench/suites/parser/parser_benchmark.exs" ]; then
@@ -349,7 +351,9 @@ jobs:
         # -f: the benchmark build re-resolves transitive deps and dirties
         # mix.lock; force past it (untracked benchmark outputs are unaffected).
         git checkout -f "$BASELINE_REF"
-        mix deps.get && mix compile --warnings-as-errors
+        # Baseline is only compiled to run benchmarks against; it may predate
+        # warning fixes on this branch, so do not gate it on warnings.
+        mix deps.get && mix compile
 
         echo "Running baseline memory benchmarks for scenario: ${{ matrix.scenario }}"
 
