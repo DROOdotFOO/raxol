@@ -84,6 +84,12 @@ defmodule Raxol.ACP.ProviderAdapter.JsonrpcNonceTest do
                 n = :ets.update_counter(table, :tx_counter, 1)
                 result(id, "0x" <> String.pad_leading(Integer.to_string(n, 16), 64, "0"))
             end
+
+          # send_calls now confirms the tx before reporting success; a mined
+          # receipt with status 0x1 keeps the nonce assertions focused on the
+          # send path.
+          "eth_getTransactionReceipt" ->
+            result(id, %{"status" => "0x1", "blockNumber" => "0x1"})
         end
 
       conn
