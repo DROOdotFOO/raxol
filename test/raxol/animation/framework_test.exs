@@ -8,7 +8,6 @@ defmodule Raxol.Animation.FrameworkTest do
   alias Raxol.Core.Accessibility, as: Accessibility
   alias Raxol.Core.Runtime.ProcessStore
   alias Raxol.Core.UserPreferences
-  alias Raxol.Test.EventAssertions
   import Raxol.AccessibilityTestHelpers
 
   Logger.debug("Starting FrameworkTest module")

@@ -10,7 +10,6 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   REFACTORED: All try/catch blocks replaced with functional error handling patterns.
   """
 
-  require Raxol.Core.Runtime.Log
   use GenServer
 
   alias Raxol.Core.Runtime.Rendering.Backends
@@ -705,7 +704,4 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     GenServer.cast(dispatcher_pid, {:update_plugin_manager, updated_manager})
     :ok
   end
-
-  defp update_plugin_manager_in_dispatcher(_, _),
-    do: {:error, :invalid_dispatcher}
 end

@@ -1,8 +1,8 @@
 defmodule Raxol.Core.ErrorHandlerTest do
   use ExUnit.Case, async: true
 
-  import Raxol.Core.ErrorHandler
-  alias Raxol.Core.ErrorHandler
+  import Raxol.Core.ErrorHandling
+  alias Raxol.Core.ErrorHandling, as: ErrorHandler
 
   describe "execute_with_handling/3" do
     test "returns {:ok, result} on successful execution" do

@@ -121,7 +121,6 @@ defmodule Raxol.Core.Accessibility.ThemeIntegrationTest do
 
       # Get color scheme
       scheme = ThemeIntegration.get_color_scheme()
-      assert scheme != nil
 
       # Verify high contrast colors
       assert scheme.bg == :black
@@ -147,7 +146,6 @@ defmodule Raxol.Core.Accessibility.ThemeIntegrationTest do
 
       # Get color scheme
       scheme = ThemeIntegration.get_color_scheme()
-      assert scheme != nil
 
       # Verify standard colors
       assert scheme.bg == {:rgb, 30, 30, 30}
@@ -300,7 +298,6 @@ defmodule Raxol.Core.Accessibility.ThemeIntegrationTest do
 
       # Get color scheme
       scheme = ThemeIntegration.get_color_scheme()
-      assert scheme != nil
 
       # Verify high contrast colors
       assert scheme.bg == :black
@@ -322,7 +319,6 @@ defmodule Raxol.Core.Accessibility.ThemeIntegrationTest do
 
       # Get color scheme
       scheme = ThemeIntegration.get_color_scheme()
-      assert scheme != nil
 
       # Verify standard colors
       assert scheme.bg == {:rgb, 30, 30, 30}
@@ -344,7 +340,6 @@ defmodule Raxol.Core.Accessibility.ThemeIntegrationTest do
 
       # Get color scheme
       scheme = ThemeIntegration.get_color_scheme()
-      assert scheme != nil
 
       # Verify standard colors
       assert scheme.bg == {:rgb, 30, 30, 30}

@@ -52,7 +52,6 @@ defmodule Raxol.Terminal.Driver.TerminalSize do
     else
       case IOTerminal.get_terminal_size() do
         {:ok, {width, _height}} -> width
-        _ -> 80
       end
     end
   end
@@ -64,7 +63,6 @@ defmodule Raxol.Terminal.Driver.TerminalSize do
     else
       case IOTerminal.get_terminal_size() do
         {:ok, {_width, height}} -> height
-        _ -> 24
       end
     end
   end

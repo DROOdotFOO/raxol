@@ -10,7 +10,6 @@ defmodule Raxol.Terminal.Commands.Screen do
   alias Raxol.Terminal.ScreenBuffer
   alias Raxol.Terminal.ScreenBuffer.Operations
 
-  require Raxol.Core.Runtime.Log
 
   # Use map() to accept any emulator-like struct
   @type emulator :: map()
@@ -164,7 +163,7 @@ defmodule Raxol.Terminal.Commands.Screen do
       when is_integer(count) and count > 0 do
     Raxol.Core.Runtime.Log.debug("[Screen.scroll_up_screen_command] CALLED with count: #{count}")
 
-    scrollback = Emulator.get_scrollback(emulator) || []
+    scrollback = Emulator.get_scrollback(emulator)
     buffer = emulator.main_screen_buffer
     {to_restore, _remaining_scrollback} = Enum.split(scrollback, count)
 

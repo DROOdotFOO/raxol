@@ -10,8 +10,6 @@ defmodule Raxol.View.Elements do
 
   # --- Macros (forward to View) ---
 
-  require Raxol.Core.Renderer.View
-
   defmacro row(opts, do: block) do
     quote do
       require Raxol.Core.Renderer.View

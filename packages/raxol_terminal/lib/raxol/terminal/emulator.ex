@@ -56,6 +56,7 @@ defmodule Raxol.Terminal.Emulator do
             window_manager: nil,
             mode_manager: nil,
             active_buffer_type: :main,
+            cursor_handled_by_autowrap: false,
             main_screen_buffer: nil,
             active: nil,
             alternate: nil,

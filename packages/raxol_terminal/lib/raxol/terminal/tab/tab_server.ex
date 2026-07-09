@@ -7,7 +7,6 @@ defmodule Raxol.Terminal.Tab.TabServer do
   @default_height Raxol.Core.Defaults.terminal_height()
 
   use Raxol.Core.Behaviours.BaseManager
-  require Logger
 
   alias Raxol.Terminal.Integration.State
 

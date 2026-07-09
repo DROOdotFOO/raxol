@@ -4,7 +4,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginInitializer do
   """
 
   alias Raxol.Core.Runtime.Plugins.PluginCommandManager
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Initializes all plugins in the given load order.
@@ -73,7 +72,7 @@ defmodule Raxol.Core.Runtime.Plugins.PluginInitializer do
     case plugin.init(Map.get(plugin_config, plugin_id, %{})) do
       {:ok, new_states} ->
         new_meta = Map.put(meta, plugin_id, %{status: :active})
-        plugin_map = if is_map(plugin), do: plugin, else: %{commands: []}
+        plugin_map = plugin
         new_tbl = PluginCommandManager.update_command_table(tbl, plugin_map)
         {:cont, {:ok, {new_meta, Map.merge(sts, new_states), new_tbl}}}
 

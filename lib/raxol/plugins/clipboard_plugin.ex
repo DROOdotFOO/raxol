@@ -5,8 +5,6 @@ defmodule Raxol.Plugins.ClipboardPlugin do
 
   @behaviour Raxol.Plugins.Plugin
 
-  require Raxol.Core.Runtime.Log
-
   # Alias the new consolidated module
   alias Raxol.System.Clipboard
 
@@ -97,23 +95,17 @@ defmodule Raxol.Plugins.ClipboardPlugin do
     end
   end
 
-  defp get_selected_text(%__MODULE__{} = state) do
-    case state do
-      %{
-        selection_start: start_pos,
-        selection_end: end_pos,
-        last_cells_at_selection: cells
-      } ->
-        process_valid_selection(
-          valid_selection?(start_pos, end_pos, cells),
-          start_pos,
-          end_pos,
-          cells
-        )
-
-      _ ->
-        {:error, :no_selection}
-    end
+  defp get_selected_text(%__MODULE__{
+         selection_start: start_pos,
+         selection_end: end_pos,
+         last_cells_at_selection: cells
+       }) do
+    process_valid_selection(
+      valid_selection?(start_pos, end_pos, cells),
+      start_pos,
+      end_pos,
+      cells
+    )
   end
 
   defp valid_selection?(start_pos, end_pos, cells) do

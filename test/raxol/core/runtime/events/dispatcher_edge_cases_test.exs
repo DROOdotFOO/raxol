@@ -1,6 +1,5 @@
 defmodule Raxol.Core.Runtime.Events.DispatcherEdgeCasesTest do
   use ExUnit.Case, async: false
-  require Raxol.Core.Runtime.Log
   import Mox
 
   alias Raxol.Core.Events.Event

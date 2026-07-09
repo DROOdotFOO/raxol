@@ -34,8 +34,6 @@ defmodule Raxol.Terminal.Config.Application do
              :ok <- apply_ansi_config(validated_config, terminal_pid),
              :ok <- apply_behavior_config(validated_config, terminal_pid) do
           {:ok, validated_config}
-        else
-          {:error, reason} -> {:error, reason}
         end
 
       error ->

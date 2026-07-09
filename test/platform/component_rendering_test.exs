@@ -6,7 +6,6 @@ defmodule Raxol.Test.Platform.ComponentRenderingTest do
   alias Raxol.System.Platform
   alias Raxol.UI.Components.Display.Progress
   alias Raxol.UI.Components.Input.Button
-  alias Raxol.UI.Components.Progress.ProgressBar
 
   # This test verifies that core UI components render correctly across platforms
   # It tests the component rendering output structure rather than trying to capture IO output

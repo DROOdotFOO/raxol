@@ -35,7 +35,7 @@ defprotocol Raxol.Protocols.Renderable do
   A binary string containing the rendered output with ANSI codes.
   """
   @spec render(t, keyword()) :: binary()
-  def render(data, opts \\ [])
+  def render(data, opts)
 
   @doc """
   Gets rendering metadata for the data structure.

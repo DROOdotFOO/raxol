@@ -32,11 +32,11 @@ defmodule Raxol.Core.AccessibilityMutationCoverageTest do
   describe "boolean logic in accessibility features" do
     test "boolean operations with individual features" do
       # Test boolean logic that might be mutated
-      high_contrast = false
-      reduced_motion = false
-      large_text = false
-      screen_reader = true  # This one is true
-      keyboard_focus = false
+      # Values are read through Enum.map so the type checker sees `boolean()`
+      # (not the literals) and does not constant-fold the operator logic this
+      # mutation-coverage test intentionally exercises. screen_reader is true.
+      [high_contrast, reduced_motion, large_text, screen_reader, keyboard_focus] =
+        Enum.map([false, false, false, true, false], & &1)
 
       # Test OR operations (these would be mutated to AND)
       any_active_or =
@@ -68,8 +68,7 @@ defmodule Raxol.Core.AccessibilityMutationCoverageTest do
 
     test "boolean mutations in conditional logic" do
       # Test conditions that would be affected by boolean mutations
-      setting_enabled = true
-      setting_disabled = false
+      [setting_enabled, setting_disabled] = Enum.map([true, false], & &1)
 
       # These conditions might be mutated (true -> false, false -> true)
       if setting_enabled do
@@ -124,8 +123,7 @@ defmodule Raxol.Core.AccessibilityMutationCoverageTest do
   describe "server process boolean state" do
     test "process existence checks" do
       # Test boolean logic around process management
-      process_exists = false
-      process_missing = true
+      [process_exists, process_missing] = Enum.map([false, true], & &1)
 
       # Boolean logic that might be in ensure_started/disable functions
       should_start = process_missing && !process_exists  # true && true = true
@@ -147,8 +145,7 @@ defmodule Raxol.Core.AccessibilityMutationCoverageTest do
     test "timeout and retry logic arithmetic" do
       # Test arithmetic in error handling that might be mutated
       base_timeout = 1000
-      retry_count = 3
-      max_retries = 5
+      [retry_count, max_retries] = Enum.map([3, 5], & &1)
 
       # Addition mutations
       total_timeout = base_timeout + (retry_count * 100)  # 1000 + 300 = 1300

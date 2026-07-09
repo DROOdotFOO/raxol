@@ -31,7 +31,6 @@ defmodule Raxol.UI.Components.Input.SingleLineInput do
 
   require Raxol.View.Elements
   require Raxol.Core.Renderer.View
-  require Raxol.Core.Runtime.Log
 
   # Define state struct
   defstruct id: nil,

@@ -174,7 +174,7 @@ defmodule Raxol.Protocols.AdvancedProtocolTest do
       data = %{content: "test", style: %{bold: true}}
 
       # Renderable
-      rendered = Raxol.Protocols.Renderable.render(data)
+      rendered = Raxol.Protocols.Renderable.render(data, [])
       assert is_binary(rendered)
 
       # Styleable

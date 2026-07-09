@@ -6,8 +6,6 @@ defmodule Raxol.UI.Theming.ThemeManager do
 
   use Raxol.Core.Behaviours.BaseManager
 
-  require Logger
-
   defstruct [
     :current_theme,
     :available_themes,

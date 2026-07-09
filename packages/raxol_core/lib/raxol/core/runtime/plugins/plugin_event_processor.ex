@@ -36,7 +36,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginEventProcessor do
   A crashed plugin is skipped, and the event continues to the next plugin.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Core.Runtime.Plugins.PluginSupervisor
 

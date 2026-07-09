@@ -4,15 +4,12 @@ defmodule Raxol.PluginTest do
   alias Raxol.Core.Buffer
 
   defmodule TestPlugin do
-    @behaviour Raxol.Plugin
 
-    @impl true
     def init(opts) do
       initial_value = Keyword.get(opts, :initial_value, 0)
       {:ok, %{counter: initial_value, log: []}}
     end
 
-    @impl true
     def handle_input("q", _modifiers, state) do
       {:exit, state}
     end
@@ -33,12 +30,10 @@ defmodule Raxol.PluginTest do
       {:ok, state}
     end
 
-    @impl true
     def render(buffer, state) do
       Buffer.write_at(buffer, 0, 0, "Counter: #{state.counter}")
     end
 
-    @impl true
     def cleanup(state) do
       # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
       new_state = %{state | log: state.log ++ [:cleanup_called]}
@@ -50,7 +45,6 @@ defmodule Raxol.PluginTest do
       end
     end
 
-    @impl true
     def handle_info(:increment, state) do
       {:ok, %{state | counter: state.counter + 1}}
     end
@@ -69,19 +63,14 @@ defmodule Raxol.PluginTest do
   end
 
   defmodule MinimalPlugin do
-    @behaviour Raxol.Plugin
 
-    @impl true
     def init(_opts), do: {:ok, %{}}
 
-    @impl true
     def handle_input("q", _modifiers, state), do: {:exit, state}
     def handle_input(_key, _modifiers, state), do: {:ok, state}
 
-    @impl true
     def render(buffer, _state), do: buffer
 
-    @impl true
     def cleanup(_state), do: :ok
 
     # handle_info is optional - not implemented

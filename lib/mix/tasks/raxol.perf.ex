@@ -50,7 +50,6 @@ defmodule Mix.Tasks.Raxol.Perf do
   """
 
   use Mix.Task
-  require Logger
 
   @shortdoc "Performance analysis and optimization tools"
 

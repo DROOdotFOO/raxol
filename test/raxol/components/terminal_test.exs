@@ -16,7 +16,7 @@ defmodule Raxol.UI.Components.TerminalTest do
       assert state.height == 24
       assert state.id == nil
       assert state.style == %{}
-      assert state.emulator != nil
+      assert %Raxol.Terminal.EmulatorLite{} = state.emulator
     end
 
     test "initializes with custom dimensions" do

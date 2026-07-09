@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.ANSI.Monitor do
   """
 
   use Raxol.Core.Behaviours.BaseManager
-  require Raxol.Core.Runtime.Log
   alias Raxol.Terminal.ANSI.{Parser, Processor}
 
   # --- Types ---

@@ -2,7 +2,6 @@ defmodule Raxol.Terminal.Commands.CommandServer.EraseOps do
   @moduledoc false
   @compile {:no_warn_undefined, Raxol.Terminal.Commands.CommandServer.Helpers}
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Buffer.Eraser
   alias Raxol.Terminal.Commands.CommandServer.Helpers

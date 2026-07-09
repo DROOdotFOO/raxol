@@ -20,7 +20,11 @@ defmodule Raxol.Test.Visual.Assertions do
 
       assert_matches_snapshot(component, "button_primary")
   """
-  def assert_matches_snapshot(component, name, context \\ %{}) do
+  def assert_matches_snapshot(
+        component,
+        name,
+        context \\ %{snapshots_dir: "test/snapshots"}
+      ) do
     case Visual.compare_with_snapshot(component, name, context) do
       :ok ->
         true

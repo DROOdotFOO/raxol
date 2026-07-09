@@ -45,7 +45,6 @@ defmodule Raxol.Terminal.Rendering.LigatureRenderer do
       has_ligatures? = LigatureRenderer.contains_ligatures?(text, config)
   """
 
-  require Logger
 
   defstruct [
     :font,

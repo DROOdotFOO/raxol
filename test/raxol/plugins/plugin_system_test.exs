@@ -7,7 +7,6 @@ defmodule Raxol.Plugins.PluginSystemTest do
   """
 
   alias Raxol.Plugins.EventHandler
-  alias Raxol.Plugins.EventHandler.InputEvents
   alias Raxol.Plugins.EventHandler.MouseEvents
   alias Raxol.Plugins.EventHandler.OutputEvents
   alias Raxol.Plugins.HyperlinkPlugin
@@ -280,7 +279,7 @@ defmodule Raxol.Plugins.PluginSystemTest do
                "\e]8;;https://example.com\e\\"
              )
 
-      {:ok, updated_plugin} =
+      {:ok, _updated_plugin} =
         HyperlinkPlugin.handle_output(updated_plugin, "Hello, World!")
     end
 
@@ -441,7 +440,7 @@ defmodule Raxol.Plugins.PluginSystemTest do
     end
 
     test "highlights search terms" do
-      {:ok, plugin} = SearchPlugin.init()
+      {:ok, _plugin} = SearchPlugin.init()
 
       highlighted = SearchPlugin.highlight_search_term("Hello, World!", "World")
       assert highlighted == "Hello, \e[43mWorld\e[0m!"

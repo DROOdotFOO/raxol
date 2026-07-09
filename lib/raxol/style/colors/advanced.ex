@@ -11,7 +11,6 @@ defmodule Raxol.Style.Colors.Advanced do
   """
 
   alias Raxol.Style.Colors.{Adaptive, Color, HSL}
-  require :math
 
   @type color :: Color.t()
 

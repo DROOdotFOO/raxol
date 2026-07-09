@@ -90,9 +90,7 @@ defmodule Raxol.Core.Runtime.ProcessComponentTest do
       # The crash should terminate the GenServer
       Process.flag(:trap_exit, true)
 
-      catch_exit do
-        ProcessComponent.send_update(pid, :crash)
-      end
+      catch_exit(ProcessComponent.send_update(pid, :crash))
 
       refute Process.alive?(pid)
       # The test process (caller) is still alive

@@ -7,7 +7,6 @@ defmodule Raxol.Core.Runtime.Plugins.Loader do
 
   @behaviour Raxol.Core.Runtime.Plugins.LoaderBehaviour
 
-  require Logger
 
   defstruct [
     :loaded_plugins,
@@ -77,7 +76,6 @@ defmodule Raxol.Core.Runtime.Plugins.Loader do
       dirs when is_list(dirs) ->
         case discover_plugins(dirs) do
           {:ok, plugins} -> plugins
-          {:error, _} -> []
         end
     end
   end

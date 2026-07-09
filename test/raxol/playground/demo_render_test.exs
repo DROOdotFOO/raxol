@@ -21,7 +21,8 @@ defmodule Raxol.Playground.DemoRenderTest do
 
   # `capture_log: true` swallows the Lifecycle/Engine/Buffer.Writer debug
   # stream that would otherwise drown the failure messages.
-  use ExUnit.Case, async: false, capture_log: true
+  use ExUnit.Case, async: false
+  @moduletag capture_log: true
 
   alias Raxol.Headless
   alias Raxol.Playground.Catalog

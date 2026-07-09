@@ -16,7 +16,6 @@ defmodule Raxol.Core.ColorSystem do
   alias Raxol.Style.Colors.{Color, Utilities}
   alias Raxol.UI.Theming.Colors
   alias Raxol.UI.Theming.Theme
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Creates a new theme with the given name and colors.

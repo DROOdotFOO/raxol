@@ -8,7 +8,6 @@ defmodule Raxol.Terminal.Sync.SyncServer do
   """
 
   use Raxol.Core.Behaviours.BaseManager
-  require Logger
 
   # Types
   @type sync_id :: term()

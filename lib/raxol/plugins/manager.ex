@@ -4,8 +4,6 @@ defmodule Raxol.Plugins.Manager do
   Handles plugin lifecycle, registration, and state management.
   """
 
-  require Raxol.Core.Runtime.Log
-
   alias Raxol.Plugins.{
     Plugin,
     PluginConfig

@@ -4,7 +4,6 @@ defmodule Raxol.Core.Accessibility.EventHandler do
   """
 
   alias Raxol.Core.Accessibility.{Announcements, Metadata, Preferences}
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Handle focus change events for accessibility announcements.

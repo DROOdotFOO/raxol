@@ -12,7 +12,6 @@ defmodule Raxol.Terminal.AdvancedFeatures do
   These features enable rich, interactive terminal applications with modern UX patterns.
   """
 
-  require Logger
 
   @type hyperlink_id :: String.t()
   @type url :: String.t()

@@ -1,6 +1,5 @@
 defmodule Raxol.System.Updater do
   use Raxol.Core.Behaviours.BaseManager
-  require Logger
 
   @moduledoc """
   Provides version management and self-update functionality for Raxol.

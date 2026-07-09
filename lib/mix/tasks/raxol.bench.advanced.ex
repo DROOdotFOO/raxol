@@ -411,48 +411,15 @@ defmodule Mix.Tasks.Raxol.Bench.Advanced do
 
   defp output_competitor_comparison(comparison, scores, _opts) do
     Mix.shell().info("\n=== Competitor Comparison Results ===\n")
+    Mix.shell().info(comparison.summary)
 
-    print_performance_ranking(comparison.performance_ranking)
-    print_raxol_score(scores.raxol_score)
-    print_relative_performance(scores.comparison)
-  end
+    Mix.shell().info("\nPerformance Scores (higher is better):")
 
-  defp print_performance_ranking(performance_ranking) do
-    Mix.shell().info("Performance Ranking:")
-
-    Enum.each(performance_ranking, &print_ranking_entry/1)
-  end
-
-  defp print_ranking_entry(%{rank: rank, test: test, time: time}) do
-    Mix.shell().info("  #{rank}. #{test}: #{Float.round(time, 2)}μs")
-  end
-
-  defp print_raxol_score(raxol_score) do
-    Mix.shell().info(
-      "\nRaxol Performance Score: #{Float.round(raxol_score, 1)}/100"
-    )
-  end
-
-  defp print_relative_performance(comparison_data) do
-    Mix.shell().info("\nRelative Performance vs Competitors:")
-
-    Enum.each(comparison_data, &print_comparison_entry/1)
-  end
-
-  defp print_comparison_entry({terminal, data}) do
-    percentage = Float.round(data.relative_performance, 1)
-    symbol = get_performance_symbol(percentage)
-
-    Mix.shell().info("  #{symbol} vs #{terminal}: #{percentage}%")
-  end
-
-  defp get_performance_symbol(percentage) do
-    cond do
-      percentage > 110 -> "[FAST]"
-      percentage > 100 -> "[OK]"
-      percentage > 90 -> "[WARN]"
-      true -> "[FAIL]"
-    end
+    scores
+    |> Enum.sort_by(fn {_name, score} -> score end, :desc)
+    |> Enum.each(fn {name, score} ->
+      Mix.shell().info("  #{name}: #{Float.round(score, 2)}/100")
+    end)
   end
 
   defp load_latest_results do

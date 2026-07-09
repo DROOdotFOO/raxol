@@ -7,7 +7,6 @@ defmodule Raxol.Core.Runtime.Plugins.EventFilter do
   - Handling event halting
   """
 
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Filters an event through registered plugin filters.

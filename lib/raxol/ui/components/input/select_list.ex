@@ -259,32 +259,8 @@ defmodule Raxol.UI.Components.Input.SelectList do
     ensure_options_present(state)
   end
 
-  defp do_update({:update_props, new_props}, state),
-    do: update({:update_props, new_props}, state)
-
-  defp do_update({:search, search_text}, state),
-    do: update({:search, search_text}, state)
-
-  defp do_update({:apply_search, search_text}, state),
-    do: update({:apply_search, search_text}, state)
-
-  defp do_update({:select_option, index}, state),
-    do: update({:select_option, index}, state)
-
-  defp do_update({:set_page, page_num}, state),
-    do: update({:set_page, page_num}, state)
-
-  defp do_update({:set_focus, has_focus}, state),
-    do: update({:set_focus, has_focus}, state)
-
-  defp do_update({:toggle_search_focus}, state),
-    do: update({:toggle_search_focus}, state)
-
-  defp do_update({:set_visible_height, height}, state),
-    do: update({:set_visible_height, height}, state)
-
-  defp do_update({:set_search_focus, true}, state),
-    do: update({:set_search_focus, true}, state)
+  # The specific `update/2` clauses above handle every tagged message, so
+  # do_update only ever receives non-tagged messages -- the catch-all below.
 
   defp do_update(_message, state), do: {state, nil}
 

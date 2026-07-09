@@ -622,7 +622,7 @@ defmodule Raxol.Playground.DemosTest do
 
     test "subscribe returns interval" do
       model = StatusBarDemo.init(nil)
-      assert StatusBarDemo.subscribe(model) != []
+      assert [_ | _] = StatusBarDemo.subscribe(model)
     end
 
     test "view returns element tree" do
@@ -845,7 +845,7 @@ defmodule Raxol.Playground.DemosTest do
     end
 
     test "subscribe returns interval" do
-      assert LineChartDemo.subscribe(%{}) != []
+      assert [_ | _] = LineChartDemo.subscribe(%{})
     end
 
     test "view returns element tree" do
@@ -915,7 +915,7 @@ defmodule Raxol.Playground.DemosTest do
     end
 
     test "subscribe returns interval" do
-      assert ScatterChartDemo.subscribe(%{}) != []
+      assert [_ | _] = ScatterChartDemo.subscribe(%{})
     end
 
     test "view returns element tree" do
@@ -983,7 +983,7 @@ defmodule Raxol.Playground.DemosTest do
     end
 
     test "subscribe returns interval" do
-      assert SparklineDemo.subscribe(%{}) != []
+      assert [_ | _] = SparklineDemo.subscribe(%{})
     end
 
     test "view returns element tree" do

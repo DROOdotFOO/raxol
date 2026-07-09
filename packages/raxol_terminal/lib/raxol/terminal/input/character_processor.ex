@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.Input.CharacterProcessor do
   Handles character processing, translation, and writing to the terminal buffer.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.ANSI.CharacterSets
   alias Raxol.Terminal.{CharacterHandling, Emulator, ScreenBuffer}

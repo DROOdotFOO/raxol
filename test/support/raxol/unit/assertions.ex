@@ -174,15 +174,11 @@ defmodule Raxol.Test.Unit.Assertions do
     true
   end
 
-  defp get_component_layout(_component) do
-    # Placeholder: Extract layout information
-    %{}
-  end
+  # Placeholder extractors: return the component itself so callers read its
+  # fields directly (a real layout/style projection can replace these later).
+  defp get_component_layout(component), do: component
 
-  defp get_component_style(_component) do
-    # Placeholder: Extract style information
-    %{}
-  end
+  defp get_component_style(component), do: component
 
   # defp assert_style_applied(component, style_props) do
   #   component_style = get_component_style(component)

@@ -8,8 +8,16 @@ defmodule Raxol.MixProject do
     [
       app: :raxol,
       version: @version,
-      elixir: "~> 1.17 or ~> 1.18 or ~> 1.19",
+      elixir: "~> 1.17 or ~> 1.18 or ~> 1.19 or ~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
+      # Non-test files under test/ (data, fixtures, and `test_*`/`verify_*`
+      # helpers/scripts) that Elixir 1.20 would otherwise warn about.
+      test_ignore_filters: [
+        ~r{test/data/},
+        ~r{test/fixtures/},
+        ~r{/test_[^/]+\.exs?$},
+        ~r{/verify_[^/]+\.exs$}
+      ],
       elixirc_options: [
         warnings_as_errors: Mix.env() == :prod,
         compile_order: [:cell, :operations]

@@ -4,7 +4,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginUnloader do
   """
 
   alias Raxol.Core.Runtime.Plugins.CommandRegistry
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Unloads a plugin, cleaning up commands and state.
@@ -15,7 +14,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginUnloader do
       cleanup_plugin_state(plugin_id, metadata, states, command_table)
     else
       :error -> {:ok, {metadata, states, command_table}}
-      {:error, reason} -> handle_unload_error(reason, plugin_id)
     end
   end
 

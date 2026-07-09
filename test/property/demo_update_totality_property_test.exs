@@ -55,20 +55,12 @@ defmodule Raxol.Property.DemoUpdateTotalityTest do
         try do
           final =
             Enum.reduce(events, initial, fn event, model ->
+              # A non-{model, list} shape raises CaseClauseError, caught and
+              # reported by the rescue below (the shape contract this property
+              # guards).
               case module.update(event, model) do
                 {new_model, commands} when is_list(commands) ->
                   new_model
-
-                other ->
-                  flunk("""
-                  #{@component.name}: update/2 returned bad shape.
-
-                  Expected {model, commands_list}.
-                  Got:     #{inspect(other)}
-
-                  Event:   #{inspect(event)}
-                  Model:   #{inspect(model)}
-                  """)
               end
             end)
 

@@ -8,7 +8,6 @@ defmodule Raxol.Terminal.Tab.Manager do
   """
 
   use Raxol.Core.Behaviours.BaseManager
-  require Logger
 
   # Types
   @type tab_id :: String.t()

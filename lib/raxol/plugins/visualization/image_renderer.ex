@@ -8,8 +8,6 @@ defmodule Raxol.Plugins.Visualization.ImageRenderer do
   # warnings so the compile stays clean when it is absent.
   @compile {:no_warn_undefined, Mogrify}
 
-  require Raxol.Core.Runtime.Log
-
   alias Raxol.Plugins.Visualization.DrawingUtils
   alias Raxol.Terminal.ANSI.KittyGraphics
   alias Raxol.Terminal.Cell
@@ -370,7 +368,7 @@ defmodule Raxol.Plugins.Visualization.ImageRenderer do
     offset = y * stride + x * bytes_per_pixel
 
     case buffer do
-      <<_::binary-size(offset), r, g, b, _::binary>>
+      <<_::binary-size(^offset), r, g, b, _::binary>>
       when bytes_per_pixel >= 3 ->
         Cell.new_sixel(
           " ",

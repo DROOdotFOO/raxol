@@ -45,8 +45,8 @@ env:
   MIX_ENV: test
   SKIP_TERMBOX2_TESTS: true
   TMPDIR: /tmp
-  ELIXIR_VERSION: "1.19.0"
-  OTP_VERSION: "28.2"
+  ELIXIR_VERSION: "1.20.2"
+  OTP_VERSION: "29.0.3"
 
 jobs:
   # ========================================

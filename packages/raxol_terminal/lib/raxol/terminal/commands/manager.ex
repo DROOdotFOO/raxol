@@ -1,13 +1,11 @@
 defmodule Raxol.Terminal.Commands.Manager do
   use Raxol.Core.Behaviours.BaseManager
-  require Logger
 
   @moduledoc """
   Manages terminal command processing and execution.
   This module is responsible for handling command parsing, validation, and execution.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Commands.Command
   alias Raxol.Terminal.Emulator

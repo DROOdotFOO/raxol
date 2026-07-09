@@ -162,7 +162,6 @@ defmodule Raxol.Terminal.ANSI.Utils do
     Determines the type of sequence and extracts its parameters.
     """
 
-    require Raxol.Core.Runtime.Log
     alias Raxol.Terminal.ANSI.{Monitor, StateMachine}
 
     @type sequence_type :: :csi | :osc | :sos | :pm | :apc | :esc | :text

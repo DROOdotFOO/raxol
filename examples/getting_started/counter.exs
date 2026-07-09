@@ -22,8 +22,6 @@
 defmodule CounterExample do
   use Raxol.Core.Runtime.Application
 
-  require Raxol.Core.Runtime.Log
-
   @impl true
   def init(_context) do
     %{count: 0}

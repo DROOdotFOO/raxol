@@ -14,7 +14,6 @@ defmodule Raxol.Terminal.StateManager do
   def init(opts), do: {:ok, Keyword.get(opts, :initial_state, %{})}
 
   alias Raxol.Terminal.Emulator
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Saves the current terminal state.

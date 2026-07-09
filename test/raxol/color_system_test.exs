@@ -3,7 +3,6 @@ defmodule Raxol.ColorSystemTest do
 
   import Raxol.AccessibilityTestHelpers
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Animation.Framework, as: Framework
   alias Raxol.Core.Accessibility, as: Accessibility

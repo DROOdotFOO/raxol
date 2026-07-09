@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.StyleManager do
   """
 
   alias Raxol.Terminal.StyleBuffer
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Gets the style buffer instance.

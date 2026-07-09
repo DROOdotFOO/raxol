@@ -17,7 +17,6 @@ defmodule Raxol.Core.Runtime.Plugins.LifecycleHelper do
     PluginValidator
   }
 
-  require Raxol.Core.Runtime.Log
 
   def init(opts) do
     {:ok, opts}

@@ -9,7 +9,6 @@ defmodule Raxol.Animation.AnimationProcessor do
   - Managing animation progress and timing
   """
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Animation.Accessibility, as: AnimAccessibility
   alias Raxol.Animation.Adaptation
   alias Raxol.Animation.Easing

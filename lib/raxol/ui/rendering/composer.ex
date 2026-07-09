@@ -3,8 +3,6 @@ defmodule Raxol.UI.Rendering.Composer do
   Handles composition of UI rendering trees.
   """
 
-  require Raxol.Core.Runtime.Log
-
   @doc """
   Composes a render tree or command list from the layout tree.
   Currently a stub; in the future, this will build a render tree or command list,
@@ -44,14 +42,6 @@ defmodule Raxol.UI.Rendering.Composer do
     )
 
     %{composed_type: :primitive, value: current_layout_node}
-  end
-
-  defp do_compose_recursive(nil, _previous_composed_node) do
-    Raxol.Core.Runtime.Log.debug(
-      "Composition Stage: Encountered nil layout node."
-    )
-
-    nil
   end
 
   defp can_reuse_previous_node?(current_layout_node, previous_composed_node) do

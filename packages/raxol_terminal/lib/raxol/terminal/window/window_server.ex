@@ -7,7 +7,6 @@ defmodule Raxol.Terminal.Window.WindowServer do
   """
 
   use Raxol.Core.Behaviours.BaseManager
-  require Logger
 
   @type window_id :: non_neg_integer()
   @type window_state :: %{

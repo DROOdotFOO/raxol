@@ -163,24 +163,6 @@ defmodule Raxol.Core.Renderer.Views.ChartTest do
   end
 
   describe "line chart features" do
-    # Sample data for line charts - Restructure to match expected series format
-    # The chart expects a list of series, each with a :data key containing points.
-    @line_data_series [
-      %{
-        # Added name for consistency
-        name: "Series 1",
-        # Use the values as data points
-        data: [10, 20],
-        # Assuming color applies to the series
-        color: :blue
-      },
-      %{
-        name: "Series 2",
-        # Example data points
-        data: [15, 5],
-        color: :red
-      }
-    ]
 
     test "creates points and lines" do
       # Define two-series data locally for this test
@@ -249,7 +231,6 @@ defmodule Raxol.Core.Renderer.Views.ChartTest do
       # Add assertions to verify min/max impact if possible
       assert is_map(view)
       assert Map.has_key?(view, :type)
-      assert view != nil
     end
 
     test "handles empty data" do

@@ -4,8 +4,6 @@ defmodule Raxol.Animation.Accessibility do
   specifically adapting animations for reduced motion preferences.
   """
 
-  require Raxol.Core.Runtime.Log
-
   @doc """
   Adapts an animation definition based on reduced motion settings.
 

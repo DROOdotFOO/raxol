@@ -427,7 +427,7 @@ defmodule Raxol.Terminal.Emulator.SafeEmulator do
   defp chunk_input(input) do
     # Simple chunking implementation - can be customized
     chunk_size = 1024
-    for <<chunk::binary-size(chunk_size) <- input>>, do: chunk
+    for <<chunk::binary-size(^chunk_size) <- input>>, do: chunk
   end
 
   defp process_chunks_safely(chunks, initial_state) do

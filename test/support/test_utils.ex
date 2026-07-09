@@ -19,7 +19,6 @@ defmodule Raxol.Test.TestUtils do
   import ExUnit.Callbacks
 
   alias Raxol.Core.Events.Event
-  require Raxol.Core.Runtime.Log
 
   # =============================================================================
   # ENVIRONMENT SETUP & CONFIGURATION
@@ -434,7 +433,7 @@ defmodule Raxol.Test.TestUtils do
       |> normalize_component_attrs()
 
     # Return consistent component structure
-    if is_map(state) and Map.has_key?(state, :module) do
+    if Map.has_key?(state, :module) do
       # Advanced component structure
       %{
         module: module,

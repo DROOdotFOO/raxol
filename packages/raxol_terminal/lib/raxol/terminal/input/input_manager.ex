@@ -6,7 +6,6 @@ defmodule Raxol.Terminal.Input.Manager do
   """
 
   alias Raxol.Terminal.ParserStateManager
-  require Raxol.Core.Runtime.Log
 
   @type t :: %__MODULE__{
           buffer: map(),

@@ -5,7 +5,6 @@ defmodule Raxol.Style.Colors.SystemTest do
   import Mox
   import Raxol.Test.TestUtils
 
-  alias Raxol.Core.Events.EventManager, as: Manager, as: EventManager
   alias Raxol.Style.Colors.{Color, System, Theme}
   alias Raxol.UI.Theming.Theme
 
@@ -68,7 +67,7 @@ defmodule Raxol.Style.Colors.SystemTest do
       Theme.register(create_test_theme())
       :ok = Raxol.Style.Colors.Persistence.save_theme(create_test_theme())
       result = Raxol.Style.Colors.Persistence.load_theme(create_test_theme().id)
-      assert result != nil
+      assert {:ok, _theme} = result
     end
 
     test "gets current theme", _context do

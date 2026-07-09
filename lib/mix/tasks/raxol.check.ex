@@ -37,7 +37,6 @@ defmodule Mix.Tasks.Raxol.Check do
   """
 
   use Mix.Task
-  require Logger
   alias Raxol.CLI.Colors
   alias Raxol.CLI.ErrorDisplay
   alias Raxol.CLI.Spinner

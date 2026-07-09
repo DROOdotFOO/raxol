@@ -7,7 +7,6 @@ defmodule Raxol.Terminal.Commands.CursorHandler do
   returning the updated emulator state.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Commands.CursorUtils
   alias Raxol.Terminal.Cursor.Manager, as: CursorManager
@@ -402,18 +401,9 @@ defmodule Raxol.Terminal.Commands.CursorHandler do
     end
   end
 
-  # Fallback clause for any other cursor type
-  defp set_cursor_position(cursor, {row, col}) do
-    # Try to handle any cursor type that might have row and col fields
-    case cursor do
-      %{row: _, col: _} when is_map(cursor) ->
-        %{cursor | row: row, col: col}
-
-      _ ->
-        # If we can't handle it, return the cursor unchanged
-        cursor
-    end
-  end
+  # Fallback: a non-map/non-pid cursor (maps are handled above) is returned
+  # unchanged.
+  defp set_cursor_position(cursor, {_row, _col}), do: cursor
 
   defp get_cursor_position(nil) do
     {0, 0}

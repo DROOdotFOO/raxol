@@ -14,7 +14,6 @@ defmodule Raxol.Core.UserPreferences do
   # Terminal.Config.Defaults lives in main raxol; guarded with Code.ensure_loaded?
   @compile {:no_warn_undefined, Raxol.Terminal.Config.Defaults}
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Core.Preferences.Persistence
   alias Raxol.Core.Utils.Debounce

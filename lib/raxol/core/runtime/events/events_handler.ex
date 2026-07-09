@@ -8,7 +8,6 @@ defmodule Raxol.Core.Runtime.Events.Handler do
   * Managing the priority and order of handlers
   """
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Core.Runtime.ProcessStore
 
   @doc """

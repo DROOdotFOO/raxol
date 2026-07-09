@@ -9,7 +9,6 @@ defmodule Raxol.Animation.Lifecycle do
   - Managing animation announcements and accessibility
   """
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Animation.Accessibility, as: AnimAccessibility
   alias Raxol.Animation.PathManager
   alias Raxol.Animation.StateManager, as: StateManager

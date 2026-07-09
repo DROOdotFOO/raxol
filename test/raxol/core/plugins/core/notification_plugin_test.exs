@@ -11,7 +11,6 @@ defmodule Raxol.Core.Plugins.Core.NotificationPluginTest do
   alias Raxol.Core.Plugins.Core.NotificationPlugin
 
   # Define the mock using Mox.defmock
-  Mox.defmock(SystemInteractionMock, for: Raxol.System.Interaction)
 
   # Setup Mox before each test
   setup :verify_on_exit!

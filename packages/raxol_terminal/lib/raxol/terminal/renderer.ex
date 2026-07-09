@@ -72,7 +72,6 @@ defmodule Raxol.Terminal.Renderer do
     style_cache: %{}
   ]
 
-  require Logger
 
   # ANSI escape code constants
   @ansi_reset "\e[0m"
@@ -147,23 +146,12 @@ defmodule Raxol.Terminal.Renderer do
   end
 
   @doc """
-  Renders the terminal content without additional options.
+  Renders the terminal content. The optional `opts` arguments are currently
+  unused (accepted for call-site compatibility).
   """
-  def render(%__MODULE__{} = renderer) do
-    render(renderer, %{}, %{})
-  end
+  def render(renderer, opts \\ [], additional_opts \\ [])
 
-  @doc """
-  Renders the terminal content.
-  """
-  def render(%__MODULE__{} = renderer, opts) do
-    render(renderer, opts, %{})
-  end
-
-  @doc """
-  Renders the terminal content with additional options.
-  """
-  def render(%__MODULE__{} = renderer, _opts \\ %{}, _additional_opts \\ %{}) do
+  def render(%__MODULE__{} = renderer, _opts, _additional_opts) do
     renderer.screen_buffer
     |> get_styled_content_optimized(renderer.theme, renderer.style_batching)
     |> apply_font_settings(renderer.font_settings)

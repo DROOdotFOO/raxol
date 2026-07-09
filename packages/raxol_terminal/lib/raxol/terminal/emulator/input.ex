@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.Emulator.Input do
   Provides functions for key event handling, command history, and input parsing.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Emulator.Struct, as: EmulatorStruct
 

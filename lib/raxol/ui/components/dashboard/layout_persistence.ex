@@ -3,8 +3,6 @@ defmodule Raxol.UI.Components.Dashboard.LayoutPersistence do
   Handles saving and loading dashboard widget layouts to disk.
   """
 
-  require Raxol.Core.Runtime.Log
-
   # User-specific config dir
   @layout_file Path.expand("~/.raxol/dashboard_layout.bin")
 

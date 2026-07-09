@@ -385,20 +385,17 @@ defmodule Raxol.Benchmark.Config do
   @spec apply_env_config(Keyword.t(), atom()) :: Keyword.t()
   defp apply_env_config(config, _type) do
     if System.get_env("CI") do
-      ci_overrides = Map.get(@env_overrides, "CI")
+      %{
+        time_multiplier: time_mult,
+        warmup_multiplier: warmup_mult,
+        parallel: parallel
+      } =
+        Map.fetch!(@env_overrides, "CI")
 
       config
-      |> Keyword.update(
-        :time,
-        config[:time],
-        &(&1 * ci_overrides.time_multiplier)
-      )
-      |> Keyword.update(
-        :warmup,
-        config[:warmup],
-        &(&1 * ci_overrides.warmup_multiplier)
-      )
-      |> Keyword.put(:parallel, ci_overrides.parallel)
+      |> Keyword.update(:time, config[:time], &(&1 * time_mult))
+      |> Keyword.update(:warmup, config[:warmup], &(&1 * warmup_mult))
+      |> Keyword.put(:parallel, parallel)
     else
       config
     end

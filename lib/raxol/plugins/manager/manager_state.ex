@@ -4,8 +4,6 @@ defmodule Raxol.Plugins.Manager.State do
   Provides functions for updating plugin state and managing plugin lifecycle states.
   """
 
-  require Raxol.Core.Runtime.Log
-
   alias Raxol.Plugins.Manager
 
   @doc """

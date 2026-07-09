@@ -71,13 +71,13 @@ defmodule Raxol.Core.Renderer.BufferTest do
       assert_raise ArgumentError,
                    "Cell coordinates must be a tuple of two integers",
                    fn ->
-                     Buffer.put_cell(buffer, "invalid", "a")
+                     apply(Buffer, :put_cell, [buffer, "invalid", "a"])
                    end
 
       assert_raise ArgumentError,
                    "Cell coordinates must be a tuple of two integers",
                    fn ->
-                     Buffer.put_cell(buffer, {1, 2, 3}, "a")
+                     apply(Buffer, :put_cell, [buffer, {1, 2, 3}, "a"])
                    end
     end
 

@@ -9,7 +9,6 @@ defmodule Raxol.Terminal.DriverMock do
   use GenServer
   # Removed undefined @behaviour Raxol.Terminal.Driver.Behaviour
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Core.Events.Event
 
   defmodule State do

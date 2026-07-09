@@ -4,8 +4,6 @@ defmodule Raxol.Core.Plugins.Core.NotificationPlugin do
   Relies on an implementation of Raxol.System.Interaction for OS interactions.
   """
 
-  require Raxol.Core.Runtime.Log
-
   @behaviour Raxol.Core.Runtime.Plugins.Plugin
 
   # Default implementation module

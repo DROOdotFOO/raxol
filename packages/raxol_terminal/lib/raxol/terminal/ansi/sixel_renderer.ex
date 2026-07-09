@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.ANSI.SixelRenderer do
   Handles rendering Sixel graphics data from a pixel buffer.
   """
 
-  require Raxol.Core.Runtime.Log
   import Bitwise
 
   @doc """

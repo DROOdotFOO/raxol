@@ -30,7 +30,6 @@ defmodule Raxol.Terminal.Input.MouseHandler do
       MouseHandler.handle_event(state, event)
   """
 
-  require Logger
   import Bitwise
 
   @type button ::

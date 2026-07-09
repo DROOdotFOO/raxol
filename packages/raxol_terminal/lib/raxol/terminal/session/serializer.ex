@@ -8,7 +8,6 @@ defmodule Raxol.Terminal.Session.Serializer do
 
   alias Raxol.Terminal.{Emulator, ScreenBuffer, Session}
   alias Raxol.Terminal.ScreenBuffer.Core, as: ConsolidatedBuffer
-  require Raxol.Core.Runtime.Log
 
   @default_width Raxol.Core.Defaults.terminal_width()
   @default_height Raxol.Core.Defaults.terminal_height()

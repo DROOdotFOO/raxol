@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.SearchManager do
   """
 
   alias Raxol.Terminal.SearchBuffer
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Gets the search buffer instance.

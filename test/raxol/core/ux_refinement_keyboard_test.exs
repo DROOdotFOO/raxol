@@ -1,7 +1,6 @@
 defmodule Raxol.Core.UXRefinementKeyboardTest do
   use ExUnit.Case, async: false
   import Mox
-    require Raxol.Core.Runtime.Log
 
   # Aliases for mocks will be used directly, e.g., Raxol.Mocks.AccessibilityMock
   # alias Raxol.Core.Accessibility, as: Accessibility # Removed

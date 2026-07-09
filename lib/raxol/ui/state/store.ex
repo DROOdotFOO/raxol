@@ -12,7 +12,6 @@ defmodule Raxol.UI.State.Store do
   """
 
   alias Raxol.UI.State.Management.StateManagementServer, as: Server
-  require Logger
 
   # Store state structure (for compatibility)
   defmodule State do

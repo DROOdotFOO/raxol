@@ -53,8 +53,6 @@ defmodule Raxol.Core do
     UserPreferences
   }
 
-  require Raxol.Core.Runtime.Log
-
   @type app_module :: module()
   @type app_options :: keyword()
   @type runtime_state :: map()

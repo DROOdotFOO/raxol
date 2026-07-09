@@ -7,8 +7,6 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   separate from the GenServer lifecycle.
   """
 
-  require Raxol.Core.Runtime.Log
-
   alias Raxol.Terminal.ScreenBuffer
 
   # --- Backend Dispatch ---

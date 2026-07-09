@@ -24,8 +24,6 @@ defmodule Raxol.Terminal.IOTerminal do
          :ok <- configure_terminal(),
          {:ok, size} <- get_terminal_size() do
       {:ok, %{size: size, initialized: true}}
-    else
-      error -> error
     end
   end
 

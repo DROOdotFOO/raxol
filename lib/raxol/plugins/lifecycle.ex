@@ -6,8 +6,6 @@ defmodule Raxol.Plugins.Lifecycle do
   dependencies and configuration persistence.
   """
 
-  require Raxol.Core.Runtime.Log
-
   alias Raxol.Plugins.{Manager, PluginConfig}
 
   alias Raxol.Plugins.Lifecycle.{

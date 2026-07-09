@@ -3,7 +3,6 @@ defmodule Raxol.Plugins.Visualization.ChartRenderer do
   Handles rendering logic for chart visualizations within the VisualizationPlugin.
   """
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Plugins.Visualization.DrawingUtils
   alias Raxol.Style
   alias Raxol.Terminal.Cell

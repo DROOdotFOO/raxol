@@ -7,7 +7,6 @@ defmodule Raxol.Terminal.ANSI.Sequences.Modes do
   """
 
   alias Raxol.Terminal.ModeManager
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Set or reset a screen mode.

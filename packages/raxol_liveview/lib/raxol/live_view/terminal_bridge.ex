@@ -290,8 +290,12 @@ defmodule Raxol.LiveView.TerminalBridge do
 
   defp generate_beam_css(hint, id) do
     case Map.get(hint, :effect, :stroke) do
-      :stroke -> generate_stroke_css(hint, id)
-      other -> warn_unsupported_effect(other) && ""
+      :stroke ->
+        generate_stroke_css(hint, id)
+
+      other ->
+        warn_unsupported_effect(other)
+        ""
     end
   end
 

@@ -3,8 +3,6 @@ defmodule Raxol.UI.Rendering.Layouter do
   Handles layout of UI components.
   """
 
-  require Raxol.Core.Runtime.Log
-
   @spec layout_tree(diff_result :: any(), new_tree_for_reference :: map() | nil) ::
           map() | any()
   def layout_tree(diff_result, new_tree_for_reference) do
@@ -258,8 +256,6 @@ defmodule Raxol.UI.Rendering.Layouter do
   end
 
   defp process_keyed_child_op(_unknown_op, acc), do: acc
-
-  defp path_to_access_path([]), do: []
 
   defp path_to_access_path(path_indices) when is_list(path_indices) do
     Enum.reduce(path_indices, [], fn idx, acc ->

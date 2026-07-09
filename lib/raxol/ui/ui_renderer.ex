@@ -213,39 +213,6 @@ defmodule Raxol.UI.Renderer do
     )
   end
 
-  defp render_visible_element(
-         %{type: :table, x: x, y: y, width: w, height: h} = table_element,
-         theme,
-         parent_style
-       ) do
-    _merged_style =
-      StyleProcessor.flatten_merged_style(parent_style, table_element, theme)
-
-    # Extract table data from the element or attrs
-    attrs = Map.get(table_element, :attrs, %{})
-    headers = Map.get(table_element, :headers) || Map.get(attrs, :_headers, [])
-    data = Map.get(table_element, :data) || Map.get(attrs, :_data, [])
-
-    column_widths =
-      Map.get(table_element, :column_widths) || Map.get(attrs, :_col_widths, [])
-
-    # Build attrs with table data and custom styles
-    merged_attrs =
-      ElementRenderer.build_table_attrs(
-        table_element,
-        headers,
-        data,
-        column_widths
-      )
-
-    cells = ElementRenderer.render_table(x, y, w, h, merged_attrs, theme)
-
-    CellManager.clip_cells_to_bounds(
-      cells,
-      Map.get(table_element, :clip_bounds)
-    )
-  end
-
   defp render_visible_element(%{type: :spacer}, _theme, _parent_style) do
     []
   end

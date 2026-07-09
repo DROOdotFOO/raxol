@@ -175,14 +175,6 @@ defmodule Raxol.UI.Components.Input.Button do
   end
 
   def handle_event(
-        %Raxol.Core.Events.Event{type: :click, data: _data},
-        button,
-        _context
-      ) do
-    handle_click_event(button)
-  end
-
-  def handle_event(
         %Raxol.Core.Events.Event{type: :focus, data: data},
         button,
         _context

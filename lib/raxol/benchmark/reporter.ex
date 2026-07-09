@@ -233,6 +233,7 @@ defmodule Raxol.Benchmark.Reporter do
       },
       summary: %{
         total_benchmarks: length(results),
+        total_suites: length(results),
         fastest_operations: [],
         slowest_operations: []
       },
@@ -411,7 +412,7 @@ defmodule Raxol.Benchmark.Reporter do
             <p>Total Duration: #{format_duration(report_data.metadata.total_duration)}</p>
         </div>
 
-        #{generate_html_summary(report_data)}
+        #{generate_html_summary(report_data.summary)}
         #{generate_html_charts(report_data)}
         #{generate_html_tables(report_data)}
 

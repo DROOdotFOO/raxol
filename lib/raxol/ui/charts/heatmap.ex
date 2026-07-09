@@ -30,8 +30,6 @@ defmodule Raxol.UI.Charts.Heatmap do
   def render(region, data, opts \\ [])
   def render(_region, [], _opts), do: []
 
-  def render({_x, _y, _w, _h}, data, _opts) when data == [], do: []
-
   def render({x, y, w, h}, data, opts) do
     all_values = List.flatten(data)
     render_nonempty({x, y, w, h}, data, all_values, opts)

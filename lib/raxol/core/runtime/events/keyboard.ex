@@ -8,7 +8,6 @@ defmodule Raxol.Core.Runtime.Events.Keyboard do
   * Converting keyboard events to application messages
   """
 
-  require Raxol.Core.Runtime.Log
   alias Raxol.Core.Events.Event
 
   @doc """

@@ -4,8 +4,6 @@ defmodule Raxol.Plugins.Manager.Events do
   Provides functions for processing various types of events through plugins.
   """
 
-  require Raxol.Core.Runtime.Log
-
   alias Raxol.Plugins.EventHandler
   alias Raxol.Plugins.Manager
 

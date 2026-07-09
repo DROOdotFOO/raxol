@@ -232,12 +232,12 @@ defmodule Raxol.Core.Renderer.ColorTest do
 
   describe "detect_background/0" do
     test "returns a valid background color" do
-      background = Color.detect_background()
+      background = apply(Color, :detect_background, [])
       assert is_tuple(background) or is_atom(background)
     end
 
     test "returns a valid RGB tuple or ANSI color" do
-      background = Color.detect_background()
+      background = apply(Color, :detect_background, [])
 
       if is_tuple(background) do
         {r, g, b} = background

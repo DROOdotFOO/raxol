@@ -132,7 +132,7 @@ defmodule Raxol.Terminal.Input.InputProcessor do
     end
   end
 
-  def parse_key_event(input), do: parse_unknown_input(input)
+  def parse_key_event(_input), do: get_unknown_error(false)
 
   defp function_key?(input) do
     input in ["\e[A", "\e[B", "\e[C", "\e[D"]

@@ -1,5 +1,3 @@
-require Raxol.Core.Renderer.View
-
 defmodule Raxol.UI.Components.Modal do
   @moduledoc """
   A modal component for displaying overlay dialogs like alerts, prompts, confirmations, and forms.
@@ -33,7 +31,6 @@ defmodule Raxol.UI.Components.Modal do
   # Use standard component behaviour
   use Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
-  require Raxol.Core.Runtime.Log
 
   # Require view macros and components
   # require Raxol.View.Elements  # Removed

@@ -11,7 +11,6 @@ defmodule Raxol.Core.Runtime.Supervisor do
   """
 
   use Supervisor
-  require Raxol.Core.Runtime.Log
 
   def start_link(init_arg) do
     Raxol.Core.Runtime.Log.info(

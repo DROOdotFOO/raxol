@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.Buffer.Scroller do
   Handles scrolling operations for the terminal buffer.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.ScreenBuffer
 

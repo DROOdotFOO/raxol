@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.Emulator.EmulatorState do
   Provides functions for managing terminal state, modes, and character sets.
   """
 
-  require Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Emulator.Struct, as: EmulatorStruct
 

@@ -55,8 +55,8 @@ env:
   SKIP_TERMBOX2_TESTS: true
   TMPDIR: /tmp
   MIX_ENV: test
-  ELIXIR_VERSION: "1.19.0"
-  OTP_VERSION: "28.2"
+  ELIXIR_VERSION: "1.20.2"
+  OTP_VERSION: "29.0.3"
 
 jobs:
   # Performance regression testing
@@ -72,8 +72,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        elixir: ["1.19.0"]
-        otp: ["28.2"]
+        elixir: ["1.20.2"]
+        otp: ["29.0.3"]
 
     steps:
     - name: Checkout code
@@ -168,7 +168,9 @@ jobs:
         # -f: the benchmark build re-resolves transitive deps and dirties
         # mix.lock; force past it (untracked benchmark outputs are unaffected).
         git checkout -f "$BASELINE_REF"
-        mix deps.get && mix compile --warnings-as-errors
+        # Baseline is only compiled to run benchmarks against; it may predate
+        # warning fixes on this branch, so do not gate it on warnings.
+        mix deps.get && mix compile
 
         echo "[BENCH] Running baseline performance benchmarks..."
         if [ -f "bench/suites/parser/parser_benchmark.exs" ]; then
@@ -241,8 +243,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        elixir: ["1.19.0"]
-        otp: ["28.2"]
+        elixir: ["1.20.2"]
+        otp: ["29.0.3"]
         scenario:
           - terminal_operations
           - plugin_system
@@ -349,7 +351,9 @@ jobs:
         # -f: the benchmark build re-resolves transitive deps and dirties
         # mix.lock; force past it (untracked benchmark outputs are unaffected).
         git checkout -f "$BASELINE_REF"
-        mix deps.get && mix compile --warnings-as-errors
+        # Baseline is only compiled to run benchmarks against; it may predate
+        # warning fixes on this branch, so do not gate it on warnings.
+        mix deps.get && mix compile
 
         echo "Running baseline memory benchmarks for scenario: ${{ matrix.scenario }}"
 

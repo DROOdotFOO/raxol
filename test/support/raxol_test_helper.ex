@@ -10,7 +10,6 @@ defmodule Raxol.Test.TestHelper do
   """
 
   use ExUnit.CaseTemplate
-  require Raxol.Core.Runtime.Log
 
   @doc """
   Sets up a test environment with all necessary dependencies.

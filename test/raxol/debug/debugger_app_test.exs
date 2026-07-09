@@ -165,7 +165,7 @@ defmodule Raxol.Debug.DebuggerAppTest do
       model = DebuggerApp.init(nil)
       subs = DebuggerApp.subscribe(model)
       assert is_list(subs)
-      assert subs != []
+      assert [_ | _] = subs
     end
   end
 

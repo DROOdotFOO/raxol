@@ -14,7 +14,6 @@ defmodule Raxol.Core.Renderer.Views.Table do
   @behaviour Raxol.UI.Components.Base.Component
 
   alias Raxol.Core.Renderer.View
-  require Raxol.Core.Runtime.Log
   require Raxol.Core.Renderer.View
 
   defstruct type: :table,
@@ -326,7 +325,7 @@ defmodule Raxol.Core.Renderer.Views.Table do
   end
 
   defp update_struct_map(table, fun) do
-    struct_keys = Map.keys(table.__struct__)
+    struct_keys = Map.keys(Map.from_struct(table))
 
     case fun.(Map.from_struct(table)) do
       {current, updated} ->

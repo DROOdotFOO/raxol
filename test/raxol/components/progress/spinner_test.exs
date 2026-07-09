@@ -1,7 +1,6 @@
 defmodule Raxol.UI.Components.Progress.SpinnerTest do
   use ExUnit.Case
 
-  alias Raxol.Core.Events.Event
   alias Raxol.UI.Components.Progress.Spinner
 
   describe "init/1" do

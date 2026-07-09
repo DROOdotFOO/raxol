@@ -9,7 +9,6 @@ defmodule Raxol.Terminal.ModeState do
   - Providing mode state queries
   """
 
-  require Raxol.Core.Runtime.Log
 
   # DEC Private Mode codes and their corresponding mode atoms
   @dec_private_modes %{

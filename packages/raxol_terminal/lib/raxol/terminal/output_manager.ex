@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.OutputManager do
   """
 
   alias Raxol.Terminal.OutputBuffer
-  require Raxol.Core.Runtime.Log
 
   @control_char_map %{
     "\x00" => "^@",

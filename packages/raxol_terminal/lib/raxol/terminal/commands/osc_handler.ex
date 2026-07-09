@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
   """
 
   alias Raxol.Terminal.{Clipboard, Colors}
-  require Raxol.Core.Runtime.Log
 
   # Alias for backward compatibility
   def handle_osc_sequence(emulator, command, data) do
@@ -114,7 +113,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     """
 
     alias Raxol.Terminal.Clipboard
-    require Raxol.Core.Runtime.Log
 
     def handle_9(emulator, data) do
       case data do
@@ -190,7 +188,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     """
 
     alias Raxol.Terminal.Colors
-    require Raxol.Core.Runtime.Log
 
     def handle_10(emulator, data) do
       case data do
@@ -358,7 +355,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     Handles color palette OSC commands.
     """
 
-    require Raxol.Core.Runtime.Log
 
     def handle_4(emulator, data) do
       case parse_palette_command(data) do
@@ -478,7 +474,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     Handles window-related OSC commands.
     """
 
-    require Raxol.Core.Runtime.Log
 
     def handle_0(emulator, data) do
       # Set icon name and window title
@@ -546,7 +541,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     Handles selection-related OSC commands.
     """
 
-    require Raxol.Core.Runtime.Log
 
     def handle_51(emulator, data) do
       case data do

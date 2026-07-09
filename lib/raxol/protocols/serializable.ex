@@ -43,7 +43,7 @@ defprotocol Raxol.Protocols.Serializable do
   A string or binary containing the serialized data, or `{:error, reason}`.
   """
   @spec serialize(t, format()) :: binary() | {:error, term()}
-  def serialize(data, format \\ :json)
+  def serialize(data, format)
 
   @doc """
   Checks if the data can be serialized to the given format.

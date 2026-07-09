@@ -47,7 +47,6 @@ defmodule Mix.Tasks.Raxol.Bench do
   """
 
   use Mix.Task
-  require Logger
 
   @shortdoc "Run enhanced performance benchmarks"
 

@@ -65,15 +65,7 @@ defmodule Raxol.UI.Components.Terminal.EmulatorTest do
         MatchError -> false
       end
 
-    if !match_success do
-    end
-
     assert match_success, "Expected a 2-tuple, but got: #{inspect(result)}"
-
-    # Also check tuple size if it is a tuple
-    if is_tuple(result) do
-    else
-    end
   end
 
   test ~c"initializes terminal emulator", %{initial_state: initial_state} do

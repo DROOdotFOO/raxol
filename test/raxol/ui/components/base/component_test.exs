@@ -81,11 +81,6 @@ defmodule Raxol.UI.Components.Base.ComponentTest do
     end
 
     @impl true
-    def handle_event(%Raxol.Core.Events.Event{type: :mounted}, state, _context) do
-      {state, [{:command, :mounted}]}
-    end
-
-    @impl true
     def handle_event(_event, state, _context) do
       {state, []}
     end
@@ -287,7 +282,7 @@ defmodule Raxol.UI.Components.Base.ComponentTest do
 
         def new(props \\ %{}), do: props
         def init(props), do: props
-        def render(state, _context), do: %{type: :minimal}
+        def render(_state, _context), do: %{type: :minimal}
         def handle_event(_event, state), do: {state, []}
       end
 
