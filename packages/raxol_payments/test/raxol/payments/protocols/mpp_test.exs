@@ -56,12 +56,64 @@ defmodule Raxol.Payments.Protocols.MPPTest do
     test "returns error for missing header" do
       assert {:error, {:missing_header, "www-authenticate"}} = MPP.parse_challenge([])
     end
+
+    test "accepts an integer atomic amount" do
+      assert {:ok, %{amount: 100}} = MPP.parse_challenge(challenge_headers(%{"amount" => 100}))
+    end
+
+    test "rejects a float amount as malformed atomic units" do
+      assert {:error, {:invalid_amount, 1.5}} =
+               MPP.parse_challenge(challenge_headers(%{"amount" => 1.5}))
+    end
+
+    test "rejects a decimal-string amount as malformed atomic units" do
+      assert {:error, {:invalid_amount, "1.50"}} =
+               MPP.parse_challenge(challenge_headers(%{"amount" => "1.50"}))
+    end
+
+    test "rejects a zero amount" do
+      assert {:error, {:invalid_amount, 0}} =
+               MPP.parse_challenge(challenge_headers(%{"amount" => 0}))
+    end
   end
 
   describe "amount/1" do
-    test "returns Decimal from string amount" do
-      challenge = %{amount: "0.05"}
-      assert Decimal.equal?(MPP.amount(challenge), Decimal.new("0.05"))
+    test "returns a Decimal for an all-digit atomic amount" do
+      assert Decimal.equal?(MPP.amount(%{amount: "100"}), Decimal.new("100"))
+    end
+
+    test "returns a Decimal for an integer atomic amount" do
+      assert Decimal.equal?(MPP.amount(%{amount: 100}), Decimal.new(100))
+    end
+  end
+
+  describe "gate cap and signed amount stay the same unit" do
+    defmodule StubWallet do
+      def address, do: "0x1111111111111111111111111111111111111111"
+      def sign_message(_message), do: {:ok, <<0::256>>}
+    end
+
+    test "amount/1 and the signed credential both carry the challenge's atomic amount" do
+      # The SpendingPolicy cap reads amount/1; the on-the-wire credential carries
+      # build_payment's amount. Both derive from challenge.amount verbatim, so
+      # they can never diverge into different units.
+      challenge = %{
+        amount: 100,
+        currency: "USDC",
+        recipient: "0xabcdef1234567890abcdef1234567890abcdef12",
+        methods: ["tempo"],
+        network: "tempo:mainnet",
+        nonce: "abc123"
+      }
+
+      assert Decimal.equal?(MPP.amount(challenge), Decimal.new(100))
+
+      assert {:ok, [{"authorization", "Payment " <> encoded}]} =
+               MPP.build_payment(challenge, StubWallet)
+
+      {:ok, json} = Base.decode64(encoded)
+      {:ok, credential} = Jason.decode(json)
+      assert credential["amount"] == 100
     end
   end
 
@@ -88,5 +140,22 @@ defmodule Raxol.Payments.Protocols.MPPTest do
     test "returns error for missing header" do
       assert {:error, :no_receipt} = MPP.parse_receipt([])
     end
+  end
+
+  # Build a `www-authenticate: Payment <base64>` header from a base challenge
+  # merged with `overrides`, so a test can vary a single field (e.g. amount).
+  defp challenge_headers(overrides) do
+    payload =
+      %{
+        "amount" => 100,
+        "currency" => "USDC",
+        "recipient" => "0xabcdef1234567890abcdef1234567890abcdef12",
+        "network" => "tempo:mainnet",
+        "nonce" => "abc123"
+      }
+      |> Map.merge(overrides)
+      |> Jason.encode!()
+
+    [{"www-authenticate", "Payment " <> Base.encode64(payload)}]
   end
 end
