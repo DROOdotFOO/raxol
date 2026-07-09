@@ -12,7 +12,6 @@ defmodule Raxol.Animation.Adaptation do
   alias Raxol.Animation.Lifecycle
   alias Raxol.Animation.StateManager, as: StateManager
 
-
   @doc """
   Re-adapt existing animations if settings have changed.
 

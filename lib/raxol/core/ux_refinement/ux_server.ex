@@ -9,7 +9,6 @@ defmodule Raxol.Core.UXRefinement.UxServer do
   alias Raxol.Core.Runtime.Log
   use Raxol.Core.Behaviours.BaseManager
 
-
   defstruct [
     :features,
     :hints,

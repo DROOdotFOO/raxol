@@ -4,7 +4,6 @@ defmodule Raxol.Plugins.Visualization.TreemapRenderer do
   Uses a squarified layout algorithm.
   """
 
-
   alias Raxol.Plugins.Visualization.DrawingUtils
   alias Raxol.Style
   alias Raxol.Terminal.Cell

@@ -3,7 +3,6 @@ defmodule Raxol.UI.Rendering.Painter do
   Handles painting of UI components to the terminal.
   """
 
-
   @doc """
   Paints the render tree into draw commands or buffer updates.
   Currently a stub; in the future, this will convert the render tree into draw commands,

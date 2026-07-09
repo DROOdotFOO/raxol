@@ -84,7 +84,6 @@ defmodule Raxol.Core.Runtime.Application do
   @type subscription :: term()
   @type element :: Raxol.Core.Renderer.Element.t()
 
-
   @doc """
   Initializes the application state.
 

@@ -3,7 +3,6 @@ defmodule Raxol.UI.Components.Modal.State do
   State management and form validation for the Modal component.
   """
 
-
   @doc "Handles form submission with validation."
   @spec handle_form_submission(Raxol.UI.Components.Modal.t(), any()) ::
           {Raxol.UI.Components.Modal.t(), list()}

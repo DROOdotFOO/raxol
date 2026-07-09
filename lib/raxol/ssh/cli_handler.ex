@@ -2,7 +2,6 @@ defmodule Raxol.SSH.CLIHandler do
   @moduledoc false
   @behaviour :ssh_server_channel
 
-
   defstruct [
     :app_module,
     :server,

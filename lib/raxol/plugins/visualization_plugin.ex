@@ -10,7 +10,6 @@ defmodule Raxol.Plugins.VisualizationPlugin do
   alias Raxol.Plugins.Visualization.ChartRenderer
   alias Raxol.Plugins.Visualization.ImageRenderer
 
-
   defstruct name: "visualization",
             version: "0.1.0",
             description: "Renders chart and treemap visualizations.",

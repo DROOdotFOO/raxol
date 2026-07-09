@@ -4,7 +4,6 @@ defmodule Raxol.Animation.Accessibility do
   specifically adapting animations for reduced motion preferences.
   """
 
-
   @doc """
   Adapts an animation definition based on reduced motion settings.
 

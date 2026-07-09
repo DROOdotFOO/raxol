@@ -14,7 +14,6 @@ defmodule Raxol.Performance.Memoization.MemoizationServer do
 
   use Raxol.Core.Behaviours.BaseManager
 
-
   @cleanup_interval_ms Raxol.Core.Defaults.cleanup_interval_ms()
 
   # Client API

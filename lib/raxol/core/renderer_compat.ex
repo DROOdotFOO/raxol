@@ -205,5 +205,4 @@ defmodule Raxol.Core.Renderer do
         content
     end
   end
-
 end

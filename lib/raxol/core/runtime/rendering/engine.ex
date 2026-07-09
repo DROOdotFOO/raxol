@@ -704,5 +704,4 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     GenServer.cast(dispatcher_pid, {:update_plugin_manager, updated_manager})
     :ok
   end
-
 end

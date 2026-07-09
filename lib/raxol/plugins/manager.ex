@@ -4,7 +4,6 @@ defmodule Raxol.Plugins.Manager do
   Handles plugin lifecycle, registration, and state management.
   """
 
-
   alias Raxol.Plugins.{
     Plugin,
     PluginConfig

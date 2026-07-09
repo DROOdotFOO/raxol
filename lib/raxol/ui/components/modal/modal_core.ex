@@ -3,7 +3,6 @@ defmodule Raxol.UI.Components.Modal.Core do
   Core state management and initialization for the Modal component.
   """
 
-
   @doc "Initializes the Modal component state from props."
   @spec init(map()) :: {:ok, Raxol.UI.Components.Modal.t()}
   def init(props) do

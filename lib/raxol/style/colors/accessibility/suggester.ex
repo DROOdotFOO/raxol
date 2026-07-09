@@ -5,7 +5,6 @@ defmodule Raxol.Style.Colors.Accessibility.Suggester do
   Extracted from Raxol.Style.Colors.Accessibility.
   """
 
-
   alias Raxol.Style.Colors.Accessibility
   alias Raxol.Style.Colors.Color
   alias Raxol.Style.Colors.Utilities

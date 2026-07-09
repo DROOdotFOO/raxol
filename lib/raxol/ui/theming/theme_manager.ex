@@ -6,7 +6,6 @@ defmodule Raxol.UI.Theming.ThemeManager do
 
   use Raxol.Core.Behaviours.BaseManager
 
-
   defstruct [
     :current_theme,
     :available_themes,

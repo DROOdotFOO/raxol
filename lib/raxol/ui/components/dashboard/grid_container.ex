@@ -5,7 +5,6 @@ defmodule Raxol.UI.Components.Dashboard.GridContainer do
   based on a grid layout definition (columns, rows, gaps).
   """
 
-
   # Default grid dimensions and gap
   @default_cols 12
   @default_rows 12

@@ -22,7 +22,6 @@
 defmodule CounterExample do
   use Raxol.Core.Runtime.Application
 
-
   @impl true
   def init(_context) do
     %{count: 0}

@@ -113,5 +113,4 @@ defmodule Raxol.Core.Metrics do
     end)
     |> Map.delete(nil)
   end
-
 end

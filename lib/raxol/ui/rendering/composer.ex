@@ -3,7 +3,6 @@ defmodule Raxol.UI.Rendering.Composer do
   Handles composition of UI rendering trees.
   """
 
-
   @doc """
   Composes a render tree or command list from the layout tree.
   Currently a stub; in the future, this will build a render tree or command list,
@@ -44,7 +43,6 @@ defmodule Raxol.UI.Rendering.Composer do
 
     %{composed_type: :primitive, value: current_layout_node}
   end
-
 
   defp can_reuse_previous_node?(current_layout_node, previous_composed_node) do
     is_map(current_layout_node[:layout_attrs]) &&

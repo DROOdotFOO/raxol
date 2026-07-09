@@ -3,7 +3,6 @@ defmodule Raxol.Plugins.EventHandler.MouseEvents do
   Handles mouse-related events for plugins.
   """
 
-
   alias Raxol.Plugins.EventHandler.Common
   alias Raxol.Plugins.Manager
 

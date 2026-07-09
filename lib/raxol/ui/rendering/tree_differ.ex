@@ -7,7 +7,6 @@ defmodule Raxol.UI.Rendering.TreeDiffer do
 
   # All Kernel functions are now available
 
-
   @doc """
   Computes the minimal set of changes (diff) between two UI trees.
 

@@ -3,7 +3,6 @@ defmodule Raxol.Plugins.EventHandler.OutputEvents do
   Handles output-related events for plugins.
   """
 
-
   alias Raxol.Plugins.EventHandler.Common
   alias Raxol.Plugins.Manager
 

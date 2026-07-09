@@ -6,7 +6,6 @@ defmodule Raxol.Plugins.Lifecycle do
   dependencies and configuration persistence.
   """
 
-
   alias Raxol.Plugins.{Manager, PluginConfig}
 
   alias Raxol.Plugins.Lifecycle.{

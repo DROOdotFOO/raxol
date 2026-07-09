@@ -1,4 +1,3 @@
-
 defmodule Raxol.UI.Components.Modal do
   @moduledoc """
   A modal component for displaying overlay dialogs like alerts, prompts, confirmations, and forms.

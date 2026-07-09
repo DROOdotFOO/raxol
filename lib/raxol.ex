@@ -58,7 +58,6 @@ defmodule Raxol do
 
   alias Raxol.Core.Runtime.Application
 
-
   @doc """
   Runs a Raxol application.
 

@@ -53,7 +53,6 @@ defmodule Raxol.Core do
     UserPreferences
   }
 
-
   @type app_module :: module()
   @type app_options :: keyword()
   @type runtime_state :: map()

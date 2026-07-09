@@ -9,7 +9,6 @@ defmodule Raxol.SSH.Session do
 
   use GenServer
 
-
   alias Raxol.Core.Runtime.Backpressure
   alias Raxol.SSH.IOAdapter
 

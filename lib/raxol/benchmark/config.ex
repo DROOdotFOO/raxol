@@ -385,7 +385,11 @@ defmodule Raxol.Benchmark.Config do
   @spec apply_env_config(Keyword.t(), atom()) :: Keyword.t()
   defp apply_env_config(config, _type) do
     if System.get_env("CI") do
-      %{time_multiplier: time_mult, warmup_multiplier: warmup_mult, parallel: parallel} =
+      %{
+        time_multiplier: time_mult,
+        warmup_multiplier: warmup_mult,
+        parallel: parallel
+      } =
         Map.fetch!(@env_overrides, "CI")
 
       config

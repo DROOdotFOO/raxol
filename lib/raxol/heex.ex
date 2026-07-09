@@ -31,7 +31,6 @@ defmodule Raxol.HEEx do
       end
   """
 
-
   defmacro __using__(_opts) do
     if Code.ensure_loaded?(Phoenix.Component) do
       quote do

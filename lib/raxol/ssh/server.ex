@@ -36,7 +36,6 @@ defmodule Raxol.SSH.Server do
 
   use GenServer
 
-
   defstruct [
     :daemon_ref,
     :app_module,

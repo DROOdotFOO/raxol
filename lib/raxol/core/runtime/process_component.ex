@@ -20,7 +20,6 @@ defmodule Raxol.Core.Runtime.ProcessComponent do
 
   use GenServer
 
-
   defstruct [:module, :state, :props, :parent_pid, :id]
 
   def start_link(opts) do

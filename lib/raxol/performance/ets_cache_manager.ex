@@ -14,7 +14,6 @@ defmodule Raxol.Performance.ETSCacheManager do
 
   use Raxol.Core.Behaviours.BaseManager
 
-
   alias Raxol.Performance.ETS.{CacheHelper, TableHelper}
 
   @csi_parser_cache :raxol_csi_parser_cache

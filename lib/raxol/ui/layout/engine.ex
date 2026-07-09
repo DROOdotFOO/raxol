@@ -8,7 +8,6 @@ defmodule Raxol.UI.Layout.Engine do
   * Managing the layout pipeline
   """
 
-
   alias Raxol.UI.Layout.{
     Containers,
     CSSGrid,

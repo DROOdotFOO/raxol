@@ -8,7 +8,6 @@ defmodule Raxol.Plugins.Visualization.ImageRenderer do
   # warnings so the compile stays clean when it is absent.
   @compile {:no_warn_undefined, Mogrify}
 
-
   alias Raxol.Plugins.Visualization.DrawingUtils
   alias Raxol.Terminal.ANSI.KittyGraphics
   alias Raxol.Terminal.Cell

@@ -4,7 +4,6 @@ defmodule Raxol.Plugins.Manager.Cells do
   Provides functions for processing and transforming cells through plugins.
   """
 
-
   alias Raxol.Plugins.CellProcessor
   alias Raxol.Plugins.Manager
 

@@ -19,7 +19,6 @@ defmodule Raxol.Style.Colors.System do
   * Event-driven theme changes
   """
 
-
   alias Raxol.Style.Colors.{Color, Utilities}
   alias Raxol.Style.Colors.System.ColorSystemServer, as: Server
   alias Raxol.UI.Theming.Theme
