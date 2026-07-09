@@ -7,7 +7,6 @@ defmodule Raxol.Plugins.PluginSystemTest do
   """
 
   alias Raxol.Plugins.EventHandler
-  alias Raxol.Plugins.EventHandler.InputEvents
   alias Raxol.Plugins.EventHandler.MouseEvents
   alias Raxol.Plugins.EventHandler.OutputEvents
   alias Raxol.Plugins.HyperlinkPlugin
@@ -281,7 +280,7 @@ defmodule Raxol.Plugins.PluginSystemTest do
              )
 
       {:ok, updated_plugin} =
-        HyperlinkPlugin.handle_output(updated_plugin, "Hello, World!")
+        HyperlinkPlugin.handle_output(_updated_plugin, "Hello, World!")
     end
 
     test "Hyperlink Plugin processes output via PluginManager" do

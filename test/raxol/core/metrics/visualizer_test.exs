@@ -25,7 +25,7 @@ defmodule Raxol.Core.Metrics.VisualizerTest do
         }
       ]
 
-      assert {:ok, chart_id, chart_data} = Visualizer.create_chart(metrics)
+      assert {:ok, _chart_id, chart_data} = Visualizer.create_chart(metrics)
       assert chart_data.type == "line"
       assert length(chart_data.data.datasets) == 1
 

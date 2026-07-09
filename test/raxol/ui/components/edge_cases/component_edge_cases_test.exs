@@ -1,4 +1,3 @@
-import EventMacroHelpers
 
 defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
   use ExUnit.Case, async: false

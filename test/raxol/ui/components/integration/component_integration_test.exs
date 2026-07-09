@@ -4,7 +4,6 @@ defmodule Raxol.UI.Components.Integration.ComponentIntegrationTest do
   alias Raxol.Core.Runtime.ComponentManager, as: ComponentManager
   alias Raxol.Test.Unit
   use Raxol.Test.Integration
-  import Raxol.Test.Integration.Assertions
   import Raxol.Test.TestUtils
 
   setup do

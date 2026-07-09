@@ -142,7 +142,7 @@ defmodule ScreenBufferTest do
       line1 = for _ <- 0..9, do: Cell.new("1")
       line2 = for _ <- 0..9, do: Cell.new("2")
 
-      scrollback = buffer.scrollback || []
+      scrollback = buffer.scrollback
       buffer = %{buffer | scrollback: [line1 | scrollback]}
       buffer = %{buffer | scrollback: [line2 | buffer.scrollback]}
 

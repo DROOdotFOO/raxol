@@ -9,7 +9,6 @@ defmodule Raxol.Core.Runtime.ApplicationTest do
   # Test implementation of Application behavior
   defmodule TestApp do
     use Raxol.Core.Runtime.Application
-    require Raxol.View.Elements
 
     @impl Raxol.Core.Runtime.Application
     def init(_context), do: %{count: 0, initialized: true}

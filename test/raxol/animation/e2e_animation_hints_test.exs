@@ -10,7 +10,6 @@ defmodule Raxol.Animation.E2EAnimationHintsTest do
   """
   use ExUnit.Case, async: false
 
-  require Logger
 
   alias Raxol.Animation.{Framework, Helpers, Hint}
   alias Raxol.Core.UserPreferences
