@@ -38,7 +38,6 @@ defmodule Raxol.UI.Components.Integration.ComponentIntegrationTest do
       )
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def init(props) do
       {:ok,
        Map.merge(
@@ -61,27 +60,21 @@ defmodule Raxol.UI.Components.Integration.ComponentIntegrationTest do
        )}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def mount(state) do
       {Map.put(state, :mounted, true), []}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def update({:child_updated, child_id, new_state}, state) do
       new_state = put_in(state.child_states[child_id], new_state)
       {new_state, []}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def update({:state_update, new_state}, _old_state), do: {new_state, []}
-    @impl Raxol.UI.Components.Base.Component
     def update(_msg, state), do: {state, []}
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(%Raxol.Core.Events.Event{data: data}, state),
       do: handle_event(data, state)
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(
           %{type: :child_event, child_id: child_id, value: value},
           state
@@ -117,16 +110,13 @@ defmodule Raxol.UI.Components.Integration.ComponentIntegrationTest do
       {updated_state, [command: {:broadcast_to_children, :increment}]}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(%{type: :error_event}, state) do
       # Handle error event gracefully
       {state, []}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(event, state, _context), do: handle_event(event, state)
 
-    @impl Raxol.UI.Components.Base.Component
     def render(state, _context) do
       {state, %{type: :parent, children: state.children}}
     end
@@ -156,7 +146,6 @@ defmodule Raxol.UI.Components.Integration.ComponentIntegrationTest do
       )
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def init(props) do
       {:ok,
        Map.merge(
@@ -178,44 +167,35 @@ defmodule Raxol.UI.Components.Integration.ComponentIntegrationTest do
        )}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def mount(state) do
       {Map.put(state, :mounted, true), []}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def update({:state_update, new_state}, _old_state), do: {new_state, []}
-    @impl Raxol.UI.Components.Base.Component
     def update(_msg, state), do: {state, []}
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(%Raxol.Core.Events.Event{data: data}, state),
       do: handle_event(data, state)
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(%{type: :click}, state) do
       # Increment value and notify parent
       updated_state = Map.update!(state, :value, &(&1 + 1))
       {updated_state, [command: {:notify_parent, updated_state}]}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(%{type: :increment}, state) do
       # Handle increment from parent broadcast
       updated_state = Map.update!(state, :value, &(&1 + 1))
       {updated_state, []}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(%{type: :error_event}, state) do
       # Handle error event gracefully
       {state, []}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(event, state, _context), do: handle_event(event, state)
 
-    @impl Raxol.UI.Components.Base.Component
     def render(state, _context) do
       {state, %{type: :child, value: state.value}}
     end
@@ -284,7 +264,7 @@ defmodule Raxol.UI.Components.Integration.ComponentIntegrationTest do
       # Set up components
       parent = create_test_component(ParentComponent)
 
-      child =
+      _child =
         create_test_component(ChildComponent, %{parent_id: parent.state.id})
 
       # Set up hierarchy with mounting in ComponentManager
@@ -397,7 +377,7 @@ defmodule Raxol.UI.Components.Integration.ComponentIntegrationTest do
         )
 
       # Simulate child event
-      {updated_child, _} =
+      {_updated_child, _} =
         Raxol.Test.Integration.simulate_event_with_manager_update(child, %{
           type: :click
         })
@@ -449,7 +429,7 @@ defmodule Raxol.UI.Components.Integration.ComponentIntegrationTest do
       # Set up components
       parent = create_test_component(ParentComponent)
 
-      child =
+      _child =
         create_test_component(ChildComponent, %{parent_id: parent.state.id})
 
       # Set up hierarchy with mounting in ComponentManager

@@ -51,7 +51,7 @@ defmodule Raxol.Core.Metrics.VisualizerTest do
         color: "#FF0000"
       }
 
-      assert {:ok, chart_id, chart_data} =
+      assert {:ok, _chart_id, chart_data} =
                Visualizer.create_chart(metrics, options)
 
       assert chart_data.type == "bar"
@@ -77,7 +77,7 @@ defmodule Raxol.Core.Metrics.VisualizerTest do
         title: "Gauge Chart"
       }
 
-      assert {:ok, chart_id, chart_data} =
+      assert {:ok, _chart_id, chart_data} =
                Visualizer.create_chart(metrics, options)
 
       assert chart_data.type == "gauge"
@@ -105,7 +105,7 @@ defmodule Raxol.Core.Metrics.VisualizerTest do
         title: "Histogram Chart"
       }
 
-      assert {:ok, chart_id, chart_data} =
+      assert {:ok, _chart_id, chart_data} =
                Visualizer.create_chart(metrics, options)
 
       assert chart_data.type == "bar"
@@ -231,7 +231,7 @@ defmodule Raxol.Core.Metrics.VisualizerTest do
            DateTime.from_unix!(now_ms, :millisecond)}
       }
 
-      assert {:ok, chart_id, chart_data} =
+      assert {:ok, _chart_id, chart_data} =
                Visualizer.create_chart(metrics, options)
 
       values = chart_data.data.datasets |> List.first() |> Map.get(:data)
