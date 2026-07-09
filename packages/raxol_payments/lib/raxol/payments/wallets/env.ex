@@ -81,7 +81,7 @@ defmodule Raxol.Payments.Wallets.Env do
   @spec address(String.t()) :: String.t()
   def address(env_var) do
     with {:ok, secret} <- load_key(env_var),
-         {:ok, pubkey} <- ExSecp256k1.create_public_key(Secret.reveal(secret)) do
+         {:ok, pubkey} <- Secret.with_revealed(secret, &ExSecp256k1.create_public_key/1) do
       derive_address(pubkey)
     else
       {:error, reason} -> raise "Failed to derive address: #{inspect(reason)}"
@@ -93,14 +93,7 @@ defmodule Raxol.Payments.Wallets.Env do
   def sign_message(message, env_var) do
     with {:ok, secret} <- load_key(env_var) do
       hash = ExKeccak.hash_256(message)
-
-      case ExSecp256k1.sign(hash, Secret.reveal(secret)) do
-        {:ok, signature} ->
-          {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
-
-        {:error, reason} ->
-          {:error, {:sign_failed, reason}}
-      end
+      Secret.with_revealed(secret, &sign_digest(&1, hash))
     end
   end
 
@@ -110,13 +103,7 @@ defmodule Raxol.Payments.Wallets.Env do
   def sign_typed_data(domain, types, message, env_var) do
     with {:ok, secret} <- load_key(env_var),
          {:ok, hash} <- Raxol.Payments.EIP712.hash(domain, types, message) do
-      case ExSecp256k1.sign(hash, Secret.reveal(secret)) do
-        {:ok, signature} ->
-          {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
-
-        {:error, reason} ->
-          {:error, {:sign_failed, reason}}
-      end
+      Secret.with_revealed(secret, &sign_digest(&1, hash))
     end
   end
 
@@ -124,17 +111,21 @@ defmodule Raxol.Payments.Wallets.Env do
   @spec sign_hash(<<_::256>>, String.t()) :: {:ok, binary()} | {:error, term()}
   def sign_hash(<<digest::binary-size(32)>>, env_var) do
     with {:ok, secret} <- load_key(env_var) do
-      case ExSecp256k1.sign(digest, Secret.reveal(secret)) do
-        {:ok, signature} ->
-          {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
-
-        {:error, reason} ->
-          {:error, {:sign_failed, reason}}
-      end
+      Secret.with_revealed(secret, &sign_digest(&1, digest))
     end
   end
 
   # -- Private --
+
+  # Sign a 32-byte digest with the revealed key. Always called inside
+  # `Secret.with_revealed/2`, so a raising signing NIF cannot carry the key into
+  # a crash report.
+  defp sign_digest(key, digest) do
+    case ExSecp256k1.sign(digest, key) do
+      {:ok, signature} -> {:ok, Raxol.Payments.EIP712.pack_signature(signature)}
+      {:error, reason} -> {:error, {:sign_failed, reason}}
+    end
+  end
 
   # The key is wrapped in `Secret` the moment it is decoded and revealed only at
   # the signing NIF call. Even though this wallet is stateless (it re-reads the

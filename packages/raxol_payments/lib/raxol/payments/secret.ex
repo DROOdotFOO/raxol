@@ -33,6 +33,28 @@ defmodule Raxol.Payments.Secret do
   @spec reveal(t()) :: binary()
   def reveal(%__MODULE__{bytes: bytes}), do: bytes
 
+  @doc """
+  Reveal the wrapped bytes only for `fun`, converting any exception raised inside
+  it into `{:error, :secret_operation_crashed}`.
+
+  The reveal-and-use sites pass the raw key as an argument to a signing NIF. If
+  that NIF raises (e.g. `badarg` on a malformed key), the raw bytes would appear
+  as a call argument in the crash stacktrace and OTP crash report. Running the
+  call under this guard turns such a raise into a fixed error atom before it can
+  reach a log, so the key never leaves this function. Normal `{:ok, _}` /
+  `{:error, _}` returns from `fun` pass through unchanged.
+  """
+  @spec with_revealed(t(), (binary() -> result)) ::
+          result | {:error, :secret_operation_crashed}
+        when result: term()
+  def with_revealed(%__MODULE__{bytes: bytes}, fun) when is_function(fun, 1) do
+    fun.(bytes)
+  rescue
+    _exception -> {:error, :secret_operation_crashed}
+  catch
+    _kind, _reason -> {:error, :secret_operation_crashed}
+  end
+
   defimpl Inspect do
     def inspect(_secret, _opts), do: "#Raxol.Payments.Secret<redacted>"
   end

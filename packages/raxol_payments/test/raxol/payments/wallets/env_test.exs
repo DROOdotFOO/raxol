@@ -141,4 +141,20 @@ defmodule Raxol.Payments.Wallets.EnvTest do
       assert via_hash == via_message
     end
   end
+
+  describe "signing failure containment" do
+    # A 32-byte all-zero key is a valid length but an invalid secp256k1 scalar.
+    # The signing NIF rejects it -- whether it returns an error or raises, the
+    # `Secret.with_revealed` guard must surface a clean error tuple, never crash
+    # the caller or carry the key bytes into a report.
+    @zero_key "0x" <> String.duplicate("0", 64)
+    @some_digest String.duplicate(<<0xAB>>, 32)
+
+    test "an invalid-scalar key yields an error, not a crash or a leak" do
+      System.put_env(@test_env_var, @zero_key)
+
+      assert {:error, reason} = Env.sign_hash(@some_digest, @test_env_var)
+      refute inspect(reason) =~ String.duplicate("0", 64)
+    end
+  end
 end
