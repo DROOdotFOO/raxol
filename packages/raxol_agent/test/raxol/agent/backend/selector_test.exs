@@ -25,6 +25,30 @@ defmodule Raxol.Agent.Backend.SelectorTest do
       assert opts[:base_url] == "https://api.llm7.io"
     end
 
+    test "resolves openrouter to the HTTP backend with attribution headers" do
+      cfg = ExecutorConfig.new(harness: :openrouter)
+      assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)
+      assert opts[:provider] == :openai
+      # Base URL stops at "/api"; build_request appends "/v1/chat/completions".
+      assert opts[:base_url] == "https://openrouter.ai/api"
+
+      headers = opts[:extra_headers]
+      assert {"HTTP-Referer", "https://raxol.io"} in headers
+      assert {"X-OpenRouter-Title", "Raxol"} in headers
+      assert {"X-OpenRouter-Categories", "cli-agent,personal-agent"} in headers
+    end
+
+    test "config opts override the baked openrouter attribution headers" do
+      cfg =
+        ExecutorConfig.new(
+          harness: :openrouter,
+          opts: [extra_headers: [{"HTTP-Referer", "https://example.test"}]]
+        )
+
+      assert {:ok, _, opts} = Selector.select(cfg)
+      assert opts[:extra_headers] == [{"HTTP-Referer", "https://example.test"}]
+    end
+
     test "resolves lumo and mock to their dedicated backends" do
       assert {:ok, Raxol.Agent.Backend.Lumo, _} =
                Selector.select(ExecutorConfig.new(harness: :lumo))

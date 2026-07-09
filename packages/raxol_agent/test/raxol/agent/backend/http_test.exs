@@ -119,4 +119,52 @@ defmodule Raxol.Agent.Backend.HTTPTest do
       assert headers["x-custom"] == ["test-value"]
     end
   end
+
+  describe "extra_headers option" do
+    test "attaches caller-supplied attribution headers to the request" do
+      test_pid = self()
+
+      plugin = fn req ->
+        send(test_pid, {:headers, req.headers})
+        req
+      end
+
+      HTTP.complete(
+        [%{role: :user, content: "hello"}],
+        provider: :openai,
+        api_key: "test",
+        base_url: "http://127.0.0.1:19876",
+        extra_headers: [{"HTTP-Referer", "https://raxol.io"}],
+        req_plugins: [plugin],
+        timeout: 100
+      )
+
+      assert_received {:headers, headers}
+      # Req lowercases header field names on the wire (HTTP-compliant).
+      assert headers["http-referer"] == ["https://raxol.io"]
+    end
+
+    test "appends exactly one /v1/chat/completions to a base URL ending in /api" do
+      # Guards the OpenRouter base_url gotcha: build_request must not double the
+      # /v1 when the base already ends in /api (openrouter.ai/api -> .../api/v1/...).
+      test_pid = self()
+
+      plugin = fn req ->
+        send(test_pid, {:url, URI.to_string(req.url)})
+        req
+      end
+
+      HTTP.complete(
+        [%{role: :user, content: "hello"}],
+        provider: :openai,
+        api_key: "test",
+        base_url: "http://127.0.0.1:19876/api",
+        req_plugins: [plugin],
+        timeout: 100
+      )
+
+      assert_received {:url, url}
+      assert url == "http://127.0.0.1:19876/api/v1/chat/completions"
+    end
+  end
 end

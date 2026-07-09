@@ -32,6 +32,7 @@ defmodule Raxol.Agent.ExecutorConfig do
           | :kimi
           | :ollama
           | :llm7
+          | :openrouter
           | :lumo
           | :mock
           | :claude_native

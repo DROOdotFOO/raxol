@@ -312,10 +312,12 @@ defmodule Raxol.Agent.Backend.HTTP do
 
     url = "#{base_url}/v1/chat/completions"
 
-    headers = [
-      {"authorization", "Bearer #{api_key}"},
-      {"content-type", "application/json"}
-    ]
+    headers =
+      [
+        {"authorization", "Bearer #{api_key}"},
+        {"content-type", "application/json"}
+      ]
+      |> append_extra_headers(opts)
 
     body = %{
       model: model,
@@ -335,10 +337,12 @@ defmodule Raxol.Agent.Backend.HTTP do
 
     url = "#{base_url}/v1/chat/completions"
 
-    headers = [
-      {"authorization", "Bearer #{api_key}"},
-      {"content-type", "application/json"}
-    ]
+    headers =
+      [
+        {"authorization", "Bearer #{api_key}"},
+        {"content-type", "application/json"}
+      ]
+      |> append_extra_headers(opts)
 
     body = %{
       model: model,
@@ -532,6 +536,12 @@ defmodule Raxol.Agent.Backend.HTTP do
     else
       {:error, :req_not_available}
     end
+  end
+
+  # Caller- or harness-supplied headers (e.g. OpenRouter attribution:
+  # HTTP-Referer, X-OpenRouter-Title) appended to the provider's base headers.
+  defp append_extra_headers(headers, opts) do
+    headers ++ Keyword.get(opts, :extra_headers, [])
   end
 
   defp apply_plugins(req, []), do: req
