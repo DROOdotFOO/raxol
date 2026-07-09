@@ -96,10 +96,32 @@ defmodule Raxol.ACP.JobSession.Provider do
   Invokes `handle_deliver/2`. On `{:deliver, deliverable}` it writes
   `submit(job, keccak256(deliverable))` on-chain and mirrors the session to
   `:submitted`. On `{:error, reason}` it makes no change and returns the error.
-  Requires the session to already be `:funded`.
+
+  Idempotent by the session status: `handle_deliver/2` runs only from `:funded`.
+  On an already-`:submitted` session it is a no-op returning
+  `{:ok, %{status: :submitted, idempotent: true}}` (no second handler call or
+  on-chain write); from any other status it returns
+  `{:error, {:cannot_deliver, status}}` without invoking the handler.
   """
-  @spec deliver(t(), map()) :: ok(:submitted) | {:error, term()}
+  @spec deliver(t(), map()) ::
+          ok(:submitted)
+          | {:ok, %{status: :submitted, idempotent: true}}
+          | {:error, term()}
   def deliver(%__MODULE__{} = p, request) do
+    # Guard the side-effecting handler on the current status. `handle_deliver`
+    # produces the deliverable (its work runs BEFORE the on-chain commit), so a
+    # re-drive -- a redelivered payment event, or a retry after the commit landed
+    # but the mirror did not -- must not run it twice. Once the session reflects
+    # `:submitted` (via this driver's mirror or the SSE reconciliation of the
+    # on-chain event), a re-`deliver` is an idempotent no-op.
+    case safe_status(p.session) do
+      :funded -> do_deliver(p, request)
+      :submitted -> {:ok, %{status: :submitted, idempotent: true}}
+      other -> {:error, {:cannot_deliver, other}}
+    end
+  end
+
+  defp do_deliver(p, request) do
     case HandlerSeam.invoke(p.handler, :deliver, request, ctx(p)) do
       {:deliver, deliverable} ->
         with {:ok, tx} <-
@@ -173,6 +195,16 @@ defmodule Raxol.ACP.JobSession.Provider do
   # v1 `Job.Server` ctx shape so offering handlers are unchanged.
   defp ctx(p) do
     %{job_id: p.job_id, buyer: p.buyer, seller: p.seller, state: JobSession.status(p.session)}
+  end
+
+  # Read the session status without crashing on a terminal session, which stops
+  # its process once it reaches `:completed`/`:rejected`/`:expired`. A gone
+  # session is treated as an unknown status, so `deliver` refuses rather than
+  # racing a finished job.
+  defp safe_status(session) do
+    JobSession.status(session)
+  catch
+    :exit, _ -> :gone
   end
 
   # 32-byte commitment to the deliverable payload: keccak256 of its canonical

@@ -149,6 +149,28 @@ defmodule Raxol.ACP.JobSession.ProviderTest do
       assert {:error, :rpc_down} = Provider.deliver(p, %{req: 1})
       assert JobSession.status(session) == :funded
     end
+
+    test "on an already-submitted session it is an idempotent no-op" do
+      # A redelivered payment event, or a retry after the on-chain submit landed
+      # but the mirror did not, must not re-run handle_deliver or re-submit.
+      adapter = ProviderAdapter.Mock.new()
+      session = start_session(:submitted)
+      p = provider(session, AcceptHandler, adapter)
+
+      assert {:ok, %{status: :submitted, idempotent: true}} = Provider.deliver(p, %{req: 1})
+      assert ProviderAdapter.Mock.sent_calls(adapter) == []
+      assert JobSession.status(session) == :submitted
+    end
+
+    test "refuses to deliver before the job is funded, without invoking the handler" do
+      adapter = ProviderAdapter.Mock.new()
+      session = start_session(:budget_set)
+      p = provider(session, AcceptHandler, adapter)
+
+      assert {:error, {:cannot_deliver, :budget_set}} = Provider.deliver(p, %{req: 1})
+      assert ProviderAdapter.Mock.sent_calls(adapter) == []
+      assert JobSession.status(session) == :budget_set
+    end
   end
 
   describe "evaluate/2" do
