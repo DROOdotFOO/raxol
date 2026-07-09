@@ -27,7 +27,6 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
       init(props)
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def init(props) do
       Map.merge(
         %{
@@ -42,7 +41,6 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
       )
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def mount(state) do
       {state, []}
     end
@@ -61,7 +59,6 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
       {new_state, []}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def render(state, _context) do
       {state,
        %{
@@ -94,12 +91,10 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
       {state, []}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(event, state, _context) do
       handle_event(event, state)
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def unmount(state) do
       state
     end
@@ -121,7 +116,6 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
       init(props)
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def init(props) do
       Map.merge(
         %{
@@ -136,7 +130,6 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
       )
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def mount(state) do
       {state, []}
     end
@@ -151,7 +144,6 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
       {new_state, []}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def render(state, _context) do
       if Map.get(state, :error_count, 0) > 2 do
         raise "Simulated render error"
@@ -191,12 +183,10 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
       {state, []}
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(event, state, _context) do
       handle_event(event, state)
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def unmount(state) do
       state
     end
@@ -210,25 +200,18 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
       init(props)
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def init(props), do: props
 
-    @impl Raxol.UI.Components.Base.Component
     def mount(_state) do
       raise "Simulated mount error"
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def update(_msg, state), do: {state, []}
 
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(_event, state, _context), do: {state, []}
 
-    @impl Raxol.UI.Components.Base.Component
     def render(state, _context), do: {state, %{type: :invalid_mount}}
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(_event, state), do: {state, []}
-    @impl Raxol.UI.Components.Base.Component
     def unmount(state), do: state
   end
 
@@ -240,18 +223,12 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
       init(props)
     end
 
-    @impl Raxol.UI.Components.Base.Component
     def init(props), do: props
-    @impl Raxol.UI.Components.Base.Component
     def mount(state), do: {state, []}
-    @impl Raxol.UI.Components.Base.Component
     def update(_msg, state), do: {state, []}
-    @impl Raxol.UI.Components.Base.Component
     def render(state, _context), do: {state, %{type: :invalid_unmount}}
-    @impl Raxol.UI.Components.Base.Component
     def handle_event(_event, state, _context), do: {state, []}
 
-    @impl Raxol.UI.Components.Base.Component
     def unmount(_state) do
       raise "Simulated unmount error"
     end
