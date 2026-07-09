@@ -441,7 +441,7 @@ defmodule Raxol.Plugins.PluginSystemTest do
     end
 
     test "highlights search terms" do
-      {:ok, plugin} = SearchPlugin.init()
+      {:ok, _plugin} = SearchPlugin.init()
 
       highlighted = SearchPlugin.highlight_search_term("Hello, World!", "World")
       assert highlighted == "Hello, \e[43mWorld\e[0m!"
