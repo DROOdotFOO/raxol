@@ -66,6 +66,37 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
       refute Map.has_key?(json, "trust_score")
     end
 
+    test "includes recipient_address when set" do
+      req = %QuoteRequest{
+        wallet: "0xabc",
+        from_chain_id: 8453,
+        to_chain_id: 728_126_428,
+        from_token: "0xA0b8",
+        to_token: "0x8335",
+        from_amount: "1000000",
+        settlement_preference: "public",
+        recipient_address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+      }
+
+      json = QuoteRequest.to_json(req)
+      assert json["recipient_address"] == "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    end
+
+    test "omits recipient_address when nil (Xochi defaults it to the wallet)" do
+      req = %QuoteRequest{
+        wallet: "0xabc",
+        from_chain_id: 1,
+        to_chain_id: 8453,
+        from_token: "0xA0b8",
+        to_token: "0x8335",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      json = QuoteRequest.to_json(req)
+      refute Map.has_key?(json, "recipient_address")
+    end
+
     test "includes attestations when non-empty" do
       attestation = %{
         type_code: 0x01,
@@ -163,6 +194,39 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
       }
 
       assert :ok = QuoteRequest.validate(req)
+    end
+
+    test "accepts a non-EVM (base58) recipient_address -- Riddler validates the format" do
+      # A cross-VM route (EVM origin, Tron destination) sends a base58 recipient.
+      # raxol must not apply its EVM 0x-hex check to it; Riddler validates the
+      # format against to_chain_id.
+      req = %QuoteRequest{
+        wallet: @valid_addr,
+        from_chain_id: 8453,
+        to_chain_id: 728_126_428,
+        from_token: @valid_addr,
+        to_token: @valid_addr,
+        from_amount: "1000000",
+        settlement_preference: "public",
+        recipient_address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+      }
+
+      assert :ok = QuoteRequest.validate(req)
+    end
+
+    test "empty recipient_address returns error" do
+      req = %QuoteRequest{
+        wallet: @valid_addr,
+        from_chain_id: 1,
+        to_chain_id: 8453,
+        from_token: @valid_addr,
+        to_token: @valid_addr,
+        from_amount: "1000000",
+        settlement_preference: "public",
+        recipient_address: ""
+      }
+
+      assert {:error, {:invalid_recipient_address, _}} = QuoteRequest.validate(req)
     end
 
     test "invalid wallet address returns error" do

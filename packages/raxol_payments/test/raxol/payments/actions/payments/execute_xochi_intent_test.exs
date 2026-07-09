@@ -217,6 +217,103 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntentTest do
     end
   end
 
+  describe "ExecuteXochiIntent recipient_address" do
+    test "sends recipient_address on the quote request for a public transfer" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/intent/quote" ->
+            {:ok, raw, conn} = Plug.Conn.read_body(conn)
+            send(self(), {:quote_body, Jason.decode!(raw)})
+
+            Req.Test.json(conn, %{
+              "intentId" => "int_1",
+              "quoteId" => "q_1",
+              "canSolve" => true,
+              "toAmount" => "499000",
+              "xochiFee" => "1000",
+              "eip712Data" => %{
+                "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+                "types" => %{"Intent" => [%{"name" => "amount", "type" => "uint256"}]},
+                "message" => %{"amount" => 500_000}
+              }
+            })
+
+          "/api/intent/execute" ->
+            Req.Test.json(conn, %{
+              "success" => true,
+              "intentId" => "int_1",
+              "status" => "executing"
+            })
+        end
+      end)
+
+      ledger = start_supervised!({Ledger, [name: nil]})
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1"
+      }
+
+      recipient = "0x2222222222222222222222222222222222222222"
+
+      params =
+        base_params(%{
+          settlement: "public",
+          recipient_meta_address: nil,
+          recipient_address: recipient
+        })
+
+      assert {:ok, _result} = ExecuteXochiIntent.run(params, ctx)
+
+      assert_received {:quote_body, body}
+      assert body["recipient_address"] == recipient
+      assert body["settlement_preference"] == "public"
+    end
+
+    test "two public transfers differing only by recipient are distinct payments" do
+      # A payment to recipient B must never resume recipient A's checkpoint --
+      # otherwise B's funds would follow A's already-signed intent. The recipient
+      # is part of the derived idempotency key, so each signs independently.
+      stub_quote_and_execute()
+      ledger = start_supervised!({Ledger, [name: nil]})
+      store = Checkpoint.ETS.new()
+
+      ctx = %{
+        wallet: SpyWallet,
+        xochi_config: config(),
+        ledger: ledger,
+        policy: policy(),
+        agent_id: "a1",
+        checkpoint: store
+      }
+
+      pub = fn recipient ->
+        base_params(%{
+          settlement: "public",
+          recipient_meta_address: nil,
+          recipient_address: recipient
+        })
+      end
+
+      assert {:ok, _} =
+               ExecuteXochiIntent.run(pub.("0x2222222222222222222222222222222222222222"), ctx)
+
+      assert_received :wallet_signed
+
+      assert {:ok, _} =
+               ExecuteXochiIntent.run(pub.("0x3333333333333333333333333333333333333333"), ctx)
+
+      # Signed a SECOND time -- recipient B was not resumed as recipient A's payment.
+      assert_received :wallet_signed
+
+      totals = Ledger.get_totals(ledger, "a1", policy())
+      assert Decimal.equal?(totals.lifetime, Decimal.new("1.00"))
+    end
+  end
+
   describe "ExecuteXochiIntent quote-expired retry" do
     test "re-quotes and re-executes once when the first execute reports expiry" do
       Req.Test.stub(__MODULE__, fn conn ->
