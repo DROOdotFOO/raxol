@@ -13,11 +13,14 @@ defmodule Raxol.Core.Runtime.Plugins.FileWatcher do
       %{config: config}
     )
 
-    watch_config = %{
-      watch_directories: Map.get(config, :watch_directories, ["plugins/"]),
-      debounce_ms: Map.get(config, :debounce_ms, 1000),
-      file_patterns: Map.get(config, :file_patterns, ["*.ex"])
-    }
+    # Merge the watch settings into the incoming config so callers keep their
+    # own fields (e.g. plugin_dirs/plugins_dir) rather than having them dropped.
+    watch_config =
+      Map.merge(config, %{
+        watch_directories: Map.get(config, :watch_directories, ["plugins/"]),
+        debounce_ms: Map.get(config, :debounce_ms, 1000),
+        file_patterns: Map.get(config, :file_patterns, ["*.ex"])
+      })
 
     {:ok, watch_config}
   end
