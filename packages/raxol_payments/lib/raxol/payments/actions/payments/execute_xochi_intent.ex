@@ -79,6 +79,11 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
           type: :string,
           description: "Recipient ERC-6538 stealth meta-address (st:eth:0x...)"
         ],
+        recipient_address: [
+          type: :string,
+          description:
+            "Destination recipient for a plaintext (public) transfer. Required for a cross-VM route (e.g. an EVM wallet paying a Tron base58 address); omit for same-VM, where Xochi defaults it to the sending wallet."
+        ],
         slippage_bps: [type: :integer, default: 50, description: "Max slippage (default 50)"],
         trust_score: [type: :integer, description: "Trust score for tier/fee"],
         min_to_amount: [
@@ -243,6 +248,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
           request.from_token,
           request.to_token,
           request.from_amount,
+          # The recipient is part of the payment's identity: a transfer to
+          # recipient A must never be treated as a resume of one to recipient B.
+          request.recipient_address,
           request.settlement_preference,
           request.stealth_spending_pub_key,
           request.stealth_viewing_pub_key
@@ -368,6 +376,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
         from_token: from_token,
         to_token: Map.fetch!(params, :to_token),
         from_amount: from_amount,
+        recipient_address: Map.get(params, :recipient_address),
         settlement_preference: settlement,
         slippage_bps: Map.get(params, :slippage_bps) || 50,
         trust_score: Map.get(params, :trust_score),

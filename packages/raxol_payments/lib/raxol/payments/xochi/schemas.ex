@@ -40,6 +40,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :from_token,
       :to_token,
       :from_amount,
+      :recipient_address,
       :trust_score,
       :stealth_spending_pub_key,
       :stealth_viewing_pub_key,
@@ -59,6 +60,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
             from_token: String.t(),
             to_token: String.t(),
             from_amount: String.t(),
+            recipient_address: String.t() | nil,
             settlement_preference: settlement(),
             deadline: integer() | nil,
             slippage_bps: non_neg_integer(),
@@ -97,10 +99,22 @@ defmodule Raxol.Payments.Xochi.Schemas do
            {:stealth_keys_required,
             "stealth settlement requires compressed spending and viewing public keys"}}
 
+        not recipient_address_valid?(req.recipient_address) ->
+          {:error, {:invalid_recipient_address, "must be a non-empty string when set"}}
+
         true ->
           :ok
       end
     end
+
+    # `recipient_address` is optional: nil lets Riddler default it to `wallet`
+    # (same-VM). When set (required for a cross-VM route, e.g. an EVM wallet
+    # paying a Tron address), it must be a non-empty string. The chain-specific
+    # format (EVM `0x`-hex vs TVM/SVM base58) is validated by Riddler against
+    # `to_chain_id`, which owns the chain->VM mapping.
+    defp recipient_address_valid?(nil), do: true
+    defp recipient_address_valid?(addr) when is_binary(addr), do: addr != ""
+    defp recipient_address_valid?(_), do: false
 
     defp stealth_keys_present?(%__MODULE__{
            stealth_spending_pub_key: spend,
@@ -130,6 +144,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
       }
 
       base
+      |> Raxol.Payments.Xochi.Schemas.put_non_nil("recipient_address", req.recipient_address)
       |> Raxol.Payments.Xochi.Schemas.put_non_nil("trust_score", req.trust_score)
       |> Raxol.Payments.Xochi.Schemas.put_non_nil(
         "stealth_spending_pub_key",
