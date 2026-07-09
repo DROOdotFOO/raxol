@@ -264,4 +264,64 @@ defmodule Raxol.Payments.LedgerTest do
       assert Decimal.equal?(totals.lifetime, Decimal.new("0"))
     end
   end
+
+  describe "intent-keyed reservation release" do
+    setup %{ledger: ledger} do
+      policy = %SpendingPolicy{
+        per_request_max: Decimal.new("10.00"),
+        session_max: Decimal.new("100.00"),
+        lifetime_max: Decimal.new("1000.00"),
+        session_window_ms: 3_600_000
+      }
+
+      # Reserve a spend the way the SpendGate does, then tag it with the intent id
+      # the execute dispatched (as ExecuteXochiIntent does on success).
+      :ok = Ledger.try_spend(ledger, "agent_1", Decimal.new("1.00"), policy, %{})
+      :ok = Ledger.tag_reservation(ledger, "agent_1", "intent_1", Decimal.new("1.00"))
+      %{policy: policy}
+    end
+
+    test "release_by_intent reverses the reservation exactly once", ctx do
+      %{ledger: ledger, policy: policy} = ctx
+
+      assert Decimal.equal?(Ledger.get_totals(ledger, "agent_1", policy).lifetime, "1.00")
+
+      assert :released = Ledger.release_by_intent(ledger, "agent_1", "intent_1")
+      assert Decimal.equal?(Ledger.get_totals(ledger, "agent_1", policy).lifetime, "0")
+
+      # A re-poll of an already-refunded intent must not release again -- that
+      # would under-count spend and hand back real headroom.
+      assert :noop = Ledger.release_by_intent(ledger, "agent_1", "intent_1")
+      assert Decimal.equal?(Ledger.get_totals(ledger, "agent_1", policy).lifetime, "0")
+    end
+
+    test "release_by_intent is a no-op for an untagged intent", %{ledger: ledger} do
+      assert :noop = Ledger.release_by_intent(ledger, "agent_1", "never_tagged")
+    end
+
+    test "forget_reservation drops the tag so no release can follow", ctx do
+      %{ledger: ledger, policy: policy} = ctx
+
+      :ok = Ledger.forget_reservation(ledger, "agent_1", "intent_1")
+      # Cast ordering: a following call is serialized behind it.
+      assert :noop = Ledger.release_by_intent(ledger, "agent_1", "intent_1")
+      # The spend stands -- forget does not refund.
+      assert Decimal.equal?(Ledger.get_totals(ledger, "agent_1", policy).lifetime, "1.00")
+    end
+
+    test "a freeze does not block releasing a refund", ctx do
+      %{ledger: ledger, policy: policy} = ctx
+
+      :ok = Ledger.freeze(ledger)
+      assert :released = Ledger.release_by_intent(ledger, "agent_1", "intent_1")
+      assert Decimal.equal?(Ledger.get_totals(ledger, "agent_1", policy).lifetime, "0")
+    end
+
+    test "a non-positive or empty tag is ignored", %{ledger: ledger} do
+      :ok = Ledger.tag_reservation(ledger, "agent_1", "zero", Decimal.new("0"))
+      :ok = Ledger.tag_reservation(ledger, "agent_1", "", Decimal.new("1.00"))
+      assert :noop = Ledger.release_by_intent(ledger, "agent_1", "zero")
+      assert :noop = Ledger.release_by_intent(ledger, "agent_1", "")
+    end
+  end
 end

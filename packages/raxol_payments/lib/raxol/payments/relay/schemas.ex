@@ -207,12 +207,16 @@ defmodule Raxol.Payments.Relay.Schemas do
       :actual_to_amount,
       :actual_fees,
       :error,
+      # Solver-supplied reason for a refunded transfer; present only on the
+      # terminal `:refunded` status.
+      :refund_reason,
       :created_at,
       :updated_at,
       terminal: false
     ]
 
-    @type status :: :pending | :executing | :confirming | :completed | :failed | :unknown
+    @type status ::
+            :pending | :executing | :confirming | :completed | :failed | :refunded | :unknown
 
     @type t :: %__MODULE__{
             transfer_id: String.t(),
@@ -223,12 +227,13 @@ defmodule Raxol.Payments.Relay.Schemas do
             actual_to_amount: String.t() | nil,
             actual_fees: map() | nil,
             error: String.t() | nil,
+            refund_reason: String.t() | nil,
             created_at: String.t() | nil,
             updated_at: String.t() | nil,
             terminal: boolean()
           }
 
-    @terminal_statuses [:completed, :failed]
+    @terminal_statuses [:completed, :failed, :refunded]
 
     @spec from_json(map()) :: t()
     def from_json(json) do
@@ -243,6 +248,7 @@ defmodule Raxol.Payments.Relay.Schemas do
         actual_to_amount: json["actual_to_amount"],
         actual_fees: json["actual_fees"],
         error: json["error"],
+        refund_reason: json["refund_reason"] || json["refundReason"],
         created_at: json["created_at"],
         updated_at: json["updated_at"],
         terminal: status in @terminal_statuses
@@ -257,6 +263,7 @@ defmodule Raxol.Payments.Relay.Schemas do
     defp parse_status("confirming"), do: :confirming
     defp parse_status("completed"), do: :completed
     defp parse_status("failed"), do: :failed
+    defp parse_status("refunded"), do: :refunded
     defp parse_status(_), do: :unknown
   end
 

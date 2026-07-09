@@ -143,6 +143,9 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteRelayTransfer do
          {:ok, status} <- execute(config, quote, signature, context, amount),
          {:ok, deposit_tx} <- maybe_broadcast(quote, request, signature, context, amount) do
       summary = summary(quote, status, warnings, signature, deposit_tx)
+      # Dispatched: bind the reserved amount to the transfer id so a later refund
+      # (observed by PollRelayStatus) releases exactly this reservation.
+      SpendGate.tag_reservation(context, quote.transfer_id, amount)
       Checkpoint.put(store, key, settled_record(summary))
       {:ok, summary}
     else

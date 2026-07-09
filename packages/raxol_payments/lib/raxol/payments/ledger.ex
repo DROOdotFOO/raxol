@@ -101,6 +101,51 @@ defmodule Raxol.Payments.Ledger do
   end
 
   @doc """
+  Tag a settled reservation with the on-chain intent (or transfer) it funded.
+
+  Recorded once execution dispatches, when both the reserved amount and the
+  intent id are known (the reservation itself is made earlier, before the id
+  exists). It lets a later terminal outcome release exactly that amount by intent
+  id via `release_by_intent/3`, without the caller re-threading the amount. A
+  no-op tag (nil id or non-positive amount) is ignored.
+  """
+  @spec tag_reservation(GenServer.server(), term(), String.t(), Decimal.t()) :: :ok
+  def tag_reservation(server, agent_id, intent_id, amount) do
+    GenServer.cast(server, {:tag_reservation, agent_id, intent_id, amount})
+  end
+
+  @doc """
+  Idempotently release the reservation tagged for `intent_id`.
+
+  Inserts a single compensating `-amount` entry the FIRST time it is called for a
+  tagged intent, then drops the tag; any later call for the same intent id is a
+  no-op. This is what makes a refund safe to observe more than once (e.g. a
+  re-poll of an already-refunded intent) without double-releasing budget, which
+  would under-count spend and hand back real headroom.
+
+  Returns `:released` when it reversed the reservation, `:noop` when there was no
+  live tag (already released, forgotten, or never tagged). A freeze does not block
+  a release -- refunding budget on returned funds is not a spend.
+  """
+  @spec release_by_intent(GenServer.server(), term(), String.t()) :: :released | :noop
+  def release_by_intent(server, agent_id, intent_id) do
+    GenServer.call(server, {:release_by_intent, agent_id, intent_id})
+  end
+
+  @doc """
+  Drop the reservation tag for `intent_id` WITHOUT releasing budget.
+
+  Used when an intent reaches a terminal status whose funds are kept on the books
+  (completed, or a failure whose origin pull may already have moved funds): the
+  spend stands, and only the tag is cleared so the reservation map stays bounded
+  to in-flight intents.
+  """
+  @spec forget_reservation(GenServer.server(), term(), String.t()) :: :ok
+  def forget_reservation(server, agent_id, intent_id) do
+    GenServer.cast(server, {:forget_reservation, agent_id, intent_id})
+  end
+
+  @doc """
   Get spend history for an agent.
   """
   @spec get_history(GenServer.server(), term(), keyword()) :: [entry()]
@@ -210,7 +255,7 @@ defmodule Raxol.Payments.Ledger do
         read_concurrency: true
       ])
 
-    {:ok, %{table: table, subscribers: %{}, frozen?: false}}
+    {:ok, %{table: table, subscribers: %{}, frozen?: false, reservations: %{}}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -227,6 +272,30 @@ defmodule Raxol.Payments.Ledger do
     :ets.insert(state.table, {agent_id, entry})
     notify_subscribers(state.subscribers, entry)
     {:noreply, state}
+  end
+
+  # Tag only a positive, finite amount against a real intent id. A tag is a bare
+  # {agent_id, intent_id} => amount record in state, not a ledger entry, so it
+  # never affects spend totals; only `release_by_intent` turns it into a
+  # compensating entry.
+  def handle_manager_cast(
+        {:tag_reservation, agent_id, intent_id, %Decimal{coef: coef} = amount},
+        state
+      )
+      when is_binary(intent_id) and intent_id != "" and is_integer(coef) do
+    if Decimal.compare(amount, 0) == :gt do
+      reservations = Map.put(state.reservations, {agent_id, intent_id}, amount)
+      {:noreply, %{state | reservations: reservations}}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_manager_cast({:tag_reservation, _agent_id, _intent_id, _amount}, state),
+    do: {:noreply, state}
+
+  def handle_manager_cast({:forget_reservation, agent_id, intent_id}, state) do
+    {:noreply, %{state | reservations: Map.delete(state.reservations, {agent_id, intent_id})}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -266,6 +335,37 @@ defmodule Raxol.Payments.Ledger do
         )
 
         {:reply, over, state}
+    end
+  end
+
+  # Idempotent by the presence of the tag: the first call reverses the reserved
+  # amount and drops the tag; a second call finds no tag and is a no-op. Not gated
+  # on the freeze flag -- releasing budget on returned funds is not a spend.
+  def handle_manager_call({:release_by_intent, agent_id, intent_id}, _from, state) do
+    key = {agent_id, intent_id}
+
+    case Map.fetch(state.reservations, key) do
+      {:ok, amount} ->
+        entry =
+          build_entry(agent_id, Decimal.negate(amount), %{
+            type: :release,
+            intent_id: intent_id,
+            reason: :refunded
+          })
+
+        :ets.insert(state.table, {agent_id, entry})
+        notify_subscribers(state.subscribers, entry)
+
+        :telemetry.execute(
+          [:raxol, :payments, :refund_reconciled],
+          %{amount: amount},
+          %{agent_id: agent_id, intent_id: intent_id}
+        )
+
+        {:reply, :released, %{state | reservations: Map.delete(state.reservations, key)}}
+
+      :error ->
+        {:reply, :noop, state}
     end
   end
 

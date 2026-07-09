@@ -111,10 +111,26 @@ defmodule Raxol.Payments.Relay.SchemasTest do
             {"executing", false},
             {"confirming", false},
             {"completed", true},
-            {"failed", true}
+            {"failed", true},
+            {"refunded", true}
           ] do
         status = StatusResponse.from_json(%{"transfer_id" => "t", "status" => s})
         assert StatusResponse.terminal?(status) == terminal
+      end
+    end
+
+    test "parses the refunded status and its reason (camelCase and snake_case)" do
+      for key <- ["refundReason", "refund_reason"] do
+        status =
+          StatusResponse.from_json(%{
+            "transfer_id" => "t",
+            "status" => "refunded",
+            key => "reverted on Tron"
+          })
+
+        assert status.status == :refunded
+        assert status.refund_reason == "reverted on Tron"
+        assert StatusResponse.terminal?(status)
       end
     end
 

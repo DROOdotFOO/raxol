@@ -45,9 +45,18 @@ defmodule Raxol.Payments.FailureTest do
       assert f.retryable?
     end
 
-    test "refunded maps to :refunded" do
+    test "refunded maps to :refunded and is not retryable" do
       f = Failure.from({:settlement, :refunded, nil})
       assert f.reason == :refunded
+      refute f.retryable?
+      assert to_string(f) == "The transfer failed and the funds were refunded."
+    end
+
+    test "refunded carries the solver reason into the message and detail" do
+      f = Failure.from({:settlement, :refunded, "solver timeout"})
+      assert f.reason == :refunded
+      assert f.detail == "solver timeout"
+      assert to_string(f) == "The transfer failed and the funds were refunded (solver timeout)."
     end
   end
 

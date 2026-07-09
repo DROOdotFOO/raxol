@@ -455,11 +455,30 @@ defmodule Raxol.Payments.Xochi.SchemasTest do
     end
 
     test "detects terminal statuses" do
-      for s <- ["completed", "failed", "expired"] do
+      for s <- ["completed", "failed", "expired", "refunded"] do
         json = %{"intentId" => "i", "status" => s}
         status = IntentStatus.from_json(json)
         assert IntentStatus.terminal?(status), "expected #{s} to be terminal"
       end
+    end
+
+    test "parses the refunded status and its reason (camelCase and snake_case)" do
+      for key <- ["refundReason", "refund_reason"] do
+        json = %{"intent_id" => "int_r", "status" => "refunded", key => "solver timeout"}
+        status = IntentStatus.from_json(json)
+        assert status.status == :refunded
+        assert status.refund_reason == "solver timeout"
+        # Terminal independently of the worker's `terminal` flag: refunded is a
+        # terminal status, so a poll stops even if the worker omits the flag.
+        assert IntentStatus.terminal?(status)
+      end
+    end
+
+    test "refund_reason is nil when the worker omits it" do
+      json = %{"intent_id" => "int_r", "status" => "refunded", "terminal" => true}
+      status = IntentStatus.from_json(json)
+      assert status.status == :refunded
+      assert status.refund_reason == nil
     end
 
     test "non-terminal statuses" do
