@@ -27,6 +27,15 @@ defmodule Raxol.Payments.Ledger do
 
   alias Raxol.Payments.SpendingPolicy
 
+  # Reservation tags (intent id -> reserved amount) accumulate on every dispatch
+  # and are dropped when the intent reaches a terminal poll. An intent that is
+  # executed but never polled to terminal would leak its tag forever, so a
+  # periodic sweep drops tags older than the TTL, and a hard cap bounds the map
+  # regardless of TTL. All three are overridable per Ledger via start opts.
+  @reservation_ttl_ms 3_600_000
+  @reservation_sweep_ms 300_000
+  @max_reservations 10_000
+
   @type entry :: %{
           agent_id: term(),
           amount: Decimal.t(),
@@ -146,6 +155,20 @@ defmodule Raxol.Payments.Ledger do
   end
 
   @doc """
+  Drop reservation tags older than the TTL and enforce the size cap, returning
+  the count that remains.
+
+  Runs automatically on a timer; exposed so an operator (or a test) can force it.
+  Releasing a still-tagged intent stays possible right up until it is swept.
+  """
+  @spec sweep_reservations(GenServer.server()) :: non_neg_integer()
+  def sweep_reservations(server), do: GenServer.call(server, :sweep_reservations)
+
+  @doc "Number of live reservation tags. For observability and tests."
+  @spec reservation_count(GenServer.server()) :: non_neg_integer()
+  def reservation_count(server), do: GenServer.call(server, :reservation_count)
+
+  @doc """
   Get spend history for an agent.
   """
   @spec get_history(GenServer.server(), term(), keyword()) :: [entry()]
@@ -255,7 +278,19 @@ defmodule Raxol.Payments.Ledger do
         read_concurrency: true
       ])
 
-    {:ok, %{table: table, subscribers: %{}, frozen?: false, reservations: %{}}}
+    sweep_ms = Keyword.get(opts, :reservation_sweep_ms, @reservation_sweep_ms)
+    schedule_sweep(sweep_ms)
+
+    {:ok,
+     %{
+       table: table,
+       subscribers: %{},
+       frozen?: false,
+       reservations: %{},
+       reservation_ttl_ms: Keyword.get(opts, :reservation_ttl_ms, @reservation_ttl_ms),
+       max_reservations: Keyword.get(opts, :max_reservations, @max_reservations),
+       reservation_sweep_ms: sweep_ms
+     }}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -275,16 +310,18 @@ defmodule Raxol.Payments.Ledger do
   end
 
   # Tag only a positive, finite amount against a real intent id. A tag is a bare
-  # {agent_id, intent_id} => amount record in state, not a ledger entry, so it
-  # never affects spend totals; only `release_by_intent` turns it into a
-  # compensating entry.
+  # {agent_id, intent_id} => {amount, inserted_at_ms} record in state, not a
+  # ledger entry, so it never affects spend totals; only `release_by_intent`
+  # turns it into a compensating entry. The timestamp lets the sweep expire a tag
+  # whose intent was executed but never polled to terminal.
   def handle_manager_cast(
         {:tag_reservation, agent_id, intent_id, %Decimal{coef: coef} = amount},
         state
       )
       when is_binary(intent_id) and intent_id != "" and is_integer(coef) do
     if Decimal.compare(amount, 0) == :gt do
-      reservations = Map.put(state.reservations, {agent_id, intent_id}, amount)
+      tag = {amount, System.system_time(:millisecond)}
+      reservations = Map.put(state.reservations, {agent_id, intent_id}, tag)
       {:noreply, %{state | reservations: reservations}}
     else
       {:noreply, state}
@@ -345,7 +382,7 @@ defmodule Raxol.Payments.Ledger do
     key = {agent_id, intent_id}
 
     case Map.fetch(state.reservations, key) do
-      {:ok, amount} ->
+      {:ok, {amount, _at}} ->
         entry =
           build_entry(agent_id, Decimal.negate(amount), %{
             type: :release,
@@ -367,6 +404,15 @@ defmodule Raxol.Payments.Ledger do
       :error ->
         {:reply, :noop, state}
     end
+  end
+
+  def handle_manager_call(:sweep_reservations, _from, state) do
+    reservations = prune_reservations(state)
+    {:reply, map_size(reservations), %{state | reservations: reservations}}
+  end
+
+  def handle_manager_call(:reservation_count, _from, state) do
+    {:reply, map_size(state.reservations), state}
   end
 
   def handle_manager_call({:subscribe, pid, agent_filter}, _from, state) do
@@ -419,9 +465,39 @@ defmodule Raxol.Payments.Ledger do
     {:noreply, %{state | subscribers: Map.delete(state.subscribers, ref)}}
   end
 
+  def handle_info(:sweep_reservations, state) do
+    schedule_sweep(state.reservation_sweep_ms)
+    {:noreply, %{state | reservations: prune_reservations(state)}}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   # -- Private --
+
+  # Drop tags past the TTL, then cap the map to its newest entries. Runs off the
+  # sweep timer and the manual `sweep_reservations/1`, never on the tag hot path.
+  defp prune_reservations(state) do
+    now = System.system_time(:millisecond)
+    ttl = state.reservation_ttl_ms
+
+    state.reservations
+    |> Enum.reject(fn {_key, {_amount, at}} -> now - at >= ttl end)
+    |> cap_newest(state.max_reservations)
+    |> Map.new()
+  end
+
+  defp cap_newest(entries, cap) when length(entries) <= cap, do: entries
+
+  defp cap_newest(entries, cap) do
+    entries
+    |> Enum.sort_by(fn {_key, {_amount, at}} -> at end, :desc)
+    |> Enum.take(cap)
+  end
+
+  defp schedule_sweep(ms) when is_integer(ms) and ms > 0,
+    do: Process.send_after(self(), :sweep_reservations, ms)
+
+  defp schedule_sweep(_ms), do: :ok
 
   defp check_budget_or_frozen(%{frozen?: true}, _agent_id, _amount, _policy),
     do: {:over_limit, :frozen}
