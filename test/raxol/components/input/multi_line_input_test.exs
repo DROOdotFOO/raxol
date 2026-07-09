@@ -144,7 +144,7 @@ defmodule Raxol.UI.Components.Input.MultiLineInputTest do
       assert state_sel.cursor_pos == {0, 1}
     end
 
-    test "handles scrolling (via cursor movement)", %{state: state} do
+    test "handles scrolling (via cursor movement)", %{state: _state} do
       # Simulate moving cursor down multiple times to trigger scroll
       {:ok, state_many_lines} =
         MultiLineInput.init(%{
