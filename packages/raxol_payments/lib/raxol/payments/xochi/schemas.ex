@@ -349,6 +349,9 @@ defmodule Raxol.Payments.Xochi.Schemas do
       :tx_hash,
       :receiving_tx_hash,
       :error,
+      # Solver-supplied reason a refunded intent was refunded (worker
+      # `refundReason`); present only on the terminal `:refunded` status.
+      :refund_reason,
       :updated_at,
       :substatus,
       :substatus_message,
@@ -373,6 +376,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
             | :completed
             | :failed
             | :expired
+            | :refunded
 
     @type settlement_type :: :public | :stealth | :shielded | nil
     @type attestation_status :: :verified | :rejected | :not_required | nil
@@ -383,6 +387,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
             tx_hash: String.t() | nil,
             receiving_tx_hash: String.t() | nil,
             error: String.t() | nil,
+            refund_reason: String.t() | nil,
             updated_at: String.t() | nil,
             substatus: String.t() | nil,
             substatus_message: String.t() | nil,
@@ -394,7 +399,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
             terminal: boolean()
           }
 
-    @terminal_statuses [:completed, :failed, :expired]
+    @terminal_statuses [:completed, :failed, :expired, :refunded]
 
     # The Xochi worker's status response is snake_case (`intent_id`, `tx_hash`,
     # `terminal`, ...); older/sim responses are camelCase. Accept both so the poll
@@ -411,6 +416,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
         tx_hash: pick(json, ["tx_hash", "txHash"]),
         receiving_tx_hash: pick(json, ["receiving_tx_hash", "receivingTxHash"]),
         error: json["error"],
+        refund_reason: pick(json, ["refund_reason", "refundReason"]),
         updated_at: pick(json, ["updated_at", "updatedAt"]),
         substatus: json["substatus"],
         substatus_message: pick(json, ["substatus_message", "substatusMessage"]),
@@ -446,6 +452,7 @@ defmodule Raxol.Payments.Xochi.Schemas do
     defp parse_status("completed"), do: :completed
     defp parse_status("failed"), do: :failed
     defp parse_status("expired"), do: :expired
+    defp parse_status("refunded"), do: :refunded
     defp parse_status(_s), do: :unknown
 
     defp parse_settlement_type(nil), do: nil

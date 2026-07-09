@@ -47,4 +47,36 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatusTest do
       :telemetry.detach(handler_id)
     end
   end
+
+  test "a refunded terminal status surfaces as a :refunded failure carrying the reason" do
+    # The worker reports the intent refunded and terminal, with a refundReason.
+    # The poll must stop (refunded is terminal), fail (not {:ok, ...}), and carry
+    # the reason so the agent sees why the funds came back.
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{
+        "intent_id" => "int_r",
+        "status" => "refunded",
+        "terminal" => true,
+        "refundReason" => "solver timeout"
+      })
+    end)
+
+    params = %{intent_id: "int_r", timeout_ms: 40, interval_ms: 10}
+
+    assert {:error, %Failure{reason: :refunded, retryable?: false, detail: "solver timeout"}} =
+             PollXochiStatus.run(params, %{xochi_config: config()})
+  end
+
+  test "a refunded status without a refundReason still surfaces as :refunded" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{"intent_id" => "int_r2", "status" => "refunded", "terminal" => true})
+    end)
+
+    params = %{intent_id: "int_r2", timeout_ms: 40, interval_ms: 10}
+
+    assert {:error, %Failure{reason: :refunded} = failure} =
+             PollXochiStatus.run(params, %{xochi_config: config()})
+
+    assert to_string(failure) == "The transfer failed and the funds were refunded."
+  end
 end

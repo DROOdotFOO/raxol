@@ -298,12 +298,19 @@ defmodule Raxol.Payments.Failure do
       )
 
   defp settlement_failure(:refunded, error),
-    do: build(:refunded, "The transfer failed and the funds were refunded.", false, error)
+    do: build(:refunded, refunded_message(error), false, error)
 
   defp settlement_failure(:settlement_failed, error),
     do: build(:settlement_failed, "Settlement failed after execution.", false, error)
 
   defp settlement_failure(_status, error), do: failed_settlement(error)
+
+  # A refund returns the origin funds; carry the solver's reason into the sentence
+  # when one is present so the agent sees why, not just that it was refunded.
+  defp refunded_message(reason) when is_binary(reason) and reason != "",
+    do: "The transfer failed and the funds were refunded (#{reason})."
+
+  defp refunded_message(_), do: "The transfer failed and the funds were refunded."
 
   defp failed_settlement(error) when is_binary(error) and error != "" do
     cond do

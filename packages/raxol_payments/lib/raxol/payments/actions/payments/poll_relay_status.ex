@@ -17,7 +17,7 @@ defmodule Raxol.Payments.Actions.Payments.PollRelayStatus do
   use Raxol.Agent.Action,
     name: "payment_poll_relay_status",
     description:
-      "Poll a Relay (Tron) transfer by id until it reaches a terminal status (completed or failed). Returns the final status and tx hash.",
+      "Poll a Relay (Tron) transfer by id until it reaches a terminal status (completed, failed, or refunded). Returns the final status and tx hash.",
     schema: [
       input: [
         transfer_id: [type: :string, required: true],
@@ -50,7 +50,10 @@ defmodule Raxol.Payments.Actions.Payments.PollRelayStatus do
             {:ok, summary(status, elapsed_ms, budget)}
 
           {:ok, %StatusResponse{} = status, _elapsed_ms} ->
-            {:error, Failure.from({:settlement, status.status, status.error})}
+            # Terminal but not completed (failed/refunded): surface as an error
+            # carrying the most specific reason, so a refund's reason is not lost.
+            reason = status.error || status.refund_reason
+            {:error, Failure.from({:settlement, status.status, reason})}
 
           {:error, reason} ->
             {:error, Failure.from(reason)}

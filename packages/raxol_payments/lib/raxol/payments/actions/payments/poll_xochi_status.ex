@@ -15,7 +15,7 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
   use Raxol.Agent.Action,
     name: "payment_poll_xochi_status",
     description:
-      "Poll a Xochi intent by id until it reaches a terminal status (completed, failed, expired). Returns the final status and settlement details.",
+      "Poll a Xochi intent by id until it reaches a terminal status (completed, failed, expired, refunded). Returns the final status and settlement details.",
     schema: [
       input: [
         intent_id: [type: :string, required: true],
@@ -59,11 +59,12 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
 
           {:ok, %IntentStatus{} = status, _elapsed_ms} ->
             # Terminal but not completed (failed/expired/refunded): a failed
-            # order must surface as an error, never as {:ok, ...}. Fall back to
-            # the solver's substatus_message when no explicit error is set, so
-            # the reason a settlement failed (e.g. a reconcile detail) is not lost.
-            {:error,
-             Failure.from({:settlement, status.status, status.error || status.substatus_message})}
+            # order must surface as an error, never as {:ok, ...}. Carry the most
+            # specific reason available -- an explicit error, then the refund
+            # reason on a refund, then the solver's substatus_message -- so why a
+            # settlement failed (e.g. a reconcile detail) is never lost.
+            reason = status.error || status.refund_reason || status.substatus_message
+            {:error, Failure.from({:settlement, status.status, reason})}
 
           {:error, :timeout} ->
             # A poll that never reached a terminal status is not a clean failure:
