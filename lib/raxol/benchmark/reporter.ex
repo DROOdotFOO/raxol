@@ -233,6 +233,7 @@ defmodule Raxol.Benchmark.Reporter do
       },
       summary: %{
         total_benchmarks: length(results),
+        total_suites: length(results),
         fastest_operations: [],
         slowest_operations: []
       },
