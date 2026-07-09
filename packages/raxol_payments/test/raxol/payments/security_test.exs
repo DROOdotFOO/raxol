@@ -44,9 +44,12 @@ defmodule Raxol.Payments.SecurityTest do
   end
 
   defp valid_mpp_payload(overrides \\ %{}) do
+    # MPP amounts are atomic units (integer or all-digit string); "150" is 150
+    # atomic units (e.g. Stripe cents). A decimal string like "1.50" is now
+    # rejected, so the valid baseline uses an all-digit string.
     Map.merge(
       %{
-        "amount" => "1.50",
+        "amount" => "150",
         "recipient" => @valid_address,
         "currency" => "USDC",
         "network" => "eip155:8453"
@@ -206,6 +209,20 @@ defmodule Raxol.Payments.SecurityTest do
     end
   end
 
+  describe "MPP parse_challenge rejects non-atomic amount" do
+    test "float amount" do
+      # Atomic units are integers; a float is malformed and its unit is
+      # ambiguous, so it is rejected rather than trusted (mirrors X402).
+      headers = mpp_headers(valid_mpp_payload(%{"amount" => 1.5}))
+      assert {:error, {:invalid_amount, _}} = MPP.parse_challenge(headers)
+    end
+
+    test "decimal string amount" do
+      headers = mpp_headers(valid_mpp_payload(%{"amount" => "1.50"}))
+      assert {:error, {:invalid_amount, _}} = MPP.parse_challenge(headers)
+    end
+  end
+
   describe "MPP parse_challenge rejects missing fields" do
     test "missing amount" do
       payload = valid_mpp_payload() |> Map.delete("amount")
@@ -221,10 +238,10 @@ defmodule Raxol.Payments.SecurityTest do
   end
 
   describe "MPP parse_challenge accepts valid challenge" do
-    test "string amount with recipient" do
+    test "all-digit string amount with recipient" do
       headers = mpp_headers(valid_mpp_payload())
       assert {:ok, challenge} = MPP.parse_challenge(headers)
-      assert challenge.amount == "1.50"
+      assert challenge.amount == "150"
       assert challenge.recipient == @valid_address
     end
 

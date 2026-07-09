@@ -124,11 +124,13 @@ defmodule Raxol.Payments.Protocols.MPP do
 
   @impl true
   @spec amount(map()) :: Decimal.t()
-  # MPP's server-side unit convention is ambiguous (Stripe uses cents,
-  # other implementations vary). For now we passthrough what the server
-  # sends and trust callers to write `SpendingPolicy` caps in the same
-  # convention as the targeted MPP server. Revisit with `Assets.to_human`
-  # once we integrate a concrete MPP service.
+  # MPP amounts are atomic units: `parse_challenge` accepts only an integer or
+  # an all-digit string (see `validate_positive_amount`), so this is always a
+  # valid Decimal integer -- the same value the signed credential carries, so a
+  # `SpendingPolicy` cap must be written in the targeted server's atomic unit
+  # (Stripe cents, or EVM token base units). Mapping atomic units to a human
+  # amount per method (via `Assets.to_human`) needs that server's token/decimals
+  # and lands with the first concrete MPP integration.
   def amount(challenge) do
     challenge.amount
     |> to_string()
@@ -150,24 +152,20 @@ defmodule Raxol.Payments.Protocols.MPP do
     end
   end
 
+  # MPP amounts are atomic units: a positive integer, or an all-digit string
+  # (Stripe cents, or EVM token base units), matching the x402 convention. A
+  # float or a decimal string is malformed as atomic units, so the challenge is
+  # rejected at parse time -- fail closed rather than guess the unit. Once a
+  # concrete MPP server pins the per-method token/decimals, `amount/1` routes
+  # through `Assets.to_human` and this validation matches that convention.
   defp validate_positive_amount(amount) when is_integer(amount) and amount > 0,
     do: :ok
 
-  defp validate_positive_amount(amount) when is_float(amount) and amount > 0,
-    do: :ok
-
   defp validate_positive_amount(amount) when is_binary(amount) do
-    case Decimal.parse(amount) do
-      {dec, ""} ->
-        if Decimal.positive?(dec),
-          do: :ok,
-          else: {:error, {:invalid_amount, amount}}
-
-      _ ->
-        {:error, {:invalid_amount, amount}}
+    case Integer.parse(amount) do
+      {int, ""} when int > 0 -> :ok
+      _ -> {:error, {:invalid_amount, amount}}
     end
-  rescue
-    Decimal.Error -> {:error, {:invalid_amount, amount}}
   end
 
   defp validate_positive_amount(amount), do: {:error, {:invalid_amount, amount}}
