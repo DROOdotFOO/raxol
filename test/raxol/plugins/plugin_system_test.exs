@@ -279,8 +279,8 @@ defmodule Raxol.Plugins.PluginSystemTest do
                "\e]8;;https://example.com\e\\"
              )
 
-      {:ok, updated_plugin} =
-        HyperlinkPlugin.handle_output(_updated_plugin, "Hello, World!")
+      {:ok, _updated_plugin} =
+        HyperlinkPlugin.handle_output(updated_plugin, "Hello, World!")
     end
 
     test "Hyperlink Plugin processes output via PluginManager" do

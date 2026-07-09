@@ -10,6 +10,11 @@ defmodule Raxol.MixProject do
       version: @version,
       elixir: "~> 1.17 or ~> 1.18 or ~> 1.19 or ~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
+      # Non-test data/fixture files under test/ (Elixir 1.20 warns otherwise).
+      test_ignore_filters: [
+        &String.contains?(&1, "test/data/"),
+        &String.contains?(&1, "test/fixtures/")
+      ],
       elixirc_options: [
         warnings_as_errors: Mix.env() == :prod,
         compile_order: [:cell, :operations]
