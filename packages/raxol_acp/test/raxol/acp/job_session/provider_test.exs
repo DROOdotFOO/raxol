@@ -114,6 +114,33 @@ defmodule Raxol.ACP.JobSession.ProviderTest do
 
       assert JobSession.status(session) == :open
     end
+
+    test "on an already-budget_set session it is an idempotent no-op" do
+      # A redelivered offer, or a retry after the setBudget write and mirror
+      # landed but the seller Queue lost its job tracking, must not re-run
+      # handle_request or re-write setBudget.
+      adapter = ProviderAdapter.Mock.new()
+      session = start_session(:budget_set)
+      p = provider(session, AcceptHandler, adapter)
+
+      assert {:ok, %{status: :budget_set, idempotent: true}} =
+               Provider.accept_request(p, %{req: 1}, AssetToken.usdc(0.25, @chain))
+
+      assert ProviderAdapter.Mock.sent_calls(adapter) == []
+      assert JobSession.status(session) == :budget_set
+    end
+
+    test "refuses to accept once the job has progressed, without invoking the handler" do
+      adapter = ProviderAdapter.Mock.new()
+      session = start_session(:funded)
+      p = provider(session, AcceptHandler, adapter)
+
+      assert {:error, {:cannot_accept, :funded}} =
+               Provider.accept_request(p, %{req: 1}, AssetToken.usdc(0.25, @chain))
+
+      assert ProviderAdapter.Mock.sent_calls(adapter) == []
+      assert JobSession.status(session) == :funded
+    end
   end
 
   describe "deliver/2" do

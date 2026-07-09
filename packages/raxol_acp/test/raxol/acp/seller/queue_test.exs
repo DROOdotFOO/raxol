@@ -280,6 +280,36 @@ defmodule Raxol.ACP.Seller.QueueTest do
       assert status(jid) == :submitted
       assert length(ProviderAdapter.Mock.sent_calls(adapter)) == 2
     end
+
+    test "re-offering a job whose session survived a Queue restart does not re-write setBudget",
+         %{adapter: adapter} do
+      # Simulate the crash-before-tracking window: the setBudget write + mirror
+      # landed (session is :budget_set), but the Queue lost its in-memory job map
+      # (a restart resets it), so this job_id is NOT in state.jobs -- the
+      # :already_offered guard cannot fire. On backend redelivery the Queue
+      # re-adopts the surviving session; accept_request must self-guard on the
+      # :budget_set status so no second setBudget hits the chain.
+      jid = job_id()
+
+      {:ok, _pid} =
+        JobSession.Supervisor.start_session(
+          chain_id: @chain,
+          job_id: jid,
+          role: :provider,
+          initial_status: :budget_set
+        )
+
+      offer(jid)
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dispatched],
+                      %{type: :job_offered, job_id: ^jid}},
+                     500
+
+      # The session was pre-advanced out of band, so no setBudget was written by
+      # the Queue; the idempotent re-accept must not add one.
+      assert ProviderAdapter.Mock.sent_calls(adapter) == []
+      assert status(jid) == :budget_set
+    end
   end
 
   describe "backpressure" do
