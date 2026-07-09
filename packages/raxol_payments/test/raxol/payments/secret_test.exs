@@ -53,4 +53,37 @@ defmodule Raxol.Payments.SecretTest do
       refute String.Chars.impl_for(Secret.new(@key))
     end
   end
+
+  describe "with_revealed/2" do
+    test "reveals the raw bytes to the function and passes its result through" do
+      secret = Secret.new(@key)
+      assert Secret.with_revealed(secret, fn bytes -> {:ok, bytes} end) == {:ok, @key}
+    end
+
+    test "passes an {:error, _} return through unchanged" do
+      secret = Secret.new(@key)
+      assert Secret.with_revealed(secret, fn _ -> {:error, :nope} end) == {:error, :nope}
+    end
+
+    test "converts a raise into a fixed error atom without surfacing the exception" do
+      secret = Secret.new(@key)
+
+      # A signing NIF that raises badarg would put the raw key in its stacktrace;
+      # the guard must swallow the exception entirely, leaking nothing.
+      result = Secret.with_revealed(secret, fn _ -> raise "boom #{@key_hex_lower}" end)
+
+      assert result == {:error, :secret_operation_crashed}
+      refute inspect(result) =~ @key_hex_lower
+    end
+
+    test "converts a throw and an exit into the same fixed error atom" do
+      secret = Secret.new(@key)
+
+      assert Secret.with_revealed(secret, fn _ -> throw(:boom) end) ==
+               {:error, :secret_operation_crashed}
+
+      assert Secret.with_revealed(secret, fn _ -> exit(:boom) end) ==
+               {:error, :secret_operation_crashed}
+    end
+  end
 end

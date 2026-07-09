@@ -90,7 +90,7 @@ defmodule Raxol.Payments.Wallets.Op do
   def handle_manager_call({:sign_message, message}, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} ->
-        result = do_sign_message(Secret.reveal(state.privkey), message)
+        result = Secret.with_revealed(state.privkey, &do_sign_message(&1, message))
         {:reply, result, state}
 
       {:error, reason} ->
@@ -101,7 +101,9 @@ defmodule Raxol.Payments.Wallets.Op do
   def handle_manager_call({:sign_typed_data, domain, types, message}, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} ->
-        result = do_sign_typed_data(Secret.reveal(state.privkey), domain, types, message)
+        result =
+          Secret.with_revealed(state.privkey, &do_sign_typed_data(&1, domain, types, message))
+
         {:reply, result, state}
 
       {:error, reason} ->
@@ -112,7 +114,7 @@ defmodule Raxol.Payments.Wallets.Op do
   def handle_manager_call({:sign_hash, digest}, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} ->
-        result = do_sign_hash(Secret.reveal(state.privkey), digest)
+        result = Secret.with_revealed(state.privkey, &do_sign_hash(&1, digest))
         {:reply, result, state}
 
       {:error, reason} ->
@@ -125,14 +127,14 @@ defmodule Raxol.Payments.Wallets.Op do
   defp ensure_loaded(%{privkey: %Secret{}} = state), do: {:ok, state}
 
   defp ensure_loaded(%{op_ref: op_ref} = state) do
-    case fetch_from_op(op_ref) do
-      {:ok, privkey} ->
-        {:ok, pubkey} = ExSecp256k1.create_public_key(privkey)
-        address = derive_address(pubkey)
-        {:ok, %{state | privkey: Secret.new(privkey), address: address}}
-
-      {:error, reason} ->
-        {:error, reason}
+    # Wrap the fetched key in `Secret` immediately, so the raw bytes only leave
+    # the wrapper inside `with_revealed` (which contains any NIF raise). A
+    # non-`{:ok, _}` return from the NIF now fails the load gracefully instead of
+    # crashing the wallet on a bad key.
+    with {:ok, privkey} <- fetch_from_op(op_ref),
+         secret = Secret.new(privkey),
+         {:ok, pubkey} <- Secret.with_revealed(secret, &ExSecp256k1.create_public_key/1) do
+      {:ok, %{state | privkey: secret, address: derive_address(pubkey)}}
     end
   end
 
