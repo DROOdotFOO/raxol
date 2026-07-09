@@ -324,4 +324,58 @@ defmodule Raxol.Payments.LedgerTest do
       assert :noop = Ledger.release_by_intent(ledger, "agent_1", "")
     end
   end
+
+  describe "reservation tag sweeping (memory bound)" do
+    # Disable the auto-sweep timer so the sweep only runs when the test calls it.
+    defp start_bounded(opts) do
+      {:ok, ledger} =
+        Ledger.start_link(
+          Keyword.merge(
+            [
+              table_name: :"ledger_#{:erlang.unique_integer()}",
+              reservation_sweep_ms: 0
+            ],
+            opts
+          )
+        )
+
+      ledger
+    end
+
+    defp tag_n(ledger, n) do
+      for i <- 1..n,
+          do: Ledger.tag_reservation(ledger, "agent_1", "intent_#{i}", Decimal.new("1.00"))
+
+      :ok
+    end
+
+    test "sweep drops tags past the TTL, so a never-polled intent does not leak" do
+      # ttl 0: every tag is immediately expired.
+      ledger = start_bounded(reservation_ttl_ms: 0)
+      :ok = tag_n(ledger, 3)
+      assert Ledger.reservation_count(ledger) == 3
+
+      assert 0 = Ledger.sweep_reservations(ledger)
+      assert Ledger.reservation_count(ledger) == 0
+      # A swept tag can no longer be released.
+      assert :noop = Ledger.release_by_intent(ledger, "agent_1", "intent_1")
+    end
+
+    test "a recent tag survives a sweep and is still releasable" do
+      ledger = start_bounded(reservation_ttl_ms: 3_600_000)
+      :ok = Ledger.tag_reservation(ledger, "agent_1", "live", Decimal.new("1.00"))
+
+      assert 1 = Ledger.sweep_reservations(ledger)
+      assert :released = Ledger.release_by_intent(ledger, "agent_1", "live")
+    end
+
+    test "sweep enforces the size cap regardless of TTL" do
+      ledger = start_bounded(reservation_ttl_ms: 3_600_000, max_reservations: 3)
+      :ok = tag_n(ledger, 5)
+      assert Ledger.reservation_count(ledger) == 5
+
+      assert 3 = Ledger.sweep_reservations(ledger)
+      assert Ledger.reservation_count(ledger) == 3
+    end
+  end
 end
