@@ -34,7 +34,7 @@ Raxol.Agent.Session.send_message(:my_agent, {:analyze, "lib/raxol.ex"})
 - **TEA-based agents**: `init/update/view` with OTP supervision
 - **Agent teams**: Supervisor-based coordinator/worker groups
 - **Inter-agent messaging**: Registry-routed messages via `Agent.Comm`
-- **Real SSE streaming**: Anthropic, OpenAI, Ollama, Groq, LLM7, Lumo
+- **Real SSE streaming**: Anthropic, OpenAI, Ollama, Groq, LLM7, OpenRouter, Lumo
 - **Shell commands**: Port-based execution with result callbacks
 - **Headless mode**: `view/1` is optional; skip rendering entirely
 

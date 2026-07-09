@@ -144,10 +144,12 @@ When `view/1` returns `nil` (the default), no rendering happens. The agent is a 
 # {:error, "message"}
 ```
 
-Supports Anthropic, OpenAI, Ollama, Proton's Lumo, and Kimi 2.5/moonshot.
+Supports Anthropic, OpenAI, Ollama, Proton's Lumo, Kimi 2.5/moonshot, and OpenRouter.
 Provider is auto-detected from `:base_url` or set via `:provider`.
 
 Backend detection tries each in order: Lumo -> Anthropic -> Kimi -> OpenAI -> Ollama -> LLM7 -> Mock. Set `FREE_AI=true` to hit LLM7.io with no API key.
+
+The `:openrouter` harness (via `Backend.Selector`) targets OpenRouter, an OpenAI-compatible aggregator. It attaches app-attribution headers (HTTP-Referer, X-OpenRouter-Title, X-OpenRouter-Categories) so Raxol's usage appears on openrouter.ai/rankings. Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
 
 ## Examples
 

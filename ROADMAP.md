@@ -80,6 +80,7 @@ Supported now:
 - **Groq** (`AI_API_KEY=... AI_BASE_URL=https://api.groq.com/openai`): fast free tier
 - **OpenAI** (`AI_API_KEY=...`): GPT-4o-mini and up
 - **Anthropic** (`ANTHROPIC_API_KEY=...`): Claude Haiku/Sonnet/Opus
+- **OpenRouter** (`:openrouter` harness, key via `ExecutorConfig` auth): OpenAI-compatible aggregator that sends app-attribution headers (HTTP-Referer, X-OpenRouter-Title, X-OpenRouter-Categories) so Raxol appears on openrouter.ai/rankings
 
 ### Longer Term
 

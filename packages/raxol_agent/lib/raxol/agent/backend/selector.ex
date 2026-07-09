@@ -20,6 +20,19 @@ defmodule Raxol.Agent.Backend.Selector do
     kimi: {Raxol.Agent.Backend.HTTP, [provider: :kimi]},
     ollama: {Raxol.Agent.Backend.HTTP, [provider: :ollama]},
     llm7: {Raxol.Agent.Backend.HTTP, [provider: :openai, base_url: "https://api.llm7.io"]},
+    openrouter:
+      {Raxol.Agent.Backend.HTTP,
+       [
+         provider: :openai,
+         # The :openai build_request appends "/v1/chat/completions", so the base
+         # URL stops at "/api" (never "/api/v1", which would double the "/v1").
+         base_url: "https://openrouter.ai/api",
+         extra_headers: [
+           {"HTTP-Referer", "https://raxol.io"},
+           {"X-OpenRouter-Title", "Raxol"},
+           {"X-OpenRouter-Categories", "cli-agent,personal-agent"}
+         ]
+       ]},
     lumo: {Raxol.Agent.Backend.Lumo, []},
     mock: {Raxol.Agent.Backend.Mock, []},
     # Native harnesses: the CLI owns its loop; Raxol tools are injected over MCP.

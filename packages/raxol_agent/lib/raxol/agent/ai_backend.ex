@@ -6,7 +6,7 @@ defmodule Raxol.Agent.AIBackend do
   and the backend handles the model-specific HTTP/inference details.
 
   Implementations:
-  - `Raxol.Agent.Backend.HTTP` -- Req-based client for Claude, GPT, Ollama, Kimi
+  - `Raxol.Agent.Backend.HTTP` -- Req-based client for Claude, GPT, Ollama, Kimi, OpenRouter
   - `Raxol.Agent.Backend.Lumo` -- Proton Lumo with U2L encryption (or lumo-tamer proxy)
   - `Raxol.Agent.Backend.Mock` -- Deterministic responses for testing
   """
