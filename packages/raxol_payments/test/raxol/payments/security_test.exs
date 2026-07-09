@@ -25,7 +25,9 @@ defmodule Raxol.Payments.SecurityTest do
   defp valid_x402_payload(overrides \\ %{}) do
     Map.merge(
       %{
-        "maxAmountRequired" => "1.50",
+        # x402 `maxAmountRequired` is atomic token units (an integer), e.g.
+        # 1_500_000 = 1.50 USDC at 6 decimals -- not a human-decimal "1.50".
+        "maxAmountRequired" => "1500000",
         "payTo" => @valid_address,
         "asset" => "0x" <> String.duplicate("cd", 20),
         "network" => "eip155:8453"
@@ -119,11 +121,25 @@ defmodule Raxol.Payments.SecurityTest do
     end
   end
 
-  describe "X402 parse_challenge accepts valid challenges" do
-    test "string price" do
+  describe "X402 parse_challenge rejects non-integer (non-atomic) price" do
+    test "float price" do
+      # Atomic units are integers; a float amount is malformed and would also
+      # crash the atomic->human conversion, so the challenge is rejected.
+      headers = x402_headers(valid_x402_payload(%{"maxAmountRequired" => 1.5}))
+      assert {:error, {:invalid_amount, _}} = X402.parse_challenge(headers)
+    end
+
+    test "decimal string price" do
       headers = x402_headers(valid_x402_payload(%{"maxAmountRequired" => "1.50"}))
+      assert {:error, {:invalid_amount, _}} = X402.parse_challenge(headers)
+    end
+  end
+
+  describe "X402 parse_challenge accepts valid challenges" do
+    test "integer-string price" do
+      headers = x402_headers(valid_x402_payload(%{"maxAmountRequired" => "1500000"}))
       assert {:ok, challenge} = X402.parse_challenge(headers)
-      assert challenge.price == "1.50"
+      assert challenge.price == "1500000"
       assert challenge.pay_to == @valid_address
     end
 
@@ -133,21 +149,15 @@ defmodule Raxol.Payments.SecurityTest do
       assert challenge.price == 100
     end
 
-    test "float price" do
-      headers = x402_headers(valid_x402_payload(%{"maxAmountRequired" => 1.5}))
-      assert {:ok, challenge} = X402.parse_challenge(headers)
-      assert challenge.price == 1.5
-    end
-
     test "uses price key as fallback" do
       payload =
         valid_x402_payload()
         |> Map.delete("maxAmountRequired")
-        |> Map.put("price", "2.00")
+        |> Map.put("price", "2000000")
 
       headers = x402_headers(payload)
       assert {:ok, challenge} = X402.parse_challenge(headers)
-      assert challenge.price == "2.00"
+      assert challenge.price == "2000000"
     end
 
     test "uses pay_to key as fallback" do

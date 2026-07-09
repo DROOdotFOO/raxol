@@ -64,6 +64,19 @@ defmodule Raxol.Payments.Protocols.X402 do
   @spec build_payment(map(), module()) ::
           {:ok, Headers.headers()} | {:error, term()}
   def build_payment(challenge, wallet) do
+    case atomic_value(challenge.price) do
+      {:ok, value} -> build_signed_payment(challenge, wallet, value)
+      {:error, _} = err -> err
+    end
+  end
+
+  # The signed ERC-3009 `value` is the atomic token amount the gate approved.
+  # x402 `maxAmountRequired` is atomic units (an integer); the spend gate reads
+  # the same field via `amount/1` as atomic. A float or decimal-string price is
+  # malformed as atomic units and would let the signed value diverge from the
+  # gated amount (a gate-bypass), so it is rejected before signing rather than
+  # coerced.
+  defp build_signed_payment(challenge, wallet, value) do
     chain_id = chain_id_from_network(challenge.network)
     %{name: name, version: version} = Raxol.Payments.Assets.UsdcDomains.lookup(chain_id)
 
@@ -88,7 +101,7 @@ defmodule Raxol.Payments.Protocols.X402 do
     message = %{
       from: wallet.address(),
       to: challenge.pay_to,
-      value: normalize_amount(challenge.price),
+      value: value,
       validAfter: challenge.valid_after,
       validBefore: challenge.valid_before || :os.system_time(:second) + 3600,
       nonce: challenge.nonce || generate_nonce()
@@ -153,22 +166,20 @@ defmodule Raxol.Payments.Protocols.X402 do
 
   defp chain_id_from_network(chain_id) when is_integer(chain_id), do: chain_id
 
-  defp normalize_amount(amount) when is_integer(amount) and amount >= 0,
-    do: amount
+  # Parse the challenge price strictly as non-negative atomic units. Only an
+  # integer or an all-digit string is a valid atomic amount; a float or a
+  # decimal string is rejected (fail closed) so the signed `value` is always the
+  # exact atomic amount the gate read via `amount/1`.
+  defp atomic_value(price) when is_integer(price) and price >= 0, do: {:ok, price}
 
-  defp normalize_amount(amount) when is_binary(amount) do
-    case Integer.parse(amount) do
-      {int, ""} when int >= 0 -> int
-      _ -> 0
+  defp atomic_value(price) when is_binary(price) do
+    case Integer.parse(price) do
+      {int, ""} when int >= 0 -> {:ok, int}
+      _ -> {:error, {:invalid_price, price}}
     end
   end
 
-  defp normalize_amount(amount) when is_float(amount) and amount >= 0 do
-    # USDC has 6 decimals; other tokens may differ
-    round(amount * 1_000_000)
-  end
-
-  defp normalize_amount(_amount), do: 0
+  defp atomic_value(price), do: {:error, {:invalid_price, price}}
 
   defp generate_nonce do
     :crypto.strong_rand_bytes(32)
@@ -176,24 +187,18 @@ defmodule Raxol.Payments.Protocols.X402 do
     |> then(&("0x" <> &1))
   end
 
+  # x402 `maxAmountRequired` is atomic token units: a positive integer, or an
+  # all-digit string. A float or a decimal string is malformed as atomic units
+  # (and would crash the atomic->human conversion in `amount/1`), so the
+  # challenge is rejected at parse time -- fail closed rather than guess or crash.
   defp validate_positive_amount(amount) when is_integer(amount) and amount > 0,
     do: :ok
 
-  defp validate_positive_amount(amount) when is_float(amount) and amount > 0,
-    do: :ok
-
   defp validate_positive_amount(amount) when is_binary(amount) do
-    case Decimal.parse(amount) do
-      {dec, ""} ->
-        if Decimal.positive?(dec),
-          do: :ok,
-          else: {:error, {:invalid_amount, amount}}
-
-      _ ->
-        {:error, {:invalid_amount, amount}}
+    case Integer.parse(amount) do
+      {int, ""} when int > 0 -> :ok
+      _ -> {:error, {:invalid_amount, amount}}
     end
-  rescue
-    Decimal.Error -> {:error, {:invalid_amount, amount}}
   end
 
   defp validate_positive_amount(amount), do: {:error, {:invalid_amount, amount}}

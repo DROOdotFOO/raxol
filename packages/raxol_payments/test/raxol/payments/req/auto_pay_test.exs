@@ -51,6 +51,38 @@ defmodule Raxol.Payments.Req.AutoPayTest do
     end
   end
 
+  # 402 on the first request, then 2xx on the retry (which carries the signed
+  # x-payment header) -- i.e. a payment that actually completes.
+  defp stub_402_then_ok(amount) do
+    fn req ->
+      resp =
+        if Req.Request.get_header(req, "x-payment") == [] do
+          Req.Response.new(status: 402, body: "")
+          |> Req.Response.put_header("payment-required", x402_challenge(amount))
+        else
+          Req.Response.new(status: 200, body: "ok")
+        end
+
+      {req, resp}
+    end
+  end
+
+  # 402 on the first request, then a non-2xx on the retry -- the server did not
+  # honor the payment, so it did not complete.
+  defp stub_402_then_error(amount) do
+    fn req ->
+      resp =
+        if Req.Request.get_header(req, "x-payment") == [] do
+          Req.Response.new(status: 402, body: "")
+          |> Req.Response.put_header("payment-required", x402_challenge(amount))
+        else
+          Req.Response.new(status: 500, body: "server error")
+        end
+
+      {req, resp}
+    end
+  end
+
   describe "attach/2" do
     test "adds auto_pay response step to the request" do
       req =
@@ -152,9 +184,7 @@ defmodule Raxol.Payments.Req.AutoPayTest do
       Process.put(:wallet_signal_target, self())
 
       {:ok, ledger} =
-        Ledger.start_link(
-          table_name: :"gate_ledger_#{:erlang.unique_integer([:positive])}"
-        )
+        Ledger.start_link(table_name: :"gate_ledger_#{:erlang.unique_integer([:positive])}")
 
       on_exit(fn ->
         try do
@@ -296,15 +326,89 @@ defmodule Raxol.Payments.Req.AutoPayTest do
           policy: policy,
           agent_id: :test
         )
-        |> Req.Request.prepend_request_steps(stub: stub_402(1))
+        |> Req.Request.prepend_request_steps(stub: stub_402_then_ok(1))
 
-      _resp = Req.Request.run!(req)
+      resp = Req.Request.run!(req)
+      assert resp.status == 200
       assert_received :wallet_signed
 
       # Brief settle for the ledger cast/call to flush.
       :timer.sleep(20)
+      # A completed payment records exactly the spend -- no release.
       [entry] = Ledger.get_history(ledger, :test)
       assert entry.metadata.domain == "api.example.com"
+      refute entry.metadata[:type] == :release
+    end
+  end
+
+  describe "budget release on a payment that does not complete" do
+    setup do
+      Process.put(:wallet_signal_target, self())
+
+      {:ok, ledger} =
+        Ledger.start_link(table_name: :"autopay_release_#{:erlang.unique_integer()}")
+
+      policy = %SpendingPolicy{
+        per_request_max: Decimal.new("1000"),
+        session_max: Decimal.new("1000"),
+        lifetime_max: Decimal.new("1000"),
+        approved_domains: ["api.example.com"]
+      }
+
+      %{ledger: ledger, policy: policy}
+    end
+
+    defp autopay_req(ledger, policy, stub) do
+      Req.new(url: "https://api.example.com/data", retry: false)
+      |> AutoPay.attach(wallet: StubWallet, ledger: ledger, policy: policy, agent_id: :test)
+      |> Req.Request.prepend_request_steps(stub: stub)
+    end
+
+    test "a non-2xx paid retry releases the reservation", %{ledger: ledger, policy: policy} do
+      resp = autopay_req(ledger, policy, stub_402_then_error(1)) |> Req.Request.run!()
+      assert resp.status == 500
+      assert_received :wallet_signed
+
+      :timer.sleep(20)
+      # Spend was reserved then released; totals net back to zero.
+      assert Decimal.equal?(Ledger.get_totals(ledger, :test, policy).lifetime, "0")
+    end
+
+    test "a transport error on the paid retry releases the reservation", %{
+      ledger: ledger,
+      policy: policy
+    } do
+      # First request 402s; the retry (carrying x-payment) raises a transport error.
+      stub = fn req ->
+        if Req.Request.get_header(req, "x-payment") == [] do
+          resp =
+            Req.Response.new(status: 402, body: "")
+            |> Req.Response.put_header("payment-required", x402_challenge(1))
+
+          {req, resp}
+        else
+          {req, %Req.TransportError{reason: :econnrefused}}
+        end
+      end
+
+      _resp = autopay_req(ledger, policy, stub) |> Req.Request.run!()
+
+      :timer.sleep(20)
+      assert Decimal.equal?(Ledger.get_totals(ledger, :test, policy).lifetime, "0")
+    end
+
+    test "a malformed (float) price is rejected before any reservation or signing", %{
+      ledger: ledger,
+      policy: policy
+    } do
+      # A float price is not valid atomic units, so the x402 challenge is rejected
+      # at parse: no protocol matches, nothing is reserved, nothing is signed.
+      resp = autopay_req(ledger, policy, stub_402_then_ok(0.05)) |> Req.Request.run!()
+
+      assert resp.status == 402
+      refute_received :wallet_signed
+      :timer.sleep(20)
+      assert Decimal.equal?(Ledger.get_totals(ledger, :test, policy).lifetime, "0")
     end
   end
 end

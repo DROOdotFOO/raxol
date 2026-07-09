@@ -144,8 +144,9 @@ defmodule Raxol.Payments.Protocols.X402Test do
       @impl true
       def sign_message(_msg), do: {:ok, <<0::512>>}
       @impl true
-      def sign_typed_data(domain, _types, _message) do
+      def sign_typed_data(domain, _types, message) do
         Process.put(:captured_domain, domain)
+        Process.put(:captured_message, message)
         {:ok, <<0::512>>}
       end
 
@@ -222,6 +223,96 @@ defmodule Raxol.Payments.Protocols.X402Test do
 
       assert %{name: "USD Coin", version: "2", chainId: 421_614} =
                Process.get(:captured_domain)
+    end
+  end
+
+  describe "build_payment/2 signed value binding" do
+    defmodule ValueWallet do
+      @moduledoc false
+      @behaviour Raxol.Payments.Wallet
+      @impl true
+      def address, do: "0x" <> String.duplicate("ab", 20)
+      @impl true
+      def chain_id, do: 8453
+      @impl true
+      def sign_message(_msg), do: {:ok, <<0::512>>}
+      @impl true
+      def sign_typed_data(_domain, _types, message) do
+        Process.put(:captured_message, message)
+        {:ok, <<0::512>>}
+      end
+
+      @impl true
+      def sign_hash(_digest), do: {:ok, <<0::520>>}
+    end
+
+    defp priced_challenge(price) do
+      %{
+        price: price,
+        currency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        network: "eip155:8453",
+        pay_to: "0x" <> String.duplicate("cd", 20),
+        nonce: "0x" <> String.duplicate("12", 32),
+        valid_after: 0,
+        valid_before: 9_999_999_999,
+        extra: %{}
+      }
+    end
+
+    test "signs exactly the atomic integer price the gate reads" do
+      # amount/1 (the gate) reads price as atomic units; the signed value must be
+      # that same atomic integer, so the gate and the signature can never diverge.
+      challenge = priced_challenge(1_000_000)
+      assert {:ok, _} = X402.build_payment(challenge, ValueWallet)
+      assert Process.get(:captured_message).value == 1_000_000
+    end
+
+    test "signs the integer parsed from an all-digit string price" do
+      challenge = priced_challenge("250000")
+      assert {:ok, _} = X402.build_payment(challenge, ValueWallet)
+      assert Process.get(:captured_message).value == 250_000
+    end
+
+    test "refuses to sign a float price (would diverge from the gated amount)" do
+      assert {:error, {:invalid_price, _}} =
+               X402.build_payment(priced_challenge(0.05), ValueWallet)
+    end
+
+    test "refuses to sign a decimal-string price" do
+      assert {:error, {:invalid_price, _}} =
+               X402.build_payment(priced_challenge("0.05"), ValueWallet)
+    end
+  end
+
+  describe "parse_challenge/1 rejects malformed atomic amounts" do
+    defp challenge_header(price) do
+      body =
+        %{
+          "maxAmountRequired" => price,
+          "payTo" => "0x" <> String.duplicate("cd", 20),
+          "asset" => "0x" <> String.duplicate("ef", 20),
+          "network" => "eip155:8453"
+        }
+        |> Jason.encode!()
+        |> Base.encode64()
+
+      [{"payment-required", body}]
+    end
+
+    test "accepts a positive integer-string price" do
+      assert {:ok, %{price: "1000000"}} = X402.parse_challenge(challenge_header("1000000"))
+    end
+
+    test "rejects a float price" do
+      assert {:error, {:invalid_amount, _}} = X402.parse_challenge(challenge_header(0.05))
+    end
+
+    test "rejects a decimal-string price" do
+      assert {:error, {:invalid_amount, _}} = X402.parse_challenge(challenge_header("0.05"))
+    end
+
+    test "rejects a zero price" do
+      assert {:error, {:invalid_amount, _}} = X402.parse_challenge(challenge_header(0))
     end
   end
 end
