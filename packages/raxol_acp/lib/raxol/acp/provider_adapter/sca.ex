@@ -196,13 +196,29 @@ defmodule Raxol.ACP.ProviderAdapter.SCA do
              wallet.nonce_key()
            ),
          {:ok, op_hash} <- send_write_op(cfg, call, nonce),
-         {:ok, uo_receipt} <- wallet.await_user_operation(op_hash, cfg.wallet_opts) do
+         {:ok, uo_receipt} <- wallet.await_user_operation(op_hash, cfg.wallet_opts),
+         :ok <- check_user_op_succeeded(uo_receipt) do
       # A single call maps to one atomic UserOp; the on-chain tx hash is
       # in the bundler receipt (or the op hash if the receipt omits it).
       tx_hash = get_in(uo_receipt, ["receipt", "transactionHash"]) || op_hash
       {:ok, [tx_hash]}
     end
   end
+
+  # An ERC-4337 UserOp can be MINED while its inner execution -- our
+  # `execute(...)` wrapping the ACP hook call -- REVERTS: validation passed, so
+  # the op is included and the nonce is burned, but `eth_getUserOperationReceipt`
+  # reports `success: false`. Returning `{:ok, tx_hash}` for it would let the
+  # Provider mirror a status the chain never reached, breaking its "the on-chain
+  # write is the commit point; mirror only once it succeeds" invariant. Reject an
+  # explicit failure so a reverted write leaves the session untouched (SSE
+  # reconciliation of the real on-chain event is the recovery path). A receipt
+  # that omits `success` keeps the prior lenient behavior.
+  defp check_user_op_succeeded(%{"success" => false} = uo_receipt) do
+    {:error, {:user_op_reverted, Map.get(uo_receipt, "reason")}}
+  end
+
+  defp check_user_op_succeeded(_uo_receipt), do: :ok
 
   # The write op wraps the ACP call in execute(), carries the
   # session-entity nonce, and NEVER attaches initCode -- provisioning
