@@ -60,7 +60,8 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
           private_key: Secret.t(),
           address: String.t(),
           fee_overrides: %{optional(pos_integer()) => fee_override()},
-          nonce_server: GenServer.server()
+          nonce_server: GenServer.server(),
+          receipt_wait_opts: keyword()
         }
 
   @type fee_override :: %{
@@ -89,6 +90,10 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
     server's mailbox so they can never sign the same nonce. If you run
     more than one wallet, construct each adapter with a distinct
     `:nonce_server`.
+  - `:receipt_wait_opts` -- keyword passed to `RPC.await_receipt/3` when
+    confirming a broadcast tx (`:timeout_ms` default 30_000, `:interval_ms`
+    default 250). `send_calls/3` waits for the receipt and rejects a
+    reverted tx before reporting success.
   """
   @spec new(keyword()) :: Raxol.ACP.ProviderAdapter.adapter()
   def new(opts) do
@@ -106,7 +111,8 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
       private_key: Secret.new(private_key),
       address: address,
       fee_overrides: Keyword.get(opts, :fee_overrides, %{}),
-      nonce_server: Keyword.get(opts, :nonce_server, NonceServer)
+      nonce_server: Keyword.get(opts, :nonce_server, NonceServer),
+      receipt_wait_opts: Keyword.get(opts, :receipt_wait_opts, [])
     }
 
     %{adapter: __MODULE__, config: config}
@@ -204,11 +210,14 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
           {:ok, hash}
         else
           {:error, _} = err ->
-            # The tx never reached the chain, so its nonce was not consumed.
-            # Mark the counter unseeded so the next acquisition re-fetches the
-            # pending nonce from chain and re-fills the gap -- the same self-heal
-            # the old per-send `eth_getTransactionCount` gave, now without the
-            # cross-send nonce race.
+            # Re-sync the nonce counter to chain truth on any failure. A
+            # pre-broadcast failure (sign/estimate/send) leaves the nonce
+            # unconsumed; a post-broadcast failure (the tx reverted, or its
+            # receipt didn't arrive before the await timeout) already consumed
+            # it. Either way, marking the counter unseeded makes the next
+            # acquisition re-fetch the pending nonce from chain -- which reflects
+            # whichever happened -- so we never reuse a consumed nonce nor strand
+            # an unconsumed one.
             NonceServer.resync(nonce_server)
             err
         end
@@ -248,10 +257,26 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
          tx <- Transaction.new(Map.put(tx_attrs, :gas_limit, gas_limit)),
          {:ok, signature} <- sign_tx(tx, private_key),
          signed <- Transaction.serialize(tx, signature),
-         {:ok, hash} <- RPC.send_raw_transaction(client, signed) do
+         {:ok, hash} <- RPC.send_raw_transaction(client, signed),
+         {:ok, receipt} <- RPC.await_receipt(client, hash, adapter.config.receipt_wait_opts),
+         :ok <- confirm_success(receipt, hash) do
       {:ok, hash}
     end
   end
+
+  # A broadcast tx is only a successful write once it is MINED and its receipt
+  # reports success. `eth_getTransactionReceipt.status` is `0x0` for a reverted
+  # tx (mined, nonce consumed, but the call rolled back); returning `{:ok, hash}`
+  # for it would let the Provider mirror a write the chain undid. Reject an
+  # explicit revert so the session stays put -- parity with the SCA path, which
+  # checks the UserOp receipt's `success` flag. A receipt without a `status`
+  # keeps the prior lenient behavior.
+  defp confirm_success(receipt, hash) do
+    if reverted?(receipt), do: {:error, {:tx_reverted, hash}}, else: :ok
+  end
+
+  defp reverted?(%{"status" => "0x" <> hex}), do: match?({0, ""}, Integer.parse(hex, 16))
+  defp reverted?(_receipt), do: false
 
   defp fees(client, fee_overrides, chain_id) do
     case Map.get(fee_overrides, chain_id) do
