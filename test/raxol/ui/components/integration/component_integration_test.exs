@@ -224,7 +224,7 @@ defmodule Raxol.UI.Components.Integration.ComponentIntegrationTest do
       # Set up components
       parent = create_test_component(ParentComponent)
 
-      child =
+      _child =
         create_test_component(ChildComponent, %{parent_id: parent.state.id})
 
       # Set up hierarchy with mounting in ComponentManager

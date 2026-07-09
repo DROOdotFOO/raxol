@@ -34,7 +34,7 @@ defmodule Raxol.Plugins.PluginConfigTest do
       assert config.enabled_plugins == []
     end
 
-    test "loads and saves plugin configuration", %{_temp_dir: temp_dir} do
+    test "loads and saves plugin configuration", %{temp_dir: _temp_dir} do
       # Create initial config
       config = PluginConfig.new()
 
