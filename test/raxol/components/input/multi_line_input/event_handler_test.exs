@@ -14,6 +14,9 @@ defmodule Raxol.UI.Components.Input.MultiLineInput.EventHandlerTest do
   defp normalize_dimensions(_), do: %{width: 10, height: 5}
 
   # Helper to create initial state
+  defp create_state(lines, cursor_pos),
+    do: create_state(lines, cursor_pos, nil)
+
   defp create_state(lines, cursor_pos, selection) do
     # Use the main MultiLineInput module struct
     sel_start = if selection, do: elem(selection, 0), else: nil
