@@ -105,7 +105,7 @@ defmodule Raxol.Playground.Demos.CursorTrailDemoTest do
   describe "subscribe/1" do
     test "returns interval subscription" do
       model = CursorTrailDemo.init(nil)
-      assert CursorTrailDemo.subscribe(model) != []
+      assert [_ | _] = CursorTrailDemo.subscribe(model)
     end
   end
 

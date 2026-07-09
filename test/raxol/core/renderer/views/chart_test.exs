@@ -249,7 +249,6 @@ defmodule Raxol.Core.Renderer.Views.ChartTest do
       # Add assertions to verify min/max impact if possible
       assert is_map(view)
       assert Map.has_key?(view, :type)
-      assert view != nil
     end
 
     test "handles empty data" do

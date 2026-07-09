@@ -68,7 +68,7 @@ defmodule Raxol.Style.Colors.SystemTest do
       Theme.register(create_test_theme())
       :ok = Raxol.Style.Colors.Persistence.save_theme(create_test_theme())
       result = Raxol.Style.Colors.Persistence.load_theme(create_test_theme().id)
-      assert result != nil
+      assert {:ok, _theme} = result
     end
 
     test "gets current theme", _context do
