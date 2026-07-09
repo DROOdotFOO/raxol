@@ -21,12 +21,10 @@ defmodule Raxol.Property.CodeInvariantsTest do
   end
 
   describe "no raw ANSI in View DSL components (regression for 506c1b9c)" do
-    @moduledoc """
-    Components must use the View DSL's style attributes (`fg:`, `bg:`,
-    `style: [:bold]`, ...) instead of embedding ANSI escape codes directly
-    in strings. Raw ANSI bypasses the renderer's color resolution, breaks
-    LiveView/MCP backends, and prevents theming.
-    """
+    # Components must use the View DSL's style attributes (`fg:`, `bg:`,
+    # `style: [:bold]`, ...) instead of embedding ANSI escape codes directly
+    # in strings. Raw ANSI bypasses the renderer's color resolution, breaks
+    # LiveView/MCP backends, and prevents theming.
 
     @view_dsl_globs [
       "lib/raxol/ui/components/**/*.ex"
@@ -61,13 +59,11 @@ defmodule Raxol.Property.CodeInvariantsTest do
   end
 
   describe "fprof access goes through apply/3 (regression for f435e5e1)" do
-    @moduledoc """
-    `:fprof` lives in OTP's `:tools` application, which isn't loaded at
-    compile time. Direct `:fprof.<function>(...)` calls produce
-    "undefined module" warnings (failing CI under `--warnings-as-errors`).
-    Using `apply(:fprof, :fun, args)` defers resolution to runtime where
-    `:tools` is available.
-    """
+    # `:fprof` lives in OTP's `:tools` application, which isn't loaded at
+    # compile time. Direct `:fprof.<function>(...)` calls produce
+    # "undefined module" warnings (failing CI under `--warnings-as-errors`).
+    # Using `apply(:fprof, :fun, args)` defers resolution to runtime where
+    # `:tools` is available.
 
     @profiler_globs [
       "lib/raxol/performance/**/*.ex",

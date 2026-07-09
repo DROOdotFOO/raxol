@@ -81,11 +81,6 @@ defmodule Raxol.UI.Components.Base.ComponentTest do
     end
 
     @impl true
-    def handle_event(%Raxol.Core.Events.Event{type: :mounted}, state, _context) do
-      {state, [{:command, :mounted}]}
-    end
-
-    @impl true
     def handle_event(_event, state, _context) do
       {state, []}
     end
