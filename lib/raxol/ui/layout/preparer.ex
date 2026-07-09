@@ -141,7 +141,7 @@ defmodule Raxol.UI.Layout.Preparer do
 
   def prepare(other) when is_map(other) do
     %PreparedElement{
-      type: Map.get(other, :type, :unknown),
+      type: :unknown,
       element: other,
       measured_width: 0,
       measured_height: 0,
