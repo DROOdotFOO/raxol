@@ -227,6 +227,61 @@ defmodule Raxol.ACP.Seller.QueueTest do
     end
   end
 
+  describe "idempotent redelivery" do
+    setup do
+      attach_telemetry([:dispatched, :dropped])
+      {:ok, _spec} = EchoOffering.register()
+      :ok
+    end
+
+    test "a redelivered :job_offered drops as :already_offered, no duplicate setBudget", %{
+      adapter: adapter
+    } do
+      jid = job_id()
+      offer(jid)
+      :ok = wait_status(jid, :budget_set)
+
+      # Backend at-least-once redelivery of the same offer.
+      offer(jid)
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dropped],
+                      %{type: :job_offered, job_id: ^jid, reason: :already_offered}},
+                     500
+
+      # Only the first offer wrote setBudget.
+      assert length(ProviderAdapter.Mock.sent_calls(adapter)) == 1
+    end
+
+    test "a redelivered :payment_received does not re-deliver or regress the status", %{
+      adapter: adapter
+    } do
+      jid = job_id()
+      offer(jid)
+      :ok = wait_status(jid, :budget_set)
+
+      Queue.dispatch(%{type: :payment_received, job_id: jid, payload: %{}})
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dispatched],
+                      %{type: :payment_received, job_id: ^jid}},
+                     500
+
+      :ok = wait_status(jid, :submitted)
+      # setBudget + submit = 2 on-chain writes.
+      assert length(ProviderAdapter.Mock.sent_calls(adapter)) == 2
+
+      # Redeliver the payment event: it must not re-run the handler, re-submit, or
+      # regress :submitted back to :funded.
+      Queue.dispatch(%{type: :payment_received, job_id: jid, payload: %{}})
+
+      assert_receive {:telemetry, [:raxol, :acp, :seller, :queue, :dispatched],
+                      %{type: :payment_received, job_id: ^jid}},
+                     500
+
+      assert status(jid) == :submitted
+      assert length(ProviderAdapter.Mock.sent_calls(adapter)) == 2
+    end
+  end
+
   describe "backpressure" do
     setup do
       attach_telemetry([:dispatched, :dropped])

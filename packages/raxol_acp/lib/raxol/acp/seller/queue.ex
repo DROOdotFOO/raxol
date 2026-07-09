@@ -50,7 +50,7 @@ defmodule Raxol.ACP.Seller.Queue do
   - `[:raxol, :acp, :seller, :queue, :dropped]` -- event dropped. Metadata:
     `%{type, job_id, reason}` where reason is one of `:offering_not_registered`,
     `:job_not_running`, `:no_provider_adapter`, `:start_failed`, `:at_capacity`,
-    `:malformed`, `:unknown_event`, `{:rejected, reason}`, or
+    `:already_offered`, `:malformed`, `:unknown_event`, `{:rejected, reason}`, or
     `{:handler_error, reason}`.
   """
 
@@ -119,6 +119,12 @@ defmodule Raxol.ACP.Seller.Queue do
          defaults
        ) do
     cond do
+      Map.has_key?(state.jobs, job_id) ->
+        # A job we already accepted was re-offered (backend at-least-once
+        # redelivery). Re-running `handle_request` + `setBudget` would duplicate
+        # both, so drop the redelivery idempotently.
+        drop(:job_offered, job_id, %{offering: name}, :already_offered, state)
+
       defaults.provider_adapter == nil ->
         drop(:job_offered, job_id, %{offering: name}, :no_provider_adapter, state)
 
@@ -135,7 +141,14 @@ defmodule Raxol.ACP.Seller.Queue do
 
   defp handle_event(%{type: :payment_received, job_id: job_id} = event, state, _defaults) do
     with_job(:payment_received, job_id, state, fn %{provider: provider, request: request} ->
-      JobSession.apply_event(provider.session, :funded, %{payment: Map.get(event, :payload)})
+      # Only mirror `:funded` on the actual funding transition. Mirroring it
+      # unconditionally would regress an already-`:submitted` session back to
+      # `:funded` on a redelivered payment event (apply_event bypasses adjacency),
+      # re-arming a duplicate delivery. `Provider.deliver` then self-guards on
+      # status, so a redelivery is an idempotent no-op.
+      if JobSession.status(provider.session) == :budget_set do
+        JobSession.apply_event(provider.session, :funded, %{payment: Map.get(event, :payload)})
+      end
 
       case Provider.deliver(provider, request) do
         {:ok, _} -> dispatched(:payment_received, job_id, state)
