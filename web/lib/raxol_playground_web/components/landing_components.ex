@@ -5,7 +5,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   orchestration) and the markup lives here.
 
   The counter and agent code samples are owned by this module: it stores
-  them as `~S"""..."""` literals, runs them through Makeup at compile time,
+  them as `~S\"""...\"""` literals, runs them through Makeup at compile time,
   and exposes the highlighted HTML through Components that don't take any
   attributes. Callers don't need to know either source exists.
 
@@ -14,10 +14,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   """
   use Phoenix.Component
 
+  alias RaxolPlayground.Capabilities
   alias RaxolPlaygroundWeb.Playground.Helpers
 
   import Phoenix.HTML, only: [raw: 1]
-  import RaxolPlaygroundWeb.PlaygroundComponents, only: [copyable_command: 1, terminal_chrome: 1, ssh_copy_block: 1]
+
+  import RaxolPlaygroundWeb.PlaygroundComponents,
+    only: [copyable_command: 1, terminal_chrome: 1, ssh_copy_block: 1]
 
   @counter_source ~S"""
   defmodule Counter do
@@ -79,7 +82,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     %{
       q: "Where do AI agents run?",
       a:
-        "In your BEAM, supervised. Same app, same node. Bring your own API key (Anthropic, OpenAI, Ollama, Lumo, Kimi) or run mock for development. The framework streams tokens and routes inter-agent messages over a Registry."
+        "In your BEAM, supervised. Same app, same node. Bring your own API key (Anthropic, OpenAI, OpenRouter, Ollama, Lumo, Kimi) or run mock for development. The framework streams tokens and routes inter-agent messages over a Registry."
     },
     %{
       q: "Can I drop Raxol into an existing Phoenix app?",
@@ -89,7 +92,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     %{
       q: "Is this production-ready?",
       a:
-        "raxol, raxol_core, raxol_terminal, raxol_agent, raxol_mcp, raxol_liveview, raxol_plugin, raxol_speech, raxol_telegram, raxol_watch, and raxol_sensor are at v2.4 on Hex. raxol_payments is at 0.1. raxol_acp and raxol_symphony are pre-alpha. raxol.io itself runs on Fly."
+        "raxol, raxol_core, raxol_terminal, raxol_agent, raxol_mcp, raxol_liveview, raxol_plugin, and raxol_sensor are at v2.5 on Hex; raxol_speech, raxol_telegram, and raxol_watch at 0.2; raxol_payments at 0.1. raxol_acp and raxol_symphony are pre-alpha. raxol.io itself runs on Fly."
     },
     %{
       q: "What does the SSH demo give me?",
@@ -119,7 +122,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <a href="https://github.com/DROOdotFOO/raxol" class="nav-link">GitHub</a>
         </div>
         <button phx-click="toggle_mobile_menu" class="md:hidden p-1 text-pearl-50" aria-label="Toggle menu">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <%= if @mobile_menu_open do %>
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
             <% else %>
@@ -152,7 +155,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :ssh_cmd, Helpers.ssh_command())
 
     ~H"""
-    <section class="landing-section px-6 pt-28 pb-20 md:pt-36 md:pb-24 max-w-4xl mx-auto text-center" aria-labelledby="hero-title">
+    <section class="landing-section px-6 pt-24 pb-14 md:pt-32 md:pb-24 max-w-4xl mx-auto text-center" aria-labelledby="hero-title">
       <h1 id="hero-title" class="font-mono font-bold tracking-tight text-axol-coral mb-6" style="font-size: clamp(3.5rem, 2.5rem + 5vw, 7rem); line-height: 1;">
         raxol
       </h1>
@@ -200,11 +203,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <div class="stat-grid max-w-2xl mx-auto" role="list" aria-label="Project stats">
         <div class="stat-cell" role="listitem">
-          <span class="stat-value">4</span>
+          <span class="stat-value"><%= Capabilities.surface_count() %></span>
           <span class="stat-label">surfaces</span>
         </div>
         <div class="stat-cell" role="listitem">
-          <span class="stat-value">14</span>
+          <span class="stat-value"><%= Capabilities.package_count() %></span>
           <span class="stat-label">packages</span>
         </div>
         <div class="stat-cell" role="listitem">
@@ -228,7 +231,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :counter_code, @counter_code)
 
     ~H"""
-    <section class="landing-section px-6 py-20 max-w-4xl mx-auto" aria-labelledby="code-title">
+    <section class="landing-section px-6 py-12 md:py-20 max-w-4xl mx-auto" aria-labelledby="code-title">
       <h2 id="code-title" class="heading-2xl mb-3">Hello World</h2>
       <p class="body-text mb-8">
         Every Raxol app follows The Elm Architecture:
@@ -257,15 +260,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def surfaces_deep_dive(assigns) do
     ~H"""
-    <section class="landing-section px-6 py-24 max-w-5xl mx-auto" aria-labelledby="surfaces-title">
+    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="surfaces-title">
       <div class="mb-10">
         <span class="section-numeral" aria-hidden="true">01</span>
         <span class="section-eyebrow">Surfaces</span>
-        <h2 id="surfaces-title" class="heading-2xl mb-3">One module, four surfaces.</h2>
+        <h2 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> surfaces.</h2>
         <p class="body-text max-w-2xl">
-          Write the TEA module once. Render to the terminal, embed in
-          Phoenix LiveView, serve over SSH, expose to AI agents over MCP.
-          Same model. Same view. Same updates.
+          Write the TEA module once. Render to a terminal, embed in Phoenix
+          LiveView, serve over SSH, expose to agents over MCP, or reach a phone
+          via Telegram, watch push, and voice. Same model. Same view.
         </p>
       </div>
 
@@ -286,6 +289,18 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <span class="surface-chip__name">MCP</span>
           <span class="surface-chip__cmd">JSON-RPC over stdio</span>
         </div>
+        <div class="surface-chip">
+          <span class="surface-chip__name">Telegram</span>
+          <span class="surface-chip__cmd">Telegex HTTP</span>
+        </div>
+        <div class="surface-chip">
+          <span class="surface-chip__name">Watch</span>
+          <span class="surface-chip__cmd">APNS + FCM push</span>
+        </div>
+        <div class="surface-chip">
+          <span class="surface-chip__name">Speech</span>
+          <span class="surface-chip__cmd">TTS + STT</span>
+        </div>
       </div>
     </section>
     """
@@ -299,8 +314,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :ssh_cmd, Helpers.ssh_command())
 
     ~H"""
-    <section class="landing-section px-6 py-24 max-w-5xl mx-auto" aria-labelledby="ssh-deep-title">
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
+    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="ssh-deep-title">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12 items-center">
         <div>
           <span class="section-numeral" aria-hidden="true">02</span>
           <span class="section-eyebrow">Zero install</span>
@@ -333,7 +348,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :agent_code, @agent_code)
 
     ~H"""
-    <section class="landing-section px-6 py-24 max-w-4xl mx-auto" aria-labelledby="agent-deep-title">
+    <section class="landing-section px-6 py-14 md:py-24 max-w-4xl mx-auto" aria-labelledby="agent-deep-title">
       <div class="mb-8">
         <span class="section-numeral" aria-hidden="true">03</span>
         <span class="section-eyebrow">Agent runtime</span>
@@ -357,7 +372,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <p class="body-text-dim">
         Streaming LLM output via <code class="text-axol-coral">:async</code> commands.
         Inter-agent messages routed through a unique <code class="text-axol-coral">Registry</code>.
-        Bring your own key for Anthropic, OpenAI, Ollama, Lumo, or Kimi, or run mock.
+        Bring your own key for Anthropic, OpenAI, OpenRouter, Ollama, Lumo, or Kimi, or run mock.
       </p>
     </section>
     """
@@ -369,7 +384,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def features_section(assigns) do
     ~H"""
-    <section class="landing-section px-6 py-24 max-w-5xl mx-auto" aria-labelledby="features-title">
+    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="features-title">
       <span class="section-eyebrow">More capabilities</span>
       <h2 id="features-title" class="heading-2xl mb-10">What OTP gives you.</h2>
 
@@ -407,17 +422,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def packages_section(assigns) do
     ~H"""
-    <section class="landing-section px-6 py-20 max-w-5xl mx-auto" aria-labelledby="packages-title">
+    <section class="landing-section px-6 py-12 md:py-20 max-w-5xl mx-auto" aria-labelledby="packages-title">
       <h2 id="packages-title" class="heading-2xl mb-3">Pick what you need</h2>
       <p class="body-text mb-10">Full framework or just the parts that matter.</p>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <.package_card id="raxol" name="raxol" dep={~s({:raxol, "~> 2.4"})} description="Full framework: TEA runtime, rendering, widgets, effects" accent={true} />
-        <.package_card id="agent" name="raxol_agent" dep={~s({:raxol_agent, "~> 2.4"})} description="AI agents, teams, strategies, LLM streaming" />
-        <.package_card id="mcp" name="raxol_mcp" dep={~s({:raxol_mcp, "~> 2.4"})} description="MCP server, tool derivation from widgets" />
-        <.package_card id="payments" name="raxol_payments" dep={~s({:raxol_payments, "~> 0.1"})} description="x402, MPP, Xochi cross-chain, spending controls" />
-        <.package_card id="liveview" name="raxol_liveview" dep={~s({:raxol_liveview, "~> 2.4"})} description="Render TEA apps in Phoenix LiveView" />
-        <.package_card id="sensor" name="raxol_sensor" dep={~s({:raxol_sensor, "~> 2.4"})} description="Sensor fusion. Zero dependencies." />
+        <.package_card id="raxol" name="raxol" dep={Capabilities.dep("raxol")} description="Full framework: TEA runtime, rendering, widgets, effects" accent={true} />
+        <.package_card id="agent" name="raxol_agent" dep={Capabilities.dep("raxol_agent")} description="AI agents, teams, strategies, LLM streaming" />
+        <.package_card id="mcp" name="raxol_mcp" dep={Capabilities.dep("raxol_mcp")} description="MCP server, tool derivation from widgets" />
+        <.package_card id="payments" name="raxol_payments" dep={Capabilities.dep("raxol_payments")} description="x402, MPP, Xochi cross-chain, spending controls" />
+        <.package_card id="liveview" name="raxol_liveview" dep={Capabilities.dep("raxol_liveview")} description="Render TEA apps in Phoenix LiveView" />
+        <.package_card id="sensor" name="raxol_sensor" dep={Capabilities.dep("raxol_sensor")} description="Sensor fusion. Zero dependencies." />
       </div>
     </section>
     """
@@ -456,7 +471,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :faqs, @faqs)
 
     ~H"""
-    <section class="landing-section px-6 py-24 max-w-3xl mx-auto" aria-labelledby="faq-title">
+    <section class="landing-section px-6 py-14 md:py-24 max-w-3xl mx-auto" aria-labelledby="faq-title">
       <span class="section-eyebrow">FAQ</span>
       <h2 id="faq-title" class="heading-2xl mb-10">Questions, answered.</h2>
       <div class="faq-list">
@@ -479,7 +494,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :ssh_cmd, Helpers.ssh_command())
 
     ~H"""
-    <section class="landing-section px-6 py-20 max-w-4xl mx-auto" aria-labelledby="try-title">
+    <section class="landing-section px-6 py-12 md:py-20 max-w-4xl mx-auto" aria-labelledby="try-title">
       <h2 id="try-title" class="heading-2xl mb-10">Try it</h2>
 
       <div class="space-y-3 mb-10">

@@ -1,19 +1,19 @@
 # Raxol
 
-> Multi-surface runtime for Elixir on OTP. One TEA module renders to terminal, browser (LiveView), SSH, MCP, Telegram, and watch surfaces.
+> Multi-surface runtime for Elixir on OTP. One TEA module renders to terminal, browser (LiveView), SSH, MCP, Telegram, watch, and speech surfaces.
 
 ## Quick start
 
     ssh -p 2222 playground@raxol.io    # zero install
-    {:raxol, "~> 2.4"}                 # add to mix.exs
+    {:raxol, "~> 2.5"}                 # add to mix.exs
 
 ## Capability summary
 
-Raxol is an Elixir framework built on OTP. It uses The Elm Architecture (TEA): init/1, update/2, view/1. The same module renders to six surfaces without modification.
+Raxol is an Elixir framework built on OTP. It uses The Elm Architecture (TEA): init/1, update/2, view/1. The same module renders to seven surfaces without modification.
 
-Surfaces: terminal (termbox2 NIF), browser (Phoenix LiveView), SSH (Erlang :ssh), MCP (stdio JSON-RPC), Telegram (per-chat sessions), watch (APNS/FCM push).
+Surfaces: terminal (termbox2 NIF), browser (Phoenix LiveView), SSH (Erlang :ssh), MCP (stdio JSON-RPC), Telegram (per-chat sessions), watch (APNS/FCM push), speech (TTS/STT).
 
-Agent framework: TEA agents (message-driven) and Process agents (tick-driven). Teams with coordinator/worker supervision. Strategies: Direct (sequential) and ReAct (LLM reasoning loop). Backends: Anthropic, OpenAI, Ollama, Groq, Kimi, Lumo, Mock.
+Agent framework: TEA agents (message-driven) and Process agents (tick-driven). Teams with coordinator/worker supervision. Strategies: Direct (sequential) and ReAct (LLM reasoning loop). Backends: Anthropic, OpenAI, Ollama, Kimi, Groq, LLM7, OpenRouter, Lumo, Mock.
 
 Agent payments: x402 (HTTP 402 micropayments), MPP (Stripe/Tempo), Xochi (cross-chain intent settlement with stealth addresses). SpendingPolicy + Ledger for per-request/session/lifetime limits.
 
@@ -44,15 +44,15 @@ OTP gives: crash isolation per component, hot code reload, distributed clusterin
 
 ## Packages
 
-- raxol -- Full framework: TEA runtime, rendering, widgets, effects
-- raxol_agent -- AI agents, teams, strategies, LLM streaming
-- raxol_mcp -- MCP server, tool derivation from widgets
-- raxol_payments -- x402, MPP, Xochi cross-chain, spending controls
-- raxol_liveview -- LiveView bridge, TerminalBridge, TEALive
-- raxol_sensor -- Sensor fusion (zero dependencies)
-- raxol_terminal -- VT100/ANSI emulation, screen buffer, termbox2 NIF
-- raxol_core -- Behaviours, events, config, accessibility, plugins
-- raxol_plugin -- Plugin SDK, generator, testing utils
-- raxol_speech -- TTS/STT, voice commands
-- raxol_telegram -- Telegram bot surface
-- raxol_watch -- APNS/FCM push notifications
+- raxol: Full framework, TEA runtime, rendering, widgets, effects
+- raxol_agent: AI agents, teams, strategies, LLM streaming
+- raxol_mcp: MCP server, tool derivation from widgets
+- raxol_payments: x402, MPP, Xochi cross-chain, spending controls
+- raxol_liveview: LiveView bridge, TerminalBridge, TEALive
+- raxol_sensor: Sensor fusion (zero dependencies)
+- raxol_terminal: VT100/ANSI emulation, screen buffer, termbox2 NIF
+- raxol_core: Behaviours, events, config, accessibility, plugins
+- raxol_plugin: Plugin SDK, generator, testing utils
+- raxol_speech: TTS/STT, voice commands
+- raxol_telegram: Telegram bot surface
+- raxol_watch: APNS/FCM push notifications
