@@ -224,7 +224,7 @@ defmodule Raxol.Benchmark.Runner do
           lifecycle_test()
         end,
         "Plugin discovery" => fn ->
-          Raxol.Core.Runtime.Plugins.Discovery.discover_plugins("test/plugins")
+          Raxol.Core.Runtime.Plugins.Loader.discover_plugins(["test/plugins"])
         end
       },
       options: []
