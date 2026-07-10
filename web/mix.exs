@@ -50,8 +50,8 @@ defmodule RaxolPlayground.MixProject do
         steps: [:assemble],
         applications: [
           raxol_playground: :permanent,
-          ssh: :load,
-          public_key: :load,
+          ssh: :permanent,
+          public_key: :permanent,
           crypto: :permanent
         ]
       ]
