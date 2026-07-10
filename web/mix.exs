@@ -16,8 +16,7 @@ defmodule RaxolPlayground.MixProject do
   def application do
     [
       extra_applications: [:logger, :ssh, :public_key, :crypto],
-      mod: {RaxolPlayground.Application, []},
-      included_applications: [:raxol]
+      mod: {RaxolPlayground.Application, []}
     ]
   end
 
@@ -47,13 +46,7 @@ defmodule RaxolPlayground.MixProject do
     [
       raxol_playground: [
         include_executables_for: [:unix],
-        steps: [:assemble],
-        applications: [
-          raxol_playground: :permanent,
-          ssh: :permanent,
-          public_key: :permanent,
-          crypto: :permanent
-        ]
+        steps: [:assemble]
       ]
     ]
   end

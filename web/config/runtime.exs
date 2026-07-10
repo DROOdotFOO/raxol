@@ -32,8 +32,9 @@ if config_env() == :prod do
     ],
     secret_key_base: secret_key_base
 
-  # Disable terminal features in production/container environments
-  config :raxol, :features,
+  # Disable terminal features in production/container environments.
+  # Must be a map: Raxol.Application.feature_enabled?/1 reads it with Map.get.
+  config :raxol, :features, %{
     terminal_driver: false,
     web_interface: true,
     database: false,
@@ -44,6 +45,7 @@ if config_env() == :prod do
     telemetry: true,
     plugins: false,
     audit: false
+  }
 
   # ## SSL Support
   #

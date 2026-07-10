@@ -400,8 +400,19 @@ defmodule Raxol.Application do
 
   defp feature_enabled?(feature) do
     features = Application.get_env(:raxol, :features, default_features())
-    Map.get(features, feature, false)
+    get_feature_flag(features, feature)
   end
+
+  # Tolerate both a map (the documented shape) and a keyword list, since config
+  # files commonly express `config :raxol, :features, key: value` as a keyword
+  # list, which Map.get would reject with a BadMapError at boot.
+  defp get_feature_flag(features, feature) when is_map(features),
+    do: Map.get(features, feature, false)
+
+  defp get_feature_flag(features, feature) when is_list(features),
+    do: Keyword.get(features, feature, false)
+
+  defp get_feature_flag(_features, _feature), do: false
 
   defp default_features do
     %{
