@@ -2,9 +2,13 @@
 .git/
 .gitignore
 
-# Build artifacts
+# Build artifacts. Recursive because web/ is a separate mix project: the
+# top-level _build/deps rules do not match web/_build or web/deps, so host
+# build artifacts (including a macOS-built NIF) leaked into the Linux image.
 _build/
 deps/
+**/_build/
+**/deps/
 .fetch
 
 # Test and development
@@ -31,16 +35,21 @@ docs/
 /tmp/
 erl_crash.dump
 
-# NIF build artifacts (must not leak host-platform binaries into Docker)
+# NIF build artifacts (must not leak host-platform binaries into Docker).
+# Recursive so nested build dirs are caught, e.g.
+# web/_build/prod/lib/raxol_terminal/priv/termbox2_nif.so.
 *.so
 *.o
+**/*.so
+**/*.o
 priv/termbox2_nif.so
 packages/raxol_terminal/lib/termbox2_nif/c_src/*.o
 packages/raxol_terminal/lib/termbox2_nif/c_src/*.so
 packages/raxol_terminal/lib/termbox2_nif/priv/*.so
 
-# Node modules (in case they exist at root)
+# Node modules (root or nested)
 node_modules/
+**/node_modules/
 
 # Docker files themselves
 Dockerfile*
