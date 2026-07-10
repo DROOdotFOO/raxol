@@ -50,6 +50,7 @@ defmodule Raxol.Payments.Xochi.Client do
   """
 
   alias Raxol.Payments.Xochi.Schemas.{
+    DepositRouteRequest,
     QuoteRequest,
     QuoteResponse,
     ExecuteRequest,
@@ -80,6 +81,24 @@ defmodule Raxol.Payments.Xochi.Client do
       config
       |> build_req()
       |> Req.post(url: "/api/intent/quote", json: QuoteRequest.to_json(request))
+      |> handle_response(&QuoteResponse.from_json/1)
+    end
+  end
+
+  @doc """
+  Request a deposit-route quote for a non-EVM (Tron) origin.
+
+  Same `/api/intent/quote` endpoint as `get_quote/2`, but the request allows a
+  base58 origin and the response carries a `deposit_address` + `deposit_attestation`
+  (verify it before sending funds) instead of EIP-712 typed data to sign.
+  """
+  @spec get_deposit_route_quote(config(), DepositRouteRequest.t()) ::
+          {:ok, QuoteResponse.t()} | error()
+  def get_deposit_route_quote(config, %DepositRouteRequest{} = request) do
+    with :ok <- DepositRouteRequest.validate(request) do
+      config
+      |> build_req()
+      |> Req.post(url: "/api/intent/quote", json: DepositRouteRequest.to_json(request))
       |> handle_response(&QuoteResponse.from_json/1)
     end
   end

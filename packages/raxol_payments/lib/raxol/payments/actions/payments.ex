@@ -32,6 +32,7 @@ defmodule Raxol.Payments.Actions.Payments do
     Raxol.Payments.Actions.Payments.RevokeMandate,
     Raxol.Payments.Actions.Payments.ExecuteXochiIntent,
     Raxol.Payments.Actions.Payments.PollXochiStatus,
+    Raxol.Payments.Actions.Payments.ExecuteDepositRoute,
     Raxol.Payments.Actions.Payments.ExecuteRelayTransfer,
     Raxol.Payments.Actions.Payments.PollRelayStatus
   ]

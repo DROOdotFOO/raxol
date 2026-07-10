@@ -53,8 +53,15 @@ defmodule Raxol.Payments.Protocols.Xochi do
   @behaviour Raxol.Payments.Protocol
 
   alias Raxol.Payments.Poll
-  alias Raxol.Payments.Xochi.Client
-  alias Raxol.Payments.Xochi.Schemas.{ExecuteRequest, IntentStatus, QuoteRequest, QuoteResponse}
+  alias Raxol.Payments.Xochi.{Capabilities, Client, DepositAttestation}
+
+  alias Raxol.Payments.Xochi.Schemas.{
+    DepositRouteRequest,
+    ExecuteRequest,
+    IntentStatus,
+    QuoteRequest,
+    QuoteResponse
+  }
 
   # -- Protocol behaviour (stubs -- Xochi is not a 402 protocol) --
 
@@ -93,6 +100,126 @@ defmodule Raxol.Payments.Protocols.Xochi do
           {:ok, QuoteResponse.t()} | {:error, term()}
   def get_quote(config, %QuoteRequest{} = request) do
     Client.get_quote(config, request)
+  end
+
+  @doc """
+  Fetch a deposit-route quote and verify its `deposit_attestation` before
+  returning the deposit instructions -- the authenticated form of a Tron-origin
+  quote.
+
+  A non-EVM origin has no gasless pull, so the quote returns a bare
+  `deposit_address` the payer must fund directly. A MITM or compromised endpoint
+  could swap that address, so raxol verifies the attestation recovers to the
+  pinned signer BEFORE surfacing the address, failing closed when no signer is
+  pinned or the attestation does not verify. raxol never sends the funds; the
+  returned instructions are for the caller's own Tron wallet to fund, then poll
+  with `poll_status/3`.
+
+  Signer resolution, in precedence order: `opts[:deposit_attestation_signer]`
+  (an operator's out-of-band pin), else `config :raxol_payments,
+  :xochi_deposit_attestation_signer`, else the live capability matrix's
+  `deposit_attestation_signer`.
+
+  ## Options
+
+    * `:deposit_attestation_signer` -- pin the expected signer explicitly.
+    * `:capabilities` -- a pre-fetched `Capabilities.t()` (skips the network).
+  """
+  @spec deposit_route_quote(Client.config(), DepositRouteRequest.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def deposit_route_quote(config, %DepositRouteRequest{} = request, opts \\ []) do
+    with {:ok, quote} <- Client.get_deposit_route_quote(config, request),
+         :ok <- ensure_solvable(quote),
+         {:ok, instructions} <- verify_deposit_route(config, request, quote, opts) do
+      {:ok, instructions}
+    end
+  end
+
+  @doc """
+  Verify a deposit-route quote's attestation against the pinned signer and return
+  the deposit instructions, or a fail-closed error. See `deposit_route_quote/3`
+  for signer resolution.
+  """
+  @spec verify_deposit_route(
+          Client.config(),
+          DepositRouteRequest.t(),
+          QuoteResponse.t(),
+          keyword()
+        ) :: {:ok, map()} | {:error, term()}
+  def verify_deposit_route(
+        config,
+        %DepositRouteRequest{} = request,
+        %QuoteResponse{} = quote,
+        opts \\ []
+      ) do
+    with :ok <- ensure_deposit_route(quote),
+         {:ok, signer} <- resolve_deposit_signer(config, opts),
+         :ok <-
+           DepositAttestation.verify(
+             deposit_binding_fields(request, quote),
+             quote.deposit_attestation,
+             signer
+           ) do
+      {:ok, deposit_instructions(request, quote)}
+    end
+  end
+
+  defp ensure_solvable(%QuoteResponse{can_solve: true}), do: :ok
+  defp ensure_solvable(%QuoteResponse{error: reason}), do: {:error, {:not_solvable, reason}}
+
+  defp ensure_deposit_route(%QuoteResponse{} = quote) do
+    if QuoteResponse.deposit_route?(quote), do: :ok, else: {:error, :not_a_deposit_route}
+  end
+
+  # Pin the expected signer, failing closed when none is available -- a bare
+  # deposit address with nothing to authenticate it against must not be trusted.
+  defp resolve_deposit_signer(config, opts) do
+    signer =
+      opts[:deposit_attestation_signer] ||
+        Application.get_env(:raxol_payments, :xochi_deposit_attestation_signer) ||
+        Capabilities.deposit_attestation_signer(deposit_capabilities(config, opts))
+
+    case signer do
+      s when is_binary(s) and s != "" -> {:ok, s}
+      _ -> {:error, :deposit_signer_unavailable}
+    end
+  end
+
+  defp deposit_capabilities(config, opts) do
+    case Keyword.get(opts, :capabilities) do
+      %{} = caps -> caps
+      _ -> Capabilities.get(config)
+    end
+  end
+
+  # The attestation binds fields split across the request (origin) and the quote
+  # response (ids + deposit address); reassemble them for recovery.
+  defp deposit_binding_fields(%DepositRouteRequest{} = request, %QuoteResponse{} = quote) do
+    %{
+      intent_id: quote.intent_id,
+      quote_id: quote.quote_id,
+      from_chain_id: request.from_chain_id,
+      from_token: request.from_token,
+      from_amount: request.from_amount,
+      deposit_address: quote.deposit_address
+    }
+  end
+
+  defp deposit_instructions(%DepositRouteRequest{} = request, %QuoteResponse{} = quote) do
+    %{
+      intent_id: quote.intent_id,
+      quote_id: quote.quote_id,
+      deposit_address: quote.deposit_address,
+      deposit_deadline: quote.deposit_deadline,
+      from_chain_id: request.from_chain_id,
+      from_token: request.from_token,
+      from_amount: request.from_amount,
+      to_chain_id: request.to_chain_id,
+      to_token: request.to_token,
+      recipient_address: request.recipient_address,
+      to_amount: quote.to_amount,
+      expires_at: quote.expiry
+    }
   end
 
   @doc """

@@ -133,11 +133,19 @@ defmodule Raxol.Payments.SigningBoundaryPropertyTest do
       #   CreateMandate       -- signs a struct-derived Mandate digest (sign_hash),
       #                          not an arbitrary hash; gated at LLM tool dispatch
       #                          by `sensitive: true` (see ToolGateTest)
+      #   ExecuteDepositRoute -- verify-only; never signs. It fetches a Tron-origin
+      #                          quote and verifies the deposit_attestation, then
+      #                          returns the deposit instructions. raxol has no Tron
+      #                          tx stack and moves no funds; the agent funds the
+      #                          verified address externally. `sensitive: true`
+      #                          gates it at LLM dispatch since acting on its output
+      #                          moves real funds.
       known_sensitive =
         MapSet.new([
           Payments.Transfer,
           Payments.ExecuteXochiIntent,
           Payments.ExecuteRelayTransfer,
+          Payments.ExecuteDepositRoute,
           Payments.CreateMandate
         ])
 
