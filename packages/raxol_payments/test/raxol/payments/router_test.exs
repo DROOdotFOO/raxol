@@ -1,7 +1,73 @@
 defmodule Raxol.Payments.RouterTest do
-  use ExUnit.Case, async: true
+  # async: false -- the attestation tests set the :zksar_allowed_issuers app env.
+  use ExUnit.Case, async: false
 
   alias Raxol.Payments.Router
+  alias Raxol.Payments.Zksar
+
+  # anvil account 0/1 keys -- real secp256k1 scalars. account 0's address is the
+  # trusted attestation issuer; account 1 signs "wrong issuer" proofs.
+  @issuer_key Base.decode16!(
+                "AC0974BEC39A17E36BA4A6B4D238FF944BACB478CBED5EFCAE784D7BF4F2FF80",
+                case: :mixed
+              )
+  @rogue_key Base.decode16!(
+               "59C6995E998F97A5A0044966F0945389DC9E86DAE88C7A8412F4603B6B78690D",
+               case: :mixed
+             )
+
+  @issuer (
+            {:ok, pub} = ExSecp256k1.create_public_key(@issuer_key)
+            <<_prefix::8, body::binary-size(64)>> = pub
+            <<_first_12::binary-size(12), addr::binary-size(20)>> = ExKeccak.hash_256(body)
+            "0x" <> Base.encode16(addr, case: :lower)
+          )
+
+  @type_codes %{compliance: 0x01, risk_score: 0x02, non_membership: 0x06}
+
+  setup do
+    prior = Application.get_env(:raxol_payments, :zksar_allowed_issuers)
+    Application.put_env(:raxol_payments, :zksar_allowed_issuers, [@issuer])
+
+    on_exit(fn ->
+      case prior do
+        nil -> Application.delete_env(:raxol_payments, :zksar_allowed_issuers)
+        value -> Application.put_env(:raxol_payments, :zksar_allowed_issuers, value)
+      end
+    end)
+
+    :ok
+  end
+
+  # A raw ZKSAR proof of `type` signed by `key`, valid at real system time (the
+  # Router verifies with no `now:` override): far-future expiry, past issue.
+  defp signed(type, key \\ @issuer_key) do
+    proof = %{
+      type_code: Map.fetch!(@type_codes, type),
+      issuer: address_for(key),
+      subject: "0x00000000000000000000000000000000000000ff",
+      issued_at: 1_000_000_000,
+      expires_at: 4_000_000_000,
+      signature: "",
+      payload: <<1, 2, 3, 4>>
+    }
+
+    digest = Zksar.attestation_digest(proof)
+    {:ok, {r, s, v}} = ExSecp256k1.sign(digest, key)
+
+    %{
+      proof
+      | signature:
+          "0x" <> Base.encode16(<<r::binary-size(32), s::binary-size(32), v::8>>, case: :lower)
+    }
+  end
+
+  defp address_for(key) do
+    {:ok, pub} = ExSecp256k1.create_public_key(key)
+    <<_prefix::8, body::binary-size(64)>> = pub
+    <<_first_12::binary-size(12), addr::binary-size(20)>> = ExKeccak.hash_256(body)
+    "0x" <> Base.encode16(addr, case: :lower)
+  end
 
   describe "select/1" do
     test "defaults to x402 for same-chain" do
@@ -63,53 +129,53 @@ defmodule Raxol.Payments.RouterTest do
     end
   end
 
-  describe "attestation-aware routing" do
-    @verified_non_membership %{
-      type: :non_membership,
-      subject: "0x",
-      issuer: "0x",
-      issued_at: 0,
-      expires_at: 0,
-      valid: true
-    }
-    @verified_compliance %{
-      type: :compliance,
-      subject: "0x",
-      issuer: "0x",
-      issued_at: 0,
-      expires_at: 0,
-      valid: true
-    }
+  describe "attestation-aware routing (verified, fail closed) (#337)" do
+    # A caller-fabricated attestation: the verified shape, but no raw proof to
+    # verify (no type_code / signature). It must buy nothing.
+    @self_asserted %{type: :non_membership, valid: true}
 
-    test "attestations compute trust score when trust_score absent" do
-      # non_membership (25) + compliance (20/ln(3) ~= 18) = ~43 -> stealth tier -> xochi
-      assert Router.select(attestations: [@verified_non_membership, @verified_compliance]) ==
-               :xochi
+    test "verified attestations compute a trust score" do
+      # signed non_membership (25) + compliance (~18) = ~43 -> stealth -> xochi
+      assert Router.select(attestations: [signed(:non_membership), signed(:compliance)]) == :xochi
     end
 
-    test "trust_score takes precedence over attestations" do
-      # Explicit score 10 -> standard -> x402, even though attestations would yield higher
-      assert Router.select(
-               trust_score: 10,
-               attestations: [@verified_non_membership, @verified_compliance]
-             ) == :x402
+    test "a single verified attestation of sufficient weight routes to xochi" do
+      # signed non_membership = 25 -> stealth -> xochi
+      assert Router.select(attestations: [signed(:non_membership)]) == :xochi
     end
 
-    test "attestations with high aggregate score route to xochi" do
-      # non_membership alone = 25 -> stealth -> xochi
-      assert Router.select(attestations: [@verified_non_membership]) == :xochi
+    test "trust_score_for aggregates only verified proofs" do
+      assert Router.trust_score_for(attestations: [signed(:non_membership)]) == 25
     end
 
-    test "trust_score_for/1 with attestations" do
-      score = Router.trust_score_for(attestations: [@verified_non_membership])
-      assert score == 25
+    test "a self-asserted attestation (no signature) buys no trust -- fail closed" do
+      # The core #337 vulnerability: valid: true with no proof behind it.
+      assert Router.select(attestations: [@self_asserted]) == :x402
+      assert Router.trust_score_for(attestations: [@self_asserted]) == 0
+      assert Router.settlement_for(attestations: [@self_asserted]) == :public
     end
 
-    test "trust_score_for/1 prefers explicit trust_score" do
+    test "a proof from a non-allowlisted issuer buys no trust" do
+      rogue = signed(:non_membership, @rogue_key)
+      assert Router.select(attestations: [rogue]) == :x402
+      assert Router.trust_score_for(attestations: [rogue]) == 0
+    end
+
+    test "no configured allowlist means no attestation buys trust" do
+      Application.put_env(:raxol_payments, :zksar_allowed_issuers, [])
+      assert Router.select(attestations: [signed(:non_membership)]) == :x402
+      assert Router.trust_score_for(attestations: [signed(:non_membership)]) == 0
+    end
+
+    test "an explicit trust_score wins over (would-be) attestation trust" do
+      assert Router.select(trust_score: 10, attestations: [signed(:non_membership)]) == :x402
+    end
+
+    test "trust_score_for prefers an explicit trust_score" do
       assert Router.trust_score_for(trust_score: 42) == 42
     end
 
-    test "trust_score_for/1 returns 0 with no inputs" do
+    test "trust_score_for returns 0 with no inputs" do
       assert Router.trust_score_for() == 0
     end
   end
@@ -145,35 +211,35 @@ defmodule Raxol.Payments.RouterTest do
       assert Router.settlement_for(trust_score: 999) == :shielded
     end
 
-    test "attestations with valid: false do not count for tier requirements" do
-      invalid_compliance = %{
-        type: :compliance,
-        subject: "0x",
-        issuer: "0x",
-        issued_at: 0,
-        expires_at: 0,
-        valid: false
-      }
-
-      invalid_non_membership = %{
-        type: :non_membership,
-        subject: "0x",
-        issuer: "0x",
-        issued_at: 0,
-        expires_at: 0,
-        valid: false
-      }
-
-      # Score 80 qualifies for sovereign, but invalid attestations should
-      # cause downgrade since they don't satisfy requirements.
-      # Downgrades to stealth (first tier with no attestation requirements).
+    test "verified attestations satisfy a high tier's requirement (no downgrade) (#337)" do
+      # Sovereign (score 75+) requires compliance + non_membership; both verified
+      # and present, so the tier stands -> shielded.
       settlement =
         Router.settlement_for(
           trust_score: 80,
-          attestations: [invalid_compliance, invalid_non_membership]
+          attestations: [signed(:compliance), signed(:non_membership)]
         )
 
+      assert settlement == :shielded
+    end
+
+    test "verified attestations that miss a tier's required types force a downgrade (#337)" do
+      # Score 80 is sovereign, but the only verified proof is risk_score, so the
+      # compliance/non_membership requirement is unmet -> downgrade to stealth.
+      settlement = Router.settlement_for(trust_score: 80, attestations: [signed(:risk_score)])
       assert settlement == :stealth
+    end
+
+    test "unverified attestations are dropped, not credited, so they do not downgrade (#337)" do
+      # Self-asserted proofs verify to nothing, so an explicit high score resolves
+      # by score alone -- as if no attestations were supplied.
+      settlement =
+        Router.settlement_for(
+          trust_score: 80,
+          attestations: [%{type: :compliance, valid: true}, %{type: :non_membership, valid: true}]
+        )
+
+      assert settlement == :shielded
     end
 
     test "empty attestation list does not affect routing" do
