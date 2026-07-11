@@ -16,6 +16,19 @@ defmodule Raxol.UI.Components.Display.Text do
   - `align` (`:left | :center | :right`) -- alignment within width, default `:left`
   - `width` (integer | nil) -- constraint for wrapping/alignment/truncation
   - `truncate` (boolean) -- truncate with ellipsis when exceeding width, default `false`
+  - `text_overflow` (`:clip | :ellipsis`) -- CSS `text-overflow`-following
+    single-line truncation, default `:clip` (a no-op; existing rendering
+    already visually clips at the buffer edge). Only takes effect when
+    `white_space` is `:nowrap` or `:pre` (the CSS-spec-following
+    non-wrapping cases) and set to `:ellipsis`; at any other combination
+    it defers entirely, so existing callers see zero behavior change. See
+    `Raxol.UI.TextLayout.truncate/3`.
+  - `line_clamp` (`pos_integer | nil`) -- CSS Overflow Module Level 4
+    `line-clamp`: caps wrapped output at this many lines, block-ellipsing
+    the last kept line, default `nil` (a no-op). When set, it overrides
+    the legacy `wrap`/`truncate` dispatch entirely and wraps via
+    `white_space` (default `:normal`) through
+    `Raxol.UI.TextLayout.clamp/4`.
   - `style`, `theme`, `id` -- standard
   """
 
@@ -33,6 +46,9 @@ defmodule Raxol.UI.Components.Display.Text do
           align: :left | :center | :right,
           width: non_neg_integer() | nil,
           truncate: boolean(),
+          text_overflow: :clip | :ellipsis,
+          line_clamp: pos_integer() | nil,
+          text_wrap: :auto | :pretty,
           style: map(),
           theme: map()
         }
@@ -49,6 +65,9 @@ defmodule Raxol.UI.Components.Display.Text do
       align: Keyword.get(props, :align, :left),
       width: Keyword.get(props, :width),
       truncate: Keyword.get(props, :truncate, false),
+      text_overflow: Keyword.get(props, :text_overflow, :clip),
+      line_clamp: Keyword.get(props, :line_clamp),
+      text_wrap: Keyword.get(props, :text_wrap, :auto),
       style: Keyword.get(props, :style, %{}),
       theme: Keyword.get(props, :theme, %{})
     }
@@ -64,14 +83,25 @@ defmodule Raxol.UI.Components.Display.Text do
   def render(state, context) do
     style = StyleHelper.merge_component_styles(state, context, :text)
 
+    # `text_wrap: :pretty` replaces the greedy break-point choice for
+    # plain wrapped text; `line_clamp` (which does its own wrapping) and
+    # non-:normal white-space modes take priority and ignore it.
     lines =
-      process_content(
-        state.content,
-        state.width,
-        state.white_space,
-        state.wrap,
-        state.truncate
-      )
+      if Map.get(state, :text_wrap, :auto) == :pretty and
+           state.white_space == :normal and is_integer(state.width) and
+           is_nil(state.line_clamp) and state.content != "" do
+        TextLayout.wrap(state.content, state.width, :normal, :pretty)
+      else
+        process_content(
+          state.content,
+          state.width,
+          state.white_space,
+          state.wrap,
+          state.truncate,
+          state.text_overflow,
+          state.line_clamp
+        )
+      end
 
     lines = align_lines(lines, state.width, state.align)
 
@@ -97,32 +127,123 @@ defmodule Raxol.UI.Components.Display.Text do
 
   # --- Content processing ---
 
-  defp process_content(content, nil, _white_space, _wrap, _truncate),
-    do: [content]
+  defp process_content(
+         content,
+         nil,
+         _white_space,
+         _wrap,
+         _truncate,
+         _text_overflow,
+         _line_clamp
+       ),
+       do: [content]
 
-  defp process_content(content, _width, _white_space, _wrap, _truncate)
+  defp process_content(
+         content,
+         _width,
+         _white_space,
+         _wrap,
+         _truncate,
+         _text_overflow,
+         _line_clamp
+       )
        when content == "",
        do: [""]
+
+  # `line_clamp` overrides the legacy `wrap`/`truncate` dispatch entirely
+  # (and takes priority over `white_space`, which it passes through to
+  # TextLayout.clamp/4 as the wrapping mode) whenever it's set.
+  defp process_content(
+         content,
+         width,
+         white_space,
+         _wrap,
+         _truncate,
+         _text_overflow,
+         line_clamp
+       )
+       when is_integer(line_clamp) do
+    TextLayout.clamp(content, width, line_clamp, white_space: white_space)
+  end
+
+  # `text-overflow: ellipsis` only applies to the non-wrapping CSS
+  # `white-space` cases (`:nowrap`, `:pre`); `:clip` (the default) is a
+  # no-op here since rendering already clips visually at the buffer edge.
+  defp process_content(
+         content,
+         width,
+         white_space,
+         _wrap,
+         _truncate,
+         :ellipsis,
+         _line_clamp
+       )
+       when white_space in [:nowrap, :pre] do
+    content
+    |> TextLayout.wrap(width, white_space)
+    |> Enum.map(&TextLayout.truncate(&1, width, :ellipsis))
+  end
 
   # CSS `white-space` takes over the whole collapse/preserve/wrap decision
   # whenever it's set to anything other than the default -- at :normal we
   # fall through to the legacy `wrap`-prop dispatch below unchanged.
-  defp process_content(content, width, white_space, _wrap, _truncate)
+  defp process_content(
+         content,
+         width,
+         white_space,
+         _wrap,
+         _truncate,
+         _text_overflow,
+         _line_clamp
+       )
        when white_space != :normal do
     TextLayout.wrap(content, width, white_space)
   end
 
-  defp process_content(content, width, :normal, :none, true) do
+  defp process_content(
+         content,
+         width,
+         :normal,
+         :none,
+         true,
+         _text_overflow,
+         _line_clamp
+       ) do
     [truncate_line(content, width)]
   end
 
-  defp process_content(content, _width, :normal, :none, false), do: [content]
+  defp process_content(
+         content,
+         _width,
+         :normal,
+         :none,
+         false,
+         _text_overflow,
+         _line_clamp
+       ),
+       do: [content]
 
-  defp process_content(content, width, :normal, :word, _truncate) do
+  defp process_content(
+         content,
+         width,
+         :normal,
+         :word,
+         _truncate,
+         _text_overflow,
+         _line_clamp
+       ) do
     TextLayout.wrap(content, width, :normal)
   end
 
-  defp process_content(content, width, :normal, :char, _truncate) do
+  defp process_content(
+         content,
+         width,
+         :normal,
+         :char,
+         _truncate,
+         _text_overflow,
+         _line_clamp
+       ) do
     TextWrapping.wrap_line_by_char(content, width)
   end
 
