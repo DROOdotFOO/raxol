@@ -58,7 +58,8 @@ defmodule Raxol.Payments.Xochi.Capabilities do
   @type t :: %{
           source: :live | :fallback,
           chains: [chain()],
-          tokens: [token()]
+          tokens: [token()],
+          deposit_attestation_signer: String.t() | nil
         }
 
   @table __MODULE__
@@ -121,7 +122,7 @@ defmodule Raxol.Payments.Xochi.Capabilities do
     end
   end
 
-  def parse(%{"chains" => chains, "tokens" => tokens})
+  def parse(%{"chains" => chains, "tokens" => tokens} = matrix)
       when is_list(chains) and is_list(tokens) do
     case Enum.flat_map(chains, &parse_chain/1) do
       [] ->
@@ -132,7 +133,8 @@ defmodule Raxol.Payments.Xochi.Capabilities do
          %{
            source: :live,
            chains: parsed_chains,
-           tokens: Enum.flat_map(tokens, &parse_token/1)
+           tokens: Enum.flat_map(tokens, &parse_token/1),
+           deposit_attestation_signer: parse_signer(matrix["deposit_attestation_signer"])
          }}
     end
   end
@@ -155,7 +157,10 @@ defmodule Raxol.Payments.Xochi.Capabilities do
       tokens:
         Enum.map(Assets.evm_tokens(), fn {symbol, by_chain} ->
           %{symbol: symbol, roles: [:origin, :destination], addresses: by_chain}
-        end)
+        end),
+      # No live matrix means no published signer; a deposit-route verify then
+      # fails closed (nothing to pin the attestation against).
+      deposit_attestation_signer: nil
     }
   end
 
@@ -218,6 +223,14 @@ defmodule Raxol.Payments.Xochi.Capabilities do
   @spec chain_ids(t()) :: [pos_integer()]
   def chain_ids(%{chains: chains}), do: Enum.map(chains, & &1.chain_id)
 
+  @doc """
+  The pinned deposit-route attestation signer (lowercased `0x`), or `nil` when
+  the matrix does not publish one (a deposit-route verify then fails closed).
+  """
+  @spec deposit_attestation_signer(t()) :: String.t() | nil
+  def deposit_attestation_signer(%{deposit_attestation_signer: signer}), do: signer
+  def deposit_attestation_signer(_), do: nil
+
   @doc "VM family for a chain id; `:evm` when the chain is unknown."
   @spec vm_type(t(), pos_integer() | String.t() | nil) :: vm_type()
   def vm_type(%{chains: chains}, chain_id) do
@@ -268,6 +281,16 @@ defmodule Raxol.Payments.Xochi.Capabilities do
   # ============================================================
   # Private
   # ============================================================
+
+  # The published attestation signer must be a well-formed EVM address; a
+  # malformed value is treated as absent (nil), so verify fails closed rather
+  # than pinning against garbage.
+  defp parse_signer(signer) when is_binary(signer) do
+    normalized = signer |> String.trim() |> String.downcase()
+    if Regex.match?(~r/^0x[0-9a-f]{40}$/, normalized), do: normalized, else: nil
+  end
+
+  defp parse_signer(_), do: nil
 
   defp parse_chain(%{"chain_id" => id} = chain) when is_integer(id) and id > 0 do
     [

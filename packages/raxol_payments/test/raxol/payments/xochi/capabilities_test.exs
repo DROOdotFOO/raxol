@@ -121,6 +121,52 @@ defmodule Raxol.Payments.Xochi.CapabilitiesTest do
         assert Assets.known?(chain, address)
       end
     end
+
+    test "publishes no deposit attestation signer (fails a deposit-route verify closed)" do
+      assert Capabilities.deposit_attestation_signer(Capabilities.fallback()) == nil
+    end
+  end
+
+  describe "deposit_attestation_signer/1 (#400)" do
+    @signer "0x000000000000000000000000000000000000dead"
+
+    test "parses the published signer (bare and worker-wrapped)" do
+      wire = Map.put(@wire_evm, "deposit_attestation_signer", @signer)
+
+      assert {:ok, caps} = Capabilities.parse(wire)
+      assert Capabilities.deposit_attestation_signer(caps) == @signer
+
+      assert {:ok, wrapped} = Capabilities.parse(%{"source" => "live", "capabilities" => wire})
+      assert Capabilities.deposit_attestation_signer(wrapped) == @signer
+    end
+
+    test "normalizes the signer to lowercase 0x" do
+      wire =
+        Map.put(
+          @wire_evm,
+          "deposit_attestation_signer",
+          "  0x000000000000000000000000000000000000DEAD  "
+        )
+
+      assert {:ok, caps} = Capabilities.parse(wire)
+      assert Capabilities.deposit_attestation_signer(caps) == @signer
+    end
+
+    test "is nil when the matrix omits it" do
+      assert {:ok, caps} = Capabilities.parse(@wire_evm)
+      assert Capabilities.deposit_attestation_signer(caps) == nil
+    end
+
+    test "treats a malformed signer as absent (verify then fails closed)" do
+      wire = Map.put(@wire_evm, "deposit_attestation_signer", "not-an-address")
+      assert {:ok, caps} = Capabilities.parse(wire)
+      assert Capabilities.deposit_attestation_signer(caps) == nil
+    end
+
+    test "accessor returns nil for a caps map predating the field" do
+      assert Capabilities.deposit_attestation_signer(%{source: :fallback, chains: [], tokens: []}) ==
+               nil
+    end
   end
 
   describe "fillable?/4" do
