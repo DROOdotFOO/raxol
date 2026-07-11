@@ -28,6 +28,7 @@ defmodule Raxol.UI.Components.Input.Menu do
 
   use Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   @type menu_item :: %{
           id: atom(),
@@ -402,6 +403,34 @@ defmodule Raxol.UI.Components.Input.Menu do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    %{
+      role: :menu,
+      label: node[:aria_label] || node[:label],
+      children: a11y_menu_items(node[:items] || [])
+    }
+  end
+
+  defp a11y_menu_items(items) do
+    Enum.map(items, fn item ->
+      %{
+        role: :menuitem,
+        label: item[:label],
+        id: a11y_atom_id(item[:id]),
+        state: %{disabled?: item[:disabled] == true},
+        children: a11y_menu_items(item[:children] || [])
+      }
+    end)
+  end
+
+  defp a11y_atom_id(id) when is_binary(id), do: id
+
+  defp a11y_atom_id(id) when is_atom(id) and not is_nil(id),
+    do: Atom.to_string(id)
+
+  defp a11y_atom_id(_id), do: nil
 
   defp collect_item_labels(items, depth) do
     Enum.flat_map(items, fn item ->

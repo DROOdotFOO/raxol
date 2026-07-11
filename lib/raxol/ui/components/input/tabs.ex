@@ -15,6 +15,7 @@ defmodule Raxol.UI.Components.Input.Tabs do
 
   use Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   @type tab :: %{id: atom() | String.t(), label: String.t()}
 
@@ -220,4 +221,35 @@ defmodule Raxol.UI.Components.Input.Tabs do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    tabs = node[:tabs] || []
+    active = node[:active_index] || 0
+
+    children =
+      tabs
+      |> Enum.with_index()
+      |> Enum.map(fn {tab, index} ->
+        %{
+          role: :tab,
+          label: tab[:label],
+          id: a11y_tab_id(tab[:id]),
+          state: %{selected?: index == active}
+        }
+      end)
+
+    %{
+      role: :tablist,
+      label: node[:aria_label] || node[:label],
+      children: children
+    }
+  end
+
+  defp a11y_tab_id(id) when is_binary(id), do: id
+
+  defp a11y_tab_id(id) when is_atom(id) and not is_nil(id),
+    do: Atom.to_string(id)
+
+  defp a11y_tab_id(_id), do: nil
 end

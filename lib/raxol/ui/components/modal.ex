@@ -31,6 +31,7 @@ defmodule Raxol.UI.Components.Modal do
   # Use standard component behaviour
   use Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   # Require view macros and components
   # require Raxol.View.Elements  # Removed
@@ -339,4 +340,10 @@ defmodule Raxol.UI.Components.Modal do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    # Children omitted: the projection recurses the modal's own content Elements.
+    %{role: :dialog, label: node[:title] || node[:aria_label], state: %{}}
+  end
 end

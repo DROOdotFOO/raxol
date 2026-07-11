@@ -126,6 +126,45 @@ a Component.
 
 ---
 
+## Accessibility
+
+The accessibility layer projects the semantic Element tree into a
+role/label/state form that Surfaces serialize for assistive technology.
+
+| Term                       | Definition                                                                                                                                                    | Aliases to avoid                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Accessibility tree**     | The projection of the Element tree into role/label/state descriptors, consumed by Surfaces to drive assistive technology.                                      | a11y tree, ARIA tree, semantic tree |
+| **Accessibility node**     | One entry in the Accessibility tree: `%{role, label, state, value, children, live?}`. Derived from an Element.                                                 | a11y node, ARIA node                |
+| **Accessibility Provider** | The `Raxol.Core.Accessibility.Provider` behaviour a Component implements (`a11y_node/1`) to describe itself. Parallels ToolProvider.                           | a11y provider                       |
+| **Role**                   | The ARIA role of an Accessibility node: button, textbox, checkbox, grid, dialog, and so on.                                                                    | type, kind                          |
+| **Announcement**           | A prioritized message pushed to assistive technology via the Accessibility facade (`:high`, `:medium`, `:low`, with optional interrupt). Consumed by the Speech surface (TTS) and the Browser live region. | notification, alert  |
+| **Live region**            | A Surface construct that speaks Announcements as they arrive (Browser: a visually hidden `aria-live` region; Speech: TTS).                                     | announcer                           |
+
+### Relationships
+
+- One Element yields zero or one Accessibility node (1:0..1).
+- The Projection walks the Element tree once; MCP and Browser both consume its
+  output (1:N).
+- A Component that implements the Accessibility Provider behaviour is
+  authoritative for its own node.
+
+### Example dialogue
+
+> "The checkbox's Accessibility Provider reports `role: :checkbox` with `state: %{checked?: true}`, and the Browser surface renders `aria-checked` from it."
+> NOT: "The checkbox widget sets its ARIA node so the frontend can show the checked state."
+
+### Flagged ambiguities
+
+- **Accessibility node** vs **Element**: an Element is what `view/1` returns; an
+  Accessibility node is the descriptor projected from it. Never call the
+  projected descriptor an Element.
+- **Role** (ARIA) vs Button's visual **variant** (`:primary`, `:danger`): the
+  variant is styling. It becomes `state.variant`, never the ARIA Role.
+- **Announcement** vs **Message** (TEA): a Message drives `update/2`; an
+  Announcement is an outbound accessibility string. Unrelated.
+
+---
+
 ## Agents
 
 | Term                    | Definition                                                                                            | Aliases to avoid                       |

@@ -11,6 +11,7 @@ defmodule Raxol.UI.Charts.BarChart do
 
   @compile {:no_warn_undefined, Raxol.MCP.ToolProvider}
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   @type cell :: ChartUtils.cell()
 
@@ -562,4 +563,21 @@ defmodule Raxol.UI.Charts.BarChart do
   @impl Raxol.MCP.ToolProvider
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    %{
+      role: :img,
+      label:
+        node[:aria_label] || node[:title] || a11y_chart_id(node[:id]) ||
+          "bar chart"
+    }
+  end
+
+  defp a11y_chart_id(id) when is_binary(id), do: id
+
+  defp a11y_chart_id(id) when is_atom(id) and not is_nil(id),
+    do: Atom.to_string(id)
+
+  defp a11y_chart_id(_id), do: nil
 end

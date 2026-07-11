@@ -5,6 +5,7 @@ defmodule Raxol.UI.Components.Input.Button do
 
   use Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
   @default_max_width Raxol.Core.Defaults.terminal_width()
 
   defstruct [
@@ -284,6 +285,21 @@ defmodule Raxol.UI.Components.Input.Button do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    attrs = Map.get(node, :attrs, %{})
+
+    %{
+      role: :button,
+      label: attrs[:label],
+      state: %{
+        disabled?: attrs[:disabled] == true,
+        focused?: attrs[:focused] == true,
+        variant: attrs[:role]
+      }
+    }
+  end
 
   # Add validation for invalid roles
   def errors(button) do

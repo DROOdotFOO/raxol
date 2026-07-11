@@ -12,6 +12,7 @@ defmodule Raxol.UI.Components.Input.Checkbox do
 
   use Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   @type t :: %{
           id: String.t(),
@@ -199,4 +200,21 @@ defmodule Raxol.UI.Components.Input.Checkbox do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    attrs = Map.get(node, :attrs, %{})
+
+    %{
+      role: :checkbox,
+      label:
+        node[:aria_label] || attrs[:aria_label] || node[:label] || attrs[:label],
+      state: %{
+        checked?: (node[:checked] || attrs[:checked]) == true,
+        required?: (node[:required] || attrs[:required]) == true,
+        disabled?: (node[:disabled] || attrs[:disabled]) == true,
+        focused?: (node[:focused] || attrs[:focused]) == true
+      }
+    }
+  end
 end

@@ -12,6 +12,7 @@ defmodule Raxol.UI.Components.Display.Viewport do
 
   @behaviour Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   alias Raxol.View.Components
 
@@ -303,4 +304,10 @@ defmodule Raxol.UI.Components.Display.Viewport do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    # Children omitted: the projection recurses the viewport's content Elements.
+    %{role: :region, label: node[:aria_label] || node[:label], state: %{}}
+  end
 end
