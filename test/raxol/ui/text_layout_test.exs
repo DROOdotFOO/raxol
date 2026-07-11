@@ -139,6 +139,15 @@ defmodule Raxol.UI.TextLayoutTest do
                ["one  two", "three"]
     end
 
+    test "whitespace that would itself overflow the wrap point is dropped, not hung" do
+      # "one  two " would be 9 wide (over the width-8 budget) -- the space
+      # itself doesn't fit, so it's dropped and the break happens there.
+      # The next break ("three four" doesn't fit) is *word*-caused, so the
+      # already-attached single space before "four" is preserved as-is.
+      assert TextLayout.wrap("one  two three four", 8, :pre_wrap) ==
+               ["one  two", "three ", "four"]
+    end
+
     test "preserves explicit newlines as hard breaks" do
       assert TextLayout.wrap("ab cd\nef gh", 8, :pre_wrap) ==
                ["ab cd", "ef gh"]
@@ -204,14 +213,16 @@ defmodule Raxol.UI.TextLayoutTest do
     # Scoped to ASCII/character count since :normal's fit-check is
     # String.length-based, not display-width-based.
     property "output lines never exceed width in grapheme count, except a single overlong grapheme" do
-      check all width <- integer(1..40),
-                words <-
-                  list_of(string(?a..?z, min_length: 1, max_length: 60),
-                    min_length: 0,
-                    max_length: 12
-                  ),
-                text = Enum.join(words, " "),
-                max_runs: 200 do
+      check all(
+              width <- integer(1..40),
+              words <-
+                list_of(string(?a..?z, min_length: 1, max_length: 60),
+                  min_length: 0,
+                  max_length: 12
+                ),
+              text = Enum.join(words, " "),
+              max_runs: 200
+            ) do
         lines = TextLayout.wrap(text, width, :normal)
 
         Enum.each(lines, fn line ->
@@ -226,15 +237,21 @@ defmodule Raxol.UI.TextLayoutTest do
 
   describe "property: :pre_wrap and :pre_line never exceed display width except a single overlong grapheme" do
     property "display width bound holds for the width-aware, display-width-safe modes" do
-      check all width <- integer(1..40),
-                words <-
-                  list_of(string([?a..?z, ?中, ?文, ?🎉], min_length: 1, max_length: 8),
-                    min_length: 0,
-                    max_length: 10
+      check all(
+              width <- integer(1..40),
+              words <-
+                list_of(
+                  string([?a..?z, ?中, ?文, ?🎉],
+                    min_length: 1,
+                    max_length: 8
                   ),
-                mode <- member_of([:pre_wrap, :pre_line]),
-                text = Enum.join(words, " "),
-                max_runs: 200 do
+                  min_length: 0,
+                  max_length: 10
+                ),
+              mode <- member_of([:pre_wrap, :pre_line]),
+              text = Enum.join(words, " "),
+              max_runs: 200
+            ) do
         lines = TextLayout.wrap(text, width, mode)
 
         Enum.each(lines, fn line ->
@@ -252,13 +269,182 @@ defmodule Raxol.UI.TextLayoutTest do
     end
   end
 
+  # --- truncate/3 (text-overflow) ----------------------------------------
+
+  describe "truncate/3 :ellipsis" do
+    test "ASCII: cuts to make room for a trailing single-cell ellipsis" do
+      assert TextLayout.truncate("hello world", 8, :ellipsis) == "hello w…"
+    end
+
+    test "CJK at cut boundary: never splits a double-width grapheme" do
+      # "abc你好": "abc"=3, 你=2 (total 5, fits exactly), 好=2 (would be 7).
+      # width 5 forces the cut before 你 fits alongside the ellipsis: only
+      # "abc" (3 cols) + "…" (1 col) = 4 cols fit within the width-5 budget.
+      assert TextLayout.truncate("abc你好", 5, :ellipsis) == "abc…"
+    end
+
+    test "emoji: fits whole emoji graphemes, never splits" do
+      assert TextLayout.truncate("🎉🎉🎉", 3, :ellipsis) == "🎉…"
+      assert TextLayout.truncate("🎉🎉🎉", 5, :ellipsis) == "🎉🎉…"
+    end
+
+    test "width 0: empty string" do
+      assert TextLayout.truncate("hello", 0, :ellipsis) == ""
+    end
+
+    test "negative width: empty string, no crash" do
+      assert TextLayout.truncate("hello", -3, :ellipsis) == ""
+    end
+
+    test "width 1 with overflow: just the ellipsis" do
+      assert TextLayout.truncate("ab", 1, :ellipsis) == "…"
+      assert TextLayout.truncate("中", 1, :ellipsis) == "…"
+    end
+
+    test "line already fits: returned unchanged, no ellipsis appended" do
+      assert TextLayout.truncate("hi", 10, :ellipsis) == "hi"
+      assert TextLayout.truncate("hi", 2, :ellipsis) == "hi"
+    end
+  end
+
+  describe "truncate/3 :clip" do
+    test "ASCII: hard cut at width, no ellipsis" do
+      assert TextLayout.truncate("hello world", 8, :clip) == "hello wo"
+    end
+
+    test "CJK: never splits a double-width grapheme, cuts one column early" do
+      assert TextLayout.truncate("abc你好", 5, :clip) == "abc你"
+    end
+
+    test "width 1 with an overlong double-width grapheme yields empty" do
+      assert TextLayout.truncate("中", 1, :clip) == ""
+    end
+
+    test "width 1 with a narrow grapheme yields that grapheme" do
+      assert TextLayout.truncate("ab", 1, :clip) == "a"
+    end
+
+    test "width 0: empty string" do
+      assert TextLayout.truncate("hello", 0, :clip) == ""
+    end
+
+    test "line already fits: returned unchanged" do
+      assert TextLayout.truncate("hi", 10, :clip) == "hi"
+    end
+  end
+
+  describe "property: truncate/3 output display width never exceeds the requested width" do
+    property "holds for both :ellipsis and :clip across ASCII/CJK/emoji input" do
+      check all(
+              width <- integer(0..40),
+              mode <- member_of([:ellipsis, :clip]),
+              graphemes <-
+                list_of(member_of(["a", "b", " ", "中", "文", "🎉"]),
+                  min_length: 0,
+                  max_length: 30
+                ),
+              line = Enum.join(graphemes),
+              max_runs: 200
+            ) do
+        result = TextLayout.truncate(line, width, mode)
+
+        assert Raxol.UI.TextMeasure.display_width(result) <= width,
+               "truncate(#{inspect(line)}, #{width}, #{mode}) => #{inspect(result)} exceeds width"
+      end
+    end
+
+    property "never crashes for any width, including negative" do
+      check all(
+              text <- string(:printable, max_length: 40),
+              width <- integer(-10..40),
+              mode <- member_of([:ellipsis, :clip]),
+              max_runs: 200
+            ) do
+        result = TextLayout.truncate(text, width, mode)
+        assert is_binary(result)
+      end
+    end
+  end
+
+  # --- clamp/4 (line-clamp) -----------------------------------------------
+
+  describe "clamp/4" do
+    test "content fits entirely within max_lines: unchanged, no ellipsis" do
+      assert TextLayout.clamp("one two", 10, 2) == ["one two"]
+    end
+
+    test "exact line count match: unchanged, no ellipsis" do
+      assert TextLayout.clamp("one two three four five six", 10, 3) ==
+               ["one two", "three four", "five six"]
+    end
+
+    test "clamps with block-ellipsis on the last kept line" do
+      assert TextLayout.clamp("one two three four five six", 10, 2) ==
+               ["one two", "three fou…"]
+    end
+
+    test "max_lines 1" do
+      assert TextLayout.clamp("one two three", 10, 1) == ["one two…"]
+    end
+
+    test "last kept line exactly fills width: re-truncates to make room for the ellipsis" do
+      assert TextLayout.clamp("abcdefghij klmno", 10, 1) == ["abcdefghi…"]
+    end
+
+    test ":pre_line white_space combination: collapses/wraps then clamps" do
+      assert TextLayout.clamp("a\nb\nc\nd", 10, 2, white_space: :pre_line) ==
+               ["a", "b…"]
+    end
+
+    test "max_lines <= 0 yields an empty list" do
+      assert TextLayout.clamp("anything", 10, 0) == []
+      assert TextLayout.clamp("anything", 10, -1) == []
+    end
+
+    test "empty text yields a single empty line, matching wrap/3" do
+      assert TextLayout.clamp("", 10, 2) == [""]
+    end
+
+    test "default white_space is :normal" do
+      assert TextLayout.clamp("one two three four five six", 10, 2) ==
+               TextLayout.clamp("one two three four five six", 10, 2,
+                 white_space: :normal
+               )
+    end
+  end
+
+  describe "property: clamp/4 output line count never exceeds max_lines" do
+    property "holds across white_space modes and widths" do
+      check all(
+              width <- integer(1..20),
+              max_lines <- integer(1..6),
+              white_space <-
+                member_of([:normal, :nowrap, :pre, :pre_wrap, :pre_line]),
+              words <-
+                list_of(string(?a..?z, min_length: 1, max_length: 8),
+                  min_length: 0,
+                  max_length: 15
+                ),
+              text = Enum.join(words, " "),
+              max_runs: 200
+            ) do
+        lines =
+          TextLayout.clamp(text, width, max_lines, white_space: white_space)
+
+        assert length(lines) <= max_lines
+      end
+    end
+  end
+
   describe "property: no mode ever crashes and every mode round-trips to a list of strings" do
     property "wrap/3 always returns a list of binaries for any text/width/mode" do
-      check all text <- string(:printable, max_length: 60),
-                width <- integer(-5..40),
-                white_space <-
-                  member_of([:normal, :nowrap, :pre, :pre_wrap, :pre_line]),
-                max_runs: 300 do
+      check all(
+              text <- string(:printable, max_length: 60),
+              width <- integer(-5..40),
+              white_space <-
+                member_of([:normal, :nowrap, :pre, :pre_wrap, :pre_line]),
+              max_runs: 300
+            ) do
         lines = TextLayout.wrap(text, width, white_space)
         assert is_list(lines)
         assert Enum.all?(lines, &is_binary/1)

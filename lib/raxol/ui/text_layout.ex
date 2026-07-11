@@ -31,6 +31,7 @@ defmodule Raxol.UI.TextLayout do
   """
 
   alias Raxol.UI.Components.Input.TextWrapping
+  alias Raxol.UI.TextLayout.Pretty
   alias Raxol.UI.TextMeasure
 
   @type white_space :: :normal | :nowrap | :pre | :pre_wrap | :pre_line
@@ -84,6 +85,33 @@ defmodule Raxol.UI.TextLayout do
     |> Enum.flat_map(&wrap_collapsed_segment(&1, width))
   end
 
+  @doc """
+  `wrap/3` with a CSS `text-wrap` style: `:auto` (greedy, identical to
+  `wrap/3`) or `:pretty` (Knuth-Plass DP via `TextLayout.Pretty` —
+  minimizes raggedness, avoids single-word orphan lines).
+
+  `:pretty` applies only to `white_space: :normal` (the sole mode where
+  break points are freely chosen); other modes ignore it.
+  """
+  @spec wrap(String.t(), integer(), white_space(), :auto | :pretty) :: [
+          String.t()
+        ]
+  def wrap(text, width, white_space, :auto), do: wrap(text, width, white_space)
+
+  def wrap("", _width, _white_space, :pretty), do: [""]
+
+  def wrap(text, width, :normal, :pretty)
+      when is_binary(text) and is_integer(width) do
+    if width <= 0 do
+      [text]
+    else
+      Pretty.wrap(text, width)
+    end
+  end
+
+  def wrap(text, width, white_space, :pretty),
+    do: wrap(text, width, white_space)
+
   # --- :pre_wrap: preserve whitespace runs, wrap at width ---
 
   defp wrap_preserve_segment("", _width), do: [""]
@@ -108,13 +136,15 @@ defmodule Raxol.UI.TextLayout do
     do: Enum.reverse([current | acc])
 
   defp do_wrap_preserve([token | rest], width, current, acc) do
-    cond do
-      whitespace_token?(token) ->
-        # Whitespace is preserved and always attaches to the current line
-        # (approximates CSS's allowance for trailing whitespace to "hang"
-        # past the wrap point rather than force an extra line break).
-        do_wrap_preserve(rest, width, current <> token, acc)
+    if whitespace_token?(token) do
+      do_wrap_preserve_whitespace(token, rest, width, current, acc)
+    else
+      do_wrap_preserve_word(token, rest, width, current, acc)
+    end
+  end
 
+  defp do_wrap_preserve_word(token, rest, width, current, acc) do
+    cond do
       TextMeasure.display_width(current <> token) <= width ->
         do_wrap_preserve(rest, width, current <> token, acc)
 
@@ -127,6 +157,27 @@ defmodule Raxol.UI.TextLayout do
 
       true ->
         do_wrap_preserve(rest, width, token, acc)
+    end
+  end
+
+  # Whitespace is preserved, but (unlike CSS's box-model "hang" allowance,
+  # which has no monospace-grid equivalent) it never pushes a line past
+  # `width`: if it still fits, it's appended; if it doesn't and the current
+  # line already has content, the whitespace is dropped at the wrap point
+  # (the line breaks there instead); if the line is empty and even the
+  # whitespace alone is overlong (e.g. a long run of tabs), it is
+  # force-split like an overlong word.
+  defp do_wrap_preserve_whitespace(token, rest, width, current, acc) do
+    cond do
+      TextMeasure.display_width(current <> token) <= width ->
+        do_wrap_preserve(rest, width, current <> token, acc)
+
+      current != "" ->
+        do_wrap_preserve(rest, width, "", [current | acc])
+
+      true ->
+        {chunks, remainder} = split_overlong(token, width)
+        do_wrap_preserve(rest, width, remainder, Enum.reverse(chunks) ++ acc)
     end
   end
 
@@ -162,12 +213,17 @@ defmodule Raxol.UI.TextLayout do
       current != "" ->
         do_wrap_collapsed([word | rest], width, "", [current | acc])
 
-      TextMeasure.display_width(word) > width ->
-        {chunks, remainder} = split_overlong(word, width)
-        do_wrap_collapsed(rest, width, remainder, Enum.reverse(chunks) ++ acc)
-
       true ->
-        do_wrap_collapsed(rest, width, word, acc)
+        do_wrap_collapsed_overlong(word, rest, width, acc)
+    end
+  end
+
+  defp do_wrap_collapsed_overlong(word, rest, width, acc) do
+    if TextMeasure.display_width(word) > width do
+      {chunks, remainder} = split_overlong(word, width)
+      do_wrap_collapsed(rest, width, remainder, Enum.reverse(chunks) ++ acc)
+    else
+      do_wrap_collapsed(rest, width, word, acc)
     end
   end
 
@@ -191,21 +247,24 @@ defmodule Raxol.UI.TextLayout do
     if TextMeasure.display_width(word) <= width do
       {Enum.reverse(chunks), word}
     else
-      case TextMeasure.split_at_display_width(word, width) do
-        {"", _rest} ->
-          # width is narrower than the widest single grapheme in `word`;
-          # force-take one grapheme so we always make progress.
-          {grapheme, rest} =
-            case String.next_grapheme(word) do
-              {g, r} -> {g, r}
-              nil -> {word, ""}
-            end
+      {chunk, rest} = split_one_overlong_chunk(word, width)
+      do_split_overlong(rest, width, [chunk | chunks])
+    end
+  end
 
-          do_split_overlong(rest, width, [grapheme | chunks])
+  # Splits one width-bounded chunk off the front of `word`. Falls back to
+  # force-taking a single grapheme when `width` is narrower than the
+  # widest single grapheme in `word` (so we always make progress).
+  defp split_one_overlong_chunk(word, width) do
+    case TextMeasure.split_at_display_width(word, width) do
+      {"", _rest} ->
+        case String.next_grapheme(word) do
+          {grapheme, rest} -> {grapheme, rest}
+          nil -> {word, ""}
+        end
 
-        {left, rest} ->
-          do_split_overlong(rest, width, [left | chunks])
-      end
+      {left, rest} ->
+        {left, rest}
     end
   end
 
@@ -213,5 +272,101 @@ defmodule Raxol.UI.TextLayout do
     text
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
+  end
+
+  # --- text-overflow: single-line truncation -----------------------------
+
+  @ellipsis "…"
+
+  @doc """
+  Truncates a single line to `width` display columns per CSS
+  `text-overflow` (`:ellipsis`) or a plain hard clip (`:clip`).
+
+  Never splits a double-width grapheme in half -- the cut always lands one
+  column earlier instead. Output display width is always `<= width`.
+
+  - `:clip` -- hard cut at `width`, no indicator appended.
+  - `:ellipsis` -- cut to make room for a trailing single-cell `"…"`
+    (U+2026 HORIZONTAL ELLIPSIS). At `width == 1` the whole line collapses
+    to just the ellipsis character.
+
+  `width <= 0` always yields `""`. A line that already fits within `width`
+  is returned unchanged (no ellipsis appended, even in `:ellipsis` mode).
+  """
+  @spec truncate(String.t(), integer(), :ellipsis | :clip) :: String.t()
+  def truncate(line, width, mode)
+      when is_binary(line) and is_integer(width) and mode in [:ellipsis, :clip] do
+    cond do
+      width <= 0 -> ""
+      TextMeasure.display_width(line) <= width -> line
+      mode == :clip -> clip_to_width(line, width)
+      mode == :ellipsis -> fit_with_ellipsis(line, width)
+    end
+  end
+
+  defp clip_to_width(line, width) do
+    {left, _rest} = TextMeasure.split_at_display_width(line, width)
+    left
+  end
+
+  # Assumes `width >= 1` (callers guard `width <= 0` separately).
+  defp fit_with_ellipsis(_line, width) when width <= 1, do: @ellipsis
+
+  defp fit_with_ellipsis(line, width) do
+    {left, _rest} = TextMeasure.split_at_display_width(line, width - 1)
+    left <> @ellipsis
+  end
+
+  # --- line-clamp: multi-line block truncation ----------------------------
+
+  @doc """
+  Wraps `text` to `width` columns (per `white_space`, default `:normal`)
+  and keeps at most `max_lines` lines, implementing CSS Overflow Module
+  Level 4 `line-clamp`.
+
+  If wrapping produces `max_lines` or fewer lines, the result is returned
+  unchanged -- no ellipsis is added when nothing was actually clamped.
+
+  If wrapping produces more lines than `max_lines`, the excess lines are
+  dropped and the kept last line gets a block-ellipsis: a trailing
+  single-cell `"…"` is appended, re-truncating that line first if
+  appending it would push the line past `width`. The block-ellipsed line's
+  display width never exceeds `width`.
+
+  `max_lines <= 0` yields `[]`.
+
+  ## Options
+
+  - `:white_space` -- one of `Raxol.UI.TextLayout.white_space/0`, default
+    `:normal`.
+  """
+  @spec clamp(String.t(), integer(), integer(), keyword()) :: [String.t()]
+  def clamp(text, width, max_lines, opts \\ [])
+
+  def clamp(text, width, max_lines, opts) when is_integer(max_lines) do
+    if max_lines <= 0 do
+      []
+    else
+      white_space = Keyword.get(opts, :white_space, :normal)
+      lines = wrap(text, width, white_space)
+
+      if length(lines) <= max_lines do
+        lines
+      else
+        lines
+        |> Enum.take(max_lines)
+        |> List.update_at(-1, &block_ellipsis(&1, width))
+      end
+    end
+  end
+
+  defp block_ellipsis(_line, width) when width <= 0, do: ""
+
+  defp block_ellipsis(line, width) do
+    if TextMeasure.display_width(line) + 1 <= width do
+      line <> @ellipsis
+    else
+      fit_with_ellipsis(line, width)
+    end
   end
 end
