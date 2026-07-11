@@ -423,20 +423,25 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       assert tree.style == %{flex_wrap: :wrap}
     end
 
-    test "style-based flex_wrap is silently ignored by the live engine (unreachable via View DSL)" do
+    test "style-based flex_wrap is honored by the live engine" do
       tree =
         LegacyView.flex style: %{flex_wrap: :wrap}, direction: :row do
           [text("AAAA"), text("BBBB"), text("CCCC")]
         end
 
-      # Container is 10 wide, each word 4 wide; flex_wrap is ignored so
-      # children overflow on one line like nowrap. The 9.7 solver can
-      # shrink (unlike the old Distributor), but min-content (B3) floors
-      # each word at its content width, so overflow is still the result.
-      assert layout(tree, %{width: 10, height: 10}) == [
+      # build_flex_attrs lifts flex_wrap (plus flex_direction/align_content)
+      # from style. Container 10 wide, words 4 wide: two fit on line 0,
+      # third wraps to line 1. Output order is line-reversed (pre-existing
+      # Wrapper accumulation quirk, pinned elsewhere) - sort for a stable
+      # assertion.
+      result =
+        layout(tree, %{width: 10, height: 10})
+        |> Enum.sort_by(&{&1.y, &1.x})
+
+      assert result == [
                %{type: :text, x: 0, y: 0, text: "AAAA"},
                %{type: :text, x: 4, y: 0, text: "BBBB"},
-               %{type: :text, x: 8, y: 0, text: "CCCC"}
+               %{type: :text, x: 0, y: 1, text: "CCCC"}
              ]
     end
 

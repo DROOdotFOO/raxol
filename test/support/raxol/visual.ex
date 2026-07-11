@@ -123,11 +123,21 @@ defmodule Raxol.Test.Visual do
   defp ensure_list(item) when is_list(item), do: item
   defp ensure_list(item), do: [item]
 
+  # Re-pointed from the legacy layout stack (zero production callers) to
+  # the live engine, the pipeline production actually renders through.
+  # `apply_layout/3` takes a single element and recurses via
+  # `:view`/`:children`, so wrap the top-level list the same way `view/1`
+  # callbacks do -- every element in `elements` is laid out against the
+  # same full available space.
+  #
+  # The live engine returns flat `:type`/`:x`/`:y`(/`:width`/`:height`)
+  # maps instead of the legacy `:position`/`:size` tuples -- this is the
+  # shape `Raxol.UI.Renderer.render_to_cells/2` (below) actually expects.
   defp apply_layout(elements, width, height) do
-    Raxol.Core.Renderer.Layout.apply_layout(elements, %{
-      width: width,
-      height: height
-    })
+    Raxol.UI.Layout.Engine.apply_layout(
+      %{type: :view, children: elements},
+      %{width: width, height: height}
+    )
   end
 
   defp render_to_cells(layout_elements, theme) do
