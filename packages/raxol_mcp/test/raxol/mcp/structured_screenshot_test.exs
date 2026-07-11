@@ -271,6 +271,80 @@ defmodule Raxol.MCP.StructuredScreenshotTest do
     end
   end
 
+  describe "accessibility fields" do
+    # The Component Providers live in main raxol and are not loaded here, so
+    # these exercise the projection's default (Roles-driven) extraction path.
+    # The Provider path is covered by the main app's ComponentA11y tests.
+    test "adds role/label/state for an interactive node" do
+      node = %{type: :button, id: "save", attrs: %{label: "Save", disabled: true}}
+      [summary] = StructuredScreenshot.from_view_tree(node)
+
+      assert summary.role == :button
+      assert summary.label == "Save"
+      assert summary.state == %{disabled?: true}
+    end
+
+    test "role always present; static text gets :text with content label" do
+      node = %{type: :text, id: "t", content: "Hello"}
+      [summary] = StructuredScreenshot.from_view_tree(node)
+
+      assert summary.role == :text
+      assert summary.label == "Hello"
+      refute Map.has_key?(summary, :state)
+    end
+
+    test "unknown types get role :generic" do
+      [summary] = StructuredScreenshot.from_view_tree(%{type: :frobnicate, id: "x"})
+      assert summary.role == :generic
+    end
+
+    test "marks live regions" do
+      [summary] = StructuredScreenshot.from_view_tree(%{type: :progress, id: "p"})
+      assert summary.role == :progressbar
+      assert summary.live == true
+    end
+
+    test "omits :live and :focused when not applicable" do
+      [summary] = StructuredScreenshot.from_view_tree(%{type: :text, id: "t", content: "x"})
+      refute Map.has_key?(summary, :live)
+      refute Map.has_key?(summary, :focused)
+    end
+
+    test "reports focus from the Component's own focused field" do
+      node = %{type: :text_input, id: "n", attrs: %{focused: true}}
+      [summary] = StructuredScreenshot.from_view_tree(node)
+      assert summary.focused == true
+    end
+
+    test "marks focus via the :focused_id option" do
+      node = %{type: :text_input, id: "search", attrs: %{value: "hi"}}
+      [summary] = StructuredScreenshot.from_view_tree(node, focused_id: "search")
+      assert summary.focused == true
+    end
+
+    test "enriches nested children" do
+      tree = %{
+        type: :panel,
+        id: "root",
+        children: [%{type: :button, id: "b", attrs: %{label: "Go"}}]
+      }
+
+      [summary] = StructuredScreenshot.from_view_tree(tree)
+      [child] = summary.children
+      assert child.role == :button
+      assert child.label == "Go"
+    end
+
+    test "a11y fields survive JSON serialization" do
+      node = %{type: :button, id: "b", attrs: %{label: "Save", disabled: true}}
+      json = node |> StructuredScreenshot.from_view_tree() |> StructuredScreenshot.to_json()
+
+      assert json =~ "role"
+      assert json =~ "button"
+      assert json =~ "disabled?"
+    end
+  end
+
   describe "to_json/1" do
     test "serializes summaries to JSON string" do
       summaries = [%{type: :button, id: "btn", children: []}]

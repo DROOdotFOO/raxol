@@ -109,6 +109,7 @@ defmodule Raxol.UI.Components.Table do
 
   @behaviour Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   @doc """
   Initializes the table component with the given props.
@@ -811,4 +812,37 @@ defmodule Raxol.UI.Components.Table do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    columns = node[:columns] || []
+    data = node[:data] || []
+
+    rows =
+      Enum.map(data, fn row ->
+        cells =
+          Enum.map(columns, fn column ->
+            %{
+              role: :gridcell,
+              label: a11y_cell_text(a11y_cell(row, column[:id]))
+            }
+          end)
+
+        %{role: :row, children: cells}
+      end)
+
+    %{role: :grid, label: node[:aria_label] || node[:label], children: rows}
+  end
+
+  defp a11y_cell(row, key) when is_map(row), do: Map.get(row, key)
+  defp a11y_cell(_row, _key), do: nil
+
+  defp a11y_cell_text(nil), do: nil
+  defp a11y_cell_text(value) when is_binary(value), do: value
+
+  defp a11y_cell_text(value)
+       when is_integer(value) or is_float(value) or is_atom(value),
+       do: to_string(value)
+
+  defp a11y_cell_text(value), do: inspect(value)
 end

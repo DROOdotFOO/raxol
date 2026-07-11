@@ -22,6 +22,7 @@ defmodule Raxol.UI.Components.Input.SelectList do
 
   @behaviour Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   @key_mapping %{
     "Down" => :navigation_down,
@@ -703,4 +704,33 @@ defmodule Raxol.UI.Components.Input.SelectList do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    options = node[:options] || node[:filtered_options] || []
+    selected = node[:selected_index] || node[:focused_index]
+
+    children =
+      options
+      |> Enum.with_index()
+      |> Enum.map(fn {opt, index} ->
+        %{
+          role: :option,
+          label: a11y_option_label(opt),
+          state: %{selected?: index == selected}
+        }
+      end)
+
+    %{
+      role: :listbox,
+      label: node[:aria_label] || node[:label],
+      state: %{focused?: node[:focused] == true},
+      children: children
+    }
+  end
+
+  defp a11y_option_label({label, _value}) when is_binary(label), do: label
+  defp a11y_option_label(%{} = opt), do: opt[:label] || opt[:name]
+  defp a11y_option_label(label) when is_binary(label), do: label
+  defp a11y_option_label(other), do: inspect(other)
 end

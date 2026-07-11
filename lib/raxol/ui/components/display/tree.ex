@@ -21,6 +21,7 @@ defmodule Raxol.UI.Components.Display.Tree do
 
   use Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   @type tree_node :: %{
           id: atom(),
@@ -393,4 +394,44 @@ defmodule Raxol.UI.Components.Display.Tree do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    %{
+      role: :tree,
+      label: node[:aria_label] || node[:label],
+      children: a11y_tree_items(node[:nodes] || [], node[:expanded])
+    }
+  end
+
+  defp a11y_tree_items(nodes, expanded) do
+    Enum.map(nodes, fn tree_node ->
+      children = tree_node[:children] || []
+      is_expanded = a11y_expanded?(expanded, tree_node[:id])
+
+      %{
+        role: :treeitem,
+        label: a11y_cell_text(tree_node[:label]),
+        id: a11y_atom_id(tree_node[:id]),
+        state: if(children == [], do: %{}, else: %{expanded?: is_expanded}),
+        children:
+          if(is_expanded, do: a11y_tree_items(children, expanded), else: [])
+      }
+    end)
+  end
+
+  defp a11y_expanded?(%MapSet{} = set, id), do: MapSet.member?(set, id)
+  defp a11y_expanded?(list, id) when is_list(list), do: id in list
+  defp a11y_expanded?(_expanded, _id), do: false
+
+  defp a11y_atom_id(id) when is_binary(id), do: id
+
+  defp a11y_atom_id(id) when is_atom(id) and not is_nil(id),
+    do: Atom.to_string(id)
+
+  defp a11y_atom_id(_id), do: nil
+
+  defp a11y_cell_text(text) when is_binary(text), do: text
+  defp a11y_cell_text(nil), do: nil
+  defp a11y_cell_text(text), do: to_string(text)
 end

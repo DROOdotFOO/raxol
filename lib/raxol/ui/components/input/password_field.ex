@@ -9,6 +9,7 @@ defmodule Raxol.UI.Components.Input.PasswordField do
 
   @behaviour Raxol.UI.Components.Base.Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   @impl Raxol.UI.Components.Base.Component
   def init(props) do
@@ -69,4 +70,21 @@ defmodule Raxol.UI.Components.Input.PasswordField do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    attrs = Map.get(node, :attrs, %{})
+
+    %{
+      role: :textbox,
+      label:
+        node[:aria_label] || attrs[:aria_label] || node[:label] || attrs[:label] ||
+          node[:placeholder] || attrs[:placeholder],
+      value: nil,
+      state: %{
+        focused?: (node[:focused] || attrs[:focused]) == true,
+        required?: (node[:required] || attrs[:required]) == true
+      }
+    }
+  end
 end

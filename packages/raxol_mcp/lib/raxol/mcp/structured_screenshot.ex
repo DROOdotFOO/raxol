@@ -7,27 +7,46 @@ defmodule Raxol.MCP.StructuredScreenshot do
   widget nodes to a consistent shape.
   """
 
+  alias Raxol.Core.Accessibility.Projection
+
   @type widget_summary :: %{
           required(:type) => atom(),
           required(:id) => String.t() | nil,
           required(:children) => [widget_summary()],
           optional(:content) => String.t(),
-          optional(:animation_hints) => [map()]
+          optional(:animation_hints) => [map()],
+          optional(:role) => atom(),
+          optional(:label) => String.t(),
+          optional(:state) => %{optional(atom()) => boolean() | atom()},
+          optional(:value) => term(),
+          optional(:focused) => boolean(),
+          optional(:live) => boolean()
         }
 
   @doc """
   Convert a view tree map to a list of widget summaries.
 
   Each node retains `:type`, `:id`, `:content` (if text), and recursed
-  `:children`. All callbacks and style details are stripped.
+  `:children`. All callbacks and style details are stripped. Accessibility
+  fields (`:role`, `:label`, `:state`, `:value`, `:focused`, `:live`) are folded
+  in per node via `Raxol.Core.Accessibility.Projection` so agents get a
+  machine-readable role/state alongside the structural tree.
+
+  ## Options
+
+    * `:focused_id` - Element id currently focused; marks that node `focused: true`
+      in addition to any Component-reported focus.
+    * `:type_map` - override the projection's declaration-type -> Component map.
   """
-  @spec from_view_tree(map() | list() | nil) :: [widget_summary()]
-  def from_view_tree(nil), do: []
+  @spec from_view_tree(map() | list() | nil, keyword()) :: [widget_summary()]
+  def from_view_tree(tree, opts \\ [])
 
-  def from_view_tree(nodes) when is_list(nodes),
-    do: Enum.map(nodes, &summarize_node/1)
+  def from_view_tree(nil, _opts), do: []
 
-  def from_view_tree(node) when is_map(node), do: [summarize_node(node)]
+  def from_view_tree(nodes, opts) when is_list(nodes),
+    do: Enum.map(nodes, &summarize_node(&1, opts))
+
+  def from_view_tree(node, opts) when is_map(node), do: [summarize_node(node, opts)]
 
   @doc """
   Encode a widget summary list to a JSON string.
@@ -42,11 +61,11 @@ defmodule Raxol.MCP.StructuredScreenshot do
 
   # -- Private -----------------------------------------------------------------
 
-  defp summarize_node(node) when is_map(node) do
+  defp summarize_node(node, opts) when is_map(node) do
     children =
       case Map.get(node, :children) do
         nil -> []
-        kids when is_list(kids) -> Enum.map(kids, &summarize_node/1)
+        kids when is_list(kids) -> Enum.map(kids, &summarize_node(&1, opts))
         _ -> []
       end
 
@@ -57,9 +76,43 @@ defmodule Raxol.MCP.StructuredScreenshot do
     }
     |> maybe_put_content(Map.get(node, :content))
     |> maybe_put_hints(Map.get(node, :animation_hints))
+    |> put_a11y(node, opts)
   end
 
-  defp summarize_node(_), do: %{type: :unknown, id: nil, children: []}
+  defp summarize_node(_node, _opts), do: %{type: :unknown, id: nil, children: []}
+
+  # Folds the per-node accessibility descriptor into the summary. Additive: only
+  # meaningful fields are attached (role always, others when present/truthy).
+  defp put_a11y(summary, node, opts) do
+    case Projection.descriptor(node, Keyword.take(opts, [:type_map])) do
+      nil ->
+        summary
+
+      desc ->
+        focused_id = Keyword.get(opts, :focused_id)
+
+        focused =
+          desc.state[:focused?] == true or
+            (is_binary(focused_id) and desc.id == focused_id)
+
+        summary
+        |> Map.put(:role, desc.role)
+        |> maybe_put(:label, desc.label)
+        |> put_state(desc.state)
+        |> maybe_put(:value, desc.value)
+        |> maybe_put_focused(focused)
+        |> maybe_put_live(desc.live?)
+    end
+  end
+
+  defp put_state(summary, state) when map_size(state) == 0, do: summary
+  defp put_state(summary, state), do: Map.put(summary, :state, state)
+
+  defp maybe_put_focused(summary, true), do: Map.put(summary, :focused, true)
+  defp maybe_put_focused(summary, _focused), do: summary
+
+  defp maybe_put_live(summary, true), do: Map.put(summary, :live, true)
+  defp maybe_put_live(summary, _live), do: summary
 
   defp maybe_put_content(summary, content) when is_binary(content),
     do: Map.put(summary, :content, content)

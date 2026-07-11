@@ -9,6 +9,7 @@ defmodule Raxol.UI.Components.Input.TextInput do
 
   @behaviour Component
   @behaviour Raxol.MCP.ToolProvider
+  @behaviour Raxol.Core.Accessibility.Provider
 
   @type props :: %{
           optional(:id) => String.t(),
@@ -222,6 +223,23 @@ defmodule Raxol.UI.Components.Input.TextInput do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  @impl Raxol.Core.Accessibility.Provider
+  def a11y_node(node) do
+    attrs = Map.get(node, :attrs, %{})
+
+    %{
+      role: :textbox,
+      label:
+        node[:aria_label] || attrs[:aria_label] || node[:label] || attrs[:label] ||
+          node[:placeholder] || attrs[:placeholder],
+      value: node[:value] || attrs[:value],
+      state: %{
+        focused?: (node[:focused] || attrs[:focused]) == true,
+        required?: (node[:required] || attrs[:required]) == true
+      }
+    }
+  end
 end
 
 defmodule Raxol.UI.Components.Input.TextInput.KeyHandler do
