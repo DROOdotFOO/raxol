@@ -176,7 +176,10 @@ defmodule RaxolDemo do
   defp header_bar(model) do
     status = if model.paused, do: "PAUSED", else: clock()
 
-    box style: %{border: :double, width: :fill, padding: 0} do
+    # No explicit width here either -- see the process-table panel below for
+    # why `width: :fill` was a no-op and the column's default stretch already
+    # gives this box the full row width.
+    box style: %{border: :double, padding: 0} do
       row style: %{gap: 1, justify_content: :space_between} do
         [
           text("  R A X O L", style: [:bold], fg: :cyan),
@@ -379,9 +382,13 @@ defmodule RaxolDemo do
         end
       end)
 
+    # No explicit width: the column's default align_items: :stretch already
+    # fills this box to the full row width. `width: :fill` was never a
+    # recognized value -- it silently fell back to :auto, so dropping it
+    # changes nothing but removes the misleading dead style key.
     panel =
       box id: "proc-panel",
-          style: %{border: panel_border(active), width: :fill, padding: 1} do
+          style: %{border: panel_border(active), padding: 1} do
         column style: %{gap: 0} do
           [
             text(panel_title("Top Processes", active),

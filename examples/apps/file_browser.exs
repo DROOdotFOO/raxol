@@ -111,8 +111,12 @@ defmodule FileBrowser do
             # Tree panel
             box style: %{
                   border: if(model.panel == :tree, do: :double, else: :single),
-                  width: "40%",
-                  padding: 0
+                  # {:pct, n} is the only accepted percentage form -- a "40%"
+                  # string silently resolves to :auto instead of 40% width.
+                  width: {:pct, 40},
+                  padding: 0,
+                  # clip so a deeply expanded tree can't bleed past the panel
+                  overflow: :hidden
                 } do
               column do
                 tree_lines(model)
@@ -123,7 +127,9 @@ defmodule FileBrowser do
                   border:
                     if(model.panel == :preview, do: :double, else: :single),
                   flex: 1,
-                  padding: 0
+                  padding: 0,
+                  # clip so a long file preview can't bleed past the panel
+                  overflow: :hidden
                 } do
               column do
                 preview_content(model)
