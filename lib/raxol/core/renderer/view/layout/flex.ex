@@ -5,13 +5,9 @@ defmodule Raxol.Core.Renderer.View.Layout.Flex do
   `flex` macros and, transitively, `Raxol.UI.Layout.Flexbox` -- the live
   layout engine.
 
-  The layout-calculation half of this module (`calculate_layout/2` and its
-  private algorithm, ~440 LOC) was removed as production-dead -- it was
-  only reachable through the separately-deleted `Raxol.Core.Renderer.Layout`
-  coordinator and `Raxol.Core.Renderer.View.layout/2`, which zero production
-  code called. These constructors survive: they build plain
-  `%{type: :flex, ...}` maps that the live engine (`Raxol.UI.Layout.Flexbox`)
-  pattern-matches on directly, independent of this module.
+  This module only builds plain `%{type: :flex, ...}` maps; it does not
+  compute layout. The live engine (`Raxol.UI.Layout.Flexbox`)
+  pattern-matches on those maps directly, independent of this module.
   """
 
   @doc """

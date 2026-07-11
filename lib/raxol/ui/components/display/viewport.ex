@@ -59,9 +59,7 @@ defmodule Raxol.UI.Components.Display.Viewport do
       theme: Map.get(props, :theme, %{}),
       show_scrollbar: Map.get(props, :show_scrollbar, true),
       focused: Map.get(props, :focused, false),
-      # CSS overflow-anchor, terminal-log flavor. :auto keeps the view
-      # pinned to the bottom on new content once already scrolled there
-      # (follow mode); scrolling up releases it. :none never moves.
+      # :auto pins to bottom when at end (follow mode); :none freezes scroll_top.
       overflow_anchor: Map.get(props, :overflow_anchor, :auto)
     }
 

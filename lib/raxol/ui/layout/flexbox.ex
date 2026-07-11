@@ -96,10 +96,6 @@ defmodule Raxol.UI.Layout.Flexbox do
 
   def measure_flex(_, _available_space), do: %{width: 0, height: 0}
 
-  # Legacy `new/1` + `render/1` + `calculate_layout/1` API (struct type
-  # :flexbox, never dispatched by the engine) removed — zero production
-  # callers.
-
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
@@ -193,7 +189,7 @@ defmodule Raxol.UI.Layout.Flexbox do
 
     resolved =
       Enum.map(children_with_dims, fn {child, dims} ->
-        # Automatic minimum size (spec min-width:auto = min-content, B3):
+        # Automatic minimum size (spec min-width:auto = min-content):
         # inline axis uses MinContent; block axis uses the measured content
         # size (min-content block size of unscrollable content). Items never
         # shrink below it — overflow clips instead of content vanishing.

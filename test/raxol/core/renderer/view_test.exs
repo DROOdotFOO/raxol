@@ -1,9 +1,7 @@
 defmodule Raxol.Core.Renderer.ViewTest do
   @moduledoc """
   Tests for the view module: creation, spacing normalization, and
-  construction-time validation. `View.layout/2` and the layout-geometry
-  tests it backed were removed along with the production-dead legacy
-  layout stack it delegated to.
+  construction-time validation.
   """
   use ExUnit.Case, async: true
   alias Raxol.Core.Renderer.View
@@ -78,11 +76,6 @@ defmodule Raxol.Core.Renderer.ViewTest do
     end
   end
 
-  # Relocated out of the deleted "layout/2" and "flex layout features"
-  # blocks: these four exercise construction-time validation
-  # (`Flex.container/1`'s direction check, `Border.wrap/2`, `Scroll.new/2`,
-  # `View.shadow/1`), not layout math, so they survive the dead-code
-  # removal that took `View.layout/2` and `View.grid`/`Grid.new` with it.
   describe "construction-time validation" do
     test "handles invalid flex direction" do
       assert_raise ArgumentError, "Invalid flex direction: :invalid", fn ->

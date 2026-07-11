@@ -232,10 +232,6 @@ defmodule Raxol.Examples.ButtonTest do
           focused: false
         })
 
-      # test/support/raxol/visual.ex now lays out through the live
-      # Raxol.UI.Layout.Engine, whose element shape matches what
-      # Raxol.UI.Renderer.render_to_cells/2 expects -- this snapshot shows
-      # the real bordered button box instead of a blank buffer.
       assert_matches_snapshot(
         button,
         "button_submit",
@@ -265,8 +261,6 @@ defmodule Raxol.Examples.ButtonTest do
       assert Map.get(normal_view.attrs, :disabled, false) == false
       assert Map.get(disabled_view.attrs, :disabled, false) == true
 
-      # Same harness change as above -- both snapshots show real bordered
-      # boxes instead of blank buffers.
       assert_matches_snapshot(normal_button, "button_normal", context)
       assert_matches_snapshot(disabled_button, "button_disabled", context)
     end
