@@ -2,7 +2,7 @@
 
 Multi-surface application runtime for Elixir. One TEA module, four render targets.
 
-## Current Version: v2.5.0
+## Current Version: v2.6.0
 
 ### What's Done
 

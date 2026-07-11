@@ -60,7 +60,7 @@ defmodule RaxolPlayground.Capabilities do
   def version do
     case :application.get_key(:raxol, :vsn) do
       {:ok, vsn} -> to_string(vsn)
-      _ -> "2.5.0"
+      _ -> "2.6.0"
     end
   end
 

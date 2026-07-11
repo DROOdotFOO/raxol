@@ -1,7 +1,7 @@
 defmodule RaxolAcp.MixProject do
   use Mix.Project
 
-  @version "0.2.0-rc.0"
+  @version "0.2.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
