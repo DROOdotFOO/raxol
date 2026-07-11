@@ -735,6 +735,15 @@ defmodule Raxol.UI.Layout.Engine do
   end
 
   # Box with single map child (View DSL produces map, not list, for single child)
+  # Chart widget types are :box elements with an overridden :type (for MCP
+  # tool discovery). process_element/3 rewrites them back to :box for
+  # layout; measurement must do the same or charts measure 0x0 and their
+  # siblings get placed on top of the painted chart rows.
+  def measure_element(%{type: type} = element, available_space)
+      when type in [:line_chart, :bar_chart, :scatter_chart, :heatmap] do
+    measure_element(Map.put(element, :type, :box), available_space)
+  end
+
   def measure_element(
         %{type: :box, children: %{} = child} = element,
         available_space
