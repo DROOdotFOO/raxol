@@ -8,7 +8,6 @@ defmodule Raxol.UI.Layout.Engine do  @moduledoc """
   """
 
   alias Raxol.UI.Layout.{
-    Containers,
     CSSGrid,
     Elements,
     Flexbox,
@@ -178,14 +177,14 @@ defmodule Raxol.UI.Layout.Engine do  @moduledoc """
     Panels.process(panel, space, acc)
   end
 
-  def process_element(%{type: :row} = row, space, acc) do
-    # Delegate to row layout processing
-    Containers.process_row(row, space, acc)
-  end
-
-  def process_element(%{type: :column} = column, space, acc) do
-    # Delegate to column layout processing
-    Containers.process_column(column, space, acc)
+  # Literal :row/:column elements (the old Containers dialect) now run on
+  # the flex engine through an explicit compat map (proposal D4). The
+  # dialect's defaults are preserved: gap 1, justify :start, align :start,
+  # and NO shrink (children keep their natural size; overflow instead of
+  # reflow) — see containers_compat_to_flex/2.
+  def process_element(%{type: type} = el, space, acc)
+      when type in [:row, :column] do
+    process_element(containers_compat_to_flex(el, :layout), space, acc)
   end
 
   def process_element(%{type: :grid} = grid, space, acc) do
@@ -850,11 +849,19 @@ defmodule Raxol.UI.Layout.Engine do  @moduledoc """
     end
   end
 
-  defp measure_container_element(:row, element, available_space),
-    do: Containers.measure_row(element, available_space)
+  # Measure-side gap default is 0 (the dialect disagreed with layout's
+  # default of 1; both are preserved). Explicit attrs.gap is honored.
+  defp measure_container_element(type, element, available_space)
+       when type in [:row, :column] do
+    # Measurement spaces arrive without coordinates from some callers
+    # (Panels); flex padding math needs them.
+    space =
+      available_space
+      |> Map.put_new(:x, 0)
+      |> Map.put_new(:y, 0)
 
-  defp measure_container_element(:column, element, available_space),
-    do: Containers.measure_column(element, available_space)
+    Flexbox.measure_flex(containers_compat_to_flex(element, :measure), space)
+  end
 
   defp measure_container_element(:panel, element, available_space),
     do: Panels.measure_panel(element, available_space)
@@ -865,8 +872,12 @@ defmodule Raxol.UI.Layout.Engine do  @moduledoc """
   defp measure_container_element(:view, element, available_space),
     do: measure_view(element, available_space)
 
+  # Enrich here too: this path serves old-format elements that carry an
+  # :attrs map, which may lack :flex_direction (e.g. only %{flex: ...}) —
+  # raw measure_flex would silently default such containers to :row even
+  # when the element declares direction: :column at the top level.
   defp measure_container_element(:flex, element, available_space),
-    do: Flexbox.measure_flex(element, available_space)
+    do: Flexbox.measure_flex(enrich_flex_attrs(element), available_space)
 
   defp measure_container_element(:css_grid, element, available_space),
     do: CSSGrid.measure_css_grid(element, available_space)
@@ -1033,6 +1044,80 @@ defmodule Raxol.UI.Layout.Engine do  @moduledoc """
   # Build :attrs from top-level keys so Flexbox.parse_flex_properties works.
   # The View DSL (Flex.row/column) puts direction/gap/etc. at the top level,
   # but Flexbox reads from the :attrs map.
+  # ---------------------------------------------------------------------
+  # Containers-dialect compat map (proposal D4, flex rework N17).
+  #
+  # Literal %{type: :row} / %{type: :column} elements historically ran on
+  # Raxol.UI.Layout.Containers with its own conventions. That module is
+  # deleted; this translation preserves the dialect on the flex engine:
+  #
+  #   gap      default 1 in layout, 0 in measurement (the dialect itself
+  #            disagreed between the two; both behaviors preserved)
+  #   justify  :start (maps to :flex_start; :end -> :flex_end)
+  #   align    :start (NOT :stretch — the dialect never stretched)
+  #   shrink   children default to shrink 0: natural size, overflow
+  #            instead of reflow (the dialect had no flex math). Children
+  #            that explicitly declare flex properties keep them.
+  #
+  # Consumers relying on this path: Viewport (display/viewport.ex),
+  # box auto-sizing (measure_children_as_column), Panels, Responsive.
+  # ---------------------------------------------------------------------
+  defp containers_compat_to_flex(el, mode) do
+    attrs = Map.get(el, :attrs, %{})
+    gap_default = if mode == :layout, do: 1, else: 0
+
+    %{
+      type: :flex,
+      attrs: %{
+        flex_direction: el.type,
+        justify_content: containers_justify(Map.get(attrs, :justify, :start)),
+        align_items: containers_align(Map.get(attrs, :align, :start)),
+        align_content: :flex_start,
+        flex_wrap: :nowrap,
+        gap: Map.get(attrs, :gap, gap_default),
+        padding: Map.get(attrs, :padding, 0)
+      },
+      style: Map.get(el, :style, %{}),
+      children: el |> Map.get(:children, []) |> Enum.map(&compat_no_shrink/1)
+    }
+  end
+
+  defp containers_justify(:start), do: :flex_start
+  defp containers_justify(:end), do: :flex_end
+  defp containers_justify(other), do: other
+
+  defp containers_align(:start), do: :flex_start
+  defp containers_align(:end), do: :flex_end
+  defp containers_align(other), do: other
+
+  # Default children to shrink 0 via style.flex_shrink (read by
+  # FlexItem.resolve). Deliberately NOT via :attrs — several element
+  # processors treat the presence of an :attrs key as "old element
+  # format" and rebuild the child from attrs alone, dropping inherited
+  # styles.
+  defp compat_no_shrink(child) when is_map(child) do
+    attrs =
+      case Map.get(child, :attrs, %{}) do
+        m when is_map(m) -> m
+        kw when is_list(kw) -> Map.new(kw)
+        _ -> %{}
+      end
+
+    style = resolve_style(child)
+
+    has_flex? =
+      Map.has_key?(attrs, :flex) or Map.has_key?(style, :flex) or
+        Map.has_key?(style, :flex_shrink) or Map.has_key?(style, :flex_grow)
+
+    if has_flex? do
+      child
+    else
+      Map.put(child, :style, Map.put(style, :flex_shrink, 0))
+    end
+  end
+
+  defp compat_no_shrink(child), do: child
+
   defp enrich_flex_attrs(%{type: :flex} = flex) do
     existing = Map.get(flex, :attrs, %{})
 
