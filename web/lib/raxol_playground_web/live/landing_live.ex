@@ -20,7 +20,11 @@ defmodule RaxolPlaygroundWeb.LandingLive do
 
   @raxol_version (case :application.get_key(:raxol, :vsn) do
                     {:ok, vsn} ->
-                      vsn |> to_string() |> String.split(".") |> Enum.take(2) |> Enum.join(".")
+                      vsn
+                      |> to_string()
+                      |> String.split(".")
+                      |> Enum.take(2)
+                      |> Enum.join(".")
 
                     _ ->
                       "2.4"
@@ -50,8 +54,22 @@ defmodule RaxolPlaygroundWeb.LandingLive do
 
   @impl true
   def handle_event("toggle_mobile_menu", _params, socket) do
-    {:noreply, assign(socket, :mobile_menu_open, !socket.assigns.mobile_menu_open)}
+    {:noreply,
+     assign(socket, :mobile_menu_open, !socket.assigns.mobile_menu_open)}
   end
+
+  # Forward terminal key events from the RaxolTerminal hook into the demo, so
+  # the embedded demo is interactive (same path as DemoLive).
+  def handle_event("keydown", params, socket) do
+    if socket.assigns[:lifecycle_pid] do
+      event = Raxol.LiveView.InputAdapter.translate_key_event(params)
+      {:noreply, DemoLifecycle.dispatch_event(socket, event)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   @impl true
   def handle_info({:render_update, html}, socket),
