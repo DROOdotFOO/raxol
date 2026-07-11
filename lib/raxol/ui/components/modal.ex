@@ -40,6 +40,7 @@ defmodule Raxol.UI.Components.Modal do
 
   # Alias the new modules
   alias Raxol.UI.Components.Modal.{Core, Events, Rendering, State}
+  alias Raxol.UI.Components.AbsoluteLayer
 
   # Define state struct
   defstruct id: nil,
@@ -183,6 +184,38 @@ defmodule Raxol.UI.Components.Modal do
       false -> nil
     end
   end
+
+  @doc """
+  Wraps `flow_content` as an `:absolute_layer` with this modal as a
+  centered, dimmed-backdrop dialog overlay (no-op passthrough when
+  hidden). Prefer this over replacing the flow tree with
+  `Modal.render(state, %{})`, which reflows background content.
+  """
+  @spec as_dialog_overlay(t(), map()) :: map()
+  def as_dialog_overlay(%__MODULE__{visible: false}, flow_content),
+    do: flow_content
+
+  def as_dialog_overlay(%__MODULE__{visible: true} = state, flow_content) do
+    width = state.width
+    height = Rendering.estimate_height(state)
+    box_style = Rendering.get_modal_style(state)
+    # render_modal_content/1 already wraps its column with padding: 1;
+    # dialog_surface/4 adds its own padding ring, so strip this one to
+    # avoid double-padding the overlay (see dialog_surface/4 contract).
+    content_column = unpad(Rendering.render_modal_content(state).children)
+
+    surface =
+      Rendering.dialog_surface(width, height, box_style, [content_column])
+
+    AbsoluteLayer.absolute_layer(flow_content, [
+      AbsoluteLayer.dialog_overlay(width, height, surface)
+    ])
+  end
+
+  defp unpad(%{style: style} = node) when is_map(style),
+    do: %{node | style: Map.put(style, :padding, 0)}
+
+  defp unpad(node), do: node
 
   # --- Public Helper Functions (Constructors) ---
 
