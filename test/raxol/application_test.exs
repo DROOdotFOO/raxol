@@ -5,7 +5,7 @@ defmodule Raxol.ApplicationTest do
     test "determines startup mode correctly" do
       # Test mode should be detected in test environment
       assert Application.get_env(:raxol, :startup_mode) == nil ||
-             Mix.env() == :test
+               Mix.env() == :test
     end
 
     test "health_status returns valid information" do
@@ -28,20 +28,27 @@ defmodule Raxol.ApplicationTest do
       assert Raxol.Application.toggle_feature(:audit, true) == :ok
 
       # Features that require restart
-      assert Raxol.Application.toggle_feature(:web_interface, false) == {:error, :restart_required}
-      assert Raxol.Application.toggle_feature(:database, false) == {:error, :restart_required}
-      assert Raxol.Application.toggle_feature(:pubsub, false) == {:error, :restart_required}
+      assert Raxol.Application.toggle_feature(:web_interface, false) ==
+               {:error, :restart_required}
+
+      assert Raxol.Application.toggle_feature(:database, false) ==
+               {:error, :restart_required}
+
+      assert Raxol.Application.toggle_feature(:pubsub, false) ==
+               {:error, :restart_required}
     end
 
     test "add_child and remove_child handle missing dynamic supervisor" do
       # In test mode, DynamicSupervisor might not be started
       result = Raxol.Application.add_child({Task, fn -> :ok end})
+
       assert result == {:error, :dynamic_supervisor_not_started} ||
-             match?({:ok, _}, result)
+               match?({:ok, _}, result)
 
       result = Raxol.Application.remove_child(:nonexistent)
+
       assert result == {:error, :not_found} ||
-             result == {:error, :dynamic_supervisor_not_started}
+               result == {:error, :dynamic_supervisor_not_started}
     end
   end
 
@@ -57,6 +64,23 @@ defmodule Raxol.ApplicationTest do
       # Check that features is not empty
       assert map_size(features) > 0
     end
+
+    test "get_feature_flag reads maps and keyword lists (regression: keyword config crashed boot)" do
+      # Documented shape: a map.
+      assert Raxol.Application.get_feature_flag(%{database: true}, :database)
+      refute Raxol.Application.get_feature_flag(%{database: false}, :database)
+      refute Raxol.Application.get_feature_flag(%{}, :missing)
+
+      # A keyword list (what `config :raxol, :features, key: value` produces).
+      # This used to hit Map.get on a list and raise BadMapError during boot.
+      assert Raxol.Application.get_feature_flag([database: true], :database)
+      refute Raxol.Application.get_feature_flag([database: false], :database)
+      refute Raxol.Application.get_feature_flag([], :missing)
+
+      # Anything else degrades to false rather than crashing.
+      refute Raxol.Application.get_feature_flag("garbage", :database)
+      refute Raxol.Application.get_feature_flag(nil, :database)
+    end
   end
 
   describe "Memory optimization" do
@@ -67,7 +91,8 @@ defmodule Raxol.ApplicationTest do
       info = Process.info(self())
       assert info[:trap_exit] == true
       # message_queue_data might not be available in all OTP versions
-      assert info[:message_queue_data] == :off_heap || info[:message_queue_data] == nil
+      assert info[:message_queue_data] == :off_heap ||
+               info[:message_queue_data] == nil
     end
   end
 end

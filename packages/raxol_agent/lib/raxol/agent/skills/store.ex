@@ -519,7 +519,6 @@ defmodule Raxol.Agent.Skills.Store do
 
   defp config(key), do: Application.get_env(:raxol_agent, key)
 
-  defp expand(nil), do: nil
   defp expand(path), do: Path.expand(path)
 
   defp expand_all(paths), do: Enum.map(paths, &Path.expand/1)

@@ -1,0 +1,93 @@
+name: Web Deploy Check
+
+# Builds the raxol.io web release and boots it exactly as production does
+# (RAXOL_MODE=minimal), then requires /health to return 200. The main CI never
+# builds or runs the web release, so release-config, app-boot, and service-wiring
+# bugs (the class that took raxol.io down) ship undetected until deploy. This job
+# is that missing gate.
+on:
+  pull_request:
+    branches: [master, main]
+    paths:
+      - "web/**"
+      - "lib/raxol/application.ex"
+      - "mix.exs"
+      - "mix.lock"
+      - "docker/Dockerfile.web"
+      - ".dockerignore"
+      - ".github/workflows/web-deploy-check.yml"
+  push:
+    branches: [master, main]
+    paths:
+      - "web/**"
+      - "lib/raxol/application.ex"
+
+concurrency:
+  group: web-deploy-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-boot:
+    name: Build + boot web release (minimal mode)
+    runs-on: ubuntu-latest
+    env:
+      # Match docker/Dockerfile.web so CI reflects the production build.
+      ELIXIR_VERSION: "1.17.1"
+      OTP_VERSION: "27.0"
+      MIX_ENV: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Cache web deps + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            web/deps
+            web/_build
+          key: web-release-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('web/mix.lock', 'mix.lock') }}
+
+      - name: Build web release
+        working-directory: web
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --only prod
+          mix compile
+          mix assets.deploy
+          mix release --overwrite
+
+      - name: Boot in minimal mode and require /health 200
+        working-directory: web
+        env:
+          RAXOL_MODE: minimal
+          PHX_HOST: localhost
+          PORT: "8080"
+          RAXOL_SSH_PLAYGROUND: "true"
+          RAXOL_SSH_PORT: "2222"
+          RAXOL_SSH_HOST_KEYS_DIR: /tmp/ci_ssh_keys
+          RAXOL_SSH_MAX_CONNECTIONS: "5"
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ci_ssh_keys
+          export SECRET_KEY_BASE="$(openssl rand -base64 48)"
+          bin=_build/prod/rel/raxol_playground/bin/raxol_playground
+          "$bin" start &
+          rel_pid=$!
+          ok=""
+          for i in $(seq 1 45); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:8080/health || true)"
+            if [ "$code" = "200" ]; then ok=1; echo "health 200 after ${i}s"; break; fi
+            if ! kill -0 "$rel_pid" 2>/dev/null; then echo "release process exited during boot"; break; fi
+            sleep 2
+          done
+          echo "health body:"; curl -s --max-time 3 http://localhost:8080/health || true; echo
+          "$bin" stop || true
+          if [ -z "$ok" ]; then
+            echo "::error::web release did not serve /health 200 in minimal mode"
+            exit 1
+          fi

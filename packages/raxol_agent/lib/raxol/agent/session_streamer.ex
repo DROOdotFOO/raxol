@@ -37,8 +37,6 @@ defmodule Raxol.Agent.SessionStreamer do
 
   use Raxol.Core.Behaviours.BaseManager
 
-  require Logger
-
   @type event ::
           {:text_delta, String.t()}
           | {:tool_use, map()}
