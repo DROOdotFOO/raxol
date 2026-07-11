@@ -195,9 +195,12 @@ defmodule Raxol.UI.ElementRenderer do
   defp render_clipped_box(_clip_width, 0, _clip_x, _clip_y, _style), do: []
 
   defp render_clipped_box(clip_width, clip_height, clip_x, clip_y, style) do
-    # Check if borders are disabled -- border can be true, false, :none, or
-    # a style atom like :single/:double/:rounded/:ascii
-    border_enabled = Map.get(style, :border, true) not in [false, :none]
+    # border can be true, false, :none, or a style atom like
+    # :single/:double/:rounded/:ascii. Default is :none — the LAYOUT
+    # engine treats an absent border as :none (children are not inset), so
+    # painting a default border here would draw a frame straight through
+    # the children's cells (chart wrapper boxes showed exactly that).
+    border_enabled = Map.get(style, :border, :none) not in [false, :none]
 
     render_box_with_border_option(
       border_enabled,

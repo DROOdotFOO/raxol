@@ -27,14 +27,44 @@ defmodule Raxol.UI.Charts.ViewBridge do
       cells
       |> Enum.sort_by(fn {x, y, _, _, _, _} -> {y, x} end)
       |> Enum.chunk_by(fn {_x, y, _c, fg, bg, _a} -> {y, fg, bg} end)
+      |> Enum.flat_map(&split_non_adjacent/1)
       |> Enum.map(&group_to_text_element/1)
 
     Components.box(style: chart_box_style(opts), children: children)
   end
 
+  # A same-row same-color chunk may contain gaps (e.g. two bars with
+  # spacing between them). Joining across a gap would paint both runs
+  # contiguously from the leftmost x — bars visually melt together.
+  # Split whenever a cell is not directly adjacent to the previous one.
+  defp split_non_adjacent(group) do
+    group
+    |> Enum.chunk_while(
+      [],
+      fn {x, _y, _c, _fg, _bg, _a} = cell, acc ->
+        case acc do
+          [] ->
+            {:cont, [cell]}
+
+          [{prev_x, _, _, _, _, _} | _] when x == prev_x + 1 ->
+            {:cont, [cell | acc]}
+
+          _ ->
+            {:cont, Enum.reverse(acc), [cell]}
+        end
+      end,
+      fn
+        [] -> {:cont, []}
+        acc -> {:cont, Enum.reverse(acc), []}
+      end
+    )
+  end
+
   # The wrapper box must hug the chart's render region — a dimensionless
   # box fills all available space, framing a small chart with a huge empty
-  # rectangle. Caller-provided style dimensions win over the region's.
+  # rectangle. Charts are fixed-size raster content, so rows a renderer
+  # emits past the region are clipped (overflow: :hidden) rather than
+  # bleeding into siblings. Caller-provided style keys win.
   defp chart_box_style(opts) do
     style = Keyword.get(opts, :style, %{})
 
@@ -43,6 +73,7 @@ defmodule Raxol.UI.Charts.ViewBridge do
         style
         |> Map.put_new(:width, w)
         |> Map.put_new(:height, h)
+        |> Map.put_new(:overflow, :hidden)
 
       _ ->
         style
