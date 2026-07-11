@@ -3,8 +3,7 @@ defmodule Raxol.CrossTerminal.MultilineTextRenderTest do
   Regression: text elements containing embedded newlines must render each
   line at the ELEMENT's x on consecutive rows — never emit a literal "\\n"
   cell (which linefeeds the terminal to column 0, dragging content outside
-  its layout box; observed in the playground code panel and LineChart,
-  2026-07-11).
+  its layout box; observed in the playground code panel and LineChart).
   """
   use ExUnit.Case, async: false
 

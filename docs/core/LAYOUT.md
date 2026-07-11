@@ -1,15 +1,10 @@
 # Flex & Text Layout
 
 <!--
-CHANGELOG: added with the Phase A flex rework (proposal:
-docs/proposals/in-flight/flex-spec-convergence.md). Documents the
-corrected `:flex` layout path (`Raxol.UI.Layout.FlexItem` +
-`Flexbox.Solver` + `Flexbox.Positioner`) and the new `Raxol.UI.TextLayout`
-wrapping API (Phase E). `:row`/`:column` (`Containers.process_row/column`)
-and the third renderer stack (`Core.Renderer.View.Layout.Flex`) are
-different code paths, out of scope here -- see the proposal's "ground
-truth" section for the full three-dialect map. Phase D (unification)
-will fold `:row`/`:column` into this document once it lands.
+Documents the `:flex` layout path (`Raxol.UI.Layout.FlexItem` +
+`Flexbox.Solver` + `Flexbox.Positioner`) and the `Raxol.UI.TextLayout`
+wrapping API. Literal `:row`/`:column` elements run on the same flex
+engine through a compatibility translation (see section 6).
 -->
 
 This page is the supported-property reference for `:flex` containers and
@@ -34,13 +29,13 @@ present, falling back to legacy top-level/`attrs` forms. Item properties
 | `align_content`     | `:flex_start`, `:flex_end`, `:center`, `:space_between`, `:space_around` | `attrs.align_content` only                                                                  | No `style:` translation exists for this key; set it directly in `attrs` if you're not going through the `row`/`column`/`flex` builders. Only matters when wrapping (`flex_wrap: :wrap`). |
 | `flex_wrap`         | `:nowrap`, `:wrap` (anything non-`:nowrap` multi-lines)                 | `attrs.flex_wrap` only                                                                      | Default `:nowrap`. `:wrap_reverse` is accepted as a value but is not distinguished from `:wrap` -- lines are not reversed. |
 | `gap`                | integer, or `%{row: r, column: c}`                                      | `style: %{gap: ...}` or `attrs.gap`                                                         | Default `0`. Subtracted from the container's main-axis size before flexible-length resolution runs, and included in `MinContent` row aggregation (`sum(child min) + gap * (n - 1)`). |
-| `padding`            | integer, `{v, h}`, `{t, r, b, l}`, or `%{top:, right:, bottom:, left:}` | `style: %{padding: ...}` or `attrs.padding`                                                 | Parsed by `Raxol.UI.Layout.LayoutUtils.parse_padding/1`. Applied to the container's space before children are measured or laid out; `:prepared_cache` and other extra space keys are preserved through the padding step (Phase A fixed a bug where they were silently dropped, forcing every flex child to measure uncached). |
+| `padding`            | integer, `{v, h}`, `{t, r, b, l}`, or `%{top:, right:, bottom:, left:}` | `style: %{padding: ...}` or `attrs.padding`                                                 | Parsed by `Raxol.UI.Layout.LayoutUtils.parse_padding/1`. Applied to the container's space before children are measured or laid out; `:prepared_cache` and other extra space keys are preserved through the padding step, so flex children always measure with cache intact. |
 
 ### Item (child) properties
 
 | Property                      | Values                                                                 | Where (child's `style:` map)          | Notes |
 |--------------------------------|---------------------------------------------------------------------------|------------------------------------------|-------|
-| `flex`                        | integer `n`; `{grow, shrink, basis}`; `%{grow:, shrink:, basis:}`         | `style: %{flex: ...}`                    | Integer shorthand `flex: n` expands to `grow: n, shrink: 1, basis: 0` **and** `min_main: 0` (terminal-pragmatic sugar, D2 -- see divergences). Tuple/map forms set grow/shrink/basis only, no min override. Legacy `child.attrs.flex` (map form) is honored at lowest precedence for back-compat. |
+| `flex`                        | integer `n`; `{grow, shrink, basis}`; `%{grow:, shrink:, basis:}`         | `style: %{flex: ...}`                    | Integer shorthand `flex: n` expands to `grow: n, shrink: 1, basis: 0` **and** `min_main: 0` (terminal-pragmatic sugar -- see divergences). Tuple/map forms set grow/shrink/basis only, no min override. Legacy `child.attrs.flex` (map form) is honored at lowest precedence for back-compat. |
 | `flex_grow`                   | non-negative integer                                                     | `style: %{flex_grow: ...}`               | Default `0`. Ignored if `flex:` shorthand is also set. |
 | `flex_shrink`                 | non-negative integer                                                     | `style: %{flex_shrink: ...}`             | Default `1`. |
 | `flex_basis`                  | non-negative integer, `{:pct, n}`, or `:auto`                            | `style: %{flex_basis: ...}`              | Default `:auto` -- resolves to the content main size (measured), or the explicit `width`/`height` when set. |
@@ -55,20 +50,19 @@ present, falling back to legacy top-level/`attrs` forms. Item properties
 
 These are deliberate, not bugs -- Raxol targets a monospace cell grid, not
 a pixel box model, and some CSS corners aren't worth the complexity on a
-terminal. Source: `Raxol.UI.Layout.FlexItem` moduledoc (D2, D7, D8) and
-proposal decisions D2/D6/D7/D8.
+terminal. Source: `Raxol.UI.Layout.FlexItem` moduledoc.
 
 | CSS behavior | Raxol behavior | Why |
 |---|---|---|
-| `flex: 1` keeps each item's own `min-width`/`min-height: auto` (min-content) floor, so equal-`flex:1` columns don't always equalize if content differs. | `flex: n` sugar also sets `min_main: 0`, so equal-`flex` items *always* equalize -- an explicit `min_width`/`min_height` in `style:` still overrides the sugar. | Terminal-pragmatic (D2, V-decided 2026-07-11): equal columns that actually equalize is the common case terminal UIs want; the CSS min-content floor is opt-in via an explicit min. |
+| `flex: 1` keeps each item's own `min-width`/`min-height: auto` (min-content) floor, so equal-`flex:1` columns don't always equalize if content differs. | `flex: n` sugar also sets `min_main: 0`, so equal-`flex` items *always* equalize -- an explicit `min_width`/`min_height` in `style:` still overrides the sugar. | Terminal-pragmatic: equal columns that actually equalize is the common case terminal UIs want; the CSS min-content floor is opt-in via an explicit min. |
 | `row-reverse` / `column-reverse` reverse visual order and flip the start/end edges for `justify-content`. | `:row_reverse`/`:column_reverse` are accepted as `flex_direction` values but map to the *same* axis pair as `:row`/`:column` (`get_axes/1`) -- no actual reversal of child order or edges happens. | Not implemented. Documented divergence -- do not rely on reverse directions; they silently behave like the non-reversed direction. |
 | `align-items: baseline` aligns items along their text baseline. | Not implemented. `Positioner.align_cross/4` has no `:baseline` clause; passing it falls through to a no-op catch-all (the child keeps whatever cross position it already had, effectively broken, not "close enough"). | No font metrics/baseline concept on a monospace cell grid worth the complexity. Use `:center` or `:flex_start` instead. |
 | The fractional-flex-factor rule: if `sum(flex-grow) < 1`, only that fraction of free space is distributed, the rest stays unfilled. | Not implemented -- grow/shrink factors are non-negative integers, so a fractional sum can't occur; all free space is always distributed among items with non-zero factors. | Documented as N/A rather than a gap: the precondition (fractional factors) can't arise given the integer-only factor type. |
-| Percentages parse from CSS-like strings (`"50%"`) or numbers with a unit. | Only the `{:pct, n}` tuple is accepted; no string parsing. | D7 -- one unambiguous representation, no parser/locale edge cases. |
+| Percentages parse from CSS-like strings (`"50%"`) or numbers with a unit. | Only the `{:pct, n}` tuple is accepted; no string parsing. | One unambiguous representation, no parser/locale edge cases. |
 | Margin percentages resolve against the *containing block's inline-axis size* per side semantics some engines special-case. | Margin percentages always resolve against the container's **width**, for all four sides, matching the CSS spec's actual (if surprising) rule. | Explicitly called out in `FlexItem` moduledoc because it trips people up even in browsers -- Raxol matches spec here rather than "fixing" it. |
 | Pixel box model: fractional/subpixel sizes, box-sizing modes. | Everything is whole cells; sizes are non-negative integers (or `{:pct, n}` rounded to a whole cell). No box-sizing switch -- padding/border/margin math is always "content-box"-shaped in cells. | No subpixel concept on a terminal grid. |
-| Invalid CSS values are ignored (the property falls back to its previous/initial value, per CSS's error-handling rule). | Invalid values (negative sizes, negative flex factors, malformed percentages/margins) are clamped to the nearest valid value (usually `0`) and reported via the `[:raxol, :layout, :invalid_style]` telemetry event. Layout never raises on style input. | D8 -- fail-soft with observability instead of silent CSS-style ignoring; a clamp is easier to spot in a telemetry dashboard than a silently-dropped property. |
-| Overflow (`sum(min-size) > container`) is handled per `overflow` property (default `visible`, content spills out / overlaps). | Content clips at the container's main-end edge; siblings never overlap. Pairs with the text-overflow affordances in Section 4 so clipping degrades gracefully instead of silently truncating mid-glyph. | D6. |
+| Invalid CSS values are ignored (the property falls back to its previous/initial value, per CSS's error-handling rule). | Invalid values (negative sizes, negative flex factors, malformed percentages/margins) are clamped to the nearest valid value (usually `0`) and reported via the `[:raxol, :layout, :invalid_style]` telemetry event. Layout never raises on style input. | Fail-soft with observability instead of silent CSS-style ignoring; a clamp is easier to spot in a telemetry dashboard than a silently-dropped property. |
+| Overflow (`sum(min-size) > container`) is handled per `overflow` property (default `visible`, content spills out / overlaps). | Content clips at the container's main-end edge; siblings never overlap. Pairs with the text-overflow affordances in Section 4 so clipping degrades gracefully instead of silently truncating mid-glyph. | |
 
 ## 3. Automatic minimum size
 
@@ -83,23 +77,22 @@ shrinks below its own minimum content size) is implemented via
   labels break at spaces, after hyphens, and between CJK ideographs (each
   CJK grapheme is its own break opportunity), so a long sentence's
   min-content is just its longest word, not the whole sentence. A
-  `:divider` has min-content `1` (not the available width -- this was bug
-  class L6: a full-width divider used to inflate the measured container
-  width and rob fixed-width siblings during shrink). A `:spacer` has
-  min-content `0`.
+  `:divider` has min-content `1` (not the available width -- a full-width
+  divider would otherwise inflate the measured container width and rob
+  fixed-width siblings during shrink). A `:spacer` has min-content `0`.
 - **Block axis** (main axis is `:vertical`, i.e. `flex_direction: :column`):
   the automatic minimum is the item's already-measured content size on
   that axis (no separate min-content pass -- vertical wrapping isn't
   modeled, so "min content height" and "content height" coincide).
 - Items **never shrink below** their automatic minimum; if the sum of
-  minimums exceeds the container, the excess overflows per the D6 clip
+  minimums exceeds the container, the excess overflows per the clip
   rule (Section 2) rather than content vanishing or items overlapping.
 - An **explicit `min_width`/`min_height`** in `style:` always overrides the
   automatic minimum (and overrides the `flex: n` sugar's `min_main: 0`,
   per `FlexItem.resolve/5`'s `{explicit_min, flex.min_main_override}`
   precedence).
 - **`flex: n`** (the integer shorthand) opts out of the automatic minimum
-  entirely by setting `min_main: 0` directly (D2) -- use `flex: {n, s, b}`
+  entirely by setting `min_main: 0` directly -- use `flex: {n, s, b}`
   or explicit `flex_grow`/`flex_shrink`/`flex_basis` keys if you want the
   automatic-minimum floor to still apply.
 
@@ -121,8 +114,8 @@ Component logic. `Raxol.UI.Components.Display.Text` exposes it via props.
 
 `:normal` is the default and is deliberately bit-identical to the
 pre-existing greedy word-wrap (including its non-CJK-safe character-count
-line-fit check) -- Phase E required the default to match production
-output exactly. The other four modes are new, CJK-width-safe code paths
+line-fit check), so existing callers see unchanged output. The other four
+modes are CJK-width-safe code paths
 via `Raxol.UI.TextMeasure`. A single grapheme wider than `width` is never
 split mid-grapheme; it's emitted alone on its own line even if it exceeds
 `width`.
@@ -188,31 +181,79 @@ Text.init(
 )
 ```
 
-## 5. What changed vs. the pre-rework path
+## 5. Distribution and caching guarantees
 
-Phase A (`docs/proposals/in-flight/flex-spec-convergence.md`) corrected
-several places where the previous `:flex` implementation silently
-diverged from its own stated behavior:
+These guarantees hold across the current `:flex` layout path:
 
-- **Default shrink now actually works.** The previous single-pass
-  distribution lost free space to integer `div/2` truncation; the new
-  `Flexbox.Solver` uses largest-remainder apportionment so every
-  round distributes cells exactly, with no silent loss.
+- **Free space distribution is exact.** `Flexbox.Solver` uses
+  largest-remainder apportionment, so grow/shrink distributes every
+  round's cells exactly, with no loss to integer truncation.
 - **Explicit box `width`/`height` on a flex child is honored** as the
   main-axis size input (via `FlexItem.resolve/5`'s `explicit_main`),
   instead of being overridden by content measurement.
 - **Padding tuples are honored end-to-end**, including through the
-  `apply_padding` step that previously dropped `:prepared_cache` (and any
-  other extra space keys) -- flex children now measure with cache intact
-  instead of falling back to an uncached path on every render.
+  `apply_padding` step, which preserves `:prepared_cache` (and any other
+  extra space keys) -- flex children measure with cache intact instead of
+  falling back to an uncached path.
 - **`gap` is included in main-axis measurement**: the container's usable
   main size is `container_main - total_gaps` before flexible-length
   resolution runs, and `MinContent`'s row aggregation adds
-  `gap * (n - 1)` to the summed child minimums -- gap no longer causes
+  `gap * (n - 1)` to the summed child minimums -- gap doesn't cause
   under- or over-fitting against the container.
+
+## 6. The `:row`/`:column` compatibility dialect
+
+Literal `%{type: :row}` / `%{type: :column}` element maps (as opposed to
+the View DSL `row`/`column` macros, which build `:flex` maps) predate the
+flex engine and carried their own conventions. They now translate onto
+the flex engine (`Engine.containers_compat_to_flex/2`) preserving those
+conventions:
+
+- `gap` defaults to **1** in layout and **0** in measurement (the old
+  dialect disagreed with itself; both behaviors are preserved so
+  auto-sized boxes keep their dimensions)
+- `justify`/`align` default to `:start` (mapped to `:flex_start`; the
+  dialect never stretched children)
+- children default to `flex_shrink: 0`: natural size, overflow instead of
+  reflow. A child that declares any flex property opts out.
+- `gap`/`justify`/`align`/`padding` are read from `attrs` first, then
+  top-level keys, then the defaults above.
+
+New code should use `:flex` (the View DSL macros) directly.
+
+## 7. Overflow and scroll anchoring
+
+- `style: %{overflow: :visible | :hidden | :clip | :auto | :scroll}` on
+  boxes and flex containers. Anything but `:visible` (the default) stamps
+  every descendant with the container's content rectangle as clip bounds;
+  the renderer drops cells outside it. Nested clips intersect.
+  `:auto`/`:scroll` clip identically -- scrolling itself is the Viewport
+  component's job; the property only guarantees containment.
+- `Raxol.UI.Components.Display.Viewport` takes
+  `overflow_anchor: :auto | :none`. `:auto` (default) is the terminal-log
+  idiom: a viewport scrolled to the bottom stays pinned to the bottom as
+  content grows; scrolling up releases the pin. `:none` never moves
+  `scroll_top` on content changes.
+- Chart wrapper boxes (`Raxol.UI.Charts.ViewBridge`) size themselves to
+  the chart's render region and default to `overflow: :hidden` -- chart
+  cells can never paint outside the declared region.
+
+## Future work
+
+- **Span-aware wrapping**: a wrapped paragraph cannot yet carry per-span
+  styles (`MarkdownRenderer` drops inline styling on lines that wrap;
+  single-line content keeps it). Requires the wrapper to thread style
+  runs through break points.
+- **`:fill` as a dimension value**: accepted by the box path but not by
+  `FlexItem` (where it clamps to `:auto` with telemetry). Candidate
+  alias: `{:pct, 100}`.
+- **`align-items: baseline`, reverse directions, `wrap-reverse`**:
+  intentionally unsupported (see section 2); revisit only with a concrete
+  consumer.
 
 ## See also
 
-- `docs/proposals/in-flight/flex-spec-convergence.md` -- the full phase
-  plan, decisions (D1-D9), and test strategy this document tracks.
 - `docs/core/ARCHITECTURE.md` -- where layout sits in the render pipeline.
+- Module docs: `Raxol.UI.Layout.FlexItem` (resolved-item semantics),
+  `Raxol.UI.Layout.Flexbox.Solver` (flexible-length algorithm),
+  `Raxol.UI.Layout.MinContent` (automatic minimum measurement).

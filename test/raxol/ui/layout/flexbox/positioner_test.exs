@@ -1,8 +1,6 @@
 defmodule Raxol.UI.Layout.Flexbox.PositionerTest do
   @moduledoc """
-  Coverage for the N2 fixes to `Raxol.UI.Layout.Flexbox.Positioner`
-  (flex rework, wave 0.5; see
-  `docs/proposals/in-flight/flex-spec-convergence.md` Phase A step 6):
+  Coverage for `Raxol.UI.Layout.Flexbox.Positioner`:
 
     * Fix 1 -- `calculate_justify_positioning/4` (and its cross-axis
       twin `calculate_align_content_positioning/4`) used `div/2` for

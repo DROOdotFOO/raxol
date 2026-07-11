@@ -178,11 +178,11 @@ defmodule Raxol.UI.Layout.Engine do
     Panels.process(panel, space, acc)
   end
 
-  # Literal :row/:column elements (the old Containers dialect) now run on
-  # the flex engine through an explicit compat map (proposal D4). The
-  # dialect's defaults are preserved: gap 1, justify :start, align :start,
-  # and NO shrink (children keep their natural size; overflow instead of
-  # reflow) — see containers_compat_to_flex/2.
+  # Literal :row/:column elements (the old Containers dialect) run on the
+  # flex engine through an explicit compat map. The dialect's defaults are
+  # preserved: gap 1, justify :start, align :start, and NO shrink (children
+  # keep their natural size; overflow instead of reflow) — see
+  # containers_compat_to_flex/2.
   def process_element(%{type: type} = el, space, acc)
       when type in [:row, :column] do
     process_element(containers_compat_to_flex(el, :layout), space, acc)
@@ -1058,11 +1058,11 @@ defmodule Raxol.UI.Layout.Engine do
   # The View DSL (Flex.row/column) puts direction/gap/etc. at the top level,
   # but Flexbox reads from the :attrs map.
   # ---------------------------------------------------------------------
-  # Containers-dialect compat map (proposal D4, flex rework N17).
+  # Containers-dialect compat map.
   #
-  # Literal %{type: :row} / %{type: :column} elements historically ran on
-  # Raxol.UI.Layout.Containers with its own conventions. That module is
-  # deleted; this translation preserves the dialect on the flex engine:
+  # Literal %{type: :row} / %{type: :column} elements ran on
+  # Raxol.UI.Layout.Containers, which had its own conventions; this
+  # translation preserves that dialect on the flex engine:
   #
   #   gap      default 1 in layout, 0 in measurement (the dialect itself
   #            disagreed between the two; both behaviors preserved)
@@ -1143,15 +1143,15 @@ defmodule Raxol.UI.Layout.Engine do
   defp compat_no_shrink(child), do: child
 
   # ---------------------------------------------------------------------
-  # overflow (proposal Phase F1): when a box declares
+  # overflow: when a box declares
   # `style: %{overflow: :hidden | :clip | :auto | :scroll}`, every
   # descendant element it produced is stamped with `:clip_bounds`
   # (the box's content rectangle), which `Raxol.UI.CellManager`
   # already honors at paint time. Nested clips intersect. `:visible`
   # (default) stamps nothing — content may paint outside, matching CSS.
   # `:auto`/`:scroll` clip identically here; scrolling itself is the
-  # Viewport component's job (F2), this property only guarantees the
-  # box's content can never paint outside its bounds.
+  # Viewport component's job, this property only guarantees the box's
+  # content can never paint outside its bounds.
   # ---------------------------------------------------------------------
   @doc false
   # Overflow clipping for flex containers (called from Flexbox.process_flex,

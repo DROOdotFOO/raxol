@@ -77,9 +77,7 @@ defmodule Raxol.Property.UIComponentTest do
     end
   end
 
-  # "Flexbox layout properties" (Flexbox.new/render/calculate_layout)
-  # deleted in flex rework N11 with the legacy API. Live-path flex
-  # properties live in test/property/flex_layout_property_test.exs.
+  # Flex layout properties live in test/property/flex_layout_property_test.exs.
 
   describe "Grid layout properties" do
     property "grid places items in correct cells" do

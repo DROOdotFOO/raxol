@@ -3,14 +3,13 @@ defmodule Raxol.Playground.Demos.ContainerDemo do
   Playground demo: scrollable container with viewport controls.
 
   Keeps its own `Enum.slice/3`-based windowing rather than embedding
-  `Raxol.UI.Components.Display.Viewport`: the box's D6 overflow clip
+  `Raxol.UI.Components.Display.Viewport`: the box's overflow clip
   (`docs/core/LAYOUT.md` section 2) only clips from the container's
-  main-end edge, it can't show an arbitrary mid-list offset window, and
-  `Viewport` is a stateful `Base.Component` (its own `init/1`/`render/2`
-  lifecycle) rather than a plain View DSL element -- embedding it here
-  would mean moving scroll ownership out of this demo's TEA model, a
-  much bigger rework than the offset-window slicing this demo already
-  does correctly.
+  main-end edge, so it can't show an arbitrary mid-list offset window.
+  `Viewport` is also a stateful `Base.Component` (its own
+  `init/1`/`render/2` lifecycle) rather than a plain View DSL element, so
+  embedding it here would mean moving scroll ownership out of this
+  demo's TEA model.
   """
   use Raxol.Core.Runtime.Application
   alias Raxol.Playground.DemoHelpers

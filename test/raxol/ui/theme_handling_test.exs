@@ -67,8 +67,8 @@ defmodule Raxol.UI.ThemeHandlingTest do
         border_style: %{type: :double}
       })
 
-    # re-pinned: renderer no longer paints a border by default (layout
-    # treats absent border as :none); declare it explicitly.
+    # The renderer doesn't paint a border by default (layout treats absent
+    # border as :none); declare it explicitly.
     element =
       Helper.create_test_box(0, 0, 5, 5, %{
         theme: theme,
@@ -84,9 +84,9 @@ defmodule Raxol.UI.ThemeHandlingTest do
   end
 
   test "handles default border styles" do
-    # re-pinned: border must be declared (renderer default is now :none,
-    # matching the layout engine); the DEFAULT under test is the theme's
-    # border STYLING, not border presence.
+    # Border must be declared (renderer default is :none, matching the
+    # layout engine); the DEFAULT under test is the theme's border
+    # STYLING, not border presence.
     element = Helper.create_test_box(0, 0, 5, 5, %{border: :single})
     cells = Renderer.render_to_cells(element)
 

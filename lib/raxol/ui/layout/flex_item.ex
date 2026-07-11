@@ -2,18 +2,17 @@ defmodule Raxol.UI.Layout.FlexItem do
   @moduledoc """
   A flex child resolved into the inputs the flexible-length solver needs.
 
-  This is the interface contract for the flex rework (proposal:
-  `docs/proposals/in-flight/flex-spec-convergence.md`, Phase A). One
-  `FlexItem` is resolved per child BEFORE distribution; the solver
-  (`Distributor`) then works exclusively on these — it never reads raw
-  elements or style maps.
+  This is the interface contract between element resolution and the
+  flexible-length solver. One `FlexItem` is resolved per child BEFORE
+  distribution; the solver (`Distributor`) then works exclusively on
+  these — it never reads raw elements or style maps.
 
   ## Semantics (decided, do not re-litigate in downstream nodes)
 
     * `base_size` — the item's flex base size (resolved `flex-basis`).
       `:auto` basis resolves to the content main size via the measure
       function passed to `resolve/4`.
-    * Terminal-pragmatic `flex: 1` (D2): the integer shorthand
+    * Terminal-pragmatic `flex: 1`: the integer shorthand
       `style: %{flex: n}` expands to grow n / shrink 1 / basis 0 AND
       `min_main: 0`, so equal columns actually equalize. An explicit
       `min_width`/`min_height` in style still wins over the sugar.
@@ -23,16 +22,16 @@ defmodule Raxol.UI.Layout.FlexItem do
       resolve against the container's WIDTH regardless of side (spec).
     * Invalid values (negative sizes, negative flex factors, malformed
       percentages) are clamped to the nearest valid value and reported via
-      the `[:raxol, :layout, :invalid_style]` telemetry event (D8) — layout
+      the `[:raxol, :layout, :invalid_style]` telemetry event — layout
       never raises on style input.
     * `margin` sides may be `:auto`; sizing math treats `:auto` as 0
-      (`outer_main/2`), positioning distributes free space into them (P3
-      auto-margin step, solver-adjacent but not solver-owned).
+      (`outer_main/2`), positioning distributes free space into them
+      (auto-margin step, solver-adjacent but not solver-owned).
 
   ## Solver fields
 
   `frozen`, `frozen_reason` (`:inflexible | :min_violation | :max_violation`)
-  and `main_size` belong to the resolve-flexible-lengths loop (N6). They are
+  and `main_size` belong to the resolve-flexible-lengths loop. They are
   defined here so the struct is the single currency between resolution,
   distribution, and positioning.
   """
@@ -162,7 +161,7 @@ defmodule Raxol.UI.Layout.FlexItem do
 
   Returns `%{grow, shrink, basis, min_main_override}`.
 
-    * `flex: n` (int)      -> grow n, shrink 1, basis 0, min_main_override 0  (D2)
+    * `flex: n` (int)      -> grow n, shrink 1, basis 0, min_main_override 0
     * `flex: {g, s, b}`    -> as given, no min override
     * `flex: %{...}` map   -> grow/shrink/basis keys, no min override
     * legacy `attrs.flex`  -> same as map form (lowest precedence)

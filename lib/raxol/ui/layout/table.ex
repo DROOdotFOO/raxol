@@ -18,15 +18,6 @@ defmodule Raxol.UI.Layout.Table do
   @fallback_available_width Raxol.Core.Defaults.terminal_width()
 
   @doc """
-  Measures a table element.
-
-  Calculates the required dimensions for a table based on:
-  - Column widths (auto-sized or fixed)
-  - Row count and height
-  - Headers and borders
-  - Available space constraints
-  """
-  @doc """
   Normalizes the two table element conventions into the attrs shape this
   module works with.
 
@@ -69,6 +60,15 @@ defmodule Raxol.UI.Layout.Table do
     end
   end
 
+  @doc """
+  Measures a table element.
+
+  Calculates the required dimensions for a table based on:
+  - Column widths (auto-sized or fixed)
+  - Row count and height
+  - Headers and borders
+  - Available space constraints
+  """
   def measure(attrs_map, available_space) do
     columns = Map.get(attrs_map, :columns, [])
     # Support both 'rows' and 'data' attributes

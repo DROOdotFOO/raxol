@@ -123,24 +123,18 @@ defmodule Raxol.Test.Visual do
   defp ensure_list(item) when is_list(item), do: item
   defp ensure_list(item), do: [item]
 
-  # N14: Re-pointed from the legacy stack (Raxol.Core.Renderer.Layout ->
-  # View.Layout.Flex/Grid, zero production callers) to the live engine
-  # (Raxol.UI.Layout.Engine, the pipeline production actually renders
-  # through). The live engine's `apply_layout/3` takes a single element,
+  # Runs elements through the live layout engine, the same pipeline
+  # production renders through. `apply_layout/3` takes a single element,
   # not a bare list, and recurses via `:view`/`:children` -- wrap the
   # top-level element list the same way `view/1` callbacks do, so every
   # element in `elements` is laid out against the *same* full available
-  # space (matching the legacy harness's flat, unpartitioned semantics).
+  # space.
   #
-  # Shape change: the live engine returns a flat list of positioned
-  # element maps carrying `:type`/`:x`/`:y` (and `:width`/`:height` for
-  # sized types) instead of the legacy `:position`/`:size` tuples. This
-  # is exactly the shape `Raxol.UI.Renderer.render_to_cells/2` (called
-  # below) already expects -- it is production's cell renderer, and the
-  # legacy `:position`/`:size` shape never matched its `%{x:, y:, width:,
-  # height:}` clauses, which is why every snapshot under this harness was
-  # a blank buffer before this change (see re-pin comments in the test
-  # files under test/ for confirmation).
+  # The engine returns a flat list of positioned element maps carrying
+  # `:type`/`:x`/`:y` (and `:width`/`:height` for sized types). This is
+  # exactly the shape `Raxol.UI.Renderer.render_to_cells/2` (called
+  # below) expects -- a mismatched shape (e.g. `:position`/`:size`
+  # tuples) silently renders a blank buffer instead of raising.
   defp apply_layout(elements, width, height) do
     Raxol.UI.Layout.Engine.apply_layout(
       %{type: :view, children: elements},

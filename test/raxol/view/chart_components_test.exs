@@ -56,9 +56,9 @@ defmodule Raxol.View.ChartComponentsTest do
           style: %{border: :single}
         )
 
-      # re-pinned: the wrapper box now carries the chart region as
-      # width/height (hugging the chart instead of filling all available
-      # space); caller style keys still pass through and win.
+      # The wrapper box carries the chart region as width/height (hugging
+      # the chart instead of filling all available space); caller style
+      # keys still pass through and win.
       assert view.style.border == :single
       assert view.style.width == 40
       assert view.style.height == 10

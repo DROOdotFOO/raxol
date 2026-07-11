@@ -1,12 +1,11 @@
 defmodule Raxol.Playground.Demos.SplitPaneDemoTest do
   @moduledoc """
-  Focused coverage for the `{:pct, n}` proportional-sizing rework
-  (`docs/core/LAYOUT.md` section 1): previously the two panes had no
-  width/height style at all, so `ratio` only changed the displayed
-  percentage text -- the boxes never actually resized. These tests
-  inspect the raw view tree the demo returns to confirm the panes are
-  now styled with `{:pct, n}` and that the two percentages always sum
-  to 100 regardless of ratio or direction.
+  Focused coverage for `{:pct, n}` proportional sizing
+  (`docs/core/LAYOUT.md` section 1): without a width/height style on the
+  panes, `ratio` only changes the displayed percentage text -- the boxes
+  don't actually resize. These tests inspect the raw view tree the demo
+  returns to confirm the panes are styled with `{:pct, n}` and that the
+  two percentages always sum to 100 regardless of ratio or direction.
   """
   use ExUnit.Case, async: true
 

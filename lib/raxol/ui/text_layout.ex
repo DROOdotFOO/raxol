@@ -26,10 +26,9 @@ defmodule Raxol.UI.TextLayout do
   pre-existing character-count-based (not display-width-based) line-fit
   check. That means `:normal` is not CJK-width-safe today; this is a known,
   intentionally preserved divergence (see moduledoc note on
-  `Raxol.UI.Components.Input.TextWrapping`), not something this module
-  fixes, because Phase E of the flex-spec-convergence proposal requires the
-  default to match current production output exactly. The other four modes
-  are new code and *are* display-width safe via `Raxol.UI.TextMeasure`.
+  `Raxol.UI.Components.Input.TextWrapping`), kept so the default matches
+  existing production output exactly. The other four modes are new code
+  and *are* display-width safe via `Raxol.UI.TextMeasure`.
 
   Word-vs-character break granularity (i.e. CSS `word-break`/`overflow-wrap`)
   is a different, orthogonal axis from `white-space` and is not modeled

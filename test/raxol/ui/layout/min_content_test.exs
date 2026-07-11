@@ -1,5 +1,5 @@
 defmodule Raxol.UI.Layout.MinContentTest do
-  @moduledoc "Contract tests for min-content measurement (flex rework N8)."
+  @moduledoc "Contract tests for min-content measurement."
   use ExUnit.Case, async: true
 
   alias Raxol.UI.Layout.MinContent

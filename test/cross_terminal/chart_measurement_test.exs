@@ -3,7 +3,7 @@ defmodule Raxol.CrossTerminal.ChartMeasurementTest do
   Regression: chart widget types (:line_chart etc. — :box elements with an
   overridden :type for MCP discovery) measured 0x0 because only layout
   rewrote the type back to :box, not measurement. Result: siblings placed
-  on top of the painted chart rows (playground LineChart, 2026-07-11).
+  on top of the painted chart rows.
   """
   use ExUnit.Case, async: true
 

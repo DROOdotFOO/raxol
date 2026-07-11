@@ -1,7 +1,7 @@
 defmodule Raxol.UI.Layout.FlexItemTest do
   @moduledoc """
-  Contract tests for FlexItem (flex rework N5). Downstream nodes (solver,
-  percentages, min-content) code against exactly these behaviors.
+  Contract tests for FlexItem. Downstream nodes (solver, percentages,
+  min-content) code against exactly these behaviors.
   """
   use ExUnit.Case, async: true
 
@@ -16,7 +16,7 @@ defmodule Raxol.UI.Layout.FlexItemTest do
     FlexItem.resolve(child, axis, container, content)
   end
 
-  describe "flex shorthand (D2: terminal-pragmatic)" do
+  describe "flex shorthand (terminal-pragmatic)" do
     test "flex: 1 -> grow 1, shrink 1, basis 0, min_main 0" do
       item = resolve(%{style: %{flex: 1}})
       assert %{grow: 1, shrink: 1, base_size: 0, min_main: 0} = item
@@ -42,7 +42,7 @@ defmodule Raxol.UI.Layout.FlexItemTest do
       assert c.grow == 5
     end
 
-    test "negative flex factor clamps to 0 (D8, no raise)" do
+    test "negative flex factor clamps to 0 (no raise)" do
       item = resolve(%{style: %{flex: -2}})
       assert item.grow == 0
     end
@@ -75,7 +75,7 @@ defmodule Raxol.UI.Layout.FlexItemTest do
     end
   end
 
-  describe "percentages (D7)" do
+  describe "percentages" do
     test "pct width and pct min/max resolve and round" do
       item = resolve(%{style: %{width: {:pct, 33}, max_width: {:pct, 50}}})
       assert item.base_size == 33
@@ -146,7 +146,7 @@ defmodule Raxol.UI.Layout.FlexItemTest do
     end
   end
 
-  describe "telemetry on invalid values (D8)" do
+  describe "telemetry on invalid values" do
     test "invalid style emits event and clamps" do
       ref = make_ref()
       pid = self()

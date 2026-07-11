@@ -31,7 +31,7 @@ config :raxol, Raxol.Repo,
   pool_size: 10
 
 # Dev endpoint for Tidewave MCP (localhost:4000/tidewave/mcp)
-# Override with RAXOL_DEV_PORT when 4000 is taken (e.g. LiteLLM).
+# Override with RAXOL_DEV_PORT when 4000 is taken.
 config :raxol, Raxol.Endpoint,
   http: [port: String.to_integer(System.get_env("RAXOL_DEV_PORT") || "4000")],
   server: true,
