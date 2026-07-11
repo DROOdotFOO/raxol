@@ -544,7 +544,11 @@ defmodule Raxol.View.Components do
           )
       end
 
-    view = Raxol.UI.Charts.ViewBridge.cells_to_view(cells, style: style)
+    view =
+      Raxol.UI.Charts.ViewBridge.cells_to_view(cells,
+        style: style,
+        region: region
+      )
 
     # Preserve chart type, series, and render opts so MCP ToolProvider
     # can expose chart data as read-only tools via TreeWalker.
