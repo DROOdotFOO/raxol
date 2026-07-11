@@ -3,14 +3,17 @@ defmodule Raxol.UI.Layout.Flexbox do
   Modern Flexbox layout system for Raxol UI components.
 
   This module provides CSS Flexbox-compatible layout calculations with support for:
-  - Flex direction (row, column, row-reverse, column-reverse)
+  - Flex direction (row, column — reverse directions are intentionally unsupported)
   - Justify content (flex-start, flex-end, center, space-between, space-around, space-evenly)
-  - Align items (flex-start, flex-end, center, stretch, baseline)
-  - Align content (flex-start, flex-end, center, stretch, space-between, space-around)
-  - Flex wrapping (nowrap, wrap, wrap-reverse)
-  - Flex grow, shrink, and basis
+  - Align items (flex-start, flex-end, center, stretch — baseline is intentionally unsupported)
+  - Align content (flex-start, flex-end, center, space-between, space-around)
+  - Flex wrapping (nowrap, wrap; wrap-reverse behaves as wrap)
+  - Flex grow, shrink, and basis via the section-9.7 solver (`Flexbox.Solver`)
   - Gap properties
   - Order property for reordering items
+
+  See `docs/core/LAYOUT.md` for the property reference and the list of
+  intentional CSS divergences.
 
   ## Example Usage
 
