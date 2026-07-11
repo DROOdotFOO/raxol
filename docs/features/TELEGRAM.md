@@ -90,7 +90,7 @@ msg = rich_message([
 
 `chunk/2` enforces the 32K hard cap (returns `{:error, :too_long}` rather than truncating) and the 8K Show More boundary (wraps the tail of long content in a `details` block). Sender telemetry: `[:raxol_telegram, :rich_message, :sent | :error]` with `chat_id`, `byte_size`, `chunked?`, `reason`.
 
-### AI Guardian ([ADR-0014](../adr/0014-telegram-ai-guardian.md))
+### AI Guardian ([ADR-0014](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0014-telegram-ai-guardian.md))
 
 Behaviour for screening `chat_join_request` updates. Guardian runs outside the per-chat Session model: applicants are keyed by user, not chat, and the decision (approve / decline / hand off to a mini-app) happens at the Bot dispatch layer.
 
@@ -122,7 +122,7 @@ Guardian telemetry: `[:raxol_telegram, :guardian, :received | :approved | :decli
 
 ### MCP Exports
 
-`Raxol.Telegram.Guardian.MCPTools.register/0` exposes four tools through `Raxol.MCP.Registry`. Symmetric with [ADR-0012](../adr/0012-mcp-as-rendering-target.md): an external agent can observe and override Guardian decisions over MCP without protocol glue.
+`Raxol.Telegram.Guardian.MCPTools.register/0` exposes four tools through `Raxol.MCP.Registry`. Symmetric with [ADR-0012](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0012-mcp-as-rendering-target.md): an external agent can observe and override Guardian decisions over MCP without protocol glue.
 
 | Tool | Purpose |
 |------|---------|
@@ -171,4 +171,4 @@ The same `:api_base` option works on `Raxol.Telegram.Poll.send_poll/4` and `Raxo
 
 - [Watch](WATCH.md): another push surface for mobile
 - [Agent Framework](AGENT_FRAMEWORK.md): if your bot is an agent, use this stack
-- [ADR-0014](../adr/0014-telegram-ai-guardian.md): full Guardian design rationale
+- [ADR-0014](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0014-telegram-ai-guardian.md): full Guardian design rationale

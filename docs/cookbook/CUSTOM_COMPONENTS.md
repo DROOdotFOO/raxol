@@ -314,5 +314,5 @@ Start with view helpers. Graduate to the Component behaviour when you find yours
 
 - [Component Gallery](../getting-started/COMPONENT_GALLERY.md): All built-in Components with examples
 - [Building Apps](../cookbook/BUILDING_APPS.md): TEA patterns and recipes
-- [Examples](../../examples/README.md): Runnable examples from beginner to advanced
+- [Examples](https://github.com/DROOdotFOO/raxol/blob/master/examples/README.md): Runnable examples from beginner to advanced
 - Built-in components to study: `lib/raxol/ui/components/input/` and `lib/raxol/ui/components/display/`

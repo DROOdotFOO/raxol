@@ -19,7 +19,7 @@ Test settings live in `config/test.exs`, not a TOML file.
 
 1. `config/raxol.toml`: base
 2. `config/environments/{env}.toml`: environment overrides
-3. Runtime overrides via `Config.set/2`
+3. Runtime overrides via `Raxol.Config.set/2`
 
 Later values win.
 
