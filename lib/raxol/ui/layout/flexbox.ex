@@ -125,8 +125,12 @@ defmodule Raxol.UI.Layout.Flexbox do
 
   defp sort_children_by_order(children) do
     Enum.sort_by(children, fn child ->
-      child_attrs = Map.get(child, :attrs, %{})
-      Map.get(child_attrs, :order, @default_order)
+      # attrs may be a keyword list on legacy elements (e.g. labels)
+      case Map.get(child, :attrs, %{}) do
+        m when is_map(m) -> Map.get(m, :order, @default_order)
+        kw when is_list(kw) -> Keyword.get(kw, :order, @default_order)
+        _ -> @default_order
+      end
     end)
   end
 
@@ -134,8 +138,7 @@ defmodule Raxol.UI.Layout.Flexbox do
     children_with_dims =
       Enum.map(children, fn child ->
         dims = measure_flex_child(child, space, flex_props)
-        flex_attrs = get_flex_attributes(child)
-        {child, dims, flex_attrs}
+        {child, dims}
       end)
 
     {main_axis, cross_axis} = get_axes(flex_props.flex_direction)
@@ -187,7 +190,7 @@ defmodule Raxol.UI.Layout.Flexbox do
     }
 
     resolved =
-      Enum.map(children_with_dims, fn {child, dims, _legacy_flex} ->
+      Enum.map(children_with_dims, fn {child, dims} ->
         # Automatic minimum size (spec min-width:auto = min-content, B3):
         # inline axis uses MinContent; block axis uses the measured content
         # size (min-content block size of unscrollable content). Items never
@@ -426,7 +429,7 @@ defmodule Raxol.UI.Layout.Flexbox do
   defp zero_auto(v), do: v
 
   defp measure_flex_child(child, available_space, flex_props) do
-    child_attrs = Map.get(child, :attrs, %{})
+    child_attrs = attrs_map(child)
     flex_attrs = Map.get(child_attrs, :flex, %{})
     flex_basis = Map.get(flex_attrs, :basis, :auto)
 
@@ -434,6 +437,15 @@ defmodule Raxol.UI.Layout.Flexbox do
       get_child_space(flex_basis, available_space, flex_props.flex_direction)
 
     Engine.measure_element(child, child_space)
+  end
+
+  # attrs may be a keyword list on legacy elements
+  defp attrs_map(child) do
+    case Map.get(child, :attrs, %{}) do
+      m when is_map(m) -> m
+      kw when is_list(kw) -> Map.new(kw)
+      _ -> %{}
+    end
   end
 
   defp get_child_space(:auto, available_space, _flex_direction),
@@ -444,18 +456,6 @@ defmodule Raxol.UI.Layout.Flexbox do
       :horizontal -> %{available_space | width: flex_basis}
       :vertical -> %{available_space | height: flex_basis}
     end
-  end
-
-  defp get_flex_attributes(child) do
-    child_attrs = Map.get(child, :attrs, %{})
-    flex = Map.get(child_attrs, :flex, %{})
-
-    %{
-      grow: Map.get(flex, :grow, 0),
-      shrink: Map.get(flex, :shrink, 1),
-      basis: Map.get(flex, :basis, :auto),
-      align_self: Map.get(child_attrs, :align_self, nil)
-    }
   end
 
   defp get_axes(:row), do: {:horizontal, :vertical}
