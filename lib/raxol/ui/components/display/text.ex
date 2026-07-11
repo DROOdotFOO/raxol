@@ -7,6 +7,12 @@ defmodule Raxol.UI.Components.Display.Text do
   Props:
   - `content` (string) -- text to display
   - `wrap` (`:word | :char | :none`) -- wrapping mode, default `:none`
+  - `white_space` (`:normal | :nowrap | :pre | :pre_wrap | :pre_line`) --
+    CSS `white-space`-following collapse/preserve/wrap semantics, default
+    `:normal`. Only takes effect when set to a value other than `:normal`;
+    at the default it defers entirely to the legacy `wrap` prop so existing
+    callers see zero behavior change. See `Raxol.UI.TextLayout` for the
+    unified wrapping implementation.
   - `align` (`:left | :center | :right`) -- alignment within width, default `:left`
   - `width` (integer | nil) -- constraint for wrapping/alignment/truncation
   - `truncate` (boolean) -- truncate with ellipsis when exceeding width, default `false`
@@ -15,6 +21,7 @@ defmodule Raxol.UI.Components.Display.Text do
 
   alias Raxol.UI.Components.Input.TextWrapping
   alias Raxol.UI.StyleHelper
+  alias Raxol.UI.TextLayout
 
   use Raxol.UI.Components.Base.Component
 
@@ -22,6 +29,7 @@ defmodule Raxol.UI.Components.Display.Text do
           id: String.t() | atom(),
           content: String.t(),
           wrap: :word | :char | :none,
+          white_space: TextLayout.white_space(),
           align: :left | :center | :right,
           width: non_neg_integer() | nil,
           truncate: boolean(),
@@ -37,6 +45,7 @@ defmodule Raxol.UI.Components.Display.Text do
         Keyword.get(props, :id, "text-#{:erlang.unique_integer([:positive])}"),
       content: Keyword.get(props, :content, ""),
       wrap: Keyword.get(props, :wrap, :none),
+      white_space: Keyword.get(props, :white_space, :normal),
       align: Keyword.get(props, :align, :left),
       width: Keyword.get(props, :width),
       truncate: Keyword.get(props, :truncate, false),
@@ -56,7 +65,13 @@ defmodule Raxol.UI.Components.Display.Text do
     style = StyleHelper.merge_component_styles(state, context, :text)
 
     lines =
-      process_content(state.content, state.width, state.wrap, state.truncate)
+      process_content(
+        state.content,
+        state.width,
+        state.white_space,
+        state.wrap,
+        state.truncate
+      )
 
     lines = align_lines(lines, state.width, state.align)
 
@@ -82,22 +97,32 @@ defmodule Raxol.UI.Components.Display.Text do
 
   # --- Content processing ---
 
-  defp process_content(content, nil, _wrap, _truncate), do: [content]
+  defp process_content(content, nil, _white_space, _wrap, _truncate),
+    do: [content]
 
-  defp process_content(content, _width, _wrap, _truncate) when content == "",
-    do: [""]
+  defp process_content(content, _width, _white_space, _wrap, _truncate)
+       when content == "",
+       do: [""]
 
-  defp process_content(content, width, :none, true) do
+  # CSS `white-space` takes over the whole collapse/preserve/wrap decision
+  # whenever it's set to anything other than the default -- at :normal we
+  # fall through to the legacy `wrap`-prop dispatch below unchanged.
+  defp process_content(content, width, white_space, _wrap, _truncate)
+       when white_space != :normal do
+    TextLayout.wrap(content, width, white_space)
+  end
+
+  defp process_content(content, width, :normal, :none, true) do
     [truncate_line(content, width)]
   end
 
-  defp process_content(content, _width, :none, false), do: [content]
+  defp process_content(content, _width, :normal, :none, false), do: [content]
 
-  defp process_content(content, width, :word, _truncate) do
-    TextWrapping.wrap_line_by_word(content, width)
+  defp process_content(content, width, :normal, :word, _truncate) do
+    TextLayout.wrap(content, width, :normal)
   end
 
-  defp process_content(content, width, :char, _truncate) do
+  defp process_content(content, width, :normal, :char, _truncate) do
     TextWrapping.wrap_line_by_char(content, width)
   end
 
