@@ -785,6 +785,18 @@ defmodule Raxol.UI.Layout.Engine do
     measure_element_by_type(container_type, element, %{}, available_space)
   end
 
+  # Table in new View DSL format (top-level headers/rows/data, no :attrs)
+  # — normalize to the attrs shape Layout.Table works with; without this
+  # clause DSL tables measured 0x0 and vanished inside flex containers.
+  def measure_element(%{type: :table} = element, available_space) do
+    measured =
+      element
+      |> Table.normalize_table_attrs()
+      |> Table.measure(available_space)
+
+    Map.take(measured, [:width, :height])
+  end
+
   def measure_element(%{type: :spacer} = spacer, available_space) do
     size = Map.get(spacer, :size, 1)
 
