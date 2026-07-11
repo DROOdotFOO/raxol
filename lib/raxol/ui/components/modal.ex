@@ -39,6 +39,7 @@ defmodule Raxol.UI.Components.Modal do
 
   # Alias the new modules
   alias Raxol.UI.Components.Modal.{Core, Events, Rendering, State}
+  alias Raxol.UI.Components.AbsoluteLayer
 
   # Define state struct
   defstruct id: nil,
@@ -181,6 +182,42 @@ defmodule Raxol.UI.Components.Modal do
       true -> Rendering.render_modal_content(state)
       false -> nil
     end
+  end
+
+  @doc """
+  Wraps `flow_content` (the surrounding app's background view) with this
+  modal as a true dialog overlay: an `:absolute_layer` where `flow_content`
+  is the non-reflowing flow child and the modal is a centered overlay.
+
+  When hidden, returns `flow_content` unchanged -- no overlay wrapper, no
+  behavior change. When visible, `flow_content`'s rendered cells are dimmed
+  toward the background (`Raxol.UI.CellDim`) and the modal renders at full
+  color on top, centered via `{:center_of, _}` and sized via `state.width`
+  / `Rendering.estimate_height/1` so it doesn't stretch to fill the overlay
+  space the way an unsized box would.
+
+  This is the fix for the modal reflowing background content in flow:
+  callers that previously did
+  `if state.visible, do: Modal.render(state, %{})` (replacing background
+  content, causing reflow) should call
+  `Modal.as_dialog_overlay(state, background_view)` instead.
+  """
+  @spec as_dialog_overlay(t(), map()) :: map()
+  def as_dialog_overlay(%__MODULE__{visible: false}, flow_content),
+    do: flow_content
+
+  def as_dialog_overlay(%__MODULE__{visible: true} = state, flow_content) do
+    width = state.width
+    height = Rendering.estimate_height(state)
+    box_style = Rendering.get_modal_style(state)
+    content_column = Rendering.render_modal_content(state).children
+
+    surface =
+      Rendering.dialog_surface(width, height, box_style, [content_column])
+
+    AbsoluteLayer.absolute_layer(flow_content, [
+      AbsoluteLayer.dialog_overlay(width, height, surface)
+    ])
   end
 
   # --- Public Helper Functions (Constructors) ---

@@ -96,14 +96,23 @@ defmodule Raxol.UI.Renderer do
       _ ->
         # Layout-stamped overflow clipping applies to EVERY element type
         # generically; type-specific render paths that clip themselves are
-        # unaffected (intersection is idempotent).
+        # unaffected (intersection is idempotent). Same choke point for
+        # modal-backdrop dimming: `:dim_behind_modal` is stamped by the
+        # layout engine on every element an `:absolute_layer`'s flow
+        # content produces while a dialog overlay is active.
         element_with_dims
         |> render_visible_element(theme, parent_style)
         |> CellManager.clip_cells_to_bounds(
           Map.get(element_with_dims, :clip_bounds)
         )
+        |> maybe_dim(element_with_dims)
     end
   end
+
+  defp maybe_dim(cells, %{dim_behind_modal: true}),
+    do: Raxol.UI.CellDim.dim_cells(cells)
+
+  defp maybe_dim(cells, _element), do: cells
 
   # --- Element Dimension Calculation ---
 

@@ -395,7 +395,9 @@ defmodule Raxol.UI.Layout.Engine do
     {explicit_w, explicit_h} = resolve_box_dimensions(box, style, space)
 
     width =
-      if is_integer(explicit_w), do: min(explicit_w, space.width), else: space.width
+      if is_integer(explicit_w),
+        do: min(explicit_w, space.width),
+        else: space.width
 
     height =
       if is_integer(explicit_h),
@@ -404,7 +406,9 @@ defmodule Raxol.UI.Layout.Engine do
 
     box_space = %{space | width: width, height: height}
     inner_space = box_inner_space(box_space, border, padding)
-    children_space = stamp_text_paint_bound(inner_space, style, border, explicit_w)
+
+    children_space =
+      stamp_text_paint_bound(inner_space, style, border, explicit_w)
 
     box_style = Map.get(box, :style, %{})
     animation_hints = Map.get(box, :animation_hints, [])
@@ -431,7 +435,6 @@ defmodule Raxol.UI.Layout.Engine do
 
     [box_element | children_acc] ++ acc
   end
-
 
   # Chart widget types are emitted by `Components.chart/1` as :box elements
   # whose `:type` is overridden to one of these atoms so MCP ToolProvider
@@ -465,8 +468,11 @@ defmodule Raxol.UI.Layout.Engine do
 
   # Absolute layer: lay out the flow child against the parent's full available
   # space (overlays consume nothing), then resolve each overlay against the
-  # same space at declared coordinates. Overlays render after flow content so
-  # they sit on top in the renderer's last-write-wins cell merge.
+  # same space at declared coordinates. Overlays are appended AFTER flow
+  # content in the returned list so they sit on top under the renderer's
+  # last-write-wins cell composition (`Backends.apply_cells_to_buffer`
+  # folds the cell list in order, later entries winning at a shared
+  # coordinate -- flow content must come first, overlays last).
   #
   # Element shape:
   #   %{
@@ -482,19 +488,38 @@ defmodule Raxol.UI.Layout.Engine do
   # Overlay coordinates are relative to the layer's space. Symbolic
   # coordinates (`:left`, `:right`, `:top`, `:bottom`, `:center`) and negative
   # integers (offset from far edge) are resolved against the current space.
+  # `{:center_of, size}` centers an overlay of known footprint `size` on that
+  # axis (unlike bare `:center`, which anchors the overlay's origin at the
+  # midpoint rather than centering its bounding box).
+  #
+  # An overlay descriptor may also carry `dialog: true` (see
+  # `Raxol.UI.Components.AbsoluteLayer.dialog_overlay/3`) to mark it as a
+  # modal dialog: every element the flow child produces is stamped with
+  # `:dim_behind_modal` so `Raxol.UI.Renderer` dims its cells toward the
+  # background, while the dialog overlay's own elements are left unstamped
+  # and render at full color on top.
   def process_element(%{type: :absolute_layer} = layer, space, acc) do
     flow_child = Map.get(layer, :flow_child)
     overlays = Map.get(layer, :overlays, [])
+    dialog_active? = Enum.any?(overlays, &Map.get(&1, :dialog, false))
 
-    flow_acc =
+    flow_elements =
       case flow_child do
-        nil -> acc
-        child -> process_element(child, space, acc)
+        nil -> []
+        child -> process_element(child, space, [])
       end
 
-    Enum.reduce(overlays, flow_acc, fn overlay, current_acc ->
-      process_overlay(overlay, space, current_acc)
-    end)
+    flow_elements =
+      if dialog_active?,
+        do: Enum.map(flow_elements, &Map.put(&1, :dim_behind_modal, true)),
+        else: flow_elements
+
+    overlay_elements =
+      Enum.reduce(overlays, [], fn overlay, current_acc ->
+        process_overlay(overlay, space, current_acc)
+      end)
+
+    flow_elements ++ overlay_elements ++ acc
   end
 
   def process_element(%{type: :table} = table_element, space, acc) do
@@ -651,6 +676,12 @@ defmodule Raxol.UI.Layout.Engine do
   defp resolve_axis(:right, origin, length), do: origin + max(length - 1, 0)
   defp resolve_axis(:bottom, origin, length), do: origin + max(length - 1, 0)
   defp resolve_axis(:center, origin, length), do: origin + div(length, 2)
+
+  # Centers an overlay of known `size` on this axis -- the origin plus half
+  # the leftover space, rather than `:center`'s bare midpoint (which anchors
+  # the overlay's own origin there, not its bounding box).
+  defp resolve_axis({:center_of, size}, origin, length) when is_integer(size),
+    do: origin + max(div(length - size, 2), 0)
 
   defp resolve_axis(value, origin, length) when is_integer(value) and value < 0,
     do: origin + max(length + value, 0)
@@ -1191,7 +1222,11 @@ defmodule Raxol.UI.Layout.Engine do
         :telemetry.execute(
           [:raxol, :layout, :invalid_style],
           %{count: 1},
-          %{key: :overflow, value: inspect(other), at: {outer_space.x, outer_space.y}}
+          %{
+            key: :overflow,
+            value: inspect(other),
+            at: {outer_space.x, outer_space.y}
+          }
         )
 
         elements
@@ -1243,7 +1278,8 @@ defmodule Raxol.UI.Layout.Engine do
   end
 
   defp definite_box_bound?(border, explicit_w) do
-    border not in [:none, false] or explicit_w == :fill or is_integer(explicit_w)
+    border not in [:none, false] or explicit_w == :fill or
+      is_integer(explicit_w)
   end
 
   defp text_overflow_mode(style) do
@@ -1298,7 +1334,9 @@ defmodule Raxol.UI.Layout.Engine do
             Map.get(flex, :align_content, :stretch)
         ),
       flex_wrap:
-        normalize_wrap(Map.get(style, :flex_wrap) || Map.get(flex, :wrap, :nowrap)),
+        normalize_wrap(
+          Map.get(style, :flex_wrap) || Map.get(flex, :wrap, :nowrap)
+        ),
       gap: Map.get(style, :gap) || Map.get(flex, :gap, 0),
       padding: Map.get(style, :padding) || Map.get(flex, :padding, 0)
     }

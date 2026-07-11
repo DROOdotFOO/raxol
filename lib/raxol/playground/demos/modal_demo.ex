@@ -2,10 +2,14 @@ defmodule Raxol.Playground.Demos.ModalDemo do
   @moduledoc "Playground demo: modal dialog with confirm and cancel actions."
   use Raxol.Core.Runtime.Application
 
+  alias Raxol.UI.Components.AbsoluteLayer
+  alias Raxol.UI.Components.Modal.Rendering, as: ModalRendering
+
   import Raxol.Playground.DemoHelpers, only: [effective_width: 2]
 
   @stats_box_width 30
   @modal_width 40
+  @modal_height 17
 
   @impl true
   def init(_context) do
@@ -41,17 +45,38 @@ defmodule Raxol.Playground.Demos.ModalDemo do
   defp do_cancel(model),
     do: %{model | show: false, cancelled: model.cancelled + 1}
 
+  # `background_view/1` is the flow child of an `:absolute_layer` -- it is
+  # laid out identically whether the modal is open or closed, so it never
+  # reflows when the dialog opens (regression coverage in
+  # `test/cross_terminal/modal_overlay_test.exs`). The modal itself is a
+  # centered, non-flow overlay painted on top; when closed there is no
+  # overlay at all and this is a plain pass-through.
   @impl true
   def view(model) do
+    overlays =
+      if model.show do
+        width = effective_width(model, @modal_width)
+
+        [
+          AbsoluteLayer.dialog_overlay(
+            width,
+            @modal_height,
+            modal_box(model, width)
+          )
+        ]
+      else
+        []
+      end
+
+    AbsoluteLayer.absolute_layer(background_view(model), overlays)
+  end
+
+  defp background_view(model) do
     column style: %{gap: 1} do
       [
         text("Modal Demo", style: [:bold]),
         divider(),
-        if model.show do
-          modal_view(model)
-        else
-          closed_view(model)
-        end,
+        static_panel(),
         divider(),
         box style: %{
               border: :rounded,
@@ -71,15 +96,22 @@ defmodule Raxol.Playground.Demos.ModalDemo do
     end
   end
 
-  @impl true
-  def subscribe(_model), do: []
+  # Static regardless of model state -- these are the cells the reflow
+  # regression test pins to prove the background doesn't move when the
+  # modal opens.
+  defp static_panel do
+    column style: %{gap: 0} do
+      [
+        text("Background content (does not move):"),
+        text("- item one"),
+        text("- item two"),
+        text("[o] Open Modal", style: [:dim])
+      ]
+    end
+  end
 
-  defp modal_view(model) do
-    box style: %{
-          border: :double,
-          padding: 1,
-          width: effective_width(model, @modal_width)
-        } do
+  defp modal_box(_model, width) do
+    content =
       column style: %{gap: 1} do
         [
           text("Confirm Action", style: [:bold]),
@@ -94,17 +126,17 @@ defmodule Raxol.Playground.Demos.ModalDemo do
           end
         ]
       end
-    end
+
+    ModalRendering.dialog_surface(
+      width,
+      @modal_height,
+      %{border: :double, bg: {30, 30, 45}},
+      [content]
+    )
   end
 
-  defp closed_view(_model) do
-    column style: %{gap: 1} do
-      [
-        text("No modal open."),
-        button("[o] Open Modal", on_click: :open)
-      ]
-    end
-  end
+  @impl true
+  def subscribe(_model), do: []
 
   defp footer(%{show: true}) do
     text("[y] confirm  [n] cancel  [Enter/Esc] also work", style: [:dim])
