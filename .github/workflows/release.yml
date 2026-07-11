@@ -1,13 +1,12 @@
 name: Release
 
+# Creates a GitHub Release with auto-generated notes when a version tag is
+# pushed. Hex publishing is done manually in dependency order (see CLAUDE.md);
+# the raxol_acp sidecar image has its own workflow (release-raxol-acp.yml); the
+# web app deploys via docker/Dockerfile.web. There is no root binary release.
+
 permissions:
   contents: write
-  packages: write
-
-env:
-  MIX_ENV: prod
-  ELIXIR_VERSION: "1.19.0"
-  OTP_VERSION: "28.2"
 
 on:
   push:
@@ -15,115 +14,13 @@ on:
       - "v*"
 
 jobs:
-  # Gate: CI must pass before building releases
-  ci:
-    name: CI Check
-    uses: ./.github/workflows/ci-unified.yml
-    with:
-      skip_heavy_checks: true
-
-  build:
-    name: Build (${{ matrix.os }})
-    needs: ci
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: linux-amd64
-          - os: macos-13
-            target: macos-amd64
-          - os: macos-latest
-            target: macos-arm64
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Cache Mix dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            deps
-            _build
-            ~/.hex
-            ~/.mix
-          key: release-${{ matrix.target }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            release-${{ matrix.target }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-
-
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
-
-      - name: Install dependencies
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.clean --unused
-          mix deps.get
-
-      - name: Build release
-        run: mix release
-
-      - name: Package release
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd _build/prod/rel/raxol
-          tar czf "raxol-${VERSION}-${{ matrix.target }}.tar.gz" .
-          shasum -a 256 "raxol-${VERSION}-${{ matrix.target }}.tar.gz" > "raxol-${VERSION}-${{ matrix.target }}.tar.gz.sha256"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-${{ matrix.target }}
-          path: |
-            _build/prod/rel/raxol/raxol-*-${{ matrix.target }}.tar.gz
-            _build/prod/rel/raxol/raxol-*-${{ matrix.target }}.tar.gz.sha256
-
   release:
-    name: Create Release
-    needs: build
+    name: Create GitHub Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: artifacts
-          merge-multiple: true
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          files: artifacts/raxol-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish:
-    name: Publish to Hex
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
-
-      - name: Install dependencies
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.clean --unused
-          mix deps.get
-
-      - name: Publish to Hex
-        env:
-          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-        run: mix hex.publish --yes
