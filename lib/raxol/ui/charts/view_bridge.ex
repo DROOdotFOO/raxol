@@ -19,7 +19,7 @@ defmodule Raxol.UI.Charts.ViewBridge do
   def cells_to_view(cells, opts \\ [])
 
   def cells_to_view([], opts) do
-    Components.box(style: chart_box_style(opts), children: [])
+    Components.box(style: Keyword.get(opts, :style, %{}), children: [])
   end
 
   def cells_to_view(cells, opts) do

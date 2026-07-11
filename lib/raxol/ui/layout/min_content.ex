@@ -155,7 +155,7 @@ defmodule Raxol.UI.Layout.MinContent do
     {_t, r, _b, l} =
       case Map.get(box, :padding) || Map.get(style, :padding, 0) do
         n when is_integer(n) -> {n, n, n, n}
-        {h, v} -> {v, h, v, h}
+        {h, v} -> {h, v, h, v}
         {t, r, b, l} -> {t, r, b, l}
         _ -> {0, 0, 0, 0}
       end

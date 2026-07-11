@@ -121,7 +121,7 @@ defmodule Raxol.UI.Components.Display.Text do
             )
           end)
 
-        %{type: :column, style: style, children: children}
+        %{type: :column, style: style, children: children, gap: 0}
     end
   end
 
