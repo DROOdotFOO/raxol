@@ -67,7 +67,9 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
         render_with_builtin(markdown_text, width)
       end
 
-    %{type: :column, children: elements, style: %{}}
+    # gap: 0 — block spacing is expressed by explicit blank-line elements;
+    # the :column dialect default (gap 1) would double every gap.
+    %{type: :column, children: elements, style: %{}, gap: 0}
   end
 
   # --- Earmark-based rendering ---
