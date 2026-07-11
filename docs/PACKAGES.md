@@ -66,4 +66,4 @@ The main `raxol` package does not depend on `raxol_agent`, `raxol_acp`, `raxol_g
 
 ## Publishing
 
-See [Hex Publishing](../CLAUDE.md#hex-publishing) for the publish order. `HEX_BUILD=1` strips local path deps so `mix hex.build` sees only Hex packages.
+See [Hex Publishing](https://github.com/DROOdotFOO/raxol/blob/master/CLAUDE.md#hex-publishing) for the publish order. `HEX_BUILD=1` strips local path deps so `mix hex.build` sees only Hex packages.

@@ -1,6 +1,6 @@
 # MCP as a Rendering Target
 
-Most frameworks bolt MCP on as a side channel. Raxol treats it as a first-class rendering target alongside terminal, browser, and SSH. The Component tree is the source of truth; MCP tools and resources are projections of it. See [ADR-0012](../adr/0012-mcp-as-rendering-target.md) for the design rationale.
+Most frameworks bolt MCP on as a side channel. Raxol treats it as a first-class rendering target alongside terminal, browser, and SSH. The Component tree is the source of truth; MCP tools and resources are projections of it. See [ADR-0012](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0012-mcp-as-rendering-target.md) for the design rationale.
 
 ## Quick Start
 
@@ -124,6 +124,6 @@ The same TEA module the human uses, the agent uses too. Same source of truth, di
 
 ## See Also
 
-- [ADR-0012](../adr/0012-mcp-as-rendering-target.md): design rationale
+- [ADR-0012](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0012-mcp-as-rendering-target.md): design rationale
 - [Agent Framework](AGENT_FRAMEWORK.md): agents that consume MCP
 - [Symphony](SYMPHONY.md): orchestrator that exposes its own MCP surface

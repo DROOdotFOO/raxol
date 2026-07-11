@@ -104,6 +104,6 @@ The split exists so apps that *use* plugins don't need to depend on the SDK that
 
 ## See Also
 
-- [GUIDE](../plugins/GUIDE.md): step-by-step plugin authoring
-- [PLUGIN_TEMPLATES](../plugins/PLUGIN_TEMPLATES.md): ready-made starters
-- [TESTING](../plugins/TESTING.md): in-depth testing patterns
+- [GUIDE](https://github.com/DROOdotFOO/raxol/blob/master/docs/plugins/GUIDE.md): step-by-step plugin authoring
+- [PLUGIN_TEMPLATES](https://github.com/DROOdotFOO/raxol/blob/master/docs/plugins/PLUGIN_TEMPLATES.md): ready-made starters
+- [TESTING](https://github.com/DROOdotFOO/raxol/blob/master/docs/plugins/TESTING.md): in-depth testing patterns
