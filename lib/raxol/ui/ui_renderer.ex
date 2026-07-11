@@ -87,9 +87,21 @@ defmodule Raxol.UI.Renderer do
     height = Map.get(element_with_dims, :height, 0)
 
     case {width, height} do
-      {0, _} -> []
-      {_, 0} -> []
-      _ -> render_visible_element(element_with_dims, theme, parent_style)
+      {0, _} ->
+        []
+
+      {_, 0} ->
+        []
+
+      _ ->
+        # Layout-stamped overflow clipping (Phase F1) applies to EVERY
+        # element type generically; type-specific render paths that clip
+        # themselves are unaffected (intersection is idempotent).
+        element_with_dims
+        |> render_visible_element(theme, parent_style)
+        |> CellManager.clip_cells_to_bounds(
+          Map.get(element_with_dims, :clip_bounds)
+        )
     end
   end
 
