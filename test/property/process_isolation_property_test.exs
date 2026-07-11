@@ -177,42 +177,42 @@ defmodule Raxol.Property.ProcessIsolationTest do
   end
 
   describe "anti-pattern detection" do
+    @tag capture_log: true
     property "linked child with abnormal exit kills parent (proves the bug)" do
-      # Demonstrates that WITHOUT unlink, the parent dies.
-      # We run in a spawned process to protect the test runner.
+      # Demonstrates that WITHOUT unlink, the parent dies. The victim runs in a
+      # spawned (unlinked) process so its death cannot take down the test
+      # runner; the test monitors the victim directly and treats its death as
+      # the proof.
       check all(reason <- abnormal_reason_gen(), max_runs: 50) do
-        test_pid = self()
-
-        spawn(fn ->
-          # This "victim" uses start_link WITHOUT unlink (the anti-pattern)
-          {:ok, child} = GenServer.start_link(__MODULE__.CrashableChild, nil)
-          Process.monitor(child)
-          victim_pid = self()
-
-          # Spawn a watcher to report whether victim survives
+        victim =
           spawn(fn ->
-            ref = Process.monitor(victim_pid)
-
-            receive do
-              {:DOWN, ^ref, :process, ^victim_pid, _} ->
-                send(test_pid, {:victim_status, :died})
-            after
-              1_000 -> send(test_pid, {:victim_status, :survived})
-            end
+            # Anti-pattern: start_link WITHOUT unlink, then crash the child.
+            # The propagated exit signal must kill this process.
+            {:ok, child} = GenServer.start_link(__MODULE__.CrashableChild, nil)
+            send(child, {:crash, reason})
+            # Sit here until the link kills us. With the correct pattern
+            # (unlink + monitor) we would survive until the timeout instead.
+            Process.sleep(:infinity)
           end)
 
-          # Crash the child -- the link should kill us
-          send(child, {:crash, reason})
-          Process.sleep(500)
-          send(test_pid, {:victim_status, :survived})
-        end)
+        ref = Process.monitor(victim)
 
+        # A generous timeout absorbs scheduler jitter when the child's crash is
+        # delayed under CI load. The child only has to process one message and
+        # exit, so 2s is ample. There is deliberately no short-sleep self-report
+        # in the victim: that raced the crash propagation and let a slow-to-die
+        # victim report survival before the link caught up.
         result =
           receive do
-            {:victim_status, status} -> status
+            {:DOWN, ^ref, :process, ^victim, _reason} -> :died
           after
-            2_000 -> :timeout
+            2_000 -> :survived
           end
+
+        # Keep iterations independent: drop any pending :DOWN and reap the
+        # victim if it somehow outlived the timeout.
+        Process.demonitor(ref, [:flush])
+        if Process.alive?(victim), do: Process.exit(victim, :kill)
 
         assert result == :died,
                "linked child crash (#{inspect(reason)}) must kill parent -- " <>

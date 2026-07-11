@@ -129,10 +129,13 @@ defmodule Raxol.Property.ParserTest do
         # Should complete and return a list
         assert is_list(result)
 
-        # Time should scale roughly linearly (with some tolerance)
-        # Expect ~3.3 microseconds per character based on benchmarks
-        # Increase tolerance for CI/loaded systems
-        expected_max = size * 1000  # 1000 microseconds (1ms) per char as upper bound
+        # Time should scale roughly linearly. Real cost is ~3.3us/char, so the
+        # 1ms/char slope is already generous; this guards against superlinear
+        # blowups rather than enforcing a tight budget. The fixed base absorbs a
+        # one-off GC or scheduler pause on a loaded runner, which otherwise
+        # dominates the small absolute budget for tiny inputs.
+        base_overhead = 50_000
+        expected_max = base_overhead + size * 1000
         assert time < expected_max
       end
     end
