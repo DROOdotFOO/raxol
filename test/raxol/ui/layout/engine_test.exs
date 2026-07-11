@@ -404,7 +404,14 @@ defmodule Raxol.UI.Layout.EngineTest do
     end
 
     test "measures button with new View DSL format (top-level :text key)" do
-      element = %{type: :button, text: "Click Me", id: nil, on_click: :click, style: []}
+      element = %{
+        type: :button,
+        text: "Click Me",
+        id: nil,
+        on_click: :click,
+        style: []
+      }
+
       available_space = %{width: 80, height: 24}
 
       dimensions = Engine.measure_element(element, available_space)
@@ -424,7 +431,13 @@ defmodule Raxol.UI.Layout.EngineTest do
     end
 
     test "measures text_input with new View DSL format (top-level :value key)" do
-      element = %{type: :text_input, value: "hello", placeholder: "Type...", style: []}
+      element = %{
+        type: :text_input,
+        value: "hello",
+        placeholder: "Type...",
+        style: []
+      }
+
       available_space = %{width: 80, height: 24}
 
       dimensions = Engine.measure_element(element, available_space)
@@ -434,7 +447,13 @@ defmodule Raxol.UI.Layout.EngineTest do
     end
 
     test "measures text_input with empty value uses placeholder" do
-      element = %{type: :text_input, value: "", placeholder: "Search...", style: []}
+      element = %{
+        type: :text_input,
+        value: "",
+        placeholder: "Search...",
+        style: []
+      }
+
       available_space = %{width: 80, height: 24}
 
       dimensions = Engine.measure_element(element, available_space)
@@ -472,6 +491,64 @@ defmodule Raxol.UI.Layout.EngineTest do
       # Falls through to container measurement (column-like)
       assert is_integer(dimensions.width)
       assert is_integer(dimensions.height)
+    end
+  end
+
+  describe "element id preservation (accessibility)" do
+    # Accessibility surfaces (Browser data-raxol-id, ARIA) map a rendered cell
+    # span back to its source node by the positioned element's top-level :id
+    # plus geometry. These leaf components must carry both through layout.
+    defp positioned_by_id(view, id) do
+      view
+      |> Engine.apply_layout(%{width: 80, height: 24})
+      |> Enum.find(fn el ->
+        Map.get(el, :id) == id and is_integer(Map.get(el, :width)) and
+          is_integer(Map.get(el, :height))
+      end)
+    end
+
+    test "button carries its id and geometry on the positioned box" do
+      view = %{type: :button, id: "submit", attrs: %{label: "Submit"}}
+
+      el = positioned_by_id(view, "submit")
+
+      assert el.type == :box
+      assert el.width > 0
+      assert el.height == 3
+    end
+
+    test "checkbox carries its id and geometry on the positioned text" do
+      view = %{
+        type: :checkbox,
+        id: "agree",
+        attrs: %{label: "Agree", checked: true}
+      }
+
+      el = positioned_by_id(view, "agree")
+
+      assert el.type == :text
+      assert el.width == Raxol.UI.TextMeasure.display_width("[[OK]] Agree")
+      assert el.height == 1
+    end
+
+    test "text_input carries its id and geometry on the positioned box" do
+      view = %{type: :text_input, id: "name", attrs: %{value: "Alice"}}
+
+      el = positioned_by_id(view, "name")
+
+      assert el.type == :box
+      assert el.width > 0
+      assert el.height == 3
+    end
+
+    test "content text carries its id and geometry" do
+      view = %{type: :text, id: "greeting", content: "Hello"}
+
+      el = positioned_by_id(view, "greeting")
+
+      assert el.type == :text
+      assert el.width == Raxol.UI.TextMeasure.display_width("Hello")
+      assert el.height == 1
     end
   end
 end

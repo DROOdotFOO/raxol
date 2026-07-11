@@ -243,4 +243,135 @@ defmodule Raxol.LiveView.TerminalBridgeTest do
       assert html =~ ">e</span>"
     end
   end
+
+  describe "per-element ARIA (a11y_map)" do
+    # Map a run of cells to an element id, then supply an accessibility node for
+    # that id. The span carrying data-raxol-id="<id>" should gain ARIA read
+    # straight from the node (the bridge never recomputes roles).
+    defp with_mapped_text(text, id, node) do
+      buffer = Buffer.write_string(Buffer.create_blank_buffer(40, 3), 0, 0, text)
+
+      id_map =
+        for x <- 0..(String.length(text) - 1), into: %{}, do: {{x, 0}, id}
+
+      a11y_map = if node, do: %{id => node}, else: %{}
+
+      TerminalBridge.buffer_to_html(buffer,
+        element_id_map: id_map,
+        a11y_map: a11y_map
+      )
+    end
+
+    test "emits role and aria-label from the node" do
+      node = %{
+        role: :button,
+        label: "Save",
+        state: %{},
+        value: nil,
+        children: [],
+        live?: false,
+        id: "save"
+      }
+
+      html = with_mapped_text("Save", "save", node)
+
+      assert html =~ ~s(data-raxol-id="save")
+      assert html =~ ~s(role="button")
+      assert html =~ ~s(aria-label="Save")
+    end
+
+    test "emits aria-disabled and aria-required from present flags" do
+      node = %{
+        role: :textbox,
+        label: "Name",
+        state: %{disabled?: true, required?: true},
+        value: nil,
+        children: [],
+        live?: false,
+        id: "name"
+      }
+
+      html = with_mapped_text("Name", "name", node)
+
+      assert html =~ ~s(aria-disabled="true")
+      assert html =~ ~s(aria-required="true")
+    end
+
+    test "emits tri-state aria-checked=false when the flag is present and false" do
+      node = %{
+        role: :checkbox,
+        label: "Agree",
+        state: %{checked?: false},
+        value: nil,
+        children: [],
+        live?: false,
+        id: "agree"
+      }
+
+      html = with_mapped_text("[ ] Agree", "agree", node)
+
+      assert html =~ ~s(aria-checked="false")
+    end
+
+    test "emits aria-selected and aria-expanded from the node state" do
+      node = %{
+        role: :option,
+        label: "Item",
+        state: %{selected?: true, expanded?: false},
+        value: nil,
+        children: [],
+        live?: false,
+        id: "opt"
+      }
+
+      html = with_mapped_text("Item", "opt", node)
+
+      assert html =~ ~s(aria-selected="true")
+      assert html =~ ~s(aria-expanded="false")
+    end
+
+    test "escapes the aria-label value" do
+      node = %{
+        role: :button,
+        label: ~s(A"<b>&),
+        state: %{},
+        value: nil,
+        children: [],
+        live?: false,
+        id: "b"
+      }
+
+      html = with_mapped_text("Btn", "b", node)
+
+      assert html =~ ~s(aria-label="A&quot;&lt;b&gt;&amp;")
+      refute html =~ ~s(aria-label="A"<b>&")
+    end
+
+    test "id with no a11y_map entry gets data-raxol-id but no ARIA" do
+      html = with_mapped_text("Plain", "plain", nil)
+
+      # The span closes immediately after data-raxol-id: no ARIA injected.
+      assert html =~ ~s(<span data-raxol-id="plain">Plain</span>)
+      refute html =~ "aria-label"
+    end
+  end
+
+  describe "aria_mode container semantics" do
+    test "defaults to :log (whole-screen live region)" do
+      buffer = Buffer.create_blank_buffer(10, 2)
+      html = TerminalBridge.buffer_to_html(buffer)
+
+      assert html =~ ~s(role="log")
+      assert html =~ ~s(aria-live="polite")
+    end
+
+    test ":application drops the live region" do
+      buffer = Buffer.create_blank_buffer(10, 2)
+      html = TerminalBridge.buffer_to_html(buffer, aria_mode: :application)
+
+      assert html =~ ~s(role="application")
+      refute html =~ ~s(role="log")
+      refute html =~ "aria-live"
+    end
+  end
 end

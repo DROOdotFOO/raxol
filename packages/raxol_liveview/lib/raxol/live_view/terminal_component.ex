@@ -82,11 +82,15 @@ if Code.ensure_loaded?(Phoenix.LiveComponent) do
     end
 
     defp render_buffer(assigns) do
+      # The wrapper <div> below is the single coarse live region (role="log",
+      # aria-live). Render the inner buffer in :application mode so its <pre>
+      # is not a second, nested log region announcing the same content.
       TerminalBridge.buffer_to_html(
         assigns.buffer,
         theme: assigns.theme,
         show_cursor: assigns.show_cursor,
-        cursor_position: {assigns.cursor_x, assigns.cursor_y}
+        cursor_position: {assigns.cursor_x, assigns.cursor_y},
+        aria_mode: :application
       )
     end
   end
