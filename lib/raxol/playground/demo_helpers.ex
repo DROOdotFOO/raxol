@@ -45,6 +45,33 @@ defmodule Raxol.Playground.DemoHelpers do
   end
 
   @doc """
+  Renders text through `Raxol.UI.Components.Display.Text`, the canonical
+  wrapping/truncation entry point (`docs/core/LAYOUT.md` section 4:
+  `white_space`, `text_overflow`, `line_clamp`, `text_wrap: :pretty`).
+
+  The plain View DSL `text/1`/`text/2` helper (`Raxol.Core.Renderer.View`)
+  only supports `fg`/`bg`/`style`/`align`/`wrap`/`link` -- it has no
+  CSS-style wrapping/truncation props of its own. Demos that want to show
+  `white_space`, `text_overflow`, `line_clamp`, or `text_wrap: :pretty`
+  need the actual `Display.Text` component; this wraps its `init/1` +
+  `render/2` lifecycle so it drops into a `row`/`column`/`box` children
+  list exactly like `text/1`.
+
+  ## Examples
+
+      rich_text("a very long line", width: 12, white_space: :nowrap, text_overflow: :ellipsis)
+      rich_text(prose, width: 20, text_wrap: :pretty)
+      rich_text(prose, width: 20, line_clamp: 2)
+  """
+  @spec rich_text(String.t(), keyword()) :: map()
+  def rich_text(content, opts \\ []) do
+    {:ok, state} =
+      Raxol.UI.Components.Display.Text.init([content: content] ++ opts)
+
+    Raxol.UI.Components.Display.Text.render(state, %{})
+  end
+
+  @doc """
   Navigate backward through input history.
 
   Expects the model to have `:input_history`, `:history_index`, `:input`, and `:cursor` fields.

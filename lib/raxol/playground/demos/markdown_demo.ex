@@ -1,10 +1,19 @@
 defmodule Raxol.Playground.Demos.MarkdownDemo do
-  @moduledoc "Playground demo: markdown rendering with raw toggle."
+  @moduledoc """
+  Playground demo: markdown rendering with raw toggle.
+
+  Rendered-mode body paragraphs use `text_wrap: :pretty`
+  (`docs/core/LAYOUT.md` section 4) -- Knuth-Plass wrapping minimizes
+  ragged line lengths, which suits prose better than the default greedy
+  wrap. Headers and bullets keep single-line rendering since they're
+  short by convention.
+  """
   use Raxol.Core.Runtime.Application
 
-  import Raxol.Playground.DemoHelpers, only: [effective_width: 2]
+  import Raxol.Playground.DemoHelpers, only: [effective_width: 2, rich_text: 2]
 
   @default_content_box_width 45
+  @border_and_padding_overhead 4
 
   @documents [
     %{
@@ -52,12 +61,14 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
   def view(model) do
     doc = Enum.at(@documents, model.current)
     mode_label = if model.raw, do: "RAW", else: "RENDERED"
+    box_width = effective_width(model, @default_content_box_width)
+    prose_width = max(box_width - @border_and_padding_overhead, 1)
 
     content_lines =
       doc.content
       |> String.split("\n")
       |> Enum.map(fn line ->
-        if model.raw, do: text(line), else: render_line(line)
+        if model.raw, do: text(line), else: render_line(line, prose_width)
       end)
 
     column style: %{gap: 1} do
@@ -73,7 +84,7 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
         box style: %{
               border: :single,
               padding: 1,
-              width: effective_width(model, @default_content_box_width)
+              width: box_width
             } do
           column style: %{gap: 0} do
             content_lines
@@ -89,7 +100,7 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
   @impl true
   def subscribe(_model), do: []
 
-  defp render_line(line) do
+  defp render_line(line, prose_width) do
     cond do
       String.starts_with?(line, "# ") ->
         text(String.trim_leading(line, "# "), style: [:bold, :underline])
@@ -102,7 +113,7 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
         text("")
 
       true ->
-        text(render_inline(line))
+        rich_text(render_inline(line), width: prose_width, text_wrap: :pretty)
     end
   end
 
