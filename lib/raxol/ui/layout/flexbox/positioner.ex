@@ -209,9 +209,15 @@ defmodule Raxol.UI.Layout.Flexbox.Positioner do
         lines_with_layout,
         space,
         flex_props,
-        cross_axis
+        cross_axis,
+        allocated_heights \\ nil
       ) do
-    line_heights = compute_line_heights(lines_with_layout, cross_axis)
+    # Allocated heights (e.g. align-content: :stretch expanding lines in
+    # Wrapper) take precedence over re-deriving from item spaces — items
+    # with explicit cross sizes don't reflect their line's allocation.
+    line_heights =
+      allocated_heights || compute_line_heights(lines_with_layout, cross_axis)
+
     total_line_height = Enum.sum(line_heights)
     available_space = get_dimension(space, cross_axis) - total_line_height
     gap_size = get_gap_size(flex_props.gap, cross_axis)
@@ -328,6 +334,9 @@ defmodule Raxol.UI.Layout.Flexbox.Positioner do
     {start, middles}
   end
 
+  # :stretch is handled upstream (Wrapper expands the lines themselves and
+  # consumes the free space), so lines land here flush like flex-start;
+  # this clause also covers unknown values.
   def calculate_align_content_positioning(_, _available_space, line_count, gap) do
     {0, uniform_gaps(gap, line_count)}
   end

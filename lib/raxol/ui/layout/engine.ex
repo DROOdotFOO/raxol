@@ -1061,7 +1061,8 @@ defmodule Raxol.UI.Layout.Engine do
       align_items:
         Map.get(style, :align_items) || Map.get(flex, :align, :stretch),
       align_content:
-        Map.get(style, :align_content) || Map.get(flex, :align_content, :flex_start),
+        Map.get(style, :align_content) ||
+          Map.get(flex, :align_content, :flex_start),
       flex_wrap: Map.get(style, :flex_wrap) || Map.get(flex, :wrap, :nowrap),
       gap: Map.get(style, :gap) || Map.get(flex, :gap, 0),
       padding: Map.get(style, :padding) || Map.get(flex, :padding, 0)

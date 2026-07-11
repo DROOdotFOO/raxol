@@ -3,7 +3,6 @@ defmodule Raxol.Core.Renderer.View do
   Provides view-related functionality for rendering UI components.
   """
 
-  alias Raxol.Core.Renderer.Layout, as: LayoutEngine
   alias Raxol.Core.Renderer.View.Components.{Box, Scroll, Text}
   alias Raxol.Core.Renderer.View.Layout.Flex
   alias Raxol.Core.Renderer.View.Style.Border
@@ -121,36 +120,6 @@ defmodule Raxol.Core.Renderer.View do
     end
   end
 
-  @doc "Creates a grid layout."
-  defmacro grid(opts, do: block) do
-    quote do
-      Raxol.Core.Renderer.View.validate_keyword_opts(
-        unquote(opts),
-        "View.grid macro"
-      )
-
-      children = unquote(block)
-
-      Raxol.Core.Renderer.View.Layout.Grid.new(
-        Keyword.merge(
-          Raxol.Core.Renderer.View.ensure_keyword(unquote(opts)),
-          Raxol.Core.Renderer.View.ensure_keyword(children: children)
-        )
-      )
-    end
-  end
-
-  defmacro grid(opts) do
-    quote do
-      Raxol.Core.Renderer.View.validate_keyword_opts(
-        unquote(opts),
-        "View.grid macro"
-      )
-
-      Raxol.Core.Renderer.View.Layout.Grid.new(unquote(opts))
-    end
-  end
-
   @doc "Creates a new border around a view."
   def border(view, opts \\ []) do
     validate_keyword_opts(opts, "View.border")
@@ -167,15 +136,6 @@ defmodule Raxol.Core.Renderer.View do
   def table(opts \\ []) do
     validate_keyword_opts(opts, "View.table")
     Components.table(opts)
-  end
-
-  @doc """
-  Applies layout to a view, calculating absolute positions for all elements.
-  Delegates to Raxol.Renderer.Layout.apply_layout/2.
-  """
-  def layout(view, dimensions) do
-    Validation.validate_layout_dimensions(dimensions)
-    LayoutEngine.apply_layout(view, Map.new(dimensions))
   end
 
   defmacro border_wrap(style, do: block) do

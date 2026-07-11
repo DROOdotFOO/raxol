@@ -3,19 +3,23 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
   Characterization net for the live layout engine.
 
   Pins the CURRENT geometry of `Raxol.UI.Layout.Engine.apply_layout/2`
-  across the three flex-like dialects in play:
+  across the two flex-like dialects still alive:
 
     1. `:flex` elements (View DSL `row`/`column`/`flex` macros) -> the real
        `Raxol.UI.Layout.Flexbox` path.
     2. Literal `:row`/`:column` elements -> `Raxol.UI.Layout.Containers`, a
        different dialect with its own gap/align/justify defaults.
-    3. `Raxol.Core.Renderer.View.layout/2` -> a separate legacy stack
-       (`Core.Renderer.View.Layout.Flex`, ~566 LOC). Marked LEGACY-STACK
-       below.
+
+  A third dialect, `Raxol.Core.Renderer.View.layout/2`, delegated to a
+  separate legacy stack (`Core.Renderer.View.Layout.Flex.calculate_layout/2`
+  and its coordinator); both are now deleted as production-dead (zero
+  callers outside tests). `Flex`'s `row`/`column`/`container` constructors
+  (dialect 1 above) and `Box.new/1` survive -- they feed the live engine
+  independent of the deleted calculation code.
 
   Every value was captured by actually running the code above. Pins
   document behavior AS-IS, including quirks and outright bugs (each quirk
-  carries a comment) — they are a tripwire, not a correctness claim: a
+  carries a comment) -- they are a tripwire, not a correctness claim: a
   changed number means either a deliberate re-pin or a regression.
   """
 
@@ -411,9 +415,8 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
   # ---------------------------------------------------------------------
   describe "flex_wrap" do
     test "View DSL flex/2 macro requires `require Raxol.Core.Renderer.View`, else UndefinedFunctionError" do
-      # flex/2 is a macro; without `require Raxol.Core.Renderer.View` (done
-      # at module top for the LEGACY-STACK section below) it can't dispatch
-      # and raises UndefinedFunctionError.
+      # flex/2 is a macro; without `require` in scope, calling it raises
+      # UndefinedFunctionError.
       tree =
         LegacyView.flex style: %{flex_wrap: :wrap}, direction: :row do
           [text("AAAA"), text("BBBB"), text("CCCC")]
@@ -470,9 +473,13 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       # gets its own line. Returned order is reversed (C, B, A) though Y is
       # ascending: `Wrapper.place_lines_cross/5` prepends each line via
       # `positioned_line ++ acc`. Pinned as-is.
+      #
+      # align-content defaults to :stretch (CSS initial value): three
+      # 1-tall lines in a 10-tall container get stretched allocations
+      # 4/3/3, so lines start at y=0/4/7.
       assert layout(tree, %{width: 10, height: 10}) == [
-               %{type: :text, x: 0, y: 2, text: "CCCCCC"},
-               %{type: :text, x: 0, y: 1, text: "BBBBBB"},
+               %{type: :text, x: 0, y: 7, text: "CCCCCC"},
+               %{type: :text, x: 0, y: 4, text: "BBBBBB"},
                %{type: :text, x: 0, y: 0, text: "AAAAAA"}
              ]
     end
@@ -488,8 +495,11 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       # places it (an empty `current_line` always accepts the first item
       # regardless of fit), then "B" can't share the line (20+0+1 > 10) so
       # it starts its own line. Same reversed-order quirk as above.
+      #
+      # Default align-content :stretch expands the two 1-tall lines to
+      # 5/5, so line two starts at y=5.
       assert layout(tree, %{width: 10, height: 10}) == [
-               %{type: :text, x: 0, y: 1, text: "B"},
+               %{type: :text, x: 0, y: 5, text: "B"},
                %{type: :text, x: 0, y: 0, text: "AAAAAAAAAAAAAAAAAAAA"}
              ]
     end
@@ -701,68 +711,6 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
                  "bad box height: #{inspect(el)}"
         end
       end
-    end
-  end
-
-  # ---------------------------------------------------------------------
-  # LEGACY-STACK: Raxol.Core.Renderer.View.layout/2, backed by
-  # Raxol.Core.Renderer.Layout.apply_layout/2 -> View.Layout.Flex (~566
-  # LOC). Zero production callers (view_test.exs + visual snapshot harness
-  # only); pinned so removing it later is a deliberate, detectable act.
-  #
-  # Output shape differs from the live engine: `position`/`size` tuples and
-  # a `:content` field instead of flat `:x`/`:y`/`:width`/`:height`/`:text`
-  # -- unifying the two stacks needs a rewrite, not a compat shim.
-  # ---------------------------------------------------------------------
-  describe "LEGACY-STACK: Raxol.Core.Renderer.View.layout/2" do
-    test "simple text" do
-      view = LegacyView.text("Hello")
-      result = LegacyView.layout(view, width: 10, height: 1)
-
-      assert result == [
-               %{
-                 type: :text,
-                 content: "Hello",
-                 position: {0, 0},
-                 size: {5, 1},
-                 style: [],
-                 fg: nil,
-                 bg: nil,
-                 wrap: :none,
-                 align: :left,
-                 link: nil
-               }
-             ]
-    end
-
-    test "row of two texts, default gap 0 (View.Layout.Flex default, NOT Containers' gap 1)" do
-      view = row(do: [text("A"), text("B")])
-      result = LegacyView.layout(view, width: 10, height: 3)
-
-      simplified =
-        Enum.map(result, &Map.take(&1, [:type, :position, :size, :content]))
-
-      assert simplified == [
-               %{type: :text, content: "A", position: {0, 0}, size: {1, 1}},
-               %{type: :text, content: "B", position: {1, 0}, size: {1, 1}}
-             ]
-    end
-
-    test "flex direction: row, gap: 2 (macro form, requires require)" do
-      view =
-        LegacyView.flex direction: :row, gap: 2 do
-          [text("A"), text("B")]
-        end
-
-      result = LegacyView.layout(view, width: 20, height: 3)
-
-      simplified =
-        Enum.map(result, &Map.take(&1, [:type, :position, :size, :content]))
-
-      assert simplified == [
-               %{type: :text, content: "A", position: {0, 0}, size: {1, 1}},
-               %{type: :text, content: "B", position: {3, 0}, size: {1, 1}}
-             ]
     end
   end
 end

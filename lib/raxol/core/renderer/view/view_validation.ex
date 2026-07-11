@@ -41,48 +41,6 @@ defmodule Raxol.Core.Renderer.View.Validation do
     validate_container_dimensions(opts)
   end
 
-  @doc """
-  Validates layout dimensions and raises an error if invalid.
-  """
-  def validate_layout_dimensions(dimensions) do
-    validate_keyword_list(Keyword.keyword?(dimensions), dimensions)
-
-    width = Keyword.get(dimensions, :width)
-    height = Keyword.get(dimensions, :height)
-
-    validate_width_dimension(width)
-    validate_height_dimension(height)
-  end
-
-  @spec validate_keyword_list(any(), any()) :: {:ok, any()} | {:error, any()}
-  defp validate_keyword_list(true, _dimensions), do: :ok
-
-  @spec validate_keyword_list(any(), any()) :: {:ok, any()} | {:error, any()}
-  defp validate_keyword_list(false, dimensions) do
-    raise ArgumentError,
-          "View.layout macro expects a keyword list as the second argument, got: #{inspect(dimensions)}"
-  end
-
-  @spec validate_width_dimension(String.t() | integer()) ::
-          {:ok, any()} | {:error, any()}
-  defp validate_width_dimension(width) when is_integer(width) and width <= 0 do
-    raise ArgumentError, "Container width must be a positive integer"
-  end
-
-  @spec validate_width_dimension(String.t() | integer()) ::
-          {:ok, any()} | {:error, any()}
-  defp validate_width_dimension(_width), do: :ok
-
-  @spec validate_height_dimension(pos_integer()) ::
-          {:ok, any()} | {:error, any()}
-  defp validate_height_dimension(height)
-       when is_integer(height) and height <= 0 do
-    raise ArgumentError, "Container height must be a positive integer"
-  end
-
-  @spec validate_height_dimension(any()) :: {:ok, any()} | {:error, any()}
-  defp validate_height_dimension(_height), do: :ok
-
   # Private validation functions
 
   @spec validate_size_option(keyword()) :: :ok
