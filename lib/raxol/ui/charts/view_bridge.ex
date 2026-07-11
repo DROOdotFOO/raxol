@@ -19,7 +19,7 @@ defmodule Raxol.UI.Charts.ViewBridge do
   def cells_to_view(cells, opts \\ [])
 
   def cells_to_view([], opts) do
-    Components.box(style: Keyword.get(opts, :style, %{}), children: [])
+    Components.box(style: chart_box_style(opts), children: [])
   end
 
   def cells_to_view(cells, opts) do
@@ -29,7 +29,25 @@ defmodule Raxol.UI.Charts.ViewBridge do
       |> Enum.chunk_by(fn {_x, y, _c, fg, bg, _a} -> {y, fg, bg} end)
       |> Enum.map(&group_to_text_element/1)
 
-    Components.box(style: Keyword.get(opts, :style, %{}), children: children)
+    Components.box(style: chart_box_style(opts), children: children)
+  end
+
+  # The wrapper box must hug the chart's render region — a dimensionless
+  # box fills all available space, framing a small chart with a huge empty
+  # rectangle. Caller-provided style dimensions win over the region's.
+  defp chart_box_style(opts) do
+    style = Keyword.get(opts, :style, %{})
+
+    case Keyword.get(opts, :region) do
+      {_x, _y, w, h} ->
+        style
+        |> Map.put_new(:width, w)
+        |> Map.put_new(:height, h)
+        |> Map.put_new(:overflow, :hidden)
+
+      _ ->
+        style
+    end
   end
 
   defp group_to_text_element(group) do
