@@ -50,6 +50,8 @@ defmodule Raxol.UI.Layout.Flexbox do  @moduledoc """
         Engine.process_element(child, child_space, [])
       end)
 
+    elements = Engine.apply_container_overflow(elements, flex, space)
+
     elements ++ acc
   end
 

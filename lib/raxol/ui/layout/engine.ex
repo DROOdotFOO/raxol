@@ -437,8 +437,74 @@ defmodule Raxol.UI.Layout.Engine do  @moduledoc """
       }
     }
 
-    children_acc = process_children(children, inner_space, [])
+    children_acc =
+      children
+      |> process_children(inner_space, [])
+      |> apply_overflow_clip(style, inner_space, space)
+
     [box_element | children_acc] ++ acc
+  end
+
+  # ---------------------------------------------------------------------
+  # overflow (proposal Phase F1): when a box declares
+  # `style: %{overflow: :hidden | :clip | :auto | :scroll}`, every
+  # descendant element it produced is stamped with `:clip_bounds`
+  # (the box's content rectangle), which `Raxol.UI.CellManager`
+  # already honors at paint time. Nested clips intersect. `:visible`
+  # (default) stamps nothing — content may paint outside, matching CSS.
+  # `:auto`/`:scroll` clip identically here; scrolling itself is the
+  # Viewport component's job (F2), this property only guarantees the
+  # box's content can never paint outside its bounds.
+  # ---------------------------------------------------------------------
+  @doc false
+  # Overflow clipping for flex containers (called from Flexbox.process_flex,
+  # hence public). The clip rect is the container's own space.
+  def apply_container_overflow(elements, container, space) do
+    apply_overflow_clip(elements, resolve_style(container), space, space)
+  end
+
+  defp apply_overflow_clip(elements, style, inner_space, outer_space) do
+    case Map.get(style, :overflow, :visible) do
+      :visible ->
+        elements
+
+      mode when mode in [:hidden, :clip, :auto, :scroll] ->
+        bounds = {
+          inner_space.x,
+          inner_space.y,
+          inner_space.x + max(0, inner_space.width - 1),
+          inner_space.y + max(0, inner_space.height - 1)
+        }
+
+        Enum.map(elements, &stamp_clip_bounds(&1, bounds))
+
+      other ->
+        :telemetry.execute(
+          [:raxol, :layout, :invalid_style],
+          %{count: 1},
+          %{
+            key: :overflow,
+            value: inspect(other),
+            at: {outer_space.x, outer_space.y}
+          }
+        )
+
+        elements
+    end
+  end
+
+  defp stamp_clip_bounds(element, bounds) do
+    merged =
+      case Map.get(element, :clip_bounds) do
+        nil -> bounds
+        existing -> intersect_bounds(existing, bounds)
+      end
+
+    Map.put(element, :clip_bounds, merged)
+  end
+
+  defp intersect_bounds({ax1, ay1, ax2, ay2}, {bx1, by1, bx2, by2}) do
+    {max(ax1, bx1), max(ay1, by1), min(ax2, bx2), min(ay2, by2)}
   end
 
   # Chart widget types are emitted by `Components.chart/1` as :box elements
