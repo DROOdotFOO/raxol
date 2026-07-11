@@ -43,7 +43,7 @@ defmodule RaxolTerminal.MixProject do
 
   defp deps do
     [
-      raxol_dep(:raxol_core, "~> 2.4", "../raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.6", "../raxol_core"),
       {:uuid, "~> 1.1"},
       {:jason, "~> 1.4"},
 

@@ -31,11 +31,11 @@ defmodule RaxolGateway.MixProject do
 
   defp deps do
     [
-      raxol_dep(:raxol_core, "~> 2.4", "../raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.6", "../raxol_core"),
       {:telemetry, "~> 1.3"},
 
       # Per-chat durable history (optional -- only needed to record turns).
-      raxol_dep(:raxol_agent, "~> 2.4", "../raxol_agent", optional: true),
+      raxol_dep(:raxol_agent, "~> 2.6", "../raxol_agent", optional: true),
 
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},

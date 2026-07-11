@@ -35,13 +35,13 @@ defmodule RaxolTelegram.MixProject do
   defp deps do
     [
       # Core dependency (Events, Behaviours)
-      raxol_dep(:raxol_core, "~> 2.4", "../raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.6", "../raxol_core"),
       {:telemetry, "~> 1.3"},
 
       # Main raxol (Lifecycle runtime -- required for Session to start TEA apps)
       # Optional at compile time; Session guards with Code.ensure_loaded? at runtime.
       # Consumer apps must include :raxol in their deps for sessions to work.
-      {:raxol, "~> 2.4", optional: true},
+      {:raxol, "~> 2.6", optional: true},
 
       # Telegram Bot API (optional -- only needed at runtime with a bot token)
       {:telegex, "~> 1.8", optional: true, runtime: false},

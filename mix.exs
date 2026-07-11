@@ -195,12 +195,12 @@ defmodule Raxol.MixProject do
 
   defp modular_packages do
     [
-      raxol_dep(:raxol_core, "~> 2.4", "packages/raxol_core"),
-      raxol_dep(:raxol_terminal, "~> 2.4", "packages/raxol_terminal"),
-      raxol_dep(:raxol_sensor, "~> 2.4", "packages/raxol_sensor"),
-      raxol_dep(:raxol_mcp, "~> 2.4", "packages/raxol_mcp"),
-      raxol_dep(:raxol_liveview, "~> 2.4", "packages/raxol_liveview"),
-      raxol_dep(:raxol_plugin, "~> 2.4", "packages/raxol_plugin")
+      raxol_dep(:raxol_core, "~> 2.6", "packages/raxol_core"),
+      raxol_dep(:raxol_terminal, "~> 2.6", "packages/raxol_terminal"),
+      raxol_dep(:raxol_sensor, "~> 2.6", "packages/raxol_sensor"),
+      raxol_dep(:raxol_mcp, "~> 2.6", "packages/raxol_mcp"),
+      raxol_dep(:raxol_liveview, "~> 2.6", "packages/raxol_liveview"),
+      raxol_dep(:raxol_plugin, "~> 2.6", "packages/raxol_plugin")
     ]
   end
 
