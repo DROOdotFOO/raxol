@@ -591,10 +591,13 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
   #                                handle :start directly)
   #      @default_align   :start  (Flexbox's default is :stretch -- MISMATCH)
   #
-  #    Containers also returns children in REVERSE order (each
-  #    `position_row_children`/`position_column_children` reduce prepends
-  #    via `child_elements ++ elements`), same accumulation quirk as
-  #    Wrapper above. Pinned as-is.
+  #    re-pinned N17: Containers is DELETED; literal :row/:column now run
+  #    on the flex engine via `containers_compat_to_flex/2` (engine.ex).
+  #    All geometry below is byte-identical to the Containers baseline
+  #    (gap 1, justify :start, align :start, explicit attrs) -- verified
+  #    by sorted comparison at migration time. Only the LIST ORDER
+  #    changed: Containers returned children reversed, flex returns
+  #    document order. Assertions now use document order.
   # ---------------------------------------------------------------------
   describe "literal :row / :column (Containers dialect, D4 compat baseline)" do
     test "literal :row uses Containers defaults: gap 1, justify :start, align :start" do
@@ -607,11 +610,11 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
         ]
       }
 
-      # Reverse order (R3, R2, R1); gap 1 between 2-wide labels (0, 3, 6).
+      # Gap 1 between 2-wide labels (x = 0, 3, 6); document order (N17).
       assert layout(tree, %{width: 30, height: 10}) == [
-               %{type: :text, x: 6, y: 0, text: "R3"},
+               %{type: :text, x: 0, y: 0, text: "R1"},
                %{type: :text, x: 3, y: 0, text: "R2"},
-               %{type: :text, x: 0, y: 0, text: "R1"}
+               %{type: :text, x: 6, y: 0, text: "R3"}
              ]
     end
 
@@ -626,9 +629,9 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       }
 
       assert layout(tree, %{width: 30, height: 10}) == [
-               %{type: :text, x: 0, y: 4, text: "C3"},
+               %{type: :text, x: 0, y: 0, text: "C1"},
                %{type: :text, x: 0, y: 2, text: "C2"},
-               %{type: :text, x: 0, y: 0, text: "C1"}
+               %{type: :text, x: 0, y: 4, text: "C3"}
              ]
     end
 
@@ -643,8 +646,8 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       }
 
       assert layout(tree, %{width: 30, height: 10}) == [
-               %{type: :text, x: 16, y: 4, text: "X2"},
-               %{type: :text, x: 12, y: 4, text: "X1"}
+               %{type: :text, x: 12, y: 4, text: "X1"},
+               %{type: :text, x: 16, y: 4, text: "X2"}
              ]
     end
   end

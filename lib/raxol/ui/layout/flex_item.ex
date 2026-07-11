@@ -89,7 +89,7 @@ defmodule Raxol.UI.Layout.FlexItem do
   """
   def resolve(child, main_axis, container, content_size_fun, auto_min_fun \\ fn -> 0 end) do
     style = get_style(child)
-    flex = lift_flex(style, Map.get(child, :attrs, %{}))
+    flex = lift_flex(style, attrs_map(child))
 
     {main_dim, cross_dim} = axis_dims(main_axis)
     container_main = Map.get(container, main_dim)
@@ -338,7 +338,16 @@ defmodule Raxol.UI.Layout.FlexItem do
   end
 
   defp legacy_align_self(child) do
-    child |> Map.get(:attrs, %{}) |> Map.get(:align_self)
+    child |> attrs_map() |> Map.get(:align_self)
+  end
+
+  # attrs may be a keyword list on legacy elements
+  defp attrs_map(child) do
+    case Map.get(child, :attrs, %{}) do
+      m when is_map(m) -> m
+      kw when is_list(kw) -> Map.new(kw)
+      _ -> %{}
+    end
   end
 
   defp clamp_factor(n, _key) when is_integer(n) and n >= 0, do: n
