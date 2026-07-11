@@ -167,6 +167,37 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
       refute Map.has_key?(deliverable, "receiving_tx_hash")
     end
 
+    test "a stealth deliverable surfaces the ERC-5564 announcement fields (#368)" do
+      Application.put_env(:raxol_acp, :xochi_transfer_settler,
+        settle_fn: fn %{requirement: _req} ->
+          {:ok,
+           %{
+             intent_id: "int_1",
+             settlement_tx_hash: "0xabc",
+             receiving_tx_hash: nil,
+             amount_atomic: "1100000",
+             status: "completed",
+             settlement_type: "stealth",
+             stealth_address: "0x" <> String.duplicate("5c", 20),
+             ephemeral_pub_key: "0x02" <> String.duplicate("ab", 32),
+             view_tag: 42
+           }}
+        end
+      )
+
+      r = req(%{"settlement_preference" => "stealth", "destination" => "0xrecipient"})
+      assert {:deliver, deliverable} = TransferOffering.handle_deliver(r, @ctx)
+
+      # present/1 stringifies keys and keeps the non-nil announcement fields
+      # (dropping only the nil receiving_tx_hash), so the evaluator can verify
+      # the stealth delivery on-chain.
+      assert deliverable["settlement_type"] == "stealth"
+      assert deliverable["stealth_address"] == "0x" <> String.duplicate("5c", 20)
+      assert deliverable["ephemeral_pub_key"] == "0x02" <> String.duplicate("ab", 32)
+      assert deliverable["view_tag"] == 42
+      refute Map.has_key?(deliverable, "receiving_tx_hash")
+    end
+
     test "propagates a settler error so the job expires instead of completing" do
       Application.put_env(:raxol_acp, :xochi_transfer_settler,
         settle_fn: fn _ -> {:error, {:settlement_failed, :expired, "int_x", nil}} end

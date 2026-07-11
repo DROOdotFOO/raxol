@@ -24,6 +24,9 @@ defmodule Raxol.ACP.Xochi.Offering do
       job.submitted    -> storefront relayed the buyer's signed intent; solver
                           fills cross-chain; deliverable = { intent_id,
                           settlement_tx_hash, receiving_tx_hash, status }
+                          plus the ERC-5564 announcement ({ settlement_type,
+                          stealth_address, ephemeral_pub_key, view_tag }) for a
+                          stealth settlement
       job.completed    -> buyer verifies dst_tx; provider nets budget*0.90
 
   The deliverable surfaces both src and dst transaction hashes so the buyer (or
@@ -235,6 +238,36 @@ defmodule Raxol.ACP.Xochi.Offering do
           "type" => "string",
           "enum" => ["completed"],
           "description" => "Settlement lifecycle state; a delivered job is always completed."
+        },
+        "settlement_type" => %{
+          "type" => "string",
+          "enum" => ["public", "stealth", "shielded"],
+          "description" =>
+            "The privacy tier that settled, echoed from the poll status. Present " <>
+              "only when the buyer signed a non-public intent."
+        },
+        "stealth_address" => %{
+          "type" => "string",
+          "pattern" => "^0x[0-9a-fA-F]{40}$",
+          "description" =>
+            "ERC-5564 stealth address the funds landed at (present only for a " <>
+              "stealth settlement). A public on-chain announcement field, not the " <>
+              "recipient's identity."
+        },
+        "ephemeral_pub_key" => %{
+          "type" => "string",
+          "pattern" => "^0x[0-9a-fA-F]+$",
+          "description" =>
+            "ERC-5564 ephemeral public key from the stealth announcement " <>
+              "(present only for a stealth settlement)."
+        },
+        "view_tag" => %{
+          "type" => "integer",
+          "minimum" => 0,
+          "maximum" => 255,
+          "description" =>
+            "ERC-5564 view tag byte from the stealth announcement " <>
+              "(present only for a stealth settlement)."
         }
       }
     }

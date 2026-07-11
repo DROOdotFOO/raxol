@@ -54,7 +54,12 @@ defmodule Raxol.ACP.Xochi.Settler do
         settlement_tx_hash: "0x...",
         receiving_tx_hash:  "0x...",   # nil for an instant single-tx fill
         amount_atomic:      "1000000",
-        status:             "completed"
+        status:             "completed",
+        # Present only for a stealth settlement (nil otherwise):
+        settlement_type:    "stealth", # the privacy tier that settled
+        stealth_address:    "0x...",   # ERC-5564 announcement fields the buyer
+        ephemeral_pub_key:  "0x...",   # or evaluator verifies the delivery with
+        view_tag:           42
       }}
 
   On error: `{:error, reason}`. SolverAgent marks the session `:failed` and does
@@ -62,7 +67,7 @@ defmodule Raxol.ACP.Xochi.Settler do
   """
 
   alias Raxol.Payments.Protocols.Xochi
-  alias Raxol.Payments.Xochi.Schemas.IntentStatus
+  alias Raxol.Payments.Xochi.Schemas.{ExecuteResponse, IntentStatus}
 
   @doc """
   Build a settle_fn closure.
@@ -97,10 +102,10 @@ defmodule Raxol.ACP.Xochi.Settler do
   defp do_settle(args, xochi_config, poll_opts) do
     with {:ok, bundle} <- extract_signed_intent(args),
          {:ok, intent_id} <- bundle_intent_id(bundle),
-         {:ok, _exec} <- Xochi.execute_signed(xochi_config, bundle),
+         {:ok, %ExecuteResponse{} = exec} <- Xochi.execute_signed(xochi_config, bundle),
          {:ok, %IntentStatus{} = status} <-
            Xochi.poll_status(xochi_config, intent_id, poll_opts) do
-      settle_result(status, args)
+      settle_result(status, exec, args)
     end
   end
 
@@ -128,14 +133,14 @@ defmodule Raxol.ACP.Xochi.Settler do
   # :expired intent (which poll_status returns as `{:ok, status}`) must surface
   # as an error so SolverAgent does not submit a deliverable for a settlement
   # that never landed.
-  defp settle_result(%IntentStatus{status: :completed} = status, args),
-    do: to_deliverable(status, args)
+  defp settle_result(%IntentStatus{status: :completed} = status, exec, args),
+    do: to_deliverable(status, exec, args)
 
-  defp settle_result(%IntentStatus{status: s, intent_id: id, error: err}, _args)
+  defp settle_result(%IntentStatus{status: s, intent_id: id, error: err}, _exec, _args)
        when s in [:failed, :expired],
        do: {:error, {:settlement_failed, s, id, err}}
 
-  defp settle_result(%IntentStatus{status: s, intent_id: id}, _args),
+  defp settle_result(%IntentStatus{status: s, intent_id: id}, _exec, _args),
     do: {:error, {:settlement_incomplete, s, id}}
 
   # `IntentStatus.tx_hash` is the authoritative settlement tx: for an instant fill
@@ -145,16 +150,31 @@ defmodule Raxol.ACP.Xochi.Settler do
   # mislabels the single instant-fill tx as the source leg. `amount_atomic` is the
   # buyer's declared transfer amount, committed so the deliverable hash pins what
   # was moved rather than only the tx hashes.
-  defp to_deliverable(%IntentStatus{} = status, args) do
+  #
+  # For a stealth settlement the worker returns the ERC-5564 announcement
+  # (`stealth_address`/`ephemeral_pub_key`/`view_tag`) on the execute response and
+  # marks the settled intent `settlement_type: :stealth` on poll. These are the
+  # public on-chain announcement fields the buyer or evaluator needs to verify the
+  # delivery, not the recipient's identity; they are nil for a public settlement,
+  # so `TransferOffering.present/1` drops them and a public deliverable is
+  # byte-identical.
+  defp to_deliverable(%IntentStatus{} = status, %ExecuteResponse{} = exec, args) do
     {:ok,
      %{
        intent_id: status.intent_id,
        settlement_tx_hash: status.tx_hash,
        receiving_tx_hash: status.receiving_tx_hash,
        amount_atomic: transfer_amount(args),
-       status: to_string(status.status)
+       status: to_string(status.status),
+       settlement_type: settlement_type(status),
+       stealth_address: exec.stealth_address,
+       ephemeral_pub_key: exec.ephemeral_pub_key,
+       view_tag: exec.view_tag
      }}
   end
+
+  defp settlement_type(%IntentStatus{settlement_type: nil}), do: nil
+  defp settlement_type(%IntentStatus{settlement_type: t}), do: to_string(t)
 
   # The deliverable's amount: the SolverAgent-threaded transfer amount, else the
   # requirement's declared amount. It is display/audit metadata only -- the

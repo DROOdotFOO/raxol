@@ -133,9 +133,33 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
                  "settlement_tx_hash",
                  "receiving_tx_hash",
                  "amount_atomic",
-                 "status"
+                 "status",
+                 "settlement_type",
+                 "stealth_address",
+                 "ephemeral_pub_key",
+                 "view_tag"
                ])
              )
+    end
+
+    test "the ERC-5564 stealth fields are optional and typed (#368)" do
+      schema = Offering.deliverable_schema()
+      props = schema["properties"]
+      required = MapSet.new(schema["required"])
+
+      # A stealth settlement adds the announcement fields; a public one omits
+      # them, so none may be required (else a public deliverable fails to submit).
+      for key <- ["settlement_type", "stealth_address", "ephemeral_pub_key", "view_tag"] do
+        assert Map.has_key?(props, key)
+        refute MapSet.member?(required, key)
+      end
+
+      assert props["settlement_type"]["enum"] == ["public", "stealth", "shielded"]
+      assert props["stealth_address"]["pattern"] == "^0x[0-9a-fA-F]{40}$"
+      assert props["ephemeral_pub_key"]["type"] == "string"
+      assert props["view_tag"]["type"] == "integer"
+      assert props["view_tag"]["minimum"] == 0
+      assert props["view_tag"]["maximum"] == 255
     end
   end
 end

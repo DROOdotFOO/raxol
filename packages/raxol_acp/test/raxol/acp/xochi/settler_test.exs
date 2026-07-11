@@ -157,5 +157,115 @@ defmodule Raxol.ACP.Xochi.SettlerTest do
 
       refute_received {:relayed, _}
     end
+
+    # A stealth settlement: the worker returns the ERC-5564 announcement
+    # (stealth_address / ephemeral_pub_key / view_tag) on execute and marks the
+    # settled intent settlement_type "stealth" on poll. The recipient and privacy
+    # tier live inside the buyer's opaque signature; the settler only relays.
+    defp stealth_sim(test_pid) do
+      fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+
+        if conn.request_path == "/api/intent/execute" do
+          send(test_pid, {:relayed, Jason.decode!(raw)})
+        end
+
+        body =
+          case conn.request_path do
+            "/api/intent/execute" ->
+              %{
+                "success" => true,
+                "intentId" => "i1",
+                "status" => "executing",
+                "stealth_address" => "0x" <> String.duplicate("5c", 20),
+                "ephemeral_pub_key" => "0x02" <> String.duplicate("ab", 32),
+                "view_tag" => 42
+              }
+
+            "/api/intent/i1/status" ->
+              %{
+                "intentId" => "i1",
+                "status" => "completed",
+                "terminal" => true,
+                "settlement_type" => "stealth",
+                "txHash" => "0x" <> String.duplicate("a", 64),
+                "receivingTxHash" => "0x" <> String.duplicate("b", 64)
+              }
+          end
+
+        Req.Test.json(conn, body)
+      end
+    end
+
+    defp stealth_settler_for(test_pid) do
+      Settler.build(
+        xochi_config: %{
+          base_url: "https://xochi.test",
+          auth_token: "stub",
+          req_options: [plug: stealth_sim(test_pid)]
+        },
+        poll_timeout_ms: 5_000,
+        poll_interval_ms: 10
+      )
+    end
+
+    test "a stealth settlement surfaces the ERC-5564 announcement fields (#368)" do
+      # The buyer signed a stealth intent (keys + ephemeral recipient inside the
+      # signature) and its bundle carries a shielded-claim aztec_proof. The
+      # settler relays the opaque bundle verbatim, and the deliverable surfaces
+      # the public ERC-5564 announcement the evaluator verifies on-chain.
+      bundle = signed_intent(%{"aztec_proof" => "0x" <> String.duplicate("de", 40)})
+
+      stealth_args =
+        args(%{
+          requirement:
+            requirement(%{
+              "settlement_preference" => "stealth",
+              "destination" => "0x" <> String.duplicate("5c", 20),
+              "signed_intent" => bundle
+            }),
+          signed_intent: bundle
+        })
+
+      assert {:ok, deliverable} = stealth_settler_for(self()).(stealth_args)
+
+      assert deliverable.settlement_type == "stealth"
+      assert deliverable.stealth_address == "0x" <> String.duplicate("5c", 20)
+      assert deliverable.ephemeral_pub_key == "0x02" <> String.duplicate("ab", 32)
+      assert deliverable.view_tag == 42
+      assert deliverable.settlement_tx_hash == "0x" <> String.duplicate("a", 64)
+      assert deliverable.receiving_tx_hash == "0x" <> String.duplicate("b", 64)
+
+      # The buyer's opaque bundle -- signature and shielded-claim proof -- is
+      # relayed unchanged; raxol signs nothing and strips nothing.
+      assert_receive {:relayed, relayed}
+      assert relayed["signature"] == "0x" <> String.duplicate("11", 65)
+      assert relayed["aztec_proof"] == "0x" <> String.duplicate("de", 40)
+    end
+
+    test "a different-recipient intent is relayed and settled, not gated (#368)" do
+      # The recipient the buyer signed lives inside the opaque bundle; the
+      # requirement's `destination` is only an audit hint. The settle path must
+      # relay and settle it unchanged -- there is no same-owner or public-only
+      # gate on raxol's side.
+      diff_recipient_args =
+        args(%{
+          requirement:
+            requirement(%{
+              "settlement_preference" => "stealth",
+              "destination" => "0x" <> String.duplicate("fe", 20)
+            })
+        })
+
+      assert {:ok, deliverable} = settler_for("completed").(diff_recipient_args)
+      assert deliverable.intent_id == "i1"
+      assert deliverable.status == "completed"
+
+      # The buyer's bundle relays verbatim; the audit-hint destination never
+      # touches the relay POST.
+      assert_receive {:relayed, relayed}
+      assert relayed["signature"] == "0x" <> String.duplicate("11", 65)
+      refute Map.has_key?(relayed, "destination")
+    end
   end
 end
