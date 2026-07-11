@@ -85,14 +85,6 @@ defmodule Raxol.Test.Platform.ComponentRenderingTest do
       assert box.border == :single
       assert box.padding == {1, 1, 1, 1}
 
-      # Test box layout calculation
-      available_size = {20, 10}
-      layout = Box.calculate_layout(box, available_size)
-
-      # Verify layout structure
-      assert is_list(layout)
-      assert [_ | _] = layout
-
       # Check for box border characters based on platform capability
       if Platform.supports_feature?(:unicode) do
         # Unicode box drawing characters should be used
