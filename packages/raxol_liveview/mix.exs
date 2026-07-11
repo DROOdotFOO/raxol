@@ -32,7 +32,7 @@ defmodule RaxolLiveView.MixProject do
   defp deps do
     [
       # Core dependency (Buffer, Events, etc.)
-      raxol_dep(:raxol_core, "~> 2.4", "../raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.6", "../raxol_core"),
 
       # PubSub for LiveView <-> Lifecycle communication
       {:phoenix_pubsub, "~> 2.1"},

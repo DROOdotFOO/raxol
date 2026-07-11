@@ -1,0 +1,29 @@
+name: Lockstep Deps
+
+# Fails a PR if any raxol_* inter-package "~> X.Y" constraint lags the version
+# of the package it points at. Prevents the class of bug where a bumped family
+# member (e.g. raxol_core 2.6.0) is depended on with a stale "~> 2.4", so
+# HEX_BUILD publishes against the old published sibling.
+
+on:
+  pull_request:
+    paths:
+      - "**/mix.exs"
+      - "scripts/check-lockstep-deps.sh"
+      - ".github/workflows/lockstep-deps.yml"
+  push:
+    branches: [master]
+    paths:
+      - "**/mix.exs"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Constraint consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check lockstep dep constraints
+        run: ./scripts/check-lockstep-deps.sh

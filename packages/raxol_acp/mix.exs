@@ -56,9 +56,9 @@ defmodule RaxolAcp.MixProject do
 
   defp deps do
     [
-      raxol_dep(:raxol_payments, "~> 0.1", "../raxol_payments", []),
-      raxol_dep(:raxol_core, "~> 2.4", "../raxol_core", []),
-      raxol_dep(:raxol_mcp, "~> 2.4", "../raxol_mcp", runtime: false),
+      raxol_dep(:raxol_payments, "~> 0.2", "../raxol_payments", []),
+      raxol_dep(:raxol_core, "~> 2.6", "../raxol_core", []),
+      raxol_dep(:raxol_mcp, "~> 2.6", "../raxol_mcp", runtime: false),
       {:req, "~> 0.5"},
       {:ex_keccak, "~> 0.7"},
       {:jason, "~> 1.4"},

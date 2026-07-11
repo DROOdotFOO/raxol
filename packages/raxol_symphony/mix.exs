@@ -34,31 +34,31 @@ defmodule RaxolSymphony.MixProject do
 
   defp deps do
     [
-      raxol_dep(:raxol_core, "~> 2.4", "../raxol_core"),
+      raxol_dep(:raxol_core, "~> 2.6", "../raxol_core"),
 
       # Main raxol (Lifecycle runtime, Recording for evidence). Compile-time only --
       # runtime: false keeps :raxol out of this package's .app applications list so
       # the host (which owns raxol) controls its boot, avoiding circular OTP startup.
-      raxol_dep(:raxol, "~> 2.4", "../..", optional: true, runtime: false),
+      raxol_dep(:raxol, "~> 2.6", "../..", optional: true, runtime: false),
 
       # Agent runner backend. Optional at compile time so the orchestrator core
       # can be exercised in tests with a noop runner. Local path in dev so we
       # pick up Stream.Event / EventForwarder helpers ahead of next hex release.
-      raxol_dep(:raxol_agent, "~> 2.4", "../raxol_agent", optional: true),
+      raxol_dep(:raxol_agent, "~> 2.6", "../raxol_agent", optional: true),
 
       # raxol_acp is pulled in test env ONLY to exercise the canonical
       # cross-package auto-resume flow (Job.Server transition telemetry ->
       # Resumer -> Orchestrator.resume_run). Symphony does not depend on
       # ACP at runtime or compile time outside tests.
-      raxol_dep(:raxol_acp, "~> 0.2-pre", "../raxol_acp", only: :test),
+      raxol_dep(:raxol_acp, "~> 0.2", "../raxol_acp", only: :test),
 
       # MCP surface (optional). Local path in dev for ToolDef + register_all.
-      raxol_dep(:raxol_mcp, "~> 2.4", "../raxol_mcp", optional: true),
+      raxol_dep(:raxol_mcp, "~> 2.6", "../raxol_mcp", optional: true),
 
       # LiveView/Telegram/Watch surfaces -- all optional, gated at runtime.
-      raxol_dep(:raxol_liveview, "~> 2.4", "../raxol_liveview", optional: true),
-      raxol_dep(:raxol_telegram, "~> 0.1", "../raxol_telegram", optional: true),
-      raxol_dep(:raxol_watch, "~> 0.1", "../raxol_watch", optional: true),
+      raxol_dep(:raxol_liveview, "~> 2.6", "../raxol_liveview", optional: true),
+      raxol_dep(:raxol_telegram, "~> 0.2", "../raxol_telegram", optional: true),
+      raxol_dep(:raxol_watch, "~> 0.2", "../raxol_watch", optional: true),
 
       # YAML front matter parsing.
       {:yaml_elixir, "~> 2.12"},

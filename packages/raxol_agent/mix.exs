@@ -35,8 +35,8 @@ defmodule RaxolAgent.MixProject do
 
   defp deps do
     [
-      raxol_dep(:raxol, "~> 2.4", "../.."),
-      raxol_dep(:raxol_mcp, "~> 2.4", "../raxol_mcp"),
+      raxol_dep(:raxol, "~> 2.6", "../.."),
+      raxol_dep(:raxol_mcp, "~> 2.6", "../raxol_mcp"),
       {:circular_buffer, "~> 1.0"},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.12"},
