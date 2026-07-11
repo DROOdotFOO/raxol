@@ -63,7 +63,7 @@ def view(%{mode: :editing} = model), do: render_editor(model)
 
 ## Common Recipes
 
-These patterns solve real problems. Use **state machines** when your app has distinct modes (browsing vs editing vs searching). Use **scrollable lists** when you have more items than fit on screen. Use **keychord sequences** for Vim-style multi-key commands.
+Use **state machines** when your app has distinct modes (browsing vs editing vs searching). Use **scrollable lists** when you have more items than fit on screen. Use **keychord sequences** for Vim-style multi-key commands.
 
 ### Scrollable list
 
@@ -370,7 +370,7 @@ test "quit sends command" do
     type: :key, data: %{key: :char, char: "q"}
   }
   {_model, cmds} = MyApp.update(quit_event, model)
-  assert [{:quit, _}] = cmds
+  assert [%Raxol.Core.Runtime.Directive.Stop{}] = cmds
 end
 ```
 

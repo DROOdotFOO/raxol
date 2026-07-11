@@ -431,8 +431,6 @@ defmodule Raxol.MixProject do
         {"docs/getting-started/COMPONENT_GALLERY.md",
          [title: "Component Gallery"]},
         {"docs/getting-started/CORE_CONCEPTS.md", [title: "Core Concepts"]},
-        {"docs/getting-started/MIGRATION_FROM_DIY.md",
-         [title: "Migration Guide"]},
         {"docs/core/BUFFER_API.md", [title: "Buffer API"]},
         {"docs/core/ARCHITECTURE.md", [title: "Architecture"]},
         {"docs/cookbook/README.md", [title: "Cookbook", filename: "cookbook"]},
@@ -455,6 +453,17 @@ defmodule Raxol.MixProject do
         {"docs/features/TIME_TRAVEL_DEBUGGING.md",
          [title: "Time-Travel Debugging"]},
         {"docs/WHY_OTP.md", [title: "Why OTP"]},
+        {"docs/PACKAGES.md", [title: "Package Ecosystem"]},
+        {"docs/features/AGENTIC_COMMERCE.md", [title: "Agentic Commerce"]},
+        {"docs/features/ACP.md", [title: "Agent Commerce Protocol"]},
+        {"docs/features/MCP.md", [title: "MCP"]},
+        {"docs/features/PLUGIN_SDK.md", [title: "Plugin SDK"]},
+        {"docs/features/SYMPHONY.md", [title: "Symphony Orchestrator"]},
+        {"docs/features/SPEECH.md", [title: "Speech"]},
+        {"docs/features/TELEGRAM.md", [title: "Telegram"]},
+        {"docs/features/WATCH.md", [title: "Watch"]},
+        {"docs/cookbook/CUSTOM_COMPONENTS.md", [title: "Custom Components"]},
+        {"docs/cookbook/CONFIG.md", [title: "Configuration"]},
         {"examples/reference/core/README.md",
          [title: "Core Examples", filename: "core-examples"]}
       ],
@@ -464,7 +473,6 @@ defmodule Raxol.MixProject do
           docs/getting-started/QUICKSTART.md
           docs/getting-started/CORE_CONCEPTS.md
           docs/getting-started/COMPONENT_GALLERY.md
-          docs/getting-started/MIGRATION_FROM_DIY.md
         ),
         Architecture: ~w(
           docs/core/ARCHITECTURE.md
@@ -474,6 +482,8 @@ defmodule Raxol.MixProject do
         Cookbook: ~w(
           docs/cookbook/README.md
           docs/cookbook/BUILDING_APPS.md
+          docs/cookbook/CUSTOM_COMPONENTS.md
+          docs/cookbook/CONFIG.md
           docs/cookbook/SSH_DEPLOYMENT.md
           docs/cookbook/THEMING.md
           docs/cookbook/LIVEVIEW_INTEGRATION.md
@@ -490,9 +500,18 @@ defmodule Raxol.MixProject do
           docs/features/RECORDING_REPLAY.md
           docs/features/REPL.md
           docs/features/TIME_TRAVEL_DEBUGGING.md
+          docs/features/AGENTIC_COMMERCE.md
+          docs/features/ACP.md
+          docs/features/MCP.md
+          docs/features/PLUGIN_SDK.md
+          docs/features/SYMPHONY.md
+          docs/features/SPEECH.md
+          docs/features/TELEGRAM.md
+          docs/features/WATCH.md
           docs/WHY_OTP.md
         ),
         "Project Info": ~w(
+          docs/PACKAGES.md
           CHANGELOG.md
           ROADMAP.md
           .github/CONTRIBUTING.md

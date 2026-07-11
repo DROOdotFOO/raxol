@@ -126,7 +126,7 @@ Raxol.Payments.Deployment.assert_signing_isolated!()
 
 ## Agent Actions
 
-Twelve actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
+Thirteen actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
 
 | Action | What it does |
 |--------|-------------|
@@ -140,6 +140,7 @@ Twelve actions registered via the `Raxol.Agent.Action` behaviour, callable by LL
 | `payment_revoke_mandate` | Locally delete a stored Mandate (server budget honored until expiry; a 410 auto-prunes) |
 | `payment_execute_xochi_intent` | Dispatch a cross-chain Xochi intent (checkpointed) |
 | `payment_poll_xochi_status` | Poll the status of a dispatched Xochi intent |
+| `payment_execute_deposit_route` | Fetch + verify a Tron-origin deposit-route quote (bare `deposit_address`, attestation-checked); Tron origins have no gasless pull |
 | `payment_execute_relay_transfer` | Initiate a Tron transfer via Riddler Relay (checkpointed); Tron is public-only |
 | `payment_poll_relay_status` | Poll a dispatched relay (Tron) transfer to a terminal status |
 

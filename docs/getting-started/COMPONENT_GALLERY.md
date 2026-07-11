@@ -61,7 +61,7 @@ box style: %{border: :single, padding: 1, width: 40} do
 end
 ```
 
-Border styles: `:single`, `:double`, `:rounded`, `:bold`, `:ascii`.
+Border styles: `:none`, `:single`, `:double`, `:rounded`, `:bold`, `:dashed`.
 
 ### spacer
 

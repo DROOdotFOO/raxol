@@ -41,7 +41,6 @@ Complete guide to Raxol: multi-surface application runtime for Elixir.
 ## Guides
 
 - [Custom Components](cookbook/CUSTOM_COMPONENTS.md)
-- [Migration from DIY](getting-started/MIGRATION_FROM_DIY.md)
 
 ## Reference
 

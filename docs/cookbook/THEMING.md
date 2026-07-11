@@ -98,7 +98,7 @@ Components read theme styles via `Raxol.UI.Theming.Theme.component_style/2`. In 
 
 ```elixir
 def view(model) do
-  theme = Raxol.UI.Theming.ThemeManager.current_theme()
+  theme = Raxol.current_theme()
   btn_style = Raxol.UI.Theming.Theme.component_style(theme, :button)
 
   column do

@@ -23,7 +23,7 @@ Or add to an existing project:
 ```elixir
 # mix.exs
 def deps do
-  [{:raxol, "~> 2.4"}]
+  [{:raxol, "~> 2.6"}]
 end
 ```
 
@@ -59,7 +59,7 @@ defmodule MyApp do
         {%{model | count: model.count - 1}, []}
 
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
 
       _ ->
         {model, []}
@@ -104,7 +104,7 @@ end
 - `init/1` returns a plain map, which is your entire app state
 - `update/2` pattern-matches on messages and returns `{new_state, commands}`. The empty list `[]` means "no side effects"
 - `view/1` builds the UI from state using the View DSL macros (`column`, `row`, `box`)
-- `command(:quit)` is a built-in command that tells the runtime to shut down
+- `Directive.stop()` tells the runtime to shut down (the `Directive` alias comes from `use Raxol.Core.Runtime.Application`)
 
 Save as `lib/my_app.ex` and run:
 
@@ -199,7 +199,7 @@ Try `mix raxol.playground` for an interactive catalog of 30 Component demos you 
 
 ### Explore Further
 
-These features set Raxol apart:
+Features worth exploring:
 
 **SSH App Serving**: Serve your app over SSH. Each connection gets its own process:
 

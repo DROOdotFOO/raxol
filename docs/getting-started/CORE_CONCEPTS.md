@@ -278,7 +278,6 @@ MyCustomRenderer.render(output)
 ## Next Steps
 
 - [Quickstart](QUICKSTART.md) - Build your first app
-- [Migration Guide](./MIGRATION_FROM_DIY.md) - Integrate Raxol with existing code
 - [Cookbook](../cookbook/README.md) - Practical patterns and recipes
 - [API Reference](../core/BUFFER_API.md) - Complete function documentation
 - [Architecture](../core/ARCHITECTURE.md) - Implementation details

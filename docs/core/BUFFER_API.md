@@ -1,6 +1,6 @@
 # Buffer API Reference
 
-Complete API documentation for Raxol.Core buffer primitives. Lightweight terminal buffer operations. Note: raxol_core depends on telemetry at runtime.
+API reference for Raxol.Core buffer primitives. Note: raxol_core depends on telemetry at runtime.
 
 ## Raxol.Core.Buffer
 

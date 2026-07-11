@@ -125,7 +125,7 @@ end
   module={Raxol.LiveView.TerminalComponent}
   id="paste"
   buffer={@buffer}
-  theme={:solarized_dark}
+  theme={:dracula}
   on_paste="handle_paste"
 />
 ```
