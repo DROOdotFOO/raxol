@@ -21,6 +21,7 @@ defmodule Raxol.Playground.App do
   use Raxol.Core.Runtime.Application
 
   alias Raxol.Playground.Catalog
+  alias Raxol.UI.ScrollWindow
 
   @categories [nil] ++ Catalog.list_categories()
   @complexities [nil, :basic, :intermediate, :advanced]
@@ -29,6 +30,13 @@ defmodule Raxol.Playground.App do
   @help_key_pad 18
   @unknown_category_order 99
   @default_terminal_width 80
+  @default_terminal_height 24
+  # header_bar + status_bar rows consumed outside the sidebar box
+  @chrome_lines 2
+  # box top/bottom border rows
+  @box_border_lines 2
+  # Matches Viewport's @subtle_thumb_bg (rationale there).
+  @scrollbar_thumb_bg {110, 140, 180}
 
   @category_order %{
     input: 0,
@@ -42,13 +50,19 @@ defmodule Raxol.Playground.App do
   }
 
   @impl true
-  def init(_context) do
+  def init(context) do
     components = Catalog.list_components() |> sort_by_category()
-    terminal_width = detect_terminal_width()
+
+    terminal_width =
+      context_dimension(context, :width, &detect_terminal_width/0)
+
+    terminal_height =
+      context_dimension(context, :height, &detect_terminal_height/0)
 
     %{
       components: components,
       cursor: 0,
+      scroll_top: 0,
       selected: List.first(components),
       focus: :sidebar,
       search: nil,
@@ -59,6 +73,7 @@ defmodule Raxol.Playground.App do
       complexity_filter: nil,
       show_help: false,
       terminal_width: terminal_width,
+      terminal_height: terminal_height,
       available_width: demo_available_width(terminal_width)
     }
     |> init_demo()
@@ -70,16 +85,17 @@ defmodule Raxol.Playground.App do
       :tick ->
         forward_tick_to_demo(model)
 
-      %Raxol.Core.Events.Event{type: :resize, data: %{width: w}} ->
+      %Raxol.Core.Events.Event{type: :resize, data: %{width: w, height: h}} ->
         new_avail = demo_available_width(w)
 
         model =
           model
           |> Map.put(:terminal_width, w)
+          |> Map.put(:terminal_height, h)
           |> Map.put(:available_width, new_avail)
           |> inject_width_into_demo()
 
-        {model, []}
+        {%{model | scroll_top: sidebar_window(model).scroll_top}, []}
 
       _ ->
         cond do
@@ -248,7 +264,6 @@ defmodule Raxol.Playground.App do
   end
 
   defp sidebar_panel(model) do
-    items = build_sidebar_items(model)
     border_fg = if model.focus == :sidebar, do: :cyan, else: :white
     total = length(Catalog.list_components())
     showing = length(model.components)
@@ -271,24 +286,51 @@ defmodule Raxol.Playground.App do
 
     box style: %{border: :rounded, fg: border_fg, width: @sidebar_width} do
       column style: %{gap: 0} do
-        count_line ++ filter_lines ++ search_line ++ items
+        count_line ++ filter_lines ++ search_line ++ sidebar_item_lines(model)
       end
     end
   end
 
-  defp build_sidebar_items(%{components: []} = _model) do
+  # Window items only (not header rows) so one cursor step never scrolls
+  # more than one row; headers render only while the full list still fits.
+  defp sidebar_item_lines(%{components: []}) do
     [text("   No matches", style: [:dim], fg: :yellow)]
   end
 
-  defp build_sidebar_items(model) do
-    {_last_cat, items_rev} =
+  defp sidebar_item_lines(model) do
+    if sidebar_fits?(model) do
+      sidebar_full_lines(model)
+    else
+      sidebar_windowed_lines(model)
+    end
+  end
+
+  defp sidebar_fits?(model) do
+    sidebar_total_lines(model.components) <= sidebar_visible_height(model)
+  end
+
+  # items + one header row per distinct category run
+  defp sidebar_total_lines(components) do
+    {_last_cat, header_count} =
+      Enum.reduce(components, {nil, 0}, fn comp, {last_cat, count} ->
+        if comp.category != last_cat,
+          do: {comp.category, count + 1},
+          else: {comp.category, count}
+      end)
+
+    length(components) + header_count
+  end
+
+  defp sidebar_full_lines(model) do
+    {_last_cat, lines_rev} =
       model.components
       |> Enum.with_index()
       |> Enum.reduce({nil, []}, fn {comp, idx}, {last_cat, acc} ->
-        is_current = idx == model.cursor
-        marker = if is_current, do: " ▸ ", else: "   "
-        item_opts = if is_current, do: [style: [:bold], fg: :green], else: []
-        item = text(marker <> comp.name, item_opts)
+        item =
+          text(
+            sidebar_item_label(model, comp, idx),
+            sidebar_item_opts(model, idx)
+          )
 
         if comp.category != last_cat do
           hdr =
@@ -300,7 +342,79 @@ defmodule Raxol.Playground.App do
         end
       end)
 
-    Enum.reverse(items_rev)
+    Enum.reverse(lines_rev)
+  end
+
+  # Each visible line is its own row: item text padded to a fixed width,
+  # plus a trailing 1-column scrollbar cell. Fixed-width padding (rather
+  # than flex layout) guarantees the scrollbar cell lands in the box's
+  # true rightmost column regardless of how short an item's label is.
+  defp sidebar_windowed_lines(model) do
+    window = sidebar_window(model)
+    item_width = @sidebar_width - @sidebar_border_overhead - 1
+    # thumb is nil when the item count alone fits the row budget even
+    # though items+headers together didn't (the case that routed us into
+    # this windowed branch) -- {0, 0} renders a track with no thumb cell.
+    {thumb_start, thumb_size} = window.thumb || {0, 0}
+
+    window.visible
+    |> Enum.with_index()
+    |> Enum.map(fn {comp, row_idx} ->
+      idx = window.scroll_top + row_idx
+      label = pad_to_width(sidebar_item_label(model, comp, idx), item_width)
+      item_text = text(label, sidebar_item_opts(model, idx))
+
+      row style: %{gap: 0} do
+        [item_text, scrollbar_cell(row_idx, thumb_start, thumb_size)]
+      end
+    end)
+  end
+
+  defp sidebar_item_label(model, comp, idx) do
+    marker = if idx == model.cursor, do: " ▸ ", else: "   "
+    marker <> comp.name
+  end
+
+  defp sidebar_item_opts(model, idx) do
+    if idx == model.cursor, do: [style: [:bold], fg: :green], else: []
+  end
+
+  defp scrollbar_cell(row_idx, thumb_start, thumb_size) do
+    if row_idx >= thumb_start and row_idx < thumb_start + thumb_size do
+      text(" ", bg: @scrollbar_thumb_bg)
+    else
+      text(" ")
+    end
+  end
+
+  defp pad_to_width(content, width) do
+    {fit, _rest} = Raxol.UI.TextMeasure.split_at_display_width(content, width)
+    visible_width = Raxol.UI.TextMeasure.display_width(fit)
+    fit <> String.duplicate(" ", max(width - visible_width, 0))
+  end
+
+  defp sidebar_window(model) do
+    ScrollWindow.window(
+      model.components,
+      model.cursor,
+      sidebar_visible_height(model),
+      model.scroll_top
+    )
+  end
+
+  defp sidebar_chrome_lines(model) do
+    1 + length(active_filters(model)) +
+      if(model.focus == :search, do: 1, else: 0)
+  end
+
+  defp sidebar_visible_height(model) do
+    total_height = model.terminal_height || @default_terminal_height
+
+    max(
+      total_height - @chrome_lines - @box_border_lines -
+        sidebar_chrome_lines(model),
+      1
+    )
   end
 
   defp active_filters(model) do
@@ -473,7 +587,8 @@ defmodule Raxol.Playground.App do
   defp move_cursor(model, delta) do
     max_idx = length(model.components) - 1
     new_cursor = Raxol.Core.Utils.Math.clamp(model.cursor + delta, 0, max_idx)
-    %{model | cursor: new_cursor}
+    model = %{model | cursor: new_cursor}
+    %{model | scroll_top: sidebar_window(model).scroll_top}
   end
 
   defp select_current(model) do
@@ -515,7 +630,10 @@ defmodule Raxol.Playground.App do
       )
       |> sort_by_category()
 
-    %{model | components: components, cursor: 0}
+    # Jump-to-top, not a step: reset scroll_top directly rather than
+    # threading it through ScrollWindow, so the first category's header
+    # is guaranteed visible instead of merely "cursor is visible".
+    %{model | components: components, cursor: 0, scroll_top: 0}
   end
 
   defp forward_to_demo(model, event) do
@@ -539,6 +657,23 @@ defmodule Raxol.Playground.App do
     case :io.columns() do
       {:ok, cols} -> cols
       _ -> @default_terminal_width
+    end
+  end
+
+  defp detect_terminal_height do
+    case :io.rows() do
+      {:ok, rows} -> rows
+      _ -> @default_terminal_height
+    end
+  end
+
+  # Lifecycle passes `%{width:, height:, options:}` as init/1's context;
+  # prefer it over live TTY detection so headless/agent sessions (no TTY)
+  # get their configured size immediately instead of the 80x24 fallback.
+  defp context_dimension(context, key, fallback) do
+    case context do
+      %{^key => value} when is_integer(value) and value > 0 -> value
+      _ -> fallback.()
     end
   end
 

@@ -221,18 +221,20 @@ defmodule Raxol.UI.Layout.Engine do
     # Create a text element at the given position
     style_map = style_to_map(Map.get(attrs_map, :style, %{}))
 
-    text_element = %{
-      type: :text,
-      x: space.x,
-      y: space.y,
-      text: Map.get(attrs_map, :content, Map.get(attrs_map, :text, "")),
-      fg: Map.get(attrs_map, :fg),
-      bg: Map.get(attrs_map, :bg),
-      style: style_map,
-      link: Map.get(attrs_map, :link),
-      # Pass original attributes through, let Renderer handle styling
-      attrs: Map.put(attrs_map, :original_type, type)
-    }
+    text_element =
+      %{
+        type: :text,
+        x: space.x,
+        y: space.y,
+        text: Map.get(attrs_map, :content, Map.get(attrs_map, :text, "")),
+        fg: Map.get(attrs_map, :fg),
+        bg: Map.get(attrs_map, :bg),
+        style: style_map,
+        link: Map.get(attrs_map, :link),
+        # Pass original attributes through, let Renderer handle styling
+        attrs: Map.put(attrs_map, :original_type, type)
+      }
+      |> stamp_paint_bound(space)
 
     [text_element | acc]
   end
@@ -252,31 +254,33 @@ defmodule Raxol.UI.Layout.Engine do
         _ -> {0, 0}
       end
 
-    text_element = %{
-      type: :text,
-      # Carry the declaration id and explicit geometry at the top level so
-      # accessibility surfaces can map this cell span back to the source node
-      # (Browser data-raxol-id, ARIA). The renderer already honors an explicit
-      # width/height, so setting them here is behavior-preserving.
-      id: Map.get(element, :id),
-      x: space.x + dx,
-      y: space.y + dy,
-      width: Raxol.UI.TextMeasure.display_width(content),
-      # Match measure_element's line count: the renderer paints one row per
-      # `\n`-split line, so layout must reserve the same rows or later
-      # siblings get painted over.
-      height: content |> String.split("\n") |> length(),
-      text: content,
-      fg: Map.get(element, :fg),
-      bg: Map.get(element, :bg),
-      style: style_map,
-      link: Map.get(element, :link),
-      attrs: %{
-        style: style_map,
+    text_element =
+      %{
+        type: :text,
+        # Carry the declaration id and explicit geometry at the top level so
+        # accessibility surfaces can map this cell span back to the source node
+        # (Browser data-raxol-id, ARIA). The renderer already honors an explicit
+        # width/height, so setting them here is behavior-preserving.
         id: Map.get(element, :id),
-        original_type: :text
+        x: space.x + dx,
+        y: space.y + dy,
+        width: Raxol.UI.TextMeasure.display_width(content),
+        # Match measure_element's line count: the renderer paints one row per
+        # `\n`-split line, so layout must reserve the same rows or later
+        # siblings get painted over.
+        height: content |> String.split("\n") |> length(),
+        text: content,
+        fg: Map.get(element, :fg),
+        bg: Map.get(element, :bg),
+        style: style_map,
+        link: Map.get(element, :link),
+        attrs: %{
+          style: style_map,
+          id: Map.get(element, :id),
+          original_type: :text
+        }
       }
-    }
+      |> stamp_paint_bound(space)
 
     [text_element | acc]
   end
@@ -420,6 +424,9 @@ defmodule Raxol.UI.Layout.Engine do
     box_space = %{space | width: width, height: height}
     inner_space = box_inner_space(box_space, border, padding)
 
+    children_space =
+      stamp_text_paint_bound(inner_space, style, border, explicit_w)
+
     box_style = Map.get(box, :style, %{})
     animation_hints = Map.get(box, :animation_hints, [])
 
@@ -440,7 +447,7 @@ defmodule Raxol.UI.Layout.Engine do
 
     children_acc =
       children
-      |> process_children(inner_space, [])
+      |> process_children(children_space, [])
       |> apply_overflow_clip(style, inner_space, space)
 
     [box_element | children_acc] ++ acc
@@ -1178,6 +1185,41 @@ defmodule Raxol.UI.Layout.Engine do
   defp intersect_bounds({ax1, ay1, ax2, ay2}, {bx1, by1, bx2, by2}) do
     {max(ax1, bx1), max(ay1, by1), min(ax2, bx2), min(ay2, by2)}
   end
+
+  # Stamp `:text_paint_bound` for text inside a definite-boundary box
+  # (visible border or explicit/fill width) so `ElementRenderer` can
+  # ellipsize (or clip, via `text_overflow: :clip`) at paint time instead
+  # of painting past the border. Unbounded boxes don't stamp -- text
+  # stays unconstrained (existing behavior). A nested box's own stamp
+  # wins for its own subtree.
+  defp stamp_text_paint_bound(inner_space, style, border, explicit_w) do
+    if definite_box_bound?(border, explicit_w) do
+      Map.put(inner_space, :text_paint_bound, text_overflow_mode(style))
+    else
+      inner_space
+    end
+  end
+
+  defp definite_box_bound?(border, explicit_w) do
+    border not in [:none, false] or explicit_w == :fill or
+      is_integer(explicit_w)
+  end
+
+  defp text_overflow_mode(style) do
+    case Map.get(style, :text_overflow, :ellipsis) do
+      :clip -> :clip
+      _ellipsis_or_other -> :ellipsis
+    end
+  end
+
+  defp stamp_paint_bound(text_element, %{text_paint_bound: mode, width: width})
+       when mode in [:ellipsis, :clip] do
+    text_element
+    |> Map.put(:max_paint_width, max(width, 0))
+    |> Map.put(:text_overflow, mode)
+  end
+
+  defp stamp_paint_bound(text_element, _space), do: text_element
 
   defp enrich_flex_attrs(%{type: :flex} = flex) do
     existing = Map.get(flex, :attrs, %{})
