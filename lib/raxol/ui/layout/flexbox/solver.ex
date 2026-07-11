@@ -1,11 +1,8 @@
 defmodule Raxol.UI.Layout.Flexbox.Solver do
   @moduledoc """
   Resolve flexible lengths per CSS Flexbox spec section 9.7, on resolved
-  `Raxol.UI.Layout.FlexItem`s. Replaces `Distributor`'s single pass
-  (wired in by the integration node; until then this module is unreferenced
-  by the live path).
-
-  Differences from the naive pass it replaces:
+  `Raxol.UI.Layout.FlexItem`s. Called from
+  `Flexbox.calculate_single_line_layout/5` for every flex line.
 
     * free space computed from OUTER sizes (margins included; `:auto`
       margins count as 0 during sizing — positioning distributes into them)
@@ -196,7 +193,7 @@ defmodule Raxol.UI.Layout.Flexbox.Solver do
   defp apportion(exact, free) do
     floored =
       Enum.map(exact, fn {item, i, x} ->
-        base = trunc_toward_zero(x, free)
+        base = snap_candidate(x, free)
         {item, i, base, abs(x - base)}
       end)
 
@@ -214,8 +211,12 @@ defmodule Raxol.UI.Layout.Flexbox.Solver do
     |> Enum.sort_by(fn {_item, i, _s} -> i end)
   end
 
-  defp trunc_toward_zero(x, free) when free >= 0, do: trunc(:math.floor(x))
-  defp trunc_toward_zero(x, _free), do: trunc(:math.ceil(x))
+  # Floor in grow mode, ceil in shrink mode; apportion/2 then assigns the
+  # signed residue by largest remainder. The floor/ceil split is what keeps
+  # the integer accounting exact — replacing it with a plain truncation
+  # breaks the exact-sum invariant.
+  defp snap_candidate(x, free) when free >= 0, do: trunc(:math.floor(x))
+  defp snap_candidate(x, _free), do: trunc(:math.ceil(x))
 
   defp assign_residue(entries, 0, _step),
     do: Enum.map(entries, fn {item, i, s, _r} -> {item, i, s} end)

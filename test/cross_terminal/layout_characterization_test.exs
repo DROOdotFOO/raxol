@@ -423,11 +423,10 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
           [text("AAAA"), text("BBBB"), text("CCCC")]
         end
 
-      # engine's build_flex_attrs lifts flex_wrap (plus
-      # flex_direction/align_content) from style. Container 10
-      # wide, words 4 wide: two fit on line 0, third wraps to line 1.
-      # Output order is line-reversed (pre-existing Wrapper accumulation
-      # quirk, pinned elsewhere) - sort for a stable assertion.
+      # Container 10 wide, words 4 wide: two fit on line 0, third wraps.
+      # align-content defaults to :stretch, splitting the two 1-tall lines
+      # 5/5 (wrapped line starts at y=5). Output order is line-reversed, so
+      # sort for stability.
       result =
         layout(tree, %{width: 10, height: 10})
         |> Enum.sort_by(&{&1.y, &1.x})
@@ -435,7 +434,7 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       assert result == [
                %{type: :text, x: 0, y: 0, text: "AAAA"},
                %{type: :text, x: 4, y: 0, text: "BBBB"},
-               %{type: :text, x: 0, y: 1, text: "CCCC"}
+               %{type: :text, x: 0, y: 5, text: "CCCC"}
              ]
     end
 

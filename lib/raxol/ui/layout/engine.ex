@@ -1083,6 +1083,13 @@ defmodule Raxol.UI.Layout.Engine do  @moduledoc """
   defp containers_align(:end), do: :flex_end
   defp containers_align(other), do: other
 
+  # wrap may arrive as a boolean (Flex.container defaults wrap: false);
+  # only :nowrap selects the single-line path, so booleans must normalize
+  # or `wrap: false` silently enables wrapping.
+  defp normalize_wrap(true), do: :wrap
+  defp normalize_wrap(w) when w in [false, nil], do: :nowrap
+  defp normalize_wrap(w), do: w
+
   # Default children to shrink 0 via style.flex_shrink (read by
   # FlexItem.resolve). Deliberately NOT via :attrs — several element
   # processors treat the presence of an :attrs key as "old element
@@ -1187,13 +1194,23 @@ defmodule Raxol.UI.Layout.Engine do  @moduledoc """
       flex_direction:
         Map.get(style, :flex_direction) || Map.get(flex, :direction, :row),
       justify_content:
-        Map.get(style, :justify_content) ||
-          Map.get(flex, :justify, :flex_start),
+        containers_justify(
+          Map.get(style, :justify_content) ||
+            Map.get(flex, :justify, :flex_start)
+        ),
       align_items:
-        Map.get(style, :align_items) || Map.get(flex, :align, :stretch),
+        containers_align(
+          Map.get(style, :align_items) || Map.get(flex, :align, :stretch)
+        ),
       align_content:
-        Map.get(style, :align_content) || Map.get(flex, :align_content, :flex_start),
-      flex_wrap: Map.get(style, :flex_wrap) || Map.get(flex, :wrap, :nowrap),
+        containers_align(
+          Map.get(style, :align_content) ||
+            Map.get(flex, :align_content, :stretch)
+        ),
+      flex_wrap:
+        normalize_wrap(
+          Map.get(style, :flex_wrap) || Map.get(flex, :wrap, :nowrap)
+        ),
       gap: Map.get(style, :gap) || Map.get(flex, :gap, 0),
       padding: Map.get(style, :padding) || Map.get(flex, :padding, 0)
     }

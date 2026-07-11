@@ -125,6 +125,8 @@ defmodule Raxol.UI.Components.Display.Viewport do
   end
 
   def update({:update_props, props}, state) do
+    was_at_bottom = at_bottom?(state)
+
     new_state =
       state
       |> maybe_update(:children, props)
@@ -145,12 +147,17 @@ defmodule Raxol.UI.Components.Display.Viewport do
 
     new_state = %{new_state | content_height: content_height}
 
+    # overflow_anchor applies here too, not just {:set_children, ...}
     scroll_top =
-      clamp_scroll(
-        new_state.scroll_top,
-        new_state.content_height,
-        new_state.visible_height
-      )
+      if state.overflow_anchor == :auto and was_at_bottom do
+        max(0, new_state.content_height - new_state.visible_height)
+      else
+        clamp_scroll(
+          new_state.scroll_top,
+          new_state.content_height,
+          new_state.visible_height
+        )
+      end
 
     {%{new_state | scroll_top: scroll_top}, []}
   end
