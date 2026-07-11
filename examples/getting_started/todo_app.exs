@@ -164,7 +164,9 @@ defmodule TodoExample do
           text("#{prefix}#{check} #{todo.text}", style: style)
         end)
 
-      box style: %{padding: 1, border: :single, width: 40} do
+      # overflow: :hidden clips gracefully once enough todos are added to
+      # exceed the box's height, instead of the list bleeding past the border.
+      box style: %{padding: 1, border: :single, width: 40, overflow: :hidden} do
         column style: %{gap: 0} do
           items
         end

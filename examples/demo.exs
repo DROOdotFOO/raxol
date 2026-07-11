@@ -176,7 +176,8 @@ defmodule RaxolDemo do
   defp header_bar(model) do
     status = if model.paused, do: "PAUSED", else: clock()
 
-    box style: %{border: :double, width: :fill, padding: 0} do
+    # column stretch already fills width; :fill is not a real size
+    box style: %{border: :double, padding: 0} do
       row style: %{gap: 1, justify_content: :space_between} do
         [
           text("  R A X O L", style: [:bold], fg: :cyan),
@@ -379,9 +380,10 @@ defmodule RaxolDemo do
         end
       end)
 
+    # column stretch already fills width; :fill is not a real size
     panel =
       box id: "proc-panel",
-          style: %{border: panel_border(active), width: :fill, padding: 1} do
+          style: %{border: panel_border(active), padding: 1} do
         column style: %{gap: 0} do
           [
             text(panel_title("Top Processes", active),
