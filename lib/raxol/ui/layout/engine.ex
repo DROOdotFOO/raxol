@@ -1067,17 +1067,27 @@ defmodule Raxol.UI.Layout.Engine do
     attrs = Map.get(el, :attrs, %{})
     gap_default = if mode == :layout, do: 1, else: 0
 
+    # gap/justify/align may live in attrs OR top-level (Components.row/
+    # column put them top-level; old Containers read only attrs and
+    # silently ignored the top-level keys — honoring them fixes
+    # `Components.row(gap: 0)` actually meaning gap 0).
+    read = fn key, default ->
+      case Map.get(attrs, key) do
+        nil -> Map.get(el, key, default)
+        v -> v
+      end
+    end
+
     %{
       type: :flex,
       attrs: %{
         flex_direction: el.type,
-        justify_content:
-          containers_justify(Map.get(attrs, :justify, :start)),
-        align_items: containers_align(Map.get(attrs, :align, :start)),
+        justify_content: containers_justify(read.(:justify, :start)),
+        align_items: containers_align(read.(:align, :start)),
         align_content: :flex_start,
         flex_wrap: :nowrap,
-        gap: Map.get(attrs, :gap, gap_default),
-        padding: Map.get(attrs, :padding, 0)
+        gap: read.(:gap, gap_default),
+        padding: read.(:padding, 0)
       },
       style: Map.get(el, :style, %{}),
       children: el |> Map.get(:children, []) |> Enum.map(&compat_no_shrink/1)
