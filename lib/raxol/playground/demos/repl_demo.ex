@@ -97,7 +97,12 @@ defmodule Raxol.Playground.Demos.ReplDemo do
               border: :single,
               padding: 1,
               width: effective_width(model, @default_box_width),
-              height: @box_height
+              height: @box_height,
+              # Eval output is arbitrary user code -- a long `inspect`
+              # result can exceed the box width. `overflow: :hidden`
+              # (docs/core/LAYOUT.md section 2, F1) clips it inside the
+              # border instead of bleeding past it.
+              overflow: :hidden
             } do
           column style: %{gap: 0} do
             if visible_output == [],

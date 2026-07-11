@@ -1,12 +1,23 @@
 defmodule Raxol.Playground.Demos.SplitPaneDemo do
-  @moduledoc "Playground demo: resizable split pane with direction toggle."
+  @moduledoc """
+  Playground demo: resizable split pane with direction toggle.
+
+  Panes are sized via `style: %{width/height: {:pct, n}}` against an
+  explicit container width/height, since `{:pct, n}` only resolves against
+  a definite dimension. Does not override the automatic minimum size, so
+  panes refuse to shrink below their content floor at extreme ratios.
+  """
   use Raxol.Core.Runtime.Application
+
+  import Raxol.Playground.DemoHelpers, only: [effective_width: 2]
 
   @default_ratio 0.5
   @ratio_step 0.1
   @min_ratio 0.1
   @max_ratio 0.9
   @percent 100
+  @default_total_width 60
+  @stack_height 10
 
   @impl true
   def init(_context) do
@@ -49,9 +60,12 @@ defmodule Raxol.Playground.Demos.SplitPaneDemo do
     left_style = if model.focus == :left, do: [:bold], else: []
     right_style = if model.focus == :right, do: [:bold], else: []
     pct = round(model.ratio * @percent)
+    right_pct = @percent - pct
+
+    size_key = if model.direction == :horizontal, do: :width, else: :height
 
     left_pane =
-      box style: %{border: :single, padding: 1} do
+      box style: %{size_key => {:pct, pct}, border: :single, padding: 1} do
         column style: %{gap: 0} do
           [
             text("Left Pane#{left_indicator}", style: left_style),
@@ -61,22 +75,29 @@ defmodule Raxol.Playground.Demos.SplitPaneDemo do
       end
 
     right_pane =
-      box style: %{border: :single, padding: 1} do
+      box style: %{
+            size_key => {:pct, right_pct},
+            border: :single,
+            padding: 1
+          } do
         column style: %{gap: 0} do
           [
             text("Right Pane#{right_indicator}", style: right_style),
-            text("Ratio: #{@percent - pct}%")
+            text("Ratio: #{right_pct}%")
           ]
         end
       end
 
     panes =
       if model.direction == :horizontal do
-        row style: %{gap: 1} do
+        row style: %{
+              gap: 1,
+              width: effective_width(model, @default_total_width)
+            } do
           [left_pane, right_pane]
         end
       else
-        column style: %{gap: 1} do
+        column style: %{gap: 1, height: @stack_height} do
           [left_pane, right_pane]
         end
       end
