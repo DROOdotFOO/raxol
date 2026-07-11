@@ -403,16 +403,18 @@ defmodule Raxol.Application do
     get_feature_flag(features, feature)
   end
 
+  @doc false
   # Tolerate both a map (the documented shape) and a keyword list, since config
   # files commonly express `config :raxol, :features, key: value` as a keyword
-  # list, which Map.get would reject with a BadMapError at boot.
-  defp get_feature_flag(features, feature) when is_map(features),
+  # list, which Map.get would reject with a BadMapError at boot. Public only so
+  # it can be unit-tested directly.
+  def get_feature_flag(features, feature) when is_map(features),
     do: Map.get(features, feature, false)
 
-  defp get_feature_flag(features, feature) when is_list(features),
+  def get_feature_flag(features, feature) when is_list(features),
     do: Keyword.get(features, feature, false)
 
-  defp get_feature_flag(_features, _feature), do: false
+  def get_feature_flag(_features, _feature), do: false
 
   defp default_features do
     %{

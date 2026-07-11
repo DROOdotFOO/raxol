@@ -11,6 +11,12 @@ defmodule RaxolPlaygroundWeb.HealthController do
       ssh: check_ssh()
     }
 
+    # Only genuinely fatal states take the machine out of rotation (503).
+    # PubSub down breaks LiveView, and critical memory is unsafe. SSH is an
+    # optional playground extra and a memory "warning" is tolerable, so neither
+    # degrades the service to 503; the JSON still reports the real state.
+    critical? = checks.pubsub in ["down", "error"] or checks.memory == "critical"
+
     all_ok = Enum.all?(checks, fn {_k, v} -> v in ["ok", "not_configured"] end)
 
     status = %{
@@ -20,7 +26,7 @@ defmodule RaxolPlaygroundWeb.HealthController do
       checks: checks
     }
 
-    http_status = if all_ok, do: 200, else: 503
+    http_status = if critical?, do: 503, else: 200
 
     conn
     |> put_status(http_status)
