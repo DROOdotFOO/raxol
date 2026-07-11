@@ -177,7 +177,9 @@ defmodule Raxol.Core.Renderer.View.Components do
   def table(opts \\ []) do
     %{
       type: :table,
-      data: Keyword.get(opts, :data, []),
+      # `rows:` and `data:` are both accepted (the sibling builder in
+      # Raxol.View.Components uses `rows:`; callers mix the two)
+      data: Keyword.get(opts, :data) || Keyword.get(opts, :rows, []),
       headers: Keyword.get(opts, :headers, []),
       style: Keyword.get(opts, :style, %{}),
       border: Keyword.get(opts, :border, :single)

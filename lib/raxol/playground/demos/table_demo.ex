@@ -48,13 +48,16 @@ defmodule Raxol.Playground.Demos.TableDemo do
   def view(model) do
     rows = sorted_data(model)
 
-    rendered_rows =
+    # Real :table element (column widths computed by Raxol.UI.Layout.Table
+    # — aligned columns, not hand-joined strings). Cursor is shown by a
+    # marker column since the plain table element carries no selection
+    # state; the stateful Raxol.UI.Components.Table adds that plus
+    # pagination/filtering.
+    marked_rows =
       rows
       |> Enum.with_index()
       |> Enum.map(fn {row, idx} ->
-        prefix = DemoHelpers.cursor_prefix(idx, model.cursor)
-        style = if idx == model.cursor, do: [:bold], else: []
-        text(prefix <> Enum.join(row, "  |  "), style: style)
+        [DemoHelpers.cursor_prefix(idx, model.cursor) | row]
       end)
 
     sort_label =
@@ -70,10 +73,7 @@ defmodule Raxol.Playground.Demos.TableDemo do
       [
         text("Table Demo", style: [:bold]),
         divider(),
-        text("  " <> Enum.join(@headers, "  |  "), style: [:underline]),
-        column style: %{gap: 0} do
-          rendered_rows
-        end,
+        table(headers: ["" | @headers], rows: marked_rows),
         divider(),
         row style: %{gap: 2} do
           [
