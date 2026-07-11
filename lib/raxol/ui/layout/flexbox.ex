@@ -5,15 +5,10 @@ defmodule Raxol.UI.Layout.Flexbox do  @moduledoc """
   (`Flexbox.Solver`), gap, and item `order`. Baseline alignment is
   intentionally unsupported.
 
-  This module provides CSS Flexbox-compatible layout calculations with support for:
-  - Flex direction (row, column, row-reverse, column-reverse)
-  - Justify content (flex-start, flex-end, center, space-between, space-around, space-evenly)
-  - Align items (flex-start, flex-end, center, stretch, baseline)
-  - Align content (flex-start, flex-end, center, stretch, space-between, space-around)
-  - Flex wrapping (nowrap, wrap, wrap-reverse)
-  - Flex grow, shrink, and basis
-  - Gap properties
-  - Order property for reordering items
+  See `docs/core/LAYOUT.md` for the property reference and intentional
+  CSS divergences.
+
+  ## Example
 
       %{
         type: :flex,
