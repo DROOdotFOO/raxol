@@ -1,7 +1,7 @@
 defmodule Raxol.CrossTerminal.OverflowTest do
   @moduledoc """
-  Proposal Phase F: `overflow` container property (F1) and Viewport
-  `overflow_anchor` bottom-follow (F2).
+  The `overflow` container property and Viewport `overflow_anchor`
+  bottom-follow.
   """
   use ExUnit.Case, async: true
 
@@ -10,7 +10,7 @@ defmodule Raxol.CrossTerminal.OverflowTest do
   alias Raxol.UI.Components.Display.Viewport
   require Raxol.Core.Renderer.View
 
-  describe "overflow: :hidden stamps clip_bounds (F1)" do
+  describe "overflow: :hidden stamps clip_bounds" do
     defp overflowing_box(overflow) do
       V.box(
         style: %{border: :single, width: 10, height: 4, overflow: overflow},
@@ -80,7 +80,7 @@ defmodule Raxol.CrossTerminal.OverflowTest do
     end
   end
 
-  describe "Viewport overflow_anchor (F2)" do
+  describe "Viewport overflow_anchor" do
     defp viewport(props) do
       {:ok, state} = Viewport.init(props)
       state

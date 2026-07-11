@@ -232,15 +232,6 @@ defmodule Raxol.Examples.ButtonTest do
           focused: false
         })
 
-      # re-pinned N14: test/support/raxol/visual.ex now lays out through
-      # Raxol.UI.Layout.Engine (live pipeline) instead of the legacy,
-      # production-dead Raxol.Core.Renderer.Layout stack. The legacy stack's
-      # :position/:size element shape never matched what
-      # Raxol.UI.Renderer.render_to_cells/2 (already production's cell
-      # renderer, called downstream in the harness) expects, so this
-      # snapshot was previously a blank 80x24 buffer. It now shows a real
-      # bordered button box with the "Button" label -- verified sane by
-      # rendering and eyeballing the grid before re-pinning.
       assert_matches_snapshot(
         button,
         "button_submit",
@@ -270,11 +261,6 @@ defmodule Raxol.Examples.ButtonTest do
       assert Map.get(normal_view.attrs, :disabled, false) == false
       assert Map.get(disabled_view.attrs, :disabled, false) == true
 
-      # re-pinned N14 (both below): same harness re-point as button_submit
-      # above -- Raxol.UI.Layout.Engine now produces x/y/width/height
-      # elements the cell renderer actually understands, so these went
-      # from blank buffers to real "┌───┐ / │ Normal │ / └───┘" and
-      # "│ Disabled │" boxes respectively. Verified sane before re-pinning.
       assert_matches_snapshot(normal_button, "button_normal", context)
       assert_matches_snapshot(disabled_button, "button_disabled", context)
     end

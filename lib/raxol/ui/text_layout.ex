@@ -13,21 +13,15 @@ defmodule Raxol.UI.TextLayout do
   | `:pre_wrap` | preserve  | preserve               | yes              |
   | `:pre_line` | preserve  | collapse               | yes              |
 
-  `:normal` is the default and is deliberately **bit-identical** to the
-  pre-existing `Raxol.UI.Components.Input.TextWrapping.wrap_line_by_word/2`
-  behavior (it delegates to it directly) -- including that function's
-  pre-existing character-count-based (not display-width-based) line-fit
-  check. That means `:normal` is not CJK-width-safe today; this is a known,
-  intentionally preserved divergence (see moduledoc note on
-  `Raxol.UI.Components.Input.TextWrapping`), not something this module
-  fixes, because Phase E of the flex-spec-convergence proposal requires the
-  default to match current production output exactly. The other four modes
-  are new code and *are* display-width safe via `Raxol.UI.TextMeasure`.
+  `:normal` delegates to `TextWrapping.wrap_line_by_word/2` and is
+  deliberately bit-identical to it, including its character-count-based
+  (not display-width) line-fit check — so `:normal` is not CJK-width-safe.
+  This is an intentionally preserved divergence; the other four modes are
+  display-width safe via `Raxol.UI.TextMeasure`.
 
-  Word-vs-character break granularity (i.e. CSS `word-break`/`overflow-wrap`)
-  is a different, orthogonal axis from `white-space` and is not modeled
-  here; `Raxol.UI.Components.Input.TextWrapping.wrap_line_by_char/2` remains
-  a separate, untouched utility for that use case.
+  Word-vs-character break granularity (CSS `word-break`/`overflow-wrap`) is
+  a separate axis not modeled here; see
+  `Raxol.UI.Components.Input.TextWrapping.wrap_line_by_char/2`.
   """
 
   alias Raxol.UI.Components.Input.TextWrapping

@@ -1,8 +1,6 @@
 defmodule Raxol.Core.Renderer.ViewTest do  @moduledoc """
   Tests for the view module: creation, spacing normalization, and
-  construction-time validation. `View.layout/2` and the layout-geometry
-  tests it backed were deleted in N15 (flex rework Phase D) along with
-  the production-dead legacy layout stack it delegated to.
+  construction-time validation.
   """
   use ExUnit.Case, async: true
   alias Raxol.Core.Renderer.View
@@ -77,19 +75,6 @@ defmodule Raxol.Core.Renderer.ViewTest do  @moduledoc """
     end
   end
 
-  # N15 (flex rework Phase D): the `describe "layout/2"` and
-  # `describe "flex layout features"` blocks that used to live here
-  # exercised `View.layout/2`, which delegated to the now-deleted
-  # `Raxol.Core.Renderer.Layout` coordinator (D5's "third stack",
-  # production-dead -- see docs/proposals/in-flight/flex-spec-convergence.md).
-  # Tests that pinned that dead pipeline's geometry were deleted along
-  # with it. The four tests below exercised construction-time validation
-  # (`Flex.container/1`'s direction check, `Border.wrap/2`, `Scroll.new/2`,
-  # `View.shadow/1`) rather than layout math, so they survive, relocated
-  # out of the deleted describe blocks. "handles invalid grid columns"
-  # was deleted along with it: it exercised `View.grid`/`Grid.new`, which
-  # were also production-dead (zero callers besides this test) and
-  # deleted in the same pass.
   describe "construction-time validation" do
     test "handles invalid flex direction" do
       assert_raise ArgumentError, "Invalid flex direction: :invalid", fn ->

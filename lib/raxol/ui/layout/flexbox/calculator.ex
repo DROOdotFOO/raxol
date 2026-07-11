@@ -50,10 +50,6 @@ defmodule Raxol.UI.Layout.Flexbox.Calculator do
     %{width: total_width, height: total_height}
   end
 
-  # Legacy calculate_layout/distribute_flex API deleted (flex rework N11;
-  # zero production callers — served only the removed Flexbox.new/:flexbox
-  # struct API). The live Solver handles distribution now.
-
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------

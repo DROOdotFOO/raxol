@@ -1,8 +1,8 @@
 defmodule Raxol.UI.Layout.Flexbox.AlignContentStretchTest do
   @moduledoc """
-  align-content: :stretch for wrapped flex lines (flex rework N12 residual).
-  Lines share the container's free cross space (largest remainder) and
-  stretch-aligned items grow with their line.
+  align-content: :stretch for wrapped flex lines. Lines share the
+  container's free cross space (largest remainder) and stretch-aligned
+  items grow with their line.
   """
   use ExUnit.Case, async: true
 

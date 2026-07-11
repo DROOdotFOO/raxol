@@ -1,7 +1,7 @@
 defmodule Raxol.UI.Layout.Flexbox.SolverTest do
   @moduledoc """
-  Spec-example tests for the section 9.7 solver (flex rework N6).
-  Vectors hand-derived from the CSS Flexbox spec algorithm.
+  Spec-example tests for the section 9.7 solver. Vectors hand-derived
+  from the CSS Flexbox spec algorithm.
   """
   use ExUnit.Case, async: true
   use ExUnitProperties
@@ -18,7 +18,7 @@ defmodule Raxol.UI.Layout.Flexbox.SolverTest do
 
   defp sizes(items), do: Enum.map(items, & &1.main_size)
 
-  describe "flex: 1 equalization (D2 goal)" do
+  describe "flex: 1 equalization" do
     test "three flex:1 items with unequal content equalize exactly" do
       items = for _ <- 1..3, do: item(base_size: 0, grow: 1, min_main: 0)
       assert solve(items, 90) |> sizes() == [30, 30, 30]

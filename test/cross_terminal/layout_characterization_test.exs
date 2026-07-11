@@ -1,36 +1,14 @@
 defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
   @moduledoc """
-  Characterization net for the live layout engine (wave 0 of the flex
-  solver rewrite, see `docs/proposals/in-flight/flex-spec-convergence.md`).
+  Characterization net for the live layout engine.
 
-  Pins the CURRENT geometry of `Raxol.UI.Layout.Engine.apply_layout/2`
-  across the two flex-like dialects the proposal identified as alive:
+  Pins the CURRENT geometry of `Raxol.UI.Layout.Engine.apply_layout/2` across
+  the two dialects it dispatches: View DSL `row`/`column`/`flex` (the
+  `Flexbox` path) and literal `:row`/`:column` elements (the Containers-dialect
+  compat map), which has its own gap/align/justify defaults.
 
-    1. `:flex` elements (View DSL `row`/`column`/`flex` macros) -> the real
-       `Raxol.UI.Layout.Flexbox` path.
-    2. Literal `:row`/`:column` elements -> `Raxol.UI.Layout.Containers`, a
-       different dialect with its own gap/align/justify defaults (the D4
-       compat-map baseline).
-
-  A third dialect, `Raxol.Core.Renderer.View.layout/2` -> the separate
-  legacy stack (`Core.Renderer.View.Layout.Flex.calculate_layout/2`,
-  ~440 LOC, D5), was pinned here (section 11, LEGACY-STACK) until its
-  N15 Phase D deletion so the deletion would be a deliberate, detectable
-  act. That deletion has landed: `View.layout/2`, the
-  `Raxol.Core.Renderer.Layout` coordinator, its `Grid` counterpart, and
-  `Flex.calculate_layout/2` are gone, and the LEGACY-STACK pins were
-  removed with them. `Flex`'s `row`/`column`/`container` constructors
-  (dialect 1 above) and `Box.new/1` survive -- they feed the live engine
-  independent of the deleted calculation code.
-
-  Every expected value here was captured by actually running
-  `Raxol.UI.Layout.Engine.apply_layout/2` against the committed state of
-  the layout engine BEFORE the Phase A rewrite touched `flexbox.ex` /
-  `flexbox/*` / `layout_utils.ex`. Pins document behavior AS-IS, including
-  quirks and outright bugs; each quirk carries a comment. These are not
-  "correct" assertions — they are a tripwire: if Phase A changes a number
-  here, the change was either intentional (re-pin consciously) or a
-  regression.
+  Pins behavior as-is, quirks included; a changed number here is either a
+  conscious re-pin or a regression.
   """
 
   use ExUnit.Case, async: true
@@ -40,10 +18,10 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
   require Raxol.Core.Renderer.View
   alias Raxol.Core.Renderer.View, as: LegacyView
 
-  # Reduces every positioned element to the fields the task asked us to
-  # pin: type/x/y/width/height plus text content when present. This is
+  # Reduces every positioned element to the fields these pins track:
+  # type/x/y/width/height plus text content when present. This is
   # deliberately lossy (drops style/attrs/fg/bg) so pins stay readable and
-  # focus on GEOMETRY, which is what Phase A is allowed to touch.
+  # focused on geometry.
   defp simplify(elements) do
     Enum.map(elements, fn el ->
       base = Map.take(el, [:type, :x, :y, :width, :height])
@@ -439,15 +417,14 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       assert tree.style == %{flex_wrap: :wrap}
     end
 
-    test "style-based flex_wrap is honored by the live engine (re-pinned N16-followup)" do
+    test "style-based flex_wrap is honored by the live engine" do
       tree =
         LegacyView.flex style: %{flex_wrap: :wrap}, direction: :row do
           [text("AAAA"), text("BBBB"), text("CCCC")]
         end
 
-      # re-pinned: engine's build_flex_attrs now lifts flex_wrap (plus
-      # flex_direction/align_content) from style, closing the original
-      # "structurally unreachable from the View DSL" finding. Container 10
+      # engine's build_flex_attrs lifts flex_wrap (plus
+      # flex_direction/align_content) from style. Container 10
       # wide, words 4 wide: two fit on line 0, third wraps to line 1.
       # Output order is line-reversed (pre-existing Wrapper accumulation
       # quirk, pinned elsewhere) - sort for a stable assertion.
@@ -483,17 +460,10 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
         children: [text("AAAAAA"), text("BBBBBB"), text("CCCCCC")]
       }
 
-      # Container is 10 wide; each 6-wide word alone fits (6<=10) but two
-      # together don't (6+6=12>10), so each word gets its own line. NOTE
-      # the returned order: lines come back reverse-of-visual-order
-      # (C, B, A) even though the Y coordinates are correctly ascending --
-      # `Wrapper.place_lines_cross/5` builds the accumulator via
-      # `positioned_line ++ acc`. Pinned as-is.
-      #
-      # re-pinned N12: align-content defaults to :stretch (CSS initial
-      # value) and Wrapper now implements it -- three 1-tall lines in a
-      # 10-tall container get stretched allocations 4/3/3, so lines start
-      # at y=0/4/7 instead of 0/1/2.
+      # Each 6-wide word alone fits but two together don't, so each gets its
+      # own line; order comes back reversed (C, B, A) even though y is
+      # ascending (`Wrapper.place_lines_cross/5` prepends). align-content
+      # defaults to :stretch, giving allocations 4/3/3 (y = 0/4/7).
       assert layout(tree, %{width: 10, height: 10}) == [
                %{type: :text, x: 0, y: 7, text: "CCCCCC"},
                %{type: :text, x: 0, y: 4, text: "BBBBBB"},
@@ -508,13 +478,9 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
         children: [text("AAAAAAAAAAAAAAAAAAAA"), text("B")]
       }
 
-      # First item is 20 wide against a 10-wide container -- Wrapper still
-      # places it (an empty `current_line` always accepts the first item
-      # regardless of fit), then "B" can't share the line (20+0+1 > 10) so
-      # it starts its own line. Same reversed-order quirk as above.
-      #
-      # re-pinned N12: default align-content :stretch expands the two
-      # 1-tall lines to 5/5, so line two starts at y=5 instead of y=1.
+      # An empty line always accepts its first item regardless of fit, so the
+      # 20-wide item gets its own line; "B" can't share it and starts a new
+      # one. align-content :stretch splits the two lines 5/5 (y=5).
       assert layout(tree, %{width: 10, height: 10}) == [
                %{type: :text, x: 0, y: 5, text: "B"},
                %{type: :text, x: 0, y: 0, text: "AAAAAAAAAAAAAAAAAAAA"}
@@ -523,28 +489,11 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
   end
 
   # ---------------------------------------------------------------------
-  # 8. Literal :row / :column element types -- Raxol.UI.Layout.Containers,
-  #    the OTHER dialect (not View DSL row/column, which build :flex maps
-  #    processed by Flexbox). This is the D4 compat-map baseline: the
-  #    Containers defaults Phase D must preserve when :row/:column unify
-  #    into :flex.
-  #
-  #    Containers defaults (containers.ex module attributes):
-  #      @default_gap    1        (Flexbox's default is 0 -- MISMATCH)
-  #      @default_justify :start  (valid Containers value; unlike Flexbox,
-  #                                Containers' own case statement DOES
-  #                                handle :start directly)
-  #      @default_align   :start  (Flexbox's default is :stretch -- MISMATCH)
-  #
-  #    re-pinned N17: Containers is DELETED; literal :row/:column now run
-  #    on the flex engine via `containers_compat_to_flex/2` (engine.ex).
-  #    All geometry below is byte-identical to the Containers baseline
-  #    (gap 1, justify :start, align :start, explicit attrs) -- verified
-  #    by sorted comparison at migration time. Only the LIST ORDER
-  #    changed: Containers returned children reversed, flex returns
-  #    document order. Assertions now use document order.
+  # Literal :row/:column route through the Containers-dialect compat map,
+  # whose defaults (gap 1, justify :start, align :start) differ from
+  # Flexbox's own defaults (gap 0, align :stretch).
   # ---------------------------------------------------------------------
-  describe "literal :row / :column (Containers dialect, D4 compat baseline)" do
+  describe "literal :row / :column (Containers-dialect compat baseline)" do
     test "literal :row uses Containers defaults: gap 1, justify :start, align :start" do
       tree = %{
         type: :row,
@@ -555,7 +504,7 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
         ]
       }
 
-      # Gap 1 between 2-wide labels (x = 0, 3, 6); document order (N17).
+      # Gap 1 between 2-wide labels (x = 0, 3, 6); document order.
       assert layout(tree, %{width: 30, height: 10}) == [
                %{type: :text, x: 0, y: 0, text: "R1"},
                %{type: :text, x: 3, y: 0, text: "R2"},
@@ -744,20 +693,4 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       end
     end
   end
-
-  # ---------------------------------------------------------------------
-  # 11. LEGACY-STACK pins removed (N15, flex rework Phase D): they pinned
-  #     Raxol.Core.Renderer.View.layout/2, backed by
-  #     Raxol.Core.Renderer.Layout.apply_layout/2 ->
-  #     Raxol.Core.Renderer.View.Layout.Flex.calculate_layout/2
-  #     (~440 LOC, D5) specifically so that stack's deletion would be a
-  #     deliberate, detectable act rather than a silent behavior change.
-  #     That deletion has now happened: View.layout/2, the
-  #     Raxol.Core.Renderer.Layout coordinator, its Grid counterpart, and
-  #     Flex.calculate_layout/2 + private helpers are gone. Flex's
-  #     row/column/container constructors (and Box.new/1) survive --
-  #     they feed the live Raxol.UI.Layout.Engine pipeline pinned by the
-  #     sections above, unrelated to the deleted stack. See
-  #     docs/proposals/in-flight/flex-spec-convergence.md D5.
-  # ---------------------------------------------------------------------
 end
