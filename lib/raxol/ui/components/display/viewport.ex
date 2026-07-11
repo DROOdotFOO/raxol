@@ -14,7 +14,12 @@ defmodule Raxol.UI.Components.Display.Viewport do
   @behaviour Raxol.MCP.ToolProvider
   @behaviour Raxol.Core.Accessibility.Provider
 
+  alias Raxol.UI.ScrollWindow
   alias Raxol.View.Components
+
+  # Pale pastel blue, low-intensity so it reads as a subtle wash rather
+  # than a bright highlight against a dark terminal background.
+  @subtle_thumb_bg {110, 140, 180}
 
   @type t :: %{
           id: any(),
@@ -28,6 +33,7 @@ defmodule Raxol.UI.Components.Display.Viewport do
           style: map(),
           theme: map(),
           show_scrollbar: boolean(),
+          scrollbar_style: :glyph | :subtle,
           focused: boolean()
         }
 
@@ -58,6 +64,7 @@ defmodule Raxol.UI.Components.Display.Viewport do
       style: Map.get(props, :style, %{}),
       theme: Map.get(props, :theme, %{}),
       show_scrollbar: Map.get(props, :show_scrollbar, true),
+      scrollbar_style: Map.get(props, :scrollbar_style, :glyph),
       focused: Map.get(props, :focused, false),
       # :auto pins to bottom when at end (follow mode); :none freezes scroll_top.
       overflow_anchor: Map.get(props, :overflow_anchor, :auto)
@@ -133,6 +140,7 @@ defmodule Raxol.UI.Components.Display.Viewport do
       |> maybe_update(:visible_height, props)
       |> maybe_update(:visible_width, props)
       |> maybe_update(:show_scrollbar, props)
+      |> maybe_update(:scrollbar_style, props)
       |> maybe_update(:style, props)
       |> maybe_update(:theme, props)
 
@@ -244,23 +252,42 @@ defmodule Raxol.UI.Components.Display.Viewport do
     total = state.content_height
     visible = state.visible_height
 
-    thumb_size = max(1, div(visible * visible, max(total, 1)))
-    scrollable = max_scroll(total, visible)
-
-    thumb_pos =
-      if scrollable > 0,
-        do: div(state.scroll_top * (visible - thumb_size), scrollable),
-        else: 0
+    {thumb_start, thumb_size} =
+      ScrollWindow.thumb(state.scroll_top, visible, total) || {0, 0}
 
     track =
-      Enum.map(0..(visible - 1), fn i ->
-        char =
-          if i >= thumb_pos and i < thumb_pos + thumb_size, do: "█", else: "░"
-
-        Components.text(content: char, style: %{fg: :white})
-      end)
+      render_scrollbar_track(
+        state.scrollbar_style,
+        visible,
+        thumb_start,
+        thumb_size
+      )
 
     %{type: :column, style: %{}, children: track}
+  end
+
+  # :glyph -- solid/light block characters mark the thumb against the track,
+  # foreground-colored (works without truecolor support).
+  defp render_scrollbar_track(:glyph, visible, thumb_start, thumb_size) do
+    Enum.map(0..(visible - 1), fn i ->
+      char =
+        if i >= thumb_start and i < thumb_start + thumb_size, do: "█", else: "░"
+
+      Components.text(content: char, style: %{fg: :white})
+    end)
+  end
+
+  # :subtle -- no glyphs at all; only the thumb rows get a pale pastel-blue
+  # background wash, the track is otherwise blank. Reads as a hint rather
+  # than a hard UI chrome element.
+  defp render_scrollbar_track(:subtle, visible, thumb_start, thumb_size) do
+    Enum.map(0..(visible - 1), fn i ->
+      if i >= thumb_start and i < thumb_start + thumb_size do
+        Components.text(content: " ", bg: @subtle_thumb_bg)
+      else
+        Components.text(content: " ")
+      end
+    end)
   end
 
   defp scroll(state, delta) do
