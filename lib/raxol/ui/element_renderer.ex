@@ -257,8 +257,18 @@ defmodule Raxol.UI.ElementRenderer do
     bg = resolve_bg(style)
     attrs = extract_text_attrs(style) ++ hyperlink_attrs(style)
 
-    # Width-aware text rendering - CJK/fullwidth chars advance x by 2
+    # split \n; never emit a newline cell (resets cursor to col 0)
     text
+    |> String.split("\n")
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {line, row_offset} ->
+      render_text_line(line, x, y + row_offset, fg, bg, attrs)
+    end)
+  end
+
+  # Width-aware text rendering - CJK/fullwidth chars advance x by 2
+  defp render_text_line(line, x, y, fg, bg, attrs) do
+    line
     |> String.graphemes()
     |> Enum.reduce({[], x}, fn char, {cells, cur_x} ->
       w = Raxol.UI.TextMeasure.char_display_width(char)
