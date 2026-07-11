@@ -5,13 +5,11 @@
 ## Quick Start
 
 ```elixir
-config :raxol_watch,
-  push_backend: Raxol.Watch.Push.APNS,
-  push_opts: [key_id: "ABC", team_id: "XYZ", topic: "io.example.app"]
-
 children = [
-  Raxol.Watch.Supervisor
+  {Raxol.Watch.Supervisor, push_backend: Raxol.Watch.Push.APNS}
 ]
+
+# APNS/FCM credentials are read by the backend module from its own config.
 ```
 
 Register a device:
@@ -155,7 +153,7 @@ Notification fields exposed: `body_long`, `audio_url`, `image_url`, `media_type`
 - `data.raxol_location` (JSON-encoded map; FCM data values must be strings)
 - `data.raxol_body_long` (only when distinct from `body`)
 
-The host iOS / Wear OS app is responsible for actually downloading the media and rendering the rich UI: `UNNotificationServiceExtension` on iOS, `NotificationCompat` + `BigPictureStyle` / `MessagingStyle` on Android.
+The host iOS / Wear OS app downloads the media and renders the notification: `UNNotificationServiceExtension` on iOS, `NotificationCompat` + `BigPictureStyle` / `MessagingStyle` on Android.
 
 ## Device Registry
 
@@ -165,5 +163,5 @@ Devices don't expire automatically. Hook `unregister/1` into your auth layer whe
 
 ## See Also
 
-- [Telegram](TELEGRAM.md): richer messaging surface
+- [Telegram](TELEGRAM.md): interactive messaging surface
 - [Speech](SPEECH.md): the other accessibility-driven surface

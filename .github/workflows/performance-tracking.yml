@@ -90,9 +90,9 @@ jobs:
             ~/.hex
             ~/.mix
             priv/plts
-          key: deps-${{ runner.os }}-${{ hashFiles('**/mix.lock') }}
+          key: deps-${{ runner.os }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            deps-${{ runner.os }}-
+            deps-${{ runner.os }}-${{ hashFiles('**/mix.exs') }}-
       
       - name: Install dependencies
         run: |
@@ -162,7 +162,7 @@ jobs:
             ~/.mix
             priv/plts
             .raxol_cache
-          key: deps-${{ runner.os }}-${{ hashFiles('**/mix.lock') }}
+          key: deps-${{ runner.os }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
       
       - name: Install dependencies
         run: |

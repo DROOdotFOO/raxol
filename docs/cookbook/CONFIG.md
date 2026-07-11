@@ -43,6 +43,11 @@ blink_rate = 500         # ms
 palette = "default"      # default, solarized, dracula, nord
 true_color = true
 
+[terminal.font]
+family = "monospace"     # font family
+size = 12                # point size
+bold = false             # bold by default
+
 # Buffer
 [buffer]
 max_size = 1048576       # 1MB

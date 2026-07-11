@@ -40,7 +40,7 @@ defmodule MySshApp do
     case msg do
       :increment -> {%{model | count: model.count + 1}, []}
       :decrement -> {%{model | count: model.count - 1}, []}
-      %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} -> {model, [command(:quit)]}
+      %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} -> {model, [Directive.stop()]}
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "="}} -> update(:increment, model)
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "-"}} -> update(:decrement, model)
       _ -> {model, []}

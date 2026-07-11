@@ -16,12 +16,11 @@ Backends behind `Raxol.Speech.TTS.Backend`:
 - `OsSay`: macOS `say`, Linux `espeak`. Sanitizes input (strips control chars, caps at 10KB).
 - `Noop`: swallows speech. Default in test and CI.
 
-Pick a backend in config:
+Pick a backend when you start the supervisor:
 
 ```elixir
-config :raxol_speech,
-  tts_backend: Raxol.Speech.TTS.OsSay,
-  tts_opts: [voice: "Samantha", rate: 200]
+# in your supervision tree
+{Raxol.Speech.Supervisor, tts_backend: Raxol.Speech.TTS.OsSay}
 ```
 
 ## STT
@@ -58,13 +57,15 @@ Optional deps: `bumblebee`, `nx`, `exla`. Without them, `Recognizer.recognize/1`
 
 Any phrase that is not a recognized command falls through to a `:paste` event with the original text as payload, so dictating prose injects it verbatim.
 
-Custom commands extend the map:
+Custom commands merge with the defaults via the `:commands` option:
 
 ```elixir
-config :raxol_speech, :voice_commands, %{
-  "save now" => {:key, :ctrl_s},
-  "search" => {:focus, "search-input"}
-}
+Raxol.Speech.InputAdapter.translate(text,
+  commands: %{
+    "save" => {:key, %{key: :char, char: "s", modifiers: [:ctrl]}},
+    "new tab" => {:key, %{key: :char, char: "t", modifiers: [:ctrl]}}
+  }
+)
 ```
 
 ## Security

@@ -24,7 +24,7 @@ defmodule MyApp.TelegramHandler do
 end
 ```
 
-The bot token belongs to Telegex's own config (`config :telegex, token: ...`), not to `:raxol_telegram`. `allowed_chat_ids` is passed at the `handle_update/2` call site; there is no app-env config for it.
+The Telegex polling handler uses Telegex's own config (`config :telegex, token: ...`). The Bot API 10.x senders (`Raxol.Telegram.HTTP`) also take the token from a `bot_token:` option or `config :raxol_telegram, bot_token: ...`. `allowed_chat_ids` is passed at the `handle_update/2` call site.
 
 Send a message to the bot from an allowed chat and the router spawns a `Session` for that chat. The session hosts a Lifecycle with `environment: :telegram`.
 

@@ -91,7 +91,8 @@ alias Raxol.Agent.Comm
 
 # Broadcast to every agent in a team
 :ok = Comm.broadcast_team(:my_team, {:status_update, status})
-# Arrives as {:team_broadcast, :my_team, {:status_update, status}}
+# Arrives in each teammate's update/2 as
+# {:agent_message, from_id, {:team_broadcast, :my_team, {:status_update, status}}}
 ```
 
 ## Teams
@@ -119,7 +120,7 @@ Commands returned from `update/2` are processed by Lifecycle:
 | Command    | Helper                        | Result in update/2                                                   |
 | ---------- | ----------------------------- | -------------------------------------------------------------------- |
 | Async      | `async(fn sender -> ... end)` | `{:command_result, {:async_result, value}}`                          |
-| Shell      | `shell("ls -la")`             | `{:command_result, {:shell_result, %{output: ..., exit_code: ...}}}` |
+| Shell      | `shell("ls -la")`             | `{:command_result, {:shell_result, %{output: ..., exit_status: ...}}}` |
 | Send Agent | `send_agent(:target, msg)`    | Delivered to target as `{:agent_message, from, msg}`                 |
 
 ## Headless Agents
@@ -147,7 +148,7 @@ When `view/1` returns `nil` (the default), no rendering happens. The agent is a 
 Supports Anthropic, OpenAI, Ollama, Proton's Lumo, Kimi 2.5/moonshot, and OpenRouter.
 Provider is auto-detected from `:base_url` or set via `:provider`.
 
-Backend detection tries each in order: Lumo -> Anthropic -> Kimi -> OpenAI -> Ollama -> LLM7 -> Mock. Set `FREE_AI=true` to hit LLM7.io with no API key.
+Without an explicit `:provider`, detection matches the `:base_url`: `anthropic` picks Anthropic, `ollama` (or the default Ollama port) picks Ollama, `moonshot` picks Kimi, and anything else is treated as OpenAI-compatible. The `FREE_AI=true` / `AI_API_KEY` backend switch is a convention of the example agents under `examples/agents/`, not the `Backend.HTTP` layer.
 
 The `:openrouter` harness (via `Backend.Selector`) targets OpenRouter, an OpenAI-compatible aggregator. It attaches app-attribution headers (HTTP-Referer, X-OpenRouter-Title, X-OpenRouter-Categories) so Raxol's usage appears on openrouter.ai/rankings. Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
 

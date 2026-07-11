@@ -28,7 +28,7 @@ defmodule MyApp do
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "k"}} ->
         {%{model | cursor: max(model.cursor - 1, 0)}, []}
       %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [command(:quit)]}
+        {model, [Directive.stop()]}
       _ -> {model, []}
     end
   end

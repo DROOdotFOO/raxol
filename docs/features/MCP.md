@@ -35,10 +35,10 @@ Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exp
 | ------------ | --------------------------------------------- |
 | `Button`     | `click`                                       |
 | `TextInput`  | `type_into`, `clear`, `get_value`             |
-| `SelectList` | `select`, `get_selected`                      |
-| `Checkbox`   | `toggle`, `check`, `uncheck`                  |
-| `Modal`      | `open`, `close`, `is_open`                    |
-| `Table`      | `select_row`, `sort_by`, `filter`             |
+| `SelectList` | `select`, `get_selected`, `get_options`       |
+| `Checkbox`   | `toggle`, `get_checked`                       |
+| `Modal`      | `confirm`, `dismiss`                           |
+| `Table`      | `select_row`, `sort`, `get_rows`              |
 | `Tree`       | `expand`, `collapse`, `select_node`           |
 
 Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation, useful for internal scaffolding Components that shouldn't show up in the agent's action menu.

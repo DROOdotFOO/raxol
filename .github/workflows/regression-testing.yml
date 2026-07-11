@@ -95,9 +95,9 @@ jobs:
           deps
           ~/.cache/rebar3
           ~/.hex
-        key: deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('mix.lock') }}
+        key: deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('mix.lock') }}
         restore-keys: |
-          deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-
+          deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.exs') }}-
 
     - name: Cache PLT files
       uses: actions/cache@v6
@@ -270,9 +270,9 @@ jobs:
           deps
           ~/.cache/rebar3
           ~/.hex
-        key: deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('mix.lock') }}
+        key: deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('mix.lock') }}
         restore-keys: |
-          deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-
+          deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.exs') }}-
 
     - name: Install system dependencies
       run: |

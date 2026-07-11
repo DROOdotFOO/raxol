@@ -103,9 +103,9 @@ jobs:
             deps
             _build
             priv/plts
-          key: ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-
+            ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.exs') }}-
 
       - name: Install dependencies
         run: |
@@ -155,7 +155,7 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-extended-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-mix-extended-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
 
       - name: Install dependencies
         run: |
@@ -218,9 +218,9 @@ jobs:
             deps
             _build
             priv/plts
-          key: plt-${{ runner.os }}-27.2-1.19.0-${{ hashFiles('**/mix.lock') }}
+          key: plt-${{ runner.os }}-27.2-1.19.0-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            plt-${{ runner.os }}-27.2-1.19.0-
+            plt-${{ runner.os }}-27.2-1.19.0-${{ hashFiles('**/mix.exs') }}-
 
       - name: Install dependencies
         run: |
@@ -285,7 +285,7 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-integration-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-mix-integration-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
 
       - name: Install dependencies
         run: |

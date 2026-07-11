@@ -88,7 +88,11 @@ jobs:
       - name: Generate cache keys
         id: cache-key
         run: |
-          echo "key=deps-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.lock') }}" >> $GITHUB_OUTPUT
+          # mix.exs hash precedes the mix.lock hash so a package @version bump
+          # (which never touches mix.lock) busts the compiled _build cache. The
+          # restore-keys fall back only within the same mix.exs, never across a
+          # version change.
+          echo "key=deps-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}" >> $GITHUB_OUTPUT
       
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
@@ -106,8 +110,7 @@ jobs:
             .raxol_cache
           key: ${{ steps.cache-key.outputs.key }}
           restore-keys: |
-            deps-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
-            deps-${{ runner.os }}-
+            deps-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.exs') }}-
       
       - name: Install dependencies
         run: |
@@ -495,9 +498,9 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-mix-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-
+            ${{ runner.os }}-mix-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
       
       - name: Install dependencies
         run: |

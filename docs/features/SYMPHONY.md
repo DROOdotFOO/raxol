@@ -49,7 +49,7 @@ Every surface subscribes to the same orchestrator snapshot via Phoenix.PubSub, s
 - **MCP**: 7 tools (`list_runs`, `get_run`, `resume_run`, etc) plus `symphony://runs` as an MCP resource.
 - **Telegram**: per-issue session, inline keyboards, approval prompts.
 - **Watch**: debounced push to APNS/FCM, tap-to-approve actions.
-- **JSON API**: `/api/v1/runs`, `/api/v1/runs/:id`. Read-only by default.
+- **JSON API**: `GET /api/v1/state`, `GET /api/v1/runs/:issue_id`, `POST /api/v1/refresh`, `POST /api/v1/runs/:issue_id/stop`.
 
 ## Evidence Collection
 

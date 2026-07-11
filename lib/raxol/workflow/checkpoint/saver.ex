@@ -96,8 +96,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver do
   implicitly removes the thread from this query's result set.
 
   Optional callback: adapters that do not implement it inherit a
-  default implementation in `Raxol.Workflow.Checkpoint.Saver.list_paused/3`
-  that delegates to `list/3` per known thread (a slower path).
+  default that delegates to `list/3` per known thread (a slower path).
   """
   @callback list_paused(config(), limit :: pos_integer()) :: {:ok, [paused()]}
 
@@ -165,7 +164,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver do
   truncated to `limit`, and converted to `paused()` rows.
 
   Adapter `list_paused/2` implementations build the map via their
-  storage-specific fold (`:ets.foldl/3` or `:dets.foldl/4`) and hand
+  storage-specific fold (`:ets.foldl/3` or `:dets.foldl/3`) and hand
   the result to this helper so the rest of the pipeline stays in one
   place.
   """

@@ -49,7 +49,7 @@ jobs:
           path: |
             web/deps
             web/_build
-          key: web-release-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('web/mix.lock', 'mix.lock') }}
+          key: web-release-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('web/mix.lock', 'mix.lock', '**/mix.exs') }}
 
       - name: Build web release
         working-directory: web
