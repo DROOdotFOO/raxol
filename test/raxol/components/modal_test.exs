@@ -573,6 +573,70 @@ defmodule Raxol.UI.Components.ModalTest do
     assert commands == [{:submit_empty, %{}}]
   end
 
+  # --- as_dialog_overlay/2 (true-dialog rendering) ---
+
+  describe "as_dialog_overlay/2" do
+    defp flow_stub,
+      do: %{type: :box, children: [%{type: :text, content: "FLOW"}]}
+
+    test "hidden modal returns flow_content unchanged" do
+      props = Modal.alert(:hidden_alert, "Alert!", "X", visible: false)
+      {:ok, state} = Modal.init(Map.new(props))
+      refute state.visible
+
+      flow = flow_stub()
+      assert Modal.as_dialog_overlay(state, flow) == flow
+    end
+
+    test "visible modal wraps flow_content in an :absolute_layer with a dialog overlay" do
+      props = Modal.alert(:my_alert, "Alert!", "Something happened")
+      {:ok, state} = Modal.init(Map.new(props))
+      assert state.visible
+
+      flow = flow_stub()
+      result = Modal.as_dialog_overlay(state, flow)
+
+      assert result.type == :absolute_layer
+      assert result.flow_child == flow
+      assert [overlay] = result.overlays
+      assert overlay.dialog == true
+      assert overlay.x == {:center_of, state.width}
+      assert is_map(overlay.element)
+    end
+
+    test "the dialog overlay's element is sized to state.width and an estimated height" do
+      props = Modal.alert(:my_alert, "Alert!", "Something happened")
+      {:ok, state} = Modal.init(Map.new(props))
+
+      result = Modal.as_dialog_overlay(state, flow_stub())
+      [overlay] = result.overlays
+      surface = overlay.element
+
+      assert surface.type == :box
+      assert surface.width == state.width
+      assert surface.height > 0
+      assert overlay.y == {:center_of, surface.height}
+      # outer surface is unbordered (it's the opaque fill); the bordered
+      # dialog chrome is nested one level in as its child.
+      assert surface.border == :none
+      assert [inner] = surface.children
+      assert inner.type == :box
+      assert inner.border == :double
+      assert inner.width == state.width
+      assert inner.height == surface.height
+    end
+
+    test "does not mutate what Modal.render/2 itself returns" do
+      props = Modal.alert(:my_alert, "Alert!", "Something happened")
+      {:ok, state} = Modal.init(Map.new(props))
+
+      plain_render = Modal.render(state, %{})
+      _ = Modal.as_dialog_overlay(state, flow_stub())
+
+      assert Modal.render(state, %{}) == plain_render
+    end
+  end
+
   test "modal without id handles focus correctly" do
     props =
       Modal.form(

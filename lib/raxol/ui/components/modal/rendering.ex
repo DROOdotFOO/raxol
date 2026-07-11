@@ -77,6 +77,90 @@ defmodule Raxol.UI.Components.Modal.Rendering do
     )
   end
 
+  @doc """
+  Builds a bordered, opaque dialog surface: an inner bordered box (the
+  visible chrome) nested inside an unbordered, fully-filled outer box of
+  the same footprint -- a border only paints its ring, so without the
+  outer fill the dimmed flow content behind it would show through the
+  gaps. Outer is emitted first, inner (its child) after, so last-write-wins
+  cell composition lets the border/content win while the fill still shows
+  through any unpainted interior cells.
+
+  Both boxes set `width`/`height` as top-level keys, not just in `:style`,
+  since overlay layout has no auto-sizing fallback the way flow layout
+  does.
+  """
+  @spec dialog_surface(pos_integer(), pos_integer(), map(), [map()]) :: map()
+  def dialog_surface(width, height, box_style, children) do
+    fill_bg = Map.get(box_style, :bg) || Map.get(box_style, :background, :black)
+
+    %{
+      type: :box,
+      width: width,
+      height: height,
+      border: :none,
+      padding: 0,
+      style: %{border: :none, width: width, height: height, bg: fill_bg},
+      children: [
+        %{
+          type: :box,
+          width: width,
+          height: height,
+          border: Map.get(box_style, :border, :double),
+          padding: 1,
+          style: Map.merge(box_style, %{width: width, height: height}),
+          children: children
+        }
+      ]
+    }
+  end
+
+  @doc """
+  Structural line-count estimate of the modal's total footprint height
+  (no Preparer measurement pass for overlays); generous by design (e.g.
+  form fields budget headroom for a validation-error row) so content
+  isn't clipped.
+  """
+  @spec estimate_height(Raxol.UI.Components.Modal.t()) :: pos_integer()
+  def estimate_height(state) do
+    frame = 4
+    title_rows = if blank?(state.title), do: 0, else: 1
+    content_rows = estimate_content_rows(state)
+    button_rows = if state.buttons == [], do: 0, else: 3
+
+    spacer_rows =
+      count_true([
+        title_rows > 0 and content_rows > 0,
+        content_rows > 0 and button_rows > 0
+      ])
+
+    frame + title_rows + content_rows + spacer_rows + button_rows
+  end
+
+  defp blank?(nil), do: true
+  defp blank?(""), do: true
+  defp blank?(_), do: false
+
+  defp count_true(conditions), do: Enum.count(conditions, & &1)
+
+  defp estimate_content_rows(%{content: content}) when is_binary(content) do
+    content |> String.split("\n") |> length()
+  end
+
+  defp estimate_content_rows(%{type: type, form_state: %{fields: fields}})
+       when type in [:prompt, :form] do
+    case length(fields) do
+      0 -> 0
+      # row per field + inter-field gaps + headroom for error rows
+      n -> 2 * n - 1 + n
+    end
+  end
+
+  defp estimate_content_rows(%{content: content}) when not is_nil(content),
+    do: 3
+
+  defp estimate_content_rows(_state), do: 0
+
   @doc "Builds modal elements with proper spacing."
   def build_modal_elements(title_element, content_element, button_elements) do
     [
