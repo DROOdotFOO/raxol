@@ -45,6 +45,45 @@ defmodule Raxol.Playground.DemoHelpers do
   end
 
   @doc """
+  Renders text through `Raxol.UI.Components.Display.Text`
+  (canonical wrapping/truncation entry point, `docs/core/LAYOUT.md` §4).
+
+  Plain `Raxol.Core.Renderer.View.text/2` accepts only `fg/bg/style/align/wrap/link`.
+
+  ## Examples
+
+      rich_text("a very long line", width: 12, white_space: :nowrap, text_overflow: :ellipsis)
+      rich_text(prose, width: 20, text_wrap: :pretty)
+      rich_text(prose, width: 20, line_clamp: 2)
+  """
+  @spec rich_text(String.t(), keyword()) :: map()
+  def rich_text(content, opts \\ []) do
+    {:ok, state} =
+      Raxol.UI.Components.Display.Text.init([content: content] ++ opts)
+
+    Raxol.UI.Components.Display.Text.render(state, %{})
+  end
+
+  @doc """
+  Renders `content` (Markdown text) through `Raxol.UI.Components.MarkdownRenderer`,
+  the canonical Markdown-to-styled-elements renderer.
+
+  ## Examples
+
+      markdown("# Title\\n\\nSome **bold** text.", 40)
+  """
+  @spec markdown(String.t(), pos_integer()) :: map()
+  def markdown(content, width) do
+    {:ok, state} =
+      Raxol.UI.Components.MarkdownRenderer.init(%{
+        markdown_text: content,
+        width: width
+      })
+
+    Raxol.UI.Components.MarkdownRenderer.render(state, %{})
+  end
+
+  @doc """
   Navigate backward through input history.
 
   Expects the model to have `:input_history`, `:history_index`, `:input`, and `:cursor` fields.
