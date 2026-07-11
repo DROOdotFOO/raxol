@@ -70,13 +70,17 @@ defmodule Raxol.LiveView.TerminalBridge do
           | :tokyo_night
           | :catppuccin
           | :default
+  @type aria_mode :: :log | :application
+
   @type html_opts :: [
           theme: theme(),
           css_prefix: String.t(),
           use_inline_styles: boolean(),
           show_cursor: boolean(),
           cursor_position: {non_neg_integer(), non_neg_integer()} | nil,
-          cursor_style: :block | :underline | :bar
+          cursor_style: :block | :underline | :bar,
+          aria_mode: aria_mode(),
+          a11y_map: %{optional(String.t()) => map()}
         ]
 
   @doc """
@@ -90,6 +94,16 @@ defmodule Raxol.LiveView.TerminalBridge do
     - `:show_cursor` - Show cursor indicator (default: false)
     - `:cursor_position` - Cursor position {x, y} (default: nil)
     - `:cursor_style` - Cursor style (default: :block)
+    - `:aria_mode` - Coarse container semantics (default: `:log`). `:log` wraps
+      the terminal in `<pre role="log" aria-live="polite">` so screen readers
+      announce output as it changes. `:application` emits `<pre
+      role="application">` with no live region, so per-element ARIA and a
+      dedicated announcement region drive announcements instead of a
+      whole-screen re-read.
+    - `:a11y_map` - `id -> accessibility_node` map (from
+      `Raxol.Core.Accessibility.Projection.by_id/1`). Spans whose
+      `data-raxol-id` matches an entry get per-element ARIA
+      (role/aria-label/aria-disabled/aria-checked/aria-selected/aria-expanded/aria-required).
 
   ## Examples
 
@@ -110,6 +124,8 @@ defmodule Raxol.LiveView.TerminalBridge do
     cursor_pos = Keyword.get(opts, :cursor_position)
     cursor_style = Keyword.get(opts, :cursor_style, :block)
     element_id_map = Keyword.get(opts, :element_id_map, %{})
+    a11y_map = Keyword.get(opts, :a11y_map, %{})
+    aria_mode = Keyword.get(opts, :aria_mode, :log)
 
     terminal_class = "#{css_prefix}-terminal"
 
@@ -129,12 +145,21 @@ defmodule Raxol.LiveView.TerminalBridge do
           show_cursor: show_cursor,
           cursor_pos: cursor_pos,
           cursor_style: cursor_style,
-          element_id_map: element_id_map
+          element_id_map: element_id_map,
+          a11y_map: a11y_map
         })
       end)
 
-    ~s(<pre class="#{terminal_class}#{theme_class}" role="log" aria-live="polite" aria-atomic="false">#{lines_html}</pre>\n)
+    ~s(<pre class="#{terminal_class}#{theme_class}" #{container_aria(aria_mode)}>#{lines_html}</pre>\n)
   end
+
+  # Coarse container semantics. `:log` is a whole-screen live region (screen
+  # readers re-read on change); `:application` opts out so per-element ARIA and
+  # the dedicated announcement region drive announcements instead.
+  defp container_aria(:application), do: ~s(role="application")
+
+  defp container_aria(_log),
+    do: ~s(role="log" aria-live="polite" aria-atomic="false")
 
   @doc """
   Converts a buffer to HTML with diff highlighting (for debugging).
@@ -280,9 +305,7 @@ defmodule Raxol.LiveView.TerminalBridge do
   defp border_beam_hint?(_), do: false
 
   @beam_css_colors %{
-    colorful:
-      {"#ff0040, #ffaa00, #00ff88, #00ccff, #4400ff, #ff00cc", "#4400ff",
-       "#ff00cc"},
+    colorful: {"#ff0040, #ffaa00, #00ff88, #00ccff, #4400ff, #ff00cc", "#4400ff", "#ff00cc"},
     mono: {"#ffffff, #cccccc, #999999", "#ffffff", "#cccccc"},
     ocean: {"#0044ff, #00ccff, #0077ff, #00aaff", "#0077ff", "#00ccff"},
     sunset: {"#ff4400, #ffaa00, #ff6600, #ffcc00", "#ff4400", "#ffaa00"}
@@ -379,25 +402,75 @@ defmodule Raxol.LiveView.TerminalBridge do
   # with IDs get data-raxol-id attributes for CSS transition targeting.
   defp render_line_rle(cells, y, opts) do
     runs = rle_cells(cells, y, opts)
+    a11y_map = Map.get(opts, :a11y_map, %{})
 
     Enum.map_join(runs, "", fn {style_key, element_id, chars} ->
       text = Enum.join(chars)
+      aria = aria_attrs(element_id, a11y_map)
 
       case {style_key, element_id} do
         {:default, nil} ->
           escape_html_text(text)
 
         {:default, id} ->
-          ~s(<span data-raxol-id="#{id}">#{escape_html_text(text)}</span>)
+          ~s(<span data-raxol-id="#{id}"#{aria}>#{escape_html_text(text)}</span>)
 
         {style, nil} ->
           ~s(<span style="#{style}">#{escape_html_text(text)}</span>)
 
         {style, id} ->
-          ~s(<span style="#{style}" data-raxol-id="#{id}">#{escape_html_text(text)}</span>)
+          ~s(<span style="#{style}" data-raxol-id="#{id}"#{aria}>#{escape_html_text(text)}</span>)
       end
     end)
   end
+
+  # Reads the accessibility node for `id` (if any) and renders it as a leading
+  # string of ARIA attributes (e.g. ` role="button" aria-label="Save"`). The
+  # bridge only READS the projected node -- role/label/state come from
+  # `Raxol.Core.Accessibility.Projection`, never recomputed here.
+  defp aria_attrs(id, a11y_map) when is_binary(id) do
+    case Map.get(a11y_map, id) do
+      %{} = node -> build_aria(node)
+      _ -> ""
+    end
+  end
+
+  defp aria_attrs(_id, _a11y_map), do: ""
+
+  defp build_aria(node) do
+    attrs =
+      aria_role(node) ++
+        aria_label(node) ++
+        aria_state(node, :disabled?, "aria-disabled") ++
+        aria_state(node, :checked?, "aria-checked") ++
+        aria_state(node, :selected?, "aria-selected") ++
+        aria_state(node, :expanded?, "aria-expanded") ++
+        aria_state(node, :required?, "aria-required")
+
+    case attrs do
+      [] -> ""
+      parts -> " " <> Enum.join(parts, " ")
+    end
+  end
+
+  defp aria_role(%{role: role}) when is_atom(role) and not is_nil(role),
+    do: [~s(role="#{role}")]
+
+  defp aria_role(_node), do: []
+
+  defp aria_label(%{label: label}) when is_binary(label) and label != "",
+    do: [~s(aria-label="#{escape_html_text(label)}")]
+
+  defp aria_label(_node), do: []
+
+  defp aria_state(%{state: state}, key, attr) when is_map(state) do
+    case Map.fetch(state, key) do
+      {:ok, value} when is_boolean(value) -> [~s(#{attr}="#{value}")]
+      _ -> []
+    end
+  end
+
+  defp aria_state(_node, _key, _attr), do: []
 
   # Group consecutive cells by their computed inline style string AND
   # element ID. Returns [{style_string, element_id | nil, [char, ...]}, ...]
@@ -443,11 +516,18 @@ defmodule Raxol.LiveView.TerminalBridge do
   end
 
   defp escape_html_binary(<<>>, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
-  defp escape_html_binary(<<?&, rest::binary>>, acc), do: escape_html_binary(rest, ["&amp;" | acc])
+
+  defp escape_html_binary(<<?&, rest::binary>>, acc),
+    do: escape_html_binary(rest, ["&amp;" | acc])
+
   defp escape_html_binary(<<?<, rest::binary>>, acc), do: escape_html_binary(rest, ["&lt;" | acc])
   defp escape_html_binary(<<?>, rest::binary>>, acc), do: escape_html_binary(rest, ["&gt;" | acc])
-  defp escape_html_binary(<<?", rest::binary>>, acc), do: escape_html_binary(rest, ["&quot;" | acc])
-  defp escape_html_binary(<<?', rest::binary>>, acc), do: escape_html_binary(rest, ["&#39;" | acc])
+
+  defp escape_html_binary(<<?", rest::binary>>, acc),
+    do: escape_html_binary(rest, ["&quot;" | acc])
+
+  defp escape_html_binary(<<?', rest::binary>>, acc),
+    do: escape_html_binary(rest, ["&#39;" | acc])
 
   defp escape_html_binary(<<c::utf8, rest::binary>>, acc),
     do: escape_html_binary(rest, [<<c::utf8>> | acc])

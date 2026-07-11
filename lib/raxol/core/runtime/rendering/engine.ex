@@ -252,7 +252,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
          :ok <- sync_dispatcher(state.dispatcher_pid, view, positioned_elements),
          :continue <- agent_short_circuit(state),
          {:ok, new_state, t5} <-
-           render_cells_to_backend(positioned_elements, theme, state) do
+           render_cells_to_backend(positioned_elements, theme, state, view) do
       maybe_record_cycle_render(
         state.cycle_profiler,
         t0,
@@ -283,13 +283,18 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     end
   end
 
-  defp render_cells_to_backend(positioned_elements, theme, state) do
+  defp render_cells_to_backend(positioned_elements, theme, state, view) do
     with {:ok, cells} <- safe_render_to_cells(positioned_elements, theme),
          {:ok, final_cells} <- safe_apply_plugin_transforms(cells, state),
          {:ok, beamed_cells} <-
            safe_apply_border_beam(final_cells, positioned_elements),
          {:ok, new_state} <-
-           safe_render_to_backend(beamed_cells, state, positioned_elements) do
+           safe_render_to_backend(
+             beamed_cells,
+             state,
+             positioned_elements,
+             view
+           ) do
       t5 = profiler_now(state.cycle_profiler)
       {:ok, new_state, t5}
     end
@@ -478,7 +483,11 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   # Safe backend rendering -- dispatches to Backends module.
   # positioned_elements carries the element tree with animation hints
   # for surfaces that can use them (LiveView emits CSS transitions).
-  defp safe_render_to_backend(final_cells, state, positioned_elements) do
+  # `view` is the declaration tree; the LiveView backend projects it into an
+  # accessibility map so the Browser bridge can emit per-element ARIA. The map
+  # is computed only for the LiveView environment so the terminal path pays
+  # nothing.
+  defp safe_render_to_backend(final_cells, state, positioned_elements, view) do
     Raxol.Core.Runtime.Log.debug(
       "Rendering Engine: Sending final cells to backend: #{state.environment}"
     )
@@ -491,7 +500,14 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
         Backends.render_to_vscode(final_cells, state)
 
       :liveview ->
-        Backends.render_to_liveview(final_cells, state, positioned_elements)
+        a11y_map = Raxol.Core.Accessibility.Projection.by_id(view)
+
+        Backends.render_to_liveview(
+          final_cells,
+          state,
+          positioned_elements,
+          a11y_map
+        )
 
       :ssh ->
         Backends.render_to_ssh(final_cells, state)

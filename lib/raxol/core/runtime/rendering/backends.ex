@@ -63,9 +63,18 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   When `positioned_elements` carry animation hints, generates a companion
   `<style>` block with CSS transitions and broadcasts it alongside the
   terminal HTML. LiveView receives `{:render_update, html, animation_css}`.
+
+  `a11y_map` is an `id -> accessibility_node` map (from
+  `Raxol.Core.Accessibility.Projection.by_id/1`) that the bridge uses to emit
+  per-element ARIA on spans whose `data-raxol-id` matches an entry.
   """
   @compile {:no_warn_undefined, [Raxol.LiveView.TerminalBridge, Phoenix.PubSub]}
-  def render_to_liveview(cells, state, positioned_elements \\ []) do
+  def render_to_liveview(
+        cells,
+        state,
+        positioned_elements \\ [],
+        a11y_map \\ %{}
+      ) do
     updated_buffer = apply_cells_to_buffer(cells, state)
 
     if Code.ensure_loaded?(Raxol.LiveView.TerminalBridge) do
@@ -74,7 +83,8 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
       html =
         Raxol.LiveView.TerminalBridge.buffer_to_html(updated_buffer,
           use_inline_styles: true,
-          element_id_map: element_id_map
+          element_id_map: element_id_map,
+          a11y_map: a11y_map
         )
 
       animation_css =

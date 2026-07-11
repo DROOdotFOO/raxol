@@ -258,8 +258,15 @@ defmodule Raxol.UI.Layout.Engine do
 
     text_element = %{
       type: :text,
+      # Carry the declaration id and explicit geometry at the top level so
+      # accessibility surfaces can map this cell span back to the source node
+      # (Browser data-raxol-id, ARIA). The renderer already honors an explicit
+      # width/height, so setting them here is behavior-preserving.
+      id: Map.get(element, :id),
       x: space.x + dx,
       y: space.y + dy,
+      width: Raxol.UI.TextMeasure.display_width(content),
+      height: 1,
       text: content,
       fg: Map.get(element, :fg),
       bg: Map.get(element, :bg),
@@ -275,10 +282,12 @@ defmodule Raxol.UI.Layout.Engine do
     [text_element | acc]
   end
 
-  def process_element(%{type: :button, attrs: attrs} = _element, space, acc) do
+  def process_element(%{type: :button, attrs: attrs} = element, space, acc) do
     text = Map.get(attrs, :label, "Button")
     component_attrs = Map.put(attrs, :component_type, :button)
-    build_button_elements(text, component_attrs, space) ++ acc
+
+    build_button_elements(text, component_attrs, space, Map.get(element, :id)) ++
+      acc
   end
 
   # New-DSL form: `text_input(value: ..., placeholder: ...)` builds an
@@ -304,7 +313,7 @@ defmodule Raxol.UI.Layout.Engine do
     process_element(Map.put(element, :attrs, attrs), space, acc)
   end
 
-  def process_element(%{type: :text_input, attrs: attrs} = _element, space, acc) do
+  def process_element(%{type: :text_input, attrs: attrs} = element, space, acc) do
     # Create a text input element composed of box and text
     value = Map.get(attrs, :value, "")
     placeholder = Map.get(attrs, :placeholder, "")
@@ -316,9 +325,11 @@ defmodule Raxol.UI.Layout.Engine do
     style_map = style_to_map(Map.get(attrs, :style, %{}))
 
     text_input_elements = [
-      # Input box
+      # Input box. Carry the declaration id so accessibility surfaces can map
+      # the box's cell span back to the text_input node (data-raxol-id, ARIA).
       %{
         type: :box,
+        id: Map.get(element, :id),
         x: space.x,
         y: space.y,
         width:
@@ -348,23 +359,29 @@ defmodule Raxol.UI.Layout.Engine do
     text_input_elements ++ acc
   end
 
-  def process_element(%{type: :checkbox, attrs: attrs} = _element, space, acc) do
+  def process_element(%{type: :checkbox, attrs: attrs} = element, space, acc) do
     # Create a checkbox element (simple text for now)
     checked = Map.get(attrs, :checked, false)
     label = Map.get(attrs, :label, "")
     component_attrs = Map.put(attrs, :component_type, :checkbox)
 
     checkbox_text = get_checkbox_text(checked)
+    display_text = "#{checkbox_text} #{label}"
 
     style_map = style_to_map(Map.get(attrs, :style, %{}))
 
     checkbox_elements = [
-      # Checkbox text (box + label)
+      # Checkbox text (box + label). Carry the declaration id and explicit
+      # geometry so accessibility surfaces can map this cell span back to the
+      # checkbox node (Browser data-raxol-id, ARIA).
       %{
         type: :text,
+        id: Map.get(element, :id),
         x: space.x,
         y: space.y,
-        text: "#{checkbox_text} #{label}",
+        width: Raxol.UI.TextMeasure.display_width(display_text),
+        height: 1,
+        text: display_text,
         fg: Map.get(attrs, :fg),
         bg: Map.get(attrs, :bg),
         style: style_map,
@@ -434,7 +451,8 @@ defmodule Raxol.UI.Layout.Engine do
       style: style_map
     }
 
-    build_button_elements(text, component_attrs, space) ++ acc
+    build_button_elements(text, component_attrs, space, Map.get(button, :id)) ++
+      acc
   end
 
   def process_element(%{type: :split_pane} = split, space, acc) do
@@ -559,10 +577,11 @@ defmodule Raxol.UI.Layout.Engine do
     acc
   end
 
-  defp build_button_elements(text, component_attrs, space) do
+  defp build_button_elements(text, component_attrs, space, id) do
     [
       %{
         type: :box,
+        id: id,
         x: space.x,
         y: space.y,
         width: min(Raxol.UI.TextMeasure.display_width(text) + 4, space.width),

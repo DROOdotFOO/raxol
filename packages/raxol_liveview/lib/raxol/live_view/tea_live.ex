@@ -30,7 +30,12 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
 
     use Phoenix.LiveView
 
-    @compile {:no_warn_undefined, [Raxol.Core.Runtime.Lifecycle, Phoenix.PubSub]}
+    @compile {:no_warn_undefined,
+              [
+                Raxol.Core.Runtime.Lifecycle,
+                Raxol.Core.Accessibility,
+                Phoenix.PubSub
+              ]}
 
     require Logger
 
@@ -54,6 +59,8 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
       if connected?(socket) do
         _ = Phoenix.PubSub.subscribe(Raxol.PubSub, topic)
 
+        announce_ref = subscribe_announcements()
+
         {:ok, lifecycle_pid} =
           Lifecycle.start_link(app_module,
             environment: :liveview,
@@ -69,6 +76,8 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
           |> assign(:topic, topic)
           |> assign(:app_module, app_module)
           |> assign(:terminal_html, "")
+          |> assign(:announce_ref, announce_ref)
+          |> assign(:announcement, nil)
 
         {:ok, socket}
       else
@@ -78,6 +87,8 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
           |> assign(:topic, topic)
           |> assign(:app_module, app_module)
           |> assign(:terminal_html, "")
+          |> assign(:announce_ref, nil)
+          |> assign(:announcement, nil)
 
         {:ok, socket}
       end
@@ -109,6 +120,11 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     end
 
     @impl true
+    def handle_info({:announcement_added, _ref, announcement}, socket) do
+      {:noreply, assign(socket, :announcement, normalize_announcement(announcement))}
+    end
+
+    @impl true
     def handle_info(_msg, socket), do: {:noreply, socket}
 
     @impl true
@@ -117,6 +133,12 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
       <%= if assigns[:animation_css] && assigns[:animation_css] != "" do %>
         <%= Phoenix.HTML.raw(assigns[:animation_css]) %>
       <% end %>
+      <div
+        class="raxol-sr-only"
+        role="status"
+        aria-live={announcement_live(assigns[:announcement])}
+        aria-atomic="true"
+      ><%= announcement_text(assigns[:announcement]) %></div>
       <div
         id="raxol-terminal"
         phx-hook="RaxolTerminal"
@@ -130,13 +152,55 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
       """
     end
 
+    # The screen-reader announcement region is always present so assistive
+    # technology tracks changes to it. It reflects accessibility announcements
+    # delivered via Raxol.Core.Accessibility.subscribe_to_announcements/1:
+    # polite by default, assertive for :high-priority announcements.
+    defp announcement_live(%{priority: :high}), do: "assertive"
+    defp announcement_live(_announcement), do: "polite"
+
+    defp announcement_text(%{message: message}) when is_binary(message),
+      do: message
+
+    defp announcement_text(_announcement), do: ""
+
+    defp normalize_announcement(announcement) when is_map(announcement) do
+      %{
+        message: to_string(Map.get(announcement, :message, "")),
+        priority: Map.get(announcement, :priority, :normal)
+      }
+    end
+
+    defp normalize_announcement(_announcement), do: nil
+
+    defp subscribe_announcements do
+      ref = make_ref()
+      Raxol.Core.Accessibility.subscribe_to_announcements(ref)
+      ref
+    rescue
+      error ->
+        Logger.debug("TEALive announcement subscription failed: #{Exception.message(error)}")
+
+        nil
+    end
+
     @impl true
     def terminate(_reason, socket) do
+      if ref = socket.assigns[:announce_ref] do
+        _ = unsubscribe_announcements(ref)
+      end
+
       if socket.assigns[:lifecycle_pid] do
         Lifecycle.stop(socket.assigns.lifecycle_pid)
       end
 
       :ok
+    end
+
+    defp unsubscribe_announcements(ref) do
+      Raxol.Core.Accessibility.unsubscribe_from_announcements(ref)
+    rescue
+      _error -> :ok
     end
 
     defp dispatch_to_app(nil, _event), do: :ok
