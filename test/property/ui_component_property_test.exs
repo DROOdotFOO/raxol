@@ -82,73 +82,9 @@ defmodule Raxol.Property.UIComponentTest do
     end
   end
 
-  describe "Flexbox layout properties" do
-    property "flexbox maintains child order" do
-      check all(
-              children <-
-                list_of(integer(1..100), min_length: 1, max_length: 20),
-              max_runs: 500
-            ) do
-        layout =
-          Flexbox.new(children: Enum.map(children, &create_test_component/1))
-
-        # Children should maintain order
-        rendered_ids = layout.children |> Enum.map(& &1.id)
-        assert rendered_ids == children
-      end
-    end
-
-    property "flexbox respects size constraints" do
-      check all(
-              width <- integer(10..1000),
-              height <- integer(10..1000),
-              children_count <- integer(1..10),
-              max_runs: 500
-            ) do
-        children = for i <- 1..children_count, do: create_test_component(i)
-
-        layout =
-          Flexbox.new(
-            width: width,
-            height: height,
-            children: children
-          )
-
-        {:ok, rendered} = Flexbox.render(layout)
-
-        # Total size should not exceed container
-        assert rendered.layout.width <= width
-        assert rendered.layout.height <= height
-      end
-    end
-
-    property "flex properties distribute space correctly" do
-      check all(
-              flex_values <-
-                list_of(integer(0..10), min_length: 2, max_length: 5),
-              container_size <- integer(100..1000),
-              max_runs: 500
-            ) do
-        children =
-          Enum.map(flex_values, fn flex ->
-            %{id: flex, flex: flex}
-          end)
-
-        layout =
-          Flexbox.new(
-            width: container_size,
-            direction: :row,
-            children: children
-          )
-
-        rendered = Flexbox.calculate_layout(layout)
-
-        # Total allocated space should equal container size
-        total = Enum.sum(Enum.map(rendered.children, & &1.width))
-        assert_in_delta(total, container_size, 1.0)
-      end
-    end
-  end
+  # "Flexbox layout properties" (Flexbox.new/render/calculate_layout)
+  # deleted in flex rework N11 with the legacy API. Live-path flex
+  # properties live in test/property/flex_layout_property_test.exs.
 
   describe "Grid layout properties" do
     property "grid places items in correct cells" do

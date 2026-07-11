@@ -444,6 +444,11 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       # Container is only 10 wide; each word is 4 wide. If flex_wrap were
       # honored this would break into multiple lines. It doesn't: children
       # overflow on a single line exactly like nowrap.
+      #
+      # N11 note: the 9.7 solver CAN shrink (the old Distributor's integer
+      # division could not), but the automatic minimum size (min-content,
+      # B3) floors each "AAAA" at 4 cells - so spec-correct behavior here
+      # is still overflow, same geometry as the original pin.
       assert layout(tree, %{width: 10, height: 10}) == [
                %{type: :text, x: 0, y: 0, text: "AAAA"},
                %{type: :text, x: 4, y: 0, text: "BBBB"},

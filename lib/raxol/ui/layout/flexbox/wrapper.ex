@@ -90,8 +90,9 @@ defmodule Raxol.UI.Layout.Flexbox.Wrapper do
     )
   end
 
-  # Delegate to the parent module to avoid a circular dependency;
-  # the parent imports this function via alias.
+  # Single source of truth: the 9.7-correct single-line layout lives in
+  # the parent module (FlexItem + Solver pipeline); each wrap line runs
+  # through exactly the same code as the nowrap path.
   defp calculate_single_line_layout(
          children_with_dims,
          space,
@@ -99,38 +100,11 @@ defmodule Raxol.UI.Layout.Flexbox.Wrapper do
          main_axis,
          cross_axis
        ) do
-    alias Raxol.UI.Layout.Flexbox.Distributor
-
-    total_main_size =
-      Enum.reduce(children_with_dims, 0, fn {_child, dims, _flex}, acc ->
-        acc + Positioner.get_dimension(dims, main_axis)
-      end)
-
-    gap_size = Positioner.get_gap_size(flex_props.gap, main_axis)
-    total_gaps = gap_size * max(0, length(children_with_dims) - 1)
-
-    available_main_space =
-      Positioner.get_dimension(space, main_axis) - total_main_size - total_gaps
-
-    sized_children =
-      Distributor.distribute_main_space(
-        children_with_dims,
-        available_main_space,
-        main_axis
-      )
-
-    positioned_children =
-      Positioner.position_main_axis(
-        sized_children,
-        space,
-        flex_props,
-        main_axis
-      )
-
-    Positioner.position_cross_axis(
-      positioned_children,
+    Raxol.UI.Layout.Flexbox.calculate_single_line_layout(
+      children_with_dims,
       space,
       flex_props,
+      main_axis,
       cross_axis
     )
   end
