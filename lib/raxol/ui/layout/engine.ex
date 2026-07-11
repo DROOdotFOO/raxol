@@ -387,7 +387,20 @@ defmodule Raxol.UI.Layout.Engine do
     padding = Map.get(box, :padding, 0)
     border = Map.get(box, :border) || Map.get(style, :border, :none)
 
-    inner_space = box_inner_space(space, border, padding)
+    # Honor explicit width/height (style or element), clamped to available
+    # space; boxes without explicit dimensions keep filling the space.
+    {explicit_w, explicit_h} = resolve_box_dimensions(box, style, space)
+
+    width =
+      if is_integer(explicit_w), do: min(explicit_w, space.width), else: space.width
+
+    height =
+      if is_integer(explicit_h),
+        do: min(explicit_h, space.height),
+        else: space.height
+
+    box_space = %{space | width: width, height: height}
+    inner_space = box_inner_space(box_space, border, padding)
 
     box_style = Map.get(box, :style, %{})
     animation_hints = Map.get(box, :animation_hints, [])
@@ -396,8 +409,8 @@ defmodule Raxol.UI.Layout.Engine do
       type: :box,
       x: space.x,
       y: space.y,
-      width: space.width,
-      height: space.height,
+      width: width,
+      height: height,
       style: box_style,
       animation_hints: animation_hints,
       attrs: %{
@@ -899,36 +912,52 @@ defmodule Raxol.UI.Layout.Engine do
     end
   end
 
-  # Calculate total border + padding overhead for a box (both sides).
+  # Per-side padding as {top, right, bottom, left}. Accepts a bare integer
+  # or the tuples produced by Components.Box.normalize_spacing/1.
+  defp padding_sides(padding) do
+    case padding do
+      p when is_integer(p) and p >= 0 -> {p, p, p, p}
+      {t, r, b, l} -> {t, r, b, l}
+      {h, v} -> {h, v, h, v}
+      _ -> {0, 0, 0, 0}
+    end
+  end
+
+  # Total border + padding overhead for a box as {horizontal, vertical}.
   defp box_overhead(element, style) do
     border = Map.get(element, :border) || Map.get(style, :border, :none)
-    padding = Map.get(element, :padding, 0)
+    {top, right, bottom, left} = padding_sides(Map.get(element, :padding, 0))
     border_offset = if border in [:none, false], do: 0, else: 1
-    pad = if is_integer(padding), do: padding, else: 0
-    2 * (border_offset + pad)
+    {2 * border_offset + left + right, 2 * border_offset + top + bottom}
   end
 
   # Build inner space for a box by subtracting border and padding from outer space.
   defp box_inner_space(space, border, padding) do
     border_offset = if border in [:none, false], do: 0, else: 1
-    pad = if is_integer(padding), do: padding, else: 0
-    inset = border_offset + pad
+    {top, right, bottom, left} = padding_sides(padding)
 
     %{
-      x: space.x + inset,
-      y: space.y + inset,
-      width: max(0, space.width - 2 * inset),
-      height: max(0, space.height - 2 * inset)
+      x: space.x + border_offset + left,
+      y: space.y + border_offset + top,
+      width: max(0, space.width - 2 * border_offset - left - right),
+      height: max(0, space.height - 2 * border_offset - top - bottom)
     }
   end
 
   # Resolve explicit width/height for a box, handling :fill expansion.
   defp resolve_box_dimensions(element, style, available_space) do
-    raw_width =
-      Map.get(element, :width) || Map.get(style, :width) ||
-        Map.get(element, :size)
+    {size_w, size_h} =
+      case Map.get(element, :size) do
+        {w, h} -> {w, h}
+        s when is_integer(s) -> {s, nil}
+        _ -> {nil, nil}
+      end
 
-    raw_height = Map.get(element, :height) || Map.get(style, :height)
+    raw_width =
+      Map.get(element, :width) || Map.get(style, :width) || size_w
+
+    raw_height =
+      Map.get(element, :height) || Map.get(style, :height) || size_h
 
     width = if raw_width == :fill, do: available_space.width, else: raw_width
 
@@ -938,8 +967,8 @@ defmodule Raxol.UI.Layout.Engine do
     {width, height}
   end
 
-  # Shrink available space by a symmetric overhead amount.
-  defp shrink_space_by(available_space, overhead) do
+  # Shrink available space by {horizontal, vertical} overhead.
+  defp shrink_space_by(available_space, {overhead_w, overhead_h}) do
     avail_w =
       Map.get(available_space, :width, Raxol.Core.Defaults.terminal_width())
 
@@ -947,8 +976,8 @@ defmodule Raxol.UI.Layout.Engine do
       Map.get(available_space, :height, Raxol.Core.Defaults.terminal_height())
 
     Map.merge(available_space, %{
-      width: max(0, avail_w - overhead),
-      height: max(0, avail_h - overhead)
+      width: max(0, avail_w - overhead_w),
+      height: max(0, avail_h - overhead_h)
     })
   end
 
@@ -958,18 +987,18 @@ defmodule Raxol.UI.Layout.Engine do
     %{width: w, height: h}
   end
 
-  defp resolve_box_size(w, _h, children, inner_space, overhead)
+  defp resolve_box_size(w, _h, children, inner_space, {_ow, oh})
        when is_integer(w) do
     child_dims = measure_children_as_column(children, inner_space)
-    %{width: w, height: child_dims.height + overhead}
+    %{width: w, height: child_dims.height + oh}
   end
 
-  defp resolve_box_size(_w, _h, children, inner_space, overhead) do
+  defp resolve_box_size(_w, _h, children, inner_space, {ow, oh}) do
     child_dims = measure_children_as_column(children, inner_space)
 
     %{
-      width: child_dims.width + overhead,
-      height: child_dims.height + overhead
+      width: child_dims.width + ow,
+      height: child_dims.height + oh
     }
   end
 
@@ -990,7 +1019,9 @@ defmodule Raxol.UI.Layout.Engine do
     if map_size(existing) > 0 and Map.has_key?(existing, :flex_direction) do
       flex
     else
-      Map.put(flex, :attrs, build_flex_attrs(flex))
+      # Preserve caller-set attrs (e.g. %{flex: %{grow: 1}} on a child)
+      # on top of the defaults derived from top-level keys/style.
+      Map.put(flex, :attrs, Map.merge(build_flex_attrs(flex), existing))
     end
   end
 

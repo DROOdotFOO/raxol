@@ -277,7 +277,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   """
   def process_system_event(event, state) do
     case event do
-      %Event{type: :resize, data: data} -> handle_resize_event(data, state)
+      %Event{type: :resize} -> handle_resize_event(event, state)
       %Event{type: :quit} -> {:quit, state}
       %Event{type: :focus, data: data} -> handle_focus_event(data, state)
       %Event{type: :error, data: data} -> handle_error_event(data, state)
@@ -285,7 +285,10 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     end
   end
 
-  defp handle_resize_event(%{width: width, height: height}, state) do
+  defp handle_resize_event(
+         %Event{data: %{width: width, height: height}} = event,
+         state
+       ) do
     # Forward size to the Rendering Engine so layout uses actual terminal dimensions
     if state.rendering_engine do
       GenServer.cast(
@@ -294,8 +297,21 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       )
     end
 
-    send(state.runtime_pid, :render_needed)
-    {:ok, %{state | width: width, height: height}, []}
+    sized_state = %{state | width: width, height: height}
+
+    # Forward the resize event to the application's update/2 so apps that
+    # track terminal dimensions (e.g. for reflow) see the new size.
+    # process_app_update sends :render_needed on success; on failure (e.g.
+    # an app without a catch-all update clause) fall back to just re-rendering
+    # with the new dimensions.
+    case process_app_update(sized_state, event, event) do
+      {:ok, _updated_state, _commands} = ok ->
+        ok
+
+      _error ->
+        send(state.runtime_pid, :render_needed)
+        {:ok, sized_state, []}
+    end
   end
 
   defp handle_focus_event(%{focused: focused}, state) do

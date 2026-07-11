@@ -98,6 +98,21 @@ defmodule Raxol.Headless do
   end
 
   @doc """
+  Sends a terminal resize event to the session's dispatcher.
+
+  The dispatcher forwards the new dimensions to the rendering engine
+  (resizing its buffer) and to the application's `update/2` as a
+  `%Event{type: :resize, data: %{width: w, height: h}}`.
+  """
+  @spec send_resize(atom(), pos_integer(), pos_integer()) ::
+          :ok | {:error, term()}
+  def send_resize(id, width, height)
+      when is_integer(width) and width > 0 and is_integer(height) and
+             height > 0 do
+    GenServer.call(__MODULE__, {:send_resize, id, width, height}, 5_000)
+  end
+
+  @doc """
   Sends a key and returns a screenshot after waiting for re-render.
 
   ## Options
@@ -182,6 +197,17 @@ defmodule Raxol.Headless do
       {:ok, session} ->
         result = dispatch_key(session, key, opts)
         {:reply, result, state}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:send_resize, id, width, height}, _from, state) do
+    case get_session(state, id) do
+      {:ok, session} ->
+        {:reply, dispatch_resize(session, width, height), state}
 
       error ->
         {:reply, error, state}
@@ -422,6 +448,23 @@ defmodule Raxol.Headless do
   defp dispatch_key(session, key, opts) do
     with_dispatcher(session, fn dispatcher_pid ->
       event = EventBuilder.key(key, opts)
+
+      _ =
+        Backpressure.cast(dispatcher_pid, {:dispatch, event},
+          label: :headless_dispatch,
+          policy: :call_when_full
+        )
+
+      :ok
+    end)
+  end
+
+  defp dispatch_resize(session, width, height) do
+    with_dispatcher(session, fn dispatcher_pid ->
+      event = %Raxol.Core.Events.Event{
+        type: :resize,
+        data: %{width: width, height: height}
+      }
 
       _ =
         Backpressure.cast(dispatcher_pid, {:dispatch, event},

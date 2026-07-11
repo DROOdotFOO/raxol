@@ -29,8 +29,18 @@ defmodule Raxol.Terminal.Driver.Dispatch do
   Sends an initial resize event to the dispatcher based on current terminal size.
   """
   def send_initial_resize_event(dispatcher_pid) do
+    send_resize_event(dispatcher_pid)
+  end
+
+  @doc """
+  Queries the current terminal size and dispatches a `%Event{type: :resize}`.
+
+  Used both for the initial size notification at Driver startup and for
+  subsequent SIGWINCH-driven window resizes.
+  """
+  def send_resize_event(dispatcher_pid) do
     {:ok, width, height} = TerminalSize.get_terminal_size()
-    Log.info("Initial terminal size: #{width}x#{height}")
+    Log.info("Terminal size: #{width}x#{height}")
     event = %Event{type: :resize, data: %{width: width, height: height}}
 
     if Env.test?() do

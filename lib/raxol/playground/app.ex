@@ -223,15 +223,23 @@ defmodule Raxol.Playground.App do
   # -- Layout --
 
   defp main_view(model) do
+    content =
+      row style: %{gap: 0} do
+        [
+          sidebar_panel(model),
+          demo_panel(model)
+        ]
+      end
+
+    # Grow the content row so it absorbs all vertical space between the
+    # header and the status bar; the status bar stays pinned to the bottom
+    # of the terminal instead of floating under the content.
+    content = Map.put(content, :attrs, %{flex: %{grow: 1}})
+
     column style: %{gap: 0} do
       [
         header_bar(),
-        row style: %{gap: 0} do
-          [
-            sidebar_panel(model),
-            demo_panel(model)
-          ]
-        end,
+        content,
         status_bar(model)
       ]
     end

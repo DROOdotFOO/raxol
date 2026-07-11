@@ -57,7 +57,8 @@ defmodule Raxol.Terminal.Driver do
               init_retries: 0,
               io_terminal_state: nil,
               input_buffer: <<>>,
-              flush_timer: nil
+              flush_timer: nil,
+              sigwinch_handler: nil
   end
 
   # --- Public API ---
@@ -152,9 +153,7 @@ defmodule Raxol.Terminal.Driver do
       {_, _, nil} ->
         # No dispatcher — this is the Application supervisor's placeholder Driver.
         # Don't set up the terminal; the Lifecycle's Driver will do that.
-        Raxol.Core.Runtime.Log.info(
-          "[TerminalDriver] No dispatcher, skipping terminal setup."
-        )
+        Raxol.Core.Runtime.Log.info("[TerminalDriver] No dispatcher, skipping terminal setup.")
 
         {:ok, state}
 
@@ -191,6 +190,11 @@ defmodule Raxol.Terminal.Driver do
         if dispatcher_pid,
           do: Dispatch.send_initial_resize_event(dispatcher_pid)
 
+        # Subscribe to SIGWINCH so window resizes reach the app. Input data
+        # arrives via the prim_tty reader trace, but SIGWINCH is delivered by
+        # :erl_signal_server directly to user_drv, so we need our own handler.
+        sigwinch_handler = install_sigwinch_handler()
+
         # Activate prim_tty reader for input. In -noshell mode, prim_tty
         # was initialized with tty => false, so the reader gets no select
         # notifications. start_stdin_reader triggers reinit with tty => true
@@ -201,6 +205,7 @@ defmodule Raxol.Terminal.Driver do
           state
           | termbox_state: :initialized,
             original_stty: original_stty,
+            sigwinch_handler: sigwinch_handler,
             io_terminal_state: %{
               input_reader: Process.whereis(:user_drv_reader),
               tty_fd: nil,
@@ -254,9 +259,7 @@ defmodule Raxol.Terminal.Driver do
         {:termbox_event, event_map},
         %{termbox_state: :initialized, dispatcher_pid: dispatcher_pid} = state
       ) do
-    Raxol.Core.Runtime.Log.debug(
-      "Received termbox event: #{inspect(event_map)}"
-    )
+    Raxol.Core.Runtime.Log.debug("Received termbox event: #{inspect(event_map)}")
 
     case EventTranslator.translate(event_map) do
       {:ok, %Event{} = event} ->
@@ -270,9 +273,7 @@ defmodule Raxol.Terminal.Driver do
 
       :ignore ->
         # Event type we don't care about
-        Raxol.Core.Runtime.Log.debug(
-          "[Driver] Ignoring termbox event: #{inspect(event_map)}"
-        )
+        Raxol.Core.Runtime.Log.debug("[Driver] Ignoring termbox event: #{inspect(event_map)}")
 
         {:noreply, state}
 
@@ -303,6 +304,19 @@ defmodule Raxol.Terminal.Driver do
       _ -> {:stop, {:termbox_error, reason}, state}
     end
   end
+
+  # SIGWINCH arrived (via SigwinchHandler on :erl_signal_server) — the
+  # terminal window was resized. Query the fresh size and dispatch a
+  # resize event so the app and rendering engine can reflow.
+  @impl true
+  def handle_manager_info(:sigwinch, %{dispatcher_pid: pid} = state)
+      when is_pid(pid) do
+    Dispatch.send_resize_event(pid)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_manager_info(:sigwinch, state), do: {:noreply, state}
 
   @impl true
   def handle_manager_info({:register_dispatcher, pid}, state)
@@ -340,9 +354,7 @@ defmodule Raxol.Terminal.Driver do
       "[TerminalDriver.handle_cast - :test_input] Parsed event: #{inspect(event)}"
     )
 
-    Raxol.Core.Runtime.Log.debug(
-      "[TEST] Dispatching simulated event: #{inspect(event)}"
-    )
+    Raxol.Core.Runtime.Log.debug("[TEST] Dispatching simulated event: #{inspect(event)}")
 
     _ =
       Backpressure.cast(state.dispatcher_pid, {:dispatch, event},
@@ -466,13 +478,12 @@ defmodule Raxol.Terminal.Driver do
 
   def terminate(_reason, %{termbox_state: :initialized} = state) do
     Raxol.Core.Runtime.Log.info("Terminal Driver terminating.")
+    remove_sigwinch_handler(state)
     TermboxLifecycle.cleanup_terminal(state)
   end
 
   def terminate(_reason, _state) do
-    Raxol.Core.Runtime.Log.info(
-      "Terminal Driver terminating (not initialized)."
-    )
+    Raxol.Core.Runtime.Log.info("Terminal Driver terminating (not initialized).")
 
     :ok
   end
@@ -550,6 +561,44 @@ defmodule Raxol.Terminal.Driver do
 
   @doc false
   def noop_shell, do: :ok
+
+  # --- SIGWINCH subscription ---
+  # OTP's prim_tty delivers SIGWINCH from :erl_signal_server straight to
+  # user_drv (not through the reader we trace), so we install our own
+  # gen_event handler that pings this process on window resize.
+
+  defp install_sigwinch_handler do
+    handler_id = {Raxol.Terminal.Driver.SigwinchHandler, self()}
+
+    case :gen_event.add_handler(
+           :erl_signal_server,
+           handler_id,
+           %{driver: self()}
+         ) do
+      :ok ->
+        handler_id
+
+      other ->
+        Raxol.Core.Runtime.Log.warning_with_context(
+          "[Driver] Could not install SIGWINCH handler (window resize " <>
+            "events disabled): #{inspect(other)}",
+          %{}
+        )
+
+        nil
+    end
+  catch
+    _, _ -> nil
+  end
+
+  defp remove_sigwinch_handler(%{sigwinch_handler: nil}), do: :ok
+
+  defp remove_sigwinch_handler(%{sigwinch_handler: handler_id}) do
+    _ = :gen_event.delete_handler(:erl_signal_server, handler_id, :normal)
+    :ok
+  catch
+    _, _ -> :ok
+  end
 
   # --- Input buffering ---
   # Escape sequences may span multiple messages, so we buffer until complete.
