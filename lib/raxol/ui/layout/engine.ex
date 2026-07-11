@@ -224,18 +224,20 @@ defmodule Raxol.UI.Layout.Engine do
     # Create a text element at the given position
     style_map = style_to_map(Map.get(attrs_map, :style, %{}))
 
-    text_element = %{
-      type: :text,
-      x: space.x,
-      y: space.y,
-      text: Map.get(attrs_map, :content, Map.get(attrs_map, :text, "")),
-      fg: Map.get(attrs_map, :fg),
-      bg: Map.get(attrs_map, :bg),
-      style: style_map,
-      link: Map.get(attrs_map, :link),
-      # Pass original attributes through, let Renderer handle styling
-      attrs: Map.put(attrs_map, :original_type, type)
-    }
+    text_element =
+      %{
+        type: :text,
+        x: space.x,
+        y: space.y,
+        text: Map.get(attrs_map, :content, Map.get(attrs_map, :text, "")),
+        fg: Map.get(attrs_map, :fg),
+        bg: Map.get(attrs_map, :bg),
+        style: style_map,
+        link: Map.get(attrs_map, :link),
+        # Pass original attributes through, let Renderer handle styling
+        attrs: Map.put(attrs_map, :original_type, type)
+      }
+      |> stamp_paint_bound(space)
 
     [text_element | acc]
   end
@@ -255,21 +257,23 @@ defmodule Raxol.UI.Layout.Engine do
         _ -> {0, 0}
       end
 
-    text_element = %{
-      type: :text,
-      x: space.x + dx,
-      y: space.y + dy,
-      text: content,
-      fg: Map.get(element, :fg),
-      bg: Map.get(element, :bg),
-      style: style_map,
-      link: Map.get(element, :link),
-      attrs: %{
+    text_element =
+      %{
+        type: :text,
+        x: space.x + dx,
+        y: space.y + dy,
+        text: content,
+        fg: Map.get(element, :fg),
+        bg: Map.get(element, :bg),
         style: style_map,
-        id: Map.get(element, :id),
-        original_type: :text
+        link: Map.get(element, :link),
+        attrs: %{
+          style: style_map,
+          id: Map.get(element, :id),
+          original_type: :text
+        }
       }
-    }
+      |> stamp_paint_bound(space)
 
     [text_element | acc]
   end
@@ -400,6 +404,7 @@ defmodule Raxol.UI.Layout.Engine do
 
     box_space = %{space | width: width, height: height}
     inner_space = box_inner_space(box_space, border, padding)
+    children_space = stamp_text_paint_bound(inner_space, style, border, explicit_w)
 
     box_style = Map.get(box, :style, %{})
     animation_hints = Map.get(box, :animation_hints, [])
@@ -421,7 +426,7 @@ defmodule Raxol.UI.Layout.Engine do
 
     children_acc =
       children
-      |> process_children(inner_space, [])
+      |> process_children(children_space, [])
       |> apply_overflow_clip(style, inner_space, space)
 
     [box_element | children_acc] ++ acc
@@ -1206,6 +1211,56 @@ defmodule Raxol.UI.Layout.Engine do
   defp intersect_bounds({ax1, ay1, ax2, ay2}, {bx1, by1, bx2, by2}) do
     {max(ax1, bx1), max(ay1, by1), min(ax2, bx2), min(ay2, by2)}
   end
+
+  # ---------------------------------------------------------------------
+  # text_overflow (paint-time ellipsis backstop): a box with a visible
+  # border or an explicit/fill width presents a definite boundary to the
+  # user, so text painted past it looks broken (runs through the border)
+  # rather than merely "overflowing" per CSS `:visible`. Such a box stamps
+  # `:text_paint_bound` (`:ellipsis` | `:clip`) onto the space it hands to
+  # `process_children/3`. Flexbox narrows `space.width` per child via
+  # `Map.merge` (see `Flexbox.Positioner.build_child_space/4`), which
+  # preserves this key, so it reaches text leaves at whatever width they
+  # actually got allocated -- including flex-divided siblings, not just a
+  # box's single direct child. `Elements.measure`d text turns the key into
+  # `:max_paint_width` + `:text_overflow` at `stamp_paint_bound/2` below;
+  # `ElementRenderer` truncates at paint time via
+  # `Raxol.UI.TextLayout.truncate/3`.
+  #
+  # A box with no border and no explicit width is purely organizational
+  # (it auto-fills whatever space it's given); it does not stamp the key,
+  # so text inside stays unconstrained -- matching pre-existing behavior.
+  # `style: %{text_overflow: :clip}` on the box swaps the ellipsis for a
+  # hard clip. A nested box's own stamp (set when IT is processed, before
+  # this key would reach its text) always wins for its own subtree.
+  # ---------------------------------------------------------------------
+  defp stamp_text_paint_bound(inner_space, style, border, explicit_w) do
+    if definite_box_bound?(border, explicit_w) do
+      Map.put(inner_space, :text_paint_bound, text_overflow_mode(style))
+    else
+      inner_space
+    end
+  end
+
+  defp definite_box_bound?(border, explicit_w) do
+    border not in [:none, false] or explicit_w == :fill or is_integer(explicit_w)
+  end
+
+  defp text_overflow_mode(style) do
+    case Map.get(style, :text_overflow, :ellipsis) do
+      :clip -> :clip
+      _ellipsis_or_other -> :ellipsis
+    end
+  end
+
+  defp stamp_paint_bound(text_element, %{text_paint_bound: mode, width: width})
+       when mode in [:ellipsis, :clip] do
+    text_element
+    |> Map.put(:max_paint_width, max(width, 0))
+    |> Map.put(:text_overflow, mode)
+  end
+
+  defp stamp_paint_bound(text_element, _space), do: text_element
 
   defp enrich_flex_attrs(%{type: :flex} = flex) do
     existing = Map.get(flex, :attrs, %{})

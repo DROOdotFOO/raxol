@@ -259,17 +259,35 @@ defmodule Raxol.UI.ElementRenderer do
     fg = resolve_fg(style)
     bg = resolve_bg(style)
     attrs = extract_text_attrs(style) ++ hyperlink_attrs(style)
+    max_width = Map.get(style, :max_paint_width)
+    overflow_mode = Map.get(style, :text_overflow, :ellipsis)
 
     # Multi-line content: each line restarts at the ELEMENT's x on the
     # next row. Newlines must never become buffer cells — a literal "\n"
     # in a cell linefeeds the terminal to column 0, dragging the rest of
-    # the text outside the element's layout box.
+    # the text outside the element's layout box. Each line is bounded
+    # independently, so a multi-line element inside a bordered box gets
+    # an ellipsis on every overflowing line, not just the first.
     text
     |> String.split("\n")
     |> Enum.with_index()
     |> Enum.flat_map(fn {line, row_offset} ->
-      render_text_line(line, x, y + row_offset, fg, bg, attrs)
+      line
+      |> bound_line(max_width, overflow_mode)
+      |> render_text_line(x, y + row_offset, fg, bg, attrs)
     end)
+  end
+
+  # Paint-time overflow backstop: `:max_paint_width` is stamped by the
+  # layout engine only when the text sits inside a box with a definite
+  # boundary (border or explicit/fill width). `TextLayout.truncate/3` is a
+  # no-op when the line already fits, so non-overflowing text is
+  # byte-identical to before this backstop existed. Absent the stamp
+  # (unconstrained flow), lines are never touched here.
+  defp bound_line(line, nil, _mode), do: line
+
+  defp bound_line(line, max_width, mode) when is_integer(max_width) do
+    Raxol.UI.TextLayout.truncate(line, max_width, mode)
   end
 
   # Width-aware text rendering - CJK/fullwidth chars advance x by 2

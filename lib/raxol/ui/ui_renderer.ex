@@ -183,7 +183,9 @@ defmodule Raxol.UI.Renderer do
          parent_style
        ) do
     merged_style =
-      StyleProcessor.flatten_merged_style(parent_style, text_element, theme)
+      parent_style
+      |> StyleProcessor.flatten_merged_style(text_element, theme)
+      |> put_paint_bound(text_element)
 
     cells = ElementRenderer.render_text(x, y, text_content, merged_style, theme)
     CellManager.clip_cells_to_bounds(cells, Map.get(text_element, :clip_bounds))
@@ -331,4 +333,18 @@ defmodule Raxol.UI.Renderer do
 
   defp add_clip_bounds(child, clip_bounds),
     do: Map.put(child, :clip_bounds, clip_bounds)
+
+  # Layout (`Engine.stamp_paint_bound/2`) stamps `:max_paint_width` +
+  # `:text_overflow` directly on a positioned `:text` element when it sits
+  # inside a box with a definite boundary. Carry both onto the style map so
+  # `ElementRenderer.render_text/5` -- which only sees `style`, not the raw
+  # element -- can apply the paint-time ellipsis/clip backstop.
+  defp put_paint_bound(style, %{max_paint_width: w} = text_element)
+       when is_integer(w) do
+    style
+    |> Map.put(:max_paint_width, w)
+    |> Map.put(:text_overflow, Map.get(text_element, :text_overflow, :ellipsis))
+  end
+
+  defp put_paint_bound(style, _text_element), do: style
 end
