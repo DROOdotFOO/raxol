@@ -58,10 +58,19 @@ defmodule Raxol.UI.Components.Display.Viewport do
       style: Map.get(props, :style, %{}),
       theme: Map.get(props, :theme, %{}),
       show_scrollbar: Map.get(props, :show_scrollbar, true),
-      focused: Map.get(props, :focused, false)
+      focused: Map.get(props, :focused, false),
+      # CSS overflow-anchor, terminal-log flavor. :auto keeps the view
+      # pinned to the bottom on new content once already scrolled there
+      # (follow mode); scrolling up releases it. :none never moves.
+      overflow_anchor: Map.get(props, :overflow_anchor, :auto)
     }
 
     {:ok, state}
+  end
+
+  # At-bottom check BEFORE a content change; drives :auto anchoring.
+  defp at_bottom?(state) do
+    state.scroll_top >= max(0, state.content_height - state.visible_height)
   end
 
   @impl true
@@ -72,13 +81,26 @@ defmodule Raxol.UI.Components.Display.Viewport do
 
   @impl true
   def update({:set_children, children}, state) do
+    new_height = length(children)
+
     scroll_top =
-      clamp_scroll(state.scroll_top, length(children), state.visible_height)
+      case state.overflow_anchor do
+        :auto ->
+          if at_bottom?(state) do
+            # follow mode: stay pinned to the new bottom
+            max(0, new_height - state.visible_height)
+          else
+            clamp_scroll(state.scroll_top, new_height, state.visible_height)
+          end
+
+        :none ->
+          clamp_scroll(state.scroll_top, new_height, state.visible_height)
+      end
 
     {%{
        state
        | children: children,
-         content_height: length(children),
+         content_height: new_height,
          scroll_top: scroll_top
      }, []}
   end
