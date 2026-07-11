@@ -126,7 +126,12 @@ defmodule BorderBeamDemo do
 
   defp pad(atom, width) do
     str = Atom.to_string(atom)
-    str <> String.duplicate(" ", max(width - String.length(str), 0))
+    # display width, not String.length -- correct even if a label goes wide
+    str <>
+      String.duplicate(
+        " ",
+        max(width - Raxol.UI.TextMeasure.display_width(str), 0)
+      )
   end
 
   @impl true
