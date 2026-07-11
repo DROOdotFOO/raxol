@@ -790,6 +790,16 @@ defmodule Raxol.UI.Layout.Engine do
     measure_element_by_type(container_type, element, %{}, available_space)
   end
 
+  # normalize DSL top-level headers/rows for measure
+  def measure_element(%{type: :table} = element, available_space) do
+    measured =
+      element
+      |> Table.normalize_table_attrs()
+      |> Table.measure(available_space)
+
+    Map.take(measured, [:width, :height])
+  end
+
   def measure_element(%{type: :spacer} = spacer, available_space) do
     size = Map.get(spacer, :size, 1)
 

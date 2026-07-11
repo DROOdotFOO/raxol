@@ -18,6 +18,43 @@ defmodule Raxol.UI.Layout.Table do
   @fallback_available_width Raxol.Core.Defaults.terminal_width()
 
   @doc """
+  Normalizes DSL top-level `headers`/`rows`/`data` into `attrs.columns`/`attrs.rows`;
+  existing `attrs.columns` wins.
+  """
+  def normalize_table_attrs(table_element) do
+    attrs = Map.get(table_element, :attrs, %{})
+
+    if Map.get(attrs, :columns) do
+      attrs
+    else
+      headers =
+        Map.get(attrs, :headers) || Map.get(table_element, :headers, [])
+
+      rows =
+        Map.get(attrs, :rows) || Map.get(attrs, :data) ||
+          Map.get(table_element, :rows) || Map.get(table_element, :data) || []
+
+      columns =
+        case headers do
+          [] ->
+            # headerless: derive column count from the widest row;
+            # downstream width inference (infer_columns_from_rows) keys
+            # off the empty-columns case, so leave columns empty and let
+            # it infer — but only when rows exist
+            []
+
+          hs ->
+            Enum.map(hs, &%{label: to_string(&1), width: :auto})
+        end
+
+      attrs
+      |> Map.put(:columns, columns)
+      |> Map.put(:rows, rows)
+      |> Map.put_new(:show_header, headers != [])
+    end
+  end
+
+  @doc """
   Measures a table element.
 
   Calculates the required dimensions for a table based on:
@@ -75,7 +112,7 @@ defmodule Raxol.UI.Layout.Table do
         _ -> %{elements: [], measurements: %{}}
       end
 
-    attrs = Map.get(table_element, :attrs, %{})
+    attrs = normalize_table_attrs(table_element)
     columns = Map.get(attrs, :columns, [])
     # Support both 'rows' and 'data' attributes
     rows = Map.get(attrs, :rows, Map.get(attrs, :data, []))
@@ -96,10 +133,9 @@ defmodule Raxol.UI.Layout.Table do
         show_borders
       )
 
-    # Build positioned elements
     positioned_elements =
       build_positioned_elements(
-        table_element,
+        Map.put(table_element, :attrs, attrs),
         cell_positions,
         measurements,
         space
@@ -283,7 +319,9 @@ defmodule Raxol.UI.Layout.Table do
   defp content_width_for_column(column, col_idx, rows) do
     case Map.get(column, :width, :auto) do
       :auto ->
-        header_text = Map.get(column, :header, "")
+        # column definitions carry :label (Components.Table convention) or
+        # :header — auto width must fit whichever is present
+        header_text = Map.get(column, :label) || Map.get(column, :header, "")
         header_width = Raxol.UI.TextMeasure.display_width(header_text)
 
         content_width =
@@ -404,19 +442,32 @@ defmodule Raxol.UI.Layout.Table do
          table_element,
          _cell_positions,
          measurements,
-         _space
+         space
        ) do
-    # Return the table element with enriched attributes
+    # Produces the _headers/_data/_col_widths contract ElementRenderer.render_table consumes.
     attrs = Map.get(table_element, :attrs, %{})
-    enriched_attrs = Map.put(attrs, :_col_widths, measurements.column_widths)
+
+    headers =
+      if Map.get(attrs, :show_header, true) do
+        attrs |> Map.get(:columns, []) |> Enum.map(&Map.get(&1, :label, ""))
+      else
+        []
+      end
+
+    enriched_attrs =
+      attrs
+      |> Map.put(:_col_widths, measurements.column_widths)
+      |> Map.put_new(:_headers, headers)
+      |> Map.put_new(:_data, Map.get(attrs, :rows, Map.get(attrs, :data, [])))
 
     enriched_table =
-      Map.put(table_element, :attrs, enriched_attrs)
+      table_element
+      |> Map.put(:attrs, enriched_attrs)
+      |> Map.put(:x, Map.get(space, :x, 0))
+      |> Map.put(:y, Map.get(space, :y, 0))
       |> Map.put(:width, measurements.width)
       |> Map.put(:height, measurements.height)
 
-    # Returns the enriched table element
-    # Cell positioning can be handled by a different layer if needed
     [enriched_table]
   end
 end
