@@ -72,6 +72,29 @@ defmodule Raxol.Playground.DemoHelpers do
   end
 
   @doc """
+  Renders `content` (Markdown text) through
+  `Raxol.UI.Components.MarkdownRenderer` -- the canonical Markdown-to-styled-
+  elements renderer (bold/italic/code spans, headings, lists, blockquotes,
+  code blocks, horizontal rules). Wraps its `init/1` + `render/2` lifecycle
+  so it drops into a `row`/`column`/`box` children list exactly like
+  `text/1` and `rich_text/2`.
+
+  ## Examples
+
+      markdown("# Title\\n\\nSome **bold** text.", 40)
+  """
+  @spec markdown(String.t(), pos_integer()) :: map()
+  def markdown(content, width) do
+    {:ok, state} =
+      Raxol.UI.Components.MarkdownRenderer.init(%{
+        markdown_text: content,
+        width: width
+      })
+
+    Raxol.UI.Components.MarkdownRenderer.render(state, %{})
+  end
+
+  @doc """
   Navigate backward through input history.
 
   Expects the model to have `:input_history`, `:history_index`, `:input`, and `:cursor` fields.

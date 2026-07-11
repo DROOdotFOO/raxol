@@ -2,15 +2,24 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
   @moduledoc """
   Playground demo: markdown rendering with raw toggle.
 
-  Rendered-mode body paragraphs use `text_wrap: :pretty`
-  (`docs/core/LAYOUT.md` section 4) -- Knuth-Plass wrapping minimizes
-  ragged line lengths, which suits prose better than the default greedy
-  wrap. Headers and bullets keep single-line rendering since they're
-  short by convention.
+  Rendered mode delegates the full document to
+  `Raxol.UI.Components.MarkdownRenderer` (via `DemoHelpers.markdown/2`),
+  the canonical Markdown-to-styled-elements renderer: bold/italic/code
+  spans render as individually-styled elements when a line fits within
+  the box's prose width, headings/lists/blockquotes/code get their own
+  styling, and horizontal rules are drawn to width.
+
+  Overflowing lines are word-wrapped via `Raxol.UI.TextLayout.wrap/3`
+  (greedy `:normal` wrapping) rather than Knuth-Plass `:pretty` wrapping --
+  `MarkdownRenderer` does not implement span-aware wrapping (preserving
+  inline styles across a wrap boundary is documented future work there),
+  so once a line's segments no longer fit, styling is dropped and the
+  plain text is greedy-wrapped instead. Raw mode shows the literal
+  Markdown source, one line per row, untouched.
   """
   use Raxol.Core.Runtime.Application
 
-  import Raxol.Playground.DemoHelpers, only: [effective_width: 2, rich_text: 2]
+  import Raxol.Playground.DemoHelpers, only: [effective_width: 2, markdown: 2]
 
   @default_content_box_width 45
   @border_and_padding_overhead 4
@@ -64,12 +73,14 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
     box_width = effective_width(model, @default_content_box_width)
     prose_width = max(box_width - @border_and_padding_overhead, 1)
 
-    content_lines =
-      doc.content
-      |> String.split("\n")
-      |> Enum.map(fn line ->
-        if model.raw, do: text(line), else: render_line(line, prose_width)
-      end)
+    body =
+      if model.raw do
+        doc.content
+        |> String.split("\n")
+        |> Enum.map(&text/1)
+      else
+        [markdown(doc.content, prose_width)]
+      end
 
     column style: %{gap: 1} do
       [
@@ -87,7 +98,7 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
               width: box_width
             } do
           column style: %{gap: 0} do
-            content_lines
+            body
           end
         end,
         divider(),
@@ -99,27 +110,4 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
 
   @impl true
   def subscribe(_model), do: []
-
-  defp render_line(line, prose_width) do
-    cond do
-      String.starts_with?(line, "# ") ->
-        text(String.trim_leading(line, "# "), style: [:bold, :underline])
-
-      String.starts_with?(line, "- ") ->
-        body = String.trim_leading(line, "- ") |> render_inline()
-        text("  * " <> body)
-
-      line == "" ->
-        text("")
-
-      true ->
-        rich_text(render_inline(line), width: prose_width, text_wrap: :pretty)
-    end
-  end
-
-  defp render_inline(str) do
-    str
-    |> String.replace(~r/\*([^*]+)\*/, "_\\1_")
-    |> String.replace(~r/`([^`]+)`/, "[\\1]")
-  end
 end

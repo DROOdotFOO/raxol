@@ -159,6 +159,32 @@ defmodule Raxol.Playground.DemoRenderTest do
                  "Last frame:\n\n" <>
                  numbered(String.split(union_text, "\n"))
       end
+
+      # Phase 4: Markdown-specific regression check. MarkdownDemo starts in
+      # rendered (non-raw) mode -- the initial screenshot must show styled
+      # content, never literal Markdown marker characters leaking through
+      # (the original bug: `*bold*`/`_em_`/`` `code` `` rendered as their
+      # own source text instead of being converted to styled spans).
+      if @component.name == "Markdown" do
+        refute Regex.match?(~r/`[^`\n]+`/, initial_text),
+               header(@component.name) <>
+                 "literal backtick code markers leaked into rendered output.\n\n" <>
+                 "Rendered output:\n\n" <> numbered(lines)
+
+        refute Regex.match?(~r/\*[^*\s][^*\n]*\*/, initial_text),
+               header(@component.name) <>
+                 "literal *bold*/*em* asterisk markers leaked into rendered output " <>
+                 "(bullet prefixes like \"  * \" are fine; a closed *word* pair is not).\n\n" <>
+                 "Rendered output:\n\n" <> numbered(lines)
+
+        refute Regex.match?(
+                 ~r/(?<![[:alnum:]])_[^_\s][^_\n]*_(?![[:alnum:]])/,
+                 initial_text
+               ),
+               header(@component.name) <>
+                 "literal _em_ underscore markers leaked into rendered output.\n\n" <>
+                 "Rendered output:\n\n" <> numbered(lines)
+      end
     end
   end
 
