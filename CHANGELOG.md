@@ -1,17 +1,38 @@
 ## [Unreleased]
 
-### Removed
+## [2.6.0] - 2026-07-11
 
-- **`raxol_acp`: v1 memo model retired (seller-stack migration Phases 1-4, #385/#390/#388/#389/#391)**. Deleted `Raxol.ACP.Job.{Server, Supervisor, Registry, Workflow, StateMachine, MemoType, FeeType, Store}`, `Raxol.ACP.ContractClient` (+ `Onchain` + `InMemory`), the memo `Raxol.ACP.Directive`s + their executor, `Raxol.ACP.Onchain.LogDecoder`, and the `acp_version` / `ACP_VERSION` switch. The v2 hook/event model (`Raxol.ACP.JobSession` + `Raxol.ACP.HookClient` -> `AgenticCommerceV3` via `Raxol.ACP.ProviderAdapter`) is now the only runtime. `raxol_acp` bumped `0.2.0-pre.0 -> 0.2.0-rc.0`. Supersedes ADR-0016/0017. See `packages/raxol_acp/MIGRATION_V2.md`.
+### Added
+
+- **LiveView accessibility: ARIA roles + announcement live region (#431)**. The LiveView terminal surface now emits ARIA roles and an `aria-live` region so screen readers announce state changes.
+- **Accessibility projection + MCP a11y fields (#428)**. The model exposes an accessibility projection; MCP screenshots carry a11y fields describing focus, roles, and announcements.
+- **OpenRouter backend harness with app attribution (#414)**. `Backend.Selector`'s `:openrouter` harness targets OpenRouter (OpenAI-compatible) and attaches app-attribution headers (HTTP-Referer, X-OpenRouter-Title, X-OpenRouter-Categories) so Raxol appears on openrouter.ai/rankings.
+- **`raxol_payments`: `recipient_address` on the Xochi `QuoteRequest` (#416)**, and stealth fields surfaced in the ACP Xochi deliverable so buyers can settle to a stealth meta-address.
+- **Property tests for the money-adjacent paths (#392/#393)**: `router_property_test` (trust-score totality / monotonicity / clamp / tier_override bounds), `ledger_release_property_test` (`Ledger.release/4` refund netting), `jsonrpc_nonce_test` (concurrent-send nonce distinctness), `job_session/telemetry_test` (pins the `[:raxol, :acp, :job_session, :transition]` cross-package contract with `raxol_symphony`), and an exhaustive `JobSession.Status.validate/2` matrix.
+
+### Changed
+
+- **Toolchain: Elixir 1.20 / OTP 29, zero warnings (#398)**.
+- **`raxol_payments`: MPP amounts pinned to atomic integer units (#413)**; Xochi Tron deposit-route quotes verified.
+- **Web surface hardening (#427/#418/#426)**: web deploy gained a CI gate, health check, SSH, and warnings-as-errors; the raxol.io agent surface was tightened; the landing demo is interactive (forwards keydown).
 
 ### Fixed
 
 - **`raxol_acp`: EOA nonce race in `ProviderAdapter.JSONRPC` (#392)**. `send_calls/3` fetched the pending nonce inline, so two concurrent sends for one EOA signed the same nonce and the RPC silently dropped one (fund loss on retry). Nonce assignment now routes through the mailbox-serialized `Raxol.ACP.Wallet.NonceServer`; a failed send resyncs to re-fetch and re-fill the gap. The SCA/UserOp path is unaffected.
 - **`raxol_payments`: negative trust score crashed the router (#393)**. `Raxol.Payments.Router` clamped only the upper trust-score bound, so a negative `:trust_score` hit `PrivacyTier.from_trust_score/2` (no negative clause) and raised `FunctionClauseError` on the settlement path. Now clamped to `[0,100]` at the boundary.
+- **`raxol_payments`: x402 auto-pay budget leak and value binding (#403)**; refunded status now handled and the session budget reconciled on refund (#402); `Ledger` reservation tags are bounded with a TTL sweep (#407).
+- **`raxol_acp`: write-confirmation correctness**. EOA transactions confirm the receipt before reporting write success (#412); a reverted UserOp is rejected as a failed SCA write (#409); `accept_request` (#408) and seller delivery (#406) are idempotent.
+- **Web release stability**: fixed a raxol.io release boot crash (#424), restored web PubSub + SSH for minimal-mode Raxol (#425), set ssh/public_key to `:permanent` (#420), and excluded nested build artifacts from the Docker context (#422).
+- **CI: de-flaked two timing-sensitive property tests (#432)** (parser performance budget, process-isolation link race) that failed seed-dependently on the nightly and macOS matrices.
 
-### Added
+### Security
 
-- **Property tests for the money-adjacent paths above (#392/#393)**: `router_property_test` (trust-score totality / monotonicity / clamp / tier_override bounds), `ledger_release_property_test` (`Ledger.release/4` refund netting), `jsonrpc_nonce_test` (concurrent-send nonce distinctness), `job_session/telemetry_test` (pins the `[:raxol, :acp, :job_session, :transition]` cross-package contract with `raxol_symphony`), and an exhaustive `JobSession.Status.validate/2` matrix.
+- **`raxol_payments`: wallet private key guarded from crash-report leak (#404)**. Keys are wrapped so they cannot surface in `Inspect` output or crash reports.
+- **Dependencies: pruned orphaned lockfile deps, dropping the Tesla CVEs (#415)**; dropped the earmark dependency (#396).
+
+### Removed
+
+- **`raxol_acp`: v1 memo model retired (seller-stack migration Phases 1-4, #385/#390/#388/#389/#391)**. Deleted `Raxol.ACP.Job.{Server, Supervisor, Registry, Workflow, StateMachine, MemoType, FeeType, Store}`, `Raxol.ACP.ContractClient` (+ `Onchain` + `InMemory`), the memo `Raxol.ACP.Directive`s + their executor, `Raxol.ACP.Onchain.LogDecoder`, and the `acp_version` / `ACP_VERSION` switch. The v2 hook/event model (`Raxol.ACP.JobSession` + `Raxol.ACP.HookClient` -> `AgenticCommerceV3` via `Raxol.ACP.ProviderAdapter`) is now the only runtime. `raxol_acp` graduated `0.2.0-pre.0 -> 0.2.0`. Supersedes ADR-0016/0017. See `packages/raxol_acp/MIGRATION_V2.md`.
 
 ## [2.5.0] - 2026-07-07
 
