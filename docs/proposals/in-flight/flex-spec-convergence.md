@@ -70,6 +70,12 @@ Spec-following where a spec exists; monospace grid makes all of these cheaper th
 - Tests: golden wraps per property incl. CJK/emoji boundaries; property test — `pretty` never produces more lines than `auto`; ellipsis output width never exceeds container.
 - Estimate: 2.5-3 days total (1-1.5 of it is `pretty`).
 
+### Phase F — overflow + scroll anchoring (V-requested 2026-07-11, needs design pass)
+Driver: terminal-style UIs (playground Virtual FS example) need principled overflow.
+- `overflow: :visible | :hidden | :clip | :scroll | :auto` as a container property — formalize the ad-hoc clip_bounds already present in `UIRenderer.render_box_children`; `:scroll`/`:auto` integrate with the existing `ScrollContent`/Viewport machinery rather than a new scroller.
+- `overflow-anchor: :auto | :none` (CSS Scroll Anchoring, simplified): pick an anchor node in the visible region; on relayout, adjust scroll offset so the anchor keeps its viewport-relative position. Terminal-log idiom (bottom-follow: anchored to end until user scrolls up) as the first-class case.
+- Scope/design after Phase A+B land; drive with the Virtual FS demo as the acceptance example.
+
 ### Phase D — unification + deletion
 - Delete verified-dead: `:flexbox` API, legacy Calculator half, `Components.Box.calculate_layout`.
 - `:row`/`:column` -> `:flex` with explicit compat map (D4): preserve current Containers defaults; Viewport + panels (measure via synthetic `:column`) + responsive (builds synthetic flex) named as consumers requiring their own characterization pins.
