@@ -40,7 +40,7 @@ defmodule Raxol.Playground.Demos.TextInputDemo do
         text("Input:"),
         box style: %{
               border: :single,
-              padding: 1,
+              padding: {0, 1, 0, 1},
               width: effective_width(model, @default_input_box_width)
             } do
           text(display <> "_")
@@ -49,7 +49,7 @@ defmodule Raxol.Playground.Demos.TextInputDemo do
         divider(),
         box style: %{
               border: :rounded,
-              padding: 1,
+              padding: {0, 1, 0, 1},
               width: effective_width(model, @default_input_box_width)
             } do
           column style: %{gap: 0} do

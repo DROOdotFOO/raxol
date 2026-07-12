@@ -162,7 +162,9 @@ defmodule Raxol.Core.Renderer do
     text = Enum.map_join(reversed_chars, "", & &1.char)
     style = List.first(reversed_chars) |> Map.get(:style, %{})
 
-    new_ops = [{:move, run_start, y}, {:write, text, style} | ops]
+    # ops is built reversed and flipped once at the end; prepend write
+    # before move so the final order is [{:move, ...}, {:write, ...}]
+    new_ops = [{:write, text, style}, {:move, run_start, y} | ops]
     {new_ops, nil, []}
   end
 
