@@ -15,9 +15,11 @@ if [[ ! -f "$ALLOWLIST" ]]; then
   exit 2
 fi
 
-# Match real start_link calls (require start_link at line start modulo
-# whitespace) -- this skips comment lines like "# Usage: ... start_link(name: __MODULE__)".
-pattern='^[[:space:]]*(GenServer|Agent|Supervisor|DynamicSupervisor)\.start_link.*name: __MODULE__'
+# Match real start_link calls. The call must be at line start modulo whitespace,
+# with an optional `case ` or `{...} =`/`{...} <-` binding prefix so idempotent
+# wrappers still register -- this skips comment lines like
+# "# Usage: ... start_link(name: __MODULE__)".
+pattern='^[[:space:]]*(case[[:space:]]+|\{[^}]*\}[[:space:]]*[=<-]+[[:space:]]*)?(GenServer|Agent|Supervisor|DynamicSupervisor)\.start_link.*name: __MODULE__'
 
 # First-party paths only -- skip vendored deps and _build.
 roots=(
