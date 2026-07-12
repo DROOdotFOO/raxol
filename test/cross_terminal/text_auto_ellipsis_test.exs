@@ -81,6 +81,7 @@ defmodule Raxol.CrossTerminal.TextAutoEllipsisTest do
   describe "CJK boundary" do
     test "never splits a double-width grapheme; ellipsis moves one cell earlier" do
       text = "中文测试ABCDEFGHIJKLMNOP"
+
       {elements, cells} =
         render(bordered_box(text, width: 14), %{width: 40, height: 10})
 
