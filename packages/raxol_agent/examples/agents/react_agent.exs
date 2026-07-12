@@ -219,7 +219,6 @@ defmodule ReactAgent do
 
   @actions [Actions.CountLines, Actions.FormatReport, Actions.Summarize]
 
-  @impl true
   def available_actions, do: @actions
 
   @impl true
