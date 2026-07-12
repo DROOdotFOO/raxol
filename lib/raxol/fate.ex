@@ -73,9 +73,11 @@ defmodule Raxol.FATE do
     case read_refs_file() do
       {:ok, contents} ->
         contents
-        |> String.split("\n", trim: true)
+        |> String.split(~r/\r?\n/, trim: true)
         |> Map.new(fn line ->
-          [name, hash] = String.split(line, ~r/\s+/, parts: 2)
+          [name, hash] =
+            line |> String.trim() |> String.split(~r/\s+/, parts: 2)
+
           {name, hash}
         end)
 
