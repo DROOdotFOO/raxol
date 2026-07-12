@@ -115,7 +115,13 @@ defmodule Raxol.Property.SSHRenderingTest do
         ssh_state = ssh_state(self())
         {:ok, ssh_result} = Backends.render_to_ssh(cells, ssh_state)
 
-        terminal_state = %{width: 80, height: 24, buffer: nil, sync_output: false}
+        terminal_state = %{
+          width: 80,
+          height: 24,
+          buffer: nil,
+          sync_output: false
+        }
+
         # Capture IO to avoid writing to actual terminal
         {:ok, term_result} = capture_terminal_render(cells, terminal_state)
 
@@ -188,7 +194,13 @@ defmodule Raxol.Property.SSHRenderingTest do
   describe "Lifecycle.terminate/2 wiring" do
     property "terminate/2 delegates to terminate_manager/2" do
       check all(
-              reason <- member_of([:normal, :shutdown, :killed, {:shutdown, :user_quit}]),
+              reason <-
+                member_of([
+                  :normal,
+                  :shutdown,
+                  :killed,
+                  {:shutdown, :user_quit}
+                ]),
               max_runs: 10
             ) do
         state = %Lifecycle.State{
@@ -219,13 +231,16 @@ defmodule Raxol.Property.SSHRenderingTest do
           alternate_screen: true,
           plugin_manager: nil,
           command_registry_table: nil,
-          options: [environment: :ssh, io_writer: fn data -> send(self(), {:escape, data}) end]
+          options: [
+            environment: :ssh,
+            io_writer: fn data -> send(self(), {:escape, data}) end
+          ]
         }
 
         Lifecycle.terminate(:shutdown, state)
 
         assert_received {:escape, "\e[?1049l"},
-                         "leave-alt-screen escape not sent on terminate"
+                        "leave-alt-screen escape not sent on terminate"
       end
     end
 
@@ -264,16 +279,19 @@ defmodule Raxol.Property.SSHRenderingTest do
           alternate_screen: false,
           plugin_manager: nil,
           command_registry_table: nil,
-          options: [environment: env, io_writer: fn data -> send(self(), {:escape, data}) end]
+          options: [
+            environment: env,
+            io_writer: fn data -> send(self(), {:escape, data}) end
+          ]
         }
 
         Lifecycle.terminate(:shutdown, state)
 
         refute_received {:escape, "\e[?1049h"},
-                         "enter-alt-screen escape sent when alternate_screen is false"
+                        "enter-alt-screen escape sent when alternate_screen is false"
 
         refute_received {:escape, "\e[?1049l"},
-                         "leave-alt-screen escape sent when alternate_screen is false"
+                        "leave-alt-screen escape sent when alternate_screen is false"
       end
     end
 
@@ -288,13 +306,16 @@ defmodule Raxol.Property.SSHRenderingTest do
           alternate_screen: true,
           plugin_manager: nil,
           command_registry_table: nil,
-          options: [environment: env, io_writer: fn data -> send(self(), {:escape, data}) end]
+          options: [
+            environment: env,
+            io_writer: fn data -> send(self(), {:escape, data}) end
+          ]
         }
 
         Lifecycle.terminate(:shutdown, state)
 
         refute_received {:escape, _},
-                         "escape sequence sent for non-terminal env #{env}"
+                        "escape sequence sent for non-terminal env #{env}"
       end
     end
 
@@ -342,7 +363,90 @@ defmodule Raxol.Property.SSHRenderingTest do
     end
   end
 
+  # -- Property 7: CRLF normalization (raw-mode prim_tty doesn't cook LF) --
+  #
+  # prim_tty runs in raw OUTPUT mode and never translates a bare `\n` to
+  # `\r\n`. Renderer.render/1 joins rows with a bare `\n`, so without
+  # normalization every row after the first would drift instead of a clean
+  # line advance. Backends.normalize_frame/1 fixes this at the write site.
+
+  describe "frame CRLF normalization" do
+    property "render_to_ssh frames contain no bare LF (every \\n preceded by \\r)" do
+      check all(
+              cells <- cells_gen(),
+              max_runs: 200
+            ) do
+        state = ssh_state(self())
+        {:ok, _new_state} = Backends.render_to_ssh(cells, state)
+
+        output = collect_writes()
+
+        refute has_bare_lf?(output),
+               "SSH frame contains a bare \\n not preceded by \\r: #{inspect(output)}"
+      end
+    end
+
+    property "render_to_terminal frames contain no bare LF (every \\n preceded by \\r)" do
+      check all(
+              cells <- cells_gen(),
+              max_runs: 200
+            ) do
+        terminal_state = %{
+          width: 80,
+          height: 24,
+          buffer: nil,
+          sync_output: false
+        }
+
+        output = capture_terminal_output(cells, terminal_state)
+
+        refute has_bare_lf?(output),
+               "Terminal frame contains a bare \\n not preceded by \\r: #{inspect(output)}"
+      end
+    end
+
+    test "normalize_frame/1 converts bare LF row joins to CRLF" do
+      assert Backends.normalize_frame("row1\nrow2\nrow3") ==
+               "row1\r\nrow2\r\nrow3"
+    end
+
+    test "normalize_frame/1 leaves already-normalized \\r\\n untouched-per-LF" do
+      # Applying normalize_frame to already-\r\n content adds a redundant
+      # \r (row\r\n -> row\r\r\n) rather than corrupting it -- a redundant
+      # CR at column 0 is a no-op in both raw and cooked terminal modes, so
+      # double-normalization stays safe even if ever applied twice.
+      once = Backends.normalize_frame("row1\nrow2")
+      twice = Backends.normalize_frame(once)
+
+      assert once == "row1\r\nrow2"
+      assert twice == "row1\r\r\nrow2"
+      refute has_bare_lf?(twice)
+    end
+
+    test "normalize_frame/1 leaves LF-free content untouched" do
+      assert Backends.normalize_frame("\e[H\e[2Jno newlines here") ==
+               "\e[H\e[2Jno newlines here"
+    end
+  end
+
   # -- Helpers --
+
+  # Returns true if any \n in the string is not immediately preceded by \r.
+  defp has_bare_lf?(string) do
+    string
+    |> String.graphemes()
+    |> Enum.reduce({false, nil}, fn
+      "\n", {_found, prev} -> {prev != "\r", "\n"}
+      char, {found, _prev} -> {found, char}
+    end)
+    |> elem(0)
+  end
+
+  defp capture_terminal_output(cells, state) do
+    ExUnit.CaptureIO.capture_io(fn ->
+      {:ok, _new_state} = Backends.render_to_terminal(cells, state)
+    end)
+  end
 
   defp collect_writes do
     collect_write_list() |> Enum.join()

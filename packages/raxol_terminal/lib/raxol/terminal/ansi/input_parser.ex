@@ -34,6 +34,11 @@ defmodule Raxol.Terminal.ANSI.InputParser do
       {nil, <<>>} ->
         Enum.reverse(acc)
 
+      {:consumed, rest} ->
+        # A well-formed sequence with no event mapping (secondary DA reply,
+        # CPR, DECRQM response, ...) was consumed whole. Emit nothing.
+        parse_loop(rest, acc)
+
       {nil, _rest} ->
         # Unrecognized byte -- skip it and continue
         <<_, rest::binary>> = data
@@ -189,8 +194,18 @@ defmodule Raxol.Terminal.ANSI.InputParser do
         key = csi_letter_to_key(letter)
         {key_event(key, shift: shift, alt: alt, ctrl: ctrl), rest}
 
-      _ ->
-        {nil, data}
+      {_params, final_byte, rest} when is_integer(final_byte) ->
+        # Well-formed CSI sequence with no event mapping (secondary DA
+        # reply, cursor position report, DECRQM response, ...). Consume it
+        # whole -- {nil, data} would make parse_loop skip only the ESC and
+        # re-parse the rest as printable char keys.
+        {:consumed, rest}
+
+      {_params, nil, <<>>} ->
+        # Chunk ended mid-CSI (e.g. the input buffer flushed an incomplete
+        # sequence after its timeout). Drop the fragment rather than leak
+        # its bytes as char keys.
+        {:consumed, <<>>}
     end
   end
 
@@ -219,6 +234,15 @@ defmodule Raxol.Terminal.ANSI.InputParser do
   defp parse_csi_params(<<>>, current_digits, params) do
     num = digits_to_integer(current_digits)
     {params ++ [num], nil, <<>>}
+  end
+
+  # Catch-all for CSI parameter/intermediate bytes with no special meaning
+  # (private markers `<` `=` `>` `?` `:`, ECMA-48 intermediates 0x20-0x2F).
+  # Without this clause, an unrecognized byte is a FunctionClauseError that
+  # crashes the Driver GenServer. Skip it and keep scanning for the final
+  # byte, keeping parsing total.
+  defp parse_csi_params(<<_byte, rest::binary>>, current_digits, params) do
+    parse_csi_params(rest, current_digits, params)
   end
 
   defp digits_to_integer([]), do: 0
@@ -319,7 +343,16 @@ defmodule Raxol.Terminal.ANSI.InputParser do
         {event, rest}
 
       _ ->
-        {nil, data}
+        # Not a complete SGR mouse report (malformed or truncated after a
+        # buffer flush). Consume through the final byte -- or drop the
+        # fragment -- instead of leaking the bytes as char key events.
+        case parse_csi_params(data) do
+          {_params, final_byte, rest} when is_integer(final_byte) ->
+            {:consumed, rest}
+
+          _ ->
+            {:consumed, <<>>}
+        end
     end
   end
 

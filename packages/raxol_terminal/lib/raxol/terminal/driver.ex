@@ -20,6 +20,7 @@ defmodule Raxol.Terminal.Driver do
   alias Raxol.Core.Events.Event
   alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Terminal.ANSI.InputParser
+  alias Raxol.Terminal.Driver.BackgroundQuery
   alias Raxol.Terminal.Driver.Dispatch
   alias Raxol.Terminal.Driver.EventTranslator
   alias Raxol.Terminal.Driver.InputBuffer
@@ -57,7 +58,9 @@ defmodule Raxol.Terminal.Driver do
               init_retries: 0,
               io_terminal_state: nil,
               input_buffer: <<>>,
-              flush_timer: nil
+              flush_timer: nil,
+              sigwinch_handler: nil,
+              bg_query_pending: false
   end
 
   # --- Public API ---
@@ -173,8 +176,14 @@ defmodule Raxol.Terminal.Driver do
         # Suppress Logger console output so it doesn't corrupt the TUI
         Logger.configure(level: :none)
 
-        # Enter alternate screen, hide cursor
-        IO.write("\e[?1049h\e[?25l")
+        # Enter alternate screen, hide cursor, disable DECAWM (autowrap,
+        # \e[?7l): the frame writes full-terminal-width rows via \e[H, and
+        # with autowrap on, the last cell of a full-width row advances the
+        # cursor on its own, so the frame's own newline advances a *second*
+        # time -- doubling every content row. See normalize_frame/1 in
+        # Raxol.Core.Runtime.Rendering.Backends for the LF->CRLF half of the
+        # fix. Restored in TermboxLifecycle.cleanup_terminal/1.
+        IO.write("\e[?1049h\e[?25l\e[?7l")
 
         # Reset mouse tracking (may be left over from a crashed session)
         IO.write("\e[?1003l\e[?1006l\e[?1000l")
@@ -191,16 +200,32 @@ defmodule Raxol.Terminal.Driver do
         if dispatcher_pid,
           do: Dispatch.send_initial_resize_event(dispatcher_pid)
 
+        # Subscribe to SIGWINCH so window resizes reach the app. Input data
+        # arrives via the prim_tty reader trace, but SIGWINCH is delivered by
+        # :erl_signal_server directly to user_drv, so we need our own handler.
+        sigwinch_handler = install_sigwinch_handler()
+
         # Activate prim_tty reader for input. In -noshell mode, prim_tty
         # was initialized with tty => false, so the reader gets no select
         # notifications. start_stdin_reader triggers reinit with tty => true
         # and sets up trace interception of the reader's output.
         start_stdin_reader(self())
 
+        # Query the terminal background (OSC 11) with a DA probe as the
+        # unsupported-terminal sentinel; replies are extracted from the
+        # input stream in dispatch_raw_input/2. Must run after
+        # start_stdin_reader: writing it earlier races prim_tty's tty=>true
+        # reinit and can corrupt job control before a frame ever renders.
+        # Any failure here degrades to "no background detected" rather than
+        # crashing init.
+        bg_query_pending = write_background_query()
+
         state = %{
           state
           | termbox_state: :initialized,
+            bg_query_pending: bg_query_pending,
             original_stty: original_stty,
+            sigwinch_handler: sigwinch_handler,
             io_terminal_state: %{
               input_reader: Process.whereis(:user_drv_reader),
               tty_fd: nil,
@@ -303,6 +328,19 @@ defmodule Raxol.Terminal.Driver do
       _ -> {:stop, {:termbox_error, reason}, state}
     end
   end
+
+  # SIGWINCH arrived (via SigwinchHandler on :erl_signal_server) — the
+  # terminal window was resized. Query the fresh size and dispatch a
+  # resize event so the app and rendering engine can reflow.
+  @impl true
+  def handle_manager_info(:sigwinch, %{dispatcher_pid: pid} = state)
+      when is_pid(pid) do
+    Dispatch.send_resize_event(pid)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_manager_info(:sigwinch, state), do: {:noreply, state}
 
   @impl true
   def handle_manager_info({:register_dispatcher, pid}, state)
@@ -438,7 +476,8 @@ defmodule Raxol.Terminal.Driver do
   end
 
   defp dispatch_raw_input(data, state) do
-    events = InputParser.parse(data)
+    {data, state} = handle_bg_query_reply(data, state)
+    events = parse_input_safely(data)
 
     Enum.each(events, fn event ->
       case state.dispatcher_pid do
@@ -449,6 +488,106 @@ defmodule Raxol.Terminal.Driver do
 
     {:noreply, state}
   end
+
+  # Last-resort net: InputParser.parse/1 is written to be total over the
+  # ANSI/CSI grammar, but a parser bug here must never crash the Driver --
+  # terminate/2's cleanup write can race supervisor shutdown and take stdio
+  # down before the terminal is restored. Drop this chunk rather than crash.
+  defp parse_input_safely(data) do
+    InputParser.parse(data)
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] InputParser crashed on raw input, dropping this chunk: " <>
+          inspect(error),
+        %{}
+      )
+
+      []
+  catch
+    kind, reason ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] InputParser raised #{inspect(kind)} on raw input, dropping this chunk: " <>
+          inspect(reason),
+        %{}
+      )
+
+      []
+  end
+
+  # Writes the OSC 11 background query and returns whether a reply should
+  # be awaited. On any failure, skip the query rather than leave the driver
+  # waiting on a reply that never comes; background detection falls back to
+  # "no background detected" (BackgroundQuery.detected_background/0 :error).
+  defp write_background_query do
+    IO.write(BackgroundQuery.query_sequence())
+    true
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] Failed to write OSC 11 background query, skipping background detection: " <>
+          inspect(error),
+        %{}
+      )
+
+      false
+  catch
+    kind, reason ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] OSC 11 background query write raised #{inspect(kind)}, skipping background detection: " <>
+          inspect(reason),
+        %{}
+      )
+
+      false
+  end
+
+  # While an OSC 11 background query is pending, extract its reply (and the
+  # DA probe reply) from the input stream so they never reach the key parser.
+  # Any exception here degrades to "no background detected" and passes the
+  # chunk through untouched -- a malformed reply can't crash the driver or
+  # block real input.
+  defp handle_bg_query_reply(data, %{bg_query_pending: true} = state) do
+    case BackgroundQuery.scan(data) do
+      {{:ok, rgb}, cleaned} ->
+        BackgroundQuery.store(rgb)
+
+        if state.dispatcher_pid do
+          Dispatch.send_event_to_dispatcher(
+            state.dispatcher_pid,
+            %Event{type: :terminal_background, data: %{color: rgb}}
+          )
+        end
+
+        {cleaned, %{state | bg_query_pending: false}}
+
+      {:unsupported, cleaned} ->
+        {cleaned, %{state | bg_query_pending: false}}
+
+      {:pending, data} ->
+        {data, state}
+    end
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] OSC 11 reply scan failed, falling back to no background detected: " <>
+          inspect(error),
+        %{}
+      )
+
+      {data, %{state | bg_query_pending: false}}
+  catch
+    kind, reason ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] OSC 11 reply scan raised #{inspect(kind)}, falling back to no background detected: " <>
+          inspect(reason),
+        %{}
+      )
+
+      {data, %{state | bg_query_pending: false}}
+  end
+
+  defp handle_bg_query_reply(data, state), do: {data, state}
 
   # Forward cast messages to handle_info for test_input
   @impl true
@@ -466,6 +605,7 @@ defmodule Raxol.Terminal.Driver do
 
   def terminate(_reason, %{termbox_state: :initialized} = state) do
     Raxol.Core.Runtime.Log.info("Terminal Driver terminating.")
+    remove_sigwinch_handler(state)
     TermboxLifecycle.cleanup_terminal(state)
   end
 
@@ -509,47 +649,92 @@ defmodule Raxol.Terminal.Driver do
   end
 
   # --- Input reader ---
-  # In -noshell mode (mix run), prim_tty is initialized with tty => false,
-  # so its reader process never receives select notifications. We trigger
-  # reinit via user_drv:start_shell, then trace-intercept the reader's
-  # data messages.
+  # In -noshell mode (mix run), user_drv initializes prim_tty with
+  # tty => false, so the reader process never receives select notifications
+  # and blocks forever. Trigger a reinit via user_drv:start_shell (which
+  # spawns a fresh reader that arms select notifications), then trace the
+  # reader's sends to intercept input data before user_drv forwards it.
   defp start_stdin_reader(_driver_pid) do
-    # In -noshell mode, user_drv initializes prim_tty with tty => false,
-    # so the NIF never sets up the terminal fd for select notifications.
-    # The reader process exists but is blocked waiting for events that
-    # never arrive.
-    #
-    # Fix: call user_drv:start_shell to trigger prim_tty:reinit with
-    # tty => true, which activates the terminal fd. Then trace the
-    # reader to intercept input data before it reaches user_drv.
-    reader = Process.whereis(:user_drv_reader)
+    # `initial_shell` must be the literal atom `:noshell`, never an MFA
+    # (even a no-op one): user_drv only skips shell-spawning when
+    # initial_shell =:= :noshell. Any other value falls into
+    # init_local_shell/2, which spawns a real shell via group:start/3; that
+    # process exits immediately and drops user_drv into its JCL "User
+    # switch command" prompt, which swallows every subsequent stdin byte
+    # (including the terminal's OSC 11 / DA reply) as a job-control command
+    # instead of forwarding it, and can bring the node down before a frame
+    # ever renders.
     user_drv = Process.whereis(:user_drv)
 
     if user_drv do
-      # Activate the terminal fd by triggering prim_tty reinit.
       try do
         :gen_statem.call(
           user_drv,
-          {:start_shell, %{initial_shell: {__MODULE__, :noop_shell, []}}}
+          {:start_shell, %{initial_shell: :noshell, input: :raw}}
         )
       catch
         _, _ -> :ok
       end
     end
 
+    # Re-fetch after the reinit above: input=>raw may (re)spawn the reader.
+    reader = Process.whereis(:user_drv_reader)
+
     if reader do
       # Trace the reader's sends to intercept data before user_drv
       # forwards it. The reader sends {ref, {:data, bytes}} to user_drv.
       :erlang.trace(reader, true, [:send])
+
+      # :noshell means user_drv never issues the one-time read kick a real
+      # shell gets on startup (prim_tty:read/1 via init_shell/2), so the
+      # reader arms a select notification and then idles forever -- no
+      # crash, no keystrokes. Send the kick ourselves; :infinity makes it
+      # self-sustaining (the reader re-arms to :infinity after every read).
+      send(reader, {:read, :infinity})
     end
 
-    # Return nil — no spawned reader pid to track. Input arrives via
-    # trace messages in handle_manager_info.
+    # No spawned reader pid to track -- input arrives via trace messages
+    # in handle_manager_info.
     nil
   end
 
-  @doc false
-  def noop_shell, do: :ok
+  # --- SIGWINCH subscription ---
+  # OTP's prim_tty delivers SIGWINCH from :erl_signal_server straight to
+  # user_drv (not through the reader we trace), so we install our own
+  # gen_event handler that pings this process on window resize.
+
+  defp install_sigwinch_handler do
+    handler_id = {Raxol.Terminal.Driver.SigwinchHandler, self()}
+
+    case :gen_event.add_handler(
+           :erl_signal_server,
+           handler_id,
+           %{driver: self()}
+         ) do
+      :ok ->
+        handler_id
+
+      other ->
+        Raxol.Core.Runtime.Log.warning_with_context(
+          "[Driver] Could not install SIGWINCH handler (window resize " <>
+            "events disabled): #{inspect(other)}",
+          %{}
+        )
+
+        nil
+    end
+  catch
+    _, _ -> nil
+  end
+
+  defp remove_sigwinch_handler(%{sigwinch_handler: nil}), do: :ok
+
+  defp remove_sigwinch_handler(%{sigwinch_handler: handler_id}) do
+    _ = :gen_event.delete_handler(:erl_signal_server, handler_id, :normal)
+    :ok
+  catch
+    _, _ -> :ok
+  end
 
   # --- Input buffering ---
   # Escape sequences may span multiple messages, so we buffer until complete.
