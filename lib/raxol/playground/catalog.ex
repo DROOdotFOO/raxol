@@ -152,10 +152,17 @@ defmodule Raxol.Playground.Catalog do
       name: "Text",
       module: Demos.TextDemo,
       category: :display,
-      description: "Text rendering with style variations",
+      description:
+        "Text rendering with style variations, ellipsis truncation, line clamping, and pretty wrapping",
       complexity: :basic,
-      tags: ["display", "text", "style"],
-      code_snippet: ~s'text("Hello", style: [:bold, :italic])'
+      tags: ["display", "text", "style", "wrap", "truncate", "ellipsis"],
+      code_snippet: """
+      text("Hello", style: [:bold, :italic])
+
+      # CSS-style truncation/wrapping via Raxol.UI.Components.Display.Text:
+      {:ok, state} = Text.init(content: line, width: 20, white_space: :nowrap, text_overflow: :ellipsis)
+      Text.render(state, %{})
+      """
     },
     %{
       name: "Tree",
@@ -208,10 +215,18 @@ defmodule Raxol.Playground.Catalog do
       name: "SplitPane",
       module: Demos.SplitPaneDemo,
       category: :layout,
-      description: "Resizable split pane with direction toggle",
+      description:
+        "Resizable split pane with direction toggle, proportionally sized via {:pct, n}",
       complexity: :intermediate,
-      tags: ["layout", "split", "pane", "resize"],
-      code_snippet: ~s'row do [box(left_content), box(right_content)] end'
+      tags: ["layout", "split", "pane", "resize", "pct"],
+      code_snippet: """
+      row style: %{gap: 1, width: 60} do
+        [
+          box(style: %{width: {:pct, 30}, border: :single}, do: left_content),
+          box(style: %{width: {:pct, 70}, border: :single}, do: right_content)
+        ]
+      end
+      """
     },
     %{
       name: "Container",
