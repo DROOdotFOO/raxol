@@ -24,9 +24,10 @@ defmodule Raxol.FATE do
   @spec run() :: [{String.t(), String.t()}]
   def run do
     ensure_preferences()
+    theme = Raxol.UI.Theming.Theme.new()
 
     fixtures()
-    |> Enum.map(fn {name, element} -> {name, hash(element)} end)
+    |> Enum.map(fn {name, element} -> {name, hash(element, theme)} end)
     |> Enum.sort()
   end
 
@@ -88,9 +89,11 @@ defmodule Raxol.FATE do
 
   # --- rendering + hashing -------------------------------------------------
 
-  defp hash(element) do
+  # Render with an explicit canonical theme so the hash never depends on the
+  # global theme registry or cache (which other tests in the suite mutate).
+  defp hash(element, theme) do
     element
-    |> Renderer.render_to_cells()
+    |> Renderer.render_to_cells(theme)
     |> serialize()
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
