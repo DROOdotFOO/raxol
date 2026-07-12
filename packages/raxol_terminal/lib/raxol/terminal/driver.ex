@@ -471,7 +471,7 @@ defmodule Raxol.Terminal.Driver do
 
   defp dispatch_raw_input(data, state) do
     {data, state} = handle_bg_query_reply(data, state)
-    events = InputParser.parse(data)
+    events = parse_input_safely(data)
 
     Enum.each(events, fn event ->
       case state.dispatcher_pid do
@@ -481,6 +481,32 @@ defmodule Raxol.Terminal.Driver do
     end)
 
     {:noreply, state}
+  end
+
+  # Last-resort net: InputParser.parse/1 is written to be total over the
+  # ANSI/CSI grammar, but a parser bug here must never crash the Driver --
+  # terminate/2's cleanup write can race supervisor shutdown and take stdio
+  # down before the terminal is restored. Drop this chunk rather than crash.
+  defp parse_input_safely(data) do
+    InputParser.parse(data)
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] InputParser crashed on raw input, dropping this chunk: " <>
+          inspect(error),
+        %{}
+      )
+
+      []
+  catch
+    kind, reason ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] InputParser raised #{inspect(kind)} on raw input, dropping this chunk: " <>
+          inspect(reason),
+        %{}
+      )
+
+      []
   end
 
   # Writes the OSC 11 background query and returns whether a reply should

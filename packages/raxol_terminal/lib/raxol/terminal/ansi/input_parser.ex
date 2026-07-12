@@ -221,6 +221,15 @@ defmodule Raxol.Terminal.ANSI.InputParser do
     {params ++ [num], nil, <<>>}
   end
 
+  # Catch-all for CSI parameter/intermediate bytes with no special meaning
+  # (private markers `<` `=` `>` `?` `:`, ECMA-48 intermediates 0x20-0x2F).
+  # Without this clause, an unrecognized byte is a FunctionClauseError that
+  # crashes the Driver GenServer. Skip it and keep scanning for the final
+  # byte, keeping parsing total.
+  defp parse_csi_params(<<_byte, rest::binary>>, current_digits, params) do
+    parse_csi_params(rest, current_digits, params)
+  end
+
   defp digits_to_integer([]), do: 0
 
   defp digits_to_integer(digits) do
