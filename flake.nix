@@ -3,8 +3,15 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+  # Pinned via flake.lock and read by default.nix / shell.nix so `nix-build` and
+  # `nix-shell` keep working for non-flake callers. Not consumed by outputs.
+  inputs.flake-compat = {
+    url = "github:edolstra/flake-compat";
+    flake = false;
+  };
+
   outputs =
-    { self, nixpkgs }:
+    { self, nixpkgs, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -63,6 +70,75 @@
               echo "  first run: mix deps.get"
               echo "  tests:     MIX_ENV=test mix test --exclude slow --exclude integration --exclude docker"
             '';
+          };
+        }
+      );
+
+      # Self-contained `raxol` OTP release: the playground TUI plus the golden
+      # render smoke (Raxol.Release.playground/0 and golden/0). `nix build`
+      # assembles it; `nix run` launches the playground.
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+          # Same toolchain as the devShell and .tool-versions (OTP 29 / Elixir 1.20).
+          beam = pkgs.beam.packages.erlang_29;
+        in
+        {
+          default = beam.mixRelease {
+            pname = "raxol";
+            # Keep in sync with mix.exs @version.
+            version = "2.6.0";
+            src = ./.;
+            mixEnv = "prod";
+
+            # The fixed-output deps derivation covers only the hex closure. The
+            # in-tree packages/* path deps are not on hex, so they compile from
+            # src at release time. Do not set HEX_BUILD -- that flips raxol_dep/3
+            # in mix.exs to hex versions and the path deps would fail to resolve.
+            mixFodDeps = beam.fetchMixDeps {
+              pname = "raxol-mix-deps";
+              src = ./.;
+              version = "2.6.0";
+              # Fill on a machine with nix: set to lib.fakeHash, run
+              # `nix build .#default`, copy the reported sha256, rebuild.
+              hash = pkgs.lib.fakeHash;
+            };
+
+            # termbox2 NIF build toolchain (raxol_terminal drives elixir_make ->
+            # make against the vendored c_src).
+            nativeBuildInputs = with pkgs; [
+              gcc
+              gnumake
+              cmake
+              pkg-config
+            ];
+
+            meta = with pkgs.lib; {
+              description = "Multi-surface application runtime for Elixir";
+              homepage = "https://github.com/DROOdotFOO/raxol";
+              license = licenses.mit;
+              platforms = platforms.unix;
+              mainProgram = "raxol";
+            };
+          };
+        }
+      );
+
+      # `nix run` boots the interactive playground. `eval` loads code without
+      # auto-starting applications, which is why Raxol.Release.playground/0 calls
+      # ensure_all_started itself; it needs a real tty, which `nix run` provides.
+      apps = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        {
+          default = {
+            type = "app";
+            program = "${pkgs.writeShellScript "raxol-playground" ''
+              exec ${self.packages.${system}.default}/bin/raxol eval "Raxol.Release.playground()"
+            ''}";
           };
         }
       );
@@ -217,11 +293,5 @@
             ];
           };
         };
-
-      # Follow-up (needs a machine with nix): packages.default via
-      # beam.packages.erlang_27.mixRelease + fetchMixDeps (fill the fixed-output
-      # deps hash on the first build), and apps.default so `nix run` launches the
-      # playground -- which also needs a releases/0 entrypoint in mix.exs.
-      # Tracked in ROADMAP under "Install funnel".
     };
 }
