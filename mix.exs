@@ -106,15 +106,14 @@ defmodule Raxol.MixProject do
   end
 
   # The `raxol` release ships the playground TUI (`Raxol.Release.playground/0`)
-  # and the golden render smoke (`Raxol.Release.golden/0`). runtime_tools is
-  # loaded (not started) so :observer/:recon remote diagnostics work without
-  # starting anything at boot; every other application comes from the dep tree.
+  # and the golden render smoke (`Raxol.Release.golden/0`). :runtime_tools is
+  # already a started dependency (see application/0), so :observer / :recon
+  # diagnostics stay available; every other application comes from the dep tree.
   defp releases do
     [
       raxol: [
         include_executables_for: [:unix],
-        steps: [:assemble],
-        applications: [runtime_tools: :load]
+        steps: [:assemble]
       ]
     ]
   end
