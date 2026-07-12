@@ -91,7 +91,9 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
     {:ok, open_buffer} = Headless.get_buffer(id)
     open_title_cell = cell_at(open_buffer, 0, 0)
     assert open_title_cell.char == "M"
-    assert open_title_cell.style.foreground == {140, 140, 140}
+
+    assert open_title_cell.style.foreground ==
+             Raxol.UI.CellDim.dim_color(:white)
 
     :ok = Headless.send_key(id, "n")
     Process.sleep(50)
