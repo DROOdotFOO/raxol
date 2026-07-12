@@ -30,10 +30,42 @@ config :raxol, Raxol.Repo,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10
 
-# Dev endpoint for Tidewave MCP (localhost:4000/tidewave/mcp)
-# Override with RAXOL_DEV_PORT when 4000 is taken.
+# Dev endpoint for Tidewave MCP (localhost:<port>/tidewave/mcp).
+# RAXOL_DEV_PORT pins an explicit port; otherwise probe upward from 4000
+# for the first free one, so a co-resident service on 4000 (e.g. a local
+# LiteLLM) doesn't take the whole app down with :eaddrinuse. The probe
+# binds all interfaces with no SO_REUSEADDR to match how the endpoint
+# itself binds -- a truthful free/busy read, not a false positive.
+resolve_dev_port = fn ->
+  case System.get_env("RAXOL_DEV_PORT") do
+    nil ->
+      base = 4000
+
+      port =
+        Enum.find(base..(base + 50), base, fn candidate ->
+          case :gen_tcp.listen(candidate, [:binary]) do
+            {:ok, socket} -> :gen_tcp.close(socket) == :ok
+            {:error, _} -> false
+          end
+        end)
+
+      if port != base do
+        IO.puts(
+          :stderr,
+          "[raxol] port #{base} in use; serving web on #{port}. " <>
+            "Set RAXOL_DEV_PORT to pin a port."
+        )
+      end
+
+      port
+
+    explicit ->
+      String.to_integer(explicit)
+  end
+end
+
 config :raxol, Raxol.Endpoint,
-  http: [port: String.to_integer(System.get_env("RAXOL_DEV_PORT") || "4000")],
+  http: [port: resolve_dev_port.()],
   server: true,
   secret_key_base: String.duplicate("dev", 22)
 
