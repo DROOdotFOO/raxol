@@ -30,15 +30,21 @@ defmodule Raxol.UI.CellDimTest do
   describe "dark ground (default, no detection)" do
     test "pins the default-ground dim values" do
       assert CellDim.dim_color(:white) == {106, 106, 106}
-      assert CellDim.dim_color(:cyan) == {41, 97, 97}
+      assert CellDim.dim_color(:cyan) == {3, 100, 100}
       # unlisted atom resolves to mid-gray before dimming, not a crash
       assert CellDim.dim_color(:some_theme_color) == {66, 66, 66}
-      assert CellDim.dim_color({200, 100, 50}) == {96, 56, 38}
+      assert CellDim.dim_color({200, 100, 50}) == {108, 49, 20}
       assert CellDim.dim_color({0, 0, 0}) == {4, 4, 4}
       assert CellDim.dim_color({255, 255, 255}) == {116, 116, 116}
       assert CellDim.dim_color(nil) == nil
       assert CellDim.dim_color(42) == 42
-      assert CellDim.dim_color("#ff0000") == "#78261d"
+      assert CellDim.dim_color("#ff0000") == "#8a0000"
+      # :black is the pipeline's default/unpainted-background sentinel
+      # (ElementRenderer/BorderRenderer default every undeclared bg to
+      # this atom) -- passes through unchanged, same as nil, so it keeps
+      # resolving via the terminal's own indexed ANSI black instead of
+      # being forced into a hardcoded truecolor RGB.
+      assert CellDim.dim_color(:black) == :black
     end
 
     test "a bright color's dimmed apparent lightness drops and moves closer to ground" do
@@ -125,14 +131,57 @@ defmodule Raxol.UI.CellDimTest do
       dimmed = CellDim.dim_cells(cells)
 
       assert [
-               {0, 0, "a", {106, 106, 106}, {96, 56, 38}, [:bold]},
-               {1, 0, "b", {106, 106, 106}, {96, 56, 38}, []},
+               {0, 0, "a", {106, 106, 106}, {108, 49, 20}, [:bold]},
+               {1, 0, "b", {106, 106, 106}, {108, 49, 20}, []},
                {2, 0, "c", nil, nil, []}
              ] = dimmed
     end
 
     test "empty list does not crash" do
       assert CellDim.dim_cells([]) == []
+    end
+
+    test "bg :black sentinel passes through unchanged alongside a dimmed fg" do
+      cells = [{0, 0, "a", :cyan, :black, []}]
+
+      assert [{0, 0, "a", {3, 100, 100}, :black, []}] =
+               CellDim.dim_cells(cells)
+    end
+  end
+
+  describe "chroma/contrast split" do
+    test "dimmed chroma stays well above the just-noticeable threshold for saturated ANSI colors" do
+      for color <- [:blue, :cyan, :green, :red, :magenta, :yellow] do
+        {r, g, b} = CellDim.dim_color(color, @dark_ground_al)
+        {_l, c, _h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
+
+        assert c > 0.04,
+               "#{color} dimmed to chroma #{c}, expected > 0.04 (hue should stay legible)"
+      end
+    end
+
+    test "chroma keep factor is looser than the contrast keep factor" do
+      {l, c, h} = Salience.rgb_to_oklch(0 / 255, 0 / 255, 238 / 255)
+      apparent_l = Salience.apparent_lightness(l, c, h)
+
+      dimmed = CellDim.dim_color({0, 0, 238}, @dark_ground_al)
+
+      {dl, dc, dh} =
+        Salience.rgb_to_oklch(
+          elem(dimmed, 0) / 255,
+          elem(dimmed, 1) / 255,
+          elem(dimmed, 2) / 255
+        )
+
+      dimmed_apparent_l = Salience.apparent_lightness(dl, dc, dh)
+
+      contrast_ratio =
+        abs(dimmed_apparent_l - @dark_ground_al) /
+          abs(apparent_l - @dark_ground_al)
+
+      chroma_ratio = dc / c
+
+      assert chroma_ratio > contrast_ratio
     end
   end
 end

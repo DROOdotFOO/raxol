@@ -24,6 +24,14 @@ defmodule Raxol.UI.CellDim do
   `nil` fg/bg (terminal default -- the element never painted a color)
   always stays `nil`; only colors an element actually painted get pulled
   toward the ground.
+
+  `ElementRenderer`/`BorderRenderer` default every cell that doesn't
+  declare an explicit background to the atom `:black` (see their
+  `resolve_bg/1`) rather than leaving it `nil` -- so in practice `:black`
+  *is* the "unpainted" sentinel for the overwhelming majority of cells that
+  reach this module, not a literal painted color. `:black` is therefore
+  passed through undimmed, same as `nil`: see `dim_color/2` below for the
+  reasoning.
   """
 
   alias Raxol.UI.Theming.Colors, as: ThemeColors
@@ -35,9 +43,19 @@ defmodule Raxol.UI.CellDim do
   @compile {:no_warn_undefined, Raxol.Terminal.Driver.BackgroundQuery}
 
   # Fraction of the ground-apparent-lightness *contrast* a dimmed color
-  # retains (both in apparent lightness and chroma) -- 0.45 keeps the hue
-  # legible while reading clearly muted.
+  # retains -- 0.45 keeps the dim/non-dim distinction unambiguous without
+  # crushing everything to near-ground.
   @contrast_keep 0.45
+
+  # Fraction of *chroma* a dimmed color retains. Kept separate from
+  # `@contrast_keep`: tying chroma to the same 0.45 factor as lightness
+  # contrast was pulling already-modest ANSI-16 chromas (blue ~0.30, cyan
+  # ~0.10) down far enough that colors read as flat gray with the contrast
+  # cue doing all the work -- "dimmed" looked indistinguishable from
+  # "desaturated". 0.65 keeps hue clearly identifiable (dimmed ANSI blue's
+  # OKLCH chroma stays well above the ~0.02 just-noticeable threshold on a
+  # dark ground) while `@contrast_keep` still does the muting.
+  @chroma_keep 0.65
 
   # ANSI-16 atom -> code, matching `Raxol.Core.Renderer.Color`'s private
   # `@ansi_16_map` ordering. Only routes to `ThemeColors.ansi_to_rgb/1`'s
@@ -105,8 +123,17 @@ defmodule Raxol.UI.CellDim do
   (as returned by `ground_apparent_lightness/0`).
 
   * `nil` (unpainted cell) always stays `nil`.
-  * ANSI-16 atoms resolve to their canonical RGB first (unknown atoms,
-    including `:default` and theme-custom names, resolve to mid-gray).
+  * `:black` always stays `:black` -- see the moduledoc: `ElementRenderer`
+    and `BorderRenderer` default every undeclared background to this atom,
+    so it is the pipeline's de facto "unpainted" sentinel, not a literal
+    painted color. Passing it through unchanged (a) matches the documented
+    `nil`-passthrough contract for cells that never painted a color, and
+    (b) keeps it resolving via the terminal's own indexed ANSI black (SGR
+    `40`) instead of being forced into a hardcoded truecolor RGB that can
+    no longer track a terminal profile's customized "black" palette entry.
+  * Other ANSI-16 atoms resolve to their canonical RGB first (unknown
+    atoms, including `:default` and theme-custom names, resolve to
+    mid-gray).
   * `{r, g, b}` tuples and `"#rrggbb"` hex strings dim via OKLCH.
   * Integers (256-color palette indices) pass through unchanged -- there
     is no general reverse mapping from an index to a hue without
@@ -114,6 +141,7 @@ defmodule Raxol.UI.CellDim do
   """
   @spec dim_color(any(), float()) :: any()
   def dim_color(nil, _ground_al), do: nil
+  def dim_color(:black, _ground_al), do: :black
 
   def dim_color({r, g, b}, ground_al)
       when is_integer(r) and is_integer(g) and is_integer(b) do
@@ -179,13 +207,14 @@ defmodule Raxol.UI.CellDim do
   end
 
   # Pull (l, c, h)'s apparent lightness toward `ground_al`, keeping
-  # `@contrast_keep` of the original contrast, and desaturate by the same
-  # factor so hue identity survives while reading muted. Solve back to a
-  # nominal `l` that lands on the new apparent lightness.
+  # `@contrast_keep` of the original contrast, and desaturate by the
+  # (larger) `@chroma_keep` factor so hue identity survives clearly rather
+  # than reading as flat gray. Solve back to a nominal `l` that lands on
+  # the new apparent lightness.
   defp dim_oklch(l, c, h, ground_al) do
     apparent_l = Salience.apparent_lightness(l, c, h)
     new_apparent_l = ground_al + (apparent_l - ground_al) * @contrast_keep
-    new_c = c * @contrast_keep
+    new_c = c * @chroma_keep
     new_l = Salience.solve_lightness(new_apparent_l, new_c, h)
     {new_l, new_c, h}
   end
