@@ -14,12 +14,15 @@ defmodule Raxol.UI.Layout.LayoutUtils do
 
   ## Parameters
 
-  - `space` - Map with :x, :y, :width, :height keys
+  - `space` - Map with :x, :y, :width, :height keys. Any additional keys
+    (e.g. `:prepared_cache`, threaded through layout for text-measurement
+    caching) are preserved unchanged in the result.
   - `padding` - Map with :top, :right, :bottom, :left keys
 
   ## Returns
 
-  Map with adjusted dimensions accounting for padding.
+  The input `space` map with :x, :y, :width, :height adjusted for padding.
+  All other keys are carried through unmodified.
 
   ## Examples
 
@@ -29,12 +32,12 @@ defmodule Raxol.UI.Layout.LayoutUtils do
       %{x: 20, y: 15, width: 80, height: 40}
   """
   def apply_padding(space, padding) do
-    %{
+    Map.merge(space, %{
       x: space.x + padding.left,
       y: space.y + padding.top,
       width: max(0, space.width - padding.left - padding.right),
       height: max(0, space.height - padding.top - padding.bottom)
-    }
+    })
   end
 
   @doc """
