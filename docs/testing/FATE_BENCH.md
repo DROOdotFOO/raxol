@@ -68,6 +68,12 @@ nightly schedule (all trusted refs). There is no `pull_request` trigger, and an
 `if: github.repository_owner == 'DROOdotFOO'` guard fences out forks. Run the runner
 under an unprivileged user with no cloud credentials on the box.
 
+Trigger fencing is only the first gate. A self-hosted runner is a remote-code-execution
+surface and, on the tailnet, a lateral-movement pivot. Apply every layer in
+[FATE_RUNNER_HARDENING.md](FATE_RUNNER_HARDENING.md) (ephemeral runners, process
+isolation, resource caps, a default-deny Tailscale ACL, host firewall, minimal PAT scope)
+before pointing real jobs at the hardware.
+
 ## Runner hosts
 
 The homelab is 3 aarch64 Turing Pi boards, 1 x86_64 box, and 1 x86_64 NixOS laptop,

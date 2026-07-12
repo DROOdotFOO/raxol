@@ -81,6 +81,11 @@
         }:
         let
           cfg = config.raxol.ci.githubRunner;
+
+          tailscaleUpFlags =
+            lib.optional (cfg.tailscaleTags != [ ])
+              ("--advertise-tags=" + lib.concatStringsSep "," cfg.tailscaleTags)
+            ++ lib.optional cfg.shieldsUp "--shields-up";
         in
         {
           options.raxol.ci.githubRunner = {
@@ -116,6 +121,44 @@
               default = [ ];
               description = "Extra runner labels beyond raxol + the arch label.";
             };
+
+            tailscaleTags = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ "tag:ci" ];
+              description = ''
+                Tailscale tags the runner advertises so the tailnet ACL can fence
+                it off: deny lateral movement, allow only admin SSH inbound. See
+                docs/testing/FATE_RUNNER_HARDENING.md for the policy.
+              '';
+            };
+
+            shieldsUp = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Block all inbound tailnet connections (`tailscale up --shields-up`).
+                ACLs are the primary control; enable this only when the host needs
+                no inbound access at all, since it also blocks Tailscale SSH in.
+              '';
+            };
+
+            memoryMax = lib.mkOption {
+              type = lib.types.str;
+              default = "6G";
+              description = ''
+                Hard memory cap for the runner service (systemd MemoryMax), so a
+                runaway or hostile job cannot exhaust the host.
+              '';
+            };
+
+            cpuQuota = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                Optional CPU cap for the runner service (systemd CPUQuota, e.g.
+                "200%" for two cores).
+              '';
+            };
           };
 
           config = lib.mkIf cfg.enable {
@@ -142,15 +185,32 @@
                 git
                 openssl
               ];
+              # Cap resources so a runaway or hostile job cannot take the host
+              # down. The service already runs under a hardened, DynamicUser
+              # sandbox from the upstream module; do not relax those defaults.
+              serviceOverrides =
+                {
+                  MemoryMax = cfg.memoryMax;
+                  TasksMax = 4096;
+                }
+                // lib.optionalAttrs (cfg.cpuQuota != null) {
+                  CPUQuota = cfg.cpuQuota;
+                };
             };
 
             services.tailscale = {
               enable = true;
               authKeyFile = cfg.tailscaleAuthKeyFile;
+              # Tags let the tailnet ACL fence this node off. The ACL, not the
+              # host, is the lateral-movement control (see the hardening doc).
+              extraUpFlags = tailscaleUpFlags;
             };
 
             # The workflow drives the toolchain through `nix develop`, so flakes
-            # must be available system-wide.
+            # must be available system-wide. The runner user is intentionally NOT
+            # added to nix.settings.trusted-users: a trusted user can rewrite Nix
+            # config and add substituters, which would turn a compromised job into
+            # host-level code execution.
             nix.settings.experimental-features = [
               "nix-command"
               "flakes"
