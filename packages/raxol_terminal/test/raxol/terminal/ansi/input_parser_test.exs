@@ -6,37 +6,45 @@ defmodule Raxol.Terminal.ANSI.InputParserTest do
 
   describe "arrow keys" do
     test "parses up arrow" do
-      assert [%Event{type: :key, data: %{key: :up}}] = InputParser.parse(<<27, 91, 65>>)
+      assert [%Event{type: :key, data: %{key: :up}}] =
+               InputParser.parse(<<27, 91, 65>>)
     end
 
     test "parses down arrow" do
-      assert [%Event{type: :key, data: %{key: :down}}] = InputParser.parse(<<27, 91, 66>>)
+      assert [%Event{type: :key, data: %{key: :down}}] =
+               InputParser.parse(<<27, 91, 66>>)
     end
 
     test "parses right arrow" do
-      assert [%Event{type: :key, data: %{key: :right}}] = InputParser.parse(<<27, 91, 67>>)
+      assert [%Event{type: :key, data: %{key: :right}}] =
+               InputParser.parse(<<27, 91, 67>>)
     end
 
     test "parses left arrow" do
-      assert [%Event{type: :key, data: %{key: :left}}] = InputParser.parse(<<27, 91, 68>>)
+      assert [%Event{type: :key, data: %{key: :left}}] =
+               InputParser.parse(<<27, 91, 68>>)
     end
   end
 
   describe "basic keys" do
     test "parses escape" do
-      assert [%Event{type: :key, data: %{key: :escape}}] = InputParser.parse(<<27>>)
+      assert [%Event{type: :key, data: %{key: :escape}}] =
+               InputParser.parse(<<27>>)
     end
 
     test "parses enter (CR)" do
-      assert [%Event{type: :key, data: %{key: :enter}}] = InputParser.parse(<<13>>)
+      assert [%Event{type: :key, data: %{key: :enter}}] =
+               InputParser.parse(<<13>>)
     end
 
     test "parses enter (LF)" do
-      assert [%Event{type: :key, data: %{key: :enter}}] = InputParser.parse(<<10>>)
+      assert [%Event{type: :key, data: %{key: :enter}}] =
+               InputParser.parse(<<10>>)
     end
 
     test "parses backspace" do
-      assert [%Event{type: :key, data: %{key: :backspace}}] = InputParser.parse(<<127>>)
+      assert [%Event{type: :key, data: %{key: :backspace}}] =
+               InputParser.parse(<<127>>)
     end
 
     test "parses tab" do
@@ -46,123 +54,151 @@ defmodule Raxol.Terminal.ANSI.InputParserTest do
 
   describe "printable ASCII" do
     test "parses lowercase letter" do
-      assert [%Event{type: :key, data: %{key: :char, char: "a"}}] = InputParser.parse("a")
+      assert [%Event{type: :key, data: %{key: :char, char: "a"}}] =
+               InputParser.parse("a")
     end
 
     test "parses uppercase letter" do
-      assert [%Event{type: :key, data: %{key: :char, char: "A"}}] = InputParser.parse("A")
+      assert [%Event{type: :key, data: %{key: :char, char: "A"}}] =
+               InputParser.parse("A")
     end
 
     test "parses space" do
-      assert [%Event{type: :key, data: %{key: :char, char: " "}}] = InputParser.parse(" ")
+      assert [%Event{type: :key, data: %{key: :char, char: " "}}] =
+               InputParser.parse(" ")
     end
 
     test "parses digit" do
-      assert [%Event{type: :key, data: %{key: :char, char: "5"}}] = InputParser.parse("5")
+      assert [%Event{type: :key, data: %{key: :char, char: "5"}}] =
+               InputParser.parse("5")
     end
 
     test "parses symbol" do
-      assert [%Event{type: :key, data: %{key: :char, char: "@"}}] = InputParser.parse("@")
+      assert [%Event{type: :key, data: %{key: :char, char: "@"}}] =
+               InputParser.parse("@")
     end
   end
 
   describe "UTF-8 characters" do
     test "parses multi-byte UTF-8" do
-      assert [%Event{type: :key, data: %{key: :char, char: "ñ"}}] = InputParser.parse("ñ")
+      assert [%Event{type: :key, data: %{key: :char, char: "ñ"}}] =
+               InputParser.parse("ñ")
     end
   end
 
   describe "function keys (SS3)" do
     test "parses F1 SS3" do
-      assert [%Event{type: :key, data: %{key: :f1}}] = InputParser.parse(<<27, 79, 80>>)
+      assert [%Event{type: :key, data: %{key: :f1}}] =
+               InputParser.parse(<<27, 79, 80>>)
     end
 
     test "parses F2 SS3" do
-      assert [%Event{type: :key, data: %{key: :f2}}] = InputParser.parse(<<27, 79, 81>>)
+      assert [%Event{type: :key, data: %{key: :f2}}] =
+               InputParser.parse(<<27, 79, 81>>)
     end
 
     test "parses F3 SS3" do
-      assert [%Event{type: :key, data: %{key: :f3}}] = InputParser.parse(<<27, 79, 82>>)
+      assert [%Event{type: :key, data: %{key: :f3}}] =
+               InputParser.parse(<<27, 79, 82>>)
     end
 
     test "parses F4 SS3" do
-      assert [%Event{type: :key, data: %{key: :f4}}] = InputParser.parse(<<27, 79, 83>>)
+      assert [%Event{type: :key, data: %{key: :f4}}] =
+               InputParser.parse(<<27, 79, 83>>)
     end
   end
 
   describe "function keys (CSI tilde)" do
     test "parses F1 CSI" do
-      assert [%Event{type: :key, data: %{key: :f1}}] = InputParser.parse(<<27, 91>> <> "11~")
+      assert [%Event{type: :key, data: %{key: :f1}}] =
+               InputParser.parse(<<27, 91>> <> "11~")
     end
 
     test "parses F2 CSI" do
-      assert [%Event{type: :key, data: %{key: :f2}}] = InputParser.parse(<<27, 91>> <> "12~")
+      assert [%Event{type: :key, data: %{key: :f2}}] =
+               InputParser.parse(<<27, 91>> <> "12~")
     end
 
     test "parses F3 CSI" do
-      assert [%Event{type: :key, data: %{key: :f3}}] = InputParser.parse(<<27, 91>> <> "13~")
+      assert [%Event{type: :key, data: %{key: :f3}}] =
+               InputParser.parse(<<27, 91>> <> "13~")
     end
 
     test "parses F4 CSI" do
-      assert [%Event{type: :key, data: %{key: :f4}}] = InputParser.parse(<<27, 91>> <> "14~")
+      assert [%Event{type: :key, data: %{key: :f4}}] =
+               InputParser.parse(<<27, 91>> <> "14~")
     end
 
     test "parses F5" do
-      assert [%Event{type: :key, data: %{key: :f5}}] = InputParser.parse(<<27, 91>> <> "15~")
+      assert [%Event{type: :key, data: %{key: :f5}}] =
+               InputParser.parse(<<27, 91>> <> "15~")
     end
 
     test "parses F6" do
-      assert [%Event{type: :key, data: %{key: :f6}}] = InputParser.parse(<<27, 91>> <> "17~")
+      assert [%Event{type: :key, data: %{key: :f6}}] =
+               InputParser.parse(<<27, 91>> <> "17~")
     end
 
     test "parses F7" do
-      assert [%Event{type: :key, data: %{key: :f7}}] = InputParser.parse(<<27, 91>> <> "18~")
+      assert [%Event{type: :key, data: %{key: :f7}}] =
+               InputParser.parse(<<27, 91>> <> "18~")
     end
 
     test "parses F8" do
-      assert [%Event{type: :key, data: %{key: :f8}}] = InputParser.parse(<<27, 91>> <> "19~")
+      assert [%Event{type: :key, data: %{key: :f8}}] =
+               InputParser.parse(<<27, 91>> <> "19~")
     end
 
     test "parses F9" do
-      assert [%Event{type: :key, data: %{key: :f9}}] = InputParser.parse(<<27, 91>> <> "20~")
+      assert [%Event{type: :key, data: %{key: :f9}}] =
+               InputParser.parse(<<27, 91>> <> "20~")
     end
 
     test "parses F10" do
-      assert [%Event{type: :key, data: %{key: :f10}}] = InputParser.parse(<<27, 91>> <> "21~")
+      assert [%Event{type: :key, data: %{key: :f10}}] =
+               InputParser.parse(<<27, 91>> <> "21~")
     end
 
     test "parses F11" do
-      assert [%Event{type: :key, data: %{key: :f11}}] = InputParser.parse(<<27, 91>> <> "23~")
+      assert [%Event{type: :key, data: %{key: :f11}}] =
+               InputParser.parse(<<27, 91>> <> "23~")
     end
 
     test "parses F12" do
-      assert [%Event{type: :key, data: %{key: :f12}}] = InputParser.parse(<<27, 91>> <> "24~")
+      assert [%Event{type: :key, data: %{key: :f12}}] =
+               InputParser.parse(<<27, 91>> <> "24~")
     end
   end
 
   describe "navigation keys" do
     test "parses Home (CSI H)" do
-      assert [%Event{type: :key, data: %{key: :home}}] = InputParser.parse(<<27, 91, 72>>)
+      assert [%Event{type: :key, data: %{key: :home}}] =
+               InputParser.parse(<<27, 91, 72>>)
     end
 
     test "parses End (CSI F)" do
-      assert [%Event{type: :key, data: %{key: :end}}] = InputParser.parse(<<27, 91, 70>>)
+      assert [%Event{type: :key, data: %{key: :end}}] =
+               InputParser.parse(<<27, 91, 70>>)
     end
 
     test "parses Home (CSI 1~)" do
-      assert [%Event{type: :key, data: %{key: :home}}] = InputParser.parse(<<27, 91>> <> "1~")
+      assert [%Event{type: :key, data: %{key: :home}}] =
+               InputParser.parse(<<27, 91>> <> "1~")
     end
 
     test "parses End (CSI 4~)" do
-      assert [%Event{type: :key, data: %{key: :end}}] = InputParser.parse(<<27, 91>> <> "4~")
+      assert [%Event{type: :key, data: %{key: :end}}] =
+               InputParser.parse(<<27, 91>> <> "4~")
     end
 
     test "parses Insert" do
-      assert [%Event{type: :key, data: %{key: :insert}}] = InputParser.parse(<<27, 91>> <> "2~")
+      assert [%Event{type: :key, data: %{key: :insert}}] =
+               InputParser.parse(<<27, 91>> <> "2~")
     end
 
     test "parses Delete" do
-      assert [%Event{type: :key, data: %{key: :delete}}] = InputParser.parse(<<27, 91>> <> "3~")
+      assert [%Event{type: :key, data: %{key: :delete}}] =
+               InputParser.parse(<<27, 91>> <> "3~")
     end
 
     test "parses PageUp" do
@@ -176,11 +212,13 @@ defmodule Raxol.Terminal.ANSI.InputParserTest do
     end
 
     test "parses Home (SS3 H)" do
-      assert [%Event{type: :key, data: %{key: :home}}] = InputParser.parse(<<27, 79, 72>>)
+      assert [%Event{type: :key, data: %{key: :home}}] =
+               InputParser.parse(<<27, 79, 72>>)
     end
 
     test "parses End (SS3 F)" do
-      assert [%Event{type: :key, data: %{key: :end}}] = InputParser.parse(<<27, 79, 70>>)
+      assert [%Event{type: :key, data: %{key: :end}}] =
+               InputParser.parse(<<27, 79, 70>>)
     end
   end
 
@@ -297,11 +335,13 @@ defmodule Raxol.Terminal.ANSI.InputParserTest do
     end
 
     test "Ctrl+J maps to enter (byte 10)" do
-      assert [%Event{type: :key, data: %{key: :enter}}] = InputParser.parse(<<10>>)
+      assert [%Event{type: :key, data: %{key: :enter}}] =
+               InputParser.parse(<<10>>)
     end
 
     test "Ctrl+M maps to enter (byte 13)" do
-      assert [%Event{type: :key, data: %{key: :enter}}] = InputParser.parse(<<13>>)
+      assert [%Event{type: :key, data: %{key: :enter}}] =
+               InputParser.parse(<<13>>)
     end
   end
 
@@ -393,15 +433,19 @@ defmodule Raxol.Terminal.ANSI.InputParserTest do
   describe "bracketed paste" do
     test "parses complete paste" do
       # ESC [ 200 ~ <text> ESC [ 201 ~
-      input = <<27, 91, 50, 48, 48, 126>> <> "hello world" <> <<27, 91, 50, 48, 49, 126>>
+      input =
+        <<27, 91, 50, 48, 48, 126>> <>
+          "hello world" <> <<27, 91, 50, 48, 49, 126>>
 
-      assert [%Event{type: :paste, data: %{text: "hello world"}}] = InputParser.parse(input)
+      assert [%Event{type: :paste, data: %{text: "hello world"}}] =
+               InputParser.parse(input)
     end
 
     test "parses paste without end marker" do
       input = <<27, 91, 50, 48, 48, 126>> <> "partial paste"
 
-      assert [%Event{type: :paste, data: %{text: "partial paste"}}] = InputParser.parse(input)
+      assert [%Event{type: :paste, data: %{text: "partial paste"}}] =
+               InputParser.parse(input)
     end
   end
 
@@ -413,13 +457,8 @@ defmodule Raxol.Terminal.ANSI.InputParserTest do
     test "does not crash on a secondary DA reply (CSI > Pp ; Pv ; Pc c)" do
       # Some terminals answer unsolicited (or in response to a secondary DA
       # probe raxol never sends) with `CSI > ... c`. The leading `>` byte
-      # used to hit no clause in parse_csi_params/3 and crash the whole
-      # Driver GenServer with a FunctionClauseError. Regression coverage
-      # for that crash: the parser must return *something* rather than
-      # raise. It isn't taught to recognize this sequence, so (like any
-      # other unmapped-but-well-formed CSI sequence) it degrades to
-      # per-byte printable-char events instead of bringing the process
-      # down -- not clean, but never fatal.
+      # must not hit a missing clause in parse_csi_params/3 and crash the
+      # Driver GenServer with a FunctionClauseError.
       assert is_list(InputParser.parse("\e[>0;282;0c"))
     end
 
@@ -436,6 +475,56 @@ defmodule Raxol.Terminal.ANSI.InputParserTest do
 
       assert %Event{type: :key, data: %{key: :char, char: "q"}} =
                List.last(events)
+    end
+  end
+
+  describe "unmapped terminal reports (render-storm regression)" do
+    # Well-formed CSI sequences with no event mapping must not leak: skipping
+    # only the ESC byte and re-parsing the rest as printable char keys turns
+    # one terminal report into a burst of spurious keystrokes. Terminal
+    # reports must produce ZERO events.
+
+    test "secondary DA reply produces zero events" do
+      assert [] = InputParser.parse("\e[>0;282;0c")
+    end
+
+    test "primary DA reply produces zero events" do
+      assert [] = InputParser.parse("\e[?62;4c")
+    end
+
+    test "cursor position report produces zero events" do
+      assert [] = InputParser.parse("\e[42;120R")
+    end
+
+    test "DECRQM reply (with $ intermediate byte) produces zero events" do
+      assert [] = InputParser.parse("\e[?2026;2$y")
+    end
+
+    test "kitty keyboard protocol reply produces zero events" do
+      assert [] = InputParser.parse("\e[?1u")
+    end
+
+    test "report followed by a real key yields only that key" do
+      assert [%Event{type: :key, data: %{key: :down}}] =
+               InputParser.parse("\e[>0;282;0c\e[B")
+    end
+
+    test "report between two chars yields only those chars" do
+      assert [
+               %Event{type: :key, data: %{key: :char, char: "a"}},
+               %Event{type: :key, data: %{key: :char, char: "b"}}
+             ] = InputParser.parse("a\e[42;120Rb")
+    end
+
+    test "incomplete CSI fragment at end of chunk is dropped, not leaked" do
+      # The driver's input buffer flushes incomplete escapes after a
+      # timeout; the fragment must not degrade to char key events.
+      assert [] = InputParser.parse("\e[12;3")
+      assert [] = InputParser.parse("\e[>0;28")
+    end
+
+    test "truncated SGR mouse report is dropped, not leaked" do
+      assert [] = InputParser.parse("\e[<35;10")
     end
   end
 end
