@@ -27,6 +27,7 @@ defmodule Raxol.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
+      releases: releases(),
       description: description(),
       package: package(),
       docs: docs(),
@@ -102,6 +103,20 @@ defmodule Raxol.MixProject do
   # NIF compilation now handled by raxol_terminal package
   defp compilers do
     Mix.compilers()
+  end
+
+  # The `raxol` release ships the playground TUI (`Raxol.Release.playground/0`)
+  # and the golden render smoke (`Raxol.Release.golden/0`). runtime_tools is
+  # loaded (not started) so :observer/:recon remote diagnostics work without
+  # starting anything at boot; every other application comes from the dep tree.
+  defp releases do
+    [
+      raxol: [
+        include_executables_for: [:unix],
+        steps: [:assemble],
+        applications: [runtime_tools: :load]
+      ]
+    ]
   end
 
   # Raxol is primarily a library/toolkit; applications using it define their own OTP app.
