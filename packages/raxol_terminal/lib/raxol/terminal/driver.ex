@@ -188,11 +188,6 @@ defmodule Raxol.Terminal.Driver do
         # Enable terminal modes: focus reporting, bracketed paste
         IO.write("\e[?1004h\e[?2004h")
 
-        # Query the terminal background (OSC 11) with a DA probe as the
-        # unsupported-terminal sentinel; replies are extracted from the
-        # input stream in dispatch_raw_input/2.
-        IO.write(BackgroundQuery.query_sequence())
-
         # Send initial resize event if we have a dispatcher
         if dispatcher_pid,
           do: Dispatch.send_initial_resize_event(dispatcher_pid)
@@ -208,10 +203,20 @@ defmodule Raxol.Terminal.Driver do
         # and sets up trace interception of the reader's output.
         start_stdin_reader(self())
 
+        # Query the terminal background (OSC 11) with a DA probe as the
+        # unsupported-terminal sentinel; replies are extracted from the
+        # input stream in dispatch_raw_input/2. Written only after the
+        # stdin reader is activated: writing it earlier raced the prim_tty
+        # tty=>true reinit that start_stdin_reader triggers (via
+        # user_drv's :start_shell), corrupting job control and crashing
+        # the whole node before a frame ever rendered. Any failure here
+        # degrades to "no background detected" rather than crashing init.
+        bg_query_pending = write_background_query()
+
         state = %{
           state
           | termbox_state: :initialized,
-            bg_query_pending: true,
+            bg_query_pending: bg_query_pending,
             original_stty: original_stty,
             sigwinch_handler: sigwinch_handler,
             io_terminal_state: %{
@@ -471,8 +476,41 @@ defmodule Raxol.Terminal.Driver do
     {:noreply, state}
   end
 
+  # Writes the OSC 11 background query and returns whether a reply should
+  # be awaited. On any failure (e.g. stdio unavailable), skip the query
+  # entirely rather than leave the driver waiting on a reply that will
+  # never come or crashing init — background detection simply falls back
+  # to "no background detected" (BackgroundQuery.detected_background/0
+  # returns :error, and callers ground on that).
+  defp write_background_query do
+    IO.write(BackgroundQuery.query_sequence())
+    true
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] Failed to write OSC 11 background query, skipping background detection: " <>
+          inspect(error),
+        %{}
+      )
+
+      false
+  catch
+    kind, reason ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] OSC 11 background query write raised #{inspect(kind)}, skipping background detection: " <>
+          inspect(reason),
+        %{}
+      )
+
+      false
+  end
+
   # While an OSC 11 background query is pending, extract its reply (and the
   # DA probe reply) from the input stream so they never reach the key parser.
+  # Fail-safe by construction: any exception while scanning/parsing the
+  # reply degrades to "no background detected" and passes the raw chunk
+  # through untouched, so a malformed or unexpected reply can never crash
+  # the driver or block real input from reaching the key parser.
   defp handle_bg_query_reply(data, %{bg_query_pending: true} = state) do
     case BackgroundQuery.scan(data) do
       {{:ok, rgb}, cleaned} ->
@@ -493,6 +531,24 @@ defmodule Raxol.Terminal.Driver do
       {:pending, data} ->
         {data, state}
     end
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] OSC 11 reply scan failed, falling back to no background detected: " <>
+          inspect(error),
+        %{}
+      )
+
+      {data, %{state | bg_query_pending: false}}
+  catch
+    kind, reason ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] OSC 11 reply scan raised #{inspect(kind)}, falling back to no background detected: " <>
+          inspect(reason),
+        %{}
+      )
+
+      {data, %{state | bg_query_pending: false}}
   end
 
   defp handle_bg_query_reply(data, state), do: {data, state}
