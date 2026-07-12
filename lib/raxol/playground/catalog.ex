@@ -79,11 +79,10 @@ defmodule Raxol.Playground.Catalog do
       complexity: :intermediate,
       tags: ["overlay", "dialog", "focus"],
       code_snippet: """
-      modal(
-        title: "Confirm",
-        content: text("Are you sure?"),
-        visible: model.show_modal
-      )
+      overlays =
+        if model.show, do: [AbsoluteLayer.dialog_overlay(40, 17, dialog_box)], else: []
+
+      AbsoluteLayer.absolute_layer(background_view(model), overlays)
       """
     },
     %{

@@ -828,6 +828,16 @@ defmodule Raxol.UI.Layout.Engine do
     measure_element_by_type(container_type, element, %{}, available_space)
   end
 
+  # Absolute layer measures as its flow child measures -- overlays are
+  # non-flow (positioned independently in process_element/3) and
+  # intentionally contribute nothing to intrinsic size.
+  def measure_element(%{type: :absolute_layer} = element, available_space) do
+    case Map.get(element, :flow_child) do
+      nil -> %{width: 0, height: 0}
+      flow_child -> measure_element(flow_child, available_space)
+    end
+  end
+
   def measure_element(%{type: :spacer} = spacer, available_space) do
     size = Map.get(spacer, :size, 1)
 
