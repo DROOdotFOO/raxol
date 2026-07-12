@@ -1,0 +1,29 @@
+name: Nix
+
+on:
+  push:
+    paths:
+      - flake.nix
+      - flake.lock
+      - .github/workflows/nix.yml
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - .github/workflows/nix.yml
+
+jobs:
+  devshell:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Flake evaluates
+        run: nix flake check --no-build
+      - name: devShell provides the BEAM + NIF toolchain
+        run: nix develop --command sh -c 'elixir --version && erl -noshell -eval "erlang:display(ok), halt()."'
