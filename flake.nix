@@ -20,17 +20,17 @@
         system:
         let
           pkgs = pkgsFor system;
-          # mix.exs requires Elixir ~> 1.18 (through 1.20). erlang_27 + elixir_1_18
-          # is the widely available nixpkgs combo; bump toward .tool-versions
-          # (OTP 29 / Elixir 1.20) once those attrs land in the pinned nixpkgs.
-          elixir = pkgs.elixir_1_18;
+          # Match .tool-versions: OTP 29 / Elixir 1.20 (also the memory-regression
+          # CI toolchain). Use the beam package set; the bare elixir_1_20/erlang_29
+          # top-level attrs are deprecated.
+          beam = pkgs.beam.packages.erlang_29;
         in
         {
           default = pkgs.mkShell {
             packages =
               [
-                elixir
-                pkgs.erlang_27
+                beam.elixir_1_20
+                beam.erlang
               ]
               # termbox2 NIF build toolchain (vendored under packages/raxol_terminal)
               ++ (with pkgs; [
@@ -45,9 +45,9 @@
                 espeak-ng
                 ffmpeg
               ])
-              # assets + misc
+              # assets + misc (nodejs = current maintained LTS; _20 is EOL/insecure)
               ++ (with pkgs; [
-                nodejs_20
+                nodejs
                 git
                 openssl
                 ncurses
