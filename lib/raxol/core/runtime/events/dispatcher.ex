@@ -273,11 +273,12 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   end
 
   @doc """
-  Processes a system-level event that affects the runtime itself rather than the application logic.
+  Processes a system-level event. Resize is forwarded to the app's update/2
+  like any other message; quit/focus/error stay runtime-only.
   """
   def process_system_event(event, state) do
     case event do
-      %Event{type: :resize, data: data} -> handle_resize_event(data, state)
+      %Event{type: :resize} -> handle_resize_event(event, state)
       %Event{type: :quit} -> {:quit, state}
       %Event{type: :focus, data: data} -> handle_focus_event(data, state)
       %Event{type: :error, data: data} -> handle_error_event(data, state)
@@ -285,7 +286,10 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     end
   end
 
-  defp handle_resize_event(%{width: width, height: height}, state) do
+  defp handle_resize_event(
+         %Event{data: %{width: width, height: height}} = event,
+         state
+       ) do
     # Forward size to the Rendering Engine so layout uses actual terminal dimensions
     if state.rendering_engine do
       GenServer.cast(
@@ -294,8 +298,37 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       )
     end
 
-    send(state.runtime_pid, :render_needed)
-    {:ok, %{state | width: width, height: height}, []}
+    sized_state = %{state | width: width, height: height}
+
+    case resize_update(sized_state, event) do
+      {:ok, updated_model, commands} ->
+        process_successful_update(sized_state, updated_model, commands)
+
+      :unhandled ->
+        send(state.runtime_pid, :render_needed)
+        {:ok, sized_state, []}
+    end
+  end
+
+  # Calls update/2 directly (not through process_app_update) so a resize
+  # clause that doesn't exist can degrade silently: most apps don't reflow
+  # on resize, and a FunctionClauseError there isn't a bug worth logging on
+  # every SIGWINCH. Genuinely malformed return values still get logged.
+  defp resize_update(state, event) do
+    case state.app_module.update(event, state.model) do
+      {new_model, commands} when is_map(new_model) and is_list(commands) ->
+        {:ok, new_model, commands}
+
+      new_model when is_map(new_model) ->
+        {:ok, new_model, []}
+
+      other ->
+        log_unexpected_return(state, event, event, other)
+        :unhandled
+    end
+  rescue
+    FunctionClauseError -> :unhandled
+    UndefinedFunctionError -> :unhandled
   end
 
   defp handle_focus_event(%{focused: focused}, state) do
