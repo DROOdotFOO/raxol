@@ -115,7 +115,7 @@ defmodule Raxol.Agent.Backend.Lumo.Crypto do
         <<iv::binary-size(@iv_length), rest::binary>> = raw
         ct_len = byte_size(rest) - @tag_length
 
-        <<ciphertext::binary-size(ct_len), tag::binary-size(@tag_length)>> =
+        <<ciphertext::binary-size(^ct_len), tag::binary-size(@tag_length)>> =
           rest
 
         aad = if ad, do: ad, else: <<>>
