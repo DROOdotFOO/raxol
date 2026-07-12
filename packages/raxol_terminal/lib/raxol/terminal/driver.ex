@@ -155,7 +155,9 @@ defmodule Raxol.Terminal.Driver do
       {_, _, nil} ->
         # No dispatcher — this is the Application supervisor's placeholder Driver.
         # Don't set up the terminal; the Lifecycle's Driver will do that.
-        Raxol.Core.Runtime.Log.info("[TerminalDriver] No dispatcher, skipping terminal setup.")
+        Raxol.Core.Runtime.Log.info(
+          "[TerminalDriver] No dispatcher, skipping terminal setup."
+        )
 
         {:ok, state}
 
@@ -271,7 +273,9 @@ defmodule Raxol.Terminal.Driver do
         {:termbox_event, event_map},
         %{termbox_state: :initialized, dispatcher_pid: dispatcher_pid} = state
       ) do
-    Raxol.Core.Runtime.Log.debug("Received termbox event: #{inspect(event_map)}")
+    Raxol.Core.Runtime.Log.debug(
+      "Received termbox event: #{inspect(event_map)}"
+    )
 
     case EventTranslator.translate(event_map) do
       {:ok, %Event{} = event} ->
@@ -285,7 +289,9 @@ defmodule Raxol.Terminal.Driver do
 
       :ignore ->
         # Event type we don't care about
-        Raxol.Core.Runtime.Log.debug("[Driver] Ignoring termbox event: #{inspect(event_map)}")
+        Raxol.Core.Runtime.Log.debug(
+          "[Driver] Ignoring termbox event: #{inspect(event_map)}"
+        )
 
         {:noreply, state}
 
@@ -366,7 +372,9 @@ defmodule Raxol.Terminal.Driver do
       "[TerminalDriver.handle_cast - :test_input] Parsed event: #{inspect(event)}"
     )
 
-    Raxol.Core.Runtime.Log.debug("[TEST] Dispatching simulated event: #{inspect(event)}")
+    Raxol.Core.Runtime.Log.debug(
+      "[TEST] Dispatching simulated event: #{inspect(event)}"
+    )
 
     _ =
       Backpressure.cast(state.dispatcher_pid, {:dispatch, event},
@@ -570,7 +578,9 @@ defmodule Raxol.Terminal.Driver do
   end
 
   def terminate(_reason, _state) do
-    Raxol.Core.Runtime.Log.info("Terminal Driver terminating (not initialized).")
+    Raxol.Core.Runtime.Log.info(
+      "Terminal Driver terminating (not initialized)."
+    )
 
     :ok
   end
@@ -613,42 +623,48 @@ defmodule Raxol.Terminal.Driver do
   # spawns a fresh reader that arms select notifications), then trace the
   # reader's sends to intercept input data before user_drv forwards it.
   defp start_stdin_reader(_driver_pid) do
-    # In -noshell mode, user_drv initializes prim_tty with tty => false,
-    # so the NIF never sets up the terminal fd for select notifications.
-    # The reader process exists but is blocked waiting for events that
-    # never arrive.
-    #
-    # Fix: call user_drv:start_shell to trigger prim_tty:reinit with
-    # tty => true, which activates the terminal fd. Then trace the
-    # reader to intercept input data before it reaches user_drv.
-    reader = Process.whereis(:user_drv_reader)
+    # `initial_shell` must be the literal atom `:noshell`, never an MFA
+    # (even a no-op one): user_drv only skips shell-spawning when
+    # initial_shell =:= :noshell. Any other value falls into
+    # init_local_shell/2, which spawns a real shell via group:start/3; that
+    # process exits immediately and drops user_drv into its JCL "User
+    # switch command" prompt, which swallows every subsequent stdin byte
+    # (including the terminal's OSC 11 / DA reply) as a job-control command
+    # instead of forwarding it, and can bring the node down before a frame
+    # ever renders.
     user_drv = Process.whereis(:user_drv)
 
     if user_drv do
-      # Activate the terminal fd by triggering prim_tty reinit.
       try do
         :gen_statem.call(
           user_drv,
-          {:start_shell, %{initial_shell: {__MODULE__, :noop_shell, []}}}
+          {:start_shell, %{initial_shell: :noshell, input: :raw}}
         )
       catch
         _, _ -> :ok
       end
     end
 
+    # Re-fetch after the reinit above: input=>raw may (re)spawn the reader.
+    reader = Process.whereis(:user_drv_reader)
+
     if reader do
       # Trace the reader's sends to intercept data before user_drv
       # forwards it. The reader sends {ref, {:data, bytes}} to user_drv.
       :erlang.trace(reader, true, [:send])
+
+      # :noshell means user_drv never issues the one-time read kick a real
+      # shell gets on startup (prim_tty:read/1 via init_shell/2), so the
+      # reader arms a select notification and then idles forever -- no
+      # crash, no keystrokes. Send the kick ourselves; :infinity makes it
+      # self-sustaining (the reader re-arms to :infinity after every read).
+      send(reader, {:read, :infinity})
     end
 
     # No spawned reader pid to track -- input arrives via trace messages
     # in handle_manager_info.
     nil
   end
-
-  @doc false
-  def noop_shell, do: :ok
 
   # --- SIGWINCH subscription ---
   # OTP's prim_tty delivers SIGWINCH from :erl_signal_server straight to
