@@ -139,6 +139,15 @@ defmodule :termbox2_nif do
   def tb_print(_x, _y, _fg, _bg, _str), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
+  Read back the back buffer as a row-major list of `{ch, fg, bg}` tuples.
+
+  One tuple per cell, `tb_width() * tb_height()` in total, indexed
+  `(y * width) + x`. Reflects drawing calls (`tb_set_cell`, `tb_print`) before
+  `tb_present`. Used by the reference-oracle equivalence tests.
+  """
+  def tb_cell_buffer, do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
   Set the terminal title.
   Returns {:ok, "set"} on success, {:error, reason} on failure.
   """

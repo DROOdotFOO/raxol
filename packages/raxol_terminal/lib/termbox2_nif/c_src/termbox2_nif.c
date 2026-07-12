@@ -154,6 +154,37 @@ static ERL_NIF_TERM nif_tb_print(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
   return enif_make_int(env, result);
 }
 
+// tb_cell_buffer/0 -> row-major list of {ch, fg, bg} for the back buffer.
+// Lets Elixir read back rendered cells for reference-oracle equivalence tests.
+static ERL_NIF_TERM nif_tb_cell_buffer(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+  (void)argc;
+  (void)argv;
+  int w = tb_width();
+  int h = tb_height();
+  struct tb_cell *buf = tb_cell_buffer();
+  if (w <= 0 || h <= 0 || buf == NULL)
+  {
+    return enif_make_list(env, 0);
+  }
+  int n = w * h;
+  ERL_NIF_TERM *cells = (ERL_NIF_TERM *)malloc(sizeof(ERL_NIF_TERM) * n);
+  if (cells == NULL)
+  {
+    return enif_make_badarg(env);
+  }
+  for (int i = 0; i < n; i++)
+  {
+    ERL_NIF_TERM ch = enif_make_uint(env, (unsigned int)buf[i].ch);
+    ERL_NIF_TERM fg = enif_make_uint64(env, (ErlNifUInt64)buf[i].fg);
+    ERL_NIF_TERM bg = enif_make_uint64(env, (ErlNifUInt64)buf[i].bg);
+    cells[i] = enif_make_tuple3(env, ch, fg, bg);
+  }
+  ERL_NIF_TERM list = enif_make_list_from_array(env, cells, n);
+  free(cells);
+  return list;
+}
+
 // Platform-specific implementation for setting terminal title
 static ERL_NIF_TERM tb_set_title(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
@@ -276,6 +307,7 @@ static ErlNifFunc nif_funcs[] = {
     {"tb_set_input_mode", 1, nif_tb_set_input_mode, 0},
     {"tb_set_output_mode", 1, nif_tb_set_output_mode, 0},
     {"tb_print", 5, nif_tb_print, 0},
+    {"tb_cell_buffer", 0, nif_tb_cell_buffer, 0},
     {"tb_set_title", 1, tb_set_title, 0},
     {"tb_set_position", 2, tb_set_position, 0}};
 

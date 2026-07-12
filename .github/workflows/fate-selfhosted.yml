@@ -59,8 +59,10 @@ jobs:
             cd packages/raxol_terminal
             MIX_ENV=test mix deps.get
             script -qec "MIX_ENV=test mix test --include docker \
+              test/termbox2_nif/termbox_model_test.exs \
               test/termbox2_nif/termbox2_loading_test.exs \
-              test/termbox2_nif/termbox2_nif_test.exs --no-deps-check" /dev/null
+              test/termbox2_nif/termbox2_nif_test.exs \
+              test/termbox2_nif/oracle_equivalence_test.exs --no-deps-check" /dev/null
           '
 
       - name: Platform :requires_terminal suite (under a pseudo-terminal)
