@@ -248,14 +248,15 @@ defmodule Raxol.CrossTerminal.ModalOverlayTest do
       # before the fix, the layer's zero-height space clipped every overlay.
       assert Enum.any?(elements, &(Map.get(&1, :text) == "ZZZZZZ"))
 
-      # Flow content (dimmed behind the active dialog) also made it through.
-      background_elements =
-        Enum.filter(elements, &Map.get(&1, :dim_behind_modal, false))
+      # Flow content max y, identified directly (not via `dim_behind_modal`,
+      # which now also stamps the sibling -- see the dimming tests below).
+      flow_content_elements =
+        Enum.reject(elements, &(Map.get(&1, :text) in ["SIBLING", "ZZZZZZ"]))
 
-      assert background_elements != []
+      assert flow_content_elements != []
 
       flow_max_y =
-        background_elements
+        flow_content_elements
         |> Enum.map(&Map.get(&1, :y, 0))
         |> Enum.max()
 
@@ -266,6 +267,55 @@ defmodule Raxol.CrossTerminal.ModalOverlayTest do
 
       refute is_nil(sibling_element)
       assert sibling_element.y > flow_max_y
+    end
+
+    test "a sibling outside the absolute_layer dims too when the dialog is open" do
+      dimensions = %{width: 40, height: 20}
+
+      layer =
+        absolute_layer(background(), [dialog_overlay(8, 3, dialog_content())])
+
+      sibling = text("SIBLING", fg: :white)
+
+      root = %{
+        type: :flex,
+        direction: :column,
+        children: [layer, sibling]
+      }
+
+      elements = Engine.apply_layout(root, dimensions)
+
+      sibling_element = Enum.find(elements, &(Map.get(&1, :text) == "SIBLING"))
+      refute is_nil(sibling_element)
+      assert sibling_element.dim_behind_modal == true
+
+      # The dialog's own content is never dim-stamped, even though it's a
+      # sibling produced from the same layer -- only the flow child and
+      # chrome outside the dialog subtree dim.
+      dialog_element = Enum.find(elements, &(Map.get(&1, :text) == "ZZZZZZ"))
+      refute is_nil(dialog_element)
+      refute Map.get(dialog_element, :dim_behind_modal, false)
+    end
+
+    test "no sibling dimming when there is no active dialog" do
+      dimensions = %{width: 40, height: 20}
+
+      layer = absolute_layer(background(), [overlay(0, 0, dialog_content())])
+      sibling = text("SIBLING", fg: :white)
+
+      root = %{
+        type: :flex,
+        direction: :column,
+        children: [layer, sibling]
+      }
+
+      elements = Engine.apply_layout(root, dimensions)
+
+      sibling_element = Enum.find(elements, &(Map.get(&1, :text) == "SIBLING"))
+      refute is_nil(sibling_element)
+      refute Map.get(sibling_element, :dim_behind_modal, false)
+
+      refute Enum.any?(elements, &Map.get(&1, :dim_behind_modal, false))
     end
   end
 end
