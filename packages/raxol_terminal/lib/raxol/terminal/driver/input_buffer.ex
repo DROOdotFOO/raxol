@@ -33,6 +33,12 @@ defmodule Raxol.Terminal.Driver.InputBuffer do
 
   # ESC O but no function key letter
   defp incomplete_csi?(<<27, 79>>), do: true
+
+  # ESC ] (OSC, e.g. an OSC 11 color reply) — incomplete until BEL or ST
+  defp incomplete_csi?(<<27, 93, rest::binary>>) do
+    not (String.contains?(rest, "\a") or String.contains?(rest, "\e\\"))
+  end
+
   defp incomplete_csi?(_), do: false
 
   defp has_csi_terminator?(<<>>), do: false

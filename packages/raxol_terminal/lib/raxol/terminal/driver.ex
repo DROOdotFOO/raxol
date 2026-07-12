@@ -20,6 +20,7 @@ defmodule Raxol.Terminal.Driver do
   alias Raxol.Core.Events.Event
   alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Terminal.ANSI.InputParser
+  alias Raxol.Terminal.Driver.BackgroundQuery
   alias Raxol.Terminal.Driver.Dispatch
   alias Raxol.Terminal.Driver.EventTranslator
   alias Raxol.Terminal.Driver.InputBuffer
@@ -58,7 +59,8 @@ defmodule Raxol.Terminal.Driver do
               io_terminal_state: nil,
               input_buffer: <<>>,
               flush_timer: nil,
-              sigwinch_handler: nil
+              sigwinch_handler: nil,
+              bg_query_pending: false
   end
 
   # --- Public API ---
@@ -186,6 +188,11 @@ defmodule Raxol.Terminal.Driver do
         # Enable terminal modes: focus reporting, bracketed paste
         IO.write("\e[?1004h\e[?2004h")
 
+        # Query the terminal background (OSC 11) with a DA probe as the
+        # unsupported-terminal sentinel; replies are extracted from the
+        # input stream in dispatch_raw_input/2.
+        IO.write(BackgroundQuery.query_sequence())
+
         # Send initial resize event if we have a dispatcher
         if dispatcher_pid,
           do: Dispatch.send_initial_resize_event(dispatcher_pid)
@@ -204,6 +211,7 @@ defmodule Raxol.Terminal.Driver do
         state = %{
           state
           | termbox_state: :initialized,
+            bg_query_pending: true,
             original_stty: original_stty,
             sigwinch_handler: sigwinch_handler,
             io_terminal_state: %{
@@ -450,6 +458,7 @@ defmodule Raxol.Terminal.Driver do
   end
 
   defp dispatch_raw_input(data, state) do
+    {data, state} = handle_bg_query_reply(data, state)
     events = InputParser.parse(data)
 
     Enum.each(events, fn event ->
@@ -461,6 +470,32 @@ defmodule Raxol.Terminal.Driver do
 
     {:noreply, state}
   end
+
+  # While an OSC 11 background query is pending, extract its reply (and the
+  # DA probe reply) from the input stream so they never reach the key parser.
+  defp handle_bg_query_reply(data, %{bg_query_pending: true} = state) do
+    case BackgroundQuery.scan(data) do
+      {{:ok, rgb}, cleaned} ->
+        BackgroundQuery.store(rgb)
+
+        if state.dispatcher_pid do
+          Dispatch.send_event_to_dispatcher(
+            state.dispatcher_pid,
+            %Event{type: :terminal_background, data: %{color: rgb}}
+          )
+        end
+
+        {cleaned, %{state | bg_query_pending: false}}
+
+      {:unsupported, cleaned} ->
+        {cleaned, %{state | bg_query_pending: false}}
+
+      {:pending, data} ->
+        {data, state}
+    end
+  end
+
+  defp handle_bg_query_reply(data, state), do: {data, state}
 
   # Forward cast messages to handle_info for test_input
   @impl true
