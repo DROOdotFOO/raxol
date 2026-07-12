@@ -443,7 +443,6 @@ defmodule Raxol.UI.Layout.Engine do
     [box_element | children_acc] ++ acc
   end
 
-
   # Chart widget types are emitted by `Components.chart/1` as :box elements
   # whose `:type` is overridden to one of these atoms so MCP ToolProvider
   # can discover them. Layout-wise they behave identically to :box, so

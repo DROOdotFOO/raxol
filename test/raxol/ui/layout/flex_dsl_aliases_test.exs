@@ -46,6 +46,7 @@ defmodule Raxol.UI.Layout.FlexDslAliasesTest do
 
   test "wrap: false means no wrapping (boolean normalizes to :nowrap)" do
     children = for _ <- 1..4, do: V.text("xx")
+
     tree =
       Raxol.Core.Renderer.View.Layout.Flex.container(
         direction: :row,
@@ -53,6 +54,7 @@ defmodule Raxol.UI.Layout.FlexDslAliasesTest do
         gap: 0,
         children: children
       )
+
     positioned = texts_of(tree, %{width: 6, height: 5})
 
     # nowrap: all on one row (overflowing), never a second line
@@ -61,6 +63,7 @@ defmodule Raxol.UI.Layout.FlexDslAliasesTest do
 
   test "wrap: true wraps (boolean normalizes to :wrap)" do
     children = for _ <- 1..4, do: V.text("xx")
+
     tree =
       Raxol.Core.Renderer.View.Layout.Flex.container(
         direction: :row,
@@ -68,6 +71,7 @@ defmodule Raxol.UI.Layout.FlexDslAliasesTest do
         gap: 0,
         children: children
       )
+
     positioned = texts_of(tree, %{width: 6, height: 5})
 
     assert length(Enum.uniq(Enum.map(positioned, & &1.y))) > 1
@@ -82,6 +86,7 @@ defmodule Raxol.UI.Layout.FlexDslAliasesTest do
         gap: 0,
         children: [child]
       )
+
     measured = Engine.measure_element(flex, %{x: 0, y: 0, width: 80, height: 5})
     assert measured.width == 30
   end
