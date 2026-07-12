@@ -20,7 +20,8 @@ then compares the golden render hashes against `priv/fate/golden.refs`.
 carrying the `self-hosted`, `linux`, arch, and `raxol` labels. Each job, inside
 `nix develop` (so the toolchain is flake-pinned and identical on every host):
 
-1. Builds the NIF and runs the `:docker` suite under a pseudo-terminal.
+1. Builds the NIF and runs the `:docker` suite under a pseudo-terminal (loading
+   tests, the direct NIF tests, and the oracle equivalence test below).
 2. Runs the platform `:requires_terminal` suite under a pseudo-terminal.
 3. Runs the FATE golden render (pure, no terminal) to compare this architecture's
    hashes against the committed references.
@@ -37,6 +38,27 @@ Two mechanics matter:
   (from `util-linux`, present in the devShell) gives the process both a tty on stdin/stdout
   (so `:io.columns/0` succeeds) and a controlling terminal (so `tb_init` can open
   `/dev/tty`). `TERM=xterm-256color` plus the `ncurses` terminfo let cap loading succeed.
+
+### Reference-oracle equivalence
+
+The oracle half of Layer 2 is the checkasm analogue: the termbox2 NIF (the optimized
+path) must produce the same back buffer as a pure reference for the same op stream.
+
+- `Raxol.Terminal.Termbox.Model` (in `packages/raxol_terminal/test/support/`) is the
+  reference oracle: a small pure model of termbox2's cell semantics (cleared cell
+  `{0x20, 0, 0}`, `set_cell` in-bounds writes, `print` lead-cell writes and advance).
+  `termbox_model_test.exs` verifies the model independently, with no NIF or terminal,
+  so it runs anywhere.
+- A `tb_cell_buffer/0` NIF reads the back buffer back as a row-major list of
+  `{ch, fg, bg}`. `oracle_equivalence_test.exs` applies each fixture op stream to the
+  NIF and to the model and asserts the grids are identical, covering the explicit
+  edges FATE requires: empty, wide CJK codepoints, attribute saturation, out-of-bounds
+  writes, print clipping, and newlines. It needs `tb_init`, so it runs on the runners
+  under the pseudo-terminal alongside the other `:docker` tests.
+
+A failure names the fixture and the first few diverging cell indices. Print fixtures use
+printable ASCII (advance is one column per cell); wide characters are covered through
+`set_cell` storage, so the model never has to replicate `tb_wcwidth`.
 
 ### Security
 
