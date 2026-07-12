@@ -493,7 +493,9 @@ jobs:
         retention-days: 90
 
     - name: Comment unified results on PR
-      if: github.event_name == 'pull_request' && always()
+      # Fork PRs get a read-only GITHUB_TOKEN, so commenting is impossible and
+      # would fail the job. Only comment on same-repo PRs.
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       uses: actions/github-script@v9
       with:
         script: |
@@ -582,31 +584,36 @@ jobs:
           reportContent += "- Render: <1ms average\n";
           reportContent += "- Memory: <3MB per session\n";
 
-          // Find existing comment
-          const { data: comments } = await github.rest.issues.listComments({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number
-          });
-
-          const existingComment = comments.find(comment =>
-            comment.body.includes('Unified Regression Test Results')
-          );
-
-          if (existingComment) {
-            await github.rest.issues.updateComment({
+          // Commenting needs a write token. Warn instead of failing the job if
+          // the token is restricted (e.g. a same-repo run with reduced perms).
+          try {
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              comment_id: existingComment.id,
-              body: reportContent
+              issue_number: context.issue.number
             });
-          } else {
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: reportContent
-            });
+
+            const existingComment = comments.find(comment =>
+              comment.body.includes('Unified Regression Test Results')
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: reportContent
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: reportContent
+              });
+            }
+          } catch (error) {
+            core.warning(`Could not post regression results comment: ${error.message}`);
           }
 
   # Nightly comprehensive analysis
