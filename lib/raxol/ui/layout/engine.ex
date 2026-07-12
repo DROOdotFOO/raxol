@@ -121,6 +121,24 @@ defmodule Raxol.UI.Layout.Engine do
     view
     |> process_element(available_space, [])
     |> List.flatten()
+    |> dim_behind_dialog()
+  end
+
+  # Global post-pass: dim every non-`:in_dialog` element once the whole
+  # tree is flat, since dialog scope can span siblings outside the
+  # hosting `:absolute_layer` (e.g. a sidebar/header). No-op if no dialog
+  # is active.
+  defp dim_behind_dialog(elements) do
+    if Enum.any?(elements, &Map.get(&1, :in_dialog, false)) do
+      Enum.map(elements, fn element ->
+        case Map.pop(element, :in_dialog, false) do
+          {true, stripped} -> stripped
+          {false, stripped} -> Map.put(stripped, :dim_behind_modal, true)
+        end
+      end)
+    else
+      elements
+    end
   end
 
   # Build a flat map from element content hash to {measured_width, measured_height}.
@@ -510,16 +528,13 @@ defmodule Raxol.UI.Layout.Engine do
   # axis (unlike bare `:center`, which anchors the overlay's origin at the
   # midpoint rather than centering its bounding box).
   #
-  # An overlay descriptor may also carry `dialog: true` (see
-  # `Raxol.UI.Components.AbsoluteLayer.dialog_overlay/3`) to mark it as a
-  # modal dialog: every element the flow child produces is stamped with
-  # `:dim_behind_modal` so `Raxol.UI.Renderer` dims its cells toward the
-  # background, while the dialog overlay's own elements are left unstamped
-  # and render at full color on top.
+  # An overlay descriptor may carry `dialog: true` (see
+  # `Raxol.UI.Components.AbsoluteLayer.dialog_overlay/3`) to stamp its
+  # whole subtree `:in_dialog`; `dim_behind_dialog/1` dims everything else
+  # once the tree is flat (dialog scope is global, see that function).
   def process_element(%{type: :absolute_layer} = layer, space, acc) do
     flow_child = Map.get(layer, :flow_child)
     overlays = Map.get(layer, :overlays, [])
-    dialog_active? = Enum.any?(overlays, &Map.get(&1, :dialog, false))
 
     flow_elements =
       case flow_child do
@@ -527,14 +542,21 @@ defmodule Raxol.UI.Layout.Engine do
         child -> process_element(child, space, [])
       end
 
-    flow_elements =
-      if dialog_active?,
-        do: Enum.map(flow_elements, &Map.put(&1, :dim_behind_modal, true)),
-        else: flow_elements
-
     overlay_elements =
       Enum.reduce(overlays, [], fn overlay, current_acc ->
-        process_overlay(overlay, space, current_acc)
+        # Computed against `[]` (not `current_acc`) so only this overlay's
+        # own new elements get stamped, then recombined the same way
+        # `process_overlay/3` would have -- every process_element/3 clause
+        # in this module follows the `own_new(el, space) ++ acc` contract,
+        # so this is equivalent to the un-stamped call when not a dialog.
+        own_elements = process_overlay(overlay, space, [])
+
+        own_elements =
+          if Map.get(overlay, :dialog, false),
+            do: stamp_in_dialog(own_elements),
+            else: own_elements
+
+        own_elements ++ current_acc
       end)
 
     flow_elements ++ overlay_elements ++ acc
@@ -684,6 +706,17 @@ defmodule Raxol.UI.Layout.Engine do
   end
 
   defp process_overlay(_, _, acc), do: acc
+
+  # Marks a dialog overlay's elements `:in_dialog` so dim_behind_dialog/1 exempts them.
+  defp stamp_in_dialog(elements) when is_list(elements) do
+    Enum.map(elements, &stamp_in_dialog/1)
+  end
+
+  defp stamp_in_dialog(element) when is_map(element) do
+    Map.put(element, :in_dialog, true)
+  end
+
+  defp stamp_in_dialog(other), do: other
 
   # Resolve a coordinate (integer, negative offset, or symbolic atom) against
   # the parent space's origin and length on a single axis.
