@@ -178,9 +178,8 @@ defmodule Raxol.UI.Layout.Engine do
     Panels.process(panel, space, acc)
   end
 
-  # Literal :row/:column elements run on the flex engine via a compat map
-  # that preserves their old defaults: gap 1, justify/align :start, no
-  # shrink (overflow instead of reflow) — see containers_compat_to_flex/2.
+  # Literal :row/:column run on the flex engine via the old Containers
+  # dialect's compat map — see containers_compat_to_flex/2.
   def process_element(%{type: type} = el, space, acc)
       when type in [:row, :column] do
     process_element(containers_compat_to_flex(el, :layout), space, acc)
@@ -1047,14 +1046,12 @@ defmodule Raxol.UI.Layout.Engine do
   # Build :attrs from top-level keys so Flexbox.parse_flex_properties works.
   # The View DSL (Flex.row/column) puts direction/gap/etc. at the top level,
   # but Flexbox reads from the :attrs map.
-  # Translates literal %{type: :row} / %{type: :column} elements onto the
-  # flex engine, preserving their old defaults:
-  #
-  #   gap      1 in layout, 0 in measurement (both preserved as-is)
-  #   justify  :start (maps to :flex_start; :end -> :flex_end)
-  #   align    :start (NOT :stretch)
-  #   shrink   children default to shrink 0 — natural size, overflow
-  #            instead of reflow — unless they declare flex properties.
+  # Preserves the old Containers dialect: gap defaults to 1 in layout / 0
+  # in measurement (the dialect disagreed between the two), justify/align
+  # default :start (never :stretch), children default to shrink 0 unless
+  # they declare flex explicitly. Reads `attrs.gap` only — top-level/style
+  # gap is not honored here (that compat is in `build_flex_attrs`).
+  # Consumers: Viewport, box auto-sizing, Panels, Responsive.
   defp containers_compat_to_flex(el, mode) do
     attrs = Map.get(el, :attrs, %{})
     gap_default = if mode == :layout, do: 1, else: 0
@@ -1082,6 +1079,13 @@ defmodule Raxol.UI.Layout.Engine do
   defp containers_align(:start), do: :flex_start
   defp containers_align(:end), do: :flex_end
   defp containers_align(other), do: other
+
+  # wrap may arrive as a boolean (Flex.container defaults wrap: false);
+  # only :nowrap selects the single-line path, so booleans must normalize
+  # or `wrap: false` silently enables wrapping.
+  defp normalize_wrap(true), do: :wrap
+  defp normalize_wrap(w) when w in [false, nil], do: :nowrap
+  defp normalize_wrap(w), do: w
 
   # Default children to shrink 0 via style.flex_shrink (read by
   # FlexItem.resolve). Deliberately NOT via :attrs — several element
@@ -1111,17 +1115,9 @@ defmodule Raxol.UI.Layout.Engine do
 
   defp compat_no_shrink(child), do: child
 
-  # ---------------------------------------------------------------------
-  # overflow (proposal Phase F1): when a box declares
-  # `style: %{overflow: :hidden | :clip | :auto | :scroll}`, every
-  # descendant element it produced is stamped with `:clip_bounds`
-  # (the box's content rectangle), which `Raxol.UI.CellManager`
-  # already honors at paint time. Nested clips intersect. `:visible`
-  # (default) stamps nothing — content may paint outside, matching CSS.
-  # `:auto`/`:scroll` clip identically here; scrolling itself is the
-  # Viewport component's job (F2), this property only guarantees the
-  # box's content can never paint outside its bounds.
-  # ---------------------------------------------------------------------
+  # Stamps clip_bounds on every descendant when overflow is not :visible;
+  # nested clips intersect. :auto/:scroll clip identically — scrolling
+  # itself is Viewport's job.
   @doc false
   # Overflow clipping for flex containers (called from Flexbox.process_flex,
   # hence public). The clip rect is the container's own space.
@@ -1195,14 +1191,23 @@ defmodule Raxol.UI.Layout.Engine do
       flex_direction:
         Map.get(style, :flex_direction) || Map.get(flex, :direction, :row),
       justify_content:
-        Map.get(style, :justify_content) ||
-          Map.get(flex, :justify, :flex_start),
+        containers_justify(
+          Map.get(style, :justify_content) ||
+            Map.get(flex, :justify, :flex_start)
+        ),
       align_items:
-        Map.get(style, :align_items) || Map.get(flex, :align, :stretch),
+        containers_align(
+          Map.get(style, :align_items) || Map.get(flex, :align, :stretch)
+        ),
       align_content:
-        Map.get(style, :align_content) ||
-          Map.get(flex, :align_content, :flex_start),
-      flex_wrap: Map.get(style, :flex_wrap) || Map.get(flex, :wrap, :nowrap),
+        containers_align(
+          Map.get(style, :align_content) ||
+            Map.get(flex, :align_content, :stretch)
+        ),
+      flex_wrap:
+        normalize_wrap(
+          Map.get(style, :flex_wrap) || Map.get(flex, :wrap, :nowrap)
+        ),
       gap: Map.get(style, :gap) || Map.get(flex, :gap, 0),
       padding: Map.get(style, :padding) || Map.get(flex, :padding, 0)
     }

@@ -96,10 +96,6 @@ defmodule Raxol.UI.Layout.Flexbox do
 
   def measure_flex(_, _available_space), do: %{width: 0, height: 0}
 
-  # Legacy `new/1` + `render/1` + `calculate_layout/1` API (struct type
-  # :flexbox, never dispatched by the engine) removed — zero production
-  # callers.
-
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
@@ -193,7 +189,7 @@ defmodule Raxol.UI.Layout.Flexbox do
 
     resolved =
       Enum.map(children_with_dims, fn {child, dims} ->
-        # Automatic minimum size (spec min-width:auto = min-content, B3):
+        # Automatic minimum size (spec min-width:auto = min-content):
         # inline axis uses MinContent; block axis uses the measured content
         # size (min-content block size of unscrollable content). Items never
         # shrink below it — overflow clips instead of content vanishing.
@@ -431,14 +427,29 @@ defmodule Raxol.UI.Layout.Flexbox do
   defp zero_auto(v), do: v
 
   defp measure_flex_child(child, available_space, flex_props) do
-    child_attrs = attrs_map(child)
-    flex_attrs = Map.get(child_attrs, :flex, %{})
-    flex_basis = Map.get(flex_attrs, :basis, :auto)
+    # basis must come from the same resolution layout uses (style flex
+    # shorthand/flex_basis first, legacy attrs.flex second) or measure and
+    # layout disagree for style-declared bases
+    style =
+      case Map.get(child, :style) do
+        s when is_map(s) -> s
+        _ -> %{}
+      end
+
+    flex_basis = FlexItem.lift_flex(style, attrs_map(child)).basis
 
     child_space =
       get_child_space(flex_basis, available_space, flex_props.flex_direction)
 
-    Engine.measure_element(child, child_space)
+    measured = Engine.measure_element(child, child_space)
+
+    # a definite basis IS the flex base size (spec) — content measurement
+    # only decides the main size for basis :auto
+    case {flex_basis, get_main_axis(flex_props.flex_direction)} do
+      {b, :horizontal} when is_integer(b) -> %{measured | width: b}
+      {b, :vertical} when is_integer(b) -> %{measured | height: b}
+      _ -> measured
+    end
   end
 
   # attrs may be a keyword list on legacy elements

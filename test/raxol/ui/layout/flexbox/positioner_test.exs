@@ -1,18 +1,13 @@
 defmodule Raxol.UI.Layout.Flexbox.PositionerTest do
   @moduledoc """
-  Regression coverage for `Raxol.UI.Layout.Flexbox.Positioner`:
+  Coverage for `Raxol.UI.Layout.Flexbox.Positioner`.
 
-    * `calculate_justify_positioning/4` (and its cross-axis twin
-      `calculate_align_content_positioning/4`) used `div/2` for `:center`,
-      `:space_between`, `:space_around`, `:space_evenly`, truncating up to
-      `n - 1` cells of distributed spacing. Both now return
-      `{start, gaps :: [int]}`, with `gaps` computed via exact
-      (largest-remainder / Bresenham) integer splits summing exactly to
-      `available_space`.
-
-    * `build_child_space/4` rebuilt a fresh `%{x, y, width, height}` map,
-      dropping any extra keys on the incoming container space (e.g.
-      `:prepared_cache`). Now `Map.merge`-based.
+  `calculate_justify_positioning/4` and its cross-axis twin
+  `calculate_align_content_positioning/4` return `{start, gaps :: [int]}`,
+  with `gaps` computed via exact largest-remainder integer splits so
+  distributed spacing always sums exactly to `available_space`.
+  `build_child_space/4` preserves extra keys (e.g. `:prepared_cache`) on
+  the container space via `Map.merge`.
   """
 
   use ExUnit.Case, async: true

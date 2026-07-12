@@ -3,10 +3,8 @@ defmodule Raxol.Core.Renderer.View.Components.Box do
   Constructs `:box`-tagged View DSL nodes (`new/1`) with content, padding,
   border, and margin metadata for the box model.
 
-  The layout-calculation half of this module (`calculate_layout/2` and its
-  private box-model algorithm) was removed as production-dead -- zero
-  callers outside tests. `new/1` survives; the live engine
-  (`Raxol.UI.Layout.Engine`) computes positions for `:box` elements
+  This module only builds the node; it does not compute layout. The live
+  engine (`Raxol.UI.Layout.Engine`) computes positions for `:box` elements
   independently of this module.
   """
 

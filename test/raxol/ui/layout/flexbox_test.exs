@@ -3,10 +3,6 @@ defmodule Raxol.UI.Layout.FlexboxTest do
 
   alias Raxol.UI.Layout.Flexbox
 
-  # Legacy API describes (new/1, render/1, calculate_layout/1) removed
-  # with the API itself (dead :flexbox struct path, zero production
-  # callers).
-
   describe "measure_flex/2" do
     test "measures flex container with children" do
       flex = %{

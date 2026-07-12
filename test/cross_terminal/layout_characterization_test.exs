@@ -2,25 +2,13 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
   @moduledoc """
   Characterization net for the live layout engine.
 
-  Pins the CURRENT geometry of `Raxol.UI.Layout.Engine.apply_layout/2`
-  across the two flex-like dialects still alive:
+  Pins the CURRENT geometry of `Raxol.UI.Layout.Engine.apply_layout/2` across
+  the two dialects it dispatches: View DSL `row`/`column`/`flex` (the
+  `Flexbox` path) and literal `:row`/`:column` elements (the Containers-dialect
+  compat map), which has its own gap/align/justify defaults.
 
-    1. `:flex` elements (View DSL `row`/`column`/`flex` macros) -> the real
-       `Raxol.UI.Layout.Flexbox` path.
-    2. Literal `:row`/`:column` elements -> `Raxol.UI.Layout.Containers`, a
-       different dialect with its own gap/align/justify defaults.
-
-  A third dialect, `Raxol.Core.Renderer.View.layout/2`, delegated to a
-  separate legacy stack (`Core.Renderer.View.Layout.Flex.calculate_layout/2`
-  and its coordinator); both are now deleted as production-dead (zero
-  callers outside tests). `Flex`'s `row`/`column`/`container` constructors
-  (dialect 1 above) and `Box.new/1` survive -- they feed the live engine
-  independent of the deleted calculation code.
-
-  Every value was captured by actually running the code above. Pins
-  document behavior AS-IS, including quirks and outright bugs (each quirk
-  carries a comment) -- they are a tripwire, not a correctness claim: a
-  changed number means either a deliberate re-pin or a regression.
+  Pins behavior as-is, quirks included; a changed number here is either a
+  conscious re-pin or a regression.
   """
 
   use ExUnit.Case, async: true
@@ -30,9 +18,8 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
   require Raxol.Core.Renderer.View
   alias Raxol.Core.Renderer.View, as: LegacyView
 
-  # Reduces each positioned element to type/x/y/width/height plus text
-  # content; deliberately lossy (drops style/attrs/fg/bg) so pins stay
-  # readable and focused on geometry.
+  # Reduces positioned elements to type/x/y/width/height (or type/x/y/text
+  # for text cells), dropping style/attrs/fg/bg/id so pins stay focused on placement.
   defp simplify(elements) do
     Enum.map(elements, fn el ->
       case el do
@@ -432,11 +419,10 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
           [text("AAAA"), text("BBBB"), text("CCCC")]
         end
 
-      # build_flex_attrs lifts flex_wrap (plus flex_direction/align_content)
-      # from style. Container 10 wide, words 4 wide: two fit on line 0,
-      # third wraps to line 1. Output order is line-reversed (pre-existing
-      # Wrapper accumulation quirk, pinned elsewhere) - sort for a stable
-      # assertion.
+      # Container 10 wide, words 4 wide: two fit on line 0, third wraps.
+      # align-content defaults to :stretch, splitting the two 1-tall lines
+      # 5/5 (wrapped line starts at y=5). Output order is line-reversed, so
+      # sort for stability.
       result =
         layout(tree, %{width: 10, height: 10})
         |> Enum.sort_by(&{&1.y, &1.x})
@@ -444,7 +430,7 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       assert result == [
                %{type: :text, x: 0, y: 0, text: "AAAA"},
                %{type: :text, x: 4, y: 0, text: "BBBB"},
-               %{type: :text, x: 0, y: 1, text: "CCCC"}
+               %{type: :text, x: 0, y: 5, text: "CCCC"}
              ]
     end
 
@@ -469,14 +455,10 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
         children: [text("AAAAAA"), text("BBBBBB"), text("CCCCCC")]
       }
 
-      # Each 6-wide word alone fits (6<=10) but two together don't, so each
-      # gets its own line. Returned order is reversed (C, B, A) though Y is
-      # ascending: `Wrapper.place_lines_cross/5` prepends each line via
-      # `positioned_line ++ acc`. Pinned as-is.
-      #
-      # align-content defaults to :stretch (CSS initial value): three
-      # 1-tall lines in a 10-tall container get stretched allocations
-      # 4/3/3, so lines start at y=0/4/7.
+      # Each 6-wide word alone fits but two together don't, so each gets its
+      # own line; order comes back reversed (C, B, A) even though y is
+      # ascending (`Wrapper.place_lines_cross/5` prepends). align-content
+      # defaults to :stretch, giving allocations 4/3/3 (y = 0/4/7).
       assert layout(tree, %{width: 10, height: 10}) == [
                %{type: :text, x: 0, y: 7, text: "CCCCCC"},
                %{type: :text, x: 0, y: 4, text: "BBBBBB"},
@@ -491,13 +473,9 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
         children: [text("AAAAAAAAAAAAAAAAAAAA"), text("B")]
       }
 
-      # First item is 20 wide against a 10-wide container -- Wrapper still
-      # places it (an empty `current_line` always accepts the first item
-      # regardless of fit), then "B" can't share the line (20+0+1 > 10) so
-      # it starts its own line. Same reversed-order quirk as above.
-      #
-      # Default align-content :stretch expands the two 1-tall lines to
-      # 5/5, so line two starts at y=5.
+      # An empty line always accepts its first item regardless of fit, so the
+      # 20-wide item gets its own line; "B" can't share it and starts a new
+      # one. align-content :stretch splits the two lines 5/5 (y=5).
       assert layout(tree, %{width: 10, height: 10}) == [
                %{type: :text, x: 0, y: 5, text: "B"},
                %{type: :text, x: 0, y: 0, text: "AAAAAAAAAAAAAAAAAAAA"}
@@ -506,14 +484,11 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
   end
 
   # ---------------------------------------------------------------------
-  # Literal :row / :column element types -- Raxol.UI.Layout.Containers, a
-  # separate dialect from View DSL row/column (which build :flex maps
-  # processed by Flexbox). Containers defaults: gap 1, justify :start,
-  # align :start (Flexbox defaults: gap 0, align :stretch -- MISMATCH).
-  # Also returns children in REVERSE order (reduce prepends via
-  # `child_elements ++ elements`), same quirk as Wrapper above. Pinned as-is.
+  # Literal :row/:column route through the Containers-dialect compat map,
+  # whose defaults (gap 1, justify :start, align :start) differ from
+  # Flexbox's own defaults (gap 0, align :stretch).
   # ---------------------------------------------------------------------
-  describe "literal :row / :column (Containers dialect, D4 compat baseline)" do
+  describe "literal :row / :column (Containers-dialect compat baseline)" do
     test "literal :row uses Containers defaults: gap 1, justify :start, align :start" do
       tree = %{
         type: :row,

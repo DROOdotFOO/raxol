@@ -1,18 +1,14 @@
 defmodule Raxol.UI.Layout.MinContent do
   @moduledoc """
-  Min-content inline (width) measurement.
+  Min-content inline (width) measurement: the smallest width an element
+  can occupy without losing content (longest unbreakable text segment,
+  declared width for fixed boxes, aggregates for containers).
 
-  The min-content width of an element is the smallest width it can occupy
-  without losing content: the longest unbreakable segment for text, the
-  declared width for fixed boxes, aggregates for containers.
-
-  Pure and unwired: nothing in the live path calls this yet. Intended as
-  `FlexItem`'s automatic `min-width: auto`. A full-width divider's
-  min-content is 1 cell, so it won't inflate measured container widths or
-  rob fixed-width siblings during shrink.
-
-  Widths via `Raxol.UI.TextMeasure` exclusively (CJK double-width).
-  Unknown element types measure 0.
+  `FlexItem` resolution adopts this as the automatic minimum size
+  (`min-width: auto`) on the inline axis — a divider's min-content is 1
+  cell (not its full width) so it can't rob fixed-width siblings during
+  shrink. Widths via `Raxol.UI.TextMeasure` (CJK double-width); unknown
+  element types measure 0.
   """
 
   alias Raxol.UI.TextMeasure
@@ -155,7 +151,7 @@ defmodule Raxol.UI.Layout.MinContent do
     {_t, r, _b, l} =
       case Map.get(box, :padding) || Map.get(style, :padding, 0) do
         n when is_integer(n) -> {n, n, n, n}
-        {h, v} -> {v, h, v, h}
+        {h, v} -> {h, v, h, v}
         {t, r, b, l} -> {t, r, b, l}
         _ -> {0, 0, 0, 0}
       end

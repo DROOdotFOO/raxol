@@ -94,8 +94,9 @@ defmodule Raxol.UI.Renderer do
         []
 
       _ ->
-        # Layout-stamped clip_bounds apply generically here; render paths
-        # that clip themselves are unaffected (intersection is idempotent).
+        # Layout-stamped overflow clipping applies to EVERY element type
+        # generically; type-specific render paths that clip themselves are
+        # unaffected (intersection is idempotent).
         element_with_dims
         |> render_visible_element(theme, parent_style)
         |> CellManager.clip_cells_to_bounds(
