@@ -83,8 +83,17 @@ defmodule Raxol.UI.Layout.FlexItem do
       nil marks an indefinite dimension (percentages resolve to `:auto`)
     * `content_size_fun` — zero-arg fun returning the content main size;
       called ONLY when basis resolves to `:auto`
+    * `auto_min_fun` — zero-arg fun returning the automatic minimum size
+      (spec `min-width: auto` = min-content); called ONLY when no explicit
+      min is set and no sugar override applies. Defaults to 0.
   """
-  def resolve(child, main_axis, container, content_size_fun) do
+  def resolve(
+        child,
+        main_axis,
+        container,
+        content_size_fun,
+        auto_min_fun \\ fn -> 0 end
+      ) do
     style = get_style(child)
     flex = lift_flex(style, Map.get(child, :attrs, %{}))
 
@@ -111,7 +120,7 @@ defmodule Raxol.UI.Layout.FlexItem do
 
     min_main =
       case {explicit_min, flex.min_main_override} do
-        {:auto, nil} -> 0
+        {:auto, nil} -> non_neg(auto_min_fun.())
         {:auto, override} -> override
         {n, _} -> n
       end
@@ -275,9 +284,16 @@ defmodule Raxol.UI.Layout.FlexItem do
 
   defp get_style(child) do
     case Map.get(child, :style) do
-      s when is_map(s) -> s
-      s when is_list(s) -> Map.new(s)
-      _ -> %{}
+      s when is_map(s) ->
+        s
+
+      s when is_list(s) ->
+        # styles may be keyword lists (%{width: 4}-like) or bare atom
+        # lists like [:bold] — only keyword lists carry dimensions
+        if Keyword.keyword?(s), do: Map.new(s), else: %{}
+
+      _ ->
+        %{}
     end
   end
 

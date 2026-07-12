@@ -37,20 +37,10 @@ defmodule Raxol.UI.Layout.Flexbox do
   @default_order 0
 
   alias Raxol.UI.Layout.Engine
-  alias Raxol.UI.Layout.Flexbox.{Calculator, Distributor, Positioner, Wrapper}
+  alias Raxol.UI.Layout.FlexItem
+  alias Raxol.UI.Layout.Flexbox.{Calculator, Positioner, Solver, Wrapper}
   alias Raxol.UI.Layout.LayoutUtils
-
-  @type t :: %{
-          type: :flexbox,
-          direction: atom(),
-          justify: atom(),
-          align: atom(),
-          wrap: atom(),
-          gap: number(),
-          children: list(),
-          width: number() | nil,
-          height: number() | nil
-        }
+  alias Raxol.UI.Layout.MinContent
 
   @doc """
   Processes a flex container, calculating layout for it and its children.
@@ -109,70 +99,9 @@ defmodule Raxol.UI.Layout.Flexbox do
 
   def measure_flex(_, _available_space), do: %{width: 0, height: 0}
 
-  @doc """
-  Creates a new flexbox layout with the given options.
-
-  ## Options
-  - `:direction` - flex direction (row, column)
-  - `:justify` - justify content
-  - `:align` - align items
-  - `:wrap` - flex wrap
-  - `:gap` - gap between items
-  - `:children` - child elements
-  - `:width` - container width
-  - `:height` - container height
-  """
-  @spec new(keyword()) :: t()
-  def new(opts \\ []) do
-    %{
-      type: :flexbox,
-      direction: Keyword.get(opts, :direction, :row),
-      justify: Keyword.get(opts, :justify, :flex_start),
-      align: Keyword.get(opts, :align, :stretch),
-      wrap: Keyword.get(opts, :wrap, :nowrap),
-      gap: Keyword.get(opts, :gap, @default_gap),
-      children: Keyword.get(opts, :children, []),
-      width: Keyword.get(opts, :width),
-      height: Keyword.get(opts, :height)
-    }
-  end
-
-  @doc """
-  Renders the flexbox layout.
-
-  Returns the layout with calculated positions for all children.
-  """
-  @spec render(t()) :: {:ok, map()}
-  def render(flexbox) do
-    {:ok,
-     %{
-       type: :rendered_flexbox,
-       layout: flexbox,
-       children: flexbox.children
-     }}
-  end
-
-  @doc """
-  Calculates the layout for flexbox and its children.
-
-  Returns a map with calculated dimensions and positions.
-  """
-  @spec calculate_layout(t()) :: map()
-  def calculate_layout(flexbox) do
-    total_width = flexbox.width || Calculator.calculate_content_width(flexbox)
-
-    total_height =
-      flexbox.height || Calculator.calculate_content_height(flexbox)
-
-    child_layouts =
-      Calculator.calculate_child_layouts(flexbox, total_width, total_height)
-
-    %{
-      width: total_width,
-      height: total_height,
-      children: child_layouts
-    }
-  end
+  # Legacy `new/1` + `render/1` + `calculate_layout/1` API (struct type
+  # :flexbox, never dispatched by the engine) removed — zero production
+  # callers.
 
   # ---------------------------------------------------------------------------
   # Private helpers
@@ -237,46 +166,269 @@ defmodule Raxol.UI.Layout.Flexbox do
     end
   end
 
-  defp calculate_single_line_layout(
-         children_with_dims,
-         space,
-         flex_props,
-         main_axis,
-         cross_axis
-       ) do
-    total_main_size =
-      Enum.reduce(children_with_dims, 0, fn {_child, dims, _flex}, acc ->
-        acc + Positioner.get_dimension(dims, main_axis)
-      end)
-
+  @doc false
+  # Section 9.7-correct single-line layout on FlexItem + Solver. Public
+  # (doc: false) so Wrapper's per-line layout shares the same code path.
+  #
+  # Pipeline: resolve items -> solve main sizes -> distribute main-axis
+  # auto margins -> position OUTER boxes (margins included) via Positioner
+  # -> derive each child's inner space (margins subtracted, cross auto
+  # margins and the stretch guard applied).
+  def calculate_single_line_layout(
+        children_with_dims,
+        space,
+        flex_props,
+        main_axis,
+        cross_axis
+      ) do
+    container_main = Positioner.get_dimension(space, main_axis)
+    container_cross = Positioner.get_dimension(space, cross_axis)
     gap_size = Positioner.get_gap_size(flex_props.gap, main_axis)
     total_gaps = gap_size * max(0, length(children_with_dims) - 1)
 
-    available_main_space =
-      Positioner.get_dimension(space, main_axis) - total_main_size - total_gaps
+    container_dims = %{
+      width: Map.get(space, :width),
+      height: Map.get(space, :height)
+    }
 
-    sized_children =
-      Distributor.distribute_main_space(
-        children_with_dims,
-        available_main_space,
-        main_axis
-      )
+    resolved =
+      Enum.map(children_with_dims, fn {child, dims, _legacy_flex} ->
+        # Automatic minimum size (spec min-width:auto = min-content, B3):
+        # inline axis uses MinContent; block axis uses the measured content
+        # size (min-content block size of unscrollable content). Items never
+        # shrink below it — overflow clips instead of content vanishing.
+        auto_min = fn ->
+          case main_axis do
+            :horizontal -> MinContent.width(child)
+            :vertical -> Positioner.get_dimension(dims, :vertical)
+          end
+        end
 
-    positioned_children =
-      Positioner.position_main_axis(
-        sized_children,
-        space,
-        flex_props,
-        main_axis
-      )
+        item =
+          FlexItem.resolve(
+            child,
+            main_axis,
+            container_dims,
+            fn -> Positioner.get_dimension(dims, main_axis) end,
+            auto_min
+          )
 
-    Positioner.position_cross_axis(
-      positioned_children,
-      space,
-      flex_props,
-      cross_axis
-    )
+        {item, Positioner.get_dimension(dims, cross_axis)}
+      end)
+
+    solved =
+      resolved
+      |> Enum.map(fn {item, _mc} -> item end)
+      |> Solver.resolve_flexible_lengths(container_main - total_gaps, main_axis)
+
+    free =
+      container_main - total_gaps -
+        Enum.reduce(solved, 0, fn item, acc ->
+          acc + FlexItem.outer_main(item, item.main_size, main_axis)
+        end)
+
+    solved = distribute_auto_main_margins(solved, free, main_axis)
+
+    entries =
+      solved
+      |> Enum.zip(Enum.map(resolved, fn {_i, mc} -> mc end))
+      |> Enum.map(&build_line_entry(&1, flex_props, main_axis, container_cross))
+
+    positioned =
+      entries
+      |> Positioner.position_main_axis(space, flex_props, main_axis)
+      |> Positioner.position_cross_axis(space, flex_props, cross_axis)
+
+    Enum.map(positioned, fn {entry, outer_space} ->
+      inner_space(entry, outer_space, main_axis, cross_axis)
+    end)
   end
+
+  # Build the {pseudo_child, outer_dims, pseudo_flex} tuple Positioner
+  # expects; the pseudo child carries everything inner_space/2 needs.
+  defp build_line_entry(
+         {item, measured_cross},
+         flex_props,
+         main_axis,
+         container_cross
+       ) do
+    cross =
+      FlexItem.clamp_main(
+        cross_clamp_item(item),
+        item.cross_size || measured_cross
+      )
+
+    {cs, ce} = FlexItem.cross_margins(item, main_axis)
+    {ms, me} = FlexItem.main_margins(item, main_axis)
+
+    cross_autos = Enum.count([cs, ce], &(&1 == :auto))
+    container_align = flex_props.align_items
+    requested_align = item.align_self || container_align
+
+    effective_align =
+      cond do
+        # auto cross margins absorb free space; align-self is ignored (spec)
+        cross_autos > 0 -> :flex_start
+        # definite cross size under stretch positions like flex-start (guard)
+        requested_align == :stretch and item.cross_size != nil -> :flex_start
+        true -> requested_align
+      end
+
+    outer_cross =
+      if cross_autos > 0 or effective_align == :stretch do
+        # consume the whole line so inner resolution decides placement
+        max(
+          container_cross,
+          cross + FlexItem.margin_int(cs) + FlexItem.margin_int(ce)
+        )
+      else
+        cross + FlexItem.margin_int(cs) + FlexItem.margin_int(ce)
+      end
+
+    outer_main =
+      FlexItem.margin_int(ms) + item.main_size + FlexItem.margin_int(me)
+
+    entry = %{
+      __flex_entry__: true,
+      child: item.element,
+      item: item,
+      cross: cross,
+      effective_align: effective_align
+    }
+
+    dims =
+      case main_axis do
+        :horizontal -> %{width: outer_main, height: outer_cross}
+        :vertical -> %{width: outer_cross, height: outer_main}
+      end
+
+    {entry, dims, %{align_self: effective_align}}
+  end
+
+  # Cross clamping reuses FlexItem.clamp_main by lending it the cross bounds.
+  defp cross_clamp_item(item) do
+    %{item | min_main: item.min_cross, max_main: item.max_cross}
+  end
+
+  # Turn the positioned OUTER box into the child's inner space.
+  defp inner_space(entry, outer_space, main_axis, cross_axis) do
+    item = entry.item
+    {ms, _me} = FlexItem.main_margins(item, main_axis)
+    {cs, ce} = FlexItem.cross_margins(item, main_axis)
+
+    outer_cross = Positioner.get_dimension(outer_space, cross_axis)
+
+    inner_cross =
+      if entry.effective_align == :stretch do
+        FlexItem.clamp_main(
+          cross_clamp_item(item),
+          max(
+            0,
+            outer_cross - FlexItem.margin_int(cs) - FlexItem.margin_int(ce)
+          )
+        )
+      else
+        entry.cross
+      end
+
+    cross_free =
+      max(
+        0,
+        outer_cross - inner_cross - FlexItem.margin_int(cs) -
+          FlexItem.margin_int(ce)
+      )
+
+    cross_start_offset =
+      case {cs, ce} do
+        {:auto, :auto} -> div(cross_free, 2)
+        {:auto, _} -> cross_free
+        {_, _} -> FlexItem.margin_int(cs)
+      end
+
+    geometry =
+      case main_axis do
+        :horizontal ->
+          %{
+            x: outer_space.x + FlexItem.margin_int(ms),
+            y: outer_space.y + cross_start_offset,
+            width: item.main_size,
+            height: inner_cross
+          }
+
+        :vertical ->
+          %{
+            x: outer_space.x + cross_start_offset,
+            y: outer_space.y + FlexItem.margin_int(ms),
+            width: inner_cross,
+            height: item.main_size
+          }
+      end
+
+    {entry.child, Map.merge(outer_space, geometry)}
+  end
+
+  # Main-axis auto margins absorb positive free space before justify-content.
+  defp distribute_auto_main_margins(items, free, main_axis) when free > 0 do
+    auto_count =
+      Enum.reduce(items, 0, fn item, acc ->
+        {ms, me} = FlexItem.main_margins(item, main_axis)
+        acc + Enum.count([ms, me], &(&1 == :auto))
+      end)
+
+    if auto_count == 0 do
+      items
+    else
+      share = div(free, auto_count)
+      remainder = rem(free, auto_count)
+
+      {out, _} =
+        Enum.map_reduce(items, {0, remainder}, fn item, {seen, rem_left} ->
+          {new_margin, seen, rem_left} =
+            resolve_main_autos(item.margin, main_axis, share, seen, rem_left)
+
+          {%{item | margin: new_margin}, {seen, rem_left}}
+        end)
+
+      out
+    end
+  end
+
+  defp distribute_auto_main_margins(items, _free, main_axis) do
+    # No positive free space: auto main margins resolve to 0 (spec).
+    Enum.map(items, fn item ->
+      {t, r, b, l} = item.margin
+
+      margin =
+        case main_axis do
+          :horizontal -> {t, zero_auto(r), b, zero_auto(l)}
+          :vertical -> {zero_auto(t), r, zero_auto(b), l}
+        end
+
+      %{item | margin: margin}
+    end)
+  end
+
+  defp resolve_main_autos({t, r, b, l}, :horizontal, share, seen, rem_left) do
+    {l, seen, rem_left} = take_auto(l, share, seen, rem_left)
+    {r, seen, rem_left} = take_auto(r, share, seen, rem_left)
+    {{t, r, b, l}, seen, rem_left}
+  end
+
+  defp resolve_main_autos({t, r, b, l}, :vertical, share, seen, rem_left) do
+    {t, seen, rem_left} = take_auto(t, share, seen, rem_left)
+    {b, seen, rem_left} = take_auto(b, share, seen, rem_left)
+    {{t, r, b, l}, seen, rem_left}
+  end
+
+  defp take_auto(:auto, share, seen, rem_left) do
+    extra = if rem_left > 0, do: 1, else: 0
+    {share + extra, seen + 1, rem_left - extra}
+  end
+
+  defp take_auto(v, _share, seen, rem_left), do: {v, seen, rem_left}
+
+  defp zero_auto(:auto), do: 0
+  defp zero_auto(v), do: v
 
   defp measure_flex_child(child, available_space, flex_props) do
     child_attrs = Map.get(child, :attrs, %{})
