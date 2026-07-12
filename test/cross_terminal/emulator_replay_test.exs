@@ -77,6 +77,7 @@ defmodule Raxol.CrossTerminal.EmulatorReplayTest do
       chunked = Replayer.replay_chunks(["\e[38;2;1", "0;20;3", "0mX"])
 
       assert Replayer.grid_text(single) == Replayer.grid_text(chunked)
+
       assert Replayer.cell_at(single, 0, 0).style ==
                Replayer.cell_at(chunked, 0, 0).style
     end

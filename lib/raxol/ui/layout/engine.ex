@@ -1,4 +1,5 @@
-defmodule Raxol.UI.Layout.Engine do  @moduledoc """
+defmodule Raxol.UI.Layout.Engine do
+  @moduledoc """
   Core layout engine that translates the logical view structure into absolute positions.
 
   This module is responsible for:
@@ -444,7 +445,6 @@ defmodule Raxol.UI.Layout.Engine do  @moduledoc """
 
     [box_element | children_acc] ++ acc
   end
-
 
   # Chart widget types are emitted by `Components.chart/1` as :box elements
   # whose `:type` is overridden to one of these atoms so MCP ToolProvider

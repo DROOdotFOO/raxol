@@ -90,6 +90,7 @@ defmodule Raxol.CrossTerminal.BoxDimensionsTest do
       Enum.find(lines, &String.contains?(&1, "(type to enter text)"))
 
     assert content_line != nil
+
     assert content_line =~ "│ (type",
            "padding not applied: #{inspect(String.slice(content_line, 0, 30))}"
 

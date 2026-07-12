@@ -231,6 +231,7 @@ defmodule Raxol.UI.Layout.Flexbox.Positioner do
     # with explicit cross sizes don't reflect their line's allocation.
     line_heights =
       allocated_heights || compute_line_heights(lines_with_layout, cross_axis)
+
     total_line_height = Enum.sum(line_heights)
     available_space = get_dimension(space, cross_axis) - total_line_height
     gap_size = get_gap_size(flex_props.gap, cross_axis)

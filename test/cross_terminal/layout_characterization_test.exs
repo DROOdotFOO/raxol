@@ -18,17 +18,13 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
   require Raxol.Core.Renderer.View
   alias Raxol.Core.Renderer.View, as: LegacyView
 
-  # Reduces every positioned element to the fields these pins track:
-  # type/x/y/width/height plus text content when present. This is
-  # deliberately lossy (drops style/attrs/fg/bg) so pins stay readable and
-  # focused on geometry.
+  # Reduces positioned elements to type/x/y/width/height (or type/x/y/text
+  # for text cells), dropping style/attrs/fg/bg/id so pins stay focused on placement.
   defp simplify(elements) do
     Enum.map(elements, fn el ->
-      base = Map.take(el, [:type, :x, :y, :width, :height])
-
       case el do
-        %{type: :text, text: t} -> Map.put(base, :text, t)
-        _ -> base
+        %{type: :text, text: t} -> %{type: :text, x: el.x, y: el.y, text: t}
+        _ -> Map.take(el, [:type, :x, :y, :width, :height])
       end
     end)
   end

@@ -1,4 +1,5 @@
-defmodule Raxol.Core.Renderer.ViewTest do  @moduledoc """
+defmodule Raxol.Core.Renderer.ViewTest do
+  @moduledoc """
   Tests for the view module: creation, spacing normalization, and
   construction-time validation.
   """
@@ -153,5 +154,4 @@ defmodule Raxol.Core.Renderer.ViewTest do  @moduledoc """
       end
     end
   end
-
 end

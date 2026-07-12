@@ -1,4 +1,5 @@
-defmodule Raxol.UI.Layout.Flexbox do  @moduledoc """
+defmodule Raxol.UI.Layout.Flexbox do
+  @moduledoc """
   CSS Flexbox-compatible layout: direction (row/column; reverse
   unsupported), justify/align-items/align-content, wrap (wrap-reverse
   behaves as wrap), grow/shrink/basis via the section-9.7 solver
@@ -29,7 +30,6 @@ defmodule Raxol.UI.Layout.Flexbox do  @moduledoc """
   alias Raxol.UI.Layout.Flexbox.{Calculator, Positioner, Solver, Wrapper}
   alias Raxol.UI.Layout.LayoutUtils
   alias Raxol.UI.Layout.MinContent
-
 
   @doc """
   Processes a flex container, calculating layout for it and its children.
