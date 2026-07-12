@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycle do
   Termbox NIF initialization, shutdown, and recovery helpers.
   """
 
-
   alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.IOTerminal
 
@@ -54,7 +53,9 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycle do
             {:noreply, state}
 
           {:error, init_reason} ->
-            Log.error("Failed to recover from termbox error: #{inspect(init_reason)}")
+            Log.error(
+              "Failed to recover from termbox error: #{inspect(init_reason)}"
+            )
 
             {:stop, {:termbox_error, reason}, state}
         end
@@ -102,8 +103,12 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycle do
     if not Env.test?() and has_terminal_device?() do
       # Disable terminal modes before restoring
       IO.write("\e[?1000l\e[?1006l\e[?1004l\e[?2004l")
-      # Restore terminal: show cursor, leave alternate screen
-      IO.write("\e[?25h\e[?1049l")
+      # Restore terminal: re-enable autowrap (DECAWM, paired with the
+      # \e[?7l written at init in driver.ex's TTY-detected branch), show
+      # cursor, leave alternate screen. Autowrap is restored before the
+      # alt-screen exit so the primary screen the user returns to behaves
+      # normally.
+      IO.write("\e[?7h\e[?25h\e[?1049l")
       _ = :io.setopts(:standard_io, echo: true)
 
       # Restore original TTY settings (OS-level via /dev/tty)

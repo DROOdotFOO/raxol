@@ -29,7 +29,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
     )
 
     # Move cursor to top-left and clear screen before each frame
-    frame = "\e[H\e[2J" <> output_string
+    frame = normalize_frame("\e[H\e[2J" <> output_string)
 
     if state.sync_output do
       IO.write("\e[?2026h")
@@ -167,7 +167,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
     output_string = Raxol.Terminal.Renderer.render(renderer)
 
     # Home cursor and clear screen before each frame, matching render_to_terminal
-    frame = "\e[H\e[2J" <> output_string
+    frame = normalize_frame("\e[H\e[2J" <> output_string)
 
     write_output(state.io_writer, frame, state.sync_output)
 
@@ -175,6 +175,23 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   end
 
   # --- Output Helpers ---
+
+  @doc """
+  Normalizes bare `\\n` row joins in a rendered frame to `\\r\\n`.
+
+  `Raxol.Terminal.Renderer.render/1` joins rows with a bare `\\n`, relying on
+  the terminal driver to cook LF into CRLF. The driver runs prim_tty in raw
+  output mode (see `Raxol.Terminal.Driver.start_stdin_reader/1`), where a
+  bare `\\n` only advances the line without returning to column 0 -- every
+  row after the first drifts one column right, and combined with DECAWM
+  autowrap on full-width rows this doubles the frame's vertical extent.
+  `\\r\\n` is mode-independent: raw mode gets a real CR+LF, and cooked
+  mode's LF->CRLF translation just turns it into a harmless `\\r\\r\\n`.
+  """
+  @spec normalize_frame(String.t()) :: String.t()
+  def normalize_frame(output_string) when is_binary(output_string) do
+    String.replace(output_string, "\n", "\r\n")
+  end
 
   @doc false
   def write_output(writer, output, true) when is_function(writer, 1) do

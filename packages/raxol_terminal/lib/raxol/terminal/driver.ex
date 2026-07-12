@@ -176,8 +176,14 @@ defmodule Raxol.Terminal.Driver do
         # Suppress Logger console output so it doesn't corrupt the TUI
         Logger.configure(level: :none)
 
-        # Enter alternate screen, hide cursor
-        IO.write("\e[?1049h\e[?25l")
+        # Enter alternate screen, hide cursor, disable DECAWM (autowrap,
+        # \e[?7l): the frame writes full-terminal-width rows via \e[H, and
+        # with autowrap on, the last cell of a full-width row advances the
+        # cursor on its own, so the frame's own newline advances a *second*
+        # time -- doubling every content row. See normalize_frame/1 in
+        # Raxol.Core.Runtime.Rendering.Backends for the LF->CRLF half of the
+        # fix. Restored in TermboxLifecycle.cleanup_terminal/1.
+        IO.write("\e[?1049h\e[?25l\e[?7l")
 
         # Reset mouse tracking (may be left over from a crashed session)
         IO.write("\e[?1003l\e[?1006l\e[?1000l")
