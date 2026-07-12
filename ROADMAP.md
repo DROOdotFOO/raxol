@@ -75,6 +75,21 @@ Distilled from a fast-follow gap analysis vs [NousResearch/hermes-agent](https:/
 
 **Do not build:** trajectory/training tooling, Singularity HPC backend, a 300-model subscription portal (that is Hermes's business; ours is settlement), or a `SOUL.md` personality system beyond what the import tool needs.
 
+### FATE-style Cross-Platform Test Bench
+
+Model: FFmpeg's FATE (end-to-end reference-hash suite over a distributed runner network) plus checkasm (a pure reference *oracle* that an optimized path must match byte-for-byte), adapted to Nix-pinned self-hosted runners spanning x86_64 and aarch64 (Linux + Darwin) over a Tailscale mesh. The flake *is* the bench: `checks.<system>`, `packages.raxol-burrito-<triple>`, and a NixOS runner config are all flake outputs, so every runner is reproducible and architecture is the only variable, not environment drift. Closes three current gaps: the `termbox2` NIF is skipped in all CI today (`SKIP_TERMBOX2_TESTS=true`), there is no aarch64-linux tier, and the swarm/CRDT paths never run against a real multi-node cluster. All four layers are planned.
+
+| Layer | What | FATE analogue |
+| ----- | ---- | ------------- |
+| Multi-arch checks | Run the full suite with the `termbox2` NIF actually built and exercised on x86_64-linux, aarch64-linux, and aarch64-darwin (plus the Windows pure-Elixir driver). Drop `SKIP_TERMBOX2_TESTS` on real hardware. | breadth matrix |
+| Oracle + golden render | `IOTerminal` (pure-Elixir reference) vs the `termbox2` NIF, byte-exact for the same op stream; plus `mix raxol.fate`: a deterministic corpus of TEA apps -> ScreenBuffer/ANSI hash, references committed (`--gen`), compared per architecture. | checkasm oracle + reference md5 |
+| Real-cluster swarm | Declaratively deploy the BEAM app across the mesh over Tailscale; orchestrate partition and heal; assert CRDT (`ORSet`/`LWWRegister`) convergence and topology re-election across real nodes. | (beyond FATE) |
+| Burrito release matrix | Per-target self-contained binaries (aarch64/x86_64 Linux, Darwin, Windows) cross-compiled via zig; each smoke-tested on its actual silicon over the mesh before it is trusted. | reference run on real hardware |
+
+Substrate: builds on the PR #441 flake. `nix run` / `bin/raxol` exposes both the interactive playground and a headless golden-render entrypoint (`Raxol.Release.golden/0`) reused as the per-arch smoke test.
+
+Determinism discipline (the FATE rule, "flaky is deterministic, dig in"): render output must hash-stably. The virtual `Animation.Clock` is already frame-deterministic; the remaining guards are map-ordering leaks, locale-dependent Unicode width, and concurrent-render process ordering. A flaky golden hash is a real bug, not noise.
+
 ### AI Backend Providers
 
 Supported now:
