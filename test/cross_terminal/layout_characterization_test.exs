@@ -524,11 +524,11 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
         ]
       }
 
-      # Reverse order (R3, R2, R1); gap 1 between 2-wide labels (0, 3, 6).
+      # Gap 1 between 2-wide labels (x = 0, 3, 6); document order.
       assert layout(tree, %{width: 30, height: 10}) == [
-               %{type: :text, x: 6, y: 0, text: "R3"},
+               %{type: :text, x: 0, y: 0, text: "R1"},
                %{type: :text, x: 3, y: 0, text: "R2"},
-               %{type: :text, x: 0, y: 0, text: "R1"}
+               %{type: :text, x: 6, y: 0, text: "R3"}
              ]
     end
 
@@ -543,9 +543,9 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       }
 
       assert layout(tree, %{width: 30, height: 10}) == [
-               %{type: :text, x: 0, y: 4, text: "C3"},
+               %{type: :text, x: 0, y: 0, text: "C1"},
                %{type: :text, x: 0, y: 2, text: "C2"},
-               %{type: :text, x: 0, y: 0, text: "C1"}
+               %{type: :text, x: 0, y: 4, text: "C3"}
              ]
     end
 
@@ -560,8 +560,8 @@ defmodule Raxol.CrossTerminal.LayoutCharacterizationTest do
       }
 
       assert layout(tree, %{width: 30, height: 10}) == [
-               %{type: :text, x: 16, y: 4, text: "X2"},
-               %{type: :text, x: 12, y: 4, text: "X1"}
+               %{type: :text, x: 12, y: 4, text: "X1"},
+               %{type: :text, x: 16, y: 4, text: "X2"}
              ]
     end
   end
