@@ -100,4 +100,37 @@ defmodule Raxol.Terminal.DriverInitOrderTest do
              "caused the JCL hijack described above. If you're reintroducing a " <>
              "custom shell MFA, re-read the comment on start_stdin_reader/1 first."
   end
+
+  # Third regression: with `initial_shell: :noshell`, prim_tty's OUTPUT mode
+  # is hardcoded raw, so it never cooks the frame's bare `\n` row joins into
+  # `\r\n` the way the old MFA-shell path's cooked mode did. Combined with
+  # DECAWM autowrap being left on, a full-terminal-width content row's last
+  # cell also triggers an autowrap advance, so the frame's own newline
+  # advances a *second* time -- doubling every row (~2 screens tall instead
+  # of 1). Disabling autowrap for the life of the TUI session removes that
+  # second advance; `normalize_frame/1` in
+  # `Raxol.Core.Runtime.Rendering.Backends` covers the missing-CR half of
+  # the bug. Both halves are needed; this test pins the driver's half.
+  test "TTY init disables autowrap (DECAWM) and cleanup restores it" do
+    source = File.read!(@driver_source)
+
+    assert source =~ ~r/IO\.write\("\\e\[\?1049h\\e\[\?25l\\e\[\?7l"\)/,
+           "TTY init must write \\e[?7l (DECAWM off) alongside entering the " <>
+             "alternate screen and hiding the cursor. Autowrap must stay off " <>
+             "for the life of the session since the frame always writes " <>
+             "full-terminal-width rows and owns its own geometry via \\e[H."
+
+    lifecycle_path =
+      @driver_source
+      |> Path.dirname()
+      |> Path.join("driver/termbox_lifecycle.ex")
+      |> Path.expand()
+
+    lifecycle_source = File.read!(lifecycle_path)
+
+    assert lifecycle_source =~
+             ~r/IO\.write\("\\e\[\?7h\\e\[\?25h\\e\[\?1049l"\)/,
+           "cleanup_terminal/1 must restore autowrap (\\e[?7h) before leaving " <>
+             "the alternate screen, undoing the \\e[?7l written at TTY init."
+  end
 end

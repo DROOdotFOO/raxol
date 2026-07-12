@@ -29,7 +29,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
     )
 
     # Move cursor to top-left and clear screen before each frame
-    frame = "\e[H\e[2J" <> output_string
+    frame = normalize_frame("\e[H\e[2J" <> output_string)
 
     if state.sync_output do
       IO.write("\e[?2026h")
@@ -157,7 +157,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
     output_string = Raxol.Terminal.Renderer.render(renderer)
 
     # Home cursor and clear screen before each frame, matching render_to_terminal
-    frame = "\e[H\e[2J" <> output_string
+    frame = normalize_frame("\e[H\e[2J" <> output_string)
 
     write_output(state.io_writer, frame, state.sync_output)
 
@@ -165,6 +165,33 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   end
 
   # --- Output Helpers ---
+
+  @doc """
+  Normalizes bare `\\n` row joins in a rendered frame to `\\r\\n`.
+
+  `Raxol.Terminal.Renderer.render/1` joins rows with a bare `\\n`
+  (`packages/raxol_terminal/lib/raxol/terminal/renderer.ex`), relying on the
+  terminal driver to translate LF -> CRLF ("cooked" output processing). Since
+  commit 04cc2231 switched `user_drv`/`prim_tty` to `initial_shell: :noshell`
+  to fix a JCL-hijack crash, `prim_tty` hardcodes its OUTPUT mode to raw
+  (see `user_drv.erl`'s noshell branch) — the old MFA-shell path got
+  `output: :cooked` for free, but `:noshell` never does. In raw mode a bare
+  `\\n` only advances the line (LF), it never returns the cursor to column 0
+  (CR), so every content row after the first drifts one column to the right
+  of the last — visually a full-terminal-width staircase that, combined with
+  DECAWM autowrap on a full-width row, doubles the frame's vertical extent.
+
+  `\\r\\n` is mode-independent: raw mode gets a real CR+LF (single line
+  advance, column reset); cooked mode's LF->CRLF translation only affects
+  the `\\n` it sees, so `\\r\\n` becomes `\\r\\r\\n` there, which is still
+  a single line advance (a redundant CR is a no-op at column 0). Frame bytes
+  emitted by Raxol were never the bug — only `prim_tty`'s cooked-mode
+  mediation vanished when the shell went away.
+  """
+  @spec normalize_frame(String.t()) :: String.t()
+  def normalize_frame(output_string) when is_binary(output_string) do
+    String.replace(output_string, "\n", "\r\n")
+  end
 
   @doc false
   def write_output(writer, output, true) when is_function(writer, 1) do

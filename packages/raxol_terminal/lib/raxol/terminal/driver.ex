@@ -176,8 +176,19 @@ defmodule Raxol.Terminal.Driver do
         # Suppress Logger console output so it doesn't corrupt the TUI
         Logger.configure(level: :none)
 
-        # Enter alternate screen, hide cursor
-        IO.write("\e[?1049h\e[?25l")
+        # Enter alternate screen, hide cursor. Also disable DECAWM (autowrap,
+        # \e[?7l): since commit 04cc2231 (initial_shell: :noshell), prim_tty's
+        # OUTPUT mode is hardcoded raw and no longer cooks the frame's bare
+        # `\n` row joins into `\r\n` (see normalize_frame/1 in
+        # Raxol.Core.Runtime.Rendering.Backends for that half of the fix).
+        # Independently, the frame writes full-terminal-width rows; with
+        # autowrap on, the last cell of a full-width row still advances the
+        # cursor to the next line on its own, so the frame's own newline
+        # advances a *second* time -- doubling every content row. The frame
+        # owns its geometry entirely (it always positions via \e[H and full
+        # rows), so autowrap must stay off for the life of the session.
+        # Restored in TermboxLifecycle.cleanup_terminal/1.
+        IO.write("\e[?1049h\e[?25l\e[?7l")
 
         # Reset mouse tracking (may be left over from a crashed session)
         IO.write("\e[?1003l\e[?1006l\e[?1000l")
