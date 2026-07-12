@@ -2,6 +2,7 @@ name: Nix
 
 on:
   push:
+    branches: [master]
     paths:
       - flake.nix
       - flake.lock
@@ -11,6 +12,10 @@ on:
       - flake.nix
       - flake.lock
       - .github/workflows/nix.yml
+
+concurrency:
+  group: nix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   devshell:
