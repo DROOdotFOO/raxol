@@ -72,7 +72,6 @@ defmodule Raxol.Terminal.Renderer do
     style_cache: %{}
   ]
 
-
   # ANSI escape code constants
   @ansi_reset "\e[0m"
   @ansi_bold "\e[1m"
@@ -300,6 +299,13 @@ defmodule Raxol.Terminal.Renderer do
     "\e[38;2;#{r};#{g};#{b}m"
   end
 
+  # Plain {r, g, b} tuples (UI-stack/CellDim RGB shape -- distinct from the
+  # %{r:, g:, b:} map clause above) must also resolve to truecolor SGR.
+  defp resolve_fg_ansi({r, g, b}, _theme)
+       when is_integer(r) and is_integer(g) and is_integer(b) do
+    "\e[38;2;#{r};#{g};#{b}m"
+  end
+
   defp resolve_fg_ansi(color, _theme)
        when is_integer(color) and color >= 0 and color <= 255 do
     "\e[38;5;#{color}m"
@@ -328,6 +334,12 @@ defmodule Raxol.Terminal.Renderer do
   end
 
   defp resolve_bg_ansi(%{r: r, g: g, b: b}, _theme) do
+    "\e[48;2;#{r};#{g};#{b}m"
+  end
+
+  # Same as resolve_fg_ansi/2 for {r, g, b} tuples.
+  defp resolve_bg_ansi({r, g, b}, _theme)
+       when is_integer(r) and is_integer(g) and is_integer(b) do
     "\e[48;2;#{r};#{g};#{b}m"
   end
 
@@ -380,7 +392,9 @@ defmodule Raxol.Terminal.Renderer do
   defp parse_hex_color("#" <> hex), do: parse_hex_digits(hex)
   defp parse_hex_color(hex) when is_binary(hex), do: parse_hex_digits(hex)
 
-  defp parse_hex_digits(<<r::binary-size(2), g::binary-size(2), b::binary-size(2)>>) do
+  defp parse_hex_digits(
+         <<r::binary-size(2), g::binary-size(2), b::binary-size(2)>>
+       ) do
     with {r_val, ""} <- Integer.parse(r, 16),
          {g_val, ""} <- Integer.parse(g, 16),
          {b_val, ""} <- Integer.parse(b, 16) do
@@ -390,7 +404,9 @@ defmodule Raxol.Terminal.Renderer do
     end
   end
 
-  defp parse_hex_digits(<<r::binary-size(1), g::binary-size(1), b::binary-size(1)>>) do
+  defp parse_hex_digits(
+         <<r::binary-size(1), g::binary-size(1), b::binary-size(1)>>
+       ) do
     with {r_val, ""} <- Integer.parse(r <> r, 16),
          {g_val, ""} <- Integer.parse(g <> g, 16),
          {b_val, ""} <- Integer.parse(b <> b, 16) do

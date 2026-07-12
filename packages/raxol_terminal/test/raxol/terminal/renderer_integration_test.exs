@@ -54,7 +54,8 @@ defmodule Raxol.Terminal.RendererIntegrationTest do
   defp parse_hex("#" <> hex), do: parse_hex(hex)
 
   defp parse_hex(<<r::binary-size(2), g::binary-size(2), b::binary-size(2)>>) do
-    {String.to_integer(r, 16), String.to_integer(g, 16), String.to_integer(b, 16)}
+    {String.to_integer(r, 16), String.to_integer(g, 16),
+     String.to_integer(b, 16)}
   end
 
   describe "integration with Manipulation module" do
@@ -243,7 +244,9 @@ defmodule Raxol.Terminal.RendererIntegrationTest do
       text = "Red text"
 
       buffer =
-        Enum.reduce(Enum.with_index(String.graphemes(text)), buffer, fn {char, col}, acc ->
+        Enum.reduce(Enum.with_index(String.graphemes(text)), buffer, fn {char,
+                                                                         col},
+                                                                        acc ->
           ScreenBuffer.write_char(acc, col, 0, char, style)
         end)
 
@@ -256,6 +259,51 @@ defmodule Raxol.Terminal.RendererIntegrationTest do
       assert output =~ "Red text"
       assert output =~ ansi_fg("#FF0000")
       assert output =~ @ansi_reset
+    end
+  end
+
+  describe "{r, g, b} tuple colors (Raxol.UI.CellDim / plain UI-stack RGB)" do
+    # {r,g,b} tuples must emit 38;2/48;2, not fall through to nil.
+    test "emits a 24-bit foreground escape for a tuple color", %{buffer: buffer} do
+      buffer =
+        ScreenBuffer.write_char(buffer, 0, 0, "A", %{foreground: {9, 37, 112}})
+
+      renderer = Renderer.new(buffer)
+      output = Renderer.render(renderer)
+
+      assert output =~ "\e[38;2;9;37;112m"
+    end
+
+    test "emits a 24-bit background escape for a tuple color", %{buffer: buffer} do
+      buffer =
+        ScreenBuffer.write_char(buffer, 0, 0, "A", %{background: {4, 4, 4}})
+
+      renderer = Renderer.new(buffer)
+      output = Renderer.render(renderer)
+
+      assert output =~ "\e[48;2;4;4;4m"
+    end
+
+    test "tuple and map-shaped rgb colors of the same value render identically",
+         %{
+           buffer: buffer
+         } do
+      tuple_buffer =
+        ScreenBuffer.write_char(buffer, 0, 0, "A", %{
+          foreground: {9, 37, 112},
+          background: {4, 4, 4}
+        })
+
+      map_buffer =
+        ScreenBuffer.write_char(buffer, 0, 0, "A", %{
+          foreground: %{r: 9, g: 37, b: 112},
+          background: %{r: 4, g: 4, b: 4}
+        })
+
+      tuple_output = Renderer.render(Renderer.new(tuple_buffer))
+      map_output = Renderer.render(Renderer.new(map_buffer))
+
+      assert tuple_output == map_output
     end
   end
 
