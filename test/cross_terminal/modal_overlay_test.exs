@@ -189,7 +189,9 @@ defmodule Raxol.CrossTerminal.ModalOverlayTest do
         |> UIRenderer.render_to_cells()
         |> fold_last_write_wins()
 
-      assert {"X", :cyan, :black, []} = cells[{0, 0}]
+      # The dialog char and its explicit fg win the overlap; the bg is the
+      # theme default (not fixed across envs), so it is not asserted.
+      assert {"X", :cyan, _bg, []} = cells[{0, 0}]
     end
   end
 
