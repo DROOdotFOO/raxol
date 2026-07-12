@@ -71,6 +71,12 @@ Or generate a new project:
 mix raxol.new my_app
 ```
 
+With [Nix](https://nixos.org), `nix develop` drops you into a shell with the full BEAM and NIF toolchain (no local Elixir install required):
+
+```bash
+nix develop github:DROOdotFOO/raxol   # dev shell with elixir, erlang, NIF + speech deps
+```
+
 ## Try it
 
 ```bash

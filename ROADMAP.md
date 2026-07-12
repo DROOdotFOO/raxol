@@ -4,43 +4,29 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ## Current Version: v2.6.0
 
-### What's Done
+---
 
-- **Phase 1: Core Runtime**: TEA architecture, TTY detection, ANSI input/output, render pipeline end-to-end
-- **Phase 2: Widget Library**: 23 widgets with tests and examples (exceeds original 15-widget target)
-- **Phase 3: Framework Polish**: Focus management, W3C-style event capture/bubble, style inheritance, terminal compatibility (color downsampling, Unicode width, synchronized output)
-- **Phase 4: OTP Differentiators**: Process-per-component crash isolation, hot code reload, LiveView bridge, SSH app serving
-- **Phase 5: Ecosystem Tooling**: Hex package, Phoenix optional, `mix raxol.new` generator, documentation, tech debt cleanup, showcase, session recording
-- **Phase 6: Playground + Charts**: 30 demos across 8 categories, 7 chart modules (braille-resolution), web refactor, SSH playground
-- **Time-Travel Debugging**: Snapshot every update/2 cycle, cursor navigation, restore, export/import. Zero cost when disabled
-- **Agent Framework**: TEA-based AI agents, coordinator/worker teams, 7 agent harness gaps closed (compaction, hooks, permissions, MCP client, streams, LSP, SSE)
-- **Sensor Fusion HUD**: Sensor behaviour, polling feeds, weighted averaging, threshold alerts
-- **Distributed Swarm**: CRDTs, node monitoring, topology election, libcluster + Tailscale strategy
-- **Self-Evolving Interface**: Behavior tracking, layout recommendations, animated transitions
-- **AI Cockpit + Streaming**: Multi-pane terminal dashboard, SSE streaming for 8 AI backends
-- **Virtual File System**: Pure functional in-memory VFS, REPL helpers, 7 agent actions
-- **Phase 8: raxol_mcp**: Extracted MCP package (server, client, registry, stdio/SSE transports)
-- **Phase 9: ToolProvider**: Auto-derive MCP tools from widget tree (15 widgets), focus lens, tree walker
-- **Phase 10: MCP Protocol Hardening**: Full MCP spec coverage (prompts, logging, completion), notifications, circuit breaker, chart ToolProviders, agent bridge, Tidewave removed
-- **Phase 11: MCP Resources + Context Tree**: ResourceProvider behaviour, ResourceRouter, ContextTree, StructuredScreenshot, model projection diffs, resource subscriptions
-- **Phase 12: MCP Widget + Agent Coverage**: `@mcp_exclude` attribute, FocusLens hover mode, ToolSynchronizer focus/hover tracking, HoverHighlight effect
-- **Phase 13: MCP Test Harness**: Pipe-friendly test API (`click`, `type_into`, `assert_component`, `assert_tool_available`), session lifecycle, functor law property tests (10 properties)
-- **Agent Payments (Phase A)**: x402/MPP auto-pay, wallets (env + 1Password), spending controls, 5 agent actions
-- **Phase 14B: Xochi Integration**: Xochi as default agent protocol for cross-chain (cash-positive, tier fees 0.10-0.40%). Riddler solves behind the scenes. Full intent flow: quote -> sign -> execute -> poll. Router prefers Xochi for cross-chain and privacy. 94 tests.
-- **Phase 14C: PXE-Bridge Integration**: Aztec Private eXecution Environment as settlement target for high-trust privacy tiers. PXE client (JSON-RPC 2.0), schemas, PrivacyTier (Glass Cube, 6 tiers), Router settlement routing. 51 tests.
-- **Phase 14D: Stealth Settlement**: Full ERC-5564/ERC-6538 in `Xochi.Stealth` (~300 LOC). ECDH derivation, view tag scanning (256x speedup), domain-separated key derivation, meta-address encode/decode. 44 tests (32 unit + 12 e2e).
-- **Phase 14E: ZKSAR + Trust Tiers**: ZKSAR attestation verification (6 ZK proof types), diminishing-returns trust score aggregation, attestation-gated privacy tiers, privacy depth routing. 52 tests.
-- **Riddler Solver Wiring (ADR-0005)**: Xochi adapter wired to Riddler's intent engine: 9 endpoints, fee policy (5 tiers + privacy premiums), stealth/ERC-4337 settlement, ZKSAR attestation, EIP-712 typed data, PropertyTable stores. 119 Riddler tests + 347 raxol_payments tests. Aztec shielded settlement deferred (sidecar deployment).
-- **Phase 15A-E: Animation Hints**: Declarative metadata flowing from `view/1` to all surfaces. `Animation.Helpers` DSL (`animate`, `stagger`, `sequence`), terminal frames computed server-side via `Animation.Framework`, LiveView CSS via `TerminalBridge.animation_css/1` with `prefers-reduced-motion`, MCP `StructuredScreenshot` JSON hints, `reduced_motion` in render context.
-- **Phase 17: Telegram bridge** (`raxol_telegram`): Bot, per-chat session router (1000 max, 5s cooldown), inline keyboard navigation, message edit dedup, 10min idle timeout. 34 tests.
-- **Phase 18: Speech interface** (`raxol_speech`): TTS (OsSay/espeak, accessibility subscription), STT (Whisper via Bumblebee), Listener (sox Port, bounded), 21 default voice commands. 28 tests.
-- **Phase 19: Watch notifications** (`raxol_watch`): APNS/FCM push via `pigeon`, ETS-backed device registry, 1s debounce, 160-char glanceable summaries, tap-to-event actions. 34 tests.
-- **Adaptive UI Overhaul**: 8-rule LayoutRecommender (was 3), multi-recommendation, TrendDetector, NxModel expanded to 10 features with auto-retrain, Lifecycle integration (`adaptive: true`), 5 MCP tools. 67 tests.
-- **BorderBeam Effect**: Three-layer animated border glow (beam stroke, inner glow, outer bloom). Four variants (colorful/mono/ocean/sunset). Terminal exponential decay, LiveView conic-gradient + mask CSS, MCP hint serialization. Pipe + prop DSL. 99 effects tests.
-- **`raxol_acp` v0.2 (pre-alpha, `0.2.0-rc.0`)**: First Elixir/OTP-native Virtuals Agent Commerce Protocol implementation, aligned to the deployed Base contracts and fork-validated. The v2 hook/event model is the active runtime (the v1 memo model was retired -- see `packages/raxol_acp/MIGRATION_V2.md`): `Raxol.ACP.JobSession` state machine (`:open -> :budget_set -> :funded -> :submitted -> :completed` plus `:rejected`/`:expired`), on-chain hook writes via `HookClient` -> `AgenticCommerceV3` through an injected `ProviderAdapter` (`SCA` sponsored UserOps / `JSONRPC` EOA with `NonceServer`-serialized nonces / `Mock`), full ERC-4337 SCA wallet (Alchemy Modular Account v2: sponsored UserOps, counterfactual deploy, session keys), Seller stack (`Backend.{InMemory, WebSocket}` over Socket.IO + `Queue` + `Runtime` driving `JobSession.Provider`), `mix raxol_acp.bench`. Real ABIs and verified Base addresses vendored. 509 tests. Pre-alpha until a single graduated offering on Base mainnet.
-- **`raxol_symphony` Phases 0-14**: Elixir/OTP port of OpenAI Symphony. Tracker-driven coding-agent orchestrator with two runner backends (`raxol_agent` default + `codex app-server` Port-based JSON-RPC), six surfaces (terminal/LiveView/MCP/Telegram/Watch/JSON API), workflow hot-reload, evidence framework (CI status + PR comments + cloc/SLOC + asciinema), in-run asciicast capture. 399 tests. Pre-alpha; path-dep.
-- **Video Render Target** (hermes-agent pickup): One TEA module to MP4/WebM/GIF. Frames computed server-side at a virtual animation clock (`Raxol.Animation.Clock`), themed HTML via `TerminalBridge` rasterized through headless Chrome, encoded with FFmpeg. `Raxol.Recording.Video` (`frame_html`/`render_frame`/`capture_frame`/`capture_clip`), a swappable `Rasterizer` (zero-dep HeadlessChrome plus warm-pool ChromicPDF, ~6x faster), `Headless.get_buffer/1`, and `mix raxol.render`.
-- **Cross-Session Agent Memory** (hermes-agent pickup): Opt-in, per-agent persistent memory behind a pluggable `Raxol.Agent.Memory` behaviour. Default `Memory.Store.Ets` is a self-contained ETS+DETS store (no deps) with BM25-lite + recency + tag ranking over a token inverted index. Automatic pre-turn recall injected into the system prompt (`Manager.enrich_messages`) plus explicit `memory_remember`/`recall`/`forget` actions; wired into `Stream`/`ReAct` and exposed via `use Raxol.Agent` `memory_provider/0`. 25 tests. User model, auto-capture, and the recall-MCP bridge deferred.
+## What's Done
+
+**Framework core (Phases 1-6):** TEA architecture, full render pipeline, 23 widgets, focus + W3C-style event capture/bubble, terminal compat (color downsampling, Unicode width, synchronized output), playground (30 demos / 8 categories), 7 braille-resolution charts, Hex packaging, `mix raxol.new`, session recording.
+
+**OTP differentiators:** process-per-component crash isolation, hot code reload, LiveView bridge, SSH app serving, time-travel debugging (snapshot every `update/2`), distributed swarm (CRDTs, topology election, libcluster + Tailscale).
+
+**Adaptive UI + effects:** 8-rule LayoutRecommender, TrendDetector, Nx auto-retrain, Lifecycle integration, 5 MCP tools. Animation hints (Phase 15): declarative `view/1` metadata to every surface (`animate`/`stagger`/`sequence`), terminal frames server-side, LiveView CSS with `prefers-reduced-motion`, MCP JSON hints. BorderBeam effect (three-layer glow, 4 variants, terminal + LiveView + MCP).
+
+**MCP surface (Phases 8-13):** extracted `raxol_mcp` (server/client/registry, stdio + SSE). Auto-derives tools from the widget tree (15 widgets) with a focus/hover lens; `@mcp_exclude` opt-out. Full spec coverage (prompts, logging, completion, notifications, circuit breaker). Resources + ContextTree + StructuredScreenshot + model-projection diffs. Pipe-friendly test harness with functor-law property tests.
+
+**Agent framework:** TEA-based agents, coordinator/worker teams, 7 harness gaps closed (compaction, hooks, permissions, MCP client, streams, LSP, SSE). AI cockpit with SSE streaming for 9 backends. Virtual File System (pure-functional in-memory VFS, REPL helpers, 7 agent actions).
+
+**Agent memory + self-improving skills** (hermes-agent pickup): pluggable `Raxol.Agent.Memory` (`Store.Ets`, ETS+DETS, BM25-lite + recency + tags), pre-turn recall injection, `memory_remember`/`recall`/`forget`. Self-improving skill loop: `Curator` on an idle gate plus an isolated post-turn reviewer (`SelfImprove`) that authors/patches/consolidates `SKILL.md` skills (agentskills.io format). The same background pass does post-turn memory auto-capture and refreshes a dialectic per-user `UserModel` (both in `turn.ex`), and feeds a full-text `session_search` index. Config via `memory_provider/0` / `skills_provider/0` / `self_improve/0`. Remaining: recall-MCP bridge, hub client, paid skills.
+
+**Video render target** (hermes-agent pickup): one TEA module to MP4/WebM/GIF, server-side frames at a virtual `Animation.Clock`, themed HTML via `TerminalBridge` rasterized through headless Chrome (zero-dep + warm-pool ChromicPDF), FFmpeg-encoded, `mix raxol.render`.
+
+**Commerce rails:** agent payments with wallets (env + 1Password), ledger-enforced spending limits, and transparent HTTP-402 auto-pay across five protocols (x402, MPP, Xochi, Permit2, Riddler). Xochi is the cross-chain default (tier fees 0.10-0.40%, quote -> sign -> execute -> poll). PXE-bridge settlement (Glass Cube, 6 privacy tiers), ERC-5564/6538 stealth (`Xochi.Stealth`), ZKSAR attestation (6 proof types) + trust-tier routing. Riddler solver wired (ADR-0005, 9 endpoints, fee policy + privacy premiums). ~347 payments tests.
+
+**`raxol_acp` v0.2 (pre-alpha):** first Elixir/OTP-native Virtuals Agent Commerce Protocol, v2 hook/event model on the deployed Base contracts (v1 memo model retired). `JobSession` state machine (`:open -> :budget_set -> :funded -> :submitted -> :completed` plus `:rejected`/`:expired`), on-chain writes via `HookClient` -> `AgenticCommerceV3` through an injected `ProviderAdapter` (SCA sponsored UserOps / JSONRPC EOA with `NonceServer` / Mock), full ERC-4337 SCA wallet (Alchemy Modular Account v2), Seller stack (`Backend.{InMemory, WebSocket}` + `Queue` + `Runtime`), `mix raxol_acp.bench`. 509 tests. Graduates on the first live Base-mainnet offering.
+
+**Surfaces:** `raxol_telegram` (bot, per-chat router, inline keyboards; 34 tests), `raxol_speech` (TTS + Whisper STT + 21 voice commands; 28 tests), `raxol_watch` (APNS/FCM push, glanceable summaries, tap-to-event; 34 tests). `raxol_symphony` (pre-alpha): OTP port of OpenAI Symphony, a tracker-driven coding-agent orchestrator with two runners (`raxol_agent` + `codex`), six surfaces, workflow hot-reload, evidence framework; 399 tests.
 
 ---
 
@@ -48,24 +34,61 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ### Ship It
 
-The twelve stable packages are published to Hex: the mature framework packages at v2.4.0 and the newer payment and surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) at v0.1.0. `raxol_acp`, `raxol_symphony`, and `raxol_gateway` stay pre-alpha and unpublished until they graduate.
+The twelve published Hex packages track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_agent`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`) at v2.6.0, and the independent payment/surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) at v0.2.0. `raxol_acp` (0.2.0), `raxol_symphony`, and `raxol_gateway` stay pre-alpha and unpublished until they graduate.
 
 | Task                      | Description                                                            | Effort |
 | ------------------------- | --------------------------------------------------------------------- | ------ |
 | Graduate `raxol_acp`      | Live run on Base mainnet with one offering, then the first Hex release | Medium |
 | Graduate `raxol_symphony` | Live workflow against a real Linear/GitHub repo, then Hex reservation  | Medium |
 
-### Targeting Next: Agent & Creative
+### Fast-Follow: Hermes Parity
 
-Capabilities identified by studying [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). The BEAM gives several of these a more natural home than Hermes's single-process Python: real concurrency, crash isolation, and a native frame engine. **Shipped from this set:** the Video Render Target and Cross-Session Agent Memory (see What's Done). Remaining:
+Distilled from a fast-follow gap analysis vs [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). Moat tags: **RAILS** = routes agent spend through the commerce rails · **SURFACE** = another projection of the one TEA module · **CATCH-UP** = table-stakes to stop losing users at the door. Guard: nothing here may compromise the single-module invariant or the frame budget.
 
-| Target | What | Status |
-| ------ | ---- | ------ |
-| Self-improving skill loop | `Curator` BaseManager plus a per-turn background review: agents author, patch, consolidate, and archive their own skills (agentskills.io format), built on the existing `PermissionHook` + `Agent.Session` primitives. | Planned |
-| Agent cron scheduler | Per-agent natural-language scheduled automations that deliver to existing surfaces, generalizing Symphony's polling loop. | Planned |
-| Agent Client Protocol adapter | Put `raxol_agent` inside Zed/VS Code/JetBrains agent panels. ACP here is the Agent *Client* Protocol, distinct from `raxol_acp` (Agent *Commerce* Protocol). | Planned |
-| Creative-media agent actions | `image_generate`/`video_generate`/`tts`/`transcribe` as `raxol_agent` Actions behind a backend-agnostic provider behaviour. | Planned |
-| Memory: user model + auto-capture + MCP bridge | Extend Cross-Session Memory with a dialectic user model, optional post-turn auto-capture, and a provider that bridges to the external recall MCP server. | Planned |
+**P0: funnel & reach**
+
+| Item | What | Effort | Tag |
+| ---- | ---- | ------ | --- |
+| Install funnel | `flake.nix` (first PR) -> Burrito `curl \| bash` self-contained release (BEAM bundled, per-target termbox2 NIF, pure-Elixir driver on Windows) -> `raxol doctor`/`setup`/`update` -> Windows PowerShell installer | M | CATCH-UP |
+| Gateway breadth | Graduate `raxol_gateway`: freeze the `Gateway.Adapter` behaviour, port Telegram behind it, then Discord + Email; wire `raxol_speech` STT as a shared pipeline stage so every adapter gets voice memos | M | SURFACE |
+| Cron scheduler | `Raxol.Agent.Cron`: parse-once crontab / NL schedule, one lightweight GenServer per agent, deliver to any surface or gateway. Generalizes Symphony's polling loop | M | SURFACE |
+| Memory remainder | The `UserModel` + post-turn auto-capture already ship; finish the `Provider.RecallMcp` bridge, optionally back `session_search` with SQLite FTS5, and extract `raxol_memory`/`raxol_skills` | S/M | RAILS-adjacent |
+
+**P1: differentiation**
+
+| Item | What | Effort | Tag |
+| ---- | ---- | ------ | --- |
+| Desktop app | Tauri shell over the LiveView surface with a Burrito'd BEAM sidecar (zero new UI); defaults the harness to `:openrouter` for the attribution funnel | L | SURFACE |
+| Metered tool gateway | Creative-media actions (`image`/`video`/`tts`/`transcribe`) behind an axol-hosted service that answers HTTP 402; any 402-speaking agent auto-pays per call via x402/Xochi (the commerce wedge) | M | RAILS |
+| Paid skills market | agentskills.io-format serializer + hub pull client + tradeable skills (a `SKILL.md` bundle with an ACP offering, settled on Base) | M | RAILS |
+| Migration on-ramp | `mix raxol.import --from hermes/openclaw`: SOUL.md -> persona, memories -> `Memory.Store`, skills, allowlists -> PermissionHook | S | CATCH-UP |
+| Windows first-class | Tune the pure-Elixir driver + Windows CI + the PowerShell installer path | M | CATCH-UP |
+| OpenRouter funnel | Run the #414 live smoke with a real key, confirm the `openrouter.ai/apps?url=https://raxol.io` listing, bump site copy to v2.6 / 14 packages | S | Funnel |
+
+**P2: deliberate laggards** (do when pulled, not pushed)
+
+- **FLAME** elastic exec on Fly Machines (BEAM-native idle hibernation, replaces Modal/Daytona).
+- More gateway adapters: Slack (Socket Mode), then WhatsApp / Signal on demand.
+- i18n: wire the present `gettext` through surface rendering, extract locale files.
+- Agent Client Protocol adapter (`raxol_agent` inside Zed/VS Code/JetBrains panels; distinct from `raxol_acp`).
+- Expose the sandboxed REPL as an agent action for scripted single-turn tool pipelines.
+
+**Do not build:** trajectory/training tooling, Singularity HPC backend, a 300-model subscription portal (that is Hermes's business; ours is settlement), or a `SOUL.md` personality system beyond what the import tool needs.
+
+### FATE-style Cross-Platform Test Bench
+
+Model: FFmpeg's FATE (end-to-end reference-hash suite over a distributed runner network) plus checkasm (a pure reference *oracle* that an optimized path must match byte-for-byte), adapted to Nix-pinned self-hosted runners spanning x86_64 and aarch64 (Linux + Darwin) over a Tailscale mesh. The flake *is* the bench: `checks.<system>`, `packages.raxol-burrito-<triple>`, and a NixOS runner config are all flake outputs, so every runner is reproducible and architecture is the only variable, not environment drift. Closes three current gaps: the `termbox2` NIF is skipped in all CI today (`SKIP_TERMBOX2_TESTS=true`), there is no aarch64-linux tier, and the swarm/CRDT paths never run against a real multi-node cluster. All four layers are planned.
+
+| Layer | What | FATE analogue |
+| ----- | ---- | ------------- |
+| Multi-arch checks | Run the full suite with the `termbox2` NIF actually built and exercised on x86_64-linux, aarch64-linux, and aarch64-darwin (plus the Windows pure-Elixir driver). Drop `SKIP_TERMBOX2_TESTS` on real hardware. | breadth matrix |
+| Oracle + golden render | `IOTerminal` (pure-Elixir reference) vs the `termbox2` NIF, byte-exact for the same op stream; plus `mix raxol.fate`: a deterministic corpus of TEA apps -> ScreenBuffer/ANSI hash, references committed (`--gen`), compared per architecture. | checkasm oracle + reference md5 |
+| Real-cluster swarm | Declaratively deploy the BEAM app across the mesh over Tailscale; orchestrate partition and heal; assert CRDT (`ORSet`/`LWWRegister`) convergence and topology re-election across real nodes. | (beyond FATE) |
+| Burrito release matrix | Per-target self-contained binaries (aarch64/x86_64 Linux, Darwin, Windows) cross-compiled via zig; each smoke-tested on its actual silicon over the mesh before it is trusted. | reference run on real hardware |
+
+Substrate: builds on the PR #441 flake. `nix run` / `bin/raxol` exposes both the interactive playground and a headless golden-render entrypoint (`Raxol.Release.golden/0`) reused as the per-arch smoke test.
+
+Determinism discipline (the FATE rule, "flaky is deterministic, dig in"): render output must hash-stably. The virtual `Animation.Clock` is already frame-deterministic; the remaining guards are map-ordering leaks, locale-dependent Unicode width, and concurrent-render process ordering. A flaky golden hash is a real bug, not noise.
 
 ### AI Backend Providers
 
@@ -87,8 +110,6 @@ Supported now:
 - Multi-node cockpit (swarm coordination across physical terminals)
 - Plugin marketplace
 - VS Code extension for component previews
-- Burrito packaging (single standalone binary)
-- FLAME integration (elastic compute for Nx training bursts)
 - SSH session multiplexing (tmux-like panes)
 - Collaborative sessions (multi-user terminal sharing)
 - Documentation site (widget gallery, tutorials, examples)

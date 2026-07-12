@@ -1,0 +1,2 @@
+# Golden reference hashes must stay byte-stable across platforms (no CRLF).
+priv/fate/golden.refs text eol=lf
