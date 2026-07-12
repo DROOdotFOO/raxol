@@ -51,9 +51,10 @@ defmodule Mix.Tasks.Raxol.Check do
     :dialyzer,
     :security,
     :docs,
+    :fate,
     :test
   ]
-  @quick_checks [:lockfile, :compile, :format, :credo, :docs, :test]
+  @quick_checks [:lockfile, :compile, :format, :credo, :docs, :fate, :test]
 
   @impl Mix.Task
   def run(args) do
@@ -306,6 +307,30 @@ defmodule Mix.Tasks.Raxol.Check do
         )
 
         {:docs, :warning}
+    end
+  end
+
+  defp run_check(:fate) do
+    Mix.shell().info(Colors.subsection_header("FATE golden render"))
+
+    case Mix.shell().cmd("mix raxol.fate") do
+      0 ->
+        Mix.shell().info(
+          "    " <> Colors.format_success("Golden render hashes match")
+        )
+
+        {:fate, :ok}
+
+      _ ->
+        Mix.shell().error(
+          "    " <>
+            Colors.format_error(
+              "Golden render mismatch",
+              "inspect the diff, then run `mix raxol.fate --gen` if the change is intended"
+            )
+        )
+
+        {:fate, :error}
     end
   end
 

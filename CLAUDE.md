@@ -34,7 +34,7 @@ Note: `TMPDIR=/tmp` and `SKIP_TERMBOX2_TESTS=true` are set automatically via `.c
 ### Code Quality
 
 ```bash
-mix raxol.check               # All checks: format, compile, credo, dialyzer, security, test
+mix raxol.check               # All checks: format, compile, credo, dialyzer, security, docs, fate, test
 mix raxol.check --quick       # Skip dialyzer
 mix raxol.check --only format,credo  # Run specific checks only
 mix raxol.check --skip test   # Skip specific checks

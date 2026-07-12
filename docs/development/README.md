@@ -41,9 +41,13 @@ mix format                    # Format code
 mix credo                     # Style check
 mix dialyzer                  # Type checking (PLT cached in priv/plts/)
 mix docs                      # Generate docs
-mix raxol.check               # Run all checks (format, compile, credo, dialyzer, test)
+mix raxol.check               # Run all checks (compile, format, credo, dialyzer, security, docs, fate, test)
 mix raxol.check --quick       # Skip dialyzer
 ```
+
+Run `mix raxol.check` before you push. It mirrors the checks CI enforces, including the
+FATE golden render gate (`mix raxol.fate`). When you change rendering on purpose,
+regenerate the references with `mix raxol.fate --gen` and commit them.
 
 ### Development
 ```bash
