@@ -59,4 +59,45 @@ defmodule Raxol.Terminal.DriverInitOrderTest do
              "and can crash the whole node on startup under a real terminal (see " <>
              "commit history around the H-K salience / OSC 11 background detection merge)."
   end
+
+  # Second regression: `start_stdin_reader/1`'s `:start_shell` call must
+  # pass the literal atom `:noshell`, never an MFA — even a no-op one that
+  # returns immediately. Any non-`:noshell` value makes user_drv spawn a
+  # real shell process via `group:start/3`. If that process exits right
+  # away (as a no-op MFA shell does), user_drv prints "*** ERROR: Shell
+  # process terminated! ***" and drops into its JCL "User switch command
+  # -->" prompt for the rest of the session — every subsequent byte read
+  # from stdin, including the terminal's own reply to our OSC 11 / DA
+  # startup query, gets interpreted as a job-control command instead of
+  # reaching our trace, and the JCL handler killing/reassigning stdio
+  # crashes the whole node before a frame ever renders. This is
+  # unreachable from ExUnit for the same reason as the ordering test above
+  # (no real TTY in CI), so it's asserted directly against the source.
+  test "start_stdin_reader's :start_shell call uses :noshell, not a shell MFA" do
+    source = File.read!(@driver_source)
+
+    # Anchor on the tuple construction itself, not just the atom — ":start_shell"
+    # alone also appears earlier in explanatory comments.
+    {start_shell_index, _len} = :binary.match(source, "{:start_shell,")
+
+    # Grab a window of source after the :start_shell call site — enough to
+    # contain the Args map literal — and confirm it pins `initial_shell` to
+    # the atom :noshell rather than any other value (MFA tuple, module
+    # capture, etc).
+    window = binary_part(source, start_shell_index, 200)
+
+    assert window =~ ~r/initial_shell:\s*:noshell/,
+           "start_stdin_reader/1's {:start_shell, Args} call must set " <>
+             "initial_shell: :noshell literally. Any other value (including a " <>
+             "custom no-op shell MFA) makes user_drv spawn a real shell process " <>
+             "that immediately exits, triggering the JCL 'User switch command' " <>
+             "prompt and hijacking all subsequent stdin — including the terminal's " <>
+             "OSC 11 / DA reply — which crashes the node. See the comment on " <>
+             "start_stdin_reader/1 in driver.ex for the full mechanism."
+
+    refute source =~ "noop_shell",
+           "noop_shell/0 should no longer exist — it was the MFA shell that " <>
+             "caused the JCL hijack described above. If you're reintroducing a " <>
+             "custom shell MFA, re-read the comment on start_stdin_reader/1 first."
+  end
 end
