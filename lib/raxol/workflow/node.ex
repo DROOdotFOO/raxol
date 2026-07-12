@@ -157,9 +157,29 @@ defprotocol Raxol.Workflow.Node.Executor do
   implementing this protocol. Mirrors the
   `Raxol.Core.Runtime.Directive.Executor` shape: same callback name,
   same result tuple, same telemetry surface.
+
+  No struct is implemented in this library; the `Any` fallback raises for a
+  struct that has no implementation registered.
   """
+
+  @fallback_to_any true
 
   @spec execute(t(), state :: any(), opts :: keyword()) ::
           Raxol.Workflow.Node.result()
   def execute(node_struct, state, opts)
+end
+
+defimpl Raxol.Workflow.Node.Executor, for: Any do
+  # Reached when a TypedNode wraps a struct with no registered implementation.
+  # Raising matches the behaviour of an unimplemented protocol; the workflow
+  # runtime rescues it into an `{:error, {:exception, _}}` node result. Having a
+  # fallback also lets the compiler resolve the dispatch, so a lib-only build
+  # (the `raxol` release) does not flag the call as always-failing.
+  def execute(node_struct, _state, _opts) do
+    raise Protocol.UndefinedError,
+      protocol: Raxol.Workflow.Node.Executor,
+      value: node_struct,
+      description:
+        "register one with `defimpl Raxol.Workflow.Node.Executor, for: ...`"
+  end
 end
