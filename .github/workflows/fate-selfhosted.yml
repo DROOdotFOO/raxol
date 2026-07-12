@@ -1,0 +1,80 @@
+name: FATE self-hosted
+
+# Builds the termbox2 NIF and exercises the tty-dependent suite on the homelab's
+# Nix-pinned self-hosted runners (aarch64-linux + x86_64-linux). GitHub-hosted CI
+# skips these via SKIP_TERMBOX2_TESTS; this workflow leaves it unset and runs the
+# NIF for real on both Linux architectures, plus a golden render comparison so the
+# aarch64-linux hash is checked against priv/fate/golden.refs.
+#
+# Security: raxol is a public repository, so these jobs must never run untrusted
+# code on the homelab. Triggers are limited to manual dispatch, pushes to master,
+# and the nightly schedule (all trusted refs). There is no pull_request trigger,
+# and the owner guard fences out forks.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - "packages/raxol_terminal/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/fate-selfhosted.yml"
+  schedule:
+    - cron: "0 7 * * *"
+
+concurrency:
+  group: fate-selfhosted-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  nif:
+    if: github.repository_owner == 'DROOdotFOO'
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [ARM64, X64]
+    runs-on: [self-hosted, linux, "${{ matrix.arch }}", raxol]
+    timeout-minutes: 45
+    env:
+      TERM: xterm-256color
+      LANG: C.UTF-8
+      # SKIP_TERMBOX2_TESTS is intentionally unset so the NIF suite runs for real.
+    steps:
+      - uses: actions/checkout@v4
+
+      # `script` (from util-linux in the devShell) allocates a controlling
+      # pseudo-terminal. It wraps the whole `mix test`, not just the run: the
+      # real termbox2 tests are compiled in only when TerminalUtils.real_tty?/0
+      # is true, and that guard is evaluated at test-file compile time.
+      # --include docker un-excludes the loading tests (the package test_helper
+      # hardcodes their exclusion); the NIF-exercising tests are untagged, so
+      # naming the files runs them without --only skipping them.
+      - name: termbox2 NIF suite (built and exercised under a pseudo-terminal)
+        run: |
+          nix develop --command bash -lc '
+            cd packages/raxol_terminal
+            MIX_ENV=test mix deps.get
+            script -qec "MIX_ENV=test mix test --include docker \
+              test/termbox2_nif/termbox2_loading_test.exs \
+              test/termbox2_nif/termbox2_nif_test.exs --no-deps-check" /dev/null
+          '
+
+      - name: Platform :requires_terminal suite (under a pseudo-terminal)
+        run: |
+          nix develop --command bash -lc '
+            MIX_ENV=test mix deps.get
+            script -qec "MIX_ENV=test mix test \
+              test/platform/terminal_test.exs --no-deps-check" /dev/null
+          '
+
+      # Pure render, no pseudo-terminal needed. First comparison of the
+      # aarch64-linux golden hash against the committed references.
+      - name: FATE golden render on this architecture
+        run: |
+          nix develop --command bash -lc '
+            MIX_ENV=test mix test test/fate/golden_test.exs --no-deps-check
+          '
