@@ -68,6 +68,14 @@ Produces: `%{type: :column, children: [%{type: :text, ...}, %{type: :row, ...}],
 - **CSS Grid**: `grid` with `template_columns`, `template_rows`
 - **Box model**: `padding`, `border`, `margin`, `width`, `height`
 
+The `:flex` container path (`Raxol.UI.Layout.Flexbox` + `FlexItem` +
+`Flexbox.Solver`/`Positioner`) implements CSS Flexbox section 9.7 on a
+monospace cell grid, with a handful of intentional divergences (e.g.
+terminal-pragmatic `flex: 1` equalization, no baseline alignment) and an
+automatic minimum-size floor derived from min-content measurement. See
+[LAYOUT.md](./LAYOUT.md) for the full supported-property reference,
+divergence table, and the text-wrapping API (`Raxol.UI.TextLayout`).
+
 ### 4. Composer -> Cell Grid
 
 `Raxol.UI.Rendering.Composer` walks the positioned tree and produces cell tuples:

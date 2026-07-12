@@ -66,12 +66,17 @@ defmodule Raxol.UI.Layout.Flexbox.Wrapper do
       ) do
     lines = break_into_lines(children_with_dims, space, flex_props, main_axis)
 
+    natural_heights =
+      Enum.map(lines, &calculate_line_height(&1, cross_axis))
+
+    line_heights =
+      stretch_line_heights(natural_heights, space, flex_props, cross_axis)
+
     lines_with_layout =
-      Enum.map(lines, fn line_children ->
-        line_space = %{
-          space
-          | height: calculate_line_height(line_children, cross_axis)
-        }
+      lines
+      |> Enum.zip(line_heights)
+      |> Enum.map(fn {line_children, line_height} ->
+        line_space = set_line_cross(space, cross_axis, line_height)
 
         calculate_single_line_layout(
           line_children,
@@ -86,9 +91,43 @@ defmodule Raxol.UI.Layout.Flexbox.Wrapper do
       lines_with_layout,
       space,
       flex_props,
-      cross_axis
+      cross_axis,
+      line_heights
     )
   end
+
+  # align-content: :stretch — distribute free cross space into the lines
+  # themselves (largest-remainder), so stretch-aligned items grow with
+  # their line. Other align-content values keep natural line heights and
+  # let Positioner place the lines within the free space instead.
+  defp stretch_line_heights(natural_heights, space, flex_props, cross_axis) do
+    free =
+      Positioner.get_dimension(space, cross_axis) -
+        Enum.sum(natural_heights) -
+        Positioner.get_gap_size(flex_props.gap, cross_axis) *
+          max(0, length(natural_heights) - 1)
+
+    if Map.get(flex_props, :align_content) == :stretch and free > 0 and
+         natural_heights != [] do
+      n = length(natural_heights)
+      share = div(free, n)
+      remainder = rem(free, n)
+
+      natural_heights
+      |> Enum.with_index()
+      |> Enum.map(fn {h, i} ->
+        h + share + if(i < remainder, do: 1, else: 0)
+      end)
+    else
+      natural_heights
+    end
+  end
+
+  defp set_line_cross(space, :vertical, line_cross),
+    do: %{space | height: line_cross}
+
+  defp set_line_cross(space, :horizontal, line_cross),
+    do: %{space | width: line_cross}
 
   # Single source of truth: the 9.7-correct single-line layout lives in
   # the parent module (FlexItem + Solver pipeline); each wrap line runs
