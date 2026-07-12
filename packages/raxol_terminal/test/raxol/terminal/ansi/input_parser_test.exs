@@ -409,5 +409,33 @@ defmodule Raxol.Terminal.ANSI.InputParserTest do
     test "returns empty list for invalid sequence" do
       assert [] = InputParser.parse(<<128, 129, 130>>)
     end
+
+    test "does not crash on a secondary DA reply (CSI > Pp ; Pv ; Pc c)" do
+      # Some terminals answer unsolicited (or in response to a secondary DA
+      # probe raxol never sends) with `CSI > ... c`. The leading `>` byte
+      # used to hit no clause in parse_csi_params/3 and crash the whole
+      # Driver GenServer with a FunctionClauseError. Regression coverage
+      # for that crash: the parser must return *something* rather than
+      # raise. It isn't taught to recognize this sequence, so (like any
+      # other unmapped-but-well-formed CSI sequence) it degrades to
+      # per-byte printable-char events instead of bringing the process
+      # down -- not clean, but never fatal.
+      assert is_list(InputParser.parse("\e[>0;282;0c"))
+    end
+
+    test "does not crash on other CSI private-marker/intermediate bytes" do
+      for seq <- ["\e[=1c", "\e[<35;10;10M-not-sgr", "\e[:1;2m", "\e[?9999h"] do
+        assert is_list(InputParser.parse(seq))
+      end
+    end
+
+    test "keeps parsing subsequent events after an unrecognized CSI sequence" do
+      # A secondary DA reply immediately followed by a real key press must
+      # not swallow the key press (or crash trying to reach it).
+      events = InputParser.parse("\e[>0;282;0c" <> "q")
+
+      assert %Event{type: :key, data: %{key: :char, char: "q"}} =
+               List.last(events)
+    end
   end
 end

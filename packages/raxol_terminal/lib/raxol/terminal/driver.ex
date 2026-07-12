@@ -472,7 +472,7 @@ defmodule Raxol.Terminal.Driver do
 
   defp dispatch_raw_input(data, state) do
     {data, state} = handle_bg_query_reply(data, state)
-    events = InputParser.parse(data)
+    events = parse_input_safely(data)
 
     Enum.each(events, fn event ->
       case state.dispatcher_pid do
@@ -482,6 +482,36 @@ defmodule Raxol.Terminal.Driver do
     end)
 
     {:noreply, state}
+  end
+
+  # Real terminals send escape sequences InputParser was never taught about
+  # (secondary DA replies, unsolicited XTGETTCAP/DECRQM answers, vendor
+  # extensions, ...). InputParser.parse/1 is written to be total over the
+  # ANSI/CSI grammar, but this is a last-resort net: a parser bug here must
+  # never crash the Driver GenServer, since terminate/2's cleanup write can
+  # race the resulting supervisor shutdown and take stdio down before the
+  # terminal is restored. Degrade to "drop this chunk of input" rather than
+  # bringing the whole node down.
+  defp parse_input_safely(data) do
+    InputParser.parse(data)
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] InputParser crashed on raw input, dropping this chunk: " <>
+          inspect(error),
+        %{}
+      )
+
+      []
+  catch
+    kind, reason ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] InputParser raised #{inspect(kind)} on raw input, dropping this chunk: " <>
+          inspect(reason),
+        %{}
+      )
+
+      []
   end
 
   # Writes the OSC 11 background query and returns whether a reply should

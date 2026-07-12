@@ -221,6 +221,21 @@ defmodule Raxol.Terminal.ANSI.InputParser do
     {params ++ [num], nil, <<>>}
   end
 
+  # Catch-all for any other CSI parameter/intermediate byte we don't give
+  # special meaning to (private markers like `<` `=` `>` `?` `:`, or ECMA-48
+  # intermediate bytes 0x20-0x2F). Real terminals send sequences this
+  # parser was never taught about -- a secondary DA reply (`CSI > Pp ; Pv ;
+  # Pc c`), an unsolicited XTGETTCAP/DECRQM answer, etc. Without this clause
+  # any such byte is a FunctionClauseError that crashes the whole Driver
+  # GenServer (and, via terminate/2 racing app shutdown, can take stdio
+  # down with it). Ignoring the byte and continuing to scan for the final
+  # byte keeps parsing total: worst case an unrecognized sequence resolves
+  # to an ignorable `{params, final_byte, rest}` instead of taking the node
+  # down.
+  defp parse_csi_params(<<_byte, rest::binary>>, current_digits, params) do
+    parse_csi_params(rest, current_digits, params)
+  end
+
   defp digits_to_integer([]), do: 0
 
   defp digits_to_integer(digits) do
