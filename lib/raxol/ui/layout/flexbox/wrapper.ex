@@ -24,7 +24,7 @@ defmodule Raxol.UI.Layout.Flexbox.Wrapper do
   end
 
   defp accumulate_line_item(
-         {_child, dims, _flex} = item,
+         {_child, dims} = item,
          {lines, current_line, current_size},
          main_axis,
          gap_size,
@@ -51,7 +51,7 @@ defmodule Raxol.UI.Layout.Flexbox.Wrapper do
 
   @doc "Calculate the cross-axis height of a single line."
   def calculate_line_height(line_children, cross_axis) do
-    Enum.reduce(line_children, 0, fn {_child, dims, _flex}, acc ->
+    Enum.reduce(line_children, 0, fn {_child, dims}, acc ->
       max(acc, Positioner.get_dimension(dims, cross_axis))
     end)
   end

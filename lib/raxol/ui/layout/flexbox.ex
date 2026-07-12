@@ -1,6 +1,9 @@
-defmodule Raxol.UI.Layout.Flexbox do
-  @moduledoc """
-  Modern Flexbox layout system for Raxol UI components.
+defmodule Raxol.UI.Layout.Flexbox do  @moduledoc """
+  CSS Flexbox-compatible layout: direction (row/column; reverse
+  unsupported), justify/align-items/align-content, wrap (wrap-reverse
+  behaves as wrap), grow/shrink/basis via the section-9.7 solver
+  (`Flexbox.Solver`), gap, and item `order`. Baseline alignment is
+  intentionally unsupported.
 
   This module provides CSS Flexbox-compatible layout calculations with support for:
   - Flex direction (row, column, row-reverse, column-reverse)
@@ -12,22 +15,12 @@ defmodule Raxol.UI.Layout.Flexbox do
   - Gap properties
   - Order property for reordering items
 
-  ## Example Usage
-
-      # Flexbox container
       %{
         type: :flex,
-        attrs: %{
-          flex_direction: :row,
-          justify_content: :space_between,
-          align_items: :center,
-          gap: 10,
-          padding: %{top: 5, right: 10, bottom: 5, left: 10}
-        },
+        attrs: %{flex_direction: :row, justify_content: :space_between, gap: 10},
         children: [
           %{type: :text, attrs: %{content: "Item 1", flex: %{grow: 1}}},
-          %{type: :text, attrs: %{content: "Item 2", flex: %{shrink: 0, basis: 100}}},
-          %{type: :text, attrs: %{content: "Item 3", order: -1}}
+          %{type: :text, attrs: %{content: "Item 2", order: -1}}
         ]
       }
   """
@@ -210,8 +203,7 @@ defmodule Raxol.UI.Layout.Flexbox do
     children_with_dims =
       Enum.map(children, fn child ->
         dims = measure_flex_child(child, space, flex_props)
-        flex_attrs = get_flex_attributes(child)
-        {child, dims, flex_attrs}
+        {child, dims}
       end)
 
     {main_axis, cross_axis} = get_axes(flex_props.flex_direction)

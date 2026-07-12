@@ -170,7 +170,10 @@ defmodule Raxol.UI.Layout.FlexboxTest do
   describe "process_flex/3" do
     test "returns accumulator for non-flex element" do
       acc = [{0, 0, "x", :white, :black, %{}}]
-      result = Flexbox.process_flex(%{type: :other}, %{width: 80, height: 24}, acc)
+
+      result =
+        Flexbox.process_flex(%{type: :other}, %{width: 80, height: 24}, acc)
+
       assert result == acc
     end
 

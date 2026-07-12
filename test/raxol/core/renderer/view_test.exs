@@ -1,5 +1,4 @@
-defmodule Raxol.Core.Renderer.ViewTest do
-  @moduledoc """
+defmodule Raxol.Core.Renderer.ViewTest do  @moduledoc """
   Tests for the view module, including creation, layout,
   spacing normalization, and flex layout features.
   """

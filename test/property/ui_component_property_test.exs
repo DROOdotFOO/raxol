@@ -23,7 +23,8 @@ defmodule Raxol.Property.UIComponentTest do
     property "button state is consistent after init" do
       check all(
               label <- string(:printable, min_length: 1, max_length: 50),
-              role <- member_of([:primary, :secondary, :danger, :success, :default]),
+              role <-
+                member_of([:primary, :secondary, :danger, :success, :default]),
               max_runs: 500
             ) do
         {:ok, button} = Button.init(%{label: label, role: role})
@@ -68,10 +69,14 @@ defmodule Raxol.Property.UIComponentTest do
         {:ok, state} = TextInput.init(%{value: initial})
         refute state.focused
 
-        {focused_state, []} = TextInput.handle_event(%{type: :focus}, state, %{})
+        {focused_state, []} =
+          TextInput.handle_event(%{type: :focus}, state, %{})
+
         assert focused_state.focused
 
-        {blurred_state, []} = TextInput.handle_event(%{type: :blur}, focused_state, %{})
+        {blurred_state, []} =
+          TextInput.handle_event(%{type: :blur}, focused_state, %{})
+
         refute blurred_state.focused
       end
     end

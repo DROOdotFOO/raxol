@@ -1,6 +1,6 @@
 defmodule Raxol.UI.Layout.Flexbox.Calculator do
   @moduledoc """
-  Container sizing and the legacy calculate_layout/distribute_flex API.
+  Container sizing from measured child dimensions.
   """
 
   @compile {:no_warn_undefined, Raxol.UI.Layout.Flexbox.Positioner}
@@ -19,10 +19,15 @@ defmodule Raxol.UI.Layout.Flexbox.Calculator do
       ) do
     {main_axis, cross_axis} = get_axes(flex_props.flex_direction)
 
+    # Positioner inserts gap between children on the main axis; measured
+    # container size must include it or parents under-allocate and clip.
+    gap_size = Positioner.get_gap_size(flex_props.gap, main_axis)
+    gap_total = gap_size * max(0, length(child_dimensions) - 1)
+
     main_size =
       Enum.reduce(child_dimensions, 0, fn dims, acc ->
         acc + Positioner.get_dimension(dims, main_axis)
-      end)
+      end) + gap_total
 
     cross_size =
       Enum.reduce(child_dimensions, 0, fn dims, acc ->
