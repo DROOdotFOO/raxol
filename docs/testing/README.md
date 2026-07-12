@@ -36,12 +36,22 @@ cd packages/raxol_agent    && MIX_ENV=test mix test
 
 ### All quality checks
 
+`mix raxol.check` mirrors the checks CI enforces. Run the full command before you push;
+a clean local run is the strongest signal your branch will pass CI.
+
 ```bash
-mix raxol.check                        # format, compile, credo, dialyzer, security, test
+mix raxol.check                        # lockfile, compile, format, credo, dialyzer, security, docs, fate, test
 mix raxol.check --quick                # skip dialyzer
 mix raxol.check --only format,credo   # specific checks only
 mix raxol.check --skip test            # skip specific checks
 ```
+
+The `fate` step runs the golden render harness (`mix raxol.fate`): it hashes a fixture
+corpus and compares each hash against `priv/fate/golden.refs`, failing the gate on any
+mismatch. When you change rendering on purpose, regenerate the references with
+`mix raxol.fate --gen` and commit them. The hashes are architecture-independent, so a
+mismatch that appears on one platform while another stays green points at a determinism
+bug worth tracking down.
 
 ### Coverage
 

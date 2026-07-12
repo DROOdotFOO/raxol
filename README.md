@@ -147,7 +147,7 @@ git clone https://github.com/DROOdotFOO/raxol.git
 cd raxol
 mix deps.get
 MIX_ENV=test mix test --exclude slow --exclude integration --exclude docker
-mix raxol.check              # format, compile, credo, dialyzer, security, test
+mix raxol.check              # format, compile, credo, dialyzer, security, docs, fate, test
 mix raxol.check --quick      # skip dialyzer
 mix raxol.demo               # run built-in demos
 ```
