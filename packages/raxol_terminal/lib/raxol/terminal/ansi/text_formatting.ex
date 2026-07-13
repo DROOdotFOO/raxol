@@ -42,6 +42,9 @@ defmodule Raxol.Terminal.ANSI.TextFormatting do
           hyperlink: String.t() | nil
         }
 
+  @type underline_style ::
+          :none | :single | :double | :curly | :dotted | :dashed
+
   @type t :: %__MODULE__{
           bold: boolean(),
           italic: boolean(),
@@ -60,7 +63,9 @@ defmodule Raxol.Terminal.ANSI.TextFormatting do
           framed: boolean(),
           encircled: boolean(),
           overlined: boolean(),
-          hyperlink: String.t() | nil
+          hyperlink: String.t() | nil,
+          underline_style: underline_style(),
+          underline_color: color()
         }
 
   defstruct bold: false,
@@ -80,7 +85,9 @@ defmodule Raxol.Terminal.ANSI.TextFormatting do
             framed: false,
             encircled: false,
             overlined: false,
-            hyperlink: nil
+            hyperlink: nil,
+            underline_style: :single,
+            underline_color: nil
 
   # Core sub-module - Primary text formatting operations
   defmodule Core do
@@ -111,6 +118,19 @@ defmodule Raxol.Terminal.ANSI.TextFormatting do
 
     def get_foreground(%{} = style), do: style.foreground
     def get_background(%{} = style), do: style.background
+
+    def set_underline_color(style, color) do
+      style = ensure_text_formatting_struct(style)
+      %{style | underline_color: color}
+    end
+
+    def set_underline_style(style, underline_style) do
+      style = ensure_text_formatting_struct(style)
+      %{style | underline_style: underline_style}
+    end
+
+    def get_underline_color(%{} = style), do: style.underline_color
+    def get_underline_style(%{} = style), do: style.underline_style
 
     def set_double_width(style),
       do: %{style | double_width: true, double_height: :none}
@@ -339,6 +359,12 @@ defmodule Raxol.Terminal.ANSI.TextFormatting do
   def get_foreground(style), do: Core.get_foreground(style)
   @impl true
   def get_background(style), do: Core.get_background(style)
+  def set_underline_color(style, color), do: Core.set_underline_color(style, color)
+  def set_underline_style(style, underline_style),
+    do: Core.set_underline_style(style, underline_style)
+
+  def get_underline_color(style), do: Core.get_underline_color(style)
+  def get_underline_style(style), do: Core.get_underline_style(style)
   @impl true
   def set_double_width(style), do: Core.set_double_width(style)
   @impl true

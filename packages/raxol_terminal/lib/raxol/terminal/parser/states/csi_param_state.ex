@@ -34,6 +34,11 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
   defp dispatch_input(<<?;, rest::binary>>, emulator, parser_state),
     do: handle_separator(emulator, parser_state, rest)
 
+  # ':' is a valid CSI parameter byte (ECMA-48 0x30-0x3F) used for colon
+  # subparameters, e.g. SGR styled underline "4:3" or truecolor "38:2::r:g:b".
+  defp dispatch_input(<<?:, rest::binary>>, emulator, parser_state),
+    do: handle_colon(emulator, parser_state, rest)
+
   defp dispatch_input(
          <<intermediate_byte, rest::binary>>,
          emulator,
@@ -95,6 +100,15 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
     # Log.debug(
     #   "CSIParamState.handle_separator: new_params=#{inspect(next_parser_state.params_buffer)}"
     # )
+
+    {:continue, emulator, next_parser_state, rest}
+  end
+
+  defp handle_colon(emulator, parser_state, rest) do
+    next_parser_state = %{
+      parser_state
+      | params_buffer: parser_state.params_buffer <> <<?:>>
+    }
 
     {:continue, emulator, next_parser_state, rest}
   end

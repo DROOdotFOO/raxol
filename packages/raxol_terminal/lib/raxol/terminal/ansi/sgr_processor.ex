@@ -78,8 +78,27 @@ defmodule Raxol.Terminal.ANSI.SGRProcessor do
   defp parse_params(params) do
     params
     |> String.split(";")
-    |> Enum.map(&parse_int/1)
+    |> Enum.map(&parse_segment/1)
     |> Enum.reject(&is_nil/1)
+  end
+
+  # A ";"-delimited segment containing ":" is a colon-subparameter group,
+  # e.g. "4:3" -> {4, [3]} or "38:2::255:0:0" -> {38, [2, nil, 255, 0, 0]}.
+  # The empty slot in "::" (ECMA-48 colorspace-id quirk) parses to nil.
+  defp parse_segment(segment) do
+    case String.contains?(segment, ":") do
+      true ->
+        case String.split(segment, ":") do
+          [code_str | subparam_strs] ->
+            case parse_int(code_str) do
+              nil -> nil
+              code -> {code, Enum.map(subparam_strs, &parse_int/1)}
+            end
+        end
+
+      false ->
+        parse_int(segment)
+    end
   end
 
   defp parse_int(str) do
@@ -91,11 +110,84 @@ defmodule Raxol.Terminal.ANSI.SGRProcessor do
 
   defp process_params([], style), do: style
 
+  defp process_params([{code, subparams} | rest], style) do
+    updated_style = apply_sgr_colon_code(code, subparams, style)
+    process_params(rest, updated_style)
+  end
+
   defp process_params([code | rest], style) do
     updated_style = apply_sgr_code(code, style, rest)
     {_consumed, remaining} = get_consumed_params(code, rest)
     process_params(remaining, updated_style)
   end
+
+  # Styled underline (colon form only): 4:0 none, 4:1 single, 4:2 double,
+  # 4:3 curly, 4:4 dotted, 4:5 dashed
+  defp apply_sgr_colon_code(4, [0 | _], style) do
+    %{style | underline: false, double_underline: false, underline_style: :none}
+  end
+
+  defp apply_sgr_colon_code(4, [1 | _], style) do
+    %{style | underline: true, double_underline: false, underline_style: :single}
+  end
+
+  defp apply_sgr_colon_code(4, [2 | _], style) do
+    %{style | underline: true, double_underline: true, underline_style: :double}
+  end
+
+  defp apply_sgr_colon_code(4, [3 | _], style) do
+    %{style | underline: true, double_underline: false, underline_style: :curly}
+  end
+
+  defp apply_sgr_colon_code(4, [4 | _], style) do
+    %{style | underline: true, double_underline: false, underline_style: :dotted}
+  end
+
+  defp apply_sgr_colon_code(4, [5 | _], style) do
+    %{style | underline: true, double_underline: false, underline_style: :dashed}
+  end
+
+  defp apply_sgr_colon_code(38, subparams, style) do
+    case parse_colon_color(subparams) do
+      {:ok, color} -> Map.put(style, :foreground, color)
+      :error -> style
+    end
+  end
+
+  defp apply_sgr_colon_code(48, subparams, style) do
+    case parse_colon_color(subparams) do
+      {:ok, color} -> Map.put(style, :background, color)
+      :error -> style
+    end
+  end
+
+  defp apply_sgr_colon_code(58, subparams, style) do
+    case parse_colon_color(subparams) do
+      {:ok, color} -> Map.put(style, :underline_color, color)
+      :error -> style
+    end
+  end
+
+  defp apply_sgr_colon_code(_code, _subparams, style), do: style
+
+  # 5;n (256-color)
+  defp parse_colon_color([5, n]) when n >= 0 and n <= 255,
+    do: {:ok, {:indexed, n}}
+
+  # 2;colorspace;r;g;b (truecolor); colorspace slot may be empty (nil) or an
+  # explicit id -- either way it's ignored here.
+  defp parse_colon_color([2, _colorspace, r, g, b])
+       when r >= 0 and r <= 255 and g >= 0 and g <= 255 and b >= 0 and
+              b <= 255,
+       do: {:ok, {:rgb, r, g, b}}
+
+  # 2;r;g;b (truecolor, no colorspace slot)
+  defp parse_colon_color([2, r, g, b])
+       when r >= 0 and r <= 255 and g >= 0 and g <= 255 and b >= 0 and
+              b <= 255,
+       do: {:ok, {:rgb, r, g, b}}
+
+  defp parse_colon_color(_), do: :error
 
   defp apply_sgr_code(0, _style, _rest), do: default_style()
 
