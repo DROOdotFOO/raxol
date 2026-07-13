@@ -363,6 +363,50 @@ defmodule Raxol.Playground.Catalog do
       {:ok, result, evaluator} = Evaluator.eval(evaluator, "1 + 2")
       result.value  #=> 3
       """
+    },
+    # --- Theming/color ---
+    %{
+      name: "Salience Palette",
+      module: Demos.SalienceDemo,
+      category: :display,
+      description:
+        "H-K salience colour solver: lightness solved per tier against the detected ground",
+      complexity: :intermediate,
+      tags: ["display", "color", "theme", "oklch", "perceptual"],
+      code_snippet: """
+      Salience.solve(:differentiate, 0.074, 242, ground: 0.1)
+      SalienceTheme.build(ground: 0.92)
+      """
+    },
+    # --- Layout internals ---
+    %{
+      name: "Flex Layout",
+      module: Demos.FlexLayoutDemo,
+      category: :layout,
+      description:
+        "flex_wrap, align_content, gap, and flex: 1 growth, with min-content flooring",
+      complexity: :intermediate,
+      tags: ["layout", "flex", "wrap", "align_content", "gap", "min-content"],
+      code_snippet: """
+      row style: %{flex_wrap: :wrap, align_content: :stretch, gap: 1} do
+        [
+          box(style: %{flex: 1, border: :single}, do: text("A")),
+          box(style: %{border: :single}, do: text("Unbreakableword"))
+        ]
+      end
+      """
+    },
+    %{
+      name: "Scroll Anchor",
+      module: Demos.ScrollAnchorDemo,
+      category: :layout,
+      description:
+        "Viewport overflow_anchor: follow-tail pinning that releases when you scroll up",
+      complexity: :intermediate,
+      tags: ["layout", "scroll", "viewport", "overflow", "anchor"],
+      code_snippet: """
+      Viewport.init(children: lines, visible_height: 12, overflow_anchor: :auto)
+      """
     }
   ]
 
