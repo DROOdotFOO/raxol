@@ -390,26 +390,58 @@ defmodule Raxol.Terminal.ANSI.SGR do
     """
     @spec handle_sgr(binary(), TextFormatting.t()) :: TextFormatting.t()
     def handle_sgr(params, style) do
-      # Parse SGR parameters (e.g., "31;1;4")
-      codes =
-        params
-        |> String.split(";")
-        |> Enum.map(fn code ->
-          case Integer.parse(code) do
-            {int, _} -> int
-            :error -> nil
-          end
-        end)
-        |> Enum.filter(& &1)
+      params
+      |> parse_sgr_string()
+      |> process_params(style)
+    end
 
-      # Start with current style
+    @doc """
+    Processes already-parsed SGR parameters, as produced by
+    `Raxol.Terminal.Commands.CommandsParser.parse_params/1`: a list mixing
+    plain integer codes with colon-subparameter groups (nested lists, e.g.
+    `[4, 3]` for the raw sequence `4:3`) and `nil` placeholders for empty
+    segments/slots.
+    """
+    @spec process_params(list(), TextFormatting.t()) :: TextFormatting.t()
+    def process_params(params, style) do
       style = style || TextFormatting.new()
 
-      # Process all codes
-      process_codes(codes, style)
+      params
+      |> Enum.reject(&is_nil/1)
+      |> process_codes(style)
+    end
+
+    # Parses a raw SGR parameter string, honoring colon subparameters, e.g.
+    # "1;4:3;58:2::255:0:0" -> [1, [4, 3], [58, 2, nil, 255, 0, 0]]
+    defp parse_sgr_string(params) do
+      params
+      |> String.split(";")
+      |> Enum.map(&parse_param_segment/1)
+    end
+
+    defp parse_param_segment(segment) do
+      case String.contains?(segment, ":") do
+        true -> segment |> String.split(":") |> Enum.map(&parse_int_or_nil/1)
+        false -> parse_int_or_nil(segment)
+      end
+    end
+
+    defp parse_int_or_nil(str) do
+      case Integer.parse(str) do
+        {int, _} -> int
+        :error -> nil
+      end
     end
 
     defp process_codes([], style), do: style
+
+    # Colon-subparameter group, e.g. "4:3" -> [4, 3] or
+    # "58:2::255:0:0" -> [58, 2, nil, 255, 0, 0]
+    defp process_codes([[code | subparams] | rest], style)
+         when is_integer(code) do
+      new_style = apply_sgr_colon_code(code, subparams, style)
+      process_codes(rest, new_style)
+    end
 
     defp process_codes([code | rest], style) do
       new_style = apply_sgr_code(code, style, rest)
@@ -421,6 +453,9 @@ defmodule Raxol.Terminal.ANSI.SGR do
             Enum.drop(rest, extended_color_params_count(rest))
 
           48 when length(rest) >= 2 ->
+            Enum.drop(rest, extended_color_params_count(rest))
+
+          58 when length(rest) >= 2 ->
             Enum.drop(rest, extended_color_params_count(rest))
 
           _ ->
@@ -435,6 +470,77 @@ defmodule Raxol.Terminal.ANSI.SGR do
     # 2;r;g;b format
     defp extended_color_params_count([2 | _rest]), do: 4
     defp extended_color_params_count(_), do: 0
+
+    # Underline style (colon form only): 4:0 none, 4:1 single, 4:2 double,
+    # 4:3 curly, 4:4 dotted, 4:5 dashed
+    defp apply_sgr_colon_code(4, [0 | _], style) do
+      %{style | underline: false, double_underline: false, underline_style: :none}
+    end
+
+    defp apply_sgr_colon_code(4, [1 | _], style) do
+      %{style | underline: true, double_underline: false, underline_style: :single}
+    end
+
+    defp apply_sgr_colon_code(4, [2 | _], style) do
+      %{style | underline: true, double_underline: true, underline_style: :double}
+    end
+
+    defp apply_sgr_colon_code(4, [3 | _], style) do
+      %{style | underline: true, double_underline: false, underline_style: :curly}
+    end
+
+    defp apply_sgr_colon_code(4, [4 | _], style) do
+      %{style | underline: true, double_underline: false, underline_style: :dotted}
+    end
+
+    defp apply_sgr_colon_code(4, [5 | _], style) do
+      %{style | underline: true, double_underline: false, underline_style: :dashed}
+    end
+
+    defp apply_sgr_colon_code(38, subparams, style) do
+      case parse_colon_color(subparams) do
+        {:ok, color} -> TextFormatting.set_foreground(style, color)
+        :error -> style
+      end
+    end
+
+    defp apply_sgr_colon_code(48, subparams, style) do
+      case parse_colon_color(subparams) do
+        {:ok, color} -> TextFormatting.set_background(style, color)
+        :error -> style
+      end
+    end
+
+    defp apply_sgr_colon_code(58, subparams, style) do
+      case parse_colon_color(subparams) do
+        {:ok, color} -> TextFormatting.set_underline_color(style, color)
+        :error -> style
+      end
+    end
+
+    defp apply_sgr_colon_code(_code, _subparams, style), do: style
+
+    # 5;n (256-color)
+    defp parse_colon_color([5, n])
+         when is_integer(n) and n >= 0 and n <= 255,
+         do: {:ok, {:index, n}}
+
+    # 2;colorspace;r;g;b (truecolor); colorspace slot may be empty (nil, the
+    # ECMA-48 "::" quirk) or an explicit id -- either way it's ignored here.
+    defp parse_colon_color([2, _colorspace, r, g, b])
+         when is_integer(r) and is_integer(g) and is_integer(b) and
+                r >= 0 and r <= 255 and g >= 0 and g <= 255 and b >= 0 and
+                b <= 255,
+         do: {:ok, {:rgb, r, g, b}}
+
+    # 2;r;g;b (truecolor, no colorspace slot)
+    defp parse_colon_color([2, r, g, b])
+         when is_integer(r) and is_integer(g) and is_integer(b) and
+                r >= 0 and r <= 255 and g >= 0 and g <= 255 and b >= 0 and
+                b <= 255,
+         do: {:ok, {:rgb, r, g, b}}
+
+    defp parse_colon_color(_), do: :error
 
     # Generate optimized pattern matching for SGR codes
     for code <- 0..107 do
@@ -697,6 +803,26 @@ defmodule Raxol.Terminal.ANSI.SGR do
           # Unhandled codes
           nil
       end
+    end
+
+    # Underline color (58): 256-color and truecolor semicolon forms
+    defp apply_sgr_code(58, style, [5, n | _rest])
+         when is_integer(n) and n >= 0 and n <= 255 do
+      TextFormatting.set_underline_color(style, {:index, n})
+    end
+
+    defp apply_sgr_code(58, style, [2, r, g, b | _rest])
+         when is_integer(r) and is_integer(g) and is_integer(b) and
+                r >= 0 and r <= 255 and g >= 0 and g <= 255 and b >= 0 and
+                b <= 255 do
+      TextFormatting.set_underline_color(style, {:rgb, r, g, b})
+    end
+
+    defp apply_sgr_code(58, style, _rest), do: style
+
+    # Default underline color (59)
+    defp apply_sgr_code(59, style, _rest) do
+      TextFormatting.set_underline_color(style, nil)
     end
 
     # Catch-all for unhandled codes

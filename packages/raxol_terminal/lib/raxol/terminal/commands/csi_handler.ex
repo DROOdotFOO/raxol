@@ -168,8 +168,11 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
   defp apply_sgr(emulator, params) do
     alias Raxol.Terminal.ANSI.SGR.Processor, as: SGRProcessor
 
-    params_string = Enum.map_join(params, ";", &Integer.to_string/1)
-    updated_style = SGRProcessor.handle_sgr(params_string, emulator.style)
+    # `params` comes from CommandsParser.parse_params/1, which already
+    # preserves colon subparameter groups as nested lists (e.g. "4:3" -> [4, 3]).
+    # Feed it straight to the processor instead of re-joining into a string --
+    # re-joining would need to reconstruct colons and can't round-trip nils.
+    updated_style = SGRProcessor.process_params(params, emulator.style)
     %{emulator | style: updated_style}
   end
 

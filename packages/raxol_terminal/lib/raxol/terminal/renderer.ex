@@ -267,15 +267,40 @@ defmodule Raxol.Terminal.Renderer do
         else: codes
 
     codes =
-      if Map.get(style_map, :underline, false),
-        do: [@ansi_underline | codes],
-        else: codes
+      case underline_style_ansi(Map.get(style_map, :underline_style)) do
+        nil ->
+          if Map.get(style_map, :underline, false),
+            do: [@ansi_underline | codes],
+            else: codes
+
+        code ->
+          [code | codes]
+      end
+
+    codes =
+      case underline_color_ansi(Map.get(style_map, :underline_color)) do
+        nil -> codes
+        code -> [code | codes]
+      end
 
     case codes do
       [] -> ""
       _ -> codes |> Enum.reverse() |> Enum.join("")
     end
   end
+
+  # Underline styles beyond plain/single are emitted via the colon-form SGR 4
+  # subparameter; :single, :none, and unset styles fall back to the plain
+  # boolean `:underline` handling above (byte-identical to prior behavior).
+  defp underline_style_ansi(:double), do: "\e[4:2m"
+  defp underline_style_ansi(:curly), do: "\e[4:3m"
+  defp underline_style_ansi(:dotted), do: "\e[4:4m"
+  defp underline_style_ansi(:dashed), do: "\e[4:5m"
+  defp underline_style_ansi(_), do: nil
+
+  defp underline_color_ansi({:rgb, r, g, b}), do: "\e[58;2;#{r};#{g};#{b}m"
+  defp underline_color_ansi({:index, n}), do: "\e[58;5;#{n}m"
+  defp underline_color_ansi(_), do: nil
 
   # Resolve foreground color to ANSI code
   defp resolve_fg_ansi(color, theme) when is_atom(color) do
