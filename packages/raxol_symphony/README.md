@@ -10,13 +10,16 @@ Implements [`SPEC.md`](https://github.com/openai/symphony/blob/main/SPEC.md).
 
 ## Status
 
-Phases 0-14 complete; 399 tests pass. Two runner backends ship: `raxol_agent`
-(default, wraps `Raxol.Agent.Stream`) and `codex app-server` (Port-based
-JSON-RPC for parity with upstream Symphony Elixir). Six surfaces
-(terminal dashboard, LiveView, MCP, Telegram, Watch, JSON API). Evidence
-collection (CI status, PR comments, complexity, asciinema replays) ships
-per run. Pre-alpha until live workflow validation against a real Linear /
-GitHub repo and Hex name reservation.
+Release-packaged as 0.2.0; 738 tests pass. Two runner backends ship:
+`raxol_agent` (default, wraps `Raxol.Agent.Stream`) and `codex app-server`
+(Port-based JSON-RPC for parity with upstream Symphony Elixir). Three
+workflow modes: `default` (inline), `graph` (per-node checkpointed
+pipeline), and `graph_parallel` (batches eligible issues into one fan-out
+run per tick). Six surfaces (terminal dashboard, LiveView, MCP, Telegram,
+Watch, JSON API). Evidence collection (CI status, PR comments, complexity,
+asciinema replays) ships per run. Pre-alpha until a live workflow run
+against a real Linear / GitHub repo is captured (see
+[`RUNBOOK.md`](RUNBOOK.md)) and 0.2.0 is published to Hex.
 
 ## Trust posture
 
