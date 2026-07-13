@@ -99,6 +99,22 @@ the canvas. Foreground keeps a theme fallback (text needs a colour); background
 does not (a background is optional). An application that genuinely wants a
 different canvas sets a background explicitly, and that still paints.
 
+That forces a distinction the theme did not previously make, between a canvas we
+only *assume* and a surface we deliberately *paint*:
+
+| theme colour  | what it is                                        | painted? |
+| ------------- | ------------------------------------------------- | -------- |
+| `:background` | this theme's assumption about the terminal's own canvas | **no**   |
+| `:surface`    | a raised opaque thing — a dialog, a panel          | **yes**  |
+
+A modal needs to be opaque: it sits above dimmed content and that content must not
+read through it. But it cannot get its opacity from `:background`, because
+`:background` is precisely the colour we have decided never to paint. It needs a
+colour whose *job* is to be painted. Hence `:surface`.
+
+Opaque is right; the literal is not. A component that wants a solid panel asks the
+theme for `:surface` — not for `:background`, and not for a hard-coded `:black`.
+
 ### 5. The frame owns its own geometry
 
 The driver runs `prim_tty` with raw output, so nothing cooks the frame's bytes on
@@ -143,10 +159,17 @@ Every bug above is an instance of one pattern:
   people naturally put it
 - a border `variant` was *a known style* **and** *silently invisible* (an
   unrecognised value fell through to `:none`, whose horizontal run is a space)
+- the theme's `:background` meant *the canvas we assume* **and** *the colour a
+  panel paints itself with* — which is why a modal reached for it, and why
+  invariant 4 could not hold until `:surface` split them
 
 In each case the two meanings were indistinguishable by the time they reached the
 renderer, and the wrong one was *silently* wrong. The fix was always the same
 move: **split the meanings apart, and make the wrong one unrepresentable.**
+
+The last entry in that list was found *in review of this ADR*, by someone reading
+the invariants against the code they were supposed to describe. That is the
+intended use.
 
 When adding to the paint path, the question to ask is not "does this look right?"
 — on the default configuration it will. The question is: **what is this value's
