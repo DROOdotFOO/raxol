@@ -145,13 +145,6 @@ defmodule Raxol.UI.BorderRenderer do
   def render_box_borders(x, y, width, height, border_chars, style) do
     {fg, _bg, style_attrs} = extract_style_attributes(style)
 
-    # A box's background fills its INTERIOR; the border ring is painted only
-    # when asked for explicitly via :border_bg. Previously the ring inherited
-    # the box's background and the interior was never painted at all, so
-    # `box(border: :single, bg: :blue)` drew a blue outline around a hollow
-    # middle. Filling the interior and leaving the ring unpainted also lets a
-    # border float on a transparent terminal with only its content backed.
-    border_bg = Map.get(style, :border_bg)
     fill_bg = Map.get(style, :bg) || Map.get(style, :background)
 
     fill_cells(x, y, width, height, fg, fill_bg) ++
@@ -162,9 +155,34 @@ defmodule Raxol.UI.BorderRenderer do
         height,
         border_chars,
         fg,
-        border_bg,
+        border_ring_bg(style, fill_bg),
         style_attrs
       )
+  end
+
+  # A cell is the smallest unit of paint, so a border glyph occupies a whole
+  # cell and the fill cannot stop halfway through it. The only question is which
+  # side that cell belongs to -- which is exactly CSS `background-clip`:
+  #
+  #   :padding_box (default)  background stops at the border's inner edge, so
+  #                           the border cell is unpainted and the outline
+  #                           floats over a transparent terminal.
+  #   :border_box             background extends under the border, so the glyph
+  #                           is drawn on the fill and the box reads as a solid
+  #                           panel.
+  #
+  # An explicit :border_bg always wins over both.
+  defp border_ring_bg(style, fill_bg) do
+    case Map.get(style, :border_bg) do
+      nil ->
+        case Map.get(style, :background_clip, :padding_box) do
+          :border_box -> fill_bg
+          _padding_box -> nil
+        end
+
+      border_bg ->
+        border_bg
+    end
   end
 
   # Interior only (inside the ring). Unpainted background paints nothing, so a

@@ -62,6 +62,46 @@ defmodule Raxol.UI.BoxInteriorFillTest do
     assert bgs(ring(cells)) == [:red]
   end
 
+  describe "background_clip -- which side the border cell belongs to" do
+    # A cell is the smallest unit of paint: the border glyph fills a whole cell,
+    # so the background cannot stop halfway through it. It either stops at the
+    # border's inner edge, or extends under it.
+
+    test ":padding_box (the default) stops at the border's inner edge" do
+      cells = box(%{border: :single, bg: :blue, background_clip: :padding_box})
+
+      assert bgs(interior(cells)) == [:blue]
+      assert bgs(ring(cells)) == [nil], "the outline must float, unpainted"
+    end
+
+    test ":border_box extends the background under the border" do
+      cells = box(%{border: :single, bg: :blue, background_clip: :border_box})
+
+      assert bgs(interior(cells)) == [:blue]
+      assert bgs(ring(cells)) == [:blue], "the glyph is drawn on the fill"
+    end
+
+    test "an explicit border_bg wins over background_clip" do
+      cells =
+        box(%{
+          border: :single,
+          bg: :blue,
+          background_clip: :border_box,
+          border_bg: :red
+        })
+
+      assert bgs(interior(cells)) == [:blue]
+      assert bgs(ring(cells)) == [:red]
+    end
+
+    test ":border_box with no background paints nothing" do
+      cells = box(%{border: :single, background_clip: :border_box})
+
+      assert interior(cells) == []
+      assert bgs(ring(cells)) == [nil]
+    end
+  end
+
   test "a box too small to have an interior still renders its border" do
     # 2x2 is all ring, no interior: there is nowhere to put the fill.
     cells =
