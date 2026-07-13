@@ -292,4 +292,87 @@ defmodule Raxol.LiveView.AnimationCSSTest do
       assert css =~ "conic-gradient"
     end
   end
+
+  describe "animation_css/1 overflow-anchor" do
+    test "emits overflow-anchor: auto for :auto setting" do
+      elements = [%{id: "log", type: :box, overflow_anchor: :auto}]
+
+      css = TerminalBridge.animation_css(elements)
+
+      assert css =~ ~s([data-raxol-id="log"] { overflow-anchor: auto; })
+    end
+
+    test "emits overflow-anchor: none for :none setting" do
+      elements = [%{id: "log", type: :box, overflow_anchor: :none}]
+
+      css = TerminalBridge.animation_css(elements)
+
+      assert css =~ ~s([data-raxol-id="log"] { overflow-anchor: none; })
+    end
+
+    test "emits rules for multiple elements with different anchor settings" do
+      elements = [
+        %{id: "chat", type: :box, overflow_anchor: :auto},
+        %{id: "frozen", type: :box, overflow_anchor: :none}
+      ]
+
+      css = TerminalBridge.animation_css(elements)
+
+      assert css =~ ~s([data-raxol-id="chat"] { overflow-anchor: auto; })
+      assert css =~ ~s([data-raxol-id="frozen"] { overflow-anchor: none; })
+    end
+
+    test "collects overflow-anchor settings from nested children" do
+      elements = [
+        %{
+          type: :box,
+          children: [
+            %{id: "nested-log", type: :box, overflow_anchor: :auto}
+          ]
+        }
+      ]
+
+      css = TerminalBridge.animation_css(elements)
+
+      assert css =~ ~s([data-raxol-id="nested-log"] { overflow-anchor: auto; })
+    end
+
+    test "skips elements without an id" do
+      elements = [%{type: :box, overflow_anchor: :auto}]
+
+      assert TerminalBridge.animation_css(elements) == ""
+    end
+
+    test "skips elements with an unrecognized overflow_anchor value" do
+      elements = [%{id: "weird", type: :box, overflow_anchor: :sometimes}]
+
+      assert TerminalBridge.animation_css(elements) == ""
+    end
+
+    test "emits no CSS for elements without an overflow_anchor setting" do
+      elements = [%{id: "plain", type: :box, children: []}]
+
+      assert TerminalBridge.animation_css(elements) == ""
+    end
+
+    test "coexists with animation transitions in the same style block" do
+      elements = [
+        %{
+          id: "panel",
+          type: :box,
+          animation_hints: [
+            %{property: :opacity, duration_ms: 300, easing: :linear, delay_ms: 0}
+          ]
+        },
+        %{id: "log", type: :box, overflow_anchor: :auto}
+      ]
+
+      css = TerminalBridge.animation_css(elements)
+
+      assert css =~ "opacity 300ms"
+      assert css =~ ~s([data-raxol-id="log"] { overflow-anchor: auto; })
+      assert String.starts_with?(css, "<style>")
+      assert String.ends_with?(css, "</style>")
+    end
+  end
 end
