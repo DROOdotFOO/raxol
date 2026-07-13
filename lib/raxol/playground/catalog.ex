@@ -326,6 +326,16 @@ defmodule Raxol.Playground.Catalog do
       tags: ["effects", "focus", "ring", "accessibility"],
       code_snippet: ~s'FocusRing.render(content, FocusRing.init(style: :solid))'
     },
+    %{
+      name: "OSC Ambient",
+      module: Demos.OscAmbientDemo,
+      category: :effects,
+      description:
+        "Host-terminal desktop notification, taskbar progress, and pointer shape",
+      complexity: :intermediate,
+      tags: ["effects", "osc", "notification", "progress", "pointer"],
+      code_snippet: ~s'IO.write(AdvancedFeatures.report_progress(:set, 42))'
+    },
     # --- REPL & VFS ---
     %{
       name: "Virtual FS",
