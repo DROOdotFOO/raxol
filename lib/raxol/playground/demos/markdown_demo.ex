@@ -1,10 +1,17 @@
 defmodule Raxol.Playground.Demos.MarkdownDemo do
-  @moduledoc "Playground demo: markdown rendering with raw toggle."
+  @moduledoc """
+  Playground demo: markdown rendering with raw toggle.
+
+  Rendered mode delegates to `MarkdownRenderer` via `DemoHelpers.markdown/2`.
+  Overflowing lines fall back to greedy word-wrap with styling dropped
+  (span-aware wrapping is not implemented); raw mode shows literal source.
+  """
   use Raxol.Core.Runtime.Application
 
-  import Raxol.Playground.DemoHelpers, only: [effective_width: 2]
+  import Raxol.Playground.DemoHelpers, only: [effective_width: 2, markdown: 2]
 
   @default_content_box_width 45
+  @border_and_padding_overhead 4
 
   @documents [
     %{
@@ -52,13 +59,17 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
   def view(model) do
     doc = Enum.at(@documents, model.current)
     mode_label = if model.raw, do: "RAW", else: "RENDERED"
+    box_width = effective_width(model, @default_content_box_width)
+    prose_width = max(box_width - @border_and_padding_overhead, 1)
 
-    content_lines =
-      doc.content
-      |> String.split("\n")
-      |> Enum.map(fn line ->
-        if model.raw, do: text(line), else: render_line(line)
-      end)
+    body =
+      if model.raw do
+        doc.content
+        |> String.split("\n")
+        |> Enum.map(&text/1)
+      else
+        [markdown(doc.content, prose_width)]
+      end
 
     column style: %{gap: 1} do
       [
@@ -73,10 +84,10 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
         box style: %{
               border: :single,
               padding: 1,
-              width: effective_width(model, @default_content_box_width)
+              width: box_width
             } do
           column style: %{gap: 0} do
-            content_lines
+            body
           end
         end,
         divider(),
@@ -88,27 +99,4 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
 
   @impl true
   def subscribe(_model), do: []
-
-  defp render_line(line) do
-    cond do
-      String.starts_with?(line, "# ") ->
-        text(String.trim_leading(line, "# "), style: [:bold, :underline])
-
-      String.starts_with?(line, "- ") ->
-        body = String.trim_leading(line, "- ") |> render_inline()
-        text("  * " <> body)
-
-      line == "" ->
-        text("")
-
-      true ->
-        text(render_inline(line))
-    end
-  end
-
-  defp render_inline(str) do
-    str
-    |> String.replace(~r/\*([^*]+)\*/, "_\\1_")
-    |> String.replace(~r/`([^`]+)`/, "[\\1]")
-  end
 end
