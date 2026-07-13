@@ -265,14 +265,25 @@ defmodule Raxol.Symphony.Orchestrator do
         {:DOWN, ref, :process, _pid, reason},
         %State{} = state
       ) do
-    case find_running_by_ref(state, ref) do
-      nil ->
+    cond do
+      Map.has_key?(state.batches, ref) ->
+        {:noreply, handle_batch_exit(state, ref, reason)}
+
+      issue_id = find_running_by_ref(state, ref) ->
+        {:noreply, handle_worker_exit(state, issue_id, reason)}
+
+      true ->
         # Maybe a listener; drop it from listeners.
         {:noreply, drop_listener_by_ref(state, ref)}
-
-      issue_id ->
-        {:noreply, handle_worker_exit(state, issue_id, reason)}
     end
+  end
+
+  # A `:graph_parallel` batch worker sends this reply (via `async_nolink`)
+  # just before it exits `:normal`; we stash the per-issue results on the
+  # batch entry so the subsequent `:DOWN` fan-out can route each outcome.
+  def handle_manager_info({ref, {:batch_result, results}}, %State{} = state)
+      when is_reference(ref) and is_list(results) do
+    {:noreply, store_batch_results(state, ref, results)}
   end
 
   def handle_manager_info({:run_event, issue_id, event}, %State{} = state) do
@@ -299,9 +310,7 @@ defmodule Raxol.Symphony.Orchestrator do
         |> notify_listeners(:tick_completed)
 
       {:error, reason, state} ->
-        Logger.warning(
-          "symphony.orchestrator.preflight_failed reason=#{inspect(reason)}"
-        )
+        Logger.warning("symphony.orchestrator.preflight_failed reason=#{inspect(reason)}")
 
         notify_listeners(state, {:preflight_failed, reason})
     end
@@ -324,14 +333,12 @@ defmodule Raxol.Symphony.Orchestrator do
   defp preflight(%State{workflow_store: store} = state) do
     case WorkflowStore.get(store) do
       nil ->
-        {:error, :no_workflow_config,
-         %State{state | last_preflight_error: :no_workflow_config}}
+        {:error, :no_workflow_config, %State{state | last_preflight_error: :no_workflow_config}}
 
       latest_config ->
         case Schema.validate(latest_config, validate_opts(state)) do
           :ok ->
-            {:ok,
-             %State{state | config: latest_config, last_preflight_error: nil}}
+            {:ok, %State{state | config: latest_config, last_preflight_error: nil}}
 
           {:error, reason} ->
             {:error, reason, %State{state | last_preflight_error: reason}}
@@ -345,6 +352,10 @@ defmodule Raxol.Symphony.Orchestrator do
   defp validate_opts(%State{runner_module: nil}), do: []
   defp validate_opts(%State{}), do: [skip_runner: true]
 
+  defp dispatch_candidates(%State{config: %{workflow_mode: :graph_parallel}} = state) do
+    dispatch_parallel_candidates(state)
+  end
+
   defp dispatch_candidates(%State{} = state) do
     case Tracker.fetch_candidate_issues(state.config) do
       {:ok, issues} ->
@@ -356,6 +367,52 @@ defmodule Raxol.Symphony.Orchestrator do
       {:error, _reason} ->
         state
     end
+  end
+
+  # `:graph_parallel` mode: take up to `workflow_parallelism` eligible issues
+  # and fan them out through one batch worker per tick. In-flight batch issues
+  # are folded into the concurrency accounting so the global
+  # `max_concurrent_agents` cap still holds across batches.
+  defp dispatch_parallel_candidates(%State{} = state) do
+    case Tracker.fetch_candidate_issues(state.config) do
+      {:ok, issues} ->
+        eligible =
+          Candidate.eligible(
+            issues,
+            state.config,
+            running_for_slots(state),
+            state.claimed
+          )
+
+        eligible
+        |> Enum.take(state.config.workflow_parallelism)
+        |> Enum.map(&{&1, nil})
+        |> then(&dispatch_parallel_batch(state, &1))
+
+      {:error, _reason} ->
+        state
+    end
+  end
+
+  # Fold in-flight batch issues into a synthetic running map so
+  # `Candidate.eligible/4` counts them against `max_concurrent_agents` (batch
+  # issues live in `state.batches`, not `state.running`).
+  defp running_for_slots(%State{running: running, batches: batches}) do
+    Enum.reduce(batches, running, fn {_ref, batch}, acc ->
+      Enum.reduce(batch.issues, acc, fn %{issue: issue}, inner ->
+        Map.put_new(inner, issue.id, %{state: issue.state})
+      end)
+    end)
+  end
+
+  # `:graph_parallel` retries arrive here one issue at a time (via the retry
+  # timer); route them through the same batch machinery as a batch of one.
+  defp dispatch_issue(
+         %State{config: %{workflow_mode: :graph_parallel}} = state,
+         %Issue{} = issue,
+         attempt
+       ) do
+    dispatch_parallel_batch(state, [{issue, attempt}])
   end
 
   defp dispatch_issue(%State{} = state, %Issue{} = issue, attempt) do
@@ -508,6 +565,194 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp graph_outcome({:interrupted, _run_id, _state, value}),
     do: exit({:graph_interrupted, value})
+
+  # -- Parallel batch dispatch (:graph_parallel) ------------------------------
+
+  defp dispatch_parallel_batch(%State{} = state, []), do: state
+
+  defp dispatch_parallel_batch(%State{} = state, issues_with_attempts) do
+    with {:ok, runner_mod} <- runner_module(state),
+         {:ok, prepared} <- ensure_batch_workspaces(state, issues_with_attempts) do
+      do_dispatch_parallel_batch(state, runner_mod, prepared)
+    else
+      {:error, reason} ->
+        Logger.warning("symphony.orchestrator.parallel_dispatch_failed reason=#{inspect(reason)}")
+
+        # Nothing was spawned; fall each issue back to a failure retry so the
+        # batch is never silently dropped.
+        Enum.reduce(issues_with_attempts, state, fn {issue, attempt}, acc ->
+          schedule_failure_retry(acc, issue, (attempt || 0) + 1, reason)
+        end)
+    end
+  end
+
+  defp ensure_batch_workspaces(%State{} = state, issues_with_attempts) do
+    result =
+      Enum.reduce_while(issues_with_attempts, {:ok, []}, fn {issue, attempt}, {:ok, acc} ->
+        case Workspace.ensure(state.config, issue.identifier) do
+          {:ok, %{path: path}} ->
+            entry = %{issue: issue, attempt: attempt, workspace_path: path}
+            {:cont, {:ok, [entry | acc]}}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+        end
+      end)
+
+    case result do
+      {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+      err -> err
+    end
+  end
+
+  defp do_dispatch_parallel_batch(%State{} = state, runner_mod, prepared) do
+    issues = Enum.map(prepared, & &1.issue)
+    workspaces = Enum.map(prepared, & &1.workspace_path)
+    task = spawn_parallel_batch_task(state, runner_mod, issues, workspaces)
+
+    entry = %{
+      issues: prepared,
+      worker_pid: task.pid,
+      worker_ref: task.ref,
+      started_at: System.monotonic_time(:millisecond),
+      results: nil
+    }
+
+    register_batch(state, task.ref, entry)
+  end
+
+  defp register_batch(%State{} = state, ref, entry) do
+    claimed =
+      Enum.reduce(entry.issues, state.claimed, fn %{issue: issue}, acc ->
+        MapSet.put(acc, issue.id)
+      end)
+
+    state = %State{state | batches: Map.put(state.batches, ref, entry), claimed: claimed}
+
+    Enum.reduce(entry.issues, state, fn %{issue: issue}, acc ->
+      cancel_retry(acc, issue.id)
+    end)
+  end
+
+  defp spawn_parallel_batch_task(%State{} = state, runner_mod, issues, workspaces) do
+    parent = self()
+    config = state.config
+    max_candidates = length(issues)
+
+    Task.Supervisor.async_nolink(
+      task_supervisor(state),
+      fn ->
+        run_parallel_batch_payload(
+          config,
+          runner_mod,
+          issues,
+          workspaces,
+          max_candidates,
+          parent
+        )
+      end
+    )
+  end
+
+  defp run_parallel_batch_payload(
+         config,
+         runner_mod,
+         issues,
+         workspaces,
+         max_candidates,
+         parent
+       ) do
+    case GraphAdapter.from_workflow_parallel(max_candidates: max_candidates) do
+      {:ok, compiled} ->
+        state =
+          GraphAdapter.initial_state(
+            config: config,
+            runner_module: runner_mod,
+            candidates: issues,
+            workspaces: workspaces,
+            parent_pid: parent
+          )
+
+        results = batch_run_results(WorkflowCompiled.invoke(compiled, state), issues)
+        {:batch_result, results}
+
+      {:error, reason} ->
+        exit({:graph_compile_failed, reason})
+    end
+  end
+
+  defp batch_run_results({:ok, %{run_results: results}, _meta}, _issues)
+       when is_list(results),
+       do: results
+
+  defp batch_run_results({:ok, _final, _meta}, issues),
+    do: Enum.map(issues, &{&1.id, :ok})
+
+  defp batch_run_results({:error, reason, _state}, issues),
+    do: Enum.map(issues, &{&1.id, {:error, {:graph_runtime_error, reason}}})
+
+  defp batch_run_results({:interrupted, _run_id, _state, value}, issues),
+    do: Enum.map(issues, &{&1.id, {:error, {:graph_interrupted, value}}})
+
+  defp store_batch_results(%State{} = state, ref, results) do
+    case Map.get(state.batches, ref) do
+      nil ->
+        state
+
+      entry ->
+        %State{state | batches: Map.put(state.batches, ref, %{entry | results: results})}
+    end
+  end
+
+  defp handle_batch_exit(%State{} = state, ref, reason) do
+    entry = Map.fetch!(state.batches, ref)
+    state = record_batch_runtime(state, entry)
+    state = %State{state | batches: Map.delete(state.batches, ref)}
+    results = batch_results_map(entry, reason)
+
+    entry.issues
+    |> Enum.reduce(state, fn %{issue: issue, attempt: attempt}, acc ->
+      apply_batch_issue_result(acc, issue, attempt, Map.get(results, issue.id))
+    end)
+    |> notify_listeners(:batch_exit)
+  end
+
+  # Prefer the worker's reported per-issue results. If the batch worker died
+  # before replying (abnormal exit / kill), every issue in the batch is
+  # scheduled for a failure retry carrying the exit reason.
+  defp batch_results_map(%{results: results}, _reason) when is_list(results),
+    do: Map.new(results)
+
+  defp batch_results_map(%{issues: issues}, reason) do
+    Map.new(issues, fn %{issue: issue} ->
+      {issue.id, {:error, {:batch_worker_exit, reason}}}
+    end)
+  end
+
+  defp apply_batch_issue_result(%State{} = state, %Issue{} = issue, _attempt, :ok) do
+    state
+    |> Map.put(:completed, MapSet.put(state.completed, issue.id))
+    |> schedule_continuation_retry(issue, 1)
+  end
+
+  defp apply_batch_issue_result(%State{} = state, %Issue{} = issue, attempt, {:error, reason}) do
+    schedule_failure_retry(state, issue, (attempt || 0) + 1, reason)
+  end
+
+  # No result recorded for this slot (e.g. a candidate beyond the graph's slot
+  # count). Re-check via a continuation retry rather than dropping it.
+  defp apply_batch_issue_result(%State{} = state, %Issue{} = issue, _attempt, nil) do
+    schedule_continuation_retry(state, issue, 1)
+  end
+
+  defp record_batch_runtime(%State{} = state, entry) do
+    elapsed_seconds =
+      (System.monotonic_time(:millisecond) - entry.started_at) / 1_000
+
+    totals = state.codex_totals
+    new_totals = Map.update!(totals, :seconds_running, &(&1 + elapsed_seconds))
+    %State{state | codex_totals: new_totals}
+  end
 
   defp build_running_entry(
          %Issue{} = issue,
@@ -1001,8 +1246,7 @@ defmodule Raxol.Symphony.Orchestrator do
   defp update_entry_from_event(entry, event) do
     %{
       entry
-      | last_event:
-          Map.get(event, :event) || Map.get(event, "event") || entry.last_event,
+      | last_event: Map.get(event, :event) || Map.get(event, "event") || entry.last_event,
         last_message:
           Map.get(event, :message) || Map.get(event, "message") ||
             entry.last_message,
@@ -1048,16 +1292,22 @@ defmodule Raxol.Symphony.Orchestrator do
 
     %{
       generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-      counts: %{
-        running: map_size(state.running),
-        retrying: map_size(state.retry_attempts),
-        paused: map_size(state.paused)
-      },
+      counts: snapshot_counts(state),
       running: Enum.map(state.running, &snapshot_running(&1, now_ms)),
       retrying: Enum.map(state.retry_attempts, &snapshot_retry(&1, now_ms)),
       paused: Enum.map(state.paused, &snapshot_paused(&1, now_ms)),
+      batches: Enum.map(state.batches, &snapshot_batch(&1, now_ms)),
       codex_totals: state.codex_totals,
       rate_limits: state.codex_rate_limits
+    }
+  end
+
+  defp snapshot_counts(%State{} = state) do
+    %{
+      running: map_size(state.running),
+      retrying: map_size(state.retry_attempts),
+      paused: map_size(state.paused),
+      batches: map_size(state.batches)
     }
   end
 
@@ -1095,6 +1345,14 @@ defmodule Raxol.Symphony.Orchestrator do
       last_event: entry.last_event,
       last_message: entry.last_message,
       tokens: entry.tokens
+    }
+  end
+
+  defp snapshot_batch({_ref, entry}, now_ms) do
+    %{
+      size: length(entry.issues),
+      issue_identifiers: Enum.map(entry.issues, & &1.issue.identifier),
+      started_ms_ago: now_ms - entry.started_at
     }
   end
 
