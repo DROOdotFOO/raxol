@@ -1,5 +1,12 @@
 defmodule Raxol.Playground.Demos.ContainerDemo do
-  @moduledoc "Playground demo: scrollable container with viewport controls."
+  @moduledoc """
+  Playground demo: scrollable container with viewport controls.
+
+  Uses its own `Enum.slice/3` windowing instead of `Display.Viewport`:
+  box overflow clip can only clip from the main-end edge, not show an
+  arbitrary mid-list offset, and `Viewport` is a stateful `Base.Component`
+  rather than a plain View DSL element.
+  """
   use Raxol.Core.Runtime.Application
   alias Raxol.Playground.DemoHelpers
 
@@ -85,7 +92,11 @@ defmodule Raxol.Playground.Demos.ContainerDemo do
         text("Container Demo", style: [:bold]),
         divider(),
         text("Showing #{first}-#{last} of #{total}"),
-        box style: %{border: :single, padding: 1, width: @content_box_width} do
+        box style: %{
+              border: :single,
+              padding: 1,
+              width: DemoHelpers.effective_width(model, @content_box_width)
+            } do
           column style: %{gap: 0} do
             visible
           end

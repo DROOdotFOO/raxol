@@ -75,7 +75,11 @@ defmodule Raxol.Playground.Demos.VfsDemo do
               border: :single,
               padding: 1,
               width: box_width,
-              height: @box_height
+              height: @box_height,
+              # `cat` can echo an arbitrarily wide file line; clip it
+              # inside the border instead of bleeding past it
+              # (docs/core/LAYOUT.md section 2, F1).
+              overflow: :hidden
             } do
           column style: %{gap: 0} do
             if visible == [],
