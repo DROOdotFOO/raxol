@@ -27,6 +27,7 @@ defmodule Raxol.Symphony.Config do
     :review,
     :recording,
     :workflow_mode,
+    :workflow_parallelism,
     :workflow_path,
     :prompt_template
   ]
@@ -41,7 +42,8 @@ defmodule Raxol.Symphony.Config do
           runner: map(),
           review: map(),
           recording: map(),
-          workflow_mode: :default | :graph,
+          workflow_mode: :default | :graph | :graph_parallel,
+          workflow_parallelism: pos_integer(),
           workflow_path: Path.t() | nil,
           prompt_template: binary()
         }
@@ -66,6 +68,7 @@ defmodule Raxol.Symphony.Config do
   @default_stall_timeout_ms 300_000
   @default_recording_width 132
   @default_recording_height 50
+  @default_workflow_parallelism 3
 
   @doc """
   Builds a typed config struct from a parsed workflow.
@@ -93,6 +96,7 @@ defmodule Raxol.Symphony.Config do
       review: review(raw),
       recording: recording(raw),
       workflow_mode: workflow_mode(raw),
+      workflow_parallelism: workflow_parallelism(raw),
       workflow_path: workflow_path,
       prompt_template: prompt
     }
@@ -232,14 +236,29 @@ defmodule Raxol.Symphony.Config do
   # path the orchestrator has shipped since SPEC s7. `:graph` routes each
   # dispatched worker through `Raxol.Symphony.Workflow.GraphAdapter` so the
   # 5-stage pipeline (tracker_poll, candidate_selection, runner_dispatch,
-  # evidence_collection, completion) executes through main raxol's Phase 25
-  # workflow runtime: per-node telemetry, optional checkpoints, and a
-  # resumable execution boundary around each node.
+  # evidence_collection, completion) executes through main raxol's workflow
+  # runtime: per-node telemetry, optional checkpoints, and a resumable
+  # execution boundary around each node. `:graph_parallel` batches up to
+  # `workflow_parallelism` eligible issues into one fan-out graph run per
+  # tick (no pause support; see `GraphAdapter.from_workflow_parallel/1`).
   defp workflow_mode(raw) do
     case Map.get(raw, :workflow_mode, "default") do
+      "graph_parallel" -> :graph_parallel
+      :graph_parallel -> :graph_parallel
       "graph" -> :graph
       :graph -> :graph
       _ -> :default
+    end
+  end
+
+  # Batch size for `:graph_parallel` mode: the maximum number of eligible
+  # issues fanned out through a single parallel graph run. Clamped to a
+  # positive integer; the orchestrator further caps it against available
+  # global concurrency slots at dispatch time.
+  defp workflow_parallelism(raw) do
+    case Map.get(raw, :workflow_parallelism, @default_workflow_parallelism) do
+      n when is_integer(n) and n > 0 -> n
+      _ -> @default_workflow_parallelism
     end
   end
 

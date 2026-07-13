@@ -18,6 +18,8 @@ defmodule Raxol.Symphony.ConfigTest do
       assert config.codex.read_timeout_ms == 5_000
       assert config.codex.stall_timeout_ms == 300_000
       assert config.runner.kind == "raxol_agent"
+      assert config.workflow_mode == :default
+      assert config.workflow_parallelism == 3
       assert config.tracker.active_states == ["Todo", "In Progress"]
 
       assert config.tracker.terminal_states == [
@@ -42,6 +44,37 @@ defmodule Raxol.Symphony.ConfigTest do
 
       assert config.workspace.root |> String.contains?("symphony_workspaces")
       assert Path.type(config.workspace.root) == :absolute
+    end
+  end
+
+  describe "workflow_mode + workflow_parallelism" do
+    test "parses graph and graph_parallel from strings and atoms" do
+      for value <- ["graph", :graph] do
+        config = Config.from_workflow(%{config: %{workflow_mode: value}, prompt_template: ""})
+        assert config.workflow_mode == :graph
+      end
+
+      for value <- ["graph_parallel", :graph_parallel] do
+        config = Config.from_workflow(%{config: %{workflow_mode: value}, prompt_template: ""})
+        assert config.workflow_mode == :graph_parallel
+      end
+    end
+
+    test "an unknown workflow_mode falls back to :default" do
+      config = Config.from_workflow(%{config: %{workflow_mode: "bogus"}, prompt_template: ""})
+      assert config.workflow_mode == :default
+    end
+
+    test "workflow_parallelism takes a positive integer and clamps invalid values" do
+      config = Config.from_workflow(%{config: %{workflow_parallelism: 5}, prompt_template: ""})
+      assert config.workflow_parallelism == 5
+
+      for bad <- [0, -2, "3", nil] do
+        config =
+          Config.from_workflow(%{config: %{workflow_parallelism: bad}, prompt_template: ""})
+
+        assert config.workflow_parallelism == 3
+      end
     end
   end
 
