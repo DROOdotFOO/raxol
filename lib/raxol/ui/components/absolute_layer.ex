@@ -27,7 +27,12 @@ defmodule Raxol.UI.Components.AbsoluteLayer do
     * `:left` / `:top` -- alias for `0`
     * `:right` -- last column (`width - 1`)
     * `:bottom` -- last row (`height - 1`)
-    * `:center` -- midpoint on the axis
+    * `:center` -- midpoint on the axis (the overlay's own origin lands
+      there; its bounding box is not centered unless it happens to be 1
+      cell wide/tall)
+    * `{:center_of, size}` -- centers an overlay of known `size` on that
+      axis, i.e. `origin + (length - size) / 2`. Use this to actually
+      center a fixed-width/height overlay such as a modal dialog.
 
   Overlays whose resolved coordinates fall outside the layer's space are
   clipped silently (no cells emitted).
@@ -57,11 +62,13 @@ defmodule Raxol.UI.Components.AbsoluteLayer do
           | :top
           | :bottom
           | :center
+          | {:center_of, non_neg_integer()}
 
   @type overlay :: %{
           required(:x) => axis_coord(),
           required(:y) => axis_coord(),
-          required(:element) => map()
+          required(:element) => map(),
+          optional(:dialog) => boolean()
         }
 
   @doc """
@@ -86,5 +93,28 @@ defmodule Raxol.UI.Components.AbsoluteLayer do
   @spec overlay(axis_coord(), axis_coord(), map()) :: overlay()
   def overlay(x, y, element) when is_map(element) do
     %{x: x, y: y, element: element}
+  end
+
+  @doc """
+  Builds a dialog overlay descriptor: `element` (a `width` x `height`
+  surface, e.g. a modal box) centered on both axes via `{:center_of, _}`,
+  and marked `dialog: true`.
+
+  The `:dialog` marker tells the layout engine to dim every element the
+  layer's flow content produces (pulling painted fg/bg toward the
+  background) while leaving this overlay's own cells at full color --
+  the "dialog active" / "inside active dialog" pair described in
+  `Raxol.UI.Layout.Engine`'s `:absolute_layer` handling.
+  """
+  @spec dialog_overlay(non_neg_integer(), non_neg_integer(), map()) ::
+          overlay()
+  def dialog_overlay(width, height, element)
+      when is_map(element) and is_integer(width) and is_integer(height) do
+    %{
+      x: {:center_of, width},
+      y: {:center_of, height},
+      element: element,
+      dialog: true
+    }
   end
 end

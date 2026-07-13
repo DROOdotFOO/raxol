@@ -121,6 +121,24 @@ defmodule Raxol.UI.Layout.Engine do
     view
     |> process_element(available_space, [])
     |> List.flatten()
+    |> dim_behind_dialog()
+  end
+
+  # Global post-pass: dim every non-`:in_dialog` element once the whole
+  # tree is flat, since dialog scope can span siblings outside the
+  # hosting `:absolute_layer` (e.g. a sidebar/header). No-op if no dialog
+  # is active.
+  defp dim_behind_dialog(elements) do
+    if Enum.any?(elements, &Map.get(&1, :in_dialog, false)) do
+      Enum.map(elements, fn element ->
+        case Map.pop(element, :in_dialog, false) do
+          {true, stripped} -> stripped
+          {false, stripped} -> Map.put(stripped, :dim_behind_modal, true)
+        end
+      end)
+    else
+      elements
+    end
   end
 
   # Build a flat map from element content hash to {measured_width, measured_height}.
@@ -486,8 +504,11 @@ defmodule Raxol.UI.Layout.Engine do
 
   # Absolute layer: lay out the flow child against the parent's full available
   # space (overlays consume nothing), then resolve each overlay against the
-  # same space at declared coordinates. Overlays render after flow content so
-  # they sit on top in the renderer's last-write-wins cell merge.
+  # same space at declared coordinates. Overlays are appended AFTER flow
+  # content in the returned list so they sit on top under the renderer's
+  # last-write-wins cell composition (`Backends.apply_cells_to_buffer`
+  # folds the cell list in order, later entries winning at a shared
+  # coordinate -- flow content must come first, overlays last).
   #
   # Element shape:
   #   %{
@@ -503,19 +524,42 @@ defmodule Raxol.UI.Layout.Engine do
   # Overlay coordinates are relative to the layer's space. Symbolic
   # coordinates (`:left`, `:right`, `:top`, `:bottom`, `:center`) and negative
   # integers (offset from far edge) are resolved against the current space.
+  # `{:center_of, size}` centers an overlay of known footprint `size` on that
+  # axis (unlike bare `:center`, which anchors the overlay's origin at the
+  # midpoint rather than centering its bounding box).
+  #
+  # An overlay descriptor may carry `dialog: true` (see
+  # `Raxol.UI.Components.AbsoluteLayer.dialog_overlay/3`) to stamp its
+  # whole subtree `:in_dialog`; `dim_behind_dialog/1` dims everything else
+  # once the tree is flat (dialog scope is global, see that function).
   def process_element(%{type: :absolute_layer} = layer, space, acc) do
     flow_child = Map.get(layer, :flow_child)
     overlays = Map.get(layer, :overlays, [])
 
-    flow_acc =
+    flow_elements =
       case flow_child do
-        nil -> acc
-        child -> process_element(child, space, acc)
+        nil -> []
+        child -> process_element(child, space, [])
       end
 
-    Enum.reduce(overlays, flow_acc, fn overlay, current_acc ->
-      process_overlay(overlay, space, current_acc)
-    end)
+    overlay_elements =
+      Enum.reduce(overlays, [], fn overlay, current_acc ->
+        # Computed against `[]` (not `current_acc`) so only this overlay's
+        # own new elements get stamped, then recombined the same way
+        # `process_overlay/3` would have -- every process_element/3 clause
+        # in this module follows the `own_new(el, space) ++ acc` contract,
+        # so this is equivalent to the un-stamped call when not a dialog.
+        own_elements = process_overlay(overlay, space, [])
+
+        own_elements =
+          if Map.get(overlay, :dialog, false),
+            do: stamp_in_dialog(own_elements),
+            else: own_elements
+
+        own_elements ++ current_acc
+      end)
+
+    flow_elements ++ overlay_elements ++ acc
   end
 
   def process_element(%{type: :table} = table_element, space, acc) do
@@ -666,6 +710,17 @@ defmodule Raxol.UI.Layout.Engine do
 
   defp process_overlay(_, _, acc), do: acc
 
+  # Marks a dialog overlay's elements `:in_dialog` so dim_behind_dialog/1 exempts them.
+  defp stamp_in_dialog(elements) when is_list(elements) do
+    Enum.map(elements, &stamp_in_dialog/1)
+  end
+
+  defp stamp_in_dialog(element) when is_map(element) do
+    Map.put(element, :in_dialog, true)
+  end
+
+  defp stamp_in_dialog(other), do: other
+
   # Resolve a coordinate (integer, negative offset, or symbolic atom) against
   # the parent space's origin and length on a single axis.
   defp resolve_axis(:left, origin, _length), do: origin
@@ -673,6 +728,12 @@ defmodule Raxol.UI.Layout.Engine do
   defp resolve_axis(:right, origin, length), do: origin + max(length - 1, 0)
   defp resolve_axis(:bottom, origin, length), do: origin + max(length - 1, 0)
   defp resolve_axis(:center, origin, length), do: origin + div(length, 2)
+
+  # Centers an overlay of known `size` on this axis -- the origin plus half
+  # the leftover space, rather than `:center`'s bare midpoint (which anchors
+  # the overlay's own origin there, not its bounding box).
+  defp resolve_axis({:center_of, size}, origin, length) when is_integer(size),
+    do: origin + max(div(length - size, 2), 0)
 
   defp resolve_axis(value, origin, length) when is_integer(value) and value < 0,
     do: origin + max(length + value, 0)
