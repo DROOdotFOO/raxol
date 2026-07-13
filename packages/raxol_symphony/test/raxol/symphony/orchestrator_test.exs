@@ -203,7 +203,7 @@ defmodule Raxol.Symphony.OrchestratorTest do
       snap = Orchestrator.snapshot(pid)
 
       assert is_binary(snap.generated_at)
-      assert snap.counts == %{running: 0, retrying: 0, paused: 0}
+      assert snap.counts == %{running: 0, retrying: 0, paused: 0, batches: 0}
       assert snap.running == []
       assert snap.retrying == []
       assert snap.paused == []

@@ -61,6 +61,25 @@ defmodule Raxol.Symphony.Orchestrator.State do
           seconds_running: float()
         }
 
+  @typedoc """
+  In-flight `:graph_parallel` batch, keyed by the batch worker's task ref.
+
+  One entry covers up to `config.workflow_parallelism` issues fanned out
+  through a single parallel graph run. `results` is `nil` until the worker
+  sends its `{:batch_result, run_results}` reply, then a list of
+  `{issue_id, :ok | {:error, reason}}` tuples used to fan outcomes back to
+  the per-issue retry paths on worker exit.
+  """
+  @type batch_entry :: %{
+          issues: [
+            %{issue: Issue.t(), attempt: non_neg_integer() | nil, workspace_path: Path.t()}
+          ],
+          worker_pid: pid(),
+          worker_ref: reference(),
+          started_at: integer(),
+          results: [{binary(), :ok | {:error, term()}}] | nil
+        }
+
   defstruct [
     :config,
     :runner_module,
@@ -71,6 +90,7 @@ defmodule Raxol.Symphony.Orchestrator.State do
     :last_preflight_error,
     :paused_saver,
     running: %{},
+    batches: %{},
     claimed: MapSet.new(),
     retry_attempts: %{},
     paused: %{},
@@ -94,6 +114,7 @@ defmodule Raxol.Symphony.Orchestrator.State do
           workflow_store: GenServer.server() | nil,
           last_preflight_error: term() | nil,
           running: %{optional(binary()) => running_entry()},
+          batches: %{optional(reference()) => batch_entry()},
           claimed: MapSet.t(binary()),
           retry_attempts: %{optional(binary()) => retry_entry()},
           paused: %{optional(binary()) => paused_entry()},
