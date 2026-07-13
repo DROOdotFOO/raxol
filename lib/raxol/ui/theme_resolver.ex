@@ -310,11 +310,17 @@ defmodule Raxol.UI.ThemeResolver do
   @doc """
   Resolves background color with proper fallbacks.
   """
+  # Deliberately no fallback to the theme's global background, unlike the
+  # foreground: text needs a colour, but a background does not. An element that
+  # asks for no background gets none, and the cell keeps the terminal's own --
+  # which is what leaves it transparent on a terminal with transparency on.
+  # Falling back to the theme's `background` painted every element with the
+  # terminal's own colour: invisible on an opaque terminal, an opaque rectangle
+  # on a transparent one.
   def resolve_bg_color(attrs, _component_styles, theme) do
     attrs
     |> get_explicit_color([:bg, :background])
     |> fallback_to_variant_color(attrs, theme, :background)
-    |> fallback_to_theme_color(theme, :background, :black)
     |> convert_color_to_atom()
   end
 

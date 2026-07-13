@@ -313,9 +313,14 @@ defmodule Raxol.UI.BorderRenderer do
       Map.get(style, :border_fg) || Map.get(style, :fg) ||
         Map.get(style, :foreground, :white)
 
+    # nil, not :black -- an unpainted background must stay unpainted. The
+    # renderer emits no SGR for a nil background, so the cell keeps the
+    # terminal's default: on a transparent terminal it stays transparent.
+    # Defaulting to :black emitted \e[40m, an opaque black cell that merely
+    # *looked* right on an opaque black terminal.
     bg =
       Map.get(style, :border_bg) || Map.get(style, :bg) ||
-        Map.get(style, :background, :black)
+        Map.get(style, :background)
 
     {fg, bg}
   end

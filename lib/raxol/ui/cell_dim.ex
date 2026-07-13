@@ -97,8 +97,13 @@ defmodule Raxol.UI.CellDim do
 
   def dim_fg(color, ground_al), do: dim_color(color, ground_al)
 
-  @doc "Dims a background color. Alias of `dim_color/2` (bg-oriented, `:black` sentinel)."
+  @doc """
+  Dims a background color. `nil` is the unpainted-background sentinel and
+  passes through: there is nothing to dim, and painting one would turn a
+  transparent cell opaque.
+  """
   @spec dim_bg(any(), float()) :: any()
+  def dim_bg(nil, _ground_al), do: nil
   def dim_bg(color, ground_al), do: dim_color(color, ground_al)
 
   @doc """

@@ -97,12 +97,14 @@ defmodule Raxol.UI.SpecialComponentsTest do
 
     cells = Renderer.render_to_cells(element)
 
-    # Should apply custom styles
+    # Custom styles set only a foreground, so the background stays unpainted
+    # (nil) -- it must not be filled with an opaque :black, which would make
+    # the cell opaque on a transparent terminal.
     header_cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(header_cell, :red, :black)
+    Helper.assert_cell_style(header_cell, :red, nil)
 
     data_cell = Helper.get_cell_at(cells, 0, 2)
-    Helper.assert_cell_style(data_cell, :green, :black)
+    Helper.assert_cell_style(data_cell, :green, nil)
   end
 
   test "handles tables with sorting" do

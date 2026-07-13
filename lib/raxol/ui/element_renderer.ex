@@ -332,8 +332,10 @@ defmodule Raxol.UI.ElementRenderer do
   defp resolve_fg(style),
     do: Map.get(style, :fg) || Map.get(style, :foreground, :white)
 
+  # nil, not :black -- an unpainted background stays unpainted, so the cell
+  # keeps the terminal default and a transparent terminal stays transparent.
   defp resolve_bg(style),
-    do: Map.get(style, :bg) || Map.get(style, :background, :black)
+    do: Map.get(style, :bg) || Map.get(style, :background)
 
   defp extract_text_attrs(style) do
     Enum.filter(@text_attrs, fn attr -> Map.get(style, attr, false) == true end)
