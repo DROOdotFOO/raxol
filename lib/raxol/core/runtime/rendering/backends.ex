@@ -223,9 +223,36 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
     transformed_cells = transform_cells_for_update(cells)
 
     Enum.reduce(transformed_cells, screen_buffer, fn {x, y, cell}, buffer ->
-      style = extract_cell_style(cell)
+      style =
+        cell
+        |> extract_cell_style()
+        |> inherit_background(buffer, x, y)
+
       ScreenBuffer.write_char(buffer, x, y, cell.char || " ", style)
     end)
+  end
+
+  # Cells do not composite -- writing one replaces what was there -- so a cell
+  # with an unpainted background would ERASE the background already beneath it,
+  # punching a hole through a filled parent (a button drawn on a modal would
+  # show the desktop through it). An unpainted background means "show what is
+  # beneath", so inherit the background already at that coordinate. At the top
+  # there is nothing beneath, so it stays nil and the terminal shows through --
+  # which is what keeps a transparent terminal transparent.
+  defp inherit_background(style, buffer, x, y) when is_map(style) do
+    case Map.get(style, :background) do
+      nil -> Map.put(style, :background, background_at(buffer, x, y))
+      _painted -> style
+    end
+  end
+
+  defp inherit_background(style, _buffer, _x, _y), do: style
+
+  defp background_at(buffer, x, y) do
+    case ScreenBuffer.get_cell(buffer, x, y) do
+      %{style: %{background: bg}} -> bg
+      _ -> nil
+    end
   end
 
   @doc false

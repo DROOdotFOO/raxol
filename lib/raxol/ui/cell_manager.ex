@@ -45,15 +45,29 @@ defmodule Raxol.UI.CellManager do
 
   # Helper to build a map of cells by coordinate
   defp build_cell_map(cells) do
-    Enum.reduce(cells, %{}, fn {x, y, c, fg, bg, attrs}, acc ->
-      Map.put(acc, {x, y}, {x, y, c, fg, bg, attrs})
-    end)
+    Enum.reduce(cells, %{}, &put_cell/2)
   end
 
   # Helper to overlay cells onto a cell map
   defp overlay_cells(cell_map, overlay_cells) do
-    Enum.reduce(overlay_cells, cell_map, fn {x, y, c, fg, bg, attrs}, acc ->
-      Map.put(acc, {x, y}, {x, y, c, fg, bg, attrs})
-    end)
+    Enum.reduce(overlay_cells, cell_map, &put_cell/2)
+  end
+
+  # Cells do not composite -- the last writer wins -- so a cell written with an
+  # unpainted background would ERASE the background already beneath it, punching
+  # a hole through a filled parent (a button on a modal showing the desktop). An
+  # unpainted background means "show what is beneath", so it inherits the
+  # background already at that coordinate rather than clearing it. At the top
+  # there is nothing beneath, so it stays nil and the terminal shows through.
+  defp put_cell({x, y, c, fg, bg, attrs}, acc) do
+    bg = if is_nil(bg), do: background_at(acc, {x, y}), else: bg
+    Map.put(acc, {x, y}, {x, y, c, fg, bg, attrs})
+  end
+
+  defp background_at(acc, key) do
+    case Map.get(acc, key) do
+      {_x, _y, _c, _fg, bg, _attrs} -> bg
+      _ -> nil
+    end
   end
 end
