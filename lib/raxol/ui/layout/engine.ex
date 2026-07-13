@@ -432,6 +432,10 @@ defmodule Raxol.UI.Layout.Engine do
 
     box_element = %{
       type: :box,
+      # Carry the declaration id so accessibility surfaces can map this
+      # cell span back to the source node (Browser data-raxol-id, ARIA),
+      # matching how text/button/text_input boxes already do it.
+      id: Map.get(box, :id),
       x: space.x,
       y: space.y,
       width: width,
@@ -1106,6 +1110,9 @@ defmodule Raxol.UI.Layout.Engine do
 
     %{
       type: :flex,
+      # Carry the declaration id through so it isn't silently dropped when
+      # the literal :row/:column dialect is rewritten into :flex.
+      id: Map.get(el, :id),
       attrs: %{
         flex_direction: el.type,
         justify_content: containers_justify(read.(:justify, :start)),
