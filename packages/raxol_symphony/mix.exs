@@ -1,7 +1,7 @@
 defmodule RaxolSymphony.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
@@ -122,7 +122,7 @@ defmodule RaxolSymphony.MixProject do
           "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_symphony/CHANGELOG.md"
       },
       maintainers: ["Raxol Team"],
-      files: ~w(lib .formatter.exs mix.exs README.md)
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md CHANGELOG.md)
     ]
   end
 
@@ -131,7 +131,7 @@ defmodule RaxolSymphony.MixProject do
       main: "readme",
       source_url: @source_url,
       source_ref: "v#{@version}",
-      extras: ["README.md"]
+      extras: ["README.md", "CHANGELOG.md"]
     ]
   end
 end

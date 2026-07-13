@@ -88,6 +88,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
   @type state :: %{
           optional(:config) => Config.t(),
           optional(:candidates) => [Issue.t()],
+          optional(:workspaces) => [Path.t()],
           optional(:candidate) => Issue.t() | nil,
           optional(:run_result) => :ok | {:error, term()},
           optional(:runner_pause) => {atom(), term()} | nil,
@@ -216,16 +217,32 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
 
   defp build_slot_prepare(slot) do
     candidate_key = :"candidate_#{slot}"
+    workspace_key = :"workspace_#{slot}"
 
     fn state ->
       candidates = Map.get(state, :candidates, [])
       candidate = Enum.at(candidates, slot)
-      {:ok, Map.put(state, candidate_key, candidate)}
+      workspace = slot_workspace(state, slot)
+
+      {:ok,
+       state
+       |> Map.put(candidate_key, candidate)
+       |> Map.put(workspace_key, workspace)}
     end
+  end
+
+  # Per-slot workspace isolation: each fan-out branch runs its candidate in
+  # its own workspace so concurrent runners never share a working directory.
+  # Falls back to the shared `:workspace_path` when no per-slot list is seeded
+  # (e.g. a single-candidate invocation).
+  defp slot_workspace(state, slot) do
+    workspaces = Map.get(state, :workspaces, [])
+    Enum.at(workspaces, slot) || Map.get(state, :workspace_path, "")
   end
 
   defp build_slot_dispatch(slot) do
     candidate_key = :"candidate_#{slot}"
+    workspace_key = :"workspace_#{slot}"
     result_key = :"run_result_#{slot}"
 
     fn state ->
@@ -237,7 +254,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
           runner_opts = if state.runner_module, do: [runner_module: state.runner_module], else: []
           parent = Map.get(state, :parent_pid, self())
           attempt = Map.get(state, :attempt) || 1
-          workspace = Map.get(state, :workspace_path, "")
+          workspace = Map.get(state, workspace_key) || Map.get(state, :workspace_path, "")
 
           with {:ok, runner_module} <- Runner.resolve(state.config, runner_opts) do
             result =
@@ -261,6 +278,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
 
   defp build_slot_evidence(slot) do
     candidate_key = :"candidate_#{slot}"
+    workspace_key = :"workspace_#{slot}"
     evidence_key = :"evidence_#{slot}"
 
     fn state ->
@@ -270,7 +288,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
 
         %Issue{} ->
           subject = %{
-            workspace: Map.get(state, :workspace_path, ""),
+            workspace: Map.get(state, workspace_key) || Map.get(state, :workspace_path, ""),
             repo: nil,
             ref: nil,
             issue_number: nil
@@ -330,6 +348,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     base
     |> maybe_put(:candidates, Keyword.get(opts, :candidates))
     |> maybe_put(:candidate, Keyword.get(opts, :candidate))
+    |> maybe_put(:workspaces, Keyword.get(opts, :workspaces))
     |> maybe_put(:parent_pid, Keyword.get(opts, :parent_pid))
     |> maybe_put(:attempt, Keyword.get(opts, :attempt))
     |> maybe_put(:workspace_path, Keyword.get(opts, :workspace_path))
@@ -376,9 +395,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
      |> Map.put(:runner_pause, nil)}
   end
 
-  defp runner_dispatch_node(
-         %{candidate: %Issue{} = issue, config: config} = state
-       ) do
+  defp runner_dispatch_node(%{candidate: %Issue{} = issue, config: config} = state) do
     runner_opts =
       if state.runner_module, do: [runner_module: state.runner_module], else: []
 
