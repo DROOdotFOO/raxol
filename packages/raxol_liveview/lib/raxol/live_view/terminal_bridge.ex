@@ -199,7 +199,15 @@ defmodule Raxol.LiveView.TerminalBridge do
   a `<style>` block with CSS `transition` rules targeting `[data-raxol-id]`
   selectors, plus a `prefers-reduced-motion` media query.
 
-  Returns an empty string if no elements carry animation hints.
+  Also emits `overflow-anchor` rules for elements carrying an
+  `:overflow_anchor` field (`:auto` or `:none`) -- the browser-native
+  counterpart to the terminal `Viewport` component's `overflow_anchor`
+  scroll-pinning behavior. `:auto` lets the browser hold scroll position as
+  content grows above the fold (mirrors the terminal's follow-mode / hold
+  semantics); `:none` opts an element out entirely.
+
+  Returns an empty string if no elements carry animation hints or an
+  overflow-anchor setting.
 
   ## Examples
 
@@ -211,12 +219,17 @@ defmodule Raxol.LiveView.TerminalBridge do
       css = animation_css(elements)
       # => "<style>[data-raxol-id=\\"panel\\"] { transition: opacity 300ms cubic-bezier(...) 0ms; }\\n..."
 
+      elements = [%{id: "log", type: :box, overflow_anchor: :auto}]
+      css = animation_css(elements)
+      # => "<style>[data-raxol-id=\\"log\\"] { overflow-anchor: auto; }\\n...</style>"
+
   """
   @compile {:no_warn_undefined, Raxol.Effects.BorderBeam.CSS}
 
   @spec animation_css([map()]) :: String.t()
   def animation_css(elements) when is_list(elements) do
     hinted = collect_hinted_elements(elements, [])
+    anchored = collect_overflow_anchor_elements(elements, [])
 
     transition_rules =
       Enum.flat_map(hinted, fn {id, hints} ->
@@ -241,7 +254,12 @@ defmodule Raxol.LiveView.TerminalBridge do
         |> Enum.map(fn hint -> generate_beam_css(hint, id) end)
       end)
 
-    all_rules = transition_rules ++ beam_rules
+    anchor_rules =
+      Enum.map(anchored, fn {id, anchor} ->
+        ~s([data-raxol-id="#{id}"] { overflow-anchor: #{overflow_anchor_value(anchor)}; })
+      end)
+
+    all_rules = transition_rules ++ beam_rules ++ anchor_rules
 
     case all_rules do
       [] ->
@@ -303,6 +321,36 @@ defmodule Raxol.LiveView.TerminalBridge do
 
   defp border_beam_hint?(%{type: :border_beam}), do: true
   defp border_beam_hint?(_), do: false
+
+  # Mirrors collect_hinted_elements/2: walks the positioned element tree and
+  # pulls out {id, anchor} pairs for elements carrying a recognized
+  # `:overflow_anchor` setting.
+  defp collect_overflow_anchor_elements([], acc), do: acc
+
+  defp collect_overflow_anchor_elements([element | rest], acc) do
+    acc =
+      case element do
+        %{id: id, overflow_anchor: anchor} when is_binary(id) and anchor in [:auto, :none] ->
+          [{id, anchor} | acc]
+
+        _ ->
+          acc
+      end
+
+    children = Map.get(element, :children, [])
+
+    acc =
+      if is_list(children) do
+        collect_overflow_anchor_elements(children, acc)
+      else
+        acc
+      end
+
+    collect_overflow_anchor_elements(rest, acc)
+  end
+
+  defp overflow_anchor_value(:auto), do: "auto"
+  defp overflow_anchor_value(:none), do: "none"
 
   @beam_css_colors %{
     colorful: {"#ff0040, #ffaa00, #00ff88, #00ccff, #4400ff, #ff00cc", "#4400ff", "#ff00cc"},
