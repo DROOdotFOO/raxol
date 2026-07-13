@@ -117,7 +117,7 @@ defmodule Raxol.Examples.Showcase do
         text("Raxol Component Showcase", style: [:bold]),
         tab_bar(model.tab),
         divider(),
-        section_content(model),
+        content_region(model),
         divider(),
         footer(model)
       ]
@@ -126,6 +126,13 @@ defmodule Raxol.Examples.Showcase do
 
   @impl true
   def subscribe(_model), do: []
+
+  # flex: 1 pins the footer while tab body height changes
+  defp content_region(model) do
+    box style: %{flex: 1} do
+      section_content(model)
+    end
+  end
 
   # -- Tab bar --
 
