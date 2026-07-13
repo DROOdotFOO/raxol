@@ -172,6 +172,15 @@ defmodule Raxol.Terminal.ANSI.StateMachine do
   defp handle_byte(%{state: :osc_string_maybe_st} = state, byte),
     do: handle_osc_string_maybe_st_state(state, byte)
 
+  defp handle_byte(%{state: :dcs_entry} = state, byte),
+    do: handle_dcs_entry_state(state, byte)
+
+  defp handle_byte(%{state: :dcs_passthrough} = state, byte),
+    do: handle_dcs_passthrough_state(state, byte)
+
+  defp handle_byte(%{state: :dcs_passthrough_maybe_st} = state, byte),
+    do: handle_dcs_passthrough_maybe_st_state(state, byte)
+
   defp handle_byte(%{state: :designate_charset} = state, byte),
     do: handle_designate_charset_state(state, byte)
 
@@ -403,6 +412,56 @@ defmodule Raxol.Terminal.ANSI.StateMachine do
            | state: :osc_string,
              payload_buffer: state.payload_buffer <> <<0x1B, b>>
          }}
+    end
+  end
+
+  # DCS (Device Control String) payloads are not parsed or emitted; we only
+  # need to consume them whole so unsupported/unparsable DCS never crashes
+  # the machine or leaks its bytes as ground-state text/keystrokes.
+  defp handle_dcs_entry_state(state, byte) do
+    case byte do
+      0x1B ->
+        {:continue, %{state | state: :dcs_passthrough_maybe_st}}
+
+      b when cancel_byte?(b) ->
+        {:continue, %{state | state: :ground}}
+
+      _ ->
+        {:continue, %{state | state: :dcs_passthrough}}
+    end
+  end
+
+  defp handle_dcs_passthrough_state(state, byte) do
+    case byte do
+      0x1B ->
+        {:continue, %{state | state: :dcs_passthrough_maybe_st}}
+
+      b when cancel_byte?(b) ->
+        {:continue, %{state | state: :ground}}
+
+      _ ->
+        {:continue, state}
+    end
+  end
+
+  defp handle_dcs_passthrough_maybe_st_state(state, byte) do
+    case byte do
+      ?\\ ->
+        Raxol.Core.Runtime.Log.debug_with_context(
+          "Discarded unparsable DCS sequence",
+          %{}
+        )
+
+        {:continue, %{state | state: :ground}}
+
+      0x1B ->
+        {:continue, state}
+
+      b when cancel_byte?(b) ->
+        {:continue, %{state | state: :ground}}
+
+      _ ->
+        {:continue, %{state | state: :dcs_passthrough}}
     end
   end
 
