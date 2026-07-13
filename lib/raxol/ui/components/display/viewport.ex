@@ -226,11 +226,15 @@ defmodule Raxol.UI.Components.Display.Viewport do
         Enum.slice(state.children, state.scroll_top, state.visible_height)
       end
 
-    # gap: 0 explicitly -- a literal :column runs through the Containers compat
-    # map, whose historical default is gap 1, which would double-space the rows.
+    # gap: 0 explicitly, and top-level -- a literal :column runs through the
+    # Containers compat map, which reads gap from :attrs or the top level (never
+    # from :style) and otherwise defaults it to 1 in layout mode. Left implicit,
+    # every windowed row would be double-spaced, so half of them would fall
+    # outside the viewport's own clip bounds.
     content_column = %{
       type: :column,
-      style: %{gap: 0},
+      gap: 0,
+      style: %{},
       children: visible_children
     }
 
@@ -255,7 +259,7 @@ defmodule Raxol.UI.Components.Display.Viewport do
         |> Map.put_new(:height, state.visible_height)
         |> Map.put_new(:overflow, :hidden),
       children: [
-        %{type: :row, style: %{gap: 0}, children: children}
+        %{type: :row, gap: 0, children: children}
       ]
     }
   end
