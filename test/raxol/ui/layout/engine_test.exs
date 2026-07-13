@@ -550,5 +550,93 @@ defmodule Raxol.UI.Layout.EngineTest do
       assert el.width == Raxol.UI.TextMeasure.display_width("Hello")
       assert el.height == 1
     end
+
+    test "box carries its id and geometry on the positioned element" do
+      view = %{
+        type: :box,
+        id: "panel",
+        children: [%{type: :text, content: "Hi"}]
+      }
+
+      el = positioned_by_id(view, "panel")
+
+      assert el.type == :box
+      assert el.width > 0
+      assert el.height > 0
+    end
+
+    test "box without an id keeps behaving exactly as before" do
+      view = %{type: :box, children: [%{type: :text, content: "Hi"}]}
+
+      [box_el, _text_el] = Engine.apply_layout(view, %{width: 80, height: 24})
+
+      assert box_el.type == :box
+      assert box_el.id == nil
+    end
+
+    # Neither the literal :row/:column dialect nor the View DSL :flex
+    # container produce a positioned element of their own -- Flexbox lays
+    # out and emits only the children, matching pre-existing behavior. So
+    # the container's own :id has nowhere to land in `apply_layout/2`
+    # output; these tests instead pin that translating a container with an
+    # :id (compat rewrite, or a raw :flex node) does not corrupt or drop
+    # the :id carried by a child, which is the identity that IS addressable
+    # today.
+    test "a literal :row with an id preserves a child box's id through the compat rewrite" do
+      view = %{
+        type: :row,
+        id: "toolbar",
+        children: [
+          %{
+            type: :box,
+            id: "save_btn",
+            children: [%{type: :text, content: "Save"}]
+          }
+        ]
+      }
+
+      el = positioned_by_id(view, "save_btn")
+
+      assert el.type == :box
+      assert el.width > 0
+      assert el.height > 0
+    end
+
+    test "a literal :column with an id preserves a child box's id through the compat rewrite" do
+      view = %{
+        type: :column,
+        id: "sidebar",
+        children: [
+          %{
+            type: :box,
+            id: "item1",
+            children: [%{type: :text, content: "Item"}]
+          }
+        ]
+      }
+
+      el = positioned_by_id(view, "item1")
+
+      assert el.type == :box
+      assert el.width > 0
+      assert el.height > 0
+    end
+
+    test "a View DSL :flex container with an id preserves a child box's id" do
+      view = %{
+        type: :flex,
+        id: "layout_root",
+        direction: :row,
+        children: [
+          %{type: :box, id: "card", children: [%{type: :text, content: "Card"}]}
+        ]
+      }
+
+      el = positioned_by_id(view, "card")
+
+      assert el.type == :box
+      assert el.width > 0
+      assert el.height > 0
+    end
   end
 end
