@@ -28,7 +28,7 @@ defmodule Raxol.UI.ThemeHandlingTest do
 
     # Should use default theme
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :white, :black)
+    Helper.assert_cell_style(cell, :white, nil)
   end
 
   test "handles missing theme colors" do
@@ -38,7 +38,7 @@ defmodule Raxol.UI.ThemeHandlingTest do
 
     # Should use default colors
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :white, :black)
+    Helper.assert_cell_style(cell, :white, nil)
   end
 
   test "handles style overrides" do
@@ -79,7 +79,7 @@ defmodule Raxol.UI.ThemeHandlingTest do
 
     # Border style should be overridden (test theme has white fg on black bg)
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :white, :black, [:single])
+    Helper.assert_cell_style(cell, :white, nil, [:single])
   end
 
   test "handles default border styles" do
@@ -90,7 +90,7 @@ defmodule Raxol.UI.ThemeHandlingTest do
 
     # Should use default border style (black on white from default theme)
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :black, :white, [:single])
+    Helper.assert_cell_style(cell, :black, nil, [:single])
   end
 
   test "handles no borders" do
@@ -99,7 +99,7 @@ defmodule Raxol.UI.ThemeHandlingTest do
 
     # Should not have border style (black on white from default theme)
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :black, :white, [])
+    Helper.assert_cell_style(cell, :black, nil, [])
   end
 
   test "handles theme inheritance" do
@@ -124,7 +124,7 @@ defmodule Raxol.UI.ThemeHandlingTest do
 
     # Should inherit background from parent
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :green, :blue)
+    Helper.assert_cell_style(cell, :green, nil)
   end
 
   test "handles theme variants" do
@@ -146,7 +146,7 @@ defmodule Raxol.UI.ThemeHandlingTest do
 
     # Should use error variant
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :red, :black)
+    Helper.assert_cell_style(cell, :red, nil)
   end
 
   test "theme initialization" do

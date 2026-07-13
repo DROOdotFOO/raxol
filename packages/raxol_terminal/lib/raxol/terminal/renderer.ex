@@ -239,14 +239,17 @@ defmodule Raxol.Terminal.Renderer do
           end
       end
 
-    # Background color
+    # Background color. An unpainted background emits nothing: the cell keeps
+    # the terminal's own background, which is what makes it transparent on a
+    # terminal with transparency enabled. Falling back to the theme's default
+    # background here would paint every unpainted cell -- and the theme's
+    # "default background" is, by definition, the terminal's, so painting it
+    # is a no-op on an opaque terminal and an opaque rectangle on a
+    # transparent one.
     codes =
       case Map.get(style_map, :background) do
         nil ->
-          case get_default_bg_ansi(theme) do
-            nil -> codes
-            code -> [code | codes]
-          end
+          codes
 
         color ->
           case resolve_bg_ansi(color, theme) do
@@ -389,13 +392,6 @@ defmodule Raxol.Terminal.Renderer do
   end
 
   # Get default background ANSI from theme
-  defp get_default_bg_ansi(theme) do
-    case get_in(theme, [:background, :default]) do
-      nil -> nil
-      hex when is_binary(hex) -> hex_to_ansi_bg(hex)
-      _ -> nil
-    end
-  end
 
   # Convert hex color string to ANSI 24-bit foreground escape
   defp hex_to_ansi_fg(hex) do

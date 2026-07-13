@@ -36,7 +36,7 @@ defmodule Raxol.UI.BasicRenderingTest do
     assert fg == :default or fg == :white or fg == :black or
              is_struct(fg, Raxol.Style.Colors.Color)
 
-    assert bg == :default or bg == :black or bg == :white or
+    assert is_nil(bg) or bg == :default or bg == :black or bg == :white or
              is_struct(bg, Raxol.Style.Colors.Color)
 
     # Attributes can be empty or contain border style
