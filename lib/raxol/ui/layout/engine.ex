@@ -754,6 +754,13 @@ defmodule Raxol.UI.Layout.Engine do
     Inputs.measure(:text_input, attrs_map, available_space)
   end
 
+  # charts are :box under a discovery type alias; measure must mirror the
+  # layout-side rewrite or charts measure 0x0 and siblings paint over them
+  def measure_element(%{type: type} = element, available_space)
+      when type in [:line_chart, :bar_chart, :scatter_chart, :heatmap] do
+    measure_element(Map.put(element, :type, :box), available_space)
+  end
+
   # Box with single map child (View DSL produces map, not list, for single child)
   def measure_element(
         %{type: :box, children: %{} = child} = element,

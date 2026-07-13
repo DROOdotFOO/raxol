@@ -56,7 +56,10 @@ defmodule Raxol.View.ChartComponentsTest do
           style: %{border: :single}
         )
 
-      assert view.style == %{border: :single}
+      # wrapper hugs region w/h; caller style keys still win
+      assert view.style.border == :single
+      assert view.style.width == 40
+      assert view.style.height == 10
     end
   end
 
@@ -94,7 +97,9 @@ defmodule Raxol.View.ChartComponentsTest do
 
   describe "scatter_chart/1" do
     test "returns a box with chart content" do
-      view = Components.scatter_chart(series: @scatter_series, width: 20, height: 8)
+      view =
+        Components.scatter_chart(series: @scatter_series, width: 20, height: 8)
+
       assert view.type in [:line_chart, :bar_chart, :scatter_chart, :heatmap]
       assert is_list(view.children)
     end
