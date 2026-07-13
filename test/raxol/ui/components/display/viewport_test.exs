@@ -57,8 +57,8 @@ defmodule Raxol.UI.Components.Display.ViewportTest do
       state = init_viewport(children: children, visible_height: 5)
       rendered = Viewport.render(state, %{})
 
-      assert rendered.type == :row
-      [content_col | _] = rendered.children
+      assert rendered.type == :box
+      [content_col | _] = vp_children(rendered)
       assert content_col.type == :column
       assert length(content_col.children) == 5
 
@@ -74,7 +74,7 @@ defmodule Raxol.UI.Components.Display.ViewportTest do
 
       rendered = Viewport.render(state, %{})
 
-      [content_col | _] = rendered.children
+      [content_col | _] = vp_children(rendered)
       contents = Enum.map(content_col.children, & &1.content)
       assert contents == ["Line 6", "Line 7", "Line 8"]
     end
@@ -84,8 +84,8 @@ defmodule Raxol.UI.Components.Display.ViewportTest do
       state = init_viewport(children: children, visible_height: 5)
       rendered = Viewport.render(state, %{})
 
-      assert length(rendered.children) == 2
-      [_content, scrollbar] = rendered.children
+      assert length(vp_children(rendered)) == 2
+      [_content, scrollbar] = vp_children(rendered)
       assert scrollbar.type == :column
       assert length(scrollbar.children) == 5
     end
@@ -95,7 +95,7 @@ defmodule Raxol.UI.Components.Display.ViewportTest do
       state = init_viewport(children: children, visible_height: 5)
       rendered = Viewport.render(state, %{})
 
-      assert length(rendered.children) == 1
+      assert length(vp_children(rendered)) == 1
     end
 
     test "hides scrollbar when show_scrollbar is false" do
@@ -110,7 +110,7 @@ defmodule Raxol.UI.Components.Display.ViewportTest do
 
       rendered = Viewport.render(state, %{})
 
-      assert length(rendered.children) == 1
+      assert length(vp_children(rendered)) == 1
     end
 
     test "defaults to the :glyph scrollbar style" do
@@ -119,7 +119,7 @@ defmodule Raxol.UI.Components.Display.ViewportTest do
       assert state.scrollbar_style == :glyph
 
       rendered = Viewport.render(state, %{})
-      [_content, scrollbar] = rendered.children
+      [_content, scrollbar] = vp_children(rendered)
       contents = Enum.map(scrollbar.children, & &1.content)
       assert Enum.all?(contents, &(&1 in ["█", "░"]))
     end
@@ -135,7 +135,7 @@ defmodule Raxol.UI.Components.Display.ViewportTest do
         )
 
       rendered = Viewport.render(state, %{})
-      [_content, scrollbar] = rendered.children
+      [_content, scrollbar] = vp_children(rendered)
 
       assert length(scrollbar.children) == 5
       # every track cell is a blank space -- no block glyphs anywhere
@@ -158,7 +158,7 @@ defmodule Raxol.UI.Components.Display.ViewportTest do
         )
 
       rendered = Viewport.render(state, %{})
-      assert length(rendered.children) == 1
+      assert length(vp_children(rendered)) == 1
     end
 
     test "scrollbar_style is updatable via :update_props" do
@@ -175,7 +175,7 @@ defmodule Raxol.UI.Components.Display.ViewportTest do
       state = init_viewport(visible_height: 5)
       rendered = Viewport.render(state, %{})
 
-      [content_col] = rendered.children
+      [content_col] = vp_children(rendered)
       assert content_col.children == []
     end
   end
@@ -416,4 +416,8 @@ defmodule Raxol.UI.Components.Display.ViewportTest do
       assert Viewport.unmount(state) == state
     end
   end
+
+  # Viewport renders as a :box (addressable, self-bounding) wrapping a :row of
+  # [content_column, scrollbar]. Descend to that row's children.
+  defp vp_children(rendered), do: hd(rendered.children).children
 end

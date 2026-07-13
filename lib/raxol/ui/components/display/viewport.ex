@@ -226,8 +226,14 @@ defmodule Raxol.UI.Components.Display.Viewport do
         Enum.slice(state.children, state.scroll_top, state.visible_height)
       end
 
+    # gap: 0 explicitly, and top-level -- a literal :column runs through the
+    # Containers compat map, which reads gap from :attrs or the top level (never
+    # from :style) and otherwise defaults it to 1 in layout mode. Left implicit,
+    # every windowed row would be double-spaced, so half of them would fall
+    # outside the viewport's own clip bounds.
     content_column = %{
       type: :column,
+      gap: 0,
       style: %{},
       children: visible_children
     }
@@ -240,11 +246,21 @@ defmodule Raxol.UI.Components.Display.Viewport do
         [content_column]
       end
 
+    # A :box, not a :row. Only :box produces a positioned element, so only a
+    # box can carry identity, bound its own height, and stamp :clip_bounds on
+    # its descendants. A :row/:column dissolves into its children's positions,
+    # which leaves windowed content free to paint past the viewport.
     %{
-      type: :row,
+      type: :box,
       id: state.id,
-      style: state.style,
-      children: children
+      overflow_anchor: state.overflow_anchor,
+      style:
+        state.style
+        |> Map.put_new(:height, state.visible_height)
+        |> Map.put_new(:overflow, :hidden),
+      children: [
+        %{type: :row, gap: 0, children: children}
+      ]
     }
   end
 

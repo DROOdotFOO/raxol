@@ -43,7 +43,9 @@ defmodule Raxol.UI.Layout.ScrollContentTest do
         end)
       end
 
-      source = StreamScrollContent.new(fetch_fn: fetch_fn, total: 1000, cache_size: 50)
+      source =
+        StreamScrollContent.new(fetch_fn: fetch_fn, total: 1000, cache_size: 50)
+
       {:ok, source: source}
     end
 
@@ -107,7 +109,7 @@ defmodule Raxol.UI.Layout.ScrollContentTest do
 
       rendered = Viewport.render(state, %{})
       # First child is the content column
-      content_column = Enum.at(rendered.children, 0)
+      content_column = Enum.at(hd(rendered.children).children, 0)
       assert length(content_column.children) == 5
     end
 
@@ -120,12 +122,13 @@ defmodule Raxol.UI.Layout.ScrollContentTest do
 
       source = StreamScrollContent.new(fetch_fn: fetch_fn, total: 500)
 
-      {:ok, state} = Viewport.init(%{content_source: source, visible_height: 10})
+      {:ok, state} =
+        Viewport.init(%{content_source: source, visible_height: 10})
 
       assert state.content_height == 500
 
       rendered = Viewport.render(state, %{})
-      content_column = Enum.at(rendered.children, 0)
+      content_column = Enum.at(hd(rendered.children).children, 0)
       assert length(content_column.children) == 10
       first_child = Enum.at(content_column.children, 0)
       assert first_child.content == "row-0"
@@ -140,7 +143,7 @@ defmodule Raxol.UI.Layout.ScrollContentTest do
       assert state.content_height == 5
 
       rendered = Viewport.render(state, %{})
-      content_column = Enum.at(rendered.children, 0)
+      content_column = Enum.at(hd(rendered.children).children, 0)
       assert length(content_column.children) == 3
     end
   end
