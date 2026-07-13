@@ -29,13 +29,14 @@ defmodule Raxol.UI.BoxInteriorFillTest do
   defp bgs(cells),
     do: cells |> Enum.map(fn {_, _, _, _, bg, _} -> bg end) |> Enum.uniq()
 
-  test "a background fills the interior, leaving the border ring unpainted" do
+  test "a background fills the box, border included" do
     cells = box(%{border: :single, bg: :blue})
 
     assert bgs(interior(cells)) == [:blue]
 
-    assert bgs(ring(cells)) == [nil],
-           "the border ring must not inherit the box background"
+    assert bgs(ring(cells)) == [:blue],
+           "the border is part of the box: leaving the ring unpainted opens a " <>
+             "one-cell gap around the fill through which the backdrop shows"
 
     # 5x4 box -> a 3x2 interior
     assert length(interior(cells)) == 6
@@ -67,18 +68,23 @@ defmodule Raxol.UI.BoxInteriorFillTest do
     # so the background cannot stop halfway through it. It either stops at the
     # border's inner edge, or extends under it.
 
-    test ":padding_box (the default) stops at the border's inner edge" do
-      cells = box(%{border: :single, bg: :blue, background_clip: :padding_box})
-
-      assert bgs(interior(cells)) == [:blue]
-      assert bgs(ring(cells)) == [nil], "the outline must float, unpainted"
-    end
-
-    test ":border_box extends the background under the border" do
+    test ":border_box (the default) extends the background under the border" do
       cells = box(%{border: :single, bg: :blue, background_clip: :border_box})
 
       assert bgs(interior(cells)) == [:blue]
       assert bgs(ring(cells)) == [:blue], "the glyph is drawn on the fill"
+
+      assert box(%{border: :single, bg: :blue}) == cells,
+             "and it is the default"
+    end
+
+    test ":padding_box stops at the border's inner edge" do
+      cells = box(%{border: :single, bg: :blue, background_clip: :padding_box})
+
+      assert bgs(interior(cells)) == [:blue]
+
+      assert bgs(ring(cells)) == [nil],
+             "the fill is inset; the outline sits on what is behind"
     end
 
     test "an explicit border_bg wins over background_clip" do

@@ -161,23 +161,32 @@ defmodule Raxol.UI.BorderRenderer do
   end
 
   # A cell is the smallest unit of paint, so a border glyph occupies a whole
-  # cell and the fill cannot stop halfway through it. The only question is which
-  # side that cell belongs to -- which is exactly CSS `background-clip`:
+  # cell and the background cannot stop halfway through it. The only question is
+  # which side that cell belongs to -- exactly CSS `background-clip`:
   #
-  #   :padding_box (default)  background stops at the border's inner edge, so
-  #                           the border cell is unpainted and the outline
-  #                           floats over a transparent terminal.
-  #   :border_box             background extends under the border, so the glyph
-  #                           is drawn on the fill and the box reads as a solid
-  #                           panel.
+  #   :border_box (default)  background extends under the border: the border is
+  #                          part of the box. A box that declares a background
+  #                          is a filled panel, and its frame is that panel's
+  #                          edge, not a separate thing floating beside it.
+  #                          Leaving the ring unpainted lets whatever is behind
+  #                          (a dimmed backdrop, the desktop) show through a
+  #                          one-cell gap around the fill -- a seam that cannot
+  #                          be tuned away once the colours differ.
+  #
+  #   :padding_box           background stops at the border's inner edge, so the
+  #                          fill is inset by a cell and the outline sits on
+  #                          whatever is behind it.
+  #
+  # A box with no background paints nothing either way -- border included -- so
+  # an unfilled box stays fully transparent.
   #
   # An explicit :border_bg always wins over both.
   defp border_ring_bg(style, fill_bg) do
     case Map.get(style, :border_bg) do
       nil ->
-        case Map.get(style, :background_clip, :padding_box) do
-          :border_box -> fill_bg
-          _padding_box -> nil
+        case Map.get(style, :background_clip, :border_box) do
+          :padding_box -> nil
+          _border_box -> fill_bg
         end
 
       border_bg ->
