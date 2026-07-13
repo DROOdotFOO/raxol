@@ -4,6 +4,8 @@ defmodule Raxol.Terminal.AdvancedFeatures do
 
   This module provides support for:
   - OSC 8 Hyperlinks - Clickable links in terminal output
+  - OSC 9 / 9;4 Ambient signals - Desktop notifications and taskbar/dock progress
+  - OSC 22 Pointer shape - Mouse cursor shape hints
   - Synchronized Output (DEC 2026) - Flicker-free rendering
   - Focus Events - Terminal focus/blur detection
   - Enhanced Bracketed Paste - Improved paste handling
@@ -12,7 +14,6 @@ defmodule Raxol.Terminal.AdvancedFeatures do
   These features enable rich, interactive terminal applications with modern UX patterns.
   """
 
-
   @type hyperlink_id :: String.t()
   @type url :: String.t()
   @type hyperlink_params :: %{
@@ -20,6 +21,7 @@ defmodule Raxol.Terminal.AdvancedFeatures do
           optional(:tooltip) => String.t(),
           optional(:params) => map()
         }
+  @type progress_state :: :remove | :set | :error | :indeterminate | :warning
 
   # OSC 8 Hyperlink Implementation
 
@@ -107,6 +109,71 @@ defmodule Raxol.Terminal.AdvancedFeatures do
         # Try to detect by querying terminal capabilities
         query_hyperlink_support()
     end
+  end
+
+  # OSC 9 / 9;4 Ambient Signal Implementation
+
+  @doc """
+  Sends a desktop notification using OSC 9.
+
+  ## Examples
+
+      iex> AdvancedFeatures.notify("Build finished")
+      "\\e]9;Build finished\\e\\\\"
+  """
+  @spec notify(String.t()) :: String.t()
+  def notify(message) do
+    "\e]9;#{message}\e\\"
+  end
+
+  @doc """
+  Reports progress on the host terminal's dock/taskbar icon using OSC 9;4.
+
+  `state` is one of `:remove`, `:set`, `:error`, `:indeterminate`, or `:warning`.
+  `value` is the progress percentage (0-100), ignored by most terminals for
+  `:remove` and `:indeterminate`.
+
+  ## Examples
+
+      iex> AdvancedFeatures.report_progress(:set, 42)
+      "\\e]9;4;1;42\\e\\\\"
+
+      iex> AdvancedFeatures.report_progress(:remove)
+      "\\e]9;4;0;0\\e\\\\"
+  """
+  @spec report_progress(progress_state(), 0..100) :: String.t()
+  def report_progress(state, value \\ 0) do
+    "\e]9;4;#{progress_state_code(state)};#{value}\e\\"
+  end
+
+  @doc """
+  Clears any taskbar/dock progress previously set via `report_progress/2`.
+  """
+  @spec clear_progress() :: String.t()
+  def clear_progress, do: report_progress(:remove, 0)
+
+  defp progress_state_code(:remove), do: 0
+  defp progress_state_code(:set), do: 1
+  defp progress_state_code(:error), do: 2
+  defp progress_state_code(:indeterminate), do: 3
+  defp progress_state_code(:warning), do: 4
+
+  # OSC 22 Pointer Shape Implementation
+
+  @doc """
+  Sets the mouse pointer shape using OSC 22.
+
+  `shape` is a CSS-style cursor keyword, e.g. `"default"`, `"text"`,
+  `"pointer"`, `"wait"`, `"crosshair"`.
+
+  ## Examples
+
+      iex> AdvancedFeatures.set_pointer_shape("pointer")
+      "\\e]22;pointer\\e\\\\"
+  """
+  @spec set_pointer_shape(String.t()) :: String.t()
+  def set_pointer_shape(shape) do
+    "\e]22;#{shape}\e\\"
   end
 
   # Synchronized Output (DEC 2026) Implementation

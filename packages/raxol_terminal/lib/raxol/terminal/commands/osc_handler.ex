@@ -19,6 +19,9 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
       {:clipboard, cmd} ->
         handle_clipboard_ops(emulator, cmd, data)
 
+      {:notification, cmd} ->
+        handle_notification_ops(emulator, cmd, data)
+
       {:color, cmd} ->
         handle_color_ops(emulator, cmd, data)
 
@@ -37,9 +40,12 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
   defp get_command_group(command) do
     command_groups = [
       {[0, 1, 2, 7, 8, 1337], :window},
-      {[9, 52], :clipboard},
+      {[52], :clipboard},
+      # OSC 9: desktop notification (iTerm2/growl); OSC 9;4 (data-prefixed):
+      # taskbar/dock progress (ConEmu)
+      {[9], :notification},
       {[10, 11, 17, 19], :color},
-      {[12, 50, 112], :cursor},
+      {[12, 22, 50, 112], :cursor},
       {[4, 51], :standalone}
     ]
 
@@ -74,8 +80,13 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
 
   defp handle_clipboard_ops(emulator, command, data) do
     case command do
-      9 -> __MODULE__.Clipboard.handle_9(emulator, data)
       52 -> __MODULE__.Clipboard.handle_52(emulator, data)
+    end
+  end
+
+  defp handle_notification_ops(emulator, command, data) do
+    case command do
+      9 -> __MODULE__.Notification.handle_9(emulator, data)
     end
   end
 
@@ -88,10 +99,12 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     end
   end
 
-  defp handle_cursor_ops(emulator, command, _data) do
+  defp handle_cursor_ops(emulator, command, data) do
     case command do
       # Set cursor color
       12 -> {:ok, emulator}
+      # Set pointer/cursor shape
+      22 -> __MODULE__.Pointer.handle_22(emulator, data)
       # Set cursor shape
       50 -> {:ok, emulator}
       # Reset cursor color
@@ -113,21 +126,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     """
 
     alias Raxol.Terminal.Clipboard
-
-    def handle_9(emulator, data) do
-      case data do
-        "?" ->
-          content = Clipboard.get_content(emulator.clipboard)
-          response = format_clipboard_response(9, content)
-          {:ok, %{emulator | output_buffer: response}}
-
-        content ->
-          {:ok, new_clipboard} =
-            Clipboard.set_content(emulator.clipboard, content)
-
-          {:ok, %{emulator | clipboard: new_clipboard}}
-      end
-    end
 
     def handle_52(emulator, data) do
       case parse_52_command(data) do
@@ -178,6 +176,72 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     defp format_clipboard_response(command, content) do
       encoded = Base.encode64(content)
       "\e]#{command};c;#{encoded}\e\\"
+    end
+  end
+
+  # Notification sub-module
+  defmodule Notification do
+    @moduledoc """
+    Handles OSC 9 desktop notifications and OSC 9;4 taskbar/dock progress.
+    """
+
+    def handle_9(emulator, "4;" <> rest), do: handle_progress(emulator, rest)
+    def handle_9(emulator, data), do: {:ok, %{emulator | notification: data}}
+
+    defp handle_progress(emulator, rest) do
+      case parse_progress(rest) do
+        {:ok, state, value} ->
+          {:ok, %{emulator | progress: %{state: state, value: value}}}
+
+        {:error, _reason} ->
+          {:error, :invalid_progress, emulator}
+      end
+    end
+
+    defp parse_progress(rest) do
+      case String.split(rest, ";", parts: 2) do
+        [state_str, progress_str] ->
+          parse_state_and_progress(state_str, progress_str)
+
+        [state_str] ->
+          parse_state_and_progress(state_str, "0")
+
+        _ ->
+          {:error, :invalid_format}
+      end
+    end
+
+    defp parse_state_and_progress(state_str, progress_str) do
+      with {state_code, ""} <- Integer.parse(state_str),
+           {:ok, state} <- progress_state(state_code),
+           {value, ""} <- Integer.parse(progress_str),
+           true <- value >= 0 and value <= 100 do
+        {:ok, state, value}
+      else
+        _ -> {:error, :invalid_progress}
+      end
+    end
+
+    defp progress_state(0), do: {:ok, :remove}
+    defp progress_state(1), do: {:ok, :set}
+    defp progress_state(2), do: {:ok, :error}
+    defp progress_state(3), do: {:ok, :indeterminate}
+    defp progress_state(4), do: {:ok, :warning}
+    defp progress_state(_), do: {:error, :invalid_state}
+  end
+
+  # Pointer sub-module
+  defmodule Pointer do
+    @moduledoc """
+    Handles OSC 22 pointer/cursor shape.
+    """
+
+    def handle_22(emulator, "") do
+      {:error, :invalid_pointer_shape, emulator}
+    end
+
+    def handle_22(emulator, shape) do
+      {:ok, %{emulator | pointer_shape: shape}}
     end
   end
 
@@ -355,7 +419,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     Handles color palette OSC commands.
     """
 
-
     def handle_4(emulator, data) do
       case parse_palette_command(data) do
         {:set, index, color} ->
@@ -389,7 +452,9 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
               if color_spec == "" do
                 {:reset, index}
               else
-                case Raxol.Terminal.Commands.OSCHandler.ColorParser.parse(color_spec) do
+                case Raxol.Terminal.Commands.OSCHandler.ColorParser.parse(
+                       color_spec
+                     ) do
                   {:ok, color} -> {:set, index, color}
                   error -> error
                 end
@@ -474,7 +539,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     Handles window-related OSC commands.
     """
 
-
     def handle_0(emulator, data) do
       # Set icon name and window title
       emulator = %{emulator | icon_name: data, window_title: data}
@@ -541,7 +605,6 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     Handles selection-related OSC commands.
     """
 
-
     def handle_51(emulator, data) do
       case data do
         "?" ->
@@ -591,7 +654,8 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
         [family, size, style] ->
           case Integer.parse(size) do
             {size_val, ""} ->
-              {:ok, %{family: family, size: size_val, style: parse_style(style)}}
+              {:ok,
+               %{family: family, size: size_val, style: parse_style(style)}}
 
             _ ->
               {:error, :invalid_size}
