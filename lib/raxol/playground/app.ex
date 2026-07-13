@@ -242,7 +242,10 @@ defmodule Raxol.Playground.App do
     column style: %{gap: 0} do
       [
         header_bar(),
-        row style: %{gap: 0} do
+        # flex: 1 -- the middle row claims the column's remaining main-axis
+        # (vertical) space between the header and status bars, so the panels
+        # span the terminal height instead of being sized to their content.
+        row style: %{gap: 0, flex: 1} do
           [
             sidebar_panel(model),
             demo_panel(model)
@@ -284,7 +287,12 @@ defmodule Raxol.Playground.App do
 
     filter_lines = active_filters(model)
 
-    box style: %{border: :rounded, fg: border_fg, width: @sidebar_width} do
+    box style: %{
+          border: :rounded,
+          fg: border_fg,
+          width: @sidebar_width,
+          height: :fill
+        } do
       column style: %{gap: 0} do
         count_line ++ filter_lines ++ search_line ++ sidebar_item_lines(model)
       end
