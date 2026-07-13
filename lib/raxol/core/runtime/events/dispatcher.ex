@@ -22,6 +22,9 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     defstruct runtime_pid: nil,
               app_module: nil,
               model: nil,
+              # %{%Subscription{} => subscription_id} -- the subscriptions
+              # currently running. Re-derived from the model after every update.
+              active_subscriptions: %{},
               width: 0,
               height: 0,
               focused: true,
@@ -80,8 +83,9 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
 
     if test_env?(), do: send(self(), {:dispatcher_ready, self()})
 
-    # Start app subscriptions (timers, event sources)
-    state = setup_subscriptions(state)
+    # Start app subscriptions (timers, event sources). Re-synced after every
+    # update -- see sync_subscriptions/1.
+    state = sync_subscriptions(state)
 
     {:ok, state}
   end
@@ -209,7 +213,11 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     context = build_command_context(state)
     process_commands(commands, context)
 
-    updated_state = handle_theme_update(state, updated_model)
+    updated_state =
+      state
+      |> handle_theme_update(updated_model)
+      |> sync_subscriptions()
+
     send(state.runtime_pid, :render_needed)
     {:ok, updated_state, commands}
   end
@@ -757,30 +765,54 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   defp to_call_reply({:noreply, state}), do: {:reply, :ok, state}
   defp to_call_reply({:stop, reason, state}), do: {:stop, reason, :ok, state}
 
-  defp setup_subscriptions(state) do
-    try do
-      if function_exported?(state.app_module, :subscribe, 1) do
-        case state.app_module.subscribe(state.model) do
-          subscriptions when is_list(subscriptions) ->
-            Enum.each(subscriptions, fn
-              %Raxol.Core.Runtime.Subscription{} = sub ->
-                Raxol.Core.Runtime.Subscription.start(sub, %{pid: self()})
+  # Subscriptions are a function of the model, so they are re-derived after every
+  # update and diffed against what is running: newly-declared ones are started,
+  # no-longer-declared ones are stopped. Deriving them once at init would freeze
+  # them against the initial model -- an app whose subscriptions depend on state
+  # (poll only while a job runs; tick only the selected view) would never get
+  # them started.
+  #
+  # A `%Subscription{type: t, data: d}` is its own identity: two structurally
+  # equal subscriptions are the same subscription, so an unchanged one is left
+  # running untouched rather than being torn down and restarted each update.
+  defp sync_subscriptions(state) do
+    desired = declared_subscriptions(state)
+    active = state.active_subscriptions
 
-              _ ->
-                :ok
-            end)
+    Enum.each(Map.drop(active, desired), fn {_sub, sub_id} ->
+      Raxol.Core.Runtime.Subscription.stop(sub_id)
+    end)
 
-          _ ->
-            :ok
+    started =
+      desired
+      |> Enum.reject(&Map.has_key?(active, &1))
+      |> Enum.reduce(%{}, fn sub, acc ->
+        case Raxol.Core.Runtime.Subscription.start(sub, %{pid: self()}) do
+          {:ok, sub_id} -> Map.put(acc, sub, sub_id)
+          _ -> acc
         end
-      end
-    rescue
-      e ->
-        Logger.debug("Subscription setup failed: #{Exception.message(e)}")
-        :ok
-    end
+      end)
 
-    state
+    kept = Map.take(active, desired)
+    %{state | active_subscriptions: Map.merge(kept, started)}
+  end
+
+  defp declared_subscriptions(state) do
+    if function_exported?(state.app_module, :subscribe, 1) do
+      case state.app_module.subscribe(state.model) do
+        subs when is_list(subs) ->
+          Enum.filter(subs, &match?(%Raxol.Core.Runtime.Subscription{}, &1))
+
+        _ ->
+          []
+      end
+    else
+      []
+    end
+  rescue
+    e ->
+      Logger.debug("Subscription sync failed: #{Exception.message(e)}")
+      []
   end
 
   defp broadcast_event_if_valid(event_type, event_data)
