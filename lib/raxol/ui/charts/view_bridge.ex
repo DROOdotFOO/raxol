@@ -27,6 +27,7 @@ defmodule Raxol.UI.Charts.ViewBridge do
       cells
       |> Enum.sort_by(fn {x, y, _, _, _, _} -> {y, x} end)
       |> Enum.chunk_by(fn {_x, y, _c, fg, bg, _a} -> {y, fg, bg} end)
+      |> Enum.flat_map(&split_non_adjacent/1)
       |> Enum.map(&group_to_text_element/1)
 
     Components.box(style: chart_box_style(opts), children: children)
@@ -48,6 +49,31 @@ defmodule Raxol.UI.Charts.ViewBridge do
       _ ->
         style
     end
+  end
+
+  # a same-row same-color chunk may have gaps (bar spacing); joining across
+  # one would melt separate bars into a single run
+  defp split_non_adjacent(group) do
+    group
+    |> Enum.chunk_while(
+      [],
+      fn {x, _y, _c, _fg, _bg, _a} = cell, acc ->
+        case acc do
+          [] ->
+            {:cont, [cell]}
+
+          [{prev_x, _, _, _, _, _} | _] when x == prev_x + 1 ->
+            {:cont, [cell | acc]}
+
+          _ ->
+            {:cont, Enum.reverse(acc), [cell]}
+        end
+      end,
+      fn
+        [] -> {:cont, []}
+        acc -> {:cont, Enum.reverse(acc), []}
+      end
+    )
   end
 
   defp group_to_text_element(group) do

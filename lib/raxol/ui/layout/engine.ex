@@ -604,6 +604,9 @@ defmodule Raxol.UI.Layout.Engine do
         y: space.y,
         width: min(Raxol.UI.TextMeasure.display_width(text) + 4, space.width),
         height: 3,
+        # Buttons are visually bordered; declare it (the renderer no longer
+        # paints a border by default). The label is inset accordingly below.
+        style: %{border: :single},
         attrs: component_attrs
       },
       %{
