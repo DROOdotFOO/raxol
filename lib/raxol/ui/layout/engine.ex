@@ -262,7 +262,10 @@ defmodule Raxol.UI.Layout.Engine do
       x: space.x + dx,
       y: space.y + dy,
       width: Raxol.UI.TextMeasure.display_width(content),
-      height: 1,
+      # Match measure_element's line count: the renderer paints one row per
+      # `\n`-split line, so layout must reserve the same rows or later
+      # siblings get painted over.
+      height: content |> String.split("\n") |> length(),
       text: content,
       fg: Map.get(element, :fg),
       bg: Map.get(element, :bg),
