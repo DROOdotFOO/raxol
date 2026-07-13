@@ -143,19 +143,42 @@ defmodule Raxol.UI.BorderRenderer do
   end
 
   def render_box_borders(x, y, width, height, border_chars, style) do
-    {fg, bg, style_attrs} = extract_style_attributes(style)
+    {fg, _bg, style_attrs} = extract_style_attributes(style)
 
-    generate_border_cells(
-      x,
-      y,
-      width,
-      height,
-      border_chars,
-      fg,
-      bg,
-      style_attrs
-    )
+    # A box's background fills its INTERIOR; the border ring is painted only
+    # when asked for explicitly via :border_bg. Previously the ring inherited
+    # the box's background and the interior was never painted at all, so
+    # `box(border: :single, bg: :blue)` drew a blue outline around a hollow
+    # middle. Filling the interior and leaving the ring unpainted also lets a
+    # border float on a transparent terminal with only its content backed.
+    border_bg = Map.get(style, :border_bg)
+    fill_bg = Map.get(style, :bg) || Map.get(style, :background)
+
+    fill_cells(x, y, width, height, fg, fill_bg) ++
+      generate_border_cells(
+        x,
+        y,
+        width,
+        height,
+        border_chars,
+        fg,
+        border_bg,
+        style_attrs
+      )
   end
+
+  # Interior only (inside the ring). Unpainted background paints nothing, so a
+  # bordered box with no background stays fully transparent.
+  defp fill_cells(_x, _y, _width, _height, _fg, nil), do: []
+
+  defp fill_cells(x, y, width, height, fg, bg)
+       when width > 2 and height > 2 do
+    for i <- 1..(width - 2), j <- 1..(height - 2) do
+      {x + i, y + j, " ", fg, bg, []}
+    end
+  end
+
+  defp fill_cells(_x, _y, _width, _height, _fg, _bg), do: []
 
   defp extract_style_attributes(style) do
     {fg, bg} = resolve_colors(style)
