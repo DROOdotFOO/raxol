@@ -101,7 +101,12 @@ defmodule Raxol.Core.Runtime.Events.DispatcherResizeTest do
         assert_receive :render_needed
       end)
 
-    assert log == ""
+    # `capture_log/1` captures the whole Logger output for the duration of the
+    # block, including lines emitted by unrelated async tests running
+    # concurrently (e.g. the ANSI parser property tests fuzzing with random
+    # bytes). Assert on the absence of *this* app's update error rather than on
+    # a globally empty log, which is not ours to guarantee.
+    refute log =~ "NoResizeClauseApp"
   end
 
   test "resize with nil rendering engine does not crash" do
