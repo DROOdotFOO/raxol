@@ -117,6 +117,9 @@ defmodule Raxol.Terminal.Emulator do
             color_palette: %{},
             last_key_event: nil,
             current_hyperlink: nil,
+            notification: nil,
+            progress: nil,
+            pointer_shape: nil,
             active_buffer: nil,
             alternate_screen_buffer: nil,
             sixel_state: nil,
@@ -198,6 +201,14 @@ defmodule Raxol.Terminal.Emulator do
           color_palette: map(),
           last_key_event: any(),
           current_hyperlink: any(),
+          notification: String.t() | nil,
+          progress:
+            %{
+              state: :remove | :set | :error | :indeterminate | :warning,
+              value: 0..100
+            }
+            | nil,
+          pointer_shape: String.t() | nil,
           active_buffer: any(),
           alternate_screen_buffer: any(),
           sixel_state: any(),
@@ -274,47 +285,61 @@ defmodule Raxol.Terminal.Emulator do
 
   # Erase operations - delegated to Operations.ScreenOperations
   @doc "Clears the entire screen."
-  defdelegate clear_screen(emulator), to: Raxol.Terminal.Operations.ScreenOperations
+  defdelegate clear_screen(emulator),
+    to: Raxol.Terminal.Operations.ScreenOperations
 
   @doc "Clears the specified line."
-  defdelegate clear_line(emulator, line), to: Raxol.Terminal.Operations.ScreenOperations
+  defdelegate clear_line(emulator, line),
+    to: Raxol.Terminal.Operations.ScreenOperations
 
   @doc "Erases display content based on mode (0=to end, 1=from start, 2=entire)."
-  defdelegate erase_display(emulator, mode), to: Raxol.Terminal.Operations.ScreenOperations
+  defdelegate erase_display(emulator, mode),
+    to: Raxol.Terminal.Operations.ScreenOperations
 
   @doc "Erases content within the display."
-  defdelegate erase_in_display(emulator, mode), to: Raxol.Terminal.Operations.ScreenOperations
+  defdelegate erase_in_display(emulator, mode),
+    to: Raxol.Terminal.Operations.ScreenOperations
 
   @doc "Erases line content based on mode."
-  defdelegate erase_line(emulator, mode), to: Raxol.Terminal.Operations.ScreenOperations
+  defdelegate erase_line(emulator, mode),
+    to: Raxol.Terminal.Operations.ScreenOperations
 
   @doc "Erases content within the current line."
-  defdelegate erase_in_line(emulator, mode), to: Raxol.Terminal.Operations.ScreenOperations
+  defdelegate erase_in_line(emulator, mode),
+    to: Raxol.Terminal.Operations.ScreenOperations
 
   @doc "Erases from cursor position to end of screen."
-  defdelegate erase_from_cursor_to_end(emulator), to: Raxol.Terminal.Operations.ScreenOperations
+  defdelegate erase_from_cursor_to_end(emulator),
+    to: Raxol.Terminal.Operations.ScreenOperations
 
   @doc "Erases from start of screen to cursor position."
-  defdelegate erase_from_start_to_cursor(emulator), to: Raxol.Terminal.Operations.ScreenOperations
+  defdelegate erase_from_start_to_cursor(emulator),
+    to: Raxol.Terminal.Operations.ScreenOperations
 
   @doc "Erases the specified number of characters."
-  defdelegate erase_chars(emulator, count), to: Raxol.Terminal.Operations.ScreenOperations
+  defdelegate erase_chars(emulator, count),
+    to: Raxol.Terminal.Operations.ScreenOperations
 
   # Text operations - delegated to Operations.TextOperations
   @doc "Inserts a character at the cursor position."
-  defdelegate insert_char(emulator, char), to: Raxol.Terminal.Operations.TextOperations
+  defdelegate insert_char(emulator, char),
+    to: Raxol.Terminal.Operations.TextOperations
 
   @doc "Inserts the specified number of blank characters."
-  defdelegate insert_chars(emulator, count), to: Raxol.Terminal.Operations.TextOperations
+  defdelegate insert_chars(emulator, count),
+    to: Raxol.Terminal.Operations.TextOperations
 
   @doc "Deletes the character at the cursor position."
-  defdelegate delete_char(emulator), to: Raxol.Terminal.Operations.TextOperations
+  defdelegate delete_char(emulator),
+    to: Raxol.Terminal.Operations.TextOperations
 
   @doc "Deletes the specified number of characters."
-  defdelegate delete_chars(emulator, count), to: Raxol.Terminal.Operations.TextOperations
+  defdelegate delete_chars(emulator, count),
+    to: Raxol.Terminal.Operations.TextOperations
 
   @doc "Writes text to the terminal at the cursor position."
-  defdelegate write_text(emulator, text), to: Raxol.Terminal.Operations.TextOperations
+  defdelegate write_text(emulator, text),
+    to: Raxol.Terminal.Operations.TextOperations
 
   # Selection operations
   @doc "Starts text selection at the specified coordinates."
@@ -488,7 +513,8 @@ defmodule Raxol.Terminal.Emulator do
   # Screen buffer accessor
   @doc "Gets the active screen buffer."
   @impl Raxol.Terminal.EmulatorBehaviour
-  def get_screen_buffer(emulator), do: BufferOperations.get_screen_buffer(emulator)
+  def get_screen_buffer(emulator),
+    do: BufferOperations.get_screen_buffer(emulator)
 
   @doc "Sets terminal dimensions after validation."
   def set_dimensions(emulator, width, height) do
