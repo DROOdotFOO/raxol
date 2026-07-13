@@ -615,7 +615,9 @@ defmodule Raxol.UI.Layout.Engine do
   end
 
   def process_element(%{type: :divider} = divider, space, acc) do
-    char = Map.get(divider, :char, "-")
+    # Box-drawing, matching a :single border's horizontal run. The DSL resolves
+    # :char from :variant; this default only covers elements built by hand.
+    char = Map.get(divider, :char, "─")
 
     [
       %{

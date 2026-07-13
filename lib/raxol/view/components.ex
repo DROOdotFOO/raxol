@@ -182,8 +182,31 @@ defmodule Raxol.View.Components do
     %{
       type: :divider,
       style: Map.get(opts, :style, %{}),
-      char: Map.get(opts, :char, "-")
+      char: divider_char(opts)
     }
+  end
+
+  # A divider is a border's horizontal run, so it draws with the same charset:
+  # `variant: :single` matches a `:single` border exactly (─ ═ -). An explicit
+  # `char:` still wins, so callers can draw a divider out of anything.
+  #
+  # Only known variants are forwarded to BorderRenderer: its catch-all maps
+  # anything unrecognised to `:none`, whose horizontal run is a space -- a typo
+  # would silently render an invisible divider. Unknown variants draw `:single`.
+  @divider_variants [:single, :double, :rounded, :ascii, :none]
+
+  defp divider_char(opts) do
+    case Map.get(opts, :char) do
+      nil ->
+        opts
+        |> Map.get(:variant, :single)
+        |> then(&if &1 in @divider_variants, do: &1, else: :single)
+        |> Raxol.UI.BorderRenderer.get_border_chars()
+        |> Map.fetch!(:horizontal)
+
+      char ->
+        char
+    end
   end
 
   @doc """
