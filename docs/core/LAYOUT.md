@@ -251,6 +251,35 @@ New code should use `:flex` (the View DSL macros) directly.
   intentionally unsupported (see section 2); revisit only with a concrete
   consumer.
 
+## Only `:box` is addressable
+
+`Flexbox.process_flex/3` emits positioned elements for a container's *children*,
+never for the container itself. A `:flex`/`:row`/`:column` **dissolves** into its
+children's positions: it is pure layout, and it does not exist in the output.
+
+Only `:box` produces a positioned element of its own. So a box is the only thing
+that can:
+
+- carry an `:id` (and therefore an accessibility role, a `data-raxol-id` CSS
+  selector, an MCP projection, a change-stream identity)
+- bound its own width/height
+- stamp `:clip_bounds` on its descendants (i.e. clip its content)
+- paint a background or a border
+
+**A component that must be addressable has to render as a `:box`.** This is not
+a gap to be filled in later; it is the split between "paints and is addressable"
+and "positions its children and vanishes".
+
+This has bitten us twice. `Viewport` rendered as a `:row`, so it could neither
+bound nor clip its own content -- its windowed rows painted straight through the
+enclosing border and over whatever followed. The same `:row` had no id, so the
+LiveView surface had nothing to key `overflow-anchor` CSS to, and the feature
+shipped inert.
+
+If you need flex layout *and* addressability, nest them: a `:box` that carries
+the identity, bounds, clipping and background, wrapping a `:flex` that does the
+layout.
+
 ## See also
 
 - `docs/core/ARCHITECTURE.md` -- where layout sits in the render pipeline.
