@@ -143,19 +143,69 @@ defmodule Raxol.UI.BorderRenderer do
   end
 
   def render_box_borders(x, y, width, height, border_chars, style) do
-    {fg, bg, style_attrs} = extract_style_attributes(style)
+    {fg, _bg, style_attrs} = extract_style_attributes(style)
 
-    generate_border_cells(
-      x,
-      y,
-      width,
-      height,
-      border_chars,
-      fg,
-      bg,
-      style_attrs
-    )
+    fill_bg = Map.get(style, :bg) || Map.get(style, :background)
+
+    fill_cells(x, y, width, height, fg, fill_bg) ++
+      generate_border_cells(
+        x,
+        y,
+        width,
+        height,
+        border_chars,
+        fg,
+        border_ring_bg(style, fill_bg),
+        style_attrs
+      )
   end
+
+  # A cell is the smallest unit of paint, so a border glyph occupies a whole
+  # cell and the background cannot stop halfway through it. The only question is
+  # which side that cell belongs to -- exactly CSS `background-clip`:
+  #
+  #   :border_box (default)  background extends under the border: the border is
+  #                          part of the box. A box that declares a background
+  #                          is a filled panel, and its frame is that panel's
+  #                          edge, not a separate thing floating beside it.
+  #                          Leaving the ring unpainted lets whatever is behind
+  #                          (a dimmed backdrop, the desktop) show through a
+  #                          one-cell gap around the fill -- a seam that cannot
+  #                          be tuned away once the colours differ.
+  #
+  #   :padding_box           background stops at the border's inner edge, so the
+  #                          fill is inset by a cell and the outline sits on
+  #                          whatever is behind it.
+  #
+  # A box with no background paints nothing either way -- border included -- so
+  # an unfilled box stays fully transparent.
+  #
+  # An explicit :border_bg always wins over both.
+  defp border_ring_bg(style, fill_bg) do
+    case Map.get(style, :border_bg) do
+      nil ->
+        case Map.get(style, :background_clip, :border_box) do
+          :padding_box -> nil
+          _border_box -> fill_bg
+        end
+
+      border_bg ->
+        border_bg
+    end
+  end
+
+  # Interior only (inside the ring). Unpainted background paints nothing, so a
+  # bordered box with no background stays fully transparent.
+  defp fill_cells(_x, _y, _width, _height, _fg, nil), do: []
+
+  defp fill_cells(x, y, width, height, fg, bg)
+       when width > 2 and height > 2 do
+    for i <- 1..(width - 2), j <- 1..(height - 2) do
+      {x + i, y + j, " ", fg, bg, []}
+    end
+  end
+
+  defp fill_cells(_x, _y, _width, _height, _fg, _bg), do: []
 
   defp extract_style_attributes(style) do
     {fg, bg} = resolve_colors(style)
