@@ -504,6 +504,12 @@ jobs:
             ${{ runner.os }}-mix-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
       
       - name: Install dependencies
+        # Force bash (git-bash on Windows). The default Windows shell is pwsh,
+        # where `mix deps.get --check-locked || mix deps.get` does not reliably
+        # run the fallback for mix.bat, so upstream lock drift is never resolved
+        # and `mix test` then fails with a stale-dep "lock mismatch". bash runs
+        # the fallback identically on every OS.
+        shell: bash
         run: |
           mix local.hex --force
           mix local.rebar --force

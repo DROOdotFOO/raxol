@@ -49,6 +49,10 @@ See `Raxol.ACP.Supervisor` for the supervision tree. Subsystems:
 
 `Raxol.ACP.Xochi.TransferOffering` sells cross-chain stablecoin transfers as a **pure storefront**. The buyer quotes and signs a Xochi intent themselves (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`) and puts the signed bundle in the job requirement; on delivery `Raxol.ACP.Xochi.Settler` relays it to Xochi via `execute_signed/2` and returns the settlement tx hashes. raxol never signs or holds the transfer funds. The transfer settles off-escrow through Xochi; the ACP budget is only raxol's storefront fee (8 bps of the transfer, via `:fee_bps`). See `examples/buyer_signed_intent.exs`.
 
+### Launch liquidity gate
+
+`handle_request/2` accepts a job only for a corridor it can settle now, so a customer is rejected before escrow rather than after a failed settlement: the live capability matrix, per-order caps (`:destination_caps`), closed origins (`:closed_origins`), and a rolling aggregate reservation (`Raxol.ACP.Xochi.CapacityLedger`, opt-in via `capacity_gate_enabled: true`). `mix raxol_acp.derive_caps` derives the config from the solver's on-chain balances and `Raxol.ACP.Xochi.CapacityRefresher` refreshes it periodically. See `config/destination_caps.example.exs` and `docs/features/ACP.md`.
+
 ## Dependencies
 
 - `raxol_payments` for wallet signing (`Raxol.Payments.EIP712`, `Raxol.Payments.Wallet`) and Xochi cross-chain settlement

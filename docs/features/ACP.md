@@ -71,6 +71,17 @@ The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed
 
 `packages/raxol_acp/examples/buyer_signed_intent.exs` shows the buyer flow and the requirement/deliverable schemas to register on the marketplace.
 
+## Launch liquidity gate
+
+`TransferOffering.handle_request/2` accepts a job only for a corridor it can settle now, so a customer gets a clean rejection **before escrow** rather than an accept that fails at settlement. Four layers, all config-driven and inert by default:
+
+- **Corridor support**: the live `Raxol.Payments.Xochi.Capabilities` matrix (which chains/tokens the solver fills), degrading to the static `Raxol.Payments.Assets` set when the endpoint is unreachable.
+- **Per-order caps** (`config :raxol_acp, :destination_caps`): a max order size per destination `{chain, token_address}`; `0` closes the corridor. Rejects `{:over_capacity, chain, token}`.
+- **Closed origins** (`config :raxol_acp, :closed_origins`): src chains to refuse outright (e.g. Robinhood while the USDG exit is down). Rejects `{:origin_closed, chain}`.
+- **Rolling aggregate**: `Raxol.ACP.Xochi.CapacityLedger` bounds the *running total* committed per destination across concurrent jobs: reserve at accept, confirm at settle, release on failure, TTL-sweep if a job never settles. Opt-in via `capacity_gate_enabled: true`, which adds `Raxol.ACP.Xochi.CapacityGate` (the ledger + a periodic `CapacityRefresher`) to the seller tree.
+
+`mix raxol_acp.derive_caps` reads the solver's live `balanceOf` per corridor and emits both maps (`--order-frac`/`--aggregate-frac`/`--min-usd`, per-chain RPC via `DERIVE_RPC_<chain>`). The `CapacityRefresher` runs the same reads on an interval, so aggregate capacity tracks the chain as fills drain inventory. Starting point in `packages/raxol_acp/config/destination_caps.example.exs`.
+
 ## On-Chain Writes
 
 The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there is no separate memo model (the v1 `createMemo` / `Raxol.ACP.ContractClient` write surface and the `:acp_version` switch were retired -- see `MIGRATION_V2.md`). `Raxol.ACP.HookClient` exposes `set_budget` / `submit` / `complete` / `reject`, each dispatched through an injected `Raxol.ACP.ProviderAdapter`:

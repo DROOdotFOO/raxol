@@ -23,6 +23,14 @@ defmodule Raxol.ACP.Seller.Supervisor do
   `Raxol.ACP.Offering.Registry` via `Raxol.ACP.Seller.Offerings`, so incoming
   jobs resolve to a handler. Registration is idempotent across restarts.
 
+  ## Liquidity gate
+
+  When `config :raxol_acp, capacity_gate_enabled: true`, a
+  `Raxol.ACP.Xochi.CapacityGate` (the aggregate `CapacityLedger` + periodic
+  `CapacityRefresher`) is started FIRST -- ahead of the Queue, so a listener crash
+  never resets in-flight reservations, and it is isolated (`:one_for_one` inside).
+  Off by default; the offering's aggregate cap is inert without it.
+
   ## Opt-in
 
   This supervisor is started by `Raxol.ACP.Supervisor` only when
@@ -51,12 +59,23 @@ defmodule Raxol.ACP.Seller.Supervisor do
 
     Raxol.ACP.Seller.Offerings.register_all()
 
-    children = [
-      Raxol.ACP.Seller.Queue,
-      backend_module,
-      Raxol.ACP.Seller.Runtime
-    ]
+    children =
+      capacity_gate_children() ++
+        [
+          Raxol.ACP.Seller.Queue,
+          backend_module,
+          Raxol.ACP.Seller.Runtime
+        ]
 
     Supervisor.init(children, strategy: :rest_for_one)
+  end
+
+  # The liquidity gate is optional and isolated (its own `:one_for_one`
+  # supervisor), placed first so a downstream listener crash under `:rest_for_one`
+  # leaves the aggregate reservation ledger untouched.
+  defp capacity_gate_children do
+    if Application.get_env(:raxol_acp, :capacity_gate_enabled, false),
+      do: [Raxol.ACP.Xochi.CapacityGate],
+      else: []
   end
 end
