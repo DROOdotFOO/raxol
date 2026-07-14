@@ -1,0 +1,192 @@
+{
+  "can_solve": true,
+  "eip712": {
+    "domain": {
+      "chainId": 8453,
+      "name": "Xochi",
+      "salt": "0x9367b434237c76dd65474f6b3400f245656f312be16268d772cec464857dc759",
+      "version": "3-prod"
+    },
+    "message": {
+      "deadline": 1784039306,
+      "fromAmount": "1100000",
+      "fromChainId": 8453,
+      "fromToken": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "intentId": "xi_cff0b26717ea305b8acc8322bbe359a0",
+      "quoteId": "xq_4c209fd2fffd38dd8433aea744dedd20",
+      "recipient": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+      "settlementPreference": "public",
+      "toAmount": "1091344",
+      "toChainId": 42161,
+      "toToken": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+      "wallet": "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
+    },
+    "primaryType": "XochiIntent",
+    "types": {
+      "EIP712Domain": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "version",
+          "type": "string"
+        },
+        {
+          "name": "chainId",
+          "type": "uint256"
+        },
+        {
+          "name": "salt",
+          "type": "bytes32"
+        }
+      ],
+      "XochiIntent": [
+        {
+          "name": "intentId",
+          "type": "string"
+        },
+        {
+          "name": "quoteId",
+          "type": "string"
+        },
+        {
+          "name": "wallet",
+          "type": "address"
+        },
+        {
+          "name": "recipient",
+          "type": "string"
+        },
+        {
+          "name": "fromChainId",
+          "type": "uint256"
+        },
+        {
+          "name": "toChainId",
+          "type": "uint256"
+        },
+        {
+          "name": "fromToken",
+          "type": "string"
+        },
+        {
+          "name": "toToken",
+          "type": "string"
+        },
+        {
+          "name": "fromAmount",
+          "type": "uint256"
+        },
+        {
+          "name": "toAmount",
+          "type": "uint256"
+        },
+        {
+          "name": "settlementPreference",
+          "type": "string"
+        },
+        {
+          "name": "deadline",
+          "type": "uint256"
+        }
+      ]
+    }
+  },
+  "estimated_gas_cost": "0.01",
+  "expiry": "2026-07-14T14:23:56.722Z",
+  "gasless": false,
+  "intent_id": "xi_cff0b26717ea305b8acc8322bbe359a0",
+  "min_to_amount": "1085887",
+  "payment_method": "erc3009",
+  "pull_authorization": {
+    "domain": {
+      "chainId": 8453,
+      "name": "USD Coin",
+      "verifyingContract": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "version": "2"
+    },
+    "message": {
+      "from": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+      "nonce": "0x3a9af94dd526710b0bd293b17b912c8a94c322134364e0d458981d36a8e2e7aa",
+      "to": "0x97D447561fDe10E959E782a29411D8F89586d80b",
+      "validAfter": "0",
+      "validBefore": "1784040806",
+      "value": "1100000"
+    },
+    "primaryType": "ReceiveWithAuthorization",
+    "types": {
+      "EIP712Domain": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "version",
+          "type": "string"
+        },
+        {
+          "name": "chainId",
+          "type": "uint256"
+        },
+        {
+          "name": "verifyingContract",
+          "type": "address"
+        }
+      ],
+      "ReceiveWithAuthorization": [
+        {
+          "name": "from",
+          "type": "address"
+        },
+        {
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "name": "value",
+          "type": "uint256"
+        },
+        {
+          "name": "validAfter",
+          "type": "uint256"
+        },
+        {
+          "name": "validBefore",
+          "type": "uint256"
+        },
+        {
+          "name": "nonce",
+          "type": "bytes32"
+        }
+      ]
+    }
+  },
+  "quote_id": "xq_4c209fd2fffd38dd8433aea744dedd20",
+  "route": {
+    "expected_fill_seconds": 30,
+    "from_chain_id": 8453,
+    "settlement_type": "public",
+    "to_chain_id": 42161
+  },
+  "settlement_options": [
+    {
+      "available": true,
+      "type": "public"
+    },
+    {
+      "available": false,
+      "reason": "Requires Trusted tier (25+ score)",
+      "type": "stealth"
+    },
+    {
+      "available": false,
+      "reason": "Requires Trusted tier (25+ score)",
+      "type": "shielded"
+    }
+  ],
+  "success": true,
+  "to_amount": "1091344",
+  "xochi_fee": "2400",
+  "xochi_fee_rate": "0.22%"
+}

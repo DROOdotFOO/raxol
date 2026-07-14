@@ -1,0 +1,9 @@
+{
+  "can_solve": false,
+  "error": "amount_below_minimum: Order amount is below the supported minimum",
+  "expiry": "2026-07-14T14:23:57.018Z",
+  "intent_id": "c49c8875-3d11-4a33-b02a-775f8836a6db",
+  "quote_id": "8bef9dac-88ee-4ba4-811c-ebca99575a22",
+  "settlement_options": [],
+  "success": true
+}
