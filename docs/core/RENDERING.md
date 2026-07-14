@@ -59,6 +59,18 @@ To adapt to the real background rather than assume it, use
 `Raxol.UI.CellDim` — it detects the ground via OSC 11 and solves colours against
 it.
 
+**If you want an opaque panel, ask for `:surface`, not `:background`.** They are
+different colours doing different jobs:
+
+```elixir
+Theme.get_color(theme, :background)  # what we ASSUME the terminal is -- never paint this
+Theme.get_color(theme, :surface)     # a raised opaque thing -- painted on purpose
+```
+
+A modal is opaque by design: it sits over dimmed content that must not read
+through it. It gets that opacity from `:surface`. Reaching for `:background`
+looks identical on a default terminal and is wrong everywhere else.
+
 ### 4. A box's background fills the whole box, border included
 
 ```elixir
@@ -91,9 +103,11 @@ by hand in a component, you are almost certainly in the wrong layer.
 |---|---|
 | a colour for text | `fg:` |
 | a filled panel | `bg:` on a `box` |
+| an *opaque* panel, colour from the theme | `bg:` ← `Theme.get_color(theme, :surface)` |
 | a differently-coloured frame | `border_bg:` |
 | the frame to *not* be part of the fill | `background_clip: :padding_box` |
 | a colour that adapts to the user's terminal | `Raxol.UI.CellDim` / the H-K palette |
+| the terminal's canvas to change | nothing — it isn't yours (`:background` is an assumption, not a paint) |
 
 ---
 
@@ -125,6 +139,14 @@ as a `:box`. See [LAYOUT.md](LAYOUT.md).
 **Cells do not composite.** Writing a cell replaces what was there. This is why
 rule 2 exists; if you add a new composition point, it must inherit an unpainted
 background rather than write `nil` over a fill.
+
+**Stacking two boxes to fake opacity is a workaround, not a design.** The modal
+used to render an unbordered fill box behind an identical bordered box, because a
+border only paints its own ring and the interior would otherwise show the dimmed
+content beneath. Once a box fills its interior (rule 4) the outer box is dead
+weight, and a doubled footprint in the layout. If you find yourself relying on
+paint order between two elements of the same size, the layer below you is missing
+something.
 
 ---
 

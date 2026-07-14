@@ -78,41 +78,46 @@ defmodule Raxol.UI.Components.Modal.Rendering do
   end
 
   @doc """
-  Builds a bordered, opaque dialog surface: an inner bordered box (the
-  visible chrome) nested inside an unbordered, fully-filled outer box of
-  the same footprint -- a border only paints its ring, so without the
-  outer fill the dimmed flow content behind it would show through the
-  gaps. Outer is emitted first, inner (its child) after, so last-write-wins
-  cell composition lets the border/content win while the fill still shows
-  through any unpainted interior cells.
+  Builds the dialog surface: one bordered, filled box.
 
-  Both boxes set `width`/`height` as top-level keys, not just in `:style`,
-  since overlay layout has no auto-sizing fallback the way flow layout
-  does.
+  A dialog is opaque by design -- the dimmed content behind it must not read
+  through. It declares a background, and a box's background fills its whole
+  footprint, border included, so a single box is the whole surface.
+
+  `width`/`height` are set as top-level keys as well as in `:style`, since
+  overlay layout has no auto-sizing fallback the way flow layout does.
   """
   @spec dialog_surface(pos_integer(), pos_integer(), map(), [map()]) :: map()
   def dialog_surface(width, height, box_style, children) do
-    fill_bg = Map.get(box_style, :bg) || Map.get(box_style, :background, :black)
+    fill_bg =
+      Map.get(box_style, :bg) || Map.get(box_style, :background) ||
+        surface_color()
 
     %{
       type: :box,
       width: width,
       height: height,
-      border: :none,
-      padding: 0,
-      style: %{border: :none, width: width, height: height, bg: fill_bg},
-      children: [
-        %{
-          type: :box,
-          width: width,
-          height: height,
-          border: Map.get(box_style, :border, :double),
-          padding: 1,
-          style: Map.merge(box_style, %{width: width, height: height}),
-          children: children
-        }
-      ]
+      border: Map.get(box_style, :border, :double),
+      padding: 1,
+      style: Map.merge(box_style, %{width: width, height: height, bg: fill_bg}),
+      children: children
     }
+  end
+
+  # A dialog is a surface raised above the canvas, not the canvas itself, so it
+  # is painted on purpose -- but with the theme's surface colour, not a literal.
+  # `:black` is a black slab on a light terminal, and the terminal owns the
+  # canvas (ADR-0029).
+  @default_surface "#1E1E1E"
+
+  defp surface_color do
+    Raxol.UI.Theming.Theme.current()
+    |> Raxol.UI.Theming.Theme.get_color(:surface, @default_surface)
+  rescue
+    # No theme available (e.g. rendering outside a started application).
+    _ -> @default_surface
+  catch
+    :exit, _ -> @default_surface
   end
 
   @doc """

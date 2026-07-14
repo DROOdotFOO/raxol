@@ -616,14 +616,12 @@ defmodule Raxol.UI.Components.ModalTest do
       assert surface.width == state.width
       assert surface.height > 0
       assert overlay.y == {:center_of, surface.height}
-      # outer surface is unbordered (it's the opaque fill); the bordered
-      # dialog chrome is nested one level in as its child.
-      assert surface.border == :none
-      assert [inner] = surface.children
-      assert inner.type == :box
-      assert inner.border == :double
-      assert inner.width == state.width
-      assert inner.height == surface.height
+      # one box: it carries the border AND the fill, since a box's background
+      # now covers its interior as well as its border ring (ADR-0029).
+      assert surface.border == :double
+      # opaque on purpose -- it sits over dimmed content that must not read
+      # through it. The colour comes from the theme's :surface, never :black.
+      assert surface.style.bg not in [nil, :black]
     end
 
     test "does not mutate what Modal.render/2 itself returns" do

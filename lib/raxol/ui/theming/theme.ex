@@ -186,6 +186,11 @@ defmodule Raxol.UI.Theming.Theme do
       name: "default",
       colors: %{
         background: "#000000",
+        # A raised opaque surface -- a dialog, a panel. Distinct from
+        # :background, which is only this theme's assumption about the
+        # terminal's own canvas and is never painted (ADR-0029). A surface IS
+        # painted, on purpose, so it needs a colour of its own.
+        surface: "#1E1E1E",
         foreground: "#FFFFFF",
         accent: "#4A9CD5",
         error: "#FF5555",
