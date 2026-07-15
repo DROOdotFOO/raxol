@@ -177,7 +177,14 @@ defmodule Raxol.UI.Components.Harness.ApprovalPrompt do
       | option_rows(state)
     ]
 
-    content_column = %{type: :column, style: %{width: :fill}, children: content}
+    # gap: 0 is load-bearing: the layout engine defaults an unset gap to 1,
+    # which doubles every row and overflows the fixed-height dialog surface.
+    content_column = %{
+      type: :column,
+      style: %{width: :fill},
+      gap: 0,
+      children: content
+    }
 
     ModalRendering.dialog_surface(
       state.width,

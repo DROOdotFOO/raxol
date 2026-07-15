@@ -115,7 +115,10 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
           list |> Enum.intersperse(blank_line()) |> List.flatten()
       end
 
-    %{type: :column, style: base_style, children: children}
+    # gap: 0 is load-bearing: the layout engine defaults an unset gap to 1,
+    # which would double every row; section spacing is the explicit
+    # interspersed blank lines, counted by estimate_rows/1.
+    %{type: :column, style: base_style, gap: 0, children: children}
   end
 
   @doc """

@@ -237,4 +237,48 @@ defmodule Raxol.UI.Components.Harness.ApprovalPromptTest do
                ApprovalPrompt.handle_event(enter, state, %{})
     end
   end
+
+  describe "layout regression: explicit gaps" do
+    # The layout engine defaults an unset column gap to 1, which doubles
+    # every row and overflows the fixed-height dialog surface (content
+    # spilled past the bottom border). Every column this component renders
+    # must carry an explicit gap.
+    test "every column in the rendered tree has an explicit gap" do
+      {:ok, state} =
+        ApprovalPrompt.init(
+          action: %{description: "Clear cache", tool: "shell.exec"},
+          blast_radius: %{
+            deletes: ["/a", "/b"],
+            commands: ["rm -rf /tmp/x"],
+            writes: ["/log"],
+            reversible: false
+          }
+        )
+
+      rendered = ApprovalPrompt.render(state, %{})
+
+      for column <- collect_columns(rendered) do
+        assert is_integer(Map.get(column, :gap)) or
+                 is_integer(get_in(column, [:style, :gap])),
+               "column without explicit gap: #{inspect(Map.drop(column, [:children]))}"
+      end
+    end
+
+    defp collect_columns(%{type: :column} = node) do
+      [node | Enum.flat_map(children_of(node), &collect_columns/1)]
+    end
+
+    defp collect_columns(%{} = node),
+      do: Enum.flat_map(children_of(node), &collect_columns/1)
+
+    defp collect_columns(_other), do: []
+
+    defp children_of(node) do
+      case Map.get(node, :children) do
+        list when is_list(list) -> List.flatten(list)
+        %{} = one -> [one]
+        _ -> []
+      end
+    end
+  end
 end
