@@ -18,7 +18,8 @@ defmodule Raxol.Agent.Session do
     :team_id,
     :session_id,
     :emit_bridge,
-    bridge_opts: []
+    bridge_opts: [],
+    owns_bridge?: true
   ]
 
   @type t :: %__MODULE__{
@@ -28,7 +29,8 @@ defmodule Raxol.Agent.Session do
           team_id: term() | nil,
           session_id: String.t() | nil,
           emit_bridge: pid() | nil,
-          bridge_opts: keyword()
+          bridge_opts: keyword(),
+          owns_bridge?: boolean()
         }
 
   @spec child_spec(keyword()) :: Supervisor.child_spec()
@@ -46,9 +48,7 @@ defmodule Raxol.Agent.Session do
   def start_link(opts) do
     id = Keyword.fetch!(opts, :id)
 
-    GenServer.start_link(__MODULE__, opts,
-      name: {:via, Registry, {Raxol.Agent.Registry, id}}
-    )
+    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {Raxol.Agent.Registry, id}})
   end
 
   @doc "Send a message into the agent's TEA loop."
@@ -106,11 +106,31 @@ defmodule Raxol.Agent.Session do
       |> maybe_put(:journal, Keyword.get(opts, :journal))
       |> maybe_put(:journal_opts, Keyword.get(opts, :journal_opts))
 
-    emit_bridge = start_emit_bridge(session_id, bridge_opts)
-    # The session OWNS its bridge: monitor it so a bridge death is observed
-    # (:DOWN → log + restart-or-degrade), never linked so a bridge crash can
-    # never take the session down.
-    if emit_bridge, do: Process.monitor(emit_bridge)
+    # Two bridge-ownership modes:
+    #
+    #   * standalone `Session.start_link` (default): the session OWNS its
+    #     bridge — starts it, monitors it (:DOWN → log + restart-or-degrade;
+    #     never linked so a bridge crash can never take the session down), and
+    #     stops it in terminate/2.
+    #   * under `Raxol.Agent.Session.Supervisor` (`start_emit_bridge: false`):
+    #     the TREE owns the bridge (started before this session,
+    #     `:rest_for_one`). The session only looks it up — no monitor, no
+    #     restart, no stop; supervision handles all of that.
+    owns_bridge? = Keyword.get(opts, :start_emit_bridge, true)
+
+    emit_bridge =
+      if owns_bridge? do
+        bridge = start_emit_bridge(session_id, bridge_opts)
+        if bridge, do: Process.monitor(bridge)
+        bridge
+      else
+        lookup_emit_bridge(session_id)
+      end
+
+    # session_id → pid resolution seam (SS): registered in both ownership
+    # modes so `Raxol.Agent.Session.Supervisor.whereis/1` resolves supervised
+    # and standalone sessions alike. Registry cleans the key up on death.
+    register_session(session_id, id, app_module)
 
     lifecycle_pid = start_or_reattach_lifecycle(app_module, id, session_id)
     Process.monitor(lifecycle_pid)
@@ -127,7 +147,8 @@ defmodule Raxol.Agent.Session do
        team_id: team_id,
        session_id: session_id,
        emit_bridge: emit_bridge,
-       bridge_opts: bridge_opts
+       bridge_opts: bridge_opts,
+       owns_bridge?: owns_bridge?
      }}
   end
 
@@ -255,14 +276,21 @@ defmodule Raxol.Agent.Session do
 
   @impl GenServer
   def terminate(_reason, state) do
-    if state.lifecycle_pid && Process.alive?(state.lifecycle_pid) do
-      Raxol.Core.Runtime.Lifecycle.stop(state.lifecycle_pid)
-    end
+    # Stop the lifecycle SYNCHRONOUSLY (wait for it to actually die). Lifecycle
+    # runs under a stable name (`agent_lifecycle_<id>`); under Session.Supervisor
+    # a `:rest_for_one` restart re-enters `start_or_reattach_lifecycle` with the
+    # same name, so if we only cast `:shutdown` (async) the restarted session can
+    # reattach to the still-dying old lifecycle and immediately lose it. Freeing
+    # the name before we return makes the restart deterministic.
+    stop_lifecycle_sync(state.lifecycle_pid)
 
     # Gracefully stop the per-session sink so its journal handle is flushed and
     # closed (its terminate/2 does this). Best-effort — never block session
-    # shutdown on it.
-    stop_emit_bridge(state.emit_bridge)
+    # shutdown on it. ONLY when the session OWNS the bridge (standalone mode):
+    # under Session.Supervisor the TREE owns it, and stopping it here would tear
+    # down a sink the supervisor is responsible for (and, on a session-only
+    # `:rest_for_one` restart, orphan the journal writer).
+    if state.owns_bridge?, do: stop_emit_bridge(state.emit_bridge)
 
     :ok
   end
@@ -320,7 +348,12 @@ defmodule Raxol.Agent.Session do
   # A session_id is also the durable journal's on-disk directory name, so it
   # must be a safe filename. Coerce the (arbitrary term) agent id into the
   # journal's charset and suffix a unique token so restarts never collide.
-  defp derive_session_id(id) do
+  #
+  # Public (not `defp`) so `Raxol.Agent.Session.Supervisor.start_session/2` can
+  # mint the same shape of id up-front when the caller omits `:session_id`.
+  @doc false
+  @spec derive_session_id(term()) :: String.t()
+  def derive_session_id(id) do
     base =
       id
       |> to_id_string()
@@ -334,6 +367,48 @@ defmodule Raxol.Agent.Session do
   defp to_id_string(id) when is_binary(id), do: id
   defp to_id_string(id) when is_atom(id), do: Atom.to_string(id)
   defp to_id_string(id), do: inspect(id)
+
+  # The `session_id → pid` resolution seam (SS). The session is already
+  # registered by its agent `id` (its `{:via, ...}` name); this ADDS a second
+  # key, `{:session, session_id}`, so `Raxol.Agent.Session.Supervisor.whereis/1`
+  # and `list_sessions/0` resolve every session — supervised or standalone —
+  # by its harness session_id. `:unique` Registry allows one process under many
+  # keys; each key stays unique. The Registry auto-removes the key on death.
+  #
+  # Best-effort: an unexpectedly duplicate session_id (two standalone sessions
+  # with distinct agent ids but the same session_id) just skips the secondary
+  # registration rather than crashing the session — the primary `id` identity
+  # is untouched. Registry is always up here (the `{:via, ...}` name requires
+  # it), but guard defensively.
+  defp register_session(session_id, id, app_module) do
+    if Process.whereis(Raxol.Agent.Registry) do
+      case Registry.register(
+             Raxol.Agent.Registry,
+             {:session, session_id},
+             %{id: id, app_module: app_module}
+           ) do
+        {:ok, _} -> :ok
+        {:error, {:already_registered, _}} -> :ok
+      end
+    end
+
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
+  # Resolve the tree-owned sink for `session_id` (supervised mode). The bridge
+  # child of `Session.Supervisor` starts BEFORE this session under
+  # `:rest_for_one` and registers its `{:via, ...}` name synchronously, so by
+  # the time the session inits the key is already present.
+  defp lookup_emit_bridge(session_id) do
+    case Registry.lookup(Raxol.Agent.Registry, {:emit_bridge, session_id}) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
 
   # Start the per-session sink under the agent DynamicSupervisor when available
   # (so it is not crash-coupled to this Session); fall back to an unlinked
@@ -368,8 +443,7 @@ defmodule Raxol.Agent.Session do
   defp bridge_name_opts(session_id) do
     if Process.whereis(Raxol.Agent.Registry) do
       [
-        name:
-          {:via, Registry, {Raxol.Agent.Registry, {:emit_bridge, session_id}}}
+        name: {:via, Registry, {Raxol.Agent.Registry, {:emit_bridge, session_id}}}
       ]
     else
       []
@@ -399,6 +473,28 @@ defmodule Raxol.Agent.Session do
 
   defp maybe_put(kw, _key, nil), do: kw
   defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)
+
+  # Stop the lifecycle and block until it is truly gone (or 2s elapses), so its
+  # stable process name is free for a same-id restart. `Lifecycle.stop/1` casts
+  # `:shutdown`, so we monitor + await the `:DOWN` ourselves.
+  defp stop_lifecycle_sync(nil), do: :ok
+
+  defp stop_lifecycle_sync(pid) when is_pid(pid) do
+    if Process.alive?(pid) do
+      ref = Process.monitor(pid)
+      Raxol.Core.Runtime.Lifecycle.stop(pid)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      after
+        2_000 ->
+          Process.demonitor(ref, [:flush])
+          :ok
+      end
+    end
+
+    :ok
+  end
 
   defp stop_emit_bridge(nil), do: :ok
 
