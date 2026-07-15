@@ -6,7 +6,7 @@ defmodule Raxol.Playground.CatalogTest do
   describe "list_components/0" do
     test "returns all registered components" do
       components = Catalog.list_components()
-      assert length(components) == 35
+      assert length(components) == 36
       assert Enum.all?(components, &is_map/1)
     end
 

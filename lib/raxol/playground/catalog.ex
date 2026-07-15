@@ -420,6 +420,31 @@ defmodule Raxol.Playground.Catalog do
       code_snippet: """
       Viewport.init(children: lines, visible_height: 12, overflow_anchor: :auto)
       """
+    },
+    # --- Harness widgets ---
+    %{
+      name: "Harness Status",
+      module: Demos.HarnessStatusDemo,
+      category: :feedback,
+      description:
+        "Agent harness status bar, context/spend meters, activity indicator, advisory feed, and drift gauge",
+      complexity: :intermediate,
+      tags: [
+        "harness",
+        "status",
+        "meter",
+        "activity",
+        "advisory",
+        "drift",
+        "toast"
+      ],
+      code_snippet: """
+      {:ok, s} = ContextMeter.init(used: 13_000, total: 16_000)
+      ContextMeter.render(s, %{})
+
+      {:ok, s} = ActivityIndicator.init(state: :working, since_ms: 0, frame: 0)
+      ActivityIndicator.render(s, %{})
+      """
     }
   ]
 
