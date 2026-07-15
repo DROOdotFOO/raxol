@@ -155,6 +155,34 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
       """
     },
     %{
+      name: "long delete (mid-ellipsis)",
+      path: "config/legacy.exs",
+      language: "elixir",
+      old: """
+      config :app, :features,
+        legacy_flags: [:a_very_long_flag_name_one, :a_very_long_flag_name_two, :a_very_long_flag_name_three, :a_very_long_flag_name_four, :a_very_long_flag_name_five, :final]
+      """,
+      new: """
+      config :app, :features,
+        legacy_flags: []
+      """
+    },
+    %{
+      name: "long insert (soft-wrap)",
+      path: "lib/router.ex",
+      language: "elixir",
+      old: """
+      def routes do
+        []
+      end
+      """,
+      new: """
+      def routes do
+        [get("/health"), get("/metrics"), post("/api/v1/orders"), post("/api/v1/orders/:id/cancel"), get("/api/v1/orders/:id"), put("/api/v1/orders/:id/address"), delete("/api/v1/orders/:id")]
+      end
+      """
+    },
+    %{
       name: "word-alt clusters",
       path: "README.md",
       language: "markdown",
