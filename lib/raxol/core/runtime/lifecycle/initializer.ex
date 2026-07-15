@@ -211,7 +211,10 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
       command_registry_table: registry_table,
       time_travel: Keyword.get(options, :time_travel_pid),
       cycle_profiler: Keyword.get(options, :cycle_profiler_pid),
-      command_interceptor: Keyword.get(options, :command_interceptor)
+      command_interceptor: Keyword.get(options, :command_interceptor),
+      # Harness keystone: a :session_id opt makes the Dispatcher publish typed
+      # events to Raxol.Core.Runtime.EmitBus at both model-fold sites.
+      session_id: Keyword.get(options, :session_id)
     }
 
     environment = Keyword.get(options, :environment, :terminal)
