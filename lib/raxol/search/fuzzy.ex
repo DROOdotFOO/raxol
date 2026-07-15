@@ -23,6 +23,10 @@ defmodule Raxol.Search.Fuzzy do
 
       # Regex search
       results = Fuzzy.search(buffer, ~r/h.llo/, :regex)
+
+  Note: list-item ranking (picker/palette/session filtering) lives in
+  `Raxol.UI.ListScorer`, a separate module -- this one searches buffer
+  cells, a different problem category.
   """
 
   require Logger
