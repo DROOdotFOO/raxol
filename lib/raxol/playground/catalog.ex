@@ -213,6 +213,20 @@ defmodule Raxol.Playground.Catalog do
       DiffViewer.render(state, %{})
       """
     },
+    %{
+      name: "Harness Transcript",
+      module: Demos.HarnessTranscriptDemo,
+      category: :display,
+      description:
+        "Agent-harness transcript blocks: completed message, collapsible reasoning, error",
+      complexity: :intermediate,
+      tags: ["harness", "display", "transcript", "agent", "collapsible"],
+      code_snippet: """
+      MessageBlock.render(message_state, %{})
+      ReasoningBlock.render(reasoning_state, %{})  # collapsible, Enter/Space toggles
+      ErrorBlock.render(error_state, %{})
+      """
+    },
     # --- Navigation/Layout widgets ---
     %{
       name: "Tabs",
