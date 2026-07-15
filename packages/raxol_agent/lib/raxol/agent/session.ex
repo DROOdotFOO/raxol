@@ -19,7 +19,8 @@ defmodule Raxol.Agent.Session do
     :session_id,
     :emit_bridge,
     bridge_opts: [],
-    owns_bridge?: true
+    owns_bridge?: true,
+    owns_lifecycle?: true
   ]
 
   @type t :: %__MODULE__{
@@ -30,7 +31,8 @@ defmodule Raxol.Agent.Session do
           session_id: String.t() | nil,
           emit_bridge: pid() | nil,
           bridge_opts: keyword(),
-          owns_bridge?: boolean()
+          owns_bridge?: boolean(),
+          owns_lifecycle?: boolean()
         }
 
   @spec child_spec(keyword()) :: Supervisor.child_spec()
@@ -47,6 +49,14 @@ defmodule Raxol.Agent.Session do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     id = Keyword.fetch!(opts, :id)
+
+    # Deterministic (re)start: a `:rest_for_one` restart can race Registry's
+    # async cleanup of the dead predecessor's `{:via, ...}` name. Wait for the
+    # stale key to clear before we register, so the start can't lose the race
+    # and fail with `{:already_started, dead_pid}` (YELLOW 3). Only the
+    # single restarter competes for this unique key, and cleanup only REMOVES
+    # it, so once it reads empty our registration cannot collide.
+    await_free(id)
 
     GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {Raxol.Agent.Registry, id}})
   end
@@ -106,17 +116,27 @@ defmodule Raxol.Agent.Session do
       |> maybe_put(:journal, Keyword.get(opts, :journal))
       |> maybe_put(:journal_opts, Keyword.get(opts, :journal_opts))
 
-    # Two bridge-ownership modes:
+    # Two ownership modes, one flag pair:
     #
-    #   * standalone `Session.start_link` (default): the session OWNS its
-    #     bridge — starts it, monitors it (:DOWN → log + restart-or-degrade;
-    #     never linked so a bridge crash can never take the session down), and
-    #     stops it in terminate/2.
-    #   * under `Raxol.Agent.Session.Supervisor` (`start_emit_bridge: false`):
-    #     the TREE owns the bridge (started before this session,
-    #     `:rest_for_one`). The session only looks it up — no monitor, no
-    #     restart, no stop; supervision handles all of that.
+    #   * standalone `Session.start_link` (default): the session OWNS both its
+    #     bridge and its lifecycle — starts them (unlinked so their crashes can
+    #     never take the session down), monitors them, and stops them in
+    #     `terminate/2`. To make `terminate/2` actually run on a graceful
+    #     `GenServer.stop`/parent-shutdown, this mode traps exits (BaseManager
+    #     does NOT — unlike BaseServer). Without trapping, the cleanup below
+    #     would be dead code and the lifecycle would leak.
+    #   * under `Raxol.Agent.Session.Supervisor`
+    #     (`start_emit_bridge: false`, `manage_lifecycle: false`): the TREE owns
+    #     both — the bridge and the lifecycle are sibling supervised children
+    #     started BEFORE this session under `:rest_for_one`. The session only
+    #     looks them up; supervision owns start/restart/stop. This is what makes
+    #     the lifecycle leak + reattach-to-dead structurally impossible: a
+    #     `stop_session` tears the whole subtree down (fresh lifecycle on any
+    #     restart, never an orphan), so no `terminate/2` cleanup is needed here.
     owns_bridge? = Keyword.get(opts, :start_emit_bridge, true)
+    owns_lifecycle? = Keyword.get(opts, :manage_lifecycle, true)
+
+    if owns_bridge? or owns_lifecycle?, do: Process.flag(:trap_exit, true)
 
     emit_bridge =
       if owns_bridge? do
@@ -132,8 +152,18 @@ defmodule Raxol.Agent.Session do
     # and standalone sessions alike. Registry cleans the key up on death.
     register_session(session_id, id, app_module)
 
-    lifecycle_pid = start_or_reattach_lifecycle(app_module, id, session_id)
-    Process.monitor(lifecycle_pid)
+    lifecycle_pid =
+      if owns_lifecycle? do
+        pid = start_or_reattach_lifecycle(app_module, id, session_id)
+        Process.monitor(pid)
+        pid
+      else
+        # Tree-owned lifecycle: it started before us under `:rest_for_one` and
+        # registered its `{:lifecycle, session_id}` via-name synchronously, so
+        # the key is present by the time we init. No monitor: if it crashes,
+        # `:rest_for_one` restarts us too, so we always re-resolve a fresh pid.
+        lookup_lifecycle(session_id)
+      end
 
     Logger.info(
       "[Agent.Session] Started agent #{inspect(id)} (#{inspect(app_module)}) session=#{session_id}"
@@ -148,7 +178,8 @@ defmodule Raxol.Agent.Session do
        session_id: session_id,
        emit_bridge: emit_bridge,
        bridge_opts: bridge_opts,
-       owns_bridge?: owns_bridge?
+       owns_bridge?: owns_bridge?,
+       owns_lifecycle?: owns_lifecycle?
      }}
   end
 
@@ -276,20 +307,19 @@ defmodule Raxol.Agent.Session do
 
   @impl GenServer
   def terminate(_reason, state) do
-    # Stop the lifecycle SYNCHRONOUSLY (wait for it to actually die). Lifecycle
-    # runs under a stable name (`agent_lifecycle_<id>`); under Session.Supervisor
-    # a `:rest_for_one` restart re-enters `start_or_reattach_lifecycle` with the
-    # same name, so if we only cast `:shutdown` (async) the restarted session can
-    # reattach to the still-dying old lifecycle and immediately lose it. Freeing
-    # the name before we return makes the restart deterministic.
-    stop_lifecycle_sync(state.lifecycle_pid)
+    # Standalone mode only. Under `Session.Supervisor` the tree owns both the
+    # lifecycle and the bridge as supervised siblings, so `owns_lifecycle?` and
+    # `owns_bridge?` are false here and this is a no-op — supervision tears the
+    # subtree down in dependency order, and no cleanup depends on this callback
+    # (which BaseManager only reaches because standalone init sets `trap_exit`).
+    #
+    # Stop the lifecycle SYNCHRONOUSLY (block until it is truly dead) so its
+    # `{:lifecycle, session_id}` via-name is free and no orphaned runtime leaks.
+    if state.owns_lifecycle?, do: stop_lifecycle_sync(state.lifecycle_pid)
 
     # Gracefully stop the per-session sink so its journal handle is flushed and
     # closed (its terminate/2 does this). Best-effort — never block session
-    # shutdown on it. ONLY when the session OWNS the bridge (standalone mode):
-    # under Session.Supervisor the TREE owns it, and stopping it here would tear
-    # down a sink the supervisor is responsible for (and, on a session-only
-    # `:rest_for_one` restart, orphan the journal writer).
+    # shutdown on it.
     if state.owns_bridge?, do: stop_emit_bridge(state.emit_bridge)
 
     :ok
@@ -321,28 +351,117 @@ defmodule Raxol.Agent.Session do
     end
   end
 
-  defp start_or_reattach_lifecycle(app_module, id, session_id) do
-    opts = [
+  # The lifecycle's registered name. A `{:via, Registry, ...}` name keyed by the
+  # (unique-suffixed) session_id — NOT a `:"agent_lifecycle_#{id}"` atom. Bare
+  # atoms are never garbage-collected, so minting one per session marches a
+  # long-running node toward the ~1M atom limit; a Registry key has no such cost
+  # and is auto-removed when the lifecycle dies.
+  defp lifecycle_name(session_id),
+    do: {:via, Registry, {Raxol.Agent.Registry, {:lifecycle, session_id}}}
+
+  defp lifecycle_opts(app_module, id, session_id) do
+    [
       environment: :agent,
       width: Raxol.Core.Defaults.terminal_width(),
       height: Raxol.Core.Defaults.terminal_height(),
-      name: :"agent_lifecycle_#{inspect(id)}",
+      name: lifecycle_name(session_id),
       command_interceptor: build_command_interceptor(app_module, id),
       # Harness keystone: makes the Dispatcher publish typed events to EmitBus.
       session_id: session_id
     ]
+  end
 
-    case Raxol.Core.Runtime.Lifecycle.start_link(app_module, opts) do
+  # Standalone ownership: the session starts the lifecycle itself, unlinked so a
+  # lifecycle crash can't cascade into the session (the session monitors it
+  # instead). `terminate/2` stops it synchronously, so a graceful stop leaves no
+  # orphan. The `{:already_started, _}` branch only fires if a prior standalone
+  # incarnation leaked a lifecycle under the same session_id (e.g. a brutal
+  # kill, which skips terminate); reattach rather than fail to start.
+  defp start_or_reattach_lifecycle(app_module, id, session_id) do
+    case Raxol.Core.Runtime.Lifecycle.start_link(
+           app_module,
+           lifecycle_opts(app_module, id, session_id)
+         ) do
       {:ok, lifecycle_pid} ->
-        # A fresh lifecycle is linked to us; unlink so its crashes don't cascade.
         Process.unlink(lifecycle_pid)
         lifecycle_pid
 
       {:error, {:already_started, lifecycle_pid}} ->
-        # A prior session was killed before its lifecycle was cleaned up.
-        # Reattach to the running runtime instead of failing to restart.
         lifecycle_pid
     end
+  end
+
+  # Resolve the tree-owned lifecycle for `session_id` (supervised mode). It
+  # starts before this session under `:rest_for_one` and registers its via-name
+  # synchronously, so the key is present when we look it up.
+  defp lookup_lifecycle(session_id) do
+    case Registry.lookup(Raxol.Agent.Registry, {:lifecycle, session_id}) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
+  @doc false
+  # Supervised child spec for the per-session lifecycle, placed BETWEEN the sink
+  # and the session in `Raxol.Agent.Session.Supervisor`'s `:rest_for_one` tree.
+  # The tree owns the lifecycle: a `stop_session` (or any restart) tears it down
+  # with the subtree — it can neither leak nor be reattached-to while dead.
+  @spec lifecycle_child_spec(keyword()) :: Supervisor.child_spec()
+  def lifecycle_child_spec(opts) do
+    %{
+      id: :lifecycle,
+      start: {__MODULE__, :start_supervised_lifecycle, [opts]},
+      restart: :permanent,
+      shutdown: Raxol.Core.Defaults.shutdown_timeout_ms()
+    }
+  end
+
+  @doc false
+  # Start the lifecycle as a linked, supervised child (NOT unlinked — the tree
+  # supervises it). Waits for the dead predecessor's via-name to clear first so
+  # a `:rest_for_one` restart is deterministic (YELLOW 3).
+  @spec start_supervised_lifecycle(keyword()) :: GenServer.on_start()
+  def start_supervised_lifecycle(opts) do
+    app_module = Keyword.fetch!(opts, :app_module)
+    id = Keyword.fetch!(opts, :id)
+    session_id = Keyword.fetch!(opts, :session_id)
+
+    await_free({:lifecycle, session_id})
+
+    Raxol.Core.Runtime.Lifecycle.start_link(
+      app_module,
+      lifecycle_opts(app_module, id, session_id)
+    )
+  end
+
+  @doc false
+  # Block (bounded) until a Registry key is unregistered. Used before a
+  # same-name (re)start so it never loses the race against Registry's async
+  # cleanup of a dead predecessor. Only the single restarter competes for these
+  # unique per-session keys, and cleanup only removes entries, so once this
+  # reads empty a fresh registration cannot collide. Bounded so a genuinely
+  # live holder (pathological) just falls through to a normal already_started.
+  @spec await_free(term(), non_neg_integer()) :: :ok
+  def await_free(key, attempts \\ 200) do
+    case safe_lookup(key) do
+      [] ->
+        :ok
+
+      _ when attempts > 0 ->
+        Process.sleep(5)
+        await_free(key, attempts - 1)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp safe_lookup(key) do
+    Registry.lookup(Raxol.Agent.Registry, key)
+  rescue
+    ArgumentError -> []
   end
 
   # A session_id is also the durable journal's on-disk directory name, so it
@@ -382,19 +501,41 @@ defmodule Raxol.Agent.Session do
   # it), but guard defensively.
   defp register_session(session_id, id, app_module) do
     if Process.whereis(Raxol.Agent.Registry) do
-      case Registry.register(
-             Raxol.Agent.Registry,
-             {:session, session_id},
-             %{id: id, app_module: app_module}
-           ) do
-        {:ok, _} -> :ok
-        {:error, {:already_registered, _}} -> :ok
-      end
+      do_register_session(
+        {:session, session_id},
+        %{id: id, app_module: app_module}
+      )
     end
 
     :ok
   rescue
     ArgumentError -> :ok
+  end
+
+  # Don't silently skip on `:already_registered`. A `{:session, session_id}` key
+  # can briefly outlive its dead owner (Registry cleanup lag on a fast
+  # `:rest_for_one` restart); skipping then would leave a LIVE session
+  # unregistered once the stale key is swept — `whereis/1`, `list_sessions/0`
+  # and standalone `stop_session/1` would all lose it (YELLOW 2). Instead retry
+  # (bounded) until the stale predecessor's key clears and ours lands. A key
+  # already held by self() is fine. A genuinely-live foreign holder
+  # (pathological duplicate session_id) exhausts the budget and is skipped — the
+  # primary `id` identity is untouched.
+  defp do_register_session(key, meta, attempts \\ 200) do
+    case Registry.register(Raxol.Agent.Registry, key, meta) do
+      {:ok, _} ->
+        :ok
+
+      {:error, {:already_registered, pid}} when pid == self() ->
+        :ok
+
+      {:error, {:already_registered, _pid}} when attempts > 0 ->
+        Process.sleep(5)
+        do_register_session(key, meta, attempts - 1)
+
+      {:error, {:already_registered, _pid}} ->
+        :ok
+    end
   end
 
   # Resolve the tree-owned sink for `session_id` (supervised mode). The bridge
@@ -474,9 +615,15 @@ defmodule Raxol.Agent.Session do
   defp maybe_put(kw, _key, nil), do: kw
   defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)
 
-  # Stop the lifecycle and block until it is truly gone (or 2s elapses), so its
-  # stable process name is free for a same-id restart. `Lifecycle.stop/1` casts
-  # `:shutdown`, so we monitor + await the `:DOWN` ourselves.
+  # Stop the lifecycle and block until it is truly gone, so its via-name is free
+  # for a same-session_id restart. `Lifecycle.stop/1` casts `:shutdown`, so we
+  # monitor + await the `:DOWN` ourselves. The wait budget matches the
+  # lifecycle's own shutdown budget (`Defaults.shutdown_timeout_ms/0`) plus a
+  # margin — a shorter timeout could fire spuriously under load and return while
+  # the lifecycle is still sinking. If it DOES time out we hard-kill it before
+  # returning: returning with a still-alive lifecycle would let a restart
+  # reattach to a dying runtime whose dispatcher then vanishes, silently
+  # dropping every `send_message`.
   defp stop_lifecycle_sync(nil), do: :ok
 
   defp stop_lifecycle_sync(pid) when is_pid(pid) do
@@ -487,8 +634,9 @@ defmodule Raxol.Agent.Session do
       receive do
         {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
       after
-        2_000 ->
+        Raxol.Core.Defaults.shutdown_timeout_ms() + 1_000 ->
           Process.demonitor(ref, [:flush])
+          Process.exit(pid, :kill)
           :ok
       end
     end

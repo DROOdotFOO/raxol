@@ -238,6 +238,126 @@ defmodule Raxol.Agent.Session.SupervisorTest do
     end
   end
 
+  describe "lifecycle ownership (RED 1 — no leak, no reattach-to-dead)" do
+    test "stop_session tears down the tree-owned lifecycle — no orphaned runtime" do
+      base = tmp_base()
+      sid = "ss-lifeleak-#{uniq()}"
+
+      {:ok, sup} =
+        Session.Supervisor.start_session(EchoAgent,
+          id: :"ss_ll_#{uniq()}",
+          session_id: sid,
+          journal_opts: [base_dir: base]
+        )
+
+      # The lifecycle is a supervised sibling, registered by session_id.
+      lifecycle = lifecycle_pid(sid)
+      assert is_pid(lifecycle) and Process.alive?(lifecycle)
+
+      # Under BaseManager the session does NOT trap exits, so stop_session kills
+      # it WITHOUT running terminate/2. If the lifecycle were a session-spawned
+      # orphan it would leak here; as a tree child it dies with the subtree.
+      assert :ok = Session.Supervisor.stop_session(sid)
+      wait_until(fn -> not Process.alive?(sup) end)
+      wait_until(fn -> not Process.alive?(lifecycle) end)
+      refute Process.alive?(lifecycle)
+      wait_until(fn -> lifecycle_pid(sid) == nil end)
+    end
+
+    test "restarting the same session_id yields a FRESH lifecycle + init model (never reattaches to the dead one)" do
+      base = tmp_base()
+      sid = "ss-reattach-#{uniq()}"
+
+      {:ok, sup1} =
+        Session.Supervisor.start_session(EchoAgent,
+          id: :"ss_ra_a_#{uniq()}",
+          session_id: sid,
+          journal_opts: [base_dir: base]
+        )
+
+      session1 = Session.Supervisor.whereis(sid)
+      life1 = lifecycle_pid(sid)
+      assert is_pid(life1)
+
+      # Accumulate model state so a reattach would be observable.
+      :ok = Session.send_message(agent_id(session1), {:say, "one"})
+      wait_until(fn -> get_model(session1) == {:ok, %{seen: ["one"]}} end)
+
+      assert :ok = Session.Supervisor.stop_session(sid)
+      wait_until(fn -> not Process.alive?(sup1) and lifecycle_pid(sid) == nil end)
+      refute Process.alive?(life1)
+
+      # Same session_id again: a fresh subtree, a fresh lifecycle, and — the
+      # crux — the app's INIT model, not the dead session's accumulated one.
+      {:ok, sup2} =
+        Session.Supervisor.start_session(EchoAgent,
+          id: :"ss_ra_b_#{uniq()}",
+          session_id: sid,
+          journal_opts: [base_dir: base]
+        )
+
+      on_exit(fn -> Session.Supervisor.stop_session(sid) end)
+
+      session2 = Session.Supervisor.whereis(sid)
+      life2 = lifecycle_pid(sid)
+
+      assert is_pid(life2) and Process.alive?(life2)
+      assert life2 != life1
+      assert is_pid(sup2) and sup2 != sup1
+      assert {:ok, %{seen: []}} = get_model(session2)
+    end
+
+    test "lifecycle is REUSED after a session-only crash but FRESH after a bridge crash" do
+      base = tmp_base()
+      sid = "ss-lifeid-#{uniq()}"
+
+      {:ok, _sup} =
+        Session.Supervisor.start_session(EchoAgent,
+          id: :"ss_li_#{uniq()}",
+          session_id: sid,
+          journal_opts: [base_dir: base]
+        )
+
+      on_exit(fn -> Session.Supervisor.stop_session(sid) end)
+
+      life0 = lifecycle_pid(sid)
+      session0 = Session.Supervisor.whereis(sid)
+      assert is_pid(life0)
+
+      # Session-only crash: rest_for_one restarts only the child at/after the
+      # session (the session is last), so the lifecycle before it is untouched.
+      Process.exit(session0, :kill)
+
+      wait_until(fn ->
+        s = Session.Supervisor.whereis(sid)
+        is_pid(s) and s != session0 and Process.alive?(s)
+      end)
+
+      # REUSED — same pid, and the restarted session re-resolved it.
+      assert lifecycle_pid(sid) == life0
+      session1 = Session.Supervisor.whereis(sid)
+      assert %{lifecycle_pid: ^life0} = :sys.get_state(session1)
+
+      # Bridge crash: the bridge is first, so bridge + lifecycle + session all
+      # restart — a FRESH lifecycle (no durable event is emitted into a dead
+      # sink), which the restarted session re-resolves.
+      [{bridge1, _}] = registry_lookup({:emit_bridge, sid})
+      Process.exit(bridge1, :kill)
+
+      wait_until(fn ->
+        l = lifecycle_pid(sid)
+        is_pid(l) and l != life0 and Process.alive?(l)
+      end)
+
+      life2 = lifecycle_pid(sid)
+      assert life2 != life0
+
+      wait_until(fn ->
+        match?(%{lifecycle_pid: ^life2}, :sys.get_state(Session.Supervisor.whereis(sid)))
+      end)
+    end
+  end
+
   describe "whereis / list_sessions" do
     test "whereis resolves a live session and returns nil for an unknown id" do
       assert Session.Supervisor.whereis("ss-unknown-#{uniq()}") == nil
@@ -344,6 +464,21 @@ defmodule Raxol.Agent.Session.SupervisorTest do
   defp agent_id(session) do
     %{id: id} = :sys.get_state(session)
     id
+  end
+
+  # The tree-owned lifecycle for a session_id (nil if none). It registers under
+  # {:lifecycle, session_id} in Raxol.Agent.Registry.
+  defp lifecycle_pid(sid) do
+    case Registry.lookup(Raxol.Agent.Registry, {:lifecycle, sid}) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
+  defp get_model(session) when is_pid(session) do
+    GenServer.call(session, :get_model)
+  catch
+    :exit, _ -> {:error, :down}
   end
 
   defp registry_lookup(key), do: Registry.lookup(Raxol.Agent.Registry, key)

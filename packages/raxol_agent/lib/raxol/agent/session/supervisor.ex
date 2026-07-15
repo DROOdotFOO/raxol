@@ -11,22 +11,39 @@ defmodule Raxol.Agent.Session.Supervisor do
     1. `Raxol.Agent.EmitBridge` — the per-session sink. Owns the durable
        journal handle (opened lazily on the first durable event) and the
        EmitBus subscription.
-    2. `Raxol.Agent.Session` — the Lifecycle wrapper (dispatcher). Started
-       with `start_emit_bridge: false`: the tree owns the bridge, the session
-       must not start a second one.
+    2. `Raxol.Core.Runtime.Lifecycle` — the per-session TEA runtime (dispatcher
+       + model). A **supervised sibling**, not something the session spawns and
+       orphans. It emits durable events onto EmitBus, so it must start AFTER the
+       sink is subscribed (dependency order). Registered under
+       `{:lifecycle, session_id}`.
+    3. `Raxol.Agent.Session` — the thin API/forwarder. Started with
+       `start_emit_bridge: false` AND `manage_lifecycle: false`: the tree owns
+       both the sink and the runtime; the session only looks them up and
+       forwards `send_message` / `get_model` to the runtime's dispatcher.
 
-  Why this order: the journal/sink is the resource the session *depends on*
-  (durable events must have somewhere to land), so it starts first and stops
-  last. Under `:rest_for_one`:
+  Why the runtime is a supervised child (not session-spawned): if the session
+  owned an unlinked lifecycle, a `stop_session` (or any `:rest_for_one` restart,
+  which kills the non-trapping session WITHOUT running `terminate/2`) would
+  leave the runtime running forever — a leak — and a later same-`session_id`
+  start would reattach to that dead session's stale model. As a tree child the
+  runtime is torn down with the subtree and started fresh on every restart:
+  the leak and the reattach-to-dead are structurally impossible.
 
-    * a **bridge crash** restarts the bridge *and then* the session — the
-      whole tree recovers in dependency order, and the restarted bridge
-      re-registers under `{:emit_bridge, session_id}` (exactly one bridge; the
-      journal Writer survives via its own `:global` single-writer discipline
-      and is re-joined on the next durable append, so offsets stay monotonic);
-    * a **session crash** restarts *only* the session — the sink is never
-      orphaned and never duplicated, and the restarted session finds the
-      running bridge via the registry.
+  Why this order: the sink is the resource the runtime *depends on* (durable
+  events must have somewhere to land), so it starts first and stops last; the
+  runtime depends on it and the session depends on the runtime. Under
+  `:rest_for_one`:
+
+    * a **bridge crash** restarts the bridge, THEN the lifecycle, THEN the
+      session — the whole tree recovers in dependency order (a FRESH lifecycle,
+      so no durable event is ever emitted into a dead-sink gap), and the
+      restarted bridge re-registers under `{:emit_bridge, session_id}` (exactly
+      one bridge; the journal Writer survives via its own `:global`
+      single-writer discipline and is re-joined on the next durable append, so
+      offsets stay monotonic);
+    * a **session crash** restarts *only* the session — the sink and the
+      lifecycle are never orphaned or duplicated, and the restarted session
+      re-resolves the SAME running lifecycle (model preserved) via the registry.
 
   ## Registry keys (all in `Raxol.Agent.Registry`)
 
@@ -149,15 +166,21 @@ defmodule Raxol.Agent.Session.Supervisor do
       |> copy_opt(:journal, opts)
       |> copy_opt(:journal_opts, opts)
 
-    # The tree owns the bridge; the session must not start (or stop) its own.
-    session_opts = Keyword.put(opts, :start_emit_bridge, false)
+    # The tree owns the sink AND the lifecycle; the session starts (and stops)
+    # neither — it only looks them up and forwards to the runtime's dispatcher.
+    session_opts =
+      opts
+      |> Keyword.put(:start_emit_bridge, false)
+      |> Keyword.put(:manage_lifecycle, false)
 
     children = [
       %{
         id: :emit_bridge,
-        start: {EmitBridge, :start_link, [bridge_opts]},
-        restart: :permanent
+        start: {__MODULE__, :start_bridge, [session_id, bridge_opts]},
+        restart: :permanent,
+        shutdown: 5_000
       },
+      Session.lifecycle_child_spec(opts),
       %{
         id: :session,
         start: {Session, :start_link, [session_opts]},
@@ -165,14 +188,27 @@ defmodule Raxol.Agent.Session.Supervisor do
       }
     ]
 
-    # max_restarts is slightly generous: an immediate restart of the session
-    # child can transiently lose the Registry-cleanup race for its via name
-    # and need another attempt.
+    # Restarts are made deterministic (each via-named child waits for its dead
+    # predecessor's Registry key to clear before re-registering — see
+    # `start_bridge/2`, `Session.start_supervised_lifecycle/1`,
+    # `Session.start_link/1`), so `max_restarts` no longer has to absorb a lost
+    # cleanup race. Keep a small budget purely as a genuine crash-loop backstop.
     Supervisor.init(children,
       strategy: :rest_for_one,
       max_restarts: 5,
       max_seconds: 5
     )
+  end
+
+  @doc false
+  # Start the per-session sink, waiting for a dead predecessor's
+  # `{:emit_bridge, session_id}` via-name to clear first so a `:rest_for_one`
+  # restart is deterministic (YELLOW 3) rather than depending on winning the
+  # race against Registry's async cleanup.
+  @spec start_bridge(term(), keyword()) :: GenServer.on_start()
+  def start_bridge(session_id, bridge_opts) do
+    Session.await_free({:emit_bridge, session_id})
+    EmitBridge.start_link(bridge_opts)
   end
 
   # --- helpers -----------------------------------------------------------------
