@@ -694,6 +694,66 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
     end
   end
 
+  describe "render/2 (changed-cluster squeeze)" do
+    test "a paired long delete squeezes the removed cluster, not the frame" do
+      flags =
+        Enum.map_join(1..8, ", ", fn i -> ":a_very_long_flag_name_#{i}" end)
+
+      old = "legacy_flags: [" <> flags <> ", :final]"
+      new = "legacy_flags: []"
+
+      {:ok, state} =
+        DiffViewer.init(old: old, new: new, mode: :unified, width: 60)
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | rows] = rendered.children
+
+      delete_rows =
+        Enum.filter(rows, fn row -> gutter_bar(row).style[:fg] == "#FF6762" end)
+
+      insert_rows =
+        Enum.filter(rows, fn row -> gutter_bar(row).style[:fg] == "#5ECC71" end)
+
+      # the delete borrowed the insert's single-row allocation
+      assert length(insert_rows) == 1
+      assert length(delete_rows) == 1
+
+      [delete_row] = delete_rows
+      [_gutter, content] = delete_row.children
+      text = Enum.map_join(content.children, & &1.content)
+
+      # unchanged frame fully visible on BOTH sides of the squeeze
+      assert text =~ "legacy_flags: ["
+      assert text =~ "…"
+      assert String.trim_trailing(text) =~ ~r/\]$/
+
+      # the ellipsis is part of the removed cluster: emphasis tier bg
+      squeeze_span =
+        Enum.find(content.children, fn span -> span.content == "…" end)
+
+      assert Map.get(squeeze_span.style, :bg) == "#552527"
+    end
+
+    test "small changed clusters that already fit are left intact" do
+      old = "retries: 0, budget: 5000"
+      new = "retries: 3, budget: 9000"
+
+      {:ok, state} =
+        DiffViewer.init(old: old, new: new, mode: :unified, width: 60)
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | rows] = rendered.children
+
+      delete_row =
+        Enum.find(rows, fn row -> gutter_bar(row).style[:fg] == "#FF6762" end)
+
+      [_gutter, content] = delete_row.children
+      text = Enum.map_join(content.children, & &1.content)
+      refute text =~ "…"
+      assert text =~ "retries: 0"
+    end
+  end
+
   describe "render/2 (fold row styling)" do
     test "the unchanged-lines fold row carries no background" do
       lines = Enum.map_join(1..12, "\n", &"line #{&1}")

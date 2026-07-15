@@ -790,6 +790,18 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   defp wrapped_rows(kind, line, ranges, line_no, ctx, allowed, gutter_fn) do
     budget = ctx.unified_budget
     pieces = line_pieces(kind, line, ranges, line_no, ctx)
+
+    # A paired over-budget DELETE squeezes its CHANGED clusters (the
+    # content being removed — low-value) to fit the insert's allocation,
+    # keeping the unchanged frame around them fully visible. Inserts are
+    # never squeezed.
+    pieces =
+      if kind == :delete and allowed != nil and ranges != [] do
+        squeeze_changed_pieces(pieces, allowed * budget)
+      else
+        pieces
+      end
+
     piece_rows = wrap_pieces(pieces, budget)
 
     piece_rows =
@@ -1303,6 +1315,116 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       ellipsis = %{text: "…", fg: nil, styles: [], changed: false}
       Enum.reverse([ellipsis | kept_rev])
     end
+  end
+
+  # -- Changed-cluster squeeze (paired over-budget deletes) ----------------
+  #
+  # Mid-ellipses each run of CHANGED pieces to a proportional share of the
+  # space left after the unchanged frame is fully accounted for. The
+  # ellipsis stays `changed: true` so it renders on the emphasis tier --
+  # the squeeze reads as part of the removed cluster.
+
+  @cluster_min_width 7
+  @cluster_tail_keep 4
+
+  defp squeeze_changed_pieces(pieces, capacity) do
+    {unchanged_w, changed_w} =
+      Enum.reduce(pieces, {0, 0}, fn piece, {u, c} ->
+        w = TextMeasure.display_width(piece.text)
+        if piece.changed, do: {u, c + w}, else: {u + w, c}
+      end)
+
+    cond do
+      unchanged_w + changed_w <= capacity ->
+        pieces
+
+      # The unchanged frame alone overflows: squeezing clusters can't
+      # save the row; leave it to wrap + limit_rows.
+      unchanged_w >= capacity ->
+        pieces
+
+      true ->
+        budget_for_changed = capacity - unchanged_w
+
+        pieces
+        |> cluster_by_changed()
+        |> Enum.flat_map(fn
+          {:unchanged, run} ->
+            run
+
+          {:changed, run} ->
+            run_w =
+              Enum.reduce(run, 0, fn piece, acc ->
+                acc + TextMeasure.display_width(piece.text)
+              end)
+
+            allot =
+              max(
+                div(budget_for_changed * run_w, max(changed_w, 1)),
+                @cluster_min_width
+              )
+
+            squeeze_cluster(run, run_w, allot)
+        end)
+    end
+  end
+
+  defp cluster_by_changed(pieces) do
+    pieces
+    |> Enum.chunk_by(& &1.changed)
+    |> Enum.map(fn [first | _] = run ->
+      {if(first.changed, do: :changed, else: :unchanged), run}
+    end)
+  end
+
+  defp squeeze_cluster(run, run_w, allot) when run_w <= allot, do: run
+
+  defp squeeze_cluster(run, _run_w, allot) do
+    head_width = max(allot - 1 - @cluster_tail_keep, 1)
+    {head_rev, _} = take_within(run, head_width, [])
+    tail = tail_within(run, @cluster_tail_keep)
+
+    ellipsis = %{text: "…", fg: nil, styles: [], changed: true}
+    Enum.reverse(head_rev) ++ [ellipsis | tail]
+  end
+
+  # Last `want` display columns of a piece run, preserving piece styling.
+  defp tail_within(pieces, want) do
+    pieces
+    |> Enum.reverse()
+    |> Enum.reduce_while({[], 0}, fn piece, {acc, used} ->
+      width = TextMeasure.display_width(piece.text)
+
+      cond do
+        used >= want ->
+          {:halt, {acc, used}}
+
+        used + width <= want ->
+          {:cont, {[piece | acc], used + width}}
+
+        true ->
+          kept = slice_from_end(piece.text, want - used)
+          {:halt, {[%{piece | text: kept} | acc], want}}
+      end
+    end)
+    |> elem(0)
+  end
+
+  defp slice_from_end(text, width) do
+    text
+    |> String.graphemes()
+    |> Enum.reverse()
+    |> Enum.reduce_while({[], 0}, fn grapheme, {acc, used} ->
+      grapheme_width = TextMeasure.display_width(grapheme)
+
+      if used + grapheme_width <= width do
+        {:cont, {[grapheme | acc], used + grapheme_width}}
+      else
+        {:halt, {acc, used}}
+      end
+    end)
+    |> elem(0)
+    |> Enum.join()
   end
 
   defp take_within([], _left, acc), do: {acc, 0}
