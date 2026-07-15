@@ -23,9 +23,10 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     * A `▌` gutter bar (green/red) replaces the classic `+`/`-` text
       marker, per Pierre's `bars` indicator style.
     * Long unchanged runs (> `2 * context + 1` lines) fold into a single
-      dim "N unchanged lines" pill row; `context: :all` disables folding.
-    * Split mode fills the unpaired side of a change block with a dim
-      `╱` hatch instead of blank space.
+      dim "N unchanged lines" row; `context: :all` disables folding.
+    * Split mode is borderless and label-less -- the red/green gutters
+      carry the old/new identity -- and the unpaired side of a change
+      block stays blank to keep the panes vertically aligned.
 
   Line differencing is computed by `Raxol.UI.Components.Harness.LineDiff`
   (a plain LCS line diff). Intra-line word ranges come from
@@ -197,13 +198,13 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   defp context_width(_context), do: nil
 
-  # A split pane renders: gutter (bar glyph + numbers), gap(1), the line,
-  # inside a :single-border box with padding 1 (border 2 + padding 2 = 4
-  # chrome, + 1 row gap between gutter and content = 5). The `+`/`-` text
-  # marker that used to sit in the content is gone -- it's the 1-column
-  # gutter bar now, counted separately as `@bar_width` so it composes
-  # cleanly with `gutter_width_for/1`. Two panes sit in a row with gap 2.
-  @pane_chrome 5
+  # A split pane renders borderless: gutter (bar glyph + numbers), then a
+  # 1-column row gap before the line content -- that gap is the only
+  # chrome left now that the pane's border box and OLD/NEW header are
+  # gone. The `+`/`-` text marker lives in the 1-column gutter bar,
+  # counted separately as `@bar_width` so it composes cleanly with
+  # `gutter_width_for/1`. Two panes sit in a row with gap 2.
+  @pane_chrome 1
   @bar_width 1
   @pane_gap 2
 
@@ -217,11 +218,9 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     pane_width.(old_max) + @pane_gap + pane_width.(new_max) <= width
   end
 
-  # Widest line per side, floored at the "OLD"/"NEW" pane header width.
+  # Widest line per side (floor 1 so an empty side still occupies a cell).
   defp max_line_widths(ops) do
-    header_width = TextMeasure.display_width("OLD")
-
-    Enum.reduce(ops, {header_width, header_width}, fn
+    Enum.reduce(ops, {1, 1}, fn
       {:delete, line}, {old_max, new_max} ->
         {max(old_max, TextMeasure.display_width(line)), new_max}
 
@@ -285,8 +284,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     del_base: "#FF6762",
     del_row_bg: "#291418",
     del_emphasis_bg: "#552527",
-    del_gutter_bg: "#200F12",
-    separator_bg: "#1A1D21"
+    del_gutter_bg: "#200F12"
   }
 
   defp add_base, do: @diff_palette.add_base
@@ -297,7 +295,6 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   defp del_row_bg, do: @diff_palette.del_row_bg
   defp del_emphasis_bg, do: @diff_palette.del_emphasis_bg
   defp del_gutter_bg, do: @diff_palette.del_gutter_bg
-  defp separator_bg, do: @diff_palette.separator_bg
 
   # -- Render context: precomputed per-render inputs shared by both modes --
 
@@ -502,8 +499,11 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   defp gutter_style(fg, nil), do: %{fg: fg}
   defp gutter_style(fg, bg), do: %{fg: fg, bg: bg}
 
-  # -- Split mode: old | new side by side, hatch filler for unmatched lines --
+  # -- Split mode: old | new side by side, blank filler for unmatched lines --
 
+  # Borderless, label-less panes (less is more): the red/green gutters
+  # already say which side is which, so no OLD/NEW headers and no border
+  # boxes. Each pane takes half the available width.
   defp render_split(ctx) do
     pairs =
       ctx.ops_with_ranges
@@ -514,34 +514,22 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     old_side =
       Components.column(
         gap: 0,
-        children: [
-          Components.text(content: "OLD", style: %{bold: true, fg: :red})
-          | Enum.map(pairs, &split_old_line(&1, ctx))
-        ]
+        style: %{width: {:pct, 50}},
+        children: Enum.map(pairs, &split_old_line(&1, ctx))
       )
 
     new_side =
       Components.column(
         gap: 0,
-        children: [
-          Components.text(content: "NEW", style: %{bold: true, fg: :green})
-          | Enum.map(pairs, &split_new_line(&1, ctx))
-        ]
+        style: %{width: {:pct, 50}},
+        children: Enum.map(pairs, &split_new_line(&1, ctx))
       )
 
     [
       Components.row(
         gap: 2,
-        children: [
-          Components.box(
-            style: %{border: :single, padding: 1},
-            children: [old_side]
-          ),
-          Components.box(
-            style: %{border: :single, padding: 1},
-            children: [new_side]
-          )
-        ]
+        style: %{width: :fill},
+        children: [old_side, new_side]
       )
     ]
   end
@@ -551,7 +539,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   # Groups consecutive :equal ops as 1:1 pairs; consecutive :delete/:insert
   # runs (a changed hunk) pair up index-wise so both sides render on the
-  # same row, padding the shorter side with `nil` (hatch filler). Carries
+  # same row, padding the shorter side with `nil` (blank filler). Carries
   # each side's word-diff ranges through alongside its line.
   defp pair_rows(ops_with_ranges) do
     ops_with_ranges
@@ -625,8 +613,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   defp split_old_line({:change, nil, nil, _new_no, _new_line, _, _}, ctx) do
     gutter = split_gutter(" ", nil, ctx.gutter_width, :dim, nil)
-    content = hatch_row(ctx.old_line_width)
-    Components.row(gap: 1, children: [gutter, content])
+    Components.row(gap: 1, children: [gutter, filler_row()])
   end
 
   defp split_old_line(
@@ -652,8 +639,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   defp split_new_line({:change, _old_no, _old_line, nil, nil, _, _}, ctx) do
     gutter = split_gutter(" ", nil, ctx.gutter_width, :dim, nil)
-    content = hatch_row(ctx.new_line_width)
-    Components.row(gap: 1, children: [gutter, content])
+    Components.row(gap: 1, children: [gutter, filler_row()])
   end
 
   defp split_new_line(
@@ -672,12 +658,12 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     Components.text(content: text, style: gutter_style(fg, bg))
   end
 
-  defp hatch_row(width) do
-    text = String.duplicate("╱", max(width, 1))
-
+  # An absent line renders as plain blank space -- the row exists only to
+  # keep the two panes vertically aligned.
+  defp filler_row do
     Components.row(
       gap: 0,
-      children: [Components.text(content: text, style: %{fg: :dim})]
+      children: [Components.text(content: "", style: %{})]
     )
   end
 
@@ -693,7 +679,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
         ),
         Components.text(
           content: fold_text(count),
-          style: %{fg: :dim, bg: separator_bg()}
+          style: %{fg: :dim}
         )
       ]
     )

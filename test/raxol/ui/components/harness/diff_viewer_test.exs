@@ -76,8 +76,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
   describe "auto mode / effective_mode/2" do
     setup do
       # widest line is 9 columns ("context 1"); gutter is 1 column.
-      # pane = 1 (gutter) + 7 (chrome) + 9 (line) = 17; split needs
-      # 17 + 2 + 17 = 36 columns.
+      # pane = 1 (gutter) + 1 (bar) + 1 (chrome) + 9 (line) = 12; split
+      # needs 12 + 2 + 12 = 26 columns.
       props = [
         old: "context 1\nold line\ncontext 2",
         new: "context 1\nnew line\ncontext 2"
@@ -92,7 +92,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
     end
 
     test "falls back to unified when the width is too narrow", %{props: props} do
-      {:ok, state} = DiffViewer.init(props ++ [width: 30])
+      {:ok, state} = DiffViewer.init(props ++ [width: 20])
       assert DiffViewer.effective_mode(state, %{}) == :unified
     end
 
@@ -109,12 +109,12 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert DiffViewer.effective_mode(state, %{dimensions: %{width: 120}}) ==
                :split
 
-      assert DiffViewer.effective_mode(state, %{available_width: 30}) ==
+      assert DiffViewer.effective_mode(state, %{available_width: 20}) ==
                :unified
     end
 
     test "the :width prop wins over the context", %{props: props} do
-      {:ok, state} = DiffViewer.init(props ++ [width: 30])
+      {:ok, state} = DiffViewer.init(props ++ [width: 20])
 
       assert DiffViewer.effective_mode(state, %{available_width: 200}) ==
                :unified
@@ -129,16 +129,17 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
     test "render/2 in auto follows the fit decision", %{props: props} do
       {:ok, wide} = DiffViewer.init(props ++ [width: 120])
-      {:ok, narrow} = DiffViewer.init(props ++ [width: 30])
+      {:ok, narrow} = DiffViewer.init(props ++ [width: 20])
 
       wide_rendered = DiffViewer.render(wide, default_context())
       narrow_rendered = DiffViewer.render(narrow, default_context())
 
-      # split renders a row of two bordered panes; unified renders plain rows
+      # split renders one row of two borderless pane columns; unified
+      # renders plain rows
       [_header, _divider | wide_body] = wide_rendered.children
       [_header2, _divider2 | narrow_body] = narrow_rendered.children
 
-      assert [%{type: :row, children: [%{type: :box}, %{type: :box}]}] =
+      assert [%{type: :row, children: [%{type: :column}, %{type: :column}]}] =
                wide_body
 
       assert Enum.all?(narrow_body, &(&1.type == :row))
@@ -386,15 +387,14 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
     end
   end
 
-  describe "render/2 (split mode filler hatch)" do
-    test "the unpaired side of a change block renders a dim hatch, not blank" do
+  describe "render/2 (split mode filler)" do
+    test "the unpaired side of a change block renders blank filler" do
       {:ok, state} =
         DiffViewer.init(old: "a\nb", new: "a\nb\nc\nd", mode: :split)
 
       rendered = DiffViewer.render(state, default_context())
       [_header, _divider, split_row] = rendered.children
-      [old_box, _new_box] = split_row.children
-      [old_column] = old_box.children
+      [old_column, _new_column] = split_row.children
 
       # Last two rows on the OLD side are filler for the two extra NEW lines.
       filler_rows = Enum.take(old_column.children, -2)
@@ -402,13 +402,13 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert Enum.all?(filler_rows, fn row ->
                [_gutter, content] = row.children
                [span] = content.children
-               span.content =~ "╱" and span.style.fg == :dim
+               span.content == ""
              end)
     end
   end
 
   describe "render/2 (split mode)" do
-    test "renders old/new side by side inside a two-box row" do
+    test "renders old/new as two borderless half-width pane columns" do
       {:ok, state} =
         DiffViewer.init(old: "a\nb\nc", new: "a\nx\nc", mode: :split)
 
@@ -417,7 +417,11 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
       assert split_row.type == :row
       assert length(split_row.children) == 2
-      assert Enum.all?(split_row.children, &(&1.type == :box))
+      assert Enum.all?(split_row.children, &(&1.type == :column))
+
+      assert Enum.all?(split_row.children, fn pane ->
+               get_in(pane, [:style, :width]) == {:pct, 50}
+             end)
     end
 
     test "pads the shorter side with blank filler so rows stay aligned" do
@@ -426,13 +430,43 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
       rendered = DiffViewer.render(state, default_context())
       [_header, _divider, split_row] = rendered.children
-      [old_box, new_box] = split_row.children
+      [old_column, new_column] = split_row.children
 
-      [old_column] = old_box.children
-      [new_column] = new_box.children
-
-      # "OLD"/"NEW" label + 1 equal row per shared line + 2 inserted rows
+      # 1 equal row per shared line + 2 inserted rows, no header labels
       assert length(old_column.children) == length(new_column.children)
+    end
+  end
+
+  describe "render/2 (fold row styling)" do
+    test "the unchanged-lines fold row carries no background" do
+      lines = Enum.map_join(1..12, "\n", &"line #{&1}")
+
+      {:ok, state} =
+        DiffViewer.init(
+          old: lines <> "\nOLD TAIL",
+          new: lines <> "\nNEW TAIL",
+          mode: :unified,
+          context: 2
+        )
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | rows] = rendered.children
+
+      fold_row =
+        Enum.find(rows, fn row ->
+          Enum.any?(row.children, fn child ->
+            is_binary(child[:content]) and child[:content] =~ "unchanged"
+          end)
+        end)
+
+      assert fold_row, "expected a fold row"
+
+      fold_text =
+        Enum.find(fold_row.children, fn child ->
+          is_binary(child[:content]) and child[:content] =~ "unchanged"
+        end)
+
+      refute Map.has_key?(fold_text.style, :bg)
     end
   end
 

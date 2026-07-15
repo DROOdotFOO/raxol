@@ -76,9 +76,83 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
   @wide_width 140
   @narrow_width 60
 
+  # diffs.com-style intra-line showcase samples: each one exercises a
+  # specific word-diff behavior (replace / add / remove within a line,
+  # and the word-alt cluster merge where adjacent changed words separated
+  # by a single space fuse into one emphasis span).
+  @samples [
+    %{
+      name: "refactor + folding",
+      path: "lib/orders/total.ex",
+      language: "elixir",
+      old: nil,
+      new: nil
+    },
+    %{
+      name: "within-line replace",
+      path: "config/runtime.exs",
+      language: "elixir",
+      old: """
+      config :app, Repo,
+        pool_size: 10,
+        timeout: 15_000,
+        queue_target: 50
+      """,
+      new: """
+      config :app, Repo,
+        pool_size: 25,
+        timeout: 30_000,
+        queue_target: 50
+      """
+    },
+    %{
+      name: "within-line add",
+      path: "lib/mailer.ex",
+      language: "elixir",
+      old: """
+      def deliver(message) do
+        Mailer.send(message)
+      end
+      """,
+      new: """
+      def deliver(message, opts \\\\ []) do
+        Mailer.send(message, retry: Keyword.get(opts, :retry, 3))
+      end
+      """
+    },
+    %{
+      name: "within-line remove",
+      path: "lib/report.ex",
+      language: "elixir",
+      old: """
+      def build(data, format, verbose, legacy_mode) do
+        render(data, format, verbose, legacy_mode)
+      end
+      """,
+      new: """
+      def build(data, format) do
+        render(data, format)
+      end
+      """
+    },
+    %{
+      name: "word-alt clusters",
+      path: "README.md",
+      language: "markdown",
+      old: """
+      The quick brown fox jumps over the lazy dog.
+      Deploys run every night at midnight UTC.
+      """,
+      new: """
+      The slow gray fox walks around the lazy dog.
+      Deploys run each morning at dawn UTC.
+      """
+    }
+  ]
+
   @impl true
   def init(_context) do
-    %{mode: :auto, width: @wide_width, context: 3}
+    %{mode: :auto, width: @wide_width, context: 3, sample: 0}
   end
 
   @impl true
@@ -87,6 +161,7 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
       key_match("m") -> {%{model | mode: cycle_mode(model.mode)}, []}
       key_match("w") -> {%{model | width: toggle_width(model.width)}, []}
       key_match("f") -> {%{model | context: toggle_context(model.context)}, []}
+      key_match("s") -> {%{model | sample: next_sample(model.sample)}, []}
       _ -> {model, []}
     end
   end
@@ -101,16 +176,34 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
   defp toggle_context(:all), do: 3
   defp toggle_context(_context), do: :all
 
+  defp next_sample(index), do: rem(index + 1, length(@samples))
+
+  # The first sample keeps the big module-level refactor (module attrs so
+  # the heredocs read naturally at the top of the file).
+  defp sample_at(0) do
+    %{
+      name: "refactor + folding",
+      path: @path,
+      language: "elixir",
+      old: @old_code,
+      new: @new_code
+    }
+  end
+
+  defp sample_at(index), do: Enum.at(@samples, index)
+
   @impl true
   def view(model) do
+    sample = sample_at(model.sample)
+
     {:ok, diff_state} =
       DiffViewer.init(
-        path: @path,
-        old: @old_code,
-        new: @new_code,
+        path: sample.path,
+        old: sample.old,
+        new: sample.new,
         mode: model.mode,
         width: model.width,
-        language: "elixir",
+        language: sample.language,
         context: model.context
       )
 
@@ -123,9 +216,13 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
         DiffViewer.render(diff_state, %{}),
         divider(),
         text(
-          "Mode: #{model.mode} (rendering: #{effective})  |  " <>
-            "Width: #{model.width} cols  |  Fold: #{model.context}  |  " <>
-            "[m] cycle mode  [w] toggle width  [f] toggle fold",
+          "Sample: #{sample.name} (#{model.sample + 1}/#{length(@samples)})  |  " <>
+            "Mode: #{model.mode} (rendering: #{effective})  |  " <>
+            "Width: #{model.width}  |  Fold: #{model.context}",
+          style: [:dim]
+        ),
+        text(
+          "[s] next sample  [m] cycle mode  [w] toggle width  [f] toggle fold",
           style: [:dim]
         )
       ]
