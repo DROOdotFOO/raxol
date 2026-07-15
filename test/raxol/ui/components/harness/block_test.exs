@@ -46,7 +46,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
     :telemetry.attach(
       handler_id,
-      [:raxol, :harness, :projection, :recovered],
+      [:raxol, :harness, :block, :recovered],
       fn event, _measurements, metadata, _config ->
         send(parent, {ref, event, metadata})
       end,
@@ -616,7 +616,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert block.kind == :opaque
       assert block.raw_kind == :message
 
-      assert_received {^ref, [:raxol, :harness, :projection, :recovered], meta}
+      assert_received {^ref, [:raxol, :harness, :block, :recovered], meta}
       assert meta.kind == :message
       assert is_binary(meta.reason)
     end
@@ -644,7 +644,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert %{type: :column} = rendered
       assert Enum.any?(flat_texts(rendered), &(&1 =~ "unrenderable"))
 
-      assert_received {^ref, [:raxol, :harness, :projection, :recovered], meta}
+      assert_received {^ref, [:raxol, :harness, :block, :recovered], meta}
       assert meta.kind == :tool_call
     end
   end

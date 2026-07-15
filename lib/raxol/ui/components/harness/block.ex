@@ -69,8 +69,11 @@ defmodule Raxol.UI.Components.Harness.Block do
   fallback to the placeholder line) are observable per
   `harness-ui-testing/06-projection.md` sec 4: each emits a
   `Logger.warning/1` and the telemetry event
-  `[:raxol, :harness, :projection, :recovered]` with metadata
-  `%{kind:, reason:}` -- a recovery is never silent.
+  `[:raxol, :harness, :block, :recovered]` with metadata
+  `%{kind:, reason:}` -- a recovery is never silent. (Distinct from
+  `Raxol.Harness.Projection.Recovery`'s stream-level
+  `[:raxol, :harness, :projection, :recovered]`, whose metadata is
+  `%{reason:, event_id:}`.)
 
   ## Rendering
 
@@ -121,7 +124,7 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   require Logger
 
-  @recovered_telemetry_event [:raxol, :harness, :projection, :recovered]
+  @recovered_telemetry_event [:raxol, :harness, :block, :recovered]
 
   @type kind :: :message | :reasoning | :tool_call | :diff | :approval | :opaque
   @type fold_state :: :expanded | :folded
