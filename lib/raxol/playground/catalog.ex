@@ -445,6 +445,21 @@ defmodule Raxol.Playground.Catalog do
       {:ok, s} = ActivityIndicator.init(state: :working, since_ms: 0, frame: 0)
       ActivityIndicator.render(s, %{})
       """
+    },
+    %{
+      name: "Harness Panels",
+      module: Demos.HarnessPanelsDemo,
+      category: :display,
+      description:
+        "Read-only harness projection panels: worktracks kanban, rules (hard vs soft), memory, residual",
+      complexity: :intermediate,
+      tags: ["harness", "display", "kanban", "rules", "memory", "projection"],
+      code_snippet: """
+      {:ok, state} = WorktracksPanel.init(lanes: [
+        %{name: "doing", items: [%{title: "Fold extract into board", status: "doing"}]}
+      ])
+      WorktracksPanel.render(state, %{})
+      """
     }
   ]
 
