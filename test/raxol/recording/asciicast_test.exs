@@ -324,5 +324,216 @@ defmodule Raxol.Recording.AsciicastTest do
         Asciicast.append!([{0, :output, "x"}], path)
       end
     end
+
+    @tag :tmp_dir
+    test "appending an empty event list is a byte-for-byte no-op", %{
+      tmp_dir: dir
+    } do
+      path = Path.join(dir, "noop.cast")
+
+      Asciicast.write!(
+        %Session{
+          width: 80,
+          height: 24,
+          started_at: DateTime.from_unix!(1_700_000_000),
+          events: [{0, :output, "a"}]
+        },
+        path
+      )
+
+      before = File.read!(path)
+      assert :ok = Asciicast.append!([], path)
+      assert File.read!(path) == before
+    end
+
+    @tag :tmp_dir
+    test "an empty append neither validates nor touches the file (no-op even on a non-cast)",
+         %{tmp_dir: dir} do
+      path = Path.join(dir, "garbage_noop.cast")
+      File.write!(path, "not a cast\n")
+
+      # No header validation, no trailing-newline fixup: the file is untouched.
+      assert :ok = Asciicast.append!([], path)
+      assert File.read!(path) == "not a cast\n"
+    end
+  end
+
+  describe "append! trailing-newline handling (O(1))" do
+    @tag :tmp_dir
+    test "many sequential appends preserve order without introducing blank lines",
+         %{tmp_dir: dir} do
+      path = Path.join(dir, "many.cast")
+
+      Asciicast.write!(
+        %Session{
+          width: 80,
+          height: 24,
+          started_at: DateTime.from_unix!(1_700_000_000),
+          events: []
+        },
+        path
+      )
+
+      for i <- 0..49 do
+        Asciicast.append!([{i * 1000, :output, "e#{i}"}], path)
+      end
+
+      session = Asciicast.read!(path)
+      assert length(session.events) == 50
+
+      assert Enum.map(session.events, fn {_t, _, d} -> d end) ==
+               for(i <- 0..49, do: "e#{i}")
+
+      # The O(1) newline check must never double-insert a separator.
+      refute File.read!(path) =~ "\n\n"
+    end
+
+    @tag :tmp_dir
+    test "inserts exactly one separator when the file does not end in a newline",
+         %{tmp_dir: dir} do
+      path = Path.join(dir, "nonewline.cast")
+
+      # Header written with no trailing newline; the last-byte check must notice.
+      header = ~s({"version":2,"width":80,"height":24,"timestamp":1700000000})
+      File.write!(path, header)
+
+      Asciicast.append!([{0, :output, "x"}], path)
+
+      session = Asciicast.read!(path)
+      assert Enum.map(session.events, fn {_t, _, d} -> d end) == ["x"]
+      refute File.read!(path) =~ "\n\n"
+    end
+
+    @tag :tmp_dir
+    test "adds no separator when the file already ends in a newline", %{
+      tmp_dir: dir
+    } do
+      path = Path.join(dir, "withnewline.cast")
+
+      Asciicast.write!(
+        %Session{
+          width: 80,
+          height: 24,
+          started_at: DateTime.from_unix!(1_700_000_000),
+          events: [{0, :output, "first"}]
+        },
+        path
+      )
+
+      # write!/2 terminates the last event line with "\n".
+      assert String.ends_with?(File.read!(path), "\n")
+
+      Asciicast.append!([{1_000_000, :output, "second"}], path)
+
+      session = Asciicast.read!(path)
+
+      assert Enum.map(session.events, fn {_t, _, d} -> d end) == [
+               "first",
+               "second"
+             ]
+
+      refute File.read!(path) =~ "\n\n"
+    end
+  end
+
+  describe "torn-tail vs flushed-corrupt distinction" do
+    import ExUnit.CaptureLog
+
+    defp session_lines(path) do
+      [header | events] = String.split(File.read!(path), "\n", trim: true)
+      {header, events}
+    end
+
+    @tag :tmp_dir
+    test "a newline-terminated but unparseable final line warns (committed corruption)",
+         %{tmp_dir: dir} do
+      path = Path.join(dir, "flushed_corrupt.cast")
+      Asciicast.write!(sample_session(3), path)
+
+      {header, [e0, e1, _e2]} = session_lines(path)
+      # Replace the final event line with garbage but keep the trailing newline:
+      # the line was fully flushed, so this is real corruption.
+      File.write!(
+        path,
+        Enum.join([header, e0, e1, "garbage-final"], "\n") <> "\n"
+      )
+
+      log =
+        capture_log(fn ->
+          session = Asciicast.read!(path)
+          assert length(session.events) == 2
+        end)
+
+      assert log =~ "malformed event line"
+    end
+
+    @tag :tmp_dir
+    test "a final line with no trailing newline recovers silently (torn mid-write)",
+         %{tmp_dir: dir} do
+      path = Path.join(dir, "torn_silent.cast")
+      Asciicast.write!(sample_session(3), path)
+
+      {header, [e0, e1, _e2]} = session_lines(path)
+
+      # Final line is a torn fragment with NO trailing newline: killed mid-write.
+      File.write!(path, Enum.join([header, e0, e1, "garbage-fragmen"], "\n"))
+
+      log =
+        capture_log(fn ->
+          session = Asciicast.read!(path)
+          assert length(session.events) == 2
+        end)
+
+      refute log =~ "malformed event line"
+    end
+  end
+
+  describe "read/1 error surfacing" do
+    @tag :tmp_dir
+    test "a structurally-invalid header surfaces distinctly from a garbage/truncated file",
+         %{tmp_dir: dir} do
+      bad_ts = Path.join(dir, "bad_ts.cast")
+
+      File.write!(
+        bad_ts,
+        ~s({"version":2,"width":80,"height":24,"timestamp":"not-a-number"}) <>
+          "\n"
+      )
+
+      # Bad timestamp shape: a distinct ArgumentError, not a masked read failure.
+      assert {:error, %ArgumentError{} = err} = Asciicast.read(bad_ts)
+      assert Exception.message(err) =~ "timestamp"
+
+      # Garbage/empty header: a JSON decode error, clearly a different failure.
+      garbage = Path.join(dir, "garbage_header.cast")
+      File.write!(garbage, "this is not json\n")
+      assert {:error, %Jason.DecodeError{}} = Asciicast.read(garbage)
+    end
+
+    test "decode/1 raises ArgumentError on a bad-timestamp header" do
+      content =
+        ~s({"version":2,"width":80,"height":24,"timestamp":[1,2,3]}) <> "\n"
+
+      assert_raise ArgumentError, ~r/timestamp/, fn ->
+        Asciicast.decode(content)
+      end
+    end
+  end
+
+  describe "single-writer contract documentation" do
+    test "append!/2 and the module document the single-writer contract" do
+      {:docs_v1, _, _, _, %{"en" => moduledoc}, _, docs} =
+        Code.fetch_docs(Asciicast)
+
+      assert moduledoc =~ "single writer"
+
+      append_doc =
+        Enum.find_value(docs, fn
+          {{:function, :append!, 2}, _, _, %{"en" => doc}, _} -> doc
+          _ -> nil
+        end)
+
+      assert append_doc =~ "Single-writer"
+    end
   end
 end
