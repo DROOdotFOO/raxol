@@ -87,8 +87,26 @@ defmodule Raxol.UI.Components.Harness.Block do
   line alone + the outcome row. The outcome row is omitted entirely when
   `exit_code`, `duration_ms`, and `cost` are all `nil`; otherwise it renders
   only the fields that are present.
+
+  ## Prominence (T8)
+
+  `context[:prominence]` (`0.0..1.0`) resolves the header/content/outcome
+  text colors through `Raxol.UI.Harness.Prominence` -- the H-K salience
+  solver, ground-aware. `context[:ground]` overrides the ground lightness
+  (default: OSC-11-detected, see
+  `Raxol.UI.Theming.SalienceTheme.detect_ground/0`).
+  `context[:legibility_floor]` (default `false`) is threaded through to
+  `Prominence.resolve/3`: the default is the **pure salience-gradient
+  fade** (context text recedes, legible on promotion); T9 sets it `true`
+  only for acting / interactive tiers where blind-reading risk lives (see
+  the `Prominence` moduledoc's "Two modes"). **Default is neutral**: when
+  `:prominence` is absent from `context`, or is `1.0`, no style is touched
+  -- the render is byte-identical to a pre-T8 render (no `:fg` added to any
+  style map). This is deliberate (roadmap unit T8's regression guard,
+  SAL-P-06): existing callers that never pass `:prominence` see zero change.
   """
 
+  alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.TextLayout
   alias Raxol.UI.TextMeasure
   alias Raxol.View.Components
@@ -333,21 +351,21 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   def render(%__MODULE__{} = block, context) do
     width = Map.get(context, :width, Raxol.Core.Defaults.terminal_width())
-    build_render(block, width)
+    build_render(block, width, context)
   rescue
     e ->
       emit_recovered(block.kind, e)
       render_fallback(block)
   end
 
-  defp build_render(block, width) do
-    header = header_view(block, width)
-    outcome_children = outcome_row_view(block.outcome)
+  defp build_render(block, width, context) do
+    header = header_view(block, width, context)
+    outcome_children = outcome_row_view(block.outcome, context)
 
     body_children =
       case block.fold do
         :folded -> [header]
-        :expanded -> [header | content_lines_view(block)]
+        :expanded -> [header | content_lines_view(block, context)]
       end
 
     Components.column(gap: 0, children: body_children ++ outcome_children)
@@ -365,16 +383,55 @@ defmodule Raxol.UI.Components.Harness.Block do
     )
   end
 
-  defp header_view(block, width) do
+  defp header_view(block, width, context) do
     prefix = "#{fold_icon(block.fold)} #{kind_glyph(block.kind)} "
     budget = max(width - TextMeasure.display_width(prefix), 1)
     summary_text = block |> summary() |> TextLayout.truncate(budget, :ellipsis)
 
     Components.text(
       content: prefix <> summary_text,
-      style: header_style(block.kind)
+      style: prominence_style(header_style(block.kind), context)
     )
   end
+
+  # Chrome neutral baseline (matches DiffViewer's `@chrome_base_fg`) faded
+  # per `context[:prominence]` through the T8 mapping layer. Absent or 1.0
+  # prominence is a no-op (see moduledoc "Prominence (T8)" -- SAL-P-06).
+  @chrome_fg "#B4B4B4"
+
+  defp prominence_style(style, context) do
+    case prominence_fg(context) do
+      nil -> style
+      fg -> Map.put(style, :fg, fg)
+    end
+  end
+
+  defp prominence_fg(context) do
+    case Map.get(context, :prominence, 1.0) do
+      p when is_number(p) and p >= 1.0 ->
+        nil
+
+      p when is_number(p) ->
+        Prominence.resolve(@chrome_fg, p, prominence_opts(context))
+
+      _other ->
+        nil
+    end
+  end
+
+  # Only pass `:ground` through when the caller actually supplied one --
+  # `Prominence.resolve/3` defaults it lazily (OSC-11-detected, else the
+  # solver's reference ground), and an explicit `ground: nil` would
+  # short-circuit that default. `:legibility_floor` is threaded through when
+  # present (T9 sets it true for acting tiers; default false = pure fade).
+  defp prominence_opts(context) do
+    []
+    |> put_opt(:ground, Map.get(context, :ground))
+    |> put_opt(:legibility_floor, Map.get(context, :legibility_floor))
+  end
+
+  defp put_opt(opts, _key, nil), do: opts
+  defp put_opt(opts, key, value), do: [{key, value} | opts]
 
   defp fold_icon(:folded), do: "▸"
   defp fold_icon(_fold), do: "▾"
@@ -453,7 +510,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp format_args([]), do: ""
   defp format_args(args), do: "(#{inspect(args)})"
 
-  defp content_lines_view(block) do
+  defp content_lines_view(block, context) do
     block
     |> body_lines()
     |> Enum.with_index()
@@ -461,7 +518,7 @@ defmodule Raxol.UI.Components.Harness.Block do
       Components.text(
         id: line_id(block, idx),
         content: line,
-        style: content_style(block.kind)
+        style: prominence_style(content_style(block.kind), context)
       )
     end)
   end
@@ -501,13 +558,18 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp split_lines(""), do: []
   defp split_lines(text), do: text |> to_display_text() |> String.split("\n")
 
-  defp outcome_row_view(outcome) do
+  defp outcome_row_view(outcome, context) do
     case outcome_parts(outcome) do
       [] ->
         []
 
       parts ->
-        [Components.text(content: Enum.join(parts, " · "), style: %{dim: true})]
+        [
+          Components.text(
+            content: Enum.join(parts, " · "),
+            style: prominence_style(%{dim: true}, context)
+          )
+        ]
     end
   end
 
