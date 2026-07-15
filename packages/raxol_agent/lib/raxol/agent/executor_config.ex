@@ -31,6 +31,7 @@ defmodule Raxol.Agent.ExecutorConfig do
           | :openai
           | :kimi
           | :ollama
+          | :lm_studio
           | :llm7
           | :openrouter
           | :lumo
