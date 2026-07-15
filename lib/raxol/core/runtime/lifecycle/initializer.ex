@@ -248,6 +248,49 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   defp maybe_start_driver(_dispatcher_pid, :ssh, _options), do: {:ok, nil}
   defp maybe_start_driver(_dispatcher_pid, :agent, _options), do: {:ok, nil}
 
+  # T2d: the inline driver profile (no alt-screen, no termbox ownership).
+  # A sibling of the default branch below, not a replacement -- see
+  # Raxol.Terminal.InlineDriver's moduledoc for the full option contract.
+  # The pass-through keys below are the constructor's test/embedding seams
+  # (output device, stty injection, probe control); everything else keeps
+  # the driver's own defaults (real tty detection, real stty, real probe).
+  @inline_driver_passthrough_opts [
+    :device,
+    :subscriber,
+    :stty,
+    :tty?,
+    :stty_enabled?,
+    :install_reader?,
+    :rows,
+    :probe?,
+    :capabilities,
+    :probe_opts,
+    :probe_env
+  ]
+
+  defp maybe_start_driver(dispatcher_pid, :inline, options) do
+    driver_opts =
+      [dispatcher_pid: dispatcher_pid] ++
+        Keyword.take(options, @inline_driver_passthrough_opts)
+
+    case Raxol.Terminal.InlineDriver.start_link(driver_opts) do
+      {:ok, driver_pid} ->
+        Log.info_with_context(
+          "[Lifecycle.Initializer] Inline Driver started with PID: #{inspect(driver_pid)}"
+        )
+
+        {:ok, driver_pid}
+
+      {:error, reason} ->
+        Log.warning_with_context(
+          "[Lifecycle.Initializer] Inline Driver failed to start: #{inspect(reason)}. Continuing without driver.",
+          %{}
+        )
+
+        {:ok, nil}
+    end
+  end
+
   defp maybe_start_driver(dispatcher_pid, _environment, options) do
     driver_opts = [
       dispatcher_pid: dispatcher_pid,

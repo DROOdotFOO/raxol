@@ -533,6 +533,15 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
         updated_buffer = Backends.apply_cells_to_buffer(final_cells, state)
         {:ok, %{state | buffer: updated_buffer}}
 
+      :inline ->
+        # T2d: the inline driver profile has no renderer of its own yet --
+        # T2b (printed-history append) and T2c (pinned viewport) own that
+        # emit vocabulary. Until they land, buffer is maintained for
+        # inspection only, mirroring :agent, so registering the atom here
+        # doesn't silently fall into `:unknown_environment` below.
+        updated_buffer = Backends.apply_cells_to_buffer(final_cells, state)
+        {:ok, %{state | buffer: updated_buffer}}
+
       other ->
         Raxol.Core.Runtime.Log.error_with_stacktrace(
           "Unknown rendering environment",
