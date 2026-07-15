@@ -107,6 +107,14 @@ defmodule Raxol.Harness.T2dTeardownNegativeTest do
   describe "Tier B: LC-N-KILL9-RESIDUAL + LC-N-KILL9-RECOVER" do
     @describetag :pty
     @describetag :unix_only
+    # Excluded on CI: both cases boot the full inline app under a real pty via
+    # `mix run` and await READY within the harness timeout. CI's runner gives
+    # the mix-run child no controlling tty and a cold boot that overruns the
+    # 15s await -- READY times out before the SIGSTOP test's raw-mode
+    # precondition gate is even reached -- so these are real-terminal facts,
+    # not driver regressions. The sibling tp_pty_test.exs Tier B cases stay
+    # green on CI only because they boot instant `sh -c` shells. Run locally.
+    @describetag :skip_on_ci
 
     test "kill -9 emits no teardown tokens at all (byte-stream fact)" do
       {:ok, session} = start_mock_app_under_pty()
