@@ -6,7 +6,6 @@ defmodule Raxol.Terminal.ControlCodes do
   Relies on Emulator state and ScreenBuffer for actions.
   """
 
-
   alias Raxol.Terminal.ANSI.CharacterSets
   alias Raxol.Terminal.Cursor.Movement
   alias Raxol.Terminal.Emulator
@@ -114,12 +113,29 @@ defmodule Raxol.Terminal.ControlCodes do
     active_buffer = Emulator.get_screen_buffer(emulator)
     buffer_height = ScreenBuffer.get_height(active_buffer)
 
-    {_, current_row} =
+    # Cursor.Manager positions are {row, col} (see Cursor.Movement --
+    # `position: {new_row, col}`). This destructure previously read the
+    # COLUMN as the row, so the at-bottom-margin branch effectively never
+    # fired and LF at the bottom never scrolled (TE amend, finding 3+8).
+    {current_row, _col} =
       Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor)
 
-    last_row = buffer_height - 1
+    # LF scrolls when the cursor sits on the bottom row of the EFFECTIVE
+    # scroll region (DECSTBM stores it on emulator.scroll_region; full
+    # screen otherwise). A cursor below an interior region (e.g. in a
+    # footer) falls through to plain downward movement, clamped at the
+    # screen bottom -- no scroll, matching DECSTBM semantics.
+    region_bottom =
+      case emulator.scroll_region do
+        {top, bottom}
+        when is_integer(top) and is_integer(bottom) and top <= bottom ->
+          min(bottom, buffer_height - 1)
 
-    handle_lf_cursor_movement(current_row == last_row, emulator)
+        _ ->
+          buffer_height - 1
+      end
+
+    handle_lf_cursor_movement(current_row == region_bottom, emulator)
   end
 
   defp move_cursor_down(emulator) do
@@ -127,7 +143,11 @@ defmodule Raxol.Terminal.ControlCodes do
     {buffer_width, buffer_height} = ScreenBuffer.get_dimensions(active_buffer)
     cursor = emulator.cursor
 
-    {current_col, current_row} =
+    # Position tuples are {row, col} -- this previously destructured them
+    # swapped, feeding the ROW into the LNM column adjustment below, which
+    # made every LF drift the column right by the row number (TE amend,
+    # finding 3+8).
+    {current_row, current_col} =
       Raxol.Terminal.Cursor.Manager.get_position(cursor)
 
     last_row = buffer_height - 1
@@ -209,14 +229,19 @@ defmodule Raxol.Terminal.ControlCodes do
 
     # 2. Perform CR logic on potentially updated state
     Raxol.Core.Runtime.Log.debug("[handle_cr] Moving cursor to column 0")
-    # Get current Y coordinate
-    {_cx, cy} = Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor)
+    # Keep the current row (position tuples are {row, col} and move_to is
+    # (cursor, row, col) -- this previously destructured the COLUMN as the
+    # row and passed the arguments swapped, so every CR teleported the
+    # cursor to row 0; TE amend, finding 3+8) and move to column 0. Read
+    # the row AFTER the pending wrap so CR lands on the wrapped row.
+    {current_row, _col} =
+      Raxol.Terminal.Cursor.Manager.get_position(emulator_after_pending_wrap.cursor)
 
     final_cursor =
       Raxol.Terminal.Cursor.Manager.move_to(
         emulator_after_pending_wrap.cursor,
-        0,
-        cy
+        current_row,
+        0
       )
 
     Raxol.Core.Runtime.Log.debug(
@@ -518,11 +543,33 @@ defmodule Raxol.Terminal.ControlCodes do
   end
 
   # Helper functions for refactored if statements
+  #
+  # LF with the cursor on the bottom row of the effective scroll region:
+  # scroll the region up one line (Commands.Screen.scroll_up/2 feeds the
+  # evicted row into emulator.scrollback_buffer per the TE eviction rules
+  # in Emulator.BufferOperations.feed_scrollback_from_region_scroll/3).
+  # The cursor row stays on the bottom margin, per VT semantics; the
+  # column follows LNM exactly like the non-scrolling branch (col -> 0
+  # when line_feed_mode is enabled, unchanged otherwise). The previous
+  # `move_cursor_down |> Emulator.maybe_scroll` pipeline never scrolled:
+  # move_cursor_down clamps at the bottom margin and Emulator.maybe_scroll
+  # only fires on an out-of-bounds row, so the two composed to a no-op.
   defp handle_lf_cursor_movement(true, emulator) do
-    emulator
-    |> move_cursor_down()
-    |> Emulator.maybe_scroll()
-    |> reset_last_col_exceeded_after_scroll()
+    line_feed_mode =
+      Raxol.Terminal.ModeManager.mode_enabled?(
+        emulator.mode_manager,
+        :line_feed_mode
+      )
+
+    {row, col} = Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor)
+    target_col = get_target_column(line_feed_mode, col)
+
+    scrolled = Raxol.Terminal.Commands.Screen.scroll_up(emulator, 1)
+
+    pinned_cursor =
+      Raxol.Terminal.Cursor.Manager.move_to(scrolled.cursor, row, target_col)
+
+    reset_last_col_exceeded_after_scroll(%{scrolled | cursor: pinned_cursor})
   end
 
   defp handle_lf_cursor_movement(_at_last_row, emulator) do
@@ -533,11 +580,21 @@ defmodule Raxol.Terminal.ControlCodes do
 
   defp handle_pending_wrap(true, emulator) do
     Raxol.Core.Runtime.Log.debug("[handle_cr] Pending wrap detected")
-    # Perform the deferred wrap: move cursor to col 0, next line
-    {_cx, cy} = Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor)
+    # Perform the deferred wrap: move cursor to col 0, next line. Position
+    # tuples are {row, col} and move_to is (cursor, row, col) -- this
+    # previously destructured the COLUMN as the row and passed the
+    # arguments swapped (TE amend, finding 3+8). The unclamped row+1 may
+    # land past the screen bottom; Emulator.maybe_scroll below detects
+    # that overflow and scrolls (feeding scrollback per the TE rules).
+    {current_row, _col} =
+      Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor)
 
     wrapped_cursor =
-      Raxol.Terminal.Cursor.Manager.move_to(emulator.cursor, 0, cy + 1)
+      Raxol.Terminal.Cursor.Manager.move_to(
+        emulator.cursor,
+        current_row + 1,
+        0
+      )
 
     Raxol.Core.Runtime.Log.debug(
       "[handle_cr] Cursor after wrap: #{inspect(Raxol.Terminal.Cursor.Manager.get_position(wrapped_cursor))}"

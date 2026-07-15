@@ -72,14 +72,20 @@ defmodule Raxol.Terminal.Emulator.WritingBufferTest do
       {emulator_after, _output} =
         Emulator.process_input(emulator, "Hello\nWorld")
 
-      # Corrected assertion: After "Hello\nWorld" with LNM off, cursor should be at {1, 5}
-      assert Emulator.get_cursor_position(emulator_after) == {1, 5},
-             "Cursor should be at row 1, col 5"
+      # With LNM off, a bare LF moves down WITHOUT resetting the column
+      # (VT semantics -- that's CR's job): "Hello" ends at col 5, LF keeps
+      # col 5 on row 1, "World" writes cols 5..9, cursor lands at {1, 10}.
+      # (The previous {1, 5} expectation codified a coordinate-order bug in
+      # ControlCodes.move_cursor_down that happened to reset the column to
+      # the row number -- 0 here; fixed in unit TE's amend.)
+      assert Emulator.get_cursor_position(emulator_after) == {1, 10},
+             "Cursor should be at row 1, col 10"
 
       # Verify buffer content
       buffer = Emulator.get_screen_buffer(emulator_after)
 
-      # Expected Screen: Line 0: "Hello", Line 1: "World" (cursor at {10, 1})
+      # Expected Screen: Line 0: "Hello", Line 1: "     World" (starts at
+      # col 5 -- LF preserved the column), cursor at {1, 10}
       expected_cells_line0 =
         [
           Cell.new("H"),
@@ -90,13 +96,14 @@ defmodule Raxol.Terminal.Emulator.WritingBufferTest do
         ] ++ List.duplicate(Cell.new(" "), 75)
 
       _expected_cells_line1 =
-        [
-          Cell.new("W"),
-          Cell.new("o"),
-          Cell.new("r"),
-          Cell.new("l"),
-          Cell.new("d")
-        ] ++ List.duplicate(Cell.new(" "), 75)
+        List.duplicate(Cell.new(" "), 5) ++
+          [
+            Cell.new("W"),
+            Cell.new("o"),
+            Cell.new("r"),
+            Cell.new("l"),
+            Cell.new("d")
+          ] ++ List.duplicate(Cell.new(" "), 70)
 
       # Compare relevant fields directly for line 0
       actual_cells_line0 = Enum.at(buffer.cells, 0)
@@ -118,8 +125,8 @@ defmodule Raxol.Terminal.Emulator.WritingBufferTest do
       end)
 
       # Check cursor position
-      assert Emulator.get_cursor_position(emulator_after) == {1, 5},
-             "Cursor should be at row 1, col 5"
+      assert Emulator.get_cursor_position(emulator_after) == {1, 10},
+             "Cursor should be at row 1, col 10"
     end
 
     test "handles basic text input with newline AND MORE", %{emulator: emulator} do
@@ -129,14 +136,18 @@ defmodule Raxol.Terminal.Emulator.WritingBufferTest do
       {emulator_after, ""} =
         Emulator.process_input(emulator, "Line 1\n Line 2")
 
-      # Check cursor position after processing
-      assert Emulator.get_cursor_position(emulator_after) == {1, 7},
-             "Cursor should be at row 1, col 7"
+      # With LNM off, LF keeps the column (VT semantics; see the newline
+      # test above): "Line 1" ends at col 6, " Line 2" (7 chars) writes
+      # cols 6..12 on row 1, cursor lands at {1, 13}.
+      assert Emulator.get_cursor_position(emulator_after) == {1, 13},
+             "Cursor should be at row 1, col 13"
 
       # Check buffer content after processing
       buffer = Emulator.get_screen_buffer(emulator_after)
 
-      # Expected Screen: Line 0: "Line 1", Line 1: "       Line 2" (starts at col 7 after space)
+      # Expected Screen: Line 0: "Line 1", Line 1: "Line 2" starting at
+      # col 7 (LF kept col 6, then the literal leading space of " Line 2"
+      # was written there)
       expected_buffer = %Raxol.Terminal.ScreenBuffer{
         width: 80,
         height: 24,
@@ -151,16 +162,18 @@ defmodule Raxol.Terminal.Emulator.WritingBufferTest do
               Cell.new(" "),
               Cell.new("1")
             ] ++ List.duplicate(Cell.new(" "), 74),
-            # Line 1: " Line 2" + padding
-            [
-              Cell.new(" "),
-              Cell.new("L"),
-              Cell.new("i"),
-              Cell.new("n"),
-              Cell.new("e"),
-              Cell.new(" "),
-              Cell.new("2")
-            ] ++ List.duplicate(Cell.new(" "), 73)
+            # Line 1: 6 untouched cols + " Line 2" (written cols 6..12)
+            # + padding
+            List.duplicate(Cell.new(" "), 6) ++
+              [
+                Cell.new(" "),
+                Cell.new("L"),
+                Cell.new("i"),
+                Cell.new("n"),
+                Cell.new("e"),
+                Cell.new(" "),
+                Cell.new("2")
+              ] ++ List.duplicate(Cell.new(" "), 67)
           ] ++ List.duplicate(List.duplicate(Cell.new(" "), 80), 22),
         scrollback: [],
         scrollback_limit: 1000,
@@ -177,8 +190,8 @@ defmodule Raxol.Terminal.Emulator.WritingBufferTest do
              "Screen buffer cells mismatch"
 
       # Check cursor position
-      assert Emulator.get_cursor_position(emulator_after) == {1, 7},
-             "Cursor should be at row 1, col 7"
+      assert Emulator.get_cursor_position(emulator_after) == {1, 13},
+             "Cursor should be at row 1, col 13"
     end
 
     test "get_cell_at retrieves cell at valid coordinates", %{

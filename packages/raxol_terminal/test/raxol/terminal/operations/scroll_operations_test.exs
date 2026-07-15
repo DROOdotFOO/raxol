@@ -84,6 +84,75 @@ defmodule Raxol.Terminal.Operations.ScrollOperationsTest do
     end
   end
 
+  describe "scroll_up/2 scrollback feed (TE unit)" do
+    defp scrollback_row_text(row) do
+      row
+      |> Enum.map_join("", fn
+        %{char: char} when is_binary(char) -> char
+        _ -> " "
+      end)
+      |> String.trim_trailing()
+    end
+
+    test "full-screen scroll (no explicit region) feeds the evicted row into scrollback" do
+      emulator = TestUtils.create_test_emulator()
+      emulator = ScrollOperations.write_string(emulator, 0, 0, "row0", %{})
+
+      emulator = ScrollOperations.scroll_up(emulator, 1)
+
+      assert [row] = Raxol.Terminal.Emulator.get_scrollback(emulator)
+      assert scrollback_row_text(row) == "row0"
+    end
+
+    test "top-anchored explicit region (top = 0) feeds the evicted row into scrollback" do
+      emulator = TestUtils.create_test_emulator()
+      emulator = ScrollOperations.write_string(emulator, 0, 0, "top-row", %{})
+      emulator = ScrollOperations.set_scroll_region(emulator, 0, 5)
+
+      emulator = ScrollOperations.scroll_up(emulator, 1)
+
+      assert [row] = Raxol.Terminal.Emulator.get_scrollback(emulator)
+      assert scrollback_row_text(row) == "top-row"
+    end
+
+    test "interior region (top > 0) discards the evicted row -- no scrollback feed" do
+      emulator = TestUtils.create_test_emulator()
+      emulator = ScrollOperations.write_string(emulator, 0, 5, "line1", %{})
+      emulator = ScrollOperations.write_string(emulator, 0, 6, "line2", %{})
+      emulator = ScrollOperations.set_scroll_region(emulator, 5, 7)
+
+      emulator = ScrollOperations.scroll_up(emulator, 1)
+
+      assert Raxol.Terminal.Emulator.get_scrollback(emulator) == []
+    end
+
+    test "alternate screen buffer scroll never feeds scrollback" do
+      emulator = TestUtils.create_test_emulator()
+      emulator = %{emulator | active_buffer_type: :alternate}
+      emulator = ScrollOperations.write_string(emulator, 0, 0, "alt-row", %{})
+
+      emulator = ScrollOperations.scroll_up(emulator, 1)
+
+      assert Raxol.Terminal.Emulator.get_scrollback(emulator) == []
+    end
+
+    test "respects scrollback_limit, trimming the oldest entries first" do
+      emulator = TestUtils.create_test_emulator()
+      emulator = %{emulator | scrollback_limit: 2}
+
+      emulator =
+        Enum.reduce(0..4, emulator, fn i, acc ->
+          acc
+          |> ScrollOperations.write_string(0, 0, "r#{i}", %{})
+          |> ScrollOperations.scroll_up(1)
+        end)
+
+      scrollback = Raxol.Terminal.Emulator.get_scrollback(emulator)
+      assert length(scrollback) == 2
+      assert Enum.map(scrollback, &scrollback_row_text/1) == ["r3", "r4"]
+    end
+  end
+
   describe "scroll_down/2" do
     test "scrolls down within scroll region" do
       emulator = TestUtils.create_test_emulator()
