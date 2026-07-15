@@ -13,4 +13,11 @@ unless System.get_env("RAXOL_SESSIONS_DIR") do
   System.at_exit(fn _ -> File.rm_rf(sessions_dir) end)
 end
 
-ExUnit.start(exclude: [:slow, :integration, :docker])
+# The invariant suite's fault-injection harness lives under test/invariants/
+# (not test/support/, which elixirc_paths compiles) — load it explicitly.
+Code.require_file("invariants/support/fault_journal.ex", __DIR__)
+
+# :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
+# until their units (U4–U9) land. :mutation — negative-control checklists
+# (meta-invariant m4), run on demand, never in regular CI.
+ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation])
