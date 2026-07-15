@@ -5,17 +5,24 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
   defp default_context, do: %{theme: Raxol.UI.Theming.Theme.default_theme()}
 
-  # A fold pill row's second child is a plain `text()` node (built by
-  # `fold_row/2`); every other row's second child is a `content_spans/4`
-  # row wrapping one-or-more syntax/word-diff spans. So "does this row's
-  # content look like a fold pill" is exactly "is the second child a text
-  # node whose content mentions 'unchanged lines'".
+  # A fold row is [left-dashes, label, right-dashes]; its second child is
+  # a plain text node whose content mentions "unchanged lines". Every
+  # other row's second child is a `content_spans` row.
   defp fold_pill?(row) do
     case Enum.at(row.children, 1) do
       %{type: :text, content: content} -> content =~ "unchanged lines"
       _other -> false
     end
   end
+
+  # A gutter is a two-span row: [bar, numbers] (bar keeps identity color,
+  # numbers are prominence-faded chrome).
+  defp gutter_row(row), do: hd(row.children)
+  defp gutter_bar(row), do: hd(gutter_row(row).children)
+  defp gutter_numbers(row), do: Enum.at(gutter_row(row).children, 1)
+
+  defp gutter_text(row),
+    do: Enum.map_join(gutter_row(row).children, & &1.content)
 
   describe "init/1" do
     test "initializes with default values" do
@@ -205,9 +212,11 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       [_header, _divider | diff_lines] = rendered.children
       [_equal_a, delete_row, insert_row, _equal_c] = diff_lines
 
-      [delete_gutter, delete_content] = delete_row.children
-      assert delete_gutter.content =~ "▌"
-      assert delete_gutter.style.fg == "#FF6762"
+      [_delete_gutter, delete_content] = delete_row.children
+      assert gutter_bar(delete_row).content == "▌"
+      assert gutter_bar(delete_row).style.fg == "#FF6762"
+      # numbers on a washed (changed) row hold 80% chrome prominence
+      assert gutter_numbers(delete_row).style.fg == "#919191"
 
       # "b" -> "x" is a full single-token change (no shared substring), so
       # the whole span is word-diff-changed -- the emphasis tier, not the
@@ -219,9 +228,9 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert delete_span.style.fg == "#FF6762"
       assert delete_span.style.bg == "#552527"
 
-      [insert_gutter, insert_content] = insert_row.children
-      assert insert_gutter.content =~ "▌"
-      assert insert_gutter.style.fg == "#5ECC71"
+      [_insert_gutter, insert_content] = insert_row.children
+      assert gutter_bar(insert_row).content == "▌"
+      assert gutter_bar(insert_row).style.fg == "#5ECC71"
 
       [_leader, insert_span] = insert_content.children
       assert insert_span.content == "x"
@@ -234,16 +243,17 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       [_header, _divider | diff_lines] = rendered.children
       [equal_a, _delete_row, _insert_row, equal_c] = diff_lines
 
-      [gutter_a, content_a] = equal_a.children
-      refute gutter_a.content =~ "▌"
-      assert gutter_a.style.fg == :dim
+      [_gutter_a, content_a] = equal_a.children
+      refute gutter_text(equal_a) =~ "▌"
+      # context-row numbers are faded chrome (hex), one tier under content
+      assert is_binary(gutter_numbers(equal_a).style.fg)
       [_leader, span_a] = content_a.children
       assert span_a.content == "a"
       assert span_a.style.fg == :dim
       refute Map.has_key?(span_a.style, :bg)
 
-      [gutter_c, content_c] = equal_c.children
-      refute gutter_c.content =~ "▌"
+      [_gutter_c, content_c] = equal_c.children
+      refute gutter_text(equal_c) =~ "▌"
       [_leader, span_c] = content_c.children
       assert span_c.content == "c"
     end
@@ -363,9 +373,13 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
       assert length(fold_rows) == 1
       [fold_row] = fold_rows
-      [_gutter, content] = fold_row.children
+      [left_dashes, label, right_dashes] = fold_row.children
       # 10 leading equal lines, context 3 => 10 - 6 = 4 hidden.
-      assert content.content =~ "4 unchanged lines"
+      assert label.content =~ "4 unchanged lines"
+      # dashes at 20% prominence, label at 40%
+      assert left_dashes.style.fg == "#313131"
+      assert right_dashes.style.fg == "#313131"
+      assert label.style.fg == "#4f4f4f"
 
       # The 10-line leading run folds to 3 head + 1 pill + 3 tail (7 rows);
       # + delete + insert (2, unaffected); + a 3-line trailing run that's
@@ -397,12 +411,10 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       # is the last kept head row (old line 3); index 8 is the fold; index 9
       # is the first kept tail row before the change (old line 8).
       last_head_row = Enum.at(diff_lines, 2)
-      [last_head_gutter, _content] = last_head_row.children
-      assert last_head_gutter.content =~ "3"
+      assert gutter_text(last_head_row) =~ "3"
 
       first_tail_row = Enum.at(diff_lines, 4)
-      [first_tail_gutter, _content] = first_tail_row.children
-      assert first_tail_gutter.content =~ "8"
+      assert gutter_text(first_tail_row) =~ "8"
     end
   end
 
@@ -528,8 +540,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
       changed_row =
         Enum.find(old_column.children, fn row ->
-          [gutter, _content] = row.children
-          gutter.content =~ "▌"
+          gutter_text(row) =~ "▌"
         end)
 
       [_gutter, content] = changed_row.children
@@ -615,20 +626,18 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       Enum.map_join(content.children, & &1.content)
     end
 
-    defp gutter_of(row), do: hd(row.children)
-
     test "an over-budget UNPAIRED delete mid-ellipses to one row" do
       long = "removed " <> String.duplicate("x", 80) <> "TAIL5"
       rows = long_ctx_render("keep\n" <> long, "keep")
 
       delete_row =
-        Enum.find(rows, fn row -> gutter_of(row).content =~ "▌" end)
+        Enum.find(rows, fn row -> gutter_text(row) =~ "▌" end)
 
       text = row_text(delete_row)
       assert text =~ "…"
       assert String.trim_trailing(text) =~ ~r/TAIL5$/
       # exactly one rendered row for the delete: no continuation gutters
-      assert Enum.count(rows, fn row -> gutter_of(row).content =~ "▌" end) == 1
+      assert Enum.count(rows, fn row -> gutter_text(row) =~ "▌" end) == 1
     end
 
     test "an over-budget insert soft-wraps in full" do
@@ -636,14 +645,14 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       rows = long_ctx_render("keep", "keep\n" <> long)
 
       insert_rows =
-        Enum.filter(rows, fn row -> gutter_of(row).content =~ "▌" end)
+        Enum.filter(rows, fn row -> gutter_text(row) =~ "▌" end)
 
       assert length(insert_rows) > 1
 
       # continuation rows keep the bar but a blank line number
       [first | continuations] = insert_rows
-      assert gutter_of(first).content =~ ~r/▌\s*\d/
-      assert Enum.all?(continuations, &(gutter_of(&1).content =~ ~r/▌\s+$/))
+      assert gutter_text(first) =~ ~r/▌\s*\d/
+      assert Enum.all?(continuations, &(gutter_text(&1) =~ ~r/▌\s+$/))
 
       # nothing lost: concatenated rows reconstruct the full line
       full = Enum.map_join(insert_rows, "", &row_text/1)
@@ -658,19 +667,19 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       rows = long_ctx_render(old_long, new_long)
 
       change_rows =
-        Enum.filter(rows, fn row -> gutter_of(row).content =~ "▌" end)
+        Enum.filter(rows, fn row -> gutter_text(row) =~ "▌" end)
 
       # delete rows come first, then insert rows (unified emits the run's
       # deletes then inserts). The insert wrapped into K rows; the longer
       # delete must occupy exactly K rows too, ellipsis-truncated.
       insert_count =
         Enum.count(change_rows, fn row ->
-          gutter_of(row).style.fg == "#5ECC71"
+          gutter_bar(row).style.fg == "#5ECC71"
         end)
 
       delete_count =
         Enum.count(change_rows, fn row ->
-          gutter_of(row).style.fg == "#FF6762"
+          gutter_bar(row).style.fg == "#FF6762"
         end)
 
       assert insert_count > 1
@@ -678,7 +687,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
       delete_texts =
         change_rows
-        |> Enum.filter(fn row -> gutter_of(row).style.fg == "#FF6762" end)
+        |> Enum.filter(fn row -> gutter_bar(row).style.fg == "#FF6762" end)
         |> Enum.map(&row_text/1)
 
       assert List.last(delete_texts) =~ "…"

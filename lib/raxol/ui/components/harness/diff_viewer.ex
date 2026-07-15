@@ -378,6 +378,21 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   defp dechroma_row_bg(:equal), do: nil
 
+  # Neutral base for chrome text (line numbers, fold rows): the Salience
+  # baseline-tier neutral, faded per element by prominence.
+  @chrome_base_fg "#B4B4B4"
+
+  # Line-number prominence rides 20pp under its row's content prominence
+  # (never below the 40% floor); rows with a wash present (changed rows)
+  # hold the numbers at 80% so they anchor against the tinted background.
+  defp gutter_prominence(:changed, _content_prominence), do: 0.8
+
+  defp gutter_prominence(:context, content_prominence),
+    do: max(content_prominence - 0.2, 0.4)
+
+  defp chrome_fg(prominence),
+    do: fade_toward_ground(@chrome_base_fg, prominence)
+
   # -- Render context: precomputed per-render inputs shared by both modes --
 
   defp build_render_context(state, ops, gutter_width, avail_width) do
@@ -424,6 +439,18 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   defp unified_budget(avail_width, gutter_width) do
     max(avail_width - (2 * gutter_width + 1) - @bar_width - 1, 4)
   end
+
+  # Full rendered row width (gutter block + leader + content budget), for
+  # centering the fold row. nil when the available width is unknown.
+  defp unified_row_width(%{unified_budget: nil}), do: nil
+
+  defp unified_row_width(ctx),
+    do: @bar_width + 2 * ctx.gutter_width + 1 + 1 + ctx.unified_budget
+
+  defp split_row_width(%{pane_budget: nil}), do: nil
+
+  defp split_row_width(ctx),
+    do: @bar_width + ctx.gutter_width + 1 + ctx.pane_budget
 
   # Content columns available inside one split pane, or nil when the
   # available width is unknown (then nothing truncates and flex does its
@@ -535,9 +562,9 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     end
   end
 
-  defp fold_text(count) do
+  defp fold_label(count) do
     plural = if count == 1, do: "", else: "s"
-    "───── ⋯ #{count} unchanged line#{plural} ⋯ ─────"
+    " ⋯ #{count} unchanged line#{plural} ⋯ "
   end
 
   # -- Unified mode: one column, gutter bar + numbers, spans inline --
@@ -658,11 +685,20 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp unified_line({:fold, count}, ctx) do
-    [fold_row(2 * ctx.gutter_width + 3, count)]
+    [fold_row(count, unified_row_width(ctx))]
   end
 
   defp unified_line({:equal, line, _ranges, old_no, new_no, dist}, ctx) do
-    gutter = unified_gutter(" ", old_no, new_no, ctx.gutter_width, :dim, nil)
+    gutter =
+      unified_gutter(
+        " ",
+        old_no,
+        new_no,
+        ctx.gutter_width,
+        nil,
+        nil,
+        gutter_prominence(:context, prominence(dist))
+      )
 
     content =
       content_spans(:equal, line, [], old_no, ctx,
@@ -688,7 +724,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
           nil,
           ctx.gutter_width,
           del_base(),
-          del_gutter_bg()
+          del_gutter_bg(),
+          gutter_prominence(:changed, 1.0)
         )
       end
     )
@@ -709,7 +746,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
           no,
           ctx.gutter_width,
           add_base(),
-          add_gutter_bg()
+          add_gutter_bg(),
+          gutter_prominence(:changed, 1.0)
         )
       end
     )
@@ -854,12 +892,29 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     pieces_row(kind, ranges, row_pieces, budget, 1.0)
   end
 
-  defp unified_gutter(bar, old_no, new_no, width, fg, bg) do
-    text = bar <> pad(old_no, width) <> " " <> pad(new_no, width)
-    Components.text(content: text, style: gutter_style(fg, bg))
+  # Gutter = two spans: the bar keeps its full-strength identity color;
+  # the line numbers are chrome, faded to their own prominence.
+  defp unified_gutter(bar, old_no, new_no, width, bar_fg, bg, number_prom) do
+    numbers = pad(old_no, width) <> " " <> pad(new_no, width)
+    gutter_spans(bar, numbers, bar_fg, bg, number_prom)
   end
 
+  defp gutter_spans(bar, numbers, bar_fg, bg, number_prom) do
+    Components.row(
+      gap: 0,
+      children: [
+        Components.text(content: bar, style: gutter_style(bar_fg, bg)),
+        Components.text(
+          content: numbers,
+          style: gutter_style(chrome_fg(number_prom), bg)
+        )
+      ]
+    )
+  end
+
+  defp gutter_style(nil, nil), do: %{}
   defp gutter_style(fg, nil), do: %{fg: fg}
+  defp gutter_style(nil, bg), do: %{bg: bg}
   defp gutter_style(fg, bg), do: %{fg: fg, bg: bg}
 
   # -- Split mode: old | new side by side, blank filler for unmatched lines --
@@ -982,14 +1037,22 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp split_old_line({:fold, count}, ctx) do
-    fold_row(ctx.gutter_width + 2, count)
+    fold_row(count, split_row_width(ctx))
   end
 
   defp split_old_line(
          {:equal, old_no, line, _new_no, _new_line, _, _, dist},
          ctx
        ) do
-    gutter = split_gutter(" ", old_no, ctx.gutter_width, :dim, nil)
+    gutter =
+      split_gutter(
+        " ",
+        old_no,
+        ctx.gutter_width,
+        nil,
+        nil,
+        gutter_prominence(:context, prominence(dist))
+      )
 
     content =
       content_spans(:equal, line, [], old_no, ctx,
@@ -1001,7 +1064,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp split_old_line({:change, nil, nil, _new_no, _new_line, _, _}, ctx) do
-    gutter = split_gutter(" ", nil, ctx.gutter_width, :dim, nil)
+    gutter = split_gutter(" ", nil, ctx.gutter_width, nil, nil, 0.4)
     Components.row(gap: 0, children: [gutter, filler_row()])
   end
 
@@ -1010,7 +1073,14 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
          ctx
        ) do
     gutter =
-      split_gutter("▌", old_no, ctx.gutter_width, del_base(), del_gutter_bg())
+      split_gutter(
+        "▌",
+        old_no,
+        ctx.gutter_width,
+        del_base(),
+        del_gutter_bg(),
+        gutter_prominence(:changed, 1.0)
+      )
 
     content =
       content_spans(:delete, line, del_ranges, old_no, ctx,
@@ -1021,14 +1091,22 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp split_new_line({:fold, count}, ctx) do
-    fold_row(ctx.gutter_width + 2, count)
+    fold_row(count, split_row_width(ctx))
   end
 
   defp split_new_line(
          {:equal, _old_no, _old_line, new_no, line, _, _, dist},
          ctx
        ) do
-    gutter = split_gutter(" ", new_no, ctx.gutter_width, :dim, nil)
+    gutter =
+      split_gutter(
+        " ",
+        new_no,
+        ctx.gutter_width,
+        nil,
+        nil,
+        gutter_prominence(:context, prominence(dist))
+      )
 
     content =
       content_spans(:equal, line, [], new_no, ctx,
@@ -1040,7 +1118,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp split_new_line({:change, _old_no, _old_line, nil, nil, _, _}, ctx) do
-    gutter = split_gutter(" ", nil, ctx.gutter_width, :dim, nil)
+    gutter = split_gutter(" ", nil, ctx.gutter_width, nil, nil, 0.4)
     Components.row(gap: 0, children: [gutter, filler_row()])
   end
 
@@ -1049,7 +1127,14 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
          ctx
        ) do
     gutter =
-      split_gutter("▌", new_no, ctx.gutter_width, add_base(), add_gutter_bg())
+      split_gutter(
+        "▌",
+        new_no,
+        ctx.gutter_width,
+        add_base(),
+        add_gutter_bg(),
+        gutter_prominence(:changed, 1.0)
+      )
 
     content =
       content_spans(:insert, line, ins_ranges, new_no, ctx,
@@ -1059,9 +1144,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     Components.row(gap: 0, children: [gutter, content])
   end
 
-  defp split_gutter(bar, no, width, fg, bg) do
-    text = bar <> pad(no, width)
-    Components.text(content: text, style: gutter_style(fg, bg))
+  defp split_gutter(bar, no, width, bar_fg, bg, number_prom) do
+    gutter_spans(bar, pad(no, width), bar_fg, bg, number_prom)
   end
 
   # An absent line renders as plain blank space -- the row exists only to
@@ -1073,19 +1157,40 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     )
   end
 
-  # -- Fold pill row (shared shape for unified + both split panes) --
+  # -- Fold row (shared shape for unified + both split panes) --
+  #
+  # Center-positioned across the full row width when it's known: dashes
+  # rule the whole line at 20% prominence, the "N unchanged lines" label
+  # sits centered at 40%.
 
-  defp fold_row(gutter_span_width, count) do
+  defp fold_row(count, row_width) do
+    label = fold_label(count)
+    label_width = TextMeasure.display_width(label)
+
+    {left, right} =
+      case row_width do
+        nil ->
+          {5, 5}
+
+        total when total > label_width + 2 ->
+          side = total - label_width
+          {div(side, 2), side - div(side, 2)}
+
+        _too_narrow ->
+          {1, 1}
+      end
+
     Components.row(
-      gap: 1,
+      gap: 0,
       children: [
         Components.text(
-          content: String.duplicate(" ", gutter_span_width),
-          style: %{}
+          content: String.duplicate("─", left),
+          style: %{fg: chrome_fg(0.2)}
         ),
+        Components.text(content: label, style: %{fg: chrome_fg(0.4)}),
         Components.text(
-          content: fold_text(count),
-          style: %{fg: :dim}
+          content: String.duplicate("─", right),
+          style: %{fg: chrome_fg(0.2)}
         )
       ]
     )
