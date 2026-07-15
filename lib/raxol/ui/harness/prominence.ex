@@ -1,23 +1,17 @@
 defmodule Raxol.UI.Harness.Prominence do
   @moduledoc """
   Maps a continuous `prominence` (`0.0..1.0`) attribute onto a resolved hex
-  color through the `Raxol.UI.Theming.Salience` H-K solver -- the mapping
-  layer named in `docs/proposals/in-flight/harness-ui-roadmap.md` unit T8.
+  color through the `Raxol.UI.Theming.Salience` H-K solver.
 
-  See `docs/proposals/in-flight/harness-ui-testing/05-salience.md` for the
-  full test design; this moduledoc summarizes the two bugs it found in the
-  DiffViewer prototype (PR `feat/harness-ui-harness_diff`) and how this
-  module fixes them for the general contract.
+  ## Ground-aware fade
 
-  ## F1 -- ground-aware fade (fixed by threading `:ground` all the way through)
-
-  `DiffViewer.fade_toward_ground/2` fades toward the hardcoded dark
-  `Salience.reference_ground/0` (`0.2`) regardless of the terminal's actual
-  background. On a light theme this is backwards: fading toward `0.2`
-  moves a dark foreground *away* from a light background, so contrast rises
-  as prominence drops (the fade inverts). `resolve/3` (and `fade/3`) take
-  the real ground as an argument, threaded to `Salience.solve_lightness/3`
-  the same way `Salience.solve/4` already accepts `:ground` -- the formula
+  Fading a foreground color toward a hardcoded reference ground (rather
+  than the terminal's *actual* background) gets the direction wrong on a
+  light theme: fading toward a dark reference moves a dark foreground
+  *away* from a light background, so contrast rises as prominence drops
+  instead of falling. `resolve/3` (and `fade/3`) take the real ground as
+  an argument, threaded to `Salience.solve_lightness/3` the same way
+  `Salience.solve/4` already accepts `:ground` -- the formula
   `faded_apparent = ground + (apparent - ground) * prominence` interpolates
   APPARENT lightness toward the ground point, which is direction-correct on
   either side (dark ground: fades down toward it; light ground: fades up
@@ -25,35 +19,36 @@ defmodule Raxol.UI.Harness.Prominence do
 
   ## Two modes -- pure fade (default) vs floored (opt-in)
 
-  This is the load-bearing design decision of the unit, and a **deliberate
-  correction to 05-salience.md's original "floor everywhere" sketch** (F2
-  below). The salience gradient *is the moat*: context text is *meant* to
-  recede as its prominence drops, and "faded but not lost" means
-  **recoverable when T9 promotes the block to prominence 1.0 on focus**, NOT
-  readable-at-a-glance. A universal legibility floor would fight that
+  This is the load-bearing design decision of this module. The salience
+  gradient *is the point*: context text is *meant* to recede as its
+  prominence drops, and "faded but not lost" means **recoverable when a
+  caller later raises the block back to prominence 1.0** (e.g. on focus),
+  NOT readable-at-a-glance. A universal legibility floor would fight that
   gradient -- flattening the very tier separation the gradient exists to
   create. So:
 
     * **Pure fade (default).** `resolve(hex, prominence)` and `resolve(hex,
-      prominence, ground: g)` apply *only* the ground-aware fade (F1). No
+      prominence, ground: g)` apply *only* the ground-aware fade. No
       floor. The output recedes monotonically toward the ground as
-      `prominence` drops -- the gradient T9 depends on, with no tier
-      collapse. Only guaranteed legible **on promotion** (T9 raises the
-      block to prominence 1.0 = identity = the seed), not at rest.
+      `prominence` drops -- the gradient callers depend on, with no tier
+      collapse. Only guaranteed legible **on promotion** (raising the
+      block back to prominence 1.0 = identity = the seed), not at rest.
+      At `prominence: 0.0` with the floor off, the color fades all the way
+      to ground -- effectively invisible against the background. This is
+      an intentional boundary of the pure-fade contract, not a bug.
 
     * **Floored (opt-in, `legibility_floor: true`).** Additionally clamps
-      the output to a WCAG-style contrast floor (F2). T9 sets this **only
-      for acting / interactive tiers** -- current-turn, needs-input,
-      composer -- where blind-reading risk actually lives (the
-      93%-blind-approve stat). Context-history tiers fade free. A floored
-      output is guaranteed legible **at rest**.
+      the output to a WCAG-style contrast floor. Callers engage this
+      **only for acting / interactive content** -- the tiers where
+      blind-reading risk actually lives -- while context/history content
+      fades free. A floored output is guaranteed legible **at rest**.
 
-  ## F2 -- the legibility clamp (opt-in), and why it is opt-in
+  ## The legibility clamp (opt-in), and why it is opt-in
 
   A `prominence` scalar floors the INPUT multiplier, not the OUTPUT
   contrast: `|faded_apparent - ground| = |apparent - ground| * prominence`,
   which depends on how much contrast the source color started with. A
-  low-apparent-contrast source (a `:recede` tier neutral, or any near-ground
+  low-apparent-contrast source (a receding neutral, or any near-ground
   seed) can drop below any legibility threshold. When `legibility_floor:
   true`, `resolve/3` clamps the *WCAG-style relative-luminance contrast
   ratio* (`Salience.relative_luminance/1`, Rec. 709 -- an external check the
@@ -76,36 +71,36 @@ defmodule Raxol.UI.Harness.Prominence do
   best effort.
 
   `FLOOR_RATIO` (`#{3.0}`, `#{3.0}:1`) is a **placeholder**, pending
-  ratification by the human-eye protocol (05-salience.md sec 5) -- the
-  first playground matrix run picks the highest ratio at which every cell
-  is legible and pins it here permanently.
+  ratification by a human-eye review pass -- the first playground matrix
+  run picks the highest ratio at which every cell is legible and pins it
+  here permanently.
 
   ## Truecolor-only floor; 256-color deferred
 
   The clamp guarantees the floor on the **24-bit hex it emits** -- it is
-  truecolor-only. **256-color survival is out of scope for this unit and T9
-  must not assume the clamp survives quantization:** downsampling a
-  floored hex to the xterm-256 cube can drop it back under the floor (and
-  can collapse adjacent fade tiers, 05-salience.md SAL-N-01). The eventual
-  answer is a redistributed `tiers_for(ground, :color256)` ladder
-  (fewer, wider-spaced tiers chosen in-palette), not a post-hoc clamp on a
+  truecolor-only. **256-color survival is out of scope for this module,
+  and callers must not assume the clamp survives quantization:**
+  downsampling a floored hex to the xterm-256 cube can drop it back under
+  the floor (and can collapse adjacent fade tiers). The eventual answer is
+  a redistributed per-ground tier ladder for 256-color (fewer,
+  wider-spaced tiers chosen in-palette), not a post-hoc clamp on a
   quantized value -- deferred here because it needs a quantization-pipeline
-  decision this unit does not make.
+  decision this module does not make.
 
   ## Scope
 
   This module resolves a single foreground color; it does not decide
   *which* prominence a block gets nor *whether* the floor is engaged for it
-  (that's T9's `policy/2` -- it owns the acting-vs-context call and passes
-  `legibility_floor:` accordingly), nor whether a sealed block may be
-  restyled at all (that's D-PA + `Block.fold_allowed?/2` territory).
+  (that's the caller's policy -- it owns the acting-vs-context call and
+  passes `legibility_floor:` accordingly), nor whether a sealed block may
+  be restyled at all (that's separate fold/authorization territory).
   """
 
   alias Raxol.UI.Theming.Salience
   alias Raxol.UI.Theming.SalienceTheme
 
-  # WCAG AA large-text / UI-component minimum, placeholder pending the
-  # human-eye ratification pass (05-salience.md sec 5.4).
+  # WCAG AA large-text / UI-component minimum -- a placeholder pending a
+  # human-eye ratification pass (see moduledoc).
   @floor_ratio 3.0
 
   @clamp_iterations 24
@@ -123,9 +118,9 @@ defmodule Raxol.UI.Harness.Prominence do
   @doc """
   Resolves `hex` at `prominence` (`0.0..1.0`) against a ground.
 
-  Default is the **pure ground-aware fade** (the salience gradient, F1) --
-  no legibility floor. Pass `legibility_floor: true` to additionally clamp
-  the output to a WCAG contrast floor (F2); T9 does this only for acting /
+  Default is the **pure ground-aware fade** (the salience gradient) -- no
+  legibility floor. Pass `legibility_floor: true` to additionally clamp the
+  output to a WCAG contrast floor; callers engage this only for acting /
   interactive tiers. See the moduledoc's "Two modes" section.
 
   ## Options
@@ -135,16 +130,21 @@ defmodule Raxol.UI.Harness.Prominence do
       (`Raxol.UI.Theming.SalienceTheme.detect_ground/0`), falling back to
       `Salience.reference_ground/0` when detection is unavailable. Pass
       explicitly to test against a specific ground without touching
-      `:persistent_term`.
+      `:persistent_term`. A non-numeric `:ground` (a color string, an
+      atom, ...) can't feed the fade math -- it is treated as absent and
+      falls back to the same lazy default instead of reaching the fade
+      math and raising.
     * `:legibility_floor` - `true` engages the opt-in legibility clamp
       (default `false` = pure fade).
     * `:floor_ratio` - override the legibility floor ratio (default
       `#{@floor_ratio}`); only consulted when `legibility_floor: true`.
 
   `prominence >= 1.0` is the identity (byte-identical `hex` back, no ground
-  lookup, no clamp, regardless of `:legibility_floor`) -- the T8 neutrality
-  guarantee (SAL-P-06): a caller that never sets `prominence` below `1.0`
-  sees zero change.
+  lookup, no clamp, regardless of `:legibility_floor`) -- a neutrality
+  guarantee: a caller that never sets `prominence` below `1.0` sees zero
+  change. `prominence < 0.0` is clamped to `0.0` -- a negative prominence
+  would extrapolate past the ground rather than fade toward it, which is
+  gamut-undefined.
   """
   @spec resolve(String.t(), number(), opts()) :: String.t()
   def resolve(hex, prominence, opts \\ [])
@@ -152,6 +152,7 @@ defmodule Raxol.UI.Harness.Prominence do
   def resolve(hex, prominence, _opts) when prominence >= 1.0, do: hex
 
   def resolve(hex, prominence, opts) do
+    prominence = clamp_prominence(prominence)
     ground = resolve_ground(opts)
     {l, c, h} = Salience.hex_to_oklch(hex)
     apparent = Salience.apparent_lightness(l, c, h)
@@ -167,13 +168,14 @@ defmodule Raxol.UI.Harness.Prominence do
   @doc """
   The raw ground-aware fade -- identical to `resolve/3`'s default (pure
   fade) mode, and exposed as its own name so callers/tests can name the
-  intent explicitly (observe the F1 fix without any chance of the opt-in
-  floor engaging).
+  intent explicitly, with no chance of the opt-in floor engaging. A
+  non-numeric `ground` falls back to the same lazy default as `resolve/3`.
   """
-  @spec fade(String.t(), number(), float()) :: String.t()
+  @spec fade(String.t(), number(), term()) :: String.t()
   def fade(hex, prominence, _ground) when prominence >= 1.0, do: hex
 
   def fade(hex, prominence, ground) do
+    ground = normalize_ground(ground)
     {l, c, h} = Salience.hex_to_oklch(hex)
     apparent = Salience.apparent_lightness(l, c, h)
     fade_color(apparent, c, h, ground, prominence)
@@ -191,8 +193,9 @@ defmodule Raxol.UI.Harness.Prominence do
   @doc """
   WCAG-style contrast ratio between two hex colors: sRGB relative luminance
   (`Salience.relative_luminance/1`, Rec. 709), `(max(Y) + 0.05) / (min(Y) + 0.05)`.
-  This is metric M2 (05-salience.md sec 1) -- the external legibility check,
-  distinct from the solver's own apparent-lightness model (M1).
+  This is the external, standards-based legibility check, distinct from the
+  solver's own internal apparent-lightness model. Raises `ArgumentError` if
+  either hex string is malformed (see `Salience.relative_luminance/1`).
   """
   @spec wcag_ratio(String.t(), String.t()) :: float()
   def wcag_ratio(hex_a, hex_b) do
@@ -202,8 +205,26 @@ defmodule Raxol.UI.Harness.Prominence do
   end
 
   defp resolve_ground(opts) do
-    Keyword.get_lazy(opts, :ground, &SalienceTheme.detect_ground/0)
+    opts
+    |> Keyword.get_lazy(:ground, &SalienceTheme.detect_ground/0)
+    |> normalize_ground()
   end
+
+  # A `:ground` opt (or `fade/3`'s positional `ground`) that isn't a number
+  # -- a color string, an atom, ... -- can't feed the fade math (it flows
+  # straight into float arithmetic in `fade_color/5`). Treat it as absent
+  # and fall back to the same lazy default rather than letting it reach
+  # that arithmetic and raise.
+  defp normalize_ground(ground) when is_number(ground), do: ground
+  defp normalize_ground(_invalid), do: SalienceTheme.detect_ground()
+
+  # A negative prominence would extrapolate PAST the ground rather than
+  # fade toward it (`ground + (apparent - ground) * t` with `t < 0` moves
+  # apparent lightness away from both `apparent` and `ground`), which is
+  # gamut-undefined. Clamp to the `t = 0.0` floor -- full fade to ground --
+  # instead.
+  defp clamp_prominence(prominence) when prominence < 0.0, do: 0.0
+  defp clamp_prominence(prominence), do: prominence
 
   defp legibility_floor?(opts), do: Keyword.get(opts, :legibility_floor, false)
 
@@ -215,12 +236,13 @@ defmodule Raxol.UI.Harness.Prominence do
     Salience.oklch_to_hex(l, c, h)
   end
 
-  # The F2 guard: if the raw fade's contrast ratio against ground already
-  # meets the floor, it passes through unchanged. Otherwise walk the fade
-  # line back up toward `t = 1.0` (the TRUE full-chroma prominence:1.0
-  # color) until the floor is met -- never past `t = 1.0`, so the clamp
-  # never manufactures more contrast than the color's own full-strength
-  # self. The reachability check is run against that same true ceiling.
+  # The legibility-floor guard: if the raw fade's contrast ratio against
+  # ground already meets the floor, it passes through unchanged. Otherwise
+  # walk the fade line back up toward `t = 1.0` (the TRUE full-chroma
+  # prominence:1.0 color) until the floor is met -- never past `t = 1.0`,
+  # so the clamp never manufactures more contrast than the color's own
+  # full-strength self. The reachability check is run against that same
+  # true ceiling.
   defp clamp_to_floor(faded_hex, apparent, c, h, ground, prominence, opts) do
     floor_ratio = resolve_floor_ratio(opts)
     ground_hex = build_hex(ground, 0.0, 0.0)

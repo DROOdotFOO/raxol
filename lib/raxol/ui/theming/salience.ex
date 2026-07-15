@@ -274,15 +274,45 @@ defmodule Raxol.UI.Theming.Salience do
   brightness (used for tier uniformity/monotonicity), while relative
   luminance is the *external*, standards-based check a caller can use for a
   legibility floor that the solver's own model cannot self-certify.
+
+  Raises `ArgumentError` (with the malformed value in the message) when
+  `hex` isn't exactly 6 hex digits, optionally `#`-prefixed -- a
+  programming-error contract, not a runtime-input one: callers are
+  expected to pass already-resolved hex colors, not raw user input.
   """
   @spec relative_luminance(String.t()) :: float()
   def relative_luminance("#" <> hex), do: relative_luminance(hex)
 
-  def relative_luminance(<<r::binary-2, g::binary-2, b::binary-2>>) do
-    [r, g, b] = Enum.map([r, g, b], &(String.to_integer(&1, 16) / 255))
+  def relative_luminance(hex) when is_binary(hex) do
+    case parse_hex6(hex) do
+      {:ok, {r, g, b}} ->
+        [r, g, b] = Enum.map([r, g, b], &(&1 / 255))
 
-    0.2126 * srgb_to_linear(r) + 0.7152 * srgb_to_linear(g) +
-      0.0722 * srgb_to_linear(b)
+        0.2126 * srgb_to_linear(r) + 0.7152 * srgb_to_linear(g) +
+          0.0722 * srgb_to_linear(b)
+
+      :error ->
+        raise ArgumentError,
+              "invalid hex color #{inspect(hex)}: expected 6 hex digits " <>
+                "(e.g. \"1e1e1e\"), optionally prefixed with \"#\""
+    end
+  end
+
+  defp parse_hex6(<<r::binary-2, g::binary-2, b::binary-2>>) do
+    with {:ok, rv} <- parse_hex_byte(r),
+         {:ok, gv} <- parse_hex_byte(g),
+         {:ok, bv} <- parse_hex_byte(b) do
+      {:ok, {rv, gv, bv}}
+    end
+  end
+
+  defp parse_hex6(_other), do: :error
+
+  defp parse_hex_byte(byte) do
+    case Integer.parse(byte, 16) do
+      {n, ""} -> {:ok, n}
+      _ -> :error
+    end
   end
 
   defp cube(x), do: x * x * x
