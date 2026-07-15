@@ -25,14 +25,8 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
     # of one SGR + reset per cell. Round-trip-identical (each run still
     # \e[0m-terminated), 8-28x fewer bytes on styled UIs.
     renderer = Raxol.Terminal.Renderer.new(updated_buffer, %{}, %{}, true)
-    output_string = Raxol.Terminal.Renderer.render(renderer)
 
-    Raxol.Core.Runtime.Log.debug(
-      "Rendering Engine: Terminal output generated (length: #{String.length(output_string)})"
-    )
-
-    # Move cursor to top-left and clear screen before each frame
-    frame = normalize_frame("\e[H\e[2J" <> output_string)
+    frame = build_terminal_frame(state.buffer, updated_buffer, renderer, state)
 
     if state.sync_output do
       IO.write("\e[?2026h")
@@ -47,7 +41,48 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
       Raxol.Recording.Recorder.record_output(pid, frame)
     end
 
-    {:ok, %{state | buffer: updated_buffer}}
+    # Map.put (not %{state | ...}) so the flag is set whether or not the caller's
+    # state carries it -- the real Engine.State always does; test states may not.
+    {:ok,
+     state |> Map.put(:buffer, updated_buffer) |> Map.put(:force_repaint, false)}
+  end
+
+  # --- Incremental frame emission ---
+  #
+  # One absolute-CUP vocabulary for both frame kinds (ADR-0029 inv 5): every row
+  # is emitted at \e[y;1H, so there are no \r\n row-joins and no full-screen
+  # clear on the common path. A keyframe is that same emit over every row, with
+  # a leading \e[2J; a diff emits only rows whose cells changed. `state.buffer`
+  # is the previous frame, already in hand -- the grid is its own diff basis.
+
+  @doc false
+  def build_terminal_frame(prev, next, renderer, state) do
+    if keyframe?(prev, next, state) do
+      "\e[2J" <> emit_rows(renderer, all_rows(next))
+    else
+      emit_rows(renderer, changed_rows(prev, next))
+    end
+  end
+
+  defp keyframe?(nil, _next, _state), do: true
+  defp keyframe?(_prev, _next, %{force_repaint: true}), do: true
+
+  defp keyframe?(prev, next, _state),
+    do: prev.width != next.width or prev.height != next.height
+
+  defp all_rows(buffer), do: Enum.to_list(0..(buffer.height - 1)//1)
+
+  defp changed_rows(prev, next) do
+    Enum.filter(0..(next.height - 1)//1, fn y ->
+      Enum.at(prev.cells, y) != Enum.at(next.cells, y)
+    end)
+  end
+
+  defp emit_rows(renderer, rows) do
+    Enum.map_join(rows, "", fn y ->
+      "\e[#{y + 1};1H\e[0m\e[2K" <>
+        Raxol.Terminal.Renderer.render_row(renderer, y)
+    end)
   end
 
   @doc """
@@ -328,10 +363,17 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
         |> Map.merge(Map.take(attrs_map, [:bold, :underline, :italic]))
         |> put_hyperlink(hyperlink)
 
-      cell = %Raxol.Terminal.Cell{char: char, style: cell_attrs}
+      cell = %Raxol.Terminal.Cell{char: sanitize_char(char), style: cell_attrs}
       {x, y, cell}
     end)
   end
+
+  # A cell holds one glyph. A control byte here -- an in-cell \n, \e, \t -- would
+  # under incremental rendering corrupt its row and bleed onto the next, and
+  # unlike the old clear-every-frame path nothing repaints the victim row. Blank
+  # it at the write boundary so the invalid cell is unrepresentable downstream.
+  defp sanitize_char(<<c::utf8>>) when c < 0x20 or c == 0x7F, do: " "
+  defp sanitize_char(char), do: char
 
   # Pull a tagged `{:hyperlink, url}` entry out of the cell attrs list; the
   # remaining entries are plain style atoms. Returns {url_or_nil, atoms}.

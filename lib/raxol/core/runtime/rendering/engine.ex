@@ -41,7 +41,11 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
               # Cycle profiler pid (nil when disabled)
               cycle_profiler: nil,
               # Cached prepared element tree (Pretext-inspired two-phase)
-              prepared_tree: nil
+              prepared_tree: nil,
+              # Force the next terminal frame to be a full keyframe (first frame,
+              # resize, or Ctrl-L recovery). Set true so the first render always
+              # paints a full frame; the terminal backend clears it after one frame.
+              force_repaint: true
   end
 
   # --- Public API ---
@@ -146,8 +150,17 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
     new_state = %{state | width: w, height: h}
 
+    # Resize owns the keyframe. This handler swaps in a fresh blank buffer of the
+    # new size, so by render time dims already match and a render-time dims check
+    # can't fire -- and diffing against the blank would leave stale pre-resize
+    # rows unpainted. Force a full repaint instead.
     resized_buffer = ScreenBuffer.new(w, h)
-    {:noreply, %{new_state | buffer: resized_buffer}}
+    {:noreply, %{new_state | buffer: resized_buffer, force_repaint: true}}
+  end
+
+  @impl true
+  def handle_cast(:force_repaint, state) do
+    {:noreply, %{state | force_repaint: true}}
   end
 
   @impl true

@@ -914,6 +914,19 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     end
   end
 
+  # Ctrl-L forces a full-screen repaint -- recovery from out-of-band corruption
+  # (a stray write, a resize we missed). Redraw is a runtime concern, so the
+  # dispatcher fires it directly, then lets the event pass through: some apps
+  # also bind Ctrl-L (e.g. clear), and a repaint composes with whatever they do.
+  defp maybe_handle_focus_navigation(
+         %Event{type: :key, data: %{key: :char, char: "l", ctrl: true}},
+         state
+       ) do
+    if pid = state.rendering_engine, do: GenServer.cast(pid, :force_repaint)
+    if rt = state.runtime_pid, do: send(rt, :render_needed)
+    :pass
+  end
+
   defp maybe_handle_focus_navigation(_event, _state), do: :pass
 
   defp focus_manager_active? do
