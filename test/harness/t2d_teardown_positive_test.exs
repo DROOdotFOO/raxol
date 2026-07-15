@@ -321,6 +321,12 @@ defmodule Raxol.Harness.T2dTeardownPositiveTest do
   describe "Tier B: LC-P-SIGTERM" do
     @describetag :pty
     @describetag :unix_only
+    # Excluded on CI: boots the full inline app under a real pty via `mix run`
+    # and awaits READY within 15s. CI's runner gives the mix-run child a cold
+    # boot with no controlling tty, so READY times out -- a real-terminal
+    # constraint, not a driver regression (mirrors the negative suite's Tier B
+    # skip). Run locally against a real terminal.
+    @describetag :skip_on_ci
 
     test "a real SIGTERM reaches the BEAM, driver emits complete teardown before exit" do
       {:ok, session} = start_mock_app_under_pty()
