@@ -32,6 +32,11 @@ defmodule Raxol.Agent.Journal.FileStore do
   @env_base "RAXOL_SESSIONS_DIR"
   @default_base "~/.raxol/sessions"
 
+  # A session_id is also the on-disk directory name, so it must not be able to
+  # escape the base dir. Allow only a conservative filename charset (no `/`, no
+  # NUL, no empty string) and reject the `.`/`..` traversal names explicitly.
+  @session_id_re ~r/\A[A-Za-z0-9._-]+\z/
+
   @doc """
   Open (creating if needed) the journal for `session_id`.
 
@@ -46,12 +51,22 @@ defmodule Raxol.Agent.Journal.FileStore do
   """
   @impl Raxol.Agent.Journal
   def open(session_id, opts \\ []) when is_binary(session_id) do
-    dir = Path.join(base_dir(opts), session_id)
-    writer_opts = Keyword.merge(opts, dir: dir, session_id: session_id)
+    with :ok <- validate_session_id(session_id) do
+      dir = Path.join(base_dir(opts), session_id)
+      writer_opts = Keyword.merge(opts, dir: dir, session_id: session_id)
 
-    case Writer.start_link(writer_opts) do
-      {:ok, pid} -> {:ok, %__MODULE__{session_id: session_id, dir: dir, writer: pid}}
-      {:error, _} = err -> err
+      case Writer.start_link(writer_opts) do
+        {:ok, pid} ->
+          {:ok, %__MODULE__{session_id: session_id, dir: dir, writer: pid}}
+
+        # Single-writer invariant: a Writer already owns this session's journal.
+        # Reuse the live one rather than spawning a second writer on the segment.
+        {:error, {:already_started, pid}} ->
+          {:ok, %__MODULE__{session_id: session_id, dir: dir, writer: pid}}
+
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
@@ -87,6 +102,16 @@ defmodule Raxol.Agent.Journal.FileStore do
   end
 
   # --- helpers ---------------------------------------------------------------
+
+  defp validate_session_id(id) when id in [".", ".."], do: {:error, :invalid_session_id}
+
+  defp validate_session_id(id) do
+    if Regex.match?(@session_id_re, id) do
+      :ok
+    else
+      {:error, :invalid_session_id}
+    end
+  end
 
   defp flush(pid) do
     if Process.alive?(pid), do: Writer.flush(pid)

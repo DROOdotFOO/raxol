@@ -45,8 +45,16 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   # --- API -------------------------------------------------------------------
 
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts)
+    dir = Keyword.fetch!(opts, :dir)
+    # Single-writer invariant: at most one Writer per physical journal dir,
+    # globally (survives across processes and — on shared storage — nodes).
+    # A second `start_link` for the same dir returns `{:error, {:already_started, pid}}`
+    # so the opener can reuse the live Writer instead of racing a second one.
+    GenServer.start_link(__MODULE__, opts, name: global_name(dir))
   end
+
+  @doc false
+  def global_name(dir), do: {:global, {__MODULE__, dir}}
 
   @spec append(pid(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
   def append(pid, event), do: GenServer.call(pid, {:append, event})
@@ -66,6 +74,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
     File.mkdir_p!(journal_dir)
     File.mkdir_p!(Path.join(dir, "snapshots"))
+    sweep_tmp_files(dir)
 
     schema_version = Keyword.get(opts, :schema_version, @default_schema_version)
     seg_cap = Keyword.get(opts, :segment_cap, @default_segment_cap)
@@ -104,14 +113,22 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     offset = state.offset + 1
     record = stamp(event, offset, state.schema_version)
     line = [Jason.encode_to_iodata!(record), ?\n]
-    :ok = :file.write(state.io, line)
 
-    state =
-      %{state | offset: offset, seg_size: state.seg_size + IO.iodata_length(line)}
-      |> maybe_rotate()
-      |> sync_after_append(immediate?(record, state))
+    # A write can fail (e.g. `:enospc` on a full disk). Surface it as an error
+    # instead of MatchError-crashing the Writer: the offset is NOT advanced, the
+    # fd/state stay intact, and the caller can retry once space frees up.
+    case :file.write(state.io, line) do
+      :ok ->
+        state =
+          %{state | offset: offset, seg_size: state.seg_size + IO.iodata_length(line)}
+          |> maybe_rotate()
+          |> sync_after_append(immediate?(record, state))
 
-    {:reply, {:ok, offset}, state}
+        {:reply, {:ok, offset}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
   end
 
   @impl GenServer
@@ -130,6 +147,10 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   def terminate(_reason, state) do
     state = flush_now(state)
     if state.io, do: :file.close(state.io)
+    # Free the global name synchronously (before the process exits) so a
+    # close-then-reopen on the same dir never races the async :global cleanup
+    # and gets handed the corpse of the writer we just stopped.
+    if state.dir, do: :global.unregister_name({__MODULE__, state.dir})
     :ok
   end
 
@@ -214,10 +235,19 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
   # --- meta.json / HEAD (atomic writes only) ---------------------------------
 
+  # HEAD is only rewritten on flush (≤200ms / datasync), but `:file.write`
+  # already reached the OS ahead of it — so after a crash HEAD can lag the real
+  # journal. Trusting HEAD alone would reuse an already-written offset (duplicate
+  # id, non-monotonic, id ≠ offset). Resume from the max of HEAD and the reader's
+  # torn-tail-recovered real last offset, so id stays monotonic and == offset.
   defp resume_offset(dir) do
+    max(head_offset(dir), Reader.last_offset(dir))
+  end
+
+  defp head_offset(dir) do
     case read_head(dir) do
       {:ok, %{"offset" => offset}} when is_integer(offset) -> offset
-      _ -> Reader.last_offset(dir)
+      _ -> 0
     end
   end
 
@@ -275,6 +305,36 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     end)
 
     File.rename!(tmp, path)
+    # Durability of the rename itself needs the *directory* entry flushed, else
+    # a power loss can lose the newly-renamed name. Best-effort (some platforms
+    # reject datasync on a dir fd — that's fine, the rename still stands).
+    sync_dir(Path.dirname(path))
     :ok
+  end
+
+  defp sync_dir(dir) do
+    case :file.open(dir, [:read, :raw]) do
+      {:ok, io} ->
+        _ = :file.datasync(io)
+        :file.close(io)
+
+      _ ->
+        :ok
+    end
+
+    :ok
+  end
+
+  # Remove stray `*.tmp.*` files left by a crash mid-atomic-write on a prior run.
+  defp sweep_tmp_files(dir) do
+    case File.ls(dir) do
+      {:ok, names} ->
+        Enum.each(names, fn name ->
+          if String.contains?(name, ".tmp."), do: File.rm(Path.join(dir, name))
+        end)
+
+      _ ->
+        :ok
+    end
   end
 end

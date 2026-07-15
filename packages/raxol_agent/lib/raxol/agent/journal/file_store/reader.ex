@@ -97,6 +97,10 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
           |> Enum.map(fn {line, i} ->
             %{path: path, raw: line, terminated: i < n - 1 or terminated_file?}
           end)
+          # A stray blank line is not a record and not corruption — drop it, as
+          # the moduledoc promises. (`terminated` on the survivors is unaffected:
+          # only the file's true last line can ever be unterminated.)
+          |> Enum.reject(&(&1.raw == ""))
       end
     end)
   end
@@ -108,17 +112,26 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
       {:ok, record} ->
         replay(rest, [record | acc], dir)
 
-      {:error, _} when rest == [] ->
-        # Final line of the last segment failed to parse: torn tail. Truncate
-        # the incomplete bytes and recover everything before.
-        truncate_torn(entry)
-        {:ok, Enum.reverse(acc)}
-
       {:error, _} ->
-        # Interior corruption: alarm, mark damaged, delete nothing, leak nothing.
-        alarm(dir, entry)
-        {:damaged, Enum.reverse(acc)}
+        handle_bad_line(entry, rest, acc, dir)
     end
+  end
+
+  # Torn tail (Ra policy): the *final* line of the *last* segment has NO trailing
+  # newline — a crash mid-`:file.write`. Truncate the incomplete bytes, recover
+  # everything before, session stays healthy.
+  defp handle_bad_line(%{terminated: false} = entry, [], acc, _dir) do
+    truncate_torn(entry)
+    {:ok, Enum.reverse(acc)}
+  end
+
+  # Everything else is real data loss, not a torn write: an interior bad line, OR
+  # a fully-flushed newline-terminated but corrupt final record. Mark damaged —
+  # alarm, delete nothing, leak nothing. Silently truncating a terminated record
+  # would mask genuine corruption behind a healthy `:ok`.
+  defp handle_bad_line(entry, _rest, acc, dir) do
+    alarm(dir, entry)
+    {:damaged, Enum.reverse(acc)}
   end
 
   defp truncate_torn(%{path: path, raw: raw, terminated: terminated}) do

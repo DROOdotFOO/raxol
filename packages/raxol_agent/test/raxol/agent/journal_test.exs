@@ -251,6 +251,155 @@ defmodule Raxol.Agent.JournalTest do
     end
   end
 
+  describe "single-writer invariant" do
+    test "a second open on the same session reuses the one writer, offsets never collide",
+         %{base: base, session: session} do
+      {:ok, j1} = FileStore.open(session, base_dir: base)
+      {:ok, j2} = FileStore.open(session, base_dir: base)
+
+      # Same session dir -> the exact same Writer process, not a second one.
+      assert j1.writer == j2.writer
+
+      # Interleave appends through both handles: the single writer serializes
+      # them, so ids are unique, ascending, and never collide.
+      offsets =
+        Enum.map([j1, j2, j1, j2, j1], fn h ->
+          {:ok, off} = FileStore.append(h, %{"type" => "chunk"})
+          off
+        end)
+
+      assert offsets == [1, 2, 3, 4, 5]
+      assert offsets == Enum.uniq(offsets)
+
+      {:ok, records} = FileStore.read(j1)
+      assert Enum.map(records, & &1["id"]) == [1, 2, 3, 4, 5]
+
+      # Closing either handle stops the shared writer once.
+      FileStore.close(j1)
+      refute Process.alive?(j2.writer)
+    end
+  end
+
+  describe "stale-HEAD offset resume (crash before HEAD flush)" do
+    test "resume ignores a stale HEAD and continues from the real last record",
+         %{base: base, session: session} do
+      {:ok, j} = FileStore.open(session, base_dir: base)
+      {:ok, 1} = FileStore.append(j, %{"type" => "a"})
+      FileStore.close(j)
+
+      # HEAD now records offset 1. Simulate `:file.write` having reached the OS
+      # for records 2 and 3 while the crash beat the next HEAD flush -- so the
+      # journal on disk is ahead of a stale HEAD.
+      [seg] = segments(base, session)
+      File.write!(seg, ~s({"id":2,"type":"b"}\n{"id":3,"type":"c"}\n), [:append])
+
+      {:ok, head} = Path.join([base, session, "HEAD"]) |> File.read!() |> Jason.decode()
+      assert head["offset"] == 1, "precondition: HEAD is stale behind the journal"
+
+      {:ok, j2} = FileStore.open(session, base_dir: base)
+      # Next id must be 4 (not a reused 2/3): monotonic, no duplicate, id == offset.
+      assert {:ok, 4} = FileStore.append(j2, %{"type" => "d"})
+
+      {:ok, records} = FileStore.read(j2)
+      ids = Enum.map(records, & &1["id"])
+      assert ids == [1, 2, 3, 4]
+      assert ids == Enum.uniq(ids), "no duplicate ids after a stale-HEAD resume"
+      assert ids == Enum.sort(ids), "ids strictly ascending"
+      FileStore.close(j2)
+    end
+  end
+
+  describe "session_id validation (path traversal)" do
+    test "rejects ids that escape the base dir, are empty, or contain NUL",
+         %{base: base} do
+      for bad <- ["../foo", "a/b", "", "a\0b", "..", ".", "../../etc/x"] do
+        assert {:error, :invalid_session_id} = FileStore.open(bad, base_dir: base),
+               "expected #{inspect(bad)} to be rejected"
+      end
+    end
+
+    test "accepts ordinary safe ids", %{base: base} do
+      for good <- ["sess-1", "abc_DEF.123", "a-b_c", "session"] do
+        assert {:ok, j} = FileStore.open(good, base_dir: base)
+        FileStore.close(j)
+      end
+    end
+  end
+
+  describe "terminated-but-corrupt final record (not a torn tail)" do
+    test "a newline-terminated corrupt final line is :damaged, never silently truncated",
+         %{base: base, session: session} do
+      {:ok, j} = FileStore.open(session, base_dir: base)
+      for n <- 1..3, do: FileStore.append(j, %{"type" => "chunk", "n" => n})
+      FileStore.close(j)
+
+      [seg] = segments(base, session)
+      # Fully flushed (has a trailing newline) but corrupt final record: this is
+      # real data loss, NOT a crash mid-write, so it must NOT be truncated away.
+      File.write!(seg, ~s({corrupt but terminated}\n), [:append])
+      before = File.read!(seg)
+
+      {:ok, j2} = FileStore.open(session, base_dir: base)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :damaged} = FileStore.read(j2)
+          assert FileStore.status(j2) == :damaged
+        end)
+
+      assert log =~ "interior corruption"
+      # Nothing deleted or truncated: the corrupt bytes are still on disk.
+      assert File.read!(seg) == before
+      FileStore.close(j2)
+    end
+  end
+
+  describe "blank interior line" do
+    test "a stray blank line is skipped and the session stays healthy",
+         %{base: base, session: session} do
+      {:ok, j} = FileStore.open(session, base_dir: base)
+      for n <- 1..3, do: FileStore.append(j, %{"type" => "chunk", "n" => n})
+      FileStore.close(j)
+
+      [seg] = segments(base, session)
+      [first | rest] = String.split(File.read!(seg), "\n", trim: true)
+      # Inject a stray blank line between the first and second records.
+      File.write!(seg, Enum.join([first, "" | rest], "\n") <> "\n")
+
+      {:ok, j2} = FileStore.open(session, base_dir: base)
+      assert {:ok, records} = FileStore.read(j2)
+      assert Enum.map(records, & &1["id"]) == [1, 2, 3]
+      assert FileStore.status(j2) == :ok
+      FileStore.close(j2)
+    end
+  end
+
+  describe "write error handling (disk full)" do
+    test "a failing write returns {:error, reason} and keeps the writer alive",
+         %{base: base, session: session} do
+      {:ok, j} = FileStore.open(session, base_dir: base)
+      {:ok, 1} = FileStore.append(j, %{"type" => "a"})
+
+      # Simulate a failing fd (e.g. :enospc): swap a closed, writer-owned handle
+      # into the writer's state so the next :file.write returns {:error, _}. The
+      # fd is opened+closed *inside* the writer process (the replace_state fun
+      # runs there) so the writer owns it and terminate can close it cleanly.
+      scratch = Path.join(base, "scratch")
+
+      :sys.replace_state(j.writer, fn state ->
+        {:ok, dead_io} = :file.open(scratch, [:write, :raw, :binary])
+        :ok = :file.close(dead_io)
+        %{state | io: dead_io}
+      end)
+
+      assert {:error, _reason} = FileStore.append(j, %{"type" => "b"})
+      # The writer survives the error (state/fd intact, offset not advanced).
+      assert Process.alive?(j.writer)
+
+      FileStore.close(j)
+    end
+  end
+
   defp attach_damaged_telemetry do
     ref = "journal-damaged-#{System.unique_integer([:positive])}"
     test_pid = self()
