@@ -15,6 +15,8 @@ defmodule Raxol.Property.SSHRenderingTest do
 
   alias Raxol.Core.Runtime.Rendering.Backends
   alias Raxol.Core.Runtime.Lifecycle
+  alias Raxol.Terminal.Buffer.Queries
+  alias Raxol.Test.CrossTerminal.AnsiReplayer, as: Replayer
 
   # -- Generators --
 
@@ -22,7 +24,12 @@ defmodule Raxol.Property.SSHRenderingTest do
     gen all(
           x <- integer(0..79),
           y <- integer(0..23),
-          char <- string(:printable, min_length: 1, max_length: 1),
+          # Single-width alphanumeric only. The grid round-trip below compares
+          # the emulator's interpretation against the buffer's own text, and the
+          # two carry different display-width models for wide/ambiguous chars
+          # (CJK, private-use) -- reconciling those is a separate concern (R1 G2),
+          # not what these properties exercise.
+          char <- string(:alphanumeric, min_length: 1, max_length: 1),
           fg <- member_of([:red, :green, :blue, :white, :yellow, :cyan]),
           bg <- member_of([:black, :white, :blue])
         ) do
@@ -386,23 +393,68 @@ defmodule Raxol.Property.SSHRenderingTest do
       end
     end
 
-    property "render_to_terminal frames contain no bare LF (every \\n preceded by \\r)" do
+    property "render_to_terminal keyframe round-trips through the emulator to the buffer grid" do
+      # The terminal path no longer emits row-joined frames -- it emits
+      # absolute-CUP-addressed rows (no \n at all). So the contract is no longer
+      # "no bare LF" but the stronger one: what the backend emits, the reference
+      # emulator interprets back to the exact grid the backend built. Assert the
+      # grid, not the bytes (survives batching / emit reshaping).
+      # Fewer runs than the byte-level properties: each run replays a full
+      # keyframe (all 24 rows) through the reference emulator, which is orders of
+      # magnitude heavier than a byte assertion.
       check all(
               cells <- cells_gen(),
-              max_runs: 200
+              max_runs: 25
             ) do
-        terminal_state = %{
+        state = %{
           width: 80,
           height: 24,
           buffer: nil,
-          sync_output: false
+          sync_output: false,
+          force_repaint: true
         }
 
-        output = capture_terminal_output(cells, terminal_state)
+        {output, result} = render_capturing_both(cells, state)
 
-        refute has_bare_lf?(output),
-               "Terminal frame contains a bare \\n not preceded by \\r: #{inspect(output)}"
+        grid =
+          output
+          |> Replayer.replay(width: 80, height: 24)
+          |> Replayer.grid_text()
+
+        assert grid == Queries.get_text(result.buffer)
       end
+    end
+
+    test "first frame is a keyframe; a later one-cell change diffs only its row" do
+      state = %{
+        width: 6,
+        height: 3,
+        buffer: nil,
+        sync_output: false,
+        force_repaint: true
+      }
+
+      {kf_out, after_kf} =
+        render_capturing_both([{0, 0, "A", :white, :black, []}], state)
+
+      # keyframe: leading clear, no per-row CUP omitted
+      assert String.starts_with?(kf_out, "\e[2J")
+
+      # next frame: prev buffer in hand, force_repaint cleared, one new cell on row 1
+      {diff_out, _} =
+        render_capturing_both(
+          [{0, 0, "A", :white, :black, []}, {0, 1, "B", :white, :black, []}],
+          after_kf
+        )
+
+      refute String.contains?(diff_out, "\e[2J"),
+             "a diff frame must not clear the screen"
+
+      assert String.contains?(diff_out, "\e[2;1H"),
+             "the changed row (2) must be addressed"
+
+      refute String.contains?(diff_out, "\e[1;1H"),
+             "the unchanged row 1 must not be emitted"
     end
 
     test "normalize_frame/1 converts bare LF row joins to CRLF" do
@@ -442,12 +494,6 @@ defmodule Raxol.Property.SSHRenderingTest do
     |> elem(0)
   end
 
-  defp capture_terminal_output(cells, state) do
-    ExUnit.CaptureIO.capture_io(fn ->
-      {:ok, _new_state} = Backends.render_to_terminal(cells, state)
-    end)
-  end
-
   defp collect_writes do
     collect_write_list() |> Enum.join()
   end
@@ -473,6 +519,23 @@ defmodule Raxol.Property.SSHRenderingTest do
 
     receive do
       {:result, new_state} -> {:ok, new_state}
+    after
+      1000 -> raise "render_to_terminal did not complete"
+    end
+  end
+
+  # Captures both the emitted frame bytes and the resulting state from one render.
+  defp render_capturing_both(cells, state) do
+    parent = self()
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        {:ok, new_state} = Backends.render_to_terminal(cells, state)
+        send(parent, {:result, new_state})
+      end)
+
+    receive do
+      {:result, new_state} -> {output, new_state}
     after
       1000 -> raise "render_to_terminal did not complete"
     end
