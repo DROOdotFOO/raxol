@@ -338,6 +338,12 @@ defmodule Raxol.Agent.Session.SupervisorTest do
       session1 = Session.Supervisor.whereis(sid)
       assert %{lifecycle_pid: ^life0} = :sys.get_state(session1)
 
+      # Accumulate model state on the REUSED lifecycle so a "fresh model" claim
+      # after the bridge crash is observable at the MODEL level, not just via a
+      # new pid: a reattach-to-dead would carry this state forward.
+      :ok = Session.send_message(agent_id(session1), {:say, "kept"})
+      wait_until(fn -> get_model(session1) == {:ok, %{seen: ["kept"]}} end)
+
       # Bridge crash: the bridge is first, so bridge + lifecycle + session all
       # restart — a FRESH lifecycle (no durable event is emitted into a dead
       # sink), which the restarted session re-resolves.
@@ -355,6 +361,113 @@ defmodule Raxol.Agent.Session.SupervisorTest do
       wait_until(fn ->
         match?(%{lifecycle_pid: ^life2}, :sys.get_state(Session.Supervisor.whereis(sid)))
       end)
+
+      # The crux: the fresh lifecycle carries the app's INIT model, NOT the
+      # accumulated ["kept"] — proving it did not reattach to the dead runtime.
+      session2 = Session.Supervisor.whereis(sid)
+      wait_until(fn -> get_model(session2) == {:ok, %{seen: []}} end)
+    end
+  end
+
+  describe "graceful stop drains the durable tail (YELLOW 2 — no journal-tail loss)" do
+    test "durable events queued at stop_session all reach the journal" do
+      base = tmp_base()
+      sid = "ss-drain-#{uniq()}"
+
+      {:ok, _sup} =
+        Session.Supervisor.start_session(EchoAgent,
+          id: :"ss_drain_#{uniq()}",
+          session_id: sid,
+          journal_opts: [base_dir: base]
+        )
+
+      session = Session.Supervisor.whereis(sid)
+      aid = agent_id(session)
+
+      # Fire several turns WITHOUT awaiting their round-trip, so their durable
+      # events are still in-flight (session/dispatcher/bridge mailboxes) at stop
+      # time. Each turn journals turn_started, item_completed, turn_completed.
+      n = 5
+      for i <- 1..n, do: :ok = Session.send_message(aid, {:say, "m#{i}"})
+
+      # Graceful stop must flush the whole queued tail before teardown.
+      assert :ok = Session.Supervisor.stop_session(sid)
+      wait_until(fn -> Session.Supervisor.whereis(sid) == nil end)
+
+      # Reopen from disk: all N turns present — none lost to a truncated tail.
+      {:ok, j} = FileStore.open(sid, base_dir: base)
+      {:ok, records} = FileStore.read(j)
+      FileStore.close(j)
+
+      assert Enum.count(records, &(&1["type"] == "turn_completed")) == n
+      ids = Enum.map(records, & &1["id"])
+      assert ids == Enum.sort(ids)
+    end
+  end
+
+  describe "standalone Session under a rest_for_one parent (YELLOW 1 — no orphaned lifecycle)" do
+    test "a Team-style parent shutdown honors terminate/2 and leaves no orphaned lifecycle" do
+      base = tmp_base()
+      sid = "ss-teardown-#{uniq()}"
+
+      # Mirror Raxol.Agent.Team exactly: a :rest_for_one supervisor over a
+      # standalone Session child spec (Session.child_spec).
+      children = [
+        {Session,
+         [
+           app_module: EchoAgent,
+           id: :"ss_td_#{uniq()}",
+           session_id: sid,
+           journal_opts: [base_dir: base]
+         ]}
+      ]
+
+      {:ok, parent} = Supervisor.start_link(children, strategy: :rest_for_one)
+
+      session = Session.Supervisor.whereis(sid)
+      assert is_pid(session) and Process.alive?(session)
+
+      lifecycle = lifecycle_pid(sid)
+      assert is_pid(lifecycle) and Process.alive?(lifecycle)
+
+      # Tear the parent down. The child-spec shutdown budget (drain + margin) must
+      # give the Session's terminate/2 long enough to run stop_lifecycle_sync to
+      # completion — incl. its Process.exit(:kill) fallback — so the owned
+      # lifecycle can never be orphaned by a premature parent brutal-kill.
+      Supervisor.stop(parent)
+
+      refute Process.alive?(session)
+      wait_until(fn -> not Process.alive?(lifecycle) end)
+      refute Process.alive?(lifecycle)
+      wait_until(fn -> lifecycle_pid(sid) == nil end)
+    end
+
+    test "a graceful standalone GenServer.stop drains its durable tail" do
+      base = tmp_base()
+      sid = "ss-standalone-drain-#{uniq()}"
+
+      {:ok, session} =
+        Session.start_link(
+          app_module: EchoAgent,
+          id: :"ss_sad_#{uniq()}",
+          session_id: sid,
+          journal_opts: [base_dir: base]
+        )
+
+      aid = agent_id(session)
+      n = 4
+      for i <- 1..n, do: :ok = Session.send_message(aid, {:say, "s#{i}"})
+
+      # Standalone traps exits: terminate/2 runs, draining the lifecycle
+      # (dispatcher) then the bridge (which flushes the journal) — no tail loss.
+      :ok = GenServer.stop(session)
+      wait_until(fn -> not Process.alive?(session) end)
+
+      {:ok, j} = FileStore.open(sid, base_dir: base)
+      {:ok, records} = FileStore.read(j)
+      FileStore.close(j)
+
+      assert Enum.count(records, &(&1["type"] == "turn_completed")) == n
     end
   end
 

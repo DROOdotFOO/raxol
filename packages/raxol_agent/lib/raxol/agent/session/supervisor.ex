@@ -113,14 +113,94 @@ defmodule Raxol.Agent.Session.Supervisor do
   of start order — so the bridge's `terminate/2` flushes and closes the
   journal handle last). Also stops bare `Raxol.Agent.Session.start_link`
   sessions that registered under `{:session, session_id}`.
+
+  ## Journal-tail completeness guarantee (graceful stop)
+
+  Before tearing the tree down, `stop_session/1` drains the durable tail so a
+  graceful stop never silently truncates the journal. The runtime `Lifecycle`
+  does NOT trap exits, so a plain subtree teardown would kill the dispatcher
+  (and the events queued in its mailbox) with no drain. Instead we flush in
+  dependency order using synchronous FIFO barriers — a `:sys.get_state/2` call
+  returns only after every message enqueued before it has been handled:
+
+    1. barrier on the **session** — `send_message` is a cast the session forwards
+       (also a cast) to the dispatcher, so this drains queued inbound messages
+       out of the session's mailbox into the dispatcher's first;
+    2. barrier on the **dispatcher** — it processes its whole mailbox, publishing
+       each queued durable event to `EmitBus`, which `send`s it (synchronously)
+       into the bridge's mailbox;
+    3. barrier on the **bridge** — it processes its whole mailbox, `append`ing
+       each durable event to the journal `Writer` (a synchronous call).
+
+  Neither barrier stops a process, so no `:rest_for_one` restart is triggered.
+  Only then do we tear the subtree down; the journal `Writer` (which traps exits)
+  datasyncs and closes in its own `terminate/2`.
+
+  GUARANTEED: every durable event enqueued to the dispatcher at the moment the
+  drain begins is appended to the journal and datasynced before teardown.
+  NOT guaranteed: events emitted *concurrently* by a still-running async turn
+  after the barriers pass — they race the teardown. For the harness's
+  synchronous one-message-one-turn model, once inbound `send_message`s stop the
+  tail is captured in full. The drain is bounded (best-effort) and never blocks
+  teardown on a slow/dead process.
   """
   @spec stop_session(term()) :: :ok | {:error, :not_found}
   def stop_session(session_id) do
     case lookup({:session_supervisor, session_id}) do
-      pid when is_pid(pid) -> stop_tree(pid)
-      nil -> stop_standalone(session_id)
+      pid when is_pid(pid) ->
+        drain_durable_tail(session_id)
+        stop_tree(pid)
+
+      nil ->
+        # Standalone sessions drain themselves: `Session.terminate/2` runs
+        # `stop_lifecycle_sync` (drains the dispatcher) then stops the bridge
+        # (which flushes the journal), so no extra drain is needed here.
+        stop_standalone(session_id)
     end
   end
+
+  # Flush dispatcher -> bridge -> journal via FIFO barriers so a graceful stop
+  # captures the full durable tail before the tree is torn down. See the
+  # `stop_session/1` doc for the completeness guarantee. Best-effort and bounded:
+  # any missing/slow/dead process just short-circuits — teardown proceeds either
+  # way, and a hard teardown is still safe (the Writer datasyncs on its own exit).
+  defp drain_durable_tail(session_id) do
+    flush_barrier(lookup({:session, session_id}))
+    flush_barrier(dispatcher_for(session_id))
+    flush_barrier(lookup({:emit_bridge, session_id}))
+    :ok
+  end
+
+  defp dispatcher_for(session_id) do
+    with pid when is_pid(pid) <- lookup({:lifecycle, session_id}),
+         %{dispatcher_pid: dispatcher} <-
+           GenServer.call(pid, :get_full_state, drain_timeout()) do
+      dispatcher
+    else
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
+  # A synchronous system message is a FIFO barrier: it returns only after every
+  # message enqueued before it has been handled, draining the mailbox into the
+  # process's side effects (dispatcher: publish to EmitBus; bridge: append to
+  # journal) WITHOUT stopping it (so no `:rest_for_one` restart fires).
+  defp flush_barrier(pid) when is_pid(pid) do
+    _ = :sys.get_state(pid, drain_timeout())
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp flush_barrier(_), do: :ok
+
+  defp drain_timeout, do: Raxol.Core.Defaults.shutdown_timeout_ms()
 
   @doc """
   Resolve `session_id` to the live `Raxol.Agent.Session` pid, or `nil`.

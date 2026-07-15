@@ -42,7 +42,17 @@ defmodule Raxol.Agent.Session do
     %{
       id: {__MODULE__, id},
       start: {__MODULE__, :start_link, [opts]},
-      restart: :permanent
+      restart: :permanent,
+      # The child-spec shutdown budget must STRICTLY EXCEED `stop_lifecycle_sync`'s
+      # total wait (`shutdown_timeout_ms() + 1_000`, see ~640). A standalone
+      # Session traps exits and drains its owned lifecycle in `terminate/2`; on a
+      # parent shutdown (e.g. `Raxol.Agent.Team`'s `:rest_for_one`), the parent
+      # must give `terminate/2` long enough to reach its `Process.exit(:kill)`
+      # fallback. If this budget were <= the drain budget the parent would
+      # brutal-kill the Session mid-drain, BEFORE the kill-fallback runs —
+      # orphaning the lifecycle (the exact failure the sync drain exists to
+      # prevent). +2_000 keeps a 1s margin over the +1_000 drain budget.
+      shutdown: Raxol.Core.Defaults.shutdown_timeout_ms() + 2_000
     }
   end
 
@@ -303,6 +313,22 @@ defmodule Raxol.Agent.Session do
     end
   end
 
+  # A LINKED process exited abnormally. Standalone mode traps exits, so a link
+  # exit lands here as `{:EXIT, pid, reason}`. gen_server intercepts the PARENT's
+  # exit before it reaches this callback (it drives `terminate/2`), so this only
+  # fires for a NON-parent link. Nothing links to the Session today (the lifecycle
+  # and bridge are unlinked + monitored), but if a future linked helper dies
+  # abnormally, log it rather than let the catch-all below swallow it silently.
+  def handle_manager_info({:EXIT, pid, reason}, state)
+      when reason not in [:normal, :shutdown] do
+    Logger.warning(
+      "[Agent.Session] linked process #{inspect(pid)} for #{inspect(state.id)} " <>
+        "exited abnormally: #{inspect(reason)}"
+    )
+
+    {:noreply, state}
+  end
+
   def handle_manager_info(_msg, state), do: {:noreply, state}
 
   @impl GenServer
@@ -408,6 +434,16 @@ defmodule Raxol.Agent.Session do
   # and the session in `Raxol.Agent.Session.Supervisor`'s `:rest_for_one` tree.
   # The tree owns the lifecycle: a `stop_session` (or any restart) tears it down
   # with the subtree — it can neither leak nor be reattached-to while dead.
+  #
+  # NOTE on `shutdown`: `Raxol.Core.Runtime.Lifecycle` does NOT trap exits, so on
+  # a supervised teardown it dies immediately on the `:shutdown` signal WITHOUT
+  # running its `handle_cast(:shutdown)` dispatcher-drain or `terminate/2` — this
+  # budget only bounds how long the supervisor waits before brutal-kill (it
+  # rarely engages). The durable-tail drain is therefore NOT done here; it is
+  # done up-front by `Raxol.Agent.Session.Supervisor.stop_session/1`, which flushes
+  # the dispatcher -> bridge -> journal Writer via FIFO barriers BEFORE tearing
+  # the tree down. The journal Writer traps exits and datasyncs in its own
+  # `terminate/2`, so once flushed the tail survives this hard teardown.
   @spec lifecycle_child_spec(keyword()) :: Supervisor.child_spec()
   def lifecycle_child_spec(opts) do
     %{
@@ -533,7 +569,23 @@ defmodule Raxol.Agent.Session do
         Process.sleep(5)
         do_register_session(key, meta, attempts - 1)
 
-      {:error, {:already_registered, _pid}} ->
+      {:error, {:already_registered, holder}} ->
+        # Retry budget exhausted: a genuinely-live foreign holder still owns the
+        # key. Proceed (the primary `id` identity is intact) but LOUDLY — an
+        # unregistered live session is invisible to `whereis/1`, `list_sessions/0`
+        # and `stop_session/1` by session_id, and a silent `:ok` would hide that.
+        Logger.warning(
+          "[Agent.Session] session_id seam registration for #{inspect(key)} timed " <>
+            "out (held by #{inspect(holder)}); proceeding UNREGISTERED — this " <>
+            "session won't resolve by session_id via whereis/list_sessions/stop_session"
+        )
+
+        :telemetry.execute(
+          [:raxol, :agent, :session, :register_timeout],
+          %{count: 1},
+          Map.put(meta, :key, key)
+        )
+
         :ok
     end
   end
@@ -648,6 +700,15 @@ defmodule Raxol.Agent.Session do
 
   defp stop_emit_bridge(pid) do
     if Process.alive?(pid) do
+      # FIFO barrier: drain the bridge's mailbox so durable events the lifecycle
+      # drain (`stop_lifecycle_sync`, run just before this) published are appended
+      # to the journal BEFORE we stop the bridge. This matters on the DynSup path:
+      # a plain `GenServer.stop` would trip the bridge's permanent-child restart,
+      # so we must `terminate_child` — which brutal-kills without a mailbox drain.
+      # The journal Writer (linked, exit-trapping) datasyncs in its own
+      # `terminate/2`, so once appended the tail survives the kill.
+      drain_mailbox(pid)
+
       case Process.whereis(Raxol.Agent.DynSup) do
         nil ->
           GenServer.stop(pid, :normal, 1_000)
@@ -663,6 +724,18 @@ defmodule Raxol.Agent.Session do
     end
 
     :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  # A synchronous system message is a FIFO barrier: it returns only after every
+  # message enqueued before it has been handled. Best-effort/bounded — a slow or
+  # dead process just short-circuits and teardown proceeds.
+  defp drain_mailbox(pid) do
+    _ = :sys.get_state(pid, Raxol.Core.Defaults.shutdown_timeout_ms())
+    :ok
+  rescue
+    _ -> :ok
   catch
     :exit, _ -> :ok
   end
