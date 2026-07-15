@@ -144,13 +144,19 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     {added, removed} = count_changes(ops)
     gutter_width = gutter_width_for(ops)
 
+    avail_width = state.width || context_width(context)
+
     body =
       case resolve_mode(state, context, ops, gutter_width) do
         :split ->
-          render_split(build_render_context(state, ops, gutter_width))
+          render_split(
+            build_render_context(state, ops, gutter_width, avail_width)
+          )
 
         :unified ->
-          render_unified(build_render_context(state, ops, gutter_width))
+          render_unified(
+            build_render_context(state, ops, gutter_width, avail_width)
+          )
       end
 
     %{
@@ -208,29 +214,49 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   @bar_width 1
   @pane_gap 2
 
+  # Auto-fit is percentile-based, not max-based: one 200-char outlier
+  # line shouldn't veto side-by-side for the whole file. Split is chosen
+  # when the 95th-percentile line of each side fits its half-width pane;
+  # the outliers beyond that get ellipsis-truncated at render (see
+  # `truncate_pieces/2`), keeping the 50/50 grid intact.
+  @fit_percentile 0.95
+
   defp split_fits?(ops, gutter_width, width) do
-    {old_max, new_max} = max_line_widths(ops)
+    {old_typical, new_typical} = side_percentile_widths(ops, @fit_percentile)
 
     pane_width = fn line_width ->
       gutter_width + @bar_width + @pane_chrome + line_width
     end
 
-    pane_width.(old_max) + @pane_gap + pane_width.(new_max) <= width
+    pane_width.(old_typical) + @pane_gap + pane_width.(new_typical) <= width
   end
 
-  # Widest line per side (floor 1 so an empty side still occupies a cell).
-  defp max_line_widths(ops) do
-    Enum.reduce(ops, {1, 1}, fn
-      {:delete, line}, {old_max, new_max} ->
-        {max(old_max, TextMeasure.display_width(line)), new_max}
+  # Per-side display widths at the given percentile (floor 1 so an empty
+  # side still occupies a cell). Equal lines count toward both sides.
+  defp side_percentile_widths(ops, percentile) do
+    {old_widths, new_widths} =
+      Enum.reduce(ops, {[], []}, fn
+        {:delete, line}, {olds, news} ->
+          {[TextMeasure.display_width(line) | olds], news}
 
-      {:insert, line}, {old_max, new_max} ->
-        {old_max, max(new_max, TextMeasure.display_width(line))}
+        {:insert, line}, {olds, news} ->
+          {olds, [TextMeasure.display_width(line) | news]}
 
-      {:equal, line}, {old_max, new_max} ->
-        width = TextMeasure.display_width(line)
-        {max(old_max, width), max(new_max, width)}
-    end)
+        {:equal, line}, {olds, news} ->
+          width = TextMeasure.display_width(line)
+          {[width | olds], [width | news]}
+      end)
+
+    {percentile_of(old_widths, percentile),
+     percentile_of(new_widths, percentile)}
+  end
+
+  defp percentile_of([], _percentile), do: 1
+
+  defp percentile_of(widths, percentile) do
+    sorted = Enum.sort(widths)
+    index = max(ceil(percentile * length(sorted)) - 1, 0)
+    max(Enum.at(sorted, index), 1)
   end
 
   # -- Header: framing reads "will change", never "changed" --
@@ -298,18 +324,26 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   # -- Render context: precomputed per-render inputs shared by both modes --
 
-  defp build_render_context(state, ops, gutter_width) do
-    {old_line_width, new_line_width} = max_line_widths(ops)
-
+  defp build_render_context(state, ops, gutter_width, avail_width) do
     %{
       ops_with_ranges: annotate_word_ranges(ops),
       gutter_width: gutter_width,
       old_lines: highlight(state.old, state.language, state.syntax_theme),
       new_lines: highlight(state.new, state.language, state.syntax_theme),
-      old_line_width: old_line_width,
-      new_line_width: new_line_width,
+      pane_budget: pane_budget(avail_width, gutter_width),
+      avail_width: avail_width,
       context: state.context
     }
+  end
+
+  # Content columns available inside one split pane, or nil when the
+  # available width is unknown (then nothing truncates and flex does its
+  # best). Floor 4 so pathological narrow widths still show something.
+  defp pane_budget(nil, _gutter_width), do: nil
+
+  defp pane_budget(avail_width, gutter_width) do
+    half = div(avail_width - @pane_gap, 2)
+    max(half - gutter_width - @bar_width - @pane_chrome, 4)
   end
 
   defp highlight(text, language, theme) do
@@ -511,24 +545,34 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       |> annotate_pairs()
       |> fold_rows(ctx.context, &split_classify/1)
 
+    # flex: 1 shares the row's free space equally — a true 50/50 split.
+    # ({:pct, n} only resolves against a definite container dimension,
+    # which this row usually doesn't have.) Outlier-long lines are
+    # ellipsis-truncated to the pane budget so they can't push a pane
+    # past its half (the flex min-content floor never engages).
     old_side =
       Components.column(
         gap: 0,
-        style: %{width: {:pct, 50}},
+        style: %{flex: 1},
         children: Enum.map(pairs, &split_old_line(&1, ctx))
       )
 
     new_side =
       Components.column(
         gap: 0,
-        style: %{width: {:pct, 50}},
+        style: %{flex: 1},
         children: Enum.map(pairs, &split_new_line(&1, ctx))
       )
 
     [
       Components.row(
         gap: 2,
-        style: %{width: :fill},
+        # flex children only share space the row actually HAS: inside the
+        # content-sized root column an unsized row collapses to content
+        # width and the panes pile up left. Give the row the known
+        # available width; :fill is the best-effort fallback when the
+        # width is unknown (explicit :split with no width prop).
+        style: %{width: ctx.avail_width || :fill},
         children: [old_side, new_side]
       )
     ]
@@ -607,7 +651,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   defp split_old_line({:equal, old_no, line, _new_no, _new_line, _, _}, ctx) do
     gutter = split_gutter(" ", old_no, ctx.gutter_width, :dim, nil)
-    content = content_spans(:equal, line, [], old_no, ctx)
+    content = content_spans(:equal, line, [], old_no, ctx, ctx.pane_budget)
     Components.row(gap: 1, children: [gutter, content])
   end
 
@@ -623,7 +667,9 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     gutter =
       split_gutter("▌", old_no, ctx.gutter_width, del_base(), del_gutter_bg())
 
-    content = content_spans(:delete, line, del_ranges, old_no, ctx)
+    content =
+      content_spans(:delete, line, del_ranges, old_no, ctx, ctx.pane_budget)
+
     Components.row(gap: 1, children: [gutter, content])
   end
 
@@ -633,7 +679,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   defp split_new_line({:equal, _old_no, _old_line, new_no, line, _, _}, ctx) do
     gutter = split_gutter(" ", new_no, ctx.gutter_width, :dim, nil)
-    content = content_spans(:equal, line, [], new_no, ctx)
+    content = content_spans(:equal, line, [], new_no, ctx, ctx.pane_budget)
     Components.row(gap: 1, children: [gutter, content])
   end
 
@@ -649,7 +695,9 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     gutter =
       split_gutter("▌", new_no, ctx.gutter_width, add_base(), add_gutter_bg())
 
-    content = content_spans(:insert, line, ins_ranges, new_no, ctx)
+    content =
+      content_spans(:insert, line, ins_ranges, new_no, ctx, ctx.pane_budget)
+
     Components.row(gap: 1, children: [gutter, content])
   end
 
@@ -694,7 +742,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   # a bg picked from the diff palette -- the row wash normally, the
   # brighter emphasis tier over any word-diff-changed range.
 
-  defp content_spans(kind, line, ranges, line_no, ctx) do
+  defp content_spans(kind, line, ranges, line_no, ctx, budget \\ nil) do
     tokens = line_tokens(kind, line, line_no, ctx)
     row_bg = row_bg_for(kind)
     emphasis_bg = emphasis_bg_for(kind)
@@ -704,6 +752,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       tokens
       |> split_tokens_by_ranges(ranges)
       |> Enum.reject(fn piece -> piece.text == "" end)
+      |> truncate_pieces(budget)
       |> Enum.map(fn piece ->
         bg = if piece.changed, do: emphasis_bg, else: row_bg
         fg = piece.fg || fallback_fg
@@ -727,6 +776,62 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       end
 
     Components.row(gap: 0, children: spans)
+  end
+
+  # Ellipsis-truncates a line's span pieces to a display-width budget
+  # (grapheme-accurate via TextMeasure — CJK/emoji count double). The
+  # outliers past the auto-fit percentile land here; everything else
+  # passes through untouched. nil budget = no truncation.
+  defp truncate_pieces(pieces, nil), do: pieces
+
+  defp truncate_pieces(pieces, budget) do
+    total =
+      Enum.reduce(pieces, 0, fn piece, acc ->
+        acc + TextMeasure.display_width(piece.text)
+      end)
+
+    if total <= budget do
+      pieces
+    else
+      {kept_rev, _used} = take_within(pieces, budget - 1, [])
+
+      ellipsis = %{text: "…", fg: nil, styles: [], changed: false}
+      Enum.reverse([ellipsis | kept_rev])
+    end
+  end
+
+  defp take_within([], _left, acc), do: {acc, 0}
+
+  defp take_within([piece | rest], left, acc) do
+    width = TextMeasure.display_width(piece.text)
+
+    cond do
+      width <= left ->
+        take_within(rest, left - width, [piece | acc])
+
+      left <= 0 ->
+        {acc, 0}
+
+      true ->
+        {[%{piece | text: slice_to_width(piece.text, left)} | acc], 0}
+    end
+  end
+
+  defp slice_to_width(text, width) do
+    text
+    |> String.graphemes()
+    |> Enum.reduce_while({[], 0}, fn grapheme, {acc, used} ->
+      grapheme_width = TextMeasure.display_width(grapheme)
+
+      if used + grapheme_width <= width do
+        {:cont, {[grapheme | acc], used + grapheme_width}}
+      else
+        {:halt, {acc, used}}
+      end
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+    |> Enum.join()
   end
 
   defp line_tokens(:delete, line, old_no, ctx),

@@ -136,6 +136,25 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
       """
     },
     %{
+      name: "long-line outlier",
+      path: "lib/telemetry.ex",
+      language: "elixir",
+      old: """
+      def emit(event) do
+        :telemetry.execute([:app, :request], %{count: 1}, %{event: event})
+        Logger.debug("emitted " <> inspect(event) <> " with metadata " <> inspect(%{source: :router, retries: 0, budget_ms: 5000, tags: [:hot, :inline]}))
+        :ok
+      end
+      """,
+      new: """
+      def emit(event) do
+        :telemetry.execute([:app, :request], %{count: 1}, %{event: event})
+        Logger.debug("emitted " <> inspect(event) <> " with metadata " <> inspect(%{source: :router, retries: 3, budget_ms: 9000, tags: [:hot, :inline]}))
+        :done
+      end
+      """
+    },
+    %{
       name: "word-alt clusters",
       path: "README.md",
       language: "markdown",
