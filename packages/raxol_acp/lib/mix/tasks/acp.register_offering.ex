@@ -29,8 +29,8 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
 
   ## Operator workflow
 
-  See `MARKETPLACE_REGISTRATION.md` for the full step-by-step,
-  including agent identity setup and dev-API smoke test.
+  Paste the output into the Virtuals dashboard (Offerings -> New offering) after
+  registering the agent at `app.virtuals.io/acp/new`.
   """
   use Mix.Task
 

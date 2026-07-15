@@ -221,31 +221,23 @@ defmodule Raxol.ACP.Relay.LiveRelayTest do
       Relay.get_quote(context.relay_config, request)
     end
 
+    @explorers %{
+      1 => "https://etherscan.io/tx/",
+      10 => "https://optimistic.etherscan.io/tx/",
+      137 => "https://polygonscan.com/tx/",
+      8453 => "https://basescan.org/tx/",
+      42_161 => "https://arbiscan.io/tx/"
+    }
+
     defp report_relay(label, transfer, status, from_chain) do
-      IO.puts("""
-
-      [live_relay:#{label}] settled
-        transfer_id   #{transfer.transfer_id}
-        status        #{status.status}
-        deposit tx    #{deposit_line(transfer.deposit_tx_hash, from_chain)}\
-      """)
+      IO.puts(
+        "[live_relay:#{label}] settled transfer=#{transfer.transfer_id} " <>
+          "status=#{status.status} deposit=#{deposit_line(transfer.deposit_tx_hash, from_chain)}"
+      )
     end
 
-    defp deposit_line(nil, _chain), do: "(none reported)"
-
-    defp deposit_line(hash, chain) do
-      case explorer_base(chain) do
-        nil -> hash
-        base -> base <> hash
-      end
-    end
-
-    defp explorer_base(1), do: "https://etherscan.io/tx/"
-    defp explorer_base(8453), do: "https://basescan.org/tx/"
-    defp explorer_base(42_161), do: "https://arbiscan.io/tx/"
-    defp explorer_base(10), do: "https://optimistic.etherscan.io/tx/"
-    defp explorer_base(137), do: "https://polygonscan.com/tx/"
-    defp explorer_base(_), do: nil
+    defp deposit_line(nil, _chain), do: "(none)"
+    defp deposit_line(hash, chain), do: Map.get(@explorers, chain, "") <> hash
 
     defp parse_list(spec), do: spec |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
 

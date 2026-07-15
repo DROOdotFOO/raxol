@@ -39,16 +39,19 @@ preflight runs. Rehearse each with `DRY_RUN=1` before a funded run.
 matrix mode (`XOCHI_LIVE_MATRIX=true`) it validates the full 6-chain grid
 (Ethereum, Optimism, Polygon, Base, Arbitrum with USDC/USDT/WETH; Robinhood
 Chain with USDG/WETH):
-the read-only preflight quotes every cell and asserts `can_solve`, the correct
-pull method per token (USDC -> ERC-3009, USDT/WETH -> Permit2), and the pinned
-Riddler solver; the funded run settles only the fillable subset. USDC settles
-here directly; USDT/WETH need a standing Permit2 allowance, so their real
+the read-only preflight quotes every settle-eligible cell (skipping the cells the
+funded run would skip -- eth-origin/dest, Permit2 -- so it does not hammer the
+worker validating corridors the real run never touches) and asserts `can_solve`,
+the correct pull method per token (USDC -> ERC-3009, USDT/WETH -> Permit2), and
+the pinned Riddler solver; the funded run settles only the fillable subset. USDC
+settles here directly; USDT/WETH need a standing Permit2 allowance, so their real
 settlement is the ACP order gate below (or opt in with `XOCHI_LIVE_SETTLE_PERMIT2=true`
-once the allowance is set). Auth defaults to a self-signed mandate; `member` uses
-the worker token in 1Password.
+once the allowance is set). Set `XOCHI_LIVE_PREFLIGHT_ALL=true` to quote the full
+grid regardless. Auth defaults to a self-signed mandate; `member` uses the worker
+token in 1Password.
 
 ```bash
-# full 5x3 grid, read-only (no funds)
+# full 6-chain grid, read-only (no funds)
 XOCHI_LIVE_KEY=0x<funded> DRY_RUN=1 XOCHI_LIVE_MATRIX=true \
   XOCHI_LIVE_CORRIDORS=mesh XOCHI_LIVE_TOKENS=USDC,USDT,WETH \
   ./examples/run_live_xochi_gate.sh

@@ -62,11 +62,14 @@
 # private path.
 #
 # Matrix mode (XOCHI_LIVE_MATRIX=true): validate every corridor x token x settlement
-# type in one run. A read-only per-cell preflight runs first (quote every cell,
-# assert can_solve, the served pull method per token, and the pinned solver); it
-# aborts before any funds move if a cell fails, and is all that runs under DRY_RUN.
-# The funded run then settles only the FILLABLE SUBSET: it re-quotes each cell and
-# skips (logs) any the solver cannot fill right now. Bounded by:
+# type in one run. A read-only per-cell preflight runs first (quote every
+# settle-eligible cell, assert can_solve, the served pull method per token, and the
+# pinned solver); it aborts before any funds move if a cell fails, and is all that
+# runs under DRY_RUN. The preflight skips quoting the cells the funded run would skip
+# by default (eth-origin/dest, Permit2) so it does not hammer the worker validating
+# corridors the real run never touches; set XOCHI_LIVE_PREFLIGHT_ALL=true to quote the
+# full grid. The funded run then settles only the FILLABLE SUBSET: it re-quotes each
+# cell and skips (logs) any the solver cannot fill right now. Bounded by:
 #   XOCHI_LIVE_CORRIDORS         "from>to,from>to" chain ids, OR "mesh" for all 20
 #                                ordered pairs of the 5 EVM chains (default 8453>42161,42161>8453)
 #   XOCHI_LIVE_TOKENS            "USDC,USDT,WETH" (default USDC,USDT,WETH)
@@ -75,6 +78,7 @@
 #   XOCHI_LIVE_WETH_AMOUNT       per-cell WETH amount (default 0.001; 18-decimal token)
 #   XOCHI_LIVE_ALLOW_ETH_ORIGIN  set true to settle Ethereum-origin cells (default: quote-only)
 #   XOCHI_LIVE_SETTLE_PERMIT2    set true to settle USDT/WETH cells in the funded run
+#   XOCHI_LIVE_PREFLIGHT_ALL     set true to quote every cell in the preflight, incl. skipped ones
 # Tokens resolve per chain via Raxol.Payments.Assets across the five EVM chains
 # (1, 10, 137, 8453, 42161). USDC pulls via ERC-3009 and settles here directly.
 # USDT/WETH pull via Permit2, which needs a standing on-chain Permit2 allowance this
