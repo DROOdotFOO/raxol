@@ -30,7 +30,7 @@ defmodule RaxolAgent do
   - **TEA-based agents** -- `init/update/view` with OTP supervision
   - **Agent teams** -- Supervisor-based coordinator/worker groups
   - **Inter-agent messaging** -- Registry-routed messages via `Agent.Comm`
-  - **Real SSE streaming** -- Anthropic, OpenAI, Ollama, Kimi, LLM7, OpenRouter, Lumo
+  - **Real SSE streaming** -- Anthropic, OpenAI, Ollama, LM Studio, Kimi, LLM7, OpenRouter, Lumo
   - **Shell commands** -- Port-based execution with result callbacks
   - **Headless mode** -- `view/1` is optional; skip rendering entirely
 

@@ -18,6 +18,13 @@ defmodule Raxol.Agent.Backend.SelectorTest do
       end
     end
 
+    test "resolves lm_studio to the HTTP backend with a base_url default" do
+      cfg = ExecutorConfig.new(harness: :lm_studio)
+      assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)
+      assert opts[:provider] == :openai
+      assert opts[:base_url] == "http://localhost:1234"
+    end
+
     test "resolves llm7 to the HTTP backend with a base_url default" do
       cfg = ExecutorConfig.new(harness: :llm7)
       assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)

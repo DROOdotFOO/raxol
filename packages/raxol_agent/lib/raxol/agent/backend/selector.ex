@@ -19,6 +19,9 @@ defmodule Raxol.Agent.Backend.Selector do
     openai: {Raxol.Agent.Backend.HTTP, [provider: :openai]},
     kimi: {Raxol.Agent.Backend.HTTP, [provider: :kimi]},
     ollama: {Raxol.Agent.Backend.HTTP, [provider: :ollama]},
+    # LM Studio serves an OpenAI-compatible /v1/chat/completions endpoint, so
+    # it reuses the :openai request/response/SSE handling in Backend.HTTP.
+    lm_studio: {Raxol.Agent.Backend.HTTP, [provider: :openai, base_url: "http://localhost:1234"]},
     llm7: {Raxol.Agent.Backend.HTTP, [provider: :openai, base_url: "https://api.llm7.io"]},
     openrouter:
       {Raxol.Agent.Backend.HTTP,
