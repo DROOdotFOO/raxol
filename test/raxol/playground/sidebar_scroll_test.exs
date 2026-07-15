@@ -107,7 +107,7 @@ defmodule Raxol.Playground.SidebarScrollTest do
       sidebar = sidebar_text(text)
 
       assert sidebar =~ "▸ Button"
-      assert sidebar =~ "38 widgets"
+      assert sidebar =~ "39 widgets"
     end
 
     test "scrolling past the visible window keeps the marker on screen and scrolls the top items out",

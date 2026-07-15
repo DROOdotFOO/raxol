@@ -483,6 +483,19 @@ defmodule Raxol.Playground.Catalog do
         ApprovalPrompt.render(approval, %{})
       )
       """
+    },
+    %{
+      name: "Harness Tool Blocks",
+      module: Demos.HarnessToolBlocksDemo,
+      category: :display,
+      description:
+        "Agent tool-call/tool-result blocks with a status glyph and an untrusted-output taint badge",
+      complexity: :intermediate,
+      tags: ["harness", "display", "agent", "tool", "taint", "provenance"],
+      code_snippet: """
+      ToolCallBlock.init(name: "Bash", args: %{command: "ls"}, status: :running)
+      ToolResultBlock.init(output: fetched_page, taint: true)  # composes TaintBadge
+      """
     }
   ]
 
