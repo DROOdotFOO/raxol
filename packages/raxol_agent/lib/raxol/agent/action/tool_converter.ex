@@ -7,6 +7,7 @@ defmodule Raxol.Agent.Action.ToolConverter do
   the LLM's tool call response back to the matching Action module.
   """
 
+  alias Raxol.Agent.ToolCall.Hook
   alias Raxol.Agent.ToolPolicy
 
   @doc """
@@ -38,6 +39,11 @@ defmodule Raxol.Agent.Action.ToolConverter do
   Validates argument depth, key count, and value sizes before dispatch
   to prevent resource exhaustion from malformed LLM output.
 
+  Dispatch order: find action -> parse arguments -> validate limits ->
+  `:tool_authorizer` (see `Raxol.Agent.ToolPolicy`) -> `:tool_call_hooks`
+  pipeline (see `Raxol.Agent.ToolCall.Hook`) -> `Action.call/2`. A hook veto
+  returns `{:error, {:vetoed, reason}}` without invoking the Action.
+
   Returns `{:ok, result}` or `{:error, reason}`.
   """
   @type effect :: Raxol.Agent.Directive.t()
@@ -52,7 +58,35 @@ defmodule Raxol.Agent.Action.ToolConverter do
          {:ok, params} <- parse_arguments(raw_args, module),
          :ok <- validate_arg_limits(params),
          :ok <- authorize_tool(module, params, context) do
-      module.call(params, context)
+      run_hooked(module, name, params, tool_call, context)
+    end
+  end
+
+  # Execution chokepoint: every LLM tool call passes through here. The
+  # `:tool_call_hooks` pipeline (Raxol.Agent.ToolCall.Hook) runs immediately
+  # before the Action -- hooks may transform the call or veto it. Zero
+  # registered hooks takes the fast path (behavior unchanged).
+  defp run_hooked(module, name, params, tool_call, context) do
+    case Hook.from_context(context) do
+      [] ->
+        module.call(params, context)
+
+      hooks ->
+        call = %{
+          action: module,
+          name: name,
+          params: params,
+          call_id: Map.get(tool_call, "id") || Map.get(tool_call, :id)
+        }
+
+        case Hook.run_before(hooks, call, context) do
+          {:cont, final_call} ->
+            result = final_call.action.call(final_call.params, context)
+            Hook.run_after(hooks, final_call, result, context)
+
+          {:halt, reason} ->
+            {:error, {:vetoed, reason}}
+        end
     end
   end
 
