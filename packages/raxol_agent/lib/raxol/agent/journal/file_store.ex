@@ -56,8 +56,18 @@ defmodule Raxol.Agent.Journal.FileStore do
   """
   @impl Raxol.Agent.Journal
   def open(session_id, opts \\ []) when is_binary(session_id) do
-    with :ok <- validate_session_id(session_id) do
-      dir = Path.join(base_dir(opts), session_id)
+    dir = Path.join(base_dir(opts), session_id)
+
+    # Pre-flight the session layout HERE, where a failure is a plain
+    # `{:error, reason}` return. A raising `Writer.init` (e.g. the session dir
+    # path blocked by a regular file, or an unwritable base) exits ABNORMALLY,
+    # and an abnormal init exit kills a non-trapping linked caller outright —
+    # so without this check the documented `{:error, _}` open contract (and
+    # EmitBridge's fail-closed `:journal_open_failed` arm) never fires for
+    # real filesystem failures. (Found by the I1 `:open_fail` fault site in
+    # test/invariants/identity_invariants_test.exs.)
+    with :ok <- validate_session_id(session_id),
+         :ok <- ensure_layout(dir) do
       writer_opts = Keyword.merge(opts, dir: dir, session_id: session_id)
 
       case Writer.start_link(writer_opts) do
@@ -132,6 +142,17 @@ defmodule Raxol.Agent.Journal.FileStore do
   end
 
   # --- helpers ---------------------------------------------------------------
+
+  # Non-raising layout creation, so open failures surface as error tuples
+  # instead of an abnormal Writer.init exit (see the comment in open/2).
+  defp ensure_layout(dir) do
+    Enum.reduce_while(["journal", "snapshots"], :ok, fn sub, :ok ->
+      case File.mkdir_p(Path.join(dir, sub)) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:mkdir_failed, reason, dir}}}
+      end
+    end)
+  end
 
   defp validate_session_id(id) when id in [".", ".."],
     do: {:error, :invalid_session_id}
