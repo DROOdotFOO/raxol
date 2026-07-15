@@ -687,7 +687,11 @@ defmodule Raxol.Harness.TFFixtureTest do
 
       for name <- @golden_names do
         result = Map.fetch!(by_name, name)
-        assert result.blocks_path == Path.join(dir, name <> ".blocks.json")
+        # Path.rootname (product side) normalizes separators to "/" while
+        # Path.join keeps the tmp-dir's native separators; expand both so the
+        # comparison is separator-agnostic on Windows.
+        assert Path.expand(result.blocks_path) ==
+                 Path.expand(Path.join(dir, name <> ".blocks.json"))
         assert File.exists?(result.blocks_path)
         assert result.count > 0
       end
