@@ -1,0 +1,354 @@
+defmodule Raxol.Harness.T2aScrollRegionTest do
+  @moduledoc """
+  Unit T2a (scroll-region manager, `Raxol.Terminal.ScrollRegionManager`) --
+  harness-level suite. Pure package-local geometry/byte tests live in
+  `packages/raxol_terminal/test/raxol/terminal/scroll_region_manager_test.exs`;
+  this file covers what only the root project can: assertions against the
+  TB byte-capture oracle (`Raxol.Harness.Test.SealOracle`,
+  `Raxol.UI.Rendering.PaintAuthority.Dialect`), composition with T2d's
+  teardown (`Raxol.Terminal.InlineDriver`), a full StreamData property
+  (`raxol_terminal` carries no `stream_data` test dep), and the `:pty`
+  real-signal facts (`Raxol.Test.PtyHarness`, unit TP).
+
+  Per `harness-ui-testing/02-renderer.md` §0 (orientation, locked from
+  roadmap T2a): scroll region = TOP rows `1..(H-N)` (history, scrolling);
+  footer = rows `(H-N+1)..H`, OUTSIDE the region, pinned. Per
+  `harness-ui-testing/03-lifecycle.md`: T2d's `InlineDriver.Sequences.
+  teardown_bytes/1` already emits `CSI r` (bare release) unconditionally
+  and idempotently; T2a's job is only ever to SET a real region (`start/3`,
+  `resize/2`) -- release composes for free, tested here at the byte level
+  and, for the real-signal facts, under an actual pty.
+  """
+
+  use ExUnit.Case, async: false
+  use ExUnitProperties
+
+  alias Raxol.Harness.Test.SealOracle
+  alias Raxol.Terminal.InlineDriver
+  alias Raxol.Terminal.ScrollRegionManager, as: SRM
+  alias Raxol.Test.PtyHarness
+  alias Raxol.UI.Rendering.PaintAuthority.Dialect
+
+  @moduletag :harness
+
+  defp contents(sio) do
+    {_input, output} = StringIO.contents(sio)
+    output
+  end
+
+  describe "byte format matches the TB Dialect exactly (package-boundary pin)" do
+    test "SRM.region_set_bytes/2 == Dialect.region_set(1, region_top)" do
+      for {rows, footer_rows} <- [{24, 1}, {80, 5}, {30, 3}, {6, 10}] do
+        top = SRM.region_top(rows, footer_rows)
+
+        assert SRM.region_set_bytes(rows, footer_rows) ==
+                 Dialect.region_set(1, top)
+      end
+    end
+  end
+
+  describe "start/3 -- ORIENTATION FAIL-FIRST ANCHOR, via the TB oracle" do
+    test "SealOracle parses the region as {1, H-N}; footer rows fall strictly outside it" do
+      {:ok, sio} = StringIO.open("")
+      state = SRM.start(sio, 30, 3)
+      raw = contents(sio)
+
+      # The anchor: if `region_top/2`'s formula were inverted (the
+      # historical v1 bug -- footer_rows used where H-N belongs), this
+      # would parse as {1, 3} instead of {1, 27} and every assertion below
+      # flips. Demonstrated red during development by temporarily swapping
+      # `region_top(rows, footer_rows)` to `footer_rows` and re-running:
+      # both `scroll_region/1` and the footer-disjointness check failed.
+      assert SealOracle.scroll_region(raw) == {1, 27}
+      assert SealOracle.region_sets(raw) == [{1, 27}]
+
+      footer = SRM.footer_range(state)
+      {_top, bottom} = SealOracle.scroll_region(raw)
+      assert Enum.min(footer) > bottom
+      assert Enum.max(footer) == 30
+    end
+
+    test "region_sets/1 sees exactly one DECSTBM set for a single start/3 call" do
+      {:ok, sio} = StringIO.open("")
+      _state = SRM.start(sio, 24, 2)
+
+      assert SealOracle.region_sets(contents(sio)) == [{1, 22}]
+    end
+
+    test "never emits a full-screen clear (INV-3)" do
+      {:ok, sio} = StringIO.open("")
+      _state = SRM.start(sio, 24, 2)
+
+      refute SealOracle.emits_full_clear?(contents(sio))
+    end
+  end
+
+  describe "resize/2 -- INV-5 universal half + TB oracle" do
+    test "exactly one region re-set per resize, correct bounds, no full clear" do
+      {:ok, sio} = StringIO.open("")
+      state = SRM.start(sio, 24, 2)
+      _state = SRM.resize(state, 40)
+
+      raw = contents(sio)
+      assert SealOracle.region_sets(raw) == [{1, 22}, {1, 38}]
+      refute SealOracle.emits_full_clear?(raw)
+    end
+
+    test "a width-only resize (rows unchanged) still emits its region re-set, but geometry is unchanged" do
+      {:ok, sio} = StringIO.open("")
+      before_state = SRM.start(sio, 24, 2)
+      after_state = SRM.resize(before_state, 24)
+
+      refute SRM.geometry_changed?(before_state, after_state)
+      assert SealOracle.region_sets(contents(sio)) == [{1, 22}, {1, 22}]
+    end
+  end
+
+  describe "composition with T2d's teardown (Tier A, StringIO, no pty)" do
+    # Mirrors packages/raxol_terminal/test/raxol/terminal/inline_driver_test.exs's
+    # "LC-P-CRASH: terminate/2 emits full teardown regardless of reason" --
+    # driving InlineDriver.terminate/2 directly with a crash-shaped reason,
+    # on the SAME device T2a already wrote its region-set bytes to, proves
+    # the two units compose across the trapped-crash path without any new
+    # wiring: T2d's bare `CSI r` release, unmodified, meaningfully resets
+    # the REAL region T2a set.
+    test "clean/trapped-crash: SET (T2a) precedes RELEASE (T2d), no double-emission, no full clear" do
+      {:ok, sio} = StringIO.open("")
+      state = SRM.start(sio, 30, 2)
+
+      driver_state = %InlineDriver.State{
+        device: sio,
+        rows: 30,
+        stty_enabled?: false
+      }
+
+      assert :ok =
+               InlineDriver.terminate(
+                 %RuntimeError{message: "boom"},
+                 driver_state
+               )
+
+      raw = contents(sio)
+
+      # SET appears exactly once, from T2a; T2d never emits a SET, only the
+      # bare release -- so the oracle's region-sets list stays a single
+      # entry even after composing with a full teardown.
+      assert SealOracle.region_sets(raw) == [{1, SRM.region_top(state)}]
+
+      {set_idx, _} = :binary.match(raw, SRM.region_set_bytes(30, 2))
+      {release_idx, _} = :binary.match(raw, "\e[r")
+      assert set_idx < release_idx
+
+      refute SealOracle.emits_full_clear?(raw)
+
+      # The teardown's final absolute move (`CSI 30;1 H`) addresses the
+      # real bottom row, which is INSIDE the region T2a set (1..28, footer
+      # rows 29-30 excluded) -- proving the release truly preceded the
+      # move byte-for-byte (INV-1 from 03-lifecycle.md): had the order been
+      # reversed, a real terminal would clamp this move inside the still-
+      # active 1..28 region instead of landing on row 30.
+      {move_idx, _} = :binary.match(raw, "\e[30;1H")
+      assert release_idx < move_idx
+    end
+
+    test "composing with T2d's idempotent emit_teardown/2 seam never double-releases" do
+      {:ok, sio} = StringIO.open("")
+      state = SRM.start(sio, 24, 1)
+
+      driver_state = %InlineDriver.State{
+        device: sio,
+        rows: 24,
+        stty_enabled?: false
+      }
+
+      driver_state = InlineDriver.emit_teardown(sio, driver_state)
+      assert driver_state.torn_down? == true
+
+      # Second call, state properly threaded (the documented contract:
+      # emit_teardown/2 is idempotent when the CALLER threads torn_down?
+      # back in -- see the module's own moduledoc on why raw terminate/2
+      # is not re-entrant the same way).
+      _driver_state = InlineDriver.emit_teardown(sio, driver_state)
+
+      raw = contents(sio)
+      # Exactly one release token, and T2a's SET is still exactly one
+      # entry -- T2d's idempotency guard, unmodified by T2a, absorbs the
+      # second call cleanly regardless of what T2a wrote first.
+      assert length(:binary.matches(raw, "\e[r")) == 1
+      assert SealOracle.region_sets(raw) == [{1, SRM.region_top(state)}]
+    end
+  end
+
+  describe "property: any resize sequence keeps the footer outside the region (StreamData)" do
+    property "history/footer stay disjoint, correctly ordered, and every DECSTBM set is exact" do
+      check all(
+              footer_rows <- integer(0..15),
+              initial_rows <- integer(1..300),
+              resizes <- list_of(integer(1..300), max_length: 25),
+              max_runs: 200
+            ) do
+        {:ok, sio} = StringIO.open("")
+        state = SRM.start(sio, initial_rows, footer_rows)
+
+        # footer_rows never changes across resize, so the expected DECSTBM
+        # sequence is just region_top/2 applied to each rows value in turn
+        # -- independently derived from the pure geometry function, not by
+        # re-walking SRM's own stateful resize/2 (which would make this
+        # property tautological).
+        expected_sets =
+          [{1, SRM.region_top(initial_rows, footer_rows)}] ++
+            Enum.map(resizes, fn rows ->
+              {1, SRM.region_top(rows, footer_rows)}
+            end)
+
+        final =
+          Enum.reduce(resizes, state, fn rows, acc -> SRM.resize(acc, rows) end)
+
+        raw = contents(sio)
+        refute SealOracle.emits_full_clear?(raw)
+        assert SealOracle.region_sets(raw) == expected_sets
+
+        history = MapSet.new(SRM.history_range(final))
+        footer = MapSet.new(SRM.footer_range(final))
+        assert MapSet.disjoint?(history, footer)
+        assert SRM.footer_rows(final) == footer_rows
+      end
+    end
+  end
+
+  # --- Tier B: real pty, real signals (TP, unit T2a's own scope) ---
+
+  @footer_rows 2
+  @rows 24
+
+  @mock_app_src """
+  defmodule T2aPtyMockApp do
+    use Raxol.Core.Runtime.Application
+    def init(_ctx), do: %{}
+    def update(_message, model), do: {model, []}
+    def view(_model), do: nil
+    def subscribe(_model), do: []
+  end
+
+  defmodule T2aPtySigtermHandler do
+    @behaviour :gen_event
+    def init(%{lifecycle: lifecycle}), do: {:ok, %{lifecycle: lifecycle}}
+
+    def handle_event(:sigterm, %{lifecycle: lifecycle} = state) do
+      case :sys.get_state(lifecycle).driver_pid do
+        driver_pid when is_pid(driver_pid) -> GenServer.stop(driver_pid, :normal)
+        _ -> :ok
+      end
+
+      System.stop(0)
+      {:ok, state}
+    end
+
+    def handle_event(_signal, state), do: {:ok, state}
+    def handle_call(_request, state), do: {:ok, :ok, state}
+  end
+
+  {:ok, pid} =
+    Raxol.start_link(T2aPtyMockApp,
+      environment: :inline,
+      probe?: false,
+      rows: #{@rows}
+    )
+
+  # T2a's own contribution: set a REAL scroll region on the same tty the
+  # driver just claimed, straight to :stdio -- exactly how a future
+  # integration (T2b) would call this module, without touching
+  # inline_driver.ex (outside this unit's write-set).
+  _srm = Raxol.Terminal.ScrollRegionManager.start(:stdio, #{@rows}, #{@footer_rows})
+
+  :ok = :os.set_signal(:sigterm, :handle)
+
+  :ok =
+    :gen_event.add_handler(
+      :erl_signal_server,
+      {T2aPtySigtermHandler, pid},
+      %{lifecycle: pid}
+    )
+
+  IO.puts("READY")
+  Process.sleep(:infinity)
+  """
+
+  setup_all do
+    if PtyHarness.available?() do
+      :ok
+    else
+      {:skip, "python3 not found on PATH"}
+    end
+  end
+
+  defp start_mock_app_under_pty do
+    PtyHarness.start(["mix", "run", "--no-halt", "-e", @mock_app_src],
+      env: %{"MIX_ENV" => "test"}
+    )
+  end
+
+  defp cleanup(session) do
+    PtyHarness.stop(session)
+    File.rm(session.capture_path)
+  end
+
+  describe "Tier B: LC-P-SIGTERM composed with a real T2a region set" do
+    @describetag :pty
+    @describetag :unix_only
+    @describetag :skip_on_ci
+
+    test "a real SIGTERM: T2a's region set precedes T2d's release, no full clear, region set exactly once" do
+      {:ok, session} = start_mock_app_under_pty()
+      on_exit(fn -> cleanup(session) end)
+
+      assert :ok = PtyHarness.await_capture(session, "READY", 15_000)
+      assert :ok = PtyHarness.signal(session, :term)
+      assert {:ok, {:exit, 0}} = PtyHarness.await(session, 15_000)
+
+      {:ok, output} = PtyHarness.read_output(session)
+
+      expected_top = SRM.region_top(@rows, @footer_rows)
+      assert SealOracle.region_sets(output) == [{1, expected_top}]
+      refute SealOracle.emits_full_clear?(output)
+
+      {set_idx, _} =
+        :binary.match(output, SRM.region_set_bytes(@rows, @footer_rows))
+
+      {release_idx, _} = :binary.match(output, "\e[r")
+      assert set_idx < release_idx
+    end
+  end
+
+  describe "Tier B: LC-N-KILL9-RESIDUAL, scoped to the region T2a set" do
+    @describetag :pty
+    @describetag :unix_only
+    @describetag :skip_on_ci
+
+    test "kill -9 leaves a REAL region set (not default) with no release -- the documented residual" do
+      {:ok, session} = start_mock_app_under_pty()
+      on_exit(fn -> cleanup(session) end)
+
+      assert :ok = PtyHarness.await_capture(session, "READY", 15_000)
+      assert :ok = PtyHarness.signal(session, :kill)
+      assert {:ok, {:signaled, 9}} = PtyHarness.await(session, 15_000)
+
+      {:ok, output} = PtyHarness.read_output(session)
+
+      expected_top = SRM.region_top(@rows, @footer_rows)
+      # The region T2a set is a tested, real fact (not the terminal's
+      # already-default state) -- the residual is that it never gets
+      # released, because no process survived to run either module's
+      # teardown. Scroll-region state has no kernel representation (unlike
+      # raw mode's -icanon/-echo, which `stty -a` can show), so the
+      # documented recovery for THIS residual is the same byte-level
+      # one-liner T2d already proves generically
+      # (`test/harness/t2d_teardown_negative_test.exs`,
+      # "residual-while-hung (SIGSTOP) + the documented recovery
+      # one-liner") -- not re-demonstrated here to avoid duplicating that
+      # pty-heavy test for a fact that isn't region-specific.
+      assert SealOracle.region_sets(output) == [{1, expected_top}]
+      refute output =~ "\e[r"
+    end
+  end
+end
