@@ -85,7 +85,7 @@ defmodule Raxol.UI.Components.Harness.ToolCallBlock do
         )
       ] ++ args_children(state.id, args_label)
 
-    %{type: :row, style: row_style, children: children}
+    %{type: :row, style: row_style, gap: 1, children: children}
   end
 
   @doc """

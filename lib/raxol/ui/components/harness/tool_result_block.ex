@@ -89,7 +89,7 @@ defmodule Raxol.UI.Components.Harness.ToolResultBlock do
       body_box(state, lines, long?)
     ]
 
-    %{type: :column, style: column_style, children: children}
+    %{type: :column, style: column_style, gap: 0, children: children}
   end
 
   defp toggle_collapsed(state), do: %{state | collapsed: not state.collapsed}
