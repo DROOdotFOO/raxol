@@ -1,0 +1,13 @@
+# GitGuardian configuration.
+#
+# The stealth conformance fixture and its generator contain deterministic
+# secp256k1 test vectors (including the well-known ethers/web3 documentation key
+# 0x4c0883a6...b6c1a1). They are reference values from the Xochi TS SDK used to
+# prove raxol's ERC-5564 stealth derivation matches byte-for-byte -- not live
+# credentials, and tied to no funded wallet. Ignore these paths so the test
+# vectors do not trip secret detection.
+version: 2
+secret:
+  ignored-paths:
+    - "packages/raxol_payments/test/fixtures/stealth_vectors.json"
+    - "packages/raxol_payments/scripts/gen_reverse_stealth_vectors.exs"
