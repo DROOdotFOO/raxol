@@ -1,0 +1,64 @@
+{
+  "schema": "raxol.t0.verdict/1",
+  "generated_at": "fixture",
+  "matrix": [
+    {
+      "terminal": "kitty",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C1",
+      "observable": "pass",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "fixture",
+      "verdict": "pass"
+    },
+    {
+      "terminal": "kitty",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C3",
+      "observable": "pass",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "fixture",
+      "verdict": "pass"
+    },
+    {
+      "terminal": "kitty",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C2",
+      "observable": {
+        "status": "fed",
+        "tail_window_rows": 21
+      },
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "fixture",
+      "verdict": "fed"
+    },
+    {
+      "terminal": "kitty",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C4",
+      "observable": "reflow",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "fixture",
+      "verdict": "reflow"
+    },
+    {
+      "terminal": "wezterm",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C4",
+      "observable": "reflow",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "fixture",
+      "verdict": "reflow"
+    }
+  ]
+}

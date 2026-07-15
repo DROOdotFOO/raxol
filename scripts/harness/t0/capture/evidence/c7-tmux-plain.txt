@@ -1,0 +1,31 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+LINE-0001
+LINE-0002
+LINE-0003
+LINE-0004
+LINE-0005
+tool: echo hi
+hi
+
+---STRIP---
+STATUS: turn 1
+PROMPT>
