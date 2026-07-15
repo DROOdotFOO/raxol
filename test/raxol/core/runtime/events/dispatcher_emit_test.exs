@@ -88,15 +88,22 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEmitTest do
     assert event.payload.message == {:command_result, {:llm_chunk, "hello"}}
   end
 
-  test "process_app_update publishes a durable :app_update event",
+  test "an agent-message turn brackets a durable :app_update with turn_started/turn_completed",
        %{dispatcher: dispatcher} do
-    # agent_message casts route straight to process_app_update.
+    # agent_message casts are one turn: turn_started -> app_update -> turn_completed,
+    # all durable and sharing one minted turn_id.
     GenServer.cast(dispatcher, {:dispatch, {:agent_message, :peer, :ping}})
 
-    assert_receive {:emit_bus, @session_id, event}, 1_000
-    assert event.family == :loop
-    assert event.type == :app_update
-    assert event.tier == :durable
+    assert_receive {:emit_bus, @session_id, %{type: :turn_started} = started}, 1_000
+    assert_receive {:emit_bus, @session_id, %{type: :app_update} = updated}, 1_000
+    assert_receive {:emit_bus, @session_id, %{type: :turn_completed} = completed}, 1_000
+
+    assert Enum.all?([started, updated, completed], &(&1.family == :loop))
+    assert Enum.all?([started, updated, completed], &(&1.tier == :durable))
+
+    assert is_binary(started.turn_id)
+    assert started.turn_id == updated.turn_id
+    assert started.turn_id == completed.turn_id
   end
 
   test "no session_id means no emit (terminal apps stay silent)" do

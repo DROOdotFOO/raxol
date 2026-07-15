@@ -11,13 +11,15 @@ defmodule Raxol.Agent.Session do
 
   require Logger
 
-  defstruct [:id, :app_module, :lifecycle_pid, :team_id]
+  defstruct [:id, :app_module, :lifecycle_pid, :team_id, :session_id, :emit_bridge]
 
   @type t :: %__MODULE__{
           id: term(),
           app_module: module(),
           lifecycle_pid: pid() | nil,
-          team_id: term() | nil
+          team_id: term() | nil,
+          session_id: String.t() | nil,
+          emit_bridge: pid() | nil
         }
 
   @spec child_spec(keyword()) :: Supervisor.child_spec()
@@ -80,17 +82,30 @@ defmodule Raxol.Agent.Session do
     id = Keyword.fetch!(opts, :id)
     team_id = Keyword.get(opts, :team_id)
 
-    lifecycle_pid = start_or_reattach_lifecycle(app_module, id)
+    # Harness keystone: a stable session_id makes the runtime Dispatcher emit
+    # typed events, and scopes the durable journal + event stream. Start the
+    # per-session sink (EmitBridge) BEFORE the lifecycle so it is subscribed to
+    # EmitBus in time for the first turn. The sink emits into the singleton
+    # SessionStreamer (supervised by Raxol.Agent.Supervisor); when none is
+    # running its emits are harmless no-ops.
+    session_id = Keyword.get(opts, :session_id) || derive_session_id(id)
+    emit_bridge = start_emit_bridge(session_id, opts)
+
+    lifecycle_pid = start_or_reattach_lifecycle(app_module, id, session_id)
     Process.monitor(lifecycle_pid)
 
-    Logger.info("[Agent.Session] Started agent #{inspect(id)} (#{inspect(app_module)})")
+    Logger.info(
+      "[Agent.Session] Started agent #{inspect(id)} (#{inspect(app_module)}) session=#{session_id}"
+    )
 
     {:ok,
      %__MODULE__{
        id: id,
        app_module: app_module,
        lifecycle_pid: lifecycle_pid,
-       team_id: team_id
+       team_id: team_id,
+       session_id: session_id,
+       emit_bridge: emit_bridge
      }}
   end
 
@@ -170,6 +185,11 @@ defmodule Raxol.Agent.Session do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:get_session_id, _from, state) do
+    {:reply, {:ok, state.session_id}, state}
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call(_msg, _from, state),
     do: {:reply, {:error, :unknown_call}, state}
 
@@ -194,7 +214,21 @@ defmodule Raxol.Agent.Session do
       Raxol.Core.Runtime.Lifecycle.stop(state.lifecycle_pid)
     end
 
+    # Gracefully stop the per-session sink so its journal handle is flushed and
+    # closed (its terminate/2 does this). Best-effort — never block session
+    # shutdown on it.
+    stop_emit_bridge(state.emit_bridge)
+
     :ok
+  end
+
+  @doc "Read the harness session_id for a running agent (nil if not found)."
+  @spec session_id(term()) :: {:ok, String.t() | nil} | {:error, :not_found}
+  def session_id(agent_id) do
+    case Registry.lookup(Raxol.Agent.Registry, agent_id) do
+      [{pid, _}] -> GenServer.call(pid, :get_session_id)
+      [] -> {:error, :not_found}
+    end
   end
 
   # Wire the agent's permission/sandbox/audit hook chain into the runtime so it
@@ -211,13 +245,15 @@ defmodule Raxol.Agent.Session do
     end
   end
 
-  defp start_or_reattach_lifecycle(app_module, id) do
+  defp start_or_reattach_lifecycle(app_module, id, session_id) do
     opts = [
       environment: :agent,
       width: Raxol.Core.Defaults.terminal_width(),
       height: Raxol.Core.Defaults.terminal_height(),
       name: :"agent_lifecycle_#{inspect(id)}",
-      command_interceptor: build_command_interceptor(app_module, id)
+      command_interceptor: build_command_interceptor(app_module, id),
+      # Harness keystone: makes the Dispatcher publish typed events to EmitBus.
+      session_id: session_id
     ]
 
     case Raxol.Core.Runtime.Lifecycle.start_link(app_module, opts) do
@@ -231,6 +267,75 @@ defmodule Raxol.Agent.Session do
         # Reattach to the running runtime instead of failing to restart.
         lifecycle_pid
     end
+  end
+
+  # A session_id is also the durable journal's on-disk directory name, so it
+  # must be a safe filename. Coerce the (arbitrary term) agent id into the
+  # journal's charset and suffix a unique token so restarts never collide.
+  defp derive_session_id(id) do
+    base =
+      id
+      |> to_id_string()
+      |> String.replace(~r/[^A-Za-z0-9._-]/, "-")
+      |> String.trim("-")
+
+    base = if base == "", do: "agent", else: base
+    "#{base}-#{System.unique_integer([:positive])}"
+  end
+
+  defp to_id_string(id) when is_binary(id), do: id
+  defp to_id_string(id) when is_atom(id), do: Atom.to_string(id)
+  defp to_id_string(id), do: inspect(id)
+
+  # Start the per-session sink under the agent DynamicSupervisor when available
+  # (so it is not crash-coupled to this Session); fall back to a linked start
+  # otherwise, so the sink dies with the session rather than leaking. Returns
+  # the bridge pid or nil.
+  defp start_emit_bridge(session_id, opts) do
+    bridge_opts =
+      [session_id: session_id]
+      |> maybe_put(:journal, Keyword.get(opts, :journal))
+      |> maybe_put(:journal_opts, Keyword.get(opts, :journal_opts))
+
+    case Process.whereis(Raxol.Agent.DynSup) do
+      nil ->
+        start_emit_bridge_standalone(bridge_opts)
+
+      _sup ->
+        case DynamicSupervisor.start_child(
+               Raxol.Agent.DynSup,
+               {Raxol.Agent.EmitBridge, bridge_opts}
+             ) do
+          {:ok, pid} -> pid
+          {:error, {:already_started, pid}} -> pid
+          {:error, _} -> start_emit_bridge_standalone(bridge_opts)
+        end
+    end
+  end
+
+  defp start_emit_bridge_standalone(bridge_opts) do
+    case Raxol.Agent.EmitBridge.start_link(bridge_opts) do
+      {:ok, pid} -> pid
+      _ -> nil
+    end
+  end
+
+  defp maybe_put(kw, _key, nil), do: kw
+  defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)
+
+  defp stop_emit_bridge(nil), do: :ok
+
+  defp stop_emit_bridge(pid) do
+    if Process.alive?(pid) do
+      case Process.whereis(Raxol.Agent.DynSup) do
+        nil -> GenServer.stop(pid, :normal, 1_000)
+        _sup -> DynamicSupervisor.terminate_child(Raxol.Agent.DynSup, pid)
+      end
+    end
+
+    :ok
+  catch
+    :exit, _ -> :ok
   end
 
   defp get_dispatcher(lifecycle_pid) when is_pid(lifecycle_pid) do

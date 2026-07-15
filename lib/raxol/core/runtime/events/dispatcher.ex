@@ -42,7 +42,12 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
               # Harness keystone: when set, both model-fold sites publish a
               # neutral event to Raxol.Core.Runtime.EmitBus keyed by this id.
               # nil (terminal/plain apps) makes emit/2 a no-op.
-              session_id: nil
+              session_id: nil,
+              # Harness loop vocabulary: the turn currently in flight. Minted at
+              # the agent-message dispatch (a prompt = a turn) and stamped onto
+              # every event emitted while it is set, so all items within one turn
+              # share a stable turn_id (U6's expected_turn_id CAS depends on it).
+              turn_id: nil
   end
 
   # BaseManager provides start_link/1 and start_link/2 automatically
@@ -412,7 +417,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       "[Dispatcher] handle_cast :dispatch agent_message: #{inspect(msg)}"
     )
 
-    with_dispatch_span(fn -> dispatch_raw_message(msg, state) end)
+    with_dispatch_span(fn -> dispatch_agent_turn(msg, state) end)
   end
 
   @impl true
@@ -425,7 +430,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     )
 
     # Agent messages go directly to update/2, bypassing event/plugin pipeline
-    with_dispatch_span(fn -> dispatch_raw_message(msg, state) end)
+    with_dispatch_span(fn -> dispatch_agent_turn(msg, state) end)
   end
 
   @impl true
@@ -593,13 +598,42 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # agent Contract on the raxol_agent side.
   defp emit(%State{session_id: nil}, _type, _tier, _payload), do: :ok
 
-  defp emit(%State{session_id: session_id}, type, tier, payload) do
+  defp emit(%State{session_id: session_id, turn_id: turn_id}, type, tier, payload) do
     session_id
-    |> Raxol.Core.Runtime.EmitBus.build(type, tier, payload)
+    |> Raxol.Core.Runtime.EmitBus.build(type, tier, payload, turn_id: turn_id)
     |> Raxol.Core.Runtime.EmitBus.publish()
 
     :ok
   end
+
+  # --- Harness loop vocabulary: turn brackets ----------------------------
+  # An inbound agent message is one turn. We mint a turn_id, emit a durable
+  # `:turn_started` before the fold, run the model fold (whose own durable
+  # `:app_update` emit now carries this turn_id), then bracket with a durable
+  # `:turn_completed` on success or `:error` on failure. The turn_id persists
+  # in state so any async `:command_result` deltas that stream out of the
+  # turn's commands carry the same turn_id.
+  #
+  # NOTE (v0 limitation): turn_completed is emitted when the synchronous fold
+  # returns. Agents that stream via async commands will emit their ephemeral
+  # item_deltas after turn_completed (same turn_id). Tightening the boundary to
+  # the last async chunk is a later unit — see the module TODO.
+  defp dispatch_agent_turn(msg, state) do
+    turn_state = %{state | turn_id: mint_turn_id()}
+    emit(turn_state, :turn_started, :durable, %{message: msg})
+
+    case process_app_update(turn_state, msg, msg) do
+      {:ok, new_state, _commands} ->
+        emit(new_state, :turn_completed, :durable, %{})
+        {:noreply, new_state}
+
+      {:error, reason} ->
+        emit(turn_state, :error, :durable, %{reason: reason})
+        {:noreply, turn_state}
+    end
+  end
+
+  defp mint_turn_id, do: "turn-#{System.unique_integer([:positive])}"
 
   defp log_command_failure(:error, label, reason, context) do
     Raxol.Core.Runtime.Log.error_with_stacktrace(label, reason, nil, context)
@@ -624,7 +658,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     )
 
     with_dispatch_span(fn ->
-      msg |> dispatch_raw_message(state) |> to_call_reply()
+      msg |> dispatch_agent_turn(state) |> to_call_reply()
     end)
   end
 
