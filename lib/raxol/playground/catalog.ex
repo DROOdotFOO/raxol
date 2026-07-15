@@ -200,6 +200,19 @@ defmodule Raxol.Playground.Catalog do
       tags: ["display", "markdown", "text", "rendering"],
       code_snippet: ~s'text(render_markdown(content))'
     },
+    %{
+      name: "Harness Diff Viewer",
+      module: Demos.HarnessDiffDemo,
+      category: :display,
+      description:
+        "Pre-apply file diff: line-based unified/split view with +/- markers and line numbers",
+      complexity: :intermediate,
+      tags: ["harness", "diff", "display", "review", "agent"],
+      code_snippet: """
+      {:ok, state} = DiffViewer.init(path: "lib/foo.ex", old: old_text, new: new_text)
+      DiffViewer.render(state, %{})
+      """
+    },
     # --- Navigation/Layout widgets ---
     %{
       name: "Tabs",
