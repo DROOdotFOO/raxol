@@ -19,5 +19,8 @@ Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 
 # :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
 # until their units (U4–U9) land. :mutation — negative-control checklists
-# (meta-invariant m4), run on demand, never in regular CI.
-ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation])
+# (meta-invariant m4), run on demand, never in regular CI. :harness_red —
+# permanent failing-first red suites authored before their unit exists (e.g.
+# U21 evidence-gated done); the reds run RED against the skeleton until the
+# unit lands, their CI-green negative controls stay untagged and DO run.
+ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation, :harness_red])
