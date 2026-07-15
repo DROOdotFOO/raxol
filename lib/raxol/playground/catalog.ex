@@ -460,6 +460,29 @@ defmodule Raxol.Playground.Catalog do
       ])
       WorktracksPanel.render(state, %{})
       """
+    },
+    %{
+      name: "Harness Approval",
+      module: Demos.HarnessApprovalDemo,
+      category: :overlay,
+      description:
+        "Agent-harness approval gate: blast-radius preview and keyboard-driven allow/deny scope choice",
+      complexity: :intermediate,
+      tags: ["harness", "approval", "overlay", "blast-radius"],
+      code_snippet: """
+      {:ok, approval} =
+        ApprovalPrompt.init(
+          id: "harness-approval",
+          action: %{description: "Clear stale build cache", tool: "shell.exec"},
+          blast_radius: %{deletes: ["/tmp/build/artifact.tar"], reversible: false}
+        )
+
+      AbsoluteLayer.dialog_overlay(
+        approval.width,
+        ApprovalPrompt.estimate_height(approval),
+        ApprovalPrompt.render(approval, %{})
+      )
+      """
     }
   ]
 
