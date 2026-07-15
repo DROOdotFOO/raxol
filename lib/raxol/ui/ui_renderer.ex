@@ -264,7 +264,7 @@ defmodule Raxol.UI.Renderer do
        ) do
     style = Map.get(element, :style, %{})
     fg = Map.get(style, :fg, :white)
-    bg = Map.get(style, :bg, :black)
+    bg = Map.get(style, :bg)
     ch = String.at(char || "-", 0) || "-"
 
     for col <- 0..(w - 1), do: {x + col, y, ch, fg, bg, []}
