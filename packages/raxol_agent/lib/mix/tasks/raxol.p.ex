@@ -1,0 +1,217 @@
+defmodule Mix.Tasks.Raxol.P do
+  @shortdoc "One-shot headless agent run: prompt in, answer to stdout, events to stderr"
+
+  @moduledoc """
+  Run one agent turn headlessly — the `raxol -p` surface.
+
+      mix raxol.p "what's inside my cwd"
+      mix raxol.p --harness lm_studio --model qwen2.5-7b-instruct "summarize mix.exs"
+      bin/raxol -p "what's inside my cwd"        # repo-root wrapper
+
+  ## What it does
+
+  Boots the agent runtime (no terminal UI), starts a `SessionStreamer`,
+  subscribes to it, then pumps a `Raxol.Agent.Stream.react/2` run through
+  `Raxol.Agent.Contract` — so this command is a real consumer of the
+  harness contract, not a shortcut around it:
+
+    * **stdout** — the answer only (streamed deltas when the backend
+      streams; the final message otherwise). Pipe-safe.
+    * **stderr** — every contract event as one JSON line: `turn_started`,
+      `item_completed{tool_use/tool_result/message}`, `turn_completed`,
+      `error`. `2>events.jsonl` captures a machine-readable trace.
+
+  The agent gets read-only fs tools (`list_dir`, `read_file`, `file_stat`)
+  scoped under the current working directory.
+
+  ## Options
+
+    * `--harness`  — backend harness atom (default `lm_studio`; also
+      `anthropic`, `openai`, `ollama`, ... see `Backend.Selector`)
+    * `--model`    — model override (LM Studio uses its loaded model)
+    * `--base-url` — override the backend base URL
+    * `--system`   — system prompt override
+    * `--timeout`  — per-run timeout in seconds (default 180)
+    * `--no-tools` — plain completion, no tool loop
+
+  ## Exit codes
+
+  `0` success · `1` run error · `2` timeout · `64` usage error
+  """
+
+  use Mix.Task
+
+  alias Raxol.Agent.Contract
+  alias Raxol.Agent.SessionStreamer
+
+  @default_timeout_s 180
+
+  @switches [
+    harness: :string,
+    model: :string,
+    base_url: :string,
+    system: :string,
+    timeout: :integer,
+    tools: :boolean
+  ]
+
+  @impl Mix.Task
+  def run(argv) do
+    {opts, args, invalid} = OptionParser.parse(argv, strict: @switches)
+
+    prompt = Enum.join(args, " ") |> String.trim()
+
+    cond do
+      invalid != [] ->
+        usage_error("unknown options: #{inspect(invalid)}")
+
+      prompt == "" ->
+        usage_error("no prompt given. Usage: mix raxol.p [options] \"prompt\"")
+
+      true ->
+        run_prompt(prompt, opts)
+    end
+  end
+
+  defp usage_error(message) do
+    IO.puts(:stderr, "raxol.p: #{message}")
+    exit({:shutdown, 64})
+  end
+
+  defp run_prompt(prompt, opts) do
+    # Agent environment only — no terminal driver, no UI. stdout belongs to
+    # the answer: boot without recompiling (bin/raxol precompiles silently)
+    # and keep Logger quiet below :error.
+    System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
+    Logger.configure(level: :error)
+
+    Mix.Task.run("app.start", [
+      "--no-compile",
+      "--no-deps-check",
+      "--no-archives-check",
+      "--no-elixir-version-check"
+    ])
+
+    ensure_streamer!()
+
+    session_id = "cli-#{System.unique_integer([:positive])}"
+    :ok = SessionStreamer.subscribe(session_id)
+
+    stream_opts = build_stream_opts(prompt, opts)
+    use_tools = Keyword.get(opts, :tools, true)
+
+    runner =
+      Task.async(fn ->
+        stream =
+          if use_tools do
+            Raxol.Agent.Stream.react(prompt, stream_opts)
+          else
+            Raxol.Agent.Stream.run(prompt, stream_opts)
+          end
+
+        Contract.pump(session_id, stream, prompt: prompt)
+      end)
+
+    timeout_ms = Keyword.get(opts, :timeout, @default_timeout_s) * 1_000
+    status = consume(session_id, runner, timeout_ms, %{wrote_stdout: false})
+    exit({:shutdown, status})
+  end
+
+  # SessionStreamer is not in any package supervision tree yet (the CLI is
+  # its first live consumer); start it idempotently.
+  defp ensure_streamer! do
+    case SessionStreamer.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, reason} -> raise "cannot start SessionStreamer: #{inspect(reason)}"
+    end
+  end
+
+  defp build_stream_opts(_prompt, opts) do
+    harness_name = Keyword.get(opts, :harness, "lm_studio")
+    supported = Raxol.Agent.Backend.Selector.supported_harnesses()
+
+    harness =
+      Enum.find(supported, &(Atom.to_string(&1) == harness_name)) ||
+        usage_error(
+          "unknown harness #{inspect(harness_name)}; supported: " <>
+            Enum.map_join(supported, ", ", &Atom.to_string/1)
+        )
+
+    executor_attrs =
+      [harness: harness]
+      |> maybe_put(:model, Keyword.get(opts, :model))
+
+    executor = Raxol.Agent.ExecutorConfig.new(executor_attrs)
+
+    backend_opts =
+      []
+      |> maybe_put(:base_url, Keyword.get(opts, :base_url))
+
+    system =
+      Keyword.get(
+        opts,
+        :system,
+        "You are a helpful assistant running in a terminal at the user's " <>
+          "current working directory. Use the available tools to inspect " <>
+          "files when the question is about them. Be concise."
+      )
+
+    [
+      executor: executor,
+      backend_opts: backend_opts,
+      system_prompt: system,
+      actions: Raxol.Agent.Actions.Fs.all()
+    ]
+  end
+
+  defp maybe_put(kw, _key, nil), do: kw
+  defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)
+
+  # -- Event consumption: contract events in, stdout/stderr out --------------
+
+  defp consume(session_id, runner, timeout_ms, state) do
+    receive do
+      {:session_event, ^session_id, %Contract.Event{} = event} ->
+        IO.write(:stderr, Contract.encode_line(event))
+        state = render_stdout(event, state)
+
+        case event do
+          %{type: :turn_completed, payload: %{final: true}} ->
+            Task.await(runner, 5_000)
+            if state.wrote_stdout, do: IO.write("\n")
+            0
+
+          %{type: :error} ->
+            Task.await(runner, 5_000)
+            1
+
+          _ ->
+            consume(session_id, runner, timeout_ms, state)
+        end
+    after
+      timeout_ms ->
+        IO.puts(:stderr, ~s({"type":"error","payload":{"reason":"timeout"}}))
+        Task.shutdown(runner, :brutal_kill)
+        2
+    end
+  end
+
+  # stdout carries the ANSWER only. Stream deltas as they arrive; if the
+  # run produced no deltas (non-streaming react loop), print the final
+  # message content once.
+  defp render_stdout(%{type: :item_delta, payload: %{chunk: chunk}}, state) do
+    IO.write(chunk)
+    %{state | wrote_stdout: true}
+  end
+
+  defp render_stdout(
+         %{type: :item_completed, payload: %{item_type: :message, content: content}},
+         %{wrote_stdout: false} = state
+       ) do
+    IO.write(content)
+    %{state | wrote_stdout: true}
+  end
+
+  defp render_stdout(_event, state), do: state
+end

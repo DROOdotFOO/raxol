@@ -1,0 +1,66 @@
+#!/bin/sh
+# raxol — one-shot headless agent CLI (v0).
+#
+#   raxol -p "what's inside my cwd"
+#   raxol -p "summarize mix.exs" --harness lm_studio 2>events.jsonl
+#
+# stdout = the answer. stderr = harness contract events as JSON lines.
+# Runs the mix task from the raxol_agent package while keeping the
+# CALLER's cwd as the agent's working directory (the fs tools are scoped
+# to it). Requires deps compiled once: (cd packages/raxol_agent && mix deps.get)
+
+set -e
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(dirname -- "$SCRIPT_DIR")
+CALLER_CWD=$(pwd)
+
+PROMPT=""
+PASSTHRU=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p)
+      shift
+      PROMPT="$1"
+      ;;
+    -h|--help)
+      echo "usage: raxol -p \"prompt\" [--harness NAME] [--model NAME] [--base-url URL] [--system TEXT] [--timeout SECONDS] [--no-tools]"
+      exit 0
+      ;;
+    *)
+      PASSTHRU="$PASSTHRU $1"
+      ;;
+  esac
+  shift
+done
+
+if [ -z "$PROMPT" ]; then
+  echo "raxol: missing -p \"prompt\"" >&2
+  exit 64
+fi
+
+cd "$REPO_ROOT/packages/raxol_agent"
+
+# Compile silently first so the actual run keeps stdout clean for the
+# answer (the task boots with --no-compile).
+mix compile >/dev/null 2>&1 || {
+  echo "raxol: compile failed; run (cd packages/raxol_agent && mix compile) for details" >&2
+  exit 70
+}
+
+# RAXOL_CLI_CWD tells the fs tools which directory the user meant.
+# MAKEFLAGS=-s keeps the termbox2 NIF's per-invocation make check from
+# printing "Nothing to be done" onto the answer channel. Mix's pre-task
+# dep check still prints a constant "==> raxol_terminal" header (the
+# elixir_make dep reads as always-stale — root fix is a manifest guard in
+# raxol_terminal, out of scope here), so filter that exact line while
+# preserving the task's exit code.
+STATUS_FILE=$(mktemp)
+{
+  MAKEFLAGS=-s RAXOL_CLI_CWD="$CALLER_CWD" mix raxol.p $PASSTHRU "$PROMPT"
+  echo $? > "$STATUS_FILE"
+} | grep --line-buffered -v '^==> raxol_terminal$'
+read CODE < "$STATUS_FILE"
+rm -f "$STATUS_FILE"
+exit "$CODE"
