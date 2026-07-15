@@ -44,7 +44,7 @@ jobs:
           otp-version: ${{ env.OTP_VERSION }}
 
       - name: Cache web deps + build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             web/deps
