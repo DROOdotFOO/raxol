@@ -19,5 +19,12 @@ Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 
 # :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
 # until their units (U4–U9) land. :mutation — negative-control checklists
-# (meta-invariant m4), run on demand, never in regular CI.
-ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation])
+# (meta-invariant m4), run on demand, never in regular CI. :harness_red —
+# permanent failing-first contour reds authored before their unit exists (e.g.
+# the U5-R interrupt suite drives the unimplemented Raxol.Agent.Interrupt and is
+# red by design); excluded so CI stays green until the implementing unit flips
+# it on. The matching negative controls (…_controls_test.exs) are NOT tagged
+# :harness_red and DO run — they prove the reds have teeth.
+ExUnit.start(
+  exclude: [:slow, :integration, :docker, :pending_unit, :mutation, :harness_red]
+)
