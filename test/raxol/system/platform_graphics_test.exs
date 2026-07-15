@@ -48,7 +48,8 @@ defmodule Raxol.System.PlatformGraphicsTest do
       result = Platform.detect_graphics_support()
 
       assert result.terminal_type == :wezterm
-      assert result.kitty_graphics == true # WezTerm supports Kitty protocol
+      # WezTerm supports Kitty protocol
+      assert result.kitty_graphics == true
 
       System.delete_env("WEZTERM_EXECUTABLE")
     end
@@ -122,6 +123,10 @@ defmodule Raxol.System.PlatformGraphicsTest do
   end
 
   describe "terminal type detection" do
+    setup do
+      isolate_terminal_program_leak()
+    end
+
     test "detects various terminal types from TERM variable" do
       test_cases = [
         {"xterm-kitty", :kitty},
@@ -166,6 +171,10 @@ defmodule Raxol.System.PlatformGraphicsTest do
   end
 
   describe "terminal capabilities detection" do
+    setup do
+      isolate_terminal_program_leak()
+    end
+
     test "provides Kitty terminal capabilities" do
       # Mock Kitty environment
       original_term = System.get_env("TERM")
@@ -234,7 +243,8 @@ defmodule Raxol.System.PlatformGraphicsTest do
     test "checks WezTerm version for Kitty support" do
       # Mock WezTerm with version info
       System.put_env("WEZTERM_EXECUTABLE", "/usr/bin/wezterm")
-      System.put_env("WEZTERM_VERSION", "20220101")  # Old version
+      # Old version
+      System.put_env("WEZTERM_VERSION", "20220101")
 
       result = Platform.detect_graphics_support()
 
@@ -276,8 +286,10 @@ defmodule Raxol.System.PlatformGraphicsTest do
   describe "environment variable precedence" do
     test "KITTY_WINDOW_ID takes precedence over TERM" do
       original_term = System.get_env("TERM")
-      System.put_env("TERM", "xterm-256color")  # Would normally detect as xterm
-      System.put_env("KITTY_WINDOW_ID", "12345")  # But this indicates Kitty
+      # Would normally detect as xterm
+      System.put_env("TERM", "xterm-256color")
+      # But this indicates Kitty
+      System.put_env("KITTY_WINDOW_ID", "12345")
 
       result = Platform.detect_graphics_support()
 
@@ -286,6 +298,7 @@ defmodule Raxol.System.PlatformGraphicsTest do
 
       # Restore environment
       System.delete_env("KITTY_WINDOW_ID")
+
       case original_term do
         nil -> System.delete_env("TERM")
         term -> System.put_env("TERM", term)
@@ -300,10 +313,12 @@ defmodule Raxol.System.PlatformGraphicsTest do
       result = Platform.detect_graphics_support()
 
       assert result.terminal_type == :wezterm
-      assert result.kitty_graphics == true  # WezTerm supports Kitty protocol
+      # WezTerm supports Kitty protocol
+      assert result.kitty_graphics == true
 
       # Restore environment
       System.delete_env("WEZTERM_EXECUTABLE")
+
       case original_term do
         nil -> System.delete_env("TERM")
         term -> System.put_env("TERM", term)
@@ -331,12 +346,13 @@ defmodule Raxol.System.PlatformGraphicsTest do
 
       Enum.each(test_cases, fn terminal_type ->
         # Mock each terminal type
-        term_value = case terminal_type do
-          :mintty -> "mintty"
-          :mlterm -> "mlterm"
-          :wezterm -> "wezterm"
-          :foot -> "foot"
-        end
+        term_value =
+          case terminal_type do
+            :mintty -> "mintty"
+            :mlterm -> "mlterm"
+            :wezterm -> "wezterm"
+            :foot -> "foot"
+          end
 
         System.put_env("TERM", term_value)
 
@@ -350,5 +366,30 @@ defmodule Raxol.System.PlatformGraphicsTest do
         term -> System.put_env("TERM", term)
       end
     end
+  end
+
+  # `Platform.detect_terminal_type/0` checks TERM_PROGRAM (and the Kitty/
+  # WezTerm/Alacritty program-marker vars) before it ever looks at TERM --
+  # running these tests from inside one of those terminals leaks the host's
+  # own identity in and wins over whatever TERM value the test sets.
+  defp isolate_terminal_program_leak do
+    leaking = [
+      "TERM_PROGRAM",
+      "KITTY_WINDOW_ID",
+      "WEZTERM_EXECUTABLE",
+      "ALACRITTY_LOG"
+    ]
+
+    saved = Map.new(leaking, &{&1, System.get_env(&1)})
+    Enum.each(leaking, &System.delete_env/1)
+
+    on_exit(fn ->
+      Enum.each(saved, fn
+        {k, nil} -> System.delete_env(k)
+        {k, v} -> System.put_env(k, v)
+      end)
+    end)
+
+    :ok
   end
 end
