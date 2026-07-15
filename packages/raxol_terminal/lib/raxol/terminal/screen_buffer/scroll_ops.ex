@@ -126,6 +126,15 @@ defmodule Raxol.Terminal.ScreenBuffer.ScrollOps do
 
   @doc """
   Scrolls up within an explicit top/bottom region.
+
+  Returns `{buffer, scrolled_out_rows}` -- the rows evicted from the top of
+  the region, oldest-first -- mirroring `scroll_up/2`'s two-arg contract.
+  Whether `scrolled_out_rows` is scrollback-eligible depends on the region:
+  callers feeding an effective top of 0 (screen row 1, including the
+  no-region/full-screen case) should treat them as real scrollback history;
+  callers with an interior region (top > 0) discard them, matching
+  real-terminal behavior where only a top-anchored scroll region feeds
+  native scrollback.
   """
   def scroll_up(buffer, top, bottom, lines) do
     {effective_top, effective_bottom} = normalize_scroll_region(buffer, top, bottom)
@@ -136,13 +145,14 @@ defmodule Raxol.Terminal.ScreenBuffer.ScrollOps do
       {region, after_region} = Enum.split(region_and_after, effective_bottom - effective_top + 1)
 
       lines_to_scroll = min(lines, length(region))
+      scrolled_out = Enum.take(region, lines_to_scroll)
       kept_region = Enum.drop(region, lines_to_scroll)
       empty_lines = List.duplicate(create_empty_line(buffer.width), lines_to_scroll)
       scrolled_region = kept_region ++ empty_lines
       new_cells = before_region ++ scrolled_region ++ after_region
-      %{buffer | cells: new_cells}
+      {%{buffer | cells: new_cells}, scrolled_out}
     else
-      buffer
+      {buffer, []}
     end
   end
 

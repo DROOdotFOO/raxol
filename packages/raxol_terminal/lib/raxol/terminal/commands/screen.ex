@@ -10,7 +10,6 @@ defmodule Raxol.Terminal.Commands.Screen do
   alias Raxol.Terminal.ScreenBuffer
   alias Raxol.Terminal.ScreenBuffer.Operations
 
-
   # Use map() to accept any emulator-like struct
   @type emulator :: map()
 
@@ -182,7 +181,7 @@ defmodule Raxol.Terminal.Commands.Screen do
     Raxol.Core.Runtime.Log.debug("[Screen.scroll_down] CALLED with count: #{count}")
 
     buffer = Emulator.get_screen_buffer(emulator)
-    {top, bottom} = ScreenBuffer.get_scroll_region_boundaries(buffer)
+    {top, bottom} = effective_scroll_region(emulator, buffer)
 
     # Use ScreenBuffer.scroll_down since we have a ScreenBuffer struct
     new_buffer = ScreenBuffer.scroll_down(buffer, top, bottom, count)
@@ -193,10 +192,36 @@ defmodule Raxol.Terminal.Commands.Screen do
     Raxol.Core.Runtime.Log.debug("[Screen.scroll_up] CALLED with lines: #{lines}")
 
     buffer = Emulator.get_screen_buffer(emulator)
-    {top, bottom} = ScreenBuffer.get_scroll_region_boundaries(buffer)
+    {top, bottom} = effective_scroll_region(emulator, buffer)
 
     # Use ScreenBuffer.scroll_up since we have a ScreenBuffer struct
-    new_buffer = ScreenBuffer.scroll_up(buffer, top, bottom, lines)
-    Emulator.update_active_buffer(emulator, new_buffer)
+    {new_buffer, scrolled_lines} = ScreenBuffer.scroll_up(buffer, top, bottom, lines)
+
+    emulator
+    |> Emulator.update_active_buffer(new_buffer)
+    |> Raxol.Terminal.Emulator.BufferOperations.feed_scrollback_from_region_scroll(
+      top,
+      scrolled_lines
+    )
+  end
+
+  # DECSTBM (via Emulator.CommandHandler / the CSI handlers) records the
+  # scroll region on `emulator.scroll_region`; the ScreenBuffer's own
+  # `scroll_region` field is a separate store that the byte path never
+  # sets. The emulator-level region wins when present -- the same
+  # precedence `insert_lines/2` and `delete_lines/2` above already use --
+  # falling back to the buffer's boundaries (which default to full screen).
+  defp effective_scroll_region(emulator, buffer) do
+    height = ScreenBuffer.get_height(buffer)
+
+    case Map.get(emulator, :scroll_region) do
+      {top, bottom}
+      when is_integer(top) and is_integer(bottom) and top >= 0 and
+             top <= bottom ->
+        {top, min(bottom, height - 1)}
+
+      _ ->
+        ScreenBuffer.get_scroll_region_boundaries(buffer)
+    end
   end
 end

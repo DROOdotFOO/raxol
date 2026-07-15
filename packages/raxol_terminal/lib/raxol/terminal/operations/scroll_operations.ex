@@ -56,10 +56,20 @@ defmodule Raxol.Terminal.Operations.ScrollOperations do
   def scroll_up(emulator, lines) do
     buffer = get_screen_buffer(emulator)
 
-    {new_buffer, _scrolled_lines} =
+    # ScrollRegion.scroll_up/2 derives its region from the buffer's own
+    # scroll_region field, so the pre-scroll region top for the scrollback
+    # eviction rule comes from the same store.
+    region_top = ScreenBuffer.get_scroll_top(buffer)
+
+    {new_buffer, scrolled_lines} =
       Raxol.Terminal.Buffer.ScrollRegion.scroll_up(buffer, lines)
 
-    update_active_buffer(emulator, new_buffer)
+    emulator
+    |> update_active_buffer(new_buffer)
+    |> Raxol.Terminal.Emulator.BufferOperations.feed_scrollback_from_region_scroll(
+      region_top,
+      scrolled_lines
+    )
   end
 
   def scroll_down(emulator, lines) do

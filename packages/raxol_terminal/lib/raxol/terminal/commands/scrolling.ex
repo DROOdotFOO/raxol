@@ -3,11 +3,21 @@ defmodule Raxol.Terminal.Commands.Scrolling do
   Handles scrolling operations for the terminal screen buffer.
   """
 
-
   alias Raxol.Terminal.ANSI.TextFormatting
   alias Raxol.Terminal.Cell
   alias Raxol.Terminal.ScreenBuffer
 
+  # NOTE (harness-ui unit TE): this scroll_up is the function the harness
+  # roadmap and `Raxol.Harness.Test.SealOracle` historically named as the
+  # scrollback-dropping culprit ("commands/scrolling.ex scroll_up blanks
+  # vacated rows"). It is NOT on any live emulator scroll path today --
+  # only ScrollOps.scroll_down_with_count/3 and tests reach it. The live
+  # paths, where the TE scrollback feed is wired, are:
+  #   * Raxol.Terminal.Commands.Screen.scroll_up/2 (DECSTBM region path,
+  #     also invoked by ControlCodes.handle_lf/1 at the bottom margin and
+  #     Emulator.maybe_scroll/1 on cursor overflow)
+  #   * Raxol.Terminal.Operations.ScrollOperations.scroll_up/2
+  # both feeding Emulator.BufferOperations.feed_scrollback_from_region_scroll/3.
   @spec scroll_up(
           map(),
           non_neg_integer(),

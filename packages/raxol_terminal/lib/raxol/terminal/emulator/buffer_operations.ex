@@ -78,6 +78,86 @@ defmodule Raxol.Terminal.Emulator.BufferOperations do
   end
 
   @doc """
+  Appends rows evicted by a scroll to the end of the scrollback buffer.
+
+  Order is oldest-first: `emulator.scrollback_buffer` is a chronological
+  transcript, so newly evicted rows are appended (never prepended) to keep
+  `Emulator.get_scrollback(emulator) ++ <still-on-screen rows>` reading as
+  one continuous, in-order history. Trims from the front (the oldest
+  entries) when the result would exceed `scrollback_limit`. A no-op for a
+  missing/empty eviction list.
+  """
+  @spec append_scrollback(emulator(), list()) :: emulator()
+  def append_scrollback(emulator, lines)
+
+  def append_scrollback(emulator, lines) when lines in [nil, []], do: emulator
+
+  def append_scrollback(emulator, lines) when is_list(lines) do
+    combined = (Map.get(emulator, :scrollback_buffer) || []) ++ lines
+    limit = Map.get(emulator, :scrollback_limit)
+
+    trimmed =
+      case is_integer(limit) and limit >= 0 and length(combined) > limit do
+        true -> Enum.drop(combined, length(combined) - limit)
+        false -> combined
+      end
+
+    %{emulator | scrollback_buffer: trimmed}
+  end
+
+  @doc """
+  Feeds rows evicted by a scroll-region scroll into the scrollback buffer
+  (`docs/proposals/in-flight/harness-ui-roadmap.md` unit TE).
+
+  Eviction rule: a TOP-ANCHORED scroll region -- `region_top == 0` (screen
+  row 1), including the full-screen case where no explicit region is set --
+  feeds its evictions into `emulator.scrollback_buffer`; an INTERIOR region
+  (`region_top > 0`) discards them; the alternate screen buffer never gets
+  scrollback regardless of region, matching real-terminal alt-screen
+  semantics.
+
+  Fidelity note: the full-screen and alt-screen halves of this rule match
+  real terminals exactly. The PARTIAL top-anchored case (region rows
+  1..H-N with footer rows below it) is the harness's print-above scrollback
+  model per T0's design -- real terminals vary here (xterm reliably feeds
+  native scrollback only for full-screen scrolls), and T0's Ring B measures
+  what each tier-1 terminal actually does. The interior-region discard does
+  match xterm.
+
+  `region_top` is the 0-based top row of the region that was scrolled,
+  captured BEFORE the scroll by the caller (which store it comes from --
+  `emulator.scroll_region` vs the buffer's own `scroll_region` -- is the
+  caller's concern; see `Raxol.Terminal.Commands.Screen.scroll_up/2`).
+  """
+  @spec feed_scrollback_from_region_scroll(
+          emulator(),
+          non_neg_integer(),
+          list()
+        ) :: emulator()
+  def feed_scrollback_from_region_scroll(emulator, region_top, scrolled_lines)
+
+  def feed_scrollback_from_region_scroll(emulator, _region_top, lines)
+      when lines in [nil, []],
+      do: emulator
+
+  def feed_scrollback_from_region_scroll(
+        %{active_buffer_type: :alternate} = emulator,
+        _region_top,
+        _scrolled_lines
+      ),
+      do: emulator
+
+  def feed_scrollback_from_region_scroll(emulator, 0, scrolled_lines),
+    do: append_scrollback(emulator, scrolled_lines)
+
+  def feed_scrollback_from_region_scroll(
+        emulator,
+        _interior_region_top,
+        _scrolled_lines
+      ),
+      do: emulator
+
+  @doc """
   Switches to the alternate screen buffer.
   """
   def switch_to_alternate_screen(emulator) do

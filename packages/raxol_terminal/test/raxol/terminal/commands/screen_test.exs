@@ -488,4 +488,121 @@ defmodule Raxol.Terminal.Commands.ScreenTest do
       assert position == {3, 1}
     end
   end
+
+  describe "scroll_up/2 scrollback feed (TE unit)" do
+    defp row_text(row) do
+      row
+      |> Enum.map_join("", fn
+        %{char: char} when is_binary(char) -> char
+        _ -> " "
+      end)
+      |> String.trim_trailing()
+    end
+
+    test "full-screen scroll (no scroll region set) feeds the evicted row into scrollback" do
+      emulator = Emulator.new(10, 5)
+
+      filled =
+        ScreenBuffer.write_string(
+          emulator.main_screen_buffer,
+          0,
+          0,
+          "TOPROW",
+          TextFormatting.new()
+        )
+
+      emulator = Emulator.update_active_buffer(emulator, filled)
+
+      emulator = Screen.scroll_up(emulator, 1)
+
+      assert [row] = Emulator.get_scrollback(emulator)
+      assert row_text(row) == "TOPROW"
+    end
+
+    test "top-anchored scroll region (top row 1 / internal row 0) feeds evicted rows into scrollback" do
+      emulator = Emulator.new(10, 5)
+
+      filled =
+        ScreenBuffer.write_string(
+          emulator.main_screen_buffer,
+          0,
+          0,
+          "TOPROW",
+          TextFormatting.new()
+        )
+
+      filled = ScreenBuffer.set_scroll_region(filled, {0, 2})
+      emulator = Emulator.update_active_buffer(emulator, filled)
+
+      emulator = Screen.scroll_up(emulator, 1)
+
+      assert [row] = Emulator.get_scrollback(emulator)
+      assert row_text(row) == "TOPROW"
+    end
+
+    test "interior scroll region (top > 0) discards evicted rows -- no scrollback feed" do
+      emulator = Emulator.new(10, 5)
+
+      filled =
+        ScreenBuffer.write_string(
+          emulator.main_screen_buffer,
+          0,
+          1,
+          "EVICTME",
+          TextFormatting.new()
+        )
+
+      filled = ScreenBuffer.set_scroll_region(filled, {1, 3})
+      emulator = Emulator.update_active_buffer(emulator, filled)
+
+      emulator = Screen.scroll_up(emulator, 1)
+
+      assert Emulator.get_scrollback(emulator) == []
+    end
+
+    test "alternate screen buffer scroll never feeds scrollback" do
+      emulator = Emulator.new(10, 5)
+      emulator = %{emulator | active_buffer_type: :alternate}
+
+      filled =
+        ScreenBuffer.write_string(
+          emulator.alternate_screen_buffer,
+          0,
+          0,
+          "ALTROW",
+          TextFormatting.new()
+        )
+
+      emulator = Emulator.update_active_buffer(emulator, filled)
+
+      emulator = Screen.scroll_up(emulator, 1)
+
+      assert Emulator.get_scrollback(emulator) == []
+    end
+
+    test "respects scrollback_limit, trimming the oldest entries first" do
+      emulator = Emulator.new(10, 5)
+      emulator = %{emulator | scrollback_limit: 2}
+
+      emulator =
+        Enum.reduce(0..4, emulator, fn i, acc ->
+          filled =
+            ScreenBuffer.write_string(
+              acc.main_screen_buffer,
+              0,
+              0,
+              "R#{i}",
+              TextFormatting.new()
+            )
+
+          acc
+          |> Emulator.update_active_buffer(filled)
+          |> Screen.scroll_up(1)
+        end)
+
+      scrollback = Emulator.get_scrollback(emulator)
+      assert length(scrollback) == 2
+      assert Enum.map(scrollback, &row_text/1) == ["R3", "R4"]
+    end
+  end
 end
