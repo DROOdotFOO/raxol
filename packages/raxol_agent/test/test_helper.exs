@@ -19,5 +19,9 @@ Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 
 # :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
 # until their units (U4–U9) land. :mutation — negative-control checklists
-# (meta-invariant m4), run on demand, never in regular CI.
-ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation])
+# (meta-invariant m4), run on demand, never in regular CI. :harness_red —
+# permanent failing-first red suites authored before their unit lands (the
+# red-first fan-out, e.g. U7-R SpendGate); excluded so CI stays green while they
+# are red, run with `--only harness_red`. Their negative controls carry no tag
+# and run in CI.
+ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation, :harness_red])
