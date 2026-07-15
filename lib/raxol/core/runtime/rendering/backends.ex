@@ -21,7 +21,10 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
 
     updated_buffer = apply_cells_to_buffer(cells, state)
 
-    renderer = Raxol.Terminal.Renderer.new(updated_buffer)
+    # style_batching: merge adjacent same-style cells into one SGR run instead
+    # of one SGR + reset per cell. Round-trip-identical (each run still
+    # \e[0m-terminated), 8-28x fewer bytes on styled UIs.
+    renderer = Raxol.Terminal.Renderer.new(updated_buffer, %{}, %{}, true)
     output_string = Raxol.Terminal.Renderer.render(renderer)
 
     Raxol.Core.Runtime.Log.debug(
@@ -163,7 +166,10 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   def render_to_ssh(cells, state) do
     updated_buffer = apply_cells_to_buffer(cells, state)
 
-    renderer = Raxol.Terminal.Renderer.new(updated_buffer)
+    # style_batching: merge adjacent same-style cells into one SGR run instead
+    # of one SGR + reset per cell. Round-trip-identical (each run still
+    # \e[0m-terminated), 8-28x fewer bytes on styled UIs.
+    renderer = Raxol.Terminal.Renderer.new(updated_buffer, %{}, %{}, true)
     output_string = Raxol.Terminal.Renderer.render(renderer)
 
     # Home cursor and clear screen before each frame, matching render_to_terminal
