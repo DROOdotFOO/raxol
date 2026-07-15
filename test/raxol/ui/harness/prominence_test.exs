@@ -411,4 +411,163 @@ defmodule Raxol.UI.Harness.ProminenceTest do
       assert header.style.fg == Prominence.resolve("#B4B4B4", 0.6, [])
     end
   end
+
+  # ---------------------------------------------------------------------
+  # Review-round guard: a non-numeric `:ground` (or `fade/3`'s positional
+  # `ground`) must fall back to the lazy default instead of reaching the
+  # fade math (`ground + (apparent - ground) * t`) and raising an
+  # ArithmeticError.
+  # ---------------------------------------------------------------------
+
+  describe "ground validation (non-numeric :ground falls back, never raises)" do
+    test "resolve/3 with a non-numeric :ground falls back instead of raising" do
+      for bad_ground <- ["#1e1e1e", :dark, %{}, [1, 2, 3]] do
+        resolved = Prominence.resolve("#c1712c", 0.6, ground: bad_ground)
+        assert resolved =~ ~r/^#[0-9a-f]{6}$/
+      end
+    end
+
+    test "fade/3 with a non-numeric ground falls back instead of raising" do
+      for bad_ground <- ["#1e1e1e", :dark] do
+        resolved = Prominence.fade("#c1712c", 0.6, bad_ground)
+        assert resolved =~ ~r/^#[0-9a-f]{6}$/
+      end
+    end
+
+    test "a non-numeric :ground resolves to the same output as omitting :ground entirely" do
+      for bad_ground <- ["#1e1e1e", :dark] do
+        assert Prominence.resolve("#c1712c", 0.6, ground: bad_ground) ==
+                 Prominence.resolve("#c1712c", 0.6, [])
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # Review-round guard: a negative prominence must clamp to 0.0 (full fade
+  # to ground) instead of extrapolating past the ground into
+  # gamut-undefined territory.
+  # ---------------------------------------------------------------------
+
+  describe "negative prominence guard (clamped to 0.0)" do
+    test "negative prominence never raises and produces a valid hex" do
+      for ground <- [@dark_ground, @light_ground],
+          hex <- ["#c1712c", "#abb7c3", "#717171"],
+          prominence <- [-0.5, -1.0, -100.0] do
+        resolved = Prominence.resolve(hex, prominence, ground: ground)
+        assert resolved =~ ~r/^#[0-9a-f]{6}$/
+      end
+    end
+
+    test "negative prominence clamps to the same output as an explicit 0.0" do
+      for ground <- [@dark_ground, @light_ground],
+          hex <- ["#c1712c", "#abb7c3"],
+          legibility_floor <- [false, true] do
+        opts = [ground: ground, legibility_floor: legibility_floor]
+
+        assert Prominence.resolve(hex, -0.5, opts) ==
+                 Prominence.resolve(hex, 0.0, opts)
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # Review-round guard: wcag_ratio/2 keeps raising ArgumentError on
+  # malformed hex (a programming-error contract, not a runtime-input one),
+  # with a clear message.
+  # ---------------------------------------------------------------------
+
+  describe "wcag_ratio/2 malformed hex guard" do
+    test "raises ArgumentError for an invalid hex digit string" do
+      assert_raise ArgumentError, fn ->
+        Prominence.wcag_ratio("zzzzzz", "#000000")
+      end
+    end
+
+    test "raises ArgumentError regardless of which argument is malformed" do
+      assert_raise ArgumentError, fn ->
+        Prominence.wcag_ratio("#000000", "zzzzzz")
+      end
+    end
+
+    test "raises ArgumentError for a wrong-length hex string" do
+      assert_raise ArgumentError, fn ->
+        Prominence.wcag_ratio("#fff", "#000000")
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # Review-round guard: the legibility clamp's ceiling must be the TRUE
+  # full-chroma prominence:1.0 color reconstructed from `(apparent, c, h)`,
+  # not a stand-in for the input seed hex. `apparent_lightness/3` and
+  # `solve_lightness/3` are exact inverses for a fixed `(c, h)`, so a
+  # future "optimization" that short-circuits the ceiling computation to
+  # just return the seed hex would happen to agree with this today -- but
+  # this test derives the ceiling independently via the public API, the
+  # same construction `clamp_to_floor/7` uses internally, so a future
+  # divergence between the two gets caught here instead of silently
+  # breaking the contrast-floor guarantee.
+  # ---------------------------------------------------------------------
+
+  describe "legibility clamp ceiling pins to the reconstructed full-chroma color" do
+    defp true_ceiling_hex(seed) do
+      {l, c, h} = Salience.hex_to_oklch(seed)
+      apparent = Salience.apparent_lightness(l, c, h)
+      Salience.oklch_to_hex(Salience.solve_lightness(apparent, c, h), c, h)
+    end
+
+    test "clamped ratio never exceeds the independently-derived true ceiling, and meets the floor when the ceiling is reachable" do
+      seeds =
+        for c <- [0.02, 0.1, 0.16, 0.3], h <- [25, 57, 142, 250, 314] do
+          Salience.oklch_to_hex(0.6, c, h)
+        end
+
+      for seed <- seeds,
+          ground <- [@dark_ground, @light_ground],
+          prominence <- [0.4, 0.6, 0.8] do
+        ground_hex = Salience.oklch_to_hex(ground, 0.0, 0.0)
+
+        # Reconstructed independently -- NOT by reusing `seed` as a
+        # stand-in for its own ceiling.
+        ceiling_ratio =
+          Prominence.wcag_ratio(true_ceiling_hex(seed), ground_hex)
+
+        resolved =
+          Prominence.resolve(seed, prominence,
+            ground: ground,
+            legibility_floor: true
+          )
+
+        ratio = Prominence.wcag_ratio(resolved, ground_hex)
+
+        assert ratio <= ceiling_ratio + 1.0e-6,
+               "#{seed} p#{prominence} g#{ground}: ratio #{ratio} exceeds the reconstructed true ceiling #{ceiling_ratio}"
+
+        if ceiling_ratio >= Prominence.floor_ratio() do
+          assert ratio >= Prominence.floor_ratio() - 1.0e-6,
+                 "#{seed} p#{prominence} g#{ground}: ratio #{ratio} below floor even though the reconstructed ceiling #{ceiling_ratio} was reachable"
+        end
+      end
+    end
+
+    test "a zero-chroma seed's reconstructed ceiling round-trips byte-exact" do
+      # At c = 0.0 the reconstruction collapses to a pure lightness value
+      # (h is irrelevant) -- a boundary worth pinning explicitly:
+      # `apparent_lightness/3` and `solve_lightness/3` must still
+      # round-trip with no chroma to compensate for.
+      seed = Salience.oklch_to_hex(0.6, 0.0, 0.0)
+      ground = @dark_ground
+      ground_hex = Salience.oklch_to_hex(ground, 0.0, 0.0)
+
+      assert true_ceiling_hex(seed) == seed
+
+      ceiling_ratio = Prominence.wcag_ratio(true_ceiling_hex(seed), ground_hex)
+
+      resolved =
+        Prominence.resolve(seed, 0.5, ground: ground, legibility_floor: true)
+
+      ratio = Prominence.wcag_ratio(resolved, ground_hex)
+      assert ratio <= ceiling_ratio + 1.0e-6
+    end
+  end
 end
