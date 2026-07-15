@@ -5,6 +5,18 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
   defp default_context, do: %{theme: Raxol.UI.Theming.Theme.default_theme()}
 
+  # A fold pill row's second child is a plain `text()` node (built by
+  # `fold_row/2`); every other row's second child is a `content_spans/4`
+  # row wrapping one-or-more syntax/word-diff spans. So "does this row's
+  # content look like a fold pill" is exactly "is the second child a text
+  # node whose content mentions 'unchanged lines'".
+  defp fold_pill?(row) do
+    case Enum.at(row.children, 1) do
+      %{type: :text, content: content} -> content =~ "unchanged lines"
+      _other -> false
+    end
+  end
+
   describe "init/1" do
     test "initializes with default values" do
       assert {:ok, state} = DiffViewer.init(id: :dv1)
@@ -14,6 +26,9 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert state.new == ""
       assert state.mode == :auto
       assert state.width == nil
+      assert state.language == nil
+      assert state.syntax_theme == :one_dark
+      assert state.context == 3
       assert state.style == %{}
       assert state.theme == %{}
     end
@@ -27,7 +42,10 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
                  new: "a\nc",
                  mode: :split,
                  style: %{bold: true},
-                 theme: %{fg: :white}
+                 theme: %{fg: :white},
+                 language: "elixir",
+                 syntax_theme: :dracula,
+                 context: 5
                )
 
       assert state.path == "lib/foo.ex"
@@ -36,11 +54,22 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert state.mode == :split
       assert state.style == %{bold: true}
       assert state.theme == %{fg: :white}
+      assert state.language == "elixir"
+      assert state.syntax_theme == :dracula
+      assert state.context == 5
     end
 
     test "normalizes an unrecognized mode to :auto" do
       assert {:ok, state} = DiffViewer.init(mode: :bogus)
       assert state.mode == :auto
+    end
+
+    test "context accepts :all, non-negative integers, and normalizes anything else to 3" do
+      assert {:ok, %{context: :all}} = DiffViewer.init(context: :all)
+      assert {:ok, %{context: 0}} = DiffViewer.init(context: 0)
+      assert {:ok, %{context: 7}} = DiffViewer.init(context: 7)
+      assert {:ok, %{context: 3}} = DiffViewer.init(context: -1)
+      assert {:ok, %{context: 3}} = DiffViewer.init(context: :bogus)
     end
   end
 
@@ -157,34 +186,224 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert "-1" in texts
     end
 
-    test "colors the deleted line red and the inserted line green", %{
-      state: state
-    } do
+    test "the deleted line gets a red gutter bar and the inserted line a green one",
+         %{state: state} do
       rendered = DiffViewer.render(state, default_context())
       [_header, _divider | diff_lines] = rendered.children
       [_equal_a, delete_row, insert_row, _equal_c] = diff_lines
 
-      [_gutter, delete_text] = delete_row.children
-      assert delete_text.content =~ "- b"
-      assert delete_text.style.fg == :red
+      [delete_gutter, delete_content] = delete_row.children
+      assert delete_gutter.content =~ "▌"
+      assert delete_gutter.style.fg == "#FF6762"
 
-      [_gutter, insert_text] = insert_row.children
-      assert insert_text.content =~ "+ x"
-      assert insert_text.style.fg == :green
+      # "b" -> "x" is a full single-token change (no shared substring), so
+      # the whole span is word-diff-changed -- the emphasis tier, not the
+      # plain row tier (see the word-diff describe block below for a case
+      # with a partially-unchanged line).
+      [delete_span] = delete_content.children
+      assert delete_span.content == "b"
+      assert delete_span.style.fg == "#FF6762"
+      assert delete_span.style.bg == "#552527"
+
+      [insert_gutter, insert_content] = insert_row.children
+      assert insert_gutter.content =~ "▌"
+      assert insert_gutter.style.fg == "#5ECC71"
+
+      [insert_span] = insert_content.children
+      assert insert_span.content == "x"
+      assert insert_span.style.fg == "#5ECC71"
+      assert insert_span.style.bg == "#1D4428"
     end
 
-    test "context lines are dim and unmarked", %{state: state} do
+    test "context lines are dim, unbarred, and untinted", %{state: state} do
       rendered = DiffViewer.render(state, default_context())
       [_header, _divider | diff_lines] = rendered.children
       [equal_a, _delete_row, _insert_row, equal_c] = diff_lines
 
-      [_gutter, text_a] = equal_a.children
-      assert text_a.content =~ "  a"
-      assert text_a.style.fg == :dim
+      [gutter_a, content_a] = equal_a.children
+      refute gutter_a.content =~ "▌"
+      assert gutter_a.style.fg == :dim
+      [span_a] = content_a.children
+      assert span_a.content == "a"
+      assert span_a.style.fg == :dim
+      refute Map.has_key?(span_a.style, :bg)
 
-      [_gutter, text_c] = equal_c.children
-      assert text_c.content =~ "  c"
-      assert text_c.style.fg == :dim
+      [gutter_c, content_c] = equal_c.children
+      refute gutter_c.content =~ "▌"
+      [span_c] = content_c.children
+      assert span_c.content == "c"
+    end
+  end
+
+  describe "render/2 (word-diff emphasis)" do
+    test "the changed word gets the emphasis bg tier; unchanged words keep the row tier" do
+      {:ok, state} =
+        DiffViewer.init(old: "hello world", new: "hello there", mode: :unified)
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | diff_lines] = rendered.children
+      [delete_row, insert_row] = diff_lines
+
+      [_gutter, delete_content] = delete_row.children
+      del_spans = delete_content.children
+
+      assert Enum.any?(
+               del_spans,
+               &(&1.content == "world" and &1.style.bg == "#552527")
+             )
+
+      assert Enum.any?(
+               del_spans,
+               &(&1.content == "hello " and &1.style.bg == "#291418")
+             )
+
+      [_gutter, insert_content] = insert_row.children
+      ins_spans = insert_content.children
+
+      assert Enum.any?(
+               ins_spans,
+               &(&1.content == "there" and &1.style.bg == "#1D4428")
+             )
+
+      assert Enum.any?(
+               ins_spans,
+               &(&1.content == "hello " and &1.style.bg == "#12261B")
+             )
+    end
+  end
+
+  describe "render/2 (syntax highlighting)" do
+    test "language: elixir flows real syntax fg colors through the diff tint" do
+      {:ok, state} =
+        DiffViewer.init(
+          old: "def foo, do: :ok",
+          new: "def bar, do: :ok",
+          mode: :unified,
+          language: "elixir"
+        )
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | diff_lines] = rendered.children
+      [delete_row, insert_row] = diff_lines
+
+      [_gutter, delete_content] = delete_row.children
+      [_gutter, insert_content] = insert_row.children
+
+      # At least one span keeps its own syntax fg (not the plain red/green
+      # fallback) -- e.g. the unchanged "def" keyword token.
+      assert Enum.any?(delete_content.children, fn span ->
+               is_binary(span.style.fg) and span.style.fg != "#FF6762"
+             end)
+
+      assert Enum.any?(insert_content.children, fn span ->
+               is_binary(span.style.fg) and span.style.fg != "#5ECC71"
+             end)
+    end
+
+    test "language: nil (default) never calls the highlighter -- plain fallback fg" do
+      {:ok, state} = DiffViewer.init(old: "a\nb", new: "a\nc", mode: :unified)
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | diff_lines] = rendered.children
+      [_equal_a, delete_row, _insert_row] = diff_lines
+      [_gutter, content] = delete_row.children
+      [span] = content.children
+      assert span.style.fg == "#FF6762"
+    end
+  end
+
+  describe "render/2 (hunk folding)" do
+    setup do
+      old_lines = for n <- 1..10, do: "line #{n}"
+      new_lines = for n <- 1..10, do: "line #{n}"
+
+      old =
+        Enum.join(
+          old_lines ++ ["old tail", "after 1", "after 2", "after 3"],
+          "\n"
+        )
+
+      new =
+        Enum.join(
+          new_lines ++ ["new tail", "after 1", "after 2", "after 3"],
+          "\n"
+        )
+
+      %{old: old, new: new}
+    end
+
+    test "a run longer than 2*context+1 collapses to one pill row", %{
+      old: old,
+      new: new
+    } do
+      {:ok, state} = DiffViewer.init(old: old, new: new, mode: :unified)
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | diff_lines] = rendered.children
+
+      fold_rows = Enum.filter(diff_lines, &fold_pill?/1)
+
+      assert length(fold_rows) == 1
+      [fold_row] = fold_rows
+      [_gutter, content] = fold_row.children
+      # 10 leading equal lines, context 3 => 10 - 6 = 4 hidden.
+      assert content.content =~ "4 unchanged lines"
+
+      # The 10-line leading run folds to 3 head + 1 pill + 3 tail (7 rows);
+      # + delete + insert (2, unaffected); + a 3-line trailing run that's
+      # too short to fold (3, stays as-is) = 7 + 2 + 3 = 12.
+      assert length(diff_lines) == 12
+    end
+
+    test "context: :all disables folding entirely", %{old: old, new: new} do
+      {:ok, state} =
+        DiffViewer.init(old: old, new: new, mode: :unified, context: :all)
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | diff_lines] = rendered.children
+
+      # 10 leading equal + delete + insert + 3 trailing equal, nothing folded.
+      assert length(diff_lines) == 15
+      refute Enum.any?(diff_lines, &fold_pill?/1)
+    end
+
+    test "line numbers on rows after the fold are still correct", %{
+      old: old,
+      new: new
+    } do
+      {:ok, state} = DiffViewer.init(old: old, new: new, mode: :unified)
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | diff_lines] = rendered.children
+
+      # head(3) + fold(1) + tail(3) + delete + insert + 3 trailing = index 7
+      # is the last kept head row (old line 3); index 8 is the fold; index 9
+      # is the first kept tail row before the change (old line 8).
+      last_head_row = Enum.at(diff_lines, 2)
+      [last_head_gutter, _content] = last_head_row.children
+      assert last_head_gutter.content =~ "3"
+
+      first_tail_row = Enum.at(diff_lines, 4)
+      [first_tail_gutter, _content] = first_tail_row.children
+      assert first_tail_gutter.content =~ "8"
+    end
+  end
+
+  describe "render/2 (split mode filler hatch)" do
+    test "the unpaired side of a change block renders a dim hatch, not blank" do
+      {:ok, state} =
+        DiffViewer.init(old: "a\nb", new: "a\nb\nc\nd", mode: :split)
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider, split_row] = rendered.children
+      [old_box, _new_box] = split_row.children
+      [old_column] = old_box.children
+
+      # Last two rows on the OLD side are filler for the two extra NEW lines.
+      filler_rows = Enum.take(old_column.children, -2)
+
+      assert Enum.all?(filler_rows, fn row ->
+               [_gutter, content] = row.children
+               [span] = content.children
+               span.content =~ "╱" and span.style.fg == :dim
+             end)
     end
   end
 
