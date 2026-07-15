@@ -56,7 +56,11 @@ defmodule Raxol.Agent.Snapshot do
     * plain maps — `%{"$m" => [[key, value], ...]}` (pairs preserve arbitrary
       key types); per-key drops are recorded, the rest survive.
     * declared structs — `%{"$s" => "Elixir.Mod", "f" => %{"field" => value}}`;
-      recursed via the struct's own `Persist.spec/1`.
+      recursed via the struct's own `Persist.spec/1`. On load the module tag is
+      validated to name a currently-loaded `Persist` implementation before
+      `struct/2` is called. Unlike an atom value or map key, a struct module is
+      **not** raw-string-fallback: an unknown or non-`Persist` module tag is a
+      typed load error (`{:unknown_struct_module, _}`), never a rebuilt struct.
     * PIDs / Ports / refs / functions / tuples / undeclared structs — never
       encoded; dropped into the manifest.
 
@@ -68,8 +72,23 @@ defmodule Raxol.Agent.Snapshot do
   @snapshot_version 1
 
   # Name-based secret heuristic — a defence-in-depth net so an obvious secret is
-  # redacted even when an app forgot to declare it. Matches on field/key names.
-  @redact_pattern ~r/secret|password|passwd|token|api[_-]?key|private[_-]?key|credential|mnemonic|seed_phrase/i
+  # redacted even when an app forgot to declare it. Matches on field/key names,
+  # anchored to whole `_`/`-`-delimited segments so normal agent state (token
+  # meters and the like) is NOT misclassified as a secret. For an agent runtime
+  # `:tokens`, `:token_count`, `:input_tokens`, `:total_tokens`, `:tokenizer`,
+  # `:api_key_id`, `:passwords_count`, `:secretary` are ordinary fields; only a
+  # field whose NAME is (or ends in) a secret word is redacted.
+  #
+  # Two rules, because the safe boundary differs by word:
+  #
+  #   * segment words redact when the word is a complete segment ANYWHERE in the
+  #     name (`client_secret`, `db_password`, `seed_phrase`) — these words never
+  #     name a benign metric;
+  #   * suffix words (`token`, the key family) redact only when the name ENDS
+  #     with them, so `access_token`/`api_key` redact while `token_count`,
+  #     `input_tokens`, and `api_key_id` do not.
+  @redact_segment ~r/(?:^|[_-])(?:password|passwd|secret|credentials?|mnemonic|seed[_-]?phrase)(?:$|[_-])/i
+  @redact_suffix ~r/(?:^|[_-])(?:token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|secret[_-]?key)$/i
 
   @type envelope :: %{
           required(:v) => pos_integer(),
@@ -128,10 +147,16 @@ defmodule Raxol.Agent.Snapshot do
     with {:ok, v} <- fetch(envelope, :v),
          :ok <- check_version(v),
          {:ok, data} <- fetch(envelope, :data) do
-      {:ok, coerce(decode(data), module)}
+      {:ok, coerce(decode(data, 0), module)}
     end
   rescue
     e -> {:error, {:load_failed, Exception.message(e)}}
+  catch
+    # A tampered/corrupt on-disk envelope is untrusted input (FI-9 tamper
+    # class). decode/2 signals structured refusals — unbounded nesting, an
+    # unknown/non-Persist struct module, a malformed tag — as throws carrying a
+    # typed reason, surfaced here as a typed load error rather than a crash.
+    {:snapshot_decode_error, reason} -> {:error, {:load_failed, reason}}
   end
 
   @doc """
@@ -255,21 +280,68 @@ defmodule Raxol.Agent.Snapshot do
 
   # --- Decoding --------------------------------------------------------------
 
-  defp decode(%{"$a" => name}) when is_binary(name), do: safe_atom(name)
+  # A tampered/corrupt on-disk envelope is untrusted input. decode/2 threads a
+  # depth counter and refuses three shapes it will not build, throwing a typed
+  # reason caught in load/2: nesting past @max_decode_depth, a $s struct-module
+  # tag that is not a loaded Persist implementation, and a $a/$s/$m tag with a
+  # malformed body. Unknown tags (`$x`, …) still pass through for forward-compat.
 
-  defp decode(%{"$s" => mod_str, "f" => fmap})
+  # Deeper than any real model, shallow enough to stop a nesting-bomb envelope
+  # before it exhausts the stack.
+  @max_decode_depth 64
+
+  defp decode(_v, depth) when depth > @max_decode_depth,
+    do: throw({:snapshot_decode_error, :max_depth_exceeded})
+
+  defp decode(%{"$a" => name}, _depth) when is_binary(name), do: safe_atom(name)
+
+  defp decode(%{"$s" => mod_str, "f" => fmap}, depth)
        when is_binary(mod_str) and is_map(fmap) do
-    mod = String.to_existing_atom(mod_str)
-    fields = for {k, v} <- fmap, do: {safe_atom(k), decode(v)}
+    mod = resolve_struct_module(mod_str)
+    fields = for {k, v} <- fmap, do: {safe_atom(k), decode(v, depth + 1)}
     struct(mod, fields)
   end
 
-  defp decode(%{"$m" => pairs}) when is_list(pairs) do
-    Map.new(pairs, fn [k, v] -> {decode(k), decode(v)} end)
+  defp decode(%{"$m" => pairs}, depth) when is_list(pairs) do
+    Map.new(pairs, fn [k, v] ->
+      {decode(k, depth + 1), decode(v, depth + 1)}
+    end)
   end
 
-  defp decode(list) when is_list(list), do: Enum.map(list, &decode/1)
-  defp decode(v), do: v
+  # A tag marker present but with a malformed body is corruption/tampering, not
+  # a forward-compat unknown tag — reject it explicitly rather than letting the
+  # raw map survive woven into the restored model.
+  defp decode(%{"$a" => _} = v, _depth) when map_size(v) == 1,
+    do: throw({:snapshot_decode_error, {:malformed_tag, "$a"}})
+
+  defp decode(%{"$s" => _}, _depth),
+    do: throw({:snapshot_decode_error, {:malformed_tag, "$s"}})
+
+  defp decode(%{"$m" => _} = v, _depth) when map_size(v) == 1,
+    do: throw({:snapshot_decode_error, {:malformed_tag, "$m"}})
+
+  defp decode(list, depth) when is_list(list),
+    do: Enum.map(list, &decode(&1, depth + 1))
+
+  defp decode(v, _depth), do: v
+
+  # Validate a $s module tag before it reaches struct/2. Without this a crafted
+  # envelope could steer struct/2 at any loaded struct module and rebuild it
+  # with attacker-chosen fields (type-confusion gadget; bounded by
+  # to_existing_atom, but downstream code trusts __struct__). The module must
+  # resolve to a currently-loaded Persist implementation — the same
+  # consolidation-safe probe the dump side uses in slice_spec/1. Unlike an atom
+  # VALUE or map key, a struct module is NOT raw-string-fallback: an unknown or
+  # non-Persist name is a typed load error, never a silently rebuilt struct.
+  defp resolve_struct_module(mod_str) do
+    mod = safe_atom(mod_str)
+
+    if is_atom(mod) and persist_impl?(mod) do
+      mod
+    else
+      throw({:snapshot_decode_error, {:unknown_struct_module, mod_str}})
+    end
+  end
 
   # A bare-map encoding restores to a plain map; a caller that knows the target
   # struct module can pass it to rebuild a struct from that map.
@@ -329,19 +401,28 @@ defmodule Raxol.Agent.Snapshot do
   # state. A struct with no such module is genuinely undeclared → auto-scan does
   # not recurse into it; it is dropped-with-manifest.
   defp slice_spec(%mod{} = struct) do
-    impl = Module.concat(Persist, mod)
-
-    if Code.ensure_loaded?(impl) and function_exported?(impl, :spec, 1) do
-      {:declared, impl.spec(struct)}
+    if persist_impl?(mod) do
+      {:declared, Module.concat(Persist, mod).spec(struct)}
     else
       :undeclared
     end
   end
 
+  # The consolidation-safe Persist probe, shared by the dump side (slice_spec/1)
+  # and the load side (resolve_struct_module/1): the per-struct implementation
+  # module is always generated and loadable even when protocol consolidation
+  # froze out a late `@derive`, so probing it directly is robust.
+  defp persist_impl?(mod) when is_atom(mod) do
+    impl = Module.concat(Persist, mod)
+    Code.ensure_loaded?(impl) and function_exported?(impl, :spec, 1)
+  end
+
   defp sensitive?(k) when is_atom(k) and not is_nil(k) and not is_boolean(k),
     do: sensitive?(Atom.to_string(k))
 
-  defp sensitive?(k) when is_binary(k), do: Regex.match?(@redact_pattern, k)
+  defp sensitive?(k) when is_binary(k),
+    do: Regex.match?(@redact_segment, k) or Regex.match?(@redact_suffix, k)
+
   defp sensitive?(_), do: false
 
   # Restore an atom without risking the String.to_atom memory-leak on reload of

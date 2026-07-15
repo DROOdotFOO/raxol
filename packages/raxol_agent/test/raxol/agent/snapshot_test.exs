@@ -236,6 +236,106 @@ defmodule Raxol.Agent.SnapshotTest do
     end
   end
 
+  # --- Redaction name heuristic (whole-segment boundaries) -------------------
+
+  describe "redaction name heuristic" do
+    test "secret-shaped field names ARE redacted, values never reach data" do
+      model = %{
+        api_key: "AAA",
+        access_token: "BBB",
+        auth_token: "CCC",
+        password: "DDD",
+        private_key: "EEE",
+        access_key: "FFF",
+        client_secret: "GGG"
+      }
+
+      {:ok, envelope} = Snapshot.dump(model)
+      redacted_paths = Enum.map(envelope.redacted, & &1["path"])
+
+      for key <-
+            ~w(api_key access_token auth_token password private_key access_key client_secret) do
+        assert [key] in redacted_paths, "expected #{key} to be redacted"
+      end
+
+      json = Jason.encode!(envelope)
+
+      for value <- ~w(AAA BBB CCC DDD EEE FFF GGG) do
+        refute String.contains?(json, value)
+      end
+    end
+
+    test "token/metric field names are NOT redacted — normal agent state survives" do
+      # For an agent runtime these are ordinary model fields, not secrets.
+      model = %{
+        tokens: 10,
+        token_count: 20,
+        input_tokens: 30,
+        total_tokens: 40,
+        tokenizer: "gpt",
+        secretary: "alice",
+        api_key_id: "kid-123",
+        passwords_count: 2
+      }
+
+      {:ok, envelope} = Snapshot.dump(model)
+
+      assert envelope.redacted == [], "nothing here should be redacted"
+      assert envelope.dropped == []
+
+      assert {:ok, restored} = Snapshot.load(envelope)
+      assert restored == model
+    end
+  end
+
+  # --- Load-path hardening (tampered on-disk envelopes are untrusted) --------
+
+  describe "load/2 hardening against tampered envelopes" do
+    test "a $s tag naming a loaded-but-non-Persist module is a typed error" do
+      # URI is a loaded struct, but declares no Persist slice — must not be built.
+      envelope = tampered(%{"$s" => "Elixir.URI", "f" => %{"scheme" => "http"}})
+
+      assert {:error, {:load_failed, {:unknown_struct_module, "Elixir.URI"}}} =
+               Snapshot.load(envelope)
+    end
+
+    test "a $s tag naming an unknown module is a typed error, no struct built" do
+      envelope = tampered(%{"$s" => "Elixir.Nope.NotReal", "f" => %{}})
+
+      assert {:error, {:load_failed, {:unknown_struct_module, "Elixir.Nope.NotReal"}}} =
+               Snapshot.load(envelope)
+    end
+
+    test "decode nested past the max depth is a typed error, not a crash" do
+      deep =
+        Enum.reduce(1..70, %{"$m" => []}, fn _, acc ->
+          %{"$m" => [["leaf", acc]]}
+        end)
+
+      assert {:error, {:load_failed, :max_depth_exceeded}} =
+               Snapshot.load(tampered(deep))
+    end
+
+    test "a malformed $a tag body is a typed error, not a passed-through map" do
+      assert {:error, {:load_failed, {:malformed_tag, "$a"}}} =
+               Snapshot.load(tampered(%{"$a" => 127}))
+    end
+
+    test "a malformed $s tag body is a typed error" do
+      assert {:error, {:load_failed, {:malformed_tag, "$s"}}} =
+               Snapshot.load(tampered(%{"$s" => 123, "f" => %{}}))
+    end
+
+    test "a malformed $m tag body is a typed error" do
+      assert {:error, {:load_failed, {:malformed_tag, "$m"}}} =
+               Snapshot.load(tampered(%{"$m" => "not-a-list"}))
+    end
+
+    test "an unknown tag still passes through (forward-compat)" do
+      assert {:ok, %{"$x" => 1}} = Snapshot.load(tampered(%{"$x" => 1}))
+    end
+  end
+
   # --- Property: generated plain-data models round-trip through JSON ----------
 
   describe "property: plain-data slice equality" do
@@ -297,6 +397,10 @@ defmodule Raxol.Agent.SnapshotTest do
   end
 
   # --- Helpers ---------------------------------------------------------------
+
+  # A hand-built envelope with an attacker-controlled `data` payload.
+  defp tampered(data),
+    do: %{v: 1, module: nil, data: data, dropped: [], redacted: []}
 
   # Deep-scan an encoded term for a raw substring (proves a secret is absent).
   defp encoded_contains?(term, needle) when is_binary(term),
