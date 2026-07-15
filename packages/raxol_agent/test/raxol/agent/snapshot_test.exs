@@ -42,6 +42,17 @@ defmodule Raxol.Agent.SnapshotTest do
     defstruct [:inner, :bad]
   end
 
+  defmodule ForcePersistModel do
+    @moduledoc false
+    # `client_secret_version` trips the name-heuristic segment `secret` despite
+    # being explicitly persist:-listed. The heuristic wins unconditionally
+    # (Finding 4, resolved by quorum): a field this shape is redacted, not
+    # persisted, and the mismatch is surfaced via Logger.warning + telemetry
+    # rather than silently dropping to nil.
+    @derive {Raxol.Agent.Snapshot.Persist, persist: [:client_secret_version]}
+    defstruct [:client_secret_version]
+  end
+
   # --- PID + secret + plain data ---------------------------------------------
 
   describe "dump/1 with PID + secret + plain data" do
@@ -288,6 +299,148 @@ defmodule Raxol.Agent.SnapshotTest do
     end
   end
 
+  # --- Non-UTF-8 binaries (JSON-safety) ---------------------------------------
+
+  describe "non-UTF-8 binary (JSON-safety)" do
+    test "a non-UTF-8 binary is base64-tagged ($b64), survives JSON + restore" do
+      model = %{buf: <<0xFF, 0xFE, 0x00>>, ok: "utf8"}
+      {:ok, envelope} = Snapshot.dump(model)
+      assert envelope.dropped == []
+      assert envelope.redacted == []
+      json = Jason.encode!(envelope)
+      assert {:ok, restored} = Snapshot.load(Jason.decode!(json))
+      assert restored == %{buf: <<0xFF, 0xFE, 0x00>>, ok: "utf8"}
+    end
+
+    test "a valid-UTF-8 binary stays bare (no base64 overhead)" do
+      {:ok, envelope} = Snapshot.dump(%{s: "hello"})
+      assert %{"$m" => [[_k, "hello"]]} = envelope.data
+    end
+
+    test "a non-UTF-8 binary inside a list and a struct field also survive" do
+      model = %{list: [<<0xC3, 0x28>>], nested: %{x: <<0xFF>>}}
+      {:ok, env} = Snapshot.dump(model)
+      assert {:ok, ^model} = Snapshot.load(Jason.decode!(Jason.encode!(env)))
+    end
+
+    test "a malformed $b64 tag body is a typed error, not a crash" do
+      assert {:error, {:load_failed, {:malformed_tag, "$b64"}}} =
+               Snapshot.load(tampered(%{"$b64" => 123}))
+
+      assert {:error, {:load_failed, {:malformed_tag, "$b64"}}} =
+               Snapshot.load(tampered(%{"$b64" => "!!!!"}))
+    end
+  end
+
+  # --- Finding 4 HELD: heuristic still wins over persist:, but loudly --------
+  #
+  # A second review flagged that letting persist: silently override the name
+  # heuristic could write a real secret to cleartext disk (e.g. an accidental
+  # `persist: [:api_key]`). Pending a human decision, the heuristic keeps
+  # winning unconditionally; the only change is that the mismatch is now loud
+  # (Logger.warning + telemetry) instead of a silent restore-to-nil.
+
+  describe "persist: vs. the name heuristic (precedence held, made loud)" do
+    test "a field explicitly persist:-listed is STILL redacted by the heuristic" do
+      {:ok, env} = Snapshot.dump(%ForcePersistModel{client_secret_version: 3})
+      assert %{"path" => ["client_secret_version"]} in env.redacted
+      refute match?(%{"$s" => _, "f" => %{"client_secret_version" => 3}}, env.data)
+
+      assert {:ok, r} = Snapshot.load(env)
+      assert r.client_secret_version == nil
+    end
+
+    test "redacting a persist:-listed field emits a Logger.warning and telemetry" do
+      test_pid = self()
+
+      :telemetry.attach(
+        "persist-redacted-heuristic-test",
+        [:raxol, :agent, :snapshot, :persist_redacted_by_heuristic],
+        fn event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_event, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("persist-redacted-heuristic-test") end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          Snapshot.dump(%ForcePersistModel{client_secret_version: 3})
+        end)
+
+      assert log =~ "client_secret_version"
+      assert log =~ "persist:"
+
+      assert_received {:telemetry_event,
+                        [:raxol, :agent, :snapshot, :persist_redacted_by_heuristic], %{count: 1},
+                        %{path: ["client_secret_version"]}}
+    end
+
+    # explicit redact still beats explicit persist — already proven by the
+    # PidSecretModel `api_key` case above (redacted, restores to nil).
+  end
+
+  # --- Finding 3 HELD: redaction word-list unchanged --------------------------
+  #
+  # Widening the heuristic (creds/privkey/pwd/apisecret/ssn) is deferred
+  # pending the Finding 4 precedence decision — without a persist: escape
+  # hatch, a wider net has no rescue for a false positive. Confirms current
+  # behavior is unchanged (still declines these abbreviated spellings, still
+  # declines bare `seed`).
+
+  describe "redaction patterns unchanged (Finding 3 held)" do
+    test "abbreviated/alternate secret spellings are NOT yet redacted under :auto" do
+      model = %{
+        creds: "A",
+        privkey: "B",
+        pwd: "C",
+        apisecret: "D",
+        ssn: "E"
+      }
+
+      {:ok, env} = Snapshot.dump(model)
+      assert env.redacted == []
+      assert {:ok, ^model} = Snapshot.load(env)
+    end
+
+    test "benign names near the deferred patterns still survive (no over-match)" do
+      model = %{
+        credit_card: 1,
+        random_seed: 2,
+        db_seed: 3,
+        cwd: "/tmp",
+        tokens: 4,
+        token_count: 5,
+        input_tokens: 6,
+        api_key_id: "x",
+        passwords_count: 2,
+        secretary: "s"
+      }
+
+      {:ok, env} = Snapshot.dump(model)
+      assert env.redacted == []
+      assert {:ok, ^model} = Snapshot.load(env)
+    end
+  end
+
+  # --- MISS-1: $m inner-pair arity validation ---------------------------------
+
+  describe "load/2 hardening: malformed $m inner pair (MISS-1)" do
+    test "a $m inner pair with the wrong arity is a typed error, not a raw MatchError" do
+      assert {:error, {:load_failed, {:malformed_tag, "$m"}}} =
+               Snapshot.load(tampered(%{"$m" => [["a"]]}))
+
+      assert {:error, {:load_failed, {:malformed_tag, "$m"}}} =
+               Snapshot.load(tampered(%{"$m" => [["a", 1, 2]]}))
+    end
+
+    test "a well-formed $m still decodes normally" do
+      env = tampered(%{"$m" => [["a", 1], ["b", 2]]})
+      assert {:ok, %{"a" => 1, "b" => 2}} = Snapshot.load(env)
+    end
+  end
+
   # --- Load-path hardening (tampered on-disk envelopes are untrusted) --------
 
   describe "load/2 hardening against tampered envelopes" do
@@ -333,6 +486,13 @@ defmodule Raxol.Agent.SnapshotTest do
 
     test "an unknown tag still passes through (forward-compat)" do
       assert {:ok, %{"$x" => 1}} = Snapshot.load(tampered(%{"$x" => 1}))
+    end
+
+    test "load/2 with an explicit non-Persist module is a typed error (aligned with $s)" do
+      env = tampered(%{"$m" => [[%{"$a" => "scheme"}, "http"]]})
+
+      assert {:error, {:load_failed, {:unknown_struct_module, "Elixir.URI"}}} =
+               Snapshot.load(env, URI)
     end
   end
 

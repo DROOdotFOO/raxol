@@ -38,7 +38,41 @@ defprotocol Raxol.Agent.Snapshot.Persist do
     * `redact:` — secret fields. Redacted values never reach the snapshot data;
       they are listed in the `redacted` manifest and restore to their struct
       default. (A name-based heuristic in the codec redacts obvious secrets —
-      `api_key`, `password`, `token`, … — even when not declared.)
+      `api_key`, `password`, `token`, … — even when not declared. See below for
+      the full word-list and how it interacts with `persist:`.)
+
+  ## Redaction: the name heuristic vs. your declaration
+
+  Beyond `redact:`, the codec runs a name-based secret heuristic (defense in
+  depth for a field you forgot to declare). It matches, on `_`/`-` segment
+  boundaries: password / passwd / secret / credential(s) / mnemonic /
+  seed_phrase, and name suffixes: token / api_key / apikey / access_key /
+  private_key / secret_key. (A few close spellings — creds/cred, privkey, pwd,
+  apisecret, ssn — are deliberately NOT included; see the TODO in
+  `Raxol.Agent.Snapshot`'s `@redact_segment`/`@redact_suffix` for why.)
+
+  Precedence (highest first) — **the heuristic wins unconditionally**, even
+  over an explicit `persist:` listing. This was reviewed and settled: letting
+  `persist:` silently override the heuristic would let a real secret, listed
+  by typo or oversight (e.g. `persist: [:api_key]`), reach cleartext disk.
+
+    1. explicit `redact:`   — always redacted
+    2. name heuristic       — redacts a secret-shaped name even if the field
+       is listed in `persist:`
+    3. explicit `persist:`  — an unlisted field drops
+    4. plain data (`:auto`) — persisted
+
+  If the heuristic redacts a field you explicitly `persist:`-listed, the codec
+  logs a `Logger.warning/1` and emits
+  `[:raxol, :agent, :snapshot, :persist_redacted_by_heuristic]` telemetry — so
+  the mismatch between your declaration and the outcome is loud, not a
+  silently-empty field on restore. If that's a genuine false positive, rename
+  the field; there is no `persist:`-side override. (The intended future
+  escape hatch is a deliberately-ugly `allow_secret_names:` derive opt-out
+  that warns on every dump — not `persist:`, and not implemented yet.)
+
+  Bare `seed` is intentionally NOT in the heuristic (it collides with RNG/data
+  seeds); redact a real crypto seed explicitly via `redact:`.
 
   ## Default (no declaration)
 

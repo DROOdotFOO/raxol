@@ -43,14 +43,43 @@ defmodule Raxol.Agent.Snapshot do
   Ports, refs, functions), undeclared fields, and secrets come back at their
   struct defaults — by design, not by accident.
 
+  **Precise scope of the equality**: it holds *exactly* for declared struct
+  field NAMES, and for string/number/boolean/binary data. Atom *values* and
+  bare-map atom *keys* round-trip **best-effort**: an atom already interned at
+  load time restores as an atom; one that is not (e.g. an enum value first
+  introduced on a later release, loaded on an older/fresh node) restores as its
+  raw string name instead — never a crash, never `String.to_atom/1`'s
+  unbounded atom-table growth on untrusted disk data.
+
+  The larger real-world blast radius here is **struct field VALUES that are
+  atoms**, not just bare-map keys — e.g. `%Model{status: :idle}` restores
+  `:idle` as an atom only if something already interned it in the restoring
+  VM; a status/enum value first assigned at runtime (never appearing as a
+  literal anywhere in that release's source) restores as the string `"idle"`
+  instead, silently changing the field's type. Only the struct's *field
+  NAMES* are guaranteed via `resolve_struct_module/1` (the struct's module,
+  and therefore its `defstruct` field atoms, must already be loaded before
+  its `"$s"`-tagged fields are decoded) — the atom *values* it holds carry the
+  same best-effort risk as any other atom. This is a fundamental ceiling of a
+  JSON-safe, atom-table-DoS-safe codec, not a bug to "fix" by interning on
+  load.
+
   ## Encoding grammar
 
   Every persisted value maps to a self-describing, JSON-safe term:
 
-    * `nil`, booleans, numbers, binaries — encoded bare.
+    * `nil`, booleans, numbers — encoded bare.
+    * valid-UTF-8 binaries — encoded bare; a non-UTF-8 binary is not
+      JSON-encodable, so it is tagged `%{"$b64" => base64}` (round-trippable,
+      e.g. a terminal buffer or other packed bytes survives the checkpoint
+      instead of crashing `Jason.encode!/1` at write time).
     * other atoms — `%{"$a" => "name"}` (tagged strings; restored with
       `String.to_existing_atom/1`, falling back to the raw string if the atom
-      no longer exists — safe, never a leak, never a crash).
+      no longer exists — safe, never a leak, never a crash). This is the
+      best-effort restore path described in "The restore property" above:
+      struct field NAMES always resurrect, but an atom VALUE (whether a
+      struct field's value, a bare-map value, or a bare-map key) does not if
+      it was never interned at load time.
     * lists — JSON arrays, **all-or-nothing**: a list holding a non-serializable
       element is dropped whole (positional partial-drop would silently reindex).
     * plain maps — `%{"$m" => [[key, value], ...]}` (pairs preserve arbitrary
@@ -67,9 +96,19 @@ defmodule Raxol.Agent.Snapshot do
   See `Raxol.Agent.Snapshot.Persist` for how an app declares its slice.
   """
 
+  require Logger
+
   alias Raxol.Agent.Snapshot.Persist
 
   @snapshot_version 1
+
+  # Emitted when the name heuristic redacts a field that the app explicitly
+  # listed in `persist:` — i.e. a likely false positive the author didn't
+  # intend. The heuristic always wins over persist: (redaction-over-persist is
+  # the settled precedence — see encode_fields/4), but a caller relying on
+  # that field surviving the checkpoint deserves a loud signal instead of a
+  # silently-empty field on restore.
+  @telemetry_persist_redacted [:raxol, :agent, :snapshot, :persist_redacted_by_heuristic]
 
   # Name-based secret heuristic — a defence-in-depth net so an obvious secret is
   # redacted even when an app forgot to declare it. Matches on field/key names,
@@ -87,6 +126,21 @@ defmodule Raxol.Agent.Snapshot do
   #   * suffix words (`token`, the key family) redact only when the name ENDS
   #     with them, so `access_token`/`api_key` redact while `token_count`,
   #     `input_tokens`, and `api_key_id` do not.
+  #
+  # Bare `seed` is intentionally NOT in the segment list: it over-matches
+  # `random_seed`/`db_seed` and other ordinary ML/RNG state, so the
+  # false-positive cost outweighs the marginal defense-in-depth gain. A real
+  # crypto seed should be declared via an explicit `redact:`. Keep
+  # `seed_phrase`/`mnemonic` — those never name benign data.
+  #
+  # TODO(deferred — Finding 3, resolved by quorum): candidate additional
+  # spellings — creds/cred, privkey, pwd, apisecret, ssn — stay out of the
+  # heuristic. Widening this list needs an escape hatch for a field whose NAME
+  # matches but isn't secret; the heuristic winning over persist: (Finding 4,
+  # settled) means plain `persist:` is NOT that hatch. The intended hatch is a
+  # future, deliberately-ugly `allow_secret_names:` derive opt-out (warns on
+  # every dump) — not implemented yet. Until then, widening this list has no
+  # cheap rescue for a false positive.
   @redact_segment ~r/(?:^|[_-])(?:password|passwd|secret|credentials?|mnemonic|seed[_-]?phrase)(?:$|[_-])/i
   @redact_suffix ~r/(?:^|[_-])(?:token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|secret[_-]?key)$/i
 
@@ -179,8 +233,17 @@ defmodule Raxol.Agent.Snapshot do
   # envelope reverses them once.
 
   defp encode(v, _path)
-       when is_nil(v) or is_boolean(v) or is_number(v) or is_binary(v),
+       when is_nil(v) or is_boolean(v) or is_number(v),
        do: {:keep, v, [], []}
+
+  # Valid-UTF-8 binaries encode bare; a non-UTF-8 binary is not JSON-encodable,
+  # so it is base64-tagged (round-trippable) rather than kept bare and crashing
+  # Jason at write time.
+  defp encode(v, _path) when is_binary(v) do
+    if String.valid?(v),
+      do: {:keep, v, [], []},
+      else: {:keep, %{"$b64" => Base.encode64(v)}, [], []}
+  end
 
   defp encode(v, _path) when is_atom(v),
     do: {:keep, %{"$a" => Atom.to_string(v)}, [], []}
@@ -253,10 +316,33 @@ defmodule Raxol.Agent.Snapshot do
     end
   end
 
+  # Precedence (settled — see @telemetry_persist_redacted above): the name
+  # heuristic redacts a secret-shaped field name UNCONDITIONALLY, even when
+  # that field is explicitly listed in `persist:`. Rationale: `persist:` is
+  # written once at declaration time and can drift as fields are added;
+  # letting it silently override the heuristic would let `persist: [:api_key]`
+  # (typo, copy-paste, or a genuinely secret field someone forgot to also
+  # `redact:`) write a real secret to cleartext disk. The heuristic winning is
+  # the safe failure mode — worst case a false positive drops a benign field,
+  # which is loud (telemetry + Logger.warning below), never a silent secret
+  # leak. A future `allow_secret_names:` derive opt-out (deliberately ugly,
+  # warns on every dump) is the intended escape hatch for a genuine false
+  # positive — not a plain `persist:` override.
+  #
+  # A field explicitly declared in BOTH persist: and redact: is redacted
+  # (proven by the PidSecretModel `api_key` fixture) — same outcome, no
+  # warning needed since the app declared the intent explicitly.
   defp encode_fields(fields, persist, redact_set, path) do
     Enum.reduce(fields, {%{}, [], []}, fn {k, val}, {fmap, drops, reds} ->
       cond do
-        MapSet.member?(redact_set, k) or sensitive?(k) ->
+        MapSet.member?(redact_set, k) ->
+          {fmap, drops, [redacted_entry(path ++ [k]) | reds]}
+
+        sensitive?(k) ->
+          if persist != :auto and k in persist do
+            warn_persist_redacted_by_heuristic(path ++ [k])
+          end
+
           {fmap, drops, [redacted_entry(path ++ [k]) | reds]}
 
         persist != :auto and k not in persist ->
@@ -266,6 +352,21 @@ defmodule Raxol.Agent.Snapshot do
           encode_field(k, val, path, fmap, drops, reds)
       end
     end)
+  end
+
+  defp warn_persist_redacted_by_heuristic(full_path) do
+    string_path = stringify_path(full_path)
+
+    Logger.warning(
+      "Raxol.Agent.Snapshot: field #{inspect(string_path)} is explicitly " <>
+        "listed in persist: but its name matches the secret-redaction " <>
+        "heuristic — it is being redacted, not persisted. If it truly holds " <>
+        "a secret, this is correct (consider also declaring it in redact: to " <>
+        "silence this warning). If it is a false positive, rename the field " <>
+        "or file a request to widen the heuristic's escape hatch."
+    )
+
+    :telemetry.execute(@telemetry_persist_redacted, %{count: 1}, %{path: string_path})
   end
 
   defp encode_field(k, val, path, fmap, drops, reds) do
@@ -281,10 +382,12 @@ defmodule Raxol.Agent.Snapshot do
   # --- Decoding --------------------------------------------------------------
 
   # A tampered/corrupt on-disk envelope is untrusted input. decode/2 threads a
-  # depth counter and refuses three shapes it will not build, throwing a typed
+  # depth counter and refuses shapes it will not build, throwing a typed
   # reason caught in load/2: nesting past @max_decode_depth, a $s struct-module
-  # tag that is not a loaded Persist implementation, and a $a/$s/$m tag with a
-  # malformed body. Unknown tags (`$x`, …) still pass through for forward-compat.
+  # tag that is not a loaded Persist implementation, and a $a/$b64/$s/$m tag
+  # with a malformed body (including a malformed $m INNER PAIR — wrong arity,
+  # not just a non-list top-level body). Unknown tags (`$x`, …) still pass
+  # through for forward-compat.
 
   # Deeper than any real model, shallow enough to stop a nesting-bomb envelope
   # before it exhausts the stack.
@@ -295,6 +398,13 @@ defmodule Raxol.Agent.Snapshot do
 
   defp decode(%{"$a" => name}, _depth) when is_binary(name), do: safe_atom(name)
 
+  defp decode(%{"$b64" => b64}, _depth) when is_binary(b64) do
+    case Base.decode64(b64) do
+      {:ok, bin} -> bin
+      :error -> throw({:snapshot_decode_error, {:malformed_tag, "$b64"}})
+    end
+  end
+
   defp decode(%{"$s" => mod_str, "f" => fmap}, depth)
        when is_binary(mod_str) and is_map(fmap) do
     mod = resolve_struct_module(mod_str)
@@ -303,9 +413,18 @@ defmodule Raxol.Agent.Snapshot do
   end
 
   defp decode(%{"$m" => pairs}, depth) when is_list(pairs) do
-    Map.new(pairs, fn [k, v] ->
-      {decode(k, depth + 1), decode(v, depth + 1)}
-    end)
+    if Enum.all?(pairs, &match?([_, _], &1)) do
+      Map.new(pairs, fn [k, v] ->
+        {decode(k, depth + 1), decode(v, depth + 1)}
+      end)
+    else
+      # An inner pair that isn't exactly a 2-element list (e.g. `["a"]` or
+      # `["a", 1, 2]`) would otherwise blow up inside the Map.new/2 callback
+      # with a raw FunctionClauseError/MatchError — caught by load/2's rescue,
+      # but as an unstructured {:load_failed, msg} instead of the same typed
+      # {:malformed_tag, "$m"} reason every other corrupt-tag case produces.
+      throw({:snapshot_decode_error, {:malformed_tag, "$m"}})
+    end
   end
 
   # A tag marker present but with a malformed body is corruption/tampering, not
@@ -313,6 +432,11 @@ defmodule Raxol.Agent.Snapshot do
   # raw map survive woven into the restored model.
   defp decode(%{"$a" => _} = v, _depth) when map_size(v) == 1,
     do: throw({:snapshot_decode_error, {:malformed_tag, "$a"}})
+
+  # A $b64 whose body is a non-binary (e.g. `%{"$b64" => 123}`); the
+  # non-base64-string case (e.g. `"!!!!"`) is handled by the :error branch above.
+  defp decode(%{"$b64" => _} = v, _depth) when map_size(v) == 1,
+    do: throw({:snapshot_decode_error, {:malformed_tag, "$b64"}})
 
   defp decode(%{"$s" => _}, _depth),
     do: throw({:snapshot_decode_error, {:malformed_tag, "$s"}})
@@ -348,9 +472,17 @@ defmodule Raxol.Agent.Snapshot do
   defp coerce(decoded, nil), do: decoded
   defp coerce(%_{} = decoded, _module), do: decoded
 
+  # Aligned with the $s decode path (resolve_struct_module/1): a bare-map
+  # envelope loaded against an explicit module must also name a currently-
+  # loaded Persist implementation before struct/2 is called, never a silently
+  # rebuilt struct of an arbitrary caller-supplied module.
   defp coerce(decoded, module) when is_map(decoded) and is_atom(module) do
-    fields = for {k, v} <- decoded, do: {atomize(k), v}
-    struct(module, fields)
+    if persist_impl?(module) do
+      fields = for {k, v} <- decoded, do: {atomize(k), v}
+      struct(module, fields)
+    else
+      throw({:snapshot_decode_error, {:unknown_struct_module, module_string(module)}})
+    end
   end
 
   defp coerce(decoded, _module), do: decoded
