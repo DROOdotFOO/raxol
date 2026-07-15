@@ -12,7 +12,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert state.path == ""
       assert state.old == ""
       assert state.new == ""
-      assert state.mode == :unified
+      assert state.mode == :auto
+      assert state.width == nil
       assert state.style == %{}
       assert state.theme == %{}
     end
@@ -37,9 +38,81 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert state.theme == %{fg: :white}
     end
 
-    test "normalizes an unrecognized mode to :unified" do
+    test "normalizes an unrecognized mode to :auto" do
       assert {:ok, state} = DiffViewer.init(mode: :bogus)
-      assert state.mode == :unified
+      assert state.mode == :auto
+    end
+  end
+
+  describe "auto mode / effective_mode/2" do
+    setup do
+      # widest line is 9 columns ("context 1"); gutter is 1 column.
+      # pane = 1 (gutter) + 7 (chrome) + 9 (line) = 17; split needs
+      # 17 + 2 + 17 = 36 columns.
+      props = [
+        old: "context 1\nold line\ncontext 2",
+        new: "context 1\nnew line\ncontext 2"
+      ]
+
+      %{props: props}
+    end
+
+    test "picks split when both panes fit the :width prop", %{props: props} do
+      {:ok, state} = DiffViewer.init(props ++ [width: 120])
+      assert DiffViewer.effective_mode(state, %{}) == :split
+    end
+
+    test "falls back to unified when the width is too narrow", %{props: props} do
+      {:ok, state} = DiffViewer.init(props ++ [width: 30])
+      assert DiffViewer.effective_mode(state, %{}) == :unified
+    end
+
+    test "falls back to unified when no width is known", %{props: props} do
+      {:ok, state} = DiffViewer.init(props)
+      assert DiffViewer.effective_mode(state, %{}) == :unified
+    end
+
+    test "reads available width from the render context", %{props: props} do
+      {:ok, state} = DiffViewer.init(props)
+      assert DiffViewer.effective_mode(state, %{available_width: 120}) == :split
+      assert DiffViewer.effective_mode(state, %{width: 120}) == :split
+
+      assert DiffViewer.effective_mode(state, %{dimensions: %{width: 120}}) ==
+               :split
+
+      assert DiffViewer.effective_mode(state, %{available_width: 30}) ==
+               :unified
+    end
+
+    test "the :width prop wins over the context", %{props: props} do
+      {:ok, state} = DiffViewer.init(props ++ [width: 30])
+
+      assert DiffViewer.effective_mode(state, %{available_width: 200}) ==
+               :unified
+    end
+
+    test "explicit modes pass through regardless of width", %{props: props} do
+      {:ok, unified} = DiffViewer.init(props ++ [mode: :unified, width: 200])
+      {:ok, split} = DiffViewer.init(props ++ [mode: :split, width: 10])
+      assert DiffViewer.effective_mode(unified, %{}) == :unified
+      assert DiffViewer.effective_mode(split, %{}) == :split
+    end
+
+    test "render/2 in auto follows the fit decision", %{props: props} do
+      {:ok, wide} = DiffViewer.init(props ++ [width: 120])
+      {:ok, narrow} = DiffViewer.init(props ++ [width: 30])
+
+      wide_rendered = DiffViewer.render(wide, default_context())
+      narrow_rendered = DiffViewer.render(narrow, default_context())
+
+      # split renders a row of two bordered panes; unified renders plain rows
+      [_header, _divider | wide_body] = wide_rendered.children
+      [_header2, _divider2 | narrow_body] = narrow_rendered.children
+
+      assert [%{type: :row, children: [%{type: :box}, %{type: :box}]}] =
+               wide_body
+
+      assert Enum.all?(narrow_body, &(&1.type == :row))
     end
   end
 
