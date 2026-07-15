@@ -1,4 +1,6 @@
 defmodule Raxol.Agent.Action.ToolConverter do
+  require Logger
+
   @moduledoc """
   Converts Action modules to LLM tool definitions and dispatches tool calls.
 
@@ -42,10 +44,23 @@ defmodule Raxol.Agent.Action.ToolConverter do
   Dispatch order: find action -> parse arguments -> validate limits ->
   `:tool_authorizer` (see `Raxol.Agent.ToolPolicy`) -> `:tool_call_hooks`
   pipeline (see `Raxol.Agent.ToolCall.Hook`) -> `Action.call/2`. A hook veto
-  returns `{:error, {:vetoed, reason}}` without invoking the Action. If a hook
-  rewrites the call's action to a different module, the authorizer is re-run
-  against that module before execution (a denial returns `{:error,
-  {:tool_denied, ...}}` and the rewritten Action never runs).
+  returns `{:error, {:vetoed, reason}}` without invoking the Action. A hook
+  contract violation (an invalid `before_call/2` return shape) returns
+  `{:error, {:hook_error, reason}}`, distinct from a veto. Re-authorization
+  runs whenever a hook transforms the `(action, params)` pair that is about
+  to execute -- either the action module or the params (or both) differ from
+  what was originally authorized -- so a hook cannot smuggle a param
+  escalation (e.g. a fund-mover's amount) or a swapped action past the
+  policy that guarded the original call (a denial returns `{:error,
+  {:tool_denied, ...}}` and the transformed call never executes). A hook
+  rewriting `:action` to a module outside the declared `action_modules` set
+  is rejected with `{:error, {:tool_not_in_toolset, module}}`, and a rewrite
+  to a module that isn't callable (does not export `call/2`) is rejected
+  with `{:error, {:invalid_action, module}}` -- both checked before the
+  authorizer even runs. Argument-limit validation (depth/keys/value size)
+  also re-runs against a hook-transformed `params`, so a hook cannot inflate
+  params past the ceiling the pre-hook check enforces; a violation returns
+  the same `{:error, reason}` shape as the pre-hook check.
 
   Returns `{:ok, result}` or `{:error, reason}`.
   """
@@ -61,7 +76,7 @@ defmodule Raxol.Agent.Action.ToolConverter do
          {:ok, params} <- parse_arguments(raw_args, module),
          :ok <- validate_arg_limits(params),
          :ok <- authorize_tool(module, params, context) do
-      run_hooked(module, name, params, tool_call, context)
+      run_hooked(module, params, name, tool_call, action_modules, context)
     end
   end
 
@@ -71,7 +86,7 @@ defmodule Raxol.Agent.Action.ToolConverter do
   # pipeline (Raxol.Agent.ToolCall.Hook) runs immediately before the Action --
   # hooks may transform the call or veto it. Zero registered hooks takes the
   # fast path (behavior unchanged).
-  defp run_hooked(module, name, params, tool_call, context) do
+  defp run_hooked(module, params, name, tool_call, action_modules, context) do
     case Hook.from_context(context) do
       [] ->
         module.call(params, context)
@@ -86,30 +101,85 @@ defmodule Raxol.Agent.Action.ToolConverter do
 
         case Hook.run_before(hooks, call, context) do
           {:cont, final_call} ->
-            run_authorized_call(module, final_call, context, hooks)
+            run_authorized_call(module, params, final_call, action_modules, context, hooks)
 
           {:halt, reason} ->
             {:error, {:vetoed, reason}}
+
+          {:error, reason} ->
+            Logger.error(fn -> "tool-call hook contract violation: #{inspect(reason)}" end)
+            {:error, {:hook_error, reason}}
         end
     end
   end
 
-  # A before_call hook may rewrite the call's `:action` to a *different* module.
-  # If it did, re-run the tool authorizer against the rewritten action (with its
-  # possibly-transformed params) so a hook cannot smuggle a `sensitive: true`
-  # fund-mover past the ToolPolicy that guarded the original action (U8 builds
-  # fund-movement approval on this seam). Unchanged action -> no re-auth (cheap).
-  defp run_authorized_call(original_module, %{action: action} = final_call, context, hooks) do
-    with :ok <- reauthorize_if_transformed(original_module, action, final_call.params, context) do
-      result = action.call(final_call.params, context)
+  # A before_call hook may rewrite the call's `:action` and/or `:params`.
+  # Four gates run on whatever `(action, params)` pair is actually about to
+  # execute, in order:
+  #
+  #   1. `ensure_in_toolset/3` -- a swapped action must be a member of the
+  #      declared `action_modules` set (checked first, so an out-of-set
+  #      module never reaches `run_authorizer`, which calls
+  #      `module.__action_meta__()` and would raise on a non-Action module).
+  #   2. `assert_callable/1` -- the executing action must export `call/2`.
+  #      `Hook.run_before/3` already rejects a non-atom `:action` as an
+  #      invalid hook return, but an atom that passes toolset membership and
+  #      is nonetheless not a callable Action (e.g. a module with no `call/2`)
+  #      must not reach `action.call(...)` uncontained -- that would raise
+  #      `UndefinedFunctionError` outside any rescue/catch and crash the
+  #      (untrapped) react loop.
+  #   3. `validate_arg_limits/1` -- re-checked against the (possibly
+  #      hook-transformed) `params`, not just the original pre-hook params, so
+  #      a hook cannot inflate params past the depth/key/size ceiling the
+  #      pre-hook check exists to enforce.
+  #   4. `reauthorize_if_transformed/5` -- re-runs the tool authorizer
+  #      against the executing `(action, params)` pair unless it is
+  #      byte-identical to what was already authorized pre-hook. This closes
+  #      the param-escalation gap: a hook that keeps the same action but
+  #      rewrites e.g. a transfer amount is re-authorized against the new
+  #      amount, not cheap-skipped on action identity alone (U8 fund-movement
+  #      approval builds on this).
+  defp run_authorized_call(
+         orig_module,
+         orig_params,
+         %{action: action, params: params} = final_call,
+         action_modules,
+         context,
+         hooks
+       ) do
+    with :ok <- ensure_in_toolset(orig_module, action, action_modules),
+         :ok <- assert_callable(action),
+         :ok <- validate_arg_limits(params),
+         :ok <- reauthorize_if_transformed(orig_module, orig_params, action, params, context) do
+      result = action.call(params, context)
       Hook.run_after(hooks, final_call, result, context)
     end
   end
 
-  defp reauthorize_if_transformed(same, same, _params, _context), do: :ok
+  # The original module came from find_action/2, so it is in-set by
+  # construction (repeated var = unchanged action -> skip). A swap must be a
+  # member of the declared set.
+  defp ensure_in_toolset(same, same, _action_modules), do: :ok
 
-  defp reauthorize_if_transformed(_original, new_module, params, context),
-    do: authorize_tool(new_module, params, context)
+  defp ensure_in_toolset(_orig, new_module, action_modules) do
+    if new_module in action_modules,
+      do: :ok,
+      else: {:error, {:tool_not_in_toolset, new_module}}
+  end
+
+  defp assert_callable(action) do
+    if function_exported?(action, :call, 2),
+      do: :ok,
+      else: {:error, {:invalid_action, action}}
+  end
+
+  # Cheap-skip ONLY when the whole (action, params) pair is byte-identical to
+  # what the pre-hook authorize_tool already cleared (repeated vars = equality).
+  defp reauthorize_if_transformed(mod, params, mod, params, _context), do: :ok
+
+  # Action OR params changed -> re-authorize the pair actually about to execute.
+  defp reauthorize_if_transformed(_orig_mod, _orig_params, new_module, new_params, context),
+    do: authorize_tool(new_module, new_params, context)
 
   # Security gate: consult a `(module, params, context) -> :ok | {:deny, reason}`
   # authorizer before running the Action so a prompt-injected LLM cannot invoke
@@ -133,6 +203,58 @@ defmodule Raxol.Agent.Action.ToolConverter do
       {:deny, reason} -> {:error, {:tool_denied, module.__action_meta__().name, reason}}
     end
   end
+
+  @doc """
+  Stable, secret-free category string for an LLM-facing tool error.
+
+  A hook, authorizer, or exception can supply arbitrary detail (wallet
+  addresses, balances, internal messages) as the `reason` term. That detail
+  must never reach the LLM prompt -- only a bounded, developer-authored
+  category may. Callers that need the raw detail (logging, tests,
+  programmatic error handling) should match on the `{:error, reason}` tuple
+  directly; this function is only for the string fed back to the model.
+  """
+  @spec public_error(String.t(), term()) :: String.t()
+  def public_error(name, {:vetoed, {:hook_raised, _hook, _msg}}),
+    do: "[Tool error for #{name}]: blocked by policy (hook error)"
+
+  def public_error(name, {:vetoed, {:hook_threw, _hook, _v}}),
+    do: "[Tool error for #{name}]: blocked by policy (hook error)"
+
+  def public_error(name, {:vetoed, {:hook_exited, _hook, _r}}),
+    do: "[Tool error for #{name}]: temporarily unavailable"
+
+  def public_error(name, {:hook_error, _detail}),
+    do: "[Tool error for #{name}]: tool misconfigured"
+
+  def public_error(name, {:vetoed, reason}) when is_atom(reason),
+    do: "[Tool error for #{name}]: blocked by policy (#{reason})"
+
+  def public_error(name, {:vetoed, _reason}),
+    do: "[Tool error for #{name}]: blocked by policy"
+
+  def public_error(name, {:tool_denied, _tool, reason}) when is_atom(reason),
+    do: "[Tool error for #{name}]: denied (#{reason})"
+
+  def public_error(name, {:tool_denied, _tool, _reason}),
+    do: "[Tool error for #{name}]: denied"
+
+  def public_error(name, {:tool_not_in_toolset, _mod}),
+    do: "[Tool error for #{name}]: tool not available"
+
+  def public_error(name, {:invalid_action, _mod}),
+    do: "[Tool error for #{name}]: tool not available"
+
+  def public_error(name, reason)
+      when reason in [
+             :arguments_not_object,
+             :too_many_argument_keys,
+             :argument_value_too_large,
+             :arguments_too_deep
+           ],
+      do: "[Tool error for #{name}]: invalid arguments"
+
+  def public_error(name, _other), do: "[Tool error for #{name}]: tool error"
 
   @doc """
   Build a tool result message for feeding back to the LLM.
@@ -190,6 +312,12 @@ defmodule Raxol.Agent.Action.ToolConverter do
       {:error, _} = err -> err
     end
   end
+
+  # A hook that rewrites `params` to a non-map is itself a contract
+  # violation on the value dispatched to `Action.call/2`; reject it the same
+  # way as an oversized/malformed argument tree rather than raising inside
+  # `check_depth_and_size/3`'s map-only clauses.
+  defp validate_arg_limits(_non_map), do: {:error, :arguments_not_object}
 
   defp check_depth_and_size(_value, depth, _keys) when depth > @max_arg_depth do
     {:error, :arguments_too_deep}

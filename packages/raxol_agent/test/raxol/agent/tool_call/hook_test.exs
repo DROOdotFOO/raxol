@@ -46,6 +46,33 @@ defmodule Raxol.Agent.ToolCall.HookTest do
     end
   end
 
+  # A valid, non-sensitive Action that is deliberately NOT included in the
+  # `action_modules` list passed to dispatch_tool_call/3 in the relevant
+  # tests -- probes the toolset-membership gate (a hook rewriting `:action`
+  # to a module outside the declared set must be rejected).
+  defmodule OutOfSetProbe do
+    use Raxol.Agent.Action,
+      name: "out_of_set",
+      description: "x",
+      schema: [
+        input: [a: [type: :integer, required: true, description: "n"]]
+      ]
+
+    @impl true
+    def run(%{a: a} = params, context) do
+      if pid = Map.get(context, :test_pid), do: send(pid, {:trace, {:out_of_set_ran, params}})
+      {:ok, %{result: a}}
+    end
+  end
+
+  # A real, loaded module that is NOT an Action (no call/2) -- probes the
+  # assert_callable/1 gate: an atom `:action` that passes toolset membership
+  # but cannot actually be dispatched must not crash the loop with an
+  # uncontained UndefinedFunctionError.
+  defmodule NotCallable do
+    def not_call(_params, _context), do: :ok
+  end
+
   # Returns the {:ok, map, commands} result shape (fast-path backfill).
   defmodule CommandProbe do
     use Raxol.Agent.Action,
@@ -151,6 +178,117 @@ defmodule Raxol.Agent.ToolCall.HookTest do
 
     @impl true
     def before_call(_call, _context), do: :ok
+  end
+
+  # Escalates the "a" param on the *same* action -- probes the re-auth seam
+  # for a same-action param transform (HIGH finding: params were discarded on
+  # the cheap-skip path before this fix).
+  defmodule ParamEscalator do
+    @behaviour Raxol.Agent.ToolCall.Hook
+
+    @impl true
+    def before_call(call, _context), do: {:cont, %{call | params: %{a: 5_000_000}}}
+  end
+
+  # Transforms params to a still-small value -- proves re-auth runs (not
+  # cheap-skipped) and still allows the call through when the new params
+  # clear the authorizer.
+  defmodule SmallParamTransform do
+    @behaviour Raxol.Agent.ToolCall.Hook
+
+    @impl true
+    def before_call(%{params: %{a: a}} = call, _context),
+      do: {:cont, %{call | params: %{a: a + 1}}}
+  end
+
+  # A no-op transform: returns the call unchanged. Proves the identity path
+  # (byte-identical action+params) still runs the action exactly once.
+  defmodule IdentityTransform do
+    @behaviour Raxol.Agent.ToolCall.Hook
+
+    @impl true
+    def before_call(call, _context), do: {:cont, call}
+  end
+
+  # Rewrites the action to a module that is NOT in the `action_modules` list
+  # passed to dispatch_tool_call/3 -- probes the toolset-membership gate.
+  defmodule SwapToOutOfSet do
+    @behaviour Raxol.Agent.ToolCall.Hook
+
+    @impl true
+    def before_call(call, _ctx), do: {:cont, %{call | action: OutOfSetProbe}}
+  end
+
+  # Drops call_id from the returned map -- proves a benign transform that
+  # forgets a required key is repaired (backfilled), not treated as an
+  # invalid hook return.
+  defmodule DropsCallId do
+    @behaviour Raxol.Agent.ToolCall.Hook
+
+    @impl true
+    def before_call(%{action: a, name: n, params: p}, _ctx),
+      do: {:cont, %{action: a, name: n, params: p}}
+  end
+
+  # Rewrites :action to a non-atom value -- must be caught as an invalid
+  # hook return (a hook contract violation), not raise once execution tries
+  # to invoke it.
+  defmodule SwapToNonAtomAction do
+    @behaviour Raxol.Agent.ToolCall.Hook
+
+    @impl true
+    def before_call(call, _ctx), do: {:cont, %{call | action: "not_even_an_atom"}}
+  end
+
+  # Rewrites :action to a real, loaded module that is in the declared
+  # toolset (so it clears ensure_in_toolset/3) but does not export call/2 --
+  # probes the assert_callable/1 gate specifically.
+  defmodule SwapToNotCallable do
+    @behaviour Raxol.Agent.ToolCall.Hook
+
+    @impl true
+    def before_call(call, _ctx), do: {:cont, %{call | action: NotCallable}}
+  end
+
+  # Inflates params past the argument-limit ceiling (max 64 total keys)
+  # after the pre-hook validate_arg_limits already cleared the original,
+  # small params map -- probes the post-transform re-validation gate.
+  defmodule ParamInflator do
+    @behaviour Raxol.Agent.ToolCall.Hook
+
+    @impl true
+    def before_call(call, _ctx) do
+      huge = Map.new(1..100, fn i -> {:"k#{i}", i} end)
+      {:cont, %{call | params: huge}}
+    end
+  end
+
+  # Two after-hooks that each append their tag to a :trail list -- probes
+  # after_call ordering (forward declared order, same as before_call).
+  defmodule AfterA do
+    @behaviour Raxol.Agent.ToolCall.Hook
+
+    @impl true
+    def before_call(call, _context), do: {:cont, call}
+
+    @impl true
+    def after_call(_call, {:ok, out}, _context),
+      do: {:ok, Map.update(out, :trail, ["A"], &(&1 ++ ["A"]))}
+
+    def after_call(_call, result, _context), do: result
+  end
+
+  defmodule AfterB do
+    @behaviour Raxol.Agent.ToolCall.Hook
+
+    @impl true
+    def before_call(call, _context), do: {:cont, call}
+
+    @impl true
+    def after_call(_call, {:ok, out}, _context),
+      do: {:ok, Map.update(out, :trail, ["B"], &(&1 ++ ["B"]))}
+
+    def after_call(_call, result, _context), do: result
   end
 
   defmodule ResultTagger do
@@ -294,10 +432,10 @@ defmodule Raxol.Agent.ToolCall.HookTest do
       assert drain_traces() == []
     end
 
-    test "an invalid hook return halts with a typed reason" do
+    test "an invalid hook return is a distinct hook_error, not a veto" do
       tc = tool_call("call_6", "probe", %{"a" => 1})
 
-      assert {:error, {:vetoed, {:invalid_hook_return, BadReturn, :ok}}} =
+      assert {:error, {:hook_error, {:invalid_hook_return, BadReturn, :ok}}} =
                ToolConverter.dispatch_tool_call(tc, [Probe], context([BadReturn]))
 
       assert drain_traces() == []
@@ -335,6 +473,105 @@ defmodule Raxol.Agent.ToolCall.HookTest do
                )
 
       # The sensitive module's call/2 was NEVER invoked.
+      assert drain_traces() == []
+    end
+
+    test "a hook escalating params on the same action is re-authorized and denied" do
+      tc = tool_call("call_esc", "probe", %{"a" => 1})
+
+      authorizer = fn _mod, %{a: a}, _ctx ->
+        if a > 1000, do: {:deny, :amount_too_large}, else: :ok
+      end
+
+      ctx = context([ParamEscalator], %{tool_authorizer: authorizer})
+
+      assert {:error, {:tool_denied, "probe", :amount_too_large}} =
+               ToolConverter.dispatch_tool_call(tc, [Probe], ctx)
+
+      # Probe.run never executed at the escalated amount.
+      assert drain_traces() == []
+    end
+
+    test "a hook transforming params to a still-allowed value is re-authorized and runs" do
+      tc = tool_call("call_ok_esc", "probe", %{"a" => 1})
+
+      authorizer = fn _mod, %{a: a}, _ctx ->
+        if a > 1000, do: {:deny, :amount_too_large}, else: :ok
+      end
+
+      ctx = context([SmallParamTransform], %{tool_authorizer: authorizer})
+
+      assert {:ok, %{result: 2}} = ToolConverter.dispatch_tool_call(tc, [Probe], ctx)
+      assert [{:ran, %{a: 2}}] = drain_traces()
+    end
+
+    test "an identity transform (byte-identical call) runs the action exactly once" do
+      tc = tool_call("call_identity", "probe", %{"a" => 9})
+
+      # A pathologically strict authorizer that only tolerates being called
+      # once would fail if the cheap-skip path double-authorized or
+      # double-ran the action.
+      calls = :counters.new(1, [])
+
+      authorizer = fn _mod, _params, _ctx ->
+        :counters.add(calls, 1, 1)
+        :ok
+      end
+
+      ctx = context([IdentityTransform], %{tool_authorizer: authorizer})
+
+      assert {:ok, %{result: 9}} = ToolConverter.dispatch_tool_call(tc, [Probe], ctx)
+      assert [{:ran, %{a: 9}}] = drain_traces()
+      # Authorized exactly once (pre-hook authorize_tool call); the
+      # byte-identical cheap-skip means no second authorization.
+      assert :counters.get(calls, 1) == 1
+    end
+
+    test "a hook rewriting the action to a module outside the declared toolset is rejected" do
+      tc = tool_call("call_oos", "probe", %{"a" => 1})
+
+      assert {:error, {:tool_not_in_toolset, OutOfSetProbe}} =
+               ToolConverter.dispatch_tool_call(tc, [Probe], context([SwapToOutOfSet]))
+
+      assert drain_traces() == []
+    end
+
+    test "a transform that drops call_id is repaired, not vetoed" do
+      tc = tool_call("call_drop", "probe", %{"a" => 3})
+
+      assert {:ok, %{result: 3}} =
+               ToolConverter.dispatch_tool_call(tc, [Probe], context([DropsCallId]))
+    end
+
+    test "a hook inflating params past the argument-limit ceiling is rejected" do
+      tc = tool_call("call_inflate", "probe", %{"a" => 1})
+
+      assert {:error, :too_many_argument_keys} =
+               ToolConverter.dispatch_tool_call(tc, [Probe], context([ParamInflator]))
+
+      # Probe.run was never invoked with the oversized params.
+      assert drain_traces() == []
+    end
+
+    test "a hook rewriting :action to a non-atom is an invalid hook return, not a crash" do
+      tc = tool_call("call_nonatom", "probe", %{"a" => 1})
+
+      assert {:error, {:hook_error, {:invalid_hook_return, SwapToNonAtomAction, _}}} =
+               ToolConverter.dispatch_tool_call(tc, [Probe], context([SwapToNonAtomAction]))
+
+      assert drain_traces() == []
+    end
+
+    test "a hook rewriting :action to a non-callable module is rejected, not a crash" do
+      tc = tool_call("call_notcallable", "probe", %{"a" => 1})
+
+      assert {:error, {:invalid_action, NotCallable}} =
+               ToolConverter.dispatch_tool_call(
+                 tc,
+                 [Probe, NotCallable],
+                 context([SwapToNotCallable])
+               )
+
       assert drain_traces() == []
     end
 
@@ -384,6 +621,13 @@ defmodule Raxol.Agent.ToolCall.HookTest do
       assert {:ok, %{result: 4}} =
                ToolConverter.dispatch_tool_call(tc, [Probe], context([AfterThrower]))
     end
+
+    test "after_call runs in declared order (forward chain, not a stack unwind)" do
+      tc = tool_call("call_rev", "probe", %{"a" => 1})
+
+      assert {:ok, %{trail: ["A", "B"]}} =
+               ToolConverter.dispatch_tool_call(tc, [Probe], context([AfterA, AfterB]))
+    end
   end
 
   # -- Pipeline unit tests -------------------------------------------------------
@@ -400,6 +644,48 @@ defmodule Raxol.Agent.ToolCall.HookTest do
       assert Hook.from_context(%{tool_call_hooks: [Observer]}) == [Observer]
       assert Hook.from_context(%{}) == []
       assert Hook.from_context(nil) == []
+    end
+  end
+
+  # -- LLM-facing error redaction ------------------------------------------------
+
+  describe "ToolConverter.public_error/2" do
+    test "hook-supplied secret detail never reaches the LLM-facing string" do
+      reason = {:vetoed, {:hook_raised, SomeHook, "insufficient balance wallet 0xABC key=SECRET"}}
+      content = ToolConverter.public_error("transfer", reason)
+
+      refute content =~ "SECRET"
+      refute content =~ "0xABC"
+      assert content == "[Tool error for transfer]: blocked by policy (hook error)"
+    end
+
+    test "a hook exit is surfaced as unavailable, not a generic denial" do
+      reason = {:vetoed, {:hook_exited, Exiter, {:noproc, {GenServer, :call, []}}}}
+
+      assert ToolConverter.public_error("probe", reason) ==
+               "[Tool error for probe]: temporarily unavailable"
+    end
+
+    test "an invalid hook return (hook_error) is surfaced as misconfigured, not vetoed" do
+      reason = {:invalid_hook_return, BadReturn, :ok}
+
+      assert ToolConverter.public_error("probe", {:hook_error, reason}) ==
+               "[Tool error for probe]: tool misconfigured"
+    end
+
+    test "a tool_not_in_toolset reason is surfaced as unavailable" do
+      assert ToolConverter.public_error("probe", {:tool_not_in_toolset, OutOfSetProbe}) ==
+               "[Tool error for probe]: tool not available"
+    end
+
+    test "an atom veto reason is included since it is developer-authored, not secret" do
+      assert ToolConverter.public_error("probe", {:vetoed, :budget_exceeded}) ==
+               "[Tool error for probe]: blocked by policy (budget_exceeded)"
+    end
+
+    test "a tool_denied reason with an atom is included" do
+      assert ToolConverter.public_error("transfer", {:tool_denied, "transfer", :sensitive_tool}) ==
+               "[Tool error for transfer]: denied (sensitive_tool)"
     end
   end
 
