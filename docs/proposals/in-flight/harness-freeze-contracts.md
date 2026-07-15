@@ -144,7 +144,7 @@ restore formula already. No behavior change while `low_watermark = 1`.
 |---|---|---|---|
 | `event` | EmitBridge (durable tier) | the contract Event fields as landed (`v, session_id, turn_id, ts, family, type, tier, payload`) | the existing corpus; `"kind"` absent ⇒ `"event"` (grandfather clause — every landed journal stays valid, byte-for-byte) |
 | `checkpoint` | checkpoint writer (U9/U10), via the same single Writer | §1.1-checkpoint below | AD-10: checkpoints are **in-log pointer records** — all four cohort leaders independently converged here; HEAD sidecar stays offset+config only, never model state |
-| `annotation` | any writer (reopen the single Writer) | `%{target_offset \| target_range, label, body_ref, author, consent_class}`; `consent_class ∈ private \| shareable \| train` (grow-only) | human/agent notes on history (F14, community-gaps VB#13); **tip-excluded by the closure rule**; sharing/export honors `consent_class` |
+| `annotation` | any writer (reopen the single Writer) | `%{target_offset \| target_range, label, body_ref, author, consent_class}`; `consent_class ∈ private \| shareable \| train` (grow-only) | human/agent notes on history (F14, community-gaps VB#13); **open-any-writer through the single Writer** (non-authoritative, **tip-excluded by the closure rule**); annotations **are records** — they count toward segment rotation and GC, so unbounded annotation bloat is a **GC-policy concern, not a contract gate**; sharing/export honors `consent_class` |
 | `schedule` | scheduler writer (durable trigger store) | `%{trigger_id, when: cron\|event\|once, next_fire, payload_ref, armed}` | wake / self-initiated autonomy (F9, community-gaps class 13); the journal is the authoritative trigger store — external cron tables are projections; **tip-excluded**; the session lifecycle enum grows `:dormant` (a session parked between wakes) |
 
 **Deliberately NOT kinds:**
@@ -248,6 +248,12 @@ must emit it as `family:loop`).
 §1.5): it stays in CONVERSATIONAL from day one. EmitBridge must wire its
 emit mapping for `item_started` before U4-R/U9-R reds are authored.
 
+**`woken` loop-vocabulary registration (like `item_started`):** `woken` must be
+registered in the loop vocabulary and its EmitBridge neutral→contract mapping
+wired **before any `woken` is emitted** — the producer seam rejects unregistered
+types. This registration is orthogonal to its CONVERSATIONAL exclusion: `woken`
+is emittable (`family:loop`) but is never a tip.
+
 - **U4 locates the tip** by backward scan under this predicate (over the
   tolerant Reader output — unknown kinds/types encountered on the way are
   skipped, not fatal).
@@ -256,6 +262,29 @@ emit mapping for `item_started` before U4-R/U9-R reds are authored.
   `conversational?` or the append is rejected (see negative contour). With
   `branch_id`, `tip_offset` MUST name a conversational record on the
   checkpoint's own `branch_id` (same-branch tip).
+
+#### Record lifecycle (who stamps what — the full stamping path)
+
+```
+neutral map (producer)          business fields only
+      │
+      ▼
+EmitBridge.stamp                adds envelope fields: actor, scope,
+      │                         provenance, cost_ref
+      ▼
+Writer.stamp                    adds id, kind, branch_id, schema_version
+      │
+      ▼
+disk (NNNNNN.jsonl)             append-BEFORE-publish; the live path mirrors
+                                the SAME stamped envelope, so durable + live agree
+```
+
+Both the durable path (`durable_record/1`) and the live path (`map_event/3`)
+carry the envelope fields (`actor`, `scope`, `provenance`, `cost_ref`); a field
+stamped on one path but stranded on the other is the **named failure mode**
+(N-U11.8-class: two records / two paths disagreeing on an envelope field). A red
+author carrying a new envelope field must extend BOTH functions plus the Reader
+decode, or the durable and live views diverge.
 
 #### Reader tolerance (frozen behavior)
 
@@ -278,6 +307,9 @@ emit mapping for `item_started` before U4-R/U9-R reds are authored.
   at the record layer (I5/I6 as landed).
 - **`$blob` value marker (externalized payloads):** a payload value MAY be
   `{"$blob": "blobs/<sha256-hex>"}` (optionally with `"bytes"`/`"media"` keys).
+  If present, `"bytes"` is **REQUIRED to equal the dereferenced file's byte
+  size**; a mismatch is a typed error `{:error, :blob_size_mismatch}` at deref
+  time (same failure family as `:snapshot_corrupt`), not journal damage.
   Bulk bytes live at `<session>/blobs/<sha256>` — content-addressed, FI-8 atomic
   write, **written before** the referencing record (same discipline as checkpoint
   snapshots). Records stay small facts + pointers. Readers built against v1 MUST
@@ -285,7 +317,13 @@ emit mapping for `item_started` before U4-R/U9-R reds are authored.
   missing/altered blob file degrades under N-JS3 semantics (deref-fail ⇒
   tombstone, journal stays `:ok`, nothing deleted implicitly per FI-7). The
   Writer externalizes payloads over a per-record byte ceiling (the threshold is
-  policy; the ceiling's *existence* is the law); redaction runs before hashing.
+  policy; the ceiling's *existence* is the law). **FI-10 at `$blob` (frozen):**
+  blob bytes pass `Contract.sanitize_payload`-class sanitization + MS secret
+  exclusion **before** `sha256`/write — the exact same write-boundary discipline
+  as checkpoint snapshot files (§FI-10 below), so a large secret cannot evade
+  scrubbing by being externalized. **Ordering law: sanitize BEFORE externalize**
+  — a sanitized-shorter value may never cross the byte ceiling, so sanitization
+  always precedes the externalize decision (and redaction runs before hashing).
 - **`$redacted` value marker (the one legal rewrite):** a payload value MAY be
   replaced in-place with `{"$redacted": %{reason, at_ts}}` — the sole legal
   rewrite of history (§0 clause 6), for secret/PII scrubbing. It never disturbs
@@ -317,8 +355,9 @@ Sessions form a DAG at the lineage level; each journal stays strictly linear
 forever. Lineage lives in session metadata (`meta.json`), never on a record:
 
 ```
-parents: [ %{session_id, offset, relation} ]     # list, possibly empty
+parents: [ %{session_id, offset, relation, detail \\ null} ]   # list, possibly empty
 relation ∈ :fork | :spawn | :merge | :import      # grow-only enum
+# detail: optional grow-only map (e.g. %{role: :subagent}), default null
 ```
 
 A **list of typed edges** — never a scalar `forked_from` (scalar→list would be a
@@ -406,10 +445,15 @@ Governing dispositions: AD-9, AD-10, AD-11, AD-15, AD-3a/3b, FI-7/8/9/10/12.
   `sha256(bytes)` matches the pointer; deref-then-fold equals the same fold with
   the bytes inlined. A missing blob leaves the journal `:ok` (tombstone), never
   `{:damaged}`.
-- **P-JS11 low-watermark density:** under the full I1 fault schedule, record ids
-  are dense across `[low_watermark, n]`; with `low_watermark = 1` this is exactly
-  P-JS1. A prefix missing below an attesting `gc`/HEAD watermark reads healthy;
-  missing without attestation reads damaged.
+- **P-JS11 low-watermark density (`@tag :gc` — deferred):** under the full I1
+  fault schedule, record ids are dense across `[low_watermark, n]`; with
+  `low_watermark = 1` this is exactly P-JS1. A prefix missing below an attesting
+  `gc`/HEAD watermark reads healthy; missing without attestation reads damaged.
+  **Deferred:** not authorable until a `gc` record kind or a HEAD
+  `low_watermark > 1` exists — at `low_watermark = 1` there is no below-watermark
+  range to truncate, so the scenario is ungeneratable. A test harness MAY inject
+  a synthetic `gc` record + HEAD watermark to exercise it, with an explicit
+  "simulates future state" note.
 - **P-JS12 redaction preserves framing:** replacing a payload value with
   `$redacted` leaves every other record's framing, `id`, `kind`, and hash
   byte-identical; the journal folds `{:ok, _}` before and after. Generator MUST
@@ -434,7 +478,7 @@ Governing dispositions: AD-9, AD-10, AD-11, AD-15, AD-3a/3b, FI-7/8/9/10/12.
 | N-JS8 | tip scan ignores `branch_id` (selects a record from another branch), or a closure-rule tip predicate patched to accept a non-whitelisted kind/type | P-JS8 fails: `tip(journal, b)` returns an offset with `branch_id ≠ b`, or selects a non-CONVERSATIONAL record | predicate variant dropping the `branch_id == b` clause, or one admitting any `family:loop` type regardless of CONVERSATIONAL membership |
 | N-JS9 | reader marks a session damaged for a missing/dangling or cyclic lineage parent | P-JS9 fails; tolerance red asserts `{:ok, _}` and identical fold | reader that resolves lineage as replay input and damages-on-missing-parent |
 | N-JS10 | `$blob` deref failure treated as journal corruption, or blob written AFTER the referencing record | P-JS10 fails: reader returns `{:damaged, _}` on a missing blob (must be tombstone + `:ok`), or a crash between record-append and blob-write leaves a referenced-but-absent blob | reader that damages-on-missing-blob; Writer that appends the record before the blob file |
-| N-JS11 | a GC'd leading prefix (missing below `low_watermark`) reported as damaged, or a real missing-middle at/above the watermark reported healthy | P-JS11 fails on either side | reader with the density check hardcoded to `1..n` (ignores `low_watermark`), or one treating any missing segment as attested |
+| N-JS11 | a GC'd leading prefix (missing below `low_watermark`) reported as damaged, or a real missing-middle at/above the watermark reported healthy | P-JS11 fails on either side **(`@tag :gc` — deferred until a `gc` kind or HEAD `low_watermark > 1` exists; see P-JS11)** | reader with the density check hardcoded to `1..n` (ignores `low_watermark`), or one treating any missing segment as attested |
 | N-JS12 | a "redaction" that rewrites framing/`id`/`kind`/hash, or scrubs a value by any means other than the `$redacted` marker | P-JS12 fails: a neighboring record's hash/offset changes, or the scrub reads as interior corruption (I5/I6) | redactor that re-serializes the record (OpenHands PR #9793 timestamp-corruption class), or one that substring-scrubs across framing |
 | N-JS13 | a second concurrent writer / CRDT merge admitted into one journal (NC-12 violation) | P-JS1/P-JS11 density fails: two writers collide on offsets, or a merge produces a non-dense id set | Writer variant accepting appends from a second live writer, or a "converge" path that offset-unions two divergent logs |
 
@@ -546,9 +590,14 @@ field is absent by design, not defaulted to a guess.
   qualification can come later; cross-session actor identity is a
   **consuming-store concern** (same boundary as `refs` — the journal never
   resolves it).
-- `approval_decided` additionally names `actor` in its payload (its G4 shape);
-  when both are present they agree by producer-seam stamping — the envelope actor
-  is the uniform mechanism, the payload actor is the decision-scoped copy.
+- `approval_decided` carries **no `actor` in its payload** — `envelope.actor` is
+  the single source of truth (uniform-actor principle). Any decision-scoped view
+  of "who decided" is derived at read time from the envelope, never stored on the
+  payload (a payload copy would re-introduce the dual-location drift the
+  uniform-actor seam exists to eliminate). Live enforcement state built on these
+  records (e.g. U8's in-memory approvals) MUST be rebuildable by a fold over
+  `approval_decided` events on replay/resume — the journal is the authority,
+  the in-memory set is a projection.
 
 #### `cost_ref` — spend correlation (spend-bearing records only)
 
@@ -572,11 +621,16 @@ attribution field that could drift from or double-count the Ledger.
 }
 ```
 
-- **`params_hash` canonicalization spec (normative, written once):** sha256 over
-  the JSON of the params object with **sorted keys** and a **documented
-  excluded-ephemeral list** (request ids, timestamps, and other per-call noise
-  are excluded); one serialization or hashes are incomparable across writers in
-  golden fixtures.
+- **`params_hash` canonicalization spec (normative, written once):** `sha256`
+  over a canonical JSON serialization of the params object with **sorted keys**,
+  produced by exactly ONE named normative serializer —
+  `Raxol.Agent.Fingerprint.canonical_json/1` (to be implemented with U11-I;
+  every golden fixture MUST hash through it, so two independent encoders cannot
+  diverge). The excluded-ephemeral key list is **exhaustive and frozen**
+  (grow-only): `request_id`, `idempotency_key`, `trace_id`, `timestamp`/`ts`.
+  Everything else is included — in particular **`seed` is INCLUDED in the hash**
+  (it is a sampling parameter; replay identity needs it). There is no open-ended
+  "other per-call noise" exclusion: an ambiguous exclusion is not a contract.
 - **`params_inline`** is the capped subset `%{temperature, top_p, max_tokens,
   seed}` (grow-only keys) — the human/audit split, mirroring the frozen `charge`
   shape discipline (the split is the type; the cost/compare *function* is policy).
@@ -616,8 +670,8 @@ later add).
 | `promote` | `%{item, justification, refs}` | **global** | the only `:global` type; requires human `approval_decision` before commit |
 | `probe_run` | `%{probe, run_id, status, charge, refs}` | session | probe lifecycle (§3); `status` grow-only enum |
 | `attach` | `%{from_offset, history_policy, surface, refs}` | session | best-effort audit (§1.1); nothing may depend on it |
-| `speculation` | `%{phase, branch_ref, outcome, refs}` — `phase ∈ :begin\|:commit\|:rollback` (grow-only); `outcome ∈ :cleared\|:rejected\|:disagreed\|:timeout\|nil` | session | YOLO/tournament branch lifecycle (yolo-safe C2); at `:begin`, `refs` names the parent tip **offset(s)** — plural by construction (a merge-commit speculation names N parents) |
-| `approval_decided` | `%{request_ref, decision, actor, refs}` | session | AD-14 decision record (G4); journaled so U8's "after deny, no later success" is a fold, not an honor system; tip-excluded (a trailing deny is not a resume point) |
+| `speculation` | `%{phase, branch_ref, outcome, refs}` — `phase ∈ :begin\|:commit\|:rollback` (grow-only); `outcome ∈ :cleared\|:rejected\|:disagreed\|:timeout\|nil` | session | YOLO/tournament branch lifecycle (yolo-safe C2); at `:begin`, `refs` names **in-session** parent tip **offset(s) only** — plural stays legal for in-journal branches (a merge-commit over Option-B branches names N in-journal parents). **Cross-session merge parentage lives in lineage `:merge` edges (`meta.json`, §1.1-lineage), never in `refs`** — in-journal refs resolve only within the enclosing session (§2.1 session-scoping contract), so a cross-session parent has no legal `refs` slot; the limitation is explicit by design |
+| `approval_decided` | `%{request_ref, decision, refs}` — `decision ∈ :approved \| :denied` (grow-only) | session | AD-14 decision record (G4); `actor` lives on the **envelope only** (single-source, uniform-actor principle), never in the payload; journaled so U8's "after deny, no later success" is a fold, not an honor system; tip-excluded (a trailing deny is not a resume point) |
 | `policy_amended` | `%{scope, rule_id, before, after, source, refs}` — `source ∈ :human\|:calibrate\|:oracle` (grow-only) | session | journaled **BEFORE enforcement** (reserve-before-call applied to policy); U18-servo learned policies are `source: :calibrate` **rows, never a side file** |
 
 **`refs` is frozen as the uniform annotation mechanism:** a required payload
@@ -721,9 +775,10 @@ Governing dispositions: FI-5, FI-2, AD-11, I9.
   under the normative canonicalization across two independent encoders (property,
   same class as P-U11.1).
 - **P-U11.8 speculation refs are plural-capable:** a `speculation{phase: :begin}`
-  MAY name N parent tip offsets in `refs`; a merge-commit speculation naming ≥2
-  parents round-trips and folds without any singular-parent assumption. Generator
-  MUST include a ≥2-parent case (vacuous otherwise).
+  MAY name N **in-session** parent tip offsets in `refs`; a merge-commit
+  speculation naming ≥2 in-journal parents round-trips and folds without any
+  singular-parent assumption. Generator MUST include a ≥2-parent case (vacuous
+  otherwise).
 
 ### 2.3 Negative contour
 
@@ -1003,6 +1058,11 @@ N-U12.10 is **additive** to N-U12.3, not a replacement: submit-time
 saturation still returns `{:ok, run_id}` and parks (never a synchronous
 failure); N-U12.10 only bounds how long and how many runs may sit parked.
 
+**Parking precedence (frozen):** if a run cannot be parked because `max_parked`
+is exceeded, it terminates `:exhausted` (**never `:parked`**) — still exactly one
+terminal `probe_run` event. `max_parked` dominates the parking state: budget
+exhaustion parks, but a full parked set overrides parking with `:exhausted`.
+
 ### 3.4 Forward-compat note
 
 - Grows by: new `probe_run` statuses, new charge keys (e.g. cost-in-currency),
@@ -1062,13 +1122,20 @@ truth and cross-referenced from their implementing drafts.
 ### 5.1 `client_msg_id` — command idempotency (ingest seam)
 
 Every externally-injected command carries a client-supplied idempotency key
-`client_msg_id`. Duplicate delivery (same `(session_id, client_msg_id)` within
-the dedup window) is deduplicated at the ingest seam — an idempotent accept
-referencing the original turn, never a second durable turn. The command's `actor`
-comes from the attach/auth context (cross-ref §2.1 actor producer-seam stamping),
-and `turn_started.payload` grows an optional `client_msg_id` linking the turn to
-its client message. Offset-derived keys are forbidden (they break under
-replay/compaction); the key is generated client-side at write time.
+`client_msg_id`. **Dedup window = session lifetime.** The **journal is the dedup
+truth**: an accepted command carries its `client_msg_id` in the resulting durable
+event's payload (`turn_started.payload` grows an optional `client_msg_id` linking
+the turn to its client message), so the set of seen keys is a fold over the
+journal. The ingest seam's dedup state is an **in-memory index rebuilt by fold on
+restart/replay** — a re-delivery of the same `(session_id, client_msg_id)` after
+a BEAM restart still deduplicates, because the index is reconstructed from the
+durable events, not held only in RAM. The idempotent accept for a duplicate is a
+**live ack referencing the original turn, NOT a second durable event** — a
+duplicate never appends to the journal (so a re-sent, only-live-acked message
+never re-emits a durable `turn_started`). The command's `actor` comes from the
+attach/auth context (cross-ref §2.1 actor producer-seam stamping). Offset-derived
+keys are forbidden (they break under replay/compaction); the key is generated
+client-side at write time.
 
 ### 5.2 `effect_class` + `egress` — the action reversibility taxonomy
 
@@ -1081,9 +1148,15 @@ effect_class ∈ :reversible_local | :bounded_sandboxable | :irreversible_extern
 egress:        boolean
 ```
 
-The YOLO auto-approvability predicate and the always-escalate set dispatch on
-these (`harness-yolo-safe-research.md` §2/§7): `:irreversible_external` is the
-irreducible always-escalate class (no lineage, oracle, or calibration overrides
-it), and `egress` is the exfil leg of the lethal trifecta. Enforcement is
-**structural, compiled in our own tree** — never self-reported by an untrusted
+**Auto-approve predicate (inlined, normative here):** a call **escalates**
+(requires human approval) iff `effect_class == :irreversible_external` **OR**
+`egress == true`; otherwise it is **YOLO-applicable over trusted lineage** (see
+`harness-yolo-safe-research.md` §2/§7 for the full model). `:irreversible_external`
+is the irreducible always-escalate class (no lineage, oracle, or calibration
+overrides it), and `egress` is the exfil leg of the lethal trifecta. Enforcement
+is **structural, compiled in our own tree** — never self-reported by an untrusted
 MCP tool (the `destructiveHint`-is-a-lie class, yolo-safe N-Y5).
+
+**F2 dependency:** `effect_class`/`egress` live in the not-yet-landed F2
+`Raxol.Action` draft — reds that assert `effect_class`-keyed escalation carry
+`@tag :action_surface` until F2 lands.
