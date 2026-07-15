@@ -120,6 +120,18 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
                :unified
     end
 
+    test "a single outlier-long line does not veto split (percentile fit)" do
+      # 20 short lines + one 200-char outlier; max-based fit would demand
+      # 200+ columns, percentile fit sees the typical 8-col line.
+      shorts = Enum.map_join(1..20, "\n", fn i -> "line #{i}" end)
+      outlier = String.duplicate("x", 200)
+      old = shorts <> "\n" <> outlier <> "\nlast old"
+      new = shorts <> "\n" <> outlier <> "\nlast new"
+
+      {:ok, state} = DiffViewer.init(old: old, new: new, width: 80)
+      assert DiffViewer.effective_mode(state, %{}) == :split
+    end
+
     test "explicit modes pass through regardless of width", %{props: props} do
       {:ok, unified} = DiffViewer.init(props ++ [mode: :unified, width: 200])
       {:ok, split} = DiffViewer.init(props ++ [mode: :split, width: 10])
@@ -419,8 +431,11 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert length(split_row.children) == 2
       assert Enum.all?(split_row.children, &(&1.type == :column))
 
+      # flex: 1 shares the row's space equally — {:pct, n} would only
+      # resolve against a definite container dimension, which the row
+      # doesn't have.
       assert Enum.all?(split_row.children, fn pane ->
-               get_in(pane, [:style, :width]) == {:pct, 50}
+               get_in(pane, [:style, :flex]) == 1
              end)
     end
 
@@ -434,6 +449,60 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
       # 1 equal row per shared line + 2 inserted rows, no header labels
       assert length(old_column.children) == length(new_column.children)
+    end
+  end
+
+  describe "render/2 (split mode truncation)" do
+    test "an outlier line is ellipsis-truncated to the pane budget" do
+      outlier = String.duplicate("y", 120)
+      old = "short a\n" <> outlier <> "\nshort b"
+      new = "short a\n" <> outlier <> "\nshort c"
+
+      {:ok, state} =
+        DiffViewer.init(old: old, new: new, mode: :split, width: 60)
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider, split_row] = rendered.children
+      [old_column, _new_column] = split_row.children
+
+      # find the outlier content row and measure its total span width
+      outlier_row =
+        Enum.find(old_column.children, fn row ->
+          [_gutter, content] = row.children
+
+          Enum.any?(content.children, fn span ->
+            is_binary(span[:content]) and span[:content] =~ "yyy"
+          end)
+        end)
+
+      assert outlier_row, "expected the outlier row"
+      [_gutter, content] = outlier_row.children
+
+      total_width =
+        Enum.reduce(content.children, 0, fn span, acc ->
+          acc + Raxol.UI.TextMeasure.display_width(span.content)
+        end)
+
+      # pane budget for width 60: half = 29, minus gutter(1)+bar(1)+chrome(1) = 26
+      assert total_width <= 26
+      assert List.last(content.children).content == "…"
+    end
+
+    test "short lines pass through untruncated" do
+      {:ok, state} =
+        DiffViewer.init(old: "aa\nbb", new: "aa\ncc", mode: :split, width: 60)
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider, split_row] = rendered.children
+      [old_column, _new_column] = split_row.children
+
+      refute Enum.any?(old_column.children, fn row ->
+               [_gutter, content] = row.children
+
+               Enum.any?(content.children, fn span ->
+                 span[:content] == "…"
+               end)
+             end)
     end
   end
 
