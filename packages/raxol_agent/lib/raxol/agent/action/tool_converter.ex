@@ -42,7 +42,10 @@ defmodule Raxol.Agent.Action.ToolConverter do
   Dispatch order: find action -> parse arguments -> validate limits ->
   `:tool_authorizer` (see `Raxol.Agent.ToolPolicy`) -> `:tool_call_hooks`
   pipeline (see `Raxol.Agent.ToolCall.Hook`) -> `Action.call/2`. A hook veto
-  returns `{:error, {:vetoed, reason}}` without invoking the Action.
+  returns `{:error, {:vetoed, reason}}` without invoking the Action. If a hook
+  rewrites the call's action to a different module, the authorizer is re-run
+  against that module before execution (a denial returns `{:error,
+  {:tool_denied, ...}}` and the rewritten Action never runs).
 
   Returns `{:ok, result}` or `{:error, reason}`.
   """
@@ -62,10 +65,12 @@ defmodule Raxol.Agent.Action.ToolConverter do
     end
   end
 
-  # Execution chokepoint: every LLM tool call passes through here. The
-  # `:tool_call_hooks` pipeline (Raxol.Agent.ToolCall.Hook) runs immediately
-  # before the Action -- hooks may transform the call or veto it. Zero
-  # registered hooks takes the fast path (behavior unchanged).
+  # Execution chokepoint: every LLM-initiated tool call passes through here
+  # (the internal Pipeline/Direct/run_action* paths call Action.call/2 directly
+  # but are agent-internal, never LLM-reachable). The `:tool_call_hooks`
+  # pipeline (Raxol.Agent.ToolCall.Hook) runs immediately before the Action --
+  # hooks may transform the call or veto it. Zero registered hooks takes the
+  # fast path (behavior unchanged).
   defp run_hooked(module, name, params, tool_call, context) do
     case Hook.from_context(context) do
       [] ->
@@ -81,14 +86,30 @@ defmodule Raxol.Agent.Action.ToolConverter do
 
         case Hook.run_before(hooks, call, context) do
           {:cont, final_call} ->
-            result = final_call.action.call(final_call.params, context)
-            Hook.run_after(hooks, final_call, result, context)
+            run_authorized_call(module, final_call, context, hooks)
 
           {:halt, reason} ->
             {:error, {:vetoed, reason}}
         end
     end
   end
+
+  # A before_call hook may rewrite the call's `:action` to a *different* module.
+  # If it did, re-run the tool authorizer against the rewritten action (with its
+  # possibly-transformed params) so a hook cannot smuggle a `sensitive: true`
+  # fund-mover past the ToolPolicy that guarded the original action (U8 builds
+  # fund-movement approval on this seam). Unchanged action -> no re-auth (cheap).
+  defp run_authorized_call(original_module, %{action: action} = final_call, context, hooks) do
+    with :ok <- reauthorize_if_transformed(original_module, action, final_call.params, context) do
+      result = action.call(final_call.params, context)
+      Hook.run_after(hooks, final_call, result, context)
+    end
+  end
+
+  defp reauthorize_if_transformed(same, same, _params, _context), do: :ok
+
+  defp reauthorize_if_transformed(_original, new_module, params, context),
+    do: authorize_tool(new_module, params, context)
 
   # Security gate: consult a `(module, params, context) -> :ok | {:deny, reason}`
   # authorizer before running the Action so a prompt-injected LLM cannot invoke
