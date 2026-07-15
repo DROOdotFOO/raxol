@@ -15,6 +15,52 @@ defmodule Raxol.UI.SyntaxHighlighterTest do
       assert Enum.map_join(line, & &1.text) == "def foo, do: :ok"
     end
 
+    # Makeup token values are chardata (mixed binaries + bare codepoints);
+    # a codepoint above 255 made the old IO.iodata_to_binary conversion
+    # raise, silently degrading the WHOLE file to plain text. "€" (U+20AC)
+    # is the exact character that surfaced it.
+    test "a multi-byte codepoint does not knock out highlighting (euro regression)" do
+      src = ~s{def currency_symbol(:eur), do: "€"\n}
+      [line, _trailing] = SyntaxHighlighter.highlight_lines(src, "elixir")
+
+      assert Enum.any?(line, fn tok -> is_binary(tok.fg) end),
+             "expected highlighted tokens, got plain fallback: #{inspect(line)}"
+
+      assert Enum.map_join(line, & &1.text) == String.trim_trailing(src, "\n")
+    end
+
+    test "complex unicode and emoji survive with highlighting intact" do
+      cases = [
+        {"cjk", ~s(x = "汉字テスト한글")},
+        {"combining diacritics", ~s(x = "éà")},
+        {"astral plane", ~s(x = "𝕊𝕥𝕣𝕚𝕟𝕘")},
+        {"emoji", ~s(x = "🚀 fire 🔥")},
+        {"zwj emoji sequence", ~s(x = "👩‍🚀👨‍👩‍👧‍👦")},
+        {"flags + skin tone", ~s(x = "🏳️‍🌈 👍🏽")},
+        {"mixed rtl", ~s(x = "abc عربى abc")}
+      ]
+
+      for {label, src} <- cases do
+        [line] = SyntaxHighlighter.highlight_lines(src, "elixir")
+
+        # never degrades to the single plain-token fallback
+        assert Enum.any?(line, fn tok -> is_binary(tok.fg) end),
+               "#{label}: lost highlighting: #{inspect(line)}"
+
+        # tokens reconstruct the source byte-for-byte
+        assert Enum.map_join(line, & &1.text) == src,
+               "#{label}: token texts do not reconstruct the source"
+      end
+    end
+
+    test "unicode inside comments and atoms keeps line structure" do
+      src = "# comment with € and 🚀\n:atom_ok\n"
+      lines = SyntaxHighlighter.highlight_lines(src, "elixir")
+
+      assert length(lines) == 3
+      assert Enum.map_join(hd(lines), & &1.text) == "# comment with € and 🚀"
+    end
+
     test "an unresolvable language falls back to one plain token per line" do
       assert SyntaxHighlighter.highlight_lines(
                "hello world",
