@@ -25,9 +25,14 @@ defmodule Raxol.Agent.Journal.FileStore do
   alias Raxol.Agent.Journal.FileStore.{Reader, Writer}
 
   @enforce_keys [:session_id, :dir, :writer]
-  defstruct [:session_id, :dir, :writer]
+  defstruct [:session_id, :dir, :writer, owner?: true]
 
-  @type t :: %__MODULE__{session_id: String.t(), dir: Path.t(), writer: pid()}
+  @type t :: %__MODULE__{
+          session_id: String.t(),
+          dir: Path.t(),
+          writer: pid(),
+          owner?: boolean()
+        }
 
   @env_base "RAXOL_SESSIONS_DIR"
   @default_base "~/.raxol/sessions"
@@ -57,12 +62,26 @@ defmodule Raxol.Agent.Journal.FileStore do
 
       case Writer.start_link(writer_opts) do
         {:ok, pid} ->
-          {:ok, %__MODULE__{session_id: session_id, dir: dir, writer: pid}}
+          {:ok,
+           %__MODULE__{
+             session_id: session_id,
+             dir: dir,
+             writer: pid,
+             owner?: true
+           }}
 
         # Single-writer invariant: a Writer already owns this session's journal.
         # Reuse the live one rather than spawning a second writer on the segment.
+        # This handle JOINS a shared Writer it did not start — mark it a joiner
+        # so `close/1` does not stop the Writer out from under the owner.
         {:error, {:already_started, pid}} ->
-          {:ok, %__MODULE__{session_id: session_id, dir: dir, writer: pid}}
+          {:ok,
+           %__MODULE__{
+             session_id: session_id,
+             dir: dir,
+             writer: pid,
+             owner?: false
+           }}
 
         {:error, _} = err ->
           err
@@ -73,6 +92,11 @@ defmodule Raxol.Agent.Journal.FileStore do
   @impl Raxol.Agent.Journal
   def append(%__MODULE__{writer: pid}, event) when is_map(event) do
     Writer.append(pid, event)
+  catch
+    # The Writer died underneath this handle (owner closed it, crash, ...).
+    # Surface a normal error tuple instead of exiting the caller — the handle
+    # is stale and should be reopened.
+    :exit, reason -> {:error, {:writer_down, exit_reason(reason)}}
   end
 
   @impl Raxol.Agent.Journal
@@ -85,11 +109,17 @@ defmodule Raxol.Agent.Journal.FileStore do
     end
   end
 
+  # Only the handle that STARTED the Writer may stop it. A joiner handle (one
+  # whose `open/2` found the Writer `{:already_started, _}`) shares the Writer
+  # with its owner; stopping it here would crash the owner's next append.
+  # Joiners just drop their reference.
   @impl Raxol.Agent.Journal
-  def close(%__MODULE__{writer: pid}) do
+  def close(%__MODULE__{writer: pid, owner?: true}) do
     if Process.alive?(pid), do: GenServer.stop(pid)
     :ok
   end
+
+  def close(%__MODULE__{owner?: false}), do: :ok
 
   @impl Raxol.Agent.Journal
   def status(%__MODULE__{dir: dir, writer: pid}) do
@@ -103,7 +133,8 @@ defmodule Raxol.Agent.Journal.FileStore do
 
   # --- helpers ---------------------------------------------------------------
 
-  defp validate_session_id(id) when id in [".", ".."], do: {:error, :invalid_session_id}
+  defp validate_session_id(id) when id in [".", ".."],
+    do: {:error, :invalid_session_id}
 
   defp validate_session_id(id) do
     if Regex.match?(@session_id_re, id) do
@@ -116,7 +147,14 @@ defmodule Raxol.Agent.Journal.FileStore do
   defp flush(pid) do
     if Process.alive?(pid), do: Writer.flush(pid)
     :ok
+  catch
+    :exit, _ -> :ok
   end
+
+  # Strip GenServer.call decoration ({reason, {GenServer, :call, ...}}) down to
+  # the bare exit reason.
+  defp exit_reason({reason, {GenServer, :call, _}}), do: reason
+  defp exit_reason(reason), do: reason
 
   defp filter(records, opts) do
     case Keyword.get(opts, :from_offset) do

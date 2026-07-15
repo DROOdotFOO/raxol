@@ -47,6 +47,8 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
               # the agent-message dispatch (a prompt = a turn) and stamped onto
               # every event emitted while it is set, so all items within one turn
               # share a stable turn_id (U6's expected_turn_id CAS depends on it).
+              # Cleared back to nil when the turn's closing bracket
+              # (turn_completed / error) is emitted — see dispatch_agent_turn/2.
               turn_id: nil
   end
 
@@ -598,7 +600,12 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # agent Contract on the raxol_agent side.
   defp emit(%State{session_id: nil}, _type, _tier, _payload), do: :ok
 
-  defp emit(%State{session_id: session_id, turn_id: turn_id}, type, tier, payload) do
+  defp emit(
+         %State{session_id: session_id, turn_id: turn_id},
+         type,
+         tier,
+         payload
+       ) do
     session_id
     |> Raxol.Core.Runtime.EmitBus.build(type, tier, payload, turn_id: turn_id)
     |> Raxol.Core.Runtime.EmitBus.publish()
@@ -610,14 +617,18 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # An inbound agent message is one turn. We mint a turn_id, emit a durable
   # `:turn_started` before the fold, run the model fold (whose own durable
   # `:app_update` emit now carries this turn_id), then bracket with a durable
-  # `:turn_completed` on success or `:error` on failure. The turn_id persists
-  # in state so any async `:command_result` deltas that stream out of the
-  # turn's commands carry the same turn_id.
+  # `:turn_completed` on success or `:error` on failure. The turn_id is
+  # CLEARED (nil) in the state returned from both arms, after the bracket
+  # event: a turn_id must never outlive its closing bracket, or any later
+  # non-agent event (tick, key, subscription) would emit a durable
+  # `:app_update` attributed to a finished turn AFTER its `turn_completed` —
+  # poisoning U6's `expected_turn_id` CAS.
   #
   # NOTE (v0 limitation): turn_completed is emitted when the synchronous fold
   # returns. Agents that stream via async commands will emit their ephemeral
-  # item_deltas after turn_completed (same turn_id). Tightening the boundary to
-  # the last async chunk is a later unit — see the module TODO.
+  # item_deltas after turn_completed, with `turn_id: nil` (the turn is closed
+  # by then). Tightening the boundary to the last async chunk is a later
+  # unit — see the module TODO.
   defp dispatch_agent_turn(msg, state) do
     turn_state = %{state | turn_id: mint_turn_id()}
     emit(turn_state, :turn_started, :durable, %{message: msg})
@@ -625,11 +636,11 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     case process_app_update(turn_state, msg, msg) do
       {:ok, new_state, _commands} ->
         emit(new_state, :turn_completed, :durable, %{})
-        {:noreply, new_state}
+        {:noreply, %{new_state | turn_id: nil}}
 
       {:error, reason} ->
         emit(turn_state, :error, :durable, %{reason: reason})
-        {:noreply, turn_state}
+        {:noreply, %{turn_state | turn_id: nil}}
     end
   end
 

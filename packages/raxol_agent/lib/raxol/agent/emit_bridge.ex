@@ -34,12 +34,32 @@ defmodule Raxol.Agent.EmitBridge do
       reproduces exactly these ids — one identity, zero divergence.
     * **Ephemeral** events (`item_delta`): never journaled. Their id carries the
       **last durable offset** so it never masquerades as a fresh offset — a
-      delta refines the item at the current durable position.
+      delta refines the item at the current durable position. Real journal
+      offsets start at `1`; an ephemeral event emitted before any durable
+      append carries the sentinel id `0` ("pre-durable").
 
   The journal is opened lazily on the first durable event (or supplied up-front
   via the `:journal` option), scoped to `session_id` under `RAXOL_SESSIONS_DIR`
   / `~/.raxol/sessions`, and closed on `terminate/2`. It persists to disk and
   survives a BEAM kill.
+
+  ## The journal is the hard gate for durable events
+
+  When a durable append fails (journal cannot be opened, or `append/2` returns
+  `{:error, reason}` — e.g. a full disk), the durable event is **dropped from
+  the live tail**: it is NOT published with a fabricated id and `last_offset`
+  does NOT advance. Fabricating an id here would resurrect the dual-id
+  landmine — the Writer does not advance its offset on a failed append, so the
+  next successful append would reuse the fabricated number and two live-tail
+  events would share one id while replay reproduced only one. An un-journaled
+  durable event must never look durable.
+
+  Instead the bridge emits a loud, clearly-marked failure signal: an
+  **ephemeral** `:error` contract event with payload
+  `%{reason: :journal_append_failed | :journal_open_failed, original_type: t,
+  detail: ...}`, plus a `Logger.error`. If the failure was a dead Writer, the
+  stale handle is dropped so the next durable event lazily reopens the journal
+  and resumes from the on-disk offset — ids stay collision-free.
 
   ## Neutral -> contract mapping
 
@@ -56,6 +76,8 @@ defmodule Raxol.Agent.EmitBridge do
   """
 
   use Raxol.Core.Behaviours.BaseManager
+
+  require Logger
 
   alias Raxol.Agent.Contract
   alias Raxol.Agent.Contract.Event
@@ -113,6 +135,9 @@ defmodule Raxol.Agent.EmitBridge do
   end
 
   # Durable tier: the journal owns the id. Append first, take the offset, emit.
+  # The journal is the hard gate: if the append fails, the durable event is NOT
+  # published (no fabricated id, `last_offset` untouched) — a loud ephemeral
+  # `:error` event goes out instead. See the moduledoc.
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info(
         {:emit_bus, session_id, %{tier: :durable} = neutral},
@@ -121,10 +146,27 @@ defmodule Raxol.Agent.EmitBridge do
     # Sanitize once and reuse for both the journal record and the live event so
     # the live tail and the replayed record are byte-identical, not just id-equal.
     safe = Map.put(neutral, :payload, sanitized_payload(neutral))
-    {state, offset} = append_durable(state, safe)
-    event = map_event(safe, offset, session_id)
-    SessionStreamer.emit(session_id, event, state.streamer)
-    {:noreply, %{state | last_offset: offset}}
+
+    case append_durable(state, safe) do
+      {:ok, state, offset} ->
+        event = map_event(safe, offset, session_id)
+        SessionStreamer.emit(session_id, event, state.streamer)
+        {:noreply, %{state | last_offset: offset}}
+
+      {:error, state, failure_reason, detail} ->
+        Logger.error(
+          "[EmitBridge] dropping durable event #{inspect(Map.get(safe, :type))} " <>
+            "for session #{inspect(session_id)}: #{failure_reason} (#{inspect(detail)})"
+        )
+
+        SessionStreamer.emit(
+          session_id,
+          journal_failure_event(state, safe, failure_reason, detail),
+          state.streamer
+        )
+
+        {:noreply, state}
+    end
   end
 
   # Ephemeral tier: never journaled. Id carries the last durable offset.
@@ -174,32 +216,64 @@ defmodule Raxol.Agent.EmitBridge do
   # --- durable id authority --------------------------------------------------
 
   # Append the durable event to the journal and return the assigned offset. The
-  # journal is opened lazily on first use. If no journal is available (open or
-  # append failed — e.g. a full disk), degrade to a sequential in-memory id so
-  # ids stay monotonic and the stream keeps flowing.
+  # journal is opened lazily on first use. The journal is the HARD GATE: on
+  # open/append failure no id is fabricated (the Writer did not advance its
+  # offset, so a fabricated id would collide with the next successful append —
+  # the dual-id landmine). The caller drops the event from the live tail and
+  # emits an ephemeral `:error` signal instead.
   defp append_durable(state, neutral) do
-    state = ensure_journal(state)
+    case ensure_journal(state) do
+      {:ok, state} ->
+        case FileStore.append(state.journal, durable_record(neutral)) do
+          {:ok, offset} ->
+            {:ok, state, offset}
 
-    case state.journal do
-      nil ->
-        {state, state.last_offset + 1}
-
-      handle ->
-        case FileStore.append(handle, durable_record(neutral)) do
-          {:ok, offset} -> {state, offset}
-          {:error, _reason} -> {state, state.last_offset + 1}
+          {:error, detail} ->
+            {:error, drop_dead_journal(state, detail), :journal_append_failed,
+             detail}
         end
+
+      {:error, state, detail} ->
+        {:error, state, :journal_open_failed, detail}
     end
   end
 
   defp ensure_journal(%__MODULE__{journal: nil} = state) do
     case FileStore.open(to_string(state.session_id), state.journal_opts) do
-      {:ok, handle} -> %{state | journal: handle}
-      {:error, _reason} -> state
+      {:ok, handle} -> {:ok, %{state | journal: handle}}
+      {:error, reason} -> {:error, state, reason}
     end
   end
 
-  defp ensure_journal(state), do: state
+  defp ensure_journal(state), do: {:ok, state}
+
+  # A dead Writer means the handle is stale forever; drop it so the next
+  # durable event lazily reopens the journal and resumes from the on-disk
+  # offset. Other errors (e.g. :enospc) keep the handle — the Writer is alive
+  # and a later append may succeed once the condition clears.
+  defp drop_dead_journal(state, {:writer_down, _}), do: %{state | journal: nil}
+  defp drop_dead_journal(state, _detail), do: state
+
+  # The loud failure signal that replaces a durable event the journal refused:
+  # ephemeral (it must never look durable — it has no offset), id pinned to the
+  # unchanged last durable offset.
+  defp journal_failure_event(state, neutral, failure_reason, detail) do
+    %Event{
+      v: 0,
+      id: state.last_offset,
+      session_id: state.session_id,
+      turn_id: Map.get(neutral, :turn_id),
+      ts: System.system_time(:microsecond),
+      family: Map.get(neutral, :family, :loop),
+      type: :error,
+      tier: :ephemeral,
+      payload: %{
+        reason: failure_reason,
+        original_type: contract_type(Map.get(neutral, :type), :durable),
+        detail: inspect(detail)
+      }
+    }
+  end
 
   # A plain, JSON-encodable map persisted to the journal. The Writer stamps
   # `"id"` (= offset) and stringifies keys; replaying reconstructs the same

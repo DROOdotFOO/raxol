@@ -11,7 +11,15 @@ defmodule Raxol.Agent.Session do
 
   require Logger
 
-  defstruct [:id, :app_module, :lifecycle_pid, :team_id, :session_id, :emit_bridge]
+  defstruct [
+    :id,
+    :app_module,
+    :lifecycle_pid,
+    :team_id,
+    :session_id,
+    :emit_bridge,
+    bridge_opts: []
+  ]
 
   @type t :: %__MODULE__{
           id: term(),
@@ -19,7 +27,8 @@ defmodule Raxol.Agent.Session do
           lifecycle_pid: pid() | nil,
           team_id: term() | nil,
           session_id: String.t() | nil,
-          emit_bridge: pid() | nil
+          emit_bridge: pid() | nil,
+          bridge_opts: keyword()
         }
 
   @spec child_spec(keyword()) :: Supervisor.child_spec()
@@ -37,7 +46,9 @@ defmodule Raxol.Agent.Session do
   def start_link(opts) do
     id = Keyword.fetch!(opts, :id)
 
-    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {Raxol.Agent.Registry, id}})
+    GenServer.start_link(__MODULE__, opts,
+      name: {:via, Registry, {Raxol.Agent.Registry, id}}
+    )
   end
 
   @doc "Send a message into the agent's TEA loop."
@@ -89,7 +100,17 @@ defmodule Raxol.Agent.Session do
     # SessionStreamer (supervised by Raxol.Agent.Supervisor); when none is
     # running its emits are harmless no-ops.
     session_id = Keyword.get(opts, :session_id) || derive_session_id(id)
-    emit_bridge = start_emit_bridge(session_id, opts)
+
+    bridge_opts =
+      []
+      |> maybe_put(:journal, Keyword.get(opts, :journal))
+      |> maybe_put(:journal_opts, Keyword.get(opts, :journal_opts))
+
+    emit_bridge = start_emit_bridge(session_id, bridge_opts)
+    # The session OWNS its bridge: monitor it so a bridge death is observed
+    # (:DOWN → log + restart-or-degrade), never linked so a bridge crash can
+    # never take the session down.
+    if emit_bridge, do: Process.monitor(emit_bridge)
 
     lifecycle_pid = start_or_reattach_lifecycle(app_module, id, session_id)
     Process.monitor(lifecycle_pid)
@@ -105,7 +126,8 @@ defmodule Raxol.Agent.Session do
        lifecycle_pid: lifecycle_pid,
        team_id: team_id,
        session_id: session_id,
-       emit_bridge: emit_bridge
+       emit_bridge: emit_bridge,
+       bridge_opts: bridge_opts
      }}
   end
 
@@ -193,6 +215,29 @@ defmodule Raxol.Agent.Session do
   def handle_manager_call(_msg, _from, state),
     do: {:reply, {:error, :unknown_call}, state}
 
+  # The session's emit bridge went down. Graceful stops (:normal/:shutdown)
+  # need no reaction — the session itself is usually terminating. On a crash,
+  # restart the bridge (same session_id, so it re-registers and re-subscribes)
+  # or degrade to running without a sink if the restart fails.
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info(
+        {:DOWN, _ref, :process, pid, reason},
+        %__MODULE__{emit_bridge: pid} = state
+      ) do
+    if reason in [:normal, :shutdown] do
+      {:noreply, %{state | emit_bridge: nil}}
+    else
+      Logger.warning(
+        "[Agent.Session] EmitBridge for session #{state.session_id} crashed: " <>
+          "#{inspect(reason)}; restarting"
+      )
+
+      bridge = start_emit_bridge(state.session_id, state.bridge_opts)
+      if bridge, do: Process.monitor(bridge)
+      {:noreply, %{state | emit_bridge: bridge}}
+    end
+  end
+
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:DOWN, _ref, :process, pid, reason}, state) do
     if pid == state.lifecycle_pid do
@@ -241,7 +286,10 @@ defmodule Raxol.Agent.Session do
 
       hooks ->
         context = %{agent_id: id, agent_module: app_module}
-        fn commands -> Raxol.Agent.CommandHook.wrap_commands(commands, hooks, context) end
+
+        fn commands ->
+          Raxol.Agent.CommandHook.wrap_commands(commands, hooks, context)
+        end
     end
   end
 
@@ -288,14 +336,18 @@ defmodule Raxol.Agent.Session do
   defp to_id_string(id), do: inspect(id)
 
   # Start the per-session sink under the agent DynamicSupervisor when available
-  # (so it is not crash-coupled to this Session); fall back to a linked start
-  # otherwise, so the sink dies with the session rather than leaking. Returns
-  # the bridge pid or nil.
-  defp start_emit_bridge(session_id, opts) do
+  # (so it is not crash-coupled to this Session); fall back to an unlinked
+  # standalone start otherwise. Returns the bridge pid or nil.
+  #
+  # The bridge is registered by session_id in Raxol.Agent.Registry (when
+  # running) under `{:emit_bridge, session_id}`. That registration is the
+  # orphan guard: if this session crashed and its bridge survived (subscribed,
+  # journal open), a restarted session with the same session_id gets
+  # `{:already_started, pid}` here and ADOPTS the orphan instead of starting a
+  # second bridge — one bridge per session, no duplicate emits.
+  defp start_emit_bridge(session_id, extra_opts) do
     bridge_opts =
-      [session_id: session_id]
-      |> maybe_put(:journal, Keyword.get(opts, :journal))
-      |> maybe_put(:journal_opts, Keyword.get(opts, :journal_opts))
+      [session_id: session_id] ++ extra_opts ++ bridge_name_opts(session_id)
 
     case Process.whereis(Raxol.Agent.DynSup) do
       nil ->
@@ -313,10 +365,35 @@ defmodule Raxol.Agent.Session do
     end
   end
 
+  defp bridge_name_opts(session_id) do
+    if Process.whereis(Raxol.Agent.Registry) do
+      [
+        name:
+          {:via, Registry, {Raxol.Agent.Registry, {:emit_bridge, session_id}}}
+      ]
+    else
+      []
+    end
+  end
+
+  # Standalone fallback (no Raxol.Agent.DynSup). Ownership direction: the
+  # SESSION owns the bridge, never the reverse — a bridge crash must not take
+  # the session down. A raw start_link would link bidirectionally, so we
+  # immediately unlink and rely on the Process.monitor set by the caller
+  # (init_manager / the :DOWN handler): bridge death arrives as :DOWN and is
+  # answered with log + restart-or-degrade, and a crashed session's surviving
+  # bridge is found-and-adopted via its registry name by the successor.
   defp start_emit_bridge_standalone(bridge_opts) do
     case Raxol.Agent.EmitBridge.start_link(bridge_opts) do
-      {:ok, pid} -> pid
-      _ -> nil
+      {:ok, pid} ->
+        Process.unlink(pid)
+        pid
+
+      {:error, {:already_started, pid}} ->
+        pid
+
+      _ ->
+        nil
     end
   end
 
@@ -328,8 +405,16 @@ defmodule Raxol.Agent.Session do
   defp stop_emit_bridge(pid) do
     if Process.alive?(pid) do
       case Process.whereis(Raxol.Agent.DynSup) do
-        nil -> GenServer.stop(pid, :normal, 1_000)
-        _sup -> DynamicSupervisor.terminate_child(Raxol.Agent.DynSup, pid)
+        nil ->
+          GenServer.stop(pid, :normal, 1_000)
+
+        _sup ->
+          # An adopted bridge may have been started standalone by a prior
+          # session incarnation; stop it directly if DynSup doesn't own it.
+          case DynamicSupervisor.terminate_child(Raxol.Agent.DynSup, pid) do
+            :ok -> :ok
+            {:error, :not_found} -> GenServer.stop(pid, :normal, 1_000)
+          end
       end
     end
 
