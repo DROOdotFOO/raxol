@@ -230,8 +230,13 @@ defmodule Raxol.UI.SyntaxHighlighter do
     |> Enum.map(&Enum.reverse/1)
   end
 
-  defp token_into_lines({type, _meta, iodata}, {finished_rev, current_rev}) do
-    case iodata |> IO.iodata_to_binary() |> String.split("\n") do
+  # Makeup token values are CHARDATA, not iodata: mixed lists of binaries
+  # and bare codepoints (e.g. `[":", 101, 117, 114]`). A codepoint above
+  # 255 (like "€") makes `IO.iodata_to_binary/1` raise, which the
+  # top-level rescue then degrades to plain text for the WHOLE file —
+  # `IO.chardata_to_string/1` is the correct conversion.
+  defp token_into_lines({type, _meta, chardata}, {finished_rev, current_rev}) do
+    case chardata |> IO.chardata_to_string() |> String.split("\n") do
       [only] ->
         {finished_rev, maybe_prepend(type, only, current_rev)}
 
