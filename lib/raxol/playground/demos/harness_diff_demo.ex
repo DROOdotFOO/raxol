@@ -4,8 +4,9 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
 
   Exercises `Raxol.UI.Components.Harness.DiffViewer` with a realistic
   before/after edit -- unchanged context lines, a couple of lines removed,
-  a couple of lines added. `[m]` toggles between unified and split
-  rendering.
+  a couple of lines added. `[m]` cycles auto -> unified -> split; `[w]`
+  toggles the simulated available width so `:auto` visibly flips between
+  side-by-side (wide) and unified (narrow).
   """
   use Raxol.Core.Runtime.Application
 
@@ -37,21 +38,29 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
   end
   """
 
+  @wide_width 140
+  @narrow_width 60
+
   @impl true
   def init(_context) do
-    %{mode: :unified}
+    %{mode: :auto, width: @wide_width}
   end
 
   @impl true
   def update(message, model) do
     case message do
-      key_match("m") -> {%{model | mode: toggle_mode(model.mode)}, []}
+      key_match("m") -> {%{model | mode: cycle_mode(model.mode)}, []}
+      key_match("w") -> {%{model | width: toggle_width(model.width)}, []}
       _ -> {model, []}
     end
   end
 
-  defp toggle_mode(:unified), do: :split
-  defp toggle_mode(:split), do: :unified
+  defp cycle_mode(:auto), do: :unified
+  defp cycle_mode(:unified), do: :split
+  defp cycle_mode(:split), do: :auto
+
+  defp toggle_width(@wide_width), do: @narrow_width
+  defp toggle_width(@narrow_width), do: @wide_width
 
   @impl true
   def view(model) do
@@ -60,8 +69,11 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
         path: @path,
         old: @old_code,
         new: @new_code,
-        mode: model.mode
+        mode: model.mode,
+        width: model.width
       )
+
+    effective = DiffViewer.effective_mode(diff_state, %{})
 
     column style: %{gap: 1} do
       [
@@ -70,7 +82,8 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
         DiffViewer.render(diff_state, %{}),
         divider(),
         text(
-          "Mode: #{model.mode}  |  [m] toggle unified/split",
+          "Mode: #{model.mode} (rendering: #{effective})  |  " <>
+            "Width: #{model.width} cols  |  [m] cycle mode  [w] toggle width",
           style: [:dim]
         )
       ]
