@@ -94,9 +94,15 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEmitTest do
     # all durable and sharing one minted turn_id.
     GenServer.cast(dispatcher, {:dispatch, {:agent_message, :peer, :ping}})
 
-    assert_receive {:emit_bus, @session_id, %{type: :turn_started} = started}, 1_000
-    assert_receive {:emit_bus, @session_id, %{type: :app_update} = updated}, 1_000
-    assert_receive {:emit_bus, @session_id, %{type: :turn_completed} = completed}, 1_000
+    assert_receive {:emit_bus, @session_id, %{type: :turn_started} = started},
+                   1_000
+
+    assert_receive {:emit_bus, @session_id, %{type: :app_update} = updated},
+                   1_000
+
+    assert_receive {:emit_bus, @session_id,
+                    %{type: :turn_completed} = completed},
+                   1_000
 
     assert Enum.all?([started, updated, completed], &(&1.family == :loop))
     assert Enum.all?([started, updated, completed], &(&1.tier == :durable))
@@ -104,6 +110,44 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEmitTest do
     assert is_binary(started.turn_id)
     assert started.turn_id == updated.turn_id
     assert started.turn_id == completed.turn_id
+  end
+
+  test "a tagged async command_result carries its ORIGINATING turn's id, not emit-time state",
+       %{dispatcher: dispatcher} do
+    # Cross-turn contamination regression: an async command dispatched in turn
+    # N snapshots N's turn_id into its context; its late result echoes it back
+    # as {:command_result, msg, %{turn_id: ...}}. Run a LATER full turn first,
+    # then deliver turn N's leftover delta — it must be stamped with N's id,
+    # not the later turn's and not nil.
+    GenServer.cast(dispatcher, {:dispatch, {:agent_message, :peer, :ping}})
+
+    assert_receive {:emit_bus, @session_id, %{type: :turn_completed} = later},
+                   1_000
+
+    send(
+      dispatcher,
+      {:command_result, {:llm_chunk, "late"}, %{turn_id: "turn-N"}}
+    )
+
+    assert_receive {:emit_bus, @session_id, %{type: :command_result} = delta},
+                   1_000
+
+    assert delta.tier == :ephemeral
+    assert delta.turn_id == "turn-N"
+    refute delta.turn_id == later.turn_id
+  end
+
+  test "an UNtagged command_result between turns is attributed to no turn (nil), never a stale one",
+       %{dispatcher: dispatcher} do
+    GenServer.cast(dispatcher, {:dispatch, {:agent_message, :peer, :ping}})
+    assert_receive {:emit_bus, @session_id, %{type: :turn_completed}}, 1_000
+
+    send(dispatcher, {:command_result, {:llm_chunk, "untagged"}})
+
+    assert_receive {:emit_bus, @session_id, %{type: :command_result} = delta},
+                   1_000
+
+    assert is_nil(delta.turn_id)
   end
 
   test "no session_id means no emit (terminal apps stay silent)" do
@@ -131,7 +175,9 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEmitTest do
         name: nil
       )
 
-    on_exit(fn -> if Process.alive?(dispatcher), do: GenServer.stop(dispatcher) end)
+    on_exit(fn ->
+      if Process.alive?(dispatcher), do: GenServer.stop(dispatcher)
+    end)
 
     # Subscribe to a wildcard is impossible; subscribe to the id the app would
     # have used and confirm nothing arrives.

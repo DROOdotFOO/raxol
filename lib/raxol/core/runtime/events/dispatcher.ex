@@ -243,7 +243,13 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       pid: self(),
       command_registry_table: state.command_registry_table,
       runtime_pid: state.runtime_pid,
-      command_interceptor: state.command_interceptor
+      command_interceptor: state.command_interceptor,
+      # Snapshot of the MINTING turn's id, taken at dispatch time. Async
+      # executors echo it back as `{:command_result, msg, %{turn_id: ...}}` so
+      # a late delta is stamped with its ORIGINATING turn's id — never with
+      # whatever `state.turn_id` happens to hold when the result lands
+      # (cross-turn contamination), and never with nil-by-timing.
+      turn_id: state.turn_id
     }
   end
 
@@ -510,10 +516,23 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     {:noreply, state}
   end
 
+  # Tagged form: async executors that snapshotted the minting turn's id into
+  # their dispatch context echo it back here. The app still sees the plain
+  # `{:command_result, msg}` shape; the tag only drives event attribution.
+  @impl true
+  def handle_manager_info({:command_result, msg, meta}, %State{} = state)
+      when is_map(meta) do
+    full_message = {:command_result, msg}
+    process_command_result(state, full_message, Map.get(meta, :turn_id))
+  end
+
+  # Untagged (legacy) form: no originating-turn snapshot travelled with the
+  # command, so fall back to `state.turn_id` — nil between turns, which is
+  # honest ("not attributable"), never another turn's id.
   @impl true
   def handle_manager_info({:command_result, msg}, %State{} = state) do
     full_message = {:command_result, msg}
-    process_command_result(state, full_message)
+    process_command_result(state, full_message, state.turn_id)
   end
 
   @impl true
@@ -538,16 +557,28 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     {:noreply, state}
   end
 
-  defp process_command_result(state, message) do
+  defp process_command_result(state, message, turn_id) do
     case Application.delegate_update(state.app_module, message, state.model) do
       {updated_model, commands}
       when is_map(updated_model) and is_list(commands) ->
         # Keystone: the async command-result fold used to update the model
         # silently. It now emits a typed event. Async chunks (LLM stream /
         # shell / ticks) are live-render-only, hence :ephemeral.
-        emit(state, :command_result, :ephemeral, %{message: message})
+        #
+        # `turn_id` is the ORIGINATING turn's id, snapshotted into the command
+        # context at dispatch — NOT `state.turn_id` read at emit time. The
+        # dispatcher is a single mailbox: by the time an async delta lands the
+        # minting turn is closed (turn_id nil'd) or a later turn may be the
+        # current one, so an emit-time read would stamp the delta with nil or
+        # with the WRONG turn — poisoning U6's expected_turn_id CAS.
+        emit(
+          %{state | turn_id: turn_id},
+          :command_result,
+          :ephemeral,
+          %{message: message}
+        )
 
-        process_command_commands(state, updated_model, commands)
+        process_command_commands(state, updated_model, commands, turn_id)
 
       {:error, reason} ->
         log_command_failure(
@@ -571,8 +602,12 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     end
   end
 
-  defp process_command_commands(state, updated_model, commands) do
-    context = build_command_context(state)
+  defp process_command_commands(state, updated_model, commands, turn_id) do
+    # Follow-up commands minted by this result's fold belong to the same
+    # originating turn: build their context from a COPY of state carrying that
+    # turn_id. The state returned below is the original — the id must not
+    # leak into the dispatcher's persistent state (that was finding 2).
+    context = build_command_context(%{state | turn_id: turn_id})
 
     case Raxol.Core.ErrorHandling.safe_call(fn ->
            process_commands(commands, context)
@@ -626,9 +661,13 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   #
   # NOTE (v0 limitation): turn_completed is emitted when the synchronous fold
   # returns. Agents that stream via async commands will emit their ephemeral
-  # item_deltas after turn_completed, with `turn_id: nil` (the turn is closed
-  # by then). Tightening the boundary to the last async chunk is a later
-  # unit — see the module TODO.
+  # item_deltas after turn_completed — but each delta carries its ORIGINATING
+  # turn's id, snapshotted into the command context at dispatch and echoed
+  # back by the executor (see build_command_context/1 and the tagged
+  # `{:command_result, msg, meta}` clause). A late delta is therefore never
+  # stamped with a later turn's id or with nil-by-timing. Tightening the
+  # boundary so turn_completed follows the last async chunk is a later unit —
+  # see the module TODO.
   defp dispatch_agent_turn(msg, state) do
     turn_state = %{state | turn_id: mint_turn_id()}
     emit(turn_state, :turn_started, :durable, %{message: msg})
