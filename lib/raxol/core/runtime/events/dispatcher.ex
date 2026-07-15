@@ -42,7 +42,14 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
               # Harness keystone: when set, both model-fold sites publish a
               # neutral event to Raxol.Core.Runtime.EmitBus keyed by this id.
               # nil (terminal/plain apps) makes emit/2 a no-op.
-              session_id: nil
+              session_id: nil,
+              # Harness loop vocabulary: the turn currently in flight. Minted at
+              # the agent-message dispatch (a prompt = a turn) and stamped onto
+              # every event emitted while it is set, so all items within one turn
+              # share a stable turn_id (U6's expected_turn_id CAS depends on it).
+              # Cleared back to nil when the turn's closing bracket
+              # (turn_completed / error) is emitted — see dispatch_agent_turn/2.
+              turn_id: nil
   end
 
   # BaseManager provides start_link/1 and start_link/2 automatically
@@ -236,7 +243,13 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       pid: self(),
       command_registry_table: state.command_registry_table,
       runtime_pid: state.runtime_pid,
-      command_interceptor: state.command_interceptor
+      command_interceptor: state.command_interceptor,
+      # Snapshot of the MINTING turn's id, taken at dispatch time. Async
+      # executors echo it back as `{:command_result, msg, %{turn_id: ...}}` so
+      # a late delta is stamped with its ORIGINATING turn's id — never with
+      # whatever `state.turn_id` happens to hold when the result lands
+      # (cross-turn contamination), and never with nil-by-timing.
+      turn_id: state.turn_id
     }
   end
 
@@ -412,7 +425,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       "[Dispatcher] handle_cast :dispatch agent_message: #{inspect(msg)}"
     )
 
-    with_dispatch_span(fn -> dispatch_raw_message(msg, state) end)
+    with_dispatch_span(fn -> dispatch_agent_turn(msg, state) end)
   end
 
   @impl true
@@ -425,7 +438,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     )
 
     # Agent messages go directly to update/2, bypassing event/plugin pipeline
-    with_dispatch_span(fn -> dispatch_raw_message(msg, state) end)
+    with_dispatch_span(fn -> dispatch_agent_turn(msg, state) end)
   end
 
   @impl true
@@ -503,10 +516,23 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     {:noreply, state}
   end
 
+  # Tagged form: async executors that snapshotted the minting turn's id into
+  # their dispatch context echo it back here. The app still sees the plain
+  # `{:command_result, msg}` shape; the tag only drives event attribution.
+  @impl true
+  def handle_manager_info({:command_result, msg, meta}, %State{} = state)
+      when is_map(meta) do
+    full_message = {:command_result, msg}
+    process_command_result(state, full_message, Map.get(meta, :turn_id))
+  end
+
+  # Untagged (legacy) form: no originating-turn snapshot travelled with the
+  # command, so fall back to `state.turn_id` — nil between turns, which is
+  # honest ("not attributable"), never another turn's id.
   @impl true
   def handle_manager_info({:command_result, msg}, %State{} = state) do
     full_message = {:command_result, msg}
-    process_command_result(state, full_message)
+    process_command_result(state, full_message, state.turn_id)
   end
 
   @impl true
@@ -531,16 +557,28 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     {:noreply, state}
   end
 
-  defp process_command_result(state, message) do
+  defp process_command_result(state, message, turn_id) do
     case Application.delegate_update(state.app_module, message, state.model) do
       {updated_model, commands}
       when is_map(updated_model) and is_list(commands) ->
         # Keystone: the async command-result fold used to update the model
         # silently. It now emits a typed event. Async chunks (LLM stream /
         # shell / ticks) are live-render-only, hence :ephemeral.
-        emit(state, :command_result, :ephemeral, %{message: message})
+        #
+        # `turn_id` is the ORIGINATING turn's id, snapshotted into the command
+        # context at dispatch — NOT `state.turn_id` read at emit time. The
+        # dispatcher is a single mailbox: by the time an async delta lands the
+        # minting turn is closed (turn_id nil'd) or a later turn may be the
+        # current one, so an emit-time read would stamp the delta with nil or
+        # with the WRONG turn — poisoning U6's expected_turn_id CAS.
+        emit(
+          %{state | turn_id: turn_id},
+          :command_result,
+          :ephemeral,
+          %{message: message}
+        )
 
-        process_command_commands(state, updated_model, commands)
+        process_command_commands(state, updated_model, commands, turn_id)
 
       {:error, reason} ->
         log_command_failure(
@@ -564,8 +602,12 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     end
   end
 
-  defp process_command_commands(state, updated_model, commands) do
-    context = build_command_context(state)
+  defp process_command_commands(state, updated_model, commands, turn_id) do
+    # Follow-up commands minted by this result's fold belong to the same
+    # originating turn: build their context from a COPY of state carrying that
+    # turn_id. The state returned below is the original — the id must not
+    # leak into the dispatcher's persistent state (that was finding 2).
+    context = build_command_context(%{state | turn_id: turn_id})
 
     case Raxol.Core.ErrorHandling.safe_call(fn ->
            process_commands(commands, context)
@@ -593,13 +635,55 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # agent Contract on the raxol_agent side.
   defp emit(%State{session_id: nil}, _type, _tier, _payload), do: :ok
 
-  defp emit(%State{session_id: session_id}, type, tier, payload) do
+  defp emit(
+         %State{session_id: session_id, turn_id: turn_id},
+         type,
+         tier,
+         payload
+       ) do
     session_id
-    |> Raxol.Core.Runtime.EmitBus.build(type, tier, payload)
+    |> Raxol.Core.Runtime.EmitBus.build(type, tier, payload, turn_id: turn_id)
     |> Raxol.Core.Runtime.EmitBus.publish()
 
     :ok
   end
+
+  # --- Harness loop vocabulary: turn brackets ----------------------------
+  # An inbound agent message is one turn. We mint a turn_id, emit a durable
+  # `:turn_started` before the fold, run the model fold (whose own durable
+  # `:app_update` emit now carries this turn_id), then bracket with a durable
+  # `:turn_completed` on success or `:error` on failure. The turn_id is
+  # CLEARED (nil) in the state returned from both arms, after the bracket
+  # event: a turn_id must never outlive its closing bracket, or any later
+  # non-agent event (tick, key, subscription) would emit a durable
+  # `:app_update` attributed to a finished turn AFTER its `turn_completed` —
+  # poisoning U6's `expected_turn_id` CAS.
+  #
+  # NOTE (v0 limitation): turn_completed is emitted when the synchronous fold
+  # returns. Agents that stream via async commands will emit their ephemeral
+  # item_deltas after turn_completed — but each delta carries its ORIGINATING
+  # turn's id, snapshotted into the command context at dispatch and echoed
+  # back by the executor (see build_command_context/1 and the tagged
+  # `{:command_result, msg, meta}` clause). A late delta is therefore never
+  # stamped with a later turn's id or with nil-by-timing. Tightening the
+  # boundary so turn_completed follows the last async chunk is a later unit —
+  # see the module TODO.
+  defp dispatch_agent_turn(msg, state) do
+    turn_state = %{state | turn_id: mint_turn_id()}
+    emit(turn_state, :turn_started, :durable, %{message: msg})
+
+    case process_app_update(turn_state, msg, msg) do
+      {:ok, new_state, _commands} ->
+        emit(new_state, :turn_completed, :durable, %{})
+        {:noreply, %{new_state | turn_id: nil}}
+
+      {:error, reason} ->
+        emit(turn_state, :error, :durable, %{reason: reason})
+        {:noreply, %{turn_state | turn_id: nil}}
+    end
+  end
+
+  defp mint_turn_id, do: "turn-#{System.unique_integer([:positive])}"
 
   defp log_command_failure(:error, label, reason, context) do
     Raxol.Core.Runtime.Log.error_with_stacktrace(label, reason, nil, context)
@@ -624,7 +708,7 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     )
 
     with_dispatch_span(fn ->
-      msg |> dispatch_raw_message(state) |> to_call_reply()
+      msg |> dispatch_agent_turn(state) |> to_call_reply()
     end)
   end
 

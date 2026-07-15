@@ -4,7 +4,7 @@ defmodule Raxol.Core.Runtime.EmitBus do
 
   This is the **keystone seam** for the harness event stream. The Dispatcher
   publishes one neutral event map at each of its two model-fold sites
-  (`process_app_update/3` and `process_command_result/2`); any process that
+  (`process_app_update/3` and `process_command_result/3`); any process that
   subscribes by `session_id` receives those maps as `{:emit_bus, session_id,
   event}` messages.
 

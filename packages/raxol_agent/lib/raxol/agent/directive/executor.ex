@@ -3,13 +3,21 @@ defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.Async 
 
   def execute(%Async{fun: fun}, context) do
     pid = context.pid
-    sender = fn msg -> send(pid, {:command_result, msg}) end
+    # Snapshot the minting turn's id NOW (dispatch time). Results may land
+    # turns later; the tag makes each delta carry its originating turn's id
+    # instead of whatever the dispatcher's current turn happens to be.
+    meta = %{turn_id: Map.get(context, :turn_id)}
+    sender = fn msg -> send(pid, {:command_result, msg, meta}) end
 
     Task.start(fn ->
       try do
         fun.(sender)
       rescue
-        e -> send(pid, {:command_result, {:async_error, Exception.message(e)}})
+        e ->
+          send(
+            pid,
+            {:command_result, {:async_error, Exception.message(e)}, meta}
+          )
       end
     end)
   end
@@ -28,6 +36,8 @@ defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.Shell 
 
     cd = Keyword.get(opts, :cd)
     env = Keyword.get(opts, :env, [])
+    # Originating-turn snapshot; see the Async impl above.
+    meta = %{turn_id: Map.get(context, :turn_id)}
 
     Task.start(fn ->
       charlist_env =
@@ -48,7 +58,7 @@ defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.Shell 
 
       port = Port.open({:spawn_executable, "/bin/sh"}, port_opts)
       result = collect_port_output(port, [], timeout)
-      send(context.pid, {:command_result, {:shell_result, result}})
+      send(context.pid, {:command_result, {:shell_result, result}, meta})
     end)
   end
 
@@ -83,7 +93,8 @@ defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.SendAg
       _ ->
         send(
           context.pid,
-          {:command_result, {:send_agent_error, :not_found, target_id}}
+          {:command_result, {:send_agent_error, :not_found, target_id},
+           %{turn_id: Map.get(context, :turn_id)}}
         )
     end
   end

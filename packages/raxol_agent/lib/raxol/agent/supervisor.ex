@@ -5,6 +5,8 @@ defmodule Raxol.Agent.Supervisor do
   Children:
   - `Raxol.Agent.Registry` -- unique Registry for agent discovery
   - `Raxol.Agent.DynSup` -- DynamicSupervisor for Agent.Process instances
+    (and per-session `Raxol.Agent.EmitBridge` sinks)
+  - `Raxol.Agent.SessionStreamer` -- singleton harness event stream
   - `Raxol.Agent.Orchestrator` -- multi-agent coordinator
   - `Raxol.Agent.Memory.Store.Ets` -- when configured as the memory provider
   - `Raxol.Agent.Skills.Store` -- when a skills provider is configured
@@ -36,6 +38,7 @@ defmodule Raxol.Agent.Supervisor do
       [
         {Registry, keys: :unique, name: Raxol.Agent.Registry},
         {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one},
+        Raxol.Agent.SessionStreamer,
         Raxol.Agent.Orchestrator
       ] ++ memory_children() ++ skills_children() ++ curator_children()
 

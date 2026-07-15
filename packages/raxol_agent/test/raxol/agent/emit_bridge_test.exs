@@ -85,7 +85,10 @@ defmodule Raxol.Agent.EmitBridgeTest do
       assert event.type == :item_delta
       assert event.tier == :ephemeral
       assert event.family == :loop
-      assert event.id == 1
+      # Ephemeral events are never journaled; their id carries the last durable
+      # offset (0 here — no durable event has been journaled yet), never a fresh
+      # offset that could masquerade as a journal id.
+      assert event.id == 0
     end
   end
 
