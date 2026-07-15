@@ -70,6 +70,7 @@ defmodule Raxol.UI.Components.Harness.ActivityIndicator do
     %{
       type: :row,
       style: base_style,
+      gap: 1,
       children: [
         Raxol.View.Components.text(
           id: "#{state.id}-indicator",

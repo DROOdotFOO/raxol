@@ -66,6 +66,7 @@ defmodule Raxol.UI.Components.Harness.ContextMeter do
     %{
       type: :row,
       style: base_style,
+      gap: 1,
       children: [
         Raxol.View.Components.text(
           id: "#{state.id}-label",
