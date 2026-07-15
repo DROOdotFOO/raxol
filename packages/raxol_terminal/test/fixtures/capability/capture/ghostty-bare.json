@@ -1,0 +1,34 @@
+{
+  "context": "bare",
+  "env": {
+    "COLORTERM": "truecolor",
+    "SSH_TTY": null,
+    "TERM": "xterm-ghostty",
+    "TERM_PROGRAM": "ghostty",
+    "TMUX": null
+  },
+  "expected": {
+    "grapheme_width": "assumed",
+    "identity": [
+      "ghostty",
+      "1.0.1"
+    ],
+    "in_band_resize": false,
+    "kitty_keyboard": 31,
+    "lr_margins": false,
+    "multiplexer": "none",
+    "sixel": false,
+    "sync_output": true,
+    "theme_events": false,
+    "tier": "rich",
+    "truecolor": true,
+    "unicode": "wide"
+  },
+  "expected_tier": "inline_log",
+  "notes": "Synthetic plausible capture. Kitty keyboard flags 31.",
+  "query_hex": "1b5d31313b3f071b5b3f751b5b3f3230323624701b5b3e30711b5b63",
+  "reply_hex": "1b5d31313b7267623a323232322f323232322f323232321b5c1b5b3f3331751b5b3f323032363b3124791b503e7c67686f7374747920312e302e311b5c1b5b3f36323b323263",
+  "schema": "raxol.capability.capture/1",
+  "terminal": "ghostty",
+  "terminal_version": "1.0.1"
+}

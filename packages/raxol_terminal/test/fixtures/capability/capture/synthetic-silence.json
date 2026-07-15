@@ -1,0 +1,31 @@
+{
+  "context": "bare",
+  "env": {
+    "COLORTERM": null,
+    "SSH_TTY": null,
+    "TERM": "dumb",
+    "TERM_PROGRAM": null,
+    "TMUX": null
+  },
+  "expected": {
+    "grapheme_width": "assumed",
+    "identity": null,
+    "in_band_resize": false,
+    "kitty_keyboard": null,
+    "lr_margins": false,
+    "multiplexer": "none",
+    "sixel": false,
+    "sync_output": false,
+    "theme_events": false,
+    "tier": "core_minus",
+    "truecolor": false,
+    "unicode": "wide"
+  },
+  "expected_tier": "flat",
+  "notes": "Total silence: not even the DA1 sentinel. The probe finalizes on the clock deadline with the conservative default (CAP-N-01).",
+  "query_hex": "1b5d31313b3f071b5b3f751b5b3f3230323624701b5b3e30711b5b63",
+  "reply_hex": "",
+  "schema": "raxol.capability.capture/1",
+  "terminal": "synthetic",
+  "terminal_version": null
+}

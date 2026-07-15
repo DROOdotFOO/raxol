@@ -1,0 +1,31 @@
+{
+  "context": "tmux",
+  "env": {
+    "COLORTERM": null,
+    "SSH_TTY": null,
+    "TERM": "screen-256color",
+    "TERM_PROGRAM": null,
+    "TMUX": "/private/tmp/tmux-501/default,32768,0"
+  },
+  "expected": {
+    "grapheme_width": "assumed",
+    "identity": null,
+    "in_band_resize": false,
+    "kitty_keyboard": null,
+    "lr_margins": false,
+    "multiplexer": "tmux",
+    "sixel": false,
+    "sync_output": false,
+    "theme_events": false,
+    "tier": "core",
+    "truecolor": false,
+    "unicode": "wide"
+  },
+  "expected_tier": "tmux_conservative",
+  "notes": "Inside tmux with passthrough off (default since 3.3a): DA1 from tmux itself plus a truncated/garbled DCS fragment. Clamp to the conservative tier; $TERM=screen is NOT trusted (CAP-N-06).",
+  "query_hex": "1b5d31313b3f071b5b3f751b5b3f3230323624701b5b3e30711b5b63",
+  "reply_hex": "1b5b3f313b32631b503e7c746d",
+  "schema": "raxol.capability.capture/1",
+  "terminal": "synthetic",
+  "terminal_version": null
+}
