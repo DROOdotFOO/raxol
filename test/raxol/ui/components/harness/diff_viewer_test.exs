@@ -599,6 +599,92 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
     end
   end
 
+  describe "render/2 (long changed lines, unified)" do
+    # width 60 -> unified budget = 60 - (2*1+1) - 1 - 1 = 55 columns
+    defp long_ctx_render(old, new) do
+      {:ok, state} =
+        DiffViewer.init(old: old, new: new, mode: :unified, width: 60)
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | rows] = rendered.children
+      rows
+    end
+
+    defp row_text(row) do
+      [_gutter, content] = row.children
+      Enum.map_join(content.children, & &1.content)
+    end
+
+    defp gutter_of(row), do: hd(row.children)
+
+    test "an over-budget UNPAIRED delete mid-ellipses to one row" do
+      long = "removed " <> String.duplicate("x", 80) <> "TAIL5"
+      rows = long_ctx_render("keep\n" <> long, "keep")
+
+      delete_row =
+        Enum.find(rows, fn row -> gutter_of(row).content =~ "▌" end)
+
+      text = row_text(delete_row)
+      assert text =~ "…"
+      assert String.trim_trailing(text) =~ ~r/TAIL5$/
+      # exactly one rendered row for the delete: no continuation gutters
+      assert Enum.count(rows, fn row -> gutter_of(row).content =~ "▌" end) == 1
+    end
+
+    test "an over-budget insert soft-wraps in full" do
+      long = "added " <> String.duplicate("y", 120) <> "END"
+      rows = long_ctx_render("keep", "keep\n" <> long)
+
+      insert_rows =
+        Enum.filter(rows, fn row -> gutter_of(row).content =~ "▌" end)
+
+      assert length(insert_rows) > 1
+
+      # continuation rows keep the bar but a blank line number
+      [first | continuations] = insert_rows
+      assert gutter_of(first).content =~ ~r/▌\s*\d/
+      assert Enum.all?(continuations, &(gutter_of(&1).content =~ ~r/▌\s+$/))
+
+      # nothing lost: concatenated rows reconstruct the full line
+      full = Enum.map_join(insert_rows, "", &row_text/1)
+      assert String.replace(full, " ", "") =~ String.duplicate("y", 120)
+      assert full =~ "END"
+      refute full =~ "…"
+    end
+
+    test "a PAIRED over-budget delete borrows the insert's row allocation" do
+      old_long = "shared head " <> String.duplicate("a", 200) <> " old tail"
+      new_long = "shared head " <> String.duplicate("b", 90) <> " new tail"
+      rows = long_ctx_render(old_long, new_long)
+
+      change_rows =
+        Enum.filter(rows, fn row -> gutter_of(row).content =~ "▌" end)
+
+      # delete rows come first, then insert rows (unified emits the run's
+      # deletes then inserts). The insert wrapped into K rows; the longer
+      # delete must occupy exactly K rows too, ellipsis-truncated.
+      insert_count =
+        Enum.count(change_rows, fn row ->
+          gutter_of(row).style.fg == "#5ECC71"
+        end)
+
+      delete_count =
+        Enum.count(change_rows, fn row ->
+          gutter_of(row).style.fg == "#FF6762"
+        end)
+
+      assert insert_count > 1
+      assert delete_count == insert_count
+
+      delete_texts =
+        change_rows
+        |> Enum.filter(fn row -> gutter_of(row).style.fg == "#FF6762" end)
+        |> Enum.map(&row_text/1)
+
+      assert List.last(delete_texts) =~ "…"
+    end
+  end
+
   describe "render/2 (fold row styling)" do
     test "the unchanged-lines fold row carries no background" do
       lines = Enum.map_join(1..12, "\n", &"line #{&1}")

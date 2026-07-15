@@ -336,13 +336,14 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   @unchanged_part_chroma 0.35
 
   # Prominence by distance (in lines) from the nearest change: the edited
-  # line's immediate neighbour keeps 80%, then 60%, 40%, and everything
-  # further fades to a 20% floor (folding hides the deep tail anyway).
+  # line's immediate neighbour keeps 80%, then 60%, and everything
+  # further rests at the 40% floor (folding hides the deep tail anyway).
   defp prominence(0), do: 1.0
   defp prominence(1), do: 0.8
   defp prominence(2), do: 0.6
   defp prominence(3), do: 0.4
-  defp prominence(_distance), do: 0.2
+  # 40% is the floor: fading further reads as "broken terminal", not calm.
+  defp prominence(_distance), do: 0.4
 
   # Reduce a hex color's chroma while holding its H-K apparent lightness
   # constant, so the calmer color reads equally bright.
@@ -542,39 +543,122 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   # -- Unified mode: one column, gutter bar + numbers, spans inline --
 
   defp render_unified(ctx) do
+    plans = unified_plans(ctx.ops_with_ranges, ctx.unified_budget)
+
     ctx.ops_with_ranges
+    |> Enum.zip(plans)
     |> annotate()
     |> fold_rows(ctx.context, &unified_classify/1)
-    |> Enum.map(&unified_line(&1, ctx))
+    |> Enum.flat_map(&unified_line(&1, ctx))
   end
 
   defp unified_classify(row),
     do: if(elem(row, 0) == :equal, do: :context, else: :change)
 
-  defp annotate(ops_with_ranges) do
+  # -- Long-line render plans (unified mode only) --------------------------
+  #
+  # Removed content is low-value: an over-budget UNPAIRED delete keeps one
+  # row and mid-ellipses (head + "…" + last 5 chars). Added content is
+  # what's being reviewed: an over-budget insert SOFT-WRAPS in full. A
+  # PAIRED over-budget delete borrows its insert's allocation — it wraps
+  # into exactly as many rows as the paired insert took, tail-ellipsed if
+  # it still overflows. Split mode keeps plain truncation (wrapping would
+  # break pane row alignment).
+  defp unified_plans(ops_with_meta, nil),
+    do: Enum.map(ops_with_meta, fn _op -> :plain end)
+
+  defp unified_plans(ops_with_meta, budget) do
+    ops_with_meta
+    |> Enum.chunk_by(fn {{{kind, _line}, _ranges}, _dist} ->
+      if kind == :equal, do: :equal, else: :change
+    end)
+    |> Enum.flat_map(&run_plans(&1, budget))
+  end
+
+  defp run_plans([{{{:equal, _}, _}, _} | _] = equal_run, _budget),
+    do: Enum.map(equal_run, fn _op -> :plain end)
+
+  defp run_plans(change_run, budget) do
+    over? = fn line -> TextMeasure.display_width(line) > budget end
+
+    inserts =
+      for {{{:insert, line}, _ranges}, _dist} <- change_run, do: line
+
+    insert_rows =
+      Enum.map(inserts, fn line ->
+        if over?.(line), do: wrap_row_count(line, budget), else: 1
+      end)
+
+    {plans_rev, _del_idx} =
+      Enum.reduce(change_run, {[], 0}, fn
+        {{{:insert, line}, _r}, _d}, {acc, del_idx} ->
+          plan = if over?.(line), do: :wrap, else: :plain
+          {[plan | acc], del_idx}
+
+        {{{:delete, line}, _r}, _d}, {acc, del_idx} ->
+          plan =
+            cond do
+              not over?.(line) ->
+                :plain
+
+              del_idx < length(insert_rows) ->
+                {:wrap_limit, Enum.at(insert_rows, del_idx)}
+
+              true ->
+                :mid_ellipsis
+            end
+
+          {[plan | acc], del_idx + 1}
+      end)
+
+    Enum.reverse(plans_rev)
+  end
+
+  # Greedy display-width fill — must stay in lockstep with wrap_pieces/2
+  # so a paired delete's row allowance matches the insert's actual rows.
+  defp wrap_row_count(line, budget) do
+    line
+    |> String.graphemes()
+    |> Enum.reduce({1, 0}, fn grapheme, {rows, used} ->
+      w = TextMeasure.display_width(grapheme)
+      if used + w > budget, do: {rows + 1, w}, else: {rows, used + w}
+    end)
+    |> elem(0)
+  end
+
+  defp annotate(ops_with_plans) do
     {rows, _old_no, _new_no} =
-      Enum.reduce(ops_with_ranges, {[], 1, 1}, &annotate_op/2)
+      Enum.reduce(ops_with_plans, {[], 1, 1}, &annotate_op/2)
 
     Enum.reverse(rows)
   end
 
-  defp annotate_op({{{:equal, line}, ranges}, dist}, {acc, old_no, new_no}) do
+  defp annotate_op(
+         {{{{:equal, line}, ranges}, dist}, _plan},
+         {acc, old_no, new_no}
+       ) do
     row = {:equal, line, ranges, old_no, new_no, dist}
     {[row | acc], old_no + 1, new_no + 1}
   end
 
-  defp annotate_op({{{:delete, line}, ranges}, _dist}, {acc, old_no, new_no}) do
-    row = {:delete, line, ranges, old_no, nil}
+  defp annotate_op(
+         {{{{:delete, line}, ranges}, _dist}, plan},
+         {acc, old_no, new_no}
+       ) do
+    row = {:delete, line, ranges, old_no, nil, plan}
     {[row | acc], old_no + 1, new_no}
   end
 
-  defp annotate_op({{{:insert, line}, ranges}, _dist}, {acc, old_no, new_no}) do
-    row = {:insert, line, ranges, nil, new_no}
+  defp annotate_op(
+         {{{{:insert, line}, ranges}, _dist}, plan},
+         {acc, old_no, new_no}
+       ) do
+    row = {:insert, line, ranges, nil, new_no, plan}
     {[row | acc], old_no, new_no + 1}
   end
 
   defp unified_line({:fold, count}, ctx) do
-    fold_row(2 * ctx.gutter_width + 3, count)
+    [fold_row(2 * ctx.gutter_width + 3, count)]
   end
 
   defp unified_line({:equal, line, _ranges, old_no, new_no, dist}, ctx) do
@@ -586,45 +670,188 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
         prominence: prominence(dist)
       )
 
-    Components.row(gap: 0, children: [gutter, content])
+    [Components.row(gap: 0, children: [gutter, content])]
   end
 
-  defp unified_line({:delete, line, ranges, old_no, _new_no}, ctx) do
-    gutter =
-      unified_gutter(
-        "▌",
-        old_no,
-        nil,
-        ctx.gutter_width,
-        del_base(),
-        del_gutter_bg()
-      )
-
-    content =
-      content_spans(:delete, line, ranges, old_no, ctx,
-        budget: ctx.unified_budget
-      )
-
-    Components.row(gap: 0, children: [gutter, content])
+  defp unified_line({:delete, line, ranges, old_no, _new_no, plan}, ctx) do
+    changed_rows(
+      :delete,
+      line,
+      ranges,
+      old_no,
+      plan,
+      ctx,
+      fn no ->
+        unified_gutter(
+          "▌",
+          no,
+          nil,
+          ctx.gutter_width,
+          del_base(),
+          del_gutter_bg()
+        )
+      end
+    )
   end
 
-  defp unified_line({:insert, line, ranges, _old_no, new_no}, ctx) do
-    gutter =
-      unified_gutter(
-        "▌",
-        nil,
-        new_no,
-        ctx.gutter_width,
-        add_base(),
-        add_gutter_bg()
-      )
+  defp unified_line({:insert, line, ranges, _old_no, new_no, plan}, ctx) do
+    changed_rows(
+      :insert,
+      line,
+      ranges,
+      new_no,
+      plan,
+      ctx,
+      fn no ->
+        unified_gutter(
+          "▌",
+          nil,
+          no,
+          ctx.gutter_width,
+          add_base(),
+          add_gutter_bg()
+        )
+      end
+    )
+  end
 
-    content =
-      content_spans(:insert, line, ranges, new_no, ctx,
-        budget: ctx.unified_budget
-      )
+  # Emits one-or-more rows for a changed line according to its plan. The
+  # first row carries the numbered gutter; wrap continuation rows keep the
+  # colored bar but blank numbers.
+  defp changed_rows(kind, line, ranges, line_no, plan, ctx, gutter_fn) do
+    case plan do
+      :plain ->
+        content =
+          content_spans(kind, line, ranges, line_no, ctx,
+            budget: ctx.unified_budget
+          )
 
-    Components.row(gap: 0, children: [gutter, content])
+        [Components.row(gap: 0, children: [gutter_fn.(line_no), content])]
+
+      :mid_ellipsis ->
+        content =
+          mid_ellipsis_spans(
+            kind,
+            line,
+            ranges,
+            line_no,
+            ctx,
+            ctx.unified_budget
+          )
+
+        [Components.row(gap: 0, children: [gutter_fn.(line_no), content])]
+
+      :wrap ->
+        wrapped_rows(kind, line, ranges, line_no, ctx, nil, gutter_fn)
+
+      {:wrap_limit, allowed} ->
+        wrapped_rows(kind, line, ranges, line_no, ctx, allowed, gutter_fn)
+    end
+  end
+
+  defp wrapped_rows(kind, line, ranges, line_no, ctx, allowed, gutter_fn) do
+    budget = ctx.unified_budget
+    pieces = line_pieces(kind, line, ranges, line_no, ctx)
+    piece_rows = wrap_pieces(pieces, budget)
+
+    piece_rows =
+      case allowed do
+        nil -> piece_rows
+        n when length(piece_rows) <= n -> piece_rows
+        n -> limit_rows(piece_rows, n, budget)
+      end
+
+    piece_rows
+    |> Enum.with_index()
+    |> Enum.map(fn {row_pieces, index} ->
+      gutter =
+        if index == 0,
+          do: gutter_fn.(line_no),
+          else: gutter_fn.(nil)
+
+      content = pieces_row(kind, ranges, row_pieces, budget, 1.0)
+      Components.row(gap: 0, children: [gutter, content])
+    end)
+  end
+
+  # Greedy display-width wrap of span pieces into rows of `budget` columns.
+  # Kept in lockstep with wrap_row_count/2.
+  defp wrap_pieces(pieces, budget) do
+    {rows_rev, current_rev, _used} =
+      Enum.reduce(pieces, {[], [], 0}, fn piece, acc ->
+        wrap_piece(piece, acc, budget)
+      end)
+
+    rows_rev =
+      if current_rev == [], do: rows_rev, else: [current_rev | rows_rev]
+
+    rows_rev
+    |> Enum.reverse()
+    |> Enum.map(&Enum.reverse/1)
+    |> case do
+      [] -> [[]]
+      rows -> rows
+    end
+  end
+
+  defp wrap_piece(piece, {rows_rev, current_rev, used}, budget) do
+    width = TextMeasure.display_width(piece.text)
+
+    cond do
+      used + width <= budget ->
+        {rows_rev, [piece | current_rev], used + width}
+
+      true ->
+        room = budget - used
+        {head_text, rest_text} = split_text_at_width(piece.text, room)
+
+        current_rev =
+          if head_text == "",
+            do: current_rev,
+            else: [%{piece | text: head_text} | current_rev]
+
+        rest = %{piece | text: rest_text}
+
+        wrap_piece(rest, {[current_rev | rows_rev], [], 0}, budget)
+    end
+  end
+
+  defp split_text_at_width(text, width) when width <= 0, do: {"", text}
+
+  defp split_text_at_width(text, width) do
+    head = slice_to_width(text, width)
+    {head, String.slice(text, String.length(head)..-1//1) || ""}
+  end
+
+  # Keep the first `n` rows; the last kept row is re-truncated to make
+  # room for the trailing "…" marker.
+  defp limit_rows(piece_rows, n, budget) do
+    kept = Enum.take(piece_rows, n)
+    {head_rows, [last_row]} = Enum.split(kept, n - 1)
+
+    {trimmed_rev, _} =
+      take_within(last_row, budget - 1, [])
+
+    ellipsis = %{text: "…", fg: nil, styles: [], changed: false}
+    head_rows ++ [Enum.reverse([ellipsis | trimmed_rev])]
+  end
+
+  # Mid-string ellipsis for an over-budget UNPAIRED delete: head, "…",
+  # then the line's last 5 characters — enough to see what it was, no
+  # more ("we do not care about the full contents of what's removed").
+  defp mid_ellipsis_spans(kind, line, ranges, line_no, ctx, budget) do
+    tail_text = String.slice(line, -5, 5)
+    tail_width = TextMeasure.display_width(tail_text)
+
+    pieces = line_pieces(kind, line, ranges, line_no, ctx)
+
+    {head_rev, _} = take_within(pieces, budget - 1 - tail_width, [])
+
+    ellipsis = %{text: "…", fg: nil, styles: [], changed: false}
+    tail = %{text: tail_text, fg: nil, styles: [], changed: false}
+
+    row_pieces = Enum.reverse(head_rev) ++ [ellipsis, tail]
+    pieces_row(kind, ranges, row_pieces, budget, 1.0)
   end
 
   defp unified_gutter(bar, old_no, new_no, width, fg, bg) do
@@ -877,7 +1104,22 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     budget = Keyword.get(opts, :budget)
     prominence = Keyword.get(opts, :prominence, 1.0)
 
-    tokens = line_tokens(kind, line, line_no, ctx)
+    pieces =
+      kind
+      |> line_pieces(line, ranges, line_no, ctx)
+      |> truncate_pieces(budget)
+
+    pieces_row(kind, ranges, pieces, budget, prominence)
+  end
+
+  defp line_pieces(kind, line, ranges, line_no, ctx) do
+    kind
+    |> line_tokens(line, line_no, ctx)
+    |> split_tokens_by_ranges(ranges)
+    |> Enum.reject(fn piece -> piece.text == "" end)
+  end
+
+  defp pieces_row(kind, ranges, pieces, budget, prominence) do
     row_bg = row_bg_for(kind)
     emphasis_bg = emphasis_bg_for(kind)
     fallback_fg = fallback_fg_for(kind)
@@ -887,12 +1129,6 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     # a glance; the changed pieces keep the bright emphasis tier. A fully
     # added/removed line (no ranges) keeps the full wash end to end.
     plain_bg = if ranges == [], do: row_bg, else: dechroma_row_bg(kind)
-
-    pieces =
-      tokens
-      |> split_tokens_by_ranges(ranges)
-      |> Enum.reject(fn piece -> piece.text == "" end)
-      |> truncate_pieces(budget)
 
     used_width =
       Enum.reduce(pieces, 0, fn piece, acc ->
