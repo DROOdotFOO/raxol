@@ -10,6 +10,8 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
   @usdt_arb "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9"
   @weth_base "0x4200000000000000000000000000000000000006"
   @weth_arb "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
+  @usdt_poly "0xc2132d05d31c914a87c6611c10748aeb04b58e8f"
+  @usdg_robinhood "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
 
   @ctx %{job_id: "j1", buyer: "0xbuyer", seller: "0xseller", state: :request}
 
@@ -308,6 +310,79 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
                  req(%{"dst_chain_id" => @tron, "dst_token" => @usdt_tron}),
                  @ctx
                )
+    end
+  end
+
+  describe "handle_request/2 stablecoin corridor scope (allowlist enabled)" do
+    setup do
+      Application.put_env(:raxol_acp, :stablecoin_corridors_only, true)
+      on_exit(fn -> Application.delete_env(:raxol_acp, :stablecoin_corridors_only) end)
+      :ok
+    end
+
+    test "USDC Base -> Arbitrum stays accepted" do
+      r = req(%{})
+      assert {:accept, ^r} = TransferOffering.handle_request(r, @ctx)
+    end
+
+    test "USDT Arbitrum -> Polygon (a relay corridor) is accepted" do
+      r =
+        req(%{
+          "src_chain_id" => 42_161,
+          "dst_chain_id" => 137,
+          "src_token" => @usdt_arb,
+          "dst_token" => @usdt_poly
+        })
+
+      assert {:accept, ^r} = TransferOffering.handle_request(r, @ctx)
+    end
+
+    test "USDG Robinhood -> USDC hub (Arb, Base) is accepted (drain)" do
+      to_arb =
+        req(%{
+          "src_chain_id" => 4663,
+          "dst_chain_id" => 42_161,
+          "src_token" => @usdg_robinhood,
+          "dst_token" => @usdc_arb
+        })
+
+      to_base =
+        req(%{
+          "src_chain_id" => 4663,
+          "dst_chain_id" => 8453,
+          "src_token" => @usdg_robinhood,
+          "dst_token" => @usdc_base
+        })
+
+      assert {:accept, ^to_arb} = TransferOffering.handle_request(to_arb, @ctx)
+      assert {:accept, ^to_base} = TransferOffering.handle_request(to_base, @ctx)
+    end
+
+    test "USDT on Base is declined -- not a relay corridor" do
+      r = req(%{"src_token" => @usdt_base, "dst_token" => @usdt_arb})
+
+      assert {:reject, {:unsupported_corridor, 8453, 42_161}} =
+               TransferOffering.handle_request(r, @ctx)
+    end
+
+    test "WETH is declined -- volatile, not a launch stablecoin" do
+      r = req(%{"src_token" => @weth_base, "dst_token" => @weth_arb})
+
+      assert {:reject, {:unsupported_corridor, 8453, 42_161}} =
+               TransferOffering.handle_request(r, @ctx)
+    end
+
+    test "USDG inbound to Robinhood is declined -- drain direction only" do
+      r =
+        req(%{
+          "src_chain_id" => 42_161,
+          "dst_chain_id" => 4663,
+          "src_token" => @usdc_arb,
+          "dst_token" => @usdg_robinhood
+        })
+
+      assert {:reject, {:unsupported_corridor, 42_161, 4663}} =
+               TransferOffering.handle_request(r, @ctx)
     end
   end
 end

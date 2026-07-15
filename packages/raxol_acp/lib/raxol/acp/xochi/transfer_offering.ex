@@ -47,6 +47,7 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
     cluster: "on_chain"
 
   alias Raxol.ACP.Xochi.CapacityLedger
+  alias Raxol.ACP.Xochi.CorridorAllowlist
   alias Raxol.ACP.Xochi.Offering, as: Schema
   alias Raxol.ACP.Xochi.Settler
   alias Raxol.Payments.Assets
@@ -124,6 +125,14 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
       not fillable?(caps, req["dst_chain_id"], req["dst_token"], :destination) ->
         {:error, {:unsupported_dst_token, req["dst_chain_id"], req["dst_token"]}}
 
+      # Stablecoin corridor scope: both legs pass the token-fillable checks above,
+      # but that is direction-blind -- it accepts pairs the solver cannot route
+      # (e.g. USDT Arbitrum -> Base). The allowlist declines any route outside the
+      # launch stablecoin set (USDC mesh, the USDT relay corridors, USDG drain).
+      # Fails closed in production; inert in dev/test unless configured on.
+      not allowed_corridor?(req) ->
+        {:error, {:unsupported_corridor, req["src_chain_id"], req["dst_chain_id"]}}
+
       # Liquidity guardrails: reject a corridor we cannot settle right now before
       # escrow, so a customer gets a clean rejection instead of an accept that
       # fails at settlement. A closed origin (e.g. Robinhood while the USDG exit
@@ -153,6 +162,26 @@ defmodule Raxol.ACP.Xochi.TransferOffering do
   # `:closed_origins` is open. Both unset reproduces today's behavior. Caps are
   # DESTINATION-side (the fill inventory), so they gate the token that actually
   # settles -- including a cross-asset Robinhood leg (dst = USDG on 4663).
+
+  # Corridor scope gate: resolve each leg's token symbol from its {chain, address}
+  # and consult the stablecoin allowlist. Inert (always true) unless the allowlist
+  # is enabled -- see `CorridorAllowlist.enabled?/0`. An unknown token resolves to
+  # `nil`, which the allowlist never allows (fail closed).
+  defp allowed_corridor?(req) do
+    if CorridorAllowlist.enabled?() do
+      src_symbol = Assets.symbol_for(req["src_chain_id"], req["src_token"])
+      dst_symbol = Assets.symbol_for(req["dst_chain_id"], req["dst_token"])
+
+      CorridorAllowlist.allowed?(
+        src_symbol,
+        dst_symbol,
+        req["src_chain_id"],
+        req["dst_chain_id"]
+      )
+    else
+      true
+    end
+  end
 
   defp origin_closed?(chain),
     do: chain in Application.get_env(:raxol_acp, :closed_origins, [])
