@@ -1,0 +1,25 @@
+cursor(row,col 0-based)=23,13
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+LINE-0001
+LINE-0002
+LINE-0003
+LINE-0004
+LINE-0005
+ABOVE-MARK
+
+---STRIP---
+STATUS: idle
+PROMPT> hello

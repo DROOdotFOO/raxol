@@ -1,0 +1,34 @@
+{
+  "context": "bare",
+  "env": {
+    "COLORTERM": "truecolor",
+    "SSH_TTY": null,
+    "TERM": "xterm-kitty",
+    "TERM_PROGRAM": null,
+    "TMUX": null
+  },
+  "expected": {
+    "grapheme_width": "assumed",
+    "identity": [
+      "kitty",
+      "0.32.2"
+    ],
+    "in_band_resize": false,
+    "kitty_keyboard": 1,
+    "lr_margins": false,
+    "multiplexer": "none",
+    "sixel": false,
+    "sync_output": true,
+    "theme_events": false,
+    "tier": "rich",
+    "truecolor": true,
+    "unicode": "wide"
+  },
+  "expected_tier": "inline_log",
+  "notes": "Synthetic plausible capture (schema-stable placeholder until T0 lands real bytes). ST-terminated OSC; DECRQM 2026 answers 2.",
+  "query_hex": "1b5d31313b3f071b5b3f751b5b3f3230323624701b5b3e30711b5b63",
+  "reply_hex": "1b5d31313b7267623a316531652f323032302f323632361b5c1b5b3f31751b5b3f323032363b3224791b503e7c6b6974747928302e33322e32291b5c1b5b3f36323b63",
+  "schema": "raxol.capability.capture/1",
+  "terminal": "kitty",
+  "terminal_version": "0.32.2"
+}

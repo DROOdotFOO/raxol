@@ -1,0 +1,32 @@
+{
+  "context": "bare",
+  "env": {
+    "COLORTERM": null,
+    "SSH_TTY": null,
+    "TERM": "xterm-256color",
+    "TERM_PROGRAM": null,
+    "TMUX": null
+  },
+  "expected": {
+    "grapheme_width": "assumed",
+    "identity": null,
+    "in_band_resize": false,
+    "kitty_keyboard": null,
+    "lr_margins": false,
+    "multiplexer": "none",
+    "sixel": false,
+    "sync_output": true,
+    "theme_events": false,
+    "tier": "modern",
+    "truecolor": false,
+    "unicode": "wide"
+  },
+  "expected_leak_hex": "6c730d",
+  "expected_tier": "inline_log",
+  "notes": "User typed 'l', 's', Enter while replies were in flight. The replies are parsed AND the keystrokes survive, in order (CAP-N-04).",
+  "query_hex": "1b5d31313b3f071b5b3f751b5b3f3230323624701b5b3e30711b5b63",
+  "reply_hex": "6c1b5b3f323032363b3124791b5b3f36323b63730d",
+  "schema": "raxol.capability.capture/1",
+  "terminal": "synthetic",
+  "terminal_version": null
+}

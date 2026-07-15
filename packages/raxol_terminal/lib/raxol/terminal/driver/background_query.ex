@@ -1,25 +1,36 @@
 defmodule Raxol.Terminal.Driver.BackgroundQuery do
   @moduledoc """
-  OSC 11 terminal background-color detection.
+  OSC 11 terminal background-color detection + DECRQM 2026 probe.
 
-  Emits an OSC 11 query (`ESC ] 11 ; ? BEL`) followed by a primary Device
-  Attributes probe (`CSI c`). Every terminal answers DA, so a DA reply that
-  arrives without an OSC 11 reply means the terminal does not support
-  dynamic-color queries and callers should fall back to an assumed ground.
+  Emits an OSC 11 query (`ESC ] 11 ; ? BEL`) and a DECRQM query for mode
+  2026 (`CSI ? 2026 $ p`, synchronized output), followed by a primary
+  Device Attributes probe (`CSI c`) as the sentinel. Every terminal
+  answers DA, so a DA reply that arrives without a wanted reply means the
+  terminal does not support that query and callers fall back conservative
+  (silence is the failure mode, F0 §2).
 
   Replies arrive asynchronously on the input stream, interleaved with
-  keystrokes. `scan/1` extracts (and strips) the OSC 11 / DA replies from a
-  raw input chunk so they never leak into key-event parsing.
+  keystrokes. `scan/1` routes the chunk through
+  `Raxol.Terminal.Capabilities.ReplyScanner` (grammar dispatch, both
+  OSC terminators, leak-free residual) so reply bytes never leak into
+  key-event parsing. A parsed DECRQM 2026 reply is noted on
+  `Raxol.Terminal.Capabilities` -- `Capabilities.sync_output?/0` is the
+  one public emit-gate render paths consult. `scan/1` keeps its original
+  `{result, cleaned}` contract for the driver.
 
   The detected background is stored in `:persistent_term` and readable via
   `detected_background/0`; higher layers (e.g. salience theming) convert it
   to a ground lightness.
   """
 
+  alias Raxol.Terminal.Capabilities
+  alias Raxol.Terminal.Capabilities.ReplyScanner
+
   @pt_key {__MODULE__, :background}
 
-  # OSC 11 query (BEL-terminated) + primary DA probe.
-  @query "\e]11;?\a\e[c"
+  # OSC 11 query (BEL-terminated) + DECRQM 2026 probe + primary DA
+  # sentinel LAST (F0 §2: read-to-sentinel bounds every unanswered query).
+  @query "\e]11;?\a\e[?2026$p\e[c"
 
   @type rgb :: {0..255, 0..255, 0..255}
 
@@ -28,7 +39,8 @@ defmodule Raxol.Terminal.Driver.BackgroundQuery do
   def query_sequence, do: @query
 
   @doc """
-  Scans a raw input chunk for OSC 11 / DA replies while a query is pending.
+  Scans a raw input chunk for OSC 11 / DECRQM / DA replies while a query
+  is pending.
 
   Returns `{result, cleaned}` where `cleaned` is the chunk with any reply
   bytes removed (safe to hand to the key-event parser) and `result` is:
@@ -39,21 +51,30 @@ defmodule Raxol.Terminal.Driver.BackgroundQuery do
   """
   @spec scan(binary()) :: {{:ok, rgb()} | :unsupported | :pending, binary()}
   def scan(data) when is_binary(data) do
-    case extract_osc11(data) do
-      {payload, cleaned} ->
-        cleaned = strip_da_reply(cleaned)
+    {acc, leak_free} = ReplyScanner.scan(data, ReplyScanner.new())
 
-        case parse_color(payload) do
-          {:ok, rgb} -> {{:ok, rgb}, cleaned}
-          :error -> {:unsupported, cleaned}
-        end
+    # scan/1 is stateless per chunk (the driver's contract): a trailing
+    # partial reply is handed back untouched so the next chunk re-scans it.
+    cleaned = leak_free <> acc.partial
 
-      :none ->
-        case strip_da_reply_if_present(data) do
-          {:stripped, cleaned} -> {:unsupported, cleaned}
-          :absent -> {:pending, data}
-        end
+    note_mode_replies(acc)
+
+    case {acc.osc11, acc.sentinel_seen?} do
+      {{:ok, rgb}, _} -> {{:ok, rgb}, cleaned}
+      {{:invalid, _payload}, _} -> {:unsupported, cleaned}
+      {nil, true} -> {:unsupported, cleaned}
+      {nil, false} -> {:pending, cleaned}
     end
+  end
+
+  # Route parsed DECRQM replies (e.g. mode 2026) to the session
+  # capability record so `Capabilities.sync_output?/0` -- the one public
+  # emit-gate -- answers from the wire, never from env sniffing.
+  defp note_mode_replies(%ReplyScanner{mode: mode}) when map_size(mode) == 0,
+    do: :ok
+
+  defp note_mode_replies(%ReplyScanner{mode: mode}) do
+    Enum.each(mode, fn {m, value} -> Capabilities.note_mode_reply(m, value) end)
   end
 
   @doc "Stores a detected background color for later lookup."
@@ -66,72 +87,6 @@ defmodule Raxol.Terminal.Driver.BackgroundQuery do
     case :persistent_term.get(@pt_key, :undefined) do
       :undefined -> :error
       rgb -> {:ok, rgb}
-    end
-  end
-
-  # ---- OSC 11 reply extraction ----
-  # Reply shape: ESC ] 11 ; <payload> terminated by BEL or ST (ESC \).
-
-  defp extract_osc11(data) do
-    case :binary.match(data, "\e]11;") do
-      :nomatch ->
-        :none
-
-      {start, prefix_len} ->
-        rest_start = start + prefix_len
-        rest = binary_part(data, rest_start, byte_size(data) - rest_start)
-
-        case find_osc_terminator(rest) do
-          :none ->
-            :none
-
-          {payload_len, term_len} ->
-            payload = binary_part(rest, 0, payload_len)
-
-            cleaned =
-              binary_part(data, 0, start) <>
-                binary_part(
-                  data,
-                  rest_start + payload_len + term_len,
-                  byte_size(data) - rest_start - payload_len - term_len
-                )
-
-            {payload, cleaned}
-        end
-    end
-  end
-
-  defp find_osc_terminator(rest) do
-    bel = :binary.match(rest, "\a")
-    st = :binary.match(rest, "\e\\")
-
-    case {bel, st} do
-      {:nomatch, :nomatch} -> :none
-      {{pos, len}, :nomatch} -> {pos, len}
-      {:nomatch, {pos, len}} -> {pos, len}
-      {{b, bl}, {s, _}} when b < s -> {b, bl}
-      {_, {s, sl}} -> {s, sl}
-    end
-  end
-
-  # ---- DA reply stripping: ESC [ ? <params> c ----
-
-  defp strip_da_reply(data) do
-    case strip_da_reply_if_present(data) do
-      {:stripped, cleaned} -> cleaned
-      :absent -> data
-    end
-  end
-
-  defp strip_da_reply_if_present(data) do
-    case Regex.run(~r/\e\[\?[\d;]*c/, data, return: :index) do
-      [{start, len}] ->
-        {:stripped,
-         binary_part(data, 0, start) <>
-           binary_part(data, start + len, byte_size(data) - start - len)}
-
-      nil ->
-        :absent
     end
   end
 

@@ -107,15 +107,47 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
 
   defp replay([], acc, _dir), do: {:ok, Enum.reverse(acc)}
 
+  # Ra policy, frame-strict: the FINAL line of the LAST segment with no trailing
+  # newline is a torn write even when its bytes happen to decode — the frame is
+  # the whole line, and leaving decodable-but-unterminated bytes in place would
+  # concatenate the next append onto the same line, corrupting the journal one
+  # write later. Truncate it, keep the prefix, stay healthy. (Found by the I5
+  # byte-cut fuzz in test/invariants/storage_invariants_test.exs.)
+  defp replay([%{terminated: false} = entry], acc, _dir) do
+    truncate_torn(entry)
+    {:ok, Enum.reverse(acc)}
+  end
+
   defp replay([entry | rest], acc, dir) do
     case Jason.decode(entry.raw) do
       {:ok, record} ->
-        replay(rest, [record | acc], dir)
+        if continuous?(acc, record) do
+          replay(rest, [record | acc], dir)
+        else
+          # An id gap (or a record without an integer id) means complete
+          # records were LOST — a deleted/truncated interior segment. Silently
+          # concatenating around the hole would fabricate continuity, so this
+          # is damage, exactly like interior corruption. (Found by the I6
+          # missing-middle-segment invariant.)
+          alarm(dir, entry)
+          {:damaged, Enum.reverse(acc)}
+        end
 
       {:error, _} ->
         handle_bad_line(entry, rest, acc, dir)
     end
   end
+
+  # The writer stamps strictly consecutive integer ids, so any healthy journal
+  # replays as prev + 1 steps. The first record anchors the sequence (a later
+  # GC unit may legally drop a prefix, so it need not be id 1).
+  defp continuous?([], %{"id" => id}) when is_integer(id), do: true
+
+  defp continuous?([%{"id" => prev} | _], %{"id" => id})
+       when is_integer(prev) and is_integer(id),
+       do: id == prev + 1
+
+  defp continuous?(_acc, _record), do: false
 
   # Torn tail (Ra policy): the *final* line of the *last* segment has NO trailing
   # newline — a crash mid-`:file.write`. Truncate the incomplete bytes, recover

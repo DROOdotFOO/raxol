@@ -1,0 +1,31 @@
+{
+  "context": "bare",
+  "env": {
+    "COLORTERM": null,
+    "SSH_TTY": null,
+    "TERM": "xterm-256color",
+    "TERM_PROGRAM": "Apple_Terminal",
+    "TMUX": null
+  },
+  "expected": {
+    "grapheme_width": "assumed",
+    "identity": null,
+    "in_band_resize": false,
+    "kitty_keyboard": null,
+    "lr_margins": false,
+    "multiplexer": "none",
+    "sixel": false,
+    "sync_output": false,
+    "theme_events": false,
+    "tier": "core",
+    "truecolor": false,
+    "unicode": "wide"
+  },
+  "expected_tier": "flat",
+  "notes": "Silence for everything except the DA1 sentinel: no OSC 11, no DECRQM, no XTVERSION. Missing reply before the sentinel = unsupported (F0 §2).",
+  "query_hex": "1b5d31313b3f071b5b3f751b5b3f3230323624701b5b3e30711b5b63",
+  "reply_hex": "1b5b3f313b3263",
+  "schema": "raxol.capability.capture/1",
+  "terminal": "Apple_Terminal",
+  "terminal_version": "455"
+}

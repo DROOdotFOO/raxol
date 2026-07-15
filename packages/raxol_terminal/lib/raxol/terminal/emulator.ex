@@ -542,8 +542,46 @@ defmodule Raxol.Terminal.Emulator do
   @doc "Gets the scrollback buffer contents."
   def get_scrollback(emulator), do: emulator.scrollback_buffer || []
 
-  @doc "Performs automatic scrolling if needed."
-  def maybe_scroll(emulator), do: emulator
+  @doc """
+  Performs automatic scrolling if needed.
+
+  Fires when the cursor row has moved past the bottom of the screen (the
+  deferred-autowrap and pending-wrap paths move the cursor unclamped);
+  scrolls the effective scroll region by the overflow amount via
+  `Raxol.Terminal.Commands.Screen.scroll_up/2` -- which feeds evicted rows
+  into `emulator.scrollback_buffer` per the TE eviction rules -- and clamps
+  the cursor back onto the last row. The in-bounds LF-at-bottom-margin
+  scroll is handled by `Raxol.Terminal.ControlCodes.handle_lf/1` directly
+  and never reaches here (a clamped cursor is indistinguishable from one
+  legitimately sitting on the last row).
+  """
+  def maybe_scroll(emulator) do
+    height =
+      case get_screen_buffer(emulator) do
+        %{height: h} -> h
+        _ -> nil
+      end
+
+    {row, col} = Raxol.Terminal.Cursor.Manager.get_position(emulator.cursor)
+
+    case is_integer(row) and is_integer(height) and row >= height do
+      true ->
+        scrolled =
+          Raxol.Terminal.Commands.Screen.scroll_up(emulator, row - height + 1)
+
+        clamped_cursor =
+          Raxol.Terminal.Cursor.Manager.move_to(
+            scrolled.cursor,
+            height - 1,
+            col
+          )
+
+        %{scrolled | cursor: clamped_cursor}
+
+      false ->
+        emulator
+    end
+  end
 
   @doc "Sets a terminal mode."
   def set_mode(emulator, mode), do: ModeOperations.set_mode(emulator, mode)

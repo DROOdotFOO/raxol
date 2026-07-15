@@ -1,0 +1,105 @@
+{
+  "_comment": "I9 contract snapshot — the checked-in floor the contract may only GROW from. contract_invariants_test.exs re-produces every shape below through the real producers and fails on removal, rename, type-narrowing, tier flip, enum-value removal, or event-type removal. Adding fields/types/enum values is legal and does NOT require touching this file; removing or renaming anything here is a contract break.",
+  "schema_version": "1.0.0",
+  "contract_version": 0,
+  "envelope": {
+    "required": [
+      "v",
+      "id",
+      "session_id",
+      "turn_id",
+      "ts",
+      "family",
+      "type",
+      "tier",
+      "payload"
+    ],
+    "field_types": {
+      "v": "integer",
+      "id": "integer",
+      "ts": "integer",
+      "family": "atom",
+      "type": "atom",
+      "tier": "atom",
+      "payload": "map"
+    },
+    "defaults": {
+      "v": 0,
+      "family": "loop",
+      "tier": "durable"
+    }
+  },
+  "enums": {
+    "family": ["loop", "meta"],
+    "tier": ["ephemeral", "durable"],
+    "type": [
+      "turn_started",
+      "item_delta",
+      "item_completed",
+      "turn_completed",
+      "error"
+    ],
+    "item_type": ["message", "tool_use", "tool_result"],
+    "journal_failure_reason": ["journal_append_failed", "journal_open_failed"]
+  },
+  "event_types": {
+    "turn_started": { "tier": "durable" },
+    "item_delta": { "tier": "ephemeral" },
+    "item_completed": { "tier": "durable" },
+    "turn_completed": { "tier": "durable" },
+    "error": { "tier": "durable" }
+  },
+  "neutral_to_contract": {
+    "command_result": "item_delta",
+    "app_update": "item_completed",
+    "turn_started": "turn_started",
+    "turn_completed": "turn_completed",
+    "error": "error",
+    "_fallback": "item_completed"
+  },
+  "producers": {
+    "pump": {
+      "turn_started": { "payload_required": ["prompt"] },
+      "item_delta": { "payload_required": ["chunk"] },
+      "item_completed.message": {
+        "payload_required": ["item_type", "content"]
+      },
+      "item_completed.tool_use": {
+        "payload_required": ["item_type", "name", "arguments", "call_id"]
+      },
+      "item_completed.tool_result": {
+        "payload_required": ["item_type", "name", "result"]
+      },
+      "turn_completed": { "payload_required": ["usage", "final"] },
+      "error": { "payload_required": ["reason"] }
+    },
+    "dispatcher_bridge": {
+      "turn_started": { "payload_required": ["message"] },
+      "item_delta": { "payload_required": ["message"] },
+      "item_completed": { "payload_required": ["message"] },
+      "turn_completed": { "payload_required": [] },
+      "error": { "payload_required": ["reason"] }
+    },
+    "bridge_failure_signal": {
+      "type": "error",
+      "tier": "ephemeral",
+      "payload_required": ["reason", "original_type", "detail"]
+    }
+  },
+  "journal_record": {
+    "required": [
+      "v",
+      "id",
+      "session_id",
+      "turn_id",
+      "ts",
+      "family",
+      "type",
+      "tier",
+      "payload",
+      "schema_version"
+    ],
+    "writer_injected": ["id", "schema_version"],
+    "tier_always": "durable"
+  }
+}

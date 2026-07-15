@@ -15,9 +15,16 @@ defprotocol Raxol.Core.Runtime.Directive.Executor do
     * `:pid` - process to receive `{:command_result, payload}` messages
     * `:runtime_pid` - process to receive runtime-level signals (e.g. quit)
 
-  Effect messages land at `context.pid` as `{:command_result, payload}`.
-  Consumers rely on the asynchronous result message rather than the return
-  value of `execute/2`.
+  The Dispatcher additionally supplies `:turn_id` — a snapshot of the agent
+  turn that minted the command (nil outside a turn). Implementations whose
+  results may land after the minting turn closed SHOULD echo it back using the
+  tagged form `{:command_result, payload, %{turn_id: turn_id}}` so the result
+  is attributed to its originating turn; the plain 2-tuple remains valid and
+  is attributed to the turn current at delivery time (nil between turns).
+
+  Effect messages land at `context.pid` as `{:command_result, payload}` (or
+  the tagged 3-tuple above). Consumers rely on the asynchronous result message
+  rather than the return value of `execute/2`.
   """
 
   @spec execute(t(), context :: map()) :: any()

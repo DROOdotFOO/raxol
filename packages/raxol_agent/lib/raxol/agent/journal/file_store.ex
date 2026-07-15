@@ -25,9 +25,14 @@ defmodule Raxol.Agent.Journal.FileStore do
   alias Raxol.Agent.Journal.FileStore.{Reader, Writer}
 
   @enforce_keys [:session_id, :dir, :writer]
-  defstruct [:session_id, :dir, :writer]
+  defstruct [:session_id, :dir, :writer, owner?: true]
 
-  @type t :: %__MODULE__{session_id: String.t(), dir: Path.t(), writer: pid()}
+  @type t :: %__MODULE__{
+          session_id: String.t(),
+          dir: Path.t(),
+          writer: pid(),
+          owner?: boolean()
+        }
 
   @env_base "RAXOL_SESSIONS_DIR"
   @default_base "~/.raxol/sessions"
@@ -51,18 +56,42 @@ defmodule Raxol.Agent.Journal.FileStore do
   """
   @impl Raxol.Agent.Journal
   def open(session_id, opts \\ []) when is_binary(session_id) do
-    with :ok <- validate_session_id(session_id) do
-      dir = Path.join(base_dir(opts), session_id)
+    dir = Path.join(base_dir(opts), session_id)
+
+    # Pre-flight the session layout HERE, where a failure is a plain
+    # `{:error, reason}` return. A raising `Writer.init` (e.g. the session dir
+    # path blocked by a regular file, or an unwritable base) exits ABNORMALLY,
+    # and an abnormal init exit kills a non-trapping linked caller outright —
+    # so without this check the documented `{:error, _}` open contract (and
+    # EmitBridge's fail-closed `:journal_open_failed` arm) never fires for
+    # real filesystem failures. (Found by the I1 `:open_fail` fault site in
+    # test/invariants/identity_invariants_test.exs.)
+    with :ok <- validate_session_id(session_id),
+         :ok <- ensure_layout(dir) do
       writer_opts = Keyword.merge(opts, dir: dir, session_id: session_id)
 
       case Writer.start_link(writer_opts) do
         {:ok, pid} ->
-          {:ok, %__MODULE__{session_id: session_id, dir: dir, writer: pid}}
+          {:ok,
+           %__MODULE__{
+             session_id: session_id,
+             dir: dir,
+             writer: pid,
+             owner?: true
+           }}
 
         # Single-writer invariant: a Writer already owns this session's journal.
         # Reuse the live one rather than spawning a second writer on the segment.
+        # This handle JOINS a shared Writer it did not start — mark it a joiner
+        # so `close/1` does not stop the Writer out from under the owner.
         {:error, {:already_started, pid}} ->
-          {:ok, %__MODULE__{session_id: session_id, dir: dir, writer: pid}}
+          {:ok,
+           %__MODULE__{
+             session_id: session_id,
+             dir: dir,
+             writer: pid,
+             owner?: false
+           }}
 
         {:error, _} = err ->
           err
@@ -73,6 +102,11 @@ defmodule Raxol.Agent.Journal.FileStore do
   @impl Raxol.Agent.Journal
   def append(%__MODULE__{writer: pid}, event) when is_map(event) do
     Writer.append(pid, event)
+  catch
+    # The Writer died underneath this handle (owner closed it, crash, ...).
+    # Surface a normal error tuple instead of exiting the caller — the handle
+    # is stale and should be reopened.
+    :exit, reason -> {:error, {:writer_down, exit_reason(reason)}}
   end
 
   @impl Raxol.Agent.Journal
@@ -85,11 +119,17 @@ defmodule Raxol.Agent.Journal.FileStore do
     end
   end
 
+  # Only the handle that STARTED the Writer may stop it. A joiner handle (one
+  # whose `open/2` found the Writer `{:already_started, _}`) shares the Writer
+  # with its owner; stopping it here would crash the owner's next append.
+  # Joiners just drop their reference.
   @impl Raxol.Agent.Journal
-  def close(%__MODULE__{writer: pid}) do
+  def close(%__MODULE__{writer: pid, owner?: true}) do
     if Process.alive?(pid), do: GenServer.stop(pid)
     :ok
   end
+
+  def close(%__MODULE__{owner?: false}), do: :ok
 
   @impl Raxol.Agent.Journal
   def status(%__MODULE__{dir: dir, writer: pid}) do
@@ -103,7 +143,19 @@ defmodule Raxol.Agent.Journal.FileStore do
 
   # --- helpers ---------------------------------------------------------------
 
-  defp validate_session_id(id) when id in [".", ".."], do: {:error, :invalid_session_id}
+  # Non-raising layout creation, so open failures surface as error tuples
+  # instead of an abnormal Writer.init exit (see the comment in open/2).
+  defp ensure_layout(dir) do
+    Enum.reduce_while(["journal", "snapshots"], :ok, fn sub, :ok ->
+      case File.mkdir_p(Path.join(dir, sub)) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:mkdir_failed, reason, dir}}}
+      end
+    end)
+  end
+
+  defp validate_session_id(id) when id in [".", ".."],
+    do: {:error, :invalid_session_id}
 
   defp validate_session_id(id) do
     if Regex.match?(@session_id_re, id) do
@@ -116,7 +168,14 @@ defmodule Raxol.Agent.Journal.FileStore do
   defp flush(pid) do
     if Process.alive?(pid), do: Writer.flush(pid)
     :ok
+  catch
+    :exit, _ -> :ok
   end
+
+  # Strip GenServer.call decoration ({reason, {GenServer, :call, ...}}) down to
+  # the bare exit reason.
+  defp exit_reason({reason, {GenServer, :call, _}}), do: reason
+  defp exit_reason(reason), do: reason
 
   defp filter(records, opts) do
     case Keyword.get(opts, :from_offset) do

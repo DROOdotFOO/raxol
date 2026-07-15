@@ -1,0 +1,34 @@
+{
+  "context": "bare",
+  "env": {
+    "COLORTERM": "truecolor",
+    "SSH_TTY": null,
+    "TERM": "wezterm",
+    "TERM_PROGRAM": "WezTerm",
+    "TMUX": null
+  },
+  "expected": {
+    "grapheme_width": "assumed",
+    "identity": [
+      "WezTerm",
+      "20240203-110809-5046fc22"
+    ],
+    "in_band_resize": false,
+    "kitty_keyboard": null,
+    "lr_margins": false,
+    "multiplexer": "none",
+    "sixel": true,
+    "sync_output": true,
+    "theme_events": false,
+    "tier": "modern",
+    "truecolor": true,
+    "unicode": "wide"
+  },
+  "expected_tier": "inline_log",
+  "notes": "Synthetic plausible capture.",
+  "query_hex": "1b5d31313b3f071b5b3f751b5b3f3230323624701b5b3e30711b5b63",
+  "reply_hex": "1b5d31313b7267623a323832382f326332632f333433341b5c1b5b3f323032363b3124791b503e7c57657a5465726d2032303234303230332d3131303830392d35303436666332321b5c1b5b3f36353b343b363b31383b323263",
+  "schema": "raxol.capability.capture/1",
+  "terminal": "WezTerm",
+  "terminal_version": "20240203-110809-5046fc22"
+}

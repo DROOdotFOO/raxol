@@ -41,7 +41,10 @@ defmodule Raxol.Agent.Directive do
         runtime_pid: runtime_pid
       })
 
-  Result messages arrive at `context.pid` as `{:command_result, payload}`.
+  Result messages arrive at `context.pid` as
+  `{:command_result, payload, %{turn_id: turn_id}}` — the `turn_id` is a
+  snapshot of the agent turn that dispatched the directive (nil outside a
+  turn), so late async results stay attributed to their originating turn.
   """
 
   alias __MODULE__.{Async, SendAgent, Shell}

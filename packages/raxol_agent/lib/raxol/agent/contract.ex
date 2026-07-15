@@ -78,6 +78,17 @@ defmodule Raxol.Agent.Contract do
     [Jason.encode!(sanitize(event)), "\n"]
   end
 
+  @doc """
+  Coerce a payload map into a JSON-encodable one.
+
+  Same boundary sanitization `encode_line/1` applies, exposed for the durable
+  journal sink: an event whose payload carries non-encodable terms (message
+  tuples, structs, pids) must not crash `Jason.encode!` when appended. Anything
+  Jason can't take becomes `inspect/1` text.
+  """
+  @spec sanitize_payload(map()) :: map()
+  def sanitize_payload(payload) when is_map(payload), do: sanitize_value(payload)
+
   # Payloads may carry non-JSON-encodable terms (error reasons, tuples,
   # arbitrary tool results). Sanitize at the boundary rather than crash
   # the feed: anything Jason can't take becomes `inspect/1` text.

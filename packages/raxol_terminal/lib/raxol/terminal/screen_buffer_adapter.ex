@@ -71,8 +71,10 @@ defmodule Raxol.Terminal.ScreenBufferAdapter do
   def scroll_down(buffer), do: ScrollOps.scroll_down(buffer, 1)
   defdelegate scroll_down(buffer, n), to: ScrollOps
 
+  # ScrollOps.scroll_up/4 returns {buffer, scrolled_out_rows} (TE); this
+  # adapter's contract is buffer-only, so drop the eviction list here.
   def scroll_region_up(buffer, top, bottom, n),
-    do: ScrollOps.scroll_up(buffer, top, bottom, n)
+    do: elem(ScrollOps.scroll_up(buffer, top, bottom, n), 0)
 
   def scroll_region_down(buffer, top, bottom, n),
     do: ScrollOps.scroll_down(buffer, top, bottom, n)

@@ -1,0 +1,34 @@
+{
+  "context": "bare",
+  "env": {
+    "COLORTERM": "truecolor",
+    "SSH_TTY": null,
+    "TERM": "alacritty",
+    "TERM_PROGRAM": null,
+    "TMUX": null
+  },
+  "expected": {
+    "grapheme_width": "assumed",
+    "identity": [
+      "Alacritty",
+      "0.13.2"
+    ],
+    "in_band_resize": false,
+    "kitty_keyboard": null,
+    "lr_margins": false,
+    "multiplexer": "none",
+    "sixel": false,
+    "sync_output": true,
+    "theme_events": false,
+    "tier": "modern",
+    "truecolor": true,
+    "unicode": "wide"
+  },
+  "expected_tier": "inline_log",
+  "notes": "DECRQM 2026 value stuck at 2 (never flips to 1 after set). Generic rule classifies 2 as supported; quirk table adds :no_verify_2026 -- never set-then-requery (CAP-N-05).",
+  "query_hex": "1b5d31313b3f071b5b3f751b5b3f3230323624701b5b3e30711b5b63",
+  "reply_hex": "1b5d31313b7267623a316431642f316631662f32313231071b5b3f323032363b3224791b503e7c416c6163726974747920302e31332e321b5c1b5b3f3663",
+  "schema": "raxol.capability.capture/1",
+  "terminal": "alacritty",
+  "terminal_version": "0.13.2"
+}
