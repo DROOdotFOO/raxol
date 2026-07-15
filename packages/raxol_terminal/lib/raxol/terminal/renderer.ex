@@ -157,6 +157,36 @@ defmodule Raxol.Terminal.Renderer do
     |> maybe_apply_cursor(renderer.cursor)
   end
 
+  @doc """
+  Renders each buffer row to its own ANSI string, in order.
+
+  `render/1` is `Enum.join(render_rows(renderer), "\\n")` modulo the (currently
+  no-op) font/cursor wrappers -- a property pinned by test. An incremental
+  renderer diffs the grid and re-emits individual rows via this instead of
+  rebuilding the whole frame string.
+  """
+  @spec render_rows(t()) :: [String.t()]
+  def render_rows(%__MODULE__{} = renderer) do
+    Enum.map(
+      renderer.screen_buffer.cells,
+      &render_row_optimized(&1, renderer.theme, renderer.style_batching)
+    )
+  end
+
+  @doc """
+  Renders a single row (0-based) to its ANSI string. Out-of-range rows render
+  as `""`. A row is a pure function of its own cells -- it carries no pen state
+  from the row above, so a row rendered in isolation is byte-identical to its
+  slice of the full frame.
+  """
+  @spec render_row(t(), non_neg_integer()) :: String.t()
+  def render_row(%__MODULE__{} = renderer, y) when is_integer(y) and y >= 0 do
+    case Enum.at(renderer.screen_buffer.cells, y) do
+      nil -> ""
+      row -> render_row_optimized(row, renderer.theme, renderer.style_batching)
+    end
+  end
+
   defp get_styled_content_optimized(buffer, theme, style_batching) do
     buffer.cells
     |> Enum.map_join("\n", fn row ->
