@@ -5,9 +5,14 @@ defmodule RaxolAcp.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      Raxol.ACP.Supervisor
-    ]
+    # The live Xochi solver runtime (auth + job stream + settlement) is opt-in via
+    # `config :raxol_acp, xochi_solver_enabled: true`; off, only the local stack runs.
+    solver_children =
+      if Raxol.ACP.Xochi.SolverApplication.enabled?(),
+        do: [Raxol.ACP.Xochi.SolverApplication],
+        else: []
+
+    children = [Raxol.ACP.Supervisor] ++ solver_children
 
     case Supervisor.start_link(children,
            strategy: :one_for_one,
