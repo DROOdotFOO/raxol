@@ -38,7 +38,11 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
               rendering_engine: nil,
               time_travel: nil,
               cycle_profiler: nil,
-              command_interceptor: nil
+              command_interceptor: nil,
+              # Harness keystone: when set, both model-fold sites publish a
+              # neutral event to Raxol.Core.Runtime.EmitBus keyed by this id.
+              # nil (terminal/plain apps) makes emit/2 a no-op.
+              session_id: nil
   end
 
   # BaseManager provides start_link/1 and start_link/2 automatically
@@ -74,7 +78,8 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       current_theme_id: safe_get_theme_id(),
       time_travel: Map.get(initial_state, :time_travel),
       cycle_profiler: Map.get(initial_state, :cycle_profiler),
-      command_interceptor: Map.get(initial_state, :command_interceptor)
+      command_interceptor: Map.get(initial_state, :command_interceptor),
+      session_id: Map.get(initial_state, :session_id)
     }
 
     send(runtime_pid, {:runtime_initialized, self()})
@@ -198,6 +203,10 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
           mem_after,
           message
         )
+
+        # Keystone: the same fold site TimeTravel taps also emits a typed
+        # event. A synchronous update is a completed, durable step.
+        emit(state, :app_update, :durable, %{message: message})
 
         process_successful_update(state, updated_model, commands)
 
@@ -526,6 +535,11 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     case Application.delegate_update(state.app_module, message, state.model) do
       {updated_model, commands}
       when is_map(updated_model) and is_list(commands) ->
+        # Keystone: the async command-result fold used to update the model
+        # silently. It now emits a typed event. Async chunks (LLM stream /
+        # shell / ticks) are live-render-only, hence :ephemeral.
+        emit(state, :command_result, :ephemeral, %{message: message})
+
         process_command_commands(state, updated_model, commands)
 
       {:error, reason} ->
@@ -569,6 +583,22 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     end
 
     {:noreply, %{state | model: updated_model}}
+  end
+
+  # --- Harness keystone emit ---------------------------------------------
+  # Single typed-emit seam shared by both model-fold sites. Publishes a
+  # neutral event map to Raxol.Core.Runtime.EmitBus (main-package pub/sub, no
+  # raxol_agent dependency). No-op unless the session was started with a
+  # :session_id. Raxol.Agent.EmitBridge subscribes and maps these to the
+  # agent Contract on the raxol_agent side.
+  defp emit(%State{session_id: nil}, _type, _tier, _payload), do: :ok
+
+  defp emit(%State{session_id: session_id}, type, tier, payload) do
+    session_id
+    |> Raxol.Core.Runtime.EmitBus.build(type, tier, payload)
+    |> Raxol.Core.Runtime.EmitBus.publish()
+
+    :ok
   end
 
   defp log_command_failure(:error, label, reason, context) do

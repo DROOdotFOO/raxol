@@ -1,0 +1,143 @@
+defmodule Raxol.Core.Runtime.Events.DispatcherEmitTest do
+  @moduledoc """
+  Keystone-emit tests: proves the Dispatcher publishes a neutral event to
+  `Raxol.Core.Runtime.EmitBus` at BOTH model-fold sites. The async
+  command-result path used to update the model silently (the emits-nothing
+  bug); it now emits.
+  """
+  use ExUnit.Case, async: false
+
+  alias Raxol.Core.Runtime.EmitBus
+  alias Raxol.Core.Runtime.Events.Dispatcher
+
+  @session_id "sess-emit-test"
+
+  defmodule EmitMockApp do
+    @behaviour Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_context), do: %{count: 0}
+
+    @impl true
+    def update(_msg, model), do: {%{model | count: model.count + 1}, []}
+
+    @impl true
+    def view(_model), do: []
+
+    @impl true
+    def handle_event(_), do: :ok
+    @impl true
+    def handle_message(_, _), do: :ok
+    @impl true
+    def handle_tick(_), do: :ok
+    @impl true
+    def subscriptions(_), do: []
+    @impl true
+    def terminate(_, _), do: :ok
+  end
+
+  setup do
+    case Raxol.Core.UserPreferences.start_link(
+           name: Raxol.Core.UserPreferences,
+           test_mode?: true
+         ) do
+      {:ok, _} -> :ok
+      {:error, {:already_started, _}} -> :ok
+    end
+
+    ensure_registry(:raxol_event_subscriptions, :duplicate)
+    ensure_registry(EmitBus.registry_name(), :duplicate)
+
+    table = :"cmd_reg_#{System.unique_integer([:positive])}"
+    :ets.new(table, [:set, :public, :named_table, read_concurrency: true])
+
+    initial_state = %{
+      app_module: EmitMockApp,
+      model: %{count: 0},
+      runtime_pid: self(),
+      width: 80,
+      height: 24,
+      focused: true,
+      debug_mode: false,
+      plugin_manager: nil,
+      command_registry_table: table,
+      session_id: @session_id
+    }
+
+    {:ok, dispatcher} = Dispatcher.start_link(self(), initial_state, name: nil)
+
+    on_exit(fn ->
+      if Process.alive?(dispatcher), do: GenServer.stop(dispatcher)
+    end)
+
+    EmitBus.subscribe(@session_id)
+
+    %{dispatcher: dispatcher}
+  end
+
+  test "process_command_result publishes an ephemeral :command_result event",
+       %{dispatcher: dispatcher} do
+    # Drive the previously-blind async fold site.
+    send(dispatcher, {:command_result, {:llm_chunk, "hello"}})
+
+    assert_receive {:emit_bus, @session_id, event}, 1_000
+    assert event.family == :loop
+    assert event.type == :command_result
+    assert event.tier == :ephemeral
+    assert is_integer(event.ts)
+    assert event.payload.message == {:command_result, {:llm_chunk, "hello"}}
+  end
+
+  test "process_app_update publishes a durable :app_update event",
+       %{dispatcher: dispatcher} do
+    # agent_message casts route straight to process_app_update.
+    GenServer.cast(dispatcher, {:dispatch, {:agent_message, :peer, :ping}})
+
+    assert_receive {:emit_bus, @session_id, event}, 1_000
+    assert event.family == :loop
+    assert event.type == :app_update
+    assert event.tier == :durable
+  end
+
+  test "no session_id means no emit (terminal apps stay silent)" do
+    ensure_registry(:raxol_event_subscriptions, :duplicate)
+    ensure_registry(EmitBus.registry_name(), :duplicate)
+
+    table = :"cmd_reg_#{System.unique_integer([:positive])}"
+    :ets.new(table, [:set, :public, :named_table, read_concurrency: true])
+
+    {:ok, dispatcher} =
+      Dispatcher.start_link(
+        self(),
+        %{
+          app_module: EmitMockApp,
+          model: %{count: 0},
+          runtime_pid: self(),
+          width: 80,
+          height: 24,
+          focused: true,
+          debug_mode: false,
+          plugin_manager: nil,
+          command_registry_table: table
+          # no session_id
+        },
+        name: nil
+      )
+
+    on_exit(fn -> if Process.alive?(dispatcher), do: GenServer.stop(dispatcher) end)
+
+    # Subscribe to a wildcard is impossible; subscribe to the id the app would
+    # have used and confirm nothing arrives.
+    EmitBus.subscribe(@session_id)
+    send(dispatcher, {:command_result, {:llm_chunk, "silent"}})
+
+    refute_receive {:emit_bus, _, _}, 300
+  end
+
+  defp ensure_registry(name, keys) do
+    case Registry.start_link(keys: keys, name: name) do
+      {:ok, _} -> :ok
+      {:error, {:already_started, _}} -> :ok
+    end
+  end
+end

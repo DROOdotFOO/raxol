@@ -127,6 +127,7 @@ defmodule Raxol.Application do
     [
       {Raxol.Performance.ETSCacheManager, []},
       {Registry, keys: :duplicate, name: :raxol_event_subscriptions},
+      Raxol.Core.Runtime.EmitBus,
       {Raxol.DynamicSupervisor, []},
       {Raxol.Core.UserPreferences, [name: Raxol.Core.UserPreferences]}
     ]
@@ -151,6 +152,7 @@ defmodule Raxol.Application do
       {Raxol.Core.UserPreferences, [name: Raxol.Core.UserPreferences]},
       {Raxol.DynamicSupervisor, []},
       {Registry, keys: :duplicate, name: :raxol_event_subscriptions},
+      Raxol.Core.Runtime.EmitBus,
       maybe_add_mcp_supervisor(),
       {Raxol.Headless, []},
       maybe_add_pubsub()
@@ -188,6 +190,7 @@ defmodule Raxol.Application do
       {Raxol.Terminal.Supervisor, []},
       maybe_add_agent_supervisor(),
       {Registry, keys: :duplicate, name: :raxol_event_subscriptions},
+      Raxol.Core.Runtime.EmitBus,
       # MCP server (registry + server, works in all environments)
       maybe_add_mcp_supervisor(),
       # Headless session manager for programmatic app interaction
