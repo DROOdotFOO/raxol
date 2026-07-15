@@ -236,6 +236,11 @@ defmodule Raxol.MixProject do
       {:makeup, "~> 1.2"},
       # Elixir syntax highlighting
       {:makeup_elixir, "~> 1.0.1"},
+      # Optional: 205 more syntect syntaxes (python, go, rust, yaml, bash,
+      # markdown, ...), auto-registered into Makeup.Registry on start.
+      # Precompiled NIF; harness degrades to plain text without it. See
+      # docs/proposals/in-flight/shiki-elixir-analysis.md.
+      {:makeup_syntect, "~> 0.1", optional: true},
       # System clipboard access
       {:clipboard, "~> 0.2.1"},
       # Efficient circular buffer implementation
