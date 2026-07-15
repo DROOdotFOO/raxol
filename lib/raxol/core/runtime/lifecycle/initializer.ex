@@ -249,12 +249,19 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   defp maybe_start_driver(_dispatcher_pid, :agent, _options), do: {:ok, nil}
 
   defp maybe_start_driver(dispatcher_pid, _environment, options) do
-    driver_opts = [
-      dispatcher_pid: dispatcher_pid,
-      mouse: Keyword.get(options, :mouse, true)
-    ]
+    driver_opts =
+      [
+        dispatcher_pid: dispatcher_pid,
+        mouse: Keyword.get(options, :mouse, true)
+      ] ++ Keyword.get(options, :driver_start_opts, [])
 
-    case Raxol.Terminal.Driver.start_link(driver_opts) do
+    # Test seam only: production callers never pass :driver_module, so this
+    # always resolves to Raxol.Terminal.Driver. Lets lifecycle shutdown-order
+    # tests inject a recording double without touching packages/raxol_terminal
+    # or standing up a real termbox2/tty session.
+    driver_module = Keyword.get(options, :driver_module, Raxol.Terminal.Driver)
+
+    case driver_module.start_link(driver_opts) do
       {:ok, driver_pid} ->
         Log.info_with_context(
           "[Lifecycle.Initializer] Terminal Driver started with PID: #{inspect(driver_pid)}"
@@ -289,8 +296,18 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
         :cycle_profiler,
         Keyword.get(options, :cycle_profiler_pid)
       )
+      |> Kernel.++(Keyword.get(options, :engine_start_opts, []))
 
-    case Raxol.Core.Runtime.Rendering.Engine.start_link(engine_opts) do
+    # Test seam only, mirrors :driver_module above -- production callers
+    # never pass :engine_module.
+    engine_module =
+      Keyword.get(
+        options,
+        :engine_module,
+        Raxol.Core.Runtime.Rendering.Engine
+      )
+
+    case engine_module.start_link(engine_opts) do
       {:ok, engine_pid} ->
         Log.info_with_context(
           "[Lifecycle.Initializer] Rendering Engine started with PID: #{inspect(engine_pid)}"
