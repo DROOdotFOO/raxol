@@ -1,0 +1,25 @@
+reply_hex=
+^[[?2026;2$y
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+---STRIP---
+STATUS: 2026-framed
+PROMPT>

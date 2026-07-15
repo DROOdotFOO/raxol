@@ -1,0 +1,18 @@
+{
+  "schema": "raxol.capability.capture/1",
+  "terminal": "tmux",
+  "terminal_version": "3.7b",
+  "context": "bare",
+  "env": {
+    "TERM": "tmux-256color",
+    "COLORTERM": null,
+    "TERM_PROGRAM": null,
+    "TMUX": "present",
+    "SSH_TTY": null
+  },
+  "query_hex": "1b5b3f323032362470",
+  "reply_hex": "",
+  "notes": "DECRQM query for mode 2026 sent from INSIDE a detached tmux pane (no client attached, no host terminal above it). Captured by run_cell.sh cell_c5 via probes/p05_mode2026_probe.sh + lib/read_reply.py.",
+  "expected": null,
+  "expected_tier": null
+}
