@@ -1,60 +1,28 @@
 defmodule Raxol.ACP.Xochi.LiveOrderTest do
   @moduledoc """
-  Another agent orders the `xochi_cross_chain_transfer` ACP offering and the
-  seller settles it for real through Xochi + the Riddler solver.
+  Live gate: a buyer orders the `xochi_cross_chain_transfer` ACP offering and the
+  seller settles it for real through Xochi + the Riddler solver. Moves real funds.
 
-  This is the end-to-end proof that the settlement services are orderable through
-  the ACP under the PURE-STOREFRONT model: the buyer quotes and signs a Xochi
-  intent itself (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`), embeds the
-  signed bundle in the job requirement's `signed_intent`, and the seller's
-  `Raxol.ACP.Xochi.TransferOffering` accepts the job and, on delivery, relays the
-  bundle via `Raxol.ACP.Xochi.Settler` ->
-  `Raxol.Payments.Protocols.Xochi.execute_signed/2` (no re-signing) and polls it.
-  The deliverable carries the intent id and the on-chain settlement tx hashes.
+  The buyer quotes and signs a Xochi intent itself
+  (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`), embeds the signed bundle in
+  the job requirement's `signed_intent`, and the seller's `TransferOffering` relays
+  it via `Raxol.ACP.Xochi.Settler` -> `execute_signed/2` (no re-signing) and polls.
+  Job orchestration is in-process (`ProviderAdapter.Mock` stands in for the on-chain
+  hook writes); only the settlement moves funds. The funded `LiveWallet` plays every
+  role -- buyer, provider, and recipient (the Xochi `QuoteRequest` has no separate
+  recipient, so funds return to the funded key on the destination chain).
 
-  Here the test plays BOTH roles: the funded `LiveWallet` is the buyer (it signs
-  the intent), and for a self-contained gate is also the job's provider address.
-
-  The job orchestration runs an in-process `JobSession` (no live ACP escrow
-  contracts); the SETTLEMENT is real and moves funds. The fuller on-chain escrow
-  path (`HookClient` + `SolverAgent`) is the existing `:live_chain` stack and is
-  a separate gate.
-
-  Auth is the Member service token (`XOCHI_ORDER_LIVE_TOKEN`): one `xochi_config`
-  serves the buyer's quote+sign and the Settler's relay+poll. (The mandate path is
-  exercised by the raxol_payments Xochi gate.)
-
-  USDC pulls via ERC-3009 and settles directly. USDT/WETH -- and USDG, the origin
-  asset for any Robinhood-origin corridor -- pull via Permit2 and need a standing
-  on-chain allowance, which this gate broadcasts via
-  `Raxol.ACP.Onchain.Permit2Approver` using a JSON-RPC provider built from the
-  funded key and `XOCHI_ORDER_RPC_<chain>`. A Permit2-origin cell with no RPC for
-  its origin chain is skipped (logged), not failed. Robinhood Chain (4663) has no
-  USDC, so a stablecoin corridor touching it is cross-asset (USDG on the Robinhood
-  leg); order a `4663->8453` USDG->USDC corridor with
-  `XOCHI_ORDER_CORRIDORS=4663>8453 XOCHI_ORDER_RPC_4663=https://rpc.mainnet.chain.robinhood.com`.
-
-  Moves real funds. Tagged `:live_xochi_order` (settle) and
-  `:live_xochi_order_preflight` (read-only); excluded by default and compiled
-  only when the required env is present.
-
-  Funds settle to the buyer's own wallet on the destination chain -- the Xochi
-  `QuoteRequest` has no separate recipient (wallet = funder = recipient), so the
-  buyer's signed intent delivers to the funded key's own address.
+  Tagged `:live_xochi_order` (settle) and `:live_xochi_order_preflight`
+  (read-only); excluded by default, compiled only when the env is present.
 
       XOCHI_ORDER_LIVE_URL=https://api.xochi.fi \\
-      XOCHI_ORDER_LIVE_TOKEN="$(op read 'op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential')" \\
-      XOCHI_ORDER_LIVE_KEY=0x<funded buyer key> \\
+      XOCHI_ORDER_LIVE_TOKEN=<Xochi Member token> XOCHI_ORDER_LIVE_KEY=0x<funded key> \\
       XOCHI_ORDER_RPC_8453=https://mainnet.base.org \\
-      XOCHI_ORDER_TOKENS=USDC,USDT,WETH \\
         mix test --only live_xochi_order test/raxol/acp/xochi/live_order_test.exs
 
-  Or use the runner: examples/run_live_acp_order_gate.sh
-
-  Overrides: XOCHI_ORDER_CORRIDORS ("from>to,from>to" or "mesh"),
-  XOCHI_ORDER_TOKENS, XOCHI_ORDER_AMOUNT, XOCHI_ORDER_WETH_AMOUNT,
-  XOCHI_ORDER_ALLOW_ETH_ORIGIN, XOCHI_ORDER_SOLVER, XOCHI_ORDER_SOLVER_PIN,
-  XOCHI_ORDER_RPC_<chain>.
+  Runner + full env/corridor reference (USDC/ERC-3009 vs USDT/WETH/USDG Permit2,
+  Robinhood cross-asset corridors, mesh, and all `XOCHI_ORDER_*` overrides):
+  `examples/run_live_acp_order_gate.sh`.
   """
 
   use ExUnit.Case, async: false
@@ -117,7 +85,7 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
       assert spec.handler == TransferOffering
 
       cells = cells()
-      IO.puts("[live_xochi_order:preflight] checking #{length(cells)} cells (NO funds move)")
+      log("preflight: checking #{length(cells)} cells (NO funds move)")
 
       results =
         Enum.map(cells, fn {from, to, token} ->
@@ -137,7 +105,7 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     @tag :live_xochi_order_settle
     test "a buyer orders the offering and the seller settles the fillable subset", %{cfg: cfg} do
       cells = cells()
-      IO.puts("[live_xochi_order] ordering #{length(cells)} cells through the ACP (REAL funds)")
+      log("ordering #{length(cells)} cells through the ACP (REAL funds)")
 
       for cell <- cells, do: run_cell(cfg, cell)
     end
@@ -154,9 +122,8 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
       label = "#{from}->#{to}:#{token}"
 
       if from == 1 and System.get_env("XOCHI_ORDER_ALLOW_ETH_ORIGIN") != "true" do
-        IO.puts(
-          "[live_xochi_order] SKIP #{label}: Ethereum origin is quote-only " <>
-            "(set XOCHI_ORDER_ALLOW_ETH_ORIGIN=true to settle from L1)"
+        log(
+          "SKIP #{label}: Ethereum origin is quote-only (set XOCHI_ORDER_ALLOW_ETH_ORIGIN=true)"
         )
       else
         run_fillable_cell(cfg, from, to, token, label)
@@ -171,8 +138,7 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
            {:ok, _allowance} <- ensure_permit2(from, token, cfg.wallet_address) do
         order_cell(cfg, from, to, token, label)
       else
-        {:error, reason} ->
-          IO.puts("[live_xochi_order] SKIP #{label}: #{inspect(reason)}; no funds moved")
+        {:error, reason} -> log("SKIP #{label}: #{inspect(reason)}; no funds moved")
       end
     end
 
@@ -410,24 +376,28 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     defp decode_key("0x" <> hex), do: Base.decode16!(hex, case: :mixed)
     defp decode_key(hex), do: Base.decode16!(hex, case: :mixed)
 
-    # -- Reporting --
+    # -- Reporting (one terse line per cell) --
 
-    defp report_preflight(from, to, token, {:ok, info}) do
-      IO.puts(
-        "  PASS #{from}->#{to} #{asset_pair(from, to, token)} via #{info.method || "?"}" <>
-          " (to_amount #{info.to_amount})"
+    @explorers %{
+      1 => "https://etherscan.io/tx/",
+      10 => "https://optimistic.etherscan.io/tx/",
+      137 => "https://polygonscan.com/tx/",
+      8453 => "https://basescan.org/tx/",
+      42_161 => "https://arbiscan.io/tx/"
+    }
+
+    defp log(msg), do: IO.puts("[live_xochi_order] " <> msg)
+
+    defp report_preflight(from, to, token, outcome) do
+      cell = "#{from}->#{to} #{asset_pair(from, to, token)}"
+
+      log(
+        case outcome do
+          {:ok, %{method: m, to_amount: a}} -> "PASS #{cell} via #{m || "?"} (#{a})"
+          {:soft, :cannot_solve} -> "SKIP #{cell}: solver cannot fill yet"
+          {:error, reason} -> "FAIL #{cell}: #{inspect(reason)}"
+        end
       )
-    end
-
-    defp report_preflight(from, to, token, {:soft, :cannot_solve}) do
-      IO.puts(
-        "  SKIP #{from}->#{to} #{asset_pair(from, to, token)}: " <>
-          "solver cannot fill this cell yet (no funds needed)"
-      )
-    end
-
-    defp report_preflight(from, to, token, {:error, reason}) do
-      IO.puts("  FAIL #{from}->#{to} #{asset_pair(from, to, token)}: #{inspect(reason)}")
     end
 
     # Render the corridor's asset pairing: "USDC" same-asset, "USDC->USDG" when a
@@ -440,31 +410,22 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
 
     defp report_settlement(label, to_chain, deliverable, started_ms) do
       elapsed = System.monotonic_time(:millisecond) - started_ms
+      settle = tx_line(deliverable["settlement_tx_hash"], to_chain)
 
-      IO.puts("""
+      recv =
+        case deliverable["receiving_tx_hash"] do
+          nil -> ""
+          hash -> " recv=" <> tx_line(hash, to_chain)
+        end
 
-      [live_xochi_order:#{label}] settled in #{elapsed}ms
-        intent_id     #{deliverable["intent_id"]}
-        status        #{deliverable["status"]}
-        settle tx     #{tx_line(deliverable["settlement_tx_hash"], to_chain)}
-        recv tx       #{tx_line(deliverable["receiving_tx_hash"], to_chain)}\
-      """)
+      log(
+        "#{label} settled #{elapsed}ms " <>
+          "intent=#{deliverable["intent_id"]} status=#{deliverable["status"]} settle=#{settle}" <>
+          recv
+      )
     end
 
-    defp tx_line(nil, _chain_id), do: "(none reported)"
-
-    defp tx_line(hash, chain_id) do
-      case explorer_base(chain_id) do
-        nil -> hash
-        base -> base <> hash
-      end
-    end
-
-    defp explorer_base(1), do: "https://etherscan.io/tx/"
-    defp explorer_base(8453), do: "https://basescan.org/tx/"
-    defp explorer_base(42_161), do: "https://arbiscan.io/tx/"
-    defp explorer_base(10), do: "https://optimistic.etherscan.io/tx/"
-    defp explorer_base(137), do: "https://polygonscan.com/tx/"
-    defp explorer_base(_), do: nil
+    defp tx_line(nil, _chain), do: "(none)"
+    defp tx_line(hash, chain), do: Map.get(@explorers, chain, "") <> hash
   end
 end

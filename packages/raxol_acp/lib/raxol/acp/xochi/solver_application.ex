@@ -35,13 +35,11 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   |---|---|
   | `RAXOL_ACP_AGENT_PRIVATE_KEY` | 32-byte hex, solver EOA. Signs auth + on-chain submit/complete. |
   | `RAXOL_ACP_EVALUATOR` | Address allowed to call `complete`/`reject`. |
-  | `XOCHI_BASE_URL` | Xochi/Riddler endpoint (`https://riddler.axol.io`). |
-  | `XOCHI_AUTH_TOKEN` | Bearer/API key for Xochi. |
+  | `XOCHI_BASE_URL` | Xochi worker (`https://api.xochi.fi` prod, `https://api-stg.xochi.fi` staging). The worker calls Riddler internally; do not point at `riddler.axol.io/xochi/*`. |
+  | `XOCHI_AUTH_TOKEN` | Xochi worker Member / agent-service token (`Authorization: Bearer`). Not a Riddler token. |
 
   Optional: `RAXOL_ACP_RPC_URL` (default `Chain.mainnet/0` rpc_url), `XOCHI_FEE_BPS`
   (default `50` -> 0.5%).
-
-  See `MARKETPLACE_REGISTRATION.md` (operator guide) and `GO_LIVE_STABLECOINS.md`.
   """
 
   use Supervisor

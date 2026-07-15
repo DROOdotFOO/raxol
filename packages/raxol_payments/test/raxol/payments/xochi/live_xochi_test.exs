@@ -30,86 +30,33 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   env is present, so opting in without it yields no tests.
 
       XOCHI_LIVE_URL=https://api.xochi.fi \\
-      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential')" \\
-      XOCHI_LIVE_KEY=0x<funded Base mainnet private key> \\
+      XOCHI_LIVE_TOKEN=<Xochi Member token> XOCHI_LIVE_KEY=0x<funded Base key> \\
         mix test --include live_xochi test/raxol/payments/xochi/live_xochi_test.exs
-
-  Or use the runner: examples/run_live_xochi_gate.sh
-
-  Overrides: XOCHI_LIVE_AUTH, XOCHI_LIVE_AGENT_WALLET, XOCHI_LIVE_FROM_CHAIN,
-  XOCHI_LIVE_TO_CHAIN, XOCHI_LIVE_FROM_TOKEN, XOCHI_LIVE_TO_TOKEN,
-  XOCHI_LIVE_AMOUNT, XOCHI_LIVE_SETTLEMENT, XOCHI_LIVE_RECIPIENT_META,
-  XOCHI_LIVE_SOLVER, XOCHI_LIVE_SOLVER_PIN.
 
   ## Solver pin
 
   The gate enforces the origin-pull solver pin by default: the pull recipient
   (`to` for ERC-3009, `spender` for Permit2) must equal the canonical Riddler
   solver `0x97D447561fDe10E959E782a29411D8F89586d80b`, so a forged or MITM'd
-  quote that retargets the pull aborts before any signature. Override the pinned
-  address with `XOCHI_LIVE_SOLVER` (a solver rotation is an env change), or set
-  `XOCHI_LIVE_SOLVER_PIN=false` to disable the pin while debugging. The pin is
-  scoped to this module -- it does not change config for the rest of the suite.
+  quote that retargets the pull aborts before any signature. `XOCHI_LIVE_SOLVER`
+  overrides the pinned address; `XOCHI_LIVE_SOLVER_PIN=false` disables the pin
+  while debugging. The pin is scoped to this module.
 
   ## Matrix mode
 
   `XOCHI_LIVE_MATRIX=true` adds one test that settles every configured corridor
-  for each token and settlement type -- the live counterpart of
-  `settlement_matrix_test.exs`. It moves real funds per cell (corridor x token x
-  settlement), so it is bounded by env:
+  (`XOCHI_LIVE_CORRIDORS`, or `"mesh"`) for each token and settlement type -- the
+  live counterpart of `settlement_matrix_test.exs`. It moves real funds per cell,
+  re-quotes each, and settles only the fillable subset (skipping eth-origin/dest,
+  unpriced amounts, Permit2-without-allowance, and transient worker errors),
+  failing only on a client integration fault. `XOCHI_LIVE_RECORD_MARGIN=true`
+  prints a per-corridor fee-vs-gas margin + native-drain report after the sweep.
+  A companion `:live_xochi_preflight` test quotes the settle-eligible subset
+  read-only first (no funds), asserting `can_solve` and the pinned solver.
 
-  - `XOCHI_LIVE_CORRIDORS` -- `"from>to,from>to"` chain-id pairs (default
-    `"8453>42161,42161>8453"`), or `"mesh"` for every ordered pair of the six
-    supported EVM chains (1, 10, 137, 8453, 42161, 4663). Tokens resolve per chain
-    via `Raxol.Payments.Assets`. Robinhood Chain (4663) has no USDC/USDT, so a
-    stablecoin corridor touching it is cross-asset (USDG on the Robinhood leg,
-    the requested stablecoin on the other) -- the fungible stablecoin group the
-    solver fills. The Robinhood leg pulls USDG via Permit2, never ERC-3009.
-  - `XOCHI_LIVE_TOKENS` -- `"USDC,USDT,WETH"` (default `"USDC"`). USDC pulls via
-    ERC-3009; USDT/WETH via Permit2 (needs a standing Permit2 allowance on each
-    origin chain). The preflight asserts the served pull method per token
-    (USDC -> erc3009, USDT/WETH -> permit2) read-only.
-  - `XOCHI_LIVE_SETTLE_PERMIT2` -- set to `true` to settle USDT/WETH cells in the
-    funded matrix. Off by default: those pulls need a standing Permit2 allowance
-    this gate does not broadcast, so order them through raxol_acp
-    (`run_live_acp_order_gate.sh`), which sets the allowance and settles for real.
-    The funded matrix re-quotes each cell and skips (logs) any the solver cannot
-    fill -- at quote time, at settlement, or on a transient worker error (HTTP
-    5xx/429) -- settling only the fillable subset and failing only on a client
-    integration fault (bad signature, spend gate, solver pin, malformed request).
-  - `XOCHI_LIVE_SETTLEMENTS` -- `"public,stealth"` (default `"public"`). Stealth
-    cells require `XOCHI_LIVE_RECIPIENT_META`.
-  - `XOCHI_LIVE_AMOUNT` -- per-cell stablecoin amount (default `1.10`, above the
-    solver's >1 USDC floor).
-  - `XOCHI_LIVE_WETH_AMOUNT` -- per-cell WETH amount (default `0.001`); WETH is
-    18-decimal and worth thousands per unit, so it is sized separately.
-  - `XOCHI_LIVE_ALLOW_ETH_ORIGIN` -- set to `true` to settle Ethereum-origin
-    (chain 1) cells; by default they are skipped (quote-only) for L1 gas cost.
-  - `XOCHI_LIVE_ALLOW_ETH_DEST` -- set to `true` to settle Ethereum-destination
-    (`*->1`) cells; by default they are skipped, because a small L1 fill pays more
-    in ETH gas than it earns in spread and drains mainnet ETH.
-  - `XOCHI_LIVE_PACE_MS` -- milliseconds to wait between cells (default `1500`) so
-    the sweep does not trip the worker's rate limit; set `0` to fire back-to-back.
-  - `XOCHI_LIVE_RECORD_MARGIN` -- set to `true` to record each settled fill into a
-    `Raxol.Payments.SettlementLedger` (fee vs on-chain gas) and print a per-corridor
-    margin + native-drain report after the sweep. RPC per chain defaults to public
-    endpoints, overridable via `XOCHI_LIVE_RPC_<chain_id>`.
-
-  A companion `:live_xochi_preflight` test quotes every corridor x token
-  read-only (no funds) and asserts `can_solve` plus the pinned origin-pull
-  solver, so a bad corridor, unpriceable amount, or rotated solver is caught
-  before any funded run. `examples/run_live_xochi_gate.sh` runs it first.
-
-  Run only the matrix:
-
-      XOCHI_LIVE_URL=https://api.xochi.fi \\
-      XOCHI_LIVE_TOKEN="$(op read 'op://Employee/Xochi production AGENT_SERVICE_TOKENS/credential')" \\
-      XOCHI_LIVE_KEY=0x<funded key> \\
-      XOCHI_LIVE_MATRIX=true \\
-      XOCHI_LIVE_TOKENS=USDC,USDT,WETH \\
-      XOCHI_LIVE_SETTLEMENTS=public,stealth \\
-      XOCHI_LIVE_RECIPIENT_META=st:eth:0x... \\
-        mix test --only live_xochi_matrix test/raxol/payments/xochi/live_xochi_test.exs
+  Runner + full env/corridor reference (auth modes, all `XOCHI_LIVE_*` overrides,
+  cross-asset Robinhood/USDG corridors, matrix bounds): the runner runs preflight
+  then matrix -- `examples/run_live_xochi_gate.sh`.
   """
 
   use ExUnit.Case, async: false
@@ -312,44 +259,22 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
           for {from, to, token, settlement} <- cells do
             label = "#{from}->#{to}:#{token}:#{settlement}"
 
+            skip = settle_skip_reason(from, to, token)
+
             cond do
               settlement == "stealth" and is_nil(meta) ->
                 IO.puts("[live_xochi:matrix] FAULT #{label}: needs XOCHI_LIVE_RECIPIENT_META")
                 {:fault, label, :missing_recipient_meta}
 
-              # Ethereum-origin settlement burns real L1 gas and has no confirmed
-              # instant-settlement inventory; keep it quote-only unless opted in.
-              from == 1 and System.get_env("XOCHI_LIVE_ALLOW_ETH_ORIGIN") != "true" ->
-                IO.puts(
-                  "[live_xochi:matrix] SKIP #{label}: Ethereum origin is quote-only " <>
-                    "(set XOCHI_LIVE_ALLOW_ETH_ORIGIN=true to settle from L1)"
-                )
-
-                {:skipped, label, :eth_origin}
-
-              # Ethereum-DESTINATION fills burn real L1 gas: a small fill pays more
-              # in ETH gas than it earns in spread and drains mainnet ETH one-way.
-              # Skip by default so the probe does not bleed ETH each run.
-              to == 1 and System.get_env("XOCHI_LIVE_ALLOW_ETH_DEST") != "true" ->
-                IO.puts(
-                  "[live_xochi:matrix] SKIP #{label}: Ethereum destination is quote-only " <>
-                    "(set XOCHI_LIVE_ALLOW_ETH_DEST=true to settle to L1)"
-                )
-
-                {:skipped, label, :eth_dest}
-
-              # USDT/WETH pull via Permit2, which needs a standing on-chain allowance
-              # this gate does not broadcast (raxol_payments holds no tx code). Set the
-              # allowance via the ACP order gate, then opt in with XOCHI_LIVE_SETTLE_PERMIT2.
-              permit2_origin?(from, token) and
-                  System.get_env("XOCHI_LIVE_SETTLE_PERMIT2") != "true" ->
-                IO.puts(
-                  "[live_xochi:matrix] SKIP #{label}: #{token} pulls via Permit2 and needs a " <>
-                    "standing allowance. Order it through raxol_acp (run_live_acp_order_gate.sh), " <>
-                    "or set XOCHI_LIVE_SETTLE_PERMIT2=true once the allowance is in place."
-                )
-
-                {:skipped, label, :permit2_allowance}
+              # An env-gated skip the funded run does not settle by default: an
+              # Ethereum-origin/destination cell (real L1 gas, drains mainnet ETH) or
+              # a Permit2-pull cell that needs a standing on-chain allowance this gate
+              # does not broadcast. Shared with the preflight via settle_skip_reason/3
+              # so the two never disagree on what is in scope.
+              skip != nil ->
+                {reason, message} = skip
+                IO.puts("[live_xochi:matrix] SKIP #{label}: #{message}")
+                {:skipped, label, reason}
 
               true ->
                 settle_fillable_cell(
@@ -662,6 +587,37 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       defp permit2_origin?(from, token),
         do: String.upcase(leg_symbol(from, token)) != "USDC"
 
+      # The env-gated reasons the FUNDED matrix skips a cell, shared by the matrix
+      # and the preflight so the two can never disagree on what is in scope.
+      # Returns nil for a settle-eligible cell, or {reason_atom, message} for one
+      # the funded run would skip by default: an Ethereum-origin/destination cell
+      # (real L1 gas, opt in with XOCHI_LIVE_ALLOW_ETH_ORIGIN / _DEST) or a
+      # Permit2-pull cell (USDT/WETH, and Robinhood-origin USDG) that needs a
+      # standing on-chain allowance this gate does not broadcast (opt in with
+      # XOCHI_LIVE_SETTLE_PERMIT2 once the ACP order gate has set it). The preflight
+      # skips quoting these entirely -- no point validating a cell the real run will
+      # never touch -- unless XOCHI_LIVE_PREFLIGHT_ALL=true forces the full grid.
+      defp settle_skip_reason(from, to, token) do
+        cond do
+          from == 1 and System.get_env("XOCHI_LIVE_ALLOW_ETH_ORIGIN") != "true" ->
+            {:eth_origin,
+             "Ethereum origin is quote-only (set XOCHI_LIVE_ALLOW_ETH_ORIGIN=true to settle from L1)"}
+
+          to == 1 and System.get_env("XOCHI_LIVE_ALLOW_ETH_DEST") != "true" ->
+            {:eth_dest,
+             "Ethereum destination is quote-only (set XOCHI_LIVE_ALLOW_ETH_DEST=true to settle to L1)"}
+
+          permit2_origin?(from, token) and System.get_env("XOCHI_LIVE_SETTLE_PERMIT2") != "true" ->
+            {:permit2_allowance,
+             "#{token} pulls via Permit2 and needs a standing allowance. Order it through " <>
+               "raxol_acp (run_live_acp_order_gate.sh), or set XOCHI_LIVE_SETTLE_PERMIT2=true " <>
+               "once the allowance is in place."}
+
+          true ->
+            nil
+        end
+      end
+
       # Read-only preflight retries: a transient worker/oracle blip clears in
       # seconds and quoting moves no funds, so retry a transient cell before judging
       # it structurally unfillable.
@@ -694,30 +650,100 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
           "[live_xochi:preflight] checking #{length(cells)} cells read-only (NO funds move)"
         )
 
+        # Quote only the cells the funded run would actually attempt. A cell the
+        # funded matrix skips by default (eth-origin/dest, Permit2 allowance) is
+        # reported without a quote -- no network call, no retries -- so the preflight
+        # does not hammer the worker validating corridors the real run never touches.
+        # XOCHI_LIVE_PREFLIGHT_ALL=true forces a full-grid quote for pricing visibility.
+        preflight_all? = System.get_env("XOCHI_LIVE_PREFLIGHT_ALL") == "true"
+
         results =
-          Enum.map(cells, fn {from, to, token} ->
-            outcome = preflight_cell(context, from, to, token, amount_for(token, stable_amount))
+          Enum.map(cells, fn {from, to, token} = cell ->
+            outcome =
+              case preflight_all? || settle_skip_reason(from, to, token) do
+                {reason, _message} ->
+                  {:skipped, reason}
+
+                _ ->
+                  pace()
+                  preflight_cell(context, from, to, token, amount_for(token, stable_amount))
+              end
+
             report_preflight(from, to, token, outcome)
-            {{from, to, token}, outcome}
+            {cell, outcome}
           end)
 
+        passed = for {_cell, {:ok, _info}} <- results, do: :ok
+        skipped_reasons = for {_cell, {:skipped, reason}} <- results, do: reason
         failures = for {cell, {:error, reason}} <- results, do: {cell, reason}
 
         {transient, blocking} =
           Enum.split_with(failures, fn {_cell, reason} -> transient_preflight?(reason) end)
 
+        # The 16 PASS lines above are the point: every cell the funded run will
+        # attempt is fillable via the pinned solver. The skips are corridors gated
+        # behind opt-in flags -- tally them by reason on one line instead of a page
+        # of "you didn't opt into this".
+        report_skips(skipped_reasons)
+
+        for {cell, reason} <- transient do
+          IO.puts("  transient  #{cell_label(cell)} (#{terse_reason(reason)})")
+        end
+
+        IO.puts(
+          "[live_xochi:preflight] checked #{length(cells)}: #{length(passed)} quoted OK, " <>
+            "#{length(skipped_reasons)} skipped, #{length(transient)} transient, " <>
+            "#{length(blocking)} blocking"
+        )
+
         if transient != [] do
           IO.puts(
-            "[live_xochi:preflight] #{length(transient)} transient cell(s) survived retries " <>
-              "(worker/oracle, not blocking; the funded matrix re-quotes and skips a still-" <>
-              "unpriceable cell): #{inspect(transient)}"
+            "  note     transient cells are a worker/oracle blip, not blocking; the funded " <>
+              "matrix re-quotes and skips any still-unpriceable cell."
           )
         end
 
         assert blocking == [],
                "preflight failed for #{length(blocking)} structural cell(s) -- bad corridor, " <>
                  "unpriceable amount, wrong pull rail, or solver-pin mismatch; no funds moved: " <>
-                 "#{inspect(blocking)}"
+                 "#{format_blocking(blocking)}"
+      end
+
+      # Terse cell + reason rendering for the summary, so a transient or blocking
+      # line reads "8453->1 USDC (http 503)" instead of dumping the raw HTTP body
+      # (intent_id/quote_id/expiry) the worker returns on every 5xx.
+      defp cell_label({from, to, token}), do: "#{from}->#{to} #{asset_pair(from, to, token)}"
+
+      defp format_blocking(blocking) do
+        blocking
+        |> Enum.map(fn {cell, reason} -> "#{cell_label(cell)} (#{terse_reason(reason)})" end)
+        |> Enum.join(", ")
+      end
+
+      defp terse_reason({:http, code, _body}), do: "http #{code}"
+      defp terse_reason({:cannot_solve, msg}) when is_binary(msg), do: String.slice(msg, 0, 80)
+      defp terse_reason(%Failure{reason: reason}), do: inspect(reason)
+      defp terse_reason(other), do: inspect(other)
+
+      # Tally skipped cells by reason on one line, with the flag that would include
+      # them. A skip is not a failure -- it is a corridor the funded run does not
+      # settle by default (eth-origin/dest burn L1 gas; a Permit2 pull needs a
+      # standing allowance this gate does not broadcast), so it is not worth quoting.
+      defp report_skips([]), do: :ok
+
+      defp report_skips(reasons) do
+        tally =
+          reasons
+          |> Enum.frequencies()
+          |> Enum.sort_by(fn {_reason, count} -> -count end)
+          |> Enum.map_join(", ", fn {reason, count} -> "#{count} #{reason}" end)
+
+        IO.puts("  skipped #{length(reasons)} not settle-eligible by default: #{tally}")
+
+        IO.puts(
+          "          include via XOCHI_LIVE_ALLOW_ETH_ORIGIN / _DEST / SETTLE_PERMIT2, " <>
+            "or XOCHI_LIVE_PREFLIGHT_ALL to quote the whole grid"
+        )
       end
 
       # Quote one corridor x token read-only and confirm the solver can fill it and
@@ -826,16 +852,21 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       defp preflight_can_solve(%{can_solve: true}), do: :ok
       defp preflight_can_solve(%{error: err}), do: {:error, {:cannot_solve, err}}
 
+      # A quoted cell is the proof -- it can_solve, pulls via the asserted rail, and
+      # targets the pinned solver -- so PASS prints with its numbers. Skips are the
+      # opposite: cells the funded run won't touch by default, tallied once after the
+      # loop rather than one noisy line each. FAIL is always worth a line.
       defp report_preflight(from, to, token, {:ok, info}) do
         IO.puts(
-          "  PASS #{from}->#{to} #{asset_pair(from, to, token)} via #{info.method || "?"}" <>
-            " (to_amount #{info.to_amount}, fee #{info.fee})" <>
-            preflight_notes(from, info.method)
+          "  PASS #{from}->#{to} #{asset_pair(from, to, token)} via #{info.method || "?"} " <>
+            "(to_amount #{info.to_amount}, fee #{info.fee})"
         )
       end
 
+      defp report_preflight(_from, _to, _token, {:skipped, _reason}), do: :ok
+
       defp report_preflight(from, to, token, {:error, reason}) do
-        IO.puts("  FAIL #{from}->#{to} #{asset_pair(from, to, token)}: #{inspect(reason)}")
+        IO.puts("  FAIL #{from}->#{to} #{asset_pair(from, to, token)}: #{terse_reason(reason)}")
       end
 
       # Render the corridor's asset pairing: "USDC" for a same-asset corridor, or
@@ -845,23 +876,6 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         f = leg_symbol(from, token)
         t = leg_symbol(to, token)
         if f == t, do: f, else: "#{f}->#{t}"
-      end
-
-      # Per-cell operator notes that are not failures: an L1 origin costs real gas,
-      # and a Permit2 pull (USDT/WETH) needs a standing allowance the gate does not
-      # set, so a first run on a fresh wallet would revert the pull on-chain.
-      defp preflight_notes(from, method) do
-        l1 =
-          if from == 1,
-            do: " [eth-origin: L1 gas; quote-only unless XOCHI_LIVE_ALLOW_ETH_ORIGIN=true]",
-            else: ""
-
-        permit2 =
-          if method == "permit2",
-            do: " [permit2: needs a standing Permit2 allowance on chain #{from}]",
-            else: ""
-
-        l1 <> permit2
       end
 
       # The six supported EVM chains: Ethereum, Optimism, Polygon, Base, Arbitrum,
@@ -987,33 +1001,31 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
 
     # Print the verifiable settlement artifacts so an operator running the gate can
     # confirm the real on-chain transfer independently and eyeball end-to-end latency.
+    @explorers %{
+      1 => "https://etherscan.io/tx/",
+      10 => "https://optimistic.etherscan.io/tx/",
+      137 => "https://polygonscan.com/tx/",
+      8453 => "https://basescan.org/tx/",
+      42_161 => "https://arbiscan.io/tx/"
+    }
+
     defp report_settlement(label, intent, status, params, started_ms) do
       elapsed = System.monotonic_time(:millisecond) - started_ms
+      fill = tx_line(Map.get(status, :tx_hash), params.to_chain_id)
 
-      IO.puts("""
+      recv =
+        case Map.get(status, :receiving_tx_hash) do
+          nil -> ""
+          hash -> " recv=" <> tx_line(hash, params.to_chain_id)
+        end
 
-      [live_xochi:#{label}] settled in #{elapsed}ms
-        intent_id     #{intent.intent_id}
-        status        #{status.status}
-        fill tx       #{tx_line(Map.get(status, :tx_hash), params.to_chain_id)}
-        receiving tx  #{tx_line(Map.get(status, :receiving_tx_hash), params.to_chain_id)}\
-      """)
+      IO.puts(
+        "[live_xochi:#{label}] settled #{elapsed}ms " <>
+          "intent=#{intent.intent_id} status=#{status.status} fill=#{fill}" <> recv
+      )
     end
 
-    defp tx_line(nil, _chain_id), do: "(none reported)"
-
-    defp tx_line(hash, chain_id) do
-      case explorer_base(chain_id) do
-        nil -> hash
-        base -> base <> hash
-      end
-    end
-
-    defp explorer_base(1), do: "https://etherscan.io/tx/"
-    defp explorer_base(8453), do: "https://basescan.org/tx/"
-    defp explorer_base(42_161), do: "https://arbiscan.io/tx/"
-    defp explorer_base(10), do: "https://optimistic.etherscan.io/tx/"
-    defp explorer_base(137), do: "https://polygonscan.com/tx/"
-    defp explorer_base(_), do: nil
+    defp tx_line(nil, _chain), do: "(none)"
+    defp tx_line(hash, chain), do: Map.get(@explorers, chain, "") <> hash
   end
 end
