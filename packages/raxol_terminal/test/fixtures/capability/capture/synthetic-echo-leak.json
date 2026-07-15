@@ -1,0 +1,32 @@
+{
+  "context": "bare",
+  "env": {
+    "COLORTERM": null,
+    "SSH_TTY": null,
+    "TERM": "vt52-like",
+    "TERM_PROGRAM": null,
+    "TMUX": null
+  },
+  "expected": {
+    "grapheme_width": "assumed",
+    "identity": null,
+    "in_band_resize": false,
+    "kitty_keyboard": null,
+    "lr_margins": false,
+    "multiplexer": "none",
+    "sixel": false,
+    "sync_output": false,
+    "theme_events": false,
+    "tier": "core_minus",
+    "truecolor": false,
+    "unicode": "wide"
+  },
+  "expected_leak_hex": "1b5b3e30711b5b63",
+  "expected_tier": "flat",
+  "notes": "A terminal that echoes the whole query back verbatim. The echoed DECRQM query ($p, not $y) and bare 'CSI ? u' are recognized as non-replies and drained; the echoed XTVERSION/DA queries leak as well-formed CSI that the InputParser consumes without key events; no cap is falsely set (CAP-N-07).",
+  "query_hex": "1b5d31313b3f071b5b3f751b5b3f3230323624701b5b3e30711b5b63",
+  "reply_hex": "1b5d31313b3f071b5b3f751b5b3f3230323624701b5b3e30711b5b63",
+  "schema": "raxol.capability.capture/1",
+  "terminal": "synthetic",
+  "terminal_version": null
+}
