@@ -79,6 +79,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   alias Raxol.UI.StyleHelper
   alias Raxol.UI.SyntaxHighlighter
   alias Raxol.UI.TextMeasure
+  alias Raxol.UI.Theming.Salience
   alias Raxol.View.Components
 
   @type mode :: :unified | :split | :auto
@@ -322,18 +323,105 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   defp del_emphasis_bg, do: @diff_palette.del_emphasis_bg
   defp del_gutter_bg, do: @diff_palette.del_gutter_bg
 
+  # -- Perceptual transforms (H-K solver, Raxol.UI.Theming.Salience) --
+  #
+  # Ground lightness is the reference near-black; pairing this with the
+  # OSC 11-queried terminal ground is a natural follow-up (the Salience
+  # API already takes it as an input).
+
+  # Chroma factor for the row wash under the UNCHANGED parts of a
+  # partially-changed line: visibly calmer than the full wash, same
+  # apparent lightness, so "this part of the changed line didn't change"
+  # reads at a glance.
+  @unchanged_part_chroma 0.35
+
+  # Prominence by distance (in lines) from the nearest change: the edited
+  # line's immediate neighbour keeps 80%, then 60%, 40%, and everything
+  # further fades to a 20% floor (folding hides the deep tail anyway).
+  defp prominence(0), do: 1.0
+  defp prominence(1), do: 0.8
+  defp prominence(2), do: 0.6
+  defp prominence(3), do: 0.4
+  defp prominence(_distance), do: 0.2
+
+  # Reduce a hex color's chroma while holding its H-K apparent lightness
+  # constant, so the calmer color reads equally bright.
+  defp dechroma(hex, factor) do
+    {l, c, h} = Salience.hex_to_oklch(hex)
+    apparent = Salience.apparent_lightness(l, c, h)
+    reduced_c = c * factor
+    solved_l = Salience.solve_lightness(apparent, reduced_c, h)
+    Salience.oklch_to_hex(solved_l, reduced_c, h)
+  end
+
+  # Fade a foreground toward the ground by interpolating APPARENT
+  # lightness (not nominal L) and scaling chroma with prominence -- the
+  # H-K compensation keeps the fade perceptually even across hues.
+  defp fade_toward_ground(hex, prominence) when prominence >= 1.0, do: hex
+
+  defp fade_toward_ground(hex, prominence) do
+    ground = Salience.reference_ground()
+    {l, c, h} = Salience.hex_to_oklch(hex)
+    apparent = Salience.apparent_lightness(l, c, h)
+    faded_apparent = ground + (apparent - ground) * prominence
+    faded_c = c * prominence
+    solved_l = Salience.solve_lightness(faded_apparent, faded_c, h)
+    Salience.oklch_to_hex(solved_l, faded_c, h)
+  end
+
+  defp dechroma_row_bg(:delete),
+    do: dechroma(del_row_bg(), @unchanged_part_chroma)
+
+  defp dechroma_row_bg(:insert),
+    do: dechroma(add_row_bg(), @unchanged_part_chroma)
+
+  defp dechroma_row_bg(:equal), do: nil
+
   # -- Render context: precomputed per-render inputs shared by both modes --
 
   defp build_render_context(state, ops, gutter_width, avail_width) do
+    ops_with_ranges = annotate_word_ranges(ops)
+
     %{
-      ops_with_ranges: annotate_word_ranges(ops),
+      ops_with_ranges: Enum.zip(ops_with_ranges, change_distances(ops)),
       gutter_width: gutter_width,
       old_lines: highlight(state.old, state.language, state.syntax_theme),
       new_lines: highlight(state.new, state.language, state.syntax_theme),
       pane_budget: pane_budget(avail_width, gutter_width),
+      unified_budget: unified_budget(avail_width, gutter_width),
       avail_width: avail_width,
       context: state.context
     }
+  end
+
+  # Per-op distance (in rows) to the nearest changed op -- the input to
+  # the prominence fade. Two linear sweeps.
+  defp change_distances(ops) do
+    infinity = length(ops) + 1
+
+    forward =
+      ops
+      |> Enum.scan(infinity, fn
+        {:equal, _line}, prev -> prev + 1
+        {_changed, _line}, _prev -> 0
+      end)
+
+    ops
+    |> Enum.zip(forward)
+    |> Enum.reverse()
+    |> Enum.scan(infinity, fn
+      {{:equal, _line}, fwd}, prev -> min(fwd, prev + 1)
+      {{_changed, _line}, _fwd}, _prev -> 0
+    end)
+    |> Enum.reverse()
+  end
+
+  # Content columns for a unified row: full width minus the gutter block
+  # (bar + old-number + space + new-number) and the leader space.
+  defp unified_budget(nil, _gutter_width), do: nil
+
+  defp unified_budget(avail_width, gutter_width) do
+    max(avail_width - (2 * gutter_width + 1) - @bar_width - 1, 4)
   end
 
   # Content columns available inside one split pane, or nil when the
@@ -470,29 +558,35 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     Enum.reverse(rows)
   end
 
-  defp annotate_op({{:equal, line}, ranges}, {acc, old_no, new_no}) do
-    row = {:equal, line, ranges, old_no, new_no}
+  defp annotate_op({{{:equal, line}, ranges}, dist}, {acc, old_no, new_no}) do
+    row = {:equal, line, ranges, old_no, new_no, dist}
     {[row | acc], old_no + 1, new_no + 1}
   end
 
-  defp annotate_op({{:delete, line}, ranges}, {acc, old_no, new_no}) do
+  defp annotate_op({{{:delete, line}, ranges}, _dist}, {acc, old_no, new_no}) do
     row = {:delete, line, ranges, old_no, nil}
     {[row | acc], old_no + 1, new_no}
   end
 
-  defp annotate_op({{:insert, line}, ranges}, {acc, old_no, new_no}) do
+  defp annotate_op({{{:insert, line}, ranges}, _dist}, {acc, old_no, new_no}) do
     row = {:insert, line, ranges, nil, new_no}
     {[row | acc], old_no, new_no + 1}
   end
 
   defp unified_line({:fold, count}, ctx) do
-    fold_row(2 * ctx.gutter_width + 2, count)
+    fold_row(2 * ctx.gutter_width + 3, count)
   end
 
-  defp unified_line({:equal, line, _ranges, old_no, new_no}, ctx) do
+  defp unified_line({:equal, line, _ranges, old_no, new_no, dist}, ctx) do
     gutter = unified_gutter(" ", old_no, new_no, ctx.gutter_width, :dim, nil)
-    content = content_spans(:equal, line, [], old_no, ctx)
-    Components.row(gap: 1, children: [gutter, content])
+
+    content =
+      content_spans(:equal, line, [], old_no, ctx,
+        budget: ctx.unified_budget,
+        prominence: prominence(dist)
+      )
+
+    Components.row(gap: 0, children: [gutter, content])
   end
 
   defp unified_line({:delete, line, ranges, old_no, _new_no}, ctx) do
@@ -506,8 +600,12 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
         del_gutter_bg()
       )
 
-    content = content_spans(:delete, line, ranges, old_no, ctx)
-    Components.row(gap: 1, children: [gutter, content])
+    content =
+      content_spans(:delete, line, ranges, old_no, ctx,
+        budget: ctx.unified_budget
+      )
+
+    Components.row(gap: 0, children: [gutter, content])
   end
 
   defp unified_line({:insert, line, ranges, _old_no, new_no}, ctx) do
@@ -521,8 +619,12 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
         add_gutter_bg()
       )
 
-    content = content_spans(:insert, line, ranges, new_no, ctx)
-    Components.row(gap: 1, children: [gutter, content])
+    content =
+      content_spans(:insert, line, ranges, new_no, ctx,
+        budget: ctx.unified_budget
+      )
+
+    Components.row(gap: 0, children: [gutter, content])
   end
 
   defp unified_gutter(bar, old_no, new_no, width, fg, bg) do
@@ -585,23 +687,27 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   # runs (a changed hunk) pair up index-wise so both sides render on the
   # same row, padding the shorter side with `nil` (blank filler). Carries
   # each side's word-diff ranges through alongside its line.
-  defp pair_rows(ops_with_ranges) do
-    ops_with_ranges
-    |> Enum.chunk_by(fn {{kind, _line}, _ranges} ->
+  defp pair_rows(ops_with_meta) do
+    ops_with_meta
+    |> Enum.chunk_by(fn {{{kind, _line}, _ranges}, _dist} ->
       if kind == :equal, do: :equal, else: :change
     end)
     |> Enum.flat_map(&expand_run/1)
   end
 
-  defp expand_run([{{:equal, _line}, _ranges} | _] = equal_run) do
-    Enum.map(equal_run, fn {{:equal, line}, _ranges} ->
-      {:equal, line, line, [], []}
+  defp expand_run([{{{:equal, _line}, _ranges}, _dist} | _] = equal_run) do
+    Enum.map(equal_run, fn {{{:equal, line}, _ranges}, dist} ->
+      {:equal, line, line, [], [], dist}
     end)
   end
 
   defp expand_run(change_run) do
-    deletes = for {{:delete, line}, ranges} <- change_run, do: {line, ranges}
-    inserts = for {{:insert, line}, ranges} <- change_run, do: {line, ranges}
+    deletes =
+      for {{{:delete, line}, ranges}, _dist} <- change_run, do: {line, ranges}
+
+    inserts =
+      for {{{:insert, line}, ranges}, _dist} <- change_run, do: {line, ranges}
+
     count = max(length(deletes), length(inserts))
 
     Enum.map(0..(count - 1), fn idx ->
@@ -616,8 +722,11 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     Enum.reverse(rows)
   end
 
-  defp annotate_pair({:equal, old_line, new_line, _, _}, {acc, old_no, new_no}) do
-    row = {:equal, old_no, old_line, new_no, new_line, [], []}
+  defp annotate_pair(
+         {:equal, old_line, new_line, _, _, dist},
+         {acc, old_no, new_no}
+       ) do
+    row = {:equal, old_no, old_line, new_no, new_line, [], [], dist}
     {[row | acc], old_no + 1, new_no + 1}
   end
 
@@ -646,18 +755,27 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp split_old_line({:fold, count}, ctx) do
-    fold_row(ctx.gutter_width + 1, count)
+    fold_row(ctx.gutter_width + 2, count)
   end
 
-  defp split_old_line({:equal, old_no, line, _new_no, _new_line, _, _}, ctx) do
+  defp split_old_line(
+         {:equal, old_no, line, _new_no, _new_line, _, _, dist},
+         ctx
+       ) do
     gutter = split_gutter(" ", old_no, ctx.gutter_width, :dim, nil)
-    content = content_spans(:equal, line, [], old_no, ctx, ctx.pane_budget)
-    Components.row(gap: 1, children: [gutter, content])
+
+    content =
+      content_spans(:equal, line, [], old_no, ctx,
+        budget: ctx.pane_budget,
+        prominence: prominence(dist)
+      )
+
+    Components.row(gap: 0, children: [gutter, content])
   end
 
   defp split_old_line({:change, nil, nil, _new_no, _new_line, _, _}, ctx) do
     gutter = split_gutter(" ", nil, ctx.gutter_width, :dim, nil)
-    Components.row(gap: 1, children: [gutter, filler_row()])
+    Components.row(gap: 0, children: [gutter, filler_row()])
   end
 
   defp split_old_line(
@@ -668,24 +786,35 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       split_gutter("▌", old_no, ctx.gutter_width, del_base(), del_gutter_bg())
 
     content =
-      content_spans(:delete, line, del_ranges, old_no, ctx, ctx.pane_budget)
+      content_spans(:delete, line, del_ranges, old_no, ctx,
+        budget: ctx.pane_budget
+      )
 
-    Components.row(gap: 1, children: [gutter, content])
+    Components.row(gap: 0, children: [gutter, content])
   end
 
   defp split_new_line({:fold, count}, ctx) do
-    fold_row(ctx.gutter_width + 1, count)
+    fold_row(ctx.gutter_width + 2, count)
   end
 
-  defp split_new_line({:equal, _old_no, _old_line, new_no, line, _, _}, ctx) do
+  defp split_new_line(
+         {:equal, _old_no, _old_line, new_no, line, _, _, dist},
+         ctx
+       ) do
     gutter = split_gutter(" ", new_no, ctx.gutter_width, :dim, nil)
-    content = content_spans(:equal, line, [], new_no, ctx, ctx.pane_budget)
-    Components.row(gap: 1, children: [gutter, content])
+
+    content =
+      content_spans(:equal, line, [], new_no, ctx,
+        budget: ctx.pane_budget,
+        prominence: prominence(dist)
+      )
+
+    Components.row(gap: 0, children: [gutter, content])
   end
 
   defp split_new_line({:change, _old_no, _old_line, nil, nil, _, _}, ctx) do
     gutter = split_gutter(" ", nil, ctx.gutter_width, :dim, nil)
-    Components.row(gap: 1, children: [gutter, filler_row()])
+    Components.row(gap: 0, children: [gutter, filler_row()])
   end
 
   defp split_new_line(
@@ -696,9 +825,11 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       split_gutter("▌", new_no, ctx.gutter_width, add_base(), add_gutter_bg())
 
     content =
-      content_spans(:insert, line, ins_ranges, new_no, ctx, ctx.pane_budget)
+      content_spans(:insert, line, ins_ranges, new_no, ctx,
+        budget: ctx.pane_budget
+      )
 
-    Components.row(gap: 1, children: [gutter, content])
+    Components.row(gap: 0, children: [gutter, content])
   end
 
   defp split_gutter(bar, no, width, fg, bg) do
@@ -742,20 +873,36 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   # a bg picked from the diff palette -- the row wash normally, the
   # brighter emphasis tier over any word-diff-changed range.
 
-  defp content_spans(kind, line, ranges, line_no, ctx, budget \\ nil) do
+  defp content_spans(kind, line, ranges, line_no, ctx, opts) do
+    budget = Keyword.get(opts, :budget)
+    prominence = Keyword.get(opts, :prominence, 1.0)
+
     tokens = line_tokens(kind, line, line_no, ctx)
     row_bg = row_bg_for(kind)
     emphasis_bg = emphasis_bg_for(kind)
     fallback_fg = fallback_fg_for(kind)
 
-    spans =
+    # Partially-changed line: the UNCHANGED pieces sit on a chroma-reduced
+    # wash (same apparent lightness) so "this part didn't change" reads at
+    # a glance; the changed pieces keep the bright emphasis tier. A fully
+    # added/removed line (no ranges) keeps the full wash end to end.
+    plain_bg = if ranges == [], do: row_bg, else: dechroma_row_bg(kind)
+
+    pieces =
       tokens
       |> split_tokens_by_ranges(ranges)
       |> Enum.reject(fn piece -> piece.text == "" end)
       |> truncate_pieces(budget)
-      |> Enum.map(fn piece ->
-        bg = if piece.changed, do: emphasis_bg, else: row_bg
-        fg = piece.fg || fallback_fg
+
+    used_width =
+      Enum.reduce(pieces, 0, fn piece, acc ->
+        acc + TextMeasure.display_width(piece.text)
+      end)
+
+    spans =
+      Enum.map(pieces, fn piece ->
+        bg = if piece.changed, do: emphasis_bg, else: plain_bg
+        fg = span_fg(piece.fg, fallback_fg, prominence)
 
         Components.text(
           content: piece.text,
@@ -763,20 +910,37 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
         )
       end)
 
-    spans =
-      if spans == [] do
-        [
-          Components.text(
-            content: "",
-            style: span_style(fallback_fg, row_bg, [])
-          )
-        ]
-      else
-        spans
-      end
+    # Leader covers the former gutter-content gap cell; trailing pad
+    # stretches the wash to the full row budget -- together the line
+    # background spans the whole width, not just the text.
+    leader = Components.text(content: " ", style: span_style(nil, plain_bg, []))
+    trailer = trailing_pad(budget, used_width, plain_bg)
 
-    Components.row(gap: 0, children: spans)
+    Components.row(gap: 0, children: [leader | spans] ++ trailer)
   end
+
+  # Fade only real (hex) token colors; atom fallbacks like :dim have no
+  # colorimetric identity to fade.
+  defp span_fg(nil, fallback_fg, _prominence), do: fallback_fg
+
+  defp span_fg(fg, _fallback_fg, prominence) when is_binary(fg),
+    do: fade_toward_ground(fg, prominence)
+
+  defp span_fg(fg, _fallback_fg, _prominence), do: fg
+
+  defp trailing_pad(nil, _used, _bg), do: []
+  defp trailing_pad(_budget, _used, nil), do: []
+
+  defp trailing_pad(budget, used, bg) when budget > used do
+    [
+      Components.text(
+        content: String.duplicate(" ", budget - used),
+        style: span_style(nil, bg, [])
+      )
+    ]
+  end
+
+  defp trailing_pad(_budget, _used, _bg), do: []
 
   # Ellipsis-truncates a line's span pieces to a display-width budget
   # (grapheme-accurate via TextMeasure — CJK/emoji count double). The

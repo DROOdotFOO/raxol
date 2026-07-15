@@ -212,8 +212,9 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       # "b" -> "x" is a full single-token change (no shared substring), so
       # the whole span is word-diff-changed -- the emphasis tier, not the
       # plain row tier (see the word-diff describe block below for a case
-      # with a partially-unchanged line).
-      [delete_span] = delete_content.children
+      # with a partially-unchanged line). First content child is the
+      # leader space covering the gutter-content gap cell.
+      [_leader, delete_span] = delete_content.children
       assert delete_span.content == "b"
       assert delete_span.style.fg == "#FF6762"
       assert delete_span.style.bg == "#552527"
@@ -222,7 +223,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert insert_gutter.content =~ "▌"
       assert insert_gutter.style.fg == "#5ECC71"
 
-      [insert_span] = insert_content.children
+      [_leader, insert_span] = insert_content.children
       assert insert_span.content == "x"
       assert insert_span.style.fg == "#5ECC71"
       assert insert_span.style.bg == "#1D4428"
@@ -236,14 +237,14 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       [gutter_a, content_a] = equal_a.children
       refute gutter_a.content =~ "▌"
       assert gutter_a.style.fg == :dim
-      [span_a] = content_a.children
+      [_leader, span_a] = content_a.children
       assert span_a.content == "a"
       assert span_a.style.fg == :dim
       refute Map.has_key?(span_a.style, :bg)
 
       [gutter_c, content_c] = equal_c.children
       refute gutter_c.content =~ "▌"
-      [span_c] = content_c.children
+      [_leader, span_c] = content_c.children
       assert span_c.content == "c"
     end
   end
@@ -262,12 +263,15 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
       assert Enum.any?(
                del_spans,
-               &(&1.content == "world" and &1.style.bg == "#552527")
+               &(&1.content == "world" and Map.get(&1.style, :bg) == "#552527")
              )
 
+      # The UNCHANGED part of a changed line sits on the chroma-reduced
+      # wash (H-K dechroma of #291418 at 0.35 chroma), not the full tint.
       assert Enum.any?(
                del_spans,
-               &(&1.content == "hello " and &1.style.bg == "#291418")
+               &(&1.content == "hello " and
+                   Map.get(&1.style, :bg) == "#201819")
              )
 
       [_gutter, insert_content] = insert_row.children
@@ -275,12 +279,13 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
       assert Enum.any?(
                ins_spans,
-               &(&1.content == "there" and &1.style.bg == "#1D4428")
+               &(&1.content == "there" and Map.get(&1.style, :bg) == "#1D4428")
              )
 
       assert Enum.any?(
                ins_spans,
-               &(&1.content == "hello " and &1.style.bg == "#12261B")
+               &(&1.content == "hello " and
+                   Map.get(&1.style, :bg) == "#1c221f")
              )
     end
   end
@@ -305,11 +310,13 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       # At least one span keeps its own syntax fg (not the plain red/green
       # fallback) -- e.g. the unchanged "def" keyword token.
       assert Enum.any?(delete_content.children, fn span ->
-               is_binary(span.style.fg) and span.style.fg != "#FF6762"
+               fg = Map.get(span.style, :fg)
+               is_binary(fg) and fg != "#FF6762"
              end)
 
       assert Enum.any?(insert_content.children, fn span ->
-               is_binary(span.style.fg) and span.style.fg != "#5ECC71"
+               fg = Map.get(span.style, :fg)
+               is_binary(fg) and fg != "#5ECC71"
              end)
     end
 
@@ -319,7 +326,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       [_header, _divider | diff_lines] = rendered.children
       [_equal_a, delete_row, _insert_row] = diff_lines
       [_gutter, content] = delete_row.children
-      [span] = content.children
+      [_leader, span] = content.children
       assert span.style.fg == "#FF6762"
     end
   end
@@ -478,14 +485,18 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert outlier_row, "expected the outlier row"
       [_gutter, content] = outlier_row.children
 
+      # First child is the leader space (covers the gutter-content gap
+      # cell, outside the budget); the budgeted content follows it.
+      [_leader | budgeted] = content.children
+
       total_width =
-        Enum.reduce(content.children, 0, fn span, acc ->
+        Enum.reduce(budgeted, 0, fn span, acc ->
           acc + Raxol.UI.TextMeasure.display_width(span.content)
         end)
 
       # pane budget for width 60: half = 29, minus gutter(1)+bar(1)+chrome(1) = 26
       assert total_width <= 26
-      assert List.last(content.children).content == "…"
+      assert List.last(budgeted).content == "…"
     end
 
     test "short lines pass through untruncated" do
@@ -503,6 +514,88 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
                  span[:content] == "…"
                end)
              end)
+    end
+  end
+
+  describe "render/2 (full-width wash + perceptual fade)" do
+    test "a changed row's wash pads to the full pane budget" do
+      {:ok, state} =
+        DiffViewer.init(old: "aa\nbb", new: "aa\ncc", mode: :split, width: 60)
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider, split_row] = rendered.children
+      [old_column, _new_column] = split_row.children
+
+      changed_row =
+        Enum.find(old_column.children, fn row ->
+          [gutter, _content] = row.children
+          gutter.content =~ "▌"
+        end)
+
+      [_gutter, content] = changed_row.children
+      [_leader | budgeted] = content.children
+
+      total_width =
+        Enum.reduce(budgeted, 0, fn span, acc ->
+          acc + Raxol.UI.TextMeasure.display_width(span.content)
+        end)
+
+      # pane budget for width 60 (see truncation test): exactly filled
+      assert total_width == 26
+
+      # trailing pad carries the wash bg
+      trailer = List.last(budgeted)
+      assert String.trim(trailer.content) == ""
+      assert is_binary(Map.get(trailer.style, :bg))
+    end
+
+    test "the leader space carries the row wash on changed lines" do
+      {:ok, state} = DiffViewer.init(old: "a", new: "b", mode: :unified)
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider, delete_row, _insert_row] = rendered.children
+      [_gutter, content] = delete_row.children
+      [leader | _rest] = content.children
+
+      assert leader.content == " "
+      assert is_binary(Map.get(leader.style, :bg))
+    end
+
+    test "context lines fade with distance from the nearest change" do
+      # 6 identical context lines, then a change: the same token on rows
+      # at distance 1 vs 4 must resolve to different faded fg hexes, and
+      # the farther one must not equal the nearer one.
+      context = Enum.map_join(1..6, "\n", fn _ -> "x = 1" end)
+      old = context <> "\nremoved_line"
+      new = context <> "\nadded_line"
+
+      {:ok, state} =
+        DiffViewer.init(
+          old: old,
+          new: new,
+          mode: :unified,
+          language: "elixir",
+          context: :all
+        )
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | rows] = rendered.children
+
+      fg_of_context_row = fn row ->
+        [_gutter, content] = row.children
+
+        content.children
+        |> Enum.map(&Map.get(&1.style, :fg))
+        |> Enum.find(&is_binary/1)
+      end
+
+      # rows: 6 equal lines then delete+insert; distance to change is
+      # 6,5,4,3,2,1 for the equal rows.
+      equal_rows = Enum.take(rows, 6)
+      far_fg = fg_of_context_row.(Enum.at(equal_rows, 0))
+      near_fg = fg_of_context_row.(Enum.at(equal_rows, 5))
+
+      assert is_binary(far_fg) and is_binary(near_fg)
+      assert far_fg != near_fg
     end
   end
 
