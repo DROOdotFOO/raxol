@@ -1,0 +1,303 @@
+defmodule Raxol.Agent.Command do
+  @moduledoc """
+  Harness command channel — the inbound half of the harness protocol.
+
+  `Raxol.Agent.Contract` is the outbound half (core → surface): observable
+  loop steps become `Contract.Event`s emitted through `SessionStreamer`. This
+  module is the mirror image (surface → core): a subscriber's typed request to
+  drive the session — start a turn, interrupt it, (later) attach/seek a
+  read-model.
+
+  Conforms to `docs/proposals/in-flight/harness-spec-protocol.md` §4 (commands)
+  and §6 (the one validation seam). U3 in `harness-roadmap.md`.
+
+  ## Vocabulary (v0)
+
+    * `:prompt`    — start a turn; payload `%{text}` (required, non-empty),
+      optional `:attachments`. The primary population's entry point.
+    * `:interrupt` — supervised kill of the running turn (AD-1); payload `%{}`,
+      optionally `%{turn_id: ...}`. The real cancel lands in U5.
+    * `:attach`    — subscribe + replay durable events from an offset; payload
+      `%{from_offset: integer, history_policy: atom}`. Decodes fully; routing
+      is stubbed (U4).
+    * `:seek`      — time-travel a read-model to a journal offset; payload
+      `%{offset: integer}`. Decodes fully; routing is stubbed.
+
+  `:steer`, `:approval_decision`, and `:detach` from the full protocol table
+  attach behind this same seam in later steps; the codec grows, the shape does
+  not.
+
+  ## The one validation seam
+
+  `decode/1` is the single place wire/term input becomes a typed `%Command{}`.
+  It is **loud**: malformed JSON, a non-map, an unknown/missing `type`, or a
+  missing/empty required payload field is a typed `{:error, {:invalid_command,
+  reason}}` — never a best-effort partial (COMPASS: string-level leniency is
+  where enforcement fails 60–87%). It **never raises** on bad input.
+
+  ## Routing seam
+
+  `route/2` dispatches a decoded command into a live session. In v0 it is a
+  pure dispatcher: it returns a typed **action tuple** the session runtime
+  executes, and — when the session carries a `:pid` — also delivers that action
+  as a `{:harness_command, action}` OTP message to the session process (the
+  U5 turn-supervisor pattern-matches it). The `:prompt` action
+  (`{:start_turn, session_id, payload}`) is what the session runtime turns into
+  a `Raxol.Agent.Contract.pump/3` over a `Raxol.Agent.Stream.react/2` run — the
+  exact path `mix raxol.p` already drives. Actually spawning that turn subtree
+  is U5's job; here we validate and dispatch.
+  """
+
+  @enforce_keys [:type]
+  defstruct type: nil, payload: %{}
+
+  @type type :: :prompt | :interrupt | :attach | :seek
+
+  @type t :: %__MODULE__{
+          type: type(),
+          payload: map()
+        }
+
+  @typedoc """
+  A live session handle. Either a bare `session_id` binary, or a map carrying
+  at least `:session_id` and optionally a `:pid` to receive dispatched actions.
+  """
+  @type session ::
+          binary()
+          | %{optional(:session_id) => term(), optional(:pid) => pid()}
+
+  @type reason :: atom() | {atom(), term()}
+
+  @type action ::
+          {:start_turn, term(), map()}
+          | {:interrupt, term(), map()}
+
+  # Whitelisted string → atom for the `type` field. Never String.to_atom/1 on
+  # user input (unbounded atom table growth).
+  @types %{
+    "prompt" => :prompt,
+    "interrupt" => :interrupt,
+    "attach" => :attach,
+    "seek" => :seek
+  }
+
+  # Whitelisted history policies for `attach`.
+  @history_policies %{
+    "replay" => :replay,
+    "live" => :live,
+    "snapshot" => :snapshot
+  }
+
+  @doc """
+  Decode wire/term input into a `%Command{}` — the single validation seam.
+
+  Accepts a JSON string or a plain map. The canonical shape is
+  `%{"type" => t, "payload" => %{...}}`; string and atom keys both work.
+  Returns `{:ok, %Command{}}` or `{:error, {:invalid_command, reason}}`.
+
+  Never raises on bad input.
+
+  ## Examples
+
+      iex> Raxol.Agent.Command.decode(~s({"type":"prompt","payload":{"text":"hi"}}))
+      {:ok, %Raxol.Agent.Command{type: :prompt, payload: %{text: "hi"}}}
+
+      iex> Raxol.Agent.Command.decode("{not json")
+      {:error, {:invalid_command, {:malformed_json, "unexpected byte at position 1"}}}
+
+      iex> Raxol.Agent.Command.decode(%{"type" => "prompt", "payload" => %{}})
+      {:error, {:invalid_command, :missing_text}}
+  """
+  @spec decode(String.t() | map() | term()) ::
+          {:ok, t()} | {:error, {:invalid_command, reason()}}
+  def decode(input) when is_binary(input) do
+    case Jason.decode(input) do
+      {:ok, map} when is_map(map) ->
+        decode(map)
+
+      {:ok, _other} ->
+        {:error, {:invalid_command, :not_a_map}}
+
+      {:error, %Jason.DecodeError{} = error} ->
+        {:error, {:invalid_command, {:malformed_json, decode_error_message(error)}}}
+    end
+  end
+
+  def decode(map) when is_map(map) and not is_struct(map) do
+    with {:ok, type} <- fetch_type(map),
+         payload = fetch_payload(map),
+         {:ok, validated} <- validate(type, payload) do
+      {:ok, %__MODULE__{type: type, payload: validated}}
+    end
+  end
+
+  def decode(_other), do: {:error, {:invalid_command, :not_a_command}}
+
+  @doc """
+  Dispatch a decoded command into a live `session`.
+
+  * `:prompt`    → `{:start_turn, session_id, payload}` — the session runtime
+    pumps a `Raxol.Agent.Stream.react/2` run through `Contract.pump/3`.
+  * `:interrupt` → `{:interrupt, session_id, payload}` — the supervised-kill
+    seam (U5).
+  * `:attach` / `:seek` → `{:error, :not_implemented}` — decoded, not yet routed.
+
+  When `session` carries a `:pid`, the action is also delivered to that process
+  as `{:harness_command, action}` (the real OTP dispatch); the action tuple is
+  returned regardless, for synchronous callers and tests.
+  """
+  @spec route(t(), session()) :: action() | {:error, :not_implemented}
+  def route(%__MODULE__{type: :prompt, payload: payload}, session) do
+    dispatch(session, {:start_turn, session_id(session), payload})
+  end
+
+  def route(%__MODULE__{type: :interrupt, payload: payload}, session) do
+    dispatch(session, {:interrupt, session_id(session), payload})
+  end
+
+  def route(%__MODULE__{type: type}, _session) when type in [:attach, :seek] do
+    {:error, :not_implemented}
+  end
+
+  # -- Decode internals -------------------------------------------------------
+
+  defp fetch_type(map) do
+    case get(map, "type", :type) do
+      nil -> {:error, {:invalid_command, :missing_type}}
+      type when is_binary(type) -> normalize_type(type)
+      type when is_atom(type) -> normalize_type(Atom.to_string(type))
+      _ -> {:error, {:invalid_command, :invalid_type}}
+    end
+  end
+
+  defp normalize_type(str) do
+    case Map.fetch(@types, str) do
+      {:ok, type} -> {:ok, type}
+      :error -> {:error, {:invalid_command, {:unknown_type, str}}}
+    end
+  end
+
+  # Payload is the nested "payload"/:payload map; absent → empty map. A
+  # non-map payload is normalized to empty (validation then rejects on the
+  # missing required field, with a field-specific reason).
+  defp fetch_payload(map) do
+    case get(map, "payload", :payload) do
+      payload when is_map(payload) -> payload
+      _ -> %{}
+    end
+  end
+
+  defp validate(:prompt, payload) do
+    case get(payload, "text", :text) do
+      text when is_binary(text) ->
+        if String.trim(text) == "" do
+          {:error, {:invalid_command, :empty_text}}
+        else
+          {:ok, prompt_payload(text, payload)}
+        end
+
+      nil ->
+        {:error, {:invalid_command, :missing_text}}
+
+      _ ->
+        {:error, {:invalid_command, :invalid_text}}
+    end
+  end
+
+  defp validate(:interrupt, payload) do
+    case get(payload, "turn_id", :turn_id) do
+      nil -> {:ok, %{}}
+      turn_id -> {:ok, %{turn_id: turn_id}}
+    end
+  end
+
+  defp validate(:attach, payload) do
+    with {:ok, offset} <- fetch_offset(payload, "from_offset", :from_offset),
+         {:ok, policy} <- fetch_history_policy(payload) do
+      {:ok, %{from_offset: offset, history_policy: policy}}
+    end
+  end
+
+  defp validate(:seek, payload) do
+    with {:ok, offset} <- fetch_offset(payload, "offset", :offset) do
+      {:ok, %{offset: offset}}
+    end
+  end
+
+  defp prompt_payload(text, payload) do
+    base = %{text: text}
+
+    case get(payload, "attachments", :attachments) do
+      list when is_list(list) -> Map.put(base, :attachments, list)
+      _ -> base
+    end
+  end
+
+  defp fetch_offset(payload, string_key, atom_key) do
+    case get(payload, string_key, atom_key) do
+      offset when is_integer(offset) and offset >= 0 ->
+        {:ok, offset}
+
+      nil ->
+        {:error, {:invalid_command, {:missing_offset, atom_key}}}
+
+      _ ->
+        {:error, {:invalid_command, {:invalid_offset, atom_key}}}
+    end
+  end
+
+  defp fetch_history_policy(payload) do
+    case get(payload, "history_policy", :history_policy) do
+      nil ->
+        {:ok, :replay}
+
+      policy when is_atom(policy) ->
+        validate_history_policy(Atom.to_string(policy))
+
+      policy when is_binary(policy) ->
+        validate_history_policy(policy)
+
+      _ ->
+        {:error, {:invalid_command, :invalid_history_policy}}
+    end
+  end
+
+  defp validate_history_policy(str) do
+    case Map.fetch(@history_policies, str) do
+      {:ok, policy} -> {:ok, policy}
+      :error -> {:error, {:invalid_command, {:unknown_history_policy, str}}}
+    end
+  end
+
+  # Read a key that may be either the string or the atom form.
+  defp get(map, string_key, atom_key) do
+    case Map.fetch(map, string_key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, atom_key)
+    end
+  end
+
+  defp decode_error_message(%Jason.DecodeError{} = error) do
+    Exception.message(error)
+  rescue
+    _ -> "malformed JSON"
+  end
+
+  # -- Route internals --------------------------------------------------------
+
+  defp dispatch(session, action) do
+    case session_pid(session) do
+      nil -> :ok
+      pid -> send(pid, {:harness_command, action})
+    end
+
+    action
+  end
+
+  defp session_id(%{session_id: id}), do: id
+  defp session_id(id) when is_binary(id), do: id
+  defp session_id(_), do: nil
+
+  defp session_pid(%{pid: pid}) when is_pid(pid), do: pid
+  defp session_pid(_), do: nil
+end
