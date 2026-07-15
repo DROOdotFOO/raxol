@@ -265,6 +265,26 @@ defmodule Raxol.UI.Theming.Salience do
     if c <= 0.04045, do: c / 12.92, else: :math.pow((c + 0.055) / 1.055, 2.4)
   end
 
+  @doc """
+  sRGB relative luminance (Rec. 709 coefficients) of a `#rrggbb` hex color,
+  per the WCAG contrast-ratio formula (`(L1 + 0.05) / (L2 + 0.05)`).
+
+  This is intentionally a different lens than `apparent_lightness/3`: the
+  H-K apparent-lightness model is the solver's *internal* notion of equal
+  brightness (used for tier uniformity/monotonicity), while relative
+  luminance is the *external*, standards-based check a caller can use for a
+  legibility floor that the solver's own model cannot self-certify.
+  """
+  @spec relative_luminance(String.t()) :: float()
+  def relative_luminance("#" <> hex), do: relative_luminance(hex)
+
+  def relative_luminance(<<r::binary-2, g::binary-2, b::binary-2>>) do
+    [r, g, b] = Enum.map([r, g, b], &(String.to_integer(&1, 16) / 255))
+
+    0.2126 * srgb_to_linear(r) + 0.7152 * srgb_to_linear(g) +
+      0.0722 * srgb_to_linear(b)
+  end
+
   defp cube(x), do: x * x * x
 
   defp cbrt(x) when x < 0, do: -:math.pow(-x, 1 / 3)
