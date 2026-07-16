@@ -20,9 +20,11 @@ Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 # :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
 # until their units (U4–U9) land. :mutation — negative-control checklists
 # (meta-invariant m4), run on demand, never in regular CI. :harness_red —
-# permanent failing-first red suites authored before their unit exists (e.g.
-# U6-R steer); excluded so CI stays green, while their in-CI negative controls
-# (dead-injector detection) stay un-tagged and DO run.
+# failing-first red suites authored before their unit exists; excluded so CI
+# stays green while their in-CI negative controls (dead-injector detection)
+# stay un-tagged and DO run. A red suite DROPS the tag when its unit lands and
+# goes green (U6-R steer did exactly that — no suite carries the tag right
+# now); the exclusion stays as the standing mechanism for the next unit's reds.
 ExUnit.start(
   exclude: [:slow, :integration, :docker, :pending_unit, :mutation, :harness_red]
 )
