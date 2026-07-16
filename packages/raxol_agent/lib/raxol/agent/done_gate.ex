@@ -179,12 +179,32 @@ defmodule Raxol.Agent.DoneGate do
     event_type(ev) == :item_completed and payload_field(ev, :item_type) == :tool_result
   end
 
-  # Mutation predicate: a state-changing tool_use (write/shell).
+  # Mutation predicate — DERIVED at decision time from the event's intrinsic
+  # type + effect classification, never from a producer-stamped `mutating:`
+  # boolean (§0 decision-time-fold law: ADMISSION gates fold truth
+  # synchronously; the stamp is display/audit metadata, the fold is the
+  # security boundary). A state-affecting action is an `:item_completed`
+  # `:tool_use` that carries an `effect_class` — the tool's intrinsic effect
+  # classification. Deriving mutating-ness from that classification, rather than
+  # trusting a `mutating: false` self-report, is what stops a producer from
+  # WIDENING the valid-evidence window to launder stale evidence past a real
+  # mutation.
+  #
+  # The boolean flag survives ONLY as a fail-safe NARROWING tiebreak: an
+  # explicit `mutating: true` also counts (shrinking the evidence window toward
+  # safety), but a `false`/absent flag can never REMOVE an effect-bearing action
+  # from the mutation set — ambiguity resolves toward "is a mutation".
+  #
+  # (`:state_change` is deliberately NOT in the mutating set: it is an internal
+  # transition carrying no effect_class, is neither evidence nor mutation in the
+  # v0 loop vocabulary, and the frozen Oracle/fold treats it the same way.)
   defp mutating?(ev) do
     event_type(ev) == :item_completed and
       payload_field(ev, :item_type) == :tool_use and
-      payload_field(ev, :mutating) == true
+      (effect_bearing?(ev) or payload_field(ev, :mutating) == true)
   end
+
+  defp effect_bearing?(ev), do: payload_field(ev, :effect_class) != nil
 
   defp resolve(journal, offset), do: Enum.find(journal, &(event_id(&1) == offset))
 

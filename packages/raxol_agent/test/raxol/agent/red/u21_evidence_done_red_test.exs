@@ -696,6 +696,47 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
                {:error, :unturned_done}
     end
   end
+
+  describe "U21-R2 #2 — mutating-ness is derived from type, not the stamped `mutating` flag" do
+    test "an effect-bearing tool_use with `mutating: false` still counts as a mutation" do
+      # A state-affecting tool call whose producer self-reports `mutating: false`
+      # but which carries an intrinsic effect_class. If the gate trusted the
+      # stamped flag, this would not count as a mutation, `last_mutation` would
+      # be nil, and the pre-mutation evidence at offset 2 would wrongly gate the
+      # done. Deriving from effect_class makes offset 3 a mutation, so the
+      # evidence that predates it is stale.
+      spoofed_mutation =
+        Build.ev(
+          3,
+          :item_completed,
+          %{
+            item_type: :tool_use,
+            mutating: false,
+            effect_class: :reversible_local,
+            name: "fs_write"
+          },
+          turn_id: "t"
+        )
+
+      journal = [Build.turn_started(1), Build.evidence(2), spoofed_mutation]
+
+      assert gate(journal, "t", [2]) == {:error, {:stale_evidence, 2}}
+    end
+
+    test "an effect-bearing tool_use with NO `mutating` flag at all still counts as a mutation" do
+      unflagged_mutation =
+        Build.ev(
+          3,
+          :item_completed,
+          %{item_type: :tool_use, effect_class: :reversible_local, name: "fs_write"},
+          turn_id: "t"
+        )
+
+      journal = [Build.turn_started(1), Build.evidence(2), unflagged_mutation]
+
+      assert gate(journal, "t", [2]) == {:error, {:stale_evidence, 2}}
+    end
+  end
 end
 
 # ===========================================================================
