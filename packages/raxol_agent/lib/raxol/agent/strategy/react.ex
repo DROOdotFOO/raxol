@@ -1,4 +1,6 @@
 defmodule Raxol.Agent.Strategy.ReAct do
+  require Logger
+
   @moduledoc """
   ReAct (Reasoning + Acting) strategy.
 
@@ -106,7 +108,8 @@ defmodule Raxol.Agent.Strategy.ReAct do
             {[msg | msgs], [{name, result} | results]}
 
           {:error, reason} ->
-            msg = %{role: :user, content: "[Tool error for #{name}]: #{inspect(reason)}"}
+            Logger.debug(fn -> "tool #{name} failed: #{inspect(reason)}" end)
+            msg = %{role: :user, content: ToolConverter.public_error(name, reason)}
             {[msg | msgs], [{name, {:error, reason}} | results]}
         end
       end)

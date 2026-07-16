@@ -1,0 +1,96 @@
+{
+  "blocks": [
+    {
+      "kind": "reasoning",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 100,
+        "cost": null
+      },
+      "content": {
+        "text": "I should list the directory first, then read mix.exs."
+      },
+      "event_refs": [
+        2,
+        3
+      ],
+      "raw_kind": "reasoning",
+      "seal": "sealed"
+    },
+    {
+      "kind": "tool_call",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 300,
+        "cost": null
+      },
+      "content": {
+        "args": {
+          "path": "."
+        },
+        "name": "list_dir",
+        "result": "mix.exs\nlib/\ntest/\nREADME.md",
+        "tainted": true
+      },
+      "event_refs": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "raw_kind": "tool_call",
+      "seal": "sealed"
+    },
+    {
+      "kind": "tool_call",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 300,
+        "cost": null
+      },
+      "content": {
+        "args": {
+          "path": "mix.exs"
+        },
+        "name": "read_file",
+        "result": "defmodule Raxol.MixProject do\n  use Mix.Project\nend",
+        "tainted": true
+      },
+      "event_refs": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "raw_kind": "tool_call",
+      "seal": "sealed"
+    },
+    {
+      "kind": "message",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 200,
+        "cost": null
+      },
+      "content": {
+        "text": "Root has mix.exs, lib/, test/, README.md."
+      },
+      "event_refs": [
+        12,
+        14
+      ],
+      "raw_kind": "message",
+      "seal": "sealed"
+    }
+  ],
+  "schema": "harness-t7blocks/1",
+  "fold_defaults": {
+    "message": "expanded",
+    "opaque": "expanded",
+    "diff": "folded",
+    "reasoning": "folded",
+    "tool_call": "expanded",
+    "approval": "expanded"
+  },
+  "projector": "Raxol.Harness.Projection"
+}

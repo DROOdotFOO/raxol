@@ -12,6 +12,26 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   `dispatcher_ready` and `plugin_manager_ready` flags are set. In dev mode,
   a CodeReloader is started to watch for source changes and trigger re-renders.
 
+  ## Shutdown & exit trapping
+
+  Every child (dispatcher, driver, rendering engine, plugin manager) is
+  `start_link`'d from `init/1`, so all are LINKED to this process, and this
+  process traps exits. `terminate/2` is the single source of truth for
+  shutdown ordering: it stops children driver-FIRST so the Terminal Driver's
+  own `terminate/2` (mode reset, scroll-region reset, stty restore) runs to
+  completion before anything under it is torn down. This runs identically for
+  every stop trigger: our own `:shutdown` cast, an external abnormal exit
+  signal, or a genuine child crash.
+
+  Trapping exits preserves the prior die-together + supervisor-restart
+  contract (an abnormal child/peer exit still stops this process with the
+  same reason, propagated verbatim), while a `:normal` peer exit is ignored
+  exactly as an untrapped process would have dropped it. One behavioral
+  addition: a genuine child CRASH now incurs the full driver-first teardown
+  BEFORE the crash reason propagates upward (bounded latency:
+  `GenServer.stop` over the surviving children) -- teardown-on-crash is
+  intentional, not a correctness break.
+
   ## Sub-modules
   - `Lifecycle.Initializer` -- component startup sequence
   - `Lifecycle.Shutdown`    -- stop_process, cleanup, registry management
@@ -113,6 +133,8 @@ defmodule Raxol.Core.Runtime.Lifecycle do
 
   @impl GenServer
   def init(options) when is_list(options) do
+    trap_child_exits!()
+
     app_module = Keyword.fetch!(options, :app_module)
 
     Log.info_with_context(
@@ -124,6 +146,10 @@ defmodule Raxol.Core.Runtime.Lifecycle do
       |> maybe_start_time_travel()
       |> maybe_start_cycle_profiler()
 
+    finish_init(app_module, options)
+  end
+
+  defp finish_init(app_module, options) do
     case Initializer.initialize_all(app_module, options) do
       {:ok, registry_table, pm_pid, initialized_model, dispatcher_pid,
        driver_pid, rendering_engine_pid} ->
@@ -161,6 +187,24 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   def handle_continue(:enter_alternate_screen, state) do
     maybe_enter_alternate_screen(state)
     {:noreply, state}
+  end
+
+  # Every child (dispatcher, driver, rendering engine, plugin manager, ...)
+  # is start_link'd from inside init/1 via Initializer, so all of them are
+  # LINKED to this process. Without trapping exits, the first child that
+  # dies during our own shutdown sequence (Shutdown.stop_process/2 uses
+  # GenServer.stop/3, and the target's own exit propagates back over the
+  # link) kills THIS process immediately -- before terminate/2 ever runs,
+  # before any later Shutdown.stop_process/2 call executes, and before an
+  # unrelated linked-child crash gets a chance to be handled gracefully.
+  # Trapping exits turns those into ordinary {:EXIT, pid, reason} messages
+  # (see handle_info/2 below) so terminate/2 -- and the driver-first
+  # teardown it now performs -- reliably runs on every shutdown path: our
+  # own :shutdown cast, an external supervisor/SIGTERM exit signal, or a
+  # genuine child crash.
+  defp trap_child_exits! do
+    Process.flag(:trap_exit, true)
+    :ok
   end
 
   defp build_initial_state(
@@ -294,6 +338,50 @@ defmodule Raxol.Core.Runtime.Lifecycle do
     handle_cast(:shutdown, state)
   end
 
+  # A linked NON-PARENT peer exited cleanly (:normal) -- ignore it (a child we
+  # already stopped, or a sibling). This preserves the pre-trap_exit contract
+  # for peers: a process not trapping exits already silently drops a :normal
+  # exit signal from a link, so a :normal peer exit never took the old
+  # Lifecycle down, and it must not take the new one down either.
+  #
+  # This clause does NOT see the start_link PARENT's exit: gen_server
+  # intercepts `{:EXIT, Parent, Reason}` in its own receive loop (before
+  # handle_info) and terminates with that reason -- standard OTP "a gen_server
+  # dies with its parent". So trap_exit does introduce ONE narrow, intended
+  # change for the parent specifically: a parent exit (any reason) now brings
+  # Lifecycle down GRACEFULLY through terminate/2 -- running the driver-first
+  # teardown -- instead of, pre-trap, either lingering (parent :normal) or
+  # dying with no teardown (parent crash). For an owns-the-node caller
+  # (a script/CLI whose main process ends) that means the terminal is now
+  # restored when the caller finishes, which is the desired behavior. The
+  # only ABNORMAL peer exits are handled by the clause below.
+  @impl true
+  def handle_info({:EXIT, _pid, :normal}, state) do
+    {:noreply, state}
+  end
+
+  # Any other linked-process exit -- a genuine child crash, an external
+  # supervisor-driven abnormal termination, or the tail end of our own
+  # controlled shutdown -- must still bring this Lifecycle down (preserving
+  # the old "the whole tree dies together" + supervisor-restart contract:
+  # the exit reason is propagated verbatim as the stop reason, so a
+  # supervising process sees the identical restart trigger it saw pre-trap).
+  # The difference from pre-trap: we now stop via {:stop, reason, state},
+  # which runs terminate/2 -- and therefore the driver-first teardown -- to
+  # completion BEFORE the reason propagates upward, instead of the untrapped
+  # signal killing the process outright with no teardown. That teardown adds
+  # bounded latency (GenServer.stop over the surviving children) on the crash
+  # path; it is a behavioral addition, not a correctness change.
+  @impl true
+  def handle_info({:EXIT, pid, reason}, state) do
+    Log.warning_with_context(
+      "[#{__MODULE__}] Linked process #{inspect(pid)} exited: #{inspect(reason)}. Terminating.",
+      %{}
+    )
+
+    {:stop, reason, state}
+  end
+
   @impl true
   def handle_info(unhandled_message, state) do
     Log.warning_with_context(
@@ -307,17 +395,14 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   @impl true
   def handle_cast(:shutdown, state) do
     Log.info_with_context(
-      "[#{__MODULE__}] Received :shutdown cast for #{inspect(state.app_name)}. Stopping dependent processes..."
+      "[#{__MODULE__}] Received :shutdown cast for #{inspect(state.app_name)}. Stopping."
     )
 
-    Shutdown.stop_process(state.cycle_profiler_pid, "CycleProfiler")
-    Shutdown.stop_process(state.time_travel_pid, "TimeTravel")
-    Shutdown.stop_process(state.code_reloader_pid, "CodeReloader")
-    Shutdown.stop_process(state.rendering_engine_pid, "Rendering Engine")
-    Shutdown.stop_process(state.driver_pid, "Terminal Driver")
-    Shutdown.stop_process(state.dispatcher_pid, "Dispatcher")
-    Shutdown.stop_process(state.plugin_manager, "PluginManager")
-
+    # The actual child-by-child teardown lives in terminate/2 (via
+    # stop_dependent_processes/1) so that it runs identically regardless of
+    # WHY this process is stopping -- our own :shutdown cast (:normal here),
+    # an external exit signal converted to {:EXIT, ...} by trap_exit, or a
+    # linked child crash. One sequence, one place, always driver-first.
     {:stop, :normal, state}
   end
 
@@ -349,7 +434,32 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   @impl GenServer
   def terminate(reason, state) do
     maybe_leave_alternate_screen(state)
+    stop_dependent_processes(state)
     terminate_manager(reason, state)
+  end
+
+  # Stops every linked child Lifecycle started, in an order that lets the
+  # Terminal Driver's own terminate/2 (mode reset, scroll-region reset, stty
+  # restore) run to completion BEFORE anything else in the process tree is
+  # torn down. This is the single source of truth for shutdown ordering --
+  # reached whether we got here via our own :shutdown cast, an external
+  # supervisor exit signal, or a genuine child crash (see
+  # handle_info({:EXIT, ...}) above) -- so the driver is never orphaned.
+  #
+  # PluginManager is stopped here (last, after the render path) rather than
+  # relying solely on terminate_manager's cleanup so its stop is part of the
+  # one deterministic ordering; terminate_manager still runs afterward and
+  # no-ops on the already-stopped (or shared/adopted) manager. Every stop
+  # is a no-op on a nil or already-dead pid (see Shutdown.stop_process/2),
+  # so a crash that already took a child down is handled safely.
+  defp stop_dependent_processes(state) do
+    Shutdown.stop_process(state.driver_pid, "Terminal Driver")
+    Shutdown.stop_process(state.rendering_engine_pid, "Rendering Engine")
+    Shutdown.stop_process(state.cycle_profiler_pid, "CycleProfiler")
+    Shutdown.stop_process(state.time_travel_pid, "TimeTravel")
+    Shutdown.stop_process(state.code_reloader_pid, "CodeReloader")
+    Shutdown.stop_process(state.dispatcher_pid, "Dispatcher")
+    Shutdown.stop_process(state.plugin_manager, "PluginManager")
   end
 
   defp terminate_manager(reason, state) do

@@ -1,4 +1,6 @@
 defmodule Raxol.Agent.Stream do
+  require Logger
+
   @moduledoc """
   Stream-first API for agent sessions.
 
@@ -443,8 +445,10 @@ defmodule Raxol.Agent.Stream do
         build_tool_response(name, result)
 
       {:error, reason} ->
+        Logger.debug(fn -> "tool #{name} failed: #{inspect(reason)}" end)
+
         {%{name: name, result: {:error, reason}},
-         %{role: :user, content: "[Tool error for #{name}]: #{inspect(reason)}"}}
+         %{role: :user, content: ToolConverter.public_error(name, reason)}}
     end
   end
 

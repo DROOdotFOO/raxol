@@ -1,0 +1,64 @@
+
+The default interactive shell is now zsh.
+To update your account to use zsh, please run `chsh -s /bin/zsh`.
+For more details, please visit https://support.apple.com/kb/HT208050.
+MacBook-Pro-3:~ jabher$ T0_HOLD_SECONDS=8 bash '/Users/jabher/IdeaProjects/raxol
+/.claude/worktrees/agent-a7bd59b81a3d2184d/scripts/harness/t0/probes/p01_region_
+footer.sh' 24 3 40 ringb-wezterm-C1-14786
+
+
+
+
+
+
+
+
+
+
+
+
+
+LINE-0001
+LINE-0002
+LINE-0003
+LINE-0004
+LINE-0005
+LINE-0006
+LINE-0007
+LINE-0008
+LINE-0009
+LINE-0010
+LINE-0011
+LINE-0012
+LINE-0013
+LINE-0014
+LINE-0015
+LINE-0016
+LINE-0017
+LINE-0018
+LINE-0019
+LINE-0020
+LINE-0021
+LINE-0022
+LINE-0023
+LINE-0024
+LINE-0025
+LINE-0026
+LINE-0027
+LINE-0028
+LINE-0029
+LINE-0030
+LINE-0031
+LINE-0032
+LINE-0033
+LINE-0034
+LINE-0035
+LINE-0036
+LINE-0037
+LINE-0038
+LINE-0039
+LINE-0040
+
+---STRIP---                                                                     
+STATUS: idle                                                                    
+PROMPT> hello                                                                   
