@@ -213,7 +213,7 @@ defmodule Raxol.UI.Harness.KeymapTest do
         Keymap.binds()
         |> Enum.map(fn bind ->
           norm = fixture_for(bind)
-          context = %{composing?: false, focused_block_id: "any"}
+          context = context_for(bind)
 
           case Keymap.resolve(norm, context) do
             %{type: type} -> type
@@ -226,11 +226,175 @@ defmodule Raxol.UI.Harness.KeymapTest do
       assert MapSet.size(declared) == length(Keymap.binds())
     end
 
+    # The `guard: :overlay` bind's own context requirement differs from
+    # every other bind's -- see `Keymap`'s moduledoc, "overlay-open ESC
+    # capture": it only resolves when the caller explicitly opts in with
+    # `overlay_open?: true`. Every other bind's context is unaffected by
+    # that flag, so this only special-cases the one guard that needs it;
+    # the resulting resolved set (and its size against `binds/0`) is
+    # unchanged by driving each bind's own natural context here.
+    defp context_for(%{guard: :overlay}),
+      do: %{composing?: false, focused_block_id: "any", overlay_open?: true}
+
+    defp context_for(_bind), do: %{composing?: false, focused_block_id: "any"}
+
     defp fixture_for(%{key: key}),
       do: InputEvent.normalize(Event.key_event(key, :pressed, []))
 
     defp fixture_for(%{char: char}),
       do: InputEvent.normalize(Event.key_event(char, :pressed, []))
+  end
+
+  # -- overlay-open ESC capture (the overlay picker's focus context) --
+  #
+  # An open overlay picker enters the keymap's context as
+  # `overlay_open?: true`. ESC must then resolve to `:overlay_dismiss`
+  # (close the overlay) BEFORE the global `:always` ESC-interrupt bind --
+  # first-match-wins over the data table, no second dispatch mechanism.
+  # The fail-safe direction mirrors `composing?`'s: a caller that never
+  # sets `overlay_open?` gets the old behavior (ESC = interrupt),
+  # so nothing load-bearing changes for existing callers.
+
+  describe "overlay-open ESC capture" do
+    test "ESC with overlay_open?: true -> :overlay_dismiss, not :interrupt" do
+      assert resolve_from(translator_event(@tb_escape, 0), %{
+               overlay_open?: true
+             }) ==
+               %{type: :overlay_dismiss, payload: %{}}
+    end
+
+    test "ESC with overlay_open?: true resolves :overlay_dismiss regardless of composing?/streaming?" do
+      for composing? <- [true, false], streaming? <- [true, false] do
+        context = %{
+          overlay_open?: true,
+          composing?: composing?,
+          streaming?: streaming?
+        }
+
+        assert resolve_from(parser_event("\e"), context) ==
+                 %{type: :overlay_dismiss, payload: %{}},
+               "context #{inspect(context)} must dismiss, not interrupt"
+      end
+    end
+
+    test "ESC with overlay_open?: false -> :interrupt (unchanged)" do
+      assert resolve_from(parser_event("\e"), %{overlay_open?: false}) ==
+               %{type: :interrupt, payload: %{}}
+    end
+
+    test "overlay_open?: unset defaults to the fail-safe (closed) reading -- ESC stays :interrupt" do
+      assert resolve_from(parser_event("\e"), %{composing?: true}) ==
+               %{type: :interrupt, payload: %{}}
+    end
+
+    test "only ESC gains an overlay meaning in the table -- printable chars and Enter stay :passthrough with the overlay open (the Surface routes them)" do
+      # BOTH composing states: an overlay opened from transcript-browse
+      # mode (composing?: false -- the natural open path for a jump /
+      # search picker) must not lose keystrokes to the :not_composing
+      # binds. The original version of this test pinned composing?: true
+      # and probed only the unbound "a", which masked exactly that
+      # desync (adversarial review, CRITICAL).
+      for composing? <- [true, false] do
+        context = %{overlay_open?: true, composing?: composing?}
+
+        assert resolve_from(Event.key("a"), context) == :passthrough
+        assert resolve_from(Event.key(:enter), context) == :passthrough
+        assert resolve_from(Event.key(:up), context) == :passthrough
+        assert resolve_from(Event.key(:down), context) == :passthrough
+        assert resolve_from(Event.key(:backspace), context) == :passthrough
+      end
+    end
+
+    test "z/j/k with the overlay open are FILTER TEXT, never fold/jump commands -- even from transcript-browse mode (composing?: false)" do
+      # The regression the adversarial review named: z/j/k are
+      # :not_composing-guarded binds, and a guard that consults only
+      # composing? fires them straight past the open overlay --
+      # dropped from the filter query AND mutating fold/jump state
+      # behind the picker. j/k are common search letters; the picker's
+      # PRIMARY open path (from transcript browsing) must keep them.
+      context = %{overlay_open?: true, composing?: false}
+
+      for char <- ["z", "j", "k"] do
+        assert resolve_from(Event.key(char), context) == :passthrough,
+               "#{inspect(char)} must pass through to the overlay filter, " <>
+                 "not resolve to a transcript command behind it"
+      end
+    end
+
+    test "command_types/0 includes :overlay_dismiss" do
+      assert :overlay_dismiss in Keymap.command_types()
+    end
+  end
+
+  # -- the full guard x context matrix ----------------------------------
+  #
+  # Every bind resolved against every {composing?, overlay_open?}
+  # combination (including each flag absent), so no guard/context pair
+  # can go untested again -- the CRITICAL routing desync above survived
+  # precisely because the overlay tests only ever pinned one corner of
+  # this matrix.
+
+  describe "guard x context matrix" do
+    # overlay_open? values: true / false / :absent; composing? likewise.
+    defp matrix_context(composing?, overlay_open?) do
+      %{}
+      |> put_flag(:composing?, composing?)
+      |> put_flag(:overlay_open?, overlay_open?)
+    end
+
+    defp put_flag(context, _key, :absent), do: context
+    defp put_flag(context, key, value), do: Map.put(context, key, value)
+
+    # Expected resolution per bind kind. `composing?` absent defaults to
+    # composing (fail-safe); `overlay_open?` absent defaults to closed
+    # (fail-safe) -- both documented in the Keymap moduledoc.
+    defp expected(:escape, _composing?, overlay_open?) do
+      if overlay_open? == true,
+        do: %{type: :overlay_dismiss, payload: %{}},
+        else: %{type: :interrupt, payload: %{}}
+    end
+
+    defp expected(:tab, _composing?, _overlay_open?),
+      do: %{type: :steer, payload: %{}}
+
+    defp expected({:char, char, type}, composing?, overlay_open?) do
+      effective_composing? = composing? in [true, :absent]
+      overlay? = overlay_open? == true
+
+      if effective_composing? or overlay? do
+        :passthrough
+      else
+        payload = if type == :fold_toggle, do: %{block_id: nil}, else: %{}
+        %{type: type, payload: payload}
+      end
+    end
+
+    test "every bind x every context combination resolves as documented" do
+      binds = [
+        :escape,
+        :tab,
+        {:char, "z", :fold_toggle},
+        {:char, "j", :jump_next},
+        {:char, "k", :jump_prev}
+      ]
+
+      for bind <- binds,
+          composing? <- [true, false, :absent],
+          overlay_open? <- [true, false, :absent] do
+        context = matrix_context(composing?, overlay_open?)
+
+        event =
+          case bind do
+            {:char, char, _type} -> Event.key(char)
+            key when is_atom(key) -> Event.key(key)
+          end
+
+        assert resolve_from(event, context) ==
+                 expected(bind, composing?, overlay_open?),
+               "bind #{inspect(bind)} with composing?: #{inspect(composing?)}, " <>
+                 "overlay_open?: #{inspect(overlay_open?)} resolved wrong"
+      end
+    end
   end
 
   # -- 5. modifier-aware key binds (Drew's review, T12 fix-now #2) --

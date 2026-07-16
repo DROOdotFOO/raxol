@@ -20,6 +20,34 @@ defmodule Raxol.Harness.Surface do
   is the process-level driver (real tty, `Raxol.Terminal.InlineDriver` for
   raw input) built on top of this module's pure functions.
 
+  ## Glossary (the substrate vocabulary, one line each)
+
+  New to this lane? These terms recur, undefended, across this module,
+  `Raxol.UI.Rendering.PaintAuthority.InlineAuthority`, and
+  `Raxol.Terminal.ScrollRegionManager` -- this is the one anchor:
+
+    * **DECSTBM** -- the ANSI "set top/bottom margins" control
+      (`CSI top;bottom r`): confines terminal scrolling to a row range.
+      The harness uses it to split the screen into scrolling history
+      (top) and a pinned footer (bottom).
+    * **The pin / pinned footer** -- the bottom N rows placed OUTSIDE the
+      DECSTBM scroll region, so history scrolling never moves them; the
+      only surface the harness ever repaints.
+    * **Seal / seal-once** -- writing a finished block into the history
+      region exactly once, never repainted afterward; sealed rows
+      eventually scroll into the terminal's own native scrollback, which
+      this process cannot rewrite.
+    * **Index-at-region-boundary** -- a line feed on the scroll region's
+      bottom row scrolls the region up one row (the top row is evicted
+      toward scrollback) instead of moving the cursor; how both sealing
+      and the overlay's footer-grow preserve content.
+    * **Keyframe vs. repaint** -- `repaint/2` rewrites only footer rows
+      whose content changed (a diff); `keyframe/2` rewrites every footer
+      row (the recovery / post-geometry-change path).
+    * **Degenerate geometry** -- a terminal too short to hold the footer
+      plus a 2-row-minimum history region: DECSTBM cannot pin, and the
+      harness degrades (or, for overlays, refuses) instead of pretending.
+
   ## Composition (what this module assembles)
 
     * The append path / footer viewport (`InlineAuthority`) or the
@@ -113,6 +141,46 @@ defmodule Raxol.Harness.Surface do
   still calls `repaint/2`/`keyframe/2` (they never crash), just over
   whatever footer capacity `footer_range/1` reports for that geometry.
 
+  While an overlay picker is open (see "The overlay picker" section
+  below), the layout is instead status ++ overlay lines
+  (`ViewText.lines(OverlayPicker.render(picker), width, :styled)`) ++
+  Composer's lines ++ notice -- the pending/live-tail preview lines are
+  SUPPRESSED for exactly as long as the overlay is open (the space they'd
+  occupy is now claimed by the overlay), and return the moment it closes.
+
+  ## The overlay picker (footer-region overlay)
+
+  `open_overlay/3` hosts a `Raxol.UI.Harness.OverlayPicker` by GROWING the
+  DECSTBM footer viewport (`InlineAuthority.set_footer_rows/2`) -- never a
+  centered modal painted over history, never the alternate screen. The
+  overlay's rows live entirely inside the (now larger) pinned footer, the
+  same substrate the composer/status/preview lines already share.
+
+  ESC closes the overlay, not the running turn: `Keymap`'s `:overlay`
+  guard (see that module's moduledoc) captures ESC as `:overlay_dismiss`
+  BEFORE the global `:always` ESC-interrupt bind ever sees it, as long as
+  `handle_input/2`'s context carries `overlay_open?: true` -- which it
+  does whenever `model.overlay` is non-`nil`. Enter, printable characters,
+  and the arrow keys are deliberately NOT added to `Keymap.binds/0` for
+  the overlay; they stay `:passthrough`, and THIS module is what routes a
+  `:passthrough` event to `OverlayPicker.handle_key/2` instead of the
+  Composer while an overlay is open (see `handle_input/2`'s routing,
+  below) -- Enter commits the overlay's current selection instead of
+  submitting the composer's buffer.
+
+  `open_overlay/3` refuses rather than degrading silently whenever the
+  current geometry cannot safely host even a minimal overlay: history
+  must keep at least 2 rows, and the overlay itself needs at least 2 rows
+  (a query row plus one item row) -- `{:error,
+  :insufficient_footer_capacity}`, zero bytes, model untouched. A taller
+  item list than the available capacity is CLAMPED to fit (via
+  `OverlayPicker`'s own `:max_visible` option), not refused -- only a
+  geometry too small for even the 2-row minimum is a hard refusal.
+  `model.footer_rows` always stays the BASE value the caller originally
+  configured; the grown row count lives only in `model.authority` for as
+  long as the overlay is open, and `close_overlay/1` restores the
+  authority back to exactly that base value on dismiss or commit.
+
   ## Precondition #6 -- command bifurcation (fixture mode = honest UI stubs)
 
   `:interrupt`/`:steer` are the two commands that cross to the agent lane
@@ -135,6 +203,15 @@ defmodule Raxol.Harness.Surface do
 
   `:fold_toggle`/`:jump_next`/`:jump_prev` never leave this module -- they
   are pure UI-local state per Keymap's own documented bifurcation.
+
+  While an overlay picker is open (`model.overlay != nil`), `:steer` is a
+  documented no-op instead of queuing the composer's buffer: the composer
+  is frozen mid-pick (its buffer is not what the operator is currently
+  interacting with), so queuing a steer built from THAT hidden state
+  would be dishonest UI -- it would claim to queue "what you were about
+  to send" when what's actually on screen is a filter query, not a
+  prompt. `:interrupt` is unaffected (an overlay is transient UI-local
+  state, not a reason to block the honest interrupt stub).
 
   ## Fold/jump and the seal-time-only gate -- a translation, not a reuse
 
@@ -291,11 +368,12 @@ defmodule Raxol.Harness.Surface do
 
   alias Raxol.Harness.Fixture.Session
   alias Raxol.Harness.Projection
+  alias Raxol.Terminal.ScrollRegionManager
   alias Raxol.Harness.StatusStrip
   alias Raxol.Harness.Surface.ViewText
 
   alias Raxol.UI.Components.Harness.{Block, BlockBody, Composer}
-  alias Raxol.UI.Harness.{InputEvent, Keymap}
+  alias Raxol.UI.Harness.{InputEvent, Keymap, OverlayPicker}
 
   alias Raxol.UI.Rendering.PaintAuthority.{
     FlatAuthority,
@@ -323,7 +401,20 @@ defmodule Raxol.Harness.Surface do
           rows: pos_integer(),
           footer_rows: pos_integer(),
           status: map(),
-          stub_notice: String.t() | nil
+          stub_notice: String.t() | nil,
+          overlay: overlay() | nil
+        }
+
+  @typedoc """
+  The hosted overlay picker's state: the pure `OverlayPicker.t()` plus the
+  caller-supplied (or default) commit callback. `on_pick` is invoked as
+  `on_pick.(model, item)` AFTER `close_overlay/1` has already restored the
+  footer to its base row count -- see `handle_input/2`'s `:passthrough`
+  routing.
+  """
+  @type overlay :: %{
+          picker: OverlayPicker.t(),
+          on_pick: (t(), term() -> t())
         }
 
   # -- construction -------------------------------------------------------
@@ -413,7 +504,8 @@ defmodule Raxol.Harness.Surface do
       rows: rows,
       footer_rows: footer_rows,
       status: %{},
-      stub_notice: nil
+      stub_notice: nil,
+      overlay: nil
     }
 
     model
@@ -725,9 +817,12 @@ defmodule Raxol.Harness.Surface do
   Normalizes `raw_event` (`InputEvent.normalize/1`) and resolves it via
   `Keymap.resolve/2` BEFORE the Composer ever sees it -- see the
   moduledoc's precondition #2. A `:passthrough` result reaches
-  `Composer.handle_event/3` only while `composing?`; otherwise it is a
-  no-op (there is no other focusable surface in this fixture-only
-  assembly). Always repaints the footer afterward.
+  `Composer.handle_event/3` only while `composing?` AND no overlay is
+  open; while an overlay picker is open (`model.overlay != nil`), a
+  `:passthrough` result instead reaches
+  `Raxol.UI.Harness.OverlayPicker.handle_key/2` with the SAME normalized
+  event this function already computed (never re-normalized) -- see "The
+  overlay picker" section above. Always repaints the footer afterward.
   """
   @spec handle_input(t(), term()) :: t()
   def handle_input(model, raw_event) do
@@ -736,17 +831,48 @@ defmodule Raxol.Harness.Surface do
     context = %{
       composing?: model.composing?,
       streaming?: not Map.get(model.status, :turn_completed, false),
-      focused_block_id: model.focused_index
+      focused_block_id: model.focused_index,
+      overlay_open?: model.overlay != nil
     }
 
     model =
       case Keymap.resolve(norm, context) do
-        :passthrough -> maybe_forward_to_composer(model, raw_event)
+        :passthrough -> route_passthrough(model, norm, raw_event)
         command -> dispatch_command(model, command)
       end
 
     paint_footer(model)
   end
+
+  # While an overlay is open, EVERY :passthrough event (typed characters,
+  # arrows, Enter, an unrecognized special key) is routed to the overlay
+  # picker instead of the Composer -- the composer's buffer is frozen
+  # mid-pick (see the moduledoc's command-bifurcation note on `:steer`).
+  defp route_passthrough(%{overlay: overlay} = model, norm, _raw_event)
+       when overlay != nil do
+    case OverlayPicker.handle_key(overlay.picker, norm) do
+      {:continue, picker} ->
+        %{model | overlay: %{overlay | picker: picker}}
+
+      {:picked, item} ->
+        # Close FIRST so on_pick sees the already-restored (base) footer
+        # -- the trailing paint_footer/1 in handle_input/2 then paints
+        # whatever notice on_pick set, at the correct row count.
+        model
+        |> close_overlay()
+        |> then(&overlay.on_pick.(&1, item))
+
+      :dismissed ->
+        # Defensive only: with the overlay open, the Keymap's :overlay
+        # guard captures ESC as :overlay_dismiss before it ever reaches
+        # :passthrough (see Keymap's moduledoc), so this clause is not
+        # expected to fire in practice.
+        close_overlay(model)
+    end
+  end
+
+  defp route_passthrough(model, _norm, raw_event),
+    do: maybe_forward_to_composer(model, raw_event)
 
   defp maybe_forward_to_composer(%{composing?: true} = model, raw_event) do
     {composer, commands} = Composer.handle_event(raw_event, model.composer, %{})
@@ -766,6 +892,9 @@ defmodule Raxol.Harness.Surface do
 
   defp apply_composer_command(_command, model), do: model
 
+  defp dispatch_command(model, %{type: :overlay_dismiss}),
+    do: close_overlay(model)
+
   defp dispatch_command(model, %{type: :fold_toggle}) do
     apply_fold_toggle(model, model.focused_index)
   end
@@ -776,6 +905,15 @@ defmodule Raxol.Harness.Surface do
   defp dispatch_command(model, %{type: :interrupt}) do
     %{model | stub_notice: @stub_interrupt_notice}
   end
+
+  # An open overlay freezes the composer buffer mid-pick (see the
+  # moduledoc's command-bifurcation note) -- queuing a steer built from
+  # that hidden state would be dishonest UI. This clause MUST precede the
+  # general `:steer` clause below (function-clause order is load-bearing
+  # here, same as `Keymap.binds/0`'s own ESC-priority note).
+  defp dispatch_command(%{overlay: overlay} = model, %{type: :steer})
+       when overlay != nil,
+       do: model
 
   defp dispatch_command(model, %{type: :steer}) do
     text = Composer.value(model.composer)
@@ -863,6 +1001,130 @@ defmodule Raxol.Harness.Surface do
     %{model | composing?: true, composer: composer}
   end
 
+  # -- overlay picker (see the moduledoc's "The overlay picker" section) ---
+
+  @doc """
+  Opens an overlay picker over `items`, growing the footer viewport
+  (`InlineAuthority.set_footer_rows/2`) by exactly `OverlayPicker.height/1`
+  rows and repainting immediately. See the moduledoc's "The overlay
+  picker" section for the full contract.
+
+  ## Options
+
+  Forwarded to `Raxol.UI.Harness.OverlayPicker.new/2` (`:label_fn`,
+  `:filter_fn`, `:title`), except `:max_visible`, which this function
+  CLAMPS to the available footer capacity before forwarding (a taller
+  request is narrowed, never refused -- see below), plus:
+
+    * `:on_pick` -- `(t(), item -> t())`, invoked after the overlay has
+      already closed (see `handle_input/2`'s `:passthrough` routing).
+      Defaults to an honest one-frame footer notice
+      (`"» picked <label>"`), the same stub mechanism `:interrupt`/`:steer`
+      use.
+
+  ## Errors
+
+    * `{:error, :overlay_already_open}` -- `model.overlay` is already set.
+    * `{:error, :no_footer}` -- `model.mode == :flat` (nothing to grow).
+    * `{:error, :insufficient_footer_capacity}` -- the current geometry
+      cannot keep history's 2-row minimum AND host at least a 2-row
+      overlay (query + one item row). Zero bytes written, model
+      untouched.
+  """
+  @spec open_overlay(t(), [term()], keyword()) ::
+          {:ok, t()}
+          | {:error,
+             :overlay_already_open | :no_footer | :insufficient_footer_capacity}
+  def open_overlay(model, items, opts \\ [])
+
+  def open_overlay(%{overlay: overlay}, _items, _opts) when overlay != nil,
+    do: {:error, :overlay_already_open}
+
+  def open_overlay(%{mode: :flat}, _items, _opts), do: {:error, :no_footer}
+
+  def open_overlay(model, items, opts) do
+    max_overlay_rows = max_overlay_rows(model.rows, model.footer_rows)
+
+    if max_overlay_rows < 2 or degenerate?(model) do
+      {:error, :insufficient_footer_capacity}
+    else
+      do_open_overlay(model, items, opts, max_overlay_rows)
+    end
+  end
+
+  # The largest overlay row claim the given geometry can host: the
+  # biggest `h` for which the grown split (`footer_rows + h`) is still
+  # non-degenerate by `ScrollRegionManager.degenerate?/2`'s OWN
+  # definition (history keeps its 2-row minimum). Derived by asking that
+  # predicate directly rather than re-encoding its `< 2` literal here --
+  # this substrate-capacity guard is exactly where a silently-drifted
+  # copy of the threshold would be most dangerous. Shared by
+  # `open_overlay/3` and `force_close_overlay?/2` (one source of truth).
+  defp max_overlay_rows(rows, footer_rows) do
+    Enum.find((rows - footer_rows)..0//-1, 0, fn h ->
+      not ScrollRegionManager.degenerate?(rows, footer_rows + h)
+    end)
+  end
+
+  defp do_open_overlay(model, items, opts, max_overlay_rows) do
+    effective_max_visible =
+      min(
+        Keyword.get(opts, :max_visible, OverlayPicker.default_max_visible()),
+        max_overlay_rows - 1
+      )
+
+    picker_opts = Keyword.put(opts, :max_visible, effective_max_visible)
+    picker = OverlayPicker.new(items, picker_opts)
+    claimed_rows = OverlayPicker.height(picker)
+
+    case InlineAuthority.set_footer_rows(
+           model.authority,
+           model.footer_rows + claimed_rows
+         ) do
+      {:ok, authority} ->
+        on_pick = Keyword.get(opts, :on_pick, default_on_pick(picker))
+        overlay = %{picker: picker, on_pick: on_pick}
+        model = %{model | authority: authority, overlay: overlay}
+        {:ok, paint_footer(model)}
+
+      # Unreachable given the capacity check above (belt and braces): a
+      # geometry that already passed `degenerate?/1` and the 2-row
+      # minimum check can never make `set_footer_rows/2` itself see a
+      # degenerate target.
+      {:error, :degenerate} ->
+        {:error, :insufficient_footer_capacity}
+    end
+  end
+
+  defp default_on_pick(picker) do
+    fn model, item ->
+      %{model | stub_notice: "» picked #{picker.label_fn.(item)}"}
+    end
+  end
+
+  @doc """
+  Closes the currently-open overlay picker (a no-op when none is open),
+  restoring the footer viewport to `model.footer_rows` (the base value)
+  and repainting. See the moduledoc's "The overlay picker" section.
+  """
+  @spec close_overlay(t()) :: t()
+  def close_overlay(%{overlay: nil} = model), do: model
+
+  def close_overlay(model) do
+    authority =
+      case InlineAuthority.set_footer_rows(model.authority, model.footer_rows) do
+        {:ok, authority} -> authority
+        # Cannot happen for any authority this module itself constructed
+        # (the base footer_rows was already valid when the overlay
+        # opened) -- kept the authority unchanged rather than crashing if
+        # it somehow did.
+        {:error, _reason} -> model.authority
+      end
+
+    %{model | authority: authority, overlay: nil}
+    |> paint_footer()
+  end
+
   # -- footer paint (precondition #5) --------------------------------------
 
   defp paint_footer(%{mode: :flat} = model), do: model
@@ -875,7 +1137,12 @@ defmodule Raxol.Harness.Surface do
 
   defp footer_lines(model) do
     status_line = StatusStrip.render(model.status, model.width)
-    preview_lines = pending_preview_lines(model)
+    overlay_lines = overlay_lines(model)
+
+    # The pending/live-tail preview is suppressed while an overlay is
+    # open -- the overlay claims that space (see the moduledoc's
+    # precondition #5 update, "The overlay picker" section).
+    preview_lines = if model.overlay, do: [], else: pending_preview_lines(model)
 
     composer_lines =
       ViewText.lines(
@@ -886,8 +1153,14 @@ defmodule Raxol.Harness.Surface do
 
     notice_lines = notice_line(model.stub_notice, model.width)
 
-    status_line ++ preview_lines ++ composer_lines ++ notice_lines
+    status_line ++
+      overlay_lines ++ preview_lines ++ composer_lines ++ notice_lines
   end
+
+  defp overlay_lines(%{overlay: nil}), do: []
+
+  defp overlay_lines(%{overlay: %{picker: picker}, width: width}),
+    do: ViewText.lines(OverlayPicker.render(picker), width, :styled)
 
   defp notice_line(nil, _width), do: []
 
@@ -945,6 +1218,16 @@ defmodule Raxol.Harness.Surface do
   InlineAuthority.keyframe/2` explicitly (the documented composition --
   `resize/3` alone never repaints the footer) in inline/tmux modes;
   `FlatAuthority.resize/3` writes zero bytes either way.
+
+  If an overlay is open and the NEW geometry can no longer host it
+  (`new_rows - 2 - model.footer_rows < OverlayPicker.height(picker)`), the
+  overlay is force-closed FIRST, at the OLD geometry (restoring the base
+  footer pin), before the resize itself runs -- see the moduledoc's "The
+  overlay picker" section. If it still fits, it stays open: the grown
+  footer row count survives the resize (`ScrollRegionManager.resize/2`
+  holds `footer_rows` constant, and the overlay's grown claim IS the
+  current `footer_rows` as far as the authority is concerned), and the
+  keyframe below repaints it at the new position.
   """
   @spec resize(t(), pos_integer(), pos_integer()) :: t()
   def resize(%{mode: :flat} = model, width, rows) do
@@ -957,11 +1240,31 @@ defmodule Raxol.Harness.Surface do
   end
 
   def resize(model, width, rows) do
+    model =
+      if force_close_overlay?(model, rows) do
+        close_overlay(model)
+      else
+        model
+      end
+
     model = %{model | width: width, rows: rows}
     authority = InlineAuthority.resize(model.authority, width, rows)
     lines = footer_lines(%{model | authority: authority})
     authority = InlineAuthority.keyframe(authority, lines)
     %{model | authority: authority, stub_notice: nil}
+  end
+
+  defp force_close_overlay?(%{overlay: nil}, _new_rows), do: false
+
+  defp force_close_overlay?(
+         %{overlay: overlay, footer_rows: footer_rows},
+         new_rows
+       ) do
+    # Same capacity rule `open_overlay/3` admits with -- one helper, one
+    # threshold (routed through `ScrollRegionManager.degenerate?/2`),
+    # never a re-encoded literal that could drift.
+    OverlayPicker.height(overlay.picker) >
+      max_overlay_rows(new_rows, footer_rows)
   end
 
   # -- accessors ------------------------------------------------------------

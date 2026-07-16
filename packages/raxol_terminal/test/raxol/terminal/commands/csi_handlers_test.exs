@@ -277,7 +277,8 @@ defmodule Raxol.Terminal.Commands.CSIHandlerTest do
     setup %{emulator: emulator} do
       {:ok,
        emulator: emulator,
-       buffer_height: ScreenBuffer.get_height(Emulator.get_screen_buffer(emulator))}
+       buffer_height:
+         ScreenBuffer.get_height(Emulator.get_screen_buffer(emulator))}
     end
 
     test "sets a valid scrolling region and moves cursor to home", %{
@@ -1005,6 +1006,60 @@ defmodule Raxol.Terminal.Commands.CSIHandlerTest do
     test "handles invalid status codes", %{emulator: emulator} do
       result = CSIHandler.handle_device_status(emulator, 999)
       assert result == emulator
+    end
+  end
+
+  describe "DECSTBM (CSI r) through the real parser path" do
+    # Regression (found via the harness overlay picker's shrink-resize
+    # suite): the CSI dispatch path (Executor -> handle_basic_command ->
+    # handle_csi_sequence -> handle_other_csi) had NO "r" clause, so
+    # every DECSTBM arriving mid-stream through the real parser was
+    # silently dropped -- the correct handle_r/2 existed but was never
+    # reached. Only a region-set REGEXED off the head of a processed
+    # input chunk (InputProcessing.preprocess_scroll_region/2) ever
+    # applied, which masked the bug for any stream whose first bytes
+    # are the initial region set. A terminal that ignores a DECSTBM
+    # re-set scrolls at a stale boundary, which corrupts every
+    # region-change consumer (resize, footer grow/shrink).
+    test "a second DECSTBM mid-stream replaces the scroll region" do
+      emulator = Emulator.new(20, 10)
+      {emulator, _out} = Emulator.process_input(emulator, "\e[1;8r")
+      assert emulator.scroll_region == {0, 7}
+
+      # mid-stream re-set (NOT at the head of the input chunk)
+      {emulator, _out} = Emulator.process_input(emulator, "X\e[1;6r")
+      assert emulator.scroll_region == {0, 5}
+    end
+
+    test "a mid-stream full reset (CSI r, no params) clears the region" do
+      emulator = Emulator.new(20, 10)
+      {emulator, _out} = Emulator.process_input(emulator, "\e[1;6r")
+      assert emulator.scroll_region == {0, 5}
+
+      {emulator, _out} = Emulator.process_input(emulator, "X\e[r")
+      assert emulator.scroll_region == nil
+    end
+
+    test "LF at the re-set region's bottom scrolls at the NEW boundary" do
+      emulator = Emulator.new(20, 10)
+
+      content =
+        1..6
+        |> Enum.map(fn i -> "\e[#{i};1Hline #{i}\r\n" end)
+        |> Enum.join()
+
+      {emulator, _out} =
+        Emulator.process_input(
+          emulator,
+          "\e[1;8r" <> content <> "\e[1;6r\e[6;1H\n\n\n\n"
+        )
+
+      # four LFs at row 6 (the NEW bottom) must scroll four times --
+      # with the stale 1..8 region they would scroll only twice
+      scrollback = Emulator.get_scrollback(emulator)
+
+      assert length(scrollback) >= 4,
+             "expected >= 4 scrolled rows, got #{length(scrollback)}"
     end
   end
 end
