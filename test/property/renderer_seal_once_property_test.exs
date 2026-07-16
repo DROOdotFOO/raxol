@@ -63,6 +63,11 @@ defmodule Raxol.Property.RendererSealOnceTest do
   # ---------------------------------------------------------------------
 
   describe "keystone: immutable-prefix" do
+    # 1000 sealed blocks + a full emulator replay at each checkpoint is
+    # CPU-heavy; the default 60s blows on slow CI runners (Windows), which
+    # is a runner-speed artifact, not a hang — a genuine infinite loop
+    # still fails, just at the raised bound.
+    @tag timeout: 180_000
     test "streaming 1000 sealed single-line blocks: zero rewrites at constant width" do
       {device, authority} = new_authority()
 

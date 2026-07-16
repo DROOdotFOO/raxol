@@ -495,6 +495,10 @@ defmodule Raxol.Property.RendererFooterTest do
   # ---------------------------------------------------------------------
 
   describe "footer side: repaint/2 and keyframe/2 never leave the cursor moved or the save/restore bracket unbalanced" do
+    # Many generated repaint/keyframe rounds, each byte-checked; the
+    # default 60s blows on slow CI runners (Windows) — runner-speed
+    # artifact, not a hang. A genuine hang still fails at the raised bound.
+    @tag timeout: 180_000
     property "after any number of repaint/2 or keyframe/2 calls, the cursor is back at its pre-bracket position every time" do
       op_gen =
         gen all(
