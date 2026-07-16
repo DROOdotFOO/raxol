@@ -66,7 +66,21 @@ need a lockstep update. Concretely:
    (§1.1-redaction) for secret/PII scrubbing. Everything else stays strictly
    append-only. Record framing, `id`, `kind`, and envelope fields are never
    rewritten; a `$redacted` value never disturbs the framing, offsets, or hashes
-   of any other record.
+   of any other record. **I2 scoping (byte-identity/hash invariants) is a
+   WRITE-TIME property:** the `$redacted` rewrite is the one legal *post-write*
+   mutation of a payload value, and it MUST be accompanied by an I9-corpus
+   fixture containing a redacted record — so replay/hash tooling is exercised
+   against a legally-mutated log, not only against strictly-append-only ones.
+7. **Decision-time evaluation law (the general form of the taint/GC gates
+   below).** Tolerate-and-mark applies to REPLAY/AUDIT seams; ADMISSION
+   decisions (gates, `gc` acceptance, gate-relevant trust) MUST evaluate the
+   folded truth synchronously at decision time. A red suite that only tests the
+   replay seam is incomplete without its decision-time counterpart. This is why
+   OQ-U11.3's "taint miscount ⇒ marker, not reject" (a replay-seam tolerance)
+   does NOT license a gate to read a stamped `trust` field: the stamp is
+   display/audit metadata, the fold is the security boundary. HIGH-1 (§2.1 taint
+   point 6 / §5.2) and HIGH-2 (§1.1 schedule arming) are two instances of this
+   law.
 
 ---
 
@@ -138,6 +152,12 @@ them ⇒ healthy, missing without attestation ⇒ damaged exactly as today.
 `fold(0..x)` reads as `fold(low_watermark..x) ⊕ covering checkpoint` — P-JS4's
 restore formula already. No behavior change while `low_watermark = 1`.
 
+**Frozen law: GC never orphans checkpoints.** GC/truncation never removes
+records at/above the newest healthy checkpoint's `tip_offset` — a checkpoint's
+restore path must stay intact. A `gc` proposal violating this is rejected at
+the same seam as `:invalid_tip` (a synchronous admission decision, §0
+clause 7 — never accepted-then-marked).
+
 #### The complete kind set (v1 — minimal, each justified)
 
 | kind | who appends | payload | why it exists |
@@ -145,7 +165,7 @@ restore formula already. No behavior change while `low_watermark = 1`.
 | `event` | EmitBridge (durable tier) | the contract Event fields as landed (`v, session_id, turn_id, ts, family, type, tier, payload`) | the existing corpus; `"kind"` absent ⇒ `"event"` (grandfather clause — every landed journal stays valid, byte-for-byte) |
 | `checkpoint` | checkpoint writer (U9/U10), via the same single Writer | §1.1-checkpoint below | AD-10: checkpoints are **in-log pointer records** — all four cohort leaders independently converged here; HEAD sidecar stays offset+config only, never model state |
 | `annotation` | any writer (reopen the single Writer) | `%{target_offset \| target_range, label, body_ref, author, consent_class}`; `consent_class ∈ private \| shareable \| train` (grow-only) | human/agent notes on history (F14, community-gaps VB#13); **open-any-writer through the single Writer** (non-authoritative, **tip-excluded by the closure rule**); annotations **are records** — they count toward segment rotation and GC, so unbounded annotation bloat is a **GC-policy concern, not a contract gate**; sharing/export honors `consent_class` |
-| `schedule` | scheduler writer (durable trigger store) | `%{trigger_id, when: cron\|event\|once, next_fire, payload_ref, armed}` | wake / self-initiated autonomy (F9, community-gaps class 13); the journal is the authoritative trigger store — external cron tables are projections; **tip-excluded**; the session lifecycle enum grows `:dormant` (a session parked between wakes) |
+| `schedule` | scheduler writer (durable trigger store) | `%{trigger_id, when: cron\|event\|once, next_fire, payload_ref, armed, armed_by}` — `armed_by` REQUIRED, arming provenance (§1.1-schedule below) | wake / self-initiated autonomy (F9, community-gaps class 13); the journal is the authoritative trigger store — external cron tables are projections; **tip-excluded**; the session lifecycle enum grows `:dormant` (a session parked between wakes); **inside the taint lattice via `armed_by`** (§1.1-schedule) |
 
 **Deliberately NOT kinds:**
 
@@ -163,6 +183,31 @@ restore formula already. No behavior change while `low_watermark = 1`.
 - **`gc`/`truncation` marker — reserved, not frozen.** FI-7 explicit-consent
   GC will need one; the kind registry is forward-only, so it can be added
   later without touching this freeze.
+
+#### `schedule` arming provenance (frozen — the wake trigger enters the taint lattice)
+
+The `schedule` record carries required arming provenance so a wake armed from
+tainted context is distinguishable from a trusted one:
+
+- **`armed_by` (required, refs):** a list of journal offsets
+  (`[non_neg_integer()]`, may be empty) naming the events whose *content
+  determined the trigger* — the schedule's lineage into the taint algebra
+  (§2.1). Empty is legal and meaningful: direct human arming with no
+  content-derived input.
+- **Actor rule:** the same envelope-actor rule as events (§2.1, producer-seam
+  stamping) applies to the ARMING command — the command's `actor` comes from
+  the attach/auth context, never invented by the scheduler module. The
+  `schedule` *record* itself still carries no `actor` field (pointer-record
+  rule, §2.1) — arming attribution lives on the arming command path;
+  `armed_by` carries the content lineage.
+- **Wake linkage:** the `woken` loop event's `refs` MUST include the schedule
+  record's offset, so every wake folds back to its arming provenance.
+- **Frozen taint law:** a wake fired from a schedule whose `armed_by` lineage
+  folds tainted is a TAINTED wake — the `woken` event's derived taint follows
+  the fold (§2.1 algebra), and gates treat post-wake actions accordingly
+  (decision-time fold, §0 clause 7). A wake armed from tainted context MUST be
+  distinguishable from a trusted one; without `armed_by` the two would be
+  indistinguishable, which is exactly the hole this closes.
 
 #### `checkpoint` record — frozen fields
 
@@ -247,6 +292,13 @@ must emit it as `family:loop`).
 `item_started`'s membership above is ratified, not tentative (OQ-JS3 — see
 §1.5): it stays in CONVERSATIONAL from day one. EmitBridge must wire its
 emit mapping for `item_started` before U4-R/U9-R reds are authored.
+
+**Emit-vocabulary landing status (baseline correction):** `approval_requested`
+and `item_started` are CONTRACT-frozen members of CONVERSATIONAL, but they are
+NOT YET LANDED in the emit vocabulary — only `turn_started` and the other
+already-landed loop types are wired today. Their EmitBridge wiring is
+implementation work the U4-R/U9-R reds depend on; nothing in this freeze should
+be read as claiming these types already exist in code.
 
 **`woken` loop-vocabulary registration (like `item_started`):** `woken` must be
 registered in the loop vocabulary and its EmitBridge neutral→contract mapping
@@ -474,7 +526,7 @@ Governing dispositions: AD-9, AD-10, AD-11, AD-15, AD-3a/3b, FI-7/8/9/10/12.
 | N-JS4 | reader treats an unknown `kind` as corruption | tolerance red asserts `{:ok, _}`; a reader returning `{:damaged, _}` on unknown kind is the injected breakage | patched Reader that damages-on-unknown-kind |
 | N-JS5 | tip scan selects a non-conversational record | Dormammu red (FI-12) fails; injector: tip predicate patched to `kind == "event"` only (drops the family/type clauses) | that patched predicate |
 | N-JS6 | two id spaces reintroduced (a pointer record stamped from a side counter) | P-JS1 density check fails on the record layer | Writer variant stamping checkpoints from a second counter |
-| N-JS7 | live/ephemeral id surfaces before its durable record is readable (emit-ahead-of-journal, I13) | P-JS5 replay-closure red fails: a late subscriber's `attach_live` stream includes an id not yet present in `read(0..o-1)` | EmitBridge variant that publishes the live id before the Writer append/ack returns |
+| N-JS7 | live/ephemeral id surfaces before its durable record is readable (emit-ahead-of-journal — the I3 publish-ahead invariant; invariants.md defines I1–I10, there is no I13) | P-JS5 replay-closure red fails: a late subscriber's `attach_live` stream includes an id not yet present in `read(0..o-1)` | EmitBridge variant that publishes the live id before the Writer append/ack returns |
 | N-JS8 | tip scan ignores `branch_id` (selects a record from another branch), or a closure-rule tip predicate patched to accept a non-whitelisted kind/type | P-JS8 fails: `tip(journal, b)` returns an offset with `branch_id ≠ b`, or selects a non-CONVERSATIONAL record | predicate variant dropping the `branch_id == b` clause, or one admitting any `family:loop` type regardless of CONVERSATIONAL membership |
 | N-JS9 | reader marks a session damaged for a missing/dangling or cyclic lineage parent | P-JS9 fails; tolerance red asserts `{:ok, _}` and identical fold | reader that resolves lineage as replay input and damages-on-missing-parent |
 | N-JS10 | `$blob` deref failure treated as journal corruption, or blob written AFTER the referencing record | P-JS10 fails: reader returns `{:damaged, _}` on a missing blob (must be tombstone + `:ok`), or a crash between record-append and blob-write leaves a referenced-but-absent blob | reader that damages-on-missing-blob; Writer that appends the record before the blob file |
@@ -725,6 +777,16 @@ as opaque labels.
 5. **Gates read taint:** a tool call whose args derive from tainted content
    takes a distinct confirmation path (FI-5 verbatim) — the *enforcement* is
    U8/U15's job; the *marker semantics* are frozen here.
+6. **Gates fold taint, never read the stamped field (frozen law — the
+   decision-time form of point 5; §0 clause 7):** any gate admitting a call
+   on TrustedLineage grounds (YOLO clause-4, BlastRadiusGate taint
+   escalation) MUST compute trust by folding this algebra over the call's
+   `refs`/lineage at decision time; reading the stamped envelope `trust`
+   value for an ADMISSION decision is forbidden. Rationale: OQ-U11.3 makes a
+   taint miscount an alarm+marker (not a reject), so a mis-stamped `:trusted`
+   event reads trusted until something folds — the stamped field is
+   display/audit metadata, the fold is the security boundary. Echoed at the
+   auto-approve predicate (§5.2); negative contour N-U11.11.
 
 #### Decode/validation seam
 
@@ -794,6 +856,7 @@ Governing dispositions: FI-5, FI-2, AD-11, I9.
 | N-U11.8 | a module invents `actor` locally instead of the producer seam, or a reader infers human/agent from absent `actor` | P-U11.6 fails: two records in one write generation disagree on actor, or absence decodes as non-system | module-local actor stamping; reader that guesses actor from context on absence |
 | N-U11.9 | head / `turn_started` / `item_completed` fingerprints disagree and the fold picks the wrong precedence (e.g. head wins over `item_completed`) | P-U11.7 fails naming the offset whose content is mis-attributed | fold that reads session-head model as "what produced this content" instead of the `item_completed` fingerprint |
 | N-U11.10 | `speculation{:begin}` validator hardcodes a single parent (refs treated as scalar) | P-U11.8 fails: a 2-parent begin is rejected or truncated to one | validator asserting `length(refs) == 1` at `:begin` |
+| N-U11.11 | a gate reads the stamped envelope `trust` for an ADMISSION decision instead of folding the algebra over `refs`/lineage (§2.1 point 6) | decision-time red fails: a mis-stamped `:trusted` event with tainted refs is admitted by the field-reading gate where the folding gate escalates/denies | gate variant reading `event.provenance.trust` directly — a mis-stamped `:trusted` event with tainted refs passes the field-reading gate, fails a folding gate |
 
 ### 2.4 Forward-compat note
 
@@ -982,6 +1045,16 @@ last-wins unless a future grow-only per-call list supersedes it.
   This is **additive** to N-U12.3's "never drops silently" rule, not a
   denial of it: a shed run still gets its terminal `probe_run` event, it is
   never simply discarded.
+- **Saturation observability (frozen — the backpressure observable):** when a
+  run parks, or the parked set sheds (`max_parked` overflow / `park_timeout_ms`
+  expiry), the Runner emits telemetry
+  `[:raxol, :agent, :probe, :saturation]` with counts (parked, shed, running),
+  AND the `probe_run{status: :parked}` / `:exhausted` events already journal
+  the facts. A caller CAN therefore distinguish "accepted and running" from
+  "accepted and parked/shed" via `status/2` and the `probe_run` stream —
+  **`submit`'s `{:ok, run_id}` is an acceptance receipt, not an execution
+  promise.** Saturation is never silent: it is observable both live
+  (telemetry) and durably (the journaled lifecycle).
 
 #### Cache-riding (frozen requirement, mechanism opaque)
 
@@ -1082,7 +1155,12 @@ exhaustion parks, but a full parked set overrides parking with `:exhausted`.
   (no session cap), contradicting the "runaway impossible" goal (U16) and
   leaving the per-session economy undefined. `budget_scope` reserves
   session-then-run, in that fixed order, so exhaustion of either parks the
-  run without an ordering hazard.
+  run without an ordering hazard. **Partial-failure rollback (frozen):** if
+  the run-level reserve is refused after the session-level reserve
+  succeeded, the session-level reservation is RELEASED before the run parks
+  — no leaked session budget. Negative contour: an injector that leaks the
+  session reservation on run-refusal must fail a budget-conservation red
+  (the session budget fold returns to its pre-submit value).
 - **OQ-U12.2 — RULED: freeze the interface now; `@tag`-pending reds until
   U17.** Reason: C6 cross-family is the only `:standalone` consumer and it's
   Wave 4 — a standalone red now would have no implementation surface to
@@ -1156,6 +1234,12 @@ is the irreducible always-escalate class (no lineage, oracle, or calibration
 overrides it), and `egress` is the exfil leg of the lethal trifecta. Enforcement
 is **structural, compiled in our own tree** — never self-reported by an untrusted
 MCP tool (the `destructiveHint`-is-a-lie class, yolo-safe N-Y5).
+
+**Decision-time fold law (echo of §2.1 taint point 6 / §0 clause 7):** the
+"trusted lineage" leg of YOLO-applicability is established by folding the taint
+algebra over the call's `refs`/lineage at decision time — never by reading the
+stamped envelope `trust` field. A gate that admits on the stamped value fails
+N-U11.11.
 
 **F2 dependency:** `effect_class`/`egress` live in the not-yet-landed F2
 `Raxol.Action` draft — reds that assert `effect_class`-keyed escalation carry
