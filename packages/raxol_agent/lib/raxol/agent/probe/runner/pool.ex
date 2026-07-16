@@ -175,17 +175,22 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     {:noreply, shed_held(state, run_id, key, :exhausted, :park_timeout)}
   end
 
-  # A max_parked overflow signalled sustained budget pressure: shed every run
-  # still held for this pool to :timeout so the parked set stays bounded
-  # (N-U12.10). Shed runs keep their :parked opening but never end :exhausted —
-  # only the overflow runs that were refused parking do (parking precedence).
+  # A max_parked overflow signalled sustained budget pressure. Shed only ONE
+  # run — the OLDEST still-held parked run for this pool — per overflow, NOT the
+  # entire parked set (the old code nuked every parked run on a single overflow).
+  # The evicted run terminates `:exhausted` (the contract's park-eviction
+  # observable: "the oldest/over-TTL parked runs shed to :exhausted", §3.1
+  # Budget / N-U12.10) — NOT `:timeout`, which is reserved for the wall-clock
+  # leash (#2, #7). One overflow relieves one slot; sustained overflow relieves
+  # proportionally, so surviving parked runs keep waiting for a slot or their TTL.
   def handle_info({:pressure_shed, key}, state) do
     held = Map.get(state.parked, key, MapSet.new())
 
     state =
-      Enum.reduce(held, state, fn run_id, acc ->
-        shed_held(acc, run_id, key, :timeout, :pressure)
-      end)
+      case oldest_held(held) do
+        nil -> state
+        run_id -> shed_held(state, run_id, key, :exhausted, :pressure)
+      end
 
     {:noreply, state}
   end
@@ -333,9 +338,23 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   # Shed a still-held parked run to a terminal status, releasing its slot. A run
   # that already terminated (killed, or a prior shed) is left untouched — exactly
   # one terminal per run (P-U12.1).
+  # The oldest still-held parked run in `held`, by monotonic run_id order (the
+  # gen_run_id suffix is a monotonic integer, so the smallest is the oldest), or
+  # nil when the set is empty. Used to shed the single oldest run per overflow.
+  defp oldest_held(held) do
+    if Enum.empty?(held), do: nil, else: Enum.min_by(held, &run_seq/1)
+  end
+
+  defp run_seq(run_id) do
+    run_id |> String.split("-") |> List.last() |> String.to_integer()
+  end
+
   defp shed_held(state, run_id, key, status, reason) do
     case Map.get(state.runs, run_id) do
       %{status: :parked, emit: emit, spec: spec} = run ->
+        # A parked run holds no reserve (reserved: 0), so this is a no-op; kept
+        # for symmetry with the other under-charge terminals (#5).
+        release_reserve(run)
         emit_terminal(emit, run_id, spec.id, status, @zero_charge, reason)
 
         state

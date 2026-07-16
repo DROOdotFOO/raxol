@@ -477,17 +477,28 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # The parked set never grows past the cap.
       assert L.bounded_parking(events, max_parked) == :ok, "seed=#{@seed}"
 
-      # Excess runs got the :exhausted terminal, never :parked (parking precedence).
-      shed =
-        for %{kind: :probe_run, run_id: id, status: :exhausted} <- events,
+      # AMENDED (adversarial-review #7, 2026-07-16): the OVER-CAP-refused runs are
+      # identified by their :exhausted `reason: :max_parked` — NOT by "any
+      # :exhausted run". The contract (§3.1 Budget / N-U12.10) says pressure
+      # relief also sheds the OLDEST HELD parked runs to :exhausted (reason
+      # :pressure); those legitimately WERE :parked. The original refute iterated
+      # every :exhausted run and would have wrongly flagged a pressure-evicted
+      # parked run. The LAW it pins — a max_parked-REFUSED run is :exhausted and
+      # was NEVER :parked (parking precedence, §3.3) — is unchanged; only the
+      # set it applies to is scoped to the refused runs. (Fix #7 also changed
+      # pressure-eviction from the frozen-but-wrong :timeout to :exhausted and
+      # from nuke-all to shed-oldest-one-per-overflow.)
+      refused =
+        for %{kind: :probe_run, run_id: id, status: :exhausted, reason: :max_parked} <- events,
             into: MapSet.new(),
             do: id
 
-      assert MapSet.size(shed) >= n - max_parked,
-             "seed=#{@seed}: #{n - max_parked} over-cap runs must shed :exhausted, " <>
-               "got #{MapSet.size(shed)} — a silently discarded run is the N-U12.3 breach"
+      assert MapSet.size(refused) == n - max_parked,
+             "seed=#{@seed}: exactly #{n - max_parked} over-cap runs must shed :exhausted " <>
+               "(reason :max_parked), got #{MapSet.size(refused)} — a silently discarded run " <>
+               "is the N-U12.3 breach"
 
-      for run_id <- shed do
+      for run_id <- refused do
         refute Enum.any?(
                  events,
                  &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :parked)
@@ -497,6 +508,75 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       # Still exactly one terminal each — shedding is not double-emitting.
       assert L.lifecycle_complete(events, submitted) == :ok, "seed=#{@seed}"
+    end
+
+    test "one over-cap submit sheds at most one (the oldest) parked run; the others survive (adversarial-review #7)" do
+      # Fill the parked set to exactly max_parked (all PARK — cap:0 refuses every
+      # reserve, parked set not yet full). ShortParkProbe: max_parked 3, fast TTL.
+      rig = rig(cap: 0)
+      max_parked = ShortParkProbe.spec().max_parked
+
+      parked =
+        for i <- 1..max_parked do
+          assert {:ok, id} =
+                   Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx(tip_offset: i)))
+
+          id
+        end
+
+      # Every one parked, none terminal yet (park_or_shed emits :parked inline).
+      evs0 = L.events(rig.bus)
+
+      for id <- parked do
+        assert Enum.any?(evs0, &(&1.kind == :probe_run and &1.run_id == id and &1.status == :parked))
+
+        refute Enum.any?(
+                 evs0,
+                 &(&1.kind == :probe_run and &1.run_id == id and &1.status in L.terminal_statuses())
+               )
+      end
+
+      # ONE over-cap submit → it goes :exhausted (never parked) and schedules a
+      # SINGLE pressure-shed of the oldest held run.
+      assert {:ok, over} =
+               Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx(tip_offset: 99)))
+
+      # Wait for the single pressure-shed (@pressure_shed_ms ~40ms) but well
+      # inside the 300ms park TTL so survivors are shed by PRESSURE, not TTL.
+      Process.sleep(120)
+      events = L.events(rig.bus)
+
+      # The over-cap run: :exhausted, reason :max_parked, never :parked.
+      assert Enum.any?(
+               events,
+               &(&1.kind == :probe_run and &1.run_id == over and &1.status == :exhausted and
+                   &1.reason == :max_parked)
+             )
+
+      # Exactly ONE parked run was pressure-evicted (:exhausted, reason :pressure).
+      pressure_shed =
+        for %{kind: :probe_run, run_id: id, status: :exhausted, reason: :pressure} <- events,
+            id in parked,
+            into: MapSet.new(),
+            do: id
+
+      assert MapSet.size(pressure_shed) == 1,
+             "one overflow must shed exactly one parked run, got #{inspect(MapSet.to_list(pressure_shed))}"
+
+      # The oldest (smallest tip / first submitted) was the one evicted.
+      assert MapSet.member?(pressure_shed, hd(parked)),
+             "the OLDEST parked run must be the one shed"
+
+      # The other parked runs SURVIVE (still parked, no terminal yet).
+      survivors = Enum.reject(parked, &MapSet.member?(pressure_shed, &1))
+
+      for id <- survivors do
+        refute Enum.any?(
+                 events,
+                 &(&1.kind == :probe_run and &1.run_id == id and &1.status in L.terminal_statuses())
+               ),
+               "a non-oldest parked run was shed by a single overflow: #{id}"
+      end
     end
   end
 
