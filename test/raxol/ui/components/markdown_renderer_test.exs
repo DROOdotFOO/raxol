@@ -297,6 +297,22 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
         assert String.starts_with?(line.content, "  ")
       end
     end
+
+    # Regression pin: the builtin fenced path used to push code lines onto
+    # the reversed accumulator in already-correct order, so the final
+    # reversal flipped them -- a multi-line block rendered bottom-to-top.
+    test "renders multi-line code in source order" do
+      md = "```\nfirst\nsecond\nthird\n```"
+      result = render_md(md)
+
+      code_contents =
+        result
+        |> children()
+        |> Enum.filter(&(&1.style[:fg] == :yellow))
+        |> Enum.map(& &1.content)
+
+      assert code_contents == ["  first", "  second", "  third"]
+    end
   end
 
   describe "blockquotes" do
@@ -414,6 +430,79 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
                {"bold", %{bold: true}},
                {" tail", %{}}
              ]
+    end
+  end
+
+  # A fence's info string ("```elixir") names the code's language. The
+  # renderer displays it as a dim label line above the (monospace, yellow)
+  # code body. Display only -- NO syntax highlighting in this unit; the
+  # label + @code_style block is the documented seam a future highlighter
+  # slots into.
+  describe "fenced code language tags (info string)" do
+    test "renders the language as a dim label line above the code body" do
+      md = "```elixir\nIO.puts(\"hi\")\n```"
+      result = render_md(md)
+
+      assert [label] =
+               Enum.filter(children(result), &(&1[:content] == "  elixir"))
+
+      assert label.style[:dim] == true
+
+      label_idx =
+        Enum.find_index(children(result), &(&1[:content] == "  elixir"))
+
+      code_idx =
+        Enum.find_index(children(result), &((&1[:content] || "") =~ "IO.puts"))
+
+      assert label_idx < code_idx,
+             "the language label must sit above the code body"
+    end
+
+    test "the label is chrome, not code -- dim, never the code accent" do
+      md = "```elixir\nIO.puts(\"hi\")\n```"
+      result = render_md(md)
+
+      [label] = Enum.filter(children(result), &(&1[:content] == "  elixir"))
+
+      refute label.style[:fg] == :yellow,
+             "the label must be visually distinct from the code body"
+    end
+
+    test "an untagged fence renders no label line (and no dim element at all)" do
+      md = "```\nhello\n```"
+      result = render_md(md)
+
+      assert length(children(result)) == 3
+
+      refute Enum.any?(children(result), &(&1[:style][:dim] == true)),
+             "an untagged fence must not grow a label line"
+    end
+
+    test "~~~ fences carry the label too" do
+      md = "~~~python\nx = 1\n~~~"
+      result = render_md(md)
+
+      assert Enum.any?(children(result), &(&1[:content] == "  python"))
+    end
+
+    test "only the first word of the info string becomes the label" do
+      md = "```elixir title=demo\n:ok\n```"
+      result = render_md(md)
+
+      assert Enum.any?(children(result), &(&1[:content] == "  elixir"))
+      refute full_text(result) =~ "title"
+    end
+
+    test "code_language_from_attrs/1 extracts Earmark's class attr, stripping the language- prefix" do
+      assert MarkdownRenderer.code_language_from_attrs([{"class", "elixir"}]) ==
+               "elixir"
+
+      assert MarkdownRenderer.code_language_from_attrs([
+               {"class", "language-rust"}
+             ]) == "rust"
+
+      assert MarkdownRenderer.code_language_from_attrs([]) == nil
+      assert MarkdownRenderer.code_language_from_attrs([{"class", ""}]) == nil
     end
   end
 end

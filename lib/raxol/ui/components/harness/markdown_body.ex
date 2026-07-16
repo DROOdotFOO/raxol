@@ -81,6 +81,16 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
   marker character still toggles/opens its construct normally. Full
   escape handling would need to thread an "escaped" flag through the
   scan; left as a documented gap rather than expanded scope here.
+
+  ## Follow-up seam: stable-prefix optimization
+
+  Today every streaming delta re-parses the FULL accumulated text (byte-
+  capped at 256KB -- see `@render_byte_cap` below). A follow-up unit
+  could instead cache the parse of the longest durable prefix (the text
+  up to the last committed line boundary, which never changes as more
+  deltas arrive) and re-parse only the live tail on each delta.
+  Documented here as a known optimization opportunity, not implemented --
+  this module's current correctness does not depend on it.
   """
 
   alias Raxol.UI.Components.MarkdownRenderer

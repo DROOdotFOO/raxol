@@ -349,4 +349,57 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
       refute Enum.any?(texts, &(&1 =~ "No tracked effects."))
     end
   end
+
+  # `mount/3` takes the block's seal state (`:seal` -- `:live | :sealed`,
+  # default `:sealed`) and threads it into the `:message` body as
+  # `MessageBlock`'s render mode: a live message renders with the
+  # provisional-close streaming treatment, a sealed one as a plain full
+  # parse. Default is `:sealed` so existing direct callers see zero change;
+  # `BlockBody` passes the real `block.seal`. Other kinds accept and
+  # ignore the option.
+  describe "seal threading -- :message bodies stream-render while live" do
+    test "seal: :live renders the message body with provisional close (no marker leak)" do
+      {:ok, view} =
+        BodyProvider.mount(:message, %{text: "wip **bold"},
+          context: default_context(),
+          seal: :live
+        )
+
+      texts = flat_texts(view)
+
+      assert Enum.any?(texts, &(&1 =~ "bold"))
+
+      refute Enum.any?(texts, &(&1 =~ "*")),
+             "a live message's unclosed marker leaked through the mount"
+    end
+
+    test "seal: :sealed (and omitted) renders a plain full parse -- the unclosed marker stays literal" do
+      {:ok, sealed_view} =
+        BodyProvider.mount(:message, %{text: "wip **bold"},
+          context: default_context(),
+          seal: :sealed
+        )
+
+      {:ok, default_view} =
+        BodyProvider.mount(:message, %{text: "wip **bold"},
+          context: default_context()
+        )
+
+      assert Enum.any?(flat_texts(sealed_view), &(&1 =~ "**"))
+
+      # ids are per-init unique -- parity is about rendered content, so
+      # compare the text projection, not the raw view maps.
+      assert flat_texts(sealed_view) == flat_texts(default_view)
+    end
+
+    test "seal is accepted and harmless for non-message kinds" do
+      assert {:ok, _view} =
+               BodyProvider.mount(
+                 :tool_call,
+                 %{name: "Bash", args: %{command: "ls"}},
+                 context: default_context(),
+                 seal: :live
+               )
+    end
+  end
 end
