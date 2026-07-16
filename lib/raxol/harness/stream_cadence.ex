@@ -15,11 +15,29 @@ defmodule Raxol.Harness.StreamCadence do
   producer and a `Raxol.Harness.Surface`-shaped consumer (apply deltas
   to the live tail, repaint the footer): unbounded ingest via
   `ingest/2` (the GenServer mailbox is the buffer -- it never blocks
-  the producer), cadence-throttled egress via
-  `Raxol.Harness.CadencePolicy` (the pure decision function), bounded
-  per-flush drain (`Raxol.Harness.CadencePolicy.drain_count/2`).
+  the producer; load-shedding, not backpressure: excess above
+  `:max_pending` is dropped, not pushed back), cadence-throttled egress
+  via `Raxol.Harness.CadencePolicy` (the pure decision function),
+  bounded per-flush drain (`Raxol.Harness.CadencePolicy.drain_count/2`).
+
+  To be plain about the flow-control model: this layer never applies
+  backpressure toward the producer. It is a cadence + load-shedding
+  layer -- ingest is always accepted, and excess above the watermark is
+  shed per section 3. A supervision instrument must stay alive and
+  current: the newest deltas ARE the live tail's value, and blocking
+  (call-based) ingest would stall the SSE reader process and cascade
+  into transport timeouts -- the wrong failure mode. Visibly lossy
+  above the watermark beats dead.
 
   ## 2. The owner-consumption contract (the seam)
+
+  **Out of the box this module enforces NO input priority.** The
+  default `:input_check` always returns `false`, so the source-side
+  hold described below is OFF until a caller wires a real check. The
+  `:input_check` seam is MANDATORY, not optional, for the input-first
+  behavior -- and the other mandatory half is the owner handling its
+  input messages before `{:render_batch, ...}` messages in its own
+  receive.
 
   Flush delivery is a **message** the owner consumes -- by default
   `{:render_batch, batch}` sent to the `:owner` pid -- never a blocking
@@ -40,13 +58,35 @@ defmodule Raxol.Harness.StreamCadence do
   `send`, never a `GenServer.call` into the owner) -- this server has
   no timeout protection against a slow sink.
 
-  ## 3. Ordering / no-loss guarantee
+  ## 3. Ordering / loss contract
 
-  Batches arrive in ingest order. The concatenation of every delivered
-  batch equals the exact ingest sequence -- no delta is ever dropped,
-  duplicated, or reordered. Each batch has at most
-  `Raxol.Harness.CadencePolicy.max_drain_per_flush/0` items (or the
-  configured override).
+  The guarantee is: **lossless below the `:max_pending` watermark;
+  explicit, in-band loss above it.**
+
+  Below the watermark, batches arrive in ingest order and the
+  concatenation of every delivered batch equals the exact ingest
+  sequence -- no delta dropped, duplicated, or reordered. Each batch
+  carries at most `Raxol.Harness.CadencePolicy.max_drain_per_flush/0`
+  deltas (or the configured override).
+
+  At or above the watermark, the OLDEST pending deltas are shed
+  (drop-oldest: the queue head is history, the queue tail is the live
+  view). Each shed emits an `[:raxol, :harness, :stream_cadence,
+  :overflow]` telemetry event at drop time (measurements
+  `%{dropped, pending_count}`, metadata `%{max_pending}`), and the next
+  flushed batch begins with a `{:cadence_dropped, n}` marker sitting
+  exactly at the position of the loss (the dropped items were the queue
+  head). The marker is NOT counted against the drain bound, so a batch
+  carries at most `max_drain_per_flush + 1` elements when loss
+  occurred. `{:cadence_dropped, non_neg_integer()}` is a documented
+  RESERVED element type in the batch stream; consumers must handle it.
+  A naive sink that assumes every batch element is a delta (say, one
+  that joins binaries) will fail loudly at the first loss -- that is
+  deliberate: in a supervision instrument, silently rendering a
+  gapless stream over shed data is worse than a crash that names the
+  unhandled loss.
+
+  The pending queue is therefore always bounded.
 
   ## 4. Throughput ceiling (deliberate design point)
 
@@ -62,6 +102,11 @@ defmodule Raxol.Harness.StreamCadence do
   (the SSE `:sse_done` moment) to skip that wait and flush the tail
   immediately instead of leaving it up to 16ms stale.
 
+  In the other direction, rendering waits on input for at most ~one
+  frame interval: the consecutive-yield budget
+  (`Raxol.Harness.CadencePolicy.max_consecutive_yields/0`) forces a
+  flush through even under continuous input.
+
   ## 5. Not wired yet
 
   The live session loop that would own one of these servers, apply
@@ -74,11 +119,15 @@ defmodule Raxol.Harness.StreamCadence do
 
   alias Raxol.Harness.CadencePolicy
 
+  @overflow_event [:raxol, :harness, :stream_cadence, :overflow]
+
   ## Client API
 
   @doc """
   Enqueues `delta` for eventual flush. Always a cast -- the unbounded
-  mailbox is the buffer, so ingest never blocks the producer.
+  mailbox is the buffer, so ingest never blocks the producer
+  (load-shedding, not backpressure: excess above `:max_pending` is
+  dropped, not pushed back -- see moduledoc section 3).
   """
   @spec ingest(GenServer.server(), term()) :: :ok
   def ingest(server, delta) do
@@ -116,7 +165,13 @@ defmodule Raxol.Harness.StreamCadence do
         CadencePolicy.input_yield_retry_ms()
       )
 
-    policy_opts = Keyword.take(opts, [:flush_interval_ms, :max_drain_per_flush])
+    policy_opts =
+      Keyword.take(opts, [
+        :flush_interval_ms,
+        :max_drain_per_flush,
+        :max_pending,
+        :max_consecutive_yields
+      ])
 
     state = %{
       sink: sink,
@@ -128,7 +183,9 @@ defmodule Raxol.Harness.StreamCadence do
       pending: :queue.new(),
       pending_count: 0,
       last_flush_ms: nil,
-      timer_ref: nil
+      timer_ref: nil,
+      dropped_since_flush: 0,
+      yields_since_flush: 0
     }
 
     {:ok, state}
@@ -137,7 +194,10 @@ defmodule Raxol.Harness.StreamCadence do
   @impl true
   def handle_manager_cast({:ingest, delta}, state) do
     pending = :queue.in(delta, state.pending)
-    state = %{state | pending: pending, pending_count: state.pending_count + 1}
+
+    state =
+      %{state | pending: pending, pending_count: state.pending_count + 1}
+      |> shed_overflow()
 
     state =
       if state.timer_ref do
@@ -199,11 +259,56 @@ defmodule Raxol.Harness.StreamCadence do
     end
   end
 
+  # Drop-oldest load shedding at the :max_pending watermark: the queue
+  # head is history, the queue tail is the live view. Loud, twice over
+  # -- telemetry now, and an in-band {:cadence_dropped, n} marker at
+  # the next flush (accumulated in dropped_since_flush).
+  defp shed_overflow(state) do
+    case state.policy.drop_count(state.pending_count, state.policy_opts) do
+      0 ->
+        state
+
+      drop ->
+        {_shed, rest} = :queue.split(drop, state.pending)
+        new_count = state.pending_count - drop
+
+        :telemetry.execute(
+          @overflow_event,
+          %{dropped: drop, pending_count: new_count},
+          %{
+            max_pending:
+              Keyword.get(
+                state.policy_opts,
+                :max_pending,
+                CadencePolicy.max_pending()
+              )
+          }
+        )
+
+        %{
+          state
+          | pending: rest,
+            pending_count: new_count,
+            dropped_since_flush: state.dropped_since_flush + drop
+        }
+    end
+  end
+
   # Consults the policy for the current instant and either flushes now
   # (draining a bounded batch, then re-consulting for any remainder),
-  # or schedules a `:flush_due` timer per the verdict.
+  # or schedules a `:flush_due` timer per the verdict. The
+  # yields_since_flush counter is caller state the policy needs, passed
+  # per call (never stored inside policy_opts) and reset by every
+  # flushed batch.
   defp decide_and_act(state) do
     now = state.clock.()
+
+    opts =
+      Keyword.put(
+        state.policy_opts,
+        :yields_since_flush,
+        state.yields_since_flush
+      )
 
     verdict =
       state.policy.decide(
@@ -211,7 +316,7 @@ defmodule Raxol.Harness.StreamCadence do
         state.last_flush_ms,
         state.pending_count,
         state.input_check.(),
-        state.policy_opts
+        opts
       )
 
     case verdict do
@@ -222,27 +327,48 @@ defmodule Raxol.Harness.StreamCadence do
         schedule_flush(state, ms)
 
       :yield_to_input ->
+        state = %{state | yields_since_flush: state.yields_since_flush + 1}
         schedule_flush(state, state.input_yield_retry_ms)
     end
   end
 
-  # Drains exactly one bounded batch, then -- if anything remains --
-  # re-consults the policy with the fresh `last_flush_ms`. Immediately
-  # after a flush, elapsed time against that fresh timestamp is ~0, so
-  # the policy will defer the remainder by a full cadence interval
-  # (or yield to input, if input became pending in the meantime).
-  defp flush_one_batch(state, now) do
+  # The one shared drain body (the cadence path and the forced path
+  # both use it): split off one bounded batch, prepend the loss marker
+  # if any deltas were shed since the last flush, sink it, and reset
+  # the per-flush counters. The marker is NOT counted against the
+  # drain bound -- a marker-bearing batch is max_drain + 1 elements,
+  # so no delta is displaced by the report of the loss.
+  defp drain_one_batch(state, now) do
     drain = state.policy.drain_count(state.pending_count, state.policy_opts)
     {batch_queue, rest_queue} = :queue.split(drain, state.pending)
-    batch = :queue.to_list(batch_queue)
+    deltas = :queue.to_list(batch_queue)
+
+    batch =
+      case state.dropped_since_flush do
+        0 -> deltas
+        n -> [{:cadence_dropped, n} | deltas]
+      end
+
     state.sink.(batch)
 
-    state = %{
+    %{
       state
       | pending: rest_queue,
         pending_count: state.pending_count - drain,
-        last_flush_ms: now
+        last_flush_ms: now,
+        dropped_since_flush: 0,
+        yields_since_flush: 0
     }
+  end
+
+  # Cadence-path flush: one bounded batch, then -- if anything remains
+  # -- re-consult the policy with the fresh `last_flush_ms`.
+  # Immediately after a flush, elapsed time against that fresh
+  # timestamp is ~0, so the policy will defer the remainder by a full
+  # cadence interval (or yield to input, if input became pending in
+  # the meantime).
+  defp flush_one_batch(state, now) do
+    state = drain_one_batch(state, now)
 
     if state.pending_count > 0 do
       decide_and_act(state)
@@ -254,31 +380,19 @@ defmodule Raxol.Harness.StreamCadence do
   # Forced full drain (`flush_now/1`): ignores cadence and the input
   # gate entirely, delivering everything pending now in consecutive
   # bounded batches.
+  defp full_drain(%{pending_count: 0} = state), do: state
+
   defp full_drain(state) do
-    if state.pending_count == 0 do
-      state
-    else
-      now = state.clock.()
-      full_drain_loop(state, now)
-    end
+    now = state.clock.()
+    full_drain_loop(state, now)
   end
 
   defp full_drain_loop(%{pending_count: 0} = state, _now), do: state
 
   defp full_drain_loop(state, now) do
-    drain = state.policy.drain_count(state.pending_count, state.policy_opts)
-    {batch_queue, rest_queue} = :queue.split(drain, state.pending)
-    batch = :queue.to_list(batch_queue)
-    state.sink.(batch)
-
-    state = %{
-      state
-      | pending: rest_queue,
-        pending_count: state.pending_count - drain,
-        last_flush_ms: now
-    }
-
-    full_drain_loop(state, now)
+    state
+    |> drain_one_batch(now)
+    |> full_drain_loop(now)
   end
 
   defp schedule_flush(state, ms) do

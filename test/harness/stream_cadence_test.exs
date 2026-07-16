@@ -80,11 +80,112 @@ defmodule Raxol.Harness.StreamCadenceTest do
 
       StreamCadence.ingest(server, "x")
 
-      refute_receive {:render_batch, _}, 30
+      # 10ms of 1ms retries stays under the 16-yield budget, so the
+      # flush is still held here.
+      refute_receive {:render_batch, _}, 10
 
       Agent.update(input_pending, fn _ -> false end)
 
       assert_receive {:render_batch, ["x"]}, 50
+    end
+  end
+
+  describe "forced progress under permanent input" do
+    test "yield budget forces a flush even when input never releases" do
+      server = start(input_check: fn -> true end)
+
+      StreamCadence.ingest(server, "x")
+
+      # The default 16-yield budget exhausts after ~16 x 1ms retries and
+      # the decision falls through to the cadence rules -> flush.
+      assert_receive {:render_batch, ["x"]}, 100
+    end
+
+    test ":max_consecutive_yields config seam shortens the hold" do
+      server = start(input_check: fn -> true end, max_consecutive_yields: 3)
+
+      StreamCadence.ingest(server, "x")
+
+      assert_receive {:render_batch, ["x"]}, 50
+    end
+  end
+
+  describe "overflow: drop-oldest at the :max_pending watermark" do
+    test "sheds oldest, emits telemetry, marks loss in-band at the next flush" do
+      handler_id = "stream-cadence-overflow-#{inspect(self())}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:raxol, :harness, :stream_cadence, :overflow],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:overflow, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      server = start(flush_interval_ms: 60_000, max_pending: 5)
+
+      StreamCadence.ingest(server, "seed")
+      assert_receive {:render_batch, ["seed"]}, 50
+
+      for i <- 1..10, do: StreamCadence.ingest(server, "d#{i}")
+
+      # d6..d10 push the queue past the watermark; d1..d5 are shed.
+      dropped_total =
+        Enum.reduce(1..5, 0, fn _, acc ->
+          assert_receive {:overflow, %{dropped: n}, %{max_pending: 5}}, 100
+          acc + n
+        end)
+
+      assert dropped_total == 5
+      refute_receive {:overflow, _, _}, 20
+
+      StreamCadence.flush_now(server)
+
+      assert_receive {:render_batch,
+                      [{:cadence_dropped, 5}, "d6", "d7", "d8", "d9", "d10"]},
+                     100
+    end
+
+    test "loss marker resets after the flush that reported it" do
+      server = start(flush_interval_ms: 60_000, max_pending: 2)
+
+      StreamCadence.ingest(server, "seed")
+      assert_receive {:render_batch, ["seed"]}, 50
+
+      for i <- 1..3, do: StreamCadence.ingest(server, "d#{i}")
+
+      StreamCadence.flush_now(server)
+      assert_receive {:render_batch, [{:cadence_dropped, 1}, "d2", "d3"]}, 100
+
+      StreamCadence.ingest(server, "z")
+      StreamCadence.flush_now(server)
+
+      # No marker: the counter reset at the previous flush.
+      assert_receive {:render_batch, ["z"]}, 100
+    end
+
+    test "marker prepends without displacing a delta: batch may be max_drain + 1" do
+      server = start(flush_interval_ms: 60_000, max_pending: 32)
+
+      StreamCadence.ingest(server, "seed")
+      assert_receive {:render_batch, ["seed"]}, 50
+
+      deltas = for i <- 1..33, do: "d#{i}"
+      Enum.each(deltas, &StreamCadence.ingest(server, &1))
+
+      # d1 was shed at the watermark; d2..d33 (32 items, a full drain)
+      # remain. The marker rides along as element 33 -- it is not
+      # counted against the drain bound, so no delta is displaced.
+      StreamCadence.flush_now(server)
+
+      assert_receive {:render_batch, batch}, 100
+      assert length(batch) == 33
+      assert hd(batch) == {:cadence_dropped, 1}
+      assert tl(batch) == Enum.drop(deltas, 1)
     end
   end
 

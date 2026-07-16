@@ -15,6 +15,14 @@ defmodule Raxol.Harness.CadencePolicyTest do
     test "input_yield_retry_ms/0" do
       assert CadencePolicy.input_yield_retry_ms() == 1
     end
+
+    test "max_pending/0" do
+      assert CadencePolicy.max_pending() == 10_000
+    end
+
+    test "max_consecutive_yields/0" do
+      assert CadencePolicy.max_consecutive_yields() == 16
+    end
   end
 
   describe "decide/5 -- never flushed" do
@@ -120,6 +128,66 @@ defmodule Raxol.Harness.CadencePolicyTest do
 
     test "override does not raise the cap for small counts" do
       assert CadencePolicy.drain_count(5, max_drain_per_flush: 10) == 5
+    end
+  end
+
+  describe "decide/5 -- consecutive-yield budget" do
+    # Input holds a token flush only while the caller-carried
+    # yields_since_flush counter is below the budget; at the budget the
+    # decision falls through to the plain cadence rules, guaranteeing
+    # forward progress within ~one frame of continuous input.
+    for yields <- [0, 1, 15] do
+      test "input pending with #{yields} yields spent still yields" do
+        assert CadencePolicy.decide(2_000, 1_000, 3, true,
+                 yields_since_flush: unquote(yields)
+               ) == :yield_to_input
+      end
+    end
+
+    test "exhausted budget falls through: nil last_flush -> :flush_now" do
+      assert CadencePolicy.decide(1_000, nil, 1, true, yields_since_flush: 16) ==
+               :flush_now
+    end
+
+    test "exhausted budget falls through: window open -> :flush_now" do
+      assert CadencePolicy.decide(2_000, 1_000, 3, true, yields_since_flush: 16) ==
+               :flush_now
+    end
+
+    test "exhausted budget falls through: window closed -> exact defer" do
+      assert CadencePolicy.decide(1_005, 1_000, 3, true, yields_since_flush: 16) ==
+               {:defer, 11}
+    end
+
+    test ":max_consecutive_yields override honored" do
+      assert CadencePolicy.decide(2_000, 1_000, 3, true,
+               yields_since_flush: 3,
+               max_consecutive_yields: 3
+             ) == :flush_now
+
+      assert CadencePolicy.decide(2_000, 1_000, 3, true,
+               yields_since_flush: 2,
+               max_consecutive_yields: 3
+             ) == :yield_to_input
+    end
+  end
+
+  describe "drop_count/2" do
+    test "below the watermark drops nothing" do
+      assert CadencePolicy.drop_count(9_999) == 0
+    end
+
+    test "at the watermark drops nothing" do
+      assert CadencePolicy.drop_count(10_000) == 0
+    end
+
+    test "above the watermark drops the exact excess" do
+      assert CadencePolicy.drop_count(10_007) == 7
+    end
+
+    test "honors the :max_pending override" do
+      assert CadencePolicy.drop_count(8, max_pending: 5) == 3
+      assert CadencePolicy.drop_count(5, max_pending: 5) == 0
     end
   end
 
