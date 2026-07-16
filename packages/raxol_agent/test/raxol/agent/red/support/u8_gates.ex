@@ -780,7 +780,7 @@ defmodule Raxol.Agent.Red.U8Gates do
       end)
     end
 
-    # C8 (@action_surface) — the pure §5.2 predicate table: escalate iff
+    # C8 — the pure §5.2 predicate table: escalate iff
     # irreversible_external OR egress; both benign classes without egress → auto.
     def escalate_predicate(gate) do
       safe(fn ->
@@ -824,7 +824,7 @@ defmodule Raxol.Agent.Red.U8Gates do
       end)
     end
 
-    # C9 (@action_surface) — the predicate reads STRUCTURAL effect_class, never a
+    # C9 — the predicate reads STRUCTURAL effect_class, never a
     # self-reported hint: an irreversible call claiming destructive_hint: false
     # still escalates.
     def predicate_ignores_destructive_hint(gate) do

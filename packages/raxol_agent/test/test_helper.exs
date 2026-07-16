@@ -49,8 +49,10 @@ end
 # `Raxol.Agent.Fingerprint`, so it now runs untagged in CI; the tag is kept in
 # the exclude list for the next failing-first red. The negative CONTROLS for the
 # same contours are NOT tagged :harness_red — they run in CI to prove each red
-# has teeth (meta-invariant m4). :action_surface — reds depending on the
-# not-yet-landed F2 Raxol.Action draft (already under :harness_red; a marker).
+# has teeth (meta-invariant m4). (The former `:action_surface` marker on U8-R's
+# §5.2 predicate block was retired: that predicate reads a structural
+# `effect_class` supplied by the call map, needs no F2 `Raxol.Action` draft to
+# exercise, and runs green — so the block is untagged, not deferred.)
 ExUnit.start(
   exclude: [
     :slow,

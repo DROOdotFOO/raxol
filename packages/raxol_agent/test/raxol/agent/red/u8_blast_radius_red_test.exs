@@ -5,11 +5,10 @@
 #
 # Two modules, one file, by design:
 #
-#   * `U8BlastRadiusRedTest` (@moduletag :harness_red, excluded in
-#     test_helper.exs) — the RED contours, run against the production skeleton
-#     `Raxol.Agent.Authorization.BlastRadiusGate`. They fail today
-#     (:not_implemented) and turn green IN PLACE when U8 lands: flip the
-#     exclusion off, change no assertion.
+#   * `U8BlastRadiusRedTest` (GRADUATED — carries only `@moduletag :capture_log`,
+#     runs untagged in CI) — the contours, run against the now-implemented
+#     `Raxol.Agent.Authorization.BlastRadiusGate`. They were authored RED and
+#     turned green IN PLACE when U8 landed; no assertion changed.
 #   * `U8BlastRadiusControlsTest` (untagged — runs in CI every push) — proves
 #     the contours have teeth: the correct ReferenceGate passes every contour
 #     (discrimination / non-vacuity), and every dead injector fails its contour
@@ -22,9 +21,10 @@ defmodule Raxol.Agent.Red.U8BlastRadiusRedTest do
   use ExUnit.Case, async: true
 
   # U8-R has GRADUATED: U8 implemented `Raxol.Agent.Authorization.BlastRadiusGate`
-  # (BlastRadiusGate + approvals + decision-time taint fold, AD-6b/AD-14), so the
-  # positive contours now run untagged in CI. The `:action_surface` describe block
-  # below stays tagged until the F2 `Raxol.Action` draft lands.
+  # (BlastRadiusGate + approvals + decision-time taint fold, AD-6b/AD-14), so all
+  # contours — including the §5.2 predicate table (C8/C9) — now run untagged and
+  # GREEN in CI. The predicate reads a structural `effect_class` field supplied
+  # directly by the call map, so it needs no F2 `Raxol.Action` draft to exercise.
   @moduletag :capture_log
 
   # Fixed, reproducible fold-rebuild schedules (meta-inv m2); keep in sync with
@@ -92,9 +92,7 @@ defmodule Raxol.Agent.Red.U8BlastRadiusRedTest do
     end
   end
 
-  describe "U8-R predicate contours (@action_surface — F2 Raxol.Action draft not landed)" do
-    @describetag :action_surface
-
+  describe "U8-R predicate contours (§5.2 — runs green in CI)" do
     test "C8 — escalate iff effect_class == :irreversible_external OR egress == true (§5.2 normative)" do
       assert :ok = Contours.escalate_predicate(BlastRadiusGate)
     end
