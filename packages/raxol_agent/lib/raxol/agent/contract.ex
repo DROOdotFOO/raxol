@@ -54,7 +54,34 @@ defmodule Raxol.Agent.Contract do
               family: :loop,
               type: nil,
               tier: :durable,
-              payload: %{}
+              payload: %{},
+              # --- U11 envelope growth (harness-freeze-contracts.md §2.1) -----
+              # All defaulted; every landed v0 event and every journal record
+              # without these keys decodes to these values — the grandfather
+              # clause. The I9 "contract only grows" rule is honored: new fields
+              # are optional-with-default, never required (removal / rename /
+              # optional→required is forbidden). The EmitBridge / Writer / Reader
+              # carry-through of these fields (`durable_record/1` AND
+              # `map_event/3`, plus the Reader decode) is **U11-I implementation
+              # work** — this enabler grows the struct only so the U11-R red
+              # suite compiles against the frozen shape.
+              scope: :session,
+              provenance: %{source: :primary, trust: :trusted},
+              actor: nil,
+              # The speculation branch this record belongs to (freeze §1.1).
+              # Optional-with-default "main"; a non-default branch is written to
+              # (and now read back from) the journal, "main" stays implicit on the
+              # wire (grandfather-safe, byte-identical for default records — I2).
+              branch_id: "main"
+
+    @typedoc "FI-5 provenance — grow-only; later keys (e.g. :model_family) are additive."
+    @type provenance :: %{
+            required(:source) => atom(),
+            required(:trust) => :trusted | :tainted
+          }
+
+    @typedoc "Who emitted the event; absent (`nil`) folds as `%{kind: :system}` by rule."
+    @type actor :: %{kind: :human | :agent | :system, id: String.t()} | nil
 
     @type t :: %__MODULE__{
             v: non_neg_integer(),
@@ -65,7 +92,11 @@ defmodule Raxol.Agent.Contract do
             family: :loop | :meta,
             type: atom(),
             tier: :ephemeral | :durable,
-            payload: map()
+            payload: map(),
+            scope: :session | :global | atom(),
+            provenance: provenance(),
+            actor: actor(),
+            branch_id: String.t()
           }
   end
 
@@ -88,7 +119,8 @@ defmodule Raxol.Agent.Contract do
   Jason can't take becomes `inspect/1` text.
   """
   @spec sanitize_payload(map()) :: map()
-  def sanitize_payload(payload) when is_map(payload), do: sanitize_value(payload)
+  def sanitize_payload(payload) when is_map(payload),
+    do: sanitize_value(payload)
 
   # Payloads may carry non-JSON-encodable terms (error reasons, tuples,
   # arbitrary tool results). Sanitize at the boundary rather than crash

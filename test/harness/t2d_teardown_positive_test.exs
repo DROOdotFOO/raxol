@@ -125,22 +125,14 @@ defmodule Raxol.Harness.T2dTeardownPositiveTest do
     # capture device, graceful-stop it via the PUBLIC api (`Raxol.stop/1`),
     # and assert the driver's teardown bytes were emitted.
     #
-    # UNRELIABLE today (documents the gap): `Raxol.stop/1` ->
-    # `Lifecycle.handle_cast(:shutdown)` stops dependents in order
-    # (rendering engine, THEN driver) via `GenServer.stop(pid, :shutdown)`.
-    # Neither `Lifecycle` nor its caller traps exits, so the rendering
-    # engine's `:shutdown` exit RACES back through the link: if it kills
-    # `Lifecycle` before the `GenServer.stop(driver, ...)` line is reached,
-    # the driver's `terminate/2` never runs and NO teardown is emitted.
-    # Measured ~50% miss under ExUnit load (deterministic-looking under a
-    # bare `mix run`, which just wins the race). Tracked as unit T28
-    # (graceful shutdown deterministically reaches driver terminate); T28's
-    # builder removes the `skip:` line once Lifecycle stops the driver
-    # before the cascade can unwind it.
-    @tag :pending_t28
-    @tag skip:
-           "blocked on unit T28 — Raxol.stop/1 races the shutdown cascade; teardown reaches the driver only ~half the time"
-    test "Raxol.stop/1 reliably drives the inline driver's teardown (blocked on T28)",
+    # RELIABLE since T28a (merged): Lifecycle traps exits and drives
+    # teardown from its own terminate/2, driver-first, so a dependent's
+    # :shutdown exit can no longer race back through the link and unwind
+    # Lifecycle before the driver is stopped. Pre-T28a this was a measured
+    # ~50% miss under ExUnit load (the skip: this tag carried until then).
+    # This test is the enforcement of that guarantee through the PUBLIC
+    # graceful-stop path.
+    test "Raxol.stop/1 reliably drives the inline driver's teardown (fixed by T28a)",
          %{sio: sio} do
       {:ok, pid} =
         Raxol.start_link(MockInlineApp,
@@ -161,8 +153,7 @@ defmodule Raxol.Harness.T2dTeardownPositiveTest do
 
       output = contents(sio)
       # Must reliably emit the full canonical teardown through the public
-      # graceful-stop path. Fails/flakes until T28 makes Lifecycle stop the
-      # driver before the cascade can unwind it.
+      # graceful-stop path (T28a's guarantee).
       assert output =~
                "\e[?2004l\e[?1004l\e[?1003l\e[?1006l\e[?1000l\e[?6l\e[r\e[?7h\e[?25h\e[30;1H\r\n"
     end
@@ -184,13 +175,15 @@ defmodule Raxol.Harness.T2dTeardownPositiveTest do
     #
     # This is the production-critical path (a container `kill -TERM`), so
     # it is the one that must eventually pass. It FAILS today; tracked as
-    # unit T28 (graceful VM shutdown reaches driver terminate). `:pending_t28`
-    # marks the tracked gap; `skip:` keeps the suite green today. T28's
-    # builder removes the `skip:` line to enforce the guarantee once the VM
-    # shutdown path is wired to reach the driver.
-    @tag :pending_t28
+    # unit T28b (the in-process Raxol.stop/1 facet was fixed by T28a and is
+    # enforced by the now-unskipped Tier A test above; the first SIGTERM
+    # handler attempt self-deadlocked in :erl_signal_server and was
+    # reworked into T28b). `:pending_t28b` marks the tracked gap; `skip:`
+    # keeps the suite green today. T28b's builder removes the `skip:` line
+    # once the VM shutdown path is wired to reach the driver.
+    @tag :pending_t28b
     @tag skip:
-           "blocked on unit T28 — default SIGTERM/init:stop does not reach driver terminate"
+           "blocked on unit T28b — default SIGTERM/init:stop does not reach driver terminate"
     test "a plain SIGTERM (no app-level handler) emits the driver teardown to the tty" do
       # NOTE: no custom :sigterm gen_event handler here (unlike
       # @mock_inline_app_src below, which works around the gap). This is the

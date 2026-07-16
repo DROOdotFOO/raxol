@@ -81,46 +81,36 @@ defmodule Raxol.Terminal.InlineDriver do
   all -- documented residual, not a gap in this module (`kill -9` cannot
   be caught by anything running in the killed process).
 
-  ## Teardown-on-quit is NOT reliably wired through Lifecycle (unit T28)
+  ## Teardown-on-quit through Lifecycle: graceful stop FIXED (T28a), SIGTERM open (T28b)
 
-  Neither app-level quit path reliably reaches this `terminate/2` today
-  (both measured, not assumed -- see the tests referenced below). The
-  driver's teardown itself is correct and deterministic; the gap is that
-  Lifecycle does not dependably *invoke* it on shutdown.
+  The driver's teardown itself is correct and deterministic; whether
+  Lifecycle *invokes* it on shutdown was unit T28's subject, since split
+  into two facets with different fates:
 
-    * **`Raxol.stop/1`** (in-process graceful stop):
-      `Lifecycle.handle_cast(:shutdown)` stops its dependents in order --
-      the rendering engine, THEN this driver -- via
-      `GenServer.stop(pid, :shutdown, _)`. Neither `Lifecycle` nor its
-      caller traps exits, so the rendering engine's `:shutdown` exit RACES
-      back through the link: if it kills `Lifecycle` before the
-      `GenServer.stop(driver, ...)` line is reached, this `terminate/2`
-      never runs. Measured **~50% miss under ExUnit load** (a bare
-      `mix run` happens to win the race every time, which is why it can
-      look reliable in isolation). So teardown-on-graceful-stop is present
-      but nondeterministic.
+    * **`Raxol.stop/1`** (in-process graceful stop): **deterministic
+      since T28a** (merged). `Lifecycle` now traps exits and drives
+      teardown from its own `terminate/2`, driver-first, so a dependent's
+      `:shutdown` exit can no longer race back through the link and kill
+      `Lifecycle` before this driver is stopped -- this `terminate/2`
+      runs by construction. (Pre-T28a this was a measured ~50% miss under
+      ExUnit load.) Enforced by the now-unskipped graceful-stop test in
+      `test/harness/t2d_teardown_positive_test.exs`.
 
     * **OTP default SIGTERM -> `init:stop/0`** (the real VM tree-unwind a
       production `kill -TERM` / container stop triggers): teardown is
-      **never reached**. The tree unwind does not route through
-      `Lifecycle`'s own `handle_cast(:shutdown)` at all, so this
-      `terminate/2` is skipped every time (measured under a real pty: no
-      `\\e[r`, no modes-off in the capture). This is the stdio-shutdown
-      race the termbox `driver.ex` already flags (~line 494) surfacing as
-      a total miss on the inline path.
-
-  Both are the same Lifecycle-level defect, tracked as **unit T28
-  (graceful shutdown deterministically reaches driver terminate)**. It
-  reproduces identically with `environment: :terminal` and the termbox
-  driver -- not specific to the inline profile. Until T28 lands, reliable
-  production teardown-on-quit **relies on T28** (or on the app arranging
-  its own SIGTERM handler that stops the driver / calls `Raxol.stop/1`
-  and retries, as the Tier B `LC-P-SIGTERM` test does). The gap is pinned
-  by two skipped, tagged tests (`@tag :pending_t28` in
-  `test/harness/t2d_teardown_positive_test.exs`) -- one per path -- that
-  fail today and whose `skip:` T28's builder removes when the fix lands.
-  The driver's own teardown is meanwhile proven deterministically by
-  stopping the driver process directly (`LC-P-CLEAN`).
+      still **never reached**. The tree unwind does not route through
+      `Lifecycle` at all, so this `terminate/2` is skipped every time
+      (measured under a real pty: no `\\e[r`, no modes-off in the
+      capture). This is the stdio-shutdown race the termbox `driver.ex`
+      already flags (~line 494) surfacing as a total miss on the inline
+      path. Tracked as **unit T28b** (the first SIGTERM handler attempt
+      self-deadlocked in `:erl_signal_server` and was reworked). Until
+      T28b lands, production SIGTERM teardown relies on the app arranging
+      its own handler that calls `Raxol.stop/1` (as the Tier B
+      `LC-P-SIGTERM` test does); the gap stays pinned by the remaining
+      skipped `@tag :pending_t28b` test. The driver's own teardown is
+      meanwhile proven deterministically by stopping the driver process
+      directly (`LC-P-CLEAN`).
 
   ## Input contract
 
@@ -205,7 +195,8 @@ defmodule Raxol.Terminal.InlineDriver do
       if stty_enabled? do
         %{
           state
-          | original_stty: normalize_saved_stty(safe_stty_call(stty_module, :save, []))
+          | original_stty:
+              normalize_saved_stty(safe_stty_call(stty_module, :save, []))
         }
       else
         state
@@ -245,11 +236,21 @@ defmodule Raxol.Terminal.InlineDriver do
     end
   rescue
     error ->
-      restore_stranded_raw_mode(state.stty_module, state.stty_enabled?, state.original_stty)
+      restore_stranded_raw_mode(
+        state.stty_module,
+        state.stty_enabled?,
+        state.original_stty
+      )
+
       reraise error, __STACKTRACE__
   catch
     kind, reason ->
-      restore_stranded_raw_mode(state.stty_module, state.stty_enabled?, state.original_stty)
+      restore_stranded_raw_mode(
+        state.stty_module,
+        state.stty_enabled?,
+        state.original_stty
+      )
+
       :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
