@@ -1,8 +1,6 @@
 defmodule Raxol.Terminal.ScrollRegionManager do
   @moduledoc """
-  DECSTBM scroll-region lifecycle for the inline-hybrid render substrate
-  (unit T2a, `docs/proposals/in-flight/harness-ui-roadmap.md`; suite design
-  in `harness-ui-testing/02-renderer.md` §0 + §3 INV-5).
+  DECSTBM scroll-region lifecycle for the inline-hybrid render substrate.
 
   **The invariant this module exists to hold**: the top rows of the
   terminal are history (native scrollback, freely scrolling) and the
@@ -12,23 +10,11 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   claims the pin succeeded when the terminal will actually ignore the
   request (see "Degenerate terminals" below).
 
-  Glossary for codenames referenced in this file, so the invariant above
-  stays the thing you remember, not these labels: T0/T2b/T2c/T2d are
-  sibling units in the harness-ui roadmap (T0 = orientation lock, T2b =
-  append path, T2c = footer viewport, T2d = inline driver teardown); D-PA
-  is the roadmap's ruling on seal-time-only vs. soft-owned-history; "RB
-  C-4" is a real-hardware probe result (iTerm2's resize-reflow behavior);
-  INV-3/INV-5 are numbered invariants from `harness-ui-testing/
-  02-renderer.md`; the "TB oracle" is `Raxol.Harness.Test.SealOracle`, the
-  byte-capture parser the test suite asserts emitted DECSTBM sequences
-  against.
-
-  Orientation is LOCKED (T0's verdict, restated in `02-renderer.md` §0 so
-  T2a does not re-derive it): the scroll region is the TOP `1..(H-N)` rows
+  Orientation is fixed: the scroll region is the TOP `1..(H-N)` rows
   -- history, scrolling, feeds native scrollback on real terminals -- and
   the footer is the `N` rows below it, `(H-N+1)..H`, OUTSIDE the region and
-  pinned (T2c's buffer-diff viewport). `N` (`footer_rows`) is caller-chosen
-  and held constant across resize; only `H` (`rows`) varies.
+  pinned. `N` (`footer_rows`) is caller-chosen and held constant across
+  resize; only `H` (`rows`) varies.
 
   ## Degenerate terminals: never emit a DECSTBM the terminal will ignore
 
@@ -48,27 +34,26 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   therefore emits the full-screen release (`CSI r`) instead of a lying
   `1;1r`: an honest un-pin rather than a pretend-pin a real terminal
   ignores. The returned struct also records `degenerate?: true` so callers
-  (T2c's footer viewport, T13a) can detect the condition and adapt --
-  e.g. falling back to redrawing the footer every frame instead of relying
-  on the pin. The documented limit: **the footer cannot be pinned when
-  `rows < footer_rows + 2`.** `history_bottom/2` still returns a sane (`>= 1`)
-  row in this case, purely for append-path row-range math -- it does not
-  mean the pin is active; callers must consult `degenerate?/1` for that.
+  can detect the condition and adapt -- e.g. falling back to redrawing the
+  footer every frame instead of relying on the pin. The documented limit:
+  **the footer cannot be pinned when `rows < footer_rows + 2`.**
+  `history_bottom/2` still returns a sane (`>= 1`) row in this case, purely
+  for append-path row-range math -- it does not mean the pin is active;
+  callers must consult `degenerate?/1` for that.
 
   ## What this module owns
 
     * Emitting `CSI 1;(H-N) r` once at `start/3` and again, on every
       `resize/2` that actually changes the history/footer split point (see
       "Geometry-gated resize emission" below) -- never more, never a
-      full-screen clear (`\\e[2J`/`\\e[3J` are forbidden on the inline path
-      per N06: real-hardware measurement showed `\\e[2J` wipes native
-      scrollback on wezterm/kitty, so a resize that cleared the screen to
-      redraw the region would nuke already-sealed history).
+      full-screen clear. `\\e[2J`/`\\e[3J` are forbidden on the inline path:
+      measurement showed `\\e[2J` wipes native scrollback on wezterm/kitty,
+      so a resize that cleared the screen to redraw the region would nuke
+      already-sealed history.
     * Recomputing the history/footer split on resize, keeping `footer_rows`
       constant.
     * Exposing the split as plain row ranges (`history_range/1`,
-      `footer_range/1`) for T2b (append path) and T2c (footer viewport) to
-      build on.
+      `footer_range/1`) for the append path and footer viewport to build on.
 
   ## Geometry-gated resize emission
 
@@ -99,59 +84,55 @@ defmodule Raxol.Terminal.ScrollRegionManager do
 
   ## What this module deliberately does NOT own
 
-  **Teardown.** T2d's `Raxol.Terminal.InlineDriver.Sequences.teardown_bytes/1`
+  **Teardown.** `Raxol.Terminal.InlineDriver.Sequences.teardown_bytes/1`
   already emits `CSI r` (full-screen release) unconditionally, as step 2 of
   its canonical order, on every exit path it can reach (clean stop, trapped
   crash) and is already idempotent (`InlineDriver.emit_teardown/2` guards on
   `torn_down?`). Before this module existed, that `CSI r` was a no-op reset
   of the terminal's already-default (unset) region. After this module sets a
   REAL region via `start/3`, the exact same, unmodified `CSI r` now
-  meaningfully releases it -- the two units compose by construction, with
-  no new code needed on either side and no risk of a double release. This
-  module therefore has no `teardown/1` / `release/1` function of its own:
-  adding one would either duplicate T2d's release byte-for-byte (redundant,
+  meaningfully releases it -- the two compose by construction, with no new
+  code needed on either side and no risk of a double release. This module
+  therefore has no `teardown/1` / `release/1` function of its own: adding
+  one would either duplicate the driver's release byte-for-byte (redundant,
   and a foot-gun if the two ever drift) or require this module to own an
-  output device across the whole driver lifetime, which is T2d's job, not
-  T2a's. `kill -9` is consequently the same **documented residual** T2d
-  already names: no process is left alive to run either module's teardown;
-  the honest mitigations are the same (a kernel tty reset, or the
-  documented `printf '\\e[r'` recovery one-liner) and are not re-litigated
-  here (see `harness-ui-testing/03-lifecycle.md` §0 risk 4).
+  output device across the whole driver lifetime, which is the driver's job,
+  not this module's. `kill -9` is consequently the same **documented
+  residual** the driver already names: no process is left alive to run
+  either module's teardown; the honest mitigations are the same (a kernel
+  tty reset, or the documented `printf '\\e[r'` recovery one-liner).
 
   ## Package boundary note (why this module hand-rolls its own bytes)
 
   `Raxol.UI.Rendering.PaintAuthority.Dialect.region_set/2` (main `raxol`,
   `lib/raxol/ui/rendering/paint_authority.ex`) is the shared DECSTBM byte
-  builder T2b/T2c's PaintAuthority implementations and the TB byte-capture
-  oracle (`Raxol.Harness.Test.SealOracle`) are built against. This module
-  lives in the `raxol_terminal` package, which -- per the repo's dependency
-  graph (main `raxol` depends on `raxol_terminal`, never the reverse) --
-  cannot import anything under main `raxol`'s `lib/raxol/ui/`. So
+  builder the `PaintAuthority` implementations and the byte-capture oracle
+  (`Raxol.Harness.Test.SealOracle`) are built against. This module lives in
+  the `raxol_terminal` package, which -- per the repo's dependency graph
+  (main `raxol` depends on `raxol_terminal`, never the reverse) -- cannot
+  import anything under main `raxol`'s `lib/raxol/ui/`. So
   `region_set_bytes/2` below reproduces `Dialect.region_set/2`'s exact wire
   format (`CSI top;bottom r`) locally rather than aliasing it. The two are
   byte-identical by construction (and pinned by a test asserting exactly
-  that), so the TB oracle (`SealOracle.scroll_region/1`,
+  that), so the oracle (`SealOracle.scroll_region/1`,
   `SealOracle.region_sets/1`) parses this module's output the same way it
   parses a `PaintAuthority` implementation's -- the oracle works off raw
   bytes and vocabulary, not module identity.
 
-  ## The (B)-upgrade seam (thin; does not implement (B))
+  ## Reflow-aware resize: the seam this module exposes
 
-  Per the D-PA RULING (roadmap §0): ship (A) seal-time-only as the default,
-  with (B) soft-owned-history as a **runtime-detected, per-terminal,
-  additive** upgrade -- RB's real-hardware C-4 probe found iTerm2
-  genuinely reflows sealed history on resize, so a future unit (T2b or a
-  capability-gated follow-on) may re-emit a bounded tail of recently-sealed
-  blocks on a reflow-capable terminal. This module does not probe
-  capabilities and does not re-emit any content -- that decision and its
-  bytes belong entirely to T2b. What it DOES expose is the one fact that
-  decision needs from the region-geometry side: `geometry_changed?/2`, a
-  pure comparison of two states' `history_bottom`, so a future caller can tell
-  "this resize actually moved the history/footer split" apart from a
-  width-only resize that left `history_bottom` untouched (in which case there
-  is nothing for policy (B) to reflow in the first place, independent of
-  whatever the capability probe says). Nothing here upgrades to (B); this
-  is the seam, not the upgrade.
+  The default policy is seal-time-only: history bytes, once emitted, are the
+  terminal's to reflow. Some terminals (e.g. iTerm2) genuinely reflow sealed
+  history on resize, so a future, capability-gated upgrade may re-emit a
+  bounded tail of recently-sealed blocks on a reflow-capable terminal. This
+  module does not probe capabilities and does not re-emit any content -- that
+  decision and its bytes belong to the append path, not here. What it DOES
+  expose is the one fact that decision needs from the region-geometry side:
+  `geometry_changed?/2`, a pure comparison of two states' `history_bottom`,
+  so a future caller can tell "this resize actually moved the history/footer
+  split" apart from a width-only resize that left `history_bottom` untouched
+  (in which case there is nothing to reflow in the first place). This is the
+  seam, not the upgrade.
   """
 
   @enforce_keys [:device, :rows, :footer_rows, :history_bottom, :degenerate?]
@@ -261,7 +242,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   region (see the moduledoc's "Degenerate terminals" section) -- i.e. the
   footer is NOT actually pinned right now, regardless of what
   `history_bottom/1`/`footer_range/1` report for row-range math. Callers
-  needing to know whether the pin is real (T2c's footer viewport, T13a)
+  needing to know whether the pin is real (the footer-viewport callers)
   must check this rather than assuming `start/3`/`resize/2` always
   succeeded.
   """
@@ -271,7 +252,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   @doc """
   True if the two states' history/footer split point differs -- i.e. the
   resize between them actually changed geometry, not just width. See the
-  moduledoc's "(B)-upgrade seam" section: this is the thin fact a future
+  moduledoc's "Reflow-aware resize" section: this is the thin fact a future
   reflow-re-emit decision (owned elsewhere) would consult; `resize/2`
   itself also consults this comparison to skip a redundant DECSTBM
   re-emit on a width-only resize (see "Geometry-gated resize emission").
@@ -290,9 +271,8 @@ defmodule Raxol.Terminal.ScrollRegionManager do
       do: a != b
 
   # ---------------------------------------------------------------------
-  # The I/O seam -- device is a parameter (mirrors T2d's InlineDriver: a
-  # StringIO/collector device makes this Tier A -- byte-capture, no pty, no
-  # termbox -- per harness-ui-testing/03-lifecycle.md §1.1's hard ask).
+  # The I/O seam -- device is a parameter. Passing a StringIO/collector
+  # device makes emission byte-capturable in tests (no pty, no termbox).
   # ---------------------------------------------------------------------
 
   @doc """
@@ -307,8 +287,8 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   the returned state has `degenerate?: true` -- the footer is NOT pinned
   in this case; callers must check `degenerate?/1`.
 
-  Composes with T2d (see moduledoc): no teardown call is needed from this
-  module. `InlineDriver`'s existing, unmodified `emit_teardown/2` releases
+  Composes with the inline driver (see moduledoc): no teardown call is needed
+  from this module. `InlineDriver`'s existing, unmodified `emit_teardown/2` releases
   whatever region this call set (a no-op re-release in the degenerate
   case, since this call already released).
   """
@@ -338,10 +318,10 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   effect would otherwise fire for no geometric reason. When the split
   point does move, exactly one DECSTBM (or, in the degenerate case, one
   full-screen release -- see `region_set_bytes/2`) is written. Never emits
-  `\\e[2J`/`\\e[3J` or any other byte (INV-3 / N06: a full-screen clear on
-  resize would wipe already-sealed native scrollback on wezterm/kitty).
-  The footer's CONTENT is not this module's concern (T2c owns repainting
-  it); only the row-range split is recomputed here.
+  `\\e[2J`/`\\e[3J` or any other byte (a full-screen clear on resize would
+  wipe already-sealed native scrollback on wezterm/kitty).
+  The footer's CONTENT is not this module's concern (the footer viewport
+  owns repainting it); only the row-range split is recomputed here.
   """
   @spec resize(t(), pos_integer()) :: t()
   def resize(

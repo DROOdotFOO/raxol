@@ -1,15 +1,13 @@
 defmodule Raxol.Terminal.ScrollRegionManagerTest do
   @moduledoc """
-  Unit T2a (`Raxol.Terminal.ScrollRegionManager`) -- pure geometry + byte
-  tests, Tier A of `harness-ui-testing/02-renderer.md` /
-  `harness-ui-testing/03-lifecycle.md`: no process beyond the struct
-  itself, no pty, no termbox. Harness-level composition with T2d's
-  teardown, the TB byte-capture oracle, and the `:pty` real-signal facts
-  live in `test/harness/t2a_scroll_region_test.exs` (root project, where
-  the TB oracle + `Raxol.Test.PtyHarness` are reachable).
+  `Raxol.Terminal.ScrollRegionManager` -- pure geometry + byte tests: no
+  process beyond the struct itself, no pty, no termbox. Composition with the
+  inline driver's teardown, the byte-capture oracle, and the `:pty`
+  real-signal facts live in `test/harness/t2a_scroll_region_test.exs` (root
+  project, where the oracle + `Raxol.Test.PtyHarness` are reachable).
 
   `async: true`: this module keeps no global/process state (`device` is a
-  plain parameter, per the suite design's output-device seam requirement).
+  plain parameter, the output-device seam).
   """
 
   use ExUnit.Case, async: true
@@ -95,14 +93,10 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
       {:ok, sio} = StringIO.open("")
       state = SRM.start(sio, 30, 3)
 
-      # This is the exact orientation v1 of the roadmap had backwards
-      # (roadmap: "region = rows 1..H-N (history, scrolling); footer
-      # outside — v1 had the orientation backwards"). Swapping
-      # `history_bottom/2`'s formula to `footer_rows` instead of
-      # `rows - footer_rows` (the historical bug) flips these two
-      # assertions to fail -- demonstrated red during development by
-      # temporarily inverting the implementation and confirming both
-      # ranges below come out swapped.
+      # Orientation guard: region = TOP rows (history, scrolling), footer =
+      # BOTTOM rows outside it. Swapping `history_bottom/2`'s formula to
+      # `footer_rows` instead of `rows - footer_rows` would flip these two
+      # assertions, so this pins the correct orientation against that error.
       assert SRM.history_range(state) == 1..27
       assert SRM.footer_range(state) == 28..30
 
@@ -294,7 +288,7 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
   describe "interleaved resizes never let the footer bleed into the region (example-based)" do
     # The full StreamData property (`raxol_terminal` has no stream_data test
     # dep; the property lives in test/harness/t2a_scroll_region_test.exs at
-    # the root project, alongside the TB oracle) is mirrored here as a fixed
+    # the root project, alongside the byte-capture oracle) is mirrored here as a fixed
     # table of resize sequences so the package's own test suite still pins
     # the invariant without a new dependency.
     for {footer_rows, initial_rows, resizes} <- [

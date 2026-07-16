@@ -1,23 +1,22 @@
 defmodule Raxol.Harness.T2aScrollRegionTest do
   @moduledoc """
-  Unit T2a (scroll-region manager, `Raxol.Terminal.ScrollRegionManager`) --
+  Scroll-region manager (`Raxol.Terminal.ScrollRegionManager`) --
   harness-level suite. Pure package-local geometry/byte tests live in
   `packages/raxol_terminal/test/raxol/terminal/scroll_region_manager_test.exs`;
   this file covers what only the root project can: assertions against the
-  TB byte-capture oracle (`Raxol.Harness.Test.SealOracle`,
-  `Raxol.UI.Rendering.PaintAuthority.Dialect`), composition with T2d's
-  teardown (`Raxol.Terminal.InlineDriver`), a full StreamData property
-  (`raxol_terminal` carries no `stream_data` test dep), and the `:pty`
-  real-signal facts (`Raxol.Test.PtyHarness`, unit TP).
+  byte-capture oracle (`Raxol.Harness.Test.SealOracle`,
+  `Raxol.UI.Rendering.PaintAuthority.Dialect`), composition with the inline
+  driver's teardown (`Raxol.Terminal.InlineDriver`), a full StreamData
+  property (`raxol_terminal` carries no `stream_data` test dep), and the
+  `:pty` real-signal facts (`Raxol.Test.PtyHarness`).
 
-  Per `harness-ui-testing/02-renderer.md` §0 (orientation, locked from
-  roadmap T2a): scroll region = TOP rows `1..(H-N)` (history, scrolling);
-  footer = rows `(H-N+1)..H`, OUTSIDE the region, pinned. Per
-  `harness-ui-testing/03-lifecycle.md`: T2d's `InlineDriver.Sequences.
-  teardown_bytes/1` already emits `CSI r` (bare release) unconditionally
-  and idempotently; T2a's job is only ever to SET a real region (`start/3`,
-  `resize/2`) -- release composes for free, tested here at the byte level
-  and, for the real-signal facts, under an actual pty.
+  Orientation: scroll region = TOP rows `1..(H-N)` (history, scrolling);
+  footer = rows `(H-N+1)..H`, OUTSIDE the region, pinned. The inline
+  driver's `InlineDriver.Sequences.teardown_bytes/1` already emits `CSI r`
+  (bare release) unconditionally and idempotently; this module's job is only
+  ever to SET a real region (`start/3`, `resize/2`) -- release composes for
+  free, tested here at the byte level and, for the real-signal facts, under
+  an actual pty.
   """
 
   use ExUnit.Case, async: false
@@ -72,18 +71,15 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
     end
   end
 
-  describe "start/3 -- ORIENTATION FAIL-FIRST ANCHOR, via the TB oracle" do
+  describe "start/3 -- ORIENTATION FAIL-FIRST ANCHOR, via the byte-capture oracle" do
     test "SealOracle parses the region as {1, H-N}; footer rows fall strictly outside it" do
       {:ok, sio} = StringIO.open("")
       state = SRM.start(sio, 30, 3)
       raw = contents(sio)
 
-      # The anchor: if `history_bottom/2`'s formula were inverted (the
-      # historical v1 bug -- footer_rows used where H-N belongs), this
-      # would parse as {1, 3} instead of {1, 27} and every assertion below
-      # flips. Demonstrated red during development by temporarily swapping
-      # `history_bottom(rows, footer_rows)` to `footer_rows` and re-running:
-      # both `scroll_region/1` and the footer-disjointness check failed.
+      # The anchor: if `history_bottom/2`'s formula were inverted
+      # (footer_rows used where H-N belongs), this would parse as {1, 3}
+      # instead of {1, 27} and every assertion below flips.
       assert SealOracle.scroll_region(raw) == {1, 27}
       assert SealOracle.region_sets(raw) == [{1, 27}]
 
@@ -100,7 +96,7 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
       assert SealOracle.region_sets(contents(sio)) == [{1, 22}]
     end
 
-    test "never emits a full-screen clear (INV-3)" do
+    test "never emits a full-screen clear" do
       {:ok, sio} = StringIO.open("")
       _state = SRM.start(sio, 24, 2)
 
@@ -108,7 +104,7 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
     end
   end
 
-  describe "resize/2 -- INV-5 universal half + TB oracle" do
+  describe "resize/2 -- correct bounds via the byte-capture oracle" do
     test "exactly one region re-set per resize, correct bounds, no full clear" do
       {:ok, sio} = StringIO.open("")
       state = SRM.start(sio, 24, 2)
@@ -136,15 +132,15 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
     end
   end
 
-  describe "composition with T2d's teardown (Tier A, StringIO, no pty)" do
+  describe "composition with the inline driver's teardown (byte-capture, StringIO, no pty)" do
     # Mirrors packages/raxol_terminal/test/raxol/terminal/inline_driver_test.exs's
-    # "LC-P-CRASH: terminate/2 emits full teardown regardless of reason" --
+    # "terminate/2 emits full teardown regardless of reason" --
     # driving InlineDriver.terminate/2 directly with a crash-shaped reason,
-    # on the SAME device T2a already wrote its region-set bytes to, proves
-    # the two units compose across the trapped-crash path without any new
-    # wiring: T2d's bare `CSI r` release, unmodified, meaningfully resets
-    # the REAL region T2a set.
-    test "clean/trapped-crash: SET (T2a) precedes RELEASE (T2d), no double-emission, no full clear" do
+    # on the SAME device the region manager already wrote its region-set
+    # bytes to, proves the two compose across the trapped-crash path without
+    # any new wiring: the inline driver's bare `CSI r` release, unmodified,
+    # meaningfully resets the REAL region the manager set.
+    test "clean/trapped-crash: SET (region manager) precedes RELEASE (inline driver), no double-emission, no full clear" do
       {:ok, sio} = StringIO.open("")
       state = SRM.start(sio, 30, 2)
 
@@ -162,9 +158,9 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
 
       raw = contents(sio)
 
-      # SET appears exactly once, from T2a; T2d never emits a SET, only the
-      # bare release -- so the oracle's region-sets list stays a single
-      # entry even after composing with a full teardown.
+      # SET appears exactly once, from the region manager; the inline driver
+      # never emits a SET, only the bare release -- so the oracle's
+      # region-sets list stays a single entry even after a full teardown.
       assert SealOracle.region_sets(raw) == [{1, SRM.history_bottom(state)}]
 
       {set_idx, _} = :binary.match(raw, SRM.region_set_bytes(30, 2))
@@ -174,16 +170,16 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
       refute SealOracle.emits_full_clear?(raw)
 
       # The teardown's final absolute move (`CSI 30;1 H`) addresses the
-      # real bottom row, which is INSIDE the region T2a set (1..28, footer
-      # rows 29-30 excluded) -- proving the release truly preceded the
-      # move byte-for-byte (INV-1 from 03-lifecycle.md): had the order been
-      # reversed, a real terminal would clamp this move inside the still-
-      # active 1..28 region instead of landing on row 30.
+      # real bottom row, which is INSIDE the region this module set (1..28,
+      # footer rows 29-30 excluded) -- proving the release truly preceded the
+      # move byte-for-byte: had the order been reversed, a real terminal would
+      # clamp this move inside the still-active 1..28 region instead of
+      # landing on row 30.
       {move_idx, _} = :binary.match(raw, "\e[30;1H")
       assert release_idx < move_idx
     end
 
-    test "composing with T2d's idempotent emit_teardown/2 seam never double-releases" do
+    test "composing with the inline driver's idempotent emit_teardown/2 seam never double-releases" do
       {:ok, sio} = StringIO.open("")
       state = SRM.start(sio, 24, 1)
 
@@ -203,9 +199,9 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
       _driver_state = InlineDriver.emit_teardown(sio, driver_state)
 
       raw = contents(sio)
-      # Exactly one release token, and T2a's SET is still exactly one
-      # entry -- T2d's idempotency guard, unmodified by T2a, absorbs the
-      # second call cleanly regardless of what T2a wrote first.
+      # Exactly one release token, and the region manager's SET is still
+      # exactly one entry -- the inline driver's idempotency guard, unmodified,
+      # absorbs the second call cleanly regardless of what the manager wrote first.
       assert length(:binary.matches(raw, "\e[r")) == 1
       assert SealOracle.region_sets(raw) == [{1, SRM.history_bottom(state)}]
     end
@@ -241,8 +237,8 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
         #   2. Degenerate exclusion: an emit whose TARGET geometry is
         #      degenerate writes a full-screen release, not a `{1, top}`
         #      DECSTBM -- the oracle's region_sets/1 does not parse a bare
-        #      release as a region set (same as it already does for T2d's
-        #      teardown release), so a degenerate emit contributes no
+        #      release as a region set (same as it already does for the
+        #      inline driver's teardown release), so a degenerate emit contributes no
         #      entry either, even though real bytes were written.
         initial_top = SRM.history_bottom(initial_rows, footer_rows)
 
@@ -284,7 +280,7 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
     end
   end
 
-  # --- Tier B: real pty, real signals (TP, unit T2a's own scope) ---
+  # --- Real pty, real signals (this module's own scope) ---
 
   @footer_rows 2
   @rows 24
@@ -323,10 +319,10 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
       rows: #{@rows}
     )
 
-  # T2a's own contribution: set a REAL scroll region on the same tty the
-  # driver just claimed, straight to :stdio -- exactly how a future
-  # integration (T2b) would call this module, without touching
-  # inline_driver.ex (outside this unit's write-set).
+  # This module's own contribution: set a REAL scroll region on the same tty
+  # the driver just claimed, straight to :stdio -- exactly how a future
+  # append-path integration would call this module, without touching
+  # inline_driver.ex.
   _srm = Raxol.Terminal.ScrollRegionManager.start(:stdio, #{@rows}, #{@footer_rows})
 
   :ok = :os.set_signal(:sigterm, :handle)
@@ -361,12 +357,12 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
     File.rm(session.capture_path)
   end
 
-  describe "Tier B: LC-P-SIGTERM composed with a real T2a region set" do
+  describe "real pty: SIGTERM composed with a real region set" do
     @describetag :pty
     @describetag :unix_only
     @describetag :skip_on_ci
 
-    test "a real SIGTERM: T2a's region set precedes T2d's release, no full clear, region set exactly once" do
+    test "a real SIGTERM: the region set precedes the inline driver's release, no full clear, region set exactly once" do
       {:ok, session} = start_mock_app_under_pty()
       on_exit(fn -> cleanup(session) end)
 
@@ -388,7 +384,7 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
     end
   end
 
-  describe "Tier B: LC-N-KILL9-RESIDUAL, scoped to the region T2a set" do
+  describe "real pty: kill -9 residual, scoped to the region set" do
     @describetag :pty
     @describetag :unix_only
     @describetag :skip_on_ci
@@ -404,13 +400,13 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
       {:ok, output} = PtyHarness.read_output(session)
 
       expected_top = SRM.history_bottom(@rows, @footer_rows)
-      # The region T2a set is a tested, real fact (not the terminal's
+      # The region set is a tested, real fact (not the terminal's
       # already-default state) -- the residual is that it never gets
       # released, because no process survived to run either module's
       # teardown. Scroll-region state has no kernel representation (unlike
       # raw mode's -icanon/-echo, which `stty -a` can show), so the
       # documented recovery for THIS residual is the same byte-level
-      # one-liner T2d already proves generically
+      # one-liner the inline driver already proves generically
       # (`test/harness/t2d_teardown_negative_test.exs`,
       # "residual-while-hung (SIGSTOP) + the documented recovery
       # one-liner") -- not re-demonstrated here to avoid duplicating that
