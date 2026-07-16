@@ -84,4 +84,32 @@ defmodule Raxol.Agent.SpendGateRobustnessTest do
       assert :ok = SpendGate.settle(c, reservation, 70)
     end
   end
+
+  describe "finding #3 — settle accounting completes even if emit(:settle) throws" do
+    test "emit(:settle) throwing still completes the settle (guard flipped, claim released)" do
+      cost_ref = "f3-#{System.unique_integer([:positive])}"
+
+      c =
+        ctx(
+          try_reserve: fn _amount -> {:ok, 900} end,
+          emit: fn
+            %{kind: :settle} -> raise "settle journal boom"
+            _record -> :ok
+          end
+        )
+
+      assert {:ok, reservation} = SpendGate.reserve(c, cost_ref, 100)
+
+      # The CAS flip is irreversible: even though the settle record write throws,
+      # settle accounting COMPLETES — it returns :ok, not an exception.
+      assert :ok = SpendGate.settle(c, reservation, 70)
+
+      # Proof the guard flipped: a replay is rejected as already-settled (no
+      # double-refund), never re-run.
+      assert {:error, {:already_settled, ^cost_ref}} = SpendGate.settle(c, reservation, 70)
+
+      # Proof the claim was released: the same cost_ref is reservable again.
+      assert {:ok, _} = SpendGate.reserve(c, cost_ref, 100)
+    end
+  end
 end

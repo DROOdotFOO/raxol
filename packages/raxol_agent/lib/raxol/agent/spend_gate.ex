@@ -285,8 +285,14 @@ defmodule Raxol.Agent.SpendGate do
         # First settle: release the active claim and journal the authoritative
         # `actual`. Budget-side refund of `estimate - actual` is a deferred
         # follow-up (see moduledoc) — derivable from the (reserve, settle) pair.
+        #
+        # The CAS flip above is IRREVERSIBLE — settle can never retry. So the
+        # journal write must not be able to abort settle accounting: `emit` is
+        # guarded (finding #3). A throwing sink leaves the guard flipped and the
+        # claim released (settle IS complete); the missing settle record is
+        # logged and shows as a hole in the fold, never a re-runnable settle.
         Reservations.release(scope, cost_ref)
-        emit(context, %{kind: :settle, cost_ref: cost_ref, actual: actual})
+        guarded_emit(context, %{kind: :settle, cost_ref: cost_ref, actual: actual})
         :ok
 
       _already_settled ->
@@ -312,7 +318,9 @@ defmodule Raxol.Agent.SpendGate do
         # `cost_ref`. Release it on any raise (so `cost_ref` is reclaimable) then
         # re-raise — the caller sees the failure, the registry is not poisoned.
         {actual, result} = safe_call(reservation, call_fun)
-        emit(context, %{kind: :call, cost_ref: cost_ref})
+        # Guard the :call write too: a throw here would skip settle and leave the
+        # budget charged with the claim held (finding #3, same class).
+        guarded_emit(context, %{kind: :call, cost_ref: cost_ref})
         settle(context, reservation, actual)
         {:ok, result}
 
