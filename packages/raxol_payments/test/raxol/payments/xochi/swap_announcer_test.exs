@@ -54,7 +54,7 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncerTest do
     )
   end
 
-  defp request do
+  defp request(preference \\ "public") do
     %QuoteRequest{
       wallet: AgentWallet.address(),
       from_chain_id: 8453,
@@ -62,7 +62,7 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncerTest do
       from_token: @usdc,
       to_token: @usdc,
       from_amount: "500000",
-      settlement_preference: "public"
+      settlement_preference: preference
     }
   end
 
@@ -231,6 +231,100 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncerTest do
       SwapAnnouncer.announce_execute(context(), request(), quote_resp(), exec())
       assert {:ok, _} = SwapRouteStore.take("int_1")
       assert :error == SwapRouteStore.take("int_1")
+    end
+  end
+
+  describe "privacy: only public settlements disclose the route" do
+    defp expected_pseudo(intent_id) do
+      :crypto.hash(:sha256, [@topic, "\n", intent_id])
+      |> binary_part(0, 16)
+      |> Base.encode16(case: :lower)
+    end
+
+    defp assert_redacted(body) do
+      e = body["event"]
+      assert e["fromChainId"] == 0
+      assert e["toChainId"] == 0
+      assert e["fromToken"] == "redacted"
+      assert e["toToken"] == "redacted"
+      assert e["fromAmount"] == "0"
+      assert is_nil(e["toAmount"])
+      # No real amounts/tokens/chains leaked, and the intent id is a pseudonym.
+      refute e["intentId"] == "int_1"
+      refute e["fromAmount"] == "500000"
+    end
+
+    test "a stealth execute announces a redacted row, not the route" do
+      assert :ok ==
+               SwapAnnouncer.announce_execute(
+                 context(),
+                 request("stealth"),
+                 quote_resp(),
+                 exec()
+               )
+
+      assert_receive {:announce, "/api/agent/announce", body}, 1000
+      assert_redacted(body)
+      assert body["event"]["status"] == "executing"
+      assert body["event"]["intentId"] == expected_pseudo("int_1")
+
+      # The redacted row is still a valid, verifiable signed announce.
+      {:ok, recovered} =
+        AgentStream.recover_signer(@topic, event_of(body), body["agentSig"])
+
+      assert String.downcase(recovered) == String.downcase(@agent_address)
+    end
+
+    test "an unset settlement preference is treated as private (fail safe)" do
+      assert :ok ==
+               SwapAnnouncer.announce_execute(
+                 context(),
+                 request(nil),
+                 quote_resp(),
+                 exec()
+               )
+
+      assert_receive {:announce, _path, body}, 1000
+      assert_redacted(body)
+    end
+
+    test "a shielded terminal row stays redacted and shares the execute pseudo id" do
+      SwapAnnouncer.announce_execute(
+        context(),
+        request("shielded"),
+        quote_resp(),
+        exec()
+      )
+
+      assert_receive {:announce, _path, execute_body}, 1000
+      pseudo = execute_body["event"]["intentId"]
+      assert pseudo == expected_pseudo("int_1")
+
+      status = %IntentStatus{intent_id: "int_1", status: :completed, tx_hash: "0xabc"}
+      assert :ok == SwapAnnouncer.announce_terminal(context(), "int_1", status)
+
+      assert_receive {:announce, _path, terminal_body}, 1000
+      assert_redacted(terminal_body)
+      assert terminal_body["event"]["status"] == "completed"
+      # Same pseudo id so the browser merges the two rows, without exposing the
+      # real intent id at any point.
+      assert terminal_body["event"]["intentId"] == pseudo
+    end
+
+    test "a public execute still discloses the full route" do
+      assert :ok ==
+               SwapAnnouncer.announce_execute(
+                 context(),
+                 request("public"),
+                 quote_resp(),
+                 exec()
+               )
+
+      assert_receive {:announce, _path, body}, 1000
+      assert body["event"]["intentId"] == "int_1"
+      assert body["event"]["fromChainId"] == 8453
+      assert body["event"]["fromAmount"] == "500000"
+      assert body["event"]["toAmount"] == "499000"
     end
   end
 

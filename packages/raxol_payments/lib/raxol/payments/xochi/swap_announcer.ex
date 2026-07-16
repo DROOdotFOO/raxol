@@ -32,12 +32,33 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
   `:wallet` (the agent's own wallet). The delegator/human wallet never appears.
 
   The route (chains, tokens, amounts) is captured at execute and stashed in
-  `Raxol.Payments.Xochi.SwapRouteStore` keyed by intent id, so the later terminal
-  announce can rebuild the full event from only the `intent_id` it observes.
+  `Raxol.Payments.Xochi.SwapRouteStore` keyed by the real intent id, so the later
+  terminal announce can rebuild the event from only the `intent_id` it observes.
+
+  ## Privacy: only public settlements disclose the route
+
+  Safe by default: only a `settlement_preference` of `"public"` announces the
+  full route (chains, tokens, amounts, real intent id). A `"stealth"` or
+  `"shielded"` settlement (and any unset/unknown preference) announces a
+  redacted row instead: the status and timestamp only, under a topic-salted
+  pseudo intent id, with no amounts, chains, or tokens. Announcing the exact
+  delivered amount or the real intent id of a private swap would let an observer
+  join the feed row against the on-chain stealth announcement or shielded note
+  and defeat the very unlinkability those modes exist for. The execute and
+  terminal rows share the same pseudo id so the browser still merges them into
+  one advancing row.
   """
 
   alias Raxol.Payments.Xochi.{AgentStream, SwapRouteStore}
   alias Raxol.Payments.Xochi.Schemas.{IntentStatus, QuoteRequest, QuoteResponse}
+
+  # Placeholder token for a redacted row. The wire schema requires a non-empty
+  # string (fromToken/toToken min length 1), so a private swap cannot send "".
+  @redacted_token "redacted"
+  # Chain ids and amount for a redacted row. 0 is a valid wire int; "0"/nil are
+  # valid wire amounts (toAmount is nullable). None reveal the real route.
+  @redacted_chain 0
+  @redacted_from_amount "0"
 
   @doc """
   Announce the execute (non-terminal) event and stash the route for the terminal
@@ -53,8 +74,11 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
       ) do
     case config(context) do
       {:ok, cfg} ->
-        event = execute_event(request, quote, exec)
-        SwapRouteStore.remember(event.intent_id, event)
+        event = execute_event(request, quote, exec, cfg.topic_id)
+        # Key the stash by the REAL intent id: PollXochiStatus only ever observes
+        # that. For a private swap the event's own `intent_id` is the pseudo id,
+        # so the two must not be conflated.
+        SwapRouteStore.remember(exec.intent_id, event)
         AgentStream.announce(cfg, event)
         :ok
 
@@ -119,18 +143,55 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
     end
   end
 
-  defp execute_event(%QuoteRequest{} = request, %QuoteResponse{} = quote, exec) do
+  # Public settlement: disclose the full route. Any other preference (stealth /
+  # shielded / unset) settles privately, so the row is redacted to status only.
+  defp execute_event(%QuoteRequest{} = request, %QuoteResponse{} = quote, exec, topic_id) do
+    if settlement_private?(request) do
+      redacted_event(pseudo_id(topic_id, exec.intent_id), execute_status(exec))
+    else
+      %{
+        intent_id: exec.intent_id,
+        from_chain_id: request.from_chain_id,
+        to_chain_id: request.to_chain_id,
+        from_token: request.from_token,
+        to_token: request.to_token,
+        from_amount: request.from_amount,
+        to_amount: quote.to_amount,
+        status: execute_status(exec),
+        ts: now_ms()
+      }
+    end
+  end
+
+  # Only an explicit "public" preference discloses the route. Everything else,
+  # including a nil/unknown preference, is treated as private (fail safe).
+  defp settlement_private?(%QuoteRequest{settlement_preference: "public"}), do: false
+  defp settlement_private?(%QuoteRequest{}), do: true
+
+  # A redacted row carries no amounts, chains, or tokens and a pseudo intent id.
+  # Fields are set to the least-revealing values the wire schema still accepts.
+  defp redacted_event(pseudo_intent_id, status) do
     %{
-      intent_id: exec.intent_id,
-      from_chain_id: request.from_chain_id,
-      to_chain_id: request.to_chain_id,
-      from_token: request.from_token,
-      to_token: request.to_token,
-      from_amount: request.from_amount,
-      to_amount: quote.to_amount,
-      status: execute_status(exec),
+      intent_id: pseudo_intent_id,
+      from_chain_id: @redacted_chain,
+      to_chain_id: @redacted_chain,
+      from_token: @redacted_token,
+      to_token: @redacted_token,
+      from_amount: @redacted_from_amount,
+      to_amount: nil,
+      status: status,
       ts: now_ms()
     }
+  end
+
+  # A stable, topic-salted pseudonym for the real intent id: the same real id
+  # under the same topic always yields the same pseudo id (so the execute and
+  # terminal rows merge in the browser), but without the topic secret it cannot
+  # be tied back to the real intent id or to on-chain settlement state.
+  defp pseudo_id(topic_id, intent_id) do
+    :crypto.hash(:sha256, [topic_id, "\n", to_string(intent_id)])
+    |> binary_part(0, 16)
+    |> Base.encode16(case: :lower)
   end
 
   # Rebuild the terminal event from the stashed route, overriding only the status
