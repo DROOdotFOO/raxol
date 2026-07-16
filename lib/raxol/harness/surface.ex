@@ -444,7 +444,8 @@ defmodule Raxol.Harness.Surface do
           status: map(),
           stub_notice: String.t() | nil,
           overlay: overlay() | nil,
-          editor_session: module() | (String.t(), keyword() -> term()) | nil
+          editor_session: module() | (String.t(), keyword() -> term()) | nil,
+          editor_opts: keyword()
         }
 
   @typedoc """
@@ -488,6 +489,11 @@ defmodule Raxol.Harness.Surface do
       section); `nil` renders an honest stub notice instead. Embedders
       with a real tty pass `Raxol.Harness.EditorSession`; tests inject a
       fun returning canned outcomes.
+    * `:editor_opts` -- extra options merged into every editor-session
+      call (e.g. `editor_timeout_ms: 60_000`, or an explicit vetted
+      `:env` -- see `Raxol.Harness.EditorSession`'s trust-boundary
+      section). Model-owned `device`/`rows`/`width` always win over
+      entries here.
 
   ## Startup mode notice (the degradation ladder's `select_with_reason/3` seam)
 
@@ -555,7 +561,8 @@ defmodule Raxol.Harness.Surface do
       status: %{},
       stub_notice: nil,
       overlay: nil,
-      editor_session: Keyword.get(opts, :editor_session)
+      editor_session: Keyword.get(opts, :editor_session),
+      editor_opts: Keyword.get(opts, :editor_opts, [])
     }
 
     model
@@ -1123,11 +1130,14 @@ defmodule Raxol.Harness.Surface do
   defp run_editor(model) do
     draft = Composer.value(model.composer)
 
-    opts = [
-      device: authority_device(model.authority),
-      rows: model.rows,
-      width: model.width
-    ]
+    # `:editor_opts` is the embedder seam (timeout, vetted env, ...);
+    # model-owned device/geometry always win.
+    opts =
+      Keyword.merge(model.editor_opts,
+        device: authority_device(model.authority),
+        rows: model.rows,
+        width: model.width
+      )
 
     # The session returns with the tty raw again and the reader re-enabled,
     # but WITHOUT the DECSTBM pin (region bytes are owned by this model's
@@ -1142,13 +1152,15 @@ defmodule Raxol.Harness.Surface do
     # redundant, idempotent DECSTBM re-emit is cheaper than reasoning about
     # exactly which failure points left the region released.
     case call_editor_session(model.editor_session, draft, opts) do
-      {:ok, %{text: text, width: width, rows: rows}} ->
+      {:ok, %{text: text, width: width, rows: rows} = result} ->
         model = resume_geometry(model, width, rows)
-        %{model | composer: Composer.set_value(model.composer, text)}
+        model = %{model | composer: Composer.set_value(model.composer, text)}
+        apply_degraded_notice(model, Map.get(result, :degraded, []))
 
-      {:kept, reason, %{width: width, rows: rows}} ->
+      {:kept, reason, %{width: width, rows: rows} = geo} ->
         model = resume_geometry(model, width, rows)
-        %{model | stub_notice: kept_notice(reason)}
+        model = %{model | stub_notice: kept_notice(reason)}
+        apply_degraded_notice(model, Map.get(geo, :degraded, []))
 
       {:error, reason} ->
         model = resume_geometry(model, model.width, model.rows)
@@ -1158,6 +1170,30 @@ defmodule Raxol.Harness.Surface do
           | stub_notice: "» editor suspend aborted: #{inspect(reason)}"
         }
     end
+  end
+
+  # A non-empty degradation list means the session resumed but a
+  # terminal resource could not be restored -- today, the stdin reader
+  # after the editor. This MUST be visible (the review's critical
+  # finding was exactly this warning being swallowed): the operator is
+  # about to discover their keyboard is dead, and a silent success frame
+  # would read as "everything is fine".
+  defp apply_degraded_notice(model, []), do: model
+
+  defp apply_degraded_notice(model, [_ | _]) do
+    # Kept deliberately terse: the footer notice line is truncated to the
+    # terminal width by ViewText, and this warning must survive even when
+    # appended after a kept-notice on an 80-column terminal.
+    notice =
+      case model.stub_notice do
+        nil ->
+          "» warning: input reader failed to re-enable — keyboard may be dead"
+
+        kept ->
+          kept <> " · input reader failed to re-enable"
+      end
+
+    %{model | stub_notice: notice}
   end
 
   # The session's contract propagates exceptions AFTER running its
@@ -1204,6 +1240,8 @@ defmodule Raxol.Harness.Surface do
     do: "» editor not found: #{cmd} — draft kept"
 
   defp kept_notice(:editor_crashed), do: "» editor crashed — draft kept"
+
+  defp kept_notice(:editor_timeout), do: "» editor timed out — draft kept"
 
   defp kept_notice(:reload_failed),
     do: "» could not reload edited draft — draft kept"

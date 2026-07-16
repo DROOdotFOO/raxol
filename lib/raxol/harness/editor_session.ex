@@ -30,19 +30,29 @@ defmodule Raxol.Harness.EditorSession do
 
   ## Outcomes
 
-    * `{:ok, %{text: edited, width: w, rows: h}}` -- editor exited 0 and
-      the temp file read back; `text` is the decoded draft
-      (`EditorSuspend.decode_draft/1`).
-    * `{:kept, reason, %{width: w, rows: h}}` -- the terminal was
-      suspended and RESUMED, but the draft is kept unchanged:
-      `:editor_nonzero` | `{:editor_not_found, cmd}` | `:editor_crashed`
-      | `:reload_failed`.
+    * `{:ok, %{text: edited, width: w, rows: h, degraded: [...]}}` --
+      editor exited 0 and the temp file read back; `text` is the
+      decoded draft (`EditorSuspend.decode_draft/1`).
+    * `{:kept, reason, %{width: w, rows: h, degraded: [...]}}` -- the
+      terminal was suspended and RESUMED, but the draft is kept
+      unchanged: `:editor_nonzero` | `{:editor_not_found, cmd}` |
+      `:editor_crashed` | `:editor_timeout` | `:reload_failed`.
     * `{:error, {:reader_disable, reason}}` / `{:error, {step, reason}}`
       -- a step failed before the handoff completed; the machine's
       compensation ran, so the terminal is back in a recoverable state.
       In particular a reader-disable failure aborts BEFORE any byte
       touches the device: never hand the tty to an editor while the
       BEAM reader still competes for its keystrokes.
+
+  `degraded` is the machine's `EditorSuspend.degradations/1` list --
+  `[]` on a clean run. A non-empty list (today: `{:enable_reader,
+  reason}` when the stdin reader failed to re-enable after the editor)
+  means the run COMPLETED but keyboard input may be dead; the failure
+  also emits `[:raxol, :harness, :editor, :reader_enable_failed]`
+  telemetry with `%{reason: reason}` metadata. Callers MUST surface a
+  non-empty `degraded` to the operator (Surface renders a footer
+  warning) -- it is never safe to show the edited draft as if nothing
+  happened while the tty cannot type.
 
   A step that RAISES (rather than returning an error) still runs the
   machine's `recovery/1` compensation first, then the exception
@@ -51,6 +61,37 @@ defmodule Raxol.Harness.EditorSession do
   the exception reaches them either way. The temp file is additionally
   removed in a `try/after`, so no path -- including the raise path --
   leaks it.
+
+  ## Draft confidentiality (the temp file is a secret)
+
+  A composer draft can contain anything the operator types -- API keys,
+  private text. It is therefore never written bare into the shared
+  tmp dir: each run creates a fresh per-run subdirectory chmod'd `0700`
+  (unreadable to other local users regardless of file modes or umask),
+  with an unpredictable `:crypto.strong_rand_bytes`-suffixed name, and
+  the draft file inside it is created by `write_draft_file/2` with
+  `[:exclusive]` (`O_CREAT | O_EXCL` -- creation FAILS on any
+  pre-existing path, and per POSIX the final path component is never
+  followed as a symlink under `O_EXCL`, so a pre-planted symlink cannot
+  redirect the write) and chmod'd `0600`. Cleanup removes the whole
+  per-run directory on every path.
+
+  ## Trust boundary: `$VISUAL`/`$EDITOR` is the operator's own shell config
+
+  The editor command is interpolated into a `/bin/sh` command line
+  UNVALIDATED, by design -- the same contract git, crontab, and OTP's
+  own shell honor (all of them sh-execute `$EDITOR`, precisely so
+  values like `"code -w"` or `emacsclient -a ""` work; a metacharacter
+  allowlist would break real configurations while defending a boundary
+  that does not exist here). It is safe under exactly one assumption:
+  the process environment is the SAME trust domain as the operator's
+  shell -- whoever set `$EDITOR` could already run commands as this
+  user. The draft content itself never reaches the shell (only the
+  quoted generated path does). Embedders that expose the harness across
+  a privilege boundary where the environment is attacker-influenceable
+  (SSH `AcceptEnv`/`ForceCommand` setups, sudo `env_keep`, a service
+  manager injecting env) MUST NOT pass the ambient environment through
+  -- inject a vetted `:env` explicitly instead.
 
   ## What this module deliberately does NOT do
 
@@ -78,8 +119,19 @@ defmodule Raxol.Harness.EditorSession do
   alias Raxol.Terminal.InlineDriver.Sequences
 
   @type outcome ::
-          {:ok, %{text: String.t(), width: pos_integer(), rows: pos_integer()}}
-          | {:kept, term(), %{width: pos_integer(), rows: pos_integer()}}
+          {:ok,
+           %{
+             text: String.t(),
+             width: pos_integer(),
+             rows: pos_integer(),
+             degraded: [{EditorSuspend.step(), term()}]
+           }}
+          | {:kept, term(),
+             %{
+               width: pos_integer(),
+               rows: pos_integer(),
+               degraded: [{EditorSuspend.step(), term()}]
+             }}
           | {:error, {atom(), term()}}
 
   @spec run(String.t(), keyword()) :: outcome()
@@ -92,15 +144,21 @@ defmodule Raxol.Harness.EditorSession do
       |> Keyword.get_lazy(:env, fn -> System.get_env() end)
       |> EditorSuspend.resolve_editor()
 
-    path =
+    # A fresh, unpredictably-named per-run directory (see the moduledoc's
+    # confidentiality section) -- created 0700 by :write_tmp, removed
+    # whole by :cleanup_tmp / the `after` below.
+    dir =
       opts
       |> Keyword.get_lazy(:tmp_dir, &System.tmp_dir!/0)
-      |> Path.join(EditorSuspend.tmp_filename(unique()))
+      |> Path.join("raxol_editor_" <> unique())
+
+    editor_timeout = Keyword.get(opts, :editor_timeout_ms, :infinity)
 
     ctx = %{
       draft: draft,
       editor: editor,
-      path: path,
+      dir: dir,
+      path: Path.join(dir, EditorSuspend.tmp_filename(unique())),
       cmd: nil,
       device: Keyword.get(opts, :device, :stdio),
       rows: rows,
@@ -111,7 +169,10 @@ defmodule Raxol.Harness.EditorSession do
         Keyword.get_lazy(opts, :reader, fn ->
           Process.whereis(:user_drv_reader)
         end),
-      spawn_fun: Keyword.get(opts, :spawn_fun, &default_spawn/1),
+      spawn_fun:
+        Keyword.get(opts, :spawn_fun, fn cmd ->
+          default_spawn(cmd, editor_timeout)
+        end),
       size_fun: Keyword.get(opts, :size_fun, fn -> stty.size() end),
       exit_status: nil,
       outcome: nil
@@ -121,19 +182,35 @@ defmodule Raxol.Harness.EditorSession do
       drive(EditorSuspend.new(), ctx)
     after
       # Belt-and-braces: the machine's own :cleanup_tmp (happy path) or
-      # compensation (failure path) already removes the file; this
+      # compensation (failure path) already removes the directory; this
       # `after` guarantees it even on the raise path. Removing an
-      # already-removed file is a harmless error tuple.
-      _ = File.rm(path)
+      # already-removed directory is a harmless no-op.
+      _ = File.rm_rf(dir)
+    end
+  end
+
+  @doc false
+  # The exclusive-create draft write, exposed for the security suite:
+  # `[:exclusive]` = O_CREAT|O_EXCL, so a pre-existing path (including a
+  # pre-planted symlink -- O_EXCL never follows the final component) is
+  # refused with {:error, :eexist} instead of truncated/redirected. The
+  # file is chmod'd 0600 after the write; its 0700 parent directory is
+  # what actually confines the content window in between.
+  @spec write_draft_file(Path.t(), binary()) :: :ok | {:error, term()}
+  def write_draft_file(path, content) do
+    with {:ok, io} <- :file.open(path, [:write, :exclusive, :binary, :raw]),
+         :ok <- :file.write(io, content),
+         :ok <- :file.close(io) do
+      File.chmod(path, 0o600)
     end
   end
 
   # -- the machine loop --------------------------------------------------
 
-  defp drive(machine, ctx) do
-    case EditorSuspend.advance(machine, :ok) do
-      {:done, _machine} ->
-        finish(ctx)
+  defp drive(machine, ctx, event \\ :ok) do
+    case EditorSuspend.advance(machine, event) do
+      {:done, machine} ->
+        finish(ctx, machine)
 
       {:effect, step, machine} ->
         run_step(step, machine, ctx)
@@ -156,7 +233,13 @@ defmodule Raxol.Harness.EditorSession do
       :erlang.raise(kind, reason, __STACKTRACE__)
   else
     {:ok, ctx} ->
-      drive(machine, ctx)
+      drive(machine, ctx, :ok)
+
+    {:degraded, reason} ->
+      # The step failed but must not abort (today: :enable_reader) --
+      # the machine records it so `finish/2` reports it; interpret/2
+      # already emitted the telemetry.
+      drive(machine, ctx, {:degraded, reason})
 
     {:error, reason} ->
       {:abort, compensation, _machine} =
@@ -166,11 +249,24 @@ defmodule Raxol.Harness.EditorSession do
       {:error, {error_tag(step), reason}}
   end
 
-  defp finish(%{outcome: nil} = ctx),
-    do: {:ok, %{text: ctx.text, width: ctx.width, rows: ctx.rows}}
+  defp finish(%{outcome: nil} = ctx, machine) do
+    {:ok,
+     %{
+       text: ctx.text,
+       width: ctx.width,
+       rows: ctx.rows,
+       degraded: EditorSuspend.degradations(machine)
+     }}
+  end
 
-  defp finish(%{outcome: {:kept, reason}} = ctx),
-    do: {:kept, reason, %{width: ctx.width, rows: ctx.rows}}
+  defp finish(%{outcome: {:kept, reason}} = ctx, machine) do
+    {:kept, reason,
+     %{
+       width: ctx.width,
+       rows: ctx.rows,
+       degraded: EditorSuspend.degradations(machine)
+     }}
+  end
 
   # The one step whose public error tag differs from its machine name:
   # callers see the RESOURCE that failed (the reader gate), not the
@@ -181,9 +277,15 @@ defmodule Raxol.Harness.EditorSession do
   # -- step interpretation ----------------------------------------------
 
   defp interpret(:write_tmp, ctx) do
-    case File.write(ctx.path, EditorSuspend.encode_draft(ctx.draft)) do
-      :ok -> {:ok, ctx}
-      {:error, posix} -> {:error, posix}
+    # 0700 per-run dir FIRST (the confinement), then the exclusive-create
+    # 0600 draft file inside it -- see the moduledoc's confidentiality
+    # section. The mkdir itself is fresh-named (strong-random suffix), so
+    # an existing path here is already suspicious and refused.
+    with :ok <- File.mkdir(ctx.dir),
+         :ok <- File.chmod(ctx.dir, 0o700),
+         :ok <-
+           write_draft_file(ctx.path, EditorSuspend.encode_draft(ctx.draft)) do
+      {:ok, ctx}
     end
   end
 
@@ -239,11 +341,25 @@ defmodule Raxol.Harness.EditorSession do
   end
 
   defp interpret(:enable_reader, ctx) do
-    # An enable failure leaves input degraded but is survivable --
-    # continuing (the caller can notify) beats aborting a resume that is
-    # already half-done.
-    _ = ctx.gate.enable(ctx.reader)
-    {:ok, ctx}
+    # An enable failure leaves input degraded but must not abort a
+    # resume that is already half-done -- and it must NEVER be silent:
+    # the {:degraded, reason} report is recorded by the machine, carried
+    # on the outcome for the caller to surface, and telemetry-emitted
+    # here (review finding: the old `_ = enable(...)` swallow reported
+    # a permanently-deaf tty as a clean {:ok, text}).
+    case ctx.gate.enable(ctx.reader) do
+      :ok ->
+        {:ok, ctx}
+
+      {:error, reason} ->
+        :telemetry.execute(
+          [:raxol, :harness, :editor, :reader_enable_failed],
+          %{},
+          %{reason: reason}
+        )
+
+        {:degraded, reason}
+    end
   end
 
   defp interpret(:reinit_modes, ctx) do
@@ -274,11 +390,14 @@ defmodule Raxol.Harness.EditorSession do
   defp interpret(:reload_draft, %{exit_status: :crashed} = ctx),
     do: {:ok, %{ctx | outcome: {:kept, :editor_crashed}}}
 
+  defp interpret(:reload_draft, %{exit_status: :timeout} = ctx),
+    do: {:ok, %{ctx | outcome: {:kept, :editor_timeout}}}
+
   defp interpret(:reload_draft, ctx),
     do: {:ok, %{ctx | outcome: {:kept, :editor_nonzero}}}
 
   defp interpret(:cleanup_tmp, ctx) do
-    _ = File.rm(ctx.path)
+    _ = File.rm_rf(ctx.dir)
     {:ok, ctx}
   end
 
@@ -293,14 +412,20 @@ defmodule Raxol.Harness.EditorSession do
   # Region bytes stay with the authority owner -- same rationale as the
   # forward step; the caller reasserts on every return.
   defp compensate(:reassert_region, _ctx), do: :ok
-  defp compensate(:cleanup_tmp, ctx), do: File.rm(ctx.path)
+  defp compensate(:cleanup_tmp, ctx), do: File.rm_rf(ctx.dir)
 
   # -- the real spawn ----------------------------------------------------
 
   # Synchronous: opens the port (the editor now owns fds 0/1/2 -- the
   # tty) and blocks until it delivers an exit status. `:crashed` when
-  # the port dies without one.
-  defp default_spawn(cmd) do
+  # the port dies without one; `:timeout` when `:editor_timeout_ms`
+  # elapses first (default `:infinity` -- a human legitimately edits for
+  # an arbitrary time on their own tty and can always quit the editor
+  # themselves; the bound exists for embedders/automation, threaded
+  # through Surface's `:editor_opts`). On timeout the editor process is
+  # best-effort SIGTERMed and the port closed before returning, so the
+  # resume bracket does not race a still-writing editor.
+  defp default_spawn(cmd, timeout) do
     port = Port.open({:spawn, cmd}, [:nouse_stdio, :exit_status])
     ref = Port.monitor(port)
 
@@ -311,7 +436,30 @@ defmodule Raxol.Harness.EditorSession do
 
       {:DOWN, ^ref, :port, ^port, _reason} ->
         :crashed
+    after
+      timeout ->
+        kill_editor(port, ref)
+        :timeout
     end
+  end
+
+  defp kill_editor(port, ref) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} ->
+        _ =
+          System.cmd("kill", ["-TERM", Integer.to_string(os_pid)],
+            stderr_to_stdout: true
+          )
+
+      _no_pid ->
+        :ok
+    end
+
+    Port.demonitor(ref, [:flush])
+
+    if Port.info(port), do: Port.close(port)
+  rescue
+    ArgumentError -> :ok
   end
 
   # Single-quote wrapping with the canonical '\'' escape -- the tmp path

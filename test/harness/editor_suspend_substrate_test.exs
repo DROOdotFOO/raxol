@@ -52,6 +52,12 @@ defmodule Raxol.Harness.EditorSuspendSubstrateTest do
       refute bytes =~ "\e[2J"
       refute bytes =~ "\e[3J"
     end
+
+    test "the park is a named builder (park_bottom/1), shared with move_bottom/1" do
+      assert Sequences.park_bottom(24) == "\e[24;1H"
+      assert String.ends_with?(Sequences.suspend_bytes(24), Sequences.park_bottom(24))
+      assert Sequences.move_bottom(24) == Sequences.park_bottom(24) <> "\r\n"
+    end
   end
 
   describe "ScrollRegionManager.reassert/1" do

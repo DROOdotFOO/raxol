@@ -94,7 +94,7 @@ defmodule Raxol.Harness.EditorSessionTest do
         {:enable_reader, reader, PdictStty.pdict_device_bytes()}
       )
 
-      :ok
+      Process.get(:reader_gate_enable_result, :ok)
     end
   end
 
@@ -320,6 +320,190 @@ defmodule Raxol.Harness.EditorSessionTest do
     assert device_bytes() == ""
 
     assert File.ls!(tmp_dir) == []
+  end
+
+  # ---------------------------------------------------------------------
+  # reader re-enable failure: DEGRADED, never silent (review CRITICAL)
+  # ---------------------------------------------------------------------
+
+  test "enable failure is reported as a degradation on the OK outcome -- never swallowed" do
+    tmp_dir = fresh_tmp_dir("degraded_ok")
+    {:ok, device} = StringIO.open("")
+
+    Process.put(:reader_gate_enable_result, {:error, {:reader_down, :noproc}})
+
+    spawn_fun = fn cmd ->
+      File.write!(quoted_path(cmd), "edited\n")
+      0
+    end
+
+    result =
+      EditorSession.run("draft", base_opts(device, tmp_dir, spawn_fun))
+
+    assert {:ok,
+            %{
+              text: "edited",
+              degraded: [{:enable_reader, {:reader_down, :noproc}}]
+            }} = result
+
+    # the resume still completed: modes re-inited despite the dead reader
+    assert device_bytes() =~ Sequences.init_bytes()
+    assert File.ls!(tmp_dir) == []
+  end
+
+  test "enable failure is reported as a degradation on KEPT outcomes too" do
+    tmp_dir = fresh_tmp_dir("degraded_kept")
+    {:ok, device} = StringIO.open("")
+
+    Process.put(:reader_gate_enable_result, {:error, :timeout})
+
+    spawn_fun = fn _cmd -> 3 end
+
+    assert {:kept, :editor_nonzero, %{degraded: [{:enable_reader, :timeout}]}} =
+             EditorSession.run("draft", base_opts(device, tmp_dir, spawn_fun))
+  end
+
+  test "a clean run reports an EMPTY degradation list" do
+    tmp_dir = fresh_tmp_dir("degraded_none")
+    {:ok, device} = StringIO.open("")
+
+    spawn_fun = fn cmd ->
+      File.write!(quoted_path(cmd), "x\n")
+      0
+    end
+
+    assert {:ok, %{degraded: []}} =
+             EditorSession.run("draft", base_opts(device, tmp_dir, spawn_fun))
+  end
+
+  test "enable failure emits the reader_enable_failed telemetry event" do
+    tmp_dir = fresh_tmp_dir("degraded_tel")
+    {:ok, device} = StringIO.open("")
+    parent = self()
+    handler_id = "editor-session-test-#{:erlang.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:raxol, :harness, :editor, :reader_enable_failed],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:telemetry, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    Process.put(:reader_gate_enable_result, {:error, {:reader_down, :killed}})
+
+    spawn_fun = fn cmd ->
+      File.write!(quoted_path(cmd), "x\n")
+      0
+    end
+
+    {:ok, _} = EditorSession.run("draft", base_opts(device, tmp_dir, spawn_fun))
+
+    assert_received {:telemetry, %{reason: {:reader_down, :killed}}}
+  end
+
+  # ---------------------------------------------------------------------
+  # temp-file confidentiality (review security finding)
+  # ---------------------------------------------------------------------
+
+  @tag :unix_only
+  test "the draft lives in a fresh 0700 per-run directory as a 0600 file -- never bare in the shared tmp dir" do
+    tmp_dir = fresh_tmp_dir("perms")
+    {:ok, device} = StringIO.open("")
+
+    spawn_fun = fn cmd ->
+      path = quoted_path(cmd)
+      %File.Stat{mode: file_mode} = File.stat!(path)
+      dir = Path.dirname(path)
+      %File.Stat{mode: dir_mode} = File.stat!(dir)
+
+      PdictStty.pdict_record(
+        {:perms, Bitwise.band(file_mode, 0o777), Bitwise.band(dir_mode, 0o777),
+         dir}
+      )
+
+      File.write!(path, "x\n")
+      0
+    end
+
+    {:ok, _} = EditorSession.run("secret draft", base_opts(device, tmp_dir, spawn_fun))
+
+    {:perms, file_perms, dir_perms, draft_dir} =
+      Enum.find(events(), &match?({:perms, _, _, _}, &1))
+
+    assert file_perms == 0o600
+    assert dir_perms == 0o700
+    # a per-run SUBDIRECTORY of the injected tmp dir, not the tmp dir itself
+    assert Path.dirname(draft_dir) == tmp_dir
+    refute draft_dir == tmp_dir
+
+    # the whole per-run directory is gone afterward
+    assert File.ls!(tmp_dir) == []
+  end
+
+  @tag :unix_only
+  test "draft creation is O_EXCL: a pre-existing file (or pre-planted symlink) is refused, never followed" do
+    tmp_dir = fresh_tmp_dir("excl")
+
+    existing = Path.join(tmp_dir, "existing.md")
+    File.write!(existing, "already here")
+    assert {:error, :eexist} = EditorSession.write_draft_file(existing, "draft")
+    # the pre-existing content was NOT truncated or replaced
+    assert File.read!(existing) == "already here"
+
+    target = Path.join(tmp_dir, "attacker_target")
+    File.write!(target, "victim file")
+    link = Path.join(tmp_dir, "planted.md")
+    :ok = :file.make_symlink(target, link)
+
+    assert {:error, :eexist} = EditorSession.write_draft_file(link, "draft")
+    # the symlink's target is untouched
+    assert File.read!(target) == "victim file"
+  end
+
+  # ---------------------------------------------------------------------
+  # editor timeout (review finding: unbounded synchronous wait)
+  # ---------------------------------------------------------------------
+
+  test "a wedged editor is bounded by :editor_timeout_ms -> {:kept, :editor_timeout, geo}" do
+    tmp_dir = fresh_tmp_dir("timeout")
+    {:ok, device} = StringIO.open("")
+
+    # REAL default spawn (no :spawn_fun injected): "sleep 3" plays the
+    # wedged editor; the 300ms bound must kill the wait long before the
+    # 3s exit would deliver a status.
+    opts =
+      base_opts(device, tmp_dir, nil)
+      |> Keyword.delete(:spawn_fun)
+      |> Keyword.merge(
+        env: %{"EDITOR" => "sleep 3 #"},
+        editor_timeout_ms: 300
+      )
+
+    started = System.monotonic_time(:millisecond)
+    result = EditorSession.run("draft", opts)
+    elapsed = System.monotonic_time(:millisecond) - started
+
+    assert {:kept, :editor_timeout, %{}} = result
+    assert elapsed < 2_000
+
+    # the resume bracket still ran
+    assert :stty_raw in event_names()
+    assert File.ls!(tmp_dir) == []
+  end
+
+  test "spawn_fun returning :timeout maps to {:kept, :editor_timeout, geo}" do
+    tmp_dir = fresh_tmp_dir("timeout_map")
+    {:ok, device} = StringIO.open("")
+
+    spawn_fun = fn _cmd -> :timeout end
+
+    assert {:kept, :editor_timeout, %{width: 100, rows: 30}} =
+             EditorSession.run("draft", base_opts(device, tmp_dir, spawn_fun))
   end
 
   # ---------------------------------------------------------------------

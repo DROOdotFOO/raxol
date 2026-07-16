@@ -54,9 +54,31 @@ defmodule Raxol.Terminal.InlineDriver.ReaderGate do
   have been consumed by the reader. The window is a single scheduler
   hop; the byte is delivered to the harness (which is mid-suspend and
   ignores it) rather than lost to the kernel.
+
+  ## Version coupling: pinned range and the drift failure mode
+
+  This wire protocol is OTP-private. Tested/verified range: **OTP 26
+  through 29** (the disable/enable branch of `reader_loop/2` is
+  byte-identical across them; prim_tty itself first shipped the reader
+  in OTP 26). Below the floor, `disable/2`/`enable/2` refuse with
+  `{:error, {:unsupported_otp, release}}` rather than sending a message
+  whose receiver semantics were never verified.
+
+  If a FUTURE OTP changes the reader's message shape, the failure mode
+  is fail-closed by construction, not silent corruption: `reader_loop`'s
+  catch-all clause ignores unknown messages, so the gate's call times
+  out (`{:error, :timeout}`, bounded), and the one caller that matters
+  treats a disable failure as ABORT-the-suspend -- the tty is never
+  handed to an editor with the gate in an unknown state. Bumping the
+  pinned range above is a deliberate act: re-read `prim_tty.erl`'s
+  `reader_loop/2` for the new release and extend the ceiling in this
+  doc; the protocol suite (`reader_gate_test.exs`, scripted readers)
+  pins the wire shape this module SPEAKS, and the pty round-trip test
+  exercises it against the REAL reader.
   """
 
   @default_timeout_ms 2_000
+  @min_otp 26
 
   @spec disable(pid() | nil, timeout()) :: :ok | {:error, term()}
   def disable(reader \\ Process.whereis(:user_drv_reader), timeout \\ @default_timeout_ms)
@@ -77,7 +99,19 @@ defmodule Raxol.Terminal.InlineDriver.ReaderGate do
   # The alias-monitor request/reply OTP's prim_tty `call/2` uses: the
   # alias doubles as the reply address and auto-demonitors on reply
   # (`:reply_demonitor`), so no stale DOWN can arrive after a success.
+  # Refuses below the verified OTP floor rather than speaking an
+  # unverified protocol (see the moduledoc's version-coupling section).
   defp call(reader, msg, timeout) do
+    release = otp_release()
+
+    if release < @min_otp do
+      {:error, {:unsupported_otp, release}}
+    else
+      do_call(reader, msg, timeout)
+    end
+  end
+
+  defp do_call(reader, msg, timeout) do
     ref = :erlang.monitor(:process, reader, alias: :reply_demonitor)
     send(reader, {ref, msg})
 
@@ -92,5 +126,13 @@ defmodule Raxol.Terminal.InlineDriver.ReaderGate do
         :erlang.demonitor(ref, [:flush])
         {:error, :timeout}
     end
+  end
+
+  defp otp_release do
+    :otp_release |> :erlang.system_info() |> List.to_integer()
+  rescue
+    # A non-numeric release string (never seen in practice) reads as
+    # "unknown, too old" -- refusing is the safe direction.
+    _ -> 0
   end
 end

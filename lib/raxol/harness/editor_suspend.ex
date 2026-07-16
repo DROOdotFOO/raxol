@@ -57,14 +57,42 @@ defmodule Raxol.Harness.EditorSuspend do
   Each step's effect on the externally observable resources is a ledger
   transition over `{tty, reader, screen, modes, tmp}`. `advance/2` with
   `{:error, reason}` (and `recovery/1`, the runner's rescue seam)
-  derives the compensation from the ledger of COMPLETED steps only --
-  never compensating work that was not done -- emitted in the safe
-  resume order: `:raw_tty`, `:enable_reader`, `:reinit_modes`,
+  derives the compensation from the ledger, emitted in the safe resume
+  order: `:raw_tty`, `:enable_reader`, `:reinit_modes`,
   `:reassert_region`, `:cleanup_tmp` (each included only when the
   ledger actually deviates). By construction, completed-steps ++
   compensation always folds back to the invariant
   `{raw, enabled, asserted, on, absent}` -- the exhaustive test in
   `editor_suspend_test.exs` pins exactly that, over every failure point.
+
+  ### Worst-case assumption for suspend-phase failures
+
+  A FAILED suspend-phase step (`:write_tmp`, `:disable_reader`,
+  `:release_screen`, `:restore_tty`) is folded into the ledger AS IF its
+  effects landed: a failed `File.write` may have created the file
+  (ENOSPC after create), a raising `IO.write` may have emitted part of
+  its bytes, a timed-out stty/gate call may have taken effect with the
+  reply lost. Compensating effects that never happened is harmless
+  (every compensation is idempotent toward the invariant -- an enable
+  against a never-disabled reader is ignored and times out, a re-raw of
+  an already-raw tty is a no-op); NOT compensating effects that DID
+  happen strands the terminal. Resume-phase steps get the opposite
+  assumption -- a failed `:raw_tty`/`:reinit_modes` is NOT done, so
+  compensation retries it.
+
+  ### Degradable steps: `:enable_reader`
+
+  `:enable_reader` is the one step whose failure must NOT abort: the
+  resume is already half-done, and finishing it (modes, region, draft
+  reload) with degraded input beats stranding the terminal mid-resume.
+  The runner reports it via `advance(machine, {:degraded, reason})`:
+  the machine continues to the next step but records the degradation --
+  the ledger keeps `reader: :disabled` (a degraded enable is honestly
+  NOT an enable, so a later failure's compensation retries the reader),
+  and `degradations/1` exposes the list so the runner/caller MUST
+  surface it (notice + telemetry) instead of a silent `{:ok, ...}`.
+  A `{:degraded, _}` report on any non-degradable step raises: it is a
+  programmer error, not a policy choice.
 
   ## Draft round-trip discipline
 
@@ -92,7 +120,8 @@ defmodule Raxol.Harness.EditorSuspend do
           | :reload_draft
           | :cleanup_tmp
 
-  @type machine :: %{completed: [step()], pending: step() | nil}
+  @type completion :: {step(), :ok | {:degraded, term()}}
+  @type machine :: %{completed: [completion()], pending: step() | nil}
 
   @steps [
     :write_tmp,
@@ -120,6 +149,20 @@ defmodule Raxol.Harness.EditorSuspend do
     :reassert_region,
     :cleanup_tmp
   ]
+
+  # Suspend-phase steps whose FAILURE is folded into the ledger as if
+  # their effects landed (worst case) -- see the moduledoc's
+  # "Worst-case assumption" section.
+  @assume_done_on_failure [
+    :write_tmp,
+    :disable_reader,
+    :release_screen,
+    :restore_tty
+  ]
+
+  # Steps whose failure may be reported as {:degraded, reason} instead of
+  # {:error, reason} -- see the moduledoc's "Degradable steps" section.
+  @degradable [:enable_reader]
 
   @initial_ledger %{
     tty: :raw,
@@ -192,26 +235,45 @@ defmodule Raxol.Harness.EditorSuspend do
     * `advance(machine, :ok)` -- the pending step (if any) completed;
       returns `{:effect, next_step, machine}` with the next step now
       pending, or `{:done, machine}` when the sequence is exhausted.
-    * `advance(machine, {:error, reason})` -- the pending step FAILED
-      (its work was not done); returns `{:abort, compensation, machine}`
-      where `compensation` covers the COMPLETED steps only, in the safe
-      resume order (see the moduledoc).
+    * `advance(machine, {:degraded, reason})` -- the pending step is a
+      DEGRADABLE step (`:enable_reader`) whose work failed but whose
+      failure must not abort the resume: the machine continues exactly
+      like `:ok` but RECORDS the degradation (`degradations/1`), and the
+      ledger keeps the resource un-repaired so a later failure's
+      compensation retries it. Raises `ArgumentError` on a
+      non-degradable step (programmer error, not policy).
+    * `advance(machine, {:error, reason})` -- the pending step FAILED;
+      returns `{:abort, compensation, machine}` where `compensation`
+      covers the completed steps PLUS, for a suspend-phase pending step,
+      the worst-case assumption that its effects landed (see the
+      moduledoc), in the safe resume order.
   """
-  @spec advance(machine(), :ok | {:error, term()}) ::
+  @spec advance(machine(), :ok | {:degraded, term()} | {:error, term()}) ::
           {:effect, step(), machine()}
           | {:done, machine()}
           | {:abort, [step()], machine()}
   def advance(%{completed: completed, pending: pending}, :ok) do
-    completed = if pending, do: completed ++ [pending], else: completed
-
-    case Enum.at(@steps, length(completed)) do
-      nil -> {:done, %{completed: completed, pending: nil}}
-      step -> {:effect, step, %{completed: completed, pending: step}}
-    end
+    completed = if pending, do: completed ++ [{pending, :ok}], else: completed
+    continue(completed)
   end
 
-  def advance(%{completed: completed} = machine, {:error, _reason}) do
-    {:abort, compensation(completed), %{machine | pending: nil}}
+  def advance(%{completed: completed, pending: pending}, {:degraded, reason})
+      when pending in @degradable do
+    continue(completed ++ [{pending, {:degraded, reason}}])
+  end
+
+  def advance(%{pending: pending}, {:degraded, _reason}) do
+    raise ArgumentError,
+          "step #{inspect(pending)} is not degradable -- only " <>
+            "#{inspect(@degradable)} may report {:degraded, reason}; " <>
+            "a failure here must be {:error, reason} (abort + compensation)"
+  end
+
+  def advance(
+        %{completed: completed, pending: pending} = machine,
+        {:error, _reason}
+      ) do
+    {:abort, compensation(completed, pending), %{machine | pending: nil}}
   end
 
   @doc """
@@ -222,16 +284,45 @@ defmodule Raxol.Harness.EditorSuspend do
   `advance(machine, {:error, _})` would return.
   """
   @spec recovery(machine()) :: [step()]
-  def recovery(%{completed: completed}), do: compensation(completed)
+  def recovery(%{completed: completed, pending: pending}),
+    do: compensation(completed, pending)
+
+  @doc """
+  Every degradation recorded so far, as `{step, reason}` in step order.
+  A non-empty list at `:done` means the run COMPLETED but a resource
+  could not be restored (today: the stdin reader after the editor) --
+  the runner must surface this to the operator, never swallow it.
+  """
+  @spec degradations(machine()) :: [{step(), term()}]
+  def degradations(%{completed: completed}) do
+    for {step, {:degraded, reason}} <- completed, do: {step, reason}
+  end
 
   # -- private ----------------------------------------------------------
 
-  # Derive compensation from the ledger of completed work: include each
-  # recovery step (in @recovery_order) only when the resource it repairs
-  # actually deviates from the invariant. Never compensates a step whose
-  # work was not done, by construction.
-  defp compensation(completed) do
-    ledger = Enum.reduce(completed, @initial_ledger, &apply_step(&2, &1))
+  defp continue(completed) do
+    case Enum.at(@steps, length(completed)) do
+      nil -> {:done, %{completed: completed, pending: nil}}
+      step -> {:effect, step, %{completed: completed, pending: step}}
+    end
+  end
+
+  # Derive compensation from the ledger: fold the completed work (a
+  # degraded completion contributes NO effect -- the resource was not
+  # repaired) plus, for a suspend-phase pending step that failed, the
+  # worst-case assumption that its effects landed. Include each recovery
+  # step (in @recovery_order) only when the resource it repairs actually
+  # deviates from the invariant.
+  defp compensation(completed, pending) do
+    assumed =
+      if pending in @assume_done_on_failure, do: [{pending, :ok}], else: []
+
+    ledger =
+      Enum.reduce(
+        completed ++ assumed,
+        @initial_ledger,
+        &apply_completion(&2, &1)
+      )
 
     Enum.filter(@recovery_order, fn
       :raw_tty -> ledger.tty != :raw
@@ -241,6 +332,12 @@ defmodule Raxol.Harness.EditorSuspend do
       :cleanup_tmp -> ledger.tmp != :absent
     end)
   end
+
+  # A step that completed :ok applies its ledger transition; a DEGRADED
+  # completion applies none -- the resource it was meant to repair is
+  # honestly still broken (see the moduledoc's degradable-steps section).
+  defp apply_completion(ledger, {step, :ok}), do: apply_step(ledger, step)
+  defp apply_completion(ledger, {_step, {:degraded, _reason}}), do: ledger
 
   # The resource-ledger transition table -- one clause per step (and the
   # compensation steps reuse the same vocabulary, so a compensated

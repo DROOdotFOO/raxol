@@ -65,12 +65,25 @@ defmodule Raxol.Terminal.InlineDriver.Sequences do
   def autowrap_cursor, do: @autowrap_cursor
 
   @doc """
-  Step 4: absolute-move to `(rows, 1)` then CRLF. Safe to be unclamped
-  because the scroll region is already gone by this point (step 2).
+  The bare absolute park at `(rows, 1)` -- the shared "magic byte"
+  builder both `move_bottom/1` (park + fresh-line CRLF, for the shell
+  handoff) and `suspend_bytes/1` (park only, for the editor handoff)
+  compose from. Safe to be unclamped only AFTER the region release
+  (step 2).
+  """
+  @spec park_bottom(pos_integer()) :: binary()
+  def park_bottom(rows) when is_integer(rows) and rows > 0 do
+    "\e[#{rows};1H"
+  end
+
+  @doc """
+  Step 4: absolute-move to `(rows, 1)` (`park_bottom/1`) then CRLF. Safe
+  to be unclamped because the scroll region is already gone by this
+  point (step 2).
   """
   @spec move_bottom(pos_integer()) :: binary()
   def move_bottom(rows) when is_integer(rows) and rows > 0 do
-    "\e[#{rows};1H\r\n"
+    park_bottom(rows) <> "\r\n"
   end
 
   @doc """
@@ -118,6 +131,6 @@ defmodule Raxol.Terminal.InlineDriver.Sequences do
   """
   @spec suspend_bytes(pos_integer()) :: binary()
   def suspend_bytes(rows) when is_integer(rows) and rows > 0 do
-    modes_off() <> release_region() <> autowrap_cursor() <> "\e[#{rows};1H"
+    modes_off() <> release_region() <> autowrap_cursor() <> park_bottom(rows)
   end
 end

@@ -150,6 +150,84 @@ defmodule Raxol.Harness.EditorSurfaceTest do
     assert flush(device) =~ "\e[1;24r"
   end
 
+  test "a degraded resume (reader did not re-enable) surfaces a visible warning even on success" do
+    device = open_device()
+
+    session = fn _draft, _opts ->
+      {:ok,
+       %{
+         text: "edited",
+         width: 80,
+         rows: 24,
+         degraded: [{:enable_reader, {:reader_down, :noproc}}]
+       }}
+    end
+
+    model = new_surface(device, editor_session: session)
+    _ = flush(device)
+    model = Surface.handle_input(model, ctrl_e())
+
+    # the edit itself still landed...
+    assert Composer.value(model.composer) == "edited"
+    # ...but the input-death warning is visibly rendered, not swallowed
+    assert flush(device) =~ "input reader failed to re-enable"
+  end
+
+  test "a degraded KEPT outcome carries both the kept notice and the degradation warning" do
+    device = open_device()
+
+    session = fn _draft, _opts ->
+      {:kept, :editor_nonzero,
+       %{width: 80, rows: 24, degraded: [{:enable_reader, :timeout}]}}
+    end
+
+    model = new_surface(device, editor_session: session)
+    _ = flush(device)
+    _model = Surface.handle_input(model, ctrl_e())
+
+    bytes = flush(device)
+    assert bytes =~ "draft kept"
+    assert bytes =~ "input reader failed to re-enable"
+  end
+
+  test "{:kept, :editor_timeout, geo} renders a timeout notice" do
+    device = open_device()
+
+    session = fn _draft, _opts ->
+      {:kept, :editor_timeout, %{width: 80, rows: 24}}
+    end
+
+    model = new_surface(device, editor_session: session)
+    _ = flush(device)
+    _model = Surface.handle_input(model, ctrl_e())
+
+    assert flush(device) =~ "editor timed out"
+  end
+
+  test ":editor_opts flow through to the session (embedder seam, e.g. :editor_timeout_ms)" do
+    device = open_device()
+    parent = self()
+
+    session = fn _draft, opts ->
+      send(parent, {:session_opts, opts})
+      {:ok, %{text: "t", width: 80, rows: 24}}
+    end
+
+    model =
+      new_surface(device,
+        editor_session: session,
+        editor_opts: [editor_timeout_ms: 5_000]
+      )
+
+    _model = Surface.handle_input(model, ctrl_e())
+
+    assert_received {:session_opts, opts}
+    assert opts[:editor_timeout_ms] == 5_000
+    # model-owned geometry/device always win over editor_opts
+    assert opts[:rows] == 24
+    assert opts[:device] == device
+  end
+
   test "no session wired: honest stub notice, no crash" do
     device = open_device()
     model = new_surface(device)

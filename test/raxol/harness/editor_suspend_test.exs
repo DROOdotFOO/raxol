@@ -226,17 +226,22 @@ defmodule Raxol.Harness.EditorSuspendTest do
       end
     end
 
-    test "compensation never includes a step whose work was not done: failing the very first step compensates nothing" do
+    test "failing write_tmp assumes a partial file may exist (worst case): compensates [:cleanup_tmp]" do
       {machine, :write_tmp} = drive_to_step(1)
 
-      assert {:abort, [], _machine} =
+      assert {:abort, [:cleanup_tmp], _machine} =
                EditorSuspend.advance(machine, {:error, :eacces})
     end
 
-    test "failing disable_reader (first terminal-state step) compensates only the tmp file" do
+    test "failing disable_reader assumes the disable may have LANDED with the reply lost: compensates the reader too" do
+      # A gate timeout cannot distinguish "never disabled" from "disabled,
+      # reply lost". Worst case is a permanently-deaf tty, so compensation
+      # must include :enable_reader -- against a never-disabled reader the
+      # enable message is ignored by the reader loop's catch-all and the
+      # compensation call just times out harmlessly.
       {machine, :disable_reader} = drive_to_step(2)
 
-      assert {:abort, [:cleanup_tmp], _machine} =
+      assert {:abort, [:enable_reader, :cleanup_tmp], _machine} =
                EditorSuspend.advance(machine, {:error, :timeout})
     end
 
@@ -291,6 +296,115 @@ defmodule Raxol.Harness.EditorSuspendTest do
 
         assert EditorSuspend.recovery(machine) == compensation
       end
+    end
+
+    # Suspend-phase steps must be assumed DONE when they fail: a failed
+    # IO.write may have partially landed its bytes, a failed File.write may
+    # have created the file, a timed-out stty/gate call may have taken
+    # effect with the reply lost. Resume-phase steps get the opposite
+    # assumption (not done), so compensation RETRIES them. This is the
+    # stronger, worst-case form of the invariant above.
+    @assume_done_on_failure [
+      :write_tmp,
+      :disable_reader,
+      :release_screen,
+      :restore_tty
+    ]
+
+    test "WORST CASE: completed ++ (pending, if suspend-phase) ++ compensation still restores the invariant" do
+      for fail_at <- 1..length(@expected_steps) do
+        {machine, pending} = drive_to_step(fail_at)
+
+        {:abort, compensation, _machine} =
+          EditorSuspend.advance(machine, {:error, :boom})
+
+        completed = Enum.take(@expected_steps, fail_at - 1)
+        assumed = if pending in @assume_done_on_failure, do: [pending], else: []
+
+        final =
+          Enum.reduce(
+            completed ++ assumed ++ compensation,
+            @initial_ledger,
+            &ledger_apply(&2, &1)
+          )
+
+        assert final == @initial_ledger,
+               "worst-case failure at #{inspect(pending)} (step #{fail_at}): " <>
+                 "completed #{inspect(completed)} ++ assumed #{inspect(assumed)} ++ " <>
+                 "compensation #{inspect(compensation)} leaves ledger " <>
+                 "#{inspect(final)}, not the invariant"
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # degradable steps: enable_reader can FAIL without aborting the resume
+  # ---------------------------------------------------------------------
+
+  describe "machine: degradable enable_reader" do
+    defp enable_index,
+      do: Enum.find_index(@expected_steps, &(&1 == :enable_reader)) + 1
+
+    test "a degraded enable continues to the next step and is RECORDED, never silently ok" do
+      {machine, :enable_reader} = drive_to_step(enable_index())
+
+      assert {:effect, :reinit_modes, machine} =
+               EditorSuspend.advance(
+                 machine,
+                 {:degraded, {:reader_down, :killed}}
+               )
+
+      assert EditorSuspend.degradations(machine) ==
+               [{:enable_reader, {:reader_down, :killed}}]
+    end
+
+    test "a non-degradable step rejects {:degraded, _} loudly (programmer error, not a policy)" do
+      {machine, :write_tmp} = drive_to_step(1)
+
+      assert_raise ArgumentError, fn ->
+        EditorSuspend.advance(machine, {:degraded, :whatever})
+      end
+    end
+
+    test "the ledger never lies: after a degraded enable, a later failure re-compensates the reader" do
+      {machine, :enable_reader} = drive_to_step(enable_index())
+
+      {:effect, :reinit_modes, machine} =
+        EditorSuspend.advance(machine, {:degraded, :noproc})
+
+      {:abort, compensation, _machine} =
+        EditorSuspend.advance(machine, {:error, :boom})
+
+      assert :enable_reader in compensation
+    end
+
+    test "a run completing WITH a degraded enable still reports the degradation at :done" do
+      {machine, :enable_reader} = drive_to_step(enable_index())
+
+      {:effect, :reinit_modes, machine} =
+        EditorSuspend.advance(machine, {:degraded, :noproc})
+
+      final =
+        Enum.reduce_while(1..20, machine, fn _i, machine ->
+          case EditorSuspend.advance(machine, :ok) do
+            {:effect, _step, machine} -> {:cont, machine}
+            {:done, machine} -> {:halt, machine}
+          end
+        end)
+
+      assert EditorSuspend.degradations(final) == [{:enable_reader, :noproc}]
+    end
+
+    test "a clean happy path reports zero degradations" do
+      final =
+        Enum.reduce_while(1..20, EditorSuspend.new(), fn _i, machine ->
+          case EditorSuspend.advance(machine, :ok) do
+            {:effect, _step, machine} -> {:cont, machine}
+            {:done, machine} -> {:halt, machine}
+          end
+        end)
+
+      assert EditorSuspend.degradations(final) == []
     end
   end
 end
