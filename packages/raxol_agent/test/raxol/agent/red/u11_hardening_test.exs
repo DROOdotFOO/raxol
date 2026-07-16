@@ -168,4 +168,32 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
       assert Fingerprint.params_hash(built_a) == Fingerprint.params_hash(built_b)
     end
   end
+
+  # ===========================================================================
+  # Finding 6 (🟡) — what_produced precedence walk
+  # ===========================================================================
+
+  describe "what_produced follows the precedence law (§2.1)" do
+    test "an item_completed offset resolves to its OWN fingerprint (highest precedence)" do
+      %{records: records, item_offset: item_off, z: z} =
+        Gen.fingerprint_precedence(0)
+
+      assert Meta.what_produced(records, item_off) == z,
+             "the item_completed fingerprint wins 'what produced this content'"
+    end
+
+    test "a turn_started offset resolves to the head default, NOT its 'what-was-asked' override" do
+      %{records: records, x: x, y: y} = Gen.fingerprint_precedence(0)
+
+      # offset 2 is the turn_started carrying override Y ("what was asked").
+      produced = Meta.what_produced(records, 2)
+
+      assert produced == x,
+             "a turn_started must resolve to the head default (the effective " <>
+               "producing fp), never the override"
+
+      refute produced == y,
+             "the turn_started override is 'what was asked', not 'what produced'"
+    end
+  end
 end

@@ -281,9 +281,55 @@ defmodule Raxol.Agent.Meta do
   @spec what_produced([jrecord()], non_neg_integer()) :: map() | nil
   def what_produced(records, offset) do
     case Enum.find(records, fn r -> offset(r) == offset end) do
-      %{"payload" => %{"fingerprint" => fp}} -> fp
-      _ -> nil
+      nil -> nil
+      record -> producing_fingerprint(record, records)
     end
+  end
+
+  # The frozen precedence walk (§2.1 "Precedence law"): the `item_completed`
+  # fingerprint wins "what produced this content"; the `turn_started` override
+  # governs "what was ASKED", never what was produced; the session head config
+  # is defaults only.
+  defp producing_fingerprint(record, records) do
+    cond do
+      type(record) == :item_completed ->
+        # A non-LLM item carries no own fingerprint — fall to the turn's override
+        # (the model actually in effect) and then the head default.
+        own_fingerprint(record) ||
+          turn_override(records, turn_of(record)) ||
+          head_default(records)
+
+      type(record) == :turn_started ->
+        # A turn_started is a request, not produced content: its override is
+        # "what was asked", explicitly NOT the producing fp — fall to the head
+        # default (the effective producing model absent any item).
+        head_default(records)
+
+      true ->
+        turn_override(records, turn_of(record)) || head_default(records)
+    end
+  end
+
+  defp own_fingerprint(%{"payload" => %{"fingerprint" => fp}}), do: fp
+  defp own_fingerprint(_), do: nil
+
+  defp turn_of(%{"turn_id" => t}), do: t
+  defp turn_of(_), do: nil
+
+  defp turn_override(_records, nil), do: nil
+
+  defp turn_override(records, turn) do
+    Enum.find_value(records, fn r ->
+      if type(r) == :turn_started and turn_of(r) == turn do
+        get_in(r, ["payload", "fingerprint_override"])
+      end
+    end)
+  end
+
+  defp head_default(records) do
+    Enum.find_value(records, fn r ->
+      if type(r) == :head_config, do: get_in(r, ["payload", "fingerprint"])
+    end)
   end
 
   # --- record accessors (string-keyed, Reader-shaped) ------------------------
