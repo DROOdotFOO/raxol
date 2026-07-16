@@ -16,7 +16,13 @@ defmodule Raxol.Property.RendererT2cReviewFixesTest do
   `repaint/2`/`keyframe/2`, emerges neutralized.
   """
 
-  use ExUnit.Case, async: true
+  # async: false — this suite drives full terminal-emulator replays in a
+  # hot loop (CPU-bound). Co-scheduling several such suites in the async
+  # pool starves them of cores on small CI runners (the 2-core Windows
+  # matrix), timing out whichever heavy property loses the scheduling
+  # draw. Serializing costs nothing in throughput there (the work is
+  # CPU-bound either way) and removes the contention-induced timeouts.
+  use ExUnit.Case, async: false
 
   alias Raxol.Harness.Test.SealOracle
   alias Raxol.Terminal.Buffer.Queries

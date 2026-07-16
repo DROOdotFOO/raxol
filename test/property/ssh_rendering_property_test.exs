@@ -10,7 +10,13 @@ defmodule Raxol.Property.SSHRenderingTest do
 
   Bug class: rendering backend parity gaps and orphaned callbacks (see issue #212).
   """
-  use ExUnit.Case, async: true
+  # async: false — this suite drives full terminal-emulator replays in a
+  # hot loop (CPU-bound). Co-scheduling several such suites in the async
+  # pool starves them of cores on small CI runners (the 2-core Windows
+  # matrix), timing out whichever heavy property loses the scheduling
+  # draw. Serializing costs nothing in throughput there (the work is
+  # CPU-bound either way) and removes the contention-induced timeouts.
+  use ExUnit.Case, async: false
   use ExUnitProperties
 
   alias Raxol.Core.Runtime.Rendering.Backends
