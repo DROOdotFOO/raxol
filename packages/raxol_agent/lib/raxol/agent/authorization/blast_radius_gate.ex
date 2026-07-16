@@ -231,8 +231,26 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   """
   @impl true
   @spec escalate?(call()) :: boolean()
-  def escalate?(call),
-    do: call.effect_class == :irreversible_external or call.egress == true
+  def escalate?(call) do
+    cond do
+      call.effect_class == :irreversible_external -> true
+      call.egress == true -> true
+      # Auto-proceed ONLY for a recognized benign class with egress EXACTLY
+      # false. An unknown/unrecognized effect_class, or a non-boolean egress,
+      # fails CLOSED to escalation (§2.1 unknown-trust doctrine) — never a silent
+      # proceed on a field we don't understand.
+      known_effect_class?(call.effect_class) and call.egress == false -> false
+      true -> true
+    end
+  end
+
+  @known_effect_classes [
+    :reversible_local,
+    :bounded_sandboxable,
+    :irreversible_external
+  ]
+
+  defp known_effect_class?(class), do: class in @known_effect_classes
 
   @doc """
   The taint FOLD (HIGH-1 / §0 clause 7 decision-time law): derive the call's

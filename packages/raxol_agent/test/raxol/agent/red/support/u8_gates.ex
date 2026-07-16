@@ -108,9 +108,28 @@ defmodule Raxol.Agent.Red.U8Gates do
       denied: MapSet.new()
     }
 
-  @doc "The pure §5.2 predicate: escalate iff irreversible_external OR egress."
-  def escalate_p(call),
-    do: call.effect_class == :irreversible_external or call.egress == true
+  @doc """
+  The pure §5.2 predicate: escalate iff irreversible_external OR egress. Fails
+  CLOSED (matches production): an unknown effect_class or a non-boolean egress
+  escalates — auto-proceed only for a recognized benign class with egress
+  exactly false.
+  """
+  def escalate_p(call) do
+    cond do
+      call.effect_class == :irreversible_external -> true
+      call.egress == true -> true
+      known_effect_class?(call.effect_class) and call.egress == false -> false
+      true -> true
+    end
+  end
+
+  @known_effect_classes [
+    :reversible_local,
+    :bounded_sandboxable,
+    :irreversible_external
+  ]
+
+  defp known_effect_class?(class), do: class in @known_effect_classes
 
   @doc """
   The reference taint FOLD (HIGH-1): tainted iff any record reachable from
@@ -880,6 +899,38 @@ defmodule Raxol.Agent.Red.U8Gates do
           end
         else
           bad -> {:violation, {:once_scope_flow_broke, bad}}
+        end
+      end)
+    end
+
+    # C14 (Fix 4 regression) — the §5.2 predicate fails CLOSED on inputs it does
+    # not recognize: an UNKNOWN effect_class escalates, and a NON-boolean egress
+    # escalates (the pre-fix `class == :irreversible_external or egress == true`
+    # returned false — a silent proceed — for both).
+    def escalate_predicate_fails_closed(gate) do
+      safe(fn ->
+        unknown_class =
+          U8Gates.escalating_call(%{
+            effect_class: :quantum_teleport,
+            egress: false
+          })
+
+        non_boolean_egress =
+          U8Gates.escalating_call(%{
+            effect_class: :reversible_local,
+            egress: :maybe
+          })
+
+        cond do
+          not gate.escalate?(unknown_class) ->
+            {:violation, {:unknown_class_proceeded, unknown_class.effect_class}}
+
+          not gate.escalate?(non_boolean_egress) ->
+            {:violation,
+             {:non_boolean_egress_proceeded, non_boolean_egress.egress}}
+
+          true ->
+            :ok
         end
       end)
     end
