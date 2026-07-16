@@ -975,7 +975,9 @@ defmodule Raxol.Agent.Probe do
               timeout_ms: pos_integer(),         #   "        "        "
               default_budget: pos_integer(),     # tokens (see Budget)
               max_parked: pos_integer(),         # pool-level cap on parked runs (AF-5); probe may override the pool default
-              park_timeout_ms: pos_integer()     # TTL a parked run may wait before terminating :exhausted (AF-5)
+              park_timeout_ms: pos_integer(),    # TTL a parked run may wait before terminating :exhausted (AF-5)
+              # --- eval-first growth (2026-07-16, ratified; OPTIONAL, defaulted absent) ---
+              sunset: String.t() | nil           # one-line delete-criterion, e.g. "delete when provider-native compaction matches on eval"
             }
   @callback build(context) :: {:ok, request} | :skip
   @callback interpret(response :: map(), context) ::
@@ -987,6 +989,19 @@ Probes are **pure interpreters**: `build/1` and `interpret/2` receive
 read-only data and return data. A probe never touches the journal, the bus,
 the session process, or the provider — the Runner does all four. That is the
 isolation guarantee *by construction*, not by convention.
+
+**`sunset` — the probe's own delete-criterion (eval-first, ratified 2026-07-16).**
+Optional-with-default-absent (additive under §0), so no grandfathered probe
+breaks. Every probe is scaffolding compensating for a current model weakness;
+`sunset` states in one line *when that weakness is expected to expire and the
+probe should be deleted* (e.g. `"delete when provider-native compaction matches
+on eval"`). **Governing note:** every probe spec **SHOULD** declare a `sunset`;
+**Wave-4 graduation REQUIRES** one (a probe with no sunset does not graduate).
+Grandfathered C-probes (the existing C1–C7 / `:probe_c1_gate` … `:probe_c7`
+sources, §2.1 registry) MUST gain a `sunset` line **at their next touch**. This
+is the structural form of the eval-first meta-pattern — anything built atop model
+behavior carries a measured exit criterion (see `harness-eval-first-analysis.md`
+§4.2/§5, and the eval gate at §6 below).
 
 #### The runner API (frozen observables)
 
@@ -1277,3 +1292,36 @@ N-U11.11.
 **F2 dependency:** `effect_class`/`egress` live in the not-yet-landed F2
 `Raxol.Action` draft — reds that assert `effect_class`-keyed escalation carry
 `@tag :action_surface` until F2 lands.
+
+---
+
+## 6. Eval gate (ratified 2026-07-16)
+
+Folded from V's external-cohort ruling (`harness-eval-first-analysis.md`,
+disposition binding). This is additive under §0 — it adds an **acceptance bar**
+to probes and an **exit criterion** to U13; it renames and repurposes nothing.
+
+The governing meta-pattern: **every abandoned scaffold in the cohort was a
+compensator for a model weakness that expired; every survivor had a falsifier.
+Anything built atop model behavior needs a measured exit criterion.** The probe
+`sunset` field (§3) states the criterion; this section states how it is measured.
+
+- **Journal-replay eval set (the instrument).** The eval is journal-replay-based
+  and rides infra that is ~80% already present: the replay closure (P-JS5, §1.2)
+  plus the FI-2 log-head version tags (`{harness_version, model, config_hash}`).
+  It is named as a roadmap unit (**U23 eval harness** — see the numbering flag in
+  `harness-eval-first-analysis.md` §4.4: V's ruling said "U22", but U22 is the
+  already-landed asciicast fix, so the eval unit is U23).
+- **Probe acceptance bar (new).** A probe is accepted **only if it beats a null
+  baseline on the eval set** — "beats do-nothing" is the floor. A probe whose
+  signal does not clear the null baseline does not ship.
+- **U13 A/B is an exit criterion (new).** The C1 reasoning-gate's A/B test (score↔
+  benefit correlation) is promoted from someday-nice-to-have to a required exit
+  criterion — it is the falsifier the C1≈Cognition-"Smart-Friend" echo was
+  missing (`harness-eval-first-analysis.md` §2, echo a).
+- **The eval unit gates Wave 4.** The probes (U13–U18) do not graduate without
+  the eval harness in place: it is the measurement surface for every probe's
+  `sunset` and acceptance bar.
+
+This gate does not alter any frozen schema; it constrains *which* probes may
+graduate, not *what* the probe/meta/journal records look like.
