@@ -1,9 +1,12 @@
-# Fail-closed capability gate (W17-caps). Two tiers:
+# Fail-closed capability gate (W17-caps; delete/close/auth leaves closed by
+# W7a / parked review item 5). Two tiers:
 #
 #   1. Pure-predicate matrix over `Capabilities.negotiated?/2` and the
 #      `MethodTable` capability column: no-requirement methods always pass;
-#      gated methods deny on absent/false/nil caps; `:never` + missing-leaf
-#      rows fail closed; snapshot immutability; drift guard on `cap_fields/1`.
+#      gated methods deny on absent/false/nil caps; the (now closed)
+#      session/delete|close|logout oracle-divergence rows gate live on real
+#      leaves instead of failing closed unconditionally; snapshot
+#      immutability; drift guard on `cap_fields/1`.
 #   2. One end-to-end Paired integration: a client that never advertised
 #      `terminal` rejects the agent's `terminal/create` with `-32601`, BEFORE
 #      decode (proven by decode-invalid params still yielding -32601, not
@@ -15,8 +18,12 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
   alias Raxol.AgentClientProtocol.Capabilities
   alias Raxol.AgentClientProtocol.MethodTable
 
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.AgentAuthCapabilities
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.LogoutCapabilities
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCapabilities
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCloseCapabilities
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.SessionDeleteCapabilities
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.ClientCapabilities
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.FileSystemCapability
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionListCapabilities
@@ -145,20 +152,41 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
     end
   end
 
-  # -- structural fail-closed: :never + missing-leaf oracle divergences ----
+  # -- closed oracle divergences: delete/close/auth leaves (W17-caps / parked --
+  # -- review item 5) now gate live instead of failing closed unconditionally --
 
-  describe "oracle-divergence rows fail closed unconditionally" do
-    test "logout (:never) is denied for every snapshot" do
-      assert MethodTable.capability_for("logout") == :never
+  describe "logout gates on auth.logout (closed oracle-divergence gap)" do
+    test "logout is no longer :never in the table" do
+      assert MethodTable.capability_for("logout") == {:agent, [:auth, :logout]}
+    end
 
+    test "denied when auth is absent (nil), even with other caps present" do
       for caps <- [nil, %AgentCapabilities{}, %AgentCapabilities{load_session: true}] do
         refute Capabilities.negotiated?(caps, "logout")
       end
     end
 
-    test "session/delete and session/close deny even with session_capabilities present" do
-      # The ported SessionCapabilities struct has no :delete / :close leaf, so
-      # even a fully-populated session_capabilities cannot advertise them.
+    test "denied when auth is present but logout is absent" do
+      caps = %AgentCapabilities{auth: %AgentAuthCapabilities{logout: nil}}
+      refute Capabilities.negotiated?(caps, "logout")
+    end
+
+    test "allowed when auth.logout is present" do
+      caps = %AgentCapabilities{auth: %AgentAuthCapabilities{logout: %LogoutCapabilities{}}}
+      assert Capabilities.negotiated?(caps, "logout")
+    end
+  end
+
+  describe "session/delete and session/close gate on session_capabilities.{delete,close} (closed oracle-divergence gap)" do
+    test "the table resolves real paths, not :never" do
+      assert MethodTable.capability_for("session/delete") ==
+               {:agent, [:session_capabilities, :delete]}
+
+      assert MethodTable.capability_for("session/close") ==
+               {:agent, [:session_capabilities, :close]}
+    end
+
+    test "denied when session_capabilities is present but delete/close are absent" do
       caps = %AgentCapabilities{
         session_capabilities: %SessionCapabilities{
           list: %SessionListCapabilities{},
@@ -168,6 +196,34 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
 
       refute Capabilities.negotiated?(caps, "session/delete")
       refute Capabilities.negotiated?(caps, "session/close")
+    end
+
+    test "allowed when session_capabilities.delete/close are present" do
+      caps = %AgentCapabilities{
+        session_capabilities: %SessionCapabilities{
+          delete: %SessionDeleteCapabilities{},
+          close: %SessionCloseCapabilities{}
+        }
+      }
+
+      assert Capabilities.negotiated?(caps, "session/delete")
+      assert Capabilities.negotiated?(caps, "session/close")
+    end
+
+    test "each leaf gates independently (delete present, close absent, and vice versa)" do
+      delete_only = %AgentCapabilities{
+        session_capabilities: %SessionCapabilities{delete: %SessionDeleteCapabilities{}}
+      }
+
+      assert Capabilities.negotiated?(delete_only, "session/delete")
+      refute Capabilities.negotiated?(delete_only, "session/close")
+
+      close_only = %AgentCapabilities{
+        session_capabilities: %SessionCapabilities{close: %SessionCloseCapabilities{}}
+      }
+
+      refute Capabilities.negotiated?(close_only, "session/delete")
+      assert Capabilities.negotiated?(close_only, "session/close")
     end
   end
 

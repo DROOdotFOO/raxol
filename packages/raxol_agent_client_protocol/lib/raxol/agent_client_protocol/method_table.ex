@@ -45,8 +45,8 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
   the `Schema.*` modules it references).
   """
 
-  alias Raxol.AgentClientProtocol.Schema.{AgentTypes, ClientTypes, LifecycleExtras, Unstable}
   alias Raxol.AgentClientProtocol.Ext.Schema, as: ExtSchema
+  alias Raxol.AgentClientProtocol.Schema.{AgentTypes, ClientTypes, LifecycleExtras, Unstable}
 
   @typedoc "Which side sends this row's wire method."
   @type direction :: :client_to_agent | :agent_to_client | :both
@@ -79,23 +79,24 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
     * `:never` — the oracle gates this method by a capability the ported
       Elixir capability structs cannot express, so it is unconditionally NOT
       negotiated (fail closed, `-32601`) until the struct model is extended.
-      Currently only `logout` (oracle `agentCapabilities.auth.logout`;
-      `AgentCapabilities` has no `auth` field).
+      Not currently used by any row (the former `logout` row that used this —
+      see ORACLE-DIVERGENCE below — now resolves a real path).
 
   ### ORACLE-DIVERGENCE (schema-oracle v1.19.0 vs. ported f1729 structs)
 
-  The pinned oracle's capability tree is RICHER than the Elixir structs
-  ported from the older f1729 snapshot. Where the struct can express the
-  gate, the path resolves and gating is live; where it cannot, the row fails
-  closed (documented per-row below). Concretely:
+  The pinned oracle's capability tree was originally RICHER than the Elixir
+  structs ported from the older f1729 snapshot; three leaves have since been
+  added to close the gap (parked review item 5 / W17-caps):
 
-    * `sessionCapabilities.{delete,close}` — oracle has them, the Elixir
-      `SessionCapabilities` struct (`modes`/`list`/`fork`/`resume`) does not.
-      `session/delete`/`session/close` therefore resolve to a MISSING leaf
-      under `:session_capabilities` and always fail closed. They will
-      auto-activate (no code change) once the struct gains the fields.
-    * `agentCapabilities.auth.logout` — the struct has no `auth` field at
-      all, so `logout` uses `:never` rather than a dead path.
+    * `sessionCapabilities.{delete,close}` — oracle has them; ported as
+      `Schema.AgentTypes.SessionDeleteCapabilities`/`SessionCloseCapabilities`
+      onto the `SessionCapabilities` struct's `delete`/`close` fields.
+      `session/delete`/`session/close` now gate live on
+      `{:agent, [:session_capabilities, :delete | :close]}`.
+    * `agentCapabilities.auth.logout` — oracle has it; ported as
+      `Schema.AgentTypes.AgentAuthCapabilities`/`LogoutCapabilities` onto the
+      `AgentCapabilities` struct's `auth` field. `logout` now gates live on
+      `{:agent, [:auth, :logout]}` instead of `:never`.
     * JSON-key vs struct-field: the table historically carried oracle-ish
       keys (`[:sessions, :list]`, `[:fs, :read_text_file]`, `[:logout]`)
       that resolved against NEITHER the oracle JSON NOR the Elixir struct.
@@ -130,7 +131,8 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
     :load_session,
     :prompt_capabilities,
     :mcp_capabilities,
-    :session_capabilities
+    :session_capabilities,
+    :auth
   ]
   @client_cap_fields [:terminal, :file_system]
 
@@ -246,8 +248,9 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       callback: :delete_session,
       params: LifecycleExtras.DeleteSessionRequest,
       result: LifecycleExtras.DeleteSessionResponse,
-      # ORACLE-DIVERGENCE: leaf absent in the ported `SessionCapabilities`
-      # struct ⇒ fails closed today; auto-activates when the field lands.
+      # Gates on `session_capabilities.delete`
+      # (`Schema.AgentTypes.SessionDeleteCapabilities`) -- closed W17-caps
+      # gap, see the `capability` typedoc ORACLE-DIVERGENCE note.
       capability: {:agent, [:session_capabilities, :delete]},
       layer: :app,
       ext: nil
@@ -270,8 +273,9 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       callback: :close_session,
       params: LifecycleExtras.CloseSessionRequest,
       result: LifecycleExtras.CloseSessionResponse,
-      # ORACLE-DIVERGENCE: leaf absent in the ported `SessionCapabilities`
-      # struct ⇒ fails closed today; auto-activates when the field lands.
+      # Gates on `session_capabilities.close`
+      # (`Schema.AgentTypes.SessionCloseCapabilities`) -- closed W17-caps
+      # gap, see the `capability` typedoc ORACLE-DIVERGENCE note.
       capability: {:agent, [:session_capabilities, :close]},
       layer: :app,
       ext: nil
@@ -288,10 +292,10 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       callback: :logout,
       params: nil,
       result: LifecycleExtras.LogoutResponse,
-      # ORACLE-DIVERGENCE: oracle gates this by `agentCapabilities.auth.logout`,
-      # but the ported `AgentCapabilities` struct has no `auth` field — no path
-      # can resolve, so fail closed unconditionally (see `capability` typedoc).
-      capability: :never,
+      # Gates on `auth.logout` (`Schema.AgentTypes.AgentAuthCapabilities`/
+      # `LogoutCapabilities`) -- closed W17-caps gap, see the `capability`
+      # typedoc ORACLE-DIVERGENCE note.
+      capability: {:agent, [:auth, :logout]},
       layer: :app,
       ext: nil
     }

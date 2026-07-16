@@ -438,7 +438,11 @@ defmodule Raxol.AgentClientProtocol.Ext.Capability.Issuer do
     end
   end
 
-  @spec resolve_priv(privkey_source()) :: {:ok, binary()} | {:error, atom()}
+  # `{:hex_or_raw, binary()}` is an internal-only dispatch tag (not part of
+  # the public `privkey_source()` union) that every other clause recurses
+  # into once it has resolved its source down to a raw/hex binary.
+  @spec resolve_priv(privkey_source() | {:hex_or_raw, binary()}) ::
+          {:ok, binary()} | {:error, atom()}
   defp resolve_priv({:env, var}) when is_binary(var) do
     case System.get_env(var) do
       nil -> {:error, :privkey_env_missing}

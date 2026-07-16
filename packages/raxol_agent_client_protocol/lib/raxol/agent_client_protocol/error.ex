@@ -37,53 +37,53 @@ defmodule Raxol.AgentClientProtocol.Error do
   # -- Error code constants --------------------------------------------------
 
   @spec parse_error_code() :: integer()
-  def parse_error_code, do: -32700
+  def parse_error_code, do: -32_700
 
   @spec invalid_request_code() :: integer()
-  def invalid_request_code, do: -32600
+  def invalid_request_code, do: -32_600
 
   @spec method_not_found_code() :: integer()
-  def method_not_found_code, do: -32601
+  def method_not_found_code, do: -32_601
 
   @spec invalid_params_code() :: integer()
-  def invalid_params_code, do: -32602
+  def invalid_params_code, do: -32_602
 
   @spec internal_error_code() :: integer()
-  def internal_error_code, do: -32603
+  def internal_error_code, do: -32_603
 
   @spec auth_required_code() :: integer()
-  def auth_required_code, do: -32000
+  def auth_required_code, do: -32_000
 
   @spec resource_not_found_code() :: integer()
-  def resource_not_found_code, do: -32002
+  def resource_not_found_code, do: -32_002
 
   # -- Convenience constructors ----------------------------------------------
 
   @spec parse_error() :: t()
-  def parse_error, do: %__MODULE__{code: -32700, message: "Parse error"}
+  def parse_error, do: %__MODULE__{code: -32_700, message: "Parse error"}
 
   @spec invalid_request() :: t()
-  def invalid_request, do: %__MODULE__{code: -32600, message: "Invalid request"}
+  def invalid_request, do: %__MODULE__{code: -32_600, message: "Invalid request"}
 
   @spec method_not_found() :: t()
-  def method_not_found, do: %__MODULE__{code: -32601, message: "Method not found"}
+  def method_not_found, do: %__MODULE__{code: -32_601, message: "Method not found"}
 
   @spec invalid_params() :: t()
-  def invalid_params, do: %__MODULE__{code: -32602, message: "Invalid params"}
+  def invalid_params, do: %__MODULE__{code: -32_602, message: "Invalid params"}
 
   @spec internal_error() :: t()
-  def internal_error, do: %__MODULE__{code: -32603, message: "Internal error"}
+  def internal_error, do: %__MODULE__{code: -32_603, message: "Internal error"}
 
   @spec auth_required() :: t()
-  def auth_required, do: %__MODULE__{code: -32000, message: "Authentication required"}
+  def auth_required, do: %__MODULE__{code: -32_000, message: "Authentication required"}
 
   @spec resource_not_found(String.t() | nil) :: t()
   def resource_not_found(uri \\ nil)
 
-  def resource_not_found(nil), do: %__MODULE__{code: -32002, message: "Resource not found"}
+  def resource_not_found(nil), do: %__MODULE__{code: -32_002, message: "Resource not found"}
 
   def resource_not_found(uri) when is_binary(uri) do
-    %__MODULE__{code: -32002, message: "Resource not found", data: %{"uri" => uri}}
+    %__MODULE__{code: -32_002, message: "Resource not found", data: %{"uri" => uri}}
   end
 
   @spec new(integer(), String.t()) :: t()
@@ -96,13 +96,13 @@ defmodule Raxol.AgentClientProtocol.Error do
 
   @doc "Convert an ErrorCode integer to its name atom, or `{:other, code}` when unrecognized."
   @spec code_name(integer()) :: atom() | {:other, integer()}
-  def code_name(-32700), do: :parse_error
-  def code_name(-32600), do: :invalid_request
-  def code_name(-32601), do: :method_not_found
-  def code_name(-32602), do: :invalid_params
-  def code_name(-32603), do: :internal_error
-  def code_name(-32000), do: :auth_required
-  def code_name(-32002), do: :resource_not_found
+  def code_name(-32_700), do: :parse_error
+  def code_name(-32_600), do: :invalid_request
+  def code_name(-32_601), do: :method_not_found
+  def code_name(-32_602), do: :invalid_params
+  def code_name(-32_603), do: :internal_error
+  def code_name(-32_000), do: :auth_required
+  def code_name(-32_002), do: :resource_not_found
   def code_name(code) when is_integer(code), do: {:other, code}
 
   @spec to_json(t()) :: map()

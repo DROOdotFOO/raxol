@@ -432,7 +432,7 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
       {:prompting, t0} = turn_state(session)
 
       {res, _} = begin(session, 2)
-      assert {:error, %Error{code: -32600}} = res
+      assert {:error, %Error{code: -32_600}} = res
       # in-flight turn untouched
       assert {:prompting, t1} = turn_state(session)
       assert t1.turn_ref == t0.turn_ref
@@ -570,7 +570,7 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
 
       assert {:ok, _} = Session.set_mode(session, "code")
       assert :sys.get_state(session).mode_state.current_mode_id == "code"
-      assert {:error, %Error{code: -32602}} = Session.set_mode(session, "nope")
+      assert {:error, %Error{code: -32_602}} = Session.set_mode(session, "nope")
 
       {:prompting, t} = turn_state(session)
       send(t.root_pid, :go)
@@ -580,7 +580,7 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
     test "a nil mode_state makes set_mode invalid-params", ctx do
       conn = new_conn()
       {session, _} = start_session(ctx, conn, mode_state: nil)
-      assert {:error, %Error{code: -32602}} = Session.set_mode(session, "code")
+      assert {:error, %Error{code: -32_602}} = Session.set_mode(session, "code")
     end
   end
 

@@ -210,11 +210,9 @@ defmodule Raxol.AgentClientProtocol.RouterTest do
   # one layer up, in Connection, not tested here.
 
   defp method_already_an_atom?(method) do
-    try do
-      String.to_existing_atom(method)
-      true
-    rescue
-      ArgumentError -> false
-    end
+    _ = String.to_existing_atom(method)
+    true
+  rescue
+    ArgumentError -> false
   end
 end

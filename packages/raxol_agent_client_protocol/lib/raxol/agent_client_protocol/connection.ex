@@ -121,8 +121,8 @@ defmodule Raxol.AgentClientProtocol.Connection do
   use GenServer
   require Logger
 
-  alias Raxol.AgentClientProtocol.Connection.Ctx
   alias Raxol.AgentClientProtocol.{Capabilities, Error, Router}
+  alias Raxol.AgentClientProtocol.Connection.Ctx
   alias Raxol.AgentClientProtocol.Rpc.{Message, Notification, Request, RequestId, Response}
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.CancelNotification
   alias Raxol.AgentClientProtocol.Schema.LifecycleExtras.CancelRequestNotification
@@ -412,19 +412,17 @@ defmodule Raxol.AgentClientProtocol.Connection do
         demonitor_adopter(entry)
         st = %{state | reply_refs: reply_refs, pending_in: pending_in}
 
-        cond do
-          entry.cancelled? ->
-            # IC-5a/d: the id was abandoned; emit nothing.
-            {:reply, :ok, st}
+        if entry.cancelled? do
+          # IC-5a/d: the id was abandoned; emit nothing.
+          {:reply, :ok, st}
+        else
+          case push_frame(st, response_frame(id, result_or_error)) do
+            {:ok, st2} ->
+              {:reply, :ok, maybe_agent_initialized(id, entry, result_or_error, st2)}
 
-          true ->
-            case push_frame(st, response_frame(id, result_or_error)) do
-              {:ok, st2} ->
-                {:reply, :ok, maybe_agent_initialized(id, entry, result_or_error, st2)}
-
-              {:down, reason} ->
-                {:stop, :normal, :ok, transport_down(reason, st)}
-            end
+            {:down, reason} ->
+              {:stop, :normal, :ok, transport_down(reason, st)}
+          end
         end
     end
   end
@@ -632,7 +630,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
       # (1) handshake gate
       state.phase == :uninitialized and method != "initialize" ->
         error =
-          data_error(-32600, "Invalid request", %{
+          data_error(-32_600, "Invalid request", %{
             "method" => method,
             "reason" => "initialize required"
           })
@@ -640,7 +638,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
         emit_and_continue(response_frame(id, {:error, error}), state)
 
       state.phase == :initialized and method == "initialize" ->
-        error = data_error(-32600, "Invalid request", %{"reason" => "already initialized"})
+        error = data_error(-32_600, "Invalid request", %{"reason" => "already initialized"})
         emit_and_continue(response_frame(id, {:error, error}), state)
 
       # (2) null-id request
@@ -656,7 +654,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
 
       # (5) capability gate BEFORE decode — -32601 beats -32602 (§4.1)
       capability_denied?(method, state) ->
-        error = data_error(-32601, "Method not found", method)
+        error = data_error(-32_601, "Method not found", method)
         emit_and_continue(response_frame(id, {:error, error}), state)
 
       true ->
@@ -667,11 +665,11 @@ defmodule Raxol.AgentClientProtocol.Connection do
   defp dispatch_inbound_request(%Request{id: id, method: method, params: params}, rx_seq, state) do
     case Router.decode(state.role, :request, method, params) do
       {:error, :method_not_found} ->
-        error = data_error(-32601, "Method not found", method)
+        error = data_error(-32_601, "Method not found", method)
         emit_and_continue(response_frame(id, {:error, error}), state)
 
       {:error, reason} ->
-        error = data_error(-32602, "Invalid params", inspect(reason))
+        error = data_error(-32_602, "Invalid params", inspect(reason))
         emit_and_continue(response_frame(id, {:error, error}), state)
 
       {:ok, dispatchable} ->
@@ -805,18 +803,16 @@ defmodule Raxol.AgentClientProtocol.Connection do
             reply_refs: Map.delete(state.reply_refs, entry.reply_ref)
         }
 
-        cond do
-          entry.cancelled? or reason == :normal ->
-            {:noreply, state}
+        if entry.cancelled? or reason == :normal do
+          {:noreply, state}
+        else
+          Logger.error(
+            "ACP: request handler crashed (#{entry.method}, id #{RequestId.display(id)}): #{inspect(reason)}"
+          )
 
-          true ->
-            Logger.error(
-              "ACP: request handler crashed (#{entry.method}, id #{RequestId.display(id)}): #{inspect(reason)}"
-            )
+          emit_telemetry([:raxol, :acp, :handler_crash], %{kind: :request, method: entry.method})
 
-            emit_telemetry([:raxol, :acp, :handler_crash], %{kind: :request, method: entry.method})
-
-            emit_and_continue(response_frame(id, {:error, Error.internal_error()}), state)
+          emit_and_continue(response_frame(id, {:error, Error.internal_error()}), state)
         end
     end
   end

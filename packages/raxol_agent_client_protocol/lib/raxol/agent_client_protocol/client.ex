@@ -461,9 +461,7 @@ defmodule Raxol.AgentClientProtocol.Client do
                        {:handle_ext_request, 3},
                        {:handle_ext_notification, 3}
                      ] ++
-                       Raxol.AgentClientProtocol.Handler.Codegen.callback_arities(
-                         :client
-                       )
+                       Raxol.AgentClientProtocol.Handler.Codegen.callback_arities(:client)
 
       # -- session_update default: broadcast to subscribe/3 subscribers --
       # `session_update/2` was included in the `defoverridable` list above
@@ -582,9 +580,7 @@ defmodule Raxol.AgentClientProtocol.Client do
 
     %{
       id: Keyword.get(opts, :id, __MODULE__),
-      start:
-        {ConnectionSupervisor, :start_link,
-         [{handler, handler_arg, transport}, sup_opts]},
+      start: {ConnectionSupervisor, :start_link, [{handler, handler_arg, transport}, sup_opts]},
       type: :supervisor,
       # One-shot by design: the subtree `auto_shutdown`s on a significant
       # child's exit and is never restarted in place (§1.1) — connection
@@ -631,6 +627,16 @@ defmodule Raxol.AgentClientProtocol.Client.FsSandbox do
   `-32602 invalid params` `Error.t()`, safe to send straight to the peer
   (the resolved absolute path is only ever placed in `data`, for local
   debugging, never in `message`).
+
+  This is an INTENTIONAL DUPLICATE of `Raxol.Core.Boundary.Path.confine/3`
+  (raxol_core), not a wrapper -- this package cannot depend on raxol_core.
+  The two are bound to the SAME shared conformance vectors
+  (`test/support/boundary_vectors/path_{reject,accept}_vectors.json`,
+  copied verbatim from raxol_core; see `test/client/fs_sandbox_vectors_test.exs`)
+  so a divergence between the two independent confinement implementations
+  is a red test here, not a silent fork (migration P5, confinement-seam-
+  proposal option b). `resolve/2` does not implement `Path.confine/3`'s
+  `ref_format` regex gate; vectors exercising it are skipped by that test.
   """
 
   alias Raxol.AgentClientProtocol.Error
@@ -652,8 +658,7 @@ defmodule Raxol.AgentClientProtocol.Client.FsSandbox do
           {:ok, ReadTextFileResponse.new(slice(content, req.line, req.limit))}
 
         {:error, reason} ->
-          {:error,
-           Error.with_data(Error.resource_not_found(req.path), inspect(reason))}
+          {:error, Error.with_data(Error.resource_not_found(req.path), inspect(reason))}
       end
     end
   end

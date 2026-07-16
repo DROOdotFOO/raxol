@@ -22,7 +22,7 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdate do
   `McpServer`, `ToolCallContent`) do not get a `Jason.Encoder` impl of
   their own -- only genuine structs do.
 
-  ## Variants ported (all ten f1729 defines)
+  ## Variants ported (all ten f1729 defines, plus the oracle's eleventh)
 
     * `:user_message_chunk` / `:agent_message_chunk` / `:agent_thought_chunk`
       -- `ContentChunk` payload
@@ -35,22 +35,18 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdate do
       `Raxol.AgentClientProtocol.Schema.Unstable.ConfigOptionUpdate`
     * `:session_info_update` (unstable) --
       `Raxol.AgentClientProtocol.Schema.Unstable.SessionInfoUpdate`
+    * `:usage_update` -- `Raxol.AgentClientProtocol.Schema.UsageUpdate`, the
+      pinned v1.19.0 oracle's eleventh variant (context-window/cost update),
+      absent from f1729; ported straight from `priv/schema-oracle/v1/schema.json`
+      `$defs/UsageUpdate` (+ its nested `$defs/Cost`), no upstream attribution.
 
-  ## Gaps versus the pinned v1.19.0 oracle schema (`priv/schema-oracle/v1/schema.json`)
+  ## Closed gap: `ContentChunk.messageId`
 
-  Ported strictly to what f1729 has; the oracle documents two things f1729
-  lacks that are deliberately **not** invented here (no decode logic exists
-  for either):
-
-    * An eleventh variant, `usage_update`, carrying a `UsageUpdate` payload
-      (`used`/`size`/optional `cost` token-budget fields). `UsageUpdate` is
-      not ported anywhere in this package; `from_json/1` returns
-      `{:error, {:invalid_session_update_variant, "usage_update"}}` for it,
-      same as any other unrecognized discriminator.
-    * `ContentChunk` in the oracle carries an additional optional
-      `messageId` wire field (groups chunks belonging to the same
-      streamed message); f1729's `ACP.ContentChunk` has no such field and
-      this port's `ContentChunk` matches f1729, not the oracle.
+  The pinned oracle documents an additional optional `messageId` wire field
+  on `ContentChunk` (groups chunks belonging to the same streamed message)
+  that f1729's `ACP.ContentChunk` lacked; it is now ported below as
+  `ContentChunk.message_id` (optional, absent-safe on both decode and
+  encode).
 
   Also not ported here: the `ACP.SessionNotification` envelope
   (`{"sessionId", "update", "_meta"}`) that wraps a `SessionUpdate` for the
@@ -69,6 +65,7 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdate do
   alias Raxol.AgentClientProtocol.Schema.ToolCall
   alias Raxol.AgentClientProtocol.Schema.ToolCallUpdate
   alias Raxol.AgentClientProtocol.Schema.Unstable.{ConfigOptionUpdate, SessionInfoUpdate}
+  alias Raxol.AgentClientProtocol.Schema.UsageUpdate
 
   @type t ::
           {:user_message_chunk, ContentChunk.t()}
@@ -81,6 +78,7 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdate do
           | {:current_mode_update, CurrentModeUpdate.t()}
           | {:config_option_update, ConfigOptionUpdate.t()}
           | {:session_info_update, SessionInfoUpdate.t()}
+          | {:usage_update, UsageUpdate.t()}
 
   @spec to_json(t()) :: map()
   def to_json({:user_message_chunk, chunk}),
@@ -107,6 +105,8 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdate do
 
   def to_json({:session_info_update, siu}),
     do: tag(SessionInfoUpdate.to_json(siu), "session_info_update")
+
+  def to_json({:usage_update, uu}), do: tag(UsageUpdate.to_json(uu), "usage_update")
 
   defp tag(json, session_update), do: Map.put(json, "sessionUpdate", session_update)
 
@@ -149,6 +149,9 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdate do
   def from_json(%{"sessionUpdate" => "session_info_update"} = map),
     do: decode(:session_info_update, &SessionInfoUpdate.from_json/1, map)
 
+  def from_json(%{"sessionUpdate" => "usage_update"} = map),
+    do: decode(:usage_update, &UsageUpdate.from_json/1, map)
+
   def from_json(%{"sessionUpdate" => other}),
     do: {:error, {:invalid_session_update_variant, other}}
 
@@ -171,10 +174,12 @@ defmodule Raxol.AgentClientProtocol.Schema.ContentChunk do
   `SessionUpdate` `user_message_chunk`/`agent_message_chunk`/
   `agent_thought_chunk` variants.
 
-  Note: the pinned v1.19.0 oracle schema documents an additional optional
-  `messageId` wire field on this type (groups chunks belonging to the same
-  streamed message) that f1729's `ACP.ContentChunk` does not have; not
-  ported here per `SessionUpdate`'s f1729-first scope (see its moduledoc).
+  Carries the pinned v1.19.0 oracle's optional `messageId` wire field
+  (`message_id` here -- groups chunks belonging to the same streamed
+  message; a change in `message_id` signals a new message has started).
+  f1729's `ACP.ContentChunk` has no such field; it is new to this port,
+  absent-safe on both decode (`nil` when omitted or non-string) and encode
+  (omitted, never emitted as `null`).
 
   Ported from the MIT `f1729/agent_client_protocol` (c) 2025 f1729; see NOTICE.md.
   """
@@ -182,27 +187,36 @@ defmodule Raxol.AgentClientProtocol.Schema.ContentChunk do
   alias Raxol.AgentClientProtocol.Schema.ContentBlock
   alias Raxol.AgentClientProtocol.Schema.WireFields
 
-  @type t :: %__MODULE__{content: ContentBlock.t(), _meta: map()}
+  @type t :: %__MODULE__{content: ContentBlock.t(), message_id: String.t() | nil, _meta: map()}
 
   @enforce_keys [:content]
-  defstruct [:content, _meta: %{}]
+  defstruct [:content, message_id: nil, _meta: %{}]
 
-  @known_wire_keys ~w(content)
+  @known_wire_keys ~w(content messageId)
 
   @spec new(ContentBlock.t()) :: t()
   def new(content), do: %__MODULE__{content: content}
 
+  @spec new(ContentBlock.t(), String.t() | nil) :: t()
+  def new(content, message_id), do: %__MODULE__{content: content, message_id: message_id}
+
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = c) do
     %{"content" => ContentBlock.to_json(c.content)}
+    |> WireFields.put("messageId", c.message_id)
     |> WireFields.emit_meta(c._meta)
   end
 
-  @doc "Total: never raises. A missing/unparseable `content` is the only failure mode (required field)."
+  @doc "Total: never raises. A missing/unparseable `content` is the only failure mode (required field); an absent/non-string `messageId` defaults to `nil`."
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(%{"content" => content_map} = map) do
     with {:ok, content} <- ContentBlock.from_json(content_map) do
-      {:ok, %__MODULE__{content: content, _meta: WireFields.fold_meta(map, @known_wire_keys)}}
+      {:ok,
+       %__MODULE__{
+         content: content,
+         message_id: WireFields.optional(map, "messageId", &is_binary/1),
+         _meta: WireFields.fold_meta(map, @known_wire_keys)
+       }}
     end
   end
 
@@ -468,6 +482,144 @@ defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.UnstructuredCommand
   def encode(val, opts) do
     val
     |> Raxol.AgentClientProtocol.Schema.UnstructuredCommandInput.to_json()
+    |> Jason.Encoder.encode(opts)
+  end
+end
+
+# -- UsageUpdate / Cost ---------------------------------------------------------
+
+defmodule Raxol.AgentClientProtocol.Schema.UsageUpdate do
+  @moduledoc """
+  Payload for the `SessionUpdate` `usage_update` variant: a context-window
+  and cost update for a session -- tokens currently in context (`used`),
+  the total context window size (`size`), and an optional cumulative
+  session `cost`.
+
+  Not present in f1729; ported straight from the pinned v1.19.0 oracle
+  schema (`priv/schema-oracle/v1/schema.json`, `$defs/UsageUpdate`), no
+  upstream attribution. `used`/`size` are required non-negative integers
+  per the oracle (no `x-deserialize-default-on-error` on either); `cost` is
+  optional and decode-lenient, defaulting to `nil` on an absent or
+  unparseable value.
+  """
+
+  alias Raxol.AgentClientProtocol.Schema.Cost
+  alias Raxol.AgentClientProtocol.Schema.WireFields
+
+  @type t :: %__MODULE__{
+          used: non_neg_integer(),
+          size: non_neg_integer(),
+          cost: Cost.t() | nil,
+          _meta: map()
+        }
+
+  @enforce_keys [:used, :size]
+  defstruct [:used, :size, cost: nil, _meta: %{}]
+
+  @known_wire_keys ~w(used size cost)
+
+  @spec new(non_neg_integer(), non_neg_integer()) :: t()
+  def new(used, size) when is_integer(used) and used >= 0 and is_integer(size) and size >= 0,
+    do: %__MODULE__{used: used, size: size}
+
+  @spec new(non_neg_integer(), non_neg_integer(), Cost.t() | nil) :: t()
+  def new(used, size, cost)
+      when is_integer(used) and used >= 0 and is_integer(size) and size >= 0,
+      do: %__MODULE__{used: used, size: size, cost: cost}
+
+  @spec to_json(t()) :: map()
+  def to_json(%__MODULE__{} = u) do
+    %{"used" => u.used, "size" => u.size}
+    |> WireFields.put("cost", encode_cost(u.cost))
+    |> WireFields.emit_meta(u._meta)
+  end
+
+  defp encode_cost(nil), do: nil
+  defp encode_cost(cost), do: Cost.to_json(cost)
+
+  @doc """
+  Total: never raises. A missing/non-non-negative-integer `used` or `size`
+  is the only failure mode (both required); an absent or unparseable
+  optional `cost` defaults to `nil` rather than failing the whole object.
+  """
+  @spec from_json(term()) :: {:ok, t()} | {:error, term()}
+  def from_json(map) when is_map(map) do
+    with {:ok, used} <- WireFields.require(map, "used", &non_neg_integer?/1),
+         {:ok, size} <- WireFields.require(map, "size", &non_neg_integer?/1) do
+      {:ok,
+       %__MODULE__{
+         used: used,
+         size: size,
+         cost: WireFields.optional_nested(map, "cost", &Cost.from_json/1),
+         _meta: WireFields.fold_meta(map, @known_wire_keys)
+       }}
+    end
+  end
+
+  def from_json(other), do: {:error, {:invalid_usage_update, other}}
+
+  defp non_neg_integer?(v), do: is_integer(v) and v >= 0
+end
+
+defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.UsageUpdate do
+  def encode(val, opts) do
+    val
+    |> Raxol.AgentClientProtocol.Schema.UsageUpdate.to_json()
+    |> Jason.Encoder.encode(opts)
+  end
+end
+
+defmodule Raxol.AgentClientProtocol.Schema.Cost do
+  @moduledoc """
+  Cumulative session cost information -- the optional `cost` field of
+  `UsageUpdate`.
+
+  Not present in f1729; ported straight from the pinned v1.19.0 oracle
+  schema (`priv/schema-oracle/v1/schema.json`, `$defs/Cost`), no upstream
+  attribution. `amount`/`currency` are both required (no
+  `x-deserialize-default-on-error` on either in the oracle).
+  """
+
+  alias Raxol.AgentClientProtocol.Schema.WireFields
+
+  @type t :: %__MODULE__{amount: number(), currency: String.t(), _meta: map()}
+
+  @enforce_keys [:amount, :currency]
+  defstruct [:amount, :currency, _meta: %{}]
+
+  @known_wire_keys ~w(amount currency)
+
+  @spec new(number(), String.t()) :: t()
+  def new(amount, currency) when is_number(amount) and is_binary(currency),
+    do: %__MODULE__{amount: amount, currency: currency}
+
+  @spec to_json(t()) :: map()
+  def to_json(%__MODULE__{} = c) do
+    %{"amount" => c.amount, "currency" => c.currency}
+    |> WireFields.emit_meta(c._meta)
+  end
+
+  @doc "Total: never raises. A missing/non-number `amount` or missing/non-string `currency` is the only failure mode (both required)."
+  @spec from_json(term()) :: {:ok, t()} | {:error, term()}
+  def from_json(map) when is_map(map) do
+    with {:ok, amount} <- WireFields.require(map, "amount", &is_number/1),
+         {:ok, currency} <- WireFields.require(map, "currency", &is_binary/1) do
+      {:ok,
+       %__MODULE__{
+         amount: amount,
+         currency: currency,
+         _meta: WireFields.fold_meta(map, @known_wire_keys)
+       }}
+    end
+  end
+
+  def from_json(other), do: {:error, {:invalid_cost, other}}
+end
+
+defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Cost do
+  def encode(val, opts) do
+    val
+    |> Raxol.AgentClientProtocol.Schema.Cost.to_json()
     |> Jason.Encoder.encode(opts)
   end
 end

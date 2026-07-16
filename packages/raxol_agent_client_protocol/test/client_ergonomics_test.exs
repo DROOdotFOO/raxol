@@ -27,9 +27,9 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
     PromptRequest
   }
 
-  alias Raxol.AgentClientProtocol.Schema.ContentBlock
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.ClientCapabilities
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.FileSystemCapability
+  alias Raxol.AgentClientProtocol.Schema.ContentBlock
 
   # `fs/read_text_file`/`fs/write_text_file` are capability-gated
   # (`Capabilities.negotiated?/2`, resolved against the CLIENT's own
@@ -419,7 +419,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
 
       write_frame = ScriptedPeer.recv(peer)
       assert write_frame["id"] == "w-esc"
-      assert write_frame["error"]["code"] == -32602
+      assert write_frame["error"]["code"] == -32_602
       refute Map.has_key?(write_frame, "result")
       # the real, on-disk file was never touched by the rejected write
       assert File.read!(victim) == "do-not-touch"
@@ -432,7 +432,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
 
       read_frame = ScriptedPeer.recv(peer)
       assert read_frame["id"] == "r-esc"
-      assert read_frame["error"]["code"] == -32602
+      assert read_frame["error"]["code"] == -32_602
       refute Map.has_key?(read_frame, "result")
 
       # write escape onto a path that does not yet exist outside the sandbox:
@@ -448,7 +448,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
       })
 
       write_frame2 = ScriptedPeer.recv(peer)
-      assert write_frame2["error"]["code"] == -32602
+      assert write_frame2["error"]["code"] == -32_602
       refute File.exists?(new_leak)
     end
 
@@ -470,7 +470,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
 
       link_frame = ScriptedPeer.recv(peer)
       assert link_frame["id"] == "r-link"
-      assert link_frame["error"]["code"] == -32602
+      assert link_frame["error"]["code"] == -32_602
       refute Map.has_key?(link_frame, "result")
       # the secret content never made it onto the wire in any form
       refute inspect(link_frame) =~ "top-secret"
@@ -489,7 +489,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
 
       dir_link_frame = ScriptedPeer.recv(peer)
       assert dir_link_frame["id"] == "w-link"
-      assert dir_link_frame["error"]["code"] == -32602
+      assert dir_link_frame["error"]["code"] == -32_602
       refute File.exists?(leak_target)
     end
   end

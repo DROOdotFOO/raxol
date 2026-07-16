@@ -1318,7 +1318,7 @@ defmodule Raxol.AgentClientProtocol.Schema.ClientTypes.AgentRequest do
           | {:release_terminal, ClientTypes.ReleaseTerminalRequest.t()}
           | {:wait_for_terminal_exit, ClientTypes.WaitForTerminalExitRequest.t()}
           | {:kill_terminal_command, ClientTypes.KillTerminalRequest.t()}
-          | {:ext_method, Raxol.AgentClientProtocol.Schema.ExtRequest.t()}
+          | {:ext_method, Raxol.AgentClientProtocol.Schema.Ext.ExtRequest.t()}
 
   @spec method(t()) :: String.t()
   def method({:write_text_file, _}), do: "fs/write_text_file"

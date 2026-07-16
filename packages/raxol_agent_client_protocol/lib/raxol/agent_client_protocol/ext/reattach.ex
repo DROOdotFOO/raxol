@@ -182,7 +182,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
 
   @doc "The CDI-5 deny envelope: `-32000 \"attach denied\"`, NO `data` (anti-oracle)."
   @spec deny_envelope() :: Error.t()
-  def deny_envelope, do: Error.new(-32000, "attach denied")
+  def deny_envelope, do: Error.new(-32_000, "attach denied")
 
   defp build_ctx(%{ctx: ctx}) when is_map(ctx), do: ctx
 
@@ -206,7 +206,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
       Map.get(opts, :authorize) ||
         fn c ->
           policy = Map.get(opts, :policy)
-          apply(@default_runner, :authorize, [policy, c])
+          @default_runner.authorize(policy, c)
         end
 
     case fun.(ctx) do
@@ -355,7 +355,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
       policy != :none and state.from_offset > h + 1 ->
         # Minting a gap is illegal (J-gap): reject with the watermark (§3.1).
         _ = unsubscribe(state, live)
-        err = Error.with_data(Error.new(-32602, "invalid params"), %{"highWatermark" => h})
+        err = Error.with_data(Error.new(-32_602, "invalid params"), %{"highWatermark" => h})
         _ = state.conn_mod.reply(state.conn, state.reply_ref, {:error, err})
         {:stop, :normal, :ok, %{state | live: :detached}}
 

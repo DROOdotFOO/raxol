@@ -223,10 +223,10 @@ defmodule Raxol.AgentClientProtocol.Agent do
   process, before any child starts -- the standard OTP way to hand a
   supervisor's own pid to a child it is about to start).
 
-  This module does not assume `Raxol.AgentClientProtocol.child_spec/1`
-  (the doc's generic, role-parameterized §1.4 convenience) exists; when it
-  lands it can delegate here (or vice versa) without changing this layer's
-  contract.
+  This module does not assume `Raxol.AgentClientProtocol`'s
+  `child_spec/1` (the doc's generic, role-parameterized §1.4 convenience,
+  not yet implemented) exists; when it lands it can delegate here (or vice
+  versa) without changing this layer's contract.
   """
 
   require Raxol.AgentClientProtocol.Handler.Codegen
@@ -297,9 +297,7 @@ defmodule Raxol.AgentClientProtocol.Agent do
                        {:handle_ext_request, 3},
                        {:handle_ext_notification, 3}
                      ] ++
-                       Raxol.AgentClientProtocol.Handler.Codegen.callback_arities(
-                         :agent
-                       )
+                       Raxol.AgentClientProtocol.Handler.Codegen.callback_arities(:agent)
     end
   end
 
@@ -379,9 +377,7 @@ defmodule Raxol.AgentClientProtocol.Agent do
 
     %{
       id: Keyword.get(opts, :id, __MODULE__),
-      start:
-        {ConnectionSupervisor, :start_link,
-         [{handler, handler_arg, transport}, sup_opts]},
+      start: {ConnectionSupervisor, :start_link, [{handler, handler_arg, transport}, sup_opts]},
       type: :supervisor,
       # One-shot by design: the subtree `auto_shutdown`s on a significant
       # child's exit and is never restarted in place (§1.1) — connection

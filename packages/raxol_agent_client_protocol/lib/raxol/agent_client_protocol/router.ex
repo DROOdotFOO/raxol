@@ -232,10 +232,11 @@ defmodule Raxol.AgentClientProtocol.Router do
   response.
 
   Every function clause here is generated at compile time from
-  `Raxol.AgentClientProtocol.MethodTable.rows/0` by
-  `Raxol.AgentClientProtocol.Router.Codegen` -- editing the table is the
-  only way to change routing behavior; there is no hand-maintained parallel
-  list of method strings anywhere in this module. See
+  `Raxol.AgentClientProtocol.MethodTable.rows/0` by the internal
+  `Router.Codegen` module (not part of the public docs; `@moduledoc
+  false`) -- editing the table is the only way to change routing behavior;
+  there is no hand-maintained parallel list of method strings anywhere in
+  this module. See
   `scratchpad/specs/acp-methodtable-design.md` for the full design and its
   G1/G2 gate-review fix log.
 

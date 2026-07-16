@@ -109,11 +109,11 @@ defmodule Raxol.AgentClientProtocol.Torture.WireTortureTest do
   alias Raxol.AgentClientProtocol.Schema.TextContent
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionInfoUpdate
   alias Raxol.AgentClientProtocol.Schema.Version
+  alias Raxol.AgentClientProtocol.Test.ScriptedPeer
   alias Raxol.AgentClientProtocol.Torture.WireTortureTest.ControlledAgent
   alias Raxol.AgentClientProtocol.Torture.WireTortureTest.SimpleAgent
   alias Raxol.AgentClientProtocol.Transport.Paired
   alias Raxol.AgentClientProtocol.Transport.Stdio
-  alias Raxol.AgentClientProtocol.Test.ScriptedPeer
 
   # ===========================================================================
   # Shared fixtures
@@ -240,8 +240,7 @@ defmodule Raxol.AgentClientProtocol.Torture.WireTortureTest do
       complete_handshake(peer)
 
       garbage_corpus = [
-        {"totally/unknown",
-         %{"nested" => %{"deep" => [1, %{"x" => "y"}, nil]}}},
+        {"totally/unknown", %{"nested" => %{"deep" => [1, %{"x" => "y"}, nil]}}},
         {"session/newx", nil},
         {"_vendor/unregistered_ext_method", %{"whatever" => 1}},
         {"a" <> String.duplicate("b", 500), %{}},

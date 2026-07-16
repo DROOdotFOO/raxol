@@ -34,9 +34,9 @@ defmodule Raxol.AgentClientProtocol.Schema.LifecycleExtras do
   `result` module regardless of whether its params are decoded.
   """
 
+  alias Raxol.AgentClientProtocol.Rpc.RequestId
   alias Raxol.AgentClientProtocol.Schema.AgentTypes
   alias Raxol.AgentClientProtocol.Schema.SessionUpdate
-  alias Raxol.AgentClientProtocol.Rpc.RequestId
 end
 
 # -- CloseSessionRequest / CloseSessionResponse ------------------------------
@@ -310,8 +310,8 @@ defmodule Raxol.AgentClientProtocol.Schema.LifecycleExtras.CancelRequestNotifica
   decode clause for this `layer: :protocol` row.
   """
 
-  alias Raxol.AgentClientProtocol.Schema.AgentTypes
   alias Raxol.AgentClientProtocol.Rpc.RequestId
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes
 
   @known_keys ["requestId", "_meta"]
 

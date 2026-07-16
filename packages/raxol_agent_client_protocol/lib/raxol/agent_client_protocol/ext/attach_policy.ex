@@ -189,7 +189,7 @@ defmodule Raxol.AgentClientProtocol.Ext.AttachPolicy.Runner do
   in one place.
   """
   @spec deny_wire() :: %{code: integer(), message: String.t()}
-  def deny_wire, do: %{code: -32000, message: "attach denied"}
+  def deny_wire, do: %{code: -32_000, message: "attach denied"}
 
   # -- internals --------------------------------------------------------------
 

@@ -362,7 +362,7 @@ defmodule Raxol.AgentClientProtocol.Ext.AttachPolicyTest do
 
     # …yet the wire projection is byte-identical and carries NO reason / data.
     wire = Runner.deny_wire()
-    assert wire == %{code: -32000, message: "attach denied"}
+    assert wire == %{code: -32_000, message: "attach denied"}
     refute Map.has_key?(wire, :data)
 
     for reason <- reasons do

@@ -74,8 +74,8 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
   alias Raxol.AgentClientProtocol.ConnectionTest.ScriptAgent
   alias Raxol.AgentClientProtocol.ConnectionTest.ScriptClient
   alias Raxol.AgentClientProtocol.Session
-  alias Raxol.AgentClientProtocol.Transport.Paired
   alias Raxol.AgentClientProtocol.Test.ScriptedPeer
+  alias Raxol.AgentClientProtocol.Transport.Paired
 
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.InitializeResponse
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.PromptResponse
@@ -1224,7 +1224,7 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
       ScriptedPeer.send_raw(peer, %{
         "jsonrpc" => "2.0",
         "id" => nil,
-        "error" => %{"code" => -32700, "message" => "Parse error"}
+        "error" => %{"code" => -32_700, "message" => "Parse error"}
       })
 
       :ok =

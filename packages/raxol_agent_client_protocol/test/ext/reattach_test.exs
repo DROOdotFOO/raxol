@@ -371,7 +371,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       {:ok, j} = Mem.open(sid)
       {conn, ref, sub, :deferred} = attach(sid, j)
       _ = sync(sub)
-      assert {:reply, ^ref, {:error, %Error{code: -32002}}} = reply_entry(conn)
+      assert {:reply, ^ref, {:error, %Error{code: -32_002}}} = reply_entry(conn)
     end
   end
 
@@ -490,7 +490,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     {conn, ref, sub, :deferred} = attach(sid, j, %{from_offset: h + 2})
     _ = sync(sub)
 
-    assert {:reply, ^ref, {:error, %Error{code: -32602} = err}} = reply_entry(conn)
+    assert {:reply, ^ref, {:error, %Error{code: -32_602} = err}} = reply_entry(conn)
     assert err.data == %{"highWatermark" => h}
     # Nothing was delivered — a rejected attach reads no history.
     assert delivered_offsets(conn) == []
@@ -541,7 +541,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
         })
 
       # The CDI-5 deny envelope: -32000 "attach denied", NO data (anti-oracle).
-      assert {:error, %Error{code: -32000, message: "attach denied", data: nil}} = res
+      assert {:error, %Error{code: -32_000, message: "attach denied", data: nil}} = res
 
       # Nothing registered, no history read, no delegate/reply — a denied
       # attacher never appears in the subscriber set even transiently.
@@ -566,7 +566,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
             authorize: fn _ctx -> verdict end
           })
 
-        assert {:error, %Error{code: -32000}} = res
+        assert {:error, %Error{code: -32_000}} = res
       end
 
       assert FakeConnection.log(conn) == []
@@ -582,7 +582,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       {conn_d, _rd, _sub_d, res_d} =
         attach(sid, j, %{authorize: real_authorize, transport: nil})
 
-      assert {:error, %Error{code: -32000}} = res_d
+      assert {:error, %Error{code: -32_000}} = res_d
       assert FakeConnection.log(conn_d) == []
 
       # Grant: an in-BEAM :process transport is OS-co-resident ⇒ the real Runner

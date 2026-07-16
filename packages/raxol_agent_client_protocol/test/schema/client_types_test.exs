@@ -26,12 +26,12 @@ defmodule Raxol.AgentClientProtocol.Schema.ClientTypesTest do
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.TerminalExitStatus
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.TerminalOutputRequest
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.TerminalOutputResponse
-  alias Raxol.AgentClientProtocol.Schema.ToolCallUpdate
-  alias Raxol.AgentClientProtocol.Schema.ToolCallUpdateFields
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.WaitForTerminalExitRequest
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.WaitForTerminalExitResponse
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.WriteTextFileRequest
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.WriteTextFileResponse
+  alias Raxol.AgentClientProtocol.Schema.ToolCallUpdate
+  alias Raxol.AgentClientProtocol.Schema.ToolCallUpdateFields
 
   describe "PermissionOptionKind" do
     test "round-trips every variant" do

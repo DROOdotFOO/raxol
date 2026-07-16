@@ -334,7 +334,7 @@ defmodule Raxol.AgentClientProtocol.Session do
   def handle_call({:begin_prompt, _req, _reply_ref, _rx_seq}, _from, state) do
     # Busy: a second prompt on a live turn. The in-flight turn is left untouched
     # (I12); the handler replies with this error on its own (undelegated) reply_ref.
-    {:reply, {:error, Error.new(-32600, "prompt already in flight")}, state}
+    {:reply, {:error, Error.new(-32_600, "prompt already in flight")}, state}
   end
 
   # ---- set_mode -------------------------------------------------------------

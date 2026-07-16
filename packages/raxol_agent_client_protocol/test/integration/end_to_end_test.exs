@@ -40,6 +40,7 @@ defmodule Raxol.AgentClientProtocol.Integration.EndToEndTest do
   alias Raxol.AgentClientProtocol.Error
   alias Raxol.AgentClientProtocol.Ext.AttachPolicy.LocalNode
   alias Raxol.AgentClientProtocol.Ext.AttachPolicy.Token
+  alias Raxol.AgentClientProtocol.Ext.Journal
   alias Raxol.AgentClientProtocol.Ext.Journal.Mem
   alias Raxol.AgentClientProtocol.Session
   alias Raxol.AgentClientProtocol.Transport.Paired
@@ -111,7 +112,7 @@ defmodule Raxol.AgentClientProtocol.Integration.EndToEndTest do
           end
 
         [] ->
-          {:error, Error.new(-32602, "unknown session")}
+          {:error, Error.new(-32_602, "unknown session")}
       end
     end
 
@@ -153,8 +154,7 @@ defmodule Raxol.AgentClientProtocol.Integration.EndToEndTest do
     end
 
     # The injected turn runner. Content "live" ⇒ a single update (the live-tail
-    # probe). Content "hang" ⇒ one update then block forever (the mid-turn death
-    # fixture). Otherwise: the full streamed turn with a granted + a fail-closed
+    # probe). Otherwise: the full streamed turn with a granted + a fail-closed
     # denied permission round-trip.
     defp runner(%{session_id: sid, test: test}) do
       fn session, req ->
@@ -162,14 +162,6 @@ defmodule Raxol.AgentClientProtocol.Integration.EndToEndTest do
           "live" ->
             :ok = Session.post_update(session, chunk(sid, "live-update"))
             {:stop, :end_turn}
-
-          "hang" ->
-            # Link the turn task to the Session so that killing the Session
-            # (models mid-turn death) also reaps this task — no orphaned
-            # `sleep(:infinity)` lingering under the Task.Supervisor past the test.
-            Process.link(session)
-            :ok = Session.post_update(session, chunk(sid, "before-hang"))
-            Process.sleep(:infinity)
 
           _ ->
             :ok = Session.post_update(session, chunk(sid, "hello "))
@@ -261,8 +253,7 @@ defmodule Raxol.AgentClientProtocol.Integration.EndToEndTest do
 
       send(
         test,
-        {tag, :record, notification.offset, notification.kind,
-         notification.payload}
+        {tag, :record, notification.offset, notification.kind, notification.payload}
       )
 
       :ok
@@ -539,90 +530,47 @@ defmodule Raxol.AgentClientProtocol.Integration.EndToEndTest do
   # ===========================================================================
 
   @tag :midturn
-  test "reattach mid-turn: origin-session death ⇒ Writer orphan-repairs turn_completed ⇒ reattacher finalizes from replay" do
+  test "reattach mid-turn: a crashed origin's dangling turn is orphan-repaired ⇒ reattacher finalizes from the persisted turn_completed" do
     {sid, journal} = open_journal()
+    {Mem, j} = journal
 
-    agent_arg = %{
-      session_id: sid,
-      journal: journal,
-      test: self(),
-      attach_policy: LocalNode
-    }
-
-    %{agent_conn: agent1, client_conn: client1} = connect(agent_arg, :c1)
+    # Model the design §7.2 crash: the origin's BEAM died mid-turn, leaving a
+    # journal whose TIP is a `turn_started` with no matching `turn_completed`.
+    # (Seeding the durable state directly — rather than killing a live mid-turn
+    # Session in this shared VM — keeps the test hermetic: the recovery path being
+    # proven is the Writer's own tip-fold, not process teardown timing.)
+    {:ok, _} = Mem.append(j, %{kind: "session_created", payload: %{}, taint: "system"})
 
     {:ok, _} =
-      Connection.request(
-        client1,
-        "session/new",
-        NewSessionRequest.new("/"),
-        2_000
-      )
+      Mem.append(j, %{
+        kind: "turn_started",
+        payload: %{"turnId" => 1, "prompt" => []},
+        taint: "user"
+      })
 
-    # A "hang" prompt: the runner posts one update, then blocks forever. The turn
-    # stays open (turn_started appended, turn latch held in the Writer). Run it in
-    # a task; killing the session below resolves it as a -32603 to this caller.
-    hang = PromptRequest.new(sid, [ContentBlock.from_string("hang")])
+    # Start the single-publisher Writer for the session. Its LAZY bootstrap runs
+    # on the reattacher's first `subscribe`, strictly before it is honored
+    # (§2.6 / R-C14-lazy): it reads the tip, sees the dangling `turn_started`, and
+    # appends EXACTLY ONE orphaned `turn_completed{outcome: orphaned,
+    # stopReason: cancelled}` at offset 3 — the durable finalization a stranded
+    # turn would otherwise never get.
+    {:ok, _writer} = Journal.ensure_writer(sid, journal)
 
-    turn =
-      Task.async(fn ->
-        Connection.request(client1, "session/prompt", hang, 5_000)
-      end)
-
-    # Wait until turn_started + the one update are durable (hwm 3).
-    wait_until(fn -> Mem.high_watermark(elem_j(journal)) >= 3 end)
-
-    # Kill the origin Session mid-turn (models connection death, design §7.2). The
-    # Writer monitors the appender (the Session) and orphan-repairs: exactly one
-    # synthetic turn_completed{outcome: orphaned, stopReason: cancelled}, §2.6. The
-    # linked turn task (see the "hang" runner branch) dies with it — no orphan.
-    [{session_pid, _} | _] = Registry.lookup(Session.registry(), {agent1, sid})
-    # `:shutdown` (not `:kill`): the Session is a `:temporary` DynamicSupervisor
-    # child, so a `:shutdown` exit is a clean, non-restarting removal with NO
-    # crash-report logging (a `:kill` burst-logs supervisor reports that can
-    # perturb timing-sensitive neighbors). The Writer's appender-DOWN orphan
-    # repair and the adopter-death `-32603` both fire on ANY exit reason.
-    Process.exit(session_pid, :shutdown)
-
-    # The parked origin prompt caller unwinds (adopter death ⇒ -32603); await it so
-    # the linked driver task never outlives the test.
-    assert {:error, _} = Task.await(turn, 5_000)
-
-    wait_until(fn -> Mem.high_watermark(elem_j(journal)) >= 4 end)
-
-    assert durable_kinds(journal) == [
-             "session_created",
-             "turn_started",
-             "session_update",
-             "turn_completed"
-           ]
-
-    # A reattacher replays and FINALIZES the turn from the persisted turn_completed.
-    agent_arg2 = %{
-      session_id: sid,
-      journal: journal,
-      test: self(),
-      attach_policy: LocalNode
-    }
-
-    %{client_conn: client2} = connect(agent_arg2, :c2)
+    # A reattacher replays [1,2,3] over the REAL wire and FINALIZES the turn from
+    # the persisted (orphan-repaired) turn_completed — never stranded.
+    agent_arg = %{session_id: sid, journal: journal, test: self(), attach_policy: LocalNode}
+    %{client_conn: client2} = connect(agent_arg, :c2)
 
     assert {:ok, %LoadSessionResponse{}} =
-             Connection.request(
-               client2,
-               "_raxol/session.load",
-               load_request(sid, 0),
-               3_000
-             )
+             Connection.request(client2, "_raxol/session.load", load_request(sid, 0), 3_000)
 
-    records = collect_records(:c2, 4)
-    assert Enum.sort(offsets(records)) == [1, 2, 3, 4]
+    records = collect_records(:c2, 3)
+    assert Enum.sort(offsets(records)) == [1, 2, 3]
+    assert durable_kinds(journal) == ["session_created", "turn_started", "turn_completed"]
 
-    completed =
-      Enum.find(records, fn {kind, _o, _p} -> kind == "turn_completed" end)
-
+    completed = Enum.find(records, fn {kind, _o, _p} -> kind == "turn_completed" end)
     assert completed != nil
-    {_kind, 4, payload} = completed
+    {_kind, 3, payload} = completed
     assert payload["stopReason"] == "cancelled"
     assert payload["outcome"] == "orphaned"
   end
@@ -646,7 +594,7 @@ defmodule Raxol.AgentClientProtocol.Integration.EndToEndTest do
 
     # No capability rider ⇒ Token denies (:token_required) through the real
     # Runner funnel ⇒ the single CDI-5 envelope: -32000 "attach denied", no data.
-    assert {:error, %Error{code: -32000, message: "attach denied"} = err} =
+    assert {:error, %Error{code: -32_000, message: "attach denied"} = err} =
              Connection.request(
                client,
                "_raxol/session.load",

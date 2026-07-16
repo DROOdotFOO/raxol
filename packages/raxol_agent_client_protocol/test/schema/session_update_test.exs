@@ -10,9 +10,12 @@
 # ports `client_types.ex` -- see `SessionUpdate`'s moduledoc.
 #
 # New coverage (not in upstream): a discriminator round-trip test for every
-# one of the ten variants, `"sessionUpdate"` non-leakage into a variant
-# payload's `_meta`, and totality assertions for unrecognized/missing
-# discriminators and non-map input.
+# one of the eleven variants (including `usage_update`, the oracle's 11th
+# variant absent from f1729), `"sessionUpdate"` non-leakage into a variant
+# payload's `_meta`, totality assertions for unrecognized/missing
+# discriminators and non-map input, and `ContentChunk.messageId` /
+# `UsageUpdate` / `Cost` coverage (all closing oracle-vs-f1729 gaps, none
+# ported from upstream).
 defmodule Raxol.AgentClientProtocol.Schema.SessionUpdateTest do
   use ExUnit.Case, async: true
 
@@ -21,6 +24,7 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdateTest do
   alias Raxol.AgentClientProtocol.Schema.AvailableCommandsUpdate
   alias Raxol.AgentClientProtocol.Schema.ContentBlock
   alias Raxol.AgentClientProtocol.Schema.ContentChunk
+  alias Raxol.AgentClientProtocol.Schema.Cost
   alias Raxol.AgentClientProtocol.Schema.CurrentModeUpdate
   alias Raxol.AgentClientProtocol.Schema.Plan
   alias Raxol.AgentClientProtocol.Schema.PlanEntry
@@ -29,10 +33,11 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdateTest do
   alias Raxol.AgentClientProtocol.Schema.ToolCall
   alias Raxol.AgentClientProtocol.Schema.ToolCallUpdate
   alias Raxol.AgentClientProtocol.Schema.ToolCallUpdateFields
-  alias Raxol.AgentClientProtocol.Schema.UnstructuredCommandInput
   alias Raxol.AgentClientProtocol.Schema.Unstable.ConfigOptionUpdate
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigOption
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionInfoUpdate
+  alias Raxol.AgentClientProtocol.Schema.UnstructuredCommandInput
+  alias Raxol.AgentClientProtocol.Schema.UsageUpdate
 
   # -- Upstream fixtures, adapted -------------------------------------------
 
@@ -95,6 +100,8 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdateTest do
 
   defp session_info_update_fixture, do: %SessionInfoUpdate{title: {:value, "My Session"}}
 
+  defp usage_update_fixture, do: UsageUpdate.new(120, 1000, Cost.new(0.05, "USD"))
+
   describe "discriminator round trip, every variant" do
     test "user_message_chunk" do
       assert_round_trips(:user_message_chunk, chunk_fixture())
@@ -134,6 +141,10 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdateTest do
 
     test "session_info_update" do
       assert_round_trips(:session_info_update, session_info_update_fixture())
+    end
+
+    test "usage_update" do
+      assert_round_trips(:usage_update, usage_update_fixture())
     end
   end
 
@@ -214,6 +225,93 @@ defmodule Raxol.AgentClientProtocol.Schema.SessionUpdateTest do
 
       reencoded = ContentChunk.to_json(decoded)
       assert reencoded["_meta"] == %{"vendorX" => "y", "z" => 1}
+    end
+
+    test "messageId round trip (oracle gap closed)" do
+      chunk = ContentChunk.new(ContentBlock.text(TextContent.new("hello")), "msg-1")
+      json = ContentChunk.to_json(chunk)
+      assert json["messageId"] == "msg-1"
+
+      assert {:ok, decoded} = ContentChunk.from_json(json)
+      assert decoded == chunk
+      assert decoded.message_id == "msg-1"
+    end
+
+    test "messageId is absent-safe: omitted on encode when nil, nil on decode when absent" do
+      chunk = ContentChunk.new(ContentBlock.text(TextContent.new("hello")))
+      json = ContentChunk.to_json(chunk)
+      refute Map.has_key?(json, "messageId")
+
+      assert {:ok, decoded} = ContentChunk.from_json(json)
+      assert decoded.message_id == nil
+    end
+
+    test "a non-string messageId defaults to nil rather than failing the whole object" do
+      wire = %{"content" => %{"type" => "text", "text" => "hi"}, "messageId" => 42}
+      assert {:ok, decoded} = ContentChunk.from_json(wire)
+      assert decoded.message_id == nil
+    end
+  end
+
+  # -- UsageUpdate (oracle's 11th SessionUpdate variant) ------------------------
+
+  describe "UsageUpdate" do
+    test "to_json/from_json round trip with cost" do
+      usage = UsageUpdate.new(120, 1000, Cost.new(0.05, "USD"))
+      json = UsageUpdate.to_json(usage)
+
+      assert json == %{
+               "used" => 120,
+               "size" => 1000,
+               "cost" => %{"amount" => 0.05, "currency" => "USD"}
+             }
+
+      assert {:ok, decoded} = UsageUpdate.from_json(json)
+      assert decoded == usage
+    end
+
+    test "cost is optional: omitted on encode, nil on decode when absent" do
+      usage = UsageUpdate.new(0, 1000)
+      json = UsageUpdate.to_json(usage)
+      refute Map.has_key?(json, "cost")
+
+      assert {:ok, decoded} = UsageUpdate.from_json(json)
+      assert decoded.cost == nil
+    end
+
+    test "from_json/1 is total: missing used/size never raises" do
+      assert {:error, {:missing_field, "used"}} = UsageUpdate.from_json(%{"size" => 10})
+      assert {:error, {:missing_field, "size"}} = UsageUpdate.from_json(%{"used" => 10})
+      assert {:error, {:invalid_usage_update, "nope"}} = UsageUpdate.from_json("nope")
+    end
+
+    test "a negative used/size is invalid (non-negative integer required)" do
+      assert {:error, {:invalid_field, "used", -1}} =
+               UsageUpdate.from_json(%{"used" => -1, "size" => 10})
+    end
+
+    test "an unparseable cost defaults to nil rather than failing the whole object" do
+      assert {:ok, decoded} =
+               UsageUpdate.from_json(%{"used" => 1, "size" => 10, "cost" => "nope"})
+
+      assert decoded.cost == nil
+    end
+  end
+
+  describe "Cost" do
+    test "to_json/from_json round trip" do
+      cost = Cost.new(1.5, "EUR")
+      json = Cost.to_json(cost)
+      assert json == %{"amount" => 1.5, "currency" => "EUR"}
+
+      assert {:ok, decoded} = Cost.from_json(json)
+      assert decoded == cost
+    end
+
+    test "from_json/1 is total: missing amount/currency never raises" do
+      assert {:error, {:missing_field, "amount"}} = Cost.from_json(%{"currency" => "USD"})
+      assert {:error, {:missing_field, "currency"}} = Cost.from_json(%{"amount" => 1})
+      assert {:error, {:invalid_cost, "nope"}} = Cost.from_json("nope")
     end
   end
 

@@ -15,12 +15,14 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypesTest do
   use ExUnit.Case, async: true
 
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.{
+    AgentAuthCapabilities,
     AgentCapabilities,
     AuthMethod,
     CancelNotification,
     EnvVariable,
     HttpHeader,
     Implementation,
+    LogoutCapabilities,
     McpCapabilities,
     McpServer,
     McpServerHttp,
@@ -29,6 +31,8 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypesTest do
     PromptCapabilities,
     PromptResponse,
     SessionCapabilities,
+    SessionCloseCapabilities,
+    SessionDeleteCapabilities,
     SessionMode,
     SessionModeState,
     SetSessionModeRequest,
@@ -334,6 +338,70 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypesTest do
       assert SessionCapabilities.to_json(caps) == %{"modes" => false}
       assert {:ok, decoded} = SessionCapabilities.from_json(%{"modes" => true})
       assert decoded.modes == true
+    end
+
+    test "SessionCapabilities delete/close round trip (oracle-divergence gap closed)" do
+      caps = %SessionCapabilities{
+        delete: SessionDeleteCapabilities.new(),
+        close: SessionCloseCapabilities.new()
+      }
+
+      json = SessionCapabilities.to_json(caps)
+      assert json["delete"] == %{}
+      assert json["close"] == %{}
+
+      assert {:ok, decoded} = SessionCapabilities.from_json(json)
+      assert decoded == caps
+    end
+
+    test "SessionCapabilities delete/close default to nil and are omitted on encode" do
+      caps = SessionCapabilities.new()
+      json = SessionCapabilities.to_json(caps)
+      refute Map.has_key?(json, "delete")
+      refute Map.has_key?(json, "close")
+
+      assert {:ok, decoded} = SessionCapabilities.from_json(%{})
+      assert decoded.delete == nil
+      assert decoded.close == nil
+    end
+
+    test "AgentCapabilities auth.logout round trip (oracle-divergence gap closed)" do
+      caps = %AgentCapabilities{auth: %AgentAuthCapabilities{logout: LogoutCapabilities.new()}}
+
+      json = AgentCapabilities.to_json(caps)
+      assert json["auth"] == %{"logout" => %{}}
+
+      assert {:ok, decoded} = AgentCapabilities.from_json(json)
+      assert decoded == caps
+    end
+
+    test "AgentCapabilities auth defaults to nil and is omitted on encode" do
+      caps = AgentCapabilities.new()
+      json = AgentCapabilities.to_json(caps)
+      refute Map.has_key?(json, "auth")
+
+      assert {:ok, decoded} = AgentCapabilities.from_json(%{})
+      assert decoded.auth == nil
+    end
+
+    test "AgentAuthCapabilities with logout absent" do
+      caps = AgentAuthCapabilities.new()
+      assert AgentAuthCapabilities.to_json(caps) == %{}
+      assert {:ok, decoded} = AgentAuthCapabilities.from_json(%{})
+      assert decoded.logout == nil
+    end
+
+    test "SessionDeleteCapabilities / SessionCloseCapabilities / LogoutCapabilities are empty-object leaves" do
+      for {mod, invalid_tag} <- [
+            {SessionDeleteCapabilities, :invalid_session_delete_capabilities},
+            {SessionCloseCapabilities, :invalid_session_close_capabilities},
+            {LogoutCapabilities, :invalid_logout_capabilities}
+          ] do
+        leaf = mod.new()
+        assert mod.to_json(leaf) == %{}
+        assert {:ok, ^leaf} = mod.from_json(%{})
+        assert {:error, {^invalid_tag, "nope"}} = mod.from_json("nope")
+      end
     end
   end
 

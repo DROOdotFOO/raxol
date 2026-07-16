@@ -111,8 +111,9 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes do
 
   @doc """
   Re-emit a struct's `_meta` bucket under the wire `"_meta"` key, omitted
-  when empty -- matches `Raxol.AgentClientProtocol.Schema.WireFields.emit_meta/2`,
-  the convention every sibling module in this package (`content.ex`,
+  when empty -- matches the internal `WireFields.emit_meta/2` helper (not
+  part of the public docs; `@moduledoc false`), the convention every
+  sibling module in this package (`content.ex`,
   `plan.ex`, `tool_call.ex`, `client_types.ex`) follows. Previously this
   flattened `meta`'s contents directly onto the top-level wire object
   (`Map.merge/2`), a genuine encode/decode asymmetry bug: `extract_meta/2`
@@ -291,7 +292,8 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.InitializeRequest do
   end
 
   @doc """
-  Decodes an `initialize` request. Uses `Version.coerce/1` (tolerant of legacy
+  Decodes an `initialize` request. Uses
+  `Raxol.AgentClientProtocol.Schema.Version.coerce/1` (tolerant of legacy
   string protocol versions from older clients, e.g. Zed's date-string
   handshake) since this is the initial handshake.
   """
@@ -1192,12 +1194,20 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities do
   @moduledoc """
   Capabilities declared by the agent in the `initialize` response.
 
+  `auth` (`AgentAuthCapabilities`, carrying the optional `logout` leaf) is
+  not in f1729; ported from the pinned v1.19.0 oracle schema
+  (`priv/schema-oracle/v1/schema.json`, `$defs/AgentCapabilities.auth` +
+  `$defs/AgentAuthCapabilities`) to close the oracle-vs-f1729 gap that had
+  `logout` fail closed unconditionally (`MethodTable`'s `:never` gate --
+  see W17-caps). No upstream attribution for `auth`/`AgentAuthCapabilities`.
+
   Ported from the MIT `f1729/agent_client_protocol` (c) 2025 f1729; see NOTICE.md.
   """
 
   alias Raxol.AgentClientProtocol.Schema.AgentTypes
 
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.{
+    AgentAuthCapabilities,
     McpCapabilities,
     PromptCapabilities,
     SessionCapabilities
@@ -1208,6 +1218,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities do
     "promptCapabilities",
     "mcpCapabilities",
     "sessionCapabilities",
+    "auth",
     "_meta"
   ]
 
@@ -1216,6 +1227,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities do
           prompt_capabilities: PromptCapabilities.t() | nil,
           mcp_capabilities: McpCapabilities.t() | nil,
           session_capabilities: SessionCapabilities.t() | nil,
+          auth: AgentAuthCapabilities.t() | nil,
           _meta: map()
         }
 
@@ -1223,6 +1235,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities do
             prompt_capabilities: nil,
             mcp_capabilities: nil,
             session_capabilities: nil,
+            auth: nil,
             _meta: %{}
 
   @spec new() :: t()
@@ -1234,6 +1247,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities do
     |> maybe_put_prompt(c.prompt_capabilities)
     |> maybe_put_mcp(c.mcp_capabilities)
     |> maybe_put_session(c.session_capabilities)
+    |> maybe_put_auth(c.auth)
     |> AgentTypes.put_meta(c._meta)
   end
 
@@ -1248,13 +1262,16 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities do
              map,
              "sessionCapabilities",
              &SessionCapabilities.from_json/1
-           ) do
+           ),
+         {:ok, auth} <-
+           AgentTypes.decode_optional(map, "auth", &AgentAuthCapabilities.from_json/1) do
       {:ok,
        %__MODULE__{
          load_session: Map.get(map, "loadSession", false),
          prompt_capabilities: prompt_capabilities,
          mcp_capabilities: mcp_capabilities,
          session_capabilities: session_capabilities,
+         auth: auth,
          _meta: AgentTypes.extract_meta(map, @known_keys)
        }}
     end
@@ -1274,6 +1291,9 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities do
 
   defp maybe_put_session(map, sc),
     do: Map.put(map, "sessionCapabilities", SessionCapabilities.to_json(sc))
+
+  defp maybe_put_auth(map, nil), do: map
+  defp maybe_put_auth(map, auth), do: Map.put(map, "auth", AgentAuthCapabilities.to_json(auth))
 end
 
 defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities do
@@ -1384,10 +1404,24 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCapabilities do
   Session-lifecycle capabilities the agent supports, including the unstable
   `list`/`fork`/`resume` extensions.
 
+  `delete`/`close` (`SessionDeleteCapabilities`/`SessionCloseCapabilities`)
+  are not in f1729; ported from the pinned v1.19.0 oracle schema
+  (`priv/schema-oracle/v1/schema.json`, `$defs/SessionCapabilities.delete`
+  + `.close`) to close the oracle-vs-f1729 gap that had `session/delete`
+  and `session/close` fail closed unconditionally at a missing struct leaf
+  (see `MethodTable`'s ORACLE-DIVERGENCE note, W17-caps). No upstream
+  attribution for `delete`/`close`/`SessionDeleteCapabilities`/
+  `SessionCloseCapabilities`.
+
   Ported from the MIT `f1729/agent_client_protocol` (c) 2025 f1729; see NOTICE.md.
   """
 
   alias Raxol.AgentClientProtocol.Schema.AgentTypes
+
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.{
+    SessionCloseCapabilities,
+    SessionDeleteCapabilities
+  }
 
   alias Raxol.AgentClientProtocol.Schema.Unstable.{
     SessionForkCapabilities,
@@ -1395,17 +1429,25 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCapabilities do
     SessionResumeCapabilities
   }
 
-  @known_keys ["modes", "list", "fork", "resume", "_meta"]
+  @known_keys ["modes", "list", "fork", "resume", "delete", "close", "_meta"]
 
   @type t :: %__MODULE__{
           modes: boolean(),
           list: SessionListCapabilities.t() | nil,
           fork: SessionForkCapabilities.t() | nil,
           resume: SessionResumeCapabilities.t() | nil,
+          delete: SessionDeleteCapabilities.t() | nil,
+          close: SessionCloseCapabilities.t() | nil,
           _meta: map()
         }
 
-  defstruct modes: false, list: nil, fork: nil, resume: nil, _meta: %{}
+  defstruct modes: false,
+            list: nil,
+            fork: nil,
+            resume: nil,
+            delete: nil,
+            close: nil,
+            _meta: %{}
 
   @spec new() :: t()
   def new, do: %__MODULE__{}
@@ -1416,6 +1458,8 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCapabilities do
     |> maybe_put_list(c.list)
     |> maybe_put_fork(c.fork)
     |> maybe_put_resume(c.resume)
+    |> maybe_put_delete(c.delete)
+    |> maybe_put_close(c.close)
     |> AgentTypes.put_meta(c._meta)
   end
 
@@ -1426,13 +1470,19 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCapabilities do
          {:ok, fork} <-
            AgentTypes.decode_optional(map, "fork", &SessionForkCapabilities.from_json/1),
          {:ok, resume} <-
-           AgentTypes.decode_optional(map, "resume", &SessionResumeCapabilities.from_json/1) do
+           AgentTypes.decode_optional(map, "resume", &SessionResumeCapabilities.from_json/1),
+         {:ok, delete} <-
+           AgentTypes.decode_optional(map, "delete", &SessionDeleteCapabilities.from_json/1),
+         {:ok, close} <-
+           AgentTypes.decode_optional(map, "close", &SessionCloseCapabilities.from_json/1) do
       {:ok,
        %__MODULE__{
          modes: Map.get(map, "modes", false),
          list: list,
          fork: fork,
          resume: resume,
+         delete: delete,
+         close: close,
          _meta: AgentTypes.extract_meta(map, @known_keys)
        }}
     end
@@ -1448,6 +1498,12 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCapabilities do
 
   defp maybe_put_resume(map, nil), do: map
   defp maybe_put_resume(map, r), do: Map.put(map, "resume", SessionResumeCapabilities.to_json(r))
+
+  defp maybe_put_delete(map, nil), do: map
+  defp maybe_put_delete(map, d), do: Map.put(map, "delete", SessionDeleteCapabilities.to_json(d))
+
+  defp maybe_put_close(map, nil), do: map
+  defp maybe_put_close(map, cl), do: Map.put(map, "close", SessionCloseCapabilities.to_json(cl))
 end
 
 defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCapabilities do
@@ -1455,6 +1511,173 @@ defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.AgentTypes.SessionC
 
   def encode(%SessionCapabilities{} = val, opts) do
     val |> SessionCapabilities.to_json() |> Jason.Encode.map(opts)
+  end
+end
+
+# -- SessionDeleteCapabilities / SessionCloseCapabilities / AgentAuthCapabilities / LogoutCapabilities --
+#
+# Closes the oracle-vs-f1729 gap (parked review item 5 / W17-caps): the pinned
+# v1.19.0 oracle schema (`priv/schema-oracle/v1/schema.json`) documents these
+# four leaves -- `SessionCapabilities.delete`/`.close` and
+# `AgentCapabilities.auth.logout` -- none of which exist in f1729. All four
+# are empty `{}`-shaped capability flags (bar `AgentAuthCapabilities`, which
+# nests `logout`), matching the existing `Unstable.SessionListCapabilities`/
+# `SessionForkCapabilities`/`SessionResumeCapabilities` pattern: presence of
+# the (possibly empty) nested struct is the truthy signal
+# `Capabilities.negotiated?/2` resolves on, not a boolean field. New to this
+# port; no upstream attribution.
+
+defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.SessionDeleteCapabilities do
+  @moduledoc """
+  Capability flag for `session/delete`: agent supports deleting sessions
+  from `session/list`. Not in f1729; ported from the pinned oracle schema
+  `$defs/SessionDeleteCapabilities`.
+  """
+
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes
+
+  @type t :: %__MODULE__{_meta: map()}
+
+  defstruct _meta: %{}
+
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
+
+  @spec to_json(t()) :: map()
+  def to_json(%__MODULE__{} = c), do: AgentTypes.put_meta(%{}, c._meta)
+
+  @spec from_json(term()) :: {:ok, t()} | {:error, term()}
+  def from_json(map) when is_map(map) do
+    {:ok, %__MODULE__{_meta: AgentTypes.extract_meta(map, ["_meta"])}}
+  end
+
+  def from_json(other), do: {:error, {:invalid_session_delete_capabilities, other}}
+end
+
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.AgentTypes.SessionDeleteCapabilities do
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.SessionDeleteCapabilities
+
+  def encode(%SessionDeleteCapabilities{} = val, opts) do
+    val |> SessionDeleteCapabilities.to_json() |> Jason.Encode.map(opts)
+  end
+end
+
+defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCloseCapabilities do
+  @moduledoc """
+  Capability flag for `session/close`: agent supports closing sessions.
+  Not in f1729; ported from the pinned oracle schema
+  `$defs/SessionCloseCapabilities`.
+  """
+
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes
+
+  @type t :: %__MODULE__{_meta: map()}
+
+  defstruct _meta: %{}
+
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
+
+  @spec to_json(t()) :: map()
+  def to_json(%__MODULE__{} = c), do: AgentTypes.put_meta(%{}, c._meta)
+
+  @spec from_json(term()) :: {:ok, t()} | {:error, term()}
+  def from_json(map) when is_map(map) do
+    {:ok, %__MODULE__{_meta: AgentTypes.extract_meta(map, ["_meta"])}}
+  end
+
+  def from_json(other), do: {:error, {:invalid_session_close_capabilities, other}}
+end
+
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCloseCapabilities do
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCloseCapabilities
+
+  def encode(%SessionCloseCapabilities{} = val, opts) do
+    val |> SessionCloseCapabilities.to_json() |> Jason.Encode.map(opts)
+  end
+end
+
+defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.LogoutCapabilities do
+  @moduledoc """
+  Capability flag for `logout`: agent supports the logout method. Not in
+  f1729; ported from the pinned oracle schema `$defs/LogoutCapabilities`.
+  """
+
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes
+
+  @type t :: %__MODULE__{_meta: map()}
+
+  defstruct _meta: %{}
+
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
+
+  @spec to_json(t()) :: map()
+  def to_json(%__MODULE__{} = c), do: AgentTypes.put_meta(%{}, c._meta)
+
+  @spec from_json(term()) :: {:ok, t()} | {:error, term()}
+  def from_json(map) when is_map(map) do
+    {:ok, %__MODULE__{_meta: AgentTypes.extract_meta(map, ["_meta"])}}
+  end
+
+  def from_json(other), do: {:error, {:invalid_logout_capabilities, other}}
+end
+
+defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.AgentTypes.LogoutCapabilities do
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.LogoutCapabilities
+
+  def encode(%LogoutCapabilities{} = val, opts) do
+    val |> LogoutCapabilities.to_json() |> Jason.Encode.map(opts)
+  end
+end
+
+defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.AgentAuthCapabilities do
+  @moduledoc """
+  Authentication-related capabilities supported by the agent: currently
+  just the optional `logout` leaf. Not in f1729; ported from the pinned
+  oracle schema `$defs/AgentAuthCapabilities`.
+  """
+
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.LogoutCapabilities
+
+  @known_keys ["logout", "_meta"]
+
+  @type t :: %__MODULE__{logout: LogoutCapabilities.t() | nil, _meta: map()}
+
+  defstruct logout: nil, _meta: %{}
+
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
+
+  @spec to_json(t()) :: map()
+  def to_json(%__MODULE__{} = c) do
+    %{}
+    |> maybe_put_logout(c.logout)
+    |> AgentTypes.put_meta(c._meta)
+  end
+
+  @spec from_json(term()) :: {:ok, t()} | {:error, term()}
+  def from_json(map) when is_map(map) do
+    with {:ok, logout} <-
+           AgentTypes.decode_optional(map, "logout", &LogoutCapabilities.from_json/1) do
+      {:ok, %__MODULE__{logout: logout, _meta: AgentTypes.extract_meta(map, @known_keys)}}
+    end
+  end
+
+  def from_json(other), do: {:error, {:invalid_agent_auth_capabilities, other}}
+
+  defp maybe_put_logout(map, nil), do: map
+  defp maybe_put_logout(map, l), do: Map.put(map, "logout", LogoutCapabilities.to_json(l))
+end
+
+defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.AgentTypes.AgentAuthCapabilities do
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.AgentAuthCapabilities
+
+  def encode(%AgentAuthCapabilities{} = val, opts) do
+    val |> AgentAuthCapabilities.to_json() |> Jason.Encode.map(opts)
   end
 end
 

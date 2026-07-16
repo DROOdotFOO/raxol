@@ -97,8 +97,7 @@ defmodule Raxol.AgentClientProtocol.Torture.PbusCoverageAudit do
      "DEAD attach-requires-writer would error; the correct path does NOT"},
     {"test/ext/reattach_test.exs",
      "a {:denied, _} verdict ⇒ -32000 deny envelope, NO registration, NO history, NO reply"},
-    {"test/ext/attach_policy_test.exs",
-     "raise / throw / exit all deny :policy_crash (T-2, T-3)"},
+    {"test/ext/attach_policy_test.exs", "raise / throw / exit all deny :policy_crash (T-2, T-3)"},
     {"test/ext/token_test.exs",
      "the full Runner funnel admits a valid token and denies an expired one"},
     {"test/ext/reattach_test.exs",
@@ -127,8 +126,7 @@ defmodule Raxol.AgentClientProtocol.Torture.PbusCoverageAudit do
      "append assigns contiguous offsets from 1, strictly increasing, fully stamped"},
     {"test/ext/journal_test.exs",
      "offset law: concurrent appends through the Writer are contiguous, monotone, no gap/dup"},
-    {"test/agent_test.exs",
-     "every request-kind callback defaults to {:error, method_not_found}"}
+    {"test/agent_test.exs", "every request-kind callback defaults to {:error, method_not_found}"}
   ]
 
   test "coverage map citations resolve to real files and real test names" do
@@ -328,10 +326,8 @@ defmodule Raxol.AgentClientProtocol.Torture.PbusCoverageAudit do
       {sid, j, _w} =
         start_writer([
           {"turn_started", %{"turnId" => 1, "prompt" => []}, "user"},
-          {"session_update",
-           %{"sessionUpdate" => "agent_message_chunk", "n" => 1}, "agent"},
-          {"turn_completed", %{"turnId" => 1, "stopReason" => "end_turn"},
-           "system"}
+          {"session_update", %{"sessionUpdate" => "agent_message_chunk", "n" => 1}, "agent"},
+          {"turn_completed", %{"turnId" => 1, "stopReason" => "end_turn"}, "system"}
         ])
 
       {conn, _ref, sub, :deferred} = attach(sid, j)

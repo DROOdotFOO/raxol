@@ -174,8 +174,8 @@ defmodule Raxol.AgentClientProtocol.CtxTest do
     test "propagates a client error reply", ctx do
       task = Task.async(fn -> Ctx.read_text_file(ctx.conn, "sess-1", "/nope") end)
       req = ScriptedPeer.recv(ctx.peer)
-      ScriptedPeer.send_error(ctx.peer, req["id"], %{"code" => -32002, "message" => "not found"})
-      assert {:error, %Raxol.AgentClientProtocol.Error{code: -32002}} = Task.await(task)
+      ScriptedPeer.send_error(ctx.peer, req["id"], %{"code" => -32_002, "message" => "not found"})
+      assert {:error, %Raxol.AgentClientProtocol.Error{code: -32_002}} = Task.await(task)
     end
   end
 

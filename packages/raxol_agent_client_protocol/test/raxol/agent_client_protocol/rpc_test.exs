@@ -56,10 +56,10 @@ defmodule Raxol.AgentClientProtocol.RpcTest do
     resp = Response.error(1, err)
     json = Response.to_json(resp)
     assert json["id"] == 1
-    assert json["error"]["code"] == -32601
+    assert json["error"]["code"] == -32_601
     {:ok, decoded} = Response.from_json(json)
     assert {:error, 1, decoded_err} = decoded
-    assert decoded_err.code == -32601
+    assert decoded_err.code == -32_601
   end
 
   test "Notification to_json/from_json" do
@@ -173,7 +173,7 @@ defmodule Raxol.AgentClientProtocol.RpcTest do
 
       {:ok, decoded} = Response.from_json(json)
       assert {:error, nil, decoded_err} = decoded
-      assert decoded_err.code == -32700
+      assert decoded_err.code == -32_700
     end
 
     test "an invalid-request error response can carry a null id through Message encode/decode" do

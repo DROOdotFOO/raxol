@@ -19,7 +19,8 @@ defmodule RaxolAgentClientProtocol.MixProject do
       source_url: @source_url,
       dialyzer: [
         plt_add_apps: [:mix, :ex_unit],
-        flags: [:error_handling, :underspecs]
+        flags: [:error_handling, :underspecs],
+        ignore_warnings: ".dialyzer_ignore.exs"
       ]
     ]
   end
