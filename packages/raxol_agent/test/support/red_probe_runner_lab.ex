@@ -406,6 +406,19 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     if peak <= max_parked, do: :ok, else: {:error, {:parked_overflow, peak, max_parked}}
   end
 
+  @doc """
+  OQ-U12.1 partial-failure rollback — budget conservation. After a
+  session-then-run submit whose RUN-level reserve was refused, the SESSION-level
+  budget must be back to `expected_reserved` (no leaked session reservation).
+  """
+  def budget_conserved(session_budget, expected_reserved) do
+    got = reserved(session_budget)
+
+    if got == expected_reserved,
+      do: :ok,
+      else: {:error, {:session_leaked, got, expected_reserved}}
+  end
+
   @doc "Fingerprint REQUIRED on every probe_run terminal."
   def fingerprint_present(events) do
     events
@@ -816,6 +829,27 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       L.fire(fs, :no_fingerprint)
       L.emit(bus, L.opening(run_id, :started))
       L.emit(bus, L.terminal(run_id, :completed, fingerprint: nil))
+    end
+  end
+
+  defmodule SessionLeakRunner do
+    @moduledoc """
+    OQ-U12.1 partial-failure rollback violation: reserves the SESSION level, then
+    the RUN level is refused, but the session reservation is NOT released — a
+    leaked session budget. Flagged by BUDGET-CONSERVED (the session fold does not
+    return to its pre-submit value).
+    """
+    alias Raxol.Agent.Red.ProbeRunnerLab, as: L
+
+    def run(%{bus: bus, session_budget: sb, budget: rb, fireset: fs}, run_id) do
+      L.fire(fs, :session_leak)
+      L.emit(bus, L.opening(run_id, :started))
+      # Session reserve succeeds; the run-level reserve is refused (cap 0)...
+      :ok = L.try_reserve(sb, 100)
+      {:over, _} = L.try_reserve(rb, 100)
+      # VIOLATION: the session reservation is NOT released before parking.
+      L.emit(bus, L.opening(run_id, :parked))
+      L.emit(bus, L.terminal(run_id, :exhausted, fingerprint: L.fingerprint(), charge: L.charge(calls: 0)))
     end
   end
 

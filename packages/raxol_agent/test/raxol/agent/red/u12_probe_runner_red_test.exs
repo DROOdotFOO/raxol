@@ -348,6 +348,36 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     end
   end
 
+  describe "two-level budget — session-then-run rollback (adversarial-review #6)" do
+    test "session reserve is RELEASED when the run-level reserve is refused — no leaked session budget (OQ-U12.1)" do
+      # Session cap fits one reserve; run cap is 0 so the RUN level is refused
+      # AFTER the session level succeeded. The session reservation must roll back.
+      session_budget = L.new_budget(100)
+      run_budget = L.new_budget(0)
+      bus = L.new_bus()
+      provider = L.new_provider()
+
+      opts = [
+        emit: L.emit_fun(bus),
+        provider: provider,
+        budget: run_budget,
+        session_budget: session_budget,
+        context: ctx()
+      ]
+
+      assert {:ok, run_id} = Runner.submit("u12-red", ShortParkProbe, opts)
+
+      # The rollback is synchronous inside submit: the session budget is back to 0.
+      assert L.budget_conserved(session_budget, 0) == :ok,
+             "session budget leaked on run-level refusal: reserved=#{L.reserved(session_budget)}"
+
+      # The run still parks and completes its lifecycle via the shed terminal.
+      park_ttl = ShortParkProbe.spec().park_timeout_ms
+      events = await_terminals(bus, [run_id], park_ttl + 2_000)
+      assert L.lifecycle_complete(events, [run_id]) == :ok
+    end
+  end
+
   describe "P-U12.2 budget — reserve-before-call (AD-6a)" do
     test "journal order per provider call is reserve → call → settle; never a call without a prior same-run reserve" do
       rig = rig()
@@ -807,6 +837,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     ProbeControlledLeashRunner,
     ReferenceRunner,
     ReserializingPrefixRunner,
+    SessionLeakRunner,
     SettleOnlyRunner,
     SilentDropRunner,
     StreamingDraftsRunner,
@@ -1010,6 +1041,23 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
 
     assert {:error, {:missing_fingerprint, "r1"}} = L.fingerprint_present(events)
     L.assert_all_fired!(rig.fireset, [:no_fingerprint])
+  end
+
+  test "DEAD INJECTOR OQ-U12.1: session-leak Runner (run refused, session NOT released) — flagged by BUDGET-CONSERVED" do
+    rig = rig()
+    L.arm(rig.fireset, :session_leak)
+    session_budget = L.new_budget(100)
+    run_budget = L.new_budget(0)
+
+    SessionLeakRunner.run(
+      %{bus: rig.bus, session_budget: session_budget, budget: run_budget, fireset: rig.fireset},
+      "r1"
+    )
+
+    # The session reservation leaked: reserved stayed at 100 instead of rolling
+    # back to 0.
+    assert {:error, {:session_leaked, 100, 0}} = L.budget_conserved(session_budget, 0)
+    L.assert_all_fired!(rig.fireset, [:session_leak])
   end
 
   test "the checkers PASS a well-formed trace (controls are not vacuously red)" do
