@@ -13,8 +13,13 @@ defmodule Raxol.Agent.Red.SpendGateProbe do
     * **budget** — an atomic `try_reserve` reference in the `Ledger.try_spend`
       shape (serialized get_and_update). The single source of truth for the
       run/session cap; the dual-truth dead injector deliberately bypasses it.
+      `try_reserve_fun/1` closes over it as the frozen `context.try_reserve`
+      seam (`Raxol.Agent.SpendGate` context shape) — BOTH the real gate and
+      every injector below reserve through this SAME closure, so the
+      atomicity guarantee binds the context contract, not this probe module.
     * **checkers** — pure folds over the record stream: reserve→call→settle
-      order, fail-closed, no-over-reserve, dangling-reserve-visible.
+      order, fail-closed, no-over-reserve (PEAK concurrent, not cumulative),
+      no-double-settle, dangling-reserve-visible.
     * **fired counters** (meta-invariant m1) — every dead injector arms a site
       and must fire; `assert_all_fired!/2` fails on a dead injector.
     * **dead injectors** — wrong SpendGate implementations (settle-only,
@@ -95,19 +100,33 @@ defmodule Raxol.Agent.Red.SpendGateProbe do
   end
 
   @doc """
-  Atomically reserve `amount` against the cap (the `try_spend` shape).
-  `:ok` on success, `{:over, :over_run_cap}` when it would exceed the cap.
-  Serialized by the Agent, so concurrent reservers can never over-reserve.
+  Atomically reserve `amount` against the cap — the frozen `context.try_reserve`
+  seam shape (`Raxol.Agent.SpendGate` context; the `Ledger.try_spend` shape):
+  `{:ok, remaining}` on success (`remaining` = cap minus now-reserved),
+  `{:error, :over_limit}` when it would exceed the cap. Serialized by the
+  Agent in one `get_and_update`, so concurrent reservers can never
+  over-reserve and never read a stale `remaining`.
   """
   def try_reserve(budget, amount) do
     Agent.get_and_update(budget, fn %{reserved: reserved, cap: cap} = s ->
-      if reserved + amount <= cap do
-        {:ok, %{s | reserved: reserved + amount}}
+      new_reserved = reserved + amount
+
+      if new_reserved <= cap do
+        {{:ok, cap - new_reserved}, %{s | reserved: new_reserved}}
       else
-        {{:over, :over_run_cap}, s}
+        {{:error, :over_limit}, s}
       end
     end)
   end
+
+  @doc """
+  Build the `context.try_reserve` closure for `budget` — the frozen reserve
+  seam BOTH the real `Raxol.Agent.SpendGate` implementation and every dead
+  injector below MUST reserve through. Freezing this in the context shape
+  (rather than each caller reaching into a test-support module function)
+  is what binds the atomicity guarantee to the GATE, not to the probe.
+  """
+  def try_reserve_fun(budget), do: fn amount -> try_reserve(budget, amount) end
 
   @doc "Total currently reserved against the budget."
   def budget_reserved(budget), do: Agent.get(budget, fn %{reserved: r} -> r end)
@@ -174,14 +193,64 @@ defmodule Raxol.Agent.Red.SpendGateProbe do
   end
 
   @doc """
-  No over-reserve: the sum of every successful `:reserve`'s estimate never
-  exceeds `cap`. Catches a gate that reserves against a stale/second counter
-  instead of the one atomic budget (the dual-truth class).
+  No over-reserve: the PEAK concurrent reserved total, folded in `seq` order,
+  never exceeds `cap`. A `:reserve` adds its `estimate` to the running total;
+  a `:settle` refunds `estimate - actual` back (the amount that stays
+  permanently spent is `actual`; the freed `estimate - actual` is available
+  for reuse). The checker tracks the running total's PEAK over the whole
+  fold — not the cumulative sum of every `:reserve` ever emitted.
+
+  Cumulative-summing every reserve (the old checker) wrongly rejects a
+  legitimate refund-and-reuse gate: an early settle with `actual < estimate`
+  frees budget for a LATER reserve in the same run, and a cumulative sum has
+  no notion of "freed." Peak-tracking still catches the dual-truth class
+  exactly as before, since a gate that never consults the shared budget only
+  ever grows the running total (no settle event can bring the peak down).
   """
   def reserved_within_cap(records, cap) do
-    sum = for(r <- records, r.kind == :reserve, do: r.estimate) |> Enum.sum()
+    estimate_by_ref =
+      for(r <- records, r.kind == :reserve, do: {r.cost_ref, r.estimate}) |> Map.new()
 
-    if sum <= cap, do: :ok, else: {:error, {:over_reserve, sum, cap}}
+    {peak, _running} =
+      records
+      |> Enum.sort_by(& &1.seq)
+      |> Enum.reduce({0, 0}, fn record, {peak, running} -> fold_reserved(record, estimate_by_ref, peak, running) end)
+
+    if peak <= cap, do: :ok, else: {:error, {:over_reserve, peak, cap}}
+  end
+
+  defp fold_reserved(%{kind: :reserve, estimate: estimate}, _estimate_by_ref, peak, running) do
+    new_running = running + estimate
+    {max(peak, new_running), new_running}
+  end
+
+  defp fold_reserved(%{kind: :settle, cost_ref: cost_ref, actual: actual}, estimate_by_ref, peak, running) do
+    refund = Map.get(estimate_by_ref, cost_ref, actual) - actual
+    new_running = running - refund
+    {max(peak, new_running), new_running}
+  end
+
+  defp fold_reserved(_record, _estimate_by_ref, peak, running), do: {peak, running}
+
+  @doc """
+  No double-settle: a reservation must be settled exactly once. A second
+  `:settle` for the same `cost_ref` is a reservation-token replay — each
+  settle independently refunds `estimate - actual`, so double-settling
+  refunds TWICE (money inflation: the budget ends up with more available
+  capacity than the true accounting allows).
+  """
+  def no_double_settle(records) do
+    records
+    |> group_refs()
+    |> Enum.reduce_while(:ok, fn cost_ref, :ok ->
+      count = records |> kinds_for(cost_ref) |> Enum.count(&(&1 == :settle))
+
+      if count <= 1 do
+        {:cont, :ok}
+      else
+        {:halt, {:error, {:double_settle, cost_ref, count}}}
+      end
+    end)
   end
 
   @doc """
@@ -277,14 +346,16 @@ defmodule Raxol.Agent.Red.SpendGateProbe do
     def around(ctx, cost_ref, estimate, call_fun) do
       P.fire(ctx.probe, :call_on_refused)
 
-      case P.try_reserve(ctx.budget, estimate) do
-        {:over, reason} ->
+      # Reserves through the FROZEN context.try_reserve seam, same as the
+      # real gate would — the violation is calling the provider anyway.
+      case ctx.try_reserve.(estimate) do
+        {:error, reason} ->
           ctx.emit.(%{kind: :reserve_refused, cost_ref: cost_ref, reason: reason})
           # VIOLATION: makes the call anyway. The stub counter catches it.
           {_actual, _result} = call_fun.()
           {:error, {:reserve_refused, reason}}
 
-        :ok ->
+        {:ok, _remaining} ->
           {actual, result} = call_fun.()
           ctx.emit.(%{kind: :reserve, cost_ref: cost_ref, estimate: estimate})
           ctx.emit.(%{kind: :call, cost_ref: cost_ref})
@@ -304,12 +375,60 @@ defmodule Raxol.Agent.Red.SpendGateProbe do
 
     def around(ctx, cost_ref, estimate, call_fun) do
       P.fire(ctx.probe, :dual_truth)
-      # Never consults ctx.budget — every call "succeeds".
+      # Never consults ctx.budget or ctx.try_reserve — every call "succeeds".
       ctx.emit.(%{kind: :reserve, cost_ref: cost_ref, estimate: estimate})
       {actual, result} = call_fun.()
       ctx.emit.(%{kind: :call, cost_ref: cost_ref})
       ctx.emit.(%{kind: :settle, cost_ref: cost_ref, actual: actual})
       {:ok, result}
+    end
+  end
+
+  defmodule DuplicateReserveInjector do
+    @moduledoc """
+    Reserves the SAME cost_ref TWICE before calling (e.g. a naive retry that
+    re-reserves instead of checking for an already-dangling reservation).
+    Fails the ORDER red: `[:reserve, :reserve, :call, :settle]` is not a
+    legal prefix of reserve → call → settle.
+    """
+    alias Raxol.Agent.Red.SpendGateProbe, as: P
+
+    def around(ctx, cost_ref, estimate, call_fun) do
+      P.fire(ctx.probe, :duplicate_reserve)
+
+      with {:ok, _} <- ctx.try_reserve.(estimate),
+           {:ok, _} <- ctx.try_reserve.(estimate) do
+        ctx.emit.(%{kind: :reserve, cost_ref: cost_ref, estimate: estimate})
+        ctx.emit.(%{kind: :reserve, cost_ref: cost_ref, estimate: estimate})
+        {actual, result} = call_fun.()
+        ctx.emit.(%{kind: :call, cost_ref: cost_ref})
+        ctx.emit.(%{kind: :settle, cost_ref: cost_ref, actual: actual})
+        {:ok, result}
+      end
+    end
+  end
+
+  defmodule DoubleSettleInjector do
+    @moduledoc """
+    Settles the same reservation TWICE — a reservation-token replay. Each
+    `:settle` independently refunds `estimate - actual`, so double-settling
+    refunds twice: money inflation (the budget ends up with more available
+    capacity than the true accounting allows). Fails the DOUBLE-SETTLE red.
+    """
+    alias Raxol.Agent.Red.SpendGateProbe, as: P
+
+    def around(ctx, cost_ref, estimate, call_fun) do
+      P.fire(ctx.probe, :double_settle)
+
+      with {:ok, _remaining} <- ctx.try_reserve.(estimate) do
+        ctx.emit.(%{kind: :reserve, cost_ref: cost_ref, estimate: estimate})
+        {actual, result} = call_fun.()
+        ctx.emit.(%{kind: :call, cost_ref: cost_ref})
+        # VIOLATION: settles (and refunds) twice — replaying the reservation token.
+        ctx.emit.(%{kind: :settle, cost_ref: cost_ref, actual: actual})
+        ctx.emit.(%{kind: :settle, cost_ref: cost_ref, actual: actual})
+        {:ok, result}
+      end
     end
   end
 

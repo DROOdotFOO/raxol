@@ -18,9 +18,15 @@ defmodule Raxol.Agent.Red.U7SpendGateRedTest do
       but the `settle` record is the authoritative post-hoc fact — the refund is
       derivable from the `(reserve, settle)` pair.
     * **The journal fold IS the accounting.** A crash between reserve and call
-      leaves the reserve dangling but VISIBLE in the fold (never silently lost).
+      leaves the reserve dangling but VISIBLE in the fold (never silently lost) —
+      pinned here with a REAL process kill, not just an omitted settle.
     * **Concurrent calls under one budget never over-reserve past the cap** —
-      atomic `try_spend` semantics.
+      atomic `try_spend` semantics, checked as PEAK concurrent reserved (not a
+      cumulative sum), so a legitimate refund-and-reuse gate is not falsely
+      flagged.
+    * **A cost_ref reserves at most once, and settles at most once** — a
+      repeated reserve or a replayed settle (double-refund / money inflation)
+      is rejected, not silently accepted.
 
   These tests drive the real `Raxol.Agent.SpendGate` (currently a
   `:not_implemented` skeleton), so they FAIL until U7 lands — that is the point.
@@ -39,11 +45,22 @@ defmodule Raxol.Agent.Red.U7SpendGateRedTest do
   alias Raxol.Agent.Red.SpendGateProbe, as: P
   alias Raxol.Agent.SpendGate
 
-  # Seed for the concurrent-schedule contour; overridable + dumped on failure (m2).
-  @seed String.to_integer(System.get_env("U7_SEED", "424242"))
+  # Seed for the concurrent-schedule contour; overridable + dumped on failure
+  # (m2). Read at RUNTIME (not a `@seed` module attribute) — a module
+  # attribute captures `System.get_env/2` at COMPILE time, so `U7_SEED=...`
+  # on an already-compiled module (e.g. `mix test --no-compile`, or a cached
+  # `_build`) would silently have no effect.
+  defp seed, do: String.to_integer(System.get_env("U7_SEED", "424242"))
 
   defp ctx(journal, budget),
-    do: %{emit: P.emit_fun(journal), budget: budget, agent_id: :u7_red}
+    do: %{
+      emit: P.emit_fun(journal),
+      # The frozen context.try_reserve seam (see Raxol.Agent.SpendGate
+      # moduledoc) — the real gate reserves through this SAME closure.
+      try_reserve: P.try_reserve_fun(budget),
+      budget: budget,
+      agent_id: :u7_red
+    }
 
   describe "positive contours — the real gate (red until U7 lands)" do
     test "reserve→call→settle, in order, per call (fold asserts; cost_ref correlation)" do
@@ -51,6 +68,7 @@ defmodule Raxol.Agent.Red.U7SpendGateRedTest do
       p = P.new_provider()
       ctx = ctx(j, P.new_budget(1000))
 
+      # actual (80) < estimate (100): under-estimate, refund due.
       assert {:ok, {:result, "c1"}} =
                SpendGate.around(ctx, "c1", 100, P.call_fun(p, "c1", 80))
 
@@ -84,6 +102,7 @@ defmodule Raxol.Agent.Red.U7SpendGateRedTest do
       p = P.new_provider()
       ctx = ctx(j, P.new_budget(1000))
 
+      # actual (70) < estimate (100): under-estimate, refund due.
       assert {:ok, _} = SpendGate.around(ctx, "c1", 100, P.call_fun(p, "c1", 70))
 
       recs = P.records(j)
@@ -93,13 +112,29 @@ defmodule Raxol.Agent.Red.U7SpendGateRedTest do
       assert P.reserve_before_call(recs) == :ok
     end
 
-    test "a crash between reserve and call leaves the reserve DANGLING but visible in the fold" do
+    test "a crash between reserve and call leaves the reserve DANGLING but visible in the fold (real process kill)" do
       j = P.new_journal()
       ctx = ctx(j, P.new_budget(1000))
+      parent = self()
 
-      # Reserve, then the process dies before the call/settle. The reserve must
-      # already be durable (journal-before-call), so recovery sees it dangling.
-      _ = SpendGate.reserve(ctx, "c1", 100)
+      # A REAL crash, not just an omitted settle: a separate process reserves,
+      # signals that the reserve returned, then is killed with :kill before it
+      # can proceed to the call/settle step. The reserve must already be
+      # durable (journaled synchronously, inside reserve/3, before it returns)
+      # so the journal — a SEPARATE process from the one that died — still
+      # shows it: durability survives the crash, and the stranded reserve is
+      # visible/reclaimable in the fold, never silently lost.
+      {pid, ref} =
+        spawn_monitor(fn ->
+          _ = SpendGate.reserve(ctx, "c1", 100)
+          send(parent, :reserved)
+          # Would call the provider next — but the crash happens first.
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :reserved, 1_000
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 1_000
 
       recs = P.records(j)
       assert P.dangling_reserve_visible(recs, "c1") == :ok
@@ -116,16 +151,18 @@ defmodule Raxol.Agent.Red.U7SpendGateRedTest do
       p = P.new_provider()
       ctx = ctx(j, P.new_budget(cap))
 
+      seed = seed()
+
+      # The BEAM scheduler itself interleaves these `max_concurrency: n` tasks
+      # non-deterministically; no artificial jitter is needed to vary the
+      # WINNERS run to run — the serialized atomic budget is what makes the
+      # COUNT that fits the cap invariant regardless of interleaving. `seed`
+      # is still threaded through the failure messages so a red run is
+      # reproducible (m2) if a future scheduling-sensitive assertion is added.
       results =
         1..n
         |> Task.async_stream(
-          fn i ->
-            # Per-task jitter derived from the seed varies the interleaving; the
-            # WINNERS vary run to run but the COUNT that fits the cap is invariant.
-            :rand.seed(:exsss, {@seed, i, @seed})
-            Process.sleep(:rand.uniform(3))
-            SpendGate.around(ctx, "c#{i}", est, P.call_fun(p, "c#{i}", est))
-          end,
+          fn i -> SpendGate.around(ctx, "c#{i}", est, P.call_fun(p, "c#{i}", est)) end,
           max_concurrency: n,
           timeout: 5_000
         )
@@ -137,15 +174,42 @@ defmodule Raxol.Agent.Red.U7SpendGateRedTest do
       # actual == estimate here, so no refund frees budget mid-storm: exactly
       # `expected` reservations fit, and the peak reserved never exceeds the cap.
       assert P.reserved_within_cap(recs, cap) == :ok,
-             "seed=#{@seed}: over-reserved past cap #{cap}; records=#{inspect(recs)}"
+             "seed=#{seed}: over-reserved past cap #{cap}; records=#{inspect(recs)}"
 
       assert ok_count == expected,
-             "seed=#{@seed}: expected #{expected} successful reserves, got #{ok_count}"
+             "seed=#{seed}: expected #{expected} successful reserves, got #{ok_count}"
 
       assert P.provider_calls(p) == expected,
-             "seed=#{@seed}: provider called #{P.provider_calls(p)}x, expected #{expected}"
+             "seed=#{seed}: provider called #{P.provider_calls(p)}x, expected #{expected}"
 
-      assert P.call_count(recs) == expected, "seed=#{@seed}"
+      assert P.call_count(recs) == expected, "seed=#{seed}"
+    end
+
+    test "reserving the same cost_ref twice is rejected (no double-spend via retry)" do
+      j = P.new_journal()
+      ctx = ctx(j, P.new_budget(1000))
+
+      assert {:ok, _reservation} = SpendGate.reserve(ctx, "c1", 100)
+      # A second reserve for the SAME cost_ref must be rejected, not silently
+      # accepted as a second independent reservation.
+      assert {:error, _reason} = SpendGate.reserve(ctx, "c1", 100)
+
+      recs = P.records(j)
+      assert P.kinds_for(recs, "c1") == [:reserve]
+    end
+
+    test "settling the same reservation twice does not double-refund (token replay)" do
+      j = P.new_journal()
+      ctx = ctx(j, P.new_budget(1000))
+
+      assert {:ok, reservation} = SpendGate.reserve(ctx, "c1", 100)
+      assert :ok = SpendGate.settle(ctx, reservation, 70)
+      # Replaying the same reservation token a second time must be rejected —
+      # not silently refund estimate - actual a second time (money inflation).
+      assert {:error, _reason} = SpendGate.settle(ctx, reservation, 70)
+
+      recs = P.records(j)
+      assert P.no_double_settle(recs) == :ok
     end
   end
 end
@@ -165,7 +229,9 @@ defmodule Raxol.Agent.Red.U7SpendGateControlsTest do
   alias Raxol.Agent.Red.SpendGateProbe.{
     CallOnRefusedInjector,
     CrashLosesReserveInjector,
+    DoubleSettleInjector,
     DualTruthInjector,
+    DuplicateReserveInjector,
     SettleOnlyInjector
   }
 
@@ -189,7 +255,8 @@ defmodule Raxol.Agent.Red.U7SpendGateControlsTest do
     p = P.new_provider()
     probe = P.new_probe() |> P.arm(:call_on_refused)
     # Cap 0 ⇒ every reserve is refused.
-    ctx = %{emit: P.emit_fun(j), probe: probe, budget: P.new_budget(0)}
+    budget = P.new_budget(0)
+    ctx = %{emit: P.emit_fun(j), probe: probe, budget: budget, try_reserve: P.try_reserve_fun(budget)}
 
     assert {:error, {:reserve_refused, _}} =
              CallOnRefusedInjector.around(ctx, "c1", 100, P.call_fun(p, "c1", 100))
@@ -236,6 +303,53 @@ defmodule Raxol.Agent.Red.U7SpendGateControlsTest do
     P.assert_all_fired!(probe, [:crash_loses_reserve])
   end
 
+  test "DEAD INJECTOR (d): reserving the same cost_ref twice fails the ORDER red" do
+    j = P.new_journal()
+    p = P.new_provider()
+    probe = P.new_probe() |> P.arm(:duplicate_reserve)
+    budget = P.new_budget(1000)
+    ctx = %{emit: P.emit_fun(j), probe: probe, budget: budget, try_reserve: P.try_reserve_fun(budget)}
+
+    assert {:ok, _} = DuplicateReserveInjector.around(ctx, "c1", 100, P.call_fun(p, "c1", 80))
+
+    recs = P.records(j)
+    assert P.kinds_for(recs, "c1") == [:reserve, :reserve, :call, :settle]
+
+    assert {:error, {:bad_order, "c1", [:reserve, :reserve, :call, :settle]}} =
+             P.reserve_before_call(recs)
+
+    P.assert_all_fired!(probe, [:duplicate_reserve])
+  end
+
+  test "DEAD INJECTOR (e): settling the same reservation twice fails DOUBLE-SETTLE (money inflation)" do
+    j = P.new_journal()
+    p = P.new_provider()
+    probe = P.new_probe() |> P.arm(:double_settle)
+    budget = P.new_budget(1000)
+    ctx = %{emit: P.emit_fun(j), probe: probe, budget: budget, try_reserve: P.try_reserve_fun(budget)}
+
+    assert {:ok, _} = DoubleSettleInjector.around(ctx, "c1", 100, P.call_fun(p, "c1", 70))
+
+    recs = P.records(j)
+    assert P.kinds_for(recs, "c1") == [:reserve, :call, :settle, :settle]
+    assert {:error, {:double_settle, "c1", 2}} = P.no_double_settle(recs)
+    # The generic order checker independently flags the same trace too.
+    assert {:error, {:bad_order, "c1", [:reserve, :call, :settle, :settle]}} =
+             P.reserve_before_call(recs)
+
+    P.assert_all_fired!(probe, [:double_settle])
+  end
+
+  test "the ORDER checker already rejects a bare duplicate-reserve trace via bad_order" do
+    j = P.new_journal()
+    emit = P.emit_fun(j)
+    emit.(%{kind: :reserve, cost_ref: "c1", estimate: 100})
+    emit.(%{kind: :reserve, cost_ref: "c1", estimate: 100})
+    recs = P.records(j)
+
+    assert {:error, {:bad_order, "c1", [:reserve, :reserve]}} = P.reserve_before_call(recs)
+  end
+
   test "the checkers PASS a well-formed trace (controls are not vacuously red)" do
     j = P.new_journal()
     emit = P.emit_fun(j)
@@ -247,8 +361,36 @@ defmodule Raxol.Agent.Red.U7SpendGateControlsTest do
     assert P.reserve_before_call(recs) == :ok
     assert P.fail_closed(recs, 1, 1) == :ok
     assert P.reserved_within_cap(recs, 300) == :ok
+    assert P.no_double_settle(recs) == :ok
     # A settled reserve is not dangling — the crash contour's negative direction.
     assert P.dangling_reserve_visible(recs, "c1") == {:error, :not_dangling}
+  end
+
+  test "PEAK vs cumulative: a refund-and-reuse trace stays within cap under peak tracking" do
+    # A legitimate reserve->settle->reserve sequence: c1 reserves 100 but only
+    # spends 20 (settling early frees 80 back to the pool), then c2 reserves
+    # 100 and spends 90. The two estimates sum to 200 > a 150 cap, but they
+    # are never concurrently outstanding, so the PEAK concurrent reserved
+    # never exceeds the cap.
+    j = P.new_journal()
+    emit = P.emit_fun(j)
+    cap = 150
+
+    emit.(%{kind: :reserve, cost_ref: "c1", estimate: 100})
+    emit.(%{kind: :call, cost_ref: "c1"})
+    emit.(%{kind: :settle, cost_ref: "c1", actual: 20})
+    emit.(%{kind: :reserve, cost_ref: "c2", estimate: 100})
+    emit.(%{kind: :call, cost_ref: "c2"})
+    emit.(%{kind: :settle, cost_ref: "c2", actual: 90})
+    recs = P.records(j)
+
+    assert P.reserved_within_cap(recs, cap) == :ok
+
+    # Pin that the PEAK fix (not a raised cap) is what makes this pass: the
+    # naive cumulative sum of every :reserve estimate WOULD have wrongly
+    # rejected this well-formed, budget-respecting trace.
+    cumulative = recs |> Enum.filter(&(&1.kind == :reserve)) |> Enum.map(& &1.estimate) |> Enum.sum()
+    assert cumulative > cap
   end
 
   test "m1: an armed injector that never fires fails assert_all_fired! and dumps the schedule (m2)" do

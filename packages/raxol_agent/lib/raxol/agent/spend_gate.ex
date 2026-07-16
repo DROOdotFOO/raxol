@@ -48,10 +48,47 @@ defmodule Raxol.Agent.SpendGate do
   recorder the checkers fold. Binding `emit` to the real journal is U7
   implementation work, not part of this skeleton.
 
-  Reservation is atomic against `context.budget` (the local try_spend-shaped
-  seam — a run-level and session-level cap), so concurrent calls under one
-  budget can never over-reserve past the cap.
+  ## The reserve seam (frozen — binds atomicity to the GATE, not a test helper)
+
+  Reservation is atomic against `context.try_reserve` — a callable in the
+  frozen context shape:
+
+      context.try_reserve.(estimate()) ::
+        {:ok, remaining :: non_neg_integer()} | {:error, :over_limit}
+
+  This is the `try_spend` shape (mirrors `Raxol.Payments.Ledger.try_spend/5`),
+  generalized as a plain closure so raxol_agent doesn't need to depend on
+  raxol_payments. **Both** the eventual U7 implementation of `reserve/3` and
+  any test/injector caller MUST reserve through this SAME callable — freezing
+  it here in the context shape (rather than letting each caller reach into a
+  test-support module function directly) is what makes the atomicity
+  guarantee a property of the GATE's contract, not an artifact of the probe.
+  A run-level and session-level cap can each be represented as their own
+  `try_reserve` seam, composed by the caller that builds `context`.
+
+  **U7-I must accept and invoke `context.try_reserve`** when it implements
+  `reserve/3` — wiring the production closure to the real
+  `Raxol.Payments.Ledger.try_spend/5`-shaped budget is production work, not
+  part of this skeleton.
   """
+
+  @typedoc """
+  Context passed to every SpendGate call. Frozen fields:
+
+    * `:emit` — `(record :: map() -> :ok)`, the cost-journal sink.
+    * `:try_reserve` — `(estimate() -> {:ok, remaining :: non_neg_integer()} |
+      {:error, :over_limit})`, the atomic reserve seam (see moduledoc). BOTH
+      the real gate and any test/injector implementation reserve through
+      this SAME callable.
+
+  Other fields are caller-defined and opaque to this module (e.g. an
+  `agent_id`, a raw budget handle the closure above captures, ...).
+  """
+  @type context :: %{
+          required(:emit) => (map() -> :ok),
+          required(:try_reserve) => (non_neg_integer() -> {:ok, non_neg_integer()} | {:error, :over_limit}),
+          optional(atom()) => term()
+        }
 
   @typedoc "Opaque correlation id tying one reserve to its call and its settle."
   @type cost_ref :: String.t()
@@ -75,7 +112,7 @@ defmodule Raxol.Agent.SpendGate do
   `reserve_refused` record and returns `{:error, {:refused, reason}}` — and the
   caller MUST NOT make the call (fail-closed).
   """
-  @callback reserve(context :: map(), cost_ref(), estimate()) ::
+  @callback reserve(context :: context(), cost_ref(), estimate()) ::
               {:ok, reservation()} | {:error, {:refused, refusal()}}
 
   @doc """
@@ -83,7 +120,7 @@ defmodule Raxol.Agent.SpendGate do
   `settle` record and refunds `estimate - actual` to the budget internally. The
   `settle` record is authoritative; the refund is derivable from the pair.
   """
-  @callback settle(context :: map(), reservation(), actual()) :: :ok
+  @callback settle(context :: context(), reservation(), actual()) :: :ok
 
   @doc """
   Reserve-before-call combinator — the single seam the primary loop wraps around
@@ -96,7 +133,7 @@ defmodule Raxol.Agent.SpendGate do
   `{:error, {:reserve_refused, reason}}`.
   """
   @callback around(
-              context :: map(),
+              context :: context(),
               cost_ref(),
               estimate(),
               call_fun :: (-> {actual(), result :: term()})
