@@ -221,6 +221,7 @@ defmodule Raxol.Agent.DoneGate do
 
   defp event_id(ev), do: get_either(ev, :id)
   defp event_turn_id(ev), do: get_either(ev, :turn_id)
+  defp event_session_id(ev), do: get_either(ev, :session_id)
   defp event_type(ev), do: atomize(get_either(ev, :type))
 
   defp payload_field(ev, key) do
@@ -253,9 +254,20 @@ defmodule Raxol.Agent.DoneGate do
 
   defp atomize(value), do: value
 
-  # The durable done event handed back to the journal. `id`/`ts` are assigned by
-  # the journal writer at append time; this carries the next-offset hint from the
-  # journal tail so the event is well-formed even before it lands.
+  # The durable done event handed back to the journal. On append the Writer
+  # stamps only `id` (= the real journal offset), overwriting the `next_id`
+  # hint carried here; it does NOT re-stamp `session_id`, `ts`, or the envelope
+  # (`Writer.stamp/3` puts `"id"`/`"schema_version"` and nothing else), so those
+  # must be well-formed at hand-back.
+  #
+  # `session_id` is derived from the CLAIMING TURN's own events (they carry the
+  # session) rather than `List.first/1` of the journal: the head may belong to
+  # an interleaved foreign turn or a GC-dropped prefix, and on a string-keyed
+  # replay it would not even carry an atom `:session_id` key.
+  #
+  # `ts` is a monotonic, offset-derived placeholder — the gate is a pure
+  # decision function and reads no wall clock; a producer seam may set a real
+  # timestamp when the accepted done is actually emitted.
   defp done_event(journal, turn_id, refs) do
     next_id =
       journal
@@ -266,7 +278,10 @@ defmodule Raxol.Agent.DoneGate do
         ids -> Enum.max(ids) + 1
       end
 
-    session_id = journal |> List.first() |> then(&(&1 && Map.get(&1, :session_id)))
+    session_id =
+      journal
+      |> Enum.find(&(event_turn_id(&1) == turn_id))
+      |> then(&(&1 && event_session_id(&1)))
 
     %Event{
       v: 0,

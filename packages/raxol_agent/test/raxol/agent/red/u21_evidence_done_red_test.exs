@@ -754,6 +754,27 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
       end
     end
   end
+
+  describe "U21-R2 #4 — the done's session_id derives from the claiming turn, not the journal head" do
+    test "an accepted done carries the claiming turn's session, not List.first's" do
+      # The journal head is a foreign turn under a DIFFERENT session_id (as an
+      # interleaved concurrent turn or a GC-dropped prefix would leave it). The
+      # Writer does not re-stamp session_id at append, so the emitted done must
+      # already carry the CLAIMING turn's session — not the head's.
+      head = %{Build.turn_started(1, turn_id: "other") | session_id: "sess-OTHER"}
+
+      journal = [
+        head,
+        Build.turn_started(2, turn_id: "t"),
+        Build.mutation(3, turn_id: "t"),
+        Build.evidence(4, turn_id: "t")
+      ]
+
+      assert {:ok, done} = gate(journal, "t", [4])
+      assert done.session_id == "sess-u21"
+      refute done.session_id == "sess-OTHER"
+    end
+  end
 end
 
 # ===========================================================================
