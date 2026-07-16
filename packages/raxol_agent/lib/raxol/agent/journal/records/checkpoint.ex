@@ -119,22 +119,26 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   @callback restore(journal :: term(), opts :: keyword()) ::
               {:ok, model()} | {:error, term()}
 
-  # --- default seam — the red suite is RED against this ----------------------
+  # --- backend seam ----------------------------------------------------------
 
   # A backend implementing `c:write/3` / `c:restore/2` may be injected via
   # `:persistent_term` under this key (how an alternate storage backend slots in
-  # behind the behaviour). Until U9 registers one, both entry points return
-  # `{:error, :not_implemented}` — so the U9-R red suite is RED by construction.
+  # behind the behaviour). The DEFAULT (no registration) is the landed
+  # `FileBackend` — the U9 file-store implementation. `put_backend(nil)` forces
+  # the inert `{:error, :not_implemented}` seam back on (e.g. to disable
+  # checkpointing in a constrained deployment).
   @backend_key {__MODULE__, :backend}
+  @default_backend Raxol.Agent.Journal.Records.Checkpoint.FileBackend
 
   @doc """
-  Register a module implementing this behaviour as the active backend, or
-  `nil`/absence for the default `:not_implemented` seam.
+  Register a module implementing this behaviour as the active backend, or `nil`
+  to force the inert `{:error, :not_implemented}` seam. Absence ⇒ the default
+  `FileBackend`.
   """
   @spec put_backend(module() | nil) :: :ok
   def put_backend(backend), do: :persistent_term.put(@backend_key, backend)
 
-  @doc "See `c:write/3`. Returns `{:error, :not_implemented}` until a backend is registered (U9)."
+  @doc "See `c:write/3`. Dispatches to the active backend (default `FileBackend`)."
   @spec write(term(), model(), keyword()) ::
           {:ok, FileStore.offset()} | {:error, term()}
   def write(journal, model, opts \\ []) do
@@ -144,7 +148,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
     end
   end
 
-  @doc "See `c:restore/2`. Returns `{:error, :not_implemented}` until a backend is registered (U9)."
+  @doc "See `c:restore/2`. Dispatches to the active backend (default `FileBackend`)."
   @spec restore(term(), keyword()) :: {:ok, model()} | {:error, term()}
   def restore(journal, opts \\ []) do
     case backend() do
@@ -153,5 +157,32 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
     end
   end
 
-  defp backend, do: :persistent_term.get(@backend_key, nil)
+  defp backend, do: :persistent_term.get(@backend_key, @default_backend)
+
+  # --- GC protection floor (Drew MEDIUM; JS-FREEZE §1.1-GC) ------------------
+
+  @doc """
+  The GC-protected floor for a set of already-read `records`: records at or
+  above this offset MUST NEVER be truncated, so the newest checkpoint's restore
+  path stays intact (**frozen law: GC never orphans checkpoints**, JS-FREEZE
+  §1.1). It is the `tip_offset` of the newest healthy checkpoint (highest
+  offset). `:none` when no checkpoint exists (nothing to protect).
+
+  A future `gc`/truncation writer MUST consult this and reject any proposal
+  whose truncation range reaches this offset — rejected at the same synchronous
+  admission seam as `:invalid_tip`, never accepted-then-marked.
+  """
+  @spec protected_floor([map()]) :: {:offset, pos_integer()} | :none
+  def protected_floor(records) when is_list(records) do
+    records
+    |> Enum.filter(&(Map.get(&1, "kind") == @kind))
+    |> case do
+      [] ->
+        :none
+
+      cps ->
+        newest = Enum.max_by(cps, &Map.fetch!(&1, "id"))
+        {:offset, Map.fetch!(newest, "tip_offset")}
+    end
+  end
 end
