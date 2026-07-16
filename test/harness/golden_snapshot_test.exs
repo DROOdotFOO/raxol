@@ -147,6 +147,43 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
         end
       end
     end
+
+    test "no golden carries ESC-less control-sequence residue (the ContentGuard-stripped [K class)" do
+      # `ContentGuard.sanitize_line/1`'s "visible-honest" neutralization
+      # strips a disallowed sequence's ESC byte but keeps the printable
+      # remainder -- so a caller that wrongly embeds a control sequence
+      # (e.g. `\e[K`) in CONTENT it hands to `InlineAuthority.seal/2`
+      # leaves a literal `[K` painted into sealed history, visible on a
+      # real terminal, invisible to every substring-based semantic
+      # assertion. This guard scans each golden's TEXT tokens (already
+      # ESC-free by tokenization) for that residue class.
+      for fixture <- Golden.fixtures(), mode <- Golden.modes() do
+        golden = read_golden!(fixture, mode)
+        residue = escless_residue(golden)
+
+        assert residue == [],
+               "#{fixture} x #{mode} golden contains ESC-less control-sequence " <>
+                 "residue in its text tokens (a ContentGuard-stripped sequence " <>
+                 "embedded in sealed content): #{inspect(residue, printable_limit: 200)}"
+      end
+    end
+  end
+
+  # Text tokens of `raw` that carry a stripped-CSI residue: `[` followed
+  # by numeric params and any final letter (`[2J`, `[1;14r`), or, for the
+  # empty-param form, `[` followed by an UPPERCASE CSI final (`[K`, `[J`,
+  # `[H`). The empty-param branch is deliberately uppercase-only so the
+  # fixtures' legitimate lowercase bracket labels (`[assistant]`,
+  # `[reasoning]`) never false-positive; a stripped no-param lowercase
+  # final (`\e[r` bare) cannot occur here -- this codebase always emits
+  # DECSTBM with params, which the digit branch catches.
+  @escless_residue ~r/\[(?:\d{1,3}(?:;\d{1,3})*[A-Za-z]|[A-HJKST])/
+  defp escless_residue(raw) do
+    raw
+    |> SequenceScanner.scan()
+    |> Enum.filter(&match?({:text, _}, &1))
+    |> Enum.map(fn {:text, text} -> text end)
+    |> Enum.filter(&Regex.match?(@escless_residue, &1))
   end
 
   # ---------------------------------------------------------------------
@@ -180,6 +217,18 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
       assert Enum.any?(SequenceScanner.scan(poisoned), &match?({:osc, _}, &1)),
              "an injected OSC 52 sequence must scan as an {:osc, _} token so " <>
                "the sequence-vocabulary allowlist guard rejects it"
+    end
+
+    test "the ESC-less residue guard detects stripped-sequence remnants but not bracket labels" do
+      # what ContentGuard leaves behind when a caller wrongly embeds a
+      # control sequence in sealed content:
+      assert escless_residue("prefix [Ksuffix\r\n") != []
+      assert escless_residue("[1;14r positioned") != []
+      assert escless_residue("half [2J cleared") != []
+
+      # legitimate prose the fixtures actually contain must never trip it:
+      assert escless_residue("[assistant]\r\nHello!\r\n") == []
+      assert escless_residue("[reasoning] thinking...") == []
     end
   end
 

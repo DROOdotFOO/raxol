@@ -653,9 +653,17 @@ defmodule Raxol.Harness.Surface do
     %{model | authority: authority, painted_count: model.painted_count + 1}
   end
 
+  # No per-line `\e[K` here: `InlineAuthority.seal/2` sanitizes CONTENT
+  # through `ContentGuard.sanitize_line/1` (its allowlist keeps SGR only),
+  # so an EL embedded in content never survived -- the guard stripped the
+  # ESC and left a literal `[K` painted at the start of every sealed
+  # history row (caught by the byte-golden sidecar; pinned by the
+  # ESC-less-residue guard in test/harness/golden_snapshot_test.exs).
+  # Erasing is the authority's business, not content's: sealed lines land
+  # on rows the DECSTBM scroll already blanked, so no EL is needed.
   defp seal_block(model, block) do
     lines = render_block_lines(block, model, :styled)
-    iodata = Enum.map(lines, &["\e[K", &1, "\r\n"])
+    iodata = Enum.map(lines, &[&1, "\r\n"])
     authority = InlineAuthority.seal(model.authority, iodata)
     %{model | authority: authority, painted_count: model.painted_count + 1}
   end
