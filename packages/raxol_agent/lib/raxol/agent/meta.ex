@@ -87,6 +87,11 @@ defmodule Raxol.Agent.Meta do
       scope == :global and Registry.scope(type) != :global ->
         {:error, {:scope_violation, type}}
 
+      # promote is the ONLY global/commit type — a session-scoped promote is a
+      # mis-scoped commit slipping the strict seam. Enforce promote ⇒ :global.
+      Registry.scope(type) == :global and scope != :global ->
+        {:error, {:scope_violation, type}}
+
       true ->
         :ok
     end

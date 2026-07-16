@@ -196,4 +196,34 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
              "the turn_started override is 'what was asked', not 'what produced'"
     end
   end
+
+  # ===========================================================================
+  # Finding 7 (🟡) — validate enforces promote ⇒ :global
+  # ===========================================================================
+
+  describe "validate enforces promote ⇒ :global (§2.1)" do
+    test "a session-scoped promote is rejected at validate" do
+      event = %{
+        family: :meta,
+        type: :promote,
+        payload: Gen.meta_payload(:promote, [1]),
+        scope: :session
+      }
+
+      assert Meta.validate(event) == {:error, {:scope_violation, :promote}},
+             "promote is the only commit type — a session-scoped promote is a " <>
+               "mis-scoped commit and must be rejected"
+    end
+
+    test "a global-scoped promote with refs still passes (regression guard)" do
+      event = %{
+        family: :meta,
+        type: :promote,
+        payload: Gen.meta_payload(:promote, [1]),
+        scope: :global
+      }
+
+      assert Meta.validate(event) == :ok
+    end
+  end
 end
