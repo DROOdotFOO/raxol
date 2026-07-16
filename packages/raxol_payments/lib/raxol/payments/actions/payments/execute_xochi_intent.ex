@@ -111,7 +111,7 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
   alias Raxol.Payments.{Assets, Checkpoint, Failure, Router}
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.{QuoteRequest, QuoteResponse}
-  alias Raxol.Payments.Xochi.Stealth
+  alias Raxol.Payments.Xochi.{Stealth, SwapAnnouncer}
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, Failure.t()}
   @impl true
@@ -146,6 +146,10 @@ defmodule Raxol.Payments.Actions.Payments.ExecuteXochiIntent do
            execute(config, request, quote, wallet, context, amount, store, key),
          :ok <- assert_settlement_privacy(request, exec) do
       summary = summary(request, filled_quote, exec)
+      # Best-effort, non-blocking: emit a signed activity row to the user's live
+      # feed (and stash the route for the terminal announce). Never affects the
+      # swap; a no-op unless a capability topic_id is configured.
+      SwapAnnouncer.announce_execute(context, request, filled_quote, exec)
       Checkpoint.put(store, key, settled_record(summary))
       {:ok, summary}
     end

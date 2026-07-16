@@ -36,6 +36,7 @@ defmodule Raxol.Agent.Contract do
   `SessionStreamer` boundary without surfaces changing.
   """
 
+  alias Raxol.Agent.DoneGate
   alias Raxol.Agent.SessionStreamer
 
   defmodule Event do
@@ -53,7 +54,34 @@ defmodule Raxol.Agent.Contract do
               family: :loop,
               type: nil,
               tier: :durable,
-              payload: %{}
+              payload: %{},
+              # --- U11 envelope growth (harness-freeze-contracts.md §2.1) -----
+              # All defaulted; every landed v0 event and every journal record
+              # without these keys decodes to these values — the grandfather
+              # clause. The I9 "contract only grows" rule is honored: new fields
+              # are optional-with-default, never required (removal / rename /
+              # optional→required is forbidden). The EmitBridge / Writer / Reader
+              # carry-through of these fields (`durable_record/1` AND
+              # `map_event/3`, plus the Reader decode) is **U11-I implementation
+              # work** — this enabler grows the struct only so the U11-R red
+              # suite compiles against the frozen shape.
+              scope: :session,
+              provenance: %{source: :primary, trust: :trusted},
+              actor: nil,
+              # The speculation branch this record belongs to (freeze §1.1).
+              # Optional-with-default "main"; a non-default branch is written to
+              # (and now read back from) the journal, "main" stays implicit on the
+              # wire (grandfather-safe, byte-identical for default records — I2).
+              branch_id: "main"
+
+    @typedoc "FI-5 provenance — grow-only; later keys (e.g. :model_family) are additive."
+    @type provenance :: %{
+            required(:source) => atom(),
+            required(:trust) => :trusted | :tainted
+          }
+
+    @typedoc "Who emitted the event; absent (`nil`) folds as `%{kind: :system}` by rule."
+    @type actor :: %{kind: :human | :agent | :system, id: String.t()} | nil
 
     @type t :: %__MODULE__{
             v: non_neg_integer(),
@@ -64,7 +92,11 @@ defmodule Raxol.Agent.Contract do
             family: :loop | :meta,
             type: atom(),
             tier: :ephemeral | :durable,
-            payload: map()
+            payload: map(),
+            scope: :session | :global | atom(),
+            provenance: provenance(),
+            actor: actor(),
+            branch_id: String.t()
           }
   end
 
@@ -87,7 +119,8 @@ defmodule Raxol.Agent.Contract do
   Jason can't take becomes `inspect/1` text.
   """
   @spec sanitize_payload(map()) :: map()
-  def sanitize_payload(payload) when is_map(payload), do: sanitize_value(payload)
+  def sanitize_payload(payload) when is_map(payload),
+    do: sanitize_value(payload)
 
   # Payloads may carry non-JSON-encodable terms (error reasons, tuples,
   # arbitrary tool results). Sanitize at the boundary rather than crash
@@ -138,74 +171,125 @@ defmodule Raxol.Agent.Contract do
     turn_id = "turn-#{System.unique_integer([:positive])}"
     counter = :counters.new(1, [])
 
-    emit_event(session_id, turn_id, counter, :turn_started, :durable, %{
-      prompt: prompt
-    })
+    started =
+      emit_event(session_id, turn_id, counter, :turn_started, :durable, %{
+        prompt: prompt
+      })
 
-    Enum.reduce(stream, {:error, :no_result}, fn stream_event, acc ->
-      handle_stream_event(session_id, turn_id, counter, stream_event, acc)
-    end)
+    # The accumulator carries the run result plus the durable journal emitted
+    # so far this turn, so the done site can consult DoneGate.gate/3 over the
+    # real journal (ephemeral `item_delta`s are never journaled).
+    {result, _journal} =
+      Enum.reduce(stream, {{:error, :no_result}, [started]}, fn stream_event, acc ->
+        handle_stream_event(session_id, turn_id, counter, stream_event, acc)
+      end)
+
+    result
   end
 
-  defp handle_stream_event(session_id, turn_id, counter, event, acc) do
+  defp handle_stream_event(session_id, turn_id, counter, event, {result, journal}) do
     case event do
       {:text_delta, chunk} ->
         emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
           chunk: chunk
         })
 
-        acc
+        {result, journal}
 
       {:tool_use, %{name: name} = tool_use} ->
-        emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
-          item_type: :tool_use,
-          name: name,
-          arguments: Map.get(tool_use, :arguments, %{}),
-          call_id: Map.get(tool_use, :id)
-        })
+        ev =
+          emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
+            item_type: :tool_use,
+            name: name,
+            arguments: Map.get(tool_use, :arguments, %{}),
+            call_id: Map.get(tool_use, :id)
+          })
 
-        acc
+        {result, journal ++ [ev]}
 
       {:tool_result, %{name: name} = tool_result} ->
-        emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
-          item_type: :tool_result,
-          name: name,
-          result: Map.get(tool_result, :result)
-        })
+        ev =
+          emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
+            item_type: :tool_result,
+            name: name,
+            result: Map.get(tool_result, :result)
+          })
 
-        acc
+        {result, journal ++ [ev]}
 
       {:turn_complete, info} ->
-        emit_event(session_id, turn_id, counter, :turn_completed, :durable, %{
-          iteration: Map.get(info, :iteration, 0),
-          usage: Map.get(info, :usage, %{}),
-          final: false
-        })
+        ev =
+          emit_event(session_id, turn_id, counter, :turn_completed, :durable, %{
+            iteration: Map.get(info, :iteration, 0),
+            usage: Map.get(info, :usage, %{}),
+            final: false
+          })
 
-        acc
+        {result, journal ++ [ev]}
 
       {:done, %{content: content} = info} ->
-        emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
-          item_type: :message,
-          content: content
-        })
+        message_ev =
+          emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
+            item_type: :message,
+            content: content
+          })
 
-        emit_event(session_id, turn_id, counter, :turn_completed, :durable, %{
-          usage: Map.get(info, :usage, %{}),
-          final: true
-        })
+        journal = journal ++ [message_ev]
+        refs = DoneGate.evidence_refs(journal, turn_id)
 
-        {:ok, %{content: content, usage: Map.get(info, :usage, %{})}}
+        final_ev =
+          emit_event(
+            session_id,
+            turn_id,
+            counter,
+            :turn_completed,
+            :durable,
+            gated_done_payload(journal, turn_id, refs, info)
+          )
+
+        {{:ok, %{content: content, usage: Map.get(info, :usage, %{})}}, journal ++ [final_ev]}
 
       {:error, reason} ->
         emit_event(session_id, turn_id, counter, :error, :durable, %{
           reason: reason
         })
 
-        {:error, reason}
+        {{:error, reason}, journal}
 
       _other ->
-        acc
+        {result, journal}
+    end
+  end
+
+  # Consult the evidence gate on the real done path in observe-only mode (see
+  # DoneGate's "Wiring status"). Completion stays fail-open: the turn always
+  # closes with `final: true`, carrying its accepted `refs` when the gate
+  # accepts, and emitting a telemetry signal for a non-accepting verdict so the
+  # boundary is measurable without blocking every done on a v0 journal.
+  defp gated_done_payload(journal, turn_id, refs, info) do
+    base = %{usage: Map.get(info, :usage, %{}), final: true}
+
+    case DoneGate.gate(journal, turn_id, refs) do
+      {:ok, _done} ->
+        Map.put(base, :refs, refs)
+
+      {:error, :evidence_required} ->
+        :telemetry.execute(
+          [:raxol, :agent, :done_gate, :ungated_done],
+          %{},
+          %{turn_id: turn_id}
+        )
+
+        base
+
+      {:error, reason} ->
+        :telemetry.execute(
+          [:raxol, :agent, :done_gate, :rejected_evidence],
+          %{},
+          %{turn_id: turn_id, reason: reason}
+        )
+
+        base
     end
   end
 
@@ -224,5 +308,6 @@ defmodule Raxol.Agent.Contract do
     }
 
     SessionStreamer.emit(session_id, event)
+    event
   end
 end
