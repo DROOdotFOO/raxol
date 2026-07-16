@@ -660,6 +660,46 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       do: {:ok, [%{type: :extract, op: :add, item: "rule", refs: [context.tip_offset]}]}
   end
 
+  defmodule SlowMultiCallProbe do
+    @moduledoc """
+    A many-call probe (id :c2_rules) whose `build/1` sleeps `per_call_ms/0` so a
+    kill issued PAST the Runner's `@kill_grace_ms` lands MID multi-call — the
+    post-grace-kill spend/reserve-leak regression (adversarial-review #1). High
+    `max_calls`, a long `timeout_ms`, and a wide budget mean neither the leash,
+    the wall-clock, nor the cap terminates it within the kill window; only the
+    kill does, so the "spend stops at the call boundary" law is what is exercised.
+    """
+    @behaviour Raxol.Agent.Probe
+
+    @per_call_ms 50
+    def per_call_ms, do: @per_call_ms
+
+    @impl true
+    def spec do
+      %{
+        id: :c2_rules,
+        mode: :cache_riding,
+        max_calls: 6,
+        timeout_ms: 60_000,
+        default_budget: 500,
+        max_parked: 4,
+        park_timeout_ms: 10_000
+      }
+    end
+
+    @impl true
+    def build(_context) do
+      Process.sleep(@per_call_ms)
+
+      {:ok,
+       %{suffix: [%{role: "user", content: "rules?"}], output: :text, max_output_tokens: 128}}
+    end
+
+    @impl true
+    def interpret(_response, context),
+      do: {:ok, [%{type: :extract, op: :add, item: "rule", refs: [context.tip_offset]}]}
+  end
+
   defmodule LoopDraftProbe do
     @moduledoc "Drafts a `family: :loop` event — the N-U12.1 violation (rejected whole)."
     @behaviour Raxol.Agent.Probe

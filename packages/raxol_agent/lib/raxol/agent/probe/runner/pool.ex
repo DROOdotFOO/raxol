@@ -111,8 +111,23 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
         {:reply, {:error, :not_found}, state}
 
       %{status: :running, killed: false, emit: emit, spec: spec} = run ->
-        # :killed charges @zero_charge (< the submit-time reserve): release it so
-        # the budget's reserved counter tracks the authoritative charge (F5, #5).
+        # TERMINATE the run Task (mirroring the :run_timeout leash): a killed run
+        # must make no further provider call and emit NOTHING after its :killed
+        # terminal (N-U12.7). A cooperative flag cannot stop an already-in-flight
+        # call's `:call`/`:settle` accounting from racing past the terminal at the
+        # bus; killing the process is the deterministic stop — spend halts at the
+        # call boundary and no post-terminal event can be emitted (the reserve seam
+        # `:reserve_next` additionally refuses any reserve the dead Task might have
+        # had in flight, #1).
+        case Map.get(run, :task_pid) do
+          pid when is_pid(pid) -> Process.exit(pid, :kill)
+          _ -> :ok
+        end
+
+        # :killed charges @zero_charge (< every reserve the run took): release the
+        # FULL held reserve (`run.reserved` accrues each per-call grant, #1) so the
+        # budget's reserved counter tracks the authoritative charge (F5, #5) and no
+        # mid-multi-call reserve is stranded.
         cancel_timeout(run)
         release_reserve(run)
         emit_terminal(emit, run_id, spec.id, :killed, @zero_charge, nil)
@@ -166,6 +181,32 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
       _killed_or_gone ->
         # A kill won the race: drop the result whole (no post-kill emission).
         {:reply, :ok, state}
+    end
+  end
+
+  # Per-call reserve seam for the run Task's multi-call loop (calls 2..max_calls;
+  # call 1 rides the submit-time reserve). Serialized in the coordinator with
+  # `kill/1` so the two never interleave:
+  #
+  #   * a RUNNING run reserves `amount` at both budget levels and the grant is
+  #     accrued onto `run.reserved` (cumulative) — so the eventual terminal
+  #     releases EVERY reserve the run took, not just the submit-time one (#1).
+  #   * a killed / timed-out / already-terminal / gone run is REFUSED, so the loop
+  #     exits without reserving OR calling the provider again — spend stops at the
+  #     call boundary after the in-flight call (#1, N-U12.7 in the budget domain).
+  def handle_call({:reserve_next, run_id, amount}, _from, state) do
+    case Map.get(state.runs, run_id) do
+      %{status: :running, killed: false, budget: budget, session_budget: session_budget} = run ->
+        case reserve_two_level(session_budget, budget, amount) do
+          :ok ->
+            {:reply, :ok, put_run(state, run_id, %{run | reserved: run.reserved + amount})}
+
+          {:over, reason} ->
+            {:reply, {:over, reason}, state}
+        end
+
+      _killed_or_gone ->
+        {:reply, {:over, :killed}, state}
     end
   end
 
@@ -263,9 +304,12 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
           emit: emit,
           spec: spec,
           context: context,
-          # Budget handles + the submit-time reserve, so an under-charge terminal
-          # (kill/timeout — both charge less than reserved) can RELEASE it and the
-          # authoritative charge stops diverging from the reserved counter (F5).
+          # Budget handles + the running total of reserve HELD. It starts at the
+          # submit-time reserve and accrues each per-call grant (`:reserve_next`);
+          # every terminal SETTLES it back to the budget, so the reserved counter
+          # returns to baseline (completed) or releases the full stranded amount
+          # (under-charge kill/timeout) — never diverging from the authoritative
+          # charge (F5, #1).
           budget: budget,
           session_budget: session_budget,
           reserved: @reserve_estimate
@@ -390,6 +434,7 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
           :continue ->
             args = %{
               run_id: run_id,
+              parent: parent,
               probe: probe,
               spec: spec,
               context: context,
@@ -424,8 +469,17 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     interpret_result(args.probe, args.context, last_resp, made)
   end
 
-  defp more_calls(%{run_id: run_id, emit: emit} = args, last_resp, made) do
-    case reserve_two_level(args.session_budget, args.budget, @reserve_estimate) do
+  defp more_calls(%{run_id: run_id, parent: parent, emit: emit} = args, last_resp, made) do
+    # Reserve through the coordinator, NOT the budget directly (as call 1 does at
+    # submit). The Pool serializes this reserve with any concurrent `kill/1`, so a
+    # LATE kill (past @kill_grace_ms, mid multi-call) STOPS spend at the call
+    # boundary (#1): a killed/terminal run is REFUSED here, the loop exits per the
+    # existing `{:over, _}` semantics, no further provider call is made, and
+    # `finalize` drops the outcome (the kill already won). A reserve granted in the
+    # kill race is TRACKED on the run (`reserved += amount`) so the kill RELEASES
+    # it — never dropped. `{:over, :over_budget}` (the real budget refusal) is
+    # unchanged: mid-run exhaustion.
+    case GenServer.call(parent, {:reserve_next, run_id, @reserve_estimate}) do
       {:over, _} ->
         {:exhausted, made}
 
@@ -482,6 +536,16 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     # a queued {:run_timeout} cannot double-emit (the status guard also protects,
     # this just avoids the stale message).
     cancel_timeout(run)
+
+    # SETTLE: release every reserve the run held (the per-call HOLD is settled at
+    # the terminal; the authoritative spend is the emitted `charge`). This runs on
+    # ALL of the Task's own terminals — :completed included, not just the
+    # under-charge ones — so the budget's outstanding-reservation counter returns
+    # to baseline and does NOT grow monotonically across a session (a completed
+    # 2-call run reserves 200 and must release 200, not 0). The kill/timeout/crash
+    # paths settle in their own handlers.
+    release_reserve(run)
+    run = %{run | reserved: 0}
     taint = context_taint(run)
     read_set = context_read_set(run)
 
@@ -666,11 +730,13 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     end
   end
 
-  # Release the submit-time reserve held by a run whose terminal charges less
-  # than it reserved (kill / timeout — both @zero_charge). Both budget levels
-  # were reserved together at submit (reserve_two_level), so both are released
-  # together. A run that has no held reserve (parked = reserve was refused, or an
-  # already-released terminal) carries `reserved: 0` and is a no-op.
+  # Settle the FULL reserve held by a run at its terminal — the cumulative
+  # `run.reserved` (submit-time reserve + every per-call `:reserve_next` grant),
+  # not a fixed 100. Both budget levels are reserved together (reserve_two_level),
+  # so both are released together. Called on every terminal (completed settles its
+  # holds too; kill/timeout release the stranded amount). A run with no held
+  # reserve (parked = reserve was refused, or an already-settled terminal) carries
+  # `reserved: 0` and is a no-op.
   defp release_reserve(%{reserved: amount} = run) when amount > 0 do
     release(Map.get(run, :budget), amount)
     release(Map.get(run, :session_budget), amount)

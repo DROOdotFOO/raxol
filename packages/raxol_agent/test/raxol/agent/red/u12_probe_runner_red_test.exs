@@ -73,6 +73,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     LoopDraftProbe,
     MultiCallProbe,
     ShortParkProbe,
+    SlowMultiCallProbe,
     TaintedTrustProbe,
     UnregisteredSourceProbe
   }
@@ -378,6 +379,85 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
              "B was refused a reserve that kill should have released: #{inspect(events)}"
 
       assert L.lifecycle_complete(events, [b]) == :ok
+    end
+  end
+
+  describe "reserve/settle reconciliation (adversarial-review HIGH / #1)" do
+    test "a completed multi-call run settles every reserve — reserved returns to baseline, no session growth" do
+      # A bounded budget shared across several sequential COMPLETED multi-call
+      # runs. MultiCallProbe makes two provider calls (two 100-token reserves). If
+      # :completed released nothing (the leak), `reserved` would climb 200 per run
+      # and eventually saturate; it must return to 0 after every run.
+      rig = rig(cap: 1_000)
+
+      for _round <- 1..3 do
+        assert {:ok, run_id} = Runner.submit("u12-red", MultiCallProbe, submit_opts(rig, ctx()))
+        events = await_terminals(rig.bus, [run_id])
+
+        assert Enum.any?(
+                 events,
+                 &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :completed)
+               ),
+               "expected the multi-call run to complete, got #{inspect(events)}"
+
+        assert L.reserved(rig.budget) == 0,
+               "a completed multi-call run stranded reserve: reserved=#{L.reserved(rig.budget)} " <>
+                 "— the reserve/settle reconciliation leaked (monotonic budget growth)"
+      end
+    end
+
+    test "a post-grace kill mid multi-call stops spend at the call boundary — no more calls, no leaked reserve, one :killed" do
+      # SlowMultiCallProbe sleeps per call, so a kill issued PAST @kill_grace_ms
+      # (25ms) lands mid multi-call. The budget is wide (cap fits every call) and
+      # the leash/wall-clock are far off, so ONLY the kill can stop the run.
+      rig = rig(cap: 2_000)
+      probe = SlowMultiCallProbe
+      max_calls = probe.spec().max_calls
+
+      assert {:ok, run_id} = Runner.submit("u12-red", probe, submit_opts(rig, ctx()))
+
+      # Past the 25ms grace + the initial checkpoint, so the run is in its
+      # multi-call loop with call 1 in flight — NOT killed at the checkpoint.
+      Process.sleep(40)
+      assert :ok = Runner.kill(run_id)
+
+      _ = await_terminals(rig.bus, [run_id])
+
+      # Let the in-flight call finish and the loop hit its next reserve boundary
+      # (refused → exit).
+      Process.sleep(probe.per_call_ms() + 80)
+      calls_after_kill = L.provider_calls(rig.provider)
+
+      # A full run's worth of time: had the kill NOT stopped spend, the loop would
+      # have made all max_calls provider calls by now.
+      Process.sleep(max_calls * probe.per_call_ms() + 100)
+
+      # (a) spend stopped at the call boundary: no provider call after the kill
+      # settled, and the run never ran to the Runner-owned leash.
+      assert L.provider_calls(rig.provider) == calls_after_kill,
+             "provider called again after :killed — spend did not stop at the call boundary"
+
+      assert calls_after_kill < max_calls,
+             "the killed run ran to the leash (#{calls_after_kill}/#{max_calls}) — kill did not stop spend"
+
+      # (b) no leaked reserve: every reserve the run took is released, budget
+      # headroom fully restored.
+      assert L.reserved(rig.budget) == 0,
+             "a reserve leaked past the kill: reserved=#{L.reserved(rig.budget)}"
+
+      # (c) exactly one :killed terminal, atomic (no drafted output survived).
+      events = L.events(rig.bus)
+
+      terminals =
+        for %{kind: :probe_run, run_id: ^run_id, status: s} <- events,
+            s in L.terminal_statuses(),
+            do: s
+
+      assert terminals == [:killed],
+             "a mid-multi-call kill must yield exactly one :killed terminal, got #{inspect(terminals)}"
+
+      assert L.lifecycle_complete(events, [run_id]) == :ok
+      assert L.output_atomic(events) == :ok
     end
   end
 
