@@ -367,6 +367,28 @@ killing one never touches the primary loop; budget exhaustion parks probes.
 
 ### Wave 4 — the probes (all need U12; parallel)
 
+**U23 — eval harness** · size M · needs U4+U11 · **gates all of Wave 4**
+(ratified 2026-07-16; `harness-eval-first-analysis.md` §4.1). Journal-replay
+model-behavior eval: measures probe **signal quality** (C1 score↔benefit
+correlation, compaction fidelity across a model swap) against a **null baseline**.
+Infra is ~80% already built and merely unnamed — the journal replay closure
+(U4 / P-JS5) plus the FI-2 log-head version tags
+(`{harness_version, model, config_hash}`) are exactly the substrate a replay-eval
+needs. **This unit gates Wave 4:** no probe (U13–U18) graduates without it.
+*(Numbering note: V's ruling proposed "U22" for this unit, but U22 is the
+already-landed asciicast fix (PR #544) — the eval unit is **U23** to avoid
+renumbering an existing unit.)*
+*Accepts:* a probe run over a replayed journal produces a score the harness can
+compare to the null baseline; a probe that does not beat the null baseline is
+rejected by the acceptance bar; the C1 A/B (U13) runs as an exit criterion.
+
+**Probe-unit requirement (ratified 2026-07-16):** every probe unit (U13–U18)
+carries a one-line **sunset** annotation in its spec ("delete when
+provider-native X matches on eval") — frozen as an OPTIONAL `spec()` field in
+`harness-freeze-contracts.md` §3, REQUIRED for Wave-4 graduation. Grandfathered
+C-probes gain their sunset line at next touch. Probe **acceptance** requires
+beating the null baseline on U23's eval set.
+
 **U13 — C1 reasoning gate** · size M
 Pre-query probe scores reasoning-benefit 0–100 (structured output, regex
 fallback); `<30` skip / `30–70` seeded dice / `70+` reason. Seed journaled
@@ -381,6 +403,12 @@ journal projection. At 75% context: per-class "what's missing" pass + fresh
 session seeded from projections instead of prose summary.
 *Accepts:* a long multi-tool session crosses the 75% swap and the successor
 session honors a constraint stated early in the original (the OpenClaw test).
+*Exit criterion (control arm, ratified 2026-07-16):* C2 is measured against
+Anthropic-native compaction (`compact-2026-01-12` + memory tool) **over the same
+corpus** on the U23 eval harness. If native compaction wins, **C2 demotes to an
+adapter** over the provider primitive rather than a from-scratch crown jewel.
+This closes the "C2 never argued against provider-native compaction" echo — see
+`harness-eval-first-analysis.md` §4.3.
 
 **U14b — Hard rules → enforcement (AD-7)** · size M · needs U14
 Extracted `when tool=X then deny/ask` rules feed `Authorization.Engine` /
@@ -541,6 +569,12 @@ Unit-spec deltas from round 2:
   from the UI lane must never need lockstep updates.
 - **NC guards still binding:** no graph/DSL (NC-1), no swarm headline (NC-2),
   no ACP server (NC-3), no Temporal-grade engine (NC-4).
+- **Packaging ratification (pre-CLI-surface, ratified 2026-07-16):** decide
+  **burrito vs `mix release`** (self-contained binary vs BEAM-runtime dep) and
+  write a **decision doc** *before* the CLI surface ships. The cohort's Codex
+  lesson is a zero-dependency binary; we carry a BEAM runtime dep and have no
+  packaging answer yet (blind spot #2, `harness-eval-first-analysis.md` §4.4).
+  Not a numbered unit — a gate on the S1/S2 CLI-surface lane.
 
 ### Red-first fan-out (2026-07-16)
 
