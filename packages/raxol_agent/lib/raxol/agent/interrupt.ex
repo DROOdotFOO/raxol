@@ -25,6 +25,14 @@ defmodule Raxol.Agent.Interrupt do
     * `:interrupt_killed`   — the hard **process-group** SIGKILL landed and OS
       death was confirmed **out-of-band** (`ps`), never by trusting
       `:exit_status`. This is the **kill-complete** fence.
+    * `:interrupt_kill_failed` — the OS kill signal did NOT land: a `kill`
+      shell-out reported a non-zero status, or the kill path threw. It is
+      emitted **in place of** `:interrupt_killed` so the journal never claims a
+      kill that did not happen — the kill-complete fence is withheld,
+      `killed?`/`confirmed_dead?` stay `false`, and post-kill quiescence is never
+      *falsely* claimed. The cancellation intent is still recorded by the
+      trailing `:turn_canceled` (the turn is over either way; what changed is the
+      truthfulness of the kill claim).
     * `:turn_canceled`      — the terminal turn bracket carrying `%{reason}`
       (new loop vocabulary; already frozen into the journal's CONVERSATIONAL
       tip set by `harness-freeze-contracts.md` §1.1).
@@ -66,8 +74,16 @@ defmodule Raxol.Agent.Interrupt do
   @signal :interrupt_signaled
   @wait :interrupt_waited
   @kill :interrupt_killed
+  @kill_failed :interrupt_kill_failed
   @terminal :turn_canceled
   @default_grace_ms 300
+
+  # Executable for the mutating `kill` shell-outs. Overridable via
+  # `config :raxol_agent, :interrupt_kill_sh` so a test can force an OS-level
+  # signal failure (a permission-denied kill) without an unkillable live
+  # process. Only the `kill` calls honor this seam — every `ps`/pgid read uses
+  # the real binary, so liveness and pgid derivation stay truthful.
+  @kill_sh "/bin/sh"
 
   @typedoc "The three staged-kill event types, in escalation order."
   @type stage :: :interrupt_signaled | :interrupt_waited | :interrupt_killed
@@ -111,7 +127,7 @@ defmodule Raxol.Agent.Interrupt do
   """
   @type outcome :: %{
           turn_id: String.t(),
-          stages: [stage()],
+          stages: [stage() | :interrupt_kill_failed],
           reason: reason(),
           os_pid: non_neg_integer() | nil,
           killed?: boolean(),
@@ -154,11 +170,17 @@ defmodule Raxol.Agent.Interrupt do
       payload's `:actor` field when present (U11's optional actor attribution).
 
   Never raises on an OS-level failure mid-kill: the kill path is guarded so a
-  failed signal/confirm still lands the kill fence and the terminal
-  `:turn_canceled`, keeping post-kill quiescence intact (only `confirmed_dead?`
-  goes `false`). The BEAM process that owns the Port is never used as the death
-  signal — a hostile tool survives BEAM teardown, so only the OS group-kill,
-  OS-confirmed, counts.
+  failed signal (`kill` returned non-zero) or a thrown kill still terminates the
+  turn with `:turn_canceled`, keeping post-kill quiescence intact. But it does
+  NOT forge the kill-complete fence: a failed/thrown kill emits
+  `:interrupt_kill_failed` (not `:interrupt_killed`) with `killed?` and
+  `confirmed_dead?` both `false`, so the journal never claims a kill that did not
+  happen. The BEAM process that owns the Port is never used as the death signal
+  — a hostile tool survives BEAM teardown, so only the OS group-kill,
+  OS-confirmed, counts, and OS confirmation is trusted **only when the kill
+  signal itself succeeded** (a failed signal cannot claim a recycled pid's
+  absence as its own success; the residual ABA window is documented on
+  `await_dead/2`).
   """
   @spec interrupt(tool_ref(), sink(), keyword()) ::
           {:ok, outcome()} | {:error, term()}
@@ -189,18 +211,19 @@ defmodule Raxol.Agent.Interrupt do
       :escalate ->
         emit(sink, @wait, %{grace_ms: grace_ms}, opts)
 
-        {killed?, confirmed?, os_pid} = hard_kill(ref)
+        {disposition, confirmed?, os_pid} = hard_kill(ref)
+        kill_stage = kill_stage_for(disposition)
 
-        emit(sink, @kill, %{os_pid: os_pid}, opts)
+        emit(sink, kill_stage, %{os_pid: os_pid}, opts)
         emit(sink, @terminal, %{reason: reason}, opts)
 
         {:ok,
          %{
            turn_id: turn_id,
-           stages: [@signal, @wait, @kill],
+           stages: [@signal, @wait, kill_stage],
            reason: reason,
            os_pid: os_pid,
-           killed?: killed?,
+           killed?: disposition == :killed,
            confirmed_dead?: confirmed?
          }}
     end
@@ -209,6 +232,13 @@ defmodule Raxol.Agent.Interrupt do
   def interrupt(tool_ref, _sink, _opts) do
     {:error, {:invalid_tool_ref, tool_ref}}
   end
+
+  # The kill-complete fence reflects the truth of the hard kill: a genuine group
+  # SIGKILL (or the tool-less no-op bookkeeping fence) lands `:interrupt_killed`;
+  # a failed/thrown signal lands the distinct `:interrupt_kill_failed` so the
+  # journal never claims a kill that did not happen.
+  defp kill_stage_for(:failed), do: @kill_failed
+  defp kill_stage_for(_), do: @kill
 
   @doc "The stage-1 event type — cooperative cancel (group SIGTERM)."
   @spec signal_stage() :: :interrupt_signaled
@@ -221,6 +251,15 @@ defmodule Raxol.Agent.Interrupt do
   @doc "The stage-3 event type — group SIGKILL landed, OS death confirmed (kill-complete)."
   @spec kill_stage() :: :interrupt_killed
   def kill_stage, do: @kill
+
+  @doc """
+  The kill-failure fence — emitted in place of `kill_stage/0` when the OS kill
+  signal did not land (a `kill` returned non-zero, or the kill path threw). Not
+  part of the frozen success `sequence/0`; it is the honest alternative to a
+  forged `:interrupt_killed`.
+  """
+  @spec kill_failed_stage() :: :interrupt_kill_failed
+  def kill_failed_stage, do: @kill_failed
 
   @doc "The three staged-kill event types, in escalation order."
   @spec stages() :: [stage()]
@@ -282,21 +321,31 @@ defmodule Raxol.Agent.Interrupt do
   defp cooperative_exit(_ref, _grace_ms), do: :escalate
 
   # Stage 3 — the hard kill. A real tool that survived the grace window gets the
-  # OS process-group SIGKILL, then death is confirmed out-of-band (`ps`), never
-  # via `:exit_status`. Guarded so an OS-level failure mid-kill cannot raise: the
-  # caller still journals the kill fence + turn_canceled (quiescence intact),
-  # only `confirmed_dead?` reflects the miss. A tool-less interrupt kills nothing
-  # (the kill stage is a no-op fence for the frozen 4-stage sequence).
+  # OS process-group SIGKILL. Returns `{disposition, confirmed?, os_pid}`:
+  #
+  #   * `:killed`  — the kill signal landed (`kill` exited 0); death is then
+  #     confirmed out-of-band (`ps`), never via `:exit_status`.
+  #   * `:failed`  — the kill signal did NOT land (`kill` non-zero) or the kill
+  #     path threw. The kill claim is a lie waiting to happen, so it is refused:
+  #     the caller emits `:interrupt_kill_failed` instead of `:interrupt_killed`.
+  #   * `:noop`    — a tool-less interrupt kills nothing (the kill stage is a
+  #     no-op bookkeeping fence for the frozen 4-stage sequence).
+  #
+  # `confirmed?` is `false` unless the signal itself succeeded: a failed signal
+  # must never claim a (possibly recycled) pid's absence as its own kill (the
+  # ABA guard, finding U5-#5). Guarded so an OS-level failure mid-kill cannot
+  # raise; a throw is treated as `:failed` (kill status unknown ⇒ not killed).
   defp hard_kill(%{os_pid: os_pid}) when is_integer(os_pid) do
-    _ = group_signal(os_pid, "-9")
-    {true, await_dead(os_pid), os_pid}
+    {signal_ok?, _mode} = group_signal(os_pid, "-9")
+    disposition = if signal_ok?, do: :killed, else: :failed
+    {disposition, signal_ok? and await_dead(os_pid), os_pid}
   rescue
-    _ -> {true, false, os_pid}
+    _ -> {:failed, false, os_pid}
   catch
-    _, _ -> {true, false, os_pid}
+    _, _ -> {:failed, false, os_pid}
   end
 
-  defp hard_kill(_ref), do: {false, false, nil}
+  defp hard_kill(_ref), do: {:noop, false, nil}
 
   # --- OS process-group primitives -------------------------------------------
   #
@@ -310,30 +359,52 @@ defmodule Raxol.Agent.Interrupt do
   # guarantee: pgid == os_pid) and the group is not this VM's own — otherwise
   # falls back to signaling the parent + enumerated children individually, so a
   # mis-derived pgid can never SIGKILL an unrelated group.
+  #
+  # Returns `{ok?, mode}` where `ok?` is whether the signal actually landed —
+  # the `kill` exit status, NOT discarded (finding U5-#1). The group path is
+  # `ok?` iff its single `kill` exited 0; the fallback is `ok?` iff the parent
+  # kill AND every enumerated child kill exited 0. `{false, :noop}` when there
+  # is nothing signalable (a non-positive/invalid pid).
   defp group_signal(os_pid, signal)
        when is_integer(os_pid) and os_pid > 1 and is_binary(signal) do
     if group_leader_safe?(os_pid) do
-      _ = System.cmd("/bin/sh", ["-c", "kill #{signal} -#{os_pid} 2>/dev/null"])
-      :group
+      {_out, status} =
+        System.cmd(kill_sh(), ["-c", "kill #{signal} -#{os_pid} 2>/dev/null"])
+
+      {status == 0, :group}
     else
       children = children_of(os_pid)
-      _ = System.cmd("/bin/sh", ["-c", "kill #{signal} #{os_pid} 2>/dev/null"])
-      Enum.each(children, &individual_signal(&1, signal))
-      {:fallback, children}
+
+      {_out, status} =
+        System.cmd(kill_sh(), ["-c", "kill #{signal} #{os_pid} 2>/dev/null"])
+
+      child_ok? = children |> Enum.map(&individual_signal(&1, signal)) |> Enum.all?()
+      {status == 0 and child_ok?, {:fallback, children}}
     end
   end
 
-  defp group_signal(_os_pid, _signal), do: :noop
+  defp group_signal(_os_pid, _signal), do: {false, :noop}
 
+  # Signal one pid; returns whether the `kill` exited 0 (status not discarded).
   defp individual_signal(pid, signal) when is_integer(pid) and pid > 1 do
-    _ = System.cmd("/bin/sh", ["-c", "kill #{signal} #{pid} 2>/dev/null"])
-    :ok
+    {_out, status} = System.cmd(kill_sh(), ["-c", "kill #{signal} #{pid} 2>/dev/null"])
+    status == 0
   end
 
-  defp individual_signal(_pid, _signal), do: :ok
+  defp individual_signal(_pid, _signal), do: false
+
+  defp kill_sh, do: Application.get_env(:raxol_agent, :interrupt_kill_sh, @kill_sh)
 
   # Poll `ps` until `os_pid` is gone or the budget elapses. The OS death oracle
   # — never the Port's `:exit_status`.
+  #
+  # Residual ABA window (finding U5-#5): this observes the *pid*, not identity,
+  # so if a pid were reaped and recycled between our SIGKILL and the poll, `ps`
+  # would report a different process by the same number as "gone". That window
+  # is OS-inherent and not fully closable here; `hard_kill/1` bounds the damage
+  # by trusting this confirmation ONLY when the kill signal itself succeeded, so
+  # a *failed* kill can never launder a recycled pid's absence into a confirmed
+  # death.
   defp await_dead(os_pid, budget_ms \\ 500)
 
   defp await_dead(os_pid, budget_ms) when budget_ms <= 0, do: dead?(os_pid)

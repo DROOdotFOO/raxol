@@ -152,6 +152,56 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
     end
   end
 
+  describe "P6 — kill-claim integrity (the OS kill signal fails)" do
+    @tag :unix_only
+    test "a kill whose signal fails journals :interrupt_kill_failed, never a killed success", %{
+      base: base
+    } do
+      # Simulate an OS-level signal failure (e.g. a permission-denied kill) by
+      # pointing the `kill` shell-out at `false`: every kill exits non-zero, the
+      # rogue tool survives, and the staged kill must report the TRUTH — an
+      # :interrupt_kill_failed fence (not :interrupt_killed), killed? false,
+      # confirmed_dead? false. The pre-fix code discarded the kill exit status
+      # and emitted :interrupt_killed unconditionally; this arm pins that closed.
+      false_bin = System.find_executable("false") || "/usr/bin/false"
+      prev = Application.get_env(:raxol_agent, :interrupt_kill_sh)
+      Application.put_env(:raxol_agent, :interrupt_kill_sh, false_bin)
+
+      on_exit(fn ->
+        case prev do
+          nil -> Application.delete_env(:raxol_agent, :interrupt_kill_sh)
+          v -> Application.put_env(:raxol_agent, :interrupt_kill_sh, v)
+        end
+      end)
+
+      lab = KillLab.spawn_rogue(sleep: 30)
+      # Reap with the real shell (KillLab.reap does not honor the seam), so the
+      # simulated-failure tool is not actually leaked.
+      on_exit(fn -> KillLab.reap(lab) end)
+
+      {turn_id, dir, sink} = open_turn(base)
+      seed(sink, :turn_started, %{prompt: "run the rogue tool"})
+
+      {:ok, outcome} =
+        Interrupt.interrupt(
+          %{turn_id: turn_id, port: lab.port, os_pid: lab.os_pid, grace_ms: 30},
+          sink,
+          []
+        )
+
+      refute outcome.killed?, "a failed OS kill must not report killed? = true"
+
+      refute outcome.confirmed_dead?,
+             "a failed OS kill must not claim OS-confirmed death (finding U5-#5 ABA guard)"
+
+      Contours.assert_kill_failed!(Contours.records(dir), turn_id)
+
+      # Ground truth: the tool the (simulated-failed) kill never touched is alive.
+      assert KillLab.alive?(lab.os_pid),
+             "the false-kill test process should still be alive — the kill was a no-op"
+    end
+  end
+
   # --- helpers ---------------------------------------------------------------
 
   # Open a fresh session journal + a durable sink for one turn.

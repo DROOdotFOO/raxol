@@ -207,6 +207,34 @@ defmodule Raxol.Agent.Interrupt.Contours do
     :ok
   end
 
+  @doc """
+  **Kill-failure arm** (the kill-claim-integrity contour). When the OS kill
+  signal did NOT land, the trace must not forge a completed kill: the distinct
+  `:interrupt_kill_failed` fence is journaled, `:interrupt_killed` is **not**,
+  and the terminal `:turn_canceled` still lands (cancellation intent recorded).
+  A trace that emits `:interrupt_killed` after a failed signal — the pre-fix
+  behaviour, which discarded the `kill` exit status — raises here.
+  """
+  @spec assert_kill_failed!([map()], String.t()) :: :ok
+  def assert_kill_failed!(records, turn_id) do
+    types = for r <- records, r["turn_id"] == turn_id, do: r["type"]
+
+    assert "interrupt_kill_failed" in types,
+           "turn #{turn_id} did not journal the :interrupt_kill_failed fence after a " <>
+             "failed OS kill (types: #{inspect(types)})"
+
+    refute "interrupt_killed" in types,
+           "turn #{turn_id} journaled :interrupt_killed although the OS kill signal " <>
+             "failed — a kill that did not happen was claimed complete (types: " <>
+             "#{inspect(types)})"
+
+    assert "turn_canceled" in types,
+           "turn #{turn_id} did not still record :turn_canceled after a failed kill " <>
+             "(the cancellation intent must survive; types: #{inspect(types)})"
+
+    :ok
+  end
+
   @doc "Build a `FileStore`-backed durable sink for `turn_id` (the U5-R emit seam)."
   @spec journal_sink(term(), String.t(), term()) :: Interrupt.sink()
   def journal_sink(journal, session_id, turn_id) do
