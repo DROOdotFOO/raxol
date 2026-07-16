@@ -327,10 +327,16 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   def evaluate(state, call) do
     cid = call.call_id
     tool = call.tool
+    # The `:once` grant is keyed by the FULL request identity (tool + call_id),
+    # NOT the call_id alone (AD-14 "unlocks exactly that request"): a grant for
+    # (toolA, c1) must NOT admit (toolB, c1). Because the key includes the tool,
+    # a DIFFERENT request never matches this branch and so falls through to the
+    # taint fold below — a grant can never bypass a taint fold on another request.
+    once_key = request_ref(call)
 
     cond do
-      MapSet.member?(state.once, cid) ->
-        {:proceed, %{state | once: MapSet.delete(state.once, cid)}}
+      MapSet.member?(state.once, once_key) ->
+        {:proceed, %{state | once: MapSet.delete(state.once, once_key)}}
 
       MapSet.member?(state.denied, cid) ->
         {:reject, :denied, state}
@@ -462,12 +468,14 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
 
   # Fold one decision into the enforcement projection at its scope. A grant also
   # clears any prior deny for the call_id (a fresh approval cycle supersedes it);
-  # a deny records the call_id durably and drops any stale :once grant.
-  defp grant(state, :approved, :once, cid, _tool),
+  # a deny records the call_id durably and drops any stale :once grant. The
+  # `:once` grant is keyed by the FULL request identity (tool + call_id via
+  # `ref_encode`), so it unlocks exactly that request and no other (AD-14).
+  defp grant(state, :approved, :once, cid, tool),
     do: %{
       state
       | denied: MapSet.delete(state.denied, cid),
-        once: MapSet.put(state.once, cid)
+        once: MapSet.put(state.once, ref_encode(tool_key(tool), cid))
     }
 
   defp grant(state, :approved, scope, cid, tool) when scope in [:session, :root],
@@ -477,10 +485,10 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
         session: MapSet.put(state.session, tool_key(tool))
     }
 
-  defp grant(state, :denied, _scope, cid, _tool),
+  defp grant(state, :denied, _scope, cid, tool),
     do: %{
       state
       | denied: MapSet.put(state.denied, cid),
-        once: MapSet.delete(state.once, cid)
+        once: MapSet.delete(state.once, ref_encode(tool_key(tool), cid))
     }
 end

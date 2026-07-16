@@ -197,10 +197,13 @@ defmodule Raxol.Agent.Red.U8Gates do
   def evaluate_with(state, call, taint_fun) do
     cid = call.call_id
     tool = call.tool
+    # `:once` keyed by FULL request identity (tool + call_id) — a grant unlocks
+    # exactly that request; a DIFFERENT request falls through to the taint fold.
+    once_key = request_ref(call)
 
     cond do
-      MapSet.member?(state.once, cid) ->
-        {:proceed, %{state | once: MapSet.delete(state.once, cid)}}
+      MapSet.member?(state.once, once_key) ->
+        {:proceed, %{state | once: MapSet.delete(state.once, once_key)}}
 
       MapSet.member?(state.denied, cid) ->
         {:reject, :denied, state}
@@ -239,11 +242,11 @@ defmodule Raxol.Agent.Red.U8Gates do
   end
 
   @doc "Fold one decision into the enforcement projection (grant/deny at scope)."
-  def grant(state, :approved, :once, cid, _tool),
+  def grant(state, :approved, :once, cid, tool),
     do: %{
       state
       | denied: MapSet.delete(state.denied, cid),
-        once: MapSet.put(state.once, cid)
+        once: MapSet.put(state.once, ref_encode(tool_key(tool), cid))
     }
 
   def grant(state, :approved, scope, cid, tool) when scope in [:session, :root],
@@ -253,11 +256,11 @@ defmodule Raxol.Agent.Red.U8Gates do
         session: MapSet.put(state.session, tool_key(tool))
     }
 
-  def grant(state, :denied, _scope, cid, _tool),
+  def grant(state, :denied, _scope, cid, tool),
     do: %{
       state
       | denied: MapSet.put(state.denied, cid),
-        once: MapSet.delete(state.once, cid)
+        once: MapSet.delete(state.once, ref_encode(tool_key(tool), cid))
     }
 
   # --- call builders ----------------------------------------------------------
@@ -828,6 +831,50 @@ defmodule Raxol.Agent.Red.U8Gates do
             {:proceed, _st} -> :ok
             other -> {:violation, {:clean_lineage_escalated, other}}
           end
+        end
+      end)
+    end
+
+    # C12 (Fix 2 regression) — a `:once` grant unlocks EXACTLY that request
+    # (tool + call_id), never a different tool sharing the call_id, and can never
+    # let a DIFFERENT request bypass the taint fold (AD-14). Two legs:
+    #   1. a once-grant for (tool_a, cid) does NOT admit (tool_b, cid) — it
+    #      escalates (the pre-fix call_id-only key admitted it);
+    #   2. a TAINTED (tool_b, cid) still escalates — the once branch (keyed by the
+    #      full identity) doesn't match, so the taint fold runs (the pre-fix
+    #      call_id-only key short-circuited the fold and auto-proceeded).
+    def once_grant_is_request_scoped(gate) do
+      safe(fn ->
+        cid = "shared-once-cid"
+        call_a = U8Gates.escalating_call(%{tool: :once_tool_a, call_id: cid})
+
+        with {:escalate, req, s1} <- gate.evaluate(gate.new(), call_a),
+             ref = req.payload.request_ref,
+             {:ok, s2} <-
+               gate.apply_decision(s1, decision(ref, :approved, :once), human()) do
+          other_tool =
+            U8Gates.escalating_call(%{tool: :once_tool_b, call_id: cid})
+
+          tainted_other =
+            U8Gates.escalating_call(%{tool: :once_tool_b, call_id: cid})
+            |> Map.merge(U8Gates.tainted_arg_lineage())
+
+          cond do
+            authorize_tag(gate, s2, other_tool) != :escalated ->
+              {:violation,
+               {:once_grant_admitted_other_tool,
+                authorize_tag(gate, s2, other_tool)}}
+
+            not match?({:escalate, _, _}, gate.evaluate(s2, tainted_other)) ->
+              {:violation,
+               {:tainted_request_bypassed_fold,
+                gate.evaluate(s2, tainted_other)}}
+
+            true ->
+              :ok
+          end
+        else
+          bad -> {:violation, {:once_scope_flow_broke, bad}}
         end
       end)
     end

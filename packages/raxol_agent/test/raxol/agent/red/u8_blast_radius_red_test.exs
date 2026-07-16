@@ -74,6 +74,10 @@ defmodule Raxol.Agent.Red.U8BlastRadiusRedTest do
     test "C11 — request_ref is injective + string-canonical: a STRING tool and a ':'-bearing tool/call_id round-trip and rebuild == live (Fix 1)" do
       assert :ok = Contours.ref_roundtrips_string_and_colon(BlastRadiusGate)
     end
+
+    test "C12 — a :once grant unlocks exactly that request: (tool_a, cid) does not admit (tool_b, cid), and a tainted (tool_b, cid) still escalates (Fix 2)" do
+      assert :ok = Contours.once_grant_is_request_scoped(BlastRadiusGate)
+    end
   end
 
   describe "U8-R predicate contours (@action_surface — F2 Raxol.Action draft not landed)" do
@@ -163,6 +167,10 @@ defmodule Raxol.Agent.Red.U8BlastRadiusControlsTest do
 
     test "C11 request_ref injective + string-canonical (string tool, ':'-bearing tool/call_id round-trip)" do
       assert :ok = Contours.ref_roundtrips_string_and_colon(ReferenceGate)
+    end
+
+    test "C12 once grant is request-scoped (tool+call_id), never admits another tool, never bypasses the taint fold" do
+      assert :ok = Contours.once_grant_is_request_scoped(ReferenceGate)
     end
   end
 
