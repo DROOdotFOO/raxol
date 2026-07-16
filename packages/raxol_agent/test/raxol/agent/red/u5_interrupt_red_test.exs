@@ -5,12 +5,13 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
   the frozen contract in `docs/proposals/in-flight/harness-roadmap.md` (U5),
   `harness-research/spike-u5-kill.md`, and `harness-freeze-contracts.md`.
 
-  Every test here drives the real `Raxol.Agent.Interrupt` — which is an enabler
-  skeleton whose `interrupt/3` raises `:not_implemented`. So the whole suite is
-  **red by design**: `@moduletag :harness_red`, excluded from CI (see
-  `test_helper.exs`), until U5-I lands and flips it green by implementing the
-  behaviour. Nothing here is fitted to an implementation; the implementation is
-  built to satisfy these.
+  Every test here drives the real `Raxol.Agent.Interrupt`. The suite was authored
+  **failing-first** (`@moduletag :harness_red`, excluded from CI) against the
+  frozen contract while `interrupt/3` was still an unimplemented skeleton;
+  nothing here is fitted to an implementation, the implementation is built to
+  satisfy these. U5-I (AD-12, staged supervised kill) has since landed and
+  implemented the behaviour, so the suite now runs GREEN in CI (the
+  `:harness_red` tag is removed).
 
   Positive contours pinned:
 
@@ -30,7 +31,6 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
   """
   use ExUnit.Case, async: false
 
-  @moduletag :harness_red
   @moduletag :capture_log
 
   alias Raxol.Agent.Interrupt
@@ -46,7 +46,9 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
   end
 
   describe "P1/P2 — staged event trace (pure journal, no tool Port)" do
-    test "signal → wait → kill → turn_canceled are journaled in order under one turn_id", %{base: base} do
+    test "signal → wait → kill → turn_canceled are journaled in order under one turn_id", %{
+      base: base
+    } do
       {turn_id, dir, sink} = open_turn(base)
 
       # A turn is live and streaming when the interrupt lands.
@@ -71,7 +73,9 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
   end
 
   describe "P4 — post-kill quiescence (the no-zombie-emission law)" do
-    test "no item_delta/item_completed/tool_result for the turn after kill-complete", %{base: base} do
+    test "no item_delta/item_completed/tool_result for the turn after kill-complete", %{
+      base: base
+    } do
       {turn_id, dir, sink} = open_turn(base)
 
       # Pre-kill output exists (non-vacuous): the tool produced a result before
@@ -123,7 +127,9 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
     end
 
     @tag :unix_only
-    test "the OS process AND its grandchild are gone — zero orphans (spike ground truth)", %{base: base} do
+    test "the OS process AND its grandchild are gone — zero orphans (spike ground truth)", %{
+      base: base
+    } do
       lab = KillLab.spawn_rogue(sleep: 30)
       on_exit(fn -> KillLab.reap(lab) end)
 
