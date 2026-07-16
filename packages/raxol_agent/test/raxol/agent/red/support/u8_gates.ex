@@ -133,8 +133,10 @@ defmodule Raxol.Agent.Red.U8Gates do
 
   @doc """
   The reference taint FOLD (HIGH-1): tainted iff any record reachable from
-  `arg_refs` through `lineage` refs is stamped `:tainted`; an unresolvable ref
-  folds as tainted (fail-closed). Cycle-safe.
+  `arg_refs` through `lineage` refs is stamped `:tainted`. Fails CLOSED (matches
+  production): an unresolvable ref, an unrecognized trust stamp (a future lattice
+  point / garbage), or a malformed (:refs-less / trust-less) entry all fold as
+  tainted. Only an HONEST `:trusted` node has its ref chain followed. Cycle-safe.
   """
   def fold_tainted?(call) do
     lineage = Map.get(call, :lineage, %{})
@@ -148,15 +150,22 @@ defmodule Raxol.Agent.Red.U8Gates do
       tainted_reach?(rest, lineage, seen)
     else
       case Map.get(lineage, id) do
-        # unknown ref → fail-closed (U11 §2.1: unknown trust reads as tainted)
-        nil ->
-          true
-
+        # a taint source: absorbing (refs not followed)
         %{trust: :tainted} ->
           true
 
-        %{refs: refs} ->
+        # an HONEST :trusted node: fold its ref chain (a mis-stamped :trusted
+        # over a tainted chain still folds tainted)
+        %{trust: :trusted, refs: refs} ->
           tainted_reach?(refs ++ rest, lineage, MapSet.put(seen, id))
+
+        # Fail CLOSED (matches production): an unknown ref (nil), an unrecognized
+        # trust stamp (a future lattice point / garbage), or a malformed
+        # (:refs-less / trust-less) entry all read as tainted — U11 §2.1
+        # unknown-trust rule. Never follow the refs of a stamp we don't
+        # recognize, and never crash on a malformed entry.
+        _ ->
+          true
       end
     end
   end
@@ -899,6 +908,34 @@ defmodule Raxol.Agent.Red.U8Gates do
           end
         else
           bad -> {:violation, {:once_scope_flow_broke, bad}}
+        end
+      end)
+    end
+
+    # C15 (Fix 5 regression) — the taint fold fails CLOSED on inputs it does not
+    # recognize, matching production: an UNKNOWN-trust leaf (a no-refs leaf whose
+    # trust is an unrecognized value) escalates, and a MALFORMED (:refs-less /
+    # trust-less) entry escalates rather than crashing. Pins the ReferenceGate
+    # spec against a regression toward the old fail-OPEN / CaseClauseError fold.
+    def taint_fold_fails_closed(gate) do
+      safe(fn ->
+        unknown_trust =
+          U8Gates.benign_call(%{
+            arg_refs: [1],
+            lineage: %{1 => %{trust: :unknown_future_value, refs: []}}
+          })
+
+        malformed =
+          U8Gates.benign_call(%{
+            arg_refs: [1],
+            lineage: %{1 => %{note: "no trust, no refs"}}
+          })
+
+        with :ok <-
+               expect_escalate(gate, unknown_trust, :unknown_trust_leaf_proceeded),
+             :ok <-
+               expect_escalate(gate, malformed, :malformed_entry_proceeded) do
+          :ok
         end
       end)
     end

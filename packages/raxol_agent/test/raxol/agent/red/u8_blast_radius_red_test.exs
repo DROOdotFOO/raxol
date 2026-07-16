@@ -86,6 +86,10 @@ defmodule Raxol.Agent.Red.U8BlastRadiusRedTest do
     test "C14 — the §5.2 predicate fails closed: an unknown effect_class and a non-boolean egress both escalate (Fix 4)" do
       assert :ok = Contours.escalate_predicate_fails_closed(BlastRadiusGate)
     end
+
+    test "C15 — the taint fold fails closed: an unknown-trust leaf and a malformed lineage entry both escalate (Fix 5)" do
+      assert :ok = Contours.taint_fold_fails_closed(BlastRadiusGate)
+    end
   end
 
   describe "U8-R predicate contours (@action_surface — F2 Raxol.Action draft not landed)" do
@@ -187,6 +191,10 @@ defmodule Raxol.Agent.Red.U8BlastRadiusControlsTest do
 
     test "C14 §5.2 predicate fails closed on unknown effect_class / non-boolean egress" do
       assert :ok = Contours.escalate_predicate_fails_closed(ReferenceGate)
+    end
+
+    test "C15 taint fold fails closed on unknown-trust leaf / malformed entry (spec matches production)" do
+      assert :ok = Contours.taint_fold_fails_closed(ReferenceGate)
     end
   end
 
