@@ -1388,13 +1388,14 @@ defmodule Raxol.Harness.Surface do
   # content, not raw fixture traffic.
   defp unread_offset(model), do: length(model.projection.blocks)
 
-  # Clamps the unread-divider state against the just-rebuilt projection
-  # (`UnreadDivider.reconcile/2`) -- `advance/2` is the only place
-  # `projection.blocks` is ever replaced, so threading here means a
-  # shrunken rebuild can never leave a stuck span whose boundary no
-  # navigation index can reach. A no-op under fixture mode's monotone
-  # growth (every existing suite proves that); it exists for the
-  # replay/reattach shapes a future producer can hit.
+  # Reconciles the unread-divider state against the just-rebuilt
+  # projection (`UnreadDivider.reconcile/2`, retire-only -- counts are
+  # clamped at display time by `divider/2`, never into state) --
+  # `advance/2` is the only place `projection.blocks` is ever replaced,
+  # so threading here means a shrunken rebuild can never leave a stuck
+  # span whose boundary no navigation index can reach. A no-op under
+  # fixture mode's monotone growth (every existing suite proves that);
+  # it exists for the replay/reattach shapes a future producer can hit.
   defp reconcile_unread(model) do
     %{
       model

@@ -240,7 +240,10 @@ defmodule Raxol.Harness.UnreadDividerTest do
                nil
     end
 
-    test "a partial shrink clamps the frozen count to the extant blocks past the boundary" do
+    test "a partial shrink clamps the PAINTED count only -- state keeps the frozen span" do
+      # The state-level reconcile is retire-only: clamping the count into
+      # state would permanently bake a transient dip in (see the test
+      # below). Display honesty during the dip is divider/2's job.
       state =
         UnreadDivider.new()
         |> UnreadDivider.blur(2)
@@ -248,8 +251,43 @@ defmodule Raxol.Harness.UnreadDividerTest do
 
       assert UnreadDivider.divider(state) == %{from: 2, count: 6}
 
-      assert state |> UnreadDivider.reconcile(5) |> UnreadDivider.divider() ==
-               %{from: 2, count: 3}
+      reconciled = UnreadDivider.reconcile(state, 5)
+      assert UnreadDivider.divider(reconciled) == %{from: 2, count: 6}
+      assert UnreadDivider.divider(reconciled, 5) == %{from: 2, count: 3}
+    end
+
+    test "a transient dip while attending never permanently freezes an under-count" do
+      # Reviewer repro (round 2): %{from: 5, count: 3}; a momentary
+      # projection wobble to 6 must not freeze count: 1 into state -- the
+      # dip paints 1 while dipped (divider/2) and recovers the honest 3
+      # on regrow.
+      state =
+        UnreadDivider.new()
+        |> UnreadDivider.blur(5)
+        |> UnreadDivider.focus(8)
+        |> UnreadDivider.reconcile(6)
+
+      assert UnreadDivider.divider(state) == %{from: 5, count: 3},
+             "the state-level reconcile must not bake a dipped count in"
+
+      assert UnreadDivider.divider(state, 6) == %{from: 5, count: 1}
+      assert UnreadDivider.divider(state, 8) == %{from: 5, count: 3}
+    end
+
+    test "the away boundary pull over-reports on shrink-then-regrow -- the documented fail-safe direction" do
+      # blur(5): the operator had read blocks 0..4. Shrink to 3 while
+      # away replaces blocks 3..4 with content that arrives during the
+      # regrow, so the pulled boundary re-marks indices 3..4. Over-report
+      # is the deliberate direction for an unread marker: it can re-mark
+      # read content, but it can never hide unread content.
+      span =
+        UnreadDivider.new()
+        |> UnreadDivider.blur(5)
+        |> UnreadDivider.reconcile(3)
+        |> UnreadDivider.focus(8)
+        |> UnreadDivider.divider()
+
+      assert span == %{from: 3, count: 5}
     end
 
     test "a shrink to exactly the boundary retires the span (zero extant new blocks)" do

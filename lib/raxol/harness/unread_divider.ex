@@ -77,20 +77,30 @@ defmodule Raxol.Harness.UnreadDivider do
       UNDER-reports (the blocks between the shrink floor and the new
       offset are different content this module has no way to
       distinguish). That is a documented limit, not a covered case.
-    * **`reconcile/2`** clamps recorded state against the live offset:
-      an active span whose boundary meets or exceeds the offset is
-      retired (its marked content no longer exists -- and `viewed/2`'s
-      navigation gate would otherwise be permanently unreachable, a
-      stuck divider); a span extending past the offset has its count
-      clamped; an away boundary above the offset is pulled down.
-      `Raxol.Harness.Surface` threads this on every `advance/2` (the
-      only place its projection is rebuilt), and `divider/2` applies the
-      same clamp read-only at render time, so a stale span can never
-      PAINT past reality even before the state itself is reconciled.
-      Post-reconcile, an active span always satisfies `from < offset`,
-      which restores `viewed/2`'s reachability (the highest navigable
-      index, `offset - 1`, can always reach the gate). Reconciliation
-      only ever clamps -- growth never inflates a frozen count.
+    * **`reconcile/2`** is deliberately RETIRE-ONLY on the span: one
+      whose boundary meets or exceeds the offset is cleared (its marked
+      content no longer exists -- and `viewed/2`'s navigation gate would
+      otherwise be permanently unreachable, a stuck divider), and an
+      away boundary above the offset is pulled down. It never clamps a
+      span's COUNT into state: a transient projection dip would bake in
+      permanently as an under-count. Post-reconcile, an active span
+      always satisfies `from < offset`, which restores `viewed/2`'s
+      reachability (the highest navigable index, `offset - 1`, can
+      always reach the gate). `Raxol.Harness.Surface` threads this on
+      every `advance/2` (the only place its projection is rebuilt).
+    * **`divider/2`** is the read-only DISPLAY clamp: it paints `nil`
+      when the offset no longer reaches past the boundary and a reduced
+      count while the offset sits inside the span, so a stale or dipped
+      span never renders past reality -- and because the state is never
+      mutated, a dip that recovers paints the honest frozen count again.
+    * **The away boundary pull OVER-reports on shrink-then-regrow.** If
+      the projection shrinks below the boundary while away and then
+      regrows, the pulled boundary re-marks blocks the operator had
+      already read (the regrown indices carry different content, which
+      this module cannot distinguish from the old). Over-report is the
+      deliberate fail-safe direction for an unread marker -- it can
+      re-mark read content, but it can never hide unread content; the
+      under-report twin is the focus-time single-sample limit above.
 
   ## Rendering is width-exact up to a clamp, never `String.length`
 
@@ -225,22 +235,21 @@ defmodule Raxol.Harness.UnreadDivider do
   def viewed(state, _block_index), do: state
 
   @doc """
-  Clamps recorded state against the live `offset` (see the moduledoc's
-  "Defensive boundaries and reconciliation"): retires a span whose
-  `:from` meets or exceeds `offset` (its marked content no longer
-  exists, and `viewed/2` could never reach it), clamps a span's count to
-  the extant blocks past the boundary, and pulls an away boundary down
-  to `offset`. Clamp-only: growth never changes anything.
+  Reconciles recorded state against the live `offset` (see the
+  moduledoc's "Defensive boundaries and reconciliation"). Deliberately
+  RETIRE-ONLY on the span: a span whose `:from` meets or exceeds
+  `offset` is cleared (its marked content no longer exists, and
+  `viewed/2` could never reach it -- the stuck-divider fix), and an away
+  boundary above `offset` is pulled down (the fail-safe over-report
+  direction; see the moduledoc). A span's COUNT is never mutated here:
+  clamping it into state would permanently bake a transient projection
+  dip in as an under-count -- display-time clamping is `divider/2`'s
+  job, and it recovers the moment the offset does.
   """
   @spec reconcile(t(), non_neg_integer()) :: t()
   def reconcile(%__MODULE__{span: %{from: from}} = state, offset)
       when offset <= from do
     %{state | span: nil, boundary: nil, attention: :attending}
-  end
-
-  def reconcile(%__MODULE__{span: %{from: from, count: count}} = state, offset)
-      when offset < from + count do
-    %{state | span: %{from: from, count: offset - from}}
   end
 
   def reconcile(
@@ -258,13 +267,23 @@ defmodule Raxol.Harness.UnreadDivider do
   def divider(%__MODULE__{span: span}), do: span
 
   @doc """
-  The reconciled read: the active span as `reconcile/2` at `offset`
-  would leave it, without mutating anything -- the render-time guarantee
-  that a stale span never PAINTS past the live block count, even before
-  the state itself has been reconciled.
+  The reconciled read for rendering: the active span, clamped read-only
+  against the live `offset` -- `nil` when `offset` no longer reaches
+  past `:from` (nothing marked still exists), a reduced count while
+  `offset` sits inside the span (a transient dip paints only the extant
+  blocks), the frozen span verbatim otherwise. Never mutates state, so
+  a dip that recovers paints the honest frozen count again (see
+  `reconcile/2`'s doc for why the state itself is never count-clamped).
   """
   @spec divider(t(), non_neg_integer()) :: span() | nil
-  def divider(state, offset), do: state |> reconcile(offset) |> divider()
+  def divider(%__MODULE__{span: %{from: from}}, offset) when offset <= from,
+    do: nil
+
+  def divider(%__MODULE__{span: %{from: from, count: count}}, offset)
+      when offset < from + count,
+      do: %{from: from, count: offset - from}
+
+  def divider(state, _offset), do: divider(state)
 
   @doc """
   Renders `span` as a full-width `─` rule sized to `width` display
