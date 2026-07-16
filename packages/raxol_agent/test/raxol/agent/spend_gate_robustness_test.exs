@@ -171,4 +171,34 @@ defmodule Raxol.Agent.SpendGateRobustnessTest do
       Reservations.release(scope, cost_ref)
     end
   end
+
+  describe "finding #6 — leaked claims from an ended scope are reclaimable (bounded growth)" do
+    test "sweep_scope reclaims every claim of an ended scope; the cost_refs are reusable" do
+      Reservations.ensure_started()
+
+      # A scope with claims that were never settled/released (killed mid-reserve,
+      # or a run/session budget that simply ended).
+      scope = {:budget_id, make_ref()}
+      refs = for i <- 1..3, do: "f6-#{i}-#{System.unique_integer([:positive])}"
+      for ref <- refs, do: assert(:ok = Reservations.claim(scope, ref))
+
+      # A second, independent scope must NOT be swept.
+      other_scope = {:budget_id, make_ref()}
+      other_ref = "f6-other-#{System.unique_integer([:positive])}"
+      assert :ok = Reservations.claim(other_scope, other_ref)
+
+      # Teardown reclaims exactly the ended scope's 3 claims.
+      assert Reservations.sweep_scope(scope) == 3
+
+      # Reclaimed ⇒ every cost_ref is claimable again (no unbounded leak).
+      for ref <- refs, do: assert(:ok = Reservations.claim(scope, ref))
+
+      # The other scope's claim is untouched.
+      assert {:error, :duplicate} = Reservations.claim(other_scope, other_ref)
+
+      # cleanup
+      Reservations.sweep_scope(scope)
+      Reservations.release(other_scope, other_ref)
+    end
+  end
 end

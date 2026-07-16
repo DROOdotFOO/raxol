@@ -60,6 +60,31 @@ defmodule Raxol.Agent.SpendGate.Reservations do
     :ok
   end
 
+  @doc """
+  Reclaim EVERY claim held under `scope` — the per-scope teardown/GC path.
+
+  Claims are otherwise removed only on settle or refusal, so a reserver killed
+  mid-flight (crash contour) or a run/session budget that simply ended leaks its
+  claims forever, growing the table without bound (finding #6). The owner of a
+  `scope` (a run/session budget) MUST call this when that scope ends; growth is
+  then bounded by scope lifetime, not by process uptime. Returns the number of
+  claims reclaimed.
+  """
+  @spec sweep_scope(term()) :: non_neg_integer()
+  def sweep_scope(scope) do
+    ensure_started()
+    # match_delete every {{scope, _cost_ref}, _} tuple; select_delete returns
+    # the count so callers/telemetry can observe how much was reclaimed.
+    :ets.select_delete(@table, [{{{scope, :_}, :_}, [], [true]}])
+  end
+
+  @doc "How many claims are currently held (across all scopes) — bound observability."
+  @spec count() :: non_neg_integer()
+  def count do
+    ensure_started()
+    :ets.info(@table, :size)
+  end
+
   @impl GenServer
   def init(_) do
     table =
