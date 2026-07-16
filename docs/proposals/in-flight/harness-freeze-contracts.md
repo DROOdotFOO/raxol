@@ -696,6 +696,35 @@ The must-fail red is **N-JS-skew** (§1.3).
   move historical tips (§1.4), and it's exactly the U4/U9 divergence vector
   the false-parallel analysis flags. EmitBridge must wire its emit mapping
   for `item_started` before U4-R/U9-R reds are authored.
+- **OQ-JS4 (live-delivery wire shape) — RULED: RATIFIED (V, 2026-07-16).** The
+  reattach live tail is delivered as `{:reattach_live, session_id, record}`
+  messages to the attaching process, where `record` is the full durable
+  journal record (the same map `read/*` yields — NOT a projection). Frozen as
+  the U4-R suite provisionally pinned it (its moduledoc). Grow-only: the tuple
+  shape and arity are fixed; any future per-delivery metadata rides *inside*
+  `record` (already grow-only per §1.1) or as a NEW message type, never by
+  widening/reordering this tuple. This freezes only the *law-satisfying wire*
+  — the closure law itself is P-JS5 (§1.2) and the no-publish-ahead ordering
+  is I3 / N-JS7 (§1.3); the fan-out + permission BUS that produces these
+  messages (AD-15 second half) is still unfrozen and tracked as OQ-JS6.
+- **OQ-JS5 (`attach` base-dir) — RULED: GROW THE ARITY NOW (V, 2026-07-16).**
+  `attach/3`'s frozen shape gains a trailing optional `opts` keyword:
+  `attach(session_id, offset, historyPolicy, opts \\ [])` where `opts` may
+  carry `:base_dir` (session-dir root override; default = the
+  `RAXOL_SESSIONS_DIR`-resolved path the FileStore already honors, §0 clause
+  5). Ruled now, while cheap: arity is a one-way door, and §0-clause-5
+  directory portability (tar + untar into a fresh base) makes an explicit
+  base-dir a plausible near-term need; an omitted `opts`/absent `:base_dir`
+  is byte-for-byte the current env-resolved behavior, so this is purely
+  additive (optional-with-default, never optional→required). The U4-R
+  self-containment red already pins the `RAXOL_SESSIONS_DIR` resolution; the
+  `:base_dir` opt is the same seam made explicit.
+- **OQ-JS6 (broadcast/permission bus — AD-15 second half) — OPEN.** No frozen
+  contract surface yet: the mechanism that fans `{:reattach_live, …}` to N
+  subscribers and gates who may attach/receive. Under active design (dual
+  research + design pass, 2026-07-16); ratified separately. Until then U4-I
+  builds only the read-side + single-subscriber live tail against OQ-JS4; the
+  bus is deferred, not assumed.
 
 ---
 
