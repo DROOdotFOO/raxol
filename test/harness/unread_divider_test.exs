@@ -208,6 +208,92 @@ defmodule Raxol.Harness.UnreadDividerTest do
     end
   end
 
+  describe "reconciliation against the live offset (reconcile/2, divider/2)" do
+    test "the reviewer's stuck-divider repro: a post-focus shrink below the boundary retires the span" do
+      # blur at 5, focus at 8 freezes %{from: 5, count: 3}; blocks then
+      # shrink to 4 (replay/reattach/truncation). Without reconciliation
+      # the highest navigable index is 3, viewed/2's `>= 5` gate is
+      # unreachable, and the divider is stuck forever.
+      state =
+        UnreadDivider.new()
+        |> UnreadDivider.blur(5)
+        |> UnreadDivider.focus(8)
+
+      assert UnreadDivider.divider(state) == %{from: 5, count: 3}
+
+      reconciled = UnreadDivider.reconcile(state, 4)
+      assert UnreadDivider.divider(reconciled) == nil
+    end
+
+    test "reconciliation restores viewed/2's reachability invariant" do
+      # Post-reconcile, an active span always satisfies from < offset, so
+      # the max navigable index (offset - 1) can always reach the gate.
+      state =
+        UnreadDivider.new()
+        |> UnreadDivider.blur(5)
+        |> UnreadDivider.focus(8)
+        |> UnreadDivider.reconcile(6)
+
+      assert %{from: 5} = UnreadDivider.divider(state)
+
+      assert state |> UnreadDivider.viewed(5) |> UnreadDivider.divider() ==
+               nil
+    end
+
+    test "a partial shrink clamps the frozen count to the extant blocks past the boundary" do
+      state =
+        UnreadDivider.new()
+        |> UnreadDivider.blur(2)
+        |> UnreadDivider.focus(8)
+
+      assert UnreadDivider.divider(state) == %{from: 2, count: 6}
+
+      assert state |> UnreadDivider.reconcile(5) |> UnreadDivider.divider() ==
+               %{from: 2, count: 3}
+    end
+
+    test "a shrink to exactly the boundary retires the span (zero extant new blocks)" do
+      state =
+        UnreadDivider.new()
+        |> UnreadDivider.blur(2)
+        |> UnreadDivider.focus(8)
+        |> UnreadDivider.reconcile(2)
+
+      assert UnreadDivider.divider(state) == nil
+    end
+
+    test "growth never inflates the frozen count (reconcile is clamp-only)" do
+      state =
+        UnreadDivider.new()
+        |> UnreadDivider.blur(2)
+        |> UnreadDivider.focus(5)
+        |> UnreadDivider.reconcile(9)
+
+      assert UnreadDivider.divider(state) == %{from: 2, count: 3}
+    end
+
+    test "while away, a shrunken offset clamps the boundary so the next focus stays honest" do
+      state =
+        UnreadDivider.new()
+        |> UnreadDivider.blur(5)
+        |> UnreadDivider.reconcile(3)
+        |> UnreadDivider.focus(6)
+
+      assert UnreadDivider.divider(state) == %{from: 3, count: 3}
+    end
+
+    test "divider/2 is the reconciled read: a stale span never renders past the live offset" do
+      state =
+        UnreadDivider.new()
+        |> UnreadDivider.blur(5)
+        |> UnreadDivider.focus(8)
+
+      assert UnreadDivider.divider(state, 4) == nil
+      assert UnreadDivider.divider(state, 6) == %{from: 5, count: 1}
+      assert UnreadDivider.divider(state, 8) == %{from: 5, count: 3}
+    end
+  end
+
   # -- rendering: the width-exact rule ------------------------------------
 
   describe "line/2 (the full-width rule)" do
@@ -243,6 +329,16 @@ defmodule Raxol.Harness.UnreadDividerTest do
     test "degrades to the bare label when the width is smaller than the label" do
       line = UnreadDivider.line(%{from: 2, count: 3}, 5)
       assert line =~ "3 new since you looked"
+    end
+
+    test "an absurd width is clamped: no unbounded String.duplicate from a spoofed resize" do
+      # `width` flows from resize/3 unclamped; without a cap here a
+      # terminal (or hostile resize event) reporting a huge width forces
+      # an O(width) allocation on every footer repaint.
+      line = UnreadDivider.line(%{from: 0, count: 3}, 1_000_000)
+
+      assert TextMeasure.display_width(line) <= 1024,
+             "the rule must be clamped to a sane maximum width"
     end
 
     test "contains no C0 control bytes or escapes (plain content for the ViewText seam)" do

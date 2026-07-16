@@ -28,7 +28,8 @@ defmodule Raxol.Harness.UnreadDivider do
   one span, `%{from: boundary, count: offset - boundary}`, when the
   caller-supplied offset is strictly past the boundary -- otherwise it
   silently returns to `:attending` with no span (nothing arrived while
-  away, or a non-monotone offset; see "Defensive boundaries" below).
+  away, or a decreased offset; see "Defensive boundaries and
+  reconciliation" below).
 
   ## One divider per unattended span (merge-on-reblur)
 
@@ -62,14 +63,47 @@ defmodule Raxol.Harness.UnreadDivider do
   would silently hide unread content the moment the operator merely
   types.
 
-  ## Rendering is width-exact, never `String.length`
+  ## Defensive boundaries and reconciliation
+
+  The offsets this module receives are block COUNTS the caller samples
+  from a projection that can, in principle, be rebuilt smaller (session
+  replay, reattach, truncation). Two independent defenses, honestly
+  scoped:
+
+    * **The focus-time guard** (`focus/2`'s `offset <= boundary` clause)
+      rejects exactly ONE shape: a single decreased sample at
+      focus-time. It cannot see a shrink-then-regrow that lands back
+      above the boundary while away -- such a span's count silently
+      UNDER-reports (the blocks between the shrink floor and the new
+      offset are different content this module has no way to
+      distinguish). That is a documented limit, not a covered case.
+    * **`reconcile/2`** clamps recorded state against the live offset:
+      an active span whose boundary meets or exceeds the offset is
+      retired (its marked content no longer exists -- and `viewed/2`'s
+      navigation gate would otherwise be permanently unreachable, a
+      stuck divider); a span extending past the offset has its count
+      clamped; an away boundary above the offset is pulled down.
+      `Raxol.Harness.Surface` threads this on every `advance/2` (the
+      only place its projection is rebuilt), and `divider/2` applies the
+      same clamp read-only at render time, so a stale span can never
+      PAINT past reality even before the state itself is reconciled.
+      Post-reconcile, an active span always satisfies `from < offset`,
+      which restores `viewed/2`'s reachability (the highest navigable
+      index, `offset - 1`, can always reach the gate). Reconciliation
+      only ever clamps -- growth never inflates a frozen count.
+
+  ## Rendering is width-exact up to a clamp, never `String.length`
 
   `line/2` sizes its output via `Raxol.UI.TextMeasure.display_width/1`,
   matching every other harness chrome unit's discipline (`StatusStrip`,
-  `Raxol.Harness.Surface.ViewText`). A width too small to hold even the
-  bare label degrades to that bare label unpadded, for the caller's
-  `ViewText` truncation seam to finish the job -- this module never
-  truncates its own label.
+  `Raxol.Harness.Surface.ViewText`). The width is clamped to
+  `@max_rule_width` (1024) display columns first:
+  the caller's width flows from raw terminal geometry (a resize event),
+  and an unclamped `String.duplicate/2` would hand a spoofed or absurd
+  resize an O(width) allocation on every footer repaint. A width too
+  small to hold even the bare label degrades to that bare label
+  unpadded, for the caller's `ViewText` truncation seam to finish the
+  job -- this module never truncates its own label.
 
   ## Live-region only (the in-history divider is a deferred upgrade)
 
@@ -82,14 +116,22 @@ defmodule Raxol.Harness.UnreadDivider do
   only ever seals once, never repaints history -- so it is out of scope
   for v1, not an oversight.
 
-  ## The mode-1004 seam
+  ## The mode-1004 seam -- INERT at runtime until that unit lands
 
   `Raxol.Harness.Surface.blur/1` / `Surface.focus/1` are the explicit
   attention API a later focus-event unit (a real terminal-focus-in/out
   signal, mode 1004 in xterm's escape sequence vocabulary) wires
-  directly. `input_activity/2` is today's fallback: absent a real focus
-  signal, any keystroke through `Surface.handle_input/2` doubles as the
-  return-of-attention evidence.
+  directly. Be clear about what exists TODAY: `blur/1` has zero
+  production callers -- `Raxol.Terminal.AdvancedFeatures.parse_focus_event/1`
+  can already parse `\\e[I`/`\\e[O`, but nothing calls it, and
+  `Raxol.Terminal.InlineDriver` neither enables mode 1004 nor routes
+  focus bytes anywhere. `input_activity/2` (fed on every keystroke) can
+  only CLOSE an away state, never open one, so in the running harness
+  the machine never leaves `:attending` and the divider never renders.
+  This module is exercised end-to-end by its test suites, which drive
+  `blur/1` directly; the feature goes live only when the focus-event
+  unit wires the driver through -- a deliberate scope cut, not an
+  oversight.
   """
 
   alias Raxol.UI.TextMeasure
@@ -182,13 +224,52 @@ defmodule Raxol.Harness.UnreadDivider do
 
   def viewed(state, _block_index), do: state
 
+  @doc """
+  Clamps recorded state against the live `offset` (see the moduledoc's
+  "Defensive boundaries and reconciliation"): retires a span whose
+  `:from` meets or exceeds `offset` (its marked content no longer
+  exists, and `viewed/2` could never reach it), clamps a span's count to
+  the extant blocks past the boundary, and pulls an away boundary down
+  to `offset`. Clamp-only: growth never changes anything.
+  """
+  @spec reconcile(t(), non_neg_integer()) :: t()
+  def reconcile(%__MODULE__{span: %{from: from}} = state, offset)
+      when offset <= from do
+    %{state | span: nil, boundary: nil, attention: :attending}
+  end
+
+  def reconcile(%__MODULE__{span: %{from: from, count: count}} = state, offset)
+      when offset < from + count do
+    %{state | span: %{from: from, count: offset - from}}
+  end
+
+  def reconcile(
+        %__MODULE__{attention: :away, boundary: boundary} = state,
+        offset
+      )
+      when is_integer(boundary) and boundary > offset do
+    %{state | boundary: offset}
+  end
+
+  def reconcile(state, _offset), do: state
+
   @doc "The active span, or `nil` when none is open."
   @spec divider(t()) :: span() | nil
   def divider(%__MODULE__{span: span}), do: span
 
   @doc """
+  The reconciled read: the active span as `reconcile/2` at `offset`
+  would leave it, without mutating anything -- the render-time guarantee
+  that a stale span never PAINTS past the live block count, even before
+  the state itself has been reconciled.
+  """
+  @spec divider(t(), non_neg_integer()) :: span() | nil
+  def divider(state, offset), do: state |> reconcile(offset) |> divider()
+
+  @doc """
   Renders `span` as a full-width `─` rule sized to `width` display
-  columns via `Raxol.UI.TextMeasure.display_width/1` (never
+  columns (clamped to `@max_rule_width` -- see the moduledoc's
+  "Rendering" section) via `Raxol.UI.TextMeasure.display_width/1` (never
   `String.length` -- see the moduledoc). The label is exactly
   `" \#{count} new since you looked "` (leading and trailing space),
   filled with the box-drawing rule on both sides so the widest widths
@@ -199,8 +280,18 @@ defmodule Raxol.Harness.UnreadDivider do
   even hold that -- left for the caller's `ViewText` truncation seam to
   finish (this module never truncates its own label).
   """
+  # The rule-width clamp (see the moduledoc's "Rendering" section): wide
+  # enough for any real terminal, small enough that a spoofed resize
+  # cannot force an unbounded `String.duplicate/2` on the repaint hot
+  # path. `StatusStrip` shares the unclamped-width pattern (its padding
+  # is also O(width)) -- a repo-wide clamp at the resize boundary is
+  # backlog, not this module's scope; this constant caps the divider's
+  # own contribution.
+  @max_rule_width 1024
+
   @spec line(span(), non_neg_integer()) :: String.t()
   def line(%{count: count}, width) when is_integer(width) do
+    width = min(width, @max_rule_width)
     bare = "#{count}#{@label_suffix}"
     bare_width = TextMeasure.display_width(bare)
     padded = " " <> bare <> " "

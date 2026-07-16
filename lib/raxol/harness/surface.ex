@@ -172,7 +172,17 @@ defmodule Raxol.Harness.Surface do
   `focus/1` are safe no-ops there). It clears the instant `move_focus/2`
   reaches or passes the boundary block -- jumps skip the divider itself
   by construction, since `focused_index` ranges only over
-  `projection.blocks`.
+  `projection.blocks`. `advance/2` reconciles the policy state against
+  every projection rebuild, and the render read is itself reconciled
+  (`UnreadDivider.divider/2`), so a shrunken rebuild can neither stick
+  the span nor paint it past the live block count.
+
+  DORMANT TODAY: nothing in the production input path calls `blur/1` --
+  the terminal side can parse focus bytes but no driver enables mode
+  1004 or routes them here (see `UnreadDivider`'s "mode-1004 seam"
+  section for the full evidence trail). Until that unit lands, the
+  divider never renders outside the test suites; the keystroke fallback
+  only ever CLOSES an away state, never opens one.
 
   ## The overlay picker (footer-region overlay)
 
@@ -709,6 +719,7 @@ defmodule Raxol.Harness.Surface do
 
     model =
       %{model | revealed: revealed, projection: projection}
+      |> reconcile_unread()
       |> paint_pending_blocks()
       |> update_status(events_so_far, now)
       |> paint_footer()
@@ -1336,6 +1347,12 @@ defmodule Raxol.Harness.Surface do
       current = model.focused_index || if delta > 0, do: -1, else: total
       next = (current + delta) |> max(0) |> min(total - 1)
 
+      # Load-bearing identity: `UnreadDivider`'s boundary is a block
+      # COUNT (sampled from `length(projection.blocks)`), while `next`
+      # is a 0-based block INDEX -- "count of seen blocks == index of
+      # the first unseen block" holds precisely because `focused_index`
+      # is 0-based over a densely-indexed block list. A move to 1-based
+      # focus or sparse block ids must revisit this comparison.
       %{
         model
         | focused_index: next,
@@ -1371,11 +1388,28 @@ defmodule Raxol.Harness.Surface do
   # content, not raw fixture traffic.
   defp unread_offset(model), do: length(model.projection.blocks)
 
+  # Clamps the unread-divider state against the just-rebuilt projection
+  # (`UnreadDivider.reconcile/2`) -- `advance/2` is the only place
+  # `projection.blocks` is ever replaced, so threading here means a
+  # shrunken rebuild can never leave a stuck span whose boundary no
+  # navigation index can reach. A no-op under fixture mode's monotone
+  # growth (every existing suite proves that); it exists for the
+  # replay/reattach shapes a future producer can hit.
+  defp reconcile_unread(model) do
+    %{
+      model
+      | unread: UnreadDivider.reconcile(model.unread, unread_offset(model))
+    }
+  end
+
   @doc """
   Records that the operator has looked away, for the unread-divider
   policy (`Raxol.Harness.UnreadDivider.blur/2`). This is the explicit
   attention API a later focus-event unit (a real terminal focus-out
   signal) wires directly -- see `UnreadDivider`'s "mode-1004 seam" doc.
+  No production caller exists yet (the divider is dormant at runtime
+  until that unit lands); tests and future drivers invoke this
+  directly, same as `focus_transcript/1`.
   A no-op in `:flat` mode's own honest sense: `paint_footer/1` never
   repaints there, so nothing visibly changes, but the policy state
   itself still tracks the boundary (harmless, since flat mode has no
@@ -1568,7 +1602,12 @@ defmodule Raxol.Harness.Surface do
   # inert text (rule glyphs, digits, a fixed label), but this module
   # takes no shortcuts around that seam for it.
   defp unread_divider_lines(model) do
-    case UnreadDivider.divider(model.unread) do
+    # The RECONCILED read (`divider/2`, not `/1`): paints only what the
+    # live block count can honestly support, so a stale span can never
+    # render past reality even on a paint that precedes the state's own
+    # reconciliation (see `UnreadDivider`'s "Defensive boundaries and
+    # reconciliation").
+    case UnreadDivider.divider(model.unread, unread_offset(model)) do
       nil ->
         []
 

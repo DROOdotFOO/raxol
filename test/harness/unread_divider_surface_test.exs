@@ -257,6 +257,36 @@ defmodule Raxol.Harness.UnreadDividerSurfaceTest do
     end
   end
 
+  # -- 3b. reconciliation: a stale span never renders past reality ----------
+
+  describe "3b. a block-count shrink after focus cannot leave a stuck divider" do
+    test "the footer stops rendering a span whose boundary exceeds the extant blocks" do
+      {model, device, _count} = blur_focus_run()
+
+      # Simulate the shrink the reviewer reproduced (replay/reattach/
+      # truncation rebuilding a smaller projection): the model is a plain
+      # map, so the projection can be hand-shrunk below the frozen
+      # span's boundary. The very next footer paint must drop the stale
+      # divider -- viewed/2's navigation gate is unreachable in this
+      # state, so rendering it would be a permanent false claim.
+      span = Raxol.Harness.UnreadDivider.divider(model.unread)
+      assert span != nil, "test precondition: an active span"
+
+      shrunk = Enum.take(model.projection.blocks, max(span.from - 1, 0))
+
+      model = %{
+        model
+        | projection: %{model.projection | blocks: shrunk},
+          painted_count: min(model.painted_count, length(shrunk))
+      }
+
+      _model = Surface.tick(model, 9_000)
+
+      assert divider_rows(footer_texts(device)) == [],
+             "a divider whose boundary no longer exists must not render"
+    end
+  end
+
   # -- 4. the keystroke fallback -------------------------------------------
 
   describe "4. keystroke return (the fallback attention signal)" do
