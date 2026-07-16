@@ -37,13 +37,38 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
   end
 
   describe "byte format matches the TB Dialect exactly (package-boundary pin)" do
-    test "SRM.region_set_bytes/2 == Dialect.region_set(1, region_top)" do
-      for {rows, footer_rows} <- [{24, 1}, {80, 5}, {30, 3}, {6, 10}] do
+    test "SRM.region_set_bytes/2 == Dialect.region_set(1, region_top), for NON-degenerate splits" do
+      # {6, 10} deliberately dropped from this table: it is a degenerate
+      # split (region_top(6, 10) == 1 < 2), and the byte-identical claim
+      # here only holds for non-degenerate geometry. `Dialect.region_set/2`
+      # (IOAuthority's legacy-profile byte builder, see the moduledoc's
+      # "Emission ownership" section) has no concept of the
+      # degenerate-terminal policy -- it always emits the literal
+      # `CSI top;bottom r`, even a lying `1;1r` a real terminal would
+      # ignore. SRM's `region_set_bytes/2` diverges from it there BY
+      # DESIGN (see the next test).
+      for {rows, footer_rows} <- [{24, 1}, {80, 5}, {30, 3}] do
         top = SRM.region_top(rows, footer_rows)
+        refute SRM.degenerate?(rows, footer_rows)
 
         assert SRM.region_set_bytes(rows, footer_rows) ==
                  Dialect.region_set(1, top)
       end
+    end
+
+    test "diverges from Dialect.region_set/2 for a degenerate split -- by design" do
+      # {6, 10}: region_top(6, 10) == 1, degenerate. Dialect.region_set/2
+      # blindly emits the wire format it's told to (`CSI 1;1 r`); SRM
+      # knows a real terminal ignores that and emits the honest
+      # full-screen release instead. This divergence is the fix, not a
+      # regression -- see the moduledoc's "Degenerate terminals" section.
+      rows = 6
+      footer_rows = 10
+      top = SRM.region_top(rows, footer_rows)
+      assert SRM.degenerate?(rows, footer_rows)
+
+      assert Dialect.region_set(1, top) == "\e[1;1r"
+      assert SRM.region_set_bytes(rows, footer_rows) == "\e[r"
     end
   end
 
@@ -94,13 +119,20 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
       refute SealOracle.emits_full_clear?(raw)
     end
 
-    test "a width-only resize (rows unchanged) still emits its region re-set, but geometry is unchanged" do
+    test "a width-only resize (rows unchanged) is geometry-gated: zero bytes, no redundant DECSTBM" do
       {:ok, sio} = StringIO.open("")
       before_state = SRM.start(sio, 24, 2)
       after_state = SRM.resize(before_state, 24)
 
       refute SRM.geometry_changed?(before_state, after_state)
-      assert SealOracle.region_sets(contents(sio)) == [{1, 22}, {1, 22}]
+
+      # FLIPPED from the old assertion `[{1, 22}, {1, 22}]`: re-emitting an
+      # identical DECSTBM on a width-only resize was pure waste with a
+      # real side effect -- DECSTBM homes the cursor (VT100) -- for zero
+      # geometric benefit. `resize/2` now skips the write entirely when
+      # `region_top` is unchanged, so the oracle sees only the original
+      # start/3 region-set, never a second one.
+      assert SealOracle.region_sets(contents(sio)) == [{1, 22}]
     end
   end
 
@@ -191,15 +223,51 @@ defmodule Raxol.Harness.T2aScrollRegionTest do
         state = SRM.start(sio, initial_rows, footer_rows)
 
         # footer_rows never changes across resize, so the expected DECSTBM
-        # sequence is just region_top/2 applied to each rows value in turn
-        # -- independently derived from the pure geometry function, not by
-        # re-walking SRM's own stateful resize/2 (which would make this
-        # property tautological).
+        # sequence is derived from region_top/2 applied to each rows value
+        # in turn -- independently derived from the pure geometry
+        # function, not by re-walking SRM's own stateful resize/2 (which
+        # would make this property tautological). Two adjustments versus
+        # the naive "one entry per call" version, mirroring resize/2's own
+        # rules (both stated declaratively here from the pure primitives,
+        # not by calling resize/2):
+        #
+        #   1. Adjacent dedup: start/3 always attempts an emit, but each
+        #      resize/2 call only emits when its region_top DIFFERS from
+        #      the PREVIOUS state's region_top (the geometry gate --
+        #      "Geometry-gated resize emission" in the moduledoc). A
+        #      resize to the same rows (or a different rows value that
+        #      happens to produce the same region_top) contributes no
+        #      entry.
+        #   2. Degenerate exclusion: an emit whose TARGET geometry is
+        #      degenerate writes a full-screen release, not a `{1, top}`
+        #      DECSTBM -- the oracle's region_sets/1 does not parse a bare
+        #      release as a region set (same as it already does for T2d's
+        #      teardown release), so a degenerate emit contributes no
+        #      entry either, even though real bytes were written.
+        initial_top = SRM.region_top(initial_rows, footer_rows)
+
+        {reversed_resize_entries, _final_top} =
+          Enum.reduce(resizes, {[], initial_top}, fn rows, {acc, prev_top} ->
+            new_top = SRM.region_top(rows, footer_rows)
+
+            acc =
+              cond do
+                new_top == prev_top -> acc
+                SRM.degenerate?(rows, footer_rows) -> acc
+                true -> [{1, new_top} | acc]
+              end
+
+            {acc, new_top}
+          end)
+
+        resize_entries = Enum.reverse(reversed_resize_entries)
+
         expected_sets =
-          [{1, SRM.region_top(initial_rows, footer_rows)}] ++
-            Enum.map(resizes, fn rows ->
-              {1, SRM.region_top(rows, footer_rows)}
-            end)
+          if SRM.degenerate?(initial_rows, footer_rows) do
+            resize_entries
+          else
+            [{1, initial_top} | resize_entries]
+          end
 
         final =
           Enum.reduce(resizes, state, fn rows, acc -> SRM.resize(acc, rows) end)

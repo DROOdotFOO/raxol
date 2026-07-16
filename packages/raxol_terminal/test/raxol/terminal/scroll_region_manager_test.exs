@@ -45,8 +45,48 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
       # Pinned literally (not by aliasing -- raxol_terminal must not depend
       # on main raxol's lib/raxol/ui/, see the moduledoc's package-boundary
       # note) so a future drift in either byte builder is caught here.
+      # Only valid for NON-degenerate splits: Dialect.region_set/2 has no
+      # concept of the degenerate-terminal policy below, so the two
+      # diverge by design once `degenerate?/2` is true (see the
+      # "degenerate case" test group).
       assert SRM.region_set_bytes(80, 5) == "\e[1;75r"
       assert SRM.region_set_bytes(24, 1) == "\e[1;23r"
+    end
+  end
+
+  describe "degenerate?/2 -- pure geometry" do
+    test "false for an ordinary split (region_top >= 2)" do
+      refute SRM.degenerate?(30, 3)
+      refute SRM.degenerate?(24, 1)
+      # The exact boundary: region_top == 2 is the smallest VALID region
+      # (top=1, bottom=2, top < bottom holds).
+      refute SRM.degenerate?(5, 3)
+    end
+
+    test "true when region_top would be < 2 (a top == bottom DECSTBM the terminal would ignore)" do
+      assert SRM.degenerate?(2, 2)
+      assert SRM.degenerate?(3, 2)
+      assert SRM.degenerate?(5, 4)
+      assert SRM.degenerate?(1, 0)
+    end
+  end
+
+  describe "region_set_bytes/2 -- degenerate case (tiny terminals)" do
+    # Each of these has region_top(rows, footer_rows) < 2 -- a terminal too
+    # short for its footer plus a 1-row history minimum. The historical bug
+    # (see the false-confidence-flip test below) emitted a lying
+    # `CSI 1;1 r` here; a real terminal ignores a `top == bottom` DECSTBM
+    # outright, silently leaving whatever region was previously active
+    # untouched while the caller believed the footer was pinned.
+    for {rows, footer_rows} <- [{2, 2}, {3, 2}, {5, 4}, {1, 0}] do
+      test "rows=#{rows} footer_rows=#{footer_rows}: emits the full-screen release, not a lying 1;1r" do
+        rows = unquote(rows)
+        footer_rows = unquote(footer_rows)
+
+        assert SRM.degenerate?(rows, footer_rows)
+        assert SRM.region_set_bytes(rows, footer_rows) == "\e[r"
+        refute SRM.region_set_bytes(rows, footer_rows) == "\e[1;1r"
+      end
     end
   end
 
@@ -96,6 +136,25 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
       assert SRM.rows(state) == 40
       assert SRM.footer_rows(state) == 4
       assert SRM.region_top(state) == 36
+      refute SRM.degenerate?(state)
+    end
+  end
+
+  describe "start/3 -- degenerate case (tiny terminals)" do
+    for {rows, footer_rows} <- [{2, 2}, {3, 2}, {5, 4}, {1, 0}] do
+      test "rows=#{rows} footer_rows=#{footer_rows}: degenerate? is true, bytes are the full-screen release" do
+        rows = unquote(rows)
+        footer_rows = unquote(footer_rows)
+
+        {:ok, sio} = StringIO.open("")
+        state = SRM.start(sio, rows, footer_rows)
+
+        assert SRM.degenerate?(state)
+        assert contents(sio) == "\e[r"
+        # region_top/1 still returns a sane (>= 1) row for append-path
+        # math even though the pin itself is not active.
+        assert SRM.region_top(state) >= 1
+      end
     end
   end
 
@@ -129,13 +188,70 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
       refute contents(sio) =~ "\e[H\e[2J"
     end
 
-    test "shrinking below footer_rows clamps region_top to 1, never 0 or negative" do
+    test "shrinking below footer_rows clamps region_top to 1, never 0 or negative -- and never lies with a 1;1r DECSTBM" do
       {:ok, sio} = StringIO.open("")
       state = SRM.start(sio, 24, 3)
       state = SRM.resize(state, 2)
 
       assert SRM.region_top(state) == 1
-      assert contents(sio) =~ "\e[1;1r"
+
+      # This is the FLIPPED false-confidence assertion: the old test here
+      # asserted `contents(sio) =~ "\e[1;1r"` as SUCCESS. That was a false
+      # positive -- a real terminal (xterm/wezterm/kitty) IGNORES a
+      # `top == bottom` DECSTBM outright, so a `1;1r` byte on the wire
+      # would silently fail to pin anything while the caller believed it
+      # had. `resize/2` now emits the honest full-screen release instead,
+      # and the manager records `degenerate?: true` so callers can detect
+      # the condition (see the moduledoc's "Degenerate terminals" section).
+      refute contents(sio) =~ "\e[1;1r"
+      assert SRM.degenerate?(state)
+      assert contents(sio) == "\e[1;21r" <> "\e[r"
+    end
+
+    test "geometry-gated emission: a width-only resize (rows unchanged) writes ZERO bytes" do
+      {:ok, sio} = StringIO.open("")
+      state = SRM.start(sio, 24, 2)
+      before_bytes = contents(sio)
+
+      after_state = SRM.resize(state, 24)
+
+      refute SRM.geometry_changed?(state, after_state)
+      # No second DECSTBM, no bytes at all: DECSTBM homes the cursor as a
+      # side effect, so re-emitting an unchanged region on a width-only
+      # resize would move the cursor for zero geometric benefit.
+      assert contents(sio) == before_bytes
+    end
+
+    test "geometry-gated emission: a height-changing resize still emits exactly once" do
+      {:ok, sio} = StringIO.open("")
+      state = SRM.start(sio, 24, 2)
+      after_state = SRM.resize(state, 40)
+
+      assert SRM.geometry_changed?(state, after_state)
+      assert contents(sio) == "\e[1;22r" <> "\e[1;38r"
+    end
+
+    test "resizing INTO a degenerate split releases the previously-active real region" do
+      {:ok, sio} = StringIO.open("")
+      state = SRM.start(sio, 24, 3)
+      refute SRM.degenerate?(state)
+
+      state = SRM.resize(state, 4)
+
+      assert SRM.degenerate?(state)
+      assert contents(sio) == "\e[1;21r" <> "\e[r"
+    end
+
+    test "resizing OUT of a degenerate split emits a real DECSTBM" do
+      {:ok, sio} = StringIO.open("")
+      state = SRM.start(sio, 4, 3)
+      assert SRM.degenerate?(state)
+      assert contents(sio) == "\e[r"
+
+      state = SRM.resize(state, 24)
+
+      refute SRM.degenerate?(state)
+      assert contents(sio) == "\e[r" <> "\e[1;21r"
     end
 
     test "footer stays outside the region across a whole resize sequence" do
