@@ -13,6 +13,7 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
   @moduletag :capture_log
 
   alias Raxol.Agent.Contract.Event
+  alias Raxol.Agent.Fingerprint
   alias Raxol.Agent.Meta
   alias Raxol.Agent.Red.MetaJournalGen, as: Gen
 
@@ -139,6 +140,32 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
       # under the old String.to_atom path — a VM-crashing DoS).
       assert after_count - before < 100,
              "decode leaked #{after_count - before} atoms from unknown journal tokens"
+    end
+  end
+
+  # ===========================================================================
+  # Finding 5 (🟡) — canonical_json recurses the key-sort into nested objects
+  # ===========================================================================
+
+  describe "canonical_json is deterministic through nested objects (I2)" do
+    test "nested object keys are sorted at EVERY level, not just the top" do
+      params = %{z_top: 1, a_top: %{y: 1, b: 2, m: %{q: 1, a: 2}}}
+
+      # Sorted at the top, at a_top, AND at the doubly-nested m — the property
+      # the old top-level-only sort (nested via Jason term order) did not give.
+      assert Fingerprint.canonical_json(params) ==
+               ~s({"a_top":{"b":2,"m":{"a":2,"q":1},"y":1},"z_top":1})
+    end
+
+    test "a nested object hashes identically regardless of how it was built" do
+      built_a = %{model: "m", opts: Enum.into([b: 2, a: 1, deep: %{y: 2, x: 1}], %{})}
+
+      built_b = %{}
+      built_b = Map.put(built_b, :opts, Map.new([{:deep, Map.new(x: 1, y: 2)}, {:a, 1}, {:b, 2}]))
+      built_b = Map.put(built_b, :model, "m")
+
+      assert Fingerprint.canonical_json(built_a) == Fingerprint.canonical_json(built_b)
+      assert Fingerprint.params_hash(built_a) == Fingerprint.params_hash(built_b)
     end
   end
 end

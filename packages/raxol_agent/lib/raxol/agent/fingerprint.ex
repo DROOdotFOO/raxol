@@ -51,12 +51,20 @@ defmodule Raxol.Agent.Fingerprint do
 
   Frozen serialization rules:
 
-    * ephemeral keys (`excluded_keys/0`) are stripped — `:seed` is NOT one of
-      them, so it stays in the hash input;
-    * keys are stringified and **sorted**, so map iteration order cannot leak
-      into the hash;
-    * each value is JSON-encoded with `Jason` — the single named encoder, so
+    * ephemeral keys (`excluded_keys/0`) are stripped at the top level — `:seed`
+      is NOT one of them, so it stays in the hash input;
+    * keys are stringified and **sorted at EVERY map level**, recursively, so
+      map iteration order cannot leak into the hash — a nested object hashes
+      the same regardless of insertion order (a top-level-only sort left nested
+      maps at BEAM term order, diverging across encoders / the JS UI fork);
+    * each scalar is JSON-encoded with `Jason` — the single named encoder, so
       two independent callers cannot diverge on number/string formatting.
+
+  **Key-ordering law (frozen).** Sorting is by Erlang binary order. Canonical
+  params keys are guaranteed ASCII (temperature, top_p, max_tokens, seed, and
+  additive provider params), and for ASCII strings byte order is identical to
+  JS UTF-16 code-unit order — so the JS UI fork (I2) byte-matches without a
+  code-unit collator. Non-ASCII canonical keys are out of contract.
 
   Every golden fixture MUST hash through this so two independent encoders cannot
   diverge.
@@ -65,12 +73,31 @@ defmodule Raxol.Agent.Fingerprint do
   def canonical_json(params) when is_map(params) do
     params
     |> Map.drop(@excluded_keys)
-    |> Enum.map(fn {k, v} -> {to_string(k), v} end)
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.map(fn {k, v} -> Jason.encode!(k) <> ":" <> Jason.encode!(v) end)
-    |> Enum.join(",")
-    |> then(&("{" <> &1 <> "}"))
+    |> canonical_encode()
   end
+
+  # Recursive, key-sorted canonicalization. Maps sort their stringified keys at
+  # every level; lists preserve order but canonicalize each element; scalars go
+  # through the single named encoder. Structs are treated as their map form.
+  defp canonical_encode(%_{} = struct),
+    do: struct |> Map.from_struct() |> canonical_encode()
+
+  defp canonical_encode(map) when is_map(map) do
+    inner =
+      map
+      |> Enum.map(fn {k, v} -> {to_string(k), v} end)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.map(fn {k, v} -> Jason.encode!(k) <> ":" <> canonical_encode(v) end)
+      |> Enum.join(",")
+
+    "{" <> inner <> "}"
+  end
+
+  defp canonical_encode(list) when is_list(list) do
+    "[" <> (list |> Enum.map(&canonical_encode/1) |> Enum.join(",")) <> "]"
+  end
+
+  defp canonical_encode(scalar), do: Jason.encode!(scalar)
 
   @doc "`sha256` hex (lower-case) of `canonical_json/1` — the `params_hash` field."
   @spec params_hash(map()) :: String.t()
