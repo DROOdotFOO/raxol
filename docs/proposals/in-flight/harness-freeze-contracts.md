@@ -12,6 +12,12 @@ This doc freezes **on top of what landed** — it renames nothing that exists in
 `contract.ex` / `emit_bridge.ex` / the journal modules, and it changes zero
 bytes of the Reader's framing logic.
 
+**Ratification authority:** throughout this doc, **"V"** is the project owner
+(vsevolod.rodionov), whose ratification rulings are recorded inline with dates
+("RATIFIED by V, YYYY-MM-DD") and are the sole gate between PROPOSED and frozen;
+`AF-*` audit-finding provenance lives in the PR #569 review threads by design —
+findings enter this doc only where they change contract text.
+
 **Fold-before-reds revision (2026-07-16, ratified).** This is the final pre-red
 revision; permanent red suites are authored against these shapes next. It folds
 in the ratified reservations from `harness-yolo-safe-research.md`,
@@ -1466,7 +1472,7 @@ graduate, not *what* the probe/meta/journal records look like.
 > skew-guard now lives in §1.4 (rule + invariant) and §1.3 (must-fail red
 > N-JS-skew). PA-1 below is retained as the ratification record / options
 > analysis; the binding text is §1.4/§1.3.
-> **PA-2..PA-5 remain PROPOSED — NOT YET FROZEN, awaiting separate V
+> **PA-2..PA-10 remain PROPOSED — NOT YET FROZEN, awaiting separate V
 > ratification.** Each is a **constitution one-way-door**; none is binding until V
 > ratifies it, and until then the frozen law is §0–§6 (incl. the promoted PA-1).
 > These are drafts responding to the automated adversarial review on PR #569
@@ -1474,7 +1480,10 @@ graduate, not *what* the probe/meta/journal records look like.
 > doc-consistency clarifications (closure-rule prose, §1.1; skip-unknown carve-out,
 > §0.2) were applied inline and marked "clarified per AF review #569" — they
 > change no law, only remove literal-reading traps; V may still veto them.
-> Everything in PA-2..PA-5 is a **contract ruling** and is drafted-not-applied.
+> Everything in PA-2..PA-10 is a **contract ruling** and is drafted-not-applied.
+> PA-2..PA-5 respond to that automated pass; **PA-6..PA-10 respond to the second,
+> net-new adversarial pass (adversarial review 2026-07-16, DROOdotFOO)** and
+> follow the same additive lane.
 
 ### PA-1 (HIGH) — RATIFIED 2026-07-16, promoted to §1.4/§1.3 — the only-grows law does not protect tip stability across version skew
 
@@ -1661,6 +1670,208 @@ classification, or defaults it to `:trusted`, is rejected. This freezes the
 *contract of the boundary* (a classification exists and fails closed) without
 freezing the *policy content* (which sources) — closing the "no negative control
 at the source" gap while respecting the deliberate policy carve-out.
+
+### PA-6 (HIGH) — CAS pointer deref has no runtime confinement (traversal via `$blob` / `snapshot_ref`)
+
+**Problem (adversarial review 2026-07-16, DROOdotFOO — HIGH 1; §0.5 + §1.1
+`$blob` / checkpoint `snapshot_ref`).** Self-containment (§0 clause 5) is
+enforced only by a fixture lint scan; the runtime deref rules never require the
+reader to validate that a pointer is a bare content hash confined to the session
+dir. N-JS3-family reds cover *missing/altered* blobs, not a pointer that
+**escapes** (`{"$blob": "blobs/../../../../etc/passwd"}`). An `:import`ed or
+corrupted journal feeds attacker-controlled pointers straight into the tolerant
+reader seam — "deref-or-render-opaque" today derefs first.
+
+**Proposed frozen text (draft — contract ruling, needs ratification).** Added to
+§1.1 reader tolerance, governing BOTH deref paths — `$blob` deref and checkpoint
+`snapshot_ref` resolution at restore:
+
+> *CAS deref confinement: a CAS pointer is well-formed iff it matches
+> `^(blobs|snapshots)/[0-9a-f]{64}(\.json)?$` (`blobs/<sha>` bare;
+> `snapshots/<sha>.json`), AND the path resolved against the session directory
+> (canonicalized, symlinks not followed) stays strictly inside it. A
+> non-conforming pointer is NEVER dereferenced: the reader renders it as an
+> opaque tombstone under N-JS3 semantics (`{:error, :ref_escape}` family at the
+> deref seam; journal stays `:ok`, nothing read, nothing deleted). The producer
+> seam rejects writing a non-conforming pointer loudly.*
+
+Check-then-deref, belt and suspenders: the regex is the contract; the
+resolved-containment check catches encodings the regex author didn't foresee.
+
+**New contour.** Must-fail red **N-JS-traversal**: a journal fixture
+(`:import`-lineage flavored) carrying (a) a `$blob` with `../` segments and (b) a
+checkpoint whose `snapshot_ref` escapes the session dir — the reader/restore
+path MUST perform zero filesystem reads outside the session dir and render both
+refs opaque. Dead injector: a deref that joins the pointer onto the session dir
+without validation.
+
+**Adoption cost.** One validation function at two deref call sites; zero schema
+change; every conforming pointer (all existing fixtures) is byte-for-byte
+unaffected. Purely additive under §0.
+
+### PA-7 (HIGH) — snapshot redaction does not remove the secret in v1
+
+**Problem (adversarial review 2026-07-16, DROOdotFOO — HIGH 2; §1.1 `$redacted`
++ FI-7 + OQ-JS2).** Redacting a snapshot-referenced value "produces a NEW
+snapshot file; the pre-redaction file may be deleted under FI-7 consent" — but
+GC is deferred entirely (OQ-JS2), so for all of v1 the pre-redaction snapshot —
+the secret, content-addressed, on disk — is never deleted. The one legal rewrite
+scrubs the payload *value* and leaves the snapshot *bytes* recoverable. Distinct
+from PA-2 (authorization): a fully-authorized redaction still fails to redact.
+
+**Proposed frozen text — PRIMARY variant (synchronous deletion; draft, needs
+ratification):**
+
+> *Redaction of snapshot-referenced content is complete only when the
+> pre-redaction CAS file is gone: the redaction act (1) writes the
+> post-redaction snapshot (FI-8 atomic), then (2) synchronously deletes the
+> pre-redaction `snapshots/<sha>.json` in the same act — never deferred to GC.
+> The referencing checkpoint is not rewritten; the dangling pointer surfaces
+> `:snapshot_missing` (N-JS3), already the accepted cost. A crash between (1)
+> and (2) leaves the old file as a loud, retryable INCOMPLETE redaction — never
+> silently considered done.*
+
+**FI-7 analysis (why this is not the forbidden delete).** FI-7 forbids deletion
+*implicitly* — as a side effect nobody asked for. Redaction is the contract's
+one explicit, consented destruction act (§0 clause 6; PA-2 adds actor +
+authorization + a `redaction` meta event). Deleting the pre-redaction bytes is
+not a new deletion power; it is the *completion* of the deletion the consent was
+FOR. Scrubbing the pointer while keeping the bytes is redaction theater.
+
+**FALLBACK variant (documented no-op), if V rejects deletion:** freeze the
+honest warning instead — *"snapshot redaction in v1 does NOT remove the secret
+bytes; the pre-redaction CAS file persists until FI-7 GC ships. Do not rely on
+`$redacted` for PII/secret scrubbing of snapshot content."* — so nobody builds
+compliance on a scrub that doesn't scrub. **V picks the variant.**
+
+**New contour (deletion variant).** Must-fail red **N-JS-redact-cas**: after an
+authorized snapshot redaction, the pre-redaction bytes are absent from the
+session dir, and restore via the old checkpoint surfaces `:snapshot_missing` —
+never the secret. Dead injector: a redaction path that writes the new snapshot
+but leaves the old file.
+
+**Adoption cost.** Deletion variant: one file removal inside the already-atomic
+redaction act + an incomplete-redaction retry surface; no framing/offset/hash
+disturbance (the checkpoint record is untouched). Fallback variant: zero code,
+one loud sentence.
+
+### PA-8 (HIGH) — GC truncation can orphan taint lineage (`refs` / `armed_by`)
+
+**Problem (adversarial review 2026-07-16, DROOdotFOO — HIGH 3; §1.1
+low-watermark + §1.1-schedule + §2.1 taint).** The taint algebra folds over
+`refs` (§2.1 point 4) and `schedule.armed_by`. GC may truncate any prefix below
+the watermark, and the frozen no-orphan law covers only *checkpoints*. A tainted
+ancestor truncated below the watermark becomes unreadable to the decision-time
+fold — and the contract never says whether an unreadable ref target folds
+`:tainted` or `:trusted`. GC the tainted ancestor and the descendant launders by
+truncation, defeating §2.1 point 3. GC is deferred, but `refs`/`armed_by` freeze
+NOW.
+
+**Proposed frozen text (BOTH halves, belt and suspenders; draft, needs
+ratification):**
+
+> *1. (Prevention — companion to "GC never orphans checkpoints", §1.1)
+> GC/truncation never orphans a live `refs`/`armed_by` target above any
+> surviving descendant: it never removes a record that any surviving record
+> at/above the watermark names — directly or transitively — via `refs` or
+> `armed_by`. A `gc` proposal that would sever a surviving record's
+> taint-lineage closure is rejected at the same synchronous admission seam as
+> `:invalid_tip` (§0 clause 7).*
+> *2. (Containment — if prevention fails) a `refs`/`armed_by` target that
+> cannot be read (below the watermark, missing, damaged) folds **fail-closed
+> `:tainted`** — never `:trusted`, never skipped. Same fail-closed family as
+> unknown trust values (§2.1 point 1) and the §0.2 fold carve-out.*
+
+Half 1 keeps lineage foldable; half 2 guarantees that even a buggy or hostile
+truncation can only make the fold MORE conservative, never launder.
+
+**New contour.** Must-fail red **N-JS-gc-taint**: (a) a journal whose surviving
+descendant refs an offset below the watermark — the decision-time fold yields
+`:tainted`; (b) a `gc` proposal severing a live `refs`/`armed_by` closure is
+rejected, nothing truncated. Dead injectors: a fold that skips unreadable refs
+(fails open); a GC acceptor that checks only checkpoint coverage.
+
+**Adoption cost.** Half 2 is one branch in the fold, testable today. Half 1
+constrains the future GC ruling (OQ-JS2) and costs nothing while
+`low_watermark = 1`; when GC lands it may keep tainted prefixes alive longer or
+force a lineage-summary design — that trade is exactly what V is ratifying.
+
+### PA-9 (MEDIUM) — §5.1 `client_msg_id` has zero negative contour + an unbounded index
+
+**Problem (adversarial review 2026-07-16, DROOdotFOO — MED 4; §5.1).** §5
+carries no must-fail reds at all. A duplicate is deduplicated as a
+live-ack-only, journal-silent accept — indistinguishable, at the seam, from a
+silent swallow; no contour asserts a second durable event is impossible. And the
+in-memory index "rebuilt by fold" over a session-lifetime window carries no
+frozen bound.
+
+**Proposed frozen text (draft, needs ratification):**
+
+> *Observability: the duplicate's live ack carries a grow-only dedup marker —
+> `%{dedup: true, original_turn_id, original_offset}` — so the collision is
+> observable at the seam that produced it, plus telemetry
+> `[:raxol, :agent, :ingest, :dedup_hit]`. A duplicate NEVER appends any record
+> — not even a meta event (a journaled duplicate-marker would let a replayer
+> bloat the journal without ever passing dedup); the ack is the observability
+> surface, the journal stays silent.*
+> *Index bound: dedup is guaranteed over the readable suffix
+> `[low_watermark, n]` — the index is exactly the fold §5.1 already freezes, and
+> a fold cannot see below the watermark. While `low_watermark = 1` (all of v1,
+> until GC ships), this IS the frozen session-lifetime window, verbatim. When GC
+> ships, a key whose only occurrence was truncated MAY be accepted as new — an
+> accepted cost to be stated loudly in the GC ruling, same class as the dangling
+> snapshot pointer.*
+
+*(Consistency note — why NOT "pruned at the compaction boundary": AD-3b freezes
+compaction=resume=one artifact — a compaction is a `checkpoint` record in the
+SAME journal (§1.1 "deliberately NOT kinds"), not a fresh session artifact, so a
+compaction boundary would prune keys the fold can still see and break the
+rebuilt-by-fold law. The watermark is the boundary at which folds* legally
+*lose sight; the index bound must be that boundary.)*
+
+**New contour.** Must-fail red **N-cmd-dedup**: re-delivering
+`(session_id, client_msg_id)` — including across a BEAM restart (index rebuilt
+by fold) — yields exactly one durable `turn_started` (journal byte-identical
+after the replay, offset counter untouched) AND a live ack carrying the dedup
+marker naming the original turn. Dead injectors: an ingest seam that appends a
+second `turn_started`; an ack without the marker (silent swallow); an index not
+rebuilt on restart.
+
+**Adoption cost.** Grow-only ack fields + one telemetry event; no journal schema
+change; the index bound is a definition, not new code, while `low_watermark = 1`.
+
+### PA-10 (MEDIUM) — schedule missed-wake semantics on resume are unfrozen
+
+**Problem (adversarial review 2026-07-16, DROOdotFOO — MED 5; §1.1-schedule).**
+The record freezes `next_fire`/`armed` and the lifecycle enum grows `:dormant`,
+but nothing specifies firing when a dormant session resumes with `next_fire` in
+the past: once? per-missed-interval (thundering herd)? drop? The record shape is
+frozen; the firing law the reds need is absent.
+
+**Proposed frozen text (draft, needs ratification):**
+
+> *Missed-wake law (fire-ONCE-on-resume, coalescing): when a session resumes
+> (or the scheduler restarts) and an armed schedule's `next_fire` lies in the
+> past, the trigger fires exactly once — never once per missed interval, never
+> silently dropped. The resulting `woken` event's payload grows an optional
+> grow-only field `missed_fires: non_neg_integer()` (default `0`): with `m ≥ 1`
+> scheduled fire times in the past, the single coalesced wake carries
+> `missed_fires: m - 1`, so the skip is durable, observable, and foldable.
+> After the coalesced fire, a recurring trigger's `next_fire` recomputes forward
+> from NOW — missed intervals are never replayed. `once` triggers fire the one
+> time and disarm as already frozen. `woken.refs` MUST still include the
+> schedule offset; the §1.1-schedule taint law is unchanged.*
+
+**New contour.** Must-fail red **N-sched-coalesce**: resume a dormant session
+whose armed cron trigger is `m ≥ 2` fire-times past — exactly one `woken` event
+appears, with `missed_fires: m - 1` and the schedule offset in `refs`, and
+`next_fire` is strictly in the future afterward. Dead injectors: a wake loop
+emitting `m` `woken` events (the herd); a resume path that silently advances
+`next_fire` without firing (the drop); a wake payload lacking the count.
+
+**Adoption cost.** One grow-only payload field + a coalescing branch in the wake
+path; `missed_fires` default `0` keeps every normal wake byte-compatible. Purely
+additive under §0.
 
 ### LOW items (noted, not drafted)
 
