@@ -32,6 +32,23 @@ defmodule Raxol.Property.DcsParsingTest do
   # the state machine with random unicode inside a DCS string, e.g.
   # `"\eP��...\e\\"`.
   describe "DCS totality" do
+    # Regression: found by this property's random seed on CI. SUB (0x1A)
+    # inside the DCS string cancels it; ESC ] then opens an OSC; the
+    # trailing ST terminates that OSC with an EMPTY payload — and
+    # `emit_osc_sequence/1` crashed with a MatchError trying to split a
+    # command out of the empty payload buffer.
+    test "an empty OSC (via SUB-cancelled DCS) does not raise" do
+      input = <<0x1B, ?P>> <> <<26, 27, 93>> <> <<0x1B, ?\\>>
+
+      StateMachine.process(StateMachine.new(), input)
+      |> assert_sane_result()
+    end
+
+    test "a bare empty OSC terminated by ST does not raise" do
+      StateMachine.process(StateMachine.new(), <<0x1B, ?], 0x1B, ?\\>>)
+      |> assert_sane_result()
+    end
+
     property "never raises on DCS strings wrapping arbitrary bytes" do
       check all(
               payload <- binary(max_length: 64),
