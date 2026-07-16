@@ -26,7 +26,18 @@ defmodule Raxol.Agent.Red.U5InterruptControlsTest do
 
   alias Raxol.Agent.Interrupt.Contours
   alias Raxol.Agent.Interrupt.Faults
-  alias Raxol.Agent.Interrupt.Injectors.{LateResult, Reference, SkipWait, TrustExitStatus}
+
+  alias Raxol.Agent.Interrupt.Injectors.{
+    LateResult,
+    NaiveEscalate,
+    Reference,
+    SkipWait,
+    TrailingOutput,
+    TrustExitStatus,
+    TrustReason,
+    WaitKillTransposed
+  }
+
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.KillLab
 
@@ -42,7 +53,10 @@ defmodule Raxol.Agent.Red.U5InterruptControlsTest do
   end
 
   describe "staging contour — dead injector :skip_wait" do
-    test "reference passes; skipping the wait stage fails the staging red", %{base: base, seed: seed} do
+    test "reference passes; skipping the wait stage fails the staging red", %{
+      base: base,
+      seed: seed
+    } do
       harness = Faults.new()
       Faults.arm(harness, :skip_wait)
 
@@ -74,7 +88,10 @@ defmodule Raxol.Agent.Red.U5InterruptControlsTest do
       harness = Faults.new()
       Faults.arm(harness, :late_result)
 
-      pre_kill = 1 + :rand.uniform(3)
+      # Fixed, not randomized: quiescence must hold regardless of how much
+      # pre-kill output there was, so randomness here buys no extra coverage
+      # — it only makes failures harder to reproduce without the seed.
+      pre_kill = 2
 
       # Green on correct: pre-kill output, nothing after the kill fence.
       {t1, d1, s1} = open_turn(base)
@@ -101,10 +118,11 @@ defmodule Raxol.Agent.Red.U5InterruptControlsTest do
 
   describe "effectiveness contour — dead injector :trust_exit_status" do
     @tag :unix_only
-    test "reference group-kill passes; trusting :exit_status leaves an orphan and fails the red", %{
-      base: base,
-      seed: seed
-    } do
+    test "reference group-kill passes; trusting :exit_status leaves an orphan and fails the red",
+         %{
+           base: base,
+           seed: seed
+         } do
       harness = Faults.new()
       Faults.arm(harness, :trust_exit_status)
 
@@ -142,9 +160,200 @@ defmodule Raxol.Agent.Red.U5InterruptControlsTest do
         end
 
       assert err.message =~ "grandchild"
-      assert KillLab.alive?(bad_lab.child_pid), "the orphan the mutant left must still be alive here"
+
+      assert KillLab.alive?(bad_lab.child_pid),
+             "the orphan the mutant left must still be alive here"
 
       Faults.assert_all_fired!(harness, %{seed: seed, sites: [:trust_exit_status]})
+    end
+  end
+
+  describe "staging contour — dead injector :wait_kill_transposed" do
+    test "reference passes; a kill-before-wait transposition fails the staging red", %{
+      base: base,
+      seed: seed
+    } do
+      harness = Faults.new()
+      Faults.arm(harness, :wait_kill_transposed)
+
+      # Green on correct.
+      {t1, d1, s1} = open_turn(base)
+      seed_output(s1, :turn_started, %{prompt: "task"})
+      {:ok, _} = Reference.interrupt(%{turn_id: t1, port: nil, os_pid: nil}, s1, [])
+      assert :ok = Contours.assert_staging!(Contours.records(d1), t1)
+
+      # Red on mutant: signal → kill → wait breaks the ordered sequence (a
+      # transposition, distinct from :skip_wait's omission).
+      {t2, d2, s2} = open_turn(base)
+      {:ok, _} = WaitKillTransposed.interrupt(%{turn_id: t2}, s2, faults: harness)
+
+      err =
+        assert_raise ExUnit.AssertionError, fn ->
+          Contours.assert_staging!(Contours.records(d2), t2)
+        end
+
+      assert err.message =~ "staged-kill sequence"
+      Faults.assert_all_fired!(harness, %{seed: seed, sites: [:wait_kill_transposed]})
+    end
+  end
+
+  describe "turn-canceled contour — dead injector :trust_reason" do
+    test "reference passes; a wrong terminal record type fails the turn-canceled red", %{
+      base: base,
+      seed: seed
+    } do
+      harness = Faults.new()
+      Faults.arm(harness, :trust_reason)
+
+      # Green on correct.
+      {t1, d1, s1} = open_turn(base)
+      seed_output(s1, :turn_started, %{prompt: "task"})
+      {:ok, out1} = Reference.interrupt(%{turn_id: t1, port: nil, os_pid: nil}, s1, [])
+      assert :ok = Contours.assert_turn_canceled!(Contours.records(d1), t1, out1)
+
+      # Red on mutant: the outcome carries the right :reason, but the journaled
+      # terminal record is :turn_ended, not :turn_canceled.
+      {t2, d2, s2} = open_turn(base)
+      {:ok, out2} = TrustReason.interrupt(%{turn_id: t2}, s2, faults: harness)
+
+      err =
+        assert_raise ExUnit.AssertionError, fn ->
+          Contours.assert_turn_canceled!(Contours.records(d2), t2, out2)
+        end
+
+      assert err.message =~ "did not terminate with turn_canceled"
+      Faults.assert_all_fired!(harness, %{seed: seed, sites: [:trust_reason]})
+    end
+  end
+
+  describe "no-trailing-output contour (P3b) — dead injector :trailing_output" do
+    test "reference passes; a post-cancel stream chunk fails the mid-provider-stream red", %{
+      base: base,
+      seed: seed
+    } do
+      harness = Faults.new()
+      Faults.arm(harness, :trailing_output)
+
+      # Green on correct: mid-stream deltas before the cancel, nothing after.
+      {t1, d1, s1} = open_turn(base)
+      seed_output(s1, :turn_started, %{prompt: "stream please"})
+      seed_output(s1, :item_delta, %{chunk: "half a sen"})
+      {:ok, _} = Reference.interrupt(%{turn_id: t1, port: nil, os_pid: nil}, s1, [])
+      assert :ok = Contours.assert_no_trailing_output!(Contours.records(d1), t1)
+
+      # Red on mutant: a stream chunk lands AFTER :turn_canceled.
+      {t2, d2, s2} = open_turn(base)
+      seed_output(s2, :turn_started, %{prompt: "stream please"})
+      seed_output(s2, :item_delta, %{chunk: "half a sen"})
+      {:ok, _} = TrailingOutput.interrupt(%{turn_id: t2}, s2, faults: harness)
+
+      err =
+        assert_raise ExUnit.AssertionError, fn ->
+          Contours.assert_no_trailing_output!(Contours.records(d2), t2)
+        end
+
+      assert err.message =~ "trailing output"
+      Faults.assert_all_fired!(harness, %{seed: seed, sites: [:trailing_output]})
+    end
+  end
+
+  describe "escalation conditionality — dead injector :naive_escalate" do
+    @tag :unix_only
+    test "a cooperative tool short-circuits after signal; killing it anyway fails the red", %{
+      base: base,
+      seed: seed
+    } do
+      harness = Faults.new()
+      Faults.arm(harness, :naive_escalate)
+
+      # Green on correct: KillLab.spawn_nice is the COOPERATIVE tool (dies on
+      # SIGTERM) — previously defined but never exercised by any test. The
+      # reference must short-circuit: no wait stage, no kill stage.
+      nice_lab = KillLab.spawn_nice(sleep: 30)
+      on_exit(fn -> KillLab.reap(nice_lab) end)
+      {t1, d1, s1} = open_turn(base)
+
+      {:ok, out1} =
+        Reference.interrupt(
+          %{turn_id: t1, port: nice_lab.port, os_pid: nice_lab.os_pid, grace_ms: 300},
+          s1,
+          []
+        )
+
+      assert :ok = Contours.assert_short_circuit!(Contours.records(d1), t1)
+      refute out1.killed?, "a cooperative tool must not be reported as hard-killed"
+
+      # Red on mutant: NaiveEscalate also sends the real cooperative signal
+      # (the tool dies from it, same as the reference case above) but never
+      # checks before escalating — it hard-kills the group regardless.
+      nice_lab2 = KillLab.spawn_nice(sleep: 30)
+      on_exit(fn -> KillLab.reap(nice_lab2) end)
+      {t2, d2, s2} = open_turn(base)
+
+      {:ok, _out2} =
+        NaiveEscalate.interrupt(
+          %{turn_id: t2, port: nice_lab2.port, os_pid: nice_lab2.os_pid, grace_ms: 300},
+          s2,
+          faults: harness
+        )
+
+      err =
+        assert_raise ExUnit.AssertionError, fn ->
+          Contours.assert_short_circuit!(Contours.records(d2), t2)
+        end
+
+      assert err.message =~ "still hard-killed"
+      Faults.assert_all_fired!(harness, %{seed: seed, sites: [:naive_escalate]})
+    end
+  end
+
+  describe "blast radius — bystander survival (safety-critical for kill -9 -<pgid>)" do
+    @tag :unix_only
+    test "killing the target's process group leaves a bystander in a different group alive", %{
+      base: base
+    } do
+      target = KillLab.spawn_rogue(sleep: 30)
+      on_exit(fn -> KillLab.reap(target) end)
+      bystander = KillLab.spawn_rogue(sleep: 30)
+      on_exit(fn -> KillLab.reap(bystander) end)
+
+      # BEAM makes each Port its own process-group leader (spike:
+      # pgid == os_pid, per port) — these two rogue tools sit in DIFFERENT
+      # groups even though both are "rogue".
+      refute target.os_pid == bystander.os_pid
+
+      {t1, _dir, s1} = open_turn(base)
+
+      {:ok, _out} =
+        Reference.interrupt(
+          %{turn_id: t1, port: target.port, os_pid: target.os_pid, grace_ms: 50},
+          s1,
+          []
+        )
+
+      assert KillLab.await_dead(target.os_pid), "target top pid survived its own interrupt"
+      assert KillLab.await_dead(target.child_pid), "target grandchild survived its own interrupt"
+
+      assert KillLab.alive?(bystander.os_pid),
+             "bystander top pid died from an interrupt aimed at a different group — blast radius leaked"
+
+      assert KillLab.alive?(bystander.child_pid),
+             "bystander grandchild died from an interrupt aimed at a different group — blast radius leaked"
+    end
+
+    @tag :unix_only
+    test "group_kill declines the -pgid kill for a pid that is not its own group's leader" do
+      lab = KillLab.spawn_rogue(sleep: 30)
+      on_exit(fn -> KillLab.reap(lab) end)
+
+      # The grandchild shares its parent's process group (pgid == the top
+      # pid's os_pid) but is NOT that group's leader (its own pid != that
+      # pgid). Asking to group-kill BY the grandchild's pid must decline the
+      # `-pgid` kill and fall back to an individual kill instead — a mis-taken
+      # pid must never be able to SIGKILL a whole group by proxy.
+      assert {:fallback, _children} = KillLab.group_kill(lab.child_pid)
+
+      KillLab.reap(lab)
     end
   end
 
@@ -171,10 +380,13 @@ defmodule Raxol.Agent.Red.U5InterruptControlsTest do
       assert err.message =~ "seed: #{seed}"
     end
 
-    test "the pure-journal fault sites are both alive (m1)", %{base: base} do
+    test "the pure-journal fault sites are all alive (m1)", %{base: base} do
       harness = Faults.new()
       Faults.arm(harness, :skip_wait)
       Faults.arm(harness, :late_result)
+      Faults.arm(harness, :trust_reason)
+      Faults.arm(harness, :trailing_output)
+      Faults.arm(harness, :wait_kill_transposed)
 
       {t1, _d1, s1} = open_turn(base)
       {:ok, _} = SkipWait.interrupt(%{turn_id: t1}, s1, faults: harness)
@@ -182,9 +394,21 @@ defmodule Raxol.Agent.Red.U5InterruptControlsTest do
       {t2, _d2, s2} = open_turn(base)
       {:ok, _} = LateResult.interrupt(%{turn_id: t2}, s2, faults: harness)
 
+      {t3, _d3, s3} = open_turn(base)
+      {:ok, _} = TrustReason.interrupt(%{turn_id: t3}, s3, faults: harness)
+
+      {t4, _d4, s4} = open_turn(base)
+      {:ok, _} = TrailingOutput.interrupt(%{turn_id: t4}, s4, faults: harness)
+
+      {t5, _d5, s5} = open_turn(base)
+      {:ok, _} = WaitKillTransposed.interrupt(%{turn_id: t5}, s5, faults: harness)
+
       fired = Faults.assert_all_fired!(harness, :m1_self_test)
       assert fired[:skip_wait] >= 1
       assert fired[:late_result] >= 1
+      assert fired[:trust_reason] >= 1
+      assert fired[:trailing_output] >= 1
+      assert fired[:wait_kill_transposed] >= 1
     end
   end
 

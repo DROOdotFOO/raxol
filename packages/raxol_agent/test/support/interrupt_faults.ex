@@ -4,7 +4,7 @@ defmodule Raxol.Agent.Interrupt.Faults do
   layer (`harness-invariants.md`, meta-invariants 1 & 2) applied to the interrupt
   reds.
 
-  Three named fault sites, one per dead injector:
+  Named fault sites, one per dead injector:
 
     * `:skip_wait`         — an interrupt that skips the bounded-wait stage
       (signal → kill), violating the staging contour.
@@ -13,13 +13,34 @@ defmodule Raxol.Agent.Interrupt.Faults do
       effectiveness contour (orphaned grandchild).
     * `:late_result`       — an interrupt that lets a tool-result through AFTER
       kill-complete, violating the post-kill quiescence contour.
+    * `:trust_reason`      — an interrupt that emits the wrong terminal event
+      type (trusts the outcome's `:reason` field instead of journaling the
+      frozen `:turn_canceled` record), violating the turn-canceled contour (P2).
+    * `:trailing_output`   — mid-provider-stream (no tool Port): an interrupt
+      that lets a stream chunk through AFTER `:turn_canceled`, violating the
+      no-trailing-output contour (P3b).
+    * `:naive_escalate`    — an interrupt that hard-kills unconditionally even
+      when the tool already exited cooperatively during the grace window,
+      violating the escalation-conditionality contour (the staged kill's
+      short-circuit).
+    * `:wait_kill_transposed` — an interrupt that kills BEFORE waiting (signal
+      → kill → wait instead of signal → wait → kill), violating the staging
+      contour's ordering.
 
   Each injector calls `record_fired/2` when it runs; a control arms its site and
   `assert_all_fired!/2` fails if an armed site never fired (a dead injector =
   green lies). Failure messages carry the seed/schedule for reproduction (m2).
   """
 
-  @sites [:skip_wait, :trust_exit_status, :late_result]
+  @sites [
+    :skip_wait,
+    :trust_exit_status,
+    :late_result,
+    :trust_reason,
+    :trailing_output,
+    :naive_escalate,
+    :wait_kill_transposed
+  ]
 
   @doc "All named interrupt fault sites."
   @spec sites() :: [atom()]

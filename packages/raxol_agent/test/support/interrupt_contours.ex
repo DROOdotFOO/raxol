@@ -109,7 +109,10 @@ defmodule Raxol.Agent.Interrupt.Contours do
     assert KillLab.await_dead(lab.os_pid),
            "tool process #{lab.os_pid} survived the interrupt"
 
-    assert KillLab.dead?(lab.child_pid),
+    # Polled, symmetric with the top-pid check above (a single non-polling
+    # `ps` on the grandchild was a CI flake vector: reaping can lag the top
+    # pid's death by a beat).
+    assert KillLab.await_dead(lab.child_pid),
            "orphaned grandchild #{lab.child_pid} survived the interrupt — the " <>
              "kill trusted :exit_status / killed only the top pid instead of the " <>
              "process group"
@@ -170,6 +173,36 @@ defmodule Raxol.Agent.Interrupt.Contours do
     assert offenders == [],
            "mid-stream interrupt left trailing output for turn #{turn_id}: " <>
              "#{inspect(offenders)} after turn_canceled"
+
+    :ok
+  end
+
+  @doc """
+  **Escalation-conditionality contour** (the substantive half of "staged" —
+  the spike's gotcha #4 in reverse: a well-behaved tool must NOT still be
+  hard-killed). When the tool exits cooperatively during the grace window
+  after the signal, the kill must short-circuit: `:interrupt_signaled` then
+  straight to `:turn_canceled` — no `:interrupt_waited` (the frozen doc: the
+  wait stage is "the bounded grace window elapsed WITHOUT the tool exiting"),
+  no `:interrupt_killed`. An implementation that escalates unconditionally —
+  hard-killing a tool that already exited on its own — raises here.
+  """
+  @spec assert_short_circuit!([map()], String.t()) :: :ok
+  def assert_short_circuit!(records, turn_id) do
+    seq = staged_sequence(records, turn_id)
+
+    assert Interrupt.signal_stage() in seq,
+           "no :interrupt_signaled record for turn #{turn_id} (#{inspect(seq)})"
+
+    assert Interrupt.kill_stage() not in seq,
+           "cooperative tool for turn #{turn_id} was still hard-killed " <>
+             "(#{inspect(seq)}) — escalation must be conditional on the tool " <>
+             "surviving the grace window, not unconditional"
+
+    assert Interrupt.wait_stage() not in seq,
+           "cooperative tool for turn #{turn_id} still recorded the wait stage " <>
+             "(#{inspect(seq)}) — the wait stage means the grace window elapsed " <>
+             "WITHOUT the tool exiting, which did not happen here"
 
     :ok
   end

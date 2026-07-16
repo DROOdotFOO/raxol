@@ -31,7 +31,11 @@ defmodule Raxol.Agent.KillLab do
 
   Options: `:sleep` (grandchild sleep seconds, default 30).
   """
-  @spec spawn_rogue(keyword()) :: %{port: port(), os_pid: non_neg_integer(), child_pid: non_neg_integer()}
+  @spec spawn_rogue(keyword()) :: %{
+          port: port(),
+          os_pid: non_neg_integer(),
+          child_pid: non_neg_integer()
+        }
   def spawn_rogue(opts \\ []) do
     secs = Keyword.get(opts, :sleep, 30)
     cmd = "trap '' TERM INT; sleep #{secs} & echo RAXOL_CHILD $!; wait"
@@ -43,7 +47,11 @@ defmodule Raxol.Agent.KillLab do
   does NOT trap signals — a well-behaved tool that still leaks its subprocess
   under a naive top-pid signal (spike gotcha #4). Same return shape.
   """
-  @spec spawn_nice(keyword()) :: %{port: port(), os_pid: non_neg_integer(), child_pid: non_neg_integer()}
+  @spec spawn_nice(keyword()) :: %{
+          port: port(),
+          os_pid: non_neg_integer(),
+          child_pid: non_neg_integer()
+        }
   def spawn_nice(opts \\ []) do
     secs = Keyword.get(opts, :sleep, 30)
     cmd = "sleep #{secs} & echo RAXOL_CHILD $!; wait"
@@ -96,8 +104,12 @@ defmodule Raxol.Agent.KillLab do
   @spec await_dead(non_neg_integer(), non_neg_integer()) :: boolean()
   def await_dead(pid, budget_ms \\ 500) do
     cond do
-      dead?(pid) -> true
-      budget_ms <= 0 -> false
+      dead?(pid) ->
+        true
+
+      budget_ms <= 0 ->
+        false
+
       true ->
         Process.sleep(10)
         await_dead(pid, budget_ms - 10)
@@ -124,21 +136,46 @@ defmodule Raxol.Agent.KillLab do
   swept the tool + its enumerated children individually instead.
   """
   @spec group_kill(non_neg_integer()) :: :group | {:fallback, [non_neg_integer()]}
-  def group_kill(os_pid) when is_integer(os_pid) and os_pid > 1 do
+  def group_kill(os_pid), do: group_signal(os_pid, "-9")
+
+  @doc """
+  The **cooperative** signal: OS process-group SIGTERM (`kill -TERM -<os_pid>`)
+  — the staging kill's SIGNAL-stage primitive. A well-behaved tool exits on
+  this alone (spike: ~4-11ms); a rogue one ignores it and survives to the
+  escalation. Signaling just the top pid does NOT cascade to the group (spike
+  gotcha #4) — that's why this, like `group_kill/1`, always targets `-os_pid`.
+  Guarded identically (see moduledoc).
+  """
+  @spec signal_group(non_neg_integer()) :: :group | {:fallback, [non_neg_integer()]}
+  def signal_group(os_pid), do: group_signal(os_pid, "-TERM")
+
+  defp group_signal(os_pid, signal)
+       when is_integer(os_pid) and os_pid > 1 and is_binary(signal) do
     if group_leader_safe?(os_pid) do
-      _ = System.cmd("/bin/sh", ["-c", "kill -9 -#{os_pid} 2>/dev/null"])
+      _ = System.cmd("/bin/sh", ["-c", "kill #{signal} -#{os_pid} 2>/dev/null"])
       :group
     else
       # Platform did not make the port a pgroup leader: sweep children by ppid
-      # (while the parent is alive to give the linkage), then kill the parent.
+      # (while the parent is alive to give the linkage), then signal the parent.
       children = children_of(os_pid)
-      _ = System.cmd("/bin/sh", ["-c", "kill -9 #{os_pid} 2>/dev/null"])
-      Enum.each(children, &top_pid_kill/1)
+      _ = System.cmd("/bin/sh", ["-c", "kill #{signal} #{os_pid} 2>/dev/null"])
+      Enum.each(children, &individual_signal(&1, signal))
       {:fallback, children}
     end
   end
 
-  @doc "Best-effort teardown that never raises — group-kill if safe, then belt-and-suspenders individual kills."
+  defp individual_signal(pid, signal) do
+    _ = System.cmd("/bin/sh", ["-c", "kill #{signal} #{pid} 2>/dev/null"])
+    :ok
+  end
+
+  @doc """
+  Best-effort teardown — group-kill if safe, then belt-and-suspenders
+  individual kills. Every shell-out is already `_ = System.cmd(...)` (status
+  ignored, stderr silenced); nothing here is expected to raise, so this does
+  NOT swallow exceptions with a bare rescue (repo convention against broad
+  rescues) — a genuine crash here should surface, not `:ok`-through.
+  """
   @spec reap(map()) :: :ok
   def reap(%{os_pid: os_pid} = lab) do
     if group_leader_safe?(os_pid) do
@@ -146,10 +183,11 @@ defmodule Raxol.Agent.KillLab do
     end
 
     _ = System.cmd("/bin/sh", ["-c", "kill -9 #{os_pid} 2>/dev/null"])
-    if child = Map.get(lab, :child_pid), do: System.cmd("/bin/sh", ["-c", "kill -9 #{child} 2>/dev/null"])
+
+    if child = Map.get(lab, :child_pid),
+      do: System.cmd("/bin/sh", ["-c", "kill -9 #{child} 2>/dev/null"])
+
     :ok
-  rescue
-    _ -> :ok
   end
 
   # A group-kill of -os_pid is safe ONLY when os_pid is genuinely the group's
@@ -175,7 +213,9 @@ defmodule Raxol.Agent.KillLab do
   defp os_getpid, do: :os.getpid() |> to_string() |> String.to_integer()
 
   defp children_of(ppid) do
-    case System.cmd("ps", ["-o", "pid=", "--ppid", Integer.to_string(ppid)], stderr_to_stdout: true) do
+    case System.cmd("ps", ["-o", "pid=", "--ppid", Integer.to_string(ppid)],
+           stderr_to_stdout: true
+         ) do
       {out, 0} ->
         out |> String.split("\n", trim: true) |> Enum.map(&parse_int/1) |> Enum.reject(&is_nil/1)
 
