@@ -54,18 +54,25 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
   ## Mergeability discipline
 
-  `@moduletag :harness_red` — excluded in `test_helper.exs`, so CI stays GREEN
-  while these are red (`--only harness_red` runs them). The negative controls
-  (dead injectors) live in `U12ProbeRunnerControlsTest` below WITHOUT the tag,
-  so they run in CI and prove the checkers are not vacuous.
+  GRADUATED (2026-07-16): the Runner Pool impl lands these all GREEN, so the
+  `@moduletag :harness_red` gate was removed and the suite now runs in CI. It
+  was authored red-first (excluded via `:harness_red` in `test_helper.exs`)
+  and stayed red until the impl existed; graduation followed the N-U12.3
+  amendment (see the test at the `submit under exhaustion` case for the ruling).
+  The negative controls (dead injectors) live in `U12ProbeRunnerControlsTest`
+  below and prove the checkers are not vacuous.
   """
   use ExUnit.Case, async: true
 
-  @moduletag :harness_red
-
   alias Raxol.Agent.Probe.Runner
   alias Raxol.Agent.Red.ProbeRunnerLab, as: L
-  alias Raxol.Agent.Red.ProbeRunnerLab.{CacheRideProbe, LoopDraftProbe, MultiCallProbe, TaintedTrustProbe}
+
+  alias Raxol.Agent.Red.ProbeRunnerLab.{
+    CacheRideProbe,
+    LoopDraftProbe,
+    MultiCallProbe,
+    TaintedTrustProbe
+  }
 
   # Seed for concurrent-schedule contours; overridable + dumped on failure (m2).
   @seed String.to_integer(System.get_env("U12_SEED", "424242"))
@@ -113,8 +120,12 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
           do: id
 
     cond do
-      MapSet.subset?(wanted, terminal_ids) -> events
-      System.monotonic_time(:millisecond) > deadline -> events
+      MapSet.subset?(wanted, terminal_ids) ->
+        events
+
+      System.monotonic_time(:millisecond) > deadline ->
+        events
+
       true ->
         Process.sleep(20)
         do_await(bus, wanted, deadline)
@@ -184,10 +195,11 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
              ),
              "budget-refused submit must PARK (probe_run{status: :parked}), got #{inspect(events)}"
 
-      # Fail-closed: no reserve ⇒ no call, ever.
+      # Fail-closed: no reserve ⇒ no call, ever — even across the shed.
       assert L.fail_closed(L.provider_calls(rig.provider), 0) == :ok
-      # Never dropped silently: the run is observable.
-      assert L.lifecycle_complete(events, []) == :ok
+      # Never dropped silently: the submitted run's lifecycle COMPLETES with a
+      # terminal, arriving asynchronously via the real shed path (not inline).
+      assert L.lifecycle_complete(events, [run_id]) == :ok
     end
 
     test "submit under saturation never blocks (seed-reproducible burst)" do
@@ -198,6 +210,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       results =
         for i <- 1..n do
           Process.sleep(:rand.uniform(2) - 1)
+
           {micros, result} =
             :timer.tc(fn ->
               Runner.submit("u12-red-#{i}", CacheRideProbe, submit_opts(rig, ctx()))
@@ -222,7 +235,11 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       submitted =
         for i <- 1..4 do
           assert {:ok, run_id} =
-                   Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx(tip_offset: 40 + i)))
+                   Runner.submit(
+                     "u12-red",
+                     CacheRideProbe,
+                     submit_opts(rig, ctx(tip_offset: 40 + i))
+                   )
 
           run_id
         end
@@ -230,7 +247,17 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       events = await_terminals(rig.bus, submitted)
       assert L.lifecycle_complete(events, submitted) == :ok
       assert {:ok, status} = Runner.status(hd(submitted))
-      assert status in [:completed, :exhausted, :timeout, :error, :killed, :parked, :queued, :running]
+
+      assert status in [
+               :completed,
+               :exhausted,
+               :timeout,
+               :error,
+               :killed,
+               :parked,
+               :queued,
+               :running
+             ]
     end
 
     test "kill/1 yields the :killed terminal exactly once; status reports it; no post-kill emission (N-U12.7)" do
@@ -387,7 +414,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       submitted =
         for _ <- 1..3 do
-          assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, context))
+          assert {:ok, run_id} =
+                   Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, context))
+
           run_id
         end
 
@@ -420,7 +449,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       submitted =
         for i <- 1..4 do
-          assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx(tip_offset: i)))
+          assert {:ok, run_id} =
+                   Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx(tip_offset: i)))
+
           run_id
         end
 
@@ -464,7 +495,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     test "every result event carries source == :probe_<spec.id> and trust == context.taint ⊓ refs-taint" do
       rig = rig()
 
-      assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx(taint: :trusted)))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx(taint: :trusted)))
+
       events = await_terminals(rig.bus, [run_id])
 
       results = Enum.filter(events, &(&1.kind == :meta_result))
@@ -485,6 +518,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       # The Runner overrides the probe's :trusted draft: the algebra is Runner-owned.
       assert L.provenance_stamped(events, :probe_c1_gate, :tainted) == :ok
+
       refute Enum.any?(results, &(&1.trust == :trusted)),
              "a tainted context produced a trusted event: #{inspect(results)}"
     end
@@ -570,7 +604,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     SettleOnlyRunner.run(rig, "r1")
     events = L.events(rig.bus)
 
-    assert {:error, {:bad_order, "r1", kinds, :call_without_reserve}} = L.reserve_before_call(events)
+    assert {:error, {:bad_order, "r1", kinds, :call_without_reserve}} =
+             L.reserve_before_call(events)
+
     assert kinds == [:call, :settle]
     # The provider WAS invoked with zero reserves — the stub counter has the proof.
     assert L.provider_calls(rig.provider) == 1
@@ -599,7 +635,10 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     ProbeControlledLeashRunner.run(rig, "r1", max_calls)
 
     assert L.provider_calls(rig.provider) == max_calls + 1
-    assert {:error, {:leash_exceeded, 3, 2}} = L.leash_enforced(L.provider_calls(rig.provider), max_calls)
+
+    assert {:error, {:leash_exceeded, 3, 2}} =
+             L.leash_enforced(L.provider_calls(rig.provider), max_calls)
+
     L.assert_all_fired!(rig.fireset, [:probe_leash])
   end
 
@@ -611,7 +650,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     captures = L.captures(rig.provider)
 
     assert [_] = captures
-    assert {:error, {:prefix_divergence, offset, "r1"}} = L.prefix_identity(captures, L.primary_prefix())
+
+    assert {:error, {:prefix_divergence, offset, "r1"}} =
+             L.prefix_identity(captures, L.primary_prefix())
 
     # The 1-byte divergence is NAMED: the offset points at the first divergent
     # byte (the collapsed double space inside "hi  there").
@@ -672,7 +713,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     TerminalCountRunner.run(rig, "r1", :omit)
     events = L.events(rig.bus)
 
-    assert {:error, {:lifecycle, "r1", %{openings: 1, terminals: 0}}} = L.lifecycle_complete(events)
+    assert {:error, {:lifecycle, "r1", %{openings: 1, terminals: 0}}} =
+             L.lifecycle_complete(events)
+
     L.assert_all_fired!(rig.fireset, [:terminal_count])
   end
 
@@ -712,7 +755,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     LoopPerturbingRunner.run(rig, "r1", baseline)
     events = L.events(rig.bus)
 
-    assert {:error, {:isolation_breach, got, ^baseline}} = L.loop_fold_independence(events, baseline)
+    assert {:error, {:isolation_breach, got, ^baseline}} =
+             L.loop_fold_independence(events, baseline)
+
     assert got == baseline ++ [:probe_injected]
     L.assert_all_fired!(rig.fireset, [:loop_perturb])
   end
