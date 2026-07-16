@@ -73,7 +73,8 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     LoopDraftProbe,
     MultiCallProbe,
     ShortParkProbe,
-    TaintedTrustProbe
+    TaintedTrustProbe,
+    UnregisteredSourceProbe
   }
 
   # Seed for concurrent-schedule contours; overridable + dumped on failure (m2).
@@ -817,6 +818,24 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       refute Enum.any?(results, &(&1.trust == :trusted)),
              "a tainted context produced a trusted event: #{inspect(results)}"
+    end
+
+    test "an unregistered probe id stamps :probe_unregistered, never the bare interned atom (adversarial-review #10)" do
+      # :probe_notreal IS interned (by UnregisteredSourceProbe) but is not a
+      # registered Meta.Registry source, so String.to_existing_atom/1 would
+      # resolve it — only the membership check rejects it.
+      rig = rig()
+      assert UnregisteredSourceProbe.interned_source() == :probe_notreal
+
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", UnregisteredSourceProbe, submit_opts(rig, ctx()))
+
+      events = await_terminals(rig.bus, [run_id])
+      results = Enum.filter(events, &(&1.kind == :meta_result))
+      assert results != [], "no result events — the provenance-source contour is vacuous"
+
+      assert Enum.all?(results, &(&1.source == :probe_unregistered)),
+             "an unregistered probe id must stamp :probe_unregistered, got #{inspect(results)}"
     end
 
     test "a TRUSTED context whose drafted ref reaches a tainted record still stamps :tainted (adversarial-review #4)" do

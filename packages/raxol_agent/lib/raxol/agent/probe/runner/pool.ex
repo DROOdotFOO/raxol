@@ -581,10 +581,15 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
 
   # `:probe_<id>` provenance source (§3.1). A probe cannot stamp its own source.
   # The source atoms are pre-interned in the grow-only provenance registry
-  # (`Raxol.Agent.Meta.Registry` @sources, §2.1) — resolve to the existing atom,
-  # never mint a fresh one from a journal/probe token (atom-table DoS guard).
+  # (`Raxol.Agent.Meta.Registry` @sources, §2.1). Resolve to the existing atom
+  # (never mint a fresh one from a probe token — atom-table DoS guard) AND require
+  # it to be a REGISTERED source: `String.to_existing_atom/1` alone resolves ANY
+  # interned atom, so it would accept `:probe_<x>` interned elsewhere but never
+  # registered. Membership through the Meta seam is what makes the moduledoc's
+  # "through the U11 Meta seam" claim true (#10).
   defp provenance_source(probe_id) do
-    String.to_existing_atom("probe_" <> Atom.to_string(probe_id))
+    candidate = String.to_existing_atom("probe_" <> Atom.to_string(probe_id))
+    if candidate in Meta.Registry.sources(), do: candidate, else: :probe_unregistered
   rescue
     ArgumentError -> :probe_unregistered
   end

@@ -548,6 +548,43 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       do: {:ok, [%{type: :gate_decision, refs: [context.tip_offset], payload: %{choice: :allow}}]}
   end
 
+  defmodule UnregisteredSourceProbe do
+    @moduledoc """
+    A probe whose id (`:notreal`) maps to `:probe_notreal` — an atom that IS
+    interned (referenced below) but is NOT a registered provenance source. The
+    Runner must stamp `:probe_unregistered`, never the bare interned atom
+    (adversarial-review #10). Interning the atom here proves the membership check
+    (not merely `String.to_existing_atom/1`) is what rejects it.
+    """
+    @behaviour Raxol.Agent.Probe
+
+    # Force :probe_notreal to be interned so String.to_existing_atom/1 succeeds —
+    # only the Meta.Registry membership check should then reject it.
+    @interned :probe_notreal
+    def interned_source, do: @interned
+
+    @impl true
+    def spec do
+      %{
+        id: :notreal,
+        mode: :cache_riding,
+        max_calls: 1,
+        timeout_ms: 5_000,
+        default_budget: 500,
+        max_parked: 4,
+        park_timeout_ms: 10_000
+      }
+    end
+
+    @impl true
+    def build(_context),
+      do: {:ok, %{suffix: [%{role: "user", content: "x"}], output: :structured, max_output_tokens: 64}}
+
+    @impl true
+    def interpret(_response, context),
+      do: {:ok, [%{type: :gate_decision, refs: [context.tip_offset], payload: %{choice: :allow}}]}
+  end
+
   defmodule HangingProbe do
     @moduledoc """
     A probe whose `build/1` never returns — a hung provider/interpret call. The
