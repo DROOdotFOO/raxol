@@ -163,9 +163,7 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
            seed: seed
          } do
       unknown =
-        Gen.rec(1, :meta, :from_the_future_v9, %{refs: [], note: "later"},
-          source: "probe_x"
-        )
+        Gen.rec(1, :meta, :from_the_future_v9, %{refs: [], note: "later"}, source: "probe_x")
 
       {[readback], _session} = seed_journal!(base, [unknown])
 
