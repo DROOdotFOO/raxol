@@ -58,6 +58,56 @@ defmodule Raxol.Agent.KillLab do
     spawn_tool(cmd)
   end
 
+  @doc """
+  Spawn a rogue tool whose interesting subtree hangs off a **non-group-leader**
+  mid shell: `bash (port, group leader) → sh MID (traps TERM/INT) → sh → sleep`.
+  Returns `%{port:, os_pid:, child_pid:}` where `child_pid` is MID — a pid with
+  `pgid != pid`, so signaling it forces the per-pid fallback path, and MID's
+  *grandchild* `sleep` is exactly what a depth-1 child sweep misses. Used by
+  the degraded-fallback claim regression.
+  """
+  @spec spawn_rogue_nested(keyword()) :: %{
+          port: port(),
+          os_pid: non_neg_integer(),
+          child_pid: non_neg_integer()
+        }
+  def spawn_rogue_nested(opts \\ []) do
+    secs = Keyword.get(opts, :sleep, 30)
+
+    cmd =
+      ~s[sh -c 'trap "" TERM INT; sh -c "sleep #{secs} & wait" & wait' & ] <>
+        ~s[echo RAXOL_CHILD $!; wait]
+
+    spawn_tool(cmd)
+  end
+
+  @doc """
+  Spawn a tool that manufactures a **zombie**: a short-lived child exits under
+  a parent (`exec sleep`) that never reaps it, so the child sits in STAT `Z`
+  until the parent dies. Returns `%{port:, os_pid:, child_pid:}` where
+  `child_pid` becomes the zombie. Used by the state-aware-liveness regression
+  (`ps -p` exits 0 for a zombie; a liveness oracle must not call it alive).
+  """
+  @spec spawn_zombie(keyword()) :: %{
+          port: port(),
+          os_pid: non_neg_integer(),
+          child_pid: non_neg_integer()
+        }
+  def spawn_zombie(opts \\ []) do
+    secs = Keyword.get(opts, :sleep, 30)
+    cmd = "sleep 0.2 & echo RAXOL_CHILD $!; exec sleep #{secs}"
+    spawn_tool(cmd)
+  end
+
+  @doc "True iff `ps` reports `pid` in a zombie (`Z*`) state."
+  @spec zombie?(non_neg_integer()) :: boolean()
+  def zombie?(pid) when is_integer(pid) do
+    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
+      {out, 0} -> out |> String.trim() |> String.starts_with?("Z")
+      _ -> false
+    end
+  end
+
   defp spawn_tool(cmd) do
     port =
       Port.open(

@@ -25,6 +25,14 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
     * P4 — post-kill quiescence: no output event for the turn after kill-complete.
     * P5 — the OS process (and its grandchild) is actually gone — the spike's
       process-group ground truth, not `:exit_status`.
+    * P6 — kill-claim integrity: a failed OS kill journals
+      `:interrupt_kill_failed`, never a forged `:interrupt_killed`.
+    * P7 — pgid derivation works on this host (group-kill, not the fallback).
+    * P8 — the degraded per-pid fallback never claims a confirmed group kill
+      (adversarial-review regression: confirmation must observe the GROUP).
+    * P9 — the liveness oracle is state-aware: a zombie is dead, not alive.
+    * P10 — a sink failure after the kill converts to an error return carrying
+      the OS truth; it never raises out of the staged kill.
 
   The `:unix_only` tests spawn real OS processes; they are additionally guarded
   by that tag (auto-excluded on Windows).
@@ -226,7 +234,113 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
     end
   end
 
+  describe "P8 — degraded per-pid fallback never claims a confirmed group kill" do
+    @tag :unix_only
+    test "a non-group-leader target (fallback path) yields kill_failed, not a false killed",
+         %{base: base} do
+      lab = KillLab.spawn_rogue_nested(sleep: 30)
+      on_exit(fn -> KillLab.reap(lab) end)
+
+      # Target the MID shell: pgid != pid, so the kill must take the per-pid
+      # fallback — the same degraded path a host with broken pgid derivation
+      # takes for EVERY kill. MID's grandchild sleep is what a depth-1 sweep
+      # misses; the pre-fix code still confirmed death off the top pid alone
+      # and journaled a false :interrupt_killed while the grandchild lived.
+      refute Interrupt.group_leader_safe?(lab.child_pid),
+             "test premise broken: the mid shell must not be its own group leader"
+
+      {turn_id, dir, sink} = open_turn(base)
+      seed(sink, :turn_started, %{prompt: "run the rogue tool"})
+
+      {:ok, outcome} =
+        Interrupt.interrupt(
+          %{turn_id: turn_id, port: lab.port, os_pid: lab.child_pid, grace_ms: 50},
+          sink,
+          []
+        )
+
+      refute outcome.killed?,
+             "a per-pid fallback sweep is not a group SIGKILL and must not report killed?"
+
+      refute outcome.confirmed_dead?,
+             "group death was never observable on the fallback path — confirming it " <>
+               "off the top pid is the exact top-pid observation the effectiveness law condemns"
+
+      Contours.assert_kill_failed!(Contours.records(dir), turn_id)
+    end
+  end
+
+  describe "P9 — the liveness oracle is state-aware (a zombie is dead, not alive)" do
+    @tag :unix_only
+    test "a killed-but-unreaped (zombie) child is reported dead, though ps -p exits 0" do
+      lab = KillLab.spawn_zombie(sleep: 30)
+      on_exit(fn -> KillLab.reap(lab) end)
+
+      assert await(fn -> KillLab.zombie?(lab.child_pid) end, 3_000),
+             "the short-lived child never became a zombie — cannot exercise the oracle"
+
+      # Raw `ps -p` still exits 0 for a zombie: the pre-fix oracle called it
+      # alive and burned the whole confirmation budget on an already-dead
+      # process (confirmed_dead? false on a genuinely dead tool — a lie and a
+      # flake vector on loaded machines).
+      assert KillLab.alive?(lab.child_pid),
+             "test premise broken: ps -p should still see the zombie"
+
+      refute Interrupt.os_alive?(lab.child_pid),
+             "a zombie is a KILLED process awaiting reap — the interrupt's " <>
+               "liveness oracle must report it dead"
+    end
+  end
+
+  describe "P10 — a sink failure after the kill never raises out of the staged kill" do
+    test "a sink dying on the kill fence yields {:error, {:sink_failure, _, outcome}}", %{
+      base: base
+    } do
+      {turn_id, dir, sink} = open_turn(base)
+      seed(sink, :turn_started, %{prompt: "long task"})
+
+      # The kill (here the tool-less bookkeeping fence) has already run when
+      # the kill-stage emit fires; a journal-writer failure at that point must
+      # not escape as a raise and leave the caller guessing whether the kill
+      # happened — the OS truth rides back inside the error.
+      kill = Interrupt.kill_stage()
+
+      failing = fn
+        ^kill, _payload -> raise "journal writer down"
+        type, payload -> sink.(type, payload)
+      end
+
+      assert {:error, {:sink_failure, %RuntimeError{}, outcome}} =
+               Interrupt.interrupt(%{turn_id: turn_id, port: nil, os_pid: nil}, failing, [])
+
+      assert outcome.turn_id == turn_id
+      assert Interrupt.kill_stage() in outcome.stages
+
+      # The journal holds the pre-kill stages, and no forged records after the
+      # sink died — the caller owns reconciliation, the journal never lies.
+      types = for r <- Contours.records(dir), r["turn_id"] == turn_id, do: r["type"]
+      assert "interrupt_signaled" in types
+      assert "interrupt_waited" in types
+      refute "interrupt_killed" in types
+      refute "turn_canceled" in types
+    end
+  end
+
   # --- helpers ---------------------------------------------------------------
+
+  defp await(fun, budget_ms) do
+    cond do
+      fun.() ->
+        true
+
+      budget_ms <= 0 ->
+        false
+
+      true ->
+        Process.sleep(20)
+        await(fun, budget_ms - 20)
+    end
+  end
 
   # Open a fresh session journal + a durable sink for one turn.
   defp open_turn(base) do
