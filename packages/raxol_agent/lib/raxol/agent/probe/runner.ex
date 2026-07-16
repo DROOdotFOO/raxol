@@ -1,12 +1,10 @@
 defmodule Raxol.Agent.Probe.Runner do
   @moduledoc """
-  U12 — the probe Runner interface (frozen observables,
-  `harness-freeze-contracts.md` §3.1/§3.3). **Skeleton only** — every function
-  here returns `{:error, :not_implemented}`. The permanent U12-R red suite
-  (`test/raxol/agent/red/u12_probe_runner_red_test.exs`) is authored against
-  this seam *before* the in-BEAM supervised pool exists (roadmap D2 — no
-  Oban/Postgres; D1 stayed on files). U12 replaces the bodies; the red suite
-  turns green when it does.
+  U12 — the probe Runner (frozen observables, `harness-freeze-contracts.md`
+  §3.1/§3.3). The in-BEAM supervised pool (roadmap D2 — no Oban/Postgres; D1
+  stayed on files) that drives a `Raxol.Agent.Probe` through its lifecycle and
+  emits the frozen `probe_run` / result meta events, owning everything the pure
+  probe does not.
 
   ## What the Runner owns (the probe does not)
 
@@ -26,11 +24,13 @@ defmodule Raxol.Agent.Probe.Runner do
       full terminates `:exhausted` (never `:parked`); a parked run past its TTL
       terminates `:exhausted`. Every shed run still gets its terminal event
       (N-U12.10, additive to N-U12.3).
-    * **Reserve-before-call (AD-6a).** Reserve `estimate = max_output_tokens +
-      uncached_prompt_estimate` BEFORE each provider call; settle actuals after.
-      No reserve ⇒ no call, ever. Settlement is Runner↔Ledger-internal (F4) — no
-      `reservation_id` is exposed. The frozen `charge` shape is the
-      post-settlement authoritative report.
+    * **Reserve-before-call (AD-6a).** Reserve BEFORE each provider call; settle
+      actuals after. No reserve ⇒ no call, ever. The two-level budget reserves
+      session-then-run (OQ-U12.1); a run-level refusal after a session-level
+      success RELEASES the session reservation (partial-failure rollback).
+      Settlement is Runner↔Ledger-internal (F4) — no `reservation_id` is
+      exposed. The frozen `charge` shape is the post-settlement authoritative
+      report.
     * **Provenance stamping (U11).** Result meta events carry
       `provenance.source = :probe_<spec.id>` and `trust = context.taint ⊓ refs`.
       A probe cannot stamp its own provenance; a run over tainted context
@@ -47,8 +47,8 @@ defmodule Raxol.Agent.Probe.Runner do
   `payload: %{probe, run_id, status, charge, refs}`. Terminal statuses are
   exclusive and final — **exactly one** opening (`:started`-or-`:parked`) and
   **exactly one** terminal per run (P-U12.1). The terminal carries the
-  model/params fingerprint (REQUIRED on probe terminals) and MAY carry
-  `cost_ref` into the Ledger.
+  model/params fingerprint (REQUIRED on probe terminals, via
+  `Raxol.Agent.Fingerprint`) and MAY carry `cost_ref` into the Ledger.
 
   ## The `charge` shape (frozen — §3.1 Budget)
 
@@ -59,7 +59,21 @@ defmodule Raxol.Agent.Probe.Runner do
 
   The cost *function* over a charge (how cached tokens are weighted) is policy,
   not frozen — the shape guarantees the UI fork and U18 always see the split.
+
+  ## Injectable seams (interface-only wiring, §3)
+
+  `submit/3` reads its side-effecting seams from `opts` so the U12-R red suite
+  can fold them in-memory:
+
+    * `:emit` — a 1-arity sink the Runner calls with each frozen record map
+      (the journal / EmitBridge in production).
+    * `:provider` — an opaque handle the Runner rides the shared prefix through
+      (the real provider in production).
+    * `:budget` — an opaque `Ledger.try_spend`-shaped reserve handle.
+    * `:context` — the `Raxol.Agent.Probe.context()` the pure probe reads.
   """
+
+  alias Raxol.Agent.Probe.Runner.Pool
 
   @typedoc "Opaque run identity returned by `submit/3`."
   @type run_id :: String.t()
@@ -102,20 +116,20 @@ defmodule Raxol.Agent.Probe.Runner do
   @doc "Current status of a run, or `{:error, :not_found}`."
   @callback status(run_id()) :: {:ok, status()} | {:error, :not_found}
 
-  # --- skeleton: not implemented until U12 lands ----------------------------
-  #
-  # These stubs let the red suite compile and RUN (red) against a real symbol.
-  # U12 replaces the bodies; the red suite turns green when it does.
-
-  @doc false
+  @doc """
+  Submit `probe` for `session_id`. See the moduledoc: non-blocking, total over
+  registered probes, parks under saturation.
+  """
   @spec submit(String.t(), module(), keyword()) :: {:ok, run_id()} | {:error, :unknown_probe}
-  def submit(_session_id, _probe, _opts \\ []), do: {:error, :not_implemented}
+  def submit(session_id, probe, opts \\ []) do
+    Pool.submit(session_id, probe, opts)
+  end
 
-  @doc false
+  @doc "Kill a run (see the moduledoc / N-U12.7)."
   @spec kill(run_id()) :: :ok | {:error, :not_found}
-  def kill(_run_id), do: {:error, :not_implemented}
+  def kill(run_id), do: Pool.kill(run_id)
 
-  @doc false
+  @doc "Current status of a run, or `{:error, :not_found}`."
   @spec status(run_id()) :: {:ok, status()} | {:error, :not_found}
-  def status(_run_id), do: {:error, :not_implemented}
+  def status(run_id), do: Pool.status(run_id)
 end
