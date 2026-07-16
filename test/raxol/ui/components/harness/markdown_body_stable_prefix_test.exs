@@ -88,9 +88,9 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
     {chunks, final}
   end
 
-  # --- SP-EQ: the equivalence spec (the load-bearing oracle property) ---
+  # --- the equivalence spec (the load-bearing oracle property) ---
 
-  describe "SP-EQ — incremental render equals full re-parse at every prefix" do
+  describe "equivalence oracle — incremental render equals full re-parse at every prefix" do
     # Fragments deliberately include unclosed inline constructs, stray
     # pipes, fence markers, and multibyte text -- the exact hazards the
     # checkpoint rule must refuse to freeze across.
@@ -198,9 +198,9 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
     end
   end
 
-  # --- SP-IMM: the frozen prefix is genuinely immutable ---
+  # --- the frozen prefix is genuinely immutable ---
 
-  describe "SP-IMM — frozen elements never change once frozen" do
+  describe "frozen-prefix immutability — frozen elements never change once frozen" do
     test "each returned view begins with exactly the checkpoint's frozen elements" do
       {chunks, _final} = golden_deltas_and_final()
 
@@ -227,9 +227,9 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
     end
   end
 
-  # --- SP-HAZ: directed hazard cases (each names a clause of the boundary rule) ---
+  # --- directed hazard cases (each names a clause of the boundary rule) ---
 
-  describe "SP-HAZ — table lookahead: a committed '|' line must not freeze before its next line arrives" do
+  describe "boundary hazard: table lookahead — a committed pipe line must not freeze before its next line arrives" do
     test "a line that later becomes a table header is never frozen prematurely" do
       # After chunk 1, "| a | b |" is a committed plain-prose line; chunk
       # 2 retroactively makes it a TABLE HEADER. Freezing it after chunk
@@ -258,7 +258,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
     end
   end
 
-  describe "SP-HAZ — open fence: no boundary inside an unterminated fence" do
+  describe "boundary hazard: open fence — no boundary inside an unterminated fence" do
     test "the checkpoint holds at the fence opener until the matching closer arrives" do
       opener = "```\n"
       chunks = [opener, "code | with pipe\n", "**not bold**\n", "```\n", "\n"]
@@ -290,7 +290,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
     end
   end
 
-  describe "SP-HAZ — live inline state: an unclosed emphasis spanning lines blocks the boundary" do
+  describe "boundary hazard: live inline state — an unclosed emphasis spanning lines blocks the boundary" do
     test "a committed line with an unclosed ** does not freeze until the construct resolves" do
       chunks = ["start **bold\n", "still bold** done\n", "\n", "next\n"]
 
@@ -310,7 +310,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
     end
   end
 
-  describe "SP-HAZ — UTF-8 and CRLF chunk splits" do
+  describe "boundary hazard: UTF-8 and CRLF chunk splits" do
     test "byte-by-byte streaming across multibyte graphemes matches the oracle at every byte" do
       doc = "café 日本語 😀 done\n\n**bold** more\n"
 
@@ -334,9 +334,9 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
     end
   end
 
-  # --- SP-API: checkpoint lifecycle contract ---
+  # --- checkpoint lifecycle contract ---
 
-  describe "SP-API — checkpoint lifecycle" do
+  describe "checkpoint lifecycle" do
     test "new_checkpoint/0 starts at offset zero with no frozen elements" do
       cp = MarkdownBody.new_checkpoint()
       assert cp.frozen_byte_offset == 0
@@ -393,9 +393,9 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
     end
   end
 
-  # --- SP-CAP: the 256KB ceiling applies to the TOTAL accumulated text ---
+  # --- the 256KB ceiling applies to the TOTAL accumulated text ---
 
-  describe "SP-CAP — the byte cap applies to the total, and resets the checkpoint" do
+  describe "byte cap — applies to the total accumulated text, and resets the checkpoint" do
     @cap_bytes 256 * 1024
 
     test "above the cap the view is the oracle-identical plain-text fallback and the checkpoint resets" do
@@ -429,14 +429,14 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
     end
   end
 
-  # --- SP-PERF: the O(N^2) -> O(N) pin ---
+  # --- the O(N^2) -> O(N) pin ---
 
   # Order-of-magnitude convention (same as N-MDFUZZ-05 in
   # markdown_body_test.exs): generous absolute bounds that a
   # wrong-complexity implementation blows past by 10x+, never tight
   # wall-clock asserts -- CI runners are slow.
 
-  describe "SP-PERF — incremental parse work is bounded by the live tail, not the total" do
+  describe "streaming performance — incremental parse work is bounded by the live tail, not the total" do
     defp perf_doc do
       Enum.map_join(1..1_000, "", fn i ->
         "paragraph #{i} with **bold** text and `code` spans.\n\n"
@@ -485,29 +485,44 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
       assert view == oracle(doc)
     end
 
-    test "cumulative incremental work over 2000 line-deltas stays well under the never-hang bound" do
-      # Pre-fix, every delta re-parses the FULL accumulated text: 2000
-      # deltas x O(N) parse = O(N^2) total, which blows this bound by an
-      # order of magnitude. Incremental work per delta is O(live tail)
-      # (one paragraph), so the total stays comfortably inside it.
+    test "cumulative parse WORK over 2000 line-deltas is linear in the doc, not quadratic" do
+      # A work metric, not wall-clock: per delta, the bytes actually
+      # re-parsed are exactly `byte_size(acc) - frozen_byte_offset` (the
+      # live tail past the checkpoint). This is deterministic and
+      # runner-independent -- a shared CI box under load cannot flake it
+      # -- and it pins the O(N) claim tighter than time does.
+      #
+      # Pre-fix (no checkpoint, offset pinned at 0), the sum is
+      # sum(prefix sizes) ~= 1000x the doc size for this stream. With a
+      # tracking checkpoint the tail stays one paragraph (~2 lines), so
+      # the sum lands around 2x the doc size. 4x is a generous
+      # order-of-magnitude separator (~250x headroom against the
+      # quadratic shape).
       doc = perf_doc()
       deltas = line_deltas(doc)
 
-      {elapsed_us, _} =
-        :timer.tc(fn ->
-          Enum.reduce(deltas, {"", MarkdownBody.new_checkpoint()}, fn delta,
-                                                                      {acc, cp} ->
-            acc = acc <> delta
+      {total_tail_bytes, {_acc, final_cp}} =
+        Enum.reduce(deltas, {0, {"", MarkdownBody.new_checkpoint()}}, fn delta,
+                                                                         {work,
+                                                                          {acc,
+                                                                           cp}} ->
+          acc = acc <> delta
+          tail_bytes = byte_size(acc) - cp.frozen_byte_offset
 
-            {_view, cp} =
-              MarkdownBody.render_streaming_incremental(acc, @width, cp)
+          {_view, cp} =
+            MarkdownBody.render_streaming_incremental(acc, @width, cp)
 
-            {acc, cp}
-          end)
+          {work + tail_bytes, {acc, cp}}
         end)
 
-      assert elapsed_us < 2_000_000,
-             "2000 incremental deltas took #{elapsed_us}us (bound 2000000)"
+      assert total_tail_bytes < 4 * byte_size(doc),
+             "cumulative re-parsed tail bytes #{total_tail_bytes} exceed " <>
+               "4x the doc size (#{byte_size(doc)}) -- the checkpoint is " <>
+               "not bounding per-delta work"
+
+      # the checkpoint only ever moves forward -- offsets are monotone by
+      # construction, and the final one covers (nearly) the whole doc.
+      assert final_cp.frozen_byte_offset >= byte_size(doc) - 100
     end
 
     # Timing comparisons belong out of the default suite (:slow is
