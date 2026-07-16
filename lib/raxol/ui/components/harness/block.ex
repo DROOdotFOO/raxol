@@ -9,8 +9,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   code yet (spec draft only) -- `from_events/3` accepts plain maps shaped
   like it: `%{id:, turn_id:, ts:, family:, type:, tier:, scope:,
   provenance:, payload:}`, all keys optional and read defensively. That
-  tolerance is deliberate: the contract only grows (methodology R6), and
-  this module must never crash when it meets a field it doesn't know yet.
+  tolerance is deliberate: the contract only grows, and this module must
+  never crash when it meets a field it doesn't know yet.
 
   ## Struct
 
@@ -47,8 +47,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   transition takes a `:fold_after_seal` option (`:allow | :deny`, default
   `:deny`) so the eventual D-PA verdict plugs in as a caller-supplied policy
   with no rewrite of this module: pass `fold_after_seal: :allow` once D-PA
-  chooses (B) soft-owned history or (C) live-region-only with a wider live
-  window; leave the default `:deny` for (A) seal-time-only.
+  chooses soft-owned history or live-region-only with a wider live window;
+  leave the default `:deny` for seal-time-only fold semantics.
 
   A denied post-seal fold is a silent no-op by design (`fold/2` always
   returns `t()`, never a tagged tuple). Callers that track fold state on
@@ -69,8 +69,11 @@ defmodule Raxol.UI.Components.Harness.Block do
   fallback to the placeholder line) are observable per
   `harness-ui-testing/06-projection.md` sec 4: each emits a
   `Logger.warning/1` and the telemetry event
-  `[:raxol, :harness, :projection, :recovered]` with metadata
-  `%{kind:, reason:}` -- a recovery is never silent.
+  `[:raxol, :harness, :block, :recovered]` with metadata
+  `%{kind:, reason:}` -- a recovery is never silent. (Distinct from
+  `Raxol.Harness.Projection.Recovery`'s stream-level
+  `[:raxol, :harness, :projection, :recovered]`, whose metadata is
+  `%{reason:, event_id:}`.)
 
   ## Rendering
 
@@ -87,15 +90,41 @@ defmodule Raxol.UI.Components.Harness.Block do
   line alone + the outcome row. The outcome row is omitted entirely when
   `exit_code`, `duration_ms`, and `cost` are all `nil`; otherwise it renders
   only the fields that are present.
+
+  ## Prominence
+
+  `context[:prominence]` (`0.0..1.0`) resolves the header/content/outcome
+  text colours through `Raxol.UI.Harness.Prominence` -- a salience solver
+  that fades a colour toward the background as prominence drops.
+  `context[:ground]` overrides the background lightness (default:
+  terminal-detected, see `Raxol.UI.Theming.SalienceTheme.detect_ground/0`).
+  `context[:legibility_floor]` (default `false`) is threaded through to
+  `Prominence.resolve/3`: the default is a pure fade (context text recedes,
+  becoming legible again as it is promoted); set it `true` for interactive
+  tiers where a minimum legibility must be preserved (see the `Prominence`
+  moduledoc's "Two modes").
+
+  When `context[:markdown]` is enabled, the Markdown body is faded to the
+  same resolved colour as the header, so the whole block dims together.
+
+  **Default is neutral**: when `:prominence` is absent from `context`, or
+  is `1.0`, no style is touched -- the render is byte-identical to a render
+  without prominence (no `:fg` added to any style map), so existing callers
+  that never pass `:prominence` see zero change.
+
+  The colour is resolved once per `render/2` call and threaded into every
+  branch, so a multi-line body never re-runs the solver per line.
   """
 
+  alias Raxol.UI.Components.Harness.MarkdownBody
+  alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.TextLayout
   alias Raxol.UI.TextMeasure
   alias Raxol.View.Components
 
   require Logger
 
-  @recovered_telemetry_event [:raxol, :harness, :projection, :recovered]
+  @recovered_telemetry_event [:raxol, :harness, :block, :recovered]
 
   @type kind :: :message | :reasoning | :tool_call | :diff | :approval | :opaque
   @type fold_state :: :expanded | :folded
@@ -325,6 +354,19 @@ defmodule Raxol.UI.Components.Harness.Block do
   @doc """
   Renders `block` as a plain view map. `context[:width]` sets the wrap/
   truncation budget (defaults to `Raxol.Core.Defaults.terminal_width/0`).
+
+  `context[:markdown]` (default `false`, additive/opt-in) routes a
+  `:message`/`:reasoning` block's text content through
+  `Raxol.UI.Components.Harness.MarkdownBody` instead of the plain
+  line-split body: `:sealed` mode while the block is `:sealed`, `:streaming`
+  (provisional-close) while it is still `:live`. Every other kind, and
+  every block when the option is omitted, renders exactly as before.
+
+  `context[:prominence]` (see the moduledoc's "Prominence" section) fades
+  the header, content, and outcome to one resolved colour. A Markdown body
+  fades in lockstep -- its text nodes carry the same colour as the header,
+  so a faded header never sits above a bright body.
+
   Never raises: any unexpected internal shape falls back to a one-line
   placeholder rather than crashing the caller.
   """
@@ -333,21 +375,26 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   def render(%__MODULE__{} = block, context) do
     width = Map.get(context, :width, Raxol.Core.Defaults.terminal_width())
-    build_render(block, width)
+    build_render(block, width, context)
   rescue
     e ->
       emit_recovered(block.kind, e)
       render_fallback(block)
   end
 
-  defp build_render(block, width) do
-    header = header_view(block, width)
-    outcome_children = outcome_row_view(block.outcome)
+  defp build_render(block, width, context) do
+    # Resolve the prominence fade colour ONCE per render (nil = neutral,
+    # no fade), then thread it into every text-producing branch --
+    # header, content, and outcome all carry the SAME `:fg`, and the
+    # per-line content map never re-runs the H-K solver.
+    fg = prominence_fg(context)
+    header = header_view(block, width, fg)
+    outcome_children = outcome_row_view(block.outcome, fg)
 
     body_children =
       case block.fold do
         :folded -> [header]
-        :expanded -> [header | content_lines_view(block)]
+        :expanded -> [header | content_lines_view(block, width, context, fg)]
       end
 
     Components.column(gap: 0, children: body_children ++ outcome_children)
@@ -365,16 +412,54 @@ defmodule Raxol.UI.Components.Harness.Block do
     )
   end
 
-  defp header_view(block, width) do
+  defp header_view(block, width, fg) do
     prefix = "#{fold_icon(block.fold)} #{kind_glyph(block.kind)} "
     budget = max(width - TextMeasure.display_width(prefix), 1)
     summary_text = block |> summary() |> TextLayout.truncate(budget, :ellipsis)
 
     Components.text(
       content: prefix <> summary_text,
-      style: header_style(block.kind)
+      style: apply_fg(header_style(block.kind), fg)
     )
   end
+
+  # Chrome neutral baseline (matches DiffViewer's neutral chrome colour)
+  # faded per `context[:prominence]`. Absent or 1.0 prominence resolves to
+  # a nil fade colour (see `prominence_fg/1`), which `apply_fg/2` leaves
+  # the style untouched for -- neutral by default.
+  @chrome_fg "#B4B4B4"
+
+  # Applies an already-resolved fade colour to a style map. `nil` (the
+  # neutral / no-prominence case) leaves the style byte-identical.
+  defp apply_fg(style, nil), do: style
+  defp apply_fg(style, fg), do: Map.put(style, :fg, fg)
+
+  defp prominence_fg(context) do
+    case Map.get(context, :prominence, 1.0) do
+      p when is_number(p) and p >= 1.0 ->
+        nil
+
+      p when is_number(p) ->
+        Prominence.resolve(@chrome_fg, p, prominence_opts(context))
+
+      _other ->
+        nil
+    end
+  end
+
+  # Only pass `:ground` through when the caller actually supplied one --
+  # `Prominence.resolve/3` defaults it lazily (OSC-11-detected, else the
+  # solver's reference ground), and an explicit `ground: nil` would
+  # short-circuit that default. `:legibility_floor` is threaded through when
+  # present (T9 sets it true for acting tiers; default false = pure fade).
+  defp prominence_opts(context) do
+    []
+    |> put_opt(:ground, Map.get(context, :ground))
+    |> put_opt(:legibility_floor, Map.get(context, :legibility_floor))
+  end
+
+  defp put_opt(opts, _key, nil), do: opts
+  defp put_opt(opts, key, value), do: [{key, value} | opts]
 
   defp fold_icon(:folded), do: "▸"
   defp fold_icon(_fold), do: "▾"
@@ -403,6 +488,13 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp summary(%__MODULE__{kind: :approval, content: %{action: action}}) do
     first_line(action)
+  end
+
+  defp summary(%__MODULE__{kind: :diff, content: %{path: path}}) do
+    case path do
+      "" -> "(no path)"
+      p -> p
+    end
   end
 
   defp summary(%__MODULE__{
@@ -453,7 +545,59 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp format_args([]), do: ""
   defp format_args(args), do: "(#{inspect(args)})"
 
-  defp content_lines_view(block) do
+  # Opt-in Markdown wire-in per `context[:markdown]`, message/reasoning
+  # kinds only. When enabled, the block's text content is rendered by
+  # `MarkdownBody` (`:sealed` full parse while sealed, `:streaming`
+  # provisional-close while live) and then FADED to the same resolved
+  # prominence colour as the header, so a faded header never sits above a
+  # bright Markdown body. Every other combination -- markdown disabled,
+  # or a non-message/reasoning kind -- falls through to the plain
+  # per-line rendering unchanged.
+  defp content_lines_view(
+         %__MODULE__{kind: kind, content: %{text: _}} = block,
+         width,
+         context,
+         fg
+       )
+       when kind in [:message, :reasoning] do
+    if Map.get(context, :markdown, false) do
+      body =
+        MarkdownBody.render(markdown_source(block), %{
+          width: width,
+          mode: markdown_mode(block)
+        })
+
+      [fade_view(body, fg)]
+    else
+      plain_content_lines(block, fg)
+    end
+  end
+
+  defp content_lines_view(block, _width, _context, fg),
+    do: plain_content_lines(block, fg)
+
+  defp markdown_source(%__MODULE__{content: %{text: text}}),
+    do: to_display_text(text)
+
+  defp markdown_mode(%__MODULE__{seal: :sealed}), do: :sealed
+  defp markdown_mode(%__MODULE__{seal: :live}), do: :streaming
+
+  # Recursively applies the resolved prominence colour to every text node
+  # in a rendered view tree (the MarkdownBody result), so the Markdown
+  # body fades in lockstep with the header/outcome. `nil` fg is the
+  # neutral case -- the tree is returned byte-identical, so a
+  # no-prominence markdown render is untouched.
+  defp fade_view(view, nil), do: view
+
+  defp fade_view(%{type: :text, style: style} = node, fg),
+    do: %{node | style: apply_fg(style, fg)}
+
+  defp fade_view(%{children: children} = node, fg),
+    do: %{node | children: Enum.map(children, &fade_view(&1, fg))}
+
+  defp fade_view(node, _fg), do: node
+
+  defp plain_content_lines(block, fg) do
     block
     |> body_lines()
     |> Enum.with_index()
@@ -461,7 +605,7 @@ defmodule Raxol.UI.Components.Harness.Block do
       Components.text(
         id: line_id(block, idx),
         content: line,
-        style: content_style(block.kind)
+        style: apply_fg(content_style(block.kind), fg)
       )
     end)
   end
@@ -501,13 +645,18 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp split_lines(""), do: []
   defp split_lines(text), do: text |> to_display_text() |> String.split("\n")
 
-  defp outcome_row_view(outcome) do
+  defp outcome_row_view(outcome, fg) do
     case outcome_parts(outcome) do
       [] ->
         []
 
       parts ->
-        [Components.text(content: Enum.join(parts, " · "), style: %{dim: true})]
+        [
+          Components.text(
+            content: Enum.join(parts, " · "),
+            style: apply_fg(%{dim: true}, fg)
+          )
+        ]
     end
   end
 
@@ -555,6 +704,10 @@ defmodule Raxol.UI.Components.Harness.Block do
   @action_paths [[:action]]
   @blast_radius_paths [[:blast_radius]]
   @options_paths [[:options]]
+  @path_paths [[:path], [:content, :path]]
+  @old_paths [[:old], [:content, :old]]
+  @new_paths [[:new], [:content, :new]]
+  @language_paths [[:language], [:content, :language]]
 
   defp event_refs(events) when is_list(events) do
     Enum.map(events, fn
@@ -605,6 +758,7 @@ defmodule Raxol.UI.Components.Harness.Block do
     do: extract_tool_call_content(events)
 
   defp extract_content(:approval, events), do: extract_approval_content(events)
+  defp extract_content(:diff, events), do: extract_diff_content(events)
   defp extract_content(_kind, events), do: %{text: extract_text(events)}
 
   defp extract_text(events) do
@@ -658,10 +812,33 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp extract_approval_content(events) do
     action = events |> find_in_events(@action_paths) |> to_display_text()
+    # No `|| %{}` fallback here: a blast radius no producer ever supplied
+    # must stay distinguishable from one a producer explicitly declares
+    # empty. `nil` means "not declared" --
+    # `Raxol.UI.Components.Harness.BlastRadiusPreview` renders that as its
+    # own explicit "not declared, treat as unsafe" warning rather than the
+    # calm "No tracked effects." line it renders for a genuine `%{}`.
     blast_radius = find_in_events(events, @blast_radius_paths)
     options = find_in_events(events, @options_paths) || []
 
     %{action: action, blast_radius: blast_radius, options: options}
+  end
+
+  # No producer resolves the `:diff` kind yet (T7's BlockBuilder only ever
+  # emits :message/:reasoning/:tool_call/:approval; see
+  # `Raxol.Harness.Projection.BlockBuilder`) -- there is no wire convention
+  # to conform to. `:path`/`:old`/`:new`/`:language` mirror
+  # `Raxol.UI.Components.Harness.DiffViewer`'s own prop names (T5's
+  # BodyProvider content-map contract), the component this content feeds.
+  # A flat `:text` field (the generic fallback every other kind gets)
+  # cannot carry old-vs-new distinctly, so `:diff` needs its own shape.
+  defp extract_diff_content(events) do
+    %{
+      path: events |> find_in_events(@path_paths) |> to_display_text(),
+      old: events |> find_in_events(@old_paths) |> to_display_text(),
+      new: events |> find_in_events(@new_paths) |> to_display_text(),
+      language: find_in_events(events, @language_paths)
+    }
   end
 
   defp find_in_events(events, paths) when is_list(events) do

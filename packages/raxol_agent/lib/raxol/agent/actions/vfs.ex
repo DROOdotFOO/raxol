@@ -13,8 +13,10 @@ defmodule Raxol.Agent.Actions.Vfs do
 
       # After LLM returns a tool call:
       context = %{vfs: model.vfs}
-      {:ok, result} = ToolConverter.dispatch_tool_call(tool_call, actions(), context)
-      new_vfs = Map.get(result, :vfs, model.vfs)
+      case ToolConverter.dispatch_tool_call(tool_call, actions(), context) do
+        {:ok, result} -> Map.get(result, :vfs, model.vfs)
+        {:error, reason} -> handle_tool_error(reason)  # e.g. {:vetoed, _} | {:tool_denied, _, _}
+      end
   """
 
   @actions [

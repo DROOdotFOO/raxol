@@ -37,10 +37,28 @@ defmodule Raxol.UI.Components.Harness.Composer do
   no history yet. The modifier branches activate automatically when F1b
   (kitty keyboard protocol) lands -- zero logic change here.
 
-  Also known: printable characters arriving with compound modifiers (e.g.
-  `[:shift, :alt]`) fall through to MultiLineInput delegation and are
-  dropped today -- canonical modifier normalization belongs to F1a input
-  canon, not this unit.
+  ## Input-shape normalization
+
+  `handle_event/3` normalizes every incoming event through
+  `Raxol.UI.Harness.InputEvent.normalize/1` before deciding anything.
+  Before T27's review round this component matched key events by pattern
+  (`%{key: :enter, modifiers: modifiers}`), which only exists on
+  `Event.key_event/3`'s test-API shape -- the real terminal driver's two
+  shapes (`event_translator.ex`'s boolean `shift:`/`ctrl:`/... fields,
+  `input_parser.ex`'s optional fields) have no `:modifiers` key at all, so
+  the pattern never matched a REAL keypress. Enter never submitted,
+  printable characters never inserted, and everything silently fell
+  through to raw `MultiLineInput` delegation for actual terminal input --
+  this unit only ever worked in tests that construct `Event.key_event/3`
+  directly. `InputEvent.normalize/1` erases that shape difference: Enter
+  from a real termbox driver, a real ANSI parser, or `Event.key_event/3`
+  all normalize to the same `kind: :key, key: :enter` and reach the same
+  `handle_enter_key/2`.
+
+  Printable characters arriving with compound modifiers (e.g. Shift+Alt)
+  are `InputEvent.shortcut?/1` (alt held) and fall through to
+  `MultiLineInput` delegation, same as before -- canonical compound-
+  modifier handling belongs to F1a input canon, not this unit.
 
   ## Bracketed paste
 
@@ -80,6 +98,7 @@ defmodule Raxol.UI.Components.Harness.Composer do
   alias Raxol.Core.Events.Event
   alias Raxol.UI.Components.Input.MultiLineInput
   alias Raxol.UI.Components.Input.MultiLineInput.TextHelper
+  alias Raxol.UI.Harness.InputEvent
   alias Raxol.UI.StyleHelper
   alias Raxol.UI.TextMeasure
   alias Raxol.View.Components
@@ -210,61 +229,104 @@ defmodule Raxol.UI.Components.Harness.Composer do
 
   # -- events --
 
+  # Migration pattern documented at `Raxol.UI.Harness.InputEvent`'s
+  # moduledoc: normalize first, check `shortcut?/1` before `text?/1`/
+  # `key/1` (so a modifier-qualified char/key still reaches the right
+  # handler WITH its mods), paste short-circuits everything. Enter is
+  # special-cased ahead of the generic shortcut/text/key triage because
+  # its submit-vs-newline decision depends on mods (shift/alt) rather than
+  # being a plain pass/fail shortcut check -- both `handle_shortcut/4`
+  # (Alt+Enter, which IS classified `shortcut?`) and the `key` branch
+  # (plain Enter, Shift+Enter, neither of which is) route back into the
+  # same `handle_enter_key/2`.
   @impl true
-  def handle_event(%Event{type: :paste, data: %{text: text}}, state, _context) do
-    {new_mli, _cmds} = update_mli({:clipboard_content, text}, state.mli)
-    {%{state | mli: new_mli}, []}
-  end
+  def handle_event(%Event{} = event, state, context) do
+    norm = InputEvent.normalize(event)
 
-  def handle_event(
-        %Event{type: :key, data: %{key: :enter, modifiers: modifiers}},
-        state,
-        _context
-      ) do
-    handle_enter_key(modifiers, state)
-  end
+    cond do
+      norm.kind == :paste ->
+        {new_mli, _cmds} =
+          update_mli({:clipboard_content, norm.text}, state.mli)
 
-  def handle_event(
-        %Event{type: :key, data: %{key: :up, modifiers: []}} = event,
-        state,
-        context
-      ) do
-    handle_history_nav(:up, event, state, context)
-  end
+        {%{state | mli: new_mli}, []}
 
-  def handle_event(
-        %Event{type: :key, data: %{key: :down, modifiers: []}} = event,
-        state,
-        context
-      ) do
-    handle_history_nav(:down, event, state, context)
-  end
+      InputEvent.shortcut?(norm) ->
+        handle_shortcut(norm, state, event, context)
 
-  # Printable-character keys are intercepted here rather than delegated:
-  # MultiLineInput's EventHandler forwards them as `{:input, <binary>}` but
-  # its EditOps/TextHelper insertion path expects an integer codepoint
-  # (`<<codepoint::utf8>>`), so blind delegation crashes on every ordinary
-  # keystroke. Routing through `{:clipboard_content, char}` -- the same safe
-  # insertion path bracketed paste uses -- sidesteps the upstream bug (kept
-  # out of this changeset; MultiLineInput is outside T11's write-set) and
-  # additionally handles multi-codepoint graphemes (emoji) that the
-  # upstream `byte_size == 1` dispatch drops entirely.
-  def handle_event(
-        %Event{type: :key, data: %{key: char, modifiers: modifiers}} = event,
-        state,
-        context
-      )
-      when is_binary(char) and (modifiers == [] or modifiers == [:shift]) do
-    if String.length(char) == 1 do
-      {new_mli, cmds} = update_mli({:clipboard_content, char}, state.mli)
-      {%{state | mli: new_mli}, cmds}
-    else
-      {new_mli, cmds} = delegate_to_mli(event, state.mli, context)
-      {%{state | mli: new_mli}, cmds}
+      InputEvent.text?(norm) ->
+        insert_char(state, InputEvent.printable_char(norm))
+
+      key = InputEvent.key(norm) ->
+        dispatch_key(key, norm.mods, state, event, context)
+
+      true ->
+        {new_mli, cmds} = delegate_to_mli(event, state.mli, context)
+        {%{state | mli: new_mli}, cmds}
     end
   end
 
   def handle_event(event, state, context) do
+    {new_mli, cmds} = delegate_to_mli(event, state.mli, context)
+    {%{state | mli: new_mli}, cmds}
+  end
+
+  # Alt+Enter is `shortcut?` (alt held) but is still "insert a newline",
+  # not a generic keyboard shortcut -- recognize it here and fall back to
+  # the same `handle_enter_key/2` the unmodified/Shift+Enter path in
+  # `dispatch_key/5` uses. No other composer-level shortcuts exist today;
+  # a consumer (T12 keybinds) wires additional ones (e.g. Ctrl+Enter via
+  # `force_submit/1`) outside this component, so anything else
+  # ctrl/alt/meta-qualified falls through to MultiLineInput (e.g. Ctrl+C,
+  # Ctrl+V, which it already owns).
+  defp handle_shortcut(%{key: :enter, mods: mods}, state, _event, _context) do
+    handle_enter_key(mods, state)
+  end
+
+  defp handle_shortcut(_norm, state, event, context) do
+    {new_mli, cmds} = delegate_to_mli(event, state.mli, context)
+    {%{state | mli: new_mli}, cmds}
+  end
+
+  defp insert_char(state, nil), do: {state, []}
+
+  # Routed through `{:clipboard_content, char}` -- the same safe insertion
+  # path bracketed paste uses -- rather than MultiLineInput's own
+  # `{:input, <binary>}` dispatch, which expects an integer codepoint
+  # (`<<codepoint::utf8>>`) and crashes on ordinary keystrokes (kept out of
+  # this changeset; MultiLineInput is outside T11's write-set). Also
+  # correctly handles multi-codepoint graphemes (emoji) that the upstream
+  # `byte_size == 1` dispatch drops entirely.
+  defp insert_char(state, char) do
+    {new_mli, cmds} = update_mli({:clipboard_content, char}, state.mli)
+    {%{state | mli: new_mli}, cmds}
+  end
+
+  # Reached only when `shortcut?/1` was false, so ctrl/alt/meta are all
+  # false here -- only `mods.shift` varies (e.g. Shift+Enter, Shift+Up).
+  defp dispatch_key(:enter, mods, state, _event, _context) do
+    handle_enter_key(mods, state)
+  end
+
+  defp dispatch_key(:up, mods, state, event, context) do
+    if mods.shift do
+      delegate(event, state, context)
+    else
+      handle_history_nav(:up, event, state, context)
+    end
+  end
+
+  defp dispatch_key(:down, mods, state, event, context) do
+    if mods.shift do
+      delegate(event, state, context)
+    else
+      handle_history_nav(:down, event, state, context)
+    end
+  end
+
+  defp dispatch_key(_key, _mods, state, event, context),
+    do: delegate(event, state, context)
+
+  defp delegate(event, state, context) do
     {new_mli, cmds} = delegate_to_mli(event, state.mli, context)
     {%{state | mli: new_mli}, cmds}
   end
@@ -299,9 +361,9 @@ defmodule Raxol.UI.Components.Harness.Composer do
 
   # -- private: enter / submit --
 
-  defp handle_enter_key(modifiers, state) do
+  defp handle_enter_key(%{shift: shift, alt: alt}, state) do
     cond do
-      :shift in modifiers or :alt in modifiers -> insert_newline(state)
+      shift or alt -> insert_newline(state)
       multiline?(state.mli) -> insert_newline(state)
       true -> maybe_submit(state)
     end

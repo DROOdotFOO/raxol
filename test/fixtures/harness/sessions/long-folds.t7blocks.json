@@ -1,0 +1,158 @@
+{
+  "blocks": [
+    {
+      "kind": "tool_call",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 300,
+        "cost": null
+      },
+      "content": {
+        "args": {
+          "target": "subsystem-1"
+        },
+        "name": "run_diagnostic",
+        "result": "[diagnostic] subsystem-1 check #1: OK (1 ms)\n[diagnostic] subsystem-1 check #2: OK (2 ms)\n[diagnostic] subsystem-1 check #3: OK (3 ms)\n[diagnostic] subsystem-1 check #4: OK (4 ms)\n[diagnostic] subsystem-1 check #5: OK (5 ms)\n[diagnostic] subsystem-1 check #6: OK (6 ms)\n[diagnostic] subsystem-1 check #7: OK (7 ms)\n[diagnostic] subsystem-1 check #8: OK (8 ms)\n[diagnostic] subsystem-1 check #9: OK (9 ms)\n[diagnostic] subsystem-1 check #10: OK (10 ms)\n[diagnostic] subsystem-1 check #11: OK (11 ms)\n[diagnostic] subsystem-1 check #12: OK (12 ms)\n[diagnostic] subsystem-1 check #13: OK (13 ms)\n[diagnostic] subsystem-1 check #14: OK (14 ms)\n[diagnostic] subsystem-1 check #15: OK (15 ms)\n[diagnostic] subsystem-1 check #16: OK (16 ms)\n[diagnostic] subsystem-1 check #17: OK (17 ms)\n[diagnostic] subsystem-1 check #18: OK (18 ms)\n[diagnostic] subsystem-1 check #19: OK (19 ms)\n[diagnostic] subsystem-1 check #20: OK (20 ms)",
+        "tainted": true
+      },
+      "event_refs": [
+        2,
+        3,
+        4,
+        5
+      ],
+      "raw_kind": "tool_call",
+      "seal": "sealed"
+    },
+    {
+      "kind": "tool_call",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 300,
+        "cost": null
+      },
+      "content": {
+        "args": {
+          "target": "subsystem-2"
+        },
+        "name": "run_diagnostic",
+        "result": "[diagnostic] subsystem-2 check #1: OK (2 ms)\n[diagnostic] subsystem-2 check #2: OK (4 ms)\n[diagnostic] subsystem-2 check #3: OK (6 ms)\n[diagnostic] subsystem-2 check #4: OK (8 ms)\n[diagnostic] subsystem-2 check #5: OK (10 ms)\n[diagnostic] subsystem-2 check #6: OK (12 ms)\n[diagnostic] subsystem-2 check #7: OK (14 ms)\n[diagnostic] subsystem-2 check #8: OK (16 ms)\n[diagnostic] subsystem-2 check #9: OK (18 ms)\n[diagnostic] subsystem-2 check #10: OK (20 ms)\n[diagnostic] subsystem-2 check #11: OK (22 ms)\n[diagnostic] subsystem-2 check #12: OK (24 ms)\n[diagnostic] subsystem-2 check #13: OK (26 ms)\n[diagnostic] subsystem-2 check #14: OK (28 ms)\n[diagnostic] subsystem-2 check #15: OK (30 ms)\n[diagnostic] subsystem-2 check #16: OK (32 ms)\n[diagnostic] subsystem-2 check #17: OK (34 ms)\n[diagnostic] subsystem-2 check #18: OK (36 ms)\n[diagnostic] subsystem-2 check #19: OK (38 ms)\n[diagnostic] subsystem-2 check #20: OK (40 ms)",
+        "tainted": true
+      },
+      "event_refs": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "raw_kind": "tool_call",
+      "seal": "sealed"
+    },
+    {
+      "kind": "tool_call",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 300,
+        "cost": null
+      },
+      "content": {
+        "args": {
+          "target": "subsystem-3"
+        },
+        "name": "run_diagnostic",
+        "result": "[diagnostic] subsystem-3 check #1: OK (3 ms)\n[diagnostic] subsystem-3 check #2: OK (6 ms)\n[diagnostic] subsystem-3 check #3: OK (9 ms)\n[diagnostic] subsystem-3 check #4: OK (12 ms)\n[diagnostic] subsystem-3 check #5: OK (15 ms)\n[diagnostic] subsystem-3 check #6: OK (18 ms)\n[diagnostic] subsystem-3 check #7: OK (21 ms)\n[diagnostic] subsystem-3 check #8: OK (24 ms)\n[diagnostic] subsystem-3 check #9: OK (27 ms)\n[diagnostic] subsystem-3 check #10: OK (30 ms)\n[diagnostic] subsystem-3 check #11: OK (33 ms)\n[diagnostic] subsystem-3 check #12: OK (36 ms)\n[diagnostic] subsystem-3 check #13: OK (39 ms)\n[diagnostic] subsystem-3 check #14: OK (42 ms)\n[diagnostic] subsystem-3 check #15: OK (45 ms)\n[diagnostic] subsystem-3 check #16: OK (48 ms)\n[diagnostic] subsystem-3 check #17: OK (51 ms)\n[diagnostic] subsystem-3 check #18: OK (54 ms)\n[diagnostic] subsystem-3 check #19: OK (57 ms)\n[diagnostic] subsystem-3 check #20: OK (60 ms)",
+        "tainted": true
+      },
+      "event_refs": [
+        14,
+        15,
+        16,
+        17
+      ],
+      "raw_kind": "tool_call",
+      "seal": "sealed"
+    },
+    {
+      "kind": "tool_call",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 300,
+        "cost": null
+      },
+      "content": {
+        "args": {
+          "target": "subsystem-4"
+        },
+        "name": "run_diagnostic",
+        "result": "[diagnostic] subsystem-4 check #1: OK (4 ms)\n[diagnostic] subsystem-4 check #2: OK (8 ms)\n[diagnostic] subsystem-4 check #3: OK (12 ms)\n[diagnostic] subsystem-4 check #4: OK (16 ms)\n[diagnostic] subsystem-4 check #5: OK (20 ms)\n[diagnostic] subsystem-4 check #6: OK (24 ms)\n[diagnostic] subsystem-4 check #7: OK (28 ms)\n[diagnostic] subsystem-4 check #8: OK (32 ms)\n[diagnostic] subsystem-4 check #9: OK (36 ms)\n[diagnostic] subsystem-4 check #10: OK (40 ms)\n[diagnostic] subsystem-4 check #11: OK (44 ms)\n[diagnostic] subsystem-4 check #12: OK (48 ms)\n[diagnostic] subsystem-4 check #13: OK (52 ms)\n[diagnostic] subsystem-4 check #14: OK (56 ms)\n[diagnostic] subsystem-4 check #15: OK (60 ms)\n[diagnostic] subsystem-4 check #16: OK (64 ms)\n[diagnostic] subsystem-4 check #17: OK (68 ms)\n[diagnostic] subsystem-4 check #18: OK (72 ms)\n[diagnostic] subsystem-4 check #19: OK (76 ms)\n[diagnostic] subsystem-4 check #20: OK (80 ms)",
+        "tainted": true
+      },
+      "event_refs": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "raw_kind": "tool_call",
+      "seal": "sealed"
+    },
+    {
+      "kind": "tool_call",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 300,
+        "cost": null
+      },
+      "content": {
+        "args": {
+          "target": "subsystem-5"
+        },
+        "name": "run_diagnostic",
+        "result": "[diagnostic] subsystem-5 check #1: OK (5 ms)\n[diagnostic] subsystem-5 check #2: OK (10 ms)\n[diagnostic] subsystem-5 check #3: OK (15 ms)\n[diagnostic] subsystem-5 check #4: OK (20 ms)\n[diagnostic] subsystem-5 check #5: OK (25 ms)\n[diagnostic] subsystem-5 check #6: OK (30 ms)\n[diagnostic] subsystem-5 check #7: OK (35 ms)\n[diagnostic] subsystem-5 check #8: OK (40 ms)\n[diagnostic] subsystem-5 check #9: OK (45 ms)\n[diagnostic] subsystem-5 check #10: OK (50 ms)\n[diagnostic] subsystem-5 check #11: OK (55 ms)\n[diagnostic] subsystem-5 check #12: OK (60 ms)\n[diagnostic] subsystem-5 check #13: OK (65 ms)\n[diagnostic] subsystem-5 check #14: OK (70 ms)\n[diagnostic] subsystem-5 check #15: OK (75 ms)\n[diagnostic] subsystem-5 check #16: OK (80 ms)\n[diagnostic] subsystem-5 check #17: OK (85 ms)\n[diagnostic] subsystem-5 check #18: OK (90 ms)\n[diagnostic] subsystem-5 check #19: OK (95 ms)\n[diagnostic] subsystem-5 check #20: OK (100 ms)",
+        "tainted": true
+      },
+      "event_refs": [
+        26,
+        27,
+        28,
+        29
+      ],
+      "raw_kind": "tool_call",
+      "seal": "sealed"
+    },
+    {
+      "kind": "tool_call",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 300,
+        "cost": null
+      },
+      "content": {
+        "args": {
+          "target": "subsystem-6"
+        },
+        "name": "run_diagnostic",
+        "result": "[diagnostic] subsystem-6 check #1: OK (6 ms)\n[diagnostic] subsystem-6 check #2: OK (12 ms)\n[diagnostic] subsystem-6 check #3: OK (18 ms)\n[diagnostic] subsystem-6 check #4: OK (24 ms)\n[diagnostic] subsystem-6 check #5: OK (30 ms)\n[diagnostic] subsystem-6 check #6: OK (36 ms)\n[diagnostic] subsystem-6 check #7: OK (42 ms)\n[diagnostic] subsystem-6 check #8: OK (48 ms)\n[diagnostic] subsystem-6 check #9: OK (54 ms)\n[diagnostic] subsystem-6 check #10: OK (60 ms)\n[diagnostic] subsystem-6 check #11: OK (66 ms)\n[diagnostic] subsystem-6 check #12: OK (72 ms)\n[diagnostic] subsystem-6 check #13: OK (78 ms)\n[diagnostic] subsystem-6 check #14: OK (84 ms)\n[diagnostic] subsystem-6 check #15: OK (90 ms)\n[diagnostic] subsystem-6 check #16: OK (96 ms)\n[diagnostic] subsystem-6 check #17: OK (102 ms)\n[diagnostic] subsystem-6 check #18: OK (108 ms)\n[diagnostic] subsystem-6 check #19: OK (114 ms)\n[diagnostic] subsystem-6 check #20: OK (120 ms)",
+        "tainted": true
+      },
+      "event_refs": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "raw_kind": "tool_call",
+      "seal": "sealed"
+    }
+  ],
+  "schema": "harness-t7blocks/1",
+  "fold_defaults": {
+    "message": "expanded",
+    "opaque": "expanded",
+    "diff": "folded",
+    "reasoning": "folded",
+    "tool_call": "expanded",
+    "approval": "expanded"
+  },
+  "projector": "Raxol.Harness.Projection"
+}
