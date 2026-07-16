@@ -71,6 +71,24 @@ immediate work.
 | T11 | `lib/raxol/ui/components/harness/toast.ex:60` | `state.message` (agent/external event text) |
 | T12 | `lib/raxol/ui/components/harness/composer.ex:516` (queued steer banner) + MLI value render path (:492) | Pasted input echo — bracketed-paste can carry ESC/ANSI; classic local-echo injection |
 
+**TWO-CONTRACT CAUTION (ruled 2026-07-17, see
+[agent-lane-response-to-ui-intersection.md](./agent-lane-response-to-ui-intersection.md) §B):**
+the T-rows above are all strip-all contract sites (`text()` / View-DSL boundary) and
+migrate onto `TermText.sanitize/2` as written. The UI lane's master-side sanitizers are
+**NOT all the same contract** — triage before touching:
+
+| Master-side site | Contract | Migration ruling |
+| ---------------- | -------- | ---------------- |
+| `lib/raxol/ui/rendering/paint_authority/content_guard.ex` (`sanitize_line/1`) + its `InlineAuthority.seal/2` / footer-viewport callers | **SGR-allowlist, "visible-honest"** (keeps safe `CSI…m` verbatim; strips only the ESC of other sequences, printable residue survives; #608 tests `sanitize==identity` for safe SGR as a seal invariant) | **allowlist contract — needs TermText `:sgr_keep` mode, co-design; do NOT strip-all migrate** |
+| `lib/raxol/harness/surface/view_text.ex` (`sanitize/1`, :221) | strip-all (C0 except `\t`, DEL) | strip-all contract — eligible for `:strip` migration once the UI lane confirms the `\n`-pre-split ordering is preserved |
+| `lib/raxol/ui/components/harness/markdown_body.ex` (`to_text/1` → `sanitize_controls/1`, :266) | strip-all (C0 minus `\n\t`, DEL, C1) | strip-all contract — eligible for `:strip` migration (note: overlaps T1's boundary; dedupe at review) |
+
+`TermText` grows an additive `mode:` opt (`:strip` default = current behavior;
+`:sgr_keep` = allowlist) as a **co-design follow-up on #613** — the UI lane owns the
+allowlist byte-semantics + the #608 seal invariant, and its corpus (#607 fence-label,
+#608 residue classes, G11 wrap/ESC) is absorbed into the shared boundary_vectors as the
+`:sgr_keep` conformance set. Nobody strip-migrates an allowlist site.
+
 #### (B) Trusted / internal — explicitly NOT migrating
 
 Considered and dismissed; listed so a reviewer sees they were weighed:
@@ -263,6 +281,66 @@ UI-lane PR description.
 | T12 `harness/composer.ex:516/492` | `TermText.sanitize/2` | UI-harness / Drew | direct | #613; Drew sign-off | paste-echo red |
 | PA-6 CAS deref (future) | `Path.confine/3` + `ref_format:` | harness / us | n/a yet | **PA-6 freeze** (proposed-not-frozen) + CAS existing | ref_format vectors + deref red |
 | #586 tar extract (future slot) | `Path.confine/3` per member | harness / us | n/a yet | untrusted-extract path existing | per-member vectors + link/device-member red |
+
+## Second sweep (grok-4.5 + longcat) — confirmed-new sites
+
+2026-07-17, second discovery pass adjudicated against source (two lenses diverged
+sharply — grok-4.5 claimed 15 path + 11 term new; longcat claimed 0 path + 1 term.
+Every candidate below was read in the `confinement` worktree before ruling; the
+adjudicated truth is **1 new path row + 5 new term rows**). Injection-class findings
+that are NOT confinement sites (unpatched, with exploit specifics) are held
+**privately** pending owner triage — not in this public branch; ask the agent-lane
+owner.
+
+### Confirmed-new migration rows
+
+| Site | Fn | Lane / owner | Dep-class | Blocked-by | Test strategy |
+| ---- | -- | ------------ | --------- | ---------- | ------------- |
+| NP1 `raxol_agent/skills/store.ex:386–389` (`skill_dir/2`) + :294–299 (`do_create`) + :324–335 (`do_archive`) + :314–322 (`do_delete` `rm_rf(entry.dir)`) | `Path.confine/3` with `ref_format: ~r/^[\w.-]+$/` on `name` and `category` (per segment) | harness-agent / us | new raxol_core dep (same mix.exs edit as P1/P4) | #613 | shared vectors + NEW reds: create with `name: "../../x"` must reject; archive/delete of a traversal-named entry must never `rm_rf` outside root |
+| NT13 `lib/raxol/ui/components/harness/block.ex:461` (`content_lines_view/1`; body via `body_lines/1` :474+, `to_display_text/1` :543) | `TermText.sanitize/2` once at `from_events/3` content extraction | UI-harness / Drew | direct | #613; Drew sign-off | component red (tool-result + approval payloads) |
+| NT14 `lib/raxol/ui/components/harness/memory_panel.ex:81–83` (table rows `key`/`to_string(value)`) | `TermText.sanitize/2` on both cells | UI-harness / Drew | direct | #613; Drew sign-off | component red |
+| NT15 `lib/raxol/ui/components/harness/residual_indicator.ex:60` (`"⚠ unresolved: #{residual}"`) | `TermText.sanitize/2` on `residual` | UI-harness / Drew | direct | #613; Drew sign-off | component red |
+| NT16 `packages/raxol_symphony/lib/raxol/symphony/surfaces/terminal.ex:291–361` (`running_row`/`paused_row`/`retrying_row`: `issue_identifier`, `last_event`, `interrupt_reason`, `error`) | `TermText.sanitize/2` at snapshot-field render | harness-agent / us (symphony) | direct dep (mix.exs:37) | #613 | component red with ESC in a tracker-sourced field |
+| NT17 `lib/raxol/recording/player.ex:90, :154, :215` (`IO.write(data)` of every `.cast` `:output` event; reachable via `mix raxol.replay FILE`) | `TermText.sanitize/2` **with a new replay profile** — see policy note | recording / main lib | direct | #613; **policy call** | replay red: poisoned `.cast` with OSC-52/OSC-0/DECRQSS must not reach the host terminal raw |
+
+**NP1 rationale**: `skill_manage` is an LLM-callable action (`actions/skills/manage.ex`,
+`name` required string); `require_name/1` (:505) checks only non-empty. `skill_dir/2`
+joins `state.root`/`category`/`name` with no traversal gate → `File.mkdir_p` + write on
+create, `File.rm_rf(entry.dir)` on delete, `File.rm_rf!` + `File.rename!` on archive. An
+LLM-authored `name: "../../…"` writes — and later recursively deletes — outside the
+skills root. Distinct from confirmed P4 (`read_view/2` is the read side; this is the
+write/delete side of the same file). Highest-severity new site in the sweep.
+
+**NT17 policy note (behavior-CHANGE flag, rank alongside risk-1..3)**: replay's purpose
+is reproducing recorded ANSI — a blanket `sanitize/2` (strip all ESC) destroys the
+feature. The row requires a **replay profile** (e.g. `sanitize(data, profile: :replay)`):
+allow display CSI/SGR/cursor sequences, strip OSC (title/clipboard/hyperlink), DCS/APC/PM,
+and query/report sequences (DECRQSS, DA) that make the *host* terminal act on a shared
+`.cast` file's bytes. Whether the profile lives in `TermText` or as a recording-lane
+filter bound to the same vectors is the policy call — do not land a blind sanitize here.
+
+### Considered + dismissed (2nd sweep)
+
+| Candidate | Ruling | One-line reason |
+| --------- | ------ | --------------- |
+| `raxol_terminal/session/storage.ex:90` + `session_manager/persistence.ex:21` (session-id → filename) | FALSE-POSITIVE | session ids are internally generated (`:crypto.strong_rand_bytes` / sha256-hex, `session_manager/helpers.ex:78/193`); no external caller supplies an id (a separate deserialization concern is held in the private triage list) |
+| `core/runtime/plugins/api.ex:135` (`plugin_data_dir/1`) | DUPLICATE | already C-list row 1 |
+| `style/colors/persistence.ex` theme-name paths | DUPLICATE | already C-list row 2 |
+| `harness/error_block.ex`, `harness/rules_panel.ex`, `harness/worktracks_panel.ex` | DUPLICATE | already C-list rows |
+| `terminal/history_buffer.ex:146–161`, `script/script_server.ex:473–499`, `debug/time_travel.ex:305–317` export/import paths, `recording/asciicast.ex`+`recorder.ex` paths | FALSE-POSITIVE | caller/operator-supplied API or CLI (`-o`) paths — same class as dismissed `config/loader` ("user explicitly names is a feature") |
+| `terminal/image.ex:116–121`, `plugins/visualization/image_renderer.ex:135–140` (`File.read(source)` fallback) | FALSE-POSITIVE | source is app/operator-supplied; no untrusted ingress found — but the try-as-path-then-raw-data ambiguity is a hardening nit (require explicit `{:path, _}`/`{:data, _}`) |
+| `terminal/config/profiles.ex:174` (load/delete skip `validate_profile_name`) | FALSE-POSITIVE | operator-supplied profile names; save-side charset gate has no `/`, so `..` can't traverse with the `.json` suffix join; the save/load asymmetry is a nit, not a boundary |
+| `agent/directive/executor.ex:37` (`:cd` Port opt) | FALSE-POSITIVE (as confinement) | confining `:cd` while the same directive runs an unrestricted `/bin/sh -c` is theater — subsumed by the shell finding in the injection doc |
+| `terminal/plugin/plugin_server.ex:352` | FALSE-POSITIVE | operator-configured plugin dirs |
+| OSC title writers (`io_terminal.ex:142`, `advanced_features.ex:361`, `ansi/window.ex:491`) | FALSE-POSITIVE (as TermText rows) | framework producer APIs, title is app-supplied — the OSC-terminator-breakout hardening is in the injection doc |
+| grok "shell output direct `text()`" (no file:line) | FALSE-POSITIVE | no concrete site; shell output routes through confirmed T2 (`tool_result_block`) and NT13 |
+| longcat payments/ACP "sanitize at origin" batch (12 action result maps, JobSession entries, SSE forwarding) | FALSE-POSITIVE | wrong seam placement — the contract sanitizes at the **render boundary** (confirmed harness blocks + NT16), not in data-producing actions/transports |
+
+### Running counts (after 2nd sweep)
+
+- **(A) Confirmed**: 17 → **23** (P1–P5, T1–T12, + NP1, NT13–NT17)
+- **(B) Dismissed**: 9 → **21** (+12 second-sweep dismissal rows above)
+- **(C) Uncertain**: 7 (unchanged; four 2nd-sweep candidates deduped into existing C rows)
 
 ## References
 
