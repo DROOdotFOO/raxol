@@ -24,9 +24,19 @@ defmodule Raxol.Harness.EditorSession do
   path is single-quote shell-escaped before it joins the command line.
 
   The `:spawn_fun` seam is `(shell_command :: String.t()) ->
-  non_neg_integer() | :crashed` -- synchronous, returning the editor's
-  exit status (`:crashed` when the port died without ever delivering
-  one). The default implementation is the Port described above.
+  non_neg_integer() | :crashed | :timeout` -- synchronous, returning the
+  editor's exit status (`:crashed` when the port died without ever
+  delivering one; `:timeout` when `:editor_timeout_ms` elapsed first).
+  The default implementation is the Port described above.
+
+  The default `:editor_timeout_ms` is `:infinity` -- an interactive
+  human legitimately edits for arbitrary time on their own tty and can
+  always quit the editor themselves. This deliberately leaves
+  NON-interactive embedders (automation, agents, CI harnesses driving a
+  pty) unprotected against a wedged editor by default: such embedders
+  MUST set a bound (via this option, or `Raxol.Harness.Surface`'s
+  `:editor_opts`), or a never-exiting editor blocks the calling loop
+  forever.
 
   ## Outcomes
 
@@ -458,6 +468,18 @@ defmodule Raxol.Harness.EditorSession do
     Port.demonitor(ref, [:flush])
 
     if Port.info(port), do: Port.close(port)
+
+    # Drain a raced exit_status: the editor may have exited in the window
+    # between the timeout firing and the close above, leaving a stray
+    # `{port, {:exit_status, _}}` in THIS process's mailbox -- which is
+    # the harness dispatcher/TEA-loop process, where an unmatched message
+    # would sit forever (round-2 review). Zero-timeout receive: gone if
+    # present, free if not.
+    receive do
+      {^port, {:exit_status, _late}} -> :ok
+    after
+      0 -> :ok
+    end
   rescue
     ArgumentError -> :ok
   end
@@ -468,7 +490,15 @@ defmodule Raxol.Harness.EditorSession do
   defp shell_quote(path),
     do: "'" <> String.replace(path, "'", "'\\''") <> "'"
 
+  # Counter + timestamp for uniqueness/debuggability, PLUS a
+  # :crypto.strong_rand_bytes segment for unpredictability -- the
+  # confidentiality section's claim, honored in code (round-2 review
+  # caught the doc promising crypto randomness the old counter+timestamp
+  # name did not deliver). 6 bytes -> 8 url-safe base64 chars.
   defp unique do
-    "#{:erlang.unique_integer([:positive, :monotonic])}_#{System.os_time(:microsecond)}"
+    random =
+      6 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
+
+    "#{:erlang.unique_integer([:positive, :monotonic])}_#{System.os_time(:microsecond)}_#{random}"
   end
 end

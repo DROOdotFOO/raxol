@@ -190,6 +190,27 @@ defmodule Raxol.Harness.EditorSurfaceTest do
     assert bytes =~ "input reader failed to re-enable"
   end
 
+  test "the degradation warning survives a LONG kept notice at 80 cols (own line, exempt from the kept notice's truncation)" do
+    device = open_device()
+
+    # The round-2 review's exact scenario: a long editor command makes the
+    # kept notice alone ~65 cols; appended on the same line, the warning
+    # was entirely truncated away by ViewText's end-truncation.
+    session = fn _draft, _opts ->
+      {:kept, {:editor_not_found, "code --wait --user-data-dir=/tmp/x"},
+       %{width: 80, rows: 24, degraded: [{:enable_reader, :timeout}]}}
+    end
+
+    model = new_surface(device, editor_session: session)
+    _ = flush(device)
+    _model = Surface.handle_input(model, ctrl_e())
+
+    bytes = flush(device)
+    # BOTH messages fully present -- the warning on its own footer line
+    assert bytes =~ "input reader failed to re-enable"
+    assert bytes =~ "draft kept"
+  end
+
   test "{:kept, :editor_timeout, geo} renders a timeout notice" do
     device = open_device()
 

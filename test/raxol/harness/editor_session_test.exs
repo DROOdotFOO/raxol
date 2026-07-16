@@ -441,6 +441,17 @@ defmodule Raxol.Harness.EditorSessionTest do
     assert Path.dirname(draft_dir) == tmp_dir
     refute draft_dir == tmp_dir
 
+    # the per-run dir name carries a strong-random segment, honoring the
+    # confidentiality doc's unpredictability claim (round-2 review: the
+    # doc said strong_rand_bytes but the name was counter+timestamp) --
+    # 6 random bytes -> 8 url-base64 chars as the final `_`-separated part
+    assert [random_segment | _] =
+             draft_dir |> Path.basename() |> String.split("_") |> Enum.reverse()
+
+    assert String.length(random_segment) >= 8
+    assert random_segment =~ ~r/\A[A-Za-z0-9_-]+\z/
+    refute random_segment =~ ~r/\A[0-9]+\z/
+
     # the whole per-run directory is gone afterward
     assert File.ls!(tmp_dir) == []
   end

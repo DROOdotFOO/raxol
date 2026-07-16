@@ -442,7 +442,7 @@ defmodule Raxol.Harness.Surface do
           rows: pos_integer(),
           footer_rows: pos_integer(),
           status: map(),
-          stub_notice: String.t() | nil,
+          stub_notice: String.t() | [String.t()] | nil,
           overlay: overlay() | nil,
           editor_session: module() | (String.t(), keyword() -> term()) | nil,
           editor_opts: keyword()
@@ -1178,19 +1178,23 @@ defmodule Raxol.Harness.Surface do
   # finding was exactly this warning being swallowed): the operator is
   # about to discover their keyboard is dead, and a silent success frame
   # would read as "everything is fine".
+  #
+  # The warning gets its OWN notice line, never appended to a kept
+  # notice: `ViewText.lines/3` end-truncates each line to the width
+  # budget, so a same-line append made the warning the first casualty of
+  # a long kept notice (e.g. a long `{:editor_not_found, cmd}`) on an
+  # 80-column terminal -- the round-2 review's finding. Per-line, both
+  # messages survive truncation independently.
   defp apply_degraded_notice(model, []), do: model
 
   defp apply_degraded_notice(model, [_ | _]) do
-    # Kept deliberately terse: the footer notice line is truncated to the
-    # terminal width by ViewText, and this warning must survive even when
-    # appended after a kept-notice on an 80-column terminal.
+    warning =
+      "» warning: input reader failed to re-enable — keyboard may be dead"
+
     notice =
       case model.stub_notice do
-        nil ->
-          "» warning: input reader failed to re-enable — keyboard may be dead"
-
-        kept ->
-          kept <> " · input reader failed to re-enable"
+        nil -> warning
+        kept -> [kept, warning]
       end
 
     %{model | stub_notice: notice}
@@ -1481,6 +1485,13 @@ defmodule Raxol.Harness.Surface do
     do: ViewText.lines(OverlayPicker.render(picker), width, :styled)
 
   defp notice_line(nil, _width), do: []
+
+  # A LIST of notices renders one footer line each -- each independently
+  # width-truncated, so a long first notice can never truncate away a
+  # later one (the degraded-resume warning rides this; see
+  # `apply_degraded_notice/2`).
+  defp notice_line(notices, width) when is_list(notices),
+    do: Enum.flat_map(notices, &notice_line(&1, width))
 
   defp notice_line(text, width),
     do: ViewText.lines(%{type: :text, content: text}, width, :styled)
