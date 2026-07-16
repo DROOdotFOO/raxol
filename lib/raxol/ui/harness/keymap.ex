@@ -38,11 +38,12 @@ defmodule Raxol.UI.Harness.Keymap do
       `InputEvent.printable_char/1` already returns `nil` whenever
       ctrl/alt/meta is held, so a modifier-qualified letter never reaches
       the char-kind match branch in the first place.
-    * **Invocation parity with T15's palette**: the palette can enumerate
-      `binds/0` and invoke `command_for/2` on any entry directly (a command
-      palette is just another way to select a bind, not a second source of
-      truth for what commands exist). `command_types/0` is the exact union
-      this module can ever emit -- there are no commands hiding outside the
+    * **Invocation parity with the command palette**: the palette
+      enumerates `palette_binds/0` (the labeled subset of `binds/0`) and
+      invokes `command_for/2` on any entry directly (a command palette is
+      just another way to select a bind, not a second source of truth for
+      what commands exist). `command_types/0` is the exact union this
+      module can ever emit -- there are no commands hiding outside the
       table.
 
   ## The composer-focus guard
@@ -200,7 +201,22 @@ defmodule Raxol.UI.Harness.Keymap do
   vocabulary this unit adds (the task's own named example of "a needed
   command kind [that] doesn't exist yet") -- transcript-navigation actions
   that never need to leave the UI lane, so they ride the same channel for
-  T15 invocation-parity without ever being routed to `raxol_agent`.
+  the command palette's invocation parity without ever being routed to
+  `raxol_agent`. `:open_palette` / `:open_jump_picker` /
+  `:open_session_picker` are the same kind of UI-local vocabulary, added
+  for the pickers below.
+
+  ## Palette derivation (the `label` field)
+
+  A bind opts into the command palette by declaring a `label:` -- a short,
+  human-readable string. `palette_binds/0` is exactly the labeled subset
+  of `binds/0`, in table order; nothing else decides what appears in the
+  palette. The overlay-only `:overlay_dismiss` bind is deliberately left
+  unlabeled: the palette IS itself an overlay, so listing "dismiss the
+  overlay" as something the palette can invoke on itself would be
+  nonsensical. Every other bind that names a discrete, invokable action
+  carries a label; adding a new labeled bind to the table is the only
+  change needed to make it appear in the palette.
   """
 
   alias Raxol.UI.Harness.InputEvent
@@ -220,6 +236,9 @@ defmodule Raxol.UI.Harness.Keymap do
           | :jump_next
           | :jump_prev
           | :overlay_dismiss
+          | :open_palette
+          | :open_jump_picker
+          | :open_session_picker
 
   @type command :: %{type: command_type(), payload: map()}
 
@@ -230,7 +249,8 @@ defmodule Raxol.UI.Harness.Keymap do
           optional(:key) => atom(),
           optional(:char) => String.t(),
           optional(:guard) => guard(),
-          optional(:mods) => InputEvent.mods()
+          optional(:mods) => InputEvent.mods(),
+          optional(:label) => String.t()
         }
 
   # Plain keys only (v1) -- see moduledoc's "tui-steal rule": a future chord
@@ -245,8 +265,13 @@ defmodule Raxol.UI.Harness.Keymap do
   # incidental.
   @binds [
     %{key: :escape, command_type: :overlay_dismiss, guard: :overlay},
-    %{key: :escape, command_type: :interrupt, guard: :always},
-    %{key: :tab, command_type: :steer, guard: :always},
+    %{
+      key: :escape,
+      command_type: :interrupt,
+      guard: :always,
+      label: "interrupt turn"
+    },
+    %{key: :tab, command_type: :steer, guard: :always, label: "queue steer"},
     # Ctrl+E: hand the composer draft to $EDITOR. A `char:`-kind bind that
     # DECLARES `mods:` -- the tui-steal promise cashing in for char-kind
     # binds (see the moduledoc): the match spec grew a `mods:` field, the
@@ -258,11 +283,48 @@ defmodule Raxol.UI.Harness.Keymap do
       char: "e",
       mods: %{ctrl: true, alt: false, shift: false, meta: false},
       command_type: :edit_draft,
-      guard: :always
+      guard: :always,
+      label: "edit draft in external editor"
     },
-    %{char: "z", command_type: :fold_toggle, guard: :not_composing},
-    %{char: "j", command_type: :jump_next, guard: :not_composing},
-    %{char: "k", command_type: :jump_prev, guard: :not_composing}
+    %{
+      char: "z",
+      command_type: :fold_toggle,
+      guard: :not_composing,
+      label: "toggle fold"
+    },
+    %{
+      char: "j",
+      command_type: :jump_next,
+      guard: :not_composing,
+      label: "next block"
+    },
+    %{
+      char: "k",
+      command_type: :jump_prev,
+      guard: :not_composing,
+      label: "previous block"
+    },
+    # Ctrl+P: same chord shape as Ctrl+E above -- a ctrl chord is never
+    # typed text, so this is `:always` too.
+    %{
+      char: "p",
+      mods: %{ctrl: true, alt: false, shift: false, meta: false},
+      command_type: :open_palette,
+      guard: :always,
+      label: "command palette"
+    },
+    %{
+      char: "g",
+      command_type: :open_jump_picker,
+      guard: :not_composing,
+      label: "jump to block"
+    },
+    %{
+      char: "s",
+      command_type: :open_session_picker,
+      guard: :not_composing,
+      label: "switch session"
+    }
   ]
 
   # Structural guard for the one load-bearing ordering above: the
@@ -299,6 +361,31 @@ defmodule Raxol.UI.Harness.Keymap do
   """
   @spec command_types() :: [command_type()]
   def command_types, do: @binds |> Enum.map(& &1.command_type) |> Enum.uniq()
+
+  @doc """
+  The labeled subset of `binds/0` -- a bind opts into palette listing by
+  declaring a `label:`; derived from the table, never a parallel list.
+  See `picker_binds_test.exs`'s "palette derivation" describe.
+  """
+  @spec palette_binds() :: [bind()]
+  def palette_binds, do: Enum.filter(@binds, &Map.has_key?(&1, :label))
+
+  @doc """
+  Emits the exact command `resolve/2` would dispatch for an event matching
+  `bind`, without needing a live `InputEvent.t()` -- this is what makes the
+  command palette's invocation parity real: it can invoke any
+  `palette_binds/0` entry directly instead of needing to fabricate a
+  matching keypress. A bare `nil` context normalizes to `%{}`, same as
+  `resolve/2`. `:fold_toggle` threads `context.focused_block_id` into the
+  payload exactly like a live keypress would (see
+  `picker_binds_test.exs`'s "command_for/2 threads context into
+  :fold_toggle's payload" case).
+  """
+  @spec command_for(bind(), context() | nil) :: command()
+  def command_for(bind, context \\ %{})
+
+  def command_for(bind, nil), do: command_for(bind, %{})
+  def command_for(bind, context), do: build_command(bind, context)
 
   @doc """
   Resolve a normalized `InputEvent.t()` (see `Raxol.UI.Harness.InputEvent`

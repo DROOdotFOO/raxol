@@ -507,37 +507,43 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp content_style(:opaque), do: %{dim: true}
   defp content_style(_kind), do: %{}
 
-  defp summary(%__MODULE__{
-         kind: :tool_call,
-         content: %{name: name, args: args}
-       }) do
+  @doc """
+  One-line summary of `block` (kind-aware) -- the folded-header text and
+  the jump-picker's label source (see
+  `command_palette_surface_test.exs`'s "jump picker" describe).
+  """
+  @spec summary(t()) :: String.t()
+  def summary(%__MODULE__{
+        kind: :tool_call,
+        content: %{name: name, args: args}
+      }) do
     name <> format_args(args)
   end
 
-  defp summary(%__MODULE__{kind: :approval, content: %{action: action}}) do
+  def summary(%__MODULE__{kind: :approval, content: %{action: action}}) do
     first_line(action)
   end
 
-  defp summary(%__MODULE__{kind: :diff, content: %{path: path}}) do
+  def summary(%__MODULE__{kind: :diff, content: %{path: path}}) do
     case path do
       "" -> "(no path)"
       p -> p
     end
   end
 
-  defp summary(%__MODULE__{
-         kind: :opaque,
-         raw_kind: raw_kind,
-         content: %{text: text}
-       }) do
+  def summary(%__MODULE__{
+        kind: :opaque,
+        raw_kind: raw_kind,
+        content: %{text: text}
+      }) do
     "[#{kind_label(raw_kind)}] " <> first_line(text)
   end
 
-  defp summary(%__MODULE__{content: %{text: text}}) do
+  def summary(%__MODULE__{content: %{text: text}}) do
     first_line(text)
   end
 
-  defp summary(_block), do: "(empty)"
+  def summary(_block), do: "(empty)"
 
   defp kind_label(raw_kind) when is_atom(raw_kind), do: Atom.to_string(raw_kind)
   defp kind_label(raw_kind) when is_binary(raw_kind), do: raw_kind

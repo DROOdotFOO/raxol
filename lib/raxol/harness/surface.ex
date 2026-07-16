@@ -414,6 +414,40 @@ defmodule Raxol.Harness.Surface do
   back to, so `:edit_draft` there seals one honest history line saying
   so instead of pretending.
 
+  ## The pickers (command palette, jump, session)
+
+  Three more `OverlayPicker` consumers ride the same footer-overlay
+  substrate as the picker described above. Ctrl+P (`Keymap`'s
+  `:open_palette`, an `:always` chord) opens the command palette from
+  anywhere, including mid-compose -- a chord is never typed text, the same
+  reasoning as Ctrl+E. `g` (`:open_jump_picker`) and `s`
+  (`:open_session_picker`) are plain printable letters gated
+  `:not_composing`, the same class as `z`/`j`/`k`: they only resolve in
+  transcript-browse mode, never stealing a letter out of the composer's
+  typed text.
+
+  The palette's entries are `Keymap.palette_binds/0` (the labeled subset
+  of the bind table) plus two commands that exist only at THIS assembly
+  layer, not in `Keymap.binds/0` -- "focus transcript" and "focus
+  composer" (the very transition `focus_transcript/1`/`focus_composer/1`
+  already exposes as direct API). Picking any palette entry dispatches
+  through the exact same `dispatch_command/2` path a keypress takes --
+  there is no second, parallel execution mechanism for a palette-picked
+  command. All three pickers (palette, jump, session) opt into
+  `Raxol.UI.Harness.OverlayPicker.fuzzy_filter/3` as their `filter_fn`
+  (the `Raxol.UI.ListScorer` adapter), not the default substring filter --
+  a fuzzy-ranked query is what a "type a few letters, find the entry"
+  picker needs.
+
+  Session-switch semantics (`s`, `switch_session/2`) are stated plainly:
+  the abandoned session's sealed history stays byte-identical above --
+  print-once, the substrate cannot rewrite it -- while its not-yet-painted
+  PENDING blocks (the one-block foldable window) are DROPPED, never
+  sealed late. Replay state (`events`/`revealed`/`projection`/
+  `painted_count`/`fold_overrides`/`focused_index`/`status`) resets, the
+  new session's events append below whatever is already sealed, and the
+  composer draft plus authority/geometry survive the switch untouched.
+
   ## Precondition #7 -- teardown ownership (this module owns NONE)
 
   `new/2` sets the DECSTBM history/footer split via
@@ -442,6 +476,7 @@ defmodule Raxol.Harness.Surface do
   shipped for callers to reuse.
   """
 
+  alias Raxol.Harness.Fixture
   alias Raxol.Harness.Fixture.Session
   alias Raxol.Harness.Projection
   alias Raxol.Harness.RecencyPolicy
@@ -461,6 +496,7 @@ defmodule Raxol.Harness.Surface do
   }
 
   @default_footer_rows 6
+  @default_sessions_dir Path.join(["test", "fixtures", "harness", "sessions"])
   @stub_interrupt_notice "» interrupt requested (stub — no agent lane in fixture mode)"
 
   @type mode :: :inline_log | :tmux_conservative | :flat
@@ -484,7 +520,8 @@ defmodule Raxol.Harness.Surface do
           overlay: overlay() | nil,
           editor_session: module() | (String.t(), keyword() -> term()) | nil,
           editor_opts: keyword(),
-          unread: UnreadDivider.t()
+          unread: UnreadDivider.t(),
+          sessions_dir: Path.t()
         }
 
   @typedoc """
@@ -533,6 +570,10 @@ defmodule Raxol.Harness.Surface do
       `:env` -- see `Raxol.Harness.EditorSession`'s trust-boundary
       section). Model-owned `device`/`rows`/`width` always win over
       entries here.
+    * `:sessions_dir` (default `#{inspect(@default_sessions_dir)}`, the
+      same source `examples/harness_fixture_demo.exs` reads) -- the
+      directory `list_fixture_sessions/1` (the session picker, `s`) lists
+      `.jsonl` fixtures from.
 
   ## Startup mode notice (the degradation ladder's `select_with_reason/3` seam)
 
@@ -602,7 +643,8 @@ defmodule Raxol.Harness.Surface do
       overlay: nil,
       editor_session: Keyword.get(opts, :editor_session),
       editor_opts: Keyword.get(opts, :editor_opts, []),
-      unread: UnreadDivider.new()
+      unread: UnreadDivider.new(),
+      sessions_dir: Keyword.get(opts, :sessions_dir, @default_sessions_dir)
     }
 
     model
@@ -649,13 +691,21 @@ defmodule Raxol.Harness.Surface do
   # no-op) -- seal the notice as the first history line instead, through
   # the same `FlatAuthority.seal/2` path `seal_block/2`'s `:flat` clause
   # uses for every other line.
-  defp apply_mode_notice(%{mode: :flat} = model, text) do
+  defp apply_mode_notice(%{mode: :flat} = model, text),
+    do: seal_flat_notice(model, text)
+
+  defp apply_mode_notice(model, text), do: %{model | stub_notice: text}
+
+  # Seals one honest, plain-rendered history line through the same
+  # `FlatAuthority.seal/2` path every flat-mode notice uses (this
+  # function's own `:flat` clause above, and `picker_refusal/2`'s
+  # `:no_footer` case below) -- one source of truth for "how flat mode
+  # writes an honest one-line notice", never a re-derived copy.
+  defp seal_flat_notice(model, text) do
     lines = ViewText.lines(%{type: :text, content: text}, model.width, :plain)
     iodata = Enum.map(lines, &(&1 <> "\n"))
     %{model | authority: FlatAuthority.seal(model.authority, iodata)}
   end
-
-  defp apply_mode_notice(model, text), do: %{model | stub_notice: text}
 
   defp build_authority(:flat, device, width, rows, _footer_rows, _caps),
     do: FlatAuthority.new(device, width, rows)
@@ -1052,12 +1102,7 @@ defmodule Raxol.Harness.Surface do
       | unread: UnreadDivider.input_activity(model.unread, unread_offset(model))
     }
 
-    context = %{
-      composing?: model.composing?,
-      streaming?: not Map.get(model.status, :turn_completed, false),
-      focused_block_id: model.focused_index,
-      overlay_open?: model.overlay != nil
-    }
+    context = keymap_context(model)
 
     model =
       case Keymap.resolve(norm, context) do
@@ -1066,6 +1111,19 @@ defmodule Raxol.Harness.Surface do
       end
 
     paint_footer(model)
+  end
+
+  # The one construction of `Keymap.resolve/2`'s mode context -- shared
+  # with `palette_command/2`'s `Keymap.command_for/2` invocation below, so
+  # the two can never drift apart (a palette-picked bind and a live
+  # keypress must see the identical context shape).
+  defp keymap_context(model) do
+    %{
+      composing?: model.composing?,
+      streaming?: not Map.get(model.status, :turn_completed, false),
+      focused_block_id: model.focused_index,
+      overlay_open?: model.overlay != nil
+    }
   end
 
   # While an overlay is open, EVERY :passthrough event (typed characters,
@@ -1129,6 +1187,32 @@ defmodule Raxol.Harness.Surface do
   defp dispatch_command(model, %{type: :interrupt}) do
     %{model | stub_notice: @stub_interrupt_notice}
   end
+
+  # Only the `:always` Ctrl+P chord can ever fire this clause with an
+  # overlay already open -- `g`/`s` are already suppressed by their own
+  # `:not_composing` guard's `overlay_open?` check (see `Keymap`'s
+  # moduledoc), so they never reach `dispatch_command/2` at all while a
+  # picker is open. Clause order load-bearing, same reason as the
+  # `:steer`/`:edit_draft` overlay guards below: this must precede the
+  # plain `:open_palette` clause.
+  defp dispatch_command(%{overlay: overlay} = model, %{type: :open_palette})
+       when overlay != nil,
+       do: picker_refusal(model, :overlay_already_open)
+
+  defp dispatch_command(model, %{type: :open_palette}),
+    do: open_command_palette(model)
+
+  defp dispatch_command(model, %{type: :open_jump_picker}),
+    do: open_jump_picker(model)
+
+  defp dispatch_command(model, %{type: :open_session_picker}),
+    do: open_session_picker(model)
+
+  defp dispatch_command(model, %{type: :focus_transcript}),
+    do: focus_transcript(model)
+
+  defp dispatch_command(model, %{type: :focus_composer}),
+    do: focus_composer(model)
 
   # An open overlay freezes the composer buffer mid-pick (see the
   # moduledoc's command-bifurcation note) -- queuing a steer built from
@@ -1574,6 +1658,216 @@ defmodule Raxol.Harness.Surface do
 
     %{model | authority: authority, overlay: nil}
     |> paint_footer()
+  end
+
+  # -- pickers (command palette, jump, session) ----------------------------
+  # See the moduledoc's "The pickers" section.
+
+  @doc """
+  Opens the command palette (Ctrl+P): one entry per `Keymap.palette_binds/0`
+  label, plus two surface-local commands (`focus transcript`, `focus
+  composer`) that exist only at this assembly layer. Picking an entry
+  dispatches through the exact same `dispatch_command/2` path a keypress
+  takes -- no parallel execution mechanism. Uses
+  `OverlayPicker.fuzzy_filter/3` as its `filter_fn`. Refusals (a picker
+  already open, insufficient geometry, flat mode) surface as an honest
+  notice via `picker_refusal/2`, same as `open_overlay/3`'s other callers.
+  """
+  @spec open_command_palette(t()) :: t()
+  def open_command_palette(model) do
+    items =
+      Enum.map(
+        Keymap.palette_binds(),
+        &%{label: &1.label, command: {:bind, &1}}
+      ) ++
+        [
+          %{
+            label: "focus transcript",
+            command: {:command, %{type: :focus_transcript, payload: %{}}}
+          },
+          %{
+            label: "focus composer",
+            command: {:command, %{type: :focus_composer, payload: %{}}}
+          }
+        ]
+
+    model
+    |> open_overlay(items,
+      label_fn: & &1.label,
+      filter_fn: &OverlayPicker.fuzzy_filter/3,
+      title: "commands",
+      on_pick: fn model, item ->
+        dispatch_command(model, palette_command(model, item.command))
+      end
+    )
+    |> handle_open_result(model)
+  end
+
+  # A surface-local command (`{:command, cmd}`) is already the command
+  # `dispatch_command/2` expects; a bind reference (`{:bind, bind}`) goes
+  # through `Keymap.command_for/2` with the SAME context
+  # `handle_input/2`'s own keypress path builds (`keymap_context/1`) --
+  # one construction, so a palette pick and a live keypress can never
+  # resolve a bind differently.
+  defp palette_command(_model, {:command, cmd}), do: cmd
+
+  defp palette_command(model, {:bind, bind}),
+    do: Keymap.command_for(bind, keymap_context(model))
+
+  @doc """
+  Opens the jump-to-block picker (`g`, transcript-browse only): one entry
+  per projected block, labeled `"<kind> · <summary>"` (`Block.summary/1`).
+  Picking an entry sets `focused_index`. An empty block list is an honest
+  no-op notice rather than an empty overlay.
+  """
+  @spec open_jump_picker(t()) :: t()
+  def open_jump_picker(%{projection: %{blocks: []}} = model) do
+    %{model | stub_notice: "» no blocks to jump to"}
+  end
+
+  def open_jump_picker(model) do
+    items =
+      model.projection.blocks
+      |> Enum.with_index()
+      |> Enum.map(fn {block, index} ->
+        # No truncation here -- `ViewText.lines/3` is the one truncation
+        # trust boundary (see this module's moduledoc); this hands it the
+        # full, untruncated label.
+        %{index: index, label: "#{block.kind} · #{Block.summary(block)}"}
+      end)
+
+    model
+    |> open_overlay(items,
+      label_fn: & &1.label,
+      filter_fn: &OverlayPicker.fuzzy_filter/3,
+      title: "jump",
+      on_pick: fn model, item -> %{model | focused_index: item.index} end
+    )
+    |> handle_open_result(model)
+  end
+
+  @doc """
+  Opens the session picker (`s`, transcript-browse only): one entry per
+  `.jsonl` fixture in `model.sessions_dir` (see `list_fixture_sessions/1`).
+  Picking a name loads it (`Raxol.Harness.Fixture.load/1`) and switches to
+  it via `switch_session/2` -- see the moduledoc's session-switch
+  semantics. An empty directory listing is an honest no-op notice rather
+  than an empty overlay; a load failure surfaces its `DecodeError` reason
+  instead of switching.
+  """
+  @spec open_session_picker(t()) :: t()
+  def open_session_picker(model) do
+    case list_fixture_sessions(model.sessions_dir) do
+      [] ->
+        %{
+          model
+          | stub_notice: "» no fixture sessions found in #{model.sessions_dir}"
+        }
+
+      names ->
+        model
+        |> open_overlay(names,
+          filter_fn: &OverlayPicker.fuzzy_filter/3,
+          title: "session",
+          on_pick: &pick_session/2
+        )
+        |> handle_open_result(model)
+    end
+  end
+
+  defp pick_session(model, name) do
+    path = Path.join(model.sessions_dir, name <> ".jsonl")
+
+    case Fixture.load(path) do
+      {:ok, session} ->
+        model
+        |> switch_session(session)
+        |> Map.put(
+          :stub_notice,
+          "» switched to session #{name} — previous history stays sealed above"
+        )
+
+      {:error, error} ->
+        %{
+          model
+          | stub_notice:
+              "» could not load session #{name}: #{inspect(error.reason)}"
+        }
+    end
+  end
+
+  @doc """
+  Lists fixture session names available under `dir` -- the `.jsonl` files
+  (suffix stripped, sorted) `open_session_picker/1` reads. `{:error, _}`
+  from `File.ls/1` (missing/unreadable directory) yields `[]`, the same
+  "nothing to pick" shape an empty directory produces.
+  """
+  @spec list_fixture_sessions(Path.t()) :: [String.t()]
+  def list_fixture_sessions(dir) do
+    case File.ls(dir) do
+      {:ok, entries} ->
+        entries
+        |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
+        |> Enum.map(&String.replace_suffix(&1, ".jsonl", ""))
+        |> Enum.sort()
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  @doc """
+  Switches the active session to `session_or_events` (see the moduledoc's
+  "The pickers" section for the print-once semantics this implements):
+  `authority`/`composer`/`mode`/geometry (`width`/`rows`)/`footer_rows`/
+  `sessions_dir`/`editor_session`/`editor_opts` are left untouched --
+  sealed history above is never touched by this function at all, which is
+  the whole point. Replay state resets (`events`, `revealed`,
+  `projection`, `painted_count`, `fold_overrides`, `focused_index`,
+  `status`) so the new session starts its own fresh reveal. Does NOT paint
+  by itself -- the caller's trailing `paint_footer/1` (in
+  `handle_input/2`) covers the footer.
+  """
+  @spec switch_session(t(), Session.t() | [map()]) :: t()
+  def switch_session(model, session_or_events) do
+    %{
+      model
+      | events: events_from(session_or_events),
+        revealed: 0,
+        projection: Projection.project([], fold_defaults: model.fold_defaults),
+        painted_count: 0,
+        fold_overrides: %{},
+        focused_index: nil,
+        status: %{}
+    }
+  end
+
+  # `open_overlay/3`'s `{:ok, model}` / `{:error, reason}` result, uniform
+  # across all three pickers above: succeed with the opened model, or
+  # route the refusal reason through `picker_refusal/2` against the
+  # PRE-open model (the `{:error, _}` branch never touches the authority,
+  # so `original_model` and the `open_overlay/3` input are the same value
+  # -- named separately only for clarity at each call site).
+  defp handle_open_result({:ok, model}, _original_model), do: model
+
+  defp handle_open_result({:error, reason}, original_model),
+    do: picker_refusal(original_model, reason)
+
+  # Routes an `open_overlay/3` refusal to an honest, one-frame notice
+  # (`:insufficient_footer_capacity`/`:overlay_already_open`) or, for
+  # `:no_footer` (flat mode has no footer to grow at all), seals ONE
+  # honest history line through the same `FlatAuthority.seal/2` path
+  # `apply_mode_notice/2`'s flat clause uses (see `seal_flat_notice/2`).
+  defp picker_refusal(model, :insufficient_footer_capacity) do
+    %{model | stub_notice: "» picker needs more rows — terminal too small"}
+  end
+
+  defp picker_refusal(model, :overlay_already_open) do
+    %{model | stub_notice: "» a picker is already open"}
+  end
+
+  defp picker_refusal(model, :no_footer) do
+    seal_flat_notice(model, "» pickers require the footer (flat mode)")
   end
 
   # -- footer paint (precondition #5) --------------------------------------
