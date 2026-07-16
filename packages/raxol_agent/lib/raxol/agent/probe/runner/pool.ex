@@ -112,6 +112,7 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
       %{status: :running, killed: false, emit: emit, spec: spec} = run ->
         # :killed charges @zero_charge (< the submit-time reserve): release it so
         # the budget's reserved counter tracks the authoritative charge (F5, #5).
+        cancel_timeout(run)
         release_reserve(run)
         emit_terminal(emit, run_id, spec.id, :killed, @zero_charge, nil)
         {:reply, :ok, put_run(state, run_id, %{run | status: :killed, killed: true, reserved: 0})}
@@ -189,6 +190,28 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     {:noreply, state}
   end
 
+  # Wall-clock leash fired (#2): kill a still-running run, release its reserve,
+  # and emit the :timeout terminal. Setting the status here means the subsequent
+  # :DOWN (reason :killed) finds a non-:running run and is a no-op — no double
+  # terminal. A run that already reached a terminal (its timer was cancelled but
+  # the message had already been queued) is left untouched.
+  def handle_info({:run_timeout, run_id}, state) do
+    case Map.get(state.runs, run_id) do
+      %{status: :running, killed: false, emit: emit, spec: spec} = run ->
+        case Map.get(run, :task_pid) do
+          pid when is_pid(pid) -> Process.exit(pid, :kill)
+          _ -> :ok
+        end
+
+        release_reserve(run)
+        emit_terminal(emit, run_id, spec.id, :timeout, @zero_charge, :timeout_ms)
+        {:noreply, put_run(state, run_id, %{run | status: :timeout, killed: true, reserved: 0})}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state)
       when reason in [:normal, :shutdown] do
     {:noreply, state}
@@ -199,8 +222,10 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     case Enum.find(state.runs, fn {_id, r} -> Map.get(r, :task_pid) == pid end) do
       {run_id, %{status: :running, killed: false, emit: emit, spec: spec} = run} ->
         Logger.debug("probe run #{run_id} crashed: #{inspect(reason)}")
+        cancel_timeout(run)
+        release_reserve(run)
         emit_terminal(emit, run_id, spec.id, :error, @zero_charge, :crash)
-        {:noreply, put_run(state, run_id, %{run | status: :error})}
+        {:noreply, put_run(state, run_id, %{run | status: :error, reserved: 0})}
 
       _ ->
         {:noreply, state}
@@ -244,6 +269,13 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
 
         state =
           spawn_work(state, run_id, probe, spec, context, provider, budget, session_budget, emit)
+
+        # Wall-clock leash (#2): a hung provider_invoke / build / interpret would
+        # otherwise hold the reserve forever and never emit a terminal (lifecycle
+        # incompleteness). Arm a timer; on fire, the run is killed and gets its
+        # :timeout terminal. Cancelled by every other terminal path.
+        timeout_ref = Process.send_after(self(), {:run_timeout, run_id}, spec.timeout_ms)
+        state = put_run(state, run_id, Map.put(Map.get(state.runs, run_id), :timeout_ref, timeout_ref))
 
         {:reply, {:ok, run_id}, state}
 
@@ -424,6 +456,10 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   # ---------------------------------------------------------------------------
 
   defp apply_result(state, run_id, %{emit: emit, spec: spec} = run, result) do
+    # The run reached its own terminal before the wall-clock leash — disarm it so
+    # a queued {:run_timeout} cannot double-emit (the status guard also protects,
+    # this just avoids the stale message).
+    cancel_timeout(run)
     taint = context_taint(run)
 
     case result do
@@ -580,6 +616,15 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
 
   defp release_reserve(_run), do: :ok
 
+  # Disarm a run's wall-clock leash (#2) when it reaches a terminal by another
+  # path, so a queued {:run_timeout} message cannot fire against a fresh run.
+  defp cancel_timeout(%{timeout_ref: ref}) when is_reference(ref) do
+    Process.cancel_timer(ref)
+    :ok
+  end
+
+  defp cancel_timeout(_run), do: :ok
+
   # Atomic `Ledger.try_spend`-shaped reserve against the injected handle.
   defp reserve(nil, _amount), do: :ok
 
@@ -597,6 +642,13 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     Agent.update(budget, fn %{reserved: reserved} = s ->
       %{s | reserved: max(reserved - amount, 0)}
     end)
+  catch
+    # A release runs in the coordinator (e.g. off a crashed run's :DOWN). The
+    # ephemeral test budget Agent can already be gone — a dead budget has nothing
+    # to release, and it must NOT crash this shared singleton pool. Swallow ONLY
+    # the dead-handle :noproc shape; any other failure surfaces.
+    :exit, reason when reason == :noproc or (is_tuple(reason) and elem(reason, 0) == :noproc) ->
+      :ok
   end
 
   # ---------------------------------------------------------------------------

@@ -69,6 +69,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
   alias Raxol.Agent.Red.ProbeRunnerLab.{
     CacheRideProbe,
+    HangingProbe,
     LoopDraftProbe,
     MultiCallProbe,
     ShortParkProbe,
@@ -406,6 +407,33 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       assert is_integer(p) and is_integer(c) and is_integer(o) and is_integer(n)
       assert c <= p, "cached prompt tokens cannot exceed prompt tokens"
+    end
+  end
+
+  describe "wall-clock timeout_ms leash (adversarial-review #2)" do
+    test "a hung run gets a :timeout terminal at spec.timeout_ms and its reserve is released" do
+      # cap fits exactly one reserve; HangingProbe.build/1 never returns, so
+      # without the leash the reserve leaks forever and no terminal ever lands.
+      rig = rig(cap: 100)
+      timeout_ms = HangingProbe.spec().timeout_ms
+
+      assert {:ok, run_id} = Runner.submit("u12-red", HangingProbe, submit_opts(rig, ctx()))
+      # It reserved at submit and is now hung.
+      assert L.reserved(rig.budget) == 100
+
+      events = await_terminals(rig.bus, [run_id], timeout_ms + 2_000)
+
+      terminals =
+        for %{kind: :probe_run, run_id: ^run_id, status: s, reason: r} <- events,
+            s in L.terminal_statuses(),
+            do: {s, r}
+
+      assert terminals == [{:timeout, :timeout_ms}],
+             "a hung run must terminate :timeout at the leash, got #{inspect(terminals)}"
+
+      # The reserve is released — a hung run no longer strands budget.
+      assert L.reserved(rig.budget) == 0
+      assert L.lifecycle_complete(events, [run_id]) == :ok
     end
   end
 
