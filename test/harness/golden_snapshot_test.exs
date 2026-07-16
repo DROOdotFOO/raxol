@@ -27,6 +27,17 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
   alias Raxol.Harness.Test.SealOracle
   alias Raxol.Test.CrossTerminal.SequenceScanner
 
+  # Sequence-vocabulary allowlist for `:inline_log`/`:tmux_conservative`
+  # goldens -- the substrate's measured full vocabulary for those tiers:
+  # CUP (`H`), EL (`K`), SGR (`m`), DECSTBM (`r`) from `InlineAuthority` /
+  # `ScrollRegionManager`, plus DECSC/DECRC (`\e7`/`\e8`) save/restore-
+  # cursor. A failure against these lists means either a poisoned golden
+  # (something emitted a sequence outside this vocabulary, e.g. OSC 52
+  # clipboard exfiltration) or a deliberate vocabulary extension that must
+  # be reviewed and added here consciously.
+  @allowed_csi_finals ~w(H K m r)
+  @allowed_esc_chars ~w(7 8)
+
   # ---------------------------------------------------------------------
   # (a) byte-golden + (b) determinism, one test pair per fixture x mode
   # ---------------------------------------------------------------------
@@ -108,6 +119,34 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
                "#{fixture} x #{mode} golden emits a full clear per SealOracle"
       end
     end
+
+    test "inline_log and tmux_conservative goldens use only the measured sequence vocabulary" do
+      for fixture <- Golden.fixtures(),
+          mode <- [:inline_log, :tmux_conservative] do
+        golden = read_golden!(fixture, mode)
+        tokens = SequenceScanner.scan(golden)
+
+        refute Enum.any?(tokens, &match?({:osc, _}, &1)),
+               "#{fixture} x #{mode} golden contains an OSC sequence -- outside " <>
+                 "the measured vocabulary (see the allowlist comment above)"
+
+        refute Enum.any?(tokens, &match?({:dcs, _}, &1)),
+               "#{fixture} x #{mode} golden contains a DCS sequence -- outside " <>
+                 "the measured vocabulary (see the allowlist comment above)"
+
+        for {:csi, _params, final} <- tokens do
+          assert final in @allowed_csi_finals,
+                 "#{fixture} x #{mode} golden contains a CSI sequence with " <>
+                   "final #{inspect(final)}, outside the allowlist #{inspect(@allowed_csi_finals)}"
+        end
+
+        for {:esc, ch} <- tokens do
+          assert ch in @allowed_esc_chars,
+                 "#{fixture} x #{mode} golden contains an ESC sequence #{inspect(ch)}, " <>
+                   "outside the allowlist #{inspect(@allowed_esc_chars)}"
+        end
+      end
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -134,6 +173,14 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
 
       assert corrupted =~ <<0x1B>>
     end
+
+    test "an injected OSC 52 (clipboard) sequence produces an {:osc, _} token -- the allowlist guard would catch it" do
+      poisoned = "x\e]52;c;aGVsbG8=\a y"
+
+      assert Enum.any?(SequenceScanner.scan(poisoned), &match?({:osc, _}, &1)),
+             "an injected OSC 52 sequence must scan as an {:osc, _} token so " <>
+               "the sequence-vocabulary allowlist guard rejects it"
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -145,6 +192,129 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
   describe "drift tripwire" do
     test "the full fixtures x modes matrix is current against its checked-in goldens" do
       assert {:ok, _results} = Golden.run(check: true)
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # (f) bounded drive_to_completion: the step-budgeted replacement for the
+  #     former unbounded recursion (see Golden's moduledoc / the raise
+  #     path's own doc for why this must be loud rather than a silent
+  #     hang in CI/bless).
+  # ---------------------------------------------------------------------
+
+  describe "bounded drive_to_completion" do
+    test "max_steps/1 derives the documented budget (2 * event_count + 32)" do
+      assert Golden.max_steps(10) == 52
+      assert Golden.max_steps(0) == 32
+    end
+
+    test "a non-converging advance_fun raises instead of hanging forever" do
+      non_converging = fn model -> {model, :ok} end
+
+      assert_raise RuntimeError, ~r/never returned :done within 5 steps/, fn ->
+        Golden.drive_to_completion(:whatever_model, non_converging, 5)
+      end
+    end
+
+    test "an advance_fun that converges within budget returns the final model" do
+      # returns :done on the 3rd call -- well within a 5-step budget.
+      countdown = fn
+        n when n >= 2 -> {n + 1, :done}
+        n -> {n + 1, :ok}
+      end
+
+      assert Golden.drive_to_completion(0, countdown, 5) == 3
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # (g) escape_lines/1: the pure formatter behind the reviewable textual
+  #     sidecar bless writes next to every byte golden.
+  # ---------------------------------------------------------------------
+
+  describe "escape_lines/1" do
+    @round_trip_samples [
+      "",
+      "\n",
+      "hello\n",
+      "\e[2Jworld",
+      <<0, 1, 2, 255, 254>>,
+      "line1\nline2\n\nline4",
+      "no trailing newline",
+      "a\r\nb\r\nc"
+    ]
+
+    test "round-trips: concatenating the unescaped chunks reproduces the original binary" do
+      for sample <- @round_trip_samples do
+        escaped = Golden.escape_lines(sample)
+        assert String.ends_with?(escaped, "\n")
+
+        body = String.slice(escaped, 0, byte_size(escaped) - 1)
+        lines = if body == "", do: [], else: String.split(body, "\n")
+
+        rebuilt =
+          Enum.map_join(lines, "", fn line ->
+            {value, _bindings} = Code.eval_string(line)
+            value
+          end)
+
+        assert rebuilt == sample
+      end
+    end
+
+    test "escapes ESC (\\e) visibly rather than emitting a raw control byte" do
+      escaped = Golden.escape_lines("\e[2J")
+      assert escaped =~ "\\e"
+      refute escaped =~ <<0x1B>>
+    end
+
+    test "output is deterministic across calls" do
+      sample = "\e[H\e[Kfoo\nbar\e7baz"
+      assert Golden.escape_lines(sample) == Golden.escape_lines(sample)
+    end
+
+    test "a known input produces the documented literal escaped form" do
+      assert Golden.escape_lines("ab\n") ==
+               inspect("ab\n", limit: :infinity, printable_limit: :infinity) <>
+                 "\n"
+    end
+
+    test "empty binary produces zero escaped lines, just the trailing newline" do
+      assert Golden.escape_lines("") == "\n"
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # (h) explicit file-read error handling in bless (Fix 4): a directory
+  #     occupying a golden's path must raise a read-diagnosis error, not
+  #     be silently treated as "absent" and masked by a failed write.
+  # ---------------------------------------------------------------------
+
+  describe "bless :dir option + explicit file-read error handling" do
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "golden-bless-test-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+      %{dir: dir}
+    end
+
+    test "a directory occupying a golden's path raises a read-diagnosis error",
+         %{dir: dir} do
+      fixture = List.first(Golden.fixtures())
+      mode = List.first(Golden.modes())
+      path = Path.join(dir, "#{fixture}.#{mode}.golden")
+      # occupy the golden's own path with a directory instead of a file --
+      # `File.read/1` on it returns `{:error, :eisdir}`.
+      File.mkdir_p!(path)
+
+      assert_raise RuntimeError, ~r/failed to read golden.*eisdir/s, fn ->
+        Golden.run(dir: dir)
+      end
     end
   end
 

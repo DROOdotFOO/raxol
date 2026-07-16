@@ -10,11 +10,20 @@ defmodule Mix.Tasks.Raxol.Harness.Goldens.Bless do
       mix raxol.harness.goldens.bless --check
 
   `--check` writes nothing: it renders each fixture x mode pair fresh and
-  compares the bytes against the on-disk golden, printing each drifted
+  compares the bytes against the on-disk golden AND the on-disk escaped
+  textual sidecar (`<golden path>.txt`, see
+  `Raxol.Harness.Surface.Golden.escape_lines/1`), printing each drifted
   name plus its formatted byte-diff (offset, sizes, escaped context
   windows on both sides -- see `Raxol.Harness.Surface.GoldenDiff`) and
   failing (non-zero exit) when anything drifted or is missing -- the CI
   half of the drift tripwire.
+
+  A fresh golden is reported as `bless (new)`; an existing golden whose
+  bytes changed is reported as `bless (overwrote)` followed immediately
+  by the byte-diff against what was previously on disk -- a byte-golden
+  clobber must be loud at bless time (see
+  `Raxol.Harness.Surface.Golden`'s moduledoc, "Bless status
+  conventions").
 
   Mirrors the FATE `--gen` precedent (`mix raxol.fate --gen`) and the
   `mix raxol.harness.fixtures.bless` precedent one layer further down the
@@ -25,7 +34,7 @@ defmodule Mix.Tasks.Raxol.Harness.Goldens.Bless do
 
   use Mix.Task
 
-  alias Raxol.Harness.Surface.{Golden, GoldenDiff}
+  alias Raxol.Harness.Surface.Golden
 
   @switches [check: :boolean]
 
@@ -52,12 +61,14 @@ defmodule Mix.Tasks.Raxol.Harness.Goldens.Bless do
 
   # `Golden.run/1` reports `{:error, {:drift, names}}` (mirroring
   # `Raxol.Harness.Fixture.Bless.run/1`'s own shape) with just the drifted
-  # names, not the per-pair diff text -- recomputed here, directly, via the
-  # same public render/compare seam `Golden.run/1` itself uses internally.
-  # `Golden.render/2` is a pure, deterministic re-render (see that module's
-  # moduledoc's determinism audit), so recomputing costs one extra render
-  # pass per drifted pair, never a behavior difference from what
-  # `Golden.run/1` already found.
+  # names, not the per-pair diff text -- recomputed here, directly, via
+  # `Golden.diff_report/3`, the same golden-AND-sidecar compare seam
+  # `Golden.run/1` itself uses internally (so a sidecar-only drift is
+  # reported exactly as loudly as a byte-golden one, with no duplicated
+  # comparison logic in this task). `Golden.render/2` is a pure,
+  # deterministic re-render (see that module's moduledoc's determinism
+  # audit), so recomputing costs one extra render pass per drifted pair,
+  # never a behavior difference from what `Golden.run/1` already found.
   defp print_drift(name) do
     Mix.shell().info("drift   #{name}")
 
@@ -69,18 +80,7 @@ defmodule Mix.Tasks.Raxol.Harness.Goldens.Bless do
 
   defp diff_for(name) do
     {fixture, mode} = split_name(name)
-    path = Golden.golden_path(fixture, mode)
-
-    case File.read(path) do
-      {:ok, golden} ->
-        case GoldenDiff.compare(golden, Golden.render(fixture, mode)) do
-          :ok -> nil
-          {:diverged, _offset, report} -> report
-        end
-
-      {:error, _reason} ->
-        "golden missing at #{path}"
-    end
+    Golden.diff_report(fixture, mode)
   end
 
   # `name` is always `"<fixture>.<mode>"`, produced by `Golden.run/1` from
@@ -97,7 +97,23 @@ defmodule Mix.Tasks.Raxol.Harness.Goldens.Bless do
     Mix.shell().info("current #{name}")
   end
 
-  defp report(%{status: :written, name: name, path: path, bytes: bytes}) do
-    Mix.shell().info("bless   #{name} -> #{path} (#{bytes} bytes)")
+  defp report(%{status: :created, name: name, path: path, bytes: bytes}) do
+    Mix.shell().info("bless (new)       #{name} -> #{path} (#{bytes} bytes)")
+  end
+
+  defp report(%{
+         status: :overwritten,
+         name: name,
+         path: path,
+         bytes: bytes,
+         old_bytes: old_bytes,
+         diff: diff
+       }) do
+    Mix.shell().info(
+      "bless (overwrote) #{name} -> #{path} " <>
+        "(was #{old_bytes} bytes, now #{bytes} bytes)"
+    )
+
+    if diff, do: Mix.shell().info(diff)
   end
 end
