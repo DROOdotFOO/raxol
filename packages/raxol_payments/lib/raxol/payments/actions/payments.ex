@@ -18,7 +18,10 @@ defmodule Raxol.Payments.Actions.Payments do
         policy: SpendingPolicy.dev(),
         agent_id: :my_agent
       }
-      {:ok, result} = ToolConverter.dispatch_tool_call(tool_call, actions(), context)
+      case ToolConverter.dispatch_tool_call(tool_call, actions(), context) do
+        {:ok, result} -> result
+        {:error, reason} -> handle_tool_error(reason)  # {:vetoed, _} | {:tool_denied, _, _} | {:hook_error, _}
+      end
   """
 
   @actions [

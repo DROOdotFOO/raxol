@@ -139,4 +139,33 @@ defmodule Raxol.UI.Theming.SalienceTest do
       assert c < 0.01
     end
   end
+
+  describe "relative_luminance/1 malformed hex guard" do
+    test "raises ArgumentError for invalid hex digits" do
+      assert_raise ArgumentError, fn ->
+        Salience.relative_luminance("zzzzzz")
+      end
+    end
+
+    test "raises ArgumentError for invalid hex digits with a # prefix" do
+      assert_raise ArgumentError, fn ->
+        Salience.relative_luminance("#zzzzzz")
+      end
+    end
+
+    test "raises ArgumentError for a too-short hex string" do
+      assert_raise ArgumentError, fn -> Salience.relative_luminance("#fff") end
+    end
+
+    test "raises ArgumentError for a too-long hex string" do
+      assert_raise ArgumentError, fn ->
+        Salience.relative_luminance("#1e1e1e1e")
+      end
+    end
+
+    test "valid hex still resolves normally" do
+      assert Salience.relative_luminance("#ffffff") == 1.0
+      assert Salience.relative_luminance("000000") == 0.0
+    end
+  end
 end

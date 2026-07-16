@@ -33,3 +33,6 @@ t0_cursor_restore
 # (the strip is never touched), but doing it here gives the capture a
 # byte-identical "expected" footer to diff the first paint against.
 t0_paint_footer "$footer_top" "---STRIP---" "STATUS: idle" "PROMPT> hello"
+
+# Ring B device-control capture window (no-op unless T0_HOLD_SECONDS set).
+t0_hold
