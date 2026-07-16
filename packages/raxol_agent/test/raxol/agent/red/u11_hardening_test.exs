@@ -20,6 +20,7 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
   alias Raxol.Agent.Fingerprint
   alias Raxol.Agent.Meta
   alias Raxol.Agent.Red.MetaJournalGen, as: Gen
+  alias Raxol.Agent.Red.MetaOracle, as: Oracle
 
   # ===========================================================================
   # Finding 2 (🔴) — taint fails CLOSED on unknown/garbage trust
@@ -28,9 +29,12 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
   describe "taint fails CLOSED on unknown trust (§2.1 pt.1)" do
     test "(a) a record with provenance.trust \"poisoned\" decodes to :tainted, never :trusted" do
       poisoned =
-        Gen.rec(1, :meta, :extract, Gen.meta_payload(:extract, []), trust: "poisoned")
+        Gen.rec(1, :meta, :extract, Gen.meta_payload(:extract, []),
+          trust: "poisoned"
+        )
 
-      assert {:ok, %Event{provenance: %{trust: :tainted}}} = Meta.decode(poisoned),
+      assert {:ok, %Event{provenance: %{trust: :tainted}}} =
+               Meta.decode(poisoned),
              "a present-but-unrecognized trust token must fail closed to :tainted"
     end
 
@@ -44,7 +48,9 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
         )
 
       dependent =
-        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]), trust: "trusted")
+        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]),
+          trust: "trusted"
+        )
 
       derived = Meta.derive_taint([entry, dependent])
 
@@ -65,7 +71,9 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
              "absent provenance must default to the frozen grandfather value"
 
       dependent =
-        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]), trust: "trusted")
+        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]),
+          trust: "trusted"
+        )
 
       # A meta event whose only ref is a grandfathered (absent-provenance) leaf
       # stays trusted — the grandfather path is NOT the same as fail-closed.
@@ -87,10 +95,14 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
         |> Map.put("provenance", "garbage")
 
       dep_a =
-        Gen.rec(3, :meta, :extract, Gen.meta_payload(:extract, [1]), trust: "trusted")
+        Gen.rec(3, :meta, :extract, Gen.meta_payload(:extract, [1]),
+          trust: "trusted"
+        )
 
       dep_b =
-        Gen.rec(4, :meta, :extract, Gen.meta_payload(:extract, [2]), trust: "trusted")
+        Gen.rec(4, :meta, :extract, Gen.meta_payload(:extract, [2]),
+          trust: "trusted"
+        )
 
       derived = Meta.derive_taint([leaf_trustless, leaf_nonmap, dep_a, dep_b])
 
@@ -119,7 +131,9 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
       }
 
       dep_c =
-        Gen.rec(6, :meta, :extract, Gen.meta_payload(:extract, [5]), trust: "trusted")
+        Gen.rec(6, :meta, :extract, Gen.meta_payload(:extract, [5]),
+          trust: "trusted"
+        )
 
       assert {:ok, %Event{provenance: %{source: :primary, trust: :trusted}}} =
                Meta.decode(absent)
@@ -144,7 +158,9 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
     end
 
     test "a record without branch_id decodes to the default \"main\" (grandfather)" do
-      rec = Gen.rec(1, :loop, :item_completed, %{item_type: "message", refs: []})
+      rec =
+        Gen.rec(1, :loop, :item_completed, %{item_type: "message", refs: []})
+
       refute Map.has_key?(rec, "branch_id")
 
       assert {:ok, %Event{branch_id: "main"}} = Meta.decode(rec),
@@ -212,14 +228,27 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
     end
 
     test "a nested object hashes identically regardless of how it was built" do
-      built_a = %{model: "m", opts: Enum.into([b: 2, a: 1, deep: %{y: 2, x: 1}], %{})}
+      built_a = %{
+        model: "m",
+        opts: Enum.into([b: 2, a: 1, deep: %{y: 2, x: 1}], %{})
+      }
 
       built_b = %{}
-      built_b = Map.put(built_b, :opts, Map.new([{:deep, Map.new(x: 1, y: 2)}, {:a, 1}, {:b, 2}]))
+
+      built_b =
+        Map.put(
+          built_b,
+          :opts,
+          Map.new([{:deep, Map.new(x: 1, y: 2)}, {:a, 1}, {:b, 2}])
+        )
+
       built_b = Map.put(built_b, :model, "m")
 
-      assert Fingerprint.canonical_json(built_a) == Fingerprint.canonical_json(built_b)
-      assert Fingerprint.params_hash(built_a) == Fingerprint.params_hash(built_b)
+      assert Fingerprint.canonical_json(built_a) ==
+               Fingerprint.canonical_json(built_b)
+
+      assert Fingerprint.params_hash(built_a) ==
+               Fingerprint.params_hash(built_b)
     end
   end
 
@@ -278,6 +307,152 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
       }
 
       assert Meta.validate(event) == :ok
+    end
+  end
+
+  # ===========================================================================
+  # Round-2 HIGH (🔴) — the taint fold is memoized (linear, not exponential)
+  # ===========================================================================
+
+  describe "taint fold is memoized — linear on multi-parent ref DAGs" do
+    # The worst case is the ALL-TRUSTED DAG: `Enum.any?` cannot short-circuit,
+    # so the pre-fix recursion is the full T(n) = T(n-1) + T(n-2) — measured
+    # ~4.4s at depth 32 and ~x2.6 per +2 depth, i.e. minutes at depth 40: this
+    # test TIMES OUT pre-fix (the failure the saboteur predicted — a
+    # legitimate multi-parent speculation journal hangs replay / taint audit).
+    # Post-fix each node is computed once; the fold returns in microseconds.
+    @tag timeout: 30_000
+    test "a 40-deep all-trusted Fibonacci-shaped multi-parent journal folds in bounded time" do
+      %{records: records, meta_offsets: offsets} =
+        Gen.fibonacci_dag(40, leaf_trust: :trusted)
+
+      {us, derived} = :timer.tc(fn -> Meta.derive_taint(records) end)
+
+      assert us < 5_000_000,
+             "derive_taint took #{us}us on a 40-deep multi-parent DAG — the " <>
+               "fold is not memoized (exponential recursion)"
+
+      for off <- offsets do
+        assert derived[off] == :trusted,
+               "offset #{off}: memoization must not over-taint a trusted DAG"
+      end
+    end
+
+    @tag timeout: 30_000
+    test "the tainted variant folds fast and taint absorbs through every chain" do
+      # (Pre-fix the tainted case short-circuits at the first tainted ref, so
+      # this variant pins correctness, not the blow-up — the trusted test
+      # above is the timeout red.)
+      %{records: records, meta_offsets: offsets} =
+        Gen.fibonacci_dag(40, leaf_trust: :tainted)
+
+      derived = Meta.derive_taint(records)
+
+      for off <- offsets do
+        assert derived[off] == :tainted,
+               "offset #{off}: taint must absorb through every multi-parent chain"
+      end
+    end
+
+    @tag timeout: 30_000
+    test "taint_violations/1 completes on the worst-case shape (it folds per meta event)" do
+      %{records: records} = Gen.fibonacci_dag(40, leaf_trust: :trusted)
+
+      # The generator stores the correct derived trust on every record, so a
+      # terminating, correct fold reports zero violations.
+      assert Meta.taint_violations(records) == []
+    end
+
+    test "the memoized fold equals the un-memoized reference on small multi-parent DAGs" do
+      # Oracle.derive_taint_correct IS the pre-fix algorithm (fresh DFS per
+      # node, no cross-branch memo) — small enough here to run exhaustively.
+      for leaf <- [:trusted, :tainted] do
+        %{records: records} = Gen.fibonacci_dag(18, leaf_trust: leaf)
+
+        assert Meta.derive_taint(records) ==
+                 Oracle.derive_taint_correct(records),
+               "memoization changed the derived trust map (leaf_trust: #{leaf})"
+      end
+    end
+  end
+
+  # ===========================================================================
+  # Round-2 MEDIUM (🔴) — the memo is cycle-safe (no laundering via the cache)
+  # ===========================================================================
+
+  describe "cycle guard + memo never launder (contaminated :trusted is not cached)" do
+    test "a node whose only taint path runs through a cycle still derives :tainted" do
+      # T(1) tainted loop leaf; A(2) refs [3, 1]; X(3) refs [2] — a cycle
+      # A <-> X, with taint reachable from X only THROUGH A. Computing A first
+      # explores X while A is on the DFS path, so X's back-edge-pruned
+      # `:trusted` is path-contaminated. A memo that cached it would report
+      # X `:trusted` at X's own fold — the exact laundering bug the review
+      # predicted a naive node-keyed memo would introduce. Computed fresh,
+      # X -> A -> T is found and X is `:tainted`.
+      t =
+        Gen.rec(1, :loop, :tool_result, %{name: "f", result: "r", refs: []},
+          trust: "tainted"
+        )
+
+      a =
+        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [3, 1]),
+          trust: "tainted"
+        )
+
+      x =
+        Gen.rec(3, :meta, :extract, Gen.meta_payload(:extract, [2]),
+          trust: "tainted"
+        )
+
+      derived = Meta.derive_taint([t, a, x])
+
+      assert derived[2] == :tainted
+
+      assert derived[3] == :tainted,
+             "a cycle-contaminated cached :trusted laundered taint away from X"
+    end
+
+    test "an all-trusted cycle keeps the documented back-edge behavior (:trusted, terminates)" do
+      # Cycles only exist in corrupt journals (refs name already-existing
+      # offsets in a legal one). The back-edge prune is sound because any
+      # reachable tainted leaf is reached via a simple path — pinned here so a
+      # future change to the cycle arm is a deliberate decision, not drift.
+      a =
+        Gen.rec(1, :meta, :extract, Gen.meta_payload(:extract, [2]),
+          trust: "trusted"
+        )
+
+      b =
+        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]),
+          trust: "trusted"
+        )
+
+      derived = Meta.derive_taint([a, b])
+      assert derived[1] == :trusted
+      assert derived[2] == :trusted
+    end
+  end
+
+  # ===========================================================================
+  # Round-2 LOW — unknown actor kind is preserved raw, never re-attributed
+  # ===========================================================================
+
+  describe "unknown actor kind stays a raw binary (reader-tolerant, never privileged)" do
+    test "decode + fold preserve an unregistered kind verbatim" do
+      tok = "u11_alien_kind_#{System.unique_integer([:positive])}"
+
+      rec =
+        Gen.rec(1, :loop, :item_completed, %{item_type: "message", refs: []},
+          actor: %{"kind" => tok, "id" => "z"}
+        )
+
+      # Consumer surface: the kind is neither an error, nor a fresh atom, nor
+      # rewritten to :system (absence⇒system is the rule for ABSENCE only —
+      # rewriting a present unknown kind would misattribute the event).
+      assert {:ok, %Event{actor: %{kind: ^tok, id: "z"}}} = Meta.decode(rec)
+
+      # Fold surface agrees with the decode surface.
+      assert Meta.fold_actors([rec])[1] == %{kind: tok, id: "z"}
     end
   end
 end

@@ -23,12 +23,26 @@ defmodule Raxol.Agent.Red.MetaOracle do
   # ===========================================================================
 
   @doc "The record's `family` as an atom (`:loop` / `:meta`)."
-  def family(%{"family" => f}), do: String.to_atom(f)
+  def family(%{"family" => f}), do: existing_atom(f)
   def family(_), do: :loop
 
   @doc "The record's `type` as an atom."
-  def type(%{"type" => t}) when is_binary(t), do: String.to_atom(t)
+  def type(%{"type" => t}) when is_binary(t), do: existing_atom(t)
   def type(%{"type" => t}) when is_atom(t), do: t
+
+  # Bounded token conversion — an independent mirror of the impl's atom-table
+  # DoS guard (never `String.to_atom/1` on record input: one copy-paste from a
+  # generator-token corpus would otherwise reintroduce the exact VM-crashing
+  # DoS the impl's `decode_token` was hardened against). Every registered
+  # family/type/kind is already interned, so a KNOWN token resolves to its
+  # atom; an unknown token stays a raw binary.
+  defp existing_atom(value) when is_atom(value), do: value
+
+  defp existing_atom(value) when is_binary(value) do
+    String.to_existing_atom(value)
+  rescue
+    ArgumentError -> value
+  end
 
   @doc "The record's journal offset."
   def offset(%{"id" => id}), do: id
@@ -252,7 +266,7 @@ defmodule Raxol.Agent.Red.MetaOracle do
   defp event?(r), do: Map.get(r, "kind", "event") == "event"
 
   defp decode_actor(%{"actor" => %{"kind" => k} = a}) do
-    %{kind: String.to_atom(k), id: Map.get(a, "id")}
+    %{kind: existing_atom(k), id: Map.get(a, "id")}
   end
 
   # Absent actor => system, BY RULE (never inferred as human/agent).
@@ -264,7 +278,7 @@ defmodule Raxol.Agent.Red.MetaOracle do
       actor =
         case r do
           %{"actor" => %{"kind" => k} = a} ->
-            %{kind: String.to_atom(k), id: Map.get(a, "id")}
+            %{kind: existing_atom(k), id: Map.get(a, "id")}
 
           _ ->
             %{kind: :agent}

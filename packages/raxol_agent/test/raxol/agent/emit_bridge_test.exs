@@ -61,10 +61,14 @@ defmodule Raxol.Agent.EmitBridgeTest do
   describe "process wiring (EmitBus -> bridge -> SessionStreamer)" do
     setup do
       ensure_registry(EmitBus.registry_name())
-      streamer = start_supervised!({SessionStreamer, name: :bridge_test_streamer})
+
+      streamer =
+        start_supervised!({SessionStreamer, name: :bridge_test_streamer})
 
       bridge =
-        start_supervised!({EmitBridge, session_id: @session_id, streamer: streamer})
+        start_supervised!(
+          {EmitBridge, session_id: @session_id, streamer: streamer}
+        )
 
       # Give the bridge a moment to register its EmitBus subscription.
       _ = :sys.get_state(bridge)
@@ -99,7 +103,9 @@ defmodule Raxol.Agent.EmitBridgeTest do
   describe "producer-seam stamping is not spoofable (actor/branch_id)" do
     setup do
       ensure_registry(EmitBus.registry_name())
-      streamer = start_supervised!({SessionStreamer, name: :bridge_spoof_streamer})
+
+      streamer =
+        start_supervised!({SessionStreamer, name: :bridge_spoof_streamer})
 
       base =
         Path.join(
@@ -153,7 +159,11 @@ defmodule Raxol.Agent.EmitBridgeTest do
       {:ok, [record]} = FileStore.read(journal)
 
       # The bridge's write-generation values WIN; the spoofed ones never land.
-      assert record["actor"] == %{"kind" => "system", "id" => "bridge-authority"}
+      assert record["actor"] == %{
+               "kind" => "system",
+               "id" => "bridge-authority"
+             }
+
       assert record["branch_id"] == "feature-x"
 
       refute record["actor"] == %{"kind" => "human", "id" => "attacker"},
@@ -170,7 +180,8 @@ defmodule Raxol.Agent.EmitBridgeTest do
 
       main_bridge =
         start_supervised!(
-          {EmitBridge, session_id: main_session, streamer: streamer, journal: main_journal},
+          {EmitBridge,
+           session_id: main_session, streamer: streamer, journal: main_journal},
           id: :main_bridge
         )
 
@@ -215,13 +226,140 @@ defmodule Raxol.Agent.EmitBridgeTest do
   end
 
   # ===========================================================================
+  # Round-2 fix (🔴): write-generation provenance seam (taint-absorbing meet)
+  # ===========================================================================
+
+  describe "write-generation provenance seam (taint-absorbing meet)" do
+    setup do
+      ensure_registry(EmitBus.registry_name())
+
+      streamer =
+        start_supervised!({SessionStreamer, name: :bridge_prov_streamer})
+
+      base =
+        Path.join(
+          System.tmp_dir!(),
+          "bridge_prov_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+      %{streamer: streamer, base: base}
+    end
+
+    test "a tainted generation force-taints a module OMISSION (laundering-by-omission closed)",
+         %{streamer: streamer, base: base} do
+      session = "sess-prov-omit-#{System.unique_integer([:positive])}"
+      {:ok, journal} = FileStore.open(session, base_dir: base)
+
+      bridge =
+        start_supervised!(
+          {EmitBridge,
+           session_id: session,
+           streamer: streamer,
+           journal: journal,
+           provenance: %{source: :primary, trust: :tainted}},
+          id: :prov_omit_bridge
+        )
+
+      _ = :sys.get_state(bridge)
+
+      # The neutral map carries NO provenance — the exact omission that would
+      # otherwise land as the trusted grandfather default and launder a taint
+      # source (the review's write-side finding).
+      EmitBus.publish(durable_neutral(session))
+      _ = :sys.get_state(bridge)
+
+      {:ok, [record]} = FileStore.read(journal)
+
+      assert record["provenance"] == %{
+               "source" => "primary",
+               "trust" => "tainted"
+             },
+             "a tainted write generation must stamp taint onto an omitted provenance"
+
+      assert {:ok, %Event{provenance: %{trust: :tainted}}} = Meta.decode(record)
+      :ok = FileStore.close(journal)
+    end
+
+    test "a module-supplied :tainted is NEVER overwritten by the generation stamp (no upgrade path)",
+         %{streamer: streamer, base: base} do
+      session = "sess-prov-keep-#{System.unique_integer([:positive])}"
+      {:ok, journal} = FileStore.open(session, base_dir: base)
+
+      # The generation context says trusted — an unconditional Map.put stamp
+      # (the actor pattern) would LAUNDER the module's honest :tainted.
+      bridge =
+        start_supervised!(
+          {EmitBridge,
+           session_id: session,
+           streamer: streamer,
+           journal: journal,
+           provenance: %{source: :primary, trust: :trusted}},
+          id: :prov_keep_bridge
+        )
+
+      _ = :sys.get_state(bridge)
+
+      tainted_neutral =
+        session
+        |> durable_neutral()
+        |> Map.put(:provenance, %{source: :primary, trust: :tainted})
+
+      EmitBus.publish(tainted_neutral)
+      _ = :sys.get_state(bridge)
+
+      {:ok, [record]} = FileStore.read(journal)
+
+      assert record["provenance"] == %{
+               "source" => "primary",
+               "trust" => "tainted"
+             },
+             "the taint-absorbing meet must never upgrade :tainted -> :trusted"
+
+      :ok = FileStore.close(journal)
+    end
+
+    test "no generation context + module omission: the frozen default stays IMPLICIT on disk (I2)",
+         %{streamer: streamer, base: base} do
+      session = "sess-prov-default-#{System.unique_integer([:positive])}"
+      {:ok, journal} = FileStore.open(session, base_dir: base)
+
+      bridge =
+        start_supervised!(
+          {EmitBridge,
+           session_id: session, streamer: streamer, journal: journal},
+          id: :prov_default_bridge
+        )
+
+      _ = :sys.get_state(bridge)
+      EmitBus.publish(durable_neutral(session))
+      _ = :sys.get_state(bridge)
+
+      {:ok, [record]} = FileStore.read(journal)
+
+      # Anti-tautology guard: the seam must not disturb the grandfather clause —
+      # a default event's on-disk bytes stay byte-identical to pre-U11 (I2).
+      refute Map.has_key?(record, "provenance"),
+             "a default provenance must stay implicit on disk"
+
+      assert {:ok, %Event{provenance: %{source: :primary, trust: :trusted}}} =
+               Meta.decode(record)
+
+      :ok = FileStore.close(journal)
+    end
+  end
+
+  # ===========================================================================
   # Adjacent fix: approval_requested / woken are forced durable
   # ===========================================================================
 
   describe "approval_requested is forced durable (resume-bracket)" do
     setup do
       ensure_registry(EmitBus.registry_name())
-      streamer = start_supervised!({SessionStreamer, name: :bridge_approval_streamer})
+
+      streamer =
+        start_supervised!({SessionStreamer, name: :bridge_approval_streamer})
 
       base =
         Path.join(
@@ -240,7 +378,10 @@ defmodule Raxol.Agent.EmitBridgeTest do
       {:ok, journal} = FileStore.open(session, base_dir: base)
 
       bridge =
-        start_supervised!({EmitBridge, session_id: session, streamer: streamer, journal: journal})
+        start_supervised!(
+          {EmitBridge,
+           session_id: session, streamer: streamer, journal: journal}
+        )
 
       _ = :sys.get_state(bridge)
       SessionStreamer.subscribe(session, streamer)
