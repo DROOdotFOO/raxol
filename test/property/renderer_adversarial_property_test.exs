@@ -1,16 +1,15 @@
 defmodule Raxol.Property.RendererAdversarialTest do
   @moduledoc """
-  T2b's negative suite: the printed-history append path
-  (`docs/proposals/in-flight/harness-ui-roadmap.md` T2b), scoped subset of
-  `harness-ui-testing/02-renderer.md` §5 relevant to the append path
-  specifically (R-N4, R-N5-style fail-first) plus the (B)-detection seam
-  the D-PA ruling asks T2b to wire (roadmap §0).
+  The append path's negative suite: the printed-history append path,
+  covering full-grid-path clear-on-resize regression characterization,
+  fail-first checks on the immutable-prefix oracle, and the reflow-aware
+  detection seam.
 
   Each test here either (a) characterizes a regression class the real,
   full-grid path exhibits and proves the new inline path is exempt from
-  it (R-N4), or (b) demonstrates the TB oracle CATCHES a deliberately
+  it, or (b) demonstrates the byte-capture oracle CATCHES a deliberately
   wrong stream before trusting any of the positive suite's green results
-  (the fail-first discipline `tb_oracle_test.exs`'s R-P12 established,
+  (the same fail-first discipline `tb_oracle_test.exs` established,
   applied here to `InlineAuthority` itself rather than a hand-written
   byte string).
   """
@@ -41,11 +40,11 @@ defmodule Raxol.Property.RendererAdversarialTest do
   end
 
   # ---------------------------------------------------------------------
-  # R-N4: today's full-grid path clears on width change; the inline
+  # Today's full-grid path clears on width change; the inline
   # append path is exempt by construction.
   # ---------------------------------------------------------------------
 
-  describe "R-N4: full-grid \\e[2J-on-resize characterization vs the inline path's exemption" do
+  describe "full-grid \\e[2J-on-resize characterization vs the inline path's exemption" do
     test "characterization: Backends.build_terminal_frame/4 emits \\e[2J on a width change (today's known regression class)" do
       prev = ScreenBuffer.new(80, 24)
       next = ScreenBuffer.new(120, 24)
@@ -76,7 +75,7 @@ defmodule Raxol.Property.RendererAdversarialTest do
   # ---------------------------------------------------------------------
 
   describe "fail-first: immutable-prefix oracle catches a deliberately-repainting append" do
-    test "RED: repainting an already-sealed row (simulating a buggy append_sealed) is caught by INV-1" do
+    test "RED: repainting an already-sealed row (simulating a buggy append_sealed) is caught by the immutable-prefix oracle" do
       {device, authority} = new_authority()
 
       # Three CORRECT seals via the real production path.
@@ -92,7 +91,7 @@ defmodule Raxol.Property.RendererAdversarialTest do
 
       _authority = authority
 
-      # Simulate the regression class INV-1 exists to reject: instead of
+      # Simulate the regression class the immutable-prefix oracle exists to reject: instead of
       # ALWAYS positioning at the region's bottom row (the real
       # `InlineAuthority.append_sealed/2`'s only addressing behavior),
       # a buggy implementation repaints row 1 -- already sealed -- with
@@ -109,8 +108,8 @@ defmodule Raxol.Property.RendererAdversarialTest do
         SealOracle.history(emulator_final, @region_top, high_water: hw_final)
 
       # THE RED RUN. If this ever starts returning `:ok`, the oracle
-      # itself has regressed -- this is the demonstrated-red counterpart
-      # to every `:ok` assertion in `renderer_seal_once_property_test.exs`.
+      # itself has regressed -- this is the RED counterpart to every `:ok`
+      # assertion in `renderer_seal_once_property_test.exs`.
       assert {:violation, _idx, _expected, _actual} =
                SealOracle.immutable_prefix?(history_k, history_final)
     end
@@ -181,11 +180,11 @@ defmodule Raxol.Property.RendererAdversarialTest do
   end
 
   # ---------------------------------------------------------------------
-  # The (B)-detection seam: thin, wired, no re-emission.
+  # The reflow-aware detection seam: thin, wired, no re-emission.
   # ---------------------------------------------------------------------
 
-  describe "(B)-detection seam: reflow_capable?/1 + resize/3's telemetry hook" do
-    test "reflow_capable?/1: true only for iTerm2 (RB's C-4 real-hardware matrix), false for everything else" do
+  describe "reflow-aware detection seam: reflow_capable?/1 + resize/3's telemetry hook" do
+    test "reflow_capable?/1: true only for iTerm2 per the terminal-matrix probe, false for everything else" do
       assert InlineAuthority.reflow_capable?(%Capabilities{
                identity: {"iTerm2", "3.5.0"}
              })
@@ -242,7 +241,7 @@ defmodule Raxol.Property.RendererAdversarialTest do
         )
 
       # The ONLY new bytes after resize are ScrollRegionManager's single
-      # DECSTBM re-set -- ships (A) no matter what the seam detects.
+      # DECSTBM re-set -- ships seal-time-only no matter what the seam detects.
       assert new_bytes == Dialect.region_set(1, 20 - @footer_rows)
       refute SealOracle.emits_full_clear?(all_bytes)
     end
@@ -291,8 +290,8 @@ defmodule Raxol.Property.RendererAdversarialTest do
 
       refute_receive {:telemetry_fired, _event, _measurements, _metadata}, 50
 
-      # (A) is still correctly applied regardless -- the DECSTBM re-set
-      # still happens, just with no telemetry.
+      # Seal-time-only is still correctly applied regardless -- the DECSTBM
+      # re-set still happens, just with no telemetry.
       assert SealOracle.region_sets(raw(device)) == [
                {1, @region_top},
                {1, 20 - @footer_rows}

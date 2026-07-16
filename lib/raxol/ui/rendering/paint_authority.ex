@@ -100,10 +100,10 @@ defmodule Raxol.UI.Rendering.PaintAuthority do
     @doc """
     Cursor Position (CUP), 1-based row, column pinned to `1`: `CSI row;1H`.
     The single byte-builder for "position at the start of history row
-    `row`" -- callers that used to hand-roll `"\\e[\#{row};1H"` (T2b's
-    `InlineAuthority.append_sealed/2`) route through this instead, so the
-    wire format is defined once and pinned by test rather than duplicated
-    per call site.
+    `row`" -- callers that used to hand-roll `"\\e[\#{row};1H"` (the append
+    path's `InlineAuthority.append_sealed/2`) route through this instead,
+    so the wire format is defined once and pinned by test rather than
+    duplicated per call site.
     """
     @spec cursor_position(pos_integer()) :: binary()
     def cursor_position(row) when is_integer(row) and row >= 1 do

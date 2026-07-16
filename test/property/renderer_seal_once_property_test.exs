@@ -1,19 +1,18 @@
 defmodule Raxol.Property.RendererSealOnceTest do
   @moduledoc """
-  T2b's positive suite: the printed-history append path
-  (`docs/proposals/in-flight/harness-ui-roadmap.md` T2b), scoped subset of
-  `harness-ui-testing/02-renderer.md` §4 (R-P1..P11) that belongs to the
-  APPEND path specifically — T2c's footer-side properties (R-P3/P9, the
-  pinned-viewport repaint path) are that unit's own PR, not duplicated
-  here.
+  The append path's positive suite: the printed-history append path
+  properties that belong to the APPEND path specifically — the footer
+  viewport's own footer-side properties (the pinned-viewport repaint
+  path) are that unit's own PR, not duplicated here.
 
   Unlike `test/harness/tb_oracle_test.exs` (which drives the
   `CaptureAuthority` test double), these properties drive the REAL
   production implementation,
   `Raxol.UI.Rendering.PaintAuthority.InlineAuthority`, through a
-  `StringIO` device — the actual bytes T2b ships, replayed through the
-  same `Raxol.Harness.Test.SealOracle` oracles (O1 mechanical scanner, O2
-  VT replay) TB built.
+  `StringIO` device — the actual bytes the append path ships, replayed
+  through the same `Raxol.Harness.Test.SealOracle` oracles (a mechanical
+  scanner and a VT replay oracle) the byte-capture oracle suite already
+  built.
   """
 
   use ExUnit.Case, async: true
@@ -60,10 +59,10 @@ defmodule Raxol.Property.RendererSealOnceTest do
   end
 
   # ---------------------------------------------------------------------
-  # R-P1/R-P2 keystone: immutable-prefix seal-once
+  # Keystone: immutable-prefix seal-once
   # ---------------------------------------------------------------------
 
-  describe "keystone: immutable-prefix (INV-1)" do
+  describe "keystone: immutable-prefix" do
     test "streaming 1000 sealed single-line blocks: zero rewrites at constant width" do
       {device, authority} = new_authority()
 
@@ -146,10 +145,10 @@ defmodule Raxol.Property.RendererSealOnceTest do
   end
 
   # ---------------------------------------------------------------------
-  # Footer-confinement + composition with T2a's region (INV-2)
+  # Footer-confinement + composition with the scroll-region manager
   # ---------------------------------------------------------------------
 
-  describe "composition with T2a's ScrollRegionManager: sealed lines land in history, never footer" do
+  describe "composition with the scroll-region manager: sealed lines land in history, never footer" do
     test "every seal-path CUP addresses a history row (fill-down, then the bottom row), never a footer row" do
       {device, authority} = new_authority()
 
@@ -171,12 +170,12 @@ defmodule Raxol.Property.RendererSealOnceTest do
       assert @region_top in rows
 
       # Footer rows (9, 10) never appear -- the append path never bleeds
-      # into T2c's territory.
+      # into the footer viewport's territory.
       refute (@region_top + 1) in rows
       refute @height in rows
     end
 
-    test "O2: footer rows stay blank -- the append path never writes on-screen footer content" do
+    test "footer rows stay blank -- the append path never writes on-screen footer content" do
       {device, authority} = new_authority()
 
       _ =
@@ -203,10 +202,10 @@ defmodule Raxol.Property.RendererSealOnceTest do
   end
 
   # ---------------------------------------------------------------------
-  # INV-3: no full clear, ever
+  # No full clear, ever
   # ---------------------------------------------------------------------
 
-  describe "INV-3: no \\e[2J on the append path, with or without resize" do
+  describe "no \\e[2J on the append path, with or without resize" do
     property "arbitrary seal/resize interleavings never emit a full-screen clear" do
       op_gen =
         gen all(
@@ -240,10 +239,10 @@ defmodule Raxol.Property.RendererSealOnceTest do
   end
 
   # ---------------------------------------------------------------------
-  # INV-4: cursor-ownership round-trip
+  # Cursor-ownership round-trip
   # ---------------------------------------------------------------------
 
-  describe "INV-4: cursor-ownership round-trip (interleaved seals never corrupt cursor state)" do
+  describe "cursor-ownership round-trip (interleaved seals never corrupt cursor state)" do
     property "after any number of seal/2 calls, the cursor is back at its pre-bracket position every time, and save/restore never nests" do
       check all(
               blocks <- blocks_gen(min_length: 1, max_length: 30),
@@ -282,10 +281,10 @@ defmodule Raxol.Property.RendererSealOnceTest do
   end
 
   # ---------------------------------------------------------------------
-  # INV-5-A: resize under D-PA policy (A) seal-time-only
+  # Resize under seal-time-only policy
   # ---------------------------------------------------------------------
 
-  describe "INV-5-A: resize never re-emits sealed content; DECSTBM re-set exactly once" do
+  describe "resize never re-emits sealed content; DECSTBM re-set exactly once" do
     test "seal, resize, seal again: history before resize is byte-unchanged; region re-set fires exactly once per resize" do
       {device, authority} = new_authority()
 

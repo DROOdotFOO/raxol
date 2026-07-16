@@ -1,8 +1,7 @@
 defmodule Raxol.Property.RendererT2bReviewFixesTest do
   @moduledoc """
-  T2b's review-response suite (Fable's FIX-NOW batch on the printed-
-  history append path, `docs/proposals/in-flight/harness-ui-roadmap.md`
-  T2b): `Raxol.UI.Rendering.PaintAuthority.ContentGuard` (HIGH --
+  Fixes on the printed-history append path:
+  `Raxol.UI.Rendering.PaintAuthority.ContentGuard` (HIGH --
   `seal/2`/`append_sealed/2` wrote agent/LLM-originated iodata verbatim,
   so a control sequence embedded IN CONTENT could defeat every invariant
   the append path exists to hold, from the inside), newline-termination
@@ -10,7 +9,7 @@ defmodule Raxol.Property.RendererT2bReviewFixesTest do
   an `ArgumentError`, not prose), and the `with_cursor/3` nesting guard
   (MED -- the sole-DECSC-owner invariant is now enforced in code).
 
-  Each `describe "R8: ..."` block is a RED/GREEN pair: RED demonstrates,
+  Each `describe` block below is a RED/GREEN pair: RED demonstrates,
   via the byte-capture oracle (`Raxol.Harness.Test.SealOracle`) or a
   direct `Emulator` inspection, that the raw/pre-guard bytes are a REAL,
   oracle-visible threat -- not a strawman -- before GREEN shows the same
@@ -51,10 +50,10 @@ defmodule Raxol.Property.RendererT2bReviewFixesTest do
   end
 
   # ---------------------------------------------------------------------
-  # R8: ContentGuard neutralizes control bytes embedded IN sealed content
+  # ContentGuard neutralizes control bytes embedded IN sealed content
   # ---------------------------------------------------------------------
 
-  describe "R8: \\e[2J embedded in content" do
+  describe "\\e[2J embedded in content" do
     test "RED: raw bytes trigger the full-clear oracle" do
       {device, authority} = new_authority()
       _ = InlineAuthority.seal(authority, "sealed before\r\n")
@@ -75,7 +74,7 @@ defmodule Raxol.Property.RendererT2bReviewFixesTest do
     end
   end
 
-  describe "R8: \\e[3J embedded in content" do
+  describe "\\e[3J embedded in content" do
     test "RED: raw bytes trigger the full-clear oracle" do
       {device, authority} = new_authority()
       _ = InlineAuthority.seal(authority, "sealed before\r\n")
@@ -96,7 +95,7 @@ defmodule Raxol.Property.RendererT2bReviewFixesTest do
     end
   end
 
-  describe "R8: \\e[1;1H embedded in content (CUP repaint attempt)" do
+  describe "\\e[1;1H embedded in content (CUP repaint attempt)" do
     test "RED: raw bytes repainting row 1 are caught by the immutable-prefix oracle" do
       {device, authority} = new_authority()
 
@@ -161,7 +160,7 @@ defmodule Raxol.Property.RendererT2bReviewFixesTest do
     end
   end
 
-  describe "R8: \\e[5A embedded in content (relative cursor-up + overwrite)" do
+  describe "\\e[5A embedded in content (relative cursor-up + overwrite)" do
     test "RED: raw bytes moving up then overwriting are caught by the immutable-prefix oracle" do
       {device, authority} = new_authority()
 
@@ -220,7 +219,7 @@ defmodule Raxol.Property.RendererT2bReviewFixesTest do
     end
   end
 
-  describe "R8: OSC (\\e]0;title\\a) embedded in content" do
+  describe "OSC (\\e]0;title\\a) embedded in content" do
     test "RED: raw bytes actually set the emulator's window title (a real, executed side effect)" do
       fresh = SealOracle.replay("", width: @width, height: @height)
       assert fresh.window_title == nil
@@ -242,7 +241,7 @@ defmodule Raxol.Property.RendererT2bReviewFixesTest do
     end
   end
 
-  describe "R8: bare partial escape at end-of-line" do
+  describe "bare partial escape at end-of-line" do
     test "RED: a truncated CSI at the end of one write corrupts and merges the NEXT line, once concatenated on the wire" do
       {device, _authority} = new_authority()
 
@@ -284,7 +283,7 @@ defmodule Raxol.Property.RendererT2bReviewFixesTest do
     end
   end
 
-  describe "R8: a legitimately styled line stays styled (SGR passes through byte-identical)" do
+  describe "a legitimately styled line stays styled (SGR passes through byte-identical)" do
     test "GREEN: \\e[1;31m...\\e[0m survives seal/2 unchanged" do
       {device, authority} = new_authority()
       bytes_before = raw(device)

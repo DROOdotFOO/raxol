@@ -1,23 +1,21 @@
 defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   @moduledoc """
-  T2b's real (production) `PaintAuthority` implementation: the printed-
-  history append path (`docs/proposals/in-flight/harness-ui-roadmap.md`
-  T2b; suite design `harness-ui-testing/02-renderer.md`).
+  The real (production) `PaintAuthority` implementation: the printed-
+  history append path.
 
-  This is the module the roadmap means by "the existing `IOAuthority` is
-  deliberately NOT a full T2b implementation... T2b owns filling this in
-  for real" — it composes:
+  This is the module that fills in what `IOAuthority` deliberately leaves
+  as a stub — it composes:
 
-    * **T2a's `Raxol.Terminal.ScrollRegionManager`** for the DECSTBM
+    * **`Raxol.Terminal.ScrollRegionManager`** for the DECSTBM
       region/footer split (`history_bottom/1`, `resize/2` re-set the region
       exactly once, never a full clear).
-    * **T2d's device seam** — the output sink is a parameter
-      (`IO.device()`), the same `:device` T2a and `InlineDriver` already
-      thread through, so a `StringIO` pid (or `ExUnit.CaptureIO`) captures
-      bytes with no pty in tests and `:stdio` writes for real in
-      production.
+    * **The inline driver's device seam** — the output sink is a parameter
+      (`IO.device()`), the same `:device` the scroll-region manager and
+      `InlineDriver` already thread through, so a `StringIO` pid (or
+      `ExUnit.CaptureIO`) captures bytes with no pty in tests and
+      `:stdio` writes for real in production.
     * **The shared `Dialect` wire vocabulary** (`cursor_save/0`,
-      `cursor_restore/0`) the TB byte-capture oracle
+      `cursor_restore/0`) the byte-capture oracle
       (`Raxol.Harness.Test.SealOracle`) already parses.
 
   ## Seal-once, by construction: fill down, then scroll
@@ -41,13 +39,11 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   that always targets the bottom row from the first append onward front-
   loads the combined `scrollback ++ on-screen` history with content-free
   filler rows ahead of any real content, which defeats the high-water
-  prefix check silently — a bug that existed and was caught by
-  observation during this module's development; fill-down-then-scroll is
-  the fix, and it is load-bearing, not a style preference.
+  prefix check silently; fill-down-then-scroll avoids this, and it is
+  load-bearing, not a style preference.
 
-  The committed fail-first RED test
-  (`test/property/renderer_adversarial_property_test.exs`, "RED:
-  repainting an already-sealed row...") is a separate thing: an ORACLE-
+  The test in `test/property/renderer_adversarial_property_test.exs`
+  ("repainting an already-sealed row...") is a separate thing: an ORACLE-
   VALIDITY guard that hand-injects a known-bad stream (a row-1 repaint —
   a different, also-invalid violation class) to prove `SealOracle`
   catches a real immutable-prefix violation instead of rubber-stamping
@@ -57,15 +53,15 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
   ## The cursor-ownership protocol
 
-  Per the roadmap: "one owner module, both paths go through it." This
-  module's `with_cursor/3` is that owner — the SOLE place a save/restore
+  One owner module, both paths go through it. This module's
+  `with_cursor/3` is that owner — the SOLE place a save/restore
   bracket is opened. `append_sealed/2` itself never saves or restores; it
   only positions+writes. The full protocol (save -> position -> emit ->
   restore) is `seal/2`, the composition of the two:
 
       seal(t, iodata) == with_cursor(t, :history, fn s -> append_sealed(s, iodata) end)
 
-  Callers (T2b's own driver, and T2c's footer path for its OWN
+  Callers (the append path's own driver, and the footer viewport's own
   positioning) should go through `with_cursor/3` for anything that moves
   the cursor, so saves and restores from the two emit vocabularies never
   interleave (a save inside another save's bracket silently clobbers the
@@ -75,33 +71,33 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   ## `\\e[2J` is never emitted
 
   Neither this module nor `Raxol.Terminal.ScrollRegionManager` (which owns
-  the DECSTBM re-set on `resize/3`) ever writes `\\e[2J`/`\\e[3J`. Per N06
-  (RB's real-hardware measurement, roadmap §0): a full-screen clear wipes
-  native scrollback on wezterm/kitty, which would destroy history that,
-  once sealed, exists only as terminal-owned pixels this process can no
+  the DECSTBM re-set on `resize/3`) ever writes `\\e[2J`/`\\e[3J`:
+  real-hardware measurement showed a full-screen clear wipes native
+  scrollback on wezterm/kitty, which would destroy history that, once
+  sealed, exists only as terminal-owned pixels this process can no
   longer reconstruct.
 
-  ## D-PA scope: ships (A), wires the (B)-detection seam
+  ## Resize scope: ships seal-time-only, wires the reflow-aware detection seam
 
-  Per the roadmap §0 RULING, this module ships D-PA = **(A) seal-time-
-  only**: `resize/3` NEVER re-emits previously-sealed content — the only
-  byte it writes on resize is `ScrollRegionManager`'s single DECSTBM
-  re-set (content already on-screen is left exactly as it is; a shrinking
-  region merely clamps where FUTURE appends resume, per `next_row`'s
-  resize clamp below). `reflow_capable?/1` is the **(B)-detection SEAM**:
-  a pure predicate over a terminal identity, reporting whether RB's real-
-  hardware C-4 probe measured THIS terminal to reflow sealed scrollback
-  cleanly on resize (today: iTerm2 only — wezterm/kitty were measured NOT
-  to; ghostty is unmeasurable and conservatively `false`). `resize/3`
-  consults it (alongside `ScrollRegionManager.geometry_changed?/2`, T2a's
+  This module ships **seal-time-only**: `resize/3` NEVER re-emits
+  previously-sealed content — the only byte it writes on resize is
+  `ScrollRegionManager`'s single DECSTBM re-set (content already on-screen
+  is left exactly as it is; a shrinking region merely clamps where
+  FUTURE appends resume, per `next_row`'s resize clamp below).
+  `reflow_capable?/1` is the **reflow-aware detection SEAM**: a pure
+  predicate over a terminal identity, reporting whether the
+  terminal-matrix probe measured THIS terminal to reflow sealed
+  scrollback cleanly on resize (today: iTerm2 only — wezterm/kitty were
+  measured NOT to; ghostty is unmeasurable and conservatively `false`).
+  `resize/3` consults it (alongside `ScrollRegionManager.geometry_changed?/2`'s
   thin "did the split point actually move" fact) purely to emit a
   `:telemetry` event when both hold — **no bytes are re-emitted**. A
   FUTURE unit reads that telemetry (or calls `reflow_capable?/1` directly)
   to gate bounded soft-owned-history re-emission. Wiring the hook here,
-  without acting on it, is the whole point: "(B) is a runtime-detected
-  additive upgrade... DEFER (B) re-emission" (roadmap ruling). Contract-
-  only-grows: this module never has to be rewritten to add (B) later,
-  only extended.
+  without acting on it, is the whole point: reflow-aware re-emission is a
+  runtime-detected additive upgrade, deferred for a future unit to
+  implement. Contract-only-grows: this module never has to be rewritten
+  to add reflow-aware re-emission later, only extended.
   """
 
   @behaviour Raxol.UI.Rendering.PaintAuthority
@@ -129,10 +125,11 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         }
 
   @doc """
-  Builds a new authority: sets the DECSTBM region via T2a's
+  Builds a new authority: sets the DECSTBM region via
   `ScrollRegionManager.start/3` (one write, `CSI 1;(H-N) r`), records
-  whether this session's terminal is on the (B)-detection allowlist, and
-  starts the fill-down cursor (`next_row`) at the region's first row.
+  whether this session's terminal is on the reflow-aware detection
+  allowlist, and starts the fill-down cursor (`next_row`) at the
+  region's first row.
 
   ## Options
 
@@ -174,16 +171,16 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   end
 
   @doc """
-  The (B)-detection SEAM (thin — does not implement (B), see moduledoc).
-  `true` only for terminal identities RB's real-hardware C-4 probe
-  confirmed reflow sealed history cleanly on resize
-  (`docs/proposals/in-flight/harness-ui-roadmap.md` §0: "C-4 resize:
-  iTerm2 REFLOWS sealed history cleanly... Only iTerm2 was resize-
-  testable"). Every other identity — including `nil`/unmeasured
-  (ghostty), and the two terminals RB measured NOT to reflow (wezterm,
-  kitty) — is conservatively `false`. The D-PA RULING is A-default,
-  B-where-EARNED: "earned" means measured on real hardware, never
-  assumed from a `$TERM_PROGRAM` guess.
+  The reflow-aware detection SEAM (thin — does not implement
+  reflow-aware re-emission itself, see moduledoc). `true` only for
+  terminal identities the terminal-matrix probe confirmed reflow sealed
+  history cleanly on resize (iTerm2 reflows sealed history cleanly on
+  resize; it was the only terminal resize-testable on real hardware).
+  Every other identity — including `nil`/unmeasured (ghostty), and the
+  two terminals measured NOT to reflow (wezterm, kitty) — is
+  conservatively `false`. Support defaults to seal-time-only and only
+  turns on where reflow-aware behavior is earned: "earned" means
+  measured on real hardware, never assumed from a `$TERM_PROGRAM` guess.
   """
   @spec reflow_capable?(Capabilities.t() | nil) :: boolean()
   def reflow_capable?(%Capabilities{identity: {"iTerm2", _version}}), do: true
@@ -192,8 +189,9 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   @doc """
   The full cursor-ownership protocol for one sealed append: save the
   cursor, position into the history region (via `append_sealed/2`), emit
-  `iodata`, restore. This is the entry point T2b's caller (and later
-  units building on this substrate) should use — `append_sealed/2` alone
+  `iodata`, restore. This is the entry point the append path's caller
+  (and later units building on this substrate) should use —
+  `append_sealed/2` alone
   only positions+emits; `seal/2` is what makes that a single, save/
   restore-bracketed operation.
 
@@ -259,11 +257,12 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
   @impl true
   def repaint_footer(%__MODULE__{region: region} = t, iodata) do
-    # Placeholder pass-through pending T2c (pinned viewport): T2b's scope
-    # is the append path + the shared cursor protocol seam, not the
-    # footer's own positioning/diff discipline. Mirrors
-    # `PaintAuthority.IOAuthority`'s minimal stub so the behaviour is
-    # satisfied without reaching into T2c's work.
+    # Placeholder pass-through pending the footer viewport (pinned
+    # viewport): this module's scope is the append path + the shared
+    # cursor protocol seam, not the footer's own positioning/diff
+    # discipline. Mirrors `PaintAuthority.IOAuthority`'s minimal stub so
+    # the behaviour is satisfied without reaching into the footer
+    # viewport's work.
     IO.write(region.device, iodata)
     t
   end
@@ -320,12 +319,13 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
     if ScrollRegionManager.geometry_changed?(old_region, new_region) and
          t.reflow_capable? do
-      # The (B)-detection seam firing: this session's terminal is known,
-      # from RB's real-hardware C-4 probe, to reflow sealed history
-      # cleanly on a geometry-changing resize. NOTHING is re-emitted here
-      # — re-emission is a FUTURE unit's job (D-PA RULING: ship (A), (B)
-      # is a runtime-detected ADDITIVE upgrade). This telemetry event is
-      # the thin hook that unit gates on.
+      # The reflow-aware detection seam firing: this session's terminal
+      # is known, from the terminal-matrix probe, to reflow sealed
+      # history cleanly on a geometry-changing resize. NOTHING is
+      # re-emitted here — re-emission is a FUTURE unit's job (ship
+      # seal-time-only now; reflow-aware re-emission is a
+      # runtime-detected ADDITIVE upgrade). This telemetry event is the
+      # thin hook that unit gates on.
       :telemetry.execute(
         [:raxol, :ui, :paint_authority, :reflow_capable_resize],
         %{},
@@ -340,7 +340,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       t
       | region: new_region,
         width: width,
-        # Existing on-screen content is untouched (D-PA (A): no
+        # Existing on-screen content is untouched (seal-time-only: no
         # re-emission) — only where FUTURE appends resume is clamped to
         # the (possibly smaller) new bottom row.
         next_row: min(next_row, ScrollRegionManager.history_bottom(new_region))

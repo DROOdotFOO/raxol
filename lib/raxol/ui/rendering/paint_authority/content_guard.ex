@@ -1,16 +1,16 @@
 defmodule Raxol.UI.Rendering.PaintAuthority.ContentGuard do
   @moduledoc """
   Neutralizes control bytes inside agent/LLM-originated content before it
-  reaches `PaintAuthority.InlineAuthority.seal/2` (T2b review fix, HIGH:
-  "our code was wrong" -- `seal/2`/`append_sealed/2` wrote iodata
-  verbatim, so an embedded `\\e[2J`/`\\e[3J`/CUP inside model output could
-  wipe native scrollback or repaint an already-sealed row FROM INSIDE THE
-  CONTENT, defeating every invariant the append path exists to hold, no
-  matter how correct the fill-down/seal-once machinery around it is).
+  reaches `PaintAuthority.InlineAuthority.seal/2` -- `seal/2`/
+  `append_sealed/2` previously wrote iodata verbatim, so an embedded
+  `\\e[2J`/`\\e[3J`/CUP inside model output could wipe native scrollback
+  or repaint an already-sealed row FROM INSIDE THE CONTENT, defeating
+  every invariant the append path exists to hold, no matter how correct
+  the fill-down/seal-once machinery around it is.
 
-  This module is intentionally SHARED, not private to T2b:
+  This module is intentionally SHARED, not private to the append path:
   `Raxol.UI.Rendering.PaintAuthority.InlineAuthority.seal/2` is its first
-  caller, and T2c's footer/pinned-viewport repaint path (also fed
+  caller, and the footer viewport's pinned-viewport repaint path (also fed
   agent-controlled text) is expected to reuse it rather than growing a
   second, divergent sanitizer.
 
