@@ -21,10 +21,19 @@ Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 # support/ (also outside test/support/) — load it explicitly, same idiom.
 Code.require_file("raxol/agent/red/support/u10_compaction.ex", __DIR__)
 
-# :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
-# until their units (U4–U9) land. :mutation — negative-control checklists
-# (meta-invariant m4), run on demand, never in regular CI. :harness_red —
-# permanent failing-first red contours authored against not-yet-implemented
-# seams (they fail by construction; run with `--only harness_red`). Their
-# CI-green control companions are NOT tagged and run every pass.
-ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation, :harness_red])
+# (meta-invariant m4), run on demand, never in regular CI.
+# :harness_red — permanent failing-first (RED) suites authored against the
+# frozen freeze contracts BEFORE their unit's implementation lands (U9-R, ...).
+# Excluded from CI so they stay red-but-green-CI; drop the exclusion when the
+# unit lands and the suite must go green unchanged. Their negative-control
+# ("*_controls_test.exs") counterparts are NOT tagged and DO run in CI.
+red_excludes = [
+  :slow,
+  :integration,
+  :docker,
+  :pending_unit,
+  :mutation,
+  :harness_red
+]
+
+ExUnit.start(exclude: red_excludes)
