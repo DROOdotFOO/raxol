@@ -115,10 +115,15 @@ defmodule Raxol.Agent.Red.U8Gates do
   exactly false.
   """
   def escalate_p(call) do
+    # Map.get, never dot access (matches production): a call MISSING a
+    # structural field fails CLOSED to escalation, never raises a KeyError.
+    effect_class = Map.get(call, :effect_class, :__missing__)
+    egress = Map.get(call, :egress, :__missing__)
+
     cond do
-      call.effect_class == :irreversible_external -> true
-      call.egress == true -> true
-      known_effect_class?(call.effect_class) and call.egress == false -> false
+      effect_class == :irreversible_external -> true
+      egress == true -> true
+      known_effect_class?(effect_class) and egress == false -> false
       true -> true
     end
   end
@@ -175,26 +180,57 @@ defmodule Raxol.Agent.Red.U8Gates do
   def tool_key(tool) when is_binary(tool), do: tool
 
   @doc """
-  request_ref encodes tool + call_id so a journaled decision alone rebuilds the
-  grant key. INJECTIVE + delimiter-safe: the (normalized string) tool is
-  length-prefixed, so a ":" in either tool or call_id can't mis-split the ref.
+  request_ref — the ONE request identity (pending key, once-grant key, deny
+  key) — encodes tool + call_id + a digest of the argument lineage, so a
+  journaled decision alone rebuilds the grant key. INJECTIVE + delimiter-safe:
+  tool and call_id are both length-prefixed, so a ":" in either can't mis-split
+  the ref; the digest binds a grant to the request's vetted lineage.
   """
-  def request_ref(call), do: ref_encode(tool_key(call.tool), call.call_id)
+  def request_ref(call),
+    do: ref_encode(tool_key(call.tool), call.call_id, lineage_digest(call))
 
-  @doc "Encode {tool, call_id} into a delimiter-safe, injective request_ref."
-  def ref_encode(tool, cid) when is_binary(tool) and is_binary(cid),
-    do: "req:" <> Integer.to_string(byte_size(tool)) <> ":" <> tool <> cid
-
-  @doc "Parse a reference request_ref back into {tool, call_id} (tool is the canonical string)."
-  def parse_ref("req:" <> rest) do
-    [len_str, tail] = String.split(rest, ":", parts: 2)
-    len = String.to_integer(len_str)
-    <<tool::binary-size(^len), cid::binary>> = tail
-    {tool, cid}
+  @doc "Digest of the call's argument-lineage identity (in-session binder)."
+  def lineage_digest(call) do
+    {Map.get(call, :arg_refs, []), Map.get(call, :lineage, %{})}
+    |> :erlang.phash2(4_294_967_296)
+    |> Integer.to_string()
   end
+
+  @doc "Encode {tool, call_id, digest} into a delimiter-safe, injective request_ref."
+  def ref_encode(tool, cid, digest)
+      when is_binary(tool) and is_binary(cid) and is_binary(digest) do
+    "req:" <>
+      Integer.to_string(byte_size(tool)) <>
+      ":" <> tool <> Integer.to_string(byte_size(cid)) <> ":" <> cid <> digest
+  end
+
+  @doc """
+  Fail-closed parse of a request_ref back into {:ok, {tool, call_id}} (tool is
+  the canonical string); :error — never a raise — on any ref that did not
+  originate from `ref_encode/3` (matches production).
+  """
+  def parse_ref("req:" <> rest) do
+    with [tool_len_str, tail] <- String.split(rest, ":", parts: 2),
+         {tool_len, ""} when tool_len >= 0 <- Integer.parse(tool_len_str),
+         <<tool::binary-size(^tool_len), tail::binary>> <- tail,
+         [cid_len_str, tail] <- String.split(tail, ":", parts: 2),
+         {cid_len, ""} when cid_len >= 0 <- Integer.parse(cid_len_str),
+         <<cid::binary-size(^cid_len), _digest::binary>> <- tail do
+      {:ok, {tool, cid}}
+    else
+      _ -> :error
+    end
+  end
+
+  def parse_ref(_), do: :error
 
   @doc "The approval_requested neutral event a gate returns on escalation (family :loop — frozen F3)."
   def approval_request(ref, call) do
+    # Map.get: a call escalating BECAUSE a structural field is missing must
+    # still produce a well-formed request (matches production).
+    effect_class = Map.get(call, :effect_class)
+    egress = Map.get(call, :egress)
+
     %{
       family: :loop,
       type: :approval_requested,
@@ -202,9 +238,9 @@ defmodule Raxol.Agent.Red.U8Gates do
         request_ref: ref,
         call_id: call.call_id,
         action: call.tool,
-        effect_class: call.effect_class,
-        egress: call.egress,
-        blast_radius: %{effect_class: call.effect_class, egress: call.egress}
+        effect_class: effect_class,
+        egress: egress,
+        blast_radius: %{effect_class: effect_class, egress: egress}
       }
     }
   end
@@ -223,23 +259,23 @@ defmodule Raxol.Agent.Red.U8Gates do
     6. otherwise → auto-proceed (YOLO-applicable over trusted lineage).
   """
   def evaluate_with(state, call, taint_fun) do
-    cid = call.call_id
-    tool = call.tool
-    # `:once` keyed by FULL request identity (tool + call_id) — a grant unlocks
-    # exactly that request; a DIFFERENT request falls through to the taint fold.
-    once_key = request_ref(call)
+    # ONE request identity at every site (matches production): once grants AND
+    # durable denies are keyed by the full request_ref (tool + call_id +
+    # lineage digest), never a bare call_id — a grant unlocks exactly that
+    # request; a DIFFERENT request falls through to the taint fold.
+    ref = request_ref(call)
 
     cond do
-      MapSet.member?(state.once, once_key) ->
-        {:proceed, %{state | once: MapSet.delete(state.once, once_key)}}
+      MapSet.member?(state.once, ref) ->
+        {:proceed, %{state | once: MapSet.delete(state.once, ref)}}
 
-      MapSet.member?(state.denied, cid) ->
+      MapSet.member?(state.denied, ref) ->
         {:reject, :denied, state}
 
       taint_fun.(call) ->
         escalate(state, call)
 
-      MapSet.member?(state.session, tool_key(tool)) ->
+      MapSet.member?(state.session, tool_key(call.tool)) ->
         {:proceed, state}
 
       escalate_p(call) ->
@@ -269,27 +305,49 @@ defmodule Raxol.Agent.Red.U8Gates do
     end
   end
 
-  @doc "Fold one decision into the enforcement projection (grant/deny at scope)."
-  def grant(state, :approved, :once, cid, tool),
+  @doc """
+  Fold one decision into the enforcement projection (grant/deny at scope). The
+  ref (the ONE request identity) keys both once grants and durable denies; each
+  polarity clears the other (matches production).
+  """
+  def grant(state, :approved, :once, ref, _tool),
     do: %{
       state
-      | denied: MapSet.delete(state.denied, cid),
-        once: MapSet.put(state.once, ref_encode(tool_key(tool), cid))
+      | denied: MapSet.delete(state.denied, ref),
+        once: MapSet.put(state.once, ref)
     }
 
-  def grant(state, :approved, scope, cid, tool) when scope in [:session, :root],
+  def grant(state, :approved, scope, ref, tool) when scope in [:session, :root],
     do: %{
       state
-      | denied: MapSet.delete(state.denied, cid),
+      | denied: MapSet.delete(state.denied, ref),
         session: MapSet.put(state.session, tool_key(tool))
     }
 
-  def grant(state, :denied, _scope, cid, tool),
+  def grant(state, :denied, _scope, ref, _tool),
     do: %{
       state
-      | denied: MapSet.put(state.denied, cid),
-        once: MapSet.delete(state.once, ref_encode(tool_key(tool), cid))
+      | denied: MapSet.put(state.denied, ref),
+        once: MapSet.delete(state.once, ref)
     }
+
+  @doc "Actor authentication (matches production): only kind: :human decisions are enacted."
+  def authenticate_actor(%{kind: :human}), do: :ok
+  def authenticate_actor(actor), do: {:error, {:unauthorized_actor, actor_kind(actor)}}
+
+  defp actor_kind(%{kind: kind}), do: kind
+  defp actor_kind(_), do: nil
+
+  @doc "Decision-domain validation (matches production): fail-closed on unknown values."
+  def validate_decision(%{decision: d} = decision) when d in [:approved, :denied] do
+    case Map.get(decision, :scope, :once) do
+      scope when scope in [:once, :session, :root] -> :ok
+      other -> {:error, {:unknown_scope, other}}
+    end
+  end
+
+  def validate_decision(decision),
+    do: {:error, {:unknown_decision, Map.get(decision, :decision)}}
 
   # --- call builders ----------------------------------------------------------
 
@@ -383,34 +441,60 @@ defmodule Raxol.Agent.Red.U8Gates do
       do: U8Gates.authorize_via(__MODULE__, state, call, run_fn)
 
     @impl true
-    def apply_decision(state, %{request_ref: ref} = decision, _actor) do
-      case Map.fetch(state.pending, ref) do
-        :error ->
-          # forged / dangling decision: no live request names this ref
-          {:error, :no_such_request}
+    def apply_decision(state, %{request_ref: ref} = decision, actor) do
+      # The approver is authenticated by the gate (fail-closed): only a
+      # kind: :human envelope actor's decision is enacted. Unknown decision/
+      # scope values are errors, never crashes.
+      with :ok <- U8Gates.authenticate_actor(actor),
+           :ok <- U8Gates.validate_decision(decision),
+           {:ok, %{tool: tool}} <- fetch_pending(state, ref) do
+        state = %{state | pending: Map.delete(state.pending, ref)}
+        scope = Map.get(decision, :scope, :once)
+        {:ok, U8Gates.grant(state, decision.decision, scope, ref, tool)}
+      end
+    end
 
-        {:ok, %{call_id: cid, tool: tool}} ->
-          state = %{state | pending: Map.delete(state.pending, ref)}
-          scope = Map.get(decision, :scope, :once)
-          {:ok, U8Gates.grant(state, decision.decision, scope, cid, tool)}
+    def apply_decision(_state, decision, _actor),
+      do: {:error, {:malformed_decision, decision}}
+
+    defp fetch_pending(state, ref) do
+      case Map.fetch(state.pending, ref) do
+        # forged / dangling decision: no live request names this ref
+        :error -> {:error, :no_such_request}
+        {:ok, entry} -> {:ok, entry}
       end
     end
 
     @impl true
     def rebuild(events) do
-      # The journal is the authority: decisions were request-validated when
-      # first observed, so the fold re-derives the enforcement projection from
-      # the decisions alone (request_ref encodes the grant key). A `:once`-grant
-      # consumption marker (%{consumed_ref}) reproduces post-consumption state.
+      # The journal is the authority: the fold re-derives the enforcement
+      # projection from the decisions alone (request_ref encodes the grant
+      # key). It re-applies the SAME actor authentication as apply_decision (a
+      # non-human decision was never enacted live, so replay enacts nothing),
+      # and degrades fail-closed (no-op, never crash) on out-of-domain input.
+      # A `:once`-grant consumption marker (%{consumed_ref}) reproduces
+      # post-consumption state; removal is restrictive, so no actor gate.
       Enum.reduce(events, new(), fn
         {%{consumed_ref: ref}, _actor}, state ->
           %{state | once: MapSet.delete(state.once, ref)}
 
-        {decision, _actor}, state ->
-          {tool, cid} = U8Gates.parse_ref(decision.request_ref)
-          scope = Map.get(decision, :scope, :once)
-          U8Gates.grant(state, decision.decision, scope, cid, tool)
+        {decision, actor}, state when is_map(decision) ->
+          fold_decision(state, decision, actor)
+
+        _malformed, state ->
+          state
       end)
+    end
+
+    defp fold_decision(state, decision, actor) do
+      with :ok <- U8Gates.authenticate_actor(actor),
+           :ok <- U8Gates.validate_decision(decision),
+           ref when is_binary(ref) <- Map.get(decision, :request_ref, :error),
+           {:ok, {tool, _cid}} <- U8Gates.parse_ref(ref) do
+        U8Gates.grant(state, decision.decision, Map.get(decision, :scope, :once), ref, tool)
+      else
+        _ -> state
+      end
     end
   end
 
@@ -457,7 +541,7 @@ defmodule Raxol.Agent.Red.U8Gates do
         :error ->
           {:error, :no_such_request}
 
-        {:ok, %{call_id: cid, tool: tool}} ->
+        {:ok, %{tool: tool}} ->
           # BUG: drops the decision polarity — a deny grants like an approve.
           state = %{state | pending: Map.delete(state.pending, ref)}
 
@@ -466,7 +550,7 @@ defmodule Raxol.Agent.Red.U8Gates do
              state,
              :approved,
              Map.get(decision, :scope, :once),
-             cid,
+             ref,
              tool
            )}
       end
@@ -1059,6 +1143,253 @@ defmodule Raxol.Agent.Red.U8Gates do
       else
         bad -> {:violation, {:ref_roundtrip_flow_broke, overrides, bad}}
       end
+    end
+
+    # C16 (Drew HIGH-1 regression) — the approver is AUTHENTICATED: an
+    # approval_decided whose envelope actor is not kind: :human (agent, system,
+    # nil, kindless) does NOT unlock the escalated call — neither live
+    # (apply_decision) nor on rebuild (a forged agent-authored decision folded
+    # from the journal) — and the guarded side effect never runs. A :human
+    # approval on the same still-pending request still works. The pre-fix gate
+    # discarded the actor entirely, so an agent self-approved its own write.
+    def non_human_approver_never_grants(gate) do
+      safe(fn ->
+        {:ok, exec} = Counter.start()
+        run = fn -> Counter.bump(exec) end
+        call = U8Gates.escalating_call()
+
+        with {:escalate, req, s1} <- gate.evaluate(gate.new(), call) do
+          d = decision(req.payload.request_ref, :approved, :session)
+
+          bad_actors = [
+            %{kind: :agent, id: "agent-1"},
+            %{kind: :system, id: "sys-1"},
+            nil,
+            %{id: "kindless"}
+          ]
+
+          live_violation =
+            Enum.find_value(bad_actors, fn actor ->
+              state =
+                case gate.apply_decision(s1, d, actor) do
+                  {:ok, st} -> st
+                  {:error, _} -> s1
+                end
+
+              case gate.authorize(state, call, run) do
+                {:proceeded, _, _} ->
+                  {:violation, {:non_human_approver_granted_live, actor}}
+
+                _ ->
+                  nil
+              end
+            end)
+
+          rebuild_violation =
+            Enum.find_value(bad_actors, fn actor ->
+              case gate.authorize(gate.rebuild([{d, actor}]), call, run) do
+                {:proceeded, _, _} ->
+                  {:violation, {:non_human_approver_granted_rebuild, actor}}
+
+                _ ->
+                  nil
+              end
+            end)
+
+          cond do
+            live_violation != nil ->
+              live_violation
+
+            rebuild_violation != nil ->
+              rebuild_violation
+
+            Counter.value(exec) != 0 ->
+              {:violation, {:side_effect_ran_unapproved, Counter.value(exec)}}
+
+            true ->
+              # the human decision still works on the untouched pending request
+              case gate.apply_decision(s1, d, human()) do
+                {:ok, s2} ->
+                  case gate.authorize(s2, call, run) do
+                    {:proceeded, _, _} -> :ok
+                    bad -> {:violation, {:human_approval_stopped_working, bad}}
+                  end
+
+                bad ->
+                  {:violation, {:human_approval_rejected, bad}}
+              end
+          end
+        else
+          bad -> {:violation, {:approver_auth_flow_broke, bad}}
+        end
+      end)
+    end
+
+    # C17 (Drew HIGH-2 regression) — deny and grant use ONE key (the full
+    # request identity), so a deny is request-scoped: after denying
+    # (tool_a, cid), the SAME request stays durably rejected, but a DIFFERENT
+    # tool sharing the bare call_id gets its own approval cycle (escalates) —
+    # it is never blanket-rejected by another request's deny. The pre-fix gate
+    # keyed denies by bare call_id (asymmetric with the ref-keyed once grants):
+    # this leg over-blocked, and the mirrored keying admitted deny bypass.
+    def deny_is_request_scoped(gate) do
+      safe(fn ->
+        cid = "shared-deny-cid"
+        call_a = U8Gates.escalating_call(%{tool: :deny_tool_a, call_id: cid})
+        call_b = U8Gates.escalating_call(%{tool: :deny_tool_b, call_id: cid})
+
+        with {:escalate, req, s1} <- gate.evaluate(gate.new(), call_a),
+             {:ok, s2} <-
+               gate.apply_decision(
+                 s1,
+                 decision(req.payload.request_ref, :denied, :once),
+                 human()
+               ) do
+          cond do
+            not match?({:reject, :denied, _}, gate.evaluate(s2, call_a)) ->
+              {:violation, {:deny_did_not_stick, gate.evaluate(s2, call_a)}}
+
+            not match?({:escalate, _, _}, gate.evaluate(s2, call_b)) ->
+              {:violation, {:deny_over_blocked_other_tool, gate.evaluate(s2, call_b)}}
+
+            true ->
+              :ok
+          end
+        else
+          bad -> {:violation, {:deny_scope_flow_broke, bad}}
+        end
+      end)
+    end
+
+    # C18 (Drew MEDIUM regression) — the decision folds degrade fail-closed on
+    # out-of-domain journal input, never crash (replay-DoS class): an unknown
+    # decision value, an out-of-domain scope, an unparseable/foreign
+    # request_ref, and a malformed record all fold as NO-GRANT in rebuild/1
+    # (the session still reconstructs; a valid human grant in the same journal
+    # still applies), and apply_decision returns {:error, _} for out-of-domain
+    # values. The pre-fix folds raised FunctionClauseError/MatchError.
+    def corrupt_journal_folds_fail_closed(gate) do
+      safe(fn ->
+        call = U8Gates.escalating_call(%{tool: :fold_tool, call_id: "c-fold"})
+
+        with {:escalate, req, s1} <- gate.evaluate(gate.new(), call) do
+          ref = req.payload.request_ref
+          valid = decision(ref, :approved, :session)
+
+          corrupt = [
+            {%{request_ref: ref, decision: :corrupt, refs: []}, human()},
+            {%{request_ref: ref, decision: :approved, scope: :global, refs: []}, human()},
+            {%{request_ref: "not-a-ref", decision: :approved, scope: :session, refs: []},
+             human()},
+            {%{request_ref: "req:999:overflow", decision: :approved, scope: :session, refs: []},
+             human()},
+            {:not_even_a_decision, human()},
+            :not_even_a_pair
+          ]
+
+          corrupt_only = gate.rebuild(corrupt)
+          with_valid = gate.rebuild(corrupt ++ [{valid, human()}])
+
+          cond do
+            authorize_tag(gate, corrupt_only, call) == :proceeded ->
+              {:violation, :corrupt_journal_granted}
+
+            authorize_tag(gate, with_valid, call) != :proceeded ->
+              {:violation,
+               {:valid_grant_lost_among_corruption, authorize_tag(gate, with_valid, call)}}
+
+            not match?(
+              {:error, _},
+              gate.apply_decision(
+                s1,
+                %{request_ref: ref, decision: :corrupt, refs: []},
+                human()
+              )
+            ) ->
+              {:violation, :unknown_decision_enacted_live}
+
+            not match?(
+              {:error, _},
+              gate.apply_decision(
+                s1,
+                %{request_ref: ref, decision: :approved, scope: :global, refs: []},
+                human()
+              )
+            ) ->
+              {:violation, :unknown_scope_enacted_live}
+
+            true ->
+              :ok
+          end
+        else
+          bad -> {:violation, {:corrupt_fold_flow_broke, bad}}
+        end
+      end)
+    end
+
+    # C19 (Drew LOW regression) — the §5.2 predicate is defensive on the
+    # authorization path: a call map MISSING effect_class or egress fails
+    # CLOSED to escalation (both in escalate?/1 and through evaluate/2), never
+    # raises a KeyError. The pre-fix predicate used dot access and crashed.
+    def predicate_missing_fields_fail_closed(gate) do
+      safe(fn ->
+        no_egress = Map.delete(U8Gates.benign_call(), :egress)
+        no_class = Map.delete(U8Gates.benign_call(), :effect_class)
+
+        cond do
+          not gate.escalate?(no_egress) ->
+            {:violation, :missing_egress_proceeded}
+
+          not gate.escalate?(no_class) ->
+            {:violation, :missing_class_proceeded}
+
+          not match?({:escalate, _, _}, gate.evaluate(gate.new(), no_egress)) ->
+            {:violation,
+             {:evaluate_choked_on_missing_egress, gate.evaluate(gate.new(), no_egress)}}
+
+          not match?({:escalate, _, _}, gate.evaluate(gate.new(), no_class)) ->
+            {:violation, {:evaluate_choked_on_missing_class, gate.evaluate(gate.new(), no_class)}}
+
+          true ->
+            :ok
+        end
+      end)
+    end
+
+    # C20 (Drew LOW regression) — a standing `:once` grant is bound to the
+    # request's VETTED lineage, not just (tool, call_id): re-issuing the same
+    # ids with newly-TAINTED lineage misses the grant (the ref's lineage digest
+    # differs), falls through to the decision-time taint fold, and escalates —
+    # the side effect never runs on the stale grant. The pre-fix ref keyed only
+    # tool + call_id, so the standing grant admitted the re-tainted call.
+    def once_grant_bound_to_lineage(gate) do
+      safe(fn ->
+        {:ok, exec} = Counter.start()
+        run = fn -> Counter.bump(exec) end
+        call = U8Gates.escalating_call(%{tool: :lineage_tool, call_id: "c-lin"})
+
+        with {:escalate, req, s1} <- gate.evaluate(gate.new(), call),
+             {:ok, s2} <-
+               gate.apply_decision(
+                 s1,
+                 decision(req.payload.request_ref, :approved, :once),
+                 human()
+               ) do
+          retainted = Map.merge(call, U8Gates.tainted_arg_lineage())
+
+          case gate.authorize(s2, retainted, run) do
+            {:escalated, _, _} ->
+              if Counter.value(exec) == 0,
+                do: :ok,
+                else: {:violation, {:side_effect_ran, Counter.value(exec)}}
+
+            bad ->
+              {:violation, {:stale_grant_admitted_retainted_call, bad}}
+          end
+        else
+          bad -> {:violation, {:lineage_binding_flow_broke, bad}}
+        end
+      end)
     end
 
     # --- helpers -------------------------------------------------------------

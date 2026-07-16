@@ -90,6 +90,26 @@ defmodule Raxol.Agent.Red.U8BlastRadiusRedTest do
     test "C15 — the taint fold fails closed: an unknown-trust leaf and a malformed lineage entry both escalate (Fix 5)" do
       assert :ok = Contours.taint_fold_fails_closed(BlastRadiusGate)
     end
+
+    test "C16 — the approver is authenticated: a non-:human actor's approval_decided never grants, live or on rebuild; a :human's still does (adversarial-review HIGH-1)" do
+      assert :ok = Contours.non_human_approver_never_grants(BlastRadiusGate)
+    end
+
+    test "C17 — deny and grant share ONE request identity: a deny is request-scoped, never blanket-blocking another tool on a shared call_id (adversarial-review HIGH-2)" do
+      assert :ok = Contours.deny_is_request_scoped(BlastRadiusGate)
+    end
+
+    test "C18 — the decision folds degrade fail-closed on corrupt/out-of-domain journal input: no crash, no grant, valid grants survive (adversarial-review MED)" do
+      assert :ok = Contours.corrupt_journal_folds_fail_closed(BlastRadiusGate)
+    end
+
+    test "C19 — the §5.2 predicate fails closed on a call MISSING effect_class/egress instead of raising (adversarial-review LOW)" do
+      assert :ok = Contours.predicate_missing_fields_fail_closed(BlastRadiusGate)
+    end
+
+    test "C20 — a :once grant is bound to the vetted lineage: the same (tool, call_id) re-issued with tainted lineage re-escalates (adversarial-review LOW)" do
+      assert :ok = Contours.once_grant_bound_to_lineage(BlastRadiusGate)
+    end
   end
 
   describe "U8-R predicate contours (§5.2 — runs green in CI)" do
@@ -193,6 +213,26 @@ defmodule Raxol.Agent.Red.U8BlastRadiusControlsTest do
 
     test "C15 taint fold fails closed on unknown-trust leaf / malformed entry (spec matches production)" do
       assert :ok = Contours.taint_fold_fails_closed(ReferenceGate)
+    end
+
+    test "C16 non-:human approver never grants (live + rebuild); :human still does" do
+      assert :ok = Contours.non_human_approver_never_grants(ReferenceGate)
+    end
+
+    test "C17 deny is request-scoped (one identity with grants), never over-blocks a shared call_id" do
+      assert :ok = Contours.deny_is_request_scoped(ReferenceGate)
+    end
+
+    test "C18 corrupt journal input folds fail-closed (no crash, no grant, valid grants survive)" do
+      assert :ok = Contours.corrupt_journal_folds_fail_closed(ReferenceGate)
+    end
+
+    test "C19 predicate fails closed on missing effect_class/egress (no KeyError on the authorization path)" do
+      assert :ok = Contours.predicate_missing_fields_fail_closed(ReferenceGate)
+    end
+
+    test "C20 once grant bound to vetted lineage (re-tainted re-issue re-escalates)" do
+      assert :ok = Contours.once_grant_bound_to_lineage(ReferenceGate)
     end
   end
 

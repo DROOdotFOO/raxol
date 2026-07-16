@@ -33,6 +33,44 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   `approval_decided` events (`rebuild/1`) so a resumed/replayed session
   reconstructs identical enforcement state — the journal is the authority.
 
+  ## The approver is authenticated by the gate (fail-closed)
+
+  The gate's reason to exist is "a destructive call requires a **human**
+  decision", so the gate itself enforces it: `apply_decision/3` and the
+  `rebuild/1` fold ENACT a decision **only** when the envelope actor is
+  `%{kind: :human}`. A decision authored by an `:agent`, `:system`, a `nil`/
+  absent actor (absent = system emission, §2.1 frozen fold rule), or a
+  malformed actor is NOT a grant — live it is `{:error, {:unauthorized_actor,
+  kind}}` (the request stays pending, awaiting the human), and on rebuild it
+  folds as a no-op. This closes the self-approval hole: an agent that can emit
+  `approval_decided` events naming its own live `request_ref` still cannot
+  unlock its own escalated write. The trust boundary is thus IN the gate, not
+  deferred to journal-producer discipline.
+
+  ## One request identity everywhere
+
+  A single injective key — the `request_ref`, encoding
+  `{tool, call_id, lineage_digest}` — is the identity for pending requests,
+  `:once` grants, AND durable denies (no bare-`call_id` side keys). So:
+
+    * a `:once` grant unlocks exactly the approved request — a different tool
+      sharing the `call_id`, or the same `(tool, call_id)` re-issued with
+      DIFFERENT argument lineage (the digest differs), does not match and falls
+      through to the taint fold / escalation (AD-14 "unlocks exactly that
+      request");
+    * a deny is durable **per request** (AD-14: "the *same request* may not be
+      retried into success without a NEW approval cycle") — it never
+      blanket-blocks an unrelated tool that happens to share a `call_id`.
+
+  ## Deployment status (declared deferrals)
+
+    * **Not yet wired**: no tool-dispatch path routes through `authorize/3` in
+      this unit — "locked by default" describes the gate's contract, not yet a
+      live control. Wiring the dispatch seam is a follow-up unit.
+    * **State growth**: `pending`/`once`/`session`/`denied` are bounded only by
+      session lifetime (undecided escalations and denies accumulate). A
+      TTL/cap policy is a follow-up GC concern; sizes are O(decisions).
+
   ## The auto-approve predicate (§5.2, inlined normative)
 
   A call **escalates** (requires human approval) iff
@@ -184,9 +222,11 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
 
   The `decision.request_ref` MUST name a live pending request; a forged/dangling
   decision (no matching request) is rejected `{:error, reason}` — a decision with
-  no request is not a fact the gate may enact. `actor` comes from the envelope. A
-  `:denied` decision is **durable**: after it, the same request may not be retried
-  into success without a NEW approval cycle.
+  no request is not a fact the gate may enact. `actor` comes from the envelope
+  and is AUTHENTICATED: only a `%{kind: :human}` actor's decision is enacted —
+  any other actor (agent/system/nil/malformed) is rejected fail-closed, the
+  request left pending. A `:denied` decision is **durable**: after it, the same
+  request may not be retried into success without a NEW approval cycle.
   """
   @callback apply_decision(state(), decision(), actor()) ::
               {:ok, state()} | {:error, reason :: term()}
@@ -201,6 +241,12 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   folding one reproduces the post-consumption state, so a spent one-shot grant is
   NOT resurrected on resume (a re-issued call must not auto-admit without a new
   approval cycle).
+
+  The fold is reader-tolerant and fail-closed (never a crash, never a grant):
+  a non-`:human` actor, an unknown `decision`/`scope` value, an unparseable
+  `request_ref`, or a malformed record folds as a NO-OP — a version-skewed or
+  partially-corrupt journal degrades to "nothing extra granted", it does not
+  prevent the session from reconstructing enforcement state.
   """
   @callback rebuild([{decision() | consumption(), actor()}]) :: state()
 
@@ -232,14 +278,21 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   @impl true
   @spec escalate?(call()) :: boolean()
   def escalate?(call) do
+    # Map.get, never dot access: a call map MISSING a "required" structural
+    # field must fail CLOSED to escalation on the authorization path, not raise
+    # a KeyError out of evaluate/2. `:__missing__` is unrecognized, so both
+    # cond arms below treat absence exactly like an unknown value.
+    effect_class = Map.get(call, :effect_class, :__missing__)
+    egress = Map.get(call, :egress, :__missing__)
+
     cond do
-      call.effect_class == :irreversible_external -> true
-      call.egress == true -> true
+      effect_class == :irreversible_external -> true
+      egress == true -> true
       # Auto-proceed ONLY for a recognized benign class with egress EXACTLY
-      # false. An unknown/unrecognized effect_class, or a non-boolean egress,
-      # fails CLOSED to escalation (§2.1 unknown-trust doctrine) — never a silent
-      # proceed on a field we don't understand.
-      known_effect_class?(call.effect_class) and call.egress == false -> false
+      # false. An unknown/unrecognized/absent effect_class, or a non-boolean
+      # egress, fails CLOSED to escalation (§2.1 unknown-trust doctrine) —
+      # never a silent proceed on a field we don't understand.
+      known_effect_class?(effect_class) and egress == false -> false
       true -> true
     end
   end
@@ -341,10 +394,10 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
 
   Order is load-bearing (the YOLO-safe soundness ladder):
 
-    1. an `:once` grant for exactly this `call_id` → `{:proceed, _}` (a completed
+    1. an `:once` grant for exactly this request → `{:proceed, _}` (a completed
        approval cycle covers precisely this request; the grant is consumed);
-    2. a durable deny for this `call_id` → `{:reject, :denied, _}` (deny survives
-       a bare retry — AD-14);
+    2. a durable deny for exactly this request → `{:reject, :denied, _}` (deny
+       survives a bare retry — AD-14);
     3. a tainted lineage (decision-time fold) → `{:escalate, _, _}` REGARDLESS of
        class/egress or any standing session grant (FI-5: the untrusted leg is a
        distinct confirmation);
@@ -359,26 +412,29 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
           | {:escalate, request(), state()}
           | {:reject, term(), state()}
   def evaluate(state, call) do
-    cid = call.call_id
-    tool = call.tool
-    # The `:once` grant is keyed by the FULL request identity (tool + call_id),
-    # NOT the call_id alone (AD-14 "unlocks exactly that request"): a grant for
-    # (toolA, c1) must NOT admit (toolB, c1). Because the key includes the tool,
-    # a DIFFERENT request never matches this branch and so falls through to the
-    # taint fold below — a grant can never bypass a taint fold on another request.
-    once_key = request_ref(call)
+    # ONE request identity at every site: `:once` grants AND durable denies are
+    # keyed by the FULL request_ref — tool + call_id + lineage digest — never a
+    # bare call_id (asymmetric keys were the deny-bypass/over-block class). So:
+    #   * a grant/deny for (toolA, c1) never touches (toolB, c1);
+    #   * a re-issued (tool, c1) whose argument LINEAGE changed produces a
+    #     DIFFERENT ref (the digest differs), misses the once branch, and falls
+    #     through to the decision-time taint fold below — a standing grant can
+    #     never smuggle newly-tainted lineage past the fold.
+    # Grant and deny for one ref are mutually exclusive (each write clears the
+    # other), so the once-before-deny order carries no hidden precedence.
+    ref = request_ref(call)
 
     cond do
-      MapSet.member?(state.once, once_key) ->
-        {:proceed, %{state | once: MapSet.delete(state.once, once_key)}}
+      MapSet.member?(state.once, ref) ->
+        {:proceed, %{state | once: MapSet.delete(state.once, ref)}}
 
-      MapSet.member?(state.denied, cid) ->
+      MapSet.member?(state.denied, ref) ->
         {:reject, :denied, state}
 
       tainted_lineage?(call) ->
         escalate(state, call)
 
-      MapSet.member?(state.session, tool_key(tool)) ->
+      MapSet.member?(state.session, tool_key(call.tool)) ->
         {:proceed, state}
 
       escalate?(call) ->
@@ -394,6 +450,10 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   # approval; the freeze tip predicate §1.1). The side effect does NOT run.
   defp escalate(state, call) do
     ref = request_ref(call)
+    # Map.get: a call escalating BECAUSE a structural field is missing must
+    # still produce a well-formed request, not raise while describing itself.
+    effect_class = Map.get(call, :effect_class)
+    egress = Map.get(call, :egress)
 
     request = %{
       family: :loop,
@@ -402,9 +462,9 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
         request_ref: ref,
         call_id: call.call_id,
         action: call.tool,
-        effect_class: call.effect_class,
-        egress: call.egress,
-        blast_radius: %{effect_class: call.effect_class, egress: call.egress}
+        effect_class: effect_class,
+        egress: egress,
+        blast_radius: %{effect_class: effect_class, egress: egress}
       }
     }
 
@@ -423,22 +483,58 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   defp tool_key(tool) when is_atom(tool), do: Atom.to_string(tool)
   defp tool_key(tool) when is_binary(tool), do: tool
 
-  # request_ref encodes tool + call_id so a journaled decision ALONE rebuilds the
-  # grant key on replay (the enforcement projection needs no side table). The
-  # encoding is INJECTIVE and delimiter-safe: the (normalized string) tool is
-  # length-prefixed, so a ":" inside EITHER the tool or the call_id can never
-  # mis-split the ref back into the wrong {tool, call_id}.
-  defp request_ref(call), do: ref_encode(tool_key(call.tool), call.call_id)
+  # request_ref is the ONE request identity (pending key, `:once`-grant key,
+  # deny key) and encodes tool + call_id + a digest of the argument lineage, so
+  # a journaled decision ALONE rebuilds the grant key on replay (the enforcement
+  # projection needs no side table).
+  #
+  # Wire format (documented — the load-bearing link between a journaled decision
+  # and the grant key):
+  #
+  #     "req:" <> byte_size(tool) <> ":" <> tool
+  #            <> byte_size(call_id) <> ":" <> call_id <> lineage_digest
+  #
+  # INJECTIVE and delimiter-safe: tool and call_id are length-prefixed, so a ":"
+  # inside either can never mis-split the ref. The digest binds the grant to the
+  # request's argument lineage: a re-issued (tool, call_id) with DIFFERENT
+  # lineage produces a different ref, so a standing `:once` grant covers exactly
+  # the vetted request — never the same ids over newly-tainted arguments. The
+  # digest is a non-cryptographic in-session binder (`:erlang.phash2`); if it
+  # ever skews across a runtime upgrade the mismatch fails CLOSED (the grant
+  # simply doesn't match and the call re-escalates).
+  defp request_ref(call),
+    do: ref_encode(tool_key(call.tool), call.call_id, lineage_digest(call))
 
-  defp ref_encode(tool, cid) when is_binary(tool) and is_binary(cid),
-    do: "req:" <> Integer.to_string(byte_size(tool)) <> ":" <> tool <> cid
-
-  defp parse_ref("req:" <> rest) do
-    [len_str, tail] = String.split(rest, ":", parts: 2)
-    len = String.to_integer(len_str)
-    <<tool::binary-size(^len), cid::binary>> = tail
-    {tool, cid}
+  defp lineage_digest(call) do
+    {Map.get(call, :arg_refs, []), Map.get(call, :lineage, %{})}
+    |> :erlang.phash2(4_294_967_296)
+    |> Integer.to_string()
   end
+
+  defp ref_encode(tool, cid, digest)
+       when is_binary(tool) and is_binary(cid) and is_binary(digest) do
+    "req:" <>
+      Integer.to_string(byte_size(tool)) <>
+      ":" <> tool <> Integer.to_string(byte_size(cid)) <> ":" <> cid <> digest
+  end
+
+  # Fail-closed parse: a ref that did not originate from `ref_encode/3` (foreign
+  # producer, version skew, corruption) returns :error — never a raise on the
+  # rebuild path (the fold treats it as no-grant).
+  defp parse_ref("req:" <> rest) do
+    with [tool_len_str, tail] <- String.split(rest, ":", parts: 2),
+         {tool_len, ""} when tool_len >= 0 <- Integer.parse(tool_len_str),
+         <<tool::binary-size(^tool_len), tail::binary>> <- tail,
+         [cid_len_str, tail] <- String.split(tail, ":", parts: 2),
+         {cid_len, ""} when cid_len >= 0 <- Integer.parse(cid_len_str),
+         <<cid::binary-size(^cid_len), _digest::binary>> <- tail do
+      {:ok, {tool, cid}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_ref(_), do: :error
 
   @doc """
   Guard `run_fn` behind the gate: it is invoked **iff** the call proceeds.
@@ -463,32 +559,72 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   @doc """
   Fold one OBSERVED `approval_decided` event into the live approval state.
 
+  The envelope `actor` is AUTHENTICATED first (fail-closed): only a
+  `%{kind: :human}` actor's decision is enacted. Any other actor — `:agent`,
+  `:system`, `nil`/absent (absent = system, §2.1), or malformed — returns
+  `{:error, {:unauthorized_actor, kind}}` and leaves the state (including the
+  pending request) untouched, so an agent can never self-approve its own
+  escalated write and the request keeps awaiting its human.
+
   `decision.request_ref` MUST name a live pending request; a forged/dangling
   decision is `{:error, :no_such_request}` — a decision with no request is not a
-  fact the gate may enact. A `:denied` decision is durable (records the deny so a
-  bare retry can't succeed). `actor` comes from the envelope (unused for the
-  enforcement projection — recorded upstream on the journal envelope, §2.1).
+  fact the gate may enact. An out-of-domain `decision`/`scope` value is
+  `{:error, _}` — never a crash, never a grant. A `:denied` decision is durable
+  (records the deny so a bare retry can't succeed).
   """
   @impl true
   @spec apply_decision(state(), decision(), actor()) ::
           {:ok, state()} | {:error, term()}
-  def apply_decision(state, %{request_ref: ref} = decision, _actor) do
-    case Map.fetch(state.pending, ref) do
-      :error ->
-        {:error, :no_such_request}
-
-      {:ok, %{call_id: cid, tool: tool}} ->
-        state = %{state | pending: Map.delete(state.pending, ref)}
-        scope = Map.get(decision, :scope, :once)
-        {:ok, grant(state, decision.decision, scope, cid, tool)}
+  def apply_decision(state, %{request_ref: ref} = decision, actor) do
+    with :ok <- authenticate_actor(actor),
+         :ok <- validate_decision(decision),
+         {:ok, %{tool: tool}} <- Map.fetch(state.pending, ref) |> pending_or_error() do
+      state = %{state | pending: Map.delete(state.pending, ref)}
+      scope = Map.get(decision, :scope, :once)
+      {:ok, grant(state, decision.decision, scope, ref, tool)}
     end
   end
+
+  def apply_decision(_state, decision, _actor),
+    do: {:error, {:malformed_decision, decision}}
+
+  # The gate's own trust boundary (fail-closed): a grant takes effect ONLY for a
+  # human approver. Absent/nil actor is a system emission by the frozen §2.1
+  # fold rule — not a human, so not a decision the gate may enact.
+  defp authenticate_actor(%{kind: :human}), do: :ok
+
+  defp authenticate_actor(actor),
+    do: {:error, {:unauthorized_actor, actor_kind(actor)}}
+
+  defp actor_kind(%{kind: kind}), do: kind
+  defp actor_kind(_), do: nil
+
+  defp validate_decision(%{decision: d} = decision) when d in [:approved, :denied] do
+    case Map.get(decision, :scope, :once) do
+      scope when scope in [:once, :session, :root] -> :ok
+      other -> {:error, {:unknown_scope, other}}
+    end
+  end
+
+  defp validate_decision(decision),
+    do: {:error, {:unknown_decision, Map.get(decision, :decision)}}
+
+  defp pending_or_error(:error), do: {:error, :no_such_request}
+  defp pending_or_error({:ok, entry}), do: {:ok, entry}
 
   @doc """
   Rebuild live approval state by folding `approval_decided` events in order (the
   §2.1 replay/resume law): the journal is the authority, so the enforcement
   projection is re-derived from the decisions alone (`request_ref` encodes the
-  grant key). Each decision was request-validated when first observed.
+  grant key).
+
+  The fold applies the SAME actor authentication as `apply_decision/3` — a
+  decision whose envelope actor is not `%{kind: :human}` folds as a no-op (it
+  was never enacted live, so replay must not enact it either; a forged
+  agent-authored `approval_decided` in the journal grants nothing on resume).
+  Out-of-domain input (unknown `decision`/`scope`, unparseable `request_ref`,
+  malformed record) also folds as a no-op — fail-closed degradation, never a
+  crash: a version-skewed or partially-corrupt journal still rebuilds.
   """
   @impl true
   @spec rebuild([{decision() | consumption(), actor()}]) :: state()
@@ -497,38 +633,53 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
       {%{consumed_ref: ref}, _actor}, state ->
         # A journaled once-grant consumption (the guarded action ran): reproduce
         # the POST-consumption state so resume does not resurrect a spent grant.
+        # Removal is restrictive, so it needs no actor gate.
         %{state | once: MapSet.delete(state.once, ref)}
 
-      {decision, _actor}, state ->
-        {tool, cid} = parse_ref(decision.request_ref)
-        scope = Map.get(decision, :scope, :once)
-        grant(state, decision.decision, scope, cid, tool)
+      {decision, actor}, state when is_map(decision) ->
+        fold_decision(state, decision, actor)
+
+      _malformed, state ->
+        state
     end)
   end
 
-  # Fold one decision into the enforcement projection at its scope. A grant also
-  # clears any prior deny for the call_id (a fresh approval cycle supersedes it);
-  # a deny records the call_id durably and drops any stale :once grant. The
-  # `:once` grant is keyed by the FULL request identity (tool + call_id via
-  # `ref_encode`), so it unlocks exactly that request and no other (AD-14).
-  defp grant(state, :approved, :once, cid, tool),
+  defp fold_decision(state, decision, actor) do
+    with :ok <- authenticate_actor(actor),
+         :ok <- validate_decision(decision),
+         ref when is_binary(ref) <- Map.get(decision, :request_ref, :error),
+         {:ok, {tool, _cid}} <- parse_ref(ref) do
+      grant(state, decision.decision, Map.get(decision, :scope, :once), ref, tool)
+    else
+      # Fail-closed no-op: an unauthenticated, unknown, or corrupt decision
+      # grants nothing — and never crashes the rebuild.
+      _ -> state
+    end
+  end
+
+  # Fold one decision into the enforcement projection at its scope. The ref (the
+  # ONE request identity — tool + call_id + lineage digest) keys both `:once`
+  # grants and durable denies; each polarity clears the other, so grant and deny
+  # for one request are mutually exclusive. A fresh approval cycle supersedes a
+  # prior deny of the same request (AD-14); a deny drops any stale :once grant.
+  defp grant(state, :approved, :once, ref, _tool),
     do: %{
       state
-      | denied: MapSet.delete(state.denied, cid),
-        once: MapSet.put(state.once, ref_encode(tool_key(tool), cid))
+      | denied: MapSet.delete(state.denied, ref),
+        once: MapSet.put(state.once, ref)
     }
 
-  defp grant(state, :approved, scope, cid, tool) when scope in [:session, :root],
+  defp grant(state, :approved, scope, ref, tool) when scope in [:session, :root],
     do: %{
       state
-      | denied: MapSet.delete(state.denied, cid),
+      | denied: MapSet.delete(state.denied, ref),
         session: MapSet.put(state.session, tool_key(tool))
     }
 
-  defp grant(state, :denied, _scope, cid, tool),
+  defp grant(state, :denied, _scope, ref, _tool),
     do: %{
       state
-      | denied: MapSet.put(state.denied, cid),
-        once: MapSet.delete(state.once, ref_encode(tool_key(tool), cid))
+      | denied: MapSet.put(state.denied, ref),
+        once: MapSet.delete(state.once, ref)
     }
 end
