@@ -15,7 +15,7 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
 
   # -- one realistic events list per kind, reused for both fold states
   # (folded/expanded is a Block construction option, not a different
-  # events shape -- methodology R9: real producer, not a synthetic map) --
+  # events shape -- these come from a real producer, not a synthetic map) --
 
   defp events(:message) do
     [
@@ -254,11 +254,16 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   # (see the moduledoc's total-safety claim, block_body.ex:20-23). Two
   # independently reachable vectors, per the T5 Opus review:
   describe "expanded mount raise recovers to the same fallback as a mount error" do
-    test "a real :approval producer with no blast_radius renders the real component (Y1 default)" do
-      # Real producer shape: `approval_requested` with no `blast_radius` key
-      # at all -- Block.extract_approval_content now defaults the missing
-      # field to `%{}` (Y1), so BlastRadiusPreview mounts and renders its
-      # own "no tracked effects" message instead of ever reaching a raise.
+    test "a real :approval producer with no blast_radius renders an explicit unsafe-warning, not a false-safe empty state" do
+      # Real producer shape: `approval_requested` with no `blast_radius`
+      # key at all. `Block.extract_approval_content/1` leaves that `nil`
+      # rather than defaulting it to `%{}` -- a defaulted `%{}` would have
+      # mounted `BlastRadiusPreview` straight into its "No tracked
+      # effects." line, an authoritative safety claim that is FALSE here:
+      # this action has no declared blast radius at all, not a
+      # confirmed-empty one. `ApprovalPrompt` still mounts (no raise), but
+      # `BlastRadiusPreview` renders its own explicit "not declared" warning
+      # instead.
       events = [
         %{
           id: 1,
@@ -274,9 +279,14 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
       assert Enum.any?(texts, &(&1 =~ "rm -rf /")),
              "expected the real ApprovalPrompt to mount and show the action"
 
-      assert Enum.any?(texts, &(&1 =~ "No tracked effects.")),
-             "expected the Y1 blast_radius default (%{}) to render " <>
-               "BlastRadiusPreview's own empty-state message, not a raise"
+      assert Enum.any?(texts, &(&1 =~ "not declared")),
+             "expected an undeclared blast radius to render an explicit " <>
+               "unsafe-warning, not a raise"
+
+      refute Enum.any?(texts, &(&1 =~ "No tracked effects.")),
+             "an undeclared blast radius must never render as the calm " <>
+               "empty-state line -- that would read a destructive, " <>
+               "undeclared action as harmless"
     end
 
     test "a :diff body with non-string old/new raises inside DiffViewer/LineDiff and recovers" do

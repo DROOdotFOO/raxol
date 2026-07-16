@@ -9,8 +9,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   code yet (spec draft only) -- `from_events/3` accepts plain maps shaped
   like it: `%{id:, turn_id:, ts:, family:, type:, tier:, scope:,
   provenance:, payload:}`, all keys optional and read defensively. That
-  tolerance is deliberate: the contract only grows (methodology R6), and
-  this module must never crash when it meets a field it doesn't know yet.
+  tolerance is deliberate: the contract only grows, and this module must
+  never crash when it meets a field it doesn't know yet.
 
   ## Struct
 
@@ -47,8 +47,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   transition takes a `:fold_after_seal` option (`:allow | :deny`, default
   `:deny`) so the eventual D-PA verdict plugs in as a caller-supplied policy
   with no rewrite of this module: pass `fold_after_seal: :allow` once D-PA
-  chooses (B) soft-owned history or (C) live-region-only with a wider live
-  window; leave the default `:deny` for (A) seal-time-only.
+  chooses soft-owned history or live-region-only with a wider live window;
+  leave the default `:deny` for seal-time-only fold semantics.
 
   A denied post-seal fold is a silent no-op by design (`fold/2` always
   returns `t()`, never a tagged tuple). Callers that track fold state on
@@ -812,7 +812,13 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp extract_approval_content(events) do
     action = events |> find_in_events(@action_paths) |> to_display_text()
-    blast_radius = find_in_events(events, @blast_radius_paths) || %{}
+    # No `|| %{}` fallback here: a blast radius no producer ever supplied
+    # must stay distinguishable from one a producer explicitly declares
+    # empty. `nil` means "not declared" --
+    # `Raxol.UI.Components.Harness.BlastRadiusPreview` renders that as its
+    # own explicit "not declared, treat as unsafe" warning rather than the
+    # calm "No tracked effects." line it renders for a genuine `%{}`.
+    blast_radius = find_in_events(events, @blast_radius_paths)
     options = find_in_events(events, @options_paths) || []
 
     %{action: action, blast_radius: blast_radius, options: options}

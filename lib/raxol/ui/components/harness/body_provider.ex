@@ -34,13 +34,19 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
       shape to preserve).
     * `:approval`  -- required `:action`, `:blast_radius`, `:options`.
       `:blast_radius` must be shaped like
-      `Raxol.UI.Components.Harness.BlastRadiusPreview.blast_radius()` and
-      `:options` like `Raxol.UI.Components.Harness.ApprovalPrompt.option()`
-      for the mounted render to be meaningful -- `validate/2` only checks
-      key PRESENCE (a cheap, always-safe check), not the value's inner
-      shape; a wrongly-shaped value is the producer's bug, not something
-      this seam can catch without becoming a second type-checker for
-      every component's props.
+      `Raxol.UI.Components.Harness.BlastRadiusPreview.blast_radius()`, or
+      `nil` when no producer ever supplied one -- `nil` is a real,
+      distinct value here, not a validation failure: `BlastRadiusPreview`
+      renders it as an explicit "not declared, treat as unsafe" warning,
+      never as its `%{}` "No tracked effects." line (a producer-declared
+      empty blast radius is a different, calmer claim than one nobody
+      declared at all). `:options` must be shaped like
+      `Raxol.UI.Components.Harness.ApprovalPrompt.option()` for the
+      mounted render to be meaningful -- `validate/2` only checks key
+      PRESENCE (a cheap, always-safe check), not the value's inner shape;
+      a wrongly-shaped value is the producer's bug, not something this
+      seam can catch without becoming a second type-checker for every
+      component's props.
 
   `:opaque` (Block's forward-compat fallback for an unrecognised kind) has
   no schema and no mountable component -- `component_for/1` and `mount/2`
@@ -162,6 +168,23 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
     * `:component` -- override the component actually mounted (for
       testing the wrong-kind refusal above); defaults to
       `component_for(kind)`.
+
+  ## What `{:ok, _} | {:error, _}` does NOT cover
+
+  The two-tuple result above covers this seam's OWN guard failures
+  (unknown kind, wrong-kind override, schema validation) -- it does not
+  catch an exception raised inside the mounted component's own `init/1`
+  or `render/2` (a schema-valid but wrong-SHAPED prop reaching a
+  component's internal guard/pattern match, see the `:approval` schema
+  note above). This module keeps no try/rescue of its own, by design --
+  see `Raxol.UI.Components.Harness.BlockBody`'s moduledoc ("the rescue
+  lives HERE, not inside `BodyProvider.mount/3`"). Production code never
+  calls `mount/3` directly for exactly that reason: only
+  `BlockBody.render/2` does, and it wraps the call so a component raise
+  recovers to the same `{:error, reason}` shape this function returns for
+  its own failures. A caller that reaches `mount/3` directly (as this
+  module's own tests do) gets an uncaught raise on that path, not an
+  `{:error, _}` tuple.
   """
   @spec mount(kind() | term(), body(), keyword()) ::
           {:ok, map()} | {:error, String.t()}
@@ -292,7 +315,7 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
       {_result, exit_code} when is_integer(exit_code) and exit_code != 0 ->
         :failed
 
-      _present ->
+      _result_present_not_failed ->
         :done
     end
   end

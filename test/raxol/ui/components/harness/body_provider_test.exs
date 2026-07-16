@@ -22,8 +22,8 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
   defp flat_texts(_node), do: []
 
   # -- realistic per-kind fixtures, built through the REAL Block.from_events
-  # (methodology R9: cross-boundary tests drive real producers, never
-  # synthetic hand-built maps) --
+  # (cross-boundary tests drive real producers, never synthetic
+  # hand-built maps) --
 
   defp fixture_block(:message) do
     Block.from_events(
@@ -332,6 +332,21 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
       assert Enum.any?(texts, &(&1 =~ "build/"))
       assert Enum.any?(texts, &(&1 =~ "Allow once"))
       assert Enum.any?(texts, &(&1 =~ "Deny"))
+    end
+
+    test ":approval with a nil (undeclared) blast_radius still mounts, validate/2 stays presence-only, and BlastRadiusPreview renders the explicit unsafe-warning" do
+      body = %{action: "rm -rf /", blast_radius: nil, options: [:allow, :deny]}
+
+      assert BodyProvider.validate(:approval, body) == :ok,
+             "a present key with a nil value must still pass presence-only validation"
+
+      assert {:ok, view} =
+               BodyProvider.mount(:approval, body, context: default_context())
+
+      texts = flat_texts(view)
+      assert Enum.any?(texts, &(&1 =~ "rm -rf /"))
+      assert Enum.any?(texts, &(&1 =~ "not declared"))
+      refute Enum.any?(texts, &(&1 =~ "No tracked effects."))
     end
   end
 end

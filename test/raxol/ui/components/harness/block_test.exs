@@ -376,6 +376,23 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert Enum.any?(texts, &(&1 == "deletes 3 files"))
       assert Enum.any?(texts, &(&1 =~ "allow"))
     end
+
+    test "a producer with no blast_radius extracts nil, not %{} -- absence must stay distinguishable from a declared-empty radius" do
+      events = [
+        %{
+          id: 1,
+          type: :approval_requested,
+          payload: %{action: "rm -rf /", options: [:allow, :deny]}
+        }
+      ]
+
+      block = Block.from_events(:approval, events, fold: :expanded)
+
+      assert block.content.blast_radius == nil,
+             "an undeclared blast radius must stay nil so " <>
+               "BlastRadiusPreview can render its explicit unsafe-warning " <>
+               "instead of silently defaulting to a false-safe %{}"
+    end
   end
 
   describe "diff content extraction (T5 seam: path/old/new/language, not :text)" do
