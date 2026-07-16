@@ -111,6 +111,14 @@ defmodule Raxol.UI.Harness.OverlayPicker do
   @default_max_visible 8
 
   @doc """
+  The default `:max_visible` item-row cap `new/2` uses. Exposed so hosts
+  (`Raxol.Harness.Surface.open_overlay/3`) clamp against THIS value
+  rather than re-encoding the literal -- one source of truth.
+  """
+  @spec default_max_visible() :: pos_integer()
+  def default_max_visible, do: @default_max_visible
+
+  @doc """
   Builds a fresh picker over `items`.
 
   ## Options

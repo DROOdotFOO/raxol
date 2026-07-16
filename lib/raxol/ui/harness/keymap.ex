@@ -63,7 +63,13 @@ defmodule Raxol.UI.Harness.Keymap do
       out of the composer's typed text. Gating them on `composing?` is the
       fix: they only resolve to a command when focus is NOT the composer
       (browsing the transcript), and fall through to `:passthrough`
-      (ordinary character insertion) while composing.
+      (ordinary character insertion) while composing. An OPEN OVERLAY
+      suppresses them the same way (the guard consults `overlay_open?`
+      too): with a picker open, `z`/`j`/`k` are filter text the overlay
+      must receive, never commands fired at the transcript hidden behind
+      it -- and the picker's natural open path is exactly transcript-
+      browse mode (`composing?: false`), where a composing?-only guard
+      would fire them (see the "overlay-open ESC capture" section).
 
   ## The overlay-open ESC capture (order is load-bearing)
 
@@ -76,7 +82,14 @@ defmodule Raxol.UI.Harness.Keymap do
   `:always`-guarded `%{key: :escape, command_type: :interrupt}` entry
   later in the table -- `resolve/2` walks `@binds` in order and takes the
   first match, so this is the one place in this module where table ORDER
-  is part of the contract, not incidental. Enter/printable chars/arrows
+  is part of the contract, not incidental (and it is enforced
+  structurally: a compile-time check below `@binds` raises if the two
+  escape entries are ever reordered or a third appears). The guarded
+  transcript binds honor the overlay too -- `:not_composing`'s guard
+  consults `overlay_open?` alongside `composing?`, so `z`/`j`/`k` with a
+  picker open are filter text even from transcript-browse mode
+  (`composing?: false`), never fold/jump commands fired at state hidden
+  behind the overlay. Enter/printable chars/arrows
   are deliberately NOT added to the table for the overlay: they stay
   `:passthrough` even with `context.overlay_open?: true` (see
   `matches?/3`'s test coverage) -- the assembly layer (`Surface`) is the
@@ -232,6 +245,26 @@ defmodule Raxol.UI.Harness.Keymap do
     %{char: "k", command_type: :jump_prev, guard: :not_composing}
   ]
 
+  # Structural guard for the one load-bearing ordering above: the
+  # `:overlay` escape bind must precede the `:always` escape bind, or an
+  # open overlay's ESC-to-close silently becomes an interrupt. Prose and
+  # a behavioral test alone would let a future reorder (or a third
+  # escape entry) slip through to runtime; this raises at COMPILE time
+  # instead.
+  case for %{key: :escape, guard: guard} <- @binds, do: guard do
+    [:overlay, :always] ->
+      :ok
+
+    other ->
+      raise CompileError,
+        description:
+          "Keymap.@binds escape ordering violated: expected exactly " <>
+            "[:overlay, :always] (the :overlay dismiss bind must precede " <>
+            "the :always interrupt bind -- first match wins), got " <>
+            "#{inspect(other)}. See the moduledoc's \"overlay-open ESC " <>
+            "capture\" section before changing this."
+  end
+
   @doc """
   The keymap as data -- one entry per v1 bind. Exposed so T15's command
   palette can enumerate every invokable command without a second table.
@@ -309,8 +342,23 @@ defmodule Raxol.UI.Harness.Keymap do
   # Missing `composing?` defaults to `true` (composing) -- the fail-safe
   # direction. See moduledoc's "Fail-safe default" section: a caller must
   # opt IN to guarded-bind resolution with an explicit `composing?: false`.
-  defp guard_passes?(%{guard: :not_composing}, context),
-    do: not Map.get(context, :composing?, true)
+  # An OPEN OVERLAY also suppresses the guarded transcript binds: with a
+  # picker open, `z`/`j`/`k` are FILTER TEXT the overlay must receive as
+  # `:passthrough`, never fold/jump commands fired at transcript state
+  # hidden BEHIND the overlay. Consulting only `composing?` here was the
+  # named routing desync (adversarial review, CRITICAL): the natural
+  # open path for a jump/search picker is transcript-browse mode
+  # (`composing?: false` -- the exact mode these binds exist for), so an
+  # overlay opened from it would silently lose `j`/`k`/`z` from its
+  # filter query while mutating fold/jump state out of sight. The
+  # `overlay_open?` read keeps the same fail-safe default as the
+  # `:overlay` guard's (absent = closed): a caller that never sets the
+  # flag gets exactly the pre-overlay behavior.
+  defp guard_passes?(%{guard: :not_composing}, context) do
+    composing? = Map.get(context, :composing?, true)
+    overlay_open? = Map.get(context, :overlay_open?, false)
+    not (composing? or overlay_open?)
+  end
 
   # Missing `overlay_open?` defaults to `false` (no overlay) -- the
   # OPPOSITE fail-safe direction from `:not_composing`, deliberately (see

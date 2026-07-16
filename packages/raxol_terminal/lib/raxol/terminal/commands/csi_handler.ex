@@ -79,6 +79,16 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
       "m" -> apply_sgr(emulator, params)
       "s" -> save_cursor_position(emulator)
       "u" -> restore_cursor_position(emulator)
+      # DECSTBM. Without this clause every scroll-region set arriving
+      # through the real parser path was silently dropped (the correct
+      # handle_r/2 below existed but was unreachable from here) -- only
+      # InputProcessing.preprocess_scroll_region/2's head-of-chunk regex
+      # ever applied one, so a stream's FIRST region set worked and every
+      # later re-set (resize, footer grow/shrink) was ignored, leaving
+      # LF-at-boundary scrolling at a stale bottom row. Regression tests:
+      # csi_handlers_test.exs, "DECSTBM (CSI r) through the real parser
+      # path".
+      "r" -> handle_r(emulator, params)
       _ -> emulator
     end
   end
@@ -301,7 +311,8 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
 
   def handle_bracketed_paste_start(emulator) do
     if emulator.mode_manager.bracketed_paste_mode do
-      {:ok, %{emulator | bracketed_paste_active: true, bracketed_paste_buffer: ""}}
+      {:ok,
+       %{emulator | bracketed_paste_active: true, bracketed_paste_buffer: ""}}
     else
       {:ok, emulator}
     end
@@ -309,7 +320,8 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
 
   def handle_bracketed_paste_end(emulator) do
     if emulator.bracketed_paste_active do
-      {:ok, %{emulator | bracketed_paste_active: false, bracketed_paste_buffer: ""}}
+      {:ok,
+       %{emulator | bracketed_paste_active: false, bracketed_paste_buffer: ""}}
     else
       {:ok, emulator}
     end

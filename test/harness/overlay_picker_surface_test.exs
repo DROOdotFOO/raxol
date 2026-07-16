@@ -319,6 +319,48 @@ defmodule Raxol.Harness.OverlayPickerSurfaceTest do
 
       refute SealOracle.emits_full_clear?(raw(device))
     end
+
+    test "open immediately after a shrink-resize (next_row clamped onto a full region) still scrolls, never overwrites -- immutable prefix from the post-resize baseline" do
+      # Adversarial review, LOW (plausible): resize/3 clamps next_row
+      # DOWN on a rows-shrink without moving on-screen content, so a
+      # grow right after could under-report occupancy. The clamp lands
+      # next_row exactly AT the new bottom, which is grow_reclaim_count's
+      # conservative full-delta branch -- this pins that.
+      {model, device} = new_model(bulk_events(4))
+      model = drive_to_completion(model)
+      assert model.authority.next_row == @region_top
+
+      # shrink 12 -> 10 rows: history bottom 8 -> 6, next_row clamps 8 -> 6
+      shrunk_rows = 10
+      shrunk_region_top = shrunk_rows - @footer_rows
+      model = Surface.resize(model, @width, shrunk_rows)
+      assert model.authority.next_row == shrunk_region_top
+
+      history_after_resize =
+        raw(device)
+        |> SealOracle.replay(width: @width, height: shrunk_rows)
+        |> SealOracle.history(shrunk_region_top)
+
+      assert {:ok, model} = Surface.open_overlay(model, @items)
+
+      overlay_region_top = shrunk_region_top - @overlay_h
+
+      history_during =
+        raw(device)
+        |> SealOracle.replay(width: @width, height: shrunk_rows)
+        |> SealOracle.history(overlay_region_top)
+
+      assert :ok ==
+               SealOracle.immutable_prefix?(
+                 history_after_resize,
+                 history_during
+               ),
+             "a grow right after a shrink-resize must scroll the still-occupied rows, never overwrite them"
+
+      model = Surface.handle_input(model, Event.key(:escape))
+      assert model.overlay == nil
+      refute SealOracle.emits_full_clear?(raw(device))
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -362,6 +404,38 @@ defmodule Raxol.Harness.OverlayPickerSurfaceTest do
       assert model.overlay == nil
       # default on_pick: an honest one-frame footer notice
       assert strip_ansi(raw(device)) =~ "beta"
+    end
+
+    test "opened from transcript-browse mode (composing?: false -- the natural jump/search path), z/j/k are filter text and never mutate fold/jump state behind the overlay" do
+      # The adversarial review's CRITICAL: z/j/k are :not_composing
+      # keymap binds. A guard consulting only composing? fires them as
+      # commands past the open overlay -- dropped from the filter query
+      # AND silently toggling folds / moving the jump cursor behind it.
+      {model, _device} = new_model(bulk_events(2))
+      model = drive_to_completion(model)
+
+      model = Surface.focus_transcript(model)
+      refute model.composing?
+      model = Surface.handle_input(model, Event.key("j"))
+      assert model.focused_index == 0
+
+      assert {:ok, model} = Surface.open_overlay(model, ["jazz", "kilo"])
+
+      model =
+        Enum.reduce(["j", "k", "z"], model, fn ch, m ->
+          Surface.handle_input(m, Event.key(ch))
+        end)
+
+      assert model.overlay != nil, "the overlay must survive plain typing"
+
+      assert model.overlay.picker.query == "jkz",
+             "every typed letter must reach the overlay filter"
+
+      assert model.focused_index == 0,
+             "the transcript jump cursor must not move behind the open overlay"
+
+      assert model.fold_overrides == %{},
+             "no fold may toggle behind the open overlay"
     end
 
     test "keystroke echo while the overlay is open stays inside the grown footer" do

@@ -288,17 +288,112 @@ defmodule Raxol.UI.Harness.KeymapTest do
     end
 
     test "only ESC gains an overlay meaning in the table -- printable chars and Enter stay :passthrough with the overlay open (the Surface routes them)" do
-      context = %{overlay_open?: true, composing?: true}
+      # BOTH composing states: an overlay opened from transcript-browse
+      # mode (composing?: false -- the natural open path for a jump /
+      # search picker) must not lose keystrokes to the :not_composing
+      # binds. The original version of this test pinned composing?: true
+      # and probed only the unbound "a", which masked exactly that
+      # desync (adversarial review, CRITICAL).
+      for composing? <- [true, false] do
+        context = %{overlay_open?: true, composing?: composing?}
 
-      assert resolve_from(Event.key("a"), context) == :passthrough
-      assert resolve_from(Event.key(:enter), context) == :passthrough
-      assert resolve_from(Event.key(:up), context) == :passthrough
-      assert resolve_from(Event.key(:down), context) == :passthrough
-      assert resolve_from(Event.key(:backspace), context) == :passthrough
+        assert resolve_from(Event.key("a"), context) == :passthrough
+        assert resolve_from(Event.key(:enter), context) == :passthrough
+        assert resolve_from(Event.key(:up), context) == :passthrough
+        assert resolve_from(Event.key(:down), context) == :passthrough
+        assert resolve_from(Event.key(:backspace), context) == :passthrough
+      end
+    end
+
+    test "z/j/k with the overlay open are FILTER TEXT, never fold/jump commands -- even from transcript-browse mode (composing?: false)" do
+      # The regression the adversarial review named: z/j/k are
+      # :not_composing-guarded binds, and a guard that consults only
+      # composing? fires them straight past the open overlay --
+      # dropped from the filter query AND mutating fold/jump state
+      # behind the picker. j/k are common search letters; the picker's
+      # PRIMARY open path (from transcript browsing) must keep them.
+      context = %{overlay_open?: true, composing?: false}
+
+      for char <- ["z", "j", "k"] do
+        assert resolve_from(Event.key(char), context) == :passthrough,
+               "#{inspect(char)} must pass through to the overlay filter, " <>
+                 "not resolve to a transcript command behind it"
+      end
     end
 
     test "command_types/0 includes :overlay_dismiss" do
       assert :overlay_dismiss in Keymap.command_types()
+    end
+  end
+
+  # -- the full guard x context matrix ----------------------------------
+  #
+  # Every bind resolved against every {composing?, overlay_open?}
+  # combination (including each flag absent), so no guard/context pair
+  # can go untested again -- the CRITICAL routing desync above survived
+  # precisely because the overlay tests only ever pinned one corner of
+  # this matrix.
+
+  describe "guard x context matrix" do
+    # overlay_open? values: true / false / :absent; composing? likewise.
+    defp matrix_context(composing?, overlay_open?) do
+      %{}
+      |> put_flag(:composing?, composing?)
+      |> put_flag(:overlay_open?, overlay_open?)
+    end
+
+    defp put_flag(context, _key, :absent), do: context
+    defp put_flag(context, key, value), do: Map.put(context, key, value)
+
+    # Expected resolution per bind kind. `composing?` absent defaults to
+    # composing (fail-safe); `overlay_open?` absent defaults to closed
+    # (fail-safe) -- both documented in the Keymap moduledoc.
+    defp expected(:escape, _composing?, overlay_open?) do
+      if overlay_open? == true,
+        do: %{type: :overlay_dismiss, payload: %{}},
+        else: %{type: :interrupt, payload: %{}}
+    end
+
+    defp expected(:tab, _composing?, _overlay_open?),
+      do: %{type: :steer, payload: %{}}
+
+    defp expected({:char, char, type}, composing?, overlay_open?) do
+      effective_composing? = composing? in [true, :absent]
+      overlay? = overlay_open? == true
+
+      if effective_composing? or overlay? do
+        :passthrough
+      else
+        payload = if type == :fold_toggle, do: %{block_id: nil}, else: %{}
+        %{type: type, payload: payload}
+      end
+    end
+
+    test "every bind x every context combination resolves as documented" do
+      binds = [
+        :escape,
+        :tab,
+        {:char, "z", :fold_toggle},
+        {:char, "j", :jump_next},
+        {:char, "k", :jump_prev}
+      ]
+
+      for bind <- binds,
+          composing? <- [true, false, :absent],
+          overlay_open? <- [true, false, :absent] do
+        context = matrix_context(composing?, overlay_open?)
+
+        event =
+          case bind do
+            {:char, char, _type} -> Event.key(char)
+            key when is_atom(key) -> Event.key(key)
+          end
+
+        assert resolve_from(event, context) ==
+                 expected(bind, composing?, overlay_open?),
+               "bind #{inspect(bind)} with composing?: #{inspect(composing?)}, " <>
+                 "overlay_open?: #{inspect(overlay_open?)} resolved wrong"
+      end
     end
   end
 

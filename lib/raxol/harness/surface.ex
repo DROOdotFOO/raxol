@@ -20,6 +20,34 @@ defmodule Raxol.Harness.Surface do
   is the process-level driver (real tty, `Raxol.Terminal.InlineDriver` for
   raw input) built on top of this module's pure functions.
 
+  ## Glossary (the substrate vocabulary, one line each)
+
+  New to this lane? These terms recur, undefended, across this module,
+  `Raxol.UI.Rendering.PaintAuthority.InlineAuthority`, and
+  `Raxol.Terminal.ScrollRegionManager` -- this is the one anchor:
+
+    * **DECSTBM** -- the ANSI "set top/bottom margins" control
+      (`CSI top;bottom r`): confines terminal scrolling to a row range.
+      The harness uses it to split the screen into scrolling history
+      (top) and a pinned footer (bottom).
+    * **The pin / pinned footer** -- the bottom N rows placed OUTSIDE the
+      DECSTBM scroll region, so history scrolling never moves them; the
+      only surface the harness ever repaints.
+    * **Seal / seal-once** -- writing a finished block into the history
+      region exactly once, never repainted afterward; sealed rows
+      eventually scroll into the terminal's own native scrollback, which
+      this process cannot rewrite.
+    * **Index-at-region-boundary** -- a line feed on the scroll region's
+      bottom row scrolls the region up one row (the top row is evicted
+      toward scrollback) instead of moving the cursor; how both sealing
+      and the overlay's footer-grow preserve content.
+    * **Keyframe vs. repaint** -- `repaint/2` rewrites only footer rows
+      whose content changed (a diff); `keyframe/2` rewrites every footer
+      row (the recovery / post-geometry-change path).
+    * **Degenerate geometry** -- a terminal too short to hold the footer
+      plus a 2-row-minimum history region: DECSTBM cannot pin, and the
+      harness degrades (or, for overlays, refuses) instead of pretending.
+
   ## Composition (what this module assembles)
 
     * The append path / footer viewport (`InlineAuthority`) or the
@@ -340,6 +368,7 @@ defmodule Raxol.Harness.Surface do
 
   alias Raxol.Harness.Fixture.Session
   alias Raxol.Harness.Projection
+  alias Raxol.Terminal.ScrollRegionManager
   alias Raxol.Harness.StatusStrip
   alias Raxol.Harness.Surface.ViewText
 
@@ -1014,7 +1043,7 @@ defmodule Raxol.Harness.Surface do
   def open_overlay(%{mode: :flat}, _items, _opts), do: {:error, :no_footer}
 
   def open_overlay(model, items, opts) do
-    max_overlay_rows = model.rows - 2 - model.footer_rows
+    max_overlay_rows = max_overlay_rows(model.rows, model.footer_rows)
 
     if max_overlay_rows < 2 or degenerate?(model) do
       {:error, :insufficient_footer_capacity}
@@ -1023,9 +1052,26 @@ defmodule Raxol.Harness.Surface do
     end
   end
 
+  # The largest overlay row claim the given geometry can host: the
+  # biggest `h` for which the grown split (`footer_rows + h`) is still
+  # non-degenerate by `ScrollRegionManager.degenerate?/2`'s OWN
+  # definition (history keeps its 2-row minimum). Derived by asking that
+  # predicate directly rather than re-encoding its `< 2` literal here --
+  # this substrate-capacity guard is exactly where a silently-drifted
+  # copy of the threshold would be most dangerous. Shared by
+  # `open_overlay/3` and `force_close_overlay?/2` (one source of truth).
+  defp max_overlay_rows(rows, footer_rows) do
+    Enum.find((rows - footer_rows)..0//-1, 0, fn h ->
+      not ScrollRegionManager.degenerate?(rows, footer_rows + h)
+    end)
+  end
+
   defp do_open_overlay(model, items, opts, max_overlay_rows) do
     effective_max_visible =
-      min(Keyword.get(opts, :max_visible, 8), max_overlay_rows - 1)
+      min(
+        Keyword.get(opts, :max_visible, OverlayPicker.default_max_visible()),
+        max_overlay_rows - 1
+      )
 
     picker_opts = Keyword.put(opts, :max_visible, effective_max_visible)
     picker = OverlayPicker.new(items, picker_opts)
@@ -1214,7 +1260,11 @@ defmodule Raxol.Harness.Surface do
          %{overlay: overlay, footer_rows: footer_rows},
          new_rows
        ) do
-    new_rows - 2 - footer_rows < OverlayPicker.height(overlay.picker)
+    # Same capacity rule `open_overlay/3` admits with -- one helper, one
+    # threshold (routed through `ScrollRegionManager.degenerate?/2`),
+    # never a re-encoded literal that could drift.
+    OverlayPicker.height(overlay.picker) >
+      max_overlay_rows(new_rows, footer_rows)
   end
 
   # -- accessors ------------------------------------------------------------
