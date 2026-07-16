@@ -330,19 +330,30 @@ defmodule Raxol.Payments.Xochi.AgentStream do
     ExKeccak.hash_256(prefixed)
   end
 
+  # secp256k1 group order halved. A canonical (low-s) signature has
+  # 1 <= s <= n/2. Because (r, n - s) recovers the same key, accepting a high-s
+  # signature would let a third party malleate a posted announce into a second
+  # signature over the same event that still verifies, so the relay fans out a
+  # duplicate row. Reject high-s; our own signer (libsecp256k1) already emits
+  # low-s, and the client's viem check is over the canonical form.
+  @secp256k1_half_n 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0
+
+  # EIP-191/personal_sign is canonical: v is 27 or 28 (never the raw 0/1 recovery
+  # id here) and s is low. Enforce both so a malformed or malleated signature is
+  # rejected rather than recovered. ExSecp256k1.recover wants a 0/1 recovery id.
   defp decode_signature(hex) do
     case Base.decode16(hex, case: :mixed) do
-      {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>} ->
-        {:ok, {r, s, normalize_recovery_id(v)}}
+      {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>} when v in [27, 28] ->
+        if low_s?(s),
+          do: {:ok, {r, s, v - 27}},
+          else: {:error, :malleable_signature}
 
       _ ->
         {:error, :invalid_signature}
     end
   end
 
-  # EIP-191/personal_sign uses v in {27, 28}; ExSecp256k1 wants a 0/1 recovery id.
-  defp normalize_recovery_id(v) when v >= 27, do: v - 27
-  defp normalize_recovery_id(v), do: v
+  defp low_s?(<<s::unsigned-big-256>>), do: s >= 1 and s <= @secp256k1_half_n
 
   # address = last 20 bytes of keccak256(uncompressed pubkey without the 0x04 tag).
   defp address_from_pubkey(<<_prefix::8, xy::binary-size(64)>>) do
