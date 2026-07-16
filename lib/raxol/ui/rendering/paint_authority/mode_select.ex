@@ -33,23 +33,43 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ModeSelect do
       zero regions, zero cursor jumps. The screen-reader answer, the
       CI/pipe answer, the block-hater answer (AD-U2).
 
-  ## Rule order (first match wins)
+  ## Rule order
 
-  1. **Explicit env override** (`RAXOL_HARNESS_MODE=flat|tmux|inline`)
-     wins over every other signal, including a degenerate terminal or a
-     detected multiplexer -- an operator who typed the override gets
-     exactly what they asked for.
-  2. **Headless** (`TERM=dumb`, not a tty, or `CI` truthy AND not a tty)
-     -> `:flat`. This has to run before the tmux check: a CI runner
-     piping output through `TERM=dumb` (or no tty at all) is not a place
-     any cursor-positioning tier belongs, tmux-flavored or not.
-  3. **Degenerate geometry** (`ScrollRegionManager.degenerate?/2`: the
-     terminal is too short to hold a footer plus a 1-row history region)
-     -> `:flat`.
-  4. **tmux/screen multiplexer detected** -> `:tmux_conservative`.
-  5. Otherwise -> `:inline_log`.
+  Mode-pick happens in two passes: first a CANDIDATE mode is resolved
+  (from an explicit override or from auto-detection), then a
+  degenerate-geometry FLOOR is applied to whatever that candidate is.
+  The floor runs LAST, after the candidate is chosen, not as one more
+  item in the override/auto-detect priority list -- see "Why the
+  degenerate floor applies after override resolution" below for why that
+  distinction is load-bearing.
 
-  ### Why degenerate geometry is checked before tmux (rules 3 vs. 4)
+  ### Pass 1: resolve a candidate mode
+
+  1. **Explicit env override** (`RAXOL_HARNESS_MODE=flat|tmux|inline`,
+     case- and whitespace-insensitive) is the candidate, when recognized.
+     An unrecognized non-empty value does NOT win -- it falls through to
+     auto-detection below, and is surfaced separately via
+     `select_with_reason/3`'s `:override_unrecognized` reason so a caller
+     can warn instead of silently guessing what the operator meant.
+  2. Otherwise, auto-detect:
+     a. **Headless** (`TERM=dumb`, not a tty, or `CI` truthy AND not a
+        tty) -> `:flat`. This has to run before the tmux check: a CI
+        runner piping output through `TERM=dumb` (or no tty at all) is
+        not a place any cursor-positioning tier belongs, tmux-flavored
+        or not.
+     b. **tmux/screen multiplexer detected** -> `:tmux_conservative`.
+     c. Otherwise -> `:inline_log`.
+
+  ### Pass 2: the degenerate-geometry floor
+
+  **Degenerate geometry** (`ScrollRegionManager.degenerate?/2`: the
+  terminal is too short to hold a footer plus a 1-row history region)
+  clamps ANY non-`:flat` candidate down to `:flat`, regardless of whether
+  that candidate came from an override or from auto-detection. A
+  candidate that is already `:flat` (override or auto-detected) is left
+  alone -- the floor is a one-way clamp, never a way to escape `:flat`.
+
+  ### Why the degenerate floor applies after override resolution
 
   This ordering is load-bearing, not cosmetic: a degenerate geometry
   (too few rows to hold a footer plus a 1-row history region, e.g.
@@ -59,20 +79,30 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ModeSelect do
   row 1 BEFORE the terminal has scrolled -- each new block overwrites the
   previous one instead of accumulating (traced on real bytes: `\e[1;1HL1...`
   then `\e[1;1HM1...`, with `L1` clobbered, never reaching scrollback).
-  This happens whether or not the session is also inside tmux: tmux's
-  clamped capability profile changes which escape sequences
-  `InlineAuthority` is willing to assume are honored, but it does nothing
-  to fix a `region_top` that is pinned at 1 by the geometry itself. So a
-  session that is BOTH degenerate AND tmux-detected still gets the
-  clobbering append path if routed to `:tmux_conservative` -- there is no
-  additional safety purchased by keeping the tmux-specific clamping, only
-  a broken transcript. `:flat` sidesteps the whole failure mode: it never
-  positions a cursor, so there is no pinned row to clobber, and every
-  sealed line survives in order. That is strictly safer than any
-  cursor-positioning tier at degenerate geometry, which is why degenerate
-  geometry outranks tmux detection in the rule order. A tmux session with
-  ADEQUATE geometry has no such pinning problem and keeps its
-  `:tmux_conservative` tier as before.
+
+  That clobber has nothing to do with WHY `InlineAuthority` was picked --
+  it fires identically whether the route there was auto-detected tmux
+  (this unit's original regression: a tmux-detected session at degenerate
+  geometry must not fall through to `:tmux_conservative`, since that tier
+  still reaches the same clobbering `InlineAuthority` append path) or an
+  operator-supplied `RAXOL_HARNESS_MODE=inline`/`=tmux` override picked
+  the same authority explicitly. An override that special-cased itself to
+  skip the floor would reproduce the EXACT byte-traced clobber above,
+  just reached via an exported env var instead of auto-detection --
+  there is no additional safety purchased by letting an override outrank
+  the floor, only a broken transcript once the geometry turns out to be
+  degenerate at runtime (which the operator setting the override at
+  shell-startup time cannot always know in advance). `:flat` sidesteps
+  the whole failure mode: it never positions a cursor, so there is no
+  pinned row to clobber, and every sealed line survives in order. That is
+  strictly safer than any cursor-positioning tier at degenerate geometry,
+  for a candidate reached by ANY path, which is why the floor applies
+  uniformly AFTER candidate resolution rather than being folded into the
+  override-vs-auto-detect priority order. A `:flat` override is always
+  honored -- it is already the floor's own target, so clamping is a
+  no-op -- and a session with ADEQUATE geometry has no pinning problem and
+  keeps whatever candidate it resolved to (override or auto-detected) as
+  before.
   """
 
   alias Raxol.Terminal.Capabilities
@@ -80,6 +110,29 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ModeSelect do
 
   @typedoc "Which `PaintAuthority` tier a session should render through."
   @type mode :: :inline_log | :tmux_conservative | :flat
+
+  @typedoc """
+  Why `select_with_reason/3` picked the mode it returned:
+
+    * `:override` — a recognized `RAXOL_HARNESS_MODE` value was honored
+      as-is (or was already `:flat`, so the degenerate floor was a no-op).
+    * `:override_unrecognized` — `RAXOL_HARNESS_MODE` was set to a
+      non-empty value that isn't `flat`/`tmux`/`inline` (after
+      trim+downcase); the mode fell through to auto-detection.
+    * `:headless` — auto-detected via `TERM=dumb` / non-tty / CI-without-tty.
+    * `:tmux` — auto-detected via a `TMUX`/`screen`-prefixed `TERM` env var
+      or a `Capabilities.multiplexer` of `:tmux`/`:screen`.
+    * `:default` — auto-detection fell through to the `:inline_log` default.
+    * `:degenerate_clamp` — the degenerate-geometry floor overrode
+      whatever candidate the above resolved to (see moduledoc).
+  """
+  @type reason ::
+          :override
+          | :override_unrecognized
+          | :headless
+          | :tmux
+          | :default
+          | :degenerate_clamp
 
   @typedoc """
   Pre-gathered environment facts. String keys mirror OS env var names
@@ -103,40 +156,104 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ModeSelect do
       check is then skipped (treated as non-degenerate), matching every
       other rule's fail-open-to-`:inline_log` default.
     * `:footer_rows` — the footer row count the caller intends to pin
-      (`N` in the roadmap's `H - N` split). Defaults to `0`.
+      (`N` in the roadmap's `H - N` split). Defaults to `0`. A negative
+      or non-integer value is also treated as fail-open-to-non-degenerate
+      rather than raised — `ScrollRegionManager.degenerate?/2` itself
+      guards `footer_rows >= 0`, so this module has to guard the same
+      thing before delegating, or a caller-supplied `footer_rows: -1`
+      would crash mode-pick instead of degrading gracefully.
 
   Never consults `System.get_env/1`, `:persistent_term`, or any device —
-  purely a function of its three arguments.
+  purely a function of its three arguments. Delegates to
+  `select_with_reason/3` and discards the reason; use that function
+  directly when the reason is needed (e.g. a startup notice explaining
+  WHY a session ended up in `:flat`).
   """
   @spec select(Capabilities.t() | nil, env(), keyword()) :: mode()
   def select(caps, env, opts \\ []) when is_map(env) and is_list(opts) do
+    {mode, _reason} = select_with_reason(caps, env, opts)
+    mode
+  end
+
+  @doc """
+  Same mode-pick as `select/3`, plus the `reason()` the pick came from
+  (see the `t:reason/0` typedoc). This is the seam T13a's assembler uses
+  to print a startup notice ("routing through :flat because geometry is
+  too small for a footer" and similar).
+  """
+  @spec select_with_reason(Capabilities.t() | nil, env(), keyword()) ::
+          {mode(), reason()}
+  def select_with_reason(caps, env, opts \\ [])
+      when is_map(env) and is_list(opts) do
+    caps
+    |> resolve_candidate(env)
+    |> apply_degenerate_floor(opts)
+  end
+
+  # ---- pass 1: resolve the candidate mode (override, else auto-detect) ----
+
+  defp resolve_candidate(caps, env) do
     case override(env) do
-      nil -> select_without_override(caps, env, opts)
-      mode -> mode
+      {:ok, mode} -> {mode, :override}
+      :unrecognized -> {auto_detect_mode(caps, env), :override_unrecognized}
+      :none -> auto_detect(caps, env)
     end
   end
 
-  defp select_without_override(caps, env, opts) do
+  defp auto_detect_mode(caps, env) do
+    {mode, _reason} = auto_detect(caps, env)
+    mode
+  end
+
+  defp auto_detect(caps, env) do
     cond do
-      headless?(env) -> :flat
-      degenerate_geometry?(opts) -> :flat
-      tmux?(caps, env) -> :tmux_conservative
-      true -> :inline_log
+      headless?(env) -> {:flat, :headless}
+      tmux?(caps, env) -> {:tmux_conservative, :tmux}
+      true -> {:inline_log, :default}
     end
   end
 
-  # ---- rule 1: explicit override ----
+  # ---- pass 2: degenerate-geometry floor (see moduledoc) ----
+
+  defp apply_degenerate_floor({:flat, reason}, _opts), do: {:flat, reason}
+
+  defp apply_degenerate_floor({mode, reason}, opts) do
+    if degenerate_geometry?(opts) do
+      {:flat, :degenerate_clamp}
+    else
+      {mode, reason}
+    end
+  end
+
+  # ---- explicit override: recognized value, unrecognized, or absent ----
+  # Values are trimmed and downcased before matching, so `Flat`/` flat `
+  # both match `flat`.
 
   defp override(env) do
     case Map.get(env, "RAXOL_HARNESS_MODE") do
-      "flat" -> :flat
-      "tmux" -> :tmux_conservative
-      "inline" -> :inline_log
-      _other -> nil
+      nil ->
+        :none
+
+      "" ->
+        :none
+
+      raw ->
+        override_normalized(
+          raw
+          |> to_string()
+          |> String.trim()
+          |> String.downcase()
+        )
     end
   end
 
-  # ---- rule 2: headless (TERM=dumb / non-tty / CI-without-tty) ----
+  defp override_normalized(""), do: :none
+  defp override_normalized("flat"), do: {:ok, :flat}
+  defp override_normalized("tmux"), do: {:ok, :tmux_conservative}
+  defp override_normalized("inline"), do: {:ok, :inline_log}
+  defp override_normalized(_other), do: :unrecognized
+
+  # ---- headless (TERM=dumb / non-tty / CI-without-tty) ----
 
   defp headless?(env) do
     dumb_term?(env) or non_tty?(env) or ci_without_tty?(env)
@@ -154,7 +271,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ModeSelect do
   defp truthy?("0"), do: false
   defp truthy?(_other), do: true
 
-  # ---- rule 4: tmux/screen multiplexer ----
+  # ---- tmux/screen multiplexer ----
 
   defp tmux?(caps, env), do: tmux_env?(env) or multiplexer_detected?(caps)
 
@@ -180,16 +297,20 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ModeSelect do
 
   defp multiplexer_detected?(_caps), do: false
 
-  # ---- rule 3: degenerate geometry ----
-
+  # ---- degenerate geometry (the pass-2 floor) ----
+  #
+  # Fails open to `false` (non-degenerate) whenever `:rows`/`:footer_rows`
+  # aren't the shape `ScrollRegionManager.degenerate?/2` itself requires
+  # (`rows` a positive integer, `footer_rows` a non-negative integer) --
+  # matching every other rule's fail-open default rather than raising a
+  # `FunctionClauseError` on a caller-supplied `footer_rows: -1`.
   defp degenerate_geometry?(opts) do
-    case Keyword.get(opts, :rows) do
-      rows when is_integer(rows) and rows > 0 ->
-        footer_rows = Keyword.get(opts, :footer_rows, 0)
-        ScrollRegionManager.degenerate?(rows, footer_rows)
-
-      _other ->
-        false
+    with rows when is_integer(rows) and rows > 0 <- Keyword.get(opts, :rows),
+         footer_rows when is_integer(footer_rows) and footer_rows >= 0 <-
+           Keyword.get(opts, :footer_rows, 0) do
+      ScrollRegionManager.degenerate?(rows, footer_rows)
+    else
+      _other -> false
     end
   end
 end

@@ -145,7 +145,10 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
          :inline_log},
         {"geometry unknown (:rows omitted) -> treated as non-degenerate",
          no_caps, %{"TERM" => "xterm-256color"}, [footer_rows: 2], :inline_log},
-        {"tmux AND degenerate geometry -> flat (degenerate geometry outranks tmux: InlineAuthority's append path clobbers row 1 pre-scroll when region_top pins at 1)",
+        {"footer_rows: -1 (invalid) is guarded, fails open to non-degenerate rather than raising",
+         no_caps, %{"TERM" => "xterm-256color"}, [rows: 2, footer_rows: -1],
+         :inline_log},
+        {"tmux AND degenerate geometry -> flat (see moduledoc: 'Why the degenerate floor applies after override resolution')",
          no_caps,
          %{
            "TMUX" => "/tmp/tmux-1000/default,1234,0",
@@ -154,14 +157,26 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
         {"override=flat wins over an otherwise-plain terminal", no_caps,
          %{"RAXOL_HARNESS_MODE" => "flat", "TERM" => "xterm-256color"}, [],
          :flat},
-        {"override=tmux wins over TERM=dumb", no_caps,
-         %{"RAXOL_HARNESS_MODE" => "tmux", "TERM" => "dumb"}, [],
+        {"override=tmux wins over TERM=dumb (no geometry given -> no floor to apply)",
+         no_caps, %{"RAXOL_HARNESS_MODE" => "tmux", "TERM" => "dumb"}, [],
          :tmux_conservative},
-        {"override=inline wins over TERM=dumb AND degenerate geometry", no_caps,
-         %{"RAXOL_HARNESS_MODE" => "inline", "TERM" => "dumb"},
-         [rows: 2, footer_rows: 2], :inline_log},
-        {"override=inline wins over a detected tmux session", tmux_caps,
-         %{"RAXOL_HARNESS_MODE" => "inline", "TMUX" => "x"}, [], :inline_log}
+        {"override=inline at degenerate geometry is floored to :flat (HIGH review fix; see describe block below for the red-first proof)",
+         no_caps, %{"RAXOL_HARNESS_MODE" => "inline", "TERM" => "dumb"},
+         [rows: 2, footer_rows: 2], :flat},
+        {"override=tmux at degenerate geometry is floored to :flat too",
+         no_caps, %{"RAXOL_HARNESS_MODE" => "tmux", "TERM" => "xterm-256color"},
+         [rows: 2, footer_rows: 2], :flat},
+        {"override=flat at degenerate geometry is honored (already :flat, floor is a no-op)",
+         no_caps, %{"RAXOL_HARNESS_MODE" => "flat", "TERM" => "xterm-256color"},
+         [rows: 2, footer_rows: 2], :flat},
+        {"override=inline wins over a detected tmux session (no geometry given -> no floor to apply)",
+         tmux_caps, %{"RAXOL_HARNESS_MODE" => "inline", "TMUX" => "x"}, [],
+         :inline_log},
+        {"unrecognized override value falls through to auto-detect", no_caps,
+         %{"RAXOL_HARNESS_MODE" => "bogus", "TERM" => "xterm-256color"}, [],
+         :inline_log},
+        {"override value is trimmed and downcased", no_caps,
+         %{"RAXOL_HARNESS_MODE" => " Flat "}, [], :flat}
       ]
 
       for {description, caps, env, opts, expected} <- table do
@@ -170,17 +185,10 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
     end
 
     test "regression: tmux + degenerate geometry (rows=2, footer_rows=2) -> :flat, not :tmux_conservative" do
-      # Traced on real bytes: at region_top=1 (the only value
-      # ScrollRegionManager can pin when rows=2/footer_rows=2 leaves no
-      # room for a history region), InlineAuthority's append path CUPs to
-      # row 1 on every seal BEFORE the terminal scrolls -- each new block
-      # overwrites the previous one instead of accumulating (`\e[1;1HL1...`
-      # then `\e[1;1HM1...`, `L1` clobbered, never reaching scrollback).
-      # Routing this corner to `:tmux_conservative` still reaches that
-      # same InlineAuthority append path, so the clobber happens whether
-      # or not tmux is detected. Pinned explicitly here (independent of
-      # the table above) so this corner can never silently regress back
-      # to `:tmux_conservative` without a targeted, named test failing.
+      # See ModeSelect's moduledoc ("Why the degenerate floor applies
+      # after override resolution") for the byte-traced clobber this
+      # pins against. Kept as a named test, independent of the table
+      # above, so this corner can never silently regress.
       env_var_tmux = %{
         "TMUX" => "/tmp/tmux-1000/default,1234,0",
         "TERM" => "tmux-256color"
@@ -199,7 +207,14 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
              ) == :flat
     end
 
-    property "explicit override always wins, regardless of any other signal" do
+    property "explicit override wins over every other signal, UNLESS the degenerate floor clamps it to :flat" do
+      # HIGH review fix: `rows <- integer(1..3)` with `footer_rows: 2`
+      # fixed is ALWAYS degenerate (region_top = max(rows - 2, 1) = 1 <
+      # 2 for every value in that range), so whenever geometry is given
+      # at all in this property, the floor clamps any non-:flat override
+      # down to :flat. Pre-fix, this property asserted the override won
+      # unconditionally even at that geometry -- exactly the clobber bug
+      # this batch fixes (see ModeSelect's moduledoc).
       check all(
               term <-
                 member_of(["dumb", "xterm-256color", "screen", "tmux-256color"]),
@@ -223,12 +238,19 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
         caps = %Capabilities{multiplexer: multiplexer}
         opts = if rows, do: [rows: rows, footer_rows: 2], else: []
 
-        expected =
+        override_expected =
           case override_mode do
             "flat" -> :flat
             "tmux" -> :tmux_conservative
             "inline" -> :inline_log
           end
+
+        # `rows` present in this property is always degenerate (see the
+        # comment above) -- the floor only ever pushes TOWARD :flat.
+        expected =
+          if rows && override_expected != :flat,
+            do: :flat,
+            else: override_expected
 
         assert ModeSelect.select(caps, env, opts) == expected
       end
@@ -252,6 +274,85 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
     defp maybe_put_tmux(env, nil), do: env
     defp maybe_put_tmux(env, ""), do: env
     defp maybe_put_tmux(env, value), do: Map.put(env, "TMUX", value)
+  end
+
+  # ---------------------------------------------------------------------
+  # 1b. Override-outranks-degenerate floor: RED-FIRST proof (HIGH review fix)
+  # ---------------------------------------------------------------------
+
+  describe "ModeSelect.select_with_reason/3: override-outranks-degenerate floor (HIGH review fix)" do
+    test "override=inline at degenerate geometry clamps to :flat, not :inline_log" do
+      # RED-FIRST: before this fix, `select/3` returned the override mode
+      # unconditionally (`override(env)` short-circuited before the
+      # degenerate check ever ran), so this exact combination -- an
+      # exported `RAXOL_HARNESS_MODE=inline` later run in a 2-row split --
+      # returned `:inline_log` and reproduced the same byte-traced
+      # row-1 clobber as the auto-detected tmux+degenerate regression
+      # above. See ModeSelect's moduledoc for the full rationale.
+      env = %{"RAXOL_HARNESS_MODE" => "inline", "TERM" => "xterm-256color"}
+
+      assert ModeSelect.select(nil, env, rows: 2, footer_rows: 2) == :flat
+
+      assert ModeSelect.select_with_reason(nil, env, rows: 2, footer_rows: 2) ==
+               {:flat, :degenerate_clamp}
+    end
+
+    test "override=tmux at degenerate geometry also clamps to :flat" do
+      env = %{"RAXOL_HARNESS_MODE" => "tmux", "TERM" => "xterm-256color"}
+
+      assert ModeSelect.select_with_reason(nil, env, rows: 2, footer_rows: 2) ==
+               {:flat, :degenerate_clamp}
+    end
+
+    test "override=flat at degenerate geometry is honored as-is (already :flat, floor is a no-op)" do
+      env = %{"RAXOL_HARNESS_MODE" => "flat", "TERM" => "xterm-256color"}
+
+      assert ModeSelect.select_with_reason(nil, env, rows: 2, footer_rows: 2) ==
+               {:flat, :override}
+    end
+
+    test "override at ADEQUATE geometry is unaffected by the floor" do
+      env = %{"RAXOL_HARNESS_MODE" => "inline", "TERM" => "xterm-256color"}
+
+      assert ModeSelect.select_with_reason(nil, env, rows: 40, footer_rows: 2) ==
+               {:inline_log, :override}
+    end
+
+    test "auto-detected reasons: :headless, :tmux, :default" do
+      assert ModeSelect.select_with_reason(nil, %{"TERM" => "dumb"}, []) ==
+               {:flat, :headless}
+
+      assert ModeSelect.select_with_reason(
+               nil,
+               %{"TMUX" => "x", "TERM" => "tmux-256color"},
+               []
+             ) == {:tmux_conservative, :tmux}
+
+      assert ModeSelect.select_with_reason(
+               nil,
+               %{"TERM" => "xterm-256color"},
+               []
+             ) ==
+               {:inline_log, :default}
+    end
+
+    test "unrecognized override value falls through to auto-detect and surfaces :override_unrecognized" do
+      env = %{"RAXOL_HARNESS_MODE" => "bogus", "TERM" => "xterm-256color"}
+
+      assert ModeSelect.select_with_reason(nil, env, []) ==
+               {:inline_log, :override_unrecognized}
+    end
+
+    test "override value is trimmed and downcased before matching" do
+      assert ModeSelect.select(nil, %{"RAXOL_HARNESS_MODE" => "Flat"}, []) ==
+               :flat
+
+      assert ModeSelect.select(nil, %{"RAXOL_HARNESS_MODE" => " flat "}, []) ==
+               :flat
+
+      assert ModeSelect.select(nil, %{"RAXOL_HARNESS_MODE" => "TMUX"}, []) ==
+               :tmux_conservative
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -292,6 +393,47 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
 
       assert FlatAuthority.region_top(authority) == 24
       assert raw(device) == "assistant: hello\n"
+    end
+  end
+
+  describe "FlatAuthority: append_sealed/2 scrubs hostile escape bytes (HIGH review fix)" do
+    test "content carrying a CSI clear, an SGR color change, and a bare BEL is scrubbed to plain text" do
+      {:ok, device} = StringIO.open("")
+      authority = FlatAuthority.new(device, @width, @height)
+
+      hostile = "before\e[2Jafter\e[31mred\adone\n"
+
+      _final = FlatAuthority.seal(authority, hostile)
+
+      output = raw(device)
+
+      assert flat_is_pure_text?(output),
+             "scrubbed output must contain zero escape-sequence tokens, got: #{inspect(SequenceScanner.scan(output))}"
+
+      # Module-enforced, not caller-trusted (see moduledoc): the ESC lead
+      # byte and the bare BEL are stripped, but the rest of each sequence's
+      # bytes survive as a visible, garbled-looking fragment ("[2J",
+      # "[31m") rather than being silently swallowed whole -- an HONEST
+      # detectable failure, not an invisible injection.
+      assert output == "before[2Jafter[31mreddone\n"
+    end
+
+    test "\\t, \\r, and \\n survive the scrub unchanged" do
+      {:ok, device} = StringIO.open("")
+      authority = FlatAuthority.new(device, @width, @height)
+
+      _final = FlatAuthority.seal(authority, "a\tb\r\nc\n")
+
+      assert raw(device) == "a\tb\r\nc\n"
+    end
+
+    test "multi-byte UTF-8 content is untouched by the byte-wise scrub" do
+      {:ok, device} = StringIO.open("")
+      authority = FlatAuthority.new(device, @width, @height)
+
+      _final = FlatAuthority.seal(authority, "café résumé naïve\n")
+
+      assert raw(device) == "café résumé naïve\n"
     end
   end
 

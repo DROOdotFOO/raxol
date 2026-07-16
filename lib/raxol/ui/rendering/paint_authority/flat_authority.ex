@@ -8,12 +8,20 @@ defmodule Raxol.UI.Rendering.PaintAuthority.FlatAuthority do
   non-tty, CI-without-tty, and degenerate-geometry sessions — the
   screen-reader answer, the CI/pipe answer, the block-hater answer (AD-U2).
 
-  ## The SGR/escape decision: zero escape bytes, full stop
+  ## The SGR/escape decision: zero escape bytes, enforced IN THIS MODULE
 
   Unlike `InlineAuthority` (which never emits a full clear but DOES emit
   DECSTBM/CUP/cursor-save bytes) this module never writes ANY byte in the
-  `0x1B` (ESC) family — not just cursor movement, but also SGR styling.
-  This is a deliberate v1 simplification, not an oversight:
+  C0 control range (`0x00`-`0x1F`, which includes `0x1B`/ESC) except
+  `\\t`, `\\r`, `\\n` — not just cursor movement, but also SGR styling and
+  bare control bytes like BEL. This is a deliberate v1 simplification, not
+  an oversight, AND it is a property `append_sealed/2` enforces itself by
+  scrubbing those bytes out of the iodata before it ever reaches the
+  device — it is not a contract callers have to uphold on their own.
+  Content flowing into this authority can originate from an LLM response,
+  a tool's stdout, or any other untrusted source; a caller forgetting to
+  sanitize it must not be able to smuggle a screen clear or a color
+  change through the flat tier.
 
     * A conditionally-styled flat mode (SGR when the destination happens
       to be a real tty, plain when it's a genuine pipe) would need its
@@ -26,7 +34,17 @@ defmodule Raxol.UI.Rendering.PaintAuthority.FlatAuthority do
       the mechanical acceptance check ("flat output contains no
       cursor-move/CUP/scroll sequences") reduces to "every scanned token
       is `{:text, _}`" with no exceptions to special-case for allowed SGR
-      runs.
+      runs — and now that the scrub happens inside the module, that
+      property holds regardless of what a caller passes in, not just for
+      well-behaved callers.
+    * Scrubbing the ESC lead byte and leaving the rest of a hostile
+      sequence's bytes untouched (e.g. `\\e[31m` becomes the visible
+      fragment `[31m`) is an intentional, HONEST failure mode: a reader
+      sees garbled-looking text and knows something was stripped. The
+      alternative — swallowing the whole sequence body, or worse, leaving
+      it byte-for-byte intact — risks an invisible injection that changes
+      what a downstream pipe or screen reader does without any visible
+      trace. A visible fragment is strictly safer than a silent one.
     * This is additive, not a rewrite, to upgrade later: a future unit
       that wants styled flat output for a genuine tty destination can
       thread `ModeSelect`'s already-computed `:tty?` fact into `new/3` as
@@ -42,16 +60,19 @@ defmodule Raxol.UI.Rendering.PaintAuthority.FlatAuthority do
   screen reader, or a CI capture buffer — none of which need or want the
   extra `\\r`. Callers building content for `FlatAuthority` should
   terminate each line with plain `\\n`. This module does not enforce or
-  rewrite terminators itself (it writes `iodata` verbatim, exactly like
-  `PaintAuthority.IOAuthority`'s minimal-stub convention) — the `\\r\\n`
-  vs. `\\n` choice lives entirely in what the CALLER passes in, so a
-  caller that already has `\\r\\n`-terminated content (e.g. replaying the
-  same fixture through both tiers for a parity check) gets it written
-  through unchanged rather than silently rewritten.
+  rewrite terminators itself — `\\t`, `\\r`, and `\\n` are all exempt from
+  the C0 scrub described above, so both conventions pass through
+  unchanged (exactly like `PaintAuthority.IOAuthority`'s minimal-stub
+  convention for everything outside that scrub) — the `\\r\\n` vs. `\\n`
+  choice lives entirely in what the CALLER passes in, so a caller that
+  already has `\\r\\n`-terminated content (e.g. replaying the same
+  fixture through both tiers for a parity check) gets it written through
+  unchanged rather than silently rewritten.
 
   ## What every callback does
 
-    * `append_sealed/2` — writes `iodata` verbatim. No CUP, ever.
+    * `append_sealed/2` — scrubs C0 control bytes (except `\\t`/`\\r`/`\\n`)
+      out of `iodata`, then writes what remains. No CUP, ever.
     * `repaint_footer/2` / `keyframe_footer/2` — NO-OP (return state
       unchanged, write nothing). Flat has no footer to repaint or
       keyframe; a caller that calls these on a flat authority gets
@@ -94,8 +115,22 @@ defmodule Raxol.UI.Rendering.PaintAuthority.FlatAuthority do
 
   @impl true
   def append_sealed(%__MODULE__{device: device} = t, iodata) do
-    IO.write(device, iodata)
+    IO.write(device, scrub(iodata))
     t
+  end
+
+  # Module-enforced escape scrub (see moduledoc): strips every C0 control
+  # byte (0x00-0x1F, which includes ESC/0x1B) except `\t`/`\r`/`\n`.
+  # Byte-wise stripping is safe for UTF-8 content: multi-byte sequence
+  # lead bytes (0xC2-0xF4) and continuation bytes (0x80-0xBF) are both
+  # outside the C0 range, so no valid UTF-8 codepoint is ever split.
+  @c0_exceptions [?\t, ?\r, ?\n]
+
+  defp scrub(iodata) do
+    for <<byte <- IO.iodata_to_binary(iodata)>>,
+        byte >= 0x20 or byte in @c0_exceptions,
+        into: <<>>,
+        do: <<byte>>
   end
 
   @impl true
