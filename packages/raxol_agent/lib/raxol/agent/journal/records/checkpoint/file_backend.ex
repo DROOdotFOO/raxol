@@ -290,10 +290,17 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
 
   defp decode_snapshot(bytes) do
     case Jason.decode(bytes) do
-      {:ok, term} ->
+      # A snapshot's top-level term is ALWAYS a folded model map (the codec dumps
+      # `%{"applied" => ...}`). A scalar/list top-level is adversarial disk data:
+      # reject it here, before it can reach `fold_step`'s `Map.update` and raise a
+      # `BadMapError` on a non-empty conversational tail (typed-reject, never raise).
+      {:ok, term} when is_map(term) ->
         if safe_term?(term, @max_decode_depth),
           do: {:ok, term},
           else: {:error, :snapshot_corrupt}
+
+      {:ok, _non_map} ->
+        {:error, :snapshot_corrupt}
 
       {:error, _} ->
         {:error, :snapshot_corrupt}
@@ -348,7 +355,9 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   # FI-8 atomic write: temp + fsync + rename, then best-effort dir fsync.
   defp atomic_write(path, data) do
     dir = Path.dirname(path)
-    tmp = path <> ".tmp." <> Integer.to_string(System.unique_integer([:positive]))
+
+    tmp =
+      path <> ".tmp." <> Integer.to_string(System.unique_integer([:positive]))
 
     with :ok <- File.mkdir_p(dir),
          :ok <- write_and_sync(tmp, data),

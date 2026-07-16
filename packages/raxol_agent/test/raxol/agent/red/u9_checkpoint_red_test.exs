@@ -187,7 +187,9 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
 
       # Checkpoint captures the model as of the tip.
       assert {:ok, _cp_off} =
-               Checkpoint.write(j, CR.fold(CR.raw_records(dir)), reason: "manual")
+               Checkpoint.write(j, CR.fold(CR.raw_records(dir)),
+                 reason: "manual"
+               )
 
       # Mutate the conversation forward past the checkpoint.
       CR.append_all!(j, [
@@ -503,6 +505,75 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
       assert {:ok, %{"applied" => [1, 2, 3]}} = Checkpoint.restore(j),
              "an unknown reason must not block restore (read-side tolerance)"
 
+      :ok = FileStore.close(j)
+    end
+  end
+
+  # ===========================================================================
+  # Restore-path hardening — adversarial disk must TYPED-REJECT, never raise
+  # (adversarial-review findings on U9-I, PR #582)
+  # ===========================================================================
+
+  describe "restore-path hardening — a non-map snapshot top-level is corrupt, not a raise" do
+    test "a hash-matched snapshot decoding to a LIST → :snapshot_corrupt (no BadMapError), with a non-empty conversational tail",
+         %{base: base} do
+      {j, _session, dir} = seed_conversation!(base)
+
+      # A non-empty CONVERSATIONAL tail past the frozen tip (id 3): ids 5,6,7.
+      # These are exactly the records restore folds FORWARD onto the snapshot, so
+      # the snapshot must be a map or `fold_step`'s `Map.update` raises.
+      CR.append_all!(j, [
+        CR.loop_event("turn_started"),
+        CR.loop_event("item_completed", %{"text" => "more"}),
+        CR.loop_event("turn_completed")
+      ])
+
+      # An adversarial snapshot whose top-level term is a LIST, not the folded
+      # model map — staged with a MATCHING content hash so it clears sha256
+      # verification and reaches the decoder.
+      {ref, hash} = CR.stage_snapshot!(dir, [1, 2, 3])
+
+      CR.inject_single_counter_checkpoint!(dir, %{
+        "tip_offset" => 3,
+        "snapshot_ref" => ref,
+        "snapshot_hash" => hash,
+        "reason" => "manual"
+      })
+
+      # BEFORE the fix this reached `fold_step` and raised BadMapError; the
+      # contract demands a typed reject with the journal left intact.
+      assert {:error, :snapshot_corrupt} = Checkpoint.restore(j),
+             "a non-map snapshot top-level must surface :snapshot_corrupt, never raise"
+
+      assert FileStore.status(j) == :ok,
+             "a corrupt snapshot is not journal damage"
+
+      :ok = FileStore.close(j)
+    end
+
+    test "a hash-matched snapshot decoding to a SCALAR → :snapshot_corrupt (no raise)",
+         %{base: base} do
+      {j, _session, dir} = seed_conversation!(base)
+
+      CR.append_all!(j, [
+        CR.loop_event("turn_started"),
+        CR.loop_event("turn_completed")
+      ])
+
+      # Top-level scalar (a bare integer) — same class, different shape.
+      {ref, hash} = CR.stage_snapshot!(dir, 42)
+
+      CR.inject_single_counter_checkpoint!(dir, %{
+        "tip_offset" => 3,
+        "snapshot_ref" => ref,
+        "snapshot_hash" => hash,
+        "reason" => "manual"
+      })
+
+      assert {:error, :snapshot_corrupt} = Checkpoint.restore(j),
+             "a scalar snapshot top-level must surface :snapshot_corrupt, never raise"
+
+      assert FileStore.status(j) == :ok
       :ok = FileStore.close(j)
     end
   end
