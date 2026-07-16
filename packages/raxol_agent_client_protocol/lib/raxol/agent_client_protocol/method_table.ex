@@ -15,11 +15,13 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
 
   ## What lives here vs. what doesn't (this task's scope)
 
-  This module owns `rows/0`, `rows/1`, `rows_for_side/1`, and the
-  compile-time table invariants (§1.1 of the design doc). Capability
-  derivation/gating (design doc §6, artifact #3) and the `Connection`-side
-  pre-filter for `layer: :protocol`/`:session_control` rows (§4's D1-2 fix,
-  §6.0's G2 delta) are consumers of this table, not implemented here.
+  This module owns `rows/0`, `rows/1`, `rows_for_side/1`, `capability_for/1`,
+  the `:capability` column data (design doc §6, artifact #3), and the
+  compile-time table invariants (§1.1 of the design doc, incl. invariant 7
+  guarding the capability paths). The negotiated-caps PREDICATE
+  (`Capabilities.negotiated?/2`) and the `Connection`-side pre-filter for
+  `layer: :protocol`/`:session_control` rows (§4's D1-2 fix, §6.0's G2 delta)
+  are consumers of this table, not implemented here.
 
   ## Compile-time invariants (raise `CompileError` on violation)
 
@@ -60,8 +62,47 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
   """
   @type layer :: :app | :protocol | :session_control
 
-  @typedoc "A path into the negotiated capability structs, or `nil` for baseline (always available)."
-  @type capability :: nil | {:agent | :client, [atom()]}
+  @typedoc """
+  How a row is capability-gated (design doc §6, artifact #3):
+
+    * `nil` — baseline method, always available (no capability gate).
+    * `{:agent | :client, path}` — a field path into the *receiver's own*
+      negotiated capability struct (`Schema.AgentTypes.AgentCapabilities`
+      for `:agent`, `Schema.ClientTypes.ClientCapabilities` for `:client`).
+      `Raxol.AgentClientProtocol.Capabilities.negotiated?/2` walks the path;
+      a truthy leaf ⇒ negotiated, anything else (missing field, `nil`,
+      `false`) ⇒ NOT negotiated (fail closed). The path uses **Elixir struct
+      field atoms**, not the JSON wire keys, because the snapshot resolved
+      against is the decoded struct — see invariant 7 and the ORACLE-DIVERGENCE
+      note below.
+    * `:never` — the oracle gates this method by a capability the ported
+      Elixir capability structs cannot express, so it is unconditionally NOT
+      negotiated (fail closed, `-32601`) until the struct model is extended.
+      Currently only `logout` (oracle `agentCapabilities.auth.logout`;
+      `AgentCapabilities` has no `auth` field).
+
+  ### ORACLE-DIVERGENCE (schema-oracle v1.19.0 vs. ported f1729 structs)
+
+  The pinned oracle's capability tree is RICHER than the Elixir structs
+  ported from the older f1729 snapshot. Where the struct can express the
+  gate, the path resolves and gating is live; where it cannot, the row fails
+  closed (documented per-row below). Concretely:
+
+    * `sessionCapabilities.{delete,close}` — oracle has them, the Elixir
+      `SessionCapabilities` struct (`modes`/`list`/`fork`/`resume`) does not.
+      `session/delete`/`session/close` therefore resolve to a MISSING leaf
+      under `:session_capabilities` and always fail closed. They will
+      auto-activate (no code change) once the struct gains the fields.
+    * `agentCapabilities.auth.logout` — the struct has no `auth` field at
+      all, so `logout` uses `:never` rather than a dead path.
+    * JSON-key vs struct-field: the table historically carried oracle-ish
+      keys (`[:sessions, :list]`, `[:fs, :read_text_file]`, `[:logout]`)
+      that resolved against NEITHER the oracle JSON NOR the Elixir struct.
+      Fixed to real struct fields (`[:session_capabilities, :list]`,
+      `[:file_system, :read_text_file]`, …); invariant 7 now guards the
+      first segment against drift.
+  """
+  @type capability :: nil | :never | {:agent | :client, [atom()]}
 
   @typedoc "`nil` for the core v1.19.0 surface; `:raxol` for registered `_raxol/*` vendor rows."
   @type ext :: nil | :raxol
@@ -77,6 +118,20 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
           layer: layer(),
           ext: ext()
         }
+
+  # Top-level struct fields of the two negotiated capability roots, as literal
+  # atoms (NOT introspected from the struct modules — invariant 6's rationale
+  # applies: reaching into `Schema.*` at compile time reintroduces the
+  # compile-order knot). Invariant 7 checks every gated path's FIRST segment
+  # against these; `test/capabilities_test.exs` asserts these literals still
+  # match `Map.keys(struct(...)) -- [:_meta]`, catching drift.
+  @agent_cap_fields [
+    :load_session,
+    :prompt_capabilities,
+    :mcp_capabilities,
+    :session_capabilities
+  ]
+  @client_cap_fields [:terminal, :file_system]
 
   # -- Agent methods (direction: client_to_agent) -- 13 rows, meta.json `agentMethods` --
 
@@ -179,7 +234,7 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       callback: :list_sessions,
       params: Unstable.ListSessionsRequest,
       result: Unstable.ListSessionsResponse,
-      capability: {:agent, [:sessions, :list]},
+      capability: {:agent, [:session_capabilities, :list]},
       layer: :app,
       ext: nil
     },
@@ -190,7 +245,9 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       callback: :delete_session,
       params: LifecycleExtras.DeleteSessionRequest,
       result: LifecycleExtras.DeleteSessionResponse,
-      capability: {:agent, [:sessions, :delete]},
+      # ORACLE-DIVERGENCE: leaf absent in the ported `SessionCapabilities`
+      # struct ⇒ fails closed today; auto-activates when the field lands.
+      capability: {:agent, [:session_capabilities, :delete]},
       layer: :app,
       ext: nil
     },
@@ -201,7 +258,7 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       callback: :resume_session,
       params: Unstable.ResumeSessionRequest,
       result: Unstable.ResumeSessionResponse,
-      capability: {:agent, [:sessions, :resume]},
+      capability: {:agent, [:session_capabilities, :resume]},
       layer: :app,
       ext: nil
     },
@@ -212,7 +269,9 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       callback: :close_session,
       params: LifecycleExtras.CloseSessionRequest,
       result: LifecycleExtras.CloseSessionResponse,
-      capability: {:agent, [:sessions, :close]},
+      # ORACLE-DIVERGENCE: leaf absent in the ported `SessionCapabilities`
+      # struct ⇒ fails closed today; auto-activates when the field lands.
+      capability: {:agent, [:session_capabilities, :close]},
       layer: :app,
       ext: nil
     },
@@ -228,7 +287,10 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       callback: :logout,
       params: nil,
       result: LifecycleExtras.LogoutResponse,
-      capability: {:agent, [:logout]},
+      # ORACLE-DIVERGENCE: oracle gates this by `agentCapabilities.auth.logout`,
+      # but the ported `AgentCapabilities` struct has no `auth` field — no path
+      # can resolve, so fail closed unconditionally (see `capability` typedoc).
+      capability: :never,
       layer: :app,
       ext: nil
     }
@@ -266,7 +328,7 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       callback: :write_text_file,
       params: ClientTypes.WriteTextFileRequest,
       result: ClientTypes.WriteTextFileResponse,
-      capability: {:client, [:fs, :write_text_file]},
+      capability: {:client, [:file_system, :write_text_file]},
       layer: :app,
       ext: nil
     },
@@ -277,7 +339,7 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       callback: :read_text_file,
       params: ClientTypes.ReadTextFileRequest,
       result: ClientTypes.ReadTextFileResponse,
-      capability: {:client, [:fs, :read_text_file]},
+      capability: {:client, [:file_system, :read_text_file]},
       layer: :app,
       ext: nil
     },
@@ -446,6 +508,30 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
           "dollar-outside-protocol=#{inspect(Enum.map(bad_protocol_prefix, & &1.wire))}"
   end
 
+  # Invariant 7 (§6, artifact #3): every gated `{side, path}` capability must
+  # RESOLVE against the negotiated caps struct shape. Checked at the enforceable
+  # compile-time granularity — the FIRST path segment must be a real top-level
+  # field of that side's capability struct (catching the `[:sessions, …]` /
+  # `[:fs, …]` / `[:logout]` drift class). Deeper segments are validated at
+  # runtime by `Capabilities.negotiated?/2` via fail-closed field access, and
+  # end-to-end in `test/capabilities_test.exs`. `nil` (baseline) and `:never`
+  # (unrepresentable, see the `capability` typedoc) carry no path and are skipped.
+  bad_capability_paths =
+    Enum.filter(@rows, fn
+      %{capability: {:agent, [first | _]}} -> first not in @agent_cap_fields
+      %{capability: {:client, [first | _]}} -> first not in @client_cap_fields
+      %{capability: {_side, []}} -> true
+      _ -> false
+    end)
+
+  if bad_capability_paths != [] do
+    raise CompileError,
+      description:
+        "MethodTable invariant 7 violated (capability path first segment is not a " <>
+          "top-level field of the caps struct, or path is empty): " <>
+          inspect(Enum.map(bad_capability_paths, &{&1.wire, &1.capability}))
+  end
+
   # -- Public API ---------------------------------------------------------------
 
   @doc "All table rows, in declaration order (agent methods, then client methods, then protocol methods)."
@@ -466,4 +552,30 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
   @spec rows_for_side(:agent | :client) :: [row()]
   def rows_for_side(:agent), do: rows(:client_to_agent) ++ rows(:both)
   def rows_for_side(:client), do: rows(:agent_to_client) ++ rows(:both)
+
+  @doc """
+  The capability gate for a wire `method`, normalized for
+  `Raxol.AgentClientProtocol.Capabilities.negotiated?/2`:
+
+    * `:none` — baseline method, always available (table `capability: nil`).
+    * `:never` — unrepresentable in the ported caps model; fail closed.
+    * `{:agent | :client, path}` — a field path into the receiver's own caps.
+    * `:unknown_method` — `method` is not in the table (`decode/4` will
+      `-32601` it; the caller MUST NOT treat this as a capability denial).
+  """
+  @spec capability_for(String.t()) ::
+          :none | :never | :unknown_method | {:agent | :client, [atom()]}
+  def capability_for(method) when is_binary(method) do
+    case Enum.find(@rows, &(&1.wire == method)) do
+      nil -> :unknown_method
+      %{capability: nil} -> :none
+      %{capability: :never} -> :never
+      %{capability: {_side, _path} = cap} -> cap
+    end
+  end
+
+  @doc "The literal top-level field atoms of a side's capability struct (drift-guarded by invariant 7 + tests)."
+  @spec cap_fields(:agent | :client) :: [atom()]
+  def cap_fields(:agent), do: @agent_cap_fields
+  def cap_fields(:client), do: @client_cap_fields
 end

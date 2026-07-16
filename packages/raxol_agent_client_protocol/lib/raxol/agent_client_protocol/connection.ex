@@ -90,11 +90,20 @@ defmodule Raxol.AgentClientProtocol.Connection do
        design's `{:invalid_params, reason}`); any non-`:method_not_found`
        decode error is mapped to `-32602` (§4.1).
     3. The capability gate is located BEFORE decode with the correct
-       `-32601`-beats-`-32602` ordering, but its membership predicate
-       (`capability_negotiated?/2`) is a permissive SEAM: the
-       capability-derivation wave (MethodTable §6) that defines the
-       negotiated-`caps` shape is not built, so no method is spuriously
-       rejected. Only that predicate changes when the wave lands.
+       `-32601`-beats-`-32602` ordering. The permissive seam is now CLOSED
+       (W17-caps wave): `capability_denied?/2` delegates to the real
+       `Capabilities.negotiated?/2`, which fails closed on any
+       missing/`nil`/`false` capability. Closing it required one change the
+       original deviation did not foresee ("only that predicate changes"):
+       the `caps` SNAPSHOT is now the RECEIVER's OWN capability tree, not the
+       whole `initialize` message. The agent snapshots `agent_capabilities`
+       from the response it sends; the client snapshots `client_capabilities`
+       from the request it sends (stashed in `own_caps` at outbound-submit
+       time, committed at handshake), because the client's own caps are not
+       present in the `initialize` RESPONSE it receives. See
+       `Capabilities` + `MethodTable`'s ORACLE-DIVERGENCE note
+       (`session/delete`/`close`/`logout` fail closed — the ported caps
+       structs cannot express those gates).
     4. `transport_ref` and the monitored carrier pid are both taken from the
        handle's `:pid` field (the Transport behaviour exposes no ref
        accessor; Paired — and the future stdio reader — expose `:pid`, and
@@ -113,7 +122,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
   require Logger
 
   alias Raxol.AgentClientProtocol.Connection.Ctx
-  alias Raxol.AgentClientProtocol.{Error, MethodTable, Router}
+  alias Raxol.AgentClientProtocol.{Capabilities, Error, Router}
   alias Raxol.AgentClientProtocol.Rpc.{Message, Notification, Request, RequestId, Response}
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.CancelNotification
   alias Raxol.AgentClientProtocol.Schema.LifecycleExtras.CancelRequestNotification
@@ -127,6 +136,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
             transport_monitor: nil,
             phase: :booting,
             caps: nil,
+            own_caps: nil,
             parent_sup: nil,
             session_sup: nil,
             rx_seq: 0,
@@ -434,6 +444,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
         {:answered, {:error, :not_initialized}, state}
 
       true ->
+        state = maybe_stash_own_caps(state, method, params)
         id = state.next_out_id
         state = %{state | next_out_id: id + 1}
         frame = wire(Request.new(id, method, to_wire(params)))
@@ -957,8 +968,12 @@ defmodule Raxol.AgentClientProtocol.Connection do
   defp decode_response({:error, _id, %Error{} = err}, _method), do: {:error, err}
 
   # ===========================================================================
-  # Handshake phase transitions (§7.2). caps snapshot is best-effort (deviation
-  # #3): the negotiated-caps shape is owned by the unbuilt capability wave.
+  # Handshake phase transitions (§7.2). The `caps` snapshot is the RECEIVER's
+  # OWN capability tree (deviation #3, W17-caps): the agent snapshots the
+  # `agent_capabilities` of the response it just sent; the client snapshots the
+  # `client_capabilities` it stashed (`own_caps`) when it sent the request —
+  # the client's own caps are absent from the response it receives. Written
+  # exactly once here and immutable after (Inv-11).
   # ===========================================================================
 
   defp maybe_agent_initialized(
@@ -967,20 +982,35 @@ defmodule Raxol.AgentClientProtocol.Connection do
          {:ok, struct},
          %{role: :agent, phase: :uninitialized} = state
        ) do
-    %{state | phase: :initialized, caps: struct}
+    %{state | phase: :initialized, caps: own_agent_caps(struct)}
   end
 
   defp maybe_agent_initialized(_id, _entry, _response, state), do: state
 
   defp maybe_client_initialized(
          "initialize",
-         {:ok, %_{} = struct},
+         {:ok, %_{}},
          %{role: :client, phase: :uninitialized} = state
        ) do
-    %{state | phase: :initialized, caps: struct}
+    %{state | phase: :initialized, caps: state.own_caps}
   end
 
   defp maybe_client_initialized(_method, _outcome, state), do: state
+
+  # The client's own advertised caps live in the outbound `initialize` request
+  # params; stash them at submit time so the handshake commit (which only sees
+  # the RESPONSE) can promote them to the `caps` snapshot.
+  defp maybe_stash_own_caps(%{role: :client} = state, "initialize", params) do
+    %{state | own_caps: own_client_caps(params)}
+  end
+
+  defp maybe_stash_own_caps(state, _method, _params), do: state
+
+  defp own_agent_caps(%{agent_capabilities: caps}), do: caps
+  defp own_agent_caps(_other), do: nil
+
+  defp own_client_caps(%{client_capabilities: caps}), do: caps
+  defp own_client_caps(_other), do: nil
 
   # ===========================================================================
   # reject_all_outgoing + inbound teardown (§3). One idempotent funnel.
@@ -1110,27 +1140,11 @@ defmodule Raxol.AgentClientProtocol.Connection do
     Router.dispatch(side, handler, dispatchable, ctx)
   end
 
-  # Capability gate location is faithful (before decode); the predicate is a
-  # permissive SEAM until the capability-derivation wave lands (deviation #3).
+  # Capability gate (§4.1 step 5): located BEFORE decode so `-32601` beats
+  # `-32602`. Delegates to the real, fail-closed predicate over the receiver's
+  # own negotiated caps snapshot (W17-caps — deviation #3 seam CLOSED).
   defp capability_denied?(method, state) do
-    case Enum.find(MethodTable.rows_for_side(state.role), &(&1.wire == method)) do
-      %{capability: nil} -> false
-      %{capability: cap} -> not capability_negotiated?(state.caps, cap)
-      nil -> false
-    end
-  end
-
-  # SEAM (deviation #3): today `caps` is the raw negotiated struct, so the
-  # fallback treats every method as available. When the capability-derivation
-  # wave lands it will populate `caps.__denied__` (or replace this predicate),
-  # at which point gating activates with zero changes elsewhere. Reading
-  # `caps` here (rather than a literal `true`) is also what keeps the gate
-  # from being constant-folded into dead code.
-  defp capability_negotiated?(caps, capability) do
-    case caps do
-      %{__denied__: denied} -> capability not in denied
-      _ -> true
-    end
+    not Capabilities.negotiated?(state.caps, method)
   end
 
   defp lookup_session(session_id) do
