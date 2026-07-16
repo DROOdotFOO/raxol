@@ -46,11 +46,11 @@ defmodule Raxol.Agent.Red.U6SteerRedTest do
       SteerContours.assert_nothing_on_reject(Steer)
     end
 
-    test "concurrent racing steers: exactly one wins the CAS, the loser gets a typed reject (seed-reproducible)" do
+    test "serialized CAS ordering: exactly one steer wins per schedule, the loser gets a typed reject (seed-reproducible)" do
       # The property is order-independent — assert it across a spread of
       # seed-chosen schedules so a one-sided implementation can't slip through.
       for seed <- 0..9 do
-        SteerContours.assert_one_winner(Steer, seed)
+        SteerContours.assert_serialized_cas_order(Steer, seed)
       end
     end
 
@@ -60,6 +60,22 @@ defmodule Raxol.Agent.Red.U6SteerRedTest do
 
     test "idempotency survives a BEAM restart: dedup index rebuilt by journal fold (§5.1)" do
       SteerContours.assert_dedup_survives_restart(Steer)
+    end
+
+    test "the CAS token is distinct from every previously observed token, not just the current one (ABA hazard, AD-13)" do
+      SteerContours.assert_token_uniqueness(Steer)
+    end
+
+    test "a steer against a session with no running turn is rejected with {:error, :no_live_turn}" do
+      SteerContours.assert_no_live_turn_reject(Steer)
+    end
+
+    test "a re-delivered client_msg_id carrying a different payload is rejected with {:error, :client_msg_id_reuse}" do
+      SteerContours.assert_dedup_payload_mismatch_rejected(Steer)
+    end
+
+    test "two steers with a nil client_msg_id are never deduped against each other" do
+      SteerContours.assert_nil_client_msg_id_not_deduped(Steer)
     end
   end
 end

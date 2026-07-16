@@ -19,9 +19,24 @@ defmodule Raxol.Agent.Red.SteerContours do
 
   Frozen shapes (AD-13 + freeze-contracts §5.1):
 
-    * accept    → `{:ok, {:accepted, %{turn_id, offset, client_msg_id}}}`
-    * duplicate → `{:ok, {:duplicate, ref}}` (ref == the original accept)
-    * stale     → `{:error, {:stale_turn, expected, actual}}`
+    * accept          → `{:ok, {:accepted, %{turn_id, offset, client_msg_id}}}`
+    * duplicate       → `{:ok, {:duplicate, ref}}` (ref == the original accept)
+    * stale           → `{:error, {:stale_turn, expected, actual}}`
+    * no live turn    → `{:error, :no_live_turn}`
+    * cmid reuse      → `{:error, :client_msg_id_reuse}` (same cmid, different payload)
+
+  ## A note on `assert_serialized_cas_order/2` (was `assert_one_winner/2`)
+
+  This checker drives two steer requests through `impl.resolve/2` via a plain
+  `Enum.map_reduce/3` in a seed-chosen order — it is a **pure sequential CAS
+  ordering** property, NOT a test of concurrent execution. It proves the CAS
+  semantics are order-independent (whichever request resolves first wins,
+  deterministically, for any schedule), which is exactly what a running turn's
+  real mailbox reduces genuinely concurrent callers to. What this checker does
+  NOT cover: an actual read-then-write race inside the session runtime's
+  process (two callers observing the same `state.turn_id` before either
+  resolves). That runtime-level race is a SEPARATE, currently-uncovered
+  obligation belonging to U6-I (the implementation unit), not this red suite.
   """
 
   import ExUnit.Assertions
@@ -99,12 +114,16 @@ defmodule Raxol.Agent.Red.SteerContours do
   end
 
   @doc """
-  POSITIVE: two concurrent steers built against the same observed turn resolve so
-  that EXACTLY ONE wins the CAS and the other gets a typed stale reject. The
-  schedule (application order) is chosen from `seed`, reproducibly. Returns the
-  winning `client_msg_id`.
+  POSITIVE: two steers built against the same observed turn, resolved in a
+  seed-determined SERIAL order, land so that EXACTLY ONE wins the CAS and the
+  other gets a typed stale reject. This is a serialized-CAS-ordering property
+  (a sequential `Enum.map_reduce`, see moduledoc) — it stands in for what a
+  running turn's real mailbox does to genuinely concurrent callers, but does
+  not itself exercise concurrency; the runtime-level race is U6-I's separate
+  obligation. The schedule (application order) is chosen from `seed`,
+  reproducibly. Returns the winning `client_msg_id`.
   """
-  def assert_one_winner(impl, seed) when is_integer(seed) do
+  def assert_serialized_cas_order(impl, seed) when is_integer(seed) do
     state = initial(@target)
     r1 = %Request{expected_turn_id: @target, client_msg_id: "m1", text: "steer-1"}
     r2 = %Request{expected_turn_id: @target, client_msg_id: "m2", text: "steer-2"}
@@ -218,5 +237,141 @@ defmodule Raxol.Agent.Red.SteerContours do
 
     assert length(after_second.log) == length(after_first.log),
            "a post-restart duplicate must NOT append a second durable event — log grew from #{length(after_first.log)} to #{length(after_second.log)}"
+  end
+
+  @doc """
+  POSITIVE (AD-13, the ABA hazard): the CAS token issued after every accept is
+  DISTINCT FROM EVERY PREVIOUSLY OBSERVED TOKEN in the turn's history, not
+  merely different from the immediately-current one. Drives three consecutive
+  accepts (each against the turn's own just-returned token) and asserts the
+  full sequence of four observed tokens (initial + after each accept) contains
+  no repeats — a token space that cycles back to an earlier value (a boolean
+  toggle, a repeatable counter) would fail this even though every individual
+  `swap(cur) != cur` check trivially passes.
+  """
+  def assert_token_uniqueness(impl) do
+    state = initial(@target)
+
+    {r1, s1} =
+      impl.resolve(state, %Request{
+        expected_turn_id: @target,
+        client_msg_id: "m-aba-1",
+        text: "one"
+      })
+
+    assert {:ok, {:accepted, _}} = r1,
+           "precondition: the first steer must be accepted, got: #{inspect(r1)}"
+
+    {r2, s2} =
+      impl.resolve(s1, %Request{
+        expected_turn_id: s1.turn_id,
+        client_msg_id: "m-aba-2",
+        text: "two"
+      })
+
+    assert {:ok, {:accepted, _}} = r2,
+           "precondition: the second steer (against the freshly swapped token) must be accepted, got: #{inspect(r2)}"
+
+    {r3, s3} =
+      impl.resolve(s2, %Request{
+        expected_turn_id: s2.turn_id,
+        client_msg_id: "m-aba-3",
+        text: "three"
+      })
+
+    assert {:ok, {:accepted, _}} = r3,
+           "precondition: the third steer (against the freshly swapped token) must be accepted, got: #{inspect(r3)}"
+
+    tokens = [state.turn_id, s1.turn_id, s2.turn_id, s3.turn_id]
+
+    assert length(Enum.uniq(tokens)) == length(tokens),
+           "every post-accept CAS token must be distinct from every previously observed token " <>
+             "(ABA hazard, AD-13) — observed tokens: #{inspect(tokens)}"
+  end
+
+  @doc """
+  NEGATIVE: a steer against a session with NO running turn (`state.turn_id ==
+  nil`) is REJECTED with `{:error, :no_live_turn}`, regardless of what
+  `expected_turn_id` the request carries — a `nil == nil` "match" must never
+  read as a real CAS accept, which would land a durable steer event on a
+  nonexistent turn. Zero model effect: state is unchanged.
+  """
+  def assert_no_live_turn_reject(impl) do
+    state = %TurnState{turn_id: nil, seen: %{}, log: []}
+    req = %Request{expected_turn_id: nil, client_msg_id: "m-idle", text: "hello?"}
+
+    {result, next} = impl.resolve(state, req)
+
+    assert result == {:error, :no_live_turn},
+           "a steer against a session with no running turn must reject {:error, :no_live_turn}, got: #{inspect(result)}"
+
+    assert next == state,
+           "a no-live-turn reject must have zero model effect — state changed:\n  before: #{inspect(state)}\n  after:  #{inspect(next)}"
+  end
+
+  @doc """
+  NEGATIVE (§5.1, the suppression vector): a `client_msg_id` re-delivered with
+  a DIFFERENT payload (`text`) than its original accept is NEVER treated as a
+  duplicate — it is REJECTED with `{:error, :client_msg_id_reuse}`. A reused
+  idempotency key carrying new content is a client bug or an attempt to
+  silently suppress new steering text under an old key; the original accept is
+  left untouched (zero model effect, nothing newly journaled).
+  """
+  def assert_dedup_payload_mismatch_rejected(impl) do
+    state = initial(@target)
+    req1 = %Request{expected_turn_id: @target, client_msg_id: "m-mismatch", text: "go left"}
+    {first, after_first} = impl.resolve(state, req1)
+
+    assert {:ok, {:accepted, _ref}} = first,
+           "precondition: the first delivery must be accepted, got: #{inspect(first)}"
+
+    req2 = %Request{
+      expected_turn_id: @target,
+      client_msg_id: "m-mismatch",
+      text: "go RIGHT instead"
+    }
+
+    {second, after_second} = impl.resolve(after_first, req2)
+
+    assert second == {:error, :client_msg_id_reuse},
+           "a re-delivered client_msg_id carrying a DIFFERENT payload must reject {:error, :client_msg_id_reuse} " <>
+             "(a reused cmid with new content is a client bug/attack, never a duplicate), got: #{inspect(second)}"
+
+    assert after_second == after_first,
+           "a client_msg_id_reuse reject must have zero model effect — state changed:\n  before: #{inspect(after_first)}\n  after:  #{inspect(after_second)}"
+  end
+
+  @doc """
+  POSITIVE: two steers each carrying a `nil` `client_msg_id` are NEVER deduped
+  against each other — `nil` is not a memoised idempotency key (there is no
+  client-supplied key to dedup on), so both land as distinct durable events.
+  Pins the current correct behavior against a future regression that treats
+  `nil` as an ordinary (colliding) dedup key.
+  """
+  def assert_nil_client_msg_id_not_deduped(impl) do
+    state = initial(@target)
+    req1 = %Request{expected_turn_id: @target, client_msg_id: nil, text: "first, no id"}
+    {first, after_first} = impl.resolve(state, req1)
+
+    assert {:ok, {:accepted, ref1}} = first,
+           "precondition: a nil client_msg_id steer must still be accepted, got: #{inspect(first)}"
+
+    req2 = %Request{
+      expected_turn_id: after_first.turn_id,
+      client_msg_id: nil,
+      text: "second, no id"
+    }
+
+    {second, after_second} = impl.resolve(after_first, req2)
+
+    assert {:ok, {:accepted, ref2}} = second,
+           "a SECOND nil client_msg_id steer against the (now current) turn must ALSO be accepted " <>
+             "— nil is never memoised for dedup, got: #{inspect(second)}"
+
+    assert ref1.offset != ref2.offset,
+           "two nil-client_msg_id steers must land as two DISTINCT durable events, got the same ref: #{inspect(ref1)}"
+
+    assert length(after_second.log) == 2,
+           "two nil-client_msg_id steers must both journal (no dedup on nil), got #{length(after_second.log)} events"
   end
 end

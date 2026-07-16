@@ -9,7 +9,7 @@ defmodule Raxol.Agent.Red.U6SteerControlsTest do
     * a CORRECT reference (`Raxol.Agent.Red.SteerReference`) — asserts every
       contour PASSES, so no red is vacuously failing (the checker can be
       satisfied); and
-    * three dead injectors (`Raxol.Agent.Red.SteerInjectors`) — asserts each one
+    * seven dead injectors (`Raxol.Agent.Red.SteerInjectors`) — asserts each one
       FAILS its target contour, so no red is a green lie (the checker catches its
       breakage).
 
@@ -26,8 +26,11 @@ defmodule Raxol.Agent.Red.U6SteerControlsTest do
 
   alias Raxol.Agent.Red.SteerInjectors.{
     DropDedup,
+    IgnorePayloadMismatch,
     InMemoryOnlyDedup,
     JournalBeforeCas,
+    NilTurnAccept,
+    RepeatableToken,
     SkipCas
   }
 
@@ -40,7 +43,11 @@ defmodule Raxol.Agent.Red.U6SteerControlsTest do
       SteerContours.assert_nothing_on_reject(SteerReference)
       SteerContours.assert_dedup(SteerReference)
       SteerContours.assert_dedup_survives_restart(SteerReference)
-      for seed <- 0..9, do: SteerContours.assert_one_winner(SteerReference, seed)
+      SteerContours.assert_token_uniqueness(SteerReference)
+      SteerContours.assert_no_live_turn_reject(SteerReference)
+      SteerContours.assert_dedup_payload_mismatch_rejected(SteerReference)
+      SteerContours.assert_nil_client_msg_id_not_deduped(SteerReference)
+      for seed <- 0..9, do: SteerContours.assert_serialized_cas_order(SteerReference, seed)
     end
   end
 
@@ -77,6 +84,30 @@ defmodule Raxol.Agent.Red.U6SteerControlsTest do
       end
 
       SteerFaults.record_fired(harness, :in_memory_only_dedup)
+
+      # (d) repeatable token: the CAS token cycles (ABA) → must fail
+      # token-uniqueness even though every individual swap looks fine.
+      assert_raise ExUnit.AssertionError, fn ->
+        SteerContours.assert_token_uniqueness(RepeatableToken)
+      end
+
+      SteerFaults.record_fired(harness, :repeatable_token)
+
+      # (e) nil-turn accept: skips the no-live-turn guard → must fail the
+      # no-live-turn contour.
+      assert_raise ExUnit.AssertionError, fn ->
+        SteerContours.assert_no_live_turn_reject(NilTurnAccept)
+      end
+
+      SteerFaults.record_fired(harness, :nil_turn_accept)
+
+      # (f) ignore-payload-mismatch: dedups on cmid alone → must fail the
+      # dedup-payload-mismatch contour.
+      assert_raise ExUnit.AssertionError, fn ->
+        SteerContours.assert_dedup_payload_mismatch_rejected(IgnorePayloadMismatch)
+      end
+
+      SteerFaults.record_fired(harness, :ignore_payload_mismatch)
 
       # Meta-invariant 1: a fault site that never fired = a dead injector.
       SteerFaults.assert_all_fired!(harness, {:u6_steer_controls, SteerFaults.sites()})
@@ -115,10 +146,10 @@ defmodule Raxol.Agent.Red.U6SteerControlsTest do
       SteerContours.assert_dedup(SkipCas)
     end
 
-    test "drop-dedup still lands, rejects stale steers, and picks one race winner" do
+    test "drop-dedup still lands, rejects stale steers, and picks one CAS-order winner" do
       SteerContours.assert_lands(DropDedup)
       SteerContours.assert_stale_reject(DropDedup)
-      for seed <- 0..9, do: SteerContours.assert_one_winner(DropDedup, seed)
+      for seed <- 0..9, do: SteerContours.assert_serialized_cas_order(DropDedup, seed)
     end
 
     test "in-memory-only dedup PASSES in-process dedup but FAILS only across restart" do
@@ -130,6 +161,47 @@ defmodule Raxol.Agent.Red.U6SteerControlsTest do
 
       assert_raise ExUnit.AssertionError, fn ->
         SteerContours.assert_dedup_survives_restart(InMemoryOnlyDedup)
+      end
+    end
+
+    test "repeatable-token still lands, rejects stale steers, dedups, and picks one CAS-order winner — only token uniqueness breaks" do
+      SteerContours.assert_lands(RepeatableToken)
+      SteerContours.assert_stale_reject(RepeatableToken)
+      SteerContours.assert_nothing_on_reject(RepeatableToken)
+      SteerContours.assert_dedup(RepeatableToken)
+      SteerContours.assert_dedup_survives_restart(RepeatableToken)
+      SteerContours.assert_no_live_turn_reject(RepeatableToken)
+      for seed <- 0..9, do: SteerContours.assert_serialized_cas_order(RepeatableToken, seed)
+
+      assert_raise ExUnit.AssertionError, fn ->
+        SteerContours.assert_token_uniqueness(RepeatableToken)
+      end
+    end
+
+    test "nil-turn-accept still lands, rejects stale (non-nil) steers, dedups, and is ABA-safe — only the no-live-turn guard breaks" do
+      SteerContours.assert_lands(NilTurnAccept)
+      SteerContours.assert_stale_reject(NilTurnAccept)
+      SteerContours.assert_nothing_on_reject(NilTurnAccept)
+      SteerContours.assert_dedup(NilTurnAccept)
+      SteerContours.assert_dedup_survives_restart(NilTurnAccept)
+      SteerContours.assert_token_uniqueness(NilTurnAccept)
+
+      assert_raise ExUnit.AssertionError, fn ->
+        SteerContours.assert_no_live_turn_reject(NilTurnAccept)
+      end
+    end
+
+    test "ignore-payload-mismatch still lands, rejects stale steers, dedups same-payload retries, and is ABA-safe — only payload-mismatch detection breaks" do
+      SteerContours.assert_lands(IgnorePayloadMismatch)
+      SteerContours.assert_stale_reject(IgnorePayloadMismatch)
+      SteerContours.assert_nothing_on_reject(IgnorePayloadMismatch)
+      SteerContours.assert_dedup(IgnorePayloadMismatch)
+      SteerContours.assert_dedup_survives_restart(IgnorePayloadMismatch)
+      SteerContours.assert_token_uniqueness(IgnorePayloadMismatch)
+      SteerContours.assert_no_live_turn_reject(IgnorePayloadMismatch)
+
+      assert_raise ExUnit.AssertionError, fn ->
+        SteerContours.assert_dedup_payload_mismatch_rejected(IgnorePayloadMismatch)
       end
     end
   end

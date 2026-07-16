@@ -16,23 +16,51 @@ defmodule Raxol.Agent.Steer do
   A steer command carries the `turn_id` it believes is running. `resolve/2` is
   the pure decision:
 
-    * **Accept** — `request.expected_turn_id == state.turn_id`. A durable steer
-      event is appended to the target turn (correct attribution), the CAS token
-      is swapped forward (so a second steer built against the old token loses),
-      and the `client_msg_id` is memoised for idempotency. Returns
-      `{:ok, {:accepted, ref}}`.
+    * **Accept** — `request.expected_turn_id == state.turn_id`, AND a turn is
+      actually running (`state.turn_id != nil`). A durable steer event is
+      appended to the target turn (correct attribution), the CAS token is
+      swapped forward, and the `client_msg_id` is memoised for idempotency.
+      Returns `{:ok, {:accepted, ref}}`.
     * **Stale reject** — `request.expected_turn_id != state.turn_id` (the turn
       already ended, or another steer won the race). Returns
       `{:error, {:stale_turn, expected, actual}}`. **Nothing is journaled and
       the state is unchanged** — no silent misdirection of input into the wrong
       turn (zero model effect).
-    * **Duplicate** — the same `(session, client_msg_id)` re-delivered (mobile
-      retry over a flaky wire, §5.1). Returns `{:ok, {:duplicate, ref}}`
-      referencing the ORIGINAL accept — one durable event, never a second turn.
+    * **No-live-turn reject** — `state.turn_id == nil` (an idle session with no
+      running turn), regardless of what `expected_turn_id` the request carries.
+      Returns `{:error, :no_live_turn}`, state unchanged. This is a DISTINCT
+      case from stale reject, checked before the general CAS comparison: `nil
+      == nil` must never read as "the CAS matched" — a steer landing on a
+      nonexistent turn is the same silent-misdirection hazard the CAS exists to
+      prevent, just at the boundary instead of mid-race.
+    * **Duplicate** — the same `(session, client_msg_id)` re-delivered with the
+      SAME payload (mobile retry over a flaky wire, §5.1). Returns
+      `{:ok, {:duplicate, ref}}` referencing the ORIGINAL accept — one durable
+      event, never a second turn.
+    * **`client_msg_id` reuse reject** — the same `(session, client_msg_id)`
+      re-delivered with a DIFFERENT payload (different `text`). This is never
+      treated as a duplicate: a reused idempotency key carrying new content is
+      a client bug or an attacker attempting to suppress new steering text
+      under an old key. Returns `{:error, :client_msg_id_reuse}`, state
+      unchanged — nothing is journaled, and the ORIGINAL accept is left
+      untouched.
 
   `resolve/2` returns `{result, next_state}`; the session threads the state
   through the running turn process (its mailbox serialises concurrent steers, so
   "racing" steers resolve in a well-defined order and exactly one wins the CAS).
+
+  ## CAS token uniqueness (ABA-safety, the load-bearing swap law)
+
+  The CAS token issued after every accept MUST be **distinct from every
+  previously observed token in that turn's history**, not merely different from
+  the immediately-current one. A weaker `swap(cur) != cur` law is
+  ABA-vulnerable: a token space that cycles (a boolean toggle, or a repeatable
+  counter) can return to an EQUAL value after the turn advances, and a steer
+  built against a stale earlier token would then wrongly pass the CAS once the
+  token cycles back — exactly the "silent misdirection into the wrong turn"
+  this mechanism exists to prevent. Implementations satisfy this with a
+  globally-unique generator (e.g. `System.unique_integer/1`), never a
+  finite/repeatable token space.
 
   ## Idempotency is journal-truth, not process memory (§5.1)
 
@@ -103,6 +131,8 @@ defmodule Raxol.Agent.Steer do
           {:ok, {:accepted, accepted_ref()}}
           | {:ok, {:duplicate, accepted_ref()}}
           | {:error, {:stale_turn, term(), term()}}
+          | {:error, :no_live_turn}
+          | {:error, :client_msg_id_reuse}
 
   @doc """
   Resolve a steer request against the running turn's steer state.
