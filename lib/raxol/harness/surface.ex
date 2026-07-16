@@ -674,17 +674,28 @@ defmodule Raxol.Harness.Surface do
       today (the block builder only constructs completed, sealed blocks),
       which leaves the classifier's mid-turn running exceptions dormant
       until a producer emits still-running entries.
-    * `pending_input?` -- true for the NEWEST block while the fixture
-      reveal is unfinished: this is the one-advance foldable window (see
-      the moduledoc's "Fold/jump and the seal-time-only gate"), expressed
-      in frontier terms. The window block's rendered form may still change
-      on user interaction (a fold toggle), which is exactly the print-once
-      hazard the frontier's pending-input gate exists for -- committing it
-      would freeze a form the user may still flip. The hold is
-      unconditional on turn state (matching the window's own semantics:
-      it releases on reveal completion, not on turn boundaries). When the
-      block builder later grows a completed-but-unsealed phase, this
-      derivation moves down a layer.
+    * `pending_input?` -- the frontier gate's invariant is "the rendered
+      form can still change on user interaction; print-once must not
+      freeze it," and this feed derives BOTH instances of it:
+
+        1. A LIVE `:approval` block (`Block.live?/1` with
+           `kind: :approval`) is, per `Block`'s own contract, a question
+           still waiting on the user -- the genuine awaiting-input
+           lifecycle, held in EVERY turn state and at any position (the
+           gate exists precisely so the idle relaxation can never seal an
+           unanswered prompt past a stale running flag). Dormant today --
+           the block builder only constructs sealed blocks -- but the
+           gate's contract holds the moment a producer emits live
+           approval blocks.
+        2. The NEWEST block while the fixture reveal is unfinished: the
+           one-advance foldable window (see the moduledoc's "Fold/jump
+           and the seal-time-only gate"), expressed in frontier terms --
+           a fold toggle is the pending interaction. The hold is
+           unconditional on turn state (matching the window's own
+           semantics: it releases on reveal completion, not on turn
+           boundaries). When the block builder later grows a
+           completed-but-unsealed phase, this derivation moves down a
+           layer.
   """
   @spec frontier_entries(t()) :: [SealFrontier.entry()]
   def frontier_entries(model) do
@@ -699,10 +710,19 @@ defmodule Raxol.Harness.Surface do
         kind: block.kind,
         committed?: index < model.painted_count,
         running?: Block.live?(block),
-        pending_input?: not reveal_finished? and index == total - 1
+        pending_input?:
+          awaiting_input?(block) or
+            (not reveal_finished? and index == total - 1)
       }
     end)
   end
+
+  # A live approval block is, per `Block`'s own contract, a question still
+  # waiting on the user -- the genuine awaiting-input feed for the
+  # frontier's pending-input gate. A sealed approval is an answered
+  # question and does not feed the gate. See `frontier_entries/1`'s doc.
+  defp awaiting_input?(block),
+    do: Block.live?(block) and block.kind == :approval
 
   @doc """
   The shared frontier consultation every consumer in this module goes
