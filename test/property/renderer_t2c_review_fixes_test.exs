@@ -366,11 +366,44 @@ defmodule Raxol.Property.RendererT2cReviewFixesTest do
       assert String.contains?(new_bytes, expected_fragment)
     end
 
-    test "a width-only resize (history_bottom unchanged) does not set needs_keyframe" do
+    test "a width-only resize now sets needs_keyframe (footer re-truncation + reflow seam)" do
+      # width 40 -> 80, height unchanged: `history_bottom` is row-based, so the
+      # REGION needs no re-emit (T2b's pinned regression, below, still holds) --
+      # but the footer may need re-truncation to the new width, and reflow-capable
+      # terminals rewrap sealed history on a WIDTH change. The latch keys on the
+      # width axis too, not just the vertical geometry, so the first repaint after
+      # a width resize fully re-renders rather than diffing against stale-width state.
       {_device, authority} = new_authority()
-      same_height_resized = InlineAuthority.resize(authority, 80, @height)
+      widened = InlineAuthority.resize(authority, 80, @height)
 
-      refute same_height_resized.needs_keyframe
+      assert widened.needs_keyframe
+    end
+
+    test "reflow_capable_resize telemetry fires on a WIDTH-only resize (the axis reflow actually happens on)" do
+      {_device, authority} = new_authority()
+      authority = %{authority | reflow_capable?: true}
+
+      ref = make_ref()
+      handler = {__MODULE__, ref}
+
+      :telemetry.attach(
+        handler,
+        [:raxol, :ui, :paint_authority, :reflow_capable_resize],
+        fn _event, _measure, meta, {pid, r} -> send(pid, {:reflow, r, meta}) end,
+        {self(), ref}
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # Width 40 -> 30 (SHRINK, the reflow-triggering direction), height
+      # unchanged. `history_bottom` is identical, so the old vertical-only gate
+      # never fired this event -- reflow happens on the horizontal axis, so the
+      # seam the future (B) reflow unit gates on must observe the width delta.
+      InlineAuthority.resize(authority, 30, @height)
+
+      assert_receive {:reflow, ^ref, meta}
+      assert meta.old_width == @width
+      assert meta.new_width == 30
     end
 
     test "resize/3 emits ONLY the DECSTBM re-set even with the latch change (T2b's pinned regression is untouched)" do

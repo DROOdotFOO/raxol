@@ -203,15 +203,19 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       whatever was on screen at that position before the resize (leftover
       history text, or a stale row `repaint/2` previously left blank via
       `\\e[K` at the OLD position). The `needs_keyframe` flag closes this:
-      a geometry-changing `resize/3` sets it (a pure state change — the
-      pinned T2b regression test asserting resize's ONLY new bytes are
-      `ScrollRegionManager`'s single DECSTBM re-set is untouched, since
-      setting a struct field emits no bytes); the NEXT `repaint/2` call
-      checks it FIRST and, if set, self-promotes to a full `keyframe/2`
-      (which clears the flag) instead of running its normal diff — so the
-      first repaint after any geometry change always fully re-renders the
-      footer at its current position, regardless of whether the logical
-      content changed.
+      a resize that changes EITHER axis — vertical geometry (`history_bottom`)
+      OR width — sets it (a pure state change — the pinned T2b regression test
+      asserting resize's ONLY new bytes are `ScrollRegionManager`'s single
+      DECSTBM re-set is untouched, since setting a struct field emits no bytes,
+      and a width-only resize re-emits no region bytes at all). Width matters
+      here even though the region doesn't move: a reflow-capable terminal
+      rewraps sealed history on a width change, and a width-shrink can wrap an
+      untruncated footer line past the pin, so the footer needs a clean
+      re-render at the new width. The NEXT `repaint/2` call checks the flag
+      FIRST and, if set, self-promotes to a full `keyframe/2` (which clears the
+      flag) instead of running its normal diff — so the first repaint after any
+      geometry OR width change always fully re-renders the footer at its current
+      position and width, regardless of whether the logical content changed.
   """
 
   @behaviour Raxol.UI.Rendering.PaintAuthority
@@ -598,14 +602,15 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   `\\e[2J`/`\\e[3J` or addresses a history row, so the composition
   inherits both properties.
 
-  When the resize actually changes geometry (`ScrollRegionManager
-  .geometry_changed?/2`), also sets `needs_keyframe: true` -- a pure state
-  change, zero bytes -- so the NEXT `repaint/2` call self-promotes to a
-  full `keyframe/2` instead of trusting a diff against footer content
-  whose on-screen ROW POSITIONS just moved (see the moduledoc's
-  "`needs_keyframe` latch" section). This is independent of
-  `reflow_capable?/1`/the telemetry hook below: the ghost-content risk
-  applies to every terminal's footer, not just the (B)-detection subset.
+  When the resize changes EITHER axis -- vertical geometry
+  (`ScrollRegionManager.geometry_changed?/2`) OR width (`t.width != width`) --
+  also sets `needs_keyframe: true` -- a pure state change, zero bytes -- so the
+  NEXT `repaint/2` call self-promotes to a full `keyframe/2` instead of trusting
+  a diff against footer content whose on-screen ROW POSITIONS moved (vertical)
+  or whose width-correct truncation went stale / whose sealed history rewrapped
+  (horizontal). This is independent of `reflow_capable?/1`/the telemetry hook
+  below: the ghost-content risk applies to every terminal's footer, not just the
+  (B)-detection subset.
   """
   @impl true
   def resize(%__MODULE__{region: region, next_row: next_row} = t, width, height) do
@@ -615,20 +620,34 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     geometry_changed? =
       ScrollRegionManager.geometry_changed?(old_region, new_region)
 
-    if geometry_changed? and t.reflow_capable? do
-      # The reflow-aware detection seam firing: this session's terminal
-      # is known, from the terminal-matrix probe, to reflow sealed
-      # history cleanly on a geometry-changing resize. NOTHING is
-      # re-emitted here — re-emission is a FUTURE unit's job (ship
-      # seal-time-only now; reflow-aware re-emission is a
-      # runtime-detected ADDITIVE upgrade). This telemetry event is the
-      # thin hook that unit gates on.
+    # `geometry_changed?` is the REGION-re-emission gate: it watches the
+    # VERTICAL axis (`history_bottom`, row-based) and is correctly blind to
+    # width — a width-only resize needs no DECSTBM bytes (T2b's pinned
+    # regression). But keyframe + reflow are HORIZONTAL concerns: reflow-
+    # capable terminals rewrap sealed history on a WIDTH change (RB probe,
+    # measured on 4/5 terminals — kitty is the no-reflow exception), and a
+    # width-shrink can wrap an untruncated footer line past the pin. So the
+    # latch and the reflow seam key on the width axis too; only the region
+    # re-emission stays vertical-only.
+    width_changed? = t.width != width
+    reflow_relevant? = geometry_changed? or width_changed?
+
+    if reflow_relevant? and t.reflow_capable? do
+      # The (B)-detection seam firing: this session's terminal is known,
+      # from RB's real-hardware C-4 probe, to reflow sealed history
+      # cleanly on a geometry-changing resize. NOTHING is re-emitted here
+      # — re-emission is a FUTURE unit's job (D-PA RULING: ship (A), (B)
+      # is a runtime-detected ADDITIVE upgrade). This telemetry event is
+      # the thin hook that unit gates on — it carries BOTH axes so the (B)
+      # unit can tell a rewrapping width change from a pure row change.
       :telemetry.execute(
         [:raxol, :ui, :paint_authority, :reflow_capable_resize],
         %{},
         %{
           old_region_top: ScrollRegionManager.history_bottom(old_region),
-          new_region_top: ScrollRegionManager.history_bottom(new_region)
+          new_region_top: ScrollRegionManager.history_bottom(new_region),
+          old_width: t.width,
+          new_width: width
         }
       )
     end
@@ -641,7 +660,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         # re-emission) — only where FUTURE appends resume is clamped to
         # the (possibly smaller) new bottom row.
         next_row: min(next_row, ScrollRegionManager.history_bottom(new_region)),
-        needs_keyframe: t.needs_keyframe or geometry_changed?
+        needs_keyframe: t.needs_keyframe or reflow_relevant?
     }
   end
 
