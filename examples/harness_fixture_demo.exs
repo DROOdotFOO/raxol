@@ -20,7 +20,10 @@
 #
 # Keys while running: `z` fold/unfold the focused block, `j`/`k` move
 # focus (once off the composer -- see `Surface.focus_transcript/1`), `Tab`
-# queues a steer stub, `Esc` shows an interrupt stub (no agent lane in
+# queues a steer stub, `Ctrl-E` opens the composer draft in $VISUAL/$EDITOR
+# (the harness suspends its terminal claim while the editor owns the tty,
+# then resumes and reloads the edited draft -- see
+# `Raxol.Harness.EditorSession`), `Esc` shows an interrupt stub (no agent lane in
 # fixture mode -- see `Raxol.Harness.Surface`'s moduledoc, precondition
 # #6), `q` quits cleanly WHEN THE COMPOSER BUFFER IS EMPTY (Ctrl-C does
 # not: raw mode disables SIGINT delivery, per `Raxol.Terminal.InlineDriver`'s
@@ -86,7 +89,11 @@ defmodule Raxol.Examples.HarnessFixtureDemo do
         width: width,
         rows: rows,
         footer_rows: @footer_rows,
-        tty?: tty?
+        tty?: tty?,
+        # Ctrl-E hands the composer draft to $VISUAL/$EDITOR (real tty
+        # runs only -- a piped/CI run has no terminal to hand over, and
+        # Surface renders its honest stub notice instead).
+        editor_session: if(tty?, do: Raxol.Harness.EditorSession)
       )
 
     try do

@@ -838,6 +838,50 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     end)
   end
 
+  @doc """
+  Re-asserts the DECSTBM history/footer split UNCONDITIONALLY (via
+  `ScrollRegionManager.reassert/1`, one `CSI 1;(H-N) r` write regardless
+  of whether geometry changed) and latches `needs_keyframe: true` -- the
+  resume entry point after an external process owned the terminal (an
+  `$EDITOR` session that released the region via the canonical suspend
+  bytes).
+
+  ## Why `resize/3` alone cannot do this
+
+  `resize/3`'s region re-emission is geometry-gated (see
+  `ScrollRegionManager.resize/2`'s "Geometry-gated resize emission"):
+  when the terminal was NOT resized while suspended, `history_bottom` is
+  unchanged and resize writes ZERO region bytes -- silently leaving the
+  region released even though this struct still believes the footer is
+  pinned. The documented resume composition is therefore
+
+      authority |> resize(new_w, new_h) |> reassert()
+
+  -- `resize/3` handles a mid-suspend geometry change (and may emit its
+  own region bytes for it; the duplicate emit from `reassert/1` in that
+  case is harmless -- identical, idempotent bytes), `reassert/1`
+  guarantees the pin for the unchanged case.
+
+  ## Why the latch instead of an explicit keyframe
+
+  The editor repainted arbitrary screen content while it owned the tty,
+  so the last-painted `footer_lines` no longer describe what is
+  on-screen -- a logical diff against them would be a lie. Setting
+  `needs_keyframe` (a pure state change, zero bytes) makes the NEXT
+  `repaint/2` self-promote to a full `keyframe/2` (the existing
+  post-resize ghost-content mechanism, see the moduledoc), so the first
+  ordinary footer paint after resume fully re-renders every footer row
+  with no new paint code and no second keyframe call site.
+
+  Never emits `\\e[2J`/`\\e[3J`; never addresses a history row. Sealed
+  history above the footer survives the whole suspend/resume bracket
+  untouched by construction.
+  """
+  @spec reassert(t()) :: t()
+  def reassert(%__MODULE__{region: region} = t) do
+    %{t | region: ScrollRegionManager.reassert(region), needs_keyframe: true}
+  end
+
   @impl true
   def region_top(%__MODULE__{region: region}),
     do: ScrollRegionManager.history_bottom(region)

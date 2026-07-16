@@ -49,12 +49,18 @@ defmodule Raxol.UI.Harness.Keymap do
 
   Two classes of bind:
 
-    * **Always live** -- fire regardless of `context.composing?`. Only ESC
-      (`:interrupt`) and the steer-submit key (`:tab`, `:steer`) are in this
-      class, because both are non-printable control keys that can never be
-      part of typed text, and ESC in particular must never be swallowed by
-      whatever currently has focus (AD-1: interrupt is a supervised kill
-      now, not a cooperative flag queued behind typing).
+    * **Always live** -- fire regardless of `context.composing?`. ESC
+      (`:interrupt`), the steer-submit key (`:tab`, `:steer`), and the
+      Ctrl+E chord (`:edit_draft` -- hand the composer draft to
+      `$EDITOR`) are in this class, because all three are non-printable
+      control keys/chords that can never be part of typed text, and ESC
+      in particular must never be swallowed by whatever currently has
+      focus (AD-1: interrupt is a supervised kill now, not a cooperative
+      flag queued behind typing). Ctrl+E is the first `char:`-kind chord
+      in the table -- a `char:` bind that declares `mods:` requires an
+      EXACT modifier match against the normalized event (mirroring the
+      `key:`-kind rule below) instead of the printable-char path, which
+      is nil under ctrl by design.
     * **Guarded by `not composing?`** -- the block-navigation binds
       (`fold-toggle`, `jump_next`, `jump_prev`). These use plain printable
       letters (`z`/`j`/`k`), and a prior flat-keymap prototype's named bug
@@ -209,6 +215,7 @@ defmodule Raxol.UI.Harness.Keymap do
   @type command_type ::
           :interrupt
           | :steer
+          | :edit_draft
           | :fold_toggle
           | :jump_next
           | :jump_prev
@@ -240,6 +247,19 @@ defmodule Raxol.UI.Harness.Keymap do
     %{key: :escape, command_type: :overlay_dismiss, guard: :overlay},
     %{key: :escape, command_type: :interrupt, guard: :always},
     %{key: :tab, command_type: :steer, guard: :always},
+    # Ctrl+E: hand the composer draft to $EDITOR. A `char:`-kind bind that
+    # DECLARES `mods:` -- the tui-steal promise cashing in for char-kind
+    # binds (see the moduledoc): the match spec grew a `mods:` field, the
+    # walking loop did not change. A ctrl chord can never be typed text
+    # (`InputEvent.printable_char/1` is nil under ctrl), so this is
+    # `:always`, same class as ESC/Tab; the command acts on the composer's
+    # buffer whether or not the composer has focus.
+    %{
+      char: "e",
+      mods: %{ctrl: true, alt: false, shift: false, meta: false},
+      command_type: :edit_draft,
+      guard: :always
+    },
     %{char: "z", command_type: :fold_toggle, guard: :not_composing},
     %{char: "j", command_type: :jump_next, guard: :not_composing},
     %{char: "k", command_type: :jump_prev, guard: :not_composing}
@@ -314,6 +334,19 @@ defmodule Raxol.UI.Harness.Keymap do
   @spec matches?(bind(), InputEvent.t(), context()) :: boolean()
   def matches?(%{key: key} = bind, norm, context) do
     InputEvent.key(norm) == key and mods_match?(bind, norm) and
+      guard_passes?(bind, context)
+  end
+
+  # A `char:`-kind bind that DECLARES `mods:` is a chord: match on the raw
+  # normalized `char` + an EXACT `mods` map, NOT via
+  # `InputEvent.printable_char/1` -- which is deliberately `nil` whenever
+  # ctrl/alt/meta is held (that nil is exactly why undeclared-mods char
+  # binds below never see chords, and it stays untouched). This clause
+  # must precede the plain char clause: a bind map carrying both `:char`
+  # and `:mods` would otherwise fall into the printable_char path and
+  # never match its own chord.
+  def matches?(%{char: char, mods: required_mods} = bind, norm, context) do
+    match?(%{kind: :char, char: ^char}, norm) and norm.mods == required_mods and
       guard_passes?(bind, context)
   end
 

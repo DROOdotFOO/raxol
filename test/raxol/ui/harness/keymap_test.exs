@@ -106,6 +106,37 @@ defmodule Raxol.UI.Harness.KeymapTest do
                %{type: :jump_prev, payload: %{}}
     end
 
+    test "Ctrl+E (ANSI parser shape, raw 0x05 byte) -> :edit_draft, even while composing" do
+      assert resolve_from(parser_event(<<5>>), %{composing?: true}) ==
+               %{type: :edit_draft, payload: %{}}
+    end
+
+    test "Ctrl+E (Event.key_event/3 shape) -> :edit_draft regardless of composing?" do
+      for composing? <- [true, false] do
+        assert resolve_from(Event.key_event("e", :pressed, [:ctrl]), %{
+                 composing?: composing?
+               }) == %{type: :edit_draft, payload: %{}}
+      end
+    end
+
+    test "plain 'e' while composing stays :passthrough (ordinary character insertion)" do
+      assert resolve_from(Event.key_event("e", :pressed, []), %{
+               composing?: true
+             }) == :passthrough
+    end
+
+    test "plain 'e' while NOT composing is also :passthrough ('e' is not a nav bind)" do
+      assert resolve_from(Event.key_event("e", :pressed, []), %{
+               composing?: false
+             }) == :passthrough
+    end
+
+    test "Ctrl+Alt+E -> :passthrough (chord binds require an EXACT mods match)" do
+      assert resolve_from(Event.key_event("e", :pressed, [:ctrl, :alt]), %{
+               composing?: true
+             }) == :passthrough
+    end
+
     test "an unbound key normalizes but resolves to :passthrough" do
       assert resolve_from(Event.key_event("q", :pressed, []), %{
                composing?: false
@@ -240,6 +271,13 @@ defmodule Raxol.UI.Harness.KeymapTest do
 
     defp fixture_for(%{key: key}),
       do: InputEvent.normalize(Event.key_event(key, :pressed, []))
+
+    # A char-kind CHORD bind (declared `mods:`) needs its modifiers in the
+    # fixture event, else the exact-mods match correctly rejects it.
+    defp fixture_for(%{char: char, mods: mods}) do
+      modifiers = for {mod, true} <- mods, do: mod
+      InputEvent.normalize(Event.key_event(char, :pressed, modifiers))
+    end
 
     defp fixture_for(%{char: char}),
       do: InputEvent.normalize(Event.key_event(char, :pressed, []))
