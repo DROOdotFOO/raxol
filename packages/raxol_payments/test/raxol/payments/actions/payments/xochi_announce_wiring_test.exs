@@ -25,7 +25,17 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
 
   # Xochi worker sim: quote -> execute -> completed status. The announce POST is
   # captured on a separate plug so the swap and the announce stay decoupled.
-  defp xochi_plug do
+  @completed_status %{
+    "intentId" => "int_1",
+    "status" => "completed",
+    "txHash" => "0xabc",
+    "terminal" => true
+  }
+
+  # A status that never reaches terminal, so the poll times out (stranded).
+  @nonterminal_status %{"intentId" => "int_1", "status" => "executing", "terminal" => false}
+
+  defp xochi_plug(status_body \\ @completed_status) do
     fn conn ->
       case conn.request_path do
         "/api/intent/quote" ->
@@ -56,12 +66,7 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
           })
 
         "/api/intent/int_1/status" ->
-          Req.Test.json(conn, %{
-            "intentId" => "int_1",
-            "status" => "completed",
-            "txHash" => "0xabc",
-            "terminal" => true
-          })
+          Req.Test.json(conn, status_body)
       end
     end
   end
@@ -157,6 +162,27 @@ defmodule Raxol.Payments.Actions.Payments.XochiAnnounceWiringTest do
                PollXochiStatus.run(%{intent_id: "int_1", timeout_ms: 2000}, ctx)
 
       body = assert_announce_verifies("completed")
+      assert body["event"]["intentId"] == "int_1"
+    end
+
+    test "PollXochiStatus fires a stranded announce when the poll times out" do
+      ctx =
+        with_stream(
+          context(%{
+            xochi_config: %{
+              base_url: "https://xochi.test",
+              req_options: [plug: xochi_plug(@nonterminal_status)]
+            }
+          })
+        )
+
+      assert {:ok, _} = ExecuteXochiIntent.run(params(), ctx)
+      assert_announce_verifies("executing")
+
+      assert {:error, %{reason: :stranded}} =
+               PollXochiStatus.run(%{intent_id: "int_1", timeout_ms: 40, interval_ms: 10}, ctx)
+
+      body = assert_announce_verifies("stranded")
       assert body["event"]["intentId"] == "int_1"
     end
   end

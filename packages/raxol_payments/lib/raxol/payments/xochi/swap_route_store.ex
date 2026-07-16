@@ -89,6 +89,22 @@ defmodule Raxol.Payments.Xochi.SwapRouteStore do
 
   def take(_intent_id), do: :error
 
+  @doc """
+  Peek (read without deleting) the event stashed for `intent_id`. Same result as
+  `take/1` but leaves the entry in place, so a provisional read (a stranded
+  intent that may still resolve to a real terminal status later) does not consume
+  the route the eventual terminal announce needs.
+  """
+  @spec peek(String.t()) :: {:ok, map()} | :error
+  def peek(intent_id) when is_binary(intent_id) do
+    ensure_started()
+    GenServer.call(__MODULE__, {:peek, intent_id})
+  catch
+    :exit, _ -> :error
+  end
+
+  def peek(_intent_id), do: :error
+
   @doc false
   @spec ensure_started() :: :ok
   def ensure_started do
@@ -119,19 +135,20 @@ defmodule Raxol.Payments.Xochi.SwapRouteStore do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:take, intent_id}, _from, state) do
-    reply =
-      case :ets.take(@table, intent_id) do
-        [{^intent_id, event, expiry}] ->
-          if expiry >= System.monotonic_time(:millisecond),
-            do: {:ok, event},
-            else: :error
-
-        _ ->
-          :error
-      end
-
-    {:reply, reply, state}
+    {:reply, fresh_entry(:ets.take(@table, intent_id), intent_id), state}
   end
+
+  def handle_manager_call({:peek, intent_id}, _from, state) do
+    {:reply, fresh_entry(:ets.lookup(@table, intent_id), intent_id), state}
+  end
+
+  # Shared result shape for take (delete-on-read) and peek (read-only): an entry
+  # is returned only if present and unexpired.
+  defp fresh_entry([{intent_id, event, expiry}], intent_id) do
+    if expiry >= System.monotonic_time(:millisecond), do: {:ok, event}, else: :error
+  end
+
+  defp fresh_entry(_rows, _intent_id), do: :error
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:remember, intent_id, event, expiry}, state) do
