@@ -1,10 +1,24 @@
 defmodule Raxol.Agent.SpendGate do
   @moduledoc """
   U7 — reserve-before-call at the harness primary-loop tool/provider boundary
-  (AD-6a). **Skeleton only** — every function here returns
-  `{:error, :not_implemented}`. The permanent U7-R red suite
-  (`test/raxol/agent/red/u7_spend_gate_red_test.exs`) is authored against this
-  seam *before* the implementation exists (the red-first fan-out).
+  (AD-6a). The permanent U7-R red suite
+  (`test/raxol/agent/red/u7_spend_gate_red_test.exs`) — authored against this
+  seam *before* the implementation existed (the red-first fan-out) — drives
+  these functions and is now GREEN.
+
+  ## Deferred (documented follow-ups, post-U11)
+
+    * **`cost_ref` ↔ journal tie.** The gate emits its reserve/call/settle
+      records through the injected `context.emit` sink; binding that sink to the
+      real durable per-session journal (`family: :meta` records carrying
+      `cost_ref`, per `harness-freeze-contracts.md` §2.1) is U7-I wiring, not
+      done here.
+    * **Budget-side release on settle.** `settle/3` records the authoritative
+      `actual`; the refund of `estimate - actual` is *derivable* from the
+      `(reserve, settle)` pair. Wiring that release back to the real
+      `Raxol.Payments.Ledger.try_spend/5`-shaped budget is U7-I work — the
+      frozen `context` exposes only the reserve seam, and the reserve/refund is
+      a Gate↔budget-internal step (freeze §"Settlement is internal").
 
   ## The law
 
@@ -72,6 +86,8 @@ defmodule Raxol.Agent.SpendGate do
   part of this skeleton.
   """
 
+  alias Raxol.Agent.SpendGate.Reservations
+
   @typedoc """
   Context passed to every SpendGate call. Frozen fields:
 
@@ -86,7 +102,8 @@ defmodule Raxol.Agent.SpendGate do
   """
   @type context :: %{
           required(:emit) => (map() -> :ok),
-          required(:try_reserve) => (non_neg_integer() -> {:ok, non_neg_integer()} | {:error, :over_limit}),
+          required(:try_reserve) => (non_neg_integer() ->
+                                       {:ok, non_neg_integer()} | {:error, :over_limit}),
           optional(atom()) => term()
         }
 
@@ -103,24 +120,44 @@ defmodule Raxol.Agent.SpendGate do
   @type reservation :: %{cost_ref: cost_ref(), estimate: estimate()}
 
   @typedoc "Why a reserve was refused (fail-closed)."
-  @type refusal :: :over_run_cap | :over_session_cap | :invalid_amount | atom()
+  @type refusal ::
+          :over_run_cap
+          | :over_session_cap
+          | :over_limit
+          | :invalid_amount
+          | :duplicate_reserve
+          | atom()
 
   @doc """
   Atomically reserve `estimate` tokens for the spend-bearing call `cost_ref`,
-  against the run + session caps (the `try_spend` shape). On success, journals a
-  `reserve` record and returns `{:ok, reservation}`. On refusal, journals a
-  `reserve_refused` record and returns `{:error, {:refused, reason}}` — and the
-  caller MUST NOT make the call (fail-closed).
+  against the caps behind `context.try_reserve` (the frozen `try_spend` shape).
+  On success, journals a `reserve` record and returns `{:ok, reservation}`.
+
+  Fail-closed refusals — the caller MUST NOT make the call:
+
+    * a non-positive / non-integer (non-finite) `estimate` ⇒
+      `{:error, {:refused, :invalid_amount}}` (journals `reserve_refused`, never
+      touches the budget);
+    * a live (unsettled) reservation already exists for `cost_ref` ⇒
+      `{:error, {:refused, :duplicate_reserve}}` (reserve-once — journals
+      NOTHING, never touches the budget: no second reserve record);
+    * `context.try_reserve` rejects the amount ⇒
+      `{:error, {:refused, reason}}` (releases the claim taken for `cost_ref`
+      and journals `reserve_refused` with `reason`).
   """
   @callback reserve(context :: context(), cost_ref(), estimate()) ::
               {:ok, reservation()} | {:error, {:refused, refusal()}}
 
   @doc """
   Settle a reservation with the `actual` cost once the call returned. Journals a
-  `settle` record and refunds `estimate - actual` to the budget internally. The
-  `settle` record is authoritative; the refund is derivable from the pair.
+  `settle` record; the refund of `estimate - actual` is derivable from the
+  `(reserve, settle)` pair, so the `settle` record is authoritative. Settling
+  the same reservation token twice is rejected (a replay would double-refund and
+  inflate the budget): the first settle wins and returns `:ok`, the replay
+  journals nothing and returns `{:error, {:already_settled, cost_ref()}}`.
   """
-  @callback settle(context :: context(), reservation(), actual()) :: :ok
+  @callback settle(context :: context(), reservation(), actual()) ::
+              :ok | {:error, {:already_settled, cost_ref()}}
 
   @doc """
   Reserve-before-call combinator — the single seam the primary loop wraps around
@@ -140,17 +177,127 @@ defmodule Raxol.Agent.SpendGate do
             ) ::
               {:ok, result :: term()} | {:error, {:reserve_refused, refusal()}}
 
-  # --- skeleton: not implemented until U7 lands -----------------------------
-  #
-  # These stubs let the red suite compile and RUN (red) against a real symbol.
-  # U7 replaces the bodies; the red suite turns green when it does.
+  # --- implementation (U7 / AD-6a) ------------------------------------------
 
-  @doc false
-  def reserve(_context, _cost_ref, _estimate), do: {:error, :not_implemented}
+  @doc """
+  Reserve `estimate` for `cost_ref`. See the `reserve/3` callback for the
+  success and fail-closed refusal contract.
+  """
+  @spec reserve(context(), cost_ref(), estimate()) ::
+          {:ok, reservation()} | {:error, {:refused, refusal()}}
+  def reserve(context, cost_ref, estimate) do
+    Reservations.ensure_started()
 
-  @doc false
-  def settle(_context, _reservation, _actual), do: {:error, :not_implemented}
+    if valid_amount?(estimate) do
+      reserve_valid(context, cost_ref, estimate)
+    else
+      # Non-positive / non-finite estimate — fail closed BEFORE any budget or
+      # claim mutation. Mirrors the payments Ledger's non-positive/non-finite
+      # guard (`Raxol.Payments.Ledger` check_amount_positive).
+      emit(context, %{kind: :reserve_refused, cost_ref: cost_ref, reason: :invalid_amount})
+      {:error, {:refused, :invalid_amount}}
+    end
+  end
 
-  @doc false
-  def around(_context, _cost_ref, _estimate, _call_fun), do: {:error, :not_implemented}
+  defp reserve_valid(context, cost_ref, estimate) do
+    scope = reserve_scope(context)
+
+    case Reservations.claim(scope, cost_ref) do
+      {:error, :duplicate} ->
+        # A live reservation for this cost_ref already exists (reserve-once).
+        # Refuse without a second reserve record and without touching the budget.
+        {:error, {:refused, :duplicate_reserve}}
+
+      :ok ->
+        reserve_against_budget(context, cost_ref, estimate, scope)
+    end
+  end
+
+  defp reserve_against_budget(context, cost_ref, estimate, scope) do
+    # The FROZEN reserve seam — the same closure the caller composed over the
+    # run/session budget, atomic under concurrency (`Ledger.try_spend` shape).
+    case context.try_reserve.(estimate) do
+      {:ok, _remaining} ->
+        emit(context, %{kind: :reserve, cost_ref: cost_ref, estimate: estimate})
+
+        {:ok,
+         %{
+           cost_ref: cost_ref,
+           estimate: estimate,
+           scope: scope,
+           settle_guard: :atomics.new(1, [])
+         }}
+
+      {:error, reason} ->
+        # Budget refused: release the claim we took (fail-closed — no call will
+        # happen) and journal a typed refusal.
+        Reservations.release(scope, cost_ref)
+        emit(context, %{kind: :reserve_refused, cost_ref: cost_ref, reason: reason})
+        {:error, {:refused, reason}}
+    end
+  end
+
+  @doc """
+  Settle a reservation with its `actual`. See the `settle/3` callback contract
+  (double-settle is rejected).
+  """
+  @spec settle(context(), reservation(), actual()) ::
+          :ok | {:error, {:already_settled, cost_ref()}}
+  def settle(context, reservation, actual) do
+    %{scope: scope, cost_ref: cost_ref, settle_guard: guard} = reservation
+    Reservations.ensure_started()
+
+    # Atomic settle-once: flip 0 -> 1. `:atomics.compare_exchange/4` returns
+    # `:ok` when it matched (first settle) or the current value (already 1) on a
+    # replay — so two concurrent settles of one token can never both win.
+    case :atomics.compare_exchange(guard, 1, 0, 1) do
+      :ok ->
+        # First settle: release the active claim and journal the authoritative
+        # `actual`. Budget-side refund of `estimate - actual` is a deferred
+        # follow-up (see moduledoc) — derivable from the (reserve, settle) pair.
+        Reservations.release(scope, cost_ref)
+        emit(context, %{kind: :settle, cost_ref: cost_ref, actual: actual})
+        :ok
+
+      _already_settled ->
+        # Replayed reservation token: reject, journal nothing (a second settle
+        # would double-refund / inflate the budget).
+        {:error, {:already_settled, cost_ref}}
+    end
+  end
+
+  @doc """
+  Reserve-before-call combinator. See the `around/4` callback contract. On a
+  successful reserve, invokes `call_fun` (which reports `{actual, result}`),
+  journals the `call`, settles, and returns `{:ok, result}`. On a refused
+  reserve, `call_fun` is NEVER invoked and it returns
+  `{:error, {:reserve_refused, reason}}`.
+  """
+  @spec around(context(), cost_ref(), estimate(), (-> {actual(), term()})) ::
+          {:ok, term()} | {:error, {:reserve_refused, refusal()}}
+  def around(context, cost_ref, estimate, call_fun) do
+    case reserve(context, cost_ref, estimate) do
+      {:ok, reservation} ->
+        {actual, result} = call_fun.()
+        emit(context, %{kind: :call, cost_ref: cost_ref})
+        settle(context, reservation, actual)
+        {:ok, result}
+
+      {:error, {:refused, reason}} ->
+        {:error, {:reserve_refused, reason}}
+    end
+  end
+
+  # --- internals ------------------------------------------------------------
+
+  defp emit(context, record), do: context.emit.(record)
+
+  # The reservation namespace = the frozen `context.try_reserve` closure itself:
+  # guaranteed present, and unique per budget scope (see Reservations).
+  defp reserve_scope(context), do: context.try_reserve
+
+  # A valid token estimate is a positive integer. Rejects 0, negatives, floats,
+  # and non-numbers (non-finite) — fail-closed, mirroring the payments Ledger.
+  defp valid_amount?(estimate) when is_integer(estimate) and estimate > 0, do: true
+  defp valid_amount?(_estimate), do: false
 end
