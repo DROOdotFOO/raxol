@@ -104,9 +104,11 @@ defmodule Raxol.Agent.Meta do
   @doc """
   Decode a journal record into an `Event` (reader-tolerant seam).
 
-  Always `{:ok, event}` — an unknown meta type / source / status is preserved
-  raw (the `type` atom is materialized, the payload kept as-is) and never
-  errors. Missing envelope keys decode to the frozen grandfather defaults
+  Always `{:ok, event}` — a KNOWN meta type / source / status resolves to its
+  interned atom, while an UNKNOWN token is preserved RAW as a binary (never
+  materialized into a fresh atom — an atom-table DoS guard) and the payload is
+  kept as-is; the seam never errors. Missing envelope keys decode to the frozen
+  grandfather defaults
   (`scope: :session`, `provenance: %{source: :primary, trust: :trusted}`,
   `actor: nil`).
   """
@@ -119,11 +121,11 @@ defmodule Raxol.Agent.Meta do
        session_id: Map.get(record, "session_id"),
        turn_id: Map.get(record, "turn_id"),
        ts: Map.get(record, "ts", 0),
-       family: to_existing_or_new_atom(Map.get(record, "family"), :loop),
-       type: to_existing_or_new_atom(Map.get(record, "type"), nil),
-       tier: to_existing_or_new_atom(Map.get(record, "tier"), :durable),
+       family: decode_token(Map.get(record, "family"), :loop),
+       type: decode_token(Map.get(record, "type"), nil),
+       tier: decode_token(Map.get(record, "tier"), :durable),
        payload: Map.get(record, "payload") || %{},
-       scope: to_existing_or_new_atom(Map.get(record, "scope"), :session),
+       scope: decode_token(Map.get(record, "scope"), :session),
        provenance: decode_provenance(Map.get(record, "provenance")),
        actor: decode_actor_field(Map.get(record, "actor")),
        # branch_id is written omit-when-"main" (I2); absent decodes back to the
@@ -225,7 +227,7 @@ defmodule Raxol.Agent.Meta do
 
   # Absent actor => system, BY RULE (never inferred as human/agent).
   defp fold_actor(%{"actor" => %{"kind" => k} = a}) do
-    %{kind: to_existing_or_new_atom(k, :system), id: Map.get(a, "id")}
+    %{kind: decode_token(k, :system), id: Map.get(a, "id")}
   end
 
   defp fold_actor(_), do: %{kind: :system}
@@ -288,13 +290,13 @@ defmodule Raxol.Agent.Meta do
 
   defp index(records), do: Map.new(records, fn r -> {offset(r), r} end)
 
-  defp family(%{"family" => f}) when is_binary(f), do: String.to_atom(f)
+  defp family(%{"family" => f}) when is_binary(f), do: decode_token(f, :loop)
   defp family(%{"family" => f}) when is_atom(f) and not is_nil(f), do: f
   defp family(_), do: :loop
 
   defp meta?(r), do: family(r) == :meta
 
-  defp type(%{"type" => t}) when is_binary(t), do: String.to_atom(t)
+  defp type(%{"type" => t}) when is_binary(t), do: decode_token(t, nil)
   defp type(%{"type" => t}) when is_atom(t), do: t
   defp type(_), do: nil
 
@@ -304,7 +306,7 @@ defmodule Raxol.Agent.Meta do
   defp refs(%{"payload" => %{"refs" => refs}}) when is_list(refs), do: refs
   defp refs(_), do: []
 
-  defp scope(%{"scope" => s}) when is_binary(s), do: String.to_atom(s)
+  defp scope(%{"scope" => s}) when is_binary(s), do: decode_token(s, :session)
   defp scope(%{"scope" => s}) when is_atom(s) and not is_nil(s), do: s
   defp scope(_), do: :session
 
@@ -336,25 +338,33 @@ defmodule Raxol.Agent.Meta do
   # (a present-but-unrecognized value must NOT read as trusted — §2.4). Absent
   # provenance is handled by the grandfather clause below (:trusted default).
   defp decode_provenance(%{"trust" => trust} = p) do
-    %{source: to_existing_or_new_atom(Map.get(p, "source"), :primary), trust: trust_token(trust)}
+    %{source: decode_token(Map.get(p, "source"), :primary), trust: trust_token(trust)}
   end
 
   defp decode_provenance(%{source: _, trust: _} = provenance), do: provenance
   defp decode_provenance(_), do: @default_provenance
 
   defp decode_actor_field(%{"kind" => k} = a) do
-    %{kind: to_existing_or_new_atom(k, :system), id: Map.get(a, "id")}
+    %{kind: decode_token(k, :system), id: Map.get(a, "id")}
   end
 
   defp decode_actor_field(%{kind: _} = actor), do: actor
   defp decode_actor_field(_), do: nil
 
-  # The reader-tolerant seam must materialize unknown atoms (future meta types /
-  # sources / scopes) from a trusted, self-produced journal — String.to_atom is
-  # intentional here (not user input; the journal is the session's own file).
-  defp to_existing_or_new_atom(nil, default), do: default
-  defp to_existing_or_new_atom(value, _default) when is_atom(value), do: value
+  # Bounded, non-atom-creating decode of a journal token. Every registered
+  # family / type / tier / scope / source / actor-kind is already interned, so a
+  # KNOWN token resolves to its atom; an UNKNOWN token from a version-skewed,
+  # corrupt, or oversized journal is PRESERVED RAW as a binary (contract §0.2
+  # "preserve raw", not "materialize atom"), never turned into a fresh atom.
+  # `String.to_atom/1` on unbounded journal input exhausts the atom table and
+  # crashes the VM — a DoS this codebase forbids exactly (command.ex:75,
+  # frame.ex:110). Never raises: the reader seam is tolerant.
+  defp decode_token(nil, default), do: default
+  defp decode_token(value, _default) when is_atom(value), do: value
 
-  defp to_existing_or_new_atom(value, _default) when is_binary(value),
-    do: String.to_atom(value)
+  defp decode_token(value, _default) when is_binary(value) do
+    String.to_existing_atom(value)
+  rescue
+    ArgumentError -> value
+  end
 end

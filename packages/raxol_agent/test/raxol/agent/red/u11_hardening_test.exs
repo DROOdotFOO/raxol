@@ -96,4 +96,49 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
              "absent branch_id must default to \"main\""
     end
   end
+
+  # ===========================================================================
+  # Finding 3 (🟡→red) — reader-tolerant decode never exhausts the atom table
+  # ===========================================================================
+
+  describe "decode preserves unknown tokens raw, never materializing atoms (§0.2)" do
+    test "decoding many distinct unknown type/source strings creates no atoms" do
+      before = :erlang.system_info(:atom_count)
+
+      records =
+        for i <- 1..2000 do
+          # A guaranteed-fresh token never compiled as an atom anywhere.
+          tok = "u11_unknown_#{System.unique_integer([:positive])}_#{i}"
+
+          %{
+            "id" => i,
+            "family" => "meta",
+            "type" => tok,
+            "payload" => %{"refs" => []},
+            "provenance" => %{"source" => tok <> "_src", "trust" => "trusted"}
+          }
+        end
+
+      decoded =
+        Enum.map(records, fn r ->
+          {:ok, ev} = Meta.decode(r)
+          ev
+        end)
+
+      after_count = :erlang.system_info(:atom_count)
+
+      # Unknown tokens are preserved RAW as binaries (contract §0.2), never
+      # turned into fresh atoms — so type + source stay binary...
+      assert Enum.all?(decoded, fn ev -> is_binary(ev.type) end),
+             "an unknown type must be preserved as a raw binary"
+
+      assert Enum.all?(decoded, fn ev -> is_binary(ev.provenance.source) end),
+             "an unknown source must be preserved as a raw binary"
+
+      # ...and the atom table did NOT grow (2000 unknowns would add ~4000 atoms
+      # under the old String.to_atom path — a VM-crashing DoS).
+      assert after_count - before < 100,
+             "decode leaked #{after_count - before} atoms from unknown journal tokens"
+    end
+  end
 end
