@@ -370,7 +370,13 @@ defmodule Raxol.Agent.Meta do
   # from a present-but-unrecognized value. This anchors the taint fold's leaves,
   # so a laundered entry point can no longer read trusted.
   defp stored_trust(%{"provenance" => %{"trust" => trust}}), do: trust_token(trust)
-  defp stored_trust(%{"provenance" => p}) when is_map(p), do: :trusted
+  # PRESENT provenance map with NO trust key: fail CLOSED (a trustless present
+  # provenance must not launder taint away).
+  defp stored_trust(%{"provenance" => p}) when is_map(p), do: :tainted
+  # PRESENT provenance of any other shape (non-map): fail CLOSED.
+  defp stored_trust(%{"provenance" => _}), do: :tainted
+  # The "provenance" key is WHOLLY ABSENT: the frozen grandfather default only
+  # applies here — omit-when-default is the sole trusted path.
   defp stored_trust(_), do: :trusted
 
   # The frozen v1 trust lattice is exactly two points; every other token —
@@ -392,8 +398,22 @@ defmodule Raxol.Agent.Meta do
     %{source: decode_token(Map.get(p, "source"), :primary), trust: trust_token(trust)}
   end
 
+  # Already atom-keyed & complete (decode over an already-decoded provenance).
   defp decode_provenance(%{source: _, trust: _} = provenance), do: provenance
-  defp decode_provenance(_), do: @default_provenance
+
+  # PRESENT map provenance with NO trust key: PRESERVE the carried source (never
+  # drop it) but fail CLOSED on the missing trust — a present-but-partial
+  # provenance defaults trust to :tainted, never :trusted (U8/U12 read this).
+  defp decode_provenance(%{} = p) do
+    %{source: decode_token(Map.get(p, "source"), :primary), trust: :tainted}
+  end
+
+  # ABSENT provenance (the caller passes nil): the frozen grandfather default —
+  # the ONLY path that yields :trusted.
+  defp decode_provenance(nil), do: @default_provenance
+
+  # PRESENT non-map provenance (wrong shape): fail CLOSED.
+  defp decode_provenance(_present), do: %{source: :primary, trust: :tainted}
 
   defp decode_actor_field(%{"kind" => k} = a) do
     %{kind: decode_token(k, :system), id: Map.get(a, "id")}

@@ -7,8 +7,12 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
 
   These run in regular CI alongside the frozen U11 red suite + controls; they
   pin the security-critical seams the YOLO-safe soundness theorem depends on.
+
+  `async: false` — the atom-table DoS regression reads the GLOBAL
+  `:erlang.system_info(:atom_count)`, so it must not race other async tests
+  creating atoms concurrently (that would inflate the delta).
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   @moduletag :capture_log
 
@@ -66,6 +70,62 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
       # A meta event whose only ref is a grandfathered (absent-provenance) leaf
       # stays trusted — the grandfather path is NOT the same as fail-closed.
       assert Meta.derive_taint([bare, dependent])[2] == :trusted
+    end
+
+    test "(d) a PRESENT-but-trustless provenance fails closed (the last laundering arm)" do
+      # The generator always emits a "trust" key, so these shapes are only
+      # reachable by overriding provenance directly — the real laundering arm.
+
+      # (i) PRESENT map provenance carrying a source but NO trust key.
+      leaf_trustless =
+        Gen.rec(1, :loop, :tool_result, %{name: "x", result: "y", refs: []})
+        |> Map.put("provenance", %{"source" => "probe_c7"})
+
+      # (ii) PRESENT non-map provenance (wrong shape).
+      leaf_nonmap =
+        Gen.rec(2, :loop, :tool_result, %{name: "x", result: "y", refs: []})
+        |> Map.put("provenance", "garbage")
+
+      dep_a =
+        Gen.rec(3, :meta, :extract, Gen.meta_payload(:extract, [1]), trust: "trusted")
+
+      dep_b =
+        Gen.rec(4, :meta, :extract, Gen.meta_payload(:extract, [2]), trust: "trusted")
+
+      derived = Meta.derive_taint([leaf_trustless, leaf_nonmap, dep_a, dep_b])
+
+      # Taint-fold surface: a laundering leaf now taints its dependents.
+      assert derived[3] == :tainted,
+             "a present-but-trustless provenance must ENTER taint, not launder it"
+
+      assert derived[4] == :tainted,
+             "a present non-map provenance must fail closed into taint"
+
+      # Consumer surface (U8/U12 read this): source PRESERVED, trust fails closed.
+      assert {:ok, %Event{provenance: %{source: :probe_c7, trust: :tainted}}} =
+               Meta.decode(leaf_trustless),
+             "decode must preserve the carried source and default trust to :tainted"
+
+      assert {:ok, %Event{provenance: %{source: :primary, trust: :tainted}}} =
+               Meta.decode(leaf_nonmap),
+             "a present non-map provenance must decode to :tainted on the consumer surface"
+
+      # Anti-tautology guard: a WHOLLY-ABSENT provenance still grandfathers.
+      absent = %{
+        "id" => 5,
+        "family" => "loop",
+        "type" => "tool_result",
+        "payload" => %{"refs" => []}
+      }
+
+      dep_c =
+        Gen.rec(6, :meta, :extract, Gen.meta_payload(:extract, [5]), trust: "trusted")
+
+      assert {:ok, %Event{provenance: %{source: :primary, trust: :trusted}}} =
+               Meta.decode(absent)
+
+      assert Meta.derive_taint([absent, dep_c])[6] == :trusted,
+             "absent provenance must remain the only trusted grandfather path"
     end
   end
 
