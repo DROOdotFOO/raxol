@@ -78,6 +78,10 @@ defmodule Raxol.Agent.Red.U8BlastRadiusRedTest do
     test "C12 — a :once grant unlocks exactly that request: (tool_a, cid) does not admit (tool_b, cid), and a tainted (tool_b, cid) still escalates (Fix 2)" do
       assert :ok = Contours.once_grant_is_request_scoped(BlastRadiusGate)
     end
+
+    test "C13 — a consumed :once grant is reconstructed as consumed: rebuild does not resurrect a spent grant (Fix 3)" do
+      assert :ok = Contours.once_consumption_survives_rebuild(BlastRadiusGate)
+    end
   end
 
   describe "U8-R predicate contours (@action_surface — F2 Raxol.Action draft not landed)" do
@@ -171,6 +175,10 @@ defmodule Raxol.Agent.Red.U8BlastRadiusControlsTest do
 
     test "C12 once grant is request-scoped (tool+call_id), never admits another tool, never bypasses the taint fold" do
       assert :ok = Contours.once_grant_is_request_scoped(ReferenceGate)
+    end
+
+    test "C13 consumed once grant reconstructed as consumed (rebuild == post-consumption live)" do
+      assert :ok = Contours.once_consumption_survives_rebuild(ReferenceGate)
     end
   end
 

@@ -117,6 +117,17 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
           optional(any()) => any()
         }
 
+  @typedoc """
+  A journaled `:once`-grant CONSUMPTION marker: the guarded action for
+  `consumed_ref` ran, spending the one-shot grant. Folded by `rebuild/1` so a
+  resumed session reproduces the POST-consumption state (a spent grant is not
+  resurrected). `consumed_ref` is the request_ref the grant was keyed under.
+  """
+  @type consumption :: %{
+          required(:consumed_ref) => String.t(),
+          optional(any()) => any()
+        }
+
   @typedoc "The envelope-side actor of an `approval_decided` event (§2.1)."
   @type actor :: %{
           required(:kind) => :human | :agent | :system,
@@ -185,8 +196,13 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   replay/resume law, §2.1): the reconstructed state MUST equal the live state that
   produced the same event sequence. In-memory-only enforcement state that a fold
   cannot reconstruct is a contract violation.
+
+  The journal also carries `:once`-grant CONSUMPTION markers (`%{consumed_ref}`):
+  folding one reproduces the post-consumption state, so a spent one-shot grant is
+  NOT resurrected on resume (a re-issued call must not auto-admit without a new
+  approval cycle).
   """
-  @callback rebuild([{decision(), actor()}]) :: state()
+  @callback rebuild([{decision() | consumption(), actor()}]) :: state()
 
   # The synthetic root offset the taint fold hangs the call's `arg_refs` under
   # before handing the translated lineage to `Meta.derive_taint/1`. A string so
@@ -457,12 +473,18 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
   grant key). Each decision was request-validated when first observed.
   """
   @impl true
-  @spec rebuild([{decision(), actor()}]) :: state()
+  @spec rebuild([{decision() | consumption(), actor()}]) :: state()
   def rebuild(events) do
-    Enum.reduce(events, new(), fn {decision, _actor}, state ->
-      {tool, cid} = parse_ref(decision.request_ref)
-      scope = Map.get(decision, :scope, :once)
-      grant(state, decision.decision, scope, cid, tool)
+    Enum.reduce(events, new(), fn
+      {%{consumed_ref: ref}, _actor}, state ->
+        # A journaled once-grant consumption (the guarded action ran): reproduce
+        # the POST-consumption state so resume does not resurrect a spent grant.
+        %{state | once: MapSet.delete(state.once, ref)}
+
+      {decision, _actor}, state ->
+        {tool, cid} = parse_ref(decision.request_ref)
+        scope = Map.get(decision, :scope, :once)
+        grant(state, decision.decision, scope, cid, tool)
     end)
   end
 

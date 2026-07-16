@@ -372,11 +372,16 @@ defmodule Raxol.Agent.Red.U8Gates do
     def rebuild(events) do
       # The journal is the authority: decisions were request-validated when
       # first observed, so the fold re-derives the enforcement projection from
-      # the decisions alone (request_ref encodes the grant key).
-      Enum.reduce(events, new(), fn {decision, _actor}, state ->
-        {tool, cid} = U8Gates.parse_ref(decision.request_ref)
-        scope = Map.get(decision, :scope, :once)
-        U8Gates.grant(state, decision.decision, scope, cid, tool)
+      # the decisions alone (request_ref encodes the grant key). A `:once`-grant
+      # consumption marker (%{consumed_ref}) reproduces post-consumption state.
+      Enum.reduce(events, new(), fn
+        {%{consumed_ref: ref}, _actor}, state ->
+          %{state | once: MapSet.delete(state.once, ref)}
+
+        {decision, _actor}, state ->
+          {tool, cid} = U8Gates.parse_ref(decision.request_ref)
+          scope = Map.get(decision, :scope, :once)
+          U8Gates.grant(state, decision.decision, scope, cid, tool)
       end)
     end
   end
@@ -875,6 +880,50 @@ defmodule Raxol.Agent.Red.U8Gates do
           end
         else
           bad -> {:violation, {:once_scope_flow_broke, bad}}
+        end
+      end)
+    end
+
+    # C13 (Fix 3 regression) — a CONSUMED `:once` grant is reconstructed by the
+    # fold as consumed: after consuming a once-grant and rebuilding from the
+    # journal (the decision + the consumption marker), the same call is NOT
+    # re-admitted (rebuild == post-consumption live). The pre-fix rebuild folded
+    # only approval_decided, so it resurrected the spent grant on resume.
+    def once_consumption_survives_rebuild(gate) do
+      safe(fn ->
+        {:ok, exec} = Counter.start()
+        run = fn -> Counter.bump(exec) end
+        call = U8Gates.escalating_call()
+
+        with {:escalate, req, s1} <- gate.evaluate(gate.new(), call),
+             ref = req.payload.request_ref,
+             d = decision(ref, :approved, :once),
+             {:ok, s2} <- gate.apply_decision(s1, d, human()),
+             {:proceeded, _, s3} <- gate.authorize(s2, call, run) do
+          # Live state after the one-shot grant is spent: a re-issue escalates.
+          live_tag = authorize_tag(gate, s3, call)
+
+          # The journal the runtime records for this flow: the decision, then the
+          # consumption marker naming the spent grant's ref.
+          journal = [{d, human()}, {%{consumed_ref: ref}, human()}]
+          rebuilt_tag = authorize_tag(gate, gate.rebuild(journal), call)
+
+          cond do
+            Counter.value(exec) != 1 ->
+              {:violation, {:side_effect_count, Counter.value(exec)}}
+
+            live_tag == :proceeded ->
+              {:violation, {:once_not_consumed_live, live_tag}}
+
+            rebuilt_tag != live_tag ->
+              {:violation,
+               {:consumption_not_reconstructed, live_tag, rebuilt_tag}}
+
+            true ->
+              :ok
+          end
+        else
+          bad -> {:violation, {:once_consumption_flow_broke, bad}}
         end
       end)
     end
