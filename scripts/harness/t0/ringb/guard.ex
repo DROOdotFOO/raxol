@@ -94,6 +94,32 @@ defmodule T0.RingB.Guard do
     _ -> :ok
   end
 
+  @doc """
+  Same close-and-verify teardown as `safe_teardown/3`, WITHOUT the
+  `kill_marker/1` step — for callers whose command already ran to
+  completion (synchronously, with no `T0_HOLD_SECONDS` hold) before
+  teardown is ever reached, so there is never a live marked process left
+  to find. `T0.RingB.Measurements`'s capacity-gate calibration is the
+  one caller of this: its plain `for`/`printf` loop is typed directly at
+  the session's own interactive prompt (not spawned as a separately
+  addressable process the way the held probes are), so a marker embedded
+  in that command text would never show up in `ps` output for
+  `kill_marker/1`'s `pkill -f` to match in the first place — calling
+  `safe_teardown/3` there was documented as matching NOTHING (RB review
+  FIX-NOW #2) and gave a false impression of protection this path never
+  had. `close_only/2` is the honest version: it still closes and
+  verifies the window is gone, bounded exactly like `safe_teardown/3`,
+  it just doesn't pretend to kill a process that was never trackable.
+  """
+  @spec close_only(module(), term()) :: :ok
+  def close_only(driver, session) do
+    close_until_gone(driver, session, @max_close_attempts)
+    Process.sleep(@close_settle_ms)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
   # Tries `close`, then verifies with `still_open?/1`. If still open,
   # dismisses (targeting the RIGHT app — a bare keystroke with no prior
   # `activate` was empirically unreliable: the keystroke goes to
@@ -164,18 +190,72 @@ defmodule T0.RingB.Guard do
   end
 
   @doc """
-  Last-resort modal dismissal for the two AppleScript-driven terminals
-  (iTerm2, Terminal.app): activates `app_name` FIRST, then sends Return
-  via System Events — which per the observed Terminal.app dialog is
-  bound to "Terminate" (the destructive but automation-correct choice —
-  we already tried to kill the process ourselves; if a sheet is up
-  anyway, the safest exit is to let it proceed).
+  Runs an external command bounded by `with_timeout/2`, normalizing
+  `System.cmd/3`'s `{out, exit_code}` result to
+  `{:ok, out} | {:error, reason}` so callers don't need to
+  special-case a timeout vs. a nonzero exit vs. an in-task raise
+  themselves. Shared by the CLI-driven drivers (WezTerm, kitty) — RB
+  review FIX-NOW #1 bounds every `spawn_session/1`, `run_command/2`,
+  `get_visible/1`, and `get_scrollback/1` call site, and pulling the
+  common wrapper here (instead of each driver keeping its own copy)
+  is what keeps that fix from being duplicated code across both.
 
-  The explicit `activate` matters: `keystroke` goes to whatever is
-  frontmost SYSTEM-WIDE at that instant, not necessarily the
-  sheet-bearing window — a bare `keystroke return` with no prior
-  activation was observed to be unreliable (the window sometimes
-  stayed open for many seconds after a "successful" dismiss call).
+  The middle clause's `is_integer(code)` guard matters: if
+  `System.cmd/3` itself raises inside the guarded task, `with_timeout/2`'s
+  own internal rescue already converts that to
+  `{:ok, {:error, {:raised, message}}}` (a graceful, non-crashing
+  result, NOT a timeout) — without the guard, that inner
+  `{:error, {:raised, _}}` tuple would itself match the bare
+  `{out, code}` shape (`out` bound to `:error`) and blow up in
+  `String.trim/1` on the second clause instead of surfacing the real
+  error via the third.
+  """
+  @spec run_cmd(String.t(), [String.t()], keyword(), timeout()) ::
+          {:ok, String.t()} | {:error, term()}
+  def run_cmd(bin, args, opts \\ [stderr_to_stdout: false], timeout_ms \\ 5_000) do
+    case with_timeout(fn -> System.cmd(bin, args, opts) end, timeout_ms) do
+      {:ok, {out, 0}} ->
+        {:ok, out}
+
+      {:ok, {out, code}} when is_integer(code) ->
+        {:error, {:exit, code, String.trim(out)}}
+
+      {:ok, {:error, _} = err} ->
+        err
+
+      :timeout ->
+        {:error, {:timeout, timeout_ms}}
+    end
+  end
+
+  @doc """
+  Last-resort modal dismissal for the two AppleScript-driven terminals
+  (iTerm2, Terminal.app), reached ONLY after `kill_marker/1`, `close/1`,
+  and one `still_open?/1` verification have ALL already failed to clear
+  the window, and only inside a watched run (RB review FIX-NOW #4 —
+  stated plainly here, not just implied): this dismissal is APP-scoped,
+  not sheet-scoped. `activate` brings `app_name` (the whole application
+  — "iTerm2" or "Terminal", not a specific window/sheet handle) to the
+  front, then sends a bare `keystroke return` via System Events, which
+  per the observed Terminal.app dialog is bound to "Terminate" (the
+  destructive but automation-correct choice — we already tried to kill
+  the process ourselves; if a sheet is up anyway, the safest exit is to
+  let it proceed). Because the keystroke is app-scoped rather than
+  addressed to the exact sheet, IF that application has more than one
+  window open with a confirmation sheet showing simultaneously, this
+  could in principle dismiss the wrong one — a real, accepted limitation
+  of automating through System Events rather than the Accessibility API
+  directly. A sheet-scoped version (targeting the specific window/sheet
+  element instead of "whatever is frontmost for this app") is DEFERRED,
+  not implemented here: it needs to be validated against a real modal in
+  a watched live matrix run before it replaces this app-scoped fallback,
+  and this module does not attempt that rework.
+
+  The explicit `activate` matters even at app scope: `keystroke` goes to
+  whatever is frontmost SYSTEM-WIDE at that instant, not necessarily the
+  sheet-bearing app — a bare `keystroke return` with no prior activation
+  was observed to be unreliable (the window sometimes stayed open for
+  many seconds after a "successful" dismiss call).
 
   `app_name` of `nil` (wezterm/kitty — no GUI confirmation dialog
   exists for either's plain CLI close path) short-circuits to a no-op.

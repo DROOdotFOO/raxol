@@ -79,11 +79,21 @@ defmodule T0.RingB.Runner do
   defp run_one(driver, claim, probes_dir, evidence_dir, repo_root) do
     case driver.spawn_session([]) do
       {:ok, session} ->
+        # Generated ONCE here and threaded into `measure/5` via opts, so
+        # the marker embedded in the probe's own argv (which
+        # `T0.RingB.Measurements.held_cmd/3` builds from
+        # `opts[:marker]`) is the EXACT SAME value `Guard.safe_teardown/3`
+        # uses for `kill_marker/1` below — previously this function
+        # rebuilt an unrelated plain `"ringb-<driver>-<claim>"` string
+        # for teardown while `Measurements` generated its own unique
+        # marker internally, so `kill_marker/1` never matched the real
+        # process (RB review FIX-NOW #2).
+        marker = Guard.marker(driver.name(), claim)
+
         try do
-          row = measure(driver, claim, session, probes_dir)
+          row = measure(driver, claim, session, probes_dir, marker: marker)
           record(driver, row, evidence_dir, repo_root)
         after
-          marker = "ringb-#{driver.name()}-#{claim}"
           Guard.safe_teardown(driver, session, marker)
         end
 
@@ -105,23 +115,23 @@ defmodule T0.RingB.Runner do
       }
   end
 
-  defp measure(driver, "C1", session, probes_dir),
-    do: Measurements.measure_c1(driver, session, probes_dir)
+  defp measure(driver, "C1", session, probes_dir, opts),
+    do: Measurements.measure_c1(driver, session, probes_dir, opts)
 
-  defp measure(driver, "C2", session, probes_dir),
-    do: Measurements.measure_c2(driver, session, probes_dir)
+  defp measure(driver, "C2", session, probes_dir, opts),
+    do: Measurements.measure_c2(driver, session, probes_dir, opts)
 
-  defp measure(driver, "C3", session, probes_dir),
-    do: Measurements.measure_c3(driver, session, probes_dir)
+  defp measure(driver, "C3", session, probes_dir, opts),
+    do: Measurements.measure_c3(driver, session, probes_dir, opts)
 
-  defp measure(driver, "C4", session, probes_dir),
-    do: Measurements.measure_c4(driver, session, probes_dir)
+  defp measure(driver, "C4", session, probes_dir, opts),
+    do: Measurements.measure_c4(driver, session, probes_dir, opts)
 
-  defp measure(driver, "N06", session, probes_dir),
-    do: Measurements.measure_n06(driver, session, probes_dir)
+  defp measure(driver, "N06", session, probes_dir, opts),
+    do: Measurements.measure_n06(driver, session, probes_dir, opts)
 
-  defp measure(driver, "N07", session, probes_dir),
-    do: Measurements.measure_n07(driver, session, probes_dir)
+  defp measure(driver, "N07", session, probes_dir, opts),
+    do: Measurements.measure_n07(driver, session, probes_dir, opts)
 
   defp record(driver, %{skip: true} = row, _evidence_dir, _repo_root) do
     Map.put(row, :driver, driver.name())

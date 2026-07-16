@@ -28,11 +28,22 @@ defmodule T0.RingB.Drivers.Wezterm do
       GUI confirmation dialog (unlike closing an Terminal.app/iTerm2
       window with a live foreground job) — `close/1` uses this
       directly rather than closing the whole OS window.
+
+  Every `wezterm cli` invocation below (`spawn_session/1`,
+  `send_text/2` behind `run_command/2`/`mark_cursor/2`, `get_text/2`
+  behind `get_visible/1`/`get_scrollback/1`, `get_cursor/1`) is bounded
+  by `T0.RingB.Guard.with_timeout/2` (RB review FIX-NOW #1) — a hung
+  `wezterm cli` round trip (daemon wedged, IPC socket stuck) can no
+  longer hang the whole matrix run indefinitely; `close/1` and
+  `still_open?/1` were already guarded one layer up, in
+  `T0.RingB.Guard.safe_teardown/3`.
   """
 
   @behaviour T0.RingB.Driver
+  alias T0.RingB.Guard
 
   @settle_ms 2200
+  @cmd_timeout_ms 5_000
 
   @impl true
   def name, do: :wezterm
@@ -45,18 +56,17 @@ defmodule T0.RingB.Drivers.Wezterm do
 
   @impl true
   def spawn_session(_opts \\ []) do
-    case System.cmd(
+    case guarded_cmd(
            "wezterm",
-           ["cli", "spawn", "--new-window", "--", "bash", "-l"],
-           stderr_to_stdout: false
+           ["cli", "spawn", "--new-window", "--", "bash", "-l"]
          ) do
-      {out, 0} ->
+      {:ok, out} ->
         pane_id = out |> String.trim() |> String.split("\n") |> List.last()
         Process.sleep(@settle_ms)
         {:ok, %{pane_id: pane_id}}
 
-      {out, code} ->
-        {:error, {:exit, code, String.trim(out)}}
+      {:error, reason} ->
+        {:error, reason}
     end
   rescue
     e -> {:error, {:raised, Exception.message(e)}}
@@ -76,10 +86,8 @@ defmodule T0.RingB.Drivers.Wezterm do
 
   @impl true
   def get_cursor(%{pane_id: pid}) do
-    case System.cmd("wezterm", ["cli", "list", "--format", "json"],
-           stderr_to_stdout: false
-         ) do
-      {out, 0} ->
+    case guarded_cmd("wezterm", ["cli", "list", "--format", "json"]) do
+      {:ok, out} ->
         case Jason.decode(out) do
           {:ok, panes} ->
             case Enum.find(panes, &(to_string(&1["pane_id"]) == pid)) do
@@ -91,8 +99,8 @@ defmodule T0.RingB.Drivers.Wezterm do
             {:error, reason}
         end
 
-      {out, code} ->
-        {:error, {:exit, code, String.trim(out)}}
+      {:error, reason} ->
+        {:error, reason}
     end
   rescue
     e -> {:error, {:raised, Exception.message(e)}}
@@ -139,28 +147,32 @@ defmodule T0.RingB.Drivers.Wezterm do
   # --- internal --------------------------------------------------------------
 
   defp send_text(pane_id, text) do
-    case System.cmd(
+    case guarded_cmd(
            "wezterm",
-           ["cli", "send-text", "--pane-id", pane_id, "--no-paste", text],
-           stderr_to_stdout: false
+           ["cli", "send-text", "--pane-id", pane_id, "--no-paste", text]
          ) do
-      {_out, 0} -> :ok
-      {out, code} -> {:error, {:exit, code, String.trim(out)}}
+      {:ok, _out} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   rescue
     e -> {:error, {:raised, Exception.message(e)}}
   end
 
   defp get_text(%{pane_id: pid}, start_line) do
-    case System.cmd(
-           "wezterm",
-           ["cli", "get-text", "--pane-id", pid, "--start-line", start_line],
-           stderr_to_stdout: false
-         ) do
-      {out, 0} -> {:ok, out}
-      {out, code} -> {:error, {:exit, code, String.trim(out)}}
-    end
+    guarded_cmd(
+      "wezterm",
+      ["cli", "get-text", "--pane-id", pid, "--start-line", start_line]
+    )
   rescue
     e -> {:error, {:raised, Exception.message(e)}}
+  end
+
+  # Bounds every `wezterm cli` call above at `@cmd_timeout_ms` (RB
+  # review FIX-NOW #1) rather than the bare, unbounded `System.cmd/3`
+  # this driver used before — see moduledoc. Delegates the actual
+  # timeout/normalization logic to `Guard.run_cmd/4` (shared with
+  # `T0.RingB.Drivers.Kitty`, to avoid duplicating it per driver).
+  defp guarded_cmd(bin, args, opts \\ [stderr_to_stdout: false]) do
+    Guard.run_cmd(bin, args, opts, @cmd_timeout_ms)
   end
 end

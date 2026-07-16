@@ -33,13 +33,26 @@ defmodule T0.RingB.Drivers.Kitty do
       is the belt-and-suspenders `Guard`-adjacent cleanup the coordinator
       asked for: no GUI confirmation dialog exists for a `SIGTERM`'d
       background process, so there is nothing to hang on.
+
+  Every `System.cmd/3` call below — the launch in `spawn_session/1` and
+  the `kitty @` remote-control calls behind `run_command/2`,
+  `mark_cursor/2`, `get_visible/1`, and `get_scrollback/1` (`kitty_run/1`
+  / `kitty_text/1`) — is bounded by `T0.RingB.Guard.with_timeout/2` (RB
+  review FIX-NOW #1). The launch call is a detached, backgrounded
+  `nohup ... &` that returns as soon as the shell forks it, not once
+  kitty itself is ready (`wait_for_socket/2` right after is what's
+  actually bounded against kitty never coming up) — it is guarded here
+  too anyway, for the same reason every other call site is: defense
+  against an unexpectedly wedged `bash -c` itself, not just kitty.
   """
 
   @behaviour T0.RingB.Driver
+  alias T0.RingB.Guard
 
   @kitty_bin "/Applications/kitty.app/Contents/MacOS/kitty"
   @socket_wait_ms 6_000
   @settle_ms 2200
+  @cmd_timeout_ms 5_000
 
   @impl true
   def name, do: :kitty
@@ -74,8 +87,8 @@ defmodule T0.RingB.Drivers.Kitty do
       "nohup '#{bin}' -o allow_remote_control=yes --listen-on unix:'#{sock}' " <>
         "</dev/null >/dev/null 2>&1 & echo $!"
 
-    case System.cmd("bash", ["-c", launch_cmd], stderr_to_stdout: false) do
-      {out, 0} ->
+    case guarded_cmd("bash", ["-c", launch_cmd]) do
+      {:ok, out} ->
         os_pid = String.trim(out)
 
         case wait_for_socket(sock, @socket_wait_ms) do
@@ -88,8 +101,8 @@ defmodule T0.RingB.Drivers.Kitty do
             {:error, {:socket_never_appeared, sock}}
         end
 
-      {out, code} ->
-        {:error, {:launch_failed, code, String.trim(out)}}
+      {:error, reason} ->
+        {:error, {:launch_failed, reason}}
     end
   rescue
     e -> {:error, {:raised, Exception.message(e)}}
@@ -194,9 +207,9 @@ defmodule T0.RingB.Drivers.Kitty do
   # "Fire and forget" — discards stdout, only reports success/failure.
   # Used by send-text/close-window, whose stdout is normally empty.
   defp kitty_run(args) do
-    case System.cmd(kitty_bin(), args, stderr_to_stdout: false) do
-      {_out, 0} -> :ok
-      {out, code} -> {:error, {:exit, code, String.trim(out)}}
+    case guarded_cmd(kitty_bin(), args) do
+      {:ok, _out} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   rescue
     e -> {:error, {:raised, Exception.message(e)}}
@@ -204,11 +217,17 @@ defmodule T0.RingB.Drivers.Kitty do
 
   # Captures stdout — used by get-text.
   defp kitty_text(args) do
-    case System.cmd(kitty_bin(), args, stderr_to_stdout: false) do
-      {out, 0} -> {:ok, out}
-      {out, code} -> {:error, {:exit, code, String.trim(out)}}
-    end
+    guarded_cmd(kitty_bin(), args)
   rescue
     e -> {:error, {:raised, Exception.message(e)}}
+  end
+
+  # Bounds every `System.cmd/3` call above at `@cmd_timeout_ms` (RB
+  # review FIX-NOW #1) rather than the bare, unbounded call this driver
+  # used before — see moduledoc. Delegates the actual timeout/
+  # normalization logic to `Guard.run_cmd/4` (shared with
+  # `T0.RingB.Drivers.Wezterm`, to avoid duplicating it per driver).
+  defp guarded_cmd(bin, args, opts \\ [stderr_to_stdout: false]) do
+    Guard.run_cmd(bin, args, opts, @cmd_timeout_ms)
   end
 end

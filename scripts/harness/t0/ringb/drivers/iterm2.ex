@@ -25,12 +25,25 @@ defmodule T0.RingB.Drivers.Iterm2 do
       creation observably corrupted the first several characters (shell
       not yet ready for input); a short settle delay after spawn fixes
       this reliably.
+
+  Every `Osa.run/1` call below except `close/1`/`still_open?/1` (already
+  bounded one layer up, in `T0.RingB.Guard.safe_teardown/3`) goes
+  through the private `guarded_osa/1`, which wraps it in
+  `T0.RingB.Guard.with_timeout/2` (RB review FIX-NOW #1) — `spawn_session/1`,
+  `run_command/2`/`mark_cursor/2` (`write/2`), `get_visible/1`/
+  `get_scrollback/1` (`get_contents/1`), and `resize/3` can no longer
+  hang the whole matrix run indefinitely on a wedged `osascript` (e.g. a
+  TCC Automation permission prompt nobody has clicked yet — see
+  `T0.RingB.Osa`'s moduledoc for why the bound lives here rather than
+  inside `Osa` itself).
   """
 
   @behaviour T0.RingB.Driver
+  alias T0.RingB.Guard
   alias T0.RingB.Osa
 
   @settle_ms 1400
+  @osa_timeout_ms 5_000
 
   @impl true
   def name, do: :iterm2
@@ -53,7 +66,7 @@ defmodule T0.RingB.Drivers.Iterm2 do
     end tell
     """
 
-    case Osa.run(script) do
+    case guarded_osa(script) do
       {:ok, wid} ->
         Process.sleep(@settle_ms)
         {:ok, %{window_id: String.trim(wid)}}
@@ -93,7 +106,7 @@ defmodule T0.RingB.Drivers.Iterm2 do
     end tell
     """
 
-    case Osa.run(script) do
+    case guarded_osa(script) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -128,7 +141,7 @@ defmodule T0.RingB.Drivers.Iterm2 do
     end tell
     """
 
-    case Osa.run(script) do
+    case guarded_osa(script) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -143,6 +156,21 @@ defmodule T0.RingB.Drivers.Iterm2 do
     end tell
     """
 
-    Osa.run(script)
+    guarded_osa(script)
+  end
+
+  # Bounds every `Osa.run/1` call above at `@osa_timeout_ms` (RB review
+  # FIX-NOW #1) — see moduledoc for why the bound lives here rather
+  # than inside `T0.RingB.Osa` itself (load-order/no-cycle constraint of
+  # `T0.RingB.Boot.require_all!/1`'s sequential `Code.require_file/2`).
+  # `Osa.run/1` never raises on its own (it has its own internal
+  # try/rescue), so this never needs to disambiguate a raised-inside-
+  # the-task result from a timeout the way the CLI drivers' `guarded_cmd/3`
+  # helpers do.
+  defp guarded_osa(script) do
+    case Guard.with_timeout(fn -> Osa.run(script) end, @osa_timeout_ms) do
+      {:ok, result} -> result
+      :timeout -> {:error, :osascript_timeout}
+    end
   end
 end

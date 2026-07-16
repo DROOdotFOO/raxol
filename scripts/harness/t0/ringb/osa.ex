@@ -13,6 +13,30 @@ defmodule T0.RingB.Osa do
   doing it twice would silently absorb real terminal padding
   differences between drivers into this "shared" layer instead of
   leaving it visible in the driver-specific evidence dump).
+
+  `run/1` ITSELF is intentionally unbounded — `T0.RingB.Guard` is loaded
+  AFTER this module in `T0.RingB.Boot.require_all!/1`'s fixed load order
+  (`Guard.dismiss_modal_best_effort/1` calls back into `Osa.run/1`, so
+  the dependency has to point one way through `Code.require_file/2`'s
+  strictly sequential, non-whole-graph loading — unlike a normal
+  `mix compile`, forcing a cycle here would just relocate the forward-
+  reference warning instead of fixing anything). The bound lives one
+  layer up instead: every AppleScript driver call site (`spawn_session/1`,
+  `run_command/2`, `get_visible/1`, `get_scrollback/1`, `mark_cursor/2`,
+  `resize/3`) wraps its own `Osa.run/1` call in
+  `T0.RingB.Guard.with_timeout/2` (RB review FIX-NOW #1) — see
+  `T0.RingB.Drivers.Iterm2` and `T0.RingB.Drivers.TerminalApp`'s private
+  `guarded_osa/1`. `close/1` and `still_open?/1` were already bounded
+  one layer further up still, in `T0.RingB.Guard.safe_teardown/3`.
+
+  Accepted caveat either way: force-killing the supervising Task does
+  not (and cannot) reap an orphaned `osascript` OS process still stuck
+  on a one-time macOS TCC Automation permission prompt — the guarantee
+  is that THIS RUN stays bounded, not that the orphan is cleaned up.
+  That first-run TCC prompt (for Terminal/iTerm2/System Events
+  automation control) must be clicked by a human the first time this
+  harness runs on a given machine; a watched run is exactly the context
+  that expects it, and every subsequent run is unattended.
   """
 
   @spec run(String.t()) :: {:ok, String.t()} | {:error, term()}

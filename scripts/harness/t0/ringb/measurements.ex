@@ -26,7 +26,16 @@ defmodule T0.RingB.Measurements do
   Callers (the runner) own spawning the session and are responsible for
   `T0.RingB.Guard.safe_teardown/3` afterward — this module never closes
   a session itself, so a measurement failure never leaves teardown
-  half-done.
+  half-done. The marker embedded in the probe invocation is generated
+  ONCE by the caller (`T0.RingB.Runner.run_one/4`, via `Guard.marker/2`)
+  and threaded through `opts[:marker]` (each `measure_*/4` falls back to
+  generating its own only when called directly with no `:marker` opt,
+  as the `ringb_*_test.exs` unit tests do) — this keeps the marker
+  embedded in the probe's argv identical to the one the caller's
+  `safe_teardown/3` uses for `kill_marker/1` afterward (RB review
+  FIX-NOW #2; previously the runner independently rebuilt an unrelated
+  plain string for teardown, so `kill_marker/1` never matched the real
+  process).
   """
 
   alias T0.RingB.Capture
@@ -65,7 +74,7 @@ defmodule T0.RingB.Measurements do
   def measure_c1(driver, session, probes_dir, opts \\ []) do
     height = Keyword.get(opts, :height, 24)
     footer_rows = Keyword.get(opts, :footer_rows, 3)
-    marker = Guard.marker(driver.name(), "C1")
+    marker = marker_for(opts, driver, "C1")
 
     probe = Path.join(probes_dir, "p01_region_footer.sh")
     cmd = held_cmd(probe, [height, footer_rows, 40], marker)
@@ -116,7 +125,7 @@ defmodule T0.RingB.Measurements do
     height = Keyword.get(opts, :height, 24)
     footer_rows = Keyword.get(opts, :footer_rows, 3)
     count = Keyword.get(opts, :count, 100)
-    marker = Guard.marker(driver.name(), "C2")
+    marker = marker_for(opts, driver, "C2")
 
     case capacity_gate(driver, count) do
       {:ok, _depth} ->
@@ -212,7 +221,7 @@ defmodule T0.RingB.Measurements do
   def measure_c3(driver, session, probes_dir, opts \\ []) do
     height = Keyword.get(opts, :height, 24)
     footer_rows = Keyword.get(opts, :footer_rows, 3)
-    marker = Guard.marker(driver.name(), "C3")
+    marker = marker_for(opts, driver, "C3")
 
     probe = Path.join(probes_dir, "p03_cursor_protocol.sh")
     cmd = held_cmd(probe, [height, footer_rows], marker)
@@ -279,7 +288,7 @@ defmodule T0.RingB.Measurements do
     height = Keyword.get(opts, :height, 24)
     footer_rows = Keyword.get(opts, :footer_rows, 3)
     count = Keyword.get(opts, :count, 30)
-    marker = Guard.marker(driver.name(), "C4")
+    marker = marker_for(opts, driver, "C4")
 
     # Cheap capability check before spending a capacity feed: a driver
     # with a real resize primitive proceeds through the gate; any other
@@ -403,7 +412,7 @@ defmodule T0.RingB.Measurements do
     height = Keyword.get(opts, :height, 24)
     footer_rows = Keyword.get(opts, :footer_rows, 3)
     count = Keyword.get(opts, :count, 20)
-    marker = Guard.marker(driver.name(), "N06")
+    marker = marker_for(opts, driver, "N06")
 
     probe = Path.join(probes_dir, "n06_keyframe_clear.sh")
     cmd = held_cmd(probe, [height, footer_rows, count], marker)
@@ -445,7 +454,7 @@ defmodule T0.RingB.Measurements do
   def measure_n07(driver, session, probes_dir, opts \\ []) do
     height = Keyword.get(opts, :height, 24)
     footer_rows = Keyword.get(opts, :footer_rows, 3)
-    marker = Guard.marker(driver.name(), "N07")
+    marker = marker_for(opts, driver, "N07")
 
     probe = Path.join(probes_dir, "n07_inverted_region.sh")
     cmd = held_cmd(probe, [height, footer_rows, 40], marker)
@@ -476,10 +485,30 @@ defmodule T0.RingB.Measurements do
 
   # --- internal ----------------------------------------------------------------
 
+  # Threads a caller-supplied marker (the runner generates ONE per
+  # (driver, claim) via `Guard.marker/2`, see `T0.RingB.Runner.run_one/4`)
+  # through so the SAME value that gets embedded in the probe's argv
+  # (via `held_cmd/3` below) is also the one `Guard.safe_teardown/3` uses
+  # for `kill_marker/1` after this measurement returns (RB review
+  # FIX-NOW #2). Falls back to a freshly-generated marker when called
+  # directly with no `:marker` opt, as `test/harness/ringb_*_test.exs`
+  # do — those callers are unaffected.
+  defp marker_for(opts, driver, claim) do
+    Keyword.get_lazy(opts, :marker, fn -> Guard.marker(driver.name(), claim) end)
+  end
+
   defp held_cmd(probe, args, marker) do
     arglist = Enum.join(args, " ")
-    "T0_HOLD_SECONDS=#{@hold_seconds} bash '#{probe}' #{arglist} #{marker}"
+
+    "T0_HOLD_SECONDS=#{@hold_seconds} bash #{shell_quote(probe)} #{arglist} #{marker}"
   end
+
+  # POSIX single-quote escaping (RB review FIX-NOW #3): a bare `'#{probe}'`
+  # breaks if the repo (or a temp/evidence path built from it) ever lands
+  # on a filesystem path containing an apostrophe — the standard
+  # close-quote/escaped-quote/reopen-quote trick (`'\''`) keeps the path
+  # a single shell word regardless of what characters it contains.
+  defp shell_quote(s), do: "'" <> String.replace(s, "'", "'\\''") <> "'"
 
   defp line_n(n),
     do: "LINE-" <> String.pad_leading(Integer.to_string(n), 4, "0")
@@ -515,12 +544,24 @@ defmodule T0.RingB.Measurements do
   defp capacity_gate(driver, needed) do
     case driver.spawn_session([]) do
       {:ok, cal_session} ->
-        marker = Guard.marker(driver.name(), "CAP")
-
         try do
           calibrate(driver, cal_session, needed)
         after
-          Guard.safe_teardown(driver, cal_session, marker)
+          # `Guard.close_only/2`, not `safe_teardown/3` (RB review
+          # FIX-NOW #2): calibrate/3's command is a plain `for`/`printf`
+          # loop typed directly at the session's own interactive prompt
+          # (no `T0_HOLD_SECONDS` hold, no separately-spawned process
+          # with its own argv) and has already run to completion by the
+          # time this `after` fires — `calibrate/3` only returns once
+          # `poll_scrollback/3` observed every fed line. There is never
+          # a live marked process for `kill_marker/1` to find, and no
+          # marker was ever embedded in the command text for `pkill -f`
+          # to match against in the first place; generating one here
+          # and handing it to `safe_teardown/3` was documented as
+          # matching NOTHING. `close_only/2` still closes and verifies
+          # the calibration window is gone — it just doesn't claim a
+          # process-kill guarantee this path never had.
+          Guard.close_only(driver, cal_session)
         end
 
       {:error, reason} ->

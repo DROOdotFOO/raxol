@@ -23,8 +23,32 @@ defmodule Mix.Tasks.T0.Ringb do
   kills the probe's own process before closing (avoiding the "terminate
   running processes?" confirmation dialog a live foreground job would
   otherwise trigger) and falls back to a bounded, non-blocking recovery
-  path if a close still hangs — this task will not leave a modal dialog
-  waiting on a human click.
+  path if a close still hangs. Every driver call this task makes
+  (spawn, run-command, capture, resize, close) is itself bounded by
+  `T0.RingB.Guard.with_timeout/2` (RB review FIX-NOW #1) — the
+  enforced guarantee is that THIS RUN stays bounded, not that every OS
+  process it ever touches is guaranteed reaped: force-killing a guarded
+  task cannot reap an already-orphaned `osascript` subprocess (see
+  `T0.RingB.Osa`'s moduledoc), and this task does not claim otherwise.
+
+  Two things a human running this WATCHED (never unattended) needs to
+  know honestly, not just implicitly:
+
+    * The very first run on a machine that has never granted this
+      harness Automation permission (Terminal/iTerm2/System Events) will
+      pop a one-time macOS TCC authorization prompt outside this task's
+      control — it must be clicked by a human before the run can
+      proceed; every run after that grant is unattended.
+    * The last-resort modal dismissal inside `T0.RingB.Guard` (reached
+      only after kill-marker + close + a `still_open?/1` verification
+      have ALL already failed) is APP-scoped, not sheet-scoped — it
+      activates the whole application and sends a bare keystroke, which
+      per the observed dialog is bound to "Terminate". A sheet-scoped
+      version (targeting the exact confirmation dialog rather than
+      whatever the app has frontmost) is DEFERRED to the next watched
+      live matrix run, where it can be validated against a real modal
+      before replacing this fallback; see `T0.RingB.Guard.
+      dismiss_modal_best_effort/1`'s moduledoc for the full rationale.
 
   Requires a real macOS GUI session (Aqua) — not runnable headless/CI;
   see the `test/harness/ringb_*.exs` suite (`@moduletag :ring_b`,
