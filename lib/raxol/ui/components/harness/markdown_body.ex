@@ -1,3 +1,41 @@
+defmodule Raxol.UI.Components.Harness.MarkdownBody.Checkpoint do
+  @moduledoc """
+  Carries the frozen (already-parsed) prefix across successive calls to
+  `Raxol.UI.Components.Harness.MarkdownBody.render_streaming_incremental/3`.
+
+  All fields are private implementation state -- callers should treat this
+  as an opaque token: create one via `MarkdownBody.new_checkpoint/0`, thread
+  it through successive `render_streaming_incremental/3` calls, and never
+  construct or inspect the fields directly.
+
+  - `frozen_byte_offset` -- raw byte offset into the caller's accumulated
+    text, always sitting just past a committed `"\\n"` (never inside a
+    line still being typed).
+  - `frozen_elements` -- the already-rendered elements for the frozen
+    prefix; a genuine prefix of every subsequent view's `:children`.
+  - `raw_prefix` -- the exact raw bytes frozen so far, used to detect a
+    non-extending (stale/misused) `text` argument on the next call.
+  - `sanitized_prefix` -- `to_text/1` of `raw_prefix` (ends with `"\\n"`
+    whenever non-empty).
+  - `width` -- the width the frozen elements were rendered at; a change
+    invalidates the checkpoint (frozen elements are width-dependent).
+  """
+
+  defstruct frozen_byte_offset: 0,
+            frozen_elements: [],
+            raw_prefix: "",
+            sanitized_prefix: "",
+            width: nil
+
+  @type t :: %__MODULE__{
+          frozen_byte_offset: non_neg_integer(),
+          frozen_elements: [map()],
+          raw_prefix: binary(),
+          sanitized_prefix: binary(),
+          width: pos_integer() | nil
+        }
+end
+
 defmodule Raxol.UI.Components.Harness.MarkdownBody do
   @moduledoc """
   Renders a message/reasoning block's Markdown content for the harness
@@ -82,17 +120,91 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
   escape handling would need to thread an "escaped" flag through the
   scan; left as a documented gap rather than expanded scope here.
 
-  ## Follow-up seam: stable-prefix optimization
+  ## Stable-prefix streaming (incremental render)
 
-  Today every streaming delta re-parses the FULL accumulated text (byte-
-  capped at 256KB -- see `@render_byte_cap` below). A follow-up unit
-  could instead cache the parse of the longest durable prefix (the text
-  up to the last committed line boundary, which never changes as more
-  deltas arrive) and re-parse only the live tail on each delta.
-  Documented here as a known optimization opportunity, not implemented --
-  this module's current correctness does not depend on it.
+  `render_streaming_incremental/3` is the O(live tail) alternative to
+  re-parsing the FULL accumulated text on every delta: it accepts the
+  full accumulated text, a `width`, and a `Checkpoint` carried from the
+  previous call, and returns `{view, checkpoint}` where `view` is EXACTLY
+  what `render(text, %{mode: :streaming, width: width})` would return --
+  element-for-element, at every prefix. The full re-parse remains the
+  correctness oracle; the checkpoint only changes how much work gets
+  redone, never what the result is. `new_checkpoint/0` builds the initial
+  (empty) checkpoint; `nil` is also accepted as fresh.
+
+  ### The checkpoint rule
+
+  A candidate boundary sits just past a committed `"\\n"` (the still-
+  growing last line is never frozen). A boundary is safe only when ALL of
+  these hold, each protecting a specific construct's immutability:
+
+  - **fence** -- both the renderer's raw-prefix ```` ``` ````/`~~~`
+    matching-marker fence machine AND provisional-close's trimmed-prefix
+    fence machine must be closed. A fence parser is forward-only: once a
+    matching-marker line closes it, no later byte can reopen it, so a
+    closed fence's extent is permanently fixed -- but an OPEN fence's
+    extent is not yet known, so nothing inside or at its still-open
+    boundary may freeze.
+  - **table** -- the line immediately before the boundary must contain no
+    `"|"`. A committed `"|"`-line can still become a table HEADER once
+    the next line arrives (the header+separator lookahead is 2 lines),
+    and a still-absorbing table re-derives column widths over ALL rows,
+    so a later row can rewrite an earlier row's rendered text. Excluding
+    every pipe-containing line from being the boundary's last line rules
+    out both hazards at once.
+  - **inline** -- the provisional-close scan stack must be empty. An
+    unclosed `` **`` / `*` / `` ` `` / `[` on a committed line receives
+    erasures/closers from LATER lines (`resolve_inline_close/1` looks at
+    the tail of the whole prose run), so a boundary with live inline
+    state is not stable.
+  - **single-line constructs** (headings, hr, blockquote, list items,
+    plain paragraphs) are immutable the moment their `"\\n"` arrives --
+    this grammar nests only via fences and tables, both covered above.
+  - **UTF-8** -- the frozen raw segment must be valid UTF-8 on its own
+    (bounded by the longest valid UTF-8 prefix of the live tail). Whole-
+    buffer Latin-1 recovery (`recover_utf8/1`) is not tail-composable, so
+    a boundary past a genuinely-invalid byte would freeze the wrong
+    (recovered) bytes. `"\\r"` needs no special handling: sanitize
+    preserves both `"\\r"` and `"\\n"`, so a CRLF split lands like any
+    other chunk boundary.
+
+  ### Cap interaction
+
+  The 256KB cap (`@render_byte_cap`) applies to the TOTAL sanitized text
+  (frozen prefix + live tail), matching the full re-parse's own cap
+  check. Above it, the view is the same plain-text fallback the full
+  re-parse would produce, and the checkpoint RESETS to fresh -- the next
+  call re-derives everything from scratch rather than growing an
+  unbounded frozen-elements list past the cap.
+
+  ### Misuse guard
+
+  `text` must be an append-only extension of the previous call's `text`
+  at the same `width`; `render_streaming_incremental/3` verifies this by
+  byte-comparing the accumulated text's prefix against the checkpoint's
+  own frozen raw bytes. A width change or a non-extending `text` (stale
+  checkpoint reused against unrelated content) resets to a fresh
+  checkpoint and a full parse -- the output is always oracle-correct,
+  never corrupted by a misused checkpoint.
+
+  ### Garbage degradation
+
+  A genuinely-invalid byte permanently blocks the checkpoint from
+  advancing past it (the UTF-8 rule above), so a message containing
+  arbitrary garbage degrades to the pre-optimization behavior: a full
+  re-parse of the accumulated text on every delta, still capped at
+  `@render_byte_cap` bytes like any other streaming render.
+
+  ### Follow-up seam
+
+  `render/2` and `render_streaming/2` are unchanged -- nothing here
+  alters sealed or full-streaming rendering. Wiring a caller (e.g.
+  `BodyProvider`) to actually carry a `Checkpoint` across deltas, instead
+  of calling `render_streaming/2` fresh each time, is the follow-up seam
+  this module leaves open.
   """
 
+  alias __MODULE__.Checkpoint
   alias Raxol.UI.Components.MarkdownRenderer
   alias Raxol.View.Components
 
@@ -158,6 +270,209 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
   @spec render_streaming(term(), pos_integer()) :: map()
   def render_streaming(markdown_text, width) do
     markdown_text |> to_text() |> provisional_close() |> render_via(width)
+  end
+
+  @doc """
+  A fresh, empty `Checkpoint` -- the starting point for a new streamed
+  message. Also see the `nil` shorthand accepted by
+  `render_streaming_incremental/3`.
+  """
+  @spec new_checkpoint() :: Checkpoint.t()
+  def new_checkpoint, do: %Checkpoint{}
+
+  @doc """
+  Incremental streaming render: `text` is the FULL accumulated text
+  (append-only across deltas -- never just the newest chunk), `width` is
+  the render width, and `checkpoint` is the `Checkpoint` returned by the
+  previous call (or `nil`/`new_checkpoint/0` for the first call).
+
+  Returns `{view, checkpoint}`. `view` is always exactly what
+  `render(text, %{mode: :streaming, width: width})` would return; the
+  checkpoint only changes how much of `text` gets re-parsed, never the
+  result. Never raises. See the moduledoc's "Stable-prefix streaming"
+  section for the full checkpoint rule.
+  """
+  @spec render_streaming_incremental(
+          term(),
+          pos_integer(),
+          Checkpoint.t() | nil
+        ) ::
+          {map(), Checkpoint.t()}
+  def render_streaming_incremental(text, width, checkpoint) do
+    do_render_streaming_incremental(text, width, checkpoint)
+  rescue
+    _ -> {render(text, %{mode: :streaming, width: width}), new_checkpoint()}
+  end
+
+  defp do_render_streaming_incremental(text, width, _checkpoint)
+       when not is_binary(text) do
+    {render(text, %{mode: :streaming, width: width}), new_checkpoint()}
+  end
+
+  defp do_render_streaming_incremental(text, width, checkpoint) do
+    if Code.ensure_loaded?(EarmarkParser) do
+      {render(text, %{mode: :streaming, width: width}), new_checkpoint()}
+    else
+      cp = validate_checkpoint(checkpoint, width, text)
+      incremental_render(text, width, cp)
+    end
+  end
+
+  defp validate_checkpoint(nil, _width, _text), do: new_checkpoint()
+
+  defp validate_checkpoint(%Checkpoint{} = cp, width, text) do
+    cond do
+      cp.width != width ->
+        new_checkpoint()
+
+      byte_size(text) < cp.frozen_byte_offset ->
+        new_checkpoint()
+
+      binary_part(text, 0, cp.frozen_byte_offset) != cp.raw_prefix ->
+        new_checkpoint()
+
+      true ->
+        cp
+    end
+  end
+
+  defp validate_checkpoint(_other, _width, _text), do: new_checkpoint()
+
+  defp incremental_render(text, width, cp) do
+    raw_tail =
+      binary_part(
+        text,
+        cp.frozen_byte_offset,
+        byte_size(text) - cp.frozen_byte_offset
+      )
+
+    sanitized_tail = to_text(raw_tail)
+    s_total_size = byte_size(cp.sanitized_prefix) + byte_size(sanitized_tail)
+
+    if s_total_size > @render_byte_cap do
+      closed_total = cp.sanitized_prefix <> sanitized_tail
+      {fallback_view(closed_total), new_checkpoint()}
+    else
+      closed_tail = do_provisional_close(sanitized_tail)
+
+      if byte_size(cp.sanitized_prefix) + byte_size(closed_tail) >
+           @render_byte_cap do
+        {fallback_view(cp.sanitized_prefix <> closed_tail), new_checkpoint()}
+      else
+        tail_elements = MarkdownRenderer.render_with_builtin(closed_tail, width)
+
+        view = %{
+          type: :column,
+          children: cp.frozen_elements ++ tail_elements,
+          style: %{},
+          gap: 0
+        }
+
+        new_cp = advance_checkpoint(cp, text, raw_tail, sanitized_tail, width)
+        {view, new_cp}
+      end
+    end
+  end
+
+  defp advance_checkpoint(cp, text, raw_tail, sanitized_tail, width) do
+    lines = String.split(sanitized_tail, "\n")
+    complete_line_count = length(lines) - 1
+
+    case find_safe_boundary(lines, complete_line_count, raw_tail) do
+      nil ->
+        cp
+
+      {raw_delta, san_delta} ->
+        segment_sanitized = binary_part(sanitized_tail, 0, san_delta)
+        seg_parse_text = binary_part(segment_sanitized, 0, san_delta - 1)
+
+        seg_elements =
+          MarkdownRenderer.render_with_builtin(seg_parse_text, width)
+
+        %Checkpoint{
+          frozen_byte_offset: cp.frozen_byte_offset + raw_delta,
+          frozen_elements: cp.frozen_elements ++ seg_elements,
+          raw_prefix: binary_part(text, 0, cp.frozen_byte_offset + raw_delta),
+          sanitized_prefix: cp.sanitized_prefix <> segment_sanitized,
+          width: width
+        }
+    end
+  end
+
+  # Finds the LAST safe boundary among `sanitized_tail`'s complete lines
+  # (the first `complete_line_count` entries of `lines` -- the final,
+  # still-partial line is never a candidate). Threads four pieces of
+  # state left-to-right, all starting clean per the invariant that the
+  # frozen prefix always ends balanced: the renderer's raw-prefix fence
+  # machine, provisional-close's trimmed-prefix fence machine, and the
+  # inline scan stack (updated only on lines the trimmed machine tags
+  # `:prose`). Returns `{raw_delta, san_delta}` for the winning candidate
+  # or `nil` if none survive.
+  defp find_safe_boundary(_lines, 0, _raw_tail), do: nil
+
+  defp find_safe_boundary(lines, complete_line_count, raw_tail) do
+    {valid_prefix, _rest} = longest_valid_utf8_prefix(raw_tail)
+    max_raw_delta = byte_size(valid_prefix)
+
+    raw_newline_positions =
+      raw_tail
+      |> :binary.matches("\n")
+      |> Enum.map(fn {pos, _len} -> pos end)
+
+    # Zip pairs the i-th complete sanitized line with the i-th raw "\n"
+    # position -- a 1:1 correspondence (sanitize never touches "\n", and
+    # UTF-8 recovery neither drops nor invents a 0x0A byte), and O(1) per
+    # line where an indexed lookup would be O(i).
+    {_final_state, best, _san_offset} =
+      lines
+      |> Enum.take(complete_line_count)
+      |> Enum.zip(raw_newline_positions)
+      |> Enum.reduce({{false, false, []}, nil, 0}, fn {line, raw_pos},
+                                                      {state, best, san_offset} ->
+        {new_state, safe?} = step_scan_state(state, line)
+        san_offset = san_offset + byte_size(line) + 1
+        raw_delta = raw_pos + 1
+
+        best =
+          if safe? and raw_delta <= max_raw_delta,
+            do: {raw_delta, san_offset},
+            else: best
+
+        {new_state, best, san_offset}
+      end)
+
+    best
+  end
+
+  defp step_scan_state({m1, m2, stack}, line) do
+    {new_m1, tag1} = fence_step(m1, fence_marker_of(line))
+    {new_m2, _tag2} = fence_step(m2, raw_fence_marker_of(line))
+
+    new_stack =
+      if tag1 == :prose do
+        scan_markers(String.graphemes(line), 0, stack)
+      else
+        stack
+      end
+
+    safe? =
+      new_m1 == false and new_m2 == false and new_stack == [] and
+        not String.contains?(line, "|")
+
+    {{new_m1, new_m2, new_stack}, safe?}
+  end
+
+  # The renderer's own fence detector (`parse_blocks`/`take_until_fence`)
+  # matches the RAW line, no leading-whitespace trim -- unlike
+  # `fence_marker_of/1` (provisional-close's trimmed version). Kept
+  # separate because the two parsers can (and, per the directed hazard
+  # tests, do) disagree on indented fence markers.
+  defp raw_fence_marker_of(line) do
+    cond do
+      String.starts_with?(line, "```") -> "```"
+      String.starts_with?(line, "~~~") -> "~~~"
+      true -> nil
+    end
   end
 
   # Above this byte size, rendering skips the parse entirely and falls
