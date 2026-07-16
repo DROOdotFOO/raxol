@@ -281,7 +281,12 @@ defmodule Raxol.UI.ListScorerTest do
 
       millis = micros / 1000
 
-      assert millis < 16.0,
+      # Order-of-magnitude blowup guard, matching the sibling test's
+      # convention above: without the clamp, the O(query * key) DP over a
+      # 1M-grapheme label costs seconds — 200ms catches that class while
+      # absorbing shared-CI-runner load (a 16ms wall-clock target flaked
+      # on loaded runners at ~25ms with the clamp working correctly).
+      assert millis < 200.0,
              "expected the 1M-grapheme adversarial label to stay bounded, took #{millis}ms"
 
       assert [%{item: matched, key: key}] = results
