@@ -399,6 +399,10 @@ defmodule Raxol.UI.Theming.Colors do
 
   @doc """
   Finds the closest ANSI basic color index (0-15) to the given RGB color.
+
+  For semantic salience roles (error, accent, success, ...), prefer
+  `Raxol.UI.Theming.Ansi16Salience` instead: nearest-RGB quantization
+  collapses most of the solved semantic palette onto the gray ramp.
   """
   @spec find_closest_basic_color(color_rgb) :: 0..15
   def find_closest_basic_color(rgb) do
