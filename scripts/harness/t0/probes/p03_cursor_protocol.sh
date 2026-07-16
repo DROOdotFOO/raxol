@@ -40,3 +40,6 @@ t0_cursor_restore
 
 # No further writes: the cursor must now sit at (composer_row, 14).
 : "$composer_row" # referenced for readers; position asserted by the runner.
+
+# Ring B device-control capture window (no-op unless T0_HOLD_SECONDS set).
+t0_hold

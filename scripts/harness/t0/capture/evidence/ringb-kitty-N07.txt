@@ -1,0 +1,23 @@
+---STRIP---
+STATUS: idle
+PROMPT>
+_inverted_region.sh' 24 3 40 ringb-kitty-N07-15682
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+LINE-0039
+LINE-0040
