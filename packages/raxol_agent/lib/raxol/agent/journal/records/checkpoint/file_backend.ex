@@ -218,6 +218,26 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
     end
   end
 
+  # --- GC protection floor (newest HEALTHY checkpoint's tip) -----------------
+
+  @impl true
+  def protected_floor(%FileStore{} = journal, records) when is_list(records) do
+    records
+    |> Enum.filter(&(Map.get(&1, "kind") == @kind))
+    |> Enum.sort_by(&Map.get(&1, "id", -1), :desc)
+    |> Enum.find_value(:none, fn cp ->
+      # Health == restore succeeds through the SAME hardened path resume uses, so
+      # the floor is exactly the tip resume restores from (a corrupt newest is
+      # skipped, landing the floor on the older healthy checkpoint's tip).
+      case restore_checkpoint(journal, records, cp) do
+        {:ok, _model} -> {:offset, Map.fetch!(cp, "tip_offset")}
+        {:error, _reason} -> false
+      end
+    end)
+  end
+
+  def protected_floor(_journal, _records), do: :none
+
   # --- tip resolution / validation (N-JS1) -----------------------------------
 
   defp resolve_tip(records, opts) do

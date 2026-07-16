@@ -139,6 +139,15 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
               checkpoint :: map()
             ) :: {:ok, model()} | {:error, term()}
 
+  @doc """
+  The GC-protected floor for `journal`'s already-read `records`: the `tip_offset`
+  of the newest **healthy** checkpoint (its snapshot present + hash-verified,
+  restore succeeds). Records at or above this offset MUST NEVER be truncated.
+  `:none` when no healthy checkpoint exists.
+  """
+  @callback protected_floor(journal :: term(), records :: [map()]) ::
+              {:offset, pos_integer()} | :none
+
   # --- backend seam ----------------------------------------------------------
 
   # A backend implementing `c:write/3` / `c:restore/2` may be injected via
@@ -188,4 +197,34 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   end
 
   defp backend, do: :persistent_term.get(@backend_key, @default_backend)
+
+  # --- GC protection floor (Drew MEDIUM; JS-FREEZE §1.1-GC) ------------------
+
+  @doc """
+  The GC-protected floor for `journal`'s already-read `records`: records at or
+  above this offset MUST NEVER be truncated, so the checkpoint restore path
+  stays intact (**frozen law: GC never orphans checkpoints**, JS-FREEZE §1.1).
+
+  It is the `tip_offset` of the newest **healthy** checkpoint — the one resume
+  actually restores from. "Healthy" means its snapshot is present and
+  hash-verified (restore succeeds); a corrupt newest is skipped so the floor
+  lands on the older healthy checkpoint U10's fall-back restores from, never on
+  a corrupt newest's higher tip (which would let GC truncate records the
+  fall-back fold still needs — an orphaned fall-back tip). `:none` when no
+  healthy checkpoint exists (nothing to protect).
+
+  A future `gc`/truncation writer MUST consult this and reject any proposal
+  whose truncation range reaches this offset — rejected at the same synchronous
+  admission seam as `:invalid_tip`, never accepted-then-marked.
+
+  Dispatches to the active backend (default `FileBackend`) because health is a
+  snapshot-file property, not a record-only one.
+  """
+  @spec protected_floor(term(), [map()]) :: {:offset, pos_integer()} | :none
+  def protected_floor(journal, records) when is_list(records) do
+    case backend() do
+      nil -> :none
+      mod -> mod.protected_floor(journal, records)
+    end
+  end
 end
