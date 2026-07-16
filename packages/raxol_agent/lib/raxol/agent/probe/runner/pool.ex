@@ -281,7 +281,9 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
         # incompleteness). Arm a timer; on fire, the run is killed and gets its
         # :timeout terminal. Cancelled by every other terminal path.
         timeout_ref = Process.send_after(self(), {:run_timeout, run_id}, spec.timeout_ms)
-        state = put_run(state, run_id, Map.put(Map.get(state.runs, run_id), :timeout_ref, timeout_ref))
+
+        state =
+          put_run(state, run_id, Map.put(Map.get(state.runs, run_id), :timeout_ref, timeout_ref))
 
         {:reply, {:ok, run_id}, state}
 

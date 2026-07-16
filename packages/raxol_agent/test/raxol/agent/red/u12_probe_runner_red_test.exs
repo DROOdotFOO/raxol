@@ -616,11 +616,15 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       evs0 = L.events(rig.bus)
 
       for id <- parked do
-        assert Enum.any?(evs0, &(&1.kind == :probe_run and &1.run_id == id and &1.status == :parked))
+        assert Enum.any?(
+                 evs0,
+                 &(&1.kind == :probe_run and &1.run_id == id and &1.status == :parked)
+               )
 
         refute Enum.any?(
                  evs0,
-                 &(&1.kind == :probe_run and &1.run_id == id and &1.status in L.terminal_statuses())
+                 &(&1.kind == :probe_run and &1.run_id == id and
+                     &1.status in L.terminal_statuses())
                )
       end
 
@@ -661,7 +665,8 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       for id <- survivors do
         refute Enum.any?(
                  events,
-                 &(&1.kind == :probe_run and &1.run_id == id and &1.status in L.terminal_statuses())
+                 &(&1.kind == :probe_run and &1.run_id == id and
+                     &1.status in L.terminal_statuses())
                ),
                "a non-oldest parked run was shed by a single overflow: #{id}"
       end

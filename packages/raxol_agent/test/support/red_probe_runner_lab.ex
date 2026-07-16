@@ -109,7 +109,11 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
   def provider_call(provider, run_id, %{prefix: prefix} = request) do
     :counters.add(provider.calls, 1, 1)
     suffix = Map.get(request, :suffix, [])
-    Agent.update(provider.captures, fn caps -> [%{run_id: run_id, prefix: prefix, suffix: suffix} | caps] end)
+
+    Agent.update(provider.captures, fn caps ->
+      [%{run_id: run_id, prefix: prefix, suffix: suffix} | caps]
+    end)
+
     %{content: "probe-response", usage: %{output_tokens: 12}}
   end
 
@@ -323,7 +327,8 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     Enum.reduce_while(captures, :ok, fn %{run_id: run_id, prefix: prefix}, :ok ->
       if prefix == primary,
         do: {:cont, :ok},
-        else: {:halt, {:error, {:prefix_divergence, first_divergent_offset(primary, prefix), run_id}}}
+        else:
+          {:halt, {:error, {:prefix_divergence, first_divergent_offset(primary, prefix), run_id}}}
     end)
   end
 
@@ -508,7 +513,8 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def build(_context) do
-      {:ok, %{suffix: [%{role: "user", content: "gate?"}], output: :structured, max_output_tokens: 256}}
+      {:ok,
+       %{suffix: [%{role: "user", content: "gate?"}], output: :structured, max_output_tokens: 256}}
     end
 
     @impl true
@@ -541,7 +547,13 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def build(_context),
-      do: {:ok, %{suffix: [%{role: "user", content: "gate?"}], output: :structured, max_output_tokens: 256}}
+      do:
+        {:ok,
+         %{
+           suffix: [%{role: "user", content: "gate?"}],
+           output: :structured,
+           max_output_tokens: 256
+         }}
 
     @impl true
     def interpret(_response, context),
@@ -578,7 +590,9 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def build(_context),
-      do: {:ok, %{suffix: [%{role: "user", content: "x"}], output: :structured, max_output_tokens: 64}}
+      do:
+        {:ok,
+         %{suffix: [%{role: "user", content: "x"}], output: :structured, max_output_tokens: 64}}
 
     @impl true
     def interpret(_response, context),
@@ -637,7 +651,9 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def build(_context),
-      do: {:ok, %{suffix: [%{role: "user", content: "rules?"}], output: :text, max_output_tokens: 128}}
+      do:
+        {:ok,
+         %{suffix: [%{role: "user", content: "rules?"}], output: :text, max_output_tokens: 128}}
 
     @impl true
     def interpret(_response, context),
@@ -663,7 +679,9 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def build(_context),
-      do: {:ok, %{suffix: [%{role: "user", content: "x"}], output: :structured, max_output_tokens: 64}}
+      do:
+        {:ok,
+         %{suffix: [%{role: "user", content: "x"}], output: :structured, max_output_tokens: 64}}
 
     @impl true
     def interpret(_response, _context),
@@ -689,7 +707,9 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def build(_context),
-      do: {:ok, %{suffix: [%{role: "user", content: "x"}], output: :structured, max_output_tokens: 64}}
+      do:
+        {:ok,
+         %{suffix: [%{role: "user", content: "x"}], output: :structured, max_output_tokens: 64}}
 
     @impl true
     def interpret(_response, context),
@@ -711,7 +731,11 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       L.fire(fs, :family_check_removed)
       L.emit(bus, L.opening(run_id, :started))
       L.emit(bus, L.meta_result(run_id, family: :loop, source: :probe_c1_gate, trust: :trusted))
-      L.emit(bus, L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge()))
+
+      L.emit(
+        bus,
+        L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge())
+      )
     end
   end
 
@@ -726,7 +750,11 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       _ = L.provider_call(provider, run_id, %{prefix: L.primary_prefix(), suffix: []})
       L.emit(bus, L.acct(run_id, :call))
       L.emit(bus, L.acct(run_id, :settle, actual: 80))
-      L.emit(bus, L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge()))
+
+      L.emit(
+        bus,
+        L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge())
+      )
     end
   end
 
@@ -756,7 +784,13 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
         L.emit(bus, L.acct(run_id, :settle, actual: 10))
       end
 
-      L.emit(bus, L.terminal(run_id, :exhausted, fingerprint: L.fingerprint(), charge: L.charge(calls: max_calls + 1)))
+      L.emit(
+        bus,
+        L.terminal(run_id, :exhausted,
+          fingerprint: L.fingerprint(),
+          charge: L.charge(calls: max_calls + 1)
+        )
+      )
     end
   end
 
@@ -772,7 +806,11 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       _ = L.provider_call(provider, run_id, %{prefix: L.reserialized_prefix(), suffix: []})
       L.emit(bus, L.acct(run_id, :call))
       L.emit(bus, L.acct(run_id, :settle, actual: 90))
-      L.emit(bus, L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge()))
+
+      L.emit(
+        bus,
+        L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge())
+      )
     end
   end
 
@@ -785,7 +823,11 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       L.emit(bus, L.opening(run_id, :started))
       # Context is tainted, but the Runner honors the probe's :trusted draft.
       L.emit(bus, L.meta_result(run_id, family: :meta, source: :probe_c1_gate, trust: :trusted))
-      L.emit(bus, L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge()))
+
+      L.emit(
+        bus,
+        L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge())
+      )
     end
   end
 
@@ -828,7 +870,10 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     def run(%{bus: bus, fireset: fs}, run_id, k) do
       L.fire(fs, :streaming_drafts)
       L.emit(bus, L.opening(run_id, :started))
-      for _ <- 1..k, do: L.emit(bus, L.meta_result(run_id, source: :probe_c1_gate, trust: :trusted))
+
+      for _ <- 1..k,
+          do: L.emit(bus, L.meta_result(run_id, source: :probe_c1_gate, trust: :trusted))
+
       # VIOLATION: the k drafts already left the building when exhaustion hit.
       L.emit(bus, L.terminal(run_id, :exhausted, fingerprint: L.fingerprint()))
     end
@@ -886,7 +931,11 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       {:over, _} = L.try_reserve(rb, 100)
       # VIOLATION: the session reservation is NOT released before parking.
       L.emit(bus, L.opening(run_id, :parked))
-      L.emit(bus, L.terminal(run_id, :exhausted, fingerprint: L.fingerprint(), charge: L.charge(calls: 0)))
+
+      L.emit(
+        bus,
+        L.terminal(run_id, :exhausted, fingerprint: L.fingerprint(), charge: L.charge(calls: 0))
+      )
     end
   end
 
@@ -904,8 +953,25 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       _ = L.provider_call(provider, run_id, %{prefix: L.primary_prefix(), suffix: []})
       L.emit(bus, L.acct(run_id, :call))
       L.emit(bus, L.acct(run_id, :settle, actual: 90))
-      L.emit(bus, L.meta_result(run_id, family: :meta, source: :probe_c1_gate, trust: ctx_taint, refs: [tip]))
-      L.emit(bus, L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge(), refs: [tip]))
+
+      L.emit(
+        bus,
+        L.meta_result(run_id,
+          family: :meta,
+          source: :probe_c1_gate,
+          trust: ctx_taint,
+          refs: [tip]
+        )
+      )
+
+      L.emit(
+        bus,
+        L.terminal(run_id, :completed,
+          fingerprint: L.fingerprint(),
+          charge: L.charge(),
+          refs: [tip]
+        )
+      )
     end
   end
 end

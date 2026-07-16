@@ -53,7 +53,8 @@ defmodule ConcurrentBufferTestHelper do
         ConcurrentBuffer.stop(pid)
       catch
         :exit, reason
-        when reason == :noproc or (is_tuple(reason) and elem(reason, 0) == :noproc) ->
+        when reason == :noproc or
+               (is_tuple(reason) and elem(reason, 0) == :noproc) ->
           :ok
       end
     else
