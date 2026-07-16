@@ -62,6 +62,90 @@ defmodule Raxol.Agent.ContractTest do
       end
     end
 
+    test "the done gate is consulted on the real done path: independent postdating evidence closes gated with refs" do
+      session_id = "contract-test-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      # A tool_use (mutation) followed by a tool_result of a DIFFERENT tool
+      # name — an independent verification output that postdates the mutation
+      # and is not its own echo. The gate accepts, so the final turn_completed
+      # carries the evidence ref (offset 3: turn_started=1, tool_use=2, result=3).
+      stream = [
+        {:tool_use, %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
+        {:tool_result, %{name: "run_tests", result: "tests: 12 passed"}},
+        {:done, %{content: "done", usage: %{output_tokens: 1}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+
+      final = session_id |> drain_events() |> List.last()
+      assert final.type == :turn_completed
+      assert final.payload.final == true
+      assert final.payload.refs == [3]
+    end
+
+    test "a mutation's own result echo is rejected: done closes fail-open with rejected_evidence telemetry" do
+      session_id = "contract-test-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      handler = "u21-rejected-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:raxol, :agent, :done_gate, :rejected_evidence],
+        fn _e, _m, metadata, _c -> send(test_pid, {:rejected_evidence, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # The only tool_result postdating the mutation is that same call's echo
+      # (same tool name) — the gate rejects it as :mutation_echo. Completion
+      # stays fail-open: still final: true, no refs, plus telemetry.
+      stream = [
+        {:tool_use, %{name: "fs_write", arguments: %{}, id: "call-1"}},
+        {:tool_result, %{name: "fs_write", result: "wrote"}},
+        {:done, %{content: "done", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+
+      final = session_id |> drain_events() |> List.last()
+      assert final.payload.final == true
+      refute Map.has_key?(final.payload, :refs)
+
+      assert_receive {:rejected_evidence, %{reason: {:mutation_echo, _}}}
+    end
+
+    test "a zero-tool turn closes ungated (parked policy) and emits done-gate telemetry" do
+      session_id = "contract-test-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      handler = "u21-ungated-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:raxol, :agent, :done_gate, :ungated_done],
+        fn _e, _m, metadata, _c -> send(test_pid, {:ungated_done, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      {:ok, _} = Contract.pump(session_id, mock_stream("plain answer"), prompt: "hi")
+
+      final = session_id |> drain_events() |> List.last()
+
+      # Parked zero-tool policy preserved: still final: true, no refs attached.
+      assert final.payload.final == true
+      refute Map.has_key?(final.payload, :refs)
+
+      assert_receive {:ungated_done, %{turn_id: turn_id}}
+      assert is_binary(turn_id)
+    end
+
     test "an error stream yields an :error event and error return" do
       session_id = "contract-test-#{System.unique_integer([:positive])}"
       :ok = SessionStreamer.subscribe(session_id)

@@ -70,13 +70,24 @@ defmodule Raxol.Agent.DoneGate do
 
   ## Wiring status (disclosure)
 
-  `gate/3` is **not yet invoked by any production path**. `Contract.pump/3`
-  still emits `turn_completed{final: true}` unconditionally on `{:done, ...}`.
-  This module is the U21-R deliverable (the gate + its red suite); wiring the
-  done path through it is the U21-I impl unit, which per the roadmap's impl
-  ordering follows U8 (BlastRadiusGate — the unit that introduces structural
-  mutation classes and write-capable tools) and needs the refs-citation seam
-  (how an agent names its evidence offsets), which does not exist yet. Both
+  `Contract.pump/3` consults `gate/3` on the real done path, in
+  **observe-only** mode: it derives the turn's candidate evidence
+  (`evidence_refs/2`), calls `gate/3`, and emits a telemetry signal for the
+  verdict, but it does NOT hard-block completion — the turn still closes with
+  `turn_completed{final: true}`, carrying the accepted `refs` when the gate
+  accepts. Completion stays fail-open on purpose: until U8 (BlastRadiusGate)
+  introduces structural mutation classes and a real verification class, the
+  gate is fully fail-closed on v0 producer journals (see "What counts as a
+  mutation"), so blocking every done would be wrong. The observe-only wiring
+  makes the boundary live and measurable now:
+
+    * `[:raxol, :agent, :done_gate, :ungated_done]` — a done citing no evidence
+      (the parked zero-tool-turn policy path);
+    * `[:raxol, :agent, :done_gate, :rejected_evidence]` — a done whose cited
+      evidence the gate rejected (metadata carries the `reason`).
+
+  Promoting this to a hard block is the U21-I impl unit, which follows U8 and
+  the refs-citation seam (how an agent names its own evidence offsets). Both
   are tracked in `docs/proposals/in-flight/harness-parked.md` (U21
   gating-strength ruling; wiring debt).
 
@@ -206,6 +217,30 @@ defmodule Raxol.Agent.DoneGate do
       {:ok, _refs} -> {:ok, done_event(journal, turn_id, refs)}
       {:error, _} = err -> err
     end
+  end
+
+  @doc """
+  Candidate evidence refs for `turn_id`: journal offsets of the turn's own
+  `:tool_result` events that postdate its last mutating action.
+
+  This mirrors the gate's evidence-class + ordering window so a producer can
+  cite the refs it would offer without re-deriving the notion of evidence.
+  It does NOT pre-apply the mutation-echo check (check 5): those candidates are
+  handed to `gate/3`, which remains the sole authority on acceptance. On a
+  journal from today's v0 producer (no structural effect classification) the
+  gate is fully fail-closed, so most candidates resolve to `:mutation_echo`;
+  an empty list resolves to `:evidence_required`.
+  """
+  @spec evidence_refs(journal(), term()) :: [offset()]
+  def evidence_refs(journal, turn_id) do
+    last_mut = last_mutation(journal, turn_id)
+
+    journal
+    |> Enum.filter(fn ev ->
+      event_turn_id(ev) == turn_id and evidence_class?(ev) and
+        (last_mut == nil or event_id(ev) > last_mut)
+    end)
+    |> Enum.map(&event_id/1)
   end
 
   # -- ref classification -----------------------------------------------------
