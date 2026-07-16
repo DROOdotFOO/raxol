@@ -737,6 +737,23 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
       assert gate(journal, "t", [2]) == {:error, {:stale_evidence, 2}}
     end
   end
+
+  describe "U21-R2 #3 — accessors tolerate JSON-replayed (string-keyed) journals" do
+    test "every contour gates identically whether atom-keyed or JSON-replayed (string-keyed)" do
+      # `FileStore.Reader` replays a journal as `Jason.decode`d string-keyed
+      # maps (string keys AND string enum values). Round-trip each contour
+      # journal through Jason exactly as the Reader would and assert the gate's
+      # verdict is unchanged — the string-keyed form must not silently pass
+      # (nil accessors) or diverge from the atom-keyed form on any branch.
+      for {name, journal, turn, refs, _expected} <- Contours.contours() do
+        replayed = Enum.map(journal, fn e -> e |> Jason.encode!() |> Jason.decode!() end)
+
+        assert Contours.shape(gate(replayed, turn, refs)) ==
+                 Contours.shape(gate(journal, turn, refs)),
+               "string-keyed journal diverged from atom-keyed on the #{name} contour"
+      end
+    end
+  end
 end
 
 # ===========================================================================

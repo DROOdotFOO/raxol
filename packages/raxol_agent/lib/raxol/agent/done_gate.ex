@@ -208,18 +208,50 @@ defmodule Raxol.Agent.DoneGate do
 
   defp resolve(journal, offset), do: Enum.find(journal, &(event_id(&1) == offset))
 
-  # -- accessors tolerant of both %Event{} structs and plain maps --
+  # -- accessors tolerant of both decoded and JSON-replayed journals ----------
+  #
+  # A journal that reaches the gate straight from `Contract.pump`/`EmitBridge`
+  # is atom-keyed `%Event{}` structs. One replayed from disk via
+  # `Raxol.Agent.Journal.FileStore.Reader` is `Jason.decode`d into string-keyed
+  # maps — both the KEYS and the stringifiable enum VALUES (`type`, `item_type`,
+  # `effect_class`) arrive as strings. No layer rehydrates those back to atoms
+  # before the gate, so these accessors read either shape and normalize enum
+  # values with `atomize/1`, keeping the gate's verdict identical on the live
+  # and replayed forms of the same journal.
 
-  defp event_id(ev), do: Map.get(ev, :id)
-  defp event_turn_id(ev), do: Map.get(ev, :turn_id)
-  defp event_type(ev), do: Map.get(ev, :type)
+  defp event_id(ev), do: get_either(ev, :id)
+  defp event_turn_id(ev), do: get_either(ev, :turn_id)
+  defp event_type(ev), do: atomize(get_either(ev, :type))
 
   defp payload_field(ev, key) do
-    case Map.get(ev, :payload) do
-      %{} = payload -> Map.get(payload, key)
+    case get_either(ev, :payload) do
+      %{} = payload -> atomize(get_either(payload, key))
       _ -> nil
     end
   end
+
+  # Prefer the atom key; fall back to its string form for replayed journals.
+  defp get_either(map, key) when is_map(map) do
+    case Map.get(map, key) do
+      nil -> Map.get(map, Atom.to_string(key))
+      value -> value
+    end
+  end
+
+  defp get_either(_map, _key), do: nil
+
+  # Normalize a possibly-stringified enum value to its atom form so the type
+  # comparisons hold across live and replayed journals. `to_existing_atom`
+  # never fabricates atoms (no memory-leak risk on decoded input): an unknown
+  # string simply stays a string and fails the atom comparisons — the safe
+  # default. Booleans/numbers pass through unchanged.
+  defp atomize(value) when is_binary(value) do
+    String.to_existing_atom(value)
+  rescue
+    ArgumentError -> value
+  end
+
+  defp atomize(value), do: value
 
   # The durable done event handed back to the journal. `id`/`ts` are assigned by
   # the journal writer at append time; this carries the next-offset hint from the
