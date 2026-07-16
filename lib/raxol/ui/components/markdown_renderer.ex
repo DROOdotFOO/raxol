@@ -24,6 +24,12 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   @hr_width 40
   @ul_prefix "  * "
   @blockquote_prefix "| "
+  # GFM tables never shrink a column to zero width. Below this floor columns stop shrinking:
+  # cells are clipped to the floor with an ellipsis and the row as a whole
+  # is then wider than `width`, so the layout wraps/overflows that line
+  # like any other long text() -- NOT a horizontal scroll (there is no
+  # scroll surface here; "scrollable" is the aspirational end state).
+  @min_col_width 3
 
   @spec init(map()) ::
           {:ok, %{markdown_text: String.t(), width: non_neg_integer()}}
@@ -371,20 +377,39 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
 
   defp parse_blocks([], _width, acc), do: acc
 
-  # Fenced code block
+  # Fenced code block. GFM allows either ```` ``` ```` or `~~~` as the
+  # fence marker; a fence only closes on a line using the SAME marker it
+  # opened with, so a stray line of the other marker type while the fence
+  # is open is fence CONTENT, not a closer (mismatched fences never
+  # prematurely end the block).
   defp parse_blocks(["```" <> _ | rest], width, acc) do
-    {code_lines, remaining} = take_until_fence(rest, [])
+    parse_fenced_block("```", rest, width, acc)
+  end
 
-    code_elements =
-      Enum.map(code_lines, fn line ->
-        Components.text(content: "  " <> line, style: @code_style)
-      end)
+  defp parse_blocks(["~~~" <> _ | rest], width, acc) do
+    parse_fenced_block("~~~", rest, width, acc)
+  end
 
-    new_acc =
-      [Components.text(content: "") | code_elements] ++
-        [Components.text(content: "") | acc]
-
-    parse_blocks(remaining, width, new_acc)
+  # GFM table: a header row immediately followed by a separator-shaped row
+  # (`|---|---|`). Both must be present as their own lines in the buffer --
+  # a lone in-progress header (the last streamed line, no following line
+  # yet) can't satisfy this 2-line lookahead, so it renders as plain text
+  # rather than flashing a broken frame. The separator check is lenient
+  # (`separator_row?/1` accepts a partial `|--`), so complete-header +
+  # partial-separator DOES render -- a premature but well-formed frame
+  # (header + separator, body rows fill in as they stream). That is the
+  # intended benign streaming behavior, never a zero-width collapse.
+  defp parse_blocks([header, sep | rest], width, acc) do
+    if table_row?(header) and separator_row?(sep) do
+      header_cells = split_table_row(header)
+      {row_lines, remaining} = take_table_rows(rest, [], length(header_cells))
+      body_rows = Enum.map(row_lines, &split_table_row/1)
+      table_elements = render_table_rows(header_cells, body_rows, width)
+      parse_blocks(remaining, width, Enum.reverse(table_elements) ++ acc)
+    else
+      elements = parse_line(header, width)
+      parse_blocks([sep | rest], width, Enum.reverse(elements) ++ acc)
+    end
   end
 
   defp parse_blocks([line | rest], width, acc) do
@@ -536,9 +561,175 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
 
   defp slice_group(text, {start, len}), do: String.slice(text, start, len)
 
-  defp take_until_fence([], acc), do: {Enum.reverse(acc), []}
-  defp take_until_fence(["```" <> _ | rest], acc), do: {Enum.reverse(acc), rest}
+  defp parse_fenced_block(marker, rest, width, acc) do
+    {code_lines, remaining} = take_until_fence(rest, marker, [])
 
-  defp take_until_fence([line | rest], acc),
-    do: take_until_fence(rest, [line | acc])
+    code_elements =
+      Enum.map(code_lines, fn line ->
+        Components.text(content: "  " <> line, style: @code_style)
+      end)
+
+    new_acc =
+      [Components.text(content: "") | code_elements] ++
+        [Components.text(content: "") | acc]
+
+    parse_blocks(remaining, width, new_acc)
+  end
+
+  defp take_until_fence([], _marker, acc), do: {Enum.reverse(acc), []}
+
+  defp take_until_fence([line | rest], marker, acc) do
+    if String.starts_with?(line, marker) do
+      {Enum.reverse(acc), rest}
+    else
+      take_until_fence(rest, marker, [line | acc])
+    end
+  end
+
+  # --- GFM table rendering (builtin path) ---
+  #
+  # A permissive-by-design detector: any line containing "|" is a
+  # candidate row; a candidate is a separator iff every "|"-delimited cell
+  # is only dashes (optionally `:`-flanked for alignment). This is
+  # deliberately lenient about a truncated separator (`"|---|--"` still
+  # matches) -- during streaming that just renders a slightly-premature
+  # table frame one prefix earlier, never a crash or a raw-pipe flash.
+
+  defp table_row?(line) do
+    trimmed = String.trim(line)
+    trimmed != "" and String.contains?(trimmed, "|")
+  end
+
+  defp separator_row?(line) do
+    String.contains?(line, "|") and
+      line
+      |> String.trim()
+      |> String.trim("|")
+      |> String.split("|")
+      |> then(fn cells ->
+        cells != [] and Enum.all?(cells, &separator_cell?/1)
+      end)
+  end
+
+  defp separator_cell?(cell), do: Regex.match?(~r/^\s*:?-+:?\s*$/, cell)
+
+  defp split_table_row(line) do
+    line
+    |> String.trim()
+    |> String.trim("|")
+    |> String.split("|")
+    |> Enum.map(&String.trim/1)
+  end
+
+  # Consumes subsequent lines that still look like a row of THIS table: a
+  # leading "|" (the header/separator convention every existing table in
+  # this codebase follows) AND the same number of cells as the header. A
+  # blank line, a non-tabular line, or a "|"-containing line that doesn't
+  # match that shape (ordinary prose that happens to contain a stray "|"
+  # -- cell count alone isn't enough to rule this out for a 2-column
+  # table, where any single stray "|" trivially produces 2 cells) stops
+  # the row and is left in `remaining` for normal block parsing -- GFM
+  # tables don't span a blank/non-tabular-shaped line.
+  defp take_table_rows([line | rest], acc, col_count) do
+    if table_row_shaped?(line, col_count) do
+      take_table_rows(rest, [line | acc], col_count)
+    else
+      {Enum.reverse(acc), [line | rest]}
+    end
+  end
+
+  defp take_table_rows([], acc, _col_count), do: {Enum.reverse(acc), []}
+
+  defp table_row_shaped?(line, col_count) do
+    table_row?(line) and String.starts_with?(String.trim(line), "|") and
+      length(split_table_row(line)) == col_count
+  end
+
+  defp render_table_rows([], [], _width), do: []
+
+  defp render_table_rows(header_cells, body_rows, width) do
+    col_count =
+      Enum.max([length(header_cells) | Enum.map(body_rows, &length/1)])
+
+    header = pad_row(header_cells, col_count)
+    rows = Enum.map(body_rows, &pad_row(&1, col_count))
+
+    natural_widths = column_widths([header | rows], col_count)
+    final_widths = fit_widths(natural_widths, width, col_count)
+
+    header_row = table_row_text(header, final_widths)
+    separator_row = table_separator_text(final_widths)
+    body_texts = Enum.map(rows, &table_row_text(&1, final_widths))
+
+    Enum.concat([header_row, separator_row | body_texts], [
+      Components.text(content: "")
+    ])
+  end
+
+  defp pad_row(cells, col_count) do
+    cells
+    |> Kernel.++(List.duplicate("", max(col_count - length(cells), 0)))
+    |> Enum.take(col_count)
+  end
+
+  defp column_widths(rows, col_count) do
+    for i <- 0..(col_count - 1) do
+      rows
+      |> Enum.map(fn row ->
+        row |> Enum.at(i, "") |> TextMeasure.display_width()
+      end)
+      |> Enum.max()
+      |> max(@min_col_width)
+    end
+  end
+
+  # Shrinks natural column widths to fit `width` when possible; below the
+  # `@min_col_width` floor it stops shrinking and accepts a row wider than
+  # `width` (the documented "scrollable" degradation) rather than crush
+  # any column to zero.
+  defp fit_widths(widths, width, col_count) do
+    overhead = 3 * col_count + 1
+    budget = width - overhead
+    total = Enum.sum(widths)
+
+    cond do
+      total <= budget ->
+        widths
+
+      budget < col_count * @min_col_width ->
+        List.duplicate(@min_col_width, col_count)
+
+      true ->
+        shrink_proportionally(widths, budget)
+    end
+  end
+
+  defp shrink_proportionally(widths, budget) do
+    total = Enum.sum(widths)
+    Enum.map(widths, fn w -> max(@min_col_width, div(w * budget, total)) end)
+  end
+
+  defp table_row_text(cells, widths) do
+    cells_str =
+      cells
+      |> Enum.zip(widths)
+      |> Enum.map_join(" | ", fn {cell, w} -> pad_cell(cell, w) end)
+
+    Components.text(content: "| " <> cells_str <> " |")
+  end
+
+  defp table_separator_text(widths) do
+    seps = Enum.map_join(widths, "-|-", &String.duplicate("-", &1))
+    Components.text(content: "|-" <> seps <> "-|", style: @hr_style)
+  end
+
+  defp pad_cell(text, width) do
+    display_w = TextMeasure.display_width(text)
+
+    cond do
+      display_w == width -> text
+      display_w < width -> text <> String.duplicate(" ", width - display_w)
+      true -> TextLayout.truncate(text, width, :ellipsis)
+    end
+  end
 end

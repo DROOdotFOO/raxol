@@ -65,14 +65,29 @@ defmodule Raxol.Agent.EmitBridge do
 
   | neutral `type`     | tier         | contract `type`   |
   | ------------------ | ------------ | ----------------- |
-  | `:command_result`  | `:ephemeral` | `:item_delta`     |
-  | `:app_update`      | `:durable`   | `:item_completed` |
-  | `:turn_started`    | `:durable`   | `:turn_started`   |
-  | `:turn_completed`  | `:durable`   | `:turn_completed` |
-  | `:error`           | `:durable`   | `:error`          |
+  | `:command_result`   | `:ephemeral` | `:item_delta`        |
+  | `:app_update`       | `:durable`   | `:item_completed`    |
+  | `:turn_started`     | `:durable`   | `:turn_started`      |
+  | `:turn_completed`   | `:durable`   | `:turn_completed`    |
+  | `:error`            | `:durable`   | `:error`             |
+  | `:approval_requested` | (tier as sent) | `:approval_requested` |
+  | `:item_started`     | (tier as sent) | `:item_started`    |
+  | `:woken`            | (tier as sent) | `:woken`           |
 
   Anything else passes through as an `:item_completed` with its tier preserved.
   `family` and `turn_id` carry through unchanged; `ts` is preserved.
+
+  ## U11 envelope carry-through (freeze §2.1)
+
+  `scope` / `provenance` / `actor` flow end-to-end: the neutral map's values are
+  stamped onto the live `Event` (`map_event/3`) AND the journal record
+  (`durable_record/1`), and `actor` is stamped from the bridge's write-generation
+  context at this producer seam (modules never invent it). To keep grandfathered
+  records byte-identical (I2), the journal record OMITS any envelope field that
+  equals its frozen default — a record without the key decodes back to that
+  default via the grandfather clause, so only genuinely non-default provenance /
+  scope / actor / branch actually land on disk. A non-default value is never
+  stranded on one path.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -85,15 +100,39 @@ defmodule Raxol.Agent.EmitBridge do
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Core.Runtime.EmitBus
 
-  defstruct [:session_id, :streamer, :journal, journal_opts: [], last_offset: 0]
+  defstruct [
+    :session_id,
+    :streamer,
+    :journal,
+    :actor,
+    journal_opts: [],
+    last_offset: 0,
+    branch_id: "main"
+  ]
 
   @type t :: %__MODULE__{
           session_id: term(),
           streamer: GenServer.server(),
           journal: FileStore.t() | nil,
+          actor: map() | nil,
           journal_opts: keyword(),
-          last_offset: non_neg_integer()
+          last_offset: non_neg_integer(),
+          branch_id: String.t()
         }
+
+  # The frozen grandfather defaults (freeze §2.1). An event carrying exactly
+  # these values persists WITHOUT the envelope-growth keys — a record without
+  # them decodes back to these defaults, so a default event stays byte-identical
+  # to its pre-U11 form (I2). Non-default values ARE written and carried.
+  @default_scope :session
+  @default_provenance %{source: :primary, trust: :trusted}
+  @default_branch_id "main"
+
+  # Types that MUST be journaled regardless of the tier as sent: the doc calls
+  # `approval_requested` a durable resume-bracket — emit it ephemeral and the
+  # resume point is never journaled; `woken` marks a schedule/dormancy wake that
+  # must survive replay. Their tier is forced to `:durable` at the emit seam.
+  @durable_required_types [:approval_requested, :woken]
 
   @doc """
   Start a bridge for `session_id`.
@@ -106,6 +145,12 @@ defmodule Raxol.Agent.EmitBridge do
       opened lazily on the first durable event)
     * `:journal_opts` — options forwarded to `FileStore.open/2` on lazy open
       (e.g. `:base_dir`); default `[]`
+    * `:actor` — the write-generation actor (`%{kind, id}`) stamped onto every
+      event this bridge emits when the neutral map does not already carry one
+      (freeze §2.1: actor is producer-seam stamped, modules never invent it);
+      default `nil` (system emission)
+    * `:branch_id` — the speculation branch these events belong to (freeze
+      §1.1); default `"main"`, which is implicit on the wire (grandfather-safe)
     * `:name` — process name (default anonymous)
   """
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -129,23 +174,61 @@ defmodule Raxol.Agent.EmitBridge do
        session_id: session_id,
        streamer: streamer,
        journal: journal,
+       actor: Keyword.get(opts, :actor),
        journal_opts: journal_opts,
-       last_offset: last_offset(journal)
+       last_offset: last_offset(journal),
+       branch_id: Keyword.get(opts, :branch_id, @default_branch_id)
      }}
+  end
+
+  # Durable-required resume-brackets: force `:durable` no matter the tier as
+  # sent, then take the shared durable path. This clause precedes the tier-based
+  # ones so an `approval_requested`/`woken` emitted ephemeral still lands in the
+  # journal (its resume point would otherwise be lost).
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info(
+        {:emit_bus, session_id, %{type: type} = neutral},
+        %__MODULE__{session_id: session_id} = state
+      )
+      when type in @durable_required_types do
+    handle_durable(session_id, Map.put(neutral, :tier, :durable), state)
   end
 
   # Durable tier: the journal owns the id. Append first, take the offset, emit.
   # The journal is the hard gate: if the append fails, the durable event is NOT
   # published (no fabricated id, `last_offset` untouched) — a loud ephemeral
   # `:error` event goes out instead. See the moduledoc.
-  @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info(
         {:emit_bus, session_id, %{tier: :durable} = neutral},
         %__MODULE__{session_id: session_id} = state
       ) do
-    # Sanitize once and reuse for both the journal record and the live event so
-    # the live tail and the replayed record are byte-identical, not just id-equal.
-    safe = Map.put(neutral, :payload, sanitized_payload(neutral))
+    handle_durable(session_id, neutral, state)
+  end
+
+  # Ephemeral tier: never journaled. Id carries the last durable offset. The
+  # write-generation actor is stamped here too so live ephemeral events (deltas)
+  # carry the same actor as the durable events they refine.
+  def handle_manager_info(
+        {:emit_bus, session_id, neutral},
+        %__MODULE__{session_id: session_id} = state
+      ) do
+    event = map_event(stamp_generation(neutral, state), state.last_offset, session_id)
+    SessionStreamer.emit(session_id, event, state.streamer)
+    {:noreply, state}
+  end
+
+  def handle_manager_info(_msg, state), do: {:noreply, state}
+
+  # Shared durable path (append-before-publish). Sanitize once and reuse for
+  # both the journal record and the live event so the live tail and the replayed
+  # record are byte-identical, not just id-equal. Stamp the write-generation
+  # actor here (producer seam). On append failure the event is dropped from the
+  # live tail and a loud ephemeral `:error` signal goes out instead.
+  defp handle_durable(session_id, neutral, state) do
+    safe =
+      neutral
+      |> Map.put(:payload, sanitized_payload(neutral))
+      |> stamp_generation(state)
 
     case append_durable(state, safe) do
       {:ok, state, offset} ->
@@ -169,18 +252,6 @@ defmodule Raxol.Agent.EmitBridge do
     end
   end
 
-  # Ephemeral tier: never journaled. Id carries the last durable offset.
-  def handle_manager_info(
-        {:emit_bus, session_id, neutral},
-        %__MODULE__{session_id: session_id} = state
-      ) do
-    event = map_event(neutral, state.last_offset, session_id)
-    SessionStreamer.emit(session_id, event, state.streamer)
-    {:noreply, state}
-  end
-
-  def handle_manager_info(_msg, state), do: {:noreply, state}
-
   @impl GenServer
   def terminate(_reason, %__MODULE__{journal: nil}), do: :ok
 
@@ -194,7 +265,10 @@ defmodule Raxol.Agent.EmitBridge do
 
   Pure. `id` becomes the contract event's offset (the journal offset for durable
   events; the last durable offset for ephemeral ones). `session_id` overrides the
-  neutral map's (they are the same in practice).
+  neutral map's (they are the same in practice). The U11 envelope fields
+  (`scope`/`provenance`/`actor`) are carried through from the neutral map,
+  falling back to the frozen grandfather defaults so a producer that stamps
+  nothing still yields a well-formed default envelope (freeze §2.1).
   """
   @spec map_event(map(), non_neg_integer(), term()) :: Event.t()
   def map_event(neutral, id, session_id) when is_map(neutral) do
@@ -209,7 +283,13 @@ defmodule Raxol.Agent.EmitBridge do
       family: Map.get(neutral, :family, :loop),
       type: contract_type(Map.get(neutral, :type), tier),
       tier: tier,
-      payload: Map.get(neutral, :payload, %{})
+      payload: Map.get(neutral, :payload, %{}),
+      scope: Map.get(neutral, :scope, @default_scope),
+      provenance: Map.get(neutral, :provenance, @default_provenance),
+      actor: Map.get(neutral, :actor),
+      # The live path carries branch_id so it agrees with the durable record
+      # (the durable + live envelopes must never diverge on a field, §1.1).
+      branch_id: Map.get(neutral, :branch_id, @default_branch_id)
     }
   end
 
@@ -229,8 +309,7 @@ defmodule Raxol.Agent.EmitBridge do
             {:ok, state, offset}
 
           {:error, detail} ->
-            {:error, drop_dead_journal(state, detail), :journal_append_failed,
-             detail}
+            {:error, drop_dead_journal(state, detail), :journal_append_failed, detail}
         end
 
       {:error, state, detail} ->
@@ -278,6 +357,13 @@ defmodule Raxol.Agent.EmitBridge do
   # A plain, JSON-encodable map persisted to the journal. The Writer stamps
   # `"id"` (= offset) and stringifies keys; replaying reconstructs the same
   # contract-typed event. Payload is already sanitized by the caller.
+  #
+  # The U11 envelope-growth fields (scope / provenance / actor / branch_id) are
+  # written ONLY when they are non-default: a record that carries exactly the
+  # frozen defaults omits them and decodes back to those defaults via the
+  # grandfather clause, so a default event's on-disk bytes are byte-identical to
+  # its pre-U11 form (I2 preserved). A non-default value is always persisted —
+  # never stranded on the live path while missing from the journal.
   defp durable_record(neutral) do
     %{
       v: 0,
@@ -289,6 +375,49 @@ defmodule Raxol.Agent.EmitBridge do
       tier: :durable,
       payload: Map.get(neutral, :payload, %{})
     }
+    |> put_when_non_default(:scope, Map.get(neutral, :scope), @default_scope)
+    |> put_when_non_default(
+      :provenance,
+      Map.get(neutral, :provenance),
+      @default_provenance
+    )
+    |> put_actor(Map.get(neutral, :actor))
+    |> put_when_non_default(
+      :branch_id,
+      Map.get(neutral, :branch_id),
+      @default_branch_id
+    )
+  end
+
+  # Add `key` only when the carried value is present and differs from the frozen
+  # default — the grandfather-symmetric write (absent on disk ⇒ default on read).
+  defp put_when_non_default(record, _key, nil, _default), do: record
+
+  defp put_when_non_default(record, _key, value, default) when value == default,
+    do: record
+
+  defp put_when_non_default(record, key, value, _default),
+    do: Map.put(record, key, value)
+
+  # actor is `%{kind, id} | nil`; a nil actor is the system default (absent on
+  # disk), any present actor is persisted verbatim.
+  defp put_actor(record, nil), do: record
+  defp put_actor(record, actor), do: Map.put(record, :actor, actor)
+
+  # Stamp the write-generation actor + branch id onto a neutral map at the
+  # producer seam (freeze §2.1: "EmitBridge stamps actor from the command/attach
+  # context ... Individual modules never invent it"). The bridge value WINS
+  # unconditionally (`Map.put`, not `Map.put_new`): a neutral map that already
+  # carries an `:actor` — a module inventing its own — must NOT bypass the
+  # producer-seam stamp, or a nullable-everywhere field becomes inconsistent
+  # garbage and the trust lattice's actor attribution is spoofable. The branch id
+  # is forced the same way so every event in one generation shares exactly one
+  # branch_id (the tip predicate is branch-aware; a per-event branch would strand
+  # events across branches).
+  defp stamp_generation(neutral, state) do
+    neutral
+    |> Map.put(:actor, state.actor)
+    |> Map.put(:branch_id, state.branch_id)
   end
 
   defp sanitized_payload(neutral) do
@@ -317,5 +446,13 @@ defmodule Raxol.Agent.EmitBridge do
   defp contract_type(:turn_started, _tier), do: :turn_started
   defp contract_type(:turn_completed, _tier), do: :turn_completed
   defp contract_type(:error, _tier), do: :error
+  # Frozen-but-not-landed loop vocabulary (freeze §1.1 / storage-foundations):
+  # these bracket events pass through with their own type instead of collapsing
+  # to :item_completed. `approval_requested` is a durable bracket (a resume-point
+  # cannot be a bare item), `item_started` opens an item the later
+  # `item_completed` closes, `woken` marks a `schedule`/dormancy wake.
+  defp contract_type(:approval_requested, _tier), do: :approval_requested
+  defp contract_type(:item_started, _tier), do: :item_started
+  defp contract_type(:woken, _tier), do: :woken
   defp contract_type(_other, _tier), do: :item_completed
 end

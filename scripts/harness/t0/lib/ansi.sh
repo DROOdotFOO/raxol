@@ -90,3 +90,25 @@ t0_paint_footer() {
     row=$((row + 1))
   done
 }
+
+# --- hold (Ring B device-control capture window) ------------------------
+#
+# t0_hold — if T0_HOLD_SECONDS is set to a positive integer, sleep that
+# long before the probe (and its host shell) proceed to the next prompt.
+# A real GUI terminal driver (osascript/wezterm-cli/kitty-remote-control)
+# needs the terminal to STAY in the just-painted state long enough to
+# spawn a capture call; without this, the host shell prints a fresh
+# prompt line immediately after the probe exits, which can scroll the
+# footer away or move the cursor before the driver ever reads it back.
+#
+# No-op by default (T0_HOLD_SECONDS unset/0) — every existing tmux/emu
+# proxy cell that calls these probes without setting the var is
+# byte-for-byte unaffected.
+t0_hold() {
+  local seconds="${T0_HOLD_SECONDS:-0}"
+  case "$seconds" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  [ "$seconds" -gt 0 ] && sleep "$seconds"
+  return 0
+}

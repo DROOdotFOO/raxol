@@ -1,0 +1,44 @@
+
+The default interactive shell is now zsh.
+To update your account to use zsh, please run `chsh -s /bin/zsh`.
+For more details, please visit https://support.apple.com/kb/HT208050.
+MacBook-Pro-3:~ jabher$ T0_HOLD_SECONDS=8 bash '/Users/jabher/IdeaProjects/raxol
+/.claude/worktrees/agent-a7bd59b81a3d2184d/scripts/harness/t0/probes/n06_keyfram
+e_clear.sh' 24 3 20 ringb-wezterm-N06-14978
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+
+---STRIP---                                                                     
+STATUS: post-keyframe                                                           
+PROMPT>                                                                         

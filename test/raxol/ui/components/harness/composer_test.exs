@@ -517,4 +517,121 @@ defmodule Raxol.UI.Components.Harness.ComposerTest do
       assert new_state.mli.cursor_pos == {0, 0}
     end
   end
+
+  # -- T27 review round: real driver shapes, not just Event.key_event/3 --
+  #
+  # Before this round, `handle_event/3` matched key events by pattern
+  # (`%{key: :enter, modifiers: modifiers}`), a shape that ONLY exists on
+  # `Event.key_event/3` (the test API). The two real driver shapes --
+  # `event_translator.ex`'s (native termbox) and `input_parser.ex`'s (raw
+  # ANSI) -- have no `:modifiers` key at all, so that pattern never
+  # matched a real keypress: Enter never submitted, and printable
+  # characters never inserted outside of tests. These tests drive the
+  # REAL translator/parser functions (not hand-built maps) to prove the
+  # fix reaches actual terminal input, not just the test API.
+  describe "real driver shapes (event_translator.ex / input_parser.ex)" do
+    alias Raxol.Terminal.ANSI.InputParser
+    alias Raxol.Terminal.Driver.EventTranslator
+
+    defp translator_key_event(key_code, char_code \\ 0, mod_code \\ 0) do
+      {:ok, event} =
+        EventTranslator.translate(%{
+          type: :key,
+          key: key_code,
+          char: char_code,
+          mod: mod_code
+        })
+
+      event
+    end
+
+    defp parser_key_event(binary) do
+      [event] = InputParser.parse(binary)
+      event
+    end
+
+    test "a real termbox Enter (TB_KEY_ENTER) and a real ANSI Enter (CR byte) both submit" do
+      {:ok, translator_state} = Composer.init(id: :c)
+      translator_state = type(translator_state, "hello")
+
+      {:ok, parser_state} = Composer.init(id: :c)
+      parser_state = type(parser_state, "hello")
+
+      {_translator_new, translator_cmds} =
+        Composer.handle_event(
+          translator_key_event(13),
+          translator_state,
+          default_context()
+        )
+
+      {_parser_new, parser_cmds} =
+        Composer.handle_event(
+          parser_key_event(<<13>>),
+          parser_state,
+          default_context()
+        )
+
+      assert translator_cmds == [{:component_event, :c, {:submit, "hello"}}]
+      assert translator_cmds == parser_cmds
+    end
+
+    test "a native termbox printable char event inserts (was dead code before T27)" do
+      {:ok, state} = Composer.init(id: :c)
+
+      {state, _cmds} =
+        Composer.handle_event(
+          translator_key_event(0, ?h),
+          state,
+          default_context()
+        )
+
+      {state, _cmds} =
+        Composer.handle_event(
+          translator_key_event(0, ?i),
+          state,
+          default_context()
+        )
+
+      assert Composer.value(state) == "hi"
+    end
+
+    test "a raw-ANSI printable char event inserts" do
+      {:ok, state} = Composer.init(id: :c)
+
+      {state, _cmds} =
+        Composer.handle_event(parser_key_event("x"), state, default_context())
+
+      assert Composer.value(state) == "x"
+    end
+
+    test "a native termbox Ctrl+char event does not insert (it's a shortcut, delegated onward)" do
+      {:ok, state} = Composer.init(id: :c)
+
+      {new_state, _cmds} =
+        Composer.handle_event(
+          # mod bit 2 == ctrl, per event_translator.ex
+          translator_key_event(0, ?a, 2),
+          state,
+          default_context()
+        )
+
+      refute Composer.value(new_state) == "a"
+    end
+
+    test "Alt+Enter from a real termbox event inserts a newline, not a submit" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "line one")
+
+      {new_state, cmds} =
+        Composer.handle_event(
+          # mod bit 4 == alt, per event_translator.ex
+          translator_key_event(13, 0, 4),
+          state,
+          default_context()
+        )
+
+      assert cmds == []
+      assert Composer.value(new_state) == "line one\n"
+    end
+  end
 end

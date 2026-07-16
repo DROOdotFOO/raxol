@@ -248,13 +248,63 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   defp maybe_start_driver(_dispatcher_pid, :ssh, _options), do: {:ok, nil}
   defp maybe_start_driver(_dispatcher_pid, :agent, _options), do: {:ok, nil}
 
-  defp maybe_start_driver(dispatcher_pid, _environment, options) do
-    driver_opts = [
-      dispatcher_pid: dispatcher_pid,
-      mouse: Keyword.get(options, :mouse, true)
-    ]
+  # T2d: the inline driver profile (no alt-screen, no termbox ownership).
+  # A sibling of the default branch below, not a replacement -- see
+  # Raxol.Terminal.InlineDriver's moduledoc for the full option contract.
+  # The pass-through keys below are the constructor's test/embedding seams
+  # (output device, stty injection, probe control); everything else keeps
+  # the driver's own defaults (real tty detection, real stty, real probe).
+  @inline_driver_passthrough_opts [
+    :device,
+    :subscriber,
+    :stty,
+    :tty?,
+    :stty_enabled?,
+    :install_reader?,
+    :rows,
+    :probe?,
+    :capabilities,
+    :probe_opts,
+    :probe_env
+  ]
 
-    case Raxol.Terminal.Driver.start_link(driver_opts) do
+  defp maybe_start_driver(dispatcher_pid, :inline, options) do
+    driver_opts =
+      [dispatcher_pid: dispatcher_pid] ++
+        Keyword.take(options, @inline_driver_passthrough_opts)
+
+    case Raxol.Terminal.InlineDriver.start_link(driver_opts) do
+      {:ok, driver_pid} ->
+        Log.info_with_context(
+          "[Lifecycle.Initializer] Inline Driver started with PID: #{inspect(driver_pid)}"
+        )
+
+        {:ok, driver_pid}
+
+      {:error, reason} ->
+        Log.warning_with_context(
+          "[Lifecycle.Initializer] Inline Driver failed to start: #{inspect(reason)}. Continuing without driver.",
+          %{}
+        )
+
+        {:ok, nil}
+    end
+  end
+
+  defp maybe_start_driver(dispatcher_pid, _environment, options) do
+    driver_opts =
+      [
+        dispatcher_pid: dispatcher_pid,
+        mouse: Keyword.get(options, :mouse, true)
+      ] ++ Keyword.get(options, :driver_start_opts, [])
+
+    # Test seam only: production callers never pass :driver_module, so this
+    # always resolves to Raxol.Terminal.Driver. Lets lifecycle shutdown-order
+    # tests inject a recording double without touching packages/raxol_terminal
+    # or standing up a real termbox2/tty session.
+    driver_module = Keyword.get(options, :driver_module, Raxol.Terminal.Driver)
+
+    case driver_module.start_link(driver_opts) do
       {:ok, driver_pid} ->
         Log.info_with_context(
           "[Lifecycle.Initializer] Terminal Driver started with PID: #{inspect(driver_pid)}"
@@ -289,8 +339,18 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
         :cycle_profiler,
         Keyword.get(options, :cycle_profiler_pid)
       )
+      |> Kernel.++(Keyword.get(options, :engine_start_opts, []))
 
-    case Raxol.Core.Runtime.Rendering.Engine.start_link(engine_opts) do
+    # Test seam only, mirrors :driver_module above -- production callers
+    # never pass :engine_module.
+    engine_module =
+      Keyword.get(
+        options,
+        :engine_module,
+        Raxol.Core.Runtime.Rendering.Engine
+      )
+
+    case engine_module.start_link(engine_opts) do
       {:ok, engine_pid} ->
         Log.info_with_context(
           "[Lifecycle.Initializer] Rendering Engine started with PID: #{inspect(engine_pid)}"

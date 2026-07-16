@@ -1,0 +1,3 @@
+---STRIP---
+STATUS: idle
+PROMPT> hello#

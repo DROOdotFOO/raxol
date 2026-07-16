@@ -31,3 +31,6 @@ t0_stream_numbered_lines "$count"
 # clearing the WHOLE screen, not just the footer region.
 t0_clear_screen
 t0_paint_footer "$footer_top" "---STRIP---" "STATUS: post-keyframe" "PROMPT>"
+
+# Ring B device-control capture window (no-op unless T0_HOLD_SECONDS set).
+t0_hold

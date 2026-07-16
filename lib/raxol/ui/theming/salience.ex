@@ -265,6 +265,56 @@ defmodule Raxol.UI.Theming.Salience do
     if c <= 0.04045, do: c / 12.92, else: :math.pow((c + 0.055) / 1.055, 2.4)
   end
 
+  @doc """
+  sRGB relative luminance (Rec. 709 coefficients) of a `#rrggbb` hex color,
+  per the WCAG contrast-ratio formula (`(L1 + 0.05) / (L2 + 0.05)`).
+
+  This is intentionally a different lens than `apparent_lightness/3`: the
+  H-K apparent-lightness model is the solver's *internal* notion of equal
+  brightness (used for tier uniformity/monotonicity), while relative
+  luminance is the *external*, standards-based check a caller can use for a
+  legibility floor that the solver's own model cannot self-certify.
+
+  Raises `ArgumentError` (with the malformed value in the message) when
+  `hex` isn't exactly 6 hex digits, optionally `#`-prefixed -- a
+  programming-error contract, not a runtime-input one: callers are
+  expected to pass already-resolved hex colors, not raw user input.
+  """
+  @spec relative_luminance(String.t()) :: float()
+  def relative_luminance("#" <> hex), do: relative_luminance(hex)
+
+  def relative_luminance(hex) when is_binary(hex) do
+    case parse_hex6(hex) do
+      {:ok, {r, g, b}} ->
+        [r, g, b] = Enum.map([r, g, b], &(&1 / 255))
+
+        0.2126 * srgb_to_linear(r) + 0.7152 * srgb_to_linear(g) +
+          0.0722 * srgb_to_linear(b)
+
+      :error ->
+        raise ArgumentError,
+              "invalid hex color #{inspect(hex)}: expected 6 hex digits " <>
+                "(e.g. \"1e1e1e\"), optionally prefixed with \"#\""
+    end
+  end
+
+  defp parse_hex6(<<r::binary-2, g::binary-2, b::binary-2>>) do
+    with {:ok, rv} <- parse_hex_byte(r),
+         {:ok, gv} <- parse_hex_byte(g),
+         {:ok, bv} <- parse_hex_byte(b) do
+      {:ok, {rv, gv, bv}}
+    end
+  end
+
+  defp parse_hex6(_other), do: :error
+
+  defp parse_hex_byte(byte) do
+    case Integer.parse(byte, 16) do
+      {n, ""} -> {:ok, n}
+      _ -> :error
+    end
+  end
+
   defp cube(x), do: x * x * x
 
   defp cbrt(x) when x < 0, do: -:math.pow(-x, 1 / 3)
