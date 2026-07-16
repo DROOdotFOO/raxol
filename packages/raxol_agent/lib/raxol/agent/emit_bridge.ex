@@ -128,6 +128,12 @@ defmodule Raxol.Agent.EmitBridge do
   @default_provenance %{source: :primary, trust: :trusted}
   @default_branch_id "main"
 
+  # Types that MUST be journaled regardless of the tier as sent: the doc calls
+  # `approval_requested` a durable resume-bracket — emit it ephemeral and the
+  # resume point is never journaled; `woken` marks a schedule/dormancy wake that
+  # must survive replay. Their tier is forced to `:durable` at the emit seam.
+  @durable_required_types [:approval_requested, :woken]
+
   @doc """
   Start a bridge for `session_id`.
 
@@ -175,19 +181,50 @@ defmodule Raxol.Agent.EmitBridge do
      }}
   end
 
+  # Durable-required resume-brackets: force `:durable` no matter the tier as
+  # sent, then take the shared durable path. This clause precedes the tier-based
+  # ones so an `approval_requested`/`woken` emitted ephemeral still lands in the
+  # journal (its resume point would otherwise be lost).
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info(
+        {:emit_bus, session_id, %{type: type} = neutral},
+        %__MODULE__{session_id: session_id} = state
+      )
+      when type in @durable_required_types do
+    handle_durable(session_id, Map.put(neutral, :tier, :durable), state)
+  end
+
   # Durable tier: the journal owns the id. Append first, take the offset, emit.
   # The journal is the hard gate: if the append fails, the durable event is NOT
   # published (no fabricated id, `last_offset` untouched) — a loud ephemeral
   # `:error` event goes out instead. See the moduledoc.
-  @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info(
         {:emit_bus, session_id, %{tier: :durable} = neutral},
         %__MODULE__{session_id: session_id} = state
       ) do
-    # Sanitize once and reuse for both the journal record and the live event so
-    # the live tail and the replayed record are byte-identical, not just id-equal.
-    # Stamp the write-generation actor here (producer seam) so the journal record
-    # and the live event agree on `actor` — modules never invent it downstream.
+    handle_durable(session_id, neutral, state)
+  end
+
+  # Ephemeral tier: never journaled. Id carries the last durable offset. The
+  # write-generation actor is stamped here too so live ephemeral events (deltas)
+  # carry the same actor as the durable events they refine.
+  def handle_manager_info(
+        {:emit_bus, session_id, neutral},
+        %__MODULE__{session_id: session_id} = state
+      ) do
+    event = map_event(stamp_generation(neutral, state), state.last_offset, session_id)
+    SessionStreamer.emit(session_id, event, state.streamer)
+    {:noreply, state}
+  end
+
+  def handle_manager_info(_msg, state), do: {:noreply, state}
+
+  # Shared durable path (append-before-publish). Sanitize once and reuse for
+  # both the journal record and the live event so the live tail and the replayed
+  # record are byte-identical, not just id-equal. Stamp the write-generation
+  # actor here (producer seam). On append failure the event is dropped from the
+  # live tail and a loud ephemeral `:error` signal goes out instead.
+  defp handle_durable(session_id, neutral, state) do
     safe =
       neutral
       |> Map.put(:payload, sanitized_payload(neutral))
@@ -214,20 +251,6 @@ defmodule Raxol.Agent.EmitBridge do
         {:noreply, state}
     end
   end
-
-  # Ephemeral tier: never journaled. Id carries the last durable offset. The
-  # write-generation actor is stamped here too so live ephemeral events (deltas)
-  # carry the same actor as the durable events they refine.
-  def handle_manager_info(
-        {:emit_bus, session_id, neutral},
-        %__MODULE__{session_id: session_id} = state
-      ) do
-    event = map_event(stamp_generation(neutral, state), state.last_offset, session_id)
-    SessionStreamer.emit(session_id, event, state.streamer)
-    {:noreply, state}
-  end
-
-  def handle_manager_info(_msg, state), do: {:noreply, state}
 
   @impl GenServer
   def terminate(_reason, %__MODULE__{journal: nil}), do: :ok

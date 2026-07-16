@@ -217,6 +217,71 @@ defmodule Raxol.Agent.EmitBridgeTest do
     end
   end
 
+  # ===========================================================================
+  # Adjacent fix: approval_requested / woken are forced durable
+  # ===========================================================================
+
+  describe "approval_requested is forced durable (resume-bracket)" do
+    setup do
+      ensure_registry(EmitBus.registry_name())
+      streamer = start_supervised!({SessionStreamer, name: :bridge_approval_streamer})
+
+      base =
+        Path.join(
+          System.tmp_dir!(),
+          "bridge_approval_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+      %{streamer: streamer, base: base}
+    end
+
+    test "an approval_requested emitted with ephemeral tier still lands durable (journaled)",
+         %{streamer: streamer, base: base} do
+      session = "sess-approval-#{System.unique_integer([:positive])}"
+      {:ok, journal} = FileStore.open(session, base_dir: base)
+
+      bridge =
+        start_supervised!(
+          {EmitBridge,
+           session_id: session, streamer: streamer, journal: journal}
+        )
+
+      _ = :sys.get_state(bridge)
+      SessionStreamer.subscribe(session, streamer)
+
+      # Deliberately sent ephemeral — the resume-bracket must NOT honour it.
+      ephemeral_approval = %{
+        session_id: session,
+        family: :loop,
+        type: :approval_requested,
+        tier: :ephemeral,
+        turn_id: "t1",
+        payload: %{request: "confirm?"},
+        ts: 1
+      }
+
+      EmitBus.publish(ephemeral_approval)
+      _ = :sys.get_state(bridge)
+
+      # It was journaled (durable) despite being sent ephemeral — the resume
+      # point is now recoverable on replay.
+      {:ok, [record]} = FileStore.read(journal)
+      assert record["type"] == "approval_requested"
+      assert record["tier"] == "durable"
+
+      # ...and the live event carries a real journal offset, tier :durable.
+      assert_receive {:session_event, ^session,
+                      %Event{type: :approval_requested, tier: :durable, id: id}},
+                     1_000
+
+      assert id >= 1, "a journaled durable event must carry a real offset"
+
+      :ok = FileStore.close(journal)
+    end
+  end
+
   defp durable_neutral(session) do
     %{
       session_id: session,
