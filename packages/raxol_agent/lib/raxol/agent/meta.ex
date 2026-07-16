@@ -306,18 +306,33 @@ defmodule Raxol.Agent.Meta do
 
   defp event?(r), do: Map.get(r, "kind", "event") == "event"
 
-  # STORED trust on a record's provenance; grandfather / missing => :trusted.
-  defp stored_trust(%{"provenance" => %{"trust" => "tainted"}}), do: :tainted
-  defp stored_trust(%{"provenance" => %{"trust" => :tainted}}), do: :tainted
+  # STORED trust on a record's provenance. Fail-CLOSED (§2.1 taint law pt.1):
+  # only the exact known-trusted token reads :trusted; a PRESENT-but-unrecognized
+  # trust value (unknown string, garbage, a future lattice point) reads :tainted.
+  # ABSENT provenance is the frozen grandfather default (:trusted) — distinct
+  # from a present-but-unrecognized value. This anchors the taint fold's leaves,
+  # so a laundered entry point can no longer read trusted.
+  defp stored_trust(%{"provenance" => %{"trust" => trust}}), do: trust_token(trust)
+  defp stored_trust(%{"provenance" => p}) when is_map(p), do: :trusted
   defp stored_trust(_), do: :trusted
+
+  # The frozen v1 trust lattice is exactly two points; every other token —
+  # unknown, garbage, or a future lattice value — fails CLOSED to :tainted
+  # (§2.1 taint law pt.1, forward-compat §2.4 "readers fail-closed to :tainted").
+  defp trust_token("trusted"), do: :trusted
+  defp trust_token(:trusted), do: :trusted
+  defp trust_token("tainted"), do: :tainted
+  defp trust_token(:tainted), do: :tainted
+  defp trust_token(_unknown), do: :tainted
 
   # --- decode helpers --------------------------------------------------------
 
-  defp decode_provenance(%{"source" => source, "trust" => trust}) do
-    %{
-      source: to_existing_or_new_atom(source, :primary),
-      trust: to_existing_or_new_atom(trust, :trusted)
-    }
+  # Decode a PRESENT provenance. Trust fails CLOSED (§2.1 taint law pt.1): an
+  # unknown/garbage trust value decodes to :tainted, never laundered to :trusted
+  # (a present-but-unrecognized value must NOT read as trusted — §2.4). Absent
+  # provenance is handled by the grandfather clause below (:trusted default).
+  defp decode_provenance(%{"trust" => trust} = p) do
+    %{source: to_existing_or_new_atom(Map.get(p, "source"), :primary), trust: trust_token(trust)}
   end
 
   defp decode_provenance(%{source: _, trust: _} = provenance), do: provenance
