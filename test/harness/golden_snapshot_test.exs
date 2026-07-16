@@ -23,9 +23,21 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
 
   use ExUnit.Case, async: true
 
-  alias Raxol.Harness.Surface.{Golden, GoldenDiff}
+  alias Raxol.Harness.Fixture
+  alias Raxol.Harness.Surface
+  alias Raxol.Harness.Surface.{Golden, GoldenDiff, ViewText}
   alias Raxol.Harness.Test.SealOracle
   alias Raxol.Test.CrossTerminal.SequenceScanner
+  alias Raxol.UI.Components.Harness.BlockBody
+  alias Raxol.UI.Rendering.PaintAuthority.ContentGuard
+
+  # Geometry shared with `Golden.render/2` (see that module's determinism
+  # audit) -- needed here by the seal-seam ingress tests, which drive the
+  # Surface directly to get at the MODEL, not just the bytes.
+  @width 60
+  @rows 20
+  @footer_rows 6
+  @region_top @rows - @footer_rows
 
   # Sequence-vocabulary allowlist for `:inline_log`/`:tmux_conservative`
   # goldens -- the substrate's measured full vocabulary for those tiers:
@@ -172,19 +184,29 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
     end
   end
 
-  # Text tokens of `raw` that carry UNAMBIGUOUS stripped-CSI residue:
-  # `[` followed by a numeric parameter run and a final letter (`[2J`,
-  # `[1;14r`, `[12;24H`) -- a shape prose never produces. Deliberately
-  # NO empty-param branch: after `ContentGuard.sanitize_line/1` strips
-  # the ESC, a paramless final (`\e[K` -> `[K`, likewise `[P`/`[L`/`[M`)
-  # is byte-identical to the first two characters of an ordinary
-  # uppercase bracket label (`[KEY]`, `[ERROR]`, `[DONE]` -- all
-  # plausible agent output), so any fixed letter set either misses
-  # paramless editors or false-positives on labels and blocks a
-  # legitimate bless. That paramless class is owned upstream, at the
-  # ContentGuard/seal seam (content handed to `InlineAuthority.seal/2`
-  # must simply never carry escape sequences -- the `Surface.seal_block/2`
-  # fix); this tripwire pins only the residue that is provably not text.
+  # Text tokens of `raw` that carry stripped-CSI residue: `[` followed
+  # by a numeric parameter run and a final letter (`[2J`, `[1;14r`,
+  # `[12;24H`). Deliberately NO empty-param branch: after
+  # `ContentGuard.sanitize_line/1` strips the ESC, a paramless final
+  # (`\e[K` -> `[K`, likewise `[P`/`[L`/`[M`) is byte-identical to the
+  # first two characters of an ordinary uppercase bracket label
+  # (`[KEY]`, `[ERROR]`, `[DONE]` -- all plausible agent output), so any
+  # fixed letter set either misses paramless editors or false-positives
+  # on labels and blocks a legitimate bless. The paramless class is
+  # owned by the ENFORCED seal-seam ingress invariant (describe
+  # "seal-seam ingress invariant" above: outbound seal content must be a
+  # ContentGuard fixed point, pinned to reality by the replay
+  # comparison), not by this regex.
+  #
+  # Known residual false-positive class, accepted and documented: short
+  # digit-leading bracket labels -- 1-3 digits immediately followed by a
+  # letter (`[4K]`, `[8K]`, `[2FA]`, `[3D]`, `[1st]`, `[100x]`) are
+  # shape-identical to real residue post-strip and WILL trip this guard
+  # (`[200 OK]` and `[1080p]` pass clean: the digit run caps at 3 and
+  # must be immediately followed by a letter). None of the current
+  # fixtures carries such a label; the first fixture that does will need
+  # this guard revisited (e.g. a per-fixture allowlist), not silently
+  # widened.
   @escless_residue ~r/\[\d{1,3}(?:;\d{1,3})*[A-Za-z]/
   defp escless_residue(raw) do
     raw
@@ -192,6 +214,154 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
     |> Enum.filter(&match?({:text, _}, &1))
     |> Enum.map(fn {:text, text} -> text end)
     |> Enum.filter(&Regex.match?(@escless_residue, &1))
+  end
+
+  # ---------------------------------------------------------------------
+  # (c2) the seal-seam ingress invariant: the ENFORCED owner of the
+  #      paramless-residue class the narrowed guard above deliberately
+  #      does not cover. Dropping seal_block/2's embedded \e[K was a
+  #      SOURCE fix; these tests make the seam contract an INVARIANT: if
+  #      any future seal caller re-embeds a non-SGR escape in content,
+  #      ContentGuard strips it to ESC-less text that no post-hoc regex
+  #      can distinguish from prose -- so the check must live at ingress.
+  # ---------------------------------------------------------------------
+
+  describe "seal-seam ingress invariant" do
+    # Drives the REAL Surface (same construction as `Golden.render/2`,
+    # but keeping the final model) so the sealed blocks and the actual
+    # emitted bytes come from one replay.
+    defp drive_fixture(fixture, mode) do
+      path =
+        Path.join([
+          "test",
+          "fixtures",
+          "harness",
+          "sessions",
+          "#{fixture}.jsonl"
+        ])
+
+      {:ok, session} = Fixture.load(path)
+      {:ok, device} = StringIO.open("")
+
+      model =
+        Surface.new(session,
+          device: device,
+          width: @width,
+          rows: @rows,
+          footer_rows: @footer_rows,
+          mode: mode,
+          env: %{},
+          capabilities: nil
+        )
+
+      model =
+        Golden.drive_to_completion(
+          model,
+          Golden.max_steps(length(session.envelopes))
+        )
+
+      {_in, out} = StringIO.contents(device)
+      StringIO.close(device)
+      {model, out}
+    end
+
+    # Reconstructs exactly the iodata `Surface.seal_block/2` (inline
+    # path) hands to `InlineAuthority.seal/2`, one binary per block:
+    # `BlockBody.render/2 |> ViewText.lines(width, :styled)` then
+    # `\r\n`-terminated lines. Valid for a replay with NO fold input:
+    # `fold_overrides` is empty, so `apply_fold_override/3` returns every
+    # block unchanged, and `detach_up_to/2` only `:binary.copy/1`s
+    # content (byte-identical) -- the final model's `projection.blocks`
+    # ARE the sealed blocks. The faithfulness of this reconstruction is
+    # itself pinned by the replay-comparison test below, so it cannot
+    # silently drift from what seal_block really does.
+    defp seal_ingress_binaries(model) do
+      for block <- model.projection.blocks do
+        block
+        |> BlockBody.render(%{width: model.width})
+        |> ViewText.lines(model.width, :styled)
+        |> Enum.map(&[&1, "\r\n"])
+        |> IO.iodata_to_binary()
+      end
+    end
+
+    defp plain_lines(styled_binary) do
+      styled_binary
+      |> String.split("\r\n", trim: false)
+      |> Enum.map(fn line ->
+        line
+        |> SequenceScanner.scan()
+        |> Enum.filter(&match?({:text, _}, &1))
+        |> Enum.map_join("", fn {:text, text} -> text end)
+        |> String.trim_trailing()
+      end)
+    end
+
+    defp row_text(row_cells) do
+      row_cells
+      |> Enum.map_join("", &(&1.char || " "))
+      |> String.trim_trailing()
+    end
+
+    test "content handed to InlineAuthority.seal/2 is a ContentGuard fixed point (nothing would be stripped)" do
+      # NOT "zero ESC bytes": sealed styled content LEGITIMATELY carries
+      # SGR (`\e[2m...\e[0m` block headers -- allowlisted by
+      # ContentGuard's grammar). The enforceable invariant is that
+      # sanitization is the IDENTITY on outbound seal content: if
+      # `sanitize_line/1` changes nothing, no ESC was ever going to be
+      # stripped into ESC-less residue.
+      for fixture <- Golden.fixtures(),
+          mode <- [:inline_log, :tmux_conservative] do
+        {model, _out} = drive_fixture(fixture, mode)
+        binaries = seal_ingress_binaries(model)
+        assert binaries != []
+
+        for bin <- binaries do
+          assert ContentGuard.sanitize_line(bin) == bin,
+                 "#{fixture} x #{mode}: content handed to seal/2 is not a " <>
+                   "ContentGuard fixed point -- something upstream embedded " <>
+                   "a non-SGR escape that would be stripped to ESC-less " <>
+                   "residue: #{inspect(bin, printable_limit: 200)}"
+        end
+      end
+    end
+
+    test "replayed sealed history matches the reconstructed ingress exactly (anti-drift: catches any re-embedded escape)" do
+      # The fixed-point test above checks a RECONSTRUCTION of seal
+      # ingress; this test pins that reconstruction to reality. Replay
+      # the actual emitted bytes through the seal oracle's emulator and
+      # compare history row text against the plain-text projection of
+      # the reconstructed ingress: any divergence between what
+      # seal_block/2 really emitted and what we reconstructed -- e.g. a
+      # re-embedded \e[K stripped to a literal "[K" row prefix, the
+      # exact regression class the narrowed residue guard cannot see --
+      # shows up as a row mismatch here. (Red-proven by temporarily
+      # re-embedding \e[K in seal_block/2: this assertion trips while
+      # the fixed-point one stays green.)
+      for fixture <- Golden.fixtures() do
+        {model, out} = drive_fixture(fixture, :inline_log)
+
+        expected_lines =
+          model
+          |> seal_ingress_binaries()
+          |> Enum.flat_map(&plain_lines/1)
+          |> Enum.reject(&(&1 == ""))
+
+        emulator = SealOracle.replay(out, width: @width, height: @rows)
+
+        history_lines =
+          emulator
+          |> SealOracle.history(@region_top)
+          |> Enum.map(&row_text/1)
+          |> Enum.reject(&(&1 == ""))
+
+        assert history_lines == expected_lines,
+               "#{fixture} x inline_log: replayed sealed history diverges " <>
+                 "from the reconstructed seal ingress -- the seal path " <>
+                 "emitted something (residue, reordering, loss) the " <>
+                 "ingress reconstruction does not contain"
+      end
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -242,6 +412,17 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
       assert escless_residue("[DONE] all tests passed") == []
       assert escless_residue("[KEY] press any") == []
       assert escless_residue("[Kernel panic] not syncing") == []
+      assert escless_residue("[200 OK] response received") == []
+      assert escless_residue("[1080p] stream quality") == []
+
+      # Documented residual FALSE POSITIVES, pinned deliberately: short
+      # digit-leading labels are shape-identical to real residue after
+      # ESC-strip, so the regex cannot clear them. If one of these
+      # assertions ever starts failing, the guard got wider or narrower
+      # -- either way review `@escless_residue`'s comment before
+      # touching the fixtures.
+      assert escless_residue("[4K] video output") != []
+      assert escless_residue("[2FA] enabled") != []
 
       # Documented false negative, accepted by design: a PARAMLESS
       # stripped final (`\e[K` -> `[K`, likewise `[P`/`[L`/`[M`) is
