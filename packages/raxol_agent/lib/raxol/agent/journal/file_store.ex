@@ -109,6 +109,22 @@ defmodule Raxol.Agent.Journal.FileStore do
     :exit, reason -> {:error, {:writer_down, exit_reason(reason)}}
   end
 
+  @doc """
+  Atomic check-and-append: `check` runs against the freshest on-disk records
+  INSIDE the single Writer, and `event` is appended only if it returns `:ok` —
+  one atomic step, so no concurrent append (e.g. through a shared joiner
+  handle) can interleave between validation and commit. See
+  `Raxol.Agent.Journal.FileStore.Writer.append_checked/3`.
+  """
+  @spec append_checked(t(), map(), ([map()] -> :ok | {:error, term()})) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def append_checked(%__MODULE__{writer: pid}, event, check)
+      when is_map(event) and is_function(check, 1) do
+    Writer.append_checked(pid, event, check)
+  catch
+    :exit, reason -> {:error, {:writer_down, exit_reason(reason)}}
+  end
+
   @impl Raxol.Agent.Journal
   def read(%__MODULE__{dir: dir, writer: pid}, opts \\ []) do
     flush(pid)

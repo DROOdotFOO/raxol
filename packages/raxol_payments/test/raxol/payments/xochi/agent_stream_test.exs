@@ -96,6 +96,22 @@ defmodule Raxol.Payments.Xochi.AgentStreamTest do
     test "the test wallet derives the expected agent address" do
       assert String.downcase(AgentWallet.address()) == String.downcase(@agent_address)
     end
+
+    test "recover_signer rejects a malleated (high-s) signature" do
+      {:ok, "0x" <> hex} = AgentStream.sign_event(AgentWallet, @topic_id, event())
+      <<r::binary-size(32), s::unsigned-big-256, v::8>> = Base.decode16!(hex, case: :lower)
+
+      # The other valid root (r, n - s) with the flipped parity recovers the same
+      # key. viem may accept it; our low-s guard must not, or the relay fans out a
+      # duplicate row.
+      n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+
+      malleated =
+        "0x" <> Base.encode16(<<r::binary, n - s::unsigned-big-256, 55 - v::8>>, case: :lower)
+
+      assert {:error, :invalid_signature} ==
+               AgentStream.recover_signer(@topic_id, event(), malleated)
+    end
   end
 
   describe "build_body/2" do

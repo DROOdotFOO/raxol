@@ -1,0 +1,42 @@
+Last login: Thu Jul 16 04:19:08 on ttys007
+➜  agent-a7bd59b81a3d2184d git:(feat/harness-ui-RB) ✗ T0_HOLD_SECONDS=8 bash '/Users/jabher/IdeaProjects/raxol/.claude/worktrees/agent-a7bd59b81a3d2184d/scripts/harness/t0/probes/n06_keyframe_clear.sh' 24 3 20 ringb-kitty-N06-15554
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+---STRIP---
+STATUS: post-keyframe
+PROMPT>

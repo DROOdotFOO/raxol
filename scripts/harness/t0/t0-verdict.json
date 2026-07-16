@@ -1,6 +1,6 @@
 {
   "schema": "raxol.t0.verdict/1",
-  "generated_at": "2026-07-15T16:14:34Z",
+  "generated_at": "2026-07-15T21:19:20Z",
   "matrix": [
     {
       "terminal": "tmux",
@@ -234,42 +234,6 @@
       "terminal": "kitty",
       "context": "plain",
       "transport": "local",
-      "claim": "C1",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "kitty",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C2",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "kitty",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C3",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "kitty",
-      "context": "plain",
-      "transport": "local",
       "claim": "C4",
       "observable": null,
       "capture": "planned",
@@ -618,54 +582,6 @@
       "terminal": "iterm2",
       "context": "plain",
       "transport": "local",
-      "claim": "C1",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "iterm2",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C2",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "iterm2",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C3",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "iterm2",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C4",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "iterm2",
-      "context": "plain",
-      "transport": "local",
       "claim": "C5",
       "observable": null,
       "capture": "planned",
@@ -991,42 +907,6 @@
       "context": "tmux",
       "transport": "ssh",
       "claim": "C8",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "wezterm",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C1",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "wezterm",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C2",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "wezterm",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C3",
       "observable": null,
       "capture": "planned",
       "automation": "human",
@@ -2538,54 +2418,6 @@
       "terminal": "apple",
       "context": "plain",
       "transport": "local",
-      "claim": "C1",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "apple",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C2",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "apple",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C3",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "apple",
-      "context": "plain",
-      "transport": "local",
-      "claim": "C4",
-      "observable": null,
-      "capture": "planned",
-      "automation": "human",
-      "evidence": "n/a",
-      "verdict": null,
-      "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
-    },
-    {
-      "terminal": "apple",
-      "context": "plain",
-      "transport": "local",
       "claim": "C5",
       "observable": null,
       "capture": "planned",
@@ -2917,6 +2749,294 @@
       "evidence": "n/a",
       "verdict": null,
       "notes": "Ring B not yet run in this environment -- see t0-runbook.md for the exact command"
+    },
+    {
+      "terminal": "iterm2",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C1",
+      "observable": "pass",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-iterm2-C1.txt",
+      "verdict": "pass",
+      "notes": "footer tail=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello\"] (expected [\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello\"])"
+    },
+    {
+      "terminal": "iterm2",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C2",
+      "observable": {
+        "status": "fed",
+        "tail_window_rows": 20
+      },
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-iterm2-C2.txt",
+      "verdict": "fed",
+      "notes": "found=100/100 lines; tail_window_rows=20 (sealed LINE- rows still in viewport above footer)"
+    },
+    {
+      "terminal": "iterm2",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C3",
+      "observable": "pass",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-iterm2-C3.txt",
+      "verdict": "pass",
+      "notes": "cursor-marker footer=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello#\"] (expected [\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello#\"])"
+    },
+    {
+      "terminal": "iterm2",
+      "context": "plain",
+      "transport": "local",
+      "claim": "N06",
+      "observable": {
+        "history_survives": "yes",
+        "live_view_wiped": "human_eye_required"
+      },
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-iterm2-N06.txt",
+      "verdict": "fail",
+      "notes": "trigger keyframe_clear_leak: single unified capture API on iterm2 can't distinguish the instantaneous visible-grid wipe from scrollback (needs two temporally distinct captures a screenshot pass could give) -- recorded verdict:fail per the roadmap's convention (N06 is always a documented trigger, never a pass) with the automatable half measured: found=20/20 LINE- markers recoverable post-clear (history_survives=yes), post-keyframe footer repainted=true"
+    },
+    {
+      "terminal": "iterm2",
+      "context": "plain",
+      "transport": "local",
+      "claim": "N07",
+      "observable": "yes",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-iterm2-N07.txt",
+      "verdict": "pass",
+      "notes": "detector-validation cell (not a fallback trigger itself): footer_survived=yes -- confirms rows OUTSIDE the active region stay static even when the region is placed at the bottom (inverted), header=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT>\"]"
+    },
+    {
+      "terminal": "iterm2",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C4",
+      "observable": "reflow",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-iterm2-C4.txt",
+      "verdict": "reflow",
+      "notes": "resize 24x80 -> 30x120 during stream; content-preservation only (before=30, after=30 LINE- markers); perceptual reflow QUALITY (clean re-wrap vs ghost columns) is a screenshot residual, not asserted here."
+    },
+    {
+      "terminal": "apple",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C1",
+      "observable": "pass",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-apple-C1.txt",
+      "verdict": "pass",
+      "notes": "footer tail=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello\"] (expected [\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello\"])"
+    },
+    {
+      "terminal": "apple",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C2",
+      "observable": {
+        "status": "partial",
+        "tail_window_rows": 20
+      },
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-apple-C2.txt",
+      "verdict": "partial",
+      "notes": "found=20/100 lines; tail_window_rows=20 (sealed LINE- rows still in viewport above footer)"
+    },
+    {
+      "terminal": "apple",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C3",
+      "observable": "partial",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-apple-C3.txt",
+      "verdict": "partial",
+      "notes": "apple has no cursor-position API and no non-executing raw-write primitive — verified footer content only ([\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello\"]); the strict cursor-column assertion is un-automatable on this driver (documented residual, not a guess)."
+    },
+    {
+      "terminal": "apple",
+      "context": "plain",
+      "transport": "local",
+      "claim": "N06",
+      "observable": {
+        "history_survives": "no",
+        "live_view_wiped": "human_eye_required"
+      },
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-apple-N06.txt",
+      "verdict": "fail",
+      "notes": "trigger keyframe_clear_leak: single unified capture API on apple can't distinguish the instantaneous visible-grid wipe from scrollback (needs two temporally distinct captures a screenshot pass could give) -- recorded verdict:fail per the roadmap's convention (N06 is always a documented trigger, never a pass) with the automatable half measured: found=0/20 LINE- markers recoverable post-clear (history_survives=no), post-keyframe footer repainted=true"
+    },
+    {
+      "terminal": "apple",
+      "context": "plain",
+      "transport": "local",
+      "claim": "N07",
+      "observable": "yes",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-apple-N07.txt",
+      "verdict": "pass",
+      "notes": "detector-validation cell (not a fallback trigger itself): footer_survived=yes -- confirms rows OUTSIDE the active region stay static even when the region is placed at the bottom (inverted), header=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT>\"]"
+    },
+    {
+      "terminal": "apple",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C4",
+      "observable": "ghost",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-apple-C4.txt",
+      "verdict": "ghost",
+      "notes": "resize 24x80 -> 30x120 during stream; content-preservation only (before=20, after=26 LINE- markers); perceptual reflow QUALITY (clean re-wrap vs ghost columns) is a screenshot residual, not asserted here."
+    },
+    {
+      "terminal": "wezterm",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C1",
+      "observable": "pass",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-wezterm-C1.txt",
+      "verdict": "pass",
+      "notes": "footer tail=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello\"] (expected [\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello\"])"
+    },
+    {
+      "terminal": "wezterm",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C2",
+      "observable": {
+        "status": "fed",
+        "tail_window_rows": 20
+      },
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-wezterm-C2.txt",
+      "verdict": "fed",
+      "notes": "found=100/100 lines; tail_window_rows=20 (sealed LINE- rows still in viewport above footer)"
+    },
+    {
+      "terminal": "wezterm",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C3",
+      "observable": "pass",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-wezterm-C3.txt",
+      "verdict": "pass",
+      "notes": "cursor-marker footer=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello#\"] (expected [\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello#\"])"
+    },
+    {
+      "terminal": "wezterm",
+      "context": "plain",
+      "transport": "local",
+      "claim": "N06",
+      "observable": {
+        "history_survives": "no",
+        "live_view_wiped": "human_eye_required"
+      },
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-wezterm-N06.txt",
+      "verdict": "fail",
+      "notes": "trigger keyframe_clear_leak: single unified capture API on wezterm can't distinguish the instantaneous visible-grid wipe from scrollback (needs two temporally distinct captures a screenshot pass could give) -- recorded verdict:fail per the roadmap's convention (N06 is always a documented trigger, never a pass) with the automatable half measured: found=0/20 LINE- markers recoverable post-clear (history_survives=no), post-keyframe footer repainted=true"
+    },
+    {
+      "terminal": "wezterm",
+      "context": "plain",
+      "transport": "local",
+      "claim": "N07",
+      "observable": "yes",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-wezterm-N07.txt",
+      "verdict": "pass",
+      "notes": "detector-validation cell (not a fallback trigger itself): footer_survived=yes -- confirms rows OUTSIDE the active region stay static even when the region is placed at the bottom (inverted), header=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT>\"]"
+    },
+    {
+      "terminal": "kitty",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C1",
+      "observable": "pass",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-kitty-C1.txt",
+      "verdict": "pass",
+      "notes": "footer tail=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello\"] (expected [\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello\"])"
+    },
+    {
+      "terminal": "kitty",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C2",
+      "observable": {
+        "status": "fed",
+        "tail_window_rows": 20
+      },
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-kitty-C2.txt",
+      "verdict": "fed",
+      "notes": "found=100/100 lines; tail_window_rows=20 (sealed LINE- rows still in viewport above footer)"
+    },
+    {
+      "terminal": "kitty",
+      "context": "plain",
+      "transport": "local",
+      "claim": "C3",
+      "observable": "pass",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-kitty-C3.txt",
+      "verdict": "pass",
+      "notes": "cursor-marker footer=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello#\"] (expected [\"---STRIP---\", \"STATUS: idle\", \"PROMPT> hello#\"])"
+    },
+    {
+      "terminal": "kitty",
+      "context": "plain",
+      "transport": "local",
+      "claim": "N06",
+      "observable": {
+        "history_survives": "no",
+        "live_view_wiped": "human_eye_required"
+      },
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-kitty-N06.txt",
+      "verdict": "fail",
+      "notes": "trigger keyframe_clear_leak: single unified capture API on kitty can't distinguish the instantaneous visible-grid wipe from scrollback (needs two temporally distinct captures a screenshot pass could give) -- recorded verdict:fail per the roadmap's convention (N06 is always a documented trigger, never a pass) with the automatable half measured: found=0/20 LINE- markers recoverable post-clear (history_survives=no), post-keyframe footer repainted=true"
+    },
+    {
+      "terminal": "kitty",
+      "context": "plain",
+      "transport": "local",
+      "claim": "N07",
+      "observable": "yes",
+      "capture": "native_gettext",
+      "automation": "scripted",
+      "evidence": "scripts/harness/t0/capture/evidence/ringb-kitty-N07.txt",
+      "verdict": "pass",
+      "notes": "detector-validation cell (not a fallback trigger itself): footer_survived=yes -- confirms rows OUTSIDE the active region stay static even when the region is placed at the bottom (inverted), header=[\"---STRIP---\", \"STATUS: idle\", \"PROMPT>\"]"
     }
   ]
 }

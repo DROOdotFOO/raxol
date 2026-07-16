@@ -39,11 +39,26 @@ defmodule ConcurrentBufferTestHelper do
   Tears down buffer server safely.
 
   Stops the buffer server if it's still alive.
+
+  `Process.alive?/1` is a check-then-act race: an `async: true` concurrent
+  test can let the server die between the liveness probe and the stop call,
+  so `GenServer.stop/3` would exit with `:noproc` inside `on_exit` and fail an
+  otherwise-green test. Swallow ONLY that specific `:noproc` teardown race — a
+  genuine teardown crash (`:normal` mismatch, a `terminate/2` error, a timeout)
+  must still surface, not be hidden by a blanket `:exit, _`.
   """
   def teardown_buffer(pid) do
-    case Process.alive?(pid) do
-      true -> ConcurrentBuffer.stop(pid)
-      false -> :ok
+    if Process.alive?(pid) do
+      try do
+        ConcurrentBuffer.stop(pid)
+      catch
+        :exit, reason
+        when reason == :noproc or
+               (is_tuple(reason) and elem(reason, 0) == :noproc) ->
+          :ok
+      end
+    else
+      :ok
     end
   end
 
