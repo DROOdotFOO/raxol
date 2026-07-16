@@ -1,0 +1,75 @@
+{
+  "description": "Shared MUST-ACCEPT conformance vectors for path-traversal confinement (Raxol.Core.Boundary.Path.confine/3). Data-only: the runner materializes `setup` under a fresh tmp base, sets root = tmp_base/<root>, and asserts confine(root, requested, opts) == {:ok, _}. The Agent Client Protocol package copies this file verbatim and asserts its FsSandbox.resolve/2 agrees (skipping vectors that carry `ref_format`, a Path.confine-only gate FsSandbox does not implement). Paths in `root`, `requested`, and every `setup` entry are relative to the tmp base. Change this file and its sibling reject file in lockstep across both packages, or neither.",
+  "vectors": [
+    {
+      "name": "confined_file_read",
+      "root": "root",
+      "requested": "sub/a.txt",
+      "setup": [
+        { "dir": "root" },
+        { "dir": "root/sub" },
+        { "file": "root/sub/a.txt", "content": "hello" }
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "root_itself",
+      "root": "root",
+      "requested": ".",
+      "setup": [{ "dir": "root" }],
+      "expect": "ok"
+    },
+    {
+      "name": "not_yet_existing_write_leaf",
+      "root": "root",
+      "requested": "newfile.txt",
+      "setup": [{ "dir": "root" }],
+      "expect": "ok"
+    },
+    {
+      "name": "nested_not_yet_existing_leaf",
+      "root": "root",
+      "requested": "exists/new.txt",
+      "setup": [
+        { "dir": "root" },
+        { "dir": "root/exists" }
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "absolute_requested_jailed_under_root",
+      "root": "root",
+      "requested": "/etc/passwd",
+      "setup": [{ "dir": "root" }],
+      "expect": "ok"
+    },
+    {
+      "name": "symlink_inside_root_ok",
+      "root": "root",
+      "requested": "link/x.txt",
+      "setup": [
+        { "dir": "root" },
+        { "dir": "root/data" },
+        { "file": "root/data/x.txt", "content": "ok" },
+        { "symlink": "root/link", "target": "data" }
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "valid_sha_blob_ref",
+      "root": "root",
+      "requested": "blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref_format": "^(blobs|snapshots)/[0-9a-f]{64}(\\.json)?$",
+      "setup": [{ "dir": "root" }],
+      "expect": "ok"
+    },
+    {
+      "name": "valid_sha_snapshot_json_ref",
+      "root": "root",
+      "requested": "snapshots/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json",
+      "ref_format": "^(blobs|snapshots)/[0-9a-f]{64}(\\.json)?$",
+      "setup": [{ "dir": "root" }],
+      "expect": "ok"
+    }
+  ]
+}

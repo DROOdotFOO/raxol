@@ -1,0 +1,165 @@
+{
+  "description": "Shared conformance vectors for terminal-injection confinement (Raxol.Core.Boundary.TermText.sanitize/2). Data-only: `input_hex` and `expect_hex` are lowercase hex of the input and intended output binaries; `allow` (optional) is a list of C0 byte values passed as opts `allow:`. The runner asserts sanitize(input, opts) == expected for every vector, plus the invariants that the output contains no 0x1B and no disallowed control byte. Home is the UI/terminal lane only; the Agent Client Protocol package does not use this function.",
+  "vectors": [
+    {
+      "expect_hex": "",
+      "input_hex": "",
+      "name": "empty",
+      "note": "empty passes through"
+    },
+    {
+      "expect_hex": "48656c6c6f2c20776f726c642120313233",
+      "input_hex": "48656c6c6f2c20776f726c642120313233",
+      "name": "benign_passthrough",
+      "note": "plain ASCII unchanged"
+    },
+    {
+      "expect_hex": "e697a5e69cace8aa9e",
+      "input_hex": "e697a5e69cace8aa9e",
+      "name": "cjk_passthrough",
+      "note": "multi-byte UTF-8 unchanged"
+    },
+    {
+      "expect_hex": "e29c85f09f9a80",
+      "input_hex": "e29c85f09f9a80",
+      "name": "emoji_passthrough",
+      "note": "emoji unchanged"
+    },
+    {
+      "expect_hex": "610a62",
+      "input_hex": "610a62",
+      "name": "newline_kept_default",
+      "note": "default allow keeps LF"
+    },
+    {
+      "expect_hex": "68656c6c6f",
+      "input_hex": "1b5b33316d68656c6c6f1b5b306d",
+      "name": "csi_color_stripped",
+      "note": "SGR color codes removed"
+    },
+    {
+      "expect_hex": "4f4b",
+      "input_hex": "1b5d303b6576696c074f4b",
+      "name": "osc_title_bel_stripped",
+      "note": "OSC title-set (BEL-terminated) removed"
+    },
+    {
+      "expect_hex": "6c696e6b",
+      "input_hex": "1b5d383b3b687474703a2f2f6576696c1b5c6c696e6b1b5d383b3b1b5c",
+      "name": "osc8_hyperlink_stripped",
+      "note": "OSC-8 hyperlink smuggling removed, text kept"
+    },
+    {
+      "expect_hex": "58",
+      "input_hex": "1b50313b3271736978656c646174611b5c58",
+      "name": "dcs_stripped",
+      "note": "DCS (ST-terminated) removed"
+    },
+    {
+      "expect_hex": "59",
+      "input_hex": "1b5f7061796c6f61641b5c59",
+      "name": "apc_stripped",
+      "note": "APC (ST-terminated) removed"
+    },
+    {
+      "expect_hex": "5a",
+      "input_hex": "1b5e6d73671b5c5a",
+      "name": "pm_stripped",
+      "note": "PM (ST-terminated) removed"
+    },
+    {
+      "expect_hex": "57",
+      "input_hex": "1b5873747566661b5c57",
+      "name": "sos_stripped",
+      "note": "SOS (ST-terminated) removed"
+    },
+    {
+      "expect_hex": "5265736574",
+      "input_hex": "1b635265736574",
+      "name": "two_byte_esc_ris_stripped",
+      "note": "two-byte ESC c (RIS) removed"
+    },
+    {
+      "expect_hex": "74657874",
+      "input_hex": "746578741b",
+      "name": "truncated_trailing_esc",
+      "note": "bare ESC at end of input removed"
+    },
+    {
+      "expect_hex": "64617461",
+      "input_hex": "1b5b3230317e64617461",
+      "name": "bracketed_paste_terminator",
+      "note": "bracketed-paste end sequence removed"
+    },
+    {
+      "expect_hex": "58",
+      "input_hex": "1b5b3f313034396858",
+      "name": "alt_screen_stripped",
+      "note": "alt-screen enable (private CSI) removed"
+    },
+    {
+      "expect_hex": "20636c65616e",
+      "input_hex": "1b5b324a1b5b4820636c65616e",
+      "name": "cursor_move_stripped",
+      "note": "clear + cursor-home removed"
+    },
+    {
+      "expect_hex": "6162",
+      "input_hex": "610962",
+      "name": "tab_stripped_default",
+      "note": "TAB not in default allow -> stripped"
+    },
+    {
+      "expect_hex": "6162",
+      "input_hex": "610d62",
+      "name": "cr_stripped_default",
+      "note": "CR not in default allow -> stripped"
+    },
+    {
+      "allow": [
+        9,
+        10
+      ],
+      "expect_hex": "6109620a63",
+      "input_hex": "6109620a63",
+      "name": "allow_tab_and_newline",
+      "note": "explicit allow keeps TAB and LF"
+    },
+    {
+      "expect_hex": "6162",
+      "input_hex": "617f62",
+      "name": "del_stripped",
+      "note": "DEL (0x7F) removed"
+    },
+    {
+      "expect_hex": "6162",
+      "input_hex": "610062",
+      "name": "nul_stripped",
+      "note": "NUL (0x00) removed"
+    },
+    {
+      "expect_hex": "6162",
+      "input_hex": "618562",
+      "name": "raw_c1_stripped",
+      "note": "raw C1 byte (0x85 NEL) stripped, not replaced"
+    },
+    {
+      "expect_hex": "6162",
+      "input_hex": "61c28562",
+      "name": "encoded_c1_stripped",
+      "note": "UTF-8-encoded C1 (U+0085) stripped"
+    },
+    {
+      "expect_hex": "61efbfbd62",
+      "input_hex": "61ff62",
+      "name": "invalid_utf8_replaced",
+      "note": "invalid byte 0xFF -> U+FFFD"
+    },
+    {
+      "expect_hex": "61efbfbd62",
+      "input_hex": "61a062",
+      "name": "lone_continuation_replaced",
+      "note": "lone continuation 0xA0 -> U+FFFD (above C1 range)"
+    }
+  ]
+}
