@@ -391,6 +391,35 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncerTest do
     end
   end
 
+  describe "announce_stranded/2" do
+    test "announces a stranded row and leaves the route for a later terminal" do
+      SwapAnnouncer.announce_execute(context(), request(), quote_resp(), exec())
+      assert_receive {:announce, _path, _execute_body}, 1000
+
+      assert :ok == SwapAnnouncer.announce_stranded(context(), "int_1")
+
+      assert_receive {:announce, "/api/agent/announce", body}, 1000
+      assert body["event"]["intentId"] == "int_1"
+      assert body["event"]["fromChainId"] == 8453
+      assert body["event"]["status"] == "stranded"
+
+      {:ok, recovered} =
+        AgentStream.recover_signer(@topic, event_of(body), body["agentSig"])
+
+      assert String.downcase(recovered) == String.downcase(@agent_address)
+
+      # peek did not consume: a later real terminal can still announce.
+      status = %IntentStatus{intent_id: "int_1", status: :completed}
+      assert :ok == SwapAnnouncer.announce_terminal(context(), "int_1", status)
+      assert_receive {:announce, _path, %{"event" => %{"status" => "completed"}}}, 1000
+    end
+
+    test "skips when no route was stashed for the intent" do
+      assert :ok == SwapAnnouncer.announce_stranded(context(), "never_executed")
+      refute_receive {:announce, _, _}, 200
+    end
+  end
+
   describe "privacy: only public settlements disclose the route" do
     defp expected_pseudo(intent_id) do
       :crypto.hash(:sha256, [@topic, "\n", intent_id])

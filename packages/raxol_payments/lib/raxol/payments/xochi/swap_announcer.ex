@@ -147,6 +147,35 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
   end
 
   @doc """
+  Announce a `stranded` row for an intent whose poll timed out before any
+  terminal status. The row was left at its non-terminal execute state, so this
+  advances it to a distinct in-doubt state (the client keeps it out of
+  completed/failed, which is honest: the origin funds may still settle late).
+
+  Reads the route with `peek/1`, NOT `take/1`: if the intent later resolves to a
+  real terminal status on a re-poll, `announce_terminal/3` must still find its
+  route. No-op when no `topic_id` is configured or no route is stashed.
+  """
+  @spec announce_stranded(map(), String.t()) :: :ok
+  def announce_stranded(context, intent_id) do
+    case config(context) do
+      {:ok, cfg} ->
+        case SwapRouteStore.peek(intent_id) do
+          {:ok, base} ->
+            AgentStream.announce(cfg, %{base | status: "stranded", ts: now_ms()})
+            :ok
+
+          :error ->
+            emit_skipped(context, :no_route)
+            :ok
+        end
+
+      :skip ->
+        :ok
+    end
+  end
+
+  @doc """
   Resolve the `AgentStream` config from an Action context, or `:skip` when it
   fails a validation. Emits an
   `[:raxol, :payments, :xochi, :agent_stream, :announce_skipped]` telemetry event

@@ -63,4 +63,18 @@ defmodule Raxol.Payments.Xochi.SwapRouteStoreTest do
     assert {:ok, %{v: 2}} = SwapRouteStore.take("intent_update")
     assert :error == SwapRouteStore.take("intent_update")
   end
+
+  test "peek reads without consuming" do
+    SwapRouteStore.remember("intent_peek", %{p: 1})
+    assert {:ok, %{p: 1}} = SwapRouteStore.peek("intent_peek")
+    # Still there for a later take.
+    assert {:ok, %{p: 1}} = SwapRouteStore.peek("intent_peek")
+    assert {:ok, %{p: 1}} = SwapRouteStore.take("intent_peek")
+    assert :error == SwapRouteStore.peek("intent_peek")
+  end
+
+  test "peek does not return an expired entry" do
+    SwapRouteStore.remember("intent_peek_exp", %{p: 1}, ttl_ms: -1)
+    assert :error == SwapRouteStore.peek("intent_peek_exp")
+  end
 end
