@@ -216,7 +216,13 @@ defmodule Raxol.Agent.SpendGate do
   defp reserve_against_budget(context, cost_ref, estimate, scope) do
     # The FROZEN reserve seam — the same closure the caller composed over the
     # run/session budget, atomic under concurrency (`Ledger.try_spend` shape).
-    case context.try_reserve.(estimate) do
+    #
+    # Exception-safety (money-critical): if `context.try_reserve` RAISES (vs
+    # returns `{:error, _}`), the ETS claim taken in `reserve_valid/3` would leak
+    # and permanently wedge `cost_ref`. `safe_try_reserve/4` releases the claim
+    # on any raise, then re-raises — so a raising budget seam leaves `cost_ref`
+    # retryable, never stuck.
+    case safe_try_reserve(context, cost_ref, estimate, scope) do
       {:ok, _remaining} ->
         emit(context, %{kind: :reserve, cost_ref: cost_ref, estimate: estimate})
 
@@ -235,6 +241,22 @@ defmodule Raxol.Agent.SpendGate do
         emit(context, %{kind: :reserve_refused, cost_ref: cost_ref, reason: reason})
         {:error, {:refused, reason}}
     end
+  end
+
+  # Invoke the frozen `try_reserve` seam, releasing the ETS claim taken for
+  # `cost_ref` if the seam RAISES (or throws/exits), then re-raising so the
+  # caller still sees the failure. A `{:error, _}` return is NOT a raise and
+  # flows through untouched (the caller releases the claim on the refusal path).
+  defp safe_try_reserve(context, cost_ref, estimate, scope) do
+    context.try_reserve.(estimate)
+  rescue
+    error ->
+      Reservations.release(scope, cost_ref)
+      reraise error, __STACKTRACE__
+  catch
+    kind, reason ->
+      Reservations.release(scope, cost_ref)
+      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   @doc """
@@ -278,7 +300,10 @@ defmodule Raxol.Agent.SpendGate do
   def around(context, cost_ref, estimate, call_fun) do
     case reserve(context, cost_ref, estimate) do
       {:ok, reservation} ->
-        {actual, result} = call_fun.()
+        # If `call_fun` RAISES, the reservation's ETS claim would leak and wedge
+        # `cost_ref`. Release it on any raise (so `cost_ref` is reclaimable) then
+        # re-raise — the caller sees the failure, the registry is not poisoned.
+        {actual, result} = safe_call(reservation, call_fun)
         emit(context, %{kind: :call, cost_ref: cost_ref})
         settle(context, reservation, actual)
         {:ok, result}
@@ -286,6 +311,22 @@ defmodule Raxol.Agent.SpendGate do
       {:error, {:refused, reason}} ->
         {:error, {:reserve_refused, reason}}
     end
+  end
+
+  # Run the spend-bearing `call_fun`, releasing the reservation's claim if it
+  # raises/throws/exits, then re-raising. Releasing (not settling) keeps
+  # `cost_ref` reclaimable; the un-settled reserve stays visible in the fold as
+  # the crash-between-reserve-and-call contour requires.
+  defp safe_call(%{scope: scope, cost_ref: cost_ref}, call_fun) do
+    call_fun.()
+  rescue
+    error ->
+      Reservations.release(scope, cost_ref)
+      reraise error, __STACKTRACE__
+  catch
+    kind, reason ->
+      Reservations.release(scope, cost_ref)
+      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   # --- internals ------------------------------------------------------------
