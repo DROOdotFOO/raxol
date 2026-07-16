@@ -16,6 +16,15 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   performed, and none is planned as part of this label. The label plus
   the plain `@code_style` code body is the seam a future highlighter
   would slot into, not something this module implements itself.
+
+  Trust note: a new output surface added to a shared component inherits
+  the component's OWN trust contract, not the calling path's. This
+  module's contract is "callers may pass untrusted text", and it has
+  direct callers with no sanitizer in front (the harness path's
+  `Harness.MarkdownBody` pre-strips control bytes, but e.g. the
+  playground's `DemoHelpers.markdown/2` does not) -- so the label is
+  control/ESC-sanitized and length-clamped here, at the boundary that
+  produces it, regardless of which caller supplied the input.
   """
   use Raxol.UI.Components.Base.Component
 
@@ -312,20 +321,38 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
 
   def code_language_from_attrs(_attrs), do: nil
 
+  # The info string is UNTRUSTED input reaching a NEW output surface (the
+  # label line), so it is made safe here, at this module's own boundary --
+  # not on any particular calling path (see the moduledoc's trust note):
+  # all C0 controls, DEL, and C1 bytes are stripped BEFORE word extraction
+  # (`~r/\s+/` does not treat ESC as whitespace, so `elixir\e[2J` would
+  # otherwise survive as one "word" and smuggle a live escape sequence
+  # into `text()`), and the surviving word is clamped so a pathological
+  # no-whitespace info string can never become an unbounded label line.
+  @info_string_control_chars ~r/[\x00-\x1F\x7F\x{0080}-\x{009F}]/u
+  @max_lang_label_width 32
+
   # The displayed language tag is the first whitespace-separated word of
-  # an info string, an optional Earmark "language-" class prefix stripped
-  # first (a no-op when there is none, e.g. a bare fence info string like
-  # `elixir title=demo`). Absent/blank/whitespace-only input yields `nil`,
-  # not an empty string -- `code_label_elements/1` treats those the same,
-  # but keeping the "no label" case as a single value simplifies callers.
+  # the sanitized info string, an optional Earmark "language-" class
+  # prefix stripped first (a no-op when there is none, e.g. a bare fence
+  # info string like `elixir title=demo`). Absent/blank/sanitized-to-empty
+  # input yields `nil`, not an empty string -- keeping the "no label" case
+  # as a single value simplifies callers.
   defp lang_word(value) do
     value
     |> to_string()
+    |> String.replace(@info_string_control_chars, "")
     |> String.replace_prefix("language-", "")
     |> String.trim()
     |> String.split(~r/\s+/, trim: true)
     |> List.first()
+    |> clamp_lang()
   end
+
+  defp clamp_lang(nil), do: nil
+
+  defp clamp_lang(lang),
+    do: TextLayout.truncate(lang, @max_lang_label_width, :ellipsis)
 
   # --- Shared segment rendering (fits-vs-wrapped) ---
   #
@@ -630,8 +657,10 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     Enum.concat([[blank], code_label_elements(lang), code_elements, [blank]])
   end
 
+  # `lang` is always `lang_word/1`'s output here: `nil` or a non-empty,
+  # sanitized, clamped word -- there is deliberately no `""` clause, since
+  # `lang_word/1` maps every empty/blank/sanitized-away case to `nil`.
   defp code_label_elements(nil), do: []
-  defp code_label_elements(""), do: []
 
   defp code_label_elements(lang) do
     [Components.text(content: "  " <> lang, style: %{dim: true})]

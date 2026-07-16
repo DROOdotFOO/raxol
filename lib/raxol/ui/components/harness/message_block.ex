@@ -14,6 +14,12 @@ defmodule Raxol.UI.Components.Harness.MessageBlock do
   The stable-prefix optimization (cache the parse of the durable prefix of
   a streaming message and only re-parse the live tail) is a documented
   follow-up seam in `MarkdownBody`, not implemented here.
+
+  Behavioral note: sanitization applies in BOTH modes, so even a `:sealed`
+  render of control-char-bearing content is intentionally NOT
+  byte-identical to the old raw `MarkdownRenderer` parse -- control/ESC
+  bytes are stripped, invalid UTF-8 is recovered. Clean content renders
+  identically.
   """
 
   alias Raxol.UI.Components.Harness.MarkdownBody

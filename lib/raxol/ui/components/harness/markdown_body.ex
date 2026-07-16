@@ -98,6 +98,19 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
 
   @type mode :: :sealed | :streaming
 
+  @doc """
+  The single vocabulary bridge from a block's seal state (`:live |
+  :sealed`, see `Raxol.UI.Components.Harness.Block`) to this module's
+  render mode: `:live -> :streaming`, `:sealed -> :sealed`. Every call
+  site that glues block seal to Markdown rendering (`BodyProvider`'s
+  `:message` props, `Block.render/2`'s `context[:markdown]` path) MUST
+  use this rather than re-deriving the mapping -- two names for the same
+  binary state is already one too many.
+  """
+  @spec mode_for_seal(Raxol.UI.Components.Harness.Block.seal_state()) :: mode()
+  def mode_for_seal(:live), do: :streaming
+  def mode_for_seal(:sealed), do: :sealed
+
   # Above this byte size, both the provisional-close scan and the
   # downstream render/parse skip their normal work and fall back to a
   # cheap identity/plain-text path. Pure insurance: the scan is

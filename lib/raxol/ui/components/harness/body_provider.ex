@@ -73,6 +73,7 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
     ApprovalPrompt,
     Block,
     DiffViewer,
+    MarkdownBody,
     MessageBlock,
     ReasoningBlock,
     ToolCallBlock,
@@ -276,7 +277,7 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
       role: Map.get(body, :role, :assistant),
       content: Map.fetch!(body, :text),
       width: width_from(context),
-      mode: if(seal == :live, do: :streaming, else: :sealed)
+      mode: MarkdownBody.mode_for_seal(seal)
     ]
   end
 
