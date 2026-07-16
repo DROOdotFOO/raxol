@@ -112,4 +112,34 @@ defmodule Raxol.Agent.SpendGateRobustnessTest do
       assert {:ok, _} = SpendGate.reserve(c, cost_ref, 100)
     end
   end
+
+  describe "finding #4 — dedup keyed on a stable budget id, not the try_reserve closure" do
+    test "same cost_ref across two FRESHLY-BUILT closures for the SAME budget id is deduped" do
+      budget_id = make_ref()
+      cost_ref = "f4-#{System.unique_integer([:positive])}"
+
+      # Two contexts for ONE budget, each with a DISTINCT try_reserve closure
+      # term (rebuilt per call, as a real caller composing caps might). Keying on
+      # the closure would fragment the namespace and let cost_ref reserve twice.
+      ctx_a = ctx(budget_id: budget_id, try_reserve: fn _amt -> {:ok, 900} end)
+      ctx_b = ctx(budget_id: budget_id, try_reserve: fn _amt -> {:ok, 800} end)
+
+      refute ctx_a.try_reserve == ctx_b.try_reserve
+
+      assert {:ok, _} = SpendGate.reserve(ctx_a, cost_ref, 100)
+      # Second, distinct closure, SAME budget id ⇒ reserve-once dedup fires.
+      assert {:error, {:refused, :duplicate_reserve}} = SpendGate.reserve(ctx_b, cost_ref, 100)
+    end
+
+    test "two DISTINCT budget ids do not false-collide on the same cost_ref" do
+      cost_ref = "f4b-#{System.unique_integer([:positive])}"
+
+      ctx_1 = ctx(budget_id: make_ref())
+      ctx_2 = ctx(budget_id: make_ref())
+
+      assert {:ok, _} = SpendGate.reserve(ctx_1, cost_ref, 100)
+      # Different budget ⇒ independent namespace, NOT a duplicate.
+      assert {:ok, _} = SpendGate.reserve(ctx_2, cost_ref, 100)
+    end
+  end
 end

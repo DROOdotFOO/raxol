@@ -373,9 +373,32 @@ defmodule Raxol.Agent.SpendGate do
       :ok
   end
 
-  # The reservation namespace = the frozen `context.try_reserve` closure itself:
-  # guaranteed present, and unique per budget scope (see Reservations).
-  defp reserve_scope(context), do: context.try_reserve
+  # The reservation namespace (dedup scope). Keying on the `try_reserve` CLOSURE
+  # TERM is caller-fragile (finding #4): a caller that rebuilds the closure per
+  # call — or composes run+session caps into a fresh closure each time — gets a
+  # DIFFERENT term for the SAME budget, fragmenting the namespace so one cost_ref
+  # can reserve twice; conversely two distinct budgets whose closures happen to
+  # compare `=:=` would collide into a false `duplicate_reserve`.
+  #
+  # So we key on an explicit STABLE budget identity when the caller supplies one,
+  # in preference order: `:budget_id` -> `:scope` -> a raw `:budget` handle. Each
+  # is tagged so values from different fields can never alias. Only when NONE is
+  # present do we fall back to the closure term (documented requirement below).
+  #
+  # NOTE (follow-up): the frozen SpendGate `context` shape (§ AD-6a) freezes only
+  # `:emit` and `:try_reserve` — it has no stable budget-identity field yet.
+  # U7-I callers SHOULD pass a stable `:budget_id` (one per run/session budget);
+  # promoting `:budget_id` into the frozen context shape is the clean fix and is
+  # tracked as a follow-up. Until then the closure-term fallback holds only for
+  # callers that reuse ONE `try_reserve` closure per budget.
+  defp reserve_scope(context) do
+    cond do
+      Map.has_key?(context, :budget_id) -> {:budget_id, context.budget_id}
+      Map.has_key?(context, :scope) -> {:scope, context.scope}
+      Map.has_key?(context, :budget) -> {:budget, context.budget}
+      true -> {:try_reserve, context.try_reserve}
+    end
+  end
 
   # A valid token estimate is a positive integer. Rejects 0, negatives, floats,
   # and non-numbers (non-finite) — fail-closed, mirroring the payments Ledger.
