@@ -39,8 +39,13 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
     * A checkpoint MUST NOT be appended mid-turn (between `turn_started` and its
       close) nor mid-reserve (between a spend-gate reserve and its terminal),
       else `{:error, :mid_turn}` / `{:error, :mid_reserve}` (N-JS2).
-    * FI-10: the record body carries **no model content** — pointer + hash only;
-      the snapshot file passes sanitize + MS secret exclusion before hashing.
+    * FI-10: the record body carries **no model content** — pointer + hash only.
+      Snapshot-content sanitization + MS secret exclusion bind to the MS codec,
+      which is not yet landed: the interim surrogate codec typed-rejects any
+      non-JSON-native model (`{:error, :surrogate_backend_unbound}`) and writes
+      a JSON-safe model **verbatim, with no redaction** — see the "FI-10 scope
+      note" in `Checkpoint.FileBackend`'s moduledoc. Re-bind redaction together
+      with the codec when MS lands.
   """
 
   alias Raxol.Agent.Journal.FileStore
@@ -172,6 +177,16 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   A future `gc`/truncation writer MUST consult this and reject any proposal
   whose truncation range reaches this offset — rejected at the same synchronous
   admission seam as `:invalid_tip`, never accepted-then-marked.
+
+  **Fail-closed on malformed checkpoints** (adversarial-review hardening, PR
+  #582): the tolerant Reader accepts a truncated/adversarial checkpoint record
+  missing `id`/`tip_offset` (or carrying non-integer junk). Restore
+  typed-rejects those (`:malformed_checkpoint`); this floor — the "never
+  orphan a checkpoint" safety check — must not raise a `KeyError` on the same
+  records. When ANY checkpoint record is malformed the floor is unknowable, so
+  it degrades to `{:offset, 1}`: the entire journal is protected and every
+  truncation proposal is rejected. Protecting too much is safe; guessing is
+  not.
   """
   @spec protected_floor([map()]) :: {:offset, pos_integer()} | :none
   def protected_floor(records) when is_list(records) do
@@ -182,8 +197,20 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
         :none
 
       cps ->
-        newest = Enum.max_by(cps, &Map.fetch!(&1, "id"))
-        {:offset, Map.fetch!(newest, "tip_offset")}
+        if Enum.all?(cps, &floor_fields_healthy?/1) do
+          newest = Enum.max_by(cps, &Map.fetch!(&1, "id"))
+          {:offset, Map.fetch!(newest, "tip_offset")}
+        else
+          {:offset, 1}
+        end
     end
+  end
+
+  # The two fields the floor dereferences, present AND well-typed (positive
+  # integers — ids/offsets start at 1).
+  defp floor_fields_healthy?(cp) do
+    id = Map.get(cp, "id")
+    tip = Map.get(cp, "tip_offset")
+    is_integer(id) and id > 0 and is_integer(tip) and tip > 0
   end
 end
