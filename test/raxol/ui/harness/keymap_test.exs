@@ -213,7 +213,7 @@ defmodule Raxol.UI.Harness.KeymapTest do
         Keymap.binds()
         |> Enum.map(fn bind ->
           norm = fixture_for(bind)
-          context = %{composing?: false, focused_block_id: "any"}
+          context = context_for(bind)
 
           case Keymap.resolve(norm, context) do
             %{type: type} -> type
@@ -226,11 +226,80 @@ defmodule Raxol.UI.Harness.KeymapTest do
       assert MapSet.size(declared) == length(Keymap.binds())
     end
 
+    # The `guard: :overlay` bind's own context requirement differs from
+    # every other bind's -- see `Keymap`'s moduledoc, "overlay-open ESC
+    # capture": it only resolves when the caller explicitly opts in with
+    # `overlay_open?: true`. Every other bind's context is unaffected by
+    # that flag, so this only special-cases the one guard that needs it;
+    # the resulting resolved set (and its size against `binds/0`) is
+    # unchanged by driving each bind's own natural context here.
+    defp context_for(%{guard: :overlay}),
+      do: %{composing?: false, focused_block_id: "any", overlay_open?: true}
+
+    defp context_for(_bind), do: %{composing?: false, focused_block_id: "any"}
+
     defp fixture_for(%{key: key}),
       do: InputEvent.normalize(Event.key_event(key, :pressed, []))
 
     defp fixture_for(%{char: char}),
       do: InputEvent.normalize(Event.key_event(char, :pressed, []))
+  end
+
+  # -- overlay-open ESC capture (the overlay picker's focus context) --
+  #
+  # An open overlay picker enters the keymap's context as
+  # `overlay_open?: true`. ESC must then resolve to `:overlay_dismiss`
+  # (close the overlay) BEFORE the global `:always` ESC-interrupt bind --
+  # first-match-wins over the data table, no second dispatch mechanism.
+  # The fail-safe direction mirrors `composing?`'s: a caller that never
+  # sets `overlay_open?` gets the old behavior (ESC = interrupt),
+  # so nothing load-bearing changes for existing callers.
+
+  describe "overlay-open ESC capture" do
+    test "ESC with overlay_open?: true -> :overlay_dismiss, not :interrupt" do
+      assert resolve_from(translator_event(@tb_escape, 0), %{
+               overlay_open?: true
+             }) ==
+               %{type: :overlay_dismiss, payload: %{}}
+    end
+
+    test "ESC with overlay_open?: true resolves :overlay_dismiss regardless of composing?/streaming?" do
+      for composing? <- [true, false], streaming? <- [true, false] do
+        context = %{
+          overlay_open?: true,
+          composing?: composing?,
+          streaming?: streaming?
+        }
+
+        assert resolve_from(parser_event("\e"), context) ==
+                 %{type: :overlay_dismiss, payload: %{}},
+               "context #{inspect(context)} must dismiss, not interrupt"
+      end
+    end
+
+    test "ESC with overlay_open?: false -> :interrupt (unchanged)" do
+      assert resolve_from(parser_event("\e"), %{overlay_open?: false}) ==
+               %{type: :interrupt, payload: %{}}
+    end
+
+    test "overlay_open?: unset defaults to the fail-safe (closed) reading -- ESC stays :interrupt" do
+      assert resolve_from(parser_event("\e"), %{composing?: true}) ==
+               %{type: :interrupt, payload: %{}}
+    end
+
+    test "only ESC gains an overlay meaning in the table -- printable chars and Enter stay :passthrough with the overlay open (the Surface routes them)" do
+      context = %{overlay_open?: true, composing?: true}
+
+      assert resolve_from(Event.key("a"), context) == :passthrough
+      assert resolve_from(Event.key(:enter), context) == :passthrough
+      assert resolve_from(Event.key(:up), context) == :passthrough
+      assert resolve_from(Event.key(:down), context) == :passthrough
+      assert resolve_from(Event.key(:backspace), context) == :passthrough
+    end
+
+    test "command_types/0 includes :overlay_dismiss" do
+      assert :overlay_dismiss in Keymap.command_types()
+    end
   end
 
   # -- 5. modifier-aware key binds (Drew's review, T12 fix-now #2) --

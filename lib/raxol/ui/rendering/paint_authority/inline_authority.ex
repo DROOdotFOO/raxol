@@ -217,6 +217,46 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       flag) instead of running its normal diff — so the first repaint after any
       geometry OR width change always fully re-renders the footer at its current
       position and width, regardless of whether the logical content changed.
+
+  ## Growing/shrinking the footer (overlay hosting)
+
+  `set_footer_rows/2` is the seam a footer-hosted overlay
+  (`Raxol.UI.Harness.OverlayPicker`, assembled via
+  `Raxol.Harness.Surface.open_overlay/3`) uses to claim (or give back)
+  rows from the footer viewport WITHOUT a real terminal resize --
+  `rows`/`width` are unchanged, only the DECSTBM split point moves, via
+  `ScrollRegionManager.set_footer_rows/2` (the `resize/2` counterpart
+  that holds `rows` constant and varies `footer_rows` instead).
+
+  A temporary overlay must never unpin the live footer: a target that
+  would make `ScrollRegionManager.degenerate?/2` true (history could not
+  keep its 2-row minimum) is refused outright, `{:error, :degenerate}`,
+  zero bytes -- the caller keeps whatever footer it already had.
+
+  **Growing** the footer (claiming rows FROM history) must not silently
+  paint over content that already occupies those rows. Whatever currently
+  fills the reclaimed range is scrolled up first, via plain `"\n"` bytes
+  written at the OLD bottom row while the OLD (still wider) DECSTBM region
+  is still active: each `\n` landing on that row is the same
+  index-at-region-boundary behavior `append_sealed/2` already relies on --
+  the region scrolls, the row evicted off the top lands in the terminal's
+  own native scrollback, and nothing is ever re-painted. Only after that
+  scroll does the DECSTBM split actually move
+  (`ScrollRegionManager.set_footer_rows/2`) and `needs_keyframe: true` gets
+  set -- the SAME latch `resize/3` uses, so the next `repaint/2` call
+  self-promotes to a full `keyframe/2` and redraws the (now smaller)
+  footer cleanly at its new position.
+
+  **Shrinking** the footer (giving rows BACK to history) is the reverse
+  concern: the rows being vacated are still footer-owned (about to become
+  history) and may hold stale overlay pixels from the frame before
+  dismissal -- history appends resume ABOVE them, so nothing else will
+  ever clear them on its own. Each vacated row is explicitly cleared
+  (`CUP` + `\e[K`, never `\e[2J`) BEFORE the DECSTBM split moves back,
+  then the same `needs_keyframe` latch is set so the footer's remaining
+  content is fully re-rendered at its new (smaller) position.
+
+  Neither direction ever emits `\e[2J`/`\e[3J`.
   """
 
   @behaviour Raxol.UI.Rendering.PaintAuthority
@@ -666,6 +706,136 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         next_row: min(next_row, ScrollRegionManager.history_bottom(new_region)),
         needs_keyframe: t.needs_keyframe or reflow_relevant?
     }
+  end
+
+  @doc """
+  Grows or shrinks the footer viewport by `new_footer_rows` rows, WITHOUT
+  a real terminal resize (`rows`/`width` unchanged) -- see the
+  moduledoc's "Growing/shrinking the footer" section for the full
+  rationale. This is the seam `Raxol.Harness.Surface.open_overlay/3` and
+  `close_overlay/1` use to host `Raxol.UI.Harness.OverlayPicker`.
+
+  Returns `{:error, :degenerate}` (zero bytes) when the target
+  `new_footer_rows` would leave history unable to keep its 2-row minimum
+  (`ScrollRegionManager.degenerate?/2`) -- a temporary overlay must never
+  unpin the live footer. Returns `{:ok, t}` unchanged (zero bytes) when
+  `new_footer_rows` equals the current footer row count.
+
+  Otherwise grows (claims rows from history, scrolling any occupied
+  claimed rows up into native scrollback first -- never painting over
+  them) or shrinks (clears the vacated rows while they are still
+  footer-owned, then re-pins) and sets `needs_keyframe: true` either way,
+  so the next `repaint/2` self-promotes to a full `keyframe/2` at the new
+  split.
+  """
+  @spec set_footer_rows(t(), non_neg_integer()) ::
+          {:ok, t()} | {:error, :degenerate}
+  def set_footer_rows(%__MODULE__{region: region} = t, new_footer_rows)
+      when is_integer(new_footer_rows) and new_footer_rows >= 0 do
+    rows = ScrollRegionManager.rows(region)
+    old_footer_rows = ScrollRegionManager.footer_rows(region)
+
+    cond do
+      new_footer_rows == old_footer_rows ->
+        {:ok, t}
+
+      ScrollRegionManager.degenerate?(rows, new_footer_rows) ->
+        {:error, :degenerate}
+
+      true ->
+        old_bottom = ScrollRegionManager.history_bottom(region)
+        new_bottom = ScrollRegionManager.history_bottom(rows, new_footer_rows)
+
+        updated =
+          if new_bottom < old_bottom do
+            grow_footer(t, old_bottom, new_bottom, new_footer_rows)
+          else
+            shrink_footer(t, old_bottom, new_bottom, new_footer_rows)
+          end
+
+        {:ok, updated}
+    end
+  end
+
+  # Claims `old_bottom - new_bottom` rows from history for the footer.
+  # Whatever currently occupies the reclaimed range (rows
+  # `new_bottom+1..old_bottom`) is scrolled up first (never painted over)
+  # -- see moduledoc, "Growing/shrinking the footer".
+  defp grow_footer(
+         %__MODULE__{next_row: next_row} = t,
+         old_bottom,
+         new_bottom,
+         new_footer_rows
+       ) do
+    k = grow_reclaim_count(next_row, old_bottom, new_bottom)
+    t = if k > 0, do: scroll_history_up(t, old_bottom, k), else: t
+    next_row_after_scroll = if k > 0, do: max(next_row - k, 1), else: next_row
+    new_region = ScrollRegionManager.set_footer_rows(t.region, new_footer_rows)
+
+    %{
+      t
+      | region: new_region,
+        next_row: min(next_row_after_scroll, new_bottom),
+        needs_keyframe: true
+    }
+  end
+
+  # `next_row >= old_bottom` (steady state, or overflow past the bottom
+  # row) is ambiguous about exactly which rows hold real content -- the
+  # bottom row may already be filled -- so the conservative reading takes
+  # the FULL reclaimed range as occupied. Otherwise, only the rows
+  # actually written so far (`next_row - 1`) that fall inside the
+  # reclaimed range count.
+  defp grow_reclaim_count(next_row, old_bottom, new_bottom) do
+    if next_row >= old_bottom do
+      old_bottom - new_bottom
+    else
+      max(next_row - 1 - new_bottom, 0)
+    end
+  end
+
+  # Scrolls `k` rows out of the OLD (still wider) DECSTBM region by
+  # writing plain `"\n"` bytes at its bottom row -- each one an
+  # index-at-region-boundary, evicting the top row into native
+  # scrollback, never repainting anything. Written directly (not through
+  # `append_sealed/2`): this is geometry housekeeping, not a sealed
+  # content append, and carries no `next_row` bookkeeping of its own.
+  defp scroll_history_up(t, old_bottom, k) do
+    with_cursor(t, :history, fn inner ->
+      device = inner.region.device
+      IO.write(device, Dialect.cursor_position(old_bottom))
+      IO.write(device, String.duplicate("\n", k))
+      inner
+    end)
+  end
+
+  # Gives `new_bottom - old_bottom` rows back to history. The vacated
+  # range (rows `old_bottom+1..new_bottom`) is still footer-owned until
+  # the split actually moves, so each row is explicitly cleared here --
+  # history appends resume above them and would otherwise never touch
+  # them again, leaving stale overlay pixels forever.
+  defp shrink_footer(
+         %__MODULE__{next_row: next_row} = t,
+         old_bottom,
+         new_bottom,
+         new_footer_rows
+       ) do
+    t = clear_vacated_rows(t, old_bottom, new_bottom)
+    new_region = ScrollRegionManager.set_footer_rows(t.region, new_footer_rows)
+    %{t | region: new_region, next_row: next_row, needs_keyframe: true}
+  end
+
+  defp clear_vacated_rows(t, old_bottom, new_bottom) do
+    with_cursor(t, :footer, fn inner ->
+      device = inner.region.device
+
+      Enum.each((old_bottom + 1)..new_bottom//1, fn row ->
+        IO.write(device, Dialect.cursor_position(row))
+        IO.write(device, "\e[K")
+      end)
+
+      inner
+    end)
   end
 
   @impl true

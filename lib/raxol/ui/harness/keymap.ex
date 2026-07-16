@@ -65,6 +65,39 @@ defmodule Raxol.UI.Harness.Keymap do
       (browsing the transcript), and fall through to `:passthrough`
       (ordinary character insertion) while composing.
 
+  ## The overlay-open ESC capture (order is load-bearing)
+
+  An open `Raxol.UI.Harness.OverlayPicker` (hosted by
+  `Raxol.Harness.Surface.open_overlay/3`) needs ESC to close ITSELF, not
+  fire the global interrupt -- an overlay is transient UI-local state, and
+  a stray ESC-while-picking must never look like a supervised kill of the
+  running turn. `binds/0`'s FIRST entry (`%{key: :escape, command_type:
+  :overlay_dismiss, guard: :overlay}`) captures exactly that, ahead of the
+  `:always`-guarded `%{key: :escape, command_type: :interrupt}` entry
+  later in the table -- `resolve/2` walks `@binds` in order and takes the
+  first match, so this is the one place in this module where table ORDER
+  is part of the contract, not incidental. Enter/printable chars/arrows
+  are deliberately NOT added to the table for the overlay: they stay
+  `:passthrough` even with `context.overlay_open?: true` (see
+  `matches?/3`'s test coverage) -- the assembly layer (`Surface`) is the
+  one that already has the picker's state and routes those to
+  `Raxol.UI.Harness.OverlayPicker.handle_key/2` itself.
+
+  The `guard: :overlay` fail-safe direction is the OPPOSITE of
+  `:not_composing`'s, and deliberately so: `guard_passes?/2` reads
+  `Map.get(context, :overlay_open?, false)` -- absent or `false` means
+  "no overlay is open," so ESC falls through to the `:always` interrupt
+  bind exactly as it always has. A caller that never sets `overlay_open?`
+  (every existing caller, before this change) is completely unaffected --
+  nothing load-bearing changes for them. Only an explicit
+  `overlay_open?: true` opts INTO the dismiss reading. This is the safe
+  direction here for the reason `:not_composing`'s fail-safe is the
+  OPPOSITE way: the dangerous failure mode for THIS guard is silently
+  swallowing the global ESC-interrupt when no overlay is actually open (a
+  caller bug would make ESC do nothing at all, a much worse silent
+  failure than dead navigation keys), so the guard must default to
+  "closed" and require an explicit opt-in to ever capture ESC.
+
   ### Fail-safe default: missing `composing?` means composing
 
   A caller that omits `composing?` from `context()` entirely (forgets it,
@@ -156,15 +189,21 @@ defmodule Raxol.UI.Harness.Keymap do
   @type context :: %{
           optional(:composing?) => boolean(),
           optional(:streaming?) => boolean(),
-          optional(:focused_block_id) => term()
+          optional(:focused_block_id) => term(),
+          optional(:overlay_open?) => boolean()
         }
 
   @type command_type ::
-          :interrupt | :steer | :fold_toggle | :jump_next | :jump_prev
+          :interrupt
+          | :steer
+          | :fold_toggle
+          | :jump_next
+          | :jump_prev
+          | :overlay_dismiss
 
   @type command :: %{type: command_type(), payload: map()}
 
-  @type guard :: :always | :not_composing
+  @type guard :: :always | :not_composing | :overlay
 
   @type bind :: %{
           required(:command_type) => command_type(),
@@ -176,10 +215,16 @@ defmodule Raxol.UI.Harness.Keymap do
 
   # Plain keys only (v1) -- see moduledoc's "tui-steal rule": a future chord
   # (e.g. requiring :ctrl) is a new field on the matching entry, not a
-  # restructure of `resolve/2`. Order matters only in that the first match
-  # wins; the table is designed so no two entries can ever both match a
-  # single normalized event, so today the order is not load-bearing.
+  # restructure of `resolve/2`. Order matters for exactly ONE reason now
+  # (see the moduledoc's "overlay-open ESC capture" section): the
+  # `guard: :overlay` escape entry MUST precede the `guard: :always`
+  # escape entry, so `resolve/2`'s first-match walk resolves ESC to
+  # `:overlay_dismiss` while the overlay is open before ever reaching the
+  # interrupt bind. Every other pair of entries still can never both
+  # match a single normalized event, so their relative order remains
+  # incidental.
   @binds [
+    %{key: :escape, command_type: :overlay_dismiss, guard: :overlay},
     %{key: :escape, command_type: :interrupt, guard: :always},
     %{key: :tab, command_type: :steer, guard: :always},
     %{char: "z", command_type: :fold_toggle, guard: :not_composing},
@@ -266,6 +311,17 @@ defmodule Raxol.UI.Harness.Keymap do
   # opt IN to guarded-bind resolution with an explicit `composing?: false`.
   defp guard_passes?(%{guard: :not_composing}, context),
     do: not Map.get(context, :composing?, true)
+
+  # Missing `overlay_open?` defaults to `false` (no overlay) -- the
+  # OPPOSITE fail-safe direction from `:not_composing`, deliberately (see
+  # moduledoc's "overlay-open ESC capture" section): the caller must opt
+  # IN with an explicit `overlay_open?: true` before ESC captures as
+  # `:overlay_dismiss` instead of falling through to the `:always`
+  # interrupt bind. Silently swallowing interrupt for a caller that never
+  # sets this flag would be the dangerous direction; dead navigation keys
+  # (the `:not_composing` failure mode) are merely inert by comparison.
+  defp guard_passes?(%{guard: :overlay}, context),
+    do: Map.get(context, :overlay_open?, false)
 
   defp build_command(%{command_type: :fold_toggle}, context) do
     %{

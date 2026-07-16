@@ -13,8 +13,11 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   Orientation is fixed: the scroll region is the TOP `1..(H-N)` rows
   -- history, scrolling, feeds native scrollback on real terminals -- and
   the footer is the `N` rows below it, `(H-N+1)..H`, OUTSIDE the region and
-  pinned. `N` (`footer_rows`) is caller-chosen and held constant across
-  resize; only `H` (`rows`) varies.
+  pinned. `N` (`footer_rows`) is caller-chosen and constant across
+  `resize/2` (only `H`, `rows`, varies there); `set_footer_rows/2` is the
+  one function that varies `N` instead, holding `H` constant -- the seam a
+  footer-hosted overlay picker uses to grow or shrink the pinned footer
+  viewport without a real terminal resize.
 
   ## Degenerate terminals: never emit a DECSTBM the terminal will ignore
 
@@ -229,7 +232,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   @spec history_bottom(t()) :: pos_integer()
   def history_bottom(%__MODULE__{history_bottom: top}), do: top
 
-  @doc "The `footer_rows` (`N`) this manager was started/resized with. Constant across resize."
+  @doc "The `footer_rows` (`N`) this manager was started/resized with. Constant across resize/2; changed only by set_footer_rows/2."
   @spec footer_rows(t()) :: non_neg_integer()
   def footer_rows(%__MODULE__{footer_rows: n}), do: n
 
@@ -260,9 +263,13 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   Note: this compares `history_bottom` ONLY. It assumes both states share the
   same `footer_rows` (true for any pair of states produced by `start/3`
   followed by `resize/2` calls, since `footer_rows` is held constant across
-  resize) -- it is not a general "these two states are otherwise identical"
+  resize/2) -- it is not a general "these two states are otherwise identical"
   check, and is not meaningful across two managers started with different
-  `footer_rows`.
+  `footer_rows`. A second producer of a `footer_rows` difference now exists
+  (`set_footer_rows/2` -- states across a `set_footer_rows/2` call
+  intentionally differ in `footer_rows`, by design), but `geometry_changed?/2`
+  itself is still only ever consulted by `resize/2`-path callers, so this
+  assumption continues to hold for every call site.
   """
   @spec geometry_changed?(t(), t()) :: boolean()
   def geometry_changed?(%__MODULE__{history_bottom: a}, %__MODULE__{
@@ -322,6 +329,9 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   wipe already-sealed native scrollback on wezterm/kitty).
   The footer's CONTENT is not this module's concern (the footer viewport
   owns repainting it); only the row-range split is recomputed here.
+
+  `footer_rows` (`N`) is held constant across resize/2; changed only by
+  `set_footer_rows/2`.
   """
   @spec resize(t(), pos_integer()) :: t()
   def resize(
@@ -345,6 +355,51 @@ defmodule Raxol.Terminal.ScrollRegionManager do
       | rows: new_rows,
         history_bottom: new_top,
         degenerate?: degenerate?(new_rows, footer_rows)
+    }
+  end
+
+  @doc """
+  Recomputes the region for a new `footer_rows`, holding `rows` (`H`)
+  constant -- the counterpart to `resize/2`, which holds `footer_rows`
+  constant and varies `rows`. This is the seam a footer-hosted overlay
+  (`Raxol.UI.Harness.OverlayPicker`, via
+  `Raxol.UI.Rendering.PaintAuthority.InlineAuthority.set_footer_rows/2`)
+  uses to grow or shrink the pinned footer viewport without a real
+  terminal resize.
+
+  Re-emits the DECSTBM region-set bytes ONLY when the resulting
+  `history_bottom` differs from the current one -- the same
+  geometry-gated-emission discipline `resize/2` uses (see that function's
+  doc and the moduledoc's "Geometry-gated resize emission" section):
+  DECSTBM homes the cursor as a documented side effect, so a call whose
+  `footer_rows` change happens not to move the split (e.g. `rows` is
+  already degenerate on both sides) writes zero bytes rather than paying
+  that side effect for no geometric benefit.
+
+  `footer_rows`, `history_bottom`, and `degenerate?` are updated to match
+  the new split; `rows` (`H`) is untouched.
+  """
+  @spec set_footer_rows(t(), non_neg_integer()) :: t()
+  def set_footer_rows(
+        %__MODULE__{
+          device: device,
+          rows: rows,
+          history_bottom: current_top
+        } = state,
+        new_footer_rows
+      )
+      when is_integer(new_footer_rows) and new_footer_rows >= 0 do
+    new_top = history_bottom(rows, new_footer_rows)
+
+    if new_top != current_top do
+      IO.write(device, region_set_bytes(rows, new_footer_rows))
+    end
+
+    %{
+      state
+      | footer_rows: new_footer_rows,
+        history_bottom: new_top,
+        degenerate?: degenerate?(rows, new_footer_rows)
     }
   end
 end
