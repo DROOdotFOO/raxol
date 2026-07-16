@@ -153,7 +153,20 @@ defmodule Raxol.Agent.Compaction do
   newest falls back to the previous healthy one **with the typed error
   surfaced** in `resume_info.skipped`, never silently.
 
+  Options: `:at` — restore ONE specific checkpoint by its journal offset (no
+  fall-back walk); an unknown offset is `{:error, :no_such_checkpoint}`.
+
   Returns `{:ok, model, resume_info}` or `{:error, reason}`.
+
+  When NO checkpoint restores (total snapshot loss), the error is
+  `{:error, {:no_healthy_checkpoint, skipped}}` with every attempt's typed
+  reason — deliberately richer than `Checkpoint.restore/2`'s `:no_checkpoint`
+  (that path never walks, so it has no provenance to surface). Resume FAILS
+  CLOSED here rather than silently folding the journal from offset 0: an
+  automatic zero-fold arm would synthesize state with no checkpoint
+  provenance, which is a contract ruling (AD-3b: resuming IS
+  checkpoint-restore), not a local fix. The journal itself stays intact and
+  `:ok` — a caller may still fold from offset 0 explicitly.
   """
   @callback resume(journal, opts :: keyword()) ::
               {:ok, model :: map(), resume_info()} | {:error, term()}
@@ -164,6 +177,12 @@ defmodule Raxol.Agent.Compaction do
   # Every compaction is a checkpoint with this reason — the one-artifact thesis.
   @reason "compaction"
 
+  # Compile-time link to the grow-only reason enum (adversarial-review finding:
+  # no link coupled the two, so dropping "compaction" from `Checkpoint.reasons/0`
+  # would only surface at runtime as `{:error, {:unknown_reason, "compaction"}}`).
+  # If the enum ever loses this member, this module fails to COMPILE.
+  true = @reason in Checkpoint.reasons()
+
   @checkpoint_kind Checkpoint.kind()
 
   @doc """
@@ -173,6 +192,11 @@ defmodule Raxol.Agent.Compaction do
   Reuses `Checkpoint.write/3` for the append (single Writer, one dense offset,
   snapshot-file-before-record). Returns `{:ok, compact_result}` or a typed
   `{:error, reason}` propagated from the checkpoint write path.
+
+  If the checkpoint COMMITS but the enrichment re-read of the journal fails,
+  the error is `{:error, {:checkpoint_committed_unreadable, offset, reason}}`
+  — the committed offset is surfaced so a retrying caller never appends a
+  duplicate checkpoint believing the first one failed.
   """
   @spec compact(journal, keyword()) ::
           {:ok, compact_result()} | {:error, term()}
@@ -188,22 +212,32 @@ defmodule Raxol.Agent.Compaction do
     slice = persist(model)
     manifest = manifest(model)
 
-    with {:ok, offset} <- Checkpoint.write(journal, slice, reason: @reason),
-         # FOLLOW-UP (🔵 double read): `Checkpoint.write/3` returns only the
-         # offset, so we re-read the journal to recover the snapshot_ref/hash/
-         # tip_offset it already computed. Enriching the U9 write return shape is
-         # deferred — it would change the frozen `{:ok, offset}` `@callback` the
-         # U9-R suite pins.
-         {:ok, record} <- read_record(journal, offset) do
-      {:ok,
-       %{
-         checkpoint_offset: offset,
-         snapshot_ref: Map.get(record, "snapshot_ref"),
-         snapshot_hash: Map.get(record, "snapshot_hash"),
-         tip_offset: Map.get(record, "tip_offset"),
-         reason: @reason,
-         manifest: manifest
-       }}
+    with {:ok, offset} <- Checkpoint.write(journal, slice, reason: @reason) do
+      # FOLLOW-UP (double read): `Checkpoint.write/3` returns only the offset,
+      # so we re-read the journal to recover the snapshot_ref/hash/tip_offset
+      # it already computed. Enriching the U9 write return shape is deferred —
+      # it would change the frozen `{:ok, offset}` `@callback` the U9-R suite
+      # pins.
+      case read_record(journal, offset) do
+        {:ok, record} ->
+          {:ok,
+           %{
+             checkpoint_offset: offset,
+             snapshot_ref: Map.get(record, "snapshot_ref"),
+             snapshot_hash: Map.get(record, "snapshot_hash"),
+             tip_offset: Map.get(record, "tip_offset"),
+             reason: @reason,
+             manifest: manifest
+           }}
+
+        {:error, reason} ->
+          # The checkpoint IS durably committed — `Checkpoint.write/3` returned
+          # its offset; only the enrichment re-read failed. Surface the
+          # committed offset in the error (adversarial-review finding: a caller
+          # that retries on a bare error would append a DUPLICATE checkpoint
+          # believing the first one failed).
+          {:error, {:checkpoint_committed_unreadable, offset, reason}}
+      end
     end
   end
 
@@ -213,21 +247,31 @@ defmodule Raxol.Agent.Compaction do
 
   Walks checkpoints newest-first, delegating each single-checkpoint restore to
   the U9 hardened path (`Checkpoint.restore_checkpoint/3` — snapshot hash verify,
-  tip/pointer guard, path-traversal reject, size ceiling, depth-bounded decode,
-  `$s` deref guard). A corrupt/missing/malformed newer checkpoint is surfaced
-  (typed reason) in `resume_info.skipped` before falling back to the previous
-  healthy one. Returns `{:ok, model, resume_info}` or `{:error, reason}`.
+  tip/pointer guard, path-traversal reject, size ceiling, PRE-decode nesting
+  bound, `$s` deref guard). A corrupt/missing/malformed newer checkpoint is
+  surfaced (typed reason) in `resume_info.skipped` before falling back to the
+  previous healthy one. With `at: offset`, restores that ONE checkpoint (no
+  fall-back walk; unknown offset ⇒ `{:error, :no_such_checkpoint}`).
+
+  Returns `{:ok, model, resume_info}` or `{:error, reason}`. See `c:resume/2`
+  for the fail-closed total-snapshot-loss contract
+  (`{:no_healthy_checkpoint, skipped}` — never an implicit zero-fold).
   """
   @spec resume(journal, keyword()) ::
           {:ok, map(), resume_info()} | {:error, term()}
   def resume(journal, opts \\ [])
 
-  def resume(journal, _opts) do
+  def resume(journal, opts) do
     with {:ok, records} <- FileStore.read(journal) do
-      records
-      |> Enum.filter(&(Map.get(&1, "kind") == @checkpoint_kind))
-      |> Enum.sort_by(&Map.get(&1, "id"), :desc)
-      |> select_latest_healthy(journal, records, [])
+      checkpoints =
+        records
+        |> Enum.filter(&(Map.get(&1, "kind") == @checkpoint_kind))
+        |> Enum.sort_by(&Map.get(&1, "id"), :desc)
+
+      case Keyword.get(opts, :at) do
+        nil -> select_latest_healthy(checkpoints, journal, records, [])
+        offset -> resume_at(checkpoints, journal, records, offset)
+      end
     end
   end
 
@@ -250,6 +294,22 @@ defmodule Raxol.Agent.Compaction do
         select_latest_healthy(rest, journal, records, [
           {Map.get(cp, "id"), reason} | skipped
         ])
+    end
+  end
+
+  # `:at` — restore ONE named checkpoint (no fall-back walk), through the same
+  # U9 hardened path. Matches the reference compactor's `:at` semantics: an
+  # unknown offset is `:no_such_checkpoint`; a named-but-unhealthy checkpoint
+  # surfaces its typed restore error rather than silently selecting another.
+  defp resume_at(checkpoints, journal, records, offset) do
+    case Enum.find(checkpoints, &(Map.get(&1, "id") == offset)) do
+      nil ->
+        {:error, :no_such_checkpoint}
+
+      cp ->
+        with {:ok, model} <- Checkpoint.restore_checkpoint(journal, records, cp) do
+          {:ok, model, %{selected_offset: offset, skipped: []}}
+        end
     end
   end
 
