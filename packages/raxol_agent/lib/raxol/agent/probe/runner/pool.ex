@@ -405,17 +405,26 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   # ---------------------------------------------------------------------------
 
   # A test's ephemeral sink (bus Agent) can die while a run from that test is
-  # still in flight in this shared singleton pool. Emitting into the dead sink
-  # must never crash the pool or a sibling run — the owning test is gone, so
-  # there is nothing left to observe.
+  # still in flight in this shared singleton pool. Emitting into that dead sink
+  # exits `:noproc` (or `{:noproc, _}` from the wrapped `GenServer.call`); that —
+  # and ONLY that — is benign, because the owning test is gone so there is
+  # nothing left to observe.
+  #
+  # Every OTHER emit failure is a genuine journal / EmitBridge write error and
+  # MUST surface, never be silently swallowed: a run whose terminal is dropped
+  # would live in Pool state yet never be journaled, breaking the durability
+  # story (§3.1 reserve-before-call / fail-closed — the journal is the authority,
+  # not in-memory Pool state). A raised error propagates; a non-`:noproc` exit
+  # propagates. In the run-Task context that crashes the Task, which the coord's
+  # `:DOWN` handler turns into the run's `:error` terminal (still exactly one
+  # terminal). In the coordinator context it fails the supervised pool loudly
+  # rather than losing the record.
   defp safe_emit(emit, event) do
     emit.(event)
     :ok
-  rescue
-    _ -> :ok
   catch
-    :exit, _ -> :ok
-    _kind, _ -> :ok
+    :exit, reason when reason == :noproc or (is_tuple(reason) and elem(reason, 0) == :noproc) ->
+      :ok
   end
 
   defp emit_opening(emit, run_id, probe_id, status) when status in @opening do

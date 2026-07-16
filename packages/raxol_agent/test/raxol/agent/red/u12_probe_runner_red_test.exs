@@ -228,6 +228,43 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     end
   end
 
+  describe "emit durability (adversarial-review #1)" do
+    test "a genuine (non-:noproc) emit failure is NOT silently swallowed — the run crashes to :error, never :completed" do
+      # safe_emit swallows ONLY the dead-test-bus :noproc exit. A journal write
+      # that genuinely RAISES must surface: here the emit raises on the :call
+      # accounting event (run-Task context), so the Task crashes and the coord
+      # turns it into the run's :error terminal — instead of dropping the record
+      # and letting the run complete as if journaled.
+      rig = rig()
+
+      raising_emit = fn
+        %{kind: :call} -> raise "journal write down"
+        event -> L.emit(rig.bus, event)
+      end
+
+      opts = [emit: raising_emit, provider: rig.provider, budget: rig.budget, context: ctx()]
+      assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, opts)
+
+      events = await_terminals(rig.bus, [run_id])
+
+      terminals =
+        for %{kind: :probe_run, run_id: ^run_id, status: s, reason: r} <- events,
+            s in L.terminal_statuses(),
+            do: {s, r}
+
+      assert terminals == [{:error, :crash}],
+             "a raised emit must surface (crash → :error), got #{inspect(terminals)}"
+
+      refute Enum.any?(
+               events,
+               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :completed)
+             ),
+             "a swallowed emit would have let the run complete as if journaled"
+
+      assert L.lifecycle_complete(events, [run_id]) == :ok
+    end
+  end
+
   describe "P-U12.1 lifecycle completeness" do
     test "every submitted run: exactly one :started-or-:parked and exactly one terminal probe_run" do
       rig = rig()
