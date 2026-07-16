@@ -6,6 +6,7 @@ defmodule Raxol.AgentClientProtocol.ClientTest do
   use ExUnit.Case, async: true
 
   alias Raxol.AgentClientProtocol.Client
+  alias Raxol.AgentClientProtocol.Connection.Ctx
   alias Raxol.AgentClientProtocol.Error
   alias Raxol.AgentClientProtocol.Handler.Codegen
   alias Raxol.AgentClientProtocol.MethodTable
@@ -88,8 +89,19 @@ defmodule Raxol.AgentClientProtocol.ClientTest do
       end
     end
 
-    test "session_update/2 (the sole notification row) defaults to :ok" do
-      assert BareClient.session_update(nil, :fake_ctx) == :ok
+    # W17-client: the generated default now broadcasts to `Client.subscribe/3`
+    # subscribers (client_ergonomics_test.exs covers the subscription
+    # mechanics in depth) instead of being a pure no-op, so this needs a
+    # real `conn` pid and a notification-shaped argument -- `:fake_ctx`/
+    # `nil` placeholders no longer apply for THIS one row.
+    test "session_update/2 (the sole notification row) broadcasts to subscribers and returns :ok" do
+      conn = self()
+      ctx = %Ctx{conn: conn, role: :client}
+      notification = %{session_id: "sess-1", update: {:agent_message_chunk, :placeholder}}
+
+      :ok = Client.subscribe(conn, "sess-1", self())
+      assert BareClient.session_update(notification, ctx) == :ok
+      assert_receive {:acp_session_update, "sess-1", {:agent_message_chunk, :placeholder}}
     end
 
     test "handle_ext_request/3 defaults to method_not_found" do
