@@ -124,7 +124,7 @@ defmodule Raxol.Property.RendererT2cReviewFixesTest do
       rows = SealOracle.cup_rows(new_bytes)
 
       refute Enum.all?(rows, &(&1 in footer_range(authority))),
-             "fail-first: the O1 row scanner must be ABLE to catch a CUP " <>
+             "fail-first: the row scanner must be ABLE to catch a CUP " <>
                "smuggled inside footer CONTENT (not just a buggy emitter), " <>
                "or the GREEN result below is meaningless"
     end
