@@ -1,10 +1,11 @@
-# U21-R — permanent failing-first suite for "Evidence-gated done" (FI-6).
+# U21-R — evidence-gated-done suite (FI-6). Authored failing-first, now GREEN.
 #
-# Authored BEFORE the implementation exists, against the roadmap disposition
+# Authored BEFORE the implementation existed, against the roadmap disposition
 # (docs/proposals/in-flight/harness-roadmap.md §U21 + FI-6) and the freeze
-# contracts' Event vocabulary. The gate under test is the
-# `Raxol.Agent.DoneGate` skeleton (`:not_implemented`); every red here fails
-# until U21 lands, so the reds pin the contract instead of being fitted to it.
+# contracts' Event vocabulary, so the reds pin the contract instead of being
+# fitted to it. U21 has since LANDED: `Raxol.Agent.DoneGate.gate/3` implements
+# the gate, the `:harness_red` tag was removed, and these reds now run GREEN in
+# CI against the real gate.
 #
 # Part of the red-first fan-out authored against docs PR #569.
 #
@@ -28,15 +29,14 @@
 #
 # ## Layout
 #
-#   * support modules (Build / Oracle / Injector.* / Contours / Gen / Fired /
-#     RedRunner) — plain modules, compiled with the file, no elixirc_paths
-#     wiring;
-#   * `...RedTest` (`@moduletag :harness_red`, EXCLUDED in test_helper) — the
-#     permanent reds against the real `DoneGate` skeleton; RED until U21;
+#   * support modules (Build / Oracle / Injector.* / Contours / Gen / Fired) —
+#     plain modules, compiled with the file, no elixirc_paths wiring;
+#   * `...RedTest` (untagged since U21 landed, runs in CI) — the reds against
+#     the real `DoneGate.gate/3`; now GREEN;
 #   * `...ControlsTest` (UNtagged, runs in CI) — negative controls: each dead
-#     injector must fail its targeted red, plus generator-coverage (meta-inv 5),
-#     fired-counters (meta-inv 1), and the M2 CI tripwire (asserts the reds
-#     are currently 0-passing, so U21 landing is a visible event).
+#     injector must fail its targeted red, plus generator-coverage (meta-inv 5)
+#     and fired-counters (meta-inv 1). The M2 CI tripwire that lived here was
+#     removed when U21 landed (it asserted the reds were 0-passing).
 
 # ---------------------------------------------------------------------------
 # Support — journal builder (contract %Event{} at explicit offsets)
@@ -100,7 +100,13 @@ defmodule Raxol.Agent.Red.U21.Build do
 
   @doc "The agent's own say-so — a `:message` item. NOT evidence-class."
   def self_report(id, opts \\ []),
-    do: ev(id, :item_completed, %{item_type: :message, content: "All done — everything works."}, opts)
+    do:
+      ev(
+        id,
+        :item_completed,
+        %{item_type: :message, content: "All done — everything works."},
+        opts
+      )
 
   @doc "An internal state transition. NOT evidence-class."
   def state_change(id, opts \\ []),
@@ -220,8 +226,14 @@ defmodule Raxol.Agent.Red.U21.Injector do
     @impl true
     def gate(journal, turn_id, refs) do
       case Oracle.verdict(journal, turn_id, refs) do
-        {:ok, _} -> {:ok, Build.ev(9_999, :turn_completed, %{final: true, refs: refs, usage: %{}}, turn_id: turn_id)}
-        err -> err
+        {:ok, _} ->
+          {:ok,
+           Build.ev(9_999, :turn_completed, %{final: true, refs: refs, usage: %{}},
+             turn_id: turn_id
+           )}
+
+        err ->
+          err
       end
     end
   end
@@ -252,8 +264,13 @@ defmodule Raxol.Agent.Red.U21.Injector do
         {:ok, Build.ev(9_999, :turn_completed, %{final: true, refs: refs}, turn_id: turn_id)},
         fn ref, acc ->
           case Build.resolve(journal, ref) do
-            nil -> {:halt, {:error, {:missing_ref, ref}}}
-            ev -> if Oracle.evidence_class?(ev), do: {:cont, acc}, else: {:halt, {:error, {:not_evidence, ref}}}
+            nil ->
+              {:halt, {:error, {:missing_ref, ref}}}
+
+            ev ->
+              if Oracle.evidence_class?(ev),
+                do: {:cont, acc},
+                else: {:halt, {:error, {:not_evidence, ref}}}
           end
         end
       )
@@ -354,15 +371,22 @@ defmodule Raxol.Agent.Red.U21.Contours do
       # done with valid postdating evidence -> accepted
       {:valid, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [3], :accept},
       # done with NO refs -> evidence_required, no done event
-      {:evidence_required, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [], {:reject, :evidence_required}},
+      {:evidence_required, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [],
+       {:reject, :evidence_required}},
       # evidence PREDATES a later mutation -> stale
-      {:stale, [Build.turn_started(1), Build.evidence(2), Build.mutation(3)], t, [2], {:reject, {:stale_evidence, 2}}},
+      {:stale, [Build.turn_started(1), Build.evidence(2), Build.mutation(3)], t, [2],
+       {:reject, {:stale_evidence, 2}}},
       # ref points at an internal state_change -> not evidence-class
-      {:not_evidence_state_change, [Build.turn_started(1), Build.mutation(2), Build.state_change(3)], t, [3], {:reject, {:not_evidence, 3}}},
+      {:not_evidence_state_change,
+       [Build.turn_started(1), Build.mutation(2), Build.state_change(3)], t, [3],
+       {:reject, {:not_evidence, 3}}},
       # ref points at the agent's own message text -> not evidence-class
-      {:not_evidence_self_report, [Build.turn_started(1), Build.mutation(2), Build.self_report(3)], t, [3], {:reject, {:not_evidence, 3}}},
+      {:not_evidence_self_report,
+       [Build.turn_started(1), Build.mutation(2), Build.self_report(3)], t, [3],
+       {:reject, {:not_evidence, 3}}},
       # ref names an offset that does not exist
-      {:missing_ref, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [99], {:reject, {:missing_ref, 99}}},
+      {:missing_ref, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [99],
+       {:reject, {:missing_ref, 99}}},
       # H2 — cross-turn evidence spoof: turn "t"'s last mutation is at offset
       # 2; a DIFFERENT turn ("other") starts afterward and journals its own
       # (legitimate, for ITS OWN turn) tool_result at offset 4 — an offset
@@ -384,13 +408,18 @@ defmodule Raxol.Agent.Red.U21.Contours do
       # it passed. A future unit may add content gating (parsing pass/fail
       # out of the result payload).
       {:evidence_content_not_validated,
-       [Build.turn_started(1), Build.mutation(2), Build.evidence(3, result: "tests: 0 passed, 12 FAILED")], t, [3], :accept},
+       [
+         Build.turn_started(1),
+         Build.mutation(2),
+         Build.evidence(3, result: "tests: 0 passed, 12 FAILED")
+       ], t, [3], :accept},
       # L3 — a read-only action AFTER the last mutation does not move the
       # evidence window forward: only MUTATIONS gate staleness, so evidence
       # that postdates the last mutation is still valid even when a later
       # read-only action follows it.
       {:read_action_does_not_gate,
-       [Build.turn_started(1), Build.mutation(2), Build.evidence(3), Build.read_action(4)], t, [3], :accept}
+       [Build.turn_started(1), Build.mutation(2), Build.evidence(3), Build.read_action(4)], t,
+       [3], :accept}
     ]
   end
 
@@ -443,7 +472,14 @@ defmodule Raxol.Agent.Red.U21.Gen do
 
   def steps_gen do
     StreamData.list_of(
-      StreamData.member_of([:mutation, :read, :evidence, :self_report, :state_change, :foreign_evidence]),
+      StreamData.member_of([
+        :mutation,
+        :read,
+        :evidence,
+        :self_report,
+        :state_change,
+        :foreign_evidence
+      ]),
       min_length: 1,
       max_length: 7
     )
@@ -551,53 +587,27 @@ defmodule Raxol.Agent.Red.U21.Fired do
 
     if dead != [] do
       raise ExUnit.AssertionError,
-        message: "dead injector(s): armed site(s) never fired: #{inspect(dead)}; fired: #{inspect(fired)}"
+        message:
+          "dead injector(s): armed site(s) never fired: #{inspect(dead)}; fired: #{inspect(fired)}"
     end
 
     fired
   end
 end
 
-# ---------------------------------------------------------------------------
-# Support — M2 CI tripwire helper (runs the reds without depending on tags)
-# ---------------------------------------------------------------------------
-defmodule Raxol.Agent.Red.U21.RedRunner do
-  @moduledoc """
-  M2 — replays every hand-built `Contours` fixture against the real
-  `Raxol.Agent.DoneGate` skeleton, independent of ExUnit's `:harness_red`
-  exclusion. Used by `U21EvidenceDoneControlsTest`'s CI tripwire to assert
-  the reds are currently 0-passing, so the day U21 lands and flips them to
-  green is a visible, asserted event rather than a silent one.
-  """
-  alias Raxol.Agent.DoneGate
-  alias Raxol.Agent.Red.U21.Contours
-
-  # Same `apply/3` indirection as the red suite proper (see comment on
-  # U21EvidenceDoneRedTest.gate/3): keeps the return type dynamic so
-  # `--warnings-as-errors` doesn't flag the {:ok, _} branch as a dead clause
-  # against the skeleton's literal {:error, :not_implemented}.
-  defp gate(journal, turn, refs), do: apply(DoneGate, :gate, [journal, turn, refs])
-
-  @doc "Replay every hand-built contour against the real gate; `%{total:, passing:}`."
-  def run_contours do
-    outcomes =
-      for {_name, journal, turn, refs, expected} <- Contours.contours() do
-        Contours.shape(gate(journal, turn, refs)) == expected
-      end
-
-    %{total: length(outcomes), passing: Enum.count(outcomes, & &1)}
-  end
-end
-
 # ===========================================================================
-# THE REDS — against the real DoneGate skeleton. `:harness_red`, excluded in
-# test_helper. RED (failing) until U21 lands.
+# THE REDS — against the real DoneGate gate. Formerly `:harness_red` (excluded
+# in test_helper) and RED against the skeleton; U21 has landed, so the tag is
+# removed and these run GREEN in CI.
 # ===========================================================================
 defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  @moduletag :harness_red
+  # U21 has LANDED: `Raxol.Agent.DoneGate.gate/3` is implemented, so these reds
+  # now pass GREEN and run in CI (the `:harness_red` moduletag that excluded
+  # them was removed). The M2 CI tripwire that asserted "reds are 0-passing"
+  # was deleted for the same reason — see the note in the ControlsTest.
 
   alias Raxol.Agent.DoneGate
   alias Raxol.Agent.Red.U21.{Contours, Gen, Oracle}
@@ -754,7 +764,9 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
         |> Enum.frequencies()
 
       assert Map.get(classes, :accept, 0) > 0, "no accept case generated (#{inspect(classes)})"
-      assert Map.get(classes, :evidence_required, 0) > 0, "no evidence-required case (#{inspect(classes)})"
+
+      assert Map.get(classes, :evidence_required, 0) > 0,
+             "no evidence-required case (#{inspect(classes)})"
 
       assert Map.get(classes, :stale_evidence, 0) > 0,
              "generator never cited stale evidence — the stale red is vacuous (#{inspect(classes)})"
@@ -768,29 +780,15 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
   end
 
   # ===========================================================================
-  # M2 — CI tripwire. Untagged (runs in regular CI), independent of the
-  # `:harness_red` exclusion in test_helper.exs. Replays every hand-built
-  # Contours fixture straight through the REAL `Raxol.Agent.DoneGate`
-  # skeleton and asserts 0 are passing. The day U21 lands and the skeleton is
-  # replaced, this assertion starts failing LOUDLY — the reds flipping
-  # red -> green becomes a visible, intentional event (flip this suite's
-  # tag off, delete this tripwire) instead of a silent no-op forever.
-  #
-  # (M2 note, see also the comment on Injector.Reference above) This tripwire
-  # deliberately runs against `Contours.contours/0` — hand-authored `expected`
-  # shapes, not derived from Oracle — rather than replaying the `Reference`
-  # injector (which just wraps Oracle and would make this tautological).
+  # M2 — CI tripwire (REMOVED). This block asserted the contour reds were
+  # 0-passing against the `DoneGate` skeleton, so that the day U21 landed it
+  # would fail LOUDLY and force the reds' flip red -> green to be an
+  # intentional, visible event. U21 has now landed (the skeleton is replaced by
+  # the real gate), the reds pass GREEN un-excluded, and this tripwire has
+  # served its purpose — leaving it would flip it into a permanent false
+  # failure (`passing == 0` no longer holds). Its `RedRunner` helper module was
+  # removed with it. The lasting anchors that the reds are non-vacuous remain:
+  # the positive-anchor Reference check, the dead-injector controls, and the
+  # generator-coverage guard below.
   # ===========================================================================
-  describe "CI tripwire (M2) — the reds must currently be failing" do
-    test "the contour-based reds are 0-passing against the real DoneGate skeleton" do
-      %{total: total, passing: passing} = Raxol.Agent.Red.U21.RedRunner.run_contours()
-
-      assert total > 0, "the tripwire has nothing to check — Contours.contours/0 is empty"
-
-      assert passing == 0,
-             "#{passing}/#{total} U21 contour reds are unexpectedly PASSING against the real " <>
-               "DoneGate skeleton — if U21 landed, flip :harness_red to green (delete this " <>
-               "tripwire) instead of leaving it silently passing"
-    end
-  end
 end
