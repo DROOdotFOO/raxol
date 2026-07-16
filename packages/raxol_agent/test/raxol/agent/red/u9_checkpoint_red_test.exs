@@ -39,7 +39,8 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
   alias Raxol.Agent.Journal.Records.Checkpoint
   alias Raxol.Agent.Red.CheckpointRed, as: CR
 
-  @moduletag :harness_red
+  # U9 landed: this suite now runs GREEN in CI (was `@moduletag :harness_red`,
+  # excluded, until the checkpoint pointer-record implementation shipped).
   @moduletag :capture_log
 
   setup do
@@ -59,7 +60,6 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
 
     CR.append_all!(j, [
       CR.loop_event("turn_started"),
-      CR.loop_event("item_started"),
       CR.loop_event("item_completed", %{"text" => "hi"}),
       CR.loop_event("turn_completed"),
       CR.meta_event("idle")
@@ -80,7 +80,7 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
       tip = CR.tip_of(dir)
 
       assert tip == 3,
-             "tip is the last CONVERSATIONAL record (item_completed), not the idle tail"
+             "tip is the last CONVERSATIONAL record (turn_completed), not the idle tail"
 
       # The frozen contract: {:ok, offset} where offset is the checkpoint's OWN
       # dense journal offset (last + 1), and the record layer stays dense.
@@ -187,9 +187,7 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
 
       # Checkpoint captures the model as of the tip.
       assert {:ok, _cp_off} =
-               Checkpoint.write(j, CR.fold(CR.raw_records(dir)),
-                 reason: "manual"
-               )
+               Checkpoint.write(j, CR.fold(CR.raw_records(dir)), reason: "manual")
 
       # Mutate the conversation forward past the checkpoint.
       CR.append_all!(j, [
