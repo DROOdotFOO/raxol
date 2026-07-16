@@ -120,20 +120,44 @@ defmodule Raxol.Harness.StatusStrip do
   Escalation thresholds (`warn_after_ms` default `15_000`, `hung_after_ms`
   default `60_000`, both overridable per-call via `state`): under 15s is
   unremarkable ("still thinking"); 15s-60s is flagged with a trailing
-  hourglass (an agent turn commonly runs a compile/test tool call in
+  `SLOW` marker (an agent turn commonly runs a compile/test tool call in
   this range -- "slow but plausible"); 60s+ prefixes `HUNG` (the P4
   concern: something that still *claims* to be working but has gone
   quiet long enough that a human should look). These are starting
   defaults, not derived from a measurement; adjust per-deployment via
   `state.warn_after_ms` / `state.hung_after_ms`.
+
+  ## Glyph width honesty (review fix, T10 FIX-NOW batch)
+
+  Every non-ASCII glyph this module can emit must measure exactly one
+  display column per `Raxol.UI.TextMeasure.display_width/1` (`glyphs/0`
+  lists them; see the regression test in the test suite). The original
+  warn-threshold marker was the hourglass emoji U+23F3 (⏳): it carries
+  Unicode `Emoji_Presentation` and real terminals commonly render it 2
+  columns wide, but `Raxol.Terminal.CharacterHandling.wide_char?/1`'s
+  range table has no entry below the Misc Symbols and Pictographs block
+  (0x1F300+), so it measures U+23F3 as width 1 -- a pinned strip built
+  on that measurement would silently overflow its own width guarantee
+  for the entire 15s-60s "slow" window. Replaced with the ASCII word
+  `SLOW`, which is width-honest by construction (every ASCII byte is
+  single-cell). The true fix belongs upstream in
+  `Raxol.Terminal.CharacterHandling`'s width table (Emoji_Presentation
+  coverage, not just East Asian Width); once that lands and
+  `wide_char?/1` correctly flags emoji-presentation glyphs as 2 columns,
+  a fancier glyph may safely return here.
   """
 
   alias Raxol.UI.TextMeasure
 
   @missing "—"
+  @ellipsis "…"
   @separator " | "
   @default_warn_after_ms 15_000
   @default_hung_after_ms 60_000
+  # C0 control characters (0x00-0x1F) plus DEL (0x7F). Covers ESC (0x1B,
+  # the lead byte of any ANSI/CSI escape sequence), CR (0x0D), and LF
+  # (0x0A) in a single sweep -- see `sanitize_stage/1`.
+  @control_chars ~r/[\x00-\x1F\x7F]/
 
   @type turn_stage :: atom() | String.t()
 
@@ -174,6 +198,17 @@ defmodule Raxol.Harness.StatusStrip do
   """
   @spec field_keys() :: [atom()]
   def field_keys, do: Enum.map(@field_specs, fn {key, _label, _fn} -> key end)
+
+  @doc """
+  Every non-ASCII glyph this module can emit into a rendered line
+  (currently the missing-data em dash and the width-degradation
+  ellipsis). Exposed so the width-honesty regression test can assert,
+  per character, that `Raxol.UI.TextMeasure.display_width/1 == 1` --
+  see the "Glyph width honesty" moduledoc section for why this matters
+  (U+23F3 ⏳ measured 1 col but rendered 2 in real terminals).
+  """
+  @spec glyphs() :: [String.t()]
+  def glyphs, do: [@missing, @ellipsis]
 
   @doc """
   Projects `state` into the status strip's footer lines for a pinned
@@ -256,7 +291,18 @@ defmodule Raxol.Harness.StatusStrip do
   # -- stage + elapsed -----------------------------------------------------
 
   defp stage_label(nil), do: @missing
-  defp stage_label(stage), do: to_string(stage)
+  defp stage_label(stage), do: stage |> to_string() |> sanitize_stage()
+
+  # `turn_stage` is plain caller-assembled state (see moduledoc) that
+  # lands, unescaped, in the byte-level pinned-region writer this
+  # module's output feeds. Strip C0 controls (ESC/CR/LF included --
+  # see `@control_chars`) before interpolation so a stage string
+  # carrying e.g. `"plan\e[2J"` (a clear-screen CSI) or an embedded
+  # newline can't corrupt the pinned footer or spill onto a second
+  # line. This drops only the raw control bytes, not any printable
+  # characters that happened to follow them (e.g. `"\e[2J"` becomes
+  # the harmless literal text `"[2J"`).
+  defp sanitize_stage(text), do: String.replace(text, @control_chars, "")
 
   defp elapsed_ms(state) do
     with now when is_integer(now) <- Map.get(state, :now),
@@ -274,7 +320,7 @@ defmodule Raxol.Harness.StatusStrip do
 
   defp render_stage_elapsed(stage_str, ms, warn_after, _hung_after)
        when ms >= warn_after do
-    "#{stage_str} #{format_elapsed(ms)} ⏳"
+    "#{stage_str} #{format_elapsed(ms)} SLOW"
   end
 
   defp render_stage_elapsed(stage_str, ms, _warn_after, _hung_after) do
@@ -318,7 +364,7 @@ defmodule Raxol.Harness.StatusStrip do
       {left, _rest} =
         TextMeasure.split_at_display_width(text, max(width - 1, 0))
 
-      left <> "…"
+      left <> @ellipsis
     end
   end
 end

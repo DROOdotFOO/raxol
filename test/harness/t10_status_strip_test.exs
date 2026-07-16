@@ -109,14 +109,14 @@ defmodule Raxol.Harness.T10StatusStripTest do
                "tool_call 14s"
 
       assert StatusStrip.stage_value(%{base | now: 15_000}) ==
-               "tool_call 15s ⏳"
+               "tool_call 15s SLOW"
     end
 
     test "crossing hung_after_ms prefixes HUNG (long silent tool call)" do
       base = %{turn_stage: :tool_call, last_event_at: 0, now: nil}
 
       assert StatusStrip.stage_value(%{base | now: 59_999}) ==
-               "tool_call 59s ⏳"
+               "tool_call 59s SLOW"
 
       assert StatusStrip.stage_value(%{base | now: 60_000}) ==
                "HUNG tool_call 1m00s"
@@ -169,8 +169,20 @@ defmodule Raxol.Harness.T10StatusStripTest do
     end
 
     test "a narrower width drops Cost first (lowest priority)" do
-      full_width = byte_size(hd(StatusStrip.render(@wide_state, 200)))
-      without_cost_width = full_width - 12
+      [full_line] = StatusStrip.render(@wide_state, 200)
+
+      # Derive the drop-Cost boundary from the actual rendered Cost
+      # segment + separator width, rather than a hardcoded magic number
+      # that would silently rot if the label, value formatting, or
+      # separator ever changed shape.
+      cost_segment = "Cost: #{StatusStrip.cost_value(@wide_state)}"
+
+      cost_and_separator_width =
+        Raxol.UI.TextMeasure.display_width(cost_segment) +
+          Raxol.UI.TextMeasure.display_width(" | ")
+
+      without_cost_width =
+        Raxol.UI.TextMeasure.display_width(full_line) - cost_and_separator_width
 
       [line] = StatusStrip.render(@wide_state, without_cost_width)
 
@@ -222,6 +234,71 @@ defmodule Raxol.Harness.T10StatusStripTest do
         assert Raxol.UI.TextMeasure.display_width(line) <= width,
                "width #{width}: #{inspect(line)} exceeded its budget"
       end
+    end
+  end
+
+  describe "glyph width honesty (review fix: U+23F3 ⏳ measured 1 col, rendered 2)" do
+    test "every glyph this module can emit measures exactly 1 display column per character" do
+      # `CharacterHandling.wide_char?/1`'s range table has no entry
+      # below the Misc Symbols and Pictographs block (0x1F300+), so
+      # Unicode Emoji_Presentation glyphs below that codepoint --
+      # including the hourglass U+23F3 this module used to emit for
+      # the warn-threshold marker -- measure as width 1 even though
+      # real terminals commonly render them 2 columns wide. That
+      # mismatch let the strip silently overflow its own pinned-width
+      # guarantee for the whole 15s-60s "slow" window. This regression
+      # test pins every glyph `StatusStrip.glyphs/0` declares (plus any
+      # future addition) to a verified single-cell measurement, so a
+      # reintroduced ambiguous/wide-rendering glyph fails loudly here
+      # instead of silently in production.
+      #
+      # The true fix is upstream: Emoji_Presentation coverage in
+      # `Raxol.Terminal.CharacterHandling`'s width table (not just East
+      # Asian Width ranges). Once that lands and `wide_char?/1`
+      # correctly flags emoji-presentation glyphs as 2 columns wide, a
+      # fancier glyph may safely return here.
+      for glyph <- StatusStrip.glyphs(), grapheme <- String.graphemes(glyph) do
+        assert Raxol.UI.TextMeasure.display_width(grapheme) == 1,
+               "#{inspect(grapheme)} (from #{inspect(glyph)}) must be " <>
+                 "single-cell per TextMeasure"
+      end
+    end
+  end
+
+  describe "stage sanitization (injection guard: turn_stage reaches a byte-level pinned writer unsanitized)" do
+    test "an ESC-laden stage is sanitized -- no ESC byte reaches the output" do
+      # RED-FIRST: before `sanitize_stage/1` existed, `stage_value/1`
+      # interpolated `turn_stage` verbatim. A stage carrying
+      # `"plan\e[2J"` (a clear-screen CSI sequence) would put a live
+      # ESC byte into the strip's output, which the T2c footer path
+      # writes directly to the pinned terminal region -- an operator
+      # rendering an attacker- or bug-controlled `turn_stage` could
+      # have their screen cleared or cursor relocated by what should
+      # be plain status text.
+      state = %{turn_stage: "plan\e[2J"}
+
+      value = StatusStrip.stage_value(state)
+
+      refute value =~ "\e", "sanitized stage must not carry an ESC byte"
+      assert value == "plan[2J"
+    end
+
+    test "a newline-laden stage collapses to a single line" do
+      # RED-FIRST: an unsanitized `turn_stage` of `"a\nb"` would split
+      # the pinned single-line footer across two terminal rows.
+      state = %{turn_stage: "a\nb"}
+
+      value = StatusStrip.stage_value(state)
+
+      refute value =~ "\n"
+      refute value =~ "\r"
+      assert value == "ab"
+    end
+
+    test "a sanitized stage still carries its elapsed suffix" do
+      state = %{turn_stage: "plan\e[2J", now: 3_000, last_event_at: 0}
+
+      assert StatusStrip.stage_value(state) == "plan[2J 3s"
     end
   end
 end

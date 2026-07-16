@@ -3,7 +3,7 @@ defmodule Raxol.Harness.T10StatusStripPropertyTest do
   Property-based coverage for roadmap unit T10 (status strip), sibling
   to `t10_status_strip_test.exs`'s example-based tests.
 
-  Three properties, matching the task brief's test matrix:
+  Four properties, matching the task brief's test matrix:
 
     * missing-data matrix (`property "each absent field renders..."`) --
       generated over every subset of `StatusStrip.field_keys/0` rather
@@ -19,6 +19,17 @@ defmodule Raxol.Harness.T10StatusStripPropertyTest do
       strip's elapsed display is a function of the *difference* between
       two injected integers, never of their absolute magnitude, so it
       can never be sensitive to wall-clock skew.
+    * Ctx staleness gate (`property "context_pct renders numerically iff
+      turn_completed is exactly true"`) -- `turn_completed` is generated
+      independently of `context_pct` (absent/false/true, crossed with
+      `context_pct` absent/present) rather than derived from it. The
+      other properties' shared `maybe_add_turn_completed/1` helper
+      force-sets `turn_completed: true` whenever `context_pct` is
+      present, purely so those properties exercise the `Ctx` slot at
+      all; that shortcut means the "never a stale %" gate itself (T10's
+      `context_value/1`, gated on `turn_completed === true`) was never
+      property-exercised anywhere else in this file. This property
+      closes that gap directly.
   """
 
   use ExUnit.Case, async: true
@@ -102,6 +113,38 @@ defmodule Raxol.Harness.T10StatusStripPropertyTest do
   defp label_for(:turn_stage), do: "Stage"
   defp label_for(:context_pct), do: "Ctx"
   defp label_for(:cost), do: "Cost"
+
+  # -- Ctx staleness gate (turn_completed generated independently) ----------
+
+  property "context_pct renders numerically iff turn_completed is exactly true" do
+    check all(
+            context_pct <- one_of([constant(:absent), integer(0..100)]),
+            turn_completed <- member_of([:absent, false, true])
+          ) do
+      state =
+        %{}
+        |> maybe_put(:context_pct, context_pct)
+        |> maybe_put(:turn_completed, turn_completed)
+
+      value = StatusStrip.context_value(state)
+
+      case {context_pct, turn_completed} do
+        {pct, true} when pct != :absent ->
+          assert value == "#{pct}%",
+                 "context_pct #{inspect(pct)} with turn_completed: true " <>
+                   "should render the number, got #{inspect(value)}"
+
+        _ ->
+          assert value == @missing,
+                 "context_pct #{inspect(context_pct)} with turn_completed " <>
+                   "#{inspect(turn_completed)} should render #{inspect(@missing)} " <>
+                   "(never a stale %), got #{inspect(value)}"
+      end
+    end
+  end
+
+  defp maybe_put(map, _key, :absent), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   # -- width degradation -------------------------------------------------
 
