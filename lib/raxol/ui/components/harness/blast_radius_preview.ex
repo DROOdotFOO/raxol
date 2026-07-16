@@ -17,6 +17,15 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
       optional; missing lists default to `[]`, missing `:reversible`
       defaults to `true` (a missing/absent flag is not itself a danger
       signal -- but deletes are still shown loud regardless, see below).
+      A missing PROP defaults to `%{}` -- a caller that never mentions a
+      blast radius at all is presumed to have nothing to declare, and
+      renders the calm "No tracked effects." line. An explicit `nil`
+      VALUE is a different claim entirely: it means a producer somewhere
+      upstream had an approval to show but no blast radius payload for
+      it (see `Raxol.UI.Components.Harness.Block.extract_approval_content/1`)
+      -- that renders a standalone warning instead (see below), never the
+      "No tracked effects." line, because an undeclared radius is not
+      known to be safe.
 
   ## Visual hierarchy
 
@@ -57,7 +66,7 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
 
   @type t :: %{
           id: String.t() | atom(),
-          blast_radius: blast_radius(),
+          blast_radius: blast_radius() | nil,
           style: map(),
           theme: map()
         }
@@ -96,29 +105,48 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
     base_style =
       StyleHelper.merge_component_styles(state, context, :blast_radius_preview)
 
-    br = state.blast_radius
-    reversible = Map.get(br, :reversible, true)
-
-    sections =
-      [
-        marker_section(state.id, reversible)
-        | group_sections(state.id, br, reversible)
-      ]
-      |> Enum.reject(&is_nil/1)
-
-    children =
-      case sections do
-        [] ->
-          [Components.text(content: "No tracked effects.", style: %{dim: true})]
-
-        list ->
-          list |> Enum.intersperse(blank_line()) |> List.flatten()
-      end
+    children = body_children(state.id, state.blast_radius)
 
     # gap: 0 is load-bearing: the layout engine defaults an unset gap to 1,
     # which would double every row; section spacing is the explicit
     # interspersed blank lines, counted by estimate_rows/1.
     %{type: :column, style: base_style, gap: 0, children: children}
+  end
+
+  # `nil` means no producer ever supplied a blast_radius payload for this
+  # approval -- distinct from a producer-declared-empty `%{}` (handled
+  # below, still the calm "No tracked effects." line). An undeclared
+  # radius is not a known-safe one, so this renders a standalone warning
+  # instead, reversibility assumed false, so a destructive action with no
+  # declared radius never reads as harmless.
+  defp body_children(id, nil) do
+    [
+      Components.text(
+        id: "#{id}-not-declared",
+        content: "⚠ blast radius not declared — treat as unsafe",
+        fg: :red,
+        style: %{bold: true}
+      )
+    ]
+  end
+
+  defp body_children(id, br) do
+    reversible = Map.get(br, :reversible, true)
+
+    sections =
+      [
+        marker_section(id, reversible)
+        | group_sections(id, br, reversible)
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    case sections do
+      [] ->
+        [Components.text(content: "No tracked effects.", style: %{dim: true})]
+
+      list ->
+        list |> Enum.intersperse(blank_line()) |> List.flatten()
+    end
   end
 
   @doc """
@@ -128,7 +156,11 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
   `Raxol.UI.Components.Harness.ApprovalPrompt.estimate_height/1`). Generous
   by design, mirroring `Raxol.UI.Components.Modal.Rendering.estimate_height/1`.
   """
-  @spec estimate_rows(blast_radius()) :: pos_integer()
+  @spec estimate_rows(blast_radius() | nil) :: pos_integer()
+  # `nil` (not declared) renders the single-line warning from
+  # `body_children/2` above -- one row, no groups to size.
+  def estimate_rows(nil), do: 1
+
   def estimate_rows(blast_radius) do
     reversible = Map.get(blast_radius, :reversible, true)
     marker? = not reversible
