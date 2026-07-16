@@ -63,10 +63,95 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   most recent `@max_tail_delta_chunks` chunks per item, diagnosing
   `:delta_buffer_capped` once per item the first time a chunk is
   dropped (not on every subsequent delta).
+
+  ## Completion evidence (the honesty row)
+
+  After a turn's blocks are built, `build_turn/3` scans the turn's raw
+  events for the LAST `turn_completed` whose payload `final` is `true`
+  (string or atom key -- the wire is string-keyed JSON, live producer
+  events are atom-keyed, see `Raxol.Agent.Contract.gated_done_payload/4`,
+  read-only ground truth in `packages/raxol_agent`). A non-final turn
+  (no such event) is untouched -- byte-identical output, no `:completion`
+  key anywhere.
+
+  When a final `turn_completed` IS found and the turn produced at least
+  one block, `content.completion` is merged into the turn's LAST block
+  only (the one a "done" claim attaches to):
+
+    * `refs` missing, not a list, or an empty list -> `%{evidence: :none}`
+      -- the design creed's mandatory absence row (never blank, never a
+      checkmark).
+    * otherwise -> `%{evidence: entries, total: n, type_counts: counts}`,
+      `entries` capped at `@max_completion_entries` (`Block.render/2`'s
+      completion row shows "+N more" for the rest), `n` the FULL ref
+      count, and `counts` a `[%{type:, count:}]` list (descending count,
+      ties broken by first-appearance order among `refs`) covering
+      EVERY ref, not just the capped entries -- the summary line's
+      breakdown must be accurate even when most refs are never
+      individually rendered. Maps, not `{type, count}` tuples: this
+      content rides through `Jason.encode!/1` at bless time, which has
+      no `Encoder` for tuples.
+
+  ## Refs are SESSION-scoped journal offsets, not turn-scoped
+
+  Per the frozen offset law (a `ref` is a journal event id, and ids are
+  session-wide), resolution is against the WHOLE session's id-recovered
+  event stream, not just the owning turn's own events -- a ref may
+  legitimately point at an earlier turn's `tool_result`. `Projection.
+  project/2` builds one `id -> event` index over the id-recovered
+  stream (before family partition or turn bucketing) and threads it
+  into every turn's `build_turn/3` call; this module never re-derives
+  it and never assumes a ref lives in the events it was handed.
+
+  Per-ref resolution never raises (defensive, bounded, always returns
+  `%{ref:, type:, label:}`):
+
+    * ref missing from the session index -> `type: :unresolvable`,
+      `label: "unresolvable evidence ref"` (literal, rendered verbatim
+      -- an unresolvable ref is information, never silently dropped,
+      and it still counts toward the summary line's breakdown).
+    * otherwise -> `type` is the resolved event's `item_type` when it is
+      an `item_completed` (`:tool_result`, `:message`, ...), else
+      `:unknown`. `label` prefers a same-turn `:tool_call` block's own
+      `content.name` (nicer, already-extracted display name) when the
+      ref lands in THIS turn's own blocks, falling back to the raw
+      event's own `"name"` payload field; that name is joined with the
+      resolved event's content's first non-blank line via `" — "` when
+      both are present, either alone when only one is, and the type
+      name itself when neither resolves to anything displayable.
+
+  Every resolved label is sanitized (control-byte strip, mirroring
+  `Raxol.Harness.Surface.ViewText.sanitize/1`'s byte-wise technique
+  verbatim, but with NO `\\t` exception -- a completion label is a single
+  inline cell, never a multi-line body) and clamped to 32 display
+  columns (`Raxol.UI.TextLayout.truncate/3`, never `String.length`/
+  `String.slice` -- see that module's own width-safety contract) before
+  it ever reaches a block's content: labels originate from the LLM/agent
+  side and are untrusted exactly like any other tool-call/tool-result
+  payload this module already folds.
+
+  A final `turn_completed` with ZERO blocks in the turn (nothing to
+  attach honesty to) synthesizes no block -- `turn_completed` stays
+  structural/never block-producing (the frozen P-TIER-01 tier law) --
+  and instead diagnoses `:final_completion_without_blocks` via
+  `Recovery.emit/2`, same as every other recovered condition this module
+  reports.
   """
 
   alias Raxol.Harness.Projection.Recovery
   alias Raxol.UI.Components.Harness.Block
+  alias Raxol.UI.TextLayout
+
+  # Bounds how many resolved evidence entries a completion row shows
+  # inline -- `Block.completion_rows/2` renders "+N more" for the
+  # remainder using `total` (the FULL ref count, always kept regardless
+  # of this cap).
+  @max_completion_entries 3
+
+  # The display-column budget a single completion label is clamped to
+  # (`TextLayout.truncate/3`, :ellipsis mode) -- a label is one inline
+  # cell in the completion row, never a wrapped multi-line body.
+  @completion_label_width 32
 
   # Sliding-window cap on the live-tail delta buffer for a single
   # unsealed item: an item_started with no item_completed and an
@@ -94,10 +179,17 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   @doc """
   Folds one turn's events into `{blocks, tail, diagnostics}`.
   `fold_defaults` maps a `Block.kind()` to its initial fold state.
+  `session_index` is the whole session's `id -> event` map (built by
+  `Raxol.Harness.Projection.project/2` over the id-recovered stream,
+  BEFORE turn bucketing) -- completion-evidence refs are session-scoped
+  journal offsets, not turn-scoped, so resolution reaches beyond this
+  turn's own `events` (see the moduledoc's "Refs are SESSION-scoped").
+  Defaults to `%{}` so a ref genuinely absent from the session resolves
+  as unresolvable rather than raising.
   """
-  @spec build_turn([map()], map()) ::
+  @spec build_turn([map()], map(), map()) ::
           {[Block.t()], map(), [Recovery.diagnostic()]}
-  def build_turn(events, fold_defaults) do
+  def build_turn(events, fold_defaults, session_index \\ %{}) do
     {ordered_keys, groups, tail, item_diags} = fold_items(events)
 
     completed_groups =
@@ -107,7 +199,10 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
 
     {blocks, block_diags} = build_blocks(completed_groups, fold_defaults)
 
-    {blocks, tail, item_diags ++ block_diags}
+    {blocks, completion_diags} =
+      attach_final_completion(blocks, events, session_index)
+
+    {blocks, tail, item_diags ++ block_diags ++ completion_diags}
   end
 
   # -- pass 1: item/turn streaming fold -------------------------------------
@@ -424,6 +519,231 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
           })
     }
   end
+
+  # -- completion evidence (the honesty row) ---------------------------------
+
+  # The literal, rendered-verbatim label for a ref the session index has
+  # no event for at all -- an unresolvable ref is information, never
+  # silently dropped (design creed). Shared by resolution AND the
+  # honesty-pin tests, so the two can never drift apart.
+  @unresolvable_evidence_label "unresolvable evidence ref"
+
+  defp attach_final_completion(blocks, events, session_index) do
+    case find_final_turn_completed(events) do
+      nil -> {blocks, []}
+      final_event -> apply_final_completion(blocks, final_event, session_index)
+    end
+  end
+
+  # A `turn_completed{final: true}` whose payload carries an atom OR
+  # string "final" key; the LAST one wins if a turn somehow carried more
+  # than one (defensive -- real producers emit exactly one per turn).
+  defp find_final_turn_completed(events) do
+    events
+    |> Enum.filter(fn event ->
+      Map.get(event, :type) == :turn_completed and
+        payload_fetch(event, "final", :final) == true
+    end)
+    |> List.last()
+  end
+
+  # No blocks in a turn that DID close with a final claim: nothing to
+  # attach honesty to, and `turn_completed` never synthesizes a block on
+  # its own (the frozen P-TIER-01 tier law) -- diagnose instead.
+  defp apply_final_completion([], final_event, _session_index) do
+    diag =
+      Recovery.emit(:final_completion_without_blocks, Map.get(final_event, :id))
+
+    {[], [diag]}
+  end
+
+  defp apply_final_completion(blocks, final_event, session_index) do
+    completion =
+      final_event
+      |> final_refs()
+      |> build_completion(blocks, session_index)
+
+    {merge_completion_into_last(blocks, completion), []}
+  end
+
+  defp final_refs(event), do: payload_fetch(event, "refs", :refs)
+
+  defp build_completion(refs, _blocks, _session_index) when not is_list(refs),
+    do: %{evidence: :none}
+
+  defp build_completion([], _blocks, _session_index), do: %{evidence: :none}
+
+  defp build_completion(refs, blocks, session_index) do
+    total = length(refs)
+
+    # Every ref's TYPE feeds the summary line's breakdown (accurate even
+    # for refs beyond the cap); only the first @max_completion_entries
+    # get a full resolved label -- both are single, cheap session-index
+    # lookups, so computing type for all refs costs nothing extra.
+    type_counts =
+      refs
+      |> Enum.map(&ref_type(&1, session_index))
+      |> compute_type_counts()
+
+    entries =
+      refs
+      |> Enum.take(@max_completion_entries)
+      |> Enum.map(&resolve_completion_entry(&1, blocks, session_index))
+
+    %{evidence: entries, total: total, type_counts: type_counts}
+  end
+
+  defp merge_completion_into_last(blocks, completion) do
+    List.update_at(blocks, -1, fn block ->
+      %{block | content: Map.put(block.content, :completion, completion)}
+    end)
+  end
+
+  # -- session-scoped ref resolution ------------------------------------------
+  #
+  # A ref is a session-wide journal offset (the frozen offset law), not a
+  # turn-scoped one -- `session_index` (built once by `Projection.project/2`
+  # over the WHOLE id-recovered stream) is the base resolution for both
+  # type and label. `blocks` (this turn's own built blocks) is consulted
+  # ONLY as a same-turn label enrichment (a nicer, already-extracted tool
+  # name) and is naturally a no-op for a ref pointing at an earlier turn.
+
+  defp ref_type(ref, session_index) do
+    case Map.get(session_index, ref) do
+      nil -> :unresolvable
+      event -> entry_type(event)
+    end
+  end
+
+  defp resolve_completion_entry(ref, blocks, session_index) do
+    case Map.get(session_index, ref) do
+      nil ->
+        %{ref: ref, type: :unresolvable, label: @unresolvable_evidence_label}
+
+      event ->
+        type = entry_type(event)
+        %{ref: ref, type: type, label: entry_label(ref, event, type, blocks)}
+    end
+  end
+
+  # `type` is the resolved event's own `item_type` when it is an
+  # `item_completed` (`:tool_result`, `:message`, `:reasoning`,
+  # `:tool_use`); anything else -- a different event type, a missing or
+  # unrecognised `item_type` -- is `:unknown` (never raises, never
+  # invents a vocabulary this module doesn't already know).
+  defp entry_type(event) do
+    if Map.get(event, :type) == :item_completed do
+      case item_type_atom(payload_fetch(event, "item_type", :item_type)) do
+        known when known in [:message, :reasoning, :tool_use, :tool_result] ->
+          known
+
+        _unrecognised ->
+          :unknown
+      end
+    else
+      :unknown
+    end
+  end
+
+  # Prefer a same-turn :tool_call block's own name (already extracted and
+  # display-ready by `extract_tool_call_content/1`) -- naturally absent
+  # for a cross-turn ref, since `blocks` here is only THIS turn's own
+  # built blocks -- falling back to the raw event's own `"name"` payload
+  # field. That name, when present, is joined via `" — "` with the
+  # event's content's first non-blank line; either alone stands on its
+  # own; the type name itself is the last-resort fallback when neither
+  # resolves to anything displayable. Never raises.
+  defp entry_label(ref, event, type, blocks) do
+    name =
+      find_tool_call_name(ref, blocks) ||
+        present(payload_fetch(event, "name", :name))
+
+    content_line =
+      event |> payload_fetch("content", :content) |> first_nonblank_line()
+
+    candidate =
+      case {present(name), present(content_line)} do
+        {nil, nil} -> Atom.to_string(type)
+        {name, nil} -> name
+        {nil, content} -> content
+        {name, content} -> name <> " — " <> content
+      end
+
+    candidate
+    |> to_string()
+    |> sanitize_completion_label()
+    |> finalize_completion_label(Atom.to_string(type))
+  end
+
+  defp find_tool_call_name(ref, blocks) do
+    Enum.find_value(blocks, fn block ->
+      with :tool_call <- block.kind,
+           true <- ref in block.event_refs,
+           name when is_binary(name) and name != "" <-
+             Map.get(block.content, :name) do
+        name
+      else
+        _no_match -> nil
+      end
+    end)
+  end
+
+  defp present(nil), do: nil
+  defp present(""), do: nil
+  defp present(value) when is_binary(value), do: value
+  defp present(_other), do: nil
+
+  defp first_nonblank_line(text) when is_binary(text) do
+    text |> String.split("\n") |> Enum.find(&(String.trim(&1) != ""))
+  end
+
+  defp first_nonblank_line(_other), do: nil
+
+  # Descending count, ties broken by first-appearance order among the
+  # refs list -- deterministic (pure function of `types`, no ambient
+  # state) so the summary line never varies run to run for the same
+  # input, matching this module's overall P-DET discipline. Returned as
+  # `%{type:, count:}` maps, NOT `{type, count}` tuples -- this list
+  # rides inside `Block.content`, which the T7/TF bless tasks round-trip
+  # through `Jason.encode!/1`; Jason has no `Encoder` for tuples, so a
+  # tuple here would crash every snapshot bless, not just render.
+  defp compute_type_counts(types) do
+    types
+    |> Enum.with_index()
+    |> Enum.group_by(fn {type, _idx} -> type end)
+    |> Enum.map(fn {type, occurrences} ->
+      first_idx = occurrences |> Enum.map(&elem(&1, 1)) |> Enum.min()
+      {type, length(occurrences), first_idx}
+    end)
+    |> Enum.sort_by(fn {_type, count, first_idx} -> {-count, first_idx} end)
+    |> Enum.map(fn {type, count, _first_idx} -> %{type: type, count: count} end)
+  end
+
+  # Strips every C0 control byte (0x00-0x1F, which includes ESC/0x1B) and
+  # DEL (0x7F), byte-wise -- mirrors `Raxol.Harness.Surface.ViewText.
+  # sanitize/1`'s technique and safety argument verbatim: multi-byte
+  # UTF-8 lead (0xC2-0xF4) and continuation (0x80-0xBF) bytes are both
+  # `>= 0x20`, so stripping byte-by-byte never splits a valid codepoint.
+  # UNLIKE that sanitizer, `\t` gets NO exception here: a completion
+  # label is a single inline cell, never a multi-column layout, so a
+  # stray tab has no legitimate rendering role and is stripped like every
+  # other C0 byte (so is the `\n` that sanitizer also has no reason to
+  # exempt for a one-line label).
+  defp sanitize_completion_label(text) do
+    for <<byte <- text>>, byte >= 0x20 and byte != 0x7F,
+      into: <<>>,
+      do: <<byte>>
+  end
+
+  # `fallback` (the resolved event's own type name) covers the rare case
+  # where a REAL event resolved but its name/content sanitized down to
+  # nothing (e.g. a tool result that was pure control bytes) -- distinct
+  # from `@unresolvable_evidence_label`, which is reserved for a ref the
+  # session index has no event for at all (see `resolve_completion_entry/3`).
+  defp finalize_completion_label("", fallback), do: fallback
+
+  defp finalize_completion_label(label, _fallback),
+    do: TextLayout.truncate(label, @completion_label_width, :ellipsis)
 
   # -- event/payload adapter -------------------------------------------------
   #

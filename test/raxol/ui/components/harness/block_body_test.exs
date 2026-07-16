@@ -24,6 +24,13 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
 
   defp flat_leaves(_node), do: []
 
+  defp strip_ids(map) when is_map(map) do
+    map |> Map.delete(:id) |> Map.new(fn {k, v} -> {k, strip_ids(v)} end)
+  end
+
+  defp strip_ids(list) when is_list(list), do: Enum.map(list, &strip_ids/1)
+  defp strip_ids(other), do: other
+
   defp message_block(text, opts) do
     Block.from_events(
       :message,
@@ -412,6 +419,41 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
 
       assert BlockBody.render(block, default_context()) ==
                Block.render(block, default_context())
+    end
+  end
+
+  describe "expanded render carries the completion row when the block has one" do
+    test "a block with content.completion gets the row appended after the mounted component's own view" do
+      block = Block.from_events(:message, events(:message), fold: :expanded)
+      with_completion = %{block | content: Map.put(block.content, :completion, %{evidence: :none})}
+
+      rendered = BlockBody.render(with_completion, default_context())
+      texts = flat_texts(rendered)
+
+      assert Enum.any?(texts, &(&1 == "no evidence provided")),
+             "expected the completion row to survive the expanded mount path, got: #{inspect(texts)}"
+    end
+
+    test "a block with no completion key renders byte-identical to the unwrapped mount" do
+      block = Block.from_events(:message, events(:message), fold: :expanded)
+
+      refute Map.has_key?(block.content, :completion)
+
+      {:ok, unwrapped_view} =
+        Raxol.UI.Components.Harness.BodyProvider.mount(block.kind, block.content,
+          context: default_context(),
+          outcome: block.outcome,
+          seal: block.seal
+        )
+
+      # Real mounted components (MessageBlock included) stamp a fresh
+      # `:erlang.unique_integer/1`-derived id on every call -- unrelated
+      # to this feature, and true of the render path before this change
+      # too -- so ids are stripped from both sides before comparing.
+      # What this test actually pins is structural: no extra wrapping
+      # column, no extra row, when there is no completion key.
+      assert strip_ids(BlockBody.render(block, default_context())) ==
+               strip_ids(unwrapped_view)
     end
   end
 

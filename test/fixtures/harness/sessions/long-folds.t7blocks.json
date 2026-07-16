@@ -132,6 +132,9 @@
           "target": "subsystem-6"
         },
         "name": "run_diagnostic",
+        "completion": {
+          "evidence": "none"
+        },
         "result": "[diagnostic] subsystem-6 check #1: OK (6 ms)\n[diagnostic] subsystem-6 check #2: OK (12 ms)\n[diagnostic] subsystem-6 check #3: OK (18 ms)\n[diagnostic] subsystem-6 check #4: OK (24 ms)\n[diagnostic] subsystem-6 check #5: OK (30 ms)\n[diagnostic] subsystem-6 check #6: OK (36 ms)\n[diagnostic] subsystem-6 check #7: OK (42 ms)\n[diagnostic] subsystem-6 check #8: OK (48 ms)\n[diagnostic] subsystem-6 check #9: OK (54 ms)\n[diagnostic] subsystem-6 check #10: OK (60 ms)\n[diagnostic] subsystem-6 check #11: OK (66 ms)\n[diagnostic] subsystem-6 check #12: OK (72 ms)\n[diagnostic] subsystem-6 check #13: OK (78 ms)\n[diagnostic] subsystem-6 check #14: OK (84 ms)\n[diagnostic] subsystem-6 check #15: OK (90 ms)\n[diagnostic] subsystem-6 check #16: OK (96 ms)\n[diagnostic] subsystem-6 check #17: OK (102 ms)\n[diagnostic] subsystem-6 check #18: OK (108 ms)\n[diagnostic] subsystem-6 check #19: OK (114 ms)\n[diagnostic] subsystem-6 check #20: OK (120 ms)",
         "tainted": true
       },
