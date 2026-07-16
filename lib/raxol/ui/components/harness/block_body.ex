@@ -77,7 +77,11 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   defp mount_body(block, context) do
     BodyProvider.mount(block.kind, block.content,
       context: context,
-      outcome: block.outcome
+      outcome: block.outcome,
+      # threads the block's own seal so a live :message body streams with
+      # provisional close instead of a plain full parse -- see
+      # `BodyProvider.mount/3`'s `:seal` option doc.
+      seal: block.seal
     )
   rescue
     e ->

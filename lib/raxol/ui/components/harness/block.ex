@@ -607,8 +607,11 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp markdown_source(%__MODULE__{content: %{text: text}}),
     do: to_display_text(text)
 
-  defp markdown_mode(%__MODULE__{seal: :sealed}), do: :sealed
-  defp markdown_mode(%__MODULE__{seal: :live}), do: :streaming
+  # The seal->mode mapping lives in exactly one place --
+  # `MarkdownBody.mode_for_seal/1` -- so this call site and
+  # `BodyProvider`'s `:message` props can never drift apart.
+  defp markdown_mode(%__MODULE__{seal: seal}),
+    do: MarkdownBody.mode_for_seal(seal)
 
   # Recursively applies the resolved prominence colour to every text node
   # in a rendered view tree (the MarkdownBody result), so the Markdown

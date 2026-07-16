@@ -1,7 +1,10 @@
 defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   use ExUnit.Case, async: true
 
+  alias Raxol.Harness.Fixture
   alias Raxol.UI.Components.Harness.{Block, BlockBody}
+
+  @markdown_fixture_path "test/fixtures/harness/sessions/markdown-stream.jsonl"
 
   defp default_context,
     do: %{theme: Raxol.UI.Theming.Theme.default_theme(), width: 80}
@@ -12,6 +15,45 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
     do: Enum.flat_map(children, &flat_texts/1)
 
   defp flat_texts(_node), do: []
+
+  defp flat_leaves(%{type: :text, content: content} = node),
+    do: [{content, node[:style] || %{}}]
+
+  defp flat_leaves(%{children: children}) when is_list(children),
+    do: Enum.flat_map(children, &flat_leaves/1)
+
+  defp flat_leaves(_node), do: []
+
+  defp message_block(text, opts) do
+    Block.from_events(
+      :message,
+      [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{item_type: :message, content: text}
+        }
+      ],
+      Keyword.merge([fold: :expanded], opts)
+    )
+  end
+
+  # Same golden-doc loading convention as markdown_body_test.exs: the
+  # deltas and the final content come live from the fixture file, never
+  # hardcoded.
+  defp golden_deltas_and_final do
+    {:ok, session} = Fixture.load(@markdown_fixture_path)
+
+    chunks =
+      session
+      |> Fixture.Session.by_type(:item_delta)
+      |> Enum.map(& &1.body.payload["chunk"])
+
+    [completed] = Fixture.Session.by_type(session, :item_completed)
+    {chunks, completed.body.payload["content"]}
+  end
+
+  defp delta_prefixes(chunks), do: Enum.scan(chunks, "", &(&2 <> &1))
 
   # -- one realistic events list per kind, reused for both fold states
   # (folded/expanded is a Block construction option, not a different
@@ -335,6 +377,93 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
 
       assert reason =~ "FunctionClauseError",
              "expected the exception module in the recovered reason/metadata"
+    end
+  end
+
+  # A message block reaching this path may still be LIVE: its accumulated
+  # text can end inside an unclosed construct. BlockBody threads
+  # `block.seal` into `BodyProvider.mount/3`, so a live body renders the
+  # provisional-close streaming treatment and a sealed body the plain full
+  # parse -- the transcript never flashes a raw marker mid-stream.
+  describe "live markdown message bodies stream safely end-to-end" do
+    test "a live expanded message with a trailing unclosed construct never leaks markers" do
+      block = message_block("streaming **bold", seal: :live)
+      texts = flat_texts(BlockBody.render(block, default_context()))
+
+      assert Enum.any?(texts, &(&1 =~ "[assistant]")),
+             "the real MessageBlock must mount (not the Block.render fallback)"
+
+      assert Enum.any?(texts, &(&1 =~ "bold"))
+
+      refute Enum.any?(texts, &(&1 =~ "*")),
+             "a live message's unclosed bold marker leaked through BlockBody"
+    end
+
+    test "the same content sealed renders the final full parse -- the marker stays literal" do
+      block = message_block("streaming **bold", seal: :sealed)
+      texts = flat_texts(BlockBody.render(block, default_context()))
+
+      assert Enum.any?(texts, &(&1 =~ "**")),
+             "sealed content is final -- a genuinely-unclosed marker stays literal"
+    end
+
+    test "folding a live markdown block still delegates to Block.render/2 (fold x streaming interaction)" do
+      block = message_block("streaming **bold", seal: :live, fold: :folded)
+
+      assert BlockBody.render(block, default_context()) ==
+               Block.render(block, default_context())
+    end
+  end
+
+  describe "golden fixture: markdown streams through the full BlockBody path" do
+    test "every delta-boundary prefix of a live message renders with no marker leak and no raw ANSI" do
+      {chunks, _final} = golden_deltas_and_final()
+
+      for prefix <- delta_prefixes(chunks) do
+        block = message_block(prefix, seal: :live)
+        texts = flat_texts(BlockBody.render(block, default_context()))
+
+        for text <- texts do
+          refute text =~ "\e",
+                 "raw ESC byte in rendered text at prefix #{inspect(prefix)}"
+
+          refute text =~ "```",
+                 "fence marker leaked at prefix #{inspect(prefix)}: #{inspect(text)}"
+
+          refute text =~ "*",
+                 "'*' leaked at prefix #{inspect(prefix)}: #{inspect(text)}"
+
+          refute text =~ "_",
+                 "'_' leaked at prefix #{inspect(prefix)}: #{inspect(text)}"
+
+          refute text =~ "`",
+                 "'`' leaked at prefix #{inspect(prefix)}: #{inspect(text)}"
+        end
+      end
+    end
+
+    test "the sealed final content renders the styled document -- no raw ANSI bytes in the element tree" do
+      {_chunks, final} = golden_deltas_and_final()
+
+      block = message_block(final, seal: :sealed)
+      rendered = BlockBody.render(block, default_context())
+      texts = flat_texts(rendered)
+      leaves = flat_leaves(rendered)
+
+      assert Enum.any?(texts, &(&1 =~ "Diagnostic Report"))
+
+      assert Enum.any?(leaves, fn {content, style} ->
+               content == "run" and style[:bold] == true
+             end),
+             "the **run** emphasis must render as a bold span"
+
+      assert Enum.any?(leaves, fn {content, style} ->
+               content =~ "defmodule" and style[:fg] == :yellow
+             end),
+             "fenced code lines must render with the code accent"
+
+      refute Enum.any?(texts, &(&1 =~ "\e"))
+      refute Enum.any?(texts, &(&1 =~ "```"))
     end
   end
 end

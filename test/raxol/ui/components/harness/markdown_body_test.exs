@@ -71,6 +71,15 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
 
   defp delta_prefixes(chunks), do: Enum.scan(chunks, "", &(&2 <> &1))
 
+  # --- seal -> mode vocabulary bridge ---
+
+  describe "mode_for_seal/1 -- the single seal->mode vocabulary bridge" do
+    test "maps :live to :streaming and :sealed to :sealed" do
+      assert MarkdownBody.mode_for_seal(:live) == :streaming
+      assert MarkdownBody.mode_for_seal(:sealed) == :sealed
+    end
+  end
+
   # --- render/2 basic dispatch ---
 
   describe "render/2 dispatch" do

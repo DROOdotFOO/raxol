@@ -297,6 +297,22 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
         assert String.starts_with?(line.content, "  ")
       end
     end
+
+    # Regression pin: the builtin fenced path used to push code lines onto
+    # the reversed accumulator in already-correct order, so the final
+    # reversal flipped them -- a multi-line block rendered bottom-to-top.
+    test "renders multi-line code in source order" do
+      md = "```\nfirst\nsecond\nthird\n```"
+      result = render_md(md)
+
+      code_contents =
+        result
+        |> children()
+        |> Enum.filter(&(&1.style[:fg] == :yellow))
+        |> Enum.map(& &1.content)
+
+      assert code_contents == ["  first", "  second", "  third"]
+    end
   end
 
   describe "blockquotes" do
@@ -414,6 +430,130 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
                {"bold", %{bold: true}},
                {" tail", %{}}
              ]
+    end
+  end
+
+  # A fence's info string ("```elixir") names the code's language. The
+  # renderer displays it as a dim label line above the (monospace, yellow)
+  # code body. Display only -- NO syntax highlighting in this unit; the
+  # label + @code_style block is the documented seam a future highlighter
+  # slots into.
+  describe "fenced code language tags (info string)" do
+    test "renders the language as a dim label line above the code body" do
+      md = "```elixir\nIO.puts(\"hi\")\n```"
+      result = render_md(md)
+
+      assert [label] =
+               Enum.filter(children(result), &(&1[:content] == "  elixir"))
+
+      assert label.style[:dim] == true
+
+      label_idx =
+        Enum.find_index(children(result), &(&1[:content] == "  elixir"))
+
+      code_idx =
+        Enum.find_index(children(result), &((&1[:content] || "") =~ "IO.puts"))
+
+      assert label_idx < code_idx,
+             "the language label must sit above the code body"
+    end
+
+    test "the label is chrome, not code -- dim, never the code accent" do
+      md = "```elixir\nIO.puts(\"hi\")\n```"
+      result = render_md(md)
+
+      [label] = Enum.filter(children(result), &(&1[:content] == "  elixir"))
+
+      refute label.style[:fg] == :yellow,
+             "the label must be visually distinct from the code body"
+    end
+
+    test "an untagged fence renders no label line (and no dim element at all)" do
+      md = "```\nhello\n```"
+      result = render_md(md)
+
+      assert length(children(result)) == 3
+
+      refute Enum.any?(children(result), &(&1[:style][:dim] == true)),
+             "an untagged fence must not grow a label line"
+    end
+
+    test "~~~ fences carry the label too" do
+      md = "~~~python\nx = 1\n~~~"
+      result = render_md(md)
+
+      assert Enum.any?(children(result), &(&1[:content] == "  python"))
+    end
+
+    test "only the first word of the info string becomes the label" do
+      md = "```elixir title=demo\n:ok\n```"
+      result = render_md(md)
+
+      assert Enum.any?(children(result), &(&1[:content] == "  elixir"))
+      refute full_text(result) =~ "title"
+    end
+
+    # A shared component's new output surface inherits the component's OWN
+    # trust contract, not the calling path's: MarkdownRenderer's contract is
+    # "callers may pass untrusted text", and it has direct callers with no
+    # MarkdownBody pre-sanitization in front (e.g. the playground's
+    # DemoHelpers.markdown/2). So the label must be safe at THIS boundary,
+    # regardless of which path produced the input.
+    test "control/ESC bytes in the info string never reach the label" do
+      md = "```elixir\e[2J\n:ok\n```"
+      result = render_md(md)
+
+      refute full_text(result) =~ "\e",
+             "a raw ESC byte from the fence info string reached text()"
+
+      assert [label] =
+               Enum.filter(children(result), &(&1[:style][:dim] == true))
+
+      assert String.starts_with?(label.content, "  elixir")
+    end
+
+    test "a control-chars-only info string yields no label at all" do
+      md = "```\e\n:ok\n```"
+      result = render_md(md)
+
+      refute full_text(result) =~ "\e"
+
+      refute Enum.any?(children(result), &(&1[:style][:dim] == true)),
+             "a sanitized-to-empty info string must not grow an empty label"
+    end
+
+    test "an oversized info string is clamped to a bounded label line" do
+      lang = String.duplicate("x", 100_000)
+      md = "```#{lang}\n:ok\n```"
+      result = render_md(md)
+
+      assert [label] =
+               Enum.filter(children(result), &(&1[:style][:dim] == true))
+
+      assert Raxol.UI.TextMeasure.display_width(label.content) <= 40,
+             "the label line must stay bounded no matter the info string size"
+    end
+
+    test "code_language_from_attrs/1 sanitizes and clamps too -- Earmark attrs are equally untrusted" do
+      assert MarkdownRenderer.code_language_from_attrs([
+               {"class", "elixir\e[2J"}
+             ]) == "elixir[2J"
+
+      long = String.duplicate("y", 500)
+      clamped = MarkdownRenderer.code_language_from_attrs([{"class", long}])
+      assert String.length(clamped) <= 32
+    end
+
+    test "code_language_from_attrs/1 extracts Earmark's class attr, stripping the language- prefix" do
+      assert MarkdownRenderer.code_language_from_attrs([{"class", "elixir"}]) ==
+               "elixir"
+
+      assert MarkdownRenderer.code_language_from_attrs([
+               {"class", "language-rust"}
+             ]) == "rust"
+
+      assert MarkdownRenderer.code_language_from_attrs([]) == nil
+      assert MarkdownRenderer.code_language_from_attrs([{"class", ""}]) == nil
     end
   end
 end

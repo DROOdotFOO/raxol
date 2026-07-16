@@ -59,12 +59,21 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
   rendering (one-line summary + outcome row) is `Block.render/2`'s own
   proven code path -- `BlockBody` reuses it directly rather than
   reimplementing a second summary renderer here.
+
+  ## `:reasoning` stays plain through this path, by design
+
+  Unlike `:message`, a `:reasoning` body is never threaded through
+  `Harness.MarkdownBody` here -- `ReasoningBlock` renders dim plain text
+  on purpose (reasoning is meant to read as quieter, secondary content).
+  Styled Markdown reasoning is an explicit opt-in that lives entirely in
+  `Block.render/2`'s own `context[:markdown]` path, not in this seam.
   """
 
   alias Raxol.UI.Components.Harness.{
     ApprovalPrompt,
     Block,
     DiffViewer,
+    MarkdownBody,
     MessageBlock,
     ReasoningBlock,
     ToolCallBlock,
@@ -160,6 +169,14 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
     * `:context` -- render context passed to every mounted component's
       `render/2` (default `%{}`); `:width` inside it sizes `:message`,
       `:reasoning`, and `:diff` bodies.
+    * `:seal` -- `:live | :sealed` (default `:sealed`), the block's own
+      seal state. Threaded only into the `:message` body, as
+      `MessageBlock`'s render `:mode` (`:live` -> `:streaming`, `:sealed`
+      -> `:sealed`) -- a live message renders with the provisional-close
+      streaming treatment, a sealed one as a plain full parse. Defaulting
+      to `:sealed` means existing direct callers of `mount/3` see zero
+      behavior change; `BlockBody` is the one caller that passes the
+      block's real `seal`. Every other kind accepts and ignores it.
     * `:outcome` -- a `Block.outcome()` map (default `%{}`), consulted
       only for `:tool_call` to derive the mounted status glyph
       (`:pending` with no result yet, `:failed` on a non-zero
@@ -191,12 +208,13 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
   def mount(kind, body, opts \\ []) do
     context = Keyword.get(opts, :context, %{})
     outcome = Keyword.get(opts, :outcome, %{})
+    seal = Keyword.get(opts, :seal, :sealed)
 
     with {:ok, expected_component} <- component_for(kind),
          component = Keyword.get(opts, :component, expected_component),
          :ok <- ensure_component(kind, component, expected_component),
          :ok <- validate(kind, body) do
-      {:ok, build_view(kind, component, body, outcome, context)}
+      {:ok, build_view(kind, component, body, outcome, context, seal)}
     end
   end
 
@@ -210,23 +228,23 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
 
   # -- per-kind view construction ---------------------------------------
 
-  defp build_view(:message, component, body, _outcome, context) do
-    mount_one(component, message_props(body, context), context)
+  defp build_view(:message, component, body, _outcome, context, seal) do
+    mount_one(component, message_props(body, context, seal), context)
   end
 
-  defp build_view(:reasoning, component, body, _outcome, context) do
+  defp build_view(:reasoning, component, body, _outcome, context, _seal) do
     mount_one(component, reasoning_props(body, context), context)
   end
 
-  defp build_view(:diff, component, body, _outcome, context) do
+  defp build_view(:diff, component, body, _outcome, context, _seal) do
     mount_one(component, diff_props(body, context), context)
   end
 
-  defp build_view(:approval, component, body, _outcome, context) do
+  defp build_view(:approval, component, body, _outcome, context, _seal) do
     mount_one(component, approval_props(body), context)
   end
 
-  defp build_view(:tool_call, component, body, outcome, context) do
+  defp build_view(:tool_call, component, body, outcome, context, _seal) do
     call_view = mount_one(component, tool_call_props(body, outcome), context)
 
     case Map.get(body, :result) do
@@ -254,11 +272,12 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
     component.render(state, context)
   end
 
-  defp message_props(body, context) do
+  defp message_props(body, context, seal) do
     [
       role: Map.get(body, :role, :assistant),
       content: Map.fetch!(body, :text),
-      width: width_from(context)
+      width: width_from(context),
+      mode: MarkdownBody.mode_for_seal(seal)
     ]
   end
 

@@ -81,12 +81,35 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
   marker character still toggles/opens its construct normally. Full
   escape handling would need to thread an "escaped" flag through the
   scan; left as a documented gap rather than expanded scope here.
+
+  ## Follow-up seam: stable-prefix optimization
+
+  Today every streaming delta re-parses the FULL accumulated text (byte-
+  capped at 256KB -- see `@render_byte_cap` below). A follow-up unit
+  could instead cache the parse of the longest durable prefix (the text
+  up to the last committed line boundary, which never changes as more
+  deltas arrive) and re-parse only the live tail on each delta.
+  Documented here as a known optimization opportunity, not implemented --
+  this module's current correctness does not depend on it.
   """
 
   alias Raxol.UI.Components.MarkdownRenderer
   alias Raxol.View.Components
 
   @type mode :: :sealed | :streaming
+
+  @doc """
+  The single vocabulary bridge from a block's seal state (`:live |
+  :sealed`, see `Raxol.UI.Components.Harness.Block`) to this module's
+  render mode: `:live -> :streaming`, `:sealed -> :sealed`. Every call
+  site that glues block seal to Markdown rendering (`BodyProvider`'s
+  `:message` props, `Block.render/2`'s `context[:markdown]` path) MUST
+  use this rather than re-deriving the mapping -- two names for the same
+  binary state is already one too many.
+  """
+  @spec mode_for_seal(Raxol.UI.Components.Harness.Block.seal_state()) :: mode()
+  def mode_for_seal(:live), do: :streaming
+  def mode_for_seal(:sealed), do: :sealed
 
   # Above this byte size, both the provisional-close scan and the
   # downstream render/parse skip their normal work and fall back to a

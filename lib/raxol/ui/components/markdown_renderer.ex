@@ -9,6 +9,22 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   Inline styling does not survive a wrap boundary: a line that overflows
   `width` falls back to plain, unstyled wrapped text, though wrapped
   output never leaks literal Markdown marker characters.
+
+  A fenced code block's info string (the language tag after ```` ``` ````
+  or `~~~`, e.g. `elixir` in ` ```elixir `) renders as a dim label line
+  above the code body. This is display-only -- no syntax highlighting is
+  performed, and none is planned as part of this label. The label plus
+  the plain `@code_style` code body is the seam a future highlighter
+  would slot into, not something this module implements itself.
+
+  Trust note: a new output surface added to a shared component inherits
+  the component's OWN trust contract, not the calling path's. This
+  module's contract is "callers may pass untrusted text", and it has
+  direct callers with no sanitizer in front (the harness path's
+  `Harness.MarkdownBody` pre-strips control bytes, but e.g. the
+  playground's `DemoHelpers.markdown/2` does not) -- so the label is
+  control/ESC-sanitized and length-clamped here, at the boundary that
+  produces it, regardless of which caller supplied the input.
   """
   use Raxol.UI.Components.Base.Component
 
@@ -171,18 +187,8 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
 
   defp ast_node_to_elements({"pre", _attrs, children, _meta}, _width) do
     code_text = extract_code_text(children)
-    lines = String.split(code_text, "\n")
-
-    code_elements =
-      Enum.map(lines, fn line ->
-        Components.text(content: "  " <> line, style: @code_style)
-      end)
-
-    Enum.concat([
-      [Components.text(content: "")],
-      code_elements,
-      [Components.text(content: "")]
-    ])
+    lang = pre_code_language(children)
+    fenced_code_elements(code_text, lang)
   end
 
   defp ast_node_to_elements({"blockquote", _attrs, children, _meta}, width) do
@@ -292,6 +298,62 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     end)
   end
 
+  # Earmark wraps a fenced code block's language tag in the inner `code`
+  # node's `class` attr (`language-elixir` per the CommonMark convention,
+  # though a bare `elixir` is accepted too via `code_language_from_attrs/1`).
+  defp pre_code_language(children) when is_list(children) do
+    Enum.find_value(children, fn
+      {"code", attrs, _inner, _meta} -> code_language_from_attrs(attrs)
+      _other -> nil
+    end)
+  end
+
+  defp pre_code_language(_children), do: nil
+
+  @doc false
+  @spec code_language_from_attrs(list()) :: String.t() | nil
+  def code_language_from_attrs(attrs) when is_list(attrs) do
+    case List.keyfind(attrs, "class", 0) do
+      {"class", value} -> lang_word(value)
+      nil -> nil
+    end
+  end
+
+  def code_language_from_attrs(_attrs), do: nil
+
+  # The info string is UNTRUSTED input reaching a NEW output surface (the
+  # label line), so it is made safe here, at this module's own boundary --
+  # not on any particular calling path (see the moduledoc's trust note):
+  # all C0 controls, DEL, and C1 bytes are stripped BEFORE word extraction
+  # (`~r/\s+/` does not treat ESC as whitespace, so `elixir\e[2J` would
+  # otherwise survive as one "word" and smuggle a live escape sequence
+  # into `text()`), and the surviving word is clamped so a pathological
+  # no-whitespace info string can never become an unbounded label line.
+  @info_string_control_chars ~r/[\x00-\x1F\x7F\x{0080}-\x{009F}]/u
+  @max_lang_label_width 32
+
+  # The displayed language tag is the first whitespace-separated word of
+  # the sanitized info string, an optional Earmark "language-" class
+  # prefix stripped first (a no-op when there is none, e.g. a bare fence
+  # info string like `elixir title=demo`). Absent/blank/sanitized-to-empty
+  # input yields `nil`, not an empty string -- keeping the "no label" case
+  # as a single value simplifies callers.
+  defp lang_word(value) do
+    value
+    |> to_string()
+    |> String.replace(@info_string_control_chars, "")
+    |> String.replace_prefix("language-", "")
+    |> String.trim()
+    |> String.split(~r/\s+/, trim: true)
+    |> List.first()
+    |> clamp_lang()
+  end
+
+  defp clamp_lang(nil), do: nil
+
+  defp clamp_lang(lang),
+    do: TextLayout.truncate(lang, @max_lang_label_width, :ellipsis)
+
   # --- Shared segment rendering (fits-vs-wrapped) ---
   #
   # `[{text, style}, ...]` segments render as: a plain `text` element when
@@ -381,13 +443,16 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   # fence marker; a fence only closes on a line using the SAME marker it
   # opened with, so a stray line of the other marker type while the fence
   # is open is fence CONTENT, not a closer (mismatched fences never
-  # prematurely end the block).
-  defp parse_blocks(["```" <> _ | rest], width, acc) do
-    parse_fenced_block("```", rest, width, acc)
+  # prematurely end the block). Whatever follows the marker on the opening
+  # line is the info string -- its first word (if any) becomes the
+  # displayed language label; the rest (e.g. a `title=demo` attribute) is
+  # discarded, same as it always was before labels existed.
+  defp parse_blocks(["```" <> info | rest], width, acc) do
+    parse_fenced_block("```", lang_word(info), rest, width, acc)
   end
 
-  defp parse_blocks(["~~~" <> _ | rest], width, acc) do
-    parse_fenced_block("~~~", rest, width, acc)
+  defp parse_blocks(["~~~" <> info | rest], width, acc) do
+    parse_fenced_block("~~~", lang_word(info), rest, width, acc)
   end
 
   # GFM table: a header row immediately followed by a separator-shaped row
@@ -561,19 +626,44 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
 
   defp slice_group(text, {start, len}), do: String.slice(text, start, len)
 
-  defp parse_fenced_block(marker, rest, width, acc) do
+  defp parse_fenced_block(marker, lang, rest, width, acc) do
     {code_lines, remaining} = take_until_fence(rest, marker, [])
+    code_text = Enum.join(code_lines, "\n")
+    elements = fenced_code_elements(code_text, lang)
 
+    # Same reverse-then-cons convention every other `parse_blocks` clause
+    # uses (`acc` is fully reversed once at the very end, in
+    # `render_with_builtin/2`) -- pushing this block's elements on
+    # pre-reversed keeps them in correct reading order after that final
+    # reversal, exactly like a single `parse_line/2` result would be.
+    parse_blocks(remaining, width, Enum.reverse(elements) ++ acc)
+  end
+
+  # Shared by both the Earmark AST path (`ast_node_to_elements/2` for
+  # `"pre"`) and this builtin path, so the two parsers can't drift on how
+  # the language label sits relative to the surrounding blank lines and
+  # code body: blank, optional dim label, code lines, blank. `lang` is
+  # `nil` (or an empty/absent tag) -> no label line at all, not an empty one.
+  defp fenced_code_elements(code_text, lang) do
     code_elements =
-      Enum.map(code_lines, fn line ->
+      code_text
+      |> String.split("\n")
+      |> Enum.map(fn line ->
         Components.text(content: "  " <> line, style: @code_style)
       end)
 
-    new_acc =
-      [Components.text(content: "") | code_elements] ++
-        [Components.text(content: "") | acc]
+    blank = Components.text(content: "")
 
-    parse_blocks(remaining, width, new_acc)
+    Enum.concat([[blank], code_label_elements(lang), code_elements, [blank]])
+  end
+
+  # `lang` is always `lang_word/1`'s output here: `nil` or a non-empty,
+  # sanitized, clamped word -- there is deliberately no `""` clause, since
+  # `lang_word/1` maps every empty/blank/sanitized-away case to `nil`.
+  defp code_label_elements(nil), do: []
+
+  defp code_label_elements(lang) do
+    [Components.text(content: "  " <> lang, style: %{dim: true})]
   end
 
   defp take_until_fence([], _marker, acc), do: {Enum.reverse(acc), []}
