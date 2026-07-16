@@ -36,7 +36,11 @@ OP_TOKEN_REF="${OP_TOKEN_REF:-op://Employee/Riddler Tron Relay API Token/passwor
 RELAY_LIVE_FROM_TOKEN="${RELAY_LIVE_FROM_TOKEN:-0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913}"
 RELAY_LIVE_TO_TOKEN="${RELAY_LIVE_TO_TOKEN:-TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t}"
 RELAY_LIVE_TO_ADDRESS="${RELAY_LIVE_TO_ADDRESS:-TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t}"
-RELAY_LIVE_AMOUNT="${RELAY_LIVE_AMOUNT:-100000}"
+# Human-decimal amount (default 0.10). The relay /relay/quote probe wants atomic
+# units, so it is converted below; the raxol_acp test reads this human value and
+# converts per-token via Assets.to_atomic. Keeping one human value here avoids the
+# atomic-vs-human split that otherwise oversizes the funded run at the spend gate.
+RELAY_LIVE_AMOUNT="${RELAY_LIVE_AMOUNT:-0.10}"
 
 if [[ -z "${RELAY_LIVE_FROM_ADDRESS:-}" ]]; then
   printf 'error: set RELAY_LIVE_FROM_ADDRESS to the EVM source (Base) address\n' >&2
@@ -53,8 +57,10 @@ if [[ -z "${RELAY_LIVE_TOKEN:-}" ]]; then
 fi
 
 printf 'preflight: validating relay quote endpoint (read-only, no funds move)...\n' >&2
+# The relay quote API wants atomic units; the default USDC/USDT origin is 6dp.
+relay_atomic="$(awk -v a="$RELAY_LIVE_AMOUNT" 'BEGIN { printf "%d", a * 1000000 }')"
 quote_body="$(printf '{"transfer_id":"probe","from_chain_id":8453,"to_chain_id":728126428,"from_token":"%s","to_token":"%s","from_amount":"%s","from_address":"%s","to_address":"%s","slippage_bps":50}' \
-  "$RELAY_LIVE_FROM_TOKEN" "$RELAY_LIVE_TO_TOKEN" "$RELAY_LIVE_AMOUNT" "$RELAY_LIVE_FROM_ADDRESS" "$RELAY_LIVE_TO_ADDRESS")"
+  "$RELAY_LIVE_FROM_TOKEN" "$RELAY_LIVE_TO_TOKEN" "$relay_atomic" "$RELAY_LIVE_FROM_ADDRESS" "$RELAY_LIVE_TO_ADDRESS")"
 
 code="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' \
   -X POST "$RELAY_LIVE_URL/relay/quote" \
