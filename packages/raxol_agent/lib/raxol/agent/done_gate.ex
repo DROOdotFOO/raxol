@@ -25,12 +25,60 @@ defmodule Raxol.Agent.DoneGate do
        check exists to close);
     4. **postdate the last mutation** — strictly greater offset than the turn's
        last mutating action; stale evidence that predates a later mutation does
-       not count, else `{:error, {:stale_evidence, offset}}`.
+       not count, else `{:error, {:stale_evidence, offset}}`;
+    5. **not be the last mutation's own echo** — a `:tool_result` produced BY
+       the turn's last mutating tool call is that mutation's byproduct, not
+       independent verification of it, else `{:error, {:mutation_echo, offset}}`
+       (see "What counts as a mutation" below for the pairing rule).
 
   A done carrying no refs at all is `{:error, :evidence_required}`. Only when
-  every ref satisfies (1)-(4) does the gate accept and hand back the durable
+  every ref satisfies (1)-(5) does the gate accept and hand back the durable
   `turn_completed{final: true, refs: [...]}` event for journaling — so a surface
   can render "done because X".
+
+  ## What counts as a mutation (fail-safe by construction)
+
+  **Every completed `:tool_use` is a mutation.** The real producer
+  (`Raxol.Agent.Contract.pump/3`) stamps no effect metadata on tool calls, and
+  the frozen effect taxonomy (`harness-freeze-contracts.md` §5.2:
+  `:reversible_local | :bounded_sandboxable | :irreversible_external`) contains
+  only effect-BEARING classes and rules that effect enforcement is *structural,
+  compiled in our own tree — never self-reported*. So:
+
+    * an absent `effect_class` means UNCLASSIFIED, and unclassified resolves
+      toward "is a mutation" (fail-safe) — never toward "is safe";
+    * a producer-stamped `mutating: false` (or any `destructiveHint`-style
+      self-report) can never REMOVE a tool call from the mutation set — a lying
+      producer must not be able to widen the valid-evidence window and launder
+      stale evidence past a real mutation;
+    * the only future seam that may refine a `:tool_use` OUT of the mutation
+      set is a structural effect classification from the F2 `Raxol.Action`
+      draft (see `classified_effect_free?/1`), which does not exist yet.
+
+  Because a `:tool_result` always postdates its own `:tool_use`, check 5 pins
+  the corollary: the last mutation's own result echo is not evidence that the
+  mutation was verified. A result is paired to its producing call by tool
+  `name` + nearest-preceding order — the only pairing signal the frozen v0
+  producer shape carries (it stamps `name` on both sides and no `call_id` on
+  results).
+
+  **Consequence, stated plainly:** on a journal produced by today's v0
+  producer, where no tool carries a structural classification, every tool call
+  gates and no tool result can green-light a done — the gate is *fully
+  fail-closed* until a structurally-classified verification class exists.
+  That is intentional; see "Wiring status".
+
+  ## Wiring status (disclosure)
+
+  `gate/3` is **not yet invoked by any production path**. `Contract.pump/3`
+  still emits `turn_completed{final: true}` unconditionally on `{:done, ...}`.
+  This module is the U21-R deliverable (the gate + its red suite); wiring the
+  done path through it is the U21-I impl unit, which per the roadmap's impl
+  ordering follows U8 (BlastRadiusGate — the unit that introduces structural
+  mutation classes and write-capable tools) and needs the refs-citation seam
+  (how an agent names its evidence offsets), which does not exist yet. Both
+  are tracked in `docs/proposals/in-flight/harness-parked.md` (U21
+  gating-strength ruling; wiring debt).
 
   The gate never transitions the turn to done on a rejected claim; the turn
   stays open and the typed error is surfaced.
@@ -78,6 +126,16 @@ defmodule Raxol.Agent.DoneGate do
   that checks existence but not ordering, one that lets self-reported text
   count as evidence, one that skips the turn-ownership check) through the same
   shape and prove each one fails its targeted red.
+
+  ## Label key (review cross-references)
+
+  Labels like `H2` and `M1` in this module and its red suite are finding ids
+  from PR #570's adversarial review rounds — severity (High/Medium/Low) plus
+  index — kept so each fix stays traceable to the finding it closes. `§0
+  decision-time-fold law` = `docs/proposals/in-flight/harness-freeze-contracts.md`
+  §0 clause 7; `§5.2` = the effect-class taxonomy in the same document; `FI-6`
+  = the roadmap future-invariant this unit implements; `meta-inv N` = the
+  red-suite meta-invariants in `docs/proposals/in-flight/harness-invariants.md`.
   """
 
   alias Raxol.Agent.Contract.Event
@@ -103,6 +161,7 @@ defmodule Raxol.Agent.DoneGate do
           | {:error, {:not_evidence, offset()}}
           | {:error, {:foreign_turn, offset()}}
           | {:error, {:stale_evidence, offset()}}
+          | {:error, {:mutation_echo, offset()}}
 
   @doc """
   Gate a proposed done for `turn_id` against `journal`, citing evidence `refs`.
@@ -132,10 +191,13 @@ defmodule Raxol.Agent.DoneGate do
   def gate(_journal, _turn_id, []), do: {:error, :evidence_required}
 
   def gate(journal, turn_id, refs) do
+    # One walk builds the offset index; each ref is then an O(1) lookup
+    # instead of a fresh whole-journal Enum.find per ref.
+    by_offset = Map.new(journal, &{event_id(&1), &1})
     last_mut = last_mutation(journal, turn_id)
 
     Enum.reduce_while(refs, {:ok, refs}, fn ref, acc ->
-      case classify_ref(journal, turn_id, last_mut, ref) do
+      case classify_ref(journal, by_offset, turn_id, last_mut, ref) do
         :ok -> {:cont, acc}
         err -> {:halt, err}
       end
@@ -146,19 +208,31 @@ defmodule Raxol.Agent.DoneGate do
     end
   end
 
-  # -- ref classification (existence -> class -> same-turn (H2) -> ordering) --
+  # -- ref classification -----------------------------------------------------
+  # Order: existence -> class -> same-turn (H2) -> ordering -> mutation-echo.
+  # First violation wins; refs are walked in caller order.
 
-  defp classify_ref(journal, turn_id, last_mut, ref) do
-    case resolve(journal, ref) do
+  defp classify_ref(journal, by_offset, turn_id, last_mut, ref) do
+    case Map.get(by_offset, ref) do
       nil ->
         {:error, {:missing_ref, ref}}
 
       ev ->
         cond do
-          not evidence_class?(ev) -> {:error, {:not_evidence, ref}}
-          event_turn_id(ev) != turn_id -> {:error, {:foreign_turn, ref}}
-          last_mut != nil and event_id(ev) <= last_mut -> {:error, {:stale_evidence, ref}}
-          true -> :ok
+          not evidence_class?(ev) ->
+            {:error, {:not_evidence, ref}}
+
+          event_turn_id(ev) != turn_id ->
+            {:error, {:foreign_turn, ref}}
+
+          last_mut != nil and event_id(ev) <= last_mut ->
+            {:error, {:stale_evidence, ref}}
+
+          mutation_echo?(journal, turn_id, ev, last_mut) ->
+            {:error, {:mutation_echo, ref}}
+
+          true ->
+            :ok
         end
     end
   end
@@ -176,37 +250,81 @@ defmodule Raxol.Agent.DoneGate do
 
   # Evidence-class predicate: a tool result / verification output.
   defp evidence_class?(ev) do
-    event_type(ev) == :item_completed and payload_field(ev, :item_type) == :tool_result
+    event_type(ev) == :item_completed and
+      payload_field(ev, :item_type) == :tool_result
   end
 
-  # Mutation predicate — DERIVED at decision time from the event's intrinsic
-  # type + effect classification, never from a producer-stamped `mutating:`
-  # boolean (§0 decision-time-fold law: ADMISSION gates fold truth
-  # synchronously; the stamp is display/audit metadata, the fold is the
-  # security boundary). A state-affecting action is an `:item_completed`
-  # `:tool_use` that carries an `effect_class` — the tool's intrinsic effect
-  # classification. Deriving mutating-ness from that classification, rather than
-  # trusting a `mutating: false` self-report, is what stops a producer from
-  # WIDENING the valid-evidence window to launder stale evidence past a real
-  # mutation.
-  #
-  # The boolean flag survives ONLY as a fail-safe NARROWING tiebreak: an
-  # explicit `mutating: true` also counts (shrinking the evidence window toward
-  # safety), but a `false`/absent flag can never REMOVE an effect-bearing action
-  # from the mutation set — ambiguity resolves toward "is a mutation".
+  # Mutation predicate — FAIL-SAFE, derived at decision time from the event's
+  # intrinsic type (§0 decision-time-fold law: ADMISSION gates fold truth
+  # synchronously; a producer stamp is display/audit metadata, the fold is the
+  # security boundary). Every completed `:tool_use` is a mutation: the real
+  # producer (`Contract.pump/3`) stamps no effect metadata, and the frozen
+  # effect taxonomy (§5.2) contains only effect-BEARING classes, so neither an
+  # absent `effect_class` nor any self-reported flag (`mutating: false`, a
+  # `destructiveHint`-style claim) may ever REMOVE a tool call from the
+  # mutation set — a lying producer must not be able to widen the
+  # valid-evidence window and launder stale evidence past a real mutation.
   #
   # (`:state_change` is deliberately NOT in the mutating set: it is an internal
-  # transition carrying no effect_class, is neither evidence nor mutation in the
-  # v0 loop vocabulary, and the frozen Oracle/fold treats it the same way.)
+  # transition, neither evidence nor mutation in the v0 loop vocabulary, and
+  # the frozen Oracle/fold treats it the same way.)
   defp mutating?(ev) do
     event_type(ev) == :item_completed and
       payload_field(ev, :item_type) == :tool_use and
-      (effect_bearing?(ev) or payload_field(ev, :mutating) == true)
+      not classified_effect_free?(ev)
   end
 
-  defp effect_bearing?(ev), do: payload_field(ev, :effect_class) != nil
+  # The one refinement seam: a tool call leaves the mutation set ONLY via a
+  # structural, compiled-in-our-own-tree classification proving it effect-free
+  # (the F2 `Raxol.Action` draft — see the moduledoc). No such class exists in
+  # the frozen taxonomy today, so this is constantly false: unclassified and
+  # unknown both resolve toward "is a mutation".
+  defp classified_effect_free?(_ev), do: false
 
-  defp resolve(journal, offset), do: Enum.find(journal, &(event_id(&1) == offset))
+  # Check 5 — is this `:tool_result` the last mutation's own echo?
+  #
+  # A result is paired to its producing call by tool NAME + nearest-preceding
+  # order within the claiming turn: the v0 producer emits each result
+  # sequentially after its call and stamps `name` on both sides (it stamps no
+  # `call_id` on results, so name+order is the only pairing signal in the
+  # frozen shape). If the producing call IS the turn's last mutation, the ref
+  # is that mutation's byproduct — it postdates the mutation trivially and
+  # verifies nothing. An unpaired result (no named preceding call in the turn)
+  # is not an echo.
+  defp mutation_echo?(_journal, _turn_id, _ev, nil), do: false
+
+  defp mutation_echo?(journal, turn_id, ev, last_mut) do
+    name = tool_name(ev)
+    offset = event_id(ev)
+
+    name != nil and
+      journal
+      |> Enum.filter(fn cand ->
+        event_turn_id(cand) == turn_id and mutating?(cand) and
+          event_id(cand) < offset and tool_name(cand) == name
+      end)
+      |> Enum.map(&event_id/1)
+      |> case do
+        [] -> false
+        ids -> Enum.max(ids) == last_mut
+      end
+  end
+
+  # Tool names are free-form strings on the wire — read raw (never atomized)
+  # and normalize atoms from synthetic fixtures to their string form.
+  defp tool_name(ev) do
+    case get_either(ev, :payload) do
+      %{} = payload ->
+        case get_either(payload, :name) do
+          name when is_binary(name) -> name
+          name when is_atom(name) and not is_nil(name) -> Atom.to_string(name)
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
 
   # -- accessors tolerant of both decoded and JSON-replayed journals ----------
   #

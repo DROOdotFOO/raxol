@@ -18,14 +18,41 @@
 # self-report or an internal `:state_change`), (3) belong to the CLAIMING
 # turn (H2 — a ref journaled under a different turn is `:foreign_turn`, even
 # when its offset postdates this turn's last mutation: the cross-turn
-# evidence spoof), and (4) postdate the turn's last mutating action. Stale
-# evidence (predating a later mutation) does not count. A done with no refs
-# is `{:error, :evidence_required}`; every reject leaves the turn open.
+# evidence spoof), (4) postdate the turn's last mutating action, and (5) not
+# be that last mutation's own result echo. Stale evidence (predating a later
+# mutation) does not count. A done with no refs is
+# `{:error, :evidence_required}`; every reject leaves the turn open.
+#
+# ## What counts as a mutation (U21-R3, the fail-safe ruling)
+#
+# EVERY completed `:tool_use` is a mutation. The real producer
+# (`Raxol.Agent.Contract.pump/3`) stamps no effect metadata on tool calls, and
+# the frozen effect taxonomy (harness-freeze-contracts.md §5.2) contains only
+# effect-BEARING classes and rules that effect enforcement is structural,
+# never self-reported. So an absent `effect_class` resolves toward "is a
+# mutation", and a stamped `mutating: false` (the `destructiveHint`-is-a-lie
+# class) can never remove a call from the mutation set. The earlier suite
+# semantics — trusting `mutating:`/`effect_class` stamps that no producer
+# emits — were themselves the CRITICAL finding of review round 3: on every
+# real journal `last_mutation` was nil and the staleness gate never fired.
 #
 # Evidence CLASS is validated, not its CONTENT (M1, explicit non-goal for
 # U21 — see the `:evidence_content_not_validated` contour): a `:tool_result`
 # that ran and reported failure still counts as evidence that a verification
 # tool RAN.
+#
+# ## Label key (review cross-references)
+#
+# H1/H2, M1/M2, L1–L4 — finding ids from PR #570's adversarial review rounds
+#   (severity High/Medium/Low + index), kept so each fix stays traceable to
+#   the finding it closes. "U21-R2 #N" / "U21-R3" — fixes from review rounds
+#   2 and 3 of the same PR.
+# §0 / §5.2 — sections of docs/proposals/in-flight/harness-freeze-contracts.md
+#   (§0 clause 7 is the decision-time-fold law; §5.2 the effect taxonomy).
+# meta-inv N — the red-suite meta-invariants in
+#   docs/proposals/in-flight/harness-invariants.md.
+# FI-6 — the roadmap future-invariant this unit implements
+#   (docs/proposals/in-flight/harness-roadmap.md §U21).
 #
 # ## Layout
 #
@@ -80,11 +107,50 @@ defmodule Raxol.Agent.Red.U21.Build do
     )
   end
 
-  @doc "A read-only tool_use — NOT a mutation (must not gate the evidence window)."
+  @doc """
+  A read-INTENDED tool_use, self-reporting `mutating: false`. Under the
+  fail-safe ruling (U21-R3) it STILL counts as a mutation: the flag is a
+  self-report, and no structural classification exists to prove the call
+  effect-free — keeping the stamp here is what lets the suite pin that the
+  gate ignores it.
+  """
   def read_action(id, opts \\ []),
-    do: ev(id, :item_completed, %{item_type: :tool_use, mutating: false, name: "fs_read"}, opts)
+    do:
+      ev(
+        id,
+        :item_completed,
+        %{item_type: :tool_use, mutating: false, name: "fs_read"},
+        opts
+      )
 
-  @doc "Evidence: a tool result / verification output (test run, file check)."
+  @doc """
+  A tool_use in the REAL producer's shape (`Contract.pump/3`): no
+  `effect_class`, no `mutating` flag — exactly the payload the fail-safe
+  mutation default exists for.
+  """
+  def tool_call(id, opts \\ []) do
+    ev(
+      id,
+      :item_completed,
+      %{
+        item_type: :tool_use,
+        name: Keyword.get(opts, :name, "fs_write"),
+        arguments: %{},
+        call_id: "call-#{id}"
+      },
+      opts
+    )
+  end
+
+  @doc """
+  Evidence: a tool result / verification output (test run, file check).
+
+  Default `name: "shell"` deliberately pairs with NO preceding tool_use in
+  any contour journal, so the result reads as an independent verification
+  output rather than some call's echo (echo pairing is by name +
+  nearest-preceding order — see the mutation-echo contour for the paired
+  case).
+  """
   def evidence(id, opts \\ []) do
     ev(
       id,
@@ -129,9 +195,14 @@ defmodule Raxol.Agent.Red.U21.Oracle do
 
   def evidence_class?(_), do: false
 
-  @doc "Mutation predicate: a state-changing tool_use (write/shell)."
+  @doc """
+  Mutation predicate — FAIL-SAFE (U21-R3): every completed `:tool_use` is a
+  mutation. The real producer stamps no effect metadata, the frozen taxonomy
+  (§5.2) has only effect-bearing classes, and a self-reported `mutating:`
+  flag may never remove a call from the mutation set.
+  """
   def mutating?(%{type: :item_completed, payload: p}),
-    do: Map.get(p, :item_type) == :tool_use and Map.get(p, :mutating) == true
+    do: Map.get(p, :item_type) == :tool_use
 
   def mutating?(_), do: false
 
@@ -191,12 +262,45 @@ defmodule Raxol.Agent.Red.U21.Oracle do
 
       ev ->
         cond do
-          not evidence_class?(ev) -> {:error, {:not_evidence, ref}}
-          ev.turn_id != turn_id -> {:error, {:foreign_turn, ref}}
-          last_mut != nil and ev.id <= last_mut -> {:error, {:stale_evidence, ref}}
-          true -> :ok
+          not evidence_class?(ev) ->
+            {:error, {:not_evidence, ref}}
+
+          ev.turn_id != turn_id ->
+            {:error, {:foreign_turn, ref}}
+
+          last_mut != nil and ev.id <= last_mut ->
+            {:error, {:stale_evidence, ref}}
+
+          mutation_echo?(journal, turn_id, ev, last_mut) ->
+            {:error, {:mutation_echo, ref}}
+
+          true ->
+            :ok
         end
     end
+  end
+
+  @doc """
+  Check 5 (U21-R3): a `:tool_result` produced BY the turn's last mutating
+  call is that mutation's own echo — it postdates the mutation trivially and
+  verifies nothing. Pairing is by tool name + nearest-preceding order within
+  the turn (the only pairing signal in the frozen v0 producer shape); an
+  unpaired result is not an echo.
+  """
+  def mutation_echo?(_journal, _turn_id, _ev, nil), do: false
+
+  def mutation_echo?(journal, turn_id, ev, last_mut) do
+    name = ev.payload[:name]
+
+    producing_calls =
+      journal
+      |> Enum.filter(fn cand ->
+        cand.turn_id == turn_id and mutating?(cand) and cand.id < ev.id and
+          name != nil and cand.payload[:name] == name
+      end)
+      |> Enum.map(& &1.id)
+
+    producing_calls != [] and Enum.max(producing_calls) == last_mut
   end
 end
 
@@ -206,8 +310,13 @@ end
 defmodule Raxol.Agent.Red.U21.Injector do
   @moduledoc false
 
+  # Every injector fabricates its accepted-done event at offset 9_999 — a
+  # sentinel comfortably beyond any contour or generated journal (max 8
+  # records), so the fake done can never collide with a real offset.
+
   # A correct implementation — proves every contour is satisfiable and gives
-  # the reds a target. NOT the production gate (which stays :not_implemented).
+  # the reds a target. NOT the production gate (`Raxol.Agent.DoneGate`, which
+  # the RedTest drives directly).
   #
   # (M2 note) `Reference.gate/3` is a thin wrapper around `Oracle.verdict/3`,
   # so "Reference satisfies every contour" is tautological with respect to
@@ -228,9 +337,10 @@ defmodule Raxol.Agent.Red.U21.Injector do
       case Oracle.verdict(journal, turn_id, refs) do
         {:ok, _} ->
           {:ok,
-           Build.ev(9_999, :turn_completed, %{final: true, refs: refs, usage: %{}},
-             turn_id: turn_id
-           )}
+           Build.ev(
+             9_999,
+             :turn_completed,
+             %{final: true, refs: refs, usage: %{}}, turn_id: turn_id)}
 
         err ->
           err
@@ -246,7 +356,11 @@ defmodule Raxol.Agent.Red.U21.Injector do
 
     @impl true
     def gate(_journal, turn_id, refs),
-      do: {:ok, Build.ev(9_999, :turn_completed, %{final: true, refs: refs}, turn_id: turn_id)}
+      do:
+        {:ok,
+         Build.ev(9_999, :turn_completed, %{final: true, refs: refs},
+           turn_id: turn_id
+         )}
   end
 
   # (b) checks existence + evidence-class but NOT ordering — must FAIL the stale-evidence red.
@@ -261,7 +375,10 @@ defmodule Raxol.Agent.Red.U21.Injector do
     def gate(journal, turn_id, refs) do
       Enum.reduce_while(
         refs,
-        {:ok, Build.ev(9_999, :turn_completed, %{final: true, refs: refs}, turn_id: turn_id)},
+        {:ok,
+         Build.ev(9_999, :turn_completed, %{final: true, refs: refs},
+           turn_id: turn_id
+         )},
         fn ref, acc ->
           case Build.resolve(journal, ref) do
             nil ->
@@ -291,7 +408,10 @@ defmodule Raxol.Agent.Red.U21.Injector do
 
       Enum.reduce_while(
         refs,
-        {:ok, Build.ev(9_999, :turn_completed, %{final: true, refs: refs}, turn_id: turn_id)},
+        {:ok,
+         Build.ev(9_999, :turn_completed, %{final: true, refs: refs},
+           turn_id: turn_id
+         )},
         fn ref, acc ->
           case Build.resolve(journal, ref) do
             nil ->
@@ -299,9 +419,14 @@ defmodule Raxol.Agent.Red.U21.Injector do
 
             ev ->
               cond do
-                not lenient_evidence?(ev) -> {:halt, {:error, {:not_evidence, ref}}}
-                last_mut != nil and ev.id <= last_mut -> {:halt, {:error, {:stale_evidence, ref}}}
-                true -> {:cont, acc}
+                not lenient_evidence?(ev) ->
+                  {:halt, {:error, {:not_evidence, ref}}}
+
+                last_mut != nil and ev.id <= last_mut ->
+                  {:halt, {:error, {:stale_evidence, ref}}}
+
+                true ->
+                  {:cont, acc}
               end
           end
         end
@@ -334,7 +459,10 @@ defmodule Raxol.Agent.Red.U21.Injector do
 
       Enum.reduce_while(
         refs,
-        {:ok, Build.ev(9_999, :turn_completed, %{final: true, refs: refs}, turn_id: turn_id)},
+        {:ok,
+         Build.ev(9_999, :turn_completed, %{final: true, refs: refs},
+           turn_id: turn_id
+         )},
         fn ref, acc ->
           case Build.resolve(journal, ref) do
             nil ->
@@ -342,9 +470,14 @@ defmodule Raxol.Agent.Red.U21.Injector do
 
             ev ->
               cond do
-                not Oracle.evidence_class?(ev) -> {:halt, {:error, {:not_evidence, ref}}}
-                last_mut != nil and ev.id <= last_mut -> {:halt, {:error, {:stale_evidence, ref}}}
-                true -> {:cont, acc}
+                not Oracle.evidence_class?(ev) ->
+                  {:halt, {:error, {:not_evidence, ref}}}
+
+                last_mut != nil and ev.id <= last_mut ->
+                  {:halt, {:error, {:stale_evidence, ref}}}
+
+                true ->
+                  {:cont, acc}
               end
           end
         end
@@ -369,23 +502,26 @@ defmodule Raxol.Agent.Red.U21.Contours do
 
     [
       # done with valid postdating evidence -> accepted
-      {:valid, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [3], :accept},
+      {:valid, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t,
+       [3], :accept},
       # done with NO refs -> evidence_required, no done event
-      {:evidence_required, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [],
+      {:evidence_required,
+       [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [],
        {:reject, :evidence_required}},
       # evidence PREDATES a later mutation -> stale
-      {:stale, [Build.turn_started(1), Build.evidence(2), Build.mutation(3)], t, [2],
-       {:reject, {:stale_evidence, 2}}},
+      {:stale, [Build.turn_started(1), Build.evidence(2), Build.mutation(3)], t,
+       [2], {:reject, {:stale_evidence, 2}}},
       # ref points at an internal state_change -> not evidence-class
       {:not_evidence_state_change,
-       [Build.turn_started(1), Build.mutation(2), Build.state_change(3)], t, [3],
-       {:reject, {:not_evidence, 3}}},
+       [Build.turn_started(1), Build.mutation(2), Build.state_change(3)], t,
+       [3], {:reject, {:not_evidence, 3}}},
       # ref points at the agent's own message text -> not evidence-class
       {:not_evidence_self_report,
        [Build.turn_started(1), Build.mutation(2), Build.self_report(3)], t, [3],
        {:reject, {:not_evidence, 3}}},
       # ref names an offset that does not exist
-      {:missing_ref, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [99],
+      {:missing_ref,
+       [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [99],
        {:reject, {:missing_ref, 99}}},
       # H2 — cross-turn evidence spoof: turn "t"'s last mutation is at offset
       # 2; a DIFFERENT turn ("other") starts afterward and journals its own
@@ -413,17 +549,36 @@ defmodule Raxol.Agent.Red.U21.Contours do
          Build.mutation(2),
          Build.evidence(3, result: "tests: 0 passed, 12 FAILED")
        ], t, [3], :accept},
-      # L3 — a read-only action AFTER the last mutation does not move the
-      # evidence window forward: only MUTATIONS gate staleness, so evidence
-      # that postdates the last mutation is still valid even when a later
-      # read-only action follows it.
-      {:read_action_does_not_gate,
-       [Build.turn_started(1), Build.mutation(2), Build.evidence(3), Build.read_action(4)], t,
-       [3], :accept}
+      # L3, INVERTED by the U21-R3 fail-safe ruling — a tool_use AFTER the
+      # evidence gates it, even one self-reporting `mutating: false`: the flag
+      # is a self-report and no structural classification exists to prove the
+      # call effect-free, so the read-intended action at offset 4 counts as
+      # the last mutation and the evidence at 3 goes stale. (Pre-R3 this
+      # contour trusted the stamp and expected :accept — the exact
+      # inoperative-staleness bug of the round-3 CRITICAL finding.)
+      {:tool_use_after_evidence_gates,
+       [
+         Build.turn_started(1),
+         Build.mutation(2),
+         Build.evidence(3),
+         Build.read_action(4)
+       ], t, [3], {:reject, {:stale_evidence, 3}}},
+      # U21-R3 — the mutation-echo spoof: the cited result at offset 3 is the
+      # OWN echo of the last mutating call at offset 2 (paired by name +
+      # nearest-preceding order). It postdates the mutation trivially and
+      # verifies nothing; a gate checking only class + ordering would accept
+      # the byproduct of the very action that needs verifying.
+      {:mutation_echo,
+       [
+         Build.turn_started(1),
+         Build.tool_call(2, name: "fs_write"),
+         Build.evidence(3, name: "fs_write", result: "wrote 42 bytes")
+       ], t, [3], {:reject, {:mutation_echo, 3}}}
     ]
   end
 
-  def by_name(name), do: Enum.find(contours(), fn {n, _, _, _, _} -> n == name end)
+  def by_name(name),
+    do: Enum.find(contours(), fn {n, _, _, _, _} -> n == name end)
 
   @doc "Collapse a verdict to its accept/reject shape for equality across impls."
   def shape({:ok, _}), do: :accept
@@ -436,6 +591,7 @@ defmodule Raxol.Agent.Red.U21.Contours do
   def outcome_class({:error, {:not_evidence, _}}), do: :not_evidence
   def outcome_class({:error, {:missing_ref, _}}), do: :missing_ref
   def outcome_class({:error, {:foreign_turn, _}}), do: :foreign_turn
+  def outcome_class({:error, {:mutation_echo, _}}), do: :mutation_echo
 end
 
 # ---------------------------------------------------------------------------
@@ -445,29 +601,20 @@ defmodule Raxol.Agent.Red.U21.Gen do
   @moduledoc false
   alias Raxol.Agent.Red.U21.Build
 
-  # H1/L1 — a REAL fixed seed.
+  # H1/L1 — determinism contract for `sample/1`: same `n` -> byte-identical
+  # output, every run, any process, with the `n` samples still diverse.
   #
-  # `:rand.seed(:exsss, @seed)` before `Enum.take/2` (the old code) was
-  # decorative: enumerating a bare `StreamData` generator via the
-  # `Enumerable` protocol reseeds from `:os.timestamp()` on every reduce
-  # (see `StreamData.__reduce__/3`), ignoring the calling process's `:rand`
-  # state entirely — `sample/1` produced a DIFFERENT journal set on every
-  # call, same process or not (verified empirically: this was the H1 bug).
+  # Both are needed at once, which is why each sample index gets its OWN
+  # deterministic seed (`@seed + index`) through `StreamData.__call__/3`
+  # (the public entry point `seeded/2` and the property engine build on).
+  # Enumerating a generator through the `Enumerable` protocol reseeds from
+  # the wall clock (non-reproducible), and one shared seed for a whole take
+  # collapses every element onto a single branch because our fixed-length
+  # `one_of`/`member_of` choices don't consult StreamData's growing `size`
+  # parameter (no diversity). Per-index seeding is the only combination that
+  # provides both.
   #
-  # `StreamData.seeded/2` looked like the fix but isn't sufficient on its
-  # own either: it pins ONE fixed internal seed for the whole generator, and
-  # `Enum.take/2` only diversifies successive elements through the growing
-  # `size` parameter — our `one_of`/`member_of` choices don't consult `size`
-  # (we fix explicit min/max lengths), so a single shared seed collapsed
-  # every sampled element onto the same branch (verified empirically: 400
-  # samples, all `evidence_required`).
-  #
-  # The real fix: derive an INDEPENDENT deterministic seed per sample index
-  # via `StreamData.__call__/3` (the same public entry point `seeded/2` and
-  # `check_all` build on) instead of one shared seed across a whole
-  # `Enum.take`. `sample(n)` is now byte-identical every run, in any
-  # process, with the n samples still diverse — a failure is reproducible by
-  # construction, no separate "dump the seed" step needed.
+  # The value is arbitrary (a date typed as hex); only its FIXEDNESS matters.
   @seed 0x51212026
 
   def steps_gen do
@@ -499,12 +646,16 @@ defmodule Raxol.Agent.Red.U21.Gen do
       # if it checks ordering/class but not ownership.
       own_evidence_offsets =
         journal
-        |> Enum.filter(&(&1.payload[:item_type] == :tool_result and &1.turn_id == "t"))
+        |> Enum.filter(
+          &(&1.payload[:item_type] == :tool_result and &1.turn_id == "t")
+        )
         |> Enum.map(& &1.id)
 
       foreign_evidence_offsets =
         journal
-        |> Enum.filter(&(&1.payload[:item_type] == :tool_result and &1.turn_id != "t"))
+        |> Enum.filter(
+          &(&1.payload[:item_type] == :tool_result and &1.turn_id != "t")
+        )
         |> Enum.map(& &1.id)
 
       refs_gen =
@@ -521,7 +672,9 @@ defmodule Raxol.Agent.Red.U21.Gen do
           StreamData.constant(foreign_evidence_offsets)
         ])
 
-      StreamData.bind(refs_gen, fn refs -> StreamData.constant({journal, "t", refs}) end)
+      StreamData.bind(refs_gen, fn refs ->
+        StreamData.constant({journal, "t", refs})
+      end)
     end)
   end
 
@@ -548,7 +701,12 @@ defmodule Raxol.Agent.Red.U21.Gen do
 
   defp build_journal(steps) do
     first = Build.turn_started(1, turn_id: "t")
-    rest = steps |> Enum.with_index(2) |> Enum.map(fn {step, off} -> build_step(step, off) end)
+
+    rest =
+      steps
+      |> Enum.with_index(2)
+      |> Enum.map(fn {step, off} -> build_step(step, off) end)
+
     [first | rest]
   end
 
@@ -558,7 +716,9 @@ defmodule Raxol.Agent.Red.U21.Gen do
   defp build_step(:self_report, off), do: Build.self_report(off, turn_id: "t")
   # H2 — evidence journaled under a DIFFERENT (foreign) turn, interleaved
   # into the same session journal, as real concurrent-turn journals would be.
-  defp build_step(:foreign_evidence, off), do: Build.evidence(off, turn_id: "other")
+  defp build_step(:foreign_evidence, off),
+    do: Build.evidence(off, turn_id: "other")
+
   defp build_step(:state_change, off), do: Build.state_change(off)
 end
 
@@ -579,7 +739,10 @@ defmodule Raxol.Agent.Red.U21.Fired do
   end
 
   def fire(pid, site),
-    do: Agent.update(pid, fn s -> %{s | fired: Map.update(s.fired, site, 1, &(&1 + 1))} end)
+    do:
+      Agent.update(pid, fn s ->
+        %{s | fired: Map.update(s.fired, site, 1, &(&1 + 1))}
+      end)
 
   def assert_all_fired!(pid) do
     %{armed: armed, fired: fired} = Agent.get(pid, & &1)
@@ -612,19 +775,19 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
   alias Raxol.Agent.DoneGate
   alias Raxol.Agent.Red.U21.{Build, Contours, Gen, Oracle}
 
-  # Route every gate call through apply/3 so the compiler keeps the return type
-  # DYNAMIC. The skeleton returns a literal {:error, :not_implemented}; a direct
-  # `DoneGate.gate/3` call would let the type system flag every `{:ok, _}` match
-  # as a dead clause (breaking --warnings-as-errors) — the exact narrowing this
-  # red suite must survive until the real gate ships the full verdict union.
-  defp gate(journal, turn, refs), do: apply(DoneGate, :gate, [journal, turn, refs])
+  # Route every gate call through apply/3 so the compiler keeps the return
+  # type DYNAMIC: the suite must stay compilable against ANY gate
+  # implementation (including a stub whose literal return type would
+  # otherwise let the type system flag `{:ok, _}` matches as dead clauses
+  # under --warnings-as-errors).
+  defp gate(journal, turn, refs),
+    do: apply(DoneGate, :gate, [journal, turn, refs])
 
   describe "positive contours — accepted claims hand back turn_completed{final: true}" do
-    # :valid is the base postdating-evidence accept. :evidence_content_not_validated
-    # (M1) and :read_action_does_not_gate (L3) are also accept-shaped —
-    # looped here rather than hand-duplicated so every accept contour gets
-    # the identical assertion set.
-    for name <- [:valid, :evidence_content_not_validated, :read_action_does_not_gate] do
+    # :valid is the base postdating-evidence accept; :evidence_content_not_validated
+    # (M1) is also accept-shaped — looped here rather than hand-duplicated so
+    # every accept contour gets the identical assertion set.
+    for name <- [:valid, :evidence_content_not_validated] do
       test "accept: #{name} — the gate hands back a turn_completed{final: true} carrying its evidence refs" do
         {_, journal, turn, refs, _} = Contours.by_name(unquote(name))
 
@@ -665,7 +828,10 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
     property "gate agrees with the evidence spec on every generated journal" do
       # The generator MUST include the stale-evidence ordering, or the property
       # is vacuous; the ControlsTest coverage guard enforces that separately.
-      check all({journal, turn, refs} <- Gen.journal_and_refs_gen(), max_runs: 200) do
+      check all(
+              {journal, turn, refs} <- Gen.journal_and_refs_gen(),
+              max_runs: 200
+            ) do
         assert Contours.shape(gate(journal, turn, refs)) ==
                  Contours.shape(Oracle.verdict(journal, turn, refs))
       end
@@ -697,14 +863,14 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
     end
   end
 
-  describe "U21-R2 #2 — mutating-ness is derived from type, not the stamped `mutating` flag" do
+  describe "U21-R2 #2 — mutating-ness is derived from type, never from stamped flags" do
     test "an effect-bearing tool_use with `mutating: false` still counts as a mutation" do
-      # A state-affecting tool call whose producer self-reports `mutating: false`
-      # but which carries an intrinsic effect_class. If the gate trusted the
-      # stamped flag, this would not count as a mutation, `last_mutation` would
-      # be nil, and the pre-mutation evidence at offset 2 would wrongly gate the
-      # done. Deriving from effect_class makes offset 3 a mutation, so the
-      # evidence that predates it is stale.
+      # A state-affecting tool call whose producer self-reports `mutating:
+      # false`. If the gate trusted the stamped flag, this would not count as
+      # a mutation, `last_mutation` would be nil, and the pre-mutation
+      # evidence at offset 2 would wrongly satisfy the done. Under the
+      # fail-safe default (every tool_use is a mutation) offset 3 gates, so
+      # the evidence that predates it is stale.
       spoofed_mutation =
         Build.ev(
           3,
@@ -728,7 +894,11 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
         Build.ev(
           3,
           :item_completed,
-          %{item_type: :tool_use, effect_class: :reversible_local, name: "fs_write"},
+          %{
+            item_type: :tool_use,
+            effect_class: :reversible_local,
+            name: "fs_write"
+          },
           turn_id: "t"
         )
 
@@ -746,7 +916,8 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
       # verdict is unchanged — the string-keyed form must not silently pass
       # (nil accessors) or diverge from the atom-keyed form on any branch.
       for {name, journal, turn, refs, _expected} <- Contours.contours() do
-        replayed = Enum.map(journal, fn e -> e |> Jason.encode!() |> Jason.decode!() end)
+        replayed =
+          Enum.map(journal, fn e -> e |> Jason.encode!() |> Jason.decode!() end)
 
         assert Contours.shape(gate(replayed, turn, refs)) ==
                  Contours.shape(gate(journal, turn, refs)),
@@ -761,7 +932,10 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
       # interleaved concurrent turn or a GC-dropped prefix would leave it). The
       # Writer does not re-stamp session_id at append, so the emitted done must
       # already carry the CLAIMING turn's session — not the head's.
-      head = %{Build.turn_started(1, turn_id: "other") | session_id: "sess-OTHER"}
+      head = %{
+        Build.turn_started(1, turn_id: "other")
+        | session_id: "sess-OTHER"
+      }
 
       journal = [
         head,
@@ -791,12 +965,14 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
 
   # Route the real gate through apply/3 (same reason as the RedTest helper):
   # keep the return type dynamic so {:ok, _} matches never narrow to dead code.
-  defp real_gate(journal, turn, refs), do: apply(DoneGate, :gate, [journal, turn, refs])
+  defp real_gate(journal, turn, refs),
+    do: apply(DoneGate, :gate, [journal, turn, refs])
 
   describe "positive anchor — the contours are satisfiable" do
     test "a correct reference implementation satisfies every contour" do
       for {name, journal, turn, refs, expected} <- Contours.contours() do
-        assert Contours.shape(Injector.Reference.gate(journal, turn, refs)) == expected,
+        assert Contours.shape(Injector.Reference.gate(journal, turn, refs)) ==
+                 expected,
                "reference failed the #{name} contour"
       end
     end
@@ -806,13 +982,19 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
     test "every dead injector fails exactly its targeted contour, and every armed site fires (meta-inv 1)" do
       fired = Fired.new()
 
-      for site <- [:accepts_without_refs, :existence_only, :text_as_evidence, :skips_turn_check],
+      for site <- [
+            :accepts_without_refs,
+            :existence_only,
+            :text_as_evidence,
+            :skips_turn_check
+          ],
           do: Fired.arm(fired, site)
 
       # (a) accepts-without-refs must fail the evidence-required red.
       {_, j_a, t_a, r_a, exp_a} = Contours.by_name(:evidence_required)
 
-      refute Contours.shape(Injector.AcceptsWithoutRefs.gate(j_a, t_a, r_a)) == exp_a,
+      refute Contours.shape(Injector.AcceptsWithoutRefs.gate(j_a, t_a, r_a)) ==
+               exp_a,
              "AcceptsWithoutRefs should NOT satisfy the evidence-required red"
 
       Fired.fire(fired, :accepts_without_refs)
@@ -828,7 +1010,8 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
       # (c) text-as-evidence must fail the evidence-class red (self-report ref).
       {_, j_c, t_c, r_c, exp_c} = Contours.by_name(:not_evidence_self_report)
 
-      refute Contours.shape(Injector.TextAsEvidence.gate(j_c, t_c, r_c)) == exp_c,
+      refute Contours.shape(Injector.TextAsEvidence.gate(j_c, t_c, r_c)) ==
+               exp_c,
              "TextAsEvidence should NOT satisfy the evidence-class red"
 
       Fired.fire(fired, :text_as_evidence)
@@ -836,7 +1019,8 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
       # (d) H2 — skips-turn-check must fail the new foreign-turn red.
       {_, j_d, t_d, r_d, exp_d} = Contours.by_name(:foreign_turn)
 
-      refute Contours.shape(Injector.SkipsTurnCheck.gate(j_d, t_d, r_d)) == exp_d,
+      refute Contours.shape(Injector.SkipsTurnCheck.gate(j_d, t_d, r_d)) ==
+               exp_d,
              "SkipsTurnCheck should NOT satisfy the foreign-turn red"
 
       Fired.fire(fired, :skips_turn_check)
@@ -854,7 +1038,8 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
         disagreements =
           Gen.sample(300)
           |> Enum.count(fn {j, t, r} ->
-            Contours.shape(mod.gate(j, t, r)) != Contours.shape(Oracle.verdict(j, t, r))
+            Contours.shape(mod.gate(j, t, r)) !=
+              Contours.shape(Oracle.verdict(j, t, r))
           end)
 
         assert disagreements > 0, "the fold property would never catch #{name}"
@@ -869,10 +1054,13 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
       # deterministic, reproducible failure, not a flaky one.
       classes =
         Gen.sample(400)
-        |> Enum.map(fn {j, t, r} -> Contours.outcome_class(Oracle.verdict(j, t, r)) end)
+        |> Enum.map(fn {j, t, r} ->
+          Contours.outcome_class(Oracle.verdict(j, t, r))
+        end)
         |> Enum.frequencies()
 
-      assert Map.get(classes, :accept, 0) > 0, "no accept case generated (#{inspect(classes)})"
+      assert Map.get(classes, :accept, 0) > 0,
+             "no accept case generated (#{inspect(classes)})"
 
       assert Map.get(classes, :evidence_required, 0) > 0,
              "no evidence-required case (#{inspect(classes)})"
@@ -880,26 +1068,16 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
       assert Map.get(classes, :stale_evidence, 0) > 0,
              "generator never cited stale evidence — the stale red is vacuous (#{inspect(classes)})"
 
-      assert Map.get(classes, :not_evidence, 0) > 0, "no not-evidence case (#{inspect(classes)})"
-      assert Map.get(classes, :missing_ref, 0) > 0, "no missing-ref case (#{inspect(classes)})"
+      assert Map.get(classes, :not_evidence, 0) > 0,
+             "no not-evidence case (#{inspect(classes)})"
+
+      assert Map.get(classes, :missing_ref, 0) > 0,
+             "no missing-ref case (#{inspect(classes)})"
 
       assert Map.get(classes, :foreign_turn, 0) > 0,
              "generator never cited foreign-turn evidence — the H2 cross-turn-spoof red is vacuous (#{inspect(classes)})"
     end
   end
-
-  # ===========================================================================
-  # M2 — CI tripwire (REMOVED). This block asserted the contour reds were
-  # 0-passing against the `DoneGate` skeleton, so that the day U21 landed it
-  # would fail LOUDLY and force the reds' flip red -> green to be an
-  # intentional, visible event. U21 has now landed (the skeleton is replaced by
-  # the real gate), the reds pass GREEN un-excluded, and this tripwire has
-  # served its purpose — leaving it would flip it into a permanent false
-  # failure (`passing == 0` no longer holds). Its `RedRunner` helper module was
-  # removed with it. The lasting anchors that the reds are non-vacuous remain:
-  # the positive-anchor Reference check, the dead-injector controls, and the
-  # generator-coverage guard below.
-  # ===========================================================================
 
   # ===========================================================================
   # U21-R2 #5 — mutation-classification boundary anchor (impl-independent).
@@ -912,7 +1090,7 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
   # from neither predicate): if the gate's notion of "what is a mutation"
   # drifts, this fails even where the coupled fold property cannot see it.
   # ===========================================================================
-  describe "U21-R2 #5 — mutation-classification boundary (hand-authored literals)" do
+  describe "U21-R2 #5 / U21-R3 — mutation-classification boundary (hand-authored literals)" do
     test "an effect-bearing tool_use with `mutating: false` counts as a mutation" do
       # Literal: evidence at offset 2 precedes an effect-bearing tool_use at
       # offset 3 whose producer stamped `mutating: false`. Independent of any
@@ -922,7 +1100,11 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
         Build.ev(
           3,
           :item_completed,
-          %{item_type: :tool_use, mutating: false, effect_class: :reversible_local},
+          %{
+            item_type: :tool_use,
+            mutating: false,
+            effect_class: :reversible_local
+          },
           turn_id: "t"
         )
 
@@ -931,18 +1113,155 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
       assert real_gate(journal, "t", [2]) == {:error, {:stale_evidence, 2}}
     end
 
-    test "a read-only tool_use (no effect_class) is NOT a mutation and does not gate later evidence" do
-      # Literal: a real mutation at 2, evidence at 3, then a read-only tool_use
-      # at 4. The read must NOT count as a mutation, so evidence at 3 (which
-      # postdates the real mutation) still holds — the correct verdict is
-      # exactly an accept whose done cites [3].
-      read_only =
-        Build.ev(4, :item_completed, %{item_type: :tool_use, name: "fs_read"}, turn_id: "t")
+    test "a bare tool_use (no effect_class, no flag — the REAL producer shape) IS a mutation" do
+      # Literal for the round-3 CRITICAL: `Contract.pump/3` emits tool_use as
+      # %{item_type: :tool_use, name, arguments, call_id} — no effect_class,
+      # no mutating flag. A gate that only recognizes stamped mutations sees
+      # `last_mutation` nil on every real journal and its staleness check
+      # never fires. Fail-safe: the bare call at offset 3 IS a mutation, so
+      # the evidence at offset 2 that predates it is stale.
+      journal = [
+        Build.turn_started(1),
+        Build.evidence(2),
+        Build.tool_call(3, name: "fs_write")
+      ]
 
-      journal = [Build.turn_started(1), Build.mutation(2), Build.evidence(3), read_only]
+      assert real_gate(journal, "t", [2]) == {:error, {:stale_evidence, 2}}
+    end
 
-      assert {:ok, done} = real_gate(journal, "t", [3])
-      assert done.payload.refs == [3]
+    test "a read-INTENDED tool_use self-reporting `mutating: false` still gates later evidence" do
+      # Literal for the inverted L3: a real mutation at 2, evidence at 3, then
+      # a tool_use at 4 stamped `mutating: false`. The stamp is a self-report
+      # (the `destructiveHint`-is-a-lie class, §5.2) and may never remove the
+      # call from the mutation set — so offset 4 gates, and the evidence at 3
+      # goes stale.
+      journal = [
+        Build.turn_started(1),
+        Build.mutation(2),
+        Build.evidence(3),
+        Build.read_action(4)
+      ]
+
+      assert real_gate(journal, "t", [3]) == {:error, {:stale_evidence, 3}}
+    end
+
+    test "the last mutation's own result echo is not evidence (mutation_echo)" do
+      # Literal for the round-3 HIGH: every tool call emits a tool_result at a
+      # later offset than its tool_use, so the echo of the last mutation
+      # always class-passes and postdates it — citing it would let a done be
+      # green-lit by the byproduct of the very action needing verification.
+      journal = [
+        Build.turn_started(1),
+        Build.tool_call(2, name: "fs_write"),
+        Build.evidence(3, name: "fs_write", result: "wrote 42 bytes")
+      ]
+
+      assert real_gate(journal, "t", [3]) == {:error, {:mutation_echo, 3}}
+    end
+  end
+end
+
+# ===========================================================================
+# U21-R3 — regressions built from the REAL producer (`Contract.pump/3`), not
+# the synthetic Build helpers. Round 3's CRITICAL finding was exactly that the
+# suite was green only on synthetic journals whose payloads carried fields
+# production never stamps — these tests journal a run through the real
+# producer and gate THAT.
+# ===========================================================================
+defmodule Raxol.Agent.Red.U21RealProducerRegressionTest do
+  # async: false — SessionStreamer is a named singleton.
+  use ExUnit.Case, async: false
+
+  alias Raxol.Agent.Contract
+  alias Raxol.Agent.Contract.Event
+  alias Raxol.Agent.DoneGate
+  alias Raxol.Agent.SessionStreamer
+
+  setup do
+    start_supervised!({SessionStreamer, []})
+    :ok
+  end
+
+  # Drew's round-3 failure scenario, produced for real: run tests (pass), THEN
+  # edit code, then try to cite the pre-edit test run as evidence.
+  #
+  # Journal produced (all durable): 1 turn_started, 2 tool_use(run_tests),
+  # 3 tool_result(run_tests), 4 tool_use(fs_write), 5 tool_result(fs_write),
+  # 6 message, 7 turn_completed{final: true}.
+  defp real_journal do
+    session_id = "u21-real-#{System.unique_integer([:positive])}"
+    :ok = SessionStreamer.subscribe(session_id)
+
+    stream = [
+      {:tool_use, %{name: "run_tests", id: "call-1", arguments: %{}}},
+      {:tool_result,
+       %{name: "run_tests", result: "tests: 12 passed, 0 failed"}},
+      {:tool_use,
+       %{name: "fs_write", id: "call-2", arguments: %{path: "lib/a.ex"}}},
+      {:tool_result, %{name: "fs_write", result: "wrote 42 bytes"}},
+      {:done, %{content: "All fixed.", usage: %{}}}
+    ]
+
+    {:ok, _} = Contract.pump(session_id, stream, prompt: "fix the bug")
+
+    journal = drain_events(session_id)
+    [%Event{turn_id: turn_id} | _] = journal
+    {journal, turn_id}
+  end
+
+  test "the real producer stamps neither effect_class nor mutating on tool_use (regression premise)" do
+    # If this ever fails, the producer grew effect stamping and the fail-safe
+    # default below must be re-derived against the new shape.
+    {journal, _turn} = real_journal()
+
+    tool_uses = Enum.filter(journal, &(&1.payload[:item_type] == :tool_use))
+    assert tool_uses != []
+
+    for %Event{payload: payload} <- tool_uses do
+      refute Map.has_key?(payload, :effect_class)
+      refute Map.has_key?(payload, :mutating)
+    end
+  end
+
+  test "stale evidence predating a real (unstamped) tool_use mutation is rejected" do
+    # Pre-fix, `last_mutation` was nil on this journal (no stamped fields), so
+    # the pre-edit test run at offset 3 wrongly satisfied the done.
+    {journal, turn} = real_journal()
+
+    assert DoneGate.gate(journal, turn, [3]) == {:error, {:stale_evidence, 3}}
+  end
+
+  test "the last mutation's own echo in a real journal cannot green-light the done" do
+    # Offset 5 is fs_write's own tool_result — it postdates the mutation at 4
+    # trivially and verifies nothing.
+    {journal, turn} = real_journal()
+
+    assert DoneGate.gate(journal, turn, [5]) == {:error, {:mutation_echo, 5}}
+  end
+
+  test "fail-closed: no offset in a real v0 journal is acceptable evidence" do
+    # Intentional (see the DoneGate moduledoc "Wiring status"): with no
+    # structural effect classification in the frozen producer shape, every
+    # tool call gates and every result is some call's echo — the gate accepts
+    # nothing until F2/U8 land a verification class. This pins that the gate
+    # fails CLOSED on real journals rather than silently open (the round-3
+    # CRITICAL failure mode).
+    {journal, turn} = real_journal()
+
+    for %Event{id: offset} <- journal do
+      refute match?({:ok, _}, DoneGate.gate(journal, turn, [offset]))
+    end
+  end
+
+  defp drain_events(session_id, acc \\ []) do
+    receive do
+      {:session_event, ^session_id, %Event{tier: :durable} = event} ->
+        drain_events(session_id, [event | acc])
+
+      {:session_event, ^session_id, %Event{}} ->
+        drain_events(session_id, acc)
+    after
+      100 -> Enum.reverse(acc)
     end
   end
 end
