@@ -1,28 +1,27 @@
 defmodule Raxol.UI.Rendering.PaintAuthority.ModeSelect do
   @moduledoc """
-  T3's startup mode-pick decision: caps + env -> which `PaintAuthority`
-  profile a session renders through
-  (`docs/proposals/in-flight/harness-ui-roadmap.md`, unit T3 —
-  "degradation ladder").
+  The degradation ladder's startup mode-pick decision: caps + env ->
+  which `PaintAuthority` profile a session renders through.
 
   This is a PURE function. It never calls `System.get_env/1` or does any
-  I/O itself -- callers (T13a's assembler, or a `mix run` entry point) are
-  responsible for gathering the env map and passing it in, exactly the
-  same discipline `Raxol.Terminal.Capabilities.Classifier.classify/3`
-  already uses for its own env seed (`04-capability.md`: "env sniffing is
-  only ever a free first-pass seed"). Keeping the decision pure is what
-  makes the full mode-pick matrix table-testable without a pty or a real
-  tmux session.
+  I/O itself -- callers (the assembled harness's assembler, or a `mix run`
+  entry point) are responsible for gathering the env map and passing it
+  in, exactly the same discipline
+  `Raxol.Terminal.Capabilities.Classifier.classify/3` already uses for its
+  own env seed (env sniffing is only ever a free first-pass seed). Keeping
+  the decision pure is what makes the full mode-pick matrix table-testable
+  without a pty or a real tmux session.
 
   ## The three tiers
 
-    * `:inline_log` — the default: `InlineAuthority` (T2b/T2c), full
-      DECSTBM-pinned footer + scrolling history.
-    * `:tmux_conservative` — NOT a separate authority module. Per the
-      roadmap: "tmux tier per T0: no OSC marks assumed consumed, clamped
-      caps, possibly transient-region algorithm." T1's capability ladder
-      already clamps `%Capabilities{}` for a detected multiplexer before
-      it ever reaches `InlineAuthority.new/5` (`reflow_capable?/1` is
+    * `:inline_log` — the default: `InlineAuthority` (the append path +
+      the footer viewport), full DECSTBM-pinned footer + scrolling
+      history.
+    * `:tmux_conservative` — NOT a separate authority module. The tmux
+      tier assumes no OSC marks are consumed, clamps caps, and possibly
+      uses a transient-region algorithm; the capability ladder already
+      clamps `%Capabilities{}` for a detected multiplexer before it ever
+      reaches `InlineAuthority.new/5` (`reflow_capable?/1` is
       conservatively `false` for anything that isn't measured, and tmux is
       never on that allowlist); `ModeSelect` only picks the TIER NAME so a
       caller knows to route through that same `InlineAuthority` with the
@@ -31,7 +30,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ModeSelect do
       not add one.
     * `:flat` — `FlatAuthority` (this unit, sibling module): append-only,
       zero regions, zero cursor jumps. The screen-reader answer, the
-      CI/pipe answer, the block-hater answer (AD-U2).
+      CI/pipe answer, the block-hater answer.
 
   ## Rule order
 
@@ -156,7 +155,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ModeSelect do
       check is then skipped (treated as non-degenerate), matching every
       other rule's fail-open-to-`:inline_log` default.
     * `:footer_rows` — the footer row count the caller intends to pin
-      (`N` in the roadmap's `H - N` split). Defaults to `0`. A negative
+      (`N` in the `H - N` split). Defaults to `0`. A negative
       or non-integer value is also treated as fail-open-to-non-degenerate
       rather than raised — `ScrollRegionManager.degenerate?/2` itself
       guards `footer_rows >= 0`, so this module has to guard the same
@@ -177,9 +176,9 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ModeSelect do
 
   @doc """
   Same mode-pick as `select/3`, plus the `reason()` the pick came from
-  (see the `t:reason/0` typedoc). This is the seam T13a's assembler uses
-  to print a startup notice ("routing through :flat because geometry is
-  too small for a footer" and similar).
+  (see the `t:reason/0` typedoc). This is the seam the assembled harness's
+  assembler uses to print a startup notice ("routing through :flat
+  because geometry is too small for a footer" and similar).
   """
   @spec select_with_reason(Capabilities.t() | nil, env(), keyword()) ::
           {mode(), reason()}

@@ -1,12 +1,10 @@
 defmodule Raxol.UI.Rendering.PaintAuthority.FlatAuthority do
   @moduledoc """
-  T3's `:flat` tier: the append-only, zero-region, zero-cursor-jump
-  `PaintAuthority` implementation
-  (`docs/proposals/in-flight/harness-ui-roadmap.md`, unit T3 —
-  "degradation ladder"). Picked by
+  The degradation ladder's `:flat` tier: the append-only, zero-region,
+  zero-cursor-jump `PaintAuthority` implementation. Picked by
   `Raxol.UI.Rendering.PaintAuthority.ModeSelect.select/3` for `TERM=dumb`,
   non-tty, CI-without-tty, and degenerate-geometry sessions — the
-  screen-reader answer, the CI/pipe answer, the block-hater answer (AD-U2).
+  screen-reader answer, the CI/pipe answer, the block-hater answer.
 
   ## The SGR/escape decision: zero escape bytes, enforced IN THIS MODULE
 

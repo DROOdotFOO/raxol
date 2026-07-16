@@ -1,21 +1,20 @@
 defmodule Raxol.Harness.T3DegradationLadderTest do
   @moduledoc """
-  Acceptance suite for roadmap unit T3 (degradation ladder):
-  `docs/proposals/in-flight/harness-ui-roadmap.md` — "Mode pick at
-  startup: caps + env override -> `:inline_log` | `:tmux_conservative` |
-  `:flat`... same fixture renders correct linear transcript with
-  `TERM=dumb`; flat output contains no cursor-move/CUP/scroll sequences
-  (mechanical assert); tmux env picks the conservative tier."
+  Acceptance suite for the degradation ladder: mode pick at startup (caps
+  + env override -> `:inline_log` | `:tmux_conservative` | `:flat`); the
+  same fixture renders a correct linear transcript with `TERM=dumb`; flat
+  output contains no cursor-move/CUP/scroll sequences (mechanical
+  assert); tmux env picks the conservative tier.
 
-  Four groups, mirroring the unit's brief:
+  Four groups:
 
     1. Mode-pick matrix — table + property coverage of
        `ModeSelect.select/3` over caps x env x geometry combinations.
     2. THE mechanical flat assert — a representative fixture driven
        through `FlatAuthority` contains zero escape-sequence tokens.
-    3. R8 demonstrated-red — a deliberately-wrong flat writer (one CUP)
-       is caught by the same mechanical assert; the real `FlatAuthority`
-       passes the identical fixture cleanly.
+    3. A deliberately-wrong flat writer (one CUP) is caught by the same
+       mechanical assert; the real `FlatAuthority` passes the identical
+       fixture cleanly.
     4. Same-fixture parity — `InlineAuthority` and `FlatAuthority`, driven
        with the same fixture, agree on LINE CONTENT (styling/positioning
        aside).
@@ -34,10 +33,10 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
   }
 
   # ---------------------------------------------------------------------
-  # A deliberately-wrong flat writer (R8 fixture): same shape as
+  # A deliberately-wrong flat writer: same shape as
   # `Raxol.Harness.Test.BuggyAuthority` but scoped to this unit, since
-  # BuggyAuthority's existing streams are all T2b/T2c (footer/history)
-  # shaped, not "a flat writer that shouldn't move the cursor at all."
+  # BuggyAuthority's existing streams are all footer/history shaped, not
+  # "a flat writer that shouldn't move the cursor at all."
   # ---------------------------------------------------------------------
   defmodule BuggyFlatAuthority do
     @moduledoc """
@@ -80,12 +79,13 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
   @footer_rows 2
 
   # A representative session: a mix of plain lines, a multi-line "tool
-  # call" block, and unicode content -- close enough to the shape T7's
-  # journal-fold projection will eventually hand this unit (a list of
-  # sealed blocks, each a list of plain text lines with NO terminator
-  # baked in yet) without depending on T7's JSONL fixtures, which are
-  # journal-envelope shaped, not render-byte shaped (T13a's job to bridge
-  # the two, not this unit's).
+  # call" block, and unicode content -- close enough to the shape the
+  # block builder's journal-fold projection will eventually hand this
+  # unit (a list of sealed blocks, each a list of plain text lines with
+  # NO terminator baked in yet) without depending on the block builder's
+  # JSONL fixtures, which are journal-envelope shaped, not render-byte
+  # shaped (bridging the two is the assembled harness's job, not this
+  # unit's).
   @fixture_blocks [
     ["assistant: analyzing the request..."],
     ["tool_call: ls -la", "  total 24", "  drwxr-xr-x  5 raxol staff  160 ."],
@@ -160,7 +160,7 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
         {"override=tmux wins over TERM=dumb (no geometry given -> no floor to apply)",
          no_caps, %{"RAXOL_HARNESS_MODE" => "tmux", "TERM" => "dumb"}, [],
          :tmux_conservative},
-        {"override=inline at degenerate geometry is floored to :flat (HIGH review fix; see describe block below for the red-first proof)",
+        {"override=inline at degenerate geometry is floored to :flat",
          no_caps, %{"RAXOL_HARNESS_MODE" => "inline", "TERM" => "dumb"},
          [rows: 2, footer_rows: 2], :flat},
         {"override=tmux at degenerate geometry is floored to :flat too",
@@ -208,13 +208,13 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
     end
 
     property "explicit override wins over every other signal, UNLESS the degenerate floor clamps it to :flat" do
-      # HIGH review fix: `rows <- integer(1..3)` with `footer_rows: 2`
-      # fixed is ALWAYS degenerate (region_top = max(rows - 2, 1) = 1 <
-      # 2 for every value in that range), so whenever geometry is given
-      # at all in this property, the floor clamps any non-:flat override
-      # down to :flat. Pre-fix, this property asserted the override won
+      # `rows <- integer(1..3)` with `footer_rows: 2` fixed is ALWAYS
+      # degenerate (region_top = max(rows - 2, 1) = 1 < 2 for every value
+      # in that range), so whenever geometry is given at all in this
+      # property, the floor clamps any non-:flat override down to :flat.
+      # Before this was fixed, this property asserted the override won
       # unconditionally even at that geometry -- exactly the clobber bug
-      # this batch fixes (see ModeSelect's moduledoc).
+      # fixed here (see ModeSelect's moduledoc).
       check all(
               term <-
                 member_of(["dumb", "xterm-256color", "screen", "tmux-256color"]),
@@ -277,12 +277,12 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
   end
 
   # ---------------------------------------------------------------------
-  # 1b. Override-outranks-degenerate floor: RED-FIRST proof (HIGH review fix)
+  # 1b. Override-outranks-degenerate floor
   # ---------------------------------------------------------------------
 
-  describe "ModeSelect.select_with_reason/3: override-outranks-degenerate floor (HIGH review fix)" do
+  describe "ModeSelect.select_with_reason/3: override-outranks-degenerate floor" do
     test "override=inline at degenerate geometry clamps to :flat, not :inline_log" do
-      # RED-FIRST: before this fix, `select/3` returned the override mode
+      # Before this was fixed, `select/3` returned the override mode
       # unconditionally (`override(env)` short-circuited before the
       # degenerate check ever ran), so this exact combination -- an
       # exported `RAXOL_HARNESS_MODE=inline` later run in a 2-row split --
@@ -396,7 +396,7 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
     end
   end
 
-  describe "FlatAuthority: append_sealed/2 scrubs hostile escape bytes (HIGH review fix)" do
+  describe "FlatAuthority: append_sealed/2 scrubs hostile escape bytes" do
     test "content carrying a CSI clear, an SGR color change, and a bare BEL is scrubbed to plain text" do
       {:ok, device} = StringIO.open("")
       authority = FlatAuthority.new(device, @width, @height)
@@ -438,10 +438,10 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
   end
 
   # ---------------------------------------------------------------------
-  # 3. R8 demonstrated-red
+  # 3. The mechanical assert catches a real violation
   # ---------------------------------------------------------------------
 
-  describe "R8 demonstrated-red: the mechanical assert catches a real violation" do
+  describe "the mechanical assert catches a real violation" do
     test "a flat writer that emits one CUP fails the assert; the real FlatAuthority passes the identical fixture" do
       {:ok, bad_device} = StringIO.open("")
       bad = %BuggyFlatAuthority{device: bad_device}
@@ -453,7 +453,7 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
       bad_output = raw(bad_device)
 
       refute flat_is_pure_text?(bad_output),
-             "RED proof failed: the buggy authority's CUP must be caught by the mechanical assert"
+             "the buggy authority's CUP must be caught by the mechanical assert"
 
       assert Enum.any?(
                SequenceScanner.scan(bad_output),
@@ -471,7 +471,7 @@ defmodule Raxol.Harness.T3DegradationLadderTest do
       good_output = raw(good_device)
 
       assert flat_is_pure_text?(good_output),
-             "GREEN proof failed: the real FlatAuthority must never emit an escape sequence on the same fixture"
+             "the real FlatAuthority must never emit an escape sequence on the same fixture"
     end
   end
 
