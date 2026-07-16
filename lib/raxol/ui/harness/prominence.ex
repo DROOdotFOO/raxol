@@ -75,6 +75,19 @@ defmodule Raxol.UI.Harness.Prominence do
   run picks the highest ratio at which every cell is legible and pins it
   here permanently.
 
+  ## The needs-input starvation guard (policy floor)
+
+  Content that is *waiting on the user* (an approval prompt, a composer
+  asking for input) must never be starved of visibility below the ordinary
+  context it interrupts, no matter what prominence value a demotion sweep
+  hands it -- a projection bug must not be able to fade the one thing the
+  user has to see. `needs_input: true` floors the *effective prominence*
+  at `needs_input_floor/0` (`#{0.6}`, the ordinary-context tier of the
+  shipped salience ladder) before the fade runs. The floor raises only:
+  prominences at or above it pass through byte-identical, and
+  `prominence >= 1.0` remains the identity. It composes with (and applies
+  before) the opt-in legibility clamp.
+
   ## Truecolor-only floor; 256-color deferred
 
   The clamp guarantees the floor on the **24-bit hex it emits** -- it is
@@ -85,15 +98,20 @@ defmodule Raxol.UI.Harness.Prominence do
   a redistributed per-ground tier ladder for 256-color (fewer,
   wider-spaced tiers chosen in-palette), not a post-hoc clamp on a
   quantized value -- deferred here because it needs a quantization-pipeline
-  decision this module does not make.
+  decision this module does not make. One minimum IS pinned by regression
+  test: the 1.0/0.6 prominence pair must survive
+  `Raxol.UI.Theming.Colors.find_closest_256_color/1` as distinct palette
+  indices (the coarsest tier separation the ladder needs on a 256-color
+  terminal).
 
   ## Scope
 
   This module resolves a single foreground color; it does not decide
   *which* prominence a block gets nor *whether* the floor is engaged for it
   (that's the caller's policy -- it owns the acting-vs-context call and
-  passes `legibility_floor:` accordingly), nor whether a sealed block may
-  be restyled at all (that's separate fold/authorization territory).
+  passes `legibility_floor:`/`needs_input:` accordingly), nor whether a
+  sealed block may be restyled at all (that's separate fold/authorization
+  territory).
   """
 
   alias Raxol.UI.Theming.Salience
@@ -103,17 +121,32 @@ defmodule Raxol.UI.Harness.Prominence do
   # human-eye ratification pass (see moduledoc).
   @floor_ratio 3.0
 
+  # The ordinary-context prominence tier of the shipped salience ladder
+  # (1.0 / 0.8 / 0.6 / 0.4): the level ordinary context content renders at.
+  # Needs-input content is floored here so it never resolves below the
+  # context it interrupts (see the moduledoc's starvation-guard section).
+  @needs_input_prominence_floor 0.6
+
   @clamp_iterations 24
 
   @type opts :: [
           ground: float(),
           legibility_floor: boolean(),
-          floor_ratio: float()
+          floor_ratio: float(),
+          needs_input: boolean()
         ]
 
   @doc "The placeholder WCAG-style legibility floor ratio (see moduledoc)."
   @spec floor_ratio() :: float()
   def floor_ratio, do: @floor_ratio
+
+  @doc """
+  The prominence floor applied under `needs_input: true` -- the
+  ordinary-context tier of the shipped salience ladder, so content awaiting
+  user input never resolves below ordinary context content.
+  """
+  @spec needs_input_floor() :: float()
+  def needs_input_floor, do: @needs_input_prominence_floor
 
   @doc """
   Resolves `hex` at `prominence` (`0.0..1.0`) against a ground.
@@ -138,6 +171,11 @@ defmodule Raxol.UI.Harness.Prominence do
       (default `false` = pure fade).
     * `:floor_ratio` - override the legibility floor ratio (default
       `#{@floor_ratio}`); only consulted when `legibility_floor: true`.
+    * `:needs_input` - `true` floors the effective prominence at
+      `needs_input_floor/0` (`#{@needs_input_prominence_floor}`) before the
+      fade -- the starvation guard for content awaiting user input (see
+      moduledoc). Default `false`. Raises the effective prominence only;
+      inert at or above the floor.
 
   `prominence >= 1.0` is the identity (byte-identical `hex` back, no ground
   lookup, no clamp, regardless of `:legibility_floor`) -- a neutrality
@@ -152,7 +190,9 @@ defmodule Raxol.UI.Harness.Prominence do
   def resolve(hex, prominence, _opts) when prominence >= 1.0, do: hex
 
   def resolve(hex, prominence, opts) do
-    prominence = clamp_prominence(prominence)
+    prominence =
+      prominence |> clamp_prominence() |> apply_needs_input_floor(opts)
+
     ground = resolve_ground(opts)
     {l, c, h} = Salience.hex_to_oklch(hex)
     apparent = Salience.apparent_lightness(l, c, h)
@@ -225,6 +265,16 @@ defmodule Raxol.UI.Harness.Prominence do
   # instead.
   defp clamp_prominence(prominence) when prominence < 0.0, do: 0.0
   defp clamp_prominence(prominence), do: prominence
+
+  # The needs-input starvation guard (see moduledoc): floors the effective
+  # prominence at the ordinary-context tier, so content awaiting user input
+  # never resolves below the context it interrupts. Raises only -- at or
+  # above the floor it is the identity.
+  defp apply_needs_input_floor(prominence, opts) do
+    if Keyword.get(opts, :needs_input, false),
+      do: max(prominence, @needs_input_prominence_floor),
+      else: prominence
+  end
 
   defp legibility_floor?(opts), do: Keyword.get(opts, :legibility_floor, false)
 

@@ -221,4 +221,31 @@ defmodule Raxol.UI.Harness.ProminencePropertyTest do
       assert resolved =~ ~r/^#[0-9a-f]{6}$/
     end
   end
+
+  # ---------------------------------------------------------------------
+  # Needs-input starvation guard: a needs-input resolve never lands below
+  # the ordinary-context resolve of the same seed, for ANY handed
+  # prominence (including ones far below the floor), on both grounds.
+  # ---------------------------------------------------------------------
+
+  property "needs-input never resolves below ordinary context, both grounds" do
+    check all(
+            h <- hue_gen(),
+            c <- chroma_gen(),
+            tier <- member_of(Salience.tiers()),
+            ground <- ground_gen(),
+            prominence <- float(min: 0.0, max: 1.0)
+          ) do
+      seed = Salience.solve(tier, c, h, ground: ground)
+
+      guarded =
+        Prominence.resolve(seed, prominence, ground: ground, needs_input: true)
+
+      context_level =
+        Prominence.resolve(seed, Prominence.needs_input_floor(), ground: ground)
+
+      assert apparent_contrast(guarded, ground) >=
+               apparent_contrast(context_level, ground) - @eps_quant
+    end
+  end
 end
