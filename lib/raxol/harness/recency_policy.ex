@@ -24,6 +24,20 @@ defmodule Raxol.Harness.RecencyPolicy do
   darker: an ungraded block is never demoted below full prominence by
   this policy's own uncertainty.
 
+  ### Why these values (the ladder's provenance)
+
+  The four tiers are not new: they are the shipped salience ladder
+  already pinned by `Raxol.UI.Harness.Prominence` -- `0.6` is the
+  ordinary-context tier (`Prominence.needs_input_floor/0` floors
+  awaiting-input content exactly there), the `1.0`/`0.6` pair is pinned
+  by regression to survive 256-color quantization as distinct palette
+  indices, and `0.4` is that ladder's own floor. This policy was
+  ratified with an explicit "no new tiers" fence: it maps recency onto
+  the EXISTING ladder, one uniform `0.2` step per turn behind, and any
+  retuning of the tier values themselves belongs to the solver-side
+  ladder (and its pending human-eye ratification pass, see the
+  `Prominence` moduledoc), never to this mapping.
+
   ## Seal-time grading (the substrate law)
 
   Prominence for a block is decided **exactly once, at the moment the
@@ -129,6 +143,13 @@ defmodule Raxol.Harness.RecencyPolicy do
   `turns_behind` is `position(current_turn) - position(block_turn)` in
   that order.
 
+  **Caller contract (load-bearing): `turn_ids` must be in transcript
+  order.** Positional recency is meaningless on a reordered list -- a
+  turn that appears first IS oldest to this function, whatever its id
+  looks like. This is a documented precondition, not something this
+  pure function can validate (turn ids are opaque; there is no
+  order-independent notion of "older" to check against).
+
   Rules (each a documented guarantee, never darker than honest
   uncertainty warrants):
 
@@ -162,7 +183,8 @@ defmodule Raxol.Harness.RecencyPolicy do
   `Raxol.Harness.Projection` was built from.
 
   Derivation (defensive throughout -- a non-map entry in `events` is
-  skipped, never raised on):
+  skipped, never raised on; the whole derivation is a SINGLE pass over
+  `events`, so grading one block costs one walk, never three):
 
     * the block's own turn is the `:turn_id` of the FIRST event in
       `events` whose `:id` is in `block.event_refs` (`nil` if
@@ -175,14 +197,25 @@ defmodule Raxol.Harness.RecencyPolicy do
   Empty `events`, an unresolvable block turn, or a `nil` current turn
   all fall out of the same `grade/2` core as `1.0` -- see that
   function's own rule list.
+
+  **Input contract (load-bearing, guaranteed upstream for the intended
+  feed):** `events` must be journal/ingest-ordered and complete for the
+  blocks being graded. Both hold for `projection.source_events` by
+  construction: `Raxol.Harness.Projection.Recovery.filter_ids/1` drops
+  duplicate/out-of-order ids BEFORE retention (so the retained list is
+  id-monotonic), and `source_events` retains EVERY durable event for
+  the session un-windowed (only `:ephemeral` tier -- `item_delta`
+  traffic, which never enters a block's `event_refs` -- is excluded),
+  so every block built by the projection resolves its turn here. A
+  caller feeding a reordered or windowed list violates the contract;
+  each violation degrades toward `1.0` (never darker), per the same
+  uncertainty rule as everything else in this module.
   """
   @spec grade_block(map(), [map()]) :: prominence()
   def grade_block(%{event_refs: refs}, events) when is_list(events) do
-    safe_events = Enum.filter(events, &is_map/1)
-    order = safe_events |> Enum.map(&Map.get(&1, :turn_id)) |> turn_order()
-    current_turn = current_turn_of(safe_events)
+    {rev_order, current_turn, block_turn} = scan_events(events, refs)
+    order = Enum.reverse(rev_order)
     current_position = position(order, current_turn)
-    block_turn = block_turn_of(refs, safe_events)
 
     grade_one(order, current_position, block_turn, current_turn)
   end
@@ -227,19 +260,46 @@ defmodule Raxol.Harness.RecencyPolicy do
 
   # -- grade_block/2 event-derivation helpers ------------------------------
 
-  defp current_turn_of(events) do
-    events
-    |> Enum.map(&Map.get(&1, :turn_id))
-    |> Enum.reject(&is_nil/1)
-    |> List.last()
+  # One pass over `events` deriving all three of grade_block/2's inputs
+  # at once (the doc's "one walk, never three"): the distinct non-nil
+  # turn order (accumulated REVERSED, with a MapSet for O(1) seen
+  # checks -- the caller reverses back to first-seen order), the current
+  # turn (last non-nil turn_id wins by overwrite), and the block's own
+  # turn (the FIRST event whose id is in `refs`; latched with a
+  # `{:found, turn}` tuple rather than a bare sentinel atom so an
+  # opaque turn id can never collide with "not found yet"). Non-map
+  # entries fall through the guard and are skipped, never raised on.
+  defp scan_events(events, refs) do
+    {_seen, rev_order, current_turn, block_turn} =
+      Enum.reduce(events, {MapSet.new(), [], nil, :none}, fn
+        event, {seen, rev_order, current, found} when is_map(event) ->
+          turn = Map.get(event, :turn_id)
+
+          {seen, rev_order} =
+            if is_nil(turn) or MapSet.member?(seen, turn) do
+              {seen, rev_order}
+            else
+              {MapSet.put(seen, turn), [turn | rev_order]}
+            end
+
+          current = if is_nil(turn), do: current, else: turn
+
+          found =
+            if found == :none and Map.get(event, :id) in refs do
+              {:found, turn}
+            else
+              found
+            end
+
+          {seen, rev_order, current, found}
+
+        _non_map, acc ->
+          acc
+      end)
+
+    {rev_order, current_turn, unwrap_block_turn(block_turn)}
   end
 
-  defp block_turn_of([], _events), do: nil
-
-  defp block_turn_of(refs, events) do
-    case Enum.find(events, fn event -> Map.get(event, :id) in refs end) do
-      nil -> nil
-      event -> Map.get(event, :turn_id)
-    end
-  end
+  defp unwrap_block_turn({:found, turn}), do: turn
+  defp unwrap_block_turn(:none), do: nil
 end

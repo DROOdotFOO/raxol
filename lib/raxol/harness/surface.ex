@@ -921,7 +921,10 @@ defmodule Raxol.Harness.Surface do
   # Called from seal_block/2 -- the print-once paint -- so the grade
   # computed here IS the seal-time grade (see RecencyPolicy's moduledoc,
   # "Seal-time grading"): painted history is never re-graded because it
-  # is never repainted.
+  # is never repainted. The grade trusts source_events' journal order
+  # and durable completeness -- both guaranteed upstream
+  # (Recovery.filter_ids/1 id-monotonicity; un-windowed durable-only
+  # retention); see RecencyPolicy.grade_block/2's input contract.
   defp render_block_lines(block, model, mode) do
     prominence =
       RecencyPolicy.grade_block(block, model.projection.source_events)
