@@ -104,6 +104,14 @@ defmodule Raxol.UI.Components.Harness.Block do
   tiers where a minimum legibility must be preserved (see the `Prominence`
   moduledoc's "Two modes").
 
+  A **live `:approval` block auto-engages the needs-input starvation
+  guard** (`Prominence.resolve/3`'s `needs_input: true`): a pending
+  question is never faded below ordinary context content, whatever
+  prominence a demotion sweep hands it. A sealed approval is an answered
+  question and fades free. `context[:needs_input]` (boolean) overrides the
+  derivation in either direction -- flag any awaiting-input component in,
+  or an approval out.
+
   When `context[:markdown]` is enabled, the Markdown body is faded to the
   same resolved colour as the header, so the whole block dims together.
 
@@ -387,7 +395,7 @@ defmodule Raxol.UI.Components.Harness.Block do
     # no fade), then thread it into every text-producing branch --
     # header, content, and outcome all carry the SAME `:fg`, and the
     # per-line content map never re-runs the H-K solver.
-    fg = prominence_fg(context)
+    fg = prominence_fg(block, context)
     header = header_view(block, width, fg)
     outcome_children = outcome_row_view(block.outcome, fg)
 
@@ -434,13 +442,13 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp apply_fg(style, nil), do: style
   defp apply_fg(style, fg), do: Map.put(style, :fg, fg)
 
-  defp prominence_fg(context) do
+  defp prominence_fg(block, context) do
     case Map.get(context, :prominence, 1.0) do
       p when is_number(p) and p >= 1.0 ->
         nil
 
       p when is_number(p) ->
-        Prominence.resolve(@chrome_fg, p, prominence_opts(context))
+        Prominence.resolve(@chrome_fg, p, prominence_opts(block, context))
 
       _other ->
         nil
@@ -452,10 +460,30 @@ defmodule Raxol.UI.Components.Harness.Block do
   # solver's reference ground), and an explicit `ground: nil` would
   # short-circuit that default. `:legibility_floor` is threaded through when
   # present (T9 sets it true for acting tiers; default false = pure fade).
-  defp prominence_opts(context) do
+  # `:needs_input` engages the starvation guard (see `needs_input?/2`).
+  defp prominence_opts(block, context) do
     []
     |> put_opt(:ground, Map.get(context, :ground))
     |> put_opt(:legibility_floor, Map.get(context, :legibility_floor))
+    |> put_opt(:needs_input, needs_input?(block, context))
+  end
+
+  # A LIVE approval block is, by definition, waiting on the user -- it
+  # auto-engages `Prominence`'s needs-input starvation guard so no
+  # demotion sweep can fade the pending question below ordinary context.
+  # Once sealed it is an answered question (history), so the auto-flag
+  # drops. `context[:needs_input]` overrides the derivation either way
+  # (a caller can flag any awaiting-input component in, or an approval
+  # out). Returns `nil` (not `false`) when the guard is off so
+  # `put_opt/3` omits the key entirely.
+  defp needs_input?(block, context) do
+    engaged =
+      case Map.get(context, :needs_input) do
+        value when is_boolean(value) -> value
+        _absent -> block.kind == :approval and block.seal == :live
+      end
+
+    if engaged, do: true, else: nil
   end
 
   defp put_opt(opts, _key, nil), do: opts

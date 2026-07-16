@@ -570,4 +570,216 @@ defmodule Raxol.UI.Harness.ProminenceTest do
       assert ratio <= ceiling_ratio + 1.0e-6
     end
   end
+
+  # ---------------------------------------------------------------------
+  # Needs-input starvation guard: content awaiting user input must never
+  # resolve below ordinary context content, regardless of the prominence
+  # value handed to it -- a policy floor in the mapping layer, so a
+  # projection bug (or an aggressive demotion sweep) can never starve an
+  # approval prompt of visibility below the context it interrupts.
+  # ---------------------------------------------------------------------
+
+  describe "needs-input starvation guard (policy floor)" do
+    @needs_input_seeds %{
+      @dark_ground => ["#c1712c", "#abb7c3", "#B4B4B4"],
+      @light_ground => ["#3b444f", "#B4B4B4"]
+    }
+
+    test "the floor constant equals the ordinary-context prominence tier" do
+      assert Prominence.needs_input_floor() == 0.6
+    end
+
+    test "needs_input: true floors the resolve at the ordinary-context prominence, both grounds" do
+      for {ground, seeds} <- @needs_input_seeds,
+          seed <- seeds,
+          prominence <- [0.0, 0.2, 0.4, 0.59] do
+        guarded =
+          Prominence.resolve(seed, prominence,
+            ground: ground,
+            needs_input: true
+          )
+
+        context_level =
+          Prominence.resolve(seed, Prominence.needs_input_floor(),
+            ground: ground
+          )
+
+        assert guarded == context_level,
+               "#{seed} p#{prominence} ground#{ground}: expected the " <>
+                 "floored resolve #{context_level}, got #{guarded}"
+      end
+    end
+
+    test "needs-input never resolves below ordinary context contrast, both grounds" do
+      for {ground, seeds} <- @needs_input_seeds,
+          seed <- seeds,
+          prominence <- [0.0, 0.1, 0.3, 0.5] do
+        ground_hex = Salience.oklch_to_hex(ground, 0.0, 0.0)
+
+        guarded =
+          Prominence.resolve(seed, prominence,
+            ground: ground,
+            needs_input: true
+          )
+
+        context_level =
+          Prominence.resolve(seed, Prominence.needs_input_floor(),
+            ground: ground
+          )
+
+        assert Prominence.wcag_ratio(guarded, ground_hex) >=
+                 Prominence.wcag_ratio(context_level, ground_hex) - 1.0e-9
+      end
+    end
+
+    test "above the floor, needs_input is inert (byte-identical to the plain resolve)" do
+      for ground <- [@dark_ground, @light_ground], prominence <- [0.8, 0.9] do
+        assert Prominence.resolve("#c1712c", prominence,
+                 ground: ground,
+                 needs_input: true
+               ) ==
+                 Prominence.resolve("#c1712c", prominence, ground: ground)
+      end
+    end
+
+    test "prominence 1.0 with needs_input stays the byte-identical identity" do
+      assert Prominence.resolve("#c1712c", 1.0,
+               ground: @dark_ground,
+               needs_input: true
+             ) == "#c1712c"
+    end
+
+    test "needs_input composes with the legibility floor (clamp applies after the policy floor)" do
+      # A low-contrast seed at a starved prominence: the policy floor lifts
+      # it to the context tier first, then the opt-in legibility clamp still
+      # guarantees the WCAG floor on the result.
+      seed = Salience.solve(:recede, 0.02, 250, ground: @dark_ground)
+      ground_hex = Salience.oklch_to_hex(@dark_ground, 0.0, 0.0)
+
+      resolved =
+        Prominence.resolve(seed, 0.1,
+          ground: @dark_ground,
+          needs_input: true,
+          legibility_floor: true
+        )
+
+      assert Prominence.wcag_ratio(resolved, ground_hex) >=
+               Prominence.floor_ratio() - 1.0e-6
+    end
+  end
+
+  describe "Block needs-input floor integration" do
+    @approval_events [
+      %{
+        id: 7,
+        payload: %{action: "delete scratch dir", options: ["allow", "deny"]}
+      }
+    ]
+
+    test "a live approval block never paints dimmer than the ordinary-context resolve" do
+      block = Block.from_events(:approval, @approval_events)
+      assert Block.live?(block)
+
+      %{children: [header | _]} =
+        Block.render(block, %{prominence: 0.2, ground: @dark_ground})
+
+      assert header.style.fg ==
+               Prominence.resolve("#B4B4B4", Prominence.needs_input_floor(),
+                 ground: @dark_ground
+               )
+    end
+
+    test "an ordinary message block at the same prominence fades below the approval floor" do
+      message =
+        Block.from_events(:message, [
+          %{type: :item_completed, content: "context chatter"}
+        ])
+
+      %{children: [header | _]} =
+        Block.render(message, %{prominence: 0.2, ground: @dark_ground})
+
+      assert header.style.fg ==
+               Prominence.resolve("#B4B4B4", 0.2, ground: @dark_ground)
+
+      ground_hex = Salience.oklch_to_hex(@dark_ground, 0.0, 0.0)
+
+      floored_fg =
+        Prominence.resolve("#B4B4B4", Prominence.needs_input_floor(),
+          ground: @dark_ground
+        )
+
+      assert Prominence.wcag_ratio(header.style.fg, ground_hex) <
+               Prominence.wcag_ratio(floored_fg, ground_hex)
+    end
+
+    test "context[:needs_input] flags any block into the floor (explicit override)" do
+      message =
+        Block.from_events(:message, [
+          %{type: :item_completed, content: "composer draft"}
+        ])
+
+      %{children: [header | _]} =
+        Block.render(message, %{
+          prominence: 0.2,
+          ground: @dark_ground,
+          needs_input: true
+        })
+
+      assert header.style.fg ==
+               Prominence.resolve("#B4B4B4", Prominence.needs_input_floor(),
+                 ground: @dark_ground
+               )
+    end
+
+    test "a sealed approval block is no longer awaiting input -- it fades free" do
+      # An answered (sealed) approval prompt is history, not a pending
+      # question; the auto-flag applies only while the block is live.
+      block = :approval |> Block.from_events(@approval_events) |> Block.seal()
+
+      %{children: [header | _]} =
+        Block.render(block, %{prominence: 0.2, ground: @dark_ground})
+
+      assert header.style.fg ==
+               Prominence.resolve("#B4B4B4", 0.2, ground: @dark_ground)
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 256-color degradation guard: when a resolved color is quantized to the
+  # xterm-256 palette (`Raxol.UI.Theming.Colors.find_closest_256_color/1`,
+  # the shipped degradation path), the 1.0 and 0.6 prominence tiers must
+  # not collapse to the SAME palette index -- the minimum tier separation
+  # the salience ladder needs to survive a 256-color terminal.
+  # ---------------------------------------------------------------------
+
+  describe "256-color quantization tier collapse guard (1.0/0.6 pair)" do
+    test "prominence 1.0 and 0.6 quantize to distinct 256-color indices, both grounds" do
+      for {ground, seeds} <- %{
+            @dark_ground => ["#c1712c", "#abb7c3", "#B4B4B4"],
+            @light_ground => ["#3b444f", "#B4B4B4"]
+          },
+          seed <- seeds do
+        full = Prominence.resolve(seed, 1.0, ground: ground)
+        faded = Prominence.resolve(seed, 0.6, ground: ground)
+
+        full_idx = seed_256_index(full)
+        faded_idx = seed_256_index(faded)
+
+        assert full_idx != faded_idx,
+               "#{seed} on ground #{ground}: 1.0 (#{full}) and 0.6 " <>
+                 "(#{faded}) both quantize to 256-color index #{full_idx}"
+      end
+    end
+
+    defp seed_256_index(hex) do
+      hex
+      |> hex_to_rgb_tuple()
+      |> Raxol.UI.Theming.Colors.find_closest_256_color()
+    end
+
+    defp hex_to_rgb_tuple("#" <> <<r::binary-2, g::binary-2, b::binary-2>>) do
+      {String.to_integer(r, 16), String.to_integer(g, 16),
+       String.to_integer(b, 16)}
+    end
+  end
 end
