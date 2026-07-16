@@ -338,7 +338,7 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
       tainted_lineage?(call) ->
         escalate(state, call)
 
-      MapSet.member?(state.session, tool) ->
+      MapSet.member?(state.session, tool_key(tool)) ->
         {:proceed, state}
 
       escalate?(call) ->
@@ -368,17 +368,36 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
       }
     }
 
-    pending = Map.put(state.pending, ref, %{call_id: call.call_id, tool: call.tool})
+    pending =
+      Map.put(state.pending, ref, %{call_id: call.call_id, tool: tool_key(call.tool)})
+
     {:escalate, request, %{state | pending: pending}}
   end
 
+  # The ONE canonical tool representation used identically in live-store,
+  # request_ref, parse_ref, and rebuild: a string. `call.tool` is `atom() |
+  # String.t()`; normalizing to a string means a STRING-named tool stored live
+  # equals the tool reconstructed by `parse_ref` on replay (no atom/string
+  # skew), and `String.to_existing_atom` — which crashes on an unknown tool — is
+  # never reached.
+  defp tool_key(tool) when is_atom(tool), do: Atom.to_string(tool)
+  defp tool_key(tool) when is_binary(tool), do: tool
+
   # request_ref encodes tool + call_id so a journaled decision ALONE rebuilds the
-  # grant key on replay (the enforcement projection needs no side table).
-  defp request_ref(call), do: "req:#{call.tool}:#{call.call_id}"
+  # grant key on replay (the enforcement projection needs no side table). The
+  # encoding is INJECTIVE and delimiter-safe: the (normalized string) tool is
+  # length-prefixed, so a ":" inside EITHER the tool or the call_id can never
+  # mis-split the ref back into the wrong {tool, call_id}.
+  defp request_ref(call), do: ref_encode(tool_key(call.tool), call.call_id)
+
+  defp ref_encode(tool, cid) when is_binary(tool) and is_binary(cid),
+    do: "req:" <> Integer.to_string(byte_size(tool)) <> ":" <> tool <> cid
 
   defp parse_ref("req:" <> rest) do
-    [tool, cid] = String.split(rest, ":", parts: 2)
-    {String.to_existing_atom(tool), cid}
+    [len_str, tail] = String.split(rest, ":", parts: 2)
+    len = String.to_integer(len_str)
+    <<tool::binary-size(^len), cid::binary>> = tail
+    {tool, cid}
   end
 
   @doc """
@@ -455,7 +474,7 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
     do: %{
       state
       | denied: MapSet.delete(state.denied, cid),
-        session: MapSet.put(state.session, tool)
+        session: MapSet.put(state.session, tool_key(tool))
     }
 
   defp grant(state, :denied, _scope, cid, _tool),

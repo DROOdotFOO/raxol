@@ -70,6 +70,10 @@ defmodule Raxol.Agent.Red.U8BlastRadiusRedTest do
     test "C10 — taint is a FOLD over refs: a :trusted-STAMPED arg over a tainted chain escalates (HIGH-1, FI-5)" do
       assert :ok = Contours.taint_escalates(BlastRadiusGate)
     end
+
+    test "C11 — request_ref is injective + string-canonical: a STRING tool and a ':'-bearing tool/call_id round-trip and rebuild == live (Fix 1)" do
+      assert :ok = Contours.ref_roundtrips_string_and_colon(BlastRadiusGate)
+    end
   end
 
   describe "U8-R predicate contours (@action_surface — F2 Raxol.Action draft not landed)" do
@@ -155,6 +159,10 @@ defmodule Raxol.Agent.Red.U8BlastRadiusControlsTest do
 
     test "C10 taint fold over refs (mis-stamped chain escalates; clean chain proceeds)" do
       assert :ok = Contours.taint_escalates(ReferenceGate)
+    end
+
+    test "C11 request_ref injective + string-canonical (string tool, ':'-bearing tool/call_id round-trip)" do
+      assert :ok = Contours.ref_roundtrips_string_and_colon(ReferenceGate)
     end
   end
 

@@ -142,13 +142,27 @@ defmodule Raxol.Agent.Red.U8Gates do
     end
   end
 
-  @doc "request_ref encodes tool + call_id so a journaled decision alone rebuilds the grant key."
-  def request_ref(call), do: "req:#{call.tool}:#{call.call_id}"
+  @doc "The ONE canonical tool representation (string) — live-store == parse_ref == rebuild."
+  def tool_key(tool) when is_atom(tool), do: Atom.to_string(tool)
+  def tool_key(tool) when is_binary(tool), do: tool
 
-  @doc "Parse a reference request_ref back into {tool, call_id}."
+  @doc """
+  request_ref encodes tool + call_id so a journaled decision alone rebuilds the
+  grant key. INJECTIVE + delimiter-safe: the (normalized string) tool is
+  length-prefixed, so a ":" in either tool or call_id can't mis-split the ref.
+  """
+  def request_ref(call), do: ref_encode(tool_key(call.tool), call.call_id)
+
+  @doc "Encode {tool, call_id} into a delimiter-safe, injective request_ref."
+  def ref_encode(tool, cid) when is_binary(tool) and is_binary(cid),
+    do: "req:" <> Integer.to_string(byte_size(tool)) <> ":" <> tool <> cid
+
+  @doc "Parse a reference request_ref back into {tool, call_id} (tool is the canonical string)."
   def parse_ref("req:" <> rest) do
-    [tool, cid] = String.split(rest, ":", parts: 2)
-    {String.to_existing_atom(tool), cid}
+    [len_str, tail] = String.split(rest, ":", parts: 2)
+    len = String.to_integer(len_str)
+    <<tool::binary-size(^len), cid::binary>> = tail
+    {tool, cid}
   end
 
   @doc "The approval_requested neutral event a gate returns on escalation (family :loop — frozen F3)."
@@ -194,7 +208,7 @@ defmodule Raxol.Agent.Red.U8Gates do
       taint_fun.(call) ->
         escalate(state, call)
 
-      MapSet.member?(state.session, tool) ->
+      MapSet.member?(state.session, tool_key(tool)) ->
         {:proceed, state}
 
       escalate_p(call) ->
@@ -210,7 +224,7 @@ defmodule Raxol.Agent.Red.U8Gates do
     req = approval_request(ref, call)
 
     pending =
-      Map.put(state.pending, ref, %{call_id: call.call_id, tool: call.tool})
+      Map.put(state.pending, ref, %{call_id: call.call_id, tool: tool_key(call.tool)})
 
     {:escalate, req, %{state | pending: pending}}
   end
@@ -236,7 +250,7 @@ defmodule Raxol.Agent.Red.U8Gates do
     do: %{
       state
       | denied: MapSet.delete(state.denied, cid),
-        session: MapSet.put(state.session, tool)
+        session: MapSet.put(state.session, tool_key(tool))
     }
 
   def grant(state, :denied, _scope, cid, _tool),
@@ -816,6 +830,58 @@ defmodule Raxol.Agent.Red.U8Gates do
           end
         end
       end)
+    end
+
+    # C11 (Fix 1 regression) — request_ref is INJECTIVE + string-canonical:
+    # a STRING-named tool and a tool/call_id containing ":" both survive the
+    # request_ref → parse_ref round-trip, and the fold-rebuilt enforcement state
+    # authorizes the same call identically to the live state. The pre-fix gate
+    # (atom-stringified tool + `String.to_existing_atom` + `split(":", parts: 2)`)
+    # crashes or diverges on exactly these inputs.
+    def ref_roundtrips_string_and_colon(gate) do
+      safe(fn ->
+        cases = [
+          # ":" in BOTH the tool name and the call_id — the naive split mis-parses.
+          %{tool: "weird:tool", call_id: "c:1:x"},
+          # a plain STRING tool — the naive rebuild does String.to_existing_atom.
+          %{tool: "string_only_tool", call_id: "c-plain"}
+        ]
+
+        Enum.reduce_while(cases, :ok, fn overrides, _acc ->
+          case session_grant_rebuild_equals_live(gate, overrides) do
+            :ok -> {:cont, :ok}
+            violation -> {:halt, violation}
+          end
+        end)
+      end)
+    end
+
+    # Escalate a call, approve at :session scope, then assert live and the
+    # decision-folded rebuild admit the SAME call identically — exercising the
+    # tool round-trip (session grants are tool-keyed) across the ref encoding.
+    defp session_grant_rebuild_equals_live(gate, overrides) do
+      call = U8Gates.escalating_call(overrides)
+
+      with {:escalate, req, s1} <- gate.evaluate(gate.new(), call),
+           ref = req.payload.request_ref,
+           d = decision(ref, :approved, :session),
+           {:ok, s2} <- gate.apply_decision(s1, d, human()) do
+        live_tag = authorize_tag(gate, s2, call)
+        rebuilt_tag = authorize_tag(gate, gate.rebuild([{d, human()}]), call)
+
+        cond do
+          live_tag != :proceeded ->
+            {:violation, {:session_grant_did_not_admit, overrides, live_tag}}
+
+          rebuilt_tag != live_tag ->
+            {:violation, {:rebuild_diverged_for_ref, ref, live_tag, rebuilt_tag}}
+
+          true ->
+            :ok
+        end
+      else
+        bad -> {:violation, {:ref_roundtrip_flow_broke, overrides, bad}}
+      end
     end
 
     # --- helpers -------------------------------------------------------------
