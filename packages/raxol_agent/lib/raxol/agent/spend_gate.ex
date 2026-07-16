@@ -62,6 +62,15 @@ defmodule Raxol.Agent.SpendGate do
   recorder the checkers fold. Binding `emit` to the real journal is U7
   implementation work, not part of this skeleton.
 
+  **A real `emit` failure is never swallowed.** The fold is the accounting, so
+  a silently dropped record on irreversible spend state (a charged reserve, a
+  flipped settle guard) would be exactly the silent charge/record divergence
+  this gate exists to prevent. A raising sink propagates as
+  `Raxol.Agent.SpendGate.JournalWriteError`, carrying the record so the budget
+  owner can reconcile (refund the estimate, halt the run). The only tolerated
+  failure is an ephemeral `:noproc` exit — a dead in-memory test bus (the U12
+  `safe_emit` narrowing).
+
   ## The reserve seam (frozen — binds atomicity to the GATE, not a test helper)
 
   Reservation is atomic against `context.try_reserve` — a callable in the
@@ -86,9 +95,8 @@ defmodule Raxol.Agent.SpendGate do
   part of this skeleton.
   """
 
+  alias Raxol.Agent.SpendGate.JournalWriteError
   alias Raxol.Agent.SpendGate.Reservations
-
-  require Logger
 
   @typedoc """
   Context passed to every SpendGate call. Frozen fields:
@@ -118,7 +126,15 @@ defmodule Raxol.Agent.SpendGate do
   @typedoc "Actual token cost, known only AFTER the call returns."
   @type actual :: non_neg_integer()
 
-  @typedoc "Handle for a reservation held between reserve and settle."
+  @typedoc """
+  Handle for a reservation held between reserve and settle.
+
+  NODE-LOCAL and NOT serializable: the internal settle-once guard is an
+  `:atomics` reference, dead outside the VM that created it. Handing a
+  reservation across nodes (swarm) or persisting/replaying it silently voids
+  double-settle protection — settle where you reserved. (Cross-node settle is
+  out of scope for U7; the harness primary loop is node-local.)
+  """
   @type reservation :: %{cost_ref: cost_ref(), estimate: estimate()}
 
   @typedoc "Why a reserve was refused (fail-closed)."
@@ -184,6 +200,13 @@ defmodule Raxol.Agent.SpendGate do
   @doc """
   Reserve `estimate` for `cost_ref`. See the `reserve/3` callback for the
   success and fail-closed refusal contract.
+
+  Raises `Raxol.Agent.SpendGate.JournalWriteError` when the budget was charged
+  but the `:reserve` record could not be written (real journal failure, not a
+  dead test bus): the claim is released (`cost_ref` retryable) and the error
+  carries the record so the budget owner can reconcile the charge. It is never
+  swallowed into `{:ok, reservation}` — charge and record must not silently
+  diverge.
   """
   @spec reserve(context(), cost_ref(), estimate()) ::
           {:ok, reservation()} | {:error, {:refused, refusal()}}
@@ -196,7 +219,8 @@ defmodule Raxol.Agent.SpendGate do
       # Non-positive / non-finite estimate — fail closed BEFORE any budget or
       # claim mutation. Mirrors the payments Ledger's non-positive/non-finite
       # guard (`Raxol.Payments.Ledger` check_amount_positive).
-      emit(context, %{kind: :reserve_refused, cost_ref: cost_ref, reason: :invalid_amount})
+      guarded_emit(context, %{kind: :reserve_refused, cost_ref: cost_ref, reason: :invalid_amount})
+
       {:error, {:refused, :invalid_amount}}
     end
   end
@@ -226,21 +250,32 @@ defmodule Raxol.Agent.SpendGate do
     # retryable, never stuck.
     case safe_try_reserve(context, cost_ref, estimate, scope) do
       {:ok, _remaining} ->
-        # The budget is now CHARGED. Build the settle-able handle FIRST, then
-        # journal — so a throwing `emit` (durable I/O in prod) cannot strand a
-        # charged budget with no reservation to settle. The frozen context has
-        # no un-reserve seam, so we CANNOT roll the charge back here; returning a
-        # usable handle keeps the refund derivable via `settle/3` (finding #2).
-        # A dropped reserve record is loud (logged) and visible in the fold.
-        reservation = %{
-          cost_ref: cost_ref,
-          estimate: estimate,
-          scope: scope,
-          settle_guard: :atomics.new(1, [])
-        }
+        # The budget is now CHARGED, and the journal fold IS the accounting —
+        # so the charge and the `:reserve` record must not diverge. The frozen
+        # context has no un-reserve seam, so a failed record write CANNOT roll
+        # the charge back here. What it MUST NOT do is get swallowed into a
+        # normal `{:ok, reservation}` (a charged-but-unrecorded reserve,
+        # invisible to any ledger-vs-journal reconciliation). So the write goes
+        # through `emit_or_release/4`: a REAL journal failure releases the
+        # claim (`cost_ref` stays retryable, same contour as a raising
+        # `call_fun`) and propagates a `JournalWriteError` carrying the record
+        # — the caller owns the budget seam and can reconcile (refund the
+        # estimate, halt the run). Only an ephemeral `:noproc` (dead test bus)
+        # is tolerated; then the handle below is returned settle-able as usual.
+        emit_or_release(
+          context,
+          %{kind: :reserve, cost_ref: cost_ref, estimate: estimate},
+          scope,
+          cost_ref
+        )
 
-        guarded_emit(context, %{kind: :reserve, cost_ref: cost_ref, estimate: estimate})
-        {:ok, reservation}
+        {:ok,
+         %{
+           cost_ref: cost_ref,
+           estimate: estimate,
+           scope: scope,
+           settle_guard: :atomics.new(1, [])
+         }}
 
       {:error, reason} ->
         # Budget refused: release the claim we took (fail-closed — no call will
@@ -270,6 +305,12 @@ defmodule Raxol.Agent.SpendGate do
   @doc """
   Settle a reservation with its `actual`. See the `settle/3` callback contract
   (double-settle is rejected).
+
+  Raises `Raxol.Agent.SpendGate.JournalWriteError` when the `:settle` record
+  could not be written for real: settle accounting is already COMPLETE by then
+  (the once-guard stays flipped — a replay is still rejected — and the claim is
+  released), but the missing record must surface rather than be swallowed into
+  `:ok`; the fold conservatively shows the reserve dangling until reconciled.
   """
   @spec settle(context(), reservation(), actual()) ::
           :ok | {:error, {:already_settled, cost_ref()}}
@@ -286,11 +327,16 @@ defmodule Raxol.Agent.SpendGate do
         # `actual`. Budget-side refund of `estimate - actual` is a deferred
         # follow-up (see moduledoc) — derivable from the (reserve, settle) pair.
         #
-        # The CAS flip above is IRREVERSIBLE — settle can never retry. So the
-        # journal write must not be able to abort settle accounting: `emit` is
-        # guarded (finding #3). A throwing sink leaves the guard flipped and the
-        # claim released (settle IS complete); the missing settle record is
-        # logged and shows as a hole in the fold, never a re-runnable settle.
+        # The CAS flip above is IRREVERSIBLE — settle can never retry, and by
+        # the time we emit, the claim is already released: settle accounting IS
+        # complete regardless of what the journal write does. But the fold is
+        # the accounting, so a REAL write failure must not be swallowed into a
+        # normal `:ok` (the `actual` would be recorded nowhere): `guarded_emit`
+        # propagates it as a `JournalWriteError` carrying the settle record.
+        # The guard stays flipped (a replay is still rejected — never a
+        # re-runnable settle) and the fold conservatively shows the reserve as
+        # dangling (over-counts, fail-closed) until the caller reconciles.
+        # Only an ephemeral `:noproc` (dead test bus) is tolerated as `:ok`.
         Reservations.release(scope, cost_ref)
         guarded_emit(context, %{kind: :settle, cost_ref: cost_ref, actual: actual})
         :ok
@@ -318,9 +364,11 @@ defmodule Raxol.Agent.SpendGate do
         # `cost_ref`. Release it on any raise (so `cost_ref` is reclaimable) then
         # re-raise — the caller sees the failure, the registry is not poisoned.
         {actual, result} = safe_call(reservation, call_fun)
-        # Guard the :call write too: a throw here would skip settle and leave the
-        # budget charged with the claim held (finding #3, same class).
-        guarded_emit(context, %{kind: :call, cost_ref: cost_ref})
+        # The :call write follows the same law: a REAL journal failure releases
+        # the claim (`cost_ref` reclaimable; the reserve shows dangling in the
+        # fold — the crash contour's shape) and propagates `JournalWriteError`;
+        # only a dead test bus (`:noproc`) is tolerated.
+        emit_or_release(context, %{kind: :call, cost_ref: cost_ref}, reservation.scope, cost_ref)
         settle(context, reservation, actual)
         {:ok, result}
 
@@ -347,30 +395,48 @@ defmodule Raxol.Agent.SpendGate do
 
   # --- internals ------------------------------------------------------------
 
-  defp emit(context, record), do: context.emit.(record)
-
-  # Journal a record without letting a throwing sink strand irreversible spend
-  # state. In production `context.emit` is durable I/O (a per-session journal
-  # write) that CAN fail; a raise here must never lose a reservation handle or
-  # block settle accounting that already flipped its guard. The record is best
-  # effort at the seam — a dropped write is logged loudly and remains visible as
-  # a hole in the fold (findings #2, #3).
+  # Journal a record through `context.emit` — in production, durable I/O (a
+  # per-session journal write) that CAN fail. The journal fold IS the
+  # accounting, so a dropped write is silent divergence between the charged
+  # budget and the recorded truth — the exact loss the gate promises to
+  # prevent. A REAL failure therefore PROPAGATES as a distinguishable
+  # `JournalWriteError` carrying the record (the budget owner reconciles); it
+  # is never swallowed into `:ok`.
+  #
+  # The ONLY tolerated failure is an ephemeral `:noproc` exit — a dead
+  # in-memory test bus, where no durable journal existed to diverge from. This
+  # is the same narrowing U12 applies in its `safe_emit`.
   defp guarded_emit(context, record) do
-    emit(context, record)
+    context.emit.(record)
+    :ok
   rescue
     error ->
-      Logger.warning(
-        "SpendGate: cost-journal emit failed for #{inspect(record)}: #{inspect(error)}"
-      )
-
-      :ok
+      reraise JournalWriteError,
+              [record: record, original: error],
+              __STACKTRACE__
   catch
-    kind, reason ->
-      Logger.warning(
-        "SpendGate: cost-journal emit #{kind} for #{inspect(record)}: #{inspect(reason)}"
-      )
-
+    :exit, reason when reason == :noproc or (is_tuple(reason) and elem(reason, 0) == :noproc) ->
       :ok
+
+    kind, reason ->
+      :erlang.raise(
+        :error,
+        JournalWriteError.exception(record: record, original: {kind, reason}),
+        __STACKTRACE__
+      )
+  end
+
+  # `guarded_emit/2` for the two sites that still HOLD the reservation claim
+  # when they journal (the `:reserve` and `:call` writes): on a real journal
+  # failure, release the claim first — `cost_ref` stays retryable, the same
+  # contour as a raising `call_fun` — then let the `JournalWriteError`
+  # propagate.
+  defp emit_or_release(context, record, scope, cost_ref) do
+    guarded_emit(context, record)
+  rescue
+    error in JournalWriteError ->
+      Reservations.release(scope, cost_ref)
+      reraise error, __STACKTRACE__
   end
 
   # The reservation namespace (dedup scope). Keying on the `try_reserve` CLOSURE

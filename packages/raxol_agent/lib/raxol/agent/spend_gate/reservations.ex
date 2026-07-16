@@ -9,10 +9,23 @@ defmodule Raxol.Agent.SpendGate.Reservations do
   # `:ets.insert_new/2` check-and-set, without serializing every reserve through
   # this process.
   #
-  # The `scope` is the frozen `context.try_reserve` closure itself (see
-  # `Raxol.Agent.SpendGate` — the one field guaranteed present and unique per
-  # budget scope): two contexts that share a budget seam share a reservation
-  # namespace, and independent budgets never collide.
+  # The `scope` is a TAGGED budget-identity tuple derived by
+  # `SpendGate.reserve_scope/1`, in preference order: `{:budget_id, id}` ->
+  # `{:scope, s}` -> `{:budget, handle}` -> `{:try_reserve, closure}` (the
+  # closure TERM is the documented last-resort fallback only — it is fragile
+  # for callers that rebuild the closure per call; see the `reserve_scope`
+  # comment in `Raxol.Agent.SpendGate`). Two contexts that share a budget
+  # identity share a reservation namespace; the tags keep values from
+  # different fields from ever aliasing, so independent budgets never collide.
+  #
+  # SECURITY TRADEOFF (documented, accepted for U7): the table is `:public` —
+  # required by the direct-to-ETS `claim`/`release` design (`:protected` would
+  # force every reserve through this process, serializing the hot path). Any
+  # co-resident VM process (a plugin, another agent) can therefore delete a
+  # live claim (permitting one bounded duplicate reserve per cost_ref) or
+  # insert a fake claim (wedging a cost_ref until swept). Money-adjacent but
+  # cap-bounded; revisit at U7-I if untrusted in-VM code becomes a real
+  # deployment shape.
   #
   # Ownership: in production this registry belongs in the agent supervision
   # tree. The agent application does not boot under `MIX_ENV=test`, so the gate
@@ -25,6 +38,11 @@ defmodule Raxol.Agent.SpendGate.Reservations do
   require Logger
 
   @table __MODULE__
+
+  # Start-race spin bounds (`await_table/1`): how long a loser of the
+  # first-use start race waits for the winner's `init/1` to create the table.
+  @table_await_retries 100
+  @table_await_interval_ms 1
 
   @doc "Idempotently ensure the registry table exists. Race-safe under concurrency."
   @spec ensure_started() :: :ok
@@ -69,6 +87,15 @@ defmodule Raxol.Agent.SpendGate.Reservations do
   `scope` (a run/session budget) MUST call this when that scope ends; growth is
   then bounded by scope lifetime, not by process uptime. Returns the number of
   claims reclaimed.
+
+  NOT YET WIRED IN PRODUCTION: nothing in `lib/` drives the gate yet (U7-I —
+  the primary-loop integration — is where a run/session scope first EXISTS to
+  end). U7-I MUST call `sweep_scope/1` from its scope-teardown path (e.g. the
+  budget owner's `terminate/2` or the run supervisor's shutdown); until then
+  the leak-and-reclaim behavior is pinned by the robustness suite, including
+  the brutal-`:kill` contour (`Process.exit(_, :kill)` runs no `rescue`/
+  `after`, so a killed reserver ALWAYS leaks its claim — sweep is the only
+  reclaim path).
   """
   @spec sweep_scope(term()) :: non_neg_integer()
   def sweep_scope(scope) do
@@ -126,13 +153,13 @@ defmodule Raxol.Agent.SpendGate.Reservations do
   # Lost the start race: the winner's `init/1` may not have created the table
   # yet (the name is registered before `init` returns), so spin briefly for it.
   # Only ever hit once, on the very first use across the VM.
-  defp await_table(retries \\ 100)
+  defp await_table(retries \\ @table_await_retries)
   defp await_table(0), do: raise("SpendGate.Reservations table failed to start")
 
   defp await_table(retries) do
     case :ets.whereis(@table) do
       :undefined ->
-        Process.sleep(1)
+        Process.sleep(@table_await_interval_ms)
         await_table(retries - 1)
 
       _ref ->
