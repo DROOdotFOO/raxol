@@ -62,7 +62,12 @@ defmodule Raxol.AgentClientProtocol.Handler.Codegen do
 
   # -- @callback clause builders ------------------------------------------
 
-  defp callback_clause(%{kind: :request, params: nil, callback: cb, result: result}) do
+  defp callback_clause(%{
+         kind: :request,
+         params: nil,
+         callback: cb,
+         result: result
+       }) do
     quote do
       @callback unquote(cb)(Raxol.AgentClientProtocol.Connection.Ctx.t()) ::
                   {:ok, unquote(result).t()}
@@ -71,7 +76,12 @@ defmodule Raxol.AgentClientProtocol.Handler.Codegen do
     end
   end
 
-  defp callback_clause(%{kind: :request, params: params, callback: cb, result: result}) do
+  defp callback_clause(%{
+         kind: :request,
+         params: params,
+         callback: cb,
+         result: result
+       }) do
     quote do
       @callback unquote(cb)(
                   unquote(params).t(),
@@ -236,7 +246,8 @@ defmodule Raxol.AgentClientProtocol.Agent do
   it is never mutated after init (connection doc §4.5). Default: `{:ok,
   handler_arg}`.
   """
-  @callback init(handler_arg :: term()) :: {:ok, handler_state :: term()} | {:stop, term()}
+  @callback init(handler_arg :: term()) ::
+              {:ok, handler_state :: term()} | {:stop, term()}
 
   @doc """
   Handle an inbound `"_"`-prefixed extension request with no `MethodTable`
@@ -250,7 +261,8 @@ defmodule Raxol.AgentClientProtocol.Agent do
   Handle an inbound `"_"`-prefixed extension notification. Return value is
   ignored. Default: `:ok`.
   """
-  @callback handle_ext_notification(wire :: String.t(), params :: map(), ctx()) :: term()
+  @callback handle_ext_notification(wire :: String.t(), params :: map(), ctx()) ::
+              term()
 
   Codegen.defcallbacks(:agent)
 
@@ -284,7 +296,10 @@ defmodule Raxol.AgentClientProtocol.Agent do
                        {:init, 1},
                        {:handle_ext_request, 3},
                        {:handle_ext_notification, 3}
-                     ] ++ Raxol.AgentClientProtocol.Handler.Codegen.callback_arities(:agent)
+                     ] ++
+                       Raxol.AgentClientProtocol.Handler.Codegen.callback_arities(
+                         :agent
+                       )
     end
   end
 
@@ -306,7 +321,8 @@ defmodule Raxol.AgentClientProtocol.Agent do
 
     alias Raxol.AgentClientProtocol.Session
 
-    @spec start_link({module(), term(), term()}, keyword()) :: Supervisor.on_start()
+    @spec start_link({module(), term(), term()}, keyword()) ::
+            Supervisor.on_start()
     def start_link(init_arg, opts \\ []) do
       Supervisor.start_link(__MODULE__, init_arg, opts)
     end
@@ -332,7 +348,10 @@ defmodule Raxol.AgentClientProtocol.Agent do
 
       children = Session.Supervisor.child_specs() ++ [connection_spec]
 
-      Supervisor.init(children, strategy: :one_for_all, auto_shutdown: :any_significant)
+      Supervisor.init(children,
+        strategy: :one_for_all,
+        auto_shutdown: :any_significant
+      )
     end
   end
 
@@ -360,8 +379,15 @@ defmodule Raxol.AgentClientProtocol.Agent do
 
     %{
       id: Keyword.get(opts, :id, __MODULE__),
-      start: {ConnectionSupervisor, :start_link, [{handler, handler_arg, transport}, sup_opts]},
-      type: :supervisor
+      start:
+        {ConnectionSupervisor, :start_link,
+         [{handler, handler_arg, transport}, sup_opts]},
+      type: :supervisor,
+      # One-shot by design: the subtree `auto_shutdown`s on a significant
+      # child's exit and is never restarted in place (§1.1) — connection
+      # recovery is a fresh reattach against the durable journal, not a
+      # supervisor restart. Embedders may override (`%{spec | restart: ...}`).
+      restart: :temporary
     }
   end
 

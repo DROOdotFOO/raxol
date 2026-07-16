@@ -161,7 +161,8 @@ defmodule Raxol.AgentClientProtocol.Client do
   at `Connection` boot; the result is threaded read-only through every
   dispatch as `ctx.handler_state`. Default: `{:ok, handler_arg}`.
   """
-  @callback init(handler_arg :: term()) :: {:ok, handler_state :: term()} | {:stop, term()}
+  @callback init(handler_arg :: term()) ::
+              {:ok, handler_state :: term()} | {:stop, term()}
 
   @doc """
   Handle an inbound `"_"`-prefixed extension request with no `MethodTable`
@@ -175,7 +176,8 @@ defmodule Raxol.AgentClientProtocol.Client do
   Handle an inbound `"_"`-prefixed extension notification. Return value is
   ignored. Default: `:ok`.
   """
-  @callback handle_ext_notification(wire :: String.t(), params :: map(), ctx()) :: term()
+  @callback handle_ext_notification(wire :: String.t(), params :: map(), ctx()) ::
+              term()
 
   Codegen.defcallbacks(:client)
 
@@ -349,7 +351,14 @@ defmodule Raxol.AgentClientProtocol.Client do
     :ok = subscribe(conn, session_id, self())
 
     try do
-      case Connection.async_request(conn, "session/prompt", request, self(), tag, timeout_ms) do
+      case Connection.async_request(
+             conn,
+             "session/prompt",
+             request,
+             self(),
+             tag,
+             timeout_ms
+           ) do
         :ok -> collect_prompt(session_id, tag, [])
         {:error, _} = err -> err
       end
@@ -373,7 +382,8 @@ defmodule Raxol.AgentClientProtocol.Client do
 
   defp settle_updates(session_id, acc) do
     receive do
-      {:acp_session_update, ^session_id, update} -> settle_updates(session_id, [update | acc])
+      {:acp_session_update, ^session_id, update} ->
+        settle_updates(session_id, [update | acc])
     after
       5 -> Enum.reverse(acc)
     end
@@ -399,7 +409,14 @@ defmodule Raxol.AgentClientProtocol.Client do
     :ok = subscribe(conn, session_id, self())
 
     try do
-      case Connection.async_request(conn, "session/prompt", request, self(), tag, timeout_ms) do
+      case Connection.async_request(
+             conn,
+             "session/prompt",
+             request,
+             self(),
+             tag,
+             timeout_ms
+           ) do
         :ok -> stream_prompt(session_id, tag, on_update)
         {:error, _} = err -> err
       end
@@ -443,7 +460,10 @@ defmodule Raxol.AgentClientProtocol.Client do
                        {:init, 1},
                        {:handle_ext_request, 3},
                        {:handle_ext_notification, 3}
-                     ] ++ Raxol.AgentClientProtocol.Handler.Codegen.callback_arities(:client)
+                     ] ++
+                       Raxol.AgentClientProtocol.Handler.Codegen.callback_arities(
+                         :client
+                       )
 
       # -- session_update default: broadcast to subscribe/3 subscribers --
       # `session_update/2` was included in the `defoverridable` list above
@@ -504,7 +524,8 @@ defmodule Raxol.AgentClientProtocol.Client do
 
     alias Raxol.AgentClientProtocol.Session
 
-    @spec start_link({module(), term(), term()}, keyword()) :: Supervisor.on_start()
+    @spec start_link({module(), term(), term()}, keyword()) ::
+            Supervisor.on_start()
     def start_link(init_arg, opts \\ []) do
       Supervisor.start_link(__MODULE__, init_arg, opts)
     end
@@ -530,7 +551,10 @@ defmodule Raxol.AgentClientProtocol.Client do
 
       children = Session.Supervisor.child_specs() ++ [connection_spec]
 
-      Supervisor.init(children, strategy: :one_for_all, auto_shutdown: :any_significant)
+      Supervisor.init(children,
+        strategy: :one_for_all,
+        auto_shutdown: :any_significant
+      )
     end
   end
 
@@ -558,8 +582,15 @@ defmodule Raxol.AgentClientProtocol.Client do
 
     %{
       id: Keyword.get(opts, :id, __MODULE__),
-      start: {ConnectionSupervisor, :start_link, [{handler, handler_arg, transport}, sup_opts]},
-      type: :supervisor
+      start:
+        {ConnectionSupervisor, :start_link,
+         [{handler, handler_arg, transport}, sup_opts]},
+      type: :supervisor,
+      # One-shot by design: the subtree `auto_shutdown`s on a significant
+      # child's exit and is never restarted in place (§1.1) — connection
+      # recovery is a fresh reattach against the durable journal, not a
+      # supervisor restart. Embedders may override (`%{spec | restart: ...}`).
+      restart: :temporary
     }
   end
 
@@ -603,12 +634,17 @@ defmodule Raxol.AgentClientProtocol.Client.FsSandbox do
   """
 
   alias Raxol.AgentClientProtocol.Error
-  alias Raxol.AgentClientProtocol.Schema.ClientTypes.{ReadTextFileResponse, WriteTextFileResponse}
+
+  alias Raxol.AgentClientProtocol.Schema.ClientTypes.{
+    ReadTextFileResponse,
+    WriteTextFileResponse
+  }
 
   @max_symlink_depth 40
 
   @doc "Handle `fs/read_text_file` (`req` is a `ClientTypes.ReadTextFileRequest.t()`) confined to `sandbox_root`."
-  @spec read(String.t(), struct()) :: {:ok, ReadTextFileResponse.t()} | {:error, Error.t()}
+  @spec read(String.t(), struct()) ::
+          {:ok, ReadTextFileResponse.t()} | {:error, Error.t()}
   def read(sandbox_root, req) do
     with {:ok, real} <- resolve(sandbox_root, req.path) do
       case File.read(real) do
@@ -616,23 +652,31 @@ defmodule Raxol.AgentClientProtocol.Client.FsSandbox do
           {:ok, ReadTextFileResponse.new(slice(content, req.line, req.limit))}
 
         {:error, reason} ->
-          {:error, Error.with_data(Error.resource_not_found(req.path), inspect(reason))}
+          {:error,
+           Error.with_data(Error.resource_not_found(req.path), inspect(reason))}
       end
     end
   end
 
   @doc "Handle `fs/write_text_file` (`req` is a `ClientTypes.WriteTextFileRequest.t()`) confined to `sandbox_root`. Creates parent directories as needed."
-  @spec write(String.t(), struct()) :: {:ok, WriteTextFileResponse.t()} | {:error, Error.t()}
+  @spec write(String.t(), struct()) ::
+          {:ok, WriteTextFileResponse.t()} | {:error, Error.t()}
   def write(sandbox_root, req) do
     with {:ok, real} <- resolve(sandbox_root, req.path),
          :ok <- File.mkdir_p(Path.dirname(real)) do
       case File.write(real, req.content) do
-        :ok -> {:ok, WriteTextFileResponse.new()}
-        {:error, reason} -> {:error, Error.with_data(Error.internal_error(), inspect(reason))}
+        :ok ->
+          {:ok, WriteTextFileResponse.new()}
+
+        {:error, reason} ->
+          {:error, Error.with_data(Error.internal_error(), inspect(reason))}
       end
     else
-      {:error, %Error{}} = err -> err
-      {:error, reason} -> {:error, Error.with_data(Error.internal_error(), inspect(reason))}
+      {:error, %Error{}} = err ->
+        err
+
+      {:error, reason} ->
+        {:error, Error.with_data(Error.internal_error(), inspect(reason))}
     end
   end
 
@@ -643,7 +687,8 @@ defmodule Raxol.AgentClientProtocol.Client.FsSandbox do
   Returns `{:ok, real_absolute_path}` or `{:error, %Error{}}`
   (`-32602 invalid params`).
   """
-  @spec resolve(String.t(), String.t()) :: {:ok, String.t()} | {:error, Error.t()}
+  @spec resolve(String.t(), String.t()) ::
+          {:ok, String.t()} | {:error, Error.t()}
   def resolve(sandbox_root, requested_path)
       when is_binary(sandbox_root) and is_binary(requested_path) do
     root = Path.expand(sandbox_root)
@@ -660,10 +705,14 @@ defmodule Raxol.AgentClientProtocol.Client.FsSandbox do
   end
 
   defp invalid_params(reason, path) do
-    Error.with_data(Error.invalid_params(), %{"reason" => to_string(reason), "path" => path})
+    Error.with_data(Error.invalid_params(), %{
+      "reason" => to_string(reason),
+      "path" => path
+    })
   end
 
-  defp within?(root, path), do: path == root or String.starts_with?(path, root <> "/")
+  defp within?(root, path),
+    do: path == root or String.starts_with?(path, root <> "/")
 
   # Full symlink resolution (a hand-rolled `realpath`): if `path` itself is
   # a symlink, follow it (a relative target resolves against the
@@ -697,8 +746,11 @@ defmodule Raxol.AgentClientProtocol.Client.FsSandbox do
 
           parent ->
             case real_path(parent, depth + 1) do
-              {:ok, real_parent} -> {:ok, Path.join(real_parent, Path.basename(path))}
-              error -> error
+              {:ok, real_parent} ->
+                {:ok, Path.join(real_parent, Path.basename(path))}
+
+              error ->
+                error
             end
         end
     end

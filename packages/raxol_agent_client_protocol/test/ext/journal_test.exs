@@ -162,9 +162,7 @@ defmodule Raxol.AgentClientProtocol.Ext.JournalTest do
         start_supervised!(
           %{
             id: {:writer, sid},
-            start:
-              {Writer, :start_link,
-               [[session_id: sid, journal: {Mem, j}, name: nil]]},
+            start: {Writer, :start_link, [[session_id: sid, journal: {Mem, j}, name: nil]]},
             restart: :temporary
           },
           restart: :temporary

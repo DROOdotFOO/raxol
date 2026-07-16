@@ -86,8 +86,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Mem do
       {:ok, []}
     else
       match_spec = [
-        {{:"$1", :"$2"}, [{:andalso, {:>=, :"$1", from}, {:"=<", :"$1", to}}],
-         [:"$2"]}
+        {{:"$1", :"$2"}, [{:andalso, {:>=, :"$1", from}, {:"=<", :"$1", to}}], [:"$2"]}
       ]
 
       {:ok, :ets.select(j.table, match_spec)}

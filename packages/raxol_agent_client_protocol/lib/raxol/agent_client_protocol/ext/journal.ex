@@ -119,6 +119,12 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal do
   alias Raxol.AgentClientProtocol.Ext.Journal.Record
   alias Raxol.AgentClientProtocol.Ext.Journal.Writer
 
+  # The package `Application`-started `DynamicSupervisor` under which Writers
+  # start lazily (reattach §2.1). Its name is contract: `Application.children/0`
+  # starts it, `ensure_writer/3` places children under it. An embedder in
+  # library mode gets the identical name from `Application.children/0`.
+  @writer_supervisor Raxol.AgentClientProtocol.Ext.Journal.WriterSupervisor
+
   @typedoc "Opaque, per-session storage handle."
   @type j :: term()
 
@@ -139,6 +145,52 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal do
   @callback close(j) :: :ok
 
   @optional_callbacks close: 1
+
+  # -- Lazy Writer start (→ WriterSupervisor, reattach §2.1) ------------------
+
+  @doc """
+  Start-or-lookup the single-publisher `Writer` for `session_id`, lazily, under
+  the package `Application`'s `WriterSupervisor` (reattach §2.1: "started lazily
+  on first append/subscribe, `:already_started` folded"). Idempotent: a live
+  Writer for the session is returned as-is (`{:ok, pid}`) without a second start.
+
+  `journal` is the `{module, handle}` durable store for the session; the handle's
+  owner MUST outlive the Writer (so a Writer restart can tip-fold, §2.6). `opts`
+  are extra `Writer.start_link/1` opts (e.g. `:session_meta`). Children start
+  `:transient` — a Writer that exits `:normal` is not resurrected, but a crash is
+  restarted so the live tail survives (the journal, not the Writer, is durable).
+
+  Returns `{:error, :no_supervisor}` when the `WriterSupervisor` is not running
+  (the `Application` did not start / an embedder omitted it from `children/0`) —
+  fail soft, never raise into a turn.
+  """
+  @spec ensure_writer(String.t(), {module(), term()}, keyword()) ::
+          {:ok, pid()} | {:error, :no_supervisor | term()}
+  def ensure_writer(session_id, journal, opts \\ [])
+      when is_binary(session_id) and is_tuple(journal) do
+    case Writer.whereis(session_id) do
+      pid when is_pid(pid) -> {:ok, pid}
+      nil -> start_writer(session_id, journal, opts)
+    end
+  end
+
+  defp start_writer(session_id, journal, opts) do
+    if is_pid(Process.whereis(@writer_supervisor)) do
+      spec =
+        Supervisor.child_spec(
+          {Writer, [session_id: session_id, journal: journal] ++ opts},
+          restart: :transient
+        )
+
+      case DynamicSupervisor.start_child(@writer_supervisor, spec) do
+        {:ok, pid} -> {:ok, pid}
+        {:error, {:already_started, pid}} -> {:ok, pid}
+        {:error, _} = err -> err
+      end
+    else
+      {:error, :no_supervisor}
+    end
+  end
 
   # -- Live-bus registration facade (→ Writer, the single publisher) ----------
 

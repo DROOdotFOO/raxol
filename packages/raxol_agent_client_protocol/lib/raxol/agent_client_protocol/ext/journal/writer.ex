@@ -183,8 +183,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
       journal: Keyword.fetch!(opts, :journal),
       session_meta: Keyword.get(opts, :session_meta, %{}),
       dead_publish_phantom: Keyword.get(opts, :__dead_publish_phantom__, false),
-      dead_bootstrap_after_op:
-        Keyword.get(opts, :__dead_bootstrap_after_op__, false)
+      dead_bootstrap_after_op: Keyword.get(opts, :__dead_bootstrap_after_op__, false)
     }
 
     # Bootstrap is LAZY (R-C14-lazy): it runs as the Writer's first action for
@@ -205,8 +204,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
     else
       ref = Process.monitor(pid)
 
-      {:reply, :ok,
-       %{state | subscribers: Map.put(state.subscribers, ref, pid)}}
+      {:reply, :ok, %{state | subscribers: Map.put(state.subscribers, ref, pid)}}
     end
   end
 

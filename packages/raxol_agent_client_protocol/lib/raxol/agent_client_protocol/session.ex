@@ -119,6 +119,13 @@ defmodule Raxol.AgentClientProtocol.Session do
   @default_cancel_backstop_ms 30_000
   @default_conn_mod Raxol.AgentClientProtocol.Connection
 
+  # The emit seam (acp-reattach-design.md §2.4). The DEFAULT is byte-identical to
+  # the base package (`Emitter.Direct`: `emit/2` forwards to `Connection.notify`,
+  # the boundary hooks are no-ops), so a Session with no journal ext behaves
+  # EXACTLY as frozen v2. `Emitter.Journal` reroutes updates + turn boundaries
+  # through the single-publisher Writer for durable, reattach-replayable sessions.
+  @default_emitter Raxol.AgentClientProtocol.Session.Emitter.Direct
+
   @registry Raxol.AgentClientProtocol.SessionRegistry
 
   @type t :: %__MODULE__{
@@ -130,6 +137,9 @@ defmodule Raxol.AgentClientProtocol.Session do
           mode_state: SessionModeState.t() | nil,
           turn: :idle | {:prompting, Turn.t()} | {:cancelling, Turn.t()},
           last_cancel_seq: non_neg_integer(),
+          emitter: module(),
+          journal: {module(), term()} | nil,
+          turn_seq: non_neg_integer(),
           config: %{permission_timeout: timeout(), cancel_backstop_ms: pos_integer()}
         }
 
@@ -141,6 +151,9 @@ defmodule Raxol.AgentClientProtocol.Session do
             mode_state: nil,
             turn: :idle,
             last_cancel_seq: 0,
+            emitter: @default_emitter,
+            journal: nil,
+            turn_seq: 0,
             config: %{}
 
   # -- Public API -------------------------------------------------------------
@@ -263,6 +276,10 @@ defmodule Raxol.AgentClientProtocol.Session do
       mode_state: Keyword.get(opts, :mode_state),
       turn: :idle,
       last_cancel_seq: 0,
+      # Emit seam (§2.4): default Direct = base behavior; Journal = durable.
+      emitter: Keyword.get(opts, :emitter, @default_emitter),
+      journal: Keyword.get(opts, :journal),
+      turn_seq: 0,
       config: config
     }
 
@@ -286,6 +303,12 @@ defmodule Raxol.AgentClientProtocol.Session do
     else
       session = self()
 
+      # Turn boundary (§2.4/§2.5): the per-session turn ordinal, appended (in
+      # journal mode) as a `turn_started` record AFTER reply adoption, BEFORE the
+      # root-task spawn. Direct mode makes this a no-op — base behavior unchanged.
+      turn_seq = state.turn_seq + 1
+      _ = state.emitter.turn_started(state, req, turn_seq)
+
       task =
         Task.Supervisor.async_nolink(state.task_sup, fn -> state.turn_runner.(session, req) end)
 
@@ -304,7 +327,7 @@ defmodule Raxol.AgentClientProtocol.Session do
         updates_emitted?: false
       }
 
-      {:reply, :ok, %{state | turn: {:prompting, turn}}}
+      {:reply, :ok, %{state | turn: {:prompting, turn}, turn_seq: turn_seq}}
     end
   end
 
@@ -348,7 +371,9 @@ defmodule Raxol.AgentClientProtocol.Session do
       emit_telemetry([:raxol, :acp, :empty_chunk_rejected], %{session_id: state.session_id})
       {:reply, {:error, :empty_chunk}, state}
     else
-      _ = state.conn_mod.notify(state.conn, "session/update", notification)
+      # Emit seam (§2.4): Direct forwards to Connection.notify (base behavior);
+      # Journal ALSO durably appends the update to the Writer (J10 durability).
+      _ = state.emitter.emit(state, notification)
       {:reply, :ok, put_turn(state, ts, %{t | updates_emitted?: true})}
     end
   end
@@ -594,9 +619,16 @@ defmodule Raxol.AgentClientProtocol.Session do
   defp finish(state, t) do
     if t.backstop_timer, do: Process.cancel_timer(t.backstop_timer)
     warn_if_zero_updates(state, t)
+    # SINGLE render site (§3.2, I5): the one `render(outcome)` value feeds BOTH
+    # the durable `turn_completed` record AND the prompt response — they cannot
+    # disagree (invariant J7a). The boundary append precedes the reply so a
+    # reattacher's `turn_completed` frame and the live response carry the same
+    # rendered value (§2.5). Direct mode makes the boundary a no-op.
+    rendered = render(t.outcome)
+    _ = state.emitter.turn_completed(state, rendered, state.turn_seq)
     # When respond? is false the obligation was voided by $/cancel_request; skip
     # reply/3 (Connection would suppress it anyway — belt-and-braces, §3.1).
-    if t.respond?, do: state.conn_mod.reply(state.conn, t.reply_ref, render(t.outcome))
+    if t.respond?, do: state.conn_mod.reply(state.conn, t.reply_ref, rendered)
     %{state | turn: :idle}
   end
 
@@ -712,4 +744,198 @@ defmodule Raxol.AgentClientProtocol.Session do
 
     :ok
   end
+end
+
+defmodule Raxol.AgentClientProtocol.Session.Emitter do
+  @moduledoc """
+  The Session emit seam (`acp-reattach-design.md` §2.4) — one injection point
+  through which every `session/update` and every turn boundary flows.
+
+  The base package binds `Emitter.Direct`, whose behavior is byte-identical to
+  the frozen v2 Session (`emit/2` calls `Connection.notify`; the boundary hooks
+  are no-ops). `Emitter.Journal` reroutes updates + turn boundaries through the
+  single-publisher Writer (`Ext.Journal.Writer`) so every delivered update is
+  ALSO durable and a reattacher replays an exact offset-addressed journal.
+
+  ## Callbacks
+
+    * `emit(session_state, notification)` — a `session/update` (in-turn
+      `post_update` and out-of-turn `set_mode`'s `current_mode_update`).
+    * `turn_started(session_state, prompt_req, turn_id)` — a turn begins; the
+      per-session ordinal `turn_id` is threaded from the Session (§1.2).
+    * `turn_completed(session_state, rendered, turn_id)` — a turn ends; `rendered`
+      is the SINGLE-render-site value that ALSO becomes the prompt response
+      (invariant J7a: they are built from one `render(outcome)` call).
+
+  `session_state` is the `%Raxol.AgentClientProtocol.Session{}` struct; an emitter
+  reads `conn`/`conn_mod`/`session_id`/`journal` from it.
+  """
+
+  @callback emit(session_state :: struct(), notification :: struct()) :: :ok
+  @callback turn_started(
+              session_state :: struct(),
+              prompt_req :: term(),
+              turn_id :: pos_integer()
+            ) ::
+              :ok
+  @callback turn_completed(
+              session_state :: struct(),
+              rendered :: term(),
+              turn_id :: pos_integer()
+            ) ::
+              :ok
+end
+
+defmodule Raxol.AgentClientProtocol.Session.Emitter.Direct do
+  @moduledoc """
+  The DEFAULT emitter — byte-identical to the frozen v2 Session. `emit/2` forwards
+  a `session/update` to `Connection.notify` on the same FIFO lane as the eventual
+  prompt reply (I3); the turn-boundary hooks are no-ops (the base package keeps no
+  durable journal). Selecting this emitter (or omitting `:emitter`) means the
+  reattach extension is OFF and nothing about the base behavior changes.
+  """
+
+  @behaviour Raxol.AgentClientProtocol.Session.Emitter
+
+  @impl true
+  def emit(state, notification) do
+    _ = state.conn_mod.notify(state.conn, "session/update", notification)
+    :ok
+  end
+
+  @impl true
+  def turn_started(_state, _req, _turn_id), do: :ok
+
+  @impl true
+  def turn_completed(_state, _rendered, _turn_id), do: :ok
+end
+
+defmodule Raxol.AgentClientProtocol.Session.Emitter.Journal do
+  @moduledoc """
+  The durable emitter (`acp-reattach-design.md` §2.4) — reroutes updates and turn
+  boundaries through the single-publisher Writer (`Ext.Journal.Writer`) so the
+  session's durable, offset-addressed journal is FILLED by live turns, and every
+  attached reattacher replays it (P-JS5 / J1).
+
+  ## What lands durably
+
+    * `emit/2` → `Writer.append("session_update", SessionUpdate.to_json(update),
+      taint)`. The Writer publishes the stamped record to every subscriber
+      (reattachers). Taint is stamped here and NEVER filtered (§6, W20).
+    * `turn_started/3` → `Writer.append("turn_started", %{turnId, prompt}, "user")`
+      — acquires the Writer's cross-connection turn latch (§2.7).
+    * `turn_completed/3` → `Writer.append("turn_completed", payload, "system")`
+      — clears the latch atomically (C13). Built from the single render value, so
+      a reattacher's `turn_completed` frame equals the live prompt response (J7a).
+
+  ## Reported deviations from §2.4/§2.5 (not silently diverged — see the coder's
+  report)
+
+    * **Origin delivery is append-then-notify (two sites), not the single
+      subscriber-#1 path.** The frozen v2 Session already owns direct
+      `Connection.notify` for its own connection; `emit/2` KEEPS that (so I3
+      ordering and the 582-test base are untouched) and ADDS the durable append.
+      Reattachers on OTHER connections get the identical stamped stream via the
+      Writer subscription. The design's "origin == subscriber #1" symmetry (one
+      `notify` call site, the grep-gate J10) is thus NOT realized for the origin;
+      the observable invariants (durability, ordering, reattacher stream equality)
+      hold. Unifying the origin onto the subscriber path is the §2.5
+      finalizing-drain rewrite, deferred to protect the frozen drain.
+    * **No Writer ⇒ degrade to notify-only.** If the session has no live Writer
+      (`Writer.whereis == nil`), `emit/2` still notifies (never crashes a turn);
+      the update is simply non-durable. Turn boundaries no-op.
+    * **Born-cancelled turns** (supervision IC-5c) do NOT append the
+      `turn_started`+`turn_completed` pair here (that path never reaches the
+      §2.4 seam); a Writer-side orphan-fold / repair covers dangling turns.
+    * **`prompt` capture is `[]` in v1.** `turn_started` records `turnId` (the
+      J7-totality key) with an empty prompt-block list; capturing the content
+      blocks is additive, grow-only.
+  """
+
+  @behaviour Raxol.AgentClientProtocol.Session.Emitter
+
+  alias Raxol.AgentClientProtocol.Error
+  alias Raxol.AgentClientProtocol.Ext.Journal.Writer
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.PromptResponse
+  alias Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification
+  alias Raxol.AgentClientProtocol.Schema.SessionUpdate
+
+  @impl true
+  def emit(state, %SessionNotification{update: update} = notification) do
+    payload = SessionUpdate.to_json(update)
+    _ = append(state, "session_update", payload, taint_of(update))
+    # Origin delivery stays direct (reported deviation): base behavior preserved.
+    _ = state.conn_mod.notify(state.conn, "session/update", notification)
+    :ok
+  end
+
+  # A non-SessionNotification update (test double / opaque) still delivers; it is
+  # not durable (no wire map to persist). Never crash a turn on an odd shape.
+  def emit(state, notification) do
+    _ = state.conn_mod.notify(state.conn, "session/update", notification)
+    :ok
+  end
+
+  @impl true
+  def turn_started(state, req, turn_id) do
+    _ =
+      append(
+        state,
+        "turn_started",
+        %{"turnId" => turn_id, "prompt" => prompt_blocks(req)},
+        "user"
+      )
+
+    :ok
+  end
+
+  @impl true
+  def turn_completed(state, rendered, turn_id) do
+    _ = append(state, "turn_completed", completed_payload(turn_id, rendered), "system")
+    :ok
+  end
+
+  # -- internals --------------------------------------------------------------
+
+  # Append through the single publisher (Writer). No Writer ⇒ no durable record
+  # (degrade, never crash). Kind/latch semantics live in the Writer (§2.5/§2.7).
+  defp append(state, kind, payload, taint) do
+    case Writer.whereis(state.session_id) do
+      nil -> :ok
+      writer -> safe_append(writer, kind, payload, taint)
+    end
+  end
+
+  defp safe_append(writer, kind, payload, taint) do
+    Writer.append(writer, kind, payload, taint)
+  catch
+    # A busy latch (`{:error, :turn_in_flight}` is a value, not a throw) or a
+    # Writer that died mid-call must never take down the turn task.
+    kind_, reason -> {:caught, kind_, reason}
+  end
+
+  # v1 taint classes (§6) derived from the SessionUpdate variant tag. A grow-only
+  # free string; converges with the harness §2.1 classes at wiring time (OQ-2).
+  defp taint_of({:user_message_chunk, _}), do: "user"
+  defp taint_of({:agent_message_chunk, _}), do: "agent"
+  defp taint_of({:agent_thought_chunk, _}), do: "agent"
+  defp taint_of({:plan, _}), do: "agent"
+  defp taint_of({:tool_call, _}), do: "external"
+  defp taint_of({:tool_call_update, _}), do: "external"
+  defp taint_of(_other), do: "system"
+
+  defp prompt_blocks(_req), do: []
+
+  defp completed_payload(turn_id, {:ok, %PromptResponse{stop_reason: r}}),
+    do: %{"turnId" => turn_id, "stopReason" => stop_reason_str(r)}
+
+  defp completed_payload(turn_id, {:error, %Error{code: c, message: m}}),
+    do: %{"turnId" => turn_id, "error" => %{"code" => c, "message" => m}}
+
+  defp completed_payload(turn_id, _other),
+    do: %{"turnId" => turn_id, "stopReason" => "end_turn"}
+
+  defp stop_reason_str(r) when is_atom(r), do: Atom.to_string(r)
+  defp stop_reason_str(r) when is_binary(r), do: r
+  defp stop_reason_str(r), do: inspect(r)
 end

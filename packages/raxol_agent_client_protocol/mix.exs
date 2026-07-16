@@ -26,7 +26,13 @@ defmodule RaxolAgentClientProtocol.MixProject do
 
   def application do
     [
-      extra_applications: [:logger, :crypto]
+      extra_applications: [:logger, :crypto],
+      # The package's shared supervision tree (SessionRegistry, journal Writer
+      # supervisor/registry, attach-policy Task.Supervisor, standalone
+      # ConnectionsSupervisor). `RaxolAgentClientProtocol.Application` starts an
+      # EMPTY tree under MIX_ENV=test (compile-time `@auto_start` guard) so the
+      # existing suite's manually/injected supervisors never collide.
+      mod: {RaxolAgentClientProtocol.Application, []}
     ]
   end
 
