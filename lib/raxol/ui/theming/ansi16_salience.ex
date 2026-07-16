@@ -18,7 +18,32 @@ defmodule Raxol.UI.Theming.Ansi16Salience do
   measuring distance in RGB space, each semantic role is PINNED to a
   hue-preserving ANSI slot chosen so the role's category (red/green/yellow/
   blue/magenta/neutral) is never lost and never confused with another
-  role's category.
+  role's category. (`:running` is reserved for activity state -- no RGB
+  seed exists in the harness yet, which is why measured naive-collapse
+  counts say "11 fields" while `roles/0` returns 12.)
+
+  ## Legibility floor
+
+  Every slot assignment meets a WCAG-style 3:1 contrast ratio against its
+  polarity's canonical ground, measured on the module's reference palette
+  (`Raxol.UI.Theming.Colors.ansi_to_rgb/1`), with one small, named
+  exemption set on light polarity only:
+
+    * Green/yellow state roles on light ground: no green or yellow slot in
+      the reference palette is legible on light ground (best available:
+      normal green 1.98:1, normal yellow 1.56:1). The best-effort normal
+      slots (2 and 3) are pinned anyway, because swapping hue family would
+      be a category lie worse than low contrast for a state signal, and
+      gray would erase the signal entirely. Real light-mode terminal
+      themes darken these slots; the pin keeps the category-true handle
+      for them to interpret.
+    * Muted/border recede chrome on light ground: silver is a subtle
+      light-UI border by design; receding below the floor is these roles'
+      function.
+
+  Dark polarity has NO exemptions: every dark-canvas assignment meets the
+  floor outright. The ranked priority throughout the table is explicit:
+  legibility > category preservation > tier separation.
 
   ## Polarity-awareness
 
@@ -26,35 +51,55 @@ defmodule Raxol.UI.Theming.Ansi16Salience do
   (9-15) per hue. Which one reads as "the loud one" depends on the canvas:
   bright variants pop on a dark background, normal variants pop on a light
   background. `polarity/1` derives the canvas from ground OKLCH lightness
-  using the same threshold as `Raxol.UI.Theming.Salience`'s `:auto` polarity
-  resolution (`ground < 0.5` is dark).
+  using the same threshold as `Raxol.UI.Theming.Salience`'s `:auto`
+  polarity resolution (`ground < 0.5` is dark). Because a 16-color path is
+  a fallback, `polarity/1` must not crash when the OSC 11 background probe
+  has no reading: `nil` falls back to the reference ground's polarity;
+  other non-numbers still raise.
 
   ## Tier degradation
 
-  The shipped prominence ladder has four tiers (1.0 / 0.8 / 0.6 / 0.4), but
-  16-color can only express two distinguishable steps per hue (normal vs.
-  bright). The ladder folds pairwise at `loud_threshold/0` (0.8): prominence
-  `>= 0.8` resolves to the loud tier, everything below resolves to the soft
-  tier. That fold keeps `1.0` and `0.6` -- the coarsest separation the
-  instrument requires -- on distinct slots for every role except `:muted`
-  and `:border`, which already sit at the dimmest slot that stays legible
-  (the recede floor); folding them is intentional, not a gap.
+  The shipped prominence ladder has four tiers (1.0 / 0.8 / 0.6 / 0.4),
+  but 16-color can express at most two distinguishable steps per hue. The
+  ladder folds pairwise at `loud_threshold/0` (0.8): prominence `>= 0.8`
+  resolves to the loud tier, everything below resolves to the soft tier.
+
+  Which roles keep distinct 1.0 vs 0.6 slots is per polarity. On dark, all
+  roles stay distinct except `:muted` and `:border`, which already sit at
+  the dimmest legible slot (the recede floor -- intentional fold). On
+  light, the reference palette leaves single legible slots for several
+  families, so the fold list grows: `:muted`, `:border`, `:warning`,
+  `:success`, `:diff_add`, `:running`, `:foreground`, and `:chrome` all
+  trade tier separation for the legibility floor.
 
   ## Accepted losses
 
   This is a lossy degradation and it accepts specific losses in exchange
-  for never lying about hue:
+  for never lying about hue and never dropping below legibility where the
+  palette allows:
 
     * Sub-hue detail is dropped -- an orange warning and a yellow warning
       both land on the yellow slot.
     * `:diff_add` folds onto `:success`'s green family and `:diff_del`
       folds onto `:error`'s red family; these are in-family folds, not
       category lies.
+    * `:accent` renders on the cyan slots on a dark canvas: the palette's
+      normal blue (slot 4, #0000EE) is illegible on black -- the classic
+      blue-on-black problem -- and the bright blue slot alone cannot
+      express two tiers. Cyan is the adjacent cool slot and no other role
+      occupies it; the role's category stays `:blue`.
     * `:emphasis` trades its warm (yellow-adjacent) seed hue for the
       max-contrast neutral slot at its loudest tier, so it can never be
       mistaken for the `:warning` state signal -- the yellow slot is
       reserved for warning. `:emphasis` keeps its anchor function (it is
       still the loudest role in the ramp) without competing for a hue.
+    * The neutral ramp merges. On dark at the soft tier, `:foreground`,
+      `:chrome`, `:muted`, and `:border` all share slot 8 -- receded body
+      text merges into recede chrome, because slot 8 is the only legible
+      sub-body neutral on dark. On light the whole mid-ramp compresses
+      onto slot 8: the palette has exactly two legible neutrals on light
+      ground (black and dark gray), so foreground and chrome fold onto
+      dark gray at both tiers.
     * `:running` is reserved for activity/in-progress state and given its
       own hue family (magenta), separate from the alarm/success/warning
       triad.
@@ -65,7 +110,10 @@ defmodule Raxol.UI.Theming.Ansi16Salience do
   `Raxol.UI.Theming.Colors.find_closest_basic_color/1` (nearest-RGB) must
   not be used for semantic roles -- see its `@doc` for the pointer back
   here. Truecolor and 256-color rendering are unaffected; this module is
-  additive.
+  additive. Note the table is not yet consumed by the render path (wiring
+  the capability gate is a follow-up); until then
+  `find_closest_basic_color/1` remains the live -- lossy -- 16-color
+  fallback.
 
   ## Unknown roles
 
@@ -74,6 +122,8 @@ defmodule Raxol.UI.Theming.Ansi16Salience do
   fallback clause for atoms outside that set -- they raise
   `FunctionClauseError` rather than silently guessing a slot.
   """
+
+  alias Raxol.UI.Theming.Salience
 
   @type role ::
           :foreground
@@ -99,46 +149,82 @@ defmodule Raxol.UI.Theming.Ansi16Salience do
   # {1.0, 0.8} -> loud, {0.6, 0.4, ...} -> soft.
   @loud_threshold 0.8
 
-  # Chromatic roles and their base ANSI hue slot (the normal-intensity
-  # 1-5 range). Dark canvas: loud = bright variant (base + 8), soft =
-  # normal (base). Light canvas: the polarity flip -- loud = normal,
-  # soft = bright.
-  @chromatic_base %{
-    error: 1,
-    diff_del: 1,
-    success: 2,
-    diff_add: 2,
-    warning: 3,
-    accent: 4,
-    running: 5
-  }
-
-  @chromatic_roles Map.keys(@chromatic_base)
-
-  # Neutral roles: explicit {loud, soft} slot per polarity. Emphasis is
-  # the anchor tier (max-contrast slot); foreground/chrome sit one step
-  # below it; muted/border are the recede tier at the dimmest readable
-  # slot (their floor -- loud and soft intentionally coincide there).
-  @neutral_table %{
+  # Explicit per-polarity per-tier slot pins. The design is no longer one
+  # intensity-flip formula: legibility against the canonical ground
+  # (measured on Colors.ansi_to_rgb/1) overrides the flip wherever the
+  # palette leaves a family without two -- or any -- legible slots.
+  #
+  # Dark canvas: bright-loud / normal-soft for every family it works for;
+  # accent moves to the cyan slots (normal blue is 1.93:1 on black).
+  #
+  # Light canvas: the flip holds only where the bright variant stays
+  # legible (red, blue); warning/success/diff_add/running fold both tiers
+  # onto their single best slot; the neutral mid-ramp compresses onto
+  # dark gray (slot 8).
+  @slot_table %{
     dark: %{
-      emphasis: {15, 7},
-      foreground: {7, 8},
-      chrome: {7, 8},
-      muted: {8, 8},
-      border: {8, 8}
+      loud: %{
+        error: 9,
+        diff_del: 9,
+        success: 10,
+        diff_add: 10,
+        warning: 11,
+        accent: 14,
+        running: 13,
+        emphasis: 15,
+        foreground: 7,
+        chrome: 7,
+        muted: 8,
+        border: 8
+      },
+      soft: %{
+        error: 1,
+        diff_del: 1,
+        success: 2,
+        diff_add: 2,
+        warning: 3,
+        accent: 6,
+        running: 5,
+        emphasis: 7,
+        foreground: 8,
+        chrome: 8,
+        muted: 8,
+        border: 8
+      }
     },
     light: %{
-      emphasis: {0, 8},
-      foreground: {8, 7},
-      chrome: {8, 7},
-      muted: {7, 7},
-      border: {7, 7}
+      loud: %{
+        error: 1,
+        diff_del: 1,
+        success: 2,
+        diff_add: 2,
+        warning: 3,
+        accent: 4,
+        running: 5,
+        emphasis: 0,
+        foreground: 8,
+        chrome: 8,
+        muted: 7,
+        border: 7
+      },
+      soft: %{
+        error: 9,
+        diff_del: 9,
+        success: 2,
+        diff_add: 2,
+        warning: 3,
+        accent: 12,
+        running: 5,
+        emphasis: 8,
+        foreground: 8,
+        chrome: 8,
+        muted: 7,
+        border: 7
+      }
     }
   }
 
-  @neutral_roles Map.keys(@neutral_table.dark)
-
-  @roles @chromatic_roles ++ @neutral_roles
+  @roles Map.keys(@slot_table.dark.loud)
 
   @doc "The semantic salience roles this table covers."
   @spec roles() :: [role()]
@@ -149,8 +235,16 @@ defmodule Raxol.UI.Theming.Ansi16Salience do
 
   Mirrors `Raxol.UI.Theming.Salience`'s `:auto` polarity threshold: a
   ground lightness below `0.5` is a dark canvas, `0.5` and above is light.
+
+  A 16-color path is a fallback and must not crash when ground detection
+  (the OSC 11 background probe) has no reading: `nil` falls back to the
+  reference ground's polarity. Other non-numbers raise
+  `FunctionClauseError` -- fail-loud on garbage, graceful on the
+  documented unknown.
   """
-  @spec polarity(number()) :: polarity()
+  @spec polarity(number() | nil) :: polarity()
+  def polarity(nil), do: polarity(Salience.reference_ground())
+
   def polarity(ground_lightness) when is_number(ground_lightness) do
     if ground_lightness < 0.5, do: :dark, else: :light
   end
@@ -172,25 +266,17 @@ defmodule Raxol.UI.Theming.Ansi16Salience do
   """
   @spec slot(role(), polarity(), number()) :: slot()
   def slot(role, polarity, prominence)
-      when is_number(prominence) and role in @chromatic_roles do
-    base = Map.fetch!(@chromatic_base, role)
-    chromatic_slot(polarity, tier(prominence), base)
-  end
-
-  def slot(role, polarity, prominence)
-      when is_number(prominence) and role in @neutral_roles do
-    {loud, soft} = @neutral_table[polarity][role]
-
-    case tier(prominence) do
-      :loud -> loud
-      :soft -> soft
-    end
+      when is_number(prominence) and role in @roles do
+    @slot_table
+    |> Map.fetch!(polarity)
+    |> Map.fetch!(tier(prominence))
+    |> Map.fetch!(role)
   end
 
   @doc "The full role -> slot map for a given polarity and prominence."
   @spec table(polarity(), number()) :: %{role() => slot()}
-  def table(polarity, prominence \\ 1.0) do
-    Map.new(@roles, fn role -> {role, slot(role, polarity, prominence)} end)
+  def table(polarity, prominence \\ 1.0) when is_number(prominence) do
+    @slot_table |> Map.fetch!(polarity) |> Map.fetch!(tier(prominence))
   end
 
   @doc "The hue family a role belongs to."
@@ -211,10 +297,4 @@ defmodule Raxol.UI.Theming.Ansi16Salience do
   @spec tier(number()) :: tier()
   defp tier(prominence) when prominence >= @loud_threshold, do: :loud
   defp tier(_prominence), do: :soft
-
-  @spec chromatic_slot(polarity(), tier(), non_neg_integer()) :: slot()
-  defp chromatic_slot(:dark, :loud, base), do: base + 8
-  defp chromatic_slot(:dark, :soft, base), do: base
-  defp chromatic_slot(:light, :loud, base), do: base
-  defp chromatic_slot(:light, :soft, base), do: base + 8
 end

@@ -15,15 +15,23 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
   PINNED to a hue-preserving ANSI slot, polarity-aware, and nearest-RGB is
   never consulted for semantic colors.
 
-  ## The audit tripwire
+  ## The audit tripwires
 
-  The named budgets (`@chromatic_gray_budget`, `@cross_category_collision_budget`)
-  are the regression tripwire the reference design teaches: enumerate every
-  semantic field the harness paints, and assert the count that collapses to
-  the same ANSI slot (especially gray) stays under an explicit budget.
+  Three named budgets/floors are the regression tripwire:
+
+    * `@chromatic_gray_budget` / `@cross_category_collision_budget` --
+      enumerate every semantic field the harness paints and cap slot
+      collapse (especially onto gray).
+    * `@legibility_floor` -- every role x tier x polarity must meet a
+      WCAG-style 3:1 contrast ratio against its polarity's canonical
+      ground, measured on the module's own reference palette
+      (`Colors.ansi_to_rgb/1`). The exceptions are the EXACT named set in
+      `@floor_exemptions`, each pinned to its documented best-effort slot
+      so the exemption list cannot silently grow or drift.
   """
   use ExUnit.Case, async: true
 
+  alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.Theming.Ansi16Salience
   alias Raxol.UI.Theming.Colors
   alias Raxol.UI.Theming.Salience
@@ -37,6 +45,11 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
   # instrument requires (same pair the 256-color pin guards).
   @full 1.0
   @receded 0.6
+
+  # Canonical grounds per polarity: the solver's dark reference ground and
+  # the near-white light ground the prominence tests already use.
+  @dark_ground Salience.reference_ground()
+  @light_ground 0.97
 
   # The four achromatic ANSI16 slots: black, silver, dark gray, bright white.
   @gray_slots [0, 7, 8, 15]
@@ -53,49 +66,151 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
   # neutral ramp) are intentional and unbudgeted.
   @cross_category_collision_budget 0
 
+  # WCAG-style contrast floor every slot assignment must meet against its
+  # polarity's canonical ground -- the module's stated purpose ("survive
+  # degradation AND stay legible") enforced as a test, not implied.
+  @legibility_floor 3.0
+
+  # The EXACT set of role x tier x polarity entries allowed under the
+  # floor, each pinned to its documented best-effort slot. Two classes,
+  # both palette-limited (measured on `Colors.ansi_to_rgb/1` against the
+  # canonical light ground #f5f5f5):
+  #
+  #   * Green/yellow state roles on LIGHT: no green or yellow slot in the
+  #     reference palette meets 3:1 on light ground (best available:
+  #     normal green slot 2 = 1.98:1, normal yellow slot 3 = 1.56:1).
+  #     Swapping family (red/magenta) would be a category lie worse than
+  #     low contrast for a state signal, and gray would erase it. Both
+  #     tiers pin to the best-effort normal slot. Real light-mode terminal
+  #     themes darken these slots (e.g. Solarized's #B58900 yellow); the
+  #     pin keeps the category-true handle for them to interpret.
+  #   * Recede chrome (muted/border) on LIGHT: slot 7 (silver, 1.16:1) is
+  #     the palette's only sub-body neutral -- a subtle light-UI border by
+  #     design. Receding below the floor is these roles' function; they
+  #     are likewise exempt from tier separation.
+  #
+  # DARK polarity has NO exemptions: every dark assignment meets 3:1.
+  @floor_exemptions %{
+    {:light, :warning, @full} => 3,
+    {:light, :warning, @receded} => 3,
+    {:light, :success, @full} => 2,
+    {:light, :success, @receded} => 2,
+    {:light, :diff_add, @full} => 2,
+    {:light, :diff_add, @receded} => 2,
+    {:light, :muted, @full} => 7,
+    {:light, :muted, @receded} => 7,
+    {:light, :border, @full} => 7,
+    {:light, :border, @receded} => 7
+  }
+
+  # Roles whose loud and soft tiers intentionally coincide (fold), per
+  # polarity. Dark: only the recede floor. Light: the reference palette
+  # leaves single legible slots for several families (no legible green/
+  # yellow at all; one legible magenta; two legible neutrals), so those
+  # roles trade tier separation for the legibility floor -- the ranked
+  # priority this module documents (legibility > category > tier).
+  @tier_fold_exempt %{
+    dark: [:muted, :border],
+    light: [
+      :muted,
+      :border,
+      :warning,
+      :success,
+      :diff_add,
+      :running,
+      :foreground,
+      :chrome
+    ]
+  }
+
   # ---- the role -> slot table (both polarities, both tiers) -------------
 
   describe "chromatic role -> slot table" do
-    # Base hue slots: red 1, green 2, yellow 3, blue 4, magenta 5.
-    # Dark canvas: loud = bright variant (base + 8), soft = normal (base).
-    # Light canvas: the polarity flip -- loud = normal, soft = bright.
+    # Explicit per-polarity pins. The dark side keeps the bright-loud /
+    # normal-soft intensity flip for every family it works for; accent
+    # moves to the cyan slots because the palette's normal blue (slot 4,
+    # #0000EE) is illegible on the dark ground (1.93:1 -- the classic
+    # blue-on-black problem) and slot 12 alone cannot express two tiers.
+    # The light side keeps the flip only where the bright variant stays
+    # legible on light ground (red, blue); green/yellow/magenta fold to
+    # their single best slot (see @floor_exemptions / @tier_fold_exempt).
     @chromatic_expected %{
-      error: 1,
-      diff_del: 1,
-      success: 2,
-      diff_add: 2,
-      warning: 3,
-      accent: 4,
-      running: 5
+      dark: %{
+        loud: %{
+          error: 9,
+          diff_del: 9,
+          success: 10,
+          diff_add: 10,
+          warning: 11,
+          accent: 14,
+          running: 13
+        },
+        soft: %{
+          error: 1,
+          diff_del: 1,
+          success: 2,
+          diff_add: 2,
+          warning: 3,
+          accent: 6,
+          running: 5
+        }
+      },
+      light: %{
+        loud: %{
+          error: 1,
+          diff_del: 1,
+          success: 2,
+          diff_add: 2,
+          warning: 3,
+          accent: 4,
+          running: 5
+        },
+        soft: %{
+          error: 9,
+          diff_del: 9,
+          success: 2,
+          diff_add: 2,
+          warning: 3,
+          accent: 12,
+          running: 5
+        }
+      }
     }
 
-    test "dark polarity: bright set when loud, normal set when receded" do
-      for {role, base} <- @chromatic_expected do
-        assert Ansi16Salience.slot(role, :dark, @full) == base + 8,
-               "#{role} loud on dark must be bright slot #{base + 8}"
+    test "dark polarity chromatic pins (loud and receded)" do
+      for {role, slot} <- @chromatic_expected.dark.loud do
+        assert Ansi16Salience.slot(role, :dark, @full) == slot,
+               "#{role} loud on dark must be slot #{slot}"
+      end
 
-        assert Ansi16Salience.slot(role, :dark, @receded) == base,
-               "#{role} receded on dark must be normal slot #{base}"
+      for {role, slot} <- @chromatic_expected.dark.soft do
+        assert Ansi16Salience.slot(role, :dark, @receded) == slot,
+               "#{role} receded on dark must be slot #{slot}"
       end
     end
 
-    test "light polarity: normal set when loud, bright set when receded" do
-      for {role, base} <- @chromatic_expected do
-        assert Ansi16Salience.slot(role, :light, @full) == base,
-               "#{role} loud on light must be normal slot #{base}"
+    test "light polarity chromatic pins (loud and receded)" do
+      for {role, slot} <- @chromatic_expected.light.loud do
+        assert Ansi16Salience.slot(role, :light, @full) == slot,
+               "#{role} loud on light must be slot #{slot}"
+      end
 
-        assert Ansi16Salience.slot(role, :light, @receded) == base + 8,
-               "#{role} receded on light must be bright slot #{base + 8}"
+      for {role, slot} <- @chromatic_expected.light.soft do
+        assert Ansi16Salience.slot(role, :light, @receded) == slot,
+               "#{role} receded on light must be slot #{slot}"
       end
     end
   end
 
   describe "neutral role -> slot table" do
-    # The neutral ramp mirrors the chromatic polarity flip. Emphasis is the
-    # anchor tier and takes the max-contrast slot; body foreground sits one
-    # step below it so the anchor can still exceed baseline; muted/border
-    # are the recede tier and sit at the dimmest readable slot (their
-    # floor -- see the tier-separation exemption below).
+    # The neutral ramp: emphasis is the anchor tier and takes the
+    # max-contrast slot; body foreground sits one step below it so the
+    # anchor can still exceed baseline; muted/border are the recede tier.
+    # On light ground the palette has exactly two legible neutrals (black
+    # 19.26:1, dark gray 3.67:1), so the light mid-ramp compresses onto
+    # dark gray: foreground and chrome fold (loud == soft == 8) and the
+    # receded emphasis joins them -- documented distinction loss, traded
+    # for the legibility floor.
     test "dark polarity neutral ramp" do
       assert Ansi16Salience.slot(:emphasis, :dark, @full) == 15
       assert Ansi16Salience.slot(:emphasis, :dark, @receded) == 7
@@ -111,11 +226,22 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
       assert Ansi16Salience.slot(:emphasis, :light, @full) == 0
       assert Ansi16Salience.slot(:emphasis, :light, @receded) == 8
       assert Ansi16Salience.slot(:foreground, :light, @full) == 8
-      assert Ansi16Salience.slot(:foreground, :light, @receded) == 7
+      assert Ansi16Salience.slot(:foreground, :light, @receded) == 8
       assert Ansi16Salience.slot(:chrome, :light, @full) == 8
-      assert Ansi16Salience.slot(:chrome, :light, @receded) == 7
+      assert Ansi16Salience.slot(:chrome, :light, @receded) == 8
       assert Ansi16Salience.slot(:muted, :light, @full) == 7
       assert Ansi16Salience.slot(:border, :light, @full) == 7
+    end
+
+    test "dark receded neutrals merge onto the recede floor (documented)" do
+      # At soft tier on dark, foreground, chrome, muted, and border all
+      # share slot 8 -- receded body text becomes indistinguishable from
+      # recede chrome. Intentional: slot 8 is the only sub-body neutral
+      # that stays legible on the dark ground (4.52:1); the alternative
+      # (silver) would collide with the LOUD body slot instead.
+      for role <- [:foreground, :chrome, :muted, :border] do
+        assert Ansi16Salience.slot(role, :dark, @receded) == 8
+      end
     end
   end
 
@@ -123,7 +249,9 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
     test "roles/0 covers every semantic field the harness paints" do
       # The 8 SalienceTheme seed roles + the harness constants (Block
       # chrome #B4B4B4, DiffViewer add/del bases) + :running (reserved for
-      # activity state, per the reference design's magenta family).
+      # activity state; it has no RGB seed anywhere in the harness yet,
+      # which is why measured naive-collapse counts say "11 fields" while
+      # roles/0 returns 12).
       seed_names = Enum.map(SalienceTheme.seeds(), & &1.name)
 
       for name <- seed_names do
@@ -161,15 +289,28 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
       assert Ansi16Salience.polarity(0.5) == :light
       assert Ansi16Salience.polarity(1.0) == :light
     end
+
+    test "nil ground (detection unavailable) falls back to the reference ground" do
+      # A 16-color path is a fallback; it must not crash when the OSC 11
+      # background probe has no reading. nil lands on the solver's
+      # reference ground polarity (dark). Other non-numbers still raise:
+      # fail-loud on garbage, graceful on the documented unknown.
+      assert Ansi16Salience.polarity(nil) ==
+               Ansi16Salience.polarity(Salience.reference_ground())
+
+      assert_raise FunctionClauseError, fn ->
+        Ansi16Salience.polarity("#161616")
+      end
+    end
   end
 
   # ---- tier separation: the 1.0 vs 0.6 pin ------------------------------
 
   describe "tier separation (1.0 vs 0.6 survive 16-color)" do
-    test "every non-recede role resolves distinct slots at 1.0 vs 0.6" do
+    test "every non-exempt role resolves distinct slots at 1.0 vs 0.6" do
       for polarity <- @polarities,
           role <- Ansi16Salience.roles(),
-          role not in [:muted, :border] do
+          role not in @tier_fold_exempt[polarity] do
         loud = Ansi16Salience.slot(role, polarity, @full)
         soft = Ansi16Salience.slot(role, polarity, @receded)
 
@@ -178,12 +319,14 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
       end
     end
 
-    test "muted and border are the documented recede floor (tiers fold)" do
-      # The recede tier already sits at the dimmest readable slot; ANSI16
-      # has nothing dimmer that stays visible, so the fold is intentional.
-      for polarity <- @polarities, role <- [:muted, :border] do
+    test "exempt roles fold exactly as documented (tiers coincide)" do
+      # The fold list is a pin, not a permission: an exempt role whose
+      # tiers become separable again should be removed from the list.
+      for {polarity, roles} <- @tier_fold_exempt, role <- roles do
         assert Ansi16Salience.slot(role, polarity, @full) ==
-                 Ansi16Salience.slot(role, polarity, @receded)
+                 Ansi16Salience.slot(role, polarity, @receded),
+               "#{role} on #{polarity} is fold-exempt but resolves " <>
+                 "distinct tiers -- drop it from the exemption list"
       end
     end
 
@@ -207,6 +350,78 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
         assert Ansi16Salience.slot(role, polarity, 0.79) ==
                  Ansi16Salience.slot(role, polarity, 0.6)
       end
+    end
+  end
+
+  # ---- THE LEGIBILITY FLOOR: the module's purpose, asserted -------------
+
+  describe "legibility floor (WCAG-style 3:1 against canonical grounds)" do
+    test "every non-exempt role x tier x polarity meets the floor" do
+      for {polarity, ground} <- [dark: @dark_ground, light: @light_ground],
+          prominence <- [@full, @receded],
+          role <- Ansi16Salience.roles(),
+          not Map.has_key?(@floor_exemptions, {polarity, role, prominence}) do
+        slot = Ansi16Salience.slot(role, polarity, prominence)
+        ratio = slot_contrast(slot, ground)
+
+        assert ratio >= @legibility_floor,
+               "#{role}@#{prominence} on #{polarity}: slot #{slot} is " <>
+                 "#{Float.round(ratio, 2)}:1 against ground -- below the " <>
+                 "#{@legibility_floor}:1 floor"
+      end
+    end
+
+    test "exempt entries sit exactly on their documented best-effort slot" do
+      # Exemptions are pins: an exempt entry may not drift to a different
+      # (possibly worse) slot, and if the palette ever gains a compliant
+      # in-family slot the pin should be retired, not silently bypassed.
+      for {{polarity, role, prominence}, pinned_slot} <- @floor_exemptions do
+        assert Ansi16Salience.slot(role, polarity, prominence) ==
+                 pinned_slot,
+               "#{role}@#{prominence} on #{polarity} is floor-exempt but " <>
+                 "moved off its documented slot #{pinned_slot}"
+      end
+    end
+
+    test "soft tier never reads louder than loud tier (fade direction)" do
+      # The receded tier must sit at equal-or-lower contrast than the full
+      # tier -- a soft slot brighter than its loud slot would invert the
+      # salience gradient the instrument exists to show.
+      for {polarity, ground} <- [dark: @dark_ground, light: @light_ground],
+          role <- Ansi16Salience.roles() do
+        loud =
+          slot_contrast(Ansi16Salience.slot(role, polarity, @full), ground)
+
+        soft =
+          slot_contrast(Ansi16Salience.slot(role, polarity, @receded), ground)
+
+        assert soft <= loud,
+               "#{role} on #{polarity}: receded tier (#{Float.round(soft, 2)}) " <>
+                 "reads louder than full tier (#{Float.round(loud, 2)})"
+      end
+    end
+
+    test "dark polarity needs no exemptions" do
+      # Documented invariant: every dark-canvas assignment meets the floor
+      # outright. If a dark exemption ever becomes necessary, that is a
+      # design regression to surface, not a map entry to add.
+      refute Enum.any?(@floor_exemptions, fn {{polarity, _, _}, _} ->
+               polarity == :dark
+             end)
+    end
+
+    defp slot_contrast(slot, ground) do
+      ground_hex = Salience.oklch_to_hex(ground, 0.0, 0.0)
+      Prominence.wcag_ratio(slot_hex(slot), ground_hex)
+    end
+
+    defp slot_hex(slot) do
+      {r, g, b} = Colors.ansi_to_rgb(slot)
+
+      "#" <>
+        Enum.map_join([r, g, b], fn ch ->
+          ch |> Integer.to_string(16) |> String.pad_leading(2, "0")
+        end)
     end
   end
 
