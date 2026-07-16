@@ -36,6 +36,13 @@ defmodule Raxol.Test.CrossTerminal.SequenceScanner do
     scan(rest, [{:dcs, body} | acc])
   end
 
+  # A lone trailing ESC (0x1B with no following byte) is a dangling,
+  # incomplete escape sequence. Without this clause the generic fallback
+  # below would match the ESC at position 0, slice zero bytes, and recurse
+  # on the unchanged input -- an infinite loop. Emit it as a text token so
+  # the scan terminates deterministically.
+  defp scan(<<0x1B>>, acc), do: scan(<<>>, [{:text, <<0x1B>>} | acc])
+
   defp scan(<<0x1B, char, rest::binary>>, acc) do
     scan(rest, [{:esc, <<char>>} | acc])
   end
