@@ -22,6 +22,8 @@ defmodule Raxol.Agent.SpendGate.Reservations do
   # detached from whoever happened to touch the gate first.
   use GenServer
 
+  require Logger
+
   @table __MODULE__
 
   @doc "Idempotently ensure the registry table exists. Race-safe under concurrency."
@@ -70,6 +72,30 @@ defmodule Raxol.Agent.SpendGate.Reservations do
       ])
 
     {:ok, table}
+  end
+
+  # The owner holds the named ETS table (dedup claims). It MUST survive stray
+  # traffic: the GenServer default `handle_call`/`handle_cast` STOP the process
+  # on an unexpected message ({:bad_call}/{:bad_cast}), which would destroy the
+  # table and vanish every live claim → double-charge (finding #5). Log + ignore
+  # instead of dying. The table has no in-process protocol; claim/release go
+  # straight to ETS, so there is genuinely nothing these should service.
+  @impl GenServer
+  def handle_call(request, _from, table) do
+    Logger.debug("SpendGate.Reservations: ignoring unexpected call #{inspect(request)}")
+    {:reply, {:error, :unsupported}, table}
+  end
+
+  @impl GenServer
+  def handle_cast(request, table) do
+    Logger.debug("SpendGate.Reservations: ignoring unexpected cast #{inspect(request)}")
+    {:noreply, table}
+  end
+
+  @impl GenServer
+  def handle_info(message, table) do
+    Logger.debug("SpendGate.Reservations: ignoring unexpected message #{inspect(message)}")
+    {:noreply, table}
   end
 
   # Lost the start race: the winner's `init/1` may not have created the table

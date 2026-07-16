@@ -13,6 +13,7 @@ defmodule Raxol.Agent.SpendGateRobustnessTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Agent.SpendGate
+  alias Raxol.Agent.SpendGate.Reservations
 
   # A minimal context. `budget_id` is the STABLE dedup scope (finding #4); an
   # explicit id makes two freshly-built `try_reserve` closures for one budget
@@ -140,6 +141,34 @@ defmodule Raxol.Agent.SpendGateRobustnessTest do
       assert {:ok, _} = SpendGate.reserve(ctx_1, cost_ref, 100)
       # Different budget ⇒ independent namespace, NOT a duplicate.
       assert {:ok, _} = SpendGate.reserve(ctx_2, cost_ref, 100)
+    end
+  end
+
+  describe "finding #5 — the registry owner survives stray messages (table not destroyed)" do
+    test "an unexpected call/cast/info does NOT stop the owner or destroy the table" do
+      Reservations.ensure_started()
+      owner = Process.whereis(Reservations)
+      assert is_pid(owner)
+
+      # A live claim we can prove survives.
+      scope = {:budget_id, make_ref()}
+      cost_ref = "f5-#{System.unique_integer([:positive])}"
+      assert :ok = Reservations.claim(scope, cost_ref)
+
+      # Default GenServer handle_call/handle_cast would STOP the owner here.
+      assert {:error, :unsupported} = GenServer.call(owner, :nonsense)
+      GenServer.cast(owner, :nonsense)
+      send(owner, :nonsense)
+      # A synchronous round-trip proves the owner is still alive after all three.
+      assert {:error, :unsupported} = GenServer.call(owner, :ping)
+
+      assert Process.alive?(owner)
+      assert :ets.whereis(Reservations) != :undefined
+      # The claim taken before the stray traffic is intact (would be gone if the
+      # table had been destroyed and recreated).
+      assert {:error, :duplicate} = Reservations.claim(scope, cost_ref)
+
+      Reservations.release(scope, cost_ref)
     end
   end
 end
