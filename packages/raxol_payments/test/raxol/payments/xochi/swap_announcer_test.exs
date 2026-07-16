@@ -121,6 +121,92 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncerTest do
     end
   end
 
+  describe "config/1 trust boundary: announce host allowlist" do
+    test "allows the swap's own Xochi host (override equals base)" do
+      assert {:ok, _} = SwapAnnouncer.config(context())
+    end
+
+    test "allows defaulting to the swap's base_url host" do
+      ctx = context(%{agent_stream: stream_config(%{xochi_api_url: nil})})
+      assert {:ok, %{xochi_api_url: "https://xochi.test"}} = SwapAnnouncer.config(ctx)
+    end
+
+    test "rejects a context-injected host that is not the swap host or allowlisted" do
+      ctx = context(%{agent_stream: stream_config(%{xochi_api_url: "https://attacker.example"})})
+      assert :skip == SwapAnnouncer.config(ctx)
+    end
+
+    test "allows a host on the operator allowlist" do
+      Application.put_env(:raxol_payments, :xochi_announce_hosts, ["relay.xochi.example"])
+      on_exit(fn -> Application.delete_env(:raxol_payments, :xochi_announce_hosts) end)
+
+      ctx =
+        context(%{agent_stream: stream_config(%{xochi_api_url: "https://relay.xochi.example"})})
+
+      assert {:ok, %{xochi_api_url: "https://relay.xochi.example"}} = SwapAnnouncer.config(ctx)
+    end
+  end
+
+  describe "config/1 trust boundary: topic_id format" do
+    test "accepts a well-formed base64url topic" do
+      assert {:ok, _} = SwapAnnouncer.config(context())
+    end
+
+    test "rejects a too-short topic" do
+      ctx = context(%{agent_stream: stream_config(%{topic_id: "short"})})
+      assert :skip == SwapAnnouncer.config(ctx)
+    end
+
+    test "rejects a topic with illegal characters" do
+      ctx = context(%{agent_stream: stream_config(%{topic_id: "has spaces and!@#chars"})})
+      assert :skip == SwapAnnouncer.config(ctx)
+    end
+  end
+
+  describe "config/1 trust boundary: topic bound to authorizing Mandate" do
+    test "accepts when the authorizing mandate matches the topic's declared mandate" do
+      ctx =
+        context(%{
+          agent_stream: stream_config(%{mandate_hash: "0xABCDEF"}),
+          authorizing_mandate_hash: "0xabcdef"
+        })
+
+      assert {:ok, _} = SwapAnnouncer.config(ctx)
+    end
+
+    test "rejects when the authorizing mandate does not match" do
+      ctx =
+        context(%{
+          agent_stream: stream_config(%{mandate_hash: "0xdead"}),
+          authorizing_mandate_hash: "0xbeef"
+        })
+
+      assert :skip == SwapAnnouncer.config(ctx)
+    end
+
+    test "rejects when the authorizing mandate is known but the topic declares none" do
+      ctx = context(%{authorizing_mandate_hash: "0xbeef"})
+      assert :skip == SwapAnnouncer.config(ctx)
+    end
+
+    test "when binding is required, a topic must declare its mandate" do
+      base = context(%{require_topic_mandate_binding: true})
+      assert :skip == SwapAnnouncer.config(base)
+
+      bound =
+        context(%{
+          agent_stream: stream_config(%{mandate_hash: "0xabc"}),
+          require_topic_mandate_binding: true
+        })
+
+      assert {:ok, _} = SwapAnnouncer.config(bound)
+    end
+
+    test "binding is a no-op when not required and no authorizing mandate is surfaced" do
+      assert {:ok, _} = SwapAnnouncer.config(context())
+    end
+  end
+
   describe "diagnostics: announce_skipped telemetry" do
     setup do
       ref = make_ref()
@@ -160,6 +246,30 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncerTest do
       status = %IntentStatus{intent_id: "never_stashed", status: :completed}
       assert :ok == SwapAnnouncer.announce_terminal(context(), "never_stashed", status)
       assert_receive {:skipped, ^ref, :no_route}
+    end
+
+    test "emits :invalid_topic_id for a malformed topic", %{ref: ref} do
+      SwapAnnouncer.config(context(%{agent_stream: stream_config(%{topic_id: "short"})}))
+      assert_receive {:skipped, ^ref, :invalid_topic_id}
+    end
+
+    test "emits :host_not_allowed for an off-allowlist host", %{ref: ref} do
+      SwapAnnouncer.config(
+        context(%{agent_stream: stream_config(%{xochi_api_url: "https://attacker.example"})})
+      )
+
+      assert_receive {:skipped, ^ref, :host_not_allowed}
+    end
+
+    test "emits :mandate_binding_required on a mandate mismatch", %{ref: ref} do
+      SwapAnnouncer.config(
+        context(%{
+          agent_stream: stream_config(%{mandate_hash: "0xdead"}),
+          authorizing_mandate_hash: "0xbeef"
+        })
+      )
+
+      assert_receive {:skipped, ^ref, :mandate_binding_required}
     end
 
     test "does not emit when config resolves cleanly", %{ref: ref} do

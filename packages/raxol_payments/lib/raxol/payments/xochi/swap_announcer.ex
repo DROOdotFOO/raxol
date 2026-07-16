@@ -47,6 +47,28 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
   and defeat the very unlinkability those modes exist for. The execute and
   terminal rows share the same pseudo id so the browser still merges them into
   one advancing row.
+
+  ## Trust boundary: where and under whose topic a signed row may go
+
+  The `topic_id` is a capability and the announce host is signature-free, so a
+  context that names a hostile host or a wrong topic would exfiltrate a signed
+  activity row to an attacker or into another user's feed. `config/1` therefore
+  fails closed on three axes before it will announce:
+
+    * The announce host must be the swap's own Xochi host, `localhost`, or a
+      host on the operator's allowlist (`config :raxol_payments,
+      :xochi_announce_hosts`). An injected `agent_stream.xochi_api_url` pointing
+      elsewhere is rejected.
+    * The `topic_id` must match the Xochi capability format
+      (`[A-Za-z0-9_-]{16,64}`), so a truncated or malformed topic never ships.
+    * The topic is bound to its authorizing Mandate. When the swap surfaces the
+      authorizing mandate hash (`context.authorizing_mandate_hash`), the topic's
+      declared `mandate_hash` must equal it. Absent that, a binding-required
+      deployment (production by default, or `config :raxol_payments,
+      :require_topic_mandate_binding`) still requires the topic to declare which
+      mandate it serves. Full cryptographic ownership is a Xochi-side check
+      (the worker verifying the signature against the mandate the topic was
+      issued for) and lands with the authorization handoff.
   """
 
   alias Raxol.Payments.Xochi.{AgentStream, SwapRouteStore}
@@ -59,6 +81,14 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
   # valid wire amounts (toAmount is nullable). None reveal the real route.
   @redacted_chain 0
   @redacted_from_amount "0"
+
+  # Xochi capability topic format (mirrors TOPIC_ID_RE in the shared contract):
+  # 16-64 base64url characters. A topic that does not match never ships.
+  @topic_id_re ~r/^[A-Za-z0-9_-]{16,64}$/
+  # Announce hosts allowed in addition to the swap's own Xochi host. Localhost
+  # covers `wrangler dev`; production is added via config. The swap's own host is
+  # always allowed (it is already trusted to move the funds).
+  @default_announce_hosts ["api.xochi.fi", "localhost", "127.0.0.1"]
 
   @doc """
   Announce the execute (non-terminal) event and stash the route for the terminal
@@ -75,6 +105,7 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
     case config(context) do
       {:ok, cfg} ->
         event = execute_event(request, quote, exec, cfg.topic_id)
+
         # Key the stash by the REAL intent id: PollXochiStatus only ever observes
         # that. For a private swap the event's own `intent_id` is the pseudo id,
         # so the two must not be conflated.
@@ -116,28 +147,123 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
   end
 
   @doc """
-  Resolve the `AgentStream` config from an Action context, or `:skip` when no
-  `topic_id` (or no wallet / announce host) is available. Emits an
+  Resolve the `AgentStream` config from an Action context, or `:skip` when it
+  fails a validation. Emits an
   `[:raxol, :payments, :xochi, :agent_stream, :announce_skipped]` telemetry event
-  carrying the specific reason so a misconfiguration is observable rather than a
-  silent no-op.
+  carrying the specific reason (`:not_configured`, `:no_topic_id`,
+  `:invalid_topic_id`, `:mandate_binding_required`, `:no_wallet`,
+  `:no_announce_host`, `:host_not_allowed`) so a misconfiguration or a rejected
+  host/topic is observable rather than a silent no-op. See the "Trust boundary"
+  section for the host, topic-format, and Mandate-binding rules.
   """
   @spec config(map()) :: {:ok, map()} | :skip
   def config(context) do
-    with {_, %{} = stream} <- {:not_configured, Map.get(context, :agent_stream)},
-         {_, topic_id} when is_binary(topic_id) and topic_id != "" <-
-           {:no_topic_id, Map.get(stream, :topic_id)},
-         {_, {:ok, wallet}} <- {:no_wallet, Map.fetch(context, :wallet)},
-         {_, {:ok, url}} <- {:no_announce_host, resolve_url(stream, context)} do
+    with {:ok, {stream, topic_id}} <- validate_topic(context),
+         {:ok, {wallet, url}} <- validate_target(context, stream) do
       {:ok, build_config(stream, url, topic_id, wallet)}
     else
-      {reason, _} ->
+      {:skip, reason} ->
         emit_skipped(context, reason)
         :skip
     end
   end
 
   # -- Private --
+
+  # The topic axis: a configured, well-formed topic, bound to its mandate.
+  defp validate_topic(context) do
+    with {_, %{} = stream} <- {:not_configured, Map.get(context, :agent_stream)},
+         {_, topic_id} when is_binary(topic_id) and topic_id != "" <-
+           {:no_topic_id, Map.get(stream, :topic_id)},
+         {_, true} <- {:invalid_topic_id, valid_topic_id?(topic_id)},
+         {_, :ok} <- {:mandate_binding_required, mandate_bound(stream, context)} do
+      {:ok, {stream, topic_id}}
+    else
+      {reason, _} -> {:skip, reason}
+    end
+  end
+
+  # The target axis: a signing wallet and an allowlisted announce host.
+  defp validate_target(context, stream) do
+    with {_, {:ok, wallet}} <- {:no_wallet, Map.fetch(context, :wallet)},
+         {_, {:ok, url}} <- {:no_announce_host, resolve_url(stream, context)},
+         {_, :ok} <- {:host_not_allowed, allowed_host(url, context)} do
+      {:ok, {wallet, url}}
+    else
+      {reason, _} -> {:skip, reason}
+    end
+  end
+
+  defp valid_topic_id?(topic_id), do: Regex.match?(@topic_id_re, topic_id)
+
+  # The announce host must be the swap's own Xochi host (already trusted to move
+  # the funds), or a host the operator explicitly allowlisted. A context-injected
+  # override to any other host is rejected so a signed row cannot be exfiltrated.
+  defp allowed_host(url, context) do
+    host = url_host(url)
+    base_host = url_host(get_in(context, [:xochi_config, :base_url]))
+
+    cond do
+      is_nil(host) -> :error
+      host == base_host -> :ok
+      host in configured_hosts() -> :ok
+      true -> :error
+    end
+  end
+
+  defp configured_hosts do
+    Application.get_env(
+      :raxol_payments,
+      :xochi_announce_hosts,
+      @default_announce_hosts
+    )
+  end
+
+  defp url_host(url) when is_binary(url), do: URI.parse(url).host
+  defp url_host(_url), do: nil
+
+  # Bind the topic to the mandate that authorized the swap. When the swap
+  # surfaces that mandate (`context.authorizing_mandate_hash`), the topic's
+  # declared `mandate_hash` must match it byte-for-byte (case-insensitively) so a
+  # topic issued for one mandate cannot ride a swap under another. Absent that
+  # context, a binding-required deployment still requires the topic to name a
+  # mandate; otherwise the check is a no-op.
+  defp mandate_bound(stream, context) do
+    configured = Map.get(stream, :mandate_hash)
+    authorizing = Map.get(context, :authorizing_mandate_hash)
+
+    cond do
+      is_binary(authorizing) and authorizing != "" ->
+        ok_if(is_binary(configured) and hash_eq?(configured, authorizing))
+
+      require_mandate_binding?(context) ->
+        ok_if(present?(configured))
+
+      true ->
+        :ok
+    end
+  end
+
+  defp present?(value), do: is_binary(value) and value != ""
+
+  defp ok_if(true), do: :ok
+  defp ok_if(_false), do: :error
+
+  defp require_mandate_binding?(context) do
+    case Map.get(context, :require_topic_mandate_binding) do
+      flag when is_boolean(flag) ->
+        flag
+
+      _ ->
+        Application.get_env(
+          :raxol_payments,
+          :require_topic_mandate_binding,
+          Raxol.Payments.Deployment.production?()
+        )
+    end
+  end
+
+  defp hash_eq?(a, b), do: String.downcase(a) == String.downcase(b)
 
   # Diagnostics for the best-effort no-op paths. AgentStream emits :dropped once
   # an announce is attempted and fails; this covers the layer above, where an
@@ -181,7 +307,12 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
 
   # Public settlement: disclose the full route. Any other preference (stealth /
   # shielded / unset) settles privately, so the row is redacted to status only.
-  defp execute_event(%QuoteRequest{} = request, %QuoteResponse{} = quote, exec, topic_id) do
+  defp execute_event(
+         %QuoteRequest{} = request,
+         %QuoteResponse{} = quote,
+         exec,
+         topic_id
+       ) do
     if settlement_private?(request) do
       redacted_event(pseudo_id(topic_id, exec.intent_id), execute_status(exec))
     else
@@ -201,7 +332,9 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
 
   # Only an explicit "public" preference discloses the route. Everything else,
   # including a nil/unknown preference, is treated as private (fail safe).
-  defp settlement_private?(%QuoteRequest{settlement_preference: "public"}), do: false
+  defp settlement_private?(%QuoteRequest{settlement_preference: "public"}),
+    do: false
+
   defp settlement_private?(%QuoteRequest{}), do: true
 
   # A redacted row carries no amounts, chains, or tokens and a pseudo intent id.
