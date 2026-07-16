@@ -24,9 +24,7 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
   describe "taint fails CLOSED on unknown trust (§2.1 pt.1)" do
     test "(a) a record with provenance.trust \"poisoned\" decodes to :tainted, never :trusted" do
       poisoned =
-        Gen.rec(1, :meta, :extract, Gen.meta_payload(:extract, []),
-          trust: "poisoned"
-        )
+        Gen.rec(1, :meta, :extract, Gen.meta_payload(:extract, []), trust: "poisoned")
 
       assert {:ok, %Event{provenance: %{trust: :tainted}}} = Meta.decode(poisoned),
              "a present-but-unrecognized trust token must fail closed to :tainted"
@@ -42,9 +40,7 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
         )
 
       dependent =
-        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]),
-          trust: "trusted"
-        )
+        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]), trust: "trusted")
 
       derived = Meta.derive_taint([entry, dependent])
 
@@ -65,9 +61,7 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
              "absent provenance must default to the frozen grandfather value"
 
       dependent =
-        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]),
-          trust: "trusted"
-        )
+        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]), trust: "trusted")
 
       # A meta event whose only ref is a grandfathered (absent-provenance) leaf
       # stays trusted — the grandfather path is NOT the same as fail-closed.

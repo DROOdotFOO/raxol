@@ -64,9 +64,7 @@ defmodule Raxol.Agent.EmitBridgeTest do
       streamer = start_supervised!({SessionStreamer, name: :bridge_test_streamer})
 
       bridge =
-        start_supervised!(
-          {EmitBridge, session_id: @session_id, streamer: streamer}
-        )
+        start_supervised!({EmitBridge, session_id: @session_id, streamer: streamer})
 
       # Give the bridge a moment to register its EmitBus subscription.
       _ = :sys.get_state(bridge)
@@ -172,8 +170,7 @@ defmodule Raxol.Agent.EmitBridgeTest do
 
       main_bridge =
         start_supervised!(
-          {EmitBridge,
-           session_id: main_session, streamer: streamer, journal: main_journal},
+          {EmitBridge, session_id: main_session, streamer: streamer, journal: main_journal},
           id: :main_bridge
         )
 
@@ -243,10 +240,7 @@ defmodule Raxol.Agent.EmitBridgeTest do
       {:ok, journal} = FileStore.open(session, base_dir: base)
 
       bridge =
-        start_supervised!(
-          {EmitBridge,
-           session_id: session, streamer: streamer, journal: journal}
-        )
+        start_supervised!({EmitBridge, session_id: session, streamer: streamer, journal: journal})
 
       _ = :sys.get_state(bridge)
       SessionStreamer.subscribe(session, streamer)
