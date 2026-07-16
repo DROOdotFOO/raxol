@@ -68,6 +68,13 @@ defmodule Raxol.Harness.StatusStrip do
   | `Ctx`   | context %      | `context_pct` gated by `turn_completed`|
   | `Cost`  | session cost   | `cost`                                 |
 
+  One conditional notice sits outside the slot system: an optional
+  `:stall_verdict` entry (the stall detector's one integration seam --
+  see `Raxol.Harness.StallDetector` and the private `stall_notice/1`)
+  prepends an `ALERT: <evidence>` segment at the very highest priority
+  when, and only when, the verdict is `:stalled`/`:looping` with a
+  non-empty evidence summary.
+
   Priority order, highest first (kept longest as width shrinks; see
   `field_keys/0` and `render/2`): `needs_input` (safety: an agent
   waiting on approval must never silently disappear from a narrow
@@ -211,6 +218,24 @@ defmodule Raxol.Harness.StatusStrip do
   def glyphs, do: [@missing, @ellipsis]
 
   @doc """
+  The default "slow but plausible" threshold for the Stage elapsed
+  ticker, in milliseconds. Public so the stall detector's no-progress
+  signal formalizes THIS heuristic instead of inventing a parallel
+  constant -- the strip stays the single source of truth for what
+  "quiet too long" means.
+  """
+  @spec default_warn_after_ms() :: pos_integer()
+  def default_warn_after_ms, do: @default_warn_after_ms
+
+  @doc """
+  The default "gone quiet long enough that a human should look"
+  threshold, in milliseconds. See `default_warn_after_ms/0` for why
+  this is public.
+  """
+  @spec default_hung_after_ms() :: pos_integer()
+  def default_hung_after_ms, do: @default_hung_after_ms
+
+  @doc """
   Projects `state` into the status strip's footer lines for a pinned
   region `width` display columns wide. Always returns exactly one line
   (a single-element list) -- the list return type matches the general
@@ -232,7 +257,47 @@ defmodule Raxol.Harness.StatusStrip do
         "#{label}: #{value_fn.(state)}"
       end)
 
+    segments =
+      case stall_notice(state) do
+        nil -> segments
+        notice -> [notice | segments]
+      end
+
     [fit_to_width(segments, safe_width)]
+  end
+
+  # -- stall verdict notice -------------------------------------------------
+
+  # The stall detector's one integration seam (see
+  # `Raxol.Harness.StallDetector`): an optional `:stall_verdict` state
+  # entry -- the detector's verdict struct or any map of the same shape.
+  # Only `:stalled` / `:looping` render; `:suspect` is a pre-alarm the
+  # detector surfaces for callers that want it, deliberately kept off
+  # the strip (the same false-alarm economy behind its honesty floor).
+  #
+  # This is a conditional NOTICE, not a fifth labelled slot: the
+  # always-render-`—` convention exists so missing *data* is visibly
+  # missing, but "no alarm" is the healthy state, and a permanent
+  # `Alert: —` slot would be pure noise. When present it takes highest
+  # priority -- ahead even of `needs_input` -- because a wedged agent is
+  # the one condition this instrument exists to make impossible to miss,
+  # and unlike needs-input it arrives with no other on-screen trace.
+  #
+  # No notice ever renders without evidence text: an alarm the operator
+  # cannot act on is noise (the detector's own law, enforced again here
+  # defensively). Evidence summaries embed tool names straight from
+  # agent events -- the same injection surface as `turn_stage` -- so the
+  # summary passes through the same control-character sweep.
+  defp stall_notice(state) do
+    case Map.get(state, :stall_verdict) do
+      %{class: class, evidence: %{summary: summary}}
+      when class in [:stalled, :looping] and is_binary(summary) and
+             summary != "" ->
+        "ALERT: #{sanitize_stage(summary)}"
+
+      _ ->
+        nil
+    end
   end
 
   # -- per-field slot formatting ----------------------------------------

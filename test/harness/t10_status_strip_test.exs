@@ -265,6 +265,110 @@ defmodule Raxol.Harness.T10StatusStripTest do
     end
   end
 
+  describe "stall verdict notice (the stall detector's one integration seam)" do
+    # RED-FIRST: these tests were written and run before `render/2` knew
+    # the `:stall_verdict` key existed -- every rendering assertion below
+    # failed (the key was silently ignored, no ALERT segment appeared)
+    # until the wiring landed.
+
+    @looping_verdict %{
+      class: :looping,
+      evidence: %{
+        reason: :repetition,
+        tool: "read_file",
+        count: 4,
+        summary: "possible loop: read_file x4 same args"
+      }
+    }
+
+    test "a :looping verdict prepends an ALERT segment naming the evidence" do
+      state = Map.put(@full_state, :stall_verdict, @looping_verdict)
+
+      assert StatusStrip.render(state, 200) == [
+               "ALERT: possible loop: read_file x4 same args | " <>
+                 "Input: clear | Stage: tool_call 4s | Ctx: 42% | Cost: $1.23"
+             ]
+    end
+
+    test "a :stalled verdict renders the same needs-attention notice" do
+      verdict = %{
+        class: :stalled,
+        evidence: %{reason: :no_progress, summary: "no output for 1m15s"}
+      }
+
+      [line] = StatusStrip.render(%{stall_verdict: verdict}, 200)
+
+      assert line =~ "ALERT: no output for 1m15s"
+    end
+
+    test "a :suspect verdict renders NO notice (pre-alarms stay off the strip)" do
+      verdict = %{
+        class: :suspect,
+        evidence: %{
+          reason: :repetition,
+          summary: "repeated call: x x3 same args"
+        }
+      }
+
+      state = Map.put(@full_state, :stall_verdict, verdict)
+
+      assert StatusStrip.render(state, 200) ==
+               StatusStrip.render(@full_state, 200)
+    end
+
+    test "an :ok verdict and an absent key render identically" do
+      ok_verdict = %{class: :ok, evidence: nil}
+      state = Map.put(@full_state, :stall_verdict, ok_verdict)
+
+      assert StatusStrip.render(state, 200) ==
+               StatusStrip.render(@full_state, 200)
+    end
+
+    test "a verdict without evidence renders NO notice (no unexplained alarms)" do
+      # The detector's honesty floor says no verdict without evidence;
+      # the strip enforces the same law defensively -- an alarm the
+      # operator can't act on is noise, not information.
+      state =
+        Map.put(@full_state, :stall_verdict, %{class: :stalled, evidence: nil})
+
+      assert StatusStrip.render(state, 200) ==
+               StatusStrip.render(@full_state, 200)
+    end
+
+    test "the ALERT segment has highest priority under width pressure" do
+      state = Map.put(@full_state, :stall_verdict, @looping_verdict)
+      alert = "ALERT: possible loop: read_file x4 same args"
+
+      [line] =
+        StatusStrip.render(state, Raxol.UI.TextMeasure.display_width(alert))
+
+      assert line == alert
+      refute line =~ "Input:"
+    end
+
+    test "an ESC-laden evidence summary is sanitized like any footer text" do
+      # Evidence summaries embed tool names, which come straight from
+      # agent events -- the same injection surface as `turn_stage`.
+      verdict = %{
+        class: :looping,
+        evidence: %{reason: :repetition, summary: "loop: x\e[2J y\nz"}
+      }
+
+      [line] = StatusStrip.render(%{stall_verdict: verdict}, 200)
+
+      refute line =~ "\e"
+      refute line =~ "\n"
+      assert line =~ "ALERT: loop: x[2J yz"
+    end
+  end
+
+  describe "shared thresholds (single source of truth for the hung heuristic)" do
+    test "the warn/hung defaults are exposed for the stall detector to reuse" do
+      assert StatusStrip.default_warn_after_ms() == 15_000
+      assert StatusStrip.default_hung_after_ms() == 60_000
+    end
+  end
+
   describe "stage sanitization (injection guard: turn_stage reaches a byte-level pinned writer unsanitized)" do
     test "an ESC-laden stage is sanitized -- no ESC byte reaches the output" do
       # RED-FIRST: before `sanitize_stage/1` existed, `stage_value/1`
