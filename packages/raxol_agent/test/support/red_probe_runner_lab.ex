@@ -504,6 +504,70 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     end
   end
 
+  defmodule ShortParkProbe do
+    @moduledoc """
+    A cache-riding probe with a SHORT `park_timeout_ms` (and small `max_parked`)
+    so the bounded-parking / kill-on-parked contours run fast in CI instead of
+    waiting the 10s production TTL (adversarial-review #8). Same `id` (`:c1_gate`)
+    and behaviour as `CacheRideProbe`; only the parking knobs differ.
+    """
+    @behaviour Raxol.Agent.Probe
+
+    @impl true
+    def spec do
+      %{
+        id: :c1_gate,
+        mode: :cache_riding,
+        max_calls: 1,
+        timeout_ms: 5_000,
+        default_budget: 500,
+        max_parked: 3,
+        park_timeout_ms: 300
+      }
+    end
+
+    @impl true
+    def build(_context),
+      do: {:ok, %{suffix: [%{role: "user", content: "gate?"}], output: :structured, max_output_tokens: 256}}
+
+    @impl true
+    def interpret(_response, context),
+      do: {:ok, [%{type: :gate_decision, refs: [context.tip_offset], payload: %{choice: :allow}}]}
+  end
+
+  defmodule HangingProbe do
+    @moduledoc """
+    A probe whose `build/1` never returns — a hung provider/interpret call. The
+    Runner's wall-clock `timeout_ms` leash (adversarial-review #2) must kill it
+    and emit the `:timeout` terminal. `timeout_ms` is short so the leash fires
+    fast in CI.
+    """
+    @behaviour Raxol.Agent.Probe
+
+    @impl true
+    def spec do
+      %{
+        id: :c1_gate,
+        mode: :cache_riding,
+        max_calls: 1,
+        timeout_ms: 300,
+        default_budget: 500,
+        max_parked: 4,
+        park_timeout_ms: 10_000
+      }
+    end
+
+    @impl true
+    def build(_context) do
+      Process.sleep(:infinity)
+      {:ok, %{suffix: [], output: :structured, max_output_tokens: 64}}
+    end
+
+    @impl true
+    def interpret(_response, context),
+      do: {:ok, [%{type: :gate_decision, refs: [context.tip_offset], payload: %{choice: :allow}}]}
+  end
+
   defmodule MultiCallProbe do
     @moduledoc "A two-call probe (id :c2_rules) for max_calls/mid-run exhaustion."
     @behaviour Raxol.Agent.Probe

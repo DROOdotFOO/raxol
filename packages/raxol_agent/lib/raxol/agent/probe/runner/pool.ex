@@ -116,6 +116,26 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
         emit_terminal(emit, run_id, spec.id, :killed, @zero_charge, nil)
         {:reply, :ok, put_run(state, run_id, %{run | status: :killed, killed: true, reserved: 0})}
 
+      %{status: :parked, killed: false, emit: emit, spec: spec, key: key, park_ref: park_ref} =
+          run ->
+        # Kill on a PARKED run must NOT be a silent no-op (the old clause matched
+        # only :running, so a parked run replied :ok with no terminal and later
+        # shed :exhausted — a phantom double lifecycle). Evict it: cancel the TTL
+        # timer so no shed terminal follows, drop it from the parked set, emit the
+        # single :killed terminal (#3).
+        Process.cancel_timer(park_ref)
+
+        emit_terminal(emit, run_id, spec.id, :killed, @zero_charge, nil)
+
+        state =
+          state
+          |> put_run(run_id, %{run | status: :killed, killed: true})
+          |> Map.update(:parked, %{}, fn sets ->
+            Map.update(sets, key, MapSet.new(), &MapSet.delete(&1, run_id))
+          end)
+
+        {:reply, :ok, state}
+
       _already_terminal ->
         # Idempotent: a run past its terminal is not re-killed (no double emit).
         {:reply, :ok, state}
@@ -247,9 +267,21 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
       # :timeout when a max_parked overflow signals sustained budget pressure.
       # A held run has no terminal yet; that is the observable "parked" state.
       emit_opening(emit, run_id, spec.id, :parked)
-      Process.send_after(self(), {:park_ttl, run_id, key}, spec.park_timeout_ms)
+      park_ref = Process.send_after(self(), {:park_ttl, run_id, key}, spec.park_timeout_ms)
 
-      run = %{status: :parked, killed: false, emit: emit, spec: spec, budget: budget}
+      # A parked run holds NO reserve (its reserve was refused — that is why it
+      # parked), so `reserved: 0`. `key`/`park_ref` let `kill/1` evict it and
+      # cancel its TTL so no shed terminal follows the :killed one (#3).
+      run = %{
+        status: :parked,
+        killed: false,
+        emit: emit,
+        spec: spec,
+        budget: budget,
+        key: key,
+        park_ref: park_ref,
+        reserved: 0
+      }
 
       state
       |> put_run(run_id, run)

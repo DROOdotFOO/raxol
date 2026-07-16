@@ -71,6 +71,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     CacheRideProbe,
     LoopDraftProbe,
     MultiCallProbe,
+    ShortParkProbe,
     TaintedTrustProbe
   }
 
@@ -468,6 +469,42 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       # Still exactly one terminal each — shedding is not double-emitting.
       assert L.lifecycle_complete(events, submitted) == :ok, "seed=#{@seed}"
+    end
+  end
+
+  describe "kill on a parked run (adversarial-review #3)" do
+    test "kill on a PARKED run emits the :killed terminal, cancels the TTL, sheds no later :exhausted" do
+      # cap:0 refuses the reserve → the run PARKS. park_or_shed emits :parked
+      # synchronously inside submit, so it is already on the bus when submit
+      # returns. ShortParkProbe's park_timeout_ms is 300ms (fast-park, #8) so the
+      # "no shed after kill" wait is sub-second, not the 10s production TTL.
+      rig = rig(cap: 0)
+
+      assert {:ok, run_id} = Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx()))
+
+      assert Enum.any?(
+               L.events(rig.bus),
+               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :parked)
+             ),
+             "expected the run to park before kill: #{inspect(L.events(rig.bus))}"
+
+      assert :ok = Runner.kill(run_id)
+
+      # Wait past park_timeout_ms: a cancelled TTL must NOT shed a second terminal.
+      park_ttl = ShortParkProbe.spec().park_timeout_ms
+      Process.sleep(park_ttl + 200)
+      events = L.events(rig.bus)
+
+      terminals =
+        for %{kind: :probe_run, run_id: ^run_id, status: s} <- events,
+            s in L.terminal_statuses(),
+            do: s
+
+      assert terminals == [:killed],
+             "kill on a parked run must yield exactly one :killed terminal, got #{inspect(terminals)}"
+
+      assert {:ok, :killed} = Runner.status(run_id)
+      assert L.lifecycle_complete(events, [run_id]) == :ok
     end
   end
 
