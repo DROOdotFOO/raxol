@@ -67,7 +67,12 @@ defmodule Raxol.Agent.Meta do
           | {:error, {:invalid_meta_payload, atom(), [atom()]}}
           | {:error, :provenance_required}
           | {:error, {:scope_violation, atom()}}
-  def validate(%Event{family: family, type: type, payload: payload, scope: scope}) do
+  def validate(%Event{
+        family: family,
+        type: type,
+        payload: payload,
+        scope: scope
+      }) do
     validate(%{family: family, type: type, payload: payload, scope: scope})
   end
 
@@ -167,37 +172,90 @@ defmodule Raxol.Agent.Meta do
   def derive_taint(records) do
     idx = index(records)
 
-    for r <- records, meta?(r), into: %{} do
-      {offset(r), derived_trust(r, idx, MapSet.new())}
-    end
+    {result, _cache} =
+      Enum.reduce(records, {%{}, %{}}, fn r, {acc, cache} ->
+        if meta?(r) do
+          {trust, _pure?, cache} = derived_trust(r, idx, MapSet.new(), cache)
+          {Map.put(acc, offset(r), trust), cache}
+        else
+          {acc, cache}
+        end
+      end)
+
+    result
   end
 
-  # Recursive tainted-absorbing meet over refs (cycle-guarded). Loop events
-  # anchor with their stored trust; meta events derive from their refs.
-  defp derived_trust(record, idx, seen) do
+  # Memoized recursive tainted-absorbing meet over refs. Loop events anchor
+  # with their stored trust; meta events derive from their refs.
+  #
+  # `seen` is the cycle guard on the CURRENT DFS path only; `cache` is the
+  # cross-branch memo (`offset => trust`) shared across the WHOLE fold, which
+  # makes the fold linear in the size of the ref DAG. Without it, sibling
+  # ref-branches recompute shared nodes from scratch, and a multi-parent
+  # journal — REQUIRED by the freeze (N-U11.10 plural-parent speculation,
+  # P-U11.8) — makes the fold Fibonacci-shaped, i.e. exponential: a few dozen
+  # chained 2-parent meta events would hang `derive_taint/1` on replay.
+  #
+  # The `:trusted` back-edge (cycle guard) is SAFE, not fail-open: a record is
+  # tainted iff a tainted leaf is reachable through refs, and any reachable
+  # tainted leaf is reached via a simple (acyclic) path, which the DFS always
+  # explores — pruning a back-edge can never hide a tainted path, it only
+  # stops the infinite descent. Cycles cannot occur in a legal append-only
+  # journal (refs name already-existing offsets); this arm fires only on a
+  # corrupt or adversarial journal, where the argument above still holds.
+  #
+  # The memo is CYCLE-SAFE by construction: a `:tainted` result is always
+  # cached (a concrete tainted path was found — path-independent), but a
+  # `:trusted` result is cached ONLY when its computation never touched a
+  # pruned back-edge (`pure? = true`). A back-edge-contaminated `:trusted` is
+  # path-relative — caching it would launder taint on a later path — so it is
+  # recomputed fresh at its own top-level fold instead. On any legal (acyclic)
+  # journal every node is pure, so every node is computed exactly once.
+  defp derived_trust(record, idx, seen, cache) do
     id = offset(record)
 
     cond do
+      Map.has_key?(cache, id) ->
+        {Map.fetch!(cache, id), true, cache}
+
       MapSet.member?(seen, id) ->
-        :trusted
+        # Back-edge on the current path: prune (sound, see above), and mark
+        # the enclosing computation impure so its :trusted is never cached.
+        {:trusted, false, cache}
 
       not meta?(record) ->
-        stored_trust(record)
+        trust = stored_trust(record)
+        {trust, true, Map.put(cache, id, trust)}
 
       true ->
         seen = MapSet.put(seen, id)
 
-        tainted? =
+        {tainted?, pure?, cache} =
           record
           |> refs()
-          |> Enum.any?(fn ref ->
+          |> Enum.reduce_while({false, true, cache}, fn ref,
+                                                        {_t, pure?, cache} ->
             case Map.get(idx, ref) do
-              nil -> false
-              ref_rec -> derived_trust(ref_rec, idx, seen) == :tainted
+              nil ->
+                {:cont, {false, pure?, cache}}
+
+              ref_rec ->
+                case derived_trust(ref_rec, idx, seen, cache) do
+                  {:tainted, _pure?, cache} ->
+                    {:halt, {true, pure?, cache}}
+
+                  {:trusted, ref_pure?, cache} ->
+                    {:cont, {false, pure? and ref_pure?, cache}}
+                end
             end
           end)
 
-        if tainted?, do: :tainted, else: :trusted
+        trust = if tainted?, do: :tainted, else: :trusted
+        # A tainted result is path-independent (a concrete tainted path was
+        # found), so it is always cacheable and always pure to reuse.
+        pure? = tainted? or pure?
+        cache = if pure?, do: Map.put(cache, id, trust), else: cache
+        {trust, pure?, cache}
     end
   end
 
@@ -230,7 +288,9 @@ defmodule Raxol.Agent.Meta do
     for r <- records, event?(r), into: %{}, do: {offset(r), fold_actor(r)}
   end
 
-  # Absent actor => system, BY RULE (never inferred as human/agent).
+  # Absent actor => system, BY RULE (never inferred as human/agent). An
+  # unknown PRESENT kind stays a raw binary — see decode_actor_field/1 below
+  # for why it is neither an error nor rewritten to :system.
   defp fold_actor(%{"actor" => %{"kind" => k} = a}) do
     %{kind: decode_token(k, :system), id: Map.get(a, "id")}
   end
@@ -331,6 +391,14 @@ defmodule Raxol.Agent.Meta do
     end)
   end
 
+  # CROSS-UNIT SEAM, not dead code: `:head_config` is the session head-tag
+  # record (§2.1 "the session head config is defaults only" / the
+  # replay-fidelity law's "the head tag states session defaults"). No unit in
+  # this package emits it yet — the session-head unit lands it (U12 fingerprint
+  # wiring, U11-I). Until then this branch folds `nil` for journals without a
+  # head record, which is the correct answer: no head config means no default
+  # fingerprint, never a guessed one. The precedence reds pin the branch via
+  # generator-built `:head_config` records (`MetaJournalGen.fingerprint_precedence/1`).
   defp head_default(records) do
     Enum.find_value(records, fn r ->
       if type(r) == :head_config, do: get_in(r, ["payload", "fingerprint"])
@@ -369,7 +437,9 @@ defmodule Raxol.Agent.Meta do
   # ABSENT provenance is the frozen grandfather default (:trusted) — distinct
   # from a present-but-unrecognized value. This anchors the taint fold's leaves,
   # so a laundered entry point can no longer read trusted.
-  defp stored_trust(%{"provenance" => %{"trust" => trust}}), do: trust_token(trust)
+  defp stored_trust(%{"provenance" => %{"trust" => trust}}),
+    do: trust_token(trust)
+
   # PRESENT provenance map with NO trust key: fail CLOSED (a trustless present
   # provenance must not launder taint away).
   defp stored_trust(%{"provenance" => p}) when is_map(p), do: :tainted
@@ -395,7 +465,10 @@ defmodule Raxol.Agent.Meta do
   # (a present-but-unrecognized value must NOT read as trusted — §2.4). Absent
   # provenance is handled by the grandfather clause below (:trusted default).
   defp decode_provenance(%{"trust" => trust} = p) do
-    %{source: decode_token(Map.get(p, "source"), :primary), trust: trust_token(trust)}
+    %{
+      source: decode_token(Map.get(p, "source"), :primary),
+      trust: trust_token(trust)
+    }
   end
 
   # Already atom-keyed & complete (decode over an already-decoded provenance).
@@ -415,6 +488,15 @@ defmodule Raxol.Agent.Meta do
   # PRESENT non-map provenance (wrong shape): fail CLOSED.
   defp decode_provenance(_present), do: %{source: :primary, trust: :tainted}
 
+  # An UNKNOWN actor kind (not :human/:agent/:system) is preserved RAW as a
+  # binary by `decode_token` — the reader-tolerant seam (§0.2) forbids both
+  # erroring and materializing fresh atoms. Deliberately NOT mapped to
+  # `:system`: absent-actor⇒system is the frozen fold rule for ABSENCE only;
+  # rewriting an unknown PRESENT kind to :system would misattribute the event.
+  # Consumers making trust/attribution decisions on `actor.kind` MUST treat a
+  # non-atom kind fail-closed (least privilege), never fall through to a
+  # privileged default — the actor path is the one the moduledoc calls
+  # spoofable, and admission decisions must fold, not read stamps (§2.1 pt.6).
   defp decode_actor_field(%{"kind" => k} = a) do
     %{kind: decode_token(k, :system), id: Map.get(a, "id")}
   end
