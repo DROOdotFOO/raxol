@@ -134,6 +134,36 @@ defmodule Raxol.Core.Boundary.PathTest do
 
       assert Confine.confine(root, "a") == {:error, :too_many_symlinks}
     end
+
+    test "relative leaf symlink under a depth-inflating ancestor cannot under-apply .. (:symlink_escape)",
+         %{base: base} do
+      # A symlink's relative target must resolve against its REAL parent, not its
+      # lexical parent. `loop -> .` inflates lexical depth (root/loop/loop == root),
+      # so resolving `esc -> ../secret.txt` against the LEXICAL parent (root/loop)
+      # lands on root/secret.txt (interior) while the OS resolves it to
+      # base/secret.txt (outside root). Asserts the escape directly -- no
+      # confine-derived oracle -- so it fails if the escape is ever accepted.
+      File.write!(Path.join(base, "secret.txt"), "SECRET")
+
+      root = Path.join(base, "root")
+      File.mkdir_p!(root)
+      :ok = File.ln_s!(".", Path.join(root, "loop"))
+      :ok = File.ln_s!("../secret.txt", Path.join(root, "esc"))
+
+      assert Confine.confine(root, "loop/loop/esc") == {:error, :symlink_escape}
+    end
+
+    test "deep symlink-free nesting is not mistaken for a symlink cycle", %{base: base} do
+      # The depth cap counts symlink hops, not directory nesting: a tree far
+      # deeper than @max_symlink_depth (40) with zero symlinks must still resolve.
+      deep = Enum.map_join(1..80, "/", &"d#{&1}")
+      File.mkdir_p!(Path.join(base, deep))
+      File.write!(Path.join([base, deep, "leaf.txt"]), "deep")
+
+      assert {:ok, real} = Confine.confine(base, deep <> "/leaf.txt")
+      assert File.read!(real) == "deep"
+      assert String.starts_with?(real, resolve_real(base) <> "/")
+    end
   end
 
   describe "confine/3 ref-shape gate" do
