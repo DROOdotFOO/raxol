@@ -74,11 +74,12 @@ defmodule Raxol.Agent.Steer do
 
   ## Status
 
-  **Skeleton only (U6 enabler).** `resolve/2` raises `:not_implemented`; the
-  permanent red suite in `test/raxol/agent/red/u6_steer_red_test.exs` is authored
-  against this frozen shape and fails until U6 lands. The
-  `@moduletag :harness_red` reds are excluded from CI so the suite stays green;
-  the negative controls (dead-injector detection) run in CI.
+  **Implemented (U6).** `resolve/2` and `rebuild/1` land the decision core above;
+  the permanent suite in `test/raxol/agent/red/u6_steer_red_test.exs` — authored
+  against this frozen shape — now runs GREEN in CI (the `@moduletag :harness_red`
+  exclusion was dropped once the impl satisfied every contour). The negative
+  controls (dead-injector detection) continue to run in CI against the reference
+  oracle and injectors.
   """
 
   defmodule Request do
@@ -159,21 +160,107 @@ defmodule Raxol.Agent.Steer do
   @doc """
   Resolve a steer request (see the `resolve/2` callback).
 
-  Skeleton: raises `:not_implemented`. Lands with U6.
+  Decision order is load-bearing (freeze-contracts §5.1 + AD-13):
+
+    1. **Idempotency first** — a re-delivered `client_msg_id` is resolved against
+       the journal-derived dedup index BEFORE the CAS, so a duplicate still
+       deduplicates after a restart even when a different turn is running. Same
+       payload → `{:ok, {:duplicate, ref}}` (the ORIGINAL accept); different
+       payload → `{:error, :client_msg_id_reuse}`. Both leave the state
+       unchanged.
+    2. **No live turn** — `turn_id == nil` → `{:error, :no_live_turn}`, state
+       unchanged. Checked before the CAS so a `nil == nil` request can never be
+       read as a real match (Drew's nil-turn tooth).
+    3. **CAS** — `expected_turn_id != turn_id` → `{:error, {:stale_turn, exp,
+       act}}`, state unchanged (nothing journaled, zero model effect).
+    4. **Accept** — append one durable steer event to the target turn, swap the
+       CAS token forward to a globally-unique (ABA-safe) value, memoise the
+       `client_msg_id` + payload.
   """
   @spec resolve(TurnState.t(), Request.t()) :: {result(), TurnState.t()}
-  def resolve(%TurnState{} = _state, %Request{} = _request) do
-    raise "Raxol.Agent.Steer.resolve/2 not implemented (U6 — steer via expected_turn_id CAS, AD-13)"
+  def resolve(
+        %TurnState{turn_id: cur, seen: seen, log: log} = state,
+        %Request{expected_turn_id: expected, client_msg_id: cmid, text: text}
+      ) do
+    cond do
+      not is_nil(cmid) and Map.has_key?(seen, cmid) ->
+        resolve_seen(state, Map.fetch!(seen, cmid), text)
+
+      is_nil(cur) ->
+        # No turn is running — a fresh steer has nowhere to land. `expected ==
+        # nil` must NOT be read as a CAS match (silent-misdirection guard).
+        {{:error, :no_live_turn}, state}
+
+      expected != cur ->
+        # Stale — the turn changed (ended, or another steer won the race). No
+        # journaling, no token swap: zero model effect.
+        {{:error, {:stale_turn, expected, cur}}, state}
+
+      true ->
+        accept(cur, seen, log, cmid, text)
+    end
+  end
+
+  # (1) idempotency — same cmid seen before. The payload MUST match, or this is a
+  # reused key carrying new content (a client bug/attack), never a retry (§5.1).
+  defp resolve_seen(state, %{ref: ref, text: original_text}, text) do
+    if original_text == text do
+      {{:ok, {:duplicate, ref}}, state}
+    else
+      {{:error, :client_msg_id_reuse}, state}
+    end
+  end
+
+  # (4) accept — land a durable event in the TARGET turn, swap the token forward.
+  defp accept(cur, seen, log, cmid, text) do
+    offset = length(log) + 1
+    ref = %{turn_id: cur, offset: offset, client_msg_id: cmid}
+
+    event = %{
+      type: :steer,
+      tier: :durable,
+      family: :loop,
+      turn_id: cur,
+      client_msg_id: cmid,
+      text: text,
+      offset: offset
+    }
+
+    seen2 =
+      if is_nil(cmid), do: seen, else: Map.put(seen, cmid, %{ref: ref, text: text})
+
+    next = %TurnState{turn_id: swap(cur), seen: seen2, log: log ++ [event]}
+
+    {{:ok, {:accepted, ref}}, next}
   end
 
   @doc """
   Rebuild the dedup index from the durable journal (see the `rebuild/1`
   callback).
 
-  Skeleton: raises `:not_implemented`. Lands with U6.
+  The journal is the dedup truth (§5.1): each accepted steer stored its
+  `client_msg_id` AND its `text`, so folding the durable steer records back into
+  the idempotency index survives a BEAM restart with the payload-mismatch check
+  intact. `turn_id` is NOT reconstructed here — it comes from the loop's turn
+  brackets on resume; dedup is checked before the CAS, so a duplicate is caught
+  regardless of which turn is running after the restart.
   """
   @spec rebuild([map()]) :: TurnState.t()
   def rebuild(journal) when is_list(journal) do
-    raise "Raxol.Agent.Steer.rebuild/1 not implemented (U6 — journal-fold dedup, §5.1)"
+    seen =
+      journal
+      |> Enum.filter(&(&1[:type] == :steer and not is_nil(&1[:client_msg_id])))
+      |> Map.new(fn ev ->
+        ref = %{turn_id: ev[:turn_id], offset: ev[:offset], client_msg_id: ev[:client_msg_id]}
+        {ev[:client_msg_id], %{ref: ref, text: ev[:text]}}
+      end)
+
+    %TurnState{turn_id: nil, seen: seen, log: journal}
   end
+
+  # The CAS swap: a fresh token, GLOBALLY DISTINCT from every token this turn has
+  # ever held (not merely different from the current one) — the ABA-safety law.
+  # `System.unique_integer/1` guarantees this; a boolean toggle or a repeatable
+  # per-turn counter would NOT (see `SteerInjectors.RepeatableToken`).
+  defp swap(cur), do: {:steered, cur, System.unique_integer([:positive])}
 end
