@@ -93,7 +93,10 @@ defmodule Raxol.Payments.Xochi.SwapRouteStore do
         :ok
 
       nil ->
-        case start_link([]) do
+        # Register the singleton under __MODULE__ so a later `whereis` short-
+        # circuits and a concurrent starter loses cleanly with :already_started
+        # (rather than reaching init and crashing on the duplicate named table).
+        case start_link(name: __MODULE__) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
           {:error, _reason} -> :ok
