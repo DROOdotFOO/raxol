@@ -612,7 +612,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   or whose width-correct truncation went stale / whose sealed history rewrapped
   (horizontal). This is independent of `reflow_capable?/1`/the telemetry hook
   below: the ghost-content risk applies to every terminal's footer, not just the
-  (B)-detection subset.
+  reflow-capable subset.
   """
   @impl true
   def resize(%__MODULE__{region: region, next_row: next_row} = t, width, height) do
@@ -636,13 +636,14 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     reflow_relevant? = geometry_changed? or width_changed?
 
     if reflow_relevant? and t.reflow_capable? do
-      # The (B)-detection seam firing: this session's terminal is known,
-      # from RB's real-hardware C-4 probe, to reflow sealed history
-      # cleanly on a geometry-changing resize. NOTHING is re-emitted here
-      # — re-emission is a FUTURE unit's job (D-PA RULING: ship (A), (B)
-      # is a runtime-detected ADDITIVE upgrade). This telemetry event is
-      # the thin hook that unit gates on — it carries BOTH axes so the (B)
-      # unit can tell a rewrapping width change from a pure row change.
+      # The reflow-aware detection seam firing: this session's terminal
+      # is known, from the real-hardware terminal-matrix probe, to reflow
+      # sealed history cleanly on a geometry-changing resize. NOTHING is
+      # re-emitted here — re-emission is a FUTURE unit's job (ship
+      # seal-time-only now; reflow-aware re-emission is a runtime-detected
+      # ADDITIVE upgrade). This telemetry event is the thin hook that unit
+      # gates on — it carries BOTH axes so the future unit can tell a
+      # rewrapping width change from a pure row change.
       :telemetry.execute(
         [:raxol, :ui, :paint_authority, :reflow_capable_resize],
         %{},
