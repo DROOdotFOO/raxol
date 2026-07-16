@@ -147,13 +147,36 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       assert L.provider_calls(rig.provider) == 0
     end
 
-    test "submit under exhaustion still returns {:ok, run_id}; the run PARKS with zero provider calls (N-U12.3)" do
+    test "submit under exhaustion still returns {:ok, run_id}; the run PARKS, then its lifecycle completes via the shed terminal — zero provider calls (N-U12.3)" do
       # Cap 0 ⇒ every reserve refused at the submit-time budget check.
       rig = rig(cap: 0)
 
       assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
 
-      events = L.events(rig.bus)
+      # AMENDED — ratified by V, 2026-07-16 (do not re-litigate).
+      #
+      # The contradiction: the original N-U12.3 read the bus IMMEDIATELY after
+      # submit and asserted `lifecycle_complete/2`, which requires exactly one
+      # terminal per run. On a budget-refused (cap:0) run the immediate read sees
+      # only the `:parked` opening (openings:1, terminals:0), so it demanded a
+      # SYNCHRONOUS terminal at submit time. That is pre-F5 semantics (park =
+      # immediate synthetic terminal). It is mutually exclusive with the
+      # bounded-parking laws in THIS file for the identical first run: test ~298
+      # (a parked run sheds to :exhausted only after park_timeout_ms) and test
+      # ~315 (a max_parked-refused run is :exhausted and was NEVER :parked).
+      #
+      # The ruling: genuine held bounded parking (ratified F5) means a parked run
+      # legitimately has NO terminal until it sheds (TTL/pressure) or executes.
+      # The lifecycle-completeness law it pins — every submitted run terminates,
+      # even when parked — REMAINS in force, but ASYNCHRONOUSLY. So AWAIT the
+      # terminal (bounded poll until the real shed produces it) instead of reading
+      # it inline. A truly-missing terminal still fails (the bound elapses and the
+      # fold sees openings:1/terminals:0) rather than hanging. Tests ~298/~315 are
+      # untouched; all three laws (lifecycle-completeness, over-cap exhaustion,
+      # parked≠exhausted-lie) still hold — only the timing assumption changed.
+      # Rationale: F5 genuine-parking (harness-freeze-contracts.md §3.1 Budget).
+      park_ttl = CacheRideProbe.spec().park_timeout_ms
+      events = await_terminals(rig.bus, [run_id], park_ttl + 2_000)
 
       assert Enum.any?(
                events,
