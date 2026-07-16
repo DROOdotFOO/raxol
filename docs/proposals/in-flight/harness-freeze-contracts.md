@@ -707,6 +707,17 @@ The must-fail red is **N-JS-skew** (§1.3).
   — the closure law itself is P-JS5 (§1.2) and the no-publish-ahead ordering
   is I3 / N-JS7 (§1.3); the fan-out + permission BUS that produces these
   messages (AD-15 second half) is still unfrozen and tracked as OQ-JS6.
+  - *Non-normative context (2026-07-17, changes no law):* the layered
+    protocol work (`harness-bus-{protocol,encoding,transport}.md` + the
+    `raxol_agent_client_protocol` package) recontextualizes this ratified
+    tuple as exactly the **`(term × process)` cell** of the encoding ×
+    transport matrix — the BEAM-local wire. The *portable/cross-language*
+    wire for the same semantics is **ACP (Agent Client Protocol, Zed's
+    editor↔agent JSON-RPC 2.0) + our `_raxol/session.load` extension with
+    offset params riding `_meta["raxol.io"]`**. Everything ratified here
+    stands unchanged; do NOT freeze this tuple as the cross-language wire —
+    that role belongs to the ACP extension surface. (ACP here = Agent
+    *Client* Protocol; unrelated to `raxol_acp` = Agent *Commerce* Protocol.)
 - **OQ-JS5 (`attach` base-dir) — RULED: GROW THE ARITY NOW (V, 2026-07-16).**
   `attach/3`'s frozen shape gains a trailing optional `opts` keyword:
   `attach(session_id, offset, historyPolicy, opts \\ [])` where `opts` may
@@ -725,6 +736,17 @@ The must-fail red is **N-JS-skew** (§1.3).
   research + design pass, 2026-07-16); ratified separately. Until then U4-I
   builds only the read-side + single-subscriber live tail against OQ-JS4; the
   bus is deferred, not assumed.
+  - *Status pointer (2026-07-17, still OPEN — changes no law):* the admission
+    design is now being built concretely as `AttachPolicy` (fail-closed
+    `authorize_attach/1`: anything but a literal `{:ok, grant}` denies) +
+    offline-verifiable Ed25519 capability tokens (claims
+    `{session_id, actor, issued, expiry}`, grow-only; verifiable writerless
+    from a tar'd dir) inside the `raxol_agent_client_protocol` package,
+    riding the ACP `_raxol/*` extension surface, per the V-ratified bus
+    specs (`harness-bus-protocol.md` §3, annotate-not-filter taint §6).
+    When that package's permission layer lands and survives its gates,
+    ratification of OQ-JS6 should target THAT artifact rather than a
+    bespoke bus module.
 
 ---
 
