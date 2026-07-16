@@ -22,7 +22,22 @@ defmodule Raxol.UI.Harness.Keymap do
 
     * **tui-steal rule** (chords replace keys later without restructuring
       the dispatch logic -- a bind's `match` grows a `mods:` requirement,
-      the walking loop does not change).
+      the walking loop does not change). This is not aspirational: a
+      `key:`-kind bind with no declared `mods:` matches only a BARE
+      keypress (no ctrl/alt/meta held) -- Ctrl+Tab, Alt+Tab, and Meta+Tab
+      all fall through to `:passthrough` rather than firing `:steer`,
+      because they are shortcuts wired to something else, not "Tab". An
+      entry that DOES declare `mods:` (a full `InputEvent.mods()` map)
+      requires an EXACT match against the normalized event's `mods`
+      instead of the bare-keypress default -- that is the chord's match
+      spec growing a field, per the promise above, with `resolve/2`'s
+      walking loop untouched. Shift alone is not restricted by the
+      bare-keypress default (mirrors `InputEvent.text?/1`: shift-only is
+      not a shortcut), so Shift+Tab still resolves through the plain
+      `:tab` bind. `char:`-kind binds need no separate mods check --
+      `InputEvent.printable_char/1` already returns `nil` whenever
+      ctrl/alt/meta is held, so a modifier-qualified letter never reaches
+      the char-kind match branch in the first place.
     * **Invocation parity with T15's palette**: the palette can enumerate
       `binds/0` and invoke `command_for/2` on any entry directly (a command
       palette is just another way to select a bind, not a second source of
@@ -49,6 +64,38 @@ defmodule Raxol.UI.Harness.Keymap do
       fix: they only resolve to a command when focus is NOT the composer
       (browsing the transcript), and fall through to `:passthrough`
       (ordinary character insertion) while composing.
+
+  ### Fail-safe default: missing `composing?` means composing
+
+  A caller that omits `composing?` from `context()` entirely (forgets it,
+  or is a code path -- palette invocation, a future non-composer
+  interaction -- that never renders a composer at all) gets the
+  fail-SAFE reading: **treated as composing**, so the guarded binds
+  (`fold-toggle`, `jump_next`, `jump_prev`) resolve to `:passthrough`,
+  never firing. This is deliberately asymmetric with what would be
+  simplest to implement (`Map.get(context, :composing?, false)`, "missing
+  means not composing"), because the two failure directions are not
+  equally bad:
+
+    * **Fail-safe (this module's choice)**: a caller that never sets
+      `composing?` gets dead `j`/`k`/`z` navigation. That is immediately
+      discoverable -- the keys visibly do nothing -- and ESC/Tab are
+      unaffected (`:always` binds never consult `composing?`), so nothing
+      load-bearing is silently broken.
+    * **Fail-open (the rejected alternative)**: a caller that never sets
+      `composing?` gets the guarded binds firing unconditionally --
+      exactly the named prototype bug this module exists to fix (see
+      below), except now triggered by an *absent* flag instead of a
+      flat keymap with no guard at all. Typed `j`/`k`/`z` would silently
+      turn into fold-toggle/jump commands instead of inserting characters,
+      with no crash and no visible error -- the worst kind of bug, because
+      it looks like normal typing until content goes missing.
+
+  Only an explicit `composing?: false` opts a caller INTO guarded-bind
+  resolution. `context()` also normalizes a bare `nil` (e.g. "no block
+  focused" callers that pass `nil` instead of `%{}`) to `%{}` before any
+  guard consults it, so the crash surface is not bind-dependent -- see
+  `resolve/2`'s doc.
 
   `context()` is deliberately small: `composing?` (is the composer
   focused/receiving text), `streaming?` (is a turn currently running), and
@@ -123,7 +170,8 @@ defmodule Raxol.UI.Harness.Keymap do
           required(:command_type) => command_type(),
           optional(:key) => atom(),
           optional(:char) => String.t(),
-          optional(:guard) => guard()
+          optional(:guard) => guard(),
+          optional(:mods) => InputEvent.mods()
         }
 
   # Plain keys only (v1) -- see moduledoc's "tui-steal rule": a future chord
@@ -152,7 +200,7 @@ defmodule Raxol.UI.Harness.Keymap do
   invocation-parity test and available to T15 for the same reason.
   """
   @spec command_types() :: [command_type()]
-  def command_types, do: Enum.map(@binds, & &1.command_type)
+  def command_types, do: @binds |> Enum.map(& &1.command_type) |> Enum.uniq()
 
   @doc """
   Resolve a normalized `InputEvent.t()` (see `Raxol.UI.Harness.InputEvent`
@@ -160,31 +208,64 @@ defmodule Raxol.UI.Harness.Keymap do
   a mode context into a typed command, or `:passthrough` when no bind
   applies (composer-focus guard blocked it, or the key simply isn't bound).
 
+  A bare `nil` context (e.g. "no block focused" callers that pass `nil`
+  instead of `%{}`) normalizes to `%{}` before any guard consults it --
+  every field then falls back to its documented default (see the
+  moduledoc's fail-safe-default section for `composing?`) instead of the
+  guard raising on a non-map.
+
   Pure: no process state, no side effects, never raises on a well-formed
   `InputEvent.t()`.
   """
-  @spec resolve(InputEvent.t(), context()) :: command() | :passthrough
-  def resolve(norm, context \\ %{}) do
+  @spec resolve(InputEvent.t(), context() | nil) :: command() | :passthrough
+  def resolve(norm, context \\ %{})
+
+  def resolve(norm, nil), do: resolve(norm, %{})
+
+  def resolve(norm, context) do
     case Enum.find(@binds, &matches?(&1, norm, context)) do
       nil -> :passthrough
       bind -> build_command(bind, context)
     end
   end
 
-  # -- private --
-
-  defp matches?(%{key: key} = bind, norm, context) do
-    InputEvent.key(norm) == key and guard_passes?(bind, context)
+  @doc false
+  # Exposed (not `defp`) so the modifier-exact-match branch is directly
+  # unit-testable against a fixture bind without adding a chord to the
+  # shipped v1 table -- see keymap_test.exs's "modifier-aware key binds".
+  @spec matches?(bind(), InputEvent.t(), context()) :: boolean()
+  def matches?(%{key: key} = bind, norm, context) do
+    InputEvent.key(norm) == key and mods_match?(bind, norm) and
+      guard_passes?(bind, context)
   end
 
-  defp matches?(%{char: char} = bind, norm, context) do
+  def matches?(%{char: char} = bind, norm, context) do
     InputEvent.printable_char(norm) == char and guard_passes?(bind, context)
+  end
+
+  # -- private --
+
+  # `key:`-kind binds are modifier-aware (see moduledoc's tui-steal rule):
+  # no declared `mods:` means "bare keypress only" -- ctrl/alt/meta held
+  # fails the match (Ctrl+Tab/Alt+Tab/Meta+Tab are shortcuts, not Tab).
+  # Shift is deliberately excluded from that check (mirrors
+  # `InputEvent.text?/1`: shift-only is not a shortcut), so Shift+Tab
+  # still resolves through the plain `:tab` bind. A bind that DOES
+  # declare `mods:` requires an EXACT match against the normalized
+  # event's `mods` map instead.
+  defp mods_match?(%{mods: required_mods}, norm), do: norm.mods == required_mods
+
+  defp mods_match?(_bind, norm) do
+    not (norm.mods.ctrl or norm.mods.alt or norm.mods.meta)
   end
 
   defp guard_passes?(%{guard: :always}, _context), do: true
 
+  # Missing `composing?` defaults to `true` (composing) -- the fail-safe
+  # direction. See moduledoc's "Fail-safe default" section: a caller must
+  # opt IN to guarded-bind resolution with an explicit `composing?: false`.
   defp guard_passes?(%{guard: :not_composing}, context),
-    do: not Map.get(context, :composing?, false)
+    do: not Map.get(context, :composing?, true)
 
   defp build_command(%{command_type: :fold_toggle}, context) do
     %{

@@ -161,13 +161,21 @@ defmodule Raxol.UI.Harness.KeymapTest do
              }) == %{type: :fold_toggle, payload: %{block_id: nil}}
     end
 
-    test "composing?: unset defaults to the guarded (non-composing) behavior -- callers must opt in explicitly" do
-      # Absence of :composing? in context must not accidentally suppress a
-      # navigation bind -- Map.get(context, :composing?, false) means
-      # "unset == not composing", the safe default for callers (e.g. tests,
-      # a palette invocation) that never render a composer at all.
+    test "composing?: unset defaults to the fail-safe (composing) behavior -- callers must opt in explicitly to guarded binds" do
+      # Absence of :composing? in context must not accidentally let a
+      # navigation bind fire and steal a keystroke -- Map.get(context,
+      # :composing?, true) means "unset == composing", the fail-safe
+      # default. Only an explicit composing?: false opts a caller INTO
+      # guarded-bind resolution (e.g. a transcript-browsing mode that
+      # deliberately declares it isn't composing).
       assert resolve_from(Event.key_event("j", :pressed, []), %{}) ==
-               %{type: :jump_next, payload: %{}}
+               :passthrough
+    end
+
+    test "composing?: false explicitly opts in to guarded-bind resolution" do
+      assert resolve_from(Event.key_event("j", :pressed, []), %{
+               composing?: false
+             }) == %{type: :jump_next, payload: %{}}
     end
 
     test "ESC and Tab are the explicit exceptions -- they fire even while composing?: true" do
@@ -196,7 +204,10 @@ defmodule Raxol.UI.Harness.KeymapTest do
 
   describe "invocation parity" do
     test "command_types/0 is exactly the union binds/0 can ever emit" do
-      declared = Keymap.command_types() |> Enum.uniq() |> MapSet.new()
+      # command_types/0 documents itself as "the exact set" -- a set, not a
+      # dup-capable list -- so it uniqs internally now; no compensating
+      # Enum.uniq/1 needed here.
+      declared = Keymap.command_types() |> MapSet.new()
 
       emitted =
         Keymap.binds()
@@ -222,15 +233,103 @@ defmodule Raxol.UI.Harness.KeymapTest do
       do: InputEvent.normalize(Event.key_event(char, :pressed, []))
   end
 
-  # -- 5. fail-first RED proof (see commit message / report for the manual
-  # red run against a deliberately-broken guard) --
+  # -- 5. modifier-aware key binds (Drew's review, T12 fix-now #2) --
+
+  describe "modifier-aware key binds" do
+    test "Ctrl+Tab (translator shape) -> :passthrough" do
+      assert resolve_from(translator_event(@tb_tab, 0, 2)) == :passthrough
+    end
+
+    test "Ctrl+Tab (Event.key_event/3 shape) -> :passthrough" do
+      assert resolve_from(Event.key_event(:tab, :pressed, [:ctrl])) ==
+               :passthrough
+    end
+
+    test "Alt+Tab (Event.key_event/3 shape) -> :passthrough" do
+      assert resolve_from(Event.key_event(:tab, :pressed, [:alt])) ==
+               :passthrough
+    end
+
+    test "plain Tab (translator shape, no modifiers) -> :steer" do
+      assert resolve_from(translator_event(@tb_tab, 0)) ==
+               %{type: :steer, payload: %{}}
+    end
+
+    test "plain Tab (Event.key_event/3 shape, no modifiers) -> :steer" do
+      assert resolve_from(Event.key_event(:tab, :pressed, [])) ==
+               %{type: :steer, payload: %{}}
+    end
+
+    test "a declared mods: bind requires an EXACT match, not just 'no modifiers held'" do
+      # Fixture-only bind (never added to the shipped v1 table) that
+      # exercises the chord-growth extension point the moduledoc promises:
+      # a bind that declares `mods:` requires the normalized event's mods
+      # to match it exactly, rather than falling back to the bare-keypress
+      # default `matches?/3` uses for every un-chorded v1 bind.
+      chord = %{
+        key: :tab,
+        command_type: :steer,
+        guard: :always,
+        mods: %{ctrl: true, alt: false, shift: false, meta: false}
+      }
+
+      ctrl_tab =
+        Event.key_event(:tab, :pressed, [:ctrl]) |> InputEvent.normalize()
+
+      plain_tab = Event.key_event(:tab, :pressed, []) |> InputEvent.normalize()
+
+      alt_tab =
+        Event.key_event(:tab, :pressed, [:alt]) |> InputEvent.normalize()
+
+      ctrl_shift_tab =
+        Event.key_event(:tab, :pressed, [:ctrl, :shift])
+        |> InputEvent.normalize()
+
+      assert Keymap.matches?(chord, ctrl_tab, %{})
+      refute Keymap.matches?(chord, plain_tab, %{})
+      refute Keymap.matches?(chord, alt_tab, %{})
+      refute Keymap.matches?(chord, ctrl_shift_tab, %{})
+    end
+  end
+
+  # -- 6. resolve/2 with a nil context ("no block focused" callers) --
+
+  describe "resolve/2 with a nil context" do
+    test "nil normalizes to %{} -- guard: :always binds are unaffected" do
+      assert resolve_from(Event.key_event(:escape, :pressed, []), nil) ==
+               %{type: :interrupt, payload: %{}}
+    end
+
+    test "nil normalizes to %{} -- guard: :not_composing binds no longer raise, and resolve to :passthrough per the fail-safe default" do
+      # Before the fix, guard_passes?/2 called Map.get(nil, :composing?,
+      # _) directly and raised (BadMapError) for any :not_composing-
+      # guarded bind -- a crash surface that depended on which bind
+      # matched, since :always binds never touch context at all. resolve/2
+      # now normalizes nil to %{} up front, so every bind sees a real map.
+      assert resolve_from(Event.key_event("j", :pressed, []), nil) ==
+               :passthrough
+    end
+  end
+
+  # -- 7. fail-first RED proofs (see commit message / report for the manual
+  # red runs against deliberately-reverted code) --
   #
-  # The property test above ("composing?: true always passes through...")
-  # is the fail-first proof: temporarily inlining `true` in place of
-  # `guard_passes?/2`'s `:not_composing` clause (so `z`/`j`/`k` fire
-  # unconditionally, reproducing the named prototype bug) reddens this
-  # exact property immediately (StreamData shrinks to a single-char
-  # counterexample, e.g. "j", within the same run) with no other test
-  # touched. Restoring the guard turns it green again. This is the
-  # regression this suite exists to prevent.
+  # (a) The property test above ("composing?: true always passes
+  # through...") is the fail-first proof for the composer-focus guard
+  # itself: temporarily inlining `true` in place of `guard_passes?/2`'s
+  # `:not_composing` clause (so `z`/`j`/`k` fire unconditionally,
+  # reproducing the named prototype bug) reddens this exact property
+  # immediately (StreamData shrinks to a single-char counterexample, e.g.
+  # "j", within the same run) with no other test touched. Restoring the
+  # guard turns it green again.
+  #
+  # (b) "composing?: unset defaults to the fail-safe (composing)
+  # behavior" above is the fail-first proof for the DEFAULT DIRECTION
+  # fix: reverting `guard_passes?/2`'s `Map.get(context, :composing?,
+  # true)` back to the old `Map.get(context, :composing?, false)` reddens
+  # this exact test (it asserts :passthrough; the old default resolves
+  # to `%{type: :jump_next, payload: %{}}` instead) with no other test in
+  # this module touched -- this is the precise inversion Drew's review
+  # named: a caller that omits `composing?` must get guarded (dead)
+  # navigation, not silently-armed guarded binds.
 end
