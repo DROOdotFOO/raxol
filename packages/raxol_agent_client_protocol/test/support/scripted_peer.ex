@@ -91,6 +91,26 @@ defmodule Raxol.AgentClientProtocol.Test.ScriptedPeer do
     :ok
   end
 
+  @doc """
+  Send an arbitrary term as a "frame" -- including a non-map shape like a
+  JSON array (batch request), which `Paired.send_message/2`'s own public API
+  guards against (`when is_map(message)`) since a real byte-level transport
+  would never hand the Connection anything but a decoded map. This bypasses
+  that guard by calling straight into the `Paired` GenServer's `handle_call`
+  clause (which has no such guard), purely to exercise the Connection's own
+  classification path (design §4: "a JSON array (batch) frame -> `-32600`,
+  `null` id") against a shape `Paired`'s normal contract never produces on
+  its own. Test-only; never use this for anything but that one scenario.
+  """
+  @spec send_raw_unchecked(t(), term()) :: :ok
+  def send_raw_unchecked(%__MODULE__{handle: %Paired{pid: pid}}, frame) do
+    :ok = GenServer.call(pid, {:send, frame})
+  end
+
+  @doc "Close this peer's transport handle (simulates the peer hanging up on the Connection)."
+  @spec close_peer(t()) :: :ok
+  def close_peer(%__MODULE__{handle: handle}), do: Paired.close(handle)
+
   @doc "Block for the next frame the Connection sent us; returns the decoded (raw) map."
   @spec recv(t(), timeout()) :: map()
   def recv(%__MODULE__{} = _peer, timeout \\ 500) do
