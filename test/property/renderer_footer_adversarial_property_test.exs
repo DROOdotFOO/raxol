@@ -1,19 +1,18 @@
 defmodule Raxol.Property.RendererFooterAdversarialTest do
   @moduledoc """
-  T2c's negative suite: the pinned footer viewport
-  (`docs/proposals/in-flight/harness-ui-roadmap.md` T2c), scoped subset of
-  `harness-ui-testing/02-renderer.md` §5 relevant to the footer path
-  specifically (R-N2/R-N4-style, plus fail-first RED/GREEN pairs for the
-  footer-confinement and keyframe-ban guards T2c adds).
+  Negative-case suite for the pinned footer viewport, relevant to the
+  footer path specifically: characterization tests plus fail-first
+  RED/GREEN pairs for the footer-confinement and keyframe-ban guards this
+  module adds.
 
   Each test here either (a) characterizes a regression class the real,
-  full-grid path exhibits and proves the footer-scoped path is exempt
-  (R-N4), or (b) demonstrates a footer-scoped guard CATCHES a
-  deliberately wrong stream before trusting any of the positive suite's
-  GREEN results (the fail-first discipline `tb_oracle_test.exs`'s R-P12
-  established, `renderer_adversarial_property_test.exs` applied to T2b's
+  full-grid path exhibits and proves the footer-scoped path is exempt, or
+  (b) demonstrates a footer-scoped guard CATCHES a deliberately wrong
+  stream before trusting any of the positive suite's GREEN results (the
+  fail-first discipline `tb_oracle_test.exs` established and
+  `renderer_adversarial_property_test.exs` applied to the append path's
   `InlineAuthority.seal/2`; this file applies the same discipline to
-  T2c's `repaint/2`/`keyframe/2`).
+  `repaint/2`/`keyframe/2`).
   """
 
   use ExUnit.Case, async: true
@@ -81,11 +80,11 @@ defmodule Raxol.Property.RendererFooterAdversarialTest do
   end
 
   # ---------------------------------------------------------------------
-  # Acceptance 4 / R-N4: full-grid keyframe characterization vs the
+  # Acceptance 4: full-grid keyframe characterization vs the
   # footer-scoped path's exemption.
   # ---------------------------------------------------------------------
 
-  describe "R-N4 (footer-scoped contrast): full-grid \\e[2J-on-resize vs the footer path's exemption" do
+  describe "footer-scoped contrast: full-grid \\e[2J-on-resize vs the footer path's exemption" do
     test "characterization: Backends.build_terminal_frame/4 emits \\e[2J on a width change (today's known regression class)" do
       prev = ScreenBuffer.new(80, 24)
       next = ScreenBuffer.new(120, 24)
@@ -99,7 +98,7 @@ defmodule Raxol.Property.RendererFooterAdversarialTest do
                "footer path's exemption below is still a meaningful regression guard"
     end
 
-    test "regression guard: resize/3 |> keyframe/2 (T2c's footer re-derivation) emits no \\e[2J on the equivalent width+height change" do
+    test "regression guard: resize/3 |> keyframe/2 (the footer re-derivation) emits no \\e[2J on the equivalent width+height change" do
       {device, authority} = new_authority()
       authority = InlineAuthority.seal(authority, "sealed before resize\r\n")
       authority = InlineAuthority.repaint(authority, ["live", "composer"])
@@ -112,7 +111,7 @@ defmodule Raxol.Property.RendererFooterAdversarialTest do
   end
 
   # ---------------------------------------------------------------------
-  # Fail-first: footer-confinement (INV-2) must be ABLE to fail before any
+  # Fail-first: footer-confinement must be ABLE to fail before any
   # GREEN result from the positive suite is trusted.
   # ---------------------------------------------------------------------
 
@@ -178,8 +177,7 @@ defmodule Raxol.Property.RendererFooterAdversarialTest do
   end
 
   # ---------------------------------------------------------------------
-  # Fail-first: keyframe/Ctrl-L touching history (INV-2/INV-6) must be
-  # ABLE to fail.
+  # Fail-first: keyframe/Ctrl-L touching history must be ABLE to fail.
   # ---------------------------------------------------------------------
 
   describe "fail-first: keyframe-touches-history is caught by the confinement check" do
@@ -191,7 +189,7 @@ defmodule Raxol.Property.RendererFooterAdversarialTest do
 
       refute Enum.all?(rows, &(&1 in footer_range(authority))),
              "fail-first: the confinement check must be ABLE to fail on a " <>
-               "keyframe that touches history, or the INV-6 GREEN result " <>
+               "keyframe that touches history, or the GREEN result " <>
                "below is meaningless"
     end
 
@@ -211,9 +209,9 @@ defmodule Raxol.Property.RendererFooterAdversarialTest do
   end
 
   # ---------------------------------------------------------------------
-  # Fail-first: INV-1 from the footer side -- a footer-originated write
-  # that stomps sealed history must be caught by the immutable-prefix
-  # oracle, exactly as T2b's own fail-first test proves for a second seal.
+  # Fail-first: a footer-originated write that stomps sealed history must
+  # be caught by the immutable-prefix oracle, exactly as the append
+  # path's own fail-first test proves for a second seal.
   # ---------------------------------------------------------------------
 
   describe "fail-first: immutable-prefix oracle catches a footer write that stomps sealed history" do
@@ -228,8 +226,8 @@ defmodule Raxol.Property.RendererFooterAdversarialTest do
 
       # A buggy footer path that stomps the sealed history row instead of
       # confining itself to the footer range -- the two-emit-paths-collide
-      # failure mode INV-1 exists to reject, this time originating from
-      # the footer side rather than a second seal.
+      # failure mode this oracle exists to reject, this time originating
+      # from the footer side rather than a second seal.
       IO.write(device, "\e[1;1Hstomped by a buggy footer write\r\n")
 
       raw_final = raw(device)

@@ -99,14 +99,13 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   implement. Contract-only-grows: this module never has to be rewritten
   to add reflow-aware re-emission later, only extended.
 
-  ## T2c: the pinned footer viewport (buffer-diff, footer-scoped)
+  ## The pinned footer viewport (buffer-diff, footer-scoped)
 
-  T2b's `repaint_footer/2`/`keyframe_footer/2` `@impl` callbacks were
-  deliberate placeholders ("mirrors `PaintAuthority.IOAuthority`'s
-  minimal stub so the behaviour is satisfied without reaching into T2c's
-  work"). T2c fills that in with the real buffer-diff pipeline the
-  roadmap describes ("a buffer-diff pipeline scoped to the footer rows
-  only... every emitted CUP scoped to footer rows"):
+  The `repaint_footer/2`/`keyframe_footer/2` `@impl` callbacks were
+  deliberate placeholders: minimal pass-through stubs that satisfy the
+  behaviour without any real positioning/diff logic. This module fills
+  that in with a buffer-diff pipeline scoped to the footer rows only —
+  every emitted CUP stays inside footer rows:
 
     * `footer_diff/2` — pure function, no I/O: given the last-painted
       footer content and the next footer content (both one binary per
@@ -115,8 +114,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       actually changed. This is the "minimal repaint bytes" half of the
       pipeline, kept separate from the emit half so it is unit-testable
       with zero device/cursor setup.
-    * `repaint/2` — the diff-driven entry point (T2c's normal per-frame
-      footer update): pads/truncates the caller's next footer lines to
+    * `repaint/2` — the diff-driven entry point for normal per-frame
+      footer updates: pads/truncates the caller's next footer lines to
       the CURRENT footer row count (`ScrollRegionManager.footer_range/1`
       via `footer_row_count/1`), diffs against `footer_lines` (the
       struct field this module now tracks), and emits ONLY the changed
@@ -131,17 +130,19 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       (never a full-screen clear). This is the Ctrl-L recovery entry
       point. Composition note: `resize/3` (below) re-derives the
       DECSTBM split but deliberately does NOT call this automatically —
-      see `resize/3`'s doc for why (an existing T2b regression test
-      pins resize to emit only the DECSTBM re-set). Callers that also
-      need the footer re-rendered at the new geometry compose explicitly:
+      see `resize/3`'s doc for why (an existing regression test on the
+      append path pins resize to emit only the DECSTBM re-set). Callers
+      that also need the footer re-rendered at the new geometry compose
+      explicitly:
       `authority |> InlineAuthority.resize(w, h) |> InlineAuthority.keyframe(current_lines)`.
       Both calls already guarantee no `\\e[2J`/`\\e[3J` and no history
       addressing, so the composition inherits both properties for free.
 
   Every row either function addresses is computed from
-  `region_top(t) + 1 .. rows(region)` (T2a's `footer_range/1`) — never a
-  hand-maintained constant — so a footer paint can never drift into the
-  scrolling history region even under resize.
+  `region_top(t) + 1 .. rows(region)` (the scroll-region manager's
+  `footer_range/1`) — never a hand-maintained constant — so a footer
+  paint can never drift into the scrolling history region even under
+  resize.
 
   ## Caller contract: footer line width (NOT enforced here)
 
@@ -151,12 +152,12 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   than the terminal's column count wraps onto the following row (a real
   terminal's own line-wrap behavior), which breaks footer confinement: the
   wrapped tail lands on whatever row follows, which may be the next footer
-  row (silently overwriting content INV-2 assumes only `repaint/2`
-  addresses) or, on the LAST footer row, past the bottom of the screen
+  row (silently overwriting content that only `repaint/2` is assumed to
+  address) or, on the LAST footer row, past the bottom of the screen
   entirely. This module does not defend against that — it is the caller's
-  (T13a's assembler) responsibility to display-width-truncate every line
-  to the authority's `width` (the same value passed to `new/5`) BEFORE
-  calling `repaint/2`/`keyframe/2`. Use `Raxol.UI.TextMeasure` for that
+  responsibility to display-width-truncate every line to the authority's
+  `width` (the same value passed to `new/5`) BEFORE calling
+  `repaint/2`/`keyframe/2`. Use `Raxol.UI.TextMeasure` for that
   measurement — never `String.length/1`, which undercounts double-width
   (CJK) characters and would let a line that measures "short" by codepoint
   count still overflow the column budget.
@@ -164,27 +165,27 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   ## Degenerate geometry: `degenerate?/1`
 
   A terminal too short for its requested footer (`rows - footer_rows < 2`,
-  T2a's `ScrollRegionManager.degenerate?/1`) cannot have its footer
-  actually pinned via DECSTBM — see that module's moduledoc for why. This
-  module surfaces that fact via `degenerate?/1` (a thin delegation, no
-  behavior change) so callers can detect the condition and adapt — e.g.
-  T13a falling back to redrawing the footer every frame — instead of
-  silently trusting a pin that a real terminal ignored. `repaint/2` and
-  `keyframe/2` still function on a degenerate geometry (never crash): they
-  simply operate over whatever footer capacity `footer_range/1` actually
-  reports for that geometry, which may be smaller than `footer_rows`
-  requested, or empty.
+  the scroll-region manager's `ScrollRegionManager.degenerate?/1`) cannot
+  have its footer actually pinned via DECSTBM — see that module's
+  moduledoc for why. This module surfaces that fact via `degenerate?/1`
+  (a thin delegation, no behavior change) so callers can detect the
+  condition and adapt — e.g. falling back to redrawing the footer every
+  frame — instead of silently trusting a pin that a real terminal
+  ignored. `repaint/2` and `keyframe/2` still function on a degenerate
+  geometry (never crash): they simply operate over whatever footer
+  capacity `footer_range/1` actually reports for that geometry, which may
+  be smaller than `footer_rows` requested, or empty.
 
-  ## T2c review response: footer `ContentGuard`, and the `needs_keyframe` latch
+  ## Footer `ContentGuard`, and the `needs_keyframe` latch
 
-  Two FIX-NOW findings from review, both closed here:
+  Two properties enforced here:
 
-    * **Footer content is not trusted either (HIGH).** T2b's review
-      already established that `seal/2` cannot write agent/LLM-originated
-      iodata verbatim (`ContentGuard.sanitize_line/1`); the footer path
-      carries the SAME kind of content (live-tail/agent text) through the
-      SAME risk (a footer line smuggling `\\e[3;1H`/`\\e[2J`/etc. would
-      execute against the footer confinement invariant exactly like an
+    * **Footer content is not trusted either.** The history append path
+      does not write agent/LLM-originated iodata verbatim
+      (`ContentGuard.sanitize_line/1`); the footer path carries the SAME
+      kind of content (live-tail/agent text) through the SAME risk (a
+      footer line smuggling `\\e[3;1H`/`\\e[2J`/etc. would execute
+      against the footer confinement invariant exactly like an
       unguarded history append would against the seal-once invariant).
       `repaint/2` and `keyframe/2` both run every caller-supplied line
       through `ContentGuard.sanitize_line/1` at entry — BEFORE padding or
@@ -193,7 +194,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       invariant: once sanitized in, never re-sanitized out, so `footer_diff/2`
       comparing old (already-sanitized) against new (freshly-sanitized) is
       always an apples-to-apples comparison.
-    * **A stale post-resize repaint could leave ghost content (MED).**
+    * **A stale post-resize repaint could leave ghost content.**
       `resize/3` clamps `next_row` but, by design (see above), never
       repaints the footer — a geometry-changing resize can relocate the
       footer's on-screen rows to different absolute row numbers while their
@@ -204,7 +205,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       history text, or a stale row `repaint/2` previously left blank via
       `\\e[K` at the OLD position). The `needs_keyframe` flag closes this:
       a resize that changes EITHER axis — vertical geometry (`history_bottom`)
-      OR width — sets it (a pure state change — the pinned T2b regression test
+      OR width — sets it (a pure state change — the pinned regression test
       asserting resize's ONLY new bytes are `ScrollRegionManager`'s single
       DECSTBM re-set is untouched, since setting a struct field emits no bytes,
       and a width-only resize re-emits no region bytes at all). Width matters
@@ -426,10 +427,10 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   end
 
   @doc """
-  T2c's diff-driven footer repaint: sanitizes every line of `new_lines`
+  The diff-driven footer repaint: sanitizes every line of `new_lines`
   through `ContentGuard.sanitize_line/1` (footer content is agent/LLM-
   originated, same as the history append path -- see the moduledoc's
-  review-response section), pads/truncates the sanitized result to the
+  `ContentGuard` section), pads/truncates the sanitized result to the
   CURRENT footer row count, diffs against the last-painted footer
   (`footer_diff/2`), and emits only the changed rows -- each `CUP`
   (inside the footer range, never history) + `\\e[K` (per-row clear,
@@ -480,8 +481,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   full-screen clear) and rewritten, regardless of what changed. The
   Ctrl-L recovery entry point, and what a caller composes after
   `resize/3` to re-derive the footer's on-screen content at the new
-  geometry (see the moduledoc's "T2c" section for why `resize/3` itself
-  does not call this) -- and what `repaint/2` self-promotes to when
+  geometry (see the moduledoc's "pinned footer viewport" section for why
+  `resize/3` itself does not call this) -- and what `repaint/2` self-promotes to when
   `needs_keyframe` is set. Sanitizes every line of `new_lines` through
   `ContentGuard.sanitize_line/1` (same as `repaint/2`), then pads/
   truncates to the CURRENT footer row count.
@@ -522,7 +523,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
   # Common entry sanitization for both repaint/2 and keyframe/2: every
   # caller-supplied line is agent/LLM-originated (same trust boundary as
-  # seal/2's history-side iodata -- see the moduledoc's review-response
+  # seal/2's history-side iodata -- see the moduledoc's `ContentGuard`
   # section) and must be neutralized BEFORE padding/diffing ever sees it.
   defp sanitize_and_pad(new_lines, count) do
     new_lines
@@ -589,17 +590,18 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
   @doc """
   Re-derives the DECSTBM history/footer split for a new geometry (via
-  T2a's `ScrollRegionManager.resize/2`, one `CSI 1;(H-N) r` write) and
-  clamps the append cursor. Deliberately does NOT also repaint the
-  footer's on-screen content here -- an existing T2b regression test
+  the scroll-region manager's `ScrollRegionManager.resize/2`, one
+  `CSI 1;(H-N) r` write) and clamps the append cursor. Deliberately does
+  NOT also repaint the footer's on-screen content here -- an existing
+  regression test on the append path
   (`renderer_adversarial_property_test.exs`, "the ONLY new bytes after
   resize are ScrollRegionManager's single DECSTBM re-set") pins this
   callback to emit nothing else, and folding a footer keyframe in here
   would silently break that pinned byte-count. Callers that also need
   the footer redrawn at the new geometry compose explicitly:
   `authority |> resize(w, h) |> keyframe(current_footer_lines)` -- see
-  the moduledoc's "T2c" section. Neither call ever emits
-  `\\e[2J`/`\\e[3J` or addresses a history row, so the composition
+  the moduledoc's "pinned footer viewport" section. Neither call ever
+  emits `\\e[2J`/`\\e[3J` or addresses a history row, so the composition
   inherits both properties.
 
   When the resize changes EITHER axis -- vertical geometry
@@ -622,13 +624,14 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
     # `geometry_changed?` is the REGION-re-emission gate: it watches the
     # VERTICAL axis (`history_bottom`, row-based) and is correctly blind to
-    # width — a width-only resize needs no DECSTBM bytes (T2b's pinned
-    # regression). But keyframe + reflow are HORIZONTAL concerns: reflow-
-    # capable terminals rewrap sealed history on a WIDTH change (RB probe,
-    # measured on 4/5 terminals — kitty is the no-reflow exception), and a
-    # width-shrink can wrap an untruncated footer line past the pin. So the
-    # latch and the reflow seam key on the width axis too; only the region
-    # re-emission stays vertical-only.
+    # width — a width-only resize needs no DECSTBM bytes (the append
+    # path's pinned regression). But keyframe + reflow are HORIZONTAL
+    # concerns: reflow-capable terminals rewrap sealed history on a WIDTH
+    # change (the terminal-matrix probe measured this on 4/5 terminals —
+    # kitty is the no-reflow exception), and a width-shrink can wrap an
+    # untruncated footer line past the pin. So the latch and the reflow
+    # seam key on the width axis too; only the region re-emission stays
+    # vertical-only.
     width_changed? = t.width != width
     reflow_relevant? = geometry_changed? or width_changed?
 
@@ -671,11 +674,10 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   @doc """
   True when this authority's current geometry cannot form a valid DECSTBM
   region — i.e. the footer is NOT actually pinned right now (see the
-  moduledoc's "Degenerate geometry" section). A thin delegation to T2a's
+  moduledoc's "Degenerate geometry" section). A thin delegation to
   `ScrollRegionManager.degenerate?/1`; no behavior change of its own.
-  Callers that need to know whether the pin is real (T13a's assembler)
-  should check this rather than assuming `new/5`/`resize/3` always
-  succeeded.
+  Callers that need to know whether the pin is real should check this
+  rather than assuming `new/5`/`resize/3` always succeeded.
   """
   @spec degenerate?(t()) :: boolean()
   def degenerate?(%__MODULE__{region: region}),

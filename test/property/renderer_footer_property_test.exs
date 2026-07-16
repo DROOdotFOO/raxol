@@ -1,19 +1,16 @@
 defmodule Raxol.Property.RendererFooterTest do
   @moduledoc """
-  T2c's positive suite: the pinned footer viewport
-  (`docs/proposals/in-flight/harness-ui-roadmap.md` T2c), scoped subset of
-  `harness-ui-testing/02-renderer.md` §4 (R-P3/R-P9-style) that belongs to
-  the FOOTER path specifically — T2b's append-path properties are that
-  unit's own PR (`renderer_seal_once_property_test.exs`), not duplicated
-  here.
+  Positive-case suite for the pinned footer viewport, scoped to the
+  footer path specifically -- append-path properties live in their own
+  suite (`renderer_seal_once_property_test.exs`), not duplicated here.
 
-  Like T2b's suite, these properties drive the REAL production
+  Like that suite, these properties drive the REAL production
   implementation, `Raxol.UI.Rendering.PaintAuthority.InlineAuthority`'s
-  `repaint/2`/`keyframe/2` (the T2c diff-repaint / full-keyframe entry
-  points built on top of the `repaint_footer/2`/`keyframe_footer/2` @impl
-  callbacks), through a `StringIO` device — the actual bytes T2c ships,
-  replayed through the same `Raxol.Harness.Test.SealOracle` oracles (O1
-  mechanical scanner, O2 VT replay) TB built and T2b already uses.
+  `repaint/2`/`keyframe/2` (the diff-repaint / full-keyframe entry points
+  built on top of the `repaint_footer/2`/`keyframe_footer/2` @impl
+  callbacks), through a `StringIO` device -- the actual bytes shipped,
+  replayed through the same `Raxol.Harness.Test.SealOracle` oracles
+  (mechanical scanner + VT replay) the append path already uses.
   """
 
   use ExUnit.Case, async: true
@@ -25,7 +22,7 @@ defmodule Raxol.Property.RendererFooterTest do
   alias Raxol.UI.Rendering.PaintAuthority.Dialect
   alias Raxol.UI.Rendering.PaintAuthority.InlineAuthority
 
-  # Same fixed geometry T2b's suite uses: 10 rows total, footer 2 rows,
+  # Same fixed geometry the append path's suite uses: 10 rows total, footer 2 rows,
   # region_top = 8 (history rows 1..8, footer rows 9..10).
   @width 40
   @height 10
@@ -52,7 +49,7 @@ defmodule Raxol.Property.RendererFooterTest do
     (top + 1)..(top + count)//1
   end
 
-  # A second `new_authority` for tests exercising non-fixed geometry (Y2's
+  # A second `new_authority` for tests exercising non-fixed geometry (the
   # degenerate-geometry cases) -- the module-level `new_authority/1` above
   # is deliberately pinned to the fixed 10/2/40 geometry every other test
   # in this file relies on.
@@ -177,7 +174,7 @@ defmodule Raxol.Property.RendererFooterTest do
   end
 
   # ---------------------------------------------------------------------
-  # Acceptance 1: footer repaint touches only footer rows (INV-2)
+  # Acceptance 1: footer repaint touches only footer rows
   # ---------------------------------------------------------------------
 
   describe "acceptance 1: repaint/2 touches only footer rows" do
@@ -243,10 +240,10 @@ defmodule Raxol.Property.RendererFooterTest do
   # cannot prove WHAT ends up on screen; a stale-content bug (dropping
   # `\e[K` from `footer_row_bytes/2`) keeps every one of those green while
   # leaving ghost characters behind a shorter new line. This is the
-  # content-level check O1 (positional) cannot provide -- it replays the
-  # real emitted bytes through the actual VT emulator (O2) and reads back
-  # rendered text, the same oracle machinery `history/3`/`immutable_prefix?/2`
-  # use for the history side.
+  # content-level check a positional-only scan cannot provide -- it
+  # replays the real emitted bytes through the actual VT emulator and
+  # reads back rendered text, the same oracle machinery
+  # `history/3`/`immutable_prefix?/2` use for the history side.
   # ---------------------------------------------------------------------
 
   describe "content-correctness: repaint/2 renders exactly the new footer content, no residue" do
@@ -308,12 +305,13 @@ defmodule Raxol.Property.RendererFooterTest do
   end
 
   # ---------------------------------------------------------------------
-  # Degenerate geometry (Y2): InlineAuthority surfaces T2a's degenerate?/1
-  # signal, and repaint/2 + keyframe/2 never crash or address a row outside
-  # the actual screen even when the requested footer doesn't fit.
+  # Degenerate geometry: InlineAuthority surfaces the scroll-region
+  # manager's degenerate?/1 signal, and repaint/2 + keyframe/2 never crash
+  # or address a row outside the actual screen even when the requested
+  # footer doesn't fit.
   # ---------------------------------------------------------------------
 
-  describe "degenerate geometry: new/5 never crashes, degenerate?/1 surfaces T2a's signal" do
+  describe "degenerate geometry: new/5 never crashes, degenerate?/1 surfaces the scroll-region manager's signal" do
     test "rows=2/footer_rows=3: degenerate, footer capacity shrinks to what's left, no CUP outside the screen" do
       {device, authority} = new_authority(40, 2, 3)
 
@@ -354,8 +352,8 @@ defmodule Raxol.Property.RendererFooterTest do
       prior_size = device |> raw() |> byte_size()
       _authority = InlineAuthority.keyframe(authority, ["anything", "at all"])
 
-      # T2c review response: keyframe/2 with zero footer row capacity
-      # early-returns without opening a with_cursor/3 bracket at all --
+      # keyframe/2 with zero footer row capacity early-returns without
+      # opening a with_cursor/3 bracket at all --
       # an empty \e7/\e8 save/restore pair over zero addressed rows would
       # be ceremony around a no-op; emitting NOTHING is the honest
       # behavior on a geometry that cannot show a footer.
@@ -411,8 +409,8 @@ defmodule Raxol.Property.RendererFooterTest do
       assert MapSet.new(rows) == MapSet.new(footer_range(authority))
       refute SealOracle.emits_full_clear?(new_bytes)
 
-      # History is untouched by the keyframe -- INV-6's "history
-      # unchanged" half.
+      # History is untouched by the keyframe -- the "history unchanged"
+      # half of that invariant.
       raw_final = raw(device)
       hw_final = SealOracle.seal_high_water(raw_final)
 
@@ -452,8 +450,8 @@ defmodule Raxol.Property.RendererFooterTest do
 
       # resize/3's OWN delta: the single DECSTBM re-set, nothing else --
       # no full clear (checked below via the whole-stream assertion), no
-      # footer content bytes (T2c's design decision: resize does not
-      # auto-repaint the footer, see InlineAuthority.resize/3's doc).
+      # footer content bytes (resize does not auto-repaint the footer by
+      # design, see InlineAuthority.resize/3's doc).
       resize_delta = delta(raw(device), byte_size(raw_before))
 
       # keyframe/2's OWN delta, measured strictly AFTER resize/3
@@ -493,10 +491,10 @@ defmodule Raxol.Property.RendererFooterTest do
   end
 
   # ---------------------------------------------------------------------
-  # INV-4 (footer side): with_cursor(:footer, ...) round-trips the cursor
+  # Footer side: with_cursor(:footer, ...) round-trips the cursor
   # ---------------------------------------------------------------------
 
-  describe "INV-4 (footer side): repaint/2 and keyframe/2 never leave the cursor moved or the save/restore bracket unbalanced" do
+  describe "footer side: repaint/2 and keyframe/2 never leave the cursor moved or the save/restore bracket unbalanced" do
     property "after any number of repaint/2 or keyframe/2 calls, the cursor is back at its pre-bracket position every time" do
       op_gen =
         gen all(

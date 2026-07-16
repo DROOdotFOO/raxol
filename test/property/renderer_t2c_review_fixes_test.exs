@@ -1,19 +1,16 @@
 defmodule Raxol.Property.RendererT2cReviewFixesTest do
   @moduledoc """
-  T2c's review-response suite (Fable-adjudicated FIX-NOW batch on the
-  pinned footer viewport, `docs/proposals/in-flight/harness-ui-roadmap.md`
-  T2c): footer `ContentGuard` (HIGH -- `repaint/2`/`keyframe/2` wrote
+  Footer `ContentGuard`: `repaint/2`/`keyframe/2` do not write
   agent/LLM-originated footer lines verbatim, so a footer line smuggling a
-  control sequence could defeat the footer-confinement invariant FROM THE
-  INSIDE, exactly the same threat class T2b's review already closed on the
-  history append path), and the `needs_keyframe` latch (MED -- a geometry-
-  changing `resize/3` can relocate the footer's on-screen rows while their
+  control sequence cannot defeat the footer-confinement invariant FROM THE
+  INSIDE -- the same threat class already closed on the history append
+  path. Also covers the `needs_keyframe` latch: a geometry-changing
+  `resize/3` can relocate the footer's on-screen rows while their
   logical content is unchanged; a diff-only `repaint/2` immediately after
-  would see a no-op diff and write nothing, leaving ghost content at the
-  new position).
+  would otherwise see a no-op diff and write nothing, leaving ghost
+  content at the new position.
 
-  Each `describe "R8-footer: ..."` block is a RED/GREEN pair, same
-  discipline as `renderer_t2b_review_fixes_test.exs`: RED demonstrates the
+  Each `describe` block below is a RED/GREEN pair: RED demonstrates the
   raw/pre-guard bytes are a real, oracle-visible (or content-visible)
   threat before GREEN shows the same payload, routed through the real
   `repaint/2`/`keyframe/2`, emerges neutralized.
@@ -101,12 +98,12 @@ defmodule Raxol.Property.RendererT2cReviewFixesTest do
   end
 
   # ---------------------------------------------------------------------
-  # R8-footer: ContentGuard neutralizes control bytes embedded IN footer
-  # content -- the same threat class as T2b's history-side review fix,
-  # applied to the footer path.
+  # ContentGuard neutralizes control bytes embedded IN footer content --
+  # the same threat class as the history-side fix, applied to the footer
+  # path.
   # ---------------------------------------------------------------------
 
-  describe "R8-footer: \\e[3;1H (a HISTORY row CUP) smuggled in a footer line" do
+  describe "\\e[3;1H (a HISTORY row CUP) smuggled in a footer line" do
     test "RED: raw bytes (what an unguarded repaint/2 would emit) let the smuggled CUP address a row outside the footer range" do
       {device, authority} = new_authority()
       prior_size = device |> raw() |> byte_size()
@@ -151,7 +148,7 @@ defmodule Raxol.Property.RendererT2cReviewFixesTest do
     end
   end
 
-  describe "R8-footer: \\e[2J (full-screen clear) smuggled in a footer line" do
+  describe "\\e[2J (full-screen clear) smuggled in a footer line" do
     test "RED: raw bytes (what an unguarded repaint/2 would emit) trigger the full-clear oracle" do
       {device, authority} = new_authority()
       prior_size = device |> raw() |> byte_size()
@@ -206,7 +203,7 @@ defmodule Raxol.Property.RendererT2cReviewFixesTest do
     end
   end
 
-  describe "R8-footer: \\e[K (erase-line) smuggled in a footer line" do
+  describe "\\e[K (erase-line) smuggled in a footer line" do
     test "RED: raw bytes let the smuggled EL execute silently -- it vanishes instead of appearing as text" do
       {device, _authority} = new_authority()
 
@@ -246,7 +243,7 @@ defmodule Raxol.Property.RendererT2cReviewFixesTest do
     end
   end
 
-  describe "R8-footer: a legitimately styled footer line stays styled (SGR passes through byte-identical)" do
+  describe "a legitimately styled footer line stays styled (SGR passes through byte-identical)" do
     test "GREEN: \\e[1;31m...\\e[0m survives repaint/2 unchanged" do
       {device, authority} = new_authority()
       bytes_before = raw(device)
@@ -368,7 +365,7 @@ defmodule Raxol.Property.RendererT2cReviewFixesTest do
 
     test "a width-only resize now sets needs_keyframe (footer re-truncation + reflow seam)" do
       # width 40 -> 80, height unchanged: `history_bottom` is row-based, so the
-      # REGION needs no re-emit (T2b's pinned regression, below, still holds) --
+      # REGION needs no re-emit (the append path's pinned regression, below, still holds) --
       # but the footer may need re-truncation to the new width, and reflow-capable
       # terminals rewrap sealed history on a WIDTH change. The latch keys on the
       # width axis too, not just the vertical geometry, so the first repaint after
@@ -406,7 +403,7 @@ defmodule Raxol.Property.RendererT2cReviewFixesTest do
       assert meta.new_width == 30
     end
 
-    test "resize/3 emits ONLY the DECSTBM re-set even with the latch change (T2b's pinned regression is untouched)" do
+    test "resize/3 emits ONLY the DECSTBM re-set even with the latch change (the append path's pinned regression is untouched)" do
       {device, authority} = new_authority()
       bytes_before = raw(device)
 
