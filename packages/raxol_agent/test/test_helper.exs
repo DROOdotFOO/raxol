@@ -38,11 +38,13 @@ end
 # (meta-invariant m4), run on demand, never in regular CI.
 #
 # :harness_red — permanent failing-first red suites authored BEFORE their
-# implementation lands (here: U11-R meta family + provenance/taint). Excluded
-# from every regular run so CI stays GREEN while the contract is pinned; the
-# suite goes green as its unit (U11-I) implements `Raxol.Agent.Meta`. The
-# negative CONTROLS for the same contours are NOT tagged :harness_red — they run
-# in CI to prove each red has teeth (meta-invariant m4).
+# implementation lands. Excluded from every regular run so CI stays GREEN while
+# the contract is pinned; a suite loses the tag (and joins CI green) the day its
+# unit implements it. U11-R (meta family + provenance/taint) has graduated —
+# U11-I implemented `Raxol.Agent.Meta` / `Raxol.Agent.Fingerprint`, so the suite
+# now runs untagged in CI; the tag is kept in the exclude list for the next
+# failing-first red. The negative CONTROLS for the same contours are NOT tagged
+# :harness_red — they run in CI to prove each red has teeth (meta-invariant m4).
 ExUnit.start(
   exclude: [
     :slow,

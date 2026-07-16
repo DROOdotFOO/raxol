@@ -14,8 +14,12 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
 
   The independent oracle (`Raxol.Agent.Red.MetaOracle`, meta-invariant m6) supplies
   every "expected" value; the negative CONTROLS proving each red has teeth live
-  in `u11_meta_controls_test.exs` and run in CI. This module is tagged
-  `:harness_red` and is excluded from every regular run (test_helper).
+  in `u11_meta_controls_test.exs` and run in CI.
+
+  U11-I has landed (`Raxol.Agent.Meta` / `Raxol.Agent.Fingerprint`), so this
+  suite now runs GREEN in every regular run — the `:harness_red` exclusion was
+  lifted the day the implementation made every contour pass. The negative
+  controls stay in CI to guarantee the reds keep their teeth.
 
   Contour map (freeze §2.2/§2.3):
     producer-strict seam ....... N-U11.1, N-U11.2, N-U11.4, N-U11.10
@@ -30,7 +34,6 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
   """
   use ExUnit.Case, async: true
 
-  @moduletag :harness_red
   @moduletag :capture_log
 
   alias Raxol.Agent.Contract.Event

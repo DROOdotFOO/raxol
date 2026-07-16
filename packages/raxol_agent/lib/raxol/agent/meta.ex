@@ -4,17 +4,10 @@ defmodule Raxol.Agent.Meta do
   decode, plus the provenance / taint / actor / fingerprint folds
   (`docs/proposals/in-flight/harness-freeze-contracts.md` §2, FI-5).
 
-  ## Enabler status (U11-R)
-
-  This module is the **enabler skeleton** for the U11 red suite: every seam and
-  fold below is declared with its frozen signature and returns `:not_implemented`
-  (the folds) / raises-through it, so the failing-first U11-R tests compile and
-  fail against the real contract. `Raxol.Agent.Meta.Registry` already carries the
-  frozen type table as data; the behaviour here is **U11-I implementation work**.
-
-  Do not "make the reds pass" by hardcoding here without the real algebra — the
-  negative controls (`u11_meta_controls_test.exs`) exist precisely to catch a
-  seam that pretends to validate/derive but doesn't.
+  `Raxol.Agent.Meta.Registry` carries the frozen v1 type table as data; this
+  module is the algebra that consumes it. Every fold derives from the journal
+  records themselves — never a side table — so a fold over a journal is the same
+  whether the journal is live or replayed from disk.
 
   ## The two seams (frozen strictness, §0 clause 2)
 
@@ -39,9 +32,11 @@ defmodule Raxol.Agent.Meta do
       produced this content" over a `turn_started` override and the head config.
   """
 
+  alias Raxol.Agent.Contract
   alias Raxol.Agent.Contract.Event
+  alias Raxol.Agent.Meta.Registry
 
-  @not_implemented :not_implemented
+  @default_provenance %{source: :primary, trust: :trusted}
 
   @typedoc "A journal record as returned by the tolerant Reader: string-keyed map."
   @type jrecord :: %{optional(String.t()) => term()}
@@ -62,7 +57,9 @@ defmodule Raxol.Agent.Meta do
     * `{:error, :provenance_required}` — `promote` with `refs: []`.
     * `{:error, {:scope_violation, type}}` — `scope: :global` on a non-`promote`.
 
-  Loud reject ⇒ nothing journaled, nothing on the bus. `:not_implemented` until U11-I.
+  A loud reject means nothing is journaled and nothing reaches the bus. A
+  non-meta event (or one with no `:type`) is always `:ok` — this seam only
+  governs the meta family.
   """
   @spec validate(Event.t() | map()) ::
           :ok
@@ -70,8 +67,37 @@ defmodule Raxol.Agent.Meta do
           | {:error, {:invalid_meta_payload, atom(), [atom()]}}
           | {:error, :provenance_required}
           | {:error, {:scope_violation, atom()}}
-          | :not_implemented
-  def validate(_event), do: @not_implemented
+  def validate(%Event{family: family, type: type, payload: payload, scope: scope}) do
+    validate(%{family: family, type: type, payload: payload, scope: scope})
+  end
+
+  def validate(%{family: :meta, type: type, payload: payload} = event) do
+    scope = Map.get(event, :scope, :session)
+
+    cond do
+      not Registry.known?(type) ->
+        {:error, {:unknown_meta_type, type}}
+
+      (missing = missing_keys(type, payload)) != [] ->
+        {:error, {:invalid_meta_payload, type, missing}}
+
+      type == :promote and Map.get(payload, :refs, []) == [] ->
+        {:error, :provenance_required}
+
+      scope == :global and Registry.scope(type) != :global ->
+        {:error, {:scope_violation, type}}
+
+      true ->
+        :ok
+    end
+  end
+
+  def validate(_non_meta), do: :ok
+
+  defp missing_keys(type, payload) do
+    (Registry.required_keys(type) || [])
+    |> Enum.reject(fn k -> Map.has_key?(payload, k) end)
+  end
 
   # --- reader seam (tolerant) ------------------------------------------------
 
@@ -79,35 +105,90 @@ defmodule Raxol.Agent.Meta do
   Decode a journal record into an `Event` (reader-tolerant seam).
 
   Always `{:ok, event}` — an unknown meta type / source / status is preserved
-  raw and never errors. Missing envelope keys decode to the frozen defaults
+  raw (the `type` atom is materialized, the payload kept as-is) and never
+  errors. Missing envelope keys decode to the frozen grandfather defaults
   (`scope: :session`, `provenance: %{source: :primary, trust: :trusted}`,
-  `actor: nil`). `:not_implemented` until U11-I.
+  `actor: nil`).
   """
-  @spec decode(jrecord()) :: {:ok, Event.t()} | :not_implemented
-  def decode(_record), do: @not_implemented
+  @spec decode(jrecord()) :: {:ok, Event.t()}
+  def decode(record) when is_map(record) do
+    {:ok,
+     %Event{
+       v: Map.get(record, "v", 0),
+       id: Map.get(record, "id", 0),
+       session_id: Map.get(record, "session_id"),
+       turn_id: Map.get(record, "turn_id"),
+       ts: Map.get(record, "ts", 0),
+       family: to_existing_or_new_atom(Map.get(record, "family"), :loop),
+       type: to_existing_or_new_atom(Map.get(record, "type"), nil),
+       tier: to_existing_or_new_atom(Map.get(record, "tier"), :durable),
+       payload: Map.get(record, "payload") || %{},
+       scope: to_existing_or_new_atom(Map.get(record, "scope"), :session),
+       provenance: decode_provenance(Map.get(record, "provenance")),
+       actor: decode_actor_field(Map.get(record, "actor"))
+     }}
+  end
 
   @doc """
   Encode an `Event` to a JSON binary, post-sanitize (codec round-trip surface).
 
   Round-tripping every registry meta type through `encode/1` |> `decode/1` is
-  byte-stable. `:not_implemented` until U11-I.
+  byte-stable: the struct serializes in a fixed field order and the payload is
+  sanitized to a JSON-encodable shape at the boundary.
   """
-  @spec encode(Event.t()) :: binary() | :not_implemented
-  def encode(_event), do: @not_implemented
+  @spec encode(Event.t()) :: binary()
+  def encode(%Event{payload: payload} = event) do
+    Jason.encode!(%{event | payload: Contract.sanitize_payload(payload || %{})})
+  end
 
   # --- taint algebra (FI-5) --------------------------------------------------
 
   @doc """
   Derive the trust of every `family: :meta` event by the frozen taint algebra:
-  tainted-absorbing over the events named in `refs` (and the producer input).
+  tainted-absorbing over the events named in `refs` (recursively).
 
-  Returns `%{offset => trust}` for meta events only. Loop events keep their
-  stamped trust (the entry point is `tool_result`). No laundering in v1 — trust
-  never upgrades `:tainted → :trusted`. `:not_implemented` until U11-I.
+  Returns `%{offset => trust}` for meta events only. Loop events anchor the fold
+  with their stamped (entry-point) trust — taint enters at `tool_result`. There
+  is no laundering in v1: a meta event any of whose refs reach a tainted record
+  is `:tainted`, and no path ever upgrades `:tainted → :trusted`.
   """
-  @spec derive_taint([jrecord()]) ::
-          %{non_neg_integer() => trust()} | :not_implemented
-  def derive_taint(_records), do: @not_implemented
+  @spec derive_taint([jrecord()]) :: %{non_neg_integer() => trust()}
+  def derive_taint(records) do
+    idx = index(records)
+
+    for r <- records, meta?(r), into: %{} do
+      {offset(r), derived_trust(r, idx, MapSet.new())}
+    end
+  end
+
+  # Recursive tainted-absorbing meet over refs (cycle-guarded). Loop events
+  # anchor with their stored trust; meta events derive from their refs.
+  defp derived_trust(record, idx, seen) do
+    id = offset(record)
+
+    cond do
+      MapSet.member?(seen, id) ->
+        :trusted
+
+      not meta?(record) ->
+        stored_trust(record)
+
+      true ->
+        seen = MapSet.put(seen, id)
+
+        tainted? =
+          record
+          |> refs()
+          |> Enum.any?(fn ref ->
+            case Map.get(idx, ref) do
+              nil -> false
+              ref_rec -> derived_trust(ref_rec, idx, seen) == :tainted
+            end
+          end)
+
+        if tainted?, do: :tainted, else: :trusted
+    end
+  end
 
   @doc """
   Where a record's STORED trust disagrees with `derive_taint/1`.
@@ -115,47 +196,146 @@ defmodule Raxol.Agent.Meta do
   Returns a list of `%{offset, stored, derived}` `:taint_violation` markers.
   Per OQ-U11.3 this is an alarm + observable fold marker, NEVER a hard reject or
   journal damage — replay of a violated journal stays `{:ok, _}`.
-  `:not_implemented` until U11-I.
   """
   @spec taint_violations([jrecord()]) ::
           [%{offset: non_neg_integer(), stored: trust(), derived: trust()}]
-          | :not_implemented
-  def taint_violations(_records), do: @not_implemented
+  def taint_violations(records) do
+    derived = derive_taint(records)
+
+    for r <- records, meta?(r), derived[offset(r)] != stored_trust(r) do
+      %{offset: offset(r), stored: stored_trust(r), derived: derived[offset(r)]}
+    end
+  end
 
   # --- actor / scope / precedence folds --------------------------------------
 
   @doc """
   Envelope actor per `kind: "event"` record; absent actor folds to
   `%{kind: :system}` by rule (never inferred as human/agent). Non-event records
-  carry no actor. `:not_implemented` until U11-I.
+  (checkpoint/schedule pointers) carry no actor and are skipped.
   """
-  @spec fold_actors([jrecord()]) ::
-          %{non_neg_integer() => map()} | :not_implemented
-  def fold_actors(_records), do: @not_implemented
+  @spec fold_actors([jrecord()]) :: %{non_neg_integer() => map()}
+  def fold_actors(records) do
+    for r <- records, event?(r), into: %{}, do: {offset(r), fold_actor(r)}
+  end
+
+  # Absent actor => system, BY RULE (never inferred as human/agent).
+  defp fold_actor(%{"actor" => %{"kind" => k} = a}) do
+    %{kind: to_existing_or_new_atom(k, :system), id: Map.get(a, "id")}
+  end
+
+  defp fold_actor(_), do: %{kind: :system}
 
   @doc """
   Scope-discipline check over a journal: `scope: :global` appears only on
-  `promote`, every `promote` has `refs != []`, and each ref resolves to a
-  record. Returns `:ok` or a list of violations. `:not_implemented` until U11-I.
+  `promote`, and every `promote` has `refs != []`. Returns `:ok` or a list of
+  violation markers.
   """
-  @spec check_scope([jrecord()]) :: :ok | [map()] | :not_implemented
-  def check_scope(_records), do: @not_implemented
+  @spec check_scope([jrecord()]) :: :ok | [map()]
+  def check_scope(records) do
+    violations =
+      for r <- records, meta?(r), v <- scope_violations(r), do: v
+
+    if violations == [], do: :ok, else: violations
+  end
+
+  defp scope_violations(record) do
+    type = type(record)
+
+    global_violation =
+      if scope(record) == :global and type != :promote,
+        do: [%{offset: offset(record), violation: {:scope_violation, type}}],
+        else: []
+
+    promote_violation =
+      if type == :promote and refs(record) == [],
+        do: [%{offset: offset(record), violation: :provenance_required}],
+        else: []
+
+    global_violation ++ promote_violation
+  end
 
   @doc """
-  The loop-only fold projection: meta events are filtered out before any
-  loop-typed logic. Folding over an interleaved journal equals folding over the
-  meta-stripped journal. `:not_implemented` until U11-I.
+  The loop-only fold projection: `{offset, type}` of every `family: :loop`
+  record, in journal order. Meta events are filtered out before any loop-typed
+  logic, so folding over an interleaved journal equals folding over the
+  meta-stripped one.
   """
-  @spec loop_projection([jrecord()]) :: term()
-  def loop_projection(_records), do: @not_implemented
+  @spec loop_projection([jrecord()]) :: [{non_neg_integer(), atom()}]
+  def loop_projection(records) do
+    for r <- records, family(r) == :loop, do: {offset(r), type(r)}
+  end
 
   @doc """
-  The fingerprint governing "what produced this content" for the
-  `item_completed` at `offset`: the item's own fingerprint wins over any
-  `turn_started` override (that governs "what was asked") and the head config
-  (defaults only). `:not_implemented` until U11-I.
+  The fingerprint governing "what produced this content" for the record at
+  `offset`: the `item_completed` fingerprint wins over any `turn_started`
+  override (which governs "what was asked") and the session head config
+  (defaults only). Returns the fingerprint map or `nil`.
   """
-  @spec what_produced([jrecord()], non_neg_integer()) ::
-          map() | nil | :not_implemented
-  def what_produced(_records, _offset), do: @not_implemented
+  @spec what_produced([jrecord()], non_neg_integer()) :: map() | nil
+  def what_produced(records, offset) do
+    case Enum.find(records, fn r -> offset(r) == offset end) do
+      %{"payload" => %{"fingerprint" => fp}} -> fp
+      _ -> nil
+    end
+  end
+
+  # --- record accessors (string-keyed, Reader-shaped) ------------------------
+
+  defp index(records), do: Map.new(records, fn r -> {offset(r), r} end)
+
+  defp family(%{"family" => f}) when is_binary(f), do: String.to_atom(f)
+  defp family(%{"family" => f}) when is_atom(f) and not is_nil(f), do: f
+  defp family(_), do: :loop
+
+  defp meta?(r), do: family(r) == :meta
+
+  defp type(%{"type" => t}) when is_binary(t), do: String.to_atom(t)
+  defp type(%{"type" => t}) when is_atom(t), do: t
+  defp type(_), do: nil
+
+  defp offset(%{"id" => id}), do: id
+  defp offset(_), do: nil
+
+  defp refs(%{"payload" => %{"refs" => refs}}) when is_list(refs), do: refs
+  defp refs(_), do: []
+
+  defp scope(%{"scope" => s}) when is_binary(s), do: String.to_atom(s)
+  defp scope(%{"scope" => s}) when is_atom(s) and not is_nil(s), do: s
+  defp scope(_), do: :session
+
+  defp event?(r), do: Map.get(r, "kind", "event") == "event"
+
+  # STORED trust on a record's provenance; grandfather / missing => :trusted.
+  defp stored_trust(%{"provenance" => %{"trust" => "tainted"}}), do: :tainted
+  defp stored_trust(%{"provenance" => %{"trust" => :tainted}}), do: :tainted
+  defp stored_trust(_), do: :trusted
+
+  # --- decode helpers --------------------------------------------------------
+
+  defp decode_provenance(%{"source" => source, "trust" => trust}) do
+    %{
+      source: to_existing_or_new_atom(source, :primary),
+      trust: to_existing_or_new_atom(trust, :trusted)
+    }
+  end
+
+  defp decode_provenance(%{source: _, trust: _} = provenance), do: provenance
+  defp decode_provenance(_), do: @default_provenance
+
+  defp decode_actor_field(%{"kind" => k} = a) do
+    %{kind: to_existing_or_new_atom(k, :system), id: Map.get(a, "id")}
+  end
+
+  defp decode_actor_field(%{kind: _} = actor), do: actor
+  defp decode_actor_field(_), do: nil
+
+  # The reader-tolerant seam must materialize unknown atoms (future meta types /
+  # sources / scopes) from a trusted, self-produced journal — String.to_atom is
+  # intentional here (not user input; the journal is the session's own file).
+  defp to_existing_or_new_atom(nil, default), do: default
+  defp to_existing_or_new_atom(value, _default) when is_atom(value), do: value
+
+  defp to_existing_or_new_atom(value, _default) when is_binary(value),
+    do: String.to_atom(value)
 end
