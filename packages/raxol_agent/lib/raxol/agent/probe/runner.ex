@@ -1,8 +1,10 @@
 defmodule Raxol.Agent.Probe.Runner do
   @moduledoc """
   U12 — the probe Runner (frozen observables, `harness-freeze-contracts.md`
-  §3.1/§3.3). The in-BEAM supervised pool (roadmap D2 — no Oban/Postgres; D1
-  stayed on files) that drives a `Raxol.Agent.Probe` through its lifecycle and
+  §3.1/§3.3). The in-BEAM Runner Pool (roadmap D2 — no Oban/Postgres; D1
+  stayed on files; an UNSUPERVISED lazy singleton today — see
+  `Raxol.Agent.Probe.Runner.Pool` for the process model + supervision follow-up)
+  that drives a `Raxol.Agent.Probe` through its lifecycle and
   emits the frozen `probe_run` / result meta events, owning everything the pure
   probe does not.
 
@@ -35,8 +37,8 @@ defmodule Raxol.Agent.Probe.Runner do
       `provenance.source = :probe_<spec.id>` and `trust = context.taint ⊓ refs`.
       A probe cannot stamp its own provenance; a run over tainted context
       produces no trusted event (P-U12.5).
-    * **Isolation.** One supervised process per run; a probe crash yields
-      `probe_run{status: :error}` and touches nothing else. `kill/1` is
+    * **Isolation.** One isolated process (a linked `Task`) per run; a probe
+      crash yields `probe_run{status: :error}` and touches nothing else. `kill/1` is
       effective mid-provider-call and never propagates to the primary loop or
       sibling probes; no meta event for a run may appear after its terminal
       (N-U12.7).

@@ -1,6 +1,6 @@
 defmodule Raxol.Agent.Probe.Runner.Pool do
   @moduledoc """
-  The in-BEAM supervised pool backing `Raxol.Agent.Probe.Runner` (roadmap D2).
+  The in-BEAM Runner Pool backing `Raxol.Agent.Probe.Runner` (roadmap D2).
 
   A single serialized coordinator owns the run registry (`run_id → state`), the
   per-pool bounded parked set, and the kill↔finalize ordering. Each budget-OK
@@ -14,6 +14,46 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   `:emit` / `:provider` / `:budget` (+ optional `:session_budget`) so the U12-R
   red suite folds them in-memory; production binds the journal / EmitBridge and
   the real provider / Ledger to the same seam.
+
+  ## Process model — UNSUPERVISED lazy singleton (not yet supervised)
+
+  The pool is a lazily-started, **unsupervised** named singleton: `ensure_started/0`
+  calls `GenServer.start` (NOT `start_link`, and not under any supervisor), so it
+  is unlinked from every caller. If a **coordinator-context** emit fails loudly
+  (a genuine, non-`:noproc` journal/EmitBridge write error raised from inside a
+  `handle_call`, e.g. `emit_opening/4` under `submit/3`), the coordinator crashes
+  and its in-memory state — the run registry and parked set — is LOST; the next
+  `submit/3` lazily restarts it. In-flight runs at that instant get **no in-band
+  terminal** (the coordinator that would emit it is gone, and their Tasks then hit
+  `:noproc` on the next `GenServer.call(parent, …)` and die silently).
+
+  This is acceptable ONLY because the **journal is the durability authority**
+  (§3.1 reserve-before-call / fail-closed), not the in-memory Pool state: every
+  terminal is journaled as it is emitted, so the map is a cache, not the record.
+  Lifecycle closure for a run orphaned by a coordinator crash therefore comes from
+  **journal replay at recovery** (external to this module — the journal owner
+  reconciles a run that opened but never reached a journaled terminal), NOT from
+  this process.
+
+  **Documented follow-ups (production wiring, deliberately NOT done here):**
+    * Supervise the pool (a `start_link` under a supervisor) so a coordinator
+      crash restarts it eagerly and orphaned Tasks are cleaned up, rather than the
+      current lazy-restart-on-next-submit.
+    * GC terminated runs — `state.runs` is currently append-only (see
+      `put_run/3`), so a long-lived singleton grows unbounded; a TTL/cap is needed
+      once `status/1`/`kill/1` no longer need to answer for old run_ids.
+
+  ## Stub vs. production values
+
+  Bound to the lab's in-memory seams, three helpers here return **placeholder**
+  data, NOT real usage — a maintainer should read them as stubs pending the
+  production `:provider` / Ledger / `Fingerprint` binding: `provider_invoke/3`
+  (the lab call-counter shape; the real provider replaces it), `charge/1` (the
+  frozen `100/90/12` split fixture; real settlement fills actuals), and
+  `fingerprint/0` (a literal `anthropic`/`claude`/seed-7 fixture; the real model
+  identity replaces it). The red suite deliberately pins only the SHAPE of these
+  (key set, `cached ≤ prompt`, fingerprint fields) — value-level pinning against
+  observed provider usage is production-binding work, not part of the D2 seam.
   """
 
   use GenServer
@@ -69,7 +109,12 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   @doc false
   def finalize(run_id, result), do: GenServer.call(__MODULE__, {:finalize, run_id, result})
 
-  # Lazy, idempotent start — the pool is a singleton in-BEAM coordinator.
+  # Lazy, idempotent start — the pool is an UNSUPERVISED singleton in-BEAM
+  # coordinator. `GenServer.start` (not `start_link`, not under a supervisor): it
+  # is unlinked, so a caller crash never takes the pool down and the pool's own
+  # crash never takes a caller down; on crash the next submit lazily restarts it
+  # (see the moduledoc process model — the journal is the durability authority,
+  # in-flight runs get no in-band terminal, closure comes from journal replay).
   @doc false
   def ensure_started do
     case Process.whereis(__MODULE__) do
@@ -589,8 +634,11 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   # not in-memory Pool state). A raised error propagates; a non-`:noproc` exit
   # propagates. In the run-Task context that crashes the Task, which the coord's
   # `:DOWN` handler turns into the run's `:error` terminal (still exactly one
-  # terminal). In the coordinator context it fails the supervised pool loudly
-  # rather than losing the record.
+  # terminal). In the coordinator context it crashes the UNSUPERVISED pool
+  # coordinator loudly (the singleton dies and lazily restarts on next submit; its
+  # in-flight runs get no in-band terminal — see the moduledoc process model): the
+  # journal, not the lost in-memory state, is the record, so failing loud and
+  # losing the cache beats silently dropping a journal write.
   defp safe_emit(emit, event) do
     emit.(event)
     :ok
@@ -790,8 +838,9 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   defp rideable_prefix(%{prefix_ref: bytes}) when is_binary(bytes), do: bytes
   defp rideable_prefix(_), do: ""
 
-  # Invoke the injected provider handle. The lab's in-memory stub is a call
-  # counter + captured-request list; production binds the real provider here.
+  # STUB (see moduledoc "Stub vs. production values"): invoke the injected
+  # provider handle. The lab's in-memory stub is a call counter + captured-request
+  # list returning a canned response; production binds the real provider here.
   defp provider_invoke(%{calls: calls, captures: captures}, run_id, %{
          prefix: prefix,
          suffix: suffix
@@ -814,6 +863,8 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   # fingerprint (REQUIRED on every probe_run terminal — §2.1 via Fingerprint)
   # ---------------------------------------------------------------------------
 
+  # STUB (see moduledoc "Stub vs. production values"): a literal fixture model
+  # identity; the real model/params replace this at production binding.
   defp fingerprint do
     params = %{temperature: 0.0, top_p: 1.0, max_tokens: 256, seed: 7}
 
@@ -827,8 +878,10 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     }
   end
 
-  # The frozen charge split (cache-riding dividend visible). Per successful call:
-  # prompt 100 (the reserve), cached 90 (the dividend), completion 12.
+  # STUB (see moduledoc "Stub vs. production values"): the frozen charge split
+  # fixture (cache-riding dividend visible). Per successful call: prompt 100 (the
+  # reserve), cached 90 (the dividend), completion 12 — real settlement fills
+  # actuals at production binding.
   defp charge(calls) when calls > 0 do
     %{
       prompt_tokens: 100 * calls,
