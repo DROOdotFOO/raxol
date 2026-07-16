@@ -58,9 +58,7 @@ defmodule CrosschainStealthPayment do
     IO.puts("\n== crosschain stealth payment ==")
     IO.puts("wallet:   #{wallet.address()}")
 
-    IO.puts(
-      "route:    Base(#{@base}) -> Arbitrum(#{@arbitrum})  settlement=stealth\n"
-    )
+    IO.puts("route:    Base(#{@base}) -> Arbitrum(#{@arbitrum})  settlement=stealth\n")
 
     meta = recipient_meta_address()
 
@@ -102,9 +100,7 @@ defmodule CrosschainStealthPayment do
 
     totals = Ledger.get_totals(ledger, :stealth_demo, policy())
 
-    IO.puts(
-      "\nledger:   session=#{totals.session}  lifetime=#{totals.lifetime} USDC"
-    )
+    IO.puts("\nledger:   session=#{totals.session}  lifetime=#{totals.lifetime} USDC")
 
     IO.puts("\n4. spend gate blocks an over-limit intent:")
 
@@ -121,9 +117,7 @@ defmodule CrosschainStealthPayment do
            context
          ) do
       {:error, failure} ->
-        IO.puts(
-          "   denied [#{failure.reason}]: #{failure.message} (no signature released)"
-        )
+        IO.puts("   denied [#{failure.reason}]: #{failure.message} (no signature released)")
 
       {:ok, _} ->
         IO.puts("   ERROR: over-limit intent was not blocked")
@@ -135,10 +129,11 @@ defmodule CrosschainStealthPayment do
     :ok
   end
 
-  # The Tron rail: public-only, deposit-address based. A stealth request to a
-  # Tron destination is downgraded to public with a surfaced warning, and the
-  # deposit is funded by the injected broadcaster (the InMemory one here; the
-  # assembled build wires Raxol.ACP.Relay.OnchainBroadcaster).
+  # The Tron rail: public-only, deposit-address based. Tron has no stealth
+  # settlement, so a stealth request to a Tron destination FAILS CLOSED -- no
+  # silent privacy downgrade; the operator must re-request public explicitly.
+  # The public deposit is then funded by the injected broadcaster (the InMemory
+  # one here; the assembled build wires Raxol.ACP.Relay.OnchainBroadcaster).
   defp tron_leg(context) do
     IO.puts("\n== tron leg: relay rail (public-only) ==")
     IO.puts("route:    Base(#{@base}) -> Tron(#{@tron})  USDC -> USDT\n")
@@ -152,20 +147,32 @@ defmodule CrosschainStealthPayment do
       })
       |> Map.put(:broadcaster, Broadcaster.InMemory)
 
+    base_params = %{
+      amount: "0.25",
+      from_chain_id: @base,
+      to_chain_id: @tron,
+      from_token: @usdc,
+      to_token: @usdt_trc20,
+      to_address: @tron_recipient
+    }
+
+    IO.puts("5. stealth->Tron is refused (fail-closed; no silent privacy downgrade)")
+
+    case ExecuteRelayTransfer.call(Map.put(base_params, :settlement, "stealth"), relay_context) do
+      {:error, failure} ->
+        IO.puts("   refused [#{failure.reason}]: #{failure.message}")
+
+      {:ok, _} ->
+        IO.puts("   ERROR: stealth->Tron should have been refused")
+        System.halt(1)
+    end
+
     transfer =
       step(
-        "5. stealth->Tron downgrades to public; broadcaster funds the deposit",
+        "6. re-request public: broadcaster funds the deposit",
         fn ->
           ExecuteRelayTransfer.call(
-            %{
-              amount: "0.25",
-              from_chain_id: @base,
-              to_chain_id: @tron,
-              from_token: @usdc,
-              to_token: @usdt_trc20,
-              to_address: @tron_recipient,
-              settlement: "stealth"
-            },
+            Map.put(base_params, :settlement, "public"),
             relay_context
           )
         end
@@ -175,11 +182,9 @@ defmodule CrosschainStealthPayment do
       IO.puts("   warn [#{w.code}]: #{w.message}")
     end)
 
-    IO.puts(
-      "   funding: #{transfer.funding}   deposit_tx: #{transfer.deposit_tx_hash}"
-    )
+    IO.puts("   funding: #{transfer.funding}   deposit_tx: #{transfer.deposit_tx_hash}")
 
-    step("6. poll the Tron transfer to settlement", fn ->
+    step("7. poll the Tron transfer to settlement", fn ->
       PollRelayStatus.call(%{transfer_id: transfer.transfer_id}, relay_context)
     end)
   end
