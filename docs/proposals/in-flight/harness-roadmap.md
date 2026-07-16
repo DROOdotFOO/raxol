@@ -569,12 +569,18 @@ Unit-spec deltas from round 2:
   from the UI lane must never need lockstep updates.
 - **NC guards still binding:** no graph/DSL (NC-1), no swarm headline (NC-2),
   no ACP server (NC-3), no Temporal-grade engine (NC-4).
-- **Packaging ratification (pre-CLI-surface, ratified 2026-07-16):** decide
-  **burrito vs `mix release`** (self-contained binary vs BEAM-runtime dep) and
-  write a **decision doc** *before* the CLI surface ships. The cohort's Codex
-  lesson is a zero-dependency binary; we carry a BEAM runtime dep and have no
-  packaging answer yet (blind spot #2, `harness-eval-first-analysis.md` §4.4).
-  Not a numbered unit — a gate on the S1/S2 CLI-surface lane.
+- **Packaging RULED (pre-CLI-surface, V 2026-07-16):** **hermetic
+  dual-channel** — `curl | bash` **and** system installers (brew; winget
+  later), embedded ERTS, zero prerequisites ("install erlang to run" is a
+  non-starter). This kills escript/hex-as-install outright. The remaining
+  decision is **implementation only**: burrito vs a hand-rolled
+  release+launcher (self-extraction tradeoffs, cross-build matrix for the
+  brew/winget targets), plus one technical constraint made binding here: the
+  **agent-surface CLI stays NIF-free** (termbox2 stays in the TUI-lane
+  surface) so the Windows/winget target is cheap. Owner: agent lane.
+  Implementation doc + triad review before the CLI surface ships (blind spot
+  #2, `harness-eval-first-analysis.md` §4.4). Not a numbered unit — a gate on
+  the S1/S2 CLI-surface lane.
 
 ### Red-first fan-out (2026-07-16)
 
