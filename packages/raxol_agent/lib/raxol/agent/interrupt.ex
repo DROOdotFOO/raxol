@@ -429,7 +429,12 @@ defmodule Raxol.Agent.Interrupt do
 
   # A group-kill of `-os_pid` is safe ONLY when os_pid is genuinely the group's
   # leader (pgid == os_pid) and that group is not this VM's own group.
-  defp group_leader_safe?(os_pid) do
+  #
+  # `@doc false` public (not private) so the U5 pgid regression can assert group
+  # derivation works on this host — a nil pgid silently degrades group-kill to
+  # the per-pid fallback, which is exactly the macOS regression finding U5-#4.
+  @doc false
+  def group_leader_safe?(os_pid) do
     with pgid when is_integer(pgid) <- pgid_of(os_pid),
          own when is_integer(own) <- own_pgid() do
       pgid == os_pid and pgid != own
@@ -438,10 +443,40 @@ defmodule Raxol.Agent.Interrupt do
     end
   end
 
-  defp pgid_of(pid) do
-    case System.cmd("ps", ["-o", "pgid=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
+  # Derive a pid's process-group id. The primary form (`-o pgid=`, empty-header
+  # suppression) works on GNU ps and modern macOS/BSD ps; the fallback requests
+  # the single labeled `pgid` column and parses the numeric value out of the
+  # last row, for ps builds that reject `=`-suppressed headers (finding U5-#4:
+  # a nil pgid here loses the group-kill path on macOS/BSD). `@doc false` public
+  # for the regression test.
+  @doc false
+  def pgid_of(pid) do
+    pid_s = Integer.to_string(pid)
+    pgid_bare(["-o", "pgid=", "-p", pid_s]) || pgid_labeled(["-o", "pgid", "-p", pid_s])
+  end
+
+  # `-o pgid=` → a single bare number on stdout (or empty on an unsupported ps).
+  defp pgid_bare(args) do
+    case System.cmd("ps", args, stderr_to_stdout: true) do
       {out, 0} -> out |> String.trim() |> parse_int()
       _ -> nil
+    end
+  end
+
+  # `-o pgid` → header row + a data row whose last whitespace token is the pgid.
+  defp pgid_labeled(args) do
+    case System.cmd("ps", args, stderr_to_stdout: true) do
+      {out, 0} ->
+        out
+        |> String.split("\n", trim: true)
+        |> List.last()
+        |> case do
+          nil -> nil
+          line -> line |> String.trim() |> parse_int()
+        end
+
+      _ ->
+        nil
     end
   end
 

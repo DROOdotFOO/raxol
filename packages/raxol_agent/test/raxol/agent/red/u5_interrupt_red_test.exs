@@ -202,6 +202,30 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
     end
   end
 
+  describe "P7 — pgid derivation works on this host (group-kill, not the per-pid fallback)" do
+    @tag :unix_only
+    test "pgid_of returns a numeric pgid for a live child and the group path is chosen" do
+      lab = KillLab.spawn_rogue(sleep: 30)
+      on_exit(fn -> KillLab.reap(lab) end)
+
+      pgid = Interrupt.pgid_of(lab.os_pid)
+
+      assert is_integer(pgid) and pgid > 1,
+             "pgid_of derived no numeric pgid for #{lab.os_pid} — group-kill silently " <>
+               "degrades to the per-pid fallback (the macOS GNU-ps regression, U5-#4)"
+
+      # BEAM makes each Port its own process-group leader → pgid == os_pid, so
+      # the safe OS process-group kill path is taken, not the individual-signal
+      # fallback that leaks the grandchild.
+      assert pgid == lab.os_pid,
+             "a BEAM port must be its own group leader (pgid == os_pid); got pgid=#{pgid}"
+
+      assert Interrupt.group_leader_safe?(lab.os_pid),
+             "group_leader_safe? rejected a genuine group leader — the kill would fall " <>
+               "back to per-pid signalling instead of the process-group SIGKILL"
+    end
+  end
+
   # --- helpers ---------------------------------------------------------------
 
   # Open a fresh session journal + a durable sink for one turn.
