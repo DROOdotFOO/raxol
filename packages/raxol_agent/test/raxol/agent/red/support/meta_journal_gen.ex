@@ -79,7 +79,9 @@ defmodule Raxol.Agent.Red.MetaJournalGen do
         1,
         :loop,
         :tool_result,
-        %{name: "fetch", result: "<<untrusted>>", refs: []}, trust: "tainted")
+        %{name: "fetch", result: "<<untrusted>>", refs: []},
+        trust: "tainted"
+      )
 
     # offsets 2..depth: meta links, each refs the previous, each stored :tainted.
     chain_types =
@@ -124,6 +126,56 @@ defmodule Raxol.Agent.Red.MetaJournalGen do
   end
 
   # ===========================================================================
+  # Exponential-fold regression — Fibonacci-shaped multi-parent ref DAG
+  # ===========================================================================
+
+  @doc """
+  A Fibonacci-shaped multi-parent ref DAG: two loop leaves (offsets 1 and 2,
+  both stored `leaf_trust`), then `depth` chained meta `speculation` events
+  where event `n` refs `[n-1, n-2]` — the plural-parent shape the freeze
+  REQUIRES (N-U11.10 / P-U11.8), so this journal is legitimate, not exotic.
+  Every meta record stores the correct derived trust (all `leaf_trust`), so
+  the journal is consistent (`taint_violations/1` must be `[]`).
+
+  Without cross-branch memoization the taint fold over this shape recurses
+  `T(n) = T(n-1) + T(n-2)` — exponential. The worst case is `leaf_trust:
+  :trusted` (the tainted-absorbing `any?` cannot short-circuit, so every
+  branch is explored): measured ~4.4s at depth 32, ~x2.6 per +2 depth —
+  minutes at depth 40. The tainted variant short-circuits pre-fix and pins
+  correctness rather than the blow-up.
+
+  Returns `%{records, meta_offsets, leaf_trust}`.
+  """
+  def fibonacci_dag(depth, opts \\ []) when depth >= 2 do
+    leaf_trust = Keyword.get(opts, :leaf_trust, :trusted)
+    trust = to_string(leaf_trust)
+
+    leaves =
+      for id <- [1, 2] do
+        rec(
+          id,
+          :loop,
+          :tool_result,
+          %{name: "fetch", result: "r#{id}", refs: []}, trust: trust)
+      end
+
+    metas =
+      for id <- 3..(depth + 2) do
+        rec(
+          id,
+          :meta,
+          :speculation,
+          meta_payload(:speculation, [id - 1, id - 2]), trust: trust)
+      end
+
+    %{
+      records: leaves ++ metas,
+      meta_offsets: Enum.to_list(3..(depth + 2)),
+      leaf_trust: leaf_trust
+    }
+  end
+
+  # ===========================================================================
   # OQ-U11.3 — a hand-crafted taint violation (stored :trusted, tainted ref)
   # ===========================================================================
 
@@ -142,7 +194,9 @@ defmodule Raxol.Agent.Red.MetaJournalGen do
         1,
         :loop,
         :tool_result,
-        %{name: "fetch", result: "<<untrusted>>", refs: []}, trust: "tainted")
+        %{name: "fetch", result: "<<untrusted>>", refs: []},
+        trust: "tainted"
+      )
 
     # offset 2 refs the tainted entry but LIES that it is trusted.
     liar =
@@ -300,7 +354,9 @@ defmodule Raxol.Agent.Red.MetaJournalGen do
         2,
         :loop,
         :turn_started,
-        %{prompt: "p", fingerprint_override: y, refs: []}, turn_id: "t1")
+        %{prompt: "p", fingerprint_override: y, refs: []},
+        turn_id: "t1"
+      )
 
     item =
       rec(

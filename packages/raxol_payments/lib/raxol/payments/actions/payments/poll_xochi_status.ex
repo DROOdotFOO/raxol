@@ -52,6 +52,7 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
   alias Raxol.Payments.{Failure, Poll}
   alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Xochi.Schemas.IntentStatus
+  alias Raxol.Payments.Xochi.SwapAnnouncer
 
   @spec run(map(), map()) :: {:ok, map()} | {:error, Failure.t()}
   @impl true
@@ -60,54 +61,79 @@ defmodule Raxol.Payments.Actions.Payments.PollXochiStatus do
       {:ok, config} ->
         opts = poll_opts(params)
         budget = Keyword.get(opts, :budget_ms, Poll.default_budget_ms())
-
-        case Xochi.poll_status_timed(config, intent_id, opts) do
-          {:ok, %IntentStatus{status: :completed} = status, elapsed_ms} ->
-            # Settled: the spend stands. Drop the reservation tag so the ledger's
-            # in-flight set stays bounded; nothing to release.
-            SpendGate.forget_reservation(context, intent_id)
-            {:ok, summary(status, elapsed_ms, budget)}
-
-          {:ok, %IntentStatus{status: :refunded} = status, _elapsed_ms} ->
-            # The origin funds came back. Release the execute-time budget
-            # reservation, idempotently -- a re-poll of an already-refunded intent
-            # releases nothing further -- so a refunded payment stops consuming
-            # budget. Still surfaced as an error carrying the refund reason.
-            SpendGate.release_by_intent(context, intent_id)
-            reason = status.error || status.refund_reason || status.substatus_message
-            {:error, Failure.from({:settlement, :refunded, reason})}
-
-          {:ok, %IntentStatus{} = status, _elapsed_ms} ->
-            # Terminal but not completed or refunded (failed/expired): a failed
-            # order must surface as an error, never as {:ok, ...}. The origin pull
-            # may already have moved funds, so the spend stands -- forget the tag
-            # (no release), but keep the reason (an explicit error, then the
-            # solver's substatus_message) so why it failed is never lost.
-            SpendGate.forget_reservation(context, intent_id)
-            reason = status.error || status.substatus_message
-            {:error, Failure.from({:settlement, status.status, reason})}
-
-          {:error, :timeout} ->
-            # A poll that never reached a terminal status is not a clean failure:
-            # the origin funds may already have been pulled while delivery stayed
-            # unconfirmed, so the intent is stranded, not failed. Emit a distinct
-            # signal so operator tooling can reconcile or close THIS intent, and
-            # carry the id in the error so the caller does not re-execute it.
-            :telemetry.execute(
-              [:raxol, :payments, :xochi, :intent_stranded],
-              %{},
-              %{intent_id: intent_id}
-            )
-
-            {:error, Failure.from({:stranded, intent_id})}
-
-          {:error, reason} ->
-            {:error, Failure.from(reason)}
-        end
+        result = Xochi.poll_status_timed(config, intent_id, opts)
+        handle_result(result, context, intent_id, budget)
 
       :error ->
         {:error, Failure.from({:missing_context, :xochi_config})}
     end
+  end
+
+  defp handle_result(
+         {:ok, %IntentStatus{status: :completed} = status, elapsed_ms},
+         ctx,
+         id,
+         budget
+       ) do
+    # Settled: the spend stands. Drop the reservation tag so the ledger's
+    # in-flight set stays bounded; nothing to release.
+    SpendGate.forget_reservation(ctx, id)
+    announce_terminal(ctx, id, status)
+    {:ok, summary(status, elapsed_ms, budget)}
+  end
+
+  defp handle_result(
+         {:ok, %IntentStatus{status: :refunded} = status, _elapsed_ms},
+         ctx,
+         id,
+         _budget
+       ) do
+    # The origin funds came back. Release the execute-time budget reservation,
+    # idempotently -- a re-poll of an already-refunded intent releases nothing
+    # further -- so a refunded payment stops consuming budget. Still surfaced as
+    # an error carrying the refund reason.
+    SpendGate.release_by_intent(ctx, id)
+    announce_terminal(ctx, id, status)
+    reason = status.error || status.refund_reason || status.substatus_message
+    {:error, Failure.from({:settlement, :refunded, reason})}
+  end
+
+  defp handle_result({:ok, %IntentStatus{} = status, _elapsed_ms}, ctx, id, _budget) do
+    # Terminal but not completed or refunded (failed/expired): a failed order
+    # must surface as an error, never as {:ok, ...}. The origin pull may already
+    # have moved funds, so the spend stands -- forget the tag (no release), but
+    # keep the reason (an explicit error, then the solver's substatus_message) so
+    # why it failed is never lost.
+    SpendGate.forget_reservation(ctx, id)
+    announce_terminal(ctx, id, status)
+    reason = status.error || status.substatus_message
+    {:error, Failure.from({:settlement, status.status, reason})}
+  end
+
+  defp handle_result({:error, :timeout}, ctx, id, _budget) do
+    # A poll that never reached a terminal status is not a clean failure: the
+    # origin funds may already have been pulled while delivery stayed
+    # unconfirmed, so the intent is stranded, not failed. Emit a distinct signal
+    # so operator tooling can reconcile or close THIS intent, and carry the id in
+    # the error so the caller does not re-execute it.
+    :telemetry.execute([:raxol, :payments, :xochi, :intent_stranded], %{}, %{intent_id: id})
+    # Advance the live-feed row off "executing" to a stranded state so it does
+    # not sit unresolved. Best-effort; leaves the route in place for a later
+    # terminal announce if a re-poll resolves the intent.
+    SwapAnnouncer.announce_stranded(ctx, id)
+    {:error, Failure.from({:stranded, id})}
+  end
+
+  defp handle_result({:error, reason}, _ctx, _id, _budget) do
+    {:error, Failure.from(reason)}
+  end
+
+  # Best-effort, non-blocking: advance the user's live-feed row to its terminal
+  # state. A no-op unless a capability topic_id is configured and the execute
+  # stashed this intent's route. Never affects the poll result.
+  defp announce_terminal(context, intent_id, status) do
+    SwapAnnouncer.announce_terminal(context, intent_id, status)
+    :ok
   end
 
   defp poll_opts(params) do

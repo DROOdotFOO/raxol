@@ -199,7 +199,10 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   def restore(%FileStore{} = journal, _opts) do
     with {:ok, records} <- read_records(journal),
          {:ok, checkpoint} <- newest_checkpoint(records),
-         {:ok, model} <- restore_from(journal, records, checkpoint) do
+         # Delegates to the SAME hardened single-checkpoint restore U10
+         # compaction resume uses — restore/2 IS restore_checkpoint/3 applied
+         # to the newest checkpoint (structural resume-equivalence; no fork).
+         {:ok, model} <- restore_checkpoint(journal, records, checkpoint) do
       # The restored model is the SURROGATE fold, not real harness state — be
       # loud so a caller can never mistake it for a real restore (see the
       # "Surrogate safety" moduledoc section). Telemetry carries offsets only,
@@ -219,6 +222,24 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
 
   def restore(_journal, _opts), do: {:error, :invalid_journal}
 
+  @doc """
+  Restore ONE specific already-read `checkpoint` record — the hardened
+  single-checkpoint restore U10 compaction resume delegates to for its
+  newest-first walk. `restore/2` is exactly this applied to the newest
+  checkpoint; both share the same validation + snapshot hardening so
+  compaction-restore IS checkpoint-restore (structural resume-equivalence).
+  """
+  @impl true
+  def restore_checkpoint(%FileStore{} = journal, records, checkpoint)
+      when is_list(records) and is_map(checkpoint) do
+    with {:ok, cp} <- validate_checkpoint(checkpoint) do
+      restore_from(journal, records, cp)
+    end
+  end
+
+  def restore_checkpoint(_journal, _records, _checkpoint),
+    do: {:error, :malformed_checkpoint}
+
   defp newest_checkpoint(records) do
     case Enum.filter(records, &(Map.get(&1, "kind") == @kind)) do
       [] ->
@@ -227,22 +248,33 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
       cps ->
         # The Reader is tolerant of a partial record; restore is NOT. Pick the
         # newest without `fetch!` (a missing `id` is sentinel-ranked, never a
-        # raise), then require the keys restore dereferences downstream so an
-        # adversarial/truncated checkpoint yields a typed reject, not a KeyError.
-        cps
-        |> Enum.max_by(&Map.get(&1, "id", -1))
-        |> validate_checkpoint()
+        # raise); `restore_checkpoint/3` then validates the keys restore
+        # dereferences downstream so an adversarial/truncated checkpoint yields a
+        # typed reject, not a KeyError.
+        {:ok, Enum.max_by(cps, &Map.get(&1, "id", -1))}
     end
   end
 
   # A checkpoint restore dereferences `id` (selection), `tip_offset`, and
   # `snapshot_ref`; any missing ⇒ `:malformed_checkpoint` (typed reject, N-JS3
   # class) rather than an unhandled `KeyError` on `Map.fetch!`.
+  #
+  # `tip_offset` must be a POSITIVE INTEGER, not merely present: a nil/absent
+  # `tip_offset` would otherwise fold nothing forward (`id > nil` is always false
+  # under Elixir term order), silently dropping the entire conversational tail
+  # (the zero-fold hazard flagged in adversarial review). `tip_offset`'s frozen type is
+  # `pos_integer()` — a checkpoint can only be written where a real tip exists —
+  # so a non-positive-integer value on disk is a malformed checkpoint.
   defp validate_checkpoint(cp) do
-    if Enum.all?(~w(id tip_offset snapshot_ref), &Map.has_key?(cp, &1)),
-      do: {:ok, cp},
-      else: {:error, :malformed_checkpoint}
+    cond do
+      not Map.has_key?(cp, "id") -> {:error, :malformed_checkpoint}
+      not Map.has_key?(cp, "snapshot_ref") -> {:error, :malformed_checkpoint}
+      not valid_tip_offset?(Map.get(cp, "tip_offset")) -> {:error, :malformed_checkpoint}
+      true -> {:ok, cp}
+    end
   end
+
+  defp valid_tip_offset?(tip), do: is_integer(tip) and tip > 0
 
   # Tip-only pointer: full fold(0..tip_offset) over conversational records.
   defp restore_from(%FileStore{}, records, %{"snapshot_ref" => nil} = cp) do
@@ -262,6 +294,26 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
       {:ok, fold_forward(model, records, &(&1 > tip))}
     end
   end
+
+  # --- GC protection floor (newest HEALTHY checkpoint's tip) -----------------
+
+  @impl true
+  def protected_floor(%FileStore{} = journal, records) when is_list(records) do
+    records
+    |> Enum.filter(&(Map.get(&1, "kind") == @kind))
+    |> Enum.sort_by(&Map.get(&1, "id", -1), :desc)
+    |> Enum.find_value(:none, fn cp ->
+      # Health == restore succeeds through the SAME hardened path resume uses, so
+      # the floor is exactly the tip resume restores from (a corrupt newest is
+      # skipped, landing the floor on the older healthy checkpoint's tip).
+      case restore_checkpoint(journal, records, cp) do
+        {:ok, _model} -> {:offset, Map.fetch!(cp, "tip_offset")}
+        {:error, _reason} -> false
+      end
+    end)
+  end
+
+  def protected_floor(_journal, _records), do: :none
 
   # --- tip resolution / validation (N-JS1) -----------------------------------
 
@@ -409,7 +461,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   end
 
   @doc false
-  # PRE-decode nesting bound (adversarial-disk hardening, PR #582 HIGH): a
+  # PRE-decode nesting bound (adversarial-disk hardening): a
   # tail-recursive O(n) walk over the raw bytes that counts `{`/`[` nesting
   # (string contents and escapes skipped) WITHOUT building any term. Public
   # (`@doc false`) so the regression suite pins that the bound exists ahead of

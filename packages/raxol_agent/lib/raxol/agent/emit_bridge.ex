@@ -82,7 +82,11 @@ defmodule Raxol.Agent.EmitBridge do
   `scope` / `provenance` / `actor` flow end-to-end: the neutral map's values are
   stamped onto the live `Event` (`map_event/3`) AND the journal record
   (`durable_record/1`), and `actor` is stamped from the bridge's write-generation
-  context at this producer seam (modules never invent it). To keep grandfathered
+  context at this producer seam (modules never invent it). `provenance` is met
+  against the optional write-generation provenance context under the
+  taint-absorbing meet (see the `:provenance` option and `stamp_provenance/2`):
+  a tainted generation force-taints every event it emits, and a module-supplied
+  `:tainted` is never overwritten — the seam can add taint, never remove it. To keep grandfathered
   records byte-identical (I2), the journal record OMITS any envelope field that
   equals its frozen default — a record without the key decodes back to that
   default via the grandfather clause, so only genuinely non-default provenance /
@@ -105,6 +109,7 @@ defmodule Raxol.Agent.EmitBridge do
     :streamer,
     :journal,
     :actor,
+    :provenance,
     journal_opts: [],
     last_offset: 0,
     branch_id: "main"
@@ -115,6 +120,7 @@ defmodule Raxol.Agent.EmitBridge do
           streamer: GenServer.server(),
           journal: FileStore.t() | nil,
           actor: map() | nil,
+          provenance: map() | nil,
           journal_opts: keyword(),
           last_offset: non_neg_integer(),
           branch_id: String.t()
@@ -149,6 +155,16 @@ defmodule Raxol.Agent.EmitBridge do
       event this bridge emits when the neutral map does not already carry one
       (freeze §2.1: actor is producer-seam stamped, modules never invent it);
       default `nil` (system emission)
+    * `:provenance` — the write-generation provenance context
+      (`%{source, trust}`) met against every event this bridge emits, under
+      the TAINT-ABSORBING meet (freeze §2.1 taint law pt.3): a generation
+      classified `trust: :tainted` (e.g. a tool-result generation from an
+      untrusted source — the classification itself is U8 policy) force-taints
+      every event in the generation, a module-supplied `:tainted` is never
+      overwritten, and an omitted module provenance takes the generation's.
+      Default `nil` — no generation classification; a module omission then
+      decodes to the frozen grandfather default (`:trusted`), which is the
+      frozen §2.1 shape and cannot change here
     * `:branch_id` — the speculation branch these events belong to (freeze
       §1.1); default `"main"`, which is implicit on the wire (grandfather-safe)
     * `:name` — process name (default anonymous)
@@ -175,6 +191,7 @@ defmodule Raxol.Agent.EmitBridge do
        streamer: streamer,
        journal: journal,
        actor: Keyword.get(opts, :actor),
+       provenance: Keyword.get(opts, :provenance),
        journal_opts: journal_opts,
        last_offset: last_offset(journal),
        branch_id: Keyword.get(opts, :branch_id, @default_branch_id)
@@ -212,7 +229,9 @@ defmodule Raxol.Agent.EmitBridge do
         {:emit_bus, session_id, neutral},
         %__MODULE__{session_id: session_id} = state
       ) do
-    event = map_event(stamp_generation(neutral, state), state.last_offset, session_id)
+    event =
+      map_event(stamp_generation(neutral, state), state.last_offset, session_id)
+
     SessionStreamer.emit(session_id, event, state.streamer)
     {:noreply, state}
   end
@@ -309,7 +328,8 @@ defmodule Raxol.Agent.EmitBridge do
             {:ok, state, offset}
 
           {:error, detail} ->
-            {:error, drop_dead_journal(state, detail), :journal_append_failed, detail}
+            {:error, drop_dead_journal(state, detail), :journal_append_failed,
+             detail}
         end
 
       {:error, state, detail} ->
@@ -418,7 +438,39 @@ defmodule Raxol.Agent.EmitBridge do
     neutral
     |> Map.put(:actor, state.actor)
     |> Map.put(:branch_id, state.branch_id)
+    |> stamp_provenance(state.provenance)
   end
+
+  # Provenance at the producer seam. Unlike actor/branch_id this is NOT a
+  # blind `Map.put`: taint is one-way (§2.1 taint law pt.3, "no laundering"),
+  # so the stamp is the TAINT-ABSORBING MEET of the module-supplied value and
+  # the write-generation context — the bridge can only ADD taint, never remove
+  # it. An unconditional overwrite here would itself be a laundering machine
+  # (a module honestly stamping `:tainted` overwritten by a `:trusted`
+  # generation default). With no generation context the module value flows
+  # unchanged and the read side's fail-closed decode governs.
+  defp stamp_provenance(neutral, nil), do: neutral
+
+  defp stamp_provenance(neutral, gen_prov) do
+    Map.update(neutral, :provenance, gen_prov, &meet_provenance(&1, gen_prov))
+  end
+
+  # A wrong-shaped (non-map) module provenance fails CLOSED — replacing it
+  # with the generation value could launder garbage into an explicit
+  # `:trusted`; mirroring `Meta.decode_provenance/1`'s wrong-shape arm keeps
+  # the write side and read side agreeing.
+  defp meet_provenance(module_prov, _gen_prov) when not is_map(module_prov),
+    do: %{source: :primary, trust: :tainted}
+
+  # Module already tainted: never overwritten (no upgrade path exists in v1).
+  defp meet_provenance(%{trust: :tainted} = module_prov, _gen_prov),
+    do: module_prov
+
+  # Generation classified tainted: force-taint, keep the module's source.
+  defp meet_provenance(module_prov, %{trust: :tainted}),
+    do: Map.put(module_prov, :trust, :tainted)
+
+  defp meet_provenance(module_prov, _gen_prov), do: module_prov
 
   defp sanitized_payload(neutral) do
     Contract.sanitize_payload(Map.get(neutral, :payload, %{}))

@@ -125,6 +125,34 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   @callback restore(journal :: term(), opts :: keyword()) ::
               {:ok, model()} | {:error, term()}
 
+  @doc """
+  Restore the model captured by ONE specific already-read `checkpoint` record of
+  `journal` (the hardened single-checkpoint restore).
+
+  This is the seam U10 compaction resume delegates to for its newest-first walk:
+  it applies the SAME restore-path hardening as `restore/2`
+  (`tip_offset`/`snapshot_ref` presence guard ⇒ `:malformed_checkpoint`;
+  `@ref_re` path-traversal reject ⇒ `:malformed_pointer`; snapshot size ceiling,
+  depth-bounded decode, `$s` deref-gadget guard ⇒ `:snapshot_corrupt`; hash
+  verify ⇒ `:snapshot_corrupt`; absent file ⇒ `:snapshot_missing`) — the journal
+  stays `:ok` and nothing is deleted on any failure (N-JS3). `restore/2` is
+  exactly `restore_checkpoint/3` applied to the newest checkpoint.
+  """
+  @callback restore_checkpoint(
+              journal :: term(),
+              records :: [map()],
+              checkpoint :: map()
+            ) :: {:ok, model()} | {:error, term()}
+
+  @doc """
+  The GC-protected floor for `journal`'s already-read `records`: the `tip_offset`
+  of the newest **healthy** checkpoint (its snapshot present + hash-verified,
+  restore succeeds). Records at or above this offset MUST NEVER be truncated.
+  `:none` when no healthy checkpoint exists.
+  """
+  @callback protected_floor(journal :: term(), records :: [map()]) ::
+              {:offset, pos_integer()} | :none
+
   # --- backend seam ----------------------------------------------------------
 
   # A backend implementing `c:write/3` / `c:restore/2` may be injected via
@@ -163,28 +191,68 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
     end
   end
 
+  @doc "See `c:restore_checkpoint/3`. Dispatches to the active backend (default `FileBackend`)."
+  @spec restore_checkpoint(term(), [map()], map()) ::
+          {:ok, model()} | {:error, term()}
+  def restore_checkpoint(journal, records, checkpoint) do
+    case backend() do
+      nil -> {:error, :not_implemented}
+      mod -> mod.restore_checkpoint(journal, records, checkpoint)
+    end
+  end
+
   defp backend, do: :persistent_term.get(@backend_key, @default_backend)
 
   # --- GC protection floor (Drew MEDIUM; JS-FREEZE §1.1-GC) ------------------
 
   @doc """
-  The GC-protected floor for a set of already-read `records`: records at or
-  above this offset MUST NEVER be truncated, so the newest checkpoint's restore
-  path stays intact (**frozen law: GC never orphans checkpoints**, JS-FREEZE
-  §1.1). It is the `tip_offset` of the newest healthy checkpoint (highest
-  offset). `:none` when no checkpoint exists (nothing to protect).
+  The GC-protected floor for `journal`'s already-read `records`: records at or
+  above this offset MUST NEVER be truncated, so the checkpoint restore path
+  stays intact (**frozen law: GC never orphans checkpoints**, JS-FREEZE §1.1).
+
+  It is the `tip_offset` of the newest **healthy** checkpoint — the one resume
+  actually restores from. "Healthy" means its snapshot is present and
+  hash-verified (restore succeeds); a corrupt newest is skipped so the floor
+  lands on the older healthy checkpoint U10's fall-back restores from, never on
+  a corrupt newest's higher tip (which would let GC truncate records the
+  fall-back fold still needs — an orphaned fall-back tip). `:none` when no
+  healthy checkpoint exists (nothing to protect).
 
   A future `gc`/truncation writer MUST consult this and reject any proposal
   whose truncation range reaches this offset — rejected at the same synchronous
   admission seam as `:invalid_tip`, never accepted-then-marked.
 
-  **Fail-closed on malformed checkpoints** (adversarial-review hardening, PR
-  #582): the tolerant Reader accepts a truncated/adversarial checkpoint record
-  missing `id`/`tip_offset` (or carrying non-integer junk). Restore
-  typed-rejects those (`:malformed_checkpoint`); this floor — the "never
-  orphan a checkpoint" safety check — must not raise a `KeyError` on the same
-  records. When ANY checkpoint record is malformed the floor is unknowable, so
-  it degrades to `{:offset, 1}`: the entire journal is protected and every
+  Dispatches to the active backend (default `FileBackend`) because health is a
+  snapshot-file property, not a record-only one. This arity is the
+  authoritative floor for a truncation admission decision;
+  `protected_floor/1` is the record-only conservative variant for callers
+  without a journal handle.
+  """
+  @spec protected_floor(term(), [map()]) :: {:offset, pos_integer()} | :none
+  def protected_floor(journal, records) when is_list(records) do
+    case backend() do
+      nil -> :none
+      mod -> mod.protected_floor(journal, records)
+    end
+  end
+
+  @doc """
+  Record-only variant of `protected_floor/2` for callers WITHOUT a journal
+  handle: it can validate record shape but cannot probe snapshot health, so it
+  returns the newest well-formed checkpoint's tip. On its own it is NOT
+  sufficient for a truncation admission decision under the fall-back resume
+  model — a shape-valid checkpoint whose snapshot file is corrupt keeps its
+  higher tip here, while `protected_floor/2` lands the floor on the older
+  healthy tip resume actually falls back to. A GC writer with a journal handle
+  MUST use `protected_floor/2`.
+
+  **Fail-closed on malformed checkpoints** (adversarial-review hardening): the
+  tolerant Reader accepts a truncated/adversarial checkpoint record missing
+  `id`/`tip_offset` (or carrying non-integer junk). Restore typed-rejects
+  those (`:malformed_checkpoint`); this floor — the "never orphan a
+  checkpoint" safety check — must not raise a `KeyError` on the same records.
+  When ANY checkpoint record is malformed the floor is unknowable, so it
+  degrades to `{:offset, 1}`: the entire journal is protected and every
   truncation proposal is rejected. Protecting too much is safe; guessing is
   not.
   """
