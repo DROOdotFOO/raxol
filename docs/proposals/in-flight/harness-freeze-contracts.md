@@ -86,8 +86,11 @@ need a lockstep update. Concretely:
 
 ## 1. JS-FREEZE — journal record-kind schema
 
-**Governs:** U4 (reattach/replay, AD-15/FI-12), U9 (checkpoint, AD-10/AD-3a),
-U10 (compaction=resume, AD-3b). Kills the U4∥U9 false parallel: both units
+**Governs:** U4 (reattach/replay, AD-15/FI-12), U9 (checkpoint, AD-10/AD-3a —
+AD-3a = checkpoint as an in-log pointer record, not out-of-band state), U10
+(compaction=resume, AD-3b — AD-3b = compaction is resume, one artifact, never
+a second kind; both sublabels are children of parent AD-3, defined in
+`harness-synthesis.md`). Kills the U4∥U9 false parallel: both units
 consume this one schema; neither invents record kinds or tip semantics.
 
 ### 1.1 Frozen shape
@@ -167,6 +170,21 @@ clause 7 — never accepted-then-marked).
 | `annotation` | any writer (reopen the single Writer) | `%{target_offset \| target_range, label, body_ref, author, consent_class}`; `consent_class ∈ private \| shareable \| train` (grow-only) | human/agent notes on history (F14, community-gaps VB#13); **open-any-writer through the single Writer** (non-authoritative, **tip-excluded by the closure rule**); annotations **are records** — they count toward segment rotation and GC, so unbounded annotation bloat is a **GC-policy concern, not a contract gate**; sharing/export honors `consent_class` |
 | `schedule` | scheduler writer (durable trigger store) | `%{trigger_id, when: cron\|event\|once, next_fire, payload_ref, armed, armed_by}` — `armed_by` REQUIRED, arming provenance (§1.1-schedule below) | wake / self-initiated autonomy (F9, community-gaps class 13); the journal is the authoritative trigger store — external cron tables are projections; **tip-excluded**; the session lifecycle enum grows `:dormant` (a session parked between wakes); **inside the taint lattice via `armed_by`** (§1.1-schedule) |
 
+**The single-writer mutual-exclusion mechanism (frozen — what "any writer" and
+"open-any-writer" mean above).** "Any writer can append an annotation" and
+"open-any-writer through the single Writer" (`schedule` row) name a routing
+discipline, never a second writer process: the Writer is a **per-session-dir
+singleton GenServer, registered via `:global` keyed by the session directory**
+(`{:global, {Raxol.Agent.Journal.FileStore.Writer, dir}}` — this is exactly
+what the landed `FileStore.Writer` already does). "Any writer" means any
+caller — the annotation feature, the scheduler, a future kind's producer —
+routes its append THROUGH that one singleton Writer process via
+`GenServer.call/2`, never that two `Writer` processes may coexist for one
+session directory. A second `Writer` registered for the same dir is precisely
+the N-JS6 violation (§1.3): NC-12 and the offset law (above) hold only because
+every append, regardless of who logically "owns" the kind, funnels through
+this one process.
+
 **Deliberately NOT kinds:**
 
 - **`compaction` marker — rejected as a separate kind.** AD-3b's whole thesis
@@ -228,6 +246,15 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
 end
 ```
 
+- **No legal tip on a fresh/no-conversation branch (resolves the `pos_integer`
+  can't-encode-`:no_tip` observation):** `tip_offset`'s type is `pos_integer()`
+  because a checkpoint can only ever be appended where a real conversational
+  tip already exists — `tip(journal, branch)` is `:no_tip` on an
+  empty/no-conversational branch (§1.1-tip), and per N-JS1 that is not a
+  legal write target: a checkpoint MUST NOT be appended before any
+  conversational record exists on its branch (you cannot checkpoint before
+  any conversation). The type deliberately has no slot for `:no_tip` — it is
+  a precondition on the append seam, not a representable value.
 - **Snapshot payload is content-addressed and out-of-line:** written to
   `<session>/snapshots/<sha256>.json` (dir already exists in the landed
   layout) via FI-8 atomic temp+fsync+rename, **before** the checkpoint record
@@ -283,7 +310,10 @@ it out by default; this records the exclusion is intentional, not an oversight).
 That exclusion **is** the Dormammu test (FI-12): a trailing checkpoint, meta
 event, idle marker, or `woken` must never be selected as tip.
 `approval_requested` is included — a pending approval is exactly where a
-resumed conversation must land. **Ratified (was implicit, F3):**
+resumed conversation must land. **Ratified (was implicit, AF-3):** (AF-\<n\> =
+adversarial-audit finding N (longcat/review), distinct from the F\<n\>
+future-foundations tags in `harness-future-foundations-ideation.md` §3.1 — see
+`docs/proposals/in-flight/README.md` for the full ID-prefix map.)
 `approval_requested` is emitted `family:loop` (a turn-bracket signal), never
 `family:meta`, so it passes the tip predicate — this is a frozen decision,
 not an accident of which module happens to emit it (`BlastRadiusGate`/U8
@@ -346,7 +376,7 @@ decode, or the durable and live views diverge.
 - Missing `kind` ⇒ `"event"` (grandfather clause).
 - `Journal.read/2` grows one additive option: `:kinds` (list of kind strings;
   default: all kinds). `:from_offset` unchanged.
-- **`last_offset` semantics (F6, ratify-before-impl):** `Reader.last_offset`
+- **`last_offset` semantics (AF-6, ratify-before-impl):** `Reader.last_offset`
   names the last **record** of any kind (event or checkpoint), not the last
   event — unchanged code, but a semantic shift once checkpoints exist.
   `EmitBridge`'s ephemeral-id use is correct as-is (offset law, above). A
@@ -452,7 +482,7 @@ Governing dispositions: AD-9, AD-10, AD-11, AD-15, AD-3a/3b, FI-7/8/9/10/12.
   schedule, journal **record** ids are dense `1..n`; live durable **event**
   ids are exactly the ids of `kind: "event"` records, in order, as a strictly
   increasing subsequence. `HEAD.offset ≤ n` always.
-- **P-JS2 tip determinism — relabeled PROPERTY (F9), not a must-fail red:**
+- **P-JS2 tip determinism — relabeled PROPERTY (AF-9), not a must-fail red:**
   for any journal, two independent implementations of the tip predicate
   (raw-file decoder vs Reader path — oracle independence, meta-inv 6) select
   the same offset or both return `:no_tip`. Determinism is naturally an
@@ -474,7 +504,7 @@ Governing dispositions: AD-9, AD-10, AD-11, AD-15, AD-3a/3b, FI-7/8/9/10/12.
   live.
 - **P-JS6 tolerance:** a journal containing a future-kind record replays
   `{:ok, _}`; folds and tip agree with the same journal minus that record.
-- **P-JS7 grandfather — relabeled CORPUS TEST (F9), not a must-fail red:**
+- **P-JS7 grandfather — relabeled CORPUS TEST (AF-9), not a must-fail red:**
   every pre-freeze golden journal (no `"kind"` field) replays identically
   before and after this freeze — same folds, same tip. "Old journals still
   decode" has no natural must-fail mutation; this runs as a pure-decode
@@ -492,7 +522,7 @@ Governing dispositions: AD-9, AD-10, AD-11, AD-15, AD-3a/3b, FI-7/8/9/10/12.
   session damaged (readers tolerate; acyclicity is a producer obligation).
   Generator MUST include a missing-parent and a cyclic-edge case (vacuous
   otherwise).
-- **P-JS10 blob round-trip — relabeled PROPERTY (F9):** for every `$blob` value
+- **P-JS10 blob round-trip — relabeled PROPERTY (AF-9):** for every `$blob` value
   in a healthy journal, the referenced `blobs/<sha256>` file exists and
   `sha256(bytes)` matches the pointer; deref-then-fold equals the same fold with
   the bytes inlined. A missing blob leaves the journal `:ok` (tombstone), never
@@ -511,7 +541,7 @@ Governing dispositions: AD-9, AD-10, AD-11, AD-15, AD-3a/3b, FI-7/8/9/10/12.
   byte-identical; the journal folds `{:ok, _}` before and after. Generator MUST
   place a redacted record between two hash/offset-checked records (vacuous
   otherwise).
-- **P-JS13 self-containment — relabeled CORPUS/lint TEST (F9):** no golden
+- **P-JS13 self-containment — relabeled CORPUS/lint TEST (AF-9):** no golden
   fixture record carries an absolute path or a cross-session interior pointer;
   the only cross-session references are `meta.json` lineage edges. Runs as a
   fixture scan, not a must-fail red.
@@ -536,7 +566,7 @@ Governing dispositions: AD-9, AD-10, AD-11, AD-15, AD-3a/3b, FI-7/8/9/10/12.
 
 Every fault site above carries a fired-counter (meta-inv 1); schedules are
 seed-reproducible (meta-inv 2). **N-JS6 is the load-bearing single-Writer
-lockstep test (F7, ratify-before-impl):** the one-offset-law (§1.1) holds
+lockstep test (AF-7, ratify-before-impl):** the one-offset-law (§1.1) holds
 only if every kind routes through the single `Writer.append` counter — the
 Writer trusts the producer's `kind` and cannot enforce single-counter
 routing at compile time, so N-JS6 is the sole guard against a silent
@@ -657,7 +687,9 @@ Optional `cost_ref` appears **only** on spend-bearing records — `item_complete
 the `probe_run` terminal (§3), and the `turn_completed` rollup — pointing into
 the Ledger's reserve/settle identity. **Negative decision (frozen): no `bill_to`
 per record.** The Ledger is the single money truth; billing is a **derived fold**
-over Ledger + lineage subtrees (walk the R1 edges), never a per-record
+over Ledger + lineage subtrees (walk the R1 edges — R1 = session-lineage
+edges, defined in `harness-future-foundations-ideation.md` §3.1, and landed
+here as the §1.1 `meta.json parents` shape), never a per-record
 attribution field that could drift from or double-count the Ledger.
 
 #### Model/params fingerprint (frozen struct)
@@ -734,7 +766,7 @@ that draft field never landed in code, so this is a pre-freeze naming
 decision, not a rename.) `promote` additionally requires `refs != []` —
 provenance-mandatory (protocol §3).
 
-**Session-scoping contract (F1/OQ-U11.1 — permanent, load-bearing):** `refs`
+**Session-scoping contract (AF-1/OQ-U11.1 — permanent, load-bearing):** `refs`
 are interpreted relative to the enclosing record's `id`'s `session_id`;
 cross-session references are a consuming-store concern (global store / ADR),
 never a journal event field. This is a **permanent commitment** — a future
@@ -802,12 +834,12 @@ as opaque labels.
 
 Governing dispositions: FI-5, FI-2, AD-11, I9.
 
-- **P-U11.1 codec round-trip — relabeled PROPERTY (F9), not a must-fail
+- **P-U11.1 codec round-trip — relabeled PROPERTY (AF-9), not a must-fail
   red:** every registry meta type round-trips through the JSON codec
   byte-stable (post-sanitize), including `scope`, `provenance`, `refs`.
   Round-tripping is naturally a property/oracle-independence test (encode
   then decode then compare), not a single-mutation red.
-- **P-U11.2 grandfather decode — relabeled CORPUS TEST (F9), not a
+- **P-U11.2 grandfather decode — relabeled CORPUS TEST (AF-9), not a
   must-fail red:** a v0 event (no scope/provenance) decodes to the frozen
   defaults; the I9 corpus stays green with the grown struct. Runs as a
   pure-decode corpus check, same class as P-JS7.
@@ -823,7 +855,7 @@ Governing dispositions: FI-5, FI-2, AD-11, I9.
   folded over a journal with interleaved meta events equals the same fold
   over the meta-stripped journal (meta events never perturb loop folds), and
   vice versa — oracle: independent raw-file decoder (meta-inv 6). Negative
-  contour: N-U11.7 (F9).
+  contour: N-U11.7 (AF-9).
 - **P-U11.6 actor producer-seam consistency — relabeled PROPERTY (fold):** over
   any generated journal, every `kind: "event"` record's `actor` equals the
   write-generation's command/attach-context actor; absent `actor` folds as
@@ -863,7 +895,7 @@ Governing dispositions: FI-5, FI-2, AD-11, I9.
 - Grows by: new meta types (registry append), new provenance sources, new
   provenance keys, new trust lattice points (readers fail-closed to
   `:tainted` on unknown), new statuses inside `probe_run`, new `scope`
-  values (F2, ratify-before-impl — readers render unknown scopes opaquely).
+  values (AF-2, ratify-before-impl — readers render unknown scopes opaquely).
   Note: U8 already uses three approval scopes (`:once`/`:session`/`:root`,
   policy.ex:36); capping the meta-event `scope` enum at two
   (`:session`/`:global`) was a latent repurpose risk, now closed by making
@@ -942,8 +974,8 @@ defmodule Raxol.Agent.Probe do
               max_calls: pos_integer(),          # hard non-LLM termination (per run)
               timeout_ms: pos_integer(),         #   "        "        "
               default_budget: pos_integer(),     # tokens (see Budget)
-              max_parked: pos_integer(),         # pool-level cap on parked runs (F5); probe may override the pool default
-              park_timeout_ms: pos_integer()     # TTL a parked run may wait before terminating :exhausted (F5)
+              max_parked: pos_integer(),         # pool-level cap on parked runs (AF-5); probe may override the pool default
+              park_timeout_ms: pos_integer()     # TTL a parked run may wait before terminating :exhausted (AF-5)
             }
   @callback build(context) :: {:ok, request} | :skip
   @callback interpret(response :: map(), context) ::
@@ -967,7 +999,7 @@ defmodule Raxol.Agent.Probe.Runner do
   # SEPARATE, EXPLICIT step owned by the caller (roadmap U12, verbatim).
   # Saturation/exhaustion do NOT fail submit: the run is accepted and parked
   # (observable via probe_run{status: :parked}). Only an unregistered probe
-  # module fails submit. Parking is BOUNDED (F5) — see max_parked/
+  # module fails submit. Parking is BOUNDED (AF-5) — see max_parked/
   # park_timeout_ms in spec() and the Bounded parking note under Budget.
 
   @spec kill(run_id :: String.t()) :: :ok | {:error, :not_found}
@@ -998,10 +1030,11 @@ last-wins unless a future grow-only per-call list supersedes it.
 #### Budget (the accounting unit + exhaustion)
 
 - **Unit: tokens**, reserve-before-call via the SpendGate/`Ledger.try_spend`
-  shape (AD-6a): reserve `estimate = max_output_tokens +
+  shape (AD-6a — AD-6a = reserve-before-call, child of parent AD-6, defined in
+  `harness-synthesis.md`): reserve `estimate = max_output_tokens +
   uncached_prompt_estimate` **before** each provider call; settle actuals
   after. Fail-closed: no reserve ⇒ no call, ever.
-- **Settlement is internal, not part of the probe interface (F4,
+- **Settlement is internal, not part of the probe interface (AF-4,
   ratify-before-impl):** reserve→settle/refund (`estimate − actual`) is a
   Runner↔Ledger-internal step; no `reservation_id` is exposed to probes or
   callers by design. The frozen `charge` shape (below) is the
@@ -1033,7 +1066,7 @@ last-wins unless a future grow-only per-call list supersedes it.
   3. `max_calls`/`timeout_ms` tripped by the Runner → `:exhausted` / `:timeout`
      terminal event. Non-LLM termination is the Runner's job — a probe cannot
      extend its own leash.
-- **Bounded parking (F5 fix, load-bearing):** "never drop, never fail
+- **Bounded parking (AF-5 fix, load-bearing):** "never drop, never fail
   submit" does NOT mean unbounded accumulation. The parked set is bounded by
   two frozen knobs (`spec()`, above): `max_parked` (pool cap) and
   `park_timeout_ms` (per-run TTL). A parked run that exceeds
@@ -1081,7 +1114,7 @@ without any provider (capture two built requests, compare prefixes).
    from this interface on purpose.
 5. Pool saturation queues or parks; it never drops a submitted run silently
    and never blocks `submit/3`. (Scheduling order is implementation
-   freedom.) The parked set is bounded (F5, see Budget above) —
+   freedom.) The parked set is bounded (AF-5, see Budget above) —
    `max_parked`/`park_timeout_ms` — so "never drops" and "bounded" hold
    simultaneously.
 
@@ -1093,7 +1126,7 @@ economic law (cache-riding), D2 (in-BEAM pool), roadmap U12 acceptance.
 - **P-U12.1 lifecycle completeness:** every submitted run produces exactly
   one `:started`-or-`:parked` and exactly one terminal `probe_run` event;
   journal fold over `probe_run` yields a consistent state machine per
-  run_id. Negative contour: N-U12.8 (F9 — closes the gap where N-U12.4 only
+  run_id. Negative contour: N-U12.8 (AF-9 — closes the gap where N-U12.4 only
   covered `max_calls`, not the started→terminal count).
 - **P-U12.2 reserve-before-call:** journal order per provider call is
   `reserve → call → settle`; never a call without a prior same-run reserve
@@ -1110,7 +1143,7 @@ economic law (cache-riding), D2 (in-BEAM pool), roadmap U12 acceptance.
   can produce no trusted event.
 - **P-U12.6 output atomicity:** a run that hits exhaustion/timeout/kill after
   drafting k of n events emits none of them — only the terminal `probe_run`.
-  Negative contour: N-U12.9 (F9).
+  Negative contour: N-U12.9 (AF-9).
 
 ### 3.3 Negative contour
 
@@ -1125,7 +1158,7 @@ economic law (cache-riding), D2 (in-BEAM pool), roadmap U12 acceptance.
 | N-U12.7 | `kill/1` on a running probe leaks a provider stream / emits post-kill drafted events | red: no meta event for that run after the `:killed` terminal (I-pattern from U5: no `tool_result` after kill-complete) | kill path that stops the process but not the in-flight interpret emit |
 | N-U12.8 | Runner double-emits (or omits) a terminal `probe_run` for one `run_id` | P-U12.1 lifecycle-completeness red fails: fold over `probe_run` shows 0 or ≥2 terminal events for that `run_id` | Runner variant that re-emits `:exhausted` after an already-terminal `:completed` (crash-recovery bug), or one that frees the process without ever emitting a terminal event |
 | N-U12.9 | Runner emits the first `k` of `n` drafted `interpret/2` events, then hits exhaustion/timeout/kill before emitting the rest | P-U12.6 atomicity red fails: journal contains `k` result meta events plus the terminal `probe_run`, instead of zero | Runner variant that streams drafted events as they're produced instead of batching-then-emit-on-terminal-success |
-| N-U12.10 | submit pumped past `max_parked`, or a parked run left past `park_timeout_ms` (F5) | parked-set size stops growing at `max_parked` (excess runs still receive a terminal `probe_run{status: :exhausted}` — never silently discarded); a parked run past TTL terminates `probe_run{status: :exhausted}` | Runner variant with no cap/TTL check — parked set grows unbounded under sustained budget exhaustion |
+| N-U12.10 | submit pumped past `max_parked`, or a parked run left past `park_timeout_ms` (AF-5) | parked-set size stops growing at `max_parked` (excess runs still receive a terminal `probe_run{status: :exhausted}` — never silently discarded); a parked run past TTL terminates `probe_run{status: :exhausted}` | Runner variant with no cap/TTL check — parked set grows unbounded under sustained budget exhaustion |
 
 N-U12.10 is **additive** to N-U12.3, not a replacement: submit-time
 saturation still returns `{:ok, run_id}` and parks (never a synchronous

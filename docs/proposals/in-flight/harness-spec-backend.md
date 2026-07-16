@@ -84,6 +84,14 @@ end
 
 ## 4. Journal + materialized-views (L4)
 
+> SUPERSEDED by D1/D2 (files + in-BEAM pool) — see `harness-freeze-contracts.md`.
+> The "Durable sink decision" sub-section below (Oban/Ecto-table/DETS) reflects a
+> since-ratified choice: D1 ruled the journal is **files** (NC-6/NC-7 — no
+> Ecto/DETS event table), D2 ruled the probe scheduler is an **in-BEAM supervised
+> pool** (no Oban). Read `harness-freeze-contracts.md` §1/§3, not this section,
+> for storage/runner shape; the rest of §4 (materialized-views, reattach,
+> checkpoint/rewind concepts) still applies at the level of intent.
+
 - **Journal** = durable append log of the durable tier, both populations. Source of truth
   (transcript-as-truth, FI-1). Ordered by `Event.id` (= offset).
 - **Materialized-views = plural, dynamic.** Each `Projection.*` is a GenServer subscribed to the
