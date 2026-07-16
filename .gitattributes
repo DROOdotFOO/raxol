@@ -1,2 +1,16 @@
 # Golden reference hashes must stay byte-stable across platforms (no CRLF).
 priv/fate/golden.refs text eol=lf
+
+# Harness degradation-tier goldens are raw terminal byte streams compared
+# byte-for-byte in tests -- their \r\n sequences are sealed-line protocol
+# bytes, not line endings. Any eol normalization would corrupt them.
+test/fixtures/harness/goldens/*.golden binary
+
+# Escaped textual sidecars (one per golden, see
+# Raxol.Harness.Surface.Golden.escape_lines/1) are pure ASCII,
+# inspect()-escaped renderings of the same bytes -- reviewable in a PR
+# diff, unlike the binary golden above. Pinned LF so the sidecar itself
+# can't be eol-mangled. `*.golden` above does NOT also match
+# `*.golden.txt` (verified via `git check-attr`), so this line is the
+# only one governing these files.
+test/fixtures/harness/goldens/*.golden.txt text eol=lf
