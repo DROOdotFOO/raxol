@@ -47,6 +47,13 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
   # (something emitted a sequence outside this vocabulary, e.g. OSC 52
   # clipboard exfiltration) or a deliberate vocabulary extension that must
   # be reviewed and added here consciously.
+  #
+  # DEC 2026 synchronized-update brackets (`CSI ? 2026 h`/`l`, finals
+  # `h`/`l`) are capability-gated (`Capabilities.sync_output`), and every
+  # golden here renders with `capabilities: nil` -- so they never appear
+  # in this vocabulary at all, deliberately: the capability-absent case is
+  # pinned by `test/harness/surface_seal_pipeline_test.exs`
+  # ("capability absent (nil) emits no brackets anywhere in a full run").
   @allowed_csi_finals ~w(H K m r)
   @allowed_esc_chars ~w(7 8)
 

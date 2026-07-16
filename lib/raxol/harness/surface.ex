@@ -751,20 +751,64 @@ defmodule Raxol.Harness.Surface do
   Returns `{model, :ok}` while events remain, `{model, :done}` once every
   fixture event has been revealed AND the final pending block (if any) has
   been flushed to paint.
-  """
-  @spec advance(t(), integer() | nil) :: {t(), :ok | :done}
-  def advance(model, now \\ nil)
 
-  def advance(
-        %{revealed: revealed, events: events, painted_count: painted} = model,
-        _now
-      )
-      when revealed >= length(events) and
-             painted >= length(model.projection.blocks) do
+  ## Options
+
+    * `:resize` -- `{width, rows}`, the atomic combined-frame form for
+      drivers that batch a geometry change with the same advance. When
+      given, the resize is ADOPTED (dims + DECSTBM re-set, via the same
+      `adopt_resize/3` path `resize/2` itself uses, minus that function's
+      own immediate keyframe) BEFORE anything else in this call --
+      specifically, before any block seals this frame. `resize/2` remains
+      the standalone entry point; calling `resize/2` then `advance/2` is
+      equally correct. The `:resize` option exists only for drivers that
+      would otherwise have to sequence two separate calls for what is, to
+      the terminal, one frame.
+
+  ## FRAME-ORDER LAW
+
+  A resize arriving in the SAME frame as an advance MUST be adopted
+  before any seal in that advance: a block sealed at a stale width hard-
+  wraps over-wide rows, and that wrap is permanent corruption once the
+  row scrolls into native scrollback (this process can never rewrite it).
+  This is why the `:resize` option is threaded through
+  `adopt_frame_resize/2` first, unconditionally, ahead of `do_advance/2`.
+
+  The footer row COUNT in this substrate is geometry-fixed (a function of
+  `rows`/`footer_rows` only, never of post-seal state) -- so the
+  reference design's "size the footer to the post-seal state" step is
+  satisfied by construction, with nothing further to do here. The footer
+  REPAINT itself still runs AFTER the seal (see `seal_frame/3`): the
+  trailing `paint_footer/1` self-promotes to a full keyframe via
+  `InlineAuthority`'s own `needs_keyframe` latch (set by `adopt_resize/3`
+  whenever geometry or width changed), so the footer always ends up
+  correct at the newly-adopted geometry without this module needing a
+  second, explicit keyframe call here.
+  """
+  @spec advance(t(), integer() | nil, keyword()) :: {t(), :ok | :done}
+  def advance(model, now \\ nil, opts \\ [])
+
+  def advance(model, now, opts) do
+    model
+    |> adopt_frame_resize(Keyword.get(opts, :resize))
+    |> do_advance(now)
+  end
+
+  defp adopt_frame_resize(model, nil), do: model
+
+  defp adopt_frame_resize(model, {width, rows}),
+    do: adopt_resize(model, width, rows)
+
+  defp do_advance(
+         %{revealed: revealed, events: events, painted_count: painted} = model,
+         _now
+       )
+       when revealed >= length(events) and
+              painted >= length(model.projection.blocks) do
     {model, :done}
   end
 
-  def advance(model, now) do
+  defp do_advance(model, now) do
     revealed = min(model.revealed + 1, length(model.events))
     events_so_far = Enum.take(model.events, revealed)
 
@@ -773,16 +817,49 @@ defmodule Raxol.Harness.Surface do
 
     model =
       %{model | revealed: revealed, projection: projection}
+      # Pure model-state reconciliation (no bytes) -- runs before the
+      # seal frame so the divider bookkeeping is settled ahead of any
+      # paint, and stays OUTSIDE the sync bracket seal_frame may open.
       |> reconcile_unread()
-      |> paint_pending_blocks()
-      |> update_status(events_so_far, now)
-      |> paint_footer()
+      |> seal_frame(events_so_far, now)
 
     finished? =
       model.revealed >= length(model.events) and
         model.painted_count >= length(model.projection.blocks)
 
     {model, if(finished?, do: :done, else: :ok)}
+  end
+
+  # A frame that seals at least one block AND repaints the footer
+  # presents atomically: seal + status + footer run inside one DEC 2026
+  # synchronized-update bracket (InlineAuthority.with_sync/3, gated on
+  # the capability record). The bracket condition is the pre-seal scan's
+  # will_commit -- it exactly predicts "this frame seals >= 1 block"
+  # except when the first emit fails, in which case an empty bracket is
+  # emitted (harmless: a sync frame with no visible change; the
+  # balanced-bracket case in test/harness/surface_seal_pipeline_test.exs
+  # covers the failure path). Frames that seal nothing (early reveals,
+  # tick, handle_input) never open a bracket. :flat has no footer and no
+  # cursor vocabulary -- never bracketed.
+  defp seal_frame(%{mode: :flat} = model, events_so_far, now) do
+    run_seal_frame(model, events_so_far, now)
+  end
+
+  defp seal_frame(model, events_so_far, now) do
+    if frontier_scan(model).will_commit do
+      InlineAuthority.with_sync(model.authority, model, fn m ->
+        run_seal_frame(m, events_so_far, now)
+      end)
+    else
+      run_seal_frame(model, events_so_far, now)
+    end
+  end
+
+  defp run_seal_frame(model, events_so_far, now) do
+    model
+    |> paint_pending_blocks()
+    |> update_status(events_so_far, now)
+    |> paint_footer()
   end
 
   @doc """
@@ -874,6 +951,12 @@ defmodule Raxol.Harness.Surface do
   (`turn_completed`); with today's entry mapping (no running entries,
   window hold unconditional) the scan result is independent of turn
   state, so the one-step-stale status at seal time is harmless.
+
+  A third consumer: `seal_frame/3`'s per-frame synchronized-output
+  bracket decision reads `will_commit` from this same scan to predict
+  "this frame seals >= 1 block" BEFORE the commit pass actually runs --
+  same entries, same classifier, so it can never disagree with what
+  `paint_pending_blocks/1` (via `commit_walk/5`) actually does.
   """
   @spec frontier_scan(t()) :: SealFrontier.scan()
   def frontier_scan(model) do
@@ -916,9 +999,12 @@ defmodule Raxol.Harness.Surface do
     # The ONE mutating frontier walk (SealFrontier's moduledoc): emit
     # each newly-committable block via seal_block/2, which advances
     # painted_count -- the committed marker frontier_entries/1 reads.
-    # The emit is infallible today (InlineAuthority.seal/2 has no error
-    # path), so the walk's write-failure branch stays corpus-only until
-    # a write-confirming substrate lands (the two-phase seal follow-up).
+    # The emit is write-confirming (`InlineAuthority.try_seal/2`): write ->
+    # confirm -> mark. A failed device write halts the walk with
+    # painted_count (the cursor) strictly before the failed entry, and the
+    # next advance retries the same block, so a block can never be marked
+    # painted without its bytes confirmed on the device (retry-not-vanish;
+    # covered by test/harness/surface_seal_pipeline_test.exs).
     result =
       SealFrontier.commit_walk(
         entries,
@@ -930,7 +1016,7 @@ defmodule Raxol.Harness.Surface do
             |> Enum.at(index)
             |> apply_fold_override(index, acc.fold_overrides)
 
-          {:ok, seal_block(acc, block)}
+          seal_block(acc, block)
         end,
         cursor: model.painted_count
       )
@@ -989,14 +1075,19 @@ defmodule Raxol.Harness.Surface do
     end
   end
 
+  # :flat -- the degradation tier's append is a plain stdout/pipe write with
+  # no positioning to confirm; a failed pipe write raising out of the frame
+  # is the honest flat behavior, so the flat emit stays infallible-shaped.
   defp seal_block(%{mode: :flat} = model, block) do
     lines = render_block_lines(block, model, :plain)
     iodata = Enum.map(lines, &(&1 <> "\n"))
     authority = FlatAuthority.seal(model.authority, iodata)
-    %{model | authority: authority, painted_count: model.painted_count + 1}
+
+    {:ok,
+     %{model | authority: authority, painted_count: model.painted_count + 1}}
   end
 
-  # No per-line `\e[K` here: `InlineAuthority.seal/2` sanitizes CONTENT
+  # No per-line `\e[K` here: `InlineAuthority.try_seal/2` sanitizes CONTENT
   # through `ContentGuard.sanitize_line/1` (its allowlist keeps SGR only),
   # so an EL embedded in content never survived -- the guard stripped the
   # ESC and left a literal `[K` painted at the start of every sealed
@@ -1007,8 +1098,15 @@ defmodule Raxol.Harness.Surface do
   defp seal_block(model, block) do
     lines = render_block_lines(block, model, :styled)
     iodata = Enum.map(lines, &[&1, "\r\n"])
-    authority = InlineAuthority.seal(model.authority, iodata)
-    %{model | authority: authority, painted_count: model.painted_count + 1}
+
+    case InlineAuthority.try_seal(model.authority, iodata) do
+      {:ok, authority} ->
+        {:ok,
+         %{model | authority: authority, painted_count: model.painted_count + 1}}
+
+      {:error, :write_failed, authority} ->
+        {:error, :write_failed, %{model | authority: authority}}
+    end
   end
 
   # Called from seal_block/2 -- the print-once paint -- so the grade
@@ -2071,7 +2169,23 @@ defmodule Raxol.Harness.Surface do
   keyframe below repaints it at the new position.
   """
   @spec resize(t(), pos_integer(), pos_integer()) :: t()
-  def resize(%{mode: :flat} = model, width, rows) do
+  def resize(%{mode: :flat} = model, width, rows),
+    do: adopt_resize(model, width, rows)
+
+  def resize(model, width, rows) do
+    model = adopt_resize(model, width, rows)
+    lines = footer_lines(model)
+    authority = InlineAuthority.keyframe(model.authority, lines)
+    %{model | authority: authority, stub_notice: nil}
+  end
+
+  # Shared by `resize/2` and `advance/3`'s `:resize` option -- see
+  # `advance/3`'s FRAME-ORDER LAW doc for why the two paths must never
+  # drift: both need dims + DECSTBM re-set applied identically, and
+  # `resize/2` alone additionally keyframes the footer immediately (which
+  # `advance/3`'s combined frame instead lets its own trailing
+  # `paint_footer/1` self-promote to, via `needs_keyframe`).
+  defp adopt_resize(%{mode: :flat} = model, width, rows) do
     %{
       model
       | authority: FlatAuthority.resize(model.authority, width, rows),
@@ -2080,7 +2194,7 @@ defmodule Raxol.Harness.Surface do
     }
   end
 
-  def resize(model, width, rows) do
+  defp adopt_resize(model, width, rows) do
     model =
       if force_close_overlay?(model, rows) do
         close_overlay(model)
@@ -2089,10 +2203,7 @@ defmodule Raxol.Harness.Surface do
       end
 
     model = %{model | width: width, rows: rows}
-    authority = InlineAuthority.resize(model.authority, width, rows)
-    lines = footer_lines(%{model | authority: authority})
-    authority = InlineAuthority.keyframe(authority, lines)
-    %{model | authority: authority, stub_notice: nil}
+    %{model | authority: InlineAuthority.resize(model.authority, width, rows)}
   end
 
   defp force_close_overlay?(%{overlay: nil}, _new_rows), do: false

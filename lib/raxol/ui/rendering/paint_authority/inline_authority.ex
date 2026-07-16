@@ -257,6 +257,18 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   content is fully re-rendered at its new (smaller) position.
 
   Neither direction ever emits `\e[2J`/`\e[3J`.
+
+  ## Synchronized output (DEC private mode 2026)
+
+  `with_sync/3` is the DEC 2026 synchronized-update bracket
+  (`CSI ? 2026 h` ... `CSI ? 2026 l`): a Surface frame that seals one or
+  more blocks wraps the seal writes and the trailing footer repaint in
+  this bracket so a multi-block seal presents to the terminal atomically
+  (no partial-frame flicker between the sealed history and the repainted
+  footer). It is gated on this authority's `sync_output?` field (measured
+  once, at `new/5`, from the capability record) -- capability-unknown
+  means don't emit, never a guess. See `with_sync/3`'s own doc for the
+  balanced-bracket and failed-open-degrades guarantees.
   """
 
   @behaviour Raxol.UI.Rendering.PaintAuthority
@@ -274,7 +286,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     :next_row,
     in_cursor_bracket: false,
     footer_lines: [],
-    needs_keyframe: false
+    needs_keyframe: false,
+    sync_output?: false
   ]
 
   @type t :: %__MODULE__{
@@ -284,7 +297,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
           next_row: pos_integer(),
           in_cursor_bracket: boolean(),
           footer_lines: [binary()],
-          needs_keyframe: boolean()
+          needs_keyframe: boolean(),
+          sync_output?: boolean()
         }
 
   @doc """
@@ -322,7 +336,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       region: ScrollRegionManager.start(device, rows, footer_rows),
       width: width,
       reflow_capable?: reflow_capable?(caps),
-      next_row: 1
+      next_row: 1,
+      sync_output?: match?(%{sync_output: true}, caps)
     }
   end
 
@@ -385,6 +400,17 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   """
   @spec seal(t(), iodata()) :: t()
   def seal(%__MODULE__{} = t, iodata) do
+    sanitized = validate_seal_iodata!(iodata)
+    with_cursor(t, :history, fn inner -> append_sealed(inner, sanitized) end)
+  end
+
+  # Shared by `seal/2` and `try_seal/2`: enforce the `\r\n`-terminated
+  # caller contract (raises `ArgumentError` -- a caller-contract bug, never
+  # masked as a device failure) and run the content through
+  # `ContentGuard.sanitize_line/1` (see the moduledoc's `ContentGuard`
+  # section). This runs OUTSIDE `try_seal/2`'s rescued scope -- see that
+  # function's doc for why the two error classes must stay distinct.
+  defp validate_seal_iodata!(iodata) do
     binary = IO.iodata_to_binary(iodata)
 
     unless String.ends_with?(binary, "\r\n") do
@@ -394,9 +420,130 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
               inspect(binary)
     end
 
-    sanitized = ContentGuard.sanitize_line(binary)
+    ContentGuard.sanitize_line(binary)
+  end
 
-    with_cursor(t, :history, fn inner -> append_sealed(inner, sanitized) end)
+  @doc """
+  The write-confirming seal: validates and sanitizes `iodata` (via
+  `validate_seal_iodata!/1`, the same discipline `seal/2` uses -- a
+  missing `\\r\\n` terminator is a CALLER-CONTRACT bug and still raises
+  `ArgumentError`, unmasked), then attempts the write and reports whether
+  the device actually confirmed it.
+
+  ## Write -> confirm -> mark
+
+  This is the substrate half of the print-once safety property
+  documented in `Raxol.Harness.SealFrontier.commit_walk/5`: a caller
+  (`Raxol.Harness.Surface.seal_block/2`) marks a block committed only
+  AFTER `try_seal/2` returns `{:ok, _}` -- never before. On `{:error,
+  :write_failed, t}`, the ORIGINAL `t` (the one passed in, `next_row` not
+  advanced) is returned, so a retry re-positions and re-writes from
+  scratch rather than resuming from a cursor that may have been left
+  mid-write.
+
+  ## The two rescued error classes
+
+  Only DEVICE failures are converted to `{:error, :write_failed, t}`:
+
+    * `ArgumentError` -- the io server replied `{:error, reason}` to the
+      underlying `:io.put_chars` request (e.g. `{:error, :enospc}`);
+      `IO.write/2` surfaces this as a raised `ArgumentError`.
+    * `ErlangError` -- the device process is dead (e.g. `%ErlangError{
+      original: :terminated}` from a closed `StringIO`/port).
+
+  The validation raise above happens BEFORE the rescued block even starts
+  -- a missing `\\r\\n` is a bug in the calling code, not a device
+  failure, and must never be silently downgraded to a retryable
+  `:write_failed` (a caller retrying a permanently-malformed call would
+  loop forever). Likewise, `with_cursor/3`'s own nested-bracket
+  `RuntimeError` is deliberately NOT rescued here -- that too is a caller
+  bug (two overlapping brackets), not something a device retry can fix.
+
+  ## Partial-write honesty
+
+  A retry may overwrite a partially-flushed row in place (the device may
+  have accepted some bytes before failing mid-write, on some transports).
+  This is safe: an unconfirmed row was never counted in `seal`'s high-
+  water accounting (`next_row` is only advanced on `{:ok, _}`) nor marked
+  committed by `commit_walk/5`, so a retry writing over it again produces
+  the same rows the confirmed write would have -- no seal-once violation.
+  """
+  @spec try_seal(t(), iodata()) :: {:ok, t()} | {:error, :write_failed, t()}
+  def try_seal(%__MODULE__{} = t, iodata) do
+    sanitized = validate_seal_iodata!(iodata)
+    confirmed_seal(t, sanitized)
+  end
+
+  defp confirmed_seal(t, sanitized) do
+    {:ok,
+     with_cursor(t, :history, fn inner -> append_sealed(inner, sanitized) end)}
+  rescue
+    _e in [ArgumentError, ErlangError] -> {:error, :write_failed, t}
+  end
+
+  @doc """
+  The DEC 2026 synchronized-update bracket (see the moduledoc's
+  "Synchronized output" section): wraps `fun.(acc)` in `CSI ? 2026 h`
+  ... `CSI ? 2026 l` when this authority measured the capability true at
+  construction (`sync_output?`), otherwise runs `fun.(acc)` unbracketed.
+
+  ## Capability-gated, capability-unknown-means-don't-emit
+
+  `sync_output?` is measured once, at `new/5`, from the capability
+  record passed in (`nil`/unknown -> `false`). This function does not
+  re-check the capability itself -- it trusts the field. A `nil`/unknown
+  capability is the documented policy: never emit a presentation-only
+  control sequence on a guess.
+
+  ## Balanced by construction
+
+  The close (`CSI ? 2026 l`) is emitted if AND ONLY IF the open
+  succeeded, via the `after` block below -- even when `fun` raises or
+  returns while a nested seal failed. A caller that sees the open fail
+  degrades to running `fun` completely unbracketed (see below); there is
+  never a dangling open with no matching close, and never a close with no
+  matching open.
+
+  ## A failed open degrades gracefully
+
+  If the opening write itself fails (device error), `fun.(acc)` still
+  runs, just without the bracket -- this is a PRESENTATION-only feature
+  (it only affects how atomically the terminal shows already-correct
+  bytes); it must never be allowed to take down the frame it wraps.
+
+  ## Best-effort byte writes
+
+  `sync_write/2` rescues the same two device-error classes as
+  `try_seal/2` (`ArgumentError` from an `{:error, reason}` io-server
+  reply, `ErlangError` from a dead device) and reports `:error` rather
+  than raising, so a lost sync byte never crashes the frame it was only
+  decorating.
+  """
+  @spec with_sync(t(), acc, (acc -> acc)) :: acc when acc: term()
+  def with_sync(%__MODULE__{sync_output?: false}, acc, fun)
+      when is_function(fun, 1),
+      do: fun.(acc)
+
+  def with_sync(%__MODULE__{region: region}, acc, fun)
+      when is_function(fun, 1) do
+    case sync_write(region.device, "\e[?2026h") do
+      :ok ->
+        try do
+          fun.(acc)
+        after
+          sync_write(region.device, "\e[?2026l")
+        end
+
+      :error ->
+        fun.(acc)
+    end
+  end
+
+  defp sync_write(device, bytes) do
+    IO.write(device, bytes)
+    :ok
+  rescue
+    _e in [ArgumentError, ErlangError] -> :error
   end
 
   @impl true
