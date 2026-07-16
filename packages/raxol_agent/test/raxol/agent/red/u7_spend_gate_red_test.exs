@@ -28,19 +28,19 @@ defmodule Raxol.Agent.Red.U7SpendGateRedTest do
       repeated reserve or a replayed settle (double-refund / money inflation)
       is rejected, not silently accepted.
 
-  These tests drive the real `Raxol.Agent.SpendGate` (currently a
-  `:not_implemented` skeleton), so they FAIL until U7 lands — that is the point.
+  These tests drive the real `Raxol.Agent.SpendGate`. U7 has landed, so the
+  suite is now GREEN — the `:harness_red` exclusion tag has been removed and it
+  runs in CI as the permanent contract.
 
   ## Mergeability discipline
 
-  `@moduletag :harness_red` — excluded in `test_helper.exs`, so CI stays GREEN
-  while these are red. The negative controls (dead injectors) live in
-  `U7SpendGateControlsTest` below WITHOUT the tag, so they run in CI and prove
-  the checkers are not vacuous.
+  Authored failing-first under `@moduletag :harness_red` (excluded in
+  `test_helper.exs` so CI stayed green while red); the tag was dropped when the
+  U7 implementation turned it green. The negative controls (dead injectors) in
+  `U7SpendGateControlsTest` below have always run in CI and prove the checkers
+  are not vacuous.
   """
   use ExUnit.Case, async: true
-
-  @moduletag :harness_red
 
   alias Raxol.Agent.Red.SpendGateProbe, as: P
   alias Raxol.Agent.SpendGate
