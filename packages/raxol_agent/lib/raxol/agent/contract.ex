@@ -66,7 +66,12 @@ defmodule Raxol.Agent.Contract do
               # suite compiles against the frozen shape.
               scope: :session,
               provenance: %{source: :primary, trust: :trusted},
-              actor: nil
+              actor: nil,
+              # The speculation branch this record belongs to (freeze §1.1).
+              # Optional-with-default "main"; a non-default branch is written to
+              # (and now read back from) the journal, "main" stays implicit on the
+              # wire (grandfather-safe, byte-identical for default records — I2).
+              branch_id: "main"
 
     @typedoc "FI-5 provenance — grow-only; later keys (e.g. :model_family) are additive."
     @type provenance :: %{
@@ -89,7 +94,8 @@ defmodule Raxol.Agent.Contract do
             payload: map(),
             scope: :session | :global | atom(),
             provenance: provenance(),
-            actor: actor()
+            actor: actor(),
+            branch_id: String.t()
           }
   end
 

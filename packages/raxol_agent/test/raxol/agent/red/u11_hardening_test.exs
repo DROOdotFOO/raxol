@@ -73,4 +73,27 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
       assert Meta.derive_taint([bare, dependent])[2] == :trusted
     end
   end
+
+  # ===========================================================================
+  # Finding 4 (🔴) — branch_id round-trips off disk (read side)
+  # ===========================================================================
+
+  describe "branch_id read-side round-trip (§1.1)" do
+    test "a record written with a non-default branch_id decodes back with it" do
+      rec =
+        Gen.rec(1, :loop, :item_completed, %{item_type: "message", refs: []})
+        |> Map.put("branch_id", "feature-x")
+
+      assert {:ok, %Event{branch_id: "feature-x"}} = Meta.decode(rec),
+             "a non-default branch_id on disk must round-trip onto the Event"
+    end
+
+    test "a record without branch_id decodes to the default \"main\" (grandfather)" do
+      rec = Gen.rec(1, :loop, :item_completed, %{item_type: "message", refs: []})
+      refute Map.has_key?(rec, "branch_id")
+
+      assert {:ok, %Event{branch_id: "main"}} = Meta.decode(rec),
+             "absent branch_id must default to \"main\""
+    end
+  end
 end

@@ -125,7 +125,11 @@ defmodule Raxol.Agent.Meta do
        payload: Map.get(record, "payload") || %{},
        scope: to_existing_or_new_atom(Map.get(record, "scope"), :session),
        provenance: decode_provenance(Map.get(record, "provenance")),
-       actor: decode_actor_field(Map.get(record, "actor"))
+       actor: decode_actor_field(Map.get(record, "actor")),
+       # branch_id is written omit-when-"main" (I2); absent decodes back to the
+       # frozen default so a non-default branch round-trips off disk. Without
+       # this READ side a non-default branch_id landed on disk but was stranded.
+       branch_id: Map.get(record, "branch_id", "main")
      }}
   end
 

@@ -263,7 +263,10 @@ defmodule Raxol.Agent.EmitBridge do
       payload: Map.get(neutral, :payload, %{}),
       scope: Map.get(neutral, :scope, @default_scope),
       provenance: Map.get(neutral, :provenance, @default_provenance),
-      actor: Map.get(neutral, :actor)
+      actor: Map.get(neutral, :actor),
+      # The live path carries branch_id so it agrees with the durable record
+      # (the durable + live envelopes must never diverge on a field, §1.1).
+      branch_id: Map.get(neutral, :branch_id, @default_branch_id)
     }
   end
 
