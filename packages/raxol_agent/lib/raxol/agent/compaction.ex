@@ -33,7 +33,7 @@ defmodule Raxol.Agent.Compaction do
   This retires the lossy `Raxol.Agent.ContextCompactor` (prose summary that
   drops message content with no manifest) as the continuity model.
 
-  ## Reuse of the U9 checkpoint write path
+  ## Reuse of the U9 checkpoint write AND restore paths (no restore fork)
 
   `compact/2` does not reimplement checkpoint storage: it delegates the append
   to `Raxol.Agent.Journal.Records.Checkpoint.write/3` (the U9 pointer-record
@@ -42,32 +42,48 @@ defmodule Raxol.Agent.Compaction do
   slice as the snapshot content. The compaction record IS a checkpoint record;
   the offset it consumes is one dense offset from the single id space.
 
-  `resume/2` walks the checkpoints newest-first, verifying each snapshot's
-  content hash. It selects the newest healthy checkpoint and folds the
-  conversational tail forward onto its snapshot slice — identical to restoring
-  from any checkpoint (compaction = resume). A corrupt newer checkpoint is
-  **surfaced** (typed reason) in `resume_info.skipped`, never silently skipped,
-  before falling back to the previous healthy one.
+  `resume/2` does not reimplement restore either. It walks the checkpoints
+  newest-first (U10's value-add: skip a corrupt newest, fall back to the
+  previous healthy one, surfacing the typed reason in `resume_info.skipped` —
+  never silently), but **each single-checkpoint restore is delegated to the U9
+  hardened path** (`Checkpoint.restore_checkpoint/3` → `FileBackend`). This makes
+  resume-equivalence **structural** — compaction-restore IS checkpoint-restore,
+  literally the same code — and inherits every U9 restore-path hardening:
+
+    * the `tip_offset`/pointer guard (`validate_checkpoint`): a checkpoint with a
+      nil/missing `tip_offset` or `snapshot_ref` yields a typed
+      `:malformed_checkpoint` and is skipped, never a silent zero-fold that
+      drops the whole tail;
+    * the `@ref_re` path-traversal reject (`:malformed_pointer`), the snapshot
+      size ceiling, the depth-bounded decode, and the `$s` deref-gadget guard —
+      a hostile `snapshot_ref` (`../` traversal, non-hex, oversized) is rejected
+      on the compaction resume path exactly as on `Checkpoint.restore/2`.
+
+  There is exactly ONE surrogate fold (in `FileBackend`), re-bound in one place
+  when MS lands — `resume/2` no longer carries a private divergent copy.
 
   ## Surrogate MS codec (re-bind when the real event reducer lands)
 
   The model-snapshot (MS) contract owns *serialization* (`Raxol.Agent.Snapshot`
   — the persistent-slice codec + dropped/redacted manifest). The concrete
   *event reducer* (applying conversational events onto a model) is not yet
-  frozen against MS, so `persist/1`, `manifest/1`, and `apply_event/2` here are
-  the deterministic surrogate the U10-R red suite pins — the same
-  surrogate-fold discipline U9's `Checkpoint.FileBackend` documents. The
-  round-trip **equation** (compact-then-resume ≡ a full fold on the persistent
-  slice, P-JS4) is codec-independent; re-bind these three private functions to
-  the real MS reducer when it lands and the laws still hold.
+  frozen against MS. The **fold** now lives solely in `FileBackend` (the single
+  surrogate); `compact/2` here retains only the persistent-slice projection
+  `persist/1` and its omission manifest `manifest/1` — the same
+  surrogate-boundary discipline U9's `Checkpoint.FileBackend` documents (secret
+  exclusion is the `_`-prefix boundary until the real MS codec lands; a plain-key
+  secret is the MS codec's responsibility, exactly as in U9). The round-trip
+  **equation** (compact-then-resume ≡ a full fold on the persistent slice,
+  P-JS4) is codec-independent; re-bind `persist/1`/`manifest/1` to the real MS
+  projection when it lands and the laws still hold.
 
   ## GC readiness
 
   Compaction only ever **appends** (FI-7: nothing below the checkpoint offset is
   rewritten or truncated — GC is deferred to a future `gc` record). When GC
-  ships it MUST consult `Checkpoint.protected_floor/1` and never truncate at or
-  above the newest checkpoint's tip, so a compaction's restore path stays
-  intact.
+  ships it MUST consult `Checkpoint.protected_floor/2` and never truncate at or
+  above the newest **healthy** checkpoint's tip, so a compaction's restore path
+  (including U10's fall-back to an older healthy checkpoint) stays intact.
 
   ## Behaviour
 
@@ -107,8 +123,20 @@ defmodule Raxol.Agent.Compaction do
   """
   @type resume_info :: %{
           selected_offset: pos_integer() | nil,
-          skipped: [{pos_integer(), :snapshot_corrupt | :snapshot_missing}]
+          skipped: [{pos_integer(), skip_reason()}]
         }
+
+  @typedoc """
+  Why a newer checkpoint was skipped during the newest-first resume walk — the
+  typed reasons the U9 hardened restore path (`Checkpoint.restore_checkpoint/3`)
+  surfaces.
+  """
+  @type skip_reason ::
+          :snapshot_corrupt
+          | :snapshot_missing
+          | :malformed_checkpoint
+          | :malformed_pointer
+          | term()
 
   @doc """
   Compact a session by appending a `checkpoint{reason: "compaction"}` record
@@ -138,12 +166,6 @@ defmodule Raxol.Agent.Compaction do
 
   @checkpoint_kind Checkpoint.kind()
 
-  # The frozen CONVERSATIONAL whitelist (JS-FREEZE §1.1 — the closure rule).
-  @conversational MapSet.new(~w(
-    turn_started item_started item_completed
-    turn_completed turn_canceled error approval_requested
-  ))
-
   @doc """
   Compact `journal` by appending a `checkpoint{reason: "compaction"}` record
   whose content-addressed snapshot is the persistent slice of `opts[:model]`.
@@ -158,10 +180,20 @@ defmodule Raxol.Agent.Compaction do
 
   def compact(journal, opts) do
     model = Keyword.fetch!(opts, :model)
+    # SURROGATE MS BOUNDARY (call site): `persist/1` is the deterministic
+    # surrogate persistent-slice projection — secret exclusion is the `_`-prefix
+    # boundary only (see moduledoc). A plain-key secret is the real MS codec's
+    # responsibility, exactly as U9's `FileBackend` leaves it. Re-bind here when
+    # the MS `@persist` projection lands.
     slice = persist(model)
     manifest = manifest(model)
 
     with {:ok, offset} <- Checkpoint.write(journal, slice, reason: @reason),
+         # FOLLOW-UP (🔵 double read): `Checkpoint.write/3` returns only the
+         # offset, so we re-read the journal to recover the snapshot_ref/hash/
+         # tip_offset it already computed. Enriching the U9 write return shape is
+         # deferred — it would change the frozen `{:ok, offset}` `@callback` the
+         # U9-R suite pins.
          {:ok, record} <- read_record(journal, offset) do
       {:ok,
        %{
@@ -179,11 +211,12 @@ defmodule Raxol.Agent.Compaction do
   Resume from the latest healthy compaction/checkpoint — the ordinary
   checkpoint-restore path (compaction = resume).
 
-  Walks checkpoints newest-first, verifying each snapshot's content hash. A
-  corrupt/missing newer checkpoint is surfaced (typed reason) in
-  `resume_info.skipped` before falling back to the previous healthy one; the
-  selected checkpoint's snapshot slice is folded forward over the conversational
-  tail. Returns `{:ok, model, resume_info}` or `{:error, reason}`.
+  Walks checkpoints newest-first, delegating each single-checkpoint restore to
+  the U9 hardened path (`Checkpoint.restore_checkpoint/3` — snapshot hash verify,
+  tip/pointer guard, path-traversal reject, size ceiling, depth-bounded decode,
+  `$s` deref guard). A corrupt/missing/malformed newer checkpoint is surfaced
+  (typed reason) in `resume_info.skipped` before falling back to the previous
+  healthy one. Returns `{:ok, model, resume_info}` or `{:error, reason}`.
   """
   @spec resume(journal, keyword()) ::
           {:ok, map(), resume_info()} | {:error, term()}
@@ -199,15 +232,19 @@ defmodule Raxol.Agent.Compaction do
   end
 
   # --- resume selection (newest healthy, corrupt-newer surfaced) -------------
+  #
+  # U10's value-add lives HERE (the newest-first walk with typed-error fall-back)
+  # and NOWHERE else: each individual restore goes through the U9 hardened path
+  # (`Checkpoint.restore_checkpoint/3`), so there is no second surrogate fold and
+  # no bypassed hardening.
 
   defp select_latest_healthy([], _journal, _records, skipped),
     do: {:error, {:no_healthy_checkpoint, Enum.reverse(skipped)}}
 
   defp select_latest_healthy([cp | rest], journal, records, skipped) do
-    case restore_from(journal, records, cp) do
+    case Checkpoint.restore_checkpoint(journal, records, cp) do
       {:ok, model} ->
-        {:ok, model,
-         %{selected_offset: Map.get(cp, "id"), skipped: Enum.reverse(skipped)}}
+        {:ok, model, %{selected_offset: Map.get(cp, "id"), skipped: Enum.reverse(skipped)}}
 
       {:error, reason} ->
         select_latest_healthy(rest, journal, records, [
@@ -216,49 +253,11 @@ defmodule Raxol.Agent.Compaction do
     end
   end
 
-  # Restore one specific checkpoint: verify its snapshot, then fold the
-  # conversational tail (id > tip_offset) forward onto the slice (P-JS4).
-  defp restore_from(%{dir: dir}, records, cp) do
-    with {:ok, slice} <-
-           load_snapshot(
-             dir,
-             Map.get(cp, "snapshot_ref"),
-             Map.get(cp, "snapshot_hash")
-           ) do
-      {:ok, fold_forward(slice, records, Map.get(cp, "tip_offset"))}
-    end
-  end
-
-  # A tip-only pointer (nil snapshot_ref) restores from an empty slice, then
-  # folds the full conversational prefix forward (OQ-JS1).
-  defp load_snapshot(_dir, nil, _hash), do: {:ok, %{}}
-
-  defp load_snapshot(dir, ref, hash) when is_binary(ref) do
-    path = Path.join(dir, ref)
-
-    case File.read(path) do
-      {:error, _} ->
-        {:error, :snapshot_missing}
-
-      {:ok, bytes} ->
-        cond do
-          sha256_hex(bytes) != hash -> {:error, :snapshot_corrupt}
-          true -> decode_slice(bytes)
-        end
-    end
-  end
-
-  defp decode_slice(bytes) do
-    case Jason.decode(bytes) do
-      {:ok, slice} when is_map(slice) -> {:ok, slice}
-      _ -> {:error, :snapshot_corrupt}
-    end
-  end
-
-  # --- surrogate MS codec (re-bind to the real MS reducer when it lands) -----
+  # --- surrogate MS projection (re-bind to the real MS `@persist` when it lands)
 
   # Persistent slice: every key NOT prefixed `_` survives (volatile keys — pids,
-  # secrets, connection handles — never reach the snapshot).
+  # secrets, connection handles — never reach the snapshot). See the SURROGATE MS
+  # BOUNDARY note at the `compact/2` call site.
   defp persist(model) do
     for {k, v} <- model, not volatile?(k), into: %{}, do: {k, v}
   end
@@ -277,34 +276,6 @@ defmodule Raxol.Agent.Compaction do
   defp redacted_key?(<<"_secret", _::binary>>), do: true
   defp redacted_key?(_), do: false
 
-  # Fold the conversational tail (id > tip) forward onto a restored slice.
-  defp fold_forward(slice, records, tip) do
-    records
-    |> Enum.filter(fn r -> conversational?(r) and Map.get(r, "id") > tip end)
-    |> Enum.reduce(slice, fn record, model -> apply_event(model, record) end)
-  end
-
-  defp apply_event(model, record) do
-    case Map.get(record, "payload") do
-      %{"op" => "incr", "amount" => amount} ->
-        Map.update(model, "counter", amount, &(&1 + amount))
-
-      %{"op" => "note", "text" => text} ->
-        Map.update(model, "notes", [text], &(&1 ++ [text]))
-
-      _ ->
-        model
-    end
-  end
-
-  # The frozen tip predicate over a STRING-keyed record (grandfather-safe:
-  # absent kind ⇒ "event"). Only conversational loop events fold.
-  defp conversational?(record) do
-    Map.get(record, "kind", "event") == "event" and
-      Map.get(record, "family") == "loop" and
-      MapSet.member?(@conversational, Map.get(record, "type"))
-  end
-
   # --- helpers ---------------------------------------------------------------
 
   defp read_record(journal, offset) do
@@ -315,7 +286,4 @@ defmodule Raxol.Agent.Compaction do
       end
     end
   end
-
-  defp sha256_hex(bytes),
-    do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
 end

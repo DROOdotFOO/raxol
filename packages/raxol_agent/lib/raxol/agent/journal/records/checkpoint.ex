@@ -120,6 +120,25 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   @callback restore(journal :: term(), opts :: keyword()) ::
               {:ok, model()} | {:error, term()}
 
+  @doc """
+  Restore the model captured by ONE specific already-read `checkpoint` record of
+  `journal` (the hardened single-checkpoint restore).
+
+  This is the seam U10 compaction resume delegates to for its newest-first walk:
+  it applies the SAME restore-path hardening as `restore/2`
+  (`tip_offset`/`snapshot_ref` presence guard ⇒ `:malformed_checkpoint`;
+  `@ref_re` path-traversal reject ⇒ `:malformed_pointer`; snapshot size ceiling,
+  depth-bounded decode, `$s` deref-gadget guard ⇒ `:snapshot_corrupt`; hash
+  verify ⇒ `:snapshot_corrupt`; absent file ⇒ `:snapshot_missing`) — the journal
+  stays `:ok` and nothing is deleted on any failure (N-JS3). `restore/2` is
+  exactly `restore_checkpoint/3` applied to the newest checkpoint.
+  """
+  @callback restore_checkpoint(
+              journal :: term(),
+              records :: [map()],
+              checkpoint :: map()
+            ) :: {:ok, model()} | {:error, term()}
+
   # --- backend seam ----------------------------------------------------------
 
   # A backend implementing `c:write/3` / `c:restore/2` may be injected via
@@ -158,32 +177,15 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
     end
   end
 
-  defp backend, do: :persistent_term.get(@backend_key, @default_backend)
-
-  # --- GC protection floor (Drew MEDIUM; JS-FREEZE §1.1-GC) ------------------
-
-  @doc """
-  The GC-protected floor for a set of already-read `records`: records at or
-  above this offset MUST NEVER be truncated, so the newest checkpoint's restore
-  path stays intact (**frozen law: GC never orphans checkpoints**, JS-FREEZE
-  §1.1). It is the `tip_offset` of the newest healthy checkpoint (highest
-  offset). `:none` when no checkpoint exists (nothing to protect).
-
-  A future `gc`/truncation writer MUST consult this and reject any proposal
-  whose truncation range reaches this offset — rejected at the same synchronous
-  admission seam as `:invalid_tip`, never accepted-then-marked.
-  """
-  @spec protected_floor([map()]) :: {:offset, pos_integer()} | :none
-  def protected_floor(records) when is_list(records) do
-    records
-    |> Enum.filter(&(Map.get(&1, "kind") == @kind))
-    |> case do
-      [] ->
-        :none
-
-      cps ->
-        newest = Enum.max_by(cps, &Map.fetch!(&1, "id"))
-        {:offset, Map.fetch!(newest, "tip_offset")}
+  @doc "See `c:restore_checkpoint/3`. Dispatches to the active backend (default `FileBackend`)."
+  @spec restore_checkpoint(term(), [map()], map()) ::
+          {:ok, model()} | {:error, term()}
+  def restore_checkpoint(journal, records, checkpoint) do
+    case backend() do
+      nil -> {:error, :not_implemented}
+      mod -> mod.restore_checkpoint(journal, records, checkpoint)
     end
   end
+
+  defp backend, do: :persistent_term.get(@backend_key, @default_backend)
 end

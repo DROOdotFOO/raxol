@@ -42,21 +42,27 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
   # Reference MS codec — a real event-sourced model + fold + persistent slice
   # ===========================================================================
 
-  @doc "Initial model: persistent counter + notes, plus (test) volatile fields absent."
-  def initial_model, do: %{"counter" => 0, "notes" => []}
+  @doc "Initial model: an empty `applied` id-list (the single surrogate fold)."
+  def initial_model, do: %{"applied" => []}
 
   @doc """
-  Fold one journal record into the model. Only `kind: "event"` loop records
-  fold; checkpoints and any non-event kinds are inert (reader tolerance — a
-  checkpoint never perturbs an event fold).
+  Fold one journal record into the model. This mirrors the ONE surrogate fold
+  that now lives in `Raxol.Agent.Journal.Records.Checkpoint.FileBackend`
+  (`fold_step/2`): each CONVERSATIONAL loop record appends its `id` to
+  `model["applied"]`. Checkpoints and any non-event kinds are inert (reader
+  tolerance — a checkpoint never perturbs an event fold).
+
+  Unified deliberately: compaction resume now DELEGATES each single-checkpoint
+  restore to the U9 hardened path, so this oracle and the implementation share
+  exactly one surrogate fold (re-bound in one place when the real MS reducer
+  lands). The `op`/`amount`/`text` payloads the seeder writes are inert to the
+  fold — only the record `id` matters, exactly as in FileBackend.
   """
   def apply_event(model, %{"kind" => kind}) when kind not in [nil, "event"], do: model
 
-  def apply_event(model, %{"payload" => %{"op" => "incr", "amount" => a}}),
-    do: Map.update(model, "counter", a, &(&1 + a))
-
-  def apply_event(model, %{"payload" => %{"op" => "note", "text" => t}}),
-    do: Map.update(model, "notes", [t], &(&1 ++ [t]))
+  def apply_event(model, %{"family" => "loop", "type" => type, "id" => id})
+      when type in @conversational,
+      do: Map.update(model, "applied", [id], &(&1 ++ [id]))
 
   def apply_event(model, _record), do: model
 
