@@ -27,7 +27,9 @@ defmodule Raxol.AgentClientProtocol.Session.Turn do
           outcome: outcome() | nil,
           respond?: boolean(),
           pending_perms: %{reference() => %{from: GenServer.from()}},
-          backstop_timer: reference() | nil
+          backstop_timer: reference() | nil,
+          non_empty_prompt?: boolean(),
+          updates_emitted?: boolean()
         }
 
   @enforce_keys [:turn_ref, :reply_ref, :prompt_seq, :root_ref, :root_pid, :monitors]
@@ -40,7 +42,15 @@ defmodule Raxol.AgentClientProtocol.Session.Turn do
             outcome: nil,
             respond?: true,
             pending_perms: %{},
-            backstop_timer: nil
+            backstop_timer: nil,
+            # -- streaming guards (W17-ctx): the cleanroom spec's streaming
+            # rules ("no empty chunks, >=1 update per non-empty prompt",
+            # supervision design §3.3) that this layer is positioned to
+            # enforce/observe. `non_empty_prompt?` is snapshotted at
+            # begin_prompt from the incoming PromptRequest; `updates_emitted?`
+            # flips true the first time a (non-rejected) post_update goes out.
+            non_empty_prompt?: true,
+            updates_emitted?: false
 end
 
 defmodule Raxol.AgentClientProtocol.Session do
@@ -100,6 +110,9 @@ defmodule Raxol.AgentClientProtocol.Session do
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.SessionModeState
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.SetSessionModeResponse
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.RequestPermissionResponse
+  alias Raxol.AgentClientProtocol.Schema.ContentChunk
+  alias Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification
+  alias Raxol.AgentClientProtocol.Schema.TextContent
   alias Raxol.AgentClientProtocol.Session.Turn
 
   @default_permission_timeout 600_000
@@ -286,7 +299,9 @@ defmodule Raxol.AgentClientProtocol.Session do
         outcome: nil,
         respond?: true,
         pending_perms: %{},
-        backstop_timer: nil
+        backstop_timer: nil,
+        non_empty_prompt?: prompt_non_empty?(req),
+        updates_emitted?: false
       }
 
       {:reply, :ok, %{state | turn: {:prompting, turn}}}
@@ -313,12 +328,29 @@ defmodule Raxol.AgentClientProtocol.Session do
     end
   end
 
-  # ---- post_update ----------------------------------------------------------
+  # ---- post_update ------------------------------------------------------------
+  #
+  # Streaming guard #1 (W17-ctx, cleanroom spec §3.3 "no empty chunks"): an
+  # agent_message_chunk/agent_thought_chunk whose content is empty text is
+  # rejected outright — never forwarded to the Connection, never hits the
+  # wire (a real client can choke on an empty streamed chunk). Every other
+  # update variant, and every non-empty chunk, passes through unchanged and
+  # flips `updates_emitted?` for the drain-time check (see `warn_if_zero_updates/2`
+  # and `finish/2` below — that's streaming guard #2).
 
-  def handle_call({:post_update, notification}, _from, %{turn: {ts, _t}} = state)
+  def handle_call({:post_update, notification}, _from, %{turn: {ts, t}} = state)
       when ts in [:prompting, :cancelling] do
-    _ = state.conn_mod.notify(state.conn, "session/update", notification)
-    {:reply, :ok, state}
+    if empty_chunk?(notification) do
+      Logger.debug(
+        "ACP: rejected empty-content session/update chunk for session #{inspect(state.session_id)}"
+      )
+
+      emit_telemetry([:raxol, :acp, :empty_chunk_rejected], %{session_id: state.session_id})
+      {:reply, {:error, :empty_chunk}, state}
+    else
+      _ = state.conn_mod.notify(state.conn, "session/update", notification)
+      {:reply, :ok, put_turn(state, ts, %{t | updates_emitted?: true})}
+    end
   end
 
   def handle_call({:post_update, _notification}, _from, state) do
@@ -561,11 +593,77 @@ defmodule Raxol.AgentClientProtocol.Session do
   @spec finish(t(), Turn.t()) :: t()
   defp finish(state, t) do
     if t.backstop_timer, do: Process.cancel_timer(t.backstop_timer)
+    warn_if_zero_updates(state, t)
     # When respond? is false the obligation was voided by $/cancel_request; skip
     # reply/3 (Connection would suppress it anyway — belt-and-braces, §3.1).
     if t.respond?, do: state.conn_mod.reply(state.conn, t.reply_ref, render(t.outcome))
     %{state | turn: :idle}
   end
+
+  # Streaming guard #2 (W17-ctx, cleanroom spec §3.3 ">=1 update per
+  # non-empty prompt"): only the Session sees the whole turn, so this is the
+  # one place that can observe "the turn completed and never posted a single
+  # session/update". The two design docs handed to this task (acp-connection-
+  # design.md, acp-supervision-design.md) name the rule but give no algorithm
+  # for *what* to synthesize in the general zero-updates case — the one
+  # concrete synthesis case they DO name ("synthesize final text if
+  # tool-only", supervision §3.3) is narrower than "zero updates" (it
+  # requires at least one tool_call update with no text) and still specifies
+  # no content/shape to synthesize. Per this task's own instruction not to
+  # invent protocol behavior beyond the spec, this is therefore a
+  # **telemetry warning only** — a real agent violating the rule is a
+  # conformance bug in that agent, not something this library can safely
+  # paper over with invented text. Silent on cancelled/crashed turns (a
+  # turn cut short before producing anything is not a violation) and on
+  # opaque `req` shapes the Session can't inspect (`prompt_non_empty?/1`).
+  @spec warn_if_zero_updates(t(), Turn.t()) :: :ok
+  defp warn_if_zero_updates(state, %Turn{non_empty_prompt?: true, updates_emitted?: false} = t) do
+    if completed_normally?(t.outcome) do
+      {:stop, reason} = t.outcome
+
+      Logger.warning(
+        "ACP: turn for session #{inspect(state.session_id)} completed " <>
+          "(stopReason: #{inspect(reason)}) with zero session/update notifications " <>
+          "for a non-empty prompt — conformance expectation on agents (cleanroom spec " <>
+          "§3.3), not enforced or synthesized by this library"
+      )
+
+      emit_telemetry([:raxol, :acp, :zero_updates_turn], %{
+        session_id: state.session_id,
+        stop_reason: reason
+      })
+    end
+
+    :ok
+  end
+
+  defp warn_if_zero_updates(_state, _t), do: :ok
+
+  @spec completed_normally?(Turn.outcome()) :: boolean()
+  defp completed_normally?({:stop, reason}), do: reason != :cancelled
+  defp completed_normally?(_other), do: false
+
+  # Total: an opaque/non-PromptRequest-shaped `req` (e.g. a test double) is
+  # NOT assumed non-empty — a false negative (skip a warning) is the safe
+  # default here, never a false positive (spurious warning noise on
+  # unrelated code that doesn't carry a real `prompt` field).
+  @spec prompt_non_empty?(term()) :: boolean()
+  defp prompt_non_empty?(%{prompt: prompt}) when is_list(prompt), do: prompt != []
+  defp prompt_non_empty?(_other), do: false
+
+  # Empty-content guard (streaming guard #1). Only agent_message_chunk/
+  # agent_thought_chunk are in scope (the two variants the AGENT streams as
+  # free text during its own turn); every other SessionUpdate variant, and
+  # any chunk carrying non-empty text or non-text content (image/audio/
+  # resource), passes through unchanged.
+  @spec empty_chunk?(term()) :: boolean()
+  defp empty_chunk?(%SessionNotification{
+         update: {tag, %ContentChunk{content: {:text, %TextContent{text: ""}}}}
+       })
+       when tag in [:agent_message_chunk, :agent_thought_chunk],
+       do: true
+
+  defp empty_chunk?(_other), do: false
 
   @spec render(Turn.outcome()) :: {:ok, PromptResponse.t()} | {:error, Error.t()}
   defp render({:stop, reason}), do: {:ok, PromptResponse.new(reason)}
@@ -603,5 +701,15 @@ defmodule Raxol.AgentClientProtocol.Session do
       permission_timeout: Map.get(config, :permission_timeout, @default_permission_timeout),
       cancel_backstop_ms: Map.get(config, :cancel_backstop_ms, @default_cancel_backstop_ms)
     }
+  end
+
+  # Telemetry is optional (not a package dependency); Logger always carries
+  # the signal regardless (mirrors Connection's `emit_telemetry/2`).
+  defp emit_telemetry(event, metadata) do
+    if Code.ensure_loaded?(:telemetry) and function_exported?(:telemetry, :execute, 3) do
+      apply(:telemetry, :execute, [event, %{count: 1}, metadata])
+    end
+
+    :ok
   end
 end
