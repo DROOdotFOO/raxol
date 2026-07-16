@@ -148,15 +148,18 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
       end
     end
 
-    test "no golden carries ESC-less control-sequence residue (the ContentGuard-stripped [K class)" do
+    test "no golden carries ESC-less parameterized control-sequence residue (the ContentGuard-stripped class)" do
       # `ContentGuard.sanitize_line/1`'s "visible-honest" neutralization
       # strips a disallowed sequence's ESC byte but keeps the printable
       # remainder -- so a caller that wrongly embeds a control sequence
-      # (e.g. `\e[K`) in CONTENT it hands to `InlineAuthority.seal/2`
-      # leaves a literal `[K` painted into sealed history, visible on a
+      # (e.g. `\e[1;14r`) in CONTENT it hands to `InlineAuthority.seal/2`
+      # leaves literal residue painted into sealed history, visible on a
       # real terminal, invisible to every substring-based semantic
       # assertion. This guard scans each golden's TEXT tokens (already
-      # ESC-free by tokenization) for that residue class.
+      # ESC-free by tokenization) for the UNAMBIGUOUS half of that class
+      # -- see `escless_residue/1`'s comment for why paramless residue
+      # (`[K` et al.) is out of scope here and owned by the ContentGuard/
+      # seal seam upstream.
       for fixture <- Golden.fixtures(), mode <- Golden.modes() do
         golden = read_golden!(fixture, mode)
         residue = escless_residue(golden)
@@ -169,15 +172,20 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
     end
   end
 
-  # Text tokens of `raw` that carry a stripped-CSI residue: `[` followed
-  # by numeric params and any final letter (`[2J`, `[1;14r`), or, for the
-  # empty-param form, `[` followed by an UPPERCASE CSI final (`[K`, `[J`,
-  # `[H`). The empty-param branch is deliberately uppercase-only so the
-  # fixtures' legitimate lowercase bracket labels (`[assistant]`,
-  # `[reasoning]`) never false-positive; a stripped no-param lowercase
-  # final (`\e[r` bare) cannot occur here -- this codebase always emits
-  # DECSTBM with params, which the digit branch catches.
-  @escless_residue ~r/\[(?:\d{1,3}(?:;\d{1,3})*[A-Za-z]|[A-HJKST])/
+  # Text tokens of `raw` that carry UNAMBIGUOUS stripped-CSI residue:
+  # `[` followed by a numeric parameter run and a final letter (`[2J`,
+  # `[1;14r`, `[12;24H`) -- a shape prose never produces. Deliberately
+  # NO empty-param branch: after `ContentGuard.sanitize_line/1` strips
+  # the ESC, a paramless final (`\e[K` -> `[K`, likewise `[P`/`[L`/`[M`)
+  # is byte-identical to the first two characters of an ordinary
+  # uppercase bracket label (`[KEY]`, `[ERROR]`, `[DONE]` -- all
+  # plausible agent output), so any fixed letter set either misses
+  # paramless editors or false-positives on labels and blocks a
+  # legitimate bless. That paramless class is owned upstream, at the
+  # ContentGuard/seal seam (content handed to `InlineAuthority.seal/2`
+  # must simply never carry escape sequences -- the `Surface.seal_block/2`
+  # fix); this tripwire pins only the residue that is provably not text.
+  @escless_residue ~r/\[\d{1,3}(?:;\d{1,3})*[A-Za-z]/
   defp escless_residue(raw) do
     raw
     |> SequenceScanner.scan()
@@ -219,16 +227,30 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
                "the sequence-vocabulary allowlist guard rejects it"
     end
 
-    test "the ESC-less residue guard detects stripped-sequence remnants but not bracket labels" do
-      # what ContentGuard leaves behind when a caller wrongly embeds a
-      # control sequence in sealed content:
-      assert escless_residue("prefix [Ksuffix\r\n") != []
+    test "the ESC-less residue guard detects parameterized stripped-sequence remnants but never bracket labels" do
+      # UNAMBIGUOUS residue -- `[` + a parameter run + a final letter is
+      # not a shape prose produces; every one of these must trip:
       assert escless_residue("[1;14r positioned") != []
       assert escless_residue("half [2J cleared") != []
+      assert escless_residue("moved [12;24H mid-line") != []
 
-      # legitimate prose the fixtures actually contain must never trip it:
+      # Bracket labels -- lowercase AND uppercase -- are ordinary
+      # agent/LLM output and must never block a legitimate bless:
       assert escless_residue("[assistant]\r\nHello!\r\n") == []
       assert escless_residue("[reasoning] thinking...") == []
+      assert escless_residue("[ERROR] build failed") == []
+      assert escless_residue("[DONE] all tests passed") == []
+      assert escless_residue("[KEY] press any") == []
+      assert escless_residue("[Kernel panic] not syncing") == []
+
+      # Documented false negative, accepted by design: a PARAMLESS
+      # stripped final (`\e[K` -> `[K`, likewise `[P`/`[L`/`[M`) is
+      # byte-identical to the start of an uppercase bracket label after
+      # ContentGuard's neutralization, so no text-side regex can tell
+      # them apart. That class is owned upstream by the ContentGuard/
+      # seal seam (content must simply never carry escapes -- the
+      # Surface.seal_block/2 fix), not by this tripwire.
+      assert escless_residue("prefix [Ksuffix\r\n") == []
     end
   end
 
