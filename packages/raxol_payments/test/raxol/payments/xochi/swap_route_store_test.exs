@@ -36,4 +36,31 @@ defmodule Raxol.Payments.Xochi.SwapRouteStoreTest do
     SwapRouteStore.remember("intent_ttl", %{x: 1}, ttl_ms: -1)
     assert :error == SwapRouteStore.take("intent_ttl")
   end
+
+  test "two executes in one spawned agent process settle cleanly" do
+    # Pins the singleton-registration fix: the original crash only reproduced
+    # from a spawned process running two swaps back to back (whereis -> nil ->
+    # re-start_link -> :ets.new on the existing named table raises in init and
+    # the linked crash killed the caller after funds moved). This must stay a
+    # no-op-safe stash.
+    parent = self()
+
+    spawn(fn ->
+      SwapRouteStore.remember("spawn_1", %{leg: 1})
+      SwapRouteStore.remember("spawn_2", %{leg: 2})
+      send(parent, :done)
+    end)
+
+    assert_receive :done, 1000
+    assert {:ok, %{leg: 1}} = SwapRouteStore.take("spawn_1")
+    assert {:ok, %{leg: 2}} = SwapRouteStore.take("spawn_2")
+    assert Process.alive?(Process.whereis(SwapRouteStore))
+  end
+
+  test "reinserting the same intent id updates rather than duplicates" do
+    SwapRouteStore.remember("intent_update", %{v: 1})
+    SwapRouteStore.remember("intent_update", %{v: 2})
+    assert {:ok, %{v: 2}} = SwapRouteStore.take("intent_update")
+    assert :error == SwapRouteStore.take("intent_update")
+  end
 end

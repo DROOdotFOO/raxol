@@ -121,6 +121,53 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncerTest do
     end
   end
 
+  describe "diagnostics: announce_skipped telemetry" do
+    setup do
+      ref = make_ref()
+      test_pid = self()
+
+      handler = fn _event, _measure, meta, _cfg ->
+        send(test_pid, {:skipped, ref, meta.reason})
+      end
+
+      :telemetry.attach(
+        "skip-#{inspect(ref)}",
+        [:raxol, :payments, :xochi, :agent_stream, :announce_skipped],
+        handler,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("skip-#{inspect(ref)}") end)
+      %{ref: ref}
+    end
+
+    test "emits :not_configured when no agent_stream is set", %{ref: ref} do
+      SwapAnnouncer.config(%{wallet: AgentWallet})
+      assert_receive {:skipped, ^ref, :not_configured}
+    end
+
+    test "emits :no_topic_id when the topic is blank", %{ref: ref} do
+      SwapAnnouncer.config(context(%{agent_stream: stream_config(%{topic_id: ""})}))
+      assert_receive {:skipped, ^ref, :no_topic_id}
+    end
+
+    test "emits :no_wallet when the wallet is absent", %{ref: ref} do
+      SwapAnnouncer.config(%{agent_stream: stream_config()})
+      assert_receive {:skipped, ^ref, :no_wallet}
+    end
+
+    test "emits :no_route when the terminal poll finds no stashed route", %{ref: ref} do
+      status = %IntentStatus{intent_id: "never_stashed", status: :completed}
+      assert :ok == SwapAnnouncer.announce_terminal(context(), "never_stashed", status)
+      assert_receive {:skipped, ^ref, :no_route}
+    end
+
+    test "does not emit when config resolves cleanly", %{ref: ref} do
+      assert {:ok, _} = SwapAnnouncer.config(context())
+      refute_receive {:skipped, ^ref, _}, 100
+    end
+  end
+
   describe "announce_execute/4" do
     test "posts a signed, verifiable execute event and stashes the route" do
       assert :ok ==

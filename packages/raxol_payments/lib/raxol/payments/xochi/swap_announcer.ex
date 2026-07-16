@@ -94,33 +94,69 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
   """
   @spec announce_terminal(map(), String.t(), IntentStatus.t()) :: :ok
   def announce_terminal(context, intent_id, %IntentStatus{} = status) do
-    with {:ok, cfg} <- config(context),
-         {:ok, base} <- SwapRouteStore.take(intent_id) do
-      AgentStream.announce(cfg, terminal_event(base, status))
-      :ok
-    else
-      _ -> :ok
+    case config(context) do
+      {:ok, cfg} ->
+        case SwapRouteStore.take(intent_id) do
+          {:ok, base} ->
+            AgentStream.announce(cfg, terminal_event(base, status))
+            :ok
+
+          # No stash for this intent: the execute never announced (unconfigured
+          # then), or the route already expired. Emitting a blank-route terminal
+          # would clobber the row, so skip and record why.
+          :error ->
+            emit_skipped(context, :no_route)
+            :ok
+        end
+
+      # config/1 already emitted the specific skip reason.
+      :skip ->
+        :ok
     end
   end
 
   @doc """
   Resolve the `AgentStream` config from an Action context, or `:skip` when no
-  `topic_id` (or no wallet / announce host) is available.
+  `topic_id` (or no wallet / announce host) is available. Emits an
+  `[:raxol, :payments, :xochi, :agent_stream, :announce_skipped]` telemetry event
+  carrying the specific reason so a misconfiguration is observable rather than a
+  silent no-op.
   """
   @spec config(map()) :: {:ok, map()} | :skip
   def config(context) do
-    with %{} = stream <- Map.get(context, :agent_stream),
-         topic_id when is_binary(topic_id) and topic_id != "" <-
-           Map.get(stream, :topic_id),
-         {:ok, wallet} <- Map.fetch(context, :wallet),
-         {:ok, url} <- resolve_url(stream, context) do
+    with {_, %{} = stream} <- {:not_configured, Map.get(context, :agent_stream)},
+         {_, topic_id} when is_binary(topic_id) and topic_id != "" <-
+           {:no_topic_id, Map.get(stream, :topic_id)},
+         {_, {:ok, wallet}} <- {:no_wallet, Map.fetch(context, :wallet)},
+         {_, {:ok, url}} <- {:no_announce_host, resolve_url(stream, context)} do
       {:ok, build_config(stream, url, topic_id, wallet)}
     else
-      _ -> :skip
+      {reason, _} ->
+        emit_skipped(context, reason)
+        :skip
     end
   end
 
   # -- Private --
+
+  # Diagnostics for the best-effort no-op paths. AgentStream emits :dropped once
+  # an announce is attempted and fails; this covers the layer above, where an
+  # announce is never attempted at all (misconfigured topic/wallet/host, or a
+  # missing/expired route). mandate_hash and the delegator wallet never appear.
+  defp emit_skipped(context, reason) do
+    :telemetry.execute(
+      [:raxol, :payments, :xochi, :agent_stream, :announce_skipped],
+      %{count: 1},
+      %{reason: reason, topic_id: topic_id_hint(context)}
+    )
+  end
+
+  defp topic_id_hint(context) do
+    case Map.get(context, :agent_stream) do
+      %{topic_id: topic_id} -> topic_id
+      _ -> nil
+    end
+  end
 
   defp build_config(stream, url, topic_id, wallet) do
     %{xochi_api_url: url, topic_id: topic_id, wallet: wallet}
