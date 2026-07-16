@@ -73,8 +73,16 @@ defmodule Raxol.Agent.Red.SteerContours do
     event = hd(next.log)
     assert event.tier == :durable, "the steer event must be durable"
     assert event.turn_id == @target, "the durable event must be attributed to the target turn"
-    assert event.text == "go left", "the durable event must carry the steering text"
-    assert event.client_msg_id == "m-land", "the durable event must carry the client_msg_id"
+
+    # Frozen event shape (§1 + §5.1): the steering text and client_msg_id are
+    # nested in `payload` — the same place they land on disk — not at the top
+    # level. This pins the durable layout, not the accept OUTCOME (the returned
+    # `ref` still carries client_msg_id at its top level, asserted above).
+    assert event.payload.text == "go left",
+           "the durable event's payload must carry the steering text"
+
+    assert event.payload.client_msg_id == "m-land",
+           "the durable event's payload must carry the client_msg_id"
   end
 
   @doc """

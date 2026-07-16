@@ -216,14 +216,19 @@ defmodule Raxol.Agent.Steer do
     offset = length(log) + 1
     ref = %{turn_id: cur, offset: offset, client_msg_id: cmid}
 
+    # Frozen event shape (freeze-contracts §1 + §5.1): the envelope fields stay
+    # at the top level, but the `client_msg_id` and steering `text` live INSIDE
+    # `payload` — the same place they land on disk. Keeping the pure model's
+    # event byte-aligned with the durable record is what lets `rebuild/1` fold
+    # the real journal (§5.1: "carries its client_msg_id in the resulting durable
+    # event's payload").
     event = %{
       type: :steer,
       tier: :durable,
       family: :loop,
       turn_id: cur,
-      client_msg_id: cmid,
-      text: text,
-      offset: offset
+      offset: offset,
+      payload: %{client_msg_id: cmid, text: text}
     }
 
     seen2 =
@@ -249,14 +254,19 @@ defmodule Raxol.Agent.Steer do
   def rebuild(journal) when is_list(journal) do
     seen =
       journal
-      |> Enum.filter(&(&1[:type] == :steer and not is_nil(&1[:client_msg_id])))
+      |> Enum.filter(&(&1[:type] == :steer and not is_nil(payload_cmid(&1))))
       |> Map.new(fn ev ->
-        ref = %{turn_id: ev[:turn_id], offset: ev[:offset], client_msg_id: ev[:client_msg_id]}
-        {ev[:client_msg_id], %{ref: ref, text: ev[:text]}}
+        cmid = payload_cmid(ev)
+        ref = %{turn_id: ev[:turn_id], offset: ev[:offset], client_msg_id: cmid}
+        {cmid, %{ref: ref, text: payload_text(ev)}}
       end)
 
     %TurnState{turn_id: nil, seen: seen, log: journal}
   end
+
+  # `client_msg_id`/`text` are nested in `payload` (frozen shape, §5.1).
+  defp payload_cmid(ev), do: (ev[:payload] || %{})[:client_msg_id]
+  defp payload_text(ev), do: (ev[:payload] || %{})[:text]
 
   # The CAS swap: a fresh token, GLOBALLY DISTINCT from every token this turn has
   # ever held (not merely different from the current one) — the ABA-safety law.

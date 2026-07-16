@@ -54,9 +54,8 @@ defmodule Raxol.Agent.Red.SteerInjectors do
           tier: :durable,
           family: :loop,
           turn_id: cur,
-          client_msg_id: cmid,
-          text: text,
-          offset: offset
+          offset: offset,
+          payload: %{client_msg_id: cmid, text: text}
         }
 
         seen2 = if is_nil(cmid), do: seen, else: Map.put(seen, cmid, ref)
@@ -101,9 +100,8 @@ defmodule Raxol.Agent.Red.SteerInjectors do
             tier: :durable,
             family: :loop,
             turn_id: cur,
-            client_msg_id: cmid,
-            text: text,
-            offset: offset
+            offset: offset,
+            payload: %{client_msg_id: cmid, text: text}
           }
 
           dirtied = %TurnState{state | log: log ++ [event]}
@@ -156,9 +154,8 @@ defmodule Raxol.Agent.Red.SteerInjectors do
           tier: :durable,
           family: :loop,
           turn_id: cur,
-          client_msg_id: cmid,
-          text: text,
-          offset: offset
+          offset: offset,
+          payload: %{client_msg_id: cmid, text: text}
         }
 
         seen2 = if is_nil(cmid), do: seen, else: Map.put(seen, cmid, ref)
@@ -249,9 +246,8 @@ defmodule Raxol.Agent.Red.SteerInjectors do
             tier: :durable,
             family: :loop,
             turn_id: cur,
-            client_msg_id: cmid,
-            text: text,
-            offset: offset
+            offset: offset,
+            payload: %{client_msg_id: cmid, text: text}
           }
 
           seen2 =
@@ -313,9 +309,8 @@ defmodule Raxol.Agent.Red.SteerInjectors do
             tier: :durable,
             family: :loop,
             turn_id: cur,
-            client_msg_id: cmid,
-            text: text,
-            offset: offset
+            offset: offset,
+            payload: %{client_msg_id: cmid, text: text}
           }
 
           seen2 =
@@ -374,9 +369,8 @@ defmodule Raxol.Agent.Red.SteerInjectors do
             tier: :durable,
             family: :loop,
             turn_id: cur,
-            client_msg_id: cmid,
-            text: text,
-            offset: offset
+            offset: offset,
+            payload: %{client_msg_id: cmid, text: text}
           }
 
           seen2 =

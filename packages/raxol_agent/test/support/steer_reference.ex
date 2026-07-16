@@ -65,14 +65,15 @@ defmodule Raxol.Agent.Red.SteerReference do
         offset = length(log) + 1
         ref = %{turn_id: cur, offset: offset, client_msg_id: cmid}
 
+        # Frozen event shape (§1 + §5.1): client_msg_id + text nested in payload,
+        # exactly where they land on disk.
         event = %{
           type: :steer,
           tier: :durable,
           family: :loop,
           turn_id: cur,
-          client_msg_id: cmid,
-          text: text,
-          offset: offset
+          offset: offset,
+          payload: %{client_msg_id: cmid, text: text}
         }
 
         seen2 =
@@ -98,14 +99,19 @@ defmodule Raxol.Agent.Red.SteerReference do
     # caught regardless of which turn is running after the restart.
     seen =
       journal
-      |> Enum.filter(&(&1[:type] == :steer and not is_nil(&1[:client_msg_id])))
+      |> Enum.filter(&(&1[:type] == :steer and not is_nil(cmid(&1))))
       |> Map.new(fn ev ->
-        ref = %{turn_id: ev[:turn_id], offset: ev[:offset], client_msg_id: ev[:client_msg_id]}
-        {ev[:client_msg_id], %{ref: ref, text: ev[:text]}}
+        c = cmid(ev)
+        ref = %{turn_id: ev[:turn_id], offset: ev[:offset], client_msg_id: c}
+        {c, %{ref: ref, text: text(ev)}}
       end)
 
     %TurnState{turn_id: nil, seen: seen, log: journal}
   end
+
+  # client_msg_id/text are payload-nested (frozen shape, §5.1).
+  defp cmid(ev), do: (ev[:payload] || %{})[:client_msg_id]
+  defp text(ev), do: (ev[:payload] || %{})[:text]
 
   # The CAS swap: a fresh token, GLOBALLY DISTINCT from every token this turn
   # has ever held (not merely different from the current one) — the ABA-safety
