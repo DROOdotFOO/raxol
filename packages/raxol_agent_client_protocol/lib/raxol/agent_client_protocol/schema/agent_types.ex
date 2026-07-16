@@ -6,11 +6,13 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes do
   negotiation, and MCP server descriptors.
 
   Every struct here carries an `_meta` map (default `%{}`) that is total on
-  decode: unrecognized top-level wire keys are folded into it (via
-  `extract_meta/2`) and re-emitted verbatim on encode (via `put_meta/2`), so
-  round-tripping an object this library doesn't fully understand never loses
-  data. `from_json/1` never raises; it always returns `{:ok, t}` or
-  `{:error, reason}`.
+  decode: unrecognized top-level wire keys, plus the contents of an explicit
+  `"_meta"` wire object, are folded into it (via `extract_meta/2`) and
+  re-emitted nested under the wire `"_meta"` key on encode (via
+  `put_meta/2`, matching every sibling schema module's
+  `WireFields.emit_meta/2` convention), so round-tripping an object this
+  library doesn't fully understand never loses data. `from_json/1` never
+  raises; it always returns `{:ok, t}` or `{:error, reason}`.
 
   ## Cross-module references
 
@@ -33,8 +35,15 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes do
   Note: `ACP.SessionUpdate` (the `session/update` notification's
   `sessionUpdate`-discriminated union) lives in upstream's
   `lib/acp/client_types.ex`, not `agent_types.ex` — it is intentionally NOT
-  ported here despite being mentioned in this file's assignment description;
-  it belongs to whichever coder ports `client_types.ex`.
+  ported here. It has since landed as
+  `Raxol.AgentClientProtocol.Schema.SessionUpdate` in its own file,
+  `session_update.ex` (not `client_types.ex`, since the union's own variant
+  payload structs — `ContentChunk`, `CurrentModeUpdate`,
+  `AvailableCommandsUpdate`/`AvailableCommand`/`AvailableCommandInput`/
+  `UnstructuredCommandInput` — had no other landed home yet); the
+  `ACP.SessionNotification` envelope (`{sessionId, update, _meta}`) that
+  wraps it for the wire, and the `AgentNotification` routing union that
+  carries it, still belong to whichever coder ports `client_types.ex`.
 
   Ported from the MIT `f1729/agent_client_protocol` (c) 2025 f1729; see NOTICE.md.
   """
@@ -100,10 +109,20 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes do
   defp meta_of(%{"_meta" => meta}) when is_map(meta), do: meta
   defp meta_of(_map), do: %{}
 
-  @doc false
+  @doc """
+  Re-emit a struct's `_meta` bucket under the wire `"_meta"` key, omitted
+  when empty -- matches `Raxol.AgentClientProtocol.Schema.WireFields.emit_meta/2`,
+  the convention every sibling module in this package (`content.ex`,
+  `plan.ex`, `tool_call.ex`, `client_types.ex`) follows. Previously this
+  flattened `meta`'s contents directly onto the top-level wire object
+  (`Map.merge/2`), a genuine encode/decode asymmetry bug: `extract_meta/2`
+  above already folds an explicit `"_meta"` object correctly on decode, so
+  a round trip through the old `put_meta/2` silently promoted nested
+  `_meta` content to top-level fields instead of preserving the nesting.
+  """
   @spec put_meta(map(), map()) :: map()
   def put_meta(json, meta) when map_size(meta) == 0, do: json
-  def put_meta(json, meta) when is_map(meta), do: Map.merge(json, meta)
+  def put_meta(json, meta) when is_map(meta), do: Map.put(json, "_meta", meta)
 end
 
 # -- Implementation ----------------------------------------------------------

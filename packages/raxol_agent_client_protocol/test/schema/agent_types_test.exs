@@ -68,7 +68,26 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypesTest do
 
       json = Implementation.to_json(impl)
       assert json["title"] == "Test Agent"
-      assert json["x"] == 1
+      assert json["_meta"] == %{"x" => 1}
+      refute Map.has_key?(json, "x")
+    end
+
+    test "to_json/1 nests _meta under the wire \"_meta\" key, matching WireFields.emit_meta/2 (regression: put_meta/2 used to flatten it onto the top-level object)" do
+      impl = %Implementation{name: "test", version: "1.0", _meta: %{"custom" => true}}
+
+      assert Implementation.to_json(impl) == %{
+               "name" => "test",
+               "version" => "1.0",
+               "_meta" => %{"custom" => true}
+             }
+    end
+
+    test "a wire map with an explicit nested _meta object round-trips byte-faithfully" do
+      wire = %{"name" => "test", "version" => "1.0", "_meta" => %{"custom" => true, "n" => 1}}
+
+      assert {:ok, decoded} = Implementation.from_json(wire)
+      assert decoded._meta == %{"custom" => true, "n" => 1}
+      assert Implementation.to_json(decoded) == wire
     end
 
     test "from_json/1 is total: missing required field never raises" do
