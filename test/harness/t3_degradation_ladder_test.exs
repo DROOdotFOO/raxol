@@ -1,0 +1,398 @@
+defmodule Raxol.Harness.T3DegradationLadderTest do
+  @moduledoc """
+  Acceptance suite for roadmap unit T3 (degradation ladder):
+  `docs/proposals/in-flight/harness-ui-roadmap.md` — "Mode pick at
+  startup: caps + env override -> `:inline_log` | `:tmux_conservative` |
+  `:flat`... same fixture renders correct linear transcript with
+  `TERM=dumb`; flat output contains no cursor-move/CUP/scroll sequences
+  (mechanical assert); tmux env picks the conservative tier."
+
+  Four groups, mirroring the unit's brief:
+
+    1. Mode-pick matrix — table + property coverage of
+       `ModeSelect.select/3` over caps x env x geometry combinations.
+    2. THE mechanical flat assert — a representative fixture driven
+       through `FlatAuthority` contains zero escape-sequence tokens.
+    3. R8 demonstrated-red — a deliberately-wrong flat writer (one CUP)
+       is caught by the same mechanical assert; the real `FlatAuthority`
+       passes the identical fixture cleanly.
+    4. Same-fixture parity — `InlineAuthority` and `FlatAuthority`, driven
+       with the same fixture, agree on LINE CONTENT (styling/positioning
+       aside).
+  """
+
+  use ExUnit.Case, async: true
+  use ExUnitProperties
+
+  alias Raxol.Terminal.Capabilities
+  alias Raxol.Test.CrossTerminal.SequenceScanner
+
+  alias Raxol.UI.Rendering.PaintAuthority.{
+    FlatAuthority,
+    InlineAuthority,
+    ModeSelect
+  }
+
+  # ---------------------------------------------------------------------
+  # A deliberately-wrong flat writer (R8 fixture): same shape as
+  # `Raxol.Harness.Test.BuggyAuthority` but scoped to this unit, since
+  # BuggyAuthority's existing streams are all T2b/T2c (footer/history)
+  # shaped, not "a flat writer that shouldn't move the cursor at all."
+  # ---------------------------------------------------------------------
+  defmodule BuggyFlatAuthority do
+    @moduledoc """
+    Emits one CUP (`\\e[1;1H`) before every append -- exactly the shape a
+    broken "let's just reposition to be safe" patch to `FlatAuthority`
+    might introduce. Proves the mechanical zero-escape assert
+    (`flat_is_pure_text?/1` below) actually catches an escape sequence
+    instead of rubber-stamping every input.
+    """
+    @behaviour Raxol.UI.Rendering.PaintAuthority
+
+    @enforce_keys [:device]
+    defstruct [:device]
+
+    @type t :: %__MODULE__{device: IO.device()}
+
+    @impl true
+    def append_sealed(%__MODULE__{device: device} = t, iodata) do
+      IO.write(device, "\e[1;1H")
+      IO.write(device, iodata)
+      t
+    end
+
+    @impl true
+    def repaint_footer(t, _iodata), do: t
+    @impl true
+    def keyframe_footer(t, _iodata), do: t
+    @impl true
+    def with_cursor(t, _region, fun), do: fun.(t)
+    @impl true
+    def resize(t, _width, _height), do: t
+    @impl true
+    def region_top(_t), do: 1
+  end
+
+  # -- shared harness helpers ------------------------------------------
+
+  @width 40
+  @height 10
+  @footer_rows 2
+
+  # A representative session: a mix of plain lines, a multi-line "tool
+  # call" block, and unicode content -- close enough to the shape T7's
+  # journal-fold projection will eventually hand this unit (a list of
+  # sealed blocks, each a list of plain text lines with NO terminator
+  # baked in yet) without depending on T7's JSONL fixtures, which are
+  # journal-envelope shaped, not render-byte shaped (T13a's job to bridge
+  # the two, not this unit's).
+  @fixture_blocks [
+    ["assistant: analyzing the request..."],
+    ["tool_call: ls -la", "  total 24", "  drwxr-xr-x  5 raxol staff  160 ."],
+    ["assistant: found 3 files, café résumé naïve — done."]
+  ]
+
+  defp raw(device) do
+    {_in, out} = StringIO.contents(device)
+    out
+  end
+
+  # Every scanned token is `{:text, _}` -- the mechanical "zero escape
+  # bytes anywhere" assert `FlatAuthority`'s moduledoc commits to. Reuses
+  # the project's existing ANSI tokenizer (CLAUDE.md: reuse
+  # `raxol_terminal`'s parser as the test oracle, never hand-roll one)
+  # rather than a bespoke `\e[` regex.
+  defp flat_is_pure_text?(raw) when is_binary(raw) do
+    raw
+    |> SequenceScanner.scan()
+    |> Enum.all?(&match?({:text, _text}, &1))
+  end
+
+  # ---------------------------------------------------------------------
+  # 1. Mode-pick matrix
+  # ---------------------------------------------------------------------
+
+  describe "ModeSelect.select/3: mode-pick matrix" do
+    test "table: caps x env x geometry combinations pick the documented mode" do
+      tmux_caps = %Capabilities{multiplexer: :tmux}
+      no_caps = nil
+
+      table = [
+        # {description, caps, env, opts, expected}
+        {"plain xterm, no signals -> inline_log", no_caps,
+         %{"TERM" => "xterm-256color"}, [], :inline_log},
+        {"TERM=dumb -> flat", no_caps, %{"TERM" => "dumb"}, [], :flat},
+        {"non-tty (tty?: false) -> flat", no_caps,
+         %{"TERM" => "xterm-256color", :tty? => false}, [], :flat},
+        {"CI=true WITHOUT tty -> flat", no_caps,
+         %{"CI" => "true", :tty? => false}, [], :flat},
+        {"CI=true WITH tty -> inline_log (CI alone is not enough)", no_caps,
+         %{"CI" => "true", :tty? => true, "TERM" => "xterm-256color"}, [],
+         :inline_log},
+        {"TMUX var set -> tmux_conservative", no_caps,
+         %{
+           "TMUX" => "/tmp/tmux-1000/default,1234,0",
+           "TERM" => "tmux-256color"
+         }, [], :tmux_conservative},
+        {"TERM starts with screen, no TMUX var -> tmux_conservative", no_caps,
+         %{"TERM" => "screen-256color"}, [], :tmux_conservative},
+        {"caps.multiplexer == :tmux, no env hints -> tmux_conservative",
+         tmux_caps, %{"TERM" => "xterm-256color"}, [], :tmux_conservative},
+        {"degenerate geometry, no other signals -> flat", no_caps,
+         %{"TERM" => "xterm-256color"}, [rows: 2, footer_rows: 2], :flat},
+        {"adequate geometry -> inline_log", no_caps,
+         %{"TERM" => "xterm-256color"}, [rows: 40, footer_rows: 2],
+         :inline_log},
+        {"geometry unknown (:rows omitted) -> treated as non-degenerate",
+         no_caps, %{"TERM" => "xterm-256color"}, [footer_rows: 2], :inline_log},
+        {"tmux AND degenerate geometry -> flat (degenerate geometry outranks tmux: InlineAuthority's append path clobbers row 1 pre-scroll when region_top pins at 1)",
+         no_caps,
+         %{
+           "TMUX" => "/tmp/tmux-1000/default,1234,0",
+           "TERM" => "tmux-256color"
+         }, [rows: 2, footer_rows: 2], :flat},
+        {"override=flat wins over an otherwise-plain terminal", no_caps,
+         %{"RAXOL_HARNESS_MODE" => "flat", "TERM" => "xterm-256color"}, [],
+         :flat},
+        {"override=tmux wins over TERM=dumb", no_caps,
+         %{"RAXOL_HARNESS_MODE" => "tmux", "TERM" => "dumb"}, [],
+         :tmux_conservative},
+        {"override=inline wins over TERM=dumb AND degenerate geometry", no_caps,
+         %{"RAXOL_HARNESS_MODE" => "inline", "TERM" => "dumb"},
+         [rows: 2, footer_rows: 2], :inline_log},
+        {"override=inline wins over a detected tmux session", tmux_caps,
+         %{"RAXOL_HARNESS_MODE" => "inline", "TMUX" => "x"}, [], :inline_log}
+      ]
+
+      for {description, caps, env, opts, expected} <- table do
+        assert ModeSelect.select(caps, env, opts) == expected, description
+      end
+    end
+
+    test "regression: tmux + degenerate geometry (rows=2, footer_rows=2) -> :flat, not :tmux_conservative" do
+      # Traced on real bytes: at region_top=1 (the only value
+      # ScrollRegionManager can pin when rows=2/footer_rows=2 leaves no
+      # room for a history region), InlineAuthority's append path CUPs to
+      # row 1 on every seal BEFORE the terminal scrolls -- each new block
+      # overwrites the previous one instead of accumulating (`\e[1;1HL1...`
+      # then `\e[1;1HM1...`, `L1` clobbered, never reaching scrollback).
+      # Routing this corner to `:tmux_conservative` still reaches that
+      # same InlineAuthority append path, so the clobber happens whether
+      # or not tmux is detected. Pinned explicitly here (independent of
+      # the table above) so this corner can never silently regress back
+      # to `:tmux_conservative` without a targeted, named test failing.
+      env_var_tmux = %{
+        "TMUX" => "/tmp/tmux-1000/default,1234,0",
+        "TERM" => "tmux-256color"
+      }
+
+      caps_multiplexer_tmux = %Capabilities{multiplexer: :tmux}
+
+      assert ModeSelect.select(nil, env_var_tmux, rows: 2, footer_rows: 2) ==
+               :flat
+
+      assert ModeSelect.select(
+               caps_multiplexer_tmux,
+               %{"TERM" => "xterm-256color"},
+               rows: 2,
+               footer_rows: 2
+             ) == :flat
+    end
+
+    property "explicit override always wins, regardless of any other signal" do
+      check all(
+              term <-
+                member_of(["dumb", "xterm-256color", "screen", "tmux-256color"]),
+              tmux_var <- member_of([nil, "", "/tmp/tmux-1000/default,1234,0"]),
+              ci <- member_of([nil, "true", "false"]),
+              tty? <- boolean(),
+              multiplexer <- member_of([:none, :tmux, :screen]),
+              rows <- one_of([constant(nil), integer(1..3)]),
+              override_mode <- member_of(["flat", "tmux", "inline"]),
+              max_runs: 50
+            ) do
+        env =
+          %{
+            "TERM" => term,
+            "CI" => ci,
+            :tty? => tty?,
+            "RAXOL_HARNESS_MODE" => override_mode
+          }
+          |> maybe_put_tmux(tmux_var)
+
+        caps = %Capabilities{multiplexer: multiplexer}
+        opts = if rows, do: [rows: rows, footer_rows: 2], else: []
+
+        expected =
+          case override_mode do
+            "flat" -> :flat
+            "tmux" -> :tmux_conservative
+            "inline" -> :inline_log
+          end
+
+        assert ModeSelect.select(caps, env, opts) == expected
+      end
+    end
+
+    property "with no override: headless always wins flat regardless of tmux/geometry signals" do
+      check all(
+              tmux_var <- member_of([nil, "/tmp/tmux-1000/default,1234,0"]),
+              multiplexer <- member_of([:none, :tmux, :screen]),
+              rows <- integer(1..40),
+              max_runs: 30
+            ) do
+        env = %{"TERM" => "dumb"} |> maybe_put_tmux(tmux_var)
+        caps = %Capabilities{multiplexer: multiplexer}
+        opts = [rows: rows, footer_rows: 2]
+
+        assert ModeSelect.select(caps, env, opts) == :flat
+      end
+    end
+
+    defp maybe_put_tmux(env, nil), do: env
+    defp maybe_put_tmux(env, ""), do: env
+    defp maybe_put_tmux(env, value), do: Map.put(env, "TMUX", value)
+  end
+
+  # ---------------------------------------------------------------------
+  # 2. THE mechanical flat assert
+  # ---------------------------------------------------------------------
+
+  describe "FlatAuthority: the mechanical zero-escape assert" do
+    test "TERM=dumb fixture, driven through FlatAuthority, contains zero cursor-move/CUP/scroll/escape sequences" do
+      {:ok, device} = StringIO.open("")
+      authority = FlatAuthority.new(device, @width, @height)
+
+      _final =
+        Enum.reduce(@fixture_blocks, authority, fn lines, auth ->
+          FlatAuthority.seal(auth, flat_block(lines))
+        end)
+
+      output = raw(device)
+
+      assert flat_is_pure_text?(output),
+             "flat output must contain zero escape-sequence tokens, got: #{inspect(SequenceScanner.scan(output))}"
+
+      # Linear-transcript correctness: the lines appear, in order, exactly
+      # as sealed (append-only, no reordering, no loss).
+      assert output ==
+               Enum.map_join(@fixture_blocks, "", &flat_block/1)
+    end
+
+    test "resize and footer/keyframe calls on FlatAuthority write zero bytes" do
+      {:ok, device} = StringIO.open("")
+      authority = FlatAuthority.new(device, @width, @height)
+
+      authority =
+        authority
+        |> FlatAuthority.seal("assistant: hello\n")
+        |> FlatAuthority.repaint_footer("should not appear")
+        |> FlatAuthority.keyframe_footer("should not appear either")
+        |> FlatAuthority.resize(80, 24)
+
+      assert FlatAuthority.region_top(authority) == 24
+      assert raw(device) == "assistant: hello\n"
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 3. R8 demonstrated-red
+  # ---------------------------------------------------------------------
+
+  describe "R8 demonstrated-red: the mechanical assert catches a real violation" do
+    test "a flat writer that emits one CUP fails the assert; the real FlatAuthority passes the identical fixture" do
+      {:ok, bad_device} = StringIO.open("")
+      bad = %BuggyFlatAuthority{device: bad_device}
+
+      Enum.each(@fixture_blocks, fn lines ->
+        BuggyFlatAuthority.append_sealed(bad, flat_block(lines))
+      end)
+
+      bad_output = raw(bad_device)
+
+      refute flat_is_pure_text?(bad_output),
+             "RED proof failed: the buggy authority's CUP must be caught by the mechanical assert"
+
+      assert Enum.any?(
+               SequenceScanner.scan(bad_output),
+               &match?({:csi, _params, "H"}, &1)
+             ),
+             "the buggy stream should contain the injected CUP token"
+
+      {:ok, good_device} = StringIO.open("")
+      good = FlatAuthority.new(good_device, @width, @height)
+
+      Enum.reduce(@fixture_blocks, good, fn lines, auth ->
+        FlatAuthority.seal(auth, flat_block(lines))
+      end)
+
+      good_output = raw(good_device)
+
+      assert flat_is_pure_text?(good_output),
+             "GREEN proof failed: the real FlatAuthority must never emit an escape sequence on the same fixture"
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 4. Same-fixture parity: InlineAuthority vs FlatAuthority
+  # ---------------------------------------------------------------------
+
+  describe "same-fixture parity: InlineAuthority and FlatAuthority agree on line content" do
+    test "the same transcript, different substrate: identical LINE CONTENT sequence" do
+      {:ok, inline_device} = StringIO.open("")
+
+      inline_authority =
+        InlineAuthority.new(inline_device, @width, @height, @footer_rows,
+          capabilities: nil
+        )
+
+      _final_inline =
+        Enum.reduce(@fixture_blocks, inline_authority, fn lines, auth ->
+          InlineAuthority.seal(auth, inline_block(lines))
+        end)
+
+      {:ok, flat_device} = StringIO.open("")
+      flat_authority = FlatAuthority.new(flat_device, @width, @height)
+
+      _final_flat =
+        Enum.reduce(@fixture_blocks, flat_authority, fn lines, auth ->
+          FlatAuthority.seal(auth, flat_block(lines))
+        end)
+
+      inline_lines = lines_from_raw(raw(inline_device))
+      flat_lines = lines_from_raw(raw(flat_device))
+
+      expected_lines = Enum.flat_map(@fixture_blocks, & &1)
+
+      assert inline_lines == expected_lines
+      assert flat_lines == expected_lines
+      assert inline_lines == flat_lines
+    end
+  end
+
+  # -- fixture-shaping helpers (test-local, not production contract) ---
+
+  # InlineAuthority's real production contract: iodata already
+  # `\r\n`-terminated per line (mirrors `renderer_seal_once_property_test.exs`'s
+  # `block_gen/0` convention).
+  defp inline_block(lines), do: Enum.map_join(lines, "", &(&1 <> "\r\n"))
+
+  # FlatAuthority's documented convention: plain `\n`-terminated per line.
+  defp flat_block(lines), do: Enum.map_join(lines, "", &(&1 <> "\n"))
+
+  # Recovers the pure content-line sequence from a raw byte stream,
+  # regardless of which authority produced it: scans out every escape
+  # token (CUP, cursor save/restore, DECSTBM, ...) via the same tokenizer
+  # `flat_is_pure_text?/1` uses, keeps only `{:text, _}` runs, then splits
+  # on line terminators (normalizing `\r\n` to `\n` first so both
+  # authorities' conventions compare equal).
+  defp lines_from_raw(raw) do
+    raw
+    |> SequenceScanner.scan()
+    |> Enum.filter(&match?({:text, _text}, &1))
+    |> Enum.map_join("", fn {:text, text} -> text end)
+    |> String.replace("\r\n", "\n")
+    |> String.split("\n")
+    |> Enum.drop(-1)
+  end
+end
