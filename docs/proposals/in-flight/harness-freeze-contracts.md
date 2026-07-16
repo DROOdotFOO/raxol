@@ -47,6 +47,19 @@ need a lockstep update. Concretely:
      kinds, types, statuses, and extra fields: preserve them in raw views,
      skip them in typed folds, never error, never mark damaged. Tolerate
      everything you don't know.
+     - **Carve-out — skip-unknown is a *fold* rule, not a *selection/security*
+       rule (clarified per AF review #569).** "Skip in typed folds" is sound
+       only for associative/commutative folds, where a dropped record yields a
+       degraded-but-consistent result. Two frozen operations are NOT such folds
+       and state their own overriding tolerance:
+       (a) an unknown `trust` value folds **fail-closed to `:tainted`** per
+       §2.1.1 / §2.4 — it is not skipped (skipping would fail *open*); and
+       (b) the conversational **tip** is a `argmax`-by-offset **selection**, not
+       a fold — silently skipping an unknown-but-possibly-conversational record
+       changes the *answer* rather than degrading it, so tip derivation carries
+       its own skew rule (see §1.4 and PROPOSED PA-1, §7). Where a specific
+       section states a fail-closed / selection rule, it overrides this general
+       skip.
 3. **Versioning:** `schema_version` (journal, SemVer, AD-11 upcast-on-read)
    and `Event.v` (envelope) are the only version switches. A minor bump =
    additive growth; readers built against `1.x` read all later `1.y`.
@@ -295,12 +308,22 @@ tip(journal, branch := "main") :=
 # which is otherwise unchanged.
 ```
 
-**The closure rule (frozen).** CONVERSATIONAL is a whitelist and the whitelist
-is the ONLY door: every new record kind and every new event type introduced in
-the future is tip-excluded **unless explicitly added to CONVERSATIONAL**. Adding
-a member is a `schema_version` minor bump; nothing becomes a tip by default. This
-protects every future kind (`annotation`, `schedule`, the reserved `gc`) and
-every future `family:loop` type from silently moving historical tips.
+**The closure rule (frozen).** CONVERSATIONAL is a whitelist **of event
+`type`s** (each implicitly within `kind == "event" ∧ family == "loop"`, the two
+clauses the predicate applies first). It is the ONLY door for **types**: every
+new `family:loop` event type introduced in the future is tip-excluded **unless
+explicitly added to CONVERSATIONAL**. Adding a member is a `schema_version` minor
+bump; nothing becomes a tip by default. **New record *kinds* are tip-excluded
+structurally, not by the whitelist** (clarified per AF review #569): a non-`event`
+kind can never satisfy the predicate's `kind == "event"` clause, so
+whitelist-addition is *unreachable* for kinds — the "unless added to
+CONVERSATIONAL" door does not apply to them. Making a future non-`event` kind
+tip-eligible would require a deliberate amendment of the predicate itself (a
+distinct, heavier change), which the closure rule intentionally does **not**
+provide a default door for. This protects every future kind (`annotation`,
+`schedule`, the reserved `gc`) — excluded by construction — and every future
+`family:loop` type — excluded unless whitelisted — from silently moving
+historical tips.
 
 Excluded by decision: `state_change`, `idle`, every `family: "meta"` event,
 every non-`event` kind. Also excluded by decision though it is `family: "loop"`:
@@ -1325,3 +1348,220 @@ Anything built atop model behavior needs a measured exit criterion.** The probe
 
 This gate does not alter any frozen schema; it constrains *which* probes may
 graduate, not *what* the probe/meta/journal records look like.
+
+---
+
+## 7. PROPOSED amendments — adversarial review #569 (awaiting V ratification)
+
+> **STATUS: PROPOSED — NOT YET FROZEN. Awaiting V ratification.**
+> This is a **constitution one-way-door**. Nothing in §7 is binding until V
+> ratifies it; until then the frozen law is §0–§5 as written. These are drafts
+> responding to the automated adversarial review on PR #569 (personas:
+> Saboteur / Security Auditor / New Hire). The two clean doc-consistency
+> clarifications (closure-rule prose, §1.1; skip-unknown carve-out, §0.2) were
+> applied inline and marked "clarified per AF review #569" — they change no law,
+> only remove literal-reading traps; V may still veto them. Everything below is a
+> **contract ruling** and is drafted-not-applied.
+
+### PA-1 (HIGH) — the only-grows law does not protect tip stability across version skew
+
+**Problem (Saboteur, §0.3 + §1.1 closure + §1.4).** The tip is DERIVED by each
+reader from *its own compiled* CONVERSATIONAL whitelist. Adding a member is a
+`schema_version` MINOR bump (additive, legal). A record of the newly-whitelisted
+type written by a `1.y` writer is legitimately conversational and may be the
+highest-offset conversational record — i.e. the tip. A `1.x` reader (UI fork, not
+lockstep-updated) lacks that type in its whitelist, so it **skips** the record in
+its tip scan (the §0.2 reader-tolerance rule) and selects an *older* record as
+tip. The two readers disagree on the tip of the *same* journal. §0.3 promises
+"readers built against 1.x read all later 1.y" and §1.4 says the tip predicate
+"can read forward" — **both are false for the tip specifically.**
+
+**Root cause (the load-bearing insight).** Skip-unknown is safe for
+associative/commutative **folds** (a dropped record degrades the result
+consistently) but the tip is an **`argmax`-by-offset selection** — dropping the
+max element does not degrade the answer, it *changes* it to a wrong one.
+Reader-side tolerance was written for folds; it does not hold for the one
+selection operation in the contract. §1.4 already forbids *removing* a member
+("removal would silently move historical tips"); the **symmetric additive case
+moves tips for older readers just as much** — it was simply never named.
+
+**Consequence.** U4 reattach/resume lands at the WRONG offset under version skew.
+The freeze's central promise — "a separate UI fork never needs a lockstep update"
+— is FALSE for all tip-derived behavior. This is exactly the failure the freeze
+exists to prevent, so it must be closed before red suites are authored.
+
+**Options considered.**
+
+| Option | What it costs the UI fork | Preserves no-lockstep promise? | Interaction with ratified tip law |
+| --- | --- | --- | --- |
+| **A. Skew-guard: older reader degrades the tip LOUDLY when a hidden newer tip is possible** (recommended) | Zero cost to READ/FOLD/RENDER. On a newer-minor journal, tip-derived *resume* returns a distinguishable `:tip_uncertain` result **only** when an unknown loop-event type sits above the reader's computed tip; the fork then falls back / prompts, instead of silently landing wrong. | **Refines it honestly:** no lockstep to keep reading; a lockstep is needed only to *resume at the tip of a newer-minor journal that actually collides*. Loud-degrade replaces silent-wrong. | **Clean.** Tip stays DERIVED, RECOMPUTABLE, dual-oracle-checkable; whitelist stays the only door; branch-awareness untouched. Adds a reader-seam GUARD only — no stored field, no write-path change. Inert at same-version (minor==minor), so every existing red/property (P-JS2/P-JS8/N-JS*) is unchanged. |
+| **B. CONVERSATIONAL additions become MAJOR bumps, not minor** | Every new turn-signal type (an `item_started`-class addition) becomes a breaking major; a `1.x` reader is walled out of a `2.0` journal *entirely*, even when the new type is nowhere near the tip. | **No** — converts silent-divergence into an explicit version-wall; makes lockstep REQUIRED for all conversational-vocabulary growth. | **Reverses ratified text.** §0.3 ("a minor bump = additive growth") and §1.1 ("adding a member is a minor bump") both flip; breaks AD-11 upcast-on-read (major implies migration). Heaviest constitutional change of the three. |
+| **C. Tip computed version-robustly (writer stamps `tip_eligible` per record)** | Zero ongoing cost; a `1.x` reader reads the `1.y` writer's stamps and gets the *correct* tip under skew — the only option that truly *preserves* correct tips, not just degrades. | **Yes**, strongest form. | **Violates ratified tip law twice.** (1) "The tip is a derived position, NEVER a stored field … storing it is the HEAD-lag bug class" — stamping the predicate result is storing tip computation at write time. (2) Fatally, P-JS2/P-JS8 determinism is verified by **two independent oracles both recomputing** the tip (meta-inv 6 oracle independence); a stamped bool collapses both oracles to one source — the derived-not-stored law is *what makes* the tip dual-oracle-checkable. Also needs a grandfather predicate-fallback for unstamped records, so it doesn't even fully escape version-coupling. |
+
+**RECOMMENDATION: Option A (the skew-guard), in its precise form.** It is the
+only option that keeps *every* ratified property intact (derived-not-stored,
+dual-oracle recomputability, positive-whitelist closure, branch-awareness) while
+making the freeze's promise *true* instead of false. It buys safety by converting
+a silent-wrong-offset into a loud, fork-handleable degrade — the same
+fail-closed philosophy as §0.7 and the taint lattice. Option C trades away the
+ratified oracle-independence that the whole tip-determinism suite rests on; Option
+B nukes minor-only growth. Neither is worth it.
+
+**Precise guard condition (minimally over-broad).** A reader need NOT degrade on
+every higher-minor journal — only when a hidden newer tip is actually possible.
+After computing its best tip on a branch `b`, the reader degrades **iff** there
+exists a higher-offset record on `b` with `kind == "event" ∧ family == "loop" ∧
+type ∉ (the reader's own known loop-type registry)` — i.e. a type that *could* be
+a CONVERSATIONAL member the reader cannot see. If every trailing record past the
+computed tip is a *known* non-conversational record (checkpoint, meta, idle, or a
+known-excluded loop type such as `woken`), the reader's tip is **provably
+correct even under skew** and it does not degrade. So in the common case — a
+newer journal whose new conversational types are not near the tail — the fork
+computes the correct tip and never degrades; degradation fires exactly in the
+collision case, and never spuriously.
+
+**PROPOSED text — amend §0 (the UI-fork promise).** Append to the §0 preamble:
+
+> *Carve-out (PA-1): the "never needs a lockstep update" promise covers
+> reading, folding, and rendering a newer-minor journal — all of which stay
+> healthy. It does **not** promise a correct **tip** (an `argmax` selection, not
+> a fold) when a newer minor may have whitelisted a conversational type the
+> reader cannot see. In that collision the reader MUST return a distinguishable
+> degraded tip (`:tip_uncertain` / offset-with-`:maybe_stale_under_skew`), never
+> a silently-older offset. This is loud-degrade, not lockstep: the fork keeps
+> working and resumes at the tip once updated.*
+
+**PROPOSED text — amend §1.4 (Never / reader-ignores).** Add to the "Never"
+bullet, alongside the existing removal clause:
+
+> *…adding a CONVERSATIONAL member is a legal minor bump, but a reader at an
+> older minor MUST apply the tip skew-guard (PA-1): additive whitelist growth
+> moves the tip forward for newer readers, and an older reader that cannot see
+> the new type MUST degrade the tip loudly rather than select a silently-older
+> one. (Removal moves historical tips for everyone and stays forbidden; addition
+> moves tips only across skew and is neutralized by the skew-guard, not by
+> barring the addition.)*
+
+And to the "ignores safely" list, replace the tip clause with:
+
+> *…the tip predicate as frozen — additions to CONVERSATIONAL ship as minor
+> bumps a same-or-newer reader reads forward; an **older**-minor reader applies
+> the PA-1 skew-guard (degrade, never silently-older).*
+
+**New contour (PROPOSED, additive).** A must-fail red **N-JS-skew**: a `1.x`
+reader computing a tip on a `1.y` journal whose highest conversational record is
+an unknown-to-`1.x` loop type MUST return the degraded result, never the older
+offset. Dead injector: a reader variant that falls through to the older offset
+silently. This is inert at same-version, so it adds coverage without touching any
+existing red.
+
+### PA-2 (HIGH) — `$redacted` is an unauthorized, unattributable evidence-destruction primitive
+
+**Problem (Security Auditor, §0.6 + §1.1 `$redacted`).** The sole legal rewrite
+of the append-only audit log carries **no authorization, actor, or approval**.
+The `$redacted` payload is `%{reason, at_ts}` only. The one operation that
+destroys evidence in an integrity-critical journal is the *least* gated act in
+the contract, while `promote` (a mere knowledge rollup) mandates a human
+`approval_decided` and `refs != []`. There is no `redaction` meta event recording
+*who* authorized the scrub, no envelope `actor` binding, and no negative contour
+asserting an unauthorized redaction is rejected.
+
+**RECOMMENDATION (draft — contract ruling, needs ratification).** Gate the
+rewrite *additively* (no optional→required flip on the payload marker itself):
+
+1. **New `redaction` meta type** (grow-only, §2 registry): payload
+   `%{target_offset, target_id, reason, actor, authorized_by, at_ts}`, emitted
+   `family:meta`, stamped with the envelope `actor` (§2.1). The `$redacted`
+   value stays `%{reason, at_ts}` (unchanged, so no framing/hash disturbance),
+   but a legal redaction MUST be **accompanied by** a `redaction` meta event that
+   binds the actor and authorization.
+2. **Producer-seam law:** a `$redacted` rewrite with no matching `redaction`
+   meta event on the journal is a producer-seam reject — the redaction act is
+   unauthorized-by-construction. (Reader seam stays tolerant: a lone
+   `$redacted` value already in a historical journal still renders as an opaque
+   tombstone; this gates the *act*, not the *tolerance*.)
+3. **New must-fail red N-JS-redact:** an unauthorized/actor-less redaction is
+   rejected; dead injector = a rewrite path that scrubs a payload without
+   emitting the `redaction` meta event.
+
+This mirrors the existing `promote` gating (human approval + non-empty refs) and
+brings the most destructive operation up to at least the provenance bar of the
+least destructive one. It is additive (new meta type + new contour), so it fits
+under only-grows without reversing §0.6.
+
+### PA-3 (MEDIUM) — cache-riding prefix byte-identity is undefined for parked runs
+
+**Problem (New Hire/Saboteur, §3.1 vs Bounded parking, §3).** Cache-riding
+requires a prefix "byte-identical to the primary loop's *most recent* request
+prefix at `tip_offset`." A run may be parked up to `park_timeout_ms`, by which
+time the primary loop has advanced — the contract never says whether byte-identity
+is measured against tip-at-submit or the live primary. A parked run riding a
+stale prefix cannot cache-hit, quietly defeating the economic premise (P-U12.3).
+
+**RECOMMENDATION (draft).** Freeze the ride target to a **fixed offset captured
+at submit**: the prefix is byte-identical to the primary's request prefix at the
+`tip_offset` observed **when the run was submitted/parked**, not the live primary
+at execution time. Rationale: the ride target must be immutable for byte-identity
+to be testable-without-a-provider (§3.1's own test hook: capture two built
+requests, compare). A run whose fixed target has been invalidated by primary
+advance rides a *known* offset and simply may miss the live cache — an accepted,
+*predictable* cost, versus an undefined one. Add one frozen sentence to §3.1 and a
+property that the ride prefix equals the submit-time tip prefix.
+
+### PA-4 (MEDIUM) — cross-branch tip validation has no negative contour
+
+**Problem (Saboteur, §1.1 same-branch-tip vs §1.3 N-JS1).** §1.1 requires a
+checkpoint's `tip_offset` to name a conversational record on the checkpoint's
+*own* `branch_id`. N-JS1's dead injector only covers a tip pointing at a
+*non-conversational* record; N-JS8 covers the tip *scan* dropping `branch_id`. A
+checkpoint whose `tip_offset` names a *conversational record on the wrong branch*
+has no must-fail red — that bug ships green.
+
+**RECOMMENDATION (draft).** Add a must-fail red **N-JS-xbranch**: appending a
+checkpoint whose `tip_offset` names a conversational record on a `branch_id`
+other than the checkpoint's own is `{:error, :cross_branch_tip}` at the
+constructor/append seam (no record appended, offset counter untouched — same
+shape as N-JS1). Dead injector: a checkpoint constructor that validates
+`conversational?` but omits the same-branch clause. Purely additive contour.
+
+### PA-5 (MEDIUM) — taint entry-classification is unfrozen with no negative control
+
+**Problem (Security Auditor, §2.1 taint point 2).** The derivation algebra is
+robust, but *which* sources are tainted is per-deployment policy "NOT frozen
+here," with **no negative contour / dead injector** at the `tool_result`
+producer. Two implementations can legally disagree on what is tainted, and the
+mutation suite cannot catch a mis-classification at the source — the fail-closed
+lattice is only as sound as an out-of-contract policy the reds never exercise.
+
+**RECOMMENDATION (draft — narrow).** Keep *which* sources are tainted as policy
+(that judgment is genuinely deployment-specific and should stay unfrozen), but
+freeze the **existence and fail-closed default** of classification and give it a
+dead injector: (a) every `tool_result` MUST carry an entry-trust classification
+(absence ⇒ fail-closed `:tainted`, never untainted-by-omission); (b) a must-fail
+red **N-U11-classify**: a producer that emits a `tool_result` with no entry-trust
+classification, or defaults it to `:trusted`, is rejected. This freezes the
+*contract of the boundary* (a classification exists and fails closed) without
+freezing the *policy content* (which sources) — closing the "no negative control
+at the source" gap while respecting the deliberate policy carve-out.
+
+### LOW items (noted, not drafted)
+
+- **§1.1 `consent_class` enforcement (Security, LOW).** "Sharing/export honors
+  `consent_class`" names no enforcer and no dead injector; `policy_amended`
+  ordering vs a concurrent decision-time gate fold is unpinned. Recommend a
+  follow-up contour once an export/sharing seam exists; deferrable — no red is
+  authored against it yet.
+- **§1.1 GC covering-checkpoint (New Hire, LOW).** Restoring from an *old*
+  checkpoint whose `tip_offset` was truncated below `low_watermark` relies on a
+  "covering checkpoint" that is not defined. Already `@tag :gc` deferred (OQ-JS2);
+  fold the covering-checkpoint definition into the GC ruling when GC lands.
+- **Self-containment of the constitution (New Hire, MEDIUM).** Load-bearing
+  obligations `meta-inv 1/2/5/6` and numerous `AD-*/FI-*` IDs are referenced but
+  never enumerated here; they live in `harness-invariants.md`, which is not frozen
+  by this doc. Recommend **version-pinning** those siblings (a commit/rev pin
+  block in §0) rather than inlining all of them — a freeze doc should pin every
+  obligation it makes binding. Drafted as a recommendation; the pin block itself
+  awaits V's call on which rev to pin.
+
+---
+
