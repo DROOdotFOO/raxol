@@ -490,6 +490,13 @@ defmodule Raxol.UI.Components.Harness.Block do
     first_line(action)
   end
 
+  defp summary(%__MODULE__{kind: :diff, content: %{path: path}}) do
+    case path do
+      "" -> "(no path)"
+      p -> p
+    end
+  end
+
   defp summary(%__MODULE__{
          kind: :opaque,
          raw_kind: raw_kind,
@@ -697,6 +704,10 @@ defmodule Raxol.UI.Components.Harness.Block do
   @action_paths [[:action]]
   @blast_radius_paths [[:blast_radius]]
   @options_paths [[:options]]
+  @path_paths [[:path], [:content, :path]]
+  @old_paths [[:old], [:content, :old]]
+  @new_paths [[:new], [:content, :new]]
+  @language_paths [[:language], [:content, :language]]
 
   defp event_refs(events) when is_list(events) do
     Enum.map(events, fn
@@ -747,6 +758,7 @@ defmodule Raxol.UI.Components.Harness.Block do
     do: extract_tool_call_content(events)
 
   defp extract_content(:approval, events), do: extract_approval_content(events)
+  defp extract_content(:diff, events), do: extract_diff_content(events)
   defp extract_content(_kind, events), do: %{text: extract_text(events)}
 
   defp extract_text(events) do
@@ -800,10 +812,27 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp extract_approval_content(events) do
     action = events |> find_in_events(@action_paths) |> to_display_text()
-    blast_radius = find_in_events(events, @blast_radius_paths)
+    blast_radius = find_in_events(events, @blast_radius_paths) || %{}
     options = find_in_events(events, @options_paths) || []
 
     %{action: action, blast_radius: blast_radius, options: options}
+  end
+
+  # No producer resolves the `:diff` kind yet (T7's BlockBuilder only ever
+  # emits :message/:reasoning/:tool_call/:approval; see
+  # `Raxol.Harness.Projection.BlockBuilder`) -- there is no wire convention
+  # to conform to. `:path`/`:old`/`:new`/`:language` mirror
+  # `Raxol.UI.Components.Harness.DiffViewer`'s own prop names (T5's
+  # BodyProvider content-map contract), the component this content feeds.
+  # A flat `:text` field (the generic fallback every other kind gets)
+  # cannot carry old-vs-new distinctly, so `:diff` needs its own shape.
+  defp extract_diff_content(events) do
+    %{
+      path: events |> find_in_events(@path_paths) |> to_display_text(),
+      old: events |> find_in_events(@old_paths) |> to_display_text(),
+      new: events |> find_in_events(@new_paths) |> to_display_text(),
+      language: find_in_events(events, @language_paths)
+    }
   end
 
   defp find_in_events(events, paths) when is_list(events) do

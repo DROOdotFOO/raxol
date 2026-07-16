@@ -378,6 +378,61 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
     end
   end
 
+  describe "diff content extraction (T5 seam: path/old/new/language, not :text)" do
+    test "gathers path/old/new/language into a structured content map" do
+      events = [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{
+            path: "lib/orders/total.ex",
+            old: "def total(x), do: x\n",
+            new: "def total(x), do: x * 2\n",
+            language: "elixir"
+          }
+        }
+      ]
+
+      block = Block.from_events(:diff, events, fold: :expanded)
+
+      assert block.content == %{
+               path: "lib/orders/total.ex",
+               old: "def total(x), do: x\n",
+               new: "def total(x), do: x * 2\n",
+               language: "elixir"
+             }
+    end
+
+    test "the folded summary shows the path, not '(empty)'" do
+      events = [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{path: "lib/orders/total.ex", old: "a\n", new: "b\n"}
+        }
+      ]
+
+      block = Block.from_events(:diff, events, fold: :folded)
+      rendered = Block.render(block, %{width: 80})
+      texts = flat_texts(rendered)
+
+      assert Enum.any?(texts, &(&1 =~ "lib/orders/total.ex"))
+      refute Enum.any?(texts, &(&1 == "(empty)"))
+    end
+
+    test "a missing path falls back to a plain, non-crashing summary" do
+      events = [
+        %{id: 1, type: :item_completed, payload: %{old: "a\n", new: "b\n"}}
+      ]
+
+      block = Block.from_events(:diff, events, fold: :folded)
+      rendered = Block.render(block, %{width: 80})
+      texts = flat_texts(rendered)
+
+      assert Enum.any?(texts, &(&1 =~ "(no path)"))
+    end
+  end
+
   describe "unicode content — width via TextMeasure, not String.length" do
     test "CJK header truncation obeys display width (double-width chars), not codepoint count" do
       # Each CJK char is 2 display columns; 10 chars = 20 columns, well over
