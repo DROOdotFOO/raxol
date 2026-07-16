@@ -818,8 +818,7 @@ defmodule Raxol.Agent.Red.U8Gates do
             :ok
 
           {call, expected} ->
-            {:violation,
-             {:predicate_wrong, call.effect_class, call.egress, expected}}
+            {:violation, {:predicate_wrong, call.effect_class, call.egress, expected}}
         end
       end)
     end
@@ -894,14 +893,10 @@ defmodule Raxol.Agent.Red.U8Gates do
 
           cond do
             authorize_tag(gate, s2, other_tool) != :escalated ->
-              {:violation,
-               {:once_grant_admitted_other_tool,
-                authorize_tag(gate, s2, other_tool)}}
+              {:violation, {:once_grant_admitted_other_tool, authorize_tag(gate, s2, other_tool)}}
 
             not match?({:escalate, _, _}, gate.evaluate(s2, tainted_other)) ->
-              {:violation,
-               {:tainted_request_bypassed_fold,
-                gate.evaluate(s2, tainted_other)}}
+              {:violation, {:tainted_request_bypassed_fold, gate.evaluate(s2, tainted_other)}}
 
             true ->
               :ok
@@ -963,8 +958,7 @@ defmodule Raxol.Agent.Red.U8Gates do
             {:violation, {:unknown_class_proceeded, unknown_class.effect_class}}
 
           not gate.escalate?(non_boolean_egress) ->
-            {:violation,
-             {:non_boolean_egress_proceeded, non_boolean_egress.egress}}
+            {:violation, {:non_boolean_egress_proceeded, non_boolean_egress.egress}}
 
           true ->
             :ok
@@ -1004,8 +998,7 @@ defmodule Raxol.Agent.Red.U8Gates do
               {:violation, {:once_not_consumed_live, live_tag}}
 
             rebuilt_tag != live_tag ->
-              {:violation,
-               {:consumption_not_reconstructed, live_tag, rebuilt_tag}}
+              {:violation, {:consumption_not_reconstructed, live_tag, rebuilt_tag}}
 
             true ->
               :ok
