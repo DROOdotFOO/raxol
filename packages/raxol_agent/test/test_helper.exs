@@ -17,7 +17,14 @@ end
 # (not test/support/, which elixirc_paths compiles) — load it explicitly.
 Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 
+# Red-suite support (permanent failing-first contours) lives under test/raxol/…/red/
+# support/ (also outside test/support/) — load it explicitly, same idiom.
+Code.require_file("raxol/agent/red/support/u10_compaction.ex", __DIR__)
+
 # :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
 # until their units (U4–U9) land. :mutation — negative-control checklists
-# (meta-invariant m4), run on demand, never in regular CI.
-ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation])
+# (meta-invariant m4), run on demand, never in regular CI. :harness_red —
+# permanent failing-first red contours authored against not-yet-implemented
+# seams (they fail by construction; run with `--only harness_red`). Their
+# CI-green control companions are NOT tagged and run every pass.
+ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation, :harness_red])
