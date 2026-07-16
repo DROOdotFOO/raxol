@@ -22,9 +22,13 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
 
     * `:topic_id` -- the capability handed to the agent out of band at Mandate
       authorization (see the "Capability handoff" section of `AgentStream`).
-      Required; absent, every entry point here is a silent no-op.
+      Required; must match Xochi's topic format (16-64 char base64url). A missing
+      or malformed topic makes every entry point here a silent no-op.
     * `:xochi_api_url` -- announce host. Optional; defaults to
-      `xochi_config.base_url` (the same host the swap ran against).
+      `xochi_config.base_url` (the same host the swap ran against). An explicit
+      value is honored only when its host matches that swap host or the
+      `config :raxol_payments, :agent_stream_hosts` allowlist; otherwise the
+      announce is skipped rather than sent to an unrecognized host.
     * `:mandate_hash` -- telemetry-only, never on the wire. Optional.
     * `:jitter_ms`, `:req_options` -- forwarded to `AgentStream` when present.
 
@@ -59,6 +63,11 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
   # valid wire amounts (toAmount is nullable). None reveal the real route.
   @redacted_chain 0
   @redacted_from_amount "0"
+
+  # Capability topic id format, byte-matching Xochi's `TOPIC_ID_RE`
+  # (`agentStream.ts`): 128-bit random, base64url, 16-64 chars. A topic that does
+  # not match is rejected before anything is announced.
+  @topic_id_re ~r/^[A-Za-z0-9_-]{16,64}$/
 
   @doc """
   Announce the execute (non-terminal) event and stash the route for the terminal
@@ -127,6 +136,7 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
     with {_, %{} = stream} <- {:not_configured, Map.get(context, :agent_stream)},
          {_, topic_id} when is_binary(topic_id) and topic_id != "" <-
            {:no_topic_id, Map.get(stream, :topic_id)},
+         {_, true} <- {:bad_topic_id, Regex.match?(@topic_id_re, topic_id)},
          {_, {:ok, wallet}} <- {:no_wallet, Map.fetch(context, :wallet)},
          {_, {:ok, url}} <- {:no_announce_host, resolve_url(stream, context)} do
       {:ok, build_config(stream, url, topic_id, wallet)}
@@ -165,19 +175,37 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncer do
     |> put_optional(:req_options, Map.get(stream, :req_options))
   end
 
-  # An explicit announce host wins; otherwise reuse the swap's Xochi base_url.
+  # Resolve the announce host. An explicit `xochi_api_url` is honored only when
+  # its host matches the swap's own Xochi host or an operator-configured
+  # allowlist; otherwise the swap's `xochi_config.base_url` is used. This stops a
+  # poisoned context from redirecting signed announces (event + agentWallet +
+  # signature) to an attacker-controlled endpoint.
   defp resolve_url(stream, context) do
+    swap_url = get_in(context, [:xochi_config, :base_url])
+
     case Map.get(stream, :xochi_api_url) do
       url when is_binary(url) and url != "" ->
-        {:ok, url}
+        if announce_host_allowed?(url, swap_url), do: {:ok, url}, else: :error
 
       _ ->
-        case get_in(context, [:xochi_config, :base_url]) do
+        case swap_url do
           url when is_binary(url) and url != "" -> {:ok, url}
           _ -> :error
         end
     end
   end
+
+  defp announce_host_allowed?(url, swap_url) do
+    host = uri_host(url)
+    host != nil and (host == uri_host(swap_url) or host in allowed_hosts())
+  end
+
+  defp allowed_hosts do
+    Application.get_env(:raxol_payments, :agent_stream_hosts, [])
+  end
+
+  defp uri_host(url) when is_binary(url), do: URI.parse(url).host
+  defp uri_host(_url), do: nil
 
   # Public settlement: disclose the full route. Any other preference (stealth /
   # shielded / unset) settles privately, so the row is redacted to status only.

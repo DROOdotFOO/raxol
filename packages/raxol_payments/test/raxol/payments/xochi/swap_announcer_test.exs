@@ -119,6 +119,35 @@ defmodule Raxol.Payments.Xochi.SwapAnnouncerTest do
       assert :skip ==
                SwapAnnouncer.config(context(%{agent_stream: stream_config(%{topic_id: ""})}))
     end
+
+    test "skips a topic_id that fails the Xochi format" do
+      # too short (< 16 chars), and illegal characters, are both rejected.
+      assert :skip ==
+               SwapAnnouncer.config(context(%{agent_stream: stream_config(%{topic_id: "short"})}))
+
+      assert :skip ==
+               SwapAnnouncer.config(
+                 context(%{agent_stream: stream_config(%{topic_id: "has spaces and bangs!!"})})
+               )
+    end
+
+    test "skips an announce host that is neither the swap host nor allowlisted" do
+      ctx =
+        context(%{agent_stream: stream_config(%{xochi_api_url: "https://evil.example"})})
+
+      assert :skip == SwapAnnouncer.config(ctx)
+    end
+
+    test "honors an announce host on the configured allowlist" do
+      Application.put_env(:raxol_payments, :agent_stream_hosts, ["relay.xochi.example"])
+      on_exit(fn -> Application.delete_env(:raxol_payments, :agent_stream_hosts) end)
+
+      ctx =
+        context(%{agent_stream: stream_config(%{xochi_api_url: "https://relay.xochi.example"})})
+
+      assert {:ok, %{xochi_api_url: "https://relay.xochi.example"}} =
+               SwapAnnouncer.config(ctx)
+    end
   end
 
   describe "diagnostics: announce_skipped telemetry" do
