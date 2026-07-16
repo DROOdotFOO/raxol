@@ -34,9 +34,9 @@ defmodule Raxol.Terminal.ScrollRegionManager do
 
   DECSTBM (`CSI top;bottom r`) requires `top < bottom` -- a 2-row minimum
   region. This module always requests `top = 1`, so the region is only
-  valid when `bottom = region_top(rows, footer_rows) >= 2`. When
+  valid when `bottom = history_bottom(rows, footer_rows) >= 2`. When
   `rows - footer_rows < 2` (a terminal too short for its footer plus a
-  1-row history minimum), `region_top/2`'s clamp still returns `1` (so
+  1-row history minimum), `history_bottom/2`'s clamp still returns `1` (so
   row-range math never sees a zero/negative value) -- but emitting
   `CSI 1;1 r` for that `top == bottom` request is a LIE: real terminals
   (xterm, wezterm, kitty) silently IGNORE it, leaving whatever region was
@@ -51,7 +51,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   (T2c's footer viewport, T13a) can detect the condition and adapt --
   e.g. falling back to redrawing the footer every frame instead of relying
   on the pin. The documented limit: **the footer cannot be pinned when
-  `rows < footer_rows + 2`.** `region_top/2` still returns a sane (`>= 1`)
+  `rows < footer_rows + 2`.** `history_bottom/2` still returns a sane (`>= 1`)
   row in this case, purely for append-path row-range math -- it does not
   mean the pin is active; callers must consult `degenerate?/1` for that.
 
@@ -72,10 +72,10 @@ defmodule Raxol.Terminal.ScrollRegionManager do
 
   ## Geometry-gated resize emission
 
-  `resize/2` re-emits DECSTBM only when the new `region_top` differs from
+  `resize/2` re-emits DECSTBM only when the new `history_bottom` differs from
   the current one -- the same comparison `geometry_changed?/2` exposes.
   DECSTBM has a documented VT100 side effect: it homes the cursor. A
-  width-only resize (rows unchanged, so `region_top` is unchanged too) has
+  width-only resize (rows unchanged, so `history_bottom` is unchanged too) has
   nothing to re-pin; re-emitting the identical `CSI 1;(H-N) r` in that case
   would move the cursor as a side effect for zero geometric benefit.
   `resize/2` skips the write (zero bytes emitted) when geometry is
@@ -146,22 +146,22 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   capabilities and does not re-emit any content -- that decision and its
   bytes belong entirely to T2b. What it DOES expose is the one fact that
   decision needs from the region-geometry side: `geometry_changed?/2`, a
-  pure comparison of two states' `region_top`, so a future caller can tell
+  pure comparison of two states' `history_bottom`, so a future caller can tell
   "this resize actually moved the history/footer split" apart from a
-  width-only resize that left `region_top` untouched (in which case there
+  width-only resize that left `history_bottom` untouched (in which case there
   is nothing for policy (B) to reflow in the first place, independent of
   whatever the capability probe says). Nothing here upgrades to (B); this
   is the seam, not the upgrade.
   """
 
-  @enforce_keys [:device, :rows, :footer_rows, :region_top, :degenerate?]
-  defstruct [:device, :rows, :footer_rows, :region_top, :degenerate?]
+  @enforce_keys [:device, :rows, :footer_rows, :history_bottom, :degenerate?]
+  defstruct [:device, :rows, :footer_rows, :history_bottom, :degenerate?]
 
   @type t :: %__MODULE__{
           device: IO.device(),
           rows: pos_integer(),
           footer_rows: non_neg_integer(),
-          region_top: pos_integer(),
+          history_bottom: pos_integer(),
           degenerate?: boolean()
         }
 
@@ -176,8 +176,8 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   rather than a zero/negative DECSTBM range (which xterm and friends treat
   inconsistently -- clamping here means this module never emits one).
   """
-  @spec region_top(pos_integer(), non_neg_integer()) :: pos_integer()
-  def region_top(rows, footer_rows)
+  @spec history_bottom(pos_integer(), non_neg_integer()) :: pos_integer()
+  def history_bottom(rows, footer_rows)
       when is_integer(rows) and rows > 0 and is_integer(footer_rows) and
              footer_rows >= 0 do
     max(rows - footer_rows, 1)
@@ -185,7 +185,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
 
   @doc """
   True when `rows`/`footer_rows` cannot form a valid 2-row-minimum DECSTBM
-  region (`region_top(rows, footer_rows) < 2`) -- see the moduledoc's
+  region (`history_bottom(rows, footer_rows) < 2`) -- see the moduledoc's
   "Degenerate terminals" section. In this case the footer cannot be
   pinned: `region_set_bytes/2` emits a full-screen release instead of a
   `top == bottom` request a real terminal would silently ignore.
@@ -194,14 +194,14 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   def degenerate?(rows, footer_rows)
       when is_integer(rows) and rows > 0 and is_integer(footer_rows) and
              footer_rows >= 0 do
-    region_top(rows, footer_rows) < 2
+    history_bottom(rows, footer_rows) < 2
   end
 
   @doc """
   The DECSTBM byte sequence for a given `rows`/`footer_rows` split.
 
   Ordinary case: `CSI 1;(H-N) r`, 1-based inclusive, byte-identical to
-  `Raxol.UI.Rendering.PaintAuthority.Dialect.region_set(1, region_top(rows,
+  `Raxol.UI.Rendering.PaintAuthority.Dialect.region_set(1, history_bottom(rows,
   footer_rows))` (see the package-boundary note in the moduledoc for why
   this is a local copy rather than an alias).
 
@@ -217,22 +217,22 @@ defmodule Raxol.Terminal.ScrollRegionManager do
     if degenerate?(rows, footer_rows) do
       "\e[r"
     else
-      "\e[1;#{region_top(rows, footer_rows)}r"
+      "\e[1;#{history_bottom(rows, footer_rows)}r"
     end
   end
 
   @doc """
   History region row range, 1-based inclusive, TOP-anchored: `1..(H-N)`.
-  `region_top/2`'s clamp guarantees `top >= 1`, so this is never empty.
+  `history_bottom/2`'s clamp guarantees `top >= 1`, so this is never empty.
   """
   @spec history_range(t()) :: Range.t()
-  def history_range(%__MODULE__{region_top: top}), do: 1..top//1
+  def history_range(%__MODULE__{history_bottom: top}), do: 1..top//1
 
   @doc """
   Footer row range, 1-based inclusive, OUTSIDE the scrolling region and
   below it: `(H-N+1)..H`. Explicit `//1` step (never the bare `first..last`
   form): on a degenerate terminal where `rows <= footer_rows`,
-  `region_top/2`'s clamp gives history its minimum 1 row first, which can
+  `history_bottom/2`'s clamp gives history its minimum 1 row first, which can
   leave NO rows for the requested footer at all (`top >= rows`) -- without
   the explicit step, `first..last` silently REVERSES into a descending
   range when `last < first` (Elixir's legacy two-arg `Range` behavior),
@@ -241,12 +241,12 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   empty instead.
   """
   @spec footer_range(t()) :: Range.t()
-  def footer_range(%__MODULE__{rows: rows, region_top: top}),
+  def footer_range(%__MODULE__{rows: rows, history_bottom: top}),
     do: (top + 1)..rows//1
 
   @doc "Current history-region row count (`H - N`) -- the footer boundary."
-  @spec region_top(t()) :: pos_integer()
-  def region_top(%__MODULE__{region_top: top}), do: top
+  @spec history_bottom(t()) :: pos_integer()
+  def history_bottom(%__MODULE__{history_bottom: top}), do: top
 
   @doc "The `footer_rows` (`N`) this manager was started/resized with. Constant across resize."
   @spec footer_rows(t()) :: non_neg_integer()
@@ -260,7 +260,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   True if this manager's current geometry cannot form a valid DECSTBM
   region (see the moduledoc's "Degenerate terminals" section) -- i.e. the
   footer is NOT actually pinned right now, regardless of what
-  `region_top/1`/`footer_range/1` report for row-range math. Callers
+  `history_bottom/1`/`footer_range/1` report for row-range math. Callers
   needing to know whether the pin is real (T2c's footer viewport, T13a)
   must check this rather than assuming `start/3`/`resize/2` always
   succeeded.
@@ -276,7 +276,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   itself also consults this comparison to skip a redundant DECSTBM
   re-emit on a width-only resize (see "Geometry-gated resize emission").
 
-  Note: this compares `region_top` ONLY. It assumes both states share the
+  Note: this compares `history_bottom` ONLY. It assumes both states share the
   same `footer_rows` (true for any pair of states produced by `start/3`
   followed by `resize/2` calls, since `footer_rows` is held constant across
   resize) -- it is not a general "these two states are otherwise identical"
@@ -284,8 +284,10 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   `footer_rows`.
   """
   @spec geometry_changed?(t(), t()) :: boolean()
-  def geometry_changed?(%__MODULE__{region_top: a}, %__MODULE__{region_top: b}),
-    do: a != b
+  def geometry_changed?(%__MODULE__{history_bottom: a}, %__MODULE__{
+        history_bottom: b
+      }),
+      do: a != b
 
   # ---------------------------------------------------------------------
   # The I/O seam -- device is a parameter (mirrors T2d's InlineDriver: a
@@ -295,7 +297,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
 
   @doc """
   Sets the history/footer split for a freshly-started inline session:
-  computes `region_top = rows - footer_rows` (clamped, see `region_top/2`)
+  computes `history_bottom = rows - footer_rows` (clamped, see `history_bottom/2`)
   and writes the DECSTBM region-set bytes to `device` exactly once. Returns
   the new manager state.
 
@@ -314,14 +316,14 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   def start(device, rows, footer_rows)
       when is_integer(rows) and rows > 0 and is_integer(footer_rows) and
              footer_rows >= 0 do
-    top = region_top(rows, footer_rows)
+    top = history_bottom(rows, footer_rows)
     IO.write(device, region_set_bytes(rows, footer_rows))
 
     %__MODULE__{
       device: device,
       rows: rows,
       footer_rows: footer_rows,
-      region_top: top,
+      history_bottom: top,
       degenerate?: degenerate?(rows, footer_rows)
     }
   end
@@ -329,9 +331,9 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   @doc """
   Recomputes the region for a new row count, holding `footer_rows`
   constant, and re-emits the DECSTBM region-set bytes to the state's
-  device -- but ONLY when the new `region_top` differs from the current
+  device -- but ONLY when the new `history_bottom` differs from the current
   one (see the moduledoc's "Geometry-gated resize emission" section). A
-  width-only resize (rows unchanged, so `region_top` unchanged) writes
+  width-only resize (rows unchanged, so `history_bottom` unchanged) writes
   ZERO bytes: there is nothing to re-pin, and DECSTBM's cursor-homing side
   effect would otherwise fire for no geometric reason. When the split
   point does move, exactly one DECSTBM (or, in the degenerate case, one
@@ -346,13 +348,13 @@ defmodule Raxol.Terminal.ScrollRegionManager do
         %__MODULE__{
           device: device,
           footer_rows: footer_rows,
-          region_top: current_top
+          history_bottom: current_top
         } =
           state,
         new_rows
       )
       when is_integer(new_rows) and new_rows > 0 do
-    new_top = region_top(new_rows, footer_rows)
+    new_top = history_bottom(new_rows, footer_rows)
 
     if new_top != current_top do
       IO.write(device, region_set_bytes(new_rows, footer_rows))
@@ -361,7 +363,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
     %{
       state
       | rows: new_rows,
-        region_top: new_top,
+        history_bottom: new_top,
         degenerate?: degenerate?(new_rows, footer_rows)
     }
   end

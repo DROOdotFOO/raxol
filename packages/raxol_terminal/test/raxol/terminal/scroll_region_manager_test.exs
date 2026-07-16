@@ -21,18 +21,18 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
     output
   end
 
-  describe "region_top/2 -- pure geometry" do
+  describe "history_bottom/2 -- pure geometry" do
     test "H - N for the ordinary case" do
-      assert SRM.region_top(30, 3) == 27
+      assert SRM.history_bottom(30, 3) == 27
     end
 
     test "clamps to 1 when footer_rows >= rows (degenerate terminal)" do
-      assert SRM.region_top(5, 5) == 1
-      assert SRM.region_top(5, 10) == 1
+      assert SRM.history_bottom(5, 5) == 1
+      assert SRM.history_bottom(5, 10) == 1
     end
 
     test "footer_rows: 0 -- history region is the whole screen" do
-      assert SRM.region_top(24, 0) == 24
+      assert SRM.history_bottom(24, 0) == 24
     end
   end
 
@@ -55,15 +55,15 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
   end
 
   describe "degenerate?/2 -- pure geometry" do
-    test "false for an ordinary split (region_top >= 2)" do
+    test "false for an ordinary split (history_bottom >= 2)" do
       refute SRM.degenerate?(30, 3)
       refute SRM.degenerate?(24, 1)
-      # The exact boundary: region_top == 2 is the smallest VALID region
+      # The exact boundary: history_bottom == 2 is the smallest VALID region
       # (top=1, bottom=2, top < bottom holds).
       refute SRM.degenerate?(5, 3)
     end
 
-    test "true when region_top would be < 2 (a top == bottom DECSTBM the terminal would ignore)" do
+    test "true when history_bottom would be < 2 (a top == bottom DECSTBM the terminal would ignore)" do
       assert SRM.degenerate?(2, 2)
       assert SRM.degenerate?(3, 2)
       assert SRM.degenerate?(5, 4)
@@ -72,7 +72,7 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
   end
 
   describe "region_set_bytes/2 -- degenerate case (tiny terminals)" do
-    # Each of these has region_top(rows, footer_rows) < 2 -- a terminal too
+    # Each of these has history_bottom(rows, footer_rows) < 2 -- a terminal too
     # short for its footer plus a 1-row history minimum. The historical bug
     # (see the false-confidence-flip test below) emitted a lying
     # `CSI 1;1 r` here; a real terminal ignores a `top == bottom` DECSTBM
@@ -98,7 +98,7 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
       # This is the exact orientation v1 of the roadmap had backwards
       # (roadmap: "region = rows 1..H-N (history, scrolling); footer
       # outside — v1 had the orientation backwards"). Swapping
-      # `region_top/2`'s formula to `footer_rows` instead of
+      # `history_bottom/2`'s formula to `footer_rows` instead of
       # `rows - footer_rows` (the historical bug) flips these two
       # assertions to fail -- demonstrated red during development by
       # temporarily inverting the implementation and confirming both
@@ -135,7 +135,7 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
 
       assert SRM.rows(state) == 40
       assert SRM.footer_rows(state) == 4
-      assert SRM.region_top(state) == 36
+      assert SRM.history_bottom(state) == 36
       refute SRM.degenerate?(state)
     end
   end
@@ -151,22 +151,22 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
 
         assert SRM.degenerate?(state)
         assert contents(sio) == "\e[r"
-        # region_top/1 still returns a sane (>= 1) row for append-path
+        # history_bottom/1 still returns a sane (>= 1) row for append-path
         # math even though the pin itself is not active.
-        assert SRM.region_top(state) >= 1
+        assert SRM.history_bottom(state) >= 1
       end
     end
   end
 
   describe "resize/2" do
-    test "recomputes region_top keeping footer_rows constant" do
+    test "recomputes history_bottom keeping footer_rows constant" do
       {:ok, sio} = StringIO.open("")
       state = SRM.start(sio, 24, 2)
-      assert SRM.region_top(state) == 22
+      assert SRM.history_bottom(state) == 22
 
       state = SRM.resize(state, 40)
       assert SRM.footer_rows(state) == 2
-      assert SRM.region_top(state) == 38
+      assert SRM.history_bottom(state) == 38
       assert SRM.rows(state) == 40
     end
 
@@ -188,12 +188,12 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
       refute contents(sio) =~ "\e[H\e[2J"
     end
 
-    test "shrinking below footer_rows clamps region_top to 1, never 0 or negative -- and never lies with a 1;1r DECSTBM" do
+    test "shrinking below footer_rows clamps history_bottom to 1, never 0 or negative -- and never lies with a 1;1r DECSTBM" do
       {:ok, sio} = StringIO.open("")
       state = SRM.start(sio, 24, 3)
       state = SRM.resize(state, 2)
 
-      assert SRM.region_top(state) == 1
+      assert SRM.history_bottom(state) == 1
 
       # This is the FLIPPED false-confidence assertion: the old test here
       # asserted `contents(sio) =~ "\e[1;1r"` as SUCCESS. That was a false
@@ -274,7 +274,7 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
   end
 
   describe "geometry_changed?/2 -- the (B)-upgrade seam" do
-    test "false when region_top is unchanged (e.g. a width-only resize)" do
+    test "false when history_bottom is unchanged (e.g. a width-only resize)" do
       {:ok, sio} = StringIO.open("")
       before_state = SRM.start(sio, 24, 3)
       after_state = %{before_state | rows: 24}
@@ -332,7 +332,7 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
       assert Enum.min(SRM.history_range(state)) == 1
       assert Enum.max(SRM.history_range(state)) <= SRM.rows(state)
 
-      # On a degenerate terminal (rows <= footer_rows), region_top/2's
+      # On a degenerate terminal (rows <= footer_rows), history_bottom/2's
       # clamp gives history its minimum 1 row first, which can leave NO
       # rows for the footer at all -- an empty footer_range is then the
       # CORRECT outcome (not a violation): there is nowhere left to put it.
