@@ -324,6 +324,39 @@ defmodule Raxol.Harness.SealFrontierTest do
     end
   end
 
+  describe "classify/3 (the single-step primitive)" do
+    test "step order: committed skips, committable commits, blocker stops, out of bounds stops" do
+      entries = [
+        %{finalized() | committed?: true},
+        finalized(),
+        running(),
+        finalized()
+      ]
+
+      assert SealFrontier.classify(entries, 0, true) == :skip
+      assert SealFrontier.classify(entries, 1, true) == :commit
+      assert SealFrontier.classify(entries, 2, true) == :stop
+      assert SealFrontier.classify(entries, 4, true) == :stop
+      assert SealFrontier.classify([], 0, true) == :stop
+    end
+
+    test "an already-committed entry skips even when it is also pending input" do
+      # The committed check precedes committability: the committed flags
+      # are authoritative, and a committed entry is history whatever its
+      # other marks say.
+      entries = [pending(%{finalized() | committed?: true}), finalized()]
+      assert SealFrontier.classify(entries, 0, false) == :skip
+    end
+
+    test "is_last is computed against the full entry list" do
+      # A running message: held while last, released by a later entry.
+      assert SealFrontier.classify([running(:message)], 0, true) == :stop
+
+      assert SealFrontier.classify([running(:message), running()], 0, true) ==
+               :commit
+    end
+  end
+
   describe "seal display mode policy" do
     test "per-kind print-once fidelity" do
       # Committed scrollback cannot be re-folded (static terminal text),
@@ -396,6 +429,54 @@ defmodule Raxol.Harness.SealFrontierTest do
 
         refute post.will_commit
         assert post.tail_start == result.cursor
+      end
+    end
+
+    property "both walks agree with a reference walk of repeated classify/3 calls" do
+      # classify/3 is the public single-step primitive; the two walks are
+      # implemented as suffix walks for performance and are SPECIFIED to
+      # produce results identical to calling classify/3 in a loop. This
+      # property is that specification, closed over arbitrary states --
+      # without it, classify/3 would be a third, independent copy of the
+      # step order, free to drift from the walks undetected.
+      check all(
+              entries <- StreamData.list_of(entry_gen(), max_length: 12),
+              turn_running? <- StreamData.boolean()
+            ) do
+        {ref_tail, ref_committed} =
+          classify_reference_walk(entries, turn_running?)
+
+        scan = SealFrontier.scan_frontier(entries, turn_running?)
+
+        assert scan == %{
+                 tail_start: ref_tail,
+                 will_commit: ref_committed != []
+               }
+
+        result =
+          SealFrontier.commit_walk(entries, turn_running?, [], fn seen, index ->
+            {:ok, [index | seen]}
+          end)
+
+        assert result.cursor == ref_tail
+        assert Enum.reverse(result.acc) == ref_committed
+      end
+    end
+
+    # The naive reference walk: literally call classify/3 per index from 0,
+    # collecting the indices it says to commit, until it says :stop.
+    defp classify_reference_walk(entries, turn_running?, index \\ 0, acc \\ []) do
+      case SealFrontier.classify(entries, index, turn_running?) do
+        :stop ->
+          {index, Enum.reverse(acc)}
+
+        :skip ->
+          classify_reference_walk(entries, turn_running?, index + 1, acc)
+
+        :commit ->
+          classify_reference_walk(entries, turn_running?, index + 1, [
+            index | acc
+          ])
       end
     end
   end

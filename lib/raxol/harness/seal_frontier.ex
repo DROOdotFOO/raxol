@@ -62,13 +62,20 @@ defmodule Raxol.Harness.SealFrontier do
   already ran:
 
     1. `pending_input?` true -> not committable, UNCONDITIONALLY, regardless
-       of turn state. An entry awaiting a user answer (e.g. a permission
-       prompt) still has a rendered form that changes when the prompt
-       resolves; committing it now (print-once) would freeze the "waiting"
-       form forever. This check runs BEFORE the idle relaxation below on
-       purpose: idle relaxation exists to forgive a *stale running flag*,
-       never a live pending-input mark, which is exactly why pending input
-       is checked first and unconditionally.
+       of turn state. The invariant behind the flag: the entry's rendered
+       form can still change in response to user interaction, so committing
+       it now (print-once) would freeze a form the user is about to change.
+       The sole producer today (`Raxol.Harness.Surface.frontier_entries/1`)
+       feeds it from BOTH known instances of that invariant: a live
+       `:approval` block still waiting on the user's answer (the
+       permission-prompt case -- per `Raxol.UI.Components.Harness.Block`'s
+       own contract, "a live approval block is, by definition, waiting on
+       the user"; dormant until a producer emits live blocks), and the
+       surface's one-advance foldable window on the newest block (a fold
+       toggle is the pending interaction). This check runs BEFORE the idle
+       relaxation below on purpose: idle relaxation exists to forgive a
+       *stale running flag*, never a live pending-input mark, which is
+       exactly why pending input is checked first and unconditionally.
     2. `not turn_running?` -> committable (the idle relaxation). A producer
        can leave a `running?` flag set on an entry after the turn has
        already ended (a finalize event missed at a transition boundary);
@@ -131,8 +138,11 @@ defmodule Raxol.Harness.SealFrontier do
   avoid `length/1` and `Enum.at/2` costing O(n) per step, which would make
   a full walk O(n^2)) rather than by literally calling `classify/3` in a
   loop -- but they are specified to produce results IDENTICAL to repeatedly
-  calling `classify/3`, and that equivalence is covered by the
-  scan/walk-agreement property test.
+  calling `classify/3`, and that equivalence is covered directly by the
+  classify-agreement property test (a reference walk built from repeated
+  `classify/3` calls, compared against both walks for arbitrary generated
+  states), alongside the scan/walk-agreement property tying the two walks
+  to each other.
 
   ## `scan_frontier/3` -- the read-only projection
 
@@ -190,18 +200,29 @@ defmodule Raxol.Harness.SealFrontier do
 
   ## `seal_display_mode/1`
 
-  The print-once per-kind fidelity policy lives here, in one place,
-  because committed scrollback cannot be re-folded after the fact (it is
-  static terminal text once written): `:reasoning` collapses to its
-  marker (reasoning traces are the least useful thing to keep expanded
-  forever in scrollback), `:tool_call` truncates (tool output can be
-  arbitrarily long; a truncated summary is what belongs in permanent
-  history), and `:diff` stays expanded always (a diff is the key artifact
-  of an edit -- there is no useful truncated form of it). Everything else
-  -- `:message`, `:approval`, `:opaque`, and any unrecognized kind --
+  The print-once per-kind fidelity policy TABLE, declared here so the
+  consumer that eventually applies it reads it from one place instead of
+  restating it. Committed scrollback cannot be re-folded after the fact
+  (it is static terminal text once written), hence per-kind fidelity is
+  a seal-time decision: `:reasoning` collapses to its marker (reasoning
+  traces are the least useful thing to keep expanded forever in
+  scrollback), `:tool_call` truncates (tool output can be arbitrarily
+  long; a truncated summary is what belongs in permanent history), and
+  `:diff` stays expanded always (a diff is the key artifact of an edit --
+  there is no useful truncated form of it). Everything else --
+  `:message`, `:approval`, `:opaque`, and any unrecognized kind --
   defaults to `:expanded`: the safe default for a kind this policy has no
   specific opinion about is to show it in full, not to guess at a
   collapse/truncate rule that might hide something that mattered.
+
+  NOT YET WIRED: no live seal path consults this policy today.
+  `Raxol.Harness.Surface`'s `seal_block/2` seals a block at its current
+  fold state, and the truncated tool-output rendering this table calls
+  for does not exist yet -- both are renderer-level work owned by the
+  commit-cap / frame-order follow-up, which consumes this table rather
+  than inventing its own. Until that lands, sealed tool output is NOT
+  bounded on its way into permanent scrollback; the table is the declared
+  policy (corpus-tested for the values), not an enforced one.
   """
 
   @type entry :: %{
@@ -221,8 +242,19 @@ defmodule Raxol.Harness.SealFrontier do
   @doc """
   Whether a single entry may commit (seal) right now. See the moduledoc's
   "Decision order and rationale" section -- the order below is load-bearing.
+
+  The two boolean arguments are positional and adjacent -- transposing them
+  silently miscomputes the frontier, so the @spec names them and every
+  caller in this codebase passes them via identically-named variables
+  (`turn_running?`, then the is-last flag). Keyword-izing them was
+  considered and declined: this signature is pinned by the ported
+  reference design, and the walks are the only intended callers.
   """
-  @spec committable?(entry(), boolean(), boolean()) :: boolean()
+  @spec committable?(
+          entry :: entry(),
+          turn_running? :: boolean(),
+          is_last? :: boolean()
+        ) :: boolean()
   def committable?(entry, turn_running?, is_last?) do
     pending_input? = Map.get(entry, :pending_input?, false)
     running? = Map.get(entry, :running?, false)
@@ -246,19 +278,23 @@ defmodule Raxol.Harness.SealFrontier do
   and therefore everything after it this frame -- is not committable). See
   the moduledoc's "`classify/3`" section for the full step order.
   """
-  @spec classify([entry()], non_neg_integer(), boolean()) :: step()
+  @spec classify(
+          entries :: [entry()],
+          i :: non_neg_integer(),
+          turn_running? :: boolean()
+        ) :: step()
   def classify(entries, i, turn_running?) do
-    total = length(entries)
-    is_last? = i + 1 >= total
-
-    case Enum.at(entries, i) do
-      nil ->
+    # One O(i) traversal: the head of the dropped suffix is the entry, and
+    # an empty rest IS the is-last check -- no length/1 + Enum.at/2 double
+    # pass over the whole list.
+    case Enum.drop(entries, i) do
+      [] ->
         :stop
 
-      entry ->
+      [entry | rest] ->
         cond do
           Map.get(entry, :committed?, false) -> :skip
-          not committable?(entry, turn_running?, is_last?) -> :stop
+          not committable?(entry, turn_running?, rest == []) -> :stop
           true -> :commit
         end
     end
@@ -272,34 +308,35 @@ defmodule Raxol.Harness.SealFrontier do
   commit pass would not consume) and `will_commit` (whether that pass would
   do anything at all). Never mutates `entries`. See the moduledoc.
   """
-  @spec scan_frontier([entry()], boolean(), keyword()) :: scan()
+  @spec scan_frontier(
+          entries :: [entry()],
+          turn_running? :: boolean(),
+          opts :: keyword()
+        ) :: scan()
   def scan_frontier(entries, turn_running?, opts \\ []) do
     cursor = Keyword.get(opts, :cursor, 0)
-    total = length(entries)
 
-    {tail_start, will_commit} =
-      scan_walk(entries, total, cursor, turn_running?, false)
-
-    %{tail_start: tail_start, will_commit: will_commit}
+    entries
+    |> Enum.drop(cursor)
+    |> scan_walk(cursor, turn_running?, false)
   end
 
-  defp scan_walk(_entries, total, index, _turn_running?, will_commit)
-       when index >= total,
-       do: {index, will_commit}
+  # Suffix walk: pattern-match `[entry | rest]` carrying the absolute
+  # index as a counter -- `rest == []` is the is-last check -- so the
+  # whole scan is O(n), never O(n) `Enum.at/2` per step.
+  defp scan_walk([], index, _turn_running?, will_commit),
+    do: %{tail_start: index, will_commit: will_commit}
 
-  defp scan_walk(entries, total, index, turn_running?, will_commit) do
-    is_last? = index + 1 >= total
-    entry = Enum.at(entries, index)
-
+  defp scan_walk([entry | rest], index, turn_running?, will_commit) do
     cond do
       Map.get(entry, :committed?, false) ->
-        scan_walk(entries, total, index + 1, turn_running?, will_commit)
+        scan_walk(rest, index + 1, turn_running?, will_commit)
 
-      not committable?(entry, turn_running?, is_last?) ->
-        {index, will_commit}
+      not committable?(entry, turn_running?, rest == []) ->
+        %{tail_start: index, will_commit: will_commit}
 
       true ->
-        scan_walk(entries, total, index + 1, turn_running?, true)
+        scan_walk(rest, index + 1, turn_running?, true)
     end
   end
 
@@ -311,7 +348,13 @@ defmodule Raxol.Harness.SealFrontier do
   successful emit. See the moduledoc's "`commit_walk/5`" section for the
   full emit-then-mark and failure-halt contract.
   """
-  @spec commit_walk([entry()], boolean(), acc, emit_fn(), keyword()) ::
+  @spec commit_walk(
+          entries :: [entry()],
+          turn_running? :: boolean(),
+          acc,
+          emit_fn(),
+          opts :: keyword()
+        ) ::
           %{
             entries: [entry()],
             cursor: non_neg_integer(),
@@ -321,76 +364,88 @@ defmodule Raxol.Harness.SealFrontier do
         when acc: term()
   def commit_walk(entries, turn_running?, acc, emit_fn, opts \\ []) do
     cursor = Keyword.get(opts, :cursor, 0)
-    total = length(entries)
+    {prefix, suffix} = Enum.split(entries, cursor)
 
-    commit_step(entries, total, cursor, turn_running?, acc, emit_fn, 0)
+    commit_step(
+      suffix,
+      Enum.reverse(prefix),
+      cursor,
+      turn_running?,
+      acc,
+      emit_fn,
+      0
+    )
+  end
+
+  # Suffix walk, same shape as scan_walk/4: `rev_walked` accumulates the
+  # already-walked entries in reverse (marking a just-emitted entry
+  # committed is an O(1) prepend, never an O(n) List.update_at/3), and the
+  # final entry list is one reverse-onto of the untouched remainder -- the
+  # whole walk is O(n).
+  defp commit_step([], rev_walked, index, _turn_running?, acc, _emit, count) do
+    %{
+      entries: Enum.reverse(rev_walked),
+      cursor: index,
+      committed: count,
+      acc: acc
+    }
   end
 
   defp commit_step(
-         entries,
-         total,
-         index,
-         _turn_running?,
-         acc,
-         _emit_fn,
-         committed
-       )
-       when index >= total do
-    %{entries: entries, cursor: index, committed: committed, acc: acc}
-  end
-
-  defp commit_step(
-         entries,
-         total,
+         [entry | rest],
+         rev_walked,
          index,
          turn_running?,
          acc,
          emit_fn,
-         committed
+         count
        ) do
-    is_last? = index + 1 >= total
-    entry = Enum.at(entries, index)
-
     cond do
       Map.get(entry, :committed?, false) ->
         commit_step(
-          entries,
-          total,
+          rest,
+          [entry | rev_walked],
           index + 1,
           turn_running?,
           acc,
           emit_fn,
-          committed
+          count
         )
 
-      not committable?(entry, turn_running?, is_last?) ->
-        %{entries: entries, cursor: index, committed: committed, acc: acc}
+      not committable?(entry, turn_running?, rest == []) ->
+        halt_walk(rev_walked, [entry | rest], index, count, acc)
 
       true ->
         case emit_fn.(acc, index) do
           {:ok, new_acc} ->
-            updated_entries =
-              List.update_at(entries, index, &Map.put(&1, :committed?, true))
+            sealed = Map.put(entry, :committed?, true)
 
             commit_step(
-              updated_entries,
-              total,
+              rest,
+              [sealed | rev_walked],
               index + 1,
               turn_running?,
               new_acc,
               emit_fn,
-              committed + 1
+              count + 1
             )
 
           {:error, :write_failed, new_acc} ->
-            %{
-              entries: entries,
-              cursor: index,
-              committed: committed,
-              acc: new_acc
-            }
+            halt_walk(rev_walked, [entry | rest], index, count, new_acc)
         end
     end
+  end
+
+  # The walk stopped at `remaining`'s head (a blocker, or a failed emit):
+  # rebuild the full entry list with the stopping entry left untouched and
+  # the cursor strictly before it.
+  defp halt_walk(rev_walked, remaining, index, count, acc) do
+    %{
+      entries: Enum.reverse(rev_walked, remaining),
+      cursor: index,
+      committed: count,
+      acc: acc
+    }
   end
 
   # -- cursor maintenance -------------------------------------------------------
