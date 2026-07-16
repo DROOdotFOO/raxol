@@ -13,22 +13,19 @@ defmodule Raxol.Agent.Red.U6SteerRedTest do
 
   ## Red-first discipline
 
-  Every test here drives `Raxol.Agent.Steer.resolve/2`, which is a skeleton that
-  raises `:not_implemented`. So every test FAILS today — that is the point: the
-  contract is frozen in executable form before the code exists, and the unit is
-  built until these go green (drop `@moduletag :harness_red`), never the reverse.
+  Every test here drives `Raxol.Agent.Steer.resolve/2`. This suite was authored
+  red-first — the contract frozen in executable form before the code existed —
+  and the unit was built until these went green, never the reverse. U6 has now
+  landed, so `@moduletag :harness_red` is dropped and this suite runs GREEN in
+  CI.
 
-  `@moduletag :harness_red` is excluded in `test_helper.exs`, so CI stays green
-  while this suite is red. The contours live in `Raxol.Agent.Red.SteerContours`
-  (the single source of truth); the in-CI negative controls
-  (`u6_steer_controls_test.exs`) run those same contours against dead injectors
-  to prove none of these reds is vacuous.
+  The contours live in `Raxol.Agent.Red.SteerContours` (the single source of
+  truth); the in-CI negative controls (`u6_steer_controls_test.exs`) run those
+  same contours against dead injectors to prove none of these tests is vacuous.
 
   Part of the red-first fan-out authored against docs PR #569.
   """
   use ExUnit.Case, async: true
-
-  @moduletag :harness_red
 
   alias Raxol.Agent.Red.SteerContours
   alias Raxol.Agent.Steer
