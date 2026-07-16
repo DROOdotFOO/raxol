@@ -514,8 +514,16 @@ defmodule Raxol.Terminal.ANSI.StateMachine do
   end
 
   defp emit_osc_sequence(state) do
-    params = String.split(state.payload_buffer, ";", trim: true)
-    [cmd | rest] = params
+    # `trim: true` on an empty (or all-`;`) payload yields `[]` — an OSC
+    # terminated with no content (e.g. `ESC ] ST`, reachable via a
+    # SUB-cancelled DCS followed by `ESC ]`). Emit it with an empty
+    # command rather than crashing: totality over arbitrary input is the
+    # parser's contract (see the DCS/OSC property suites).
+    {cmd, rest} =
+      case String.split(state.payload_buffer, ";", trim: true) do
+        [] -> {"", []}
+        [cmd | rest] -> {cmd, rest}
+      end
 
     {:emit, %{state | state: :ground},
      %{
