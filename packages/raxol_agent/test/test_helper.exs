@@ -17,7 +17,39 @@ end
 # (not test/support/, which elixirc_paths compiles) — load it explicitly.
 Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 
+# The U11-R red suite's oracle + generators live under test/raxol/agent/red/
+# support (also outside elixirc_paths) — load them explicitly. Guard against a
+# concurrent red PR having already required them.
+for f <- [
+      "raxol/agent/red/support/meta_oracle.ex",
+      "raxol/agent/red/support/meta_journal_gen.ex"
+    ] do
+  mod =
+    case f do
+      "raxol/agent/red/support/meta_oracle.ex" -> Raxol.Agent.Red.MetaOracle
+      _ -> Raxol.Agent.Red.MetaJournalGen
+    end
+
+  unless Code.ensure_loaded?(mod), do: Code.require_file(f, __DIR__)
+end
+
 # :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
 # until their units (U4–U9) land. :mutation — negative-control checklists
 # (meta-invariant m4), run on demand, never in regular CI.
-ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation])
+#
+# :harness_red — permanent failing-first red suites authored BEFORE their
+# implementation lands (here: U11-R meta family + provenance/taint). Excluded
+# from every regular run so CI stays GREEN while the contract is pinned; the
+# suite goes green as its unit (U11-I) implements `Raxol.Agent.Meta`. The
+# negative CONTROLS for the same contours are NOT tagged :harness_red — they run
+# in CI to prove each red has teeth (meta-invariant m4).
+ExUnit.start(
+  exclude: [
+    :slow,
+    :integration,
+    :docker,
+    :pending_unit,
+    :mutation,
+    :harness_red
+  ]
+)
