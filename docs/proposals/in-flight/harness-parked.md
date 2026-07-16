@@ -101,6 +101,19 @@ U9-I (the U9 implementation unit) or a dedicated load-path-hardening unit.
 
 ---
 
+## Named-deferred (eval-first ruling, 2026-07-16)
+
+From V's external-cohort ruling (`harness-eval-first-analysis.md`, dispositions
+binding). These are deliberately deferred, not dropped — named here so they stay
+tracked.
+
+| What | Why deferred / what unblocks it |
+|---|---|
+| **Plugin supply chain for the agent surface** (OpenClaw ran ~12% malicious packages in its registry) — an agent surface that loads third-party plugins inherits that exposure | Blind spot #3 in the ruling: deferred but named. Unblocks when a plugin-loading agent surface is actually on the roadmap; must not ship a third-party plugin loader without a supply-chain answer |
+| **Fluid ontology (U19 / L2)** — keep deferring to **Wave 5** | Nobody in the cohort self-modifies their own extraction schemas; it is the least-supported piece of scaffolding and must wait until the substrate under it (U14/U18) is proven on the U23 eval harness. Already Wave 5 in `harness-roadmap.md`; this records the ruling's explicit "keep deferring" disposition |
+
+---
+
 ## Resolved
 
 *(none yet — move items here with their closing PR/commit as they land)*
