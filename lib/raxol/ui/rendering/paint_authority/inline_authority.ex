@@ -9,7 +9,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   for real" — it composes:
 
     * **T2a's `Raxol.Terminal.ScrollRegionManager`** for the DECSTBM
-      region/footer split (`region_top/1`, `resize/2` re-set the region
+      region/footer split (`history_bottom/1`, `resize/2` re-set the region
       exactly once, never a full clear).
     * **T2d's device seam** — the output sink is a parameter
       (`IO.device()`), the same `:device` T2a and `InlineDriver` already
@@ -27,10 +27,10 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   cursor last was, only falling back to scroll-at-the-boundary once the
   bottom row is reached. This module models that explicitly with a
   `next_row` cursor tracked in its own state: `append_sealed/2` positions
-  at `min(next_row, region_top)` (the next unfilled history row, clamped
+  at `min(next_row, history_bottom)` (the next unfilled history row, clamped
   to the region's bottom once full), writes, and advances `next_row` by
   the number of lines written (also clamped). Once `next_row` reaches
-  `region_top`, every subsequent append targets that same bottom row and
+  `history_bottom`, every subsequent append targets that same bottom row and
   relies on the terminal's own index-at-region-boundary semantics to
   scroll — the row is never re-addressed with different content, only
   ever pushed one row closer to eviction into scrollback.
@@ -53,7 +53,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   catches a real immutable-prefix violation instead of rubber-stamping
   every input. It does not reproduce, and was never meant to reproduce,
   the filler bug described above. There is no code path in this module
-  that CUPs to any row other than `min(next_row, region_top)`.
+  that CUPs to any row other than `min(next_row, history_bottom)`.
 
   ## The cursor-ownership protocol
 
@@ -108,16 +108,24 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
   alias Raxol.Terminal.Capabilities
   alias Raxol.Terminal.ScrollRegionManager
+  alias Raxol.UI.Rendering.PaintAuthority.ContentGuard
   alias Raxol.UI.Rendering.PaintAuthority.Dialect
 
   @enforce_keys [:region, :width, :reflow_capable?, :next_row]
-  defstruct [:region, :width, :reflow_capable?, :next_row]
+  defstruct [
+    :region,
+    :width,
+    :reflow_capable?,
+    :next_row,
+    in_cursor_bracket: false
+  ]
 
   @type t :: %__MODULE__{
           region: ScrollRegionManager.t(),
           width: pos_integer(),
           reflow_capable?: boolean(),
-          next_row: pos_integer()
+          next_row: pos_integer(),
+          in_cursor_bracket: boolean()
         }
 
   @doc """
@@ -193,16 +201,46 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   `Raxol.Harness.Test.SealOracle.assert_seal_newline_terminated/1`'s
   discipline) — a dangling partial line would leave the emulator's
   reported column mid-row, and would under-count `next_row`'s advance
-  against what the terminal actually did.
+  against what the terminal actually did. This is now an ENFORCED
+  precondition, not just prose: `seal/2` raises `ArgumentError` when
+  `iodata` does not end in `\\r\\n`.
+
+  ## Content is not trusted (`ContentGuard`)
+
+  `iodata` is agent/LLM-originated content, not renderer-generated
+  bytes — it can carry ANYTHING a language model chooses to emit,
+  including control sequences that would otherwise defeat every
+  invariant this module exists to hold from the INSIDE (a `\\e[2J`
+  wipes native scrollback same as if this module had written it
+  itself; a `\\e[1;1H` repaints an already-sealed row same as any other
+  bug class this module's fill-down design defends against). Before
+  the newline check and before `append_sealed/2` ever sees the bytes,
+  `seal/2` runs `iodata` through
+  `Raxol.UI.Rendering.PaintAuthority.ContentGuard.sanitize_line/1`,
+  which allowlists printable text, the shared SGR vocabulary, and
+  `\\t`/`\\r`/`\\n`, neutralizing everything else. See that module's
+  moduledoc for the exact grammar and the "visible-honest" neutralization
+  rationale.
   """
   @spec seal(t(), iodata()) :: t()
   def seal(%__MODULE__{} = t, iodata) do
-    with_cursor(t, :history, fn inner -> append_sealed(inner, iodata) end)
+    binary = IO.iodata_to_binary(iodata)
+
+    unless String.ends_with?(binary, "\r\n") do
+      raise ArgumentError,
+            "PaintAuthority.InlineAuthority.seal/2 requires \\r\\n-terminated " <>
+              "iodata (a sealed block must be a whole number of lines); got " <>
+              inspect(binary)
+    end
+
+    sanitized = ContentGuard.sanitize_line(binary)
+
+    with_cursor(t, :history, fn inner -> append_sealed(inner, sanitized) end)
   end
 
   @impl true
   def append_sealed(%__MODULE__{region: region, next_row: next_row} = t, iodata) do
-    bottom = ScrollRegionManager.region_top(region)
+    bottom = ScrollRegionManager.history_bottom(region)
     device = region.device
     target_row = min(next_row, bottom)
 
@@ -212,7 +250,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     # scrolls up (oldest history row evicted toward scrollback), the
     # cursor stays on that same bottom row. No other code path in this
     # module ever addresses any other row.
-    IO.write(device, cup(target_row))
+    IO.write(device, Dialect.cursor_position(target_row))
     IO.write(device, iodata)
 
     lines_written = count_lines(iodata)
@@ -237,6 +275,17 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   end
 
   @impl true
+  def with_cursor(%__MODULE__{in_cursor_bracket: true}, cursor_region, fun)
+      when cursor_region in [:history, :footer] and is_function(fun, 1) do
+    raise "PaintAuthority.InlineAuthority.with_cursor/3 called while a " <>
+            "save/restore bracket is already open -- the single hardware " <>
+            "DECSC register has exactly one slot, so a nested save would " <>
+            "silently clobber the outer bracket's saved position before " <>
+            "its own restore runs. Route the nested operation through the " <>
+            "SAME bracket instead of opening a second one (see the " <>
+            "moduledoc's cursor-ownership protocol section)."
+  end
+
   def with_cursor(%__MODULE__{region: region} = t, cursor_region, fun)
       when cursor_region in [:history, :footer] and is_function(fun, 1) do
     device = region.device
@@ -249,8 +298,16 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     # bracket that violates the sole-owner guarantee for every caller
     # after this one. `after` runs on both normal return and unwind; the
     # exception itself is never swallowed, only the restore is guaranteed.
+    #
+    # `in_cursor_bracket: true` is set on the state passed INTO `fun` (not
+    # on `t` itself) so a nested `with_cursor/3` call reached from inside
+    # `fun` hits the guard clause above instead of opening a second
+    # bracket. The flag is cleared again on the way out (whatever `fun`
+    # returned) so the NEXT top-level `with_cursor/3` call on this
+    # authority is not permanently locked out.
     try do
-      fun.(t)
+      result = fun.(%{t | in_cursor_bracket: true})
+      %{result | in_cursor_bracket: false}
     after
       IO.write(device, Dialect.cursor_restore())
     end
@@ -273,8 +330,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         [:raxol, :ui, :paint_authority, :reflow_capable_resize],
         %{},
         %{
-          old_region_top: old_region.region_top,
-          new_region_top: new_region.region_top
+          old_region_top: ScrollRegionManager.history_bottom(old_region),
+          new_region_top: ScrollRegionManager.history_bottom(new_region)
         }
       )
     end
@@ -286,15 +343,13 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         # Existing on-screen content is untouched (D-PA (A): no
         # re-emission) — only where FUTURE appends resume is clamped to
         # the (possibly smaller) new bottom row.
-        next_row: min(next_row, new_region.region_top)
+        next_row: min(next_row, ScrollRegionManager.history_bottom(new_region))
     }
   end
 
   @impl true
   def region_top(%__MODULE__{region: region}),
-    do: ScrollRegionManager.region_top(region)
-
-  defp cup(row), do: "\e[#{row};1H"
+    do: ScrollRegionManager.history_bottom(region)
 
   defp count_lines(iodata) do
     iodata
