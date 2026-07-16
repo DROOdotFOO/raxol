@@ -46,6 +46,7 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
   """
 
   alias Raxol.AgentClientProtocol.Schema.{AgentTypes, ClientTypes, LifecycleExtras, Unstable}
+  alias Raxol.AgentClientProtocol.Ext.Schema, as: ExtSchema
 
   @typedoc "Which side sends this row's wire method."
   @type direction :: :client_to_agent | :agent_to_client | :both
@@ -418,7 +419,45 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
     }
   ]
 
-  @rows @agent_rows ++ @client_rows ++ @protocol_rows
+  # -- Reattach extension rows (ext: :raxol, additive; acp-reattach-design.md
+  # §3.2's "two wire entrances, one attach seam" + the ONE generic
+  # `_raxol/session.record` frame for non-`session_update` kinds). All rows:
+  # `layer: :app`, `capability: nil` (Tier-1 gating is advertised via
+  # `initialize.result._meta["raxol.io"]`; an unimplemented optional callback
+  # answers -32601, identical to an unadvertised capability). W18b ships the
+  # two load-bearing rows; the other `_raxol/session.*` a2c notifications
+  # (caught_up/lagged/closed) and the c2a `_raxol/session.detach` are emitted
+  # as raw notifications today and become additive rows later (design §3.2).
+  #
+  #   * `_raxol/session.load` reuses `LoadSessionRequest`/`LoadSessionResponse`
+  #     verbatim (identical shape; the rider rides `_meta` — §3.1).
+  #   * `_raxol/session.record` carries `Ext.Schema.SessionRecordNotification`.
+  @ext_rows [
+    %{
+      wire: "_raxol/session.load",
+      direction: :client_to_agent,
+      kind: :request,
+      callback: :raxol_load_session,
+      params: AgentTypes.LoadSessionRequest,
+      result: AgentTypes.LoadSessionResponse,
+      capability: nil,
+      layer: :app,
+      ext: :raxol
+    },
+    %{
+      wire: "_raxol/session.record",
+      direction: :agent_to_client,
+      kind: :notification,
+      callback: :raxol_session_record,
+      params: ExtSchema.SessionRecordNotification,
+      result: nil,
+      capability: nil,
+      layer: :app,
+      ext: :raxol
+    }
+  ]
+
+  @rows @agent_rows ++ @client_rows ++ @protocol_rows ++ @ext_rows
 
   # -- Compile-time invariants -------------------------------------------------
 

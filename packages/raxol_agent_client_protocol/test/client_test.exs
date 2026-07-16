@@ -48,17 +48,27 @@ defmodule Raxol.AgentClientProtocol.ClientTest do
         end
 
       assert Client.callbacks() == expected
-      # 9 client rows; $/cancel_request (direction: both) has callback: nil.
-      assert length(Client.callbacks()) == 9
+      # 9 core client rows ($/cancel_request, direction: both, has callback:
+      # nil), plus the additive `_raxol/session.record` ext row = 10.
+      assert length(Client.callbacks()) == 10
     end
 
     test "every client-side row has params != nil (all callbacks arity 2)" do
       assert Enum.all?(Client.callbacks(), fn {_cb, arity, _wire} -> arity == 2 end)
     end
 
-    test "session/update is the sole notification-kind callback" do
-      notification_rows = Enum.filter(Codegen.rows(:client), &(&1.kind == :notification))
+    test "session/update is the sole CORE notification-kind callback" do
+      notification_rows =
+        Enum.filter(Codegen.rows(:client), &(&1.kind == :notification and &1.ext == nil))
+
       assert Enum.map(notification_rows, & &1.callback) == [:session_update]
+
+      # The additive reattach ext contributes exactly one a2c notification
+      # callback (`_raxol/session.record`); it never displaces the core one.
+      ext_notifications =
+        Enum.filter(Codegen.rows(:client), &(&1.kind == :notification and &1.ext == :raxol))
+
+      assert Enum.map(ext_notifications, & &1.callback) == [:raxol_session_record]
     end
 
     test "behaviour_info/1 declares every table callback plus init/1, handle_ext_request/3, handle_ext_notification/3" do
