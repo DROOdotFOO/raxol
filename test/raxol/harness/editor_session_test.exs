@@ -469,6 +469,9 @@ defmodule Raxol.Harness.EditorSessionTest do
   # editor timeout (review finding: unbounded synchronous wait)
   # ---------------------------------------------------------------------
 
+  # The fake wedged editor is `sleep 3` spawned via sh — Unix-only tools;
+  # on Windows the spawn fails instantly and the timeout path never runs.
+  @tag :unix_only
   test "a wedged editor is bounded by :editor_timeout_ms -> {:kept, :editor_timeout, geo}" do
     tmp_dir = fresh_tmp_dir("timeout")
     {:ok, device} = StringIO.open("")
