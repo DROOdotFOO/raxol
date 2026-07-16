@@ -48,14 +48,14 @@ flowchart TB
         U22["U22 ✅ asciicast fix (PR #544)"]
     end
 
-    subgraph GATE["Wave 1.5 — close the keystone (BLOCKS all Wave 2)"]
-        U1c["U1.5 close-the-keystone<br/>session_id wiring + journal sink w/ id-authority + turn vocab"]
-        SS["SS Session.Supervisor + session→pid registry<br/>(:rest_for_one: Journal→Dispatcher→bridge→gates)"]
+    subgraph GATE["Wave 1.5 — close the keystone ✅ MERGED (unblocked Wave 2)"]
+        U1c["U1.5 ✅ close-the-keystone (PR #547)<br/>session_id wiring + journal sink w/ id-authority + turn vocab"]
+        SS["SS ✅ Session.Supervisor + session→pid registry (PR #558)<br/>(:rest_for_one: Journal→Dispatcher→bridge→gates)"]
     end
 
-    subgraph SEAMS["Seams Wave 2 assumed (build before their consumers)"]
-        TH["TH ToolCall.Hook / pipeline<br/>before_call interception (U7/U8 need it)"]
-        MS["MS Model snapshot contract<br/>JSON-safe TEA slice / @persist (U9 needs it)"]
+    subgraph SEAMS["Seams Wave 2 assumed ✅ MERGED (built before their consumers)"]
+        TH["TH ✅ ToolCall.Hook / pipeline (PR #557)<br/>before_call interception (U7/U8 need it)"]
+        MS["MS ✅ Model snapshot contract (PR #559)<br/>JSON-safe TEA slice / @persist (U9 needs it)"]
     end
 
     subgraph SAFETY["Wave 2a — safety/usability spine (FIRST)"]
@@ -160,10 +160,13 @@ reviewers, verbatim). U14 stays the highest-value node.
 **U4 ∥ U9 is a FALSE parallel** (both invent "conversational tip", both extend
 journal record kinds) — serialize U4 → U9, or freeze one journal record schema.
 
-**Wave 1 status:** all 4 PRs open as drafts on `feat/harness-cli`. U2a carries
-3 red blockers (single-writer, stale-HEAD offset, path traversal) — in fix.
-U1's bus-only keystone + the dual-id landmine (bridge counter ≠ journal offset)
-are exactly what U1.5 closes.
+**Wave 1 status: DONE.** All 4 PRs merged (#543/#544/#545/#546), rebased onto
+the squash-merged #542; U2a's 3 red blockers (single-writer, stale-HEAD
+offset, path traversal) were fixed before merge. **Wave 1.5 + the seams are
+also DONE**: U1.5 (#547) closed the bus-only keystone + the dual-id landmine
+(bridge counter ≠ journal offset); SS (#558), TH (#557), and MS (#559) landed
+alongside it. Wave 2 was unblocked as of these merges — see "Red-first
+fan-out (2026-07-16)" in §4 for what shipped next.
 
 ---
 
@@ -524,11 +527,11 @@ Unit-spec deltas from round 2:
 
 ## 4. Sequencing reality
 
-- **Done:** U0 (#542), U1 (#546), U2a (#545, reds in fix), U3 (#543), U22 (#544).
-- **Immediate next (blocks Wave 2):** U1.5 close-the-keystone, then SS; TH and
-  MS beside them. Nothing in Wave 2 is honestly buildable until U1.5 + SS land.
+- **Done:** U0 (#542), U1 (#546), U2a (#545, reds fixed), U3 (#543), U22
+  (#544) — Wave 1. U1.5 (#547), SS (#558), TH (#557), MS (#559) — Wave 1.5 +
+  seams. All merged to master.
 - **Then two spines in parallel:**
-  - safety/usability: (U5-spike) → U5 → U6 · and TH → U7 → U8 → U21
+  - safety/usability: (U5-spike, done) → U5 → U6 · and TH → U7 → U8 → U21
   - durability: U4 → U9 → U10 (U9 also needs MS; U10 also needs U5)
 - **Corrected one-person critical path:** U0 → U1 → U2a → U1.5 → U5 → U9 → U10 →
   U11 → U12 → U14 → U14b → U18 → U19 → U20 — U5 now precedes U9/U10 (can't
@@ -538,4 +541,41 @@ Unit-spec deltas from round 2:
   from the UI lane must never need lockstep updates.
 - **NC guards still binding:** no graph/DSL (NC-1), no swarm headline (NC-2),
   no ACP server (NC-3), no Temporal-grade engine (NC-4).
+
+### Red-first fan-out (2026-07-16)
+
+With Wave 1.5 + seams merged, all 10 Wave 2/3 units shipped their **red
+suite** first as individual PRs, rather than waiting for a combined
+implementation PR per unit. Each PR is enabler-plus-red: it builds whatever
+scaffolding the tests need to compile, then a red test suite carrying
+positive *and* negative contours (dead-injector negative controls proving
+each red would actually fail if the invariant were violated), tagged
+`@moduletag :harness_red`. These suites are CI-green *by construction* (the
+enabler makes them pass trivially or the suite documents expected-red state)
+until the real implementation lands — they are not yet proof the unit works,
+only proof the contract is pinned down precisely enough to implement against.
+
+| Unit | PR | Title |
+|---|---|---|
+| U21-R | #570 | Evidence-gated done (FI-6) |
+| U7-R | #571 | SpendGate reserve-before-call (AD-6a) |
+| U5-R | #572 | Interrupt = staged supervised kill (AD-12) |
+| U6-R | #573 | Steer via `expected_turn_id` CAS (AD-13) |
+| U10-R | #581 | Compaction = resume, one artifact (AD-3b) |
+| U9-R | #582 | Checkpoint pointer records (AD-10/3a) |
+| U12-R | #583 | Probe runner interface (D2) |
+| U11-R | #584 | Meta family + provenance/taint (FI-5) |
+| U4-R | #586 | Reattach/replay closure + Dormammu (AD-15/FI-12) |
+| U8-R | #587 | BlastRadiusGate + approvals (AD-6b/14) |
+
+**Impl phase is next:** make the merged reds green, down the critical path
+**U5-I → U7-I → U4-I → U9-I** (safety spine first, then durability spine,
+matching §1's two-spine ordering). U6-I/U8-I/U21-I/U10-I/U11-I/U12-I follow
+per their existing `needs` edges in §1's chart.
+
+Several contract gaps and policy questions surfaced during this fan-out that
+don't block the red suites themselves but do block their respective impl
+units — see `harness-parked.md` for the full tracked list (restore-path
+hardening, per-unit freeze addenda, the U21 gating-strength ruling, wiring
+debt, and deferred test tags).
 ```
