@@ -275,7 +275,7 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     held = Map.get(state.parked, key, MapSet.new())
 
     state =
-      case oldest_held(held) do
+      case oldest_held(held, state.runs) do
         nil -> state
         run_id -> shed_held(state, run_id, key, :exhausted, :pressure)
       end
@@ -332,7 +332,7 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   # ---------------------------------------------------------------------------
 
   defp do_submit(probe, opts, state) do
-    run_id = gen_run_id()
+    {run_id, seq} = gen_run()
     emit = Keyword.fetch!(opts, :emit)
     provider = Keyword.get(opts, :provider)
     budget = Keyword.get(opts, :budget)
@@ -347,6 +347,7 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
         run = %{
           status: :running,
           killed: false,
+          seq: seq,
           emit: emit,
           spec: spec,
           context: context,
@@ -382,12 +383,12 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
         # (never fails submit, never drops silently — N-U12.3). Bounded by
         # max_parked (F5): if the parked set is full the run sheds :exhausted
         # WITHOUT parking (parking precedence, §3.3).
-        state = park_or_shed(state, run_id, spec, budget, emit)
+        state = park_or_shed(state, run_id, seq, spec, budget, emit)
         {:reply, {:ok, run_id}, state}
     end
   end
 
-  defp park_or_shed(state, run_id, spec, budget, emit) do
+  defp park_or_shed(state, run_id, seq, spec, budget, emit) do
     key = pool_key(budget)
     held = Map.get(state.parked, key, MapSet.new())
 
@@ -406,6 +407,7 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
       run = %{
         status: :parked,
         killed: false,
+        seq: seq,
         emit: emit,
         spec: spec,
         budget: budget,
@@ -433,15 +435,22 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   # Shed a still-held parked run to a terminal status, releasing its slot. A run
   # that already terminated (killed, or a prior shed) is left untouched — exactly
   # one terminal per run (P-U12.1).
-  # The oldest still-held parked run in `held`, by monotonic run_id order (the
-  # gen_run_id suffix is a monotonic integer, so the smallest is the oldest), or
-  # nil when the set is empty. Used to shed the single oldest run per overflow.
-  defp oldest_held(held) do
-    if Enum.empty?(held), do: nil, else: Enum.min_by(held, &run_seq/1)
+  # The oldest still-held parked run in `held`, by the monotonic `seq` CARRIED on
+  # each run (smallest = oldest), or nil when the set is empty. Reads the stored
+  # seq — never parses it back out of the run_id — so the id format is decoupled
+  # from age-ordering. Used to shed the single oldest run per overflow.
+  defp oldest_held(held, runs) do
+    if Enum.empty?(held), do: nil, else: Enum.min_by(held, &run_seq(runs, &1))
   end
 
-  defp run_seq(run_id) do
-    run_id |> String.split("-") |> List.last() |> String.to_integer()
+  # The stored monotonic seq for a held run. A held run always carries one; the
+  # fallback keeps a (should-not-happen) seq-less run from being mistaken for the
+  # oldest rather than crashing the coordinator.
+  defp run_seq(runs, run_id) do
+    case Map.get(runs, run_id) do
+      %{seq: seq} -> seq
+      _ -> :infinity
+    end
   end
 
   defp shed_held(state, run_id, key, status, reason) do
@@ -907,8 +916,14 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
       function_exported?(probe, :interpret, 2)
   end
 
-  defp gen_run_id,
-    do: "probe-run-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
+  # A fresh `{run_id, seq}`. `seq` is the monotonic integer the id embeds, carried
+  # explicitly on the run so age-ordering (`oldest_held/2`) never has to PARSE the
+  # id back out — the id format stays free to change without crashing the
+  # coordinator on `String.to_integer` (adversarial-review LOW).
+  defp gen_run do
+    seq = System.unique_integer([:positive, :monotonic])
+    {"probe-run-" <> Integer.to_string(seq), seq}
+  end
 
   defp pool_key(budget), do: budget
 
