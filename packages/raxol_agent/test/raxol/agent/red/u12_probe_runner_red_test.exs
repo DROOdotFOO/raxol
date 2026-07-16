@@ -107,8 +107,13 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
   end
 
   # Terminals are asynchronous — poll the bus fold until every submitted run
-  # carries a terminal probe_run (or the deadline passes and we fold what's there).
-  defp await_terminals(bus, run_ids, deadline_ms \\ 2_000) do
+  # carries a terminal probe_run (or the deadline passes and we fold what's
+  # there). The default slack is generous AND scales with the run count: the pool
+  # is a shared singleton, so a burst of runs from a parallel async test can add
+  # latency (adversarial-review #8a). A genuinely-dropped run still fails: the
+  # bound elapses and the fold sees openings:1/terminals:0 (N-U12.3, pinned).
+  defp await_terminals(bus, run_ids, deadline_ms \\ nil) do
+    deadline_ms = deadline_ms || 5_000 + 250 * length(run_ids)
     deadline = System.monotonic_time(:millisecond) + deadline_ms
     do_await(bus, MapSet.new(run_ids), deadline)
   end
@@ -161,6 +166,11 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       assert L.provider_calls(rig.provider) == 0
     end
 
+    # Tagged :slow (adversarial-review #8b): this pins the N-U12.3 law against the
+    # PRODUCTION 10s park_timeout_ms and takes ~10s, so it is excluded from the
+    # default CI run. A fast equivalent below (ShortParkProbe) checks the same law
+    # in CI. Run the slow one with `mix test --include slow`.
+    @tag :slow
     test "submit under exhaustion still returns {:ok, run_id}; the run PARKS, then its lifecycle completes via the shed terminal — zero provider calls (N-U12.3)" do
       # Cap 0 ⇒ every reserve refused at the submit-time budget check.
       rig = rig(cap: 0)
@@ -202,6 +212,28 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       assert L.fail_closed(L.provider_calls(rig.provider), 0) == :ok
       # Never dropped silently: the submitted run's lifecycle COMPLETES with a
       # terminal, arriving asynchronously via the real shed path (not inline).
+      assert L.lifecycle_complete(events, [run_id]) == :ok
+    end
+
+    test "N-U12.3 (fast, CI): budget-refused submit PARKS then completes via the shed terminal — same pinned law, short park_timeout_ms" do
+      # The fast CI equivalent of the :slow N-U12.3 test above — ShortParkProbe's
+      # park_timeout_ms is 300ms, so the shed arrives sub-second. The pinned law
+      # is identical: parks, then the lifecycle completes ASYNCHRONOUSLY via the
+      # real shed; a genuinely-dropped run still fails (bounded await).
+      rig = rig(cap: 0)
+
+      assert {:ok, run_id} = Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx()))
+
+      park_ttl = ShortParkProbe.spec().park_timeout_ms
+      events = await_terminals(rig.bus, [run_id], park_ttl + 2_000)
+
+      assert Enum.any?(
+               events,
+               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :parked)
+             ),
+             "budget-refused submit must PARK, got #{inspect(events)}"
+
+      assert L.fail_closed(L.provider_calls(rig.provider), 0) == :ok
       assert L.lifecycle_complete(events, [run_id]) == :ok
     end
 
@@ -469,6 +501,10 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
   end
 
   describe "bounded parking (F5)" do
+    # Tagged :slow (adversarial-review #8b): pins the park-TTL law against the
+    # production 10s park_timeout_ms (~10s). The fast equivalent below checks the
+    # same law in CI.
+    @tag :slow
     test "a parked run past park_timeout_ms sheds to the :exhausted terminal — parking is never indefinite" do
       rig = rig(cap: 0)
 
@@ -482,6 +518,26 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
                &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :exhausted)
              ),
              "over-TTL parked run must terminate :exhausted, got #{inspect(events)}"
+
+      assert L.lifecycle_complete(events, [run_id]) == :ok
+    end
+
+    test "a parked run past park_timeout_ms sheds to :exhausted (fast, CI) — short park_timeout_ms" do
+      # Fast CI equivalent: ShortParkProbe.park_timeout_ms is 300ms, so the TTL
+      # shed lands sub-second. Same law: parking is never indefinite.
+      rig = rig(cap: 0)
+
+      assert {:ok, run_id} = Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx()))
+
+      park_ttl = ShortParkProbe.spec().park_timeout_ms
+      events = await_terminals(rig.bus, [run_id], park_ttl + 2_000)
+
+      assert Enum.any?(
+               events,
+               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :exhausted and
+                   &1.reason == :park_timeout)
+             ),
+             "over-TTL parked run must terminate :exhausted (reason :park_timeout), got #{inspect(events)}"
 
       assert L.lifecycle_complete(events, [run_id]) == :ok
     end
