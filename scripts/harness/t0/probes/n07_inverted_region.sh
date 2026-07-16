@@ -23,3 +23,6 @@ t0_set_region "$inverted_top" "$height"
 t0_paint_footer 1 "---STRIP---" "STATUS: idle" "PROMPT>"
 t0_cursor_to "$height" 1
 t0_stream_numbered_lines "$count"
+
+# Ring B device-control capture window (no-op unless T0_HOLD_SECONDS set).
+t0_hold
