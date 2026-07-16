@@ -33,6 +33,21 @@ if :os.type() == {:win32, :nt} do
   ExUnit.configure(exclude: [unix_only: true, skip_on_windows: true])
 end
 
+# --- Ring B (T0 harness-UI automated real-terminal driver) is NEVER run
+# by default, on ANY platform or env-var combination -- unlike
+# docker/skip_on_ci above, this isn't conditioned on SKIP_TERMBOX2_TESTS.
+# `test/harness/ringb_*.exs` opens real GUI windows in iTerm2/Terminal.app/
+# WezTerm/kitty via AppleScript/CLI device control; it needs a real macOS
+# Aqua session and installed GUI terminals, and must not run headless/CI.
+# Read-then-append (rather than a bare `ExUnit.configure(exclude: ...)`)
+# so this can never accidentally clobber the docker/skip_on_ci or
+# unix_only/skip_on_windows exclusions set by the branches above,
+# regardless of call ordering.
+ExUnit.configure(
+  exclude:
+    Enum.uniq((Application.get_env(:ex_unit, :exclude) || []) ++ [ring_b: true])
+)
+
 # To mark a test as Docker-dependent, use:
 #   @tag :docker
 #   test "..." do ... end
@@ -40,6 +55,11 @@ end
 # To mark a test as Unix-only, use:
 #   @tag :unix_only
 #   test "..." do ... end
+#
+# To mark a test as Ring B (real macOS GUI terminal device control,
+# never run by default), use:
+#   @moduletag :ring_b
+#   @moduletag :macos_gui
 
 # Start ExUnit
 IO.puts("[TestHelper] Starting ExUnit...")

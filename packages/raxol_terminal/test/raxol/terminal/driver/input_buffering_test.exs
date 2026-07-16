@@ -36,9 +36,13 @@ defmodule Raxol.Terminal.Driver.InputBufferingTest do
       Helper.wait_for_driver_ready(driver_pid)
       Helper.consume_initial_resize()
 
-      # Send partial escape sequence
+      # Send partial escape sequence. The raw ESC byte (27) is a REAL
+      # TB_KEY_ESC control-key code (see event_translator.ex's moduledoc),
+      # so it now correctly normalizes to `key: :escape` rather than
+      # leaking through as a printable `char: "\e"` -- the exact
+      # control-byte-as-text bug the T27 review caught.
       Helper.simulate_key_event(driver_pid, ?\e)
-      Helper.assert_key_event("\e")
+      Helper.assert_key_event(nil, :escape)
 
       Helper.simulate_key_event(driver_pid, ?[)
       Helper.assert_key_event("[")
@@ -62,13 +66,14 @@ defmodule Raxol.Terminal.Driver.InputBufferingTest do
       Helper.assert_key_event("x")
 
       Helper.simulate_key_event(driver_pid, ?\e)
-      Helper.assert_key_event("\e")
+      Helper.assert_key_event(nil, :escape)
 
       Helper.simulate_key_event(driver_pid, ?[)
       Helper.assert_key_event("[")
 
-      # Up arrow
-      Helper.simulate_key_event(driver_pid, 0, 65)
+      # Up arrow -- real TB_KEY_ARROW_UP code (0xffff - 18), not the ANSI
+      # CSI final byte 65 this test used to send.
+      Helper.simulate_key_event(driver_pid, 0, 65_517)
       Helper.assert_key_event(nil, :up)
 
       Helper.simulate_key_event(driver_pid, ?y)
