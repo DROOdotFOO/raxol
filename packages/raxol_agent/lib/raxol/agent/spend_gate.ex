@@ -88,6 +88,8 @@ defmodule Raxol.Agent.SpendGate do
 
   alias Raxol.Agent.SpendGate.Reservations
 
+  require Logger
+
   @typedoc """
   Context passed to every SpendGate call. Frozen fields:
 
@@ -224,21 +226,27 @@ defmodule Raxol.Agent.SpendGate do
     # retryable, never stuck.
     case safe_try_reserve(context, cost_ref, estimate, scope) do
       {:ok, _remaining} ->
-        emit(context, %{kind: :reserve, cost_ref: cost_ref, estimate: estimate})
+        # The budget is now CHARGED. Build the settle-able handle FIRST, then
+        # journal — so a throwing `emit` (durable I/O in prod) cannot strand a
+        # charged budget with no reservation to settle. The frozen context has
+        # no un-reserve seam, so we CANNOT roll the charge back here; returning a
+        # usable handle keeps the refund derivable via `settle/3` (finding #2).
+        # A dropped reserve record is loud (logged) and visible in the fold.
+        reservation = %{
+          cost_ref: cost_ref,
+          estimate: estimate,
+          scope: scope,
+          settle_guard: :atomics.new(1, [])
+        }
 
-        {:ok,
-         %{
-           cost_ref: cost_ref,
-           estimate: estimate,
-           scope: scope,
-           settle_guard: :atomics.new(1, [])
-         }}
+        guarded_emit(context, %{kind: :reserve, cost_ref: cost_ref, estimate: estimate})
+        {:ok, reservation}
 
       {:error, reason} ->
         # Budget refused: release the claim we took (fail-closed — no call will
         # happen) and journal a typed refusal.
         Reservations.release(scope, cost_ref)
-        emit(context, %{kind: :reserve_refused, cost_ref: cost_ref, reason: reason})
+        guarded_emit(context, %{kind: :reserve_refused, cost_ref: cost_ref, reason: reason})
         {:error, {:refused, reason}}
     end
   end
@@ -332,6 +340,30 @@ defmodule Raxol.Agent.SpendGate do
   # --- internals ------------------------------------------------------------
 
   defp emit(context, record), do: context.emit.(record)
+
+  # Journal a record without letting a throwing sink strand irreversible spend
+  # state. In production `context.emit` is durable I/O (a per-session journal
+  # write) that CAN fail; a raise here must never lose a reservation handle or
+  # block settle accounting that already flipped its guard. The record is best
+  # effort at the seam — a dropped write is logged loudly and remains visible as
+  # a hole in the fold (findings #2, #3).
+  defp guarded_emit(context, record) do
+    emit(context, record)
+  rescue
+    error ->
+      Logger.warning(
+        "SpendGate: cost-journal emit failed for #{inspect(record)}: #{inspect(error)}"
+      )
+
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning(
+        "SpendGate: cost-journal emit #{kind} for #{inspect(record)}: #{inspect(reason)}"
+      )
+
+      :ok
+  end
 
   # The reservation namespace = the frozen `context.try_reserve` closure itself:
   # guaranteed present, and unique per budget scope (see Reservations).

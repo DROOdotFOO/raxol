@@ -62,4 +62,26 @@ defmodule Raxol.Agent.SpendGateRobustnessTest do
       assert {:ok, %{cost_ref: ^cost_ref}} = SpendGate.reserve(c, cost_ref, 100)
     end
   end
+
+  describe "finding #2 — a charged budget is never stranded by a throwing emit(:reserve)" do
+    test "emit(:reserve) throwing still returns a usable, settle-able reservation" do
+      cost_ref = "f2-#{System.unique_integer([:positive])}"
+
+      # try_reserve succeeds (budget charged) but the journal write for the
+      # reserve record throws. The frozen context has no un-reserve seam, so the
+      # only non-stranding outcome is a usable reservation whose settle refunds.
+      c =
+        ctx(
+          try_reserve: fn _amount -> {:ok, 900} end,
+          emit: fn
+            %{kind: :reserve} -> raise "journal boom"
+            _record -> :ok
+          end
+        )
+
+      assert {:ok, reservation} = SpendGate.reserve(c, cost_ref, 100)
+      # The handle is real: it settles cleanly (the refund path stays open).
+      assert :ok = SpendGate.settle(c, reservation, 70)
+    end
+  end
 end
