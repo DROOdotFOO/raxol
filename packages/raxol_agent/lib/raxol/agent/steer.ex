@@ -254,19 +254,52 @@ defmodule Raxol.Agent.Steer do
   def rebuild(journal) when is_list(journal) do
     seen =
       journal
-      |> Enum.filter(&(&1[:type] == :steer and not is_nil(payload_cmid(&1))))
+      |> Enum.filter(&(steer_record?(&1) and not is_nil(field(&1, :client_msg_id))))
       |> Map.new(fn ev ->
-        cmid = payload_cmid(ev)
-        ref = %{turn_id: ev[:turn_id], offset: ev[:offset], client_msg_id: cmid}
-        {cmid, %{ref: ref, text: payload_text(ev)}}
+        cmid = field(ev, :client_msg_id)
+
+        ref = %{
+          turn_id: field(ev, :turn_id),
+          offset: field(ev, :offset) || field(ev, :id),
+          client_msg_id: cmid
+        }
+
+        {cmid, %{ref: ref, text: field(ev, :text)}}
       end)
 
     %TurnState{turn_id: nil, seen: seen, log: journal}
   end
 
-  # `client_msg_id`/`text` are nested in `payload` (frozen shape, §5.1).
-  defp payload_cmid(ev), do: (ev[:payload] || %{})[:client_msg_id]
-  defp payload_text(ev), do: (ev[:payload] || %{})[:text]
+  # A durable steer record — whether the atom-keyed in-memory event this module
+  # builds, OR the STRING-keyed map the FileStore Reader round-trips off disk
+  # (Jason decodes to string keys, `type` becomes "steer"). §0 reader-tolerance:
+  # fold both shapes, never depend on one. Feeding rebuild only the in-memory log
+  # (as the suite once did) hides the real production seam — the durable record
+  # is string-keyed with client_msg_id nested in payload.
+  defp steer_record?(ev), do: get_either(ev, :type) in [:steer, "steer"]
+
+  # `client_msg_id`/`text` are nested in `payload` (frozen shape, §5.1). Read the
+  # field from the payload under either key style, falling back to a top-level
+  # value so a legacy flat record still folds (tolerant reader, never strict).
+  defp field(ev, key) do
+    payload = get_either(ev, :payload) || %{}
+
+    case get_either(payload, key) do
+      nil -> get_either(ev, key)
+      value -> value
+    end
+  end
+
+  # Fetch `key` (an atom) from a map that may be atom-keyed (in-memory) or
+  # string-keyed (Jason-decoded off disk).
+  defp get_either(map, key) when is_map(map) and is_atom(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, Atom.to_string(key))
+    end
+  end
+
+  defp get_either(_map, _key), do: nil
 
   # The CAS swap: a fresh token, GLOBALLY DISTINCT from every token this turn has
   # ever held (not merely different from the current one) — the ABA-safety law.
