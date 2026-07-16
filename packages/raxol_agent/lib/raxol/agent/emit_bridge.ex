@@ -378,13 +378,20 @@ defmodule Raxol.Agent.EmitBridge do
   defp put_actor(record, nil), do: record
   defp put_actor(record, actor), do: Map.put(record, :actor, actor)
 
-  # Stamp the write-generation actor onto a neutral map when the producer did
-  # not already supply one (freeze §2.1 producer-seam stamping). The branch id
-  # is stamped the same way so every event in the generation shares it.
+  # Stamp the write-generation actor + branch id onto a neutral map at the
+  # producer seam (freeze §2.1: "EmitBridge stamps actor from the command/attach
+  # context ... Individual modules never invent it"). The bridge value WINS
+  # unconditionally (`Map.put`, not `Map.put_new`): a neutral map that already
+  # carries an `:actor` — a module inventing its own — must NOT bypass the
+  # producer-seam stamp, or a nullable-everywhere field becomes inconsistent
+  # garbage and the trust lattice's actor attribution is spoofable. The branch id
+  # is forced the same way so every event in one generation shares exactly one
+  # branch_id (the tip predicate is branch-aware; a per-event branch would strand
+  # events across branches).
   defp stamp_generation(neutral, state) do
     neutral
-    |> Map.put_new(:actor, state.actor)
-    |> Map.put_new(:branch_id, state.branch_id)
+    |> Map.put(:actor, state.actor)
+    |> Map.put(:branch_id, state.branch_id)
   end
 
   defp sanitized_payload(neutral) do

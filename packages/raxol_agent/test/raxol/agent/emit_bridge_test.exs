@@ -8,6 +8,7 @@ defmodule Raxol.Agent.EmitBridgeTest do
 
   alias Raxol.Agent.Contract.Event
   alias Raxol.Agent.EmitBridge
+  alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Core.Runtime.EmitBus
 
@@ -89,6 +90,77 @@ defmodule Raxol.Agent.EmitBridgeTest do
       # offset (0 here — no durable event has been journaled yet), never a fresh
       # offset that could masquerade as a journal id.
       assert event.id == 0
+    end
+  end
+
+  # ===========================================================================
+  # Adversarial fix (🔴): producer-seam stamping is not spoofable
+  # ===========================================================================
+
+  describe "producer-seam stamping is not spoofable (actor/branch_id)" do
+    setup do
+      ensure_registry(EmitBus.registry_name())
+      streamer = start_supervised!({SessionStreamer, name: :bridge_spoof_streamer})
+
+      base =
+        Path.join(
+          System.tmp_dir!(),
+          "bridge_spoof_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+      %{streamer: streamer, base: base}
+    end
+
+    test "a module-supplied actor/branch_id in the neutral map does NOT override the bridge stamp",
+         %{streamer: streamer, base: base} do
+      session = "sess-spoof-#{System.unique_integer([:positive])}"
+      {:ok, journal} = FileStore.open(session, base_dir: base)
+
+      authority = %{kind: :system, id: "bridge-authority"}
+
+      bridge =
+        start_supervised!(
+          {EmitBridge,
+           session_id: session,
+           streamer: streamer,
+           journal: journal,
+           actor: authority,
+           branch_id: "feature-x"}
+        )
+
+      # Flush the EmitBus subscription registration.
+      _ = :sys.get_state(bridge)
+
+      # A hostile neutral map inventing its OWN actor + branch_id — exactly the
+      # producer-seam bypass §2.1 forbids ("modules never invent it").
+      spoof = %{
+        session_id: session,
+        family: :loop,
+        type: :app_update,
+        tier: :durable,
+        turn_id: "t1",
+        payload: %{message: :hi},
+        ts: 1,
+        actor: %{kind: :human, id: "attacker"},
+        branch_id: "attacker-branch"
+      }
+
+      EmitBus.publish(spoof)
+      # get_state queues AFTER the emit_bus info, so the append has happened.
+      _ = :sys.get_state(bridge)
+
+      {:ok, [record]} = FileStore.read(journal)
+
+      # The bridge's write-generation values WIN; the spoofed ones never land.
+      assert record["actor"] == %{"kind" => "system", "id" => "bridge-authority"}
+      assert record["branch_id"] == "feature-x"
+
+      refute record["actor"] == %{"kind" => "human", "id" => "attacker"},
+             "a module-invented actor must not bypass the producer-seam stamp"
+
+      :ok = FileStore.close(journal)
     end
   end
 
