@@ -537,7 +537,12 @@ jobs:
 
       - name: Run tests (Windows)
         if: runner.os == 'Windows'
-        run: mix test --exclude slow --exclude docker --exclude integration --exclude skip_on_ci --exclude skip_on_windows
+        # --timeout 180000: the Windows runner is CPU-starved enough that
+        # emulator-replay-heavy property tests (substrate keystones, SSH
+        # rendering round-trips) blow the 60s default as a runner-speed
+        # artifact — a different one each run. Raising the job-wide ceiling
+        # keeps full coverage; genuine hangs still fail at the raised bound.
+        run: mix test --timeout 180000 --exclude slow --exclude docker --exclude integration --exclude skip_on_ci --exclude skip_on_windows
         env:
           MIX_ENV: test
           SKIP_TERMBOX2_TESTS: "true"

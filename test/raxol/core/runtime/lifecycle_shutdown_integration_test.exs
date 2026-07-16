@@ -47,6 +47,13 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
   """
   use ExUnit.Case, async: false
 
+  # Receive deadlines in this file are 10s, not the customary 2s: these
+  # assertions pin the ARRIVAL and ORDER of teardown messages (driver
+  # teardown ran, tree died with the right reason), not their latency.
+  # On loaded shared CI runners a graceful teardown can take several
+  # seconds of wall clock; a tight deadline turns runner load into a
+  # false negative on a correctness assertion.
+
   alias Raxol.Core.Runtime.Application
   alias Raxol.Core.Runtime.Lifecycle
 
@@ -186,7 +193,7 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
   # run). This is the platform-independent way to assert stop ORDER: the
   # sequence in which the tags land IS the order the children were stopped.
   # No clock, no timestamp deltas.
-  defp next_teardown_event(timeout \\ 2_000) do
+  defp next_teardown_event(timeout \\ 10_000) do
     receive do
       :driver_terminated -> :driver
       :engine_terminated -> :engine
@@ -218,7 +225,7 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
       assert next_teardown_event() == :engine,
              "Rendering Engine's terminate/2 must run SECOND (after the driver)."
 
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 10_000
     end
 
     test "an external supervisor-style :shutdown exit signal also reaches the driver's terminate/2" do
@@ -237,7 +244,7 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
 
       assert next_teardown_event() == :engine
 
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 10_000
     end
 
     # The pre-fix bug was a RACE (~50% miss under ExUnit load per the T2d
@@ -264,7 +271,7 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
         assert next_teardown_event() == :engine,
                "iteration #{i}: engine did not tear down SECOND"
 
-        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 10_000
       end
     end
   end
@@ -300,7 +307,7 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
       # (1) Driver teardown still ran despite the crash -- teardown-on-crash
       # is pinned, not incidental.
       assert_receive :driver_terminated,
-                     2_000,
+                     10_000,
                      "driver teardown did NOT run on the crash path -- " <>
                        "terminate/2's driver-first sequence must run before the " <>
                        "crash reason propagates."
@@ -308,7 +315,7 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
       # (2) The tree dies WITH the crash reason (supervisor-restart parity):
       # trap_exit must not swallow the crash into a benign stop.
       assert_receive {:DOWN, ^ref, :process, ^pid, reason},
-                     2_000,
+                     10_000,
                      "Lifecycle did not die on a child crash -- trap_exit must " <>
                        "not swallow abnormal child exits."
 
@@ -351,7 +358,7 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
 
       # cleanup
       Lifecycle.stop(pid)
-      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 2_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 10_000
     end
 
     # Contract check (grok-composer, parent case): with trap_exit, the ONE
@@ -381,7 +388,7 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
           # falls off the end -> exits :normal
         end)
 
-      assert_receive {:lifecycle_started, pid}, 2_000
+      assert_receive {:lifecycle_started, pid}, 10_000
       ref = Process.monitor(pid)
 
       send(parent, :please_exit_normal)
@@ -389,11 +396,11 @@ defmodule Raxol.Core.Runtime.LifecycleShutdownIntegrationTest do
       # The parent's exit must drive a GRACEFUL teardown: driver terminate/2
       # runs (terminal restored), then Lifecycle goes down.
       assert_receive :driver_terminated,
-                     2_000,
+                     10_000,
                      "a parent exit must run the driver-first teardown " <>
                        "(a gen_server dies with its parent -- and we clean up first)."
 
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 10_000
     end
 
     # Idempotency: terminate/2's driver-first sequence must be a safe no-op
