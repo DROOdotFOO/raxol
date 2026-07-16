@@ -147,9 +147,27 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
 
   defp newest_checkpoint(records) do
     case Enum.filter(records, &(Map.get(&1, "kind") == @kind)) do
-      [] -> {:error, :no_checkpoint}
-      cps -> {:ok, Enum.max_by(cps, &Map.fetch!(&1, "id"))}
+      [] ->
+        {:error, :no_checkpoint}
+
+      cps ->
+        # The Reader is tolerant of a partial record; restore is NOT. Pick the
+        # newest without `fetch!` (a missing `id` is sentinel-ranked, never a
+        # raise), then require the keys restore dereferences downstream so an
+        # adversarial/truncated checkpoint yields a typed reject, not a KeyError.
+        cps
+        |> Enum.max_by(&Map.get(&1, "id", -1))
+        |> validate_checkpoint()
     end
+  end
+
+  # A checkpoint restore dereferences `id` (selection), `tip_offset`, and
+  # `snapshot_ref`; any missing ⇒ `:malformed_checkpoint` (typed reject, N-JS3
+  # class) rather than an unhandled `KeyError` on `Map.fetch!`.
+  defp validate_checkpoint(cp) do
+    if Enum.all?(~w(id tip_offset snapshot_ref), &Map.has_key?(cp, &1)),
+      do: {:ok, cp},
+      else: {:error, :malformed_checkpoint}
   end
 
   # Tip-only pointer: full fold(0..tip_offset) over conversational records.

@@ -577,4 +577,74 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
       :ok = FileStore.close(j)
     end
   end
+
+  describe "restore-path hardening — a checkpoint record missing keys is malformed, not a raise" do
+    test "a checkpoint missing tip_offset → :malformed_checkpoint (no KeyError)",
+         %{base: base} do
+      {j, _session, dir} = seed_conversation!(base)
+
+      # A truncated checkpoint the tolerant Reader accepts but restore must not
+      # blindly `fetch!` — no `tip_offset`.
+      CR.inject_single_counter_checkpoint!(dir, %{
+        "snapshot_ref" => nil,
+        "snapshot_hash" => nil,
+        "reason" => "manual"
+      })
+
+      assert {:error, :malformed_checkpoint} = Checkpoint.restore(j),
+             "a checkpoint missing tip_offset must surface a typed reject, never raise"
+
+      assert FileStore.status(j) == :ok
+      :ok = FileStore.close(j)
+    end
+
+    test "a checkpoint missing snapshot_ref → :malformed_checkpoint (no KeyError)",
+         %{base: base} do
+      {j, _session, dir} = seed_conversation!(base)
+
+      # No `snapshot_ref` key at all — the tip-only clause head needs it present
+      # as nil, and the snapshot clause `fetch!`es it; both would blow up.
+      CR.inject_single_counter_checkpoint!(dir, %{
+        "tip_offset" => 3,
+        "snapshot_hash" => nil,
+        "reason" => "manual"
+      })
+
+      assert {:error, :malformed_checkpoint} = Checkpoint.restore(j),
+             "a checkpoint missing snapshot_ref must surface a typed reject, never raise"
+
+      assert FileStore.status(j) == :ok
+      :ok = FileStore.close(j)
+    end
+
+    test "a checkpoint missing id → typed error, newest selection never raises",
+         %{base: base} do
+      {j, _session, dir} = seed_conversation!(base)
+
+      # Raw-appended (bypassing the Writer's id stamp) so the record carries NO
+      # `id`. `newest_checkpoint`'s `max_by(fetch! "id")` would have KeyError'd;
+      # in practice the tolerant Reader is STRICTER on `id` than on the pointer
+      # fields — a missing offset breaks density, so the read surfaces
+      # `{:journal, :damaged}` (nothing deleted) before restore ever selects.
+      # Either way the guarantee holds: a TYPED error, never an unhandled raise.
+      CR.raw_append!(dir, %{
+        "kind" => "checkpoint",
+        "schema_version" => "1.0.0",
+        "tip_offset" => 3,
+        "snapshot_ref" => nil,
+        "snapshot_hash" => nil,
+        "reason" => "manual"
+      })
+
+      assert {:error, reason} = Checkpoint.restore(j),
+             "a checkpoint missing id must surface a typed reject, never raise"
+
+      assert reason in [:malformed_checkpoint, {:journal, :damaged}],
+             "unexpected reason: #{inspect(reason)}"
+
+      # Nothing deleted on the damaged read (FI-7).
+      assert File.ls!(Path.join(dir, "journal")) != []
+      :ok = FileStore.close(j)
+    end
+  end
 end
