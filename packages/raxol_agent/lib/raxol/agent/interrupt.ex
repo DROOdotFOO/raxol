@@ -2,11 +2,10 @@ defmodule Raxol.Agent.Interrupt do
   @moduledoc """
   U5 — Interrupt is a **staged supervised kill** of a running turn/tool (AD-12).
 
-  This module is the **enabler skeleton** for U5-I: it freezes the observable
-  contract the U5-R red suite is authored against, but carries **no
-  implementation**. `interrupt/3` raises until U5-I lands. Everything the reds
-  assert is expressed here as a stable vocabulary + a behaviour so the red suite
-  and the eventual implementation reference one source of truth.
+  This module freezes the observable contract the U5-R red suite is authored
+  against — a stable staging vocabulary + a behaviour — AND carries the U5-I
+  implementation of `interrupt/3` (the staged supervised kill) built to satisfy
+  it. The reds and the implementation reference one source of truth.
 
   ## What interrupt IS (from the dispositions + the U5 spike)
 
@@ -61,8 +60,7 @@ defmodule Raxol.Agent.Interrupt do
       emits a durable event through this seam** — that IS the "staging is
       observable" contract.
 
-  U5-I implements this behaviour (replacing the `interrupt/3` body); the reds
-  flip from red to green the moment it does.
+  `interrupt/3` implements this behaviour; the U5-R reds run green against it.
   """
 
   @signal :interrupt_signaled
@@ -122,23 +120,94 @@ defmodule Raxol.Agent.Interrupt do
 
   @doc """
   Run the staged supervised kill for `tool_ref`, emitting each stage through
-  `sink`. Implemented by U5-I; raises until then.
+  `sink`. Implemented by `interrupt/3` (and by the U5-R control injectors).
   """
   @callback interrupt(tool_ref(), sink(), keyword()) ::
               {:ok, outcome()} | {:error, term()}
 
   @doc """
-  Staged supervised kill entry point — the U5-I seam.
+  Staged supervised kill entry point — the U5-I implementation (AD-12).
 
-  **Not implemented.** Raises until U5-I (AD-12) lands; the U5-R red suite is
-  red-by-design against this until the implementation replaces this body.
+  Drives the turn (and its running shell tool, if any) through the staged
+  shutdown and emits each stage as a durable event through `sink`:
+
+      cooperative group SIGTERM  →  bounded grace window  →  group SIGKILL
+
+  Escalation is **conditional** (the substantive half of "staged"): after the
+  cooperative signal a real tool gets its grace window to exit on its own. If it
+  does, the kill short-circuits — `:interrupt_signaled` then straight to
+  `:turn_canceled`, no wait/kill stage (per this module's own contract: the wait
+  stage IS "the grace window elapsed WITHOUT the tool exiting"). Only a tool that
+  survives the window escalates: journal `:interrupt_waited`, group-SIGKILL,
+  confirm OS-level death **out-of-band** (`ps`, never `:exit_status`), then
+  `:interrupt_killed` and `:turn_canceled`.
+
+  A tool-less interrupt (mid-provider-stream: `os_pid`/`port` `nil`) has nothing
+  to signal or wait on and always runs the full 4-stage bookkeeping sequence
+  straight through (the kill stage is a no-op fence in that case), then cancels
+  with no trailing output.
+
+  Options:
+
+    * `:reason` — the `:turn_canceled` reason (default `:interrupted`).
+    * `:actor` — who requested the interrupt; threaded into each emitted
+      payload's `:actor` field when present (U11's optional actor attribution).
+
+  Never raises on an OS-level failure mid-kill: the kill path is guarded so a
+  failed signal/confirm still lands the kill fence and the terminal
+  `:turn_canceled`, keeping post-kill quiescence intact (only `confirmed_dead?`
+  goes `false`). The BEAM process that owns the Port is never used as the death
+  signal — a hostile tool survives BEAM teardown, so only the OS group-kill,
+  OS-confirmed, counts.
   """
   @spec interrupt(tool_ref(), sink(), keyword()) ::
           {:ok, outcome()} | {:error, term()}
-  def interrupt(_tool_ref, _sink, _opts \\ []) do
-    raise "Raxol.Agent.Interrupt.interrupt/3 not implemented — U5-I (AD-12, " <>
-            "staged supervised kill) fills this in. The U5-R red suite is " <>
-            "red-by-design (@moduletag :harness_red, excluded from CI) until then."
+  def interrupt(tool_ref, sink, opts \\ [])
+
+  def interrupt(%{turn_id: turn_id} = ref, sink, opts)
+      when is_binary(turn_id) and is_function(sink, 2) do
+    reason = Keyword.get(opts, :reason, :interrupted)
+    grace_ms = Map.get(ref, :grace_ms) || @default_grace_ms
+
+    signal(ref)
+    emit(sink, @signal, %{}, opts)
+
+    case cooperative_exit(ref, grace_ms) do
+      {:short_circuit, os_pid} ->
+        emit(sink, @terminal, %{reason: reason}, opts)
+
+        {:ok,
+         %{
+           turn_id: turn_id,
+           stages: [@signal],
+           reason: reason,
+           os_pid: os_pid,
+           killed?: false,
+           confirmed_dead?: true
+         }}
+
+      :escalate ->
+        emit(sink, @wait, %{grace_ms: grace_ms}, opts)
+
+        {killed?, confirmed?, os_pid} = hard_kill(ref)
+
+        emit(sink, @kill, %{os_pid: os_pid}, opts)
+        emit(sink, @terminal, %{reason: reason}, opts)
+
+        {:ok,
+         %{
+           turn_id: turn_id,
+           stages: [@signal, @wait, @kill],
+           reason: reason,
+           os_pid: os_pid,
+           killed?: killed?,
+           confirmed_dead?: confirmed?
+         }}
+    end
+  end
+
+  def interrupt(tool_ref, _sink, _opts) do
+    {:error, {:invalid_tool_ref, tool_ref}}
   end
 
   @doc "The stage-1 event type — cooperative cancel (group SIGTERM)."
@@ -177,4 +246,175 @@ defmodule Raxol.Agent.Interrupt do
   """
   @spec default_grace_ms() :: pos_integer()
   def default_grace_ms, do: @default_grace_ms
+
+  # --- staging internals -----------------------------------------------------
+
+  # Emit one staged event through the durable sink, threading actor attribution
+  # into the payload when the caller supplied it (U11's optional :actor opt).
+  defp emit(sink, type, payload, opts) do
+    payload =
+      case Keyword.get(opts, :actor) do
+        nil -> payload
+        actor -> Map.put(payload, :actor, actor)
+      end
+
+    sink.(type, payload)
+  end
+
+  # Stage 1 — the cooperative cancel request. A real tool gets the OS
+  # process-group SIGTERM (signaling just the top pid does NOT cascade to the
+  # group). A tool-less interrupt (mid-provider-stream) has nothing to signal;
+  # the loop is simply canceled.
+  defp signal(%{os_pid: os_pid}) when is_integer(os_pid) do
+    _ = group_signal(os_pid, "-TERM")
+    :ok
+  end
+
+  defp signal(_ref), do: :ok
+
+  # Did the tool exit on its own inside the grace window? A real tool → poll the
+  # OS out-of-band. Tool-less → nothing to wait for, always escalate to run the
+  # full bookkeeping sequence.
+  defp cooperative_exit(%{os_pid: os_pid}, grace_ms) when is_integer(os_pid) do
+    if await_dead(os_pid, grace_ms), do: {:short_circuit, os_pid}, else: :escalate
+  end
+
+  defp cooperative_exit(_ref, _grace_ms), do: :escalate
+
+  # Stage 3 — the hard kill. A real tool that survived the grace window gets the
+  # OS process-group SIGKILL, then death is confirmed out-of-band (`ps`), never
+  # via `:exit_status`. Guarded so an OS-level failure mid-kill cannot raise: the
+  # caller still journals the kill fence + turn_canceled (quiescence intact),
+  # only `confirmed_dead?` reflects the miss. A tool-less interrupt kills nothing
+  # (the kill stage is a no-op fence for the frozen 4-stage sequence).
+  defp hard_kill(%{os_pid: os_pid}) when is_integer(os_pid) do
+    _ = group_signal(os_pid, "-9")
+    {true, await_dead(os_pid), os_pid}
+  rescue
+    _ -> {true, false, os_pid}
+  catch
+    _, _ -> {true, false, os_pid}
+  end
+
+  defp hard_kill(_ref), do: {false, false, nil}
+
+  # --- OS process-group primitives -------------------------------------------
+  #
+  # The spike verdict: only an OS process-group SIGKILL kills a hostile tool
+  # clean, and `:exit_status` lies (a surviving grandchild forges "port open").
+  # These shell out to POSIX `kill`/`ps` and are guarded so a group-kill can
+  # never target this VM's own group or a pid that is not its group's leader.
+
+  # Signal the tool's process group. Fires `kill <signal> -<os_pid>` only when
+  # `os_pid` is genuinely the group leader (BEAM's per-port pgroup-leader
+  # guarantee: pgid == os_pid) and the group is not this VM's own — otherwise
+  # falls back to signaling the parent + enumerated children individually, so a
+  # mis-derived pgid can never SIGKILL an unrelated group.
+  defp group_signal(os_pid, signal)
+       when is_integer(os_pid) and os_pid > 1 and is_binary(signal) do
+    if group_leader_safe?(os_pid) do
+      _ = System.cmd("/bin/sh", ["-c", "kill #{signal} -#{os_pid} 2>/dev/null"])
+      :group
+    else
+      children = children_of(os_pid)
+      _ = System.cmd("/bin/sh", ["-c", "kill #{signal} #{os_pid} 2>/dev/null"])
+      Enum.each(children, &individual_signal(&1, signal))
+      {:fallback, children}
+    end
+  end
+
+  defp group_signal(_os_pid, _signal), do: :noop
+
+  defp individual_signal(pid, signal) when is_integer(pid) and pid > 1 do
+    _ = System.cmd("/bin/sh", ["-c", "kill #{signal} #{pid} 2>/dev/null"])
+    :ok
+  end
+
+  defp individual_signal(_pid, _signal), do: :ok
+
+  # Poll `ps` until `os_pid` is gone or the budget elapses. The OS death oracle
+  # — never the Port's `:exit_status`.
+  defp await_dead(os_pid, budget_ms \\ 500)
+
+  defp await_dead(os_pid, budget_ms) when budget_ms <= 0, do: dead?(os_pid)
+
+  defp await_dead(os_pid, budget_ms) do
+    if dead?(os_pid) do
+      true
+    else
+      Process.sleep(10)
+      await_dead(os_pid, budget_ms - 10)
+    end
+  end
+
+  defp dead?(os_pid), do: not alive?(os_pid)
+
+  defp alive?(os_pid) when is_integer(os_pid) do
+    {_out, status} =
+      System.cmd("ps", ["-p", Integer.to_string(os_pid)], stderr_to_stdout: true)
+
+    status == 0
+  end
+
+  # A group-kill of `-os_pid` is safe ONLY when os_pid is genuinely the group's
+  # leader (pgid == os_pid) and that group is not this VM's own group.
+  defp group_leader_safe?(os_pid) do
+    with pgid when is_integer(pgid) <- pgid_of(os_pid),
+         own when is_integer(own) <- own_pgid() do
+      pgid == os_pid and pgid != own
+    else
+      _ -> false
+    end
+  end
+
+  defp pgid_of(pid) do
+    case System.cmd("ps", ["-o", "pgid=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
+      {out, 0} -> out |> String.trim() |> parse_int()
+      _ -> nil
+    end
+  end
+
+  defp own_pgid, do: pgid_of(os_getpid())
+
+  defp os_getpid, do: :os.getpid() |> to_string() |> String.to_integer()
+
+  defp children_of(ppid) do
+    case System.cmd("ps", ["-o", "pid=", "--ppid", Integer.to_string(ppid)],
+           stderr_to_stdout: true
+         ) do
+      {out, 0} ->
+        out
+        |> String.split("\n", trim: true)
+        |> Enum.map(&parse_int/1)
+        |> Enum.reject(&is_nil/1)
+
+      _ ->
+        # BSD ps (macOS) lacks --ppid; fall back to a full-table scan.
+        bsd_children_of(ppid)
+    end
+  end
+
+  defp bsd_children_of(ppid) do
+    case System.cmd("ps", ["-Ao", "pid=,ppid="], stderr_to_stdout: true) do
+      {out, 0} ->
+        out
+        |> String.split("\n", trim: true)
+        |> Enum.flat_map(fn line ->
+          case line |> String.split(~r/\s+/, trim: true) |> Enum.map(&parse_int/1) do
+            [pid, ^ppid] when is_integer(pid) -> [pid]
+            _ -> []
+          end
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp parse_int(str) do
+    case Integer.parse(String.trim(str)) do
+      {n, _} -> n
+      :error -> nil
+    end
+  end
 end
