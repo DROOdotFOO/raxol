@@ -295,9 +295,15 @@ defmodule Raxol.Agent.Red.U4Support do
 
   @doc """
   Dead injector `:emit_ahead` (N-JS7): the buggy EmitBridge-like ordering —
-  predict the next offset from a local counter, PUBLISH the live event first,
-  and only then append (the inverse of the real EmitBridge's
-  append-before-publish; invariant I3's publish-ahead window held open).
+  derive the next offset from the CURRENT durable record count, PUBLISH the
+  live event first, and only then append (the inverse of the real
+  EmitBridge's append-before-publish; invariant I3's publish-ahead window
+  held open).
+
+  The `raw-count + 1` prediction deliberately couples this CI-green guard to
+  the FROZEN offset law (§1.1 / P-JS1: record ids are dense, 1-based,
+  gapless). That coupling is the point: if the offset law ever changes, this
+  guard MUST break loudly — a contract change, not a flake.
 
   Sends `{:reattach_live, session, record}` to `subscriber`, then calls
   `probe.(predicted_id)` INSIDE the window (this models the late subscriber

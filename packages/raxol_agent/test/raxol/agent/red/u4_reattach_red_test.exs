@@ -28,6 +28,12 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
     * History policies: `{:from_offset, n}` = records `n..from_offset-1`;
       `:tip` = the single conversational-tip record (frozen predicate,
       `Raxol.Agent.Journal.Tip`); `:none` = no history.
+    * **Session resolution:** `attach/3` has no base-dir parameter — the
+      implementation resolves `session_id` on its read path where
+      `FileStore.open/2` resolves it by default (the ambient sessions base).
+      This suite seeds every journal there; the base is pinned once for the
+      whole run in `test_helper.exs` and never mutated per-test, so the
+      module is `async: true`-safe with no global-env writes.
 
   ## Contours (freeze §1.2/§1.3)
 
@@ -68,20 +74,21 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
   @moduletag :capture_log
 
   setup do
-    base =
+    # Per-test scratch space for NON-session artifacts (the tar file). Session
+    # journals do NOT live here — see sessions_base/0 / open_session!/0.
+    scratch =
       Path.join(
         System.tmp_dir!(),
         "raxol_red_u4_#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(base)
-    on_exit(fn -> File.rm_rf(base) end)
-    {:ok, base: base}
+    File.mkdir_p!(scratch)
+    on_exit(fn -> File.rm_rf(scratch) end)
+    {:ok, scratch: scratch}
   end
 
   describe "P-JS5 — replay closure (the U4 law)" do
-    property "∀ split offset o: read(0..o−1) ++ attach_live(o..) == full durable record stream, as a sequence",
-             %{base: base} do
+    property "∀ split offset o: read(0..o−1) ++ attach_live(o..) == full durable record stream, as a sequence" do
       check all(
               pre_types <-
                 list_of(member_of(U4Support.conversational_types()),
@@ -100,51 +107,56 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
         o = rem(split_pick, n_pre + 1) + 1
         spec = %{pre: pre_types, post: post_types, split: o}
 
-        {j, session, dir} = U4Support.open!(base)
+        {j, session, dir} = open_session!()
 
-        pre_records =
-          pre_types
-          |> Enum.with_index(1)
-          |> Enum.map(fn {t, i} -> U4Support.conv_event(t, marker: "pre-#{i}") end)
+        # Close in `after` so a failing/shrinking property run never leaks the
+        # Writer — assertions here MUST run while the journal is still open
+        # (live records are appended after the attach), so close-before-assert
+        # is not an option in this red.
+        try do
+          pre_records =
+            pre_types
+            |> Enum.with_index(1)
+            |> Enum.map(fn {t, i} -> U4Support.conv_event(t, marker: "pre-#{i}") end)
 
-        U4Support.append_all!(j, pre_records)
+          U4Support.append_all!(j, pre_records)
 
-        result = Reattach.attach(session, o, {:from_offset, 1})
+          result = Reattach.attach(session, o, {:from_offset, 1})
 
-        assert match?({:ok, _}, result),
-               "U4-R RED (P-JS5 replay closure): attach(#{inspect(session)}, #{o}, " <>
-                 "{:from_offset, 1}) must replay history 1..#{o - 1} and follow live " <>
-                 "from #{o} — got #{inspect(result)}. journal spec: #{inspect(spec)}"
+          assert match?({:ok, _}, result),
+                 "U4-R RED (P-JS5 replay closure): attach(#{inspect(session)}, #{o}, " <>
+                   "{:from_offset, 1}) must replay history 1..#{o - 1} and follow live " <>
+                   "from #{o} — got #{inspect(result)}. journal spec: #{inspect(spec)}"
 
-        {:ok, %{history: history}} = result
+          {:ok, %{history: history}} = result
 
-        post_records =
-          post_types
-          |> Enum.with_index(1)
-          |> Enum.map(fn {t, i} -> U4Support.conv_event(t, marker: "post-#{i}") end)
+          post_records =
+            post_types
+            |> Enum.with_index(1)
+            |> Enum.map(fn {t, i} -> U4Support.conv_event(t, marker: "post-#{i}") end)
 
-        U4Support.append_all!(j, post_records)
+          U4Support.append_all!(j, post_records)
 
-        # Live = catch-up (pre records with id >= o) + everything appended after
-        # the attach, delivered as {:reattach_live, session, record} in order.
-        expected_live = n_pre - o + 1 + length(post_records)
-        live = collect_live(session, expected_live)
+          # Live = catch-up (pre records with id >= o) + everything appended after
+          # the attach, delivered as {:reattach_live, session, record} in order.
+          expected_live = n_pre - o + 1 + length(post_records)
+          live = collect_live(session, expected_live)
 
-        full = FaultJournal.raw_records!(dir)
+          full = FaultJournal.raw_records!(dir)
 
-        assert U4Support.closure_check(history, live, full, o) == :ok,
-               "closure violated at split #{o}: #{inspect(U4Support.closure_check(history, live, full, o))} " <>
-                 "(spec: #{inspect(spec)})"
-
-        FileStore.close(j)
+          assert U4Support.closure_check(history, live, full, o) == :ok,
+                 "closure violated at split #{o}: #{inspect(U4Support.closure_check(history, live, full, o))} " <>
+                   "(spec: #{inspect(spec)})"
+        after
+          FileStore.close(j)
+        end
       end
     end
   end
 
   describe "writerless reattach (read-side only, §1.1)" do
-    test "reattaches against a dead-Writer session, serves full history, and writes nothing",
-         %{base: base} do
-      {j, session, dir} = U4Support.open!(base)
+    test "reattaches against a dead-Writer session, serves full history, and writes nothing" do
+      {j, session, dir} = open_session!()
 
       records =
         for i <- 1..5, do: U4Support.conv_event("item_completed", marker: "wl-#{i}")
@@ -172,8 +184,8 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
     end
 
     test "a tar'd + untar'd session directory reattaches identically (self-containment, §0.5)",
-         %{base: base} do
-      {j, session, dir} = U4Support.open!(base)
+         %{scratch: scratch} do
+      {j, session, dir} = open_session!()
 
       records =
         for i <- 1..4, do: U4Support.conv_event("item_completed", marker: "tar-#{i}")
@@ -181,28 +193,36 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
       U4Support.append_all!(j, records)
       :ok = FileStore.close(j)
 
-      # tar the session dir, untar into a fresh base — the directory is the
-      # unit of portability; every reference resolves inside it.
-      tar = Path.join(base, "session.tar")
-      new_base = Path.join(base, "untarred")
-      File.mkdir_p!(new_base)
+      original = FaultJournal.raw_records!(dir)
+
+      # tar the session dir, DESTROY the original, and restore it purely from
+      # the archive — the directory that reattaches below is entirely the
+      # untarred artifact (§0 clause 5: the session directory is the unit of
+      # portability; every reference a record carries resolves inside it, so
+      # the archive alone must be sufficient). No global state is touched:
+      # the restored dir lands back under the run-wide ambient sessions base
+      # (see sessions_base/0), where the frozen attach/3 resolves session ids.
+      tar = Path.join(scratch, "session.tar")
 
       :ok =
         :erl_tar.create(String.to_charlist(tar), [
           {String.to_charlist(session), String.to_charlist(dir)}
         ])
 
-      :ok = :erl_tar.extract(String.to_charlist(tar), [{:cwd, String.to_charlist(new_base)}])
+      File.rm_rf!(dir)
 
-      moved = FaultJournal.raw_records!(Path.join(new_base, session))
-      original = FaultJournal.raw_records!(dir)
-      assert moved == original, "tar round-trip changed the journal bytes"
+      :ok =
+        :erl_tar.extract(
+          String.to_charlist(tar),
+          [{:cwd, String.to_charlist(Path.dirname(dir))}]
+        )
 
-      # NOTE: the red drives the frozen attach surface; the implementation must
-      # resolve the session in the new base (e.g. via journal_opts/base_dir on
-      # its read path). What is frozen HERE: reattach against the untarred copy
-      # succeeds and serves the identical history.
-      result = reattach_in_base(session, new_base, 5, {:from_offset, 1})
+      assert FaultJournal.raw_records!(dir) == original,
+             "tar round-trip changed the journal bytes"
+
+      # What is frozen HERE: reattach against a directory restored purely from
+      # the tar archive succeeds and serves the identical history.
+      result = Reattach.attach(session, 5, {:from_offset, 1})
 
       assert match?({:ok, %{history: _}}, result),
              "U4-R RED (self-containment): reattach against a tar'd+untar'd session " <>
@@ -214,8 +234,7 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
   end
 
   describe "Dormammu (P-JS3, FI-12) — resume never lands on a non-conversational tail" do
-    property "attach(:tip) on a journal ending in checkpoint/meta/idle/woken resumes at the last CONVERSATIONAL loop event",
-             %{base: base} do
+    property "attach(:tip) on a journal ending in checkpoint/meta/idle/woken resumes at the last CONVERSATIONAL loop event" do
       check all(
               conv_types <-
                 list_of(member_of(U4Support.conversational_types()),
@@ -225,7 +244,7 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
               tail_picks <- list_of(integer(0..5), min_length: 1, max_length: 4),
               max_runs: 8
             ) do
-        {j, session, dir} = U4Support.open!(base)
+        {j, session, dir} = open_session!()
 
         conv_records =
           conv_types
@@ -269,8 +288,8 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
   end
 
   describe "history-policy slices (attach{offset, historyPolicy}, AD-15)" do
-    test "{:from_offset, n} delivers exactly records n..from_offset−1", %{base: base} do
-      {j, session, _dir} = U4Support.open!(base)
+    test "{:from_offset, n} delivers exactly records n..from_offset−1" do
+      {j, session, _dir} = open_session!()
 
       records =
         for i <- 1..6, do: U4Support.conv_event("item_completed", marker: "hp-#{i}")
@@ -289,8 +308,8 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
              "{:from_offset, 2} at attach offset 5 must deliver exactly ids 2..4"
     end
 
-    test ":tip delivers exactly the conversational-tip record", %{base: base} do
-      {j, session, dir} = U4Support.open!(base)
+    test ":tip delivers exactly the conversational-tip record" do
+      {j, session, dir} = open_session!()
 
       U4Support.append_all!(j, [
         U4Support.conv_event("turn_started", marker: "t1"),
@@ -313,59 +332,71 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
       assert Enum.map(history, & &1["id"]) == [2]
     end
 
-    test ":none delivers no history — live tail only", %{base: base} do
-      {j, session, _dir} = U4Support.open!(base)
+    test ":none delivers no history — live tail only" do
+      {j, session, _dir} = open_session!()
 
-      U4Support.append_all!(j, [
-        U4Support.conv_event("turn_started", marker: "n1"),
-        U4Support.conv_event("turn_completed", marker: "n2")
-      ])
+      try do
+        U4Support.append_all!(j, [
+          U4Support.conv_event("turn_started", marker: "n1"),
+          U4Support.conv_event("turn_completed", marker: "n2")
+        ])
 
-      result = Reattach.attach(session, 3, :none)
+        result = Reattach.attach(session, 3, :none)
 
-      assert match?({:ok, _}, result),
-             "U4-R RED (history policy :none): got #{inspect(result)}"
+        assert match?({:ok, _}, result),
+               "U4-R RED (history policy :none): got #{inspect(result)}"
 
-      {:ok, %{history: history}} = result
-      assert history == [], ":none must deliver an empty history"
+        {:ok, %{history: history}} = result
+        assert history == [], ":none must deliver an empty history"
 
-      # Only records from the attach offset onward may arrive, and only as live.
-      {:ok, 3} = FileStore.append(j, U4Support.conv_event("error", marker: "n3"))
-      live = collect_live(session, 1)
-      assert Enum.map(live, & &1["id"]) == [3]
-
-      FileStore.close(j)
+        # Only records from the attach offset onward may arrive, and only as live.
+        {:ok, 3} = FileStore.append(j, U4Support.conv_event("error", marker: "n3"))
+        live = collect_live(session, 1)
+        assert Enum.map(live, & &1["id"]) == [3]
+      after
+        FileStore.close(j)
+      end
     end
   end
 
   # --- helpers ---------------------------------------------------------------
 
-  defp collect_live(session, expected, acc \\ [])
-  defp collect_live(_session, 0, acc), do: Enum.reverse(acc)
+  # The frozen attach/3 (session_id, from_offset, policy) carries no base-dir
+  # parameter: an implementation resolves `session_id` on its READ path exactly
+  # where `FileStore.open/2` resolves it by default — the ambient sessions
+  # base. The suite therefore seeds every journal under $RAXOL_SESSIONS_DIR,
+  # which test_helper.exs pins ONCE for the whole run (before any test starts)
+  # and which no test may mutate: per-test isolation comes from unique session
+  # ids, keeping this module safe under `async: true` with ZERO global-env
+  # writes (a System.put_env here would bleed into every concurrently-running
+  # module — exactly the nondeterminism this suite exists to forbid).
+  defp sessions_base, do: System.fetch_env!("RAXOL_SESSIONS_DIR")
 
-  defp collect_live(session, expected, acc) do
-    receive do
-      {:reattach_live, ^session, record} ->
-        collect_live(session, expected - 1, [record | acc])
-    after
-      1_000 -> Enum.reverse(acc)
-    end
+  defp open_session! do
+    {j, session, dir} = U4Support.open!(sessions_base())
+    on_exit(fn -> File.rm_rf(dir) end)
+    {j, session, dir}
   end
 
-  # The frozen attach/3 has no base_dir parameter; a writerless read path must
-  # still be pointable at a session base (the tar'd-dir case). The suite pins
-  # the RAXOL_SESSIONS_DIR resolution the FileStore already honors — the
-  # narrowest surface that keeps attach/3's frozen arity intact.
-  defp reattach_in_base(session, base, from_offset, policy) do
-    previous = System.get_env("RAXOL_SESSIONS_DIR")
-    System.put_env("RAXOL_SESSIONS_DIR", base)
+  @live_timeout_ms 1_000
 
-    try do
-      Reattach.attach(session, from_offset, policy)
-    after
-      if previous,
-        do: System.put_env("RAXOL_SESSIONS_DIR", previous),
-        else: System.delete_env("RAXOL_SESSIONS_DIR")
+  # Live-tail collector: exactly `expected` messages or an HONEST failure.
+  # Never returns a partial list — a slow-but-correct delivery must fail as
+  # "timed out waiting for live message i/N", not leak downstream and surface
+  # as a spurious {:sequence_mismatch, ...} closure violation.
+  defp collect_live(session, expected) do
+    for i <- 1..expected//1 do
+      receive do
+        {:reattach_live, ^session, record} -> record
+      after
+        @live_timeout_ms ->
+          flunk(
+            "timed out (#{@live_timeout_ms}ms) waiting for live message " <>
+              "#{i}/#{expected} ({:reattach_live, #{inspect(session)}, _}) — " <>
+              "live delivery incomplete; this is a delivery timeout, NOT a " <>
+              "P-JS5 closure violation"
+          )
+      end
     end
   end
 
@@ -403,6 +434,7 @@ defmodule Raxol.Agent.Red.U4ReattachGuardsTest do
   alias Raxol.Agent.Invariants.FaultJournal
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.Journal.Tip
+  alias Raxol.Agent.Reattach
   alias Raxol.Agent.Red.U4Support
 
   @moduletag :capture_log
@@ -635,6 +667,32 @@ defmodule Raxol.Agent.Red.U4ReattachGuardsTest do
       assert Tip.tip(records, "x") == :no_tip
 
       :ok = FileStore.close(j)
+    end
+  end
+
+  describe "frozen facade — session_id hygiene (§0.7 admission decision, runs in CI)" do
+    # Reattach resolves `session_id` into a filesystem path on its read path,
+    # so traversal names must die at the frozen facade — BEFORE any impl — or
+    # the frozen shape bakes in path-traversal exposure for the eventual U4
+    # implementation. Mirrors FileStore's write-side session-id rule.
+    test "attach/3 rejects traversal/separator/empty session ids before any impl dispatch" do
+      for evil <- [
+            "../../other-tenant/session",
+            "..",
+            ".",
+            "nested/session",
+            "back\\slash",
+            "",
+            <<"nul", 0, "byte">>
+          ] do
+        assert Reattach.attach(evil, 0, :none) == {:error, :invalid_session_id},
+               "the frozen facade must reject #{inspect(evil)} as :invalid_session_id"
+      end
+    end
+
+    test "a well-formed session id is never rejected by the facade" do
+      refute Reattach.attach("red-u4-wellformed_1.0", 0, :none) ==
+               {:error, :invalid_session_id}
     end
   end
 

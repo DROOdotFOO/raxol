@@ -72,8 +72,32 @@ defmodule Raxol.Agent.Reattach do
               policy :: history_policy()
             ) :: {:ok, attachment()} | {:error, term()}
 
+  # A session_id names an on-disk session directory on the read path, so the
+  # facade must reject anything able to escape the sessions base (separators,
+  # `.`/`..` traversal, NUL) BEFORE dispatching to any implementation. Same
+  # conservative charset as the writer-side rule in
+  # `Raxol.Agent.Journal.FileStore`.
+  @session_id_re ~r/\A[A-Za-z0-9._-]+\z/
+
   @doc """
-  Facade `attach/3` — dispatches to the configured implementation
+  Whether `session_id` is a legal reattach target name: a single conservative
+  path segment (`[A-Za-z0-9._-]+`, never `.` or `..`) — identical to the rule
+  `Raxol.Agent.Journal.FileStore` enforces at write time.
+
+  Reattach resolves `session_id` into a filesystem path, so traversal names
+  (`"../../other-tenant/session"`) must die at this frozen surface, not in
+  each implementation. `attach/3` rejects anything else as
+  `{:error, :invalid_session_id}` before reaching the configured impl.
+  """
+  @spec valid_session_id?(String.t()) :: boolean()
+  def valid_session_id?(session_id) when is_binary(session_id) do
+    session_id not in [".", ".."] and Regex.match?(@session_id_re, session_id)
+  end
+
+  @doc """
+  Facade `attach/3` — validates `session_id` (see `valid_session_id?/1`;
+  ill-formed ids are rejected as `{:error, :invalid_session_id}` before any
+  dispatch), then dispatches to the configured implementation
   (`config :raxol_agent, :reattach_impl`), defaulting to
   `Raxol.Agent.Reattach.NotImplemented` until U4 lands.
 
@@ -85,7 +109,11 @@ defmodule Raxol.Agent.Reattach do
           {:ok, attachment()} | {:error, term()}
   def attach(session_id, from_offset, policy)
       when is_binary(session_id) and is_integer(from_offset) and from_offset >= 0 do
-    impl().attach(session_id, from_offset, policy)
+    if valid_session_id?(session_id) do
+      impl().attach(session_id, from_offset, policy)
+    else
+      {:error, :invalid_session_id}
+    end
   end
 
   defp impl do
