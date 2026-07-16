@@ -129,6 +129,9 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     pid
   end
 
+  @doc "Current reserved tokens held against the budget (0 when fully released)."
+  def reserved(budget), do: Agent.get(budget, fn %{reserved: r} -> r end)
+
   @doc "Atomically reserve `amount` against the cap. `:ok` or `{:over, reason}`."
   def try_reserve(budget, amount) do
     Agent.get_and_update(budget, fn %{reserved: reserved, cap: cap} = s ->

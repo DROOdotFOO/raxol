@@ -318,6 +318,33 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     end
   end
 
+  describe "budget reserve release on under-charge terminals (adversarial-review #5)" do
+    test "kill releases the submit-time reserve — a subsequent submit that would have been refused now succeeds" do
+      # Cap fits exactly ONE 100-token reserve. Run A holds it; without release,
+      # run B would be refused (park). Killing A must return the headroom.
+      rig = rig(cap: 100)
+
+      assert {:ok, a} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+      # A is running and holds the reserve.
+      assert L.reserved(rig.budget) == 100
+      assert :ok = Runner.kill(a)
+      # The reserve is returned — the counter tracks the authoritative charge.
+      assert L.reserved(rig.budget) == 0
+
+      # B now fits: it RUNS (a :started opening), never parks on a phantom reserve.
+      assert {:ok, b} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+      events = await_terminals(rig.bus, [b])
+
+      refute Enum.any?(
+               events,
+               &(&1.kind == :probe_run and &1.run_id == b and &1.status == :parked)
+             ),
+             "B was refused a reserve that kill should have released: #{inspect(events)}"
+
+      assert L.lifecycle_complete(events, [b]) == :ok
+    end
+  end
+
   describe "P-U12.2 budget — reserve-before-call (AD-6a)" do
     test "journal order per provider call is reserve → call → settle; never a call without a prior same-run reserve" do
       rig = rig()

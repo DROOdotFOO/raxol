@@ -110,8 +110,11 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
         {:reply, {:error, :not_found}, state}
 
       %{status: :running, killed: false, emit: emit, spec: spec} = run ->
+        # :killed charges @zero_charge (< the submit-time reserve): release it so
+        # the budget's reserved counter tracks the authoritative charge (F5, #5).
+        release_reserve(run)
         emit_terminal(emit, run_id, spec.id, :killed, @zero_charge, nil)
-        {:reply, :ok, put_run(state, run_id, %{run | status: :killed, killed: true})}
+        {:reply, :ok, put_run(state, run_id, %{run | status: :killed, killed: true, reserved: 0})}
 
       _already_terminal ->
         # Idempotent: a run past its terminal is not re-killed (no double emit).
@@ -202,7 +205,21 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     case reserve_two_level(session_budget, budget, @reserve_estimate) do
       :ok ->
         emit_opening(emit, run_id, spec.id, :started)
-        run = %{status: :running, killed: false, emit: emit, spec: spec, context: context}
+
+        run = %{
+          status: :running,
+          killed: false,
+          emit: emit,
+          spec: spec,
+          context: context,
+          # Budget handles + the submit-time reserve, so an under-charge terminal
+          # (kill/timeout — both charge less than reserved) can RELEASE it and the
+          # authoritative charge stops diverging from the reserved counter (F5).
+          budget: budget,
+          session_budget: session_budget,
+          reserved: @reserve_estimate
+        }
+
         state = put_run(state, run_id, run)
 
         state =
@@ -517,6 +534,19 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
         end
     end
   end
+
+  # Release the submit-time reserve held by a run whose terminal charges less
+  # than it reserved (kill / timeout — both @zero_charge). Both budget levels
+  # were reserved together at submit (reserve_two_level), so both are released
+  # together. A run that has no held reserve (parked = reserve was refused, or an
+  # already-released terminal) carries `reserved: 0` and is a no-op.
+  defp release_reserve(%{reserved: amount} = run) when amount > 0 do
+    release(Map.get(run, :budget), amount)
+    release(Map.get(run, :session_budget), amount)
+    :ok
+  end
+
+  defp release_reserve(_run), do: :ok
 
   # Atomic `Ledger.try_spend`-shaped reserve against the injected handle.
   defp reserve(nil, _amount), do: :ok
