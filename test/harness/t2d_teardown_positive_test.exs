@@ -178,10 +178,10 @@ defmodule Raxol.Harness.T2dTeardownPositiveTest do
     # unit T28b (the in-process Raxol.stop/1 facet was fixed by T28a and is
     # enforced by the now-unskipped Tier A test above; the first SIGTERM
     # handler attempt self-deadlocked in :erl_signal_server and was
-    # reworked into T28b). `:pending_t28` marks the tracked gap; `skip:`
+    # reworked into T28b). `:pending_t28b` marks the tracked gap; `skip:`
     # keeps the suite green today. T28b's builder removes the `skip:` line
     # once the VM shutdown path is wired to reach the driver.
-    @tag :pending_t28
+    @tag :pending_t28b
     @tag skip:
            "blocked on unit T28b — default SIGTERM/init:stop does not reach driver terminate"
     test "a plain SIGTERM (no app-level handler) emits the driver teardown to the tty" do

@@ -108,7 +108,7 @@ defmodule Raxol.Terminal.InlineDriver do
       T28b lands, production SIGTERM teardown relies on the app arranging
       its own handler that calls `Raxol.stop/1` (as the Tier B
       `LC-P-SIGTERM` test does); the gap stays pinned by the remaining
-      skipped `@tag :pending_t28` test. The driver's own teardown is
+      skipped `@tag :pending_t28b` test. The driver's own teardown is
       meanwhile proven deterministically by stopping the driver process
       directly (`LC-P-CLEAN`).
 

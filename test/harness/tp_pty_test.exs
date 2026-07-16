@@ -12,7 +12,11 @@ defmodule Raxol.Harness.TpPtyTest do
   controlling terminal, non-deterministic scheduler) -- a flake in the
   kernel/runner, not in the assertions -- so it is gated off the default
   CI path (which sets `SKIP_TERMBOX2_TESTS=true`) and runs locally /
-  watched. Skips cleanly (not a failure) when `python3` is absent.
+  watched. Note: `SKIP_TERMBOX2_TESTS=true` is also set automatically for
+  local agent sessions (see `.claude/settings.json`), so this suite is
+  skipped there too -- run it explicitly with
+  `mix test --include skip_on_ci test/harness/tp_pty_test.exs` or in a
+  clean env. Skips cleanly (not a failure) when `python3` is absent.
   """
 
   use ExUnit.Case, async: true
