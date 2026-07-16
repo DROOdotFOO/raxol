@@ -786,7 +786,12 @@ end
 defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.Agent.Red.U21.{Contours, Gen, Injector, Oracle, Fired}
+  alias Raxol.Agent.DoneGate
+  alias Raxol.Agent.Red.U21.{Build, Contours, Gen, Injector, Oracle, Fired}
+
+  # Route the real gate through apply/3 (same reason as the RedTest helper):
+  # keep the return type dynamic so {:ok, _} matches never narrow to dead code.
+  defp real_gate(journal, turn, refs), do: apply(DoneGate, :gate, [journal, turn, refs])
 
   describe "positive anchor — the contours are satisfiable" do
     test "a correct reference implementation satisfies every contour" do
@@ -895,4 +900,49 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneControlsTest do
   # the positive-anchor Reference check, the dead-injector controls, and the
   # generator-coverage guard below.
   # ===========================================================================
+
+  # ===========================================================================
+  # U21-R2 #5 — mutation-classification boundary anchor (impl-independent).
+  #
+  # The fold property compares the gate against `Oracle.verdict/3`, but the
+  # Oracle re-implements the gate's `mutating?`/`evidence_class?` predicates —
+  # so a wrong-but-CONSISTENT change to the mutation boundary moves both sides
+  # together and stays invisible to the fold property AND every injector. This
+  # control pins the boundary against HAND-AUTHORED literal verdicts (derived
+  # from neither predicate): if the gate's notion of "what is a mutation"
+  # drifts, this fails even where the coupled fold property cannot see it.
+  # ===========================================================================
+  describe "U21-R2 #5 — mutation-classification boundary (hand-authored literals)" do
+    test "an effect-bearing tool_use with `mutating: false` counts as a mutation" do
+      # Literal: evidence at offset 2 precedes an effect-bearing tool_use at
+      # offset 3 whose producer stamped `mutating: false`. Independent of any
+      # predicate, offset 3 IS a mutation, so citing the pre-mutation evidence
+      # must yield exactly {:error, {:stale_evidence, 2}}.
+      effect_bearing_write =
+        Build.ev(
+          3,
+          :item_completed,
+          %{item_type: :tool_use, mutating: false, effect_class: :reversible_local},
+          turn_id: "t"
+        )
+
+      journal = [Build.turn_started(1), Build.evidence(2), effect_bearing_write]
+
+      assert real_gate(journal, "t", [2]) == {:error, {:stale_evidence, 2}}
+    end
+
+    test "a read-only tool_use (no effect_class) is NOT a mutation and does not gate later evidence" do
+      # Literal: a real mutation at 2, evidence at 3, then a read-only tool_use
+      # at 4. The read must NOT count as a mutation, so evidence at 3 (which
+      # postdates the real mutation) still holds — the correct verdict is
+      # exactly an accept whose done cites [3].
+      read_only =
+        Build.ev(4, :item_completed, %{item_type: :tool_use, name: "fs_read"}, turn_id: "t")
+
+      journal = [Build.turn_started(1), Build.mutation(2), Build.evidence(3), read_only]
+
+      assert {:ok, done} = real_gate(journal, "t", [3])
+      assert done.payload.refs == [3]
+    end
+  end
 end
