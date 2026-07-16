@@ -65,6 +65,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
           id: non_neg_integer(),
           schema_version: String.t(),
           kind: String.t(),
+          branch_id: String.t(),
           session_id: String.t(),
           ts: integer(),
           tip_offset: pos_integer(),

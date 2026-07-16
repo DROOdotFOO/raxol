@@ -454,6 +454,22 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
       refute Map.has_key?(cp, "api_key")
       :ok = FileStore.close(j)
     end
+
+    test "the written record carries branch_id — the frozen field @type t now documents",
+         %{base: base} do
+      {j, _session, dir} = seed_conversation!(base)
+
+      assert {:ok, _off} =
+               Checkpoint.write(j, %{"applied" => []}, reason: "manual")
+
+      cp = CR.raw_records(dir) |> Enum.find(&(&1["kind"] == "checkpoint"))
+
+      # branch_id is written (single linear "main" branch, v1) and enumerated by
+      # record_keys/0 — the @type t spec must include it too (spec/record parity).
+      assert cp["branch_id"] == "main"
+      assert "branch_id" in Checkpoint.record_keys()
+      :ok = FileStore.close(j)
+    end
   end
 
   # ===========================================================================
