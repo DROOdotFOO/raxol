@@ -19,5 +19,11 @@ Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 
 # :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
 # until their units (U4–U9) land. :mutation — negative-control checklists
-# (meta-invariant m4), run on demand, never in regular CI.
-ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation])
+# (meta-invariant m4), run on demand, never in regular CI. :harness_red —
+# permanent failing-first red suites (test/raxol/agent/red/) authored against
+# the frozen contracts (harness-freeze-contracts.md) BEFORE their units exist;
+# excluded so CI stays green until an implementation turns them on:
+#
+#     MIX_ENV=test mix test --only harness_red
+#
+ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation, :harness_red])
