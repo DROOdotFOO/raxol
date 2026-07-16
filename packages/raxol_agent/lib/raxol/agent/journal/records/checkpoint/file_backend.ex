@@ -1,0 +1,638 @@
+defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
+  @moduledoc """
+  U9 — the file-store backend for `Raxol.Agent.Journal.Records.Checkpoint`
+  (AD-10 / AD-3a). Implements the checkpoint **pointer-record** discipline over
+  a `Raxol.Agent.Journal.FileStore` session.
+
+  A checkpoint is an in-log pointer, not a second store: the snapshot payload is
+  content-addressed and written out-of-line to `<session>/snapshots/<sha256>.json`
+  (FI-8 atomic temp+fsync+rename) **before** the pointer record is appended
+  through the one single Writer, consuming exactly one offset from the one id
+  space (the offset law, JS-FREEZE §1.1). The record body carries only the
+  pointer + hash + tip — never model content (FI-10).
+
+  ## Write path (`write/3`)
+
+    1. read the journal (tolerant Reader; STRING-keyed maps);
+    2. resolve `tip_offset` (explicit opt, else the derived conversational tip);
+    3. reject an invalid tip (`:invalid_tip`) — the named record must exist and
+       be CONVERSATIONAL on the branch (N-JS1); **nothing is appended**;
+    4. reject a mid-turn / mid-reserve write (`:mid_turn` / `:mid_reserve`, N-JS2);
+    5. stage the snapshot file (content-addressed, atomic) — skipped for a
+       `nil` model, which is a legal tip-only pointer (OQ-JS1);
+    6. append the pointer record through the single Writer ⇒ `{:ok, offset}`.
+       The N-JS2 turn-boundary check is **re-run atomically at the commit
+       point** (`FileStore.append_checked/3` — the check executes inside the
+       single Writer against the freshest on-disk records), so a concurrent
+       `turn_started` landing between step 1's read and the append can never
+       slip a checkpoint mid-turn. Step 4 is only the cheap pre-flight that
+       avoids staging a snapshot file destined for rejection.
+
+  ## Restore path (`restore/2`)
+
+  Locate the newest checkpoint (highest offset), then:
+
+    * tip-only pointer (`snapshot_ref == nil`) ⇒ full `fold(0..tip_offset)`;
+    * else verify `sha256(bytes) == snapshot_hash` (mismatch ⇒
+      `:snapshot_corrupt`; absent file ⇒ `:snapshot_missing`; both leave the
+      journal `:ok` and delete nothing, N-JS3), load the snapshot, then fold the
+      CONVERSATIONAL tail (records with `id > tip_offset`) forward onto it.
+
+  Restore folds equal a full fold over the persistent slice (P-JS4).
+
+  ## Restore-path hardening (folded in from `harness-parked.md`)
+
+    * **Bounded nesting BEFORE decode** — the raw snapshot bytes are pre-scanned
+      (`nesting_within_bound?/1`, an O(n) byte walk that never builds a term)
+      and rejected `:snapshot_corrupt` when JSON nesting exceeds
+      `@max_decode_depth` — **before** `Jason.decode/1` ever runs, so an
+      adversarial small-but-deep snapshot can never force the parser to
+      materialize an unbounded term. The depth-bounded structural walk
+      (`safe_term?/2`) still runs after decode as defense in depth.
+    * **`$s` deref-gadget guard** — a decoded map carrying a `"$s"` struct-module
+      tag is rejected (`:snapshot_corrupt`); this backend NEVER resolves a
+      caller-controlled atom to a module or calls `struct/2` on untrusted disk
+      data (type-confusion / atom-table-DoS class).
+    * **Malformed-pointer reject** — `snapshot_ref` must match
+      `snapshots/<64-hex>.json` exactly; anything else (path traversal, wrong
+      shape) is refused before any file read, so a hostile pointer can never
+      escape the session's `snapshots/` directory.
+    * **Snapshot-size ceiling** — a snapshot file over `@max_snapshot_bytes` is
+      refused (`:snapshot_corrupt`) rather than loaded whole.
+
+  ## Model fold (surrogate — re-bind to MS when it lands)
+
+  The Snapshot codec (`Raxol.Agent.Snapshot`, #559) owns serialization; this
+  backend owns only the pointer discipline. The concrete *fold* (applying
+  conversational events onto a model) is not yet frozen against the MS codec on
+  this branch, so it is the deterministic surrogate the U9-R red suite pins:
+  each CONVERSATIONAL event appends its `id` to `model["applied"]`. Re-bind
+  `fold_forward/3` (and `dump/1`) to the real MS fold when MS lands — the
+  round-trip *equation* (P-JS4) is codec-independent.
+
+  ### Surrogate safety (this backend is the DEFAULT — it must fail loud)
+
+  Because this backend is the active default while the MS codec is pending,
+  the surrogate is gated rather than trusted:
+
+    * **Write** — `dump/1` typed-rejects any model the surrogate JSON codec
+      cannot *faithfully* round-trip (structs, tuples, pids, refs, functions,
+      atom keys/values, non-UTF-8 binaries, non-map top-level):
+      `{:error, :surrogate_backend_unbound}`, nothing staged, nothing appended
+      — never an uncaught `Jason.EncodeError` crashing the caller. The error is
+      permanent-by-construction until the MS reducer lands and `dump/1` is
+      re-bound.
+    * **Restore** — every successful restore through the surrogate is LOUD:
+      it emits `[:raxol, :agent, :journal, :checkpoint, :surrogate]` telemetry
+      (metadata `%{op: :restore, session_id:, tip_offset:}` — offsets only,
+      never content, FI-10) and logs a warning, so a caller can never mistake
+      the surrogate `%{"applied" => [ids]}` fold for real harness state.
+      Writes that stage a surrogate snapshot emit the same event with
+      `op: :write`.
+
+  ### FI-10 scope note (sanitize / secret exclusion)
+
+  The freeze binds snapshot-content sanitization + MS secret exclusion to the
+  MS codec. The surrogate performs NO redaction: a JSON-safe model is written
+  verbatim (plaintext) to `snapshots/` — the same trust domain and permissions
+  as the journal segments, which already persist event payloads in plaintext.
+  The record body itself never carries model content (FI-10 proper). Re-bind
+  redaction together with `dump/1` when MS lands.
+
+  ### Acronym legend (defined in `harness-freeze-contracts.md`)
+
+  AD-10/AD-3a checkpoint decisions · FI-7 never delete implicitly · FI-8 atomic
+  temp+fsync+rename · FI-10 no model content in records/telemetry · N-JS1 tip
+  validity · N-JS2 turn-boundary · N-JS3 corrupt/missing snapshot is typed, not
+  damage · P-JS4 restore == full fold · OQ-JS1 tip-only pointer ruled legal ·
+  JS-FREEZE §1.1 the frozen record shape/offset law.
+  """
+
+  require Logger
+
+  @behaviour Raxol.Agent.Journal.Records.Checkpoint
+
+  alias Raxol.Agent.Journal.FileStore
+
+  @kind Raxol.Agent.Journal.Records.Checkpoint.kind()
+  @reasons Raxol.Agent.Journal.Records.Checkpoint.reasons()
+
+  # The frozen CONVERSATIONAL whitelist (JS-FREEZE §1.1 — the closure rule).
+  @conversational MapSet.new(~w(
+    turn_started item_started item_completed
+    turn_completed turn_canceled error approval_requested
+  ))
+
+  # A checkpoint's own branch (v1: single linear "main" branch).
+  @branch "main"
+
+  # Content-addressed snapshot pointer shape: snapshots/<sha256-hex>.json.
+  @ref_re ~r|\Asnapshots/[0-9a-f]{64}\.json\z|
+
+  # Restore-path hardening bounds.
+  @max_decode_depth 64
+  @max_snapshot_bytes 64 * 1024 * 1024
+
+  # --- write -----------------------------------------------------------------
+
+  @impl true
+  def write(%FileStore{} = journal, model, opts) do
+    with {:ok, records} <- read_records(journal),
+         {:ok, tip} <- resolve_tip(records, opts),
+         :ok <- check_turn_boundary(records),
+         {:ok, reason} <- validate_reason(opts) do
+      append_checkpoint(journal, model, tip, reason)
+    end
+  end
+
+  def write(_journal, _model, _opts), do: {:error, :invalid_journal}
+
+  defp append_checkpoint(%FileStore{} = journal, model, tip, reason) do
+    # File-BEFORE-record (FI-8): a crash after this and before the append leaves
+    # a harmless content-addressed orphan (FI-7: never deleted implicitly).
+    with {:ok, ref, hash} <- stage_snapshot(journal, model) do
+      record = %{
+        "kind" => @kind,
+        "branch_id" => @branch,
+        "session_id" => journal.session_id,
+        "ts" => System.system_time(:microsecond),
+        "tip_offset" => tip,
+        "snapshot_ref" => ref,
+        "snapshot_hash" => hash,
+        "reason" => reason
+      }
+
+      # The single Writer stamps `id` (= the checkpoint's own dense offset) and
+      # `schema_version`, consuming one offset from the one counter (offset law).
+      #
+      # N-JS2 at the COMMIT POINT: `write/3`'s pre-flight boundary check read a
+      # snapshot of the records that can go stale — with a shared Writer (owner
+      # + joiner handles) a concurrent `turn_started` could land between that
+      # read and this append. `append_checked/3` re-runs the turn-boundary rule
+      # INSIDE the single Writer against the freshest on-disk records, so
+      # check-and-append is one atomic step and a checkpoint can never land
+      # mid-turn through the race window. (A staged snapshot rejected here is a
+      # harmless content-addressed orphan, FI-7.)
+      FileStore.append_checked(journal, record, &check_turn_boundary/1)
+    end
+  end
+
+  # nil model ⇒ legal tip-only pointer (OQ-JS1): no snapshot file.
+  defp stage_snapshot(%FileStore{}, nil), do: {:ok, nil, nil}
+
+  defp stage_snapshot(%FileStore{dir: dir} = journal, model) do
+    with {:ok, bytes} <- dump(model) do
+      hash = sha256_hex(bytes)
+      ref = "snapshots/#{hash}.json"
+      path = Path.join(dir, ref)
+
+      with :ok <- atomic_write(path, bytes) do
+        surrogate_event(:write, journal.session_id, nil)
+        {:ok, ref, hash}
+      end
+    end
+  end
+
+  # --- restore ---------------------------------------------------------------
+
+  @impl true
+  def restore(%FileStore{} = journal, _opts) do
+    with {:ok, records} <- read_records(journal),
+         {:ok, checkpoint} <- newest_checkpoint(records),
+         # Delegates to the SAME hardened single-checkpoint restore U10
+         # compaction resume uses — restore/2 IS restore_checkpoint/3 applied
+         # to the newest checkpoint (structural resume-equivalence; no fork).
+         {:ok, model} <- restore_checkpoint(journal, records, checkpoint) do
+      # The restored model is the SURROGATE fold, not real harness state — be
+      # loud so a caller can never mistake it for a real restore (see the
+      # "Surrogate safety" moduledoc section). Telemetry carries offsets only,
+      # never content (FI-10).
+      surrogate_event(:restore, journal.session_id, Map.get(checkpoint, "tip_offset"))
+
+      Logger.warning(
+        "Checkpoint.FileBackend restore used the SURROGATE codec (MS reducer " <>
+          "pending): the restored model is the surrogate fold " <>
+          "(%{\"applied\" => ids}), not real harness state " <>
+          "[session=#{journal.session_id} tip_offset=#{inspect(Map.get(checkpoint, "tip_offset"))}]"
+      )
+
+      {:ok, model}
+    end
+  end
+
+  def restore(_journal, _opts), do: {:error, :invalid_journal}
+
+  @doc """
+  Restore ONE specific already-read `checkpoint` record — the hardened
+  single-checkpoint restore U10 compaction resume delegates to for its
+  newest-first walk. `restore/2` is exactly this applied to the newest
+  checkpoint; both share the same validation + snapshot hardening so
+  compaction-restore IS checkpoint-restore (structural resume-equivalence).
+  """
+  @impl true
+  def restore_checkpoint(%FileStore{} = journal, records, checkpoint)
+      when is_list(records) and is_map(checkpoint) do
+    with {:ok, cp} <- validate_checkpoint(checkpoint) do
+      restore_from(journal, records, cp)
+    end
+  end
+
+  def restore_checkpoint(_journal, _records, _checkpoint),
+    do: {:error, :malformed_checkpoint}
+
+  defp newest_checkpoint(records) do
+    case Enum.filter(records, &(Map.get(&1, "kind") == @kind)) do
+      [] ->
+        {:error, :no_checkpoint}
+
+      cps ->
+        # The Reader is tolerant of a partial record; restore is NOT. Pick the
+        # newest without `fetch!` (a missing `id` is sentinel-ranked, never a
+        # raise); `restore_checkpoint/3` then validates the keys restore
+        # dereferences downstream so an adversarial/truncated checkpoint yields a
+        # typed reject, not a KeyError.
+        {:ok, Enum.max_by(cps, &Map.get(&1, "id", -1))}
+    end
+  end
+
+  # A checkpoint restore dereferences `id` (selection), `tip_offset`, and
+  # `snapshot_ref`; any missing ⇒ `:malformed_checkpoint` (typed reject, N-JS3
+  # class) rather than an unhandled `KeyError` on `Map.fetch!`.
+  #
+  # `tip_offset` must be a POSITIVE INTEGER, not merely present: a nil/absent
+  # `tip_offset` would otherwise fold nothing forward (`id > nil` is always false
+  # under Elixir term order), silently dropping the entire conversational tail
+  # (the zero-fold hazard flagged in adversarial review). `tip_offset`'s frozen type is
+  # `pos_integer()` — a checkpoint can only be written where a real tip exists —
+  # so a non-positive-integer value on disk is a malformed checkpoint.
+  defp validate_checkpoint(cp) do
+    cond do
+      not Map.has_key?(cp, "id") -> {:error, :malformed_checkpoint}
+      not Map.has_key?(cp, "snapshot_ref") -> {:error, :malformed_checkpoint}
+      not valid_tip_offset?(Map.get(cp, "tip_offset")) -> {:error, :malformed_checkpoint}
+      true -> {:ok, cp}
+    end
+  end
+
+  defp valid_tip_offset?(tip), do: is_integer(tip) and tip > 0
+
+  # Tip-only pointer: full fold(0..tip_offset) over conversational records.
+  defp restore_from(%FileStore{}, records, %{"snapshot_ref" => nil} = cp) do
+    tip = Map.fetch!(cp, "tip_offset")
+    {:ok, fold(records, &(&1 <= tip))}
+  end
+
+  defp restore_from(%FileStore{dir: dir}, records, cp) do
+    tip = Map.fetch!(cp, "tip_offset")
+    ref = Map.fetch!(cp, "snapshot_ref")
+
+    with :ok <- validate_ref(ref),
+         {:ok, bytes} <- read_snapshot(dir, ref),
+         :ok <- verify_hash(bytes, Map.get(cp, "snapshot_hash")),
+         {:ok, model} <- decode_snapshot(bytes) do
+      # Fold the CONVERSATIONAL tail (id > tip) forward onto the restored model.
+      {:ok, fold_forward(model, records, &(&1 > tip))}
+    end
+  end
+
+  # --- GC protection floor (newest HEALTHY checkpoint's tip) -----------------
+
+  @impl true
+  def protected_floor(%FileStore{} = journal, records) when is_list(records) do
+    records
+    |> Enum.filter(&(Map.get(&1, "kind") == @kind))
+    |> Enum.sort_by(&Map.get(&1, "id", -1), :desc)
+    |> Enum.find_value(:none, fn cp ->
+      # Health == restore succeeds through the SAME hardened path resume uses, so
+      # the floor is exactly the tip resume restores from (a corrupt newest is
+      # skipped, landing the floor on the older healthy checkpoint's tip).
+      case restore_checkpoint(journal, records, cp) do
+        {:ok, _model} -> {:offset, Map.fetch!(cp, "tip_offset")}
+        {:error, _reason} -> false
+      end
+    end)
+  end
+
+  def protected_floor(_journal, _records), do: :none
+
+  # --- tip resolution / validation (N-JS1) -----------------------------------
+
+  defp resolve_tip(records, opts) do
+    case Keyword.get(opts, :tip_offset) do
+      nil ->
+        case conversational_tip(records) do
+          :no_tip -> {:error, :no_tip}
+          offset -> {:ok, offset}
+        end
+
+      explicit ->
+        if valid_tip?(records, explicit),
+          do: {:ok, explicit},
+          else: {:error, :invalid_tip}
+    end
+  end
+
+  defp conversational_tip(records) do
+    records
+    |> Enum.filter(&conversational?/1)
+    |> case do
+      [] -> :no_tip
+      convs -> convs |> Enum.map(&Map.fetch!(&1, "id")) |> Enum.max()
+    end
+  end
+
+  defp valid_tip?(records, offset) do
+    case Enum.find(records, &(Map.get(&1, "id") == offset)) do
+      nil -> false
+      record -> conversational?(record)
+    end
+  end
+
+  # The frozen tip predicate over a STRING-keyed record map (branch-aware,
+  # grandfather-safe: absent kind ⇒ "event", absent branch ⇒ "main").
+  defp conversational?(record) do
+    Map.get(record, "kind", "event") == "event" and
+      Map.get(record, "branch_id", @branch) == @branch and
+      Map.get(record, "family") == "loop" and
+      MapSet.member?(@conversational, Map.get(record, "type"))
+  end
+
+  # --- turn-boundary rule (N-JS2) --------------------------------------------
+
+  defp check_turn_boundary(records) do
+    {turns, reserves} =
+      Enum.reduce(records, {0, 0}, fn r, {turns, reserves} ->
+        case Map.get(r, "type") do
+          "turn_started" ->
+            {turns + 1, reserves}
+
+          t when t in ["turn_completed", "turn_canceled", "error"] ->
+            {max(turns - 1, 0), reserves}
+
+          "reserve" ->
+            {turns, reserves + 1}
+
+          t when t in ["settle", "release"] ->
+            {turns, max(reserves - 1, 0)}
+
+          _ ->
+            {turns, reserves}
+        end
+      end)
+
+    cond do
+      turns > 0 -> {:error, :mid_turn}
+      reserves > 0 -> {:error, :mid_reserve}
+      true -> :ok
+    end
+  end
+
+  # --- reason enum -----------------------------------------------------------
+
+  defp validate_reason(opts) do
+    # Grow-only enum on WRITE; unknown reasons are tolerated only on READ.
+    case to_string(Keyword.get(opts, :reason, "manual")) do
+      reason when reason in @reasons -> {:ok, reason}
+      other -> {:error, {:unknown_reason, other}}
+    end
+  end
+
+  # --- snapshot pointer / integrity (N-JS3 + hardening) ----------------------
+
+  defp validate_ref(ref) when is_binary(ref) do
+    if Regex.match?(@ref_re, ref), do: :ok, else: {:error, :malformed_pointer}
+  end
+
+  defp validate_ref(_), do: {:error, :malformed_pointer}
+
+  defp read_snapshot(dir, ref) do
+    path = Path.join(dir, ref)
+
+    case File.stat(path) do
+      {:ok, %{size: size}} when size > @max_snapshot_bytes ->
+        {:error, :snapshot_corrupt}
+
+      {:ok, _} ->
+        case File.read(path) do
+          {:ok, bytes} -> {:ok, bytes}
+          {:error, _} -> {:error, :snapshot_missing}
+        end
+
+      {:error, :enoent} ->
+        {:error, :snapshot_missing}
+
+      {:error, _} ->
+        {:error, :snapshot_missing}
+    end
+  end
+
+  defp verify_hash(bytes, hash) when is_binary(hash) do
+    if sha256_hex(bytes) == hash, do: :ok, else: {:error, :snapshot_corrupt}
+  end
+
+  defp verify_hash(_bytes, _hash), do: {:error, :snapshot_corrupt}
+
+  defp decode_snapshot(bytes) do
+    # Nesting is bounded BEFORE the parser runs: `Jason.decode/1` materializes
+    # the full term before any post-hoc walk can bound it, so a small (~200 KB)
+    # hash-matching snapshot with ~100k-deep nesting would otherwise force an
+    # unbounded pre-parse (at the 64 MiB cap, gigabytes of heap). The O(n)
+    # byte pre-scan rejects it as the promised typed `:snapshot_corrupt`.
+    if nesting_within_bound?(bytes), do: decode_scanned(bytes), else: {:error, :snapshot_corrupt}
+  end
+
+  defp decode_scanned(bytes) do
+    case Jason.decode(bytes) do
+      # A snapshot's top-level term is ALWAYS a folded model map (the codec dumps
+      # `%{"applied" => ...}`). A scalar/list top-level is adversarial disk data:
+      # reject it here, before it can reach `fold_step`'s `Map.update` and raise a
+      # `BadMapError` on a non-empty conversational tail (typed-reject, never raise).
+      {:ok, term} when is_map(term) ->
+        if safe_term?(term, @max_decode_depth),
+          do: {:ok, term},
+          else: {:error, :snapshot_corrupt}
+
+      {:ok, _non_map} ->
+        {:error, :snapshot_corrupt}
+
+      {:error, _} ->
+        {:error, :snapshot_corrupt}
+    end
+  end
+
+  @doc false
+  # PRE-decode nesting bound (adversarial-disk hardening): a
+  # tail-recursive O(n) walk over the raw bytes that counts `{`/`[` nesting
+  # (string contents and escapes skipped) WITHOUT building any term. Public
+  # (`@doc false`) so the regression suite pins that the bound exists ahead of
+  # the parser, independent of `safe_term?/2`'s post-decode walk.
+  @spec nesting_within_bound?(binary()) :: boolean()
+  def nesting_within_bound?(bytes) when is_binary(bytes),
+    do: scan_nesting(bytes, false, 0)
+
+  defp scan_nesting(_bytes, _in_string, depth) when depth > @max_decode_depth,
+    do: false
+
+  defp scan_nesting(<<>>, _in_string, _depth), do: true
+
+  # Inside a JSON string: skip escape pairs, close on an unescaped quote.
+  defp scan_nesting(<<?\\, _, rest::binary>>, true, depth),
+    do: scan_nesting(rest, true, depth)
+
+  defp scan_nesting(<<?", rest::binary>>, true, depth),
+    do: scan_nesting(rest, false, depth)
+
+  defp scan_nesting(<<_, rest::binary>>, true, depth),
+    do: scan_nesting(rest, true, depth)
+
+  # Outside a string: quotes open strings, brackets move the nesting depth.
+  defp scan_nesting(<<?", rest::binary>>, false, depth),
+    do: scan_nesting(rest, true, depth)
+
+  defp scan_nesting(<<c, rest::binary>>, false, depth) when c in [?{, ?[],
+    do: scan_nesting(rest, false, depth + 1)
+
+  defp scan_nesting(<<c, rest::binary>>, false, depth) when c in [?}, ?]],
+    do: scan_nesting(rest, false, depth - 1)
+
+  defp scan_nesting(<<_, rest::binary>>, false, depth),
+    do: scan_nesting(rest, false, depth)
+
+  # Depth-bounded structural guard + `$s` deref-gadget reject. A snapshot is a
+  # plain JSON-safe term; a `"$s"` struct-module tag on untrusted disk data is
+  # refused rather than resolved to a module (parked hardening).
+  defp safe_term?(_term, depth) when depth < 0, do: false
+
+  defp safe_term?(map, depth) when is_map(map) do
+    not Map.has_key?(map, "$s") and
+      Enum.all?(map, fn {_k, v} -> safe_term?(v, depth - 1) end)
+  end
+
+  defp safe_term?(list, depth) when is_list(list) do
+    Enum.all?(list, &safe_term?(&1, depth - 1))
+  end
+
+  defp safe_term?(_scalar, _depth), do: true
+
+  # --- model fold (surrogate — see moduledoc) --------------------------------
+
+  defp fold(records, pred), do: fold_forward(%{"applied" => []}, records, pred)
+
+  # One O(n) pass: collect the conversational ids in offset order, then a
+  # single concat onto the existing tail (not per-record `++ [id]`, which is
+  # O(n²) over a long conversational tail).
+  defp fold_forward(model, records, pred) do
+    records
+    |> Enum.filter(fn r -> conversational?(r) and pred.(Map.get(r, "id")) end)
+    |> Enum.map(&Map.fetch!(&1, "id"))
+    |> case do
+      [] -> model
+      ids -> Map.update(model, "applied", ids, &(&1 ++ ids))
+    end
+  end
+
+  # Surrogate dump (see the "Surrogate safety" moduledoc section): typed-reject
+  # any model the surrogate JSON codec cannot faithfully round-trip, never an
+  # uncaught `Jason.EncodeError`. `:surrogate_backend_unbound` is permanent
+  # until the MS reducer lands and this is re-bound.
+  defp dump(model) do
+    if surrogate_encodable?(model) do
+      case Jason.encode(model) do
+        {:ok, bytes} -> {:ok, bytes}
+        # e.g. a non-UTF-8 binary — structurally fine, still not encodable.
+        {:error, _} -> {:error, :surrogate_backend_unbound}
+      end
+    else
+      {:error, :surrogate_backend_unbound}
+    end
+  end
+
+  # Faithful-round-trip check for the surrogate codec: the model must already
+  # be JSON-native (string keys; string/number/boolean/nil scalars; lists;
+  # maps; map top-level). Atom keys/values (other than booleans/nil), tuples,
+  # pids, refs, structs, functions are rejected — Jason would either raise or
+  # silently mangle them (decode(encode(m)) ≠ m), and a checkpoint that cannot
+  # restore what was written is corruption by construction.
+  defp surrogate_encodable?(model), do: is_map(model) and json_native?(model)
+
+  defp json_native?(%_struct{}), do: false
+
+  defp json_native?(map) when is_map(map),
+    do: Enum.all?(map, fn {k, v} -> is_binary(k) and json_native?(v) end)
+
+  defp json_native?(list) when is_list(list),
+    do: Enum.all?(list, &json_native?/1)
+
+  defp json_native?(v) when is_binary(v) or is_number(v) or is_boolean(v),
+    do: true
+
+  defp json_native?(nil), do: true
+  defp json_native?(_), do: false
+
+  # The surrogate-backend runtime marker (never carries content, FI-10).
+  defp surrogate_event(op, session_id, tip_offset) do
+    :telemetry.execute(
+      [:raxol, :agent, :journal, :checkpoint, :surrogate],
+      %{},
+      %{op: op, session_id: session_id, tip_offset: tip_offset}
+    )
+  end
+
+  # --- journal read / hashing / atomic file write ----------------------------
+
+  defp read_records(%FileStore{} = journal) do
+    case FileStore.read(journal) do
+      {:ok, records} -> {:ok, records}
+      {:error, reason} -> {:error, {:journal, reason}}
+    end
+  end
+
+  defp sha256_hex(bytes),
+    do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+  # FI-8 atomic write: temp + fsync + rename, then best-effort dir fsync.
+  defp atomic_write(path, data) do
+    dir = Path.dirname(path)
+
+    tmp =
+      path <> ".tmp." <> Integer.to_string(System.unique_integer([:positive]))
+
+    with :ok <- File.mkdir_p(dir),
+         :ok <- write_and_sync(tmp, data),
+         :ok <- File.rename(tmp, path) do
+      sync_dir(dir)
+      :ok
+    else
+      {:error, reason} ->
+        _ = File.rm(tmp)
+        {:error, {:snapshot_write_failed, reason}}
+    end
+  end
+
+  defp write_and_sync(path, data) do
+    case :file.open(path, [:write, :raw, :binary]) do
+      {:ok, io} ->
+        result =
+          with :ok <- :file.write(io, data), do: :file.datasync(io)
+
+        :file.close(io)
+        result
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp sync_dir(dir) do
+    case :file.open(dir, [:read, :raw]) do
+      {:ok, io} ->
+        _ = :file.datasync(io)
+        :file.close(io)
+
+      _ ->
+        :ok
+    end
+
+    :ok
+  end
+end

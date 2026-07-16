@@ -20,6 +20,7 @@ Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 # Red-suite support (reference gates, dead injectors, shared contours) lives
 # under test/raxol/agent/red/support/ — load it explicitly, same mechanic.
 Code.require_file("raxol/agent/red/support/u8_gates.ex", __DIR__)
+Code.require_file("raxol/agent/red/support/u10_compaction.ex", __DIR__)
 
 # The U11-R red suite's oracle + generators live under test/raxol/agent/red/
 # support (also outside elixirc_paths) — load them explicitly. Guard against a
