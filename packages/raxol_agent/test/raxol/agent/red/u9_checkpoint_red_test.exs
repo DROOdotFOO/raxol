@@ -187,9 +187,7 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
 
       # Checkpoint captures the model as of the tip.
       assert {:ok, _cp_off} =
-               Checkpoint.write(j, CR.fold(CR.raw_records(dir)),
-                 reason: "manual"
-               )
+               Checkpoint.write(j, CR.fold(CR.raw_records(dir)), reason: "manual")
 
       # Mutate the conversation forward past the checkpoint.
       CR.append_all!(j, [
@@ -660,6 +658,288 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
 
       # Nothing deleted on the damaged read (FI-7).
       assert File.ls!(Path.join(dir, "journal")) != []
+      :ok = FileStore.close(j)
+    end
+  end
+
+  # ===========================================================================
+  # Surrogate-codec safety — the DEFAULT backend must fail loud, never fake
+  # (adversarial-review findings on U9, PR #582 HIGH)
+  # ===========================================================================
+
+  describe "surrogate-codec guard — write typed-rejects a model the surrogate cannot round-trip" do
+    test "a model carrying a pid and a tuple → :surrogate_backend_unbound; nothing appended, nothing staged",
+         %{base: base} do
+      {j, _session, dir} = seed_conversation!(base)
+      before_ids = CR.raw_ids(dir)
+
+      # A typical folded harness model: structs/tuples/pids everywhere. BEFORE
+      # the fix `dump/1` was `Jason.encode!/1` — an uncaught raise inside
+      # `stage_snapshot` crashing the caller.
+      model = %{"owner" => self(), "shape" => {:grid, 80, 24}}
+
+      assert {:error, :surrogate_backend_unbound} =
+               Checkpoint.write(j, model, reason: "manual"),
+             "a non-JSON model must surface a typed error, never a Jason raise"
+
+      assert CR.raw_ids(dir) == before_ids, "nothing may be appended"
+
+      assert File.ls!(Path.join(dir, "snapshots")) == [],
+             "nothing may be staged for a rejected model"
+
+      :ok = FileStore.close(j)
+    end
+
+    test "an atom-keyed model (decode(encode(m)) ≠ m — a silently mangled restore) → typed reject too",
+         %{base: base} do
+      {j, _session, dir} = seed_conversation!(base)
+
+      # Jason ENCODES this fine — but it restores string-keyed, so a surrogate
+      # snapshot of it can never restore what was written. Corruption by
+      # construction; the guard must reject at write.
+      assert {:error, :surrogate_backend_unbound} =
+               Checkpoint.write(j, %{applied: [1, 2, 3]}, reason: "manual")
+
+      assert File.ls!(Path.join(dir, "snapshots")) == []
+      :ok = FileStore.close(j)
+    end
+  end
+
+  describe "surrogate-codec loudness — a surrogate restore is distinguishable from a real one" do
+    test "write and restore emit the [:raxol,:agent,:journal,:checkpoint,:surrogate] marker; restore logs a warning",
+         %{base: base} do
+      {j, _session, _dir} = seed_conversation!(base)
+
+      handler = "u9-surrogate-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:raxol, :agent, :journal, :checkpoint, :surrogate],
+          fn _event, _meas, meta, _cfg -> send(parent, {:surrogate, meta}) end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, _off} =
+               Checkpoint.write(j, %{"applied" => [1, 2, 3]}, reason: "manual")
+
+      assert_receive {:surrogate, %{op: :write}},
+                     100,
+                     "staging a surrogate snapshot must be marked at runtime"
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{"applied" => [1, 2, 3]}} = Checkpoint.restore(j)
+        end)
+
+      assert_receive {:surrogate, %{op: :restore, tip_offset: 3} = meta},
+                     100,
+                     "a surrogate restore must be marked at runtime"
+
+      # FI-10: the marker carries offsets/session only — never model content.
+      refute Map.has_key?(meta, :model)
+
+      assert log =~ "SURROGATE",
+             "a surrogate restore must warn — the model is the surrogate fold, not real state"
+
+      :ok = FileStore.close(j)
+    end
+  end
+
+  # ===========================================================================
+  # Restore-path hardening — nesting bounded BEFORE decode
+  # (adversarial-review finding on U9, PR #582 HIGH)
+  # ===========================================================================
+
+  describe "restore-path hardening — nesting is bounded BEFORE the parser runs" do
+    test "a small ~100k-deep hash-valid snapshot → :snapshot_corrupt, no raise, journal :ok",
+         %{base: base} do
+      {j, _session, dir} = seed_conversation!(base)
+
+      # ~200 KB of bytes, ~100k levels of nesting: passes the 64 MiB size cap
+      # and the sha256 check, and BEFORE the fix reached `Jason.decode/1`,
+      # which materializes the entire term before any post-hoc depth walk.
+      deep = String.duplicate("[", 100_000) <> "1" <> String.duplicate("]", 100_000)
+      bytes = ~s({"applied":) <> deep <> "}"
+      hash = CR.sha256_hex(bytes)
+      ref = "snapshots/#{hash}.json"
+      File.mkdir_p!(Path.join(dir, "snapshots"))
+      File.write!(Path.join(dir, ref), bytes)
+
+      CR.inject_single_counter_checkpoint!(dir, %{
+        "tip_offset" => 3,
+        "snapshot_ref" => ref,
+        "snapshot_hash" => hash,
+        "reason" => "manual"
+      })
+
+      assert {:error, :snapshot_corrupt} = Checkpoint.restore(j),
+             "adversarial nesting must surface the promised typed reject"
+
+      assert FileStore.status(j) == :ok
+      :ok = FileStore.close(j)
+    end
+
+    test "the pre-decode byte scan: over-bound nesting rejected without building a term; brackets inside JSON strings are content",
+         %{base: _base} do
+      alias Raxol.Agent.Journal.Records.Checkpoint.FileBackend
+
+      # Over the @max_decode_depth 64 bound (65 arrays inside a map = 66 deep).
+      deep = String.duplicate("[", 65) <> "1" <> String.duplicate("]", 65)
+      refute FileBackend.nesting_within_bound?(~s({"applied":) <> deep <> "}")
+
+      # A real snapshot shape passes.
+      assert FileBackend.nesting_within_bound?(~s({"applied":[1,2,3]}))
+
+      # Brackets INSIDE a JSON string are content, not nesting — the scan must
+      # not false-positive a legit snapshot whose text contains brackets.
+      brackets = String.duplicate("[", 500)
+      assert FileBackend.nesting_within_bound?(~s({"a":") <> brackets <> ~s("}))
+
+      # ... including behind an escaped quote.
+      assert FileBackend.nesting_within_bound?(~s({"a":"x\\"[[[[["}))
+    end
+  end
+
+  # ===========================================================================
+  # protected_floor/1 — fail-closed on malformed checkpoint records
+  # (adversarial-review finding on U9, PR #582 MEDIUM)
+  # ===========================================================================
+
+  describe "protected_floor/1 fail-closed — malformed checkpoints protect everything, never raise" do
+    test "a checkpoint record missing id → {:offset, 1} (whole journal protected), no KeyError" do
+      records = [
+        %{"id" => 1, "family" => "loop", "type" => "turn_started"},
+        %{"kind" => "checkpoint", "tip_offset" => 3}
+      ]
+
+      # BEFORE the fix: Enum.max_by(&Map.fetch!(&1, "id")) → KeyError, crashing
+      # the GC admission check that exists to prevent orphaning.
+      assert Checkpoint.protected_floor(records) == {:offset, 1}
+    end
+
+    test "a checkpoint record missing tip_offset → {:offset, 1}, no KeyError" do
+      records = [%{"id" => 5, "kind" => "checkpoint"}]
+      assert Checkpoint.protected_floor(records) == {:offset, 1}
+    end
+
+    test "a checkpoint with non-integer id/tip_offset junk → {:offset, 1}" do
+      assert Checkpoint.protected_floor([
+               %{"id" => 5, "kind" => "checkpoint", "tip_offset" => "3"}
+             ]) == {:offset, 1}
+
+      assert Checkpoint.protected_floor([
+               %{"id" => "5", "kind" => "checkpoint", "tip_offset" => 3}
+             ]) == {:offset, 1}
+    end
+
+    test "healthy checkpoints → the NEWEST checkpoint's tip; none → :none" do
+      cps = [
+        %{"id" => 5, "kind" => "checkpoint", "tip_offset" => 3},
+        %{"id" => 9, "kind" => "checkpoint", "tip_offset" => 7}
+      ]
+
+      assert Checkpoint.protected_floor(cps) == {:offset, 7}
+      assert Checkpoint.protected_floor([]) == :none
+    end
+  end
+
+  # ===========================================================================
+  # N-JS2 at the COMMIT POINT — atomic check-and-append inside the Writer
+  # (adversarial-review finding on U9, PR #582 MEDIUM: the read-then-append
+  # window could let a concurrent turn_started slip a checkpoint mid-turn)
+  # ===========================================================================
+
+  describe "N-JS2 at the commit point — check-and-append is one atomic Writer step" do
+    test "append_checked validates against the FRESHEST records; a failing check appends nothing",
+         %{base: base} do
+      {j, _session, dir} = CR.open!(base)
+      CR.append_all!(j, [CR.loop_event("turn_started")])
+      before_ids = CR.raw_ids(dir)
+
+      check = fn records ->
+        if CR.at_turn_boundary?(records), do: :ok, else: {:error, :mid_turn}
+      end
+
+      cp = %{"kind" => "checkpoint", "tip_offset" => 1, "reason" => "manual"}
+
+      assert {:error, :mid_turn} = FileStore.append_checked(j, cp, check)
+      assert CR.raw_ids(dir) == before_ids, "a rejected checked append appends nothing"
+
+      # Close the turn → the same append is admitted, dense offset consumed.
+      CR.append_all!(j, [CR.loop_event("turn_completed")])
+      assert {:ok, off} = FileStore.append_checked(j, cp, check)
+      assert off == List.last(CR.raw_ids(dir))
+      assert CR.dense_ids?(dir)
+      :ok = FileStore.close(j)
+    end
+
+    test "a raising check fails CLOSED and the Writer survives", %{base: base} do
+      {j, _session, _dir} = CR.open!(base)
+
+      assert {:error, {:check_raised, _}} =
+               FileStore.append_checked(j, %{"kind" => "checkpoint"}, fn _ ->
+                 raise "boom"
+               end)
+
+      # The Writer must not have crashed out from under the session.
+      assert {:ok, _} = FileStore.append(j, CR.loop_event("turn_started"))
+      :ok = FileStore.close(j)
+    end
+
+    test "concurrent turn traffic through a shared joiner handle: no checkpoint ever lands mid-turn",
+         %{base: base} do
+      {j, session, dir} = seed_conversation!(base)
+
+      # A JOINER handle sharing the single Writer (file_store.ex — the exact
+      # concurrency topology of the review finding).
+      {:ok, j2} = FileStore.open(session, base_dir: base)
+
+      turns =
+        Task.async(fn ->
+          for _ <- 1..40 do
+            {:ok, _} = FileStore.append(j2, CR.loop_event("turn_started"))
+            {:ok, _} = FileStore.append(j2, CR.loop_event("turn_completed"))
+          end
+
+          :ok
+        end)
+
+      # Interleaved checkpoint writes: each either lands at a boundary or
+      # typed-rejects (:mid_turn) — never lands mid-turn.
+      for _ <- 1..40 do
+        case Checkpoint.write(j, %{"applied" => []}, reason: "auto") do
+          {:ok, _} -> :ok
+          {:error, :mid_turn} -> :ok
+          other -> flunk("unexpected write result: #{inspect(other)}")
+        end
+      end
+
+      assert :ok = Task.await(turns)
+
+      # After the dust settles a write at the boundary must still land.
+      assert {:ok, _} = Checkpoint.write(j, %{"applied" => []}, reason: "manual")
+
+      # The raw-journal invariant: for EVERY checkpoint record, the records
+      # before it sit at a turn boundary (open-turn balance zero).
+      records = CR.raw_records(dir)
+
+      records
+      |> Enum.with_index()
+      |> Enum.each(fn {r, i} ->
+        if r["kind"] == "checkpoint" do
+          prefix = Enum.take(records, i)
+
+          assert CR.at_turn_boundary?(prefix),
+                 "checkpoint at offset #{r["id"]} landed mid-turn"
+        end
+      end)
+
+      assert CR.dense_ids?(dir)
+      :ok = FileStore.close(j2)
       :ok = FileStore.close(j)
     end
   end

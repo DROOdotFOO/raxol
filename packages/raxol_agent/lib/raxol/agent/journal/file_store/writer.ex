@@ -59,6 +59,26 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   @spec append(pid(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
   def append(pid, event), do: GenServer.call(pid, {:append, event})
 
+  @doc """
+  Atomic check-and-append: run `check` against the freshest on-disk records
+  and append `event` only if it returns `:ok` — as ONE step inside the single
+  Writer, so no other append can interleave between the check and the append.
+
+  Closes the read-then-append race of a caller that validates against its own
+  (possibly stale) `read` snapshot: e.g. the checkpoint turn-boundary rule
+  (N-JS2), where a concurrent `turn_started` through a shared joiner handle
+  must not slip in between validation and commit.
+
+  `check` receives the current record list and returns `:ok` or `{:error,
+  reason}` (relayed verbatim; nothing appended). A raising `check` replies
+  `{:error, {:check_raised, ...}}` — fail-closed — rather than crashing the
+  Writer out from under every other handle on the session.
+  """
+  @spec append_checked(pid(), map(), ([map()] -> :ok | {:error, term()})) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def append_checked(pid, event, check) when is_function(check, 1),
+    do: GenServer.call(pid, {:append_checked, event, check})
+
   @spec flush(pid()) :: :ok
   def flush(pid), do: GenServer.call(pid, :flush)
 
@@ -109,7 +129,51 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   end
 
   @impl GenServer
-  def handle_call({:append, event}, _from, state) do
+  def handle_call({:append, event}, _from, state), do: do_append(event, state)
+
+  # Atomic check-and-append (see `append_checked/3`). The scan + check + append
+  # all happen inside this one call: the Writer is the only appender, so the
+  # records the check sees are exactly the records the append lands after.
+  def handle_call({:append_checked, event, check}, _from, state) do
+    # Everything already appended is visible to the Reader (raw writes, no
+    # delayed_write); flush anyway so HEAD/durability match what we validate.
+    state = flush_now(state)
+
+    case Reader.scan(state.dir) do
+      {:ok, records} ->
+        case run_check(check, records) do
+          :ok -> do_append(event, state)
+          {:error, _} = err -> {:reply, err, state}
+        end
+
+      {:damaged, _partial} ->
+        {:reply, {:error, :damaged}, state}
+    end
+  end
+
+  @impl GenServer
+  def handle_call(:flush, _from, state) do
+    {:reply, :ok, flush_now(state)}
+  end
+
+  @impl GenServer
+  def handle_info(:flush_sync, state) do
+    {:noreply, flush_now(%{state | sync_timer: nil})}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  defp run_check(check, records) do
+    case check.(records) do
+      :ok -> :ok
+      {:error, _} = err -> err
+      other -> {:error, {:check_raised, {:bad_return, other}}}
+    end
+  rescue
+    e -> {:error, {:check_raised, Exception.message(e)}}
+  end
+
+  defp do_append(event, state) do
     offset = state.offset + 1
     record = stamp(event, offset, state.schema_version)
     line = [Jason.encode_to_iodata!(record), ?\n]
@@ -130,18 +194,6 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
         {:reply, {:error, reason}, state}
     end
   end
-
-  @impl GenServer
-  def handle_call(:flush, _from, state) do
-    {:reply, :ok, flush_now(state)}
-  end
-
-  @impl GenServer
-  def handle_info(:flush_sync, state) do
-    {:noreply, flush_now(%{state | sync_timer: nil})}
-  end
-
-  def handle_info(_msg, state), do: {:noreply, state}
 
   @impl GenServer
   def terminate(_reason, state) do
