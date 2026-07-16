@@ -35,6 +35,19 @@ defmodule Raxol.Agent.DoneGate do
   The gate never transitions the turn to done on a rejected claim; the turn
   stays open and the typed error is surfaced.
 
+  ### A nil claiming turn is structurally rejected (`:unturned_done`)
+
+  The whole gate hinges on turn identity: same-turn ownership (H2, check 3) and
+  the per-turn last-mutation window (check 4) are both keyed on `turn_id`. A
+  done whose *claiming* `turn_id` is `nil` therefore cannot be gated — its
+  ownership check degenerates to `nil == nil` (any nil-turn ref would satisfy
+  "same turn") and its last-mutation scan collapses onto the nil-turn slice, so
+  cross-turn isolation evaporates for the whole claim. Rather than let value
+  equality paper over a missing turn, a nil claiming turn is rejected up front
+  as `{:error, :unturned_done}`, before any ref is examined and regardless of
+  how many refs are cited. There is no such thing as a done that belongs to no
+  turn.
+
   ### Content is NOT validated (intentional scope boundary)
 
   Evidence **class** is checked, not its **content**: a `:tool_result` that ran
@@ -85,6 +98,7 @@ defmodule Raxol.Agent.DoneGate do
   @type verdict ::
           {:ok, Event.t()}
           | {:error, :evidence_required}
+          | {:error, :unturned_done}
           | {:error, {:missing_ref, offset()}}
           | {:error, {:not_evidence, offset()}}
           | {:error, {:foreign_turn, offset()}}
@@ -102,12 +116,19 @@ defmodule Raxol.Agent.DoneGate do
   @doc """
   Gate a proposed done for `turn_id` against `journal`, citing evidence `refs`.
 
-  A done with no refs is `{:error, :evidence_required}`. Otherwise refs are
-  walked in caller order and the first violation wins (existence -> class ->
-  same-turn -> ordering). On acceptance, hands back the durable
-  `turn_completed{final: true, refs: refs}` event to journal.
+  A nil claiming turn is `{:error, :unturned_done}` (structural — see the
+  moduledoc; checked first, before evidence). A done with no refs is
+  `{:error, :evidence_required}`. Otherwise refs are walked in caller order and
+  the first violation wins (existence -> class -> same-turn -> ordering). On
+  acceptance, hands back the durable `turn_completed{final: true, refs: refs}`
+  event to journal.
   """
   @spec gate(journal(), term(), [offset()]) :: verdict()
+  # A nil claiming turn cannot be gated: same-turn ownership and the last-
+  # mutation window both key on turn_id, and `nil == nil` would let any nil-turn
+  # ref pass. Reject structurally, ahead of the evidence checks, for ANY refs.
+  def gate(_journal, nil, _refs), do: {:error, :unturned_done}
+
   def gate(_journal, _turn_id, []), do: {:error, :evidence_required}
 
   def gate(journal, turn_id, refs) do

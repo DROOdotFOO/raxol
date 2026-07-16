@@ -610,7 +610,7 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
   # was deleted for the same reason — see the note in the ControlsTest.
 
   alias Raxol.Agent.DoneGate
-  alias Raxol.Agent.Red.U21.{Contours, Gen, Oracle}
+  alias Raxol.Agent.Red.U21.{Build, Contours, Gen, Oracle}
 
   # Route every gate call through apply/3 so the compiler keeps the return type
   # DYNAMIC. The skeleton returns a literal {:error, :not_implemented}; a direct
@@ -669,6 +669,31 @@ defmodule Raxol.Agent.Red.U21EvidenceDoneRedTest do
         assert Contours.shape(gate(journal, turn, refs)) ==
                  Contours.shape(Oracle.verdict(journal, turn, refs))
       end
+    end
+  end
+
+  # ===========================================================================
+  # U21-R2 review-fix regressions (PR #570). Each test pins exactly one fixed
+  # arm from the review, against the real DoneGate.
+  # ===========================================================================
+  describe "U21-R2 #1 — a nil claiming turn is structurally rejected (:unturned_done)" do
+    test "a nil-turn done citing nil-turn evidence is rejected (nil==nil must not satisfy same-turn)" do
+      # Evidence journaled under a nil turn; the done also claims turn_id nil.
+      # The old value-equality same-turn check (`nil == nil` is false for `!=`)
+      # would let this pass, collapsing cross-turn isolation for any nil-turn
+      # claim. It must reject structurally instead.
+      journal = [
+        Build.turn_started(1, turn_id: nil),
+        Build.mutation(2, turn_id: nil),
+        Build.evidence(3, turn_id: nil)
+      ]
+
+      assert gate(journal, nil, [3]) == {:error, :unturned_done}
+    end
+
+    test "a nil-turn done is :unturned_done even with no refs (checked before evidence)" do
+      assert gate([Build.turn_started(1, turn_id: nil)], nil, []) ==
+               {:error, :unturned_done}
     end
   end
 end
