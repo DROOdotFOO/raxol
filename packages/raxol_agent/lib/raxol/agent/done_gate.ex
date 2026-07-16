@@ -1,9 +1,7 @@
 defmodule Raxol.Agent.DoneGate do
   @moduledoc """
-  U21 — Evidence-gated done (FI-6). **Skeleton only** — the real gate logic is
-  `:not_implemented` on purpose: this module is the enabler that the permanent
-  `red/u21-evidence-done` failing-first suite is authored against, before the
-  implementation exists (see
+  U21 — Evidence-gated done (FI-6). A pure read/decision function over a turn
+  journal: it never touches a shared write path (see
   `docs/proposals/in-flight/harness-roadmap.md` §U21 + FI-6 and
   `packages/raxol_agent/test/raxol/agent/red/u21_evidence_done_red_test.exs`).
 
@@ -15,31 +13,58 @@ defmodule Raxol.Agent.DoneGate do
   runs, file checks) — that **postdates the last mutating action of the turn**.
 
   Evidence is named by `refs`: journal offsets carried on the proposed done.
-  Each ref must
+  Each ref is checked, in `refs` order, and the **first violation wins**:
 
     1. **exist** — resolve to a real journal record, else `{:error, {:missing_ref, offset}}`;
     2. **be evidence-class** — a tool result / verification output, never the
        agent's own `:message` self-report and never an internal `:state_change`,
        else `{:error, {:not_evidence, offset}}`;
-    3. **postdate the last mutation** — strictly greater offset than the turn's
+    3. **belong to the claiming turn** (H2) — a ref journaled under a *different*
+       turn is `{:error, {:foreign_turn, offset}}`, even when its offset
+       postdates this turn's last mutation (the cross-turn evidence spoof this
+       check exists to close);
+    4. **postdate the last mutation** — strictly greater offset than the turn's
        last mutating action; stale evidence that predates a later mutation does
        not count, else `{:error, {:stale_evidence, offset}}`.
 
   A done carrying no refs at all is `{:error, :evidence_required}`. Only when
-  every ref satisfies (1)-(3) does the gate accept and hand back the durable
+  every ref satisfies (1)-(4) does the gate accept and hand back the durable
   `turn_completed{final: true, refs: [...]}` event for journaling — so a surface
   can render "done because X".
 
   The gate never transitions the turn to done on a rejected claim; the turn
   stays open and the typed error is surfaced.
 
+  ### Content is NOT validated (intentional scope boundary)
+
+  Evidence **class** is checked, not its **content**: a `:tool_result` that ran
+  and reported *failure* (e.g. `"tests: 0 passed, 12 FAILED"`) still class-passes
+  — the gate pins that a verification tool RAN and was journaled, not that it
+  passed. A future unit may add content gating (parsing pass/fail out of the
+  result payload); U21 deliberately stops at "a verification tool ran".
+
+  ## Gating strength (policy note)
+
+  The roadmap's U21 wording is the *weaker* reading: "`turn_completed{final:
+  true}` carries verification artifacts ... as data" — i.e. the final event
+  merely *reports* whatever evidence a run happened to produce. This
+  implementation deliberately follows the **stronger** reading that the U21-R
+  red suite encodes: a done that cites no journaled evidence (or cites refs
+  that don't hold up) is **REJECTED** — the turn does not transition to done.
+  The red suite (`Oracle.verdict/3` + `Contours`) is the authoritative contract
+  here; this module matches it. The separate parked policy question about
+  **zero-tool turns** (whether a turn that legitimately ran no tools may ever
+  declare done) is left UNRESOLVED on purpose — this module does not
+  special-case it, preserving the suite's current behaviour (a turn with no
+  evidence refs is `:evidence_required`, full stop).
+
   ## Behaviour
 
   `gate/3` is declared as a behaviour callback so the red suite can drive
   deliberately-broken *dead injectors* (an impl that skips the ref check, one
   that checks existence but not ordering, one that lets self-reported text
-  count as evidence) through the same shape and prove each one fails its
-  targeted red.
+  count as evidence, one that skips the turn-ownership check) through the same
+  shape and prove each one fails its targeted red.
   """
 
   alias Raxol.Agent.Contract.Event
@@ -62,8 +87,8 @@ defmodule Raxol.Agent.DoneGate do
           | {:error, :evidence_required}
           | {:error, {:missing_ref, offset()}}
           | {:error, {:not_evidence, offset()}}
+          | {:error, {:foreign_turn, offset()}}
           | {:error, {:stale_evidence, offset()}}
-          | {:error, :not_implemented}
 
   @doc """
   Gate a proposed done for `turn_id` against `journal`, citing evidence `refs`.
@@ -75,9 +100,111 @@ defmodule Raxol.Agent.DoneGate do
   @callback gate(journal(), turn_id :: term(), refs :: [offset()]) :: verdict()
 
   @doc """
-  Skeleton — always `{:error, :not_implemented}`. Replaced when U21 lands; the
-  red suite pins the acceptance contract until then.
+  Gate a proposed done for `turn_id` against `journal`, citing evidence `refs`.
+
+  A done with no refs is `{:error, :evidence_required}`. Otherwise refs are
+  walked in caller order and the first violation wins (existence -> class ->
+  same-turn -> ordering). On acceptance, hands back the durable
+  `turn_completed{final: true, refs: refs}` event to journal.
   """
   @spec gate(journal(), term(), [offset()]) :: verdict()
-  def gate(_journal, _turn_id, _refs), do: {:error, :not_implemented}
+  def gate(_journal, _turn_id, []), do: {:error, :evidence_required}
+
+  def gate(journal, turn_id, refs) do
+    last_mut = last_mutation(journal, turn_id)
+
+    Enum.reduce_while(refs, {:ok, refs}, fn ref, acc ->
+      case classify_ref(journal, turn_id, last_mut, ref) do
+        :ok -> {:cont, acc}
+        err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, _refs} -> {:ok, done_event(journal, turn_id, refs)}
+      {:error, _} = err -> err
+    end
+  end
+
+  # -- ref classification (existence -> class -> same-turn (H2) -> ordering) --
+
+  defp classify_ref(journal, turn_id, last_mut, ref) do
+    case resolve(journal, ref) do
+      nil ->
+        {:error, {:missing_ref, ref}}
+
+      ev ->
+        cond do
+          not evidence_class?(ev) -> {:error, {:not_evidence, ref}}
+          event_turn_id(ev) != turn_id -> {:error, {:foreign_turn, ref}}
+          last_mut != nil and event_id(ev) <= last_mut -> {:error, {:stale_evidence, ref}}
+          true -> :ok
+        end
+    end
+  end
+
+  # Offset of the turn's last mutating action, or nil if the turn mutated nothing.
+  defp last_mutation(journal, turn_id) do
+    journal
+    |> Enum.filter(&(event_turn_id(&1) == turn_id and mutating?(&1)))
+    |> Enum.map(&event_id/1)
+    |> case do
+      [] -> nil
+      ids -> Enum.max(ids)
+    end
+  end
+
+  # Evidence-class predicate: a tool result / verification output.
+  defp evidence_class?(ev) do
+    event_type(ev) == :item_completed and payload_field(ev, :item_type) == :tool_result
+  end
+
+  # Mutation predicate: a state-changing tool_use (write/shell).
+  defp mutating?(ev) do
+    event_type(ev) == :item_completed and
+      payload_field(ev, :item_type) == :tool_use and
+      payload_field(ev, :mutating) == true
+  end
+
+  defp resolve(journal, offset), do: Enum.find(journal, &(event_id(&1) == offset))
+
+  # -- accessors tolerant of both %Event{} structs and plain maps --
+
+  defp event_id(ev), do: Map.get(ev, :id)
+  defp event_turn_id(ev), do: Map.get(ev, :turn_id)
+  defp event_type(ev), do: Map.get(ev, :type)
+
+  defp payload_field(ev, key) do
+    case Map.get(ev, :payload) do
+      %{} = payload -> Map.get(payload, key)
+      _ -> nil
+    end
+  end
+
+  # The durable done event handed back to the journal. `id`/`ts` are assigned by
+  # the journal writer at append time; this carries the next-offset hint from the
+  # journal tail so the event is well-formed even before it lands.
+  defp done_event(journal, turn_id, refs) do
+    next_id =
+      journal
+      |> Enum.map(&event_id/1)
+      |> Enum.reject(&is_nil/1)
+      |> case do
+        [] -> 0
+        ids -> Enum.max(ids) + 1
+      end
+
+    session_id = journal |> List.first() |> then(&(&1 && Map.get(&1, :session_id)))
+
+    %Event{
+      v: 0,
+      id: next_id,
+      session_id: session_id,
+      turn_id: turn_id,
+      ts: next_id,
+      family: :loop,
+      type: :turn_completed,
+      tier: :durable,
+      payload: %{final: true, refs: refs, usage: %{}}
+    }
+  end
 end
