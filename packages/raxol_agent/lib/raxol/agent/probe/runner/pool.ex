@@ -133,9 +133,10 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   # GenServer
   # ---------------------------------------------------------------------------
 
-  # Debounce after a max_parked overflow before the held parked runs shed to
-  # :timeout (bounded parking under sustained pressure, N-U12.10). Short enough
-  # to land inside the suite's terminal awaits, long enough to batch a burst.
+  # Debounce after a max_parked overflow before the oldest held parked run sheds
+  # to :exhausted (reason :pressure) (bounded parking under sustained pressure,
+  # N-U12.10). Short enough to land inside the suite's terminal awaits, long
+  # enough to batch a burst.
   @pressure_shed_ms 40
 
   @impl true
@@ -392,9 +393,10 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
 
     if MapSet.size(held) < spec.max_parked do
       # Room in the parked set: PARK and HOLD. The run occupies a slot until it
-      # sheds — at park_timeout_ms → :exhausted (P-U12.10 TTL), or EARLY to
-      # :timeout when a max_parked overflow signals sustained budget pressure.
-      # A held run has no terminal yet; that is the observable "parked" state.
+      # sheds — at park_timeout_ms → :exhausted (reason :park_timeout, P-U12.10
+      # TTL), or EARLY to :exhausted (reason :pressure) when a max_parked overflow
+      # signals sustained budget pressure. A held run has no terminal yet; that is
+      # the observable "parked" state.
       emit_opening(emit, run_id, spec.id, :parked)
       park_ref = Process.send_after(self(), {:park_ttl, run_id, key}, spec.park_timeout_ms)
 
@@ -418,8 +420,9 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     else
       # Parked set full → max_parked DOMINATES: this run cannot park, so it
       # terminates :exhausted (never :parked — §3.3 parking precedence). The
-      # overflow is the pressure signal: schedule the held runs to shed to
-      # :timeout so the parked set never grows without bound (N-U12.10).
+      # overflow is the pressure signal: schedule the OLDEST held run to shed to
+      # :exhausted (reason :pressure) so the parked set never grows without bound
+      # (N-U12.10).
       emit_opening(emit, run_id, spec.id, :started)
       emit_terminal(emit, run_id, spec.id, :exhausted, @zero_charge, :max_parked)
       Process.send_after(self(), {:pressure_shed, key}, @pressure_shed_ms)
