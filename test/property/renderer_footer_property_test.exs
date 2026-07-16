@@ -341,7 +341,7 @@ defmodule Raxol.Property.RendererFooterTest do
       _authority = InlineAuthority.keyframe(authority, ["x"])
     end
 
-    test "rows=1/footer_rows=2: degenerate, footer_range empty, repaint/2 and keyframe/2 no-op cleanly (zero CUPs)" do
+    test "rows=1/footer_rows=2: degenerate, footer_range empty, repaint/2 and keyframe/2 emit zero bytes (no bracket at all)" do
       {device, authority} = new_authority(40, 1, 2)
 
       assert InlineAuthority.degenerate?(authority)
@@ -354,12 +354,12 @@ defmodule Raxol.Property.RendererFooterTest do
       prior_size = device |> raw() |> byte_size()
       _authority = InlineAuthority.keyframe(authority, ["anything", "at all"])
 
-      new_bytes = delta(raw(device), prior_size)
-      # keyframe/2 always brackets with save/restore (with_cursor/3's
-      # unconditional protocol) even over zero footer capacity, but must
-      # address zero rows -- confirmed by stripping that bracket and
-      # finding nothing left for the (fail-closed) row walk to see.
-      assert new_bytes |> strip_cursor_bracket() |> SealOracle.cup_rows() == []
+      # T2c review response: keyframe/2 with zero footer row capacity
+      # early-returns without opening a with_cursor/3 bracket at all --
+      # an empty \e7/\e8 save/restore pair over zero addressed rows would
+      # be ceremony around a no-op; emitting NOTHING is the honest
+      # behavior on a geometry that cannot show a footer.
+      assert delta(raw(device), prior_size) == ""
     end
 
     test "rows=4/footer_rows=2: control case, NOT degenerate, footer confined to rows 3..4" do

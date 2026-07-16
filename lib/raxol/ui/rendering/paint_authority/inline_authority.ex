@@ -174,6 +174,44 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   simply operate over whatever footer capacity `footer_range/1` actually
   reports for that geometry, which may be smaller than `footer_rows`
   requested, or empty.
+
+  ## T2c review response: footer `ContentGuard`, and the `needs_keyframe` latch
+
+  Two FIX-NOW findings from review, both closed here:
+
+    * **Footer content is not trusted either (HIGH).** T2b's review
+      already established that `seal/2` cannot write agent/LLM-originated
+      iodata verbatim (`ContentGuard.sanitize_line/1`); the footer path
+      carries the SAME kind of content (live-tail/agent text) through the
+      SAME risk (a footer line smuggling `\\e[3;1H`/`\\e[2J`/etc. would
+      execute against the footer confinement invariant exactly like an
+      unguarded history append would against the seal-once invariant).
+      `repaint/2` and `keyframe/2` both run every caller-supplied line
+      through `ContentGuard.sanitize_line/1` at entry — BEFORE padding or
+      diffing — so `footer_diff/2` and `footer_lines` only ever see
+      already-neutralized content. `footer_lines` itself is therefore an
+      invariant: once sanitized in, never re-sanitized out, so `footer_diff/2`
+      comparing old (already-sanitized) against new (freshly-sanitized) is
+      always an apples-to-apples comparison.
+    * **A stale post-resize repaint could leave ghost content (MED).**
+      `resize/3` clamps `next_row` but, by design (see above), never
+      repaints the footer — a geometry-changing resize can relocate the
+      footer's on-screen rows to different absolute row numbers while their
+      CONTENT (and thus `footer_diff/2`'s logical, index-based comparison)
+      is unchanged. A subsequent `repaint/2` call with unchanged lines then
+      computes a no-op diff and writes NOTHING, leaving those rows showing
+      whatever was on screen at that position before the resize (leftover
+      history text, or a stale row `repaint/2` previously left blank via
+      `\\e[K` at the OLD position). The `needs_keyframe` flag closes this:
+      a geometry-changing `resize/3` sets it (a pure state change — the
+      pinned T2b regression test asserting resize's ONLY new bytes are
+      `ScrollRegionManager`'s single DECSTBM re-set is untouched, since
+      setting a struct field emits no bytes); the NEXT `repaint/2` call
+      checks it FIRST and, if set, self-promotes to a full `keyframe/2`
+      (which clears the flag) instead of running its normal diff — so the
+      first repaint after any geometry change always fully re-renders the
+      footer at its current position, regardless of whether the logical
+      content changed.
   """
 
   @behaviour Raxol.UI.Rendering.PaintAuthority
@@ -190,7 +228,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     :reflow_capable?,
     :next_row,
     in_cursor_bracket: false,
-    footer_lines: []
+    footer_lines: [],
+    needs_keyframe: false
   ]
 
   @type t :: %__MODULE__{
@@ -199,7 +238,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
           reflow_capable?: boolean(),
           next_row: pos_integer(),
           in_cursor_bracket: boolean(),
-          footer_lines: [binary()]
+          footer_lines: [binary()],
+          needs_keyframe: boolean()
         }
 
   @doc """
@@ -354,6 +394,11 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   `old_lines` and `new_lines` (both already the SAME length — pad/
   truncate before calling, see `repaint/2`). No I/O, no cursor movement.
   `row_index` is 0-based, relative to the top of the footer.
+
+  Raises `ArgumentError` (rather than falling through to a bare
+  `FunctionClauseError`) when the two lists' lengths differ, naming the fix:
+  callers must pad/truncate both to the same row count first (`pad_rows/2`,
+  which `repaint/2`/`keyframe/2` already do before calling this).
   """
   @spec footer_diff([binary()], [binary()]) :: [{non_neg_integer(), binary()}]
   def footer_diff(old_lines, new_lines)
@@ -366,38 +411,64 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     |> Enum.map(fn {{_old_line, new_line}, idx} -> {idx, new_line} end)
   end
 
+  def footer_diff(old_lines, new_lines)
+      when is_list(old_lines) and is_list(new_lines) do
+    raise ArgumentError,
+          "InlineAuthority.footer_diff/2 requires old_lines and new_lines to " <>
+            "be the same length (got #{length(old_lines)} and " <>
+            "#{length(new_lines)}) -- pad/truncate both to the same row " <>
+            "count first (see pad_rows/2, or call repaint/2 / keyframe/2 " <>
+            "directly, which already do this)"
+  end
+
   @doc """
-  T2c's diff-driven footer repaint: pads/truncates `new_lines` to the
+  T2c's diff-driven footer repaint: sanitizes every line of `new_lines`
+  through `ContentGuard.sanitize_line/1` (footer content is agent/LLM-
+  originated, same as the history append path -- see the moduledoc's
+  review-response section), pads/truncates the sanitized result to the
   CURRENT footer row count, diffs against the last-painted footer
   (`footer_diff/2`), and emits only the changed rows -- each `CUP`
   (inside the footer range, never history) + `\\e[K` (per-row clear,
   never `\\e[2J`) + the new line content -- inside one `with_cursor/3`
-  bracket. Zero changed rows emits zero bytes. Updates `footer_lines` so
-  the next call diffs against what was actually painted.
+  bracket. Zero changed rows emits zero bytes (but `footer_lines` is still
+  updated to the padded/sanitized content, so a later resize that changes
+  footer row count doesn't diff against a stale-length list). Updates
+  `footer_lines` so the next call diffs against what was actually painted.
+
+  Self-promotes to a full `keyframe/2` -- clearing `needs_keyframe` in the
+  process -- when that flag is set (a prior geometry-changing `resize/3`):
+  see the moduledoc's "`needs_keyframe` latch" section for why a diff-only
+  repaint is not safe to trust immediately after a resize.
   """
   @spec repaint(t(), [binary()]) :: t()
+  def repaint(%__MODULE__{needs_keyframe: true} = t, new_lines)
+      when is_list(new_lines) do
+    keyframe(t, new_lines)
+  end
+
   def repaint(%__MODULE__{footer_lines: old_lines} = t, new_lines)
       when is_list(new_lines) do
     count = footer_row_count(t)
-    padded_new = pad_rows(new_lines, count)
+    padded_new = sanitize_and_pad(new_lines, count)
     padded_old = pad_rows(old_lines, count)
 
     case footer_diff(padded_old, padded_new) do
-      [] ->
-        t
-
-      changes ->
-        footer_top = region_top(t) + 1
-
-        iodata =
-          Enum.map(changes, fn {idx, line} ->
-            footer_row_bytes(footer_top + idx, line)
-          end)
-
-        t
-        |> with_cursor(:footer, fn inner -> repaint_footer(inner, iodata) end)
-        |> Map.put(:footer_lines, padded_new)
+      [] -> %{t | footer_lines: padded_new}
+      changes -> emit_footer_diff(t, changes, padded_new)
     end
+  end
+
+  defp emit_footer_diff(t, changes, padded_new) do
+    footer_top = region_top(t) + 1
+
+    iodata =
+      Enum.map(changes, fn {idx, line} ->
+        footer_row_bytes(footer_top + idx, line)
+      end)
+
+    t
+    |> with_cursor(:footer, fn inner -> repaint_footer(inner, iodata) end)
+    |> Map.put(:footer_lines, padded_new)
   end
 
   @doc """
@@ -406,13 +477,30 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   Ctrl-L recovery entry point, and what a caller composes after
   `resize/3` to re-derive the footer's on-screen content at the new
   geometry (see the moduledoc's "T2c" section for why `resize/3` itself
-  does not call this). Pads/truncates `new_lines` to the CURRENT footer
-  row count, same as `repaint/2`.
+  does not call this) -- and what `repaint/2` self-promotes to when
+  `needs_keyframe` is set. Sanitizes every line of `new_lines` through
+  `ContentGuard.sanitize_line/1` (same as `repaint/2`), then pads/
+  truncates to the CURRENT footer row count.
+
+  When the current footer row count is zero (degenerate geometry, see
+  `degenerate?/1`), returns `t` immediately -- no `with_cursor/3` bracket
+  is opened at all. Emitting an empty `\\e7`/`\\e8` save/restore pair over
+  zero addressed rows would be a byte-for-byte no-op wrapped in
+  ceremony; on a geometry that can't show a footer at all, emitting
+  nothing is the honest behavior.
   """
   @spec keyframe(t(), [binary()]) :: t()
   def keyframe(%__MODULE__{} = t, new_lines) when is_list(new_lines) do
     count = footer_row_count(t)
-    padded_new = pad_rows(new_lines, count)
+    padded_new = sanitize_and_pad(new_lines, count)
+
+    case count do
+      0 -> %{t | footer_lines: padded_new, needs_keyframe: false}
+      _ -> emit_footer_keyframe(t, padded_new)
+    end
+  end
+
+  defp emit_footer_keyframe(t, padded_new) do
     footer_top = region_top(t) + 1
 
     iodata =
@@ -425,6 +513,17 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     t
     |> with_cursor(:footer, fn inner -> keyframe_footer(inner, iodata) end)
     |> Map.put(:footer_lines, padded_new)
+    |> Map.put(:needs_keyframe, false)
+  end
+
+  # Common entry sanitization for both repaint/2 and keyframe/2: every
+  # caller-supplied line is agent/LLM-originated (same trust boundary as
+  # seal/2's history-side iodata -- see the moduledoc's review-response
+  # section) and must be neutralized BEFORE padding/diffing ever sees it.
+  defp sanitize_and_pad(new_lines, count) do
+    new_lines
+    |> Enum.map(&ContentGuard.sanitize_line/1)
+    |> pad_rows(count)
   end
 
   @doc "The current footer row count -- the size of `ScrollRegionManager.footer_range/1`, never a hand-maintained constant."
@@ -498,14 +597,25 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   the moduledoc's "T2c" section. Neither call ever emits
   `\\e[2J`/`\\e[3J` or addresses a history row, so the composition
   inherits both properties.
+
+  When the resize actually changes geometry (`ScrollRegionManager
+  .geometry_changed?/2`), also sets `needs_keyframe: true` -- a pure state
+  change, zero bytes -- so the NEXT `repaint/2` call self-promotes to a
+  full `keyframe/2` instead of trusting a diff against footer content
+  whose on-screen ROW POSITIONS just moved (see the moduledoc's
+  "`needs_keyframe` latch" section). This is independent of
+  `reflow_capable?/1`/the telemetry hook below: the ghost-content risk
+  applies to every terminal's footer, not just the (B)-detection subset.
   """
   @impl true
   def resize(%__MODULE__{region: region, next_row: next_row} = t, width, height) do
     old_region = region
     new_region = ScrollRegionManager.resize(region, height)
 
-    if ScrollRegionManager.geometry_changed?(old_region, new_region) and
-         t.reflow_capable? do
+    geometry_changed? =
+      ScrollRegionManager.geometry_changed?(old_region, new_region)
+
+    if geometry_changed? and t.reflow_capable? do
       # The reflow-aware detection seam firing: this session's terminal
       # is known, from the terminal-matrix probe, to reflow sealed
       # history cleanly on a geometry-changing resize. NOTHING is
@@ -530,7 +640,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         # Existing on-screen content is untouched (seal-time-only: no
         # re-emission) — only where FUTURE appends resume is clamped to
         # the (possibly smaller) new bottom row.
-        next_row: min(next_row, ScrollRegionManager.history_bottom(new_region))
+        next_row: min(next_row, ScrollRegionManager.history_bottom(new_region)),
+        needs_keyframe: t.needs_keyframe or geometry_changed?
     }
   end
 
