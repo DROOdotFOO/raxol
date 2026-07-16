@@ -17,11 +17,43 @@ end
 # (not test/support/, which elixirc_paths compiles) — load it explicitly.
 Code.require_file("invariants/support/fault_journal.ex", __DIR__)
 
+# The U11-R red suite's oracle + generators live under test/raxol/agent/red/
+# support (also outside elixirc_paths) — load them explicitly. Guard against a
+# concurrent red PR having already required them.
+for f <- [
+      "raxol/agent/red/support/meta_oracle.ex",
+      "raxol/agent/red/support/meta_journal_gen.ex"
+    ] do
+  mod =
+    case f do
+      "raxol/agent/red/support/meta_oracle.ex" -> Raxol.Agent.Red.MetaOracle
+      _ -> Raxol.Agent.Red.MetaJournalGen
+    end
+
+  unless Code.ensure_loaded?(mod), do: Code.require_file(f, __DIR__)
+end
+
 # :pending_unit — Tier 2 invariant skeletons, visible in the suite but inert
 # until their units (U4–U9) land. :mutation — negative-control checklists
-# (meta-invariant m4), run on demand, never in regular CI. :harness_red —
-# permanent failing-first red suites authored before their unit lands (the
-# red-first fan-out, e.g. U12-R probe runner); excluded so CI stays green while
-# they are red, run with `--only harness_red`. Their negative controls carry no
-# tag and run in CI.
-ExUnit.start(exclude: [:slow, :integration, :docker, :pending_unit, :mutation, :harness_red])
+# (meta-invariant m4), run on demand, never in regular CI.
+#
+# :harness_red — permanent failing-first red suites authored BEFORE their
+# implementation lands. Excluded from every regular run so CI stays GREEN while
+# the contract is pinned; a suite loses the tag (and joins CI green) the day its
+# unit implements it. U11-R (meta family + provenance/taint) has graduated —
+# U11-I implemented `Raxol.Agent.Meta` / `Raxol.Agent.Fingerprint`; U12-R
+# (probe runner) has graduated too — U12-I implemented `Raxol.Agent.Probe` /
+# `Raxol.Agent.Probe.Runner`, so both suites now run untagged in CI. The tag is
+# kept in the exclude list for the next failing-first red. The negative CONTROLS
+# for the same contours are NOT tagged :harness_red — they run in CI to prove
+# each red has teeth (meta-invariant m4).
+ExUnit.start(
+  exclude: [
+    :slow,
+    :integration,
+    :docker,
+    :pending_unit,
+    :mutation,
+    :harness_red
+  ]
+)
