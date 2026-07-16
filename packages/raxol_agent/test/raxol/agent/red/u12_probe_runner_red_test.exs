@@ -89,7 +89,8 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       tip_offset: Keyword.get(opts, :tip_offset, 41),
       prefix_ref: Keyword.get(opts, :prefix_ref, {:captured, L.primary_prefix()}),
       taint: Keyword.get(opts, :taint, :trusted),
-      budget_scope: Keyword.get(opts, :budget_scope, :session_then_run)
+      budget_scope: Keyword.get(opts, :budget_scope, :session_then_run),
+      read_set: Keyword.get(opts, :read_set, [])
     }
   end
 
@@ -730,6 +731,35 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       refute Enum.any?(results, &(&1.trust == :trusted)),
              "a tainted context produced a trusted event: #{inspect(results)}"
+    end
+
+    test "a TRUSTED context whose drafted ref reaches a tainted record still stamps :tainted (adversarial-review #4)" do
+      # The context floor is :trusted, but the draft refs offset 20, and the
+      # read-set at 20 is a tainted tool_result. trust = ctx ⊓ refs-taint must
+      # absorb to :tainted — the Runner recomputes from the refs via the U11 Meta
+      # seam rather than trusting the coarse context floor.
+      rig = rig()
+
+      tainted_leaf = %{
+        "id" => 20,
+        "family" => "loop",
+        "type" => "tool_result",
+        "provenance" => %{"source" => "surface", "trust" => "tainted"}
+      }
+
+      context = ctx(taint: :trusted, tip_offset: 20, read_set: [tainted_leaf])
+
+      assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, context))
+      events = await_terminals(rig.bus, [run_id])
+
+      results = Enum.filter(events, &(&1.kind == :meta_result))
+      assert results != [], "no result events — the refs-taint contour is vacuous"
+
+      # Expected trust is :tainted because ref 20 is tainted (tainted_refs [20]).
+      assert L.provenance_stamped(events, :probe_c1_gate, :trusted, [20]) == :ok
+
+      refute Enum.any?(results, &(&1.trust == :trusted)),
+             "a trusted context with a tainted ref produced a trusted event: #{inspect(results)}"
     end
   end
 

@@ -21,6 +21,7 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
   require Logger
 
   alias Raxol.Agent.Fingerprint
+  alias Raxol.Agent.Meta
 
   # Per-provider-call token reserve (the SpendGate/`Ledger.try_spend` unit,
   # AD-6a). The lab pins "cap fits exactly one 100-token reserve" — the reserve
@@ -480,11 +481,12 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     # this just avoids the stale message).
     cancel_timeout(run)
     taint = context_taint(run)
+    read_set = context_read_set(run)
 
     case result do
       {:completed, drafts, calls} ->
         Enum.each(drafts, fn draft ->
-          emit_meta_result(emit, run_id, spec.id, draft, taint)
+          emit_meta_result(emit, run_id, spec.id, draft, taint, read_set)
         end)
 
         emit_terminal(emit, run_id, spec.id, :completed, charge(calls), nil)
@@ -557,14 +559,14 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     })
   end
 
-  defp emit_meta_result(emit, run_id, probe_id, draft, ctx_taint) do
+  defp emit_meta_result(emit, run_id, probe_id, draft, ctx_taint, read_set) do
     safe_emit(emit, %{
       kind: :meta_result,
       run_id: run_id,
       type: Map.get(draft, :type),
       family: :meta,
       source: provenance_source(probe_id),
-      trust: derive_trust(ctx_taint, draft),
+      trust: derive_trust(ctx_taint, draft, read_set),
       refs: Map.get(draft, :refs, [])
     })
   end
@@ -587,15 +589,50 @@ defmodule Raxol.Agent.Probe.Runner.Pool do
     ArgumentError -> :probe_unregistered
   end
 
-  # trust = context.taint ⊓ refs-taint (U11 two-point absorbing algebra). A run
-  # over tainted context can produce NO trusted event — the probe's drafted
-  # `trust` is ignored (Runner-owned, N-U12.6). With no tainted ref in view the
-  # meet reduces to the context floor.
-  defp derive_trust(:tainted, _draft), do: :tainted
-  defp derive_trust(_trusted, _draft), do: :trusted
+  # trust = context.taint ⊓ refs-taint (U11 two-point absorbing algebra, P-U12.5).
+  # BOTH points matter: a run over tainted context can produce NO trusted event
+  # (the probe's drafted `trust` is ignored — Runner-owned, N-U12.6), AND a
+  # trusted context whose drafted refs reach a TAINTED record still stamps
+  # :tainted (defence-in-depth: the Runner recomputes from the refs, never
+  # trusting the coarse context floor). The refs-taint is folded through the U11
+  # Meta seam (`Meta.derive_taint`) over the probe's read-set, so there is one
+  # taint algebra across the harness.
+  defp derive_trust(:tainted, _draft, _read_set), do: :tainted
+
+  defp derive_trust(_trusted_ctx, draft, read_set) do
+    if refs_tainted?(draft, read_set), do: :tainted, else: :trusted
+  end
+
+  # Fold the draft's refs through `Meta.derive_taint`: wrap them in a synthetic
+  # meta record whose `refs` are the draft's, prepend it to the read-set, and ask
+  # the seam for that record's derived trust. `derive_taint` recurses the refs to
+  # their leaves (loop `tool_result` taint entry-points AND meta records alike),
+  # so this covers both. A ref that resolves to nothing is dangling — the seam
+  # treats a dangling ref as non-tainting (its documented lenient behavior); the
+  # context floor (the :tainted head above) is U12's fail-closed guard, so U12
+  # does NOT layer U8's strict dangling-ref damage here (decided per §3.1/§2.1).
+  defp refs_tainted?(draft, read_set) do
+    refs = Map.get(draft, :refs, [])
+    probe_id = {:probe_draft, make_ref()}
+
+    synthetic = %{
+      "id" => probe_id,
+      "family" => "meta",
+      "type" => "extract",
+      "payload" => %{"refs" => refs}
+    }
+
+    Meta.derive_taint([synthetic | read_set]) |> Map.get(probe_id) == :tainted
+  end
 
   defp context_taint(%{context: %{taint: t}}), do: t
   defp context_taint(_), do: :trusted
+
+  # OQ-U12.3 FULL read-set: the string-keyed journal records the probe's context
+  # actually included, fed to `Meta.derive_taint` for the refs-taint fold. Absent
+  # (the common lab rig) → empty, so the fold reduces to the context floor.
+  defp context_read_set(%{context: %{read_set: rs}}) when is_list(rs), do: rs
+  defp context_read_set(_), do: []
 
   # ---------------------------------------------------------------------------
   # budget (two-level reserve, session-then-run + partial-failure rollback)
