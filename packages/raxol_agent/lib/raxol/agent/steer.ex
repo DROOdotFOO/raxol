@@ -59,8 +59,11 @@ defmodule Raxol.Agent.Steer do
   built against a stale earlier token would then wrongly pass the CAS once the
   token cycles back — exactly the "silent misdirection into the wrong turn"
   this mechanism exists to prevent. Implementations satisfy this with a
-  globally-unique generator (e.g. `System.unique_integer/1`), never a
-  finite/repeatable token space.
+  run-unique generator (e.g. `System.unique_integer/1`, unique within a BEAM
+  run), never a finite/repeatable token space. Run-scoped uniqueness is enough
+  because swap tokens are never persisted as CAS targets across restarts — on
+  resume the `turn_id` comes from the journal's turn brackets, so a stale token
+  from a previous run can never be revived into a live CAS.
 
   ## Idempotency is journal-truth, not process memory (§5.1)
 
@@ -301,9 +304,16 @@ defmodule Raxol.Agent.Steer do
 
   defp get_either(_map, _key), do: nil
 
-  # The CAS swap: a fresh token, GLOBALLY DISTINCT from every token this turn has
-  # ever held (not merely different from the current one) — the ABA-safety law.
-  # `System.unique_integer/1` guarantees this; a boolean toggle or a repeatable
-  # per-turn counter would NOT (see `SteerInjectors.RepeatableToken`).
+  # The CAS swap: a fresh token, distinct from every token this turn has held so
+  # far (not merely different from the current one) — the ABA-safety law.
+  # `System.unique_integer([:positive])` guarantees distinctness WITHIN A BEAM
+  # RUN (its counter resets when the VM restarts — it is not globally distinct for
+  # all time). That is sufficient here because swap tokens are NEVER persisted as
+  # CAS targets across restarts: on resume the `turn_id` comes from the journal's
+  # turn brackets, never a revived swap token, so a restart cannot resurrect an
+  # old token into a live CAS and ABA it. Implementers MUST NOT persist a swap
+  # token as a client-visible turn id. A boolean toggle or a repeatable per-turn
+  # counter would fail the law even within one run (see
+  # `SteerInjectors.RepeatableToken`).
   defp swap(cur), do: {:steered, cur, System.unique_integer([:positive])}
 end
