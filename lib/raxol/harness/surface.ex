@@ -347,6 +347,37 @@ defmodule Raxol.Harness.Surface do
   hibernate during. Noted here as the next thing to reach for, not
   implemented.
 
+  ## External editor handoff (the `:edit_draft` command, Ctrl+E)
+
+  Long prompts don't belong in a 6-row footer composer. The Ctrl+E chord
+  (`Raxol.UI.Harness.Keymap`'s `:edit_draft`, an `:always` bind) hands
+  the composer draft to `$VISUAL`/`$EDITOR` via the injected
+  `:editor_session` (see `new/2`'s options): the session suspends the
+  terminal claim (the canonical suspend bytes release the DECSTBM
+  region, cooked modes come back, the BEAM stdin reader is gated off),
+  runs the editor synchronously attached to the tty, and resumes (raw
+  mode, reader, init bytes). What the session deliberately does NOT do
+  is re-pin the region -- region bytes are owned by THIS model's
+  authority, so every return branch here composes
+  `InlineAuthority.resize/3 |> InlineAuthority.reassert/1`
+  (`resize/3` alone is geometry-gated: a terminal NOT resized while
+  suspended would get zero region bytes and stay silently un-pinned),
+  and `reassert/1`'s `needs_keyframe` latch turns the next
+  `paint_footer/1` into a full keyframe. On editor exit 0 the edited
+  draft replaces the composer's value (`Composer.set_value/2`); any
+  other outcome keeps the original draft and surfaces a one-frame
+  footer notice through the existing `stub_notice` channel.
+
+  Sealed history above the footer survives the whole bracket untouched
+  by construction -- no code path here or in the session addresses a
+  history row, and the suspend bytes contain no `\\e[2J`/`\\e[3J`. The
+  one documented residual: an editor that does NOT use the alternate
+  screen may scribble over the not-yet-scrolled on-screen portion of
+  history (cosmetic; content already in native scrollback is unreachable
+  to us and to it). `:flat` mode has no footer composer to hand a draft
+  back to, so `:edit_draft` there seals one honest history line saying
+  so instead of pretending.
+
   ## Precondition #7 -- teardown ownership (this module owns NONE)
 
   `new/2` sets the DECSTBM history/footer split via
@@ -411,8 +442,10 @@ defmodule Raxol.Harness.Surface do
           rows: pos_integer(),
           footer_rows: pos_integer(),
           status: map(),
-          stub_notice: String.t() | nil,
-          overlay: overlay() | nil
+          stub_notice: String.t() | [String.t()] | nil,
+          overlay: overlay() | nil,
+          editor_session: module() | (String.t(), keyword() -> term()) | nil,
+          editor_opts: keyword()
         }
 
   @typedoc """
@@ -449,6 +482,18 @@ defmodule Raxol.Harness.Surface do
       entirely (test seam). Bypasses the startup mode notice below too --
       an explicit `:mode` is a test/caller decision, not a pick this
       module made, so there is no `reason()` to explain.
+    * `:editor_session` -- `nil` (default), a module implementing
+      `Raxol.Harness.EditorSession`'s `run(draft, opts)` contract, or a
+      2-arity fun with the same contract. Enables the Ctrl+E external-
+      editor handoff (see the moduledoc's "External editor handoff"
+      section); `nil` renders an honest stub notice instead. Embedders
+      with a real tty pass `Raxol.Harness.EditorSession`; tests inject a
+      fun returning canned outcomes.
+    * `:editor_opts` -- extra options merged into every editor-session
+      call (e.g. `editor_timeout_ms: 60_000`, or an explicit vetted
+      `:env` -- see `Raxol.Harness.EditorSession`'s trust-boundary
+      section). Model-owned `device`/`rows`/`width` always win over
+      entries here.
 
   ## Startup mode notice (the degradation ladder's `select_with_reason/3` seam)
 
@@ -515,7 +560,9 @@ defmodule Raxol.Harness.Surface do
       footer_rows: footer_rows,
       status: %{},
       stub_notice: nil,
-      overlay: nil
+      overlay: nil,
+      editor_session: Keyword.get(opts, :editor_session),
+      editor_opts: Keyword.get(opts, :editor_opts, [])
     }
 
     model
@@ -1025,6 +1072,17 @@ defmodule Raxol.Harness.Surface do
        when overlay != nil,
        do: model
 
+  # Same freeze rationale for the editor handoff: an open overlay hides
+  # the composer buffer mid-pick, and suspending the terminal to edit
+  # that hidden state (while the footer is overlay-shaped and would be
+  # keyframed back at the WRONG row split on resume) would be the same
+  # dishonest UI. Clause order load-bearing, as above.
+  defp dispatch_command(%{overlay: overlay} = model, %{type: :edit_draft})
+       when overlay != nil,
+       do: model
+
+  defp dispatch_command(model, %{type: :edit_draft}), do: run_editor(model)
+
   defp dispatch_command(model, %{type: :steer}) do
     text = Composer.value(model.composer)
 
@@ -1039,6 +1097,160 @@ defmodule Raxol.Harness.Surface do
   end
 
   defp dispatch_command(model, _other), do: model
+
+  # -- external editor handoff (the :edit_draft command) -------------------
+  #
+  # Ordering of the clauses is load-bearing: flat mode first (there is no
+  # footer composer to hand a draft back to, whatever session is wired),
+  # then the no-session stub, then the real handoff.
+
+  # `:flat` has no footer and never renders the composer, so there is no
+  # surface for the edited draft (or a footer notice) to come back to --
+  # seal one honest history line instead, through the same
+  # `FlatAuthority.seal/2` path `apply_mode_notice/2` uses.
+  defp run_editor(%{mode: :flat} = model) do
+    lines =
+      ViewText.lines(
+        %{
+          type: :text,
+          content: "» external editor requires the footer composer (flat mode)"
+        },
+        model.width,
+        :plain
+      )
+
+    iodata = Enum.map(lines, &(&1 <> "\n"))
+    %{model | authority: FlatAuthority.seal(model.authority, iodata)}
+  end
+
+  defp run_editor(%{editor_session: nil} = model) do
+    %{model | stub_notice: "» external editor not wired in this embedding"}
+  end
+
+  defp run_editor(model) do
+    draft = Composer.value(model.composer)
+
+    # `:editor_opts` is the embedder seam (timeout, vetted env, ...);
+    # model-owned device/geometry always win.
+    opts =
+      Keyword.merge(model.editor_opts,
+        device: authority_device(model.authority),
+        rows: model.rows,
+        width: model.width
+      )
+
+    # The session returns with the tty raw again and the reader re-enabled,
+    # but WITHOUT the DECSTBM pin (region bytes are owned by this model's
+    # authority -- see `Raxol.Harness.EditorSession`'s moduledoc). Every
+    # branch below therefore runs `resume_geometry/3`: `resize/3` absorbs a
+    # mid-suspend terminal resize, `reassert/1` guarantees the pin when
+    # geometry did NOT change (resize alone is geometry-gated and would
+    # write zero region bytes), and its `needs_keyframe` latch makes
+    # `handle_input/2`'s trailing `paint_footer/1` self-promote to a full
+    # keyframe. Belt-and-braces on the `{:error, _}` branch too: the
+    # session's compensation already restored what it could, and one
+    # redundant, idempotent DECSTBM re-emit is cheaper than reasoning about
+    # exactly which failure points left the region released.
+    case call_editor_session(model.editor_session, draft, opts) do
+      {:ok, %{text: text, width: width, rows: rows} = result} ->
+        model = resume_geometry(model, width, rows)
+        model = %{model | composer: Composer.set_value(model.composer, text)}
+        apply_degraded_notice(model, Map.get(result, :degraded, []))
+
+      {:kept, reason, %{width: width, rows: rows} = geo} ->
+        model = resume_geometry(model, width, rows)
+        model = %{model | stub_notice: kept_notice(reason)}
+        apply_degraded_notice(model, Map.get(geo, :degraded, []))
+
+      {:error, reason} ->
+        model = resume_geometry(model, model.width, model.rows)
+
+        %{
+          model
+          | stub_notice: "» editor suspend aborted: #{inspect(reason)}"
+        }
+    end
+  end
+
+  # A non-empty degradation list means the session resumed but a
+  # terminal resource could not be restored -- today, the stdin reader
+  # after the editor. This MUST be visible (the review's critical
+  # finding was exactly this warning being swallowed): the operator is
+  # about to discover their keyboard is dead, and a silent success frame
+  # would read as "everything is fine".
+  #
+  # The warning gets its OWN notice line, never appended to a kept
+  # notice: `ViewText.lines/3` end-truncates each line to the width
+  # budget, so a same-line append made the warning the first casualty of
+  # a long kept notice (e.g. a long `{:editor_not_found, cmd}`) on an
+  # 80-column terminal -- the round-2 review's finding. Per-line, both
+  # messages survive truncation independently.
+  defp apply_degraded_notice(model, []), do: model
+
+  defp apply_degraded_notice(model, [_ | _]) do
+    warning =
+      "» warning: input reader failed to re-enable — keyboard may be dead"
+
+    notice =
+      case model.stub_notice do
+        nil -> warning
+        kept -> [kept, warning]
+      end
+
+    %{model | stub_notice: notice}
+  end
+
+  # The session's contract propagates exceptions AFTER running its
+  # compensation (see `Raxol.Harness.EditorSession`) -- the terminal is
+  # already restored by the time one reaches here, so this UI loop
+  # degrades to the same notice path as any other session error instead
+  # of crashing mid-frame.
+  defp call_editor_session(session, draft, opts) do
+    invoke_editor_session(session, draft, opts)
+  rescue
+    error -> {:error, {:editor_session, Exception.message(error)}}
+  catch
+    kind, reason -> {:error, {:editor_session, {kind, reason}}}
+  end
+
+  defp invoke_editor_session(session, draft, opts) when is_atom(session),
+    do: session.run(draft, opts)
+
+  defp invoke_editor_session(session, draft, opts)
+       when is_function(session, 2),
+       do: session.(draft, opts)
+
+  defp authority_device(%{region: %{device: device}}), do: device
+
+  # Mirrors `resize/2`'s inline-mode shape but composes
+  # `InlineAuthority.resize/3 |> InlineAuthority.reassert/1` -- the
+  # documented resume composition (see `InlineAuthority.reassert/1`'s doc
+  # for why resize alone cannot re-pin an unchanged geometry). No explicit
+  # keyframe call here: `reassert/1` latches `needs_keyframe`, and the
+  # caller's trailing `paint_footer/1` self-promotes to a full keyframe.
+  defp resume_geometry(model, width, rows) do
+    authority =
+      model.authority
+      |> InlineAuthority.resize(width, rows)
+      |> InlineAuthority.reassert()
+
+    %{model | authority: authority, width: width, rows: rows}
+  end
+
+  defp kept_notice(:editor_nonzero),
+    do: "» editor exited nonzero — draft kept"
+
+  defp kept_notice({:editor_not_found, cmd}),
+    do: "» editor not found: #{cmd} — draft kept"
+
+  defp kept_notice(:editor_crashed), do: "» editor crashed — draft kept"
+
+  defp kept_notice(:editor_timeout), do: "» editor timed out — draft kept"
+
+  defp kept_notice(:reload_failed),
+    do: "» could not reload edited draft — draft kept"
+
+  defp kept_notice(other), do: "» editor: #{inspect(other)} — draft kept"
 
   # -- fold / jump (precondition-adjacent: the seal-time-only translation) --
 
@@ -1273,6 +1485,13 @@ defmodule Raxol.Harness.Surface do
     do: ViewText.lines(OverlayPicker.render(picker), width, :styled)
 
   defp notice_line(nil, _width), do: []
+
+  # A LIST of notices renders one footer line each -- each independently
+  # width-truncated, so a long first notice can never truncate away a
+  # later one (the degraded-resume warning rides this; see
+  # `apply_degraded_notice/2`).
+  defp notice_line(notices, width) when is_list(notices),
+    do: Enum.flat_map(notices, &notice_line(&1, width))
 
   defp notice_line(text, width),
     do: ViewText.lines(%{type: :text, content: text}, width, :styled)

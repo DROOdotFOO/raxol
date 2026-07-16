@@ -402,4 +402,47 @@ defmodule Raxol.Terminal.ScrollRegionManager do
         degenerate?: degenerate?(rows, new_footer_rows)
     }
   end
+
+  @doc """
+  Re-emits `region_set_bytes(rows, footer_rows)` to `state`'s device
+  UNCONDITIONALLY and returns `state` unchanged (same geometry, same
+  device, same everything) -- the resume-after-suspend counterpart to
+  `resize/2`'s geometry-gated emission.
+
+  ## Why unconditional (contrast `resize/2`)
+
+  `resize/2` skips the write when the new `history_bottom` matches the
+  current one -- correct for an ordinary resize, where the region is
+  never in question (this module keeps it pinned continuously from
+  `start/3` onward, so "geometry unchanged" really does mean "nothing to
+  re-pin"). But a resume after an EXTERNAL process owned the terminal
+  (an `$EDITOR` session that released the region via
+  `Raxol.Terminal.InlineDriver.Sequences.suspend_bytes/1`, the canonical
+  suspend bytes) genuinely un-pins the region without changing geometry
+  at all -- `resize/2`'s gate would (correctly, for ITS purpose) see
+  identical `history_bottom` and skip the write, silently leaving the
+  terminal un-pinned even though this process still believes the footer
+  is pinned. `reassert/1` is the different call site that needs the
+  unconditional form: always re-emit, regardless of whether geometry
+  moved.
+
+  Degenerate geometry (`degenerate?(state)`) re-emits the same
+  full-screen release `region_set_bytes/2` already emits for that case --
+  an honest un-pin, consistent with what `start/3`/`resize/2` would write
+  at that same geometry (see the moduledoc's "Degenerate terminals"
+  section).
+
+  DECSTBM's cursor-homing side effect is acceptable here: every
+  subsequent paint (`InlineAuthority.repaint/2`/`keyframe/2`) CUPs to an
+  absolute row before writing anything, so a homed cursor never becomes
+  visible.
+  """
+  @spec reassert(t()) :: t()
+  def reassert(
+        %__MODULE__{device: device, rows: rows, footer_rows: footer_rows} =
+          state
+      ) do
+    IO.write(device, region_set_bytes(rows, footer_rows))
+    state
+  end
 end
