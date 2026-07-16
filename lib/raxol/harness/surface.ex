@@ -215,6 +215,15 @@ defmodule Raxol.Harness.Surface do
 
   ## Fold/jump and the seal-time-only gate -- a translation, not a reuse
 
+  The "which blocks may seal" decision itself now lives in
+  `Raxol.Harness.SealFrontier` (a shared classifier, not restated per
+  consumer). `frontier_entries/1` expresses the foldable window described
+  below as the frontier's `pending_input?` hold on the newest block, and
+  both the seal pass (`paint_pending_blocks/1`) and the footer's pending
+  preview (`pending_block/1`) consult `frontier_scan/1` -- the same
+  entries, the same classifier -- so they can never disagree on where the
+  frontier stops.
+
   `Raxol.UI.Components.Harness.Block.seal` is an item-LIFECYCLE field:
   `BlockBuilder` only ever constructs a block once its source item(s)
   complete, always with `seal: :sealed` (see `BlockBuilder.build_block/2`).
@@ -368,6 +377,7 @@ defmodule Raxol.Harness.Surface do
 
   alias Raxol.Harness.Fixture.Session
   alias Raxol.Harness.Projection
+  alias Raxol.Harness.SealFrontier
   alias Raxol.Terminal.ScrollRegionManager
   alias Raxol.Harness.StatusStrip
   alias Raxol.Harness.Surface.ViewText
@@ -648,15 +658,102 @@ defmodule Raxol.Harness.Surface do
     |> paint_footer()
   end
 
+  @doc """
+  Builds the seal-frontier entry list (`Raxol.Harness.SealFrontier.entry/0`)
+  from the current projection. One entry per completed block, in order;
+  the live tail never enters the list (a still-streaming item has no
+  committable form until it completes into a block, so it is
+  definitionally past the frontier).
+
+  Field mapping (the design decision this assembly makes):
+
+    * `committed?` -- `index < painted_count`: physical paint is this
+      module's commit marker, and it only ever advances a contiguous
+      prefix, so the high-water mark IS the committed set.
+    * `running?` -- `Block.live?/1`, an honest passthrough. Always false
+      today (the block builder only constructs completed, sealed blocks),
+      which leaves the classifier's mid-turn running exceptions dormant
+      until a producer emits still-running entries.
+    * `pending_input?` -- the frontier gate's invariant is "the rendered
+      form can still change on user interaction; print-once must not
+      freeze it," and this feed derives BOTH instances of it:
+
+        1. A LIVE `:approval` block (`Block.live?/1` with
+           `kind: :approval`) is, per `Block`'s own contract, a question
+           still waiting on the user -- the genuine awaiting-input
+           lifecycle, held in EVERY turn state and at any position (the
+           gate exists precisely so the idle relaxation can never seal an
+           unanswered prompt past a stale running flag). Dormant today --
+           the block builder only constructs sealed blocks -- but the
+           gate's contract holds the moment a producer emits live
+           approval blocks.
+        2. The NEWEST block while the fixture reveal is unfinished: the
+           one-advance foldable window (see the moduledoc's "Fold/jump
+           and the seal-time-only gate"), expressed in frontier terms --
+           a fold toggle is the pending interaction. The hold is
+           unconditional on turn state (matching the window's own
+           semantics: it releases on reveal completion, not on turn
+           boundaries). When the block builder later grows a
+           completed-but-unsealed phase, this derivation moves down a
+           layer.
+  """
+  @spec frontier_entries(t()) :: [SealFrontier.entry()]
+  def frontier_entries(model) do
+    blocks = model.projection.blocks
+    total = length(blocks)
+    reveal_finished? = model.revealed >= length(model.events)
+
+    blocks
+    |> Enum.with_index()
+    |> Enum.map(fn {block, index} ->
+      %{
+        kind: block.kind,
+        committed?: index < model.painted_count,
+        running?: Block.live?(block),
+        pending_input?:
+          awaiting_input?(block) or
+            (not reveal_finished? and index == total - 1)
+      }
+    end)
+  end
+
+  # A live approval block is, per `Block`'s own contract, a question still
+  # waiting on the user -- the genuine awaiting-input feed for the
+  # frontier's pending-input gate. A sealed approval is an answered
+  # question and does not feed the gate. See `frontier_entries/1`'s doc.
+  defp awaiting_input?(block),
+    do: Block.live?(block) and block.kind == :approval
+
+  @doc """
+  The shared frontier consultation every consumer in this module goes
+  through: `SealFrontier.scan_frontier/3` over `frontier_entries/1`.
+  `tail_start` is both the seal pass's paint target and the first block
+  the footer's pending preview may show -- one number, so the two can
+  never disagree. `turn_running?` is derived from the status snapshot
+  (`turn_completed`); with today's entry mapping (no running entries,
+  window hold unconditional) the scan result is independent of turn
+  state, so the one-step-stale status at seal time is harmless.
+  """
+  @spec frontier_scan(t()) :: SealFrontier.scan()
+  def frontier_scan(model) do
+    SealFrontier.scan_frontier(frontier_entries(model), turn_running?(model))
+  end
+
+  defp turn_running?(model),
+    do: not Map.get(model.status, :turn_completed, false)
+
   # Leaves the newest completed block un-painted for exactly one more
   # `advance/2` call (see moduledoc, "Fold/jump and the seal-time-only gate") --
   # UNLESS the fixture has finished revealing, in which case every
   # remaining block is flushed (nothing will ever arrive to make the last
-  # block "not newest" otherwise, and it would never get painted).
+  # block "not newest" otherwise, and it would never get painted). The
+  # hold now lives in `frontier_entries/1`'s pending-input mapping;
+  # `SealFrontier`'s shared classifier decides where the frontier stops
+  # from there.
   defp paint_pending_blocks(model) do
-    total = length(model.projection.blocks)
-    finished? = model.revealed >= length(model.events)
-    target = if finished?, do: total, else: max(total - 1, 0)
+    entries = frontier_entries(model)
+    turn_running? = turn_running?(model)
+    scan = SealFrontier.scan_frontier(entries, turn_running?)
 
     # `model.projection` was just rebuilt FRESH by `Projection.project/2`
     # (`advance/2`, the caller) -- EVERY block, including ones already
@@ -673,18 +770,31 @@ defmodule Raxol.Harness.Surface do
     # `advance/2` silently hand back an un-detached reference for every
     # block this module already committed to never holding once sealed
     # (see the moduledoc's "sub-binary pinning footgun" section).
-    model = detach_up_to(model, target)
+    model = detach_up_to(model, scan.tail_start)
 
-    count = max(target - model.painted_count, 0)
+    # The ONE mutating frontier walk (SealFrontier's moduledoc): emit
+    # each newly-committable block via seal_block/2, which advances
+    # painted_count -- the committed marker frontier_entries/1 reads.
+    # The emit is infallible today (InlineAuthority.seal/2 has no error
+    # path), so the walk's write-failure branch stays corpus-only until
+    # a write-confirming substrate lands (the two-phase seal follow-up).
+    result =
+      SealFrontier.commit_walk(
+        entries,
+        turn_running?,
+        model,
+        fn acc, index ->
+          block =
+            acc.projection.blocks
+            |> Enum.at(index)
+            |> apply_fold_override(index, acc.fold_overrides)
 
-    to_paint =
-      model.projection.blocks
-      |> Enum.slice(model.painted_count, count)
-      |> Enum.with_index(model.painted_count)
+          {:ok, seal_block(acc, block)}
+        end,
+        cursor: model.painted_count
+      )
 
-    Enum.reduce(to_paint, model, fn {block, index}, acc ->
-      seal_block(acc, apply_fold_override(block, index, acc.fold_overrides))
-    end)
+    result.acc
   end
 
   # Detaches (see `detach_content/1`) every block at index `< target` and
@@ -1187,9 +1297,15 @@ defmodule Raxol.Harness.Surface do
   end
 
   defp pending_block(model) do
-    case Enum.slice(model.projection.blocks, model.painted_count..-1//1) do
+    # Post-seal, `tail_start == painted_count` always -- the committed
+    # prefix skips to the high-water mark and the walk already consumed
+    # everything committable -- so this is the same block as before, now
+    # DERIVED from the shared classifier instead of restated.
+    tail_start = frontier_scan(model).tail_start
+
+    case Enum.slice(model.projection.blocks, tail_start..-1//1) do
       [] -> nil
-      [block | _rest] -> {block, model.painted_count}
+      [block | _rest] -> {block, tail_start}
     end
   end
 
