@@ -73,7 +73,8 @@ defmodule Raxol.Agent.ContractTest do
       # item_started=2 / item_completed=3, the tool_result's item_started=4 /
       # item_completed=5).
       stream = [
-        {:tool_use, %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
+        {:tool_use,
+         %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
         {:tool_result, %{name: "run_tests", result: "tests: 12 passed"}},
         {:done, %{content: "done", usage: %{output_tokens: 1}}}
       ]
@@ -96,7 +97,9 @@ defmodule Raxol.Agent.ContractTest do
       :telemetry.attach(
         handler,
         [:raxol, :agent, :done_gate, :rejected_evidence],
-        fn _e, _m, metadata, _c -> send(test_pid, {:rejected_evidence, metadata}) end,
+        fn _e, _m, metadata, _c ->
+          send(test_pid, {:rejected_evidence, metadata})
+        end,
         nil
       )
 
@@ -130,13 +133,16 @@ defmodule Raxol.Agent.ContractTest do
       :telemetry.attach(
         handler,
         [:raxol, :agent, :done_gate, :ungated_done],
-        fn _e, _m, metadata, _c -> send(test_pid, {:ungated_done, metadata}) end,
+        fn _e, _m, metadata, _c ->
+          send(test_pid, {:ungated_done, metadata})
+        end,
         nil
       )
 
       on_exit(fn -> :telemetry.detach(handler) end)
 
-      {:ok, _} = Contract.pump(session_id, mock_stream("plain answer"), prompt: "hi")
+      {:ok, _} =
+        Contract.pump(session_id, mock_stream("plain answer"), prompt: "hi")
 
       final = session_id |> drain_events() |> List.last()
 
@@ -318,6 +324,89 @@ defmodule Raxol.Agent.ContractTest do
       assert {:ok, decoded} = Jason.decode(String.trim_trailing(line))
       assert is_binary(decoded["payload"]["reason"])
       assert decoded["payload"]["reason"] =~ "http"
+    end
+  end
+
+  describe "pump/3 — tool-execution vocabulary (ToolExecutor events)" do
+    test "approval events sequence into the run's id stream between tool_use and result" do
+      session_id = "contract-appr-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:tool_use, %{name: "edit_file", arguments: %{}, id: "e1"}},
+        {:approval_requested,
+         %{request_id: "r1", tool_name: "edit_file", options: []}},
+        {:approval_decided,
+         %{request_id: "r1", option_id: "allow", decision: :allow}},
+        {:tool_result, %{name: "edit_file", result: %{ok: true}}},
+        {:done, %{content: "done", usage: %{}}}
+      ]
+
+      {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      events = drain_events(session_id)
+      types = Enum.map(events, & &1.type)
+
+      assert :approval_requested in types
+      assert :approval_decided in types
+
+      req_i = Enum.find_index(types, &(&1 == :approval_requested))
+      dec_i = Enum.find_index(types, &(&1 == :approval_decided))
+      assert req_i < dec_i
+
+      # ids are strictly monotonic across the whole run (single id source).
+      ids = Enum.map(events, & &1.id)
+      assert ids == Enum.sort(ids)
+      assert ids == Enum.uniq(ids)
+    end
+
+    test "a diff-shaped tool_result flattens path/old/new + a diff marker onto the payload" do
+      session_id = "contract-diff-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:tool_result,
+         %{
+           name: "edit_file",
+           result: %{path: "a.ex", old: "x", new: "y", language: "elixir"}
+         }},
+        {:done, %{content: "done", usage: %{}}}
+      ]
+
+      {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      events = drain_events(session_id)
+
+      tr =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :tool_result)
+        )
+
+      assert tr.payload.diff == true
+      assert tr.payload.path == "a.ex"
+      assert tr.payload.old == "x"
+      assert tr.payload.new == "y"
+    end
+
+    test "a tool_unexecuted event seals a visible ⚠ marker message" do
+      session_id = "contract-unexec-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:tool_unexecuted, %{name: "write_file", reason: :dropped}},
+        {:done, %{content: "done", usage: %{}}}
+      ]
+
+      {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      events = drain_events(session_id)
+
+      marker =
+        Enum.find(events, fn e ->
+          e.payload[:item_type] == :message and is_binary(e.payload[:content]) and
+            e.payload.content =~ "never executed"
+        end)
+
+      assert marker, "expected a ⚠ unexecuted marker message"
+      assert marker.payload.content =~ "write_file"
     end
   end
 

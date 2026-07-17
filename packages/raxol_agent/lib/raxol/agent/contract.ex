@@ -243,9 +243,39 @@ defmodule Raxol.Agent.Contract do
         })
 
       {:tool_result, %{name: name} = tool_result} ->
-        complete_item(session_id, turn_id, counter, acc, :tool_result, %{
-          name: name,
-          result: Map.get(tool_result, :result)
+        complete_item(
+          session_id,
+          turn_id,
+          counter,
+          acc,
+          :tool_result,
+          tool_result_extra(name, Map.get(tool_result, :result))
+        )
+
+      # A consequential tool is holding for a keyboard answer. Emitted
+      # through pump (not out-of-band) so it shares the run's id sequence
+      # and the surface's BlockBuilder folds it — with its later
+      # `approval_decided` answer — into ONE approval block that holds the
+      # seal frontier between the tool_use and its result (correct ordering).
+      {:approval_requested, payload} when is_map(payload) ->
+        ev =
+          emit_event(session_id, turn_id, counter, :approval_requested, :durable, payload)
+
+        %{acc | journal: acc.journal ++ [ev]}
+
+      {:approval_decided, payload} when is_map(payload) ->
+        ev =
+          emit_event(session_id, turn_id, counter, :approval_decided, :durable, payload)
+
+        %{acc | journal: acc.journal ++ [ev]}
+
+      # The honesty marker: a tool call the model made that produced no
+      # receipt. A claim of action with zero receipts is NEVER silent — it
+      # seals a visible ⚠ message item into the transcript (full item
+      # lifecycle, like every other completed item).
+      {:tool_unexecuted, payload} when is_map(payload) ->
+        complete_item(session_id, turn_id, counter, acc, :message, %{
+          content: tool_unexecuted_marker(payload)
         })
 
       {:turn_complete, info} ->
@@ -422,6 +452,39 @@ defmodule Raxol.Agent.Contract do
 
         base
     end
+  end
+
+  # A tool result whose payload carries a before/after image of a file
+  # (write_file / edit_file) is flattened so the surface renders it as a
+  # foldable ± DIFF block, not an opaque tool row: `path`/`old`/`new`/
+  # `language` are lifted to the payload top level (where
+  # `Raxol.UI.Components.Harness.Block.extract_diff_content/1` reads them)
+  # and a `diff: true` marker tells the projection's BlockBuilder to resolve
+  # this block's kind to `:diff`. A non-diff result is unchanged.
+  # The `extra` fields `complete_item/6` merges onto a tool_result item.
+  # `item_id`/`item_type` are added by `complete_item` itself.
+  defp tool_result_extra(name, %{path: path, old: old, new: new} = result)
+       when is_binary(path) and is_binary(old) and is_binary(new) do
+    %{
+      name: name,
+      result: result,
+      diff: true,
+      path: path,
+      old: old,
+      new: new,
+      language: Map.get(result, :language)
+    }
+  end
+
+  defp tool_result_extra(name, result) do
+    %{name: name, result: result}
+  end
+
+  defp tool_unexecuted_marker(payload) do
+    name = Map.get(payload, :name) || Map.get(payload, "name") || "unknown"
+    reason = Map.get(payload, :reason) || Map.get(payload, "reason") || :unknown
+
+    "⚠ tool call `#{name}` was recognized but never executed (#{inspect(reason)})"
   end
 
   defp emit_event(session_id, turn_id, counter, type, tier, payload) do

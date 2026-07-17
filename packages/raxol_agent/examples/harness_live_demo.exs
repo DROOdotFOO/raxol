@@ -202,7 +202,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
   def run(argv) do
     ensure_agent_package!()
-    {one_shot, debug?, system_arg} = parse_args(argv)
+    {one_shot, debug?, system_arg, yolo?} = parse_args(argv)
 
     # Resolved pre-claim (stderr still lands visibly) and exactly once --
     # the same text then governs every turn this session runs.
@@ -231,7 +231,33 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     {:ok, streamer} = Raxol.Agent.SessionStreamer.start_link([])
 
     session_id = "live-demo-#{System.unique_integer([:positive])}"
-    session = %{session_id: session_id}
+
+    # The tool surface the model is told it has (and now actually has). The
+    # read-only tools (read_file/list_dir/file_stat/glob/grep) auto-run; the
+    # consequential tools (write_file/edit_file/run_shell) hold on a keyboard
+    # approval unless `--yolo`. Classification lives in
+    # `Raxol.Agent.Harness.ToolClassifier`.
+    actions =
+      Raxol.Agent.Actions.Fs.all() ++
+        Raxol.Agent.Actions.Workspace.all() ++ [Raxol.Agent.Actions.Shell]
+
+    # The session runtime (`Raxol.Agent.Harness.SessionInbox`) IS the session
+    # `:pid`, so the harness's routed keyboard commands
+    # (submit/approval_decision/interrupt) reach a real consumer that runs a
+    # tool-executing turn -- the seam that was missing when the demo drove a
+    # bare `Stream.run/2` and tool calls went unanswered.
+    {:ok, inbox} =
+      Raxol.Agent.Harness.SessionInbox.start_link(
+        session_id: session_id,
+        actions: actions,
+        backend: backend,
+        backend_opts: backend_opts_fun.(""),
+        system_prompt: system_prompt,
+        gate?: not yolo?,
+        notify: self()
+      )
+
+    session = %{session_id: session_id, pid: inbox}
 
     {width, rows} = geometry()
     tty? = Raxol.Terminal.TerminalUtils.has_terminal_device?()
@@ -416,11 +442,12 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         driver: driver,
         mirror: mirror,
         session_id: session_id,
-        backend: backend,
-        backend_opts_fun: backend_opts_fun,
-        system_prompt: system_prompt,
-        turn_task: nil,
-        queue: [],
+        session: session,
+        inbox: inbox,
+        # The inbox owns the turn now (one turn at a time, its own queue).
+        # This flag is only the embedder's local belief, used to keep the
+        # one-shot linger honest; a `{:harness_turn_done, _}` clears it.
+        turn_running?: false,
         tap: debug && debug.tap,
         debug?: debug?,
         mode: if(one_shot, do: :one_shot, else: :interactive)
@@ -505,7 +532,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
        %{
          type: :lane_notice,
          payload: %{
-           text: "» isig flipped on mid-session — re-asserted; ^C exit path restored"
+           text:
+             "» isig flipped on mid-session — re-asserted; ^C exit path restored"
          }
        }}
     )
@@ -519,12 +547,10 @@ defmodule Raxol.Examples.HarnessLiveDemo do
   # the caller's `after` block.
   defp handle_msg(_state, {:live_session_driver, _pid, :halted}), do: :halt
 
-  defp handle_msg(state, {ref, result}) when is_reference(ref),
-    do: {:cont, handle_turn_result(state, ref, result)}
-
-  # Task.async's trailing DOWN for a completed turn task.
-  defp handle_msg(state, {:DOWN, _ref, :process, _pid, _reason}),
-    do: {:cont, state}
+  # The inbox finished a turn (its own queue drives the next one). Clear the
+  # local belief and, in one-shot mode, enter the exit linger.
+  defp handle_msg(%{session_id: sid} = state, {:harness_turn_done, sid}),
+    do: {:cont, state |> Map.put(:turn_running?, false) |> maybe_enter_linger()}
 
   defp handle_msg(state, _other), do: {:cont, state}
 
@@ -553,74 +579,25 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
   defp handle_submit(state, ""), do: state
 
-  # One turn at a time: Contract.pump is a blocking drain per turn, and
-  # interleaving two pumps on one session would shuffle their events into
-  # a single transcript -- queue instead.
-  defp handle_submit(%{turn_task: task} = state, prompt) when not is_nil(task),
-    do: %{state | queue: state.queue ++ [prompt]}
-
   defp handle_submit(state, prompt), do: start_turn(state, prompt)
 
-  # The turn: exactly the keystone's recipe. `Stream.run/2` builds the
-  # lazy backend stream; `Contract.pump/3` drains it, emitting turn
-  # lifecycle + delta events onto the SessionStreamer, where the driver's
-  # forwarder (already subscribed) picks them up. pump blocks until the
-  # stream is done, so it runs in its own task; a raise inside a live
-  # backend stream is caught and reported rather than crashing the demo
-  # (pump itself already emits an honest :error event for in-band stream
-  # errors).
+  # The turn now runs INSIDE the session runtime (`SessionInbox`), reached
+  # through the REAL harness command path: the lane's `submit/2` decodes and
+  # routes a `:prompt` command to the session `:pid` (the inbox), which
+  # builds a `Raxol.Agent.Harness.ToolExecutor` stream and drains it through
+  # `Contract.pump/3`. The model's tool calls are now EXECUTED (approval-
+  # gated where consequential), fed back, and looped to a text answer -- the
+  # seam that was missing. A submit mid-turn is queued by the inbox itself.
   defp start_turn(state, prompt) do
-    backend = state.backend
-    backend_opts = state.backend_opts_fun.(prompt)
-    session_id = state.session_id
+    case Raxol.Agent.Harness.SessionLane.submit(state.session, %{text: prompt}) do
+      :ok ->
+        %{state | turn_running?: true}
 
-    # The system prompt was resolved once at boot; here it is only threaded
-    # (a binary), so no file I/O rides the turn path.
-    stream_opts =
-      [backend: backend, backend_opts: backend_opts] ++
-        case state.system_prompt do
-          nil -> []
-          text -> [system_prompt: text]
-        end
-
-    task =
-      Task.async(fn ->
-        try do
-          stream = Raxol.Agent.Stream.run(prompt, stream_opts)
-
-          Raxol.Agent.Contract.pump(session_id, stream, prompt: prompt)
-        rescue
-          error -> {:error, {:turn_crashed, Exception.message(error)}}
-        catch
-          kind, reason -> {:error, {:turn_crashed, {kind, reason}}}
-        end
-      end)
-
-    %{state | turn_task: task}
-  end
-
-  defp handle_turn_result(%{turn_task: %Task{ref: ref}} = state, ref, result) do
-    state = %{state | turn_task: nil}
-
-    case result do
-      {:error, {:turn_crashed, info}} ->
-        # Nothing reached the event stream for this failure mode, so the
-        # transcript cannot show it -- stderr is the honest channel left.
-        IO.puts(:stderr, "turn crashed before completing: #{inspect(info)}")
-
-      _ok_or_pumped_error ->
-        # {:ok, %{content: ...}} or a pump-level {:error, reason} -- both
-        # already rendered through the event stream; nothing to add here.
-        :ok
-    end
-
-    case state.queue do
-      [next | rest] -> start_turn(%{state | queue: rest}, next)
-      [] -> maybe_enter_linger(state)
+      {:error, reason} ->
+        IO.puts(:stderr, "submit failed to dispatch: #{inspect(reason)}")
+        state
     end
   end
-
-  defp handle_turn_result(state, _ref, _result), do: state
 
   # One-shot mode: the (only) turn is done -- keep the terminal up long
   # enough for the tail of the reveal to seal, still forwarding input,
@@ -946,10 +923,16 @@ defmodule Raxol.Examples.HarnessLiveDemo do
   defp parse_args(argv) do
     {opts, _positional, _invalid} =
       OptionParser.parse(argv,
-        strict: [prompt: :string, debug: :boolean, system: :string]
+        strict: [
+          prompt: :string,
+          debug: :boolean,
+          system: :string,
+          yolo: :boolean
+        ]
       )
 
-    {Keyword.get(opts, :prompt), Keyword.get(opts, :debug, false), Keyword.get(opts, :system)}
+    {Keyword.get(opts, :prompt), Keyword.get(opts, :debug, false),
+     Keyword.get(opts, :system), Keyword.get(opts, :yolo, false)}
   end
 
   # -- system prompt (--system bonded|none|<path>) ---------------------------
@@ -967,7 +950,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
          "system prompt: #{Raxol.Agent.SystemPrompt.identity_line(resolved)} (default)"}
 
       {:error, {:bonded_not_found, _candidates}} ->
-        {nil, "system prompt: none — bonded package not found (--system <path> to supply one)"}
+        {nil,
+         "system prompt: none — bonded package not found (--system <path> to supply one)"}
 
       {:error, reason} ->
         abort_system_prompt("bonded (default)", reason)
@@ -980,7 +964,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
   defp resolve_system_prompt("bonded") do
     case Raxol.Agent.SystemPrompt.resolve(:bonded) do
       {:ok, resolved} ->
-        {resolved.text, "system prompt: #{Raxol.Agent.SystemPrompt.identity_line(resolved)}"}
+        {resolved.text,
+         "system prompt: #{Raxol.Agent.SystemPrompt.identity_line(resolved)}"}
 
       {:error, reason} ->
         abort_system_prompt("bonded", reason)
@@ -990,7 +975,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
   defp resolve_system_prompt(path) do
     case Raxol.Agent.SystemPrompt.resolve({:file, path}) do
       {:ok, resolved} ->
-        {resolved.text, "system prompt: #{Raxol.Agent.SystemPrompt.identity_line(resolved)}"}
+        {resolved.text,
+         "system prompt: #{Raxol.Agent.SystemPrompt.identity_line(resolved)}"}
 
       {:error, reason} ->
         abort_system_prompt(path, reason)

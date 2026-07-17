@@ -433,7 +433,11 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
     case Map.get(acc.groups, k) do
       nil ->
         diag = Recovery.emit(:orphan_item_completed, Map.get(event, :id))
-        group = new_group(item_type: item_type, completed: event)
+
+        group =
+          [item_type: item_type, completed: event]
+          |> new_group()
+          |> maybe_diff_override(event)
 
         %{
           acc
@@ -444,7 +448,9 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
         }
 
       %{completed: nil} = group ->
-        updated = %{group | item_type: item_type, completed: event}
+        updated =
+          %{group | item_type: item_type, completed: event}
+          |> maybe_diff_override(event)
 
         %{
           acc
@@ -591,10 +597,33 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
     {[block], diag}
   end
 
+  # A tool_use + its tool_result merge into ONE :tool_call block -- UNLESS
+  # the result is a DIFF (write_file / edit_file): a ± diff is its own block
+  # kind (`:diff`, carrying the before/after image), distinct from the tool
+  # call that produced it, so it stands alone rather than collapsing into a
+  # generic tool row and losing its diff shape (`resolve_kind/1` reads the
+  # head group, which for a merged pair is the tool_use -- always `:tool_call`).
   defp mergeable_pair?(g1, g2) do
     well_formed?(g1) and well_formed?(g2) and g1.item_type == :tool_use and
-      g2.item_type == :tool_result
+      g2.item_type == :tool_result and Map.get(g2, :kind_override) != :diff
   end
+
+  # Stamp a completed tool_result group as a `:diff` block when its event
+  # carries the diff marker (`Raxol.Agent.Contract.pump/3` sets it for a
+  # before/after file image). Every other completion is untouched.
+  defp maybe_diff_override(%{item_type: :tool_result} = group, event) do
+    if truthy?(payload_fetch(event, "diff", :diff)) do
+      %{group | kind_override: :diff}
+    else
+      group
+    end
+  end
+
+  defp maybe_diff_override(group, _event), do: group
+
+  defp truthy?(true), do: true
+  defp truthy?("true"), do: true
+  defp truthy?(_), do: false
 
   defp well_formed?(%{singleton: true}), do: true
 
@@ -1026,7 +1055,7 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   # keys carry the approval referent + decision receipt through to
   # `Block.extract_approval_content/1` (`request_id` is consumed earlier,
   # for correlation, and is not needed in the rendered payload).
-  @direct_payload_keys ~w(content name action blast_radius options exit_code cost duration_ms where reason tool_name request_id decision option_id scope decided_by decided_at)a
+  @direct_payload_keys ~w(content name action blast_radius options exit_code cost duration_ms where reason tool_name request_id decision option_id scope decided_by decided_at path old new language)a
 
   defp adapt_payload(payload) when is_map(payload) do
     base =
