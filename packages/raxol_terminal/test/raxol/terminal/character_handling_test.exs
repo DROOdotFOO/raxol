@@ -18,6 +18,28 @@ defmodule Raxol.Terminal.CharacterHandlingTest do
       assert Raxol.Terminal.CharacterHandling.get_char_width("a") == 1
       assert Raxol.Terminal.CharacterHandling.get_char_width("1") == 1
     end
+
+    test ~c"kana and CJK punctuation are East Asian Wide (2 cells)" do
+      # Hiragana
+      assert CharacterHandling.wide_char?(?こ)
+      assert Raxol.Terminal.CharacterHandling.get_char_width("は") == 2
+      # Katakana (incl. the prolonged sound mark)
+      assert CharacterHandling.wide_char?(?テ)
+      assert Raxol.Terminal.CharacterHandling.get_char_width("ト") == 2
+      assert Raxol.Terminal.CharacterHandling.get_char_width("ー") == 2
+      # Katakana Phonetic Extensions
+      assert Raxol.Terminal.CharacterHandling.get_char_width("ㇰ") == 2
+      # CJK Symbols and Punctuation: ideographic space, comma, corner bracket
+      assert Raxol.Terminal.CharacterHandling.get_char_width("　") == 2
+      assert Raxol.Terminal.CharacterHandling.get_char_width("、") == 2
+      assert Raxol.Terminal.CharacterHandling.get_char_width("「") == 2
+
+      # Mixed-script strings measure per grapheme: 7 kana = 14 cells
+      assert Raxol.Terminal.CharacterHandling.get_string_width("こんにちは世界") ==
+               14
+
+      assert Raxol.Terminal.CharacterHandling.get_string_width("テスト") == 6
+    end
   end
 
   describe "combining characters" do

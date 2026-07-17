@@ -9,7 +9,6 @@ defmodule Raxol.Terminal.CharacterHandling do
   - Supporting Unicode character properties
   """
 
-
   @doc """
   Determines if a character is a wide character (takes up two cells).
   """
@@ -34,6 +33,15 @@ defmodule Raxol.Terminal.CharacterHandling do
       {0x30000, 0x3134F},
       # CJK Compatibility Ideographs
       {0xF900, 0xFAFF},
+      # CJK Symbols and Punctuation (ideographic space, 、。「」...)
+      {0x3000, 0x303E},
+      # Hiragana + Katakana (incl. the ー prolonged sound mark). Kana are
+      # East Asian Wide just like Han -- this range was missing, so kana
+      # measured 1 cell and every downstream layout budget drifted
+      # (caught by the harness diff viewer's unicode fixture, U1-b).
+      {0x3041, 0x30FF},
+      # Katakana Phonetic Extensions
+      {0x31F0, 0x31FF},
       # Hangul Syllables
       {0xAC00, 0xD7AF},
       # Fullwidth ASCII variants
