@@ -500,13 +500,25 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       h = Mem.high_watermark(j)
 
       n = 2000
+      batch = 200
 
-      for i <- 1..n,
-          do:
-            {:ok, _} = Writer.append(w, "session_update", %{"i" => i}, "agent")
+      # Append in drained batches. The finding-1 bug was that credit tracked
+      # TOTAL-ever-sent, so > 1024 lifetime sends false-lagged a subscriber
+      # that had forwarded everything. We prove that here by sending 2000
+      # (>> 1024) lifetime frames while keeping the UNFORWARDED backlog per
+      # batch (200) well under the 1024 credit -- genuine backlog > credit is
+      # real backpressure, tested separately. Draining (sub) then flushing the
+      # Writer (:sys.get_state processes the per-forward credit casts) between
+      # batches makes this deterministic, instead of relying on the scheduler
+      # to interleave forwarding into a single 2000-deep burst (which starved
+      # under a loaded suite and flaked).
+      for b <- 0..(div(n, batch) - 1) do
+        for i <- (b * batch + 1)..(b * batch + batch),
+            do: {:ok, _} = Writer.append(w, "session_update", %{"i" => i}, "agent")
 
-      # Drain the Subscriber's mailbox fully.
-      _ = sync(sub)
+        _ = sync(sub)
+        _ = :sys.get_state(w)
+      end
 
       # Healthy: it never lagged and never stopped.
       refute_receive {:DOWN, ^mon, :process, ^sub, _}, 200
