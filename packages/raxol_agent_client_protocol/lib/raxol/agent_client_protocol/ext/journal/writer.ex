@@ -30,12 +30,18 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
       knob realizes the defect for the red controls.
     * **Cross-connection turn latch** (§2.7) — `append("turn_started", …)` while
       a turn is latched returns `{:error, :turn_in_flight}`; the latch monitors
-      the appender.
-    * **Atomic latch clear** (C13) — appending `"turn_completed"` clears the
-      turn latch INSIDE the same `handle_call`, before the reply. Success
-      therefore never leaves the latch held: a Session crash immediately AFTER a
-      successful `turn_completed` append produces ZERO orphan rows (no double
-      `turn_completed`) and never wedges the next prompt at `:turn_in_flight`.
+      the appender. Symmetrically, `append("turn_completed", …)` from a NON-holder
+      while a turn is latched is REFUSED at the durable append itself
+      (`{:error, :not_turn_holder}`) — the single-holder law guards the APPEND, not
+      just the latch-clear, so a foreign connection can never write a phantom
+      completion row that a reattacher would finalize from (log + telemetry, the
+      journal is never corrupted).
+    * **Atomic latch clear** (C13) — appending `"turn_completed"` as the HOLDER
+      clears the turn latch INSIDE the same `handle_call`, before the reply.
+      Success therefore never leaves the latch held: a Session crash immediately
+      AFTER a successful `turn_completed` append produces ZERO orphan rows (no
+      double `turn_completed`) and never wedges the next prompt at
+      `:turn_in_flight`.
     * **Orphan repair on appender death** (§2.6) — if the latched appender dies
       between `turn_started` and `turn_completed`, the Writer appends exactly one
       orphaned `turn_completed{"outcome":"orphaned","stopReason":"cancelled"}`
@@ -115,7 +121,11 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
           | nil
 
   @typedoc "Per-subscriber state: pid, remaining publish credit, and highest offset sent."
-  @type subscriber :: %{pid: pid(), credit: non_neg_integer(), sent_hi: non_neg_integer()}
+  @type subscriber :: %{
+          pid: pid(),
+          credit: non_neg_integer(),
+          sent_hi: non_neg_integer()
+        }
 
   @type t :: %__MODULE__{
           session_id: String.t(),
@@ -212,21 +222,25 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
   (lagged) subscriber is a no-op.
   """
   @spec credit(GenServer.server(), pid(), pos_integer()) :: :ok
-  def credit(server, subscriber, n) when is_pid(subscriber) and is_integer(n) and n > 0,
-    do: GenServer.cast(server, {:credit, subscriber, n})
+  def credit(server, subscriber, n)
+      when is_pid(subscriber) and is_integer(n) and n > 0,
+      do: GenServer.cast(server, {:credit, subscriber, n})
 
   @doc """
   Durably append a record, then publish it live. Returns the COMPLETE stamped
   `%Record{}` (offset = `record.offset`).
 
   `kind == "turn_started"` acquires the turn latch (or returns
-  `{:error, :turn_in_flight}` if one is held); `kind == "turn_completed"` clears
-  the latch atomically in the same step; every other kind is a plain append.
-  Triggers the lazy bootstrap strictly BEFORE the append (unless the dead
-  `:__dead_bootstrap_after_op__` knob is set).
+  `{:error, :turn_in_flight}` if one is held); `kind == "turn_completed"` by the
+  latch HOLDER clears the latch atomically in the same step, while a
+  `turn_completed` from a NON-holder while a turn is latched is REFUSED at the
+  durable append (`{:error, :not_turn_holder}` — §2.7, no journal write, no false
+  boundary); every other kind (and a `turn_completed` with no open turn) is a
+  plain append. Triggers the lazy bootstrap strictly BEFORE the append (unless the
+  dead `:__dead_bootstrap_after_op__` knob is set).
   """
   @spec append(GenServer.server(), String.t(), map(), String.t()) ::
-          {:ok, Record.t()} | {:error, :turn_in_flight}
+          {:ok, Record.t()} | {:error, :turn_in_flight | :not_turn_holder}
   def append(server, kind, payload, taint)
       when is_binary(kind) and is_map(payload) and is_binary(taint) do
     GenServer.call(server, {:append, kind, payload, taint})
@@ -240,9 +254,11 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
       session_id: Keyword.fetch!(opts, :session_id),
       journal: Keyword.fetch!(opts, :journal),
       session_meta: Keyword.get(opts, :session_meta, %{}),
-      subscriber_credit: Keyword.get(opts, :subscriber_credit, @default_subscriber_credit),
+      subscriber_credit:
+        Keyword.get(opts, :subscriber_credit, @default_subscriber_credit),
       dead_publish_phantom: Keyword.get(opts, :__dead_publish_phantom__, false),
-      dead_bootstrap_after_op: Keyword.get(opts, :__dead_bootstrap_after_op__, false)
+      dead_bootstrap_after_op:
+        Keyword.get(opts, :__dead_bootstrap_after_op__, false)
     }
 
     # Bootstrap is LAZY (R-C14-lazy): it runs as the Writer's first action for
@@ -264,7 +280,8 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
       ref = Process.monitor(pid)
       sub = %{pid: pid, credit: state.subscriber_credit, sent_hi: 0}
 
-      {:reply, :ok, %{state | subscribers: Map.put(state.subscribers, ref, sub)}}
+      {:reply, :ok,
+       %{state | subscribers: Map.put(state.subscribers, ref, sub)}}
     end
   end
 
@@ -293,7 +310,9 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
           state.subscribers
 
         ref ->
-          Map.update!(state.subscribers, ref, fn sub -> %{sub | credit: sub.credit + n} end)
+          Map.update!(state.subscribers, ref, fn sub ->
+            %{sub | credit: sub.credit + n}
+          end)
       end
 
     {:noreply, %{state | subscribers: subscribers}}
@@ -362,7 +381,8 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
   # -- Append + latch ---------------------------------------------------------
 
   @spec do_append(t(), String.t(), map(), String.t(), pid()) ::
-          {{:ok, Record.t()} | {:error, :turn_in_flight}, t()}
+          {{:ok, Record.t()} | {:error, :turn_in_flight | :not_turn_holder},
+           t()}
   defp do_append(
          %__MODULE__{turn: turn} = state,
          @turn_started_kind,
@@ -390,15 +410,37 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
     {{:ok, record}, state}
   end
 
-  defp do_append(state, @turn_completed_kind, payload, taint, caller_pid) do
+  defp do_append(
+         %__MODULE__{turn: %{appender_pid: holder, turn_id: turn_id}} = state,
+         @turn_completed_kind,
+         _payload,
+         _taint,
+         caller_pid
+       )
+       when holder != caller_pid do
+    # NON-HOLDER turn_completed (§2.7 single-holder law): another connection holds
+    # the latch. REFUSE the durable APPEND — not merely the latch-clear. Persisting
+    # here would write a FALSE completion row into the journal while the holder's
+    # turn is still open, and a reattacher could then finalize the turn from that
+    # phantom boundary. Log + telemetry, leave the journal and the holder's latch
+    # untouched. The legitimate holder path and the internal orphan tip-fold
+    # (which go through `persist` as the holder / the Writer itself) are unaffected.
+    Logger.warning(
+      "acp journal: turn_completed by a non-holder for turn #{inspect(turn_id)} " <>
+        "on session #{inspect(state.session_id)}; durable append REFUSED (§2.7)"
+    )
+
+    emit_non_holder_rejected(state, turn_id)
+    {{:error, :not_turn_holder}, state}
+  end
+
+  defp do_append(state, @turn_completed_kind, payload, taint, _caller_pid) do
     record = persist(state, @turn_completed_kind, payload, taint)
-    # ATOMIC latch clear (C13): same step as the append, before the reply. But only
-    # the LATCH HOLDER clears it (§2.7 defense-in-depth): after the Session-side fix
-    # honors `{:error, :turn_in_flight}`, a `turn_completed` from a non-holder is
-    # unreachable — so if one arrives, append it but leave the holder's latch intact
-    # (a non-holder must never clear another connection's turn). Turn `nil` (no
-    # latch) clears to `nil` as before.
-    state = clear_latch_if_holder(state, caller_pid)
+    # ATOMIC latch clear (C13): same step as the append, before the reply. The
+    # non-holder case was refused above, so this clause runs only for the LATCH
+    # HOLDER (clears the turn) or a `turn_completed` with no open turn (`turn: nil`,
+    # a no-op clear as before) — `clear_latch/1` handles both.
+    state = clear_latch(state)
     state = publish_all(state, record)
     {{:ok, record}, state}
   end
@@ -446,22 +488,21 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
     %{state | turn: nil}
   end
 
-  # Clear the latch only for the holder (§2.7 defense-in-depth). No latch ⇒ nothing
-  # to clear. A non-holder `turn_completed` warns and leaves the latch held.
-  @spec clear_latch_if_holder(t(), pid()) :: t()
-  defp clear_latch_if_holder(%__MODULE__{turn: nil} = state, _caller), do: clear_latch(state)
+  # §2.7 single-holder telemetry: a non-holder turn_completed whose durable append
+  # was refused. Guarded so :telemetry stays an optional dep (never raise into the
+  # single-publisher mailbox).
+  @spec emit_non_holder_rejected(t(), term()) :: :ok
+  defp emit_non_holder_rejected(%__MODULE__{session_id: sid}, turn_id) do
+    if Code.ensure_loaded?(:telemetry) and
+         function_exported?(:telemetry, :execute, 3) do
+      apply(:telemetry, :execute, [
+        [:raxol, :acp, :journal, :non_holder_turn_completed],
+        %{count: 1},
+        %{session_id: sid, turn_id: turn_id}
+      ])
+    end
 
-  defp clear_latch_if_holder(%__MODULE__{turn: %{appender_pid: pid}} = state, caller)
-       when pid == caller,
-       do: clear_latch(state)
-
-  defp clear_latch_if_holder(%__MODULE__{turn: %{turn_id: turn_id}} = state, _caller) do
-    Logger.warning(
-      "acp journal: turn_completed by a non-holder for turn #{inspect(turn_id)} " <>
-        "on session #{inspect(state.session_id)}; latch left held (§2.7)"
-    )
-
-    state
+    :ok
   end
 
   # -- Publish (single site) --------------------------------------------------
@@ -489,7 +530,10 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
   # then demonitored and dropped. The Writer never blocks on a slow subscriber and
   # never drops a middle record for a still-attached one.
   @spec publish(t(), Record.t()) :: t()
-  defp publish(%__MODULE__{subscribers: subs, session_id: sid} = state, %Record{} = record) do
+  defp publish(
+         %__MODULE__{subscribers: subs, session_id: sid} = state,
+         %Record{} = record
+       ) do
     subscribers =
       Enum.reduce(subs, %{}, fn {ref, sub}, kept ->
         case deliver_or_lag(sid, ref, sub, record) do
@@ -503,7 +547,12 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
 
   @spec deliver_or_lag(String.t(), reference(), subscriber(), Record.t()) ::
           {:keep, subscriber()} | :drop
-  defp deliver_or_lag(sid, _ref, %{pid: pid, credit: credit, sent_hi: hi} = sub, record)
+  defp deliver_or_lag(
+         sid,
+         _ref,
+         %{pid: pid, credit: credit, sent_hi: hi} = sub,
+         record
+       )
        when credit > 0 do
     send(pid, {:reattach_live, sid, record})
     {:keep, %{sub | credit: credit - 1, sent_hi: max(hi, record.offset)}}

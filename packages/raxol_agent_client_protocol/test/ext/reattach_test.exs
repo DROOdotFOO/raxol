@@ -58,7 +58,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       start_supervised!(
         %{
           id: {:writer, sid},
-          start: {Writer, :start_link, [[session_id: sid, journal: {Mem, j}] ++ writer_opts]},
+          start:
+            {Writer, :start_link,
+             [[session_id: sid, journal: {Mem, j}] ++ writer_opts]},
           restart: :temporary
         },
         restart: :temporary
@@ -81,7 +83,10 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
   end
 
   defp grant(fields \\ %{}) do
-    Map.merge(%{actor: %{"id" => "tester"}, scope: :attach, expires_at: nil, lens: nil}, fields)
+    Map.merge(
+      %{actor: %{"id" => "tester"}, scope: :attach, expires_at: nil, lens: nil},
+      fields
+    )
   end
 
   defp granting, do: fn _ctx -> {:ok, grant()} end
@@ -136,7 +141,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
 
   defp notifies(conn), do: FakeConnection.entries(conn, :notify)
 
-  defp frame_offset("session/update", p), do: get_in(p, ["_meta", "raxol.io", "offset"])
+  defp frame_offset("session/update", p),
+    do: get_in(p, ["_meta", "raxol.io", "offset"])
+
   defp frame_offset("_raxol/session.record", p), do: p["offset"]
   defp frame_offset(_method, _p), do: nil
 
@@ -153,9 +160,14 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     for {:notify, method, params} <- notifies(conn), reduce: [] do
       acc ->
         case method do
-          "session/update" -> [get_in(params, ["_meta", "raxol.io", "taint"]) | acc]
-          "_raxol/session.record" -> [params["taint"] | acc]
-          _ -> acc
+          "session/update" ->
+            [get_in(params, ["_meta", "raxol.io", "taint"]) | acc]
+
+          "_raxol/session.record" ->
+            [params["taint"] | acc]
+
+          _ ->
+            acc
         end
     end
     |> Enum.reverse()
@@ -167,7 +179,8 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     Enum.map(recs, & &1.offset)
   end
 
-  defp reply_entry(conn), do: conn |> FakeConnection.entries(:reply) |> List.last()
+  defp reply_entry(conn),
+    do: conn |> FakeConnection.entries(:reply) |> List.last()
 
   # Poll until the origin connection has recorded a prompt reply (the turn task
   # runs async under the Task.Supervisor).
@@ -205,9 +218,12 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       {sid, j, w} =
         start_writer([
           {"turn_started", %{"turnId" => 1, "prompt" => []}, "user"},
-          {"session_update", %{"sessionUpdate" => "agent_message_chunk"}, "agent"},
-          {"session_update", %{"sessionUpdate" => "agent_message_chunk"}, "agent"},
-          {"turn_completed", %{"turnId" => 1, "stopReason" => "end_turn"}, "system"}
+          {"session_update", %{"sessionUpdate" => "agent_message_chunk"},
+           "agent"},
+          {"session_update", %{"sessionUpdate" => "agent_message_chunk"},
+           "agent"},
+          {"turn_completed", %{"turnId" => 1, "stopReason" => "end_turn"},
+           "system"}
         ])
 
       # Durable so far: 1 genesis, 2 turn_started, 3-4 updates, 5 turn_completed.
@@ -220,11 +236,29 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       assert delivered_offsets(conn) == Enum.to_list(1..5)
 
       # Live tail: a new turn appends 6,7,8; each delivered once, offset > h.
-      {:ok, _} = Writer.append(w, "turn_started", %{"turnId" => 2, "prompt" => []}, "user")
-      {:ok, _} = Writer.append(w, "session_update", %{"sessionUpdate" => "plan"}, "agent")
+      {:ok, _} =
+        Writer.append(
+          w,
+          "turn_started",
+          %{"turnId" => 2, "prompt" => []},
+          "user"
+        )
 
       {:ok, _} =
-        Writer.append(w, "turn_completed", %{"turnId" => 2, "stopReason" => "end_turn"}, "system")
+        Writer.append(
+          w,
+          "session_update",
+          %{"sessionUpdate" => "plan"},
+          "agent"
+        )
+
+      {:ok, _} =
+        Writer.append(
+          w,
+          "turn_completed",
+          %{"turnId" => 2, "stopReason" => "end_turn"},
+          "system"
+        )
 
       _ = sync(sub)
 
@@ -250,7 +284,10 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       # Dead control: a HYPOTHETICAL taint-filtering delivery (drop "external")
       # would omit offset 3's record ⇒ delivered ⊊ durable ⇒ closure broken.
       {:ok, recs} = Mem.read(j, 1, Mem.high_watermark(j))
-      filtered = recs |> Enum.reject(&(&1.taint == "external")) |> Enum.map(& &1.offset)
+
+      filtered =
+        recs |> Enum.reject(&(&1.taint == "external")) |> Enum.map(& &1.offset)
+
       refute filtered == durable_offsets(j)
     end
   end
@@ -281,29 +318,34 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     test "DEAD register-after-history: a record appended in the window is missed (gap)" do
       # Correct path: subscribe FIRST, so a record appended after h-read arrives
       # live and closure holds.
-      {sid_ok, j_ok, w_ok} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+      {sid_ok, j_ok, w_ok} =
+        start_writer([{"session_update", %{"i" => 1}, "agent"}])
 
       {conn_ok, _r, sub_ok, :deferred} =
         attach(sid_ok, j_ok, %{
           __between__: fn ->
-            {:ok, _} = Writer.append(w_ok, "session_update", %{"i" => 2}, "agent")
+            {:ok, _} =
+              Writer.append(w_ok, "session_update", %{"i" => 2}, "agent")
           end
         })
 
       _ = sync(sub_ok)
+
       # 1 genesis, 2 first update (history), 3 the between-append (live) — no gap.
       assert delivered_offsets(conn_ok) == [1, 2, 3]
 
       # DEAD path: read h + history BEFORE subscribing. The between-append lands
       # after history was read and before subscription ⇒ neither in history nor
       # live ⇒ a permanent gap.
-      {sid_bad, j_bad, w_bad} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+      {sid_bad, j_bad, w_bad} =
+        start_writer([{"session_update", %{"i" => 1}, "agent"}])
 
       {conn_bad, _r2, sub_bad, :deferred} =
         attach(sid_bad, j_bad, %{
           __dead_register_after_history__: true,
           __between__: fn ->
-            {:ok, _} = Writer.append(w_bad, "session_update", %{"i" => 2}, "agent")
+            {:ok, _} =
+              Writer.append(w_bad, "session_update", %{"i" => 2}, "agent")
           end
         })
 
@@ -327,7 +369,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
 
       # DEAD: a cached counter (h = 0) reads NO history ⇒ every pre-existing
       # record is missed (history empties) ⇒ gap vs the durable stream.
-      {conn_bad, _r2, sub_bad, :deferred} = attach(sid, j, %{__dead_cached_counter__: true})
+      {conn_bad, _r2, sub_bad, :deferred} =
+        attach(sid, j, %{__dead_cached_counter__: true})
+
       _ = sync(sub_bad)
       assert delivered_offsets(conn_bad) == []
       refute delivered_offsets(conn_bad) == durable_offsets(j)
@@ -352,7 +396,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
 
       # Replies normally with the highWatermark, and it is NOT an error.
       assert {:reply, ^ref, {:ok, resp}} = reply_entry(conn)
-      assert get_in(resp._meta, ["raxol.io", "highWatermark"]) == Mem.high_watermark(j)
+
+      assert get_in(resp._meta, ["raxol.io", "highWatermark"]) ==
+               Mem.high_watermark(j)
 
       # No live tail was armed: a stray live message is ignored (live: :none).
       before = length(delivered_offsets(conn))
@@ -383,7 +429,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     taints = ~w(user agent external system)
 
     {sid, j, _w} =
-      start_writer(Enum.map(taints, fn t -> {"session_update", %{"t" => t}, t} end))
+      start_writer(
+        Enum.map(taints, fn t -> {"session_update", %{"t" => t}, t} end)
+      )
 
     {conn, _ref, sub, :deferred} = attach(sid, j)
     _ = sync(sub)
@@ -394,7 +442,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
 
     # Per-taint delivery count == per-taint record count (no drop by taint).
     {:ok, recs} = Mem.read(j, 1, Mem.high_watermark(j))
-    assert Enum.frequencies(delivered) == Enum.frequencies(Enum.map(recs, & &1.taint))
+
+    assert Enum.frequencies(delivered) ==
+             Enum.frequencies(Enum.map(recs, & &1.taint))
   end
 
   # -- J6: Lagged heals from last_offset + 1 ----------------------------------
@@ -406,45 +456,95 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
   # The subscriber's consumer-clause reaction (emit terminal Lagged on its OWN
   # forward_hi, then stop) is its own separately-named unit test below.
 
+  # -- Credit replenishment: a HEALTHY forwarding subscriber never false-lags --
+  #
+  # The moat red (finding 1): the Writer decrements a per-subscriber publish
+  # credit (default 1024) on every live send. Before the fix, the reattach
+  # Subscriber NEVER replenished it, so a perfectly healthy subscriber that
+  # promptly forwards every frame self-destructed (false lag) after 1024 sends.
+  # The fix has the Subscriber call `Writer.credit/3` after each forward, so
+  # credit tracks 'unforwarded backlog', not 'total-ever-sent'.
+
+  describe "credit replenishment — a healthy subscriber never false-lags (finding 1)" do
+    test "forwards >1024 live frames, replenishing credit each, stays attached, NO lagged" do
+      # Default per-subscriber credit is 1024; publish MORE than that (2000).
+      {sid, j, w} = start_writer([{"session_update", %{"i" => 0}, "agent"}])
+      {conn, _ref, sub, :deferred} = attach(sid, j)
+      _ = sync(sub)
+
+      mon = Process.monitor(sub)
+      h = Mem.high_watermark(j)
+
+      n = 2000
+
+      for i <- 1..n,
+          do:
+            {:ok, _} = Writer.append(w, "session_update", %{"i" => i}, "agent")
+
+      # Drain the Subscriber's mailbox fully.
+      _ = sync(sub)
+
+      # Healthy: it never lagged and never stopped.
+      refute_receive {:DOWN, ^mon, :process, ^sub, _}, 200
+      assert Process.alive?(sub)
+
+      refute Enum.any?(notifies(conn), fn {:notify, m, _} ->
+               m == "_raxol/session.lagged"
+             end)
+
+      # ALL n live frames were forwarded, in order, once each (offsets h+1..h+n).
+      live_offsets = for o <- delivered_offsets(conn), o > h, do: o
+      assert live_offsets == Enum.to_list((h + 1)..(h + n))
+
+      # Still in the Writer's subscriber set (not dropped).
+      assert map_size(:sys.get_state(w).subscribers) == 1
+    end
+  end
+
   describe "J6 — Lagged disconnect and lossless heal (REAL runtime lag)" do
     test "Lagged carries the subscriber's own last-forwarded offset; +1 heals dup-free" do
-      # Tiny per-subscriber credit: live publishes past it force the Writer to
-      # emit {:reattach_lagged, sid, sent_hi} — PRODUCED by the runtime, not faked.
+      # REPAIRED (finding 1): a healthy Subscriber now replenishes credit per
+      # forwarded frame, so a tiny credit no longer false-lags it (that WAS the
+      # bug). Real backpressure is a subscriber that does NOT drain — here a raw
+      # non-draining probe subscribed straight to the single publisher. Its credit
+      # is never returned, so the exhausting publish makes the Writer PRODUCE
+      # {:reattach_lagged, sid, last_offset} carrying the highest offset it actually
+      # sent this subscriber (= the subscriber's last-received offset),
+      # deterministically — no timing race. (The Subscriber's own forward_hi going
+      # on the WIRE is the separate consumer-clause unit test below.)
       {sid, j, w} =
         start_writer(
           [{"session_update", %{"i" => 0}, "agent"}],
           subscriber_credit: 1
         )
 
-      {conn, _ref, sub, :deferred} = attach(sid, j)
-      _ = sync(sub)
+      # A stuck subscriber: this test process collects live frames but NEVER calls
+      # Writer.credit/3, so credit runs down and stays down.
+      probe = self()
+      :ok = Writer.subscribe(w, probe)
 
-      mon = Process.monitor(sub)
+      # First live publish fits the 1 credit; the next exhausts it ⇒ the Writer
+      # emits the terminal Lagged for the probe and drops it. (Assertions below do
+      # not hardcode the triggering offset — any reasonable accounting greens this.)
+      for i <- 1..5,
+          do:
+            {:ok, _} = Writer.append(w, "session_update", %{"i" => i}, "agent")
 
-      # Drain this subscriber's credit with a handful of live appends; the
-      # exhausting publish makes the Writer send the Lagged and drop the sub.
-      # (The exact triggering offset is B's accounting — assertions below do not
-      # hardcode it, so any reasonable credit semantics greens this.)
-      for i <- 1..5, do: {:ok, _} = Writer.append(w, "session_update", %{"i" => i}, "agent")
+      # The Writer PRODUCED the heal signal itself, carrying the highest offset it
+      # actually sent this subscriber (selectively received past the live frames).
+      assert_receive {:reattach_lagged, ^sid, last_offset}
+      assert is_integer(last_offset)
 
-      # The subscriber converts the runtime Lagged into a terminal wire signal
-      # and stops (client-driven reattach is the heal, bus §7).
-      assert_receive {:DOWN, ^mon, :process, ^sub, :normal}, 1_000
+      # Heal: a fresh reattach from last_offset + 1 ⇒ the union is gap/dup-free.
+      {conn2, _r2, sub2, :deferred} =
+        attach(sid, j, %{from_offset: last_offset + 1})
 
-      lagged =
-        Enum.find(notifies(conn), fn {:notify, m, _} -> m == "_raxol/session.lagged" end)
-
-      assert {:notify, "_raxol/session.lagged", %{"lastOffset" => wire_last}} = lagged
-      assert is_integer(wire_last)
-
-      # Heal: reattach from the wire's lastOffset + 1 ⇒ the union is gap/dup-free.
-      {conn2, _r2, sub2, :deferred} = attach(sid, j, %{from_offset: wire_last + 1})
       _ = sync(sub2)
       hwm = Mem.high_watermark(j)
-      expected = Enum.filter(1..hwm//1, &(&1 > wire_last))
+      expected = Enum.filter(1..hwm//1, &(&1 > last_offset))
       assert delivered_offsets(conn2) == expected
-      # No offset the client already held (<= wire_last) is re-delivered.
-      refute Enum.any?(delivered_offsets(conn2), &(&1 <= wire_last))
+      # No offset the client already held (<= last_offset) is re-delivered.
+      refute Enum.any?(delivered_offsets(conn2), &(&1 <= last_offset))
     end
 
     test "DEAD reattach-from-last_offset re-delivers last_offset (dup)" do
@@ -457,7 +557,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       last = Mem.high_watermark(j)
 
       # Correct heal (last + 1): last_offset is NOT re-delivered.
-      {conn_ok, _r, sub_ok, :deferred} = attach(sid, j, %{from_offset: last + 1})
+      {conn_ok, _r, sub_ok, :deferred} =
+        attach(sid, j, %{from_offset: last + 1})
+
       _ = sync(sub_ok)
       refute last in delivered_offsets(conn_ok)
 
@@ -488,9 +590,12 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       assert_receive {:DOWN, ^mon, :process, ^sub, :normal}, 500
 
       lagged =
-        Enum.find(notifies(conn), fn {:notify, m, _} -> m == "_raxol/session.lagged" end)
+        Enum.find(notifies(conn), fn {:notify, m, _} ->
+          m == "_raxol/session.lagged"
+        end)
 
-      assert {:notify, "_raxol/session.lagged", %{"lastOffset" => ^last}} = lagged
+      assert {:notify, "_raxol/session.lagged", %{"lastOffset" => ^last}} =
+               lagged
     end
 
     test "on {:acp_reply_cancelled, ref} the subscriber unsubscribes and stops (no further frames)" do
@@ -536,8 +641,10 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     {sid, j, _w} =
       start_writer([
         {"turn_started", %{"turnId" => 4, "prompt" => []}, "user"},
-        {"session_update", %{"sessionUpdate" => "agent_message_chunk"}, "agent"},
-        {"turn_completed", %{"turnId" => 4, "stopReason" => "end_turn"}, "system"}
+        {"session_update", %{"sessionUpdate" => "agent_message_chunk"},
+         "agent"},
+        {"turn_completed", %{"turnId" => 4, "stopReason" => "end_turn"},
+         "system"}
       ])
 
     {conn, _ref, sub, :deferred} = attach(sid, j)
@@ -546,19 +653,26 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     # The reattacher replays through turn_started AND the persisted
     # turn_completed (delivered as a first-class _raxol/session.record).
     records =
-      for {:notify, "_raxol/session.record", p} <- notifies(conn), do: {p["kind"], p["payload"]}
-
-    assert Enum.any?(records, fn {k, p} -> k == "turn_started" and p["turnId"] == 4 end)
+      for {:notify, "_raxol/session.record", p} <- notifies(conn),
+          do: {p["kind"], p["payload"]}
 
     assert Enum.any?(records, fn {k, p} ->
-             k == "turn_completed" and p["turnId"] == 4 and p["stopReason"] == "end_turn"
+             k == "turn_started" and p["turnId"] == 4
+           end)
+
+    assert Enum.any?(records, fn {k, p} ->
+             k == "turn_completed" and p["turnId"] == 4 and
+               p["stopReason"] == "end_turn"
            end)
 
     # Totality: in the durable substream every turn_started is matched by exactly
     # one turn_completed for its turnId.
     {:ok, recs} = Mem.read(j, 1, Mem.high_watermark(j))
     started = for r <- recs, r.kind == "turn_started", do: r.payload["turnId"]
-    completed = for r <- recs, r.kind == "turn_completed", do: r.payload["turnId"]
+
+    completed =
+      for r <- recs, r.kind == "turn_completed", do: r.payload["turnId"]
+
     assert Enum.sort(started) == Enum.sort(completed)
   end
 
@@ -571,7 +685,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     {conn, ref, sub, :deferred} = attach(sid, j, %{from_offset: h + 2})
     _ = sync(sub)
 
-    assert {:reply, ^ref, {:error, %Error{code: -32_602} = err}} = reply_entry(conn)
+    assert {:reply, ^ref, {:error, %Error{code: -32_602} = err}} =
+             reply_entry(conn)
+
     assert err.data == %{"highWatermark" => h}
     # Nothing was delivered — a rejected attach reads no history.
     assert delivered_offsets(conn) == []
@@ -599,7 +715,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     assert_receive {:DOWN, ^ref, :process, ^sub, :normal}, 1_000
 
     closed =
-      Enum.find(notifies(conn), fn {:notify, m, _} -> m == "_raxol/session.closed" end)
+      Enum.find(notifies(conn), fn {:notify, m, _} ->
+        m == "_raxol/session.closed"
+      end)
 
     assert {:notify, "_raxol/session.closed", %{"reason" => "revoked"}} = closed
   end
@@ -622,7 +740,8 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
         })
 
       # The CDI-5 deny envelope: -32000 "attach denied", NO data (anti-oracle).
-      assert {:error, %Error{code: -32_000, message: "attach denied", data: nil}} = res
+      assert {:error,
+              %Error{code: -32_000, message: "attach denied", data: nil}} = res
 
       # Nothing registered, no history read, no delegate/reply — a denied
       # attacher never appears in the subscriber set even transiently.
@@ -636,7 +755,12 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       {sid, j, _w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
       {:ok, conn} = FakeConnection.start_link()
 
-      for verdict <- [:ok, true, {:ok, :not_a_grant_but_atom} |> elem(0), {:error, :boom}] do
+      for verdict <- [
+            :ok,
+            true,
+            {:ok, :not_a_grant_but_atom} |> elem(0),
+            {:error, :boom}
+          ] do
         res =
           Reattach.attach(%{
             conn: conn,
@@ -657,7 +781,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       sup = start_supervised!({Task.Supervisor, []})
       {sid, j, _w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
 
-      real_authorize = fn ctx -> Runner.authorize(LocalNode, ctx, task_supervisor: sup) end
+      real_authorize = fn ctx ->
+        Runner.authorize(LocalNode, ctx, task_supervisor: sup)
+      end
 
       # Deny: LocalNode fails closed on a nil/absent transport (CDI-2) ⇒ -32000.
       {conn_d, _rd, _sub_d, res_d} =
@@ -669,7 +795,10 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       # Grant: an in-BEAM :process transport is OS-co-resident ⇒ the real Runner
       # returns a well-formed %Grant{}; the attach proceeds and replies.
       {conn_g, ref_g, sub_g, res_g} =
-        attach(sid, j, %{authorize: real_authorize, transport: %{kind: :process, peer: self()}})
+        attach(sid, j, %{
+          authorize: real_authorize,
+          transport: %{kind: :process, peer: self()}
+        })
 
       assert res_g == :deferred
       _ = sync(sub_g)
@@ -684,8 +813,10 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     {sid, j, _w} =
       start_writer([
         {"turn_started", %{"turnId" => 1, "prompt" => []}, "user"},
-        {"session_update", %{"sessionUpdate" => "agent_message_chunk"}, "agent"},
-        {"turn_completed", %{"turnId" => 1, "stopReason" => "end_turn"}, "system"}
+        {"session_update", %{"sessionUpdate" => "agent_message_chunk"},
+         "agent"},
+        {"turn_completed", %{"turnId" => 1, "stopReason" => "end_turn"},
+         "system"}
       ])
 
     {conn, _ref, sub, :deferred} = attach(sid, j, %{offset_aware?: false})
@@ -728,7 +859,8 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
         start_supervised!(
           %{
             id: {:writer, sid},
-            start: {Writer, :start_link, [[session_id: sid, journal: {Mem, j}]]},
+            start:
+              {Writer, :start_link, [[session_id: sid, journal: {Mem, j}]]},
             restart: :temporary
           },
           restart: :temporary
@@ -737,7 +869,11 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       task_sup = start_supervised!({Task.Supervisor, []}, id: {:task_sup, sid})
       {:ok, origin_conn} = FakeConnection.start_link()
 
-      notif = SessionNotification.new(sid, {:current_mode_update, CurrentModeUpdate.new("code")})
+      notif =
+        SessionNotification.new(
+          sid,
+          {:current_mode_update, CurrentModeUpdate.new("code")}
+        )
 
       runner = fn s, _req ->
         :ok = Session.post_update(s, notif)
@@ -762,16 +898,26 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
 
       # The origin still got its live session/update via the direct notify path
       # (base behavior preserved) AND its prompt response.
-      assert Enum.any?(notifies(origin_conn), fn {:notify, m, _} -> m == "session/update" end)
+      assert Enum.any?(notifies(origin_conn), fn {:notify, m, _} ->
+               m == "session/update"
+             end)
+
       assert {:reply, ^reply_ref, {:ok, _}} = reply_entry(origin_conn)
 
       # DURABLE: genesis(1), turn_started(2), session_update(3), turn_completed(4).
       {:ok, recs} = Mem.read(j, 1, Mem.high_watermark(j))
       kinds = Enum.map(recs, & &1.kind)
-      assert kinds == ["session_created", "turn_started", "session_update", "turn_completed"]
+
+      assert kinds == [
+               "session_created",
+               "turn_started",
+               "session_update",
+               "turn_completed"
+             ]
 
       started = Enum.find(recs, &(&1.kind == "turn_started"))
       completed = Enum.find(recs, &(&1.kind == "turn_completed"))
+
       # J7 totality + single-render equality: the turn_completed carries the same
       # turnId and the rendered stopReason that fed the prompt response.
       assert started.payload["turnId"] == 1

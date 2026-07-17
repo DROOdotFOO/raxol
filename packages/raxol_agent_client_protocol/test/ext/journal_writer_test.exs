@@ -152,7 +152,8 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.WriterTest do
 
     assert_receive {:reattach_live, ^sid, %Record{offset: 2}}
 
-    assert_receive {:reattach_live, ^sid, %Record{offset: 3, payload: %{"phantom" => true}}}
+    assert_receive {:reattach_live, ^sid,
+                    %Record{offset: 3, payload: %{"phantom" => true}}}
 
     durable = MapSet.new(read_all(j), & &1.offset)
 
@@ -425,6 +426,94 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.WriterTest do
 
     # And the subscriber is gone from the Writer's set (pruned on lag-drop).
     assert :sys.get_state(w).subscribers == %{}
+  end
+
+  test "healthy subscriber that replenishes credit never false-lags (credit/3 is LIVE API, S6)" do
+    # De-green-wash: the exhaustion test above proves lag when credit runs OUT.
+    # This proves the REPLENISH half — a subscriber that drains and calls
+    # `credit/3` after each frame tracks 'unforwarded backlog', so it stays
+    # attached and receives MORE frames than its (tiny) starting credit, with
+    # NO {:reattach_lagged}. Without a live `credit/3`, this drops at credit+1.
+    {w, sid, _j} = start_writer(subscriber_credit: 2)
+    :ok = Writer.subscribe(w, self())
+
+    # Publish 5 (> credit 2). After each delivery we replenish exactly one credit
+    # (as the production reattach Subscriber does after forwarding a frame), so
+    # the running credit never reaches 0 and the subscriber is never lagged.
+    for i <- 1..5 do
+      {:ok, rec} = Writer.append(w, "session_update", %{"i" => i}, "agent")
+      assert_receive {:reattach_live, ^sid, %Record{offset: got}}
+      assert got == rec.offset
+      :ok = Writer.credit(w, self(), 1)
+      # Barrier: the credit cast is processed before the next publish, so the
+      # replenishment provably lands in time (deterministic, no timing race).
+      _ = :sys.get_state(w)
+    end
+
+    # Never lagged, and still attached in the Writer's subscriber set.
+    refute_received {:reattach_lagged, ^sid, _}
+    assert map_size(:sys.get_state(w).subscribers) == 1
+  end
+
+  # -- §2.7: a non-holder turn_completed must be REFUSED at the APPEND ---------
+
+  test "non-holder turn_completed is refused at the append — no false durable boundary (§2.7)" do
+    # Two connections' Sessions on ONE Writer/session_id. Connection A opens the
+    # turn (latch HOLDER). A DIFFERENT connection's turn_completed must be refused
+    # at the durable append: persisting it would write a completion row while A's
+    # turn is still open, letting a reattacher finalize from a phantom boundary.
+    {w, _sid, j} = start_writer()
+    test = self()
+
+    holder =
+      spawn(fn ->
+        {:ok, _} = Writer.append(w, "turn_started", %{"turnId" => 1}, "user")
+        send(test, :holder_started)
+
+        receive do
+          :complete ->
+            res =
+              Writer.append(
+                w,
+                "turn_completed",
+                %{"turnId" => 1, "stopReason" => "end_turn"},
+                "agent"
+              )
+
+            send(test, {:holder_completed, res})
+        end
+      end)
+
+    assert_receive :holder_started
+    assert completed(j) == []
+
+    # The non-holder (this test process, != holder) attempts turn_completed.
+    non_holder_res =
+      Writer.append(
+        w,
+        "turn_completed",
+        %{"turnId" => 1, "stopReason" => "end_turn"},
+        "external"
+      )
+
+    # Refused: NOT {:ok, record}, and NO durable completion row was written.
+    refute match?({:ok, _}, non_holder_res)
+    assert completed(j) == []
+
+    # The latch is untouched — A's turn is still open (a fresh turn is rejected).
+    assert {:error, :turn_in_flight} =
+             Writer.append(w, "turn_started", %{"turnId" => 2}, "user")
+
+    # The HOLDER's turn_completed still appends + clears normally (legit path).
+    send(holder, :complete)
+    assert_receive {:holder_completed, {:ok, _}}
+    assert length(completed(j)) == 1
+    [c] = completed(j)
+    assert c.payload["turnId"] == 1
+    refute c.payload["outcome"] == "orphaned"
+
+    # Latch cleared by the holder — the next turn now succeeds.
+    assert {:ok, _} = Writer.append(w, "turn_started", %{"turnId" => 3}, "user")
   end
 
   test "a dead subscriber is pruned from the Writer's set (monitor)" do

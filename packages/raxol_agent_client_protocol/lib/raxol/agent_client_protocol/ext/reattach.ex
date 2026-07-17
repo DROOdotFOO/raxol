@@ -88,6 +88,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
 
   alias Raxol.AgentClientProtocol.Error
   alias Raxol.AgentClientProtocol.Ext.Journal
+  alias Raxol.AgentClientProtocol.Ext.Journal.Writer
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.LoadSessionResponse
 
   @vendor "raxol.io"
@@ -236,7 +237,11 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
       grant: grant,
       now: Map.get(opts, :now),
       __between__: Map.get(opts, :__between__),
-      dead: Map.take(opts, [:__dead_register_after_history__, :__dead_cached_counter__])
+      dead:
+        Map.take(opts, [
+          :__dead_register_after_history__,
+          :__dead_cached_counter__
+        ])
     ]
 
     {:ok, sub} = start_subscriber(opts, sub_opts)
@@ -252,8 +257,9 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
     :deferred
   end
 
-  defp start_subscriber(%{start_subscriber: fun}, sub_opts) when is_function(fun, 1),
-    do: fun.(sub_opts)
+  defp start_subscriber(%{start_subscriber: fun}, sub_opts)
+       when is_function(fun, 1),
+       do: fun.(sub_opts)
 
   defp start_subscriber(opts, sub_opts) do
     case subscriber_sup(opts) do
@@ -289,7 +295,8 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
   defp emit_denied(ctx, denied) do
     reason = denial_reason(denied)
 
-    if Code.ensure_loaded?(:telemetry) and function_exported?(:telemetry, :execute, 3) do
+    if Code.ensure_loaded?(:telemetry) and
+         function_exported?(:telemetry, :execute, 3) do
       apply(:telemetry, :execute, [
         [:raxol, :acp, :attach, :denied],
         %{count: 1},
@@ -335,7 +342,8 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
       forward_hi: 0,
       live: :pending,
       # dead-injector knobs (untagged red controls, bus §9):
-      dead_register_after_history: Map.get(dead, :__dead_register_after_history__, false),
+      dead_register_after_history:
+        Map.get(dead, :__dead_register_after_history__, false),
       dead_cached_counter: Map.get(dead, :__dead_cached_counter__, false)
     }
 
@@ -378,23 +386,37 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
       live == :none and h == 0 ->
         # Never-seen session (no Writer, empty journal): resource_not_found.
         _ =
-          state.conn_mod.reply(state.conn, state.reply_ref, {:error, Error.resource_not_found()})
+          state.conn_mod.reply(
+            state.conn,
+            state.reply_ref,
+            {:error, Error.resource_not_found()}
+          )
 
         {:stop, :normal, :ok, %{state | live: :detached}}
 
       policy != :none and state.from_offset > h + 1 ->
         # Minting a gap is illegal (J-gap): reject with the watermark (§3.1).
         _ = unsubscribe(state, live)
-        err = Error.with_data(Error.new(-32_602, "invalid params"), %{"highWatermark" => h})
+
+        err =
+          Error.with_data(Error.new(-32_602, "invalid params"), %{
+            "highWatermark" => h
+          })
+
         _ = state.conn_mod.reply(state.conn, state.reply_ref, {:error, err})
         {:stop, :normal, :ok, %{state | live: :detached}}
 
       true ->
-        forward_hi = if policy == :from_offset, do: emit_history(state, h), else: h
+        forward_hi =
+          if policy == :from_offset, do: emit_history(state, h), else: h
+
         call_between(state)
         maybe_caught_up(state, policy, h)
         reply_ok(state, h)
-        state = maybe_arm_expiry(%{state | h: h, forward_hi: forward_hi, live: live})
+
+        state =
+          maybe_arm_expiry(%{state | h: h, forward_hi: forward_hi, live: live})
+
         {:reply, :ok, state}
     end
   end
@@ -413,7 +435,21 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
   end
 
   defp unsubscribe(_state, :none), do: :ok
-  defp unsubscribe(state, _live), do: Journal.unsubscribe(state.session_id, self())
+
+  defp unsubscribe(state, _live),
+    do: Journal.unsubscribe(state.session_id, self())
+
+  # Return one publish credit to this session's single-publisher Writer (§5). A
+  # fire-and-forget cast, routed through the Writer registry; a no-op if the Writer
+  # is gone (no live frames can arrive then anyway) or if this subscriber was
+  # already dropped. Journal exposes no `credit` facade, so route straight to the
+  # Writer that `Journal.subscribe/2` registered us against.
+  defp replenish_credit(%{session_id: sid}) do
+    case Writer.whereis(sid) do
+      pid when is_pid(pid) -> Writer.credit(pid, self(), 1)
+      _ -> :ok
+    end
+  end
 
   # (c) history: read [max(from,1) .. h] and emit each record as a wire frame,
   # in offset order. Returns the highest offset the client now holds (= h).
@@ -457,8 +493,21 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
   # -- (f) The live gate: PERMANENT and MONOTONE -----------------------------
 
   @impl true
-  def handle_info({:reattach_live, _sid, record}, %{live: :subscribed, h: h} = state)
+  def handle_info(
+        {:reattach_live, _sid, record},
+        %{live: :subscribed, h: h} = state
+      )
       when is_integer(h) do
+    # Credit-based flow control (§5): the Writer decremented one publish credit to
+    # send this frame. Draining it here frees that slot, so REPLENISH exactly one
+    # credit per processed live frame — credit thereby tracks 'unforwarded backlog'
+    # (the Writer→Subscriber queue depth), NOT 'total-ever-sent'. Without this, a
+    # perfectly healthy subscriber that forwards every frame would false-lag after
+    # `subscriber_credit` (default 1024) sends and drop itself. A genuinely stuck
+    # subscriber never reaches here (its mailbox never drains), so it still
+    # exhausts credit and is lagged — real backpressure is preserved.
+    replenish_credit(state)
+
     if record.offset <= h do
       # Already delivered in history — drop, forever. No dup.
       {:noreply, state}
