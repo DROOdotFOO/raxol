@@ -67,10 +67,22 @@ defmodule Raxol.Harness.LiveSessionDriver do
   completed block; a live reveal is always momentarily "caught up", which
   would defeat that hold — so this driver opens the Surface with
   `stream_open: true` (the hold stays engaged while more events may come)
-  and calls `Surface.close_stream/1` at exactly the three moments no more
-  events can ever arrive: the final `turn_completed`, session-process
-  death, and a dead event feed (forwarder/cadence crash). Enforced by the
-  "fold-before-seal ordering" test.
+  and releases it at two distinct levels:
+
+    * **per turn** — every turn bracket (`turn_completed` final or not,
+      `turn_canceled`) runs `Surface.flush_held/1`: the blocks that
+      bracket completed seal NOW, and the stream stays open for the next
+      turn (`final: true` closes one pump run — one turn — never the
+      session; a multi-turn conversation runs one turn per prompt on the
+      same session id);
+    * **terminally** — `Surface.close_stream/1` at the two process-level
+      moments no more events can ever arrive: session-process death and a
+      dead event feed (forwarder/cadence crash). This is also the
+      backstop that lands a stranded mid-turn tail in history when a
+      session dies without ever emitting its bracket.
+
+  Enforced by the "fold-before-seal ordering" and "turn completion
+  releases the hold but never ends the session" tests.
 
   ## Loss and malformed-event honesty
 
@@ -104,8 +116,10 @@ defmodule Raxol.Harness.LiveSessionDriver do
 
   ## Lifecycle honesty
 
-  A session process dying, or a turn completing with `final: true`, both
-  render a plain footer statement and then let the loop KEEP RUNNING --
+  A turn completing — `final: true` included — is a TURN fact: its blocks
+  seal, the stream stays open, and nothing claims the session is over. A
+  session-process death (or a dead event feed) IS a session fact: it
+  renders a plain footer statement and then lets the loop KEEP RUNNING —
   the scrollback above the footer is the permanent record either way, and
   this module never tears the terminal down on a lifecycle event of its
   own accord (only `:halt`, sent by an embedder, ends the loop).
@@ -217,9 +231,10 @@ defmodule Raxol.Harness.LiveSessionDriver do
       # event, so the Surface must know more may come -- otherwise every
       # block would seal the instant it materializes, BEFORE its turn
       # bracket folds into it (see `Surface.frontier_entries/1`). The
-      # matching `Surface.close_stream/1` calls live in
-      # `apply_lifecycle/2` (final turn), `handle_down/4` (session
-      # death), and `handle_exit/3` (dead event feed).
+      # per-turn release (`Surface.flush_held/1`) lives in
+      # `apply_lifecycle/2` (turn brackets); the terminal
+      # `Surface.close_stream/1` calls live in `handle_down/4` (session
+      # death) and `handle_exit/3` (dead event feed).
       |> Keyword.put(:stream_open, true)
 
     model = Surface.new([], surface_opts)
@@ -612,32 +627,26 @@ defmodule Raxol.Harness.LiveSessionDriver do
     %{state | model: model, current_turn_id: turn_id}
   end
 
-  defp apply_lifecycle(state, %{type: :turn_completed, payload: payload}) do
-    state = %{state | current_turn_id: nil}
-
-    if Map.get(payload, "final") == true do
-      # No more events will ever arrive: flush the held trailing block(s)
-      # to history (the bracket that just folded is what they were being
-      # held FOR), then state the ending plainly.
-      model =
-        state.model
-        |> Surface.close_stream()
-        |> Surface.put_lane_notice(
-          "» session ended — transcript above is preserved; q quits"
-        )
-
-      %{state | model: model, session_over?: true}
-    else
-      state
-    end
+  # A turn bracket -- final or not -- releases the fold-before-seal hold
+  # for the blocks it completed (they land in history NOW, not stranded
+  # in the footer preview until the next turn), but it NEVER ends the
+  # session: `final: true` closes one pump run -- one turn -- and a
+  # multi-turn conversation runs one turn per prompt on the same session.
+  # Session end is a process-level fact (session death / dead event
+  # feed, handled in `handle_down/4` / `handle_exit/3`), never a
+  # turn-level one.
+  defp apply_lifecycle(state, %{type: :turn_completed}) do
+    %{state | model: Surface.flush_held(state.model), current_turn_id: nil}
   end
 
+  # Same release on cancellation: the bracket folded, the canceled turn's
+  # partial blocks seal now rather than waiting for a next turn that may
+  # never come.
   defp apply_lifecycle(state, %{type: :turn_canceled}) do
     model =
-      Surface.put_lane_notice(
-        state.model,
-        "» turn canceled — interrupt confirmed"
-      )
+      state.model
+      |> Surface.flush_held()
+      |> Surface.put_lane_notice("» turn canceled — interrupt confirmed")
 
     %{state | model: model, current_turn_id: nil}
   end

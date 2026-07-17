@@ -874,6 +874,35 @@ defmodule Raxol.Harness.Surface do
   end
 
   @doc """
+  The PER-TURN release of the fold-before-seal hold: seals every
+  currently-completed block while LEAVING the stream open for future
+  turns.
+
+  Call when a turn bracket (`turn_completed` / `turn_canceled`) has
+  folded: nothing more can ever fold into the blocks that bracket
+  completed, so holding them any longer serves nothing -- but the session
+  lives on (a multi-turn conversation runs one turn per prompt on the
+  same session), so this must NOT close the stream. `close_stream/1` is
+  the terminal sibling for the process-level end-of-stream facts (session
+  death, dead event feed), and the backstop that guarantees a stranded
+  tail still lands in history if a session dies mid-turn with no bracket.
+  """
+  @spec flush_held(t()) :: t()
+  def flush_held(model) do
+    open? = Map.get(model, :stream_open?, false)
+
+    # The hold is suppressed for exactly one seal pass -- the frontier
+    # scan inside `paint_pending_blocks/1` reads `stream_open?`, so this
+    # toggle IS the release -- then restored so the next turn's blocks
+    # get their own hold.
+    model
+    |> Map.put(:stream_open?, false)
+    |> paint_pending_blocks()
+    |> Map.put(:stream_open?, open?)
+    |> paint_footer()
+  end
+
+  @doc """
   Sets (or clears, with `nil`) a PERSISTENT footer notice line -- rendered
   on every paint until replaced or cleared, unlike `stub_notice` (which
   `paint_footer/1` consumes after one frame). Intended for live-session

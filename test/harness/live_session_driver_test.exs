@@ -163,31 +163,38 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
     }
   end
 
-  defp message_turn_events(content) do
+  # `base_id` lets a test stream a SECOND turn with session-scoped
+  # monotonic ids (the id authority in the real stack is the per-session
+  # journal, so a later turn's ids continue, never restart).
+  defp message_turn_events(content, turn_id \\ "t1", base_id \\ 0) do
     [
-      turn_started_event("t1", 1),
+      turn_started_event(turn_id, base_id + 1),
       %{
-        id: 2,
-        turn_id: "t1",
-        ts: 2_000,
+        id: base_id + 2,
+        turn_id: turn_id,
+        ts: (base_id + 2) * 1_000,
         family: :loop,
         type: :item_started,
         tier: :durable,
-        payload: %{item_id: "i1", item_type: :message}
+        payload: %{item_id: "#{turn_id}-i1", item_type: :message}
       },
       %{
-        id: 3,
-        turn_id: "t1",
-        ts: 3_000,
+        id: base_id + 3,
+        turn_id: turn_id,
+        ts: (base_id + 3) * 1_000,
         family: :loop,
         type: :item_completed,
         tier: :durable,
-        payload: %{item_id: "i1", item_type: :message, content: content}
+        payload: %{
+          item_id: "#{turn_id}-i1",
+          item_type: :message,
+          content: content
+        }
       },
       %{
-        id: 4,
-        turn_id: "t1",
-        ts: 4_000,
+        id: base_id + 4,
+        turn_id: turn_id,
+        ts: (base_id + 4) * 1_000,
         family: :loop,
         type: :turn_completed,
         tier: :durable,
@@ -579,15 +586,34 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
     end
   end
 
-  describe "9. final turn ends the session plainly" do
-    test "turn_completed with final: true renders the session-ended notice" do
+  describe "9. turn completion releases the hold but never ends the session" do
+    test "a multi-turn session survives its first final turn_completed" do
+      # `final: true` closes one PUMP RUN — one turn — not the session: a
+      # multi-turn REPL pumps one run per composer submit on the same
+      # session id. The turn bracket releases the fold-before-seal hold
+      # (turn 1's answer lands in history right away, not stranded in the
+      # footer preview), the stream stays open, and NO "session ended"
+      # claim is rendered — session end is a process-level fact (death /
+      # dead feed), never a turn-level one.
       %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
 
-      Enum.each(message_turn_events("done"), fn ev ->
+      Enum.each(message_turn_events("first answer", "t1", 0), fn ev ->
         send(forwarder, {:session_event, "s1", ev})
       end)
 
-      eventually(fn -> strip_ansi(raw(device)) =~ "session ended" end)
+      # The bracket released the hold: turn 1's block is sealed history...
+      eventually(fn -> history_text(raw(device)) =~ "first answer" end)
+
+      # ...and the session did NOT claim to be over.
+      refute strip_ansi(raw(device)) =~ "session ended"
+
+      # A second turn on the same session still streams and seals.
+      Enum.each(message_turn_events("second answer", "t2", 4), fn ev ->
+        send(forwarder, {:session_event, "s1", ev})
+      end)
+
+      eventually(fn -> history_text(raw(device)) =~ "second answer" end)
+      refute strip_ansi(raw(device)) =~ "session ended"
 
       assert Process.alive?(driver)
     end

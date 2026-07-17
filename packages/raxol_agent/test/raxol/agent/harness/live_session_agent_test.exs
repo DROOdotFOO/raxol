@@ -41,7 +41,8 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
     :ok
   end
 
-  defp unique_session_id(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"
+  defp unique_session_id(prefix),
+    do: "#{prefix}-#{System.unique_integer([:positive])}"
 
   # -- shared helpers --------------------------------------------------
 
@@ -94,7 +95,9 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
       notify: test_pid
     ]
 
-    {:ok, driver} = LiveSessionDriver.start_link(Keyword.merge(base_opts, driver_overrides))
+    {:ok, driver} =
+      LiveSessionDriver.start_link(Keyword.merge(base_opts, driver_overrides))
+
     on_exit(fn -> LiveSessionDriver.halt(driver) end)
     {driver, device}
   end
@@ -163,7 +166,12 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
         :ok
       end
 
-      tool_ref = %{turn_id: Map.get(payload, :turn_id) || "turn-x", port: nil, os_pid: nil}
+      tool_ref = %{
+        turn_id: Map.get(payload, :turn_id) || "turn-x",
+        port: nil,
+        os_pid: nil
+      }
+
       {:ok, _outcome} = Interrupt.interrupt(tool_ref, sink)
 
       {:noreply, state}
@@ -216,7 +224,12 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
 
       eventually(fn ->
         Agent.get(collector, & &1) ==
-          [:interrupt_signaled, :interrupt_waited, :interrupt_killed, :turn_canceled]
+          [
+            :interrupt_signaled,
+            :interrupt_waited,
+            :interrupt_killed,
+            :turn_canceled
+          ]
       end)
 
       eventually(fn -> strip_ansi(raw(device)) =~ "turn canceled" end)
@@ -379,11 +392,18 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
           backend_opts: [response: "the mock answer"]
         )
 
-      assert {:ok, %{content: content}} = Contract.pump(session_id, stream, prompt: "hello")
+      assert {:ok, %{content: content}} =
+               Contract.pump(session_id, stream, prompt: "hello")
+
       assert content =~ "the mock answer"
 
       eventually(fn -> strip_ansi(raw(device)) =~ "the mock answer" end)
-      eventually(fn -> strip_ansi(raw(device)) =~ "session ended" end)
+
+      # The pump run closing (`final: true`) is a TURN boundary, not a
+      # session boundary: a multi-turn conversation pumps one run per
+      # prompt on the same session id, so the driver must not claim the
+      # session is over -- the stream stays open for the next turn.
+      refute strip_ansi(raw(device)) =~ "session ended"
 
       # Interrupt against this real stack: SessionLane.interrupt/2 decodes
       # and routes, but this session carries no :pid, so nothing ever
