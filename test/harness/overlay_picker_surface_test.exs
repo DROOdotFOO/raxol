@@ -600,8 +600,7 @@ defmodule Raxol.Harness.OverlayPickerSurfaceTest do
       assert {:ok, auth} =
                InlineAuthority.set_footer_rows(auth, @grown_footer_rows)
 
-      auth = InlineAuthority.seal(auth, "sealed after grow\r\n")
-      _ = auth
+      _auth = InlineAuthority.seal(auth, "sealed after grow\r\n")
 
       history_after = history_at(raw(device), @grown_region_top)
 

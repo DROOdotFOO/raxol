@@ -267,6 +267,34 @@ defmodule Raxol.Harness.CommandPaletteSurfaceTest do
       assert via_palette.focused_index == via_key.focused_index
     end
 
+    test "picking 'toggle fold' with no focused block refuses with an honest notice, never a silent no-op" do
+      # Adversarial review (LOW): the :always palette chord makes the
+      # :not_composing binds reachable mid-compose, where focused_index
+      # is nil -- a silent no-op pick is dishonest UI. Same notice
+      # mechanism as the sealed-block fold refusal.
+      {model, device} = new_model([])
+      assert model.composing?
+
+      model = Surface.handle_input(model, ctrl_p())
+      model = type_chars(model, "fold")
+      model = Surface.handle_input(model, Event.key(:enter))
+
+      assert model.overlay == nil
+      assert model.fold_overrides == %{}
+      assert strip_ansi(raw(device)) =~ "no block focused"
+    end
+
+    test "pressing z in transcript-browse with no focused block surfaces the same honest notice" do
+      {model, device} = new_model([])
+      model = Surface.focus_transcript(model)
+      assert model.focused_index == nil
+
+      model = Surface.handle_input(model, Event.key("z"))
+
+      assert model.fold_overrides == %{}
+      assert strip_ansi(raw(device)) =~ "no block focused"
+    end
+
     test "typing a subsequence filters palette entries through the fuzzy scorer (substring would drop it)" do
       {model, _device} = new_model([])
 
@@ -391,6 +419,46 @@ defmodule Raxol.Harness.CommandPaletteSurfaceTest do
              "the new session must append below, never rewrite"
 
       refute SealOracle.emits_full_clear?(raw(device))
+    end
+
+    test "an oversized sessions directory is capped honestly: 100 entries listed, the title names the total" do
+      # Adversarial review (MEDIUM): sessions_dir is a public option and
+      # File.ls + per-keystroke fuzzy ranking run synchronously on the
+      # input path -- an unbounded listing must not be scored wholesale.
+      tmp =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol_session_cap_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(tmp)
+
+      on_exit(fn -> File.rm_rf!(tmp) end)
+
+      for i <- 1..120 do
+        File.write!(
+          Path.join(tmp, "session-#{String.pad_leading("#{i}", 3, "0")}.jsonl"),
+          ""
+        )
+      end
+
+      {model, _device} = new_model([], sessions_dir: tmp)
+      model = Surface.focus_transcript(model)
+      model = Surface.handle_input(model, Event.key("s"))
+
+      assert model.overlay != nil
+      picker = model.overlay.picker
+
+      assert length(picker.items) == 100,
+             "the listing must be capped, not scored wholesale"
+
+      # sorted order: the cap keeps the FIRST 100 names
+      assert List.first(picker.items) == "session-001"
+      assert List.last(picker.items) == "session-100"
+
+      # the truncation is named, never silent
+      assert picker.title =~ "100"
+      assert picker.title =~ "120"
     end
 
     test "mid-reveal switch drops the abandoned session's un-painted blocks (never seals them late)" do

@@ -497,6 +497,9 @@ defmodule Raxol.Harness.Surface do
 
   @default_footer_rows 6
   @default_sessions_dir Path.join(["test", "fixtures", "harness", "sessions"])
+  # Cap on session-picker entries -- see `open_session_picker/1`'s
+  # "Listing cap" doc section (bounded work on the input path).
+  @session_picker_cap 100
   @stub_interrupt_notice "» interrupt requested (stub — no agent lane in fixture mode)"
 
   @type mode :: :inline_log | :tmux_conservative | :flat
@@ -1177,8 +1180,18 @@ defmodule Raxol.Harness.Surface do
   defp dispatch_command(model, %{type: :overlay_dismiss}),
     do: close_overlay(model)
 
-  defp dispatch_command(model, %{type: :fold_toggle}) do
-    apply_fold_toggle(model, model.focused_index)
+  # The command's own payload is the honored fold target -- NOT a second
+  # read of `model.focused_index` here. Both producers (a live keypress
+  # resolved by `Keymap.resolve/2` in `handle_input/2`, and a palette
+  # pick via `Keymap.command_for/2` in `palette_command/2`) thread
+  # `context.focused_block_id` into `payload.block_id` from the SAME
+  # `keymap_context/1` construction, so consuming the payload keeps
+  # exactly one producer chain (context -> payload -> here). A second
+  # model read at dispatch time was the adversarial review's named
+  # decoupling hazard (2026-07-17, MEDIUM): a value the tests pinned but
+  # nothing consumed.
+  defp dispatch_command(model, %{type: :fold_toggle, payload: payload}) do
+    apply_fold_toggle(model, Map.get(payload, :block_id))
   end
 
   defp dispatch_command(model, %{type: :jump_next}), do: move_focus(model, 1)
@@ -1405,7 +1418,16 @@ defmodule Raxol.Harness.Surface do
 
   # -- fold / jump (precondition-adjacent: the seal-time-only translation) --
 
-  defp apply_fold_toggle(model, nil), do: model
+  # No focused block -- honest refusal, never a silent no-op. Reachable
+  # from a keypress (`z` in transcript-browse before any `j`/`k`) and,
+  # more prominently, from a palette pick of "toggle fold" mid-compose
+  # (the `:always` Ctrl+P chord makes the `:not_composing` binds
+  # pickable in states their keypress guard would never allow) -- the
+  # adversarial review's silent-no-op finding. Same one-frame notice
+  # mechanism as the sealed-block refusal below.
+  defp apply_fold_toggle(model, nil) do
+    %{model | stub_notice: "» no block focused — jump to a block first (g)"}
+  end
 
   defp apply_fold_toggle(model, index)
        when is_integer(index) and index < model.painted_count do
@@ -1672,6 +1694,14 @@ defmodule Raxol.Harness.Surface do
   `OverlayPicker.fuzzy_filter/3` as its `filter_fn`. Refusals (a picker
   already open, insufficient geometry, flat mode) surface as an honest
   notice via `picker_refusal/2`, same as `open_overlay/3`'s other callers.
+
+  Because the Ctrl+P chord is `:always`, entries whose keypress guard is
+  `:not_composing` become pickable in states the guard would never allow
+  -- an entry that is inapplicable in the current state (e.g. "toggle
+  fold" with no focused block) refuses with an honest one-frame notice
+  rather than silently doing nothing (see `apply_fold_toggle/2`'s
+  nil-target clause and the covering "no focused block" tests in
+  `command_palette_surface_test.exs`).
   """
   @spec open_command_palette(t()) :: t()
   def open_command_palette(model) do
@@ -1754,6 +1784,19 @@ defmodule Raxol.Harness.Surface do
   semantics. An empty directory listing is an honest no-op notice rather
   than an empty overlay; a load failure surfaces its `DecodeError` reason
   instead of switching.
+
+  ## Listing cap (bounded work on the input path)
+
+  `sessions_dir` is a public option and both the `File.ls/1` listing and
+  the per-keystroke fuzzy ranking run synchronously on the input path --
+  this Surface is a synchronous pure state machine by design (fixture
+  mode has no other thread to move them to). So the listing is CAPPED at
+  #{@session_picker_cap} entries (sorted order, first #{@session_picker_cap}
+  kept), and the truncation is named in the picker title
+  (`"session — first N of M"`), never silent. `Fixture.load/1` on pick is
+  likewise synchronous and whole-file; fixture sessions are small by
+  construction, and a pathological file pauses the loop for the load
+  rather than crashing anything -- documented, not hidden.
   """
   @spec open_session_picker(t()) :: t()
   def open_session_picker(model) do
@@ -1765,15 +1808,24 @@ defmodule Raxol.Harness.Surface do
         }
 
       names ->
+        {names, title} = cap_session_names(names)
+
         model
         |> open_overlay(names,
           filter_fn: &OverlayPicker.fuzzy_filter/3,
-          title: "session",
+          title: title,
           on_pick: &pick_session/2
         )
         |> handle_open_result(model)
     end
   end
+
+  defp cap_session_names(names) when length(names) > @session_picker_cap do
+    {Enum.take(names, @session_picker_cap),
+     "session — first #{@session_picker_cap} of #{length(names)}"}
+  end
+
+  defp cap_session_names(names), do: {names, "session"}
 
   defp pick_session(model, name) do
     path = Path.join(model.sessions_dir, name <> ".jsonl")
