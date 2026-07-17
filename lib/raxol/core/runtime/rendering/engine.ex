@@ -507,7 +507,16 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
     case state.environment do
       :terminal ->
-        Backends.render_to_terminal(final_cells, state)
+        # F0-cursor: the view root may declare a cursor park
+        # (`Backends.declared_cursor/1` holds the seam decision record).
+        # The raw view is the extraction point -- it reaches this dispatch
+        # untouched by Preparer/Layout, so the declaration needs no
+        # threading through either.
+        Backends.render_to_terminal(
+          final_cells,
+          state,
+          Backends.declared_cursor(view)
+        )
 
       :vscode ->
         Backends.render_to_vscode(final_cells, state)

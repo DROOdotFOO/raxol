@@ -8,25 +8,49 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   """
 
   alias Raxol.Terminal.ScreenBuffer
+  alias Raxol.UI.Rendering.PaintAuthority.Dialect
 
   # --- Backend Dispatch ---
 
   @doc """
   Renders cells to the terminal backend with ANSI output.
+
+  `cursor` is an optional view-declared cursor park, normalized as
+  `{row, col, visible?}` (0-based buffer coordinates) or the raw
+  `{row, col}` / `{row, col, visible?}` declaration -- see
+  `declared_cursor/1`. `nil` (the default, and every pre-existing caller)
+  is byte-identical to the cursor-less pipeline: no cursor bytes are
+  emitted and the fresh buffer's cursor fields keep their defaults.
+
+  When a cursor is declared, the resulting buffer is stamped with the
+  clamped `cursor_position` (`{x, y}` order, matching the ScreenBuffer
+  field) and `cursor_visible` -- the buffer-level cursor contract that
+  headless asserts read -- and the emitted frame carries the matching
+  byte tail (see `build_terminal_frame/5`).
   """
-  def render_to_terminal(cells, state) do
+  def render_to_terminal(cells, state, cursor \\ nil) do
     Raxol.Core.Runtime.Log.debug(
       "Rendering Engine: Executing render_to_terminal"
     )
 
-    updated_buffer = apply_cells_to_buffer(cells, state)
+    updated_buffer =
+      cells
+      |> apply_cells_to_buffer(state)
+      |> stamp_cursor(cursor)
 
     # style_batching: merge adjacent same-style cells into one SGR run instead
     # of one SGR + reset per cell. Round-trip-identical (each run still
     # \e[0m-terminated), 8-28x fewer bytes on styled UIs.
     renderer = Raxol.Terminal.Renderer.new(updated_buffer, %{}, %{}, true)
 
-    frame = build_terminal_frame(state.buffer, updated_buffer, renderer, state)
+    frame =
+      build_terminal_frame(
+        state.buffer,
+        updated_buffer,
+        renderer,
+        state,
+        cursor
+      )
 
     if state.sync_output do
       IO.write("\e[?2026h")
@@ -54,14 +78,29 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   # clear on the common path. A keyframe is that same emit over every row, with
   # a leading \e[2J; a diff emits only rows whose cells changed. `state.buffer`
   # is the previous frame, already in hand -- the grid is its own diff basis.
+  #
+  # Cursor park (F0-cursor, harness-tea-migration law 6): when a cursor is
+  # declared, every frame kind -- keyframe, diff, even a zero-row diff --
+  # ends with the park tail, because emitted rows move the physical cursor
+  # and nothing else puts it back (the InlineAuthority park rationale:
+  # "the rows moved the physical cursor, so the park CUP is what puts it
+  # back at the edit point"). Visible parks as DECTCEM show + CUP (the
+  # frame's last bytes are the CUP); hidden is DECTCEM hide alone. The
+  # tail is part of the frame string, so it sits inside the DEC-2026
+  # bracket whenever `render_to_terminal/3` opens one. No declaration
+  # appends nothing -- byte-identity with the pre-cursor pipeline is by
+  # construction.
 
   @doc false
-  def build_terminal_frame(prev, next, renderer, state) do
-    if keyframe?(prev, next, state) do
-      "\e[2J" <> emit_rows(renderer, all_rows(next))
-    else
-      emit_rows(renderer, changed_rows(prev, next))
-    end
+  def build_terminal_frame(prev, next, renderer, state, cursor \\ nil) do
+    body =
+      if keyframe?(prev, next, state) do
+        "\e[2J" <> emit_rows(renderer, all_rows(next))
+      else
+        emit_rows(renderer, changed_rows(prev, next))
+      end
+
+    body <> cursor_tail(cursor, next)
   end
 
   defp keyframe?(nil, _next, _state), do: true
@@ -83,6 +122,112 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
       "\e[#{y + 1};1H\e[0m\e[2K" <>
         Raxol.Terminal.Renderer.render_row(renderer, y)
     end)
+  end
+
+  # --- Cursor park (F0-cursor) ---
+
+  @typedoc """
+  A normalized cursor declaration: 0-based buffer `{row, col}` plus
+  visibility. `nil` means "no declaration" -- the pipeline emits no cursor
+  bytes at all.
+  """
+  @type cursor_declaration ::
+          {non_neg_integer(), non_neg_integer(), boolean()} | nil
+
+  @doc """
+  Extracts a cursor declaration from the root of the element tree that
+  `view/1` returned.
+
+  The declaration seam is a root-level `:cursor` key on that map --
+  `{row, col}` (visible) or `{row, col, visible?}`, 0-based buffer
+  coordinates, absolute. Total: any other shape (no key, malformed tuple,
+  negative or non-integer coordinates, a non-map view) is `nil`, never a
+  crash.
+
+  Absence semantics: the declaration is per-frame and absence means
+  "emit no cursor bytes", NOT "restore defaults" -- a frame without a
+  declaration leaves the terminal in whatever DECTCEM/position state the
+  previous frame set. An app that wants the cursor hidden (or parked)
+  must keep declaring it every frame; the harness's `view/1` does this
+  naturally since the declaration is a pure projection of the model.
+
+  Decision record (F0-cursor, harness-tea-migration §5 law 6):
+
+    * CHOSEN -- root-level view key. The view is the app -> pipeline
+      interface, and the Engine already hands the raw view tree to backend
+      dispatch, so the declaration rides plumbing that exists; `view/1`
+      stays the single place where "what is shown" -- cursor included --
+      is a pure projection of the model. Apps set it with
+      `Map.put(tree, :cursor, {row, col})` or the
+      `Raxol.Core.Renderer.View.view/2` macro's opts, which merge into
+      the root.
+    * REJECTED -- a `:cursor` attr on nested elements, resolved to
+      absolutes by the LayoutEngine. Composability is real (a component
+      could declare its caret relative to itself), but attrs demonstrably
+      do not survive layout today: every `process_element` clause
+      rebuilds its positioned output map by hand, so threading one attr
+      means touching every clause plus a multiple-declaration policy.
+      Revisit at Phase 2 if Composer-as-Component wants relative
+      declaration; a later resolver can lower nested declarations into
+      this same root contract without changing the byte tail.
+    * REJECTED -- a reserved key on the app MODEL. Proven collision:
+      `Raxol.Playground.Demos.CursorTrailDemo` already has
+      `model.cursor = {x, y}` meaning mouse position; a reserved model
+      key would silently repurpose it, and the model is app-private
+      namespace the runtime should not claim.
+  """
+  @spec declared_cursor(term()) :: cursor_declaration()
+  def declared_cursor(%{cursor: declaration}), do: normalize_cursor(declaration)
+  def declared_cursor(_view), do: nil
+
+  defp normalize_cursor({row, col}), do: normalize_cursor({row, col, true})
+
+  defp normalize_cursor({row, col, visible?})
+       when is_integer(row) and row >= 0 and is_integer(col) and col >= 0 and
+              is_boolean(visible?),
+       do: {row, col, visible?}
+
+  defp normalize_cursor(_), do: nil
+
+  # The byte tail appended after the row writes. Visible ends the frame
+  # with DECTCEM show + the park CUP (1-based on the wire); hidden is
+  # DECTCEM hide alone. Bytes come from the shared Dialect vocabulary,
+  # never hand-rolled here.
+  defp cursor_tail(cursor, buffer) do
+    case clamp_cursor(normalize_cursor(cursor), buffer) do
+      nil ->
+        ""
+
+      {row, col, true} ->
+        Dialect.cursor_show() <> Dialect.cursor_position(row + 1, col + 1)
+
+      {_row, _col, false} ->
+        Dialect.cursor_hide()
+    end
+  end
+
+  # Wrong states are unrepresentable downstream (same doctrine as
+  # `sanitize_char/1`): a declaration beyond the grid clamps to the last
+  # cell, so the emitted CUP and the stamped buffer cursor always agree
+  # and always land inside the buffer.
+  defp clamp_cursor(nil, _buffer), do: nil
+
+  defp clamp_cursor({row, col, visible?}, buffer) do
+    {min(row, buffer.height - 1), min(col, buffer.width - 1), visible?}
+  end
+
+  # Stamps the declared cursor onto the frame's buffer -- the buffer-level
+  # half of the contract (`cursor_position` is {x, y}, matching the
+  # ScreenBuffer field). No declaration leaves the fresh buffer's defaults
+  # untouched.
+  defp stamp_cursor(buffer, cursor) do
+    case clamp_cursor(normalize_cursor(cursor), buffer) do
+      nil ->
+        buffer
+
+      {row, col, visible?} ->
+        %{buffer | cursor_position: {col, row}, cursor_visible: visible?}
+    end
   end
 
   @doc """
