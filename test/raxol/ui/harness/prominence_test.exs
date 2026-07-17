@@ -414,6 +414,32 @@ defmodule Raxol.UI.Harness.ProminenceTest do
       end
     end
 
+    test "prominence < 1.0 resolves header and outcome fg in lockstep (kinds keeping the outcome row)" do
+      # Machinery folds its outcome into the header line/glyph, but
+      # dialogue kinds keep the SEPARATE dim outcome row
+      # (`outcome_children/2`) -- the third leg of build_render's
+      # "header, content, and outcome all carry the SAME fg" contract,
+      # unreachable through the expanded-tool test above.
+      events = [
+        %{
+          id: 1,
+          type: :item_completed,
+          content: "hello world",
+          payload: %{duration_ms: 300}
+        }
+      ]
+
+      block = Block.from_events(:message, events, fold: :folded)
+
+      %{children: [header, outcome]} =
+        Block.render(block, %{prominence: 0.6, ground: 0.2})
+
+      expected_fg = Prominence.resolve("#B4B4B4", 0.6, ground: 0.2)
+
+      assert header.style.fg == expected_fg
+      assert outcome.style.fg == expected_fg
+    end
+
     test "prominence in context defaults ground to the module's own default resolution" do
       block =
         Block.from_events(:message, [
