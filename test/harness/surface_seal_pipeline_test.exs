@@ -373,6 +373,48 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
                "footer preview -- invisible-but-retrying is under-reporting"
     end
 
+    test "a refused-write block carrying a clear-screen escape is neutralized in the footer preview (not a live \\e[2J)" do
+      # The display half above pins that a refused block stays VISIBLE in
+      # the footer. This pins that it stays visible HONESTLY. The refused
+      # block reaches the terminal ONLY via the footer preview (its seal
+      # write is refused), and here its content carries a raw CSI
+      # clear-screen -- `\e[2J`, the exact sequence the seal-frontier laws
+      # forbid from ever reaching the wire (it would wipe native
+      # scrollback / the immutable prefix). The footer repaint's
+      # `ContentGuard` must strip the leading ESC, so the operator sees the
+      # literal `[2J` residue, never a live escape. Presence alone (the
+      # test above) does not cover this: a newly-LIVE display path needs a
+      # neutralization pin, same as the seal path has.
+      hostile = @marker <> " \e[2J HOSTILE"
+
+      {device, sink} =
+        FailingDevice.start(fail_when: seal_write_with(@marker), mode: :always)
+
+      model = new_model(message_events(hostile), device: device)
+      model = advance_to_pending_flush(model)
+
+      {model, :ok} = Surface.advance(model)
+      assert model.painted_count == 0
+
+      read = fn -> FailingDevice.confirmed_bytes(sink) end
+
+      {_model, keyframe_bytes} =
+        frame_bytes(read, fn -> Surface.resize(model, @width, @rows) end)
+
+      assert occurrences(keyframe_bytes, @marker) >= 1,
+             "the refused block must still be visible in the footer preview"
+
+      assert occurrences(keyframe_bytes, "\e[2J") == 0,
+             "a hostile clear-screen in refused-write content must never " <>
+               "reach the wire as a live escape -- the footer's newly-live " <>
+               "display path must neutralize the ESC, same as the seal path"
+
+      assert occurrences(keyframe_bytes, "[2J") >= 1,
+             "the neutralized clear-screen must remain visible as literal " <>
+               "`[2J` residue in the footer preview (honest-visible, not " <>
+               "silently dropped)"
+    end
+
     test "post-seal fill protection: a fold override on an already-painted block is rejected and stores nothing" do
       # No placeholder-fill path against sealed content exists in this
       # codebase (grepped; the SessionRecap pattern has no analogue) -- so

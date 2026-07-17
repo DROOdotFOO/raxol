@@ -266,13 +266,20 @@ defmodule Raxol.Harness.Surface do
   The preview shows ONE block (two lines of it). Today the two never
   differ: the only frontier hold a shipped producer can create is the
   foldable window on the NEWEST block, so the unsealed suffix past the
-  cursor is at most one block long (pinned by the tail-bound test in
-  `test/harness/surface_frontier_feed_test.exs`). The moment a producer
-  emits live blocks (a mid-list awaiting-input approval holding several
-  finalized blocks behind it), that bound breaks and the one-block
-  preview under-reports -- the pinning test fails loudly then, and the
-  multi-block tail rendering it forces is the live-lane (T13b) unit's
-  decision, not silently absorbed here.
+  cursor is at most one block long. Two tests in
+  `test/harness/surface_frontier_feed_test.exs` guard this together, and
+  the split matters: the fixture-REPLAY pin only proves the bound holds
+  over today's shipped corpus (it replays `.jsonl`, so it structurally
+  cannot observe a runtime producer -- on its own it would pass
+  vacuously). Its teeth come from the paired SYNTHETIC test, which builds
+  the exact runtime hold the corpus lacks -- a mid-list awaiting-input
+  `:approval` holding finalized blocks behind it -- and asserts the
+  frontier genuinely stops there, so more than one block sits past the
+  cursor. That is the multi-block hold the one-block preview cannot
+  honor: the moment a producer wires such a hold into a real advance, the
+  bound breaks and the preview under-reports, forcing the multi-block
+  tail rendering decision (the live-lane / T13b unit's), never silently
+  absorbed here.
 
   `Raxol.UI.Components.Harness.Block.seal` is an item-LIFECYCLE field:
   `BlockBuilder` only ever constructs a block once its source item(s)
@@ -968,9 +975,10 @@ defmodule Raxol.Harness.Surface do
 
   Field mapping (the design decision this assembly makes):
 
-    * `committed?` -- `index < painted_count`: physical paint is this
-      module's commit marker, and it only ever advances a contiguous
-      prefix, so the high-water mark IS the committed set.
+    * `committed?` -- delegated to `block_sealed?/2`, THE single-source
+      committed-marker predicate (its doc states the `painted_count`
+      comparison exactly once; restating it here is the drift the
+      unification exists to prevent).
     * `running?` -- `Block.live?/1`, an honest passthrough. Always false
       today (the block builder only constructs completed, sealed blocks),
       which leaves the classifier's mid-turn running exceptions dormant
@@ -2409,11 +2417,16 @@ defmodule Raxol.Harness.Surface do
     # frame the walk's cursor and the scan agree (`tail_start ==
     # painted_count`, the scan/walk-agreement property), so this changes
     # nothing there; on a refusal the cursor is the honest one.
-    tail_start = model.painted_count
+    #
+    # Named `committed_cursor`, NOT `tail_start`: this PR's whole thesis is
+    # that the scan's `tail_start` and the committed cursor are DIFFERENT
+    # quantities that diverge exactly on refusal, so the one function whose
+    # reason-to-exist is that distinction must not reuse the scan's name.
+    committed_cursor = model.painted_count
 
-    case Enum.slice(model.projection.blocks, tail_start..-1//1) do
+    case Enum.slice(model.projection.blocks, committed_cursor..-1//1) do
       [] -> nil
-      [block | _rest] -> {block, tail_start}
+      [block | _rest] -> {block, committed_cursor}
     end
   end
 
