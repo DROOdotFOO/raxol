@@ -197,7 +197,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         notify: self()
       )
 
-    if debug, do: Raxol.Examples.HarnessDebug.Tap.attach_driver(debug.tap, driver)
+    if debug,
+      do: Raxol.Examples.HarnessDebug.Tap.attach_driver(debug.tap, driver)
 
     # The tty side, exactly as the fixture demo wires it -- except the
     # subscriber is THIS process, which forwards every parsed keypress to
@@ -240,6 +241,15 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
           System.halt(1)
       end
+
+      # SPIKE (react-devtools bridge — graduate or delete after V
+      # verdict): DEBUG_DEVTOOLS=true starts a bridge that poses as a
+      # React renderer to the standalone react-devtools app (WS client
+      # to localhost:8097, retry loop until the app appears — honest
+      # log at /tmp/raxol_devtools_bridge.log if it never does).
+      # Absolutely zero change when the env var is unset: the spike
+      # file is not even loaded.
+      _devtools = maybe_start_devtools(driver, session_id)
 
       {:ok, mirror} =
         Composer.init(%{
@@ -429,7 +439,9 @@ defmodule Raxol.Examples.HarnessLiveDemo do
   defp maybe_enter_linger(%{mode: :one_shot} = state) do
     # With the debug web up, linger longer -- the instrument is the
     # point, and a smoke run needs time to curl the page mid-run.
-    linger_ms = if state.tap, do: @one_shot_debug_linger_ms, else: @one_shot_linger_ms
+    linger_ms =
+      if state.tap, do: @one_shot_debug_linger_ms, else: @one_shot_linger_ms
+
     deadline = System.monotonic_time(:millisecond) + linger_ms
     %{state | mode: {:linger, deadline}}
   end
@@ -455,7 +467,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         )
 
       true ->
-        {Raxol.Agent.Backend.Mock, fn prompt -> [response: mock_response(prompt)] end, "mock"}
+        {Raxol.Agent.Backend.Mock,
+         fn prompt -> [response: mock_response(prompt)] end, "mock"}
     end
   end
 
@@ -483,7 +496,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         # Backend.HTTP's :openai provider appends /v1/chat/completions
         # itself -- strip a conventionally-supplied trailing /v1.
         [
-          base_url: url |> String.trim_trailing("/") |> String.trim_trailing("/v1")
+          base_url:
+            url |> String.trim_trailing("/") |> String.trim_trailing("/v1")
         ]
     end
   end
@@ -510,7 +524,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
       Application.put_env(:raxol_agent, Raxol.Examples.HarnessDebug.Endpoint,
         http: [ip: {127, 0, 0, 1}, port: port],
         server: true,
-        secret_key_base: "harness-debug-demo-" |> String.duplicate(4) |> binary_part(0, 64),
+        secret_key_base:
+          "harness-debug-demo-" |> String.duplicate(4) |> binary_part(0, 64),
         live_view: [signing_salt: "harness-debug-lv"],
         pubsub_server: Raxol.Examples.HarnessDebug.PubSub,
         check_origin: false,
@@ -529,6 +544,37 @@ defmodule Raxol.Examples.HarnessLiveDemo do
       # backend banner.
       IO.puts("harness debug web: #{ctx.url}")
       ctx
+    end
+  end
+
+  # -- SPIKE: react-devtools bridge (DEBUG_DEVTOOLS=true) --------------------
+
+  defp maybe_start_devtools(driver, session_id) do
+    if System.get_env("DEBUG_DEVTOOLS") in ["true", "1"] do
+      Code.require_file("spike/react_devtools_bridge.exs", __DIR__)
+
+      port =
+        case Integer.parse(System.get_env("DEBUG_DEVTOOLS_PORT") || "8097") do
+          {p, ""} -> p
+          _ -> 8097
+        end
+
+      # Dynamic module ref: the spike module only exists at runtime (via
+      # the require_file above), and a static remote call would print an
+      # "is undefined" compile warning on every DEBUG_DEVTOOLS-less run.
+      bridge = Module.concat([Raxol, Spike, ReactDevtools, Bridge])
+
+      {:ok, pid} =
+        bridge.start_link(
+          session_id: session_id,
+          driver: driver,
+          port: port,
+          log:
+            System.get_env("DEBUG_DEVTOOLS_LOG") ||
+              "/tmp/raxol_devtools_bridge.log"
+        )
+
+      pid
     end
   end
 

@@ -553,6 +553,22 @@ defmodule Raxol.Harness.LiveSessionDriver do
     %{state | model: model, steer_task: task}
   end
 
+  # SPIKE seam (react-devtools bridge — graduate or delete after V
+  # verdict): a generic embedder-injected footer notice. Lets an
+  # out-of-process observer (the DEBUG_DEVTOOLS bridge under
+  # `packages/raxol_agent/examples/spike/`) surface a short status line
+  # through the same persistent lane-notice channel this driver already
+  # uses for its own lane facts — footer only, sealed history untouched.
+  # `nil` clears it. Sent as a plain `{:surface_command, ...}` message,
+  # the same envelope the Surface's own `:command_sink` uses.
+  defp handle_surface_command(state, %{
+         type: :lane_notice,
+         payload: %{text: text}
+       })
+       when is_binary(text) or is_nil(text) do
+    %{state | model: Surface.put_lane_notice(state.model, text)}
+  end
+
   defp handle_surface_command(state, _other), do: state
 
   defp interrupt_payload(nil), do: %{}
