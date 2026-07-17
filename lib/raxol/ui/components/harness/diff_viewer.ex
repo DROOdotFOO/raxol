@@ -58,7 +58,35 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       below, which is the Raxol UI theme override map, not a code theme.
     * `:context` - number of unchanged lines kept visible at each edge of
       a folded hunk, or `:all` to disable folding entirely (default `3`).
+    * `:folded` - `true` renders the compact one-line form instead of the
+      full Pierre body (default `false`, see below).
     * `:id`, `:style`, `:theme` - standard component props.
+
+  ## Fold vocabulary (controlled)
+
+  The component has two forms: `folded: false` is the full Pierre body
+  above; `folded: true` is the compact path-first identity line
+  `± path · +N -M` -- the same line the sealed `:diff` block folds to
+  (`Raxol.UI.Components.Harness.Block.diff_line/1`), with counts from the
+  same `LineDiff` LCS, so the two can never disagree.
+
+  `handle_event/3` toggles the fold on Enter or Space (mirrors
+  `ReasoningBlock`/`Tree` activation keys). The component is CONTROLLED
+  (TEA migration doctrine, section 2): it never stores its own state --
+  the host app owns this state map in its model and forwards key events
+  into `handle_event/3`, keeping the returned state
+  (`HarnessTranscriptDemo` is the reference wiring).
+
+  Hunk folding (the "N unchanged lines" pill) is prop-driven via
+  `:context`, not a per-hunk interaction: the engine folds by
+  distance-from-change and hunks carry no identity to target, so an
+  interactive surface flips `:context` between a number and `:all` (see
+  `HarnessDiffDemo`'s `[f]`/hunks control).
+
+  The rendered root is stamped with `:id` and semantic `:attrs`
+  (`path`/`added`/`removed`/`folded`) in both forms, so the node is
+  walkable by `Raxol.MCP.TreeWalker`/`StructuredScreenshot` and
+  addressable in widget summaries.
 
   ## Example
 
@@ -74,6 +102,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   """
   use Raxol.UI.Components.Base.Component
 
+  alias Raxol.Core.Events.Event
   alias Raxol.UI.Components.Harness.LineDiff
   alias Raxol.UI.Components.Harness.WordDiff
   alias Raxol.UI.StyleHelper
@@ -95,6 +124,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
           language: String.t() | nil,
           syntax_theme: atom() | struct(),
           context: fold_context(),
+          folded: boolean(),
           style: map(),
           theme: map()
         }
@@ -117,6 +147,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       language: Keyword.get(props, :language),
       syntax_theme: Keyword.get(props, :syntax_theme, :one_dark),
       context: normalize_context(Keyword.get(props, :context, 3)),
+      folded: Keyword.get(props, :folded, false) == true,
       style: Keyword.get(props, :style, %{}),
       theme: Keyword.get(props, :theme, %{})
     }
@@ -132,8 +163,18 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   defp normalize_context(n) when is_integer(n) and n >= 0, do: n
   defp normalize_context(_other), do: 3
 
+  # Enter/Space -- toggle the compact fold (mirrors ReasoningBlock/Tree
+  # activation keys). Controlled: the caller keeps the returned state.
   @impl true
+  def handle_event(%Event{type: :key, data: %{key: :enter}}, state, _context),
+    do: {toggle_fold(state), []}
+
+  def handle_event(%Event{type: :key, data: %{key: :space}}, state, _context),
+    do: {toggle_fold(state), []}
+
   def handle_event(_event, state, _context), do: {state, []}
+
+  defp toggle_fold(state), do: %{state | folded: not state.folded}
 
   @impl true
   @spec render(t(), map()) :: map()
@@ -143,8 +184,30 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
     ops = LineDiff.diff(state.old, state.new)
     {added, removed} = count_changes(ops)
-    gutter_width = gutter_width_for(ops)
 
+    children =
+      case state.folded do
+        true -> [compact_row(state, added, removed)]
+        false -> expanded_children(state, context, ops, added, removed)
+      end
+
+    %{
+      type: :column,
+      id: state.id,
+      attrs: %{
+        path: state.path,
+        added: added,
+        removed: removed,
+        folded: state.folded
+      },
+      style: base_style,
+      gap: 0,
+      children: children
+    }
+  end
+
+  defp expanded_children(state, context, ops, added, removed) do
+    gutter_width = gutter_width_for(ops)
     avail_width = state.width || context_width(context)
 
     body =
@@ -160,13 +223,33 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
           )
       end
 
-    %{
-      type: :column,
-      style: base_style,
-      gap: 0,
-      children: [header(state, added, removed), Components.divider() | body]
-    }
+    [header(state, added, removed), Components.divider() | body]
   end
+
+  # `± path · +N -M` -- the compact folded form: the path-first identity
+  # line of the sealed `:diff` block (`Block.diff_line/1`), the referent
+  # leading. Counts come from the same LCS the expanded body walks, so
+  # the two forms can never disagree. The folded path computes only the
+  # line diff -- no highlighting, word ranges, or layout budgets.
+  defp compact_row(state, added, removed) do
+    Components.row(
+      gap: 1,
+      children: [
+        Components.text(content: "±", style: %{bold: true}),
+        Components.text(
+          content: display_path(state.path),
+          style: %{bold: true, fg: :cyan}
+        ),
+        Components.text(content: "·", style: %{fg: :dim}),
+        Components.text(content: "+#{added}", style: %{fg: :green}),
+        Components.text(content: "-#{removed}", style: %{fg: :red})
+      ]
+    )
+  end
+
+  # Same placeholder vocabulary as `Block.diff_line/1`.
+  defp display_path(""), do: "(no path)"
+  defp display_path(path), do: path
 
   @doc """
   The mode `render/2` will actually use for this state and context.

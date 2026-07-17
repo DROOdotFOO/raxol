@@ -23,7 +23,10 @@ defmodule Raxol.Playground.CatalogTest do
                  :overlay,
                  :layout,
                  :visualization,
-                 :effects
+                 :effects,
+                 # Harness block Components (TEA migration section 7:
+                 # "one @components row each, category: :harness").
+                 :harness
                ]
 
         assert is_binary(comp.description)

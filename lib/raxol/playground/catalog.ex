@@ -203,14 +203,16 @@ defmodule Raxol.Playground.Catalog do
     %{
       name: "Harness Diff Viewer",
       module: Demos.HarnessDiffDemo,
-      category: :display,
+      category: :harness,
       description:
-        "Pre-apply file diff: line-based unified/split view with +/- markers and line numbers",
+        "Pre-apply file diff (Pierre engine): unified/split body, word-diff emphasis, " <>
+          "hunk folding, Enter/Space fold to the compact ± path · +N -M line",
       complexity: :intermediate,
-      tags: ["harness", "diff", "display", "review", "agent"],
+      tags: ["harness", "diff", "display", "review", "agent", "fold"],
       code_snippet: """
       {:ok, state} = DiffViewer.init(path: "lib/foo.ex", old: old_text, new: new_text)
-      DiffViewer.render(state, %{})
+      DiffViewer.render(state, %{})          # full Pierre body
+      DiffViewer.handle_event(enter, state, %{})  # -> folded ± path · +N -M
       """
     },
     %{

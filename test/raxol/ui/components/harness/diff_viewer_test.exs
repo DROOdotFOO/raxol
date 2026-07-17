@@ -1,9 +1,21 @@
 defmodule Raxol.UI.Components.Harness.DiffViewerTest do
   use ExUnit.Case, async: true
 
+  alias Raxol.Core.Events.Event
   alias Raxol.UI.Components.Harness.DiffViewer
 
   defp default_context, do: %{theme: Raxol.UI.Theming.Theme.default_theme()}
+
+  # All text content in a rendered subtree, joined -- for presence asserts
+  # that don't care about layout structure.
+  defp tree_text(%{content: content} = node) when is_binary(content),
+    do: content <> tree_text(Map.delete(node, :content))
+
+  defp tree_text(%{children: children}) when is_list(children),
+    do: Enum.map_join(children, &tree_text/1)
+
+  defp tree_text(%{children: child}) when is_map(child), do: tree_text(child)
+  defp tree_text(_node), do: ""
 
   # A fold row is [left-dashes, label, right-dashes]; its second child is
   # a plain text node whose content mentions "unchanged lines". Every
@@ -36,6 +48,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert state.language == nil
       assert state.syntax_theme == :one_dark
       assert state.context == 3
+      assert state.folded == false
       assert state.style == %{}
       assert state.theme == %{}
     end
@@ -787,11 +800,155 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
     end
   end
 
-  describe "handle_event/3" do
-    test "passes through all events unchanged" do
-      {:ok, state} = DiffViewer.init(path: "a.ex")
-      {new_state, []} = DiffViewer.handle_event(:whatever, state, %{})
-      assert new_state == state
+  describe "handle_event/3 (fold vocabulary)" do
+    setup do
+      {:ok, state} =
+        DiffViewer.init(path: "lib/foo.ex", old: "a\nb\nc", new: "a\nx\nc")
+
+      %{state: state}
+    end
+
+    test "Enter toggles the compact fold on and back off", %{state: state} do
+      refute state.folded
+
+      {folded, []} =
+        DiffViewer.handle_event(
+          %Event{type: :key, data: %{key: :enter}},
+          state,
+          %{}
+        )
+
+      assert folded.folded
+
+      {unfolded, []} =
+        DiffViewer.handle_event(
+          %Event{type: :key, data: %{key: :enter}},
+          folded,
+          %{}
+        )
+
+      refute unfolded.folded
+      assert unfolded == state
+    end
+
+    test "Space toggles the fold too", %{state: state} do
+      {folded, []} =
+        DiffViewer.handle_event(
+          %Event{type: :key, data: %{key: :space}},
+          state,
+          %{}
+        )
+
+      assert folded.folded
+    end
+
+    test "toggling changes nothing but the fold flag", %{state: state} do
+      {folded, []} =
+        DiffViewer.handle_event(
+          %Event{type: :key, data: %{key: :enter}},
+          state,
+          %{}
+        )
+
+      assert Map.delete(folded, :folded) == Map.delete(state, :folded)
+    end
+
+    test "other keys and non-events pass through unchanged", %{state: state} do
+      {same, []} =
+        DiffViewer.handle_event(
+          %Event{type: :key, data: %{key: :char, char: "x"}},
+          state,
+          %{}
+        )
+
+      assert same == state
+
+      {still_same, []} = DiffViewer.handle_event(:whatever, state, %{})
+      assert still_same == state
+    end
+  end
+
+  describe "render/2 (folded compact form)" do
+    setup do
+      {:ok, state} =
+        DiffViewer.init(
+          id: "dv_folded",
+          path: "lib/foo.ex",
+          old: "a\nb\nc",
+          new: "a\nx\nc",
+          folded: true
+        )
+
+      %{state: state}
+    end
+
+    test "renders the one-line compact form: ± path · +N -M", %{state: state} do
+      rendered = DiffViewer.render(state, default_context())
+
+      assert rendered.type == :column
+      assert [row] = rendered.children
+
+      contents = Enum.map(row.children, & &1.content)
+      assert contents == ["±", "lib/foo.ex", "·", "+1", "-1"]
+    end
+
+    test "the path leads the compact line (path-first, before counts)", %{
+      state: state
+    } do
+      rendered = DiffViewer.render(state, default_context())
+      [row] = rendered.children
+      contents = Enum.map(row.children, & &1.content)
+
+      path_index = Enum.find_index(contents, &(&1 == "lib/foo.ex"))
+      plus_index = Enum.find_index(contents, &(&1 == "+1"))
+      assert path_index < plus_index
+    end
+
+    test "no Pierre body renders while folded", %{state: state} do
+      rendered = DiffViewer.render(state, default_context())
+
+      refute tree_text(rendered) =~ "▌"
+      refute tree_text(rendered) =~ "Proposed change"
+      refute Enum.any?(rendered.children, &(&1[:type] == :divider))
+    end
+
+    test "an empty path renders the (no path) placeholder" do
+      {:ok, state} = DiffViewer.init(old: "a", new: "b", folded: true)
+      rendered = DiffViewer.render(state, default_context())
+      [row] = rendered.children
+      assert "(no path)" in Enum.map(row.children, & &1.content)
+    end
+  end
+
+  describe "render/2 (id/attrs stamping)" do
+    test "the root node carries id and semantic attrs in both fold states" do
+      {:ok, state} =
+        DiffViewer.init(
+          id: "dv_stamp",
+          path: "lib/foo.ex",
+          old: "a\nb\nc",
+          new: "a\nx\nc"
+        )
+
+      expanded = DiffViewer.render(state, default_context())
+      assert expanded.id == "dv_stamp"
+
+      assert expanded.attrs == %{
+               path: "lib/foo.ex",
+               added: 1,
+               removed: 1,
+               folded: false
+             }
+
+      folded = DiffViewer.render(%{state | folded: true}, default_context())
+      assert folded.id == "dv_stamp"
+
+      assert folded.attrs == %{
+               path: "lib/foo.ex",
+               added: 1,
+               removed: 1,
+               folded: true
+             }
     end
   end
 end
