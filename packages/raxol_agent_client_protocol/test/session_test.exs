@@ -301,12 +301,14 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
       {:ok, _} = begin(session)
       wait_until(fn -> FakeConnection.count(conn, :async_request) == 1 end)
 
-      t0 = System.monotonic_time(:millisecond)
       GenServer.cast(session, {:acp_session_cancel, 7})
 
+      # The parked ask must unblock via the CANCEL path (I9), not by waiting
+      # out the 30s backstop. A 1s assert_receive is the order-of-magnitude
+      # bound that proves it -- 30x below the backstop, and load-robust (a
+      # wall-clock `< 50ms` assert here flaked under scheduling delay while
+      # the cancel path was in fact prompt).
       assert_receive {:perm, {:ok, :cancelled}}, 1_000
-      unblock_ms = System.monotonic_time(:millisecond) - t0
-      assert unblock_ms < 50, "perm should unblock well before the 30s backstop (I9)"
 
       assert FakeConnection.count(conn, :cancel_request) == 1
       reply = wait_for_reply(conn)
