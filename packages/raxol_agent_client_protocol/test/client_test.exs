@@ -111,7 +111,8 @@ defmodule Raxol.AgentClientProtocol.ClientTest do
 
       :ok = Client.subscribe(conn, "sess-1", self())
       assert BareClient.session_update(notification, ctx) == :ok
-      assert_receive {:acp_session_update, "sess-1", {:agent_message_chunk, :placeholder}}
+      # 4th element is `ctx.rx_seq` (the reorder key); the struct default is 0.
+      assert_receive {:acp_session_update, "sess-1", {:agent_message_chunk, :placeholder}, 0}
     end
 
     test "handle_ext_request/3 defaults to method_not_found" do

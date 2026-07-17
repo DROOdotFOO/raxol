@@ -117,20 +117,34 @@ defmodule Raxol.AgentClientProtocol.Connection do
        (IC-8); the shared IC pins the tree shape but not the child ids, so
        resolution is by child module/type heuristic.
 
-  ## Single-sender `session/update` delivery (post-ship fix)
+  ## `rx_seq` stamping for client-side update reordering (post-ship fix)
 
-  Every OTHER inbound notification dispatches to its own
-  `Task.Supervisor.async_nolink` task (§4.4), same as an inbound request
-  (§4). `session/update` (client role only) is the one deliberate
-  exception, added after ship: it is handled SYNCHRONOUSLY, in this
-  process, by `dispatch_session_update_sync/2` — see that function's doc
-  for the drop/reorder race this closes (three different BEAM senders —
-  Connection for the turn's terminal result, a fresh task per update —
-  gave no cross-sender mailbox-ordering guarantee to a `Client.subscribe/3`
-  consumer) and the accepted trade-off (a slow custom `session_update/2`
-  override now runs on this process's own message loop instead of an
-  isolated task; a crash is still caught and never reaches the wire or
-  takes the Connection down).
+  Every inbound notification — `session/update` included — dispatches to its
+  own `Task.Supervisor.async_nolink` task (§4.4), so a slow or custom
+  `session_update/2` handler NEVER head-of-line-blocks the Connection's
+  frame loop: parallel/interleaved update streams flow concurrently. The
+  consequence is that the forwarding `send/2` to a `Client.subscribe/3`
+  consumer happens from a *fresh task per notification*, while the turn's
+  terminal `session/prompt` response is delivered by THIS process
+  (`deliver_outcome/2`) — different senders, so BEAM gives no cross-sender
+  mailbox order. Rather than serialize everything through the Connection
+  (which would reintroduce head-of-line blocking), the Connection stamps
+  every delivery with the inbound frame's monotone `rx_seq` and makes the
+  CLIENT the consolidation/reordering point:
+
+    * `session/update` deliveries carry the notification frame's `rx_seq` as
+      the 4th element of `{:acp_session_update, session_id, update, rx_seq}`
+      (threaded through `Ctx.rx_seq` → the generated `session_update/2` →
+      `Client.broadcast_update/4`).
+    * a `session/prompt` response additionally sends the owner an
+      `{:acp_result_seq, tag, rx_seq}` companion (the response frame's
+      `rx_seq`) immediately before `{:acp_result, tag, outcome}`, so the
+      consumer knows the turn boundary and can drain every lower-`rx_seq`
+      update before completing.
+
+  See `Client.prompt/3`/`prompt_stream/4` for the reorder buffer that
+  restores wire order from these stamps and guarantees no same-turn update
+  is dropped.
   """
 
   use GenServer
@@ -199,6 +213,16 @@ defmodule Raxol.AgentClientProtocol.Connection do
   frame is accepted by the transport, and later delivers **exactly one**
   `{:acp_result, tag, outcome}` to `owner` — unless `owner` consumed the
   entry first via `cancel_request/2` (then zero). Connection owns the timeout.
+
+  When the outcome came from an actual peer RESPONSE frame (not a
+  Connection-side timeout/close), `owner` also receives an
+  `{:acp_result_seq, tag, rx_seq}` companion IMMEDIATELY BEFORE the
+  `{:acp_result, ...}` — the response frame's monotone inbound sequence.
+  It lets a consumer that is also receiving `{:acp_session_update, _, _,
+  rx_seq}` deliveries (via `Client.subscribe/3`) reorder them and drain
+  every lower-`rx_seq` same-turn update before completing (see the
+  "rx_seq stamping" moduledoc section). Owners that don't subscribe can
+  ignore it.
   """
   @spec async_request(
           pid(),
@@ -631,7 +655,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
 
       Map.has_key?(frame, "id") and
           (Map.has_key?(frame, "result") or Map.has_key?(frame, "error")) ->
-        classify_response(frame, state)
+        classify_response(frame, rx_seq, state)
 
       Map.has_key?(frame, "method") ->
         classify_notification(frame, rx_seq, state)
@@ -674,9 +698,9 @@ defmodule Raxol.AgentClientProtocol.Connection do
   # cross-correlated to an unrelated in-flight request of theirs. Any real
   # in-flight request we made under this id resolves by its own timeout
   # instead, per the design's row 15/16/19 precedent.
-  defp classify_response(frame, state) do
+  defp classify_response(frame, rx_seq, state) do
     case Response.from_json(frame) do
-      {:ok, resp} -> handle_inbound_response(resp, state)
+      {:ok, resp} -> handle_inbound_response(resp, rx_seq, state)
       {:error, _reason} -> drop_malformed_response(frame, state)
     end
   end
@@ -998,52 +1022,12 @@ defmodule Raxol.AgentClientProtocol.Connection do
       notif.method == "session/cancel" ->
         route_session_cancel(notif.params, rx_seq, state)
 
-      notif.method == "session/update" and state.role == :client ->
-        dispatch_session_update_sync(notif, state)
-
       true ->
-        dispatch_inbound_notification(notif, state)
+        dispatch_inbound_notification(notif, rx_seq, state)
     end
   end
 
-  # `session/update` (client role only) -- SYNCHRONOUS, single-sender
-  # delivery. This is a deliberate exception to "every inbound notification
-  # dispatches to its own async_nolink task" (§4.4): see the moduledoc's
-  # "Single-sender session/update delivery" section for the full race this
-  # closes and why running it here, in THIS process, is what closes it.
-  #
-  # In short: `Client.subscribe/3`'s default `session_update/2` forwards the
-  # decoded update via `send/2` to whichever process called `subscribe/3`
-  # (typically `prompt_stream/4`'s caller). The turn's terminal
-  # `session/prompt` RESPONSE is delivered to that same process directly by
-  # THIS Connection (`deliver_outcome/2`). When the update's forwarding
-  # `send/2` instead came from a separate per-notification task, it and the
-  # response were two different BEAM senders to the same receiver -- no
-  # cross-sender mailbox-ordering guarantee -- so the response could land
-  # first and `prompt_stream/4`'s receive loop would exit before an
-  # in-flight update was ever read, silently dropping it.
-  #
-  # The Connection handles inbound wire frames strictly in arrival order
-  # (one frame per `handle_info`), and the wire itself guarantees no
-  # `session/update` for a turn arrives after that turn's `session/prompt`
-  # response. So finishing this dispatch -- including whatever `send/2` the
-  # handler performs -- before the Connection ever looks at the next frame
-  # guarantees that send happens-before the terminal result's send, AND
-  # both now originate from this SAME process, giving BEAM's real
-  # per-sender/per-receiver FIFO guarantee.
-  #
-  # Trade-off (deliberate, scoped to this one method): a slow or crashing
-  # CUSTOM `c:session_update/2` override now runs on the Connection's own
-  # message loop instead of an isolated task, and can delay it. The crash
-  # side is still contained: `run_session_update_sync/4` wraps the call so
-  # a raise/throw/exit is logged + telemetried exactly like an async
-  # handler crash would be (§4.4), never taking the Connection down and
-  # never producing a wire frame (notifications never do). The DEFAULT
-  # handler (an ETS lookup + `send/2`) is cheap by construction, so this
-  # only matters for apps overriding `session_update/2` with something
-  # heavier -- an accepted cost for the correctness guarantee
-  # `prompt/3`/`prompt_stream/4` depend on.
-  defp dispatch_session_update_sync(%Notification{method: method, params: params}, state) do
+  defp dispatch_inbound_notification(%Notification{method: method, params: params}, rx_seq, state) do
     case Router.decode(state.role, :notification, method, params) do
       {:error, _reason} ->
         Logger.debug("ACP: unknown/invalid notification #{method} dropped")
@@ -1051,60 +1035,18 @@ defmodule Raxol.AgentClientProtocol.Connection do
         {:noreply, state}
 
       {:ok, dispatchable} ->
+        # `rx_seq` (the inbound frame's monotone stamp) is threaded onto the
+        # dispatch Ctx so the client-role `session/update` handler can forward
+        # it to `subscribe/3` consumers for reorder/no-drop (moduledoc's
+        # "rx_seq stamping" section). Notifications other than `session/update`
+        # ignore it; carrying it uniformly costs nothing.
         ctx = %Ctx{
           conn: self(),
           role: state.role,
           caps: state.caps,
           handler_state: state.handler_state,
           reply_ref: nil,
-          rx_seq: 0,
-          session_sup: state.session_sup,
-          task_sup: state.task_sup
-        }
-
-        run_session_update_sync(state.role, state.handler, dispatchable, ctx, method)
-        {:noreply, state}
-    end
-  end
-
-  # Never let a handler crash reach the wire OR take the Connection down
-  # (§4.4 parity with the async-task crash path in `handle_task_down/3`) --
-  # `rescue` covers a raised exception, `catch` covers a bare `throw`/`exit`
-  # from handler code, so this is total regardless of how the handler
-  # misbehaves.
-  defp run_session_update_sync(side, handler, dispatchable, ctx, method) do
-    run_dispatch(side, handler, dispatchable, ctx)
-    :ok
-  rescue
-    e ->
-      Logger.error(
-        "ACP: notification handler crashed (#{method}): #{Exception.format(:error, e, __STACKTRACE__)}"
-      )
-
-      emit_telemetry([:raxol, :acp, :handler_crash], %{kind: :notification, method: method})
-      :ok
-  catch
-    kind, reason ->
-      Logger.error("ACP: notification handler #{kind} (#{method}): #{inspect(reason)}")
-      emit_telemetry([:raxol, :acp, :handler_crash], %{kind: :notification, method: method})
-      :ok
-  end
-
-  defp dispatch_inbound_notification(%Notification{method: method, params: params}, state) do
-    case Router.decode(state.role, :notification, method, params) do
-      {:error, _reason} ->
-        Logger.debug("ACP: unknown/invalid notification #{method} dropped")
-        emit_telemetry([:raxol, :acp, :unknown_notification], %{method: method})
-        {:noreply, state}
-
-      {:ok, dispatchable} ->
-        ctx = %Ctx{
-          conn: self(),
-          role: state.role,
-          caps: state.caps,
-          handler_state: state.handler_state,
-          reply_ref: nil,
-          rx_seq: 0,
+          rx_seq: rx_seq,
           session_sup: state.session_sup,
           task_sup: state.task_sup
         }
@@ -1172,7 +1114,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
   # Correlated response arrival (§2.4)
   # ===========================================================================
 
-  defp handle_inbound_response(resp, state) do
+  defp handle_inbound_response(resp, rx_seq, state) do
     id = elem(resp, 1)
 
     case Map.pop(state.pending_out, id) do
@@ -1184,6 +1126,13 @@ defmodule Raxol.AgentClientProtocol.Connection do
       {%{reply_to: rt, method: method, timer_ref: timer}, pending_out} ->
         if timer, do: Process.cancel_timer(timer)
         outcome = decode_response(resp, method)
+        # Stamp the terminal outcome with this response frame's `rx_seq` for an
+        # async owner (`{:acp_result_seq, tag, rx_seq}`) so `Client.prompt/3` /
+        # `prompt_stream/4` know the turn boundary and can drain every
+        # lower-`rx_seq` `session/update` before completing (moduledoc's "rx_seq
+        # stamping" section). Sync callers (`{:call, from}`) never subscribe to
+        # updates, so they get no companion.
+        deliver_result_seq(rt, rx_seq)
         deliver_outcome(rt, outcome)
 
         state = %{state | pending_out: pending_out, out_tags: drop_tag(state.out_tags, rt)}
@@ -1304,6 +1253,19 @@ defmodule Raxol.AgentClientProtocol.Connection do
     send(pid, {:acp_result, tag, outcome})
     :ok
   end
+
+  # Companion to `deliver_outcome/2` for an async owner: the terminal
+  # response frame's `rx_seq`, sent immediately BEFORE `{:acp_result, ...}`
+  # (both from THIS process, so they arrive in order). Lets a consumer that
+  # also receives `{:acp_session_update, _, _, rx_seq}` deliveries drain
+  # every lower-`rx_seq` same-turn update before it completes. Sync callers
+  # never subscribe to updates, so there is nothing to reorder for them.
+  defp deliver_result_seq({:owner, pid, tag}, rx_seq) do
+    send(pid, {:acp_result_seq, tag, rx_seq})
+    :ok
+  end
+
+  defp deliver_result_seq({:call, _from}, _rx_seq), do: :ok
 
   defp demonitor_adopter(%{adopter: {_pid, mon}}), do: Process.demonitor(mon, [:flush])
   defp demonitor_adopter(_entry), do: :ok

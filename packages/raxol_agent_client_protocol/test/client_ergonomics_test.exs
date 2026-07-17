@@ -197,7 +197,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
         session_update_frame("sess-timeout", "late")
       )
 
-      refute_receive {:acp_session_update, "sess-timeout", _}, 200
+      refute_receive {:acp_session_update, "sess-timeout", _, _}, 200
     end
   end
 
@@ -206,7 +206,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
   # ===========================================================================
 
   describe "prompt_stream/4 (callback variant)" do
-    test "invokes on_update synchronously per update with no post-hoc gap, then returns the response" do
+    test "replays every update to on_update in rx_seq order at the turn boundary, then returns the response" do
       %{conn: conn, peer: peer} = start_client_conn(EchoClient)
       :ok = complete_handshake(conn, peer)
 
@@ -233,17 +233,18 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
         session_update_frame("sess-stream", "s1")
       )
 
-      assert_receive {:streamed, {:current_mode_update, %{current_mode_id: "s1"}}}
-
       ScriptedPeer.send_notification(
         peer,
         "session/update",
         session_update_frame("sess-stream", "s2")
       )
 
-      assert_receive {:streamed, {:current_mode_update, %{current_mode_id: "s2"}}}
-
       ScriptedPeer.send_result(peer, id, %{"stopReason" => "end_turn"})
+
+      # The reorder buffer replays the whole turn once the result's boundary
+      # is known -- in rx_seq (wire) order, none dropped.
+      assert_receive {:streamed, {:current_mode_update, %{current_mode_id: "s1"}}}
+      assert_receive {:streamed, {:current_mode_update, %{current_mode_id: "s2"}}}
 
       assert {:ok, response} = Task.await(caller)
       assert response.stop_reason == :end_turn
@@ -279,11 +280,11 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
       )
 
       assert_receive {:acp_session_update, ^session_id,
-                      {:current_mode_update, %{current_mode_id: "z"}}}
+                      {:current_mode_update, %{current_mode_id: "z"}}, _}
 
       assert_receive {:second_got,
                       {:acp_session_update, ^session_id,
-                       {:current_mode_update, %{current_mode_id: "z"}}}}
+                       {:current_mode_update, %{current_mode_id: "z"}}, _}}
     end
 
     test "unsubscribe/3 stops further delivery to that pid" do
@@ -300,7 +301,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
         session_update_frame(session_id, "x")
       )
 
-      refute_receive {:acp_session_update, ^session_id, _}, 200
+      refute_receive {:acp_session_update, ^session_id, _, _}, 200
     end
   end
 
@@ -343,7 +344,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
 
       # never reaches session_update/2 (and therefore never reaches
       # subscribe/3's broadcast) -- Connection/Router drop it centrally.
-      refute_receive {:acp_session_update, ^session_id, _}, 200
+      refute_receive {:acp_session_update, ^session_id, _, _}, 200
       assert Process.alive?(conn)
 
       # prove the connection isn't wedged: a well-formed notification right
@@ -355,7 +356,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
       )
 
       assert_receive {:acp_session_update, ^session_id,
-                      {:current_mode_update, %{current_mode_id: "ok"}}}
+                      {:current_mode_update, %{current_mode_id: "ok"}}, _}
     end
   end
 

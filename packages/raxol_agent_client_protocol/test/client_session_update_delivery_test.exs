@@ -1,29 +1,41 @@
-# Regression test for a real shipped concurrency bug: `session/update`
-# notifications could be DROPPED (silently) and REORDERED relative to a
-# prompt turn's terminal `session/prompt` result, from the perspective of
-# `Client.prompt_stream/4` (and, by the same mechanism, `Client.prompt/3`).
+# Regression + design tests for `session/update` delivery to
+# `Client.prompt/3` / `prompt_stream/4`.
 #
-# Mechanism (pre-fix): every inbound notification -- including
-# `session/update` -- was dispatched to its OWN
-# `Task.Supervisor.async_nolink` task (`Connection.dispatch_inbound_notification/2`).
-# The generated default `session_update/2` forwards the decoded update via
-# `send/2` FROM that per-notification task process
-# (`Client.broadcast_update/3`). Meanwhile the turn's terminal
-# `session/prompt` RESULT is delivered directly by the `Connection` process
-# itself (`Connection.deliver_outcome/2`). Three different sender
-# processes (Connection, and a fresh Task per notification) means BEAM
-# gives NO cross-sender mailbox-ordering guarantee to the subscriber: the
-# terminal result can land in the subscriber's mailbox before a same-turn
-# update that is still in flight. `prompt_stream/4`'s receive loop exits as
-# soon as it sees the terminal result, so any update that arrives after is
-# never read by anyone -- silently lost, not merely delayed.
+# The shipped bug: every inbound notification -- `session/update` included --
+# is dispatched to its OWN `Task.Supervisor.async_nolink` task
+# (`Connection.dispatch_inbound_notification/3`), and the generated default
+# `session_update/2` forwards the decoded update via `send/2` FROM that
+# per-notification task (`Client.broadcast_update/4`). Meanwhile the turn's
+# terminal `session/prompt` RESULT is delivered directly by the `Connection`
+# process itself (`Connection.deliver_outcome/2`). Different sender processes
+# means BEAM gives NO cross-sender mailbox-ordering guarantee to the
+# subscriber: the terminal result can land before a same-turn update still in
+# flight, AND two updates dispatched by two tasks can land out of wire order.
 #
-# This file constructs that exact interleaving deterministically (no
-# `Process.sleep`, no timing race to CREATE the condition -- only a bounded
-# `Task.yield/2` used to let the SUT's own independent, already-in-flight
-# response-delivery settle before we release a held notification handler;
-# see the big comment in the test body for why that specific wait is sound
-# and not "timing-tight").
+# The fix keeps delivery non-blocking/concurrent (so a slow handler never
+# head-of-line-blocks the Connection and parallel/interleaved update streams
+# flow) and makes the CLIENT the consolidation point: every delivery carries
+# the inbound frame's monotone `rx_seq`, the terminal result additionally
+# carries its own frame `rx_seq` (`{:acp_result_seq, tag, rx_seq}`), and
+# `prompt/3`/`prompt_stream/4` buffer updates by `rx_seq`, drain every
+# same-turn update below the result's seq (bounded settle window), and
+# release them in restored wire order.
+#
+# These three tests witness: (a) an update pending when the result lands is
+# not dropped; (b) updates delivered out of `rx_seq` order are collected in
+# `rx_seq` order; (c) two interleaved update streams (distinct `rx_seq`s,
+# scrambled arrival) are all delivered, in `rx_seq` order, none dropped.
+#
+# Determinism (no `Process.sleep`, no timing race to CREATE the condition):
+# a fixture whose `session_update/2` PARKS mid-dispatch until explicitly
+# released lets each test place the forwarding `send/2` exactly where it
+# wants relative to the result and to the other updates. (b)/(c) release all
+# updates BEFORE delivering the result, so every update is queued before the
+# result frame -- order is decided purely by the buffer's sort, with zero
+# window dependence. (a) is the one case that RELEASES AFTER the result, and
+# relies only on the update landing within the bounded settle window -- an
+# ETS-lookup + `send` after an explicit release, orders of magnitude inside
+# the window.
 defmodule Raxol.AgentClientProtocol.ClientSessionUpdateDeliveryTest do
   use ExUnit.Case, async: false
 
@@ -39,22 +51,22 @@ defmodule Raxol.AgentClientProtocol.ClientSessionUpdateDeliveryTest do
   alias Raxol.AgentClientProtocol.Schema.ContentBlock
 
   # ===========================================================================
-  # Fixture: a client whose `session_update/2` PAUSES mid-dispatch until
-  # explicitly released. This lets the test control exactly when the
-  # forwarding `send/2` to a `subscribe/3` subscriber happens, so the
-  # interleaving from the bug report -- "deliver the prompt result while an
-  # update is still pending" -- is constructed on purpose rather than hoped
-  # for.
+  # Fixture: a client whose `session_update/2` announces itself (with the
+  # update payload and its `ctx.rx_seq`) then PARKS until explicitly released.
+  # The test releases handlers in whatever order it wants, so the mailbox
+  # interleaving each scenario needs is constructed on purpose rather than
+  # hoped for. On release it forwards via `broadcast_update/4`, carrying the
+  # real `ctx.rx_seq` (the reorder key).
   # ===========================================================================
 
-  defmodule BlockableUpdateClient do
+  defmodule GatedUpdateClient do
     @moduledoc false
     use Raxol.AgentClientProtocol.Client
 
     @impl true
     def session_update(notification, ctx) do
       ref = make_ref()
-      send(ctx.handler_state, {:session_update_ready, self(), ref})
+      send(ctx.handler_state, {:update_gate, self(), ref, notification.update, ctx.rx_seq})
 
       receive do
         {^ref, :go} -> :ok
@@ -63,7 +75,8 @@ defmodule Raxol.AgentClientProtocol.ClientSessionUpdateDeliveryTest do
       Raxol.AgentClientProtocol.Client.broadcast_update(
         ctx.conn,
         notification.session_id,
-        notification.update
+        notification.update,
+        ctx.rx_seq
       )
     end
   end
@@ -105,24 +118,46 @@ defmodule Raxol.AgentClientProtocol.ClientSessionUpdateDeliveryTest do
     :ok
   end
 
-  defp session_update_frame(session_id, mode_id) do
-    %{
+  defp send_update(peer, session_id, mode_id) do
+    ScriptedPeer.send_notification(peer, "session/update", %{
       "sessionId" => session_id,
       "update" => %{"sessionUpdate" => "current_mode_update", "currentModeId" => mode_id}
-    }
+    })
+  end
+
+  # Block for the parked handler's announcement, returning `{pid, ref, seq}`
+  # for the update whose mode id is `mode_id`. Handlers announce as soon as
+  # their dispatch task runs; matching on the payload lets a test wait for a
+  # SPECIFIC update regardless of the order the tasks happened to start in.
+  defp await_gate(mode_id) do
+    assert_receive {:update_gate, pid, ref,
+                    {:current_mode_update, %{current_mode_id: ^mode_id}}, seq},
+                   1_000
+
+    {pid, ref, seq}
+  end
+
+  defp release({pid, ref, _seq}), do: send(pid, {ref, :go})
+
+  defp mode_ids(updates) do
+    Enum.map(updates, fn {:current_mode_update, %{current_mode_id: mid}} -> mid end)
   end
 
   # ===========================================================================
-  # The red-first witness.
+  # (a) drop witness: a result delivered while an update is still pending must
+  #     NOT lose that update. Against a naive consumer that exits on the
+  #     result without draining, the released update lands after the loop has
+  #     already returned and is silently dropped; the reorder buffer's bounded
+  #     drain absorbs it.
   # ===========================================================================
 
-  describe "session/update delivery vs. the turn's terminal result (single-sender ordering)" do
-    test "an update pending at the moment the terminal result is delivered is neither lost nor reordered" do
+  describe "an update pending when the terminal result arrives" do
+    test "is drained, not dropped, and still reaches the consumer" do
       test_pid = self()
-      %{conn: conn, peer: peer} = start_client_conn(BlockableUpdateClient, test_pid)
+      %{conn: conn, peer: peer} = start_client_conn(GatedUpdateClient, test_pid)
       :ok = complete_handshake(conn, peer)
 
-      session_id = "sess-race"
+      session_id = "sess-drop"
       request = PromptRequest.new(session_id, [ContentBlock.from_string("hi")])
 
       caller =
@@ -139,55 +174,137 @@ defmodule Raxol.AgentClientProtocol.ClientSessionUpdateDeliveryTest do
       assert frame["method"] == "session/prompt"
       id = frame["id"]
 
-      # 1. Send the update. Its dispatch (Task pre-fix, the Connection
-      #    process itself post-fix) starts running and immediately parks,
-      #    proven by the synchronous ready-ping below -- so we know FOR
-      #    CERTAIN the forwarding `send/2` to the `prompt_stream/4`
-      #    subscriber has NOT happened yet.
-      ScriptedPeer.send_notification(
-        peer,
-        "session/update",
-        session_update_frame(session_id, "will-be-lost")
-      )
+      # Update dispatched; its handler parks (proven by the gate ping), so the
+      # forwarding send has NOT happened yet.
+      send_update(peer, session_id, "will-be-lost")
+      gate = await_gate("will-be-lost")
 
-      assert_receive {:session_update_ready, handler_pid, ref}, 500
-
-      # 2. Deliver the turn's terminal result while that update is still
-      #    held open -- exactly the interleaving the bug report describes.
+      # Deliver the terminal result while that update is still held -- the
+      # exact interleaving the bug describes.
       ScriptedPeer.send_result(peer, id, %{"stopReason" => "end_turn"})
 
-      # 3. Give the SUT's OWN, already-in-flight response-delivery path a
-      #    generous, bounded window to settle BEFORE we release the held
-      #    notification handler. This does not race to construct the bug --
-      #    it only matters for the PRE-FIX code, where response delivery is
-      #    entirely independent of the still-parked notification task and
-      #    completes near-instantly (no I/O, pure local message passing);
-      #    300ms is enormous headroom for that. For the FIXED code this
-      #    `Task.yield/2` is not a race at all: the Connection process is
-      #    provably still blocked inside the synchronous update dispatch
-      #    (it cannot have processed the response frame yet, by
-      #    construction), so `Task.yield/2` deterministically returns `nil`
-      #    here every time, fix or no fix.
-      already_done = Task.yield(caller, 300)
+      # Barrier (not a timing hack): the Connection processes its mailbox in
+      # order, so once this synchronous `:sys.get_state/1` returns, the
+      # Connection has finished handling the result frame -- meaning it has
+      # ALREADY sent the `{:acp_result_seq, ...}` + `{:acp_result, ...}` into
+      # the consumer's mailbox. Only THEN do we release the held update, so
+      # the forwarded update is queued strictly AFTER the terminal result.
+      # A naive consumer that exits on the result drops it; the reorder
+      # buffer's drain finds it already queued and delivers it. Deterministic
+      # for both, with zero dependence on the settle window's length.
+      :sys.get_state(conn)
+      release(gate)
 
-      # 4. Only now release the held handler.
-      send(handler_pid, {ref, :go})
+      assert_receive {:streamed, {:current_mode_update, %{current_mode_id: "will-be-lost"}}},
+                     1_000
 
-      result =
-        case already_done do
-          {:ok, outcome} -> outcome
-          nil -> Task.await(caller, 1_000)
+      assert {:ok, response} = Task.await(caller, 1_000)
+      assert response.stop_reason == :end_turn
+    end
+  end
+
+  # ===========================================================================
+  # (b) reorder: two updates delivered to the consumer OUT of `rx_seq` order
+  #     (later-seq released first) must be collected in `rx_seq` order.
+  # ===========================================================================
+
+  describe "updates delivered out of rx_seq order" do
+    test "are collected by prompt/3 in rx_seq (wire) order, none lost" do
+      test_pid = self()
+      %{conn: conn, peer: peer} = start_client_conn(GatedUpdateClient, test_pid)
+      :ok = complete_handshake(conn, peer)
+
+      session_id = "sess-reorder"
+      request = PromptRequest.new(session_id, [ContentBlock.from_string("hi")])
+      caller = Task.async(fn -> Client.prompt(conn, request, 2_000) end)
+
+      frame = ScriptedPeer.recv(peer)
+      assert frame["method"] == "session/prompt"
+      id = frame["id"]
+
+      # "a" is sent (and framed) first, so it has the LOWER rx_seq; "b" second,
+      # higher. Both park.
+      send_update(peer, session_id, "a")
+      send_update(peer, session_id, "b")
+      gate_a = await_gate("a")
+      gate_b = await_gate("b")
+      assert elem(gate_a, 2) < elem(gate_b, 2)
+
+      # Release the HIGHER-seq update first, so it reaches the consumer's
+      # mailbox before the lower one -- wire order reversed on arrival. Both
+      # land before the result, so ordering is decided purely by the buffer.
+      release(gate_b)
+      release(gate_a)
+
+      ScriptedPeer.send_result(peer, id, %{"stopReason" => "end_turn"})
+
+      assert {:ok, {updates, response}} = Task.await(caller, 1_000)
+      assert response.stop_reason == :end_turn
+      # Restored to rx_seq order despite reversed arrival.
+      assert mode_ids(updates) == ["a", "b"]
+    end
+  end
+
+  # ===========================================================================
+  # (c) parallel/interleaved: two logical update streams interleaved on the
+  #     wire (distinct rx_seqs), delivered to the consumer in a scrambled
+  #     order, must ALL arrive at prompt_stream/4's callback, in rx_seq order,
+  #     none dropped. This is the parallel-tool-call case the design targets.
+  # ===========================================================================
+
+  describe "two interleaved update streams with distinct rx_seqs" do
+    test "are all delivered to prompt_stream/4 in rx_seq order, none dropped" do
+      test_pid = self()
+      %{conn: conn, peer: peer} = start_client_conn(GatedUpdateClient, test_pid)
+      :ok = complete_handshake(conn, peer)
+
+      session_id = "sess-interleave"
+      request = PromptRequest.new(session_id, [ContentBlock.from_string("hi")])
+
+      caller =
+        Task.async(fn ->
+          Client.prompt_stream(
+            conn,
+            request,
+            fn update -> send(test_pid, {:streamed, update}) end,
+            2_000
+          )
+        end)
+
+      frame = ScriptedPeer.recv(peer)
+      assert frame["method"] == "session/prompt"
+      id = frame["id"]
+
+      # Stream A = a1,a2 ; stream B = b1,b2. Interleaved on the wire so the
+      # rx_seq (frame) order is a1 < b1 < a2 < b2.
+      send_update(peer, session_id, "a1")
+      send_update(peer, session_id, "b1")
+      send_update(peer, session_id, "a2")
+      send_update(peer, session_id, "b2")
+
+      gates = Map.new(~w(a1 b1 a2 b2), fn mid -> {mid, await_gate(mid)} end)
+
+      # Release in a scrambled order (concurrent tasks landing every which
+      # way). All land before the result, so none can be dropped and order is
+      # entirely the buffer's job.
+      for mid <- ~w(b2 a2 b1 a1), do: release(gates[mid])
+
+      ScriptedPeer.send_result(peer, id, %{"stopReason" => "end_turn"})
+
+      # `on_update` is invoked from a single sender (the caller task), so the
+      # `{:streamed, _}` messages land in emission order. Receiving four with
+      # an UNPINNED pattern therefore reads them in the exact order they were
+      # emitted -- which must be restored rx_seq (wire) order, none dropped.
+      emitted =
+        for _ <- 1..4 do
+          assert_receive {:streamed, update}, 1_000
+          update
         end
 
-      # The update must have reached `on_update` -- pre-fix, `already_done`
-      # is `{:ok, _}` here (the terminal result won the race independently
-      # of the gate), the streaming task's receive loop already returned
-      # before the update was ever forwarded, and this never arrives:
-      # `prompt_stream/4` silently dropped a same-turn update.
-      assert_receive {:streamed, {:current_mode_update, %{current_mode_id: "will-be-lost"}}},
-                      1_000
+      assert mode_ids(emitted) == ["a1", "b1", "a2", "b2"]
+      refute_receive {:streamed, _}, 100
 
-      assert {:ok, response} = result
+      assert {:ok, response} = Task.await(caller, 1_000)
       assert response.stop_reason == :end_turn
     end
   end
