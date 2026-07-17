@@ -145,14 +145,16 @@ defmodule Raxol.Terminal.Input.CharacterProcessor do
         {write_col, write_row, next_cursor_col, next_cursor_row, next_last_col_exceeded}
       )
 
-    log_cursor_positions(
-      current_cursor_col,
-      current_cursor_row,
-      adjusted_write_col,
-      adjusted_write_row,
-      adjusted_next_cursor_col,
-      adjusted_next_cursor_row
-    )
+    # No per-character debug log here (removed): this function runs once
+    # per PRINTABLE CHARACTER, and a `Log.debug` in that loop eagerly
+    # interpolates its message on every call regardless of level, then
+    # (under the test env's `level: :debug` + global `capture_log`)
+    # funnels every character of every emulator replay through ExUnit's
+    # single CaptureServer -- serializing the whole async suite and
+    # pushing replay-oracle tests from seconds into minutes. A
+    # per-character cursor trace is reconstructible from the input bytes
+    # whenever it is actually needed; it earns neither the production
+    # interpolation cost nor the test-suite serialization.
 
     {adjusted_write_col, adjusted_write_row, adjusted_next_cursor_col, adjusted_next_cursor_row,
      adjusted_next_last_col_exceeded}
@@ -181,19 +183,6 @@ defmodule Raxol.Terminal.Input.CharacterProcessor do
   defp log_cursor_debug(cursor_type, cursor) do
     Raxol.Core.Runtime.Log.debug(
       "[calculate_positions] Getting position from #{cursor_type}: #{inspect(cursor)}"
-    )
-  end
-
-  defp log_cursor_positions(
-         current_col,
-         current_row,
-         write_col,
-         write_row,
-         next_col,
-         next_row
-       ) do
-    Raxol.Core.Runtime.Log.debug(
-      "Cursor positions - Current: {#{current_row}, #{current_col}}, Write: {#{write_row}, #{write_col}}, Next: {#{next_row}, #{next_col}}"
     )
   end
 
