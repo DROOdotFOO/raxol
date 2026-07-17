@@ -903,7 +903,19 @@ defmodule Raxol.UI.Components.Harness.Block do
   # omitted when the producer did not carry that field (a producer that
   # only supplied a human-readable `action` shows no tool/args lines,
   # rather than empty "tool: " chrome).
+  # For an edit/write approval the producer lifts the before/after image
+  # (`old`/`new`), so the referent is the PROPOSED DIFF itself -- the
+  # operator sees exactly the change `y` will make, path first, never
+  # truncated args. Every other approval (bash, ...) keeps its tool + args
+  # line as the referent.
   defp referent_lines(content) do
+    case proposed_diff_lines(content) do
+      [] -> plain_referent_lines(content)
+      diff -> diff
+    end
+  end
+
+  defp plain_referent_lines(content) do
     [
       referent_line("tool: ", Map.get(content, :tool_name)),
       referent_line("args: ", Map.get(content, :args))
@@ -914,6 +926,46 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp referent_line(_label, nil), do: nil
   defp referent_line(_label, ""), do: nil
   defp referent_line(label, value), do: label <> to_display_text(value)
+
+  # The ± diff rows for a proposed edit/write, path leading. A new file
+  # (`old == ""`) yields an all-adds diff. Shared with the sealed `:diff`
+  # block via `diff_rows/2`, so the diff the operator APPROVES renders
+  # byte-identically to the diff that gets SEALED after it executes.
+  defp proposed_diff_lines(%{old: old, new: new} = content)
+       when is_binary(old) and is_binary(new) do
+    ["± " <> to_display_text(Map.get(content, :path)) | diff_rows(old, new)]
+  end
+
+  defp proposed_diff_lines(_content), do: []
+
+  # A line-level ± diff (`List.myers_difference/2`): deletions `- `,
+  # insertions `+ `, unchanged context `  `. Long unchanged runs collapse
+  # to a `  …` marker so a big file's change stays legible. A new file
+  # (`old == ""`) is one deletion of the empty line and all insertions --
+  # i.e. an all-adds diff, which is exactly right.
+  @diff_context_keep 3
+
+  defp diff_rows(old, new) do
+    old_lines = String.split(old, "\n")
+    new_lines = String.split(new, "\n")
+
+    old_lines
+    |> List.myers_difference(new_lines)
+    |> Enum.flat_map(fn
+      {:eq, lines} -> collapse_context(lines)
+      {:del, lines} -> Enum.map(lines, &("- " <> &1))
+      {:ins, lines} -> Enum.map(lines, &("+ " <> &1))
+    end)
+  end
+
+  defp collapse_context(lines) when length(lines) <= 2 * @diff_context_keep + 1,
+    do: Enum.map(lines, &("  " <> &1))
+
+  defp collapse_context(lines) do
+    head = lines |> Enum.take(@diff_context_keep) |> Enum.map(&("  " <> &1))
+    tail = lines |> Enum.take(-@diff_context_keep) |> Enum.map(&("  " <> &1))
+    head ++ ["  …"] ++ tail
+  end
 
   # LIVE: the question is still open -- render the choices with their
   # answer keys so the operator can see exactly what pressing each key
@@ -1413,6 +1465,16 @@ defmodule Raxol.UI.Components.Harness.Block do
       args: find_in_events(events, @args_paths),
       blast_radius: blast_radius,
       options: options,
+      # The PROPOSED DIFF (edit_file/write_file): when the producer computed
+      # the before/after image at approval time it lifts `path`/`old`/`new`
+      # here (the same field names `extract_diff_content/1` uses), so the
+      # block can render exactly what `y` will do -- the consequences of the
+      # answer, not truncated args. Absent for a bash/other approval, which
+      # keeps its command line as the referent.
+      path: find_in_events(events, @path_paths),
+      old: find_in_events(events, @old_paths),
+      new: find_in_events(events, @new_paths),
+      language: find_in_events(events, @language_paths),
       decision: find_in_events(events, @decision_paths),
       option_id: find_in_events(events, @option_id_paths),
       scope: find_in_events(events, @scope_paths),

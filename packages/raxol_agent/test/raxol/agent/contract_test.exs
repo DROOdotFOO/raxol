@@ -73,8 +73,7 @@ defmodule Raxol.Agent.ContractTest do
       # item_started=2 / item_completed=3, the tool_result's item_started=4 /
       # item_completed=5).
       stream = [
-        {:tool_use,
-         %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
+        {:tool_use, %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
         {:tool_result, %{name: "run_tests", result: "tests: 12 passed"}},
         {:done, %{content: "done", usage: %{output_tokens: 1}}}
       ]
@@ -260,6 +259,30 @@ defmodule Raxol.Agent.ContractTest do
       assert Enum.sort(started_ids) == Enum.sort(completed_ids)
     end
 
+    test "a non-diff tool_result lifts a human :content summary (never an empty row)" do
+      session_id = "contract-summary-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:tool_use, %{name: "list_dir", arguments: %{path: "."}, id: "call-1"}},
+        {:tool_result,
+         %{name: "list_dir", result: %{path: ".", entries: ["a.ex", "b/", "c.md"]}}},
+        {:done, %{content: "done", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+
+      completed =
+        session_id
+        |> drain_events()
+        |> Enum.find(&(&1.type == :item_completed and &1.payload[:item_type] == :tool_result))
+
+      # The structured result nests under :result; the summary is lifted to
+      # :content, exactly where the harness block's body extraction reads it.
+      assert completed.payload[:content] =~ "3 entries"
+      assert completed.payload[:content] =~ "a.ex"
+    end
+
     test "a message item open when a tool_use arrives seals with its accumulated text" do
       # The pre-tool text run is a real assistant message: it must seal
       # as its own item (ordered BEFORE the tool items) rather than
@@ -334,10 +357,8 @@ defmodule Raxol.Agent.ContractTest do
 
       stream = [
         {:tool_use, %{name: "edit_file", arguments: %{}, id: "e1"}},
-        {:approval_requested,
-         %{request_id: "r1", tool_name: "edit_file", options: []}},
-        {:approval_decided,
-         %{request_id: "r1", option_id: "allow", decision: :allow}},
+        {:approval_requested, %{request_id: "r1", tool_name: "edit_file", options: []}},
+        {:approval_decided, %{request_id: "r1", option_id: "allow", decision: :allow}},
         {:tool_result, %{name: "edit_file", result: %{ok: true}}},
         {:done, %{content: "done", usage: %{}}}
       ]

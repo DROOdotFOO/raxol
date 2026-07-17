@@ -110,6 +110,32 @@ defmodule Raxol.Harness.LiveApprovalTest do
     block
   end
 
+  # An edit/write approval whose payload carries the PROPOSED DIFF (the
+  # before/after image the executor computed at approval time).
+  defp diff_approval_requested(request_id, path, old, new) do
+    %{
+      id: 10,
+      family: :loop,
+      type: :approval_requested,
+      tier: :durable,
+      payload: %{
+        request_id: request_id,
+        tool_name: "edit_file",
+        action: "edit_file",
+        args: %{"path" => path},
+        diff: true,
+        path: path,
+        old: old,
+        new: new,
+        language: "elixir",
+        options: [
+          %{option_id: "allow", name: "Allow", kind: :allow_once},
+          %{option_id: "deny", name: "Deny", kind: :reject_once}
+        ]
+      }
+    }
+  end
+
   # -- 1. the projection producer: live vs sealed vs canceled ---------------
 
   describe "the projection folds approval_requested into a LIVE approval block" do
@@ -558,6 +584,95 @@ defmodule Raxol.Harness.LiveApprovalTest do
 
       assert path_at < new_at,
              "the path (the referent) must lead the arg header, not new_string"
+    end
+  end
+
+  # -- 4e. the proposed diff (gap 2.2): the operator sees what y will do ----
+
+  describe "an edit/write approval renders the PROPOSED DIFF, not truncated args" do
+    test "the block shows the ± diff of the proposed change, path first" do
+      block =
+        only_approval_block([
+          turn_started(),
+          diff_approval_requested(
+            "req-e",
+            "/lib/x.ex",
+            "old line\ncommon",
+            "new line\ncommon"
+          )
+        ])
+
+      lines = render_lines(block)
+
+      assert Enum.any?(lines, &(&1 == "± /lib/x.ex")),
+             "the path leads the diff (the referent)"
+
+      assert Enum.member?(lines, "- old line")
+      assert Enum.member?(lines, "+ new line")
+
+      assert Enum.member?(lines, "  common"),
+             "unchanged lines render as context"
+
+      refute Enum.any?(lines, &(&1 =~ "args:")),
+             "a diff approval shows the diff, never a truncated args line"
+    end
+
+    test "write_file on a new file is an all-adds diff" do
+      lines =
+        only_approval_block([
+          turn_started(),
+          diff_approval_requested("req-n", "/new.ex", "", "line a\nline b")
+        ])
+        |> render_lines()
+
+      assert Enum.member?(lines, "+ line a")
+      assert Enum.member?(lines, "+ line b")
+    end
+
+    test "shown == done: the approved diff image equals the sealed diff block's image" do
+      # The approval carries {path, old, new}; the executed tool_result
+      # carries the SAME image (the executor computes it once, staleness-
+      # guarded). Both project; the approval's diff content must equal the
+      # sealed :diff block's -- what was shown is what was done.
+      path = "/lib/x.ex"
+      old = "old line\ncommon"
+      new = "new line\ncommon"
+
+      approval =
+        only_approval_block([
+          turn_started(),
+          diff_approval_requested("req-e", path, old, new)
+        ])
+
+      # The sealed diff block, as the executor's tool_result would project it.
+      sealed_events = [
+        turn_started(),
+        %{
+          id: 20,
+          family: :loop,
+          type: :item_completed,
+          tier: :durable,
+          payload: %{
+            item_id: "i20",
+            item_type: :tool_result,
+            name: "edit_file",
+            diff: true,
+            path: path,
+            old: old,
+            new: new,
+            language: "elixir"
+          }
+        }
+      ]
+
+      sealed =
+        Enum.find(Projection.project(sealed_events).blocks, &(&1.kind == :diff))
+
+      assert sealed, "the executed edit projects as a sealed :diff block"
+
+      assert {approval.content.path, approval.content.old, approval.content.new} ==
+               {sealed.content.path, sealed.content.old, sealed.content.new},
+             "the diff shown at approval must equal the diff that executed"
     end
   end
 

@@ -163,8 +163,7 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
           await_decision: fn _rid, _meta -> {:allow, "allow"} end
         )
 
-      assert {:approval_requested,
-              %{tool_name: "edit_file", request_id: rid, options: opts}} =
+      assert {:approval_requested, %{tool_name: "edit_file", request_id: rid, options: opts}} =
                Enum.find(events, &match?({:approval_requested, _}, &1))
 
       assert is_list(opts) and Enum.any?(opts, &(&1.kind == :allow_once))
@@ -262,13 +261,123 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
     end
   end
 
+  describe "the approval carries the PROPOSED DIFF (shown == done)" do
+    test "edit_file's approval_requested lifts {diff, path, old, new} computed before executing",
+         %{tmp: tmp} do
+      path = Path.join(tmp, "code.ex")
+      File.write!(path, "def x, do: 1\n")
+
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "edit_file",
+                 "arguments" => %{
+                   "path" => "code.ex",
+                   "old_string" => "def x, do: 1",
+                   "new_string" => "def x, do: 2"
+                 },
+                 "id" => "e1"
+               }
+             ]},
+            {:content, "done"}
+          ],
+          actions: Workspace.all(),
+          await_decision: fn _rid, _meta -> {:allow, "allow"} end
+        )
+
+      assert {:approval_requested, payload} =
+               Enum.find(events, &match?({:approval_requested, _}, &1))
+
+      assert payload.diff == true
+      assert payload.path == "code.ex"
+      assert payload.old == "def x, do: 1\n"
+      assert payload.new =~ "def x, do: 2"
+
+      # The diff shown at approval time is the diff that executed: the
+      # tool_result's old/new equals the approval's old/new.
+      assert {:tool_result, %{result: %{old: r_old, new: r_new}}} =
+               Enum.find(events, &match?({:tool_result, _}, &1))
+
+      assert {payload.old, payload.new} == {r_old, r_new}
+    end
+
+    test "write_file on a NEW file previews an all-adds diff (old is empty)", %{
+      tmp: tmp
+    } do
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "write_file",
+                 "arguments" => %{"path" => "brand_new.ex", "content" => "a\nb\n"},
+                 "id" => "w1"
+               }
+             ]},
+            {:content, "created"}
+          ],
+          actions: Workspace.all(),
+          await_decision: fn _rid, _meta -> {:allow, "allow"} end
+        )
+
+      assert {:approval_requested, %{diff: true, old: "", new: "a\nb\n"}} =
+               Enum.find(events, &match?({:approval_requested, _}, &1))
+    end
+  end
+
+  describe "staleness: the file must not change between question and answer" do
+    test "a drift after approval is NOT applied -- the honest stale result fires instead",
+         %{tmp: tmp} do
+      path = Path.join(tmp, "code.ex")
+      File.write!(path, "def x, do: 1\n")
+
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "edit_file",
+                 "arguments" => %{
+                   "path" => "code.ex",
+                   "old_string" => "def x, do: 1",
+                   "new_string" => "def x, do: 2"
+                 },
+                 "id" => "e1"
+               }
+             ]},
+            {:content, "done"}
+          ],
+          actions: Workspace.all(),
+          await_decision: fn _rid, _meta ->
+            # The file drifts under us BETWEEN the previewed diff and the
+            # answer -- the old_string is still present (so a naive edit
+            # WOULD apply), but the content the operator approved against is
+            # gone. The hash guard must catch it.
+            File.write!(path, "def x, do: 1\n# sneaked in\n")
+            {:allow, "allow"}
+          end
+        )
+
+      assert {:tool_result, %{name: "edit_file", result: {:error, :stale_approval}}} =
+               Enum.find(events, &match?({:tool_result, _}, &1))
+
+      # Our edit was NEVER applied -- the file keeps the drifted content.
+      assert File.read!(path) == "def x, do: 1\n# sneaked in\n"
+      refute File.read!(path) =~ "def x, do: 2"
+    end
+  end
+
   describe "honesty: recognized-but-unexecuted tool calls" do
     test "an unknown tool name yields an honest error tool_result, never silence" do
       events =
         run(
           [
-            {:tool_calls,
-             [%{"name" => "delete_everything", "arguments" => %{}, "id" => "x"}]},
+            {:tool_calls, [%{"name" => "delete_everything", "arguments" => %{}, "id" => "x"}]},
             {:content, "ok"}
           ],
           actions: Workspace.all(),

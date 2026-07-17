@@ -63,6 +63,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   """
 
   alias Raxol.Agent.Action.ToolConverter
+  alias Raxol.Agent.Actions.Workspace
   alias Raxol.Agent.Harness.ToolClassifier
 
   @default_max_iterations 10
@@ -190,8 +191,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
         emit(
           st,
-          {:done,
-           %{content: content || "", tool_results: [], usage: usage(response)}}
+          {:done, %{content: content || "", tool_results: [], usage: usage(response)}}
         )
 
       {:error, reason} ->
@@ -240,8 +240,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
         emit(
           st,
-          {:tool_result,
-           %{name: "unknown", result: {:error, :missing_tool_name}}}
+          {:tool_result, %{name: "unknown", result: {:error, :missing_tool_name}}}
         )
 
         %{role: :user, content: "[Tool error]: tool call had no name"}
@@ -260,16 +259,15 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
     options = [@allow_option, @deny_option]
 
+    # Compute the proposed change BEFORE asking, so the approval shows the
+    # operator the CONSEQUENCES of the answer (the ± diff), not truncated
+    # args. `preview` also captures the target's content hash -- the
+    # staleness anchor verified below.
+    preview = tool_preview(name, arguments)
+
     emit(
       st,
-      {:approval_requested,
-       %{
-         request_id: request_id,
-         tool_name: name,
-         action: name,
-         args: arguments,
-         options: options
-       }}
+      {:approval_requested, approval_payload(request_id, name, arguments, options, preview)}
     )
 
     decision =
@@ -283,17 +281,15 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       {:allow, option_id} ->
         emit(
           st,
-          {:approval_decided,
-           %{request_id: request_id, option_id: option_id, decision: :allow}}
+          {:approval_decided, %{request_id: request_id, option_id: option_id, decision: :allow}}
         )
 
-        execute(tc, name, st)
+        apply_after_allow(tc, name, preview, st)
 
       {:deny, option_id, reason} ->
         emit(
           st,
-          {:approval_decided,
-           %{request_id: request_id, option_id: option_id, decision: :deny}}
+          {:approval_decided, %{request_id: request_id, option_id: option_id, decision: :deny}}
         )
 
         emit(
@@ -307,6 +303,84 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
         }
     end
   end
+
+  # The proposed before/after image for the tools that mutate a file --
+  # computed WITHOUT writing, so the approval can render the exact diff. A
+  # preview that fails (missing/non-unique edit target) falls back to `:none`
+  # (the approval shows args, and execution surfaces the real error). Every
+  # other tool has no diff to show.
+  defp tool_preview("write_file", args),
+    do: preview_or_none(Workspace.preview_write(arg(args, "path"), arg(args, "content")))
+
+  defp tool_preview("edit_file", args),
+    do:
+      preview_or_none(
+        Workspace.preview_edit(
+          arg(args, "path"),
+          arg(args, "old_string"),
+          arg(args, "new_string")
+        )
+      )
+
+  defp tool_preview(_name, _args), do: :none
+
+  defp preview_or_none({:ok, diff}), do: {:ok, diff}
+  defp preview_or_none(_error), do: :none
+
+  defp arg(args, key) when is_map(args), do: Map.get(args, key)
+  defp arg(_args, _key), do: nil
+
+  # The approval payload: the base fields plus, when a diff was previewed,
+  # the `{path, old, new, language}` image the harness block renders as ±
+  # rows (`base_hash` stays here in the executor -- it is the staleness
+  # anchor, not something the operator needs to see).
+  defp approval_payload(request_id, name, arguments, options, {:ok, diff}) do
+    %{
+      request_id: request_id,
+      tool_name: name,
+      action: name,
+      args: arguments,
+      options: options,
+      diff: true,
+      path: diff.path,
+      old: diff.old,
+      new: diff.new,
+      language: diff.language
+    }
+  end
+
+  defp approval_payload(request_id, name, arguments, options, :none) do
+    %{
+      request_id: request_id,
+      tool_name: name,
+      action: name,
+      args: arguments,
+      options: options
+    }
+  end
+
+  # Execute an ALLOWED tool -- but first, for a previewed edit/write, verify
+  # the target still hashes to what it did at approval time. If it drifted,
+  # NEVER silently apply something other than what was approved: emit an
+  # honest stale result and ask the model to re-run (which re-previews the
+  # current diff). This is the label-vs-binding guarantee made real.
+  defp apply_after_allow(tc, name, {:ok, %{path: path, base_hash: base_hash}}, st) do
+    case Workspace.verify_unchanged(path, base_hash) do
+      :ok ->
+        execute(tc, name, st)
+
+      {:error, :stale} ->
+        emit(st, {:tool_result, %{name: name, result: {:error, :stale_approval}}})
+
+        %{
+          role: :user,
+          content:
+            "[Tool #{name} NOT applied]: #{path} changed after you approved the diff — re-run to review the current change"
+        }
+    end
+  end
+
+  defp apply_after_allow(tc, name, _no_preview, st), do: execute(tc, name, st)
 
   defp await(fun, request_id, meta) when is_function(fun, 2) do
     fun.(request_id, meta)

@@ -272,6 +272,85 @@ defmodule Raxol.Agent.Actions.Workspace do
     end
   end
 
+  @doc """
+  The SHA-256 (hex) of a file's content -- the staleness anchor. Captured
+  at approval time and re-checked at execution time so an edit/write can
+  never silently apply against a file that changed underneath the operator
+  between the question and the answer (the label-vs-binding guard).
+  """
+  @spec content_hash(String.t()) :: String.t()
+  def content_hash(content) when is_binary(content),
+    do: :crypto.hash(:sha256, content) |> Base.encode16(case: :lower)
+
+  @doc """
+  Compute the `{path, old, new, language, base_hash}` image of a proposed
+  `write_file` WITHOUT writing -- so the approval can show the operator the
+  exact diff `y` will produce. `old` is the current file (or `""` for a new
+  file, whose `base_hash` is `:absent`).
+  """
+  @spec preview_write(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def preview_write(path, content) when is_binary(content) do
+    with :ok <- guard_size(content),
+         {:ok, abs} <- Fs.resolve(path) do
+      {old, base_hash} = current_state(abs)
+
+      {:ok,
+       %{
+         path: path,
+         old: old,
+         new: content,
+         language: language_of(path),
+         base_hash: base_hash
+       }}
+    end
+  end
+
+  @doc """
+  Compute the `{path, old, new, language, base_hash}` image of a proposed
+  `edit_file` WITHOUT writing. Fails exactly as `do_edit/3` would (missing/
+  non-unique target), so an unshowable edit is refused before the question.
+  """
+  @spec preview_edit(String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, term()}
+  def preview_edit(path, old_string, new_string) do
+    with {:ok, abs} <- Fs.resolve(path),
+         {:ok, content} <- File.read(abs),
+         :ok <- guard_size(content),
+         {:ok, replaced} <- replace_unique(content, old_string, new_string) do
+      {:ok,
+       %{
+         path: path,
+         old: content,
+         new: replaced,
+         language: language_of(path),
+         base_hash: content_hash(content)
+       }}
+    end
+  end
+
+  @doc """
+  Verify the file at `path` still hashes to `base_hash` (the image captured
+  at approval time). `{:error, :stale}` when it drifted -- the caller must
+  then refuse to apply and re-ask, never blindly overwrite.
+  """
+  @spec verify_unchanged(String.t(), String.t() | :absent) ::
+          :ok | {:error, :stale} | {:error, term()}
+  def verify_unchanged(path, base_hash) do
+    with {:ok, abs} <- Fs.resolve(path) do
+      {_content, current_hash} = current_state(abs)
+      if current_hash == base_hash, do: :ok, else: {:error, :stale}
+    end
+  end
+
+  # Current on-disk state as `{content, hash}`; a missing file is
+  # `{"", :absent}` so "created since approval" is itself drift.
+  defp current_state(abs) do
+    case File.read(abs) do
+      {:ok, content} -> {content, content_hash(content)}
+      {:error, _} -> {"", :absent}
+    end
+  end
+
   # An edit MUST be unambiguous: the old_string has to occur exactly once,
   # or the model's intent is undefined and a blind replace could corrupt an
   # unrelated occurrence. Zero → :edit_target_not_found; more than one →

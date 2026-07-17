@@ -476,9 +476,59 @@ defmodule Raxol.Agent.Contract do
     }
   end
 
+  # A non-diff tool result: lift a human-readable `content` SUMMARY so the
+  # harness block renders a real receipt (entries count / bytes / matches /
+  # excerpt) instead of an empty row -- the structured result sits nested
+  # under `result`, where the block's `[:content]` extraction never looked.
   defp tool_result_extra(name, result) do
-    %{name: name, result: result}
+    base = %{name: name, result: result}
+
+    case result_summary(result) do
+      nil -> base
+      summary -> Map.put(base, :content, summary)
+    end
   end
+
+  # Per-tool result receipts. Read defensively (a tool may return an error
+  # tuple or an unexpected shape); an unrecognised result gets no summary
+  # (the block falls back to its own honest empty rendering rather than
+  # inspecting an arbitrary term into the transcript).
+  defp result_summary(%{entries: entries}) when is_list(entries) do
+    n = length(entries)
+    preview = entries |> Enum.take(20) |> Enum.map_join(", ", &to_string/1)
+    count = "#{n} #{plural(n, "entry", "entries")}"
+    if preview == "", do: count, else: count <> ": " <> preview
+  end
+
+  defp result_summary(%{content: content, truncated: truncated})
+       when is_binary(content) do
+    "#{byte_size(content)} bytes" <>
+      if(truncated, do: " (truncated)", else: "") <> result_excerpt(content)
+  end
+
+  defp result_summary(%{count: count}) when is_integer(count),
+    do: "#{count} #{plural(count, "match", "matches")}"
+
+  defp result_summary(%{matches: matches}) when is_list(matches),
+    do: "#{length(matches)} #{plural(length(matches), "match", "matches")}"
+
+  defp result_summary(%{type: type, size: size}) when is_integer(size),
+    do: "#{type}, #{size} bytes"
+
+  defp result_summary(%{stdout: out}) when is_binary(out),
+    do: "#{byte_size(out)} bytes" <> result_excerpt(out)
+
+  defp result_summary(_result), do: nil
+
+  defp result_excerpt(""), do: ""
+
+  defp result_excerpt(text) when is_binary(text) do
+    first = text |> String.split("\n", parts: 2) |> hd() |> String.slice(0, 80)
+    if first == "", do: "", else: " · " <> first
+  end
+
+  defp plural(1, singular, _plural), do: singular
+  defp plural(_n, _singular, plural), do: plural
 
   defp tool_unexecuted_marker(payload) do
     name = Map.get(payload, :name) || Map.get(payload, "name") || "unknown"
