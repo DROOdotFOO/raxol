@@ -136,7 +136,13 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
   # Waits for the next `{:handler_invoke, name, params, ctx, task_pid, ref}`
   # matching `name`, hands the task the closure to run, and returns
   # everything a test might need to script or observe the dispatch.
-  defp handle_next_invoke(name, fun, timeout \\ 500) do
+  # 2s default (not assert_receive's 100ms, nor a tight 500ms): the dispatch
+  # is real cross-process work and some callers (e.g. Inv-7) drive it only
+  # after a few hundred preceding wire messages, so under a loaded async suite
+  # the invoke can legitimately land later than a tight bound. Generous here is
+  # free -- assert_receive returns the instant the message arrives; the timeout
+  # only bites when it is genuinely absent, still far below any real hang.
+  defp handle_next_invoke(name, fun, timeout \\ 2_000) do
     assert_receive {:handler_invoke, ^name, params, ctx, task_pid, ref}, timeout
     send(task_pid, {:handler_run, ref, fun})
     %{params: params, ctx: ctx, task_pid: task_pid}
