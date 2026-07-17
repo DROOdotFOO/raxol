@@ -59,8 +59,9 @@ defmodule Raxol.AgentClientProtocol.AgentTest do
 
       assert Agent.callbacks() == expected
       # 13 core agent rows minus session/cancel (layer: :session_control, no
-      # callback) = 12, plus the additive `_raxol/session.load` ext row = 13.
-      assert length(Agent.callbacks()) == 13
+      # callback) = 12, plus the additive `_raxol/session.load` and
+      # `_raxol/session.steer` (Track E / U6-I) ext rows = 14.
+      assert length(Agent.callbacks()) == 14
     end
 
     test "logout is the sole arity-1 (params: nil, D1-6) callback" do

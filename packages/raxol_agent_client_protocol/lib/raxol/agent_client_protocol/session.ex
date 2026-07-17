@@ -113,6 +113,7 @@ defmodule Raxol.AgentClientProtocol.Session do
   alias Raxol.AgentClientProtocol.Schema.ContentChunk
   alias Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification
   alias Raxol.AgentClientProtocol.Schema.TextContent
+  alias Raxol.AgentClientProtocol.Session.SteerAdapter
   alias Raxol.AgentClientProtocol.Session.Turn
 
   @default_permission_timeout 600_000
@@ -148,6 +149,13 @@ defmodule Raxol.AgentClientProtocol.Session do
   # through the single-publisher Writer for durable, reattach-replayable sessions.
   @default_emitter Raxol.AgentClientProtocol.Session.Emitter.Direct
 
+  # The steer seam (Track E / U6-I). The DEFAULT refuses every steer with
+  # `{:error, :no_steer_channel}` and no-ops the turn hooks, so a base Session is
+  # byte-identical to frozen v2 (no steer state ever mutates). A live-steering
+  # deployment injects a real `SteerAdapter` (the `raxol_agent` side, closing over
+  # `Raxol.Agent.Steer`) via `:steer_adapter`.
+  @default_steer_adapter Raxol.AgentClientProtocol.Session.SteerAdapter.Unsupported
+
   @registry Raxol.AgentClientProtocol.SessionRegistry
 
   @type t :: %__MODULE__{
@@ -164,6 +172,8 @@ defmodule Raxol.AgentClientProtocol.Session do
           turn_seq: non_neg_integer(),
           idle_timer: reference() | nil,
           idle_epoch: non_neg_integer(),
+          steer_adapter: module(),
+          steer_state: term(),
           config: %{
             permission_timeout: timeout(),
             cancel_backstop_ms: pos_integer(),
@@ -184,6 +194,8 @@ defmodule Raxol.AgentClientProtocol.Session do
             turn_seq: 0,
             idle_timer: nil,
             idle_epoch: 0,
+            steer_adapter: @default_steer_adapter,
+            steer_state: nil,
             config: %{}
 
   # -- Public API -------------------------------------------------------------
@@ -291,6 +303,36 @@ defmodule Raxol.AgentClientProtocol.Session do
     GenServer.call(session, {:spawn_task, fun})
   end
 
+  @doc """
+  Resolve a steer request against the live turn (Track E / U6-I).
+
+  Redirects the running turn with new user input WITHOUT killing it. Runs the
+  injected `SteerAdapter`'s `expected_turn_id` compare-and-swap decision from the
+  Session's OWN mailbox — the single-writer serialization
+  `Raxol.Agent.Steer` requires, satisfied by construction (only this process
+  reads-modifies-writes the CAS state). Returns the honest CAS outcome
+  synchronously:
+
+    * `{:ok, {:accepted, ref}}` — the steer landed: the steering text was
+      forwarded to the running turn (the `{:acp_steer, text}` runner seam) and
+      one durable steer record was appended via the emitter.
+    * `{:ok, {:duplicate, ref}}` — idempotent re-delivery of an already-accepted
+      `client_msg_id` (§5.1); `ref` is the ORIGINAL accept, nothing new happens.
+    * `{:error, {:stale_turn, expected, actual}}` — the CAS lost (the turn ended,
+      or another steer won); nothing journaled, zero model effect.
+    * `{:error, :no_live_turn}` — no turn is running.
+    * `{:error, :client_msg_id_reuse}` — the idempotency key arrived carrying
+      different content (a client bug/attack, never a retry).
+    * `{:error, :no_steer_channel}` — no steer adapter is wired (the default).
+
+  `request` is a map `%{text: _, expected_turn_id: _, client_msg_id: _}` (see
+  `Raxol.AgentClientProtocol.Session.SteerAdapter.request/0`).
+  """
+  @spec steer(GenServer.server(), SteerAdapter.request()) :: SteerAdapter.result()
+  def steer(session, request) when is_map(request) do
+    GenServer.call(session, {:steer, request})
+  end
+
   # -- GenServer callbacks ----------------------------------------------------
 
   @impl true
@@ -310,6 +352,9 @@ defmodule Raxol.AgentClientProtocol.Session do
       emitter: Keyword.get(opts, :emitter, @default_emitter),
       journal: Keyword.get(opts, :journal),
       turn_seq: 0,
+      # Steer seam (Track E / U6-I): default = refuse (base v2 byte-identical).
+      steer_adapter: Keyword.get(opts, :steer_adapter, @default_steer_adapter),
+      steer_state: Keyword.get(opts, :steer_state),
       config: config
     }
 
@@ -379,8 +424,20 @@ defmodule Raxol.AgentClientProtocol.Session do
             updates_emitted?: false
           }
 
+          # Steer seam (Track E / U6-I): bind the running turn's CAS token to its
+          # per-session ordinal so a steer's `expected_turn_id` can match it. A
+          # no-op for the default (refusing) adapter — base v2 byte-identical.
+          steer_state = state.steer_adapter.turn_started(state.steer_state, turn_seq)
+
           # A live turn is never idle — disarm the reaper until the turn drains.
-          state = disarm_idle(%{state | turn: {:prompting, turn}, turn_seq: turn_seq})
+          state =
+            disarm_idle(%{
+              state
+              | turn: {:prompting, turn},
+                turn_seq: turn_seq,
+                steer_state: steer_state
+            })
+
           {:reply, :ok, state}
       end
     end
@@ -479,6 +536,30 @@ defmodule Raxol.AgentClientProtocol.Session do
 
   def handle_call({:spawn_task, _fun}, _from, state) do
     {:reply, {:error, :turn_over}, state}
+  end
+
+  # ---- steer (Track E / U6-I) -----------------------------------------------
+  #
+  # Run the injected adapter's CAS decision from THIS mailbox — the U6-I
+  # single-writer, satisfied by construction (only the Session process ever
+  # reads-modifies-writes `steer_state`). The full result is returned on the wire
+  # regardless of outcome (the honest vocabulary a Surface banner renders). Only
+  # an ACCEPT has side effects: it changes what the running turn does, so it
+  # forwards the steered text to the runner AND appends one durable steer record.
+  # Every rejection (and a duplicate — it references the original accept) changes
+  # nothing and journals nothing; it is still the synchronous reply.
+
+  def handle_call({:steer, request}, _from, state) do
+    {result, steer_state} = state.steer_adapter.resolve(state.steer_state, request)
+    state = %{state | steer_state: steer_state}
+
+    state =
+      case result do
+        {:ok, {:accepted, ref}} -> on_steer_accepted(state, ref, request)
+        _rejected_or_duplicate -> state
+      end
+
+    {:reply, result, state}
   end
 
   # ---- session/cancel (Connection direct cast, IC-5b) -----------------------
@@ -661,7 +742,14 @@ defmodule Raxol.AgentClientProtocol.Session do
         backstop_timer: timer
     }
 
-    drain_check(%{state | turn: {:cancelling, t}})
+    # Steer seam (Track E / U6-I): leaving the prompting state — clear the CAS
+    # token so a steer arriving while the turn is cancelling rejects
+    # `:no_live_turn` (a dying turn has no next boundary to inject at) rather than
+    # matching a token whose accept could never take effect. `finish/2` clears it
+    # again (idempotent) on the cancelling→idle drain. No-op for the default
+    # adapter — base v2 byte-identical.
+    steer_state = state.steer_adapter.turn_ended(state.steer_state)
+    drain_check(%{state | turn: {:cancelling, t}, steer_state: steer_state})
   end
 
   # Root leg — write-once (§3.2): the first root result wins.
@@ -713,8 +801,13 @@ defmodule Raxol.AgentClientProtocol.Session do
     # frame-count invariant (I17: exactly zero frames) is preserved Connection-side.
     # `respond?` is now vestigial (kept for documentation of the cancel leg).
     _ = state.conn_mod.reply(state.conn, t.reply_ref, rendered)
+    # Steer seam (Track E / U6-I): the turn drained — clear its CAS token so a
+    # steer arriving in the idle window between turns rejects `:no_live_turn`
+    # rather than landing on a dead turn. The dedup index (session-lifetime, §5.1)
+    # is preserved. No-op for the default adapter.
+    steer_state = state.steer_adapter.turn_ended(state.steer_state)
     # Back to idle → re-arm the idle-reap countdown from this last activity.
-    arm_idle(%{state | turn: :idle})
+    arm_idle(%{state | turn: :idle, steer_state: steer_state})
   end
 
   # Streaming guard #2 (W17-ctx, cleanroom spec §3.3 ">=1 update per
@@ -806,6 +899,41 @@ defmodule Raxol.AgentClientProtocol.Session do
 
   @spec put_turn(t(), :prompting | :cancelling, Turn.t()) :: t()
   defp put_turn(state, ts, %Turn{} = t), do: %{state | turn: {ts, t}}
+
+  # ---- steer accept side effects (Track E / U6-I) ---------------------------
+  #
+  # An accepted steer changes what the running turn does, so it (1) forwards the
+  # steered text to the turn runner and (2) appends ONE durable steer record via
+  # the emitter seam. Both require a live prompting turn: the adapter only accepts
+  # while a turn is live (its CAS token is bound at `turn_started`, cleared at
+  # `turn_ended`/cancel), but we guard on the Session's own turn state defensively
+  # so a race can never `send/2` to a stale `root_pid` or journal an orphan.
+  @spec on_steer_accepted(t(), map(), SteerAdapter.request()) :: t()
+  defp on_steer_accepted(%{turn: {:prompting, t}} = state, ref, request) do
+    # The runner seam: mirror the `:acp_cancel` interrupt — a plain message to the
+    # root task's pid. The injected turn runner MAY `receive`/peek `{:acp_steer,
+    # text}` between steps and fold the new input in at the next boundary (steer
+    # is "inject at the next boundary", not "kill now"). No channel process is
+    # introduced; the runner's own mailbox is the queue.
+    send(t.root_pid, {:acp_steer, Map.get(request, :text)})
+    emit_steer_accepted(state, ref, request)
+    state
+  end
+
+  defp on_steer_accepted(state, _ref, _request), do: state
+
+  # Append the durable steer record through the emitter's OPTIONAL `steer_accepted`
+  # hook (guarded like `reap` — an emitter that omits it, e.g. the default Direct,
+  # is a no-op). `Emitter.Journal` appends a `"steer"` record so a reattacher
+  # replays the redirected turn.
+  @spec emit_steer_accepted(t(), map(), SteerAdapter.request()) :: :ok
+  defp emit_steer_accepted(state, ref, request) do
+    if function_exported?(state.emitter, :steer_accepted, 3) do
+      _ = state.emitter.steer_accepted(state, ref, request)
+    end
+
+    :ok
+  end
 
   @spec normalize_config(map() | keyword()) :: %{
           permission_timeout: timeout(),
@@ -927,7 +1055,23 @@ defmodule Raxol.AgentClientProtocol.Session.Emitter do
   no-op — and any emitter that omits the callback is treated as a no-op.
   """
   @callback reap(session_state :: struct()) :: :ok
-  @optional_callbacks reap: 1
+
+  @doc """
+  OPTIONAL steer-accept hook (Track E / U6-I). Called once per ACCEPTED steer
+  (never on a reject or a duplicate). `ref` is the accept reference
+  (`%{turn_id, offset, client_msg_id}`) and `request` is the resolved steer map
+  (`%{text, expected_turn_id, client_msg_id}`). A durable emitter (`Journal`)
+  appends one `"steer"` record so a reattacher replays the redirected turn; the
+  default `Direct` emitter omits this callback (it keeps no journal) and the
+  Session treats an omitted callback as a no-op.
+  """
+  @callback steer_accepted(
+              session_state :: struct(),
+              ref :: map(),
+              request :: map()
+            ) :: :ok
+
+  @optional_callbacks reap: 1, steer_accepted: 3
 end
 
 defmodule Raxol.AgentClientProtocol.Session.Emitter.Direct do
@@ -1052,6 +1196,26 @@ defmodule Raxol.AgentClientProtocol.Session.Emitter.Journal do
   @impl true
   def turn_completed(state, rendered, turn_id) do
     _ = append(state, "turn_completed", completed_payload(turn_id, rendered), "system")
+    :ok
+  end
+
+  # Track E / U6-I: a durable `"steer"` record for an accepted steer so a
+  # reattacher replays the redirected turn. Taint `"user"` — the steering text is
+  # user input (§6, W20 never filters taint). `client_msg_id`/`text` are nested in
+  # `payload` (freeze §5.1 layout, the same place they land in the pure decision
+  # core's event). Degrades to a no-op with no live Writer.
+  @impl true
+  def steer_accepted(state, ref, request) do
+    payload = %{
+      "turnId" => Map.get(ref, :turn_id),
+      "offset" => Map.get(ref, :offset),
+      "payload" => %{
+        "clientMsgId" => Map.get(ref, :client_msg_id),
+        "text" => Map.get(request, :text)
+      }
+    }
+
+    _ = append(state, "steer", payload, "user")
     :ok
   end
 

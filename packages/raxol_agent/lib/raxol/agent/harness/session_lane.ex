@@ -9,6 +9,33 @@ defmodule Raxol.Agent.Harness.SessionLane do
 
   See `Raxol.Harness.SessionLane`'s own moduledoc for the interrupt/steer
   asymmetry rationale this module implements.
+
+  ## Steer branches on session capability (Track E / U6-I)
+
+  `steer/2` is no longer an unconditional refusal. It branches on whether the
+  session handle is **ACP-backed** — i.e. whether it carries an `:acp_session`
+  pid (a live `Raxol.AgentClientProtocol.Session`, the single-writer turn owner
+  that owns the running turn's `Raxol.Agent.Steer.TurnState` and resolves the
+  compare-and-swap from its own mailbox):
+
+    * **ACP-backed** (`:acp_session` present) — dispatch the steer to that
+      Session's synchronous `{:steer, payload}` call and return its CAS reply
+      verbatim (the honest vocabulary: `{:ok, {:accepted | :duplicate, ref}}`,
+      `{:error, {:stale_turn, _, _}}`, `{:error, :no_live_turn | :client_msg_id_reuse}`).
+      Bounded and translated: a slow/dead Session becomes `{:error, :timeout}` /
+      `{:error, :no_session}`, never a hung caller. The `{:steer, payload}`
+      message contract is shared BY CODE with `Raxol.AgentClientProtocol.Session.steer/2`
+      (this package does not depend on the ACP package; the ACP bridge that
+      minted the handle owns the pid).
+    * **Legacy** (no `:acp_session`) — the honest `{:error, :no_steer_channel}`
+      refusal STANDS. A non-ACP session runtime owns no live `TurnState`; there
+      is nothing to resolve the CAS against, so a queued-banner surface would be
+      dishonest. This refusal was always true for the legacy path and stays true.
+
+  `payload` is validated through `Raxol.Agent.Command.decode/1`'s `:steer` codec
+  (the one validation seam) before dispatch, so malformed input (empty text,
+  missing `expected_turn_id`) is a loud `{:error, {:invalid_command, reason}}`,
+  never a best-effort partial reaching the Session.
   """
 
   @behaviour Raxol.Harness.SessionLane
@@ -16,6 +43,11 @@ defmodule Raxol.Agent.Harness.SessionLane do
   alias Raxol.Agent.Command
   alias Raxol.Agent.Session
   alias Raxol.Agent.SessionStreamer
+
+  # Bounded steer dispatch: a steer is a synchronous typed decision, so a
+  # slow/dead ACP Session must translate to a typed error, never hang the caller
+  # (the behaviour's steer/2 contract calls this out explicitly).
+  @steer_timeout_ms 5_000
 
   @typedoc "A live session handle, per `Raxol.Harness.SessionLane.session/0`."
   @type session :: Raxol.Harness.SessionLane.session()
@@ -114,22 +146,55 @@ defmodule Raxol.Agent.Harness.SessionLane do
   def submit(_session, _request), do: {:error, :invalid_request}
 
   @doc """
-  Honest refusal: `{:error, :no_steer_channel}`, always.
+  Steer a running turn (Track E / U6-I). Branches on session capability:
 
-  No shipped session runtime owns a live turn's `Raxol.Agent.Steer.TurnState`
-  to resolve the compare-and-swap against (`Raxol.Agent.Steer`'s own
-  moduledoc documents that single-writer runtime integration as still
-  pending). Dispatching a fire-and-forget `:steer` command here
-  with no decision reply would let the harness surface render a queued
-  banner it has no way to know was ever actually accepted, rejected as
-  stale, or silently dropped -- exactly the dishonest-UI failure mode
-  `Raxol.Harness.SessionLane`'s own moduledoc calls out for why `steer/2`
-  is a synchronous reply in the first place. Refusing loudly here is more
-  honest than pretending to deliver.
+    * **ACP-backed** (`session[:acp_session]` is a pid) — validate the request
+      through `Raxol.Agent.Command.decode/1`'s `:steer` codec, then dispatch the
+      compare-and-swap synchronously to that `Raxol.AgentClientProtocol.Session`
+      and return its CAS outcome verbatim. Bounded: a slow/dead Session becomes
+      `{:error, :timeout}` / `{:error, :no_session}`.
+    * **Legacy** (no `:acp_session`) — the honest `{:error, :no_steer_channel}`
+      refusal (no live `TurnState` owner exists to resolve against).
+
+  See this module's moduledoc for the full rationale.
   """
   @impl Raxol.Harness.SessionLane
-  @spec steer(session(), map()) :: {:error, :no_steer_channel}
-  def steer(_session, _request), do: {:error, :no_steer_channel}
+  @spec steer(session(), map()) ::
+          {:ok, {:accepted | :duplicate, map()}}
+          | {:error, term()}
+  def steer(session, request) when is_map(request) do
+    case acp_session(session) do
+      nil ->
+        # Legacy (non-ACP) path: no live TurnState owner — honest refusal.
+        {:error, :no_steer_channel}
+
+      acp_pid ->
+        with {:ok, %Command{type: :steer, payload: payload}} <-
+               Command.decode(%{"type" => "steer", "payload" => request}) do
+          dispatch_steer(acp_pid, payload)
+        end
+    end
+  end
+
+  # The ACP-backed capability marker: a live `Raxol.AgentClientProtocol.Session`
+  # pid the ACP bridge stamped onto the handle. Absent ⇒ legacy ⇒ refuse.
+  @spec acp_session(session()) :: pid() | nil
+  defp acp_session(%{acp_session: pid}) when is_pid(pid), do: pid
+  defp acp_session(_session), do: nil
+
+  # Dispatch the validated steer payload to the ACP Session's synchronous
+  # `{:steer, payload}` call (message contract shared by code, not by a package
+  # dep). `client_msg_id` is defaulted so the payload always carries all three
+  # CAS fields. Bounded + translated so the caller is never hung by a slow/dead
+  # Session.
+  @spec dispatch_steer(pid(), map()) :: {:ok, {atom(), map()}} | {:error, term()}
+  defp dispatch_steer(acp_pid, payload) do
+    payload = Map.put_new(payload, :client_msg_id, nil)
+    GenServer.call(acp_pid, {:steer, payload}, @steer_timeout_ms)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+    :exit, _reason -> {:error, :no_session}
+  end
 
   @doc """
   `Process.monitor/1` on the session's `:pid`, when present. `nil` when

@@ -17,6 +17,26 @@ defmodule Raxol.Agent.Harness.SessionLaneTest do
   alias Raxol.Agent.Harness.SessionLane
   alias Raxol.Agent.SessionStreamer
 
+  # A stand-in for a live `Raxol.AgentClientProtocol.Session` (this package does
+  # not depend on the ACP package): it answers the shared `{:steer, payload}`
+  # call with a configured CAS reply and echoes the received payload to a sink.
+  defmodule FakeAcpSession do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
+
+    @impl true
+    def init(opts),
+      do: {:ok, %{reply: Keyword.fetch!(opts, :reply), sink: Keyword.get(opts, :sink)}}
+
+    @impl true
+    def handle_call({:steer, payload}, _from, state) do
+      if state.sink, do: send(state.sink, {:acp_steer_received, payload})
+      {:reply, state.reply, state}
+    end
+  end
+
   setup do
     start_supervised!({Registry, keys: :unique, name: Raxol.Agent.Registry})
 
@@ -91,8 +111,8 @@ defmodule Raxol.Agent.Harness.SessionLaneTest do
     end
   end
 
-  describe "steer/2" do
-    test "always returns {:error, :no_steer_channel} -- honest, no shipped runtime owns the CAS" do
+  describe "steer/2 — legacy (non-ACP) path" do
+    test "with no :acp_session the honest {:error, :no_steer_channel} refusal STANDS" do
       session = %{session_id: unique_session_id("lane-steer")}
 
       assert {:error, :no_steer_channel} =
@@ -100,6 +120,84 @@ defmodule Raxol.Agent.Harness.SessionLaneTest do
                  text: "go left instead",
                  expected_turn_id: "turn-1"
                })
+    end
+
+    test "a session carrying a non-pid :acp_session is still legacy (refusal)" do
+      session = %{session_id: unique_session_id("lane-steer"), acp_session: :not_a_pid}
+
+      assert {:error, :no_steer_channel} =
+               SessionLane.steer(session, %{text: "x", expected_turn_id: "turn-1"})
+    end
+  end
+
+  describe "steer/2 — ACP-backed path (Track E / U6-I)" do
+    test "dispatches the validated CAS payload to the ACP Session and returns its reply verbatim" do
+      accepted = {:ok, {:accepted, %{turn_id: "turn-1", offset: 1, client_msg_id: "m1"}}}
+      {:ok, fake} = FakeAcpSession.start_link(reply: accepted, sink: self())
+
+      session = %{session_id: unique_session_id("lane-steer-acp"), acp_session: fake}
+
+      assert ^accepted =
+               SessionLane.steer(session, %{
+                 text: "go left instead",
+                 expected_turn_id: "turn-1",
+                 client_msg_id: "m1"
+               })
+
+      # The ACP Session received the CAS payload with all three fields.
+      assert_receive {:acp_steer_received,
+                      %{text: "go left instead", expected_turn_id: "turn-1", client_msg_id: "m1"}}
+    end
+
+    test "an omitted client_msg_id is defaulted to nil before dispatch" do
+      {:ok, fake} = FakeAcpSession.start_link(reply: {:error, :no_live_turn}, sink: self())
+      session = %{session_id: unique_session_id("lane-steer-acp"), acp_session: fake}
+
+      assert {:error, :no_live_turn} =
+               SessionLane.steer(session, %{text: "hi", expected_turn_id: "turn-1"})
+
+      assert_receive {:acp_steer_received, %{client_msg_id: nil}}
+    end
+
+    test "a stale-turn CAS rejection flows back verbatim" do
+      stale = {:error, {:stale_turn, "turn-1", "turn-2"}}
+      {:ok, fake} = FakeAcpSession.start_link(reply: stale, sink: self())
+      session = %{session_id: unique_session_id("lane-steer-acp"), acp_session: fake}
+
+      assert ^stale =
+               SessionLane.steer(session, %{text: "late", expected_turn_id: "turn-1"})
+    end
+
+    test "empty text is rejected by the validation seam and never reaches the Session" do
+      {:ok, fake} = FakeAcpSession.start_link(reply: {:ok, :unreachable}, sink: self())
+      session = %{session_id: unique_session_id("lane-steer-acp"), acp_session: fake}
+
+      assert {:error, {:invalid_command, :empty_text}} =
+               SessionLane.steer(session, %{text: "   ", expected_turn_id: "turn-1"})
+
+      refute_receive {:acp_steer_received, _}
+    end
+
+    test "a missing expected_turn_id is rejected by the validation seam" do
+      {:ok, fake} = FakeAcpSession.start_link(reply: {:ok, :unreachable}, sink: self())
+      session = %{session_id: unique_session_id("lane-steer-acp"), acp_session: fake}
+
+      assert {:error, {:invalid_command, :missing_expected_turn_id}} =
+               SessionLane.steer(session, %{text: "go left"})
+
+      refute_receive {:acp_steer_received, _}
+    end
+
+    test "a dead ACP Session translates to a typed {:error, :no_session}, never a hung caller" do
+      {:ok, fake} = FakeAcpSession.start_link(reply: {:ok, :whatever})
+      ref = Process.monitor(fake)
+      GenServer.stop(fake)
+      assert_receive {:DOWN, ^ref, :process, ^fake, _}
+
+      session = %{session_id: unique_session_id("lane-steer-acp"), acp_session: fake}
+
+      assert {:error, :no_session} =
+               SessionLane.steer(session, %{text: "x", expected_turn_id: "turn-1"})
     end
   end
 

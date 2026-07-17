@@ -458,6 +458,25 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
       capability: nil,
       layer: :app,
       ext: :raxol
+    },
+    %{
+      # Track E / U6-I — live steering: a client→agent request, addressed by
+      # sessionId, that redirects the running turn with new user input WITHOUT
+      # killing it. The `Session` resolves the `expected_turn_id` compare-and-swap
+      # from its own mailbox (single-writer by construction) and returns the
+      # honest CAS outcome synchronously (`SteerResponse` vocabulary). Additive:
+      # a stock/older agent answers -32601 (unimplemented callback), identical to
+      # an unadvertised capability. Payload mirrors `Raxol.Agent.Command`'s
+      # `:steer` codec (text + expected_turn_id + client_msg_id).
+      wire: "_raxol/session.steer",
+      direction: :client_to_agent,
+      kind: :request,
+      callback: :raxol_steer_session,
+      params: ExtSchema.SteerRequest,
+      result: ExtSchema.SteerResponse,
+      capability: nil,
+      layer: :app,
+      ext: :raxol
     }
   ]
 
