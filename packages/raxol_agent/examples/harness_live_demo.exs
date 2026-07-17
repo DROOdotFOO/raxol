@@ -35,6 +35,21 @@
 #                             trailing /v1 is stripped here as a courtesy)
 #   AI_MODEL=...              model override for either live harness
 #
+# Debug instrument (DEBUG_WEB=true):
+#
+#   DEBUG_WEB=true            serve a live "TUI devtools" page (port from
+#                             RAXOL_DEV_PORT, default 4001; URL printed at
+#                             startup). Two panes: the Surface model as a
+#                             browser-devtools-style expandable tree
+#                             (history blocks, footer components in paint
+#                             order, session bookkeeping -- change-flash on
+#                             update), and a sequence-numbered event stream
+#                             (session events, raw tty bytes -> InputEvent
+#                             -> keymap resolution, teed device writes,
+#                             hex-escaped; kind-filterable). Implementation
+#                             in examples/support/harness_debug.exs; when
+#                             unset, this demo's behavior is unchanged.
+#
 # Keys while running (a REPL-ish loop):
 #
 #   type + ↵    submit the composed text as the next turn's prompt: a new
@@ -93,6 +108,14 @@
 defmodule Raxol.Examples.HarnessLiveDemo do
   @moduledoc false
 
+  # The debug-web modules are only loaded (Code.require_file) when
+  # DEBUG_WEB=true -- these remote calls never run otherwise.
+  @compile {:no_warn_undefined,
+            [
+              Raxol.Examples.HarnessDebug,
+              Raxol.Examples.HarnessDebug.Tap
+            ]}
+
   alias Raxol.Harness.LiveSessionDriver
   alias Raxol.Harness.Surface
   alias Raxol.Terminal.InlineDriver
@@ -103,6 +126,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
   @footer_rows 6
   @subscribe_wait_ms 5_000
   @one_shot_linger_ms 2_500
+  @one_shot_debug_linger_ms 12_000
 
   # The mirror routes events exactly like `Surface.handle_input/2` does
   # for the composing-focused, no-overlay case (keymap-first, then
@@ -145,6 +169,13 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     {width, rows} = geometry()
     tty? = Raxol.Terminal.TerminalUtils.has_terminal_device?()
 
+    # DEBUG_WEB=true: start the devtools web page + tap BEFORE the
+    # drivers so the paint device can be the tee. `debug` is nil when
+    # unset -- every debug seam below degrades to the exact previous
+    # wiring (device :stdio, raw_sink nil, no tap calls).
+    debug = maybe_start_debug_web()
+    paint_device = if debug, do: debug.device, else: :stdio
+
     # Lands in native scrollback once startup_push_up scrolls it away.
     IO.puts("harness live demo -- backend=#{label} session=#{session_id}")
 
@@ -158,7 +189,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     {:ok, driver} =
       LiveSessionDriver.start_link(
         lane: {Raxol.Agent.Harness.SessionLane, session},
-        device: :stdio,
+        device: paint_device,
         width: width,
         rows: rows,
         footer_rows: @footer_rows,
@@ -166,17 +197,21 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         notify: self()
       )
 
+    if debug, do: Raxol.Examples.HarnessDebug.Tap.attach_driver(debug.tap, driver)
+
     # The tty side, exactly as the fixture demo wires it -- except the
     # subscriber is THIS process, which forwards every parsed keypress to
     # the LiveSessionDriver as `{:inline_input, event}` (its documented
-    # input seam) after feeding the REPL mirror.
+    # input seam) after feeding the REPL mirror. With DEBUG_WEB, the tap
+    # additionally sees every PRE-parse tty chunk via `:raw_sink`.
     {:ok, inline} =
       InlineDriver.start_link(
         subscriber: self(),
         device: :stdio,
         rows: rows,
         probe?: false,
-        tty?: tty?
+        tty?: tty?,
+        raw_sink: debug && debug.tap
       )
 
     try do
@@ -185,6 +220,16 @@ defmodule Raxol.Examples.HarnessLiveDemo do
       # never emitted to zero subscribers (keystone test convention).
       case wait_for_subscription(session_id, @subscribe_wait_ms) do
         :ok ->
+          # Tap subscribes only AFTER the driver's forwarder landed --
+          # subscribing earlier would make wait_for_subscription/2 see
+          # the tap and report :ok before the driver could hear turn 1.
+          if debug do
+            Raxol.Examples.HarnessDebug.Tap.subscribe_session(
+              debug.tap,
+              session_id
+            )
+          end
+
           :ok
 
         :timeout ->
@@ -211,6 +256,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         backend_opts_fun: backend_opts_fun,
         turn_task: nil,
         queue: [],
+        tap: debug && debug.tap,
         mode: if(one_shot, do: :one_shot, else: :interactive)
       }
 
@@ -261,7 +307,18 @@ defmodule Raxol.Examples.HarnessLiveDemo do
   # through to the composer.
   defp handle_msg(state, {:inline_input, event}) do
     send(state.driver, {:inline_input, event})
-    {:cont, feed_mirror(state, event)}
+
+    # One normalize + resolve, shared by the tap entry and the mirror.
+    # The resolution here uses the MIRROR's context (composing-focused,
+    # no overlay) -- the same honest limitation the mirror documents.
+    norm = InputEvent.normalize(event)
+    resolution = Keymap.resolve(norm, @mirror_keymap_context)
+
+    if state.tap do
+      Raxol.Examples.HarnessDebug.Tap.input(state.tap, event, norm, resolution)
+    end
+
+    {:cont, feed_mirror(state, event, resolution)}
   end
 
   # The driver ended its loop (q on empty composer) -- teardown runs in
@@ -277,10 +334,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
   defp handle_msg(state, _other), do: {:cont, state}
 
-  defp feed_mirror(state, event) do
-    norm = InputEvent.normalize(event)
-
-    case Keymap.resolve(norm, @mirror_keymap_context) do
+  defp feed_mirror(state, event, resolution) do
+    case resolution do
       :passthrough ->
         {mirror, commands} = Composer.handle_event(event, state.mirror, %{})
 
@@ -372,7 +427,10 @@ defmodule Raxol.Examples.HarnessLiveDemo do
   # enough for the tail of the reveal to seal, still forwarding input,
   # then exit 0 on our own.
   defp maybe_enter_linger(%{mode: :one_shot} = state) do
-    deadline = System.monotonic_time(:millisecond) + @one_shot_linger_ms
+    # With the debug web up, linger longer -- the instrument is the
+    # point, and a smoke run needs time to curl the page mid-run.
+    linger_ms = if state.tap, do: @one_shot_debug_linger_ms, else: @one_shot_linger_ms
+    deadline = System.monotonic_time(:millisecond) + linger_ms
     %{state | mode: {:linger, deadline}}
   end
 
@@ -397,8 +455,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         )
 
       true ->
-        {Raxol.Agent.Backend.Mock,
-         fn prompt -> [response: mock_response(prompt)] end, "mock"}
+        {Raxol.Agent.Backend.Mock, fn prompt -> [response: mock_response(prompt)] end, "mock"}
     end
   end
 
@@ -426,14 +483,53 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         # Backend.HTTP's :openai provider appends /v1/chat/completions
         # itself -- strip a conventionally-supplied trailing /v1.
         [
-          base_url:
-            url |> String.trim_trailing("/") |> String.trim_trailing("/v1")
+          base_url: url |> String.trim_trailing("/") |> String.trim_trailing("/v1")
         ]
     end
   end
 
   defp mock_response(prompt) do
     "the mock answer — live harness echo of: #{prompt}"
+  end
+
+  # -- debug web (DEBUG_WEB=true) ---------------------------------------------
+
+  # Boots the devtools instrument: endpoint config FIRST (Phoenix
+  # endpoints read config at compile time, and the support file is
+  # compiled by Code.require_file below), then the support modules, then
+  # PubSub + Tap + DeviceTee + Endpoint. Returns nil when DEBUG_WEB is
+  # unset -- the demo then runs byte-identically to before.
+  defp maybe_start_debug_web do
+    if System.get_env("DEBUG_WEB") in ["true", "1"] do
+      port =
+        case System.get_env("RAXOL_DEV_PORT") do
+          nil -> 4001
+          explicit -> String.to_integer(explicit)
+        end
+
+      Application.put_env(:raxol_agent, Raxol.Examples.HarnessDebug.Endpoint,
+        http: [ip: {127, 0, 0, 1}, port: port],
+        server: true,
+        secret_key_base: "harness-debug-demo-" |> String.duplicate(4) |> binary_part(0, 64),
+        live_view: [signing_salt: "harness-debug-lv"],
+        pubsub_server: Raxol.Examples.HarnessDebug.PubSub,
+        check_origin: false,
+        render_errors: [
+          formats: [html: Raxol.Examples.HarnessDebug.ErrorHTML],
+          layout: false
+        ]
+      )
+
+      Code.require_file(Path.join(__DIR__, "support/harness_debug.exs"))
+
+      {:ok, ctx} =
+        Raxol.Examples.HarnessDebug.start(real_device: :stdio, port: port)
+
+      # Printed pre-push-up, so it lands in native scrollback with the
+      # backend banner.
+      IO.puts("harness debug web: #{ctx.url}")
+      ctx
+    end
   end
 
   # -- plumbing --------------------------------------------------------------
