@@ -444,6 +444,7 @@ defmodule Raxol.Harness.Surface do
 
   alias Raxol.Harness.Fixture.Session
   alias Raxol.Harness.Projection
+  alias Raxol.Harness.RecencyPolicy
   alias Raxol.Harness.SealFrontier
   alias Raxol.Terminal.ScrollRegionManager
   alias Raxol.Harness.StatusStrip
@@ -957,9 +958,19 @@ defmodule Raxol.Harness.Surface do
     %{model | authority: authority, painted_count: model.painted_count + 1}
   end
 
+  # Called from seal_block/2 -- the print-once paint -- so the grade
+  # computed here IS the seal-time grade (see RecencyPolicy's moduledoc,
+  # "Seal-time grading"): painted history is never re-graded because it
+  # is never repainted. The grade trusts source_events' journal order
+  # and durable completeness -- both guaranteed upstream
+  # (Recovery.filter_ids/1 id-monotonicity; un-windowed durable-only
+  # retention); see RecencyPolicy.grade_block/2's input contract.
   defp render_block_lines(block, model, mode) do
+    prominence =
+      RecencyPolicy.grade_block(block, model.projection.source_events)
+
     block
-    |> BlockBody.render(%{width: model.width})
+    |> BlockBody.render(%{width: model.width, prominence: prominence})
     |> ViewText.lines(model.width, mode)
   end
 
