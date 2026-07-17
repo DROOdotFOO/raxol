@@ -1270,8 +1270,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   # decision, not a convenience: the user echo is a claim of AUTHORSHIP
   # ("you said this"), so mislabeling machine output as the user is the
   # harmful direction. Anything that is not an exact user marker --
-  # absent, unknown, or hostile (`"\e[2Juser"`) -- resolves `:assistant`,
-  # the unmarked voice.
+  # absent, unknown, or hostile (an ESC-prefixed "user" with control
+  # bytes smuggled in) -- resolves `:assistant`, the unmarked voice.
   defp extract_role(events) do
     events |> find_in_events(@role_paths) |> normalize_role()
   end
