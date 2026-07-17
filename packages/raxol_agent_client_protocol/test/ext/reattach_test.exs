@@ -48,7 +48,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
 
   # A registered Writer over a test-owned Mem journal (the handle outlives the
   # Writer). Genesis (session_created @1) is appended on the first op.
-  defp start_writer(records \\ []) do
+  # `writer_opts` are extra `Writer.start_link/1` opts (e.g. the area-B
+  # `:journal_subscriber_credit` knob J6 drives to force REAL lag).
+  defp start_writer(records \\ [], writer_opts \\ []) do
     sid = "sess-" <> hex()
     {:ok, j} = Mem.open(sid)
 
@@ -56,7 +58,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       start_supervised!(
         %{
           id: {:writer, sid},
-          start: {Writer, :start_link, [[session_id: sid, journal: {Mem, j}]]},
+          start: {Writer, :start_link, [[session_id: sid, journal: {Mem, j}] ++ writer_opts]},
           restart: :temporary
         },
         restart: :temporary
@@ -396,36 +398,53 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
   end
 
   # -- J6: Lagged heals from last_offset + 1 ----------------------------------
+  #
+  # De-green-washed (GW-1): J6 no longer hand-delivers `{:reattach_lagged, …}`
+  # (a message `lib/` never produced). It drives REAL lag through a Writer with a
+  # tiny `:journal_subscriber_credit` (area B's producer) so the runtime emits
+  # the Lagged, then asserts the client heals from `last_offset + 1` losslessly.
+  # The subscriber's consumer-clause reaction (emit terminal Lagged on its OWN
+  # forward_hi, then stop) is its own separately-named unit test below.
 
-  describe "J6 — Lagged disconnect and lossless heal" do
+  describe "J6 — Lagged disconnect and lossless heal (REAL runtime lag)" do
     test "Lagged carries the subscriber's own last-forwarded offset; +1 heals dup-free" do
+      # Tiny per-subscriber credit: live publishes past it force the Writer to
+      # emit {:reattach_lagged, sid, sent_hi} — PRODUCED by the runtime, not faked.
       {sid, j, w} =
-        start_writer([
-          {"session_update", %{"i" => 1}, "agent"},
-          {"session_update", %{"i" => 2}, "agent"}
-        ])
+        start_writer(
+          [{"session_update", %{"i" => 0}, "agent"}],
+          subscriber_credit: 1
+        )
 
       {conn, _ref, sub, :deferred} = attach(sid, j)
       _ = sync(sub)
-      last = List.last(delivered_offsets(conn))
-      # forward_hi == last delivered offset (= h here).
-      assert last == Mem.high_watermark(j)
 
-      # Force lag: the Writer's conservative view may differ; the SUBSCRIBER's
-      # own forward counter is what goes on the wire (exactness).
-      send(sub, {:reattach_lagged, sid, 999})
-      _ = sync(sub)
+      mon = Process.monitor(sub)
+
+      # Drain this subscriber's credit with a handful of live appends; the
+      # exhausting publish makes the Writer send the Lagged and drop the sub.
+      # (The exact triggering offset is B's accounting — assertions below do not
+      # hardcode it, so any reasonable credit semantics greens this.)
+      for i <- 1..5, do: {:ok, _} = Writer.append(w, "session_update", %{"i" => i}, "agent")
+
+      # The subscriber converts the runtime Lagged into a terminal wire signal
+      # and stops (client-driven reattach is the heal, bus §7).
+      assert_receive {:DOWN, ^mon, :process, ^sub, :normal}, 1_000
 
       lagged =
         Enum.find(notifies(conn), fn {:notify, m, _} -> m == "_raxol/session.lagged" end)
 
-      assert {:notify, "_raxol/session.lagged", %{"lastOffset" => ^last}} = lagged
+      assert {:notify, "_raxol/session.lagged", %{"lastOffset" => wire_last}} = lagged
+      assert is_integer(wire_last)
 
-      # Heal: reattach from last_offset + 1 ⇒ the union is gap/dup-free.
-      {:ok, _} = Writer.append(w, "session_update", %{"i" => 3}, "agent")
-      {conn2, _r2, sub2, :deferred} = attach(sid, j, %{from_offset: last + 1})
+      # Heal: reattach from the wire's lastOffset + 1 ⇒ the union is gap/dup-free.
+      {conn2, _r2, sub2, :deferred} = attach(sid, j, %{from_offset: wire_last + 1})
       _ = sync(sub2)
-      assert delivered_offsets(conn2) == Enum.to_list((last + 1)..Mem.high_watermark(j))
+      hwm = Mem.high_watermark(j)
+      expected = Enum.filter(1..hwm//1, &(&1 > wire_last))
+      assert delivered_offsets(conn2) == expected
+      # No offset the client already held (<= wire_last) is re-delivered.
+      refute Enum.any?(delivered_offsets(conn2), &(&1 <= wire_last))
     end
 
     test "DEAD reattach-from-last_offset re-delivers last_offset (dup)" do
@@ -446,6 +465,68 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       {conn_bad, _r2, sub_bad, :deferred} = attach(sid, j, %{from_offset: last})
       _ = sync(sub_bad)
       assert last in delivered_offsets(conn_bad)
+    end
+  end
+
+  # -- Subscriber consumer clauses (unit): Lagged + cancel both stop the tail --
+
+  describe "subscriber lifecycle — Lagged and $/cancel_request stop the live tail" do
+    test "on {:reattach_lagged, …} the subscriber emits its OWN forward_hi then stops" do
+      # A direct-delivery unit test of the consumer clause (the manufactured send
+      # that USED to masquerade as J6): the Writer's 3rd element is conservative;
+      # the SUBSCRIBER's own forward counter is what goes on the wire (exactness).
+      {sid, j, _w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+      {conn, _ref, sub, :deferred} = attach(sid, j)
+      _ = sync(sub)
+      last = List.last(delivered_offsets(conn))
+      assert last == Mem.high_watermark(j)
+
+      mon = Process.monitor(sub)
+      send(sub, {:reattach_lagged, sid, 999})
+
+      # Terminal: emit Lagged, then STOP (no lingering detached process).
+      assert_receive {:DOWN, ^mon, :process, ^sub, :normal}, 500
+
+      lagged =
+        Enum.find(notifies(conn), fn {:notify, m, _} -> m == "_raxol/session.lagged" end)
+
+      assert {:notify, "_raxol/session.lagged", %{"lastOffset" => ^last}} = lagged
+    end
+
+    test "on {:acp_reply_cancelled, ref} the subscriber unsubscribes and stops (no further frames)" do
+      # S3: the Subscriber is the adopter (delegate_reply), so a $/cancel_request
+      # on the load reaches it as {:acp_reply_cancelled, reply_ref}. The peer
+      # abandoned the request ⇒ the live tail MUST stop.
+      {sid, j, w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+      {conn, ref, sub, :deferred} = attach(sid, j)
+      _ = sync(sub)
+      before = length(delivered_offsets(conn))
+
+      mon = Process.monitor(sub)
+      send(sub, {:acp_reply_cancelled, ref})
+      assert_receive {:DOWN, ^mon, :process, ^sub, :normal}, 500
+
+      # It unsubscribed from the Writer — severed from the live tail.
+      assert %{subscribers: subs} = :sys.get_state(w)
+      assert subs == %{}
+
+      # A subsequent live append reaches NO further frame (subscriber gone).
+      {:ok, _} = Writer.append(w, "session_update", %{"i" => 2}, "agent")
+      Process.sleep(20)
+      assert length(delivered_offsets(conn)) == before
+    end
+
+    test "a non-matching {:acp_reply_cancelled, other_ref} does NOT stop the subscriber" do
+      # Only the subscriber's OWN reply_ref cancels it; a stray ref falls through
+      # to the catch-all no-op (a different request's cancel must not tear us down).
+      {sid, j, _w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+      {_conn, _ref, sub, :deferred} = attach(sid, j)
+      _ = sync(sub)
+
+      mon = Process.monitor(sub)
+      send(sub, {:acp_reply_cancelled, make_ref()})
+      refute_receive {:DOWN, ^mon, :process, ^sub, _}, 100
+      assert Process.alive?(sub)
     end
   end
 

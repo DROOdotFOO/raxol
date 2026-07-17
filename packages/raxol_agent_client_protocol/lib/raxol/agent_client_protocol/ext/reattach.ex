@@ -474,9 +474,13 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
     {:noreply, state}
   end
 
-  # Lagged (§5): the subscriber's OWN last-forwarded offset goes on the wire, so
-  # `+1` heals dup-free (§4.2 corollary). Emit terminal Lagged, then detach.
-  def handle_info({:reattach_lagged, _sid, _writer_hi}, state) do
+  # Lagged (§5): the Writer exhausted this subscriber's credit and produced the
+  # `{:reattach_lagged, session_id, last_offset}` heal signal (its own conservative
+  # `last_offset` is ignored — the subscriber's OWN last-forwarded offset goes on
+  # the wire, so `+1` heals dup-free, §4.2 corollary). Emit the TERMINAL Lagged,
+  # unsubscribe, and STOP: the heal is a client-driven fresh reattach (bus §7), so
+  # nothing further may leave this process.
+  def handle_info({:reattach_lagged, _sid, _last_offset}, state) do
     _ =
       state.conn_mod.notify(state.conn, "_raxol/session.lagged", %{
         "sessionId" => state.session_id,
@@ -484,7 +488,20 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
       })
 
     _ = unsubscribe(state, state.live)
-    {:noreply, %{state | live: :detached}}
+    {:stop, :normal, %{state | live: :detached}}
+  end
+
+  # S3: the peer cancelled the load request (`$/cancel_request`). Because the
+  # Subscriber IS the adopter of the load reply (IC-4 `delegate_reply`), the
+  # Connection routes the cancel here as `{:acp_reply_cancelled, reply_ref}`. The
+  # peer abandoned the request, so the live tail MUST stop — otherwise a granted
+  # attach keeps streaming history-tail + the PERMANENT live tail to a client that
+  # no longer wants it. Unsubscribe from the Writer and terminate; emit NO frames
+  # (the id was abandoned — the Connection suppresses the reply already, I17
+  # parity). Stopping also disarms the CDI-6 expiry timer with the process.
+  def handle_info({:acp_reply_cancelled, rref}, %{reply_ref: rref} = state) do
+    _ = unsubscribe(state, state.live)
+    {:stop, :normal, %{state | live: :detached}}
   end
 
   # CDI-6: mid-attach expiry — force-close the live tail at grant.expires_at.
