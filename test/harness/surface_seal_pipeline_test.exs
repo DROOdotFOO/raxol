@@ -336,6 +336,43 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
       end
     end
 
+    test "a refused seal write keeps the unsealed block visible in the footer preview (the display half of retry-not-vanish)" do
+      # The state half of retry-not-vanish (the test above) proves the
+      # block stays unsealed for retry. This is the DISPLAY half: while
+      # it waits, the block must still be somewhere the operator can see
+      # -- it is not in history (the device refused those bytes), so the
+      # footer's pending preview is its only honest home. Deriving the
+      # preview from `scan_frontier/3`'s tail_start hides it: the scan is
+      # the PRE-commit projection ("what would remain after an ideal
+      # commit"), which consumes committable entries -- including the one
+      # whose write just failed -- so the failed block lands BEFORE
+      # tail_start and vanishes from both surfaces at once. The preview
+      # must key on the committed cursor (painted_count) instead.
+      {device, sink} =
+        FailingDevice.start(fail_when: seal_write_with(@marker), mode: :always)
+
+      model = new_model(message_events(@marker <> " body"), device: device)
+      model = advance_to_pending_flush(model)
+
+      # The flushing frame: the seal write is refused, the block stays
+      # unsealed (state half, pinned above).
+      {model, :ok} = Surface.advance(model)
+      assert model.painted_count == 0
+
+      # Force a full-footer keyframe (resize/2 keyframes unconditionally;
+      # footer rows are CUP-positioned, never \r\n-carrying, so the
+      # :always device accepts them) and read exactly its bytes: the
+      # unsealed block's content MUST be painted in the footer preview.
+      read = fn -> FailingDevice.confirmed_bytes(sink) end
+
+      {_model, keyframe_bytes} =
+        frame_bytes(read, fn -> Surface.resize(model, @width, @rows) end)
+
+      assert occurrences(keyframe_bytes, @marker) >= 1,
+             "an unsealed (refused-write) block must stay visible in the " <>
+               "footer preview -- invisible-but-retrying is under-reporting"
+    end
+
     test "post-seal fill protection: a fold override on an already-painted block is rejected and stores nothing" do
       # No placeholder-fill path against sealed content exists in this
       # codebase (grepped; the SessionRecap pattern has no analogue) -- so

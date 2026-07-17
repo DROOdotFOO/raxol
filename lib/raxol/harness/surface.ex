@@ -254,11 +254,25 @@ defmodule Raxol.Harness.Surface do
   The "which blocks may seal" decision itself now lives in
   `Raxol.Harness.SealFrontier` (a shared classifier, not restated per
   consumer). `frontier_entries/1` expresses the foldable window described
-  below as the frontier's `pending_input?` hold on the newest block, and
-  both the seal pass (`paint_pending_blocks/1`) and the footer's pending
-  preview (`pending_block/1`) consult `frontier_scan/1` -- the same
-  entries, the same classifier -- so they can never disagree on where the
-  frontier stops.
+  below as the frontier's `pending_input?` hold on the newest block; the
+  seal pass (`paint_pending_blocks/1`) walks it via `commit_walk/5`, and
+  the footer's pending preview (`pending_block/1`) shows the first block
+  past the walk's own committed cursor (`painted_count`) -- the
+  post-commit truth, which equals the pre-commit scan's `tail_start` on
+  every successful frame and stays honest (block still visible) when a
+  seal write is refused. One classifier decides where the frontier
+  stops; the cursor records where it actually got to.
+
+  The preview shows ONE block (two lines of it). Today the two never
+  differ: the only frontier hold a shipped producer can create is the
+  foldable window on the NEWEST block, so the unsealed suffix past the
+  cursor is at most one block long (pinned by the tail-bound test in
+  `test/harness/surface_frontier_feed_test.exs`). The moment a producer
+  emits live blocks (a mid-list awaiting-input approval holding several
+  finalized blocks behind it), that bound breaks and the one-block
+  preview under-reports -- the pinning test fails loudly then, and the
+  multi-block tail rendering it forces is the live-lane (T13b) unit's
+  decision, not silently absorbed here.
 
   `Raxol.UI.Components.Harness.Block.seal` is an item-LIFECYCLE field:
   `BlockBuilder` only ever constructs a block once its source item(s)
@@ -799,16 +813,14 @@ defmodule Raxol.Harness.Surface do
   defp adopt_frame_resize(model, {width, rows}),
     do: adopt_resize(model, width, rows)
 
-  defp do_advance(
-         %{revealed: revealed, events: events, painted_count: painted} = model,
-         _now
-       )
-       when revealed >= length(events) and
-              painted >= length(model.projection.blocks) do
-    {model, :done}
+  # Done-ness is stated exactly once, in `done?/1` -- this entry check
+  # and the post-frame check below both consult it, so "everything
+  # revealed and everything sealed" can never mean two different things.
+  defp do_advance(model, now) do
+    if done?(model), do: {model, :done}, else: run_advance(model, now)
   end
 
-  defp do_advance(model, now) do
+  defp run_advance(model, now) do
     model = heal_sync(model)
     revealed = min(model.revealed + 1, length(model.events))
     events_so_far = Enum.take(model.events, revealed)
@@ -824,11 +836,7 @@ defmodule Raxol.Harness.Surface do
       |> reconcile_unread()
       |> seal_frame(events_so_far, now)
 
-    finished? =
-      model.revealed >= length(model.events) and
-        model.painted_count >= length(model.projection.blocks)
-
-    {model, if(finished?, do: :done, else: :ok)}
+    {model, if(done?(model), do: :done, else: :ok)}
   end
 
   # A frame that seals at least one block AND repaints the footer
@@ -967,7 +975,7 @@ defmodule Raxol.Harness.Surface do
     |> Enum.map(fn {block, index} ->
       %{
         kind: block.kind,
-        committed?: index < model.painted_count,
+        committed?: block_sealed?(model, index),
         running?: Block.live?(block),
         pending_input?:
           awaiting_input?(block) or
@@ -975,6 +983,24 @@ defmodule Raxol.Harness.Surface do
       }
     end)
   end
+
+  # THE committed-marker mapping, stated exactly once: block `index` is
+  # sealed (physically painted into print-once history) iff it sits below
+  # the `painted_count` high-water mark -- the mark only ever advances a
+  # contiguous prefix, so the comparison IS the committed set. Both the
+  # frontier feed above (`committed?`) and the fold fill-guard
+  # (`apply_fold_toggle/2` -- the one mutation channel aimed at a block)
+  # consult this one predicate, so the "what counts as sealed" boundary
+  # can never drift between the classifier's view and the guard's
+  # (boundary-agreement pinned in
+  # test/harness/surface_frontier_feed_test.exs).
+  # No `index >= 0` guard on purpose: a degenerate negative index (no
+  # producer can build one -- `move_focus/2` clamps at 0 -- but the
+  # payload is data) classifies as "sealed" and lands on the honest
+  # refusal notice, never a crash mid-input-frame. Fail-closed: the
+  # restrictive answer for a nonsense index is "not foldable."
+  defp block_sealed?(model, index) when is_integer(index),
+    do: index < model.painted_count
 
   # A live approval block is, per `Block`'s own contract, a question still
   # waiting on the user -- the genuine awaiting-input feed for the
@@ -984,20 +1010,27 @@ defmodule Raxol.Harness.Surface do
     do: Block.live?(block) and block.kind == :approval
 
   @doc """
-  The shared frontier consultation every consumer in this module goes
-  through: `SealFrontier.scan_frontier/3` over `frontier_entries/1`.
-  `tail_start` is both the seal pass's paint target and the first block
-  the footer's pending preview may show -- one number, so the two can
-  never disagree. `turn_running?` is derived from the status snapshot
-  (`turn_completed`); with today's entry mapping (no running entries,
-  window hold unconditional) the scan result is independent of turn
-  state, so the one-step-stale status at seal time is harmless.
+  The shared PRE-commit frontier consultation: `SealFrontier.scan_frontier/3`
+  over `frontier_entries/1`. Two consumers read it, both BEFORE the
+  commit pass runs: `paint_pending_blocks/1`'s detach target
+  (`tail_start` -- every block at or past "about to seal" gets its
+  content detached), and `seal_frame/3`'s per-frame synchronized-output
+  bracket decision (`will_commit` predicts "this frame seals >= 1
+  block" -- same entries, same classifier, so it can never disagree
+  with what the walk actually attempts). `turn_running?` is derived
+  from the status snapshot (`turn_completed`); with today's entry
+  mapping (no running entries, window hold unconditional) the scan
+  result is independent of turn state, so the one-step-stale status at
+  seal time is harmless.
 
-  A third consumer: `seal_frame/3`'s per-frame synchronized-output
-  bracket decision reads `will_commit` from this same scan to predict
-  "this frame seals >= 1 block" BEFORE the commit pass actually runs --
-  same entries, same classifier, so it can never disagree with what
-  `paint_pending_blocks/1` (via `commit_walk/5`) actually does.
+  The footer's pending preview (`pending_block/1`) deliberately does
+  NOT read this scan: it keys on the committed cursor
+  (`painted_count`) instead, because the scan consumes committable
+  entries and would therefore hide a block whose seal write was just
+  REFUSED (see `pending_block/1`'s comment for the full rationale).
+  The two agree on every successful frame (the scan/walk-agreement
+  property); they diverge exactly when a write fails, and the cursor
+  is the display-honest side of that divergence.
   """
   @spec frontier_scan(t()) :: SealFrontier.scan()
   def frontier_scan(model) do
@@ -1590,8 +1623,19 @@ defmodule Raxol.Harness.Surface do
     %{model | stub_notice: "» no block focused — jump to a block first (g)"}
   end
 
-  defp apply_fold_toggle(model, index)
-       when is_integer(index) and index < model.painted_count do
+  # The sealed?/unsealed? split below goes through `block_sealed?/2` --
+  # the SAME predicate that feeds the frontier classifier's `committed?`
+  # flag (see `frontier_entries/1`) -- so the fill-guard's boundary and
+  # the classifier's can never disagree by construction.
+  defp apply_fold_toggle(model, index) when is_integer(index) do
+    if block_sealed?(model, index) do
+      sealed_fold_refusal(model, index)
+    else
+      store_fold_override(model, index)
+    end
+  end
+
+  defp sealed_fold_refusal(model, index) do
     # Already physically painted -- seal-time-only: sealed history is
     # never repainted, so a fold toggle on it is a documented no-op,
     # exactly like `Block.fold_allowed?/2`'s post-seal gate (enforced
@@ -1609,7 +1653,7 @@ defmodule Raxol.Harness.Surface do
     %{model | stub_notice: "» block #{index} sealed — fold unavailable"}
   end
 
-  defp apply_fold_toggle(model, index) do
+  defp store_fold_override(model, index) do
     case Enum.at(model.projection.blocks, index) do
       nil ->
         model
@@ -2183,11 +2227,21 @@ defmodule Raxol.Harness.Surface do
   end
 
   defp pending_block(model) do
-    # Post-seal, `tail_start == painted_count` always -- the committed
-    # prefix skips to the high-water mark and the walk already consumed
-    # everything committable -- so this is the same block as before, now
-    # DERIVED from the shared classifier instead of restated.
-    tail_start = frontier_scan(model).tail_start
+    # Keyed on the committed CURSOR (`painted_count` -- `commit_walk/5`'s
+    # own post-walk cursor), NOT on `frontier_scan/1`'s `tail_start`. The
+    # scan is the PRE-commit projection ("what would remain after an
+    # ideal commit this frame"): it consumes committable entries, so
+    # after a REFUSED seal write (`{:error, :write_failed, _}` -- the
+    # walk halts, `painted_count` stays strictly before the failed
+    # entry) the two diverge, and the scan-keyed preview would skip the
+    # very block that is not yet in history -- invisible on both
+    # surfaces at once, exactly the under-reporting the display half of
+    # retry-not-vanish forbids (pinned in
+    # test/harness/surface_seal_pipeline_test.exs). On every successful
+    # frame the walk's cursor and the scan agree (`tail_start ==
+    # painted_count`, the scan/walk-agreement property), so this changes
+    # nothing there; on a refusal the cursor is the honest one.
+    tail_start = model.painted_count
 
     case Enum.slice(model.projection.blocks, tail_start..-1//1) do
       [] -> nil
