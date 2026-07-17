@@ -549,7 +549,22 @@ defmodule Raxol.Harness.LiveSessionDriver do
     %{state | model: model}
   end
 
-  defp apply_batch_item(_other, state), do: state
+  # A batch element this loop does not recognize. The cadence layer's
+  # loss contract reserves the right to grow new in-band element types
+  # and requires consumers to handle them LOUDLY (see
+  # `Raxol.Harness.StreamCadence`'s moduledoc, section 3) -- silently
+  # dropping one here would be a fail-open over loss data: a future
+  # reserved marker would vanish without a trace. Seal an honest marker
+  # instead, same as the shed/malformed paths above.
+  defp apply_batch_item(other, state) do
+    model =
+      Surface.seal_marker(
+        state.model,
+        "» unrecognized stream element dropped: #{inspect(other)}"
+      )
+
+    %{state | model: model}
+  end
 
   # A fresh turn retires whatever pending/ack lane notice was left over
   # from the previous one.

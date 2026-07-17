@@ -474,6 +474,28 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
     end
   end
 
+  describe "6b. unknown batch elements are marked, never silently dropped" do
+    test "an unrecognized reserved element seals an honest marker line" do
+      # The cadence layer's loss contract reserves the right to grow new
+      # in-band element types, and instructs consumers to fail LOUDLY on
+      # anything they don't understand rather than render a gapless lie
+      # over it (Raxol.Harness.StreamCadence moduledoc, section 3). A
+      # silent catch-all here would be a fail-open over loss data: a
+      # future reserved marker would vanish without a trace. Delivered
+      # directly (like test 10) since only a future cadence version could
+      # produce one.
+      %{device: device, driver: driver} = new_driver(%{})
+
+      send(driver, {:render_batch, [{:future_reserved_marker, 42}]})
+
+      eventually(fn ->
+        strip_ansi(raw(device)) =~ "unrecognized stream element"
+      end)
+
+      assert Process.alive?(driver)
+    end
+  end
+
   describe "7. malformed events are rejected at the boundary and marked" do
     test "a garbage event seals an honest marker line, no crash" do
       %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
