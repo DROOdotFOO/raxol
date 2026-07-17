@@ -33,14 +33,29 @@ defmodule Raxol.Harness.Projection do
        an otherwise-loop record); only `:loop` events ever become blocks.
     3. `Recovery.bucket_by_turn/1` -- groups by `turn_id` in
        first-seen order (N-ADV-05), independent of raw arrival order.
-    4. `Raxol.Harness.Projection.BlockBuilder.build_turn/2` per turn --
+    4. `Raxol.Harness.Projection.BlockBuilder.build_turn/3` per turn --
        folds items into blocks, drops late deltas (N-SEAL), caps the
        live-tail delta buffer for an item that never completes, flags
        orphans/unknown kinds recovered (N-ADV-04, N-FWD-01), merges
        well-formed `tool_use`+`tool_result` pairs into one `:tool_call`
        block and fixes its duration span (the STATE-note bug: Block's
        own `duration_from_timestamps/1` only sees the first
-       started/completed pair in a merged list).
+       started/completed pair in a merged list). Also attaches
+       completion evidence to a closed turn's last block (see
+       `BlockBuilder`'s moduledoc, "Completion evidence"), resolving refs
+       against the SESSION-wide `id -> event` index built here in step 0
+       below -- a ref is a session-scoped journal offset, not a
+       turn-scoped one (the frozen offset law), so it may legitimately
+       point at an earlier turn's event.
+
+  Step 0 (implicit, ahead of the numbered list): this function builds
+  one `id -> event` map over the id-recovered stream (`id_ok`, the
+  output of step 1, before family partition or turn bucketing) and
+  threads it into every turn's `BlockBuilder.build_turn/3` call --
+  completion-evidence resolution is the only consumer today, but the
+  index covers the whole durable+ephemeral id-recovered set, not a
+  per-turn slice, so any ref reachable by id resolves regardless of
+  which turn built the block it names.
 
   Every recovered condition -- duplicate, out-of-order, forward gap,
   orphan, late delta, capped delta buffer, missing turn_started, untyped
@@ -98,6 +113,19 @@ defmodule Raxol.Harness.Projection do
 
   This is the key T18's restoration-diff-on-reattach uses: without the
   strips it would churn on every fold toggle or recovery re-annotation.
+
+  **`content[:completion]` is NOT stripped here.** Unlike `:recovered`/
+  `:recovered_reasons` (recovery metadata about how THIS projection
+  survived an anomaly), a block's `:completion` -- set by
+  `Raxol.Harness.Projection.BlockBuilder.build_turn/3` on a turn's last
+  block when that turn closed with a final `turn_completed` -- is
+  genuine transcript content: whether a "done" claim carried evidence
+  (or explicitly carried none, see that module's moduledoc) IS part of
+  what was said, not projection-recovery bookkeeping. It is therefore
+  included, verbatim, in BOTH `transcript_identity/1` and `identity/1`;
+  a completion appearing, disappearing, or gaining/losing a ref is a
+  real "is this the same conversation?" change, same as any other
+  content field.
 
   ### `identity/1` — the T13a regression FREEZE key
 
@@ -188,13 +216,24 @@ defmodule Raxol.Harness.Projection do
 
     {id_ok, id_diags, damaged?} = Recovery.filter_ids(events)
 
+    # SESSION-scoped, built once over the whole id-recovered stream --
+    # BEFORE family partition or turn bucketing -- so a completion-
+    # evidence ref can resolve against ANY event by id, not just the
+    # ones in its own turn's bucket (a ref is a journal offset, and ids
+    # are session-wide; see `BlockBuilder`'s moduledoc, "Refs are
+    # SESSION-scoped").
+    session_index = Map.new(id_ok, &{Map.get(&1, :id), &1})
+
     {loop_events, _meta_events, family_diags} =
       Recovery.partition_families(id_ok)
 
     {blocks, tail, fold_diags} =
       loop_events
       |> Recovery.bucket_by_turn()
-      |> Enum.reduce({[], %{}, []}, &project_turn(&1, &2, fold_defaults))
+      |> Enum.reduce(
+        {[], %{}, []},
+        &project_turn(&1, &2, fold_defaults, session_index)
+      )
 
     %__MODULE__{
       blocks: blocks,
@@ -212,7 +251,8 @@ defmodule Raxol.Harness.Projection do
   defp project_turn(
          {turn_id, turn_events},
          {blocks_acc, tail_acc, diags_acc},
-         fold_defaults
+         fold_defaults,
+         session_index
        ) do
     turn_diags =
       if turn_id != nil and Recovery.missing_turn_started?(turn_events) do
@@ -222,7 +262,7 @@ defmodule Raxol.Harness.Projection do
       end
 
     {turn_blocks, turn_tail, item_diags} =
-      BlockBuilder.build_turn(turn_events, fold_defaults)
+      BlockBuilder.build_turn(turn_events, fold_defaults, session_index)
 
     {
       blocks_acc ++ turn_blocks,

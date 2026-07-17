@@ -21,4 +21,5 @@ defmodule Raxol.MixProject do
 end
 87[15;1H[KInput: clear | Stage: item_completed | Ctx: — | Cost: —[16;1H[K[assistant][17;1H[KRoot has mix.exs, lib/, test/, README.md.87[14;1H[2m[assistant][0m
 Root has mix.exs, lib/, test/, README.md.
+[2mno evidence provided[0m
 87[15;1H[KInput: clear | Stage: turn_completed | Ctx: — | Cost: $0.00[16;1H[K [17;1H[K[2m\ continue · paste multiline · ↵ submit[0m[18;1H[K[19;1H[K8

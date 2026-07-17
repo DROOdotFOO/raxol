@@ -48,6 +48,26 @@ defmodule Raxol.Terminal.InlineDriverSequencesTest do
       assert bytes =~ "\e[?1000l"
     end
 
+    test "ends synchronized-update mode (DEC 2026) as a teardown backstop, inside step 1" do
+      # A sync close the device refused on the FINAL frame has no later
+      # frame to heal on (the harness heal seam is per-frame) -- process
+      # exit is the last chance. DEC private modes are set/reset, so an
+      # unconditional ?2026l is harmless when nothing is owed and un-wedges
+      # the terminal when a close was stranded. Belongs to step 1
+      # (modes off), same defensive rationale as the mouse/DECOM resets.
+      bytes = Sequences.teardown_bytes(24)
+
+      assert bytes =~ "\e[?2026l"
+
+      {sync_at, _} = :binary.match(bytes, "\e[?2026l")
+      {region_at, _} = :binary.match(bytes, Sequences.release_region())
+      assert sync_at < region_at
+    end
+
+    test "suspend_bytes/1 carries the same synchronized-update backstop (the editor must not inherit a frozen screen)" do
+      assert Sequences.suspend_bytes(24) =~ "\e[?2026l"
+    end
+
     test "re-enables autowrap and shows the cursor" do
       bytes = Sequences.teardown_bytes(24)
 

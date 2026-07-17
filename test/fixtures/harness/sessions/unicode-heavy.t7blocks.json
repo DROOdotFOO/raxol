@@ -29,6 +29,9 @@
           "path": "."
         },
         "name": "list_dir",
+        "completion": {
+          "evidence": "none"
+        },
         "result": "日本語.txt\n📁 emoji-folder\nRésumé.pdf",
         "tainted": true
       },

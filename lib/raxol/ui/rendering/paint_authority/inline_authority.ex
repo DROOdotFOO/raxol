@@ -257,6 +257,26 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   content is fully re-rendered at its new (smaller) position.
 
   Neither direction ever emits `\e[2J`/`\e[3J`.
+
+  ## Synchronized output (DEC private mode 2026)
+
+  `sync_open/1` / `sync_close/1` are the DEC 2026 synchronized-update
+  bracket (`Dialect.sync_begin/0` ... `Dialect.sync_end/0`): a Surface
+  frame that seals one or more blocks wraps the seal writes and the
+  trailing footer repaint in this bracket so a multi-block seal presents
+  to the terminal atomically (no partial-frame flicker between the
+  sealed history and the repainted footer). Gated on this authority's
+  `sync_output?` field (measured once, at `new/5`, from the capability
+  record, strict struct match) -- capability-unknown means don't emit,
+  never a guess.
+
+  The pair is latch-backed (`sync_close_pending?`): a close the device
+  refuses is remembered as OWED and re-attempted on every subsequent
+  frame until a write lands, so a landed `?2026h` can never dangle
+  forever with the terminal wedged in synchronized mode -- the failure
+  window is "until the next frame with a writable device", not
+  "until the process exits". See `sync_open/1`/`sync_close/1` for the
+  full contract.
   """
 
   @behaviour Raxol.UI.Rendering.PaintAuthority
@@ -274,7 +294,9 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     :next_row,
     in_cursor_bracket: false,
     footer_lines: [],
-    needs_keyframe: false
+    needs_keyframe: false,
+    sync_output?: false,
+    sync_close_pending?: false
   ]
 
   @type t :: %__MODULE__{
@@ -284,7 +306,9 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
           next_row: pos_integer(),
           in_cursor_bracket: boolean(),
           footer_lines: [binary()],
-          needs_keyframe: boolean()
+          needs_keyframe: boolean(),
+          sync_output?: boolean(),
+          sync_close_pending?: boolean()
         }
 
   @doc """
@@ -322,7 +346,11 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       region: ScrollRegionManager.start(device, rows, footer_rows),
       width: width,
       reflow_capable?: reflow_capable?(caps),
-      next_row: 1
+      next_row: 1,
+      # Strict struct match, mirroring `reflow_capable?/1`'s own idiom: a
+      # stray plain map carrying a `sync_output: true` key must never
+      # enable emission -- only the probe-built capability record may.
+      sync_output?: match?(%Capabilities{sync_output: true}, caps)
     }
   end
 
@@ -385,6 +413,17 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   """
   @spec seal(t(), iodata()) :: t()
   def seal(%__MODULE__{} = t, iodata) do
+    sanitized = validate_seal_iodata!(iodata)
+    with_cursor(t, :history, fn inner -> append_sealed(inner, sanitized) end)
+  end
+
+  # Shared by `seal/2` and `try_seal/2`: enforce the `\r\n`-terminated
+  # caller contract (raises `ArgumentError` -- a caller-contract bug, never
+  # masked as a device failure) and run the content through
+  # `ContentGuard.sanitize_line/1` (see the moduledoc's `ContentGuard`
+  # section). This runs OUTSIDE `try_seal/2`'s rescued scope -- see that
+  # function's doc for why the two error classes must stay distinct.
+  defp validate_seal_iodata!(iodata) do
     binary = IO.iodata_to_binary(iodata)
 
     unless String.ends_with?(binary, "\r\n") do
@@ -394,9 +433,260 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
               inspect(binary)
     end
 
-    sanitized = ContentGuard.sanitize_line(binary)
+    ContentGuard.sanitize_line(binary)
+  end
 
-    with_cursor(t, :history, fn inner -> append_sealed(inner, sanitized) end)
+  @doc """
+  The write-checked seal: validates and sanitizes `iodata` (via
+  `validate_seal_iodata!/1`, the same discipline `seal/2` uses -- a
+  missing `\\r\\n` terminator is a CALLER-CONTRACT bug and still raises
+  `ArgumentError`, unmasked), then attempts the write and reports whether
+  the io server ACCEPTED it.
+
+  ## What "accepted" means (and does not)
+
+  `{:ok, _}` means the device's io server replied `:ok` to the write
+  request -- accepted-into-the-io-server. For a `StringIO`/test device
+  that IS end-to-end delivery; for a buffered pipe or `:stdio` it means
+  the bytes were handed off, not that they were rendered on a screen.
+  Proving end-to-end delivery would need a DSR round-trip this module
+  does not do. "Accepted" is still the load-bearing property for
+  print-once accounting: a block is only ever marked committed for bytes
+  the device did not refuse.
+
+  ## Write -> confirm -> mark
+
+  This is the substrate half of the print-once safety property
+  documented in `Raxol.Harness.SealFrontier.commit_walk/5`: a caller
+  (`Raxol.Harness.Surface.seal_block/2`) marks a block committed only
+  AFTER `try_seal/2` returns `{:ok, _}` -- never before. On `{:error,
+  :write_failed, t}`, the ORIGINAL `t` (the one passed in, `next_row` not
+  advanced) is returned, so a retry re-positions and re-writes from
+  scratch rather than resuming from a cursor that may have been left
+  mid-write.
+
+  ## Only RETRYABLE device failures are converted to `:write_failed`
+
+  The rescue below is scoped twice, by `retryable_device_error?/2`:
+
+    * It must be a device failure at all (`device_io_error?/2` -- one of
+      the two device classes AND raised by the `:io` layer itself, the
+      stack head naming the raiser). Anything else RE-RAISES: an
+      `ArgumentError`/`ErlangError` raised by non-device code inside the
+      seal path is a logic bug, and reclassifying it as `:write_failed`
+      would turn it into an unbounded silent retry loop (the same entry
+      re-attempted every frame, forever, with the real error never
+      surfaced).
+    * It must be plausibly TRANSIENT. The `{:error, reason}` io reply
+      (`ArgumentError` from `:io.put_chars`, e.g. `enospc`) is: the
+      device is alive and answering, and may accept the retry. A DEAD
+      device (`%ErlangError{original: :terminated}` -- the io-server
+      process is gone) is NOT: a pid never comes back, so retrying is
+      retrying a corpse, forever and silently. That case RE-RAISES too --
+      the loud crash is the honest outcome for a device that can never
+      heal (and is exactly what the pre-two-phase `seal/2` did).
+
+  The validation raise above happens BEFORE the rescued block even
+  starts -- a missing `\\r\\n` is a bug in the calling code, not a
+  device failure. Likewise, `with_cursor/3`'s own nested-bracket
+  `RuntimeError` is deliberately NOT rescued -- a caller bug, not
+  something a device retry can fix.
+
+  A refusing-but-alive device CAN loop indefinitely (each frame retries,
+  each retry may be refused again). That loop is deliberate -- a bound
+  would strand the block if the device recovers on attempt N+1 -- but it
+  is not silent: the harness consumer emits
+  `[:raxol, :harness, :seal, :write_failed]` telemetry per refused write
+  (see `Raxol.Harness.Surface`), so a persistent refusal is observable
+  from the first frame.
+
+  ## Partial-write honesty (and the scroll-boundary residual)
+
+  On an io-server transport whose requests are accepted or refused as a
+  unit (a `StringIO`, the BEAM's own tty io server -- everything this
+  module is driven by today), a refused write leaves the screen
+  untouched and a retry simply re-positions and re-writes: the retry
+  produces the same rows the accepted write would have, and `next_row`/
+  the committed set never advanced, so print-once accounting holds.
+
+  A raw-fd/pty transport that can PARTIALLY flush before erroring is
+  weaker, and one case is a real residual: if `target_row` is at or near
+  `history_bottom`, partially-flushed `\\r\\n`s scroll the DECSTBM region
+  and evict partially-written rows into native scrollback -- which this
+  process can never rewrite. The retry then re-emits the whole block
+  BELOW those evicted fragments: the fragments are permanent
+  (duplicated/garbled) scrollback content. This module cannot detect or
+  repair that without a transactional device; it is named here so the
+  limit is a documented property, not an implied guarantee. (A
+  line-at-a-time write-and-check emit would bound the damage to one row
+  and is the natural follow-up if a partial-write transport ever drives
+  this path; not implemented -- nothing in the current harness stack
+  writes through one.)
+  """
+  @spec try_seal(t(), iodata()) :: {:ok, t()} | {:error, :write_failed, t()}
+  def try_seal(%__MODULE__{} = t, iodata) do
+    sanitized = validate_seal_iodata!(iodata)
+    confirmed_seal(t, sanitized)
+  end
+
+  defp confirmed_seal(t, sanitized) do
+    {:ok,
+     with_cursor(t, :history, fn inner -> append_sealed(inner, sanitized) end)}
+  rescue
+    e in [ArgumentError, ErlangError] ->
+      if retryable_device_error?(e, __STACKTRACE__) do
+        {:error, :write_failed, t}
+      else
+        reraise e, __STACKTRACE__
+      end
+  end
+
+  # The retryability split on top of device_io_error?/2 (see try_seal/2's
+  # doc): a device failure is only worth a retry when the device is ALIVE
+  # and answering ({:error, reason} reply). A dead device -- the io-server
+  # pid is gone; %ErlangError{original: :terminated} -- can never heal, so
+  # it re-raises (fail-fast) instead of becoming an infinite corpse-retry.
+  defp retryable_device_error?(exception, stacktrace) do
+    device_io_error?(exception, stacktrace) and
+      not match?(%ErlangError{original: :terminated}, exception)
+  end
+
+  @doc """
+  Whether an exception is a DEVICE failure raised by the `:io` layer --
+  the discriminator scoping `try_seal/2`'s (and the sync bracket's)
+  rescue to the device seam and nothing else.
+
+  True only when BOTH hold:
+
+    * the exception is one of the two classes the io layer raises for a
+      failed write: `ArgumentError` (the io server replied
+      `{:error, reason}`) or `ErlangError` (dead device, canonically
+      `original: :terminated`), and
+    * the stack head names the `:io` module as the raiser -- i.e. the
+      raise came out of `:io.put_chars/2` (or a sibling io call), not
+      from this module's own logic, `:binary`, `String`, or anything
+      else that happens to raise the same exception class.
+
+  The same exception class raised by NON-device code returns false, so
+  callers re-raise it loudly instead of misclassifying a logic bug as a
+  retryable write failure.
+
+  Note this answers "is it a device io error", NOT "is it worth
+  retrying" -- those are different questions. A dead device
+  (`%ErlangError{original: :terminated}`) IS a device io error by this
+  predicate, but the rescue sites here treat it as fail-fast, never
+  retryable: the io-server pid is gone and can never come back, so a
+  retry loop against it would spin silently forever (the round-2 review
+  finding). See `try_seal/2`'s "Only RETRYABLE device failures" section.
+  """
+  @spec device_io_error?(Exception.t(), Exception.stacktrace()) :: boolean()
+  def device_io_error?(exception, stacktrace)
+
+  def device_io_error?(%struct{}, [{:io, _fun, _args, _info} | _rest])
+      when struct in [ArgumentError, ErlangError],
+      do: true
+
+  def device_io_error?(_exception, _stacktrace), do: false
+
+  @doc """
+  Opens a DEC 2026 synchronized-update bracket (`Dialect.sync_begin/0`,
+  `CSI ? 2026 h`) -- the first half of the pair `sync_close/1` completes.
+  See the moduledoc's "Synchronized output" section for the frame shape.
+
+  ## Capability-gated, capability-unknown-means-don't-emit
+
+  `sync_output?` is measured once, at `new/5`, from the capability
+  record passed in (`nil`/unknown -> `false`); without it this function
+  is a byte-free no-op. Never emit a presentation-only control sequence
+  on a guess.
+
+  ## The `sync_close_pending?` latch
+
+  A successful open sets `sync_close_pending?: true` -- "a close byte is
+  owed to the terminal." The latch is cleared only by a close write the
+  device ACCEPTS (`sync_close/1`), which is what makes the pair's
+  balance claim byte-accurate rather than attempt-accurate: an open that
+  landed is remembered until its close lands, however many attempts that
+  takes. Opening while a close is still owed (a prior frame's close was
+  refused) is harmless -- DEC private modes are set/reset, not counted,
+  so a second `?2026h` on an already-synchronized terminal changes
+  nothing, and the still-set latch keeps the close owed.
+
+  ## A failed open degrades gracefully
+
+  If the opening write itself is REFUSED (the alive-but-refusing device
+  class -- a dead device re-raises, same fail-fast rationale as
+  `try_seal/2`'s corpse rule; anything non-device re-raises too), the
+  latch is left as it was and the frame simply runs unbracketed: this is
+  a PRESENTATION-only feature and must never take down the frame it
+  wraps.
+  """
+  @spec sync_open(t()) :: t()
+  def sync_open(%__MODULE__{sync_output?: false} = t), do: t
+
+  def sync_open(%__MODULE__{region: region} = t) do
+    case sync_write(region.device, Dialect.sync_begin()) do
+      :ok -> %{t | sync_close_pending?: true}
+      :error -> t
+    end
+  end
+
+  @doc """
+  Closes (or re-attempts closing) the DEC 2026 synchronized-update
+  bracket: when `sync_close_pending?` is set, writes
+  `Dialect.sync_end/0` (`CSI ? 2026 l`) and clears the latch iff the
+  device accepted the byte. A byte-free no-op when no close is owed --
+  safe to call on every frame.
+
+  ## Why the latch instead of "close in an after-block"
+
+  An attempted close is not a delivered close: if the device accepts the
+  OPEN and then refuses the close write (transient `enospc`, a device
+  dying mid-frame), the terminal is left frozen in synchronized mode --
+  and a fire-and-forget close attempt would leave it that way until the
+  process exits. The latch makes the owed close durable state:
+  `Raxol.Harness.Surface` calls this at the top of EVERY frame
+  (advance/tick/input/resize), so a dangling open heals at the first
+  frame after the device accepts a byte again. The residual window is
+  therefore "until the next frame with a writable device" -- never
+  "forever" -- and, since a refused SEAL write guarantees a retry frame,
+  the common failure topology heals immediately.
+
+  The wedge-then-QUIT topology (a close stranded on the session's final
+  frame, no later frame to heal on) is covered one layer down: the
+  inline driver's canonical teardown AND editor-suspend byte sequences
+  (`Raxol.Terminal.InlineDriver.Sequences`, step 1) emit an
+  unconditional `?2026l` backstop -- harmless when nothing is owed, DEC
+  private modes being set/reset.
+  """
+  @spec sync_close(t()) :: t()
+  def sync_close(%__MODULE__{sync_close_pending?: false} = t), do: t
+
+  def sync_close(%__MODULE__{region: region} = t) do
+    case sync_write(region.device, Dialect.sync_end()) do
+      :ok -> %{t | sync_close_pending?: false}
+      :error -> t
+    end
+  end
+
+  # Best-effort single byte-sequence write for the sync bracket:
+  # RETRYABLE device failures (retryable_device_error?/2 -- the
+  # alive-but-refusing {:error, reason} reply class) report :error, so a
+  # lost sync byte never crashes the frame it was only decorating and the
+  # latch re-attempts later. A DEAD device re-raises, same fail-fast
+  # rationale as confirmed_seal/2: everything after this write hits the
+  # same corpse, and retrying it forever would be the silent-loop
+  # regression round 2 flagged. Non-device raises re-raise (logic bug).
+  defp sync_write(device, bytes) do
+    IO.write(device, bytes)
+    :ok
+  rescue
+    e in [ArgumentError, ErlangError] ->
+      if retryable_device_error?(e, __STACKTRACE__) do
+        :error
+      else
+        reraise e, __STACKTRACE__
+      end
   end
 
   @impl true

@@ -481,16 +481,18 @@ defmodule Raxol.Harness.SealFrontierTest do
     end
   end
 
-  # -- net-new case #2: resize-during-commit (NOTED, not implemented) --------
+  # -- net-new case #2: resize-during-commit (IMPLEMENTED) -------------------
   #
-  # The frame-order unit (a follow-up, not this module) must prove the
-  # adopt-size-BEFORE-commit ordering: a block finalizing on a shrink
-  # frame must be laid out at the freshly adopted width, never the stale
-  # one -- a stale-width commit hard-wraps over-wide rows and permanently
-  # garbles the print-once copy in native scrollback. That case needs the
-  # paint pipeline (width adoption + the seal write), which this pure
-  # classifier deliberately has no access to. It is recorded here so the
-  # frame-order unit starts from a named, red-first test obligation:
+  # The frame-order unit proved the adopt-size-BEFORE-commit ordering: a
+  # block finalizing on a shrink frame is laid out at the freshly adopted
+  # width, never the stale one -- a stale-width commit hard-wraps
+  # over-wide rows and permanently garbles the print-once copy in native
+  # scrollback. That case needed the paint pipeline (width adoption + the
+  # seal write), which this pure classifier deliberately has no access
+  # to, so it does NOT live here as a new test -- it lives in
+  # `test/harness/surface_seal_pipeline_test.exs` (describe "2. frame-order
+  # law"), driven end-to-end through `Raxol.Harness.Surface.advance/3`'s
+  # `:resize` option:
   #
   #   test "a block finalizing on a shrink frame commits at the adopted
   #         width, not the stale one"

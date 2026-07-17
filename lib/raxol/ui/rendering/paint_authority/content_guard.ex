@@ -119,9 +119,27 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ContentGuard do
     scan(rest, acc)
   end
 
-  # Printable ASCII and UTF-8 lead/continuation bytes -- pass through.
-  defp scan(<<c, rest::binary>>, acc) do
+  # Printable ASCII passes through as a single byte.
+  defp scan(<<c, rest::binary>>, acc) when c >= 0x20 and c <= 0x7E do
     scan(rest, [<<c>> | acc])
+  end
+
+  # A code point >= 0x80: strip the C1 control range (U+0080..U+009F) -- the
+  # 8-bit-encoded siblings of the ESC-led CSI/OSC/DCS sequences neutralized
+  # above (0x9B is CSI, 0x9D is OSC), which a byte-wise pass-through would let
+  # through raw. Decoding by code point catches a C1 encoded as UTF-8
+  # (`0xC2 0x9B`) while every other high code point (real UTF-8 text) passes
+  # through intact.
+  defp scan(<<cp::utf8, rest::binary>>, acc) when cp >= 0x80 do
+    if cp <= 0x9F,
+      do: scan(rest, acc),
+      else: scan(rest, [<<cp::utf8>> | acc])
+  end
+
+  # A high byte that is not a valid UTF-8 start (a lone raw C1 like 0x9B, or a
+  # stray continuation byte) -- dropped, no residue.
+  defp scan(<<_c, rest::binary>>, acc) do
+    scan(rest, acc)
   end
 
   defp scan(<<>>, acc) do

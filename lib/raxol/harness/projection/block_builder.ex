@@ -63,10 +63,202 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   most recent `@max_tail_delta_chunks` chunks per item, diagnosing
   `:delta_buffer_capped` once per item the first time a chunk is
   dropped (not on every subsequent delta).
+
+  ## Completion evidence (the honesty row)
+
+  After a turn's blocks are built, `build_turn/3` scans the turn's raw
+  events for the LAST `turn_completed` whose payload `final` is `true`
+  (string or atom key -- the wire is string-keyed JSON, live producer
+  events are atom-keyed, see `Raxol.Agent.Contract.gated_done_payload/4`,
+  read-only ground truth in `packages/raxol_agent`). A non-final turn
+  (no such event) is untouched -- byte-identical output, no `:completion`
+  key anywhere.
+
+  When a final `turn_completed` IS found and the turn produced at least
+  one block, `content.completion` is merged into the turn's LAST block
+  only (the one a "done" claim attaches to):
+
+    * `refs` missing, not a list, or an empty list -> `%{evidence: :none}`
+      -- the design creed's mandatory absence row (never blank, never a
+      checkmark).
+    * otherwise -> `%{evidence: entries, total: n, type_counts: counts}`,
+      `entries` capped at `@max_completion_entries` (`Block.render/2`'s
+      completion row shows "+N more" for the rest), `n` the FULL ref
+      count, and `counts` a `[%{type:, count:}]` list (descending count,
+      ties broken by first-appearance order among `refs`) covering
+      EVERY ref, not just the capped entries -- the summary line's
+      breakdown must be accurate even when most refs are never
+      individually rendered. Maps, not `{type, count}` tuples: this
+      content rides through `Jason.encode!/1` at bless time, which has
+      no `Encoder` for tuples.
+
+  ## Refs are SESSION-scoped journal offsets, not turn-scoped -- and why
+
+  Per the frozen offset law (a `ref` is a journal event id, and ids are
+  session-wide), resolution is against the WHOLE session's id-recovered
+  event stream, not just the owning turn's own events. `Projection.
+  project/2` builds one `id -> event` index over the id-recovered
+  stream (before family partition or turn bucketing) and threads it
+  into every turn's `build_turn/3` call; this module never re-derives
+  it and never assumes a ref lives in the events it was handed.
+
+  This is a DISPLAY-side decision, not a re-implementation of the
+  producer's evidence gate: the honest producer
+  (`Raxol.Agent.Contract.gated_done_payload/4` / the evidence gate it
+  consults) only ever emits gate-accepted, SAME-turn refs -- the gate is
+  the sole acceptance authority. A direct call back into the gate is
+  impossible (`raxol_agent` depends on main `raxol`, never the reverse),
+  but that only rules out CALLING it -- WHICH of its predicates to
+  re-derive locally is a decision, made on predicate stability:
+
+    * **Closed predicates are mirrored.** Index existence (a rejected
+      `missing_ref` renders `"unresolvable evidence ref"`), item_type
+      (a rejected `not_evidence` is disclosed by the type breakdown --
+      renders "1 message", never "1 tool result"), and turn_id equality
+      (a rejected `foreign_turn` renders marked `cross_turn: true`, see
+      below) are decidable from frozen wire facts and can never diverge
+      from the gate's own reading of them.
+    * **Open predicates are knowingly NOT mirrored** -- see "Knowingly
+      unmarked" below.
+
+  Session-scope resolution here is a deliberate display-side SUPERSET of
+  what an honest producer emits -- a claim citing a ref the gate would
+  have rejected as foreign-turn is SHOWN, marked, rather than hidden or
+  silently resolved as if unremarkable. `type` carries the "what kind"
+  signal, `cross_turn` the orthogonal "which turn" signal.
+
+  ## Knowingly unmarked: stale and mutation-echo
+
+  A same-turn ref the gate would reject as `stale_evidence` (the cited
+  result predates a later mutation in the claiming turn) or as
+  `mutation_echo` (the last mutation's own result echo, verifying
+  nothing) renders as ordinary, UNMARKED evidence. This is a conscious
+  decision, pinned by tests, not an oversight. Both predicates consume
+  the gate's mutation predicate, which is an OPEN predicate: today it is
+  fail-safe ("every completed `tool_use` is a mutation ... and not
+  `classified_effect_free?`", where `classified_effect_free?/1` is
+  constantly false), but that private function is an explicit, designed
+  refinement seam -- a structural effect classification is planned to
+  remove effect-free tools from the mutation set. Mirroring today's
+  everything-mutates reading into this renderer would freeze it here:
+  once the seam is filled, gate-ACCEPTED evidence (accepted precisely
+  because the intervening tools were classified effect-free) would
+  render with false stale/echo marks -- the display would accuse honest
+  evidence, which burns trust in the marks that ARE reliable. The
+  closed-predicate marks above never have that failure mode.
+
+  Bound on the residual: the current gate is fail-closed on journals
+  without effect classification, and the producer attaches `refs` ONLY
+  on gate-accept -- so today's honest wire never carries refs at all,
+  and an unmarked stale/echo render is reachable only through a
+  tampered or synthetic journal. Even there, the closed-predicate marks
+  and the projection's `damaged` flag still catch most tampering
+  shapes; what remains unmarked is exactly a same-turn, evidence-class,
+  index-resolvable ref whose only defect is ordering relative to
+  mutations -- a defect only the gate's evolving mutation predicate can
+  judge without false accusations.
+
+  ## Cross-turn disclosure
+
+  Every resolved entry, and a session-wide tally alongside `type_counts`,
+  compares the resolved event's OWN `turn_id` against the CLAIMING
+  turn's `turn_id` (the final `turn_completed` event's own `turn_id` --
+  not a turn a same-turn `:tool_call` block happens to belong to):
+
+    * a mismatch adds `cross_turn: true` to that entry's map
+      (`put_present` style -- a same-turn entry's map shape is
+      UNCHANGED, so an all-same-turn completion churns nothing that
+      wasn't already there before this fix).
+    * `cross_turn_count` (tallied over ALL refs, not just the capped
+      entries -- the identical "every ref, not just the shown ones"
+      discipline `type_counts` already follows) is added to the
+      completion map ONLY when it is greater than zero, for the same
+      no-churn reason.
+
+  Per-ref resolution never raises (defensive, bounded, always returns
+  `%{ref:, type:, label:}`, plus `cross_turn: true` when applicable):
+
+    * ref missing from the session index -> `type: :unresolvable`,
+      `label: "unresolvable evidence ref"` (literal, rendered verbatim
+      -- an unresolvable ref is information, never silently dropped,
+      and it still counts toward the summary line's breakdown). Never
+      marked cross-turn: there is no resolved event to compare a
+      turn_id against, and cross-turn is a "which turn did this
+      citation come from" signal, not a synonym for "unresolvable".
+    * otherwise -> `type` is the resolved event's `item_type` when it is
+      an `item_completed` (`:tool_result`, `:message`, ...), else
+      `:unknown`. `label` prefers a same-turn `:tool_call` block's own
+      `content.name` (nicer, already-extracted display name) when the
+      ref lands in THIS turn's own blocks -- naturally absent for a
+      cross-turn ref, since a different turn's own built blocks were
+      never searched -- falling back to the raw event's own `"name"`
+      payload field; that name is joined with the resolved event's
+      content's first non-blank line via `" — "` when both are present,
+      either alone when only one is, and the type name itself when
+      neither resolves to anything displayable.
+
+  Every resolved label is sanitized (control-byte strip, mirroring
+  `Raxol.Harness.Surface.ViewText.sanitize/1`'s byte-wise technique
+  verbatim, but with NO `\\t` exception -- a completion label is a single
+  inline cell, never a multi-line body) and clamped to 32 display
+  columns (`Raxol.UI.TextLayout.truncate/3`, never `String.length`/
+  `String.slice` -- see that module's own width-safety contract) before
+  it ever reaches a block's content: labels originate from the LLM/agent
+  side and are untrusted exactly like any other tool-call/tool-result
+  payload this module already folds.
+
+  ## Known conflation (fail-open wire)
+
+  The producer emits `final: true` with NO `refs` key for at least THREE
+  indistinguishable states: gate-rejected evidence, a "done" citing
+  nothing at all, and a trivial tool-free turn with nothing to cite. The
+  wire carries no rejection marker distinguishing them, so the absence
+  row (`%{evidence: :none}`, "no evidence provided") is INTENTIONALLY
+  unconditional -- per the ratified design creed, absence renders "no
+  evidence provided" explicitly regardless of WHICH of the three states
+  produced it. Disambiguating them needs a producer-side wire change
+  (tracked cross-lane, not this module's concern); the zero-tool-turn
+  policy question is deliberately parked in the producer's gate. Do not
+  weaken the absence row trying to guess which of the three states it
+  was.
+
+  ## Staleness under compaction
+
+  Refs are stable, counter-derived journal ids -- a reattach at a later
+  offset does not shift them. But an event compacted or dropped upstream
+  (before this projection ever sees it) leaves the session index without
+  that key, and the ref renders `"unresolvable evidence ref"` exactly as
+  if the ref had never existed at all -- this module cannot tell the two
+  apart BY ITSELF. A consumer CAN, though, one level up: an interior
+  drop produces a forward id gap, which sets the whole projection's
+  `damaged: true` flag (`Raxol.Harness.Projection.Recovery.filter_ids/1`).
+  Unresolvable-in-a-damaged-stream (a possible compaction victim) is
+  therefore distinguishable from unresolvable-in-an-intact-stream (the
+  ref never existed) by checking `projection.damaged`, not by anything
+  this module's own output carries.
+
+  A final `turn_completed` with ZERO blocks in the turn (nothing to
+  attach honesty to) synthesizes no block -- `turn_completed` stays
+  structural/never block-producing (the frozen P-TIER-01 tier law) --
+  and instead diagnoses `:final_completion_without_blocks` via
+  `Recovery.emit/2`, same as every other recovered condition this module
+  reports.
   """
 
   alias Raxol.Harness.Projection.Recovery
   alias Raxol.UI.Components.Harness.Block
+  alias Raxol.UI.TextLayout
+
+  # Bounds how many resolved evidence entries a completion row shows
+  # inline -- `Block.completion_rows/2` renders "+N more" for the
+  # remainder using `total` (the FULL ref count, always kept regardless
+  # of this cap).
+  @max_completion_entries 3
+
+  # The display-column budget a single completion label is clamped to
+  # (`TextLayout.truncate/3`, :ellipsis mode) -- a label is one inline
+  # cell in the completion row, never a wrapped multi-line body.
+  @completion_label_width 32
 
   # Sliding-window cap on the live-tail delta buffer for a single
   # unsealed item: an item_started with no item_completed and an
@@ -94,10 +286,17 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   @doc """
   Folds one turn's events into `{blocks, tail, diagnostics}`.
   `fold_defaults` maps a `Block.kind()` to its initial fold state.
+  `session_index` is the whole session's `id -> event` map (built by
+  `Raxol.Harness.Projection.project/2` over the id-recovered stream,
+  BEFORE turn bucketing) -- completion-evidence refs are session-scoped
+  journal offsets, not turn-scoped, so resolution reaches beyond this
+  turn's own `events` (see the moduledoc's "Refs are SESSION-scoped").
+  Defaults to `%{}` so a ref genuinely absent from the session resolves
+  as unresolvable rather than raising.
   """
-  @spec build_turn([map()], map()) ::
+  @spec build_turn([map()], map(), map()) ::
           {[Block.t()], map(), [Recovery.diagnostic()]}
-  def build_turn(events, fold_defaults) do
+  def build_turn(events, fold_defaults, session_index \\ %{}) do
     {ordered_keys, groups, tail, item_diags} = fold_items(events)
 
     completed_groups =
@@ -107,7 +306,10 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
 
     {blocks, block_diags} = build_blocks(completed_groups, fold_defaults)
 
-    {blocks, tail, item_diags ++ block_diags}
+    {blocks, completion_diags} =
+      attach_final_completion(blocks, events, session_index)
+
+    {blocks, tail, item_diags ++ block_diags ++ completion_diags}
   end
 
   # -- pass 1: item/turn streaming fold -------------------------------------
@@ -424,6 +626,282 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
           })
     }
   end
+
+  # -- completion evidence (the honesty row) ---------------------------------
+
+  # The literal, rendered-verbatim label for a ref the session index has
+  # no event for at all -- an unresolvable ref is information, never
+  # silently dropped (design creed). Shared by resolution AND the
+  # honesty-pin tests, so the two can never drift apart.
+  @unresolvable_evidence_label "unresolvable evidence ref"
+
+  defp attach_final_completion(blocks, events, session_index) do
+    case find_final_turn_completed(events) do
+      nil -> {blocks, []}
+      final_event -> apply_final_completion(blocks, final_event, session_index)
+    end
+  end
+
+  # A `turn_completed{final: true}` whose payload carries an atom OR
+  # string "final" key; the LAST one wins if a turn somehow carried more
+  # than one (defensive -- real producers emit exactly one per turn).
+  defp find_final_turn_completed(events) do
+    events
+    |> Enum.filter(fn event ->
+      Map.get(event, :type) == :turn_completed and
+        payload_fetch(event, "final", :final) == true
+    end)
+    |> List.last()
+  end
+
+  # No blocks in a turn that DID close with a final claim: nothing to
+  # attach honesty to, and `turn_completed` never synthesizes a block on
+  # its own (the frozen P-TIER-01 tier law) -- diagnose instead.
+  defp apply_final_completion([], final_event, _session_index) do
+    diag =
+      Recovery.emit(:final_completion_without_blocks, Map.get(final_event, :id))
+
+    {[], [diag]}
+  end
+
+  defp apply_final_completion(blocks, final_event, session_index) do
+    claiming_turn_id = Map.get(final_event, :turn_id)
+
+    completion =
+      final_event
+      |> final_refs()
+      |> build_completion(blocks, session_index, claiming_turn_id)
+
+    {merge_completion_into_last(blocks, completion), []}
+  end
+
+  defp final_refs(event), do: payload_fetch(event, "refs", :refs)
+
+  defp build_completion(refs, _blocks, _session_index, _claiming_turn_id)
+       when not is_list(refs),
+       do: %{evidence: :none}
+
+  defp build_completion([], _blocks, _session_index, _claiming_turn_id),
+    do: %{evidence: :none}
+
+  defp build_completion(refs, blocks, session_index, claiming_turn_id) do
+    total = length(refs)
+
+    # Every ref's TYPE feeds the summary line's breakdown (accurate even
+    # for refs beyond the cap); only the first @max_completion_entries
+    # get a full resolved label -- both are single, cheap session-index
+    # lookups, so computing type for all refs costs nothing extra.
+    type_counts =
+      refs
+      |> Enum.map(&ref_type(&1, session_index))
+      |> compute_type_counts()
+
+    # Same discipline as type_counts: tallied over ALL refs, not just the
+    # capped entries -- a cross-turn ref pushed past the cap must still
+    # be disclosed in the summary line (see the moduledoc's "Cross-turn
+    # disclosure").
+    cross_turn_total =
+      Enum.count(refs, &cross_turn_ref?(&1, session_index, claiming_turn_id))
+
+    entries =
+      refs
+      |> Enum.take(@max_completion_entries)
+      |> Enum.map(
+        &resolve_completion_entry(&1, blocks, session_index, claiming_turn_id)
+      )
+
+    base = %{evidence: entries, total: total, type_counts: type_counts}
+
+    # Added ONLY when > 0 (put_present style): an all-same-turn
+    # completion's map shape is byte-identical to before this fix --
+    # the no-churn pin.
+    if cross_turn_total > 0 do
+      Map.put(base, :cross_turn_count, cross_turn_total)
+    else
+      base
+    end
+  end
+
+  defp merge_completion_into_last(blocks, completion) do
+    List.update_at(blocks, -1, fn block ->
+      %{block | content: Map.put(block.content, :completion, completion)}
+    end)
+  end
+
+  # -- session-scoped ref resolution ------------------------------------------
+  #
+  # A ref is a session-wide journal offset (the frozen offset law), not a
+  # turn-scoped one -- `session_index` (built once by `Projection.project/2`
+  # over the WHOLE id-recovered stream) is the base resolution for both
+  # type and label. `blocks` (this turn's own built blocks) is consulted
+  # ONLY as a same-turn label enrichment (a nicer, already-extracted tool
+  # name) and is naturally a no-op for a ref pointing at an earlier turn.
+  # `claiming_turn_id` is the CLAIMING turn's own turn_id (the final
+  # turn_completed event's `turn_id`) -- the reference point every
+  # resolved event's own `turn_id` is compared against for cross-turn
+  # disclosure (see the moduledoc).
+
+  defp ref_type(ref, session_index) do
+    case Map.get(session_index, ref) do
+      nil -> :unresolvable
+      event -> entry_type(event)
+    end
+  end
+
+  # An unresolvable ref (no event in the session index at all) is never
+  # cross-turn -- there is no resolved event to compare a turn_id
+  # against, and "cross-turn" is a disclosure about WHICH turn a real
+  # citation came from, not a synonym for "unresolvable".
+  defp cross_turn_ref?(ref, session_index, claiming_turn_id) do
+    case Map.get(session_index, ref) do
+      nil -> false
+      event -> cross_turn_event?(event, claiming_turn_id)
+    end
+  end
+
+  defp cross_turn_event?(event, claiming_turn_id),
+    do: Map.get(event, :turn_id) != claiming_turn_id
+
+  defp resolve_completion_entry(ref, blocks, session_index, claiming_turn_id) do
+    case Map.get(session_index, ref) do
+      nil ->
+        %{ref: ref, type: :unresolvable, label: @unresolvable_evidence_label}
+
+      event ->
+        type = entry_type(event)
+
+        base = %{
+          ref: ref,
+          type: type,
+          label: entry_label(ref, event, type, blocks)
+        }
+
+        if cross_turn_event?(event, claiming_turn_id) do
+          Map.put(base, :cross_turn, true)
+        else
+          base
+        end
+    end
+  end
+
+  # `type` is the resolved event's own `item_type` when it is an
+  # `item_completed` (`:tool_result`, `:message`, `:reasoning`,
+  # `:tool_use`); anything else -- a different event type, a missing or
+  # unrecognised `item_type` -- is `:unknown` (never raises, never
+  # invents a vocabulary this module doesn't already know).
+  defp entry_type(event) do
+    if Map.get(event, :type) == :item_completed do
+      case item_type_atom(payload_fetch(event, "item_type", :item_type)) do
+        known when known in [:message, :reasoning, :tool_use, :tool_result] ->
+          known
+
+        _unrecognised ->
+          :unknown
+      end
+    else
+      :unknown
+    end
+  end
+
+  # Prefer a same-turn :tool_call block's own name (already extracted and
+  # display-ready by `extract_tool_call_content/1`) -- naturally absent
+  # for a cross-turn ref, since `blocks` here is only THIS turn's own
+  # built blocks -- falling back to the raw event's own `"name"` payload
+  # field. That name, when present, is joined via `" — "` with the
+  # event's content's first non-blank line; either alone stands on its
+  # own; the type name itself is the last-resort fallback when neither
+  # resolves to anything displayable. Never raises.
+  defp entry_label(ref, event, type, blocks) do
+    name =
+      find_tool_call_name(ref, blocks) ||
+        present(payload_fetch(event, "name", :name))
+
+    content_line =
+      event |> payload_fetch("content", :content) |> first_nonblank_line()
+
+    candidate =
+      case {present(name), present(content_line)} do
+        {nil, nil} -> Atom.to_string(type)
+        {name, nil} -> name
+        {nil, content} -> content
+        {name, content} -> name <> " — " <> content
+      end
+
+    candidate
+    |> to_string()
+    |> sanitize_completion_label()
+    |> finalize_completion_label(Atom.to_string(type))
+  end
+
+  defp find_tool_call_name(ref, blocks) do
+    Enum.find_value(blocks, fn block ->
+      with :tool_call <- block.kind,
+           true <- ref in block.event_refs,
+           name when is_binary(name) and name != "" <-
+             Map.get(block.content, :name) do
+        name
+      else
+        _no_match -> nil
+      end
+    end)
+  end
+
+  defp present(nil), do: nil
+  defp present(""), do: nil
+  defp present(value) when is_binary(value), do: value
+  defp present(_other), do: nil
+
+  defp first_nonblank_line(text) when is_binary(text) do
+    text |> String.split("\n") |> Enum.find(&(String.trim(&1) != ""))
+  end
+
+  defp first_nonblank_line(_other), do: nil
+
+  # Descending count, ties broken by first-appearance order among the
+  # refs list -- deterministic (pure function of `types`, no ambient
+  # state) so the summary line never varies run to run for the same
+  # input, matching this module's overall P-DET discipline. Returned as
+  # `%{type:, count:}` maps, NOT `{type, count}` tuples -- this list
+  # rides inside `Block.content`, which the T7/TF bless tasks round-trip
+  # through `Jason.encode!/1`; Jason has no `Encoder` for tuples, so a
+  # tuple here would crash every snapshot bless, not just render.
+  defp compute_type_counts(types) do
+    types
+    |> Enum.with_index()
+    |> Enum.group_by(fn {type, _idx} -> type end)
+    |> Enum.map(fn {type, occurrences} ->
+      first_idx = occurrences |> Enum.map(&elem(&1, 1)) |> Enum.min()
+      {type, length(occurrences), first_idx}
+    end)
+    |> Enum.sort_by(fn {_type, count, first_idx} -> {-count, first_idx} end)
+    |> Enum.map(fn {type, count, _first_idx} -> %{type: type, count: count} end)
+  end
+
+  # Strips every C0 control byte (0x00-0x1F, which includes ESC/0x1B) and
+  # DEL (0x7F), byte-wise -- mirrors `Raxol.Harness.Surface.ViewText.
+  # sanitize/1`'s technique and safety argument verbatim: multi-byte
+  # UTF-8 lead (0xC2-0xF4) and continuation (0x80-0xBF) bytes are both
+  # `>= 0x20`, so stripping byte-by-byte never splits a valid codepoint.
+  # UNLIKE that sanitizer, `\t` gets NO exception here: a completion
+  # label is a single inline cell, never a multi-column layout, so a
+  # stray tab has no legitimate rendering role and is stripped like every
+  # other C0 byte (so is the `\n` that sanitizer also has no reason to
+  # exempt for a one-line label).
+  defp sanitize_completion_label(text) do
+    for <<byte <- text>>, byte >= 0x20 and byte != 0x7F,
+      into: <<>>,
+      do: <<byte>>
+  end
+
+  # `fallback` (the resolved event's own type name) covers the rare case
+  # where a REAL event resolved but its name/content sanitized down to
+  # nothing (e.g. a tool result that was pure control bytes) -- distinct
+  # from `@unresolvable_evidence_label`, which is reserved for a ref the
+  # session index has no event for at all (see `resolve_completion_entry/3`).
+  defp finalize_completion_label("", fallback), do: fallback
+
+  defp finalize_completion_label(label, _fallback),
+    do: TextLayout.truncate(label, @completion_label_width, :ellipsis)
 
   # -- event/payload adapter -------------------------------------------------
   #

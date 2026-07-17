@@ -137,7 +137,23 @@ defmodule Raxol.Harness.Surface do
   module truncates every individual LINE to `width` via `ViewText.lines/3`
   (which uses `TextMeasure`, never `String.length`) before that call --
   the caller contract `InlineAuthority.repaint/2`'s moduledoc documents as
-  NOT enforced by that function itself. On resize, `resize/2` composes
+  NOT enforced by that function itself.
+
+  ### The honest-notice law (priority fit before repaint's truncation)
+
+  `repaint/2`'s own pad/truncate is POSITION-BLIND (a tail-drop) -- and
+  the one-shot stub notice is the LAST footer group, so a composed footer
+  that overflows the row budget would silently eat exactly the honest
+  refusal/degradation report the notice channel exists to carry (an
+  integration finding: the overflow only manifests once sibling footer
+  content stacks up). `footer_lines/1` therefore fits the list itself
+  BEFORE the handoff (`fit_footer_lines/3`): display order preserved,
+  discretionary groups yield first (preview, then divider, then the
+  composer's tail, then an overlay's tail, then status -- each trimmed
+  from its tail so a group's leading row survives a partial trim), and a
+  notice is NEVER the row that silently drops -- at a 1-row budget the
+  notice is the row that wins. Pinned by the "honest-notice law under
+  footer overflow" describe in `diff_expand_surface_test.exs`. On resize, `resize/2` composes
   `InlineAuthority.resize/3 |> InlineAuthority.keyframe/2` explicitly (the
   documented composition -- `resize/3` alone never repaints the footer).
   `degenerate?/1` is checked before assuming a pin: a degenerate geometry
@@ -217,6 +233,72 @@ defmodule Raxol.Harness.Surface do
   long as the overlay is open, and `close_overlay/1` restores the
   authority back to exactly that base value on dismiss or commit.
 
+  ## Full-screen diff expansion (footer maximization)
+
+  `expand_focused_diff/1` hosts a `Raxol.Harness.DiffExpansion` scrollable
+  window over the focused block's diff, by the same GROW-the-footer
+  mechanism as the overlay picker above (`InlineAuthority.set_footer_rows/2`)
+  -- never a centered modal over history, never the alternate screen. The
+  difference from the overlay is the CLAIM shape: an overlay claims a
+  small, fixed height (`OverlayPicker.height/1`); an expansion claims the
+  LARGEST non-degenerate footer the current geometry can host
+  (`max_overlay_rows/2`, the exact same helper, one source of truth --
+  history still keeps its 2-row minimum). See `DiffExpansion`'s own
+  moduledoc for the full mechanism ruling -- why this grows the footer
+  instead of visiting the alternate screen (LC-P-NOALT, the seal oracle's
+  unverifiable-vocabulary concern, the missing alt-screen compensation
+  machinery) -- this section only covers the assembly-layer half of that
+  decision.
+
+  The `e` key (`Raxol.UI.Harness.Keymap`'s `:expand_diff`, a
+  `:not_composing` bind, same guard class as fold/jump) expands the
+  currently focused block when it is a `:diff` block. It rides the exact
+  guard fold/jump already use -- suppressed while composing (plain typed
+  text) and while an overlay OR expansion is already open (`context`'s
+  `overlay_open?` flag is `model.overlay != nil or model.expansion != nil`
+  -- see `handle_input/2`'s moduledoc) -- so `e` can never fire a second,
+  nested expansion or steal a keystroke from an open overlay's filter
+  query.
+
+  ESC closes the expansion, not the running turn, for the identical
+  reason ESC closes an open overlay: `Keymap`'s `:overlay` guard captures
+  it as `:overlay_dismiss` whenever `context.overlay_open?` is true, which
+  it is for an open expansion too. `dispatch_command/2`'s expansion clause
+  for `:overlay_dismiss` precedes the overlay clause (load-bearing order,
+  same class of ordering the overlay's own ESC-priority note documents),
+  so an open expansion's ESC always closes the EXPANSION -- the two can
+  never both be open at once (each refuses while the other is), so this
+  is not actually an ambiguous case, just an explicit one. `q` is a second
+  dismiss key, routed the same way through `route_passthrough/3`'s
+  expansion clause (alongside `j`/`k`/arrow-key scrolling) -- `Enter`,
+  other printable characters, and any other special key are inert while
+  expanded, matching the overlay's own "only the keys the picker actually
+  understands are wired" discipline. Dismissing restores the footer to
+  `model.footer_rows` via `set_footer_rows/2`, which latches
+  `needs_keyframe` -- the trailing `paint_footer/1` self-promotes to a
+  full keyframe, the same byte-identical restore discipline
+  `close_overlay/1` already relies on.
+
+  Honest refusals (see `expand_focused_diff/1`'s doc for the full,
+  ordered list): no footer to grow (`:flat` mode), no block focused, the
+  focused block is not a `:diff` block, the geometry cannot host even the
+  2-row minimum, or the focused block's content fails
+  `BodyProvider`'s `:diff` schema. Every refusal is zero bytes and an
+  unchanged model; the `e` keybind path (`apply_expand/1`) additionally
+  surfaces each one as an honest, visibly-labeled one-frame footer notice
+  through the existing `stub_notice` channel (precondition #6's stub
+  mechanism), never a silent no-op.
+
+  `resize/2` mirrors the overlay's force-close discipline for a geometry
+  that can no longer host the expansion at all, but because the
+  expansion's claim is "the maximum available," not a fixed height, a
+  resize that STILL fits does not merely survive unchanged the way an
+  open overlay does -- the claim is RE-DERIVED at the new geometry every
+  time, the footer re-grown or re-shrunk to match, and
+  `DiffExpansion.resize_view/3` re-renders the same diff content at the
+  new width/window, clamping the scroll offset. See `resize/2`'s own doc
+  for the exact sequencing.
+
   ## Precondition #6 -- command bifurcation (fixture mode = honest UI stubs)
 
   `:interrupt`/`:steer` are the two commands that cross to the agent lane
@@ -254,11 +336,25 @@ defmodule Raxol.Harness.Surface do
   The "which blocks may seal" decision itself now lives in
   `Raxol.Harness.SealFrontier` (a shared classifier, not restated per
   consumer). `frontier_entries/1` expresses the foldable window described
-  below as the frontier's `pending_input?` hold on the newest block, and
-  both the seal pass (`paint_pending_blocks/1`) and the footer's pending
-  preview (`pending_block/1`) consult `frontier_scan/1` -- the same
-  entries, the same classifier -- so they can never disagree on where the
-  frontier stops.
+  below as the frontier's `pending_input?` hold on the newest block; the
+  seal pass (`paint_pending_blocks/1`) walks it via `commit_walk/5`, and
+  the footer's pending preview (`pending_block/1`) shows the first block
+  past the walk's own committed cursor (`painted_count`) -- the
+  post-commit truth, which equals the pre-commit scan's `tail_start` on
+  every successful frame and stays honest (block still visible) when a
+  seal write is refused. One classifier decides where the frontier
+  stops; the cursor records where it actually got to.
+
+  The preview shows ONE block (two lines of it). Today the two never
+  differ: the only frontier hold a shipped producer can create is the
+  foldable window on the NEWEST block, so the unsealed suffix past the
+  cursor is at most one block long (pinned by the tail-bound test in
+  `test/harness/surface_frontier_feed_test.exs`). The moment a producer
+  emits live blocks (a mid-list awaiting-input approval holding several
+  finalized blocks behind it), that bound breaks and the one-block
+  preview under-reports -- the pinning test fails loudly then, and the
+  multi-block tail rendering it forces is the live-lane (T13b) unit's
+  decision, not silently absorbed here.
 
   `Raxol.UI.Components.Harness.Block.seal` is an item-LIFECYCLE field:
   `BlockBuilder` only ever constructs a block once its source item(s)
@@ -448,6 +544,33 @@ defmodule Raxol.Harness.Surface do
   new session's events append below whatever is already sealed, and the
   composer draft plus authority/geometry survive the switch untouched.
 
+  ## Projection panels (read-only footer overlays)
+
+  Three more overlays ride the same hosted-overlay footer slot, but are
+  `Raxol.UI.Harness.OverlayPanel` instances (never `OverlayPicker`) --
+  summonable via the labeled `w`/`m`/`n` panel binds (worktracks/memory/
+  plan; `Keymap`'s `:open_panel` command, discriminated by
+  `payload.panel`), and therefore via the command palette too, same
+  invocation-parity guarantee as every other labeled bind. Content is a
+  read-model folded by `Raxol.Harness.PanelProjection` from the
+  projection's retained *durable* `extract` meta events, recomputed both
+  at summon (`open_panel/3`) and on every footer repaint while open
+  (`refresh_panel_overlay/1`, called from `paint_footer/1`) -- a live
+  projection, not a one-shot snapshot. Same refusal ladder as
+  `open_overlay/3` (`:overlay_already_open`/`:no_footer`/
+  `:insufficient_footer_capacity`), surfaced through the same
+  `picker_refusal/2` notice path. Dismissal releases the claimed footer
+  rows and discards only UI-local panel state (scroll offset); re-summoning
+  folds the CURRENT retained events without ever touching the block
+  projection itself.
+
+  Merge caveat (see `PanelProjection`'s own moduledoc for the full
+  statement): the panels build against the frozen meta-event contract
+  shapes and a contract-shape fixture
+  (`test/fixtures/harness/sessions/projection-panels.jsonl`); the
+  per-class item shapes are ASSUMPTIONS pending verification against real
+  agent-emitted `extract` events before this unit's PR merges.
+
   ## Precondition #7 -- teardown ownership (this module owns NONE)
 
   `new/2` sets the DECSTBM history/footer split via
@@ -476,8 +599,10 @@ defmodule Raxol.Harness.Surface do
   shipped for callers to reuse.
   """
 
+  alias Raxol.Harness.DiffExpansion
   alias Raxol.Harness.Fixture
   alias Raxol.Harness.Fixture.Session
+  alias Raxol.Harness.PanelProjection
   alias Raxol.Harness.Projection
   alias Raxol.Harness.RecencyPolicy
   alias Raxol.Harness.SealFrontier
@@ -487,7 +612,7 @@ defmodule Raxol.Harness.Surface do
   alias Raxol.Harness.UnreadDivider
 
   alias Raxol.UI.Components.Harness.{Block, BlockBody, Composer}
-  alias Raxol.UI.Harness.{InputEvent, Keymap, OverlayPicker}
+  alias Raxol.UI.Harness.{InputEvent, Keymap, OverlayPanel, OverlayPicker}
 
   alias Raxol.UI.Rendering.PaintAuthority.{
     FlatAuthority,
@@ -521,6 +646,7 @@ defmodule Raxol.Harness.Surface do
           status: map(),
           stub_notice: String.t() | [String.t()] | nil,
           overlay: overlay() | nil,
+          expansion: DiffExpansion.t() | nil,
           editor_session: module() | (String.t(), keyword() -> term()) | nil,
           editor_opts: keyword(),
           unread: UnreadDivider.t(),
@@ -531,14 +657,20 @@ defmodule Raxol.Harness.Surface do
         }
 
   @typedoc """
-  The hosted overlay picker's state: the pure `OverlayPicker.t()` plus the
-  caller-supplied (or default) commit callback. `on_pick` is invoked as
+  The hosted overlay's state: `mod` names which module owns `picker` (
+  `Raxol.UI.Harness.OverlayPicker` for the filterable pickers,
+  `Raxol.UI.Harness.OverlayPanel` for the read-only projection panels --
+  see `overlay_mod/1`), `picker` holds THAT module's own state (a picker
+  or a panel, despite the field name predating panels), and `on_pick` is
+  the caller-supplied (or default) commit callback, invoked as
   `on_pick.(model, item)` AFTER `close_overlay/1` has already restored the
   footer to its base row count -- see `handle_input/2`'s `:passthrough`
-  routing.
+  routing. A hosted `OverlayPanel` never produces a pick (see
+  `open_panel/3`), so its `on_pick` is shape-compatible filler only.
   """
   @type overlay :: %{
-          picker: OverlayPicker.t(),
+          mod: module(),
+          picker: OverlayPicker.t() | OverlayPanel.t(),
           on_pick: (t(), term() -> t())
         }
 
@@ -660,6 +792,7 @@ defmodule Raxol.Harness.Surface do
       status: %{},
       stub_notice: nil,
       overlay: nil,
+      expansion: nil,
       editor_session: Keyword.get(opts, :editor_session),
       editor_opts: Keyword.get(opts, :editor_opts, []),
       unread: UnreadDivider.new(),
@@ -770,20 +903,63 @@ defmodule Raxol.Harness.Surface do
   Returns `{model, :ok}` while events remain, `{model, :done}` once every
   fixture event has been revealed AND the final pending block (if any) has
   been flushed to paint.
-  """
-  @spec advance(t(), integer() | nil) :: {t(), :ok | :done}
-  def advance(model, now \\ nil)
 
-  def advance(
-        %{revealed: revealed, events: events, painted_count: painted} = model,
-        _now
-      )
-      when revealed >= length(events) and
-             painted >= length(model.projection.blocks) do
-    {model, :done}
+  ## Options
+
+    * `:resize` -- `{width, rows}`, the atomic combined-frame form for
+      drivers that batch a geometry change with the same advance. When
+      given, the resize is ADOPTED (dims + DECSTBM re-set, via the same
+      `adopt_resize/3` path `resize/2` itself uses, minus that function's
+      own immediate keyframe) BEFORE anything else in this call --
+      specifically, before any block seals this frame. `resize/2` remains
+      the standalone entry point; calling `resize/2` then `advance/2` is
+      equally correct. The `:resize` option exists only for drivers that
+      would otherwise have to sequence two separate calls for what is, to
+      the terminal, one frame.
+
+  ## FRAME-ORDER LAW
+
+  A resize arriving in the SAME frame as an advance MUST be adopted
+  before any seal in that advance: a block sealed at a stale width hard-
+  wraps over-wide rows, and that wrap is permanent corruption once the
+  row scrolls into native scrollback (this process can never rewrite it).
+  This is why the `:resize` option is threaded through
+  `adopt_frame_resize/2` first, unconditionally, ahead of `do_advance/2`.
+
+  The footer row COUNT in this substrate is geometry-fixed (a function of
+  `rows`/`footer_rows` only, never of post-seal state) -- so the
+  reference design's "size the footer to the post-seal state" step is
+  satisfied by construction, with nothing further to do here. The footer
+  REPAINT itself still runs AFTER the seal (see `seal_frame/3`): the
+  trailing `paint_footer/1` self-promotes to a full keyframe via
+  `InlineAuthority`'s own `needs_keyframe` latch (set by `adopt_resize/3`
+  whenever geometry or width changed), so the footer always ends up
+  correct at the newly-adopted geometry without this module needing a
+  second, explicit keyframe call here.
+  """
+  @spec advance(t(), integer() | nil, keyword()) :: {t(), :ok | :done}
+  def advance(model, now \\ nil, opts \\ [])
+
+  def advance(model, now, opts) do
+    model
+    |> adopt_frame_resize(Keyword.get(opts, :resize))
+    |> do_advance(now)
   end
 
-  def advance(model, now) do
+  defp adopt_frame_resize(model, nil), do: model
+
+  defp adopt_frame_resize(model, {width, rows}),
+    do: adopt_resize(model, width, rows)
+
+  # Done-ness is stated exactly once, in `done?/1` -- this entry check
+  # and the post-frame check below both consult it, so "everything
+  # revealed and everything sealed" can never mean two different things.
+  defp do_advance(model, now) do
+    if done?(model), do: {model, :done}, else: run_advance(model, now)
+  end
+
+  defp run_advance(model, now) do
+    model = heal_sync(model)
     revealed = min(model.revealed + 1, length(model.events))
     events_so_far = Enum.take(model.events, revealed)
 
@@ -792,17 +968,85 @@ defmodule Raxol.Harness.Surface do
 
     model =
       %{model | revealed: revealed, projection: projection}
+      # Pure model-state reconciliation (no bytes) -- runs before the
+      # seal frame so the divider bookkeeping is settled ahead of any
+      # paint, and stays OUTSIDE the sync bracket seal_frame may open.
       |> reconcile_unread()
-      |> paint_pending_blocks()
-      |> update_status(events_so_far, now)
-      |> paint_footer()
+      |> seal_frame(events_so_far, now)
 
-    finished? =
-      model.revealed >= length(model.events) and
-        model.painted_count >= length(model.projection.blocks)
-
-    {model, if(finished?, do: :done, else: :ok)}
+    {model, if(done?(model), do: :done, else: :ok)}
   end
+
+  # A frame that seals at least one block AND repaints the footer
+  # presents atomically: seal + status + footer run between
+  # InlineAuthority.sync_open/1 and sync_close/1 -- one DEC 2026
+  # synchronized-update bracket, gated on the capability record. The
+  # bracket condition is the pre-seal scan's will_commit -- it exactly
+  # predicts "this frame seals >= 1 block" except when the first emit
+  # fails, in which case an empty bracket is emitted (harmless: a sync
+  # frame with no visible change; the balanced-bracket case in
+  # test/harness/surface_seal_pipeline_test.exs covers the failure path).
+  # A PERSISTENTLY refusing (alive) device therefore emits one empty
+  # open/close pair per retry frame -- a few bytes of decoration per
+  # frame, deliberately not special-cased: the same frames emit
+  # [:raxol, :harness, :seal, :write_failed] telemetry per refused
+  # write, so the condition is observable from the first frame and the
+  # operator/driver owns the decision to stop advancing.
+  # Frames that seal nothing (early reveals, tick, handle_input) never
+  # open a bracket -- but every frame entry point calls heal_sync/1
+  # first, so a close the device refused in an EARLIER frame (the
+  # dangling-open wedge) is re-attempted at the first opportunity of any
+  # kind. :flat has no footer and no cursor vocabulary -- never
+  # bracketed.
+  #
+  # If run_seal_frame/3 raises mid-bracket (a logic bug -- device
+  # failures are tuples, not raises, on this path), the rescue below
+  # makes one best-effort close attempt before re-raising, so a crashing
+  # frame does not also leave the terminal synchronized. The authority
+  # state update is lost with the crash either way; the byte is what
+  # matters to the terminal.
+  defp seal_frame(%{mode: :flat} = model, events_so_far, now) do
+    run_seal_frame(model, events_so_far, now)
+  end
+
+  defp seal_frame(model, events_so_far, now) do
+    if frontier_scan(model).will_commit do
+      opened = update_authority(model, &InlineAuthority.sync_open/1)
+
+      try do
+        opened
+        |> run_seal_frame(events_so_far, now)
+        |> update_authority(&InlineAuthority.sync_close/1)
+      rescue
+        e ->
+          _ = InlineAuthority.sync_close(opened.authority)
+          reraise e, __STACKTRACE__
+      end
+    else
+      run_seal_frame(model, events_so_far, now)
+    end
+  end
+
+  defp run_seal_frame(model, events_so_far, now) do
+    model
+    |> paint_pending_blocks()
+    |> update_status(events_so_far, now)
+    |> paint_footer()
+  end
+
+  # Re-attempts a sync close the device refused in an earlier frame (see
+  # InlineAuthority.sync_close/1's latch contract) -- a byte-free no-op
+  # when nothing is owed, so every frame entry point (do_advance, tick,
+  # handle_input, resize) calls it unconditionally: a dangling ?2026h
+  # heals at the FIRST frame after the device accepts a byte again,
+  # never later.
+  defp heal_sync(%{mode: :flat} = model), do: model
+
+  defp heal_sync(model),
+    do: update_authority(model, &InlineAuthority.sync_close/1)
+
+  defp update_authority(model, fun),
+    do: %{model | authority: fun.(model.authority)}
 
   @doc """
   Advances the elapsed-since-last-event ticker (the status strip's
@@ -814,6 +1058,7 @@ defmodule Raxol.Harness.Surface do
   @spec tick(t(), integer()) :: t()
   def tick(model, now) when is_integer(now) do
     model
+    |> heal_sync()
     |> put_in([:status, :now], now)
     |> paint_footer()
   end
@@ -1029,7 +1274,7 @@ defmodule Raxol.Harness.Surface do
     |> Enum.map(fn {block, index} ->
       %{
         kind: block.kind,
-        committed?: index < model.painted_count,
+        committed?: block_sealed?(model, index),
         running?: Block.live?(block),
         pending_input?:
           awaiting_input?(block) or
@@ -1037,6 +1282,24 @@ defmodule Raxol.Harness.Surface do
       }
     end)
   end
+
+  # THE committed-marker mapping, stated exactly once: block `index` is
+  # sealed (physically painted into print-once history) iff it sits below
+  # the `painted_count` high-water mark -- the mark only ever advances a
+  # contiguous prefix, so the comparison IS the committed set. Both the
+  # frontier feed above (`committed?`) and the fold fill-guard
+  # (`apply_fold_toggle/2` -- the one mutation channel aimed at a block)
+  # consult this one predicate, so the "what counts as sealed" boundary
+  # can never drift between the classifier's view and the guard's
+  # (boundary-agreement pinned in
+  # test/harness/surface_frontier_feed_test.exs).
+  # No `index >= 0` guard on purpose: a degenerate negative index (no
+  # producer can build one -- `move_focus/2` clamps at 0 -- but the
+  # payload is data) classifies as "sealed" and lands on the honest
+  # refusal notice, never a crash mid-input-frame. Fail-closed: the
+  # restrictive answer for a nonsense index is "not foldable."
+  defp block_sealed?(model, index) when is_integer(index),
+    do: index < model.painted_count
 
   # A live approval block is, per `Block`'s own contract, a question still
   # waiting on the user -- the genuine awaiting-input feed for the
@@ -1046,14 +1309,27 @@ defmodule Raxol.Harness.Surface do
     do: Block.live?(block) and block.kind == :approval
 
   @doc """
-  The shared frontier consultation every consumer in this module goes
-  through: `SealFrontier.scan_frontier/3` over `frontier_entries/1`.
-  `tail_start` is both the seal pass's paint target and the first block
-  the footer's pending preview may show -- one number, so the two can
-  never disagree. `turn_running?` is derived from the status snapshot
-  (`turn_completed`); with today's entry mapping (no running entries,
-  window hold unconditional) the scan result is independent of turn
-  state, so the one-step-stale status at seal time is harmless.
+  The shared PRE-commit frontier consultation: `SealFrontier.scan_frontier/3`
+  over `frontier_entries/1`. Two consumers read it, both BEFORE the
+  commit pass runs: `paint_pending_blocks/1`'s detach target
+  (`tail_start` -- every block at or past "about to seal" gets its
+  content detached), and `seal_frame/3`'s per-frame synchronized-output
+  bracket decision (`will_commit` predicts "this frame seals >= 1
+  block" -- same entries, same classifier, so it can never disagree
+  with what the walk actually attempts). `turn_running?` is derived
+  from the status snapshot (`turn_completed`); with today's entry
+  mapping (no running entries, window hold unconditional) the scan
+  result is independent of turn state, so the one-step-stale status at
+  seal time is harmless.
+
+  The footer's pending preview (`pending_block/1`) deliberately does
+  NOT read this scan: it keys on the committed cursor
+  (`painted_count`) instead, because the scan consumes committable
+  entries and would therefore hide a block whose seal write was just
+  REFUSED (see `pending_block/1`'s comment for the full rationale).
+  The two agree on every successful frame (the scan/walk-agreement
+  property); they diverge exactly when a write fails, and the cursor
+  is the display-honest side of that divergence.
   """
   @spec frontier_scan(t()) :: SealFrontier.scan()
   def frontier_scan(model) do
@@ -1096,9 +1372,14 @@ defmodule Raxol.Harness.Surface do
     # The ONE mutating frontier walk (SealFrontier's moduledoc): emit
     # each newly-committable block via seal_block/2, which advances
     # painted_count -- the committed marker frontier_entries/1 reads.
-    # The emit is infallible today (InlineAuthority.seal/2 has no error
-    # path), so the walk's write-failure branch stays corpus-only until
-    # a write-confirming substrate lands (the two-phase seal follow-up).
+    # The emit is write-checked (`InlineAuthority.try_seal/2`): write ->
+    # confirm -> mark, where "confirmed" means the device's io server
+    # ACCEPTED the write (see try_seal/2's doc for what that does and
+    # does not promise). A refused write halts the walk with
+    # painted_count (the cursor) strictly before the failed entry, and the
+    # next advance retries the same block, so a block can never be marked
+    # painted for bytes the device refused (retry-not-vanish; covered by
+    # test/harness/surface_seal_pipeline_test.exs).
     result =
       SealFrontier.commit_walk(
         entries,
@@ -1110,7 +1391,26 @@ defmodule Raxol.Harness.Surface do
             |> Enum.at(index)
             |> apply_fold_override(index, acc.fold_overrides)
 
-          {:ok, seal_block(acc, block)}
+          case seal_block(acc, block) do
+            {:ok, _acc} = ok ->
+              ok
+
+            {:error, :write_failed, _acc} = error ->
+              # The retry loop for a refusing-but-alive device is
+              # unbounded BY DESIGN (a bound would strand the block when
+              # the device recovers) -- this emit is what keeps it from
+              # being unbounded AND invisible: one event per refused
+              # write, from the first frame, so a driver/operator can see
+              # a persistent refusal and decide. A DEAD device never
+              # reaches here (try_seal fail-fasts on a corpse).
+              :telemetry.execute(
+                [:raxol, :harness, :seal, :write_failed],
+                %{},
+                %{index: index, kind: block.kind}
+              )
+
+              error
+          end
         end,
         cursor: model.painted_count
       )
@@ -1169,14 +1469,19 @@ defmodule Raxol.Harness.Surface do
     end
   end
 
+  # :flat -- the degradation tier's append is a plain stdout/pipe write with
+  # no positioning to confirm; a failed pipe write raising out of the frame
+  # is the honest flat behavior, so the flat emit stays infallible-shaped.
   defp seal_block(%{mode: :flat} = model, block) do
     lines = render_block_lines(block, model, :plain)
     iodata = Enum.map(lines, &(&1 <> "\n"))
     authority = FlatAuthority.seal(model.authority, iodata)
-    %{model | authority: authority, painted_count: model.painted_count + 1}
+
+    {:ok,
+     %{model | authority: authority, painted_count: model.painted_count + 1}}
   end
 
-  # No per-line `\e[K` here: `InlineAuthority.seal/2` sanitizes CONTENT
+  # No per-line `\e[K` here: `InlineAuthority.try_seal/2` sanitizes CONTENT
   # through `ContentGuard.sanitize_line/1` (its allowlist keeps SGR only),
   # so an EL embedded in content never survived -- the guard stripped the
   # ESC and left a literal `[K` painted at the start of every sealed
@@ -1187,8 +1492,15 @@ defmodule Raxol.Harness.Surface do
   defp seal_block(model, block) do
     lines = render_block_lines(block, model, :styled)
     iodata = Enum.map(lines, &[&1, "\r\n"])
-    authority = InlineAuthority.seal(model.authority, iodata)
-    %{model | authority: authority, painted_count: model.painted_count + 1}
+
+    case InlineAuthority.try_seal(model.authority, iodata) do
+      {:ok, authority} ->
+        {:ok,
+         %{model | authority: authority, painted_count: model.painted_count + 1}}
+
+      {:error, :write_failed, authority} ->
+        {:error, :write_failed, %{model | authority: authority}}
+    end
   end
 
   # Called from seal_block/2 -- the print-once paint -- so the grade
@@ -1266,15 +1578,26 @@ defmodule Raxol.Harness.Surface do
   Normalizes `raw_event` (`InputEvent.normalize/1`) and resolves it via
   `Keymap.resolve/2` BEFORE the Composer ever sees it -- see the
   moduledoc's precondition #2. A `:passthrough` result reaches
-  `Composer.handle_event/3` only while `composing?` AND no overlay is
-  open; while an overlay picker is open (`model.overlay != nil`), a
-  `:passthrough` result instead reaches
+  `Composer.handle_event/3` only while `composing?` AND no overlay/
+  expansion is open; while an overlay picker is open (`model.overlay !=
+  nil`), a `:passthrough` result instead reaches
   `Raxol.UI.Harness.OverlayPicker.handle_key/2` with the SAME normalized
   event this function already computed (never re-normalized) -- see "The
-  overlay picker" section above. Always repaints the footer afterward.
+  overlay picker" section above. While a diff expansion is open
+  (`model.expansion != nil`), a `:passthrough` result is instead consulted
+  for scroll/dismiss keys directly by this module -- see "Full-screen
+  diff expansion" below. `overlay_open?` in the `Keymap` context carries
+  BOTH transient-footer-view flags (`model.overlay != nil or
+  model.expansion != nil`): an open expansion suppresses the same
+  `:not_composing` binds (and captures ESC as `:overlay_dismiss`) an open
+  overlay would, for the identical reason -- the footer is showing
+  something other than the transcript/composer, and typed letters must
+  reach THAT, never fire commands at state hidden behind it. Always
+  repaints the footer afterward.
   """
   @spec handle_input(t(), term()) :: t()
   def handle_input(model, raw_event) do
+    model = heal_sync(model)
     norm = InputEvent.normalize(raw_event)
 
     # Every keystroke is presence evidence for the unread divider's
@@ -1305,17 +1628,29 @@ defmodule Raxol.Harness.Surface do
       composing?: model.composing?,
       streaming?: not Map.get(model.status, :turn_completed, false),
       focused_block_id: model.focused_index,
-      overlay_open?: model.overlay != nil
+      # BOTH transient footer views ride this flag (see the moduledoc's
+      # "Full-screen diff expansion" section): an open expansion
+      # suppresses the same `:not_composing` binds (and captures ESC as
+      # `:overlay_dismiss`) an open overlay picker would.
+      overlay_open?: model.overlay != nil or model.expansion != nil
     }
   end
 
+  # The hosted overlay's own module (see the `overlay()` typedoc) --
+  # `OverlayPicker` for the filterable pickers, or an explicitly-stamped
+  # `mod` (currently only `OverlayPanel`, the read-only projection
+  # panels) for anything else. One source of truth for "which module owns
+  # this overlay's state," consulted at every dispatch site instead of
+  # hardcoding `OverlayPicker`.
+  defp overlay_mod(overlay), do: Map.get(overlay, :mod, OverlayPicker)
+
   # While an overlay is open, EVERY :passthrough event (typed characters,
-  # arrows, Enter, an unrecognized special key) is routed to the overlay
-  # picker instead of the Composer -- the composer's buffer is frozen
+  # arrows, Enter, an unrecognized special key) is routed to the hosted
+  # overlay instead of the Composer -- the composer's buffer is frozen
   # mid-pick (see the moduledoc's command-bifurcation note on `:steer`).
   defp route_passthrough(%{overlay: overlay} = model, norm, _raw_event)
        when overlay != nil do
-    case OverlayPicker.handle_key(overlay.picker, norm) do
+    case overlay_mod(overlay).handle_key(overlay.picker, norm) do
       {:continue, picker} ->
         %{model | overlay: %{overlay | picker: picker}}
 
@@ -1333,6 +1668,29 @@ defmodule Raxol.Harness.Surface do
         # :passthrough (see Keymap's moduledoc), so this clause is not
         # expected to fire in practice.
         close_overlay(model)
+    end
+  end
+
+  # While a diff expansion is open, EVERY :passthrough event is consulted
+  # for the expansion's own small key vocabulary (scroll/dismiss) instead
+  # of reaching the Composer -- mutually exclusive with the overlay clause
+  # above (`expand_focused_diff/1` refuses while an overlay is open, and
+  # `open_overlay/3` refuses while an expansion is open), so relative
+  # clause order between the two is incidental.
+  defp route_passthrough(%{expansion: expansion} = model, norm, _raw_event)
+       when expansion != nil do
+    cond do
+      InputEvent.printable_char(norm) == "j" or InputEvent.key(norm) == :down ->
+        %{model | expansion: DiffExpansion.scroll(expansion, 1)}
+
+      InputEvent.printable_char(norm) == "k" or InputEvent.key(norm) == :up ->
+        %{model | expansion: DiffExpansion.scroll(expansion, -1)}
+
+      InputEvent.printable_char(norm) == "q" ->
+        close_expansion(model)
+
+      true ->
+        model
     end
   end
 
@@ -1357,11 +1715,22 @@ defmodule Raxol.Harness.Surface do
 
   defp apply_composer_command(_command, model), do: model
 
+  # Must precede the plain :overlay_dismiss clause below: while an
+  # expansion is open, ESC (resolved by Keymap's :overlay guard, which
+  # reads the SAME overlay_open? context flag an open overlay sets --
+  # see handle_input/2's moduledoc) closes the EXPANSION, not a
+  # (necessarily absent, since the two refuse each other) overlay.
+  defp dispatch_command(%{expansion: expansion} = model, %{
+         type: :overlay_dismiss
+       })
+       when expansion != nil,
+       do: close_expansion(model)
+
   defp dispatch_command(model, %{type: :overlay_dismiss}),
     do: close_overlay(model)
 
-  # The command's own payload is the honored fold target -- NOT a second
-  # read of `model.focused_index` here. Both producers (a live keypress
+  # The command's own payload is the honored target -- NOT a second read
+  # of `model.focused_index` here. Both producers (a live keypress
   # resolved by `Keymap.resolve/2` in `handle_input/2`, and a palette
   # pick via `Keymap.command_for/2` in `palette_command/2`) thread
   # `context.focused_block_id` into `payload.block_id` from the SAME
@@ -1369,7 +1738,11 @@ defmodule Raxol.Harness.Surface do
   # exactly one producer chain (context -> payload -> here). A second
   # model read at dispatch time was the adversarial review's named
   # decoupling hazard (2026-07-17, MEDIUM): a value the tests pinned but
-  # nothing consumed.
+  # nothing consumed. `:expand_diff` carries the identical payload shape
+  # and honors it the same way.
+  defp dispatch_command(model, %{type: :expand_diff, payload: payload}),
+    do: apply_expand(model, Map.get(payload, :block_id))
+
   defp dispatch_command(model, %{type: :fold_toggle, payload: payload}) do
     apply_fold_toggle(model, Map.get(payload, :block_id))
   end
@@ -1403,6 +1776,18 @@ defmodule Raxol.Harness.Surface do
        when overlay != nil,
        do: picker_refusal(model, :overlay_already_open)
 
+  # An open diff expansion blocks the palette the same way an open
+  # overlay does (Ctrl+P is `:always`, so the keymap guard never
+  # suppresses it): the footer is expansion-shaped, and the two transient
+  # footer views never coexist -- `open_overlay/3` would refuse with
+  # `:expansion_open` anyway; refusing HERE gives the same honest notice
+  # channel the overlay-already-open case uses.
+  defp dispatch_command(%{expansion: expansion} = model, %{
+         type: :open_palette
+       })
+       when expansion != nil,
+       do: picker_refusal(model, :expansion_open)
+
   defp dispatch_command(model, %{type: :open_palette}),
     do: open_command_palette(model)
 
@@ -1412,11 +1797,34 @@ defmodule Raxol.Harness.Surface do
   defp dispatch_command(model, %{type: :open_session_picker}),
     do: open_session_picker(model)
 
+  # `handle_open_result/2` already routes an `open_panel/3` refusal
+  # through `picker_refusal/2` -- panels reuse it verbatim, same honest
+  # refusal vocabulary as the pickers above.
+  defp dispatch_command(model, %{type: :open_panel, payload: %{panel: kind}}) do
+    model |> open_panel(kind) |> handle_open_result(model)
+  end
+
   defp dispatch_command(model, %{type: :focus_transcript}),
     do: focus_transcript(model)
 
   defp dispatch_command(model, %{type: :focus_composer}),
     do: focus_composer(model)
+
+  # Same freeze rationale as the overlay clauses below, for an open diff
+  # expansion: the composer/transcript state behind a full-screen diff is
+  # hidden, so queuing a steer built from it would be dishonest UI. These
+  # two clauses MUST precede the general `:steer`/`:edit_draft` clauses
+  # (function-clause order load-bearing, same as the overlay pair) --
+  # relative order between the expansion and overlay freeze clauses is
+  # incidental, since the two refuse each other and can never both be
+  # open at once.
+  defp dispatch_command(%{expansion: expansion} = model, %{type: :steer})
+       when expansion != nil,
+       do: model
+
+  defp dispatch_command(%{expansion: expansion} = model, %{type: :edit_draft})
+       when expansion != nil,
+       do: model
 
   # An open overlay freezes the composer buffer mid-pick (see the
   # moduledoc's command-bifurcation note) -- queuing a steer built from
@@ -1640,8 +2048,19 @@ defmodule Raxol.Harness.Surface do
     %{model | stub_notice: "» no block focused — jump to a block first (g)"}
   end
 
-  defp apply_fold_toggle(model, index)
-       when is_integer(index) and index < model.painted_count do
+  # The sealed?/unsealed? split below goes through `block_sealed?/2` --
+  # the SAME predicate that feeds the frontier classifier's `committed?`
+  # flag (see `frontier_entries/1`) -- so the fill-guard's boundary and
+  # the classifier's can never disagree by construction.
+  defp apply_fold_toggle(model, index) when is_integer(index) do
+    if block_sealed?(model, index) do
+      sealed_fold_refusal(model, index)
+    else
+      store_fold_override(model, index)
+    end
+  end
+
+  defp sealed_fold_refusal(model, index) do
     # Already physically painted -- seal-time-only: sealed history is
     # never repainted, so a fold toggle on it is a documented no-op,
     # exactly like `Block.fold_allowed?/2`'s post-seal gate (enforced
@@ -1659,7 +2078,7 @@ defmodule Raxol.Harness.Surface do
     %{model | stub_notice: "» block #{index} sealed — fold unavailable"}
   end
 
-  defp apply_fold_toggle(model, index) do
+  defp store_fold_override(model, index) do
     case Enum.at(model.projection.blocks, index) do
       nil ->
         model
@@ -1792,6 +2211,9 @@ defmodule Raxol.Harness.Surface do
 
   ## Errors
 
+    * `{:error, :expansion_open}` -- a diff expansion (see
+      `expand_focused_diff/1`) is already claiming the footer; the two
+      transient footer views never coexist.
     * `{:error, :overlay_already_open}` -- `model.overlay` is already set.
     * `{:error, :no_footer}` -- `model.mode == :flat` (nothing to grow).
     * `{:error, :insufficient_footer_capacity}` -- the current geometry
@@ -1802,8 +2224,15 @@ defmodule Raxol.Harness.Surface do
   @spec open_overlay(t(), [term()], keyword()) ::
           {:ok, t()}
           | {:error,
-             :overlay_already_open | :no_footer | :insufficient_footer_capacity}
+             :expansion_open
+             | :overlay_already_open
+             | :no_footer
+             | :insufficient_footer_capacity}
   def open_overlay(model, items, opts \\ [])
+
+  def open_overlay(%{expansion: expansion}, _items, _opts)
+      when expansion != nil,
+      do: {:error, :expansion_open}
 
   def open_overlay(%{overlay: overlay}, _items, _opts) when overlay != nil,
     do: {:error, :overlay_already_open}
@@ -1851,7 +2280,7 @@ defmodule Raxol.Harness.Surface do
          ) do
       {:ok, authority} ->
         on_pick = Keyword.get(opts, :on_pick, default_on_pick(picker))
-        overlay = %{picker: picker, on_pick: on_pick}
+        overlay = %{mod: OverlayPicker, picker: picker, on_pick: on_pick}
         model = %{model | authority: authority, overlay: overlay}
         {:ok, paint_footer(model)}
 
@@ -1891,6 +2320,98 @@ defmodule Raxol.Harness.Surface do
 
     %{model | authority: authority, overlay: nil}
     |> paint_footer()
+  end
+
+  # -- projection panels (see the moduledoc's "Projection panels" section) -
+
+  @doc """
+  Opens a read-only projection panel (`kind`: `:worktracks`, `:memory`, or
+  `:plan`) over the same hosted-overlay footer slot `open_overlay/3` uses --
+  growing the footer viewport by `Raxol.UI.Harness.OverlayPanel.height/1`
+  rows and repainting immediately. Summon shows the LIVE projection: the
+  panel's initial content is `Raxol.Harness.PanelProjection.render_lines/2`
+  folded over `model.projection.source_events` (the retained *durable*
+  meta events) at the moment of opening, not a stale snapshot.
+
+  Dismissal (`close_overlay/1`, same as any other hosted overlay) discards
+  only UI-local state -- scroll offset, claimed footer rows. The fold
+  source is the projection's retained events, so re-summoning a panel
+  folds current state without ever touching the block projection itself
+  (see `PanelProjection`'s moduledoc, "Recompute, not incrementally
+  cached").
+
+  ## Options
+
+    * `:max_visible` (default `OverlayPanel.default_max_visible/0`) --
+      clamped to the available footer capacity, same narrowing rule
+      `open_overlay/3` applies (a taller request is narrowed, never
+      refused).
+
+  ## Errors
+
+  Identical refusal ladder to `open_overlay/3`:
+  `{:error, :overlay_already_open}`, `{:error, :no_footer}` (`:flat`
+  mode), `{:error, :insufficient_footer_capacity}`. Zero bytes written,
+  model untouched on every refusal.
+  """
+  @spec open_panel(t(), PanelProjection.kind(), keyword()) ::
+          {:ok, t()}
+          | {:error,
+             :overlay_already_open | :no_footer | :insufficient_footer_capacity}
+  def open_panel(model, kind, opts \\ [])
+
+  def open_panel(%{overlay: overlay}, _kind, _opts) when overlay != nil,
+    do: {:error, :overlay_already_open}
+
+  def open_panel(%{mode: :flat}, _kind, _opts), do: {:error, :no_footer}
+
+  def open_panel(model, kind, opts) do
+    max_overlay_rows = max_overlay_rows(model.rows, model.footer_rows)
+
+    if max_overlay_rows < 2 or degenerate?(model) do
+      {:error, :insufficient_footer_capacity}
+    else
+      do_open_panel(model, kind, opts, max_overlay_rows)
+    end
+  end
+
+  defp do_open_panel(model, kind, opts, max_overlay_rows) do
+    max_visible =
+      min(
+        Keyword.get(opts, :max_visible, OverlayPanel.default_max_visible()),
+        max_overlay_rows - 1
+      )
+
+    panel =
+      OverlayPanel.new(kind: kind, max_visible: max_visible)
+      |> OverlayPanel.put_lines(
+        PanelProjection.render_lines(kind, model.projection.source_events)
+      )
+
+    claimed_rows = OverlayPanel.height(panel)
+
+    case InlineAuthority.set_footer_rows(
+           model.authority,
+           model.footer_rows + claimed_rows
+         ) do
+      {:ok, authority} ->
+        # A panel never produces {:picked, _} (see OverlayPanel's
+        # moduledoc) -- `on_pick` here is shape-compat filler only, never
+        # actually invoked.
+        overlay = %{
+          mod: OverlayPanel,
+          picker: panel,
+          on_pick: fn m, _item -> m end
+        }
+
+        model = %{model | authority: authority, overlay: overlay}
+        {:ok, paint_footer(model)}
+
+      # Unreachable given the capacity check above (belt and braces), same
+      # reasoning as `do_open_overlay/4`'s own unreachable clause.
+      {:error, :degenerate} ->
+        {:error, :insufficient_footer_capacity}
+    end
   end
 
   # -- pickers (command palette, jump, session) ----------------------------
@@ -2129,8 +2650,205 @@ defmodule Raxol.Harness.Surface do
     %{model | stub_notice: "» a picker is already open"}
   end
 
+  # A diff expansion claims the footer the same way an open picker does
+  # (the two transient footer views never coexist) -- same honest-notice
+  # channel, named for what is actually in the way.
+  defp picker_refusal(model, :expansion_open) do
+    %{model | stub_notice: "» a diff expansion is open — dismiss it first"}
+  end
+
   defp picker_refusal(model, :no_footer) do
     seal_flat_notice(model, "» pickers require the footer (flat mode)")
+  end
+
+  # -- diff expansion (see the moduledoc's "Full-screen diff expansion" section) --
+
+  @doc """
+  Expands the currently focused block full-screen, when it is a `:diff`
+  block, by growing the DECSTBM footer to the largest non-degenerate
+  claim (history keeps its 2-row minimum -- `max_overlay_rows/2`, the
+  SAME helper `open_overlay/3` uses, one source of truth) and hosting a
+  `Raxol.Harness.DiffExpansion` scrollable window inside it. See the
+  moduledoc's "Full-screen diff expansion (footer maximization)" section
+  for the mechanism ruling.
+
+  Refuses, in order (each refusal: zero bytes written, model untouched):
+
+    * `{:error, :expansion_already_open}` -- `model.expansion` is already
+      set.
+    * `{:error, :overlay_open}` -- an overlay picker is open (the two
+      transient footer views never coexist).
+    * `{:error, :no_footer}` -- `model.mode == :flat` (nothing to grow).
+    * `{:error, :no_focus}` -- `model.focused_index` is `nil`.
+    * `{:error, :not_a_diff}` -- the focused block does not exist, or its
+      `kind` is not `:diff`.
+    * `{:error, :insufficient_footer_capacity}` -- the current geometry
+      cannot keep history's 2-row minimum AND host at least a 2-row
+      expansion (one status row and one expansion header row, per the
+      moduledoc's arithmetic).
+    * `{:error, {:invalid_content, reason}}` -- the focused block's
+      content map fails `Raxol.UI.Components.Harness.BodyProvider`'s
+      `:diff` schema (`DiffExpansion.new/2`'s own validation, consulted
+      BEFORE any row is claimed -- a content error never grows the
+      footer).
+  """
+  @spec expand_focused_diff(t()) ::
+          {:ok, t()}
+          | {:error,
+             :expansion_already_open
+             | :overlay_open
+             | :no_footer
+             | :no_focus
+             | :not_a_diff
+             | :insufficient_footer_capacity
+             | {:invalid_content, String.t()}}
+  def expand_focused_diff(model),
+    do: expand_block_at(model, model.focused_index)
+
+  # The parameterized ladder both producers share: the public
+  # `expand_focused_diff/1` reads `model.focused_index`; the
+  # `:expand_diff` command dispatch threads `payload.block_id` instead
+  # (the one-producer-chain rule -- see `dispatch_command/2`'s
+  # payload-honoring comment). Both values originate from the same
+  # `keymap_context/1` construction, so the ladders can never disagree;
+  # parameterizing keeps that a structural fact instead of a coincidence.
+  defp expand_block_at(%{expansion: expansion}, _index) when expansion != nil,
+    do: {:error, :expansion_already_open}
+
+  defp expand_block_at(%{overlay: overlay}, _index) when overlay != nil,
+    do: {:error, :overlay_open}
+
+  defp expand_block_at(%{mode: :flat}, _index), do: {:error, :no_footer}
+
+  defp expand_block_at(_model, nil), do: {:error, :no_focus}
+
+  defp expand_block_at(model, index) do
+    case Enum.at(model.projection.blocks, index) do
+      %{kind: :diff} = block -> do_expand(model, block)
+      _not_a_diff_or_missing -> {:error, :not_a_diff}
+    end
+  end
+
+  # The grown footer's top two rows are chrome the expansion always
+  # reserves: one status row plus one expansion header row (the file
+  # path + scroll position line `DiffExpansion.render_lines/1` prepends).
+  # Everything below them is scrollable content, so the content viewport
+  # is `total_footer - @expansion_chrome_rows`. Named once and derived
+  # through `expansion_view_rows/2` so the `build_expansion/3` open path
+  # and the `resize_expansion/3` re-grow path can never drift apart.
+  # NOTE: distinct from the `claim < 2` gate below (that `2` is a minimum
+  # footer GROWTH, not this chrome subtraction -- see `do_expand/2`) and
+  # from `DiffExpansion`'s own `@gutter_width 2` (a per-row column count).
+  @expansion_chrome_rows 2
+
+  defp expansion_view_rows(footer_rows, claim),
+    do: footer_rows + claim - @expansion_chrome_rows
+
+  defp do_expand(model, block) do
+    claim = max_overlay_rows(model.rows, model.footer_rows)
+
+    # `claim` is the footer GROWTH beyond the base `model.footer_rows`
+    # that still leaves history its 2-row minimum (what
+    # `max_overlay_rows/2` maximizes). A growth below 2 cannot host the
+    # expansion's own two chrome rows, so refuse with the honest notice
+    # rather than open a viewport with no room for content.
+    if claim < 2 or degenerate?(model) do
+      {:error, :insufficient_footer_capacity}
+    else
+      build_expansion(model, block, claim)
+    end
+  end
+
+  # `DiffExpansion.new/2` (pure, no IO) runs BEFORE `set_footer_rows/2`
+  # ever touches the authority -- a content-validation error propagates
+  # with zero bytes written, exactly like every other refusal above.
+  defp build_expansion(model, block, claim) do
+    view_rows = expansion_view_rows(model.footer_rows, claim)
+
+    case DiffExpansion.new(block.content,
+           width: model.width,
+           view_rows: view_rows
+         ) do
+      {:ok, expansion} ->
+        case InlineAuthority.set_footer_rows(
+               model.authority,
+               model.footer_rows + claim
+             ) do
+          {:ok, authority} ->
+            model = %{model | authority: authority, expansion: expansion}
+            {:ok, paint_footer(model)}
+
+          # Unreachable given the capacity check above (belt and braces,
+          # same reasoning as `do_open_overlay/4`'s own defensive branch).
+          {:error, :degenerate} ->
+            {:error, :insufficient_footer_capacity}
+        end
+
+      # A sub-gutter-floor width (`DiffExpansion` refuses `width <
+      # @gutter_width + 1`, since every body row's fixed gutter would
+      # overflow a narrower budget and wrap past the footer region) is a
+      # terminal-too-small refusal, mapped to the same honest notice the
+      # row-degenerate gate above uses -- never emitted as wrapping bytes.
+      {:error, :degenerate_view} ->
+        {:error, :insufficient_footer_capacity}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Closes the currently-open diff expansion (a no-op when none is open),
+  restoring the footer viewport to `model.footer_rows` (the base value)
+  and repainting. `InlineAuthority.set_footer_rows/2` latches
+  `needs_keyframe` on a shrink, so the trailing `paint_footer/1` call
+  self-promotes to a full keyframe -- the byte-identical restore
+  discipline the moduledoc documents (mirrors `close_overlay/1`
+  verbatim).
+  """
+  @spec close_expansion(t()) :: t()
+  def close_expansion(%{expansion: nil} = model), do: model
+
+  def close_expansion(model) do
+    authority =
+      case InlineAuthority.set_footer_rows(model.authority, model.footer_rows) do
+        {:ok, authority} -> authority
+        # Cannot happen for any authority this module itself constructed
+        # (the base footer_rows was already valid when the expansion
+        # opened) -- kept the authority unchanged rather than crashing if
+        # it somehow did.
+        {:error, _reason} -> model.authority
+      end
+
+    %{model | authority: authority, expansion: nil}
+    |> paint_footer()
+  end
+
+  # `:expand_diff`'s dispatch target: maps every refusal to an honest,
+  # visibly-labeled one-frame footer notice (the SAME `stub_notice`
+  # mechanism `:interrupt`/`:steer`/the fold-on-sealed-block no-op use --
+  # see the moduledoc's precondition #6), never a silent no-op. `{:ok, _}`
+  # passes the already-painted model straight through.
+  defp apply_expand(model, block_id) do
+    case expand_block_at(model, block_id) do
+      {:ok, model} ->
+        model
+
+      {:error, :no_focus} ->
+        %{model | stub_notice: "» expand: no block focused"}
+
+      {:error, :not_a_diff} ->
+        %{model | stub_notice: "» expand: focused block is not a diff"}
+
+      {:error, :insufficient_footer_capacity} ->
+        %{
+          model
+          | stub_notice: "» expand: terminal too small for a full-screen diff"
+        }
+
+      {:error, reason} ->
+        %{model | stub_notice: "» expand: #{inspect(reason)}"}
+    end
   end
 
   # -- footer paint (precondition #5) --------------------------------------
@@ -2138,16 +2856,59 @@ defmodule Raxol.Harness.Surface do
   defp paint_footer(%{mode: :flat} = model), do: model
 
   defp paint_footer(model) do
+    model = refresh_panel_overlay(model)
     lines = footer_lines(model)
     authority = InlineAuthority.repaint(model.authority, lines)
     %{model | authority: authority, stub_notice: nil}
   end
 
-  defp footer_lines(model) do
-    status_line = StatusStrip.render(model.status, model.width)
-    lane_lines = notice_line(model.lane_notice, model.width)
-    overlay_lines = overlay_lines(model)
+  # This is the whole live-update mechanism for an open projection panel:
+  # `advance/2` (fixture reveal) and `handle_input/2` (keystrokes) both
+  # end in this module's own `paint_footer/1` call, so an open panel
+  # refreshes its content as new `extract` events reveal, without any
+  # separate subscription or polling path. Recompute-per-paint is the
+  # documented decision -- see `PanelProjection`'s moduledoc, "Recompute,
+  # not incrementally cached."
+  defp refresh_panel_overlay(
+         %{overlay: %{mod: OverlayPanel, picker: panel} = overlay} = model
+       ) do
+    lines =
+      PanelProjection.render_lines(panel.kind, model.projection.source_events)
 
+    %{
+      model
+      | overlay: %{overlay | picker: OverlayPanel.put_lines(panel, lines)}
+    }
+  end
+
+  defp refresh_panel_overlay(model), do: model
+
+  # While a diff expansion is open, it claims the WHOLE footer viewport:
+  # composer, preview, and overlay lines are all suppressed (there is no
+  # overlay to suppress anyway -- the two refuse each other) -- only the
+  # status line, a one-frame notice (if any -- e.g. the honest refusal
+  # notices `apply_expand/1` sets right before an expansion attempt
+  # fails, or a stale notice from just before "e" opened one), and the
+  # expansion's own header-plus-window lines. A separate function head
+  # (rather than a branch inside the clause below) keeps this diff
+  # surgical against the existing footer_lines/1 body.
+  defp footer_lines(%{expansion: expansion} = model) when expansion != nil do
+    # Same honest-notice law as the normal clause below: the expansion's
+    # body rows are the discretionary tail (its header stays first-in-
+    # group so position/dismiss hints survive a trim), status yields
+    # next, the notice never.
+    fit_footer_lines(
+      [
+        status: StatusStrip.render(model.status, model.width),
+        notice: notice_line(model.stub_notice, model.width),
+        expansion: DiffExpansion.render_lines(expansion)
+      ],
+      [:expansion, :status],
+      footer_budget(model)
+    )
+  end
+
+  defp footer_lines(model) do
     # Both the divider and the pending/live-tail preview are suppressed
     # while an overlay is open -- the overlay claims that space (see the
     # moduledoc's precondition #5 update, "The overlay picker" section,
@@ -2162,18 +2923,90 @@ defmodule Raxol.Harness.Surface do
         :styled
       )
 
-    notice_lines = notice_line(model.stub_notice, model.width)
-
-    status_line ++
-      lane_lines ++
-      overlay_lines ++
-      divider_lines ++ preview_lines ++ composer_lines ++ notice_lines
+    # `lane` is the persistent live-session status channel
+    # (`put_lane_notice/2`: "interrupt sent", "session process exited —
+    # transcript preserved", etc.). Like `notice`, it is an HONEST report
+    # channel, so it is deliberately absent from `drop_order` -- never shed
+    # to fit the budget (a dropped lane notice would read as "nothing
+    # happened", the exact fail-safe inversion the honest-notice law rules
+    # out). It sits right after `status` in display order, as it did before
+    # master's fit refactor.
+    fit_footer_lines(
+      [
+        status: StatusStrip.render(model.status, model.width),
+        lane: notice_line(model.lane_notice, model.width),
+        overlay: overlay_lines(model),
+        divider: divider_lines,
+        preview: preview_lines,
+        composer: composer_lines,
+        notice: notice_line(model.stub_notice, model.width)
+      ],
+      [:preview, :divider, :composer, :overlay, :status],
+      footer_budget(model)
+    )
   end
+
+  # -- footer fit: the honest-notice law ------------------------------
+  #
+  # `InlineAuthority.repaint/2` pads/TRUNCATES the handed list to the
+  # footer row count POSITION-BLIND (`pad_rows/2` is an `Enum.take/2` --
+  # the tail is the casualty). With the notice as the last footer group,
+  # any composed footer that overflows the budget would silently eat the
+  # honest refusal/degradation notice first -- the exact fail-safe
+  # inversion the notice channel exists to rule out (a notice IS the
+  # honest report that something was refused or degraded; a dropped one
+  # reads as "nothing happened"). So THIS module owns a priority-aware
+  # fit before repaint ever truncates: display order is preserved,
+  # `drop_order` names the discretionary groups from most to least
+  # droppable (each trimmed from its TAIL, so a group's leading line --
+  # the composer's prompt row, the expansion's position header --
+  # survives a partial trim), and the notice group is deliberately
+  # absent from every drop order: as the last resort (notices alone
+  # exceeding the budget) the final head-take keeps the EARLIEST notice
+  # lines rather than crashing. Pinned by the "honest-notice law under
+  # footer overflow" describe in diff_expand_surface_test.exs.
+  defp fit_footer_lines(groups, drop_order, budget) do
+    total =
+      groups |> Enum.map(fn {_key, lines} -> length(lines) end) |> Enum.sum()
+
+    groups
+    |> shed_overflow(drop_order, total - budget)
+    |> Enum.flat_map(fn {_key, lines} -> lines end)
+    |> Enum.take(budget)
+  end
+
+  defp shed_overflow(groups, _drop_order, overflow) when overflow <= 0,
+    do: groups
+
+  defp shed_overflow(groups, [], _overflow), do: groups
+
+  defp shed_overflow(groups, [key | rest], overflow) do
+    lines = Keyword.fetch!(groups, key)
+    shed = min(length(lines), overflow)
+    kept = Enum.take(lines, length(lines) - shed)
+
+    groups
+    |> List.keyreplace(key, 0, {key, kept})
+    |> shed_overflow(rest, overflow - shed)
+  end
+
+  # The row budget the current pin actually provides -- the authority's
+  # own footer range (grown while an overlay/expansion holds a claim),
+  # never a hand-maintained constant. #620's frame pipeline keeps this
+  # geometry-fixed per frame (never a function of post-seal state), so
+  # reading it here is stable within a paint.
+  defp footer_budget(model),
+    do: InlineAuthority.footer_row_count(model.authority)
 
   defp overlay_lines(%{overlay: nil}), do: []
 
-  defp overlay_lines(%{overlay: %{picker: picker}, width: width}),
-    do: ViewText.lines(OverlayPicker.render(picker), width, :styled)
+  defp overlay_lines(%{overlay: overlay, width: width}),
+    do:
+      ViewText.lines(
+        overlay_mod(overlay).render(overlay.picker),
+        width,
+        :styled
+      )
 
   # Renders the unread divider (see `UnreadDivider`'s moduledoc) as one
   # dim footer line through the SAME `ViewText` sanitize/truncate seam
@@ -2235,11 +3068,21 @@ defmodule Raxol.Harness.Surface do
   end
 
   defp pending_block(model) do
-    # Post-seal, `tail_start == painted_count` always -- the committed
-    # prefix skips to the high-water mark and the walk already consumed
-    # everything committable -- so this is the same block as before, now
-    # DERIVED from the shared classifier instead of restated.
-    tail_start = frontier_scan(model).tail_start
+    # Keyed on the committed CURSOR (`painted_count` -- `commit_walk/5`'s
+    # own post-walk cursor), NOT on `frontier_scan/1`'s `tail_start`. The
+    # scan is the PRE-commit projection ("what would remain after an
+    # ideal commit this frame"): it consumes committable entries, so
+    # after a REFUSED seal write (`{:error, :write_failed, _}` -- the
+    # walk halts, `painted_count` stays strictly before the failed
+    # entry) the two diverge, and the scan-keyed preview would skip the
+    # very block that is not yet in history -- invisible on both
+    # surfaces at once, exactly the under-reporting the display half of
+    # retry-not-vanish forbids (pinned in
+    # test/harness/surface_seal_pipeline_test.exs). On every successful
+    # frame the walk's cursor and the scan agree (`tail_start ==
+    # painted_count`, the scan/walk-agreement property), so this changes
+    # nothing there; on a refusal the cursor is the honest one.
+    tail_start = model.painted_count
 
     case Enum.slice(model.projection.blocks, tail_start..-1//1) do
       [] -> nil
@@ -2282,9 +3125,39 @@ defmodule Raxol.Harness.Surface do
   holds `footer_rows` constant, and the overlay's grown claim IS the
   current `footer_rows` as far as the authority is concerned), and the
   keyframe below repaints it at the new position.
+
+  A diff expansion mirrors the same force-close discipline (same
+  `max_overlay_rows/2` capacity check, at the OLD geometry, before
+  anything else runs), but does NOT simply stay open unchanged when it
+  still fits: because the expansion mechanism is "claim the MAXIMUM
+  non-degenerate footer," not a fixed height like the overlay's, the claim
+  is RE-DERIVED at the new geometry every resize (`max_overlay_rows(rows,
+  model.footer_rows)` again), the footer re-grown to match via
+  `InlineAuthority.set_footer_rows/2`, and `DiffExpansion.resize_view/3`
+  re-renders the SAME content at the new width/window (clamping its
+  scroll offset) -- see the moduledoc's "Full-screen diff expansion"
+  section. A `resize_view/3` failure (degenerate target geometry) falls
+  back to closing the expansion and restoring the base pin, same as the
+  too-small force-close path.
   """
   @spec resize(t(), pos_integer(), pos_integer()) :: t()
-  def resize(%{mode: :flat} = model, width, rows) do
+  def resize(%{mode: :flat} = model, width, rows),
+    do: adopt_resize(model, width, rows)
+
+  def resize(model, width, rows) do
+    model = model |> heal_sync() |> adopt_resize(width, rows)
+    lines = footer_lines(model)
+    authority = InlineAuthority.keyframe(model.authority, lines)
+    %{model | authority: authority, stub_notice: nil}
+  end
+
+  # Shared by `resize/2` and `advance/3`'s `:resize` option -- see
+  # `advance/3`'s FRAME-ORDER LAW doc for why the two paths must never
+  # drift: both need dims + DECSTBM re-set applied identically, and
+  # `resize/2` alone additionally keyframes the footer immediately (which
+  # `advance/3`'s combined frame instead lets its own trailing
+  # `paint_footer/1` self-promote to, via `needs_keyframe`).
+  defp adopt_resize(%{mode: :flat} = model, width, rows) do
     %{
       model
       | authority: FlatAuthority.resize(model.authority, width, rows),
@@ -2293,7 +3166,7 @@ defmodule Raxol.Harness.Surface do
     }
   end
 
-  def resize(model, width, rows) do
+  defp adopt_resize(model, width, rows) do
     model =
       if force_close_overlay?(model, rows) do
         close_overlay(model)
@@ -2301,11 +3174,27 @@ defmodule Raxol.Harness.Surface do
         model
       end
 
+    model =
+      if force_close_expansion?(model, rows) do
+        close_expansion(model)
+      else
+        model
+      end
+
     model = %{model | width: width, rows: rows}
     authority = InlineAuthority.resize(model.authority, width, rows)
-    lines = footer_lines(%{model | authority: authority})
-    authority = InlineAuthority.keyframe(authority, lines)
-    %{model | authority: authority, stub_notice: nil}
+
+    # A still-open expansion re-derives its maximal claim at the new
+    # geometry HERE, in the shared adopt path, so both consumers get it:
+    # `resize/2`'s trailing keyframe repaints the re-rendered window
+    # immediately, and `advance/3`'s combined frame self-promotes via the
+    # `needs_keyframe` latch (already set by `InlineAuthority.resize/3`
+    # above on any geometry change; `resize_expansion/3`'s own
+    # `set_footer_rows/2` latches again whenever the claim changed).
+    # Re-rendering before the frame's seals/paints is the same
+    # frame-order discipline `advance/3`'s FRAME-ORDER LAW pins for
+    # blocks: nothing may paint expansion content at a stale width.
+    resize_expansion(%{model | authority: authority}, width, rows)
   end
 
   defp force_close_overlay?(%{overlay: nil}, _new_rows), do: false
@@ -2317,8 +3206,54 @@ defmodule Raxol.Harness.Surface do
     # Same capacity rule `open_overlay/3` admits with -- one helper, one
     # threshold (routed through `ScrollRegionManager.degenerate?/2`),
     # never a re-encoded literal that could drift.
-    OverlayPicker.height(overlay.picker) >
+    overlay_mod(overlay).height(overlay.picker) >
       max_overlay_rows(new_rows, footer_rows)
+  end
+
+  # A diff expansion's claim is "the maximum non-degenerate footer
+  # GROWTH", not a fixed height -- so unlike the overlay, force-close is
+  # the ONLY geometry below which it cannot be hosted at all. When
+  # `max_overlay_rows/2` (the maximal growth still leaving history its
+  # 2-row minimum) drops below 2, that growth can no longer host the
+  # expansion's own two chrome rows (`@expansion_chrome_rows`: one status
+  # row, one expansion header row), so the expansion must close. The `2`
+  # here is that minimum growth, NOT the chrome subtraction it happens to
+  # equal -- see `expansion_view_rows/2` and `do_expand/2`.
+  defp force_close_expansion?(%{expansion: nil}, _new_rows), do: false
+
+  defp force_close_expansion?(%{footer_rows: footer_rows}, new_rows),
+    do: max_overlay_rows(new_rows, footer_rows) < 2
+
+  # Re-derives the expansion's claim at the NEW geometry and re-renders
+  # its content to match -- see `resize/3`'s moduledoc. A no-op when no
+  # expansion is open (including the case just force-closed above, since
+  # `close_expansion/1` already cleared `model.expansion`).
+  defp resize_expansion(%{expansion: nil} = model, _width, _rows), do: model
+
+  defp resize_expansion(model, width, rows) do
+    claim = max_overlay_rows(rows, model.footer_rows)
+
+    case InlineAuthority.set_footer_rows(
+           model.authority,
+           model.footer_rows + claim
+         ) do
+      {:ok, authority} ->
+        view_rows = expansion_view_rows(model.footer_rows, claim)
+
+        case DiffExpansion.resize_view(model.expansion, width, view_rows) do
+          {:ok, expansion} ->
+            %{model | authority: authority, expansion: expansion}
+
+          {:error, _reason} ->
+            close_expansion(%{model | authority: authority})
+        end
+
+      # Unreachable given `force_close_expansion?/2` already gated this
+      # call on a non-degenerate claim (belt and braces, same reasoning
+      # as `build_expansion/3`'s own defensive branch).
+      {:error, :degenerate} ->
+        close_expansion(model)
+    end
   end
 
   # -- accessors ------------------------------------------------------------

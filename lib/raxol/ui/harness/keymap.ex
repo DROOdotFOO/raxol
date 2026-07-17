@@ -63,20 +63,32 @@ defmodule Raxol.UI.Harness.Keymap do
       `key:`-kind rule below) instead of the printable-char path, which
       is nil under ctrl by design.
     * **Guarded by `not composing?`** -- the block-navigation binds
-      (`fold-toggle`, `jump_next`, `jump_prev`). These use plain printable
-      letters (`z`/`j`/`k`), and a prior flat-keymap prototype's named bug
-      (see `harness-ui-STATE.md`, "the demo's flat keymap steals j/k/s/z
-      from typing") was firing them unconditionally, stealing those letters
-      out of the composer's typed text. Gating them on `composing?` is the
-      fix: they only resolve to a command when focus is NOT the composer
-      (browsing the transcript), and fall through to `:passthrough`
-      (ordinary character insertion) while composing. An OPEN OVERLAY
-      suppresses them the same way (the guard consults `overlay_open?`
-      too): with a picker open, `z`/`j`/`k` are filter text the overlay
-      must receive, never commands fired at the transcript hidden behind
-      it -- and the picker's natural open path is exactly transcript-
-      browse mode (`composing?: false`), where a composing?-only guard
-      would fire them (see the "overlay-open ESC capture" section).
+      (`fold-toggle`, `jump_next`, `jump_prev`, `expand_diff`). These use
+      plain printable letters (`z`/`j`/`k`/`e`), and a prior flat-keymap
+      prototype's named bug (see `harness-ui-STATE.md`, "the demo's flat
+      keymap steals j/k/s/z from typing") was firing them unconditionally,
+      stealing those letters out of the composer's typed text. Gating them
+      on `composing?` is the fix: they only resolve to a command when
+      focus is NOT the composer (browsing the transcript), and fall
+      through to `:passthrough` (ordinary character insertion) while
+      composing. An OPEN OVERLAY suppresses them the same way (the guard
+      consults `overlay_open?` too): with a picker open, `z`/`j`/`k`/`e`
+      are filter text the overlay must receive, never commands fired at
+      the transcript hidden behind it -- and the picker's natural open
+      path is exactly transcript-browse mode (`composing?: false`), where
+      a composing?-only guard would fire them (see the "overlay-open ESC
+      capture" section). `e` (expand the focused diff block full-screen)
+      rides the exact same guard for the exact same reason: it is plain
+      typed text while composing, and `Raxol.Harness.Surface` reports its
+      own footer-region expansion through the SAME `overlay_open?` context
+      flag an open overlay picker already uses (see that module's "Full-
+      screen diff expansion" section) -- so `e` is suppressed while an
+      expansion is already open too, not just while an overlay is. It
+      cannot collide with the Ctrl+E editor-handoff chord below:
+      `InputEvent.printable_char/1` is `nil` whenever ctrl is held, so a
+      Ctrl+E keypress never reaches this bind's `char:`-only match clause
+      at all -- the two live on entirely disjoint matching paths, not a
+      priority order.
 
   ## The overlay-open ESC capture (order is load-bearing)
 
@@ -239,6 +251,8 @@ defmodule Raxol.UI.Harness.Keymap do
           | :open_palette
           | :open_jump_picker
           | :open_session_picker
+          | :open_panel
+          | :expand_diff
 
   @type command :: %{type: command_type(), payload: map()}
 
@@ -250,7 +264,8 @@ defmodule Raxol.UI.Harness.Keymap do
           optional(:char) => String.t(),
           optional(:guard) => guard(),
           optional(:mods) => InputEvent.mods(),
-          optional(:label) => String.t()
+          optional(:label) => String.t(),
+          optional(:payload) => map()
         }
 
   # Plain keys only (v1) -- see moduledoc's "tui-steal rule": a future chord
@@ -304,6 +319,16 @@ defmodule Raxol.UI.Harness.Keymap do
       guard: :not_composing,
       label: "previous block"
     },
+    # Expand the focused diff block full-screen (see the moduledoc's
+    # `:not_composing` bullet). Plain "e" cannot collide with the Ctrl+E
+    # chord above: `InputEvent.printable_char/1` is nil whenever ctrl is
+    # held, so a Ctrl+E keypress never reaches this bind's match clause.
+    %{
+      char: "e",
+      command_type: :expand_diff,
+      guard: :not_composing,
+      label: "expand diff full-screen"
+    },
     # Ctrl+P: same chord shape as Ctrl+E above -- a ctrl chord is never
     # typed text, so this is `:always` too.
     %{
@@ -324,6 +349,34 @@ defmodule Raxol.UI.Harness.Keymap do
       command_type: :open_session_picker,
       guard: :not_composing,
       label: "switch session"
+    },
+    # Printable-letter binds, same guard class as z/j/k: they only resolve
+    # in transcript-browse mode, never stealing a letter out of the
+    # composer's typed text. The `label:` makes them palette entries
+    # automatically (palette_binds/0 derives from labels). "p" is NOT
+    # used for plan -- Ctrl+P is the palette chord, and a bare "p" beside
+    # it invites slips -- so "n" is used instead. The payload discriminates
+    # which panel kind one shared :open_panel command type opens.
+    %{
+      char: "w",
+      command_type: :open_panel,
+      guard: :not_composing,
+      payload: %{panel: :worktracks},
+      label: "worktracks panel"
+    },
+    %{
+      char: "m",
+      command_type: :open_panel,
+      guard: :not_composing,
+      payload: %{panel: :memory},
+      label: "memory panel"
+    },
+    %{
+      char: "n",
+      command_type: :open_panel,
+      guard: :not_composing,
+      payload: %{panel: :plan},
+      label: "plan panel"
     }
   ]
 
@@ -491,14 +544,15 @@ defmodule Raxol.UI.Harness.Keymap do
   defp guard_passes?(%{guard: :overlay}, context),
     do: Map.get(context, :overlay_open?, false)
 
-  defp build_command(%{command_type: :fold_toggle}, context) do
-    %{
-      type: :fold_toggle,
-      payload: %{block_id: Map.get(context, :focused_block_id)}
-    }
+  # `:expand_diff` reuses `:fold_toggle`'s exact payload shape --
+  # `%{block_id: ...}` -- both name the CURRENTLY FOCUSED block; there is
+  # no reason for a second payload vocabulary here.
+  defp build_command(%{command_type: type}, context)
+       when type in [:fold_toggle, :expand_diff] do
+    %{type: type, payload: %{block_id: Map.get(context, :focused_block_id)}}
   end
 
-  defp build_command(%{command_type: type}, _context) do
-    %{type: type, payload: %{}}
+  defp build_command(%{command_type: type} = bind, _context) do
+    %{type: type, payload: Map.get(bind, :payload, %{})}
   end
 end

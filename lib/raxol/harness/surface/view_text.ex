@@ -203,33 +203,64 @@ defmodule Raxol.Harness.Surface.ViewText do
   defp add_lines(acc, content, style) do
     content
     |> String.split("\n")
-    |> Enum.reduce(acc, fn line, acc2 -> [{sanitize(line), style} | acc2] end)
+    |> Enum.reduce(acc, fn line, acc2 ->
+      [{sanitize_line(line), style} | acc2]
+    end)
   end
 
-  # Strips every C0 control byte (0x00-0x1F, which includes ESC/0x1B)
-  # except `\t`, mirroring `FlatAuthority.scrub/1`'s own byte-wise
-  # technique and its safety argument verbatim: multi-byte UTF-8 lead
-  # (0xC2-0xF4) and continuation (0x80-0xBF) bytes are both `>= 0x20`, so
-  # stripping byte-by-byte never splits a valid codepoint. `\n` needs no
-  # exception here -- `add_lines/3` above already consumed every `\n` as
-  # the line-split delimiter before this ever runs, so none survives into
-  # a single line's content for this function to see. DEL (0x7F) is stripped
-  # too -- it is `>= 0x20` but a non-printing control that terminals may act
-  # on, so the `>= 0x20` allowlist alone would wrongly pass it.
   @c0_exception ?\t
 
-  defp sanitize(text) do
-    for <<byte <- text>>,
-        (byte >= 0x20 and byte != 0x7F) or byte == @c0_exception,
-        into: <<>>,
-        do: <<byte>>
+  @doc """
+  Strips control code points before untrusted content reaches the wire:
+  C0 (0x00-0x1F, incl. ESC/0x1B) except `\\t`, DEL (0x7F), AND the C1 range
+  (U+0080..U+009F) -- the 8-bit-encoded siblings of the ESC-led CSI/OSC/DCS
+  sequences (0x9B is CSI, 0x9D is OSC), which a byte-wise `>= 0x20` allowlist
+  would wrongly pass. Decodes by code point so a C1 encoded as UTF-8
+  (`0xC2 0x9B`) is caught while legitimate multi-byte text is preserved; a
+  lone raw high byte (a bare C1 like 0x9B, or a stray continuation byte) is
+  dropped rather than passed through. `\\n` needs no exception -- `add_lines/3`
+  already consumed every `\\n` as the line-split delimiter before this runs.
+
+  Public: this is the ONE sanitize implementation every caller of untrusted
+  single-line content shares -- `add_lines/3` above, and
+  `Raxol.Harness.DiffExpansion`'s own per-row renderer, which needs this exact
+  trust-boundary sanitize WITHOUT `lines/3`'s view-tree flatten. See the
+  moduledoc's "trust boundary" section.
+  """
+  @spec sanitize_line(String.t()) :: String.t()
+  def sanitize_line(text), do: sanitize(text)
+
+  defp sanitize(text), do: sanitize(text, <<>>)
+
+  defp sanitize(<<>>, acc), do: acc
+
+  defp sanitize(<<@c0_exception, rest::binary>>, acc),
+    do: sanitize(rest, <<acc::binary, @c0_exception>>)
+
+  defp sanitize(<<cp::utf8, rest::binary>>, acc) do
+    if cp < 0x20 or cp == 0x7F or (cp >= 0x80 and cp <= 0x9F),
+      do: sanitize(rest, acc),
+      else: sanitize(rest, <<acc::binary, cp::utf8>>)
   end
+
+  defp sanitize(<<_byte, rest::binary>>, acc), do: sanitize(rest, acc)
 
   # -- width truncation (plain content only, before any styling) ---------
 
-  defp truncate(_text, width) when width <= 0, do: ""
+  @doc """
+  Truncates `text` to `width` display columns (`Raxol.UI.TextMeasure`,
+  never `String.length` -- CJK undercounts), ellipsis-truncating
+  (`…`) when it would overflow, mirroring
+  `Raxol.Harness.StatusStrip`'s own truncation convention. Plain content
+  only -- apply BEFORE any styling, never after (see the moduledoc's "Why
+  truncate BEFORE styling"). Public for the same reason `sanitize_line/1`
+  is: `Raxol.Harness.DiffExpansion`'s per-row renderer reuses this exact
+  truncation instead of duplicating it.
+  """
+  @spec truncate(String.t(), non_neg_integer()) :: String.t()
+  def truncate(_text, width) when width <= 0, do: ""
 
-  defp truncate(text, width) do
+  def truncate(text, width) do
     if TextMeasure.display_width(text) <= width do
       text
     else

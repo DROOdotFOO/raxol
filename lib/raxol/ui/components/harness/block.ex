@@ -86,10 +86,51 @@ defmodule Raxol.UI.Components.Harness.Block do
   fallback layer underneath that.
 
   Expanded render = header line (fold glyph + kind glyph + first-line
-  summary) + full content lines + an outcome row. Folded render = the header
-  line alone + the outcome row. The outcome row is omitted entirely when
-  `exit_code`, `duration_ms`, and `cost` are all `nil`; otherwise it renders
-  only the fields that are present.
+  summary) + full content lines + an outcome row + a completion row.
+  Folded render = the header line alone + the outcome row + a completion
+  row. The outcome row is omitted entirely when `exit_code`, `duration_ms`,
+  and `cost` are all `nil`; otherwise it renders only the fields that are
+  present.
+
+  ## The completion row (design creed: evidence, never a success toast)
+
+  `content[:completion]` -- set by `Raxol.Harness.Projection.BlockBuilder.
+  build_turn/3` on a turn's LAST block, only when that turn closed with a
+  final `turn_completed` -- is either:
+
+    * `%{evidence: :none}` -- no accepted refs: renders ONE line, the
+      LITERAL text `"no evidence provided"`, no glyph, no checkmark --
+      the absence is information, never blank.
+    * `%{evidence: entries, total: n, type_counts: counts}` (plus an
+      optional `cross_turn_count`, see `BlockBuilder`'s moduledoc "Cross-
+      turn disclosure") -- renders:
+      1. a summary line, `"N evidence refs: 2 tool results, 1 message"`
+         (`n`, pluralized, then `counts` -- `[%{type:, count:}]`, already
+         sorted descending by count -- joined `", "`, each phrase
+         pluralized by ITS OWN count), with a `" (M cross-turn)"` suffix
+         appended when `cross_turn_count` (`M`) is present;
+      2. up to `length(entries)` per-ref lines (`entries` is capped
+         upstream, see `BlockBuilder`), each `"· " <> label` (the label
+         already sanitized/clamped -- an unresolvable ref's label is the
+         literal `"unresolvable evidence ref"`, rendered exactly like any
+         other entry, never dropped), with a trailing literal
+         `" [cross-turn]"` when that entry carries `cross_turn: true`
+         (a ref the producer's own gate would never have accepted as
+         same-turn evidence -- shown, not hidden);
+      3. a trailing `"+N more"` line when `n` exceeds `length(entries)`,
+         itself suffixed `" (M cross-turn)"` when M of the hidden
+         (never-rendered) refs are cross-turn -- so the summary's
+         session-wide cross-turn tally is never left pointing at zero
+         visibly marked lines.
+
+  Key absent or unrecognised shape renders no row at all -- byte-identical
+  to a block that never went through the completion-evidence fold.
+  `completion_rows/2` is `Block`'s own render helper for this row, public
+  so `Raxol.UI.Components.Harness.BlockBody`'s `:expanded` mount path
+  (which otherwise bypasses this module's body entirely) can append the
+  same rows after whatever real component it mounts -- see that module's
+  moduledoc. Every completion line is styled `%{dim: true}` and fades with
+  the same resolved prominence colour as the header/outcome rows.
 
   ## Prominence
 
@@ -398,6 +439,7 @@ defmodule Raxol.UI.Components.Harness.Block do
     fg = prominence_fg(block, context)
     header = header_view(block, width, fg)
     outcome_children = outcome_row_view(block.outcome, fg)
+    completion_children = completion_rows(block, fg)
 
     body_children =
       case block.fold do
@@ -405,7 +447,10 @@ defmodule Raxol.UI.Components.Harness.Block do
         :expanded -> [header | content_lines_view(block, width, context, fg)]
       end
 
-    Components.column(gap: 0, children: body_children ++ outcome_children)
+    Components.column(
+      gap: 0,
+      children: body_children ++ outcome_children ++ completion_children
+    )
   end
 
   defp render_fallback(block) do
@@ -681,6 +726,124 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp split_lines(nil), do: []
   defp split_lines(""), do: []
   defp split_lines(text), do: text |> to_display_text() |> String.split("\n")
+
+  @doc """
+  Renders the completion-evidence row(s) for `block.content[:completion]`
+  (see the moduledoc's "The completion row" section) -- one line, styled
+  `%{dim: true}` faded to the same resolved `fg` the header/outcome rows
+  carry (`nil` when prominence is absent/neutral, matching every other
+  row's default). Public (unlike every other row helper in this module)
+  so `Raxol.UI.Components.Harness.BlockBody`'s `:expanded` mount path can
+  append the same row after a mounted real component's own view -- that
+  module bypasses this render entirely once expanded, so the row would
+  otherwise silently vanish for every kind except the plain-text fallback.
+
+  Returns `[]` when the key is absent or its shape isn't recognised --
+  byte-identical to a render that never carries a `:completion` key at
+  all.
+  """
+  @spec completion_rows(t(), String.t() | nil) :: [map()]
+  def completion_rows(block, fg \\ nil)
+
+  def completion_rows(
+        %__MODULE__{content: %{completion: %{evidence: :none}}},
+        fg
+      ) do
+    [completion_text("no evidence provided", fg)]
+  end
+
+  def completion_rows(
+        %__MODULE__{
+          content: %{
+            completion:
+              %{
+                evidence: entries,
+                total: total,
+                type_counts: type_counts
+              } = completion
+          }
+        },
+        fg
+      )
+      when is_list(entries) do
+    cross_turn_count = Map.get(completion, :cross_turn_count)
+
+    summary =
+      completion_text(
+        completion_summary_line(total, type_counts, cross_turn_count),
+        fg
+      )
+
+    entry_rows =
+      Enum.map(entries, &completion_text(completion_entry_line(&1), fg))
+
+    [summary | entry_rows] ++
+      completion_more_row(total, entries, cross_turn_count, fg)
+  end
+
+  def completion_rows(%__MODULE__{}, _fg), do: []
+
+  defp completion_text(content, fg) do
+    Components.text(content: content, style: apply_fg(%{dim: true}, fg))
+  end
+
+  # A cross-turn entry's line carries the literal "[cross-turn]" marker
+  # -- the same-turn line shape is otherwise UNCHANGED (no-churn pin).
+  defp completion_entry_line(%{label: label, cross_turn: true}),
+    do: "· " <> label <> " [cross-turn]"
+
+  defp completion_entry_line(%{label: label}), do: "· " <> label
+
+  defp completion_summary_line(total, type_counts, cross_turn_count) do
+    breakdown = Enum.map_join(type_counts, ", ", &completion_type_phrase/1)
+    base = "#{total} #{pluralize("evidence ref", total)}: #{breakdown}"
+
+    case cross_turn_count do
+      n when is_integer(n) and n > 0 -> base <> " (#{n} cross-turn)"
+      _no_cross_turn -> base
+    end
+  end
+
+  defp completion_type_phrase(%{type: type, count: count}) do
+    "#{count} #{pluralize(completion_type_label(type), count)}"
+  end
+
+  defp completion_type_label(:tool_result), do: "tool result"
+  defp completion_type_label(:tool_use), do: "tool use"
+
+  defp completion_type_label(other),
+    do: other |> Atom.to_string() |> String.replace("_", " ")
+
+  defp pluralize(word, 1), do: word
+  defp pluralize(word, _other_count), do: word <> "s"
+
+  defp completion_more_row(total, entries, cross_turn_count, fg) do
+    remaining = total - length(entries)
+
+    if remaining > 0 do
+      suffix = hidden_cross_turn_suffix(entries, cross_turn_count)
+      [completion_text("+#{remaining} more" <> suffix, fg)]
+    else
+      []
+    end
+  end
+
+  # A cross-turn ref pushed past the entry cap is tallied in the summary
+  # line but carries no visible "[cross-turn]" entry line of its own --
+  # without this suffix the render would read as internally inconsistent
+  # (a cross-turn count with zero marked lines). Hidden = the session-
+  # wide tally minus the SHOWN entries that already carry their own
+  # marker; when every cross-turn ref is visible (or there are none),
+  # the tail row stays exactly "+N more".
+  defp hidden_cross_turn_suffix(entries, cross_turn_count)
+       when is_integer(cross_turn_count) do
+    hidden =
+      cross_turn_count - Enum.count(entries, &Map.get(&1, :cross_turn))
+
+    if hidden > 0, do: " (#{hidden} cross-turn)", else: ""
+  end
+
+  defp hidden_cross_turn_suffix(_entries, _absent), do: ""
 
   defp outcome_row_view(outcome, fg) do
     case outcome_parts(outcome) do
