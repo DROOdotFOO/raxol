@@ -3492,14 +3492,23 @@ defmodule Raxol.Harness.Surface do
       # render), then shifted right by the chevron prefix's two cells
       # (`chevron_lines/2` prefixes every input row with exactly
       # `@sigil_cols` cells: "❯ " on the first, two aligning spaces on
-      # continuations), capped at the physical width.
-      {row_in_composer, col} =
-        Composer.edit_point(model.composer, content_width(model))
+      # continuations), capped at the physical width. A sub-margin
+      # terminal (content width 0 -- e.g. #626's width-2 sub-gutter
+      # refusal geometries) has no representable edit point at all, so
+      # the park is nil (leave the cursor where the last park put it),
+      # matching `edit_point/2`'s own positive-width contract.
+      cwidth = content_width(model)
 
-      row = offset + min(row_in_composer, composer_kept - 1)
-      col = min(col + @sigil_cols, model.width)
+      if cwidth <= 0 do
+        nil
+      else
+        {row_in_composer, col} = Composer.edit_point(model.composer, cwidth)
 
-      if row < line_count, do: {row, col}, else: nil
+        row = offset + min(row_in_composer, composer_kept - 1)
+        col = min(col + @sigil_cols, model.width)
+
+        if row < line_count, do: {row, col}, else: nil
+      end
     end
   end
 
