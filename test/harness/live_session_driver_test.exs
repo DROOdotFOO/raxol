@@ -946,8 +946,8 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       assert_receive {:live_session_driver, ^driver, :halted}, 1_000
     end
 
-    test "0x03 with a non-empty composer does NOT quit" do
-      %{driver: driver} = new_driver(%{})
+    test "first 0x03 with a non-empty composer does NOT quit -- it arms and renders the honest notice" do
+      %{driver: driver, device: device} = new_driver(%{})
 
       [h] = Raxol.Terminal.ANSI.InputParser.parse("h")
       send(driver, {:inline_input, h})
@@ -957,10 +957,69 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
 
       refute_receive {:live_session_driver, _pid, :halted}, 300
 
+      # The user is never trapped silently: the arming press says
+      # exactly what the next press will do.
+      eventually(fn ->
+        footer_text(raw(device)) =~ "ctrl-c again to exit"
+      end)
+
       # The loop is still serving: a probe answers.
       ref = make_ref()
       send(driver, {:debug_state_probe, self(), ref})
       assert_receive {:debug_state_reply, ^ref, _state}, 1_000
+    end
+
+    test "second CONSECUTIVE 0x03 exits regardless of the draft -- and the draft lands in scrollback" do
+      %{driver: driver, device: device} = new_driver(%{})
+
+      for ch <- String.graphemes("keep me") do
+        [ev] = Raxol.Terminal.ANSI.InputParser.parse(ch)
+        send(driver, {:inline_input, ev})
+      end
+
+      [ctrl_c] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
+      send(driver, {:inline_input, ctrl_c})
+      [ctrl_c2] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
+      send(driver, {:inline_input, ctrl_c2})
+
+      assert_receive {:live_session_driver, ^driver, :halted}, 1_000
+
+      # The honesty half of "regardless of state": the unsent draft is
+      # sealed into scrollback history, never silently vanished.
+      text = history_text(raw(device))
+      assert text =~ "unsent draft"
+      assert text =~ "keep me"
+    end
+
+    test "any other input disarms: a -> ^C -> a -> ^C never exits, the notice re-renders on each arm" do
+      %{driver: driver, device: device} = new_driver(%{})
+
+      [a] = Raxol.Terminal.ANSI.InputParser.parse("a")
+      [ctrl_c] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
+
+      send(driver, {:inline_input, a})
+      send(driver, {:inline_input, ctrl_c})
+
+      eventually(fn ->
+        footer_text(raw(device)) =~ "ctrl-c again to exit"
+      end)
+
+      # The interleaved keypress clears the armed state AND the offer
+      # notice (event-clocked reset -- no wall-time window).
+      [a2] = Raxol.Terminal.ANSI.InputParser.parse("a")
+      send(driver, {:inline_input, a2})
+
+      eventually(fn ->
+        not (footer_text(raw(device)) =~ "ctrl-c again to exit")
+      end)
+
+      [ctrl_c2] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
+      send(driver, {:inline_input, ctrl_c2})
+
+      refute_receive {:live_session_driver, _pid, :halted}, 300
+
+      # Re-armed, not exited: the notice is back for the fresh offer.
+      assert footer_text(raw(device)) =~ "ctrl-c again to exit"
     end
   end
 end

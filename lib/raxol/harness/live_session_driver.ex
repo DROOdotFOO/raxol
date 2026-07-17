@@ -332,11 +332,7 @@ defmodule Raxol.Harness.LiveSessionDriver do
       current_turn_id: nil,
       session_over?: false,
       steer_task: nil,
-      # A liveness bound on THIS driver's own steering resource (not a
-      # latency claim about the lane): a steer Task that neither replies
-      # nor crashes -- a genuinely wedged lane call -- must not hold the
-      # single-in-flight guard forever. See `handle_steer_timeout/2`.
-      steer_timeout_ms: Keyword.get(opts, :steer_timeout_ms, 5_000),
+      quit_armed?: false,
       clock: clock,
       tick_ms: tick_ms,
       notify: Keyword.get(opts, :notify)
@@ -460,11 +456,30 @@ defmodule Raxol.Harness.LiveSessionDriver do
   defp dispatch_inline_input(state, event) do
     norm = InputEvent.normalize(event)
 
-    if quit_key?(norm, state.model) do
-      finish(state)
-    else
-      model = Surface.handle_input(state.model, event)
-      loop(%{state | model: model})
+    cond do
+      # Empty composer: one press of `q` OR ^C quits immediately --
+      # nothing composed, nothing to protect, no arming needed.
+      quit_key?(norm, state.model) ->
+        finish(state)
+
+      # Second CONSECUTIVE ^C: exit REGARDLESS of composer state -- the
+      # user must never be trapped in the loop. The honesty half of
+      # "regardless of state": the unsent draft is sealed into
+      # scrollback first, never silently vanished.
+      ctrl_c?(norm) and state.quit_armed? ->
+        finish(preserve_draft(state))
+
+      # First ^C while not immediately quittable (a draft is composed):
+      # ARM the exit and say exactly what the next press will do. The
+      # ^C itself is consumed by the exit protocol -- it is never
+      # forwarded to the composer as a shortcut mid-offer.
+      ctrl_c?(norm) ->
+        loop(arm_quit(state))
+
+      true ->
+        state = disarm_quit(state)
+        model = Surface.handle_input(state.model, event)
+        loop(%{state | model: model})
     end
   end
 
@@ -478,9 +493,12 @@ defmodule Raxol.Harness.LiveSessionDriver do
   # here as the plain byte 0x03 (normalized to char "c" + ctrl) and
   # NEVER reaches the VM as a break -- mapping it to the quit gate makes
   # muscle-memory ^C work exactly like `q` (quit on an empty composer).
-  # With a non-empty composer it falls through to `Surface.handle_input/2`
-  # like any other ctrl-shortcut (a C0 byte has no glyph; it is never
-  # inserted into the draft as invisible content).
+  # With a non-empty composer, ^C escalates through the node-style
+  # double-press protocol in `dispatch_inline_input/2` above: first
+  # press arms + notices, a second CONSECUTIVE press exits with the
+  # draft preserved in scrollback, and ANY other input event disarms
+  # (event-clocked reset -- no wall-time window, per the doctrine's
+  # timer-clocked-motion falsifier).
   defp quit_key?(norm, model) do
     (InputEvent.printable_char(norm) == "q" or ctrl_c?(norm)) and
       String.trim(Composer.value(model.composer)) == ""
@@ -488,6 +506,49 @@ defmodule Raxol.Harness.LiveSessionDriver do
 
   defp ctrl_c?(%{char: "c", mods: %{ctrl: true}}), do: true
   defp ctrl_c?(_norm), do: false
+
+  defp arm_quit(state) do
+    model =
+      Surface.put_lane_notice(
+        state.model,
+        "» ctrl-c again to exit — draft preserved in scrollback on quit"
+      )
+
+    %{state | model: model, quit_armed?: true}
+  end
+
+  # Event-clocked reset: ANY other input event withdraws the offer and
+  # its notice. Only INPUT disarms -- render batches and surface
+  # commands are not user keystrokes, so "consecutive" means what the
+  # user's fingers did.
+  defp disarm_quit(%{quit_armed?: true} = state) do
+    %{
+      state
+      | quit_armed?: false,
+        model: Surface.put_lane_notice(state.model, nil)
+    }
+  end
+
+  defp disarm_quit(state), do: state
+
+  # Seals the unsent draft into scrollback history through the normal
+  # marker path (sanitized, margined, permanent) before the loop ends --
+  # a double-press quit never silently destroys composed text.
+  defp preserve_draft(state) do
+    draft = Composer.value(state.model.composer)
+
+    if String.trim(draft) == "" do
+      state
+    else
+      model =
+        Surface.seal_marker(
+          state.model,
+          "» exited with an unsent draft — preserved:\n" <> draft
+        )
+
+      %{state | model: model}
+    end
+  end
 
   defp finish(state) do
     case state.notify do

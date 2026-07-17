@@ -33,9 +33,11 @@
 # demo can only detect the state and report it honestly in the boot
 # self-check (see the POST block below). While the terminal IS claimed,
 # raw mode runs `-isig` and ^C arrives as plain byte 0x03 -- mapped to
-# the same quit gate as `q` (quits on an empty composer; otherwise falls
-# through to the composer like any ctrl-shortcut), so muscle-memory ^C
-# works without ever reaching the VM.
+# the node-style exit protocol (quits immediately on an empty composer;
+# with a draft composed, the first press arms and notices "ctrl-c again
+# to exit", a second consecutive press quits with the draft sealed into
+# scrollback, and any other keypress withdraws the offer), so
+# muscle-memory ^C always has an exit path without ever reaching the VM.
 #
 # Boot POST: before the first prompt, the demo seals one small
 # self-check block into history through the driver's normal seal path
@@ -89,8 +91,13 @@
 #   z/j/k       fold/jump, once off the composer (Surface.focus_transcript/1)
 #   q           quits cleanly WHEN THE COMPOSER BUFFER IS EMPTY (the
 #               LiveSessionDriver owns this check, same convention as the
-#               fixture demo; Ctrl-C does not work -- raw mode disables
-#               SIGINT delivery, per InlineDriver's moduledoc)
+#               fixture demo)
+#   Ctrl-C      empty composer: quits immediately, same as q. With a
+#               draft composed: first press arms + notices "ctrl-c again
+#               to exit", second consecutive press quits with the draft
+#               sealed into scrollback; any other key withdraws the
+#               offer. (Raw mode runs -isig, so ^C is byte 0x03 to the
+#               driver, never a SIGINT -- per InlineDriver's moduledoc.)
 #
 # The REPL seam (why this demo keeps a mirror Composer): on this branch
 # `Raxol.Harness.Surface` has no live submit channel -- its own composer
