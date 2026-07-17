@@ -337,6 +337,20 @@ defmodule Raxol.Terminal.InlineDriver do
     {:reply, run_cursor_probe(state, budget_ms), state}
   end
 
+  # NOTE: every handle_manager_call clause must sit ABOVE the catch-all
+  # below -- a clause defined after it is unreachable (caught live: the
+  # first :isig_report landing in the catch-all fed {:error,
+  # :not_implemented} to the demo's POST line).
+  def handle_manager_call(:isig_report, _from, state) do
+    report = %{
+      boot_confirmed?: state.isig_boot_confirmed?,
+      reasserts: state.isig_reasserts,
+      isig_off?: state.isig_flags_reader && state.isig_flags_reader.()
+    }
+
+    {:reply, report, state}
+  end
+
   # BaseManager's default (warn + {:error, :not_implemented}) is replaced
   # the moment any handle_manager_call clause is defined -- restore it
   # for every request this driver does not understand.
@@ -566,16 +580,8 @@ defmodule Raxol.Terminal.InlineDriver do
         }
   def isig_report(server), do: GenServer.call(server, :isig_report)
 
-  @impl true
-  def handle_manager_call(:isig_report, _from, state) do
-    report = %{
-      boot_confirmed?: state.isig_boot_confirmed?,
-      reasserts: state.isig_reasserts,
-      isig_off?: state.isig_flags_reader && state.isig_flags_reader.()
-    }
-
-    {:reply, report, state}
-  end
+  # (Its handle_manager_call clause lives with the other call clauses,
+  # ABOVE the module's catch-all -- see the ordering note there.)
 
   # --- Input dispatch ---
 

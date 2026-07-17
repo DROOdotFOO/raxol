@@ -433,6 +433,14 @@ defmodule Raxol.Terminal.InlineDriverTest do
       assert Enum.count(InlineDriverMockStty.calls(), &(&1 == {:raw!})) >
                calls_before
 
+      # The report goes through the REAL GenServer call path (regression:
+      # a clause defined below the module's catch-all was unreachable and
+      # returned {:error, :not_implemented} to the demo's POST line).
+      report = InlineDriver.isig_report(pid)
+      assert report.reasserts >= 1
+      assert report.isig_off? == false
+      assert is_boolean(report.boot_confirmed?)
+
       GenServer.stop(pid)
     end
 
