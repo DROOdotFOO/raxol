@@ -246,7 +246,8 @@ defmodule Raxol.UI.Harness.Keymap do
           optional(:streaming?) => boolean(),
           optional(:focused_block_id) => term(),
           optional(:overlay_open?) => boolean(),
-          optional(:approval_pending?) => boolean()
+          optional(:approval_pending?) => boolean(),
+          optional(:composer_empty?) => boolean()
         }
 
   @type command_type ::
@@ -604,21 +605,25 @@ defmodule Raxol.UI.Harness.Keymap do
   end
 
   # The live-approval answer guard (Track D): passes only when a live
-  # approval is actually holding the frontier (`approval_pending?: true`)
-  # AND the composer is not focused AND no overlay is open. All three
-  # default to the "do NOT fire the answer" direction -- absent
-  # `approval_pending?` is `false`, absent `composing?` is `true`, absent
-  # `overlay_open?` is `false` -- so a caller that never sets the flags
-  # gets inert `y`/`n`/digit keys (typed text while composing, and
-  # untouched when browsing without a question), never a spurious answer.
-  # This is strictly tighter than `:not_composing`: an answer key is
-  # meaningful ONLY against a live question, so it stays passthrough
-  # everywhere else.
+  # approval is holding the frontier (`approval_pending?: true`) AND the
+  # composer DRAFT IS EMPTY (`composer_empty?: true`) AND no overlay is
+  # open. The empty-draft condition -- NOT `not composing?` -- is the
+  # reachability fix: after a submit the composer keeps focus, so requiring
+  # an unfocused composer made `y` type into the draft instead of
+  # answering; keying on emptiness means an operator who hasn't typed
+  # anything answers with `y`/`n`/digits, while an operator MID-DRAFT keeps
+  # every letter as text (an empty draft = not mid-thought). All three
+  # flags default to the "do NOT fire the answer" direction -- absent
+  # `approval_pending?`/`composer_empty?` are `false`, absent `overlay_open?`
+  # is `false` -- so a caller that never sets them gets inert answer keys,
+  # never a spurious answer. Strictly tighter than `:not_composing`: an
+  # answer key is meaningful ONLY against a live question with an empty
+  # draft, and stays passthrough everywhere else.
   defp guard_passes?(%{guard: :awaiting_approval}, context) do
-    composing? = Map.get(context, :composing?, true)
-    overlay_open? = Map.get(context, :overlay_open?, false)
     approval_pending? = Map.get(context, :approval_pending?, false)
-    approval_pending? and not (composing? or overlay_open?)
+    composer_empty? = Map.get(context, :composer_empty?, false)
+    overlay_open? = Map.get(context, :overlay_open?, false)
+    approval_pending? and composer_empty? and not overlay_open?
   end
 
   # Missing `overlay_open?` defaults to `false` (no overlay) -- the

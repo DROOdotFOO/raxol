@@ -350,6 +350,12 @@ defmodule Raxol.Harness.LiveSessionDriverCompactionTest do
     def steer(_session, _request), do: {:error, :unused}
 
     @impl true
+    def submit(_session, _request), do: :ok
+
+    @impl true
+    def answer_permission(_session, _answer), do: :ok
+
+    @impl true
     def monitor(%{pid: pid}) when is_pid(pid), do: Process.monitor(pid)
     def monitor(_session), do: nil
   end

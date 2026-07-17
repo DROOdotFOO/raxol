@@ -778,7 +778,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp format_args(args) when is_map(args) do
     body =
       args
-      |> Enum.sort_by(fn {k, _v} -> to_string(k) end)
+      |> Enum.sort_by(fn {k, _v} -> arg_sort_key(k) end)
       |> Enum.map_join(", ", fn {k, v} -> "#{k}: #{inspect(v)}" end)
 
     "(#{body})"
@@ -788,6 +788,20 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp format_args(args) when is_binary(args), do: "(#{args})"
   defp format_args([]), do: ""
   defp format_args(args), do: "(#{inspect(args)})"
+
+  # The referent leads: a path/file argument is WHAT the tool acts on, so it
+  # sorts ahead of every other arg (a plain alphabetical sort put
+  # `new_string` before `path` and let the header truncate the path away --
+  # exactly backwards). Everything else keeps its alphabetical order behind
+  # the lead key. The header's own `TextLayout.truncate(_, :ellipsis)` then
+  # trims the TAIL (the bulky `new_string`/`content`), never the path.
+  @arg_lead_keys ~w(path file filename file_path dir directory)
+
+  defp arg_sort_key(key) do
+    key_str = to_string(key)
+    lead = if key_str in @arg_lead_keys, do: 0, else: 1
+    {lead, key_str}
+  end
 
   # Opt-in Markdown wire-in per `context[:markdown]`, message/reasoning
   # kinds only. When enabled, the block's text content is rendered by
@@ -923,11 +937,50 @@ defmodule Raxol.UI.Components.Harness.Block do
       |> Enum.with_index(1)
       |> Enum.map(fn {opt, index} -> "[#{index}] " <> option_label(opt) end)
 
-    ["awaiting approval — number to choose · y allow · n deny:" | numbered]
+    [affordance_hint(options) | numbered]
   end
 
   defp approval_option_lines(_no_options),
-    do: ["awaiting approval — y to allow · n to deny"]
+    do: ["awaiting approval — no options offered"]
+
+  # The answer affordances, built from the REAL options so the hint can
+  # never claim a key the request does not actually offer (referent-honest):
+  # `y` names the first allow-class option and `n` the first reject-class
+  # one, each shown ONLY when such an option exists; the digit range covers
+  # exactly the options present. So a request with no reject option shows no
+  # `n deny`, and one with a single option shows only `1`.
+  defp affordance_hint(options) do
+    parts =
+      option_key_hint("y", options, :allow) ++
+        option_key_hint("n", options, :deny) ++
+        ["1-#{length(options)} to choose"]
+
+    "answer: " <> Enum.join(parts, " · ")
+  end
+
+  defp option_key_hint(key, options, want) do
+    case Enum.find(options, &(option_decision(&1) == want)) do
+      nil -> []
+      option -> [key <> " " <> option_label(option)]
+    end
+  end
+
+  # An option's decision class from its ACP kind -- MUST agree with
+  # `Raxol.Harness.Surface`'s own `y`/`n` resolution (that module maps the
+  # same kinds), so the hint the operator reads matches the key they press.
+  defp option_decision(%{kind: kind}), do: kind_decision(kind)
+  defp option_decision(%{"kind" => kind}), do: kind_decision(kind)
+  defp option_decision(_option), do: nil
+
+  defp kind_decision(k)
+       when k in [:allow_once, :allow_always, "allow_once", "allow_always"],
+       do: :allow
+
+  defp kind_decision(k)
+       when k in [:reject_once, :reject_always, "reject_once", "reject_always"],
+       do: :deny
+
+  defp kind_decision(_other), do: nil
 
   defp option_label(%{name: name}) when is_binary(name), do: name
   defp option_label(%{label: label}) when is_binary(label), do: label

@@ -28,6 +28,7 @@ defmodule Raxol.Harness.LiveApprovalTest do
   alias Raxol.Harness.Projection
   alias Raxol.Harness.Surface
   alias Raxol.UI.Components.Harness.Block
+  alias Raxol.UI.Components.Harness.Composer
   alias Raxol.UI.Harness.InputEvent
   alias Raxol.UI.Harness.Keymap
   alias Raxol.Core.Events.Event
@@ -256,7 +257,7 @@ defmodule Raxol.Harness.LiveApprovalTest do
       assert Enum.any?(lines, &(&1 =~ "args: rm -rf /tmp/scratch"))
       assert Enum.any?(lines, &(&1 =~ "[1] Allow once"))
       assert Enum.any?(lines, &(&1 =~ "[3] Reject"))
-      assert Enum.any?(lines, &(&1 =~ "y allow"))
+      assert Enum.any?(lines, &(&1 =~ "answer: y Allow once"))
     end
   end
 
@@ -469,29 +470,120 @@ defmodule Raxol.Harness.LiveApprovalTest do
     end
   end
 
+  # -- 4b. the empty-draft reachability fix (the field focus trap) ----------
+
+  describe "the answer keys are reachable with the composer focused when the draft is empty" do
+    test "y answers a live approval even with the composer focused, as long as the draft is empty" do
+      # No focus_transcript: after a submit the composer keeps focus, which
+      # is exactly the state V hit -- pressing y typed \"y\" into the draft
+      # instead of answering. An EMPTY draft now routes y to the answer.
+      model = sink_model([turn_started(), approval_requested(10, "req-1")])
+
+      _ = answer(model, "y")
+
+      assert_receive {:sink,
+                      %{
+                        type: :approval_answer,
+                        payload: %{option_id: "allow-once"}
+                      }}
+    end
+
+    test "once there is a draft, y is typed into it -- never a phantom answer" do
+      model = sink_model([turn_started(), approval_requested(10, "req-1")])
+
+      # "h"/"e" are not answer keys -> they build the draft; by the time "y"
+      # arrives the draft is non-empty, so y is text too.
+      typed = model |> answer("h") |> answer("e") |> answer("y")
+
+      assert Composer.value(typed.composer) == "hey"
+      refute_receive {:sink, _}, 50
+    end
+  end
+
+  # -- 4c. the answer affordance hint (gap 1a) ------------------------------
+
+  describe "the live approval block shows how to answer it" do
+    test "the affordance hint names the real allow/deny options and the digit range" do
+      lines =
+        only_approval_block([turn_started(), approval_requested()])
+        |> render_lines()
+
+      hint = Enum.find(lines, &(&1 =~ "answer:"))
+      assert hint, "a live approval must render an answer-affordance line"
+      assert hint =~ "y Allow once"
+      assert hint =~ "n Reject"
+      assert hint =~ "1-3 to choose"
+    end
+
+    test "a sealed approval renders NO affordance hint -- the question is answered" do
+      events = [
+        turn_started(),
+        approval_requested(),
+        approval_decided(11, "req-1", :allow, "allow-once")
+      ]
+
+      lines = only_approval_block(events) |> render_lines()
+      refute Enum.any?(lines, &(&1 =~ "answer:"))
+    end
+  end
+
+  # -- 4d. arg ordering: the path (referent) leads (gap 3) ------------------
+
+  describe "the tool_call header leads with the path argument" do
+    test "an edit_file header shows path before new_string, though new_string sorts earlier" do
+      block =
+        Block.from_events(
+          :tool_call,
+          [
+            %{
+              id: 1,
+              type: :item_completed,
+              payload: %{
+                item_type: :tool_use,
+                name: "edit_file",
+                args: %{
+                  "path" => "/lib/foo.ex",
+                  "old_string" => "a",
+                  "new_string" => "bbbbbbbb"
+                }
+              }
+            }
+          ],
+          seal: :sealed
+        )
+
+      summary = Block.summary(block)
+      {path_at, _} = :binary.match(summary, "path")
+      {new_at, _} = :binary.match(summary, "new_string")
+
+      assert path_at < new_at,
+             "the path (the referent) must lead the arg header, not new_string"
+    end
+  end
+
   # -- 5. Keymap: answer keys never steal from the composer -----------------
 
   defp resolve(char, context),
     do: char |> Event.key() |> InputEvent.normalize() |> Keymap.resolve(context)
 
-  describe "the answer-key guard: never steals a letter while composing" do
-    test "y answers only when a question is live AND the composer is unfocused" do
-      assert resolve("y", %{approval_pending?: true, composing?: false}) ==
+  describe "the answer-key guard: fires on an empty draft, never steals a typed letter" do
+    test "y answers when a question is live and the draft is empty" do
+      assert resolve("y", %{approval_pending?: true, composer_empty?: true}) ==
                %{type: :approval_answer, payload: %{answer: :allow}}
     end
 
-    test "y is plain typed text while composing, even with a live question" do
-      assert resolve("y", %{approval_pending?: true, composing?: true}) ==
+    test "y stays plain text the moment there is a draft to protect" do
+      assert resolve("y", %{approval_pending?: true, composer_empty?: false}) ==
                :passthrough
     end
 
-    test "y does nothing when no question is live (browsing)" do
-      assert resolve("y", %{approval_pending?: false, composing?: false}) ==
+    test "y does nothing when no question is live" do
+      assert resolve("y", %{approval_pending?: false, composer_empty?: true}) ==
                :passthrough
     end
 
-    test "n answers deny (winning over the plan-panel bind) while a question is live" do
-      assert resolve("n", %{approval_pending?: true, composing?: false}) ==
+    test "n answers deny (winning over the plan-panel bind) with a live question and empty draft" do
+      assert resolve("n", %{approval_pending?: true, composer_empty?: true}) ==
                %{type: :approval_answer, payload: %{answer: :deny}}
     end
 
@@ -500,11 +592,11 @@ defmodule Raxol.Harness.LiveApprovalTest do
                %{type: :open_panel, payload: %{panel: :plan}}
     end
 
-    test "a digit answers by position only while a question is live and unfocused" do
-      assert resolve("1", %{approval_pending?: true, composing?: false}) ==
+    test "a digit answers by position only with a live question and empty draft" do
+      assert resolve("1", %{approval_pending?: true, composer_empty?: true}) ==
                %{type: :approval_answer, payload: %{answer: {:option, 0}}}
 
-      assert resolve("1", %{approval_pending?: true, composing?: true}) ==
+      assert resolve("1", %{approval_pending?: true, composer_empty?: false}) ==
                :passthrough
     end
   end

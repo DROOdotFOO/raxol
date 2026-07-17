@@ -741,16 +741,36 @@ defmodule Raxol.Harness.LiveSessionDriver do
   # fires a whole new turn on some later boundary the operator has since
   # forgotten is a surprise; a plain refusal keeps them in control (they
   # resubmit when the turn ends).
-  defp handle_surface_command(%{current_turn_id: turn_id} = state, %{
-         type: :submit
-       })
-       when not is_nil(turn_id) do
+  # A submit while the session is BUSY refuses immediately and restores the
+  # draft -- never leaving a stuck "sending" preview. "Busy" is two honest
+  # signals, either sufficient: the driver's `current_turn_id` belief (now
+  # kept alive across inter-round `final: false` completions, see
+  # `apply_lifecycle/2`), AND `needs_input` -- a live approval holding the
+  # frontier. The second is the referent that closes the field-found
+  # deadlock: an approval-blocked turn is genuinely mid-turn even if the
+  # `current_turn_id` proxy ever went stale, so the refusal fires regardless
+  # (the same `needs_input` referent the stall gate and status strip use).
+  defp handle_surface_command(state, %{type: :submit, payload: %{text: text}}) do
+    if submit_blocked?(state) do
+      refuse_submit(state, submit_busy_notice())
+    else
+      dispatch_submit(state, text)
+    end
+  end
+
+  defp handle_surface_command(state, _other), do: state
+
+  defp submit_blocked?(state),
+    do: not is_nil(state.current_turn_id) or awaiting_operator?(state)
+
+  defp submit_busy_notice,
+    do: "» a turn is already running — wait for it, then resend"
+
+  defp refuse_submit(state, notice) do
     model =
       state.model
       |> Surface.submit_refused()
-      |> Surface.put_lane_notice(
-        "» a turn is already running — wait for it, then resend"
-      )
+      |> Surface.put_lane_notice(notice)
 
     %{state | model: model}
   end
@@ -761,7 +781,7 @@ defmodule Raxol.Harness.LiveSessionDriver do
   # echo seals only when `:turn_started` lands (`apply_lifecycle/2` ->
   # `Surface.submit_accepted/1`). A dispatch error is an honest refusal:
   # restore the draft, name the failure, no faked send.
-  defp handle_surface_command(state, %{type: :submit, payload: %{text: text}}) do
+  defp dispatch_submit(state, text) do
     {lane_mod, session} = state.lane
 
     model =
@@ -772,9 +792,7 @@ defmodule Raxol.Harness.LiveSessionDriver do
         {:error, :busy} ->
           state.model
           |> Surface.submit_refused()
-          |> Surface.put_lane_notice(
-            "» a turn is already running — wait for it, then resend"
-          )
+          |> Surface.put_lane_notice(submit_busy_notice())
 
         {:error, reason} ->
           state.model
@@ -786,8 +804,6 @@ defmodule Raxol.Harness.LiveSessionDriver do
 
     %{state | model: model}
   end
-
-  defp handle_surface_command(state, _other), do: state
 
   defp interrupt_payload(nil), do: %{}
   defp interrupt_payload(turn_id), do: %{turn_id: turn_id}
@@ -1006,7 +1022,7 @@ defmodule Raxol.Harness.LiveSessionDriver do
   # Session end is a process-level fact (session death / dead event
   # feed, handled in `handle_down/4` / `handle_exit/3`), never a
   # turn-level one.
-  defp apply_lifecycle(state, %{type: :turn_completed}) do
+  defp apply_lifecycle(state, %{type: :turn_completed} = event) do
     model =
       state.model
       |> Surface.flush_held()
@@ -1016,7 +1032,19 @@ defmodule Raxol.Harness.LiveSessionDriver do
       # unchanged model rather than ever diverging a byte.
       |> Surface.compact_sealed_turns()
 
-    %{state | model: model, current_turn_id: nil}
+    # Only a FINAL completion ends the turn belief. The tool loop emits an
+    # inter-round `turn_completed{final: false}` after EVERY tool round, but
+    # the turn is still in flight then (often parked on an approval) -- so
+    # clearing `current_turn_id` on those rounds is exactly what let a submit
+    # slip past the busy-refusal into a stuck "sending" preview (the field
+    # deadlock). Keeping the belief alive across inter-round completions
+    # makes the refusal fire. `final` absent defaults to true, so fixtures
+    # and single-pump turns (which carry no inter-round completions) are
+    # byte-unchanged.
+    current_turn_id =
+      if final_turn_completed?(event), do: nil, else: state.current_turn_id
+
+    %{state | model: model, current_turn_id: current_turn_id}
   end
 
   # Same release on cancellation: the bracket folded, the canceled turn's
@@ -1070,17 +1098,45 @@ defmodule Raxol.Harness.LiveSessionDriver do
     end
   end
 
-  # Always-put is simplest and harmless: the status strip only ever
-  # renders an ALERT segment for :stalled/:looping evidence, so putting a
-  # non-alarming verdict (:suspect) is inert on screen.
-  defp apply_verdict(state, %{class: :ok}) do
-    model = Surface.put_stall_verdict(state.model, nil)
-    %{state | model: model}
+  # An approval wait is OPERATOR-paced, not a stall: while a live approval
+  # holds the frontier (`status.needs_input`), the turn is not hung -- it is
+  # correctly waiting on the human -- so no stall alarm may render, whatever
+  # the detector's no-progress timer says. This gates on the SAME
+  # `needs_input` referent the status strip already keys its phase on
+  # (Track D), so the strip and the alarm can never disagree about whether
+  # the system is waiting or wedged. The detector's own timer keeps
+  # advancing; the next real progress event after the answer resets it.
+  defp apply_verdict(state, verdict) do
+    cond do
+      awaiting_operator?(state) ->
+        %{state | model: Surface.put_stall_verdict(state.model, nil)}
+
+      # Always-put is simplest and harmless: the status strip only ever
+      # renders an ALERT segment for :stalled/:looping evidence, so putting
+      # a non-alarming verdict (:suspect) is inert on screen.
+      verdict.class == :ok ->
+        %{state | model: Surface.put_stall_verdict(state.model, nil)}
+
+      true ->
+        %{state | model: Surface.put_stall_verdict(state.model, verdict)}
+    end
   end
 
-  defp apply_verdict(state, verdict) do
-    model = Surface.put_stall_verdict(state.model, verdict)
-    %{state | model: model}
+  defp awaiting_operator?(state),
+    do: Map.get(state.model.status, :needs_input, false) == true
+
+  # A turn_completed event is FINAL (ends the turn) unless it explicitly
+  # carries `final: false` -- the inter-round marker the tool loop emits
+  # after every tool round. `final` absent defaults to final, so fixtures
+  # and single-pump turns are byte-unchanged.
+  defp final_turn_completed?(event) do
+    case Map.get(event, :payload) do
+      %{} = payload ->
+        Map.get(payload, :final, Map.get(payload, "final", true)) == true
+
+      _no_payload ->
+        true
+    end
   end
 
   # -- tick / lane-error / EXIT -----------------------------------------

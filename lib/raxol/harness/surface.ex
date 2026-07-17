@@ -2643,10 +2643,20 @@ defmodule Raxol.Harness.Surface do
       # Track D: the answer-key guard (`:awaiting_approval`) fires only
       # while a live approval block is genuinely holding the frontier --
       # the SAME referent the frontier's pending-input gate keys on
-      # (`live_approval_block/1`), never a proxy for it.
-      approval_pending?: live_approval_block(model) != nil
+      # (`live_approval_block/1`), never a proxy for it -- AND only while
+      # the composer draft is empty, so `y`/`n`/digits answer a pending
+      # question when the operator hasn't typed anything, yet stay plain
+      # text the moment there is a draft to protect.
+      approval_pending?: live_approval_block(model) != nil,
+      composer_empty?: composer_empty?(model)
     }
   end
+
+  # The composer draft is "empty" when it carries no text at all -- the
+  # signal that the operator is not mid-thought, so an answer key is safe
+  # to consume (see `Keymap`'s `:awaiting_approval` guard). Any typed
+  # character makes it non-empty and hands letters back to the composer.
+  defp composer_empty?(model), do: Composer.value(model.composer) in [nil, ""]
 
   # The live approval block currently awaiting an answer (the one holding
   # the seal frontier), or `nil`. THE referent for "is a question on

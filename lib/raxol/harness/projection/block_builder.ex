@@ -540,12 +540,33 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
 
   # A turn-terminal loop event -- the boundary past which a still-live
   # approval must be resolved (canceled) rather than left holding the
-  # frontier. `turn_canceled` is included defensively: it is not part of
-  # the fixture loop vocabulary, but the live interrupt lane emits it, and
-  # if it ever reaches this fold it must resolve a pending approval, not be
-  # ignored.
-  defp turn_terminal?(event),
-    do: Map.get(event, :type) in [:turn_completed, :turn_canceled]
+  # frontier. A `turn_completed` counts ONLY when it is FINAL: the tool
+  # loop emits an inter-round `turn_completed{final: false}` after every
+  # tool round, and a consequential tool in a later round parks on its
+  # approval WHILE such inter-round completions have already landed in the
+  # turn -- so treating those as terminal would seal a genuinely live
+  # question as "canceled." `final` absent defaults to final (fixtures and
+  # single-pump turns carry no inter-round markers). `turn_canceled` is
+  # always terminal (and defensive: not in the fixture vocabulary, but the
+  # live interrupt lane emits it -- a pending approval must resolve, not be
+  # ignored).
+  defp turn_terminal?(event) do
+    case Map.get(event, :type) do
+      :turn_canceled -> true
+      :turn_completed -> final_completion?(event)
+      _other -> false
+    end
+  end
+
+  defp final_completion?(event) do
+    case Map.get(event, :payload) do
+      %{} = payload ->
+        Map.get(payload, :final, Map.get(payload, "final", true)) == true
+
+      _no_payload ->
+        true
+    end
+  end
 
   # Stamps an approval group's seal state. SEALED once answered
   # (`:decided` present) or once its turn ended without an answer; LIVE

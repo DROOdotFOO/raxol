@@ -652,6 +652,153 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
   end
 
   # ---------------------------------------------------------------------
+  # 5c. the approval-wait compound defect (submit deadlock + false HUNG)
+  # ---------------------------------------------------------------------
+
+  defp approval_requested_event(id) do
+    %{
+      id: id,
+      turn_id: "t1",
+      family: :loop,
+      type: :approval_requested,
+      tier: :durable,
+      ts: id * 1_000_000,
+      payload: %{
+        request_id: "appr-#{id}",
+        tool_name: "edit_file",
+        action: "edit_file",
+        args: %{"path" => "/lib/x.ex"},
+        options: [
+          %{option_id: "allow", name: "Allow", kind: :allow_once},
+          %{option_id: "deny", name: "Deny", kind: :reject_once}
+        ]
+      }
+    }
+  end
+
+  # An inter-round completion: the tool loop emits this after EVERY tool
+  # round. `final: false` means the turn is still in flight.
+  defp inter_round_completed(id) do
+    %{
+      id: id,
+      turn_id: "t1",
+      family: :loop,
+      type: :turn_completed,
+      tier: :durable,
+      ts: id * 1_000_000,
+      payload: %{final: false, iteration: 0}
+    }
+  end
+
+  # A completed tool_use -- both a stall observation (string keys, per
+  # `StallDetector.observation_from_event/1`) and an orphan tool_call block.
+  defp tool_use_completed(id, name) do
+    %{
+      id: id,
+      turn_id: "t1",
+      family: :loop,
+      type: :item_completed,
+      tier: :durable,
+      ts: id * 1_000_000,
+      payload: %{
+        "item_id" => "i#{id}",
+        "item_type" => "tool_use",
+        "name" => name,
+        "arguments" => %{}
+      }
+    }
+  end
+
+  defp probe_state(driver) do
+    ref = make_ref()
+    send(driver, {:debug_state_probe, self(), ref})
+
+    receive do
+      {:debug_state_reply, ^ref, state} -> state
+    after
+      1_000 -> nil
+    end
+  end
+
+  defp live_approval?(driver) do
+    case probe_state(driver) do
+      %{model: model} -> Surface.live_approval_block(model) != nil
+      _ -> false
+    end
+  end
+
+  defp stall_verdict(driver) do
+    case probe_state(driver) do
+      %{model: model} -> Map.get(model.status, :stall_verdict)
+      _ -> nil
+    end
+  end
+
+  describe "5c. a submit while awaiting an approval is refused, not wedged" do
+    test "the submit is refused and never dispatched, even after an inter-round completion cleared the naive turn belief" do
+      %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
+
+      send(forwarder, {:session_event, "s1", turn_started_event("t1", 1)})
+      # The exact field sequence: round-0 completes (final: false, which the
+      # naive handler used to treat as end-of-turn), THEN the round-1 tool
+      # parks on an approval. The turn is genuinely mid-approval.
+      send(forwarder, {:session_event, "s1", inter_round_completed(2)})
+      send(forwarder, {:session_event, "s1", approval_requested_event(3)})
+      eventually(fn -> live_approval?(driver) end)
+
+      # Enter/submit now: must refuse immediately and NEVER reach the lane
+      # (no stuck "sending" preview).
+      send(driver, {:surface_command, %{type: :submit, payload: %{text: "y"}}})
+      eventually(fn -> strip_ansi(raw(device)) =~ "already running" end)
+      refute_receive {:submit_dispatched, _}, 100
+    end
+  end
+
+  describe "5c. an approval wait never renders a HUNG/stall alarm (operator-paced)" do
+    test "a loop verdict is SUPPRESSED while a live approval holds the frontier" do
+      %{driver: driver, forwarder: forwarder} =
+        new_driver(%{}, stall_opts: [repetition_threshold: 2])
+
+      send(forwarder, {:session_event, "s1", turn_started_event("t1", 1)})
+      send(forwarder, {:session_event, "s1", approval_requested_event(2)})
+      eventually(fn -> live_approval?(driver) end)
+
+      # Two identical tool calls WOULD grade :looping -- but needs_input is
+      # true (the approval holds the frontier), so no alarm may be set.
+      send(forwarder, {:session_event, "s1", tool_use_completed(3, "spin")})
+      send(forwarder, {:session_event, "s1", tool_use_completed(4, "spin")})
+
+      # Wait until the detector has actually observed both calls (the point
+      # at which it would grade :looping), then assert the verdict was
+      # suppressed -- non-vacuous against the falsifier below.
+      eventually(fn ->
+        case probe_state(driver) do
+          %{detector: detector} -> length(detector.calls) >= 2
+          _ -> false
+        end
+      end)
+
+      assert stall_verdict(driver) == nil,
+             "an approval wait is operator-paced, not a stall -- no alarm"
+    end
+
+    test "FALSIFIER: the same loop DOES alarm when no approval is pending" do
+      %{driver: driver, forwarder: forwarder} =
+        new_driver(%{}, stall_opts: [repetition_threshold: 2])
+
+      send(forwarder, {:session_event, "s1", turn_started_event("t1", 1)})
+      send(forwarder, {:session_event, "s1", tool_use_completed(2, "spin")})
+      send(forwarder, {:session_event, "s1", tool_use_completed(3, "spin")})
+
+      # Proves the suppression above is real, not vacuous: identical calls
+      # with NO approval pending do set the loop verdict.
+      eventually(fn ->
+        match?(%{class: :looping}, stall_verdict(driver))
+      end)
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # 6 & 7. loss / malformed markers
   # ---------------------------------------------------------------------
 

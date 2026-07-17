@@ -293,7 +293,12 @@ defmodule Raxol.UI.Harness.KeymapTest do
     # while a question is on screen. Without it these binds correctly stay
     # `:passthrough`, exactly like the `:overlay` bind above needs its own.
     defp context_for(%{guard: :awaiting_approval}),
-      do: %{composing?: false, focused_block_id: "any", approval_pending?: true}
+      do: %{
+        composing?: false,
+        focused_block_id: "any",
+        approval_pending?: true,
+        composer_empty?: true
+      }
 
     defp context_for(_bind), do: %{composing?: false, focused_block_id: "any"}
 
