@@ -493,6 +493,25 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert style[:dim] == true
     end
 
+    test "the folded reasoning line is DIM (machinery register) and shows ∴ + line count" do
+      # A sealed reasoning block inherits the low-prominence machinery
+      # register set for reasoning items by the compaction unit: `∴
+      # reasoning · N lines`, dim, folded — never full-weight speech.
+      block =
+        Block.from_events(
+          :reasoning,
+          message_events("weigh the options\nthen decide"),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [{content, style}] =
+               styled_texts(Block.render(block, %{width: 120}))
+
+      assert content =~ "∴ reasoning · 2 lines"
+      assert style[:dim] == true
+    end
+
     test "receipt derives from the result payload shape: multi-line -> N lines" do
       block =
         Block.from_events(:tool_call, tool_events("t", %{}, "one\ntwo\nthree"),
