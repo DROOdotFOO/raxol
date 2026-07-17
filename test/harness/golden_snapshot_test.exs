@@ -54,7 +54,17 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
   # in this vocabulary at all, deliberately: the capability-absent case is
   # pinned by `test/harness/surface_seal_pipeline_test.exs`
   # ("capability absent (nil) emits no brackets anywhere in a full run").
+  #
+  # CONSCIOUS EXTENSION (cursor-park protocol): DECTCEM hide/show
+  # (`CSI ? 25 l`/`h`) wraps multi-row footer repaint bursts so the
+  # parked composer cursor never visibly hops rows mid-rewrite (see
+  # `InlineAuthority.repaint/3`'s park-protocol doc). The finals `h`/`l`
+  # are NOT added to `@allowed_csi_finals` wholesale -- that would also
+  # legitimize 2026 brackets and arbitrary private modes sneaking into a
+  # capability-nil golden -- only the exact `?25` parameter is allowed,
+  # via `@allowed_private_modes` below.
   @allowed_csi_finals ~w(H K m r)
+  @allowed_private_modes ~w(?25)
   @allowed_esc_chars ~w(7 8)
 
   # ---------------------------------------------------------------------
@@ -153,10 +163,13 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
                "#{fixture} x #{mode} golden contains a DCS sequence -- outside " <>
                  "the measured vocabulary (see the allowlist comment above)"
 
-        for {:csi, _params, final} <- tokens do
-          assert final in @allowed_csi_finals,
-                 "#{fixture} x #{mode} golden contains a CSI sequence with " <>
-                   "final #{inspect(final)}, outside the allowlist #{inspect(@allowed_csi_finals)}"
+        for {:csi, params, final} <- tokens do
+          assert final in @allowed_csi_finals or
+                   (final in ~w(h l) and params in @allowed_private_modes),
+                 "#{fixture} x #{mode} golden contains a CSI sequence " <>
+                   "#{inspect(params)} #{inspect(final)}, outside the " <>
+                   "allowlist #{inspect(@allowed_csi_finals)} + private " <>
+                   "modes #{inspect(@allowed_private_modes)}"
         end
 
         for {:esc, ch} <- tokens do

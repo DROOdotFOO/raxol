@@ -111,6 +111,34 @@ defmodule Raxol.UI.Rendering.PaintAuthority do
     end
 
     @doc """
+    Cursor Position (CUP) with an explicit column: `CSI row;col H` --
+    the cursor-park vocabulary (`InlineAuthority`'s `:cursor` repaint/
+    keyframe option parks the terminal cursor at the composer's edit
+    point after each footer paint). Same single-home rule as
+    `cursor_position/1`: the wire format lives here, never hand-rolled
+    at an emit site.
+    """
+    @spec cursor_position(pos_integer(), pos_integer()) :: binary()
+    def cursor_position(row, col)
+        when is_integer(row) and row >= 1 and is_integer(col) and col >= 1 do
+      "\e[#{row};#{col}H"
+    end
+
+    @doc """
+    DECTCEM hide: `CSI ? 25 l`. Paired with `cursor_show/0` around a
+    multi-row footer repaint burst when no DEC 2026 bracket is covering
+    the frame (see `InlineAuthority`'s park protocol) -- hiding is what
+    keeps the parked cursor from visibly hopping row to row while the
+    footer rewrites.
+    """
+    @spec cursor_hide() :: binary()
+    def cursor_hide, do: "\e[?25l"
+
+    @doc "DECTCEM show: `CSI ? 25 h`. See `cursor_hide/0`."
+    @spec cursor_show() :: binary()
+    def cursor_show, do: "\e[?25h"
+
+    @doc """
     DEC 2026 synchronized-update begin: `CSI ? 2026 h`. Paired with
     `sync_end/0` by `InlineAuthority.sync_open/1`/`sync_close/1`; defined
     here (not inline at the emit site) so the mode number and set/reset

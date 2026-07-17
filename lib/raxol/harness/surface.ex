@@ -2992,8 +2992,8 @@ defmodule Raxol.Harness.Surface do
 
   defp paint_footer(model) do
     model = refresh_panel_overlay(model)
-    lines = footer_lines(model)
-    authority = InlineAuthority.repaint(model.authority, lines)
+    {lines, cursor} = footer_frame(model)
+    authority = InlineAuthority.repaint(model.authority, lines, cursor: cursor)
     %{model | authority: authority, stub_notice: nil}
   end
 
@@ -3054,23 +3054,33 @@ defmodule Raxol.Harness.Surface do
   # expansion's own header-plus-window lines. A separate function head
   # (rather than a branch inside the clause below) keeps this diff
   # surgical against the existing footer_lines/1 body.
-  defp footer_lines(%{expansion: expansion} = model) when expansion != nil do
+  # The footer frame: the fitted line list PLUS the terminal-cursor park
+  # target (`InlineAuthority`'s `:cursor` option -- `{row_offset, col}`
+  # relative to the footer's top row, or `nil` to leave the cursor where
+  # the last park put it). Both consumers (`paint_footer/1`'s repaint,
+  # `resize/2`'s keyframe composition) thread the same tuple.
+  defp footer_frame(%{expansion: expansion} = model) when expansion != nil do
     # Same honest-notice law as the normal clause below: the expansion's
     # body rows are the discretionary tail (its header stays first-in-
     # group so position/dismiss hints survive a trim), status yields
-    # next, the notice never.
-    fit_footer_lines(
-      [
-        status: StatusStrip.render(model.status, model.width),
-        notice: notice_line(model.stub_notice, model.width),
-        expansion: DiffExpansion.render_lines(expansion)
-      ],
-      [:expansion, :status],
-      footer_budget(model)
-    )
+    # next, the notice never. No composer is on screen while expanded,
+    # so there is no edit point to park at -- the cursor stays wherever
+    # the last composer park left it.
+    lines =
+      fit_footer_lines(
+        [
+          status: StatusStrip.render(model.status, model.width),
+          notice: notice_line(model.stub_notice, model.width),
+          expansion: DiffExpansion.render_lines(expansion)
+        ],
+        [:expansion, :status],
+        footer_budget(model)
+      )
+
+    {lines, nil}
   end
 
-  defp footer_lines(model) do
+  defp footer_frame(model) do
     # Both the divider and the pending/live-tail preview are suppressed
     # while an overlay is open -- the overlay claims that space (see the
     # moduledoc's precondition #5 update, "The overlay picker" section,
@@ -3085,27 +3095,67 @@ defmodule Raxol.Harness.Surface do
         :styled
       )
 
+    budget = footer_budget(model)
+
     # `lane` is the persistent live-session status channel
     # (`put_lane_notice/2`: "interrupt sent", "session process exited —
     # transcript preserved", etc.). Like `notice`, it is an HONEST report
     # channel, so it is deliberately absent from `drop_order` -- never shed
     # to fit the budget (a dropped lane notice would read as "nothing
     # happened", the exact fail-safe inversion the honest-notice law rules
-    # out). It sits right after `status` in display order, as it did before
-    # master's fit refactor.
-    fit_footer_lines(
-      [
-        status: StatusStrip.render(model.status, model.width),
-        lane: notice_line(model.lane_notice, model.width),
-        overlay: overlay_lines(model),
-        divider: divider_lines,
-        preview: preview_lines,
-        composer: composer_lines,
-        notice: notice_line(model.stub_notice, model.width)
-      ],
-      [:preview, :divider, :composer, :overlay, :status],
-      footer_budget(model)
-    )
+    # out). It sits right after `status` in display order.
+    kept =
+      fit_footer_groups(
+        [
+          status: StatusStrip.render(model.status, model.width),
+          lane: notice_line(model.lane_notice, model.width),
+          overlay: overlay_lines(model),
+          divider: divider_lines,
+          preview: preview_lines,
+          composer: composer_lines,
+          notice: notice_line(model.stub_notice, model.width)
+        ],
+        [:preview, :divider, :composer, :overlay, :status],
+        budget
+      )
+
+    lines =
+      kept
+      |> Enum.flat_map(fn {_key, lines} -> lines end)
+      |> Enum.take(budget)
+
+    {lines, composer_cursor(model, kept, length(lines))}
+  end
+
+  # The park target for the composer's edit point (see
+  # `Composer.edit_point/2` -- end of the typed draft, the minimal
+  # honest version). `nil` -- leave the cursor at its previous park --
+  # whenever the composer is not what typed keys currently reach: an
+  # open overlay routes every `:passthrough` keystroke to the picker's
+  # filter, so parking at the (frozen) composer would point the native
+  # cursor at state the keys never touch. Also `nil` when the footer fit
+  # sheded the composer's rows entirely (nothing on screen to park at).
+  defp composer_cursor(%{overlay: overlay}, _kept, _line_count)
+       when overlay != nil,
+       do: nil
+
+  defp composer_cursor(model, kept, line_count) do
+    composer_kept = kept |> Keyword.fetch!(:composer) |> length()
+
+    if composer_kept == 0 do
+      nil
+    else
+      offset =
+        kept
+        |> Enum.take_while(fn {key, _lines} -> key != :composer end)
+        |> Enum.map(fn {_key, lines} -> length(lines) end)
+        |> Enum.sum()
+
+      {row_in_composer, col} = Composer.edit_point(model.composer, model.width)
+      row = offset + min(row_in_composer, composer_kept - 1)
+
+      if row < line_count, do: {row, col}, else: nil
+    end
   end
 
   # -- footer fit: the honest-notice law ------------------------------
@@ -3128,13 +3178,20 @@ defmodule Raxol.Harness.Surface do
   # lines rather than crashing. Pinned by the "honest-notice law under
   # footer overflow" describe in diff_expand_surface_test.exs.
   defp fit_footer_lines(groups, drop_order, budget) do
+    groups
+    |> fit_footer_groups(drop_order, budget)
+    |> Enum.flat_map(fn {_key, lines} -> lines end)
+    |> Enum.take(budget)
+  end
+
+  # The group-preserving half of the fit: sheds overflow per the drop
+  # order but keeps the keyword structure, so `footer_frame/1` can read
+  # the composer group's post-fit offset/length for the cursor park.
+  defp fit_footer_groups(groups, drop_order, budget) do
     total =
       groups |> Enum.map(fn {_key, lines} -> length(lines) end) |> Enum.sum()
 
-    groups
-    |> shed_overflow(drop_order, total - budget)
-    |> Enum.flat_map(fn {_key, lines} -> lines end)
-    |> Enum.take(budget)
+    shed_overflow(groups, drop_order, total - budget)
   end
 
   defp shed_overflow(groups, _drop_order, overflow) when overflow <= 0,
@@ -3313,8 +3370,8 @@ defmodule Raxol.Harness.Surface do
 
   def resize(model, width, rows) do
     model = model |> heal_sync() |> adopt_resize(width, rows)
-    lines = footer_lines(model)
-    authority = InlineAuthority.keyframe(model.authority, lines)
+    {lines, cursor} = footer_frame(model)
+    authority = InlineAuthority.keyframe(model.authority, lines, cursor: cursor)
     %{model | authority: authority, stub_notice: nil}
   end
 

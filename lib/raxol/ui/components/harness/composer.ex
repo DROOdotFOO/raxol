@@ -178,6 +178,44 @@ defmodule Raxol.UI.Components.Harness.Composer do
   def history(%{history: history}), do: history
 
   @doc """
+  The composer's edit point within the lines `render/2` produces at
+  `avail_width`: `{row_offset, col}` -- 0-based row offset counted from
+  the composer's own first rendered line (the queued-steer banner, when
+  present, occupies row 0), 1-based display column.
+
+  This is the terminal-cursor park target for an assembling surface
+  (`Raxol.Harness.Surface.paint_footer/1` -> `InlineAuthority`'s
+  `:cursor` option): the native cursor should sit where the next typed
+  grapheme lands. Minimal honest version, deliberately: the reported
+  point is the END OF THE TYPED DRAFT (last visible input row, one
+  column past its content) -- not the mid-draft caret MultiLineInput
+  tracks internally. Re-deriving the caret's visual position under
+  `render/2`'s own re-wrap-at-`avail_width` is real work
+  (`size_mli_for_render/2` re-splits the buffer, invalidating
+  `cursor_pos`'s row/col against the rendered lines); end-of-draft is
+  exact for the common case (typing appends) and honestly approximate
+  after mid-draft cursor movement. Columns are measured with
+  `Raxol.UI.TextMeasure` (CJK double-width), never `String.length/1`.
+  """
+  @spec edit_point(t(), pos_integer()) ::
+          {non_neg_integer(), pos_integer()}
+  def edit_point(state, avail_width)
+      when is_integer(avail_width) and avail_width > 0 do
+    mli = size_mli_for_render(state.mli, avail_width)
+    banner = if state.queued_steer, do: 1, else: 0
+
+    {scroll_row, _scroll_col} = mli.scroll_offset
+    line_count = max(length(mli.lines), 1)
+    last_visible = min(line_count - 1, scroll_row + mli.height - 1)
+    row = banner + max(last_visible - scroll_row, 0)
+
+    last_line = List.last(mli.lines) || ""
+    col = min(TextMeasure.display_width(last_line) + 1, avail_width)
+
+    {row, max(col, 1)}
+  end
+
+  @doc """
   Unconditional submit, bypassing the single-line gate -- for a consumer
   keybind (e.g. Ctrl+Enter) that must submit multi-line content directly.
   Returns `{state, []}` unchanged if the trimmed buffer is empty.

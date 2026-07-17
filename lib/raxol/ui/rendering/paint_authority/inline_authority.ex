@@ -296,8 +296,11 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     footer_lines: [],
     needs_keyframe: false,
     sync_output?: false,
-    sync_close_pending?: false
+    sync_close_pending?: false,
+    cursor_park: nil
   ]
+
+  @type cursor_park :: {pos_integer(), pos_integer()} | nil
 
   @type t :: %__MODULE__{
           region: ScrollRegionManager.t(),
@@ -308,7 +311,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
           footer_lines: [binary()],
           needs_keyframe: boolean(),
           sync_output?: boolean(),
-          sync_close_pending?: boolean()
+          sync_close_pending?: boolean(),
+          cursor_park: cursor_park()
         }
 
   @doc """
@@ -774,26 +778,56 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   process -- when that flag is set (a prior geometry-changing `resize/3`):
   see the moduledoc's "`needs_keyframe` latch" section for why a diff-only
   repaint is not safe to trust immediately after a resize.
+
+  ## The `:cursor` option (the park protocol)
+
+  `cursor: {row_offset, col}` (0-based row offset from the footer's top
+  row, 1-based column) declares where the terminal's VISIBLE cursor
+  belongs after this paint -- the composer's edit point, for the
+  assembled harness. Without it, nothing ever positions the visible
+  cursor: `ScrollRegionManager.start/3`'s DECSTBM set homes it to (1,1)
+  as a documented VT100 side effect, and every `with_cursor/3` bracket
+  faithfully restores it there -- a blinking box parked at the top-left
+  for the whole session (the live-demo defect this closes).
+
+  Contract:
+
+    * any paint that emitted rows ends its byte tail with the park CUP
+      (`Dialect.cursor_position/2`, clamped inside the footer range and
+      the authority width);
+    * a frame with NO row changes emits the park CUP alone -- and only
+      when the park actually moved (the zero-byte no-op property is
+      unchanged for a fully-unchanged frame);
+    * a MULTI-row paint is a burst: wrapped in `Dialect.cursor_hide/0`
+      ... `Dialect.cursor_show/0` so the parked cursor never visibly
+      hops row to row mid-rewrite -- UNLESS the frame is already inside
+      an open DEC 2026 bracket (`sync_close_pending?`), which makes
+      intermediate states invisible without hiding;
+    * omitting `:cursor` (every pre-existing 2-arity caller) is
+      byte-identical to the pre-park behavior -- strictly opt-in.
   """
-  @spec repaint(t(), [binary()]) :: t()
-  def repaint(%__MODULE__{needs_keyframe: true} = t, new_lines)
+  @spec repaint(t(), [binary()], keyword()) :: t()
+  def repaint(t, new_lines, opts \\ [])
+
+  def repaint(%__MODULE__{needs_keyframe: true} = t, new_lines, opts)
       when is_list(new_lines) do
-    keyframe(t, new_lines)
+    keyframe(t, new_lines, opts)
   end
 
-  def repaint(%__MODULE__{footer_lines: old_lines} = t, new_lines)
+  def repaint(%__MODULE__{footer_lines: old_lines} = t, new_lines, opts)
       when is_list(new_lines) do
     count = footer_row_count(t)
     padded_new = sanitize_and_pad(new_lines, count)
     padded_old = pad_rows(old_lines, count)
+    cursor = Keyword.get(opts, :cursor)
 
     case footer_diff(padded_old, padded_new) do
-      [] -> %{t | footer_lines: padded_new}
-      changes -> emit_footer_diff(t, changes, padded_new)
+      [] -> %{t | footer_lines: padded_new} |> park_if_moved(cursor)
+      changes -> emit_footer_diff(t, changes, padded_new, cursor)
     end
   end
 
-  defp emit_footer_diff(t, changes, padded_new) do
+  defp emit_footer_diff(t, changes, padded_new, cursor) do
     footer_top = region_top(t) + 1
 
     iodata =
@@ -801,9 +835,14 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         footer_row_bytes(footer_top + idx, line)
       end)
 
+    burst? = burst?(t, length(changes), cursor)
+
     t
+    |> burst_hide(burst?)
     |> with_cursor(:footer, fn inner -> repaint_footer(inner, iodata) end)
     |> Map.put(:footer_lines, padded_new)
+    |> park(cursor)
+    |> burst_show(burst?)
   end
 
   @doc """
@@ -823,19 +862,26 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   zero addressed rows would be a byte-for-byte no-op wrapped in
   ceremony; on a geometry that can't show a footer at all, emitting
   nothing is the honest behavior.
+
+  Accepts the same `:cursor` park option as `repaint/3` (see that doc's
+  "park protocol" section); a keyframe always re-emits the park when one
+  is given, since the screen state it recovers from (post-resize,
+  post-editor-resume) says nothing about where the cursor was left.
   """
-  @spec keyframe(t(), [binary()]) :: t()
-  def keyframe(%__MODULE__{} = t, new_lines) when is_list(new_lines) do
+  @spec keyframe(t(), [binary()], keyword()) :: t()
+  def keyframe(t, new_lines, opts \\ [])
+
+  def keyframe(%__MODULE__{} = t, new_lines, opts) when is_list(new_lines) do
     count = footer_row_count(t)
     padded_new = sanitize_and_pad(new_lines, count)
 
     case count do
       0 -> %{t | footer_lines: padded_new, needs_keyframe: false}
-      _ -> emit_footer_keyframe(t, padded_new)
+      _ -> emit_footer_keyframe(t, padded_new, Keyword.get(opts, :cursor))
     end
   end
 
-  defp emit_footer_keyframe(t, padded_new) do
+  defp emit_footer_keyframe(t, padded_new, cursor) do
     footer_top = region_top(t) + 1
 
     iodata =
@@ -845,10 +891,83 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         footer_row_bytes(footer_top + idx, line)
       end)
 
+    burst? = burst?(t, length(padded_new), cursor)
+
     t
+    |> burst_hide(burst?)
     |> with_cursor(:footer, fn inner -> keyframe_footer(inner, iodata) end)
     |> Map.put(:footer_lines, padded_new)
     |> Map.put(:needs_keyframe, false)
+    |> park(cursor)
+    |> burst_show(burst?)
+  end
+
+  # -- the cursor park (see repaint/3's "park protocol" doc section) ------
+
+  # A burst is >= 2 rows rewritten in one paint, WITH a park in play --
+  # hide/show are part of the park protocol only, so cursor-less
+  # (2-arity) callers stay byte-identical to the pre-park behavior.
+  # Hiding is also skipped inside an open DEC 2026 bracket
+  # (`sync_close_pending?` is set from open until an accepted close):
+  # synchronized frames present atomically, so the intermediate cursor
+  # positions are never visible anyway.
+  defp burst?(_t, _emitted_rows, nil), do: false
+
+  defp burst?(t, emitted_rows, _cursor),
+    do: emitted_rows > 1 and not t.sync_close_pending?
+
+  defp burst_hide(t, false), do: t
+
+  defp burst_hide(%__MODULE__{region: region} = t, true) do
+    IO.write(region.device, Dialect.cursor_hide())
+    t
+  end
+
+  defp burst_show(t, false), do: t
+
+  defp burst_show(%__MODULE__{region: region} = t, true) do
+    IO.write(region.device, Dialect.cursor_show())
+    t
+  end
+
+  # Unconditional park after a paint that emitted rows: the rows moved
+  # the physical cursor, so the park CUP is what puts it back at the edit
+  # point (the `\e8` restore alone would land on the PREVIOUS park).
+  defp park(t, nil), do: t
+
+  defp park(%__MODULE__{region: region} = t, {row_offset, col}) do
+    if footer_row_count(t) == 0 do
+      # Degenerate geometry: no footer rows exist to park inside -- same
+      # honest nothing `keyframe/3` already emits there.
+      t
+    else
+      {row, col} = clamp_park(t, row_offset, col)
+      IO.write(region.device, Dialect.cursor_position(row, col))
+      %{t | cursor_park: {row, col}}
+    end
+  end
+
+  # The no-row-change path: the physical cursor is already ON the stored
+  # park (nothing moved it), so only an actually-moved park emits -- this
+  # is what keeps the fully-unchanged frame at zero bytes.
+  defp park_if_moved(t, nil), do: t
+
+  defp park_if_moved(t, {row_offset, col}) do
+    if footer_row_count(t) > 0 and
+         clamp_park(t, row_offset, col) != t.cursor_park do
+      park(t, {row_offset, col})
+    else
+      t
+    end
+  end
+
+  # The park may never leave the footer range (the same confinement every
+  # repaint CUP already honors) nor the column budget.
+  defp clamp_park(t, row_offset, col) do
+    count = footer_row_count(t)
+    footer_top = region_top(t) + 1
+    row = footer_top + min(max(row_offset, 0), max(count - 1, 0))
+    {row, col |> max(1) |> min(t.width)}
   end
 
   # Common entry sanitization for both repaint/2 and keyframe/2: every

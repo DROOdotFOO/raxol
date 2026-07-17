@@ -878,18 +878,26 @@ defmodule Raxol.Harness.T13aSurfaceTest do
     # per-keystroke-isolated delta has no memory of the row the save
     # actually captured (that context lives in the FULL stream since
     # construction) -- feeding the bracket itself to `cup_rows/1` makes
-    # the trailing DECRC restore report a fabricated row-1 "movement"
-    # that never happened. Same fix `renderer_footer_property_test.exs`
-    # already uses for exactly this reason: strip the bracket before the
-    # ROW check (the byte-BUDGET check below still measures the full,
+    # the DECRC restore report a fabricated row-1 "movement" that never
+    # happened. Same fix `renderer_footer_property_test.exs` already
+    # uses for exactly this reason: strip the bracket before the ROW
+    # check (the byte-BUDGET check below still measures the full,
     # un-stripped delta -- the bracket is real emitted-byte cost).
+    #
+    # Since the cursor-park protocol, the delta's tail is no longer the
+    # DECRC itself: a park CUP to the composer's edit point (and, on a
+    # multi-row burst, a DECTCEM hide/show wrap) follows it -- all
+    # footer-confined bytes the row check SHOULD see. So the restore is
+    # removed wherever it sits (first occurrence -- there is exactly one
+    # bracket per keystroke echo) instead of only as a suffix.
     defp strip_cursor_bracket(bytes) do
       save = Raxol.UI.Rendering.PaintAuthority.Dialect.cursor_save()
       restore = Raxol.UI.Rendering.PaintAuthority.Dialect.cursor_restore()
 
       bytes
+      |> strip_prefix(Raxol.UI.Rendering.PaintAuthority.Dialect.cursor_hide())
       |> strip_prefix(save)
-      |> strip_suffix(restore)
+      |> String.replace(restore, "", global: false)
     end
 
     defp strip_prefix(bytes, prefix) do
@@ -899,14 +907,6 @@ defmodule Raxol.Harness.T13aSurfaceTest do
           byte_size(prefix),
           byte_size(bytes) - byte_size(prefix)
         )
-      else
-        bytes
-      end
-    end
-
-    defp strip_suffix(bytes, suffix) do
-      if String.ends_with?(bytes, suffix) do
-        binary_part(bytes, 0, byte_size(bytes) - byte_size(suffix))
       else
         bytes
       end
@@ -980,6 +980,45 @@ defmodule Raxol.Harness.T13aSurfaceTest do
                  "linear ceiling #{ceiling} (per-keystroke budget #{@echo_byte_budget}) -- " <>
                  "growth must be linear in keystrokes, never quadratic"
       end
+    end
+
+    # The live-demo defect (real terminal, harness live/fixture demos):
+    # control keys arriving over the REAL raw-ANSI wire -- not the
+    # `Event.key/1` test-API shape every test above uses -- were dead in
+    # the composer, because `MultiLineInput.EventHandler` only matched the
+    # test-API `%{key: _, modifiers: _}` data shape. Printable chars
+    # worked (the Composer intercepts those itself); backspace/arrows
+    # delegated onward and no-opped. This drives the REAL
+    # `InputParser.parse/1` emitter through the REAL
+    # `Surface.handle_input/2` route (normalize -> Keymap :passthrough ->
+    # Composer -> MultiLineInput delegation).
+    test "a real ANSI backspace through Surface.handle_input edits the composer draft" do
+      alias Raxol.Terminal.ANSI.InputParser
+      {model, _device} = echo_model()
+
+      model =
+        Enum.reduce(
+          InputParser.parse("hi"),
+          model,
+          &Surface.handle_input(&2, &1)
+        )
+
+      [backspace_event] = InputParser.parse(<<127>>)
+      model = Surface.handle_input(model, backspace_event)
+
+      assert Raxol.UI.Components.Harness.Composer.value(model.composer) == "h"
+    end
+
+    test "real ANSI arrow keys through Surface.handle_input move the composer cursor" do
+      alias Raxol.Terminal.ANSI.InputParser
+      {model, _device} = echo_model()
+
+      model =
+        InputParser.parse("ab" <> "\e[D" <> "X")
+        |> Enum.reduce(model, &Surface.handle_input(&2, &1))
+
+      assert Raxol.UI.Components.Harness.Composer.value(model.composer) ==
+               "aXb"
     end
   end
 
