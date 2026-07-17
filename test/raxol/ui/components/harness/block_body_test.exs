@@ -455,6 +455,31 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
       assert strip_ids(BlockBody.render(block, default_context())) ==
                strip_ids(unwrapped_view)
     end
+
+    test "a block with an unrecognized completion shape renders byte-identical to the unwrapped mount (completion_rows/2 returns [])" do
+      block = Block.from_events(:message, events(:message), fold: :expanded)
+
+      with_garbage_completion = %{
+        block
+        | content: Map.put(block.content, :completion, %{evidence: :garbage})
+      }
+
+      assert Block.completion_rows(with_garbage_completion) == [],
+             "test premise: an unrecognized completion shape must render no rows at all"
+
+      {:ok, unwrapped_view} =
+        Raxol.UI.Components.Harness.BodyProvider.mount(
+          with_garbage_completion.kind,
+          with_garbage_completion.content,
+          context: default_context(),
+          outcome: with_garbage_completion.outcome,
+          seal: with_garbage_completion.seal
+        )
+
+      assert strip_ids(BlockBody.render(with_garbage_completion, default_context())) ==
+               strip_ids(unwrapped_view),
+             "an unrecognized completion shape must never trigger the completion-row wrapping column"
+    end
   end
 
   describe "golden fixture: markdown streams through the full BlockBody path" do

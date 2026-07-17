@@ -117,7 +117,7 @@ defmodule Raxol.Harness.Surface.Golden do
   alias Raxol.Harness.Surface
   alias Raxol.Harness.Surface.GoldenDiff
 
-  @fixtures ["simple-chat", "multi-tool-turn"]
+  @fixtures ["simple-chat", "multi-tool-turn", "evidence-done"]
   @modes [:inline_log, :tmux_conservative, :flat]
 
   @width 60

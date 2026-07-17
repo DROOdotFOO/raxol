@@ -80,12 +80,21 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   # A mounted component's view replaces Block.render/2's whole body, so
   # the completion row (otherwise only reachable through that render)
   # has to be re-appended here. Byte-identical, no wrapping at all, when
-  # `block.content` carries no `:completion` key -- see the moduledoc.
-  defp wrap_with_completion(view, %Block{content: %{completion: _}} = block) do
-    Components.column(gap: 0, children: [view | Block.completion_rows(block)])
+  # `Block.completion_rows/2` has nothing to add -- both when
+  # `block.content` carries no `:completion` key AND when it carries one
+  # in a shape `completion_rows/2` doesn't recognise (that helper's own
+  # contract: unrecognised shape -> `[]`). Computing `rows` FIRST and
+  # branching on it (rather than pattern-matching on the mere presence of
+  # the `:completion` key, as an earlier version of this function did) is
+  # what keeps this module's own "byte-identical when there is nothing to
+  # add" promise honest for that unrecognised-shape case too -- see the
+  # moduledoc.
+  defp wrap_with_completion(view, %Block{} = block) do
+    case Block.completion_rows(block) do
+      [] -> view
+      rows -> Components.column(gap: 0, children: [view | rows])
+    end
   end
-
-  defp wrap_with_completion(view, %Block{}), do: view
 
   # The single point where a mounted component's own `init/1`/`render/2`
   # runs (via `BodyProvider.mount/3`) -- a raise here (e.g. a schema-valid

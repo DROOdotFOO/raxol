@@ -101,16 +101,22 @@ defmodule Raxol.UI.Components.Harness.Block do
     * `%{evidence: :none}` -- no accepted refs: renders ONE line, the
       LITERAL text `"no evidence provided"`, no glyph, no checkmark --
       the absence is information, never blank.
-    * `%{evidence: entries, total: n, type_counts: counts}` -- renders:
+    * `%{evidence: entries, total: n, type_counts: counts}` (plus an
+      optional `cross_turn_count`, see `BlockBuilder`'s moduledoc "Cross-
+      turn disclosure") -- renders:
       1. a summary line, `"N evidence refs: 2 tool results, 1 message"`
          (`n`, pluralized, then `counts` -- `[%{type:, count:}]`, already
          sorted descending by count -- joined `", "`, each phrase
-         pluralized by ITS OWN count);
+         pluralized by ITS OWN count), with a `" (M cross-turn)"` suffix
+         appended when `cross_turn_count` (`M`) is present;
       2. up to `length(entries)` per-ref lines (`entries` is capped
          upstream, see `BlockBuilder`), each `"· " <> label` (the label
          already sanitized/clamped -- an unresolvable ref's label is the
          literal `"unresolvable evidence ref"`, rendered exactly like any
-         other entry, never dropped);
+         other entry, never dropped), with a trailing literal
+         `" [cross-turn]"` when that entry carries `cross_turn: true`
+         (a ref the producer's own gate would never have accepted as
+         same-turn evidence -- shown, not hidden);
       3. a trailing `"+N more"` line when `n` exceeds `length(entries)`.
 
   Key absent or unrecognised shape renders no row at all -- byte-identical
@@ -739,18 +745,27 @@ defmodule Raxol.UI.Components.Harness.Block do
   def completion_rows(
         %__MODULE__{
           content: %{
-            completion: %{
-              evidence: entries,
-              total: total,
-              type_counts: type_counts
-            }
+            completion:
+              %{
+                evidence: entries,
+                total: total,
+                type_counts: type_counts
+              } = completion
           }
         },
         fg
       )
       when is_list(entries) do
-    summary = completion_text(completion_summary_line(total, type_counts), fg)
-    entry_rows = Enum.map(entries, &completion_text("· " <> &1.label, fg))
+    cross_turn_count = Map.get(completion, :cross_turn_count)
+
+    summary =
+      completion_text(
+        completion_summary_line(total, type_counts, cross_turn_count),
+        fg
+      )
+
+    entry_rows =
+      Enum.map(entries, &completion_text(completion_entry_line(&1), fg))
 
     [summary | entry_rows] ++ completion_more_row(total, entries, fg)
   end
@@ -761,9 +776,21 @@ defmodule Raxol.UI.Components.Harness.Block do
     Components.text(content: content, style: apply_fg(%{dim: true}, fg))
   end
 
-  defp completion_summary_line(total, type_counts) do
+  # A cross-turn entry's line carries the literal "[cross-turn]" marker
+  # -- the same-turn line shape is otherwise UNCHANGED (no-churn pin).
+  defp completion_entry_line(%{label: label, cross_turn: true}),
+    do: "· " <> label <> " [cross-turn]"
+
+  defp completion_entry_line(%{label: label}), do: "· " <> label
+
+  defp completion_summary_line(total, type_counts, cross_turn_count) do
     breakdown = Enum.map_join(type_counts, ", ", &completion_type_phrase/1)
-    "#{total} #{pluralize("evidence ref", total)}: #{breakdown}"
+    base = "#{total} #{pluralize("evidence ref", total)}: #{breakdown}"
+
+    case cross_turn_count do
+      n when is_integer(n) and n > 0 -> base <> " (#{n} cross-turn)"
+      _no_cross_turn -> base
+    end
   end
 
   defp completion_type_phrase(%{type: type, count: count}) do

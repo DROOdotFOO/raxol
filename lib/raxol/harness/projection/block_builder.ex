@@ -92,33 +92,71 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
       content rides through `Jason.encode!/1` at bless time, which has
       no `Encoder` for tuples.
 
-  ## Refs are SESSION-scoped journal offsets, not turn-scoped
+  ## Refs are SESSION-scoped journal offsets, not turn-scoped -- and why
 
   Per the frozen offset law (a `ref` is a journal event id, and ids are
   session-wide), resolution is against the WHOLE session's id-recovered
-  event stream, not just the owning turn's own events -- a ref may
-  legitimately point at an earlier turn's `tool_result`. `Projection.
+  event stream, not just the owning turn's own events. `Projection.
   project/2` builds one `id -> event` index over the id-recovered
   stream (before family partition or turn bucketing) and threads it
   into every turn's `build_turn/3` call; this module never re-derives
   it and never assumes a ref lives in the events it was handed.
 
+  This is a DISPLAY-side decision, not a re-implementation of the
+  producer's evidence gate: the honest producer
+  (`Raxol.Agent.Contract.gated_done_payload/4` / the evidence gate it
+  consults) only ever emits gate-accepted, SAME-turn refs -- the gate is
+  the sole acceptance authority, and this module deliberately does not
+  duplicate its predicates (a duplicated predicate drifts from the one
+  true source). It could not call back into the gate even if it wanted
+  to: `raxol_agent` depends on main `raxol`, never the reverse. Session-
+  scope resolution here is a deliberate display-side SUPERSET of what an
+  honest producer emits -- a claim citing a ref the gate would have
+  rejected as foreign-turn is SHOWN, marked `cross_turn: true` (see
+  below), rather than hidden or silently resolved as if unremarkable. A
+  ref resolving to a non-evidence-class item (a `:message`, not a
+  `:tool_result`) is already disclosed by the type breakdown (renders
+  "1 message", never "1 tool result") -- `type` carries the "what kind"
+  signal, `cross_turn` the orthogonal "which turn" signal.
+
+  ## Cross-turn disclosure
+
+  Every resolved entry, and a session-wide tally alongside `type_counts`,
+  compares the resolved event's OWN `turn_id` against the CLAIMING
+  turn's `turn_id` (the final `turn_completed` event's own `turn_id` --
+  not a turn a same-turn `:tool_call` block happens to belong to):
+
+    * a mismatch adds `cross_turn: true` to that entry's map
+      (`put_present` style -- a same-turn entry's map shape is
+      UNCHANGED, so an all-same-turn completion churns nothing that
+      wasn't already there before this fix).
+    * `cross_turn_count` (tallied over ALL refs, not just the capped
+      entries -- the identical "every ref, not just the shown ones"
+      discipline `type_counts` already follows) is added to the
+      completion map ONLY when it is greater than zero, for the same
+      no-churn reason.
+
   Per-ref resolution never raises (defensive, bounded, always returns
-  `%{ref:, type:, label:}`):
+  `%{ref:, type:, label:}`, plus `cross_turn: true` when applicable):
 
     * ref missing from the session index -> `type: :unresolvable`,
       `label: "unresolvable evidence ref"` (literal, rendered verbatim
       -- an unresolvable ref is information, never silently dropped,
-      and it still counts toward the summary line's breakdown).
+      and it still counts toward the summary line's breakdown). Never
+      marked cross-turn: there is no resolved event to compare a
+      turn_id against, and cross-turn is a "which turn did this
+      citation come from" signal, not a synonym for "unresolvable".
     * otherwise -> `type` is the resolved event's `item_type` when it is
       an `item_completed` (`:tool_result`, `:message`, ...), else
       `:unknown`. `label` prefers a same-turn `:tool_call` block's own
       `content.name` (nicer, already-extracted display name) when the
-      ref lands in THIS turn's own blocks, falling back to the raw
-      event's own `"name"` payload field; that name is joined with the
-      resolved event's content's first non-blank line via `" — "` when
-      both are present, either alone when only one is, and the type
-      name itself when neither resolves to anything displayable.
+      ref lands in THIS turn's own blocks -- naturally absent for a
+      cross-turn ref, since a different turn's own built blocks were
+      never searched -- falling back to the raw event's own `"name"`
+      payload field; that name is joined with the resolved event's
+      content's first non-blank line via `" — "` when both are present,
+      either alone when only one is, and the type name itself when
+      neither resolves to anything displayable.
 
   Every resolved label is sanitized (control-byte strip, mirroring
   `Raxol.Harness.Surface.ViewText.sanitize/1`'s byte-wise technique
@@ -129,6 +167,36 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   it ever reaches a block's content: labels originate from the LLM/agent
   side and are untrusted exactly like any other tool-call/tool-result
   payload this module already folds.
+
+  ## Known conflation (fail-open wire)
+
+  The producer emits `final: true` with NO `refs` key for at least THREE
+  indistinguishable states: gate-rejected evidence, a "done" citing
+  nothing at all, and a trivial tool-free turn with nothing to cite. The
+  wire carries no rejection marker distinguishing them, so the absence
+  row (`%{evidence: :none}`, "no evidence provided") is INTENTIONALLY
+  unconditional -- per the ratified design creed, absence renders "no
+  evidence provided" explicitly regardless of WHICH of the three states
+  produced it. Disambiguating them needs a producer-side wire change
+  (tracked cross-lane, not this module's concern); the zero-tool-turn
+  policy question is deliberately parked in the producer's gate. Do not
+  weaken the absence row trying to guess which of the three states it
+  was.
+
+  ## Staleness under compaction
+
+  Refs are stable, counter-derived journal ids -- a reattach at a later
+  offset does not shift them. But an event compacted or dropped upstream
+  (before this projection ever sees it) leaves the session index without
+  that key, and the ref renders `"unresolvable evidence ref"` exactly as
+  if the ref had never existed at all -- this module cannot tell the two
+  apart BY ITSELF. A consumer CAN, though, one level up: an interior
+  drop produces a forward id gap, which sets the whole projection's
+  `damaged: true` flag (`Raxol.Harness.Projection.Recovery.filter_ids/1`).
+  Unresolvable-in-a-damaged-stream (a possible compaction victim) is
+  therefore distinguishable from unresolvable-in-an-intact-stream (the
+  ref never existed) by checking `projection.damaged`, not by anything
+  this module's own output carries.
 
   A final `turn_completed` with ZERO blocks in the turn (nothing to
   attach honesty to) synthesizes no block -- `turn_completed` stays
@@ -558,22 +626,26 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   end
 
   defp apply_final_completion(blocks, final_event, session_index) do
+    claiming_turn_id = Map.get(final_event, :turn_id)
+
     completion =
       final_event
       |> final_refs()
-      |> build_completion(blocks, session_index)
+      |> build_completion(blocks, session_index, claiming_turn_id)
 
     {merge_completion_into_last(blocks, completion), []}
   end
 
   defp final_refs(event), do: payload_fetch(event, "refs", :refs)
 
-  defp build_completion(refs, _blocks, _session_index) when not is_list(refs),
+  defp build_completion(refs, _blocks, _session_index, _claiming_turn_id)
+       when not is_list(refs),
+       do: %{evidence: :none}
+
+  defp build_completion([], _blocks, _session_index, _claiming_turn_id),
     do: %{evidence: :none}
 
-  defp build_completion([], _blocks, _session_index), do: %{evidence: :none}
-
-  defp build_completion(refs, blocks, session_index) do
+  defp build_completion(refs, blocks, session_index, claiming_turn_id) do
     total = length(refs)
 
     # Every ref's TYPE feeds the summary line's breakdown (accurate even
@@ -585,12 +657,30 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
       |> Enum.map(&ref_type(&1, session_index))
       |> compute_type_counts()
 
+    # Same discipline as type_counts: tallied over ALL refs, not just the
+    # capped entries -- a cross-turn ref pushed past the cap must still
+    # be disclosed in the summary line (see the moduledoc's "Cross-turn
+    # disclosure").
+    cross_turn_total =
+      Enum.count(refs, &cross_turn_ref?(&1, session_index, claiming_turn_id))
+
     entries =
       refs
       |> Enum.take(@max_completion_entries)
-      |> Enum.map(&resolve_completion_entry(&1, blocks, session_index))
+      |> Enum.map(
+        &resolve_completion_entry(&1, blocks, session_index, claiming_turn_id)
+      )
 
-    %{evidence: entries, total: total, type_counts: type_counts}
+    base = %{evidence: entries, total: total, type_counts: type_counts}
+
+    # Added ONLY when > 0 (put_present style): an all-same-turn
+    # completion's map shape is byte-identical to before this fix --
+    # the no-churn pin.
+    if cross_turn_total > 0 do
+      Map.put(base, :cross_turn_count, cross_turn_total)
+    else
+      base
+    end
   end
 
   defp merge_completion_into_last(blocks, completion) do
@@ -607,6 +697,10 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   # type and label. `blocks` (this turn's own built blocks) is consulted
   # ONLY as a same-turn label enrichment (a nicer, already-extracted tool
   # name) and is naturally a no-op for a ref pointing at an earlier turn.
+  # `claiming_turn_id` is the CLAIMING turn's own turn_id (the final
+  # turn_completed event's `turn_id`) -- the reference point every
+  # resolved event's own `turn_id` is compared against for cross-turn
+  # disclosure (see the moduledoc).
 
   defp ref_type(ref, session_index) do
     case Map.get(session_index, ref) do
@@ -615,14 +709,39 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
     end
   end
 
-  defp resolve_completion_entry(ref, blocks, session_index) do
+  # An unresolvable ref (no event in the session index at all) is never
+  # cross-turn -- there is no resolved event to compare a turn_id
+  # against, and "cross-turn" is a disclosure about WHICH turn a real
+  # citation came from, not a synonym for "unresolvable".
+  defp cross_turn_ref?(ref, session_index, claiming_turn_id) do
+    case Map.get(session_index, ref) do
+      nil -> false
+      event -> cross_turn_event?(event, claiming_turn_id)
+    end
+  end
+
+  defp cross_turn_event?(event, claiming_turn_id),
+    do: Map.get(event, :turn_id) != claiming_turn_id
+
+  defp resolve_completion_entry(ref, blocks, session_index, claiming_turn_id) do
     case Map.get(session_index, ref) do
       nil ->
         %{ref: ref, type: :unresolvable, label: @unresolvable_evidence_label}
 
       event ->
         type = entry_type(event)
-        %{ref: ref, type: type, label: entry_label(ref, event, type, blocks)}
+
+        base = %{
+          ref: ref,
+          type: type,
+          label: entry_label(ref, event, type, blocks)
+        }
+
+        if cross_turn_event?(event, claiming_turn_id) do
+          Map.put(base, :cross_turn, true)
+        else
+          base
+        end
     end
   end
 

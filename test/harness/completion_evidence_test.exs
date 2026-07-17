@@ -191,7 +191,7 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
   # -- 4. session-scoped ref resolution ------------------------------------
 
   describe "projection: refs are session-scoped, not turn-scoped" do
-    test "a ref pointing at an EARLIER turn's tool_result resolves under session scope (cross-turn)" do
+    test "a ref pointing at an EARLIER turn's tool_result resolves under session scope AND is marked cross_turn" do
       events =
         List.flatten([
           loop(1, "t1", 100, :turn_started, %{}),
@@ -212,10 +212,59 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
 
       assert %{
                evidence: [
-                 %{ref: 5, type: :tool_result, label: "mix_test — 42 tests, 0 failures"}
+                 %{
+                   ref: 5,
+                   type: :tool_result,
+                   label: "mix_test — 42 tests, 0 failures",
+                   cross_turn: true
+                 }
                ],
-               total: 1
+               total: 1,
+               cross_turn_count: 1
              } = last.content.completion
+    end
+
+    test "a same-turn entry carries NO cross_turn key and the completion map carries NO cross_turn_count key (no-churn pin)" do
+      events =
+        List.flatten([
+          loop(1, "t1", 100, :turn_started, %{}),
+          tool_round_trip(2, "t1", 200, "mix_test", "42 tests, 0 failures"),
+          message(6, "t1", 300, "All tests passed."),
+          turn_completed(8, "t1", 400, %{"refs" => [5]})
+        ])
+
+      proj = Projection.project(events)
+      completion = last_block(proj).content.completion
+      [entry] = completion.evidence
+
+      refute Map.has_key?(entry, :cross_turn)
+      refute Map.has_key?(completion, :cross_turn_count)
+    end
+
+    test "a cross-turn ref BEYOND the entry cap still counts in cross_turn_count" do
+      events =
+        List.flatten([
+          loop(1, "t0", 100, :turn_started, %{}),
+          tool_round_trip(2, "t0", 200, "earlier_tool", "earlier result"),
+          turn_completed(6, "t0", 300, %{}),
+          loop(7, "t1", 400, :turn_started, %{}),
+          tool_round_trip(8, "t1", 500, "tool_a", "result a"),
+          tool_round_trip(12, "t1", 600, "tool_b", "result b"),
+          tool_round_trip(16, "t1", 700, "tool_c", "result c"),
+          message(20, "t1", 800, "all four ran"),
+          # 4 refs total: 3 same-turn (cap = 3, all shown) + 1 cross-turn
+          # (t0's tool_result, id 5) pushed past the cap -- never
+          # individually rendered, but must still count.
+          turn_completed(22, "t1", 900, %{"refs" => [11, 15, 19, 5]})
+        ])
+
+      proj = Projection.project(events)
+      completion = last_block(proj).content.completion
+
+      assert completion.total == 4
+      assert length(completion.evidence) == 3
+      assert completion.cross_turn_count == 1
+      refute Enum.any?(completion.evidence, &Map.get(&1, :cross_turn))
     end
 
     test "a ref pointing at a same-turn message item resolves with type: :message and the message content as its label" do
@@ -334,6 +383,27 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       texts = last_block(proj) |> Block.render(%{}) |> flat_texts()
 
       assert Enum.any?(texts, &(&1 == "2 evidence refs: 1 tool result, 1 unresolvable"))
+    end
+
+    test "a cross-turn ref's rendered line carries the literal \"[cross-turn]\" marker; the summary carries \"(1 cross-turn)\"" do
+      events =
+        List.flatten([
+          loop(1, "t1", 100, :turn_started, %{}),
+          tool_round_trip(2, "t1", 200, "mix_test", "42 tests, 0 failures"),
+          turn_completed(6, "t1", 300, %{}),
+          loop(7, "t2", 400, :turn_started, %{}),
+          message(8, "t2", 500, "Thanks, all done."),
+          turn_completed(10, "t2", 600, %{"refs" => [5]})
+        ])
+
+      proj = Projection.project(events)
+      texts = last_block(proj) |> Block.render(%{}) |> flat_texts()
+
+      assert Enum.any?(texts, &(&1 =~ "[cross-turn]")),
+             "expected the cross-turn entry line to carry the literal marker, got: #{inspect(texts)}"
+
+      assert Enum.any?(texts, &(&1 == "1 evidence ref: 1 tool result (1 cross-turn)")),
+             "expected the summary line to carry the cross-turn suffix, got: #{inspect(texts)}"
     end
   end
 
