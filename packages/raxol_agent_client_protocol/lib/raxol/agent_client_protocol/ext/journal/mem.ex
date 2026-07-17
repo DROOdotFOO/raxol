@@ -18,6 +18,17 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Mem do
   journal therefore outlives any single Writer crash/restart, which is the
   precondition for the Writer-restart tip-fold orphan repair (design §2.6 / C14).
 
+  ## Protection level (`:public`, deliberate)
+
+  The table is `:public`, not `:protected`. `:protected` would forbid all
+  non-owner writes, but the single-publisher Writer is a DIFFERENT process from
+  the owner (the owner OUTLIVES the Writer, per the ownership note above — the
+  C14 precondition), so `:protected` would break every append. Offset integrity
+  is instead structural: exactly one Writer per session (the unique Writer
+  Registry) is the sole appender in production. Records are stored in PLAINTEXT —
+  co-resident BEAM processes are trusted; this store is not a confidentiality
+  boundary.
+
   ## Atomic offset assignment — no counter
 
   `append/2` computes `offset = high_watermark(j) + 1` by reading the table max

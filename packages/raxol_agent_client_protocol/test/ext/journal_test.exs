@@ -23,6 +23,39 @@ defmodule Raxol.AgentClientProtocol.Ext.JournalTest do
     {sid, j}
   end
 
+  # -- Finding 4 (LOW): ETS protection posture --------------------------------
+  #
+  # DROOdotFOO flagged the `:public` table (any co-resident process can forge
+  # offsets) and asked for `:protected`. `:protected` is architecturally
+  # infeasible here: the table is owned by a process that OUTLIVES the Writer (the
+  # C14 restart tip-fold precondition), while the single-publisher Writer — a
+  # DIFFERENT process — appends cross-process; `:protected` forbids all non-owner
+  # writes, breaking every append. Offset integrity is instead enforced by the
+  # single-publisher law (exactly one Writer per session via the unique Registry).
+  # This test pins the posture so a silent flip is caught, and asserts the
+  # co-resident cross-process append the mode must keep working.
+
+  test "Mem journal is :public by architectural necessity (cross-process single-publisher writes)" do
+    {_sid, j} = open()
+    assert :ets.info(j.table, :protection) == :public
+
+    # A non-owner process (standing in for the Writer) must be able to append —
+    # exactly what :protected would forbid and why it cannot be used here.
+    parent = self()
+
+    spawn(fn ->
+      {:ok, %Record{offset: o}} =
+        Mem.append(j, %{kind: "k", payload: %{}, taint: "system"})
+
+      send(parent, {:appended, o})
+    end)
+
+    # The cross-process append succeeded (offset 1) — it did not raise on a
+    # non-owner write, which is exactly the property :protected would remove.
+    assert_receive {:appended, 1}
+    assert Mem.high_watermark(j) == 1
+  end
+
   # -- Mem: the offset law, sequential ----------------------------------------
 
   test "an empty session has high_watermark 0 and an empty read" do

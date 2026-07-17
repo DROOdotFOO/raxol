@@ -1,3 +1,27 @@
+defmodule Raxol.AgentClientProtocol.Test.SlowRecordConn do
+  @moduledoc false
+  # A conn_mod double that delegates to FakeConnection but sleeps ONCE, on the
+  # first `_raxol/session.record` history frame, long enough to push the
+  # synchronous replay past the default 5s `GenServer.call` window — the
+  # finding-1 repro (replay must run under `:infinity`, not the default timeout).
+  alias Raxol.AgentClientProtocol.Test.FakeConnection
+
+  @sleep_ms 5_300
+
+  def delegate_reply(conn, ref, adopter),
+    do: FakeConnection.delegate_reply(conn, ref, adopter)
+
+  def reply(conn, ref, result), do: FakeConnection.reply(conn, ref, result)
+
+  def notify(conn, "_raxol/session.record" = method, params) do
+    Process.sleep(@sleep_ms)
+    FakeConnection.notify(conn, method, params)
+  end
+
+  def notify(conn, method, params),
+    do: FakeConnection.notify(conn, method, params)
+end
+
 defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
   @moduledoc """
   The reattach SEAM over the ACP wire (`acp-reattach-design.md` §4, the frozen
@@ -983,6 +1007,175 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
                  journal: {Mem, j},
                  authorize: fn _ctx -> {:ok, grant()} end
                })
+    end
+  end
+
+  # ===========================================================================
+  # DROOdotFOO adversarial review of PR #624 — reattach/journal hardening.
+  # ===========================================================================
+
+  # Finding 1 (MEDIUM): the synchronous replay runs inside `GenServer.call(sub,
+  # :run)`; on the default 5s timeout a history slower than 5s crashes the attach
+  # handler. The subscriber owns its own expiry timer, so the call must be
+  # `:infinity`.
+  describe "finding 1 — large-history replay must not time out the run call" do
+    @tag timeout: 20_000
+    test "a replay slower than the default 5s call window does NOT crash attach" do
+      {sid, j, _w} = start_writer()
+      {:ok, conn} = FakeConnection.start_link()
+
+      assert :deferred =
+               Reattach.attach(%{
+                 conn: conn,
+                 conn_mod: Raxol.AgentClientProtocol.Test.SlowRecordConn,
+                 session_id: sid,
+                 reply_ref: make_ref(),
+                 journal: {Mem, j},
+                 authorize: granting()
+               })
+
+      assert {:reply, _ref, {:ok, _}} = reply_entry(conn)
+    end
+  end
+
+  # Finding 2 (LOW): `Process.send_after/3` raises above the OTP timer ceiling, so
+  # a grant with a far-future `exp` crashes the subscriber right after it replied.
+  # The arm must clamp the delay.
+  describe "finding 2 — a far-future grant.expires_at does not crash the subscriber" do
+    test "an exp past the timer ceiling arms without ArgumentError; the sub lives" do
+      {sid, j, _w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+      now = System.os_time(:second)
+      far = now + 1_000_000_000_000
+
+      {conn, ref, sub, res} =
+        attach(sid, j, %{
+          authorize: fn ctx ->
+            {:ok, grant(%{session_id: ctx.session_id, expires_at: far})}
+          end,
+          now: now
+        })
+
+      assert res == :deferred
+      assert is_pid(sub) and Process.alive?(sub)
+      _ = sync(sub)
+      assert {:reply, ^ref, {:ok, _}} = reply_entry(conn)
+      refute_receive {:DOWN, _, :process, ^sub, _}, 100
+    end
+  end
+
+  # Finding 3 (LOW): the injected `:authorize` seam admitted ANY `{:ok, map}` —
+  # including an empty map — bypassing the Grant contract. `run_authorize` must
+  # re-assert it.
+  describe "finding 3 — an injected authorize returning a non-Grant is denied" do
+    test "{:ok, %{}} (empty map) denies: -32000, NO registration, NO history" do
+      {sid, j, _w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+      {:ok, conn} = FakeConnection.start_link()
+
+      res =
+        Reattach.attach(%{
+          conn: conn,
+          conn_mod: FakeConnection,
+          session_id: sid,
+          reply_ref: make_ref(),
+          journal: {Mem, j},
+          authorize: fn _ctx -> {:ok, %{}} end
+        })
+
+      assert {:error, %Error{code: -32_000, data: nil}} = res
+      assert FakeConnection.log(conn) == []
+      assert %{subscribers: subs} = :sys.get_state(Writer.whereis(sid))
+      assert subs == %{}
+    end
+
+    test "a grant whose session_id mismatches ctx denies (session-id match [G5:X1])" do
+      {sid, j, _w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+      {:ok, conn} = FakeConnection.start_link()
+
+      res =
+        Reattach.attach(%{
+          conn: conn,
+          conn_mod: FakeConnection,
+          session_id: sid,
+          reply_ref: make_ref(),
+          journal: {Mem, j},
+          authorize: fn ctx ->
+            {:ok, grant(%{session_id: "other-" <> ctx.session_id})}
+          end
+        })
+
+      assert {:error, %Error{code: -32_000}} = res
+      assert FakeConnection.log(conn) == []
+    end
+
+    test "a grant missing actor \"id\" denies; a well-formed loose grant still admits" do
+      {sid, j, _w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+
+      {conn_d, _rd, _sub_d, res_d} =
+        attach(sid, j, %{authorize: fn _ctx -> {:ok, grant(%{actor: %{}})} end})
+
+      assert {:error, %Error{code: -32_000}} = res_d
+      assert FakeConnection.log(conn_d) == []
+
+      {conn_g, ref_g, sub_g, res_g} =
+        attach(sid, j, %{authorize: fn _ctx -> {:ok, grant()} end})
+
+      assert res_g == :deferred
+      _ = sync(sub_g)
+      assert {:reply, ^ref_g, {:ok, _}} = reply_entry(conn_g)
+    end
+  end
+
+  # Finding 5a (LOW): the unsupervised fallback links the Subscriber to the
+  # ephemeral caller; a :normal caller exit never signals the link, leaking the
+  # Subscriber past its connection. It must tie its lifetime to the conn.
+  describe "finding 5a — the fallback subscriber dies with its connection" do
+    test "killing the connection stops an unsupervised fallback subscriber" do
+      {sid, j, w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+      {:ok, conn} = FakeConnection.start_link()
+
+      assert :deferred =
+               Reattach.attach(%{
+                 conn: conn,
+                 conn_mod: FakeConnection,
+                 session_id: sid,
+                 reply_ref: make_ref(),
+                 journal: {Mem, j},
+                 authorize: granting()
+               })
+
+      [sub] =
+        for {_ref, %{pid: pid}} <- :sys.get_state(w).subscribers, do: pid
+
+      mon = Process.monitor(sub)
+      # Unlink first: FakeConnection.start_link/0 links conn to THIS test process,
+      # so a raw :kill would also take the test down. Unlinking isolates the crash
+      # to conn — the subscriber's conn-monitor then fires and stops it.
+      Process.unlink(conn)
+      Process.exit(conn, :kill)
+      assert_receive {:DOWN, ^mon, :process, ^sub, _}, 500
+      refute Process.alive?(sub)
+    end
+  end
+
+  # Finding 5b (LOW): a partial injected `:ctx` (missing :session_id / :surface)
+  # crashed `emit_denied` with a KeyError on the deny path.
+  describe "finding 5b — deny path tolerates a partial injected ctx" do
+    test "a denied attach with a partial ctx returns the deny envelope, no KeyError" do
+      {sid, j, _w} = start_writer([{"session_update", %{"i" => 1}, "agent"}])
+      {:ok, conn} = FakeConnection.start_link()
+
+      res =
+        Reattach.attach(%{
+          conn: conn,
+          conn_mod: FakeConnection,
+          session_id: sid,
+          reply_ref: make_ref(),
+          journal: {Mem, j},
+          ctx: %{transport: nil},
+          authorize: fn _ctx -> {:denied, :nope} end
+        })
+
+      assert {:error, %Error{code: -32_000}} = res
     end
   end
 end

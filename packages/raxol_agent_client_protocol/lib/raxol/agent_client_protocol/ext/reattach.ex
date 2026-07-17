@@ -80,6 +80,11 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
       MUST source `transport` from Connection-side knowledge (never peer). The
       seam takes it as a field; a `Connection.transport/1` accessor is the
       missing piece for the default LocalNode policy to function.
+    * **Keyring is validated per-attach, not at boot.** The `Token` policy's
+      Ed25519 keyring is a pure per-`verify/4` parameter (no process state, no
+      boot check), so a malformed/empty keyring surfaces as a per-attach deny,
+      not a startup failure — an endpoint that requires a configured keyring
+      should validate it at its OWN boot (this seam never holds the keyring).
   """
 
   use GenServer
@@ -95,6 +100,14 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
   @default_conn_mod Raxol.AgentClientProtocol.Connection
   # CDI-1: the SOLE fail-closed funnel (W19's cell, now present in this package).
   @default_runner Raxol.AgentClientProtocol.Ext.AttachPolicy.Runner
+
+  # v1 scope allow-list [G5:S4] — MUST match the Runner's. Re-asserted at the
+  # injected seam so it cannot admit a wider scope than the real funnel does.
+  @allowed_scopes [:attach]
+
+  # OTP timer ceiling: `Process.send_after/3` raises above the historically-safe,
+  # version-independent max (~49.7 days). The CDI-6 arm clamps to it.
+  @timer_max_ms 4_294_967_295
 
   # ===========================================================================
   # Rider parsing (§3.1) — one parser, both entrances.
@@ -202,7 +215,11 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
 
   # CDI-1: the SOLE funnel. Default = AttachPolicy.Runner.authorize/2. Any
   # non-`{:ok, %Grant{}=grant}` result denies (fail-closed even against a
-  # misbehaving injected fun).
+  # misbehaving injected fun). The Runner default already validates the Grant
+  # contract; we RE-ASSERT it here so that an INJECTED `:authorize` seam (which
+  # bypasses the Runner) cannot admit a malformed grant — an empty map, a grant
+  # without a binary actor `"id"`, a non-allow-listed scope, or a grant whose
+  # `session_id` does not match `ctx.session_id` all DENY (fail-closed).
   defp run_authorize(opts, ctx) do
     fun =
       Map.get(opts, :authorize) ||
@@ -212,10 +229,42 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
         end
 
     case fun.(ctx) do
-      {:ok, grant} when is_map(grant) -> {:ok, grant}
-      other -> {:denied, denial_reason(other)}
+      {:ok, grant} ->
+        if valid_grant?(grant, ctx),
+          do: {:ok, grant},
+          else: {:denied, :malformed_grant}
+
+      other ->
+        {:denied, denial_reason(other)}
     end
   end
+
+  # The Grant contract, re-asserted at the injected seam (mirrors the Runner's
+  # `classify/2`). A grant may be a `%Grant{}` struct or a plain map (loose
+  # test/embed grants); either way it MUST carry a binary actor `"id"` [G5:S5]
+  # and an allow-listed scope [G5:S4]. `session_id` is enforced when the grant
+  # asserts one — a real `%Grant{}` always does (its `@enforce_keys`), so a
+  # mismatch DENIES [G5:X1]; a loose grant that omits it keeps the pre-existing
+  # loose shape (the contract narrows what is admitted, never widens it).
+  @spec valid_grant?(term(), map()) :: boolean()
+  defp valid_grant?(grant, ctx) when is_map(grant) do
+    actor_ok?(Map.get(grant, :actor)) and scope_ok?(Map.get(grant, :scope)) and
+      session_ok?(Map.get(grant, :session_id), ctx)
+  end
+
+  defp valid_grant?(_grant, _ctx), do: false
+
+  defp actor_ok?(actor) when is_map(actor), do: is_binary(Map.get(actor, "id"))
+  defp actor_ok?(_actor), do: false
+
+  defp scope_ok?(scope), do: is_atom(scope) and scope in @allowed_scopes
+
+  defp session_ok?(nil, _ctx), do: true
+
+  defp session_ok?(sid, ctx) when is_binary(sid),
+    do: sid == Map.get(ctx, :session_id)
+
+  defp session_ok?(_sid, _ctx), do: false
 
   defp denial_reason({:denied, reason}), do: reason
   defp denial_reason(_), do: :non_conforming_return
@@ -253,7 +302,11 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
     # Run the NORMATIVE algorithm synchronously (subscribe → h → history → reply);
     # any live record that arrives during it queues in the subscriber mailbox and
     # is first evaluated against the gate afterward (gate-arm invariant [G5:C1]).
-    :ok = GenServer.call(sub, :run)
+    # `:infinity`, NOT the default 5s call timeout: replaying a large durable
+    # history can legitimately exceed 5s, and a timeout here would crash the load
+    # handler mid-attach. The subscriber owns its own bounded lifetime (the CDI-6
+    # `expires_at` timer + the connection monitor), so no unbounded-wait hazard.
+    :ok = GenServer.call(sub, :run, :infinity)
     :deferred
   end
 
@@ -294,18 +347,24 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
 
   defp emit_denied(ctx, denied) do
     reason = denial_reason(denied)
+    # Total against a partially-injected ctx (finding 5b): the deny path can be
+    # reached before a full ctx is guaranteed populated (an injected `:ctx` may
+    # omit keys), so read audit fields defensively — a missing key must NOT crash
+    # the fail-closed path.
+    sid = Map.get(ctx, :session_id)
+    surface = Map.get(ctx, :surface, :unknown)
 
     if Code.ensure_loaded?(:telemetry) and
          function_exported?(:telemetry, :execute, 3) do
       apply(:telemetry, :execute, [
         [:raxol, :acp, :attach, :denied],
         %{count: 1},
-        %{session_id: ctx.session_id, surface: ctx.surface, reason: reason}
+        %{session_id: sid, surface: surface, reason: reason}
       ])
     end
 
     Logger.debug(
-      "acp reattach: attach denied for #{inspect(ctx.session_id)} (#{inspect(reason)})"
+      "acp reattach: attach denied for #{inspect(sid)} (#{inspect(reason)})"
     )
 
     :ok
@@ -322,9 +381,18 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
   @impl true
   def init(sub_opts) do
     dead = Keyword.get(sub_opts, :dead, %{})
+    conn = Keyword.fetch!(sub_opts, :conn)
+
+    # Tie the subscriber's lifetime to its connection (finding 5a). On the
+    # UNSUPERVISED fallback path the subscriber is bare-linked to the ephemeral
+    # attach caller, whose `:normal` exit never signals a plain link — so without
+    # this it would leak past a dead connection forever. Monitoring the conn
+    # (harmless on the supervised path too) force-closes the tail when conn dies.
+    conn_ref = Process.monitor(conn)
 
     state = %{
-      conn: Keyword.fetch!(sub_opts, :conn),
+      conn: conn,
+      conn_ref: conn_ref,
       conn_mod: Keyword.fetch!(sub_opts, :conn_mod),
       session_id: Keyword.fetch!(sub_opts, :session_id),
       journal: Keyword.fetch!(sub_opts, :journal),
@@ -553,6 +621,17 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
     {:stop, :normal, %{state | live: :detached}}
   end
 
+  # The connection died (finding 5a): the live tail has no client left, so
+  # unsubscribe and stop — this ties the UNSUPERVISED fallback subscriber's
+  # lifetime to its connection (no leak past a dead conn).
+  def handle_info(
+        {:DOWN, ref, :process, conn, _reason},
+        %{conn_ref: ref, conn: conn} = state
+      ) do
+    _ = unsubscribe(state, state.live)
+    {:stop, :normal, %{state | live: :detached}}
+  end
+
   # CDI-6: mid-attach expiry — force-close the live tail at grant.expires_at.
   def handle_info(:force_close_expiry, state) do
     _ =
@@ -573,7 +652,11 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
     case grant_field(state.grant, :expires_at) do
       exp when is_integer(exp) ->
         now = state.now || System.os_time(:second)
-        delay = max(0, (exp - now) * 1000)
+        # CLAMP to the OTP timer ceiling (finding 2): `Process.send_after/3`
+        # raises above it, so a malformed far-future `exp` would otherwise crash
+        # the subscriber right after it replied. Clamping force-closes early — a
+        # >49.7-day held live tail is pathological and re-authorizes on reconnect.
+        delay = min(max(0, (exp - now) * 1000), @timer_max_ms)
         Process.send_after(self(), :force_close_expiry, delay)
         state
 
