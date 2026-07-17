@@ -88,7 +88,12 @@ defmodule Raxol.UI.Harness.Keymap do
       `InputEvent.printable_char/1` is `nil` whenever ctrl is held, so a
       Ctrl+E keypress never reaches this bind's `char:`-only match clause
       at all -- the two live on entirely disjoint matching paths, not a
-      priority order.
+      priority order. The same `:not_composing` guard governs the
+      picker-opening binds below (`g`/`s`/`/` -- jump, session, and
+      search) for the identical reason: each is a plain printable letter
+      that must resolve to typed text while composing, and to filter text
+      -- never a second picker opening underneath the first -- while an
+      overlay is already open.
 
   ## The overlay-open ESC capture (order is load-bearing)
 
@@ -215,8 +220,11 @@ defmodule Raxol.UI.Harness.Keymap do
   that never need to leave the UI lane, so they ride the same channel for
   the command palette's invocation parity without ever being routed to
   `raxol_agent`. `:open_palette` / `:open_jump_picker` /
-  `:open_session_picker` are the same kind of UI-local vocabulary, added
-  for the pickers below.
+  `:open_session_picker` / `:open_search_picker` are the same kind of
+  UI-local vocabulary, added for the pickers below -- `:open_search_picker`
+  (`/`) is gated `:not_composing` exactly like `:open_jump_picker`/
+  `:open_session_picker` (`g`/`s`): transcript-browse only, filter text
+  while an overlay is open, typed text while composing.
 
   ## Palette derivation (the `label` field)
 
@@ -253,6 +261,7 @@ defmodule Raxol.UI.Harness.Keymap do
           | :open_session_picker
           | :open_panel
           | :expand_diff
+          | :open_search_picker
 
   @type command :: %{type: command_type(), payload: map()}
 
@@ -377,6 +386,12 @@ defmodule Raxol.UI.Harness.Keymap do
       guard: :not_composing,
       payload: %{panel: :plan},
       label: "plan panel"
+    },
+    %{
+      char: "/",
+      command_type: :open_search_picker,
+      guard: :not_composing,
+      label: "search transcript"
     }
   ]
 

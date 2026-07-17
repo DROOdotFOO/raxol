@@ -521,4 +521,283 @@ defmodule Raxol.Harness.CommandPaletteSurfaceTest do
       assert strip_ansi(raw(device)) =~ "flat mode"
     end
   end
+
+  # ---------------------------------------------------------------------
+  # 6. Search picker ('/'): body-search proof, not just label matching
+  # ---------------------------------------------------------------------
+
+  # A variant of bulk_events/1: `count` message blocks, all one-line
+  # except block `needle_index` (1-based), whose SECOND line is
+  # `needle` -- a token that appears in NO summary and NO other block,
+  # proving the search picker's fuzzy filter reaches into block BODIES
+  # (via `Block.search_text/1`), not just the summary-derived label
+  # every other picker uses.
+  defp bulk_events_with_needle(count, needle_index, needle) do
+    turn_started = %{
+      id: 1,
+      turn_id: "bulk-needle",
+      ts: 1000,
+      family: :loop,
+      type: :turn_started,
+      tier: :durable,
+      payload: %{"prompt" => "bulk-needle"}
+    }
+
+    items =
+      for i <- 1..count do
+        base_id = 2 + (i - 1) * 2
+        item_id = "i#{i}"
+
+        content =
+          if i == needle_index do
+            "history message #{i}\n#{needle}"
+          else
+            "history message #{i}"
+          end
+
+        [
+          %{
+            id: base_id,
+            turn_id: "bulk-needle",
+            ts: 1000 + base_id,
+            family: :loop,
+            type: :item_started,
+            tier: :durable,
+            payload: %{"item_id" => item_id, "item_type" => "message"}
+          },
+          %{
+            id: base_id + 1,
+            turn_id: "bulk-needle",
+            ts: 1000 + base_id + 1,
+            family: :loop,
+            type: :item_completed,
+            tier: :durable,
+            payload: %{
+              "item_id" => item_id,
+              "item_type" => "message",
+              "content" => content
+            }
+          }
+        ]
+      end
+
+    turn_completed = %{
+      id: 2 + count * 2,
+      turn_id: "bulk-needle",
+      ts: 999_999,
+      family: :loop,
+      type: :turn_completed,
+      tier: :durable,
+      payload: %{
+        "iteration" => 1,
+        "usage" => %{"input_tokens" => 1, "output_tokens" => 1},
+        "cost" => 0.0,
+        "final" => true
+      }
+    }
+
+    List.flatten([turn_started, items, turn_completed])
+  end
+
+  # A single-block session whose body carries hostile bytes, for the
+  # sanitization test below -- built by hand (not bulk_events/1) so the
+  # hostile string lands verbatim in exactly one block's content.
+  defp hostile_events(content) do
+    [
+      %{
+        id: 1,
+        turn_id: "hostile",
+        ts: 1000,
+        family: :loop,
+        type: :turn_started,
+        tier: :durable,
+        payload: %{"prompt" => "hostile"}
+      },
+      %{
+        id: 2,
+        turn_id: "hostile",
+        ts: 1001,
+        family: :loop,
+        type: :item_started,
+        tier: :durable,
+        payload: %{"item_id" => "i1", "item_type" => "message"}
+      },
+      %{
+        id: 3,
+        turn_id: "hostile",
+        ts: 1002,
+        family: :loop,
+        type: :item_completed,
+        tier: :durable,
+        payload: %{
+          "item_id" => "i1",
+          "item_type" => "message",
+          "content" => content
+        }
+      },
+      %{
+        id: 4,
+        turn_id: "hostile",
+        ts: 999_999,
+        family: :loop,
+        type: :turn_completed,
+        tier: :durable,
+        payload: %{
+          "iteration" => 1,
+          "usage" => %{"input_tokens" => 1, "output_tokens" => 1},
+          "cost" => 0.0,
+          "final" => true
+        }
+      }
+    ]
+  end
+
+  describe "6. search picker" do
+    test "'/' opens the search picker; one entry per block, each labeled 'message · ...'" do
+      {model, _device} =
+        new_model(bulk_events_with_needle(4, 4, "zebra-needle appears here"))
+
+      model = drive_to_completion(model)
+      model = Surface.focus_transcript(model)
+
+      model = Surface.handle_input(model, Event.key("/"))
+      assert model.overlay != nil, "'/' must open the search picker"
+
+      labels = overlay_labels(model)
+      assert length(labels) == 4
+      assert Enum.all?(labels, &String.starts_with?(&1, "message · "))
+    end
+
+    test "typing a token that only exists in one block's SECOND body line filters to it; picking jumps focus" do
+      {model, _device} =
+        new_model(bulk_events_with_needle(4, 4, "zebra-needle appears here"))
+
+      model = drive_to_completion(model)
+      model = Surface.focus_transcript(model)
+
+      model = Surface.handle_input(model, Event.key("/"))
+      model = type_chars(model, "zebra-needle")
+      model = Surface.handle_input(model, Event.key(:enter))
+
+      assert model.overlay == nil
+      assert model.focused_index == 3
+    end
+
+    test "'/' while composing stays typed text (never opens the picker)" do
+      {model, _device} = new_model([])
+      assert model.composing?
+
+      model = Surface.handle_input(model, Event.key("/"))
+      assert model.overlay == nil
+
+      assert Raxol.UI.Components.Harness.Composer.value(model.composer) =~
+               "/"
+    end
+
+    test "'/' with the palette already open becomes filter text, not a second picker" do
+      {model, _device} = new_model([])
+
+      model = Surface.handle_input(model, ctrl_p())
+      assert model.overlay != nil
+      assert model.overlay.picker.title == "commands"
+
+      model = Surface.handle_input(model, Event.key("/"))
+
+      assert model.overlay != nil
+      assert model.overlay.picker.title == "commands"
+      assert model.overlay.picker.query =~ "/"
+    end
+
+    test "'/' with an empty projection is an honest no-op notice, never an empty overlay" do
+      {model, device} = new_model([])
+      model = Surface.focus_transcript(model)
+
+      model = Surface.handle_input(model, Event.key("/"))
+
+      assert model.overlay == nil
+      assert strip_ansi(raw(device)) =~ "no blocks to search"
+    end
+
+    test "picking 'search transcript' from the palette opens the search picker (palette parity)" do
+      {model, _device} = new_model(bulk_events_with_needle(2, 2, "needle"))
+      model = drive_to_completion(model)
+
+      model = Surface.handle_input(model, ctrl_p())
+      model = type_chars(model, "search transcript")
+      model = Surface.handle_input(model, Event.key(:enter))
+
+      assert model.overlay != nil
+      assert model.overlay.picker.title == "search"
+    end
+
+    test "hostile body content never leaks control bytes (C0, ESC, DEL, C1) into the footer once the picker is open" do
+      # C0 (0x01), ESC/SGR, DEL (0x7F), AND the C1 range (0x80-0x9F):
+      # raw CSI (0x9B) and IND (0x84) are lone high bytes a Latin-1 /
+      # raw-agent stream can carry. #632 made `ViewText.sanitize/1`
+      # code-point-aware so it strips 0x80-0x9F; this feature routes
+      # full block BODIES through that boundary, so the guard must cover
+      # the C1 class the sole sanitizer is now responsible for, not just
+      # C0/ESC (the review's "false assurance" gap).
+      hostile =
+        "visible words \e[31mred\e[0m trailer\x01tail\x7f" <>
+          <<0x9B>> <> "csi" <> <<0x84>> <> "ind"
+
+      {model, device} = new_model(hostile_events(hostile))
+      model = drive_to_completion(model)
+      model = Surface.focus_transcript(model)
+
+      prior = byte_size(raw(device))
+      model = Surface.handle_input(model, Event.key("/"))
+      assert model.overlay != nil
+
+      delta = delta_since(device, prior)
+
+      # Positive check on the stripped view (the row rendered).
+      assert strip_ansi(delta) =~ "visible words"
+
+      # Control-byte refutes run against the RAW delta, NOT the
+      # strip_ansi'd view: `strip_ansi`'s SequenceScanner would itself
+      # eat a lone C1 introducer (0x9B = CSI), so asserting on the
+      # stripped text would pass for the wrong reason (the oracle masking
+      # the byte under test). The renderer only ever emits 7-bit `ESC[`
+      # sequences, never a bare 0x01/0x7F/0x84/0x9B, so their absence in
+      # the raw bytes proves the sanitizer stripped the hostile input.
+      refute delta =~ <<0x01>>, "C0 (0x01) must not reach the device"
+      refute delta =~ <<0x7F>>, "DEL (0x7F) must not reach the device"
+      refute delta =~ <<0x9B>>, "raw CSI (C1) must not reach the device"
+      refute delta =~ <<0x84>>, "IND (C1) must not reach the device"
+    end
+
+    test "a long CJK body opens cleanly: the label is clamped and the claimed overlay height stays sane" do
+      cjk = String.duplicate("漢", 500)
+      {model, _device} = new_model(hostile_events("short line\n#{cjk}"))
+      model = drive_to_completion(model)
+      model = Surface.focus_transcript(model)
+
+      model = Surface.handle_input(model, Event.key("/"))
+      assert model.overlay != nil
+
+      [label] = overlay_labels(model)
+      assert String.length(label) < 450
+
+      assert OverlayPicker.height(model.overlay.picker) == 2
+    end
+
+    test "a needle past the label cap is not searchable -- the named, honest clamp consequence" do
+      # A block whose body is padded past @search_label_cap (400
+      # graphemes) before the needle appears: the clamp means the
+      # needle never reaches the picker's label, so filtering on it
+      # yields no matches.
+      padding = String.duplicate("x", 500)
+      {model, _device} = new_model(hostile_events("#{padding}\nfar-needle"))
+      model = drive_to_completion(model)
+      model = Surface.focus_transcript(model)
+
+      model = Surface.handle_input(model, Event.key("/"))
+      assert model.overlay != nil
+
+      model = type_chars(model, "far-needle")
+      assert OverlayPicker.matches(model.overlay.picker) == []
+    end
+  end
 end

@@ -590,6 +590,142 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   def summary(_block), do: "(empty)"
 
+  @doc """
+  The honest per-block search corpus: `"<kind> · <summary>"` (the same
+  shape `Raxol.Harness.Surface.open_jump_picker/1`'s labels already
+  use) followed by ` · ` plus the block's BODY text, when that body
+  carries content beyond what `summary/1` already shows -- `summary/1`
+  only ever surfaces line 1 of message-shaped content, or the header
+  fields (name/args, path) for the other kinds.
+
+  Body per kind, read defensively from `block.content` (every field
+  may be missing or `nil`; a non-map `content` degrades to the
+  `kind · summary` prefix alone, same as a body that turns out empty):
+
+    * `:message`, `:reasoning`, `:opaque` -- `content.text`, the FULL
+      text (`summary/1` shows only its first line).
+    * `:tool_call` -- `content.result` (`summary/1` already carries
+      name + args).
+    * `:approval` -- the FULL `content.action` (`summary/1` only shows
+      its first line) plus `content.options`: a list whose BINARY
+      entries are joined in. Non-binary entries (atoms, maps, anything
+      else a producer might send) are skipped rather than risking a
+      `to_string/1` call on an arbitrary term -- a named, honest
+      limitation: a block whose options are atoms contributes no
+      option text to the corpus.
+    * `:diff` -- `content.old` and `content.new` (`summary/1` already
+      carries the path).
+
+  No sanitization happens here: `Raxol.Harness.Surface.ViewText.lines/3`
+  is the ONE trust boundary for control-byte stripping and display-width
+  truncation (see that module's moduledoc). Pure; never raises,
+  regardless of `content`'s shape.
+
+  ## Bounding the work (`max_graphemes`)
+
+  `search_text/1` returns the FULL corpus (`max_graphemes: :infinity`).
+  `search_text/2` bounds it: the clamp is applied AT THE SOURCE -- every
+  body field is `String.slice`d to `max_graphemes` (which walks at most
+  `max_graphemes` graphemes and stops, never scanning the tail) BEFORE
+  it is concatenated or joined, and the assembled corpus is clamped once
+  more. So a caller on a synchronous input path (see
+  `Raxol.Harness.Surface.open_search_picker/1`) never pays O(body-size)
+  to build a bounded label out of an unbounded, untrusted body -- the
+  flatten/concat that used to run over the whole body now runs over at
+  most `max_graphemes` graphemes. The named, honest consequence: body
+  content past the cap is not part of the corpus (and so not
+  searchable), same as before -- but now the *work*, not just the
+  *output*, is bounded.
+  """
+  @spec search_text(t()) :: String.t()
+  def search_text(block), do: search_text(block, :infinity)
+
+  @spec search_text(t(), pos_integer() | :infinity) :: String.t()
+  def search_text(%__MODULE__{kind: kind} = block, max_graphemes) do
+    # Clamp the prefix too: `summary/1` returns line 1, but a single-line
+    # body makes "line 1" the whole body, so an unclamped prefix would
+    # re-introduce an O(body) concat below. `summary/1`'s own scan is the
+    # accepted `open_jump_picker/1` baseline; clamping here keeps the
+    # search path at parity with it, adding no unbounded term of its own.
+    prefix = clamp_graphemes("#{kind} · #{summary(block)}", max_graphemes)
+
+    case search_body_text(kind, search_content(block), max_graphemes) do
+      body when is_binary(body) and body != "" ->
+        clamp_graphemes(prefix <> " · " <> body, max_graphemes)
+
+      _empty ->
+        prefix
+    end
+  end
+
+  defp search_content(%__MODULE__{content: content}) when is_map(content),
+    do: content
+
+  defp search_content(_block), do: %{}
+
+  defp search_body_text(kind, content, max)
+       when kind in [:message, :reasoning, :opaque],
+       do: search_text_field(content, :text, max)
+
+  defp search_body_text(:tool_call, content, max),
+    do: search_text_field(content, :result, max)
+
+  defp search_body_text(:approval, content, max) do
+    join_search_parts(
+      [
+        search_text_field(content, :action, max),
+        search_options_text(content, max)
+      ],
+      max
+    )
+  end
+
+  defp search_body_text(:diff, content, max) do
+    join_search_parts(
+      [
+        search_text_field(content, :old, max),
+        search_text_field(content, :new, max)
+      ],
+      max
+    )
+  end
+
+  defp search_body_text(_kind, _content, _max), do: nil
+
+  # Clamp AT THE SOURCE: every field is bounded to `max` graphemes before
+  # it is ever concatenated or joined, so no caller scans past the cap.
+  defp search_text_field(content, key, max) do
+    case Map.get(content, key) do
+      text when is_binary(text) -> clamp_graphemes(text, max)
+      _other -> nil
+    end
+  end
+
+  defp search_options_text(content, max) do
+    case Map.get(content, :options) do
+      options when is_list(options) ->
+        case Enum.filter(options, &is_binary/1) do
+          [] -> nil
+          strings -> clamp_graphemes(Enum.join(strings, " "), max)
+        end
+
+      _other ->
+        nil
+    end
+  end
+
+  defp join_search_parts(parts, max) do
+    case Enum.reject(parts, &(&1 in [nil, ""])) do
+      [] -> nil
+      kept -> clamp_graphemes(Enum.join(kept, " "), max)
+    end
+  end
+
+  defp clamp_graphemes(string, :infinity), do: string
+
+  defp clamp_graphemes(string, max) when is_integer(max) and max >= 0,
+    do: String.slice(string, 0, max)
+
   defp kind_label(raw_kind) when is_atom(raw_kind), do: Atom.to_string(raw_kind)
   defp kind_label(raw_kind) when is_binary(raw_kind), do: raw_kind
   defp kind_label(raw_kind), do: inspect(raw_kind)

@@ -510,17 +510,22 @@ defmodule Raxol.Harness.Surface do
   back to, so `:edit_draft` there seals one honest history line saying
   so instead of pretending.
 
-  ## The pickers (command palette, jump, session)
+  ## The pickers (command palette, jump, session, search)
 
-  Three more `OverlayPicker` consumers ride the same footer-overlay
+  Four more `OverlayPicker` consumers ride the same footer-overlay
   substrate as the picker described above. Ctrl+P (`Keymap`'s
   `:open_palette`, an `:always` chord) opens the command palette from
   anywhere, including mid-compose -- a chord is never typed text, the same
-  reasoning as Ctrl+E. `g` (`:open_jump_picker`) and `s`
-  (`:open_session_picker`) are plain printable letters gated
-  `:not_composing`, the same class as `z`/`j`/`k`: they only resolve in
-  transcript-browse mode, never stealing a letter out of the composer's
-  typed text.
+  reasoning as Ctrl+E. `g` (`:open_jump_picker`), `s`
+  (`:open_session_picker`), and `/` (`:open_search_picker`) are plain
+  printable letters gated `:not_composing`, the same class as `z`/`j`/`k`:
+  they only resolve in transcript-browse mode, never stealing a letter
+  out of the composer's typed text. `open_search_picker/1`'s entries are
+  labeled from `Block.search_text/1` -- a content-derived search corpus
+  (kind, summary, AND body text), not just the summary header
+  `open_jump_picker/1`'s labels use -- clamped per block (see that
+  function's own doc) before `Raxol.Harness.Surface.ViewText.lines/3`
+  ever truncates a rendered row to its display-width budget.
 
   The palette's entries are `Keymap.palette_binds/0` (the labeled subset
   of the bind table) plus two commands that exist only at THIS assembly
@@ -529,7 +534,7 @@ defmodule Raxol.Harness.Surface do
   already exposes as direct API). Picking any palette entry dispatches
   through the exact same `dispatch_command/2` path a keypress takes --
   there is no second, parallel execution mechanism for a palette-picked
-  command. All three pickers (palette, jump, session) opt into
+  command. All four pickers (palette, jump, session, search) opt into
   `Raxol.UI.Harness.OverlayPicker.fuzzy_filter/3` as their `filter_fn`
   (the `Raxol.UI.ListScorer` adapter), not the default substring filter --
   a fuzzy-ranked query is what a "type a few letters, find the entry"
@@ -622,9 +627,17 @@ defmodule Raxol.Harness.Surface do
 
   @default_footer_rows 6
   @default_sessions_dir Path.join(["test", "fixtures", "harness", "sessions"])
-  # Cap on session-picker entries -- see `open_session_picker/1`'s
-  # "Listing cap" doc section (bounded work on the input path).
+  # Cap on session-picker ENTRIES (the entry-count axis) -- see
+  # `open_session_picker/1`'s "Listing cap" doc section.
   @session_picker_cap 100
+  # Cap on the per-label GRAPHEME COUNT of each block's search corpus (the
+  # per-label length axis -- a DIFFERENT axis from `@session_picker_cap`'s
+  # entry count). This is the canonical per-label bound for the search
+  # picker: it is enforced at the source inside `Block.search_text/2`
+  # (which never scans past it), so it also bounds `ListScorer`'s own
+  # `@max_score_graphemes` (a 400-grapheme label is already under the
+  # scorer's 1024 cap). See `open_search_picker/1`'s doc section.
+  @search_label_cap 400
   @stub_interrupt_notice "» interrupt requested (stub — no agent lane in fixture mode)"
 
   @type mode :: :inline_log | :tmux_conservative | :flat
@@ -1613,6 +1626,9 @@ defmodule Raxol.Harness.Surface do
     model |> open_panel(kind) |> handle_open_result(model)
   end
 
+  defp dispatch_command(model, %{type: :open_search_picker}),
+    do: open_search_picker(model)
+
   defp dispatch_command(model, %{type: :focus_transcript}),
     do: focus_transcript(model)
 
@@ -2203,7 +2219,7 @@ defmodule Raxol.Harness.Surface do
     end
   end
 
-  # -- pickers (command palette, jump, session) ----------------------------
+  # -- pickers (command palette, jump, session, search) ---------------------
   # See the moduledoc's "The pickers" section.
 
   @doc """
@@ -2295,6 +2311,101 @@ defmodule Raxol.Harness.Surface do
       on_pick: fn model, item -> %{model | focused_index: item.index} end
     )
     |> handle_open_result(model)
+  end
+
+  @doc """
+  Opens the transcript search picker (`/`, transcript-browse only): one
+  entry per projected block, labeled from `Block.search_text/1` (the
+  full content-derived search corpus, not just `Block.summary/1`'s
+  header line) -- the overlay's fuzzy filter over these labels IS the
+  search: it reaches into block BODIES, not just headers. Picking an
+  entry sets `focused_index`, exactly like `open_jump_picker/1`. An
+  empty block list is an honest no-op notice rather than an empty
+  overlay.
+
+  ## The label clamp (bounded WORK on the input path)
+
+  `Raxol.UI.Harness.OverlayPicker`'s fuzzy ranker runs synchronously,
+  per keystroke, over every label's `label_fn` output -- this Surface is
+  a synchronous pure state machine (fixture mode has no other thread to
+  move the work to), and a block body is unbounded, untrusted content
+  (a fixture's tool-call output, an LLM's streamed response). So each
+  block's search corpus is clamped to #{@search_label_cap} graphemes
+  via `Block.search_text/2`, which applies the clamp AT THE SOURCE --
+  every body field is bounded to the cap BEFORE it is concatenated,
+  joined, or newline-flattened, and `String.slice/3` walks at most that
+  many graphemes and stops. So `open_search_picker/1` does O(cap) work
+  per block, not O(body-size): the clamp bounds the WORK, not merely the
+  label output. (An earlier revision clamped only the flattened result,
+  which bounded the output while the concat + flatten still scanned the
+  whole untrusted body -- fixed by pushing the clamp into
+  `Block.search_text/2`.) This is the per-label GRAPHEME-length axis;
+  the entry-COUNT axis is left uncapped here, matching the accepted
+  `open_jump_picker/1` precedent (see "No entry cap" below). The named,
+  honest consequence: body content past the cap is not searchable.
+
+  ## No entry cap (unlike `open_session_picker/1`)
+
+  `open_search_picker/1` builds one item per block with no ceiling,
+  unlike `open_session_picker/1`'s `@session_picker_cap` entry cap. This
+  mirrors `open_jump_picker/1` (also uncapped) and is deliberate: an
+  entry cap would silently drop blocks OUT of search, making a block
+  unfindable -- a correctness regression, not a safety win. With the
+  per-item work now bounded (see the label clamp above), a single
+  keystroke's ranking is near-linear in `entries x cap`, the same
+  envelope the accepted jump picker already runs in.
+
+  ## Why every label is `kind · summary`, not "the matching line"
+
+  `OverlayPicker`'s `label_fn` is static: it is both the search key AND
+  the rendered row, and it never sees the live query as the operator
+  types -- so a label that shows "the first line that matched" is
+  structurally impossible for this primitive (there is no query yet at
+  label-construction time, and the query changes every keystroke without
+  the labels being rebuilt). Every label is instead `Block.search_text/2`
+  itself (kind-prefixed, source-clamped, newline-flattened) -- the visible,
+  width-truncated HEAD of each row (`"<kind> · <summary>"`) always
+  identifies the block even when the actual match sits deep in an
+  unfolded body line, and picking still jumps focus to the real content
+  underneath. Display-width truncation (CJK-aware) happens exactly once,
+  in `Raxol.Harness.Surface.ViewText.lines/3` -- this function hands the
+  picker full (already-clamped) labels, same as `open_jump_picker/1`.
+  """
+  @spec open_search_picker(t()) :: t()
+  def open_search_picker(%{projection: %{blocks: []}} = model) do
+    %{model | stub_notice: "» no blocks to search"}
+  end
+
+  def open_search_picker(model) do
+    items =
+      model.projection.blocks
+      |> Enum.with_index()
+      |> Enum.map(fn {block, index} ->
+        %{index: index, label: search_label(block)}
+      end)
+
+    model
+    |> open_overlay(items,
+      label_fn: & &1.label,
+      filter_fn: &OverlayPicker.fuzzy_filter/3,
+      title: "search",
+      on_pick: fn model, item -> %{model | focused_index: item.index} end
+    )
+    |> handle_open_result(model)
+  end
+
+  # `Block.search_text/2` bounds the WORK, not just the output: it clamps
+  # every untrusted body field to `@search_label_cap` graphemes at the
+  # source, so the corpus it returns is already <= the cap and the
+  # newline-flatten below (same reason `OverlayPicker.render/1` flattens
+  # every label: one item must always be one footer row) runs over a
+  # bounded string, never over the full body. The flatten only shortens
+  # (`\r\n` -> one space), so the result stays <= the cap -- no second
+  # slice needed here.
+  defp search_label(block) do
+    block
+    |> Block.search_text(@search_label_cap)
+    |> String.replace(["\r\n", "\n", "\r"], " ")
   end
 
   @doc """

@@ -85,6 +85,40 @@ defmodule Raxol.UI.Harness.PickerBindsTest do
     end
   end
 
+  # -- 1b. the search picker bind ('/') -----------------------------------
+
+  describe "search picker bind" do
+    test "'/' -> :open_search_picker in transcript-browse only" do
+      assert resolve_from(Event.key_event("/", :pressed, []), %{
+               composing?: false,
+               overlay_open?: false
+             }) == %{type: :open_search_picker, payload: %{}}
+    end
+
+    test "'/' while composing stays :passthrough (typed text)" do
+      assert resolve_from(Event.key_event("/", :pressed, []), %{
+               composing?: true
+             }) == :passthrough
+    end
+
+    test "'/' with an overlay already open stays :passthrough (filter text for the open overlay)" do
+      assert resolve_from(Event.key_event("/", :pressed, []), %{
+               composing?: false,
+               overlay_open?: true
+             }) == :passthrough
+    end
+
+    test "a missing composing? flag fail-safes '/' to :passthrough" do
+      assert resolve_from(Event.key_event("/", :pressed, []), %{}) ==
+               :passthrough
+    end
+
+    test "palette_binds/0 includes the search transcript label" do
+      labels = Enum.map(Keymap.palette_binds(), & &1.label)
+      assert "search transcript" in labels
+    end
+  end
+
   # -- 2. palette derivation: the bind table is the single source of truth --
 
   describe "palette derivation" do
