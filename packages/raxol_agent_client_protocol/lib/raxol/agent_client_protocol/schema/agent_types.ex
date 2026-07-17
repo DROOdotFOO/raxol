@@ -140,6 +140,23 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes do
   end
 
   @doc false
+  # Decode a boolean capability/flag field LEAST-PERMISSIVELY: only a literal
+  # boolean survives; any non-boolean wire value (`0`, `""`, `[]`, `"false"`,
+  # a nested object) reads as `false` -- an unparsable capability is treated
+  # as NOT advertised, never coerced-true. A bare `Map.get(map, key, false)`
+  # let a truthy non-boolean (e.g. `0` is falsey in JS but truthy in Elixir,
+  # `"false"` is a non-empty string) flip a capability on (DROOdotFOO #624
+  # review). Every capability field's contract is boolean (its default here
+  # is `false`), so a non-boolean is malformed input, not a richer value.
+  @spec decode_bool(map(), String.t()) :: boolean()
+  def decode_bool(map, key) when is_map(map) do
+    case Map.get(map, key) do
+      value when is_boolean(value) -> value
+      _ -> false
+    end
+  end
+
+  @doc false
   # Everything in `map` that isn't one of `known_keys`, plus the contents of
   # an explicit `"_meta"` object (if present), merged into one map. This is
   # the forward-compat pass-through: wire fields this module doesn't know
@@ -1314,7 +1331,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities do
            AgentTypes.decode_optional(map, "auth", &AgentAuthCapabilities.from_json/1) do
       {:ok,
        %__MODULE__{
-         load_session: Map.get(map, "loadSession", false),
+         load_session: AgentTypes.decode_bool(map, "loadSession"),
          prompt_capabilities: prompt_capabilities,
          mcp_capabilities: mcp_capabilities,
          session_capabilities: session_capabilities,
@@ -1384,9 +1401,9 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.PromptCapabilities do
   def from_json(map) when is_map(map) do
     {:ok,
      %__MODULE__{
-       image: Map.get(map, "image", false),
-       audio: Map.get(map, "audio", false),
-       embedded_context: Map.get(map, "embeddedContext", false),
+       image: AgentTypes.decode_bool(map, "image"),
+       audio: AgentTypes.decode_bool(map, "audio"),
+       embedded_context: AgentTypes.decode_bool(map, "embeddedContext"),
        _meta: AgentTypes.extract_meta(map, @known_keys)
      }}
   end
@@ -1429,8 +1446,8 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.McpCapabilities do
   def from_json(map) when is_map(map) do
     {:ok,
      %__MODULE__{
-       http: Map.get(map, "http", false),
-       sse: Map.get(map, "sse", false),
+       http: AgentTypes.decode_bool(map, "http"),
+       sse: AgentTypes.decode_bool(map, "sse"),
        _meta: AgentTypes.extract_meta(map, @known_keys)
      }}
   end
@@ -1524,7 +1541,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.SessionCapabilities do
            AgentTypes.decode_optional(map, "close", &SessionCloseCapabilities.from_json/1) do
       {:ok,
        %__MODULE__{
-         modes: Map.get(map, "modes", false),
+         modes: AgentTypes.decode_bool(map, "modes"),
          list: list,
          fork: fork,
          resume: resume,

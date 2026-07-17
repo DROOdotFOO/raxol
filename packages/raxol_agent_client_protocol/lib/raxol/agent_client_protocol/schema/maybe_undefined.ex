@@ -6,6 +6,17 @@ defmodule Raxol.AgentClientProtocol.Schema.MaybeUndefined do
   This is load-bearing for partial-update semantics where omitting a field
   means "don't change" and setting it to null means "clear".
 
+  > #### v1 status: encode-side only {: .info}
+  > As of v1 no `from_json`/decode path in this package *produces* the
+  > `:undefined` state -- every decoder collapses both an absent field and an
+  > explicit `null` to `nil` (there is no partial-update request type in the
+  > v1 schema that needs the distinction on the way IN). The three-state
+  > value is exercised only on ENCODE (the `:undefined` -> field-omitted
+  > path, via struct-local `to_json` helpers). The decode-side distinction
+  > arrives with the `Schema.Codec`-integrated `Maybe` design below; until
+  > then, treat "reads a `MaybeUndefined`" as reachable only for values this
+  > code itself constructed, never for wire-decoded input.
+
   ## JSON serialization
 
   - `:undefined` -> field is omitted from JSON output
