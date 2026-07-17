@@ -18,9 +18,9 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   | ACP                                             | contract `type`   | tier         |
   | ----------------------------------------------- | ----------------- | ------------ |
-  | `begin_turn/2` (session/prompt accepted)         | `:turn_started`   | `:durable`   |
-  | `agent_message_chunk`                            | `:item_delta`     | `:ephemeral` |
-  | `agent_thought_chunk` (`thought: true` payload)  | `:item_delta`     | `:ephemeral` |
+  | `begin_turn/2` (session/prompt accepted)         | `:turn_started`, then one `:item_completed` user echo (`item_type: :message, role: :user, content: prompt`) when the prompt is non-empty | `:durable`   |
+  | `agent_message_chunk`                            | `:item_delta` (accumulated; sealed as ONE durable `:message` item at `finish_turn/2`, pump's `{:done, %{content}}` precedent — ACP's terminal response carries no content, only the chunks did) | `:ephemeral` |
+  | `agent_thought_chunk` (`thought: true` payload)  | `:item_delta` (never accumulated — thoughts are not the assistant message) | `:ephemeral` |
   | `tool_call` / `tool_call_update`, terminal status| `:item_completed` pair (`:tool_use` + `:tool_result`) | `:durable` |
   | `plan`                                           | `:item_completed` (`item_type: :plan`) | `:durable` |
   | `finish_turn/2` `stop_reason` ∈ end_turn / max_tokens / max_turn_requests | `:turn_completed` `final: true` | `:durable` |
@@ -32,6 +32,24 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   invocation's name/arguments are only reliably present on the opening
   frame), never emitted: the mapping table emits tool items only at their
   terminal status, mirroring `pump/3`'s completed-items-only journal.
+
+  ## The user echo (speaker separation's producer half)
+
+  The transcript renders user turns as the composer sigil echoed into
+  history (`❯ text` — see `Raxol.Harness.Surface`'s user-echo seal seam),
+  but the echo only materializes from a `:message` item whose payload
+  carries an EXACT user role marker (`Raxol.UI.Components.Harness.Block`
+  normalizes exactly `"user"`/`:user`; everything else falls safe to
+  `:assistant`). `Contract.pump/3` emits only `turn_started{prompt}`, so
+  this adapter is the producer that lights the echo: `begin_turn/2`
+  emits the durable user message item (`item_type: :message, role:
+  :user, content: prompt`) immediately after `turn_started`, BEFORE any
+  agent chunk can flow — one item, sealed as the user block ahead of the
+  first assistant block. An empty prompt emits no echo (an empty `❯`
+  line would be an unbound pixel, an echo of nothing). `user_message_chunk`
+  stays unmapped for the same reason: the prompt echo already sealed at
+  `begin_turn/2`, so mapping the client's own text replayed back through
+  the stream would double-echo the user.
 
   ## Stop-reason honesty
 
@@ -107,7 +125,8 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     :turn_id,
     seq: 0,
     pending_tools: %{},
-    unmapped: %{}
+    unmapped: %{},
+    message_buf: []
   ]
 
   @type t :: %__MODULE__{
@@ -116,7 +135,8 @@ defmodule Raxol.Agent.AcpStreamAdapter do
           turn_id: String.t() | nil,
           seq: non_neg_integer(),
           pending_tools: %{optional(String.t()) => map()},
-          unmapped: %{optional(String.t()) => pos_integer()}
+          unmapped: %{optional(String.t()) => pos_integer()},
+          message_buf: [String.t()]
         }
 
   # -- client API -------------------------------------------------------------
@@ -148,8 +168,10 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   end
 
   @doc """
-  Mark a prompt as accepted: emits the durable `:turn_started` bracket and
-  returns `{:ok, turn_id}`. Call it when `session/prompt` is dispatched.
+  Mark a prompt as accepted: emits the durable `:turn_started` bracket,
+  then (for a non-empty prompt) the durable user-echo message item — see
+  the moduledoc's user-echo section — and returns `{:ok, turn_id}`. Call
+  it when `session/prompt` is dispatched, before any updates stream.
   """
   @spec begin_turn(GenServer.server(), String.t()) :: {:ok, String.t()}
   def begin_turn(server, prompt \\ "") when is_binary(prompt) do
@@ -205,19 +227,47 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:begin_turn, prompt}, _from, state) do
     turn_id = "turn-#{System.unique_integer([:positive])}"
-    state = %{state | turn_id: turn_id, pending_tools: %{}}
+    state = %{state | turn_id: turn_id, pending_tools: %{}, message_buf: []}
 
-    state = emit(state, :turn_started, :durable, %{prompt: prompt})
+    state =
+      state
+      |> emit(:turn_started, :durable, %{prompt: prompt})
+      |> emit_user_echo(prompt)
+
     {:reply, {:ok, turn_id}, state}
   end
 
   def handle_manager_call({:finish_turn, outcome}, _from, state) do
     state = close_turn(state, outcome)
-    {:reply, :ok, %{state | turn_id: nil, pending_tools: %{}}}
+    {:reply, :ok, %{state | turn_id: nil, pending_tools: %{}, message_buf: []}}
   end
 
   def handle_manager_call(:unmapped_counts, _from, state) do
     {:reply, state.unmapped, state}
+  end
+
+  # The user echo: ONE durable :message item — an item_started/
+  # item_completed bracket with a per-turn item_id (the projection's
+  # BlockBuilder groups by item_id and flags a completion without its
+  # opener as an orphan; the speaker-roles fixture pins exactly this
+  # paired shape) — carrying the EXACT user role marker Block normalizes
+  # (see the moduledoc). Emitted inside the begin_turn call, so it always
+  # precedes the first agent chunk. An empty prompt echoes nothing —
+  # never an empty `❯` line.
+  defp emit_user_echo(state, ""), do: state
+
+  defp emit_user_echo(state, prompt) do
+    emit_message_item(state, "#{state.turn_id}-user", %{
+      item_type: :message,
+      role: :user,
+      content: prompt
+    })
+  end
+
+  defp emit_message_item(state, item_id, payload) do
+    state
+    |> emit(:item_started, :durable, %{item_id: item_id, item_type: :message})
+    |> emit(:item_completed, :durable, Map.put(payload, :item_id, item_id))
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -229,8 +279,15 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   # -- update mapping ----------------------------------------------------------
 
+  # A message chunk streams as an ephemeral delta AND accumulates: the
+  # durable assistant :message item is synthesized at finish_turn from
+  # exactly this buffer (pump/3's {:done, %{content}} precedent — ACP has
+  # no terminal content of its own, only the chunks).
   defp apply_update(state, {:agent_message_chunk, %{content: content}}) do
-    emit(state, :item_delta, :ephemeral, %{chunk: chunk_text(content)})
+    text = chunk_text(content)
+
+    %{state | message_buf: [text | state.message_buf]}
+    |> emit(:item_delta, :ephemeral, %{chunk: text})
   end
 
   defp apply_update(state, {:agent_thought_chunk, %{content: content}}) do
@@ -367,6 +424,10 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     emit(state, :error, :durable, %{reason: reason})
   end
 
+  # The canceled bracket carries no trailing output (`Raxol.Agent.Interrupt`'s
+  # own contract: "the turn is simply canceled and :turn_canceled emitted with
+  # no trailing output") — the accumulated chunk buffer is NOT sealed as a
+  # message here.
   defp close_turn(state, %{stop_reason: :cancelled}) do
     emit(state, :turn_canceled, :durable, %{
       reason: :cancelled,
@@ -375,8 +436,9 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   end
 
   defp close_turn(state, %{stop_reason: :refusal} = response) do
-    emit(
-      state,
+    state
+    |> seal_assistant_message()
+    |> emit(
       :turn_completed,
       :durable,
       with_refs(
@@ -394,8 +456,9 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   defp close_turn(state, %{stop_reason: reason} = response)
        when reason in @known_stop_reasons do
-    emit(
-      state,
+    state
+    |> seal_assistant_message()
+    |> emit(
       :turn_completed,
       :durable,
       with_refs(
@@ -407,8 +470,12 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   # A stop reason outside the ACP enum (forged wire value, garbage term):
   # disclosed, never coerced to a normal completion, never granted refs.
+  # The accumulated assistant text still seals — the words WERE said; only
+  # the completion claim is suspect.
   defp close_turn(state, %{stop_reason: other}) do
-    emit(state, :turn_completed, :durable, %{
+    state
+    |> seal_assistant_message()
+    |> emit(:turn_completed, :durable, %{
       usage: %{},
       iteration: 0,
       final: true,
@@ -421,6 +488,21 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     emit(state, :error, :durable, %{
       reason: :invalid_prompt_outcome,
       detail: inspect(other)
+    })
+  end
+
+  # pump/3's {:done, %{content}} precedent, adapted: the durable assistant
+  # :message item is synthesized from the accumulated agent_message_chunk
+  # buffer, emitted BEFORE the turn bracket so the projection folds it into
+  # the closing turn. An empty buffer seals nothing.
+  defp seal_assistant_message(%{message_buf: []} = state), do: state
+
+  defp seal_assistant_message(state) do
+    content = state.message_buf |> Enum.reverse() |> Enum.join()
+
+    emit_message_item(%{state | message_buf: []}, "#{state.turn_id}-assistant", %{
+      item_type: :message,
+      content: content
     })
   end
 
