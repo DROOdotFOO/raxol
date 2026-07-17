@@ -1,0 +1,161 @@
+{
+  "description": "Shared MUST-REJECT conformance vectors for path-traversal confinement (Raxol.Core.Boundary.Path.confine/3). Data-only: the runner materializes `setup` under a fresh tmp base, sets root = tmp_base/<root>, and asserts confine(root, requested, opts) == {:error, <expect>}. `expect` is the exact rejection reason atom (as a string). The Agent Client Protocol package copies this file verbatim and asserts its FsSandbox.resolve/2 rejects the same inputs (mapping :path_traversal/:symlink_escape/:too_many_symlinks onto its Error `reason` data; skipping vectors that carry `ref_format`, a Path.confine-only gate FsSandbox does not implement). Additionally, for every reject vector the surrounding site test MUST prove the outside target was neither read nor created. Change this file and its sibling accept file in lockstep across both packages, or neither.",
+  "vectors": [
+    {
+      "name": "parent_traversal",
+      "root": "root",
+      "requested": "../../etc/passwd",
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
+      "expect": "path_traversal"
+    },
+    {
+      "name": "interior_traversal_escapes",
+      "root": "root",
+      "requested": "a/../../x",
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
+      "expect": "path_traversal"
+    },
+    {
+      "name": "malformed_ref_traversal",
+      "root": "root",
+      "requested": "blobs/../../etc/x",
+      "ref_format": "^(blobs|snapshots)/[0-9a-f]{64}(\\.json)?$",
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
+      "expect": "malformed_ref"
+    },
+    {
+      "name": "malformed_ref_sneaky_prefix",
+      "root": "root",
+      "requested": "snapshots/../blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref_format": "^(blobs|snapshots)/[0-9a-f]{64}(\\.json)?$",
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
+      "expect": "malformed_ref"
+    },
+    {
+      "name": "malformed_ref_uppercase_hex",
+      "root": "root",
+      "requested": "blobs/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ref_format": "^(blobs|snapshots)/[0-9a-f]{64}(\\.json)?$",
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
+      "expect": "malformed_ref"
+    },
+    {
+      "name": "malformed_ref_wrong_length_hex",
+      "root": "root",
+      "requested": "blobs/abc123",
+      "ref_format": "^(blobs|snapshots)/[0-9a-f]{64}(\\.json)?$",
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
+      "expect": "malformed_ref"
+    },
+    {
+      "name": "leaf_symlink_escape",
+      "root": "root",
+      "requested": "link",
+      "setup": [
+        {
+          "dir": "root"
+        },
+        {
+          "dir": "outside"
+        },
+        {
+          "file": "outside/secret.txt",
+          "content": "TOP SECRET"
+        },
+        {
+          "symlink": "root/link",
+          "target": "../outside/secret.txt"
+        }
+      ],
+      "expect": "symlink_escape"
+    },
+    {
+      "name": "symlinked_ancestor_dir_escape",
+      "root": "root",
+      "requested": "esc/secret.txt",
+      "setup": [
+        {
+          "dir": "root"
+        },
+        {
+          "dir": "outside"
+        },
+        {
+          "file": "outside/secret.txt",
+          "content": "TOP SECRET"
+        },
+        {
+          "symlink": "root/esc",
+          "target": "../outside"
+        }
+      ],
+      "expect": "symlink_escape"
+    },
+    {
+      "name": "symlink_cycle",
+      "root": "root",
+      "requested": "a",
+      "setup": [
+        {
+          "dir": "root"
+        },
+        {
+          "symlink": "root/a",
+          "target": "b"
+        },
+        {
+          "symlink": "root/b",
+          "target": "a"
+        }
+      ],
+      "expect": "too_many_symlinks"
+    },
+    {
+      "name": "relative_symlink_under_symlinked_ancestor_escape",
+      "root": "root",
+      "requested": "loop/loop/esc",
+      "setup": [
+        {
+          "dir": "root"
+        },
+        {
+          "file": "secret.txt",
+          "content": "TOP SECRET"
+        },
+        {
+          "symlink": "root/loop",
+          "target": "."
+        },
+        {
+          "symlink": "root/esc",
+          "target": "../secret.txt"
+        }
+      ],
+      "expect": "symlink_escape"
+    }
+  ]
+}
