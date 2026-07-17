@@ -236,6 +236,122 @@ defmodule Raxol.Harness.FullViewportSurfaceTest do
     end
   end
 
+  # -- the frame margin (V's inset ruling, 2026-07-18) --------------------
+  #
+  # A uniform 1-cell frame inset on the full-viewport surface: nothing
+  # touches the very screen edge on the left, and one blank row sits below
+  # the composer at the bottom. Every marker (dialogue chevron, machinery
+  # glyph, composer chevron, running-tool spinner) sits at ONE uniform
+  # left column (`@inset`, one cell in from the edge); content sits at one
+  # uniform indent past that. Inline modes keep their outer-contour col-0
+  # chevrons UNCHANGED (pinned by speaker_separation_surface_test.exs).
+  @inset 1
+
+  # Leading blank cells before the first painted glyph on a row.
+  defp lead(s), do: byte_size(s) - byte_size(String.trim_leading(s))
+
+  # The machinery kind + fold glyphs a sealed non-dialogue row can front.
+  @machinery_glyphs ~w(⚙ ∴ » ± ⚑ ◆ ▸)
+
+  defp marker_row?(row) do
+    t = String.trim_leading(row)
+
+    t != "" and
+      (String.starts_with?(t, "❯") or String.starts_with?(t, "❮") or
+         String.starts_with?(t, ">") or String.starts_with?(t, "<") or
+         Enum.any?(@machinery_glyphs, &String.starts_with?(t, &1)))
+  end
+
+  describe "frame margin: the bottom inset" do
+    test "the bottom-most row is a blank margin, the composer sits one row above it" do
+      {model, device} = new_model([], greeting: false)
+      rows = frame_rows(frame(model, device))
+
+      # Nothing is painted on the very bottom row -- it is the frame's
+      # bottom margin.
+      assert Map.get(rows, 20) == "",
+             "bottom row must be a blank frame margin, got " <>
+               inspect(Map.get(rows, 20))
+
+      # The composer's chevron row is the last PAINTED row: one cell above
+      # the bottom edge (row 20 - @inset).
+      composer_rows = for {n, t} <- rows, t =~ "❯" or t =~ ">", do: n
+
+      refute composer_rows == [],
+             "no composer chevron row found: #{inspect(rows)}"
+
+      assert Enum.max(composer_rows) == 20 - @inset
+    end
+  end
+
+  describe "frame margin: the unified left column" do
+    test "the composer chevron sits one cell in from the edge (not col 0)" do
+      {model, device} = new_model([], greeting: false)
+      rows = frame_rows(frame(model, device))
+
+      {_n, composer} =
+        Enum.find(rows, fn {_n, t} -> t =~ "❯" or t =~ ">" end)
+
+      assert lead(composer) == @inset,
+             "composer chevron must sit at the framed left column " <>
+               "(#{@inset} cell in), got lead #{lead(composer)} in " <>
+               inspect(composer)
+    end
+
+    test "dialogue chevrons sit at the framed left column, aligned with the composer" do
+      {model, device} = new_model(load!("speaker-roles"), [])
+      model = drive(model)
+      rows = frame_rows(frame(model, device))
+
+      dialogue =
+        for {_n, t} <- rows,
+            s = String.trim_leading(t),
+            String.starts_with?(s, "❯") or String.starts_with?(s, "❮"),
+            do: t
+
+      refute dialogue == [], "no dialogue chevron rows: #{inspect(rows)}"
+
+      for row <- dialogue do
+        assert lead(row) == @inset,
+               "dialogue chevron must sit at the framed left column, " <>
+                 "got lead #{lead(row)} in #{inspect(row)}"
+      end
+    end
+
+    test "every marker (dialogue + machinery) shares the one framed left column" do
+      {model, device} = new_model(load!("multi-tool-turn"), [])
+      model = drive(model)
+      rows = frame_rows(frame(model, device))
+
+      leads =
+        for {_n, t} <- rows, marker_row?(t), do: lead(t)
+
+      refute leads == [], "no marker rows found: #{inspect(rows)}"
+
+      assert Enum.uniq(leads) == [@inset],
+             "all markers must align at the framed left column #{@inset}, " <>
+               "got distinct leads #{inspect(Enum.uniq(leads))}"
+    end
+  end
+
+  describe "frame margin: inline geometry is untouched" do
+    test "the same transcript gains the inset only in full_viewport" do
+      # full_viewport: dialogue chevron is one cell in from the edge.
+      {fv, fv_dev} = new_model(load!("speaker-roles"), [])
+      fv = drive(fv)
+      fv_rows = frame_rows(frame(fv, fv_dev))
+
+      fv_dialogue =
+        for {_n, t} <- fv_rows,
+            s = String.trim_leading(t),
+            String.starts_with?(s, "❯") or String.starts_with?(s, "❮"),
+            do: t
+
+      refute fv_dialogue == []
+      assert Enum.all?(fv_dialogue, &(lead(&1) == @inset))
+    end
+  end
+
   describe "teardown" do
     test "Surface.teardown/1 leaves the alternate screen" do
       {model, device} = new_model([], [])

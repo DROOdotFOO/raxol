@@ -1280,10 +1280,50 @@ defmodule Raxol.Harness.Surface do
   # and the composer's first draft column align at column 2 (0-based).
   @sigil_cols 2
 
-  # The width budget for margined content -- always the full width minus
-  # both margin columns (and, for the composer, exactly the room left of
-  # the 2-cell chevron prefix).
-  defp content_width(model), do: max(model.width - @margin_cols, 0)
+  # -- the full-viewport frame inset (V's 2026-07-18 margin ruling) --------
+  #
+  # In `:full_viewport` the whole surface is framed one cell in: nothing
+  # touches the very screen edge on the left, one blank row hugs the
+  # bottom, and -- crucially -- the OUTER-CONTOUR markers (dialogue
+  # chevrons, the composer chevron, the running-tool spinner cell) leave
+  # column 0 and JOIN the machinery margin column, so every marker aligns
+  # at ONE framed left column (col 1, 0-based) and every content column
+  # aligns one indent past it. Machinery already lived at col 1 (the
+  # `@margin` cell), so it does not move; the inset unifies the dialogue
+  # sigils onto it. Content width shrinks by the inset (frozen records
+  # reflow at the narrower width via the existing resize path).
+  #
+  # The inset is `:full_viewport`-only and floors to 0 for any other mode
+  # AND for a degenerate geometry too narrow/short to afford it -- so
+  # `inset_prefix/2` is a byte-identity no-op in every inline/flat frame
+  # (the frozen inline goldens never shift). A `:full_viewport` session
+  # that survives the degradation ladder always affords it; the floor is
+  # defence in depth.
+  @fv_frame_inset 1
+
+  defp frame_inset(%{mode: :full_viewport, width: w, rows: r})
+       when w - @margin_cols - @fv_frame_inset >= 1 and r - @fv_frame_inset >= 1,
+       do: @fv_frame_inset
+
+  defp frame_inset(_model), do: 0
+
+  # Prepend the frame inset to an OUTER-CONTOUR line, shifting its marker
+  # from column 0 into the framed marker column. A no-op (byte-identical)
+  # whenever the inset is 0 -- inline/flat modes and narrow-floored
+  # `:full_viewport` -- and blank-guarded so an empty row stays empty (no
+  # phantom whitespace, same rule as `margin_line/1`).
+  defp inset_prefix(line, model), do: prepend_cols(line, frame_inset(model))
+
+  defp prepend_cols(line, 0), do: line
+  defp prepend_cols("", _n), do: ""
+  defp prepend_cols(line, n), do: String.duplicate(@margin, n) <> line
+
+  # The width budget for margined content -- the full width minus both
+  # margin columns and (in `:full_viewport`) the extra left frame inset.
+  # In inline/flat modes `frame_inset/1` is 0, so this is byte-identical
+  # to the pre-frame `width - @margin_cols`.
+  defp content_width(model),
+    do: max(model.width - @margin_cols - frame_inset(model), 0)
 
   # A blank line stays blank -- a margin is layout, not trailing/leading
   # whitespace injected into empty rows.
@@ -2079,15 +2119,21 @@ defmodule Raxol.Harness.Surface do
   defp prompt_echo_lines(model, text, mode) do
     sigil = live_echo_sigil(model, mode)
 
-    case ViewText.lines(
-           %{type: :text, content: text},
-           content_width(model),
-           mode
-         ) do
-      [] -> [sigil]
-      ["" | rest] -> [sigil | Enum.map(rest, &hang_line/1)]
-      [first | rest] -> [sigil <> " " <> first | Enum.map(rest, &hang_line/1)]
-    end
+    lines =
+      case ViewText.lines(
+             %{type: :text, content: text},
+             content_width(model),
+             mode
+           ) do
+        [] -> [sigil]
+        ["" | rest] -> [sigil | Enum.map(rest, &hang_line/1)]
+        [first | rest] -> [sigil <> " " <> first | Enum.map(rest, &hang_line/1)]
+      end
+
+    # Same outer-contour framing as `echo_lines/4`: in `:full_viewport`
+    # the live echo's chevron aligns with the machinery margin column; a
+    # no-op in the inline/flat seal paths (`inset_prefix/2`).
+    Enum.map(lines, &inset_prefix(&1, model))
   end
 
   defp live_echo_sigil(model, :plain), do: model.sigil
@@ -2543,7 +2589,11 @@ defmodule Raxol.Harness.Surface do
   defp echo_lines([], _block, _model, _mode), do: []
 
   defp echo_lines([first | rest], block, model, mode) do
+    # The sigil + hang lines are the OUTER CONTOUR; in `:full_viewport`
+    # they take the frame inset so the chevron aligns with the machinery
+    # margin column (a no-op in inline/flat -- `inset_prefix/2`).
     [echo_first_line(first, block, model, mode) | Enum.map(rest, &hang_line/1)]
+    |> Enum.map(&inset_prefix(&1, model))
   end
 
   # A blank first line gets the bare sigil (no trailing space injected --
@@ -4444,7 +4494,14 @@ defmodule Raxol.Harness.Surface do
     model = refresh_panel_overlay(model)
     {footer_lines, footer_cursor} = footer_frame(model)
     footer_h = length(footer_lines)
-    transcript_h = max(model.rows - footer_h, 0)
+
+    # The bottom frame inset: the composed frame is `inset` rows short of
+    # the physical height, so `ViewportAuthority.repaint/3` pads that many
+    # BLANK rows below the footer (the bottom margin). The footer rides one
+    # row up with it; `viewport_cursor/2` follows because it is anchored to
+    # `transcript_h`. Floors to 0 for a degenerate geometry (`frame_inset/1`).
+    bottom_inset = frame_inset(model)
+    transcript_h = max(model.rows - footer_h - bottom_inset, 0)
 
     transcript = viewport_transcript_lines(model)
     window = viewport_window(transcript, transcript_h, model)
@@ -4807,7 +4864,11 @@ defmodule Raxol.Harness.Surface do
         :styled
       )
 
-    [line <> first | margin_lines(rest)]
+    # The spinner rides the margin cell (col 0 inline). In `:full_viewport`
+    # the frame inset shifts that cell -- and the running-tool line with it
+    # -- into the framed marker column so the spinner aligns with every
+    # other marker. `inset_prefix/2` is a no-op inline/flat.
+    [inset_prefix(line <> first, model) | margin_lines(rest)]
   end
 
   defp spinner_active?(model) do
@@ -4832,12 +4893,18 @@ defmodule Raxol.Harness.Surface do
     sigil_row = if model.composer.queued_steer, do: 1, else: 0
     sigil = styled_sigil(model)
 
+    # The sigil row and its hang continuations are the composer's OUTER
+    # CONTOUR: in `:full_viewport` they take the frame inset so the live
+    # chevron aligns with its sealed echoes (and the machinery margin
+    # column). The queued-steer banner row already rides `margin_line/1`
+    # (the machinery column), so it is left untouched. `inset_prefix/2` is
+    # a no-op in inline/flat -- the composer keeps its col-0 chevron there.
     lines
     |> Enum.with_index()
     |> Enum.map(fn
-      {line, ^sigil_row} -> sigil <> " " <> line
+      {line, ^sigil_row} -> inset_prefix(sigil <> " " <> line, model)
       {line, index} when index < sigil_row -> margin_line(line)
-      {line, _index} -> "  " <> line
+      {line, _index} -> inset_prefix("  " <> line, model)
     end)
   end
 
@@ -4924,7 +4991,12 @@ defmodule Raxol.Harness.Surface do
         {row_in_composer, col} = Composer.edit_point(model.composer, cwidth)
 
         row = offset + min(row_in_composer, composer_kept - 1)
-        col = min(col + @sigil_cols, model.width)
+        # Shift past the chevron prefix, then past the frame inset: in
+        # `:full_viewport` the composer's draft starts one cell further
+        # right (the chevron moved into the framed marker column via
+        # `chevron_lines/2`), so the park must move with it. `frame_inset/1`
+        # is 0 inline/flat, keeping the pinned inline park byte-identical.
+        col = min(col + @sigil_cols + frame_inset(model), model.width)
 
         if row < line_count, do: {row, col}, else: nil
       end
