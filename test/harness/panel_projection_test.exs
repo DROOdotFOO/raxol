@@ -286,6 +286,24 @@ defmodule Raxol.Harness.PanelProjectionTest do
       assert byte_size(value) <= 512
     end
 
+    test "binary fields are byte-bounded even when the clamp splits a codepoint (M1)" do
+      # 400 x "→" = 1200 bytes. @max_field_bytes (512) is not divisible by 3,
+      # so `binary_part(v, 0, 512)` lands mid-codepoint -> invalid UTF-8 ->
+      # the fallback path. The old `String.slice(v, 0, 512)` fallback was a
+      # *grapheme* clamp: 400 graphemes <= 512, so it returned all 1200 bytes
+      # unclamped. This asserts the fallback actually bounds bytes.
+      long_value = String.duplicate("→", 400)
+      assert byte_size(long_value) == 1200
+
+      events = [
+        extract_event("memory", "add", %{"key" => "k", "value" => long_value})
+      ]
+
+      [%{value: value}] = PanelProjection.fold(:memory, events)
+      assert byte_size(value) <= 512
+      assert String.valid?(value), "the clamp must never emit invalid UTF-8"
+    end
+
     test "render_lines output contains no raw newline or carriage return" do
       events = [
         extract_event("worktracks", "add", %{
@@ -375,7 +393,16 @@ defmodule Raxol.Harness.PanelProjectionTest do
                },
                %{
                  name: "security",
-                 items: [%{title: "\e[2Jevil\ntitle", status: "flagged"}]
+                 # ESC form (C0) + U+009B (8-bit C1 CSI) -- fold/2 passes both
+                 # through raw; sanitizing control bytes is ViewText's job,
+                 # downstream. See the C1 wire test in
+                 # projection_panels_surface_test.exs.
+                 items: [
+                   %{
+                     title: "\e[2Jevil\ntitle" <> <<0x9B::utf8>> <> "3Gc1",
+                     status: "flagged"
+                   }
+                 ]
                }
              ]
 
