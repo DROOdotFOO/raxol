@@ -373,6 +373,65 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
                "footer preview -- invisible-but-retrying is under-reporting"
     end
 
+    test "no full-clear reaches the wire through the refused-write footer-preview path (end-to-end, independent oracle)" do
+      # The display half above pins that a refused block stays VISIBLE in the
+      # footer preview. This pins that it stays visible HONESTLY: content that
+      # smuggles a raw CSI full-screen clear (`\e[2J` -- forbidden on the
+      # inline surface, it wipes native scrollback / the immutable prefix)
+      # must never reach the wire as a live escape through this path.
+      #
+      # SCOPE + attribution (the #635-R1 correction). This is an END-TO-END
+      # integration pin over the whole refused-write -> footer-preview
+      # pipeline, NOT a single-seam pin -- and it does not attribute to one
+      # layer. TWO layers neutralize here, so this path has genuine defense
+      # in depth (traced: the raw `\e[2J` is already gone from the rendered
+      # view before ContentGuard ever runs):
+      #   1. the message-body renderer strips ESC/C0 while building the
+      #      display view, so footer content arrives already de-escaped;
+      #   2. the footer paint routes EVERY line through
+      #      `ContentGuard.sanitize_line/1` (`inline_authority.ex:436,860`).
+      # The two SEAM guarantees are pinned directly and red-first ELSEWHERE:
+      # `ContentGuard.sanitize_line(<<0x1B, "[2J">>) == "[2J"` in
+      # `test/raxol/harness/c1_sanitizer_test.exs`, and the footer-paint seam
+      # against the same independent full-clear oracle in
+      # `test/property/renderer_t2c_review_fixes_test.exs`. This test proves
+      # they COMPOSE over the refused-write preview surface, judged by that
+      # independent oracle (`SealOracle.emits_full_clear?/1`) rather than a
+      # brittle byte-substring match.
+      hostile = @marker <> " \e[2J HOSTILE"
+
+      # Fail-first (the t2c discipline): the oracle must be ABLE to catch a
+      # raw full-clear, or the GREEN refute below is vacuous.
+      assert SealOracle.emits_full_clear?("composer " <> hostile),
+             "fail-first: the full-clear oracle must catch a raw \\e[2J, " <>
+               "or the clean result below is meaningless"
+
+      {device, sink} =
+        FailingDevice.start(fail_when: seal_write_with(@marker), mode: :always)
+
+      model = new_model(message_events(hostile), device: device)
+      model = advance_to_pending_flush(model)
+
+      {model, :ok} = Surface.advance(model)
+      assert model.painted_count == 0
+
+      read = fn -> FailingDevice.confirmed_bytes(sink) end
+
+      {_model, keyframe_bytes} =
+        frame_bytes(read, fn -> Surface.resize(model, @width, @rows) end)
+
+      assert occurrences(keyframe_bytes, @marker) >= 1,
+             "the refused block must still be visible in the footer preview"
+
+      refute SealOracle.emits_full_clear?(keyframe_bytes),
+             "no \\e[2J may reach the wire through the refused-write footer " <>
+               "preview -- the independent full-clear oracle must stay silent"
+
+      assert occurrences(keyframe_bytes, "[2J") >= 1,
+             "the neutralized clear-screen stays honestly visible as literal " <>
+               "`[2J` residue in the footer preview (not silently dropped)"
+    end
+
     test "post-seal fill protection: a fold override on an already-painted block is rejected and stores nothing" do
       # No placeholder-fill path against sealed content exists in this
       # codebase (grepped; the SessionRecap pattern has no analogue) -- so

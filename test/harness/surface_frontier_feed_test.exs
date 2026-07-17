@@ -20,6 +20,13 @@ defmodule Raxol.Harness.SurfaceFrontierFeedTest do
   alias Raxol.Harness.Surface
   alias Raxol.UI.Components.Harness.Block
 
+  # THE load-bearing invariant of the one-block footer preview design (see
+  # Surface's moduledoc): the footer renders exactly one block, so the
+  # preview is honest only while at most this many blocks sit past the
+  # committed cursor. Named here rather than left as a bare `<= 1` literal
+  # because it is the whole reason the tail-bound tests below exist.
+  @max_unsealed_past_cursor 1
+
   defp block(kind, seal) do
     Block.from_events(kind, [%{id: 1, payload: %{content: "x"}}], seal: seal)
   end
@@ -154,6 +161,12 @@ defmodule Raxol.Harness.SurfaceFrontierFeedTest do
     )
   end
 
+  # A generous upper bound on the advances needed to drain a fixture: two
+  # steps per event (reveal + seal) plus slack for the trailing
+  # foldable-window release. Caps the reduce so a wedged advance can never
+  # spin forever; named rather than inlined as `length(events) * 2 + 10`.
+  defp advance_cap(model), do: length(model.events) * 2 + 10
+
   defp advance_times(model, n) do
     Enum.reduce(1..n, model, fn _i, m ->
       {m, _} = Surface.advance(m)
@@ -207,11 +220,15 @@ defmodule Raxol.Harness.SurfaceFrontierFeedTest do
       # honest only while the unsealed suffix past `painted_count` is at
       # most one block long -- true today because the only frontier hold
       # a shipped producer can create is the foldable window on the
-      # NEWEST block. The moment a producer emits live blocks (a
-      # mid-list awaiting-input approval holding finalized blocks behind
-      # it), this bound breaks: this test then fails LOUDLY, forcing the
-      # multi-block tail rendering decision (the live-lane follow-up)
-      # instead of letting held blocks silently vanish from view.
+      # NEWEST block.
+      #
+      # HONEST SCOPE: this is a fixture REPLAY. It proves the bound holds
+      # over today's shipped corpus, but it can only ever exercise holds a
+      # `.jsonl` can encode -- it structurally CANNOT observe a runtime
+      # producer emitting a live mid-list approval, so on its own it would
+      # pass vacuously (no shipped fixture creates a mid-list hold). Its
+      # teeth live in the paired synthetic test below, which builds that
+      # exact runtime hold directly and proves the bound is reachable-breakable.
       sessions_dir = Path.join(["test", "fixtures", "harness", "sessions"])
       names = Surface.list_fixture_sessions(sessions_dir)
       assert names != [], "no shipped fixtures found -- the pin needs corpus"
@@ -221,22 +238,88 @@ defmodule Raxol.Harness.SurfaceFrontierFeedTest do
           Raxol.Harness.Fixture.load(Path.join(sessions_dir, name <> ".jsonl"))
 
         model = real_model(session)
-        cap = length(model.events) * 2 + 10
+        cap = advance_cap(model)
 
-        Enum.reduce_while(1..cap, model, fn _i, m ->
-          {m, outcome} = Surface.advance(m)
+        # Track the terminal outcome so the cap cannot silently swallow an
+        # incomplete drain: reduce over `{model, outcome}` and assert `:done`
+        # after the loop (the #635-R1 saboteur note). A fixture that needs
+        # more than `cap` steps would otherwise exit the loop with its tail
+        # blocks un-run -- hiding any late `unsealed > 1` in that tail.
+        {_final, outcome} =
+          Enum.reduce_while(1..cap, {model, :running}, fn _i, {m, _} ->
+            {m, step} = Surface.advance(m)
 
-          unsealed = length(m.projection.blocks) - m.painted_count
+            unsealed = length(m.projection.blocks) - m.painted_count
 
-          assert unsealed <= 1,
-                 "fixture #{name}: #{unsealed} blocks past the committed " <>
-                   "cursor -- the one-block pending preview would hide " <>
-                   "#{unsealed - 1} of them (multi-block tail rendering " <>
-                   "is the live-lane follow-up this pin exists to force)"
+            assert unsealed <= @max_unsealed_past_cursor,
+                   "fixture #{name}: #{unsealed} blocks past the committed " <>
+                     "cursor -- the one-block pending preview would hide " <>
+                     "#{unsealed - @max_unsealed_past_cursor} of them " <>
+                     "(multi-block tail rendering is the live-lane follow-up " <>
+                     "this pin exists to force)"
 
-          if outcome == :done, do: {:halt, m}, else: {:cont, m}
-        end)
+            if step == :done,
+              do: {:halt, {m, :done}},
+              else: {:cont, {m, :running}}
+          end)
+
+        assert outcome == :done,
+               "fixture #{name}: the advance loop hit its #{cap}-step cap " <>
+                 "without reaching :done -- the drain is incomplete, so a " <>
+                 "late unsealed > 1 in the un-run tail would go unseen. " <>
+                 "Raise advance_cap/1 or fix the stalled advance."
       end
+    end
+
+    test "a synthetic mid-list live-approval hold makes frontier_scan/1 strand >1 block past the cursor -- the strand precondition the fixture replay cannot reach" do
+      # The teeth the fixture replay above lacks. No shipped producer emits
+      # a live approval, so the corpus can only ever create the one hold
+      # that keeps `unsealed <= 1` (the foldable window on the NEWEST
+      # block). This builds the hold the corpus structurally cannot: a LIVE
+      # :approval mid-list, with finalized blocks sealed BEHIND it.
+      #
+      # REFERENT (the #635-R1 correction): every assertion below is on
+      # `frontier_scan/1` -- the CLASSIFIER, which decides where the
+      # committed cursor stops. Nothing here asserts on the footer preview
+      # RENDER; this pins the strand PRECONDITION (more than one block sits
+      # past the cursor), not the under-report itself. The preview-render
+      # assertion is deliberately out of scope: the synthetic hold cannot be
+      # produced from `Surface.new/2` events (the block builder only emits
+      # sealed blocks), so there is no real model to render. When the live
+      # lane (T13b) makes this hold reachable from a real advance, the
+      # single-block preview must become multi-block -- and THAT change is
+      # where the preview-render assertion belongs.
+      #
+      # Per `SealFrontier.committable?`, a `pending_input?` entry stops the
+      # frontier UNCONDITIONALLY, so the committed cursor pins at the
+      # approval and every finalized block behind it is stranded.
+      blocks = [
+        block(:approval, :live),
+        block(:message, :sealed),
+        block(:message, :sealed)
+      ]
+
+      # Reveal finished (revealed == total_events) so the newest-block
+      # foldable window is NOT what holds -- the hold is purely the
+      # mid-list approval, isolating the multi-block scenario.
+      m = model(blocks, revealed: 3, total_events: 3, painted: 0)
+
+      scan = Surface.frontier_scan(m)
+
+      assert scan.tail_start == 0,
+             "the frontier must hold at the mid-list live approval " <>
+               "(index 0) -- sealing past an unanswered prompt would " <>
+               "freeze it into print-once history"
+
+      unsealed = length(m.projection.blocks) - scan.tail_start
+
+      assert unsealed > @max_unsealed_past_cursor,
+             "a mid-list live-approval hold must strand more than " <>
+               "#{@max_unsealed_past_cursor} block past the committed " <>
+               "cursor (got #{unsealed}); the single-block footer preview " <>
+               "would then show only the first and silently hide the rest " <>
+               "-- the multi-block tail-rendering decision the fixture-" <>
+               "replay pin above cannot force on its own"
     end
   end
 
