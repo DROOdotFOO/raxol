@@ -22,10 +22,14 @@ defmodule Raxol.Agent.Command do
       is stubbed (U4).
     * `:seek`      — time-travel a read-model to a journal offset; payload
       `%{offset: integer}`. Decodes fully; routing is stubbed.
+    * `:steer`     — redirect a running turn without killing it; payload
+      `%{text: binary, expected_turn_id: term}` (both required), optional
+      `:client_msg_id`. Decodes and routes; EXECUTING it (the compare-and-swap
+      against the running turn, `Raxol.Agent.Steer.resolve/2`) is the session
+      runtime's integration, still pending.
 
-  `:steer`, `:approval_decision`, and `:detach` from the full protocol table
-  attach behind this same seam in later steps; the codec grows, the shape does
-  not.
+  `:approval_decision` and `:detach` from the full protocol table attach
+  behind this same seam in later steps; the codec grows, the shape does not.
 
   ## The one validation seam
 
@@ -51,7 +55,7 @@ defmodule Raxol.Agent.Command do
   @enforce_keys [:type]
   defstruct type: nil, payload: %{}
 
-  @type type :: :prompt | :interrupt | :attach | :seek
+  @type type :: :prompt | :interrupt | :attach | :seek | :steer
 
   @type t :: %__MODULE__{
           type: type(),
@@ -71,6 +75,7 @@ defmodule Raxol.Agent.Command do
   @type action ::
           {:start_turn, term(), map()}
           | {:interrupt, term(), map()}
+          | {:steer, term(), map()}
 
   # Whitelisted string → atom for the `type` field. Never String.to_atom/1 on
   # user input (unbounded atom table growth).
@@ -78,7 +83,8 @@ defmodule Raxol.Agent.Command do
     "prompt" => :prompt,
     "interrupt" => :interrupt,
     "attach" => :attach,
-    "seek" => :seek
+    "seek" => :seek,
+    "steer" => :steer
   }
 
   # Whitelisted history policies for `attach`.
@@ -119,7 +125,8 @@ defmodule Raxol.Agent.Command do
         {:error, {:invalid_command, :not_a_map}}
 
       {:error, %Jason.DecodeError{} = error} ->
-        {:error, {:invalid_command, {:malformed_json, decode_error_message(error)}}}
+        {:error,
+         {:invalid_command, {:malformed_json, decode_error_message(error)}}}
     end
   end
 
@@ -140,6 +147,9 @@ defmodule Raxol.Agent.Command do
     pumps a `Raxol.Agent.Stream.react/2` run through `Contract.pump/3`.
   * `:interrupt` → `{:interrupt, session_id, payload}` — the supervised-kill
     seam (U5).
+  * `:steer`     → `{:steer, session_id, payload}` — dispatched the same way;
+    the session runtime resolves the compare-and-swap against the running
+    turn (`Raxol.Agent.Steer.resolve/2`).
   * `:attach` / `:seek` → `{:error, :not_implemented}` — decoded, not yet routed.
 
   When `session` carries a `:pid`, the action is also delivered to that process
@@ -153,6 +163,10 @@ defmodule Raxol.Agent.Command do
 
   def route(%__MODULE__{type: :interrupt, payload: payload}, session) do
     dispatch(session, {:interrupt, session_id(session), payload})
+  end
+
+  def route(%__MODULE__{type: :steer, payload: payload}, session) do
+    dispatch(session, {:steer, session_id(session), payload})
   end
 
   def route(%__MODULE__{type: type}, _session) when type in [:attach, :seek] do
@@ -211,6 +225,13 @@ defmodule Raxol.Agent.Command do
     end
   end
 
+  defp validate(:steer, payload) do
+    with {:ok, text} <- fetch_steer_text(payload),
+         {:ok, expected_turn_id} <- fetch_expected_turn_id(payload) do
+      {:ok, steer_payload(text, expected_turn_id, payload)}
+    end
+  end
+
   defp validate(:attach, payload) do
     with {:ok, offset} <- fetch_offset(payload, "from_offset", :from_offset),
          {:ok, policy} <- fetch_history_policy(payload) do
@@ -230,6 +251,43 @@ defmodule Raxol.Agent.Command do
     case get(payload, "attachments", :attachments) do
       list when is_list(list) -> Map.put(base, :attachments, list)
       _ -> base
+    end
+  end
+
+  # Reuses the exact rules/reasons `validate(:prompt, _)` uses for its own
+  # required `text` field (:missing_text / :empty_text / :invalid_text) —
+  # one vocabulary for "bad text payload", not two independently-drifting
+  # ones.
+  defp fetch_steer_text(payload) do
+    case get(payload, "text", :text) do
+      text when is_binary(text) ->
+        if String.trim(text) == "" do
+          {:error, {:invalid_command, :empty_text}}
+        else
+          {:ok, text}
+        end
+
+      nil ->
+        {:error, {:invalid_command, :missing_text}}
+
+      _other ->
+        {:error, {:invalid_command, :invalid_text}}
+    end
+  end
+
+  defp fetch_expected_turn_id(payload) do
+    case get(payload, "expected_turn_id", :expected_turn_id) do
+      nil -> {:error, {:invalid_command, :missing_expected_turn_id}}
+      expected_turn_id -> {:ok, expected_turn_id}
+    end
+  end
+
+  defp steer_payload(text, expected_turn_id, payload) do
+    base = %{text: text, expected_turn_id: expected_turn_id}
+
+    case get(payload, "client_msg_id", :client_msg_id) do
+      nil -> base
+      client_msg_id -> Map.put(base, :client_msg_id, client_msg_id)
     end
   end
 

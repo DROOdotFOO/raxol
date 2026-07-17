@@ -42,12 +42,18 @@ defmodule Raxol.Agent.CommandTest do
 
     test "prompt with empty/whitespace text is rejected" do
       assert {:error, {:invalid_command, :empty_text}} =
-               Command.decode(%{"type" => "prompt", "payload" => %{"text" => "   "}})
+               Command.decode(%{
+                 "type" => "prompt",
+                 "payload" => %{"text" => "   "}
+               })
     end
 
     test "prompt with non-binary text is rejected" do
       assert {:error, {:invalid_command, :invalid_text}} =
-               Command.decode(%{"type" => "prompt", "payload" => %{"text" => 123}})
+               Command.decode(%{
+                 "type" => "prompt",
+                 "payload" => %{"text" => 123}
+               })
     end
 
     test "decode never raises on arbitrary bad input" do
@@ -60,7 +66,9 @@ defmodule Raxol.Agent.CommandTest do
   describe "decode/1 — prompt" do
     test "valid prompt JSON decodes to a typed struct" do
       assert {:ok, %Command{type: :prompt, payload: %{text: "hello world"}}} =
-               Command.decode(~s({"type":"prompt","payload":{"text":"hello world"}}))
+               Command.decode(
+                 ~s({"type":"prompt","payload":{"text":"hello world"}})
+               )
     end
 
     test "accepts a plain map with atom keys" do
@@ -92,7 +100,103 @@ defmodule Raxol.Agent.CommandTest do
 
     test "interrupt carries an optional turn_id" do
       assert {:ok, %Command{type: :interrupt, payload: %{turn_id: "turn-7"}}} =
-               Command.decode(%{"type" => "interrupt", "payload" => %{"turn_id" => "turn-7"}})
+               Command.decode(%{
+                 "type" => "interrupt",
+                 "payload" => %{"turn_id" => "turn-7"}
+               })
+    end
+  end
+
+  describe "decode/1 — steer" do
+    test "valid steer JSON decodes to a typed struct" do
+      assert {:ok,
+              %Command{
+                type: :steer,
+                payload: %{text: "go left instead", expected_turn_id: "turn-1"}
+              }} =
+               Command.decode(
+                 ~s({"type":"steer","payload":{"text":"go left instead","expected_turn_id":"turn-1"}})
+               )
+    end
+
+    test "accepts a plain map with atom keys" do
+      assert {:ok,
+              %Command{
+                type: :steer,
+                payload: %{text: "hi", expected_turn_id: "turn-9"}
+              }} =
+               Command.decode(%{
+                 type: :steer,
+                 payload: %{text: "hi", expected_turn_id: "turn-9"}
+               })
+    end
+
+    test "missing text is rejected" do
+      assert {:error, {:invalid_command, :missing_text}} =
+               Command.decode(%{
+                 "type" => "steer",
+                 "payload" => %{"expected_turn_id" => "turn-1"}
+               })
+    end
+
+    test "empty/whitespace text is rejected" do
+      assert {:error, {:invalid_command, :empty_text}} =
+               Command.decode(%{
+                 "type" => "steer",
+                 "payload" => %{"text" => "   ", "expected_turn_id" => "turn-1"}
+               })
+    end
+
+    test "non-binary text is rejected" do
+      assert {:error, {:invalid_command, :invalid_text}} =
+               Command.decode(%{
+                 "type" => "steer",
+                 "payload" => %{"text" => 123, "expected_turn_id" => "turn-1"}
+               })
+    end
+
+    test "missing expected_turn_id is rejected" do
+      assert {:error, {:invalid_command, :missing_expected_turn_id}} =
+               Command.decode(%{
+                 "type" => "steer",
+                 "payload" => %{"text" => "hi"}
+               })
+    end
+
+    test "an explicit nil expected_turn_id is rejected the same as missing" do
+      assert {:error, {:invalid_command, :missing_expected_turn_id}} =
+               Command.decode(%{
+                 "type" => "steer",
+                 "payload" => %{"text" => "hi", "expected_turn_id" => nil}
+               })
+    end
+
+    test "carries an optional client_msg_id when present" do
+      assert {:ok, %Command{type: :steer, payload: payload}} =
+               Command.decode(%{
+                 "type" => "steer",
+                 "payload" => %{
+                   "text" => "hi",
+                   "expected_turn_id" => "turn-1",
+                   "client_msg_id" => "msg-42"
+                 }
+               })
+
+      assert payload == %{
+               text: "hi",
+               expected_turn_id: "turn-1",
+               client_msg_id: "msg-42"
+             }
+    end
+
+    test "omits client_msg_id from the payload when absent" do
+      assert {:ok, %Command{type: :steer, payload: payload}} =
+               Command.decode(%{
+                 "type" => "steer",
+                 "payload" => %{"text" => "hi", "expected_turn_id" => "turn-1"}
+               })
+
+      refute Map.has_key?(payload, :client_msg_id)
     end
   end
 
@@ -103,7 +207,10 @@ defmodule Raxol.Agent.CommandTest do
                 type: :attach,
                 payload: %{from_offset: 12, history_policy: :replay}
               }} =
-               Command.decode(%{"type" => "attach", "payload" => %{"from_offset" => 12}})
+               Command.decode(%{
+                 "type" => "attach",
+                 "payload" => %{"from_offset" => 12}
+               })
     end
 
     test "attach validates history_policy against the whitelist" do
@@ -116,7 +223,10 @@ defmodule Raxol.Agent.CommandTest do
       assert {:error, {:invalid_command, {:unknown_history_policy, "teleport"}}} =
                Command.decode(%{
                  "type" => "attach",
-                 "payload" => %{"from_offset" => 0, "history_policy" => "teleport"}
+                 "payload" => %{
+                   "from_offset" => 0,
+                   "history_policy" => "teleport"
+                 }
                })
     end
 
@@ -125,12 +235,18 @@ defmodule Raxol.Agent.CommandTest do
                Command.decode(%{"type" => "attach", "payload" => %{}})
 
       assert {:error, {:invalid_command, {:invalid_offset, :from_offset}}} =
-               Command.decode(%{"type" => "attach", "payload" => %{"from_offset" => -1}})
+               Command.decode(%{
+                 "type" => "attach",
+                 "payload" => %{"from_offset" => -1}
+               })
     end
 
     test "seek decodes to a valid struct" do
       assert {:ok, %Command{type: :seek, payload: %{offset: 99}}} =
-               Command.decode(%{"type" => "seek", "payload" => %{"offset" => 99}})
+               Command.decode(%{
+                 "type" => "seek",
+                 "payload" => %{"offset" => 99}
+               })
     end
 
     test "seek with a missing offset is rejected" do
@@ -162,22 +278,52 @@ defmodule Raxol.Agent.CommandTest do
       {:ok, cmd} =
         Command.decode(%{"type" => "prompt", "payload" => %{"text" => "go"}})
 
-      assert {:start_turn, "bare-id", %{text: "go"}} = Command.route(cmd, "bare-id")
+      assert {:start_turn, "bare-id", %{text: "go"}} =
+               Command.route(cmd, "bare-id")
     end
 
     test "interrupt routes to its supervised-kill seam" do
       {:ok, cmd} =
-        Command.decode(%{"type" => "interrupt", "payload" => %{"turn_id" => "turn-3"}})
+        Command.decode(%{
+          "type" => "interrupt",
+          "payload" => %{"turn_id" => "turn-3"}
+        })
 
       action = Command.route(cmd, %{session_id: "sess-1", pid: self()})
 
       assert action == {:interrupt, "sess-1", %{turn_id: "turn-3"}}
-      assert_receive {:harness_command, {:interrupt, "sess-1", %{turn_id: "turn-3"}}}
+
+      assert_receive {:harness_command,
+                      {:interrupt, "sess-1", %{turn_id: "turn-3"}}}
+    end
+
+    test "steer routes to the session as {:harness_command, {:steer, ...}}" do
+      {:ok, cmd} =
+        Command.decode(%{
+          "type" => "steer",
+          "payload" => %{
+            "text" => "go left instead",
+            "expected_turn_id" => "turn-1"
+          }
+        })
+
+      action = Command.route(cmd, %{session_id: "sess-1", pid: self()})
+
+      assert action ==
+               {:steer, "sess-1",
+                %{text: "go left instead", expected_turn_id: "turn-1"}}
+
+      assert_receive {:harness_command,
+                      {:steer, "sess-1",
+                       %{text: "go left instead", expected_turn_id: "turn-1"}}}
     end
 
     test "attach routes to not_implemented" do
       {:ok, cmd} =
-        Command.decode(%{"type" => "attach", "payload" => %{"from_offset" => 0}})
+        Command.decode(%{
+          "type" => "attach",
+          "payload" => %{"from_offset" => 0}
+        })
 
       assert {:error, :not_implemented} =
                Command.route(cmd, %{session_id: "sess-1", pid: self()})
@@ -189,13 +335,15 @@ defmodule Raxol.Agent.CommandTest do
       {:ok, cmd} =
         Command.decode(%{"type" => "seek", "payload" => %{"offset" => 5}})
 
-      assert {:error, :not_implemented} = Command.route(cmd, %{session_id: "sess-1"})
+      assert {:error, :not_implemented} =
+               Command.route(cmd, %{session_id: "sess-1"})
     end
   end
 
   describe "decode/1 |> route/2 — end to end" do
     test "a wire prompt line drives a start turn" do
-      assert {:ok, cmd} = Command.decode(~s({"type":"prompt","payload":{"text":"hi"}}))
+      assert {:ok, cmd} =
+               Command.decode(~s({"type":"prompt","payload":{"text":"hi"}}))
 
       assert {:start_turn, "s", %{text: "hi"}} =
                Command.route(cmd, %{session_id: "s"})
