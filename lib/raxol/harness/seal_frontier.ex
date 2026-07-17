@@ -40,12 +40,28 @@ defmodule Raxol.Harness.SealFrontier do
 
     * `Raxol.Harness.Surface.paint_pending_blocks/1` -- the one mutating
       walk, via `commit_walk/5`.
-    * `Raxol.Harness.Surface`'s footer pending-preview (`pending_block/1`,
-      via `frontier_scan/1`, itself `scan_frontier/3`) -- read-only.
+    * `Raxol.Harness.Surface`'s footer pending-preview (`pending_block/1`)
+      -- reads the WALK's committed cursor (`painted_count`), not the
+      scan: the scan is the pre-commit projection and consumes
+      committable entries, so it would hide a block whose seal write was
+      just refused. Cursor and scan agree on every successful frame (the
+      scan/walk-agreement property below); on a refusal the cursor is
+      the display-honest one.
     * `Raxol.Harness.Surface`'s synchronized-output bracket gate
-      (`seal_frame/3`, also via `frontier_scan/1`) -- read-only, consulted
-      BEFORE the commit pass to decide whether to open a bracket around
-      it.
+      (`seal_frame/3`, via `frontier_scan/1`, itself `scan_frontier/3`)
+      -- read-only, consulted BEFORE the commit pass to decide whether
+      to open a bracket around it.
+    * The keyframe/reflow gate is NOT a consumer, by construction: the
+      reference design's resize path must pick its behavior on
+      `will_commit` because its viewport height is a function of the
+      post-commit tail, but this substrate's resize path
+      (`Raxol.Harness.Surface.resize/2` / the `advance/3` `:resize`
+      option) never seals and never sizes anything off frontier state --
+      the footer row count is geometry-fixed, and a combined
+      resize+advance frame adopts geometry FIRST (the frame-order law),
+      then lets the ordinary seal frame run. A future change that makes
+      the resize path seal, or the footer height a function of tail
+      content, MUST route its decision through this classifier.
 
   ## The entry contract
 
@@ -155,8 +171,12 @@ defmodule Raxol.Harness.SealFrontier do
   first index a commit pass would NOT consume -- i.e. where the live tail
   begins after this frame's (hypothetical or already-run) commit. This
   function never mutates anything; it exists so a consumer can ask "where
-  would the frontier land" without actually committing (the footer preview
-  needs exactly this, and the resize seam will too).
+  would the frontier land" without actually committing (the sync-bracket
+  gate and the seal pass's detach target need exactly this, and the
+  resize seam will too). Display surfaces that must show what is NOT yet
+  physically committed key on the walk's cursor instead -- the scan
+  consumes committable entries, so it overshoots the committed set
+  whenever an emit fails (see the consumer table above).
 
   ## `commit_walk/5` -- the one mutating walk
 
