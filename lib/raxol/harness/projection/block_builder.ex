@@ -316,10 +316,22 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   def build_turn(events, fold_defaults, session_index \\ %{}) do
     {ordered_keys, groups, tail, item_diags} = fold_items(events)
 
+    # A live approval holds the seal frontier until it is answered. Its
+    # seal is a pure function of events: SEALED once a matching
+    # `approval_decided` folded into it, LIVE while the question is still
+    # open, and SEALED-as-canceled if the turn ended (completed or
+    # canceled) with the question never answered -- a live approval must
+    # never survive its own turn unresolved, or it would wedge the frontier
+    # forever (see `Raxol.Harness.SealFrontier`, G3). The turn-ended check
+    # only ever reaches an approval that carries NO decision; a real answer
+    # always wins.
+    turn_ended? = Enum.any?(events, &turn_terminal?/1)
+
     completed_groups =
       ordered_keys
       |> Enum.map(&Map.fetch!(groups, &1))
       |> Enum.filter(& &1.completed)
+      |> Enum.map(&resolve_approval_seal(&1, turn_ended?))
 
     {blocks, block_diags} = build_blocks(completed_groups, fold_defaults)
 
@@ -449,13 +461,37 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
     end
   end
 
+  # Keyed by `request_id` (NOT the event id), so the later
+  # `approval_decided` answer folds into THIS group rather than opening a
+  # second one. A request with no `request_id` falls back to its own event
+  # id -- it stays a unique, rendrable question, it just can never be
+  # correlated with a decision (it resolves live, then via the turn-ended
+  # safety net).
   defp fold_event(:approval_requested, event, acc) do
-    k = singleton_key(event)
+    k = approval_key(event)
 
     group =
       new_group(singleton: true, kind_override: :approval, completed: event)
 
     %{acc | order: [k | acc.order], groups: Map.put(acc.groups, k, group)}
+  end
+
+  # The answer. Folds into the matching request's group as `:decided` (the
+  # receipt -- decision/option/scope/who/when), which seals the block and
+  # releases the frontier. A decision with no matching request in this turn
+  # has no question to render, so it becomes a diagnostic, never a block
+  # (fail-loud, never a silent phantom).
+  defp fold_event(:approval_decided, event, acc) do
+    k = approval_key(event)
+
+    case Map.get(acc.groups, k) do
+      %{kind_override: :approval} = group ->
+        %{acc | groups: Map.put(acc.groups, k, Map.put(group, :decided, event))}
+
+      _no_matching_request ->
+        diag = Recovery.emit(:orphan_approval_decision, Map.get(event, :id))
+        %{acc | diags: [diag | acc.diags]}
+    end
   end
 
   defp fold_event(:error, event, acc) do
@@ -484,6 +520,37 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
 
   defp item_key(item_id), do: {:item, item_id}
   defp singleton_key(event), do: {:singleton, Map.get(event, :id)}
+
+  # The correlation key shared by an `approval_requested` and its
+  # `approval_decided` answer. Prefers the payload `request_id`; a request
+  # without one falls back to its own event id (unique, but uncorrelatable
+  # with a later decision -- see `fold_event(:approval_requested, ...)`).
+  defp approval_key(event) do
+    case payload_fetch(event, "request_id", :request_id) do
+      nil -> {:approval, {:id, Map.get(event, :id)}}
+      request_id -> {:approval, {:req, request_id}}
+    end
+  end
+
+  # A turn-terminal loop event -- the boundary past which a still-live
+  # approval must be resolved (canceled) rather than left holding the
+  # frontier. `turn_canceled` is included defensively: it is not part of
+  # the fixture loop vocabulary, but the live interrupt lane emits it, and
+  # if it ever reaches this fold it must resolve a pending approval, not be
+  # ignored.
+  defp turn_terminal?(event),
+    do: Map.get(event, :type) in [:turn_completed, :turn_canceled]
+
+  # Stamps an approval group's seal state. SEALED once answered
+  # (`:decided` present) or once its turn ended without an answer; LIVE
+  # otherwise. Non-approval groups are untouched -- they carry no `:seal`
+  # key and `build_block/2` defaults them to `:sealed`, exactly as before.
+  defp resolve_approval_seal(%{kind_override: :approval} = group, turn_ended?) do
+    sealed? = not is_nil(Map.get(group, :decided)) or turn_ended?
+    Map.put(group, :seal, if(sealed?, do: :sealed, else: :live))
+  end
+
+  defp resolve_approval_seal(group, _turn_ended?), do: group
 
   # Emits :delta_buffer_capped exactly once per item_id -- every
   # subsequent delta for the same over-cap item is a silent drop from
@@ -547,10 +614,14 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
     reasons = recovered_reasons(orphan?, unknown_type?)
     events = source_events(groups)
     fold = resolve_fold(fold_defaults, kind, unknown_type?)
+    # Every non-approval block seals immediately (there is nothing to wait
+    # on). An approval carries its own `:seal` stamp from
+    # `resolve_approval_seal/2` -- live until answered or its turn ends.
+    seal = block_seal(groups)
 
     block =
       kind
-      |> Block.from_events(events, fold: fold, seal: :sealed)
+      |> Block.from_events(events, fold: fold, seal: seal)
       |> fix_duration(kind, events)
       |> flag_recovered(reasons)
 
@@ -567,11 +638,18 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
 
   defp source_events(groups) do
     groups
-    |> Enum.flat_map(&[&1.started, &1.completed])
+    |> Enum.flat_map(&[&1.started, &1.completed, Map.get(&1, :decided)])
     |> Enum.reject(&is_nil/1)
     |> Enum.sort_by(&Map.get(&1, :id))
     |> Enum.map(&adapt_event/1)
   end
+
+  # The seal an approval group resolved to (`resolve_approval_seal/2`);
+  # every other block defaults to `:sealed`. The merge case passes a
+  # 2-group list, but only single-group approval blocks ever carry a
+  # `:seal` stamp, so reading the head is exact.
+  defp block_seal([%{seal: seal} | _]), do: seal
+  defp block_seal(_groups), do: :sealed
 
   defp resolve_fold(fold_defaults, kind, unknown_type?) do
     lookup_kind = if unknown_type?, do: :opaque, else: kind
@@ -943,8 +1021,12 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   end
 
   # Direct passthrough fields: same string key on the wire as the atom
-  # key Block's path-based extraction (block.ex @*_paths) looks up.
-  @direct_payload_keys ~w(content name action blast_radius options exit_code cost duration_ms where reason)a
+  # key Block's path-based extraction (block.ex @*_paths) looks up. The
+  # `tool_name`/`decision`/`option_id`/`scope`/`decided_by`/`decided_at`
+  # keys carry the approval referent + decision receipt through to
+  # `Block.extract_approval_content/1` (`request_id` is consumed earlier,
+  # for correlation, and is not needed in the rendered payload).
+  @direct_payload_keys ~w(content name action blast_radius options exit_code cost duration_ms where reason tool_name request_id decision option_id scope decided_by decided_at)a
 
   defp adapt_payload(payload) when is_map(payload) do
     base =

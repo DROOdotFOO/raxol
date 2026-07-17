@@ -601,6 +601,31 @@ defmodule Raxol.Harness.LiveSessionDriver do
     %{state | model: model}
   end
 
+  # Answer a pending approval (Track D). The Surface has already resolved
+  # the keystroke into a concrete `{request_id, option_id, decision}` (the
+  # referent the agent parked); this hands it to the lane. Fire-and-forget
+  # with an event-observed seal -- exactly the interrupt shape above: the
+  # lane replies to the ACP request and emits the `approval_decided` event
+  # that folds the receipt into the block and releases the frontier, so
+  # there is no synchronous outcome to render here beyond dispatch status.
+  defp handle_surface_command(state, %{type: :approval_answer, payload: answer}) do
+    {lane_mod, session} = state.lane
+
+    model =
+      case lane_mod.answer_permission(session, answer) do
+        :ok ->
+          Surface.put_lane_notice(state.model, "» approval answer sent")
+
+        {:error, reason} ->
+          Surface.put_lane_notice(
+            state.model,
+            "» approval answer failed to dispatch: #{inspect(reason)}"
+          )
+      end
+
+    %{state | model: model}
+  end
+
   # A steer already in flight: refuse a second concurrent dispatch rather
   # than racing two Task.async calls against the lane's own CAS.
   defp handle_surface_command(%{steer_task: task} = state, %{type: :steer})

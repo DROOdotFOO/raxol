@@ -265,8 +265,17 @@ defmodule Raxol.UI.Harness.KeymapTest do
       open_panel_binds =
         Enum.count(Keymap.binds(), &(&1.command_type == :open_panel))
 
+      # The live-approval answer keys (Track D) are a second shared-type
+      # family: `y`/`n`/`1`-`9` all emit `:approval_answer`, discriminated
+      # by their `payload.answer` hint (same pattern as the panel binds
+      # sharing `:open_panel`). Both families contribute (count - 1) to the
+      # residual gap between bind count and distinct-command-type count.
+      approval_answer_binds =
+        Enum.count(Keymap.binds(), &(&1.command_type == :approval_answer))
+
       assert length(Keymap.binds()) ==
-               MapSet.size(declared) + (open_panel_binds - 1)
+               MapSet.size(declared) + (open_panel_binds - 1) +
+                 (approval_answer_binds - 1)
     end
 
     # The `guard: :overlay` bind's own context requirement differs from
@@ -278,6 +287,13 @@ defmodule Raxol.UI.Harness.KeymapTest do
     # unchanged by driving each bind's own natural context here.
     defp context_for(%{guard: :overlay}),
       do: %{composing?: false, focused_block_id: "any", overlay_open?: true}
+
+    # The live-approval answer guard opts in with `approval_pending?: true`
+    # (Track D) -- its own natural context, same shape the surface builds
+    # while a question is on screen. Without it these binds correctly stay
+    # `:passthrough`, exactly like the `:overlay` bind above needs its own.
+    defp context_for(%{guard: :awaiting_approval}),
+      do: %{composing?: false, focused_block_id: "any", approval_pending?: true}
 
     defp context_for(_bind), do: %{composing?: false, focused_block_id: "any"}
 
@@ -430,7 +446,17 @@ defmodule Raxol.UI.Harness.KeymapTest do
 
     test "command_for/2 yields the same payload-carrying command as a live keypress (palette invocation parity)" do
       for {char, kind} <- @panel_chars do
-        bind = Enum.find(Keymap.binds(), &(Map.get(&1, :char) == char))
+        # Filter by command_type too: the live-approval answer binds (Track
+        # D) share `n` with the plan-panel bind (an answer while a question
+        # is live wins; see Keymap's `@approval_binds` ordering note), so a
+        # bare char lookup would find the approval bind first. This parity
+        # check is about the PANEL bind specifically.
+        bind =
+          Enum.find(
+            Keymap.binds(),
+            &(Map.get(&1, :char) == char and &1.command_type == :open_panel)
+          )
+
         assert bind.command_type == :open_panel
 
         assert Keymap.command_for(bind, %{composing?: false}) ==

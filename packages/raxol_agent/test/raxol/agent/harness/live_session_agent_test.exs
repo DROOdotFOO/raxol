@@ -203,6 +203,10 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
     def steer(_session, _request), do: {:error, :no_steer_channel}
 
     @impl true
+    def answer_permission(session, answer),
+      do: RealLane.answer_permission(session, answer)
+
+    @impl true
     def monitor(%{pid: pid}) when is_pid(pid), do: Process.monitor(pid)
     def monitor(_session), do: nil
   end
@@ -322,6 +326,10 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
 
     @impl true
     def steer(%{pid: pid}, request), do: GenServer.call(pid, {:steer, request})
+
+    @impl true
+    def answer_permission(_session, _answer),
+      do: {:error, :not_used_in_this_test}
 
     @impl true
     def monitor(%{pid: pid}) when is_pid(pid), do: Process.monitor(pid)

@@ -91,6 +91,12 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
     end
 
     @impl true
+    def answer_permission(%{test: test_pid}, answer) do
+      send(test_pid, {:approval_answered, answer})
+      :ok
+    end
+
+    @impl true
     def monitor(%{pid: pid}) when is_pid(pid), do: Process.monitor(pid)
     def monitor(_session), do: nil
   end
@@ -609,6 +615,38 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       # the whole falsifier -- it can only arrive if the guard was cleared.
       send(driver, {:surface_command, %{type: :steer, payload: %{text: "two"}}})
       assert_receive {:steer_dispatched, _second}, 2_000
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 5b. approval answers (Track D)
+  # ---------------------------------------------------------------------
+
+  describe "5b. an approval answer reaches the lane" do
+    test "an :approval_answer surface command dispatches the referent triple to the lane" do
+      %{device: device, driver: driver} = new_driver(%{})
+
+      send(
+        driver,
+        {:surface_command,
+         %{
+           type: :approval_answer,
+           payload: %{
+             request_id: "req-1",
+             option_id: "allow-once",
+             decision: :allow
+           }
+         }}
+      )
+
+      # The lane receives exactly what the surface resolved -- the concrete
+      # option the operator chose, not the raw keystroke.
+      assert_receive {:approval_answered,
+                      %{option_id: "allow-once", decision: :allow}},
+                     2_000
+
+      # Acknowledgment is footer-visible (event-observed seal aside).
+      eventually(fn -> strip_ansi(raw(device)) =~ "approval answer sent" end)
     end
   end
 

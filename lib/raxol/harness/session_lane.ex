@@ -127,6 +127,32 @@ defmodule Raxol.Harness.SessionLane do
   @callback submit(session(), request :: map()) :: :ok | {:error, term()}
 
   @doc """
+  Answer a pending approval (the ACP `session/request_permission` the
+  agent parked, blocking its turn task). `answer` carries `:request_id`
+  (the correlation id echoed back so the agent matches the parked
+  request), `:option_id` (the concrete `PermissionOption` the operator
+  chose -- the referent, resolved by `Raxol.Harness.Surface` from the
+  live block's actual options), and `:decision` (`:allow`/`:deny`, a
+  best-effort class hint for the caller's own notice).
+
+  Like `interrupt/2`, this is **fire-and-forget with an EVENT-OBSERVED
+  acknowledgment**: the lane replies to the parked ACP request with the
+  chosen option AND emits a durable `approval_decided` event on the SAME
+  stream `subscribe/1` delivers. That event -- not any reply here -- is
+  what folds the decision receipt into the live approval block and
+  releases the seal frontier (see `Raxol.Harness.Projection.BlockBuilder`).
+  So this callback defines no reply payload beyond dispatch success.
+
+  Fail-closed is INHERITED, not re-implemented here: if the surface dies
+  or disconnects before an answer is ever dispatched, the agent-side ACP
+  session denies the parked request on its own (its cancel/disconnect
+  path replies `{:ok, :cancelled}` to every pending permission). A lane
+  need only handle the answers it actually receives.
+  """
+  @callback answer_permission(session(), answer :: map()) ::
+              :ok | {:error, term()}
+
+  @doc """
   Monitor the session process for death honesty (`Process.monitor/1`
   under the hood on the agent side). Returns `nil` when there is no
   `:pid` to monitor -- a session handle that never carried a pid is not

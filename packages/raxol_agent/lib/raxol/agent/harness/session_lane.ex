@@ -197,6 +197,36 @@ defmodule Raxol.Agent.Harness.SessionLane do
   end
 
   @doc """
+  Fire-and-forget approval-answer dispatch (Track D). Builds the wire map
+  `%{"type" => "approval_decision", "payload" => answer}` and runs it
+  through `Raxol.Agent.Command.decode/1` (the one validation seam -- it
+  requires the `option_id` referent) before `Raxol.Agent.Command.route/2`,
+  exactly like `interrupt/2`. `answer` is passed through as-is;
+  `Command.decode/1` reads its fields under either atom or string keys.
+
+  Acknowledgment is EVENT-OBSERVED (see the behaviour's moduledoc): the
+  runtime consumer of the routed `{:approval_decision, ...}` action replies
+  to the parked ACP request with the chosen option and journals the durable
+  `approval_decided` event that seals the harness block. This returns `:ok`
+  once the answer decodes and is routed, or `{:error, reason}` when the
+  answer fails `Command.decode/1`'s validation (e.g. a missing `option_id`).
+  """
+  @impl Raxol.Harness.SessionLane
+  @spec answer_permission(session(), map()) :: :ok | {:error, term()}
+  def answer_permission(session, answer) when is_map(answer) do
+    wire = %{"type" => "approval_decision", "payload" => answer}
+
+    case Command.decode(wire) do
+      {:ok, cmd} ->
+        Command.route(cmd, session)
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   `Process.monitor/1` on the session's `:pid`, when present. `nil` when
   the session handle carries no pid -- nothing to watch.
   """

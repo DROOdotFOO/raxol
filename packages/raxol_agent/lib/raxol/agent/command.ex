@@ -55,7 +55,7 @@ defmodule Raxol.Agent.Command do
   @enforce_keys [:type]
   defstruct type: nil, payload: %{}
 
-  @type type :: :prompt | :interrupt | :attach | :seek | :steer
+  @type type :: :prompt | :interrupt | :attach | :seek | :steer | :approval_decision
 
   @type t :: %__MODULE__{
           type: type(),
@@ -76,6 +76,7 @@ defmodule Raxol.Agent.Command do
           {:start_turn, term(), map()}
           | {:interrupt, term(), map()}
           | {:steer, term(), map()}
+          | {:approval_decision, term(), map()}
 
   # Whitelisted string → atom for the `type` field. Never String.to_atom/1 on
   # user input (unbounded atom table growth).
@@ -84,7 +85,8 @@ defmodule Raxol.Agent.Command do
     "interrupt" => :interrupt,
     "attach" => :attach,
     "seek" => :seek,
-    "steer" => :steer
+    "steer" => :steer,
+    "approval_decision" => :approval_decision
   }
 
   # Whitelisted history policies for `attach`.
@@ -125,8 +127,7 @@ defmodule Raxol.Agent.Command do
         {:error, {:invalid_command, :not_a_map}}
 
       {:error, %Jason.DecodeError{} = error} ->
-        {:error,
-         {:invalid_command, {:malformed_json, decode_error_message(error)}}}
+        {:error, {:invalid_command, {:malformed_json, decode_error_message(error)}}}
     end
   end
 
@@ -167,6 +168,17 @@ defmodule Raxol.Agent.Command do
 
   def route(%__MODULE__{type: :steer, payload: payload}, session) do
     dispatch(session, {:steer, session_id(session), payload})
+  end
+
+  # The live-approval answer (Track D). Delivered to the session runtime as
+  # `{:approval_decision, session_id, payload}` -- the same dispatch seam
+  # `:interrupt`/`:steer` use. The runtime consumer replies to the parked
+  # ACP `session/request_permission` with the chosen `option_id` and
+  # journals the durable `approval_decided` event the harness folds into
+  # the block; the payload always carries `option_id` (the referent the
+  # operator chose), plus `request_id`/`decision` when present.
+  def route(%__MODULE__{type: :approval_decision, payload: payload}, session) do
+    dispatch(session, {:approval_decision, session_id(session), payload})
   end
 
   def route(%__MODULE__{type: type}, _session) when type in [:attach, :seek] do
@@ -232,6 +244,26 @@ defmodule Raxol.Agent.Command do
     end
   end
 
+  # `option_id` is the REFERENT the operator chose (the concrete ACP
+  # `PermissionOption`); it is required -- an answer with no option is not
+  # an answer. `request_id` (correlation) and `decision` (an allow/deny
+  # class hint) ride along when the surface supplied them.
+  defp validate(:approval_decision, payload) do
+    case get(payload, "option_id", :option_id) do
+      option_id when is_binary(option_id) and option_id != "" ->
+        {:ok, approval_decision_payload(option_id, payload)}
+
+      nil ->
+        {:error, {:invalid_command, :missing_option_id}}
+
+      "" ->
+        {:error, {:invalid_command, :empty_option_id}}
+
+      _other ->
+        {:error, {:invalid_command, :invalid_option_id}}
+    end
+  end
+
   defp validate(:attach, payload) do
     with {:ok, offset} <- fetch_offset(payload, "from_offset", :from_offset),
          {:ok, policy} <- fetch_history_policy(payload) do
@@ -253,6 +285,15 @@ defmodule Raxol.Agent.Command do
       _ -> base
     end
   end
+
+  defp approval_decision_payload(option_id, payload) do
+    %{option_id: option_id}
+    |> put_if(:request_id, get(payload, "request_id", :request_id))
+    |> put_if(:decision, get(payload, "decision", :decision))
+  end
+
+  defp put_if(map, _key, nil), do: map
+  defp put_if(map, key, value), do: Map.put(map, key, value)
 
   # Reuses the exact rules/reasons `validate(:prompt, _)` uses for its own
   # required `text` field (:missing_text / :empty_text / :invalid_text) —

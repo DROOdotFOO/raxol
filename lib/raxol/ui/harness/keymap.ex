@@ -245,7 +245,8 @@ defmodule Raxol.UI.Harness.Keymap do
           optional(:composing?) => boolean(),
           optional(:streaming?) => boolean(),
           optional(:focused_block_id) => term(),
-          optional(:overlay_open?) => boolean()
+          optional(:overlay_open?) => boolean(),
+          optional(:approval_pending?) => boolean()
         }
 
   @type command_type ::
@@ -262,10 +263,11 @@ defmodule Raxol.UI.Harness.Keymap do
           | :open_panel
           | :expand_diff
           | :open_search_picker
+          | :approval_answer
 
   @type command :: %{type: command_type(), payload: map()}
 
-  @type guard :: :always | :not_composing | :overlay
+  @type guard :: :always | :not_composing | :overlay | :awaiting_approval
 
   @type bind :: %{
           required(:command_type) => command_type(),
@@ -276,6 +278,43 @@ defmodule Raxol.UI.Harness.Keymap do
           optional(:label) => String.t(),
           optional(:payload) => map()
         }
+
+  # The live-approval answer binds (Track D). All plain printable keys,
+  # all guarded `:awaiting_approval` -- they resolve to an answer ONLY when
+  # a live approval block is holding the frontier AND the composer is not
+  # focused, so they never steal a letter or digit out of typed text (the
+  # exact no-steal contract `:not_composing` enforces for `z`/`j`/`k`,
+  # tightened further by also requiring a pending question). `y`/`n` are
+  # aliases for the first allow/deny option; `1`-`9` pick the Nth option by
+  # position. The payload carries the raw ANSWER HINT; `Raxol.Harness.
+  # Surface` resolves it against the live block's actual options into a
+  # concrete `option_id` (the referent), refusing honestly if it cannot.
+  # Deliberately UNLABELED (no palette entry): an answer is meaningful only
+  # against a live question on screen, never as a free-floating palette
+  # action -- same reasoning that leaves `:overlay_dismiss` unlabeled.
+  @approval_binds [
+    %{
+      char: "y",
+      command_type: :approval_answer,
+      guard: :awaiting_approval,
+      payload: %{answer: :allow}
+    },
+    %{
+      char: "n",
+      command_type: :approval_answer,
+      guard: :awaiting_approval,
+      payload: %{answer: :deny}
+    }
+    | for {digit, index} <-
+            Enum.with_index(~w(1 2 3 4 5 6 7 8 9)) do
+        %{
+          char: digit,
+          command_type: :approval_answer,
+          guard: :awaiting_approval,
+          payload: %{answer: {:option, index}}
+        }
+      end
+  ]
 
   # Plain keys only (v1) -- see moduledoc's "tui-steal rule": a future chord
   # (e.g. requiring :ctrl) is a new field on the matching entry, not a
@@ -288,112 +327,128 @@ defmodule Raxol.UI.Harness.Keymap do
   # match a single normalized event, so their relative order remains
   # incidental.
   @binds [
-    %{key: :escape, command_type: :overlay_dismiss, guard: :overlay},
-    %{
-      key: :escape,
-      command_type: :interrupt,
-      guard: :always,
-      label: "interrupt turn"
-    },
-    %{key: :tab, command_type: :steer, guard: :always, label: "queue steer"},
-    # Ctrl+E: hand the composer draft to $EDITOR. A `char:`-kind bind that
-    # DECLARES `mods:` -- the tui-steal promise cashing in for char-kind
-    # binds (see the moduledoc): the match spec grew a `mods:` field, the
-    # walking loop did not change. A ctrl chord can never be typed text
-    # (`InputEvent.printable_char/1` is nil under ctrl), so this is
-    # `:always`, same class as ESC/Tab; the command acts on the composer's
-    # buffer whether or not the composer has focus.
-    %{
-      char: "e",
-      mods: %{ctrl: true, alt: false, shift: false, meta: false},
-      command_type: :edit_draft,
-      guard: :always,
-      label: "edit draft in external editor"
-    },
-    %{
-      char: "z",
-      command_type: :fold_toggle,
-      guard: :not_composing,
-      label: "toggle fold"
-    },
-    %{
-      char: "j",
-      command_type: :jump_next,
-      guard: :not_composing,
-      label: "next block"
-    },
-    %{
-      char: "k",
-      command_type: :jump_prev,
-      guard: :not_composing,
-      label: "previous block"
-    },
-    # Expand the focused diff block full-screen (see the moduledoc's
-    # `:not_composing` bullet). Plain "e" cannot collide with the Ctrl+E
-    # chord above: `InputEvent.printable_char/1` is nil whenever ctrl is
-    # held, so a Ctrl+E keypress never reaches this bind's match clause.
-    %{
-      char: "e",
-      command_type: :expand_diff,
-      guard: :not_composing,
-      label: "expand diff full-screen"
-    },
-    # Ctrl+P: same chord shape as Ctrl+E above -- a ctrl chord is never
-    # typed text, so this is `:always` too.
-    %{
-      char: "p",
-      mods: %{ctrl: true, alt: false, shift: false, meta: false},
-      command_type: :open_palette,
-      guard: :always,
-      label: "command palette"
-    },
-    %{
-      char: "g",
-      command_type: :open_jump_picker,
-      guard: :not_composing,
-      label: "jump to block"
-    },
-    %{
-      char: "s",
-      command_type: :open_session_picker,
-      guard: :not_composing,
-      label: "switch session"
-    },
-    # Printable-letter binds, same guard class as z/j/k: they only resolve
-    # in transcript-browse mode, never stealing a letter out of the
-    # composer's typed text. The `label:` makes them palette entries
-    # automatically (palette_binds/0 derives from labels). "p" is NOT
-    # used for plan -- Ctrl+P is the palette chord, and a bare "p" beside
-    # it invites slips -- so "n" is used instead. The payload discriminates
-    # which panel kind one shared :open_panel command type opens.
-    %{
-      char: "w",
-      command_type: :open_panel,
-      guard: :not_composing,
-      payload: %{panel: :worktracks},
-      label: "worktracks panel"
-    },
-    %{
-      char: "m",
-      command_type: :open_panel,
-      guard: :not_composing,
-      payload: %{panel: :memory},
-      label: "memory panel"
-    },
-    %{
-      char: "n",
-      command_type: :open_panel,
-      guard: :not_composing,
-      payload: %{panel: :plan},
-      label: "plan panel"
-    },
-    %{
-      char: "/",
-      command_type: :open_search_picker,
-      guard: :not_composing,
-      label: "search transcript"
-    }
-  ]
+           %{key: :escape, command_type: :overlay_dismiss, guard: :overlay},
+           %{
+             key: :escape,
+             command_type: :interrupt,
+             guard: :always,
+             label: "interrupt turn"
+           },
+           %{
+             key: :tab,
+             command_type: :steer,
+             guard: :always,
+             label: "queue steer"
+           },
+           # Ctrl+E: hand the composer draft to $EDITOR. A `char:`-kind bind that
+           # DECLARES `mods:` -- the tui-steal promise cashing in for char-kind
+           # binds (see the moduledoc): the match spec grew a `mods:` field, the
+           # walking loop did not change. A ctrl chord can never be typed text
+           # (`InputEvent.printable_char/1` is nil under ctrl), so this is
+           # `:always`, same class as ESC/Tab; the command acts on the composer's
+           # buffer whether or not the composer has focus.
+           %{
+             char: "e",
+             mods: %{ctrl: true, alt: false, shift: false, meta: false},
+             command_type: :edit_draft,
+             guard: :always,
+             label: "edit draft in external editor"
+           }
+           # The live-approval answer binds are spliced in HERE, ahead of every
+           # `:not_composing` letter bind below. Order is load-bearing for exactly
+           # one collision: `n` is also the plan-panel bind further down. First
+           # match wins (`resolve/2` walks in order), so while a question is live
+           # (`:awaiting_approval` passing) `n` must resolve to DENY, not open the
+           # plan panel -- putting the approval binds first guarantees it, and
+           # when no question is live the `:awaiting_approval` guard fails and `n`
+           # falls straight through to the plan-panel bind exactly as before.
+         ] ++
+           @approval_binds ++
+           [
+             %{
+               char: "z",
+               command_type: :fold_toggle,
+               guard: :not_composing,
+               label: "toggle fold"
+             },
+             %{
+               char: "j",
+               command_type: :jump_next,
+               guard: :not_composing,
+               label: "next block"
+             },
+             %{
+               char: "k",
+               command_type: :jump_prev,
+               guard: :not_composing,
+               label: "previous block"
+             },
+             # Expand the focused diff block full-screen (see the moduledoc's
+             # `:not_composing` bullet). Plain "e" cannot collide with the Ctrl+E
+             # chord above: `InputEvent.printable_char/1` is nil whenever ctrl is
+             # held, so a Ctrl+E keypress never reaches this bind's match clause.
+             %{
+               char: "e",
+               command_type: :expand_diff,
+               guard: :not_composing,
+               label: "expand diff full-screen"
+             },
+             # Ctrl+P: same chord shape as Ctrl+E above -- a ctrl chord is never
+             # typed text, so this is `:always` too.
+             %{
+               char: "p",
+               mods: %{ctrl: true, alt: false, shift: false, meta: false},
+               command_type: :open_palette,
+               guard: :always,
+               label: "command palette"
+             },
+             %{
+               char: "g",
+               command_type: :open_jump_picker,
+               guard: :not_composing,
+               label: "jump to block"
+             },
+             %{
+               char: "s",
+               command_type: :open_session_picker,
+               guard: :not_composing,
+               label: "switch session"
+             },
+             # Printable-letter binds, same guard class as z/j/k: they only resolve
+             # in transcript-browse mode, never stealing a letter out of the
+             # composer's typed text. The `label:` makes them palette entries
+             # automatically (palette_binds/0 derives from labels). "p" is NOT
+             # used for plan -- Ctrl+P is the palette chord, and a bare "p" beside
+             # it invites slips -- so "n" is used instead. The payload discriminates
+             # which panel kind one shared :open_panel command type opens.
+             %{
+               char: "w",
+               command_type: :open_panel,
+               guard: :not_composing,
+               payload: %{panel: :worktracks},
+               label: "worktracks panel"
+             },
+             %{
+               char: "m",
+               command_type: :open_panel,
+               guard: :not_composing,
+               payload: %{panel: :memory},
+               label: "memory panel"
+             },
+             %{
+               char: "n",
+               command_type: :open_panel,
+               guard: :not_composing,
+               payload: %{panel: :plan},
+               label: "plan panel"
+             },
+             %{
+               char: "/",
+               command_type: :open_search_picker,
+               guard: :not_composing,
+               label: "search transcript"
+             }
+           ]
 
   # Structural guard for the one load-bearing ordering above: the
   # `:overlay` escape bind must precede the `:always` escape bind, or an
@@ -546,6 +601,24 @@ defmodule Raxol.UI.Harness.Keymap do
     composing? = Map.get(context, :composing?, true)
     overlay_open? = Map.get(context, :overlay_open?, false)
     not (composing? or overlay_open?)
+  end
+
+  # The live-approval answer guard (Track D): passes only when a live
+  # approval is actually holding the frontier (`approval_pending?: true`)
+  # AND the composer is not focused AND no overlay is open. All three
+  # default to the "do NOT fire the answer" direction -- absent
+  # `approval_pending?` is `false`, absent `composing?` is `true`, absent
+  # `overlay_open?` is `false` -- so a caller that never sets the flags
+  # gets inert `y`/`n`/digit keys (typed text while composing, and
+  # untouched when browsing without a question), never a spurious answer.
+  # This is strictly tighter than `:not_composing`: an answer key is
+  # meaningful ONLY against a live question, so it stays passthrough
+  # everywhere else.
+  defp guard_passes?(%{guard: :awaiting_approval}, context) do
+    composing? = Map.get(context, :composing?, true)
+    overlay_open? = Map.get(context, :overlay_open?, false)
+    approval_pending? = Map.get(context, :approval_pending?, false)
+    approval_pending? and not (composing? or overlay_open?)
   end
 
   # Missing `overlay_open?` defaults to `false` (no overlay) -- the

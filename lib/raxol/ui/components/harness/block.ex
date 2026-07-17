@@ -877,11 +877,17 @@ defmodule Raxol.UI.Components.Harness.Block do
     split_lines(result)
   end
 
-  defp body_lines(%__MODULE__{
-         kind: :approval,
-         content: %{blast_radius: br, options: options}
-       }) do
-    split_lines(br) ++ options_lines(options)
+  # A live approval renders the REFERENT (the exact tool + args the agent
+  # will run), the blast radius, then the live prompt (numbered options +
+  # the y/n aliases). A sealed approval renders the same referent + blast
+  # radius, then the DECISION RECEIPT (who decided what, when) -- or, when
+  # a turn was canceled while the question was still live, an honest
+  # "canceled before answer" line. `seal` is the whole discriminator, so
+  # this clause matches the full struct rather than the content map.
+  defp body_lines(%__MODULE__{kind: :approval, seal: seal, content: content}) do
+    referent_lines(content) ++
+      split_lines(Map.get(content, :blast_radius)) ++
+      approval_resolution_lines(seal, content)
   end
 
   defp body_lines(%__MODULE__{content: %{text: text}}) do
@@ -890,14 +896,98 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp body_lines(_block), do: []
 
-  defp options_lines(nil), do: []
-  defp options_lines([]), do: []
-
-  defp options_lines(options) when is_list(options) do
-    ["options: " <> Enum.map_join(options, ", ", &to_display_text/1)]
+  # The referent: what the agent will actually execute. Each line is
+  # omitted when the producer did not carry that field (a producer that
+  # only supplied a human-readable `action` shows no tool/args lines,
+  # rather than empty "tool: " chrome).
+  defp referent_lines(content) do
+    [
+      referent_line("tool: ", Map.get(content, :tool_name)),
+      referent_line("args: ", Map.get(content, :args))
+    ]
+    |> Enum.reject(&is_nil/1)
   end
 
-  defp options_lines(other), do: ["options: " <> to_display_text(other)]
+  defp referent_line(_label, nil), do: nil
+  defp referent_line(_label, ""), do: nil
+  defp referent_line(label, value), do: label <> to_display_text(value)
+
+  # LIVE: the question is still open -- render the choices with their
+  # answer keys so the operator can see exactly what pressing each key
+  # does. Numbered options are the producer's actual options (the ACP
+  # `PermissionOption` list); the y/n aliases pick the first allow/deny
+  # option (see `Raxol.Harness.Surface`'s answer resolution).
+  defp approval_resolution_lines(:live, content) do
+    approval_option_lines(Map.get(content, :options))
+  end
+
+  # SEALED: an answered (or canceled) question -- one receipt line. Deny is
+  # as first-class as allow; a turn canceled before the answer (decision
+  # `:cancel`, or absent because the turn ended without one) renders its
+  # resolution honestly rather than pretending it was answered.
+  defp approval_resolution_lines(:sealed, content),
+    do: [approval_receipt_line(content)]
+
+  defp approval_option_lines(options) when is_list(options) and options != [] do
+    numbered =
+      options
+      |> Enum.with_index(1)
+      |> Enum.map(fn {opt, index} -> "[#{index}] " <> option_label(opt) end)
+
+    ["awaiting approval — number to choose · y allow · n deny:" | numbered]
+  end
+
+  defp approval_option_lines(_no_options),
+    do: ["awaiting approval — y to allow · n to deny"]
+
+  defp option_label(%{name: name}) when is_binary(name), do: name
+  defp option_label(%{label: label}) when is_binary(label), do: label
+  defp option_label(opt) when is_binary(opt), do: opt
+  defp option_label(opt), do: to_display_text(opt)
+
+  defp approval_receipt_line(content) do
+    who = approval_actor(content)
+
+    case normalize_decision(Map.get(content, :decision)) do
+      :allow -> "✓ allowed" <> approval_scope_suffix(content) <> who
+      :deny -> "✗ denied" <> who
+      :cancel -> "⊘ canceled before answer"
+      _unanswered -> "⊘ canceled before answer"
+    end
+  end
+
+  # Reconciles the vocabulary drift across the request/answer/journal
+  # layers: the UI/protocol answer uses `:allow`/`:deny`, the blast-radius
+  # gate journal uses `:approved`/`:denied`. Both (and their wire-string
+  # forms) fold to one render vocabulary here. Anything unrecognised (or
+  # absent) is treated as "no decision" -> the canceled-before-answer line,
+  # the fail-closed reading.
+  defp normalize_decision(d) when d in [:allow, "allow", :approved, "approved"],
+    do: :allow
+
+  defp normalize_decision(d) when d in [:deny, "deny", :denied, "denied"],
+    do: :deny
+
+  defp normalize_decision(d) when d in [:cancel, "cancel", :cancelled],
+    do: :cancel
+
+  defp normalize_decision(_other), do: nil
+
+  defp approval_scope_suffix(content) do
+    case Map.get(content, :scope) do
+      s when s in [:once, "once"] -> " (once)"
+      s when s in [:session, "session"] -> " (session)"
+      s when s in [:root, "root"] -> " (subtree)"
+      _absent -> ""
+    end
+  end
+
+  defp approval_actor(content) do
+    case Map.get(content, :decided_by) do
+      who when is_binary(who) and who != "" -> " by " <> who
+      _absent -> ""
+    end
+  end
 
   defp split_lines(nil), do: []
   defp split_lines(""), do: []
@@ -1103,6 +1193,27 @@ defmodule Raxol.UI.Components.Harness.Block do
   @action_paths [[:action]]
   @blast_radius_paths [[:blast_radius]]
   @options_paths [[:options]]
+  # The REFERENT of an approval question -- the actual tool the agent will
+  # run, not just a human-readable summary that could diverge from it (see
+  # `extract_approval_content/1`'s "referent, not proxy" note). ACP carries
+  # the tool identity inside its `tool_call`; the producer flattens it onto
+  # the `approval_requested` payload so the block renders what the agent
+  # will actually execute.
+  @tool_name_paths [[:tool_name], [:content, :tool_name]]
+  # The correlation id an answer must echo back so the agent can match the
+  # response to the parked permission request. Carried on the block so the
+  # surface's answer path reads it straight off the live block (the
+  # referent), never a side-channel.
+  @request_id_paths [[:request_id]]
+  # The decision receipt, carried by the `approval_decided` event the
+  # answer produces and folded into the SAME block by
+  # `Raxol.Harness.Projection.BlockBuilder`. Every field is absent on a
+  # still-live approval -- read defensively, staying `nil` until answered.
+  @decision_paths [[:decision]]
+  @option_id_paths [[:option_id]]
+  @scope_paths [[:scope]]
+  @decided_by_paths [[:decided_by]]
+  @decided_at_paths [[:decided_at]]
   @path_paths [[:path], [:content, :path]]
   @old_paths [[:old], [:content, :old]]
   @new_paths [[:new], [:content, :new]]
@@ -1229,6 +1340,19 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp find_taint(_events), do: false
 
+  # An approval block folds TWO events when answered: the
+  # `approval_requested` (the question -- action/tool/args/options) and the
+  # `approval_decided` (the receipt -- decision/option/who/when). Both are
+  # searched by `find_in_events/2`; the request carries no decision key and
+  # the decision carries no action key, so first-match extraction keeps
+  # them cleanly separated. A still-live approval folds only the request,
+  # leaving every decision field `nil` -- which is exactly how `Block`'s
+  # own render distinguishes a pending question from an answered one.
+  #
+  # `tool_name`/`args` are the REFERENT, not a proxy: the block renders the
+  # exact tool + arguments the agent will run, never a summary that could
+  # drift from what actually executes. `action` stays the human-readable
+  # gloss; the two coexist.
   defp extract_approval_content(events) do
     action = events |> find_in_events(@action_paths) |> to_display_text()
     # No `|| %{}` fallback here: a blast radius no producer ever supplied
@@ -1240,7 +1364,19 @@ defmodule Raxol.UI.Components.Harness.Block do
     blast_radius = find_in_events(events, @blast_radius_paths)
     options = find_in_events(events, @options_paths) || []
 
-    %{action: action, blast_radius: blast_radius, options: options}
+    %{
+      action: action,
+      request_id: find_in_events(events, @request_id_paths),
+      tool_name: find_in_events(events, @tool_name_paths),
+      args: find_in_events(events, @args_paths),
+      blast_radius: blast_radius,
+      options: options,
+      decision: find_in_events(events, @decision_paths),
+      option_id: find_in_events(events, @option_id_paths),
+      scope: find_in_events(events, @scope_paths),
+      decided_by: find_in_events(events, @decided_by_paths),
+      decided_at: find_in_events(events, @decided_at_paths)
+    }
   end
 
   # No producer resolves the `:diff` kind yet (T7's BlockBuilder only ever

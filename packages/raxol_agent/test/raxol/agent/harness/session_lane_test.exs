@@ -111,6 +111,33 @@ defmodule Raxol.Agent.Harness.SessionLaneTest do
     end
   end
 
+  describe "answer_permission/2" do
+    test "reaches the session pid as {:harness_command, {:approval_decision, sid, payload}}" do
+      session_id = unique_session_id("lane-approval")
+      session = %{session_id: session_id, pid: self()}
+
+      assert :ok =
+               SessionLane.answer_permission(session, %{
+                 request_id: "req-1",
+                 option_id: "allow-once",
+                 decision: :allow
+               })
+
+      assert_receive {:harness_command,
+                      {:approval_decision, ^session_id,
+                       %{option_id: "allow-once", request_id: "req-1"}}}
+    end
+
+    test "an answer with no option_id is refused by the codec (the referent is required)" do
+      session = %{session_id: unique_session_id("lane-approval-bad"), pid: self()}
+
+      assert {:error, {:invalid_command, :missing_option_id}} =
+               SessionLane.answer_permission(session, %{decision: :allow})
+
+      refute_receive {:harness_command, _}, 50
+    end
+  end
+
   describe "steer/2 — legacy (non-ACP) path" do
     test "with no :acp_session the honest {:error, :no_steer_channel} refusal STANDS" do
       session = %{session_id: unique_session_id("lane-steer")}

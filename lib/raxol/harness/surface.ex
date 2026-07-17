@@ -662,6 +662,7 @@ defmodule Raxol.Harness.Surface do
   # scorer's 1024 cap). See `open_search_picker/1`'s doc section.
   @search_label_cap 400
   @stub_interrupt_notice "» interrupt requested (stub — no agent lane in fixture mode)"
+  @stub_approval_notice "» approval answer (stub — no agent lane in fixture mode)"
 
   # The footer-group vocabulary `put_debug_highlight/2` accepts -- exactly
   # the group keys `footer_frame/1` composes (both clauses), one highlight
@@ -2390,8 +2391,19 @@ defmodule Raxol.Harness.Surface do
 
     turn_completed? = last_loop != nil and last_loop == last_turn_completed
 
-    needs_input? =
-      last_loop != nil and event_field(last_loop, :type) == :approval_requested
+    # PROXY RETIRED (Track D): this was
+    #   `last_loop != nil and last_loop.type == :approval_requested`
+    # -- a heuristic on the LAST event that diverges from the truth the
+    # moment any event follows an unanswered approval (the last event is
+    # then no longer `:approval_requested`, yet the question is still live
+    # and still holding the frontier). The honest signal is the REFERENT:
+    # is a live approval block actually on screen, awaiting an answer? That
+    # is exactly what holds the seal frontier, so the status "needs-input"
+    # flag and the frontier gate now read from one source and can never
+    # disagree. (`model.projection` is already set for this frame -- see
+    # `run_advance/2` -- so this reads the current block list, not a stale
+    # one.)
+    needs_input? = live_approval_block(model) != nil
 
     cost =
       if last_turn_completed,
@@ -2488,9 +2500,128 @@ defmodule Raxol.Harness.Surface do
       # "Full-screen diff expansion" section): an open expansion
       # suppresses the same `:not_composing` binds (and captures ESC as
       # `:overlay_dismiss`) an open overlay picker would.
-      overlay_open?: model.overlay != nil or model.expansion != nil
+      overlay_open?: model.overlay != nil or model.expansion != nil,
+      # Track D: the answer-key guard (`:awaiting_approval`) fires only
+      # while a live approval block is genuinely holding the frontier --
+      # the SAME referent the frontier's pending-input gate keys on
+      # (`live_approval_block/1`), never a proxy for it.
+      approval_pending?: live_approval_block(model) != nil
     }
   end
+
+  # The live approval block currently awaiting an answer (the one holding
+  # the seal frontier), or `nil`. THE referent for "is a question on
+  # screen" -- reused by `keymap_context/1` (answer-key guard) and
+  # `dispatch_command/2` (resolving an answer hint to a concrete option),
+  # and the honest replacement for the old last-event-type proxy in
+  # `update_status/3`. First live approval by projection order: there is
+  # never more than one unanswered at a time (each blocks the turn), but
+  # first-match is well-defined regardless.
+  @spec live_approval_block(t()) :: Block.t() | nil
+  def live_approval_block(model) do
+    model.projection.blocks
+    |> Enum.find(&awaiting_input?/1)
+  end
+
+  # Resolves a keyboard answer HINT against the live approval block's
+  # actual options -- the honesty seam between "a key was pressed" and "a
+  # concrete decision was sent to the agent." Returns the referent triple
+  # `{request_id, option_id, decision}` the agent can act on, or an
+  # `{:error, reason}` a caller turns into an honest refusal (never a
+  # phantom answer):
+  #
+  #   * `{:option, i}` -- the Nth option shown, by position; refused when
+  #     `i` is past the option list.
+  #   * `:allow` / `:deny` -- the first option whose kind is an
+  #     allow-/reject-class option (the `y`/`n` aliases); refused when the
+  #     producer offered no option of that class.
+  #
+  # `:no_live_approval` when nothing is awaiting an answer at all.
+  @spec resolve_approval_answer(t(), term()) ::
+          {:ok, %{request_id: term(), option_id: term(), decision: atom()}}
+          | {:error, atom()}
+  defp resolve_approval_answer(model, hint) do
+    case live_approval_block(model) do
+      nil ->
+        {:error, :no_live_approval}
+
+      block ->
+        content = block.content
+        options = Map.get(content, :options, [])
+
+        case answer_option(options, hint) do
+          {:ok, option_id, decision} ->
+            {:ok,
+             %{
+               request_id: Map.get(content, :request_id),
+               option_id: option_id,
+               decision: decision
+             }}
+
+          {:error, _reason} = err ->
+            err
+        end
+    end
+  end
+
+  defp answer_option(options, {:option, index})
+       when is_list(options) and is_integer(index) do
+    case Enum.at(options, index) do
+      nil -> {:error, :no_such_option}
+      option -> {:ok, option_id_of(option), decision_of(option)}
+    end
+  end
+
+  defp answer_option(options, decision)
+       when is_list(options) and decision in [:allow, :deny] do
+    case Enum.find(options, &(decision_of(&1) == decision)) do
+      nil -> {:error, :no_matching_option}
+      option -> {:ok, option_id_of(option), decision}
+    end
+  end
+
+  defp answer_option(_options, _hint), do: {:error, :unanswerable}
+
+  defp option_id_of(%{option_id: id}), do: id
+  defp option_id_of(%{"option_id" => id}), do: id
+  defp option_id_of(option) when is_binary(option), do: option
+  defp option_id_of(_option), do: nil
+
+  # An option's decision CLASS, from its ACP kind. Unknown/absent kind is
+  # fail-closed to `:deny` for the `y`/`n` alias search -- a `y` must never
+  # match an option whose safety class we cannot establish. (The `option_id`
+  # remains the authoritative thing sent to the agent regardless; the agent
+  # re-derives the canonical decision for its own `approval_decided`.)
+  defp decision_of(%{kind: kind}), do: decision_from_kind(kind)
+  defp decision_of(%{"kind" => kind}), do: decision_from_kind(kind)
+  defp decision_of(_option), do: :deny
+
+  defp decision_from_kind(kind)
+       when kind in [:allow_once, :allow_always, "allow_once", "allow_always"],
+       do: :allow
+
+  defp decision_from_kind(kind)
+       when kind in [
+              :reject_once,
+              :reject_always,
+              "reject_once",
+              "reject_always"
+            ],
+       do: :deny
+
+  defp decision_from_kind(_kind), do: :deny
+
+  defp approval_refusal_notice(:no_live_approval),
+    do: "» no approval is awaiting an answer"
+
+  defp approval_refusal_notice(:no_such_option),
+    do: "» no such approval option"
+
+  defp approval_refusal_notice(:no_matching_option),
+    do: "» this approval offers no such choice"
+
+  defp approval_refusal_notice(_reason),
+    do: "» cannot answer that approval"
 
   # The hosted overlay's own module (see the `overlay()` typedoc) --
   # `OverlayPicker` for the filterable pickers, or an explicitly-stamped
@@ -2646,6 +2777,42 @@ defmodule Raxol.Harness.Surface do
 
   defp dispatch_command(model, %{type: :interrupt}) do
     %{model | stub_notice: @stub_interrupt_notice}
+  end
+
+  # Live command_sink: answer the pending approval. The keymap emits only
+  # an ANSWER HINT (`:allow`/`:deny`/`{:option, i}`) -- this clause
+  # resolves it against the live block's ACTUAL options into a concrete
+  # `option_id` (the referent the agent parked), then hands
+  # `{request_id, option_id, decision}` to the sink. The real seal is
+  # event-observed: the agent lane replies to ACP and emits the
+  # `approval_decided` event that folds the receipt into this block and
+  # releases the frontier (see `Raxol.Harness.Projection.BlockBuilder`).
+  # A hint that resolves to nothing (no live question, or an option index
+  # past the list) never reaches the sink -- it becomes an honest refusal
+  # notice, so a stray key can never fire a phantom decision at the agent.
+  defp dispatch_command(%{command_sink: sink} = model, %{
+         type: :approval_answer,
+         payload: payload
+       })
+       when is_function(sink, 1) do
+    case resolve_approval_answer(model, Map.get(payload, :answer)) do
+      {:ok, answer} ->
+        # Dispatch and leave the model otherwise unchanged -- the embedder
+        # owns the sent/failed notice (driver's `:approval_answer` handler)
+        # and the real acknowledgment is event-observed (the
+        # `approval_decided` event seals the block), exactly as `:interrupt`
+        # above. A surface-side refusal below is the one thing the embedder
+        # cannot know, so only that path sets a notice here.
+        sink.(%{type: :approval_answer, payload: answer})
+        model
+
+      {:error, reason} ->
+        put_lane_notice(model, approval_refusal_notice(reason))
+    end
+  end
+
+  defp dispatch_command(model, %{type: :approval_answer}) do
+    %{model | stub_notice: @stub_approval_notice}
   end
 
   # Only the `:always` Ctrl+P chord can ever fire this clause with an

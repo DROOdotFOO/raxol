@@ -45,6 +45,7 @@ defmodule Raxol.Harness.Fixture do
     "turn_completed" => :turn_completed,
     "state_change" => :state_change,
     "approval_requested" => :approval_requested,
+    "approval_decided" => :approval_decided,
     "error" => :error,
     "idle" => :idle
   }
