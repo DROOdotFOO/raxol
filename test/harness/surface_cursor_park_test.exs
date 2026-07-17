@@ -217,6 +217,34 @@ defmodule Raxol.Harness.SurfaceCursorParkTest do
       assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 2)
     end
 
+    test "a readline word-left (Alt+Left) parks at the word start" do
+      {model, device} = new_model()
+
+      model =
+        InputParser.parse("foo bar")
+        |> Enum.reduce(model, &Surface.handle_input(&2, &1))
+
+      # Alt+Left over the raw-ANSI wire: CSI 1;3D.
+      [alt_left] = InputParser.parse("\e[1;3D")
+
+      prior = byte_size(raw(device))
+      model = Surface.handle_input(model, alt_left)
+
+      # Cursor jumps to the start of "bar" (logical col 4) -> park col 5.
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 5)
+
+      # Ctrl+W with the cursor before "bar" deletes everything back to the
+      # line start ("foo "), leaving "bar"; the park follows to col 1.
+      [ctrl_w] = InputParser.parse(<<0x17>>)
+      prior = byte_size(raw(device))
+      model = Surface.handle_input(model, ctrl_w)
+
+      assert Raxol.UI.Components.Harness.Composer.value(model.composer) ==
+               "bar"
+
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 1)
+    end
+
     test "a wide grapheme (CJK) advances the park by two cells" do
       {model, device} = new_model()
 

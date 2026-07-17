@@ -1107,6 +1107,279 @@ defmodule Raxol.UI.Components.Harness.ComposerTest do
     end
   end
 
+  # -- readline word/line editing chords (V's field report: cmd-left/
+  # right/backspace "don't work" -- macOS terminals intercept Cmd; the
+  # portable fix is the readline vocabulary that reaches a terminal app,
+  # implemented on the LOGICAL draft) ---------------------------------
+  describe "readline word motion" do
+    test "Alt+Left jumps to the previous word start (next insert lands there)" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "foo bar baz")
+
+      {state, _} = press(state, :left, [:alt])
+      # cursor at start of "baz" (col 8)
+      {state, _} = press(state, "X")
+
+      assert Composer.value(state) == "foo bar Xbaz"
+    end
+
+    test "Ctrl+Left is word-left too (terminal sends CSI 1;5D)" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "foo bar baz")
+
+      {state, _} = press(state, :left, [:ctrl])
+      {state, _} = press(state, "X")
+
+      assert Composer.value(state) == "foo bar Xbaz"
+    end
+
+    test "word-left from mid-word stops at that word's start" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "foo bar baz")
+      {state, _} = press(state, :left)
+      {state, _} = press(state, :left)
+      # cursor at "ba|z"
+      {state, _} = press(state, :left, [:alt])
+      {state, _} = press(state, "X")
+
+      assert Composer.value(state) == "foo bar Xbaz"
+    end
+
+    test "Alt+Right jumps to the end of the next word" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "foo bar baz")
+      {state, _} = press(state, :home)
+
+      {state, _} = press(state, :right, [:alt])
+      {state, _} = press(state, "X")
+
+      # end of "foo" (col 3)
+      assert Composer.value(state) == "fooX bar baz"
+    end
+
+    test "word-right (ESC f) and word-left (ESC b) as readline Alt-char inlets" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "foo bar")
+      {state, _} = press(state, :home)
+
+      {state, _} = press(state, "f", [:alt])
+      {state, _} = press(state, "|")
+      assert Composer.value(state) == "foo| bar"
+
+      {state, _} = press(state, "b", [:alt])
+      {state, _} = press(state, "^")
+      assert Composer.value(state) == "^foo| bar"
+    end
+
+    test "word-left at column 0 crosses to the end of the previous logical line" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "one\\")
+      {state, []} = press(state, :enter)
+      state = type(state, "two")
+      {state, _} = press(state, :home)
+      # cursor at {1, 0}
+      {state, _} = press(state, :left, [:alt])
+      {state, _} = press(state, "X")
+
+      # jumped to end of "one" (logical line 0)
+      assert Composer.value(state) == "oneX\ntwo"
+    end
+
+    test "word-right at end-of-line crosses to the start of the next logical line" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "one\\")
+      {state, []} = press(state, :enter)
+      state = type(state, "two")
+      {state, _} = press(state, :up)
+      {state, _} = press(state, :end)
+      # cursor at end of "one"
+      {state, _} = press(state, :right, [:alt])
+      {state, _} = press(state, "X")
+
+      assert Composer.value(state) == "one\nXtwo"
+    end
+
+    test "word motion treats a CJK run as one word and lands on a grapheme boundary" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "foo 世界")
+
+      {state, _} = press(state, :left, [:alt])
+      {state, _} = press(state, "X")
+
+      assert Composer.value(state) == "foo X世界"
+    end
+
+    test "word ops on a soft-wrapped draft use logical columns, not visual rows" do
+      {:ok, state} = Composer.init(%{id: :c, width: 10, focused: true})
+      state = type(state, "aaaa bbbb cccc")
+
+      {state, _} = press(state, :left, [:ctrl])
+      # logical col 10 (start of "cccc"), regardless of the wrap at 10
+      assert state.mli.cursor_pos == {0, 10}
+      # park projects that onto visual row 1, column 1
+      assert Composer.edit_point(state, 10) == {1, 1}
+    end
+  end
+
+  describe "readline deletion (delete-word-back, kill-line)" do
+    test "Ctrl+W deletes the word before the cursor, leaving the separator" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "foo bar baz")
+
+      {state, _} = press(state, "w", [:ctrl])
+      assert Composer.value(state) == "foo bar "
+
+      {state, _} = press(state, "w", [:ctrl])
+      assert Composer.value(state) == "foo "
+    end
+
+    test "Alt/Option+Backspace also deletes the word back (ESC DEL)" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "hello world")
+
+      {state, _} = press(state, :backspace, [:alt])
+
+      assert Composer.value(state) == "hello "
+    end
+
+    test "delete-word-back at column 0 removes the joining newline" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "one\\")
+      {state, []} = press(state, :enter)
+      state = type(state, "two")
+      {state, _} = press(state, :home)
+
+      {state, _} = press(state, "w", [:ctrl])
+
+      assert Composer.value(state) == "onetwo"
+    end
+
+    test "delete-word-back removes a CJK word as a unit" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "foo 世界")
+
+      {state, _} = press(state, "w", [:ctrl])
+
+      assert Composer.value(state) == "foo "
+    end
+
+    test "Ctrl+U kills from the cursor to the line start" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "abc def")
+      {state, _} = press(state, :left, [:alt])
+      # cursor before "def"
+      {state, _} = press(state, "u", [:ctrl])
+
+      assert Composer.value(state) == "def"
+    end
+
+    test "Ctrl+K kills from the cursor to the line end" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "abc def")
+      {state, _} = press(state, :home)
+
+      {state, _} = press(state, "k", [:ctrl])
+
+      assert Composer.value(state) == ""
+    end
+
+    test "Ctrl+U / Ctrl+K on a multi-line draft touch only the current logical line" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "one\\")
+      {state, []} = press(state, :enter)
+      state = type(state, "two")
+      # cursor at end of "two" (line 1)
+      {state, _} = press(state, "u", [:ctrl])
+
+      assert Composer.value(state) == "one\n"
+    end
+
+    test "kill ops at a no-op position leave the draft unchanged" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "abc")
+
+      # Ctrl+K at end-of-line deletes nothing.
+      {state_k, _} = press(state, "k", [:ctrl])
+      assert Composer.value(state_k) == "abc"
+
+      # Ctrl+U at column 0 deletes nothing.
+      {state, _} = press(state, :home)
+      {state_u, _} = press(state, "u", [:ctrl])
+      assert Composer.value(state_u) == "abc"
+    end
+  end
+
+  describe "readline line motion (Ctrl+A / Ctrl+E, Cmd aliases)" do
+    test "Ctrl+A moves to line start, Ctrl+E to line end" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "abc")
+
+      {state, _} = press(state, "a", [:ctrl])
+      {state, _} = press(state, "<")
+      assert Composer.value(state) == "<abc"
+
+      {state, _} = press(state, "e", [:ctrl])
+      {state, _} = press(state, ">")
+      assert Composer.value(state) == "<abc>"
+    end
+
+    test "Cmd+Left / Cmd+Right alias to line start / end (when a terminal forwards Cmd)" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "abc")
+
+      {state, _} = press(state, :left, [:meta])
+      {state, _} = press(state, "<")
+      assert Composer.value(state) == "<abc"
+
+      {state, _} = press(state, :right, [:meta])
+      {state, _} = press(state, ">")
+      assert Composer.value(state) == "<abc>"
+    end
+
+    test "Cmd+Backspace aliases to kill-to-line-start" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "abc def")
+      {state, _} = press(state, :left, [:alt])
+
+      {state, _} = press(state, :backspace, [:meta])
+
+      assert Composer.value(state) == "def"
+    end
+
+    test "Ctrl+C/V/X still delegate to MultiLineInput (not swallowed as readline)" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "abc")
+
+      # Ctrl+X (cut with no selection) is a MLI no-op on value, but must
+      # not be intercepted as a readline op -- the draft is untouched.
+      {new_state, _} = press(state, "x", [:ctrl])
+      assert Composer.value(new_state) == "abc"
+    end
+  end
+
+  # -- byte-arrival: the one chord InputParser had to newly surface -----
+  describe "InputParser surfaces Alt+Backspace (ESC DEL)" do
+    alias Raxol.Terminal.ANSI.InputParser
+
+    test "ESC DEL parses to a backspace WITH the alt modifier (was a bare backspace)" do
+      [event] = InputParser.parse(<<0x1B, 0x7F>>)
+
+      assert %Raxol.Core.Events.Event{type: :key, data: data} = event
+      assert data.key == :backspace
+      assert data.alt == true
+    end
+
+    test "the ESC-DEL event drives delete-word-back through the composer" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "alpha beta")
+
+      [event] = InputParser.parse(<<0x1B, 0x7F>>)
+      {state, _} = Composer.handle_event(event, state, default_context())
+
+      assert Composer.value(state) == "alpha "
+    end
+  end
+
   # The input-zone parity guard: the whole point of the b3fdbe94f split is
   # that the logical draft is the single edit truth and every visual thing
   # -- the wrapped rows, the cursor park -- is a ONE-WAY projection of it.
@@ -1154,8 +1427,40 @@ defmodule Raxol.UI.Components.Harness.ComposerTest do
         StreamData.constant(:up),
         StreamData.constant(:down),
         StreamData.constant(:home),
-        StreamData.constant(:end)
+        StreamData.constant(:end),
+        # readline word/line ops -- also one-way projections of the
+        # logical draft, so they must preserve every parity invariant.
+        StreamData.constant(:word_left),
+        StreamData.constant(:word_right),
+        StreamData.constant(:delete_word_back),
+        StreamData.constant(:kill_to_start),
+        StreamData.constant(:kill_to_end)
       ])
+    end
+
+    defp apply_op(:word_left, {state, cmds}) do
+      {s, c} = press(state, :left, [:alt])
+      {s, cmds ++ c}
+    end
+
+    defp apply_op(:word_right, {state, cmds}) do
+      {s, c} = press(state, :right, [:alt])
+      {s, cmds ++ c}
+    end
+
+    defp apply_op(:delete_word_back, {state, cmds}) do
+      {s, c} = press(state, :backspace, [:alt])
+      {s, cmds ++ c}
+    end
+
+    defp apply_op(:kill_to_start, {state, cmds}) do
+      {s, c} = press(state, "u", [:ctrl])
+      {s, cmds ++ c}
+    end
+
+    defp apply_op(:kill_to_end, {state, cmds}) do
+      {s, c} = press(state, "k", [:ctrl])
+      {s, cmds ++ c}
     end
 
     defp apply_op({:char, g}, {state, cmds}) do

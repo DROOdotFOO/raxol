@@ -120,6 +120,18 @@ defmodule Raxol.Terminal.ANSI.InputParser do
   defp parse_one(<<27, 79, 72, rest::binary>>), do: {key_event(:home), rest}
   defp parse_one(<<27, 79, 70, rest::binary>>), do: {key_event(:end), rest}
 
+  # Alt/Option+Backspace: ESC DEL. macOS terminals (and readline's
+  # `M-DEL`) send the DEL byte prefixed with ESC for Option+Backspace;
+  # without this clause the generic parse loop drops the lone ESC and the
+  # trailing DEL arrives as a bare backspace, so Option+Backspace was
+  # indistinguishable from Backspace. Surface it as backspace WITH the alt
+  # modifier so the composer can route it to delete-word-back. Placed
+  # before the printable `ESC <char>` clause because DEL (127) is outside
+  # that clause's 32..126 range and would otherwise fall through.
+  defp parse_one(<<27, 127, rest::binary>>) do
+    {key_event(:backspace, alt: true), rest}
+  end
+
   # --- Alt+key: ESC <char> (must come after ESC[ and ESC O) ---
 
   defp parse_one(<<27, char, rest::binary>>) when char >= 32 and char <= 126 do

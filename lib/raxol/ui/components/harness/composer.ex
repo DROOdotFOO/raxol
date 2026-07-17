@@ -83,6 +83,41 @@ defmodule Raxol.UI.Components.Harness.Composer do
   `TextLayout` `:pre_wrap`) and never written back -- see that module
   for the corruption class this rules out.
 
+  ## Editing chords (readline vocabulary)
+
+  Word- and line-level editing uses the READLINE chords that actually
+  reach a terminal application, computed on the logical draft (word
+  boundaries on the logical string, grapheme/`TextMeasure` aware, never
+  on the visual projection):
+
+  | Action                | Chords                                             |
+  | --------------------- | -------------------------------------------------- |
+  | Word left             | Alt+Left, Ctrl+Left, `ESC b` (Option+b as Meta)    |
+  | Word right            | Alt+Right, Ctrl+Right, `ESC f` (Option+f as Meta)  |
+  | Delete word back      | Ctrl+W, Alt/Option+Backspace (`ESC DEL`)           |
+  | Kill to line start    | Ctrl+U                                             |
+  | Kill to line end      | Ctrl+K                                             |
+  | Line start            | Ctrl+A, Home                                        |
+  | Line end              | Ctrl+E, End                                         |
+
+  Word motion skips whitespace then a word run (symmetric both
+  directions); at a logical line edge it crosses the newline (word-left
+  at column 0 goes to the end of the previous logical line, word-right at
+  end-of-line to the start of the next). Delete-word-back removes exactly
+  what word-left would skip -- including the joining newline when the
+  cursor sits at column 0. Kill-to-start/end operate on the CURRENT
+  logical line only (a multi-line backslash-continued draft keeps its
+  other lines).
+
+  **macOS Cmd-chord reality:** Cmd+Left/Right/Backspace are almost always
+  intercepted by the terminal emulator (Terminal.app, iTerm) and never
+  reach this application at all -- confirmed against `InputParser`, they
+  deliver no bytes on a default macOS terminal. The readline family above
+  is the portable fix and what muscle memory falls back to. Where a
+  terminal IS configured to forward a Cmd chord (iTerm can be), Cmd is the
+  `meta` modifier and is aliased here: Cmd+Left -> line start, Cmd+Right
+  -> line end, Cmd+Backspace -> kill-to-line-start.
+
   ## History recall + vertical navigation
 
   Up/Down move the cursor across the wrapped VISUAL rows of the draft
@@ -376,10 +411,79 @@ defmodule Raxol.UI.Components.Harness.Composer do
     handle_enter_key(mods, state)
   end
 
+  # -- readline editing chords (see moduledoc "Editing chords") --------
+  #
+  # All operate on the LOGICAL draft. Left/Right special keys carry the
+  # modifier (Alt/Ctrl = word motion, Meta/Cmd = line motion); the
+  # char-shape chords (Ctrl+W/U/K/A/E, ESC-b/ESC-f) arrive as `kind:
+  # :char` with the modifier held. Anything not in the vocabulary falls
+  # through to MultiLineInput (Ctrl+C/V/X/Z/Y stay its own).
+
+  defp handle_shortcut(%{key: :left, mods: mods}, state, event, context) do
+    cond do
+      mods.ctrl or mods.alt -> word_left(state)
+      mods.meta -> line_start(state)
+      true -> delegate(event, state, context)
+    end
+  end
+
+  defp handle_shortcut(%{key: :right, mods: mods}, state, event, context) do
+    cond do
+      mods.ctrl or mods.alt -> word_right(state)
+      mods.meta -> line_end(state)
+      true -> delegate(event, state, context)
+    end
+  end
+
+  defp handle_shortcut(%{key: :backspace, mods: mods}, state, event, context) do
+    cond do
+      mods.alt -> delete_word_back(state)
+      mods.meta -> kill_to_line_start(state)
+      true -> delegate(event, state, context)
+    end
+  end
+
+  defp handle_shortcut(
+         %{kind: :char, char: char, mods: mods},
+         state,
+         event,
+         context
+       ) do
+    dispatch_readline_char(char, mods, state, event, context)
+  end
+
   defp handle_shortcut(_norm, state, event, context) do
     {new_mli, cmds} = delegate_to_mli(event, state.mli, context)
     {%{state | mli: new_mli}, cmds}
   end
+
+  # The char-shape readline chords. Alt+b/Alt+f are readline's word-jump
+  # (`ESC b`/`ESC f`, the modifier-independent inlet that survives every
+  # terminal); Ctrl+W/U/K/A/E are the control-byte family. Anything else
+  # (Ctrl+C/V/X/Z/Y, ...) delegates to MultiLineInput unchanged.
+  defp dispatch_readline_char("b", %{alt: true}, state, _e, _c),
+    do: word_left(state)
+
+  defp dispatch_readline_char("f", %{alt: true}, state, _e, _c),
+    do: word_right(state)
+
+  defp dispatch_readline_char("w", %{ctrl: true}, state, _e, _c),
+    do: delete_word_back(state)
+
+  defp dispatch_readline_char("u", %{ctrl: true}, state, _e, _c),
+    do: kill_to_line_start(state)
+
+  defp dispatch_readline_char("k", %{ctrl: true}, state, _e, _c),
+    do: kill_to_line_end(state)
+
+  defp dispatch_readline_char("a", %{ctrl: true}, state, _e, _c),
+    do: line_start(state)
+
+  defp dispatch_readline_char("e", %{ctrl: true}, state, _e, _c),
+    do: line_end(state)
+
+  defp dispatch_readline_char(_char, _mods, state, event, context),
+    do: delegate(event, state, context)
 
   defp insert_char(state, nil), do: {state, []}
 
@@ -695,6 +799,151 @@ defmodule Raxol.UI.Components.Harness.Composer do
       vscroll: vscroll
     }
   end
+
+  # -- private: readline word/line editing (on the LOGICAL draft) ------
+  #
+  # Word boundaries are computed on the logical line's graphemes (never
+  # the visual projection), so a soft wrap is invisible to them and a
+  # logical newline IS a boundary. Motion and deletion share
+  # `word_left_target/1`/`word_right_target/1`, so delete-word-back can
+  # never remove something different from what word-left would skip.
+  # MultiLineInput's own word nav is deliberately NOT reused -- its
+  # reverse-length boundary math is off by the kept-suffix length (a
+  # pre-existing bug in that shared module, left for its own consumers).
+
+  defp word_left(state),
+    do: move_cursor_logical(state, word_left_target(state.mli))
+
+  defp word_right(state),
+    do: move_cursor_logical(state, word_right_target(state.mli))
+
+  defp line_start(state) do
+    {row, _col} = state.mli.cursor_pos
+    move_cursor_logical(state, {row, 0})
+  end
+
+  defp line_end(state) do
+    {row, _col} = state.mli.cursor_pos
+    move_cursor_logical(state, {row, logical_line_length(state.mli, row)})
+  end
+
+  defp delete_word_back(state) do
+    origin = state.mli.cursor_pos
+    target = word_left_target(state.mli)
+
+    if target == origin,
+      do: {state, []},
+      else: delete_logical_range(state, target, origin)
+  end
+
+  defp kill_to_line_start(state) do
+    {row, col} = state.mli.cursor_pos
+
+    if col == 0,
+      do: {state, []},
+      else: delete_logical_range(state, {row, 0}, {row, col})
+  end
+
+  defp kill_to_line_end(state) do
+    {row, col} = state.mli.cursor_pos
+    eol = logical_line_length(state.mli, row)
+
+    if col >= eol,
+      do: {state, []},
+      else: delete_logical_range(state, {row, col}, {row, eol})
+  end
+
+  # Sets the logical cursor and clears any selection; ensure_cursor_visible
+  # re-derives the substrate's (logical, wrap :none) lines and scroll.
+  defp move_cursor_logical(state, {row, col}) do
+    mli =
+      %{
+        state.mli
+        | cursor_pos: {row, col},
+          selection_start: nil,
+          selection_end: nil,
+          desired_col: nil
+      }
+      |> MultiLineInput.ensure_cursor_visible()
+
+    {%{state | mli: mli}, []}
+  end
+
+  # Deletes a logical range by staging it as a selection and running the
+  # substrate's own selection-backspace (delete_selection normalizes the
+  # endpoint order, splices the lines, and parks the cursor at the range
+  # start). `from`/`to` are logical {row, grapheme col} positions.
+  defp delete_logical_range(state, from, to) do
+    mli = %{state.mli | selection_start: from, selection_end: to}
+    {new_mli, _cmds} = update_mli({:backspace}, mli)
+    {%{state | mli: new_mli}, []}
+  end
+
+  defp logical_line_length(mli, row) do
+    mli.lines |> Enum.at(row, "") |> String.length()
+  end
+
+  # Word-left target: skip a whitespace run then a word run leftward to
+  # the word start; at column 0 cross to the end of the previous logical
+  # line (so delete-word-back there removes the joining newline).
+  defp word_left_target(mli) do
+    {row, col} = mli.cursor_pos
+    graphemes = mli.lines |> Enum.at(row, "") |> String.graphemes()
+    new_col = seek_word_left(graphemes, col)
+
+    cond do
+      new_col != col -> {row, new_col}
+      row > 0 -> {row - 1, logical_line_length(mli, row - 1)}
+      true -> {row, col}
+    end
+  end
+
+  # Word-right target: skip a whitespace run then a word run rightward to
+  # the word end; at end-of-line cross to the start of the next logical
+  # line.
+  defp word_right_target(mli) do
+    {row, col} = mli.cursor_pos
+    graphemes = mli.lines |> Enum.at(row, "") |> String.graphemes()
+    len = length(graphemes)
+    new_col = seek_word_right(graphemes, col, len)
+
+    cond do
+      new_col != col -> {row, new_col}
+      row < length(mli.lines) - 1 -> {row + 1, 0}
+      true -> {row, col}
+    end
+  end
+
+  defp seek_word_left(graphemes, col) do
+    col
+    |> skip_left(graphemes, &whitespace?/1)
+    |> skip_left(graphemes, &(not whitespace?(&1)))
+  end
+
+  defp seek_word_right(graphemes, col, len) do
+    col
+    |> skip_right(graphemes, len, &whitespace?/1)
+    |> skip_right(graphemes, len, &(not whitespace?(&1)))
+  end
+
+  defp skip_left(col, graphemes, pred) do
+    if col > 0 and pred.(Enum.at(graphemes, col - 1)) do
+      skip_left(col - 1, graphemes, pred)
+    else
+      col
+    end
+  end
+
+  defp skip_right(col, graphemes, len, pred) do
+    if col < len and pred.(Enum.at(graphemes, col)) do
+      skip_right(col + 1, graphemes, len, pred)
+    else
+      col
+    end
+  end
+
+  defp whitespace?(nil), do: false
+  defp whitespace?(grapheme), do: String.trim(grapheme) == ""
 
   # -- private: history recall --
 

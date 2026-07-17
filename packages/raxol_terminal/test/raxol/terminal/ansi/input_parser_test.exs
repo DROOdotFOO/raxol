@@ -47,6 +47,15 @@ defmodule Raxol.Terminal.ANSI.InputParserTest do
                InputParser.parse(<<127>>)
     end
 
+    test "parses Alt/Option+Backspace (ESC DEL) as backspace with the alt modifier" do
+      # macOS terminals (and readline's M-DEL) send ESC + DEL for
+      # Option+Backspace. Without the dedicated clause the lone ESC was
+      # dropped and only a bare backspace survived, making Option+Backspace
+      # indistinguishable from Backspace (readline delete-word-back dead).
+      assert [%Event{type: :key, data: %{key: :backspace, alt: true}}] =
+               InputParser.parse(<<27, 127>>)
+    end
+
     test "parses tab" do
       assert [%Event{type: :key, data: %{key: :tab}}] = InputParser.parse(<<9>>)
     end
