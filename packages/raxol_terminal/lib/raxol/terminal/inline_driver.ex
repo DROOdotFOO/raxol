@@ -132,10 +132,18 @@ defmodule Raxol.Terminal.InlineDriver do
   alias Raxol.Terminal.Capabilities
   alias Raxol.Terminal.Capabilities.Probe
   alias Raxol.Terminal.Driver.Stty
+  alias Raxol.Terminal.InlineDriver.CursorReport
   alias Raxol.Terminal.InlineDriver.Sequences
   alias Raxol.Terminal.TerminalUtils
 
   @default_rows 24
+  # The DSR cursor probe's default reply deadline. This is a LIVENESS
+  # bound on a real device round-trip (write `CSI 6n`, read the CPR off
+  # the same fd) -- not a rendering clock: a local terminal answers in
+  # single-digit milliseconds, an SSH hop in tens; a device that has not
+  # answered within this bound (a pipe, a dumb terminal) is treated as
+  # one that never will, and the caller falls back honestly.
+  @default_cursor_probe_budget_ms 300
 
   defmodule State do
     @moduledoc false
@@ -285,6 +293,24 @@ defmodule Raxol.Terminal.InlineDriver do
   end
 
   @impl true
+  def handle_manager_call({:probe_cursor, budget_ms}, _from, %State{} = state) do
+    {:reply, run_cursor_probe(state, budget_ms), state}
+  end
+
+  # BaseManager's default (warn + {:error, :not_implemented}) is replaced
+  # the moment any handle_manager_call clause is defined -- restore it
+  # for every request this driver does not understand.
+  @impl true
+  def handle_manager_call(request, _from, state) do
+    Log.warning_with_context(
+      "[InlineDriver] unhandled call: #{inspect(request)}",
+      %{}
+    )
+
+    {:reply, {:error, :not_implemented}, state}
+  end
+
+  @impl true
   def handle_manager_info(
         {:trace, _reader, :send, {_ref, {:data, data}}, _to},
         state
@@ -355,6 +381,128 @@ defmodule Raxol.Terminal.InlineDriver do
     end
 
     %{state | torn_down?: true}
+  end
+
+  # --- The DSR cursor probe (GUEST-BOOT seam) ---
+
+  @doc """
+  Asks the real terminal where the shell left the cursor: writes DSR-6
+  (`Sequences.cursor_position_request/0`, `CSI 6n`) to the driver's
+  device and reads the CPR reply (`CSI row ; col R`) off the driver's
+  own input stream. This is the substrate for GUEST-BOOT placement
+  (`Raxol.UI.Rendering.PaintAuthority.InlineAuthority`'s `:boot_cursor`
+  option): boot the surface exactly where the user's shell stopped,
+  instead of pushing a blank screen first.
+
+  Returns:
+
+    * `{:ok, {row, col}}` — 1-based, straight from the terminal's reply.
+    * `{:error, :no_tty}` — the driver was constructed with
+      `tty?: false` (piped/CI). ZERO bytes are written: a device that
+      cannot answer must not be probed at all.
+    * `{:error, :timeout}` — no CPR arrived within `:budget_ms`
+      (default #{@default_cursor_probe_budget_ms}ms). The budget is a
+      LIVENESS bound on the device round-trip, not a rendering clock —
+      see the module attribute note. On timeout every byte read while
+      waiting has already been forwarded to the subscriber as ordinary
+      input; nothing is dropped.
+
+  ## The consumption contract (why this lives on the driver)
+
+  The CPR reply arrives interleaved with real keystrokes on the same
+  fd this driver already owns. Scanning happens INSIDE the driver
+  process (`Raxol.Terminal.InlineDriver.CursorReport`, the pure
+  scanner), before `InputParser` ever sees the bytes, because a CPR is
+  not representable as "just another event": `InputParser` decodes a
+  row-1 reply (`\\e[1;<n>R`) as a modified F3 keypress — the classic
+  DSR/F3 wire collision — so letting it through would deliver a
+  phantom key event to the app. Keystrokes interleaved with (or split
+  around) the reply are forwarded to the subscriber in arrival order,
+  never dropped.
+
+  ## Caller discipline
+
+    * Probe BEFORE the first paint, at most once per claim: this writes
+      bytes to the device, so it is strictly opt-in (nothing in
+      `init_manager/1` ever emits it).
+    * The result is only placement-honest while nothing else has
+      written to the device between the reply and the boot that
+      consumes it.
+    * Residual: a reply that arrives AFTER the deadline lapses flows
+      down the ordinary input path, where `InputParser` consumes it
+      silently — except the row-1 form, which surfaces as a phantom
+      modified-F3 keypress. Bound the exposure by probing when the
+      terminal is idle (boot), which is the only supported call site.
+  """
+  @spec probe_cursor(GenServer.server(), keyword()) ::
+          {:ok, CursorReport.position()} | {:error, :timeout | :no_tty}
+  def probe_cursor(server, opts \\ []) do
+    budget_ms =
+      Keyword.get(opts, :budget_ms, @default_cursor_probe_budget_ms)
+
+    GenServer.call(server, {:probe_cursor, budget_ms}, budget_ms + 5_000)
+  end
+
+  defp run_cursor_probe(%State{tty?: false}, _budget_ms),
+    do: {:error, :no_tty}
+
+  defp run_cursor_probe(%State{} = state, budget_ms) do
+    IO.write(state.device, Sequences.cursor_position_request())
+    deadline = System.monotonic_time(:millisecond) + budget_ms
+    cursor_probe_loop(<<>>, deadline, state)
+  end
+
+  # Absolute-deadline receive loop (same discipline as probe_loop/3
+  # below: re-derive `remaining` every iteration so a flooding terminal
+  # can never extend the probe). Runs inside the driver's own
+  # handle_manager_call, so the reader's trace/port messages land in
+  # this process's mailbox and the selective receive picks them up.
+  defp cursor_probe_loop(buffer, deadline, state) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:trace, _reader, :send, {_ref, {:data, data}}, _to} ->
+        cursor_probe_ingest(buffer, to_binary_data(data), deadline, state)
+
+      {port, {:data, data}} when is_port(port) ->
+        cursor_probe_ingest(buffer, to_binary_data(data), deadline, state)
+    after
+      remaining ->
+        forward_probe_leftover(buffer, state)
+        {:error, :timeout}
+    end
+  end
+
+  defp cursor_probe_ingest(buffer, chunk, deadline, state) do
+    # The raw tap sees every chunk exactly as it arrived (its documented
+    # contract) -- only the PARSED path is CPR-free. Forwarded leftovers
+    # below go through the parse-only path so the tap never sees a byte
+    # twice.
+    notify_raw(state.raw_sink, chunk)
+
+    case CursorReport.scan(buffer <> chunk) do
+      {:reply, pos, leading, trailing} ->
+        forward_probe_leftover(leading, state)
+        forward_probe_leftover(trailing, state)
+        {:ok, pos}
+
+      {:pending, forward, keep} ->
+        forward_probe_leftover(forward, state)
+        cursor_probe_loop(keep, deadline, state)
+    end
+  end
+
+  # Parse-only forward (raw_sink already saw these bytes at arrival):
+  # keystrokes interleaved with the CPR reply still reach the subscriber
+  # in order -- the leak-free rule.
+  defp forward_probe_leftover(<<>>, _state), do: :ok
+
+  defp forward_probe_leftover(bytes, state) do
+    bytes
+    |> safe_parse()
+    |> Enum.each(&notify(state.subscriber, &1))
+
+    :ok
   end
 
   # --- Input dispatch ---

@@ -62,6 +62,18 @@ defmodule Raxol.Terminal.InlineDriver.Sequences do
   @spec init_bytes() :: binary()
   def init_bytes, do: @mouse_reset <> @focus_report_on <> @bracketed_paste_on
 
+  @doc """
+  DSR-6 (`CSI 6n`): ask the terminal where its cursor is. The terminal
+  replies on the INPUT stream with a CPR (`CSI row ; col R`), which
+  `Raxol.Terminal.InlineDriver.probe_cursor/2` consumes via
+  `Raxol.Terminal.InlineDriver.CursorReport` — the reply is never
+  allowed to reach the app's input path. Emitted only by that opt-in
+  probe, never by `init_bytes/0`: a probe writes bytes to the device,
+  so callers must ask for it.
+  """
+  @spec cursor_position_request() :: binary()
+  def cursor_position_request, do: "\e[6n"
+
   @doc "Step 1: disable bracketed paste, focus reporting, and all mouse modes."
   @spec modes_off() :: binary()
   def modes_off, do: @modes_off

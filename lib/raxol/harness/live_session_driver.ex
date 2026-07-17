@@ -285,7 +285,13 @@ defmodule Raxol.Harness.LiveSessionDriver do
         # `Surface.new/2`'s `:pin` option. Default stays `:immediate`
         # (Surface's own default) so byte-golden embedders are
         # untouched; the live demo opts into `:adaptive`.
-        :pin
+        :pin,
+        # GUEST-BOOT: pass-through to `Surface.new/2`'s `:boot` option
+        # (`:top` default, `{:guest, {row, col}}` from an embedder that
+        # DSR-probed the cursor via InlineDriver.probe_cursor/2 before
+        # starting this driver). The probe itself stays the embedder's
+        # job -- it owns the InlineDriver and the pre-claim byte order.
+        :boot
       ])
       |> Keyword.put(:command_sink, fn cmd ->
         send(driver_pid, {:surface_command, cmd})

@@ -4,8 +4,9 @@
 # `Raxol.Harness.LiveSessionDriver` -- against a live
 # `Raxol.Agent.SessionStreamer` session on a real tty. This is the live
 # counterpart of `examples/harness_fixture_demo.exs`: same
-# `Raxol.Terminal.InlineDriver` raw-mode input path, same startup
-# push-up, same teardown ownership -- but the events come from a real
+# `Raxol.Terminal.InlineDriver` raw-mode input path, same GUEST-BOOT
+# cursor probe (start at the shell's prompt; push-up only on the no-reply
+# fallback), same teardown ownership -- but the events come from a real
 # `Raxol.Agent.Stream.run/2` turn pumped through
 # `Raxol.Agent.Contract.pump/3`, not a golden fixture. Wiring proven by
 # the integration keystone at
@@ -222,9 +223,45 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     # (doctrine §8.1) -- a pre-claim print raced shell echo and read as
     # garbage, and duplicating it would say the same thing twice.
 
-    # Same startup discipline as the fixture demo: push whatever is on
-    # screen up into scrollback via plain newlines -- never `\e[2J`.
-    Surface.startup_push_up(:stdio, rows)
+    # The tty side, exactly as the fixture demo wires it -- except the
+    # subscriber is THIS process, which forwards every parsed keypress to
+    # the LiveSessionDriver as `{:inline_input, event}` (its documented
+    # input seam) after feeding the REPL mirror. With DEBUG_WEB, the tap
+    # additionally sees every PRE-parse tty chunk via `:raw_sink`.
+    # Started BEFORE the LiveSessionDriver (which paints its first frame
+    # at construction): raw mode must be engaged so the GUEST-BOOT
+    # cursor probe below can read the CPR reply un-echoed. Keys pressed
+    # this early just queue in this process's mailbox until the loop
+    # starts.
+    {:ok, inline} =
+      InlineDriver.start_link(
+        subscriber: self(),
+        device: :stdio,
+        rows: rows,
+        probe?: false,
+        tty?: tty?,
+        raw_sink: debug && debug.tap
+      )
+
+    # GUEST-BOOT: ask the terminal where the shell left the cursor
+    # (`CSI 6n`; the CPR reply is consumed inside InlineDriver and
+    # never reaches this process's input stream). On a reply the
+    # surface starts exactly there -- bottom-anchored from the first
+    # frame on a normal shell (prompt at/near the screen bottom). No
+    # reply (pipe, dumb terminal): honest fallback to the top boot,
+    # reported on the boot POST below.
+    boot =
+      case InlineDriver.probe_cursor(inline) do
+        {:ok, pos} -> {:guest, pos}
+        {:error, _no_reply} -> :top
+      end
+
+    # Same startup discipline as the fixture demo (:top boot only):
+    # push whatever is on screen up into scrollback via plain newlines
+    # -- never `\e[2J`. A guest boot starts at the prompt instead --
+    # pushing first would move the cursor out from under the probed
+    # position.
+    if boot == :top, do: Surface.startup_push_up(:stdio, rows)
 
     # The live driver: builds Surface + StreamCadence + the subscription
     # forwarder inside its own process; `notify: self()` tells this
@@ -238,29 +275,16 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         footer_rows: @footer_rows,
         tty?: tty?,
         # FOOTER-FOLLOWS-CONTENT: boot with the footer floating directly
-        # below the (empty) history instead of claiming the whole screen
-        # -- it pins itself at the bottom once content reaches it.
+        # below the last content row instead of claiming the whole
+        # screen -- it pins itself at the bottom once content reaches
+        # it (immediately, on a guest boot from a bottom-row prompt).
         pin: :adaptive,
+        boot: boot,
         notify: self()
       )
 
     if debug,
       do: Raxol.Examples.HarnessDebug.Tap.attach_driver(debug.tap, driver)
-
-    # The tty side, exactly as the fixture demo wires it -- except the
-    # subscriber is THIS process, which forwards every parsed keypress to
-    # the LiveSessionDriver as `{:inline_input, event}` (its documented
-    # input seam) after feeding the REPL mirror. With DEBUG_WEB, the tap
-    # additionally sees every PRE-parse tty chunk via `:raw_sink`.
-    {:ok, inline} =
-      InlineDriver.start_link(
-        subscriber: self(),
-        device: :stdio,
-        rows: rows,
-        probe?: false,
-        tty?: tty?,
-        raw_sink: debug && debug.tap
-      )
 
     try do
       # The driver's forwarder owns the real `subscribe/1` call -- wait
@@ -313,6 +337,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         streamer: streamer,
         width: width,
         rows: rows,
+        boot: boot,
         debug: debug,
         devtools: devtools
       })
@@ -540,6 +565,9 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         # The demo starts InlineDriver with `probe?: false` a few lines
         # up -- this reports that setting, not a guess.
         "  term probe: off — conservative defaults",
+        # GUEST-BOOT evidence: the actual probe outcome this boot -- a
+        # real CPR row on success, or the honest fallback note.
+        "  " <> cursor_probe_post_line(ctx.boot),
         "  " <> sigint_post_line()
       ] ++ debug_post_lines(ctx.debug, ctx.devtools)
 
@@ -550,6 +578,14 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
     :ok
   end
+
+  # GUEST-BOOT POST evidence: the probe result that actually placed this
+  # boot -- the CPR row on a reply, the honest fallback line otherwise.
+  defp cursor_probe_post_line({:guest, {row, _col}}),
+    do: "cursor probe: reply at row #{row} — joined the shell in place"
+
+  defp cursor_probe_post_line(:top),
+    do: "cursor probe: no reply — starting at top"
 
   defp backend_post_line("mock", _opts_fun),
     do: "mock — canned echo (no AI_API_KEY / LM_STUDIO in env)"

@@ -808,6 +808,23 @@ defmodule Raxol.Harness.Surface do
       no first-load void) and pins one-way when content reaches the
       pinned position; see `InlineAuthority`'s "The adaptive pin"
       moduledoc section. Ignored in `:flat` mode (no footer).
+    * `:boot` (default `:top`) -- where the surface starts on screen.
+      `:top` is today's behavior exactly (callers push the screen blank
+      first via `startup_push_up/2`, the footer floats at the top).
+      `{:guest, {row, col}}` is GUEST-BOOT: `{row, col}` is the
+      DSR-probed cursor position where the user's shell stopped
+      (`Raxol.Terminal.InlineDriver.probe_cursor/2` is the prober; the
+      probe writes bytes to the device, so it is strictly the caller's
+      opt-in), forwarded to `InlineAuthority.new/5` as `:boot_cursor` --
+      the surface starts exactly there: floating under the prompt
+      mid-screen, or bottom-anchored from the first frame when the
+      prompt sits at/near the screen bottom (the scroll-entry path;
+      shell history scrolls up honestly, never repainted). Requires
+      `pin: :adaptive` (`InlineAuthority.new/5` raises otherwise).
+      Ignored in `:flat` mode -- flat output already flows from
+      wherever the cursor is (flat IS guest boot by nature). Any other
+      value raises `ArgumentError` -- an unrecognized boot must never
+      silently become `:top`.
 
   ## Startup mode notice (the degradation ladder's `select_with_reason/3` seam)
 
@@ -860,7 +877,8 @@ defmodule Raxol.Harness.Surface do
         rows,
         footer_rows,
         caps,
-        Keyword.get(opts, :pin, :immediate)
+        Keyword.get(opts, :pin, :immediate),
+        validate_boot!(Keyword.get(opts, :boot, :top))
       )
 
     {:ok, composer} =
@@ -975,15 +993,51 @@ defmodule Raxol.Harness.Surface do
     }
   end
 
-  defp build_authority(:flat, device, width, rows, _footer_rows, _caps, _pin),
-    do: FlatAuthority.new(device, width, rows)
+  # `:boot` shape gate (see `new/2`'s option doc): an unrecognized boot
+  # value must never silently become `:top` -- raise at the seam instead.
+  defp validate_boot!(:top), do: :top
 
-  defp build_authority(_mode, device, width, rows, footer_rows, caps, pin),
-    do:
-      InlineAuthority.new(device, width, rows, footer_rows,
-        capabilities: caps,
-        pin: pin
-      )
+  defp validate_boot!({:guest, {row, col}} = boot)
+       when is_integer(row) and row >= 1 and is_integer(col) and col >= 1,
+       do: boot
+
+  defp validate_boot!(other) do
+    raise ArgumentError,
+          "Surface.new/2's :boot must be :top or {:guest, {row, col}} " <>
+            "(1-based, the DSR-probed cursor position); got #{inspect(other)}"
+  end
+
+  defp build_authority(
+         :flat,
+         device,
+         width,
+         rows,
+         _footer_rows,
+         _caps,
+         _pin,
+         _boot
+       ),
+       do: FlatAuthority.new(device, width, rows)
+
+  defp build_authority(
+         _mode,
+         device,
+         width,
+         rows,
+         footer_rows,
+         caps,
+         pin,
+         boot
+       ),
+       do:
+         InlineAuthority.new(device, width, rows, footer_rows,
+           capabilities: caps,
+           pin: pin,
+           boot_cursor: boot_cursor(boot)
+         )
+
+  defp boot_cursor(:top), do: nil
+  defp boot_cursor({:guest, pos}), do: pos
 
   defp events_from(%Session{envelopes: envelopes}),
     do: Enum.map(envelopes, & &1.body)
@@ -1051,6 +1105,12 @@ defmodule Raxol.Harness.Surface do
   BEFORE the substrate's scroll region is established (i.e. before
   `new/2`), since `InlineAuthority.new/5` only sets the DECSTBM split --
   it never clears or pushes anything on its own.
+
+  This is the `:top` boot's companion only: a GUEST-BOOT caller
+  (`boot: {:guest, {row, col}}`, see `new/2`) must NOT call this --
+  guest boot starts exactly where the shell's cursor is, and pushing
+  the screen up first would move that cursor out from under the probed
+  position.
   """
   @spec startup_push_up(IO.device(), pos_integer()) :: :ok
   def startup_push_up(device, rows) when is_integer(rows) and rows > 0 do

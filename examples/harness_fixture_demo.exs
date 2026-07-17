@@ -79,9 +79,25 @@ defmodule Raxol.Examples.HarnessFixtureDemo do
         tty?: tty?
       )
 
-    # Startup discipline: push whatever is currently
+    # GUEST-BOOT: ask the terminal where the shell left the cursor
+    # (`CSI 6n`; the CPR reply is consumed inside the driver and never
+    # reaches this process's input stream). On a reply the surface
+    # starts exactly there -- floating under the prompt, or
+    # bottom-anchored from the first frame when the prompt sits near
+    # the screen bottom (the normal shell). No reply (pipe, dumb
+    # terminal): honest fallback to the top boot, sealed as a line
+    # below so the record says why.
+    boot =
+      case InlineDriver.probe_cursor(driver_pid) do
+        {:ok, pos} -> {:guest, pos}
+        {:error, _no_reply} -> :top
+      end
+
+    # Startup discipline (:top boot only): push whatever is currently
     # on screen up into scrollback via plain newlines -- never `\e[2J`.
-    Surface.startup_push_up(:stdio, rows)
+    # A guest boot starts at the prompt instead -- pushing first would
+    # move the cursor out from under the probed position.
+    if boot == :top, do: Surface.startup_push_up(:stdio, rows)
 
     model =
       Surface.new(session,
@@ -94,11 +110,24 @@ defmodule Raxol.Examples.HarnessFixtureDemo do
         # below the (empty) history instead of claiming the whole screen
         # -- it pins itself at the bottom once content reaches it.
         pin: :adaptive,
+        boot: boot,
         # Ctrl-E hands the composer draft to $VISUAL/$EDITOR (real tty
         # runs only -- a piped/CI run has no terminal to hand over, and
         # Surface renders its honest stub notice instead).
         editor_session: if(tty?, do: Raxol.Harness.EditorSession)
       )
+
+    model =
+      case boot do
+        {:guest, _pos} ->
+          model
+
+        :top ->
+          Surface.seal_marker(
+            model,
+            "» cursor probe: no reply — starting at top"
+          )
+      end
 
     try do
       loop(model, driver_pid, speed_ms)

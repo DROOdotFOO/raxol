@@ -303,6 +303,16 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   model, byte-identical, so every existing byte-golden suite and fixture
   stays valid unchanged. Demos opt into `:adaptive`.
 
+  **GUEST-BOOT** (`:boot_cursor`, layered on `:adaptive`): instead of
+  starting the float at row 1 of a pushed-blank screen, start it at the
+  DSR-probed row where the user's shell left the cursor — the float
+  begins mid-screen under the prompt, or (prompt at/near the bottom, the
+  normal shell) construction rides the SAME one-way transition into the
+  pinned model immediately, scrolling the shell's own history up via
+  plain `\\n`s exactly like any program printing N lines. See `new/5`'s
+  `:boot_cursor` doc for the full contract; enforced by
+  `test/harness/guest_boot_test.exs`.
+
   ## Synchronized output (DEC private mode 2026)
 
   `sync_open/1` / `sync_close/1` are the DEC 2026 synchronized-update
@@ -408,6 +418,29 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       footer position — see the moduledoc's "The adaptive pin" section.
       The default is deliberately `:immediate` so every existing
       byte-golden world stays reachable unchanged; demos opt in.
+    * `:boot_cursor` — GUEST-BOOT placement: `{row, col}` (1-based), the
+      DSR-probed position where the user's shell left the cursor
+      (`Raxol.Terminal.InlineDriver.probe_cursor/2` is the shipped
+      prober). Requires `pin: :adaptive` (raises `ArgumentError`
+      otherwise — a pinned boot homes the cursor via DECSTBM and has no
+      placement to inherit). The floating footer starts at the probed
+      row instead of row 1, so on a real shell the surface begins
+      exactly where the prompt stopped. When the probe row sits too low
+      for the footer to float above the pinned split
+      (`row > history_bottom` — the normal near-bottom shell prompt),
+      construction takes the SCROLL-ENTRY path: the same one-way
+      float->pin transition a seal would fire — plain `\\n`s at the
+      screen bottom scroll the shell's own history up honestly (exactly
+      what any program printing N lines does), one region write claims
+      the pin, and the surface is bottom-anchored from the first frame.
+      Shell content is never repainted: every byte this path emits
+      addresses the probe row or below. A `col > 1` probe reply means
+      the shell left an unterminated line on the probe row; boot
+      advances past it with one native `\\r\\n` (which scrolls honestly
+      when the probe row is the bottom row) rather than overwriting it.
+      Placement is only honest if nothing wrote to the device between
+      the probe reply and this call. Default `nil` — byte-identical to
+      today's boot.
   """
   @spec new(
           IO.device(),
@@ -425,8 +458,11 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         :error -> cached_caps()
       end
 
+    pin = Keyword.get(opts, :pin, :immediate)
+    boot_cursor = validate_boot_cursor!(pin, Keyword.get(opts, :boot_cursor))
+
     {region, pin_state} =
-      case Keyword.get(opts, :pin, :immediate) do
+      case pin do
         :immediate ->
           {ScrollRegionManager.start(device, rows, footer_rows), :pinned}
 
@@ -445,6 +481,63 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       # enable emission -- only the probe-built capability record may.
       sync_output?: match?(%Capabilities{sync_output: true}, caps)
     }
+    |> boot_at_cursor(boot_cursor)
+  end
+
+  defp validate_boot_cursor!(_pin, nil), do: nil
+
+  defp validate_boot_cursor!(:adaptive, {row, col})
+       when is_integer(row) and row >= 1 and is_integer(col) and col >= 1,
+       do: {row, col}
+
+  defp validate_boot_cursor!(pin, other) do
+    raise ArgumentError,
+          "InlineAuthority.new/5's :boot_cursor requires pin: :adaptive and " <>
+            "a 1-based {row, col} tuple (guest boot inherits the shell's " <>
+            "cursor into the FLOATING model; a pin: :immediate boot homes " <>
+            "the cursor via DECSTBM and has no placement to inherit); got " <>
+            "pin: #{inspect(pin)}, boot_cursor: #{inspect(other)}"
+  end
+
+  # GUEST-BOOT placement (see `new/5`'s `:boot_cursor` doc). Runs at
+  # construction, after the floating state is built with the default
+  # `next_row: 1`.
+  defp boot_at_cursor(t, nil), do: t
+
+  defp boot_at_cursor(%__MODULE__{region: region} = t, {row, col}) do
+    rows = ScrollRegionManager.rows(region)
+    # A CPR past the physical screen is a device lie -- clamp to the
+    # referent (the screen the region math runs against).
+    row = min(row, rows)
+
+    row =
+      if col > 1 do
+        # The shell left an unterminated line on the probe row (a prompt
+        # printed without a trailing newline). That line is shell
+        # content: advance past it with native flow -- one plain `\r\n`,
+        # which scrolls honestly when the probe row IS the bottom row --
+        # never overwrite it.
+        IO.write(region.device, "\r\n")
+        min(row + 1, rows)
+      else
+        row
+      end
+
+    t = %{t | next_row: row}
+
+    if row > ScrollRegionManager.history_bottom(region) do
+      # SCROLL-ENTRY: the floating window cannot exist below the prompt
+      # (the normal shell case -- prompt at/near the screen bottom).
+      # The existing one-way transition does exactly the honest thing:
+      # plain `\n`s at the physical bottom scroll the shell's own
+      # history up by `row - history_bottom` rows (native flow, never a
+      # repaint), one region write claims the pin, and the surface is
+      # bottom-anchored from the first frame with `next_row` directly
+      # above the pinned footer.
+      transition_to_pin(t)
+    else
+      t
+    end
   end
 
   defp cached_caps do
