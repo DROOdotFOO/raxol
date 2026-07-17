@@ -168,6 +168,76 @@ defmodule Raxol.Harness.FullViewportSurfaceTest do
     end
   end
 
+  # V's "extra line above the input field" ruling: the composer always
+  # carries exactly ONE blank row above it, separating the input from
+  # whatever precedes it (the transcript tail, or the live-region footer
+  # groups). The one-blank-between-blocks rhythm extended across the
+  # transcript->composer boundary.
+  describe "the above-composer separator (blank-row rhythm)" do
+    # The row-number of the composer's chevron row, and the visible text of
+    # the N rows directly above it (nearest-first).
+    defp composer_row_and_above(model, device, n) do
+      rows = frame_rows(frame(model, device))
+
+      composer_row =
+        rows
+        |> Enum.filter(fn {_r, t} -> t =~ "❯" end)
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.max()
+
+      above = for i <- 1..n, do: Map.get(rows, composer_row - i, :missing)
+      {composer_row, above}
+    end
+
+    test "exactly one blank row sits above the composer after a sealed block" do
+      {model, device} = new_model(load!("simple-chat"), [])
+      model = drive(model)
+
+      {_composer_row, [above1, above2]} =
+        composer_row_and_above(model, device, 2)
+
+      assert above1 == "",
+             "the row directly above the composer must be blank (the separator)"
+
+      refute above2 == "",
+             "the row two above the composer must be content, not a second blank " <>
+               "(never two blanks -- no double-pay)"
+    end
+
+    test "empty transcript + greeting: intro line, one blank, then composer" do
+      {model, device} = new_model(load!("simple-chat"), greeting: true)
+
+      {_composer_row, [above1, above2]} =
+        composer_row_and_above(model, device, 2)
+
+      assert above1 == "",
+             "one blank row must sit between the greeting and the composer"
+
+      assert above2 =~ "welcome back, operator",
+             "the greeting intro line sits exactly one blank above the composer"
+    end
+
+    test "the separator is discretionary -- it yields first under a too-short footer" do
+      # A 1-row footer budget cannot hold both the separator and the
+      # composer prompt. The separator (FIRST in the drop order) yields, so
+      # the single surviving row is the composer itself, never a bare blank.
+      {model, device} = new_model([], rows: 20, footer_rows: 1)
+
+      rows = frame_rows(frame(model, device))
+      composer_rows = for {r, t} <- rows, t =~ "❯", do: r
+
+      refute composer_rows == [],
+             "the composer must survive a 1-row footer -- the separator yields, not the input"
+    end
+
+    test "a repaint with the separator present is byte-stable" do
+      {model, device} = new_model(load!("simple-chat"), [])
+      model = drive(model)
+
+      assert frame(model, device) == frame(model, device)
+    end
+  end
+
   describe "scrollback window" do
     # A tall transcript in a modest viewport forces a scroll window.
     # markdown-stream is a long, message-heavy transcript (message blocks

@@ -4759,11 +4759,12 @@ defmodule Raxol.Harness.Surface do
         overlay: overlay_lines(model),
         divider: divider_lines,
         preview: preview_lines,
+        composer_sep: composer_sep_lines(model, composer_lines),
         composer: composer_lines,
         notice: notice_line(model.stub_notice, content_width(model))
       ]
       |> fit_footer_groups(
-        [:preview, :divider, :composer, :overlay, :status],
+        [:composer_sep, :preview, :divider, :composer, :overlay, :status],
         budget
       )
       |> apply_margins(model)
@@ -4881,6 +4882,41 @@ defmodule Raxol.Harness.Surface do
           false
       end
   end
+
+  # The above-composer separator (V's "extra line above the input field"
+  # ruling): ONE blank row always sits between the composer and whatever
+  # precedes it -- the transcript tail in `:full_viewport`, or the
+  # live-region groups (preview/divider/submitting/status) in the footer
+  # stack -- extending the one-blank-between-blocks rhythm across the
+  # transcript->composer boundary the intra-transcript rhythm never
+  # covered.
+  #
+  # Composes with the existing rhythm without DOUBLE-PAYING: none of the
+  # groups above the composer (status/lane/submitting/overlay/divider/
+  # preview) emits a trailing blank, and the composer group emits no
+  # leading blank (its first row is the sigil chevron), so this is the
+  # sole source of the boundary blank -- exactly one, never two. The
+  # `:full_viewport` greeting is unaffected for the same reason: its
+  # centered line is bottom-anchored transcript content with no trailing
+  # blank, so the separator is the intro->composer gap (intro line + one
+  # blank + composer). It is discretionary under budget pressure -- FIRST
+  # in `footer_frame/1`'s drop order, so it yields before the divider,
+  # preview, composer tail, status, and (never-dropped) notice when the
+  # footer cannot hold everything.
+  #
+  # SCOPED to `:full_viewport` (V's endgame pivot -- the "transcript"
+  # surface V's frame shows). The inline family is deliberately left
+  # unchanged: its boot greeting already carries this blank via the
+  # unclaimed-span gap (`maybe_paint_greeting/2`), so adding a footer-side
+  # separator there would double-pay into TWO blanks at the greeting, and
+  # a uniform inline change would churn every `:inline_log`/
+  # `:tmux_conservative` byte-golden plus the greeting's own byte-pins for
+  # no boundary the inline substrate presents differently. An empty
+  # `composer_lines` (composer sheded to nothing) suppresses the separator
+  # -- a leading blank above a composer that isn't on screen would be a
+  # bare stray row.
+  defp composer_sep_lines(%{mode: :full_viewport}, [_ | _]), do: [""]
+  defp composer_sep_lines(_model, _composer_lines), do: []
 
   # The composer group's rows, chevron applied. Row indexing mirrors
   # `Composer.edit_point/2`'s own banner accounting: a queued-steer
