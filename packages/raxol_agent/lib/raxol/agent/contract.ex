@@ -75,6 +75,48 @@ defmodule Raxol.Agent.Contract do
   never rewritten in place, only decoded — covered by the grandfather rule
   above).
 
+  ## Trust boundary (S2, PR #631) — producer-stamped, journal-trusted
+
+  `evidence_status/1` is a **decode**, not a **re-derivation**. It reports the
+  enum the producer stamped; it does NOT re-run `DoneGate.gate/3` over the
+  journal at read time. The soundness of the marker therefore rests on two
+  explicit assumptions, stated here so a reader wiring it to a surface knows
+  exactly what it does and does not defend against:
+
+    1. **Producer honesty is stamped, not asserted.** The marker is written by
+       `gated_done_payload/4` from the *same* `DoneGate.gate/3` verdict that
+       decides the done — producer and decider are one call, they cannot
+       disagree at write time. This producer half is pinned by
+       `Raxol.Agent.ContractTest` ("the done gate is consulted on the real done
+       path", "a mutation's own result echo is rejected", "a zero-tool turn
+       closes ungated") and by `Raxol.Agent.Red.U21RealProducerRegressionTest`,
+       which gates journals produced by the real `pump/3`, not synthetic ones.
+
+    2. **The reader trusts the journal.** A hand-forged or replayed line that
+       stamps `evidence: :accepted` — or a legacy-shaped forged line that omits
+       the marker but carries a `refs` list, which the grandfather arm blesses
+       `:accepted` — will decode as proven-done. This is the **identical**
+       threat model as `refs` themselves and every other durable field: a
+       journal that can be forged can fabricate tool results, refs, and verdicts
+       directly. The marker adds no trust surface the journal did not already
+       assume (append-only, single-writer integrity per harness-spec-backend).
+       It is sound only on a trusted, append-only journal.
+
+  What the decoder *does* defend, after the S1 fix: an `evidence` value it
+  cannot understand — a forged string, a future enum value, a garbage type —
+  fails safe to `:unknown`, never `:accepted` (see `normalize_evidence/1`). A
+  forged non-legacy line thus cannot launder a bogus marker into acceptance.
+
+  **Read-side re-derivation was considered and deliberately rejected.**
+  Re-running `DoneGate.gate/3` at decode time would (a) require the whole
+  journal + turn + refs, coupling a pure single-record decode to journal state
+  it does not carry, and (b) resurrect exactly the display-side re-evaluation of
+  *open* gate predicates (staleness relative to *later* mutations) that the #619
+  round-2 ledger settled must NOT be frozen or recomputed at the display surface.
+  Documenting the append-only trust assumption is the honest, #619-consistent
+  close; a hostile-journal re-check is out of scope for a producer-stamped
+  durable marker.
+
   ## Producers
 
   The v0 producer is `pump/3`: it drains a `Raxol.Agent.Stream.run/2` or
@@ -377,6 +419,18 @@ defmodule Raxol.Agent.Contract do
   were wire-identical, so there is no way to tell them apart after the
   fact. This case must NEVER decode as `:absent` — that would launder a
   historical rejection into a false "never offered" claim.
+
+  Totality (S1): the decoder never crashes. An `evidence` value it does not
+  recognize — a future grow-only enum value, a forged string, a garbage type —
+  degrades to `:unknown` (fail-safe, never `:accepted`); see
+  `normalize_evidence/1`. The decode is quaternary — `:accepted | :rejected |
+  :absent | :unknown` — even though the wire enum a producer stamps is
+  tri-state; `:unknown` is the decode-only bucket for legacy/unrecognized
+  records, so a consumer's `case` over this must handle four outcomes.
+
+  Trust: this reports the stamped enum, it does not re-derive the verdict from
+  the journal — see the "Trust boundary" section in the moduledoc for what that
+  does and does not defend (S2).
   """
   @spec evidence_status(map()) :: :accepted | :rejected | :absent | :unknown
   def evidence_status(payload) when is_map(payload) do
@@ -395,6 +449,19 @@ defmodule Raxol.Agent.Contract do
   defp normalize_evidence(value) when value in [:accepted, "accepted"], do: :accepted
   defp normalize_evidence(value) when value in [:rejected, "rejected"], do: :rejected
   defp normalize_evidence(value) when value in [:absent, "absent"], do: :absent
+
+  # Total fallthrough (S1, PR #631). The `evidence` enum is grow-only (AD-11
+  # upcast-on-read): a reader on 1.1.0 WILL meet a future 1.2.0 journal carrying
+  # a 4th value — exactly the grow-forward case the enum promises — and must
+  # degrade, not `FunctionClauseError` on the replay surface. A corrupt or
+  # forged line (`evidence: "bogus"`, a number, nil) lands here too. Every
+  # unrecognized value fails safe to `:unknown` — never `:accepted` — the same
+  # safe direction the grandfather rule already takes absence: an authoritative
+  # marker that cannot be understood is treated as "cannot vouch", never as
+  # proven-done. This also means a forged non-legacy line whose bogus `evidence`
+  # value sits atop a `refs` list decodes `:unknown` (the key is present, so the
+  # refs-grandfather arm is never consulted), not laundered to `:accepted`.
+  defp normalize_evidence(_), do: :unknown
 
   defp fetch_either(map, key) when is_map(map) do
     cond do
