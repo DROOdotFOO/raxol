@@ -115,6 +115,11 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   defp start_plugin_manager(_options, :agent), do: {:ok, nil}
   defp start_plugin_manager(_options, :liveview), do: {:ok, nil}
 
+  # F0-env (harness TEA migration §3): the :harness profile is
+  # Dispatcher + rendering Engine + terminal output backend ONLY --
+  # plugin-free, like :agent.
+  defp start_plugin_manager(_options, :harness), do: {:ok, nil}
+
   defp start_plugin_manager(options, _environment) do
     plugin_manager_opts = Keyword.get(options, :plugin_manager_opts, [])
 
@@ -222,9 +227,10 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
     # :ssh is multi-instance (one Lifecycle per channel). Without [name: nil]
     # the second concurrent SSH session collides on the registered Dispatcher
     # name. Callers always reach the Dispatcher via state.dispatcher_pid, so
-    # dropping the registered name is safe.
+    # dropping the registered name is safe. :harness is the same shape: the
+    # SessionPump is the Dispatcher's sole feeder and holds its pid.
     dispatcher_opts =
-      if environment in [:agent, :liveview, :ssh],
+      if environment in [:agent, :liveview, :ssh, :harness],
         do: [name: nil],
         else: []
 
@@ -247,6 +253,15 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   defp maybe_start_driver(_dispatcher_pid, :liveview, _options), do: {:ok, nil}
   defp maybe_start_driver(_dispatcher_pid, :ssh, _options), do: {:ok, nil}
   defp maybe_start_driver(_dispatcher_pid, :agent, _options), do: {:ok, nil}
+
+  # F0-env (harness TEA migration §3): NO input driver on this profile.
+  # The harness SessionPump owns stdin through its own InlineDriver
+  # (input-first selective receive, editor-suspend bracket, cursor probe)
+  # and feeds the Dispatcher normalized messages; a termbox driver here
+  # would fight it for the tty and emit competing init bytes. The
+  # rendering Engine still runs and writes frames through the terminal
+  # output backend.
+  defp maybe_start_driver(_dispatcher_pid, :harness, _options), do: {:ok, nil}
 
   # T2d: the inline driver profile (no alt-screen, no termbox ownership).
   # A sibling of the default branch below, not a replacement -- see

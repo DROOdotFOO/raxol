@@ -84,8 +84,20 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     initial_buffer = ScreenBuffer.new(state.width, state.height)
 
     sync_supported =
-      state.environment == :terminal and
-        Raxol.Terminal.AdvancedFeatures.supports_synchronized_output?()
+      case state.environment do
+        :terminal ->
+          Raxol.Terminal.AdvancedFeatures.supports_synchronized_output?()
+
+        # :harness boots byte-quiet by construction: never probe the
+        # terminal here (the harness SessionPump's InlineDriver owns
+        # capability probing). DEC-2026 sync is a boot opt-in instead --
+        # `engine_start_opts: [sync_output: true]` on the Lifecycle.
+        :harness ->
+          state.sync_output == true
+
+        _ ->
+          false
+      end
 
     new_state = %{state | buffer: initial_buffer, sync_output: sync_supported}
 
@@ -506,12 +518,20 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     )
 
     case state.environment do
-      :terminal ->
-        # F0-cursor: the view root may declare a cursor park
-        # (`Backends.declared_cursor/1` holds the seam decision record).
-        # The raw view is the extraction point -- it reaches this dispatch
-        # untouched by Preparer/Layout, so the declaration needs no
-        # threading through either.
+      # F0-cursor: the view root may declare a cursor park
+      # (`Backends.declared_cursor/1` holds the seam decision record).
+      # The raw view is the extraction point -- it reaches this dispatch
+      # untouched by Preparer/Layout, so the declaration needs no
+      # threading through either.
+      #
+      # :harness (TEA-migration F0-env) shares this terminal backend
+      # byte-for-byte: incremental row diff, one absolute-CUP vocabulary,
+      # cursor park tail, DEC-2026 bracket when enabled. Its only delta is
+      # inside render_to_terminal -- an io_writer, when set, is the output
+      # device (harness pump/tests own the tty). Alt-screen enter/leave is
+      # NEVER emitted by the runtime on this profile; the pump owns that
+      # bracket.
+      env when env in [:terminal, :harness] ->
         Backends.render_to_terminal(
           final_cells,
           state,

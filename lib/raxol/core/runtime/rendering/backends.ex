@@ -52,12 +52,23 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
         cursor
       )
 
-    if state.sync_output do
-      IO.write("\e[?2026h")
-      IO.write(frame)
-      IO.write("\e[?2026l")
-    else
-      IO.write(frame)
+    # Device seam (harness F0-env): an io_writer, when configured, IS the
+    # output device -- the same frame bytes go through it instead of
+    # stdout, so the harness pump and tests can own the tty. No :terminal
+    # caller sets io_writer, so that path stays byte-identical. Map.get,
+    # not dot access: test states may not carry the key (see below).
+    case Map.get(state, :io_writer) do
+      writer when is_function(writer, 1) ->
+        write_output(writer, frame, state.sync_output)
+
+      _ ->
+        if state.sync_output do
+          IO.write("\e[?2026h")
+          IO.write(frame)
+          IO.write("\e[?2026l")
+        else
+          IO.write(frame)
+        end
     end
 
     # Send frame to recorder if active

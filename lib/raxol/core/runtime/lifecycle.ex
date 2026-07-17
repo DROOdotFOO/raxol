@@ -108,8 +108,11 @@ defmodule Raxol.Core.Runtime.Lifecycle do
       when is_atom(app_module) and is_list(options) do
     environment = Keyword.get(options, :environment, :terminal)
 
+    # :liveview/:agent/:harness are multi-instance profiles reached by pid
+    # (the harness SessionPump holds the Lifecycle pid); registering a
+    # per-app_module global name would make a second session collide.
     name_option =
-      if environment in [:liveview, :agent] do
+      if environment in [:liveview, :agent, :harness] do
         Keyword.get(options, :name)
       else
         Keyword.get(options, :name, derive_process_name(app_module))
@@ -592,14 +595,27 @@ defmodule Raxol.Core.Runtime.Lifecycle do
     end
   end
 
-  defp trigger_initial_render(%State{rendering_engine_pid: pid})
+  # :harness boots byte-quiet (TEA-migration F0-env): the SessionPump owns
+  # first-paint ordering -- it must emit the alt-screen enter before any
+  # frame bytes and StreamCadence owns paint cadence -- so the runtime
+  # never paints spontaneously at boot on this profile. The pump requests
+  # the first frame itself; event-driven renders (:render_needed) are
+  # unaffected. Every other environment keeps the boot render.
+  defp trigger_initial_render(%State{options: options} = state) do
+    case Keyword.get(options, :environment, :terminal) do
+      :harness -> :ok
+      _ -> request_initial_render(state)
+    end
+  end
+
+  defp request_initial_render(%State{rendering_engine_pid: pid})
        when is_pid(pid) do
     if Process.alive?(pid) do
       GenServer.cast(pid, :render_frame)
     end
   end
 
-  defp trigger_initial_render(_state), do: :ok
+  defp request_initial_render(_state), do: :ok
 
   # -- Time-travel debugging --
 
