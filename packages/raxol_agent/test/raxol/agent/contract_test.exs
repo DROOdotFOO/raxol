@@ -73,8 +73,7 @@ defmodule Raxol.Agent.ContractTest do
       # item_started=2 / item_completed=3, the tool_result's item_started=4 /
       # item_completed=5).
       stream = [
-        {:tool_use,
-         %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
+        {:tool_use, %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
         {:tool_result, %{name: "run_tests", result: "tests: 12 passed"}},
         {:done, %{content: "done", usage: %{output_tokens: 1}}}
       ]
@@ -493,6 +492,119 @@ defmodule Raxol.Agent.ContractTest do
     end
   end
 
+  describe "wire-boundary markers (durable ⚠ blocks)" do
+    # RED-FIRST: an honest wire marker (length truncation / unparseable
+    # chunk) was dropped by pump's catch-all `_other` clause — the LongCat
+    # note flagged "no :marker sealing clause yet". A marker must seal as a
+    # durable ⚠ message block so a truncated turn is never silent, and it
+    # must COMPOSE with reasoning (∴ first, marker after the partial answer).
+
+    defp message_items(events) do
+      for %Event{type: :item_completed, payload: %{item_type: :message} = p} <-
+            events,
+          do: p
+    end
+
+    test "a {:marker, text} event seals a durable ⚠ message item" do
+      session_id = "contract-marker-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:marker, "⚠ response truncated — hit token limit"},
+        {:done, %{content: "", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      marker =
+        Enum.find(events, fn e ->
+          e.type == :item_completed and e.payload[:item_type] == :message and
+            is_binary(e.payload[:content]) and e.payload.content =~ "truncated"
+        end)
+
+      assert marker, "expected a ⚠ truncation marker message"
+      assert marker.tier == :durable
+    end
+
+    test "a blank marker seals nothing" do
+      session_id = "contract-marker-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:marker, "   "},
+        {:done, %{content: "hi", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      # Only the real answer message seals; no empty marker block.
+      assert [%{content: "hi"}] = message_items(events)
+    end
+
+    test "reasoning seals as ∴ BEFORE a partial answer, which precedes the truncation marker" do
+      session_id = "contract-marker-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      # The producer order for a non-empty length-truncated round:
+      # reasoning → partial content → marker → done.
+      stream = [
+        {:reasoning, "deep thought"},
+        {:text_delta, "partial"},
+        {:marker, "⚠ truncated"},
+        {:done, %{content: "partial", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      reasoning_started =
+        Enum.find(
+          events,
+          &(&1.type == :item_started and &1.payload[:item_type] == :reasoning)
+        )
+
+      answer_started =
+        Enum.find(
+          events,
+          &(&1.type == :item_started and &1.payload[:item_type] == :message and
+              &1.payload[:item_id] != marker_item_id(events))
+        )
+
+      marker_started =
+        Enum.find(
+          events,
+          &(&1.type == :item_started and &1.payload[:item_type] == :message and
+              &1.payload[:item_id] == marker_item_id(events))
+        )
+
+      # Render order is first-appearance (item_started): ∴, answer, ⚠.
+      assert reasoning_started.id < answer_started.id
+      assert answer_started.id < marker_started.id
+
+      # The partial answer and the marker are DISTINCT durable messages
+      # (the answer is not double-sealed, the marker is not folded in).
+      contents = message_items(events) |> Enum.map(& &1.content)
+      assert "partial" in contents
+      assert Enum.any?(contents, &(&1 =~ "truncated"))
+    end
+
+    # The marker's message item_id is the one whose sealed content carries
+    # the ⚠ text; used to tell the answer message from the marker message.
+    defp marker_item_id(events) do
+      Enum.find_value(events, fn
+        %Event{type: :item_completed, payload: %{item_type: :message} = p} ->
+          if is_binary(p[:content]) and p.content =~ "truncated",
+            do: p[:item_id],
+            else: nil
+
+        _ ->
+          nil
+      end)
+    end
+  end
+
   describe "encode_line/1" do
     test "produces one decodable JSON line per event" do
       event = %Event{
@@ -537,10 +649,8 @@ defmodule Raxol.Agent.ContractTest do
 
       stream = [
         {:tool_use, %{name: "edit_file", arguments: %{}, id: "e1"}},
-        {:approval_requested,
-         %{request_id: "r1", tool_name: "edit_file", options: []}},
-        {:approval_decided,
-         %{request_id: "r1", option_id: "allow", decision: :allow}},
+        {:approval_requested, %{request_id: "r1", tool_name: "edit_file", options: []}},
+        {:approval_decided, %{request_id: "r1", option_id: "allow", decision: :allow}},
         {:tool_result, %{name: "edit_file", result: %{ok: true}}},
         {:done, %{content: "done", usage: %{}}}
       ]

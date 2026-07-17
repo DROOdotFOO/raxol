@@ -29,8 +29,13 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   ## The event vocabulary (fed to `Raxol.Agent.Contract.pump/3`)
 
   Returns a lazy `Stream` whose elements are the same event tuples
-  `Raxol.Agent.Stream` uses, PLUS three this loop adds:
+  `Raxol.Agent.Stream` uses, PLUS the ones this loop adds:
 
+    * `{:reasoning, text}` — the model's chain-of-thought for THIS round
+      (surfaced from `response.reasoning`), emitted before the round's
+      tool/text so pump seals it as a durable ∴ block ahead of them; a
+      think→tool→think→answer turn produces one per thinking phase, in true
+      order. Blank thinking seals nothing.
     * `{:text_delta, text}` — the final text answer (one chunk per round)
     * `{:tool_use, %{name, arguments, id}}` — a tool the model called
     * `{:approval_requested, %{request_id, tool_name, args, options, action}}`
@@ -41,6 +46,9 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
     * `{:tool_unexecuted, %{name, reason}}` — a tool call that was RECOGNIZED
       but never produced a result (the honesty marker: a claim of action
       with no receipt is never silent)
+    * `{:marker, text}` — an honest wire-boundary notice (a length-truncated
+      round that still produced partial answer text), emitted after that
+      answer so pump seals it as a durable ⚠ block qualifying it
     * `{:turn_complete, info}` / `{:done, info}` / `{:error, reason}`
 
   `Raxol.Agent.Contract.pump/3` maps every one of these onto a durable
@@ -182,12 +190,24 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
     case config.backend.complete(messages, config.opts) do
       {:ok, %{tool_calls: tool_calls} = response}
       when is_list(tool_calls) and tool_calls != [] ->
+        # This round's thinking seals FIRST, ahead of the tool it reasoned
+        # toward (`Contract.pump/3` sequences it as a ∴ block before the
+        # tool_use item).
+        emit_reasoning(st, response)
         handle_tools(messages, iteration, st, response, tool_calls)
 
       {:ok, %{content: content} = response} ->
+        # Reasoning first (its own ∴ block), then the answer text, then —
+        # for a length-truncated round — an honest ⚠ marker AFTER the
+        # partial answer it qualifies. Ordering is what pump's first-
+        # appearance fold renders: ∴, answer, ⚠.
+        emit_reasoning(st, response)
+
         if is_binary(content) and content != "" do
           emit(st, {:text_delta, content})
         end
+
+        maybe_emit_truncation(st, response)
 
         emit(
           st,
@@ -198,6 +218,37 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
         emit(st, {:error, reason})
     end
   end
+
+  # The model's chain-of-thought for this round, surfaced from
+  # `response.reasoning` (the LongCat/DeepSeek `reasoning_content`, OpenRouter
+  # `reasoning` channel that `Backend.HTTP.complete/2` now exposes). Emitting
+  # it here is the whole fix: the live loop parsed reasoning and then dropped
+  # it, so thinking was invisible on the harness. On the complete/2 path
+  # there is no per-token reasoning stream, so the ∴ block lands when the
+  # round's response does (not live-typed) — but once landed it is a durable,
+  # peekable transcript fact like every other item. Blank thinking seals
+  # nothing.
+  defp emit_reasoning(st, response) do
+    reasoning = Map.get(response, :reasoning)
+
+    if is_binary(reasoning) and String.trim(reasoning) != "" do
+      emit(st, {:reasoning, reasoning})
+    end
+  end
+
+  # A round the provider cut off at the token limit (`finish_reason: length`)
+  # but that still produced SOME answer text: disclose the truncation with an
+  # honest ⚠ marker so a partial answer is never mistaken for a whole one.
+  # (A length-truncated round with an EMPTY answer never reaches here —
+  # `Backend.HTTP` returns it as `{:error, marker}`, handled by the loop's
+  # error clause.) The marker text rides in metadata so the honest token
+  # count from the wire boundary is preserved verbatim.
+  defp maybe_emit_truncation(st, %{metadata: %{marker: marker}})
+       when is_binary(marker) and marker != "" do
+    emit(st, {:marker, marker})
+  end
+
+  defp maybe_emit_truncation(_st, _response), do: :ok
 
   defp handle_tools(messages, iteration, st, response, tool_calls) do
     assistant_msg = %{

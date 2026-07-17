@@ -13,10 +13,15 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
 
   alias Raxol.Agent.Actions.Fs
   alias Raxol.Agent.Actions.Workspace
+  alias Raxol.Agent.Contract
+  alias Raxol.Agent.Contract.Event
   alias Raxol.Agent.Harness.ToolExecutor
+  alias Raxol.Agent.SessionStreamer
 
   # A backend that pops a scripted response per `complete/2` call: each
-  # element is `{:tool_calls, list}` or `{:content, text}`.
+  # element is `{:tool_calls, list}`, `{:content, text}`, or `{:response,
+  # map}` — the last handing the loop a full `complete/2` return map so a
+  # test can pin the reasoning channel and truncation metadata verbatim.
   defmodule ScriptBackend do
     @behaviour Raxol.Agent.AIBackend
 
@@ -36,6 +41,9 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
 
         {:content, text} ->
           {:ok, %{content: text, usage: %{}}}
+
+        {:response, response} when is_map(response) ->
+          {:ok, response}
 
         :eot ->
           {:ok, %{content: "(end)", usage: %{}}}
@@ -407,6 +415,208 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
                Enum.find(events, &match?({:tool_unexecuted, _}, &1))
 
       assert Enum.any?(events, &match?({:tool_result, _}, &1))
+    end
+  end
+
+  # RED-FIRST: reasoning is invisible on the LIVE harness path. The loop
+  # drives `complete/2`, which (since the LongCat wire fix) exposes
+  # `response.reasoning` — but the loop never surfaced it, so the model's
+  # thinking was parsed and dropped. Each round with non-empty reasoning
+  # must emit a `{:reasoning, _}` event BEFORE that round's tool/text
+  # events, so `Contract.pump/3` seals it as a durable ∴ block.
+  describe "reasoning: the complete/2 producer surfaces model thinking" do
+    defp reasoning_texts(events), do: for({:reasoning, t} <- events, do: t)
+
+    defp indices_of(events, type),
+      do: for({e, i} <- Enum.with_index(events), elem(e, 0) == type, do: i)
+
+    test "each round's reasoning is emitted before that round's tool/text events",
+         %{tmp: tmp} do
+      File.write!(Path.join(tmp, "f.txt"), "hi\n")
+
+      events =
+        run(
+          [
+            {:response,
+             %{
+               content: "",
+               tool_calls: [
+                 %{
+                   "name" => "read_file",
+                   "arguments" => %{"path" => "f.txt"},
+                   "id" => "t1"
+                 }
+               ],
+               usage: %{},
+               reasoning: "first I plan the read"
+             }},
+            {:response, %{content: "the answer", usage: %{}, reasoning: "now I conclude"}}
+          ],
+          actions: Fs.all(),
+          gate?: false
+        )
+
+      # Both rounds' thoughts surfaced, in true order.
+      assert reasoning_texts(events) == ["first I plan the read", "now I conclude"]
+
+      [r1, r2] = indices_of(events, :reasoning)
+      [tool_use_i] = indices_of(events, :tool_use)
+      [text_i] = indices_of(events, :text_delta)
+
+      # Round 1 thought precedes the tool it reasoned toward.
+      assert r1 < tool_use_i
+      # Round 2 thought is in the SECOND round (after the tool) and precedes
+      # the final answer text.
+      assert r2 > tool_use_i
+      assert r2 < text_i
+    end
+
+    test "blank (whitespace-only) reasoning emits no {:reasoning, _} event" do
+      events =
+        run(
+          [{:response, %{content: "hi", usage: %{}, reasoning: "   \n\t"}}],
+          actions: [],
+          gate?: false
+        )
+
+      refute Enum.any?(events, &match?({:reasoning, _}, &1))
+    end
+
+    test "a response with no reasoning channel emits no {:reasoning, _} event" do
+      events = run([{:content, "hi"}], actions: [], gate?: false)
+      refute Enum.any?(events, &match?({:reasoning, _}, &1))
+    end
+
+    test "a non-empty length-truncated round seals its reasoning AND discloses a truncation marker" do
+      events =
+        run(
+          [
+            {:response,
+             %{
+               content: "partial ans",
+               usage: %{},
+               reasoning: "was thinking hard",
+               metadata: %{
+                 finish_reason: :length,
+                 truncated: true,
+                 marker: "⚠ response truncated — hit token limit; raise AI_MAX_TOKENS"
+               }
+             }}
+          ],
+          actions: [],
+          gate?: false
+        )
+
+      assert {:reasoning, "was thinking hard"} in events
+
+      assert {:marker, marker} =
+               Enum.find(events, &match?({:marker, _}, &1))
+
+      assert marker =~ "truncated"
+
+      # reasoning → partial content → truncation marker (the marker
+      # qualifies the answer, so it lands after it).
+      [ri] = indices_of(events, :reasoning)
+      [ti] = indices_of(events, :text_delta)
+      [mi] = indices_of(events, :marker)
+      assert ri < ti and ti < mi
+    end
+  end
+
+  # RED-FIRST end-to-end: the REAL live path is ToolExecutor → Contract.pump.
+  # Scripting `complete/2` with reasoning on the tool round AND the answer
+  # round must land TWO durable ∴ reasoning blocks in the run history, each
+  # sealed before its round's tool/message block.
+  describe "end-to-end: live path (ToolExecutor → Contract.pump) seals ∴ blocks" do
+    setup do
+      start_supervised!({SessionStreamer, []})
+      :ok
+    end
+
+    test "think→tool→think→answer seals TWO ∴ blocks, each before its round's items",
+         %{tmp: tmp} do
+      File.write!(Path.join(tmp, "f.txt"), "hi\n")
+      session_id = "exec-e2e-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      agent =
+        script([
+          {:response,
+           %{
+             content: "",
+             tool_calls: [
+               %{
+                 "name" => "read_file",
+                 "arguments" => %{"path" => "f.txt"},
+                 "id" => "t1"
+               }
+             ],
+             usage: %{},
+             reasoning: "first, read the file"
+           }},
+          {:response, %{content: "done reading", usage: %{}, reasoning: "now, answer"}}
+        ])
+
+      stream =
+        ToolExecutor.stream("go",
+          backend: ScriptBackend,
+          backend_opts: [script: agent],
+          actions: Fs.all(),
+          gate?: false
+        )
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "go")
+      events = drain_events(session_id)
+
+      reasoning_seals =
+        for %Event{type: :item_completed, payload: %{item_type: :reasoning} = p} <-
+              events,
+            do: p
+
+      assert Enum.map(reasoning_seals, & &1.content) == [
+               "first, read the file",
+               "now, answer"
+             ]
+
+      # Round 1: the first ∴ seals BEFORE the tool_use block.
+      first_reasoning_seal =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :reasoning)
+        )
+
+      tool_use =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :tool_use)
+        )
+
+      assert first_reasoning_seal.id < tool_use.id
+
+      # Round 2: the second ∴ seals BEFORE the final answer message.
+      second_reasoning_seal =
+        Enum.find(
+          Enum.reverse(events),
+          &(&1.type == :item_completed and &1.payload[:item_type] == :reasoning)
+        )
+
+      final_message =
+        Enum.find(
+          Enum.reverse(events),
+          &(&1.type == :item_completed and &1.payload[:item_type] == :message)
+        )
+
+      assert second_reasoning_seal.id < final_message.id
+      assert tool_use.id < second_reasoning_seal.id
+    end
+  end
+
+  defp drain_events(session_id, acc \\ []) do
+    receive do
+      {:session_event, ^session_id, %Event{} = event} ->
+        drain_events(session_id, [event | acc])
+    after
+      200 -> Enum.reverse(acc)
     end
   end
 

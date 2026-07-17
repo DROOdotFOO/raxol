@@ -640,9 +640,23 @@ defmodule Raxol.Agent.Backend.HTTP do
     meta = %{backend: :http, provider: :openai, model: Map.get(body, "model")}
 
     case finish do
-      "length" -> Map.merge(meta, %{finish_reason: :length, truncated: true})
-      nil -> meta
-      other -> Map.put(meta, :finish_reason, other)
+      # A length-truncated round that still carried SOME answer text stays a
+      # {:ok, _} (partial answer preserved) but rides the honest marker in
+      # metadata — the non-streaming complete/2 loop has no other channel to
+      # disclose the truncation ALONGSIDE the partial answer. (An EMPTY
+      # length-truncated round is handled earlier as {:error, marker}.)
+      "length" ->
+        Map.merge(meta, %{
+          finish_reason: :length,
+          truncated: true,
+          marker: truncation_marker(body)
+        })
+
+      nil ->
+        meta
+
+      other ->
+        Map.put(meta, :finish_reason, other)
     end
   end
 

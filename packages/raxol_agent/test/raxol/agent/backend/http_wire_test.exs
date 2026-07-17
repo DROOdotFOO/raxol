@@ -150,6 +150,13 @@ defmodule Raxol.Agent.Backend.HTTPWireTest do
       assert response.content == "the sky is blue"
       assert response.metadata.finish_reason == :length
       assert response.metadata.truncated == true
+
+      # The honest marker rides in metadata so the live (complete/2) loop can
+      # surface a ⚠ truncation block ALONGSIDE the partial answer — the
+      # non-streaming path had no other channel for the disclosure.
+      assert is_binary(response.metadata.marker)
+      assert response.metadata.marker =~ "truncated"
+      assert response.metadata.marker =~ "AI_MAX_TOKENS"
     end
   end
 

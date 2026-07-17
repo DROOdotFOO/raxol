@@ -313,6 +313,26 @@ defmodule Raxol.Agent.Contract do
           content: tool_unexecuted_marker(payload)
         })
 
+      # An honest wire-boundary marker: a length-truncated round that still
+      # produced partial answer text (complete/2 loop), or an unparseable /
+      # again-degraded chunk forwarded on the streaming path. Previously the
+      # catch-all `_other` dropped it — a truncated turn went silent. It now
+      # seals as a durable ⚠ message so the notice is a peekable transcript
+      # fact. Any OPEN reasoning seals FIRST (∴ ahead of the warning); an
+      # open message is LEFT open, so its own `done` seal keeps the partial
+      # answer a single, un-duplicated block that (by pump's first-appearance
+      # order) renders BEFORE the marker qualifying it. Blank marker → no-op.
+      {:marker, text} when is_binary(text) ->
+        if blank?(text) do
+          acc
+        else
+          acc = close_reasoning_item(session_id, turn_id, counter, acc)
+
+          complete_item(session_id, turn_id, counter, acc, :message, %{
+            content: text
+          })
+        end
+
       {:turn_complete, info} ->
         # Close any reasoning that ran this round (think with no answer
         # text before the round boundary) so it seals as a durable block
@@ -361,8 +381,7 @@ defmodule Raxol.Agent.Contract do
 
         %{
           acc
-          | result:
-              {:ok, %{content: content, usage: Map.get(info, :usage, %{})}},
+          | result: {:ok, %{content: content, usage: Map.get(info, :usage, %{})}},
             journal: journal ++ [final_ev]
         }
 
