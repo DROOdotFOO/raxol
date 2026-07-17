@@ -11,15 +11,46 @@ defmodule Raxol.Harness.PumpContractTest do
        garbage into the model, never a crash;
     3. batch-item classification is total and `:unknown` stays
        representable (the loud-loss law needs it);
-    4. the ordering falsifier is declared as a pending stub the pump
-       reshape must make real (never fake-green).
+    4. the ordering falsifier is REAL (made so by the pump reshape,
+       A-side of A0): a scripted flood against a live
+       `Raxol.Harness.SessionPump` proves input enters the consumer
+       ahead of every batch pending with it at the pump seam.
   """
 
   use ExUnit.Case, async: true
 
   alias Raxol.Core.Events.Event
   alias Raxol.Harness.PumpContract
+  alias Raxol.Harness.SessionPump
   alias Raxol.Harness.StallDetector.Verdict
+
+  # A minimal scripted lane for the ordering falsifier — the pump under
+  # test needs a live lane seam, nothing more.
+  defmodule FloodLane do
+    @moduledoc false
+    @behaviour Raxol.Harness.SessionLane
+
+    @impl true
+    def subscribe(%{test: test_pid}) do
+      send(test_pid, {:subscribed, self()})
+      :ok
+    end
+
+    @impl true
+    def interrupt(_session, _payload), do: :ok
+
+    @impl true
+    def submit(_session, _request), do: :ok
+
+    @impl true
+    def steer(_session, _request), do: {:error, :unused}
+
+    @impl true
+    def answer_permission(_session, _answer), do: :ok
+
+    @impl true
+    def monitor(_session), do: nil
+  end
 
   # A representative EventBoundary-normalized event (the nine-field
   # fixture wire shape) — what a live forwarder would have produced.
@@ -208,39 +239,121 @@ defmodule Raxol.Harness.PumpContractTest do
     end
   end
 
-  describe "7. ordering property (falsifier stub — pump reshape makes it real)" do
-    # THE FALSIFIER the pump reshape must satisfy (PumpContract moduledoc
-    # §2; spec §3 "honest residual" / §9 risk 1):
+  describe "7. ordering property (the falsifier, REAL against SessionPump)" do
+    # THE FALSIFIER (PumpContract moduledoc §2; spec §3 "honest
+    # residual" / §9 risk 1):
     #
     #   Input enters the Dispatcher ahead of any batch that was pending
     #   with it at the pump seam.
     #
-    # Shape of the real property, once `Raxol.Harness.SessionPump`
-    # exists:
+    # Construction: the pump's clock (called first inside its :tick
+    # handler) is gated, wedging the pump MID-MESSAGE — the same
+    # deterministic wedge the driver suite's input-first test uses.
+    # While it is wedged, a flood of `{:render_batch, _}` deliveries AND
+    # one `{:inline_input, key}` all land in its mailbox: every batch is
+    # genuinely PENDING WITH the key when the loop next passes. Releasing
+    # the clock lets the loop run; the input-first selective receive must
+    # forward the key ahead of ALL of them. Against a plain-FIFO pump
+    # (the mutation this falsifies) the key arrives LAST.
     #
-    #   * flood the pump with N `{:render_batch, [...]}` deliveries from
-    #     a scripted cadence while simultaneously delivering
-    #     `{:inline_input, key_event}`;
-    #   * capture the pump→Dispatcher forward order (test Dispatcher =
-    #     the test process);
-    #   * assert every `{:key, _}` forward precedes every `{:batch, _}`
-    #     forward that was pending with it in the pump mailbox at
-    #     forward time (`PumpContract.ordering_class/1` is the oracle);
-    #   * assert the RESIDUAL bound: a key forwarded behind an
-    #     already-forwarded batch waits at most one update fold + one
-    #     coalesced paint (input-latency-under-flood measurement, the
-    #     §9 risk-1 number V ruled must exist before option (c) is ever
-    #     revisited).
-    #
-    # Marked skip, not fake-green: there is no pump to falsify yet.
-    @tag :skip
+    # The RESIDUAL half — a key forwarded behind an already-forwarded
+    # batch waits one update fold + one coalesced paint — is a
+    # measurement over the U-side (Dispatcher + update/2 + paint), owned
+    # by unit U7's latency falsifier (spec §6 Phase 4). This property
+    # pins the pump-seam guarantee, which is A0's half.
     test "input enters the Dispatcher ahead of any batch pending with it at the pump seam" do
-      flunk("""
-      Pending on the pump reshape (A-side of unit A0). This stub is the
-      contract's falsifier — implement it against SessionPump per the
-      comment above; do not delete it and do not green it without a real
-      pump under test. Contract: Raxol.Harness.PumpContract moduledoc §2.
-      """)
+      test_pid = self()
+      {:ok, gate} = Agent.start_link(fn -> :first end)
+
+      clock = fn ->
+        case Agent.get_and_update(gate, fn s -> {s, :rest} end) do
+          :first ->
+            send(test_pid, :clock_blocked)
+
+            receive do
+              :clock_go -> 0
+            end
+
+          :rest ->
+            System.monotonic_time(:millisecond)
+        end
+      end
+
+      {:ok, pump} =
+        SessionPump.start_link(
+          consumer: test_pid,
+          lane: {FloodLane, %{session_id: "s1", test: test_pid}},
+          clock: clock,
+          tick_ms: 60_000
+        )
+
+      assert_receive {:subscribed, _forwarder}, 2_000
+      on_exit(fn -> SessionPump.halt(pump) end)
+
+      # Wedge the pump inside its tick handler (the gated clock blocks
+      # before anything is forwarded for that tick).
+      send(pump, :tick)
+      assert_receive :clock_blocked, 2_000
+
+      # The flood: forty batches queue behind the wedge, then the key.
+      # In FIFO order the key is DEAD LAST in the pump's mailbox.
+      batches =
+        for i <- 1..40 do
+          [{:event, %{normalized_event() | id: i}}]
+        end
+
+      Enum.each(batches, fn batch ->
+        send(pump, {:render_batch, batch})
+      end)
+
+      send(pump, {:inline_input, %Event{type: :key, data: %{char: "z"}}})
+
+      send(pump, :clock_go)
+
+      # Collect every forward until all forty batches have arrived.
+      forwards = collect_forwards(length(batches))
+
+      key_idx =
+        Enum.find_index(
+          forwards,
+          &(PumpContract.ordering_class(&1) == :input_first)
+        )
+
+      batch_idxs =
+        for {msg, idx} <- Enum.with_index(forwards),
+            match?({:batch, _}, msg),
+            do: idx
+
+      assert key_idx, "the key was never forwarded"
+
+      assert Enum.all?(batch_idxs, &(&1 > key_idx)),
+             "input-first violated: a batch pending with the key was " <>
+               "forwarded ahead of it (key at #{key_idx}, batches at " <>
+               "#{inspect(Enum.take(batch_idxs, 5))}...)"
+
+      # And the fifo class stayed honest: batches forward verbatim, in
+      # ingest order, none dropped or reordered around each other.
+      assert Enum.filter(forwards, &match?({:batch, _}, &1)) ==
+               Enum.map(batches, &{:batch, &1})
+    end
+
+    defp collect_forwards(want_batches, acc \\ []) do
+      done? =
+        Enum.count(acc, &match?({:batch, _}, &1)) >= want_batches
+
+      if done? do
+        Enum.reverse(acc)
+      else
+        receive do
+          msg -> collect_forwards(want_batches, [msg | acc])
+        after
+          5_000 ->
+            flunk(
+              "flood incomplete: #{Enum.count(acc, &match?({:batch, _}, &1))}" <>
+                "/#{want_batches} batches forwarded; got #{inspect(Enum.reverse(acc))}"
+            )
+        end
+      end
     end
   end
 end
