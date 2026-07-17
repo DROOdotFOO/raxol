@@ -227,11 +227,20 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
     {min(row, buffer.height - 1), min(col, buffer.width - 1), visible?}
   end
 
-  # Stamps the declared cursor onto the frame's buffer -- the buffer-level
-  # half of the contract (`cursor_position` is {x, y}, matching the
-  # ScreenBuffer field). No declaration leaves the fresh buffer's defaults
-  # untouched.
-  defp stamp_cursor(buffer, cursor) do
+  @doc """
+  Stamps a view-declared cursor onto a buffer -- the buffer-level half of
+  the F0-cursor contract (`cursor_position` is `{x, y}`, matching the
+  ScreenBuffer field; plus `cursor_visible`). A `nil` declaration leaves the
+  buffer's cursor fields untouched, so no-declaration is stamp-identical to
+  the pre-cursor pipeline.
+
+  Public so the `:agent` render path (an inspection-only buffer, no tty
+  output) can reflect the SAME declared park `render_to_terminal/3` emits --
+  the harness-tea-migration §5 law 6 buffer-cursor assert surface that
+  `Raxol.Headless.get_buffer/1` exposes. Pair it with `declared_cursor/1`.
+  """
+  @spec stamp_cursor(map(), cursor_declaration()) :: map()
+  def stamp_cursor(buffer, cursor) do
     case clamp_cursor(normalize_cursor(cursor), buffer) do
       nil ->
         buffer

@@ -558,8 +558,17 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
         Backends.render_to_telegram(final_cells, state)
 
       :agent ->
-        # Agent environment: buffer maintained for inspection, no output written
-        updated_buffer = Backends.apply_cells_to_buffer(final_cells, state)
+        # Agent environment: buffer maintained for inspection, no output
+        # written. Stamp the view-declared cursor (F0-cursor / §5 law 6)
+        # onto the inspection buffer so `Raxol.Headless.get_buffer/1` reads
+        # the SAME park `render_to_terminal/3` would emit -- the buffer-level
+        # cursor-assert surface. `nil` (no declaration) leaves the buffer's
+        # cursor fields untouched, so agents that declare none are unchanged.
+        updated_buffer =
+          final_cells
+          |> Backends.apply_cells_to_buffer(state)
+          |> Backends.stamp_cursor(Backends.declared_cursor(view))
+
         {:ok, %{state | buffer: updated_buffer}}
 
       :inline ->

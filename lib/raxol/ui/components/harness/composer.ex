@@ -275,6 +275,50 @@ defmodule Raxol.UI.Components.Harness.Composer do
   end
 
   @doc """
+  The draft's visual rows as plain strings at `avail_width` -- the same
+  content-preserving `WrapMap` projection `render/2` and `edit_point/2`
+  derive from, so a host rendering the composer as footer line elements on
+  the TEA path (LayoutEngine leaves, one `%{type: :text}` node per string)
+  stays byte-aligned with `edit_point/2`'s row/col arithmetic.
+
+  This is the seam that lets the composer be hosted by
+  `Raxol.UI.Components.Harness.FooterStack` (which measures + fits line
+  lists) and lets a `view/1` declare the caret via the F0-cursor root
+  `:cursor` key: the host renders these rows, then parks the cursor at
+  `edit_point/2`. `render/2`'s own `:composer_input_row` tree targets the
+  shelved `ViewText` substrate and is not a LayoutEngine element, so this
+  is the TEA-path render surface.
+
+  A queued-steer banner, when present, is the first row (matching
+  `edit_point/2`'s banner accounting). An empty, unfocused draft with a
+  placeholder returns the placeholder row (mirrors `render/2`'s placeholder
+  branch); otherwise an empty draft is one empty row -- the caret's home.
+  Returns the FULL draft (unscrolled); for the short drafts a footer
+  composer shows this equals the rendered window (`vscroll` is 0).
+  """
+  @spec visual_lines(t(), pos_integer()) :: [String.t()]
+  def visual_lines(state, avail_width)
+      when is_integer(avail_width) and avail_width > 0 do
+    mli = state.mli
+
+    if mli.value == "" and not mli.focused and mli.placeholder != "" do
+      [truncate_to_width(mli.placeholder, avail_width)]
+    else
+      banner =
+        case state.queued_steer do
+          %{text: text} ->
+            [truncate_to_width(@steer_prefix <> text, avail_width)]
+
+          _ ->
+            []
+        end
+
+      map = WrapMap.build(mli.value, avail_width, state.wrap)
+      banner ++ WrapMap.lines(map)
+    end
+  end
+
+  @doc """
   Syncs the edit substrate's stored width -- the width event-time
   projections (visual up/down, history-recall gating) measure against.
   `render/2` and `edit_point/2` always re-derive at the caller-supplied
@@ -546,8 +590,22 @@ defmodule Raxol.UI.Components.Harness.Composer do
       ]
       |> Enum.reject(&is_nil/1)
 
+    # Stamp the root column with id + semantic attrs (harness TEA migration
+    # U2, §4 footer row): the composer becomes an identified node in the
+    # `view/1` tree so time-travel, the StructuredScreenshot semantic tree,
+    # and the TreeWalker can find it -- the same seam MessageBlock/Block
+    # carry. `component_module` marks the provider type; no `on_click` (the
+    # composer is driven by typed keys + Enter, not a click-toggle). Its
+    # edit-point caret reaches the pipeline via the host's root `:cursor`
+    # declaration (F0-cursor seam), computed from `edit_point/2` -- see §5
+    # law 6.
     %{
       type: :column,
+      id: state.id,
+      attrs: %{
+        kind: :composer,
+        component_module: __MODULE__
+      },
       style: base_style,
       gap: 0,
       children: children

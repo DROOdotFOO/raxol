@@ -611,6 +611,61 @@ defmodule Raxol.Playground.Catalog do
         dialog_overlay(w, h, Picker.render(picker_state, %{available_width: w - 4}))
       ])
       """
+    },
+    %{
+      name: "Harness FooterStack",
+      module: Demos.HarnessFooterStackDemo,
+      category: :harness,
+      description:
+        "The footer's honest-notice fit law: oversized groups clamped to a shrinking budget — drop order, protected channels never shed, budget-1 notice-wins",
+      complexity: :advanced,
+      tags: [
+        "harness",
+        "footer",
+        "layout",
+        "fit",
+        "honest-notice",
+        "controlled"
+      ],
+      code_snippet: """
+      {:ok, fs} =
+        FooterStack.init(
+          groups: [status: s, lane: l, composer: c, notice: n],
+          drop_order: [:composer_sep, :preview, :composer, :status],
+          budget: rows
+        )
+
+      FooterStack.render(fs, %{})  # fits in view-time; lane/notice never shed
+      """
+    },
+    %{
+      name: "Harness Status Strip",
+      module: Demos.HarnessStatusStripDemo,
+      category: :harness,
+      description:
+        "The pinned status strip: phase vocabulary (thinking/running/responding/awaiting approval), tick-driven braille spinner, ALERT stall, charged-minimum absence",
+      complexity: :intermediate,
+      tags: ["harness", "status", "spinner", "phase", "alert", "controlled"],
+      code_snippet: """
+      {:ok, s} =
+        StatusStrip.init(id: "status", status: status, spinner_frame: n)
+
+      StatusStrip.render(s, %{})  # yields to silence when nothing is true
+      """
+    },
+    %{
+      name: "Harness Composer",
+      module: Demos.HarnessComposerDemo,
+      category: :harness,
+      description:
+        "The prompt composer on the TEA path: cursor park at the edit point (buffer cursor), WrapMap wrap/readline chords, placeholder, submit/refuse notices",
+      complexity: :advanced,
+      tags: ["harness", "composer", "cursor", "input", "wrap", "controlled"],
+      code_snippet: """
+      {:ok, c} = Composer.init(id: "composer", focused: true)
+      rows = Composer.visual_lines(c, width)
+      {row, col} = Composer.edit_point(c, width)  # -> root :cursor
+      """
     }
   ]
 
