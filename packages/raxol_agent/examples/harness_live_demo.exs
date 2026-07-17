@@ -17,27 +17,25 @@
 # raxol_agent Mix project, which path-depends on main raxol:
 #
 #   cd packages/raxol_agent
-#   ELIXIR_ERL_OPTIONS="+Bi" mix run --no-start examples/harness_live_demo.exs
-#   ELIXIR_ERL_OPTIONS="+Bi" mix run --no-start \
-#     examples/harness_live_demo.exs --prompt "hello world"
+#   mix run --no-start examples/harness_live_demo.exs
+#   mix run --no-start examples/harness_live_demo.exs --prompt "hello world"
 #
 # `--no-start` avoids interleaving application boot logs into the byte
 # stream, exactly as the fixture demo documents -- everything this demo
 # needs (SessionStreamer, telemetry) is started explicitly below.
 #
-# `ELIXIR_ERL_OPTIONS="+Bi"` disables the BEAM break handler: without
-# it, Ctrl-C pressed OUTSIDE the raw-mode window (during boot -- longest
-# with DEBUG_WEB/DEBUG_DEVTOOLS compiling -- or during a Ctrl+E editor
-# suspend) drops into the "BREAK: (a)bort ..." menu and prints it over
-# the frame. A running BEAM cannot turn its break handler off, so the
-# demo can only detect the state and report it honestly in the boot
-# self-check (see the POST block below). While the terminal IS claimed,
-# raw mode runs `-isig` and ^C arrives as plain byte 0x03 -- mapped to
-# the node-style exit protocol (quits immediately on an empty composer;
+# Ctrl-C: while the terminal is claimed, ^C arrives as plain byte 0x03
+# (InlineDriver re-asserts `-isig` after arming its reader -- prim_tty's
+# own raw re-init used to leave ISIG on, turning ^C into the VM BREAK
+# menu printed over the frame; the boot POST probes the live termios
+# and reports the actual state). The byte feeds LiveSessionDriver's
+# node-style exit protocol: quits immediately on an empty composer;
 # with a draft composed, the first press arms and notices "ctrl-c again
 # to exit", a second consecutive press quits with the draft sealed into
-# scrollback, and any other keypress withdraws the offer), so
-# muscle-memory ^C always has an exit path without ever reaching the VM.
+# scrollback, and any other keypress withdraws the offer. Only OUTSIDE
+# the claimed window (a few seconds of boot, or a Ctrl+E editor
+# suspend) can ^C still reach the VM break handler; add
+# ELIXIR_ERL_OPTIONS="+Bi" if that window matters to you.
 #
 # Boot POST: before the first prompt, the demo seals one small
 # self-check block into history through the driver's normal seal path
@@ -96,8 +94,9 @@
 #               draft composed: first press arms + notices "ctrl-c again
 #               to exit", second consecutive press quits with the draft
 #               sealed into scrollback; any other key withdraws the
-#               offer. (Raw mode runs -isig, so ^C is byte 0x03 to the
-#               driver, never a SIGINT -- per InlineDriver's moduledoc.)
+#               offer. (Raw byte 0x03 to the driver -- InlineDriver
+#               re-asserts -isig after arming its reader; the boot POST
+#               probes and reports the live termios state.)
 #
 # The REPL seam (why this demo keeps a mirror Composer): on this branch
 # `Raxol.Harness.Surface` has no live submit channel -- its own composer
@@ -541,7 +540,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         # The demo starts InlineDriver with `probe?: false` a few lines
         # up -- this reports that setting, not a guess.
         "  term probe: off — conservative defaults",
-        "  " <> break_post_line()
+        "  " <> sigint_post_line()
       ] ++ debug_post_lines(ctx.debug, ctx.devtools)
 
     send(
@@ -565,19 +564,20 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     end
   end
 
-  # `:erlang.system_info(:break_ignored)` is the emulator's own record of
-  # +Bi -- the referent, not an env-var proxy. A live break handler means
-  # ctrl-c OUTSIDE the raw-mode window (boot, $EDITOR suspend) drops into
-  # the BREAK menu and prints over whatever is on screen; a running BEAM
-  # cannot turn it off, so the honest move is to say so and name the fix.
-  # (While the terminal is claimed, raw mode runs -isig and ^C is just
-  # byte 0x03 -- mapped to the quit gate, see LiveSessionDriver.)
-  defp break_post_line do
-    if :erlang.system_info(:break_ignored) do
-      "break handler: ignored (+Bi) — ctrl-c can never reach the vm"
+  # A REAL termios probe, not an assumption: reads the tty's live flags
+  # and reports whether ISIG is actually off (InlineDriver re-asserts
+  # `-isig` after arming its reader -- prim_tty's own raw re-init keeps
+  # ISIG on, which is exactly how ^C used to become the VM BREAK menu
+  # instead of byte 0x03 into the exit gate). If the probe cannot
+  # confirm, the line says so -- an honest warning, never a claimed
+  # guarantee.
+  defp sigint_post_line do
+    flags = :os.cmd(~c"stty -a < /dev/tty 2>/dev/null") |> List.to_string()
+
+    if flags =~ "-isig" do
+      "ctrl-c: byte 0x03 to the exit gate (-isig verified on the tty)"
     else
-      "break handler: live — ctrl-c during boot or editor suspend can " <>
-        "corrupt the frame; run with ELIXIR_ERL_OPTIONS=\"+Bi\""
+      "ctrl-c: WARNING — isig still on; ^C may hit the vm break handler"
     end
   end
 

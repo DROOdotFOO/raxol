@@ -234,7 +234,29 @@ defmodule Raxol.Terminal.InlineDriver do
     # No \e[?1049h anywhere on this path -- LC-P-NOALT.
     IO.write(device, Sequences.init_bytes())
 
-    if install_reader?, do: start_stdin_reader()
+    if install_reader? do
+      start_stdin_reader()
+
+      # Re-assert raw termios AFTER the reader is armed: user_drv's
+      # `{:start_shell, %{input: :raw}}` makes prim_tty re-initialize
+      # the termios with ITS raw settings, which keep ISIG ENABLED --
+      # silently clobbering the `-isig` this module's moduledoc
+      # promises. With ISIG back on, ^C becomes SIGINT (the VM BREAK
+      # menu printed over the frame, or a silent drop under +Bi)
+      # instead of byte 0x03 to the subscriber -- observed live as "the
+      # pilot cannot exit". prim_tty applies its termios ASYNCHRONOUSLY
+      # after the call returns, so a single immediate re-assert loses
+      # the race: verify-then-assert with a bounded budget instead,
+      # reading the LIVE flags (the referent, not this module's own
+      # bookkeeping) until `-isig` sticks. If the budget ends without it
+      # sticking, nothing is written to the tty here (no bytes may leak
+      # into the claimed frame) -- an embedder's own probe (e.g. the
+      # live demo's boot POST termios line) is the honest reporting
+      # channel for that case.
+      if state.stty_enabled? do
+        reassert_raw_until_isig_off(state.stty_module)
+      end
+    end
 
     opts
     |> maybe_run_probe(device, subscriber)
@@ -510,6 +532,53 @@ defmodule Raxol.Terminal.InlineDriver do
     end
 
     :ok
+  end
+
+  # Bounded verify-then-assert for the post-reader-arm `-isig`
+  # guarantee (see run_post_raw_setup/5's comment). prim_tty's termios
+  # write lands asynchronously, so ONE successful read is not proof the
+  # race is won -- it may simply not have landed yet. This therefore
+  # demands `@isig_confirmations` CONSECUTIVE 40ms-spaced reads showing
+  # `-isig`, re-asserting raw! and restarting the confirmation count on
+  # any flip-back, bounded by `attempts` total iterations (~1s worst
+  # case; two-three passes in practice). Only reachable with
+  # `install_reader?: true` on a real tty; the injected-stty test paths
+  # all run readerless. On a device where the flags never confirm
+  # (e.g. no controlling tty, where stty cannot run at all), this gives
+  # up silently -- nothing here may write bytes to the claimed frame;
+  # an embedder-level probe (the live demo's boot POST termios line) is
+  # the honest reporting channel.
+  @isig_confirmations 3
+
+  defp reassert_raw_until_isig_off(stty_module, attempts \\ 25) do
+    do_reassert_isig(stty_module, attempts, 0)
+  end
+
+  defp do_reassert_isig(_stty_module, 0, _confirmed), do: :ok
+
+  defp do_reassert_isig(_stty_module, _attempts, @isig_confirmations),
+    do: :ok
+
+  defp do_reassert_isig(stty_module, attempts, confirmed) do
+    confirmed =
+      if isig_off?() do
+        confirmed + 1
+      else
+        safe_stty_call(stty_module, :raw!, [])
+        0
+      end
+
+    Process.sleep(40)
+    do_reassert_isig(stty_module, attempts - 1, confirmed)
+  end
+
+  # Reads the LIVE flags from the controlling terminal -- the referent
+  # for "will ^C be a byte or a SIGINT", never a cached snapshot.
+  defp isig_off? do
+    ~c"stty -a < /dev/tty 2>/dev/null"
+    |> :os.cmd()
+    |> List.to_string()
+    |> String.contains?("-isig")
   end
 
   # --- Small helpers ---
