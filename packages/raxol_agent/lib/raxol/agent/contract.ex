@@ -27,6 +27,54 @@ defmodule Raxol.Agent.Contract do
   durable journal sink attach behind this same boundary in later steps —
   producers change, the contract does not.
 
+  ## U21 evidence tri-state wire marker (#619 residual)
+
+  On a `turn_completed{final: true}` produced by `gated_done_payload/4`, the
+  payload grows one optional discriminator plus one optional detail —
+  additive, grow-only, mirrors the Q1 `context`-field growth pattern:
+
+    * `evidence: :accepted | :rejected | :absent` — grow-only enum (atom
+      in-memory, JSON string on the wire, same convention as every other
+      enum on this surface).
+      - `:accepted` — stamped alongside `refs` (untouched: still the sole
+        accepted-refs carrier, no rename, no move).
+      - `:absent` — the `{:error, :evidence_required}` gate arm: the turn
+        offered no refs at all.
+      - `:rejected` — the `{:error, reason}` gate arm: refs were offered and
+        the gate refused them.
+    * `evidence_rejected` (present only when `evidence: :rejected`) —
+      `%{"refs" => offered_refs, "reason" => reason_name, "ref" =>
+      offset_or_nil}`, the `Raxol.Agent.DoneGate` verdict tuple flattened
+      EXPLICITLY into these string values — never handed to
+      `sanitize_payload/1` to `inspect/1`-stringify a raw tuple onto the
+      wire. `reason_name` is one of `"missing_ref"`, `"not_evidence"`,
+      `"foreign_turn"`, `"stale_evidence"`, `"mutation_echo"`.
+      `DoneGate`'s `:unturned_done` reject is unreachable on this path
+      (`pump/3` always mints a non-nil `turn_id`) and deliberately has no
+      clause here — it stays out of the wire enum.
+
+  Before this marker, a rejected done and a never-offered done were
+  byte-identical on the wire (`%{usage, final: true}`, no `refs`) — the two
+  gate-telemetry signals distinguished them live, but telemetry is not
+  journaled, so a replayed surface could not tell "offered but refused" from
+  "never offered". `evidence_status/1` decodes the field with the
+  grandfather rule this gap requires: an `evidence` key present is
+  authoritative; a **legacy** record (key absent) with `refs` present
+  grandfathers to `:accepted` (the `refs` carrier never lied); a legacy
+  record with neither key present is genuinely `:unknown` — it must NEVER
+  be guessed as `:absent`, which would launder a historical rejection into
+  a false "never offered" claim.
+
+  Both `[:raxol, :agent, :done_gate, :ungated_done]` and `[:raxol, :agent,
+  :done_gate, :rejected_evidence]` telemetry stay exactly as they were —
+  this marker is the durable/replay view; telemetry remains the live-ops
+  view. `refs` is untouched. The journal `schema_version` default bumps
+  1.0.0 -> 1.1.0 (`Raxol.Agent.Journal.FileStore.Writer`, additive per AD-11
+  upcast-on-read) alongside this payload growth; the pinned `v1.0.0` golden
+  corpus stays literal "1.0.0" and unrewritten (an old journal's records are
+  never rewritten in place, only decoded — covered by the grandfather rule
+  above).
+
   ## Producers
 
   The v0 producer is `pump/3`: it drains a `Raxol.Agent.Stream.run/2` or
@@ -271,7 +319,9 @@ defmodule Raxol.Agent.Contract do
 
     case DoneGate.gate(journal, turn_id, refs) do
       {:ok, _done} ->
-        Map.put(base, :refs, refs)
+        base
+        |> Map.put(:refs, refs)
+        |> Map.put(:evidence, :accepted)
 
       {:error, :evidence_required} ->
         :telemetry.execute(
@@ -280,7 +330,7 @@ defmodule Raxol.Agent.Contract do
           %{turn_id: turn_id}
         )
 
-        base
+        Map.put(base, :evidence, :absent)
 
       {:error, reason} ->
         :telemetry.execute(
@@ -290,6 +340,67 @@ defmodule Raxol.Agent.Contract do
         )
 
         base
+        |> Map.put(:evidence, :rejected)
+        |> Map.put(:evidence_rejected, evidence_rejected_detail(refs, reason))
+    end
+  end
+
+  # Flatten the DoneGate verdict tuple onto the wire EXPLICITLY — this must
+  # never be handed to `sanitize_payload/1` to `inspect/1`-stringify (that
+  # would render `"{:mutation_echo, 3}"` instead of a JSON-shaped detail).
+  # Every `DoneGate.gate/3` rejection reaching this arm (i.e. everything but
+  # `:evidence_required`, matched separately above) is a `{reason, offset}`
+  # pair per `DoneGate.verdict/0`. `:unturned_done` is the one bare-atom
+  # reject and is unreachable here — `pump/3` always mints a non-nil
+  # `turn_id` — so it deliberately has no clause and stays out of the wire
+  # enum; a value there would be a real invariant violation worth crashing
+  # loudly on rather than silently coercing.
+  @spec evidence_rejected_detail([DoneGate.offset()], {atom(), DoneGate.offset()}) ::
+          %{String.t() => term()}
+  defp evidence_rejected_detail(refs, {reason, offset}) when is_atom(reason) do
+    %{"refs" => refs, "reason" => Atom.to_string(reason), "ref" => offset}
+  end
+
+  @doc """
+  Decode a `turn_completed{final: true}` payload's evidence status.
+
+  Tolerant of both atom- and string-keyed payloads and both atom- and
+  string-valued enums (live in-memory events vs. journal-replayed JSON —
+  same convention as `Raxol.Agent.DoneGate`'s accessors).
+
+  Implements the grandfather rule for records written before this marker
+  existed (see moduledoc): an `evidence` key present is authoritative and
+  wins outright. A legacy record (key absent) with `refs` present
+  grandfathers to `:accepted` — the `refs` carrier never lied about
+  acceptance. A legacy record with **neither** key present is genuinely
+  `:unknown`: before this marker, a rejected done and a never-offered done
+  were wire-identical, so there is no way to tell them apart after the
+  fact. This case must NEVER decode as `:absent` — that would launder a
+  historical rejection into a false "never offered" claim.
+  """
+  @spec evidence_status(map()) :: :accepted | :rejected | :absent | :unknown
+  def evidence_status(payload) when is_map(payload) do
+    case fetch_either(payload, :evidence) do
+      {:ok, value} ->
+        normalize_evidence(value)
+
+      :error ->
+        case fetch_either(payload, :refs) do
+          {:ok, _refs} -> :accepted
+          :error -> :unknown
+        end
+    end
+  end
+
+  defp normalize_evidence(value) when value in [:accepted, "accepted"], do: :accepted
+  defp normalize_evidence(value) when value in [:rejected, "rejected"], do: :rejected
+  defp normalize_evidence(value) when value in [:absent, "absent"], do: :absent
+
+  defp fetch_either(map, key) when is_map(map) do
+    cond do
+      Map.has_key?(map, key) -> {:ok, Map.get(map, key)}
+      Map.has_key?(map, Atom.to_string(key)) -> {:ok, Map.get(map, Atom.to_string(key))}
+      true -> :error
     end
   end
 

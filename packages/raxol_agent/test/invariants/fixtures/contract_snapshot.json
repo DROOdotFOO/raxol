@@ -1,6 +1,6 @@
 {
   "_comment": "I9 contract snapshot — the checked-in floor the contract may only GROW from. contract_invariants_test.exs re-produces every shape below through the real producers and fails on removal, rename, type-narrowing, tier flip, enum-value removal, or event-type removal. Adding fields/types/enum values is legal and does NOT require touching this file; removing or renaming anything here is a contract break.",
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "contract_version": 0,
   "envelope": {
     "required": [

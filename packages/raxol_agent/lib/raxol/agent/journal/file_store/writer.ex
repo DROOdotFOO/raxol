@@ -24,7 +24,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   @default_segment_cap 8 * 1024 * 1024
   @default_sync_ceiling_ms 200
   @default_immediate_types ["tool_result", "approval"]
-  @default_schema_version "1.0.0"
+  @default_schema_version "1.1.0"
 
   defstruct [
     :session_id,
