@@ -1,5 +1,6 @@
 defmodule Raxol.UI.Components.Harness.ComposerTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Raxol.Core.Events.Event
   alias Raxol.Harness.Surface.ViewText
@@ -1103,6 +1104,117 @@ defmodule Raxol.UI.Components.Harness.ComposerTest do
       {state, _cmds} = press(state, :up)
 
       assert Composer.edit_point(state, 40) == {0, 4}
+    end
+  end
+
+  # The input-zone parity guard: the whole point of the b3fdbe94f split is
+  # that the logical draft is the single edit truth and every visual thing
+  # -- the wrapped rows, the cursor park -- is a ONE-WAY projection of it.
+  # These two must never disagree. A property drives random event sequences
+  # (typing incl. CJK/emoji double-width, paste with embedded newlines,
+  # arrow/vertical navigation, backspace) through the full
+  # `handle_event -> render -> edit_point` chain and asserts the invariants
+  # that hold no matter what was typed:
+  #
+  #   1. `edit_point/2`'s parked row ALWAYS lands on a real rendered
+  #      composer row (`0 <= row < length(rendered_lines)`), so the native
+  #      terminal cursor can never point at a row that isn't on screen --
+  #      the exact desync class (edit_point vs. render re-deriving geometry
+  #      independently) this suite exists to rule out forever.
+  #   2. The parked column is within `[1, width]` -- never off the right
+  #      edge, never zero.
+  #   3. No event in the sequence (paste included) ever emits a `:submit`
+  #      command: a pasted `\n` becomes a continuation row, never a submit,
+  #      and no navigation/edit key submits either. (Plain Enter is the ONLY
+  #      submit inlet and is deliberately absent from the generator.)
+  #   4. The logical value round-trips as a plain binary the whole time.
+  describe "input-zone parity (property: logical draft <-> visual projection <-> park)" do
+    @width 40
+
+    # A grapheme alphabet that exercises the display-width math the park
+    # arithmetic depends on: ASCII, a space (the historical spacebar-park
+    # defect), a CJK double-width cell, and a multi-codepoint emoji.
+    defp grapheme_gen do
+      StreamData.member_of(["a", "Z", "7", " ", "世", "🎉"])
+    end
+
+    defp op_gen do
+      StreamData.one_of([
+        StreamData.tuple({StreamData.constant(:char), grapheme_gen()}),
+        StreamData.tuple(
+          {StreamData.constant(:paste),
+           StreamData.string(:alphanumeric, min_length: 0, max_length: 6)}
+        ),
+        # Paste carrying an embedded newline -- the continuation-row path.
+        StreamData.constant({:paste, "x\ny"}),
+        StreamData.constant(:newline),
+        StreamData.constant(:backspace),
+        StreamData.constant(:left),
+        StreamData.constant(:right),
+        StreamData.constant(:up),
+        StreamData.constant(:down),
+        StreamData.constant(:home),
+        StreamData.constant(:end)
+      ])
+    end
+
+    defp apply_op({:char, g}, {state, cmds}) do
+      {new_state, new_cmds} = press(state, g)
+      {new_state, cmds ++ new_cmds}
+    end
+
+    defp apply_op({:paste, text}, {state, cmds}) do
+      {new_state, new_cmds} = paste(state, text)
+      {new_state, cmds ++ new_cmds}
+    end
+
+    # Shift+Enter inserts a newline (never submits) -- the modifier-carrying
+    # continuation inlet.
+    defp apply_op(:newline, {state, cmds}) do
+      {new_state, new_cmds} = press(state, :enter, [:shift])
+      {new_state, cmds ++ new_cmds}
+    end
+
+    defp apply_op(key, {state, cmds}) do
+      {new_state, new_cmds} = press(state, key)
+      {new_state, cmds ++ new_cmds}
+    end
+
+    defp rendered_line_count(state) do
+      state
+      |> Composer.render(%{available_width: @width})
+      |> ViewText.lines(@width, :styled)
+      |> length()
+    end
+
+    property "the parked cursor always lands on a rendered row, and paste never submits" do
+      check all(ops <- StreamData.list_of(op_gen(), max_length: 40)) do
+        {:ok, state} =
+          Composer.init(id: :parity_prop, width: @width, focused: true)
+
+        {final, cmds} = Enum.reduce(ops, {state, []}, &apply_op/2)
+
+        # (4) logical truth is always a recoverable binary.
+        assert is_binary(Composer.value(final))
+
+        # (3) no submit ever escaped -- plain Enter is not in the generator.
+        refute Enum.any?(cmds, fn
+                 {:component_event, _id, {:submit, _text}} -> true
+                 _other -> false
+               end)
+
+        # (1) + (2) park coherence against the ACTUAL rendered rows.
+        {row, col} = Composer.edit_point(final, @width)
+        line_count = rendered_line_count(final)
+
+        assert row >= 0 and row < line_count,
+               "park row #{row} outside rendered rows 0..#{line_count - 1} " <>
+                 "for value #{inspect(Composer.value(final))}"
+
+        assert col >= 1 and col <= @width,
+               "park col #{col} outside 1..#{@width} " <>
+                 "for value #{inspect(Composer.value(final))}"
+      end
     end
   end
 end

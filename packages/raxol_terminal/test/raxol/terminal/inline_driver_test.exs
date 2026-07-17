@@ -392,6 +392,104 @@ defmodule Raxol.Terminal.InlineDriverTest do
     end
   end
 
+  # A bracketed paste that spans more than one OS read chunk must still
+  # reach the subscriber as ONE atomic :paste event -- never fragmented
+  # into raw key events. The disease this rules out: the paste tail
+  # re-parsed as keystrokes, where a pasted CR (`\r`) becomes an :enter
+  # (a spurious SUBMIT), a pasted TAB becomes a :tab (a spurious steer),
+  # and a pasted ESC becomes an :escape (a spurious interrupt). See
+  # `InputParser`'s stateless-per-chunk contract and the driver's paste
+  # reassembly buffer.
+  describe "bracketed paste reassembly across read chunks" do
+    setup %{sio: sio} do
+      {:ok, pid} =
+        InlineDriver.start_link(
+          device: sio,
+          subscriber: self(),
+          tty?: false,
+          stty_enabled?: false,
+          install_reader?: false,
+          probe?: false
+        )
+
+      %{pid: pid}
+    end
+
+    defp feed_chunk(pid, data),
+      do: send(pid, {:trace, self(), :send, {make_ref(), {:data, data}}, self()})
+
+    test "a paste split mid-body (before its first newline) does not submit",
+         %{pid: pid} do
+      # The split lands right before the first CR -- the exact boundary that,
+      # unbuffered, parses the tail's `\r` as :enter and submits the draft.
+      feed_chunk(pid, "\e[200~line one")
+      feed_chunk(pid, "\rline two\e[201~")
+
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{
+                        type: :paste,
+                        data: %{text: "line one\rline two"}
+                      }},
+                     1_000
+
+      # No stray key events (no :enter/:tab/:key) leaked from the paste body.
+      refute_received {:inline_input, %Raxol.Core.Events.Event{type: :key}}
+
+      GenServer.stop(pid)
+    end
+
+    test "a paste split across three chunks reassembles whole", %{pid: pid} do
+      feed_chunk(pid, "\e[200~alpha\t")
+      feed_chunk(pid, "beta\r\n")
+      feed_chunk(pid, "gamma\e[201~")
+
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{
+                        type: :paste,
+                        data: %{text: "alpha\tbeta\r\ngamma"}
+                      }},
+                     1_000
+
+      refute_received {:inline_input, %Raxol.Core.Events.Event{type: :key}}
+
+      GenServer.stop(pid)
+    end
+
+    test "real key events before an unterminated paste still flush immediately",
+         %{pid: pid} do
+      # A keystroke ahead of a paste open in the same chunk must not be held
+      # hostage by the pending paste tail.
+      feed_chunk(pid, "a\e[200~partial")
+
+      assert_receive {:inline_input, %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
+                     1_000
+
+      feed_chunk(pid, " rest\e[201~")
+
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{
+                        type: :paste,
+                        data: %{text: "partial rest"}
+                      }},
+                     1_000
+
+      GenServer.stop(pid)
+    end
+
+    test "a single-chunk paste is unaffected (no regression)", %{pid: pid} do
+      feed_chunk(pid, "\e[200~whole\e[201~")
+
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{
+                        type: :paste,
+                        data: %{text: "whole"}
+                      }},
+                     1_000
+
+      GenServer.stop(pid)
+    end
+  end
+
   # ---------------------------------------------------------------------
   # The event-clocked isig guard (the real-terminal ^C trap):
   # prim_tty can re-own the termios with ISIG on at times no boot-window

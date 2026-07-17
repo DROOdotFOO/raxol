@@ -162,7 +162,8 @@ defmodule Raxol.Terminal.InlineDriver do
               isig_guard_count: 0,
               isig_flags_reader: nil,
               isig_boot_confirmed?: false,
-              isig_reasserts: 0
+              isig_reasserts: 0,
+              paste_pending: <<>>
 
     @type t :: %__MODULE__{
             dispatcher_pid: pid() | nil,
@@ -179,7 +180,10 @@ defmodule Raxol.Terminal.InlineDriver do
             isig_guard_count: non_neg_integer(),
             isig_flags_reader: (-> boolean()) | nil,
             isig_boot_confirmed?: boolean(),
-            isig_reasserts: non_neg_integer()
+            isig_reasserts: non_neg_integer(),
+            # Held bytes of a bracketed paste whose `ESC[201~` close has not
+            # arrived yet -- see `dispatch_input/2`'s reassembly note.
+            paste_pending: binary()
           }
   end
 
@@ -585,18 +589,79 @@ defmodule Raxol.Terminal.InlineDriver do
 
   # --- Input dispatch ---
 
-  defp dispatch_input(<<>>, state), do: {:noreply, state}
+  defp dispatch_input(<<>>, %State{paste_pending: <<>>} = state),
+    do: {:noreply, state}
 
   defp dispatch_input(data, state) do
+    # The raw tap always sees the verbatim, pre-parse chunk exactly as read
+    # -- never the reassembly buffer (which is a parse-layer concern).
     notify_raw(state.raw_sink, data)
 
-    data
+    # `InputParser.parse/1` is stateless per call: a bracketed paste
+    # (`ESC[200~ ... ESC[201~`) is only atomic when its close lands in the
+    # SAME chunk. A large multi-line paste split across OS reads would
+    # otherwise have its tail re-parsed as raw keys -- a pasted `\r` firing
+    # :enter (a spurious SUBMIT), `\t` firing :tab (steer), `ESC` firing
+    # :escape (interrupt). So the driver carries any unterminated paste
+    # tail in `paste_pending` and only parses once the close arrives.
+    buffer = state.paste_pending <> data
+    {to_parse, pending} = split_pending_paste(buffer)
+
+    to_parse
     |> safe_parse()
     |> Enum.each(&notify(state.subscriber, &1))
 
     # AFTER forwarding: the guard's stty spawn must never delay the
     # keystroke that carried us here -- it protects the NEXT one.
-    {:noreply, maybe_guard_isig(state)}
+    {:noreply, maybe_guard_isig(%{state | paste_pending: pending})}
+  end
+
+  @paste_open <<27, 91, 50, 48, 48, 126>>
+  @paste_close <<27, 91, 50, 48, 49, 126>>
+  # Safety valve: a terminal that opens a paste and never closes it (or a
+  # multi-megabyte paste) must not pin memory unbounded. Past this, flush
+  # what we have -- `InputParser`'s own open-without-close branch still
+  # emits it as one :paste event, so even the flush never fragments.
+  @max_paste_buffer 4_000_000
+
+  # Splits `buffer` into `{to_parse, pending}`: everything safe to parse now
+  # vs. the tail of an unterminated bracketed paste to hold for the next
+  # chunk. Complete pastes earlier in the buffer stay in `to_parse` (the
+  # parser handles them); only a trailing `ESC[200~` with no following
+  # `ESC[201~` is held.
+  defp split_pending_paste(buffer) do
+    case unterminated_open(buffer) do
+      nil ->
+        {buffer, <<>>}
+
+      open_pos when byte_size(buffer) - open_pos > @max_paste_buffer ->
+        {buffer, <<>>}
+
+      open_pos ->
+        {binary_part(buffer, 0, open_pos),
+         binary_part(buffer, open_pos, byte_size(buffer) - open_pos)}
+    end
+  end
+
+  # Byte offset of the LAST paste-open that has no paste-close after it, or
+  # nil when every open is terminated (or there is no open). Only the final
+  # open can be unterminated -- an earlier open without a close would have
+  # consumed the bytes that a later open sits in.
+  defp unterminated_open(buffer) do
+    case :binary.matches(buffer, @paste_open) do
+      [] ->
+        nil
+
+      opens ->
+        {open_pos, open_len} = List.last(opens)
+        after_open = open_pos + open_len
+        tail = binary_part(buffer, after_open, byte_size(buffer) - after_open)
+
+        case :binary.match(tail, @paste_close) do
+          :nomatch -> open_pos
+          _found -> nil
+        end
+    end
   end
 
   defp notify_raw(nil, _data), do: :ok
