@@ -465,27 +465,40 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   scratch rather than resuming from a cursor that may have been left
   mid-write.
 
-  ## Only device-origin failures are converted to `:write_failed`
+  ## Only RETRYABLE device failures are converted to `:write_failed`
 
-  The rescue below is scoped by `device_io_error?/2`: an exception
-  qualifies only when it is one of the two device classes AND was raised
-  by the `:io` layer itself (the stack head names the raiser):
+  The rescue below is scoped twice, by `retryable_device_error?/2`:
 
-    * `ArgumentError` raised by `:io.put_chars` -- the io server replied
-      `{:error, reason}` (e.g. `{:error, :enospc}`).
-    * `ErlangError` raised by `:io.put_chars` -- the device process is
-      dead (canonically `%ErlangError{original: :terminated}` from a
-      closed `StringIO`/port).
+    * It must be a device failure at all (`device_io_error?/2` -- one of
+      the two device classes AND raised by the `:io` layer itself, the
+      stack head naming the raiser). Anything else RE-RAISES: an
+      `ArgumentError`/`ErlangError` raised by non-device code inside the
+      seal path is a logic bug, and reclassifying it as `:write_failed`
+      would turn it into an unbounded silent retry loop (the same entry
+      re-attempted every frame, forever, with the real error never
+      surfaced).
+    * It must be plausibly TRANSIENT. The `{:error, reason}` io reply
+      (`ArgumentError` from `:io.put_chars`, e.g. `enospc`) is: the
+      device is alive and answering, and may accept the retry. A DEAD
+      device (`%ErlangError{original: :terminated}` -- the io-server
+      process is gone) is NOT: a pid never comes back, so retrying is
+      retrying a corpse, forever and silently. That case RE-RAISES too --
+      the loud crash is the honest outcome for a device that can never
+      heal (and is exactly what the pre-two-phase `seal/2` did).
 
-  Anything else RE-RAISES: an `ArgumentError`/`ErlangError` raised by
-  non-device code inside the seal path is a logic bug, and reclassifying
-  it as `:write_failed` would turn it into an unbounded silent retry loop
-  (the same entry re-attempted every frame, forever, with the real error
-  never surfaced). The validation raise above happens BEFORE the rescued
-  block even starts -- a missing `\\r\\n` is a bug in the calling code,
-  not a device failure. Likewise, `with_cursor/3`'s own nested-bracket
+  The validation raise above happens BEFORE the rescued block even
+  starts -- a missing `\\r\\n` is a bug in the calling code, not a
+  device failure. Likewise, `with_cursor/3`'s own nested-bracket
   `RuntimeError` is deliberately NOT rescued -- a caller bug, not
   something a device retry can fix.
+
+  A refusing-but-alive device CAN loop indefinitely (each frame retries,
+  each retry may be refused again). That loop is deliberate -- a bound
+  would strand the block if the device recovers on attempt N+1 -- but it
+  is not silent: the harness consumer emits
+  `[:raxol, :harness, :seal, :write_failed]` telemetry per refused write
+  (see `Raxol.Harness.Surface`), so a persistent refusal is observable
+  from the first frame.
 
   ## Partial-write honesty (and the scroll-boundary residual)
 
@@ -521,11 +534,21 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
      with_cursor(t, :history, fn inner -> append_sealed(inner, sanitized) end)}
   rescue
     e in [ArgumentError, ErlangError] ->
-      if device_io_error?(e, __STACKTRACE__) do
+      if retryable_device_error?(e, __STACKTRACE__) do
         {:error, :write_failed, t}
       else
         reraise e, __STACKTRACE__
       end
+  end
+
+  # The retryability split on top of device_io_error?/2 (see try_seal/2's
+  # doc): a device failure is only worth a retry when the device is ALIVE
+  # and answering ({:error, reason} reply). A dead device -- the io-server
+  # pid is gone; %ErlangError{original: :terminated} -- can never heal, so
+  # it re-raises (fail-fast) instead of becoming an infinite corpse-retry.
+  defp retryable_device_error?(exception, stacktrace) do
+    device_io_error?(exception, stacktrace) and
+      not match?(%ErlangError{original: :terminated}, exception)
   end
 
   @doc """
@@ -547,6 +570,14 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   The same exception class raised by NON-device code returns false, so
   callers re-raise it loudly instead of misclassifying a logic bug as a
   retryable write failure.
+
+  Note this answers "is it a device io error", NOT "is it worth
+  retrying" -- those are different questions. A dead device
+  (`%ErlangError{original: :terminated}`) IS a device io error by this
+  predicate, but the rescue sites here treat it as fail-fast, never
+  retryable: the io-server pid is gone and can never come back, so a
+  retry loop against it would spin silently forever (the round-2 review
+  finding). See `try_seal/2`'s "Only RETRYABLE device failures" section.
   """
   @spec device_io_error?(Exception.t(), Exception.stacktrace()) :: boolean()
   def device_io_error?(exception, stacktrace)
@@ -583,10 +614,12 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
   ## A failed open degrades gracefully
 
-  If the opening write itself fails (device error, per
-  `device_io_error?/2` -- anything else re-raises), the latch is left as
-  it was and the frame simply runs unbracketed: this is a
-  PRESENTATION-only feature and must never take down the frame it wraps.
+  If the opening write itself is REFUSED (the alive-but-refusing device
+  class -- a dead device re-raises, same fail-fast rationale as
+  `try_seal/2`'s corpse rule; anything non-device re-raises too), the
+  latch is left as it was and the frame simply runs unbracketed: this is
+  a PRESENTATION-only feature and must never take down the frame it
+  wraps.
   """
   @spec sync_open(t()) :: t()
   def sync_open(%__MODULE__{sync_output?: false} = t), do: t
@@ -618,6 +651,13 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   therefore "until the next frame with a writable device" -- never
   "forever" -- and, since a refused SEAL write guarantees a retry frame,
   the common failure topology heals immediately.
+
+  The wedge-then-QUIT topology (a close stranded on the session's final
+  frame, no later frame to heal on) is covered one layer down: the
+  inline driver's canonical teardown AND editor-suspend byte sequences
+  (`Raxol.Terminal.InlineDriver.Sequences`, step 1) emit an
+  unconditional `?2026l` backstop -- harmless when nothing is owed, DEC
+  private modes being set/reset.
   """
   @spec sync_close(t()) :: t()
   def sync_close(%__MODULE__{sync_close_pending?: false} = t), do: t
@@ -629,16 +669,20 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     end
   end
 
-  # Best-effort single byte-sequence write for the sync bracket: device
-  # failures (per device_io_error?/2 -- the :io-raised classes only)
-  # report :error; anything else re-raises. A lost sync byte never
-  # crashes the frame it was only decorating.
+  # Best-effort single byte-sequence write for the sync bracket:
+  # RETRYABLE device failures (retryable_device_error?/2 -- the
+  # alive-but-refusing {:error, reason} reply class) report :error, so a
+  # lost sync byte never crashes the frame it was only decorating and the
+  # latch re-attempts later. A DEAD device re-raises, same fail-fast
+  # rationale as confirmed_seal/2: everything after this write hits the
+  # same corpse, and retrying it forever would be the silent-loop
+  # regression round 2 flagged. Non-device raises re-raise (logic bug).
   defp sync_write(device, bytes) do
     IO.write(device, bytes)
     :ok
   rescue
     e in [ArgumentError, ErlangError] ->
-      if device_io_error?(e, __STACKTRACE__) do
+      if retryable_device_error?(e, __STACKTRACE__) do
         :error
       else
         reraise e, __STACKTRACE__

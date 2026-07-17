@@ -87,7 +87,11 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
     def start(opts) do
       {:ok, sink} = StringIO.open("")
       fail_when = Keyword.fetch!(opts, :fail_when)
-      pid = spawn_link(fn -> loop(sink, fail_when, false) end)
+      # :once (default) recovers after the first failure -- the transient
+      # topology. :always keeps refusing every matching write -- the
+      # non-transient topology round-2's observability finding targets.
+      mode = Keyword.get(opts, :mode, :once)
+      pid = spawn_link(fn -> loop(sink, fail_when, mode, false) end)
       {pid, sink}
     end
 
@@ -96,23 +100,23 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
       out
     end
 
-    defp loop(sink, fail_when, failed?) do
+    defp loop(sink, fail_when, mode, failed?) do
       receive do
         {:io_request, from, ref, {:put_chars, _enc, chars}} ->
           bytes = IO.iodata_to_binary(chars)
 
-          if not failed? and fail_when.(bytes) do
+          if (mode == :always or not failed?) and fail_when.(bytes) do
             send(from, {:io_reply, ref, {:error, :enospc}})
-            loop(sink, fail_when, true)
+            loop(sink, fail_when, mode, true)
           else
             IO.write(sink, bytes)
             send(from, {:io_reply, ref, :ok})
-            loop(sink, fail_when, failed?)
+            loop(sink, fail_when, mode, failed?)
           end
 
         {:io_request, from, ref, _other} ->
           send(from, {:io_reply, ref, {:error, :request}})
-          loop(sink, fail_when, failed?)
+          loop(sink, fail_when, mode, failed?)
       end
     end
   end
@@ -292,18 +296,21 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
       assert occurrences(FailingDevice.confirmed_bytes(sink), @marker) == 1
     end
 
-    test "try_seal/2 returns the authority untouched on a dead device (ErlangError class)" do
+    test "try_seal/2 fail-fasts on a dead device -- a corpse is never retried" do
+      # Round-2 review: a dead device (%ErlangError{original: :terminated})
+      # is PERMANENT by construction -- the io-server pid is gone and the
+      # same pid can never come back -- so classifying it retryable turned
+      # the pre-PR loud crash into a silent infinite retry loop. try_seal/2
+      # must re-raise it (fail-fast, restoring the loud failure), reserving
+      # {:error, :write_failed, _} for the ALIVE-but-refusing device class
+      # (the {:error, reason} io reply), which is plausibly transient.
       {:ok, dead} = StringIO.open("")
-      # Drain the construction bytes, then kill the device.
       authority = InlineAuthority.new(dead, 40, 10, 3)
       StringIO.close(dead)
 
-      assert {:error, :write_failed, returned} =
-               InlineAuthority.try_seal(authority, "line\r\n")
-
-      assert returned == authority,
-             "a failed seal must return the ORIGINAL authority " <>
-               "(next_row not advanced) so the retry re-positions from scratch"
+      assert_raise ErlangError, fn ->
+        InlineAuthority.try_seal(authority, "line\r\n")
+      end
     end
 
     test "try_seal/2 returns the authority untouched on an {:error, _} device reply (ArgumentError class)" do
@@ -712,6 +719,70 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
       {open_at, _} = :binary.match(healed, @sync_open)
       {close_at, _} = :binary.match(healed, @sync_close)
       assert close_at > open_at
+    end
+  end
+
+  # =======================================================================
+  # 5. Review round 2: non-transient failure observability
+  # =======================================================================
+
+  describe "5. review round 2: refused-write telemetry" do
+    test "every refused seal write emits [:raxol, :harness, :seal, :write_failed] -- a persistent refusal is observable, not silent" do
+      # Round-2 review: an ALIVE device that permanently refuses the seal
+      # write drives advance/2 to return {model, :ok} forever -- an
+      # unbounded retry with, previously, no external signal at all. The
+      # retry itself is the designed behavior for a refusing-but-alive
+      # device (it may recover; a bound would strand the block when it
+      # does) -- what was missing is OBSERVABILITY. This pins the
+      # telemetry emit: one event per refused write, carrying the block
+      # index and kind, so a driver/operator can see the loop and decide.
+      handler_id = "seal-write-failed-#{inspect(make_ref())}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:raxol, :harness, :seal, :write_failed],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:write_failed, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {device, sink} =
+        FailingDevice.start(
+          fail_when: seal_write_with(@marker),
+          mode: :always
+        )
+
+      content = "preview line one\npreview line two\n" <> @marker
+      model = new_model(message_events(content), device: device)
+      model = advance_to_pending_flush(model)
+
+      # Three failing frames: each returns :ok (retry pending), never
+      # marks, never raises -- and each emits exactly one event.
+      model =
+        Enum.reduce(1..3, model, fn n, m ->
+          {m, :ok} = Surface.advance(m)
+          assert m.painted_count == 0
+
+          assert_received {:write_failed, _measurements, metadata},
+                          "refused write ##{n} must emit telemetry"
+
+          assert metadata.index == 0
+          assert metadata.kind == :message
+          refute_received {:write_failed, _, _}
+          m
+        end)
+
+      assert occurrences(FailingDevice.confirmed_bytes(sink), @marker) == 0
+
+      # The loop stays honest end-to-end: the device is alive, so a
+      # recovery is still possible -- this test only pins that the loop
+      # is VISIBLE while it lasts.
+      assert {_model, :ok} = Surface.advance(model)
+      assert_received {:write_failed, _, _}
     end
   end
 end

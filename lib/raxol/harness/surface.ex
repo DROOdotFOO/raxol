@@ -840,6 +840,12 @@ defmodule Raxol.Harness.Surface do
   # fails, in which case an empty bracket is emitted (harmless: a sync
   # frame with no visible change; the balanced-bracket case in
   # test/harness/surface_seal_pipeline_test.exs covers the failure path).
+  # A PERSISTENTLY refusing (alive) device therefore emits one empty
+  # open/close pair per retry frame -- a few bytes of decoration per
+  # frame, deliberately not special-cased: the same frames emit
+  # [:raxol, :harness, :seal, :write_failed] telemetry per refused
+  # write, so the condition is observable from the first frame and the
+  # operator/driver owns the decision to stop advancing.
   # Frames that seal nothing (early reveals, tick, handle_input) never
   # open a bracket -- but every frame entry point calls heal_sync/1
   # first, so a close the device refused in an EARLIER frame (the
@@ -1053,7 +1059,26 @@ defmodule Raxol.Harness.Surface do
             |> Enum.at(index)
             |> apply_fold_override(index, acc.fold_overrides)
 
-          seal_block(acc, block)
+          case seal_block(acc, block) do
+            {:ok, _acc} = ok ->
+              ok
+
+            {:error, :write_failed, _acc} = error ->
+              # The retry loop for a refusing-but-alive device is
+              # unbounded BY DESIGN (a bound would strand the block when
+              # the device recovers) -- this emit is what keeps it from
+              # being unbounded AND invisible: one event per refused
+              # write, from the first frame, so a driver/operator can see
+              # a persistent refusal and decide. A DEAD device never
+              # reaches here (try_seal fail-fasts on a corpse).
+              :telemetry.execute(
+                [:raxol, :harness, :seal, :write_failed],
+                %{},
+                %{index: index, kind: block.kind}
+              )
+
+              error
+          end
         end,
         cursor: model.painted_count
       )
