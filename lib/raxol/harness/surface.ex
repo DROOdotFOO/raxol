@@ -526,7 +526,8 @@ defmodule Raxol.Harness.Surface do
           unread: UnreadDivider.t(),
           sessions_dir: Path.t(),
           command_sink: (map() -> term()) | nil,
-          lane_notice: String.t() | [String.t()] | nil
+          lane_notice: String.t() | [String.t()] | nil,
+          stream_open?: boolean()
         }
 
   @typedoc """
@@ -586,6 +587,12 @@ defmodule Raxol.Harness.Surface do
       `%{type: :interrupt, payload: %{}}` or `%{type: :steer, payload:
       %{text: composer_text}}` -- see `Raxol.Harness.SessionLane` for the
       seam a live implementation dispatches through on the other side.
+    * `:stream_open` (default `false`) -- declares that more events may
+      still arrive beyond whatever `append_events/2` has delivered so
+      far, so the reveal is never treated as finished merely for being
+      momentarily caught up (see `frontier_entries/1`'s fold-before-seal
+      note). A live embedder sets this and calls `close_stream/1` when
+      the session truly ends; fixture replay keeps the default.
 
   ## Startup mode notice (the degradation ladder's `select_with_reason/3` seam)
 
@@ -658,7 +665,8 @@ defmodule Raxol.Harness.Surface do
       unread: UnreadDivider.new(),
       sessions_dir: Keyword.get(opts, :sessions_dir, @default_sessions_dir),
       command_sink: Keyword.get(opts, :command_sink),
-      lane_notice: nil
+      lane_notice: nil,
+      stream_open?: Keyword.get(opts, :stream_open, false)
     }
 
     model
@@ -845,6 +853,27 @@ defmodule Raxol.Harness.Surface do
   end
 
   @doc """
+  Closes a live stream opened with `new/2`'s `:stream_open` option and
+  flushes every still-held completed block to sealed history.
+
+  This is the release end of the fold-before-seal ordering contract (see
+  `frontier_entries/1`): while the stream is open, the newest completed
+  block is held un-sealed so that later same-turn events -- the turn
+  bracket above all -- fold into the projection BEFORE the block is
+  irreversibly painted. Once no more events will ever arrive (the session
+  ended, the session process died, the event feed is gone), the hold has
+  nothing left to wait for; this call drops it and runs the seal pass so
+  the trailing block lands in history instead of living forever in the
+  footer preview. Idempotent; a no-op on an already-closed model.
+  """
+  @spec close_stream(t()) :: t()
+  def close_stream(model) do
+    %{model | stream_open?: false}
+    |> paint_pending_blocks()
+    |> paint_footer()
+  end
+
+  @doc """
   Sets (or clears, with `nil`) a PERSISTENT footer notice line -- rendered
   on every paint until replaced or cleared, unlike `stub_notice` (which
   `paint_footer/1` consumes after one frame). Intended for live-session
@@ -949,7 +978,22 @@ defmodule Raxol.Harness.Surface do
   def frontier_entries(model) do
     blocks = model.projection.blocks
     total = length(blocks)
-    reveal_finished? = model.revealed >= length(model.events)
+    # A LIVE stream is never "finished" merely by being momentarily caught
+    # up: `revealed == length(events)` is true after every applied live
+    # event, so without this gate the one-step hold below would never
+    # engage on the live path and every block would seal the instant it
+    # materializes -- BEFORE its turn bracket (and anything a later unit
+    # folds into the block from it, e.g. a completion/evidence row) lands
+    # in the projection. The fixture path and the live path must render
+    # the same events identically; `stream_open?` is what makes "finished"
+    # mean the same thing on both ("no more events will ever come"), and
+    # `close_stream/1` is where a live session finally says so.
+    # (`Map.get`, not dot access: hand-assembled frontier-feed test models
+    # and models built by an older constructor may not carry the key --
+    # absent means the fixture default, a closed stream.)
+    reveal_finished? =
+      not Map.get(model, :stream_open?, false) and
+        model.revealed >= length(model.events)
 
     blocks
     |> Enum.with_index()

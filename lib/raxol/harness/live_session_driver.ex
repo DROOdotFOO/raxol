@@ -56,6 +56,22 @@ defmodule Raxol.Harness.LiveSessionDriver do
   input-first receive above, and `:input_check` is only ever a latency
   optimization on top of it.
 
+  ## Fold-before-seal ordering (the live/fixture parity invariant)
+
+  A live session and a fixture replay of the SAME events must render the
+  same sealed history. The load-bearing half of that is ordering: a
+  block's turn bracket (`turn_completed` / `turn_canceled`) — and anything
+  a later unit derives from it into the block, e.g. a completion/evidence
+  row — must fold into the projection BEFORE the block seals. The fixture
+  reveal gets this from the seal frontier's one-step hold on the newest
+  completed block; a live reveal is always momentarily "caught up", which
+  would defeat that hold — so this driver opens the Surface with
+  `stream_open: true` (the hold stays engaged while more events may come)
+  and calls `Surface.close_stream/1` at exactly the three moments no more
+  events can ever arrive: the final `turn_completed`, session-process
+  death, and a dead event feed (forwarder/cadence crash). Enforced by the
+  "fold-before-seal ordering" test.
+
   ## Loss and malformed-event honesty
 
   Nothing here paints a gapless lie over data the cadence layer had to
@@ -186,6 +202,15 @@ defmodule Raxol.Harness.LiveSessionDriver do
       |> Keyword.put(:command_sink, fn cmd ->
         send(driver_pid, {:surface_command, cmd})
       end)
+      # Fold-before-seal ordering (the live/fixture parity invariant): a
+      # live reveal is always momentarily "caught up" after each applied
+      # event, so the Surface must know more may come -- otherwise every
+      # block would seal the instant it materializes, BEFORE its turn
+      # bracket folds into it (see `Surface.frontier_entries/1`). The
+      # matching `Surface.close_stream/1` calls live in
+      # `apply_lifecycle/2` (final turn), `handle_down/4` (session
+      # death), and `handle_exit/3` (dead event feed).
+      |> Keyword.put(:stream_open, true)
 
     model = Surface.new([], surface_opts)
 
@@ -503,9 +528,13 @@ defmodule Raxol.Harness.LiveSessionDriver do
   # never tears anything down on its own), just kept running with an
   # honest footer statement.
   defp handle_down(%{session_ref: ref} = state, ref, _pid, reason) do
+    # A dead session sends nothing further -- flush the held trailing
+    # block(s) so the last thing it said lands in history, not in a
+    # footer preview that will never be released.
     model =
-      Surface.put_lane_notice(
-        state.model,
+      state.model
+      |> Surface.close_stream()
+      |> Surface.put_lane_notice(
         "» session process exited (#{inspect(reason)}) — transcript above is preserved; q quits"
       )
 
@@ -577,9 +606,13 @@ defmodule Raxol.Harness.LiveSessionDriver do
     state = %{state | current_turn_id: nil}
 
     if Map.get(payload, "final") == true do
+      # No more events will ever arrive: flush the held trailing block(s)
+      # to history (the bracket that just folded is what they were being
+      # held FOR), then state the ending plainly.
       model =
-        Surface.put_lane_notice(
-          state.model,
+        state.model
+        |> Surface.close_stream()
+        |> Surface.put_lane_notice(
           "» session ended — transcript above is preserved; q quits"
         )
 
@@ -674,10 +707,14 @@ defmodule Raxol.Harness.LiveSessionDriver do
   defp handle_exit(state, _pid, reason) when reason in [:normal, :shutdown],
     do: state
 
+  # "No further events will render" also means nothing is left to hold
+  # the trailing block for -- close the stream so it seals rather than
+  # living forever in the footer preview.
   defp handle_exit(%{forwarder: pid} = state, pid, reason) do
     model =
-      Surface.put_lane_notice(
-        state.model,
+      state.model
+      |> Surface.close_stream()
+      |> Surface.put_lane_notice(
         "» live stream listener crashed (#{inspect(reason)}) — no further events will render"
       )
 
@@ -686,8 +723,9 @@ defmodule Raxol.Harness.LiveSessionDriver do
 
   defp handle_exit(%{cadence: pid} = state, pid, reason) do
     model =
-      Surface.put_lane_notice(
-        state.model,
+      state.model
+      |> Surface.close_stream()
+      |> Surface.put_lane_notice(
         "» render cadence crashed (#{inspect(reason)}) — no further events will render"
       )
 

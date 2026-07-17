@@ -301,7 +301,12 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
 
       Enum.each(events, fn ev -> send(forwarder, {:session_event, "s1", ev}) end)
 
-      eventually(fn -> strip_ansi(raw(device)) =~ "hello from live session" end)
+      # Poll sealed HISTORY (not the raw stream): the content legitimately
+      # appears in footer-preview bytes before the turn bracket folds and
+      # the block seals -- see describe "1b" for the ordering contract.
+      eventually(fn ->
+        history_text(raw(device)) =~ "hello from live session"
+      end)
 
       # The fixture-replay reference path: the SAME normalized maps driven
       # straight through Surface.advance/2, no live plumbing at all.
@@ -323,6 +328,43 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       # for why this is the byte-comparison this test makes, not raw
       # full-stream parity.
       assert history_text(raw(device)) == history_text(raw(ref_device))
+    end
+  end
+
+  describe "1b. fold-before-seal ordering (the live/fixture parity invariant)" do
+    test "a completed item does not seal until its turn bracket has folded" do
+      # The ordering contract this driver guarantees: everything that can
+      # still fold INTO a block -- the turn bracket above all (a
+      # completion/evidence row derived from turn_completed folds into the
+      # block it completes) -- lands in the projection BEFORE that block
+      # seals. The fixture reveal already holds the newest completed block
+      # until a later event reveals; the live path must preserve that hold
+      # even though its reveal is always momentarily "caught up". Without
+      # it, a live session seals the assistant block on item_completed and
+      # the turn_completed fold arrives one batch too late -- rendering
+      # done-blocks differently from a fixture replay of the same events.
+      [started, item_started, item_completed, turn_completed] =
+        message_turn_events("ordering probe content")
+
+      %{device: device, forwarder: forwarder} = new_driver(%{})
+
+      Enum.each([started, item_started, item_completed], fn ev ->
+        send(forwarder, {:session_event, "s1", ev})
+      end)
+
+      # The item has been applied (the strip's stage slot shows it) ...
+      eventually(fn -> strip_ansi(raw(device)) =~ "item_completed" end)
+
+      # ... but its block must NOT be sealed into history yet: the turn
+      # bracket has not folded.
+      refute history_text(raw(device)) =~ "ordering probe content"
+
+      # The bracket folds (final turn -> stream closes) -> the block seals.
+      send(forwarder, {:session_event, "s1", turn_completed})
+
+      eventually(fn ->
+        history_text(raw(device)) =~ "ordering probe content"
+      end)
     end
   end
 
