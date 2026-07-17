@@ -14,8 +14,9 @@ defmodule Raxol.Playground.AppTest do
   describe "init/1" do
     test "initializes with components and first selected" do
       model = App.init(nil)
-      # 42 = 40 baseline + the 2 harness TEA block demos (message + reasoning).
-      assert length(model.components) == 42
+      # 43 = 40 baseline + 2 harness TEA block demos (message + reasoning,
+      # U1-a) + 2 (tool + error, U1-d) - 1 (retired HarnessToolBlocksDemo).
+      assert length(model.components) == 43
       assert model.cursor == 0
       assert model.selected != nil
       assert model.focus == :sidebar
@@ -190,8 +191,9 @@ defmodule Raxol.Playground.AppTest do
       # After cycling through all categories, next press returns to nil
       {model, []} = App.update(key_event("f"), model)
       assert model.category_filter == nil
-      # 42 = 40 baseline + the 2 harness TEA block demos (message + reasoning).
-      assert length(model.components) == 42
+      # 43 = 40 baseline + 2 harness TEA block demos (message + reasoning,
+      # U1-a) + 2 (tool + error, U1-d) - 1 (retired HarnessToolBlocksDemo).
+      assert length(model.components) == 43
     end
 
     test "f resets cursor to 0" do

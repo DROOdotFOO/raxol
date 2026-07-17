@@ -46,7 +46,8 @@ defmodule Raxol.Playground.App do
     overlay: 4,
     layout: 5,
     visualization: 6,
-    effects: 7
+    effects: 7,
+    harness: 8
   }
 
   @impl true
@@ -566,6 +567,7 @@ defmodule Raxol.Playground.App do
   defp category_label(:layout), do: "LAYOUT"
   defp category_label(:visualization), do: "CHARTS"
   defp category_label(:effects), do: "EFFECTS"
+  defp category_label(:harness), do: "HARNESS"
   defp category_label(cat), do: cat |> to_string() |> String.upcase()
 
   # -- State helpers --

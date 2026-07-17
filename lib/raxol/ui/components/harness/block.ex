@@ -77,9 +77,18 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   ## Rendering
 
-  `render/2` returns a plain view map (`%{type: :column, ...}`), no
-  interactive `Base.Component` behaviour -- this unit renders plain text
-  bodies only. T5 mounts the rich per-kind components (already merged:
+  `render/2` returns a plain view map (`%{type: :column, ...}`) by
+  default. When the caller supplies `context[:id]` (the harness TEA
+  migration's U1 re-hosting), the root `:column` is stamped in place with
+  `id` + semantic `attrs` (`component_module`/`kind`/`fold`/`seal`, plus
+  `name`/`state`/`tainted` for tool calls) + an `on_click` toggle message
+  -- the same seam U1-a/U1-b's block Components use, so `Raxol.MCP.
+  TreeWalker` derives the `toggle_fold` action through the
+  `attrs.component_module` marker and a bubbled click fires the toggle via
+  the Bubbler's existing inline `on_click` path -- see `interactive_wrap/3`.
+  Without an id nothing changes: the legacy render is byte- and
+  map-identical, which is what the shelved Surface substrate keeps
+  consuming. T5 mounts the rich per-kind components (already merged:
   `Harness.MessageBlock`, `Harness.ReasoningBlock`, `Harness.ToolCallBlock`,
   `Harness.ToolResultBlock`, `Harness.DiffViewer`, `Harness.ApprovalPrompt`,
   ...) as the fold-aware block bodies; this module is the data + text-only
@@ -165,6 +174,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   branch, so a multi-line body never re-runs the solver per line.
   """
 
+  alias Raxol.Core.Events.Event
   alias Raxol.UI.Components.Harness.DiffViewer
   alias Raxol.UI.Components.Harness.LineDiff
   alias Raxol.UI.Components.Harness.MarkdownBody
@@ -174,6 +184,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   alias Raxol.View.Components
 
   require Logger
+
+  @behaviour Raxol.MCP.ToolProvider
 
   @recovered_telemetry_event [:raxol, :harness, :block, :recovered]
 
@@ -466,11 +478,171 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   def render(%__MODULE__{} = block, context) do
     width = Map.get(context, :width, Raxol.Core.Defaults.terminal_width())
-    build_render(block, width, context)
+    interactive_wrap(build_render(block, width, context), block, context)
   rescue
     e ->
       emit_recovered(block.kind, e)
-      render_fallback(block)
+      interactive_wrap(render_fallback(block), block, context)
+  end
+
+  # -- the interactive re-hosting stamp (harness TEA migration U1) ----------
+  #
+  # When the caller supplies `context[:id]` (a non-empty binary), the root
+  # `:column` is stamped in place with `:id`, semantic `:attrs`, and an
+  # `:on_click` toggle message -- the SAME seam U1-a/U1-b's block
+  # Components use, so the pipeline treats every re-hosted block alike:
+  #
+  #   * `attrs.component_module: __MODULE__` is the marker
+  #     `Raxol.MCP.TreeWalker` resolves a plain-`:column` root's provider
+  #     through (no new node type, no type-map growth); `mcp_tools/1` then
+  #     derives the `toggle_fold` action.
+  #   * `on_click:` carries the toggle message. A `%Event{type: :click}`
+  #     bubbled at this node (a real mouse click OR the click
+  #     `handle_tool_call/3` emits) fires it through the Bubbler's existing
+  #     inline `on_click` path -- so the MCP toggle and a physical click
+  #     dispatch the identical message, with zero Bubbler changes.
+  #
+  # WITHOUT `context[:id]` nothing is stamped: the render stays the legacy
+  # column, byte- and map-identical, so the shelved Surface substrate
+  # (which never passes an id) is untouched.
+  #
+  # `attrs` carries the semantic contract the tree consumers read:
+  # `kind`/`fold`/`seal` always; a `:tool_call` block adds `name` (the
+  # referent), `state` (the SAME outcome derivation the compact glyph
+  # renders -- `tool_state/3`, single source, the two can never disagree),
+  # and `tainted`.
+  #
+  # Total: never raises on a weird context value -- a non-binary id means
+  # no stamp, same as no id (the rescue path above relies on this).
+  defp interactive_wrap(body, block, context) do
+    case Map.get(context, :id) do
+      id when is_binary(id) and id != "" ->
+        body
+        |> Map.put(:id, id)
+        |> Map.put(:attrs, interactive_attrs(block, context))
+        |> Map.put(:on_click, toggle_message(id, context))
+
+      _absent ->
+        body
+    end
+  end
+
+  defp interactive_attrs(%__MODULE__{} = block, context) do
+    %{
+      component_module: __MODULE__,
+      kind: block.kind,
+      fold: block.fold,
+      seal: block.seal
+    }
+    |> Map.merge(interactive_kind_attrs(block, context))
+  end
+
+  defp interactive_kind_attrs(
+         %__MODULE__{kind: :tool_call, content: content} = block,
+         context
+       )
+       when is_map(content) do
+    %{
+      name: tool_name(content),
+      state: tool_state(content, block.outcome, context),
+      tainted: Map.get(content, :tainted) == true
+    }
+  end
+
+  defp interactive_kind_attrs(_block, _context), do: %{}
+
+  # The toggle message an `on_click`/key toggle emits: an app-declared
+  # `context[:on_toggle]` term when given, else the default
+  # `{:harness_block, :toggle_fold, id}` the host's `update/2` folds on.
+  defp toggle_message(id, context) do
+    case Map.get(context, :on_toggle) do
+      nil -> {:harness_block, :toggle_fold, id}
+      message -> message
+    end
+  end
+
+  # -- handle_event / ToolProvider (the controlled interaction seam) --------
+
+  @doc """
+  The real `handle_event/3` of the re-hosted block Component (the
+  U1-a/U1-b/Tree convention) -- CONTROLLED per the section-2 doctrine:
+  this function never holds or mutates fold state. Enter / Space / the
+  `z` key EMIT the stamped `on_click` toggle message as an outgoing
+  command; the host app's `update/2` folds the `%Block{}` the model owns
+  (respecting its own D-PA `:fold_after_seal` policy -- the component
+  cannot pre-judge it). `state` is unchanged (the block has no local
+  state to flip -- returning it keeps the direct-host contract shape).
+
+  A `%Event{type: :click}` is left to the Bubbler's inline `on_click`
+  path (fired by a real mouse hit or the click `handle_tool_call/3`
+  emits), so this module never needs Bubbler registration. Every other
+  event returns `{state, []}` (handled, nothing emitted).
+
+  The emitted message is the `on_click` term the render stamped
+  (`{:harness_block, :toggle_fold, id}` by default, or the caller's
+  `context[:on_toggle]`); a node without one emits nothing.
+
+  `state` is the element map (`%{id:, attrs:, on_click:, ...}`), never
+  this module's own struct -- props in, message out.
+  """
+  @spec handle_event(Event.t(), map(), map()) :: {map(), [term()]}
+  def handle_event(%Event{type: :key, data: %{key: key}}, state, _context)
+      when key in [:enter, :space],
+      do: {state, toggle_commands(state)}
+
+  def handle_event(
+        %Event{type: :key, data: %{key: :char, char: "z"}},
+        state,
+        _context
+      ),
+      do: {state, toggle_commands(state)}
+
+  def handle_event(_event, state, _context), do: {state, []}
+
+  defp toggle_commands(%{on_click: message}) when not is_nil(message),
+    do: [message]
+
+  defp toggle_commands(_state), do: []
+
+  # The `toggle_fold` action is derived ONLY when the node carries an
+  # `on_click` toggle message (the render stamped one for a block with an
+  # id) -- mirrors Button/ReasoningBlock's `on_click`-gated derivation.
+  @impl Raxol.MCP.ToolProvider
+  def mcp_tools(%{on_click: handler} = node) when not is_nil(handler) do
+    attrs = Map.get(node, :attrs, %{})
+    kind = Map.get(attrs, :kind, :block)
+
+    [
+      %{
+        name: "toggle_fold",
+        description:
+          "Toggle fold on the #{kind} block '#{block_tool_label(attrs, kind)}' " <>
+            "(compact line <-> full body)",
+        inputSchema: %{type: "object", properties: %{}}
+      }
+    ]
+  end
+
+  def mcp_tools(_node), do: []
+
+  # The targeted click Event is resolved by the Dispatcher through the
+  # Bubbler at this widget's `on_click` inline handler (the same seam
+  # Button's F0-mcp click proved), so an MCP toggle and a physical click
+  # dispatch the same toggle message -- one path, two entry points.
+  @impl Raxol.MCP.ToolProvider
+  def handle_tool_call("toggle_fold", _args, context) do
+    {:ok, "Requested fold toggle on '#{context.widget_id}'",
+     [%Event{type: :click, data: %{widget_id: context.widget_id}}]}
+  end
+
+  def handle_tool_call(action, _args, _context),
+    do: {:error, "Unknown action: #{action}"}
+
+  defp block_tool_label(attrs, kind) do
+    case Map.get(attrs, :name) do
+      name when is_binary(name) and name != "" -> name
+      _absent -> to_string(kind)
+    end
   end
 
   defp build_render(block, width, context) do
@@ -713,16 +885,18 @@ defmodule Raxol.UI.Components.Harness.Block do
   # suffix is the taint marker: `⚠︎ untrusted` is a security provenance
   # signal, not a receipt, so it is never dropped.
   defp tool_line(%__MODULE__{content: content} = block, context) do
-    name =
-      case Map.get(content, :name) do
-        n when is_binary(n) and n != "" -> n
-        _absent -> "(tool)"
-      end
-
+    name = tool_name(content)
     glyph = tool_glyph(content, block.outcome, context)
     args = format_args(Map.get(content, :args))
 
     "#{glyph} #{name}#{args}#{tool_taint_suffix(content)}"
+  end
+
+  defp tool_name(content) do
+    case Map.get(content, :name) do
+      n when is_binary(n) and n != "" -> n
+      _absent -> "(tool)"
+    end
   end
 
   # The compact tool glyph carries the outcome state the receipt suffix
@@ -737,14 +911,29 @@ defmodule Raxol.UI.Components.Harness.Block do
   #     claim of action with no receipt is never silent).
   #   * otherwise (a result, or exit 0) -> `⚙`.
   defp tool_glyph(content, outcome, context) do
+    case tool_state(content, outcome, context) do
+      :running -> kind_glyph(:tool_call)
+      :failed -> "✗"
+      :no_result -> "⊘"
+      :ok -> kind_glyph(:tool_call)
+    end
+  end
+
+  # The one outcome-state derivation BOTH the compact glyph and the
+  # interactive `attrs.state` read (see `interactive_kind_attrs/2`), so
+  # the rendered glyph and the derived tool metadata can never disagree:
+  # `:running` (pending footer preview, no answer yet), `:failed`
+  # (non-zero exit), `:no_result` (sealed with no result and no exit --
+  # the honest absence), `:ok` otherwise.
+  defp tool_state(content, outcome, context) do
     result = Map.get(content, :result)
     exit_code = Map.get(outcome, :exit_code)
 
     cond do
-      awaiting_result?(result, outcome, context) -> kind_glyph(:tool_call)
-      is_integer(exit_code) and exit_code != 0 -> "✗"
-      is_nil(result) and is_nil(exit_code) -> "⊘"
-      true -> kind_glyph(:tool_call)
+      awaiting_result?(result, outcome, context) -> :running
+      is_integer(exit_code) and exit_code != 0 -> :failed
+      is_nil(result) and is_nil(exit_code) -> :no_result
+      true -> :ok
     end
   end
 

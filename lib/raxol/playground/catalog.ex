@@ -501,16 +501,33 @@ defmodule Raxol.Playground.Catalog do
       """
     },
     %{
-      name: "Harness Tool Blocks",
-      module: Demos.HarnessToolBlocksDemo,
-      category: :display,
+      name: "Harness Tool Block",
+      module: Demos.HarnessToolBlockDemo,
+      category: :harness,
       description:
-        "Agent tool-call/tool-result blocks with a status glyph and an untrusted-output taint badge",
+        "Tool-call blocks on the compact render contract: outcome-on-glyph lines, " <>
+          "tight clustering, spinner margin, fold-to-full-body, taint marker",
       complexity: :intermediate,
-      tags: ["harness", "display", "agent", "tool", "taint", "provenance"],
+      tags: ["harness", "agent", "tool", "taint", "provenance", "fold"],
       code_snippet: """
-      ToolCallBlock.init(name: "Bash", args: %{command: "ls"}, status: :running)
-      ToolResultBlock.init(output: fetched_page, taint: true)  # composes TaintBadge
+      block = Block.from_events(:tool_call, events) |> Block.seal()
+      Block.render(block, %{width: 76, id: "tool_ok"})
+      # ⚙ mix task: test      ✗ failed      ⊘ no result      · ⚠︎ untrusted
+      """
+    },
+    %{
+      name: "Harness Error Block",
+      module: Demos.HarnessErrorBlockDemo,
+      category: :harness,
+      description:
+        "Error blocks as first-class alarm lines (real message, honest fallbacks, " <>
+          "expand-to-full-fault) plus the opaque forward-compat fallback",
+      complexity: :intermediate,
+      tags: ["harness", "agent", "error", "opaque", "alarm", "fold"],
+      code_snippet: """
+      block = Block.from_events(:error, [%{type: :error, payload: %{reason: msg}}])
+      Block.render(block, %{width: 76, id: "err_1"})
+      # ✗ Connection refused by upstream (attempt 3)
       """
     },
     # --- Harness TEA blocks (migration §7: one demo per block kind) ---
