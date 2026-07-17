@@ -231,12 +231,17 @@ defmodule Raxol.Harness.T13aSurfaceTest do
 
       # a sealed block (the completed assistant message)
       assert plain =~ "Hello!"
-      # status strip labels rendered WHILE the turn was live (the strip
+      # status strip phases rendered WHILE the turn was live (the strip
       # is a grown instrument: present during the turn, yielded to
-      # silence on the idle post-completion frame -- so the labels are
-      # in the byte HISTORY of the run, not necessarily the final frame)
-      assert plain =~ "Stage:"
-      assert plain =~ "Input:"
+      # silence on the idle post-completion frame -- so the phases are
+      # in the byte HISTORY of the run, not necessarily the final
+      # frame). Operator vocabulary only -- never raw event names, no
+      # labelled slots, no em-dash voids (the charged-minimum rulings).
+      assert plain =~ "thinking"
+      assert plain =~ "responding"
+      refute plain =~ "Stage:"
+      refute plain =~ "Input:"
+      refute plain =~ "item_delta"
       # the composer prompt row carries the chevron sigil (the
       # first-focus hint line was removed by V's charged-minimum ruling)
       assert plain =~ "❯"

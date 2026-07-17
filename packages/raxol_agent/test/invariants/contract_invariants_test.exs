@@ -325,10 +325,14 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
       end
 
       # Every event type present in the corpus (so a future upcast that drops a
-      # type cannot pass by luck).
+      # type cannot pass by luck). Exemptions: item_delta is ephemeral (never
+      # journaled), and item_started postdates the v1.0.0 corpus (pump grew
+      # the item lifecycle in 2026-07; grow-only, so a journal written before
+      # the growth stays valid history -- the grandfather clause).
       corpus_types = records |> Enum.map(& &1["type"]) |> MapSet.new()
 
-      for type <- @snapshot["enums"]["type"], type != "item_delta" do
+      for type <- @snapshot["enums"]["type"],
+          type not in ["item_delta", "item_started"] do
         assert type in corpus_types, "golden corpus is missing #{type}"
       end
 

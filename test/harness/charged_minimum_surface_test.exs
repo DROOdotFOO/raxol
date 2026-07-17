@@ -168,13 +168,13 @@ defmodule Raxol.Harness.ChargedMinimumSurfaceTest do
       # Mid-turn (turn_started + item_started revealed): live turn.
       model = advance_times(model, 2)
 
-      assert Enum.any?(footer_rows(device), &String.contains?(&1, "Stage:")),
+      assert Enum.any?(footer_rows(device), &String.contains?(&1, "thinking")),
              "the strip must be present during a live turn"
 
       # Post-completion idle frame: the strip yields to silence.
       _model = drive_to_completion(model)
 
-      refute Enum.any?(footer_rows(device), &String.contains?(&1, "Stage:")),
+      refute Enum.any?(footer_rows(device), &String.contains?(&1, "thinking")),
              "the strip must yield once the turn has completed"
     end
 
@@ -274,7 +274,7 @@ defmodule Raxol.Harness.ChargedMinimumSurfaceTest do
 
       footer = footer_rows(device)
 
-      strip_row = Enum.find(footer, &String.contains?(&1, "Stage:"))
+      strip_row = Enum.find(footer, &String.contains?(&1, "thinking"))
       assert strip_row != nil
       assert String.starts_with?(strip_row, " "), "strip row must be margined"
 

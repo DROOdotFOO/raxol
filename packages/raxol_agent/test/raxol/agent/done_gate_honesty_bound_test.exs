@@ -68,10 +68,8 @@ defmodule Raxol.Agent.DoneGateHonestyBoundTest do
 
     stream = [
       {:tool_use, %{name: "run_tests", id: "call-1", arguments: %{}}},
-      {:tool_result,
-       %{name: "run_tests", result: "tests: 12 passed, 0 failed"}},
-      {:tool_use,
-       %{name: "fs_write", id: "call-2", arguments: %{path: "lib/a.ex"}}},
+      {:tool_result, %{name: "run_tests", result: "tests: 12 passed, 0 failed"}},
+      {:tool_use, %{name: "fs_write", id: "call-2", arguments: %{path: "lib/a.ex"}}},
       {:tool_result, %{name: "fs_write", result: "wrote 42 bytes"}},
       {:done, %{content: "All fixed.", usage: %{}}}
     ]
@@ -130,17 +128,19 @@ defmodule Raxol.Agent.DoneGateHonestyBoundTest do
 
     test "non-vacuity anchor — the renderer WOULD launder a stale ref; only the gate keeps it off the wire" do
       # Prove the bound is load-bearing, not vacuous: take the SAME journal but
-      # inject refs pointing at the stale run_tests result (offset 3, which the
-      # gate rejected as :stale_evidence above). The renderer renders it as
+      # inject refs pointing at the stale run_tests result (offset 5 -- each
+      # item now carries an item_started sibling, so the journal runs
+      # turn_started=1, run_tests use=2/3, run_tests result=4/5, ... -- which
+      # the gate rejected as :stale_evidence above). The renderer renders it as
       # ordinary UNMARKED evidence — exactly the laundering the fail-closed gate
       # prevents by never letting the honest producer emit these refs.
       {journal, turn} = honest_journal()
-      assert DoneGate.gate(journal, turn, [3]) == {:error, {:stale_evidence, 3}}
+      assert DoneGate.gate(journal, turn, [5]) == {:error, {:stale_evidence, 5}}
 
       tampered =
         Enum.map(journal, fn
           %Event{type: :turn_completed} = ev ->
-            %{ev | payload: Map.put(ev.payload, :refs, [3])}
+            %{ev | payload: Map.put(ev.payload, :refs, [5])}
 
           ev ->
             ev
@@ -150,7 +150,7 @@ defmodule Raxol.Agent.DoneGateHonestyBoundTest do
 
       refute laundered == %{evidence: :none}
       assert %{evidence: [entry | _]} = laundered
-      assert entry.ref == 3
+      assert entry.ref == 5
       # The renderer does NOT mark it — no stale/echo signal exists display-side.
       refute Map.has_key?(entry, :stale)
       refute Map.has_key?(entry, :echo)

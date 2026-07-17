@@ -69,7 +69,9 @@ defmodule Raxol.Agent.ContractTest do
       # A tool_use (mutation) followed by a tool_result of a DIFFERENT tool
       # name — an independent verification output that postdates the mutation
       # and is not its own echo. The gate accepts, so the final turn_completed
-      # carries the evidence ref (offset 3: turn_started=1, tool_use=2, result=3).
+      # carries the evidence ref (offset 5: turn_started=1, the tool_use's
+      # item_started=2 / item_completed=3, the tool_result's item_started=4 /
+      # item_completed=5).
       stream = [
         {:tool_use, %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
         {:tool_result, %{name: "run_tests", result: "tests: 12 passed"}},
@@ -81,7 +83,7 @@ defmodule Raxol.Agent.ContractTest do
       final = session_id |> drain_events() |> List.last()
       assert final.type == :turn_completed
       assert final.payload.final == true
-      assert final.payload.refs == [3]
+      assert final.payload.refs == [5]
     end
 
     test "a mutation's own result echo is rejected: done closes fail-open with rejected_evidence telemetry" do
@@ -157,6 +159,128 @@ defmodule Raxol.Agent.ContractTest do
 
       events = drain_events(session_id)
       assert Enum.any?(events, &(&1.type == :error))
+    end
+  end
+
+  describe "streaming item lifecycle (item_started + item_id)" do
+    # RED-FIRST (live-session defect: streaming output not rendering
+    # incrementally). The projection's live tail
+    # (`Raxol.Harness.Projection.BlockBuilder.build_tail/2`) only
+    # surfaces `item_delta` chunks for an item that has an
+    # `item_started` group and an `item_id` -- the fixture corpus
+    # always carries both, but pump/3 emitted neither, so a REAL
+    # session's streamed answer never entered the tail and only
+    # appeared all-at-once at `item_completed`. These tests pin the
+    # producer to the same wire shape the fixtures (and the projection)
+    # already speak.
+
+    test "a streamed message opens with item_started and every delta carries its item_id" do
+      session_id = "contract-test-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:text_delta, "Hel"},
+        {:text_delta, "lo!"},
+        {:done, %{content: "Hello!", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "hi")
+
+      events = drain_events(session_id)
+
+      started =
+        Enum.find(events, &(&1.type == :item_started))
+
+      assert started != nil, "pump must emit item_started before the first delta"
+      assert started.tier == :durable
+      assert %{item_id: item_id, item_type: :message} = started.payload
+      assert is_binary(item_id) and item_id != ""
+
+      deltas = Enum.filter(events, &(&1.type == :item_delta))
+      assert length(deltas) == 2
+
+      for delta <- deltas do
+        assert delta.payload.item_id == item_id
+      end
+
+      # item_started precedes the first delta in emit order.
+      first_delta = List.first(deltas)
+      assert started.id < first_delta.id
+
+      # The message's item_completed closes the SAME item.
+      completed =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :message)
+        )
+
+      assert completed.payload.item_id == item_id
+      assert completed.payload.content == "Hello!"
+    end
+
+    test "tool_use and tool_result complete as DISTINCT items, each with a started sibling" do
+      # Without distinct item_ids every item_completed shares the same
+      # (nil) id, so the projection folds them into ONE group and drops
+      # the tool_result completion as a duplicate -- a live multi-item
+      # turn silently loses blocks the fixture path renders.
+      session_id = "contract-test-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:tool_use, %{name: "list_dir", arguments: %{path: "."}, id: "call-1"}},
+        {:tool_result, %{name: "list_dir", result: "mix.exs"}},
+        {:done, %{content: "done", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+
+      events = drain_events(session_id)
+
+      completed_ids =
+        for %Event{type: :item_completed, payload: payload} <- events do
+          assert is_binary(payload.item_id) and payload.item_id != ""
+          payload.item_id
+        end
+
+      # tool_use, tool_result, and the done message: three distinct items.
+      assert length(completed_ids) == 3
+      assert length(Enum.uniq(completed_ids)) == 3
+
+      started_ids =
+        for %Event{type: :item_started, payload: payload} <- events,
+            do: payload.item_id
+
+      # Every completed item has a started sibling with the same id.
+      assert Enum.sort(started_ids) == Enum.sort(completed_ids)
+    end
+
+    test "a message item open when a tool_use arrives seals with its accumulated text" do
+      # The pre-tool text run is a real assistant message: it must seal
+      # as its own item (ordered BEFORE the tool items) rather than
+      # leak into the final answer's item or vanish.
+      session_id = "contract-test-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:text_delta, "let me check"},
+        {:tool_use, %{name: "list_dir", arguments: %{}, id: "call-1"}},
+        {:tool_result, %{name: "list_dir", result: "mix.exs"}},
+        {:done, %{content: "final answer", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+
+      events = drain_events(session_id)
+
+      messages =
+        for %Event{type: :item_completed, payload: %{item_type: :message} = p} <-
+              events,
+            do: p
+
+      assert Enum.map(messages, & &1.content) == [
+               "let me check",
+               "final answer"
+             ]
     end
   end
 

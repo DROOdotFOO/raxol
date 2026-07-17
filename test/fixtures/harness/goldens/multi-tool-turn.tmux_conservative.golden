@@ -1,19 +1,19 @@
-[1;14r7[15;1H[K[1m❯[0m  8[15;3H[?25l7[15;1H[K Input: clear | Stage: turn_started | Ctx: — | Cost: —[16;1H[K[1m❯[0m  8[16;3H[?25h[?25l7[15;1H[K Input: clear | Stage: item_started | Ctx: — | Cost: —[16;1H[K » [17;1H[K[1m❯[0m  8[17;3H[?25h[?25l7[15;1H[K Input: clear | Stage: item_completed | Ctx: — | Cost: —[16;1H[K ▸ ∴ I should list the directory first, then read mix.exs.[17;1H[K 100ms[18;1H[K[1m❯[0m  8[18;3H[?25h7[15;1H[K Input: clear | Stage: item_started | Ctx: — | Cost: —8[18;3H7[1;1H [2m▸ ∴ I should list the directory first, then read mix.exs.[0m
+[1;14r7[15;1H[K[1m❯[0m  8[15;3H[?25l7[15;1H[K thinking[16;1H[K[1m❯[0m  8[16;3H[?25h[?25l7[16;1H[K » [17;1H[K[1m❯[0m  8[17;3H[?25h[?25l7[15;1H[K responding[16;1H[K ▸ ∴ I should list the directory first, then read mix.exs.[17;1H[K 100ms[18;1H[K[1m❯[0m  8[18;3H[?25h7[15;1H[K thinking8[18;3H7[1;1H [2m▸ ∴ I should list the directory first, then read mix.exs.[0m
  [2m100ms[0m
-8[?25l7[15;1H[K Input: clear | Stage: item_completed | Ctx: — | Cost: —[16;1H[K ○ list_dir (path: ".")[17;1H[K[1m❯[0m  [18;1H[K8[17;3H[?25h7[15;1H[K Input: clear | Stage: item_started | Ctx: — | Cost: —8[17;3H[?25l7[15;1H[K Input: clear | Stage: item_completed | Ctx: — | Cost: —[16;1H[K ✓ list_dir (path: ".")[17;1H[K ✓ Tool Result ⚠ untrusted[18;1H[K[1m❯[0m  8[18;3H[?25h7[15;1H[K Input: clear | Stage: item_started | Ctx: — | Cost: —8[18;3H7[3;1H
+8[?25l7[15;1H[K running list_dir[16;1H[K ○ list_dir (path: ".")[17;1H[K[1m❯[0m  [18;1H[K8[17;3H[?25h7[15;1H[K thinking8[17;3H[?25l7[16;1H[K ✓ list_dir (path: ".")[17;1H[K ✓ Tool Result ⚠ untrusted[18;1H[K[1m❯[0m  8[18;3H[?25h7[3;1H
  [32m✓[0m [1mlist_dir[0m [2m(path: ".")[0m
  [32m✓[0m [1mTool Result[0m [1;33m⚠ untrusted[0m
  mix.exs
  lib/
  test/
  README.md
-8[?25l7[15;1H[K Input: clear | Stage: item_completed | Ctx: — | Cost: —[16;1H[K ○ read_file (path: "mix.exs")[17;1H[K[1m❯[0m  [18;1H[K8[17;3H[?25h7[15;1H[K Input: clear | Stage: item_started | Ctx: — | Cost: —8[17;3H[?25l7[15;1H[K Input: clear | Stage: item_completed | Ctx: — | Cost: —[16;1H[K ✓ read_file (path: "mix.exs")[17;1H[K ✓ Tool Result ⚠ untrusted[18;1H[K[1m❯[0m  8[18;3H[?25h7[15;1H[K Input: clear | Stage: item_started | Ctx: — | Cost: —8[18;3H7[15;1H[K Input: clear | Stage: item_delta | Ctx: — | Cost: —8[18;3H7[10;1H
+8[?25l7[15;1H[K running read_file[16;1H[K ○ read_file (path: "mix.exs")[17;1H[K[1m❯[0m  [18;1H[K8[17;3H[?25h7[15;1H[K thinking8[17;3H[?25l7[16;1H[K ✓ read_file (path: "mix.exs")[17;1H[K ✓ Tool Result ⚠ untrusted[18;1H[K[1m❯[0m  8[18;3H[?25h7[15;1H[K responding8[18;3H7[10;1H
  [32m✓[0m [1mread_file[0m [2m(path: "mix.exs")[0m
  [32m✓[0m [1mTool Result[0m [1;33m⚠ untrusted[0m
  defmodule Raxol.MixProject do
    use Mix.Project
  end
-8[?25l7[15;1H[K Input: clear | Stage: item_completed | Ctx: — | Cost: —[16;1H[K Root has mix.exs, lib/, test/, README.md.[17;1H[K[1m❯[0m  [18;1H[K8[17;3H[?25h7[14;1H
+8[?25l7[16;1H[K Root has mix.exs, lib/, test/, README.md.[17;1H[K[1m❯[0m  [18;1H[K8[17;3H[?25h7[14;1H
 [1m❮[0m Root has mix.exs, lib/, test/, README.md.
   [2mno evidence provided[0m
 8[?25l7[15;1H[K[1m❯[0m  [16;1H[K[17;1H[K8[15;3H[?25h

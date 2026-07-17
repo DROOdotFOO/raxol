@@ -15,13 +15,29 @@ defmodule Raxol.Agent.Contract do
   ## v0 vocabulary (family `:loop` only)
 
     * `:turn_started`   — a prompt was accepted; payload `%{prompt}`
-    * `:item_delta`     — streaming text chunk; payload `%{chunk}`;
+    * `:item_started`   — an item opened; payload `%{item_id, item_type}`.
+      Emitted before an item's first delta (a lazily-opened message
+      item) and before every tool_use / tool_result completion, so the
+      live producer speaks the same item lifecycle the fixture corpus
+      does — the projection's live tail
+      (`Raxol.Harness.Projection.BlockBuilder.build_tail/2`) only
+      surfaces deltas for an item with a started group, which is what
+      makes mid-turn streaming render at all.
+    * `:item_delta`     — streaming text chunk; payload `%{item_id, chunk}`;
       the one **ephemeral** event (live render only, never for replay)
     * `:item_completed` — a finished item; payload
-      `%{item_type: :message | :tool_use | :tool_result, ...}`
+      `%{item_id, item_type: :message | :tool_use | :tool_result, ...}`.
+      `item_id`s are turn-scoped (`"i1"`, `"i2"`, …) and distinct per
+      item — without them every completion folds into one (nil-keyed)
+      projection group and later completions are dropped as duplicates.
     * `:turn_completed` — a turn boundary; payload
       `%{usage, iteration, final}` (`final: true` closes the run)
     * `:error`          — fault; payload `%{reason}`
+
+  Growth note (I9, contract-only-grows): `:item_started` and the
+  `item_id` payload keys are additive — both were already in the frozen
+  §3 loop vocabulary and the fixture wire shape; v0's producer simply
+  lagged the vocabulary it was specified against.
 
   The meta family (probe swarm), `steer`/`approval` commands, and the
   durable journal sink attach behind this same boundary in later steps —
@@ -176,46 +192,61 @@ defmodule Raxol.Agent.Contract do
         prompt: prompt
       })
 
-    # The accumulator carries the run result plus the durable journal emitted
-    # so far this turn, so the done site can consult DoneGate.gate/3 over the
-    # real journal (ephemeral `item_delta`s are never journaled).
-    {result, _journal} =
-      Enum.reduce(stream, {{:error, :no_result}, [started]}, fn stream_event, acc ->
-        handle_stream_event(session_id, turn_id, counter, stream_event, acc)
-      end)
+    # The accumulator carries the run result, the durable journal emitted so
+    # far this turn (so the done site can consult DoneGate.gate/3 over the
+    # real journal — ephemeral `item_delta`s are never journaled), and the
+    # item lifecycle bookkeeping: a turn-scoped item sequence plus the one
+    # lazily-opened message item (id + its accumulated chunks). The item
+    # lifecycle is what makes live streaming render: without `item_started`
+    # + per-item `item_id`s the projection's live tail never materializes
+    # and every completion collapses into one nil-keyed group.
+    final_acc =
+      Enum.reduce(
+        stream,
+        %{
+          result: {:error, :no_result},
+          journal: [started],
+          item_seq: 0,
+          msg_item: nil,
+          msg_chunks: []
+        },
+        fn stream_event, acc ->
+          handle_stream_event(session_id, turn_id, counter, stream_event, acc)
+        end
+      )
 
-    result
+    final_acc.result
   end
 
-  defp handle_stream_event(session_id, turn_id, counter, event, {result, journal}) do
+  defp handle_stream_event(session_id, turn_id, counter, event, acc) do
     case event do
       {:text_delta, chunk} ->
+        acc = open_message_item(session_id, turn_id, counter, acc)
+
         emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
+          item_id: acc.msg_item,
           chunk: chunk
         })
 
-        {result, journal}
+        %{acc | msg_chunks: [chunk | acc.msg_chunks]}
 
       {:tool_use, %{name: name} = tool_use} ->
-        ev =
-          emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
-            item_type: :tool_use,
-            name: name,
-            arguments: Map.get(tool_use, :arguments, %{}),
-            call_id: Map.get(tool_use, :id)
-          })
+        # A text run interrupted by a tool call is a real assistant
+        # message: seal it as its own item (ordered before the tool
+        # items) rather than leaking it into the final answer's item.
+        acc = close_message_item(session_id, turn_id, counter, acc)
 
-        {result, journal ++ [ev]}
+        complete_item(session_id, turn_id, counter, acc, :tool_use, %{
+          name: name,
+          arguments: Map.get(tool_use, :arguments, %{}),
+          call_id: Map.get(tool_use, :id)
+        })
 
       {:tool_result, %{name: name} = tool_result} ->
-        ev =
-          emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
-            item_type: :tool_result,
-            name: name,
-            result: Map.get(tool_result, :result)
-          })
-
-        {result, journal ++ [ev]}
+        complete_item(session_id, turn_id, counter, acc, :tool_result, %{
+          name: name,
+          result: Map.get(tool_result, :result)
+        })
 
       {:turn_complete, info} ->
         ev =
@@ -225,16 +256,23 @@ defmodule Raxol.Agent.Contract do
             final: false
           })
 
-        {result, journal ++ [ev]}
+        %{acc | journal: acc.journal ++ [ev]}
 
       {:done, %{content: content} = info} ->
+        # The final message closes the open (streamed) message item when
+        # one exists — the SAME item the deltas accumulated into, so the
+        # tail hands off to the sealed block. The done content is
+        # authoritative for the sealed record.
+        {item_id, acc} = done_message_item(session_id, turn_id, counter, acc)
+
         message_ev =
           emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
+            item_id: item_id,
             item_type: :message,
             content: content
           })
 
-        journal = journal ++ [message_ev]
+        journal = acc.journal ++ [message_ev]
         refs = DoneGate.evidence_refs(journal, turn_id)
 
         final_ev =
@@ -247,18 +285,111 @@ defmodule Raxol.Agent.Contract do
             gated_done_payload(journal, turn_id, refs, info)
           )
 
-        {{:ok, %{content: content, usage: Map.get(info, :usage, %{})}}, journal ++ [final_ev]}
+        %{
+          acc
+          | result: {:ok, %{content: content, usage: Map.get(info, :usage, %{})}},
+            journal: journal ++ [final_ev]
+        }
 
       {:error, reason} ->
         emit_event(session_id, turn_id, counter, :error, :durable, %{
           reason: reason
         })
 
-        {{:error, reason}, journal}
+        %{acc | result: {:error, reason}}
 
       _other ->
-        {result, journal}
+        acc
     end
+  end
+
+  # -- item lifecycle bookkeeping -------------------------------------------
+
+  # Turn-scoped item ids, mirroring the fixture corpus ("i1", "i2", …).
+  # Uniqueness only matters within the turn: the projection keys its
+  # live tail by `{turn_id, item_id}`.
+  defp next_item_id(acc), do: {"i#{acc.item_seq + 1}", %{acc | item_seq: acc.item_seq + 1}}
+
+  # Lazily opens the message item at the FIRST delta of a text run:
+  # `item_started` (durable) precedes every delta of the item, which is
+  # the projection's condition for surfacing those deltas as the live
+  # tail.
+  defp open_message_item(_session_id, _turn_id, _counter, %{msg_item: id} = acc)
+       when not is_nil(id),
+       do: acc
+
+  defp open_message_item(session_id, turn_id, counter, acc) do
+    {item_id, acc} = next_item_id(acc)
+
+    ev =
+      emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+        item_id: item_id,
+        item_type: :message
+      })
+
+    %{acc | journal: acc.journal ++ [ev], msg_item: item_id, msg_chunks: []}
+  end
+
+  # Seals an open message item with its accumulated streamed text — the
+  # mid-turn (pre-tool) close. A no-op when no message item is open.
+  defp close_message_item(_session_id, _turn_id, _counter, %{msg_item: nil} = acc),
+    do: acc
+
+  defp close_message_item(session_id, turn_id, counter, acc) do
+    content = acc.msg_chunks |> Enum.reverse() |> Enum.join("")
+
+    ev =
+      emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
+        item_id: acc.msg_item,
+        item_type: :message,
+        content: content
+      })
+
+    %{acc | journal: acc.journal ++ [ev], msg_item: nil, msg_chunks: []}
+  end
+
+  # The done site's item resolution: reuse the open streamed item when
+  # there is one (its deltas ARE this message), otherwise open a fresh
+  # started/completed pair so even a non-streamed answer carries the
+  # full lifecycle the fixtures pin.
+  defp done_message_item(_session_id, _turn_id, _counter, %{msg_item: id} = acc)
+       when not is_nil(id),
+       do: {id, %{acc | msg_item: nil, msg_chunks: []}}
+
+  defp done_message_item(session_id, turn_id, counter, acc) do
+    {item_id, acc} = next_item_id(acc)
+
+    ev =
+      emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+        item_id: item_id,
+        item_type: :message
+      })
+
+    {item_id, %{acc | journal: acc.journal ++ [ev]}}
+  end
+
+  # One completed item (tool_use / tool_result): a fresh id, its
+  # `item_started` sibling, then the completion carrying `extra`.
+  defp complete_item(session_id, turn_id, counter, acc, item_type, extra) do
+    {item_id, acc} = next_item_id(acc)
+
+    started_ev =
+      emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+        item_id: item_id,
+        item_type: item_type
+      })
+
+    completed_ev =
+      emit_event(
+        session_id,
+        turn_id,
+        counter,
+        :item_completed,
+        :durable,
+        Map.merge(%{item_id: item_id, item_type: item_type}, extra)
+      )
+
+    %{acc | journal: acc.journal ++ [started_ev, completed_ev]}
   end
 
   # Consult the evidence gate on the real done path in observe-only mode (see

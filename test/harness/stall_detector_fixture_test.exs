@@ -144,15 +144,22 @@ defmodule Raxol.Harness.StallDetectorFixtureTest do
     assert evidence.count == 4
     assert detector.escalations_left < StallDetector.new().escalations_left
 
-    # And the strip surfaces it as its highest-priority notice.
+    # And the strip surfaces it as its highest-priority notice, ahead
+    # of the operator phase (charged-minimum form: a running tool
+    # renders as "running <name>", never a labelled Stage slot).
     [line] =
       StatusStrip.render(
-        %{turn_stage: :tool_call, needs_input: false, stall_verdict: verdict},
+        %{
+          turn_stage: :item_completed,
+          running_tool: "read_file",
+          needs_input: false,
+          stall_verdict: verdict
+        },
         200
       )
 
     assert line =~ "ALERT: possible loop: read_file x4 same args"
-    assert line =~ "Stage: tool_call"
+    assert line =~ "running read_file"
   end
 
   test "a healthy session replays to :ok end to end", %{tmp_dir: tmp_dir} do

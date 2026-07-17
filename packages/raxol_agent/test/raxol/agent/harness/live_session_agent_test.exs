@@ -349,7 +349,7 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
       eventually(fn -> session_id in SessionStreamer.list_sessions() end)
 
       SessionStreamer.emit(session_id, turn_started_event(session_id, "turn-1"))
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       send(driver, {:inline_input, Event.key("h")})
       send(driver, {:inline_input, Event.key(:tab)})
@@ -373,7 +373,7 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
       eventually(fn -> session_id in SessionStreamer.list_sessions() end)
 
       SessionStreamer.emit(session_id, turn_started_event(session_id, "turn-1"))
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       send(driver, {:inline_input, Event.key("h")})
       send(driver, {:inline_input, Event.key(:tab)})
@@ -429,6 +429,69 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
 
       refute strip_ansi(raw(device)) =~ "turn canceled"
       refute strip_ansi(raw(device)) =~ "interrupt signaled"
+    end
+
+    @tag :integration
+    test "streamed deltas paint the live-tail preview MID-TURN, before the final chunk arrives" do
+      # RED-FIRST falsifier for the live-session streaming defect: with
+      # the real producer (Contract.pump) the answer only appeared
+      # all-at-once at item_completed, because pump emitted item_delta
+      # without item_started/item_id and the projection's live tail
+      # never materialized. This test holds the stream OPEN mid-turn
+      # (the producer blocks until released) and asserts the partial
+      # text is already painted -- the doctrine's "streaming/provisional
+      # content renders" claim, exercised end-to-end with no fakes on
+      # the event side.
+      session_id = unique_session_id("live-stream-tail")
+      session = %{session_id: session_id}
+
+      {_driver, device} = start_driver(RealLane, session)
+
+      eventually(fn -> session_id in SessionStreamer.list_sessions() end)
+
+      # A stream that yields one delta, then BLOCKS until the test
+      # releases it -- freezing the turn mid-stream so the intermediate
+      # paint is observable, not a race.
+      stream =
+        Stream.resource(
+          fn -> :first end,
+          fn
+            :first ->
+              {[{:text_delta, "partial streamed "}], :held}
+
+            :held ->
+              receive do
+                :release ->
+                  {[
+                     {:text_delta, "text tail"},
+                     {:done, %{content: "partial streamed text tail", usage: %{}}}
+                   ], :done}
+              end
+
+            :done ->
+              {:halt, :done}
+          end,
+          fn _ -> :ok end
+        )
+
+      pumper =
+        Task.async(fn ->
+          Contract.pump(session_id, stream, prompt: "stream it")
+        end)
+
+      # Mid-turn: the partial text is on screen (the dim ephemeral
+      # tail preview), and the not-yet-streamed remainder is NOT.
+      eventually(fn -> strip_ansi(raw(device)) =~ "partial streamed" end)
+      refute strip_ansi(raw(device)) =~ "text tail"
+
+      send(pumper.pid, :release)
+      assert {:ok, %{content: content}} = Task.await(pumper, 2_000)
+      assert content == "partial streamed text tail"
+
+      # Turn end: the full answer seals into history.
+      eventually(fn ->
+        strip_ansi(raw(device)) =~ "partial streamed text tail"
+      end)
     end
   end
 end

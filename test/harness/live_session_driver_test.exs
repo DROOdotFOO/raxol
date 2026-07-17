@@ -400,8 +400,9 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
         send(forwarder, {:session_event, "s1", ev})
       end)
 
-      # The item has been applied (the strip's stage slot shows it) ...
-      eventually(fn -> strip_ansi(raw(device)) =~ "item_completed" end)
+      # The item has been applied (the strip's phase shows it: a
+      # completed message item mid-turn renders "responding") ...
+      eventually(fn -> strip_ansi(raw(device)) =~ "responding" end)
 
       # ... but its block must NOT be sealed into history yet: the turn
       # bracket has not folded.
@@ -425,7 +426,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
 
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       send(driver, {:inline_input, Event.key(:escape)})
 
@@ -440,7 +441,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
 
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       send(driver, {:inline_input, Event.key(:escape)})
       assert_receive {:interrupt_dispatched, %{turn_id: "t1"}}, 2_000
@@ -493,7 +494,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       %{device: device, forwarder: forwarder} = new_driver(%{})
 
       send(forwarder, {:session_event, "s1", turn_started_event("t1", 1)})
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       # Belief advances to t2.
       send(forwarder, {:session_event, "s1", turn_started_event("t2", 2)})
@@ -537,7 +538,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
         })
 
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       Enum.each(["h", "i"], fn ch ->
         send(driver, {:inline_input, Event.key(ch)})
@@ -562,7 +563,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
         new_driver(%{steer_reply: {:error, {:stale_turn, "turn-1", "turn-2"}}})
 
       send(forwarder, {:session_event, "s1", turn_started_event("turn-1")})
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       send(driver, {:inline_input, Event.key("h")})
       send(driver, {:inline_input, Event.key(:tab)})
@@ -599,7 +600,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
         new_driver(%{steer_reply: :hang}, steer_timeout_ms: 150)
 
       send(forwarder, {:session_event, "s1", turn_started_event("turn-1")})
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       # First steer: dispatched to the lane, then hangs there forever.
       send(driver, {:surface_command, %{type: :steer, payload: %{text: "one"}}})
@@ -769,27 +770,58 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
   # ---------------------------------------------------------------------
 
   describe "10. input is handled before queued render batches" do
-    test "an inline_input echo appears before a same-mailbox render batch's sealed content" do
-      %{device: device, driver: driver} = new_driver(%{})
+    test "an inline_input echo appears before a queued render batch's sealed content" do
+      # ORACLE FIX (found by the charged-minimum strip change): the
+      # original form of this test sent both messages at a quiescent
+      # driver and asserted the echo's "x" preceded the content -- but a
+      # quiescent driver's BLOCKING receive consumes whichever message
+      # arrives first (the selective input-first receive only orders
+      # messages that are ALREADY queued when the loop passes), and the
+      # assertion was satisfied vacuously by the old strip's "Ctx:"
+      # label containing an "x". This version constructs the queued-both
+      # state deterministically: a gateable injected clock holds the
+      # driver mid-way through a FIRST batch while the second batch and
+      # the input land in its mailbox, so the input-first receive is
+      # what actually decides the order.
+      test_pid = self()
+      {:ok, gate} = Agent.start_link(fn -> :first end)
 
-      events =
+      clock = fn ->
+        case Agent.get_and_update(gate, fn s -> {s, :rest} end) do
+          :first ->
+            send(test_pid, :clock_blocked)
+
+            receive do
+              :clock_go -> 0
+            end
+
+          :rest ->
+            System.monotonic_time(:millisecond)
+        end
+      end
+
+      %{device: device, driver: driver} =
+        new_driver(%{}, clock: clock, tick_ms: 60_000)
+
+      [first_event | rest_events] =
         message_turn_events("batch sealed content") |> Enum.map(&normalize!/1)
 
-      # Both messages are placed in the driver's mailbox in immediate
-      # succession, from the process that already synchronized on the
-      # forwarder subscribing (so the driver is quiescent, blocked in its
-      # own receive) -- the loop's input-first selective receive is what
-      # makes the ORDER of arrival not matter: {:inline_input} is checked
-      # first on every pass through the loop, ahead of {:render_batch}.
-      send(driver, {:render_batch, Enum.map(events, &{:event, &1})})
-      send(driver, {:inline_input, Event.key("x")})
+      # Batch 1 wedges the driver inside apply_batch_item (the injected
+      # clock blocks) ...
+      send(driver, {:render_batch, [{:event, first_event}]})
+      assert_receive :clock_blocked, 2_000
+
+      # ... while the content batch and the input BOTH queue behind it.
+      send(driver, {:render_batch, Enum.map(rest_events, &{:event, &1})})
+      send(driver, {:inline_input, Event.key("z")})
+      send(driver, :clock_go)
 
       eventually(fn -> strip_ansi(raw(device)) =~ "batch sealed content" end)
 
       full = raw(device)
       [prefix, _rest] = String.split(full, "batch sealed content", parts: 2)
 
-      assert strip_ansi(prefix) =~ "x",
+      assert strip_ansi(prefix) =~ "z",
              "the composer echo for the input event must appear before the " <>
                "batched render content in the byte stream"
     end
@@ -890,7 +922,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       # A progress observation seeds last_activity_at -- the detector's
       # honesty floor never alarms on an empty window.
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       Agent.update(clock_agent, fn _ -> 1_000 end)
 
@@ -1143,7 +1175,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
 
       # A turn is running (current_turn_id set from the event).
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       type_into(driver, "save this draft")
       send(driver, {:inline_input, Event.key(:enter)})

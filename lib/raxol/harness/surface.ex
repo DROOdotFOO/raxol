@@ -2503,15 +2503,60 @@ defmodule Raxol.Harness.Surface do
       if last_turn_completed,
         do: payload_field(last_turn_completed, "cost", :cost)
 
+    # The strip's operator-phase inputs (charged-minimum form; see
+    # `Raxol.Harness.StatusStrip`'s "Phase derivation"): when the last
+    # loop event is a tool_use completion, its result is not in yet --
+    # the tool is RUNNING, and the strip names it. `last_item_type`
+    # disambiguates the other `item_completed` phases (tool_result ->
+    # "thinking", message -> "responding"). Both read the same last
+    # event `turn_stage` reads, so the three can never disagree.
+    {running_tool, last_item_type} = item_phase_inputs(last_loop)
+
     status =
       model.status
       |> Map.put(:turn_stage, last_loop && event_field(last_loop, :type))
+      |> Map.put(:running_tool, running_tool)
+      |> Map.put(:last_item_type, last_item_type)
       |> Map.put(:turn_completed, turn_completed?)
       |> Map.put(:needs_input, needs_input?)
       |> Map.put(:cost, cost)
       |> maybe_put_now(now, last_loop)
 
     %{model | status: status}
+  end
+
+  # Payload values arrive as atoms from in-process producers and as
+  # strings off the fixture wire / EventBoundary deep-normalize -- fold
+  # both spellings to the atom vocabulary (fixed map, never
+  # String.to_atom/1 on wire input).
+  @item_type_atoms %{
+    "message" => :message,
+    "reasoning" => :reasoning,
+    "tool_use" => :tool_use,
+    "tool_result" => :tool_result
+  }
+
+  defp item_phase_inputs(last_loop) do
+    if last_loop != nil and event_field(last_loop, :type) == :item_completed do
+      item_type =
+        case payload_field(last_loop, "item_type", :item_type) do
+          type when is_atom(type) and type != nil -> type
+          type when is_binary(type) -> Map.get(@item_type_atoms, type, type)
+          _other -> nil
+        end
+
+      running_tool =
+        if item_type == :tool_use do
+          case payload_field(last_loop, "name", :name) do
+            name when is_binary(name) and name != "" -> name
+            _other -> nil
+          end
+        end
+
+      {running_tool, item_type}
+    else
+      {nil, nil}
+    end
   end
 
   defp maybe_put_now(status, nil, _last_loop), do: status
@@ -4341,11 +4386,16 @@ defmodule Raxol.Harness.Surface do
 
   # A live turn: loop events have been observed (`turn_stage` is set by
   # `update_status/3` from the last loop event) and the most recent
-  # bracket has neither completed nor canceled the turn.
+  # bracket has neither completed nor canceled the turn. A terminal
+  # `:error` also ends the live claim -- nothing is running after a
+  # fault, the sealed error block is the permanent record, and a strip
+  # that kept ticking `failed <elapsed>` toward a HUNG marker would be
+  # claiming activity where there is none.
   defp live_turn?(status) do
     case Map.get(status, :turn_stage) do
       nil -> false
       :turn_canceled -> false
+      :error -> false
       _stage -> Map.get(status, :turn_completed) != true
     end
   end

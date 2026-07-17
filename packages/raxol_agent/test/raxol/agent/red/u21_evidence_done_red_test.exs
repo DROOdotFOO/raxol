@@ -340,7 +340,9 @@ defmodule Raxol.Agent.Red.U21.Injector do
            Build.ev(
              9_999,
              :turn_completed,
-             %{final: true, refs: refs, usage: %{}}, turn_id: turn_id)}
+             %{final: true, refs: refs, usage: %{}},
+             turn_id: turn_id
+           )}
 
         err ->
           err
@@ -356,11 +358,7 @@ defmodule Raxol.Agent.Red.U21.Injector do
 
     @impl true
     def gate(_journal, turn_id, refs),
-      do:
-        {:ok,
-         Build.ev(9_999, :turn_completed, %{final: true, refs: refs},
-           turn_id: turn_id
-         )}
+      do: {:ok, Build.ev(9_999, :turn_completed, %{final: true, refs: refs}, turn_id: turn_id)}
   end
 
   # (b) checks existence + evidence-class but NOT ordering — must FAIL the stale-evidence red.
@@ -375,10 +373,7 @@ defmodule Raxol.Agent.Red.U21.Injector do
     def gate(journal, turn_id, refs) do
       Enum.reduce_while(
         refs,
-        {:ok,
-         Build.ev(9_999, :turn_completed, %{final: true, refs: refs},
-           turn_id: turn_id
-         )},
+        {:ok, Build.ev(9_999, :turn_completed, %{final: true, refs: refs}, turn_id: turn_id)},
         fn ref, acc ->
           case Build.resolve(journal, ref) do
             nil ->
@@ -408,10 +403,7 @@ defmodule Raxol.Agent.Red.U21.Injector do
 
       Enum.reduce_while(
         refs,
-        {:ok,
-         Build.ev(9_999, :turn_completed, %{final: true, refs: refs},
-           turn_id: turn_id
-         )},
+        {:ok, Build.ev(9_999, :turn_completed, %{final: true, refs: refs}, turn_id: turn_id)},
         fn ref, acc ->
           case Build.resolve(journal, ref) do
             nil ->
@@ -459,10 +451,7 @@ defmodule Raxol.Agent.Red.U21.Injector do
 
       Enum.reduce_while(
         refs,
-        {:ok,
-         Build.ev(9_999, :turn_completed, %{final: true, refs: refs},
-           turn_id: turn_id
-         )},
+        {:ok, Build.ev(9_999, :turn_completed, %{final: true, refs: refs}, turn_id: turn_id)},
         fn ref, acc ->
           case Build.resolve(journal, ref) do
             nil ->
@@ -502,26 +491,23 @@ defmodule Raxol.Agent.Red.U21.Contours do
 
     [
       # done with valid postdating evidence -> accepted
-      {:valid, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t,
-       [3], :accept},
+      {:valid, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [3], :accept},
       # done with NO refs -> evidence_required, no done event
-      {:evidence_required,
-       [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [],
+      {:evidence_required, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [],
        {:reject, :evidence_required}},
       # evidence PREDATES a later mutation -> stale
-      {:stale, [Build.turn_started(1), Build.evidence(2), Build.mutation(3)], t,
-       [2], {:reject, {:stale_evidence, 2}}},
+      {:stale, [Build.turn_started(1), Build.evidence(2), Build.mutation(3)], t, [2],
+       {:reject, {:stale_evidence, 2}}},
       # ref points at an internal state_change -> not evidence-class
       {:not_evidence_state_change,
-       [Build.turn_started(1), Build.mutation(2), Build.state_change(3)], t,
-       [3], {:reject, {:not_evidence, 3}}},
+       [Build.turn_started(1), Build.mutation(2), Build.state_change(3)], t, [3],
+       {:reject, {:not_evidence, 3}}},
       # ref points at the agent's own message text -> not evidence-class
       {:not_evidence_self_report,
        [Build.turn_started(1), Build.mutation(2), Build.self_report(3)], t, [3],
        {:reject, {:not_evidence, 3}}},
       # ref names an offset that does not exist
-      {:missing_ref,
-       [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [99],
+      {:missing_ref, [Build.turn_started(1), Build.mutation(2), Build.evidence(3)], t, [99],
        {:reject, {:missing_ref, 99}}},
       # H2 — cross-turn evidence spoof: turn "t"'s last mutation is at offset
       # 2; a DIFFERENT turn ("other") starts afterward and journals its own
@@ -646,16 +632,12 @@ defmodule Raxol.Agent.Red.U21.Gen do
       # if it checks ordering/class but not ownership.
       own_evidence_offsets =
         journal
-        |> Enum.filter(
-          &(&1.payload[:item_type] == :tool_result and &1.turn_id == "t")
-        )
+        |> Enum.filter(&(&1.payload[:item_type] == :tool_result and &1.turn_id == "t"))
         |> Enum.map(& &1.id)
 
       foreign_evidence_offsets =
         journal
-        |> Enum.filter(
-          &(&1.payload[:item_type] == :tool_result and &1.turn_id != "t")
-        )
+        |> Enum.filter(&(&1.payload[:item_type] == :tool_result and &1.turn_id != "t"))
         |> Enum.map(& &1.id)
 
       refs_gen =
@@ -1185,19 +1167,18 @@ defmodule Raxol.Agent.Red.U21RealProducerRegressionTest do
   # Drew's round-3 failure scenario, produced for real: run tests (pass), THEN
   # edit code, then try to cite the pre-edit test run as evidence.
   #
-  # Journal produced (all durable): 1 turn_started, 2 tool_use(run_tests),
-  # 3 tool_result(run_tests), 4 tool_use(fs_write), 5 tool_result(fs_write),
-  # 6 message, 7 turn_completed{final: true}.
+  # Journal produced (all durable; every item carries its item_started
+  # sibling): 1 turn_started, 2/3 tool_use(run_tests), 4/5
+  # tool_result(run_tests), 6/7 tool_use(fs_write), 8/9
+  # tool_result(fs_write), 10/11 message, 12 turn_completed{final: true}.
   defp real_journal do
     session_id = "u21-real-#{System.unique_integer([:positive])}"
     :ok = SessionStreamer.subscribe(session_id)
 
     stream = [
       {:tool_use, %{name: "run_tests", id: "call-1", arguments: %{}}},
-      {:tool_result,
-       %{name: "run_tests", result: "tests: 12 passed, 0 failed"}},
-      {:tool_use,
-       %{name: "fs_write", id: "call-2", arguments: %{path: "lib/a.ex"}}},
+      {:tool_result, %{name: "run_tests", result: "tests: 12 passed, 0 failed"}},
+      {:tool_use, %{name: "fs_write", id: "call-2", arguments: %{path: "lib/a.ex"}}},
       {:tool_result, %{name: "fs_write", result: "wrote 42 bytes"}},
       {:done, %{content: "All fixed.", usage: %{}}}
     ]
@@ -1225,18 +1206,18 @@ defmodule Raxol.Agent.Red.U21RealProducerRegressionTest do
 
   test "stale evidence predating a real (unstamped) tool_use mutation is rejected" do
     # Pre-fix, `last_mutation` was nil on this journal (no stamped fields), so
-    # the pre-edit test run at offset 3 wrongly satisfied the done.
+    # the pre-edit test run at offset 5 wrongly satisfied the done.
     {journal, turn} = real_journal()
 
-    assert DoneGate.gate(journal, turn, [3]) == {:error, {:stale_evidence, 3}}
+    assert DoneGate.gate(journal, turn, [5]) == {:error, {:stale_evidence, 5}}
   end
 
   test "the last mutation's own echo in a real journal cannot green-light the done" do
-    # Offset 5 is fs_write's own tool_result — it postdates the mutation at 4
+    # Offset 9 is fs_write's own tool_result — it postdates the mutation at 7
     # trivially and verifies nothing.
     {journal, turn} = real_journal()
 
-    assert DoneGate.gate(journal, turn, [5]) == {:error, {:mutation_echo, 5}}
+    assert DoneGate.gate(journal, turn, [9]) == {:error, {:mutation_echo, 9}}
   end
 
   test "fail-closed: no offset in a real v0 journal is acceptable evidence" do
