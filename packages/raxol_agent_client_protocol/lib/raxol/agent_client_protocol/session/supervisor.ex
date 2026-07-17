@@ -38,9 +38,23 @@ defmodule Raxol.AgentClientProtocol.Session.Supervisor do
 
   alias Raxol.AgentClientProtocol.Session
 
+  # Per-connection session cap (durable-sessions robustness): a peer cannot open
+  # unbounded Sessions on one connection. `start_session/2` returns the
+  # DynamicSupervisor's own `{:error, :max_children}` past this — a clean refusal
+  # the `session/new`/`session/load` handler maps to a busy/invalid-params error,
+  # never a crash or a silent leak. Override per-connection via `:max_sessions`.
+  @default_max_sessions 1_000
+
+  # Backstop cap for the sibling per-connection dispatch `Task.Supervisor`
+  # (`child_specs/1`): the Connection's own `pending_in` cap sheds inbound
+  # requests well before this, so this only bounds a pathological co-tenant
+  # spawn burst. Override via `:max_inbound_tasks`.
+  @default_max_inbound_tasks 4_000
+
   @doc """
   Start the per-connection Session `DynamicSupervisor`. Pass `:name` to register
-  it (a host tree keys one per connection; tests may start it anonymously).
+  it (a host tree keys one per connection; tests may start it anonymously);
+  `:max_sessions` caps concurrent live Sessions (default #{@default_max_sessions}).
   """
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []) do
@@ -49,8 +63,9 @@ defmodule Raxol.AgentClientProtocol.Session.Supervisor do
   end
 
   @impl true
-  def init(_opts) do
-    DynamicSupervisor.init(strategy: :one_for_one)
+  def init(opts) do
+    max_sessions = Keyword.get(opts, :max_sessions, @default_max_sessions)
+    DynamicSupervisor.init(strategy: :one_for_one, max_children: max_sessions)
   end
 
   @doc """
@@ -91,19 +106,34 @@ defmodule Raxol.AgentClientProtocol.Session.Supervisor do
   list (Connection last, `significant: true`); the returned `:id`s let the
   Connection resolve the sibling pids in `handle_continue/2`.
   """
-  @spec child_specs(task_sup_name: term(), session_sup_name: term()) :: [Supervisor.child_spec()]
+  @spec child_specs(
+          task_sup_name: term(),
+          session_sup_name: term(),
+          max_inbound_tasks: pos_integer(),
+          max_sessions: pos_integer()
+        ) :: [Supervisor.child_spec()]
   def child_specs(opts \\ []) do
     task_sup_name = Keyword.get(opts, :task_sup_name)
     session_sup_name = Keyword.get(opts, :session_sup_name)
+    max_inbound_tasks = Keyword.get(opts, :max_inbound_tasks, @default_max_inbound_tasks)
+    max_sessions = Keyword.get(opts, :max_sessions, @default_max_sessions)
+
+    task_sup_opts =
+      [max_children: max_inbound_tasks] ++
+        if(task_sup_name, do: [name: task_sup_name], else: [])
+
+    session_sup_opts =
+      [max_sessions: max_sessions] ++
+        if(session_sup_name, do: [name: session_sup_name], else: [])
 
     [
       Supervisor.child_spec(
-        {Task.Supervisor, if(task_sup_name, do: [name: task_sup_name], else: [])},
+        {Task.Supervisor, task_sup_opts},
         id: :acp_task_supervisor,
         restart: :permanent
       ),
       Supervisor.child_spec(
-        {__MODULE__, if(session_sup_name, do: [name: session_sup_name], else: [])},
+        {__MODULE__, session_sup_opts},
         id: :acp_session_supervisor,
         restart: :permanent
       )

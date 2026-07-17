@@ -485,6 +485,84 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Per-connection session cap (durable-sessions robustness): a peer cannot open
+  # unbounded Sessions on one connection. The Nth+1 is refused CLEANLY.
+  # ---------------------------------------------------------------------------
+
+  describe "per-connection session cap" do
+    test "the (cap+1)th session is refused with {:error, :max_children}", ctx do
+      capped = start_supervised!({SessionSup, [max_sessions: 2]}, id: :capped_session_sup)
+      conn = new_conn()
+
+      start = fn sid ->
+        SessionSup.start_session(capped,
+          session_id: sid,
+          conn: conn,
+          conn_mod: FakeConnection,
+          task_sup: ctx.task_sup,
+          turn_runner: runner_ends(:end_turn)
+        )
+      end
+
+      assert {:ok, _} = start.("cap-1")
+      assert {:ok, _} = start.("cap-2")
+      # Over the cap: refused cleanly (no crash, no leak) — not silently accepted.
+      assert {:error, :max_children} = start.("cap-3")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Idle reaping of the durable Writer (durable-sessions robustness): a
+  # long-lived node must not accrue a never-stopped Writer per session forever.
+  # After the idle timeout the Session idle-STOPS its Writer; the journal is the
+  # durable state and survives, so a fresh reattach respawns + replays (the moat).
+  # ---------------------------------------------------------------------------
+
+  describe "idle Writer reaping (journal survives)" do
+    test "an idle session stops its Writer after the timeout; the journal is intact", ctx do
+      start_supervised!({Registry, keys: :unique, name: Writer.registry()})
+      sid = "sess-idle-" <> hex()
+      {:ok, j} = Mem.open(sid)
+
+      writer =
+        start_supervised!(%{
+          id: {:writer, sid},
+          start: {Writer, :start_link, [[session_id: sid, journal: {Mem, j}]]},
+          restart: :temporary
+        })
+
+      conn = new_conn()
+
+      {session, _} =
+        start_session(ctx, conn,
+          session_id: sid,
+          emitter: Emitter.Journal,
+          turn_runner: runner_ends(:end_turn),
+          config: %{idle_timeout: 120, cancel_backstop_ms: 50}
+        )
+
+      # Drive one turn so the journal holds durable records (genesis + boundaries)
+      # — this is what a reattach later replays.
+      {:ok, _} = begin(session, 1)
+      wait_for_reply(conn)
+      wait_until(fn -> turn_state(session) == :idle end)
+
+      assert Process.alive?(writer)
+      hwm_before = Mem.high_watermark(j)
+      assert hwm_before > 0
+
+      # After the idle timeout the Session reaps its Writer (registry entry gone,
+      # process down) — the journal store is owned elsewhere and is untouched.
+      wait_until(fn -> Writer.whereis(sid) == nil end)
+      refute Process.alive?(writer)
+      assert Mem.high_watermark(j) == hwm_before
+
+      # The idle Session itself is gone too (it is :temporary — reattach respawns).
+      wait_until(fn -> not Process.alive?(session) end)
+    end
+  end
+
   describe "I14 no atom creation from session data" do
     test "session_id churn does not grow the atom table", ctx do
       conn = new_conn()

@@ -1656,4 +1656,74 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
       ScriptedPeer.assert_no_frame(peer, 100)
     end
   end
+
+  # ===========================================================================
+  # Inbound flood shedding (unbounded concurrent inbound dispatch — DoS).
+  #
+  # A hostile/slow peer that streams more concurrent inbound REQUESTS than the
+  # Connection can retire grows `pending_in`/`reply_refs`/`task_index` (and the
+  # dispatch task set) without bound. The Connection must SHED the overflow —
+  # answer `-32603` (server busy) and dispatch NOTHING — never block the link
+  # and never let those maps grow past the cap.
+  # ===========================================================================
+
+  defp start_agent_conn_capped(max_inbound) do
+    task_sup = start_supervised!({Task.Supervisor, []})
+    {conn_handle, peer} = ScriptedPeer.new()
+
+    conn =
+      start_supervised!(
+        connection_child_spec(
+          role: :agent,
+          transport: {Paired, conn_handle},
+          handler: ScriptAgent,
+          handler_arg: self(),
+          task_sup: task_sup,
+          max_inbound: max_inbound
+        )
+      )
+
+    %{conn: conn, peer: peer, task_sup: task_sup}
+  end
+
+  describe "inbound flood shedding (bounded pending_in)" do
+    test "concurrent inbound requests over the cap are shed -32603; pending_in stays bounded" do
+      cap = 4
+      %{conn: conn, peer: peer} = start_agent_conn_capped(cap)
+      complete_handshake(peer)
+
+      # Park `cap` inbound requests in the handler: each new_session dispatch
+      # blocks (we never hand it the run closure), so its pending_in entry
+      # persists. After `cap` invokes land, pending_in is saturated.
+      Enum.each(1..cap, fn i ->
+        ScriptedPeer.send_request(peer, 100 + i, "session/new", new_session_params())
+      end)
+
+      for _ <- 1..cap do
+        assert_receive {:handler_invoke, :new_session, _p, _c, _task_pid, _ref}, 500
+      end
+
+      wait_until(fn -> map_size(:sys.get_state(conn).pending_in) == cap end)
+
+      # Two MORE concurrent requests: the cap is saturated, so they must be shed
+      # with -32603 and NOT dispatched (no further handler_invoke), and
+      # pending_in must NOT grow past the cap.
+      ScriptedPeer.send_request(peer, 900, "session/new", new_session_params())
+      ScriptedPeer.send_request(peer, 901, "session/new", new_session_params())
+
+      shed1 = ScriptedPeer.recv(peer)
+      shed2 = ScriptedPeer.recv(peer)
+
+      assert shed1["id"] == 900
+      assert shed1["error"]["code"] == -32_603
+      assert shed2["id"] == 901
+      assert shed2["error"]["code"] == -32_603
+
+      refute_receive {:handler_invoke, :new_session, _p, _c, _tp, _r}, 100
+
+      assert map_size(:sys.get_state(conn).pending_in) == cap
+      assert map_size(:sys.get_state(conn).reply_refs) == cap
+      assert Process.alive?(conn)
+    end
+  end
 end

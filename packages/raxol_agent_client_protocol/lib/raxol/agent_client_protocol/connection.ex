@@ -129,6 +129,15 @@ defmodule Raxol.AgentClientProtocol.Connection do
 
   @session_registry Raxol.AgentClientProtocol.SessionRegistry
 
+  # Inbound-request concurrency cap (flood-DoS shed, §4). `pending_in` (and its
+  # co-indexed `reply_refs`/`task_index`, plus one dispatch task each) is bounded
+  # by this many CONCURRENT in-flight inbound requests; a peer that streams more
+  # is SHED (`-32603` server-busy, dispatch nothing) rather than growing the maps
+  # or the task set without bound. Sized well under a healthy single-link request
+  # concurrency but low enough that an adversarial flood cannot exhaust memory;
+  # override per-connection via the `:max_inbound` start_link opt.
+  @default_max_inbound 1_000
+
   defstruct role: :agent,
             transport_mod: nil,
             transport_state: nil,
@@ -148,7 +157,8 @@ defmodule Raxol.AgentClientProtocol.Connection do
             task_index: %{},
             handler: nil,
             handler_state: nil,
-            task_sup: nil
+            task_sup: nil,
+            max_in: @default_max_inbound
 
   @type role :: :agent | :client
 
@@ -163,7 +173,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
   # (§2.1 / §5 cycle 1: no code running IN the Connection may call back into it).
   # ===========================================================================
 
-  @doc "Start a Connection. Opts: `:role`, `:transport` `{mod, handle}`, `:handler`, `:handler_arg`, and either `:parent_sup` (IC-8) or direct `:task_sup`/`:session_sup`."
+  @doc "Start a Connection. Opts: `:role`, `:transport` `{mod, handle}`, `:handler`, `:handler_arg`, `:max_inbound` (concurrent inbound-request cap, default #{@default_max_inbound}), and either `:parent_sup` (IC-8) or direct `:task_sup`/`:session_sup`."
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) when is_list(opts) do
     GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
@@ -273,7 +283,8 @@ defmodule Raxol.AgentClientProtocol.Connection do
           session_sup: Keyword.get(opts, :session_sup),
           task_sup: Keyword.get(opts, :task_sup),
           handler: handler,
-          handler_state: handler_state
+          handler_state: handler_state,
+          max_in: Keyword.get(opts, :max_inbound, @default_max_inbound)
         }
 
         {:ok, state, {:continue, :boot}}
@@ -720,6 +731,28 @@ defmodule Raxol.AgentClientProtocol.Connection do
         Logger.warning("ACP: duplicate in-flight request id #{RequestId.display(id)} dropped")
         {:noreply, state}
 
+      # (4) inbound-concurrency cap — SHED, do not dispatch (flood-DoS guard).
+      # A distinct in-flight id that would push `pending_in` past `max_in` is
+      # answered -32603 (server busy) and dispatched to NO task: the maps and the
+      # dispatch task set never grow beyond the cap, and the Connection never
+      # blocks the link. The overflow id is NOT recorded (nothing to reclaim), so
+      # a later retry of the same id after the flood drains is a fresh request.
+      map_size(state.pending_in) >= state.max_in ->
+        emit_telemetry([:raxol, :acp, :inbound_shed], %{id: RequestId.display(id), method: method})
+
+        Logger.warning(
+          "ACP: inbound request #{method} (id #{RequestId.display(id)}) shed -32603 — " <>
+            "#{state.max_in} concurrent inbound already in flight (flood guard)"
+        )
+
+        error =
+          data_error(-32_603, "Server busy", %{
+            "reason" => "too many concurrent inbound requests",
+            "limit" => state.max_in
+          })
+
+        emit_and_continue(response_frame(id, {:error, error}), state)
+
       # (5) capability gate BEFORE decode — -32601 beats -32602 (§4.1)
       capability_denied?(method, state) ->
         error = data_error(-32_601, "Method not found", method)
@@ -759,28 +792,57 @@ defmodule Raxol.AgentClientProtocol.Connection do
       task_sup: state.task_sup
     }
 
-    task =
-      Task.Supervisor.async_nolink(state.task_sup, fn ->
-        run_dispatch(state.role, state.handler, dispatchable, ctx)
-      end)
+    # The `max_in` cap (§4.1(4)) sheds before we ever reach the task_sup's own
+    # `max_children` backstop, so this rejection path is defence-in-depth: if the
+    # shared Task.Supervisor is nonetheless saturated (e.g. a co-tenant notif
+    # flood), we SHED -32603 rather than let `async_nolink` raise and take the
+    # Connection down.
+    case start_dispatch_task(state, fn ->
+           run_dispatch(state.role, state.handler, dispatchable, ctx)
+         end) do
+      {:error, reason} ->
+        emit_telemetry([:raxol, :acp, :inbound_shed], %{id: RequestId.display(id), method: method})
 
-    entry = %{
-      task_ref: task.ref,
-      task_pid: task.pid,
-      method: method,
-      cancelled?: false,
-      reply_ref: reply_ref,
-      adopter: nil
-    }
+        Logger.warning(
+          "ACP: inbound request #{method} (id #{RequestId.display(id)}) shed -32603 — " <>
+            "dispatch task_sup saturated (#{inspect(reason)})"
+        )
 
-    state = %{
-      state
-      | pending_in: Map.put(state.pending_in, id, entry),
-        reply_refs: Map.put(state.reply_refs, reply_ref, id),
-        task_index: Map.put(state.task_index, task.ref, {:request, id})
-    }
+        error =
+          data_error(-32_603, "Server busy", %{"reason" => "dispatch capacity exhausted"})
 
-    {:noreply, state}
+        emit_and_continue(response_frame(id, {:error, error}), state)
+
+      {:ok, task} ->
+        entry = %{
+          task_ref: task.ref,
+          task_pid: task.pid,
+          method: method,
+          cancelled?: false,
+          reply_ref: reply_ref,
+          adopter: nil
+        }
+
+        state = %{
+          state
+          | pending_in: Map.put(state.pending_in, id, entry),
+            reply_refs: Map.put(state.reply_refs, reply_ref, id),
+            task_index: Map.put(state.task_index, task.ref, {:request, id})
+        }
+
+        {:noreply, state}
+    end
+  end
+
+  # Spawn a dispatch task on the shared per-connection Task.Supervisor without
+  # ever crashing the Connection: `async_nolink` RAISES when the supervisor's
+  # `max_children` is reached, so it is caught and reported as `{:error, reason}`
+  # for the caller to shed/drop. On success returns `{:ok, %Task{}}`.
+  @spec start_dispatch_task(%__MODULE__{}, (-> term())) :: {:ok, Task.t()} | {:error, term()}
+  defp start_dispatch_task(state, fun) do
+    {:ok, Task.Supervisor.async_nolink(state.task_sup, fun)}
+  rescue
+    e -> {:error, e}
   end
 
   # ===========================================================================
@@ -945,13 +1007,24 @@ defmodule Raxol.AgentClientProtocol.Connection do
           task_sup: state.task_sup
         }
 
-        task =
-          Task.Supervisor.async_nolink(state.task_sup, fn ->
-            run_dispatch(state.role, state.handler, dispatchable, ctx)
-          end)
+        # A notification carries no reply obligation, so an over-capacity spawn is
+        # DROPPED (log + telemetry), never a wire frame — and never a raise that
+        # would take the Connection down (§4.4, flood-DoS guard symmetry).
+        case start_dispatch_task(state, fn ->
+               run_dispatch(state.role, state.handler, dispatchable, ctx)
+             end) do
+          {:error, reason} ->
+            Logger.warning(
+              "ACP: notification #{method} dropped — dispatch task_sup saturated (#{inspect(reason)})"
+            )
 
-        {:noreply,
-         %{state | task_index: Map.put(state.task_index, task.ref, {:notification, method})}}
+            emit_telemetry([:raxol, :acp, :notification_shed], %{method: method})
+            {:noreply, state}
+
+          {:ok, task} ->
+            {:noreply,
+             %{state | task_index: Map.put(state.task_index, task.ref, {:notification, method})}}
+        end
     end
   end
 

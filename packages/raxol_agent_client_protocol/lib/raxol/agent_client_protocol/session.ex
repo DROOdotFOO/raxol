@@ -117,6 +117,28 @@ defmodule Raxol.AgentClientProtocol.Session do
 
   @default_permission_timeout 600_000
   @default_cancel_backstop_ms 30_000
+
+  # Idle reaping (durable-sessions robustness). While a Session is `:idle` for
+  # this long, it idle-STOPS its durable Writer (via the emitter's `reap/1` seam)
+  # and then stops itself — the journal is the durable state and OUTLIVES both, so
+  # a fresh reattach (`session/load`) respawns the Writer + Session and replays the
+  # journal (the moat design). The default is `:infinity` (OFF) so the frozen base
+  # v2 behaviour is byte-identical; a durable/journalled deployment opts in with a
+  # finite `:idle_timeout` in `:config`.
+  #
+  # ## Retention / truncation (durable state growth)
+  #
+  # Reaping reclaims the two LIVE per-session processes (Writer + Session); it does
+  # NOT truncate the durable journal, which is deliberately append-only (offset law
+  # + event-sourcing axiom — a reattach must replay from genesis). A long-lived node
+  # therefore still accrues journal storage per session_id over its lifetime. That
+  # is a STORAGE-tier concern, out of this layer's scope: the journal store owner
+  # (production: the app supervisor holding `{mod, handle}`) is where retention
+  # (age/size-based compaction, session GC, cold-storage eviction) belongs. This
+  # layer's contribution is bounding the live-process footprint; the store's is
+  # bounding the durable footprint. Neither the Writer nor the Session ever deletes
+  # journal records.
+  @default_idle_timeout :infinity
   @default_conn_mod Raxol.AgentClientProtocol.Connection
 
   # The emit seam (acp-reattach-design.md §2.4). The DEFAULT is byte-identical to
@@ -140,7 +162,13 @@ defmodule Raxol.AgentClientProtocol.Session do
           emitter: module(),
           journal: {module(), term()} | nil,
           turn_seq: non_neg_integer(),
-          config: %{permission_timeout: timeout(), cancel_backstop_ms: pos_integer()}
+          idle_timer: reference() | nil,
+          idle_epoch: non_neg_integer(),
+          config: %{
+            permission_timeout: timeout(),
+            cancel_backstop_ms: pos_integer(),
+            idle_timeout: timeout()
+          }
         }
 
   defstruct session_id: nil,
@@ -154,6 +182,8 @@ defmodule Raxol.AgentClientProtocol.Session do
             emitter: @default_emitter,
             journal: nil,
             turn_seq: 0,
+            idle_timer: nil,
+            idle_epoch: 0,
             config: %{}
 
   # -- Public API -------------------------------------------------------------
@@ -283,7 +313,9 @@ defmodule Raxol.AgentClientProtocol.Session do
       config: config
     }
 
-    {:ok, state}
+    # A Session is born idle — arm the idle-reap timer (no-op when idle_timeout is
+    # :infinity, the OFF default that keeps base v2 byte-identical).
+    {:ok, arm_idle(state)}
   end
 
   # ---- begin_prompt ---------------------------------------------------------
@@ -297,9 +329,10 @@ defmodule Raxol.AgentClientProtocol.Session do
 
     if rx_seq < state.last_cancel_seq do
       # Born-cancelled: the cancel was wire-ordered before this prompt (IC-5c).
-      # Adopt, resolve cancelled immediately, run nothing.
+      # Adopt, resolve cancelled immediately, run nothing. Stays idle → re-arm the
+      # idle timer so this activity postpones reaping.
       _ = state.conn_mod.reply(state.conn, reply_ref, {:ok, PromptResponse.new(:cancelled)})
-      {:reply, :ok, state}
+      {:reply, :ok, arm_idle(state)}
     else
       session = self()
 
@@ -322,7 +355,8 @@ defmodule Raxol.AgentClientProtocol.Session do
         {:error, :turn_in_flight} ->
           busy = Error.new(-32_600, "prompt already in flight")
           _ = state.conn_mod.reply(state.conn, reply_ref, {:error, busy})
-          {:reply, :ok, state}
+          # Stays idle (spawned nothing) → re-arm the idle timer.
+          {:reply, :ok, arm_idle(state)}
 
         _ok ->
           task =
@@ -345,7 +379,9 @@ defmodule Raxol.AgentClientProtocol.Session do
             updates_emitted?: false
           }
 
-          {:reply, :ok, %{state | turn: {:prompting, turn}, turn_seq: turn_seq}}
+          # A live turn is never idle — disarm the reaper until the turn drains.
+          state = disarm_idle(%{state | turn: {:prompting, turn}, turn_seq: turn_seq})
+          {:reply, :ok, state}
       end
     end
   end
@@ -567,6 +603,29 @@ defmodule Raxol.AgentClientProtocol.Session do
     {:noreply, state}
   end
 
+  # ---- idle reap (durable-sessions robustness) ------------------------------
+
+  def handle_info(
+        {:acp_idle_reap, epoch},
+        %{turn: :idle, idle_epoch: epoch} = state
+      ) do
+    # This session has been idle for the whole timeout window (the epoch match
+    # proves no intervening activity re-armed a newer timer). Idle-STOP the durable
+    # Writer via the emitter seam (Direct = no-op; Journal = stop the Writer), then
+    # stop this Session. The journal OUTLIVES both and a fresh reattach respawns +
+    # replays (the moat). :temporary child ⇒ never restarted.
+    Logger.debug("acp: idle-reaping session #{inspect(state.session_id)} after idle timeout")
+    emit_telemetry([:raxol, :acp, :session_idle_reaped], %{session_id: state.session_id})
+    reap_writer(state)
+    {:stop, :normal, %{state | idle_timer: nil}}
+  end
+
+  def handle_info({:acp_idle_reap, _stale_epoch}, state) do
+    # A timer from an earlier idle window (activity has since re-armed a newer one,
+    # or a turn is in flight). Provably inert — drop it.
+    {:noreply, state}
+  end
+
   def handle_info(_other, state) do
     # Never crash on an unexpected message.
     {:noreply, state}
@@ -654,7 +713,8 @@ defmodule Raxol.AgentClientProtocol.Session do
     # frame-count invariant (I17: exactly zero frames) is preserved Connection-side.
     # `respond?` is now vestigial (kept for documentation of the cancel leg).
     _ = state.conn_mod.reply(state.conn, t.reply_ref, rendered)
-    %{state | turn: :idle}
+    # Back to idle → re-arm the idle-reap countdown from this last activity.
+    arm_idle(%{state | turn: :idle})
   end
 
   # Streaming guard #2 (W17-ctx, cleanroom spec §3.3 ">=1 update per
@@ -749,15 +809,60 @@ defmodule Raxol.AgentClientProtocol.Session do
 
   @spec normalize_config(map() | keyword()) :: %{
           permission_timeout: timeout(),
-          cancel_backstop_ms: pos_integer()
+          cancel_backstop_ms: pos_integer(),
+          idle_timeout: timeout()
         }
   defp normalize_config(config) do
     config = Map.new(config)
 
     %{
       permission_timeout: Map.get(config, :permission_timeout, @default_permission_timeout),
-      cancel_backstop_ms: Map.get(config, :cancel_backstop_ms, @default_cancel_backstop_ms)
+      cancel_backstop_ms: Map.get(config, :cancel_backstop_ms, @default_cancel_backstop_ms),
+      idle_timeout: Map.get(config, :idle_timeout, @default_idle_timeout)
     }
+  end
+
+  # -- Idle reaping (durable-sessions robustness) -----------------------------
+
+  # Arm (or re-arm) the idle-reap timer. Epoch-guarded: every arm bumps the epoch
+  # and cancels the prior timer, so a stale timer already in the mailbox from an
+  # earlier idle window is provably inert (its epoch no longer matches). A no-op
+  # when idle_timeout is :infinity (the OFF default — base v2 unchanged).
+  @spec arm_idle(t()) :: t()
+  defp arm_idle(state) do
+    if state.idle_timer, do: Process.cancel_timer(state.idle_timer)
+
+    case state.config.idle_timeout do
+      :infinity ->
+        %{state | idle_timer: nil}
+
+      ms when is_integer(ms) and ms > 0 ->
+        epoch = state.idle_epoch + 1
+        ref = Process.send_after(self(), {:acp_idle_reap, epoch}, ms)
+        %{state | idle_timer: ref, idle_epoch: epoch}
+    end
+  end
+
+  # Disarm the idle timer for the duration of a live turn (a running turn is never
+  # idle). The epoch bump makes any already-queued timer message inert too.
+  @spec disarm_idle(t()) :: t()
+  defp disarm_idle(state) do
+    if state.idle_timer, do: Process.cancel_timer(state.idle_timer)
+    %{state | idle_timer: nil, idle_epoch: state.idle_epoch + 1}
+  end
+
+  # Idle-stop the durable Writer via the emitter's optional `reap/1` seam. Direct
+  # (base) has no Writer, so this is a no-op there; Journal stops the single
+  # publisher (the journal store outlives it). Guarded so an emitter without the
+  # optional callback never blocks the Session's own stop.
+  @spec reap_writer(t()) :: :ok
+  defp reap_writer(state) do
+    if function_exported?(state.emitter, :reap, 1) do
+      _ = state.emitter.reap(state)
+      :ok
+    else
+      :ok
+    end
   end
 
   # Telemetry is optional (not a package dependency); Logger always carries
@@ -812,6 +917,17 @@ defmodule Raxol.AgentClientProtocol.Session.Emitter do
               turn_id :: pos_integer()
             ) ::
               :ok
+
+  @doc """
+  OPTIONAL idle-reap hook (durable-sessions robustness). Called once when the
+  Session idle-reaps: an emitter that owns a live durable process (the Journal's
+  single-publisher Writer) STOPS it here so a long-lived node does not accrue a
+  never-stopped Writer per session. The journal store outlives the Writer, so a
+  fresh reattach respawns + replays. `Direct` has no such process — this is a
+  no-op — and any emitter that omits the callback is treated as a no-op.
+  """
+  @callback reap(session_state :: struct()) :: :ok
+  @optional_callbacks reap: 1
 end
 
 defmodule Raxol.AgentClientProtocol.Session.Emitter.Direct do
@@ -836,6 +952,10 @@ defmodule Raxol.AgentClientProtocol.Session.Emitter.Direct do
 
   @impl true
   def turn_completed(_state, _rendered, _turn_id), do: :ok
+
+  # Base v2 keeps no durable Writer, so idle-reap has nothing to stop.
+  @impl true
+  def reap(_state), do: :ok
 end
 
 defmodule Raxol.AgentClientProtocol.Session.Emitter.Journal do
@@ -927,6 +1047,28 @@ defmodule Raxol.AgentClientProtocol.Session.Emitter.Journal do
   def turn_completed(state, rendered, turn_id) do
     _ = append(state, "turn_completed", completed_payload(turn_id, rendered), "system")
     :ok
+  end
+
+  # Idle reap (durable-sessions robustness): STOP the single-publisher Writer so a
+  # long-lived node does not accrue a never-stopped Writer per session. The journal
+  # store owner OUTLIVES the Writer (Writer moduledoc: the `{mod, handle}` owner
+  # outlives it), so the durable tail survives and a fresh reattach respawns the
+  # Writer (lazy-start) and replays from genesis. A `:normal` stop prunes the
+  # WriterRegistry entry via its owner-monitor. Never raises into the reaping
+  # Session — a missing/already-dead Writer is a no-op.
+  @impl true
+  def reap(state) do
+    case Writer.whereis(state.session_id) do
+      nil -> :ok
+      pid -> safe_stop(pid)
+    end
+  end
+
+  defp safe_stop(pid) do
+    GenServer.stop(pid, :normal, 5_000)
+    :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   # -- internals --------------------------------------------------------------
