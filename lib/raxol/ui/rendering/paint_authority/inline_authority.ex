@@ -258,6 +258,51 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
   Neither direction ever emits `\e[2J`/`\e[3J`.
 
+  ## The adaptive pin (FOOTER-FOLLOWS-CONTENT)
+
+  The doctrine ruling (harness-visual-doctrine.md §1.1 "guest, not
+  occupier", §1.2 "charged minimum"): the harness must not claim the
+  whole screen on an empty session. `new/5`'s `pin: :adaptive` option
+  starts this authority in a FLOATING state instead of pinning at boot:
+
+    * **No scroll region is set while floating** — the terminal keeps
+      its full-screen default. This is the load-bearing model choice:
+      sealed rows are written by plain fill-down native flow (the same
+      `next_row` cursor as the pinned model), so when they eventually
+      scroll they scroll NATIVELY into the terminal's own scrollback —
+      no DECSTBM geometry to fight, no bytes to justify on boot.
+    * **The footer paints directly below the last content row** — at
+      absolute rows `next_row..(next_row + footer_rows - 1)` (the top of
+      the screen on boot). `next_row` is the single source of truth for
+      the floating position; every footer paint site derives it through
+      `footer_top/1`.
+    * **A floating seal** first EL-clears the footer rows it converts to
+      content (the footer is repaintable — erasing is legal; sealed
+      content carries no EL of its own), writes the content once, and
+      latches `needs_keyframe` so the frame's trailing footer paint
+      re-renders at the new position — the footer migrates down by
+      exactly the sealed row count.
+    * **The float->pin transition is ONE-WAY per session** and fires the
+      moment content reaches the pinned footer position (`next_row >
+      history_bottom` after a seal, a seal too large to fit above the
+      floating footer, a resize-shrink past the content, or a footer
+      grow the floating window cannot host). The transition erases the
+      floating footer (targeted EL), scrolls just enough rows into
+      native scrollback via plain `\\n` at the screen bottom (native
+      flow — never a repaint) to restore the pinned append invariant,
+      and claims the region with ONE DECSTBM write (the honest
+      full-screen release on degenerate geometry). Not one already-
+      emitted content byte is rewritten. From then on the authority is
+      byte-for-byte today's pinned model.
+    * **While floating, `resize/3`/`set_footer_rows/2`/`reassert/1`
+      never emit region bytes** — geometry updates go through
+      `ScrollRegionManager.plan/3` (the pure constructor); only the
+      transition emits.
+
+  The default is `pin: :immediate` — exactly today's pinned-from-boot
+  model, byte-identical, so every existing byte-golden suite and fixture
+  stays valid unchanged. Demos opt into `:adaptive`.
+
   ## Synchronized output (DEC private mode 2026)
 
   `sync_open/1` / `sync_close/1` are the DEC 2026 synchronized-update
@@ -297,10 +342,32 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     needs_keyframe: false,
     sync_output?: false,
     sync_close_pending?: false,
-    cursor_park: nil
+    cursor_park: nil,
+    pin_state: :pinned
   ]
 
   @type cursor_park :: {pos_integer(), pos_integer()} | nil
+
+  @typedoc """
+  The footer-placement state machine (FOOTER-FOLLOWS-CONTENT):
+
+    * `:pinned` -- today's model: DECSTBM active, footer at the bottom
+      `footer_rows` rows of the screen. The only state a `pin: :immediate`
+      (default) authority ever inhabits.
+    * `:floating` -- the adaptive-pin boot state (`pin: :adaptive`): NO
+      scroll region is set (the whole screen keeps the terminal's
+      default full-screen scrolling), and the footer is painted at
+      absolute rows directly below the last content row --
+      `next_row..(next_row + footer_rows - 1)`. `next_row` is the single
+      source of truth for the floating footer's position (deliberately
+      not a second `{:floating, content_rows}` copy, which could only
+      drift from it).
+
+  The float->pin transition is ONE-WAY per session (content only grows)
+  and fires the moment content reaches the pinned footer position -- see
+  the moduledoc's "The adaptive pin" section.
+  """
+  @type pin_state :: :pinned | :floating
 
   @type t :: %__MODULE__{
           region: ScrollRegionManager.t(),
@@ -312,7 +379,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
           needs_keyframe: boolean(),
           sync_output?: boolean(),
           sync_close_pending?: boolean(),
-          cursor_park: cursor_park()
+          cursor_park: cursor_park(),
+          pin_state: pin_state()
         }
 
   @doc """
@@ -329,6 +397,17 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       (`Raxol.Terminal.Capabilities.cached/0`) if present, else `nil`.
       Tests should pass this explicitly rather than relying on the
       process-global `:persistent_term` cache.
+    * `:pin` — `:immediate` (default) pins the footer at the screen
+      bottom from the first byte, exactly today's model
+      (`ScrollRegionManager.start/3`'s single DECSTBM write).
+      `:adaptive` starts FLOATING instead: ZERO bytes are written at
+      construction (`ScrollRegionManager.plan/3`, the pure geometry
+      record), the footer paints directly below the last content row
+      (the top of the screen on boot), and the authority transitions
+      one-way to the pinned model the moment content reaches the pinned
+      footer position — see the moduledoc's "The adaptive pin" section.
+      The default is deliberately `:immediate` so every existing
+      byte-golden world stays reachable unchanged; demos opt in.
   """
   @spec new(
           IO.device(),
@@ -346,11 +425,21 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         :error -> cached_caps()
       end
 
+    {region, pin_state} =
+      case Keyword.get(opts, :pin, :immediate) do
+        :immediate ->
+          {ScrollRegionManager.start(device, rows, footer_rows), :pinned}
+
+        :adaptive ->
+          {ScrollRegionManager.plan(device, rows, footer_rows), :floating}
+      end
+
     %__MODULE__{
-      region: ScrollRegionManager.start(device, rows, footer_rows),
+      region: region,
       width: width,
       reflow_capable?: reflow_capable?(caps),
       next_row: 1,
+      pin_state: pin_state,
       # Strict struct match, mirroring `reflow_capable?/1`'s own idiom: a
       # stray plain map carrying a `sync_output: true` key must never
       # enable emission -- only the probe-built capability record may.
@@ -694,6 +783,41 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   end
 
   @impl true
+  def append_sealed(
+        %__MODULE__{pin_state: :floating, region: region, next_row: next_row} =
+          t,
+        iodata
+      ) do
+    bottom = ScrollRegionManager.history_bottom(region)
+    lines = count_lines(iodata)
+
+    if next_row + lines - 1 > bottom do
+      # The block cannot fit above the pinned footer position: pin FIRST
+      # (erase the floating footer, claim the region), then seal through
+      # the pinned path -- the region's own index-at-boundary scroll
+      # absorbs the overflow, and no sealed row is ever overwritten.
+      t
+      |> transition_to_pin()
+      |> append_sealed(iodata)
+    else
+      # The rows this seal converts from footer to content still hold
+      # footer glyphs (the footer is repaintable -- erasing is legal);
+      # sealed content carries no EL of its own, so a targeted EL per
+      # converted row is what keeps footer residue out of print-once
+      # history. Rows past the converted range stay footer-owned and are
+      # re-cleared by the keyframe the latch below forces.
+      t
+      |> erase_rows(next_row, min(lines, footer_row_count(t)))
+      |> write_content(iodata)
+      |> Map.put(:next_row, next_row + lines)
+      # The footer's floating position IS next_row -- every floating seal
+      # moves it, so the next repaint must be a full keyframe at the new
+      # position, never a positionally-stale diff.
+      |> Map.put(:needs_keyframe, true)
+      |> maybe_transition_after_seal(bottom)
+    end
+  end
+
   def append_sealed(%__MODULE__{region: region, next_row: next_row} = t, iodata) do
     bottom = ScrollRegionManager.history_bottom(region)
     device = region.device
@@ -711,6 +835,110 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     lines_written = count_lines(iodata)
     %{t | next_row: min(target_row + lines_written, bottom)}
   end
+
+  # -- the adaptive pin (FOOTER-FOLLOWS-CONTENT) ---------------------------
+  #
+  # The floating half of the pin-state machine. While floating there is
+  # NO scroll region (the terminal keeps its full-screen default), the
+  # footer paints at absolute rows next_row..(next_row + N - 1), and
+  # every geometry change is pure state (`ScrollRegionManager.plan/3`,
+  # zero bytes). The one-way transition below is the only producer of
+  # region bytes on the adaptive path.
+
+  defp write_content(%__MODULE__{region: region} = t, iodata) do
+    IO.write(region.device, Dialect.cursor_position(t.next_row))
+    IO.write(region.device, iodata)
+    t
+  end
+
+  # Targeted EL per row (never `\e[2J`), clamped to the physical screen.
+  # Only ever aimed at footer-owned rows -- the repaintable zone.
+  defp erase_rows(%__MODULE__{region: region} = t, top, count) do
+    rows = ScrollRegionManager.rows(region)
+    device = region.device
+
+    Enum.each(top..(top + count - 1)//1, fn row ->
+      if row <= rows do
+        IO.write(device, Dialect.cursor_position(row))
+        IO.write(device, "\e[K")
+      end
+    end)
+
+    t
+  end
+
+  # Eager pin: the moment a floating seal leaves next_row past the
+  # history bottom, the footer sits exactly on the pinned rows -- content
+  # has reached it. Pin now (one-way), inside the same seal (and thus the
+  # same frame/sync bracket the caller opened).
+  defp maybe_transition_after_seal(%__MODULE__{next_row: next_row} = t, bottom)
+       when next_row > bottom,
+       do: transition_to_pin(t)
+
+  defp maybe_transition_after_seal(t, _bottom), do: t
+
+  # The ONE-WAY float->pin transition, byte-clean by construction:
+  #
+  #   1. erase the floating footer's rows (targeted EL -- the footer is
+  #      repaintable; sealed content above is never addressed);
+  #   2. full-screen scroll (plain `\n` at the physical bottom row -- no
+  #      region is active while floating, so the terminal's own native
+  #      scroll evicts the oldest content rows into native scrollback,
+  #      never a repaint) by exactly the rows needed to restore the
+  #      pinned append invariant (row `next_row` blank, `next_row <=
+  #      history_bottom`) -- zero on the pre-seal path, one on the eager
+  #      path;
+  #   3. claim the region: `ScrollRegionManager.reassert/1` on the
+  #      planned state -- ONE region write (`CSI 1;(H-N) r`, or the
+  #      honest full-screen release on a degenerate geometry, exactly
+  #      like `start/3` would emit there);
+  #   4. latch `needs_keyframe` so the next footer paint fully re-renders
+  #      at the pinned position.
+  #
+  # No content byte is ever rewritten: step 1 touches footer rows only,
+  # step 2 scrolls (the terminal moves rows; this process repaints
+  # nothing), step 3 is a control sequence. Pinned by the emulator-replay
+  # (SealOracle O2) transition tests in test/harness/adaptive_pin_test.exs.
+  defp transition_to_pin(t), do: transition_to_pin(t, nil)
+
+  defp transition_to_pin(%__MODULE__{region: region} = t, target_footer_rows) do
+    device = region.device
+    rows = ScrollRegionManager.rows(region)
+    footer_rows = target_footer_rows || ScrollRegionManager.footer_rows(region)
+    new_bottom = ScrollRegionManager.history_bottom(rows, footer_rows)
+
+    t = erase_rows(t, t.next_row, footer_row_count(t))
+
+    scroll = max(t.next_row - new_bottom, 0)
+
+    if scroll > 0 do
+      IO.write(device, Dialect.cursor_position(rows))
+      IO.write(device, String.duplicate("\n", scroll))
+    end
+
+    new_region =
+      device
+      |> ScrollRegionManager.plan(rows, footer_rows)
+      |> ScrollRegionManager.reassert()
+
+    %{
+      t
+      | region: new_region,
+        pin_state: :pinned,
+        next_row: t.next_row |> Kernel.-(scroll) |> min(new_bottom) |> max(1),
+        needs_keyframe: true
+    }
+  end
+
+  # The footer's current top row -- the ONE derivation every footer paint
+  # (repaint diff, keyframe, cursor park) addresses through. Pinned: the
+  # row after the DECSTBM split. Floating: directly below the last
+  # content row (`next_row` -- the single source of truth for the
+  # floating position).
+  defp footer_top(%__MODULE__{pin_state: :floating, next_row: next_row}),
+    do: next_row
+
+  defp footer_top(t), do: region_top(t) + 1
 
   @impl true
   def repaint_footer(%__MODULE__{region: region} = t, iodata) do
@@ -828,7 +1056,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   end
 
   defp emit_footer_diff(t, changes, padded_new, cursor) do
-    footer_top = region_top(t) + 1
+    footer_top = footer_top(t)
 
     iodata =
       Enum.map(changes, fn {idx, line} ->
@@ -882,7 +1110,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   end
 
   defp emit_footer_keyframe(t, padded_new, cursor) do
-    footer_top = region_top(t) + 1
+    footer_top = footer_top(t)
 
     iodata =
       padded_new
@@ -965,7 +1193,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   # repaint CUP already honors) nor the column budget.
   defp clamp_park(t, row_offset, col) do
     count = footer_row_count(t)
-    footer_top = region_top(t) + 1
+    footer_top = footer_top(t)
     row = footer_top + min(max(row_offset, 0), max(count - 1, 0))
     {row, col |> max(1) |> min(t.width)}
   end
@@ -980,8 +1208,25 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     |> pad_rows(count)
   end
 
-  @doc "The current footer row count -- the size of `ScrollRegionManager.footer_range/1`, never a hand-maintained constant."
+  @doc """
+  The current footer row count. Pinned: the size of
+  `ScrollRegionManager.footer_range/1`, never a hand-maintained constant.
+  Floating: the requested `footer_rows`, clamped to the rows physically
+  below the content (`rows - next_row + 1`) -- the screen-bottom clamp;
+  at rest the floating invariant (`next_row <= history_bottom`) makes the
+  clamp a no-op, but a degenerate geometry (footer taller than the
+  screen) honestly reports only the rows that exist.
+  """
   @spec footer_row_count(t()) :: non_neg_integer()
+  def footer_row_count(
+        %__MODULE__{pin_state: :floating, region: region, next_row: next_row} =
+          _t
+      ) do
+    rows = ScrollRegionManager.rows(region)
+    requested = ScrollRegionManager.footer_rows(region)
+    requested |> min(rows - next_row + 1) |> max(0)
+  end
+
   def footer_row_count(%__MODULE__{region: region}),
     do: Range.size(ScrollRegionManager.footer_range(region))
 
@@ -1064,6 +1309,42 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   reflow-capable subset.
   """
   @impl true
+  def resize(
+        %__MODULE__{pin_state: :floating, region: region, next_row: next_row} =
+          t,
+        width,
+        height
+      ) do
+    # FLOATING: no region is claimed, so a resize is pure geometry state
+    # (`ScrollRegionManager.plan/3`) -- ZERO region bytes, ever. The
+    # footer is anchored to content (`next_row`), not the screen bottom,
+    # so a row-count change does not move it; the keyframe latch below
+    # still fires on any change (same both-axes rationale as the pinned
+    # clause) so the next paint fully re-renders at the current width.
+    footer_rows = ScrollRegionManager.footer_rows(region)
+    new_region = ScrollRegionManager.plan(region.device, height, footer_rows)
+
+    changed? =
+      ScrollRegionManager.geometry_changed?(region, new_region) or
+        t.width != width
+
+    t = %{
+      t
+      | region: new_region,
+        width: width,
+        needs_keyframe: t.needs_keyframe or changed?
+    }
+
+    # A shrink that leaves the floating footer past the pinned position
+    # (content no longer fits above it) transitions honestly at the NEW
+    # geometry -- the same one-way pin a seal would have triggered.
+    if next_row > ScrollRegionManager.history_bottom(new_region) do
+      transition_to_pin(t)
+    else
+      t
+    end
+  end
+
   def resize(%__MODULE__{region: region, next_row: next_row} = t, width, height) do
     old_region = region
     new_region = ScrollRegionManager.resize(region, height)
@@ -1139,6 +1420,61 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   """
   @spec set_footer_rows(t(), non_neg_integer()) ::
           {:ok, t()} | {:error, :degenerate}
+  def set_footer_rows(
+        %__MODULE__{pin_state: :floating, region: region} = t,
+        new_footer_rows
+      )
+      when is_integer(new_footer_rows) and new_footer_rows >= 0 do
+    rows = ScrollRegionManager.rows(region)
+    old_footer_rows = ScrollRegionManager.footer_rows(region)
+
+    cond do
+      new_footer_rows == old_footer_rows ->
+        {:ok, t}
+
+      # The SAME refusal surface as the pinned clause below, on purpose:
+      # a floating footer could physically host a claim the pinned model
+      # cannot (there is no 2-row history minimum below little content),
+      # but admitting it would create a state the one-way transition can
+      # never legally pin -- a temporary overlay must never unpin (or
+      # un-pinnable) the live footer. Uniform refusal, zero bytes.
+      ScrollRegionManager.degenerate?(rows, new_footer_rows) ->
+        {:error, :degenerate}
+
+      # The grown/shrunk footer still fits below the content: pure
+      # geometry (plan/3, zero region bytes). A GROW claims blank rows
+      # below the current footer (nothing below it has ever been painted
+      # while floating -- cheaper than the pinned clause's scroll-up); a
+      # SHRINK explicitly clears the vacated rows (still footer-owned,
+      # about to be orphaned above nothing -- same rationale as the
+      # pinned clause). Either way the keyframe latch re-renders the
+      # footer at its new size.
+      t.next_row + new_footer_rows - 1 <= rows ->
+        t =
+          if new_footer_rows < old_footer_rows do
+            erase_rows(
+              t,
+              t.next_row + new_footer_rows,
+              old_footer_rows - new_footer_rows
+            )
+          else
+            t
+          end
+
+        new_region =
+          ScrollRegionManager.plan(region.device, rows, new_footer_rows)
+
+        {:ok, %{t | region: new_region, needs_keyframe: true}}
+
+      # The claim no longer fits below the content: pin at the new split
+      # (the same one-way transition a seal would have triggered), which
+      # scrolls just enough content into native scrollback to host it --
+      # never paints over a sealed row.
+      true ->
+        {:ok, transition_to_pin(t, new_footer_rows)}
+    end
+  end
+
   def set_footer_rows(%__MODULE__{region: region} = t, new_footer_rows)
       when is_integer(new_footer_rows) and new_footer_rows >= 0 do
     rows = ScrollRegionManager.rows(region)
@@ -1296,6 +1632,15 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   untouched by construction.
   """
   @spec reassert(t()) :: t()
+  def reassert(%__MODULE__{pin_state: :floating} = t) do
+    # FLOATING: there is no pin to re-assert -- the suspend released a
+    # region this authority never claimed, and emitting one here would
+    # silently pin as a side effect of an editor round-trip. The keyframe
+    # latch alone is the honest resume: the editor scribbled the screen,
+    # so the next footer paint fully re-renders at the floating position.
+    %{t | needs_keyframe: true}
+  end
+
   def reassert(%__MODULE__{region: region} = t) do
     %{t | region: ScrollRegionManager.reassert(region), needs_keyframe: true}
   end

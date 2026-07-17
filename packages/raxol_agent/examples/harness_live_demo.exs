@@ -194,6 +194,10 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         rows: rows,
         footer_rows: @footer_rows,
         tty?: tty?,
+        # FOOTER-FOLLOWS-CONTENT: boot with the footer floating directly
+        # below the (empty) history instead of claiming the whole screen
+        # -- it pins itself at the bottom once content reaches it.
+        pin: :adaptive,
         notify: self()
       )
 
@@ -467,8 +471,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         )
 
       true ->
-        {Raxol.Agent.Backend.Mock,
-         fn prompt -> [response: mock_response(prompt)] end, "mock"}
+        {Raxol.Agent.Backend.Mock, fn prompt -> [response: mock_response(prompt)] end, "mock"}
     end
   end
 
@@ -496,8 +499,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         # Backend.HTTP's :openai provider appends /v1/chat/completions
         # itself -- strip a conventionally-supplied trailing /v1.
         [
-          base_url:
-            url |> String.trim_trailing("/") |> String.trim_trailing("/v1")
+          base_url: url |> String.trim_trailing("/") |> String.trim_trailing("/v1")
         ]
     end
   end
@@ -524,8 +526,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
       Application.put_env(:raxol_agent, Raxol.Examples.HarnessDebug.Endpoint,
         http: [ip: {127, 0, 0, 1}, port: port],
         server: true,
-        secret_key_base:
-          "harness-debug-demo-" |> String.duplicate(4) |> binary_part(0, 64),
+        secret_key_base: "harness-debug-demo-" |> String.duplicate(4) |> binary_part(0, 64),
         live_view: [signing_salt: "harness-debug-lv"],
         pubsub_server: Raxol.Examples.HarnessDebug.PubSub,
         check_origin: false,

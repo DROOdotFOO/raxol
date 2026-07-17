@@ -797,6 +797,15 @@ defmodule Raxol.Harness.Surface do
       momentarily caught up (see `frontier_entries/1`'s fold-before-seal
       note). A live embedder sets this and calls `close_stream/1` when
       the session truly ends; fixture replay keeps the default.
+    * `:pin` (default `:immediate`) -- forwarded to
+      `InlineAuthority.new/5`. `:immediate` pins the footer at the
+      screen bottom from the first byte (today's model, byte-identical
+      -- the default keeps every byte-golden suite and fixture valid
+      unchanged). `:adaptive` starts the footer FLOATING directly below
+      the last content row (the top of the screen on an empty session --
+      no first-load void) and pins one-way when content reaches the
+      pinned position; see `InlineAuthority`'s "The adaptive pin"
+      moduledoc section. Ignored in `:flat` mode (no footer).
 
   ## Startup mode notice (the degradation ladder's `select_with_reason/3` seam)
 
@@ -841,7 +850,16 @@ defmodule Raxol.Harness.Surface do
 
     {mode, mode_reason} = resolve_mode(opts, caps, env, rows, footer_rows)
 
-    authority = build_authority(mode, device, width, rows, footer_rows, caps)
+    authority =
+      build_authority(
+        mode,
+        device,
+        width,
+        rows,
+        footer_rows,
+        caps,
+        Keyword.get(opts, :pin, :immediate)
+      )
 
     {:ok, composer} =
       Composer.init(%{id: "surface-composer", width: width - 2, focused: true})
@@ -940,12 +958,15 @@ defmodule Raxol.Harness.Surface do
     %{model | authority: FlatAuthority.seal(model.authority, iodata)}
   end
 
-  defp build_authority(:flat, device, width, rows, _footer_rows, _caps),
+  defp build_authority(:flat, device, width, rows, _footer_rows, _caps, _pin),
     do: FlatAuthority.new(device, width, rows)
 
-  defp build_authority(_mode, device, width, rows, footer_rows, caps),
+  defp build_authority(_mode, device, width, rows, footer_rows, caps, pin),
     do:
-      InlineAuthority.new(device, width, rows, footer_rows, capabilities: caps)
+      InlineAuthority.new(device, width, rows, footer_rows,
+        capabilities: caps,
+        pin: pin
+      )
 
   defp events_from(%Session{envelopes: envelopes}),
     do: Enum.map(envelopes, & &1.body)

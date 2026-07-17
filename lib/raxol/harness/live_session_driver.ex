@@ -280,7 +280,12 @@ defmodule Raxol.Harness.LiveSessionDriver do
         # Pinned by the "events arriving while the editor owns the
         # terminal queue, never paint" test.
         :editor_session,
-        :editor_opts
+        :editor_opts,
+        # The adaptive pin (footer-follows-content): pass-through to
+        # `Surface.new/2`'s `:pin` option. Default stays `:immediate`
+        # (Surface's own default) so byte-golden embedders are
+        # untouched; the live demo opts into `:adaptive`.
+        :pin
       ])
       |> Keyword.put(:command_sink, fn cmd ->
         send(driver_pid, {:surface_command, cmd})

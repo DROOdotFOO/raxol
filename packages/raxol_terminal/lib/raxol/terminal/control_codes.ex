@@ -363,6 +363,18 @@ defmodule Raxol.Terminal.ControlCodes do
     cursor_style = Raxol.Terminal.Cursor.Manager.get_style(emulator.cursor)
     cursor_blinking = Raxol.Terminal.Cursor.Manager.get_blink(emulator.cursor)
 
+    # DECSC saves cursor position, character attributes (SGR), charset
+    # state, and (via mode_manager) origin/autowrap modes. It does NOT
+    # save the DECSTBM scroll region: per VT100/VT510 and xterm, margins
+    # are not part of the DECSC/DECRC saved state, so a `CSI t;b r`
+    # emitted inside an `ESC 7`/`ESC 8` bracket survives the restore on
+    # real hardware. This emulator used to round-trip `scroll_region`
+    # here, which silently un-set a region established mid-bracket (the
+    # adaptive-pin transition emits its DECSTBM inside the seal path's
+    # save/restore bracket) -- diverging from every real terminal and
+    # invalidating the O2 replay oracle. Pinned by
+    # test/harness/adaptive_pin_test.exs's transition replays and the
+    # DECRC test in state_stack_test.exs.
     saved_state = %{
       cursor: %{
         position: cursor_position,
@@ -373,7 +385,6 @@ defmodule Raxol.Terminal.ControlCodes do
       style: emulator.style,
       charset_state: emulator.charset_state,
       mode_manager: emulator.mode_manager,
-      scroll_region: emulator.scroll_region,
       cursor_style: emulator.cursor_style
     }
 
@@ -388,13 +399,16 @@ defmodule Raxol.Terminal.ControlCodes do
     case emulator.state_stack do
       [restored_state_data | new_stack] ->
         # Apply the restored state components
+        # `scroll_region` is deliberately NOT restored -- DECRC does not
+        # touch DECSTBM margins on real terminals (see handle_decsc/1's
+        # comment). A stale `scroll_region` key from an older saved-state
+        # shape is ignored for the same reason.
         emulator = %{
           emulator
           | state_stack: new_stack,
             style: restored_state_data.style,
             charset_state: restored_state_data.charset_state,
             mode_manager: restored_state_data.mode_manager,
-            scroll_region: restored_state_data.scroll_region,
             cursor_style: Map.get(restored_state_data, :cursor_style, emulator.cursor_style)
         }
 

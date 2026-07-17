@@ -90,6 +90,10 @@ defmodule Raxol.Examples.HarnessFixtureDemo do
         rows: rows,
         footer_rows: @footer_rows,
         tty?: tty?,
+        # FOOTER-FOLLOWS-CONTENT: start with the footer floating directly
+        # below the (empty) history instead of claiming the whole screen
+        # -- it pins itself at the bottom once content reaches it.
+        pin: :adaptive,
         # Ctrl-E hands the composer draft to $VISUAL/$EDITOR (real tty
         # runs only -- a piped/CI run has no terminal to hand over, and
         # Surface renders its honest stub notice instead).
