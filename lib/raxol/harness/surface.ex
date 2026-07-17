@@ -5201,14 +5201,25 @@ defmodule Raxol.Harness.Surface do
       nil ->
         []
 
-      %{chunks: chunks} ->
+      %{chunks: chunks} = entry ->
         ViewText.lines(
-          %{type: :text, content: "» " <> Enum.join(chunks, "")},
+          live_tail_preview_element(entry, Enum.join(chunks, "")),
           content_width(model),
           :plain
         )
     end
   end
+
+  # Streaming reasoning renders provisionally in the tail with the ∴
+  # marker and dim style (§4.3 low prominence) AS it streams — the
+  # claim-becomes-fact beat: it shows dim/live here, then freezes to the
+  # sealed folded ∴ block when the reasoning item completes. Answer text
+  # keeps the plain `» ` streaming preview.
+  defp live_tail_preview_element(%{item_type: :reasoning}, text),
+    do: %{type: :text, content: "∴ " <> text, style: %{dim: true}}
+
+  defp live_tail_preview_element(_entry, text),
+    do: %{type: :text, content: "» " <> text}
 
   # -- resize (precondition #5) ---------------------------------------------
 

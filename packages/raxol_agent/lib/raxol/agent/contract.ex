@@ -26,7 +26,10 @@ defmodule Raxol.Agent.Contract do
     * `:item_delta`     — streaming text chunk; payload `%{item_id, chunk}`;
       the one **ephemeral** event (live render only, never for replay)
     * `:item_completed` — a finished item; payload
-      `%{item_id, item_type: :message | :tool_use | :tool_result, ...}`.
+      `%{item_id, item_type: :message | :reasoning | :tool_use | :tool_result, ...}`.
+      A `:reasoning` item carries the model's chain-of-thought (`content`)
+      and seals as a durable, foldable/peekable ∴ block — reasoning is a
+      first-class transcript fact once sealed, never silently dropped.
       `item_id`s are turn-scoped (`"i1"`, `"i2"`, …) and distinct per
       item — without them every completion folds into one (nil-keyed)
       projection group and later completions are dropped as duplicates.
@@ -208,7 +211,9 @@ defmodule Raxol.Agent.Contract do
           journal: [started],
           item_seq: 0,
           msg_item: nil,
-          msg_chunks: []
+          msg_chunks: [],
+          reasoning_item: nil,
+          reasoning_chunks: []
         },
         fn stream_event, acc ->
           handle_stream_event(session_id, turn_id, counter, stream_event, acc)
@@ -220,7 +225,20 @@ defmodule Raxol.Agent.Contract do
 
   defp handle_stream_event(session_id, turn_id, counter, event, acc) do
     case event do
+      # Chain-of-thought / thinking text. Reasoning gets the SAME item
+      # lifecycle a message does (lazily-opened durable item, its own
+      # turn-scoped item_id, ephemeral deltas streaming into the live
+      # tail), so what the machine actually thought seals as a durable,
+      # peekable ∴ block instead of evaporating from the live tail when
+      # the answer's message item seals. See `stream_reasoning/5`.
+      {:reasoning, chunk} when is_binary(chunk) ->
+        stream_reasoning(session_id, turn_id, counter, acc, chunk)
+
       {:text_delta, chunk} ->
+        # First delta of the answer: the reasoning→answer transition
+        # seals the open reasoning item as its own durable block, ordered
+        # before this message (its item_started was emitted first).
+        acc = close_reasoning_item(session_id, turn_id, counter, acc)
         acc = open_message_item(session_id, turn_id, counter, acc)
 
         emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
@@ -234,6 +252,9 @@ defmodule Raxol.Agent.Contract do
         # A text run interrupted by a tool call is a real assistant
         # message: seal it as its own item (ordered before the tool
         # items) rather than leaking it into the final answer's item.
+        # Any open reasoning (think→tool, no intervening answer text)
+        # seals first as its own ∴ block, ahead of the tool.
+        acc = close_reasoning_item(session_id, turn_id, counter, acc)
         acc = close_message_item(session_id, turn_id, counter, acc)
 
         complete_item(session_id, turn_id, counter, acc, :tool_use, %{
@@ -259,13 +280,27 @@ defmodule Raxol.Agent.Contract do
       # seal frontier between the tool_use and its result (correct ordering).
       {:approval_requested, payload} when is_map(payload) ->
         ev =
-          emit_event(session_id, turn_id, counter, :approval_requested, :durable, payload)
+          emit_event(
+            session_id,
+            turn_id,
+            counter,
+            :approval_requested,
+            :durable,
+            payload
+          )
 
         %{acc | journal: acc.journal ++ [ev]}
 
       {:approval_decided, payload} when is_map(payload) ->
         ev =
-          emit_event(session_id, turn_id, counter, :approval_decided, :durable, payload)
+          emit_event(
+            session_id,
+            turn_id,
+            counter,
+            :approval_decided,
+            :durable,
+            payload
+          )
 
         %{acc | journal: acc.journal ++ [ev]}
 
@@ -279,6 +314,11 @@ defmodule Raxol.Agent.Contract do
         })
 
       {:turn_complete, info} ->
+        # Close any reasoning that ran this round (think with no answer
+        # text before the round boundary) so it seals as a durable block
+        # rather than dangling in the live tail into the next round.
+        acc = close_reasoning_item(session_id, turn_id, counter, acc)
+
         ev =
           emit_event(session_id, turn_id, counter, :turn_completed, :durable, %{
             iteration: Map.get(info, :iteration, 0),
@@ -289,6 +329,10 @@ defmodule Raxol.Agent.Contract do
         %{acc | journal: acc.journal ++ [ev]}
 
       {:done, %{content: content} = info} ->
+        # A pure-thinking tail (reasoning with no answer text) seals as
+        # its own durable ∴ block before the final message closes.
+        acc = close_reasoning_item(session_id, turn_id, counter, acc)
+
         # The final message closes the open (streamed) message item when
         # one exists — the SAME item the deltas accumulated into, so the
         # tail hands off to the sealed block. The done content is
@@ -317,7 +361,8 @@ defmodule Raxol.Agent.Contract do
 
         %{
           acc
-          | result: {:ok, %{content: content, usage: Map.get(info, :usage, %{})}},
+          | result:
+              {:ok, %{content: content, usage: Map.get(info, :usage, %{})}},
             journal: journal ++ [final_ev]
         }
 
@@ -338,7 +383,8 @@ defmodule Raxol.Agent.Contract do
   # Turn-scoped item ids, mirroring the fixture corpus ("i1", "i2", …).
   # Uniqueness only matters within the turn: the projection keys its
   # live tail by `{turn_id, item_id}`.
-  defp next_item_id(acc), do: {"i#{acc.item_seq + 1}", %{acc | item_seq: acc.item_seq + 1}}
+  defp next_item_id(acc),
+    do: {"i#{acc.item_seq + 1}", %{acc | item_seq: acc.item_seq + 1}}
 
   # Lazily opens the message item at the FIRST delta of a text run:
   # `item_started` (durable) precedes every delta of the item, which is
@@ -362,8 +408,13 @@ defmodule Raxol.Agent.Contract do
 
   # Seals an open message item with its accumulated streamed text — the
   # mid-turn (pre-tool) close. A no-op when no message item is open.
-  defp close_message_item(_session_id, _turn_id, _counter, %{msg_item: nil} = acc),
-    do: acc
+  defp close_message_item(
+         _session_id,
+         _turn_id,
+         _counter,
+         %{msg_item: nil} = acc
+       ),
+       do: acc
 
   defp close_message_item(session_id, turn_id, counter, acc) do
     content = acc.msg_chunks |> Enum.reverse() |> Enum.join("")
@@ -377,6 +428,99 @@ defmodule Raxol.Agent.Contract do
 
     %{acc | journal: acc.journal ++ [ev], msg_item: nil, msg_chunks: []}
   end
+
+  # -- reasoning item lifecycle ---------------------------------------------
+  #
+  # Reasoning mirrors the message lifecycle with one deliberate difference:
+  # the item is opened LAZILY at the first NON-BLANK thought — a
+  # whitespace-only reasoning stream opens no `item_started`, so it seals
+  # no block (the "empty thinking → no ∴ block" rule). Until then the raw
+  # chunks accumulate untouched, so leading whitespace still lands in the
+  # eventual sealed content, just never as its own opener.
+
+  # Buffer this chunk, then open-or-stream. The buffer is prepended (arrival
+  # order restored on read) exactly like `msg_chunks`.
+  defp stream_reasoning(session_id, turn_id, counter, acc, chunk) do
+    acc = %{acc | reasoning_chunks: [chunk | acc.reasoning_chunks]}
+    open_or_stream_reasoning(session_id, turn_id, counter, acc, chunk)
+  end
+
+  # Not yet opened: open on the FIRST non-blank accumulated content. The
+  # opener's own `item_delta` carries the full accumulated-so-far text (so
+  # the live tail is whole even if leading blank chunks preceded it); every
+  # later delta carries just its own chunk. `thought: true` marks the
+  # ephemeral delta as reasoning for the live tail.
+  defp open_or_stream_reasoning(
+         session_id,
+         turn_id,
+         counter,
+         %{reasoning_item: nil} = acc,
+         _chunk
+       ) do
+    content = acc.reasoning_chunks |> Enum.reverse() |> Enum.join("")
+
+    if blank?(content) do
+      acc
+    else
+      {item_id, acc} = next_item_id(acc)
+
+      started_ev =
+        emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+          item_id: item_id,
+          item_type: :reasoning
+        })
+
+      emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
+        item_id: item_id,
+        chunk: content,
+        thought: true
+      })
+
+      %{acc | journal: acc.journal ++ [started_ev], reasoning_item: item_id}
+    end
+  end
+
+  defp open_or_stream_reasoning(session_id, turn_id, counter, acc, chunk) do
+    emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
+      item_id: acc.reasoning_item,
+      chunk: chunk,
+      thought: true
+    })
+
+    acc
+  end
+
+  # Seals an open reasoning item with its accumulated thought as a durable
+  # ∴ block. A no-op when nothing is open — either the thought was blank
+  # (never opened) or an earlier boundary already sealed it — but the
+  # buffer is always cleared so a later reasoning segment starts fresh.
+  defp close_reasoning_item(
+         _session_id,
+         _turn_id,
+         _counter,
+         %{reasoning_item: nil} = acc
+       ),
+       do: %{acc | reasoning_chunks: []}
+
+  defp close_reasoning_item(session_id, turn_id, counter, acc) do
+    content = acc.reasoning_chunks |> Enum.reverse() |> Enum.join("")
+
+    ev =
+      emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
+        item_id: acc.reasoning_item,
+        item_type: :reasoning,
+        content: content
+      })
+
+    %{
+      acc
+      | journal: acc.journal ++ [ev],
+        reasoning_item: nil,
+        reasoning_chunks: []
+    }
+  end
+
+  defp blank?(text), do: String.trim(text) == ""
 
   # The done site's item resolution: reuse the open streamed item when
   # there is one (its deltas ARE this message), otherwise open a fresh

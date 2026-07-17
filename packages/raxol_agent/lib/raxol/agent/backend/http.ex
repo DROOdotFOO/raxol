@@ -146,10 +146,23 @@ defmodule Raxol.Agent.Backend.HTTP do
       {:sse_data, ^ref, data} ->
         {events, new_buffer} = parse_sse(buffer <> data, provider)
 
-        chunks = for {:text_delta, text} <- events, do: {:chunk, text}
+        # Preserve arrival order and interleaving: text deltas become
+        # `{:chunk, _}` (the answer), reasoning deltas become
+        # `{:reasoning, _}` (chain-of-thought), and only text feeds the
+        # accumulated `content` — reasoning is not part of the answer.
+        out =
+          Enum.flat_map(events, fn
+            {:text_delta, text} -> [{:chunk, text}]
+            {:reasoning_delta, text} -> [{:reasoning, text}]
+            _ -> []
+          end)
 
         new_content =
-          state.content <> Enum.map_join(chunks, "", fn {:chunk, t} -> t end)
+          state.content <>
+            Enum.map_join(out, "", fn
+              {:chunk, t} -> t
+              _reasoning -> ""
+            end)
 
         new_usage =
           case Enum.find(events, &match?({:usage, _}, &1)) do
@@ -157,7 +170,8 @@ defmodule Raxol.Agent.Backend.HTTP do
             nil -> state.usage
           end
 
-        {chunks, %{state | buffer: new_buffer, content: new_content, usage: new_usage}}
+        {out,
+         %{state | buffer: new_buffer, content: new_content, usage: new_usage}}
 
       {:sse_error, ^ref, error} ->
         {[{:error, error}], %{state | buffer: :halt}}
@@ -230,6 +244,13 @@ defmodule Raxol.Agent.Backend.HTTP do
     with "data: " <> json <- data_line,
          {:ok, parsed} <- Jason.decode(json) do
       case parsed do
+        # Extended-thinking blocks stream as `thinking_delta` (the thought)
+        # then `signature_delta` (the crypto signature, not shown). Surface
+        # the thought as reasoning; ignore the signature.
+        %{"type" => "content_block_delta", "delta" => %{"thinking" => text}}
+        when is_binary(text) ->
+          [{:reasoning_delta, text}]
+
         %{"type" => "content_block_delta", "delta" => %{"text" => text}} ->
           [{:text_delta, text}]
 
@@ -259,9 +280,9 @@ defmodule Raxol.Agent.Backend.HTTP do
           [{:usage, %{}}]
         else
           case Jason.decode(data) do
-            {:ok, %{"choices" => [%{"delta" => %{"content" => text}} | _]}}
-            when is_binary(text) ->
-              [{:text_delta, text}]
+            {:ok, %{"choices" => [%{"delta" => delta} | _]}}
+            when is_map(delta) ->
+              openai_delta_events(delta)
 
             _ ->
               []
@@ -272,6 +293,21 @@ defmodule Raxol.Agent.Backend.HTTP do
         []
     end
   end
+
+  # One streaming delta -> zero or one events. Reasoning models surface
+  # chain-of-thought as `reasoning` (OpenRouter) or `reasoning_content`
+  # (DeepSeek and compatibles), distinct from the answer `content`; a
+  # single delta chunk carries one or the other, never both.
+  defp openai_delta_events(%{"reasoning" => text}) when is_binary(text),
+    do: [{:reasoning_delta, text}]
+
+  defp openai_delta_events(%{"reasoning_content" => text}) when is_binary(text),
+    do: [{:reasoning_delta, text}]
+
+  defp openai_delta_events(%{"content" => text}) when is_binary(text),
+    do: [{:text_delta, text}]
+
+  defp openai_delta_events(_delta), do: []
 
   # -- Request building -------------------------------------------------------
 
@@ -436,7 +472,8 @@ defmodule Raxol.Agent.Backend.HTTP do
   # OpenAI tool_calls response
   defp parse_response(
          :openai,
-         %{"choices" => [%{"message" => %{"tool_calls" => tool_calls}} | _]} = body
+         %{"choices" => [%{"message" => %{"tool_calls" => tool_calls}} | _]} =
+           body
        )
        when is_list(tool_calls) and tool_calls != [] do
     parsed_calls =
@@ -463,7 +500,8 @@ defmodule Raxol.Agent.Backend.HTTP do
         }
       end)
 
-    content = get_in(body, ["choices", Access.at(0), "message", "content"]) || ""
+    content =
+      get_in(body, ["choices", Access.at(0), "message", "content"]) || ""
 
     %{
       content: content,
@@ -520,7 +558,12 @@ defmodule Raxol.Agent.Backend.HTTP do
   defp do_request(url, headers, body, timeout, plugins) do
     if Code.ensure_loaded?(Req) do
       req =
-        Req.new(url: url, json: body, headers: headers, receive_timeout: timeout)
+        Req.new(
+          url: url,
+          json: body,
+          headers: headers,
+          receive_timeout: timeout
+        )
         |> apply_plugins(plugins)
 
       case Req.post(req) do

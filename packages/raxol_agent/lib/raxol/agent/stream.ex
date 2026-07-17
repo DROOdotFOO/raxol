@@ -32,6 +32,9 @@ defmodule Raxol.Agent.Stream do
   ## Event Types
 
   - `{:text_delta, text}` -- streaming text chunk from LLM
+  - `{:reasoning, text}` -- streaming chain-of-thought / thinking chunk
+    (Anthropic thinking blocks, OpenAI reasoning); distinct from the
+    answer text so the contract can seal it as its own reasoning block
   - `{:tool_use, %{name, arguments, id}}` -- LLM requesting a tool call
   - `{:tool_result, %{name, result}}` -- result from executing a tool
   - `{:turn_complete, %{content, usage, iteration}}` -- end of one ReAct turn
@@ -68,6 +71,7 @@ defmodule Raxol.Agent.Stream do
 
   @type event ::
           {:text_delta, String.t()}
+          | {:reasoning, String.t()}
           | {:tool_use, tool_use()}
           | {:tool_result, tool_result()}
           | {:turn_complete, turn_info()}
@@ -285,9 +289,17 @@ defmodule Raxol.Agent.Stream do
       {:chunk, text}, :running ->
         {[{:text_delta, text}], :running}
 
+      # Reasoning/thinking tokens the backend surfaced (Anthropic thinking
+      # blocks, OpenAI reasoning). Forwarded as a distinct event so the
+      # contract can give reasoning its own durable item lifecycle rather
+      # than folding it into the answer text — see `Contract.pump/3`.
+      {:reasoning, text}, :running ->
+        {[{:reasoning, text}], :running}
+
       {:done, response}, :running ->
         done_event =
-          {:done, %{content: response.content, tool_results: [], usage: response.usage}}
+          {:done,
+           %{content: response.content, tool_results: [], usage: response.usage}}
 
         {[done_event], :done}
 
@@ -516,7 +528,8 @@ defmodule Raxol.Agent.Stream do
   # so they need the Action modules in their opts to build the MCP config.
   defp maybe_inject_actions(backend_opts, backend, opts) do
     with true <- Raxol.Agent.AIBackend.handles_tools_internally?(backend),
-         actions when is_list(actions) and actions != [] <- Keyword.get(opts, :actions) do
+         actions when is_list(actions) and actions != [] <-
+           Keyword.get(opts, :actions) do
       Keyword.put_new(backend_opts, :actions, actions)
     else
       _ -> backend_opts
@@ -541,7 +554,9 @@ defmodule Raxol.Agent.Stream do
   end
 
   defp maybe_override_model(backend_opts, nil), do: backend_opts
-  defp maybe_override_model(backend_opts, model), do: Keyword.put(backend_opts, :model, model)
+
+  defp maybe_override_model(backend_opts, model),
+    do: Keyword.put(backend_opts, :model, model)
 
   # -- Private: Message Building ----------------------------------------------
 
@@ -587,7 +602,10 @@ defmodule Raxol.Agent.Stream do
   end
 
   defp maybe_enrich_user_context(messages, context) do
-    Raxol.Agent.Memory.Manager.enrich_user_context(messages, Map.get(context, :user_context))
+    Raxol.Agent.Memory.Manager.enrich_user_context(
+      messages,
+      Map.get(context, :user_context)
+    )
   end
 
   defp last_user_content(messages) do

@@ -100,7 +100,10 @@ if Code.ensure_loaded?(Plug.Router) do
           %{event: event_type, data: data}
         end)
 
-      send_json(conn, 200, %{session_id: to_string(session_id), events: json_events})
+      send_json(conn, 200, %{
+        session_id: to_string(session_id),
+        events: json_events
+      })
     end
 
     get "/sessions/:id" do
@@ -180,7 +183,11 @@ if Code.ensure_loaded?(Plug.Router) do
             status = Raxol.Agent.Process.get_status(pid)
 
             {:ok,
-             %{id: to_string(session_id), status: to_string(status.status), pid: inspect(pid)}}
+             %{
+               id: to_string(session_id),
+               status: to_string(status.status),
+               pid: inspect(pid)
+             }}
           catch
             :exit, _ -> {:error, :not_found}
           end
@@ -193,10 +200,19 @@ if Code.ensure_loaded?(Plug.Router) do
       end
     end
 
-    @passthrough_events [:tool_use, :tool_result, :state_change, :turn_complete, :done]
+    @passthrough_events [
+      :tool_use,
+      :tool_result,
+      :state_change,
+      :turn_complete,
+      :done
+    ]
 
     defp serialize_event({:text_delta, text}), do: {"text_delta", %{text: text}}
-    defp serialize_event({:error, reason}), do: {"error", %{reason: inspect(reason)}}
+    defp serialize_event({:reasoning, text}), do: {"reasoning", %{text: text}}
+
+    defp serialize_event({:error, reason}),
+      do: {"error", %{reason: inspect(reason)}}
 
     defp serialize_event({type, info}) when type in @passthrough_events do
       {Atom.to_string(type), info}

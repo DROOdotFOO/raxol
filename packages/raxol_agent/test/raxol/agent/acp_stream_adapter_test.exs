@@ -80,7 +80,8 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
   end
 
   describe "mapping table" do
-    test "begin_turn emits a durable turn_started, then the user echo item", ctx do
+    test "begin_turn emits a durable turn_started, then the user echo item",
+         ctx do
       {:ok, turn_id} = AcpStreamAdapter.begin_turn(ctx.adapter, "do the thing")
 
       event = ctx.session_id |> next_event() |> assert_boundary_clean()
@@ -110,7 +111,8 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
       assert echo.id == 3
     end
 
-    test "an empty prompt emits no user echo (never an empty chevron line)", ctx do
+    test "an empty prompt emits no user echo (never an empty chevron line)",
+         ctx do
       {:ok, _turn_id} = AcpStreamAdapter.begin_turn(ctx.adapter, "")
 
       assert %{type: :turn_started} = next_event(ctx.session_id)
@@ -125,24 +127,40 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
       assert event.payload == %{chunk: "hel"}
     end
 
-    test "agent_thought_chunk maps to an ephemeral item_delta marked as thought", ctx do
+    test "agent_thought_chunk opens a durable reasoning item + ephemeral thought delta",
+         ctx do
+      begin!(ctx, "q")
       update!(ctx.adapter, {:agent_thought_chunk, text_chunk("hmm")})
 
-      event = ctx.session_id |> next_event() |> assert_boundary_clean()
-      assert %{type: :item_delta, tier: :ephemeral} = event
-      assert event.payload == %{chunk: "hmm", thought: true}
+      opener = ctx.session_id |> next_event() |> assert_boundary_clean()
+      assert %{type: :item_started, tier: :durable} = opener
+      assert %{item_type: :reasoning, item_id: item_id} = opener.payload
+
+      delta = ctx.session_id |> next_event() |> assert_boundary_clean()
+      assert %{type: :item_delta, tier: :ephemeral} = delta
+      assert delta.payload == %{chunk: "hmm", thought: true, item_id: item_id}
     end
 
-    test "a non-text content block degrades to an honest placeholder, never a crash", ctx do
-      update!(ctx.adapter, {:agent_message_chunk, %{content: {:image, %{data: "..."}}}})
+    test "a non-text content block degrades to an honest placeholder, never a crash",
+         ctx do
+      update!(
+        ctx.adapter,
+        {:agent_message_chunk, %{content: {:image, %{data: "..."}}}}
+      )
+
       assert %{payload: %{chunk: "[image]"}} = next_event(ctx.session_id)
 
-      update!(ctx.adapter, {:agent_message_chunk, %{content: {:bogus_variant, nil}}})
+      update!(
+        ctx.adapter,
+        {:agent_message_chunk, %{content: {:bogus_variant, nil}}}
+      )
+
       assert %{payload: %{chunk: chunk}} = next_event(ctx.session_id)
       assert chunk =~ "bogus_variant"
     end
 
-    test "a pending tool_call emits nothing; the terminal update emits the pair", ctx do
+    test "a pending tool_call emits nothing; the terminal update emits the pair",
+         ctx do
       update!(
         ctx.adapter,
         {:tool_call,
@@ -159,7 +177,10 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
       update!(
         ctx.adapter,
         {:tool_call_update,
-         %{tool_call_id: "call-1", fields: %{status: :completed, raw_output: "3 matches"}}}
+         %{
+           tool_call_id: "call-1",
+           fields: %{status: :completed, raw_output: "3 matches"}
+         }}
       )
 
       tool_use = ctx.session_id |> next_event() |> assert_boundary_clean()
@@ -190,19 +211,23 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
     test "a tool_call already terminal emits the pair immediately", ctx do
       update!(
         ctx.adapter,
-        {:tool_call, %{tool_call_id: "call-2", title: "rm", status: :failed, raw_input: %{}}}
+        {:tool_call,
+         %{tool_call_id: "call-2", title: "rm", status: :failed, raw_input: %{}}}
       )
 
-      assert %{payload: %{item_type: :tool_use, name: "rm"}} = next_event(ctx.session_id)
+      assert %{payload: %{item_type: :tool_use, name: "rm"}} =
+               next_event(ctx.session_id)
 
       assert %{payload: %{item_type: :tool_result, status: :failed}} =
                next_event(ctx.session_id)
     end
 
-    test "a terminal update for a tool never announced still emits an honest pair", ctx do
+    test "a terminal update for a tool never announced still emits an honest pair",
+         ctx do
       update!(
         ctx.adapter,
-        {:tool_call_update, %{tool_call_id: "ghost-1", fields: %{status: :completed}}}
+        {:tool_call_update,
+         %{tool_call_id: "ghost-1", fields: %{status: :completed}}}
       )
 
       # Name falls back to the id; nothing crashes, nothing is silently lost.
@@ -233,7 +258,11 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
     test "end_turn closes the turn with turn_completed final: true", ctx do
       turn_id = begin!(ctx, "p")
 
-      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :end_turn, _meta: %{}})
+      :ok =
+        AcpStreamAdapter.finish_turn(ctx.adapter, %{
+          stop_reason: :end_turn,
+          _meta: %{}
+        })
 
       event = ctx.session_id |> next_event() |> assert_boundary_clean()
       assert %{type: :turn_completed, tier: :durable, turn_id: ^turn_id} = event
@@ -241,31 +270,39 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
       refute Map.has_key?(event.payload, :refs)
     end
 
-    test "max_tokens / max_turn_requests carry their stop_reason through", ctx do
+    test "max_tokens / max_turn_requests carry their stop_reason through",
+         ctx do
       for reason <- [:max_tokens, :max_turn_requests] do
         _turn_id = begin!(ctx, "p")
 
         :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: reason})
 
-        assert %{type: :turn_completed, payload: %{stop_reason: ^reason, final: true}} =
+        assert %{
+                 type: :turn_completed,
+                 payload: %{stop_reason: ^reason, final: true}
+               } =
                  next_event(ctx.session_id)
       end
     end
 
-    test "refusal completes the turn DISCLOSED, never painted as a normal end", ctx do
+    test "refusal completes the turn DISCLOSED, never painted as a normal end",
+         ctx do
       _turn_id = begin!(ctx, "p")
 
       :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :refusal})
 
       event = ctx.session_id |> next_event() |> assert_boundary_clean()
       assert %{type: :turn_completed} = event
-      assert %{final: true, stop_reason: :refusal, refused: true} = event.payload
+
+      assert %{final: true, stop_reason: :refusal, refused: true} =
+               event.payload
     end
 
     test "cancelled emits the canceled bracket, not a completed one", ctx do
       turn_id = begin!(ctx, "p")
 
-      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :cancelled})
+      :ok =
+        AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :cancelled})
 
       event = ctx.session_id |> next_event() |> assert_boundary_clean()
       assert %{type: :turn_canceled, tier: :durable, turn_id: ^turn_id} = event
@@ -289,8 +326,10 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
       refute Map.has_key?(event.payload, :refs)
     end
 
-    test "a string stop reason (wire value smuggled past decode) is treated as forged", ctx do
-      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: "end_turn"})
+    test "a string stop reason (wire value smuggled past decode) is treated as forged",
+         ctx do
+      :ok =
+        AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: "end_turn"})
 
       assert %{payload: %{stop_reason: :unknown}} = next_event(ctx.session_id)
     end
@@ -299,7 +338,9 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
       :ok = AcpStreamAdapter.finish_turn(ctx.adapter, {:error, :timeout})
 
       event = ctx.session_id |> next_event() |> assert_boundary_clean()
-      assert %{type: :error, tier: :durable, payload: %{reason: :timeout}} = event
+
+      assert %{type: :error, tier: :durable, payload: %{reason: :timeout}} =
+               event
     end
 
     test "a garbage outcome is an honest :error, never a crash", ctx do
@@ -343,12 +384,17 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
   # -- 4. unknown-variant honesty --------------------------------------------
 
   describe "unknown-variant honesty" do
-    test "an unmapped variant is skipped, counted, and disclosed exactly once per kind", ctx do
+    test "an unmapped variant is skipped, counted, and disclosed exactly once per kind",
+         ctx do
       update!(ctx.adapter, {:usage_update, %{used: 10, size: 100}})
 
       marker = ctx.session_id |> next_event() |> assert_boundary_clean()
       assert %{type: :error, tier: :durable} = marker
-      assert marker.payload == %{reason: :unmapped_acp_update, kind: "usage_update"}
+
+      assert marker.payload == %{
+               reason: :unmapped_acp_update,
+               kind: "usage_update"
+             }
 
       # Second occurrence: counted, but no second marker.
       update!(ctx.adapter, {:usage_update, %{used: 20, size: 100}})
@@ -357,7 +403,12 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
       # A different kind gets its own first-occurrence marker.
       update!(ctx.adapter, {:current_mode_update, %{current_mode_id: "yolo"}})
 
-      assert %{payload: %{reason: :unmapped_acp_update, kind: "current_mode_update"}} =
+      assert %{
+               payload: %{
+                 reason: :unmapped_acp_update,
+                 kind: "current_mode_update"
+               }
+             } =
                next_event(ctx.session_id)
 
       assert AcpStreamAdapter.unmapped_counts(ctx.adapter) == %{
@@ -366,10 +417,15 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
              }
     end
 
-    test "a {:raw, map} manual feed and outright garbage are both survived and disclosed", ctx do
-      update!(ctx.adapter, {:raw, %{"sessionUpdate" => "quantum_update", "x" => 1}})
+    test "a {:raw, map} manual feed and outright garbage are both survived and disclosed",
+         ctx do
+      update!(
+        ctx.adapter,
+        {:raw, %{"sessionUpdate" => "quantum_update", "x" => 1}}
+      )
 
-      assert %{payload: %{kind: "raw:quantum_update"}} = next_event(ctx.session_id)
+      assert %{payload: %{kind: "raw:quantum_update"}} =
+               next_event(ctx.session_id)
 
       update!(ctx.adapter, %{"not" => "a tuple"})
       assert %{payload: %{kind: "unrecognized"}} = next_event(ctx.session_id)
@@ -387,7 +443,12 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
          ctx do
       update!(ctx.adapter, {:user_message_chunk, text_chunk("me")})
 
-      assert %{payload: %{reason: :unmapped_acp_update, kind: "user_message_chunk"}} =
+      assert %{
+               payload: %{
+                 reason: :unmapped_acp_update,
+                 kind: "user_message_chunk"
+               }
+             } =
                next_event(ctx.session_id)
     end
   end
@@ -395,7 +456,8 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
   # -- 5. assistant message accumulation --------------------------------------
 
   describe "assistant message accumulation" do
-    test "chunks accumulate and seal as ONE durable message before the bracket", ctx do
+    test "chunks accumulate and seal as ONE durable message before the bracket",
+         ctx do
       _turn_id = begin!(ctx, "p")
 
       update!(ctx.adapter, {:agent_message_chunk, text_chunk("it is ")})
@@ -422,17 +484,22 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
       update!(ctx.adapter, {:agent_message_chunk, text_chunk("half an ans")})
       assert %{type: :item_delta} = next_event(ctx.session_id)
 
-      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :cancelled})
+      :ok =
+        AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :cancelled})
 
       assert %{type: :turn_canceled} = next_event(ctx.session_id)
       refute_event(ctx.session_id)
     end
 
-    test "the buffer resets between turns — no bleed into the next turn's message", ctx do
+    test "the buffer resets between turns — no bleed into the next turn's message",
+         ctx do
       _t1 = begin!(ctx, "p1")
       update!(ctx.adapter, {:agent_message_chunk, text_chunk("stale")})
       assert %{type: :item_delta} = next_event(ctx.session_id)
-      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :cancelled})
+
+      :ok =
+        AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :cancelled})
+
       assert %{type: :turn_canceled} = next_event(ctx.session_id)
 
       _t2 = begin!(ctx, "p2")
@@ -444,6 +511,151 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
 
       assert %{payload: %{item_type: :message, content: "fresh"}} =
                next_event(ctx.session_id)
+    end
+  end
+
+  # -- 5b. reasoning item lifecycle --------------------------------------------
+
+  describe "reasoning item lifecycle" do
+    # The projected history through the exact live path (EventBoundary +
+    # shipped projection), reused from the speaker-separation pin.
+    defp projected_blocks(ctx) do
+      ctx.session_id
+      |> drain_events()
+      |> Enum.map(fn event ->
+        {:ok, map} = EventBoundary.normalize(event)
+        map
+      end)
+      |> Raxol.Harness.Projection.project()
+      |> Map.get(:blocks)
+    end
+
+    test "a thought then an answer seals a folded ∴ reasoning block BEFORE the message",
+         ctx do
+      # Projection-only: drive the whole turn, then project the FULL event
+      # stream (consuming events first would hand the projection a partial
+      # stream missing turn_started + the reasoning items).
+      {:ok, _turn_id} = AcpStreamAdapter.begin_turn(ctx.adapter, "q")
+
+      update!(
+        ctx.adapter,
+        {:agent_thought_chunk, text_chunk("weigh\nboth options")}
+      )
+
+      update!(ctx.adapter, {:agent_message_chunk, text_chunk("the answer")})
+      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :end_turn})
+
+      blocks = projected_blocks(ctx)
+
+      reasoning = Enum.find(blocks, &(&1.kind == :reasoning))
+      # The assistant message (NOT the user echo, which is also a :message).
+      assistant =
+        Enum.find(
+          blocks,
+          &(&1.kind == :message and Map.get(&1.content, :text) == "the answer")
+        )
+
+      assert reasoning != nil,
+             "the sealed thought must render as a ∴ reasoning block"
+
+      # Folded (peekable) and low-prominence by default.
+      assert reasoning.fold == :folded
+      assert reasoning.content.text == "weigh\nboth options"
+
+      r_index = Enum.find_index(blocks, &(&1 == reasoning))
+      a_index = Enum.find_index(blocks, &(&1 == assistant))
+      assert r_index < a_index
+    end
+
+    test "think→tool→think→answer yields TWO reasoning blocks in true order",
+         ctx do
+      {:ok, _turn_id} = AcpStreamAdapter.begin_turn(ctx.adapter, "q")
+
+      update!(ctx.adapter, {:agent_thought_chunk, text_chunk("first plan")})
+      update!(ctx.adapter, {:agent_thought_chunk, text_chunk(" more")})
+
+      update!(
+        ctx.adapter,
+        {:tool_call,
+         %{
+           tool_call_id: "c1",
+           title: "grep",
+           status: :completed,
+           raw_output: "hit"
+         }}
+      )
+
+      update!(ctx.adapter, {:agent_thought_chunk, text_chunk("now conclude")})
+      update!(ctx.adapter, {:agent_message_chunk, text_chunk("done")})
+      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :end_turn})
+
+      reasoning_texts =
+        ctx
+        |> projected_blocks()
+        |> Enum.filter(&(&1.kind == :reasoning))
+        |> Enum.map(& &1.content.text)
+
+      assert reasoning_texts == ["first plan more", "now conclude"]
+    end
+
+    test "whitespace-only thinking seals no reasoning block", ctx do
+      _turn_id = begin!(ctx, "q")
+
+      update!(ctx.adapter, {:agent_thought_chunk, text_chunk("   ")})
+      update!(ctx.adapter, {:agent_thought_chunk, text_chunk("\n")})
+      # Nothing emitted for blank thoughts (no item_started, no delta).
+      refute_event(ctx.session_id)
+
+      update!(ctx.adapter, {:agent_message_chunk, text_chunk("hi")})
+      assert %{type: :item_delta} = next_event(ctx.session_id)
+      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :end_turn})
+
+      refute Enum.any?(projected_blocks(ctx), &(&1.kind == :reasoning))
+    end
+
+    test "a pure-thinking turn seals its reasoning at finish_turn", ctx do
+      _turn_id = begin!(ctx, "q")
+
+      update!(ctx.adapter, {:agent_thought_chunk, text_chunk("only thinking")})
+
+      assert %{type: :item_started, payload: %{item_type: :reasoning}} =
+               next_event(ctx.session_id)
+
+      assert %{type: :item_delta} = next_event(ctx.session_id)
+
+      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :end_turn})
+
+      # The reasoning seals (thought happened, it is a transcript fact)
+      # before the turn bracket.
+      assert %{
+               type: :item_completed,
+               payload: %{item_type: :reasoning, content: "only thinking"}
+             } =
+               next_event(ctx.session_id)
+
+      assert %{type: :turn_completed} = next_event(ctx.session_id)
+    end
+
+    test "reasoning state resets between turns (no bleed)", ctx do
+      _t1 = begin!(ctx, "p1")
+      update!(ctx.adapter, {:agent_thought_chunk, text_chunk("stale thought")})
+      assert %{type: :item_started} = next_event(ctx.session_id)
+      assert %{type: :item_delta} = next_event(ctx.session_id)
+      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :end_turn})
+
+      assert %{type: :item_completed, payload: %{item_type: :reasoning}} =
+               next_event(ctx.session_id)
+
+      assert %{type: :turn_completed} = next_event(ctx.session_id)
+
+      _t2 = begin!(ctx, "p2")
+      update!(ctx.adapter, {:agent_thought_chunk, text_chunk("fresh")})
+
+      assert %{type: :item_started, payload: %{item_id: id2}} =
+               next_event(ctx.session_id)
+
+      # A fresh turn's reasoning id never reuses the prior turn's.
+      assert id2 =~ "-reasoning-1"
     end
   end
 
@@ -473,20 +685,27 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
       assert [user_block, assistant_block] = message_blocks
       assert Raxol.UI.Components.Harness.Block.role(user_block) == :user
       assert user_block.content.text == "what is 2+2"
-      assert Raxol.UI.Components.Harness.Block.role(assistant_block) == :assistant
+
+      assert Raxol.UI.Components.Harness.Block.role(assistant_block) ==
+               :assistant
+
       assert assistant_block.content.text == "it is 4"
 
       # BEFORE: the user block's position in the full block list is
       # strictly ahead of the first assistant message block.
       user_index = Enum.find_index(projection.blocks, &(&1 == user_block))
-      assistant_index = Enum.find_index(projection.blocks, &(&1 == assistant_block))
+
+      assistant_index =
+        Enum.find_index(projection.blocks, &(&1 == assistant_block))
+
       assert user_index < assistant_index
     end
   end
 
   defp drain_events(session_id, acc \\ []) do
     receive do
-      {:session_event, ^session_id, event} -> drain_events(session_id, [event | acc])
+      {:session_event, ^session_id, event} ->
+        drain_events(session_id, [event | acc])
     after
       200 -> Enum.reverse(acc)
     end

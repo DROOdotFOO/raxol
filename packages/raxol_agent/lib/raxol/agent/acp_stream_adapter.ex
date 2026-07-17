@@ -20,7 +20,7 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   | ----------------------------------------------- | ----------------- | ------------ |
   | `begin_turn/2` (session/prompt accepted)         | `:turn_started`, then one `:item_completed` user echo (`item_type: :message, role: :user, content: prompt`) when the prompt is non-empty | `:durable`   |
   | `agent_message_chunk`                            | `:item_delta` (accumulated; sealed as ONE durable `:message` item at `finish_turn/2`, pump's `{:done, %{content}}` precedent — ACP's terminal response carries no content, only the chunks did) | `:ephemeral` |
-  | `agent_thought_chunk` (`thought: true` payload)  | `:item_delta` (never accumulated — thoughts are not the assistant message) | `:ephemeral` |
+  | `agent_thought_chunk` (`thought: true` payload)  | a durable `:reasoning` item lifecycle — `:item_started` (lazily, on the first non-blank thought) + ephemeral `:item_delta`s carrying the item_id, sealed as one durable `:item_completed` (`item_type: :reasoning, content`) at the reasoning→answer transition (first `agent_message_chunk`), a tool/plan boundary, or `finish_turn`. Whitespace-only thinking opens/seals nothing. | `:durable` + `:ephemeral` |
   | `tool_call` / `tool_call_update`, terminal status| `:item_completed` pair (`:tool_use` + `:tool_result`) | `:durable` |
   | `plan`                                           | `:item_completed` (`item_type: :plan`) | `:durable` |
   | `finish_turn/2` `stop_reason` ∈ end_turn / max_tokens / max_turn_requests | `:turn_completed` `final: true` | `:durable` |
@@ -123,20 +123,26 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     :session_id,
     :streamer,
     :turn_id,
+    :reasoning_item,
     seq: 0,
+    reasoning_seq: 0,
     pending_tools: %{},
     unmapped: %{},
-    message_buf: []
+    message_buf: [],
+    reasoning_buf: []
   ]
 
   @type t :: %__MODULE__{
           session_id: term(),
           streamer: GenServer.server(),
           turn_id: String.t() | nil,
+          reasoning_item: String.t() | nil,
           seq: non_neg_integer(),
+          reasoning_seq: non_neg_integer(),
           pending_tools: %{optional(String.t()) => map()},
           unmapped: %{optional(String.t()) => pos_integer()},
-          message_buf: [String.t()]
+          message_buf: [String.t()],
+          reasoning_buf: [String.t()]
         }
 
   # -- client API -------------------------------------------------------------
@@ -184,13 +190,18 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   optional) or `{:error, reason}`. See the moduledoc's stop-reason honesty
   section for the exact bracket each outcome emits.
   """
-  @spec finish_turn(GenServer.server(), %{stop_reason: term()} | {:error, term()}) :: :ok
+  @spec finish_turn(
+          GenServer.server(),
+          %{stop_reason: term()} | {:error, term()}
+        ) :: :ok
   def finish_turn(server, outcome) do
     GenServer.call(server, {:finish_turn, outcome})
   end
 
   @doc "Per-kind counts of updates skipped as unmapped (observability; see moduledoc)."
-  @spec unmapped_counts(GenServer.server()) :: %{optional(String.t()) => pos_integer()}
+  @spec unmapped_counts(GenServer.server()) :: %{
+          optional(String.t()) => pos_integer()
+        }
   def unmapped_counts(server) do
     GenServer.call(server, :unmapped_counts)
   end
@@ -227,7 +238,16 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:begin_turn, prompt}, _from, state) do
     turn_id = "turn-#{System.unique_integer([:positive])}"
-    state = %{state | turn_id: turn_id, pending_tools: %{}, message_buf: []}
+
+    state = %{
+      state
+      | turn_id: turn_id,
+        pending_tools: %{},
+        message_buf: [],
+        reasoning_item: nil,
+        reasoning_buf: [],
+        reasoning_seq: 0
+    }
 
     state =
       state
@@ -238,8 +258,23 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   end
 
   def handle_manager_call({:finish_turn, outcome}, _from, state) do
-    state = close_turn(state, outcome)
-    {:reply, :ok, %{state | turn_id: nil, pending_tools: %{}, message_buf: []}}
+    # A pure-thinking tail (thoughts streamed, but the turn ended with no
+    # answer chunk to trigger the reasoning→answer seal) still seals its
+    # reasoning as a durable ∴ block — the thought happened, so it is a
+    # transcript fact, on every outcome (completion, refusal, cancel,
+    # error). Normally a no-op: the first answer chunk already sealed it.
+    state = state |> seal_reasoning() |> close_turn(outcome)
+
+    {:reply, :ok,
+     %{
+       state
+       | turn_id: nil,
+         pending_tools: %{},
+         message_buf: [],
+         reasoning_item: nil,
+         reasoning_buf: [],
+         reasoning_seq: 0
+     }}
   end
 
   def handle_manager_call(:unmapped_counts, _from, state) do
@@ -286,15 +321,23 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   defp apply_update(state, {:agent_message_chunk, %{content: content}}) do
     text = chunk_text(content)
 
+    # The reasoning→answer transition: the first answer chunk seals the
+    # open reasoning item as its own durable ∴ block, ordered ahead of the
+    # assistant message it precedes.
     %{state | message_buf: [text | state.message_buf]}
+    |> seal_reasoning()
     |> emit(:item_delta, :ephemeral, %{chunk: text})
   end
 
+  # A thought chunk gets the SAME durable item lifecycle a message does
+  # (item_started opened lazily on the first non-blank thought, its own
+  # turn-scoped item_id, ephemeral deltas streaming into the live tail),
+  # so reasoning seals as a durable, peekable ∴ block instead of
+  # evaporating from the live tail — the honesty rule: what the machine
+  # thought is a first-class transcript fact once sealed. See
+  # `stream_reasoning/2`.
   defp apply_update(state, {:agent_thought_chunk, %{content: content}}) do
-    emit(state, :item_delta, :ephemeral, %{
-      chunk: chunk_text(content),
-      thought: true
-    })
+    stream_reasoning(state, chunk_text(content))
   end
 
   # A tool_call frame: stash the invocation, and when its status is already
@@ -328,8 +371,11 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     end
   end
 
-  defp apply_update(state, {:plan, %{entries: entries}}) when is_list(entries) do
-    emit(state, :item_completed, :durable, %{
+  defp apply_update(state, {:plan, %{entries: entries}})
+       when is_list(entries) do
+    state
+    |> seal_reasoning()
+    |> emit(:item_completed, :durable, %{
       item_type: :plan,
       entries: Enum.map(entries, &plan_entry/1)
     })
@@ -370,7 +416,9 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   # the same shape a Stream-driven session produces. Drop the stash entry.
   defp complete_tool(state, id, status) do
     {info, pending} = Map.pop(state.pending_tools, id, %{})
-    state = %{state | pending_tools: pending}
+    # Think→tool with no intervening answer text: the open reasoning seals
+    # as its own ∴ block ahead of the tool it reasoned toward.
+    state = %{seal_reasoning(state) | pending_tools: pending}
     name = tool_name(info, id)
 
     state =
@@ -390,12 +438,20 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     })
   end
 
-  defp tool_name(%{title: title}, _id) when is_binary(title) and title != "", do: title
-  defp tool_name(%{kind: kind}, _id) when is_atom(kind) and not is_nil(kind), do: kind
+  defp tool_name(%{title: title}, _id) when is_binary(title) and title != "",
+    do: title
+
+  defp tool_name(%{kind: kind}, _id) when is_atom(kind) and not is_nil(kind),
+    do: kind
+
   defp tool_name(_info, id), do: id
 
-  defp tool_result(%{raw_output: raw_output}) when not is_nil(raw_output), do: raw_output
-  defp tool_result(%{content: content}) when is_list(content), do: inspect(content)
+  defp tool_result(%{raw_output: raw_output}) when not is_nil(raw_output),
+    do: raw_output
+
+  defp tool_result(%{content: content}) when is_list(content),
+    do: inspect(content)
+
   defp tool_result(_info), do: nil
 
   defp plan_entry(%{content: content, priority: priority, status: status}),
@@ -500,11 +556,84 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   defp seal_assistant_message(state) do
     content = state.message_buf |> Enum.reverse() |> Enum.join()
 
-    emit_message_item(%{state | message_buf: []}, "#{state.turn_id}-assistant", %{
-      item_type: :message,
+    emit_message_item(
+      %{state | message_buf: []},
+      "#{state.turn_id}-assistant",
+      %{
+        item_type: :message,
+        content: content
+      }
+    )
+  end
+
+  # -- reasoning item lifecycle -------------------------------------------------
+  #
+  # Mirrors `Raxol.Agent.Contract.pump/3`'s reasoning lifecycle so an
+  # ACP-backed session produces the same wire shape (durable
+  # item_started/item_completed with `item_type: :reasoning`, ephemeral
+  # deltas carrying the item_id) the fixture corpus and projection already
+  # speak. Interleaved reasoning (think→tool→think→answer) yields multiple
+  # ∴ blocks in true order — each segment gets its own turn-scoped id.
+
+  # Buffer the thought (prepended; restored on read), then open-or-stream.
+  defp stream_reasoning(state, chunk) do
+    state = %{state | reasoning_buf: [chunk | state.reasoning_buf]}
+    open_or_stream_reasoning(state, chunk)
+  end
+
+  # Not yet open: open on the FIRST non-blank accumulated content — a
+  # whitespace-only thought opens no item_started, so it seals no block
+  # (the "empty thinking → no ∴ block" rule). The opener's delta carries
+  # the full accumulated-so-far text so the live tail is whole.
+  defp open_or_stream_reasoning(%{reasoning_item: nil} = state, _chunk) do
+    content = state.reasoning_buf |> Enum.reverse() |> Enum.join()
+
+    if blank?(content) do
+      state
+    else
+      seq = state.reasoning_seq + 1
+      item_id = "#{state.turn_id}-reasoning-#{seq}"
+
+      %{state | reasoning_seq: seq, reasoning_item: item_id}
+      |> emit(:item_started, :durable, %{
+        item_id: item_id,
+        item_type: :reasoning
+      })
+      |> emit(:item_delta, :ephemeral, %{
+        item_id: item_id,
+        chunk: content,
+        thought: true
+      })
+    end
+  end
+
+  defp open_or_stream_reasoning(state, chunk) do
+    emit(state, :item_delta, :ephemeral, %{
+      item_id: state.reasoning_item,
+      chunk: chunk,
+      thought: true
+    })
+  end
+
+  # Seals an open reasoning item as a durable ∴ block. A no-op when nothing
+  # is open (blank thought never opened, or an earlier boundary already
+  # sealed it); the buffer always clears so the next segment starts fresh.
+  defp seal_reasoning(%{reasoning_item: nil} = state),
+    do: %{state | reasoning_buf: []}
+
+  defp seal_reasoning(state) do
+    content = state.reasoning_buf |> Enum.reverse() |> Enum.join()
+    item_id = state.reasoning_item
+
+    %{state | reasoning_item: nil, reasoning_buf: []}
+    |> emit(:item_completed, :durable, %{
+      item_type: :reasoning,
+      item_id: item_id,
       content: content
     })
   end
+
+  defp blank?(text), do: String.trim(text) == ""
 
   defp with_refs(payload, response) do
     case decode_refs(response) do
@@ -518,7 +647,9 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   bucket (see the moduledoc). Public for the hostile-frame tests.
   """
   @spec decode_refs(term()) :: [non_neg_integer()]
-  def decode_refs(%{_meta: meta}) when is_map(meta), do: decode_ref_list(Map.get(meta, "refs"))
+  def decode_refs(%{_meta: meta}) when is_map(meta),
+    do: decode_ref_list(Map.get(meta, "refs"))
+
   def decode_refs(_other), do: []
 
   defp decode_ref_list(refs) when is_list(refs) do

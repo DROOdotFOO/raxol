@@ -73,7 +73,8 @@ defmodule Raxol.Agent.ContractTest do
       # item_started=2 / item_completed=3, the tool_result's item_started=4 /
       # item_completed=5).
       stream = [
-        {:tool_use, %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
+        {:tool_use,
+         %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
         {:tool_result, %{name: "run_tests", result: "tests: 12 passed"}},
         {:done, %{content: "done", usage: %{output_tokens: 1}}}
       ]
@@ -196,7 +197,9 @@ defmodule Raxol.Agent.ContractTest do
       started =
         Enum.find(events, &(&1.type == :item_started))
 
-      assert started != nil, "pump must emit item_started before the first delta"
+      assert started != nil,
+             "pump must emit item_started before the first delta"
+
       assert started.tier == :durable
       assert %{item_id: item_id, item_type: :message} = started.payload
       assert is_binary(item_id) and item_id != ""
@@ -266,7 +269,10 @@ defmodule Raxol.Agent.ContractTest do
       stream = [
         {:tool_use, %{name: "list_dir", arguments: %{path: "."}, id: "call-1"}},
         {:tool_result,
-         %{name: "list_dir", result: %{path: ".", entries: ["a.ex", "b/", "c.md"]}}},
+         %{
+           name: "list_dir",
+           result: %{path: ".", entries: ["a.ex", "b/", "c.md"]}
+         }},
         {:done, %{content: "done", usage: %{}}}
       ]
 
@@ -275,7 +281,10 @@ defmodule Raxol.Agent.ContractTest do
       completed =
         session_id
         |> drain_events()
-        |> Enum.find(&(&1.type == :item_completed and &1.payload[:item_type] == :tool_result))
+        |> Enum.find(
+          &(&1.type == :item_completed and
+              &1.payload[:item_type] == :tool_result)
+        )
 
       # The structured result nests under :result; the summary is lifted to
       # :content, exactly where the harness block's body extraction reads it.
@@ -310,6 +319,177 @@ defmodule Raxol.Agent.ContractTest do
                "let me check",
                "final answer"
              ]
+    end
+  end
+
+  describe "reasoning item lifecycle (durable ∴ blocks)" do
+    # RED-FIRST (Grok-Build-style peekable thinking): reasoning/thought
+    # deltas used to stream into the live tail and evaporate when the
+    # message item sealed — nothing durable to peek. Now reasoning gets
+    # the SAME item lifecycle a message does: a lazily-opened durable
+    # `item_type: :reasoning` item, ephemeral deltas carrying its id, and
+    # a seal at the reasoning→answer transition (or turn end).
+
+    defp reasoning_items(events) do
+      for %Event{type: :item_completed, payload: %{item_type: :reasoning} = p} <-
+            events,
+          do: p
+    end
+
+    test "a thought stream opens a durable reasoning item, sealed before the message" do
+      session_id = "contract-reason-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:reasoning, "let me think"},
+        {:reasoning, " harder"},
+        {:text_delta, "the answer"},
+        {:done, %{content: "the answer", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+
+      events = drain_events(session_id)
+
+      started =
+        Enum.find(
+          events,
+          &(&1.type == :item_started and &1.payload[:item_type] == :reasoning)
+        )
+
+      assert started != nil,
+             "a thought must open a durable reasoning item_started"
+
+      assert started.tier == :durable
+      assert %{item_id: reasoning_id} = started.payload
+
+      # The sealed reasoning block carries the full accumulated thought.
+      [reasoning] = reasoning_items(events)
+      assert reasoning.item_id == reasoning_id
+      assert reasoning.content == "let me think harder"
+
+      # Reasoning seals BEFORE the message item (its ∴ block renders first).
+      msg =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :message)
+        )
+
+      reasoning_seal =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :reasoning)
+        )
+
+      assert reasoning_seal.id < msg.id
+      assert msg.payload.content == "the answer"
+    end
+
+    test "reasoning deltas are ephemeral, marked thought:true, and carry the item_id" do
+      session_id = "contract-reason-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:reasoning, "aa"},
+        {:reasoning, "bb"},
+        {:text_delta, "x"},
+        {:done, %{content: "x", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      started =
+        Enum.find(
+          events,
+          &(&1.type == :item_started and &1.payload[:item_type] == :reasoning)
+        )
+
+      reasoning_deltas =
+        for %Event{type: :item_delta, payload: %{thought: true} = p} <- events,
+            do: p
+
+      assert length(reasoning_deltas) == 2
+
+      for delta <- reasoning_deltas do
+        assert delta.item_id == started.payload.item_id
+      end
+
+      for %Event{type: :item_delta} = e <- events,
+          do: assert(e.tier == :ephemeral)
+    end
+
+    test "whitespace-only thinking seals NO reasoning block" do
+      session_id = "contract-reason-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:reasoning, "  "},
+        {:reasoning, "\n\t"},
+        {:text_delta, "hi"},
+        {:done, %{content: "hi", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      assert reasoning_items(events) == []
+
+      refute Enum.any?(
+               events,
+               &(&1.type == :item_started and
+                   &1.payload[:item_type] == :reasoning)
+             )
+    end
+
+    test "think→tool→think→answer produces TWO reasoning blocks in true order" do
+      session_id = "contract-reason-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:reasoning, "first I plan"},
+        {:tool_use, %{name: "list_dir", arguments: %{}, id: "c1"}},
+        {:tool_result, %{name: "list_dir", result: "mix.exs"}},
+        {:reasoning, "now I conclude"},
+        {:text_delta, "final"},
+        {:done, %{content: "final", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      contents = reasoning_items(events) |> Enum.map(& &1.content)
+      assert contents == ["first I plan", "now I conclude"]
+
+      # The first reasoning seals BEFORE the tool_use (∴ block ahead of tool).
+      first_reasoning =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :reasoning)
+        )
+
+      tool_use =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :tool_use)
+        )
+
+      assert first_reasoning.id < tool_use.id
+    end
+
+    test "a pure-thinking turn seals its reasoning at done (no answer text)" do
+      session_id = "contract-reason-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:reasoning, "just thinking, no words"},
+        {:done, %{content: "", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      assert [%{content: "just thinking, no words"}] = reasoning_items(events)
     end
   end
 
@@ -357,8 +537,10 @@ defmodule Raxol.Agent.ContractTest do
 
       stream = [
         {:tool_use, %{name: "edit_file", arguments: %{}, id: "e1"}},
-        {:approval_requested, %{request_id: "r1", tool_name: "edit_file", options: []}},
-        {:approval_decided, %{request_id: "r1", option_id: "allow", decision: :allow}},
+        {:approval_requested,
+         %{request_id: "r1", tool_name: "edit_file", options: []}},
+        {:approval_decided,
+         %{request_id: "r1", option_id: "allow", decision: :allow}},
         {:tool_result, %{name: "edit_file", result: %{ok: true}}},
         {:done, %{content: "done", usage: %{}}}
       ]
@@ -399,7 +581,8 @@ defmodule Raxol.Agent.ContractTest do
       tr =
         Enum.find(
           events,
-          &(&1.type == :item_completed and &1.payload[:item_type] == :tool_result)
+          &(&1.type == :item_completed and
+              &1.payload[:item_type] == :tool_result)
         )
 
       assert tr.payload.diff == true
