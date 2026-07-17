@@ -168,10 +168,14 @@ defmodule Raxol.Harness.UnreadDividerSurfaceTest do
 
       divider_index = Enum.find_index(footer, &String.contains?(&1, @label))
 
-      assert divider_index == 1,
-             "the divider must render immediately below the status row " <>
-               "(footer row 1), got index #{inspect(divider_index)} in " <>
-               inspect(footer)
+      # The status strip yields to silence once the turn has completed
+      # (the strip-visibility gate), so on this idle post-run frame the
+      # divider is the FIRST footer row, directly above the preview/
+      # composer rows it separates the unread span from.
+      assert divider_index == 0,
+             "the divider must be the first footer row on an idle frame " <>
+               "(the strip yields after turn completion), got index " <>
+               "#{inspect(divider_index)} in " <> inspect(footer)
     end
 
     test "no blur, no divider: an attended run never renders the rule" do
@@ -374,9 +378,11 @@ defmodule Raxol.Harness.UnreadDividerSurfaceTest do
 
       case divider_rows(footer_texts(device)) do
         [row] ->
-          assert row =~ ~r/^─+ \d+ new since you looked ─+$/u,
-                 "the divider row must be exactly rule glyphs + the " <>
-                   "module-built label, got #{inspect(row)}"
+          # One leading space: the doctrine margin -- still nothing but
+          # margin + rule glyphs + the module-built label.
+          assert row =~ ~r/^ ─+ \d+ new since you looked ─+$/u,
+                 "the divider row must be exactly the margin + rule " <>
+                   "glyphs + the module-built label, got #{inspect(row)}"
 
         other ->
           flunk("expected exactly one divider row, got #{inspect(other)}")
@@ -397,9 +403,15 @@ defmodule Raxol.Harness.UnreadDividerSurfaceTest do
 
       [row] = divider_rows(footer_texts(device, width: 31))
 
-      assert TextMeasure.display_width(row) == 31,
-             "divider must fill the current width exactly, got " <>
+      # The doctrine margin: footer content renders at width - 2 inside
+      # a 1-column margin each side; the painted row is the left margin
+      # plus the rule (the right margin is the absent 31st column).
+      assert TextMeasure.display_width(row) == 31 - 1,
+             "divider must fill the margined content width exactly, got " <>
                "#{TextMeasure.display_width(row)} for #{inspect(row)}"
+
+      assert String.starts_with?(row, " "),
+             "divider row must carry the 1-column left margin"
     end
   end
 

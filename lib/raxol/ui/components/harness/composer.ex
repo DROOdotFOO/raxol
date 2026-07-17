@@ -32,9 +32,10 @@ defmodule Raxol.UI.Components.Harness.Composer do
   with the run halved (`\\\\` submits as `\\`). The rule applies only on
   the Enter-submit path; `force_submit/1` and paste submit/insert content
   verbatim. Bracketed paste and a consumer-wired `force_submit/1` remain
-  alternate inlets, and a dim hint line (`\\ continue · paste multiline ·
-  ↵ submit`) renders below the input while it is focused, empty, and has
-  no history yet. The modifier branches activate automatically when F1b
+  alternate inlets. (An earlier first-focus hint line advertising these
+  inlets was removed by V's charged-minimum ruling -- it said nothing the
+  first Enter doesn't teach, and the boot frame carries identity, not
+  instructions.) The modifier branches activate automatically when F1b
   (kitty keyboard protocol) lands -- zero logic change here.
 
   ## Input-shape normalization
@@ -109,7 +110,6 @@ defmodule Raxol.UI.Components.Harness.Composer do
   @default_height 3
   @default_max_history 100
   @steer_prefix "⏸ steer queued for next boundary: "
-  @hint_text "\\ continue · paste multiline · ↵ submit"
 
   @type queued_steer :: %{text: String.t(), queued_at: term()} | nil
 
@@ -196,6 +196,9 @@ defmodule Raxol.UI.Components.Harness.Composer do
   exact for the common case (typing appends) and honestly approximate
   after mid-draft cursor movement. Columns are measured with
   `Raxol.UI.TextMeasure` (CJK double-width), never `String.length/1`.
+  Trailing whitespace the word-wrapper trims from the visual line is
+  added back from the logical draft, so typing a space visibly advances
+  the parked cursor (see the inline comment for the defect this fixes).
   """
   @spec edit_point(t(), pos_integer()) ::
           {non_neg_integer(), pos_integer()}
@@ -209,10 +212,40 @@ defmodule Raxol.UI.Components.Harness.Composer do
     last_visible = min(line_count - 1, scroll_row + mli.height - 1)
     row = banner + max(last_visible - scroll_row, 0)
 
-    last_line = List.last(mli.lines) || ""
-    col = min(TextMeasure.display_width(last_line) + 1, avail_width)
+    # The spacebar park defect: `mli.lines` comes from
+    # `TextHelper.split_into_lines/3`, whose word-wrap `String.trim`s
+    # every produced line -- a draft of "ab " wraps to ["ab"]. A space is
+    # invisible, so the parked terminal cursor is the ONLY visible
+    # feedback for typing one; measuring the trimmed line froze the
+    # cursor until the next visible character arrived. Compute the column
+    # as trimmed-visual-line + the trailing-whitespace run of the draft's
+    # last LOGICAL line (from `mli.value`, which wrap never touches).
+    # Trimming the visual line first prevents double-counting under a
+    # wrap mode that DOES preserve trailing whitespace.
+    last_line = String.trim_trailing(List.last(mli.lines) || "")
+
+    col =
+      min(
+        TextMeasure.display_width(last_line) +
+          TextMeasure.display_width(trailing_whitespace(mli.value)) + 1,
+        avail_width
+      )
 
     {row, max(col, 1)}
+  end
+
+  # The trailing space/tab run of the draft's last logical line. Trailing
+  # whitespace of the whole value IS that run (and a value ending in
+  # "\n" correctly yields "" -- the fresh logical line is empty).
+  defp trailing_whitespace(value) do
+    value
+    |> String.split("\n")
+    |> List.last()
+    |> Kernel.||("")
+    |> String.graphemes()
+    |> Enum.reverse()
+    |> Enum.take_while(&(&1 in [" ", "\t"]))
+    |> Enum.join()
   end
 
   @doc """
@@ -384,8 +417,7 @@ defmodule Raxol.UI.Components.Harness.Composer do
     children =
       [
         queued_steer_banner(state.queued_steer, avail_width),
-        MultiLineInput.render(mli, mli_context),
-        first_focus_hint(state)
+        MultiLineInput.render(mli, mli_context)
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -594,21 +626,6 @@ defmodule Raxol.UI.Components.Harness.Composer do
   end
 
   defp size_mli_for_render(mli, _avail_width), do: mli
-
-  # First-focus hint: shown only while there is nothing else to look at --
-  # focused, empty buffer, no history yet. Same dim styling tier as the
-  # steer banner; disappears the moment any of the three conditions breaks.
-  defp first_focus_hint(%{mli: mli, history: history}) do
-    if mli.focused and history == [] and mli.value == "" do
-      Components.text(
-        id: "composer-hint",
-        content: @hint_text,
-        style: %{dim: true}
-      )
-    else
-      nil
-    end
-  end
 
   defp queued_steer_banner(nil, _avail_width), do: nil
 

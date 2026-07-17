@@ -295,12 +295,20 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
     # ARE the sealed blocks. The faithfulness of this reconstruction is
     # itself pinned by the replay-comparison test below, so it cannot
     # silently drift from what seal_block really does.
+    # Mirrors the REAL seal path (`Surface.render_block_lines/3` + the
+    # doctrine margin): content renders at width - 2 and every line
+    # carries the 1-column left margin. The blank separator rows the
+    # seal path emits between blocks are deliberately NOT reconstructed:
+    # both sides of the ingress comparison reject blank lines, and the
+    # fixed-point guard has nothing to check on an empty row.
     defp seal_ingress_binaries(model) do
+      content_width = model.width - 2
+
       for block <- model.projection.blocks do
         block
-        |> BlockBody.render(%{width: model.width})
-        |> ViewText.lines(model.width, :styled)
-        |> Enum.map(&[&1, "\r\n"])
+        |> BlockBody.render(%{width: content_width})
+        |> ViewText.lines(content_width, :styled)
+        |> Enum.map(&[" ", &1, "\r\n"])
         |> IO.iodata_to_binary()
       end
     end

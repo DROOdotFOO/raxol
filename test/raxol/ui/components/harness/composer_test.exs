@@ -316,37 +316,46 @@ defmodule Raxol.UI.Components.Harness.ComposerTest do
     end
   end
 
-  describe "first-focus hint" do
-    test "appears when focused with an empty buffer and no history" do
+  describe "no hint line (V ruling: the hint carried no information)" do
+    test "an empty focused composer renders no composer-hint node" do
       {:ok, state} = Composer.init(id: :c)
-
-      hint = hint_of(Composer.render(state, default_context()))
-
-      assert hint != nil
-      assert hint.style[:dim] == true
-      assert hint.content =~ "\\ continue"
-      assert hint.content =~ "↵ submit"
-    end
-
-    test "disappears once the buffer has content" do
-      {:ok, state} = Composer.init(id: :c)
-      state = type(state, "x")
 
       assert hint_of(Composer.render(state, default_context())) == nil
     end
+  end
 
-    test "disappears once history exists" do
-      {:ok, state} = Composer.init(id: :c)
-      state = type(state, "first")
-      {state, _} = press(state, :enter)
+  describe "trailing-space draft (the spacebar park defect)" do
+    # The defect: word-wrap (`TextHelper.split_into_lines/3`) trims each
+    # wrapped line, so a draft of "ab " produced `lines: ["ab"]` and
+    # `edit_point/2` -- which measured `List.last(mli.lines)` -- reported
+    # the same column as for "ab". A space is invisible; the parked
+    # terminal cursor is the ONLY visible feedback for typing one, so
+    # the frame looked frozen until the next visible character arrived.
+    test "edit_point advances past a trailing space typed into the draft" do
+      {:ok, state} = Composer.init(%{id: :c, width: 40, focused: true})
+      state = type(state, "ab ")
 
-      assert hint_of(Composer.render(state, default_context())) == nil
+      assert Composer.edit_point(state, 40) == {0, 4}
     end
 
-    test "disappears when the input is not focused" do
-      {:ok, state} = Composer.init(id: :c, focused: false)
+    test "each additional trailing space advances the park column again" do
+      {:ok, state} = Composer.init(%{id: :c, width: 40, focused: true})
+      state = type(state, "ab")
+      assert Composer.edit_point(state, 40) == {0, 3}
 
-      assert hint_of(Composer.render(state, default_context())) == nil
+      state = type(state, " ")
+      assert Composer.edit_point(state, 40) == {0, 4}
+
+      state = type(state, " ")
+      assert Composer.edit_point(state, 40) == {0, 5}
+    end
+
+    test "the park column never exceeds the available width" do
+      {:ok, state} = Composer.init(%{id: :c, width: 10, focused: true})
+      state = Composer.set_value(state, "abcdef    ")
+
+      {_row, col} = Composer.edit_point(state, 10)
+      assert col <= 10
     end
   end
 

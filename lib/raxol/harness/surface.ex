@@ -719,7 +719,9 @@ defmodule Raxol.Harness.Surface do
           lane_notice: String.t() | [String.t()] | nil,
           stream_open?: boolean(),
           debug_highlight: debug_highlight_group() | nil,
-          debug_highlight_bg: ViewText.bg()
+          debug_highlight_bg: ViewText.bg(),
+          sigil: String.t(),
+          sealed_any?: boolean()
         }
 
   @typedoc """
@@ -895,7 +897,17 @@ defmodule Raxol.Harness.Surface do
       # never colors") -- the component only ever names the role; the
       # palette decides what the tint IS per capability tier, including
       # the category-preserving 256/ANSI16 downgrades.
-      debug_highlight_bg: Palette.debug_highlight_bg_for(caps)
+      debug_highlight_bg: Palette.debug_highlight_bg_for(caps),
+      # The prompt sigil (the chevron): decided ONCE from the capability
+      # record -- `unicode: :none` is the only tier that can't render
+      # U+276F, so it falls back to plain ">". See `chevron_lines/2`.
+      sigil: prompt_sigil(caps),
+      # Whether ANY line has ever been sealed into history -- drives the
+      # one-blank-row-between-sealed-blocks rule (see `seal_block/2`).
+      # Deliberately NOT reset by `switch_session/2`: sealed history
+      # stays on screen across a switch, so the next block still needs
+      # its separating blank.
+      sealed_any?: false
     }
 
     model
@@ -953,9 +965,14 @@ defmodule Raxol.Harness.Surface do
   # `:no_footer` case below) -- one source of truth for "how flat mode
   # writes an honest one-line notice", never a re-derived copy.
   defp seal_flat_notice(model, text) do
-    lines = ViewText.lines(%{type: :text, content: text}, model.width, :plain)
+    lines = marker_lines(model, text, :plain)
     iodata = Enum.map(lines, &(&1 <> "\n"))
-    %{model | authority: FlatAuthority.seal(model.authority, iodata)}
+
+    %{
+      model
+      | authority: FlatAuthority.seal(model.authority, iodata),
+        sealed_any?: true
+    }
   end
 
   defp build_authority(:flat, device, width, rows, _footer_rows, _caps, _pin),
@@ -972,6 +989,60 @@ defmodule Raxol.Harness.Surface do
     do: Enum.map(envelopes, & &1.body)
 
   defp events_from(events) when is_list(events), do: events
+
+  # -- doctrine layout: margins + the chevron sigil ------------------------
+  #
+  # V's charged-minimum ruling (harness-visual-doctrine §1.2/§4.2): all
+  # sealed-history and footer content sits inside a 1-column margin on
+  # both sides; the ONE flush-left thing on screen is the composer's
+  # chevron -- the prompt sigil, the anchor of an idle frame. Implemented
+  # here, at the single seam where lines meet the paint authorities,
+  # never as per-component string prefixes. Two documented exemptions:
+  # the overlay picker and the diff expansion are FRAMED transient claims
+  # pre-rendered at full width by their own modules -- margining them
+  # here would truncate their right bezels; bringing them inside the
+  # margin is their own follow-up, not a string-prefix hack at this seam.
+
+  # Left margin (1 col) + right margin (1 col) around margined content.
+  @margin " "
+  @margin_cols 2
+  # The chevron prefix is "❯ " / "> " -- 2 cells -- so margined content
+  # and the composer's first draft column align at column 2 (0-based).
+  @sigil_cols 2
+
+  # The width budget for margined content -- always the full width minus
+  # both margin columns (and, for the composer, exactly the room left of
+  # the 2-cell chevron prefix).
+  defp content_width(model), do: max(model.width - @margin_cols, 0)
+
+  # A blank line stays blank -- a margin is layout, not trailing/leading
+  # whitespace injected into empty rows.
+  defp margin_line(""), do: ""
+  defp margin_line(line), do: @margin <> line
+
+  defp margin_lines(lines), do: Enum.map(lines, &margin_line/1)
+
+  # `unicode: :none` is the one capability tier that can't render U+276F;
+  # every other tier (and an absent record -- the probe-off conservative
+  # default already renders em dashes and box glyphs elsewhere) gets the
+  # real chevron. Width-honesty: both sigils measure exactly one display
+  # column (pinned by test).
+  defp prompt_sigil(%{unicode: :none}), do: ">"
+  defp prompt_sigil(_caps), do: "❯"
+
+  # The chevron is the one H-K anchor of an idle frame: bold (structure
+  # channel, doctrine §4.3), styled through the SAME ViewText SGR path
+  # every other styled line uses -- never a hand-rolled escape.
+  defp styled_sigil(model) do
+    [line] =
+      ViewText.lines(
+        %{type: :text, content: model.sigil, style: %{bold: true}},
+        @sigil_cols,
+        :styled
+      )
+
+    line
+  end
 
   @doc """
   Startup discipline: push any existing dirty screen
@@ -1342,15 +1413,31 @@ defmodule Raxol.Harness.Surface do
   """
   @spec seal_marker(t(), String.t()) :: t()
   def seal_marker(%{mode: :flat} = model, text) do
-    lines = ViewText.lines(%{type: :text, content: text}, model.width, :plain)
+    lines = marker_lines(model, text, :plain)
     iodata = Enum.map(lines, &(&1 <> "\n"))
-    %{model | authority: FlatAuthority.seal(model.authority, iodata)}
+
+    %{
+      model
+      | authority: FlatAuthority.seal(model.authority, iodata),
+        sealed_any?: true
+    }
   end
 
   def seal_marker(model, text) do
-    lines = ViewText.lines(%{type: :text, content: text}, model.width, :styled)
+    lines = marker_lines(model, text, :styled)
     iodata = Enum.map(lines, &[&1, "\r\n"])
-    %{model | authority: InlineAuthority.seal(model.authority, iodata)}
+
+    %{
+      model
+      | authority: InlineAuthority.seal(model.authority, iodata),
+        sealed_any?: true
+    }
+  end
+
+  defp marker_lines(model, text, mode) do
+    %{type: :text, content: text}
+    |> ViewText.lines(content_width(model), mode)
+    |> margin_lines()
   end
 
   @doc """
@@ -1618,12 +1705,17 @@ defmodule Raxol.Harness.Surface do
   # no positioning to confirm; a failed pipe write raising out of the frame
   # is the honest flat behavior, so the flat emit stays infallible-shaped.
   defp seal_block(%{mode: :flat} = model, block) do
-    lines = render_block_lines(block, model, :plain)
-    iodata = Enum.map(lines, &(&1 <> "\n"))
+    lines = block |> render_block_lines(model, :plain) |> margin_lines()
+    iodata = Enum.map(block_separator(model) ++ lines, &(&1 <> "\n"))
     authority = FlatAuthority.seal(model.authority, iodata)
 
     {:ok,
-     %{model | authority: authority, painted_count: model.painted_count + 1}}
+     %{
+       model
+       | authority: authority,
+         painted_count: model.painted_count + 1,
+         sealed_any?: true
+     }}
   end
 
   # No per-line `\e[K` here: `InlineAuthority.try_seal/2` sanitizes CONTENT
@@ -1635,18 +1727,35 @@ defmodule Raxol.Harness.Surface do
   # Erasing is the authority's business, not content's: sealed lines land
   # on rows the DECSTBM scroll already blanked, so no EL is needed.
   defp seal_block(model, block) do
-    lines = render_block_lines(block, model, :styled)
-    iodata = Enum.map(lines, &[&1, "\r\n"])
+    lines = block |> render_block_lines(model, :styled) |> margin_lines()
+
+    iodata = Enum.map(block_separator(model) ++ lines, &[&1, "\r\n"])
 
     case InlineAuthority.try_seal(model.authority, iodata) do
       {:ok, authority} ->
         {:ok,
-         %{model | authority: authority, painted_count: model.painted_count + 1}}
+         %{
+           model
+           | authority: authority,
+             painted_count: model.painted_count + 1,
+             sealed_any?: true
+         }}
 
       {:error, :write_failed, authority} ->
         {:error, :write_failed, %{model | authority: authority}}
     end
   end
+
+  # One blank row between sealed content and the next block (V's margin
+  # ruling) -- emitted WITH the block's own seal write (never as a
+  # separate authority call), so the write-checked commit stays atomic:
+  # a refused write leaves neither separator nor block behind. Gated on
+  # `sealed_any?` so the very first sealed line of a session never opens
+  # with a blank. Markers (`seal_marker/2`) get no separator of their
+  # own -- a loss report attaches tightly to the content it interrupts --
+  # but they do SET `sealed_any?`, so the block after one is separated.
+  defp block_separator(%{sealed_any?: true}), do: [""]
+  defp block_separator(_model), do: []
 
   # Called from seal_block/2 -- the print-once paint -- so the grade
   # computed here IS the seal-time grade (see RecencyPolicy's moduledoc,
@@ -1659,9 +1768,13 @@ defmodule Raxol.Harness.Surface do
     prominence =
       RecencyPolicy.grade_block(block, model.projection.source_events)
 
+    # Rendered at the margined content width -- `seal_block/2` adds the
+    # 1-column margin around these lines, and the budget must shrink
+    # BEFORE truncation, never after (a full-width line prefixed with a
+    # margin would overflow the terminal by exactly the margin).
     block
-    |> BlockBody.render(%{width: model.width, prominence: prominence})
-    |> ViewText.lines(model.width, mode)
+    |> BlockBody.render(%{width: content_width(model), prominence: prominence})
+    |> ViewText.lines(content_width(model), mode)
   end
 
   # -- status/turn derivation (precondition #4) ----------------------------
@@ -2040,18 +2153,10 @@ defmodule Raxol.Harness.Surface do
   # seal one honest history line instead, through the same
   # `FlatAuthority.seal/2` path `apply_mode_notice/2` uses.
   defp run_editor(%{mode: :flat} = model) do
-    lines =
-      ViewText.lines(
-        %{
-          type: :text,
-          content: "» external editor requires the footer composer (flat mode)"
-        },
-        model.width,
-        :plain
-      )
-
-    iodata = Enum.map(lines, &(&1 <> "\n"))
-    %{model | authority: FlatAuthority.seal(model.authority, iodata)}
+    seal_flat_notice(
+      model,
+      "» external editor requires the footer composer (flat mode)"
+    )
   end
 
   defp run_editor(%{editor_session: nil} = model) do
@@ -3188,11 +3293,12 @@ defmodule Raxol.Harness.Surface do
 
     lines =
       [
-        status: StatusStrip.render(model.status, model.width),
-        notice: notice_line(model.stub_notice, model.width),
+        status: strip_lines(model),
+        notice: notice_line(model.stub_notice, content_width(model)),
         expansion: DiffExpansion.render_lines(expansion)
       ]
       |> fit_footer_groups([:expansion, :status], budget)
+      |> apply_margins(model)
       |> apply_debug_highlight(model)
       |> Enum.flat_map(fn {_key, lines} -> lines end)
       |> Enum.take(budget)
@@ -3210,8 +3316,8 @@ defmodule Raxol.Harness.Surface do
 
     composer_lines =
       ViewText.lines(
-        Composer.render(model.composer, %{available_width: model.width}),
-        model.width,
+        Composer.render(model.composer, %{available_width: content_width(model)}),
+        content_width(model),
         :styled
       )
 
@@ -3225,19 +3331,20 @@ defmodule Raxol.Harness.Surface do
     # happened", the exact fail-safe inversion the honest-notice law rules
     # out). It sits right after `status` in display order.
     kept =
-      fit_footer_groups(
-        [
-          status: StatusStrip.render(model.status, model.width),
-          lane: notice_line(model.lane_notice, model.width),
-          overlay: overlay_lines(model),
-          divider: divider_lines,
-          preview: preview_lines,
-          composer: composer_lines,
-          notice: notice_line(model.stub_notice, model.width)
-        ],
+      [
+        status: strip_lines(model),
+        lane: notice_line(model.lane_notice, content_width(model)),
+        overlay: overlay_lines(model),
+        divider: divider_lines,
+        preview: preview_lines,
+        composer: composer_lines,
+        notice: notice_line(model.stub_notice, content_width(model))
+      ]
+      |> fit_footer_groups(
         [:preview, :divider, :composer, :overlay, :status],
         budget
       )
+      |> apply_margins(model)
 
     lines =
       kept
@@ -3255,8 +3362,9 @@ defmodule Raxol.Harness.Surface do
   # The DevTools debug highlight (see `put_debug_highlight/2`): wraps the
   # targeted group's already-fitted, already-styled lines in the palette-
   # resolved bg tint via `ViewText.highlight_bg/3` -- applied AFTER the
-  # fit (row counts already settled; bg style only, never extra rows) and
-  # at the same byte-emission seam every other footer SGR comes from. A
+  # fit AND after the margin/chevron prefixes (row counts and row text
+  # already settled; bg style only, never extra rows or cells) and at
+  # the same byte-emission seam every other footer SGR comes from. A
   # group absent from this frame's composition (e.g. `:composer` while an
   # expansion claims the footer) is honestly a no-op -- there is nothing
   # of it on screen to tint.
@@ -3275,6 +3383,83 @@ defmodule Raxol.Harness.Surface do
           )
 
         List.keyreplace(kept, key, 0, {key, highlighted})
+    end
+  end
+
+  # -- the margin/chevron seam (see the doctrine-layout section above) ----
+  #
+  # Applied POST-fit so shed decisions run on the honest row counts, and
+  # in ONE place so no group can drift its own margin convention:
+  #
+  #   * `:composer` -- the chevron rows (see `chevron_lines/2`): the
+  #     input's first draft row is prefixed with the flush-left sigil,
+  #     continuation rows with two aligning spaces, a queued-steer
+  #     banner row with the plain margin.
+  #   * `:overlay` / `:expansion` -- exempt (framed transient claims
+  #     pre-rendered at full width; see the doctrine-layout note).
+  #   * everything else -- the plain 1-column margin.
+  defp apply_margins(kept, model) do
+    Enum.map(kept, fn
+      {:composer, lines} -> {:composer, chevron_lines(lines, model)}
+      {:overlay, lines} -> {:overlay, lines}
+      {:expansion, lines} -> {:expansion, lines}
+      {key, lines} -> {key, margin_lines(lines)}
+    end)
+  end
+
+  # The composer group's rows, chevron applied. Row indexing mirrors
+  # `Composer.edit_point/2`'s own banner accounting: a queued-steer
+  # banner (when present) occupies row 0, the draft's first input row
+  # follows it. The footer fit only ever sheds rows from a group's END
+  # (`shed_overflow/3` is an `Enum.take/2`), so the row the chevron
+  # belongs to keeps its index even under width pressure -- it can only
+  # disappear entirely, never slide.
+  defp chevron_lines(lines, model) do
+    sigil_row = if model.composer.queued_steer, do: 1, else: 0
+    sigil = styled_sigil(model)
+
+    lines
+    |> Enum.with_index()
+    |> Enum.map(fn
+      {line, ^sigil_row} -> sigil <> " " <> line
+      {line, index} when index < sigil_row -> margin_line(line)
+      {line, _index} -> "  " <> line
+    end)
+  end
+
+  # The status strip is a grown instrument (doctrine §1.2): it exists
+  # while the session has something TRUE for it to say -- a live turn
+  # (stage/elapsed are real), an approval wait (`needs_input`, the
+  # safety slot), or a stall alarm (the one condition the strip exists
+  # to make unmissable) -- and yields to silence at boot and between
+  # turns. An idle frame showing `Stage: — | Ctx: — | Cost: —` was the
+  # corpus's "airiness with nothing to say": four labelled voids
+  # claiming instrument-hood with no instrument behind them.
+  # Event-clocked by construction: every input below is derived from
+  # session events (`update_status/3`) or the stall detector, never
+  # from wall time.
+  defp strip_lines(model) do
+    if strip_visible?(model.status) do
+      StatusStrip.render(model.status, content_width(model))
+    else
+      []
+    end
+  end
+
+  defp strip_visible?(status) do
+    StatusStrip.alerting?(status) or
+      Map.get(status, :needs_input) == true or
+      live_turn?(status)
+  end
+
+  # A live turn: loop events have been observed (`turn_stage` is set by
+  # `update_status/3` from the last loop event) and the most recent
+  # bracket has neither completed nor canceled the turn.
+  defp live_turn?(status) do
+    case Map.get(status, :turn_stage) do
+      nil -> false
+      :turn_canceled -> false
+      _stage -> Map.get(status, :turn_completed) != true
     end
   end
 
@@ -3302,8 +3487,17 @@ defmodule Raxol.Harness.Surface do
         |> Enum.map(fn {_key, lines} -> length(lines) end)
         |> Enum.sum()
 
-      {row_in_composer, col} = Composer.edit_point(model.composer, model.width)
+      # The edit point is computed at the margined content width (the
+      # draft re-wraps at that width -- see `footer_frame/1`'s composer
+      # render), then shifted right by the chevron prefix's two cells
+      # (`chevron_lines/2` prefixes every input row with exactly
+      # `@sigil_cols` cells: "❯ " on the first, two aligning spaces on
+      # continuations), capped at the physical width.
+      {row_in_composer, col} =
+        Composer.edit_point(model.composer, content_width(model))
+
       row = offset + min(row_in_composer, composer_kept - 1)
+      col = min(col + @sigil_cols, model.width)
 
       if row < line_count, do: {row, col}, else: nil
     end
@@ -3325,15 +3519,17 @@ defmodule Raxol.Harness.Surface do
   # the composer's prompt row, the expansion's position header --
   # survives a partial trim), and the notice group is deliberately
   # absent from every drop order: as the last resort (notices alone
-  # exceeding the budget) the final head-take keeps the EARLIEST notice
-  # lines rather than crashing. Pinned by the "honest-notice law under
-  # footer overflow" describe in diff_expand_surface_test.exs.
+  # exceeding the budget) the final head-take (in `footer_frame/1`)
+  # keeps the EARLIEST notice lines rather than crashing. Pinned by the
+  # "honest-notice law under footer overflow" describe in
+  # diff_expand_surface_test.exs.
   #
   # Group-preserving by design: sheds overflow per the drop order but
   # keeps the keyword structure, so `footer_frame/1` can read the
-  # composer group's post-fit offset/length for the cursor park, and
-  # `apply_debug_highlight/2` can tint one group's rows post-fit (both
-  # clauses flatten + head-take themselves).
+  # composer group's post-fit offset/length for the cursor park,
+  # `apply_margins/2` can key its per-group prefix on honest row counts,
+  # and `apply_debug_highlight/2` can tint one group's rows post-fit
+  # (both clauses flatten + head-take themselves).
   defp fit_footer_groups(groups, drop_order, budget) do
     total =
       groups |> Enum.map(fn {_key, lines} -> length(lines) end) |> Enum.sum()
@@ -3393,10 +3589,10 @@ defmodule Raxol.Harness.Surface do
         ViewText.lines(
           %{
             type: :text,
-            content: UnreadDivider.line(span, model.width),
+            content: UnreadDivider.line(span, content_width(model)),
             style: %{dim: true}
           },
-          model.width,
+          content_width(model),
           :styled
         )
     end
@@ -3427,8 +3623,8 @@ defmodule Raxol.Harness.Surface do
       {block, index} ->
         block
         |> apply_fold_override(index, model.fold_overrides)
-        |> BlockBody.render(%{width: model.width})
-        |> ViewText.lines(model.width, :plain)
+        |> BlockBody.render(%{width: content_width(model)})
+        |> ViewText.lines(content_width(model), :plain)
         |> Enum.take(2)
     end
   end
@@ -3473,7 +3669,7 @@ defmodule Raxol.Harness.Surface do
       %{chunks: chunks} ->
         ViewText.lines(
           %{type: :text, content: "» " <> Enum.join(chunks, "")},
-          model.width,
+          content_width(model),
           :plain
         )
     end

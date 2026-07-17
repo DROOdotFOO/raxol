@@ -40,9 +40,15 @@ defmodule Raxol.Harness.SurfaceCursorParkTest do
   @footer_rows 6
   @region_top @rows - @footer_rows
 
-  # Footer layout for an empty session at this geometry: status strip on
-  # the first footer row, the composer's input line on the second.
-  @composer_row @region_top + 2
+  # Footer layout for an empty session at this geometry: the status
+  # strip yields to silence at boot (nothing true to say yet -- see
+  # `Surface`'s strip-visibility gate), so the composer's chevron row IS
+  # the first footer row.
+  @composer_row @region_top + 1
+
+  # The chevron prefix ("❯ ") shifts every draft column right by two
+  # cells; the park col for an empty draft is therefore 3, not 1.
+  @sigil_cols 2
 
   @hide "\e[?25l"
   @show "\e[?25h"
@@ -97,7 +103,7 @@ defmodule Raxol.Harness.SurfaceCursorParkTest do
       {_model, device} = new_model()
       bytes = raw(device)
 
-      assert_parked_at(bytes, @composer_row, 1)
+      assert_parked_at(bytes, @composer_row, @sigil_cols + 1)
     end
 
     test "typing advances the parked column to the end of the draft" do
@@ -105,11 +111,33 @@ defmodule Raxol.Harness.SurfaceCursorParkTest do
 
       prior = byte_size(raw(device))
       model = Surface.handle_input(model, Event.key("h"))
-      assert_parked_at(delta(device, prior), @composer_row, 2)
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 2)
 
       prior = byte_size(raw(device))
       _model = Surface.handle_input(model, Event.key("i"))
-      assert_parked_at(delta(device, prior), @composer_row, 3)
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 3)
+    end
+
+    test "typing a space advances the park too (the spacebar defect)" do
+      # A space is invisible: the parked cursor advancing is the ONLY
+      # visible feedback for typing one. The word-wrapper trims trailing
+      # whitespace from the visual line, so this pins the edit point's
+      # logical-draft compensation end-to-end through the paint path.
+      {model, device} = new_model()
+
+      model =
+        InputParser.parse("ab")
+        |> Enum.reduce(model, &Surface.handle_input(&2, &1))
+
+      prior = byte_size(raw(device))
+      [space] = InputParser.parse(" ")
+      model = Surface.handle_input(model, space)
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 4)
+
+      prior = byte_size(raw(device))
+      [space] = InputParser.parse(" ")
+      _model = Surface.handle_input(model, space)
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 5)
     end
 
     test "a real ANSI backspace moves the park back with the draft" do
@@ -123,20 +151,28 @@ defmodule Raxol.Harness.SurfaceCursorParkTest do
       [backspace] = InputParser.parse(<<127>>)
       _model = Surface.handle_input(model, backspace)
 
-      assert_parked_at(delta(device, prior), @composer_row, 2)
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 2)
     end
 
     test "a multi-row repaint burst hides the cursor and re-shows it after the park" do
-      # The construction paint rewrites several footer rows at once (status
-      # + composer + hint) -- a burst. With no 2026 capability, it must be
-      # wrapped in hide ... park-CUP + show.
-      {_model, device} = new_model()
-      bytes = raw(device)
+      # The charged-minimum boot frame is a SINGLE content row (chevron
+      # composer; strip and hint gone), so construction no longer bursts.
+      # A lane notice appearing above the composer rewrites two rows in
+      # one frame -- that IS a burst, and with no 2026 capability it must
+      # be wrapped in hide ... park-CUP + show.
+      {model, device} = new_model()
+
+      prior = byte_size(raw(device))
+      _model = Surface.put_lane_notice(model, "» reconnecting to session")
+      bytes = delta(device, prior)
 
       assert bytes =~ @hide,
-             "multi-row construction paint did not hide the cursor"
+             "multi-row lane-notice repaint did not hide the cursor"
 
-      assert String.ends_with?(bytes, cup(@composer_row, 1) <> @show),
+      assert String.ends_with?(
+               bytes,
+               cup(@region_top + 2, @sigil_cols + 1) <> @show
+             ),
              "burst tail must be park CUP then cursor-show"
     end
 

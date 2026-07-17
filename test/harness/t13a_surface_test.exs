@@ -231,12 +231,15 @@ defmodule Raxol.Harness.T13aSurfaceTest do
 
       # a sealed block (the completed assistant message)
       assert plain =~ "Hello!"
-      # status strip labels
+      # status strip labels rendered WHILE the turn was live (the strip
+      # is a grown instrument: present during the turn, yielded to
+      # silence on the idle post-completion frame -- so the labels are
+      # in the byte HISTORY of the run, not necessarily the final frame)
       assert plain =~ "Stage:"
       assert plain =~ "Input:"
-      # composer's first-focus hint (empty buffer, no history, focused)
-      assert plain =~ "continue"
-      assert plain =~ "submit"
+      # the composer prompt row carries the chevron sigil (the
+      # first-focus hint line was removed by V's charged-minimum ruling)
+      assert plain =~ "❯"
     end
 
     test "multi-tool-turn fixture renders every block kind (reasoning, 2x tool_call, message)" do

@@ -266,6 +266,17 @@ defmodule Raxol.Harness.StatusStrip do
     [fit_to_width(segments, safe_width)]
   end
 
+  @doc """
+  Whether `state` would render the highest-priority `ALERT:` notice --
+  a `:stalled`/`:looping` stall verdict with non-empty evidence (the
+  exact condition `render/2`'s own notice uses; one predicate, never a
+  re-encoded copy). Public for the assembly layer's strip-visibility
+  gate: an alarming strip must render even on an otherwise-idle frame
+  where the strip would yield to silence.
+  """
+  @spec alerting?(state()) :: boolean()
+  def alerting?(state) when is_map(state), do: stall_notice(state) != nil
+
   # -- stall verdict notice -------------------------------------------------
 
   # The stall detector's one integration seam (see

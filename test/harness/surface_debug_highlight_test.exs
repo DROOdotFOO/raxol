@@ -197,12 +197,13 @@ defmodule Raxol.Harness.SurfaceDebugHighlightTest do
       bg_rows = rows_with_bg(hl_bytes, @bg_256)
 
       # Exactly the composer group repainted with bg: contiguous run,
-      # one row per composer line, entirely inside the footer, below the
-      # status row (footer's first row).
+      # one row per composer line, entirely inside the footer. On this
+      # idle boot frame the status strip yields to silence (the
+      # charged-minimum gate), so the composer's chevron row IS the
+      # footer's first row.
       assert length(bg_rows) == expected_rows
       assert bg_rows == Enum.to_list(hd(bg_rows)..List.last(bg_rows))
-      assert Enum.all?(bg_rows, &(&1 > @region_top))
-      refute (@region_top + 1) in bg_rows
+      assert hd(bg_rows) == @region_top + 1
 
       # Nowhere else: every repainted chunk that carries content carries
       # the bg (the diff repaint touched ONLY the composer rows) -- any
@@ -256,14 +257,32 @@ defmodule Raxol.Harness.SurfaceDebugHighlightTest do
   end
 
   describe "highlight :status" do
-    test "bg lands on exactly the status row (the footer's first row)" do
-      {model, device} = new_model([])
+    test "bg lands on exactly the status row (the footer's first row while a turn is live)" do
+      # The strip is a grown instrument (the charged-minimum gate): it
+      # is absent on an idle boot frame, so the highlightable status row
+      # only exists while a turn is live -- reveal up to item_started
+      # (no completion) to put it on the footer's first row.
+      {model, device} = new_model(single_message_events("hi"))
+      {model, :ok} = Surface.advance(model)
+      {model, :ok} = Surface.advance(model)
+
       offset = byte_size(raw(device))
 
       _model = Surface.put_debug_highlight(model, :status)
       hl_bytes = bytes_since(device, offset)
 
       assert rows_with_bg(hl_bytes, @bg_256) == [@region_top + 1]
+    end
+
+    test "highlighting :status on an idle frame is a zero-byte no-op (no strip on screen)" do
+      {model, device} = new_model([])
+      offset = byte_size(raw(device))
+
+      _model = Surface.put_debug_highlight(model, :status)
+
+      assert bytes_since(device, offset) == "",
+             "no status row exists on an idle frame -- nothing to tint, " <>
+               "nothing to repaint"
     end
   end
 

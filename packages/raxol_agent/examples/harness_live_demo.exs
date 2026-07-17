@@ -17,12 +17,33 @@
 # raxol_agent Mix project, which path-depends on main raxol:
 #
 #   cd packages/raxol_agent
-#   mix run --no-start examples/harness_live_demo.exs
-#   mix run --no-start examples/harness_live_demo.exs --prompt "hello world"
+#   ELIXIR_ERL_OPTIONS="+Bi" mix run --no-start examples/harness_live_demo.exs
+#   ELIXIR_ERL_OPTIONS="+Bi" mix run --no-start \
+#     examples/harness_live_demo.exs --prompt "hello world"
 #
 # `--no-start` avoids interleaving application boot logs into the byte
 # stream, exactly as the fixture demo documents -- everything this demo
 # needs (SessionStreamer, telemetry) is started explicitly below.
+#
+# `ELIXIR_ERL_OPTIONS="+Bi"` disables the BEAM break handler: without
+# it, Ctrl-C pressed OUTSIDE the raw-mode window (during boot -- longest
+# with DEBUG_WEB/DEBUG_DEVTOOLS compiling -- or during a Ctrl+E editor
+# suspend) drops into the "BREAK: (a)bort ..." menu and prints it over
+# the frame. A running BEAM cannot turn its break handler off, so the
+# demo can only detect the state and report it honestly in the boot
+# self-check (see the POST block below). While the terminal IS claimed,
+# raw mode runs `-isig` and ^C arrives as plain byte 0x03 -- mapped to
+# the same quit gate as `q` (quits on an empty composer; otherwise falls
+# through to the composer like any ctrl-shortcut), so muscle-memory ^C
+# works without ever reaching the VM.
+#
+# Boot POST: before the first prompt, the demo seals one small
+# self-check block into history through the driver's normal seal path
+# (doctrine §4.5 ceremony-as-evidence / §8.1). Every line is a check the
+# demo actually performed this boot -- backend selected (with the real
+# resolved endpoint for live harnesses), streamer pid liveness, lane
+# subscription confirmed, adopted geometry, probe setting, break-handler
+# state, and (when enabled) the debug web URL and devtools-bridge pid.
 #
 # Backend selection (mirrors examples/agents/zero_system.exs + CLAUDE.md):
 #
@@ -160,8 +181,9 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     end
 
     # SessionStreamer does NOT auto-start (nothing in raxol_agent does
-    # outside a supervision tree) -- the demo owns it.
-    {:ok, _streamer} = Raxol.Agent.SessionStreamer.start_link([])
+    # outside a supervision tree) -- the demo owns it. The pid is kept
+    # for the boot POST's liveness check.
+    {:ok, streamer} = Raxol.Agent.SessionStreamer.start_link([])
 
     session_id = "live-demo-#{System.unique_integer([:positive])}"
     session = %{session_id: session_id}
@@ -176,8 +198,23 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     debug = maybe_start_debug_web()
     paint_device = if debug, do: debug.device, else: :stdio
 
-    # Lands in native scrollback once startup_push_up scrolls it away.
-    IO.puts("harness live demo -- backend=#{label} session=#{session_id}")
+    # THE POST-CLAIM BYTE INVARIANT: once the LiveSessionDriver below
+    # claims the terminal (DECSTBM scroll region + raw mode), the paint
+    # authority is the ONLY thing allowed to write a byte to the tty --
+    # a compiler diagnostic from a lazily-loaded support/spike file
+    # printing mid-raw-mode corrupts the frame (seen live: the spike
+    # file's warning bleeding into the first paint). So EVERY
+    # `Code.require_file` this demo can ever run happens HERE, before
+    # the claim, through `require_quietly/1` (which also captures any
+    # diagnostic away from the byte stream and reports it on stderr --
+    # belt and braces for the reorder). `maybe_start_devtools/2` below
+    # only START links the already-compiled bridge.
+    devtools_loaded? = maybe_load_devtools()
+
+    # No naked identity banner here anymore: backend/session are
+    # identity-card content and land in the sealed boot POST below
+    # (doctrine §8.1) -- a pre-claim print raced shell echo and read as
+    # garbage, and duplicating it would say the same thing twice.
 
     # Same startup discipline as the fixture demo: push whatever is on
     # screen up into scrollback via plain newlines -- never `\e[2J`.
@@ -252,8 +289,27 @@ defmodule Raxol.Examples.HarnessLiveDemo do
       # to localhost:8097, retry loop until the app appears — honest
       # log at /tmp/raxol_devtools_bridge.log if it never does).
       # Absolutely zero change when the env var is unset: the spike
-      # file is not even loaded.
-      _devtools = maybe_start_devtools(driver, session_id)
+      # file is not even loaded. Compilation happened pre-claim (see
+      # `maybe_load_devtools/0` above) -- this only starts the process.
+      devtools = maybe_start_devtools(devtools_loaded?, driver, session_id)
+
+      # The boot POST (doctrine §4.5 ceremony-as-evidence, §8.1): one
+      # small identity block sealed into history BEFORE the first
+      # prompt, through the driver's normal seal path -- every line a
+      # check this demo actually performed, with its actual result.
+      # Sealed only after wait_for_subscription/2 returned :ok (the lane
+      # line is backed by that return) and after the devtools bridge
+      # (when any) started, so its liveness line is a real pid check.
+      seal_boot_post(driver, %{
+        label: label,
+        backend_opts_fun: backend_opts_fun,
+        session_id: session_id,
+        streamer: streamer,
+        width: width,
+        rows: rows,
+        debug: debug,
+        devtools: devtools
+      })
 
       {:ok, mirror} =
         Composer.init(%{
@@ -452,6 +508,93 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
   defp maybe_enter_linger(state), do: state
 
+  # -- boot POST (the self-check identity card) ------------------------------
+
+  # Doctrine §4.5: ceremony is legal only when it is evidence. Every line
+  # below is a check this demo REALLY performed this boot -- lowercase,
+  # terse, one line per check -- sealed as plain history through the
+  # driver's `:seal_lines` command (the `Surface.seal_marker/2` path:
+  # same sanitize, same margins, permanent and replay-visible). No logo
+  # art, no decoration. A dead streamer is the one fatal case: without it
+  # no event can ever arrive, so the demo aborts on stderr instead of
+  # sealing a lie.
+  defp seal_boot_post(driver, ctx) do
+    unless Process.alive?(ctx.streamer) do
+      IO.puts(:stderr, "session streamer died during boot; exiting")
+      System.halt(1)
+    end
+
+    lines =
+      [
+        "raxol harness self-check",
+        "  backend: #{backend_post_line(ctx.label, ctx.backend_opts_fun)}",
+        "  streamer: up · pid #{inspect(ctx.streamer)}",
+        "  lane: subscribed · session #{ctx.session_id}",
+        "  geometry: #{ctx.width}x#{ctx.rows} · footer rows #{@footer_rows}",
+        # The demo starts InlineDriver with `probe?: false` a few lines
+        # up -- this reports that setting, not a guess.
+        "  term probe: off — conservative defaults",
+        "  " <> break_post_line()
+      ] ++ debug_post_lines(ctx.debug, ctx.devtools)
+
+    send(
+      driver,
+      {:surface_command, %{type: :seal_lines, payload: %{lines: lines}}}
+    )
+
+    :ok
+  end
+
+  defp backend_post_line("mock", _opts_fun),
+    do: "mock — canned echo (no AI_API_KEY / LM_STUDIO in env)"
+
+  # Live labels are "live:<harness>:<model>"; the endpoint comes from the
+  # SAME opts the turns will actually use (Backend.Selector's resolved
+  # base_url), never re-derived from env.
+  defp backend_post_line(label, opts_fun) do
+    case opts_fun.("") |> Keyword.get(:base_url) do
+      nil -> label
+      url -> "#{label} · #{url}"
+    end
+  end
+
+  # `:erlang.system_info(:break_ignored)` is the emulator's own record of
+  # +Bi -- the referent, not an env-var proxy. A live break handler means
+  # ctrl-c OUTSIDE the raw-mode window (boot, $EDITOR suspend) drops into
+  # the BREAK menu and prints over whatever is on screen; a running BEAM
+  # cannot turn it off, so the honest move is to say so and name the fix.
+  # (While the terminal is claimed, raw mode runs -isig and ^C is just
+  # byte 0x03 -- mapped to the quit gate, see LiveSessionDriver.)
+  defp break_post_line do
+    if :erlang.system_info(:break_ignored) do
+      "break handler: ignored (+Bi) — ctrl-c can never reach the vm"
+    else
+      "break handler: live — ctrl-c during boot or editor suspend can " <>
+        "corrupt the frame; run with ELIXIR_ERL_OPTIONS=\"+Bi\""
+    end
+  end
+
+  defp debug_post_lines(debug, devtools) do
+    web =
+      case debug do
+        %{url: url} -> ["  debug web: #{url}"]
+        _off -> []
+      end
+
+    bridge =
+      case devtools do
+        pid when is_pid(pid) ->
+          if Process.alive?(pid),
+            do: ["  devtools bridge: up · pid #{inspect(pid)}"],
+            else: ["  devtools bridge: down — see its log for why"]
+
+        _off ->
+          []
+      end
+
+    web ++ bridge
+  end
+
   # -- backend selection (zero_system.exs convention, thin) -----------------
 
   defp detect_backend do
@@ -536,7 +679,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         ]
       )
 
-      Code.require_file(Path.join(__DIR__, "support/harness_debug.exs"))
+      require_quietly(Path.join(__DIR__, "support/harness_debug.exs"))
 
       {:ok, ctx} =
         Raxol.Examples.HarnessDebug.start(real_device: :stdio, port: port)
@@ -550,33 +693,78 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
   # -- SPIKE: react-devtools bridge (DEBUG_DEVTOOLS=true) --------------------
 
-  defp maybe_start_devtools(driver, session_id) do
+  # Compile-only half, run BEFORE the terminal claim (see the post-claim
+  # byte invariant note in `run/1`): the spike file's compilation is the
+  # one thing that can print a compiler diagnostic, so it must never run
+  # after raw mode is on. Returns whether the module was loaded, so the
+  # start half never re-checks the env var and the two can't disagree.
+  defp maybe_load_devtools do
     if System.get_env("DEBUG_DEVTOOLS") in ["true", "1"] do
-      Code.require_file("spike/react_devtools_bridge.exs", __DIR__)
-
-      port =
-        case Integer.parse(System.get_env("DEBUG_DEVTOOLS_PORT") || "8097") do
-          {p, ""} -> p
-          _ -> 8097
-        end
-
-      # Dynamic module ref: the spike module only exists at runtime (via
-      # the require_file above), and a static remote call would print an
-      # "is undefined" compile warning on every DEBUG_DEVTOOLS-less run.
-      bridge = Module.concat([Raxol, Spike, ReactDevtools, Bridge])
-
-      {:ok, pid} =
-        bridge.start_link(
-          session_id: session_id,
-          driver: driver,
-          port: port,
-          log:
-            System.get_env("DEBUG_DEVTOOLS_LOG") ||
-              "/tmp/raxol_devtools_bridge.log"
-        )
-
-      pid
+      require_quietly(Path.join(__DIR__, "spike/react_devtools_bridge.exs"))
+      true
+    else
+      false
     end
+  end
+
+  # `Code.require_file/1` under `Code.with_diagnostics/1`: any compiler
+  # diagnostic (warning or error) is captured off the byte stream and
+  # reported on stderr instead of wherever the compiler would print it.
+  # This is deliberately NOT suppression -- both `maybe_load_devtools/0`
+  # call sites run before the terminal claim, so stderr still lands
+  # visibly in native scrollback; the capture only guarantees that a
+  # future reorder (or a diagnostic raised lazily at first module use)
+  # can never write compiler output into a raw-mode frame.
+  defp require_quietly(path) do
+    {result, diagnostics} =
+      Code.with_diagnostics(fn ->
+        try do
+          {:ok, Code.require_file(path)}
+        rescue
+          error -> {:error, error, __STACKTRACE__}
+        end
+      end)
+
+    Enum.each(diagnostics, fn diag ->
+      IO.puts(
+        :stderr,
+        "#{diag.severity} in #{diag.file || path}:#{inspect(diag.position)}: " <>
+          diag.message
+      )
+    end)
+
+    case result do
+      {:ok, modules} -> modules
+      {:error, error, stacktrace} -> reraise error, stacktrace
+    end
+  end
+
+  defp maybe_start_devtools(false = _loaded?, _driver, _session_id), do: nil
+
+  defp maybe_start_devtools(true = _loaded?, driver, session_id) do
+    port =
+      case Integer.parse(System.get_env("DEBUG_DEVTOOLS_PORT") || "8097") do
+        {p, ""} -> p
+        _ -> 8097
+      end
+
+    # Dynamic module ref: the spike module only exists at runtime (via
+    # maybe_load_devtools/0's require), and a static remote call would
+    # print an "is undefined" compile warning on every DEBUG_DEVTOOLS-less
+    # run.
+    bridge = Module.concat([Raxol, Spike, ReactDevtools, Bridge])
+
+    {:ok, pid} =
+      bridge.start_link(
+        session_id: session_id,
+        driver: driver,
+        port: port,
+        log:
+          System.get_env("DEBUG_DEVTOOLS_LOG") ||
+            "/tmp/raxol_devtools_bridge.log"
+      )
+
+    pid
   end
 
   # -- plumbing --------------------------------------------------------------

@@ -884,4 +884,83 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       assert_receive {:debug_state_reply, ^ref2, ^state}, 1_000
     end
   end
+
+  # ---------------------------------------------------------------------
+  # 14. embedder-sealed POST lines (the boot self-check seam)
+  # ---------------------------------------------------------------------
+
+  describe "14. :seal_lines seals embedder POST lines into history" do
+    test "lines land in sealed history in order, through the marker seal path" do
+      %{driver: driver, device: device} = new_driver(%{})
+
+      lines = [
+        "raxol harness self-check",
+        "  backend: mock — canned echo",
+        "  lane: subscribed · session s1"
+      ]
+
+      send(
+        driver,
+        {:surface_command, %{type: :seal_lines, payload: %{lines: lines}}}
+      )
+
+      eventually(fn ->
+        history_text(raw(device)) =~ "lane: subscribed · session s1"
+      end)
+
+      text = history_text(raw(device))
+      assert text =~ "raxol harness self-check"
+      assert text =~ "backend: mock — canned echo"
+
+      # In order: the header seals above the checks.
+      {header_at, _} = :binary.match(text, "self-check")
+      {lane_at, _} = :binary.match(text, "lane: subscribed")
+      assert header_at < lane_at
+    end
+
+    test "a non-binary entry seals as its inspect form -- visible, never dropped" do
+      %{driver: driver, device: device} = new_driver(%{})
+
+      send(
+        driver,
+        {:surface_command,
+         %{type: :seal_lines, payload: %{lines: ["ok line", {:oops, 1}]}}}
+      )
+
+      eventually(fn -> history_text(raw(device)) =~ "ok line" end)
+      assert history_text(raw(device)) =~ "{:oops, 1}"
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 15. Ctrl-C rides the quit gate (raw mode -isig: ^C is byte 0x03)
+  # ---------------------------------------------------------------------
+
+  describe "15. ctrl-c quits like q on an empty composer" do
+    test "0x03 with an empty composer ends the loop and notifies" do
+      %{driver: driver} = new_driver(%{})
+
+      [ctrl_c] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
+      send(driver, {:inline_input, ctrl_c})
+
+      assert_receive {:live_session_driver, ^driver, :halted}, 1_000
+    end
+
+    test "0x03 with a non-empty composer does NOT quit" do
+      %{driver: driver} = new_driver(%{})
+
+      [h] = Raxol.Terminal.ANSI.InputParser.parse("h")
+      send(driver, {:inline_input, h})
+
+      [ctrl_c] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
+      send(driver, {:inline_input, ctrl_c})
+
+      refute_receive {:live_session_driver, _pid, :halted}, 300
+
+      # The loop is still serving: a probe answers.
+      ref = make_ref()
+      send(driver, {:debug_state_probe, self(), ref})
+      assert_receive {:debug_state_reply, ^ref, _state}, 1_000
+    end
+  end
 end

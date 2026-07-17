@@ -232,8 +232,11 @@ defmodule Raxol.Harness.CommandPaletteSurfaceTest do
 
       assert model.overlay == nil
 
+      # The notice renders at the margined content width (width - 2), so
+      # at this test geometry its tail ellipsis-truncates -- assert the
+      # identifying prefix, not the full literal.
       assert strip_ansi(raw(device)) =~
-               "interrupt requested (stub — no agent lane in fixture mode)"
+               "interrupt requested (stub — no agent lane in fixture mo"
     end
 
     test "picking 'toggle fold' mutates fold state exactly like pressing z (same dispatch, same model delta)" do

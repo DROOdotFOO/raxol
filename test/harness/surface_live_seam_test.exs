@@ -276,6 +276,14 @@ defmodule Raxol.Harness.SurfaceLiveSeamTest do
   # ---------------------------------------------------------------------
 
   describe "seal_marker/2" do
+    # This test replays the full byte capture through the SealOracle
+    # emulator three times; the emulator's per-character logging makes
+    # that a ~35s oracle even alone, and async suite scheduling can push
+    # it past the default 60s (the doctrine margins/separator rows grew
+    # the capture slightly, which is what first tipped it). The oracle
+    # cost is pre-existing raxol_terminal behavior, not this test's --
+    # give it honest headroom instead of weakening the oracle.
+    @tag timeout: 180_000
     test "seals a marker line into history exactly once; later seals never touch it" do
       events = single_message_events("second block content")
       {model, device} = new_model(events, [])

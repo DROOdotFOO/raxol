@@ -473,10 +473,21 @@ defmodule Raxol.Harness.LiveSessionDriver do
   # the focused composer is entitled to receive). This function quits the
   # LOOP only -- terminal teardown stays the embedder's job (see the
   # moduledoc's teardown-ownership section).
+  #
+  # Ctrl-C rides the same gate: raw mode runs `-isig`, so ^C arrives
+  # here as the plain byte 0x03 (normalized to char "c" + ctrl) and
+  # NEVER reaches the VM as a break -- mapping it to the quit gate makes
+  # muscle-memory ^C work exactly like `q` (quit on an empty composer).
+  # With a non-empty composer it falls through to `Surface.handle_input/2`
+  # like any other ctrl-shortcut (a C0 byte has no glyph; it is never
+  # inserted into the draft as invisible content).
   defp quit_key?(norm, model) do
-    InputEvent.printable_char(norm) == "q" and
+    (InputEvent.printable_char(norm) == "q" or ctrl_c?(norm)) and
       String.trim(Composer.value(model.composer)) == ""
   end
+
+  defp ctrl_c?(%{char: "c", mods: %{ctrl: true}}), do: true
+  defp ctrl_c?(_norm), do: false
 
   defp finish(state) do
     case state.notify do
@@ -587,6 +598,29 @@ defmodule Raxol.Harness.LiveSessionDriver do
        })
        when is_atom(group) do
     %{state | model: Surface.put_debug_highlight(state.model, group)}
+  end
+
+  # Embedder-sealed history lines -- the boot POST seam (doctrine §8.1,
+  # ceremony-as-evidence): the embedder performs its real self-checks
+  # and hands the resulting lines here to be sealed into history through
+  # the SAME `Surface.seal_marker/2` path every loss marker uses (same
+  # sanitize, same margins, same authorities) -- history, not footer, so
+  # the identity card is permanent and replay-visible. A non-binary
+  # entry is sealed as its `inspect/1` form rather than dropped: an
+  # embedder bug shows up ON the record, never as a silently shorter
+  # block.
+  defp handle_surface_command(state, %{
+         type: :seal_lines,
+         payload: %{lines: lines}
+       })
+       when is_list(lines) do
+    model =
+      Enum.reduce(lines, state.model, fn
+        line, model when is_binary(line) -> Surface.seal_marker(model, line)
+        other, model -> Surface.seal_marker(model, inspect(other))
+      end)
+
+    %{state | model: model}
   end
 
   defp handle_surface_command(state, _other), do: state

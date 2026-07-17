@@ -129,7 +129,7 @@ defmodule Raxol.Spike.ReactDevtools.Wire do
     case :binary.match(acc, "\r\n\r\n") do
       {pos, 4} ->
         head_len = pos + 4
-        <<head::binary-size(head_len), rest::binary>> = acc
+        <<head::binary-size(^head_len), rest::binary>> = acc
         {:ok, head, rest}
 
       :nomatch ->
