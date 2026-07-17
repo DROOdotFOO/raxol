@@ -77,6 +77,16 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     def complete(_messages, _opts), do: {:error, :stream_only}
   end
 
+  defmodule CapturingBackend do
+    @moduledoc "Reports the exact messages it was handed, then streams one chunk."
+    def stream(messages, opts) do
+      send(Keyword.fetch!(opts, :owner), {:backend_saw, messages})
+      {:ok, [{:chunk, "ok"}, {:done, %{content: "ok", usage: %{}}}]}
+    end
+
+    def complete(_messages, _opts), do: {:error, :stream_only}
+  end
+
   defmodule GatedBackend do
     @moduledoc """
     A backend whose stream is driven by test messages: each pull blocks in a
@@ -212,6 +222,68 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     # Exactly one reply, no straggler updates.
     refute_receive {:conn_reply, _, _}, 100
     refute_receive {:conn_notify, _, _}, 10
+  end
+
+  # -- 1b. system prompt threading ----------------------------------------------
+
+  test "a system_prompt source spec resolves at wiring time and reaches the backend" do
+    runner =
+      TurnRunner.new(
+        backend: CapturingBackend,
+        backend_opts: [owner: self()],
+        system_prompt: {:text, "You are the bonded core."}
+      )
+
+    {session, session_id} = start_session!(runner)
+    reply_ref = begin_prompt!(session, session_id, "hi")
+
+    assert_receive {:backend_saw, messages}, 2_000
+
+    assert [
+             %{role: :system, content: "You are the bonded core."},
+             %{role: :user, content: "hi"}
+           ] = messages
+
+    assert_receive {:conn_reply, ^reply_ref, {:ok, %{stop_reason: :end_turn}}}, 2_000
+  end
+
+  test "a literal binary system_prompt still passes through (back-compat)" do
+    runner =
+      TurnRunner.new(
+        backend: CapturingBackend,
+        backend_opts: [owner: self()],
+        system_prompt: "literal prompt"
+      )
+
+    {session, session_id} = start_session!(runner)
+    begin_prompt!(session, session_id, "hi")
+
+    assert_receive {:backend_saw, messages}, 2_000
+    assert [%{role: :system, content: "literal prompt"} | _] = messages
+  end
+
+  test "system_prompt: :none resolves to no system message at all" do
+    runner =
+      TurnRunner.new(
+        backend: CapturingBackend,
+        backend_opts: [owner: self()],
+        system_prompt: :none
+      )
+
+    {session, session_id} = start_session!(runner)
+    begin_prompt!(session, session_id, "hi")
+
+    assert_receive {:backend_saw, messages}, 2_000
+    assert [%{role: :user, content: "hi"}] = messages
+  end
+
+  test "an unresolvable system_prompt source fails at wiring time, never mid-turn" do
+    assert_raise ArgumentError, ~r/system_prompt.*failed to resolve/s, fn ->
+      TurnRunner.new(
+        backend: CapturingBackend,
+        system_prompt: {:file, "/nonexistent/prompt.md"}
+      )
+    end
   end
 
   # -- 2. cancel mid-stream -----------------------------------------------------

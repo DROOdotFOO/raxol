@@ -98,6 +98,14 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   selecting `react/2` (tool loop) over `run/2` — `:actions`,
   `:max_iterations`.
 
+  `:system_prompt` takes either a literal binary (passed through unchanged)
+  or a `Raxol.Agent.SystemPrompt` source spec (`:bonded`, `{:file, path}`,
+  `{:text, binary}`, `:none`). A source spec is resolved ONCE at `new/1`
+  (wiring time, cached — no file read per turn), its identity logged at
+  debug, and an unresolvable source raises here rather than failing
+  silently mid-turn: a system prompt the operator believes is live but the
+  backend never received is a trust bug.
+
   Cancellation seams: `:interrupt` (module implementing the
   `Raxol.Agent.Interrupt` behaviour, or an arity-3 fun; default
   `Raxol.Agent.Interrupt`), `:interrupt_sink` (the staged kill's durable-emit
@@ -174,7 +182,40 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
               "(add it to your deps to use the ACP turn runner)"
     end
 
+    opts = resolve_system_prompt!(opts)
+
     fn session, req -> run_turn(session, req, opts) end
+  end
+
+  # `:system_prompt` source specs resolve at wiring time -- fail loud here,
+  # never silently mid-turn. Literal binaries pass through (back-compat).
+  defp resolve_system_prompt!(opts) do
+    case Keyword.get(opts, :system_prompt) do
+      nil ->
+        opts
+
+      text when is_binary(text) ->
+        opts
+
+      source ->
+        case Raxol.Agent.SystemPrompt.resolve(source) do
+          {:ok, :none} ->
+            Keyword.delete(opts, :system_prompt)
+
+          {:ok, %{text: text} = resolved} ->
+            Logger.debug(fn ->
+              "acp turn_runner system prompt: " <>
+                Raxol.Agent.SystemPrompt.identity_line(resolved)
+            end)
+
+            Keyword.put(opts, :system_prompt, text)
+
+          {:error, reason} ->
+            raise ArgumentError,
+                  "TurnRunner :system_prompt source #{inspect(source)} " <>
+                    "failed to resolve: #{inspect(reason)}"
+        end
+    end
   end
 
   @doc """

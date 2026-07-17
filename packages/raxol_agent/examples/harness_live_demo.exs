@@ -147,6 +147,18 @@
 #     channel (see the REPL-seam note above); the demo's mirror is what
 #     actually sends the prompt.
 #
+# System prompt (--system bonded|none|<path>): which system prompt
+# governs every live turn, resolved ONCE at boot via
+# `Raxol.Agent.SystemPrompt` (cached -- no file read per turn) and
+# threaded into `Raxol.Agent.Stream.run/2` as `:system_prompt`.
+# Default: the bonded-harness core prompt (AX-7 reference fill) when
+# the package file is locatable (RAXOL_BONDED_PROMPT env var >
+# `config :raxol_agent, :bonded_prompt_path` > repo scan), otherwise
+# honestly NONE -- the POST card names the live prompt's identity
+# (name + bytes + sha256) either way, so the operator can verify WHICH
+# prompt is live, never guess. An explicitly requested prompt that
+# fails to resolve aborts on stderr instead of silently running bare.
+#
 # `--prompt X` one-shot mode (non-interactive smoke): submits X
 # programmatically (no composer involved), lets the turn stream to
 # sealed history, lingers briefly (input still live), then exits 0.
@@ -190,7 +202,11 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
   def run(argv) do
     ensure_agent_package!()
-    {one_shot, debug?} = parse_args(argv)
+    {one_shot, debug?, system_arg} = parse_args(argv)
+
+    # Resolved pre-claim (stderr still lands visibly) and exactly once --
+    # the same text then governs every turn this session runs.
+    {system_prompt, system_post_line} = resolve_system_prompt(system_arg)
 
     # Explicit app starts instead of `:raxol` boot (see `--no-start` note):
     # telemetry for Contract.pump's DoneGate signals; req only when a
@@ -372,6 +388,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
       seal_boot_post(driver, debug?, %{
         label: label,
         backend_opts_fun: backend_opts_fun,
+        system_post_line: system_post_line,
         session_id: session_id,
         streamer: streamer,
         width: width,
@@ -395,6 +412,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         session_id: session_id,
         backend: backend,
         backend_opts_fun: backend_opts_fun,
+        system_prompt: system_prompt,
         turn_task: nil,
         queue: [],
         tap: debug && debug.tap,
@@ -481,8 +499,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
        %{
          type: :lane_notice,
          payload: %{
-           text:
-             "» isig flipped on mid-session — re-asserted; ^C exit path restored"
+           text: "» isig flipped on mid-session — re-asserted; ^C exit path restored"
          }
        }}
     )
@@ -551,14 +568,19 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     backend_opts = state.backend_opts_fun.(prompt)
     session_id = state.session_id
 
+    # The system prompt was resolved once at boot; here it is only threaded
+    # (a binary), so no file I/O rides the turn path.
+    stream_opts =
+      [backend: backend, backend_opts: backend_opts] ++
+        case state.system_prompt do
+          nil -> []
+          text -> [system_prompt: text]
+        end
+
     task =
       Task.async(fn ->
         try do
-          stream =
-            Raxol.Agent.Stream.run(prompt,
-              backend: backend,
-              backend_opts: backend_opts
-            )
+          stream = Raxol.Agent.Stream.run(prompt, stream_opts)
 
           Raxol.Agent.Contract.pump(session_id, stream, prompt: prompt)
         rescue
@@ -629,6 +651,10 @@ defmodule Raxol.Examples.HarnessLiveDemo do
       [
         "raxol harness self-check",
         "  backend: #{backend_post_line(ctx.label, ctx.backend_opts_fun)}",
+        # The prompt identity from the SAME resolution the turns use --
+        # name + bytes + sha256, so the operator can verify WHICH prompt
+        # is live (or see honestly that none is).
+        "  #{ctx.system_post_line}",
         "  streamer: up · pid #{inspect(ctx.streamer)}",
         "  lane: subscribed · session #{ctx.session_id}",
         "  geometry: #{ctx.width}x#{ctx.rows} · footer rows #{@footer_rows}",
@@ -910,9 +936,65 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
   defp parse_args(argv) do
     {opts, _positional, _invalid} =
-      OptionParser.parse(argv, strict: [prompt: :string, debug: :boolean])
+      OptionParser.parse(argv,
+        strict: [prompt: :string, debug: :boolean, system: :string]
+      )
 
-    {Keyword.get(opts, :prompt), Keyword.get(opts, :debug, false)}
+    {Keyword.get(opts, :prompt), Keyword.get(opts, :debug, false), Keyword.get(opts, :system)}
+  end
+
+  # -- system prompt (--system bonded|none|<path>) ---------------------------
+
+  # Returns {text_or_nil, post_card_line}. Explicitly requested prompts that
+  # fail to resolve abort on stderr -- running bare while the operator
+  # believes a prompt is live would be the exact trust bug the resolver
+  # exists to prevent. The DEFAULT arm degrades to :none only for the
+  # honest absent-package case; any other failure (unfilled slots, read
+  # error, an env var pointing at nothing) still aborts.
+  defp resolve_system_prompt(nil) do
+    case Raxol.Agent.SystemPrompt.resolve(:bonded) do
+      {:ok, resolved} ->
+        {resolved.text,
+         "system prompt: #{Raxol.Agent.SystemPrompt.identity_line(resolved)} (default)"}
+
+      {:error, {:bonded_not_found, _candidates}} ->
+        {nil, "system prompt: none — bonded package not found (--system <path> to supply one)"}
+
+      {:error, reason} ->
+        abort_system_prompt("bonded (default)", reason)
+    end
+  end
+
+  defp resolve_system_prompt("none"),
+    do: {nil, "system prompt: none (--system none)"}
+
+  defp resolve_system_prompt("bonded") do
+    case Raxol.Agent.SystemPrompt.resolve(:bonded) do
+      {:ok, resolved} ->
+        {resolved.text, "system prompt: #{Raxol.Agent.SystemPrompt.identity_line(resolved)}"}
+
+      {:error, reason} ->
+        abort_system_prompt("bonded", reason)
+    end
+  end
+
+  defp resolve_system_prompt(path) do
+    case Raxol.Agent.SystemPrompt.resolve({:file, path}) do
+      {:ok, resolved} ->
+        {resolved.text, "system prompt: #{Raxol.Agent.SystemPrompt.identity_line(resolved)}"}
+
+      {:error, reason} ->
+        abort_system_prompt(path, reason)
+    end
+  end
+
+  defp abort_system_prompt(what, reason) do
+    IO.puts(
+      :stderr,
+      "--system #{what}: cannot resolve system prompt: #{inspect(reason)}"
+    )
+
+    System.halt(1)
   end
 
   defp wait_for_subscription(session_id, budget_ms) do

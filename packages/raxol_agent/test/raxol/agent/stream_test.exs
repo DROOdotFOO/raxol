@@ -59,7 +59,31 @@ defmodule Raxol.Agent.StreamTest do
     def capabilities, do: [:completion, :tool_use]
   end
 
+  # -- Capturing Mock Backend ---------------------------------------------------
+
+  defmodule CapturingBackend do
+    @moduledoc "Sends the exact messages it was handed to the test process."
+    @behaviour Raxol.Agent.AIBackend
+
+    @impl true
+    def complete(messages, opts) do
+      send(Keyword.fetch!(opts, :owner), {:backend_saw, messages})
+      {:ok, %{content: "ok", usage: %{}, metadata: %{}}}
+    end
+
+    @impl true
+    def available?, do: true
+    @impl true
+    def name, do: "Capturing Mock"
+    @impl true
+    def capabilities, do: [:completion]
+  end
+
   # -- Helpers ----------------------------------------------------------------
+
+  defp capturing_opts do
+    [backend: CapturingBackend, backend_opts: [owner: self()], stream: false]
+  end
 
   defp mock_opts(response) do
     [backend: Raxol.Agent.Backend.Mock, backend_opts: [response: response]]
@@ -132,6 +156,69 @@ defmodule Raxol.Agent.StreamTest do
                AgentStream.run("Hello", opts) |> Enum.to_list()
 
       assert done.content == "Sync response"
+    end
+  end
+
+  # A silently-dropped system prompt is a trust bug: the operator believes a
+  # prompt governs the turn while the backend never saw it. These tests pin
+  # that :system_prompt reaches the backend on EVERY message-entry form.
+  describe "run/2 system prompt threading" do
+    test "string prompt: system_prompt arrives as the leading system message" do
+      opts = capturing_opts() ++ [system_prompt: "You are terse."]
+      AgentStream.run("Hello", opts) |> Enum.to_list()
+
+      assert_received {:backend_saw, messages}
+
+      assert [
+               %{role: :system, content: "You are terse."},
+               %{role: :user, content: "Hello"}
+             ] = messages
+    end
+
+    test "system_prompt is not dropped when the :messages opt is given" do
+      opts =
+        capturing_opts() ++
+          [
+            system_prompt: "You are terse.",
+            messages: [%{role: :user, content: "Hi"}]
+          ]
+
+      AgentStream.run("ignored", opts) |> Enum.to_list()
+
+      assert_received {:backend_saw, messages}
+
+      assert [
+               %{role: :system, content: "You are terse."},
+               %{role: :user, content: "Hi"}
+             ] = messages
+    end
+
+    test "system_prompt is not dropped when the prompt is a pre-built list" do
+      opts = capturing_opts() ++ [system_prompt: "You are terse."]
+
+      AgentStream.run([%{role: :user, content: "Hi"}], opts) |> Enum.to_list()
+
+      assert_received {:backend_saw, messages}
+
+      assert [
+               %{role: :system, content: "You are terse."},
+               %{role: :user, content: "Hi"}
+             ] = messages
+    end
+
+    test "an explicit system message in the list wins; never duplicated" do
+      opts = capturing_opts() ++ [system_prompt: "opt-level prompt"]
+
+      messages = [
+        %{role: :system, content: "list-level prompt"},
+        %{role: :user, content: "Hi"}
+      ]
+
+      AgentStream.run(messages, opts) |> Enum.to_list()
+
+      assert_received {:backend_saw, seen}
+      assert Enum.count(seen, &(&1.role == :system)) == 1
+      assert [%{role: :system, content: "list-level prompt"} | _] = seen
     end
   end
 

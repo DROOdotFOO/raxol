@@ -49,7 +49,12 @@ defmodule Raxol.Agent.Stream do
   - `:backend_opts` -- keyword list passed to backend (api_key, model, etc.);
     merged over the executor's resolved opts
   - `:model` -- per-request model override (wins over `:executor`/`:backend_opts`)
-  - `:system_prompt` -- system message prepended to conversation
+  - `:system_prompt` -- system message (binary) prepended to the conversation.
+    Applies to every entry form -- string prompts, pre-built `:messages`, and
+    message-list prompts -- unless the list already carries an explicit
+    system message (which then wins; never duplicated). Source specs like
+    `:bonded` are resolved upstream by `Raxol.Agent.SystemPrompt`; this layer
+    takes resolved text only, so no file I/O happens per turn.
   - `:messages` -- pre-built message list (overrides prompt)
   - `:stream` -- whether to use streaming backend (default: `true`)
 
@@ -543,19 +548,35 @@ defmodule Raxol.Agent.Stream do
   defp build_messages(prompt, opts) when is_binary(prompt) do
     case Keyword.get(opts, :messages) do
       nil ->
-        base = [%{role: :user, content: prompt}]
-
-        case Keyword.get(opts, :system_prompt) do
-          nil -> base
-          sys -> [%{role: :system, content: sys} | base]
-        end
+        apply_system_prompt([%{role: :user, content: prompt}], opts)
 
       messages when is_list(messages) ->
-        messages
+        apply_system_prompt(messages, opts)
     end
   end
 
-  defp build_messages(messages, _opts) when is_list(messages), do: messages
+  defp build_messages(messages, opts) when is_list(messages),
+    do: apply_system_prompt(messages, opts)
+
+  # `:system_prompt` applies to EVERY message-entry form -- a system prompt
+  # silently dropped because the caller happened to pass a pre-built list is
+  # a trust bug (the operator believes a prompt governs the turn while the
+  # backend never saw it). An explicit system message already present in the
+  # list wins: the list is the more specific artifact, and we never inject a
+  # duplicate.
+  defp apply_system_prompt(messages, opts) do
+    case Keyword.get(opts, :system_prompt) do
+      nil ->
+        messages
+
+      sys when is_binary(sys) ->
+        if Enum.any?(messages, &(Map.get(&1, :role) == :system)) do
+          messages
+        else
+          [%{role: :system, content: sys} | messages]
+        end
+    end
+  end
 
   defp maybe_enrich_memory(messages, context) do
     Raxol.Agent.Memory.Manager.enrich_messages(

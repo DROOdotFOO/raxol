@@ -167,4 +167,104 @@ defmodule Raxol.Agent.Backend.HTTPTest do
       assert url == "http://127.0.0.1:19876/api/v1/chat/completions"
     end
   end
+
+  # Request-assembly pins: a system message must land in each provider's
+  # correct slot -- Anthropic's top-level :system field, an OpenAI-compatible
+  # messages[0] role=system, Ollama's system message in /api/chat messages.
+  # A system prompt silently dropped in transit is a trust bug; these pins
+  # make that failure loud. Captured via the req_plugins seam (the request is
+  # fully built before the plugin runs; the send then fails on a dead port).
+  @system_text "You are terse."
+  @sys_and_user [
+    %{role: :system, content: "You are terse."},
+    %{role: :user, content: "hello"}
+  ]
+
+  defp captured_body(messages, provider_opts) do
+    test_pid = self()
+
+    plugin = fn req ->
+      send(test_pid, {:req_json, req.options[:json]})
+      req
+    end
+
+    HTTP.complete(
+      messages,
+      provider_opts ++
+        [
+          base_url: "http://127.0.0.1:19876",
+          req_plugins: [plugin],
+          timeout: 100
+        ]
+    )
+
+    assert_received {:req_json, body}
+    body
+  end
+
+  describe "system prompt request assembly" do
+    test "anthropic: system message becomes the top-level :system field" do
+      body = captured_body(@sys_and_user, provider: :anthropic, api_key: "test")
+
+      assert body.system == @system_text
+      assert [%{role: "user", content: "hello"}] = body.messages
+    end
+
+    test "anthropic: multiple system messages join into one :system field" do
+      messages = [
+        %{role: :system, content: "Line one."},
+        %{role: :system, content: "Line two."},
+        %{role: :user, content: "hello"}
+      ]
+
+      body = captured_body(messages, provider: :anthropic, api_key: "test")
+
+      assert body.system == "Line one.\nLine two."
+      assert [%{role: "user", content: "hello"}] = body.messages
+    end
+
+    test "anthropic: no system message means no :system key at all" do
+      body =
+        captured_body(
+          [%{role: :user, content: "hello"}],
+          provider: :anthropic,
+          api_key: "test"
+        )
+
+      refute Map.has_key?(body, :system)
+    end
+
+    test "openai: system message stays as messages[0] role=system" do
+      body = captured_body(@sys_and_user, provider: :openai, api_key: "test")
+
+      assert [
+               %{role: "system", content: @system_text},
+               %{role: "user", content: "hello"}
+             ] = body.messages
+
+      refute Map.has_key?(body, :system)
+    end
+
+    test "kimi: system message stays as messages[0] role=system" do
+      body = captured_body(@sys_and_user, provider: :kimi, api_key: "test")
+
+      assert [
+               %{role: "system", content: @system_text},
+               %{role: "user", content: "hello"}
+             ] = body.messages
+
+      refute Map.has_key?(body, :system)
+    end
+
+    test "ollama: system message rides in the /api/chat messages array" do
+      body = captured_body(@sys_and_user, provider: :ollama)
+
+      assert [
+               %{role: "system", content: @system_text},
+               %{role: "user", content: "hello"}
+             ] = body.messages
+
+      refute Map.has_key?(body, :system)
+    end
+  end
 end
