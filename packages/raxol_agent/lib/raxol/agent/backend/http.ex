@@ -34,7 +34,12 @@ defmodule Raxol.Agent.Backend.HTTP do
   @behaviour Raxol.Agent.AIBackend
 
   @default_timeout Raxol.Core.Defaults.health_check_interval_ms()
-  @default_max_tokens 1_024
+  # A reasoning model (LongCat / DeepSeek-style) spends completion tokens on a
+  # hidden reasoning channel BEFORE the answer. The old 1024 cap truncated such
+  # turns mid-reasoning -- `finish_reason: length` with an EMPTY answer. 4096
+  # leaves room for reasoning + answer; `AI_MAX_TOKENS` overrides at the
+  # deployment boundary, an explicit `:max_tokens` opt overrides per call.
+  @default_max_tokens 4_096
   @anthropic_api_version "2023-06-01"
   @default_ollama_port "11434"
 
@@ -46,12 +51,29 @@ defmodule Raxol.Agent.Backend.HTTP do
 
     {url, headers, body} = build_request(provider, messages, opts)
 
-    case do_request(url, headers, body, timeout, plugins) do
-      {:ok, response_body} ->
-        {:ok, parse_response(provider, response_body)}
+    # `parse_response/2` returns `{:ok, response} | {:error, reason}`: an
+    # unparseable body or an empty length-truncated turn is an honest error,
+    # NOT assistant prose (the "cannot lie at the wire boundary" rule). The
+    # with-chain surfaces either the transport error or the parse error.
+    with {:ok, response_body} <- do_request(url, headers, body, timeout, plugins),
+         {:ok, parsed} <- parse_response(provider, response_body) do
+      {:ok, parsed}
+    end
+  end
 
-      {:error, _} = error ->
-        error
+  # The per-call token budget. Precedence: explicit `:max_tokens` opt >
+  # `AI_MAX_TOKENS` env > `@default_max_tokens`. Read at request-build time so a
+  # deployment can raise the ceiling for reasoning models without code changes.
+  defp default_max_tokens do
+    case System.get_env("AI_MAX_TOKENS") do
+      nil ->
+        @default_max_tokens
+
+      raw ->
+        case Integer.parse(String.trim(raw)) do
+          {n, _} when n > 0 -> n
+          _ -> @default_max_tokens
+        end
     end
   end
 
@@ -148,12 +170,14 @@ defmodule Raxol.Agent.Backend.HTTP do
 
         # Preserve arrival order and interleaving: text deltas become
         # `{:chunk, _}` (the answer), reasoning deltas become
-        # `{:reasoning, _}` (chain-of-thought), and only text feeds the
-        # accumulated `content` — reasoning is not part of the answer.
+        # `{:reasoning, _}` (chain-of-thought), honest `:marker`s (unparseable
+        # chunk / truncation) ride their own channel; only text feeds the
+        # accumulated `content` — neither reasoning nor markers are the answer.
         out =
           Enum.flat_map(events, fn
             {:text_delta, text} -> [{:chunk, text}]
             {:reasoning_delta, text} -> [{:reasoning, text}]
+            {:marker, text} -> [{:marker, text}]
             _ -> []
           end)
 
@@ -170,8 +194,7 @@ defmodule Raxol.Agent.Backend.HTTP do
             nil -> state.usage
           end
 
-        {out,
-         %{state | buffer: new_buffer, content: new_content, usage: new_usage}}
+        {out, %{state | buffer: new_buffer, content: new_content, usage: new_usage}}
 
       {:sse_error, ^ref, error} ->
         {[{:error, error}], %{state | buffer: :halt}}
@@ -198,7 +221,11 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   # -- SSE parsing -------------------------------------------------------------
 
-  defp parse_sse(raw, :ollama) do
+  @doc false
+  # Exposed for unit tests: parse a raw SSE buffer for `provider` into
+  # `{events, leftover_buffer}`. Events are `{:text_delta, t}`,
+  # `{:reasoning_delta, t}`, `{:usage, u}`, or `{:marker, t}`.
+  def parse_sse(raw, :ollama) do
     lines = String.split(raw, "\n")
     {complete, [buffer]} = Enum.split(lines, -1)
 
@@ -216,7 +243,7 @@ defmodule Raxol.Agent.Backend.HTTP do
     {events, buffer}
   end
 
-  defp parse_sse(raw, provider) when provider in [:anthropic, :openai, :kimi] do
+  def parse_sse(raw, provider) when provider in [:anthropic, :openai, :kimi] do
     parts = String.split(raw, "\n\n")
 
     case parts do
@@ -275,39 +302,53 @@ defmodule Raxol.Agent.Backend.HTTP do
       |> Enum.find(&String.starts_with?(&1, "data: "))
 
     case data_line do
-      "data: " <> data ->
-        if data == "[DONE]" do
-          [{:usage, %{}}]
-        else
-          case Jason.decode(data) do
-            {:ok, %{"choices" => [%{"delta" => delta} | _]}}
-            when is_map(delta) ->
-              openai_delta_events(delta)
+      "data: [DONE]" ->
+        [{:usage, %{}}]
 
-            _ ->
-              []
-          end
+      "data: " <> data ->
+        case Jason.decode(data) do
+          {:ok, decoded} -> openai_stream_events(decoded)
+          # A `data:` line that IS present but is not valid JSON is a genuine
+          # fidelity gap -- an honest marker, never a silently dropped chunk.
+          {:error, _} -> [{:marker, "⚠ unparseable response chunk"}]
         end
 
       _ ->
+        # No `data:` line (SSE comment / keep-alive / blank) -- correctly
+        # skipped, not a parse failure.
         []
     end
   end
 
-  # One streaming delta -> zero or one events. Reasoning models surface
-  # chain-of-thought as `reasoning` (OpenRouter) or `reasoning_content`
-  # (DeepSeek and compatibles), distinct from the answer `content`; a
-  # single delta chunk carries one or the other, never both.
-  defp openai_delta_events(%{"reasoning" => text}) when is_binary(text),
-    do: [{:reasoning_delta, text}]
+  # A streaming chunk -> ordered SSE events. Handles BOTH the streaming
+  # (`delta`) and full-message (`message`, LongCat) shapes -- the delta-only
+  # parser missed LongCat, which emits `delta: null` + a full `message`.
+  # Reasoning rides its own channel (`reasoning`/`reasoning_content`), and a
+  # `finish_reason: length` chunk (either key variant) emits an honest
+  # truncation marker. A content-less chunk (role-only opener) yields nothing.
+  defp openai_stream_events(%{"choices" => [choice | _]}) when is_map(choice) do
+    msg = choice_message(choice)
+    reasoning = choice_reasoning(msg)
+    text = choice_text(msg)
+    finish = finish_reason(choice)
 
-  defp openai_delta_events(%{"reasoning_content" => text}) when is_binary(text),
-    do: [{:reasoning_delta, text}]
+    []
+    |> maybe_append(reasoning && {:reasoning_delta, reasoning})
+    |> maybe_append(text != "" && {:text_delta, text})
+    |> maybe_append(finish == "length" && {:marker, truncation_marker(choice)})
+  end
 
-  defp openai_delta_events(%{"content" => text}) when is_binary(text),
-    do: [{:text_delta, text}]
+  # A trailing usage-only chunk (some providers emit `{"usage": {...}}` with an
+  # empty `choices` at stream end) carries token accounting, nothing to render.
+  defp openai_stream_events(%{"usage" => usage}) when is_map(usage),
+    do: [{:usage, usage}]
 
-  defp openai_delta_events(_delta), do: []
+  # A well-formed JSON object in an unrecognized shape is benign protocol, not
+  # a fidelity gap -- skipped (never dumped). Only a JSON DECODE failure marks.
+  defp openai_stream_events(_other), do: []
+
+  defp maybe_append(events, falsy) when falsy in [nil, false], do: events
+  defp maybe_append(events, event), do: events ++ [event]
 
   # -- Request building -------------------------------------------------------
 
@@ -329,7 +370,7 @@ defmodule Raxol.Agent.Backend.HTTP do
 
     body = %{
       model: model,
-      max_tokens: Keyword.get(opts, :max_tokens, @default_max_tokens),
+      max_tokens: Keyword.get(opts, :max_tokens, default_max_tokens()),
       messages: Enum.map(chat_msgs, &format_message/1)
     }
 
@@ -358,7 +399,7 @@ defmodule Raxol.Agent.Backend.HTTP do
     body = %{
       model: model,
       messages: Enum.map(messages, &format_message/1),
-      max_tokens: Keyword.get(opts, :max_tokens, @default_max_tokens)
+      max_tokens: Keyword.get(opts, :max_tokens, default_max_tokens())
     }
 
     body = maybe_add_tools(:openai, body, opts)
@@ -383,7 +424,7 @@ defmodule Raxol.Agent.Backend.HTTP do
     body = %{
       model: model,
       messages: Enum.map(messages, &format_message/1),
-      max_tokens: Keyword.get(opts, :max_tokens, @default_max_tokens)
+      max_tokens: Keyword.get(opts, :max_tokens, default_max_tokens())
     }
 
     {url, headers, body}
@@ -416,6 +457,10 @@ defmodule Raxol.Agent.Backend.HTTP do
   end
 
   # -- Response parsing -------------------------------------------------------
+  #
+  # Every clause returns `{:ok, response} | {:error, reason}`. There is NO
+  # clause that dumps a raw map into `content` -- an unrecognized body is an
+  # honest `{:error, marker}` (see the fall-through), never assistant prose.
 
   # Anthropic tool_use response: stop_reason "tool_use" with tool_use content blocks
   defp parse_response(
@@ -440,33 +485,35 @@ defmodule Raxol.Agent.Backend.HTTP do
         _ -> nil
       end)
 
-    %{
-      content: text,
-      tool_calls: tool_calls,
-      usage: Map.get(body, "usage", %{}),
-      metadata: %{
-        backend: :http,
-        provider: :anthropic,
-        model: Map.get(body, "model"),
-        stop_reason: "tool_use"
-      }
-    }
+    {:ok,
+     %{
+       content: text,
+       tool_calls: tool_calls,
+       usage: Map.get(body, "usage", %{}),
+       metadata: %{
+         backend: :http,
+         provider: :anthropic,
+         model: Map.get(body, "model"),
+         stop_reason: "tool_use"
+       }
+     }}
   end
 
   defp parse_response(
          :anthropic,
          %{"content" => [%{"text" => text} | _]} = body
        ) do
-    %{
-      content: text,
-      usage: Map.get(body, "usage", %{}),
-      metadata: %{
-        backend: :http,
-        provider: :anthropic,
-        model: Map.get(body, "model"),
-        stop_reason: Map.get(body, "stop_reason")
-      }
-    }
+    {:ok,
+     %{
+       content: text,
+       usage: Map.get(body, "usage", %{}),
+       metadata: %{
+         backend: :http,
+         provider: :anthropic,
+         model: Map.get(body, "model"),
+         stop_reason: Map.get(body, "stop_reason")
+       }
+     }}
   end
 
   # OpenAI tool_calls response
@@ -500,58 +547,136 @@ defmodule Raxol.Agent.Backend.HTTP do
         }
       end)
 
-    content =
-      get_in(body, ["choices", Access.at(0), "message", "content"]) || ""
+    msg = choice_message(hd(body["choices"]))
 
-    %{
-      content: content,
-      tool_calls: parsed_calls,
-      usage: Map.get(body, "usage", %{}),
-      metadata: %{
-        backend: :http,
-        provider: :openai,
-        model: Map.get(body, "model")
-      }
-    }
+    {:ok,
+     %{
+       content: choice_text(msg),
+       tool_calls: parsed_calls,
+       usage: Map.get(body, "usage", %{}),
+       metadata: %{backend: :http, provider: :openai, model: Map.get(body, "model")}
+     }
+     |> put_reasoning(choice_reasoning(msg))}
   end
 
-  defp parse_response(
-         :openai,
-         %{"choices" => [%{"message" => %{"content" => text}} | _]} = body
-       ) do
-    %{
-      content: text,
-      usage: Map.get(body, "usage", %{}),
-      metadata: %{
-        backend: :http,
-        provider: :openai,
-        model: Map.get(body, "model")
-      }
-    }
+  # OpenAI-compatible content response. One clause covers standard OpenAI
+  # (`message.content`), LongCat's full-message shape, and the reasoning
+  # channel (`reasoning`/`reasoning_content`). The `finish_reason` variant
+  # (`finish_reason` OR the underscore-less `finishreason`) drives honest
+  # truncation: a length-capped turn with an EMPTY answer is an error marker,
+  # never a clean (blank) completion.
+  defp parse_response(:openai, %{"choices" => [choice | _]} = body)
+       when is_map(choice) do
+    msg = choice_message(choice)
+    content = choice_text(msg)
+    reasoning = choice_reasoning(msg)
+    finish = finish_reason(choice)
+
+    cond do
+      finish == "length" and blank?(content) ->
+        {:error, truncation_marker(body)}
+
+      true ->
+        {:ok,
+         %{
+           content: content,
+           usage: Map.get(body, "usage", %{}),
+           metadata: openai_metadata(body, finish)
+         }
+         |> put_reasoning(reasoning)}
+    end
   end
 
   defp parse_response(:kimi, body), do: parse_response(:openai, body)
 
   defp parse_response(:ollama, %{"message" => %{"content" => text}} = body) do
-    %{
-      content: text,
-      usage: %{},
-      metadata: %{
-        backend: :http,
-        provider: :ollama,
-        model: Map.get(body, "model"),
-        eval_duration: Map.get(body, "eval_duration")
-      }
-    }
+    {:ok,
+     %{
+       content: text,
+       usage: %{},
+       metadata: %{
+         backend: :http,
+         provider: :ollama,
+         model: Map.get(body, "model"),
+         eval_duration: Map.get(body, "eval_duration")
+       }
+     }}
   end
 
-  defp parse_response(_provider, body) do
-    %{
-      content: inspect(body),
-      usage: %{},
-      metadata: %{backend: :http, raw: true}
-    }
+  # The honest fall-through: a body no clause could parse is an ERROR marker,
+  # never `inspect(body)` painted as the assistant's answer. The shape hint
+  # (top-level keys only, never values) rides under `RAXOL_DEBUG` so a raw
+  # payload -- possibly carrying secrets -- is never leaked into a transcript.
+  defp parse_response(provider, body) do
+    {:error, unparseable_marker(provider, body)}
   end
+
+  # -- OpenAI-compatible field extraction (shared by complete + stream) --------
+
+  # The content-bearing sub-object: a non-streaming/full-message chunk carries
+  # `message`; a streaming chunk carries `delta`. LongCat emits `message` even
+  # on the SSE path, which the delta-only parser missed.
+  defp choice_message(%{"message" => msg}) when is_map(msg), do: msg
+  defp choice_message(%{"delta" => delta}) when is_map(delta), do: delta
+  defp choice_message(_choice), do: %{}
+
+  defp choice_text(%{"content" => t}) when is_binary(t), do: t
+  defp choice_text(_msg), do: ""
+
+  # The separate reasoning channel: `reasoning` (OpenRouter) or
+  # `reasoning_content` (DeepSeek / LongCat); nil when absent/blank.
+  defp choice_reasoning(%{"reasoning_content" => t}) when is_binary(t) and t != "", do: t
+  defp choice_reasoning(%{"reasoning" => t}) when is_binary(t) and t != "", do: t
+  defp choice_reasoning(_msg), do: nil
+
+  # Tolerate the wire-key variant: LongCat sends `finishreason` (no
+  # underscore) where OpenAI sends `finish_reason`.
+  defp finish_reason(choice) when is_map(choice),
+    do: Map.get(choice, "finish_reason") || Map.get(choice, "finishreason")
+
+  defp finish_reason(_choice), do: nil
+
+  defp openai_metadata(body, finish) do
+    meta = %{backend: :http, provider: :openai, model: Map.get(body, "model")}
+
+    case finish do
+      "length" -> Map.merge(meta, %{finish_reason: :length, truncated: true})
+      nil -> meta
+      other -> Map.put(meta, :finish_reason, other)
+    end
+  end
+
+  defp put_reasoning(response, nil), do: response
+  defp put_reasoning(response, reasoning), do: Map.put(response, :reasoning, reasoning)
+
+  defp blank?(s) when is_binary(s), do: String.trim(s) == ""
+  defp blank?(_), do: false
+
+  # An honest, human-readable truncation marker; the token count is the honest
+  # quantity when the response carried usage.
+  defp truncation_marker(source) do
+    tokens =
+      get_in(source, ["usage", "completion_tokens"]) ||
+        get_in(source, ["usage", "total_tokens"])
+
+    suffix = if is_integer(tokens), do: " (#{tokens} tokens)", else: ""
+    "⚠ response truncated — hit token limit#{suffix}; raise AI_MAX_TOKENS"
+  end
+
+  defp unparseable_marker(provider, body) do
+    base = "⚠ unparseable response from #{provider}"
+    if debug?(), do: base <> " — keys: #{shape_hint(body)}", else: base
+  end
+
+  # Keys only -- never values, never `inspect(body)` -- so the hint can never
+  # reintroduce the `%{...}` dump the fall-through exists to prevent.
+  defp shape_hint(body) when is_map(body),
+    do: body |> Map.keys() |> Enum.map_join(", ", &to_string/1)
+
+  defp shape_hint(body) when is_list(body), do: "list"
+  defp shape_hint(_body), do: "scalar"
+
+  defp debug?, do: System.get_env("RAXOL_DEBUG") in ["1", "true", "yes"]
 
   # -- Helpers ----------------------------------------------------------------
 

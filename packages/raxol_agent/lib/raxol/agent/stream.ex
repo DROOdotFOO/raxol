@@ -296,10 +296,15 @@ defmodule Raxol.Agent.Stream do
       {:reasoning, text}, :running ->
         {[{:reasoning, text}], :running}
 
+      # An honest wire-boundary marker (unparseable chunk / length
+      # truncation) surfaced by `Backend.HTTP`. Non-fatal: forwarded without
+      # halting the turn, so a single bad chunk never kills the stream.
+      {:marker, text}, :running ->
+        {[{:marker, text}], :running}
+
       {:done, response}, :running ->
         done_event =
-          {:done,
-           %{content: response.content, tool_results: [], usage: response.usage}}
+          {:done, %{content: response.content, tool_results: [], usage: response.usage}}
 
         {[done_event], :done}
 
