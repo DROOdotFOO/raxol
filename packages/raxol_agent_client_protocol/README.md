@@ -118,7 +118,19 @@ defmodule MyAgent do
   alias Raxol.AgentClientProtocol.Connection
   alias Raxol.AgentClientProtocol.Schema.{ContentChunk, TextContent}
   alias Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification
-  alias Raxol.AgentClientProtocol.Schema.AgentTypes.{NewSessionResponse, PromptResponse}
+
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.{
+    InitializeResponse,
+    NewSessionResponse,
+    PromptResponse
+  }
+
+  @impl true
+  def initialize(req, _ctx) do
+    # Echo back the client's requested protocol version negotiated by
+    # `Version.coerce/1`; a real agent may cap this to its own max.
+    {:ok, InitializeResponse.new(req.protocol_version)}
+  end
 
   @impl true
   def new_session(_params, _ctx) do
@@ -137,11 +149,16 @@ defmodule MyAgent do
   end
 end
 
-# Boot: adopt this BEAM's own stdin/stdout as the wire.
-{:ok, transport} = Raxol.AgentClientProtocol.Transport.Stdio.start_self()
+# Boot: adopt this BEAM's own stdin/stdout as the wire. `transport:` takes a
+# `{module, handle}` pair (per `Raxol.AgentClientProtocol.Transport`), not
+# the bare handle `start_self/1` returns.
+{:ok, handle} = Raxol.AgentClientProtocol.Transport.Stdio.start_self()
 
 {:ok, _sup} =
-  Raxol.AgentClientProtocol.Agent.child_spec(handler: MyAgent, transport: transport)
+  Raxol.AgentClientProtocol.Agent.child_spec(
+    handler: MyAgent,
+    transport: {Raxol.AgentClientProtocol.Transport.Stdio, handle}
+  )
   |> then(&Supervisor.start_link([&1], strategy: :one_for_one))
 ```
 
@@ -156,11 +173,14 @@ defmodule MyClient do
   end
 end
 
-{:ok, transport} =
+{:ok, handle} =
   Raxol.AgentClientProtocol.Transport.Stdio.start_spawn("elixir", ["my_agent.ex"])
 
 {:ok, _sup} =
-  Raxol.AgentClientProtocol.Client.child_spec(handler: MyClient, transport: transport)
+  Raxol.AgentClientProtocol.Client.child_spec(
+    handler: MyClient,
+    transport: {Raxol.AgentClientProtocol.Transport.Stdio, handle}
+  )
   |> then(&Supervisor.start_link([&1], strategy: :one_for_one))
 ```
 

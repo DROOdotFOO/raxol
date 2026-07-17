@@ -11,7 +11,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
 
     1. **Authorize through the ONE funnel (CDI-1).** `attach/1` calls the
        injected `:authorize` fun — whose default is
-       `Raxol.AgentClientProtocol.AttachPolicy.Runner.authorize/2`, the SOLE
+       `Raxol.AgentClientProtocol.Ext.AttachPolicy.Runner.authorize/2`, the SOLE
        fail-closed funnel. This design defines NO second `FailClosed`/try-catch
        wrapper (the dual-ownership hole G5 closes). Any `{:denied, _}` — or any
        non-`{:ok, %Grant{}}` — DENIES: `attach/1` returns the CDI-5 deny envelope

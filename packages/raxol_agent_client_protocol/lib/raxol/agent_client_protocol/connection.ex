@@ -361,14 +361,20 @@ defmodule Raxol.AgentClientProtocol.Connection do
         {:reply, {:error, :not_initialized}, state}
 
       true ->
-        frame = wire(Notification.new(method, to_wire(params)))
+        case to_wire(params) do
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
 
-        case push_frame(state, frame) do
-          {:ok, st} ->
-            {:reply, :ok, st}
+          {:ok, wire_params} ->
+            frame = wire(Notification.new(method, wire_params))
 
-          {:down, reason} ->
-            {:stop, :normal, {:error, {:transport, reason}}, transport_down(reason, state)}
+            case push_frame(state, frame) do
+              {:ok, st} ->
+                {:reply, :ok, st}
+
+              {:down, reason} ->
+                {:stop, :normal, {:error, {:transport, reason}}, transport_down(reason, state)}
+            end
         end
     end
   end
@@ -442,29 +448,36 @@ defmodule Raxol.AgentClientProtocol.Connection do
         {:answered, {:error, :not_initialized}, state}
 
       true ->
-        state = maybe_stash_own_caps(state, method, params)
-        id = state.next_out_id
-        state = %{state | next_out_id: id + 1}
-        frame = wire(Request.new(id, method, to_wire(params)))
-
-        case state.transport_mod.send_message(state.transport_state, frame) do
+        case to_wire(params) do
           {:error, reason} ->
-            # Nothing pended, no timer; counter still consumed (gaps harmless, §1.2).
-            {:answered, {:error, {:transport, reason}}, state}
+            # Never sent to the wire: no id consumed, no timer armed.
+            {:answered, {:error, reason}, state}
 
-          {:ok, ts} ->
-            timer_ref = arm_timer(id, timeout_ms)
+          {:ok, wire_params} ->
+            state = maybe_stash_own_caps(state, method, params)
+            id = state.next_out_id
+            state = %{state | next_out_id: id + 1}
+            frame = wire(Request.new(id, method, wire_params))
 
-            pending = %{reply_to: reply_to, method: method, timer_ref: timer_ref}
+            case state.transport_mod.send_message(state.transport_state, frame) do
+              {:error, reason} ->
+                # Nothing pended, no timer; counter still consumed (gaps harmless, §1.2).
+                {:answered, {:error, {:transport, reason}}, state}
 
-            st = %{
-              state
-              | transport_state: ts,
-                pending_out: Map.put(state.pending_out, id, pending),
-                out_tags: add_tag(state.out_tags, reply_to, id)
-            }
+              {:ok, ts} ->
+                timer_ref = arm_timer(id, timeout_ms)
 
-            {:parked, st}
+                pending = %{reply_to: reply_to, method: method, timer_ref: timer_ref}
+
+                st = %{
+                  state
+                  | transport_state: ts,
+                    pending_out: Map.put(state.pending_out, id, pending),
+                    out_tags: add_tag(state.out_tags, reply_to, id)
+                }
+
+                {:parked, st}
+            end
         end
     end
   end
@@ -1096,7 +1109,17 @@ defmodule Raxol.AgentClientProtocol.Connection do
   end
 
   # Build a JSON-RPC error/result response frame (wire map, id echoed exact-type).
-  defp response_frame(id, {:ok, %_{} = struct}), do: wire(Response.result(id, to_wire(struct)))
+  # A handler-returned result that fails to encode (O6) falls back to
+  # `-32603` rather than raising inside the Connection -- the same "never
+  # trust a handler's return value" posture `result_to_response/1`'s
+  # `:malformed` clause already takes for a non-struct/non-Error return.
+  defp response_frame(id, {:ok, %_{} = struct}) do
+    case to_wire(struct) do
+      {:ok, wire_result} -> wire(Response.result(id, wire_result))
+      {:error, _reason} -> wire(Response.error(id, Error.internal_error()))
+    end
+  end
+
   defp response_frame(id, {:error, %Error{} = err}), do: wire(Response.error(id, err))
 
   defp data_error(code, message, data), do: Error.with_data(Error.new(code, message), data)
@@ -1105,8 +1128,21 @@ defmodule Raxol.AgentClientProtocol.Connection do
 
   # Flatten a struct/map to a plain string-keyed wire map so in-process
   # transports (Paired, zero-copy) hand the peer a decodable map, not a struct.
-  defp to_wire(nil), do: nil
-  defp to_wire(params), do: params |> Jason.encode!() |> Jason.decode!()
+  # Total: never raises (O6) -- a non-JSON-safe `params` value (a stray pid,
+  # ref, or tuple; app misuse, not a protocol violation) is reported as
+  # `{:error, {:encode, reason}}` instead of raising `Jason.encode!/1` INSIDE
+  # a `handle_call`, which would otherwise kill this GenServer on caller
+  # misuse. `Jason.decode!/1` immediately after a successful `Jason.encode/1`
+  # cannot fail (its input is always well-formed JSON we just produced).
+  @spec to_wire(term()) :: {:ok, term()} | {:error, {:encode, term()}}
+  defp to_wire(nil), do: {:ok, nil}
+
+  defp to_wire(params) do
+    case Jason.encode(params) do
+      {:ok, json} -> {:ok, Jason.decode!(json)}
+      {:error, reason} -> {:error, {:encode, reason}}
+    end
+  end
 
   defp push_frame(state, frame) do
     case state.transport_mod.send_message(state.transport_state, frame) do

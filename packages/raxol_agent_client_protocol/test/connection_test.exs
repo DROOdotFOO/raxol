@@ -1471,4 +1471,61 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
     # call without an accompanying close/DOWN signal -- out of scope for the
     # Paired-only harness this suite was asked to drive.
   end
+
+  # ===========================================================================
+  # O6: `to_wire/1` must be total. Before the fix it piped through
+  # `Jason.encode!/1`, so a non-JSON-safe `params` value (a stray pid, ref, or
+  # tuple -- app misuse, not a protocol violation `Connection` should ever be
+  # trusted to survive) raised `Protocol.UndefinedError` INSIDE the
+  # Connection's own `handle_call`, killing the GenServer. A library must not
+  # die on caller misuse: the encode failure is surfaced to the caller as
+  # `{:error, {:encode, reason}}` and the Connection stays alive.
+  # ===========================================================================
+
+  describe "O6: to_wire is total (never raises on a non-JSON-safe param)" do
+    test "notify/3 with a non-encodable param returns an encode error; Connection stays alive" do
+      %{conn: conn, peer: peer} = start_agent_conn()
+      complete_handshake(peer)
+
+      assert {:error, {:encode, %Protocol.UndefinedError{}}} =
+               Connection.notify(conn, "session/update", self())
+
+      assert Process.alive?(conn)
+      ScriptedPeer.assert_no_frame(peer, 100)
+
+      # the Connection is provably still serving requests, not merely alive
+      ScriptedPeer.send_request(peer, 501, "session/new", new_session_params())
+
+      handle_next_invoke(:new_session, fn _r, _c ->
+        {:ok, Raxol.AgentClientProtocol.Schema.AgentTypes.NewSessionResponse.new("s-o6")}
+      end)
+
+      frame = ScriptedPeer.recv(peer)
+      assert frame["id"] == 501
+      assert frame["result"]["sessionId"] == "s-o6"
+    end
+
+    test "request/4 with a non-encodable param returns an encode error; Connection stays alive" do
+      %{conn: conn, peer: peer} = start_agent_conn()
+      complete_handshake(peer)
+
+      assert {:error, {:encode, %Protocol.UndefinedError{}}} =
+               Connection.request(conn, "fs/read_text_file", {self(), :bad_tuple}, 500)
+
+      assert Process.alive?(conn)
+      ScriptedPeer.assert_no_frame(peer, 100)
+    end
+
+    test "async_request/6 with a non-encodable param answers the owner instead of the connection dying" do
+      %{conn: conn, peer: peer} = start_agent_conn()
+      complete_handshake(peer)
+
+      assert {:error, {:encode, %Protocol.UndefinedError{}}} =
+               Connection.async_request(conn, "fs/read_text_file", make_ref(), self(), :o6, 500)
+
+      refute_receive {:acp_result, :o6, _}, 100
+      assert Process.alive?(conn)
+      ScriptedPeer.assert_no_frame(peer, 100)
+    end
+  end
 end
