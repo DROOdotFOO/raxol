@@ -127,17 +127,59 @@ defmodule Raxol.MCP.TreeWalker do
     do_walk(child_nodes(node), context, type_map, acc)
   end
 
+  # An `:absolute_layer` (Raxol.UI.Components.AbsoluteLayer) parents its
+  # subtree through `:flow_child` + `:overlays[].element`, not `:children`,
+  # and carries no `:id` of its own -- so without these clauses the walker
+  # would stop at it and every overlay-hosted Component (pickers, panels,
+  # dialogs painted over the transcript, migration U3) would derive zero
+  # tools. Walk into both so an overlay Component's stamped root is reached
+  # exactly as a flow child's is.
+  defp do_walk(%{flow_child: _} = node, context, type_map, acc) do
+    do_walk(child_nodes(node), context, type_map, acc)
+  end
+
+  defp do_walk(%{overlays: _} = node, context, type_map, acc) do
+    do_walk(child_nodes(node), context, type_map, acc)
+  end
+
   defp do_walk(_node, _context, _type_map, acc), do: acc
 
   # The View DSL allows :children to be a list or a single element map
   # (e.g. a box whose do-block is one column). Mirror the Bubbler's
-  # path-finding, which treats both shapes as first-class.
+  # path-finding, which treats both shapes as first-class. An
+  # `:absolute_layer` also contributes its flow child + overlay elements
+  # (see the flow_child/overlays clauses above).
   defp child_nodes(node) do
-    case Map.get(node, :children) do
-      kids when is_list(kids) -> kids
-      kid when is_map(kid) -> [kid]
-      _ -> []
-    end
+    direct =
+      case Map.get(node, :children) do
+        kids when is_list(kids) -> kids
+        kid when is_map(kid) -> [kid]
+        _ -> []
+      end
+
+    direct ++ absolute_layer_children(node)
+  end
+
+  # The `:absolute_layer` overlay wiring: the flow child plus each
+  # overlay's `:element`. Absent on ordinary nodes (both default to []), so
+  # this is a no-op everywhere except an absolute layer.
+  defp absolute_layer_children(node) do
+    flow =
+      case Map.get(node, :flow_child) do
+        child when is_map(child) -> [child]
+        _ -> []
+      end
+
+    overlay_elements =
+      node
+      |> Map.get(:overlays, [])
+      |> List.wrap()
+      |> Enum.flat_map(fn
+        %{element: element} when is_map(element) -> [element]
+        _ -> []
+      end)
+
+    flow ++ overlay_elements
   end
 
   defp derive_widget_tools(node, type, id, context, type_map) do

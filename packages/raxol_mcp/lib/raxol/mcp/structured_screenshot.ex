@@ -62,15 +62,7 @@ defmodule Raxol.MCP.StructuredScreenshot do
   # -- Private -----------------------------------------------------------------
 
   defp summarize_node(node, opts) when is_map(node) do
-    # :children may be a list or a single element map (a box whose do-block
-    # is one column) -- same duality the Bubbler's path-finding handles.
-    children =
-      case Map.get(node, :children) do
-        nil -> []
-        kids when is_list(kids) -> Enum.map(kids, &summarize_node(&1, opts))
-        kid when is_map(kid) -> [summarize_node(kid, opts)]
-        _ -> []
-      end
+    children = child_summaries(node, opts) ++ overlay_summaries(node, opts)
 
     %{
       type: Map.get(node, :type, :unknown),
@@ -83,6 +75,40 @@ defmodule Raxol.MCP.StructuredScreenshot do
   end
 
   defp summarize_node(_node, _opts), do: %{type: :unknown, id: nil, children: []}
+
+  # :children may be a list or a single element map (a box whose do-block
+  # is one column) -- same duality the Bubbler's path-finding handles.
+  defp child_summaries(node, opts) do
+    case Map.get(node, :children) do
+      nil -> []
+      kids when is_list(kids) -> Enum.map(kids, &summarize_node(&1, opts))
+      kid when is_map(kid) -> [summarize_node(kid, opts)]
+      _ -> []
+    end
+  end
+
+  # An `:absolute_layer` parents through `:flow_child` + `:overlays[].element`
+  # (migration U3 overlays hosted over the transcript). Absent on ordinary
+  # nodes, so a no-op there -- without it an overlay Component would never
+  # surface in the widgets resource.
+  defp overlay_summaries(node, opts) do
+    flow =
+      case Map.get(node, :flow_child) do
+        child when is_map(child) -> [summarize_node(child, opts)]
+        _ -> []
+      end
+
+    overlays =
+      node
+      |> Map.get(:overlays, [])
+      |> List.wrap()
+      |> Enum.flat_map(fn
+        %{element: element} when is_map(element) -> [summarize_node(element, opts)]
+        _ -> []
+      end)
+
+    flow ++ overlays
+  end
 
   # Folds the per-node accessibility descriptor into the summary. Additive: only
   # meaningful fields are attached (role always, others when present/truthy).

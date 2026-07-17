@@ -588,6 +588,29 @@ defmodule Raxol.Playground.Catalog do
 
       ReasoningBlock.render(s, %{})  # z/enter/space peek; emits on_toggle
       """
+    },
+    %{
+      name: "Harness Overlay",
+      module: Demos.HarnessOverlayDemo,
+      category: :harness,
+      description:
+        "Picker, projection panels, and scrollable diff-expansion hosted as LayoutEngine children (AbsoluteLayer dialogs) over the transcript — the full-viewport overlay gap closed: no footer-grow",
+      complexity: :advanced,
+      tags: [
+        "harness",
+        "overlay",
+        "picker",
+        "panel",
+        "full-viewport",
+        "controlled",
+        "mcp"
+      ],
+      code_snippet: """
+      # overlays are just layout children -- no footer-grow, no refusal
+      absolute_layer(transcript, [
+        dialog_overlay(w, h, Picker.render(picker_state, %{available_width: w - 4}))
+      ])
+      """
     }
   ]
 

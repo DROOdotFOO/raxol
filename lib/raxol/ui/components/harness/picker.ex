@@ -95,6 +95,8 @@ defmodule Raxol.UI.Components.Harness.Picker do
 
   use Raxol.UI.Components.Base.Component
 
+  @behaviour Raxol.MCP.ToolProvider
+
   @default_visible_height 10
   @default_placeholder ""
   @default_preview_width_divisor 2
@@ -286,6 +288,27 @@ defmodule Raxol.UI.Components.Harness.Picker do
     {update_query(state, drop_last_grapheme(state.query)), []}
   end
 
+  # EventBuilder / native-terminal / U1-blessed shape: the printable
+  # character rides `data.char` with `data.key == :char` -- what
+  # `Raxol.Headless.EventBuilder.key/2`, `Event.key_match/1`, and the
+  # re-hosted ReasoningBlock/MessageBlock components all use. Without this
+  # clause the picker cannot filter under the Headless autotest harness
+  # (the whole re-hosting test story, migration §6 F0-mcp), since the bare
+  # `%{key: char}` clause below only matches `input_parser.ex`'s shape.
+  # Both route to the identical text_input?/update_query path.
+  def handle_event(
+        %Event{type: :key, data: %{key: :char, char: char} = data},
+        state,
+        _context
+      )
+      when is_binary(char) do
+    if text_input?(data) do
+      {update_query(state, state.query <> char), []}
+    else
+      {state, []}
+    end
+  end
+
   # Printable characters. A binary `key` is always a text character (the
   # special keys above all use atoms), so this matches the printable
   # inlet across every driver's event shape -- but whether it's *text* or
@@ -428,12 +451,24 @@ defmodule Raxol.UI.Components.Harness.Picker do
         list
       end
 
-    Components.column(
+    # Direct map (not `Components.column/1`) so the root carries `attrs`
+    # for the MCP TreeWalker seam: `component_module` resolves this module
+    # as the node's ToolProvider, and the derived tools read `match_count`
+    # from these attrs to decide whether "select" is offered. Mirrors the
+    # U1 block components' stamped root.
+    %{
+      type: :column,
       id: state.id,
+      attrs: %{
+        component_module: __MODULE__,
+        kind: :picker,
+        query: state.query,
+        match_count: length(state.ranked)
+      },
       style: base_style,
       gap: 0,
       children: [render_prompt(state, avail_width), body]
-    )
+    }
   end
 
   defp render_prompt(state, avail_width) do
@@ -575,4 +610,53 @@ defmodule Raxol.UI.Components.Harness.Picker do
     |> String.split("\n")
     |> Enum.map(&{&1, %{}})
   end
+
+  # -- ToolProvider callbacks (F0-mcp seam) --------------------------------
+  #
+  # The overlay is keyboard-driven: Enter selects the current match, Escape
+  # dismisses. The two MCP actions emit exactly those synthetic key events
+  # rather than a bespoke message, so an MCP call and a physical keystroke
+  # travel the identical host routing (the "one vocabulary" discipline the
+  # U1 block seams established) and the picker itself stays the single
+  # authority on what "select the current item" resolves to. "select" is
+  # offered only when the ranked list is non-empty (read from the stamped
+  # `match_count` attr), mirroring the empty-list guard `handle_event`'s
+  # own Enter clause already applies.
+
+  @impl Raxol.MCP.ToolProvider
+  def mcp_tools(node) do
+    attrs = Map.get(node, :attrs, %{})
+    match_count = Map.get(attrs, :match_count, 0)
+
+    dismiss = %{
+      name: "dismiss",
+      description: "Dismiss the picker overlay",
+      inputSchema: %{type: "object", properties: %{}}
+    }
+
+    if match_count > 0 do
+      [
+        %{
+          name: "select",
+          description: "Select the currently highlighted item",
+          inputSchema: %{type: "object", properties: %{}}
+        },
+        dismiss
+      ]
+    else
+      [dismiss]
+    end
+  end
+
+  @impl Raxol.MCP.ToolProvider
+  def handle_tool_call("select", _args, _context) do
+    {:ok, "Selected the current item", [Event.new(:key, %{key: :enter})]}
+  end
+
+  def handle_tool_call("dismiss", _args, _context) do
+    {:ok, "Dismissed the picker", [Event.new(:key, %{key: :escape})]}
+  end
+
+  def handle_tool_call(action, _args, _context),
+    do: {:error, "Unknown action: #{action}"}
 end

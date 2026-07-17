@@ -150,6 +150,28 @@ defmodule Raxol.UI.Components.Harness.PickerTest do
 
       assert Picker.query(state) == ""
     end
+
+    # EventBuilder.key/2 (the Headless autotest harness), Event.key_match/1,
+    # and the re-hosted ReasoningBlock/MessageBlock all put the printable in
+    # `data.char` with `data.key == :char`. Without a clause for this shape
+    # the picker cannot filter under Headless -- the whole U3 overlay
+    # autotest story. (Regression pin for the harness TEA re-hosting.)
+    test "EventBuilder/native-shaped printable (%{key: :char, char: c}) inserts into the query" do
+      state = init!(items: ["alpha", "widget"], key_fn: & &1)
+
+      {state, []} = raw_key(state, %{key: :char, char: "a"})
+
+      assert Picker.query(state) == "a"
+      assert Enum.map(Picker.ranked(state), & &1.item) == ["alpha"]
+    end
+
+    test "a ctrl-modified EventBuilder-shaped printable stays a shortcut, not text" do
+      state = init!(items: ["alpha"], key_fn: & &1)
+
+      {state, []} = raw_key(state, %{key: :char, char: "a", ctrl: true})
+
+      assert Picker.query(state) == ""
+    end
   end
 
   describe "selection movement" do
