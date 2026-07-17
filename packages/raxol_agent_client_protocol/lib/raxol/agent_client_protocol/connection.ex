@@ -116,6 +116,21 @@ defmodule Raxol.AgentClientProtocol.Connection do
        `parent_sup` + `which_children` resolution in `handle_continue/2`
        (IC-8); the shared IC pins the tree shape but not the child ids, so
        resolution is by child module/type heuristic.
+
+  ## Single-sender `session/update` delivery (post-ship fix)
+
+  Every OTHER inbound notification dispatches to its own
+  `Task.Supervisor.async_nolink` task (§4.4), same as an inbound request
+  (§4). `session/update` (client role only) is the one deliberate
+  exception, added after ship: it is handled SYNCHRONOUSLY, in this
+  process, by `dispatch_session_update_sync/2` — see that function's doc
+  for the drop/reorder race this closes (three different BEAM senders —
+  Connection for the turn's terminal result, a fresh task per update —
+  gave no cross-sender mailbox-ordering guarantee to a `Client.subscribe/3`
+  consumer) and the accepted trade-off (a slow custom `session_update/2`
+  override now runs on this process's own message loop instead of an
+  isolated task; a crash is still caught and never reaches the wire or
+  takes the Connection down).
   """
 
   use GenServer
@@ -983,9 +998,96 @@ defmodule Raxol.AgentClientProtocol.Connection do
       notif.method == "session/cancel" ->
         route_session_cancel(notif.params, rx_seq, state)
 
+      notif.method == "session/update" and state.role == :client ->
+        dispatch_session_update_sync(notif, state)
+
       true ->
         dispatch_inbound_notification(notif, state)
     end
+  end
+
+  # `session/update` (client role only) -- SYNCHRONOUS, single-sender
+  # delivery. This is a deliberate exception to "every inbound notification
+  # dispatches to its own async_nolink task" (§4.4): see the moduledoc's
+  # "Single-sender session/update delivery" section for the full race this
+  # closes and why running it here, in THIS process, is what closes it.
+  #
+  # In short: `Client.subscribe/3`'s default `session_update/2` forwards the
+  # decoded update via `send/2` to whichever process called `subscribe/3`
+  # (typically `prompt_stream/4`'s caller). The turn's terminal
+  # `session/prompt` RESPONSE is delivered to that same process directly by
+  # THIS Connection (`deliver_outcome/2`). When the update's forwarding
+  # `send/2` instead came from a separate per-notification task, it and the
+  # response were two different BEAM senders to the same receiver -- no
+  # cross-sender mailbox-ordering guarantee -- so the response could land
+  # first and `prompt_stream/4`'s receive loop would exit before an
+  # in-flight update was ever read, silently dropping it.
+  #
+  # The Connection handles inbound wire frames strictly in arrival order
+  # (one frame per `handle_info`), and the wire itself guarantees no
+  # `session/update` for a turn arrives after that turn's `session/prompt`
+  # response. So finishing this dispatch -- including whatever `send/2` the
+  # handler performs -- before the Connection ever looks at the next frame
+  # guarantees that send happens-before the terminal result's send, AND
+  # both now originate from this SAME process, giving BEAM's real
+  # per-sender/per-receiver FIFO guarantee.
+  #
+  # Trade-off (deliberate, scoped to this one method): a slow or crashing
+  # CUSTOM `c:session_update/2` override now runs on the Connection's own
+  # message loop instead of an isolated task, and can delay it. The crash
+  # side is still contained: `run_session_update_sync/4` wraps the call so
+  # a raise/throw/exit is logged + telemetried exactly like an async
+  # handler crash would be (§4.4), never taking the Connection down and
+  # never producing a wire frame (notifications never do). The DEFAULT
+  # handler (an ETS lookup + `send/2`) is cheap by construction, so this
+  # only matters for apps overriding `session_update/2` with something
+  # heavier -- an accepted cost for the correctness guarantee
+  # `prompt/3`/`prompt_stream/4` depend on.
+  defp dispatch_session_update_sync(%Notification{method: method, params: params}, state) do
+    case Router.decode(state.role, :notification, method, params) do
+      {:error, _reason} ->
+        Logger.debug("ACP: unknown/invalid notification #{method} dropped")
+        emit_telemetry([:raxol, :acp, :unknown_notification], %{method: method})
+        {:noreply, state}
+
+      {:ok, dispatchable} ->
+        ctx = %Ctx{
+          conn: self(),
+          role: state.role,
+          caps: state.caps,
+          handler_state: state.handler_state,
+          reply_ref: nil,
+          rx_seq: 0,
+          session_sup: state.session_sup,
+          task_sup: state.task_sup
+        }
+
+        run_session_update_sync(state.role, state.handler, dispatchable, ctx, method)
+        {:noreply, state}
+    end
+  end
+
+  # Never let a handler crash reach the wire OR take the Connection down
+  # (§4.4 parity with the async-task crash path in `handle_task_down/3`) --
+  # `rescue` covers a raised exception, `catch` covers a bare `throw`/`exit`
+  # from handler code, so this is total regardless of how the handler
+  # misbehaves.
+  defp run_session_update_sync(side, handler, dispatchable, ctx, method) do
+    run_dispatch(side, handler, dispatchable, ctx)
+    :ok
+  rescue
+    e ->
+      Logger.error(
+        "ACP: notification handler crashed (#{method}): #{Exception.format(:error, e, __STACKTRACE__)}"
+      )
+
+      emit_telemetry([:raxol, :acp, :handler_crash], %{kind: :notification, method: method})
+      :ok
+  catch
+    kind, reason ->
+      Logger.error("ACP: notification handler #{kind} (#{method}): #{inspect(reason)}")
+      emit_telemetry([:raxol, :acp, :handler_crash], %{kind: :notification, method: method})
+      :ok
   end
 
   defp dispatch_inbound_notification(%Notification{method: method, params: params}, state) do

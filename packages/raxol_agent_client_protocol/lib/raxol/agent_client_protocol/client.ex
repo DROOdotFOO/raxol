@@ -330,17 +330,19 @@ defmodule Raxol.AgentClientProtocol.Client do
   failure/decode failure, same vocabulary as `Connection.async_request/6`'s
   `outcome`.
 
-  Ordering caveat: `session/update` forwarding to the subscribed process
-  runs in a separate handler task per notification (Connection design
-  §4.4), while the terminal `session/prompt` response is delivered
-  directly by `Connection` itself -- the WIRE order between them is
-  invariant (I3: no update after its turn's response), but the two
-  deliveries landing in *this* process's mailbox are two different
-  senders, so BEAM gives no cross-sender guarantee. This function does one
-  short best-effort settle pass after the terminal message arrives to
-  absorb same-turn stragglers; treat `updates` as "very likely complete,
-  not protocol-guaranteed complete" -- `prompt_stream/4` has no such gap
-  because it never leaves the receive loop.
+  Ordering: `Connection` delivers `session/update` forwarding to the
+  subscribed process SYNCHRONOUSLY, from the Connection process itself,
+  before it ever looks at the next inbound frame (see
+  `Connection`'s "Single-sender `session/update` delivery" moduledoc
+  section) -- and the terminal `session/prompt` response is also delivered
+  directly by `Connection`. Both now originate from the SAME sender to
+  this process, so BEAM's per-sender/per-receiver FIFO guarantee applies:
+  the WIRE invariant (I3: no update after its turn's response) carries
+  through to mailbox order here, not just on the wire. This function still
+  does one short best-effort settle pass after the terminal message
+  arrives, kept as defence-in-depth (e.g. against a future notification
+  path that isn't single-sender) rather than because it is required for
+  correctness today.
 
   Always subscribes and unsubscribes around the call, including on error.
 
