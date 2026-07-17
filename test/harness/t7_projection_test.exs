@@ -43,7 +43,7 @@ defmodule Raxol.Harness.T7ProjectionTest do
   alias Raxol.UI.Components.Harness.Block
 
   @sessions_dir "test/fixtures/harness/sessions"
-  @golden_names ~w(simple-chat multi-tool-turn long-folds unicode-heavy markdown-stream taint-propagation)
+  @golden_names ~w(simple-chat multi-tool-turn long-folds unicode-heavy markdown-stream taint-propagation evidence-done)
 
   defp load!(name),
     do: Fixture.load(Path.join(@sessions_dir, name <> ".jsonl")) |> elem(1)

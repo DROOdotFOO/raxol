@@ -29,12 +29,26 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
       total-safety promise, and `BodyProvider` stays a pure, independently
       test-facing schema seam with no defensive try/rescue of its own.
 
+  ## The completion row survives the expanded mount
+
+  A successfully mounted component's view REPLACES `Block.render/2`'s own
+  body entirely -- which would otherwise silently drop
+  `Block.completion_rows/2`'s honesty row (see `Block`'s moduledoc, "The
+  completion row") for every kind except the opaque/plain-text fallback.
+  When the mount succeeds AND `block.content` carries a `:completion` key,
+  `render/2` wraps the mounted view and the completion row(s) in one
+  `Components.column/1` (unfaded -- `%{dim: true}` only, no prominence
+  threading through this seam, kept simple per T5's own scope). A block
+  with no `:completion` key mounts and renders exactly as before, no
+  wrapping at all -- byte-identical to today's render.
+
   This unit renders into a plain view map, same as every component in this
   package (`Raxol.View.Components`-shaped, buffer-testable without a real
   terminal) -- no I/O of its own.
   """
 
   alias Raxol.UI.Components.Harness.{Block, BodyProvider}
+  alias Raxol.View.Components
 
   require Logger
 
@@ -55,11 +69,30 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   def render(%Block{fold: :expanded} = block, context) do
     case mount_body(block, context) do
       {:ok, view} ->
-        view
+        wrap_with_completion(view, block)
 
       {:error, reason} ->
         emit_recovered(block.kind, reason)
         Block.render(block, context)
+    end
+  end
+
+  # A mounted component's view replaces Block.render/2's whole body, so
+  # the completion row (otherwise only reachable through that render)
+  # has to be re-appended here. Byte-identical, no wrapping at all, when
+  # `Block.completion_rows/2` has nothing to add -- both when
+  # `block.content` carries no `:completion` key AND when it carries one
+  # in a shape `completion_rows/2` doesn't recognise (that helper's own
+  # contract: unrecognised shape -> `[]`). Computing `rows` FIRST and
+  # branching on it (rather than pattern-matching on the mere presence of
+  # the `:completion` key, as an earlier version of this function did) is
+  # what keeps this module's own "byte-identical when there is nothing to
+  # add" promise honest for that unrecognised-shape case too -- see the
+  # moduledoc.
+  defp wrap_with_completion(view, %Block{} = block) do
+    case Block.completion_rows(block) do
+      [] -> view
+      rows -> Components.column(gap: 0, children: [view | rows])
     end
   end
 

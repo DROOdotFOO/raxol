@@ -22,4 +22,5 @@
 "end\r\n"
 "\e8\e7\e[15;1H\e[KInput: clear | Stage: item_completed | Ctx: — | Cost: —\e[16;1H\e[K[assistant]\e[17;1H\e[KRoot has mix.exs, lib/, test/, README.md.\e8\e7\e[14;1H\e[2m[assistant]\e[0m\r\n"
 "Root has mix.exs, lib/, test/, README.md.\r\n"
+"\e[2mno evidence provided\e[0m\r\n"
 "\e8\e7\e[15;1H\e[KInput: clear | Stage: turn_completed | Ctx: — | Cost: $0.00\e[16;1H\e[K \e[17;1H\e[K\e[2m\\ continue · paste multiline · ↵ submit\e[0m\e[18;1H\e[K\e[19;1H\e[K\e8"

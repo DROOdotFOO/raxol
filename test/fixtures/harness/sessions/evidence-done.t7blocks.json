@@ -1,66 +1,23 @@
 {
   "blocks": [
     {
-      "kind": "reasoning",
+      "kind": "tool_call",
       "outcome": {
         "exit_code": null,
-        "duration_ms": 100,
+        "duration_ms": 300,
         "cost": null
       },
       "content": {
-        "text": "I should list the directory first, then read mix.exs."
+        "args": {},
+        "name": "mix_test",
+        "result": "42 tests, 0 failures",
+        "tainted": true
       },
       "event_refs": [
         2,
-        3
-      ],
-      "raw_kind": "reasoning",
-      "seal": "sealed"
-    },
-    {
-      "kind": "tool_call",
-      "outcome": {
-        "exit_code": null,
-        "duration_ms": 300,
-        "cost": null
-      },
-      "content": {
-        "args": {
-          "path": "."
-        },
-        "name": "list_dir",
-        "result": "mix.exs\nlib/\ntest/\nREADME.md",
-        "tainted": true
-      },
-      "event_refs": [
+        3,
         4,
-        5,
-        6,
-        7
-      ],
-      "raw_kind": "tool_call",
-      "seal": "sealed"
-    },
-    {
-      "kind": "tool_call",
-      "outcome": {
-        "exit_code": null,
-        "duration_ms": 300,
-        "cost": null
-      },
-      "content": {
-        "args": {
-          "path": "mix.exs"
-        },
-        "name": "read_file",
-        "result": "defmodule Raxol.MixProject do\n  use Mix.Project\nend",
-        "tainted": true
-      },
-      "event_refs": [
-        8,
-        9,
-        10,
-        11
+        5
       ],
       "raw_kind": "tool_call",
       "seal": "sealed"
@@ -69,18 +26,51 @@
       "kind": "message",
       "outcome": {
         "exit_code": null,
-        "duration_ms": 200,
+        "duration_ms": 100,
+        "cost": null
+      },
+      "content": {
+        "completion": {
+          "total": 1,
+          "evidence": [
+            {
+              "label": "mix_test — 42 tests, 0 failures",
+              "type": "tool_result",
+              "ref": 5
+            }
+          ],
+          "type_counts": [
+            {
+              "count": 1,
+              "type": "tool_result"
+            }
+          ]
+        },
+        "text": "All 42 tests passed."
+      },
+      "event_refs": [
+        6,
+        7
+      ],
+      "raw_kind": "message",
+      "seal": "sealed"
+    },
+    {
+      "kind": "message",
+      "outcome": {
+        "exit_code": null,
+        "duration_ms": 100,
         "cost": null
       },
       "content": {
         "completion": {
           "evidence": "none"
         },
-        "text": "Root has mix.exs, lib/, test/, README.md."
+        "text": "Sounds good, wrapping up now."
       },
       "event_refs": [
-        12,
-        14
+        10,
+        11
       ],
       "raw_kind": "message",
       "seal": "sealed"

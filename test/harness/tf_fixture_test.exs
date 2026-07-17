@@ -38,7 +38,7 @@ defmodule Raxol.Harness.TFFixtureTest do
   end
 
   @sessions_dir "test/fixtures/harness/sessions"
-  @golden_names ~w(simple-chat multi-tool-turn long-folds unicode-heavy markdown-stream taint-propagation)
+  @golden_names ~w(simple-chat multi-tool-turn long-folds unicode-heavy markdown-stream taint-propagation evidence-done)
   @all_names @golden_names ++ ["adversarial"]
 
   # -- golden sessions load ------------------------------------------------
