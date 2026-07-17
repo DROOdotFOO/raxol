@@ -376,7 +376,12 @@ defmodule Raxol.UI.Harness.ProminenceTest do
   # ---------------------------------------------------------------------
 
   describe "Block prominence integration" do
-    test "prominence < 1.0 in context resolves the header/content/outcome fg" do
+    test "prominence < 1.0 in context resolves the header AND content fg for every rendered row" do
+      # An EXPANDED tool round: the compact `⚙ grep` header line PLUS the
+      # result body rows. (A folded tool_call is a single header line -- the
+      # outcome is folded into the glyph, not a separate row; see fix 1 /
+      # the tool-compaction ruling.) Prominence must fade every rendered row
+      # to the same resolved fg.
       events = [
         %{
           id: 1,
@@ -386,18 +391,27 @@ defmodule Raxol.UI.Harness.ProminenceTest do
             content: %{name: "grep", args: %{}},
             exit_code: 0
           }
+        },
+        %{
+          id: 2,
+          type: :item_completed,
+          payload: %{item_type: :tool_result, content: "match one\nmatch two"}
         }
       ]
 
-      block = Block.from_events(:tool_call, events, fold: :folded)
+      block = Block.from_events(:tool_call, events, fold: :expanded)
 
-      %{children: [header, outcome]} =
+      %{children: [header | body]} =
         Block.render(block, %{prominence: 0.6, ground: 0.2})
 
       expected_fg = Prominence.resolve("#B4B4B4", 0.6, ground: 0.2)
 
       assert header.style.fg == expected_fg
-      assert outcome.style.fg == expected_fg
+      assert body != [], "an expanded tool round must render its result body"
+
+      for row <- body do
+        assert row.style.fg == expected_fg
+      end
     end
 
     test "prominence in context defaults ground to the module's own default resolution" do

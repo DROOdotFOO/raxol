@@ -1,8 +1,7 @@
  ∴ reasoning · 1 line
 
- ⚙ list_dir(path: ".") · ✓ 4 lines · 300ms · ⚠︎ untrusted
-
- ⚙ read_file(path: "mix.exs") · ✓ 3 lines · 300ms · ⚠︎ unt…
+ ⚙ list_dir path: . · ⚠︎ untrusted
+ ⚙ read_file path: mix.exs · ⚠︎ untrusted
 
 ❮ Root has mix.exs, lib/, test/, README.md.
   no evidence provided

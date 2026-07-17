@@ -132,9 +132,14 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
   defp valid_body(kind), do: fixture_block(kind).content
 
   describe "known_kinds/0 + required_keys/1 -- the schema surface" do
-    test "matches Block's five known kinds exactly (excludes :opaque)" do
+    test "matches Block's mountable kinds (excludes :opaque and :error)" do
+      # `:error` is a Block kind but has NO mounted component -- it renders
+      # as a compact alarm line via `Block.render/2` (see `BlockBody`'s
+      # `:error` clause), so `BodyProvider` never mounts it, exactly like
+      # `:opaque`. The schema surface therefore covers Block's known kinds
+      # MINUS `:error`.
       assert Enum.sort(BodyProvider.known_kinds()) ==
-               Enum.sort(Block.known_kinds())
+               Enum.sort(Block.known_kinds() -- [:error])
     end
 
     test "every known kind has at least one required key" do

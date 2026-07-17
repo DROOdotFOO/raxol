@@ -74,8 +74,15 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   # mounted DiffViewer as the expanded form (the ± body is the artifact);
   # its folded form is Block's compact `± path · +N -M` line via the
   # folded clause above.
+  #
+  # `:error` is Block.render/2's own too: its compact alarm line (`✗
+  # <message>`, no fold arrow, non-dim) has no mounted-component form -- a
+  # fault is a visible line, never a foldable widget, and expanded just
+  # appends the full multi-line message. (`ErrorBlock`, the bordered-box
+  # component, is a separate standalone widget, not this transcript's
+  # inline fault render.)
   def render(%Block{kind: kind} = block, context)
-      when kind in [:tool_call, :reasoning],
+      when kind in [:tool_call, :reasoning, :error],
       do: Block.render(block, context)
 
   # An edit/write approval carrying a proposed diff (`old`/`new`) is

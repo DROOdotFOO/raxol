@@ -177,7 +177,14 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   @recovered_telemetry_event [:raxol, :harness, :block, :recovered]
 
-  @type kind :: :message | :reasoning | :tool_call | :diff | :approval | :opaque
+  @type kind ::
+          :message
+          | :reasoning
+          | :tool_call
+          | :diff
+          | :approval
+          | :error
+          | :opaque
   @type fold_state :: :expanded | :folded
   @type seal_state :: :live | :sealed
   @type fold_after_seal_policy :: :allow | :deny
@@ -209,19 +216,26 @@ defmodule Raxol.UI.Components.Harness.Block do
   ]
   defstruct [:kind, :raw_kind, :event_refs, :fold, :seal, :outcome, :content]
 
-  @known_kinds [:message, :reasoning, :tool_call, :diff, :approval]
+  @known_kinds [:message, :reasoning, :tool_call, :diff, :approval, :error]
 
   # Machinery kinds (tool_call/reasoning/diff) default FOLDED: their
   # default form is the one-line compact register (glyph + referent +
   # receipt), per the low-prominence execution-block ruling -- tool output
   # is always subordinate to speech. `z` (fold toggle) peeks the full body.
+  #
+  # `:error` defaults FOLDED too, but its compact form is a full-weight
+  # ALARM line (`✗ <message>`), never the dim machinery register: a fault
+  # is signal, and its real message must read plainly on the folded line --
+  # never hidden behind a `N lines` receipt or a bare `(empty)`. `z` still
+  # peeks a multi-line fault's full body.
   @default_fold_by_kind %{
     message: :expanded,
     reasoning: :folded,
     tool_call: :folded,
     diff: :folded,
     approval: :expanded,
-    opaque: :expanded
+    opaque: :expanded,
+    error: :folded
   }
 
   @default_fold_after_seal :deny
@@ -528,6 +542,19 @@ defmodule Raxol.UI.Components.Harness.Block do
     )
   end
 
+  # An error is an ALARM line, never a foldable machinery block: NO fold
+  # arrow, NEVER dim (a fault is signal, per the compaction ruling), and it
+  # shows its REAL message (`error_line/1` reads the honest error text, with
+  # an honest specific fallback when the fault genuinely carries none --
+  # never a bare `(empty)`). The compact line is line 1 of the fault; `z`
+  # peeks the full body (a multi-line fault) via `content_lines_view/4`.
+  defp header_view(%__MODULE__{kind: :error} = block, width, fg, _context) do
+    Components.text(
+      content: TextLayout.truncate(error_line(block), max(width, 1), :ellipsis),
+      style: apply_fg(%{}, fg)
+    )
+  end
+
   defp header_view(block, width, fg, _context) do
     prefix = "#{fold_icon(block.fold)} #{glyph(block)} "
     budget = max(width - TextMeasure.display_width(prefix), 1)
@@ -670,9 +697,21 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   # -- the compact machinery lines ------------------------------------------
 
-  # The one-line form of a merged tool round-trip:
-  # `⚙ name(lead args) · <receipt>` -- glyph + referent + outcome receipt,
-  # never a header plus a result section.
+  # The one-line form of a merged tool round-trip: `⚙ name key: value`
+  # -- glyph + referent + args, NO receipt. V's ruling: the byte-count /
+  # duration / `✓ N lines` receipt was redundant information (the strip
+  # already shows elapsed; the z-expanded body shows the output), and the
+  # arg braces + quotes were noise. So the collapsed line drops the whole
+  # `· <receipt>` suffix and renders args as unquoted `key: value` (see
+  # `format_args/1`), never `(key: "value")`.
+  #
+  # The STATE the receipt used to carry now rides the leading GLYPH
+  # (`tool_glyph/3`): `⚙` normal/success, `✗` a failed exit (alarm), `⊘`
+  # a sealed tool that produced no result (the honest absence). A pending
+  # footer preview keeps `⚙` -- the col-0 margin spinner already animates
+  # "running" there, so no `running…` text is needed. The one surviving
+  # suffix is the taint marker: `⚠︎ untrusted` is a security provenance
+  # signal, not a receipt, so it is never dropped.
   defp tool_line(%__MODULE__{content: content} = block, context) do
     name =
       case Map.get(content, :name) do
@@ -680,118 +719,68 @@ defmodule Raxol.UI.Components.Harness.Block do
         _absent -> "(tool)"
       end
 
+    glyph = tool_glyph(content, block.outcome, context)
     args = format_args(Map.get(content, :args))
 
-    "#{kind_glyph(:tool_call)} #{name}#{args} · " <>
-      tool_receipt_text(content, block.outcome, context)
+    "#{glyph} #{name}#{args}#{tool_taint_suffix(content)}"
   end
 
-  @doc """
-  The outcome receipt folded into a `:tool_call` block's compact line --
-  derived from the tool_result payload and the block's outcome, never
-  invented (the evidence rules' receipts vocabulary):
-
-    * still awaiting its result AND rendered in the footer live tail
-      (`context[:pending?]`, no result, no exit) -> `"running…"`. This is
-      the ONE place `running…` appears: a footer preview, never sealed
-      history. Seal-on-result-only keeps the sealed line final-form and
-      the live/fixture byte-parity guard cadence-independent.
-    * sealed with no result (the pending flag absent, no result/exit) ->
-      `"⊘ no result"` -- the honest absence, never a checkmark.
-    * integer `exit_code` -> `"✓ exit 0"` / `"✗ exit N — first error line"`
-      (shell vocabulary: exit + duration).
-    * otherwise, shaped from the result payload itself: `"✓ N lines"`
-      (multi-line output -- a listing's lines ARE its entries), `"✓ N B"`
-      (single-line output, byte count), `"✓ empty"` (empty output). The
-      vocabulary is deliberately shape-derived, not tool-name-derived: a
-      producer-controlled name is a proxy, the payload is the referent.
-
-  `duration` (from `outcome.duration_ms`, the BlockBuilder-fixed
-  call-to-result span) and `cost` append as further ` · ` parts; tainted
-  provenance appends the text-presentation `⚠︎ untrusted` marker.
-  Context key `:pending?` (default `false`) is set only by the footer
-  live-tail preview: a resultless tool renders `running…` there while its
-  result may still arrive, and its final `⊘ no result` / `✓ …` form
-  everywhere the flag is absent (sealed history above all).
-  """
-  @spec tool_receipt(t(), map()) :: String.t()
-  def tool_receipt(%__MODULE__{} = block, context \\ %{}) do
-    tool_receipt_text(block.content, block.outcome, context)
-  end
-
-  defp tool_receipt_text(content, outcome, context) do
+  # The compact tool glyph carries the outcome state the receipt suffix
+  # used to spell out -- one monochrome text cell (all in
+  # `glyph_inventory/0`), never a verbose ` · ✓ …` tail:
+  #
+  #   * pending footer preview (`context[:pending?]`, no result/exit) ->
+  #     `⚙`; the margin spinner animates "running", so the line stays plain.
+  #   * non-zero `exit_code` -> `✗` (a failure is signal; the header stays
+  #     non-dim -- see `header_view(:tool_call)`).
+  #   * sealed with NO result and NO exit -> `⊘`, the honest absence (a
+  #     claim of action with no receipt is never silent).
+  #   * otherwise (a result, or exit 0) -> `⚙`.
+  defp tool_glyph(content, outcome, context) do
     result = Map.get(content, :result)
+    exit_code = Map.get(outcome, :exit_code)
 
-    if awaiting_result?(result, outcome, context) do
-      join_receipt_parts(["running…", taint_part(content)])
-    else
-      join_receipt_parts([
-        receipt_status(result, outcome),
-        duration_part(Map.get(outcome, :duration_ms)),
-        cost_part(Map.get(outcome, :cost)),
-        taint_part(content)
-      ])
+    cond do
+      awaiting_result?(result, outcome, context) -> kind_glyph(:tool_call)
+      is_integer(exit_code) and exit_code != 0 -> "✗"
+      is_nil(result) and is_nil(exit_code) -> "⊘"
+      true -> kind_glyph(:tool_call)
+    end
+  end
+
+  # The taint marker is a security provenance signal (never a receipt), so
+  # it survives the receipt drop as the collapsed line's one ` · ` suffix.
+  defp tool_taint_suffix(content) do
+    if Map.get(content, :tainted) == true, do: " · " <> @taint_marker, else: ""
+  end
+
+  # The ALARM line for an `:error` block -- glyph `✗` + the REAL fault text
+  # (line 1; `z` peeks the rest), read defensively from the fault payload.
+  # An error event carries its message on `reason` (see
+  # `Raxol.Agent.Contract`'s `:error` event, payload `%{reason}`), which the
+  # generic `@text_paths` never read -- hence the old `[error] (empty)`
+  # render. When the fault genuinely carries no message, fall back to an
+  # honest specific line (naming `where`, else that there is no message),
+  # never a bare `(empty)`.
+  defp error_line(%__MODULE__{content: content}) do
+    message = content |> Map.get(:text) |> to_display_text() |> String.trim()
+    where = content |> Map.get(:where) |> to_display_text() |> String.trim()
+
+    cond do
+      message != "" -> "✗ " <> first_line(message)
+      where != "" -> "✗ error from " <> first_line(where)
+      true -> "✗ error (no message)"
     end
   end
 
   # Awaiting = rendered in the footer live tail (`pending?`), no result
   # yet, and no exit code (a non-nil exit counts as an answer). `pending?`
-  # is set ONLY by the footer preview, so a sealed tool line never reads
-  # `running…` -- it is final-form, guaranteeing byte parity across reveal
-  # cadences.
+  # is set ONLY by the footer preview -- it keeps a pending tool's glyph a
+  # plain `⚙` (the margin spinner animates "running") instead of the sealed
+  # `⊘` absence, so the live tool line and its sealed form stay coherent.
   defp awaiting_result?(result, outcome, context) do
     is_nil(result) and is_nil(Map.get(outcome, :exit_code)) and
       Map.get(context, :pending?, false) == true
-  end
-
-  defp receipt_status(result, outcome) do
-    exit_code = Map.get(outcome, :exit_code)
-
-    cond do
-      is_integer(exit_code) and exit_code != 0 ->
-        "✗ exit #{exit_code}" <> short_error(result)
-
-      is_nil(result) and is_nil(exit_code) ->
-        "⊘ no result"
-
-      is_integer(exit_code) ->
-        "✓ exit #{exit_code}"
-
-      true ->
-        "✓ " <> size_receipt(result)
-    end
-  end
-
-  # First non-blank line of the failed tool's output, clamped -- the
-  # short-error tail of an alarm line, never the whole body.
-  @short_error_width 40
-  defp short_error(result) do
-    line =
-      result
-      |> to_display_text()
-      |> String.split("\n")
-      |> Enum.find(&(String.trim(&1) != ""))
-
-    case line do
-      nil -> ""
-      line -> " — " <> TextLayout.truncate(line, @short_error_width, :ellipsis)
-    end
-  end
-
-  defp size_receipt(result) do
-    case result |> to_display_text() |> String.split("\n") do
-      [""] -> "empty"
-      [line] -> "#{byte_size(line)} B"
-      lines -> "#{length(lines)} lines"
-    end
-  end
-
-  defp taint_part(content) do
-    if Map.get(content, :tainted) == true, do: @taint_marker
-  end
-
-  defp join_receipt_parts(parts) do
-    parts |> Enum.reject(&is_nil/1) |> Enum.join(" · ")
   end
 
   defp tool_failed?(outcome) do
@@ -1027,6 +1016,14 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp first_line(other), do: first_line(to_display_text(other))
 
+  # Args as a SPACE-led, unquoted `key: value` list -- V's ruling: no
+  # braces, no quotes. `⚙ glob pattern: **/README*`, never
+  # `⚙ glob(pattern: "**/README*")`. The leading space is emitted here (not
+  # by the caller) so an empty arg set contributes NOTHING -- `⚙ name` with
+  # no trailing space. Values render via `format_arg_value/1` (a binary
+  # unquoted, newlines flattened to keep the collapsed line one row; any
+  # other term still `inspect`ed for honesty). Callers (`tool_line/2`,
+  # `summary/1`) concatenate directly onto the tool name.
   defp format_args(nil), do: ""
   defp format_args(args) when is_map(args) and map_size(args) == 0, do: ""
 
@@ -1034,15 +1031,25 @@ defmodule Raxol.UI.Components.Harness.Block do
     body =
       args
       |> Enum.sort_by(fn {k, _v} -> arg_sort_key(k) end)
-      |> Enum.map_join(", ", fn {k, v} -> "#{k}: #{inspect(v)}" end)
+      |> Enum.map_join(", ", fn {k, v} -> "#{k}: #{format_arg_value(v)}" end)
 
-    "(#{body})"
+    " " <> body
   end
 
   defp format_args(""), do: ""
-  defp format_args(args) when is_binary(args), do: "(#{args})"
+  defp format_args(args) when is_binary(args), do: " " <> format_arg_value(args)
   defp format_args([]), do: ""
-  defp format_args(args), do: "(#{inspect(args)})"
+  defp format_args(args), do: " " <> inspect(args)
+
+  # A binary value renders UNQUOTED (V's ruling), with newlines flattened
+  # so a multi-line value (an edit tool's `new_string`) can never break the
+  # single collapsed row -- the header's own truncation then trims the tail.
+  # Any non-binary term is still `inspect`ed: an honest, unambiguous render
+  # beats a lossy `to_string/1` on an arbitrary term.
+  defp format_arg_value(v) when is_binary(v),
+    do: String.replace(v, ~r/[\r\n]+/, " ")
+
+  defp format_arg_value(v), do: inspect(v)
 
   # The referent leads: a path/file argument is WHAT the tool acts on, so it
   # sorts ahead of every other arg (a plain alphabetical sort put
@@ -1581,6 +1588,12 @@ defmodule Raxol.UI.Components.Harness.Block do
   @cost_paths [[:cost], [:usage, :cost], [:content, :cost]]
   @duration_paths [[:duration_ms], [:content, :duration_ms]]
   @text_paths [[:content], [:text], [:output], [:diff]]
+  # A fault's message: `reason` FIRST (the `:error` event's own payload
+  # key), then the generic text keys as a defensive fallback. `where` is the
+  # optional fault origin. Both are absent-tolerant (`find_in_events/2`
+  # returns nil), so `error_line/1` degrades to its honest specific line.
+  @error_text_paths [[:reason], [:message], [:content], [:text]]
+  @where_paths [[:where], [:content, :where]]
   @role_paths [[:role], [:content, :role]]
   @name_paths [[:name], [:content, :name]]
   @args_paths [[:args], [:content, :args]]
@@ -1666,6 +1679,17 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp extract_content(:message, events),
     do: %{text: extract_text(events), role: extract_role(events)}
+
+  # A fault carries its message on `reason` (see `Raxol.Agent.Contract`'s
+  # `:error` event), and MAY carry a `where`. Both are read here so
+  # `error_line/1` can render the honest message (with a `where`-named
+  # fallback), instead of the generic `@text_paths` extraction that never
+  # read `reason` and produced the `[error] (empty)` regression.
+  defp extract_content(:error, events),
+    do: %{
+      text: events |> find_in_events(@error_text_paths) |> to_display_text(),
+      where: find_in_events(events, @where_paths)
+    }
 
   defp extract_content(_kind, events), do: %{text: extract_text(events)}
 

@@ -350,7 +350,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       refute Enum.any?(flat_texts(rendered), &(&1 =~ "exit"))
     end
 
-    test "partial outcome data renders only the present fields" do
+    test "a failed tool_call's exit carries in the ✗ glyph, never an exit/duration/cost receipt" do
       events = [
         %{
           id: 1,
@@ -363,14 +363,16 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       rendered = Block.render(block, %{width: 80})
       texts = flat_texts(rendered)
 
-      # A tool_call's outcome is folded into its compact receipt line,
-      # not a separate row: exit present, duration/cost absent.
-      assert Enum.any?(texts, &(&1 =~ "exit 1"))
+      # Fix 1: the receipt suffix is dropped; a non-zero exit is carried by
+      # the leading ✗ glyph, not an `exit N` text tail. Never a duration or
+      # cost tail either.
+      assert Enum.any?(texts, &(&1 =~ "✗"))
+      refute Enum.any?(texts, &(&1 =~ "exit 1"))
       refute Enum.any?(texts, &(&1 =~ "$"))
       refute Enum.any?(texts, &(&1 =~ "ms"))
     end
 
-    test "full outcome data (exit code, duration, cost) all render" do
+    test "a successful tool_call's exit-0 outcome is the ⚙ glyph -- no exit/duration/cost receipt" do
       events = [
         %{id: 1, type: :item_started, ts: 1_000_000},
         %{
@@ -385,10 +387,12 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       rendered = Block.render(block, %{width: 80})
       texts = flat_texts(rendered)
 
-      outcome_line = Enum.find(texts, &(&1 =~ "exit"))
-      assert outcome_line =~ "exit 0"
-      assert outcome_line =~ "250ms"
-      assert outcome_line =~ "$0.02"
+      # Fix 1: exit 0 reads as the plain ⚙ glyph; the byte-count, duration,
+      # and cost receipt parts are all gone (the strip carries elapsed/cost).
+      assert Enum.any?(texts, &(&1 =~ "⚙"))
+      refute Enum.any?(texts, &(&1 =~ "exit"))
+      refute Enum.any?(texts, &(&1 =~ "250ms"))
+      refute Enum.any?(texts, &(&1 =~ "$0.02"))
     end
 
     test "duration_ms is derived from item_started/item_completed ts deltas (microseconds)" do
@@ -430,7 +434,9 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       texts = flat_texts(rendered)
 
       assert Enum.any?(texts, &(&1 =~ "Bash"))
-      assert Enum.any?(texts, &(&1 =~ "command: \"ls\""))
+      # Fix 1: args are unquoted `key: value`, never `(key: "value")`.
+      assert Enum.any?(texts, &(&1 =~ "command: ls"))
+      refute Enum.any?(texts, &(&1 =~ "command: \"ls\""))
       assert Enum.any?(texts, &(&1 == "file1"))
       assert Enum.any?(texts, &(&1 == "file2"))
     end
@@ -461,7 +467,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       ]
     end
 
-    test "a FOLDED tool renders exactly ONE line: glyph + name + args + receipt, no result body, no 'Tool Result'" do
+    test "a FOLDED tool renders exactly ONE line: glyph + name + unquoted args, NO receipt, no result body" do
       block =
         Block.from_events(
           :tool_call,
@@ -474,8 +480,11 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
       assert [line] = texts
       assert line =~ "⚙ list_dir"
-      assert line =~ "path: \".\""
-      assert line =~ "✓ 4 lines"
+      # Fix 1: unquoted `key: value`, no braces/quotes; NO `· ✓ N lines`
+      # receipt suffix.
+      assert line =~ "path: ."
+      refute line =~ "path: \".\""
+      refute line =~ "✓ 4 lines"
       refute line =~ "Tool Result"
       refute Enum.any?(texts, &(&1 == "a"))
     end
@@ -512,7 +521,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert style[:dim] == true
     end
 
-    test "receipt derives from the result payload shape: multi-line -> N lines" do
+    test "a tool with multi-line output renders the clean ⚙ line, no `N lines` receipt" do
       block =
         Block.from_events(:tool_call, tool_events("t", %{}, "one\ntwo\nthree"),
           fold: :folded,
@@ -520,10 +529,14 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
         )
 
       assert [line] = flat_texts(Block.render(block, %{width: 120}))
-      assert line =~ "✓ 3 lines"
+      # Fix 1: the shape-derived receipt is retired -- a tool with output is
+      # a plain ⚙ line; the z-expanded body carries the actual output.
+      assert line =~ "⚙ t"
+      refute line =~ "3 lines"
+      refute line =~ "✓"
     end
 
-    test "receipt for single-line output is a byte count" do
+    test "single-line output renders no byte-count receipt either" do
       block =
         Block.from_events(:tool_call, tool_events("t", %{}, "hello"),
           fold: :folded,
@@ -531,10 +544,12 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
         )
 
       assert [line] = flat_texts(Block.render(block, %{width: 120}))
-      assert line =~ "✓ 5 B"
+      assert line =~ "⚙ t"
+      refute line =~ "5 B"
+      refute line =~ "✓"
     end
 
-    test "receipt folds exit code + duration when the payload carries them" do
+    test "a failed tool's exit carries in the ✗ glyph, no exit-code / short-error receipt" do
       events = [
         %{
           id: 1,
@@ -560,8 +575,11 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
         Block.from_events(:tool_call, events, fold: :folded, seal: :sealed)
 
       assert [line] = flat_texts(Block.render(block, %{width: 200}))
-      assert line =~ "✗ exit 2"
-      assert line =~ "boom"
+      # Fix 1: ✗ leads the line (failure state), and the verbose
+      # `✗ exit N — <error>` receipt is gone.
+      assert line =~ "✗ sh"
+      refute line =~ "exit 2"
+      refute line =~ "boom"
     end
 
     test "a FAILED tool keeps ALARM prominence (never dim -- a failure is signal, not machinery noise)" do
@@ -584,11 +602,11 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert [{content, style}] =
                styled_texts(Block.render(block, %{width: 120}))
 
-      assert content =~ "✗ exit 1"
+      assert content =~ "✗ sh"
       refute style[:dim] == true
     end
 
-    test "a resultless tool in the footer live tail (pending?) renders the running receipt" do
+    test "a resultless tool in the footer live tail (pending?) stays a plain ⚙ line (the margin spinner carries 'running', not a receipt)" do
       events = [
         %{
           id: 1,
@@ -598,15 +616,16 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       ]
 
       block = Block.from_events(:tool_call, events, fold: :folded)
-      # running… is a FOOTER-only form -- only when the render context
-      # marks the block as the pending (not-yet-sealed) live tail.
+      # Fix 1: the pending footer preview keeps ⚙ (the col-0 margin spinner
+      # animates 'running'); no `running…` receipt text on the line.
       assert [line] =
                flat_texts(Block.render(block, %{width: 120, pending?: true}))
 
-      assert line =~ "running…"
+      assert line =~ "⚙ slow"
+      refute line =~ "running…"
     end
 
-    test "a resultless tool WITHOUT the pending flag (sealed history) renders the honest absence, never running… or a checkmark" do
+    test "a resultless tool WITHOUT the pending flag (sealed history) renders the honest absence via the ⊘ glyph, never running… or a checkmark" do
       events = [
         %{
           id: 1,
@@ -617,7 +636,9 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
       block = Block.from_events(:tool_call, events, fold: :folded)
       assert [line] = flat_texts(Block.render(block, %{width: 120}))
-      assert line =~ "⊘ no result"
+      # Fix 1: the honest absence is carried by the ⊘ glyph, not a
+      # `⊘ no result` receipt text.
+      assert line =~ "⊘ gone"
       refute line =~ "running…"
       refute line =~ "✓"
     end
@@ -696,6 +717,110 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       block = Block.from_events(:diff, events, fold: :folded, seal: :sealed)
       assert [line] = flat_texts(Block.render(block, %{width: 120}))
       assert line == "± lib/a.ex · +2 -1"
+    end
+  end
+
+  describe ":error alarm block (fix 3: real message, no ◆/(empty), never dim)" do
+    defp error_events(payload) do
+      [%{id: 1, type: :error, payload: payload}]
+    end
+
+    test "an :error kind is first-class, not normalized to :opaque" do
+      block = Block.from_events(:error, error_events(%{reason: "boom"}))
+      assert block.kind == :error
+      assert block.raw_kind == :error
+    end
+
+    test "renders the REAL error message (the `reason` payload), never '(empty)'" do
+      block =
+        Block.from_events(:error, error_events(%{reason: "connection refused"}),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [line] = flat_texts(Block.render(block, %{width: 120}))
+      assert line =~ "connection refused"
+      refute line =~ "(empty)"
+    end
+
+    test "the alarm line leads with ✗, carries NO fold arrow and NO ◆ glyph" do
+      block =
+        Block.from_events(:error, error_events(%{reason: "kaboom"}),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [line] = flat_texts(Block.render(block, %{width: 120}))
+      assert line =~ "✗"
+      refute line =~ "◆"
+      refute line =~ "▾"
+      refute line =~ "▸"
+      refute line =~ "[error]"
+    end
+
+    test "an error keeps ALARM prominence -- never dim (a fault is signal)" do
+      block =
+        Block.from_events(:error, error_events(%{reason: "fault"}),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [{content, style}] =
+               styled_texts(Block.render(block, %{width: 120}))
+
+      assert content =~ "fault"
+      refute style[:dim] == true
+    end
+
+    test "a non-binary reason (an atom/tuple) still renders honestly, not '(empty)'" do
+      block =
+        Block.from_events(:error, error_events(%{reason: {:http_error, 500}}),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [line] = flat_texts(Block.render(block, %{width: 120}))
+      assert line =~ "http_error"
+      refute line =~ "(empty)"
+    end
+
+    test "a fault with NO message renders an honest specific line, never a bare '(empty)'" do
+      block =
+        Block.from_events(:error, error_events(%{where: "Backend.HTTP"}),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [line] = flat_texts(Block.render(block, %{width: 120}))
+      assert line =~ "Backend.HTTP"
+      refute line =~ "(empty)"
+    end
+
+    test "a fault with neither message nor origin is still honest and specific" do
+      block =
+        Block.from_events(:error, error_events(%{}),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [line] = flat_texts(Block.render(block, %{width: 120}))
+      assert line =~ "✗"
+      assert line =~ "error"
+      refute line =~ "(empty)"
+    end
+
+    test "z (expanded) reveals the full multi-line fault under the same alarm line" do
+      block =
+        Block.from_events(
+          :error,
+          error_events(%{reason: "line one\nline two\nline three"}),
+          fold: :expanded,
+          seal: :sealed
+        )
+
+      texts = flat_texts(Block.render(block, %{width: 120}))
+      assert Enum.any?(texts, &(&1 =~ "✗ line one"))
+      assert Enum.any?(texts, &(&1 == "line three"))
     end
   end
 
@@ -890,7 +1015,8 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
         tool_call: :folded,
         diff: :folded,
         approval: :expanded,
-        opaque: :expanded
+        opaque: :expanded,
+        error: :folded
       }
 
       kinds = [:opaque | Block.known_kinds()]
@@ -926,7 +1052,9 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       end
 
       header = render_summary.(args_one)
-      assert header =~ "(background: false, command: \"ls\", cwd: \"/tmp\")"
+      # Fix 1: unquoted `key: value`, sorted, no braces/quotes.
+      assert header =~ "background: false, command: ls, cwd: /tmp"
+      refute header =~ "\""
       assert header == render_summary.(args_two)
     end
 
@@ -942,10 +1070,17 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
                 ),
               max_runs: 50
             ) do
+        # Fix 1: binary values render UNQUOTED, other terms inspected;
+        # sorted by key, joined with ", ", no surrounding braces.
+        fmt = fn
+          v when is_binary(v) -> v
+          v -> inspect(v)
+        end
+
         expected_args =
           pairs
           |> Enum.sort_by(fn {k, _v} -> to_string(k) end)
-          |> Enum.map_join(", ", fn {k, v} -> "#{k}: #{inspect(v)}" end)
+          |> Enum.map_join(", ", fn {k, v} -> "#{k}: #{fmt.(v)}" end)
 
         render_summary = fn args ->
           events = [
@@ -966,7 +1101,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
         header = render_summary.(Map.new(pairs))
 
-        assert header =~ "(#{expected_args})"
+        assert header =~ expected_args
         assert header == render_summary.(pairs |> Enum.shuffle() |> Map.new())
       end
     end

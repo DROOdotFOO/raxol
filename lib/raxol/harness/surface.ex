@@ -756,6 +756,7 @@ defmodule Raxol.Harness.Surface do
           sigil: String.t(),
           reply_sigil: String.t(),
           sealed_any?: boolean(),
+          last_sealed_kind: Block.kind() | nil,
           greeting_rows: [pos_integer()] | nil,
           # `:full_viewport` only (empty/`nil` in the inline/flat family):
           # the owned virtual scrollback (frozen seal records, oldest
@@ -987,6 +988,12 @@ defmodule Raxol.Harness.Surface do
       # stays on screen across a switch, so the next block still needs
       # its separating blank.
       sealed_any?: false,
+      # The kind of the last block sealed into history (nil for an echo /
+      # marker / nothing-yet). Drives the tight-tool-grouping rule
+      # (`block_separator/2`): a machinery block sealed right after another
+      # machinery block gets NO separating blank -- a run of tools reads as
+      # one tight cluster, set off by blanks only from surrounding dialogue.
+      last_sealed_kind: nil,
       # The boot greeting's on-screen rows (nil = none painted / already
       # erased) -- see `maybe_paint_greeting/2` and `clear_greeting/1`.
       # `:full_viewport` never uses this transient (its greeting is a
@@ -1167,7 +1174,8 @@ defmodule Raxol.Harness.Surface do
     %{
       model
       | authority: FlatAuthority.seal(model.authority, iodata),
-        sealed_any?: true
+        sealed_any?: true,
+        last_sealed_kind: nil
     }
   end
 
@@ -1976,6 +1984,33 @@ defmodule Raxol.Harness.Surface do
   end
 
   @doc """
+  Raises (or clears, with `:idle`/`nil`) the turn-in-flight ACTIVITY flag --
+  the honest "is the model still thinking?" signal (V's architectural ask:
+  "what is the signal we can rely on about model is still thinking?").
+
+  The driver/executor calls this around each phase: `:generating` while a
+  model `complete/2` request is outstanding (a BLOCKING round -- the one
+  place zero events arrive, so nothing else animates), `:running_tool` while
+  a tool executes, `:responding` while streaming content, and `:idle` (or
+  `nil`) when awaiting the user or an approval. While an active state holds,
+  the status strip animates its braille spinner on the tick clock (see
+  `Raxol.Harness.StatusStrip.animating?/1`), so the "thinking" pulse keeps
+  moving even through an event-silent blocking round. Idle / awaiting-input
+  animate nothing (operator-paced, per the HUNG-suppression ruling).
+
+  Distinct from `turn_stage` (derived from the last OBSERVED event) and from
+  `put_stall_verdict/2` (the wedged-agent alarm): this is the explicit,
+  producer-raised "a request/tool is actually in flight" flag. Repaints the
+  footer so a transition shows on the next frame.
+  """
+  @spec set_activity(t(), StatusStrip.activity() | nil) :: t()
+  def set_activity(model, activity)
+      when activity in [:generating, :running_tool, :responding, :idle, nil] do
+    %{model | status: Map.put(model.status, :activity, activity)}
+    |> paint_footer()
+  end
+
+  @doc """
   Seals ONE honest, plain marker line into the history region at the
   current append point -- the loss-honesty marker for live streaming (e.g.
   shed deltas, a rejected/dropped event). This instrument never renders a
@@ -2000,7 +2035,8 @@ defmodule Raxol.Harness.Surface do
     %{
       model
       | authority: FlatAuthority.seal(model.authority, iodata),
-        sealed_any?: true
+        sealed_any?: true,
+        last_sealed_kind: nil
     }
   end
 
@@ -2008,7 +2044,8 @@ defmodule Raxol.Harness.Surface do
     %{
       model
       | transcript_records: [{:marker, text} | model.transcript_records],
-        sealed_any?: true
+        sealed_any?: true,
+        last_sealed_kind: nil
     }
   end
 
@@ -2020,7 +2057,8 @@ defmodule Raxol.Harness.Surface do
     %{
       model
       | authority: InlineAuthority.seal(model.authority, iodata),
-        sealed_any?: true
+        sealed_any?: true,
+        last_sealed_kind: nil
     }
   end
 
@@ -2092,7 +2130,8 @@ defmodule Raxol.Harness.Surface do
     %{
       model
       | authority: FlatAuthority.seal(model.authority, iodata),
-        sealed_any?: true
+        sealed_any?: true,
+        last_sealed_kind: nil
     }
   end
 
@@ -2100,7 +2139,8 @@ defmodule Raxol.Harness.Surface do
     %{
       model
       | transcript_records: [{:echo, text} | model.transcript_records],
-        sealed_any?: true
+        sealed_any?: true,
+        last_sealed_kind: nil
     }
   end
 
@@ -2112,7 +2152,8 @@ defmodule Raxol.Harness.Surface do
     %{
       model
       | authority: InlineAuthority.seal(model.authority, iodata),
-        sealed_any?: true
+        sealed_any?: true,
+        last_sealed_kind: nil
     }
   end
 
@@ -2446,7 +2487,7 @@ defmodule Raxol.Harness.Surface do
       |> render_block_lines(model, :plain)
       |> sealed_history_lines(block, model, :plain)
 
-    iodata = Enum.map(block_separator(model) ++ lines, &(&1 <> "\n"))
+    iodata = Enum.map(block_separator(model, block) ++ lines, &(&1 <> "\n"))
     authority = FlatAuthority.seal(model.authority, iodata)
 
     {:ok,
@@ -2454,7 +2495,8 @@ defmodule Raxol.Harness.Surface do
        model
        | authority: authority,
          painted_count: model.painted_count + 1,
-         sealed_any?: true
+         sealed_any?: true,
+         last_sealed_kind: block.kind
      }}
   end
 
@@ -2474,7 +2516,8 @@ defmodule Raxol.Harness.Surface do
        model
        | transcript_records: [record | model.transcript_records],
          painted_count: model.painted_count + 1,
-         sealed_any?: true
+         sealed_any?: true,
+         last_sealed_kind: block.kind
      }}
   end
 
@@ -2496,7 +2539,7 @@ defmodule Raxol.Harness.Surface do
       |> render_block_lines(model, :styled)
       |> sealed_history_lines(block, model, :styled)
 
-    iodata = Enum.map(block_separator(model) ++ lines, &[&1, "\r\n"])
+    iodata = Enum.map(block_separator(model, block) ++ lines, &[&1, "\r\n"])
 
     case InlineAuthority.try_seal(model.authority, iodata) do
       {:ok, authority} ->
@@ -2505,7 +2548,8 @@ defmodule Raxol.Harness.Surface do
            model
            | authority: authority,
              painted_count: model.painted_count + 1,
-             sealed_any?: true
+             sealed_any?: true,
+             last_sealed_kind: block.kind
          }}
 
       {:error, :write_failed, authority} ->
@@ -2521,8 +2565,36 @@ defmodule Raxol.Harness.Surface do
   # with a blank. Markers (`seal_marker/2`) get no separator of their
   # own -- a loss report attaches tightly to the content it interrupts --
   # but they do SET `sealed_any?`, so the block after one is separated.
-  defp block_separator(%{sealed_any?: true}), do: [""]
-  defp block_separator(_model), do: []
+  #
+  # `/1` is the dialogue form (prompt echo): a new turn always opens with
+  # the blank. `/2` takes the block being sealed and applies the tight
+  # TOOL-GROUPING rule (V: "do not render lines between tools"): a
+  # machinery block (tool_call/diff) sealed right after another machinery
+  # block gets NO blank -- a run of tools is one tight cluster. Reasoning
+  # is NOT grouped tight (it keeps its blanks), and any dialogue neighbour
+  # on either side keeps the blank, so the tool cluster stays set off from
+  # surrounding speech.
+  defp block_separator(model), do: block_separator(model, nil)
+
+  defp block_separator(%{sealed_any?: true} = model, block) do
+    if tight_after?(model, block), do: [], else: [""]
+  end
+
+  defp block_separator(_model, _block), do: []
+
+  # Suppress the separator only when BOTH the previous sealed block and the
+  # one now sealing are machinery (tool/diff) -- the tight-cluster rule.
+  defp tight_after?(%{last_sealed_kind: prev}, %Block{kind: kind}),
+    do: machinery_kind?(prev) and machinery_kind?(kind)
+
+  defp tight_after?(_model, _block), do: false
+
+  # The kinds that cluster tight. Reasoning is deliberately EXCLUDED (it
+  # keeps its blank margins); only tool calls and their diff artifacts
+  # group into a run with no interior blanks.
+  defp machinery_kind?(:tool_call), do: true
+  defp machinery_kind?(:diff), do: true
+  defp machinery_kind?(_kind), do: false
 
   # Called from seal_block/2 -- the print-once paint -- so the grade
   # computed here IS the seal-time grade (see RecencyPolicy's moduledoc,
@@ -4539,15 +4611,32 @@ defmodule Raxol.Harness.Surface do
   defp viewport_transcript_lines(model) do
     model.transcript_records
     |> Enum.reverse()
-    |> Enum.reduce({[], false}, fn record, {acc, any?} ->
-      sep = if any? and separated_record?(record), do: [""], else: []
-      {acc ++ sep ++ render_seal_record(record, model), true}
+    |> Enum.reduce({[], nil}, fn record, {acc, prev} ->
+      sep =
+        if prev != nil and separated_record?(record) and
+             not tight_records?(prev, record),
+           do: [""],
+           else: []
+
+      {acc ++ sep ++ render_seal_record(record, model), record}
     end)
     |> elem(0)
   end
 
   defp separated_record?({:marker, _text}), do: false
   defp separated_record?(_record), do: true
+
+  # Two consecutive machinery records (tool/diff blocks) cluster tight in
+  # the frozen transcript too -- the full-viewport mirror of
+  # `block_separator/2`'s inline tool-grouping rule, keyed off the same
+  # `machinery_kind?/1` predicate so the two substrates never disagree.
+  defp tight_records?(
+         {:block, %Block{kind: prev_kind}, _prev_prom},
+         {:block, %Block{kind: kind}, _prom}
+       ),
+       do: machinery_kind?(prev_kind) and machinery_kind?(kind)
+
+  defp tight_records?(_prev, _record), do: false
 
   defp render_seal_record({:block, block, prominence}, model) do
     block
@@ -4957,16 +5046,46 @@ defmodule Raxol.Harness.Surface do
   # from wall time.
   defp strip_lines(model) do
     if strip_visible?(model.status) do
-      StatusStrip.render(model.status, content_width(model))
+      model.status
+      |> maybe_put_spinner(model)
+      |> StatusStrip.render(content_width(model))
     else
       []
     end
   end
 
+  # Inject the CURRENT braille spinner frame into the strip state whenever
+  # the turn is animating (an active `:activity` -- see
+  # `StatusStrip.animating?/1`). The frame rides `spinner_frame`, the SAME
+  # tick-advanced counter the running-tool margin spinner uses, so the strip
+  # pulse and the margin pulse share one clock and never a timer of this
+  # module's own. When not animating, the state is untouched (no `:spinner`
+  # key), so the strip renders the bare phase -- fixtures/replay never carry
+  # an activity flag, so their strip lines are byte-unchanged.
+  defp maybe_put_spinner(status, model) do
+    if StatusStrip.animating?(status) do
+      Map.put(status, :spinner, current_spinner_frame(model))
+    else
+      status
+    end
+  end
+
+  defp current_spinner_frame(model) do
+    frame_count = length(@spinner_frames)
+    index = rem(Map.get(model, :spinner_frame, 0), frame_count)
+    Enum.at(@spinner_frames, index)
+  end
+
+  # The strip is visible during a live turn, an approval wait, a stall
+  # alarm, OR whenever the turn-in-flight `:activity` is animating -- the
+  # last is what keeps the `<spinner> thinking <elapsed>` line on screen
+  # through a blocking `complete/2` round where `turn_stage` may not yet
+  # have advanced past the opener.
   defp strip_visible?(status) do
     StatusStrip.alerting?(status) or
       Map.get(status, :needs_input) == true or
-      live_turn?(status)
+      live_turn?(status) or
+      StatusStrip.animating?(status)
   end
 
   # A live turn: loop events have been observed (`turn_stage` is set by

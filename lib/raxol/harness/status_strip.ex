@@ -136,6 +136,19 @@ defmodule Raxol.Harness.StatusStrip do
 
   @type turn_stage :: atom() | String.t()
 
+  @typedoc """
+  Turn-in-flight activity, the honest "is the model still thinking?"
+  signal (V's architectural ask). Unlike `turn_stage` (derived from the
+  last observed EVENT), this is an explicit flag the driver/executor
+  raises around a phase, so it stays true through a BLOCKING `complete/2`
+  round where zero events arrive: `:generating` (a model request is
+  outstanding), `:running_tool` (a tool is executing), `:responding`
+  (streaming content), `:idle` (awaiting user/approval -- operator-paced,
+  no spinner). Absent (nil) = fixture/replay reveal, which drives the
+  spinner from events alone and never animates the strip.
+  """
+  @type activity :: :generating | :running_tool | :responding | :idle
+
   @type state :: %{
           optional(:context_pct) => number(),
           optional(:cost) => number(),
@@ -147,7 +160,13 @@ defmodule Raxol.Harness.StatusStrip do
           optional(:last_event_at) => integer(),
           optional(:turn_completed) => boolean(),
           optional(:warn_after_ms) => pos_integer(),
-          optional(:hung_after_ms) => pos_integer()
+          optional(:hung_after_ms) => pos_integer(),
+          # The turn-in-flight activity flag, and the resolved braille
+          # spinner glyph the assembly layer injects each paint (from its
+          # tick-advanced frame counter) -- both drive the persistent
+          # `<spinner> <phase>` liveness pulse; see `animating?/1`.
+          optional(:activity) => activity() | nil,
+          optional(:spinner) => String.t() | nil
         }
 
   @doc """
@@ -159,15 +178,31 @@ defmodule Raxol.Harness.StatusStrip do
   @spec field_keys() :: [atom()]
   def field_keys, do: [:turn_stage, :context_pct, :cost]
 
+  # The braille spinner frames the strip can prepend to the phase segment
+  # (`with_spinner/2`). The resolved frame arrives via `state.spinner`, but
+  # the full frame set is enumerated here so the width-honesty tripwire
+  # (`glyphs/0`) sweeps every glyph the strip can emit. Braille dot
+  # patterns (U+2800..U+28FF) are text-presentation, one column -- the same
+  # frames the transcript's running-tool margin spinner rides.
+  @spinner_glyphs ~w(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+
   @doc """
-  Every non-ASCII glyph this module can emit into a rendered line
-  (currently only the width-degradation ellipsis -- the em dash left
-  with the slot convention). Exposed so the width-honesty regression
+  The braille spinner frames, in order. Exposed so the assembly layer
+  resolves the current frame from a shared source (never a re-declared
+  copy) before injecting it into `state.spinner`.
+  """
+  @spec spinner_glyphs() :: [String.t()]
+  def spinner_glyphs, do: @spinner_glyphs
+
+  @doc """
+  Every non-ASCII glyph this module can emit into a rendered line: the
+  width-degradation ellipsis (the em dash left with the slot convention)
+  and the braille spinner frames. Exposed so the width-honesty regression
   test can assert, per character, that
   `Raxol.UI.TextMeasure.display_width/1 == 1`.
   """
   @spec glyphs() :: [String.t()]
-  def glyphs, do: [@ellipsis]
+  def glyphs, do: [@ellipsis | @spinner_glyphs]
 
   @doc """
   The default "slow but plausible" threshold for the elapsed ticker, in
@@ -284,12 +319,56 @@ defmodule Raxol.Harness.StatusStrip do
         "running " <> sanitize(Map.get(state, :running_tool))
 
       true ->
-        phase_word(
-          Map.get(state, :turn_stage),
-          Map.get(state, :last_item_type)
-        )
+        state
+        |> phase_word_from_events()
+        |> phase_or_activity(state)
     end
   end
+
+  defp phase_word_from_events(state) do
+    phase_word(Map.get(state, :turn_stage), Map.get(state, :last_item_type))
+  end
+
+  # When no EVENT names a phase, fall back to the explicit activity flag --
+  # this is what surfaces "thinking" through a blocking `complete/2` round
+  # (no events, but `:generating` is raised) AND across the inter-round
+  # `turn_completed{final: false}` gap (whose `turn_stage` is `:turn_completed`,
+  # which `phase_word/2` maps to nil even though the turn is still in
+  # flight). The activity flag is the AUTHORITATIVE in-flight signal here --
+  # it is `:idle`/absent once the turn truly ends (the driver clears it),
+  # so `activity_phase/1` yields nil then and the strip falls silent.
+  defp phase_or_activity(nil, state),
+    do: activity_phase(Map.get(state, :activity))
+
+  defp phase_or_activity(phase, _state), do: phase
+
+  defp activity_phase(:generating), do: "thinking"
+  defp activity_phase(:running_tool), do: "running tool"
+  defp activity_phase(:responding), do: "responding"
+  defp activity_phase(_absent_or_idle), do: nil
+
+  @doc """
+  Whether the strip should ANIMATE its braille spinner this frame -- the
+  "model is still thinking" pulse. True exactly when the turn-in-flight
+  `:activity` is an active state (`:generating` / `:running_tool` /
+  `:responding`) AND the resolved phase is active work: an `:idle`/absent
+  activity, an approval wait (`"awaiting approval"` -- operator-paced, the
+  HUNG-suppression ruling), and a fault (`"failed"`) all animate NOTHING.
+  Read by the assembly layer to decide whether to inject the spinner glyph,
+  and by tests. The activity flag is authoritative over `turn_stage`, so an
+  inter-round `turn_completed{final: false}` keeps pulsing while the next
+  round's request is outstanding.
+  """
+  @spec animating?(state()) :: boolean()
+  def animating?(state) when is_map(state) do
+    Map.get(state, :activity) in [:generating, :running_tool, :responding] and
+      active_work_phase?(phase_value(state))
+  end
+
+  defp active_work_phase?(nil), do: false
+  defp active_work_phase?("awaiting approval"), do: false
+  defp active_work_phase?("failed"), do: false
+  defp active_work_phase?(_phase), do: true
 
   defp phase_word(nil, _last_item_type), do: nil
   defp phase_word(:turn_completed, _last_item_type), do: nil
@@ -325,15 +404,41 @@ defmodule Raxol.Harness.StatusStrip do
         nil
 
       phase ->
-        case elapsed_ms(state) do
-          nil ->
-            phase
+        phase
+        |> with_elapsed(state)
+        |> with_spinner(state)
+    end
+  end
 
-          ms ->
-            warn_after = Map.get(state, :warn_after_ms, @default_warn_after_ms)
-            hung_after = Map.get(state, :hung_after_ms, @default_hung_after_ms)
-            render_phase_elapsed(phase, ms, warn_after, hung_after)
-        end
+  defp with_elapsed(phase, state) do
+    case elapsed_ms(state) do
+      nil ->
+        phase
+
+      ms ->
+        warn_after = Map.get(state, :warn_after_ms, @default_warn_after_ms)
+        hung_after = Map.get(state, :hung_after_ms, @default_hung_after_ms)
+        render_phase_elapsed(phase, ms, warn_after, hung_after)
+    end
+  end
+
+  # The braille spinner rides the FRONT of the phase segment (`⠋ thinking
+  # 4s`) when the turn is animating and the assembly layer injected a
+  # resolved frame glyph. It sits INSIDE the phase segment (not a separate
+  # segment) so `fit_to_width/2` clamps it with the phase under width
+  # pressure and the pinned-width guarantee still holds. The glyph is a
+  # caller-supplied string (a braille dot pattern -- text presentation,
+  # one column; see `glyphs/0`), advanced by the SAME tick clock that
+  # drives elapsed, so it pulses even through an event-silent blocking
+  # round.
+  defp with_spinner(text, state) do
+    if animating?(state) do
+      case Map.get(state, :spinner) do
+        glyph when is_binary(glyph) and glyph != "" -> glyph <> " " <> text
+        _absent -> text
+      end
+    else
+      text
     end
   end
 

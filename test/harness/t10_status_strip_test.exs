@@ -99,7 +99,12 @@ defmodule Raxol.Harness.T10StatusStripTest do
     end
 
     test "a tool completion without a name still says running tool" do
-      state = %{turn_stage: :item_completed, running_tool: nil, last_item_type: :tool_use}
+      state = %{
+        turn_stage: :item_completed,
+        running_tool: nil,
+        last_item_type: :tool_use
+      }
+
       assert StatusStrip.phase_value(state) == "running tool"
     end
 
@@ -435,6 +440,136 @@ defmodule Raxol.Harness.T10StatusStripTest do
       state = %{turn_stage: "plan\e[2J", now: 3_000, last_event_at: 0}
 
       assert StatusStrip.render(state, 200) == ["plan[2J 3s"]
+    end
+  end
+
+  describe "activity spinner (fix 4: the 'model is still thinking' signal)" do
+    # The braille frame the assembly layer resolves and injects; the strip
+    # only ever prepends whatever glyph it is given.
+    @spin "⠴"
+
+    test "a :generating turn with NO events shows 'thinking Ns' -- the blocking-round signal" do
+      # No turn_stage at all (a blocking complete/2 round: zero events),
+      # only the raised activity flag. The phase falls back to the activity.
+      state = %{activity: :generating, now: 5_000, last_event_at: 0}
+      assert StatusStrip.phase_value(state) == "thinking"
+      assert StatusStrip.render(state, 200) == ["thinking 5s"]
+    end
+
+    test "animating? is true while :generating and the injected spinner leads the phase" do
+      state = %{
+        activity: :generating,
+        now: 5_000,
+        last_event_at: 0,
+        spinner: @spin
+      }
+
+      assert StatusStrip.animating?(state)
+      assert StatusStrip.render(state, 200) == ["#{@spin} thinking 5s"]
+    end
+
+    test "the spinner ADVANCES across frames (a caller ticking the frame glyph)" do
+      base = %{activity: :generating, now: 5_000, last_event_at: 0}
+      [line_a] = StatusStrip.render(Map.put(base, :spinner, "⠋"), 200)
+      [line_b] = StatusStrip.render(Map.put(base, :spinner, "⠙"), 200)
+      assert line_a == "⠋ thinking 5s"
+      assert line_b == "⠙ thinking 5s"
+      refute line_a == line_b
+    end
+
+    test ":running_tool animates and names the running tool" do
+      state = %{
+        activity: :running_tool,
+        running_tool: "grep",
+        now: 2_000,
+        last_event_at: 0,
+        spinner: @spin
+      }
+
+      assert StatusStrip.animating?(state)
+      assert StatusStrip.render(state, 200) == ["#{@spin} running grep 2s"]
+    end
+
+    test ":responding animates (streaming content)" do
+      state = %{
+        activity: :responding,
+        now: 1_000,
+        last_event_at: 0,
+        spinner: @spin
+      }
+
+      assert StatusStrip.animating?(state)
+      assert StatusStrip.render(state, 200) == ["#{@spin} responding 1s"]
+    end
+
+    test ":idle does NOT animate -- no spinner (operator-paced)" do
+      state = %{activity: :idle, turn_stage: :turn_started, spinner: @spin}
+      refute StatusStrip.animating?(state)
+      # A stale spinner glyph in state is never shown when not animating.
+      refute hd(StatusStrip.render(state, 200)) =~ @spin
+    end
+
+    test "awaiting-approval does NOT animate, even with an active activity flag" do
+      state = %{
+        activity: :generating,
+        needs_input: true,
+        now: 30_000,
+        last_event_at: 0,
+        spinner: @spin
+      }
+
+      refute StatusStrip.animating?(state)
+      [line] = StatusStrip.render(state, 200)
+      assert line =~ "awaiting approval"
+      refute line =~ @spin
+    end
+
+    test "a fault does NOT animate (phase 'failed' is not active work)" do
+      state = %{activity: :generating, turn_stage: :error, spinner: @spin}
+      refute StatusStrip.animating?(state)
+      refute hd(StatusStrip.render(state, 200)) =~ @spin
+    end
+
+    test "the activity flag is authoritative across an inter-round turn_completed" do
+      # An inter-round `turn_completed{final: false}` sets turn_stage to
+      # :turn_completed (which phase_word maps to nil), but the turn is
+      # still in flight -- the driver keeps :generating raised, so the
+      # spinner keeps pulsing "thinking".
+      state = %{
+        activity: :generating,
+        turn_stage: :turn_completed,
+        now: 4_000,
+        last_event_at: 0,
+        spinner: @spin
+      }
+
+      assert StatusStrip.animating?(state)
+      assert StatusStrip.render(state, 200) == ["#{@spin} thinking 4s"]
+    end
+
+    test "with no activity flag (fixture/replay) the strip never animates" do
+      state = %{
+        turn_stage: :item_delta,
+        now: 4_000,
+        last_event_at: 0,
+        spinner: @spin
+      }
+
+      refute StatusStrip.animating?(state)
+      # Byte-identical to the pre-fix render: phase + elapsed, no spinner.
+      assert StatusStrip.render(state, 200) == ["responding 4s"]
+    end
+
+    test "the spinner rides INSIDE the phase segment, so width degradation clamps it" do
+      state = %{
+        activity: :generating,
+        now: 5_000,
+        last_event_at: 0,
+        spinner: @spin
+      }
+
+      [line] = StatusStrip.render(state, 6)
+      assert Raxol.UI.TextMeasure.display_width(line) <= 6
     end
   end
 end

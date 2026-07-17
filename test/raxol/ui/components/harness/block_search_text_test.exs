@@ -102,7 +102,8 @@ defmodule Raxol.UI.Components.Harness.BlockSearchTextTest do
 
     assert text =~ "tool_call"
     assert text =~ "Bash"
-    assert text =~ "command: \"ls -la\""
+    # Fix 1: args render unquoted (`key: value`), no braces/quotes.
+    assert text =~ "command: ls -la"
     assert text =~ "file1"
     assert text =~ "file2"
     assert text =~ "file3"

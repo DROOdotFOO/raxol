@@ -48,6 +48,7 @@
   ],
   "schema": "harness-t7blocks/1",
   "fold_defaults": {
+    "error": "folded",
     "message": "expanded",
     "opaque": "expanded",
     "diff": "folded",

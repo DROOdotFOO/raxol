@@ -81,8 +81,11 @@ defmodule Raxol.Harness.ChargedMinimumSurfaceTest do
     |> Enum.map(&row_text/1)
   end
 
-  defp footer_rows(device), do: device |> screen_rows() |> Enum.drop(@region_top)
-  defp history_rows(device), do: device |> screen_rows() |> Enum.take(@region_top)
+  defp footer_rows(device),
+    do: device |> screen_rows() |> Enum.drop(@region_top)
+
+  defp history_rows(device),
+    do: device |> screen_rows() |> Enum.take(@region_top)
 
   defp row_text(row_cells) do
     row_cells |> Enum.map_join("", &(&1.char || " ")) |> String.trim_trailing()
@@ -198,7 +201,9 @@ defmodule Raxol.Harness.ChargedMinimumSurfaceTest do
     test "the boot composer row starts with the chevron at column 0, bold" do
       {_model, device} = new_model([])
 
-      chevron_row = Enum.find(footer_rows(device), &String.starts_with?(&1, "❯"))
+      chevron_row =
+        Enum.find(footer_rows(device), &String.starts_with?(&1, "❯"))
+
       assert chevron_row != nil, "no flush-left chevron row on the boot frame"
 
       # Bold through the one ViewText SGR path -- the raw bytes carry the
@@ -236,8 +241,12 @@ defmodule Raxol.Harness.ChargedMinimumSurfaceTest do
 
       history = history_rows(device)
 
-      first = Enum.find_index(history, &String.contains?(&1, "first block body"))
-      second = Enum.find_index(history, &String.contains?(&1, "second block body"))
+      first =
+        Enum.find_index(history, &String.contains?(&1, "first block body"))
+
+      second =
+        Enum.find_index(history, &String.contains?(&1, "second block body"))
+
       assert first != nil and second != nil
 
       # This fixture is assistant-message-only: under V's outer-contour
@@ -280,6 +289,62 @@ defmodule Raxol.Harness.ChargedMinimumSurfaceTest do
 
       assert Enum.any?(footer, &String.starts_with?(&1, "❯")),
              "chevron row must stay flush left"
+    end
+  end
+
+  # -- 4. the activity spinner (fix 4) -----------------------------------
+
+  # The braille frames the strip pulses through -- the same set the
+  # transcript's running-tool margin spinner rides.
+  @activity_frames ~w(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+
+  defp spinner_glyph_in(rows) do
+    row = Enum.find(rows, &String.contains?(&1, "thinking"))
+    row && Enum.find(@activity_frames, &String.contains?(row, &1))
+  end
+
+  describe "4. the activity spinner (V's 'is the model still thinking?' signal)" do
+    test "a :generating turn PULSES the braille spinner on the tick clock -- with ZERO events" do
+      # The blocking complete/2 round: a turn is in flight, the driver has
+      # raised :generating, and NO further events will arrive until the
+      # round returns. The spinner must still animate.
+      {model, device} = new_model([])
+      model = Surface.set_activity(model, :generating)
+
+      model = Surface.tick(model, 1_000)
+      frame_a = spinner_glyph_in(footer_rows(device))
+
+      _model = Surface.tick(model, 2_000)
+      frame_b = spinner_glyph_in(footer_rows(device))
+
+      assert frame_a != nil,
+             "the strip must show a braille spinner while :generating"
+
+      assert frame_b != nil
+
+      refute frame_a == frame_b,
+             "the spinner must ADVANCE across ticks even with no events " <>
+               "(#{inspect(frame_a)} then #{inspect(frame_b)})"
+
+      assert Enum.any?(footer_rows(device), &String.contains?(&1, "thinking")),
+             "the honest phase word during a blocking round is 'thinking'"
+    end
+
+    test ":idle raises NO spinner (operator-paced -- awaiting the user)" do
+      {model, device} = new_model([])
+
+      model =
+        model
+        |> Surface.set_activity(:generating)
+        |> Surface.tick(1_000)
+
+      _model =
+        model
+        |> Surface.set_activity(:idle)
+        |> Surface.tick(2_000)
+
+      refute spinner_glyph_in(footer_rows(device)),
+             "an idle turn must not animate a spinner"
     end
   end
 end

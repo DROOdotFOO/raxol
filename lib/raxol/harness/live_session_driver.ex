@@ -1016,6 +1016,14 @@ defmodule Raxol.Harness.LiveSessionDriver do
       state.model
       |> Surface.submit_accepted()
       |> Surface.put_lane_notice(nil)
+      # Turn now in flight -- raise the ACTIVITY flag so the status strip's
+      # braille spinner animates on the tick clock through the BLOCKING
+      # `complete/2` round that follows (zero events arrive during it, so
+      # nothing else on screen moves). `:generating` is the honest coarse
+      # state; the strip's phase word still refines to `running <tool>` /
+      # `responding` from the events that DO arrive. Cleared on the final
+      # bracket / cancellation below.
+      |> Surface.set_activity(:generating)
 
     %{state | model: model, current_turn_id: turn_id}
   end
@@ -1047,8 +1055,16 @@ defmodule Raxol.Harness.LiveSessionDriver do
     # makes the refusal fire. `final` absent defaults to true, so fixtures
     # and single-pump turns (which carry no inter-round completions) are
     # byte-unchanged.
-    current_turn_id =
-      if final_turn_completed?(event), do: nil, else: state.current_turn_id
+    final? = final_turn_completed?(event)
+    current_turn_id = if final?, do: nil, else: state.current_turn_id
+
+    # Final -> the turn is over: drop the spinner (`:idle`). Inter-round ->
+    # the next round's `complete/2` is about to block, so KEEP it animating
+    # (`:generating`); the activity flag is authoritative over the
+    # `turn_stage: :turn_completed` this inter-round bracket set, which would
+    # otherwise read as "done".
+    model =
+      Surface.set_activity(model, if(final?, do: :idle, else: :generating))
 
     %{state | model: model, current_turn_id: current_turn_id}
   end
@@ -1067,6 +1083,8 @@ defmodule Raxol.Harness.LiveSessionDriver do
       # sealed blocks retire its predecessors' events just the same.
       |> Surface.compact_sealed_turns()
       |> Surface.put_lane_notice(turn_canceled_notice(Map.get(event, :turn_id)))
+      # Turn is over -- drop the spinner.
+      |> Surface.set_activity(:idle)
 
     %{state | model: model, current_turn_id: nil}
   end
