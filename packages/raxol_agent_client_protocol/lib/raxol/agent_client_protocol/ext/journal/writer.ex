@@ -40,12 +40,46 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
       between `turn_started` and `turn_completed`, the Writer appends exactly one
       orphaned `turn_completed{"outcome":"orphaned","stopReason":"cancelled"}`
       and clears the latch.
+    * **Credit-based lagged producer** (§5) — each subscriber carries a publish
+      credit (default `1024`, per-Writer configurable via `:subscriber_credit`).
+      Every live publish consumes one credit; a subscriber that overruns its credit
+      is sent EXACTLY ONE terminal `{:reattach_lagged, session_id, last_offset}`
+      (`last_offset` = the highest offset it was actually sent, so the client heals
+      at `+1` dup-free) and is then demonitored and dropped — the Writer never
+      blocks on a slow subscriber and never drops a middle record for one still
+      attached. `credit/3` replenishes. A dead subscriber is pruned by its monitor.
 
   ## Taint — annotate, never filter (§6)
 
   The Writer STAMPS taint into the record (via the store) and delivers the record
   to EVERY subscriber regardless of value. No code path here drops, withholds, or
   reroutes a record by taint.
+
+  ## Restart residuals (DEFERRED BY DESIGN — S9)
+
+  The Writer-restart tip-fold (`[G5:C13, C14]`, §2.6 / J12(b)) is FROZEN one-way
+  design and is NOT changed here. It folds on the journal TIP alone, which leaves
+  two residual interleavings inherent to a tip-fold when the Writer dies but the
+  appender Session survives the restart:
+
+    * **(a) tip = `turn_started`, turn still live.** The fold reads a dangling
+      `turn_started` and synthesizes one orphaned `turn_completed` — but the real
+      appender is still running; its later real updates and its own real
+      `turn_completed` then land AFTER the synthetic completion (a false-orphan of a
+      live turn).
+    * **(b) tip = a mid-turn `session_update`.** The tip is not a `turn_started`, so
+      the fold no-ops and the in-memory latch is silently lost across the restart; a
+      concurrent second `turn_started` then succeeds against a turn that is, on the
+      wire, still open.
+
+  J12(b)'s guarantee ("no dangling OPEN turn survives a restart") still holds; what
+  the frozen design never ruled is a live-appender-across-Writer-restart. This is a
+  design residual, not an implementation defect (on-disk-journal / restart
+  hardening is on the design's deliberately-deferred list). The cheap v1.1
+  hardening — recorded here, not implemented — is to REBUILD the latch by scanning
+  BACKWARD from the tip to the last turn boundary instead of folding on the tip
+  alone; that is strictly stronger and does not violate the frozen atomic-clear +
+  tip-fold contract.
 
   ## Deviation note (reported)
 
@@ -70,17 +104,27 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
   @turn_started_kind "turn_started"
   @turn_completed_kind "turn_completed"
 
+  # Per-subscriber publish credit (§5): the Writer NEVER blocks on a slow
+  # subscriber. Each live publish consumes one credit; when a subscriber's credit
+  # is exhausted the Writer emits ONE terminal `{:reattach_lagged, ...}` and drops
+  # it (stops sending). `credit/3` replenishes.
+  @default_subscriber_credit 1024
+
   @type turn ::
           %{turn_id: term(), appender_ref: reference(), appender_pid: pid()}
           | nil
 
+  @typedoc "Per-subscriber state: pid, remaining publish credit, and highest offset sent."
+  @type subscriber :: %{pid: pid(), credit: non_neg_integer(), sent_hi: non_neg_integer()}
+
   @type t :: %__MODULE__{
           session_id: String.t(),
           journal: {module(), term()},
-          subscribers: %{reference() => pid()},
+          subscribers: %{reference() => subscriber()},
           turn: turn(),
           bootstrapped: boolean(),
           session_meta: map(),
+          subscriber_credit: pos_integer(),
           dead_publish_phantom: boolean(),
           dead_bootstrap_after_op: boolean()
         }
@@ -92,6 +136,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
             turn: nil,
             bootstrapped: false,
             session_meta: %{},
+            subscriber_credit: @default_subscriber_credit,
             dead_publish_phantom: false,
             dead_bootstrap_after_op: false
 
@@ -128,6 +173,9 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
     * `:journal` (required) — an already-open `{module, handle}`; the handle's
       owner MUST outlive the Writer (so a restart can tip-fold).
     * `:session_meta` — the genesis `session_created` payload (default `%{}`).
+    * `:subscriber_credit` — per-subscriber publish credit (§5, default
+      `#{@default_subscriber_credit}`); a subscriber that overruns it is sent one
+      terminal `{:reattach_lagged, ...}` and dropped.
     * `:name` — override the `:via` name; pass `nil` to start unregistered
       (tests). Defaults to `via(session_id)`.
     * `:__dead_publish_phantom__` / `:__dead_bootstrap_after_op__` — TEST-ONLY
@@ -158,6 +206,16 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
     do: GenServer.call(server, {:unsubscribe, subscriber})
 
   @doc """
+  Replenish `subscriber`'s publish credit by `n` (§5). A cast — the Writer never
+  blocks on credit accounting. A subscriber calls this after forwarding frames so
+  its credit does not run down under a healthy delivery rate; an already-dropped
+  (lagged) subscriber is a no-op.
+  """
+  @spec credit(GenServer.server(), pid(), pos_integer()) :: :ok
+  def credit(server, subscriber, n) when is_pid(subscriber) and is_integer(n) and n > 0,
+    do: GenServer.cast(server, {:credit, subscriber, n})
+
+  @doc """
   Durably append a record, then publish it live. Returns the COMPLETE stamped
   `%Record{}` (offset = `record.offset`).
 
@@ -182,6 +240,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
       session_id: Keyword.fetch!(opts, :session_id),
       journal: Keyword.fetch!(opts, :journal),
       session_meta: Keyword.get(opts, :session_meta, %{}),
+      subscriber_credit: Keyword.get(opts, :subscriber_credit, @default_subscriber_credit),
       dead_publish_phantom: Keyword.get(opts, :__dead_publish_phantom__, false),
       dead_bootstrap_after_op: Keyword.get(opts, :__dead_bootstrap_after_op__, false)
     }
@@ -203,8 +262,9 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
       {:reply, :ok, state}
     else
       ref = Process.monitor(pid)
+      sub = %{pid: pid, credit: state.subscriber_credit, sent_hi: 0}
 
-      {:reply, :ok, %{state | subscribers: Map.put(state.subscribers, ref, pid)}}
+      {:reply, :ok, %{state | subscribers: Map.put(state.subscribers, ref, sub)}}
     end
   end
 
@@ -222,6 +282,21 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
       {reply, state} = do_append(state, kind, payload, taint, caller_pid)
       {:reply, reply, state}
     end
+  end
+
+  @impl true
+  def handle_cast({:credit, pid, n}, state) do
+    subscribers =
+      case ref_of_pid(state.subscribers, pid) do
+        nil ->
+          # Already dropped (lagged) or never subscribed — no-op (§5).
+          state.subscribers
+
+        ref ->
+          Map.update!(state.subscribers, ref, fn sub -> %{sub | credit: sub.credit + n} end)
+      end
+
+    {:noreply, %{state | subscribers: subscribers}}
   end
 
   @impl true
@@ -265,8 +340,9 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
             taint: "system"
           })
 
+        # No subscribers yet at genesis (bootstrap precedes registration), so this
+        # is a no-op delivery; routed through `publish/2` for the single-site law.
         publish(state, record)
-        state
 
       hwm ->
         {:ok, [tip]} = mod.read(j, hwm, hwm)
@@ -314,10 +390,15 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
     {{:ok, record}, state}
   end
 
-  defp do_append(state, @turn_completed_kind, payload, taint, _caller_pid) do
+  defp do_append(state, @turn_completed_kind, payload, taint, caller_pid) do
     record = persist(state, @turn_completed_kind, payload, taint)
-    # ATOMIC latch clear (C13): same step as the append, before the reply.
-    state = clear_latch(state)
+    # ATOMIC latch clear (C13): same step as the append, before the reply. But only
+    # the LATCH HOLDER clears it (§2.7 defense-in-depth): after the Session-side fix
+    # honors `{:error, :turn_in_flight}`, a `turn_completed` from a non-holder is
+    # unreachable — so if one arrives, append it but leave the holder's latch intact
+    # (a non-holder must never clear another connection's turn). Turn `nil` (no
+    # latch) clears to `nil` as before.
+    state = clear_latch_if_holder(state, caller_pid)
     state = publish_all(state, record)
     {{:ok, record}, state}
   end
@@ -365,6 +446,24 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
     %{state | turn: nil}
   end
 
+  # Clear the latch only for the holder (§2.7 defense-in-depth). No latch ⇒ nothing
+  # to clear. A non-holder `turn_completed` warns and leaves the latch held.
+  @spec clear_latch_if_holder(t(), pid()) :: t()
+  defp clear_latch_if_holder(%__MODULE__{turn: nil} = state, _caller), do: clear_latch(state)
+
+  defp clear_latch_if_holder(%__MODULE__{turn: %{appender_pid: pid}} = state, caller)
+       when pid == caller,
+       do: clear_latch(state)
+
+  defp clear_latch_if_holder(%__MODULE__{turn: %{turn_id: turn_id}} = state, _caller) do
+    Logger.warning(
+      "acp journal: turn_completed by a non-holder for turn #{inspect(turn_id)} " <>
+        "on session #{inspect(state.session_id)}; latch left held (§2.7)"
+    )
+
+    state
+  end
+
   # -- Publish (single site) --------------------------------------------------
 
   # The correct publish: send the durable, read-visible record to every
@@ -376,25 +475,47 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
   @spec publish_all(t(), Record.t()) :: t()
   defp publish_all(%__MODULE__{dead_publish_phantom: false} = state, record) do
     publish(state, record)
-    state
   end
 
   defp publish_all(%__MODULE__{dead_publish_phantom: true} = state, record) do
-    publish(state, record)
+    state = publish(state, record)
     publish(state, phantom_record(state, record))
-    state
   end
 
-  @spec publish(t(), Record.t()) :: :ok
-  defp publish(
-         %__MODULE__{subscribers: subs, session_id: sid},
-         %Record{} = record
-       ) do
-    Enum.each(subs, fn {_ref, pid} ->
-      send(pid, {:reattach_live, sid, record})
-    end)
+  # Single publish site with per-subscriber credit accounting (§5). Delivers the
+  # record to each subscriber that still has credit (decrementing it and advancing
+  # its `sent_hi`); a subscriber whose credit is exhausted is sent ONE terminal
+  # `{:reattach_lagged, sid, sent_hi}` — the highest offset it was actually sent —
+  # then demonitored and dropped. The Writer never blocks on a slow subscriber and
+  # never drops a middle record for a still-attached one.
+  @spec publish(t(), Record.t()) :: t()
+  defp publish(%__MODULE__{subscribers: subs, session_id: sid} = state, %Record{} = record) do
+    subscribers =
+      Enum.reduce(subs, %{}, fn {ref, sub}, kept ->
+        case deliver_or_lag(sid, ref, sub, record) do
+          {:keep, sub2} -> Map.put(kept, ref, sub2)
+          :drop -> kept
+        end
+      end)
 
-    :ok
+    %{state | subscribers: subscribers}
+  end
+
+  @spec deliver_or_lag(String.t(), reference(), subscriber(), Record.t()) ::
+          {:keep, subscriber()} | :drop
+  defp deliver_or_lag(sid, _ref, %{pid: pid, credit: credit, sent_hi: hi} = sub, record)
+       when credit > 0 do
+    send(pid, {:reattach_live, sid, record})
+    {:keep, %{sub | credit: credit - 1, sent_hi: max(hi, record.offset)}}
+  end
+
+  defp deliver_or_lag(sid, ref, %{pid: pid, sent_hi: hi}, _record) do
+    # Credit exhausted: terminal Lagged carrying the highest offset actually sent
+    # (so the client heals with `+1`, dup-free — §4.2 corollary), then demonitor +
+    # drop. No further live frame ever reaches this subscriber.
+    send(pid, {:reattach_lagged, sid, hi})
+    Process.demonitor(ref, [:flush])
+    :drop
   end
 
   @spec phantom_record(t(), Record.t()) :: Record.t()
@@ -413,17 +534,23 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
 
   @spec subscribed?(t(), pid()) :: boolean()
   defp subscribed?(%__MODULE__{subscribers: subs}, pid),
-    do: Enum.any?(subs, fn {_ref, p} -> p == pid end)
+    do: Enum.any?(subs, fn {_ref, sub} -> sub.pid == pid end)
+
+  # The monitor ref currently keying `pid`, or nil.
+  @spec ref_of_pid(%{reference() => subscriber()}, pid()) :: reference() | nil
+  defp ref_of_pid(subs, pid) do
+    Enum.find_value(subs, fn {ref, sub} -> if sub.pid == pid, do: ref end)
+  end
 
   @spec detach_pid(t(), pid()) :: t()
   defp detach_pid(%__MODULE__{subscribers: subs} = state, pid) do
-    case Enum.find(subs, fn {_ref, p} -> p == pid end) do
-      {ref, ^pid} ->
-        Process.demonitor(ref, [:flush])
-        %{state | subscribers: Map.delete(subs, ref)}
-
+    case ref_of_pid(subs, pid) do
       nil ->
         state
+
+      ref ->
+        Process.demonitor(ref, [:flush])
+        %{state | subscribers: Map.delete(subs, ref)}
     end
   end
 end

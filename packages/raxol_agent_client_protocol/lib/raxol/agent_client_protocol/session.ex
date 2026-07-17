@@ -306,28 +306,47 @@ defmodule Raxol.AgentClientProtocol.Session do
       # Turn boundary (§2.4/§2.5): the per-session turn ordinal, appended (in
       # journal mode) as a `turn_started` record AFTER reply adoption, BEFORE the
       # root-task spawn. Direct mode makes this a no-op — base behavior unchanged.
+      #
+      # Cross-connection turn latch (reattach §2.7, v1 RULING): with N connections
+      # attached to one session_id, N Session processes exist (SessionRegistry keys
+      # are {conn_pid, session_id}), so the per-process I12 busy row cannot arbitrate
+      # across connections. The single-publisher Writer's turn latch IS the arbiter:
+      # a `turn_started` append while a turn is in flight returns
+      # `{:error, :turn_in_flight}`, and the Session HONORS it — reply the same busy
+      # error class as the I12 row on the adopted ref, spawn nothing, stay :idle, and
+      # do NOT bump `turn_seq`. Direct mode always returns `:ok` (no latch), so base
+      # behavior is unchanged.
       turn_seq = state.turn_seq + 1
-      _ = state.emitter.turn_started(state, req, turn_seq)
 
-      task =
-        Task.Supervisor.async_nolink(state.task_sup, fn -> state.turn_runner.(session, req) end)
+      case state.emitter.turn_started(state, req, turn_seq) do
+        {:error, :turn_in_flight} ->
+          busy = Error.new(-32_600, "prompt already in flight")
+          _ = state.conn_mod.reply(state.conn, reply_ref, {:error, busy})
+          {:reply, :ok, state}
 
-      turn = %Turn{
-        turn_ref: make_ref(),
-        reply_ref: reply_ref,
-        prompt_seq: rx_seq,
-        root_ref: task.ref,
-        root_pid: task.pid,
-        monitors: %{task.ref => task.pid},
-        outcome: nil,
-        respond?: true,
-        pending_perms: %{},
-        backstop_timer: nil,
-        non_empty_prompt?: prompt_non_empty?(req),
-        updates_emitted?: false
-      }
+        _ok ->
+          task =
+            Task.Supervisor.async_nolink(state.task_sup, fn ->
+              state.turn_runner.(session, req)
+            end)
 
-      {:reply, :ok, %{state | turn: {:prompting, turn}, turn_seq: turn_seq}}
+          turn = %Turn{
+            turn_ref: make_ref(),
+            reply_ref: reply_ref,
+            prompt_seq: rx_seq,
+            root_ref: task.ref,
+            root_pid: task.pid,
+            monitors: %{task.ref => task.pid},
+            outcome: nil,
+            respond?: true,
+            pending_perms: %{},
+            backstop_timer: nil,
+            non_empty_prompt?: prompt_non_empty?(req),
+            updates_emitted?: false
+          }
+
+          {:reply, :ok, %{state | turn: {:prompting, turn}, turn_seq: turn_seq}}
+      end
     end
   end
 
@@ -626,9 +645,15 @@ defmodule Raxol.AgentClientProtocol.Session do
     # rendered value (§2.5). Direct mode makes the boundary a no-op.
     rendered = render(t.outcome)
     _ = state.emitter.turn_completed(state, rendered, state.turn_seq)
-    # When respond? is false the obligation was voided by $/cancel_request; skip
-    # reply/3 (Connection would suppress it anyway — belt-and-braces, §3.1).
-    if t.respond?, do: state.conn_mod.reply(state.conn, t.reply_ref, rendered)
+    # ALWAYS reply (S7): even when `respond? == false` (a $/cancel_request voided the
+    # obligation), the drain MUST call `reply/3` so the Connection pops its
+    # `pending_in`/`reply_refs` entry and demonitors the adopter — otherwise the
+    # cancelled prompt id stays occupied and the entry + monitor leak for the whole
+    # Session lifetime. The Connection's reply path suppresses the wire frame for a
+    # cancelled entry (IC-5a/d: "the id was abandoned; emit nothing"), so the
+    # frame-count invariant (I17: exactly zero frames) is preserved Connection-side.
+    # `respond?` is now vestigial (kept for documentation of the cancel leg).
+    _ = state.conn_mod.reply(state.conn, t.reply_ref, rendered)
     %{state | turn: :idle}
   end
 
@@ -762,7 +787,10 @@ defmodule Raxol.AgentClientProtocol.Session.Emitter do
     * `emit(session_state, notification)` — a `session/update` (in-turn
       `post_update` and out-of-turn `set_mode`'s `current_mode_update`).
     * `turn_started(session_state, prompt_req, turn_id)` — a turn begins; the
-      per-session ordinal `turn_id` is threaded from the Session (§1.2).
+      per-session ordinal `turn_id` is threaded from the Session (§1.2). Returns
+      `{:error, :turn_in_flight}` when a cross-connection turn latch is already held
+      for this session_id (reattach §2.7) — the Session then replies busy and runs
+      nothing; `:ok` otherwise (Direct always `:ok`; no latch).
     * `turn_completed(session_state, rendered, turn_id)` — a turn ends; `rendered`
       is the SINGLE-render-site value that ALSO becomes the prompt response
       (invariant J7a: they are built from one `render(outcome)` call).
@@ -777,7 +805,7 @@ defmodule Raxol.AgentClientProtocol.Session.Emitter do
               prompt_req :: term(),
               turn_id :: pos_integer()
             ) ::
-              :ok
+              :ok | {:error, :turn_in_flight}
   @callback turn_completed(
               session_state :: struct(),
               rendered :: term(),
@@ -878,15 +906,21 @@ defmodule Raxol.AgentClientProtocol.Session.Emitter.Journal do
 
   @impl true
   def turn_started(state, req, turn_id) do
-    _ =
-      append(
-        state,
-        "turn_started",
-        %{"turnId" => turn_id, "prompt" => prompt_blocks(req)},
-        "user"
-      )
-
-    :ok
+    # Propagate the Writer's cross-connection turn latch (§2.7): a held latch
+    # returns `{:error, :turn_in_flight}` and the Session replies busy. Every other
+    # result — a successful append, no live Writer (degrade), or a caught Writer
+    # crash (`safe_append`'s catch leg) — is `:ok`: a turn should never fail to
+    # start because durability is unavailable, only because another connection
+    # genuinely holds the turn.
+    case append(
+           state,
+           "turn_started",
+           %{"turnId" => turn_id, "prompt" => prompt_blocks(req)},
+           "user"
+         ) do
+      {:error, :turn_in_flight} -> {:error, :turn_in_flight}
+      _other -> :ok
+    end
   end
 
   @impl true

@@ -39,7 +39,8 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.WriterTest do
       Keyword.take(opts, [
         :__dead_publish_phantom__,
         :__dead_bootstrap_after_op__,
-        :session_meta
+        :session_meta,
+        :subscriber_credit
       ])
 
     writer_opts = [session_id: sid, journal: {Mem, j}, name: nil] ++ knobs
@@ -398,6 +399,46 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.WriterTest do
              )
            ) ==
              2
+  end
+
+  # -- S6: credit-based lagged producer (§5) ----------------------------------
+
+  test "credit exhaustion: the Writer emits a REAL {:reattach_lagged, sid, last_offset} and stops sending (S6)" do
+    # A tiny credit forces real lag: one live frame fits, the next overflows.
+    {w, sid, _j} = start_writer(subscriber_credit: 1)
+    :ok = Writer.subscribe(w, self())
+
+    # Within credit (1) ⇒ delivered live. Genesis took offset 1, so this is 2.
+    {:ok, r1} = Writer.append(w, "session_update", %{"i" => 1}, "agent")
+    assert_receive {:reattach_live, ^sid, %Record{offset: o1}}
+    assert o1 == r1.offset
+
+    # Credit exhausted ⇒ the Writer PRODUCES the lagged message itself (not a test
+    # fake), carrying the highest offset it actually sent this subscriber, then
+    # demonitors + drops it.
+    {:ok, _r2} = Writer.append(w, "session_update", %{"i" => 2}, "agent")
+    assert_receive {:reattach_lagged, ^sid, ^o1}
+
+    # Dropped ⇒ no further live frames reach this subscriber, ever.
+    {:ok, _r3} = Writer.append(w, "session_update", %{"i" => 3}, "agent")
+    refute_receive {:reattach_live, ^sid, _}, 100
+
+    # And the subscriber is gone from the Writer's set (pruned on lag-drop).
+    assert :sys.get_state(w).subscribers == %{}
+  end
+
+  test "a dead subscriber is pruned from the Writer's set (monitor)" do
+    {w, _sid, _j} = start_writer()
+    sub = spawn(fn -> receive do: (:never -> :ok) end)
+    :ok = Writer.subscribe(w, sub)
+    assert map_size(:sys.get_state(w).subscribers) == 1
+
+    ref = Process.monitor(sub)
+    Process.exit(sub, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^sub, _}
+    _ = :sys.get_state(w)
+
+    assert :sys.get_state(w).subscribers == %{}
   end
 
   # -- Live-bus registration facade (Journal.subscribe/2 → Writer) ------------

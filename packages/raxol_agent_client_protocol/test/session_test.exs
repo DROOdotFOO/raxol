@@ -14,7 +14,10 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.SelectedPermissionOutcome
   alias Raxol.AgentClientProtocol.Schema.CurrentModeUpdate
   alias Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification
+  alias Raxol.AgentClientProtocol.Ext.Journal.Mem
+  alias Raxol.AgentClientProtocol.Ext.Journal.Writer
   alias Raxol.AgentClientProtocol.Session
+  alias Raxol.AgentClientProtocol.Session.Emitter
   alias Raxol.AgentClientProtocol.Session.Supervisor, as: SessionSup
   alias Raxol.AgentClientProtocol.Test.FakeConnection
 
@@ -44,13 +47,14 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
         task_sup: ctx.task_sup,
         turn_runner: Keyword.get(overrides, :turn_runner, runner_ends(:end_turn)),
         mode_state: Keyword.get(overrides, :mode_state),
+        emitter: Keyword.get(overrides, :emitter, Emitter.Direct),
         config: Keyword.get(overrides, :config, %{cancel_backstop_ms: 50})
       ]
 
     # sessions are :temporary by design (§1.2) — a killed session must not restart
     pid =
       start_supervised!(%{
-        id: {:sess, sid},
+        id: {:sess, sid, make_ref()},
         start: {Session, :start_link, [opts]},
         restart: :temporary
       })
@@ -514,8 +518,15 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
   # I17 $/cancel_request on the prompt id
   # ---------------------------------------------------------------------------
 
-  describe "I17 $/cancel_request on the prompt id" do
-    test "emits zero response frames and still winds the turn down", ctx do
+  describe "I17 / S7 $/cancel_request on the prompt id" do
+    test "the drain STILL calls reply/3 for the cancelled id (releases pending_in, S7)", ctx do
+      # S7: before the fix, `finish/2` skipped `reply/3` when `respond? == false`, so
+      # a $/cancel_request'd delegated prompt never signalled the Connection to pop
+      # its `pending_in`/`reply_refs` entry — the id stayed occupied and the adopter
+      # monitor leaked for the Session's whole life. The fix deletes that guard: the
+      # Session always calls `reply/3`; the Connection suppresses the wire frame for a
+      # cancelled entry (that wire-zero-frames invariant is Connection-side). So at
+      # this seam the observable is: reply/3 IS invoked for the cancelled id.
       conn = new_conn()
 
       runner = fn _s, _req ->
@@ -533,18 +544,22 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
       send(session, {:acp_reply_cancelled, reply_ref})
       wait_until(fn -> turn_state(session) == :idle end)
 
-      # exactly zero response frames for the id (IC-6 "exactly zero" leg)
-      assert FakeConnection.count(conn, :reply) == 0
+      # The release signal: reply/3 was called for the cancelled reply_ref (was
+      # SKIPPED before the fix ⇒ pending_in leak). The Connection pops + suppresses.
+      assert [{:reply, ^reply_ref, {:ok, %PromptResponse{stop_reason: :cancelled}}}] =
+               FakeConnection.entries(conn, :reply)
 
-      # the session is back to :idle and accepts a new prompt
+      # And the session is back to :idle and accepts a fresh prompt.
       {:ok, _} = begin(session, 2)
       wait_until(fn -> match?({:prompting, _}, turn_state(session)) end)
       {:prompting, t} = turn_state(session)
       send(t.root_pid, :finish)
-      wait_for_reply(conn)
+      wait_until(fn -> FakeConnection.count(conn, :reply) == 2 end)
 
-      assert [{:reply, _, {:ok, %PromptResponse{stop_reason: :end_turn}}}] =
-               FakeConnection.entries(conn, :reply)
+      assert [
+               {:reply, ^reply_ref, {:ok, %PromptResponse{stop_reason: :cancelled}}},
+               {:reply, _, {:ok, %PromptResponse{stop_reason: :end_turn}}}
+             ] = FakeConnection.entries(conn, :reply)
     end
   end
 
@@ -637,5 +652,106 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
         assert FakeConnection.count(conn, :reply) == 1
       end
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # S2 / §2.7 cross-connection turn latch (Writer is the arbiter)
+  # ---------------------------------------------------------------------------
+
+  describe "S2 cross-connection turn latch (reattach §2.7)" do
+    # With N connections attached to ONE session_id, N Session processes exist
+    # (SessionRegistry keys are {conn_pid, session_id}), so the supervision I12
+    # per-process busy row cannot arbitrate across connections. The Writer's turn
+    # latch is the v1 arbiter: a `turn_started` append while a turn is in flight
+    # returns {:error, :turn_in_flight}, and THAT makes begin_prompt reply busy —
+    # spawn nothing, append nothing, one clean turn in the journal.
+    test "the second Session's prompt replies busy, runs nothing, corrupts no journal", ctx do
+      start_supervised!({Registry, keys: :unique, name: Writer.registry()})
+      sid = "sess-shared-" <> hex()
+      {:ok, j} = Mem.open(sid)
+
+      start_supervised!(%{
+        id: {:writer, sid},
+        start: {Writer, :start_link, [[session_id: sid, journal: {Mem, j}]]},
+        restart: :temporary
+      })
+
+      # Two connections ⇒ two Session processes for one session_id, both journalled.
+      conn_a = new_conn()
+      conn_b = new_conn()
+      test = self()
+
+      runner_a = fn _s, _req -> receive(do: (:go -> {:stop, :end_turn})) end
+
+      {sa, _} =
+        start_session(ctx, conn_a,
+          session_id: sid,
+          emitter: Emitter.Journal,
+          turn_runner: runner_a
+        )
+
+      {sb, _} =
+        start_session(ctx, conn_b,
+          session_id: sid,
+          emitter: Emitter.Journal,
+          turn_runner: fn _s, _r ->
+            send(test, :b_ran)
+            {:stop, :end_turn}
+          end
+        )
+
+      # A begins: its turn_started acquires the shared Writer's latch.
+      {:ok, ref_a} = begin(sa, 1)
+      wait_until(fn -> match?({:prompting, _}, turn_state(sa)) end)
+      wait_until(fn -> length(kinds(j, "turn_started")) == 1 end)
+
+      # B begins on the SAME session_id: the Writer's latch is held ⇒ busy.
+      {res_b, ref_b} = begin(sb, 1)
+      assert res_b == :ok, "B takes the deferred path (delegated), then replies busy"
+
+      wait_until(fn -> FakeConnection.count(conn_b, :reply) == 1 end)
+
+      assert [{:reply, ^ref_b, {:error, %Error{code: -32_600}}}] =
+               FakeConnection.entries(conn_b, :reply)
+
+      # B ran NOTHING and appended NOTHING: no b_ran, still exactly one turn_started,
+      # zero turn_completed, and B is back to :idle (never entered :prompting).
+      refute_receive :b_ran, 100
+      assert turn_state(sb) == :idle
+      assert length(kinds(j, "turn_started")) == 1
+      assert length(kinds(j, "turn_completed")) == 0
+
+      # A finishes cleanly: exactly one turn_started + one turn_completed. No
+      # interleave, no double completion, latch released.
+      send_root(sa, :go)
+      wait_until(fn -> FakeConnection.count(conn_a, :reply) == 1 end)
+
+      assert [{:reply, ^ref_a, {:ok, %PromptResponse{stop_reason: :end_turn}}}] =
+               FakeConnection.entries(conn_a, :reply)
+
+      wait_until(fn -> length(kinds(j, "turn_completed")) == 1 end)
+      assert length(kinds(j, "turn_started")) == 1
+      assert length(kinds(j, "turn_completed")) == 1
+
+      # Latch released ⇒ B's retry now succeeds and drives its own clean turn (the
+      # runner is non-blocking, so B may pass through :prompting too fast to observe;
+      # key on the side-effect + the journal instead).
+      {:ok, _ref_b2} = begin(sb, 2)
+      assert_receive :b_ran, 1_000
+      wait_until(fn -> length(kinds(j, "turn_started")) == 2 end)
+      wait_until(fn -> length(kinds(j, "turn_completed")) == 2 end)
+    end
+  end
+
+  # A Journal-emitter turn runner blocks on `:go` in the root task; this reaches it.
+  defp send_root(session, msg) do
+    {:prompting, t} = turn_state(session)
+    send(t.root_pid, msg)
+  end
+
+  defp kinds(j, kind) do
+    hwm = Mem.high_watermark(j)
+    {:ok, records} = Mem.read(j, 1, max(hwm, 1))
+    Enum.filter(records, &(&1.kind == kind))
   end
 end
