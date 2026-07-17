@@ -705,4 +705,57 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       assert delivered_offsets(conn2) == [1, 2, 3, 4]
     end
   end
+
+  # Wave-6 conformance finding 13: the attach Subscriber must be supervised
+  # under the per-connection Session DynamicSupervisor (ctx.session_sup), NOT
+  # bare-linked to the ephemeral handler task (whose :normal exit never signals
+  # a plain link, leaking the Subscriber past the connection forever).
+  describe "supervised subscriber lifetime (finding 13)" do
+    test "default start supervises the Subscriber under session_sup; it dies with it" do
+      {sid, j, _w} = start_writer()
+      {:ok, conn} = FakeConnection.start_link()
+      sup = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      # NO injected :start_subscriber — exercise the DEFAULT path with a real
+      # session_sup (the exact production wiring).
+      assert :deferred =
+               Reattach.attach(%{
+                 conn: conn,
+                 conn_mod: FakeConnection,
+                 session_id: sid,
+                 reply_ref: make_ref(),
+                 journal: {Mem, j},
+                 authorize: fn _ctx -> {:ok, grant()} end,
+                 session_sup: sup
+               })
+
+      # The Subscriber is a child of session_sup (supervised), not orphaned.
+      children = DynamicSupervisor.which_children(sup)
+      assert [{:undefined, sub, :worker, _}] = children
+      assert is_pid(sub) and Process.alive?(sub)
+
+      # Killing the session subtree takes the Subscriber with it — no leak.
+      ref = Process.monitor(sub)
+      :ok = Supervisor.stop(sup)
+      assert_receive {:DOWN, ^ref, :process, ^sub, _}, 500
+      refute Process.alive?(sub)
+    end
+
+    test "with neither session_sup nor start_subscriber, falls back to unsupervised start" do
+      {sid, j, _w} = start_writer()
+      {:ok, conn} = FakeConnection.start_link()
+
+      # No session_sup, no injected start_subscriber: the documented fallback
+      # still attaches (the caller owns lifetime on this path).
+      assert :deferred =
+               Reattach.attach(%{
+                 conn: conn,
+                 conn_mod: FakeConnection,
+                 session_id: sid,
+                 reply_ref: make_ref(),
+                 journal: {Mem, j},
+                 authorize: fn _ctx -> {:ok, grant()} end
+               })
+    end
+  end
 end

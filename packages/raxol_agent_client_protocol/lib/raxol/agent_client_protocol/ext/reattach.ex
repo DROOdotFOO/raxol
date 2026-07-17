@@ -157,6 +157,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
           optional(:authorize) => (map() -> {:ok, map()} | {:denied, atom()}),
           optional(:policy) => module(),
           optional(:start_subscriber) => (keyword() -> {:ok, pid()}),
+          optional(:session_sup) => pid() | nil,
           optional(:now) => integer()
         }
 
@@ -254,7 +255,36 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
   defp start_subscriber(%{start_subscriber: fun}, sub_opts) when is_function(fun, 1),
     do: fun.(sub_opts)
 
-  defp start_subscriber(_opts, sub_opts), do: start_link(sub_opts)
+  defp start_subscriber(opts, sub_opts) do
+    case subscriber_sup(opts) do
+      nil ->
+        # No per-connection Session supervisor available (a bare embed or a
+        # test that injects neither `:session_sup` nor `:start_subscriber`):
+        # fall back to an unsupervised start. The caller owns the subscriber's
+        # lifetime on this path.
+        start_link(sub_opts)
+
+      sup ->
+        # DEFAULT: supervise the attach Subscriber under the per-connection
+        # Session `DynamicSupervisor` (`ctx.session_sup`), so it dies with the
+        # connection subtree. A bare `start_link` here links the Subscriber to
+        # the EPHEMERAL handler task, whose `:normal` exit never signals a plain
+        # link — the Subscriber would then leak past the connection forever
+        # (Wave-6 conformance finding 13).
+        DynamicSupervisor.start_child(sup, %{
+          id: {__MODULE__, make_ref()},
+          start: {__MODULE__, :start_link, [sub_opts]},
+          restart: :temporary
+        })
+    end
+  end
+
+  # `ctx.session_sup` reaches `attach/1` either as an explicit `:session_sup`
+  # opt or (the natural path) inside the passed `:ctx`. `nil` on both ⇒ the
+  # unsupervised fallback above.
+  defp subscriber_sup(%{session_sup: sup}) when is_pid(sup), do: sup
+  defp subscriber_sup(%{ctx: %{session_sup: sup}}) when is_pid(sup), do: sup
+  defp subscriber_sup(_), do: nil
 
   defp emit_denied(ctx, denied) do
     reason = denial_reason(denied)
