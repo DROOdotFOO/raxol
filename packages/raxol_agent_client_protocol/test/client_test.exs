@@ -300,8 +300,14 @@ defmodule Raxol.AgentClientProtocol.ClientTest do
 
       assert prompt_resp.stop_reason == :end_turn
 
-      assert_receive {:session_update, %{update: {:agent_message_chunk, chunk1}}}
-      assert_receive {:session_update, %{update: {:agent_message_chunk, chunk2}}}
+      # Generous timeout (matching the request timeouts above): the two
+      # notifications are dispatched to this process AFTER the synchronous
+      # prompt response unblocks, so under a loaded async suite they can land
+      # >100ms (the assert_receive default) later. They are never lost, only
+      # late -- a tight default timeout is the sole reason this smoke test
+      # flaked ~2.5% of runs.
+      assert_receive {:session_update, %{update: {:agent_message_chunk, chunk1}}}, 5_000
+      assert_receive {:session_update, %{update: {:agent_message_chunk, chunk2}}}, 5_000
 
       texts =
         [chunk1, chunk2]
