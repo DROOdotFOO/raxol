@@ -4,7 +4,11 @@
 
 Proposed, 2026-07-18. Raised from three consecutive review rounds on PR #640
 (`fix(acp): single-sender session/update delivery`). No code has landed on master;
-this ADR exists to settle the contract before a fourth patch round.
+this ADR exists to settle the contract before a fourth patch round. Revised the same
+day after an adversarial self-review (see #641): clause 1 is now decided (not an
+either/or), the receiver-assigned principle is applied recursively to the turn
+namespace, the wall-clock/overflow contradiction in the gap clause is removed, and the
+contract is reconciled with the reattach/replay contract (#569/#586).
 
 ## Context
 
@@ -52,42 +56,93 @@ ACP delivery path should adopt the same shape rather than reinvent it a fourth t
 Establish the delivery-ordering contract for ACP `session/update`. Any implementation
 that lands must satisfy all five clauses.
 
-1. **Receiver-assigned ordering key.** The ordering key is assigned at the receiver's
-   trust boundary (server-side arrival order for the single-sender Connection, or a
-   receiver-stamped monotonic per-session counter), never read from peer `_meta`. The
-   peer's `_meta` may be surfaced to the handler as data, but must not be load-bearing
-   for delivery order or drop decisions.
+Definitions used below. A **turn** is the lifecycle of one `session/prompt` request from
+issue through its terminal `:acp_result`. An **update** is a `session/update`
+notification observed between those two points. A **straggler** is an update the receiver
+observes after it has already delivered the terminal result for that turn.
 
-2. **Bounded reorder buffer with explicit drop-with-telemetry.** The reorder buffer
-   has a watermark. Crossing it triggers a declared policy (deliver-with-gap-marker or
-   fail-the-turn), and emits `:telemetry` — never a silent drop, never an unbounded
-   park. Mirror ADR-0013's `[:raxol, :*, :backpressure]`-style event so the drop rate
-   is observable.
+1. **Receiver-assigned, contiguous ordering key (decided).** The ordering key is a
+   monotonic per-session counter **stamped by the receiver at the single sequential
+   point where inbound frames are demultiplexed — before any async, per-session
+   dispatch fan-out**. It is never read from, nor validated against, the peer's `_meta`.
+   Arrival-order-per-connection is explicitly rejected as the key, because it is not
+   stable across a reattach/replay onto a new connection (see clause 5 and the
+   reattach/replay reconciliation below). Stamping before fan-out is load-bearing:
+   stamping inside a per-session task reintroduces the round-2 race. The peer's `_meta`
+   may be surfaced to the handler as opaque data, but is never load-bearing for delivery
+   order or drop decisions.
 
-3. **Bounded gap resolution.** A missing ordinal is waited on for a bounded interval,
-   then resolved deterministically (deliver the buffered tail plus a gap-telemetry
-   event, or fail the turn) — not parked indefinitely. If a settle window is used, its
-   guarantee must be gap-based, not wall-clock-based, so scheduler starvation cannot
-   silently convert a late update into a dropped one.
+   A consequence worth stating: because the receiver assigns *contiguous* ordinals, the
+   peer cannot manufacture a gap. On a single reliable, ordered transport (TCP/WS) a gap
+   in receiver-stamped ordinals can arise only from genuine connection loss — not from
+   peer whim. This removes the "withhold one ordinal to force the degraded path" primitive
+   that a peer-supplied key would have handed over.
+
+2. **Bounded reorder buffer, observable.** The reorder buffer has a watermark; its
+   occupancy and every drop/gap decision emit `:telemetry` — never a silent drop, never
+   an unbounded park. Event name `[:raxol, :acp, :delivery]`, metadata
+   `%{session, turn, decision: :emit | :buffer | :gap | :fail, buffered: n, ordinal: k}`,
+   mirroring ADR-0013's convention. Default watermark: 1_024 buffered updates per turn
+   (informed by ADR-0013's 1_000; a per-turn LLM stream should never legitimately hold
+   more than a few outstanding). Crossing the watermark is treated as clause 3's failure
+   case, not a silent trim.
+
+3. **Overflow-bounded resolution, not timer-bounded.** In-order delivery is released as
+   the next contiguous ordinal arrives; there is **no wall-clock settle window** and the
+   no-drop guarantee never depends on a timer (this is the `@update_settle_ms` mistake
+   the ADR criticizes — a bounded interval is still a wall-clock timeout). A gap is bounded
+   by the buffer watermark, not by elapsed time: while the buffer is under watermark the
+   receiver holds the tail and keeps waiting for the missing contiguous ordinal; only two
+   events resolve a gap — (a) the missing ordinal arrives (normal case, release the tail),
+   or (b) the connection to that session drops or the buffer hits its watermark, in which
+   case the turn **fails** with a `:fail` telemetry event. **Fail-the-turn is the only
+   lossless resolution and is the default.** A `:gap`-marker (deliver the tail past a hole)
+   is permitted ONLY for update types the API explicitly marks coalescible/idempotent (as
+   render frames are in ADR-0013); it is never applied to lossless streamed content, where
+   a hole is corruption.
 
 4. **Streaming preserved.** `on_update` fires incrementally per contiguous update
    (O(1) steady-state memory). A test pins that the handler observes chunks live during
    the turn, not only at `:acp_result`.
 
-5. **Cross-turn monotonicity.** Ordinals are namespaced per turn (or never reset within
-   a session) so a straggler from turn N cannot be aliased into turn N+1's ordering.
+5. **Recursive receiver-assignment across turns.** The per-turn namespace that scopes
+   ordinals (so a turn-N straggler cannot alias into turn N+1) is itself
+   **receiver-assigned**, never derived from a peer-supplied session/job/turn id. Applying
+   the clause-1 trust-boundary rule to only the ordinal and not its namespace would move
+   the same defect up one level: a peer that reuses a turn id could re-alias stragglers.
+   The receiver either never resets the counter within a session (single monotonic space)
+   or scopes it under a receiver-generated turn token.
+
+### Reconciliation with reattach/replay (#569 / #586)
+
+Reattach/replay delivers a turn's updates on a **new** connection, so there is no single
+per-connection arrival sequence spanning the original turn and its replay — which is why
+clause 1 rejects arrival-order as the key. The per-session counter is the reconciliation:
+ordinals are stamped once, in the session's monotonic space, and replay re-delivers
+**already-stamped** ordinals rather than re-numbering by new-connection arrival. Delivery
+is therefore idempotent by ordinal (a replayed ordinal the handler has already seen is a
+no-op, not a reorder), and the frozen replay-closure contract in #569/#586 is preserved.
+Any implementation must add a replay test asserting that a full replay onto a fresh
+connection reproduces the original handler-visible order with no duplicates and no
+renumbering.
 
 ### Invariants to pin with tests
 
 - **Order**: for any interleaving of receiver-stamped updates, the handler observes them
   in stamped order (property test, mirroring `test/property/backpressure_ordering_test.exs`).
-- **No silent drop**: every update either reaches the handler or produces exactly one
-  drop/gap telemetry event; the count of (delivered + dropped) equals the count sent.
-- **Bounded memory**: buffer size never exceeds the watermark; a never-filled gap
-  resolves within the bounded interval rather than growing the buffer.
-- **Peer cannot wedge delivery**: a peer that replays, withholds, or freezes its
-  `_meta` sequence cannot cause an unbounded buffer, a silent drop, or out-of-order
-  delivery (adversarial test with a hostile peer stub).
+- **No silent drop**: every update either reaches the handler or is accounted for by
+  exactly one `:gap`/`:fail` telemetry event; delivered + failed = sent.
+- **No timer in the guarantee**: injecting arbitrary scheduler delay between updates
+  changes latency but never the delivered set or order (pins clause 3 — no wall-clock
+  settle window).
+- **Bounded memory**: buffer occupancy never exceeds the watermark; hitting the
+  watermark fails the turn rather than growing the buffer or silently trimming it.
+- **Peer cannot wedge or steer delivery**: because ordinals are receiver-stamped and
+  contiguous, a peer that replays, withholds, or freezes its `_meta` cannot cause an
+  unbounded buffer, a silent drop, out-of-order delivery, or force the degraded path
+  (adversarial test with a hostile peer stub).
+- **Replay idempotence**: a full replay onto a fresh connection reproduces the original
+  handler-visible order with no duplicates and no renumbering (reconciles #569/#586).
 - **Live streaming**: handler receives >1 update before the terminal result for a
   multi-chunk turn.
 
