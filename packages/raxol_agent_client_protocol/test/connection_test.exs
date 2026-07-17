@@ -654,6 +654,67 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
       assert f4["error"]["code"] == Raxol.AgentClientProtocol.Error.invalid_request_code()
     end
 
+    # GW-3 (ties to S1): the f4 case above is `%{"id" => 77}` -- neither
+    # method nor result/error, so it exercises the benign catch-all arm of
+    # `handle_message` (`true -> respond_malformed`), NOT `classify_response`'s
+    # decode-failure arm. A frame that DOES classify as a response (has
+    # "id" + "error"/"result") but fails `Response.from_json` -- e.g. an
+    # error object whose "code" isn't an integer -- is a different, more
+    # dangerous case: JSON-RPC 2.0 forbids ever answering a response, and
+    # both roles mint `next_out_id` from 1, so an -32600 echo at that id
+    # would cross-correlate into the PEER's own `pending_out` table and
+    # deliver a bogus error to one of ITS unrelated in-flight requests.
+    test "S1: a response-shaped malformed frame is dropped, never cross-correlated to pending_out" do
+      %{conn: conn, peer: peer} = start_agent_conn()
+      complete_handshake(peer)
+      owner = self()
+
+      :ok =
+        Connection.async_request(
+          conn,
+          "fs/read_text_file",
+          ReadTextFileRequest.new("s", "/f"),
+          owner,
+          :s1_inflight,
+          150
+        )
+
+      frame = ScriptedPeer.recv(peer)
+      id = frame["id"]
+
+      # (a) malformed response-shaped frame reusing OUR OWN in-flight id.
+      # Well inside the 150ms outbound timeout below -- proves the malformed
+      # frame itself produced zero frames, not merely that the timeout
+      # eventually overwrote the observation.
+      ScriptedPeer.send_raw(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => id,
+        "error" => %{"code" => "oops"}
+      })
+
+      ScriptedPeer.assert_no_frame(peer, 100)
+
+      # the real in-flight request is undisturbed by the malformed echo --
+      # it resolves by its own timeout, never by a fabricated -32600.
+      assert_receive {:acp_result, :s1_inflight, {:error, :timeout}}, 500
+
+      # §2.3's best-effort $/cancel_request for the timed-out id -- drain it
+      # so it isn't mistaken for a frame produced by case (b) below.
+      cancel_notif = ScriptedPeer.recv(peer)
+      assert cancel_notif["method"] == "$/cancel_request"
+
+      # (b) malformed response-shaped frame for an id we never sent -- also
+      # dropped silently.
+      ScriptedPeer.send_raw(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 999_999,
+        "error" => %{"code" => "oops"}
+      })
+
+      ScriptedPeer.assert_no_frame(peer, 150)
+      assert Process.alive?(conn)
+    end
+
     test "Inv-7: no atom is created from wire input (unknown methods, notifications, session ids)" do
       %{peer: peer} = start_agent_conn()
       complete_handshake(peer)
@@ -1470,6 +1531,73 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
     # faithfully needs a transport stub that can fail one `send_message/2`
     # call without an accompanying close/DOWN signal -- out of scope for the
     # Paired-only harness this suite was asked to drive.
+  end
+
+  # ===========================================================================
+  # S5: `-32700` parse-error emission for the transport's own decode-failure
+  # channel. `Transport.Paired` (used everywhere else in this suite) passes
+  # pre-decoded Elixir terms through unchanged and can never produce this
+  # message; `Transport.Stdio` delivers it for a torn/non-JSON line, a
+  # decoded-but-non-object top-level term, or an oversized frame (see that
+  # module's moduledoc). Simulated here at the wire-message level, matching
+  # the technique row 35's stale-transport-ref test already uses to drive
+  # `handle_info/2` directly.
+  # ===========================================================================
+
+  describe "S5: transport decode_error -> -32700 / -32600, connection survives" do
+    test "torn/non-JSON line yields -32700; a batch array yields -32600; any other scalar yields -32700" do
+      %{conn: conn, peer: peer} = start_agent_conn()
+      complete_handshake(peer)
+
+      %{transport_ref: ref} = :sys.get_state(conn)
+
+      # torn JSON -- before the fix, Connection had no clause for
+      # `{:decode_error, ...}` and it fell to the silent catch-all at the
+      # bottom of `handle_info/2`: the peer got nothing, ever, and any
+      # in-flight request on the other side would eventually time out
+      # instead of seeing a proper parse-error response.
+      send(
+        conn,
+        {:acp_transport, ref,
+         {:decode_error, %Jason.DecodeError{data: "{\"jsonrpc\":", position: 11, token: nil},
+          "{\"jsonrpc\":"}}
+      )
+
+      frame = ScriptedPeer.recv(peer)
+      assert frame["id"] == nil
+      assert frame["error"]["code"] == Raxol.AgentClientProtocol.Error.parse_error_code()
+
+      # a decoded-but-non-object top-level array is the same "batch" shape
+      # the `is_list(frame)` clause of `handle_message/3` answers -32600
+      # for over a pre-decoded-term transport (Paired); over a real
+      # byte-level transport it arrives here as `{:not_an_object, list}`
+      # instead -- this is the only way to reach that clause over Stdio.
+      send(conn, {:acp_transport, ref, {:decode_error, {:not_an_object, [1, 2]}, "[1,2]"}})
+
+      frame2 = ScriptedPeer.recv(peer)
+      assert frame2["id"] == nil
+      assert frame2["error"]["code"] == Raxol.AgentClientProtocol.Error.invalid_request_code()
+
+      # a non-list, non-object top-level scalar is a parse error, not a batch.
+      send(conn, {:acp_transport, ref, {:decode_error, {:not_an_object, 42}, "42"}})
+
+      frame3 = ScriptedPeer.recv(peer)
+      assert frame3["id"] == nil
+      assert frame3["error"]["code"] == Raxol.AgentClientProtocol.Error.parse_error_code()
+
+      # the connection never tears down (Inv-15 parity) and stays fully
+      # functional afterward.
+      assert Process.alive?(conn)
+
+      ScriptedPeer.send_request(peer, 500, "session/new", new_session_params())
+
+      handle_next_invoke(:new_session, fn _r, _c ->
+        {:error, Raxol.AgentClientProtocol.Error.method_not_found()}
+      end)
+
+      drain = ScriptedPeer.recv(peer)
+      assert drain["id"] == 500
+    end
   end
 
   # ===========================================================================

@@ -531,6 +531,25 @@ defmodule Raxol.AgentClientProtocol.Connection do
     end
   end
 
+  # A torn/non-JSON inbound line, or a decoded-but-non-object top-level term
+  # (incl. a JSON array), reaches the Connection via the transport's own
+  # decode-failure channel (Stdio; Paired never produces this). The
+  # `handle_message(frame, ...) when is_list(frame)` clause above only fires
+  # for pre-decoded-term transports (Paired); over a real byte-level
+  # transport a JSON array arrives here as `{:not_an_object, list}` instead,
+  # so it is routed to the same -32600 batch response. Any other decode
+  # failure (unparseable JSON, a non-object/non-array top-level scalar, an
+  # oversized frame) is a genuine parse error (§9). Never tears the
+  # connection down (Inv-15 parity).
+  def handle_info({:acp_transport, ref, {:decode_error, reason, _raw_line}}, state) do
+    if ref == state.transport_ref do
+      handle_decode_error(reason, state)
+    else
+      Logger.debug("ACP: dropping decode_error from stale transport ref #{inspect(ref)}")
+      {:noreply, state}
+    end
+  end
+
   # -- Task success (§4.2 / §4.4) --
 
   def handle_info({ref, result}, state) when is_reference(ref) do
@@ -598,6 +617,22 @@ defmodule Raxol.AgentClientProtocol.Connection do
 
   defp handle_message(_frame, _rx_seq, state), do: {:noreply, state}
 
+  # A top-level JSON array is the same "batch" shape the `is_list(frame)`
+  # clause of `handle_message/3` answers -32600 for; every other decode
+  # failure (torn JSON, an oversized frame, a non-object/non-array scalar)
+  # is a genuine -32700 parse error (§9, S5).
+  @spec handle_decode_error(term(), %__MODULE__{}) ::
+          {:noreply, %__MODULE__{}} | {:stop, :normal, %__MODULE__{}}
+  defp handle_decode_error({:not_an_object, list}, state) when is_list(list) do
+    emit_telemetry([:raxol, :acp, :invalid_request_frame], %{reason: :batch_array})
+    emit_and_continue(response_frame(nil, {:error, Error.invalid_request()}), state)
+  end
+
+  defp handle_decode_error(reason, state) do
+    emit_telemetry([:raxol, :acp, :parse_error], %{reason: inspect(reason)})
+    emit_and_continue(response_frame(nil, {:error, Error.parse_error()}), state)
+  end
+
   defp classify_request(frame, rx_seq, state) do
     case Request.from_json(frame) do
       {:ok, %Request{} = req} -> handle_inbound_request(req, rx_seq, state)
@@ -605,11 +640,31 @@ defmodule Raxol.AgentClientProtocol.Connection do
     end
   end
 
+  # A frame classified as a response (has "id" + "result"/"error") that
+  # fails to decode is DROPPED, never answered (S1): JSON-RPC 2.0 forbids
+  # answering a response, and this Connection's own `next_out_id` space can
+  # overlap the peer's -- echoing a synthesized -32600 error back at the
+  # response's id would land in the PEER's own `pending_out` table and get
+  # cross-correlated to an unrelated in-flight request of theirs. Any real
+  # in-flight request we made under this id resolves by its own timeout
+  # instead, per the design's row 15/16/19 precedent.
   defp classify_response(frame, state) do
     case Response.from_json(frame) do
       {:ok, resp} -> handle_inbound_response(resp, state)
-      {:error, _} -> respond_malformed(frame, state)
+      {:error, _reason} -> drop_malformed_response(frame, state)
     end
+  end
+
+  defp drop_malformed_response(frame, state) do
+    id = Map.get(frame, "id")
+
+    Logger.warning(
+      "ACP: malformed response frame dropped (id #{inspect(id)}) -- never answered, " <>
+        "per JSON-RPC 2.0 (a response is never itself answered)"
+    )
+
+    emit_telemetry([:raxol, :acp, :malformed_response], %{id: inspect(id)})
+    {:noreply, state}
   end
 
   defp classify_notification(frame, rx_seq, state) do
