@@ -15,12 +15,17 @@ defmodule Raxol.AgentClientProtocol.RouterTest do
   alias Raxol.AgentClientProtocol.Schema.AgentTypes
   alias Raxol.AgentClientProtocol.Schema.ClientTypes
   alias Raxol.AgentClientProtocol.Schema.LifecycleExtras
+  alias Raxol.AgentClientProtocol.Schema.Unstable
 
   defmodule MockAgentHandler do
     @moduledoc false
     def prompt(req, ctx), do: {:prompt_called, req, ctx}
     def initialize(req, ctx), do: {:initialize_called, req, ctx}
     def logout(ctx), do: {:logout_called, ctx}
+    def resume_session(req, ctx), do: {:resume_session_called, req, ctx}
+
+    def set_session_config_option(req, ctx),
+      do: {:set_session_config_option_called, req, ctx}
   end
 
   defmodule MockClientHandler do
@@ -206,6 +211,66 @@ defmodule Raxol.AgentClientProtocol.RouterTest do
       }
 
       assert Router.dispatch(:client, MockClientHandler, {:session_update, n}, :ctx) == :ok
+    end
+  end
+
+  # -- I18 / I19: session/resume + session/set_config_option decode+dispatch --
+  # CORE session-method dispatch parity (see test/INVARIANTS.md). Both methods
+  # were schema-only before this: no test drove the wire method string through
+  # Router.decode/4 -> Router.dispatch/4 to its handler callback. These close
+  # that gap end-to-end at the dispatch layer (deterministic; no processes).
+
+  describe "I18 session/resume decode + dispatch" do
+    test "decode/4 (:agent) maps session/resume params to {:resume_session, ResumeSessionRequest}" do
+      params = %{"sessionId" => "s1", "cwd" => "/tmp"}
+
+      assert {:ok, {:resume_session, %Unstable.ResumeSessionRequest{} = req}} =
+               Router.decode(:agent, :request, "session/resume", params)
+
+      assert req.session_id == "s1"
+      assert req.cwd == "/tmp"
+    end
+
+    test "decode failure (missing cwd) propagates the from_json error, no dispatch" do
+      assert {:error, {:missing_field, "cwd"}} =
+               Router.decode(:agent, :request, "session/resume", %{"sessionId" => "s1"})
+    end
+
+    test "dispatch/4 routes a decoded resume to resume_session/2 with (req, ctx)" do
+      req = Unstable.ResumeSessionRequest.new("s1", "/tmp")
+
+      assert Router.dispatch(:agent, MockAgentHandler, {:resume_session, req}, :ctx) ==
+               {:resume_session_called, req, :ctx}
+    end
+  end
+
+  describe "I19 session/set_config_option decode + dispatch" do
+    test "decode/4 (:agent) maps params to {:set_session_config_option, SetSessionConfigOptionRequest}" do
+      params = %{"sessionId" => "s1", "configId" => "theme", "value" => "dark"}
+
+      assert {:ok, {:set_session_config_option, %Unstable.SetSessionConfigOptionRequest{} = req}} =
+               Router.decode(:agent, :request, "session/set_config_option", params)
+
+      assert req.session_id == "s1"
+      assert req.config_id == "theme"
+      assert req.value == "dark"
+    end
+
+    test "decode failure (missing value) propagates the from_json error, no dispatch" do
+      assert {:error, {:missing_field, "value"}} =
+               Router.decode(
+                 :agent,
+                 :request,
+                 "session/set_config_option",
+                 %{"sessionId" => "s1", "configId" => "theme"}
+               )
+    end
+
+    test "dispatch/4 routes a decoded config option to set_session_config_option/2 with (req, ctx)" do
+      req = Unstable.SetSessionConfigOptionRequest.new("s1", "theme", "dark")
+
+      assert Router.dispatch(:agent, MockAgentHandler, {:set_session_config_option, req}, :ctx) ==
+               {:set_session_config_option_called, req, :ctx}
     end
   end
 

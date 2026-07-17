@@ -27,6 +27,7 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.ClientCapabilities
   alias Raxol.AgentClientProtocol.Schema.ClientTypes.FileSystemCapability
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionListCapabilities
+  alias Raxol.AgentClientProtocol.Schema.Unstable.SessionResumeCapabilities
 
   # -- baseline (no-requirement) methods ----------------------------------
 
@@ -224,6 +225,48 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
 
       refute Capabilities.negotiated?(close_only, "session/delete")
       assert Capabilities.negotiated?(close_only, "session/close")
+    end
+  end
+
+  # I18 (CORE, session-method capability parity — see test/INVARIANTS.md):
+  # session/resume gates fail-closed on session_capabilities.resume, exactly
+  # like the delete/close leaves above. Coverage gap closed (was schema-only).
+  describe "I18 session/resume gates on session_capabilities.resume (fail-closed)" do
+    test "the table resolves the real path, not :never" do
+      assert MethodTable.capability_for("session/resume") ==
+               {:agent, [:session_capabilities, :resume]}
+    end
+
+    test "denied when caps is nil (pre-handshake, fail closed)" do
+      refute Capabilities.negotiated?(nil, "session/resume")
+    end
+
+    test "denied when session_capabilities is present but resume is absent" do
+      caps = %AgentCapabilities{
+        session_capabilities: %SessionCapabilities{
+          list: %SessionListCapabilities{},
+          modes: true
+        }
+      }
+
+      refute Capabilities.negotiated?(caps, "session/resume")
+    end
+
+    test "allowed when session_capabilities.resume is present" do
+      caps = %AgentCapabilities{
+        session_capabilities: %SessionCapabilities{resume: %SessionResumeCapabilities{}}
+      }
+
+      assert Capabilities.negotiated?(caps, "session/resume")
+    end
+
+    test "the resume leaf gates independently of list (resume present, list absent)" do
+      resume_only = %AgentCapabilities{
+        session_capabilities: %SessionCapabilities{resume: %SessionResumeCapabilities{}}
+      }
+
+      assert Capabilities.negotiated?(resume_only, "session/resume")
+      refute Capabilities.negotiated?(resume_only, "session/list")
     end
   end
 

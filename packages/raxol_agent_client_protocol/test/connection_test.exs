@@ -553,7 +553,7 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
       assert_receive {:acp_result, :inv3_after, {:ok, %{content: "ok"}}}
     end
 
-    test "Inv-4 (IC-6): response-count invariant across normal/cancelled-undelegated/cancelled-delegated" do
+    test "IC-6 (Inv-4 alias): response-count invariant across normal/cancelled-undelegated/cancelled-delegated" do
       test_pid = self()
       %{conn: conn, peer: peer} = start_agent_conn()
       complete_handshake(peer)

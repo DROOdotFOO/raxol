@@ -985,10 +985,16 @@ defmodule Raxol.AgentClientProtocol.Session.Emitter.Journal do
       ordering and the 582-test base are untouched) and ADDS the durable append.
       Reattachers on OTHER connections get the identical stamped stream via the
       Writer subscription. The design's "origin == subscriber #1" symmetry (one
-      `notify` call site, the grep-gate J10) is thus NOT realized for the origin;
-      the observable invariants (durability, ordering, reattacher stream equality)
-      hold. Unifying the origin onto the subscriber path is the §2.5
-      finalizing-drain rewrite, deferred to protect the frozen drain.
+      `notify` call site, the grep-gate J10) is thus NOT realized for the origin.
+      Observable guarantees actually proven: **durability** and **reattacher
+      stream-equality** hold; **append order is the single-publisher Writer's
+      arrival order** — the sole concurrent test asserts a set (offsets sorted),
+      so ordering is guaranteed only for the single-publisher / single-threaded
+      Writer sequence, NOT for multi-Task concurrent live-delivery interleaving
+      (see the J8 offset-law property + the `test/INVARIANTS.md` note on
+      multi-Task live-delivery ordering). Unifying the origin onto the subscriber
+      path is the §2.5 finalizing-drain rewrite, deferred to protect the frozen
+      drain.
     * **No Writer ⇒ degrade to notify-only.** If the session has no live Writer
       (`Writer.whereis == nil`), `emit/2` still notifies (never crashes a turn);
       the update is simply non-durable. Turn boundaries no-op.

@@ -1,10 +1,34 @@
 defmodule Raxol.AgentClientProtocol.Transport.FramerTest do
+  @moduledoc """
+  CORE framing invariants F1..F6 for the NDJSON line framer
+  (`Transport.Framer`). Canonical statements live in `test/INVARIANTS.md`
+  (CORE › Framing/transport). Each `describe` below leads with its F-ID so a
+  test name resolves to a registry entry and back.
+
+    * F1 — a frame ends at a single `\\n`; partial input buffers until its
+      terminator, split frames reassemble, multiple frames in one chunk yield
+      in order, byte-at-a-time reconstructs, an empty push is a no-op.
+    * F2 — CRLF tolerated: a trailing CR before the LF is trimmed; LF and CRLF
+      terminators mix in one stream; a CR split from its LF still trims.
+    * F3 — empty-line skipping: a bare `\\n`/`\\r\\n` is skipped, never yielded
+      as an empty frame; interleaved keep-alive blank lines are dropped, order
+      preserved.
+    * F4 — oversized-frame rejection + resync: a line exceeding
+      `max_frame_bytes` yields `{:frame_too_large, size}` WITHOUT unbounded
+      buffering and resyncs at the next terminator (surrounding frames intact,
+      exactly-at-limit passes, default 64MiB, non-positive max rejected).
+    * F5 — volume/no-loss: no data loss or reordering across 10k frames fed in
+      randomly sized chunks; the buffer drains empty.
+    * F6 — re-chunking invariance (property): any re-chunking of concatenated
+      JSON lines yields the original frames in order; CRLF and LF terminators
+      are equivalent; an oversized frame errors then resyncs (totality).
+  """
   use ExUnit.Case, async: true
   use ExUnitProperties
 
   alias Raxol.AgentClientProtocol.Transport.Framer
 
-  describe "basic framing" do
+  describe "F1 basic framing: a frame ends at a single \\n; partials buffer, splits reassemble" do
     test "a single push containing one complete line yields that frame" do
       {frames, _framer} = Framer.new() |> Framer.push(~s({"a":1}\n))
       assert frames == [~s({"a":1})]
@@ -57,7 +81,7 @@ defmodule Raxol.AgentClientProtocol.Transport.FramerTest do
     end
   end
 
-  describe "CRLF handling" do
+  describe "F2 CRLF tolerated: a trailing CR before the LF is trimmed" do
     test "a trailing CR before the LF is trimmed" do
       {frames, _framer} = Framer.new() |> Framer.push("{\"a\":1}\r\n")
       assert frames == [~s({"a":1})]
@@ -78,7 +102,7 @@ defmodule Raxol.AgentClientProtocol.Transport.FramerTest do
     end
   end
 
-  describe "empty line skipping" do
+  describe "F3 empty-line skipping: a bare \\n / \\r\\n never yields an empty frame" do
     test "a bare newline is skipped, not yielded as an empty frame" do
       {frames, _framer} = Framer.new() |> Framer.push("\n")
       assert frames == []
@@ -96,7 +120,7 @@ defmodule Raxol.AgentClientProtocol.Transport.FramerTest do
     end
   end
 
-  describe "oversized frames" do
+  describe "F4 oversized-frame rejection + resync: frame_too_large, no unbounded buffering" do
     test "a line exceeding max_frame_bytes yields a frame_too_large error" do
       framer = Framer.new(max_frame_bytes: 10)
       oversized = String.duplicate("x", 20)
@@ -178,7 +202,7 @@ defmodule Raxol.AgentClientProtocol.Transport.FramerTest do
     end
   end
 
-  describe "volume" do
+  describe "F5 volume: no data loss or reorder across 10k frames in random chunks" do
     test "no data loss across 10k frames, fed in randomly sized chunks" do
       lines = for i <- 1..10_000, do: ~s({"seq":#{i}})
       payload = Enum.join(lines, "\n") <> "\n"
@@ -190,7 +214,7 @@ defmodule Raxol.AgentClientProtocol.Transport.FramerTest do
     end
   end
 
-  describe "properties" do
+  describe "F6 re-chunking invariance (property): rechunk / CRLF-LF equivalence / oversized-resync" do
     property "any re-chunking of concatenated JSON lines yields the original frames in order" do
       check all(
               lines <- list_of(json_line_generator(), min_length: 0, max_length: 50),
