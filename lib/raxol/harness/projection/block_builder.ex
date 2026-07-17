@@ -158,6 +158,14 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   mutations -- a defect only the gate's evolving mutation predicate can
   judge without false accusations.
 
+  This bound is ENFORCED, not merely documented:
+  `Raxol.Agent.DoneGateHonestyBoundTest` (in `raxol_agent`, the one tree
+  where both this renderer and the gate are loadable) pins that the
+  honest producer emits no `refs` on a fail-closed journal and that this
+  builder therefore renders the absence row -- so a future fail-open gate
+  change breaks a pin LOUDLY rather than silently laundering evidence
+  here.
+
   ## Cross-turn disclosure
 
   Every resolved entry, and a session-wide tally alongside `type_counts`,
