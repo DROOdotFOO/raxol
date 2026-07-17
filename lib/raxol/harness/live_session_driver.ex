@@ -438,6 +438,14 @@ defmodule Raxol.Harness.LiveSessionDriver do
           :halt ->
             finish(state)
 
+          # Observability seam (debug tooling, e.g. the DEBUG_WEB
+          # devtools page): reply with the full loop state, mutate
+          # nothing. Same read-only contract as `:sys.get_state/1` on a
+          # GenServer -- this loop just isn't one.
+          {:debug_state_probe, from, ref} when is_pid(from) ->
+            send(from, {:debug_state_reply, ref, state})
+            loop(state)
+
           _other ->
             loop(state)
         end

@@ -850,4 +850,38 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       eventually(fn -> strip_ansi(raw(device)) =~ "ALERT" end, 5_000)
     end
   end
+
+  # ---------------------------------------------------------------------
+  # 13. the debug state probe (observability seam)
+  # ---------------------------------------------------------------------
+
+  describe "13. debug state probe" do
+    test "replies with the loop state and mutates nothing" do
+      events = message_turn_events("probe me")
+      %{driver: driver, device: device, forwarder: forwarder} = new_driver(%{})
+
+      Enum.each(events, fn ev -> send(forwarder, {:session_event, "s1", ev}) end)
+
+      eventually(fn -> history_text(raw(device)) =~ "probe me" end)
+
+      ref = make_ref()
+      send(driver, {:debug_state_probe, self(), ref})
+
+      assert_receive {:debug_state_reply, ^ref, state}, 1_000
+
+      # The reply is the real loop state: the surface model with the
+      # sealed block, plus the session bookkeeping fields.
+      assert %{model: model, session_over?: false} = state
+
+      assert Enum.any?(model.projection.blocks, fn block ->
+               inspect(block.content) =~ "probe me"
+             end)
+
+      # Read-only: a second probe returns an identical state, and the
+      # loop keeps serving (input path still alive after probing).
+      ref2 = make_ref()
+      send(driver, {:debug_state_probe, self(), ref2})
+      assert_receive {:debug_state_reply, ^ref2, ^state}, 1_000
+    end
+  end
 end
