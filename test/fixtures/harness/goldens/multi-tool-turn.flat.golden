@@ -1,23 +1,15 @@
  ▸ ∴ I should list the directory first, then read mix.exs.
  100ms
 
- ✓
- list_dir
- (path: ".")
- ✓
- Tool Result
- ⚠ untrusted
+ ✓ list_dir (path: ".")
+ ✓ Tool Result ⚠ untrusted
  mix.exs
  lib/
  test/
  README.md
 
- ✓
- read_file
- (path: "mix.exs")
- ✓
- Tool Result
- ⚠ untrusted
+ ✓ read_file (path: "mix.exs")
+ ✓ Tool Result ⚠ untrusted
  defmodule Raxol.MixProject do
    use Mix.Project
  end

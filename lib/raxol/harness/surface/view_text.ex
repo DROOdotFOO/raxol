@@ -14,10 +14,12 @@ defmodule Raxol.Harness.Surface.ViewText do
   "callers hand the paint authority already width-truncated text").
 
   This module is the bridge the assembled harness owns: flatten a view map
-  into an ordered list of one-line-per-leaf-text-node strings, truncated to
+  into an ordered list of one-line-per-leaf-text-node strings (inline
+  `:row`s of text leaves join into ONE line -- see below), truncated to
   a display-width budget (`Raxol.UI.TextMeasure`, never `String.length` --
-  CJK undercounts), optionally wrapped in minimal SGR (24-bit truecolor
-  `:fg`, `:dim`) for the styled/inline path.
+  CJK undercounts), optionally wrapped in minimal SGR (`:bold`, `:dim`,
+  `:fg` as 24-bit truecolor hex or a named ANSI color atom) for the
+  styled/inline path.
 
   ## Why truncate BEFORE styling
 
@@ -141,6 +143,25 @@ defmodule Raxol.Harness.Surface.ViewText do
   `Composer.render/2`'s children list), so this never needs to re-wrap
   text itself.
 
+  ## `:row` nodes are ONE logical line, not N
+
+  A `%{type: :row, children: [...]}` node whose children are ALL `:text`
+  map leaves is an INLINE run -- one physical line composed of styled
+  segments in document order. `Raxol.UI.Components.MarkdownRenderer`
+  emits exactly this shape for a list item with inline styling (bullet
+  prefix + code span + plain tail, its `inline_row/2`); flattening each
+  leaf to its own line -- the pre-fix behavior -- exploded one bullet
+  item into three rows (bullet alone, code content alone, tail alone).
+  Joined segments keep their own styles: on the `:styled` path each
+  segment gets its own minimal SGR run inline (so a code span renders
+  styled INSIDE the line), on the `:plain` path contents are simply
+  concatenated. Width truncation applies to the JOINED line (the
+  ellipsis lands wherever the budget runs out, inheriting that
+  segment's style), and the trust boundary is unchanged: an embedded
+  `\\n` inside any segment still splits into real physical rows, every
+  piece sanitized. A `:row` with any non-text child falls through to
+  the normal recursive walk.
+
   ## The one exception: `MultiLineInput`'s per-run tuple leaves
 
   `Composer.render/2` mounts `Raxol.UI.Components.Input.MultiLineInput`
@@ -168,17 +189,26 @@ defmodule Raxol.Harness.Surface.ViewText do
     view
     |> collect([])
     |> Enum.reverse()
-    |> Enum.map(fn {content, style} ->
-      # Content is already sanitized: `add_lines/3` (the sole builder of these
-      # `{content, style}` entries) splits on `\n` and scrubs every resulting
-      # line before it lands here, so this stage only measures and styles.
-      content
-      |> truncate(width)
-      |> style_line(style, mode)
+    |> Enum.map(fn segments ->
+      # Content is already sanitized: `add_lines/3` and
+      # `add_segment_lines/2` (the only builders of these segment-list
+      # entries) split on `\n` and scrub every resulting piece before it
+      # lands here, so this stage only measures and styles.
+      segments
+      |> truncate_segments(width)
+      |> Enum.map_join("", fn {content, style} ->
+        style_line(content, style, mode)
+      end)
     end)
   end
 
   # -- flatten ----------------------------------------------------------
+  #
+  # `acc` entries are LINES, newest first; each line is a list of
+  # `{content, style}` segments in document order. A plain `:text` leaf
+  # contributes single-segment lines; an all-text `:row` contributes one
+  # multi-segment line (see moduledoc, "`:row` nodes are ONE logical
+  # line").
 
   defp collect(views, acc) when is_list(views) do
     Enum.reduce(views, acc, &collect/2)
@@ -189,20 +219,31 @@ defmodule Raxol.Harness.Surface.ViewText do
     add_lines(acc, content, Map.get(node, :style, %{}))
   end
 
-  # MultiLineInput's per-run tuple leaves (see moduledoc, "The one
-  # exception"): when a node's ENTIRE children list is bare
-  # `{:text, content, style}` tuples, they are run-segments of ONE visual
-  # line -- join them into a single line entry rather than recursing (a
-  # bare tuple matches no other `collect/2` clause, so recursing would
-  # silently drop them; treating each as its own line would wrongly split
-  # one row into N).
+  # An inline `:row` of text leaves is ONE logical line of styled
+  # segments (a Markdown list item's bullet + code span + tail, a
+  # tool-call header's glyph + name + args -- see moduledoc) -- join,
+  # never one-line-per-leaf. The row's `gap` (top-level key, or
+  # `style: %{gap: n}` as `ToolResultBlock`'s header row carries it)
+  # becomes literal spaces between adjacent segments, matching what the
+  # real layout engine would paint between row children. Any other
+  # children shape falls through to the shared generic walk.
+  defp collect(%{type: :row, children: children} = node, acc)
+       when is_list(children) and children != [] do
+    if Enum.all?(children, &text_leaf?/1) do
+      segments =
+        children
+        |> Enum.map(&leaf_segment/1)
+        |> intersperse_gap(row_gap(node))
+
+      add_segment_lines(acc, segments)
+    else
+      collect_generic_children(children, acc)
+    end
+  end
+
   defp collect(%{children: children}, acc)
        when is_list(children) and children != [] do
-    if Enum.all?(children, &text_tuple?/1) do
-      add_lines(acc, join_text_tuples(children), %{})
-    else
-      Enum.reduce(children, acc, &collect/2)
-    end
+    collect_generic_children(children, acc)
   end
 
   defp collect(%{children: children}, acc) when is_list(children) do
@@ -210,6 +251,43 @@ defmodule Raxol.Harness.Surface.ViewText do
   end
 
   defp collect(_node, acc), do: acc
+
+  # MultiLineInput's per-run tuple leaves (see moduledoc, "The one
+  # exception"): when a node's ENTIRE children list is bare
+  # `{:text, content, style}` tuples, they are run-segments of ONE visual
+  # line -- join them into a single line entry rather than recursing (a
+  # bare tuple matches no other `collect/2` clause, so recursing would
+  # silently drop them; treating each as its own line would wrongly split
+  # one row into N).
+  defp collect_generic_children(children, acc) do
+    if Enum.all?(children, &text_tuple?/1) do
+      add_lines(acc, join_text_tuples(children), %{})
+    else
+      Enum.reduce(children, acc, &collect/2)
+    end
+  end
+
+  defp text_leaf?(%{type: :text, content: content}), do: is_binary(content)
+  defp text_leaf?(_other), do: false
+
+  defp leaf_segment(%{content: content} = leaf),
+    do: {content, Map.get(leaf, :style, %{})}
+
+  defp row_gap(node) do
+    case Map.get(node, :gap) do
+      gap when is_integer(gap) and gap > 0 -> gap
+      _other -> style_gap(Map.get(node, :style))
+    end
+  end
+
+  defp style_gap(%{gap: gap}) when is_integer(gap) and gap > 0, do: gap
+  defp style_gap(_style), do: 0
+
+  defp intersperse_gap(segments, 0), do: segments
+
+  defp intersperse_gap(segments, gap) do
+    Enum.intersperse(segments, {String.duplicate(" ", gap), %{}})
+  end
 
   defp text_tuple?({:text, content, _style}), do: is_binary(content)
   defp text_tuple?(_other), do: false
@@ -231,7 +309,36 @@ defmodule Raxol.Harness.Surface.ViewText do
     content
     |> String.split("\n")
     |> Enum.reduce(acc, fn line, acc2 ->
-      [{sanitize_line(line), style} | acc2]
+      [[{sanitize_line(line), style}] | acc2]
+    end)
+  end
+
+  # The same trust boundary for a joined `:row`: an embedded `\n` inside
+  # ANY segment still starts a new physical line (row accounting stays
+  # exact -- `InlineAuthority`'s "one binary per row" contract), with
+  # every piece sanitized after the split. Segments before/after the
+  # split keep their own styles on their respective lines.
+  defp add_segment_lines(acc, segments) do
+    segments
+    |> Enum.reduce([[]], fn {content, style}, [current | done] ->
+      case String.split(content, "\n") do
+        [only] ->
+          [[{sanitize_line(only), style} | current] | done]
+
+        [first | rest] ->
+          started = [[{sanitize_line(first), style} | current] | done]
+
+          Enum.reduce(rest, started, fn piece, lines_acc ->
+            [[{sanitize_line(piece), style}] | lines_acc]
+          end)
+      end
+    end)
+    # Built newest-line-first with reversed segments; restore document
+    # order per line, then prepend lines oldest-first so `acc` keeps its
+    # newest-first convention.
+    |> Enum.reverse()
+    |> Enum.reduce(acc, fn rev_segments, acc2 ->
+      [Enum.reverse(rev_segments) | acc2]
     end)
   end
 
@@ -298,7 +405,49 @@ defmodule Raxol.Harness.Surface.ViewText do
     end
   end
 
+  # -- segment truncation (joined width budget, styles preserved) --------
+  #
+  # A line is a list of `{content, style}` segments; the width budget
+  # applies to the JOINED display width. When it overflows, the cut
+  # lands mid-walk: segments that fit pass through untouched, the
+  # overflowing segment is split at the remaining budget and gets the
+  # ellipsis (inheriting its own style -- same convention as the
+  # single-segment `truncate/2`), everything after it is dropped.
+  defp truncate_segments(_segments, width) when width <= 0, do: []
+
+  defp truncate_segments(segments, width) do
+    total =
+      segments
+      |> Enum.map(fn {content, _style} ->
+        TextMeasure.display_width(content)
+      end)
+      |> Enum.sum()
+
+    if total <= width do
+      segments
+    else
+      cut_segments(segments, max(width - 1, 0), [])
+    end
+  end
+
+  defp cut_segments([], _remaining, acc), do: Enum.reverse(acc)
+
+  defp cut_segments([{content, style} | rest], remaining, acc) do
+    seg_width = TextMeasure.display_width(content)
+
+    if seg_width <= remaining do
+      cut_segments(rest, remaining - seg_width, [{content, style} | acc])
+    else
+      {left, _rest} = TextMeasure.split_at_display_width(content, remaining)
+      Enum.reverse([{left <> "…", style} | acc])
+    end
+  end
+
   # -- styling (applied AFTER truncation, never counted toward width) ----
+
+  # An empty segment must never emit a bare SGR-on + reset pair (escape
+  # bytes with zero content).
+  defp style_line("", _style, _mode), do: ""
 
   defp style_line(content, _style, :plain), do: content
 
@@ -322,6 +471,34 @@ defmodule Raxol.Harness.Surface.ViewText do
 
   defp maybe_code(reversed_codes, true, code), do: [code | reversed_codes]
   defp maybe_code(reversed_codes, _falsy, _code), do: reversed_codes
+
+  # Named ANSI colors (the vocabulary `Raxol.UI.Components.
+  # MarkdownRenderer`'s styles use -- `fg: :yellow` code spans,
+  # `:cyan` headings, `:green` blockquotes). Standard 16-color SGR
+  # codes, so an inline code span actually renders styled instead of
+  # its atom fg being silently dropped. Unknown atoms still drop --
+  # neutral by default, same as every other unrecognized style key.
+  @named_fg %{
+    black: "30",
+    red: "31",
+    green: "32",
+    yellow: "33",
+    blue: "34",
+    magenta: "35",
+    cyan: "36",
+    white: "37",
+    bright_black: "90",
+    bright_red: "91",
+    bright_green: "92",
+    bright_yellow: "93",
+    bright_blue: "94",
+    bright_magenta: "95",
+    bright_cyan: "96",
+    bright_white: "97"
+  }
+
+  defp maybe_fg(reversed_codes, fg) when is_map_key(@named_fg, fg),
+    do: [Map.fetch!(@named_fg, fg) | reversed_codes]
 
   defp maybe_fg(reversed_codes, "#" <> hex) when byte_size(hex) == 6 do
     case Integer.parse(hex, 16) do

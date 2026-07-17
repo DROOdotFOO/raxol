@@ -1,8 +1,5 @@
- ✓
- mix_test
- ✓
- Tool Result
- ⚠ untrusted
+ ✓ mix_test
+ ✓ Tool Result ⚠ untrusted
  42 tests, 0 failures
 
 ❮ All 42 tests passed.
