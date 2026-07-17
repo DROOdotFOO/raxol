@@ -65,6 +65,16 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       :ok
     end
 
+    # A wedged lane: neither replies nor crashes. Models the exact case
+    # the driver's steer-timeout backstop exists for -- a live steer call
+    # that hangs forever, which without an expiry would pin the
+    # single-in-flight guard and refuse every future steer.
+    @impl true
+    def steer(%{test: test_pid, steer_reply: :hang}, request) do
+      send(test_pid, {:steer_dispatched, request})
+      Process.sleep(:infinity)
+    end
+
     @impl true
     def steer(%{test: test_pid, steer_reply: reply}, request) do
       send(test_pid, {:steer_dispatched, request})
@@ -451,7 +461,51 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
          }}
       )
 
-      eventually(fn -> strip_ansi(raw(device)) =~ "turn canceled" end)
+      eventually(fn -> strip_ansi(raw(device)) =~ "interrupt confirmed" end)
+      assert strip_ansi(raw(device)) =~ "t1"
+    end
+  end
+
+  describe "3b. the turn-canceled ack names the EVENT's turn, not the driver's belief" do
+    test "a cancel for an earlier turn is confirmed as that turn even after the belief advanced" do
+      # The interrupt turn id is advisory: the kill targets the currently
+      # running turn at the session, and the driver's `current_turn_id` is
+      # only a belief that can lag. So the authoritative "which turn died"
+      # ack must come from the `turn_canceled` EVENT, never from the
+      # driver's belief. RED against sourcing the ack from current_turn_id:
+      # here the belief has moved on to "t2" by the time the cancel for
+      # "t1" lands, so a belief-sourced ack would (wrongly) say "t2".
+      %{device: device, forwarder: forwarder} = new_driver(%{})
+
+      send(forwarder, {:session_event, "s1", turn_started_event("t1", 1)})
+      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+
+      # Belief advances to t2.
+      send(forwarder, {:session_event, "s1", turn_started_event("t2", 2)})
+      eventually(fn -> footer_text(raw(device)) != "" end)
+
+      # A cancellation that actually refers to t1 arrives.
+      send(
+        forwarder,
+        {:session_event, "s1",
+         %{
+           id: 3,
+           turn_id: "t1",
+           ts: 3_000,
+           family: :loop,
+           type: :turn_canceled,
+           tier: :durable,
+           payload: %{reason: :interrupted}
+         }}
+      )
+
+      eventually(fn -> footer_text(raw(device)) =~ "interrupt confirmed" end)
+
+      ack = footer_text(raw(device))
+      assert ack =~ "t1", "the ack must name the turn the EVENT canceled (t1)"
+
+      refute ack =~ ~s(turn "t2" canceled),
+             "the ack must not name the driver's stale current-turn belief (t2)"
     end
   end
 
@@ -514,6 +568,38 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
 
       refute footer_text(raw(device)) =~ "steer queued for next boundary",
              "the queued-steer banner must be cleared from the CURRENT frame on a stale-turn rejection"
+    end
+  end
+
+  describe "5b. steer liveness: a wedged lane call never disables steering forever" do
+    test "a hung steer times out, clears the in-flight guard, and a second steer dispatches" do
+      # RED against the pre-fix driver: the first steer hangs (the lane
+      # call never returns AND never crashes), so the single-in-flight
+      # guard stays pinned and the SECOND steer is refused with "already
+      # in flight" -- the lane's steer/2 is never called again, so the
+      # second {:steer_dispatched, _} never arrives and this test's final
+      # assert_receive times out. With the timeout backstop, the guard is
+      # released after steer_timeout_ms and the second steer dispatches.
+      %{device: device, driver: driver, forwarder: forwarder} =
+        new_driver(%{steer_reply: :hang}, steer_timeout_ms: 150)
+
+      send(forwarder, {:session_event, "s1", turn_started_event("turn-1")})
+      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+
+      # First steer: dispatched to the lane, then hangs there forever.
+      send(driver, {:surface_command, %{type: :steer, payload: %{text: "one"}}})
+      assert_receive {:steer_dispatched, _first}, 2_000
+
+      # The backstop fires: honest "wedged" notice, guard released.
+      eventually(fn -> strip_ansi(raw(device)) =~ "timed out" end)
+
+      assert strip_ansi(raw(device)) =~ "wedged"
+
+      # Steering is NOT permanently disabled: a second steer reaches the
+      # lane (it would too be refused pre-fix). Receiving this dispatch is
+      # the whole falsifier -- it can only arrive if the guard was cleared.
+      send(driver, {:surface_command, %{type: :steer, payload: %{text: "two"}}})
+      assert_receive {:steer_dispatched, _second}, 2_000
     end
   end
 

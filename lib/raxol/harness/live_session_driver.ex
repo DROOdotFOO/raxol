@@ -105,6 +105,35 @@ defmodule Raxol.Harness.LiveSessionDriver do
   arriving on the SAME event stream every other batch element does, each
   rendered honestly as it lands (see `apply_lifecycle/2`).
 
+  ### The interrupt turn id is ADVISORY (no server-side CAS, and none needed)
+
+  Steer is guarded by the session's compare-and-swap against
+  `expected_turn_id`; interrupt is NOT, and deliberately so. The real kill
+  entry point, `Raxol.Agent.Interrupt.interrupt/3`, targets a running
+  turn's `tool_ref` and takes only `:reason`/`:actor` options -- there is
+  no turn-id selector: interrupt kills whatever turn is CURRENTLY running.
+  So the `turn_id` this driver puts in the interrupt payload is advisory
+  attribution, not a target: a stale `current_turn_id` can NEVER cause the
+  wrong turn to die (the running turn is decided at the session, not here).
+  The only thing a stale belief can affect is the wording of the driver's
+  own optimistic "interrupt sent (turn X)" notice -- which is why that line
+  says "awaiting confirmation" and the AUTHORITATIVE "which turn died"
+  statement is the event-observed `:turn_canceled` ack, rendered from the
+  event's own `turn_id` (`turn_canceled_notice/1`), never from
+  `current_turn_id`.
+
+  ### Interrupt has no in-flight dedup; steer does (intentional asymmetry)
+
+  Steer keeps a single-in-flight guard (`steer_task`) because it races the
+  session's CAS: two concurrent steers could both dispatch and the second's
+  outcome would be ambiguous, so a second steer while one is pending is
+  refused with an honest notice. Interrupt has NO such guard on purpose:
+  it is idempotent fire-and-forget (signal an already-signaled turn and the
+  staged kill simply proceeds / no-ops), so every ESC press just re-renders
+  the "sent" notice -- there is no ambiguous concurrent state to protect
+  against, and refusing a second ESC would be worse (a user leaning on ESC
+  to stop a runaway tool must never be told "already interrupting, wait").
+
   `:steer` is the opposite shape: a synchronous typed DECISION, dispatched
   via `Task.async/1` so a slow lane can never block ESC-interrupt (or
   anything else) behind it. Every terminal outcome renders a distinct,
@@ -112,7 +141,11 @@ defmodule Raxol.Harness.LiveSessionDriver do
   delivered" (stale turn, no live turn, or any other dispatch error). A
   compare-and-swap failure is NEVER silently swallowed: that is the one
   reason this module exists to render five separate steer-result branches
-  instead of one generic "steer sent" line.
+  instead of one generic "steer sent" line. Because a steer is dispatched
+  under a single-in-flight guard, that guard carries its own LIVENESS
+  bound: a lane call that neither replies nor crashes is killed after
+  `steer_timeout_ms` and the guard released with an honest notice, so a
+  wedged steer can never permanently disable steering (`handle_steer_timeout/2`).
 
   ## Lifecycle honesty
 
@@ -294,6 +327,11 @@ defmodule Raxol.Harness.LiveSessionDriver do
       current_turn_id: nil,
       session_over?: false,
       steer_task: nil,
+      # A liveness bound on THIS driver's own steering resource (not a
+      # latency claim about the lane): a steer Task that neither replies
+      # nor crashes -- a genuinely wedged lane call -- must not hold the
+      # single-in-flight guard forever. See `handle_steer_timeout/2`.
+      steer_timeout_ms: Keyword.get(opts, :steer_timeout_ms, 5_000),
       clock: clock,
       tick_ms: tick_ms,
       notify: Keyword.get(opts, :notify)
@@ -381,6 +419,9 @@ defmodule Raxol.Harness.LiveSessionDriver do
 
           {:DOWN, ref, :process, pid, reason} ->
             state |> handle_down(ref, pid, reason) |> loop()
+
+          {:steer_timeout, ref} ->
+            state |> handle_steer_timeout(ref) |> loop()
 
           {:render_batch, batch} ->
             state |> handle_render_batch(batch) |> loop()
@@ -484,6 +525,20 @@ defmodule Raxol.Harness.LiveSessionDriver do
     # anything else in this loop) behind a pending steer call.
     task = Task.async(fn -> lane_mod.steer(session, request) end)
 
+    # Liveness backstop for the single-in-flight guard above. The Task is
+    # already monitored, so a steer that CRASHES clears the guard via
+    # `handle_down/4`; the gap this closes is a steer that neither replies
+    # nor crashes -- a lane call wedged forever -- which would otherwise
+    # pin `steer_task` and refuse every future steer for the life of the
+    # session. The timer is scoped to THIS task's ref, so a steer that
+    # resolves first leaves only a stale, ignored `:steer_timeout` behind
+    # (see `handle_steer_timeout/2`).
+    Process.send_after(
+      self(),
+      {:steer_timeout, task.ref},
+      state.steer_timeout_ms
+    )
+
     model =
       Surface.put_lane_notice(state.model, "» steer sent — awaiting decision")
 
@@ -495,20 +550,57 @@ defmodule Raxol.Harness.LiveSessionDriver do
   defp interrupt_payload(nil), do: %{}
   defp interrupt_payload(turn_id), do: %{turn_id: turn_id}
 
+  # The turn id here is the driver's CURRENT BELIEF (`current_turn_id`),
+  # rendered advisory-only: "awaiting confirmation" is the disclaimer, and
+  # the interrupt targets the CURRENTLY RUNNING turn regardless of this id
+  # (see the moduledoc's interrupt turn-id section). The authoritative
+  # "which turn died" statement is the event-observed `turn_canceled` ack
+  # (`turn_canceled_notice/1`).
   defp interrupt_sent_notice(nil),
     do: "» interrupt sent — awaiting confirmation"
 
   defp interrupt_sent_notice(turn_id),
     do: "» interrupt sent (turn #{inspect(turn_id)}) — awaiting confirmation"
 
+  defp turn_canceled_notice(nil),
+    do: "» turn canceled — interrupt confirmed"
+
+  defp turn_canceled_notice(turn_id),
+    do: "» turn #{inspect(turn_id)} canceled — interrupt confirmed"
+
   # -- steer task result / teardown -----------------------------------------
 
+  # The steer reply IS the terminal outcome -- clear the in-flight guard
+  # HERE (not on the trailing normal :DOWN), so a `:steer_timeout` that
+  # fires in the window between the reply and Task's own :DOWN finds a
+  # cleared (or newer) `steer_task` and no-ops rather than spuriously
+  # reporting a wedge for a steer that already landed.
   defp handle_task_result(%{steer_task: %{ref: ref}} = state, ref, result) do
     model = render_steer_result(state.model, result)
-    %{state | model: model}
+    %{state | model: model, steer_task: nil}
   end
 
   defp handle_task_result(state, _ref, _result), do: state
+
+  # The wedge backstop fires: the in-flight steer Task has neither replied
+  # nor crashed within `steer_timeout_ms`. Kill it, drop the guard, and say
+  # so honestly -- a second steer can now dispatch. Ref-scoped: a stale
+  # timer for an already-resolved (or superseded) task no-ops.
+  defp handle_steer_timeout(%{steer_task: %{ref: ref} = task} = state, ref) do
+    _ = Task.shutdown(task, :brutal_kill)
+
+    model =
+      state.model
+      |> clear_queued_steer_banner()
+      |> Surface.put_lane_notice(
+        "» steer timed out after #{state.steer_timeout_ms}ms — " <>
+          "channel may be wedged; try again"
+      )
+
+    %{state | model: model, steer_task: nil}
+  end
+
+  defp handle_steer_timeout(state, _ref), do: state
 
   # A CAS failure is NEVER silent -- every branch below renders a distinct,
   # honest notice; see the moduledoc's interrupt/steer asymmetry section.
@@ -553,11 +645,12 @@ defmodule Raxol.Harness.LiveSessionDriver do
     %{model | composer: composer}
   end
 
-  # Task.async/1 both sends {ref, result} AND (since it monitors the task)
-  # a trailing {:DOWN, ref, :process, _, :normal} -- this is that trailing
-  # message, arriving after the result has already been rendered above.
-  # Only now is the bookkeeping cleared, so a future steer can be
-  # dispatched.
+  # Defensive fallback: `handle_task_result/3` already clears the guard the
+  # instant the reply lands, so by the time Task's own trailing
+  # `{:DOWN, ref, :process, _, :normal}` arrives the guard is normally
+  # already `nil` and this clause does not match. Kept so a normal :DOWN
+  # that somehow still carries a live guard (e.g. a future reply-less
+  # normal exit) can never leave "steer already in flight" stuck.
   defp handle_down(%{steer_task: %{ref: ref}} = state, ref, _pid, :normal) do
     %{state | steer_task: nil}
   end
@@ -667,12 +760,15 @@ defmodule Raxol.Harness.LiveSessionDriver do
 
   # Same release on cancellation: the bracket folded, the canceled turn's
   # partial blocks seal now rather than waiting for a next turn that may
-  # never come.
-  defp apply_lifecycle(state, %{type: :turn_canceled}) do
+  # never come. The ack names the turn from the EVENT, never the driver's
+  # own `current_turn_id` belief -- the journal is the authority for which
+  # turn actually died (see the moduledoc's interrupt turn-id section),
+  # so a stale belief can never mislabel the confirmation.
+  defp apply_lifecycle(state, %{type: :turn_canceled} = event) do
     model =
       state.model
       |> Surface.flush_held()
-      |> Surface.put_lane_notice("» turn canceled — interrupt confirmed")
+      |> Surface.put_lane_notice(turn_canceled_notice(Map.get(event, :turn_id)))
 
     %{state | model: model, current_turn_id: nil}
   end
