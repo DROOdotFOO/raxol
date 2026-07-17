@@ -42,7 +42,13 @@ defmodule RaxolAgent.MixProject do
       {:yaml_elixir, "~> 2.12"},
       {:req, "~> 0.5", optional: true},
 
-      # Dev/test only
+      # Dev/test only. raxol_agent_client_protocol is dev/test-scoped, NOT a
+      # published requirement: Raxol.Agent.ClientProtocol.TurnRunner reaches it
+      # through the repo's cross-package convention (@compile no_warn_undefined
+      # + Code.ensure_loaded? guard), so production embedders opt in by adding
+      # the package themselves; the dep here exists so this package's own suite
+      # can run the runner against the REAL ACP Session.
+      {:raxol_agent_client_protocol, path: "../raxol_agent_client_protocol", only: [:dev, :test]},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
