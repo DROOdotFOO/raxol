@@ -546,6 +546,51 @@ defmodule Raxol.AgentClientProtocol.Ext.TokenTest do
                TokenPolicy.authorize_attach(pctx(token, %{surface: :web}))
     end
 
+    test "surf claim fails CLOSED on a type-mismatched ctx.surface — a restrictive " <>
+           "claim must never fall through to the unrestricted catch-all (G6 S5, security)",
+         %{priv: priv} do
+      # Token is restricted to the "tui" surface only.
+      token = mint(live_claims(%{"surf" => ["tui"]}), priv)
+
+      # A STRING surface ("editor") is neither a member of surf NOR the atom
+      # form of a member — a security gate must deny on this type mismatch,
+      # never fall through to an unrestricted :ok via the catch-all clause.
+      assert {:error, :surface_not_allowed} =
+               TokenPolicy.authorize_attach(pctx(token, %{surface: "editor"}))
+
+      # Also: a string that WOULD match textually if compared loosely still
+      # denies — the gate must not coerce/compare across types at all.
+      assert {:error, :surface_not_allowed} =
+               TokenPolicy.authorize_attach(pctx(token, %{surface: "tui"}))
+
+      # nil surface with a restrictive claim present also denies (no type ⇒
+      # no membership, still a mismatch).
+      assert {:error, :surface_not_allowed} =
+               TokenPolicy.authorize_attach(pctx(token, %{surface: nil}))
+    end
+
+    test "surf claim: matching atom passes, non-member atom denies, absent claim " <>
+           "passes unrestricted (G6 S5 regression matrix)",
+         %{priv: priv} do
+      restricted = mint(live_claims(%{"surf" => ["tui"]}), priv)
+      unrestricted = mint(live_claims(%{}), priv)
+
+      # matching atom ⇒ pass
+      assert {:ok, _} =
+               TokenPolicy.authorize_attach(pctx(restricted, %{surface: :tui}))
+
+      # non-member atom ⇒ deny
+      assert {:error, :surface_not_allowed} =
+               TokenPolicy.authorize_attach(pctx(restricted, %{surface: :editor}))
+
+      # no surf claim at all ⇒ unrestricted, any surface passes
+      assert {:ok, _} =
+               TokenPolicy.authorize_attach(pctx(unrestricted, %{surface: :editor}))
+
+      assert {:ok, _} =
+               TokenPolicy.authorize_attach(pctx(unrestricted, %{surface: "editor"}))
+    end
+
     test "the full Runner funnel admits a valid token and denies an expired one", %{
       priv: priv,
       sup: sup

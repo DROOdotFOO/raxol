@@ -557,6 +557,10 @@ defmodule Raxol.AgentClientProtocol.Ext.AttachPolicy.Token do
   defp actor_check(_token_act, _ctx_actor), do: :ok
 
   # Enforce-if-present [G5:S23]: a surf-bearing token is bound to its surfaces.
+  # A security gate MUST fail CLOSED on a type mismatch — a restrictive `surf`
+  # claim paired with a non-atom or non-member `ctx.surface` (e.g. a string,
+  # or `nil`) denies. There is no catch-all `:ok` once `surf` is present;
+  # nil (`surf` absent) is the ONLY unrestricted pass-through (G6 S5).
   @spec surf_check(term(), term()) :: :ok | {:error, :surface_not_allowed}
   defp surf_check(nil, _surface), do: :ok
 
@@ -566,5 +570,5 @@ defmodule Raxol.AgentClientProtocol.Ext.AttachPolicy.Token do
       else: {:error, :surface_not_allowed}
   end
 
-  defp surf_check(_surf, _surface), do: :ok
+  defp surf_check(surf, _surface) when is_list(surf), do: {:error, :surface_not_allowed}
 end
