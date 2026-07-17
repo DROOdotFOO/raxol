@@ -524,7 +524,9 @@ defmodule Raxol.Harness.Surface do
           editor_session: module() | (String.t(), keyword() -> term()) | nil,
           editor_opts: keyword(),
           unread: UnreadDivider.t(),
-          sessions_dir: Path.t()
+          sessions_dir: Path.t(),
+          command_sink: (map() -> term()) | nil,
+          lane_notice: String.t() | [String.t()] | nil
         }
 
   @typedoc """
@@ -577,6 +579,13 @@ defmodule Raxol.Harness.Surface do
       same source `examples/harness_fixture_demo.exs` reads) -- the
       directory `list_fixture_sessions/1` (the session picker, `s`) lists
       `.jsonl` fixtures from.
+    * `:command_sink` (default `nil`) -- a 1-arity fun that makes
+      `:interrupt`/`:steer` LIVE instead of the fixture-mode stubs (see
+      the moduledoc's "Command bifurcation" section). `nil` keeps
+      today's honest stubs untouched; a fun receives
+      `%{type: :interrupt, payload: %{}}` or `%{type: :steer, payload:
+      %{text: composer_text}}` -- see `Raxol.Harness.SessionLane` for the
+      seam a live implementation dispatches through on the other side.
 
   ## Startup mode notice (the degradation ladder's `select_with_reason/3` seam)
 
@@ -647,7 +656,9 @@ defmodule Raxol.Harness.Surface do
       editor_session: Keyword.get(opts, :editor_session),
       editor_opts: Keyword.get(opts, :editor_opts, []),
       unread: UnreadDivider.new(),
-      sessions_dir: Keyword.get(opts, :sessions_dir, @default_sessions_dir)
+      sessions_dir: Keyword.get(opts, :sessions_dir, @default_sessions_dir),
+      command_sink: Keyword.get(opts, :command_sink),
+      lane_notice: nil
     }
 
     model
@@ -797,6 +808,102 @@ defmodule Raxol.Harness.Surface do
     model
     |> put_in([:status, :now], now)
     |> paint_footer()
+  end
+
+  # -- live-session seam ----------------------------------------------------
+
+  @doc """
+  Appends `events` (event-shaped maps -- the same fixture wire shape
+  `advance/2` already consumes) to `model.events`. This is the live-session
+  seam: a `Raxol.Harness.SessionLane` subscriber normalizes each incoming
+  live event through `Raxol.Harness.EventBoundary.normalize/1` upstream of
+  this call, then hands the result here. Appended events are revealed with
+  `advance/2` exactly like fixture events -- there is no separate reveal
+  path for "live" vs. "fixture" once an event has landed in `model.events`.
+
+  `O(n)` per call (`model.events ++ events`), matching
+  `Raxol.Harness.Projection.project/2`'s own per-`advance/2` `O(n)` rebuild
+  -- this call changes the constant factor of a growing session's upkeep,
+  not its complexity class.
+
+  Raises `ArgumentError` on a non-map element: the boundary normalizer is
+  expected to run upstream of this call, so a non-map element reaching here
+  is a caller bug, not a value this function silently tolerates.
+  """
+  @spec append_events(t(), [map()]) :: t()
+  def append_events(model, events) when is_list(events) do
+    Enum.each(events, fn
+      event when is_map(event) ->
+        :ok
+
+      other ->
+        raise ArgumentError,
+              "append_events/2 expects event-shaped maps, got: #{inspect(other)}"
+    end)
+
+    %{model | events: model.events ++ events}
+  end
+
+  @doc """
+  Sets (or clears, with `nil`) a PERSISTENT footer notice line -- rendered
+  on every paint until replaced or cleared, unlike `stub_notice` (which
+  `paint_footer/1` consumes after one frame). Intended for live-session
+  status the embedder wants visible across many frames (e.g. "reconnecting
+  to live session"), not a one-shot acknowledgment. Repaints the footer
+  before returning.
+  """
+  @spec put_lane_notice(t(), String.t() | [String.t()] | nil) :: t()
+  def put_lane_notice(model, text) do
+    %{model | lane_notice: text}
+    |> paint_footer()
+  end
+
+  @doc """
+  Sets (or clears, with `nil`) the status strip's `:stall_verdict` seam
+  (`Raxol.Harness.StatusStrip`'s own documented integration point) and
+  repaints the footer. The strip already renders the `ALERT: <evidence>`
+  segment for a `:stalled`/`:looping` verdict with non-empty evidence; this
+  function is only the model-side plumbing that gets a verdict into
+  `model.status` in the first place.
+  """
+  @spec put_stall_verdict(t(), map() | nil) :: t()
+  def put_stall_verdict(model, nil) do
+    %{model | status: Map.delete(model.status, :stall_verdict)}
+    |> paint_footer()
+  end
+
+  def put_stall_verdict(model, verdict) do
+    %{model | status: Map.put(model.status, :stall_verdict, verdict)}
+    |> paint_footer()
+  end
+
+  @doc """
+  Seals ONE honest, plain marker line into the history region at the
+  current append point -- the loss-honesty marker for live streaming (e.g.
+  shed deltas, a rejected/dropped event). This instrument never renders a
+  gapless lie over lost data: when the live lane cannot deliver every
+  event, this is how the transcript says so, instead of silently rendering
+  as if nothing had been lost.
+
+  Uses the SAME emit paths `seal_block/2` uses (`FlatAuthority.seal/2` with
+  a trailing `"\\n"` in `:flat` mode; `InlineAuthority.seal/2` with a
+  trailing `"\\r\\n"` otherwise), through `ViewText.lines/3` exactly like
+  every other sealed line. `painted_count` is deliberately NOT advanced --
+  a marker is not a block, and this module's fold/jump bookkeeping
+  (`frontier_entries/1`, `paint_pending_blocks/1`) only ever reasons about
+  `model.projection.blocks`.
+  """
+  @spec seal_marker(t(), String.t()) :: t()
+  def seal_marker(%{mode: :flat} = model, text) do
+    lines = ViewText.lines(%{type: :text, content: text}, model.width, :plain)
+    iodata = Enum.map(lines, &(&1 <> "\n"))
+    %{model | authority: FlatAuthority.seal(model.authority, iodata)}
+  end
+
+  def seal_marker(model, text) do
+    lines = ViewText.lines(%{type: :text, content: text}, model.width, :styled)
+    iodata = Enum.map(lines, &[&1, "\r\n"])
+    %{model | authority: InlineAuthority.seal(model.authority, iodata)}
   end
 
   @doc """
@@ -1197,6 +1304,17 @@ defmodule Raxol.Harness.Surface do
   defp dispatch_command(model, %{type: :jump_next}), do: move_focus(model, 1)
   defp dispatch_command(model, %{type: :jump_prev}), do: move_focus(model, -1)
 
+  # Live command_sink: dispatch and leave the model otherwise unchanged --
+  # no stub notice (the embedder owns pending/ack rendering via
+  # `put_lane_notice/2`; the real acknowledgment is event-observed, see
+  # `Raxol.Harness.SessionLane`'s moduledoc). Must precede the plain
+  # stub clause below, which stays as the `command_sink == nil` fallback.
+  defp dispatch_command(%{command_sink: sink} = model, %{type: :interrupt})
+       when is_function(sink, 1) do
+    sink.(%{type: :interrupt, payload: %{}})
+    model
+  end
+
   defp dispatch_command(model, %{type: :interrupt}) do
     %{model | stub_notice: @stub_interrupt_notice}
   end
@@ -1246,6 +1364,26 @@ defmodule Raxol.Harness.Surface do
        do: model
 
   defp dispatch_command(model, %{type: :edit_draft}), do: run_editor(model)
+
+  # Live command_sink: the SAME queued-steer banner the stub clause below
+  # builds (that UI is real and correct on its own) PLUS the sink
+  # dispatch. Must come after the overlay-open clause above (overlay
+  # freeze wins) but before the plain stub clause, which stays as the
+  # `command_sink == nil` fallback.
+  defp dispatch_command(%{command_sink: sink} = model, %{type: :steer})
+       when is_function(sink, 1) do
+    text = Composer.value(model.composer)
+
+    composer =
+      Composer.update(
+        {:set_queued_steer, %{text: text, queued_at: model.revealed}},
+        model.composer
+      )
+      |> elem(0)
+
+    sink.(%{type: :steer, payload: %{text: text}})
+    %{model | composer: composer}
+  end
 
   defp dispatch_command(model, %{type: :steer}) do
     text = Composer.value(model.composer)
@@ -1934,6 +2072,7 @@ defmodule Raxol.Harness.Surface do
 
   defp footer_lines(model) do
     status_line = StatusStrip.render(model.status, model.width)
+    lane_lines = notice_line(model.lane_notice, model.width)
     overlay_lines = overlay_lines(model)
 
     # Both the divider and the pending/live-tail preview are suppressed
@@ -1953,6 +2092,7 @@ defmodule Raxol.Harness.Surface do
     notice_lines = notice_line(model.stub_notice, model.width)
 
     status_line ++
+      lane_lines ++
       overlay_lines ++
       divider_lines ++ preview_lines ++ composer_lines ++ notice_lines
   end

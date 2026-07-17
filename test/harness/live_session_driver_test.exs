@@ -1,0 +1,585 @@
+defmodule Raxol.Harness.LiveSessionDriverTest do
+  @moduledoc """
+  Acceptance suite for `Raxol.Harness.LiveSessionDriver`: the plain-process
+  loop that supervises one live agent session end-to-end (subscribe -> the
+  render cadence -> the surface -> the lane, and back).
+
+  Uses a SCRIPTED fake lane + fake session (no `raxol_agent` dependency --
+  this test lives in the main `raxol` package, which must never depend on
+  it). `packages/raxol_agent/test/raxol/agent/harness/live_session_agent_test.exs`
+  covers the same seams against the REAL agent-side pieces.
+
+  ## Doc guarantee -> test mapping
+
+  Every guarantee named in `Raxol.Harness.LiveSessionDriver`'s moduledoc has
+  exactly one test below proving it:
+
+    1. event-stream -> sealed blocks path -> "stream to sealed blocks"
+    2. interrupt is fire-and-forget, current turn id attached ->
+       "interrupt reaches the lane with the current turn id"
+    3. interrupt acknowledgment is EVENT-OBSERVED (not a reply) ->
+       "interrupt acknowledgment is event-observed"
+    4. steer is a synchronous typed decision (accept path) -> "steer accepted"
+    5. a steer CAS failure is never a silent drop ->
+       "steer CAS failure is an honest notice, never a silent drop"
+    6. cadence loss is marked in-band, never a gapless lie ->
+       "loss is marked in-band"
+    7. a malformed event is rejected at the boundary, marked, never crashes ->
+       "malformed events are rejected at the boundary and marked"
+    8. session death is honest, the UI survives -> "session death leaves the UI alive and honest"
+    9. a final turn ends the session plainly -> "final turn ends the session plainly"
+    10. the loop is the cadence owner: input is handled before queued
+        render batches -> "input is handled before queued render batches"
+    11. a stall verdict reaches the status strip -> "stall verdict reaches the strip"
+  """
+
+  use ExUnit.Case, async: true
+
+  alias Raxol.Core.Events.Event
+  alias Raxol.Harness.EventBoundary
+  alias Raxol.Harness.LiveSessionDriver
+  alias Raxol.Harness.Surface
+  alias Raxol.Harness.Test.SealOracle
+  alias Raxol.Test.CrossTerminal.SequenceScanner
+
+  @width 60
+  @rows 20
+  @footer_rows 6
+  @region_top @rows - @footer_rows
+
+  # -- the scripted fake lane -------------------------------------------
+
+  defmodule FakeLane do
+    @moduledoc false
+    @behaviour Raxol.Harness.SessionLane
+
+    @impl true
+    def subscribe(%{test: test_pid}) do
+      send(test_pid, {:subscribed, self()})
+      :ok
+    end
+
+    @impl true
+    def interrupt(%{test: test_pid}, payload) do
+      send(test_pid, {:interrupt_dispatched, payload})
+      :ok
+    end
+
+    @impl true
+    def steer(%{test: test_pid, steer_reply: reply}, request) do
+      send(test_pid, {:steer_dispatched, request})
+      reply
+    end
+
+    @impl true
+    def monitor(%{pid: pid}) when is_pid(pid), do: Process.monitor(pid)
+    def monitor(_session), do: nil
+  end
+
+  # -- shared test helpers (mirrors surface_live_seam_test.exs's idioms) --
+
+  defp raw(device) do
+    {_in, out} = StringIO.contents(device)
+    out
+  end
+
+  defp strip_ansi(raw) when is_binary(raw) do
+    raw
+    |> SequenceScanner.scan()
+    |> Enum.filter(&match?({:text, _}, &1))
+    |> Enum.map_join("", fn {:text, text} -> text end)
+  end
+
+  defp history_at(raw) do
+    emulator = SealOracle.replay(raw, width: @width, height: @rows)
+    SealOracle.history(emulator, @region_top)
+  end
+
+  defp row_text(row_cells) do
+    row_cells |> Enum.map_join("", &(&1.char || " ")) |> String.trim_trailing()
+  end
+
+  defp history_text(raw),
+    do: raw |> history_at() |> Enum.map_join("\n", &row_text/1)
+
+  # The CURRENT (not cumulative) footer frame -- needed for "present, then
+  # cleared" assertions (mirrors surface_live_seam_test.exs's footer_text/1).
+  defp footer_text(raw) do
+    emulator = SealOracle.replay(raw, width: @width, height: @rows)
+
+    emulator
+    |> Raxol.Terminal.Emulator.get_screen_buffer()
+    |> Map.get(:cells)
+    |> Enum.drop(@region_top)
+    |> Enum.map_join("\n", &row_text/1)
+  end
+
+  # Polls `fun` (a 0-arity predicate) until it returns truthy or `timeout`
+  # elapses -- the async pipeline (forwarder -> cadence -> driver loop) has
+  # no single synchronous checkpoint the test can block on, so this is the
+  # deterministic-enough substitute for a fixed sleep.
+  defp eventually(fun, timeout \\ 1_000, interval \\ 10) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_eventually(fun, deadline, interval)
+  end
+
+  defp do_eventually(fun, deadline, interval) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        ExUnit.Assertions.flunk(
+          "condition not met within #{interval}ms polling budget"
+        )
+      else
+        Process.sleep(interval)
+        do_eventually(fun, deadline, interval)
+      end
+    end
+  end
+
+  defp normalize!(event) do
+    {:ok, map} = EventBoundary.normalize(event)
+    map
+  end
+
+  # -- live-contract event fixtures (atom top-level, atom payload keys AND
+  # values -- the shape a real Raxol.Agent.Contract.Event carries; see
+  # EventBoundary's own moduledoc) --------------------------------------
+
+  defp turn_started_event(turn_id, id \\ 1) do
+    %{
+      id: id,
+      turn_id: turn_id,
+      ts: id * 1_000,
+      family: :loop,
+      type: :turn_started,
+      tier: :durable,
+      payload: %{prompt: "hi"}
+    }
+  end
+
+  defp message_turn_events(content) do
+    [
+      turn_started_event("t1", 1),
+      %{
+        id: 2,
+        turn_id: "t1",
+        ts: 2_000,
+        family: :loop,
+        type: :item_started,
+        tier: :durable,
+        payload: %{item_id: "i1", item_type: :message}
+      },
+      %{
+        id: 3,
+        turn_id: "t1",
+        ts: 3_000,
+        family: :loop,
+        type: :item_completed,
+        tier: :durable,
+        payload: %{item_id: "i1", item_type: :message, content: content}
+      },
+      %{
+        id: 4,
+        turn_id: "t1",
+        ts: 4_000,
+        family: :loop,
+        type: :turn_completed,
+        tier: :durable,
+        payload: %{iteration: 1, usage: %{}, cost: 0.0, final: true}
+      }
+    ]
+  end
+
+  defp burst_events do
+    tool_events =
+      for i <- 1..4 do
+        %{
+          id: i + 1,
+          turn_id: "t1",
+          ts: (i + 1) * 1_000,
+          family: :loop,
+          type: :item_completed,
+          tier: :durable,
+          payload: %{
+            item_id: "i#{i}",
+            item_type: :tool_use,
+            name: "noop",
+            arguments: %{},
+            call_id: "c#{i}"
+          }
+        }
+      end
+
+    [turn_started_event("t1", 1)] ++
+      tool_events ++
+      [
+        %{
+          id: 6,
+          turn_id: "t1",
+          ts: 6_000,
+          family: :loop,
+          type: :turn_completed,
+          tier: :durable,
+          payload: %{iteration: 1, usage: %{}, cost: 0.0, final: false}
+        }
+      ]
+  end
+
+  defp drive_to_completion(model) do
+    case Surface.advance(model) do
+      {model, :done} -> model
+      {model, :ok} -> drive_to_completion(model)
+    end
+  end
+
+  # -- driver construction -----------------------------------------------
+
+  defp start_fake_session do
+    # Unlinked (Agent.start/1, not start_link/1): the test kills this
+    # process directly in the "session death" test, and a linked Agent
+    # would propagate that :kill exit signal to the test process itself.
+    {:ok, pid} = Agent.start(fn -> nil end)
+    pid
+  end
+
+  defp new_driver(session_overrides, driver_overrides \\ []) do
+    {:ok, device} = StringIO.open("")
+    test_pid = self()
+    fake_session_pid = start_fake_session()
+
+    session =
+      Map.merge(
+        %{
+          session_id: "s1",
+          pid: fake_session_pid,
+          test: test_pid,
+          steer_reply: {:error, :unused}
+        },
+        session_overrides
+      )
+
+    base_opts = [
+      lane: {FakeLane, session},
+      device: device,
+      width: @width,
+      rows: @rows,
+      footer_rows: @footer_rows,
+      mode: :inline_log,
+      cadence_opts: [flush_interval_ms: 0],
+      notify: test_pid
+    ]
+
+    {:ok, driver} =
+      LiveSessionDriver.start_link(Keyword.merge(base_opts, driver_overrides))
+
+    # Synchronize on the forwarder having subscribed before the test drives
+    # any events -- otherwise a session_event sent too early has no
+    # registered forwarder to receive it.
+    assert_receive {:subscribed, forwarder_pid}, 500
+
+    on_exit(fn -> LiveSessionDriver.halt(driver) end)
+
+    %{
+      driver: driver,
+      device: device,
+      fake_session: fake_session_pid,
+      forwarder: forwarder_pid,
+      session: session
+    }
+  end
+
+  # ---------------------------------------------------------------------
+  # 1. stream to sealed blocks
+  # ---------------------------------------------------------------------
+
+  describe "1. stream to sealed blocks" do
+    test "live events reach sealed history the same way the fixture path renders them" do
+      events = message_turn_events("hello from live session")
+      %{device: device, forwarder: forwarder} = new_driver(%{})
+
+      Enum.each(events, fn ev -> send(forwarder, {:session_event, "s1", ev}) end)
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "hello from live session" end)
+
+      # The fixture-replay reference path: the SAME normalized maps driven
+      # straight through Surface.advance/2, no live plumbing at all.
+      {:ok, ref_device} = StringIO.open("")
+
+      _ref_model =
+        Surface.new(Enum.map(events, &normalize!/1),
+          device: ref_device,
+          width: @width,
+          rows: @rows,
+          footer_rows: @footer_rows,
+          mode: :inline_log
+        )
+        |> drive_to_completion()
+
+      # Sealed HISTORY content only (not the footer, which legitimately
+      # differs between the two paths: the live driver stamps a real
+      # `now`, the reference path passes none) -- see the module report
+      # for why this is the byte-comparison this test makes, not raw
+      # full-stream parity.
+      assert history_text(raw(device)) == history_text(raw(ref_device))
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 2 & 3. interrupt: fire-and-forget dispatch, event-observed ack
+  # ---------------------------------------------------------------------
+
+  describe "2. interrupt dispatch" do
+    test "ESC reaches the lane with the current turn id" do
+      %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
+
+      send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+
+      send(driver, {:inline_input, Event.key(:escape)})
+
+      assert_receive {:interrupt_dispatched, %{turn_id: "t1"}}, 500
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "interrupt sent" end)
+    end
+  end
+
+  describe "3. interrupt acknowledgment is event-observed" do
+    test "signaled then canceled events (not a reply) render the ack" do
+      %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
+
+      send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+
+      send(driver, {:inline_input, Event.key(:escape)})
+      assert_receive {:interrupt_dispatched, %{turn_id: "t1"}}, 500
+      eventually(fn -> strip_ansi(raw(device)) =~ "interrupt sent" end)
+
+      send(
+        forwarder,
+        {:session_event, "s1",
+         %{
+           id: 2,
+           turn_id: "t1",
+           ts: 2_000,
+           family: :loop,
+           type: :interrupt_signaled,
+           tier: :durable,
+           payload: %{}
+         }}
+      )
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "interrupt signaled" end)
+
+      send(
+        forwarder,
+        {:session_event, "s1",
+         %{
+           id: 3,
+           turn_id: "t1",
+           ts: 3_000,
+           family: :loop,
+           type: :turn_canceled,
+           tier: :durable,
+           payload: %{reason: :interrupted}
+         }}
+      )
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "turn canceled" end)
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 4 & 5. steer: synchronous typed decision, honest on stale-turn CAS
+  # ---------------------------------------------------------------------
+
+  describe "4. steer accepted" do
+    test "Tab dispatches the current turn id + a fresh client_msg_id, footer confirms" do
+      %{device: device, driver: driver, forwarder: forwarder} =
+        new_driver(%{
+          steer_reply:
+            {:ok, {:accepted, %{turn_id: "t1", offset: 1, client_msg_id: nil}}}
+        })
+
+      send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+
+      Enum.each(["h", "i"], fn ch ->
+        send(driver, {:inline_input, Event.key(ch)})
+      end)
+
+      send(driver, {:inline_input, Event.key(:tab)})
+
+      assert_receive {:steer_dispatched,
+                      %{text: "hi", expected_turn_id: "t1", client_msg_id: cmid}},
+                     500
+
+      assert is_binary(cmid)
+      assert String.starts_with?(cmid, "tui-")
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "steer accepted" end)
+    end
+  end
+
+  describe "5. steer CAS failure is an honest notice, never a silent drop" do
+    test "a stale-turn rejection names both turns and clears the queued banner" do
+      %{device: device, driver: driver, forwarder: forwarder} =
+        new_driver(%{steer_reply: {:error, {:stale_turn, "turn-1", "turn-2"}}})
+
+      send(forwarder, {:session_event, "s1", turn_started_event("turn-1")})
+      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+
+      send(driver, {:inline_input, Event.key("h")})
+      send(driver, {:inline_input, Event.key(:tab)})
+
+      assert_receive {:steer_dispatched, _request}, 500
+
+      # The queued-steer banner IS present right after Tab (Surface's own
+      # command_sink path sets it) -- before asserting it is gone.
+      eventually(fn ->
+        footer_text(raw(device)) =~ "steer queued for next boundary"
+      end)
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "NOT delivered" end)
+
+      plain = strip_ansi(raw(device))
+      assert plain =~ "turn-1"
+      assert plain =~ "turn-2"
+
+      refute footer_text(raw(device)) =~ "steer queued for next boundary",
+             "the queued-steer banner must be cleared from the CURRENT frame on a stale-turn rejection"
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 6 & 7. loss / malformed markers
+  # ---------------------------------------------------------------------
+
+  describe "6. loss is marked in-band" do
+    test "a burst past max_pending seals a dropped-marker line with a count" do
+      %{device: device, forwarder: forwarder} =
+        new_driver(%{},
+          cadence_opts: [max_pending: 2, flush_interval_ms: 10_000]
+        )
+
+      Enum.each(burst_events(), fn ev ->
+        send(forwarder, {:session_event, "s1", ev})
+      end)
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "dropped" end, 2_000)
+
+      assert strip_ansi(raw(device)) =~
+               ~r/\d+ event\(s\) dropped under render load/
+    end
+  end
+
+  describe "7. malformed events are rejected at the boundary and marked" do
+    test "a garbage event seals an honest marker line, no crash" do
+      %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
+
+      send(forwarder, {:session_event, "s1", %{garbage: true}})
+
+      eventually(fn ->
+        strip_ansi(raw(device)) =~ "malformed session event rejected"
+      end)
+
+      assert Process.alive?(driver)
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 8 & 9. lifecycle honesty
+  # ---------------------------------------------------------------------
+
+  describe "8. session death leaves the UI alive and honest" do
+    test "killing the session's process leaves the driver alive and responsive" do
+      %{device: device, driver: driver, fake_session: fake_session} =
+        new_driver(%{})
+
+      Process.exit(fake_session, :kill)
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "session process exited" end)
+
+      assert Process.alive?(driver)
+
+      before_input = raw(device)
+      send(driver, {:inline_input, Event.key("j")})
+      eventually(fn -> raw(device) != before_input end)
+
+      assert Process.alive?(driver)
+    end
+  end
+
+  describe "9. final turn ends the session plainly" do
+    test "turn_completed with final: true renders the session-ended notice" do
+      %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
+
+      Enum.each(message_turn_events("done"), fn ev ->
+        send(forwarder, {:session_event, "s1", ev})
+      end)
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "session ended" end)
+
+      assert Process.alive?(driver)
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 10. input-first cadence-owner contract
+  # ---------------------------------------------------------------------
+
+  describe "10. input is handled before queued render batches" do
+    test "an inline_input echo appears before a same-mailbox render batch's sealed content" do
+      %{device: device, driver: driver} = new_driver(%{})
+
+      events =
+        message_turn_events("batch sealed content") |> Enum.map(&normalize!/1)
+
+      # Both messages are placed in the driver's mailbox in immediate
+      # succession, from the process that already synchronized on the
+      # forwarder subscribing (so the driver is quiescent, blocked in its
+      # own receive) -- the loop's input-first selective receive is what
+      # makes the ORDER of arrival not matter: {:inline_input} is checked
+      # first on every pass through the loop, ahead of {:render_batch}.
+      send(driver, {:render_batch, Enum.map(events, &{:event, &1})})
+      send(driver, {:inline_input, Event.key("x")})
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "batch sealed content" end)
+
+      full = raw(device)
+      [prefix, _rest] = String.split(full, "batch sealed content", parts: 2)
+
+      assert strip_ansi(prefix) =~ "x",
+             "the composer echo for the input event must appear before the " <>
+               "batched render content in the byte stream"
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 11. stall verdict reaches the strip
+  # ---------------------------------------------------------------------
+
+  describe "11. stall verdict reaches the strip" do
+    test "a controlled clock crossing hung_after_ms renders the ALERT segment" do
+      {:ok, clock_agent} = Agent.start_link(fn -> 0 end)
+      clock = fn -> Agent.get(clock_agent, & &1) end
+
+      %{device: device, forwarder: forwarder} =
+        new_driver(%{},
+          clock: clock,
+          tick_ms: 5,
+          stall_opts: [warn_after_ms: 20, hung_after_ms: 50]
+        )
+
+      # A progress observation seeds last_activity_at -- the detector's
+      # honesty floor never alarms on an empty window.
+      send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+
+      Agent.update(clock_agent, fn _ -> 1_000 end)
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "ALERT" end, 2_000)
+    end
+  end
+end
