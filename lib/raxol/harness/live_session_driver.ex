@@ -176,31 +176,29 @@ defmodule Raxol.Harness.LiveSessionDriver do
   starts a session lane subscription from "now"; a later unit is expected
   to own history replay before this module's own `subscribe/1` call.
 
-  ## Growth characteristic (SEAM-bounded -- inert until the embedder + a
-  compaction unit land)
+  ## Growth characteristic (turn-granularity compaction, guarded)
 
-  DISCLOSED, not yet fixed. `apply_batch_item/2` appends each live event
-  into `model.events` and re-derives the WHOLE revealed prefix through
-  `Raxol.Harness.Surface.advance/2` (`Projection.project/2`) on every
-  event. Over a FIXTURE -- a bounded, known event list -- that is the cheap
-  growing-prefix fold `Surface` was built for. Over an UNBOUNDED live
-  stream it is O(n^2) CPU and unbounded retention: `model.events` never
-  sheds a sealed event. This is INERT today -- no shipped embedder feeds
-  the driver a real long/fast session (see SEAM #4 in the PR wiring
-  ledger); the keystone test is the only end-to-end consumer and streams
-  only short sessions, so nothing reaches the quadratic regime. The fix is
-  turn-granularity compaction: drop the source events of FULLY-SEALED turns
-  once their bracket has folded. That is sound because turns project
-  independently (no session-wide id index couples them), the
-  tool_use/tool_result merge is intra-turn, and seal-time recency grading
-  is invariant to dropping older whole turns -- but it rewrites the
-  seal-frontier bookkeeping (`painted_count`, fold-override indices) and
-  must be gated behind a multi-turn live/fixture BYTE-parity test that does
-  not yet exist. So it lands as its OWN reviewed unit WITH the embedder
-  wiring -- the same SEAM that first makes an unbounded stream reachable --
-  rather than bolted onto this diff, where a subtle bookkeeping error would
-  corrupt sealed history (the one failure worse than latency, and permanent
-  once a row scrolls into native scrollback). Owner: harness-ui lane.
+  FIXED (was: DISCLOSED-not-fixed). `apply_batch_item/2` still appends
+  each live event into `model.events` and re-derives the revealed prefix
+  through `Raxol.Harness.Surface.advance/2` (`Projection.project/2`) on
+  every event -- but every turn bracket (`turn_completed` /
+  `turn_canceled`) now runs `Raxol.Harness.Surface.compact_sealed_turns/1`
+  right after `Surface.flush_held/1`: the source events of retired turns
+  (bracket folded, all blocks sealed) are dropped from the live event
+  list, so the per-event re-projection cost and the retained event list
+  are both O(size of the newest turns), never O(session). The soundness
+  argument (turns project independently, tool-merge intra-turn, recency
+  grading turns_behind-invariant) plus the seal-frontier bookkeeping
+  shifts (`painted_count`, fold-override indices, unread divider) live
+  with the function itself -- and the function does not trust the
+  argument: it re-projects the compacted prefix and ABORTS (model
+  unchanged) unless the surviving projection is `==`-identical to the old
+  one minus the dropped sealed blocks, so a bookkeeping error degrades to
+  the old growth curve, never to corrupted sealed history. Gated behind
+  the multi-turn live/fixture byte-parity guard
+  (`test/harness/live_session_driver_compaction_test.exs`: N generated
+  multi-turn sessions through the compacted-live and uncompacted-fixture
+  paths, sealed history asserted byte-identical via the emulator oracle).
 
   ## Doc guarantee -> test mapping
 
@@ -914,7 +912,16 @@ defmodule Raxol.Harness.LiveSessionDriver do
   # feed, handled in `handle_down/4` / `handle_exit/3`), never a
   # turn-level one.
   defp apply_lifecycle(state, %{type: :turn_completed}) do
-    %{state | model: Surface.flush_held(state.model), current_turn_id: nil}
+    model =
+      state.model
+      |> Surface.flush_held()
+      # Growth fix (see the moduledoc's growth section): the bracket just
+      # sealed this turn's blocks, so earlier retired turns' source
+      # events can leave the live list. Self-checking -- aborts to an
+      # unchanged model rather than ever diverging a byte.
+      |> Surface.compact_sealed_turns()
+
+    %{state | model: model, current_turn_id: nil}
   end
 
   # Same release on cancellation: the bracket folded, the canceled turn's
@@ -927,6 +934,9 @@ defmodule Raxol.Harness.LiveSessionDriver do
     model =
       state.model
       |> Surface.flush_held()
+      # Same growth fix as the completed bracket -- a canceled turn's
+      # sealed blocks retire its predecessors' events just the same.
+      |> Surface.compact_sealed_turns()
       |> Surface.put_lane_notice(turn_canceled_notice(Map.get(event, :turn_id)))
 
     %{state | model: model, current_turn_id: nil}

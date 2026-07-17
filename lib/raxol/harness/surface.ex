@@ -1400,6 +1400,245 @@ defmodule Raxol.Harness.Surface do
   end
 
   @doc """
+  Turn-granularity compaction of the live event list: drops the source
+  events of RETIRED turns -- turns whose bracket has folded and whose
+  blocks are all already sealed into print-once history -- from
+  `model.events`, so an unbounded live session stops paying O(n^2)
+  re-projection over turns that can never render another byte.
+
+  ## Why this is byte-safe (and how it proves it)
+
+  Turns project independently (`Projection` buckets by `turn_id`; the
+  tool_use/tool_result merge is intra-turn), recency grading is
+  `turns_behind`-invariant under dropping older WHOLE turns (both the
+  current position and every surviving turn's position shift by the same
+  amount), and `Raxol.Harness.Projection.Recovery.filter_ids/1` exempts
+  the first surviving id from its forward-gap check (a call "may
+  legitimately start mid-stream"), so a dropped prefix never flips the
+  `damaged` mark. But this function does not merely TRUST that analysis:
+  it re-projects the compacted prefix and commits ONLY when the surviving
+  projection is `==`-identical (blocks, tail, damaged mark) to the old
+  projection minus the dropped turns' sealed blocks. Any divergence --
+  a cross-turn evidence ref into the dropped region, a bookkeeping error,
+  a projection change this function's analysis missed -- aborts the whole
+  compaction and returns the model UNCHANGED. Fail-safe: the worst
+  outcome of a bug here is the old growth characteristic, never a
+  corrupted transcript.
+
+  ## What is retired
+
+  A turn is retirable when every one of these holds (each individually
+  fail-safe -- when in doubt, keep the events):
+
+    * it carries a turn bracket (`turn_completed` / `turn_canceled`)
+      among the revealed events;
+    * it is not the NEWEST bracket-carrying turn (the status strip's
+      `turn_completed`/`cost` derivation reads the LAST bracket, so the
+      most recent completed turn's events always stay);
+    * every sealed block consumed only retired events, and no surviving
+      block (sealed or not) references a dropped event id;
+    * no surviving event's payload cites a dropped id in its `refs`
+      (evidence refs are same-turn by `Raxol.Agent.DoneGate`'s own
+      contract, but a forged or future cross-turn ref must veto the drop
+      rather than dangle).
+
+  Only a contiguous PREFIX of `model.events` is ever dropped, and only
+  within the revealed range: the walk stops at the first event that is
+  not a `:loop`-family event of a retired turn (meta-family events,
+  id-less events, and the live turn all act as hard stops), which
+  preserves the interior id/order structure of everything that survives.
+
+  ## Bookkeeping shifted on commit
+
+  `revealed` (an event count from the head) drops by the dropped-event
+  count; `painted_count`, `fold_overrides` keys, `focused_index`, and the
+  `UnreadDivider` boundary/span (all positions in `projection.blocks`)
+  shift down by the dropped-block count. Retention after a compacting
+  bracket is O(size of the newest turns), not O(session) -- the growth
+  fix the live-session driver's ledger discloses.
+
+  Gated behind the multi-turn live/fixture byte-parity guard in
+  `test/harness/live_session_driver_compaction_test.exs` (the emulator
+  oracle asserts compacted-live and uncompacted-fixture sealed history
+  are byte-identical).
+  """
+  @spec compact_sealed_turns(t()) :: t()
+  def compact_sealed_turns(model) do
+    with false <- model.projection.damaged,
+         {k, dropped_ids} when k > 0 <- droppable_prefix(model),
+         :ok <- refs_clear?(model, k, dropped_ids),
+         {:ok, dropped_blocks} <- dropped_block_prefix(model, dropped_ids),
+         {:ok, projection} <- reproject_survivors(model, k, dropped_blocks) do
+      commit_compaction(model, k, dropped_blocks, projection)
+    else
+      _keep -> model
+    end
+  end
+
+  # The longest droppable prefix: `:loop` events with integer ids whose
+  # turn_id is retired. Anything else -- meta family, an id-less event, a
+  # live/kept turn -- stops the walk (fail-safe: prefix-only, so survivor
+  # order and interior gap structure are untouched).
+  defp droppable_prefix(model) do
+    revealed_events = Enum.take(model.events, model.revealed)
+    retired = retired_turn_ids(revealed_events)
+
+    revealed_events
+    |> Enum.reduce_while({0, MapSet.new()}, fn event, {k, ids} ->
+      id = Map.get(event, :id)
+
+      if Map.get(event, :family) == :loop and is_integer(id) and
+           MapSet.member?(retired, Map.get(event, :turn_id)) do
+        {:cont, {k + 1, MapSet.put(ids, id)}}
+      else
+        {:halt, {k, ids}}
+      end
+    end)
+  end
+
+  # Bracket-carrying turns in first-seen order, minus the newest one
+  # (kept so the status derivation's "last turn_completed" survives).
+  defp retired_turn_ids(revealed_events) do
+    {order, bracketed} =
+      Enum.reduce(revealed_events, {[], MapSet.new()}, fn event,
+                                                          {order, bracketed} ->
+        turn_id = Map.get(event, :turn_id)
+
+        if Map.get(event, :family) == :loop and not is_nil(turn_id) do
+          order = if turn_id in order, do: order, else: [turn_id | order]
+
+          bracketed =
+            if Map.get(event, :type) in [:turn_completed, :turn_canceled],
+              do: MapSet.put(bracketed, turn_id),
+              else: bracketed
+
+          {order, bracketed}
+        else
+          {order, bracketed}
+        end
+      end)
+
+    case order
+         |> Enum.reverse()
+         |> Enum.filter(&MapSet.member?(bracketed, &1)) do
+      [] -> MapSet.new()
+      completed -> completed |> List.delete_at(-1) |> MapSet.new()
+    end
+  end
+
+  # Veto: any surviving event whose payload cites a dropped id in `refs`
+  # (either key style) keeps everything -- an evidence ref must never be
+  # left dangling into a compacted region.
+  defp refs_clear?(model, k, dropped_ids) do
+    cited =
+      model.events
+      |> Enum.drop(k)
+      |> Enum.flat_map(fn event ->
+        case Map.get(event, :payload) do
+          %{} = payload ->
+            List.wrap(Map.get(payload, "refs") || Map.get(payload, :refs))
+
+          _other ->
+            []
+        end
+      end)
+
+    if Enum.any?(cited, &MapSet.member?(dropped_ids, &1)),
+      do: :veto,
+      else: :ok
+  end
+
+  # The dropped turns must account for exactly a leading run of SEALED
+  # blocks, and no surviving block may reference a dropped event id
+  # (a cross-turn evidence fold would show up here as an intersecting
+  # `event_refs`).
+  defp dropped_block_prefix(model, dropped_ids) do
+    {dropped_blocks, rest} =
+      Enum.split_while(model.projection.blocks, fn block ->
+        Enum.all?(block.event_refs, &MapSet.member?(dropped_ids, &1))
+      end)
+
+    survivors_clear? =
+      Enum.all?(rest, fn block ->
+        not Enum.any?(block.event_refs, &MapSet.member?(dropped_ids, &1))
+      end)
+
+    count = length(dropped_blocks)
+
+    if survivors_clear? and count <= model.painted_count,
+      do: {:ok, count},
+      else: :veto
+  end
+
+  # The referent check: the compacted prefix must project to EXACTLY the
+  # old projection minus the dropped sealed blocks. `==` on the block
+  # structs is a value comparison, so a detached (binary-copied) old
+  # block still matches its freshly rebuilt twin.
+  defp reproject_survivors(model, k, dropped_blocks) do
+    projection =
+      model.events
+      |> Enum.drop(k)
+      |> Enum.take(model.revealed - k)
+      |> Projection.project(fold_defaults: model.fold_defaults)
+
+    same? =
+      projection.blocks == Enum.drop(model.projection.blocks, dropped_blocks) and
+        projection.tail == model.projection.tail and
+        projection.damaged == model.projection.damaged
+
+    if same?, do: {:ok, projection}, else: :veto
+  end
+
+  defp commit_compaction(model, k, dropped_blocks, projection) do
+    %{
+      model
+      | events: Enum.drop(model.events, k),
+        revealed: model.revealed - k,
+        projection: projection,
+        painted_count: model.painted_count - dropped_blocks,
+        fold_overrides:
+          shift_fold_overrides(model.fold_overrides, dropped_blocks),
+        focused_index: shift_focus(model.focused_index, dropped_blocks),
+        unread: shift_unread(model.unread, dropped_blocks)
+    }
+  end
+
+  defp shift_fold_overrides(overrides, shift) do
+    for {index, fold} <- overrides,
+        is_integer(index),
+        index >= shift,
+        into: %{} do
+      {index - shift, fold}
+    end
+  end
+
+  defp shift_focus(nil, _shift), do: nil
+  defp shift_focus(index, shift), do: max(index - shift, 0)
+
+  # UnreadDivider positions are block-count offsets; shift them with the
+  # blocks. A span partially consumed by the drop keeps only its
+  # surviving extent; a fully consumed span retires.
+  defp shift_unread(unread, shift) do
+    unread
+    |> Map.update!(:boundary, fn
+      nil -> nil
+      boundary -> max(boundary - shift, 0)
+    end)
+    |> Map.update!(:span, fn
+      nil ->
+        nil
+
+      %{from: from, count: count} = span ->
+        shifted_from = max(from - shift, 0)
+        shifted_count = count + min(from - shift, 0)
+
+        if shifted_count > 0,
+          do: %{span | from: shifted_from, count: shifted_count},
+          else: nil
+    end)
+  end
+
+  @doc """
   Closes a live stream opened with `new/2`'s `:stream_open` option and
   flushes every still-held completed block to sealed history.
 
