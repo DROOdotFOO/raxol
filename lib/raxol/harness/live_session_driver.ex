@@ -143,6 +143,32 @@ defmodule Raxol.Harness.LiveSessionDriver do
   starts a session lane subscription from "now"; a later unit is expected
   to own history replay before this module's own `subscribe/1` call.
 
+  ## Growth characteristic (SEAM-bounded -- inert until the embedder + a
+  compaction unit land)
+
+  DISCLOSED, not yet fixed. `apply_batch_item/2` appends each live event
+  into `model.events` and re-derives the WHOLE revealed prefix through
+  `Raxol.Harness.Surface.advance/2` (`Projection.project/2`) on every
+  event. Over a FIXTURE -- a bounded, known event list -- that is the cheap
+  growing-prefix fold `Surface` was built for. Over an UNBOUNDED live
+  stream it is O(n^2) CPU and unbounded retention: `model.events` never
+  sheds a sealed event. This is INERT today -- no shipped embedder feeds
+  the driver a real long/fast session (see SEAM #4 in the PR wiring
+  ledger); the keystone test is the only end-to-end consumer and streams
+  only short sessions, so nothing reaches the quadratic regime. The fix is
+  turn-granularity compaction: drop the source events of FULLY-SEALED turns
+  once their bracket has folded. That is sound because turns project
+  independently (no session-wide id index couples them), the
+  tool_use/tool_result merge is intra-turn, and seal-time recency grading
+  is invariant to dropping older whole turns -- but it rewrites the
+  seal-frontier bookkeeping (`painted_count`, fold-override indices) and
+  must be gated behind a multi-turn live/fixture BYTE-parity test that does
+  not yet exist. So it lands as its OWN reviewed unit WITH the embedder
+  wiring -- the same SEAM that first makes an unbounded stream reachable --
+  rather than bolted onto this diff, where a subtle bookkeeping error would
+  corrupt sealed history (the one failure worse than latency, and permanent
+  once a row scrolls into native scrollback). Owner: harness-ui lane.
+
   ## Doc guarantee -> test mapping
 
   Every claim above is exercised by name in

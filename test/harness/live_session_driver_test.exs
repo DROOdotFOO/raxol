@@ -118,11 +118,23 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
   # elapses -- the async pipeline (forwarder -> cadence -> driver loop) has
   # no single synchronous checkpoint the test can block on, so this is the
   # deterministic-enough substitute for a fixed sleep.
-  # Default budget is generous on purpose: this suite runs async beside
-  # CPU-heavy siblings (the 5000-block memory-residency case among them),
-  # and a green condition returns immediately regardless of the budget --
-  # only genuine failures ever wait it out.
-  defp eventually(fun, timeout \\ 5_000, interval \\ 10) do
+  #
+  # Budget is calibrated for a LOADED CI box, not an idle laptop. The
+  # predicate here is not free: the `history_text/1` variants replay the
+  # whole cumulative device output through a real terminal emulator
+  # (`SealOracle.replay/2`) on EVERY poll, so under CPU starvation (this
+  # suite runs `async: true` beside the 5000-block memory-residency case
+  # and every other harness sibling) both the pipeline that must make
+  # progress AND the poll that observes it are contending for the same
+  # starved schedulers. A green condition returns on the first poll
+  # regardless of the budget -- so the generous ceiling only ever costs
+  # time on a genuine failure -- and the wider interval keeps the number
+  # of heavy replays down while we wait, rather than piling a fresh full
+  # replay onto the contention every 10ms. (Empirically: 100% green
+  # unloaded; the earlier 5_000/10 budget flaked only under deliberate
+  # 15-core `yes`-burner saturation, the signature of scheduling latency,
+  # never a logic error -- the same assertions pass given the schedulers.)
+  defp eventually(fun, timeout \\ 15_000, interval \\ 50) do
     deadline = System.monotonic_time(:millisecond) + timeout
     do_eventually(fun, deadline, interval, timeout)
   end
@@ -288,7 +300,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
     # Synchronize on the forwarder having subscribed before the test drives
     # any events -- otherwise a session_event sent too early has no
     # registered forwarder to receive it.
-    assert_receive {:subscribed, forwarder_pid}, 500
+    assert_receive {:subscribed, forwarder_pid}, 2_000
 
     on_exit(fn -> LiveSessionDriver.halt(driver) end)
 
@@ -392,7 +404,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
 
       send(driver, {:inline_input, Event.key(:escape)})
 
-      assert_receive {:interrupt_dispatched, %{turn_id: "t1"}}, 500
+      assert_receive {:interrupt_dispatched, %{turn_id: "t1"}}, 2_000
 
       eventually(fn -> strip_ansi(raw(device)) =~ "interrupt sent" end)
     end
@@ -406,7 +418,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
 
       send(driver, {:inline_input, Event.key(:escape)})
-      assert_receive {:interrupt_dispatched, %{turn_id: "t1"}}, 500
+      assert_receive {:interrupt_dispatched, %{turn_id: "t1"}}, 2_000
       eventually(fn -> strip_ansi(raw(device)) =~ "interrupt sent" end)
 
       send(
@@ -486,7 +498,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       send(driver, {:inline_input, Event.key("h")})
       send(driver, {:inline_input, Event.key(:tab)})
 
-      assert_receive {:steer_dispatched, _request}, 500
+      assert_receive {:steer_dispatched, _request}, 2_000
 
       # The queued-steer banner IS present right after Tab (Surface's own
       # command_sink path sets it) -- before asserting it is gone.
@@ -520,7 +532,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
         send(forwarder, {:session_event, "s1", ev})
       end)
 
-      eventually(fn -> strip_ansi(raw(device)) =~ "dropped" end, 2_000)
+      eventually(fn -> strip_ansi(raw(device)) =~ "dropped" end, 5_000)
 
       assert strip_ansi(raw(device)) =~
                ~r/\d+ event\(s\) dropped under render load/
@@ -668,7 +680,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
 
       send(driver, {:inline_input, Event.key_event("e", :pressed, [:ctrl])})
 
-      assert_receive {:editor_invoked, _draft}, 1_000
+      assert_receive {:editor_invoked, _draft}, 2_000
       eventually(fn -> strip_ansi(raw(device)) =~ "draft kept" end)
     end
 
@@ -749,7 +761,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
 
       Agent.update(clock_agent, fn _ -> 1_000 end)
 
-      eventually(fn -> strip_ansi(raw(device)) =~ "ALERT" end, 2_000)
+      eventually(fn -> strip_ansi(raw(device)) =~ "ALERT" end, 5_000)
     end
   end
 end
