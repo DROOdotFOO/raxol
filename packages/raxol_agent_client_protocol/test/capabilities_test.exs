@@ -394,7 +394,19 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
       }
 
       assert {:ok, _} = Connection.request(ctx.client_conn, "initialize", init_req, 5_000)
-      assert :ok = await_initialized(ctx.client_conn)
+
+      # No barrier needed here: `phase: :initialized` is committed inside the
+      # SAME GenServer reduction that replies to this `request/4` call (see
+      # `handle_inbound_response/2` -> `maybe_client_initialized/3` in
+      # connection.ex) — the reply is sent before the state update, but both
+      # happen with no yield point in between, so OTP's single-process
+      # mailbox serialization guarantees any later message reaching this
+      # connection (including the terminal/create below) observes the
+      # post-commit phase. A polling wait here would be a no-op: the state it
+      # waits for is already true by the time the wait could run. If this
+      # test flakes again under load, the cause is NOT capability-ordering —
+      # diagnose fresh (candidate: request timeout or process-start latency
+      # under CPU starvation), don't paper over it with a wait.
 
       # Decode-INVALID params (missing sessionId/command). If the gate ran
       # AFTER decode we would see -32602; -32601 proves the gate ran first.
@@ -414,7 +426,10 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
       }
 
       assert {:ok, _} = Connection.request(ctx.client_conn, "initialize", init_req, 5_000)
-      assert :ok = await_initialized(ctx.client_conn)
+
+      # No barrier needed — see the comment in the sibling test above:
+      # `phase: :initialized` is already committed by the time this call
+      # returns (single-process mailbox serialization in Connection).
 
       assert {:ok, %{terminal_id: "term-ok"}} =
                Connection.request(
@@ -431,24 +446,6 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
       |> Enum.find_value(fn
         {Raxol.AgentClientProtocol.Connection, pid, _type, _mods} -> pid
         _other -> nil
-      end)
-    end
-
-    # Block until the client connection has PROCESSED its initialize response
-    # and committed `caps` (phase :initialized). In production terminal/create
-    # can only reach the client AFTER this (ordered transport: the agent sends
-    # the initialize response before any terminal/create). This test drives the
-    # two through SEPARATE connections, so without this barrier the client's
-    # response-processing can lag the agent-forwarded terminal/create under a
-    # loaded suite, gating on stale (uninitialized) caps -- a test-only race.
-    defp await_initialized(conn) do
-      Enum.reduce_while(1..1000, :timeout, fn _, _ ->
-        if :sys.get_state(conn).phase == :initialized do
-          {:halt, :ok}
-        else
-          Process.sleep(2)
-          {:cont, :timeout}
-        end
       end)
     end
   end
