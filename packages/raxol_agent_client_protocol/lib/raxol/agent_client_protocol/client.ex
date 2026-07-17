@@ -775,45 +775,48 @@ defmodule Raxol.AgentClientProtocol.Client.FsSandbox do
   defp within?(root, path),
     do: path == root or String.starts_with?(path, root <> "/")
 
-  # Full symlink resolution (a hand-rolled `realpath`): if `path` itself is
-  # a symlink, follow it (a relative target resolves against the
-  # symlink's OWN directory, per POSIX); otherwise recurse into the parent
-  # directory so a symlinked ANCESTOR is caught too, then rejoin the
-  # basename. Both existing paths (the read case) and not-yet-existing
-  # ones (the write case: the leaf doesn't exist yet, but every ancestor
-  # does) resolve correctly -- only a real symlink component changes the
-  # result. Depth-guarded against symlink cycles.
-  defp real_path(path), do: real_path(path, 0)
+  # Full symlink resolution (a hand-rolled `realpath`): walk the components
+  # left-to-right from the filesystem root, carrying a fully-resolved real
+  # `base`. A symlink is followed against `base` -- its REAL parent -- so a
+  # relative target (including `..`) resolves against where the link actually
+  # lives, not its lexical spelling. Resolving a relative target against the
+  # lexical parent instead (the previous bug) let a link under a symlinked
+  # ANCESTOR escape the sandbox while still looking interior. `.`/`..` adjust
+  # `base` directly; a component that is not a symlink -- or does not exist (the
+  # write-leaf case) -- is accepted literally, so the deepest existing ancestor
+  # still resolves. Only symlink hops count toward the depth cap, so deep
+  # symlink-free nesting is never mistaken for a cycle. Kept byte-identical to
+  # `Raxol.Core.Boundary.Path`'s `walk_real` (the shared confinement rules).
+  defp real_path(path) do
+    [root | rest] = Path.split(Path.expand(path))
+    walk_real(root, rest, 0)
+  end
 
-  defp real_path(_path, depth) when depth > @max_symlink_depth,
+  defp walk_real(_base, _components, depth) when depth > @max_symlink_depth,
     do: {:error, :too_many_symlinks}
 
-  defp real_path(path, depth) do
-    case :file.read_link(path) do
+  defp walk_real(base, [], _depth), do: {:ok, base}
+
+  defp walk_real(base, ["." | rest], depth), do: walk_real(base, rest, depth)
+
+  defp walk_real(base, [".." | rest], depth),
+    do: walk_real(Path.dirname(base), rest, depth)
+
+  defp walk_real(base, [comp | rest], depth) do
+    candidate = Path.join(base, comp)
+
+    case :file.read_link(candidate) do
       {:ok, target} ->
-        target = to_string(target)
-
-        resolved =
-          if Path.type(target) == :absolute,
-            do: target,
-            else: Path.join(Path.dirname(path), target)
-
-        real_path(Path.expand(resolved), depth + 1)
+        # A symlink resolves against its REAL parent (`base`): an absolute target
+        # restarts from the filesystem root, a relative one (possibly with `..`)
+        # is spliced ahead of the remaining components and resolved against base.
+        case Path.split(to_string(target)) do
+          ["/" | target_rest] -> walk_real("/", target_rest ++ rest, depth + 1)
+          target_rest -> walk_real(base, target_rest ++ rest, depth + 1)
+        end
 
       {:error, _not_a_symlink_or_missing} ->
-        case Path.dirname(path) do
-          ^path ->
-            {:ok, path}
-
-          parent ->
-            case real_path(parent, depth + 1) do
-              {:ok, real_parent} ->
-                {:ok, Path.join(real_parent, Path.basename(path))}
-
-              error ->
-                error
-            end
-        end
+        walk_real(candidate, rest, depth)
     end
   end
 
