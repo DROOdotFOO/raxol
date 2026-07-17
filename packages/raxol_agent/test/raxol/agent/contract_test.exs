@@ -160,6 +160,213 @@ defmodule Raxol.Agent.ContractTest do
     end
   end
 
+  describe "U21 evidence tri-state wire marker (#619 residual)" do
+    # Before the marker: a REJECTED done (evidence offered, gate refused it)
+    # and a NEVER-OFFERED done (:evidence_required — no refs at all) both
+    # close with the exact same payload shape: `%{usage, final: true}`, no
+    # `refs`, no other discriminator. Telemetry distinguishes them live, but
+    # telemetry is not journaled, so a replayed/attached surface (the UI
+    # lane's T19 renderer) cannot tell "rejected" from "absent" after the
+    # fact. These two payloads pin that gap and must stop matching once the
+    # marker lands.
+    test "a rejected done and a never-offered done are indistinguishable without the marker" do
+      session_id = "u21-marker-rejected-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      # Rejected arm: the only postdating tool_result is the mutation's own
+      # echo (:mutation_echo) — evidence was offered and refused.
+      rejected_stream = [
+        {:tool_use, %{name: "fs_write", arguments: %{}, id: "call-1"}},
+        {:tool_result, %{name: "fs_write", result: "wrote"}},
+        {:done, %{content: "done", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, rejected_stream, prompt: "p")
+      rejected_final = session_id |> drain_events() |> List.last()
+
+      # Absent arm: a zero-tool turn — no evidence ever offered.
+      absent_session_id = "u21-marker-absent-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(absent_session_id)
+
+      {:ok, _} = Contract.pump(absent_session_id, mock_stream("plain answer"), prompt: "hi")
+      absent_final = absent_session_id |> drain_events() |> List.last()
+
+      # Both close `final: true` with no `refs` — the wire-identical shape
+      # this marker exists to break.
+      assert rejected_final.payload.final == true
+      assert absent_final.payload.final == true
+      refute Map.has_key?(rejected_final.payload, :refs)
+      refute Map.has_key?(absent_final.payload, :refs)
+
+      # The marker: once stamped, these must diverge.
+      assert rejected_final.payload[:evidence] == :rejected
+      assert absent_final.payload[:evidence] == :absent
+      assert rejected_final.payload[:evidence] != absent_final.payload[:evidence]
+    end
+
+    test "accepted done carries evidence: :accepted alongside the untouched refs carrier" do
+      session_id = "u21-marker-accepted-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:tool_use, %{name: "fs_write", arguments: %{path: "/x"}, id: "call-1"}},
+        {:tool_result, %{name: "run_tests", result: "tests: 12 passed"}},
+        {:done, %{content: "done", usage: %{output_tokens: 1}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      final = session_id |> drain_events() |> List.last()
+
+      assert final.payload.evidence == :accepted
+      assert final.payload.refs == [3]
+      refute Map.has_key?(final.payload, :evidence_rejected)
+    end
+
+    test "rejected done carries evidence_rejected with the DoneGate reason flattened onto the wire, never inspect-stringified" do
+      session_id = "u21-marker-detail-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:tool_use, %{name: "fs_write", arguments: %{}, id: "call-1"}},
+        {:tool_result, %{name: "fs_write", result: "wrote"}},
+        {:done, %{content: "done", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      final = session_id |> drain_events() |> List.last()
+
+      assert final.payload.evidence == :rejected
+
+      assert %{"refs" => offered_refs, "reason" => reason, "ref" => offending_ref} =
+               final.payload.evidence_rejected
+
+      assert is_list(offered_refs)
+      assert reason == "mutation_echo"
+      assert is_integer(offending_ref)
+
+      # Never `inspect/1`-stringified (that would look like "{:mutation_echo, 3}").
+      refute reason =~ "{"
+      refute reason =~ ":"
+
+      # Survives a real JSON round-trip (the actual wire path).
+      line = final |> Contract.encode_line() |> IO.iodata_to_binary()
+      assert {:ok, decoded} = Jason.decode(String.trim_trailing(line))
+      assert decoded["payload"]["evidence"] == "rejected"
+
+      assert decoded["payload"]["evidence_rejected"] == %{
+               "refs" => offered_refs,
+               "reason" => "mutation_echo",
+               "ref" => offending_ref
+             }
+    end
+
+    test "absent done (:evidence_required) carries evidence: :absent and no evidence_rejected detail" do
+      session_id = "u21-marker-absent-detail-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      {:ok, _} = Contract.pump(session_id, mock_stream("plain answer"), prompt: "hi")
+      final = session_id |> drain_events() |> List.last()
+
+      assert final.payload.evidence == :absent
+      refute Map.has_key?(final.payload, :evidence_rejected)
+      refute Map.has_key?(final.payload, :refs)
+    end
+
+    test "the DoneGate reject reason is not observable on the wire before the marker (telemetry-only today)" do
+      # This test pins the CURRENT payload shape's ceiling: nothing about
+      # *why* the gate rejected survives onto `final.payload` apart from the
+      # new `evidence_rejected` detail this PR adds. It guards against a
+      # future regression that puts the raw verdict tuple (or an
+      # `inspect/1` rendering of it) directly under an unexpected key.
+      session_id = "u21-marker-reason-shape-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:tool_use, %{name: "fs_write", arguments: %{}, id: "call-1"}},
+        {:tool_result, %{name: "fs_write", result: "wrote"}},
+        {:done, %{content: "done", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+      final = session_id |> drain_events() |> List.last()
+
+      allowed_keys = MapSet.new([:usage, :final, :evidence, :evidence_rejected])
+      assert MapSet.new(Map.keys(final.payload)) |> MapSet.subset?(allowed_keys)
+
+      refute Map.has_key?(final.payload, :reason)
+      refute Map.has_key?(final.payload, :ref)
+    end
+  end
+
+  describe "evidence_status/1 (grandfather decode rule)" do
+    test "an authoritative marker key wins outright" do
+      assert Contract.evidence_status(%{evidence: :accepted}) == :accepted
+      assert Contract.evidence_status(%{evidence: :rejected, refs: []}) == :rejected
+      assert Contract.evidence_status(%{evidence: :absent}) == :absent
+
+      # String-keyed / string-valued (as replayed off the journal via
+      # Jason.decode).
+      assert Contract.evidence_status(%{"evidence" => "accepted"}) == :accepted
+      assert Contract.evidence_status(%{"evidence" => "rejected"}) == :rejected
+      assert Contract.evidence_status(%{"evidence" => "absent"}) == :absent
+    end
+
+    test "legacy record (no evidence key) with refs present grandfathers to :accepted" do
+      assert Contract.evidence_status(%{final: true, refs: [3]}) == :accepted
+      assert Contract.evidence_status(%{"final" => true, "refs" => [3]}) == :accepted
+    end
+
+    test "legacy record (no evidence key, no refs) is genuinely unknown — never guessed as :absent" do
+      assert Contract.evidence_status(%{final: true, usage: %{}}) == :unknown
+      assert Contract.evidence_status(%{"final" => true, "usage" => %{}}) == :unknown
+
+      # In particular it must NOT be `:absent`: that would launder a
+      # historical rejection into a false "never offered" claim.
+      refute Contract.evidence_status(%{final: true, usage: %{}}) == :absent
+    end
+
+    # S1 (PR #631, Drew's reproduction) — the decoder must be TOTAL. The
+    # `evidence` enum is grow-only (AD-11 upcast-on-read): a reader on 1.1.0
+    # WILL meet a future 1.2.0 journal carrying a 4th value, and a corrupt or
+    # forged line can carry anything. Before the fix `normalize_evidence/1` had
+    # exactly three clauses and raised `FunctionClauseError` on the replay
+    # surface. Every unrecognized value must degrade to `:unknown`, never crash,
+    # never `:accepted`.
+    test "a future/unknown string enum value decodes to :unknown (Drew's exact repro), never crashes" do
+      # Drew's reproduction: a 1.2.0 journal's 4th evidence value replayed as a
+      # JSON string on a 1.1.0 reader.
+      assert Contract.evidence_status(%{"evidence" => "verified_v2"}) == :unknown
+    end
+
+    test "a future/unknown atom enum value decodes to :unknown" do
+      assert Contract.evidence_status(%{evidence: :verified_v2}) == :unknown
+    end
+
+    test "a garbage-typed evidence value decodes to :unknown, never crashes" do
+      for garbage <- [42, nil, true, %{}, [1, 2, 3], {:tuple, :val}, 3.14] do
+        assert Contract.evidence_status(%{evidence: garbage}) == :unknown,
+               "garbage evidence value #{inspect(garbage)} did not decode :unknown"
+
+        assert Contract.evidence_status(%{"evidence" => garbage}) == :unknown,
+               "string-keyed garbage evidence #{inspect(garbage)} did not decode :unknown"
+      end
+    end
+
+    test "an unrecognized authoritative marker never launders to :accepted, even with refs present" do
+      # S2 hardening face: the `evidence` key IS present (not a legacy record),
+      # so the refs-grandfather arm must never be consulted — a forged/unknown
+      # marker value sitting atop a refs list decodes :unknown, NOT :accepted.
+      assert Contract.evidence_status(%{"evidence" => "bogus", "refs" => [3]}) ==
+               :unknown
+
+      refute Contract.evidence_status(%{"evidence" => "bogus", "refs" => [3]}) ==
+               :accepted
+
+      assert Contract.evidence_status(%{evidence: :forged, refs: [1, 2]}) ==
+               :unknown
+    end
+  end
+
   describe "encode_line/1" do
     test "produces one decodable JSON line per event" do
       event = %Event{

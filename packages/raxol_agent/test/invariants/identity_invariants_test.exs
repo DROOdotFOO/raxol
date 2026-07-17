@@ -514,7 +514,7 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
       "type" => e.type,
       "tier" => e.tier,
       "payload" => e.payload,
-      "schema_version" => "1.0.0"
+      "schema_version" => "1.1.0"
     }
 
     assert Jason.encode!(reconstructed) == line,

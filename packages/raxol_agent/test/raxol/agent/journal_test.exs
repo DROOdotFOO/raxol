@@ -202,7 +202,7 @@ defmodule Raxol.Agent.JournalTest do
       assert meta["cwd"] == "/tmp/wd"
       assert meta["title"] == "hello"
       assert is_binary(meta["created_at"])
-      assert meta["schema_version"] == "1.0.0"
+      assert meta["schema_version"] == "1.1.0"
 
       created = meta["created_at"]
       FileStore.append(j, %{"type" => "x"})
