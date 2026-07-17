@@ -444,11 +444,13 @@ defmodule Raxol.Harness.EditorSessionTest do
     # the per-run dir name carries a strong-random segment, honoring the
     # confidentiality doc's unpredictability claim (round-2 review: the
     # doc said strong_rand_bytes but the name was counter+timestamp) --
-    # 6 random bytes -> 8 url-base64 chars as the final `_`-separated part
-    assert [random_segment | _] =
-             draft_dir |> Path.basename() |> String.split("_") |> Enum.reverse()
+    # 6 random bytes -> exactly 8 trailing url-base64 chars. Asserted on
+    # the last 8 CHARS, not a `_` split: url-base64's alphabet includes
+    # `_`, so splitting on it self-truncated the segment ~12% of runs
+    # (flake found failing two unrelated PRs' CI).
+    random_segment = draft_dir |> Path.basename() |> String.slice(-8, 8)
 
-    assert String.length(random_segment) >= 8
+    assert String.length(random_segment) == 8
     assert random_segment =~ ~r/\A[A-Za-z0-9_-]+\z/
     refute random_segment =~ ~r/\A[0-9]+\z/
 
