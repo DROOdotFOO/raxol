@@ -95,6 +95,38 @@ defmodule Raxol.Harness.SessionLane do
               | {:error, term()}
 
   @doc """
+  Fire-and-forget dispatch of a user prompt -- the `:submit` command
+  (the composer's Enter). `request` carries at minimum a binary `:text`.
+
+  Like `interrupt/2` (and UNLIKE `steer/2`), acceptance is EVENT-OBSERVED,
+  not carried by the reply: a submit the session accepts opens a turn, and
+  the `:turn_started` event (payload `%{prompt: ...}`) that lands on the
+  SAME stream `subscribe/1` delivers IS the acknowledgment -- the surface
+  echoes the prompt into history only when that event is observed, never
+  optimistically on this call's return. The reply here therefore reports
+  DISPATCH outcome only:
+
+    * `:ok` -- the prompt was handed to the session's inbound command path.
+    * `{:error, :busy}` -- the session already has a turn in flight and
+      refused a second (ACP's `session/prompt` returns JSON-RPC `-32600`
+      here; one turn per session is the honesty invariant the driver ALSO
+      guards locally via its `current_turn_id` belief before this call).
+    * `{:error, term()}` -- any other dispatch/validation failure (a
+      malformed request, no inbound channel, etc.).
+
+  A `{:error, :busy}` (or any error) means no turn opened, so no
+  `:turn_started` will follow -- the caller keeps the draft rather than
+  echoing a prompt the session never accepted.
+
+  The `session()` is addressed by its `:session_id` (the ACP `session/prompt`
+  request is likewise sessionId-addressed) -- the seam carries no
+  connection or turn handle, so a lane serving either the Command/
+  SessionStreamer stack or an ACP connection can implement it without a
+  shape change here.
+  """
+  @callback submit(session(), request :: map()) :: :ok | {:error, term()}
+
+  @doc """
   Monitor the session process for death honesty (`Process.monitor/1`
   under the hood on the agent side). Returns `nil` when there is no
   `:pid` to monitor -- a session handle that never carried a pid is not

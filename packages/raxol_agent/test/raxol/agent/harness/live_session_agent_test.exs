@@ -197,6 +197,9 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
     def interrupt(session, payload), do: RealLane.interrupt(session, payload)
 
     @impl true
+    def submit(session, request), do: RealLane.submit(session, request)
+
+    @impl true
     def steer(_session, _request), do: {:error, :no_steer_channel}
 
     @impl true
@@ -313,6 +316,9 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
 
     @impl true
     def interrupt(_session, _payload), do: {:error, :not_used_in_this_test}
+
+    @impl true
+    def submit(_session, _request), do: {:error, :not_used_in_this_test}
 
     @impl true
     def steer(%{pid: pid}, request), do: GenServer.call(pid, {:steer, request})

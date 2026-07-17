@@ -718,6 +718,7 @@ defmodule Raxol.Harness.Surface do
           sessions_dir: Path.t(),
           command_sink: (map() -> term()) | nil,
           lane_notice: String.t() | [String.t()] | nil,
+          pending_submit: %{text: String.t()} | nil,
           stream_open?: boolean(),
           debug_highlight: debug_highlight_group() | nil,
           debug_highlight_bg: ViewText.bg(),
@@ -911,6 +912,7 @@ defmodule Raxol.Harness.Surface do
       sessions_dir: Keyword.get(opts, :sessions_dir, @default_sessions_dir),
       command_sink: Keyword.get(opts, :command_sink),
       lane_notice: nil,
+      pending_submit: nil,
       stream_open?: Keyword.get(opts, :stream_open, false),
       debug_highlight: nil,
       # Role token, resolved ONCE per session at the palette layer ("roles,
@@ -1814,6 +1816,72 @@ defmodule Raxol.Harness.Surface do
   end
 
   @doc """
+  Commits an in-flight submit's prompt into sealed history -- the
+  event-observed accept. Called by the live driver when the lane's
+  `:turn_started` event confirms the session opened a turn for the
+  prompt this surface has pending (see `apply_composer_command/2`'s
+  `:submit` clause and `Raxol.Harness.SessionLane`'s `submit/2` doc). The
+  prompt is sealed as a `<sigil> prompt` line through the SAME
+  `seal_marker/2` path every loss marker uses, then `pending_submit` is
+  cleared (the dim "sending" preview disappears with it).
+
+  Sealing on `:turn_started` -- BEFORE any response `item_*` events reveal
+  -- is what puts the user's echo ahead of the first response block in the
+  byte stream (the echo-on-accept ordering invariant).
+
+  ## Speaker-separation alignment
+
+  The echo uses `model.sigil` -- the SAME one-sigil source the speaker-
+  separation seal seam (`echo_lines/4`) echoes a replayed user `:message`
+  block with, and the same one the composer's live draft row carries -- so
+  a live-submitted prompt and a replayed user block render the same glyph
+  (`❯`, degrading to `>` under `unicode: :none`). This is still a PLAIN
+  marker seal, not the full styled user-block path (`echo_lines/4` adds
+  the bold sigil + block prominence fade): the marker is the honest floor
+  for a live echo that has no projection block behind it yet. The handoff
+  remains open -- when the live prompt is modeled as a real user `:message`
+  block it should seal through `echo_lines/4` and gain that styling; the
+  glyph already matches.
+
+  A no-op when there is no `pending_submit` (a `:turn_started` for a turn
+  this surface did not submit -- e.g. an externally-initiated turn -- must
+  not fabricate an echo).
+  """
+  @spec submit_accepted(t()) :: t()
+  def submit_accepted(%{pending_submit: %{text: text}} = model) do
+    model
+    |> seal_marker(model.sigil <> " " <> text)
+    |> Map.put(:pending_submit, nil)
+    |> paint_footer()
+  end
+
+  def submit_accepted(model), do: model
+
+  @doc """
+  Restores an in-flight submit's prompt back into the composer -- the
+  refusal path. Called by the live driver when a submit cannot open a turn
+  (the session is busy with a turn already in flight, or the lane rejected
+  the dispatch). The Composer cleared its buffer on Enter, so the draft
+  lived only in `pending_submit`; this puts it back (`Composer.set_value/2`)
+  so the operator never loses what they typed, and clears `pending_submit`
+  (the dim "sending" preview disappears). The driver pairs this with an
+  honest `put_lane_notice/2` naming WHY the submit was refused.
+
+  A no-op (composer untouched) when there is no `pending_submit`.
+  """
+  @spec submit_refused(t()) :: t()
+  def submit_refused(%{pending_submit: %{text: text}} = model) do
+    %{
+      model
+      | composer: Composer.set_value(model.composer, text),
+        pending_submit: nil
+    }
+    |> paint_footer()
+  end
+
+  def submit_refused(model), do: model
+
+  @doc """
   Builds the seal-frontier entry list (`Raxol.Harness.SealFrontier.entry/0`)
   from the current projection. One entry per completed block, in order;
   the live tail never enters the list (a still-streaming item has no
@@ -2438,6 +2506,33 @@ defmodule Raxol.Harness.Surface do
 
   defp maybe_forward_to_composer(model, _raw_event), do: model
 
+  # A live `command_sink` makes `:submit` a first-class command: the
+  # prompt crosses to the agent lane through the SAME sink `:interrupt`/
+  # `:steer` use, and the surface enters an optimistic "sending" state
+  # (`pending_submit`, rendered dim -- see `submitting_lines/1`) WITHOUT
+  # echoing anything into history. The echo is event-observed: only when
+  # the lane's `:turn_started` lands does `submit_accepted/1` seal the
+  # `❯ prompt` line (see that function). The Composer already cleared its
+  # own buffer on Enter (`Composer.submit/2`), so the draft now lives in
+  # `pending_submit` until it is either sealed (accept) or restored
+  # (`submit_refused/1`). An empty/whitespace submit is a no-op -- there
+  # is no prompt to send and nothing to echo.
+  defp apply_composer_command(
+         {:component_event, _id, {:submit, text}},
+         %{command_sink: sink} = model
+       )
+       when is_function(sink, 1) do
+    if String.trim(text) == "" do
+      model
+    else
+      sink.(%{type: :submit, payload: %{text: text}})
+      %{model | pending_submit: %{text: text}}
+    end
+  end
+
+  # Fixture/stub mode (no live lane): keep the honest, visibly-labeled
+  # stub notice -- byte-for-byte unchanged from before the live seam
+  # existed (the "stub mode unchanged bytes" invariant).
   defp apply_composer_command({:component_event, _id, {:submit, text}}, model) do
     %{model | stub_notice: "» (stub) would send prompt: #{text}"}
   end
@@ -3805,6 +3900,7 @@ defmodule Raxol.Harness.Surface do
       [
         status: strip_lines(model),
         lane: notice_line(model.lane_notice, content_width(model)),
+        submitting: submitting_lines(model),
         overlay: overlay_lines(model),
         divider: divider_lines,
         preview: preview_lines,
@@ -4089,6 +4185,26 @@ defmodule Raxol.Harness.Surface do
 
   defp notice_line(text, width),
     do: ViewText.lines(%{type: :text, content: text}, width, :styled)
+
+  # The optimistic "sending" preview: a single DIM line echoing the prompt
+  # currently in flight (`pending_submit`), shown between dispatch and the
+  # lane's `:turn_started` accept. Dim (not full-weight) is the honesty:
+  # nothing is on the record yet -- `submit_accepted/1` seals the real
+  # `❯ prompt` history line only when the turn is EVENT-OBSERVED, and this
+  # preview clears at the same moment. Suppressed while an overlay claims
+  # the footer (same yield as the divider/preview groups). Absent (`[]`)
+  # when no submit is in flight, so no existing frame's bytes change.
+  defp submitting_lines(%{overlay: overlay}) when overlay != nil, do: []
+
+  defp submitting_lines(%{pending_submit: %{text: text}} = model) do
+    ViewText.lines(
+      %{type: :text, content: "» sending: " <> text, style: %{dim: true}},
+      content_width(model),
+      :styled
+    )
+  end
+
+  defp submitting_lines(_model), do: []
 
   # The pending (not-yet-painted) trailing completed block, if any,
   # rendered with its current fold override applied (so a fold toggle

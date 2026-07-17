@@ -20,9 +20,7 @@ defmodule Raxol.Agent.Harness.SessionLaneTest do
   setup do
     start_supervised!({Registry, keys: :unique, name: Raxol.Agent.Registry})
 
-    start_supervised!(
-      {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one}
-    )
+    start_supervised!({DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one})
 
     start_supervised!(Raxol.Agent.SessionStreamer)
     :ok
@@ -51,8 +49,7 @@ defmodule Raxol.Agent.Harness.SessionLaneTest do
 
       assert :ok = SessionLane.interrupt(session, %{turn_id: "turn-7"})
 
-      assert_receive {:harness_command,
-                      {:interrupt, ^session_id, %{turn_id: "turn-7"}}}
+      assert_receive {:harness_command, {:interrupt, ^session_id, %{turn_id: "turn-7"}}}
     end
 
     test "an empty payload dispatches an empty interrupt payload" do
@@ -62,6 +59,35 @@ defmodule Raxol.Agent.Harness.SessionLaneTest do
       assert :ok = SessionLane.interrupt(session, %{})
 
       assert_receive {:harness_command, {:interrupt, ^session_id, %{}}}
+    end
+  end
+
+  describe "submit/2" do
+    test "reaches the session pid as {:harness_command, {:start_turn, sid, %{text: ...}}}" do
+      session_id = unique_session_id("lane-submit")
+      session = %{session_id: session_id, pid: self()}
+
+      assert :ok = SessionLane.submit(session, %{text: "run the tests"})
+
+      assert_receive {:harness_command, {:start_turn, ^session_id, %{text: "run the tests"}}}
+    end
+
+    test "an empty text is rejected loudly by the codec -- nothing is routed" do
+      session_id = unique_session_id("lane-submit-empty")
+      session = %{session_id: session_id, pid: self()}
+
+      assert {:error, _reason} = SessionLane.submit(session, %{text: ""})
+
+      refute_receive {:harness_command, _}, 50
+    end
+
+    test "a request without a binary :text is refused with {:error, :invalid_request}" do
+      session = %{session_id: unique_session_id("lane-submit-bad"), pid: self()}
+
+      assert {:error, :invalid_request} = SessionLane.submit(session, %{})
+      assert {:error, :invalid_request} = SessionLane.submit(session, %{text: 42})
+
+      refute_receive {:harness_command, _}, 50
     end
   end
 

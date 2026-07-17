@@ -702,6 +702,62 @@ defmodule Raxol.Harness.LiveSessionDriver do
     %{state | model: model}
   end
 
+  # The `:submit` command (the composer's Enter, made live by the
+  # Surface's `:command_sink`). One turn in flight per session is the
+  # honesty invariant: a submit that arrives while a turn is already
+  # running is refused HERE, locally, from the driver's `current_turn_id`
+  # belief -- the draft is restored to the composer (`submit_refused/1`,
+  # never lost) and an honest busy notice explains why. The refusal is
+  # chosen over queue-one (unlike the steer banner): a queued prompt that
+  # fires a whole new turn on some later boundary the operator has since
+  # forgotten is a surprise; a plain refusal keeps them in control (they
+  # resubmit when the turn ends).
+  defp handle_surface_command(%{current_turn_id: turn_id} = state, %{
+         type: :submit
+       })
+       when not is_nil(turn_id) do
+    model =
+      state.model
+      |> Surface.submit_refused()
+      |> Surface.put_lane_notice(
+        "» a turn is already running — wait for it, then resend"
+      )
+
+    %{state | model: model}
+  end
+
+  # Idle: dispatch the prompt to the lane. Acceptance is EVENT-OBSERVED --
+  # on `:ok` the surface KEEPS its dim `pending_submit` "sending" preview
+  # (already painted when the keystroke ran) and adds NO history echo; the
+  # echo seals only when `:turn_started` lands (`apply_lifecycle/2` ->
+  # `Surface.submit_accepted/1`). A dispatch error is an honest refusal:
+  # restore the draft, name the failure, no faked send.
+  defp handle_surface_command(state, %{type: :submit, payload: %{text: text}}) do
+    {lane_mod, session} = state.lane
+
+    model =
+      case lane_mod.submit(session, %{text: text}) do
+        :ok ->
+          state.model
+
+        {:error, :busy} ->
+          state.model
+          |> Surface.submit_refused()
+          |> Surface.put_lane_notice(
+            "» a turn is already running — wait for it, then resend"
+          )
+
+        {:error, reason} ->
+          state.model
+          |> Surface.submit_refused()
+          |> Surface.put_lane_notice(
+            "» submit failed to dispatch: #{inspect(reason)}"
+          )
+      end
+
+    %{state | model: model}
+  end
+
   defp handle_surface_command(state, _other), do: state
 
   defp interrupt_payload(nil), do: %{}
@@ -897,9 +953,19 @@ defmodule Raxol.Harness.LiveSessionDriver do
   end
 
   # A fresh turn retires whatever pending/ack lane notice was left over
-  # from the previous one.
+  # from the previous one. It is ALSO the event-observed accept for a
+  # pending submit: if the operator's prompt opened this turn, seal its
+  # `❯ prompt` echo into history NOW (`Surface.submit_accepted/1`) --
+  # before any of this turn's response `item_*` events reveal, so the
+  # user's line precedes the first response block (echo-on-accept
+  # ordering). A no-op when nothing is pending (an externally-started
+  # turn never fabricates an echo -- see `submit_accepted/1`).
   defp apply_lifecycle(state, %{type: :turn_started, turn_id: turn_id}) do
-    model = Surface.put_lane_notice(state.model, nil)
+    model =
+      state.model
+      |> Surface.submit_accepted()
+      |> Surface.put_lane_notice(nil)
+
     %{state | model: model, current_turn_id: turn_id}
   end
 

@@ -65,6 +65,15 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       :ok
     end
 
+    # Captures the dispatched submit request and replies with the
+    # session-configured `:submit_reply` (default `:ok`) -- so a test can
+    # script a `{:error, :busy}` lane rejection as well as the happy path.
+    @impl true
+    def submit(%{test: test_pid} = session, request) do
+      send(test_pid, {:submit_dispatched, request})
+      Map.get(session, :submit_reply, :ok)
+    end
+
     # A wedged lane: neither replies nor crashes. Models the exact case
     # the driver's steer-timeout backstop exists for -- a live steer call
     # that hangs forever, which without an expiry would pin the
@@ -1068,6 +1077,98 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
 
       # Re-armed, not exited: the notice is back for the fresh offer.
       assert footer_text(raw(device)) =~ "ctrl-c again to exit"
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 12. submit: the REAL prompt path (Track C)
+  # ---------------------------------------------------------------------
+
+  defp type_into(driver, text) do
+    text
+    |> String.graphemes()
+    |> Enum.each(fn ch -> send(driver, {:inline_input, Event.key(ch)}) end)
+  end
+
+  describe "12. submit dispatch" do
+    test "an idle Enter dispatches the prompt to the lane, session-addressed" do
+      %{driver: driver} = new_driver(%{})
+
+      type_into(driver, "hi")
+      send(driver, {:inline_input, Event.key(:enter)})
+
+      assert_receive {:submit_dispatched, %{text: "hi"}}, 2_000
+    end
+
+    test "a submit while a turn is in flight is refused locally, draft preserved, no dispatch" do
+      %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
+
+      # A turn is running (current_turn_id set from the event).
+      send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      eventually(fn -> strip_ansi(raw(device)) =~ "turn_started" end)
+
+      type_into(driver, "save this draft")
+      send(driver, {:inline_input, Event.key(:enter)})
+
+      # The busy invariant: no dispatch crossed to the lane ...
+      refute_receive {:submit_dispatched, _}, 300
+
+      # ... an honest refusal explains why ...
+      eventually(fn ->
+        footer_text(raw(device)) =~ "a turn is already running"
+      end)
+
+      # ... and the draft is preserved (restored to the composer, never
+      # lost to the cleared-on-Enter buffer).
+      assert footer_text(raw(device)) =~ "save this draft"
+    end
+
+    test "a lane {:error, :busy} rejection is an honest refusal, draft preserved" do
+      # Idle driver (current_turn_id nil, so the LOCAL gate passes) but the
+      # lane itself rejects -- exercises the {:error, :busy} reply branch.
+      %{device: device, driver: driver} =
+        new_driver(%{submit_reply: {:error, :busy}})
+
+      type_into(driver, "racing prompt")
+      send(driver, {:inline_input, Event.key(:enter)})
+
+      assert_receive {:submit_dispatched, %{text: "racing prompt"}}, 2_000
+
+      eventually(fn ->
+        footer_text(raw(device)) =~ "a turn is already running"
+      end)
+
+      assert footer_text(raw(device)) =~ "racing prompt"
+    end
+  end
+
+  describe "12b. echo-on-accept ordering" do
+    test "turn_started seals the `❯ prompt` echo ahead of the first response block" do
+      %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
+
+      type_into(driver, "hi")
+      send(driver, {:inline_input, Event.key(:enter)})
+      assert_receive {:submit_dispatched, %{text: "hi"}}, 2_000
+
+      # No echo until the turn is observed (event-observed accept).
+      refute history_text(raw(device)) =~ "❯ hi"
+
+      Enum.each(message_turn_events("live response body"), fn ev ->
+        send(forwarder, {:session_event, "s1", ev})
+      end)
+
+      eventually(fn ->
+        history_text(raw(device)) =~ "live response body"
+      end)
+
+      history = history_text(raw(device))
+      assert history =~ "❯ hi", "the accepted prompt must seal into history"
+
+      {echo_pos, _} = :binary.match(history, "❯ hi")
+      {response_pos, _} = :binary.match(history, "live response body")
+
+      assert echo_pos < response_pos,
+             "the user echo must seal before the first response block"
     end
   end
 end

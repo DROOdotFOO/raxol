@@ -73,6 +73,47 @@ defmodule Raxol.Agent.Harness.SessionLane do
   end
 
   @doc """
+  Fire-and-forget submit dispatch: builds the canonical wire map `%{"type"
+  => "prompt", "payload" => %{"text" => text}}` and runs it through
+  `Raxol.Agent.Command.decode/1` (the one validation seam -- it rejects a
+  missing/empty/non-binary `text` loudly) before `Raxol.Agent.Command.route/2`.
+  A `:prompt` command routes to `{:start_turn, session_id, payload}` and,
+  when the session handle carries a `:pid`, is delivered as
+  `{:harness_command, {:start_turn, ...}}` to that process.
+
+  Mirrors `interrupt/2` exactly (same decode+route codec path, same
+  event-observed acknowledgment) -- see `Raxol.Harness.SessionLane`'s
+  `submit/2` doc: this returns `:ok` once the command decodes and routes,
+  or `{:error, reason}` if `Command.decode/1` rejects the request. It does
+  NOT report turn acceptance -- that is observed via the `:turn_started`
+  event on the `subscribe/1` stream.
+
+  Busy rejection (`{:error, :busy}`) is not produced here: the
+  Command/SessionStreamer stack has no single-turn compare-and-swap at
+  this seam, so the "one turn in flight" invariant is guarded by the
+  driver's local `current_turn_id` belief before it ever calls this. An
+  ACP lane over `session/prompt` (which returns JSON-RPC `-32600` for a
+  busy session) would translate that reply into `{:error, :busy}` here --
+  the seam's reply vocabulary already admits it.
+  """
+  @impl Raxol.Harness.SessionLane
+  @spec submit(session(), map()) :: :ok | {:error, term()}
+  def submit(session, %{text: text}) when is_binary(text) do
+    wire = %{"type" => "prompt", "payload" => %{"text" => text}}
+
+    case Command.decode(wire) do
+      {:ok, cmd} ->
+        Command.route(cmd, session)
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def submit(_session, _request), do: {:error, :invalid_request}
+
+  @doc """
   Honest refusal: `{:error, :no_steer_channel}`, always.
 
   No shipped session runtime owns a live turn's `Raxol.Agent.Steer.TurnState`
