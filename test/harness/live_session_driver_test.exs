@@ -118,22 +118,26 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
   # elapses -- the async pipeline (forwarder -> cadence -> driver loop) has
   # no single synchronous checkpoint the test can block on, so this is the
   # deterministic-enough substitute for a fixed sleep.
-  defp eventually(fun, timeout \\ 1_000, interval \\ 10) do
+  # Default budget is generous on purpose: this suite runs async beside
+  # CPU-heavy siblings (the 5000-block memory-residency case among them),
+  # and a green condition returns immediately regardless of the budget --
+  # only genuine failures ever wait it out.
+  defp eventually(fun, timeout \\ 5_000, interval \\ 10) do
     deadline = System.monotonic_time(:millisecond) + timeout
-    do_eventually(fun, deadline, interval)
+    do_eventually(fun, deadline, interval, timeout)
   end
 
-  defp do_eventually(fun, deadline, interval) do
+  defp do_eventually(fun, deadline, interval, timeout) do
     if fun.() do
       :ok
     else
       if System.monotonic_time(:millisecond) >= deadline do
         ExUnit.Assertions.flunk(
-          "condition not met within #{interval}ms polling budget"
+          "condition not met within #{timeout}ms (polled every #{interval}ms)"
         )
       else
         Process.sleep(interval)
-        do_eventually(fun, deadline, interval)
+        do_eventually(fun, deadline, interval, timeout)
       end
     end
   end
@@ -617,6 +621,82 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       assert strip_ansi(prefix) =~ "x",
              "the composer echo for the input event must appear before the " <>
                "batched render content in the byte stream"
+    end
+  end
+
+  describe "12. external editor handoff passes through to the surface" do
+    test "Ctrl+E reaches an injected editor session under the live driver" do
+      # The live driver must support the same $EDITOR suspend/resume
+      # bracket the fixture demo wires (Surface's :editor_session option)
+      # -- an embedder opting in must not silently get the stub notice
+      # because the driver dropped the option on the floor.
+      test_pid = self()
+
+      editor = fn draft, _opts ->
+        send(test_pid, {:editor_invoked, draft})
+        {:kept, :editor_nonzero, %{width: @width, rows: @rows}}
+      end
+
+      %{device: device, driver: driver} =
+        new_driver(%{}, editor_session: editor)
+
+      send(driver, {:inline_input, Event.key_event("e", :pressed, [:ctrl])})
+
+      assert_receive {:editor_invoked, _draft}, 1_000
+      eventually(fn -> strip_ansi(raw(device)) =~ "draft kept" end)
+    end
+
+    test "events arriving while the editor owns the terminal queue, never paint" do
+      # Editor suspend releases the terminal claim; until resume, NOTHING
+      # may write a byte to the device. Structurally the driver is the
+      # only writer and it is blocked inside the editor bracket -- this
+      # test pins that the forwarder/cadence side honors that (messages
+      # queue for the owner; no paint from any other process), and that
+      # the queued events render after resume.
+      test_pid = self()
+      events = message_turn_events("painted only after resume")
+
+      # The editor fun runs inside the driver process, before new_driver/2
+      # has returned to this test -- it learns the forwarder pid through a
+      # holder (set below, before Ctrl+E fires) and reads the device from
+      # the opts the editor bracket itself passes (the same seam a real
+      # EditorSession uses).
+      {:ok, forwarder_holder} = Agent.start_link(fn -> nil end)
+
+      editor = fn _draft, opts ->
+        device = Keyword.fetch!(opts, :device)
+        forwarder = Agent.get(forwarder_holder, & &1)
+
+        # "Suspended": stream a whole turn while the editor owns the tty,
+        # give the forwarder/cadence time to ingest and flush, then
+        # capture what (if anything) was painted meanwhile.
+        Enum.each(events, fn ev ->
+          send(forwarder, {:session_event, "s1", ev})
+        end)
+
+        Process.sleep(100)
+        send(test_pid, {:bytes_during_suspend, byte_size(raw(device))})
+        {:kept, :editor_nonzero, %{width: @width, rows: @rows}}
+      end
+
+      %{device: device, driver: driver, forwarder: forwarder} =
+        new_driver(%{}, editor_session: editor)
+
+      Agent.update(forwarder_holder, fn _ -> forwarder end)
+
+      bytes_at_suspend = byte_size(raw(device))
+      send(driver, {:inline_input, Event.key_event("e", :pressed, [:ctrl])})
+
+      assert_receive {:bytes_during_suspend, bytes_during}, 2_000
+
+      assert bytes_during == bytes_at_suspend,
+             "no byte may reach the terminal while the editor owns it " <>
+               "(suspend: #{bytes_at_suspend}, during: #{bytes_during})"
+
+      # After resume, the queued batches apply and the turn seals.
+      eventually(fn ->
+        history_text(raw(device)) =~ "painted only after resume"
+      end)
     end
   end
 

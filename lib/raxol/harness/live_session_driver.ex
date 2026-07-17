@@ -197,7 +197,17 @@ defmodule Raxol.Harness.LiveSessionDriver do
         :capabilities,
         :mode,
         :env,
-        :fold_defaults
+        :fold_defaults,
+        # The $EDITOR suspend/resume bracket (Ctrl+E) works under the
+        # live driver exactly as under the fixture demo: the bracket runs
+        # synchronously INSIDE this driver process, which is the only
+        # writer to the device -- so while the editor owns the terminal,
+        # arriving events simply queue in this process's mailbox (cadence
+        # keeps coalescing/shedding upstream) and render after resume.
+        # Pinned by the "events arriving while the editor owns the
+        # terminal queue, never paint" test.
+        :editor_session,
+        :editor_opts
       ])
       |> Keyword.put(:command_sink, fn cmd ->
         send(driver_pid, {:surface_command, cmd})
