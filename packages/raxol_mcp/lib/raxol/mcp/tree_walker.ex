@@ -103,15 +103,26 @@ defmodule Raxol.MCP.TreeWalker do
         derive_widget_tools(node, type, id, context, type_map)
       end
 
-    children_acc = do_walk(node[:children] || [], context, type_map, acc)
+    children_acc = do_walk(child_nodes(node), context, type_map, acc)
     widget_tools ++ children_acc
   end
 
-  defp do_walk(%{children: children}, context, type_map, acc) when is_list(children) do
-    do_walk(children, context, type_map, acc)
+  defp do_walk(%{children: _} = node, context, type_map, acc) do
+    do_walk(child_nodes(node), context, type_map, acc)
   end
 
   defp do_walk(_node, _context, _type_map, acc), do: acc
+
+  # The View DSL allows :children to be a list or a single element map
+  # (e.g. a box whose do-block is one column). Mirror the Bubbler's
+  # path-finding, which treats both shapes as first-class.
+  defp child_nodes(node) do
+    case Map.get(node, :children) do
+      kids when is_list(kids) -> kids
+      kid when is_map(kid) -> [kid]
+      _ -> []
+    end
+  end
 
   defp derive_widget_tools(node, type, id, context, type_map) do
     case Map.get(type_map, type) do

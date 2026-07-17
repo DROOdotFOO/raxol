@@ -65,6 +65,10 @@ defmodule Raxol.Headless do
     * `:id` - Session identifier (default: module name as atom)
     * `:width` - Screen width (default: 120)
     * `:height` - Screen height (default: 40)
+    * `:registry` - MCP registry (name or pid) the session's
+      `ToolSynchronizer` registers derived tools against
+      (default: `Raxol.MCP.Registry`). Used by `Raxol.MCP.Test` to thread
+      a per-session registry through to the live app's tool derivation.
   """
   @spec start(module() | String.t(), keyword()) ::
           {:ok, atom()} | {:error, term()}
@@ -293,15 +297,17 @@ defmodule Raxol.Headless do
       else
         width = Keyword.get(opts, :width, @default_width)
         height = Keyword.get(opts, :height, @default_height)
-        create_session(module, id, width, height, state)
+        registry = Keyword.get(opts, :registry, Raxol.MCP.Registry)
+        create_session(module, id, width, height, registry, state)
       end
     end
   end
 
-  defp create_session(module, id, width, height, state) do
+  defp create_session(module, id, width, height, registry, state) do
     case start_headless_app(module, width, height) do
       {:ok, lifecycle_pid} ->
-        synchronizer_pid = start_tool_synchronizer(lifecycle_pid, id)
+        synchronizer_pid =
+          start_tool_synchronizer(lifecycle_pid, id, registry, module)
 
         session = %Session{
           id: id,
@@ -313,11 +319,28 @@ defmodule Raxol.Headless do
         }
 
         Process.monitor(lifecycle_pid)
+
+        # Force one synchronous render so the initial view tree reaches the
+        # synchronizer via the [:raxol, :runtime, :view_tree_updated]
+        # telemetry -- otherwise tool derivation would wait for the first
+        # event-driven re-render.
+        if synchronizer_pid, do: force_initial_render(session)
+
         {:ok, id, put_in(state, [:sessions, id], session)}
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp force_initial_render(session) do
+    with_engine(session, fn engine_pid ->
+      GenServer.call(engine_pid, :render_frame_sync, 5_000)
+    end)
+
+    :ok
+  catch
+    :exit, _ -> :ok
   end
 
   defp resolve_module(module) when is_atom(module) do
@@ -520,22 +543,36 @@ defmodule Raxol.Headless do
 
   @compile {:no_warn_undefined, Raxol.MCP.ToolSynchronizer}
 
-  defp start_tool_synchronizer(lifecycle_pid, session_id) do
+  defp start_tool_synchronizer(lifecycle_pid, session_id, registry, app_module) do
     with true <- Code.ensure_loaded?(Raxol.MCP.ToolSynchronizer),
-         pid when is_pid(pid) <- Process.whereis(Raxol.MCP.Registry),
+         pid when is_pid(pid) <- resolve_registry(registry),
          dispatcher_pid when is_pid(dispatcher_pid) <-
            get_dispatcher_pid(lifecycle_pid),
          {:ok, sync_pid} <-
            Raxol.MCP.ToolSynchronizer.start_link(
-             registry: pid,
+             registry: registry,
              dispatcher_pid: dispatcher_pid,
-             session_id: session_id
+             session_id: session_id,
+             app_module: app_module
            ) do
       sync_pid
     else
       _ -> nil
     end
   end
+
+  # A registry may be given as a pid or a registered name. Resolve to a pid
+  # to check it is actually running; the synchronizer itself keeps whatever
+  # reference the caller handed over.
+  defp resolve_registry(registry) when is_pid(registry) do
+    if Process.alive?(registry), do: registry
+  end
+
+  defp resolve_registry(registry) when is_atom(registry) do
+    Process.whereis(registry)
+  end
+
+  defp resolve_registry(_), do: nil
 
   defp get_dispatcher_pid(lifecycle_pid) do
     lifecycle_state = GenServer.call(lifecycle_pid, :get_full_state)

@@ -62,10 +62,13 @@ defmodule Raxol.MCP.StructuredScreenshot do
   # -- Private -----------------------------------------------------------------
 
   defp summarize_node(node, opts) when is_map(node) do
+    # :children may be a list or a single element map (a box whose do-block
+    # is one column) -- same duality the Bubbler's path-finding handles.
     children =
       case Map.get(node, :children) do
         nil -> []
         kids when is_list(kids) -> Enum.map(kids, &summarize_node(&1, opts))
+        kid when is_map(kid) -> [summarize_node(kid, opts)]
         _ -> []
       end
 

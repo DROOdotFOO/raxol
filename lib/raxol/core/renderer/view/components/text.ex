@@ -8,6 +8,8 @@ defmodule Raxol.Core.Renderer.View.Components.Text do
   Creates a new text view.
 
   ## Options
+    * `:id` - Stable identifier; surfaces the node in structured
+      screenshots / MCP widget summaries (`assert_component`)
     * `:fg` - Foreground color
     * `:bg` - Background color
     * `:style` - List of style atoms (e.g., [:bold, :underline])
@@ -20,12 +22,14 @@ defmodule Raxol.Core.Renderer.View.Components.Text do
 
       Text.new("Hello, World!", fg: :red, style: [:bold])
       Text.new("Centered text", align: :center)
+      Text.new("Clicks: 3", id: "click_stats")
       Text.new("0x7f3a..e21", link: "https://basescan.org/tx/0x7f3a..e21")
   """
   def new(content, opts \\ []) when is_binary(content) do
     %{
       type: :text,
       content: content,
+      id: Keyword.get(opts, :id),
       size: Keyword.get(opts, :size, {1, 1}),
       fg: Keyword.get(opts, :fg),
       bg: Keyword.get(opts, :bg),

@@ -43,17 +43,20 @@ defmodule Raxol.Playground.Demos.ButtonDemo do
         divider(),
         row style: %{gap: 2} do
           [
-            button("Primary [1]", on_click: :primary),
-            button("Secondary [2]", on_click: :secondary),
-            button("Reset [r]", on_click: :danger)
+            button("Primary [1]", id: "primary_btn", on_click: :primary),
+            button("Secondary [2]", id: "secondary_btn", on_click: :secondary),
+            button("Reset [r]", id: "reset_btn", on_click: :danger)
           ]
         end,
         divider(),
         box style: %{border: :single, padding: 1, width: @info_box_width} do
           column style: %{gap: 0} do
             [
-              text("Clicks: #{model.clicks}", style: [:bold]),
-              text("Last: #{model.last_action}")
+              text("Clicks: #{model.clicks}",
+                id: "click_stats",
+                style: [:bold]
+              ),
+              text("Last: #{model.last_action}", id: "last_action")
             ]
           end
         end,

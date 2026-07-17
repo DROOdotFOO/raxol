@@ -140,29 +140,56 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
     end
   end
 
+  # A click event that names its target widget (the MCP ToolProvider path:
+  # Button.handle_tool_call dispatches %Event{type: :click, data:
+  # %{widget_id: id}}). Mirror of the mouse head above: the mouse resolves
+  # its target by (x, y) hit test, a targeted click resolves it by widget id
+  # through the same Bubbler that handles all inline handlers -- so an MCP
+  # click and a real click on the same widget dispatch the same :on_click
+  # message. Unresolvable targets fall through to the generic path.
+  def handle_event(
+        %Event{type: :click, data: %{widget_id: widget_id}} = event,
+        %State{} = state
+      )
+      when is_binary(widget_id) do
+    context = %{
+      focused_element: widget_id,
+      theme_id: state.current_theme_id
+    }
+
+    case Bubbler.dispatch(event, state.view_tree, widget_id, context) do
+      :passthrough -> do_handle_event(event, state)
+      result -> handle_bubble_result(result, event, state)
+    end
+  end
+
   def handle_event(event, %State{} = state) do
     do_handle_event(event, state)
   end
 
   defp do_handle_event(event, state) do
-    case try_bubble_event(event, state) do
-      {:handled, {:message, message}} ->
-        process_app_update(state, message, event)
+    handle_bubble_result(try_bubble_event(event, state), event, state)
+  end
 
-      {:handled, _} ->
-        send(state.runtime_pid, :render_needed)
-        {:ok, state, []}
+  defp handle_bubble_result({:handled, {:message, message}}, event, state) do
+    process_app_update(state, message, event)
+  end
 
-      {:commands, commands} ->
-        context = build_command_context(state)
-        process_commands(commands, context)
-        send(state.runtime_pid, :render_needed)
-        {:ok, state, commands}
+  defp handle_bubble_result({:handled, _}, _event, state) do
+    send(state.runtime_pid, :render_needed)
+    {:ok, state, []}
+  end
 
-      :passthrough ->
-        # Pass the raw Event struct to update/2 — apps pattern-match on %Event{}
-        process_app_update(state, event, event)
-    end
+  defp handle_bubble_result({:commands, commands}, _event, state) do
+    context = build_command_context(state)
+    process_commands(commands, context)
+    send(state.runtime_pid, :render_needed)
+    {:ok, state, commands}
+  end
+
+  defp handle_bubble_result(:passthrough, event, state) do
+    # Pass the raw Event struct to update/2 — apps pattern-match on %Event{}
+    process_app_update(state, event, event)
   end
 
   defp try_bubble_event(_event, %State{view_tree: nil}), do: :passthrough
