@@ -170,8 +170,12 @@ defmodule Raxol.Harness.FullViewportSurfaceTest do
 
   describe "scrollback window" do
     # A tall transcript in a modest viewport forces a scroll window.
+    # markdown-stream is a long, message-heavy transcript (message blocks
+    # stay expanded -- unlike the machinery kinds, which fold to one-line
+    # compact rows), so it comfortably overruns a 14-row / 6-footer
+    # viewport and the scroll window engages.
     defp overflowing,
-      do: new_model(load!("multi-tool-turn"), rows: 14, footer_rows: 6)
+      do: new_model(load!("markdown-stream"), rows: 14, footer_rows: 6)
 
     test "PgUp scrolls off the tail and shows an honest 'N below' indicator" do
       {model, device} = overflowing()

@@ -157,32 +157,33 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
     ]
   end
 
-  # The one substring that ONLY appears in the real merged component's
-  # expanded render, never in Block's own folded header+outcome summary
-  # -- proves "unfolding renders the full body" isn't tautological.
+  # The one substring that ONLY appears in the EXPANDED render, never in
+  # the folded form -- proves "unfolding renders the full body" isn't
+  # tautological.
   #
-  # `reasoning` content here is a single short line, so Block's OWN
-  # folded summary (`first_line/1`, always computed regardless of fold)
-  # already shows that whole line verbatim -- the genuinely expanded-ONLY
-  # thing is the "N line(s)" affordance the rich component adds on top.
-  # `message` has no tagline anymore (speaker separation: bare prose), so
-  # its expanded-only content is simply its SECOND body line, which the
-  # folded first-line summary never shows.
+  # `message` (speaker separation: bare prose) shows its SECOND body line
+  # only when expanded. `reasoning` and `tool_call` are the MACHINERY
+  # register: folded is a compact count/receipt line (`∴ reasoning · N
+  # lines` / `⚙ name(args) · receipt`) that never previews the content,
+  # so their expanded-only marker is a line of the BODY itself (the
+  # reasoning text / a tool-result line).
   @expanded_only_marker %{
     message: "All checks green.",
-    reasoning: "1 line",
-    tool_call: "⚠ untrusted",
+    reasoning: "Considering",
+    tool_call: "drwxr-xr-x",
     diff: "Proposed change",
     approval: "IRREVERSIBLE"
   }
 
-  # The substring present in BOTH fold states -- "content parity where
-  # expected" (T4's folded summary already surfaces a name/path/action/
-  # first-line preview; the expanded component surfaces the same
-  # identifier again).
+  # The substring present in BOTH fold states. For message/diff/approval
+  # the folded summary previews a first-line/path/action identifier that
+  # the expanded body repeats. For the machinery kinds the shared token is
+  # the compact-line identity itself -- `reasoning` folds to `∴ reasoning
+  # · N lines` (and the expanded render keeps that same header line above
+  # the body), `tool_call` folds to `⚙ Bash(...) · ...` (name preserved).
   @parity_marker %{
     message: "Deploy is done.",
-    reasoning: "rollback plan",
+    reasoning: "reasoning",
     tool_call: "Bash",
     diff: "lib/orders/total.ex",
     approval: "rm -rf build/"
@@ -255,12 +256,14 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
     test "toggling a live tool_call block's fold flips between the two renders" do
       block = Block.from_events(:tool_call, events(:tool_call), fold: :folded)
 
+      # Folded is the compact one-line receipt (no result body); expanded
+      # reveals the body under it -- "drwxr-xr-x" is a body-only line.
       folded_texts = flat_texts(BlockBody.render(block, default_context()))
-      refute Enum.any?(folded_texts, &(&1 == "⚠ untrusted"))
+      refute Enum.any?(folded_texts, &(&1 == "drwxr-xr-x"))
 
       expanded = Block.toggle_fold(block)
       expanded_texts = flat_texts(BlockBody.render(expanded, default_context()))
-      assert Enum.any?(expanded_texts, &(&1 == "⚠ untrusted"))
+      assert Enum.any?(expanded_texts, &(&1 == "drwxr-xr-x"))
 
       refolded = Block.toggle_fold(expanded)
 
@@ -440,7 +443,11 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   describe "expanded render carries the completion row when the block has one" do
     test "a block with content.completion gets the row appended after the mounted component's own view" do
       block = Block.from_events(:message, events(:message), fold: :expanded)
-      with_completion = %{block | content: Map.put(block.content, :completion, %{evidence: :none})}
+
+      with_completion = %{
+        block
+        | content: Map.put(block.content, :completion, %{evidence: :none})
+      }
 
       rendered = BlockBody.render(with_completion, default_context())
       texts = flat_texts(rendered)
@@ -455,7 +462,9 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
       refute Map.has_key?(block.content, :completion)
 
       {:ok, unwrapped_view} =
-        Raxol.UI.Components.Harness.BodyProvider.mount(block.kind, block.content,
+        Raxol.UI.Components.Harness.BodyProvider.mount(
+          block.kind,
+          block.content,
           context: default_context(),
           outcome: block.outcome,
           seal: block.seal
@@ -491,7 +500,9 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
           seal: with_garbage_completion.seal
         )
 
-      assert strip_ids(BlockBody.render(with_garbage_completion, default_context())) ==
+      assert strip_ids(
+               BlockBody.render(with_garbage_completion, default_context())
+             ) ==
                strip_ids(unwrapped_view),
              "an unrecognized completion shape must never trigger the completion-row wrapping column"
     end

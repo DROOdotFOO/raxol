@@ -165,6 +165,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   branch, so a multi-line body never re-runs the solver per line.
   """
 
+  alias Raxol.UI.Components.Harness.LineDiff
   alias Raxol.UI.Components.Harness.MarkdownBody
   alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.TextLayout
@@ -209,16 +210,29 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   @known_kinds [:message, :reasoning, :tool_call, :diff, :approval]
 
+  # Machinery kinds (tool_call/reasoning/diff) default FOLDED: their
+  # default form is the one-line compact register (glyph + referent +
+  # receipt), per the low-prominence execution-block ruling -- tool output
+  # is always subordinate to speech. `z` (fold toggle) peeks the full body.
   @default_fold_by_kind %{
     message: :expanded,
     reasoning: :folded,
-    tool_call: :expanded,
+    tool_call: :folded,
     diff: :folded,
     approval: :expanded,
     opaque: :expanded
   }
 
   @default_fold_after_seal :deny
+
+  # The untrusted-content marker glyph, text presentation FORCED: U+26A0
+  # alone is a dual-presentation codepoint (some terminals render it as an
+  # emoji), so it carries U+FE0E (VARIATION SELECTOR-15). TextMeasure
+  # counts the pair as one grapheme, width 1 (FE0E is Grapheme_Extend;
+  # width comes from the base codepoint, which is not in any wide range).
+  # Defined here, above `glyph_inventory/0`, so that inventory can list it.
+  @taint_glyph "⚠︎"
+  @taint_marker @taint_glyph <> " untrusted"
 
   # --- construction ---------------------------------------------------------
 
@@ -450,8 +464,8 @@ defmodule Raxol.UI.Components.Harness.Block do
     # header, content, and outcome all carry the SAME `:fg`, and the
     # per-line content map never re-runs the H-K solver.
     fg = prominence_fg(block, context)
-    header = header_view(block, width, fg)
-    outcome_children = outcome_row_view(block.outcome, fg)
+    header = header_view(block, width, fg, context)
+    outcome_children = outcome_children(block, fg)
     completion_children = completion_rows(block, fg, context)
 
     body_children =
@@ -478,7 +492,42 @@ defmodule Raxol.UI.Components.Harness.Block do
     )
   end
 
-  defp header_view(block, width, fg) do
+  # -- machinery compact headers (the low-prominence execution register) --
+  #
+  # Tool, reasoning, and diff blocks render ONE compact line as their
+  # header, with no fold arrow: the glyph itself marks the line, the fold
+  # key still peeks the body. The line is the block's FINAL sealed form --
+  # a merged tool round-trip is one line (glyph + name + lead args +
+  # outcome receipt), never a header plus a separate result section.
+  # Machinery is dim by default (tool output subordinate to speech); a
+  # FAILED tool keeps alarm prominence (never dim -- a failed tool is a
+  # signal, not machinery noise).
+  defp header_view(%__MODULE__{kind: :tool_call} = block, width, fg, context) do
+    line = tool_line(block, context)
+    style = if tool_failed?(block.outcome), do: %{}, else: %{dim: true}
+
+    Components.text(
+      content: TextLayout.truncate(line, max(width, 1), :ellipsis),
+      style: apply_fg(style, fg)
+    )
+  end
+
+  defp header_view(%__MODULE__{kind: :reasoning} = block, width, fg, _context) do
+    Components.text(
+      content:
+        TextLayout.truncate(reasoning_line(block), max(width, 1), :ellipsis),
+      style: apply_fg(%{dim: true}, fg)
+    )
+  end
+
+  defp header_view(%__MODULE__{kind: :diff} = block, width, fg, _context) do
+    Components.text(
+      content: TextLayout.truncate(diff_line(block), max(width, 1), :ellipsis),
+      style: apply_fg(%{dim: true}, fg)
+    )
+  end
+
+  defp header_view(block, width, fg, _context) do
     prefix = "#{fold_icon(block.fold)} #{glyph(block)} "
     budget = max(width - TextMeasure.display_width(prefix), 1)
     summary_text = block |> summary() |> TextLayout.truncate(budget, :ellipsis)
@@ -573,13 +622,218 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp kind_glyph(:approval), do: "⚑"
   defp kind_glyph(_kind), do: "◆"
 
-  defp header_style(:reasoning), do: %{dim: true}
+  @doc """
+  Every literal glyph this module can emit into a rendered cell -- the
+  fold arrows, the per-kind glyphs, the role/receipt/outcome markers, and
+  the tainted-content marker. The one enumerated source the no-emoji
+  tripwire (`block_glyph_inventory_test.exs`) sweeps: each MUST measure
+  one display column (`Raxol.UI.TextMeasure`) and MUST NOT carry the
+  emoji-presentation selector U+FE0F. Dual-presentation bases that some
+  terminals default to emoji (U+26A0 WARNING) carry U+FE0E to force the
+  monochrome text glyph -- machinery is a text register, never an emoji.
+  """
+  @spec glyph_inventory() :: [String.t()]
+  def glyph_inventory do
+    [
+      # fold arrows
+      "▸",
+      "▾",
+      # per-kind
+      "»",
+      "∴",
+      "⚙",
+      "±",
+      "⚑",
+      "◆",
+      # message role
+      "❯",
+      # tool receipt / outcome markers
+      "✓",
+      "✗",
+      "⊘",
+      # tainted-content marker glyph (FE0E-guarded -- see @taint_glyph)
+      @taint_glyph
+    ]
+  end
+
+  # `:reasoning`, `:tool_call`, and `:diff` never reach here -- each has
+  # its own compact `header_view/4` clause. `:opaque` still routes through
+  # the default header.
   defp header_style(:opaque), do: %{dim: true}
   defp header_style(_kind), do: %{}
 
   defp content_style(:reasoning), do: %{dim: true}
+  defp content_style(:tool_call), do: %{dim: true}
   defp content_style(:opaque), do: %{dim: true}
   defp content_style(_kind), do: %{}
+
+  # -- the compact machinery lines ------------------------------------------
+
+  # The one-line form of a merged tool round-trip:
+  # `⚙ name(lead args) · <receipt>` -- glyph + referent + outcome receipt,
+  # never a header plus a result section.
+  defp tool_line(%__MODULE__{content: content} = block, context) do
+    name =
+      case Map.get(content, :name) do
+        n when is_binary(n) and n != "" -> n
+        _absent -> "(tool)"
+      end
+
+    args = format_args(Map.get(content, :args))
+
+    "#{kind_glyph(:tool_call)} #{name}#{args} · " <>
+      tool_receipt_text(content, block.outcome, context)
+  end
+
+  @doc """
+  The outcome receipt folded into a `:tool_call` block's compact line --
+  derived from the tool_result payload and the block's outcome, never
+  invented (the evidence rules' receipts vocabulary):
+
+    * still awaiting its result AND rendered in the footer live tail
+      (`context[:pending?]`, no result, no exit) -> `"running…"`. This is
+      the ONE place `running…` appears: a footer preview, never sealed
+      history. Seal-on-result-only keeps the sealed line final-form and
+      the live/fixture byte-parity guard cadence-independent.
+    * sealed with no result (the pending flag absent, no result/exit) ->
+      `"⊘ no result"` -- the honest absence, never a checkmark.
+    * integer `exit_code` -> `"✓ exit 0"` / `"✗ exit N — first error line"`
+      (shell vocabulary: exit + duration).
+    * otherwise, shaped from the result payload itself: `"✓ N lines"`
+      (multi-line output -- a listing's lines ARE its entries), `"✓ N B"`
+      (single-line output, byte count), `"✓ empty"` (empty output). The
+      vocabulary is deliberately shape-derived, not tool-name-derived: a
+      producer-controlled name is a proxy, the payload is the referent.
+
+  `duration` (from `outcome.duration_ms`, the BlockBuilder-fixed
+  call-to-result span) and `cost` append as further ` · ` parts; tainted
+  provenance appends the text-presentation `⚠︎ untrusted` marker.
+  Context key `:pending?` (default `false`) is set only by the footer
+  live-tail preview: a resultless tool renders `running…` there while its
+  result may still arrive, and its final `⊘ no result` / `✓ …` form
+  everywhere the flag is absent (sealed history above all).
+  """
+  @spec tool_receipt(t(), map()) :: String.t()
+  def tool_receipt(%__MODULE__{} = block, context \\ %{}) do
+    tool_receipt_text(block.content, block.outcome, context)
+  end
+
+  defp tool_receipt_text(content, outcome, context) do
+    result = Map.get(content, :result)
+
+    if awaiting_result?(result, outcome, context) do
+      join_receipt_parts(["running…", taint_part(content)])
+    else
+      join_receipt_parts([
+        receipt_status(result, outcome),
+        duration_part(Map.get(outcome, :duration_ms)),
+        cost_part(Map.get(outcome, :cost)),
+        taint_part(content)
+      ])
+    end
+  end
+
+  # Awaiting = rendered in the footer live tail (`pending?`), no result
+  # yet, and no exit code (a non-nil exit counts as an answer). `pending?`
+  # is set ONLY by the footer preview, so a sealed tool line never reads
+  # `running…` -- it is final-form, guaranteeing byte parity across reveal
+  # cadences.
+  defp awaiting_result?(result, outcome, context) do
+    is_nil(result) and is_nil(Map.get(outcome, :exit_code)) and
+      Map.get(context, :pending?, false) == true
+  end
+
+  defp receipt_status(result, outcome) do
+    exit_code = Map.get(outcome, :exit_code)
+
+    cond do
+      is_integer(exit_code) and exit_code != 0 ->
+        "✗ exit #{exit_code}" <> short_error(result)
+
+      is_nil(result) and is_nil(exit_code) ->
+        "⊘ no result"
+
+      is_integer(exit_code) ->
+        "✓ exit #{exit_code}"
+
+      true ->
+        "✓ " <> size_receipt(result)
+    end
+  end
+
+  # First non-blank line of the failed tool's output, clamped -- the
+  # short-error tail of an alarm line, never the whole body.
+  @short_error_width 40
+  defp short_error(result) do
+    line =
+      result
+      |> to_display_text()
+      |> String.split("\n")
+      |> Enum.find(&(String.trim(&1) != ""))
+
+    case line do
+      nil -> ""
+      line -> " — " <> TextLayout.truncate(line, @short_error_width, :ellipsis)
+    end
+  end
+
+  defp size_receipt(result) do
+    case result |> to_display_text() |> String.split("\n") do
+      [""] -> "empty"
+      [line] -> "#{byte_size(line)} B"
+      lines -> "#{length(lines)} lines"
+    end
+  end
+
+  defp taint_part(content) do
+    if Map.get(content, :tainted) == true, do: @taint_marker
+  end
+
+  defp join_receipt_parts(parts) do
+    parts |> Enum.reject(&is_nil/1) |> Enum.join(" · ")
+  end
+
+  defp tool_failed?(outcome) do
+    exit_code = Map.get(outcome, :exit_code)
+    is_integer(exit_code) and exit_code != 0
+  end
+
+  # `∴ reasoning · N lines` -- the peekable one-line register. The line
+  # count is the honest quantity (never the first line of the thought:
+  # collapsed means collapsed).
+  defp reasoning_line(%__MODULE__{content: content}) do
+    case content |> Map.get(:text) |> split_lines() do
+      [] -> "#{kind_glyph(:reasoning)} reasoning · empty"
+      [_line] -> "#{kind_glyph(:reasoning)} reasoning · 1 line"
+      lines -> "#{kind_glyph(:reasoning)} reasoning · #{length(lines)} lines"
+    end
+  end
+
+  # `± path · +N -M` -- the diff block's compact line; the ± body stays
+  # the expanded form. Counts come from the same LCS the expanded
+  # DiffViewer walks, so the two can never disagree.
+  defp diff_line(%__MODULE__{content: content}) do
+    path =
+      case content |> Map.get(:path) |> to_display_text() do
+        "" -> "(no path)"
+        p -> p
+      end
+
+    {added, removed} = diff_stat(content)
+    "#{kind_glyph(:diff)} #{path} · +#{added} -#{removed}"
+  end
+
+  defp diff_stat(content) do
+    old = content |> Map.get(:old) |> to_display_text()
+    new = content |> Map.get(:new) |> to_display_text()
+
+    LineDiff.diff(old, new)
+    |> Enum.reduce({0, 0}, fn
+      {:insert, _line}, {added, removed} -> {added + 1, removed}
+      {:delete, _line}, {added, removed} -> {added, removed + 1}
+      {:equal, _line}, acc -> acc
+    end)
+  end
 
   @doc """
   One-line summary of `block` (kind-aware) -- the folded-header text and
@@ -1226,6 +1480,23 @@ defmodule Raxol.UI.Components.Harness.Block do
   end
 
   defp hidden_cross_turn_suffix(_entries, _absent), do: ""
+
+  # Which blocks still get the separate dim outcome row:
+  #
+  #   * `:tool_call` -- NEVER. The compact line's receipt already carries
+  #     exit/duration/cost; a second row would be the two-line form this
+  #     unit exists to remove.
+  #   * `:reasoning` / `:diff`, folded -- never: the compact line IS the
+  #     whole folded render (one-line law); expanded, the row returns
+  #     (duration is peekable with the body).
+  #   * everything else -- as before.
+  defp outcome_children(%__MODULE__{kind: :tool_call}, _fg), do: []
+
+  defp outcome_children(%__MODULE__{kind: kind, fold: :folded}, _fg)
+       when kind in [:reasoning, :diff],
+       do: []
+
+  defp outcome_children(block, fg), do: outcome_row_view(block.outcome, fg)
 
   defp outcome_row_view(outcome, fg) do
     case outcome_parts(outcome) do

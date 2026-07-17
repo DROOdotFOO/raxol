@@ -278,8 +278,11 @@ defmodule Raxol.Harness.T13aSurfaceTest do
       history_text = Enum.map(history_at(raw(device)), &row_text/1)
       joined = Enum.join(history_text, "\n")
 
-      # in-order: reasoning before both tool calls before the final message
-      reasoning_idx = index_of_substring(joined, "list the directory first")
+      # in-order: reasoning before both tool calls before the final
+      # message. Reasoning seals as its collapsed machinery line (`∴
+      # reasoning · N lines`), not its content preview -- collapsed means
+      # collapsed; the ordering is what this test pins.
+      reasoning_idx = index_of_substring(joined, "∴ reasoning")
       tool_idx = index_of_substring(joined, "list_dir")
       message_idx = index_of_substring(joined, "Root has mix.exs")
 
@@ -699,15 +702,18 @@ defmodule Raxol.Harness.T13aSurfaceTest do
       assert history_text =~ "done!",
              "trailing ASCII after the unicode run must survive intact"
 
-      # the tool_call block's tainted result:
-      # "日本語.txt\n📁 emoji-folder\nRésumé.pdf"
-      assert history_text =~ "日本語.txt", "CJK filename must survive intact"
-
-      assert history_text =~ "emoji-folder",
-             "emoji-prefixed filename must survive intact"
-
-      assert history_text =~ "Résumé.pdf",
-             "accented Latin filename must survive intact"
+      # The tool_call block's tainted result body
+      # ("日本語.txt\n📁 emoji-folder\nRésumé.pdf") is NOT asserted in sealed
+      # history: tool calls are the low-prominence machinery register and
+      # fold to their compact one-line receipt by default (V's ruling), so
+      # the result body seals only when expanded (peek with z). The
+      # grapheme-safety guarantee this test exists for -- CJK/ZWJ-emoji/
+      # combining/RTL survive the seal -> emulator-replay path intact -- is
+      # fully covered by the message block above (你好世界 👨‍👩‍👧‍👦 école
+      # مرحبا שלום 🎉), which routes through the SAME
+      # `Raxol.Harness.Surface.ViewText.lines/3` trust boundary the tool
+      # body would; that boundary is kind-agnostic, so the tool body adds
+      # no grapheme-safety coverage the message does not already give.
     end
   end
 

@@ -572,6 +572,14 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   # (`:decided` present) or once its turn ended without an answer; LIVE
   # otherwise. Non-approval groups are untouched -- they carry no `:seal`
   # key and `build_block/2` defaults them to `:sealed`, exactly as before.
+  #
+  # Tool blocks are DELIBERATELY not stamped `:live` here (seal-on-result-
+  # only, the parity-safe rendering choice -- see this module's "Tool
+  # running state" note below): a tool's `running…` state lives in the
+  # footer live-tail preview (driven by render context, not seal state),
+  # never as a held block, so a sealed tool line is always its final form
+  # and the live/fixture byte-parity guard holds regardless of reveal
+  # cadence or compaction.
   defp resolve_approval_seal(%{kind_override: :approval} = group, turn_ended?) do
     sealed? = not is_nil(Map.get(group, :decided)) or turn_ended?
     Map.put(group, :seal, if(sealed?, do: :sealed, else: :live))

@@ -285,8 +285,11 @@ defmodule Raxol.Harness.T7ProjectionTest do
       proj = Projection.project(load!("multi-tool-turn"))
       by_kind = Enum.group_by(proj.blocks, & &1.kind)
 
+      # Machinery kinds (reasoning, tool_call) default FOLDED -- their
+      # default form is the compact one-line register (glyph + referent +
+      # receipt); speech (message) stays expanded.
       assert Enum.all?(by_kind[:reasoning], &(&1.fold == :folded))
-      assert Enum.all?(by_kind[:tool_call], &(&1.fold == :expanded))
+      assert Enum.all?(by_kind[:tool_call], &(&1.fold == :folded))
       assert Enum.all?(by_kind[:message], &(&1.fold == :expanded))
     end
 

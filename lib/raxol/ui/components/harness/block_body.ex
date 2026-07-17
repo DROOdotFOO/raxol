@@ -66,6 +66,18 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   def render(%Block{fold: :folded} = block, context),
     do: Block.render(block, context)
 
+  # The machinery register (tool calls, reasoning) is Block.render/2's own
+  # in BOTH fold states: folded is the compact one-line form (glyph +
+  # referent + receipt), expanded is that same line plus the full dim body
+  # -- never a mounted component pair with its own "Tool Result" header
+  # (the two-block form this rendering unit removed). `:diff` keeps its
+  # mounted DiffViewer as the expanded form (the ± body is the artifact);
+  # its folded form is Block's compact `± path · +N -M` line via the
+  # folded clause above.
+  def render(%Block{kind: kind} = block, context)
+      when kind in [:tool_call, :reasoning],
+      do: Block.render(block, context)
+
   def render(%Block{fold: :expanded} = block, context) do
     case mount_body(block, context) do
       {:ok, view} ->

@@ -93,7 +93,7 @@
     "opaque": "expanded",
     "diff": "folded",
     "reasoning": "folded",
-    "tool_call": "expanded",
+    "tool_call": "folded",
     "approval": "expanded"
   },
   "projector": "Raxol.Harness.Projection"

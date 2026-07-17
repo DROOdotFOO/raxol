@@ -363,7 +363,9 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       rendered = Block.render(block, %{width: 80})
       texts = flat_texts(rendered)
 
-      assert Enum.any?(texts, &(&1 == "exit 1"))
+      # A tool_call's outcome is folded into its compact receipt line,
+      # not a separate row: exit present, duration/cost absent.
+      assert Enum.any?(texts, &(&1 =~ "exit 1"))
       refute Enum.any?(texts, &(&1 =~ "$"))
       refute Enum.any?(texts, &(&1 =~ "ms"))
     end
@@ -431,6 +433,250 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert Enum.any?(texts, &(&1 =~ "command: \"ls\""))
       assert Enum.any?(texts, &(&1 == "file1"))
       assert Enum.any?(texts, &(&1 == "file2"))
+    end
+  end
+
+  describe "compact machinery lines (the low-prominence execution register)" do
+    defp styled_texts(%{type: :text} = node),
+      do: [{Map.get(node, :content), Map.get(node, :style, %{})}]
+
+    defp styled_texts(%{children: children}) when is_list(children),
+      do: Enum.flat_map(children, &styled_texts/1)
+
+    defp styled_texts(_node), do: []
+
+    defp tool_events(name, args, result, extra_result \\ %{}) do
+      [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{item_type: :tool_use, content: %{name: name, args: args}}
+        },
+        %{
+          id: 2,
+          type: :item_completed,
+          payload:
+            Map.merge(%{item_type: :tool_result, content: result}, extra_result)
+        }
+      ]
+    end
+
+    test "a FOLDED tool renders exactly ONE line: glyph + name + args + receipt, no result body, no 'Tool Result'" do
+      block =
+        Block.from_events(
+          :tool_call,
+          tool_events("list_dir", %{path: "."}, "a\nb\nc\nd"),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      texts = flat_texts(Block.render(block, %{width: 120}))
+
+      assert [line] = texts
+      assert line =~ "⚙ list_dir"
+      assert line =~ "path: \".\""
+      assert line =~ "✓ 4 lines"
+      refute line =~ "Tool Result"
+      refute Enum.any?(texts, &(&1 == "a"))
+    end
+
+    test "the folded tool line is DIM (machinery register), never full-weight" do
+      block =
+        Block.from_events(:tool_call, tool_events("list_dir", %{}, "x"),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [{_content, style}] =
+               styled_texts(Block.render(block, %{width: 120}))
+
+      assert style[:dim] == true
+    end
+
+    test "receipt derives from the result payload shape: multi-line -> N lines" do
+      block =
+        Block.from_events(:tool_call, tool_events("t", %{}, "one\ntwo\nthree"),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [line] = flat_texts(Block.render(block, %{width: 120}))
+      assert line =~ "✓ 3 lines"
+    end
+
+    test "receipt for single-line output is a byte count" do
+      block =
+        Block.from_events(:tool_call, tool_events("t", %{}, "hello"),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [line] = flat_texts(Block.render(block, %{width: 120}))
+      assert line =~ "✓ 5 B"
+    end
+
+    test "receipt folds exit code + duration when the payload carries them" do
+      events = [
+        %{
+          id: 1,
+          type: :item_started,
+          ts: 1_000_000,
+          payload: %{item_type: :tool_use, content: %{name: "sh", args: %{}}}
+        },
+        %{
+          id: 2,
+          type: :item_completed,
+          ts: 1_300_000,
+          payload: %{item_type: :tool_use, content: %{name: "sh", args: %{}}}
+        },
+        %{
+          id: 3,
+          type: :item_completed,
+          ts: 1_300_000,
+          payload: %{item_type: :tool_result, content: "boom", exit_code: 2}
+        }
+      ]
+
+      block =
+        Block.from_events(:tool_call, events, fold: :folded, seal: :sealed)
+
+      assert [line] = flat_texts(Block.render(block, %{width: 200}))
+      assert line =~ "✗ exit 2"
+      assert line =~ "boom"
+    end
+
+    test "a FAILED tool keeps ALARM prominence (never dim -- a failure is signal, not machinery noise)" do
+      events = [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{item_type: :tool_use, content: %{name: "sh", args: %{}}}
+        },
+        %{
+          id: 2,
+          type: :item_completed,
+          payload: %{item_type: :tool_result, content: "err", exit_code: 1}
+        }
+      ]
+
+      block =
+        Block.from_events(:tool_call, events, fold: :folded, seal: :sealed)
+
+      assert [{content, style}] =
+               styled_texts(Block.render(block, %{width: 120}))
+
+      assert content =~ "✗ exit 1"
+      refute style[:dim] == true
+    end
+
+    test "a resultless tool in the footer live tail (pending?) renders the running receipt" do
+      events = [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{item_type: :tool_use, content: %{name: "slow", args: %{}}}
+        }
+      ]
+
+      block = Block.from_events(:tool_call, events, fold: :folded)
+      # running… is a FOOTER-only form -- only when the render context
+      # marks the block as the pending (not-yet-sealed) live tail.
+      assert [line] =
+               flat_texts(Block.render(block, %{width: 120, pending?: true}))
+
+      assert line =~ "running…"
+    end
+
+    test "a resultless tool WITHOUT the pending flag (sealed history) renders the honest absence, never running… or a checkmark" do
+      events = [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{item_type: :tool_use, content: %{name: "gone", args: %{}}}
+        }
+      ]
+
+      block = Block.from_events(:tool_call, events, fold: :folded)
+      assert [line] = flat_texts(Block.render(block, %{width: 120}))
+      assert line =~ "⊘ no result"
+      refute line =~ "running…"
+      refute line =~ "✓"
+    end
+
+    test "tainted tool output appends the FE0E-guarded untrusted marker" do
+      events = [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{item_type: :tool_use, content: %{name: "web", args: %{}}}
+        },
+        %{
+          id: 2,
+          type: :item_completed,
+          provenance: %{trust: :tainted},
+          payload: %{item_type: :tool_result, content: "x"}
+        }
+      ]
+
+      block =
+        Block.from_events(:tool_call, events, fold: :folded, seal: :sealed)
+
+      assert [line] = flat_texts(Block.render(block, %{width: 120}))
+      assert line =~ "⚠︎ untrusted"
+    end
+
+    test "z (fold -> expanded) reveals the full result body under the same compact line" do
+      block =
+        Block.from_events(:tool_call, tool_events("cat", %{}, "line1\nline2"),
+          fold: :expanded,
+          seal: :sealed
+        )
+
+      texts = flat_texts(Block.render(block, %{width: 120}))
+      assert Enum.any?(texts, &(&1 =~ "⚙ cat"))
+      assert Enum.any?(texts, &(&1 == "line1"))
+      assert Enum.any?(texts, &(&1 == "line2"))
+    end
+
+    test "reasoning collapses to one dim '∴ reasoning · N lines' line, peekable" do
+      events = [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{item_type: :reasoning, content: "first\nsecond\nthird"}
+        }
+      ]
+
+      folded =
+        Block.from_events(:reasoning, events, fold: :folded, seal: :sealed)
+
+      assert [{line, style}] = styled_texts(Block.render(folded, %{width: 120}))
+      assert line =~ "∴ reasoning · 3 lines"
+      assert style[:dim] == true
+
+      expanded = %{folded | fold: :expanded}
+      texts = flat_texts(Block.render(expanded, %{width: 120}))
+      assert Enum.any?(texts, &(&1 == "first"))
+      assert Enum.any?(texts, &(&1 == "third"))
+    end
+
+    test "a diff block folds to a compact '± path · +N -M' line" do
+      events = [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{
+            item_type: :tool_result,
+            path: "lib/a.ex",
+            old: "a\nb\nc",
+            new: "a\nX\nc\nd"
+          }
+        }
+      ]
+
+      block = Block.from_events(:diff, events, fold: :folded, seal: :sealed)
+      assert [line] = flat_texts(Block.render(block, %{width: 120}))
+      assert line == "± lib/a.ex · +2 -1"
     end
   end
 
@@ -617,10 +863,12 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
     end
 
     test "the full default fold table covers every known kind plus :opaque" do
+      # Machinery kinds (reasoning, tool_call, diff) default FOLDED --
+      # their default form is the compact one-line register.
       expected = %{
         message: :expanded,
         reasoning: :folded,
-        tool_call: :expanded,
+        tool_call: :folded,
         diff: :folded,
         approval: :expanded,
         opaque: :expanded

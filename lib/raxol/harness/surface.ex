@@ -750,6 +750,7 @@ defmodule Raxol.Harness.Surface do
           lane_notice: String.t() | [String.t()] | nil,
           pending_submit: %{text: String.t()} | nil,
           stream_open?: boolean(),
+          spinner_frame: non_neg_integer(),
           debug_highlight: debug_highlight_group() | nil,
           debug_highlight_bg: ViewText.bg(),
           sigil: String.t(),
@@ -961,6 +962,10 @@ defmodule Raxol.Harness.Surface do
       lane_notice: nil,
       pending_submit: nil,
       stream_open?: Keyword.get(opts, :stream_open, false),
+      # Frame counter for the running-tool margin spinner -- advanced by
+      # the EXISTING clocks only (`tick/2` and each `advance/2` reveal;
+      # never a timer of this module's own). See `preview_margin_lines/2`.
+      spinner_frame: 0,
       debug_highlight: nil,
       # Role token, resolved ONCE per session at the palette layer ("roles,
       # never colors") -- the component only ever names the role; the
@@ -1414,6 +1419,9 @@ defmodule Raxol.Harness.Surface do
 
     model =
       %{model | revealed: revealed, projection: projection}
+      # The running-tool margin spinner rides the EXISTING clocks:
+      # every reveal advances one frame (tick/2 is the other clock).
+      |> Map.update(:spinner_frame, 1, &(&1 + 1))
       # Pure model-state reconciliation (no bytes) -- runs before the
       # seal frame so the divider bookkeeping is settled ahead of any
       # paint, and stays OUTSIDE the sync bracket seal_frame may open.
@@ -1519,6 +1527,10 @@ defmodule Raxol.Harness.Surface do
     model
     |> heal_sync()
     |> put_in([:status, :now], now)
+    # Same clock the elapsed ticker rides -- the running-tool margin
+    # spinner advances here and on each `advance/2` reveal, NEVER via a
+    # timer of this module's own (no wall-clock in the default suite).
+    |> Map.update(:spinner_frame, 1, &(&1 + 1))
     |> paint_footer()
   end
 
@@ -2119,9 +2131,11 @@ defmodule Raxol.Harness.Surface do
       comparison exactly once; restating it here is the drift the
       unification exists to prevent).
     * `running?` -- `Block.live?/1`, an honest passthrough. Always false
-      today (the block builder only constructs completed, sealed blocks),
-      which leaves the classifier's mid-turn running exceptions dormant
-      until a producer emits still-running entries.
+      for tool/reasoning/message blocks (the block builder only stamps
+      unanswered approvals `:live`); a tool's `running…` state is a
+      footer-preview concern (see `pending_preview_lines/1`), never a
+      held block, so the sealed line is always its final form and the
+      live/fixture byte-parity guard holds under any reveal cadence.
     * `pending_input?` -- the frontier gate's invariant is "the rendered
       form can still change on user interaction; print-once must not
       freeze it," and this feed derives BOTH instances of it:
@@ -2162,9 +2176,7 @@ defmodule Raxol.Harness.Surface do
     # (`Map.get`, not dot access: hand-assembled frontier-feed test models
     # and models built by an older constructor may not carry the key --
     # absent means the fixture default, a closed stream.)
-    reveal_finished? =
-      not Map.get(model, :stream_open?, false) and
-        model.revealed >= length(model.events)
+    reveal_finished? = reveal_finished?(model)
 
     blocks
     |> Enum.with_index()
@@ -2178,6 +2190,17 @@ defmodule Raxol.Harness.Surface do
             (not reveal_finished? and index == total - 1)
       }
     end)
+  end
+
+  # "No more events will ever come": the stream is closed AND everything
+  # already revealed. One meaning on both the fixture and live paths --
+  # feeds the frontier's newest-block hold and the footer preview's
+  # `pending?` running-tool signal (a resultless tool renders `running…`
+  # in the footer only while this is false; once true it seals to its
+  # honest `⊘ no result` final form).
+  defp reveal_finished?(model) do
+    not Map.get(model, :stream_open?, false) and
+      model.revealed >= length(model.events)
   end
 
   # THE committed-marker mapping, stated exactly once: block `index` is
@@ -4745,8 +4768,57 @@ defmodule Raxol.Harness.Surface do
       {:composer, lines} -> {:composer, chevron_lines(lines, model)}
       {:overlay, lines} -> {:overlay, lines}
       {:expansion, lines} -> {:expansion, lines}
+      {:preview, lines} -> {:preview, preview_margin_lines(lines, model)}
       {key, lines} -> {key, margin_lines(lines)}
     end)
+  end
+
+  # -- the running-tool margin spinner -------------------------------------
+  #
+  # A RUNNING tool line's col-0 margin cell animates a braille spinner
+  # (dim -- machinery register), clocked by the EXISTING tick/advance
+  # frames (`spinner_frame`; never a timer of this module's own). Only
+  # the preview group's FIRST row, and only while the pending (footer)
+  # block is a tool call still awaiting its result (result nil, reveal not
+  # finished). The spinner is footer-only: the sealed line is final-form,
+  # so a completed tool's margin cell is the plain blank -- the ✓/✗
+  # receipt lives in the line itself, and history never animates.
+  @spinner_frames ~w(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+
+  defp preview_margin_lines(lines, model) do
+    if spinner_active?(model) do
+      spin_first_margin(lines, model)
+    else
+      margin_lines(lines)
+    end
+  end
+
+  defp spin_first_margin([], _model), do: []
+
+  defp spin_first_margin([first | rest], model) do
+    frame_count = length(@spinner_frames)
+    index = rem(Map.get(model, :spinner_frame, 0), frame_count)
+    frame = Enum.at(@spinner_frames, index)
+
+    [line] =
+      ViewText.lines(
+        %{type: :text, content: frame, style: %{dim: true}},
+        1,
+        :styled
+      )
+
+    [line <> first | margin_lines(rest)]
+  end
+
+  defp spinner_active?(model) do
+    not reveal_finished?(model) and
+      case pending_block(model) do
+        {%Block{kind: :tool_call, content: content}, _index} ->
+          is_nil(Map.get(content, :result))
+
+        _other ->
+          false
+      end
   end
 
   # The composer group's rows, chevron applied. Row indexing mirrors
@@ -5008,7 +5080,12 @@ defmodule Raxol.Harness.Surface do
         |> apply_fold_override(index, model.fold_overrides)
         |> BlockBody.render(%{
           width: content_width(model),
-          turn_has_tools?: turn_has_tools?(block, model)
+          turn_has_tools?: turn_has_tools?(block, model),
+          # The footer live tail is the ONE place a resultless tool renders
+          # `running…` (seal-on-result-only) -- but only while a result may
+          # still arrive. Once the reveal is finished the preview shows the
+          # final `⊘ no result` form, matching what will seal.
+          pending?: not reveal_finished?(model)
         })
         |> ViewText.lines(content_width(model), :plain)
         |> Enum.take(2)
