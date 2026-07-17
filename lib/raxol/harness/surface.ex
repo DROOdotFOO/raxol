@@ -723,6 +723,7 @@ defmodule Raxol.Harness.Surface do
           debug_highlight: debug_highlight_group() | nil,
           debug_highlight_bg: ViewText.bg(),
           sigil: String.t(),
+          reply_sigil: String.t(),
           sealed_any?: boolean(),
           greeting_rows: [pos_integer()] | nil
         }
@@ -921,10 +922,15 @@ defmodule Raxol.Harness.Surface do
       # palette decides what the tint IS per capability tier, including
       # the category-preserving 256/ANSI16 downgrades.
       debug_highlight_bg: Palette.debug_highlight_bg_for(caps),
-      # The prompt sigil (the chevron): decided ONCE from the capability
+      # The dialogue sigils (the mirrored chevron pair, V's amendment to
+      # the speaker-separation ruling): decided ONCE from the capability
       # record -- `unicode: :none` is the only tier that can't render
-      # U+276F, so it falls back to plain ">". See `chevron_lines/2`.
+      # U+276F/U+276E, so they fall back to plain ">" / "<". `sigil`
+      # fronts the composer's live prompt row and every user echo;
+      # `reply_sigil` fronts assistant prose. See `chevron_lines/2` and
+      # `echo_lines/4`.
       sigil: prompt_sigil(caps),
+      reply_sigil: reply_sigil(caps),
       # Whether ANY line has ever been sealed into history -- drives the
       # one-blank-row-between-sealed-blocks rule (see `seal_block/2`).
       # Deliberately NOT reset by `switch_session/2`: sealed history
@@ -1132,14 +1138,16 @@ defmodule Raxol.Harness.Surface do
   #
   # V's charged-minimum ruling (harness-visual-doctrine §1.2/§4.2): all
   # sealed-history and footer content sits inside a 1-column margin on
-  # both sides; the chevron -- the prompt sigil -- is the ONLY entity
-  # that enters that margin, in exactly two places: the composer's live
-  # prompt row (the anchor of an idle frame) and its sealed twin, the
-  # user-echo first line of an expanded user `:message` block
-  # (speaker-separation ruling, `harness-speaker-separation.md` option A:
-  # the live sigil collapses into a `❯`-echo in history; see
-  # `echo_lines/4`). Both take the SAME `model.sigil`, decided once from
-  # the capability record, so echo and prompt can never drift.
+  # both sides; the dialogue chevrons are the ONLY entities that enter
+  # that margin -- the OUTER CONTOUR is where the speakers are marked
+  # (speaker-separation ruling as V-amended 2026-07-17): the composer's
+  # live prompt row (`❯`, the anchor of an idle frame), its sealed twins
+  # -- the user-echo first line of an expanded user `:message` block and
+  # the live submit echo (`submit_accepted/1`) -- and the mirrored reply
+  # sigil (`❮`) fronting expanded assistant `:message` blocks. All read
+  # their glyphs from `model.sigil`/`model.reply_sigil`, decided once
+  # from the capability record, so echo, prompt, and reply can never
+  # drift or mix degradation tiers.
   # Implemented here, at the single seam where lines meet the paint
   # authorities, never as per-component string prefixes. Two documented
   # exemptions: the overlay picker and the diff expansion are FRAMED
@@ -1167,13 +1175,18 @@ defmodule Raxol.Harness.Surface do
 
   defp margin_lines(lines), do: Enum.map(lines, &margin_line/1)
 
-  # `unicode: :none` is the one capability tier that can't render U+276F;
-  # every other tier (and an absent record -- the probe-off conservative
-  # default already renders em dashes and box glyphs elsewhere) gets the
-  # real chevron. Width-honesty: both sigils measure exactly one display
-  # column (pinned by test).
+  # `unicode: :none` is the one capability tier that can't render U+276F/
+  # U+276E; every other tier (and an absent record -- the probe-off
+  # conservative default already renders em dashes and box glyphs
+  # elsewhere) gets the real chevrons. Width-honesty: all four sigils
+  # measure exactly one display column (pinned by test). The pair
+  # degrades TOGETHER -- a tier can never show a real `❯` opposite a
+  # fallback `<`, which would break the mirrored-pair speaker grammar.
   defp prompt_sigil(%{unicode: :none}), do: ">"
   defp prompt_sigil(_caps), do: "❯"
+
+  defp reply_sigil(%{unicode: :none}), do: "<"
+  defp reply_sigil(_caps), do: "❮"
 
   # The chevron is the one H-K anchor of an idle frame: bold (structure
   # channel, doctrine §4.3), styled through the SAME ViewText SGR path
@@ -1846,19 +1859,23 @@ defmodule Raxol.Harness.Surface do
   -- is what puts the user's echo ahead of the first response block in the
   byte stream (the echo-on-accept ordering invariant).
 
-  ## Speaker-separation alignment
+  ## Speaker-separation alignment (V's outer-contour amendment)
 
-  The echo uses `model.sigil` -- the SAME one-sigil source the speaker-
-  separation seal seam (`echo_lines/4`) echoes a replayed user `:message`
-  block with, and the same one the composer's live draft row carries -- so
-  a live-submitted prompt and a replayed user block render the same glyph
-  (`❯`, degrading to `>` under `unicode: :none`). This is still a PLAIN
-  marker seal, not the full styled user-block path (`echo_lines/4` adds
-  the bold sigil + block prominence fade): the marker is the honest floor
-  for a live echo that has no projection block behind it yet. The handoff
-  remains open -- when the live prompt is modeled as a real user `:message`
-  block it should seal through `echo_lines/4` and gain that styling; the
-  glyph already matches.
+  The echo renders with the FULL dialogue-echo geometry the seal seam
+  (`echo_lines/4`) gives a replayed user `:message` block: the sigil
+  flush left in the margin column (column 0, the outer contour -- NOT
+  the margined marker column `seal_marker/2` uses), text at the content
+  indent (column 2), wrapped lines hang-aligned with the composer's own
+  two-space continuation convention, and the sigil bold through the
+  ViewText SGR path. The glyph is `model.sigil` -- the same one-sigil
+  source the composer's live draft row and the replayed user echo carry
+  (`❯`, degrading to `>` under `unicode: :none`), so a live-submitted
+  prompt and a replayed user block are column- and glyph-identical. The
+  one styling difference from the block path: no prominence fade (a live
+  echo has no projection block behind it yet, so there is nothing to
+  grade). It also takes the standard one-blank-row turn separator
+  (`block_separator/1`) -- the echo opens a new turn, and the blank-row
+  rhythm is the load-bearing separator.
 
   A no-op when there is no `pending_submit` (a `:turn_started` for a turn
   this surface did not submit -- e.g. an externally-initiated turn -- must
@@ -1867,12 +1884,61 @@ defmodule Raxol.Harness.Surface do
   @spec submit_accepted(t()) :: t()
   def submit_accepted(%{pending_submit: %{text: text}} = model) do
     model
-    |> seal_marker(model.sigil <> " " <> text)
+    |> seal_prompt_echo(text)
     |> Map.put(:pending_submit, nil)
     |> paint_footer()
   end
 
   def submit_accepted(model), do: model
+
+  # The live prompt echo's seal: same authority calls as `seal_marker/2`
+  # (a marker-class write -- `painted_count` is NOT advanced; the echo is
+  # not a projection block), but decorated with the dialogue-echo
+  # geometry instead of the plain margin, plus the turn-separator blank
+  # row. `sealed_any?` is set, so the first response block that follows
+  # is separated from the echo by exactly one blank -- the rhythm law
+  # holds between a live echo and its answer just as it does between
+  # replayed blocks.
+  defp seal_prompt_echo(%{mode: :flat} = model, text) do
+    model = clear_greeting(model)
+    lines = block_separator(model) ++ prompt_echo_lines(model, text, :plain)
+    iodata = Enum.map(lines, &(&1 <> "\n"))
+
+    %{
+      model
+      | authority: FlatAuthority.seal(model.authority, iodata),
+        sealed_any?: true
+    }
+  end
+
+  defp seal_prompt_echo(model, text) do
+    model = clear_greeting(model)
+    lines = block_separator(model) ++ prompt_echo_lines(model, text, :styled)
+    iodata = Enum.map(lines, &[&1, "\r\n"])
+
+    %{
+      model
+      | authority: InlineAuthority.seal(model.authority, iodata),
+        sealed_any?: true
+    }
+  end
+
+  defp prompt_echo_lines(model, text, mode) do
+    sigil = live_echo_sigil(model, mode)
+
+    case ViewText.lines(
+           %{type: :text, content: text},
+           content_width(model),
+           mode
+         ) do
+      [] -> [sigil]
+      ["" | rest] -> [sigil | Enum.map(rest, &hang_line/1)]
+      [first | rest] -> [sigil <> " " <> first | Enum.map(rest, &hang_line/1)]
+    end
+  end
+
+  defp live_echo_sigil(model, :plain), do: model.sigil
+  defp live_echo_sigil(model, :styled), do: styled_sigil(model)
 
   @doc """
   Restores an in-flight submit's prompt back into the composer -- the
@@ -2255,35 +2321,40 @@ defmodule Raxol.Harness.Surface do
   defp block_prominence(block, model),
     do: RecencyPolicy.grade_block(block, model.projection.source_events)
 
-  # -- the user-echo chevron (speaker separation, option A) ----------------
+  # -- the dialogue chevrons (speaker separation, option A as V-amended) ---
   #
-  # V's margin ruling: the chevron is the ONLY entity that enters the
-  # 1-cell margin area. An EXPANDED user `:message` block seals as a
-  # prompt echo -- its first line is prefixed with the SAME sigil the
-  # composer's live prompt row carries (`model.sigil`: chosen once from
-  # the capability record, `unicode: :none` degrades it to `>` -- echo
-  # and live prompt can never drift), flush left in the margin column;
-  # its remaining lines hang-align to the echo's text column with two
-  # spaces, the composer's own continuation-row convention
-  # (`chevron_lines/2` is the template). Everything else -- assistant
-  # prose, machinery blocks, and FOLDED user headers (`▸ ❯ ...`, which
-  # keep the ordinary margined header column) -- takes the plain margin.
+  # V's margin ruling, amended 2026-07-17: the chevron pair is the ONLY
+  # entity that enters the 1-cell margin area -- dialogue markers live in
+  # the OUTER CONTOUR. An EXPANDED `:message` block seals with its
+  # speaker's sigil flush left in the margin column (column 0) and its
+  # text at the content indent (column 2):
+  #
+  #   * user      -> `❯ text` -- the composer's `model.sigil` echoed into
+  #     history (`unicode: :none` degrades it to `>`; echo and live
+  #     prompt can never drift);
+  #   * assistant -> `❮ text` -- `model.reply_sigil`, the mirrored
+  #     inverse, degrading to `<` on the same tier so the pair always
+  #     matches.
+  #
+  # Remaining lines hang-align to the text column with two spaces, the
+  # composer's own continuation-row convention (`chevron_lines/2` is the
+  # template). The mirrored pair IS the speaker grammar; machinery blocks
+  # (tool/system glyph headers) and FOLDED headers (`▸ ❯ ...` / `▸ » ...`,
+  # which keep the ordinary margined header column) take the plain margin.
   defp sealed_history_lines(lines, block, model, mode) do
-    if echo_block?(block) do
+    if dialogue_block?(block) do
       echo_lines(lines, block, model, mode)
     else
       margin_lines(lines)
     end
   end
 
-  # Only an EXPANDED user message is the echo: a folded one renders as a
-  # `▸ ❯ summary` header line, and prefixing THAT with a second chevron
-  # would stutter (`❯ ▸ ❯ ...`) -- the fold guard keeps folded headers at
-  # their existing column convention.
-  defp echo_block?(%Block{kind: :message, fold: :expanded} = block),
-    do: Block.role(block) == :user
-
-  defp echo_block?(_block), do: false
+  # Only an EXPANDED message speaks with a sigil: a folded one renders as
+  # a `▸ ❯/» summary` header line, and prefixing THAT with a second
+  # chevron would stutter (`❯ ▸ ❯ ...`) -- the fold guard keeps folded
+  # headers at their existing column convention.
+  defp dialogue_block?(%Block{kind: :message, fold: :expanded}), do: true
+  defp dialogue_block?(_block), do: false
 
   defp echo_lines([], _block, _model, _mode), do: []
 
@@ -2302,36 +2373,47 @@ defmodule Raxol.Harness.Surface do
   defp hang_line(""), do: ""
   defp hang_line(line), do: "  " <> line
 
+  # The speaker's glyph: user turns echo the composer's prompt sigil,
+  # assistant turns carry the mirrored reply sigil -- both fields decided
+  # once from the capability record in `new/2`, so the pair can never
+  # drift apart or mix tiers.
+  defp role_sigil(block, model) do
+    case Block.role(block) do
+      :user -> model.sigil
+      :assistant -> model.reply_sigil
+    end
+  end
+
   # Bold (structure channel, doctrine §4.3) through the SAME ViewText SGR
-  # path as the composer's sigil -- and carrying the block's OWN resolved
-  # prominence fade (`Block.prominence_fg/2`, the block's single-fg rule):
-  # a demoted user turn's chevron dims with its text instead of staying
-  # anchor-bright over faded prose. `:plain` is the flat tier -- zero
-  # escape bytes, the bare sigil.
-  defp echo_sigil(_block, model, :plain), do: model.sigil
+  # path as the composer's sigil -- and NO fg of its own (single-fg rule,
+  # enforced in the honest direction): a dialogue sigil only ever fronts
+  # an EXPANDED message body (the fold guard above), and the mounted
+  # expanded body carries no prominence fade today (`BlockBody`'s
+  # documented T5 scope cut) -- so the sigil is neutral too. A sigil that
+  # faded on its own would (a) split one physical line's block into two
+  # salience levels, and (b) make sealed bytes depend on REVEAL CADENCE:
+  # seal-time grade differs between the live flush-at-bracket path and
+  # the fixture hold-back-one path, and the live/fixture byte-parity
+  # guard (live_session_driver_compaction_test.exs) rightly forbids
+  # cadence-dependent history. When the mount path later threads
+  # prominence into message bodies, this style must take the SAME
+  # resolved fg in the same change -- never ahead of it. `:plain` is the
+  # flat tier -- zero escape bytes, the bare sigil.
+  defp echo_sigil(block, model, :plain), do: role_sigil(block, model)
 
   defp echo_sigil(block, model, :styled) do
     [line] =
       ViewText.lines(
         %{
           type: :text,
-          content: model.sigil,
-          style: echo_sigil_style(block, model)
+          content: role_sigil(block, model),
+          style: %{bold: true}
         },
         @sigil_cols,
         :styled
       )
 
     line
-  end
-
-  defp echo_sigil_style(block, model) do
-    case Block.prominence_fg(block, %{
-           prominence: block_prominence(block, model)
-         }) do
-      nil -> %{bold: true}
-      fg -> %{bold: true, fg: fg}
-    end
   end
 
   # The absence-row suppression referent (V field ruling; policy seat is

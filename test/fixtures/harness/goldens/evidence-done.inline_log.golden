@@ -5,9 +5,9 @@
  [1m⚠ untrusted[0m
  42 tests, 0 failures
 8[?25l7[15;1H[K Input: clear | Stage: item_completed | Ctx: — | Cost: —[16;1H[K All 42 tests passed.[17;1H[K[1m❯[0m  [18;1H[K8[17;3H[?25h[?25l7[15;1H[K All 42 tests passed.[16;1H[K 1 evidence ref: 1 tool result8[17;3H[?25h[?25l7[15;1H[K Input: clear | Stage: turn_started | Ctx: — | Cost: $0.00[16;1H[K All 42 tests passed.[17;1H[K 1 evidence ref: 1 tool result[18;1H[K[1m❯[0m  8[18;3H[?25h7[15;1H[K Input: clear | Stage: item_started | Ctx: — | Cost: $0.008[18;3H7[7;1H
- All 42 tests passed.
- [2m1 evidence ref: 1 tool result[0m
- [2m· mix_test — 42 tests, 0 failures[0m
+[1m❮[0m All 42 tests passed.
+  [2m1 evidence ref: 1 tool result[0m
+  [2m· mix_test — 42 tests, 0 failures[0m
 8[?25l7[15;1H[K Input: clear | Stage: item_completed | Ctx: —[16;1H[K Sounds good, wrapping up now.[17;1H[K[1m❯[0m  [18;1H[K8[17;3H[?25h7[11;1H
- Sounds good, wrapping up now.
+[1m❮[0m Sounds good, wrapping up now.
 8[?25l7[15;1H[K[1m❯[0m  [16;1H[K[17;1H[K8[15;3H[?25h

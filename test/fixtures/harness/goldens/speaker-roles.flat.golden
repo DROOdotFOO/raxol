@@ -1,6 +1,6 @@
 ❯ why does the settle step double-debit the ledger when the
   run resumes after a crash?
 
- The ledger fold consulted the seal frontier after the fold
- ran; it now starts at the frontier offset, so the debit
- replays exactly once.
+❮ The ledger fold consulted the seal frontier after the fold
+  ran; it now starts at the frontier offset, so the debit
+  replays exactly once.

@@ -6,15 +6,17 @@ defmodule Raxol.Harness.SpeakerSeparationSurfaceTest do
 
     * **The tagline is dead.** The strings `[assistant]`/`[user]` never
       appear anywhere in the emitted bytes of a mixed transcript.
-    * **The user echo.** An expanded user `:message` block seals as the
-      composer's sigil echoed into history: chevron flush-left in the
-      margin column (column 0), user text at the composer's draft column
-      (column 2), wrapped lines hang-aligned under the text with the
-      composer's own two-space continuation convention. Assistant prose
-      stays bare and margined (column 1).
-    * **One sigil source.** `unicode: :none` capability degrades the echo
-      to `>` through the SAME `model.sigil` the composer's prompt row
-      uses -- echo and live prompt can never drift.
+    * **The dialogue pair (V's outer-contour amendment).** An expanded
+      `:message` block seals with its speaker's sigil flush-left in the
+      margin column (column 0, the outer contour) and text at the content
+      indent (column 2): user turns echo the composer's `❯`, assistant
+      turns carry the mirrored `❮`. Wrapped lines hang-align under the
+      text with the composer's own two-space continuation convention.
+      Machinery keeps the plain 1-column margin.
+    * **One sigil source per speaker.** `unicode: :none` capability
+      degrades the pair TOGETHER (`>` / `<`) through the same
+      `model.sigil`/`model.reply_sigil` the composer and seal seam share
+      -- echo, prompt, and reply can never drift or mix tiers.
     * **Channel discipline.** The chevron is bold (structure channel)
       through the ViewText SGR path, zero color at full prominence; a
       turns-behind echo's chevron carries the block's OWN resolved fade
@@ -207,8 +209,8 @@ defmodule Raxol.Harness.SpeakerSeparationSurfaceTest do
 
   # -- 2. the user echo geometry -------------------------------------------
 
-  describe "2. the user echo (chevron in the margin, text at the draft column)" do
-    test "first line `❯ text`, wraps hang-aligned, assistant bare + margined" do
+  describe "2. the dialogue pair (chevrons in the outer contour, text at the content indent)" do
+    test "user `❯ text` and assistant `❮ text` at column 0, wraps hang-aligned" do
       {model, device} = new_model(mixed_turn_events())
       _model = drive_to_completion(model)
 
@@ -243,10 +245,15 @@ defmodule Raxol.Harness.SpeakerSeparationSurfaceTest do
 
       assert wrap_row =~ "crash"
 
-      # Assistant prose: bare (no glyph), plain 1-column margin.
+      # Assistant prose: the mirrored reply sigil at column 0, prose at
+      # the same content indent as the user's text.
       answer_row = Enum.find(history, &(&1 =~ "seal frontier"))
       assert answer_row != nil
-      assert String.starts_with?(answer_row, " ")
+
+      assert String.starts_with?(answer_row, "❮ The fold"),
+             "assistant row must be `❮ <prose>` from column 0, " <>
+               "got #{inspect(answer_row)}"
+
       refute String.contains?(answer_row, "❯")
       refute String.contains?(answer_row, "»")
     end
@@ -278,7 +285,7 @@ defmodule Raxol.Harness.SpeakerSeparationSurfaceTest do
   # -- 3. one sigil source: capability degradation --------------------------
 
   describe "3. ANSI16 / unicode: :none degradation" do
-    test "the echo falls back to `>` through the composer's own sigil decision" do
+    test "the pair degrades together: `>` for the echo, `<` for the reply" do
       caps = %Raxol.Terminal.Capabilities{unicode: :none}
       {model, device} = new_model(mixed_turn_events(), capabilities: caps)
       _model = drive_to_completion(model)
@@ -289,7 +296,18 @@ defmodule Raxol.Harness.SpeakerSeparationSurfaceTest do
              "unicode: :none must degrade the echo sigil to '>', " <>
                "got #{inspect(history)}"
 
+      assert Enum.any?(history, &String.starts_with?(&1, "< ")),
+             "unicode: :none must degrade the reply sigil to '<', " <>
+               "got #{inspect(history)}"
+
       refute Enum.any?(history, &String.contains?(&1, "❯"))
+      refute Enum.any?(history, &String.contains?(&1, "❮"))
+    end
+
+    test "all four sigils are width-honest: exactly one display column" do
+      for sigil <- ["❯", "❮", ">", "<"] do
+        assert Raxol.UI.TextMeasure.display_width(sigil) == 1
+      end
     end
   end
 
@@ -300,26 +318,38 @@ defmodule Raxol.Harness.SpeakerSeparationSurfaceTest do
       {model, device} = new_model(mixed_turn_events())
       _model = drive_to_completion(model)
 
-      # The user block seals within its own (current) turn: prominence
-      # 1.0, so the sigil carries bold ONLY -- the achromatic structure
+      # Both blocks seal within their own (current) turn: prominence
+      # 1.0, so each sigil carries bold ONLY -- the achromatic structure
       # channel, byte-identical to the composer's own sigil styling.
       assert raw(device) =~ "\e[1m❯\e[0m why does the settle step"
+      assert raw(device) =~ "\e[1m❮\e[0m The fold consulted"
     end
 
-    test "a turns-behind echo's chevron carries the block's resolved fade colour (single-fg rule)" do
+    test "the sigil never fades ahead of its block (single-fg + cadence-independent bytes)" do
       {model, device} = new_model(two_turn_events())
       _model = drive_to_completion(model)
 
-      # t1's user-only block seals while t2 is already the current turn
-      # (turns_behind 1 -> prominence 0.8): the chevron must fade WITH
-      # its block -- bold plus the resolved truecolor fg, never a bare
-      # anchor-bright bold sigil in front of demoted text.
-      assert raw(device) =~ ~r/\e\[1;38;2;\d+;\d+;\d+m❯\e\[0m first question/,
-             "the demoted echo's chevron must carry the block's own " <>
-               "prominence fade colour"
+      # t1's user-only block seals while t2 is already the current turn.
+      # Two laws pin the sigil BOLD-ONLY here, not faded:
+      #
+      #   1. single-fg: the sigil fronts a mounted expanded message body,
+      #      and that body carries no prominence fade today (BlockBody's
+      #      documented T5 scope cut) -- a sigil fading alone would split
+      #      one line's block into two salience levels;
+      #   2. live/fixture byte parity (the compaction guard's red line):
+      #      seal-time grade depends on reveal cadence (flush-at-bracket
+      #      seals at 1.0, hold-back-one at 0.8), so a grade-derived
+      #      sigil fg would make sealed history cadence-dependent.
+      #
+      # When the mount path threads prominence into message bodies, the
+      # sigil must take the SAME resolved fg in the same change -- this
+      # test is the tripwire that forces the two to move together.
+      assert raw(device) =~ "\e[1m❯\e[0m first question"
+      assert raw(device) =~ "\e[1m❮\e[0m The second answer."
 
-      refute raw(device) =~ "\e[1m❯\e[0m first question",
-             "a demoted echo must not keep the full-prominence bold-only sigil"
+      refute raw(device) =~ ~r/\e\[1;38;2;\d+;\d+;\d+m[❯❮]/,
+             "a dialogue sigil must never carry a fade fg its block's " <>
+               "body does not carry"
     end
   end
 end

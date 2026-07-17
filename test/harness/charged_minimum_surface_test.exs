@@ -229,7 +229,7 @@ defmodule Raxol.Harness.ChargedMinimumSurfaceTest do
   # -- 3. margins ----------------------------------------------------------
 
   describe "3. the 1-column margin (chevron exempt)" do
-    test "sealed history lines carry the left margin; blocks are separated by one blank row" do
+    test "sealed dialogue rows carry their outer-contour sigil; blocks are separated by one blank row" do
       events = turn_events(["first block body", "second block body"])
       {model, device} = new_model(events)
       _model = drive_to_completion(model)
@@ -240,15 +240,19 @@ defmodule Raxol.Harness.ChargedMinimumSurfaceTest do
       second = Enum.find_index(history, &String.contains?(&1, "second block body"))
       assert first != nil and second != nil
 
-      # Every non-blank sealed row is margined. (This fixture is
-      # assistant-only: the ONE margin-dweller, the user-echo chevron of
-      # an expanded user message, is pinned separately in
-      # speaker_separation_surface_test.exs -- no chevron ever fronts
-      # ASSISTANT or machinery history.)
+      # This fixture is assistant-message-only: under V's outer-contour
+      # amendment every expanded message row is fronted by its speaker's
+      # sigil at column 0 (`❮` here), content at the 2-cell indent. The
+      # full dialogue-pair geometry (user `❯`, hang indents, machinery
+      # margin) is pinned in speaker_separation_surface_test.exs; the
+      # machinery margin itself in unread_divider_surface_test.exs.
       for row <- history, row != "" do
-        assert String.starts_with?(row, " "),
-               "sealed history row missing its left margin: #{inspect(row)}"
+        assert String.starts_with?(row, "❮ ") or String.starts_with?(row, " "),
+               "sealed history row must open with its dialogue sigil or " <>
+                 "the left margin: #{inspect(row)}"
       end
+
+      assert String.starts_with?(Enum.at(history, first), "❮ first block body")
 
       # The very first sealed line opens WITHOUT a leading blank row...
       assert history |> Enum.take_while(&(&1 == "")) == [],

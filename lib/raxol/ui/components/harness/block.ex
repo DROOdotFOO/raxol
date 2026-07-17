@@ -500,18 +500,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp apply_fg(style, nil), do: style
   defp apply_fg(style, fg), do: Map.put(style, :fg, fg)
 
-  @doc """
-  The block's resolved prominence fade colour (`"#RRGGBB"`), or `nil`
-  when `context[:prominence]` is absent, `1.0`, or not a number -- the
-  neutral case every row helper leaves styles untouched for. This is the
-  ONE solver call every faded row of a block shares (see the moduledoc's
-  "Prominence" section). Public so `Raxol.Harness.Surface`'s user-echo
-  sigil can carry the SAME resolved colour as the block it prefixes
-  (single-fg rule: the chevron fades with its block, never staying
-  anchor-bright over demoted text).
-  """
-  @spec prominence_fg(t(), map()) :: String.t() | nil
-  def prominence_fg(block, context) do
+  defp prominence_fg(block, context) do
     case Map.get(context, :prominence, 1.0) do
       p when is_number(p) and p >= 1.0 ->
         nil
