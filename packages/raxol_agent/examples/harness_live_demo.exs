@@ -50,13 +50,24 @@
 # which mechanism is currently holding it, live from
 # InlineDriver.isig_report/1.
 #
-# Boot POST: before the first prompt, the demo seals one small
-# self-check block into history through the driver's normal seal path
-# (doctrine §4.5 ceremony-as-evidence / §8.1). Every line is a check the
-# demo actually performed this boot -- backend selected (with the real
-# resolved endpoint for live harnesses), streamer pid liveness, lane
-# subscription confirmed, adopted geometry, probe setting, break-handler
-# state, and (when enabled) the debug web URL and devtools-bridge pid.
+# Default boot (V's ruling): ONE ephemeral greeting -- "welcome back,
+# operator", dim, centered in the unclaimed span above the footer. It
+# is never sealed: the Surface erases it (targeted EL, same frame) the
+# instant the first sealed content lands, so print-once history never
+# contains it.
+#
+# Boot POST (--debug only): pass --debug to seal the self-check
+# identity card into history before the first prompt, through the
+# driver's normal seal path (doctrine §4.5 ceremony-as-evidence / §8.1).
+# Every line is a check the demo actually performed this boot --
+# backend selected (with the real resolved endpoint for live
+# harnesses), streamer pid liveness, lane subscription confirmed,
+# adopted geometry, cursor-probe outcome, the ctrl-c/isig diagnosis
+# (InlineDriver.isig_report/1), vm break state, and (when enabled) the
+# debug web URL and devtools-bridge pid. The checks RUN on every boot
+# (the streamer-death abort included); --debug only decides whether the
+# card seals -- and sealing it is a first seal, so the greeting flashes
+# and yields to the card.
 #
 # Backend selection (mirrors examples/agents/zero_system.exs + CLAUDE.md):
 #
@@ -179,7 +190,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
   def run(argv) do
     ensure_agent_package!()
-    one_shot = parse_args(argv)
+    {one_shot, debug?} = parse_args(argv)
 
     # Explicit app starts instead of `:raxol` boot (see `--no-start` note):
     # telemetry for Contract.pump's DoneGate signals; req only when a
@@ -291,6 +302,12 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         # it (immediately, on a guest boot from a bottom-row prompt).
         pin: :adaptive,
         boot: boot,
+        # The boot greeting ("welcome back, operator", centered in the
+        # unclaimed span, dim) -- ephemeral: the Surface erases it the
+        # instant the first sealed content lands. Under --debug the POST
+        # seal IS that first content, so the greeting flashes and yields
+        # to the self-check card.
+        greeting: true,
         notify: self()
       )
 
@@ -341,7 +358,12 @@ defmodule Raxol.Examples.HarnessLiveDemo do
       # Sealed only after wait_for_subscription/2 returned :ok (the lane
       # line is backed by that return) and after the devtools bridge
       # (when any) started, so its liveness line is a real pid check.
-      seal_boot_post(driver, %{
+      # V's ruling: the card SEALS only under --debug -- the default
+      # boot is the greeting alone. The checks themselves (streamer
+      # liveness abort included) run on EVERY boot; --debug only decides
+      # whether their card lands in history. Sealing the card is a first
+      # seal, so under --debug the greeting flashes and yields to it.
+      seal_boot_post(driver, debug?, %{
         label: label,
         backend_opts_fun: backend_opts_fun,
         session_id: session_id,
@@ -582,7 +604,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
   # art, no decoration. A dead streamer is the one fatal case: without it
   # no event can ever arrive, so the demo aborts on stderr instead of
   # sealing a lie.
-  defp seal_boot_post(driver, ctx) do
+  defp seal_boot_post(driver, debug?, ctx) do
     unless Process.alive?(ctx.streamer) do
       IO.puts(:stderr, "session streamer died during boot; exiting")
       System.halt(1)
@@ -605,10 +627,12 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         "  " <> vm_break_post_line()
       ] ++ debug_post_lines(ctx.debug, ctx.devtools)
 
-    send(
-      driver,
-      {:surface_command, %{type: :seal_lines, payload: %{lines: lines}}}
-    )
+    if debug? do
+      send(
+        driver,
+        {:surface_command, %{type: :seal_lines, payload: %{lines: lines}}}
+      )
+    end
 
     :ok
   end
@@ -871,9 +895,9 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
   defp parse_args(argv) do
     {opts, _positional, _invalid} =
-      OptionParser.parse(argv, strict: [prompt: :string])
+      OptionParser.parse(argv, strict: [prompt: :string, debug: :boolean])
 
-    Keyword.get(opts, :prompt)
+    {Keyword.get(opts, :prompt), Keyword.get(opts, :debug, false)}
   end
 
   defp wait_for_subscription(session_id, budget_ms) do

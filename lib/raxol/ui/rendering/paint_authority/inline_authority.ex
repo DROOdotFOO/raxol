@@ -603,6 +603,94 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     with_cursor(t, :history, fn inner -> append_sealed(inner, sanitized) end)
   end
 
+  # --- Transient region elements (the boot greeting) ----------------------
+
+  @doc """
+  The UNCLAIMED history span -- the rows between the append point
+  (`next_row`) and the history bottom that hold no sealed content and no
+  shell content (guest boot never claims rows ABOVE the probed cursor;
+  everything from `next_row` down to the split is this surface's own
+  blank space). `{:ok, {from, to}}` inclusive, or `:none` when nothing
+  is unclaimed (e.g. a floating footer sitting flush on the planned
+  split). This is the placement referent for transient elements like
+  the boot greeting: they may only ever exist where neither print-once
+  history nor the user's shell has any bytes.
+  """
+  @spec unclaimed_span(t()) :: {:ok, {pos_integer(), pos_integer()}} | :none
+  def unclaimed_span(%__MODULE__{pin_state: :floating, region: region} = t) do
+    # While floating, the footer paints AT next_row -- the unclaimed
+    # space starts below it.
+    from = t.next_row + footer_row_count(t)
+    to = ScrollRegionManager.history_bottom(region)
+    if from <= to, do: {:ok, {from, to}}, else: :none
+  end
+
+  def unclaimed_span(%__MODULE__{region: region} = t) do
+    to = ScrollRegionManager.history_bottom(region)
+    if t.next_row <= to, do: {:ok, {t.next_row, to}}, else: :none
+  end
+
+  @doc """
+  Paints one TRANSIENT line at an absolute `{row, col}` inside the
+  unclaimed span (see `unclaimed_span/1` -- the caller owns the
+  placement decision; this function only refuses off-screen rows).
+  Cursor save/restore bracketed, content routed through
+  `ContentGuard.sanitize_line/1` like every other emitted line. NO
+  bookkeeping changes: a transient element is not history (`next_row`
+  does not move), not footer (no repaint diff state), and the caller is
+  responsible for erasing it (`erase_transient/2`) before sealed
+  content can ever reach its rows -- the boot greeting's first-seal
+  erase law.
+  """
+  @spec paint_transient(t(), pos_integer(), pos_integer(), iodata()) :: t()
+  def paint_transient(%__MODULE__{region: region} = t, row, col, content)
+      when is_integer(row) and row >= 1 and is_integer(col) and col >= 1 do
+    if row <= ScrollRegionManager.rows(region) do
+      sanitized = ContentGuard.sanitize_line(IO.iodata_to_binary(content))
+
+      IO.write(region.device, [
+        Dialect.cursor_save(),
+        Dialect.cursor_position(row, col),
+        sanitized,
+        Dialect.cursor_restore()
+      ])
+    end
+
+    t
+  end
+
+  @doc """
+  Erases transient rows (targeted EL per row, never `\\e[2J`), cursor
+  save/restore bracketed. The boot greeting's exit: called by the
+  assembly layer immediately BEFORE the first seal's bytes, in the same
+  frame, so the greeting vanishes exactly when real content arrives and
+  never coexists with (or enters) sealed history.
+  """
+  @spec erase_transient(t(), [pos_integer()]) :: t()
+  def erase_transient(%__MODULE__{region: region} = t, rows)
+      when is_list(rows) do
+    screen_rows = ScrollRegionManager.rows(region)
+
+    iodata =
+      rows
+      |> Enum.filter(&(is_integer(&1) and &1 >= 1 and &1 <= screen_rows))
+      |> Enum.map(&[Dialect.cursor_position(&1), "\e[K"])
+
+    case iodata do
+      [] ->
+        t
+
+      _some ->
+        IO.write(region.device, [
+          Dialect.cursor_save(),
+          iodata,
+          Dialect.cursor_restore()
+        ])
+
+        t
+    end
+  end
+
   # Shared by `seal/2` and `try_seal/2`: enforce the `\r\n`-terminated
   # caller contract (raises `ArgumentError` -- a caller-contract bug, never
   # masked as a device failure) and run the content through

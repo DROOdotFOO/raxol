@@ -637,6 +637,7 @@ defmodule Raxol.Harness.Surface do
   alias Raxol.Harness.StatusStrip
   alias Raxol.Harness.Surface.ViewText
   alias Raxol.Harness.UnreadDivider
+  alias Raxol.UI.TextMeasure
   alias Raxol.UI.Theming.Palette
 
   alias Raxol.UI.Components.Harness.{Block, BlockBody, Composer}
@@ -721,7 +722,8 @@ defmodule Raxol.Harness.Surface do
           debug_highlight: debug_highlight_group() | nil,
           debug_highlight_bg: ViewText.bg(),
           sigil: String.t(),
-          sealed_any?: boolean()
+          sealed_any?: boolean(),
+          greeting_rows: [pos_integer()] | nil
         }
 
   @typedoc """
@@ -925,12 +927,74 @@ defmodule Raxol.Harness.Surface do
       # Deliberately NOT reset by `switch_session/2`: sealed history
       # stays on screen across a switch, so the next block still needs
       # its separating blank.
-      sealed_any?: false
+      sealed_any?: false,
+      # The boot greeting's on-screen rows (nil = none painted / already
+      # erased) -- see `maybe_paint_greeting/2` and `clear_greeting/1`.
+      greeting_rows: nil
     }
 
     model
     |> apply_mode_notice(mode_notice_text(mode_reason, env))
     |> paint_footer()
+    |> maybe_paint_greeting(Keyword.get(opts, :greeting, false))
+  end
+
+  # -- the boot greeting (V's ruling: charm, not evidence) -----------------
+  #
+  # One dim, centered `welcome back, operator` line in the UNCLAIMED
+  # history span -- an ephemeral region element: painted after the
+  # construction frame, erased by `clear_greeting/1` immediately before
+  # the FIRST seal's bytes (same frame), and therefore never part of
+  # sealed history (print-once untouched -- it was never sealed at all).
+  # Doctrine check: a greeting claims nothing, so the unearned-ceremony
+  # falsifier does not fire; it stays one line, no art. Opt-in
+  # (`greeting: true`, the demos) so byte-golden embedders are
+  # untouched; flat mode has no positioning and never paints it.
+  @greeting_text "welcome back, operator"
+
+  defp maybe_paint_greeting(model, false), do: model
+  defp maybe_paint_greeting(%{mode: :flat} = model, _on), do: model
+
+  defp maybe_paint_greeting(model, true) do
+    case InlineAuthority.unclaimed_span(model.authority) do
+      :none ->
+        model
+
+      {:ok, {from, to}} ->
+        row = from + div(to - from, 2)
+
+        col =
+          max(
+            div(model.width - TextMeasure.display_width(@greeting_text), 2),
+            0
+          ) + 1
+
+        [styled] =
+          ViewText.lines(
+            %{type: :text, content: @greeting_text, style: %{dim: true}},
+            content_width(model),
+            :styled
+          )
+
+        authority =
+          InlineAuthority.paint_transient(model.authority, row, col, styled)
+
+        %{model | authority: authority, greeting_rows: [row]}
+    end
+  end
+
+  # The greeting's exit (the erase half of the ephemeral contract):
+  # targeted EL on its rows, called at the head of every seal path so
+  # the erase bytes always PRECEDE the first sealed content's bytes in
+  # the same frame. Idempotent -- nil rows is a no-op.
+  defp clear_greeting(%{greeting_rows: nil} = model), do: model
+  defp clear_greeting(%{mode: :flat} = model), do: %{model | greeting_rows: nil}
+
+  defp clear_greeting(model) do
+    authority =
+      InlineAuthority.erase_transient(model.authority, model.greeting_rows)
+
+    %{model | authority: authority, greeting_rows: nil}
   end
 
   # `:mode` (test seam) bypasses `ModeSelect.select_with_reason/3` entirely
@@ -983,6 +1047,7 @@ defmodule Raxol.Harness.Surface do
   # `:no_footer` case below) -- one source of truth for "how flat mode
   # writes an honest one-line notice", never a re-derived copy.
   defp seal_flat_notice(model, text) do
+    model = clear_greeting(model)
     lines = marker_lines(model, text, :plain)
     iodata = Enum.map(lines, &(&1 <> "\n"))
 
@@ -1473,6 +1538,7 @@ defmodule Raxol.Harness.Surface do
   """
   @spec seal_marker(t(), String.t()) :: t()
   def seal_marker(%{mode: :flat} = model, text) do
+    model = clear_greeting(model)
     lines = marker_lines(model, text, :plain)
     iodata = Enum.map(lines, &(&1 <> "\n"))
 
@@ -1484,6 +1550,7 @@ defmodule Raxol.Harness.Surface do
   end
 
   def seal_marker(model, text) do
+    model = clear_greeting(model)
     lines = marker_lines(model, text, :styled)
     iodata = Enum.map(lines, &[&1, "\r\n"])
 
@@ -1765,6 +1832,7 @@ defmodule Raxol.Harness.Surface do
   # no positioning to confirm; a failed pipe write raising out of the frame
   # is the honest flat behavior, so the flat emit stays infallible-shaped.
   defp seal_block(%{mode: :flat} = model, block) do
+    model = clear_greeting(model)
     lines = block |> render_block_lines(model, :plain) |> margin_lines()
     iodata = Enum.map(block_separator(model) ++ lines, &(&1 <> "\n"))
     authority = FlatAuthority.seal(model.authority, iodata)
@@ -1787,6 +1855,9 @@ defmodule Raxol.Harness.Surface do
   # Erasing is the authority's business, not content's: sealed lines land
   # on rows the DECSTBM scroll already blanked, so no EL is needed.
   defp seal_block(model, block) do
+    # The greeting's erase bytes must precede this seal's bytes in the
+    # SAME frame (the ephemeral-element law) -- clear first.
+    model = clear_greeting(model)
     lines = block |> render_block_lines(model, :styled) |> margin_lines()
 
     iodata = Enum.map(block_separator(model) ++ lines, &[&1, "\r\n"])
@@ -3803,6 +3874,11 @@ defmodule Raxol.Harness.Surface do
   end
 
   defp adopt_resize(model, width, rows) do
+    # A resize invalidates the greeting's absolute placement -- erase it
+    # at the OLD geometry (its rows are still where they were painted)
+    # rather than leaving a mispositioned line behind.
+    model = clear_greeting(model)
+
     model =
       if force_close_overlay?(model, rows) do
         close_overlay(model)

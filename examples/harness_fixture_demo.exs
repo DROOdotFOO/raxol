@@ -111,6 +111,10 @@ defmodule Raxol.Examples.HarnessFixtureDemo do
         # -- it pins itself at the bottom once content reaches it.
         pin: :adaptive,
         boot: boot,
+        # The boot greeting ("welcome back, operator"): ephemeral,
+        # erased by the Surface the instant the first sealed content
+        # lands -- shared with the live demo via the same Surface seam.
+        greeting: true,
         # Ctrl-E hands the composer draft to $VISUAL/$EDITOR (real tty
         # runs only -- a piped/CI run has no terminal to hand over, and
         # Surface renders its honest stub notice instead).
