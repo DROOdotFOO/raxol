@@ -661,11 +661,50 @@ defmodule Raxol.UI.Components.Harness.Block do
         :expanded -> [header | content_lines_view(block, width, context, fg)]
       end
 
-    Components.column(
-      gap: 0,
-      children: body_children ++ outcome_children ++ completion_children
-    )
+    column =
+      Components.column(
+        gap: 0,
+        children: body_children ++ outcome_children ++ completion_children
+      )
+
+    stamp_component(block, column)
   end
+
+  # An approval block's render root is stamped as an `:approval_prompt`
+  # component node -- it carries the `id` + `attrs` the MCP TreeWalker and
+  # the input Bubbler need to derive answer tools and route answer events
+  # at THIS block, while keeping the column's `children`/`gap`/`style`
+  # untouched so every children-reading consumer (ViewText flattening,
+  # the layout engine, the render pins) sees the exact tree it did before.
+  # The LayoutEngine rewrites `:approval_prompt` -> `:column` for
+  # positioning (a type alias, exactly like the chart discovery types).
+  # `answer_mode: :direct` marks the transcript block form (the harness
+  # answer vocabulary); `seal` gates answerability (a sealed question
+  # derives no answer tools). Every other kind renders as a plain column.
+  defp stamp_component(%__MODULE__{kind: :approval} = block, column) do
+    content = block.content || %{}
+
+    column
+    |> Map.put(:type, :approval_prompt)
+    |> Map.put(:id, approval_node_id(block))
+    |> Map.put(:attrs, %{
+      seal: block.seal,
+      answer_mode: :direct,
+      request_id: Map.get(content, :request_id),
+      options: Map.get(content, :options, [])
+    })
+  end
+
+  defp stamp_component(_block, view), do: view
+
+  # The node id keys the derived tools (`<id>.answer_allow`) and the event
+  # route -- the request_id (the referent) when present, a stable fallback
+  # otherwise. Never raises on a non-string request_id.
+  defp approval_node_id(%__MODULE__{content: %{request_id: rid}})
+       when is_binary(rid) and rid != "",
+       do: "approval-#{rid}"
+
+  defp approval_node_id(_block), do: "approval-prompt"
 
   defp render_fallback(block) do
     Components.column(

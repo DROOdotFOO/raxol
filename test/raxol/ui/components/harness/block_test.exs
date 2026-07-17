@@ -14,6 +14,11 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
   defp flat_texts(%{type: :column, children: children}),
     do: Enum.flat_map(children, &flat_texts/1)
 
+  # An approval block's render root is stamped :approval_prompt (U1-c
+  # re-hosting) but keeps its column children -- walk them the same way.
+  defp flat_texts(%{type: :approval_prompt, children: children}),
+    do: Enum.flat_map(children, &flat_texts/1)
+
   defp flat_texts(_), do: []
 
   # Structural gap assert: flat_texts can't see the unset-gap footgun

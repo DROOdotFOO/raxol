@@ -281,4 +281,269 @@ defmodule Raxol.UI.Components.Harness.ApprovalPromptTest do
       end
     end
   end
+
+  # -- The block answer vocabulary (U1-c re-hosting) ------------------------
+  #
+  # The transcript approval BLOCK speaks the harness answer vocabulary
+  # (`Raxol.UI.Harness.Keymap`'s Track-D binds): `y`/`n` alias the first
+  # allow/deny option, `1`-`9` pick the Nth option by position, and every
+  # key emits the raw ANSWER HINT as a message out -- the component is
+  # CONTROLLED (its returned state is discarded by the Bubbler doctrine),
+  # so the decision must ride the command channel and be applied by the
+  # owner's update/2, which resolves the hint against the block's real
+  # options (refusing honestly when it cannot). The standalone modal keeps
+  # its select-then-confirm vocabulary untouched (`answer_mode: :select`,
+  # the default -- every test above this line).
+
+  @acp_options [
+    %{option_id: "allow-once", name: "Allow once", kind: :allow_once},
+    %{option_id: "allow-always", name: "Allow always", kind: :allow_always},
+    %{option_id: "reject", name: "Reject", kind: :reject_once}
+  ]
+
+  defp direct_state(opts \\ []) do
+    {:ok, state} =
+      ApprovalPrompt.init(
+        Keyword.merge(
+          [
+            id: "approval-req-1",
+            answer_mode: :direct,
+            options: @acp_options
+          ],
+          opts
+        )
+      )
+
+    state
+  end
+
+  defp key_event(char), do: %{type: :key, data: %{key: :char, char: char}}
+
+  describe "handle_event/3 — the block answer vocabulary (answer_mode: :direct)" do
+    test "y emits the :allow hint as a message out, state untouched" do
+      state = direct_state()
+
+      assert {^state, [{:approval_answer, %{answer: :allow}}]} =
+               ApprovalPrompt.handle_event(key_event("y"), state, %{})
+    end
+
+    test "n emits the :deny hint" do
+      state = direct_state()
+
+      assert {^state, [{:approval_answer, %{answer: :deny}}]} =
+               ApprovalPrompt.handle_event(key_event("n"), state, %{})
+    end
+
+    test "a digit emits the 0-based {:option, i} hint (Keymap parity)" do
+      state = direct_state()
+
+      assert {^state, [{:approval_answer, %{answer: {:option, 2}}}]} =
+               ApprovalPrompt.handle_event(key_event("3"), state, %{})
+    end
+
+    test "a digit past the option list still emits — refusal is the model's job" do
+      # Keymap parity: the binds emit the raw hint unconditionally; the
+      # owner (Surface / demo update) resolves it and refuses honestly.
+      state = direct_state()
+
+      assert {^state, [{:approval_answer, %{answer: {:option, 8}}}]} =
+               ApprovalPrompt.handle_event(key_event("9"), state, %{})
+    end
+
+    test "Enter and arrows are no-ops — the block form has no selection cursor" do
+      state = direct_state()
+
+      for key <- [%{key: :enter}, %{key: :up}, %{key: :down}] do
+        assert {^state, []} =
+                 ApprovalPrompt.handle_event(
+                   %{type: :key, data: key},
+                   state,
+                   %{}
+                 )
+      end
+    end
+
+    test "accepts a wrapped %Event{} struct the same as a plain map" do
+      state = direct_state()
+
+      event = %Event{type: :key, data: %{key: :char, char: "y"}}
+
+      assert {^state, [{:approval_answer, %{answer: :allow}}]} =
+               ApprovalPrompt.handle_event(event, state, %{})
+    end
+
+    test "the default :select mode still jumps on digits and emits nothing" do
+      {:ok, state} = ApprovalPrompt.init(id: :modal)
+
+      assert {%{selected_index: 2}, []} =
+               ApprovalPrompt.handle_event(key_event("3"), state, %{})
+    end
+  end
+
+  # -- MCP derivation: answer actions from the LIVE block node --------------
+  #
+  # The headless-approval story: an MCP client answers a live approval
+  # programmatically. Tools derive from the node `Block.render/2` stamps
+  # (`type: :approval_prompt`, attrs carrying seal/options), offer ONLY
+  # what the request's real options offer (affordance honesty), and each
+  # invocation dispatches the same answer key a human would press.
+
+  defp live_node(options \\ @acp_options) do
+    %{
+      type: :approval_prompt,
+      id: "approval-req-1",
+      attrs: %{
+        seal: :live,
+        answer_mode: :direct,
+        options: options,
+        request_id: "req-1"
+      },
+      gap: 0,
+      children: []
+    }
+  end
+
+  defp sealed_node do
+    put_in(live_node().attrs.seal, :sealed)
+  end
+
+  describe "mcp_tools/1 — answer actions derive from the live approval node" do
+    test "a live node derives answer_allow, answer_deny, and answer_option" do
+      names = live_node() |> ApprovalPrompt.mcp_tools() |> Enum.map(& &1.name)
+
+      assert "answer_allow" in names
+      assert "answer_deny" in names
+      assert "answer_option" in names
+    end
+
+    test "answer_option's schema covers exactly the options present" do
+      tool =
+        live_node()
+        |> ApprovalPrompt.mcp_tools()
+        |> Enum.find(&(&1.name == "answer_option"))
+
+      option_schema = tool.inputSchema.properties.option
+      assert option_schema.minimum == 1
+      assert option_schema.maximum == 3
+      # referent-honest: the description names the real options
+      assert tool.description =~ "Allow once"
+      assert tool.description =~ "Reject"
+    end
+
+    test "no reject-class option -> no answer_deny (affordance honesty)" do
+      allow_only = [
+        %{option_id: "allow-once", name: "Allow once", kind: :allow_once}
+      ]
+
+      names =
+        live_node(allow_only)
+        |> ApprovalPrompt.mcp_tools()
+        |> Enum.map(& &1.name)
+
+      assert "answer_allow" in names
+      refute "answer_deny" in names
+    end
+
+    test "string-keyed wire options derive the same tools" do
+      wire = [
+        %{"option_id" => "ok", "name" => "Allow", "kind" => "allow_once"},
+        %{"option_id" => "no", "name" => "Deny", "kind" => "reject_once"}
+      ]
+
+      names =
+        live_node(wire) |> ApprovalPrompt.mcp_tools() |> Enum.map(& &1.name)
+
+      assert "answer_allow" in names
+      assert "answer_deny" in names
+    end
+
+    test "a SEALED node derives no answer tools — the question is answered" do
+      assert ApprovalPrompt.mcp_tools(sealed_node()) == []
+    end
+
+    test "a select-mode (modal) node derives no answer tools" do
+      node = put_in(live_node().attrs.answer_mode, :select)
+      assert ApprovalPrompt.mcp_tools(node) == []
+    end
+
+    test "a live node with no options derives no answer tools" do
+      assert ApprovalPrompt.mcp_tools(live_node([])) == []
+    end
+  end
+
+  describe "handle_tool_call/3 — an answer is a programmatic answer key" do
+    defp tool_context(node) do
+      %{widget_id: node.id, widget_state: node, dispatcher_pid: nil}
+    end
+
+    test "answer_allow presses y" do
+      assert {:ok, text, [event]} =
+               ApprovalPrompt.handle_tool_call(
+                 "answer_allow",
+                 %{},
+                 tool_context(live_node())
+               )
+
+      assert text =~ "Allow once"
+      assert %Event{type: :key, data: %{key: :char, char: "y"}} = event
+    end
+
+    test "answer_deny presses n" do
+      assert {:ok, _text, [event]} =
+               ApprovalPrompt.handle_tool_call(
+                 "answer_deny",
+                 %{},
+                 tool_context(live_node())
+               )
+
+      assert %Event{type: :key, data: %{key: :char, char: "n"}} = event
+    end
+
+    test "answer_option presses the 1-based digit" do
+      assert {:ok, text, [event]} =
+               ApprovalPrompt.handle_tool_call(
+                 "answer_option",
+                 %{"option" => 2},
+                 tool_context(live_node())
+               )
+
+      assert text =~ "Allow always"
+      assert %Event{type: :key, data: %{key: :char, char: "2"}} = event
+    end
+
+    test "answer_option past the list refuses with the real range, no events" do
+      assert {:error, message} =
+               ApprovalPrompt.handle_tool_call(
+                 "answer_option",
+                 %{"option" => 7},
+                 tool_context(live_node())
+               )
+
+      assert message =~ "1-3"
+    end
+
+    test "answer_deny with no reject-class option refuses honestly" do
+      allow_only = [
+        %{option_id: "allow-once", name: "Allow once", kind: :allow_once}
+      ]
+
+      assert {:error, _message} =
+               ApprovalPrompt.handle_tool_call(
+                 "answer_deny",
+                 %{},
+                 tool_context(live_node(allow_only))
+               )
+    end
+
+    test "answering a SEALED approval refuses — never a phantom answer" do
+      assert {:error, message} =
+               ApprovalPrompt.handle_tool_call(
+                 "answer_allow",
+                 %{},
+                 tool_context(sealed_node())
+               )
+
+      assert message =~ "answered"
+    end
+  end
 end

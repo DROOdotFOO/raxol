@@ -573,6 +573,105 @@ defmodule Raxol.Harness.LiveApprovalTest do
     end
   end
 
+  # -- 2b. the approval render root is a re-hosted Component node (U1-c) ----
+  #
+  # The TEA migration re-hosts the approval block: `Block.render/2`'s
+  # `:approval` root carries `type: :approval_prompt` + `id` + `attrs`
+  # (the TreeWalker requirements), so the real pipeline can derive the
+  # answer tools from the LIVE block and route events at it. The node
+  # keeps its column shape (`gap`/`children` unchanged, laid out via the
+  # engine's type-alias rewrite), so every children-reading consumer --
+  # ViewText flattening, the Pierre `:row` filter above -- sees the exact
+  # tree it always saw.
+
+  describe "the approval render root is stamped for the component tree" do
+    test "a live approval's root carries type/id/attrs from the referent" do
+      block = only_approval_block([turn_started(), approval_requested()])
+      root = Block.render(block, %{width: 80})
+
+      assert root.type == :approval_prompt
+      assert root.id == "approval-req-1"
+      assert root.attrs.seal == :live
+      assert root.attrs.answer_mode == :direct
+      assert root.attrs.request_id == "req-1"
+      assert root.attrs.options == @options
+      # the column shape survives: direct children, explicit gap
+      assert is_list(root.children)
+      assert root.gap == 0
+    end
+
+    test "a sealed approval keeps the id and reports seal: :sealed" do
+      events = [
+        turn_started(),
+        approval_requested(),
+        approval_decided(11, "req-1", :allow, "allow-once")
+      ]
+
+      root = only_approval_block(events) |> Block.render(%{width: 80})
+
+      assert root.type == :approval_prompt
+      assert root.id == "approval-req-1"
+      assert root.attrs.seal == :sealed
+    end
+
+    test "a non-approval block's root stays a plain column" do
+      events = [turn_started()] ++ message(20, "i1", "hello")
+      blocks = Projection.project(events).blocks
+      block = Enum.find(blocks, &(&1.kind == :message))
+
+      root = Block.render(block, %{width: 80})
+      assert root.type == :column
+      refute Map.has_key?(root, :attrs)
+    end
+  end
+
+  # -- 2c. needs-input prominence: the live question resists demotion -------
+  #
+  # A LIVE approval auto-engages the needs-input starvation floor
+  # (`block.ex` `needs_input?/2`), so a demotion sweep cannot fade the
+  # pending question as far as it fades answered history. Falsifier: under
+  # the SAME sub-1.0 prominence, the live referent's colour must differ
+  # from the sealed one's (the floor holds it brighter).
+
+  describe "a live approval holds the needs-input prominence floor" do
+    defp tool_line_fg(block) do
+      block
+      |> Block.render(%{width: 60, prominence: 0.3})
+      |> collect_fg()
+      |> Enum.find_value(fn {content, fg} ->
+        if String.contains?(content, "tool: bash"), do: fg
+      end)
+    end
+
+    defp collect_fg(%{type: :text, content: content, style: style}),
+      do: [{content, Map.get(style, :fg)}]
+
+    defp collect_fg(%{children: children}) when is_list(children),
+      do: Enum.flat_map(children, &collect_fg/1)
+
+    defp collect_fg(_node), do: []
+
+    test "the live referent stays brighter than the sealed one under demotion" do
+      live = only_approval_block([turn_started(), approval_requested()])
+
+      sealed =
+        only_approval_block([
+          turn_started(),
+          approval_requested(),
+          approval_decided(11, "req-1", :allow, "allow-once")
+        ])
+
+      live_fg = tool_line_fg(live)
+      sealed_fg = tool_line_fg(sealed)
+
+      assert is_binary(live_fg)
+      assert is_binary(sealed_fg)
+
+      refute live_fg == sealed_fg,
+             "the needs-input floor must keep the live question brighter than sealed history"
+    end
+  end
+
   # -- 4d. arg ordering: the path (referent) leads (gap 3) ------------------
 
   describe "the tool_call header leads with the path argument" do

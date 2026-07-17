@@ -501,6 +501,21 @@ defmodule Raxol.Playground.Catalog do
       """
     },
     %{
+      name: "Harness Approval Block",
+      module: Demos.HarnessApprovalBlockDemo,
+      category: :harness,
+      description:
+        "Agent-harness approval BLOCK (transcript form): live referent + Pierre proposed diff + answer affordances; y/n/digits seal it to a receipt",
+      complexity: :intermediate,
+      tags: ["harness", "approval", "display", "agent", "transcript", "diff"],
+      code_snippet: """
+      # a LIVE approval block renders the referent + answer affordances;
+      # y/n/1-9 route through the block's handle_event (answer_mode: :direct)
+      # and the model transitions it to a sealed decision receipt
+      Block.render(%Block{kind: :approval, seal: :live, content: content}, %{width: 72})
+      """
+    },
+    %{
       name: "Harness Tool Block",
       module: Demos.HarnessToolBlockDemo,
       category: :harness,

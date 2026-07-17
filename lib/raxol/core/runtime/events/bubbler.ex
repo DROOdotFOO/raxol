@@ -259,7 +259,8 @@ defmodule Raxol.Core.Runtime.Events.Bubbler do
     menu: Raxol.UI.Components.Input.Menu,
     tabs: Raxol.UI.Components.Input.Tabs,
     tree: Raxol.UI.Components.Display.Tree,
-    viewport: Raxol.UI.Components.Display.Viewport
+    viewport: Raxol.UI.Components.Display.Viewport,
+    approval_prompt: Raxol.UI.Components.Harness.ApprovalPrompt
   }
 
   defp component_module(%{type: type}) do

@@ -59,7 +59,8 @@ defmodule Raxol.MCP.TreeWalker do
               Raxol.UI.Components.Table,
               Raxol.UI.Charts.BarChart,
               Raxol.UI.Charts.LineChart,
-              Raxol.UI.Charts.ScatterChart
+              Raxol.UI.Charts.ScatterChart,
+              Raxol.UI.Components.Harness.ApprovalPrompt
             ]}
 
   @default_type_map %{
@@ -77,7 +78,8 @@ defmodule Raxol.MCP.TreeWalker do
     table: Raxol.UI.Components.Table,
     bar_chart: Raxol.UI.Charts.BarChart,
     line_chart: Raxol.UI.Charts.LineChart,
-    scatter_chart: Raxol.UI.Charts.ScatterChart
+    scatter_chart: Raxol.UI.Charts.ScatterChart,
+    approval_prompt: Raxol.UI.Components.Harness.ApprovalPrompt
   }
 
   @type context :: %{
@@ -96,7 +98,9 @@ defmodule Raxol.MCP.TreeWalker do
     * `:dispatcher_pid` - pid of the session's Dispatcher (for message dispatch)
     * `:type_map` - optional override for widget type -> module mapping
   """
-  @spec derive_tools(map() | [map()], context()) :: [Raxol.MCP.Registry.tool_def()]
+  @spec derive_tools(map() | [map()], context()) :: [
+          Raxol.MCP.Registry.tool_def()
+        ]
   def derive_tools(tree, context) do
     type_map = Map.get(context, :type_map, @default_type_map)
     do_walk(tree, context, type_map, [])
@@ -194,7 +198,8 @@ defmodule Raxol.MCP.TreeWalker do
     }
   end
 
-  defp dispatch_messages(messages, dispatcher_pid) when is_pid(dispatcher_pid) do
+  defp dispatch_messages(messages, dispatcher_pid)
+       when is_pid(dispatcher_pid) do
     for msg <- messages, msg != nil do
       GenServer.cast(dispatcher_pid, {:dispatch, msg})
     end

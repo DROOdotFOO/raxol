@@ -484,6 +484,13 @@ defmodule Raxol.UI.Layout.Engine do
     process_element(%{element | type: :box}, space, acc)
   end
 
+  # The harness approval block's render root is stamped :approval_prompt for
+  # MCP tool derivation + event routing; layout-wise it IS the column it was
+  # built as (a type alias, like the chart discovery types above).
+  def process_element(%{type: :approval_prompt} = element, space, acc) do
+    process_element(%{element | type: :column}, space, acc)
+  end
+
   # Process button elements in new View DSL format (no :attrs key)
   def process_element(%{type: :button, text: text} = button, space, acc)
       when is_binary(text) do
@@ -775,6 +782,17 @@ defmodule Raxol.UI.Layout.Engine do
   """
   @spec measure_element(element() | any(), map()) :: measurement()
   def measure_element(element, available_space \\ %{})
+
+  # The harness approval block's render root is stamped :approval_prompt for
+  # MCP discovery + event routing; it measures as the column it is. This
+  # MUST precede the generic `%{type:, attrs:}` clause below -- the stamped
+  # node carries an :attrs map (for the TreeWalker), which would otherwise
+  # route it to measure_element_by_type -> handle_unknown -> {0, 0} and
+  # collapse the block's height (chart aliases dodge this only because
+  # their nodes carry no :attrs). Mirror of the process-side rewrite.
+  def measure_element(%{type: :approval_prompt} = element, available_space) do
+    measure_element(%{element | type: :column}, available_space)
+  end
 
   # Handles valid elements (maps with :type and :attrs)
   def measure_element(%{type: type, attrs: attrs} = element, available_space)
