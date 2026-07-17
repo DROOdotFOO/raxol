@@ -133,18 +133,22 @@ defmodule Raxol.AgentClientProtocol.Connection do
   CLIENT the consolidation/reordering point:
 
     * `session/update` deliveries carry the notification frame's `rx_seq` as
-      the 4th element of `{:acp_session_update, session_id, update, rx_seq}`
-      (threaded through `Ctx.rx_seq` → the generated `session_update/2` →
-      `Client.broadcast_update/4`).
+      the 4th element of `{:acp_session_update, session_id, update, rx_seq,
+      update_seq}` (threaded through `Ctx.rx_seq` → the generated
+      `session_update/2` → `Client.broadcast_update/5`). The 5th element,
+      `update_seq`, is the agent's PER-SESSION update ordinal read from
+      `_meta["raxol.io"]["update_seq"]` (or `nil` when unstamped) — the
+      reorder key the consumer uses for LIVE incremental in-order release
+      (`rx_seq` remains the per-connection frame stamp / tiebreaker).
     * a `session/prompt` response additionally sends the owner an
       `{:acp_result_seq, tag, rx_seq}` companion (the response frame's
-      `rx_seq`) immediately before `{:acp_result, tag, outcome}`, so the
-      consumer knows the turn boundary and can drain every lower-`rx_seq`
-      update before completing.
+      `rx_seq`) immediately before `{:acp_result, tag, outcome}` — the
+      turn-boundary signal that closes the consumer's settle drain.
 
-  See `Client.prompt/3`/`prompt_stream/4` for the reorder buffer that
-  restores wire order from these stamps and guarantees no same-turn update
-  is dropped.
+  See `Client.prompt/3`/`prompt_stream/4` for the per-session reorder engine
+  that releases each update the instant it is contiguous and guarantees no
+  same-turn update is dropped (falling back to `rx_seq` boundary ordering for
+  an agent that does not stamp `update_seq`).
   """
 
   use GenServer

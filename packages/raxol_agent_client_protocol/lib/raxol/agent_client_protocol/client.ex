@@ -89,11 +89,13 @@ defmodule Raxol.AgentClientProtocol.Client do
   mailbox protocol. The generated default `c:session_update/2` (unless you
   override it) forwards every decoded update to whichever processes called
   `subscribe/3` for that `{conn, session_id}` pair, as
-  `{:acp_session_update, session_id, update, rx_seq}` -- `update` is always
-  an already-decoded `Raxol.AgentClientProtocol.Schema.SessionUpdate.t()`
-  (see `decode_update/1`'s doc for why an undecodable variant never reaches
-  this path at all), and `rx_seq` is the inbound frame's monotone sequence
-  stamp (the reorder key -- see below).
+  `{:acp_session_update, session_id, update, rx_seq, update_seq}` -- `update`
+  is always an already-decoded
+  `Raxol.AgentClientProtocol.Schema.SessionUpdate.t()` (see `decode_update/1`'s
+  doc for why an undecodable variant never reaches this path at all), `rx_seq`
+  is the inbound frame's monotone per-connection stamp, and `update_seq` is the
+  agent's PER-SESSION update ordinal (the reorder key) or `nil` when unstamped
+  -- see below.
 
   `prompt/3` and `prompt_stream/4` build on `subscribe/3` to give a
   synchronous-feeling API over the inherently asynchronous protocol:
@@ -113,10 +115,11 @@ defmodule Raxol.AgentClientProtocol.Client do
   for the turn: update deliveries arrive from concurrent per-notification
   dispatch tasks (non-blocking, so parallel/interleaved update streams
   flow), so they can land out of wire order and can even race the terminal
-  result into the mailbox. Each carries its `rx_seq`; the loop buffers by
-  `rx_seq`, drains every update below the result's own `rx_seq` before
-  completing, and returns them in restored wire order -- see their docs for
-  the exact mechanics.
+  result into the mailbox. Each carries the agent's per-session `update_seq`;
+  the loop releases each update the instant it is contiguous (LIVE, in
+  per-session order), holding a gap until the missing ordinal lands, and
+  falls back to `rx_seq` boundary ordering for an agent that does not stamp
+  `update_seq` -- see their docs for the exact mechanics.
 
   ## `fs_sandbox`: a working filesystem client with zero callbacks
 
@@ -214,15 +217,19 @@ defmodule Raxol.AgentClientProtocol.Client do
   Subscribe `subscriber` (default `self()`) to `session_id`'s
   `session/update` deliveries on `conn`. The generated default
   `c:session_update/2` (unless overridden) broadcasts
-  `{:acp_session_update, session_id, update, rx_seq}` to every subscriber
-  registered for `{conn, session_id}` -- `update` is always an
+  `{:acp_session_update, session_id, update, rx_seq, update_seq}` to every
+  subscriber registered for `{conn, session_id}` -- `update` is always an
   already-decoded `Raxol.AgentClientProtocol.Schema.SessionUpdate.t()`
   (see `decode_update/1`'s doc for why an undecodable variant never
-  reaches this path), and `rx_seq` is the inbound notification frame's
-  monotone sequence stamp (`Ctx.rx_seq`). Because each update is forwarded
-  from its OWN concurrent dispatch task, deliveries to the subscriber's
-  mailbox can be out of wire order; `rx_seq` is the key a consumer uses to
-  restore that order (`prompt/3`/`prompt_stream/4` do this for you). NOT
+  reaches this path), `rx_seq` is the inbound notification frame's
+  monotone per-connection stamp (`Ctx.rx_seq`), and `update_seq` is the
+  agent's PER-SESSION update ordinal read from
+  `_meta["raxol.io"]["update_seq"]` (or `nil` when the agent did not stamp
+  it). Because each update is forwarded from its OWN concurrent dispatch
+  task, deliveries to the subscriber's mailbox can be out of wire order;
+  `update_seq` is the key a consumer uses to restore per-session order and
+  release incrementally (`prompt/3`/`prompt_stream/4` do this for you),
+  falling back to `rx_seq` ordering when `update_seq` is `nil`. NOT
   idempotent: subscribing the same pid twice for
   the same key registers it twice in the underlying `:bag` -- each
   registration receives its own copy of every broadcast, so the pid gets
@@ -256,24 +263,52 @@ defmodule Raxol.AgentClientProtocol.Client do
   # (design docs' "handler crash never reaches the wire" spirit, applied
   # here even though a notification crash is already log-only, IC/§4.4).
   #
-  # `rx_seq` is the inbound `session/update` frame's monotone sequence
-  # (`Ctx.rx_seq`); it rides the delivered tuple as the 4th element so a
-  # consumer can restore wire order across concurrent per-notification
-  # dispatch tasks (see `prompt/3`/`prompt_stream/4`). Defaults to `0` so a
-  # direct/legacy `broadcast_update/3` caller (custom handler, replay
-  # tooling) keeps working -- such deliveries simply sort as "seq 0".
-  @spec broadcast_update(pid(), String.t(), term(), non_neg_integer()) :: :ok
-  def broadcast_update(conn, session_id, update, rx_seq \\ 0) do
+  # The delivered 5-tuple `{:acp_session_update, session_id, update, rx_seq,
+  # update_seq}`:
+  #
+  #   * `rx_seq` — the inbound frame's GLOBAL per-connection monotone stamp
+  #     (`Ctx.rx_seq`); kept as a frame stamp / tiebreaker. Defaults to `0` so a
+  #     direct/legacy `broadcast_update/3` caller (custom handler, replay tooling)
+  #     keeps working.
+  #   * `update_seq` — the PER-SESSION update ordinal the agent stamped into
+  #     `_meta["raxol.io"]["update_seq"]` (see `Session.stamp_update_seq/2`), or
+  #     `nil` when the agent did not stamp it. This is the reorder KEY that lets a
+  #     consumer release updates in contiguous `0..N` order the instant each is
+  #     available (LIVE incremental streaming). When it is `nil`, a consumer falls
+  #     back to arrival-order delivery (best-effort, no reorder guarantee) — see
+  #     `prompt/3` / `prompt_stream/4`.
+  @spec broadcast_update(pid(), String.t(), term(), non_neg_integer(), non_neg_integer() | nil) ::
+          :ok
+  def broadcast_update(conn, session_id, update, rx_seq \\ 0, update_seq \\ nil) do
     ensure_subs_table!()
 
     for {_key, subscriber} <- :ets.lookup(@subs_table, {conn, session_id}) do
-      send(subscriber, {:acp_session_update, session_id, update, rx_seq})
+      send(subscriber, {:acp_session_update, session_id, update, rx_seq, update_seq})
     end
 
     :ok
   rescue
     _ -> :ok
   end
+
+  @doc """
+  Extract the per-session `update_seq` an agent stamped into a
+  `session/update` notification's vendor `_meta` bucket
+  (`_meta["raxol.io"]["update_seq"]`), or `nil` when absent (a non-raxol
+  agent, an unstamped notification, or an opaque notification shape). This
+  is the reorder key `prompt/3` / `prompt_stream/4` use for LIVE
+  incremental in-order release; `nil` triggers their arrival-order
+  fallback.
+  """
+  @spec extract_update_seq(term()) :: non_neg_integer() | nil
+  def extract_update_seq(%{_meta: meta}) when is_map(meta) do
+    case meta do
+      %{"raxol.io" => %{"update_seq" => n}} when is_integer(n) and n >= 0 -> n
+      _ -> nil
+    end
+  end
+
+  def extract_update_seq(_other), do: nil
 
   defp ensure_subs_table! do
     if :ets.whereis(@subs_table) == :undefined do
@@ -356,15 +391,18 @@ defmodule Raxol.AgentClientProtocol.Client do
   by `Connection` itself. Different senders means the subscriber's mailbox
   gives no cross-sender order, and the result can even land before a
   same-turn update that is still in flight. So this function does NOT trust
-  mailbox order: every delivery carries the inbound frame's monotone
-  `rx_seq`, and `Connection` also sends an `{:acp_result_seq, tag, rx_seq}`
-  companion just before the result. This loop buffers updates by `rx_seq`,
-  and on the terminal result (frame seq `R`) drains every same-turn update
-  (all have `rx_seq < R` by wire invariant I3) with a bounded settle pass,
-  then returns them in restored `rx_seq` (wire) order. The bounded settle
-  pass is the completeness bound (an in-flight dispatch task's `send`
-  lands within scheduling latency; the pass resets on each straggler); `R`
-  is the turn-boundary classifier.
+  mailbox order: it reorders on the agent-stamped PER-SESSION `update_seq`
+  (`_meta["raxol.io"]["update_seq"]`, reset to `0` each turn — see
+  `Raxol.AgentClientProtocol.Session`). It tracks a next-expected ordinal,
+  accumulating each update the instant it is contiguous and holding a
+  higher one until the gap fills; on the terminal result a bounded settle
+  pass absorbs any straggler, then it returns the turn's updates in
+  `update_seq` order. When the agent does NOT stamp `update_seq` (a
+  non-raxol agent), it falls back to buffering by the frame's `rx_seq` and
+  returning them in `rx_seq` order at the turn boundary (deterministic,
+  no-drop, but not incremental). Either way no same-turn update is dropped;
+  `Connection` always delivers a terminal result (its protocol timeout is
+  the single authority), so the loop never blocks unbounded on a gap.
 
   Always subscribes and unsubscribes around the call, including on error.
 
@@ -392,7 +430,7 @@ defmodule Raxol.AgentClientProtocol.Client do
              tag,
              timeout_ms
            ) do
-        :ok -> collect_prompt(session_id, tag, [], nil)
+        :ok -> collect_prompt(session_id, tag, new_reorder())
         {:error, _} = err -> err
       end
     after
@@ -400,83 +438,171 @@ defmodule Raxol.AgentClientProtocol.Client do
     end
   end
 
-  # Milliseconds the reorder buffer keeps its settle window open after the
-  # turn's result, waiting for an in-flight per-notification dispatch task's
-  # `send/2` to land. That send is an ETS lookup + `send` (sub-millisecond),
-  # spawned before the result frame, so this is enormous headroom; the
-  # window RESETS on every straggler, so it only trails the LAST one. It is
-  # the completeness bound for the no-drop guarantee (there is no positive
-  # "all updates delivered" signal under a global per-connection `rx_seq`,
-  # since a numeric gap is an unrelated frame, not a missing update).
+  # Milliseconds the reorder buffer keeps a POST-RESULT settle window open,
+  # waiting for an in-flight per-notification dispatch task's `send/2` to land
+  # before it flushes any still-buffered out-of-order tail. That send is an
+  # ETS lookup + `send` (sub-millisecond), spawned before the result frame, so
+  # this is enormous headroom; the window RESETS on every straggler, so it only
+  # trails the LAST one. The primary completeness bound, though, is the terminal
+  # result itself: `Connection` ALWAYS delivers `{:acp_result, tag, _}` (its own
+  # protocol timeout is the single authority, IC-3), so the receive loop never
+  # blocks unbounded on a missing update — a genuine gap resolves at the result.
   @update_settle_ms 25
 
-  # `buf` is a list of `{rx_seq, update}`; sorted only at the end so the
-  # order the concurrent dispatch tasks happen to deliver in never matters.
-  # `result_seq` is the terminal response frame's `rx_seq` (from the
-  # `{:acp_result_seq, ...}` companion), or `nil` if the turn ended without
-  # a response frame (Connection-side timeout/close).
-  defp collect_prompt(session_id, tag, buf, result_seq) do
-    receive do
-      {:acp_session_update, ^session_id, update, seq} ->
-        collect_prompt(session_id, tag, [{seq, update} | buf], result_seq)
+  # -- reorder engine (LIVE incremental contiguous release) -------------------
+  #
+  # A consumer watches ONE session/prompt turn. The agent stamps a PER-SESSION
+  # `update_seq`, reset to 0 at the turn's start, so the turn's updates form a
+  # contiguous `0..N`. Deliveries arrive from concurrent per-notification
+  # dispatch tasks (non-blocking, so parallel/interleaved streams flow), so they
+  # can land out of order; `next` is the next-expected ordinal. An update whose
+  # `update_seq == next` releases IMMEDIATELY (live), then cascade-releases any
+  # contiguous successors already buffered; a higher ordinal buffers (a gap ⇒
+  # hold for the missing lower one, delivered shortly by its own dispatch task,
+  # or the result closes the turn — never an unbounded block, since `Connection`
+  # ALWAYS delivers a terminal `{:acp_result, ...}`); a lower ordinal is a dup and
+  # is dropped.
+  #
+  # GRACEFUL FALLBACK (update_seq == nil): a non-raxol / unstamped agent gives no
+  # per-session ordinal, so contiguous release is impossible. Rather than block
+  # (there is no ordinal to wait for) OR emit in raw arrival order (which the
+  # concurrent per-notification dispatch tasks scramble non-deterministically),
+  # such updates are buffered by the frame's GLOBAL `rx_seq` and released, sorted
+  # by `rx_seq`, at the turn boundary — the prior deterministic, non-blocking,
+  # no-drop behavior. The LIVE, in-order, incremental guarantee therefore holds
+  # ONLY when the agent stamps `update_seq`; an unstamped turn degrades to the
+  # boundary-ordered delivery it had before, never to a flaky arrival order.
+  #
+  # The reorder state: `%{next, buf, fallback, released}` — `buf` maps
+  # `update_seq => update` for held out-of-order STAMPED updates; `fallback` is a
+  # reverse list of `{rx_seq, update}` for UNSTAMPED ones; `released` is the
+  # reverse-ordered list of already-released updates (returned by `prompt/3`,
+  # ignored by `prompt_stream/4` which side-effects via `on_update` at release).
+  # A turn is all-stamped or all-unstamped, so exactly one of buf/fallback is
+  # ever populated.
 
-      {:acp_result_seq, ^tag, seq} ->
-        collect_prompt(session_id, tag, buf, seq)
+  defp new_reorder, do: %{next: 0, buf: %{}, fallback: [], released: []}
+
+  # `on_update` is the live sink (an arity-1 fun) for `prompt_stream/4`, or `nil`
+  # for `prompt/3` (accumulate only).
+  defp collect_prompt(session_id, tag, ro) do
+    receive do
+      {:acp_session_update, ^session_id, update, rx_seq, update_seq} ->
+        collect_prompt(session_id, tag, deliver_update(ro, update, update_seq, rx_seq, nil))
+
+      {:acp_result_seq, ^tag, _seq} ->
+        # Turn-boundary companion — consumed so it never lingers; the update_seq
+        # ordinals (not the global rx_seq) drive stamped ordering now, so it is
+        # inert for the stamped path (the unstamped fallback still sorts by rx_seq
+        # at the boundary, below, independent of this companion).
+        collect_prompt(session_id, tag, ro)
 
       {:acp_result, ^tag, {:ok, response}} ->
-        updates = buf |> drain_updates(session_id, result_seq) |> order_updates()
-        {:ok, {updates, response}}
+        ro = settle_updates(session_id, ro, nil)
+        {:ok, {Enum.reverse(ro.released), response}}
 
       {:acp_result, ^tag, {:error, _} = error} ->
         error
     end
   end
 
-  # Absorb same-turn stragglers that raced the result into the mailbox from
-  # their (concurrent, non-blocking) dispatch tasks. Wire invariant I3
-  # guarantees every same-turn update's frame preceded the result frame, so
-  # each has `rx_seq < result_seq`; either way we never drop an update for
-  # this session. The bounded window resets on each straggler.
-  defp drain_updates(buf, session_id, result_seq) do
-    receive do
-      {:acp_session_update, ^session_id, update, seq}
-      when is_integer(result_seq) and seq < result_seq ->
-        drain_updates([{seq, update} | buf], session_id, result_seq)
+  # Route one delivered update through the release state machine.
+  defp deliver_update(ro, update, nil, rx_seq, _on_update) do
+    # Fallback: buffer by frame rx_seq; released sorted at the boundary.
+    %{ro | fallback: [{rx_seq, update} | ro.fallback]}
+  end
 
-      # No result_seq (timeout/close, no response frame) or a seq that is not
-      # below the turn boundary (should be impossible by I3): absorb rather
-      # than drop, still bounded by the settle window.
-      {:acp_session_update, ^session_id, update, seq} ->
-        drain_updates([{seq, update} | buf], session_id, result_seq)
-    after
-      @update_settle_ms -> buf
+  defp deliver_update(%{next: next} = ro, update, update_seq, _rx_seq, on_update) do
+    cond do
+      update_seq == next ->
+        ro = emit_update(ro, update, on_update)
+        cascade_release(%{ro | next: next + 1}, on_update)
+
+      update_seq > next ->
+        %{ro | buf: Map.put(ro.buf, update_seq, update)}
+
+      true ->
+        # update_seq < next: already released (a duplicate delivery) — drop.
+        ro
     end
   end
 
-  defp order_updates(buf) do
-    buf |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(&elem(&1, 1))
+  # Release every contiguous successor now sitting in the buffer.
+  defp cascade_release(%{next: next, buf: buf} = ro, on_update) do
+    case Map.pop(buf, next) do
+      {nil, _buf} ->
+        ro
+
+      {update, buf} ->
+        ro = emit_update(%{ro | buf: buf}, update, on_update)
+        cascade_release(%{ro | next: next + 1}, on_update)
+    end
+  end
+
+  # Release one update: side-effect via `on_update` (prompt_stream) if present,
+  # and always record it (reverse order) so prompt/3 can return the turn's list.
+  defp emit_update(ro, update, nil), do: %{ro | released: [update | ro.released]}
+
+  defp emit_update(ro, update, on_update) when is_function(on_update, 1) do
+    on_update.(update)
+    %{ro | released: [update | ro.released]}
+  end
+
+  # After the terminal result, drain any same-turn straggler still in flight
+  # (bounded window, resets on each), delivering it through the same state
+  # machine, then FLUSH: any out-of-order STAMPED tail an unfillable gap left in
+  # `buf` (ascending update_seq) followed by the UNSTAMPED `fallback` (ascending
+  # rx_seq) — nothing dropped (best-effort completeness).
+  defp settle_updates(session_id, ro, on_update) do
+    receive do
+      {:acp_session_update, ^session_id, update, rx_seq, update_seq} ->
+        settle_updates(
+          session_id,
+          deliver_update(ro, update, update_seq, rx_seq, on_update),
+          on_update
+        )
+    after
+      @update_settle_ms -> flush_buffers(ro, on_update)
+    end
+  end
+
+  defp flush_buffers(%{buf: buf, fallback: fallback} = ro, on_update) do
+    ro =
+      buf
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.reduce(%{ro | buf: %{}}, fn {_seq, update}, acc ->
+        emit_update(acc, update, on_update)
+      end)
+
+    fallback
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.reduce(%{ro | fallback: []}, fn {_rx_seq, update}, acc ->
+      emit_update(acc, update, on_update)
+    end)
   end
 
   @doc """
   Callback variant of `prompt/3`: `on_update.(update)` is invoked, in this
-  process, for each `session/update` of the turn -- in restored `rx_seq`
-  (wire) order. Returns `{:ok, response}` / `{:error, term()}` for the
-  terminal outcome, same vocabulary as `Connection.async_request/6`'s
-  `outcome`. Always subscribes and unsubscribes around the call, including
-  on error.
+  process, for each `session/update` of the turn -- in `update_seq` order.
+  Returns `{:ok, response}` / `{:error, term()}` for the terminal outcome,
+  same vocabulary as `Connection.async_request/6`'s `outcome`. Always
+  subscribes and unsubscribes around the call, including on error.
 
-  Same reorder/no-drop contract as `prompt/3`: updates arrive from
-  concurrent per-notification dispatch tasks (non-blocking, so
+  Same reorder/no-drop contract as `prompt/3`, and LIVE incremental: updates
+  arrive from concurrent per-notification dispatch tasks (non-blocking, so
   parallel/interleaved streams flow), so they can land out of order and can
-  race the terminal result. This variant therefore does NOT invoke
-  `on_update` in raw arrival order -- it buffers by `rx_seq` and, once the
-  turn boundary is known (the result's `rx_seq`, after a bounded straggler
-  drain), replays the whole turn to `on_update` in `rx_seq` order. That
-  trades pre-result incremental latency for deterministic ordering: under a
-  global per-connection `rx_seq`, the result frame is the only sound
-  completeness barrier (a numeric gap is an unrelated frame, not a missing
-  update), so no update can be safely released before it without risking a
-  lower-`rx_seq` straggler arriving afterward.
+  race the terminal result. This variant reorders on the agent-stamped
+  PER-SESSION `update_seq`: it invokes `on_update` for an update the INSTANT
+  it is contiguous (`update_seq == next-expected`), then cascade-releases any
+  buffered successors -- so an in-order stamped stream streams incrementally
+  rather than waiting for the turn boundary. A gap holds the higher ordinals
+  until the missing one lands (or the result closes the turn). When the agent
+  does NOT stamp `update_seq`, it falls back to `prompt/3`'s behavior:
+  buffer by `rx_seq` and replay to `on_update` in `rx_seq` order at the turn
+  boundary (deterministic, no-drop, but not incremental). A bounded settle
+  drain after the result flushes any straggler on BOTH the ok and error
+  outcome, so updates observed up to (and just after) the result are never
+  dropped.
 
   **Precondition:** same as `prompt/3` -- requires the generated default
   `c:session_update/2`; an overridden `session_update/2` that doesn't call
@@ -500,7 +626,7 @@ defmodule Raxol.AgentClientProtocol.Client do
              tag,
              timeout_ms
            ) do
-        :ok -> stream_prompt(session_id, tag, on_update, [], nil)
+        :ok -> stream_prompt(session_id, tag, on_update, new_reorder())
         {:error, _} = err -> err
       end
     after
@@ -508,24 +634,28 @@ defmodule Raxol.AgentClientProtocol.Client do
     end
   end
 
-  # Same reorder buffer as `collect_prompt/4`, but instead of returning the
-  # list it replays it to `on_update` in `rx_seq` order once the turn
-  # boundary is known. Emits on BOTH the ok and error terminal outcome so
-  # updates observed before an error are never silently dropped.
-  defp stream_prompt(session_id, tag, on_update, buf, result_seq) do
+  # Same reorder engine as `collect_prompt/3`, but LIVE: each update is passed to
+  # `on_update` at the instant it becomes contiguous (`deliver_update/4` with the
+  # real sink), so an in-order stamped stream streams incrementally instead of
+  # waiting for the turn boundary. On the terminal result, a bounded settle drain
+  # absorbs any straggler then flushes any out-of-order tail — so updates
+  # observed right up to (and after) the result are never dropped, on BOTH the ok
+  # and error outcome.
+  defp stream_prompt(session_id, tag, on_update, ro) do
     receive do
-      {:acp_session_update, ^session_id, update, seq} ->
-        stream_prompt(session_id, tag, on_update, [{seq, update} | buf], result_seq)
+      {:acp_session_update, ^session_id, update, rx_seq, update_seq} ->
+        stream_prompt(
+          session_id,
+          tag,
+          on_update,
+          deliver_update(ro, update, update_seq, rx_seq, on_update)
+        )
 
-      {:acp_result_seq, ^tag, seq} ->
-        stream_prompt(session_id, tag, on_update, buf, seq)
+      {:acp_result_seq, ^tag, _seq} ->
+        stream_prompt(session_id, tag, on_update, ro)
 
       {:acp_result, ^tag, outcome} ->
-        buf
-        |> drain_updates(session_id, result_seq)
-        |> order_updates()
-        |> Enum.each(on_update)
-
+        _ = settle_updates(session_id, ro, on_update)
         outcome
     end
   end
@@ -570,7 +700,8 @@ defmodule Raxol.AgentClientProtocol.Client do
           ctx.conn,
           notification.session_id,
           notification.update,
-          ctx.rx_seq
+          ctx.rx_seq,
+          Raxol.AgentClientProtocol.Client.extract_update_seq(notification)
         )
       end
 

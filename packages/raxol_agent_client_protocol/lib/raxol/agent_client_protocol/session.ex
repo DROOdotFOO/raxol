@@ -162,6 +162,7 @@ defmodule Raxol.AgentClientProtocol.Session do
           emitter: module(),
           journal: {module(), term()} | nil,
           turn_seq: non_neg_integer(),
+          update_seq: non_neg_integer(),
           idle_timer: reference() | nil,
           idle_epoch: non_neg_integer(),
           config: %{
@@ -182,6 +183,19 @@ defmodule Raxol.AgentClientProtocol.Session do
             emitter: @default_emitter,
             journal: nil,
             turn_seq: 0,
+            # -- per-session update ordinal (LIVE incremental delivery) --------
+            # Stamped into every emitted `session/update` notification's
+            # `_meta["raxol.io"]["update_seq"]` (the vendor bucket, mirroring the
+            # reattach taint/offset rider convention). Unlike the GLOBAL
+            # per-connection `rx_seq` (a frame counter shared by ALL sessions on a
+            # connection — a numeric gap there is an unrelated frame, not a missing
+            # update), THIS counter is per-Session and RESETS to 0 at each turn
+            # start (`begin_prompt`), so a `session/prompt` consumer always expects
+            # a contiguous `0..N` for the turn it is watching and can release each
+            # update the instant it is contiguous (gap ⇒ wait for the missing one).
+            # The Session mailbox serializes concurrent `post_update` calls, so
+            # parallel/interleaved in-turn updates get a single total order here.
+            update_seq: 0,
             idle_timer: nil,
             idle_epoch: 0,
             config: %{}
@@ -380,7 +394,13 @@ defmodule Raxol.AgentClientProtocol.Session do
           }
 
           # A live turn is never idle — disarm the reaper until the turn drains.
-          state = disarm_idle(%{state | turn: {:prompting, turn}, turn_seq: turn_seq})
+          # Reset the per-session update ordinal so THIS turn's updates are stamped
+          # a contiguous 0..N (the consumer's next-expected index starts at 0). Only
+          # one turn is ever live per Session (the I12 busy row rejects a second
+          # prompt), so turns never overlap and a per-turn reset cannot collide.
+          state =
+            disarm_idle(%{state | turn: {:prompting, turn}, turn_seq: turn_seq, update_seq: 0})
+
           {:reply, :ok, state}
       end
     end
@@ -426,10 +446,20 @@ defmodule Raxol.AgentClientProtocol.Session do
       emit_telemetry([:raxol, :acp, :empty_chunk_rejected], %{session_id: state.session_id})
       {:reply, {:error, :empty_chunk}, state}
     else
+      # Stamp the per-session update ordinal into the OUTGOING notification's
+      # `_meta["raxol.io"]["update_seq"]` BEFORE the emitter seam, so BOTH emitters
+      # (Direct and Journal) carry the identical stamped notification and the
+      # counter is emitter-agnostic. Only NON-rejected updates consume an ordinal
+      # (an empty chunk was rejected above and never gets a seq — so the consumer
+      # sees no phantom gap). `n` is stamped, then the counter advances.
+      n = state.update_seq
+      notification = stamp_update_seq(notification, n)
       # Emit seam (§2.4): Direct forwards to Connection.notify (base behavior);
       # Journal ALSO durably appends the update to the Writer (J10 durability).
       _ = state.emitter.emit(state, notification)
-      {:reply, :ok, put_turn(state, ts, %{t | updates_emitted?: true})}
+
+      {:reply, :ok,
+       put_turn(%{state | update_seq: n + 1}, ts, %{t | updates_emitted?: true})}
     end
   end
 
@@ -781,6 +811,24 @@ defmodule Raxol.AgentClientProtocol.Session do
        do: true
 
   defp empty_chunk?(_other), do: false
+
+  # Stamp the per-session update ordinal into the notification envelope's vendor
+  # `_meta` bucket (`_meta["raxol.io"]["update_seq"]`), mirroring the reattach
+  # rider convention (offset/taint/ts under the same "raxol.io" key). A vanilla
+  # ACP client ignores `_meta`; an offset/seq-aware consumer reads it. Additive:
+  # any other `_meta` keys already on the notification are preserved. An opaque
+  # (non-SessionNotification) test-double notification is passed through unstamped
+  # — the consumer then falls back to arrival-order delivery for it.
+  @vendor_meta_key "raxol.io"
+  @spec stamp_update_seq(term(), non_neg_integer()) :: term()
+  defp stamp_update_seq(%SessionNotification{_meta: meta} = notif, n) do
+    meta = meta || %{}
+    vendor = Map.get(meta, @vendor_meta_key, %{})
+    vendor = Map.put(vendor, "update_seq", n)
+    %{notif | _meta: Map.put(meta, @vendor_meta_key, vendor)}
+  end
+
+  defp stamp_update_seq(other, _n), do: other
 
   @spec render(Turn.outcome()) :: {:ok, PromptResponse.t()} | {:error, Error.t()}
   defp render({:stop, reason}), do: {:ok, PromptResponse.new(reason)}

@@ -197,7 +197,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
         session_update_frame("sess-timeout", "late")
       )
 
-      refute_receive {:acp_session_update, "sess-timeout", _, _}, 200
+      refute_receive {:acp_session_update, "sess-timeout", _, _, _}, 200
     end
   end
 
@@ -280,11 +280,11 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
       )
 
       assert_receive {:acp_session_update, ^session_id,
-                      {:current_mode_update, %{current_mode_id: "z"}}, _}
+                      {:current_mode_update, %{current_mode_id: "z"}}, _, _}
 
       assert_receive {:second_got,
                       {:acp_session_update, ^session_id,
-                       {:current_mode_update, %{current_mode_id: "z"}}, _}}
+                       {:current_mode_update, %{current_mode_id: "z"}}, _, _}}
     end
 
     test "unsubscribe/3 stops further delivery to that pid" do
@@ -301,7 +301,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
         session_update_frame(session_id, "x")
       )
 
-      refute_receive {:acp_session_update, ^session_id, _, _}, 200
+      refute_receive {:acp_session_update, ^session_id, _, _, _}, 200
     end
   end
 
@@ -344,7 +344,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
 
       # never reaches session_update/2 (and therefore never reaches
       # subscribe/3's broadcast) -- Connection/Router drop it centrally.
-      refute_receive {:acp_session_update, ^session_id, _, _}, 200
+      refute_receive {:acp_session_update, ^session_id, _, _, _}, 200
       assert Process.alive?(conn)
 
       # prove the connection isn't wedged: a well-formed notification right
@@ -356,7 +356,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
       )
 
       assert_receive {:acp_session_update, ^session_id,
-                      {:current_mode_update, %{current_mode_id: "ok"}}, _}
+                      {:current_mode_update, %{current_mode_id: "ok"}}, _, _}
     end
   end
 
