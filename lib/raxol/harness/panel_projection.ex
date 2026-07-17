@@ -47,10 +47,11 @@ defmodule Raxol.Harness.PanelProjection do
 
     * `@max_field_bytes` -- every string entering a read-model is passed
       through `display_string/1` first: binaries longer than 512 bytes are
-      clamped (byte-sliced when that stays valid UTF-8, grapheme-sliced via
-      `String.slice/3` otherwise); non-binaries are rendered via
-      `inspect/2` with bounded `:limit`/`:printable_limit`, never evaluated
-      or atomized. Control bytes are **not** stripped here -- sanitizing
+      clamped to at most 512 **bytes** (byte-sliced, then any trailing
+      partial codepoint from a mid-codepoint split is dropped so the result
+      stays valid UTF-8 -- this drops at most 3 bytes); non-binaries are
+      rendered via `inspect/2` with bounded `:limit`/`:printable_limit`,
+      never evaluated or atomized. Control bytes are **not** stripped here -- sanitizing
       control bytes for actual terminal rendering is
       `Raxol.Harness.Surface.ViewText`'s trust boundary, downstream of this
       module; stripping them here too would just duplicate that seam
@@ -311,16 +312,33 @@ defmodule Raxol.Harness.PanelProjection do
 
   defp display_string(v)
        when is_binary(v) and byte_size(v) > @max_field_bytes do
-    candidate = binary_part(v, 0, @max_field_bytes)
-
-    if String.valid?(candidate) do
-      candidate
-    else
-      String.slice(v, 0, @max_field_bytes)
-    end
+    # Byte-bound the field: take the first @max_field_bytes BYTES, then (if
+    # that split landed mid-codepoint, making it invalid UTF-8) drop the
+    # trailing partial codepoint so the result is valid UTF-8 AND still
+    # <= @max_field_bytes. A UTF-8 codepoint is at most 4 bytes, so
+    # `trim_partial_codepoint/1` drops at most 3 trailing bytes.
+    #
+    # The previous fallback was `String.slice(v, 0, @max_field_bytes)`, whose
+    # third arg is a GRAPHEME count, not a byte count: for any input of
+    # <= 512 graphemes it returned the whole string regardless of byte size
+    # (a 3-byte "→" x 512, or a 20+-byte ZWJ emoji grapheme, blew far past
+    # the "512-byte clamp" on that path). Byte-slice-then-trim actually
+    # bounds bytes.
+    trim_partial_codepoint(binary_part(v, 0, @max_field_bytes))
   end
 
   defp display_string(v) when is_binary(v), do: v
 
   defp display_string(v), do: inspect(v, limit: 10, printable_limit: 256)
+
+  # Drop trailing bytes until the binary is valid UTF-8. Only ever called on
+  # an <= @max_field_bytes byte-slice, so the result stays <= @max_field_bytes
+  # and terminates (the empty binary is valid UTF-8).
+  defp trim_partial_codepoint(bin) do
+    if String.valid?(bin) do
+      bin
+    else
+      trim_partial_codepoint(binary_part(bin, 0, byte_size(bin) - 1))
+    end
+  end
 end

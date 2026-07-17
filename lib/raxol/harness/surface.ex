@@ -664,11 +664,17 @@ defmodule Raxol.Harness.Surface do
   footer to its base row count -- see `handle_input/2`'s `:passthrough`
   routing. A hosted `OverlayPanel` never produces a pick (see
   `open_panel/3`), so its `on_pick` is shape-compatible filler only.
+
+  `mod` is the discriminator: `OverlayPicker` => `picker`/`on_pick` are
+  live; `OverlayPanel` => `on_pick` is inert filler and `folded_at` (the
+  memoization token, present only for panels) is live. See
+  `refresh_panel_overlay/1`.
   """
   @type overlay :: %{
-          mod: module(),
-          picker: OverlayPicker.t() | OverlayPanel.t(),
-          on_pick: (t(), term() -> t())
+          :mod => module(),
+          :picker => OverlayPicker.t() | OverlayPanel.t(),
+          :on_pick => (t(), term() -> t()),
+          optional(:folded_at) => non_neg_integer()
         }
 
   # -- construction -------------------------------------------------------
@@ -2168,6 +2174,8 @@ defmodule Raxol.Harness.Surface do
     max_visible =
       min(
         Keyword.get(opts, :max_visible, OverlayPanel.default_max_visible()),
+        # reserve one row for the panel title (OverlayPanel.height/1 is
+        # `1 + max_visible`), same idiom as the picker path's own `- 1`.
         max_overlay_rows - 1
       )
 
@@ -2187,10 +2195,18 @@ defmodule Raxol.Harness.Surface do
         # A panel never produces {:picked, _} (see OverlayPanel's
         # moduledoc) -- `on_pick` here is shape-compat filler only, never
         # actually invoked.
+        #
+        # `folded_at` is the memoization token for `refresh_panel_overlay/1`
+        # (M2): the count of `source_events` the panel content was last
+        # folded over. source_events is append-only within a session (a ref
+        # is a journal offset; the journal never mutates or shrinks), so an
+        # unchanged count means an identical fold -- a pure scroll key (which
+        # never grows the journal) then skips the whole re-fold.
         overlay = %{
           mod: OverlayPanel,
           picker: panel,
-          on_pick: fn m, _item -> m end
+          on_pick: fn m, _item -> m end,
+          folded_at: length(model.projection.source_events)
         }
 
         model = %{model | authority: authority, overlay: overlay}
@@ -2655,19 +2671,46 @@ defmodule Raxol.Harness.Surface do
   # `advance/2` (fixture reveal) and `handle_input/2` (keystrokes) both
   # end in this module's own `paint_footer/1` call, so an open panel
   # refreshes its content as new `extract` events reveal, without any
-  # separate subscription or polling path. Recompute-per-paint is the
-  # documented decision -- see `PanelProjection`'s moduledoc, "Recompute,
-  # not incrementally cached."
+  # separate subscription or polling path.
+  #
+  # M2: memoize the fold against `source_events`'s length. paint_footer/1
+  # runs at the end of EVERY handle_input/2 -- including pure scroll keys
+  # that touch no projection state -- and an unguarded re-fold there is
+  # O(source_events) per keystroke over a monotonically growing journal.
+  # source_events is append-only within a session (a ref is a journal
+  # offset; existing entries never mutate), so when the count is unchanged
+  # since the last fold the result is byte-identical and the whole
+  # render_lines/2 fold+format is skipped. Only a reveal that actually grew
+  # the journal (advance/2) re-folds. Recompute-not-cached still holds for
+  # the content itself -- see `PanelProjection`'s moduledoc; this only
+  # elides provably-redundant recomputes.
   defp refresh_panel_overlay(
-         %{overlay: %{mod: OverlayPanel, picker: panel} = overlay} = model
+         %{
+           overlay:
+             %{mod: OverlayPanel, picker: panel, folded_at: folded_at} =
+               overlay
+         } = model
        ) do
-    lines =
-      PanelProjection.render_lines(panel.kind, model.projection.source_events)
+    case length(model.projection.source_events) do
+      ^folded_at ->
+        model
 
-    %{
-      model
-      | overlay: %{overlay | picker: OverlayPanel.put_lines(panel, lines)}
-    }
+      count ->
+        lines =
+          PanelProjection.render_lines(
+            panel.kind,
+            model.projection.source_events
+          )
+
+        %{
+          model
+          | overlay: %{
+              overlay
+              | picker: OverlayPanel.put_lines(panel, lines),
+                folded_at: count
+            }
+        }
+    end
   end
 
   defp refresh_panel_overlay(model), do: model

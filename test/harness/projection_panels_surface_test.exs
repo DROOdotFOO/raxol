@@ -327,6 +327,33 @@ defmodule Raxol.Harness.ProjectionPanelsSurfaceTest do
 
       refute SealOracle.emits_full_clear?(raw(device))
     end
+
+    test "refresh memoizes: a scroll key does not re-fold, a reveal does (M2)" do
+      {model, _device} = new_model(worktracks_events())
+      model = advance_times(model, 1)
+      model = Surface.focus_transcript(model)
+      model = Surface.handle_input(model, Event.key("w"))
+
+      folded_at0 = model.overlay.folded_at
+      assert folded_at0 == length(model.projection.source_events)
+      lines0 = model.overlay.picker.lines
+
+      # A pure scroll key grows no journal -> the memo token holds and the
+      # folded lines are reused verbatim (no re-fold).
+      model = Surface.handle_input(model, Event.key(:down))
+      assert model.overlay.folded_at == folded_at0
+      assert model.overlay.picker.lines == lines0
+
+      # Revealing the next extract event grows source_events -> the token
+      # advances and the content re-folds (status now "done").
+      {model, _status} = Surface.advance(model)
+      assert model.overlay.folded_at > folded_at0
+
+      assert Enum.any?(
+               model.overlay.picker.lines,
+               &String.contains?(&1, "done")
+             )
+    end
   end
 
   # -----------------------------------------------------------------------
@@ -358,6 +385,46 @@ defmodule Raxol.Harness.ProjectionPanelsSurfaceTest do
 
       refute plain =~ "evil\ntitle",
              "PanelProjection.flatten_newlines/1 must keep this one footer row"
+    end
+
+    test "an 8-bit C1 CSI in a title is stripped before it reaches the wire (H1/#616)" do
+      # A U+009B (C1 CSI) introducer arrives from agent JSON as its 2-byte
+      # UTF-8 form <<0xC2, 0x9B>> -- both bytes >= 0x20, so a C0-only
+      # sanitizer (the old #616 gap) would pass it straight to the :styled
+      # wire, where a terminal honoring C1 treats it as `ESC [`. The panel
+      # certifies ViewText.sanitize/1 as its sole sanitize boundary, so this
+      # pins that the boundary strips the C1 range (U+0080..U+009F).
+      events = [
+        extract_event(1, "worktracks", "add", %{
+          "id" => "wt-c1",
+          "lane" => "security",
+          "title" => "k1: " <> <<0x9B::utf8>> <> "2J-c1-clear",
+          "status" => "flagged"
+        })
+      ]
+
+      {model, device} = new_model(events)
+      model = advance_times(model, 1)
+      model = Surface.focus_transcript(model)
+
+      prior = byte_size(raw(device))
+      model = Surface.handle_input(model, Event.key("w"))
+      delta = delta_since(device, prior)
+
+      assert model.overlay.mod == OverlayPanel
+
+      refute String.contains?(delta, <<0xC2, 0x9B>>),
+             "the 2-byte UTF-8 C1 CSI must be stripped before the wire"
+
+      refute String.contains?(delta, <<0x9B>>),
+             "no bare C1 byte reaches the wire either"
+
+      plain = strip_ansi(delta)
+
+      assert plain =~ "k1:",
+             "the benign, sanitized remainder of the title must survive"
+
+      assert plain =~ "2J-c1-clear"
     end
   end
 

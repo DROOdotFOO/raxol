@@ -40,7 +40,7 @@ tolerant-reading-only lines.
 | 18 | 17 | `plan` / `update` | `step-1` → status `done` |
 | 19 | 18 | class `scratchpad` / `add` | **unknown class** — outside the worktracks/memory/plan vocabulary. Must be skipped by every kind's `fold/2`, never an error (tolerant-reading rule). |
 | 20 | 19 | `worktracks` / `annotate` | **unknown op** — `annotate` is not `add`/`update`/`remove`/`delete`. Must be skipped silently. |
-| 21 | 20 | `worktracks` / `add` | **HOSTILE**: `wt-hostile` in lane `security`. `title` embeds a raw ESC control byte (`\x1b`) immediately followed by `[2Jevil` and an embedded newline (`"\x1b[2Jevil\ntitle"`) — a smuggled terminal clear-screen sequence, exactly the class of content `display_string/1`'s clamp and `render_lines/2`'s newline-flatten exist to survive without crashing or corrupting footer row accounting. The same item also carries an unrelated ~600-byte `value` field (over `PanelProjection`'s 512-byte clamp) to exercise the length clamp; `value` is inert for the `worktracks` class (only `memory` reads it), so it has no effect on the worktracks read-model beyond proving extra fields are ignored, not rejected. |
+| 21 | 20 | `worktracks` / `add` | **HOSTILE**: `wt-hostile` in lane `security`. `title` embeds a raw ESC control byte (`\x1b`) immediately followed by `[2Jevil` and an embedded newline, PLUS an 8-bit C1 CSI introducer (`U+009B`, the single-codepoint form of `ESC [`) followed by `3Gc1` — full title `"\x1b[2Jevil\ntitle3Gc1"`. Both the C0 (ESC) and C1 (U+009B) control forms are smuggled terminal sequences; `fold/2` passes them through raw (sanitizing control bytes is `ViewText.sanitize/1`'s job, downstream), so the C1 case exercises the boundary that strips `U+0080..U+009F` — see the C1 wire test in `projection_panels_surface_test.exs`. This is exactly the class of content `display_string/1`'s clamp and `render_lines/2`'s newline-flatten exist to survive without crashing or corrupting footer row accounting. The same item also carries an unrelated ~600-byte `value` field (over `PanelProjection`'s 512-byte clamp) to exercise the length clamp; `value` is inert for the `worktracks` class (only `memory` reads it), so it has no effect on the worktracks read-model beyond proving extra fields are ignored, not rejected. |
 
 The `turn_completed` at offset 13 (`id=12`) closes turn `t1`; turn `t2`
 (offsets 14–25) repeats the full loop sequence and its own
@@ -50,9 +50,10 @@ own `turn_completed` at offset 25 (`id=24`).
 ## Expected read-models (post-fold)
 
 * **worktracks**: lane `todo` → `[{title: "Design schema", status: "done"}]`;
-  lane `security` → `[{title: "␛[2Jevil title" (newline flattened by
-  `render_lines/2`, raw in `fold/2`'s output), status: "flagged"}]`. `wt-2`
-  and `wt-3` (the unknown-op line) never appear.
+  lane `security` → `[{title: "␛[2Jevil title␛3Gc1" (newline flattened by
+  `render_lines/2`; both the ESC and the U+009B C1 introducer are raw in
+  `fold/2`'s output), status: "flagged"}]`. `wt-2` and `wt-3` (the
+  unknown-op line) never appear.
 * **memory**: `[{key: "topic", value: "harness ui projection panels"},
   {key: "mode", value: "build"}]`.
 * **plan**: `[{title: "Draft read-model", status: "done"}, {title: "Draft
