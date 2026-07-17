@@ -72,6 +72,9 @@ defmodule Raxol.Harness.Surface do
       the Component tree's view maps to the paint authority's flat
       `iodata()` rows (see that module's doc for why truncation precedes
       styling).
+    * **`Raxol.Harness.UnreadDivider`** -- the pure attention-boundary
+      policy behind the "N new since you looked" footer rule (see "The
+      unread divider" section below).
 
   ## Precondition #2 -- keymap-first dispatch (binding, load-bearing)
 
@@ -147,6 +150,39 @@ defmodule Raxol.Harness.Surface do
   Composer's lines ++ notice -- the pending/live-tail preview lines are
   SUPPRESSED for exactly as long as the overlay is open (the space they'd
   occupy is now claimed by the overlay), and return the moment it closes.
+
+  ## The unread divider (live-region honesty)
+
+  `Raxol.Harness.UnreadDivider` decides, purely from caller-injected
+  block-commit offsets (see that module's own moduledoc), whether a
+  "N new since you looked" rule should render. This module owns two
+  things that policy doesn't: WHEN to feed it an offset (`blur/1` and
+  `focus/1`, the explicit mode-1004 seam; `handle_input/2` also feeds
+  `UnreadDivider.input_activity/2` on every keystroke as the fallback
+  return signal, and `move_focus/2` feeds `UnreadDivider.viewed/2` on
+  every jump) and WHERE to render its output: `footer_lines/1` inserts
+  `unread_divider_lines/1`'s single dim line between the status strip
+  and the pending/live preview, styled through the same `ViewText` seam
+  every other footer line uses. The divider is decided at return-time
+  and rendered ONLY in the repaintable footer -- sealed history is never
+  touched (enforced byte-for-byte by the integration suite's
+  sealed-bytes-identical test, not merely asserted in prose), it is
+  suppressed under an open overlay exactly like the pending preview, and
+  it is absent in `:flat` mode (no footer, no live region, so `blur/1`/
+  `focus/1` are safe no-ops there). It clears the instant `move_focus/2`
+  reaches or passes the boundary block -- jumps skip the divider itself
+  by construction, since `focused_index` ranges only over
+  `projection.blocks`. `advance/2` reconciles the policy state against
+  every projection rebuild, and the render read is itself reconciled
+  (`UnreadDivider.divider/2`), so a shrunken rebuild can neither stick
+  the span nor paint it past the live block count.
+
+  DORMANT TODAY: nothing in the production input path calls `blur/1` --
+  the terminal side can parse focus bytes but no driver enables mode
+  1004 or routes them here (see `UnreadDivider`'s "mode-1004 seam"
+  section for the full evidence trail). Until that unit lands, the
+  divider never renders outside the test suites; the keystroke fallback
+  only ever CLOSES an away state, never opens one.
 
   ## The overlay picker (footer-region overlay)
 
@@ -412,6 +448,7 @@ defmodule Raxol.Harness.Surface do
   alias Raxol.Terminal.ScrollRegionManager
   alias Raxol.Harness.StatusStrip
   alias Raxol.Harness.Surface.ViewText
+  alias Raxol.Harness.UnreadDivider
 
   alias Raxol.UI.Components.Harness.{Block, BlockBody, Composer}
   alias Raxol.UI.Harness.{InputEvent, Keymap, OverlayPicker}
@@ -445,7 +482,8 @@ defmodule Raxol.Harness.Surface do
           stub_notice: String.t() | [String.t()] | nil,
           overlay: overlay() | nil,
           editor_session: module() | (String.t(), keyword() -> term()) | nil,
-          editor_opts: keyword()
+          editor_opts: keyword(),
+          unread: UnreadDivider.t()
         }
 
   @typedoc """
@@ -562,7 +600,8 @@ defmodule Raxol.Harness.Surface do
       stub_notice: nil,
       overlay: nil,
       editor_session: Keyword.get(opts, :editor_session),
-      editor_opts: Keyword.get(opts, :editor_opts, [])
+      editor_opts: Keyword.get(opts, :editor_opts, []),
+      unread: UnreadDivider.new()
     }
 
     model
@@ -680,6 +719,7 @@ defmodule Raxol.Harness.Surface do
 
     model =
       %{model | revealed: revealed, projection: projection}
+      |> reconcile_unread()
       |> paint_pending_blocks()
       |> update_status(events_so_far, now)
       |> paint_footer()
@@ -992,6 +1032,14 @@ defmodule Raxol.Harness.Surface do
   @spec handle_input(t(), term()) :: t()
   def handle_input(model, raw_event) do
     norm = InputEvent.normalize(raw_event)
+
+    # Every keystroke is presence evidence for the unread divider's
+    # keystroke fallback (see `UnreadDivider`'s "mode-1004 seam" doc) --
+    # this is a no-op unless the policy is currently `:away`.
+    model = %{
+      model
+      | unread: UnreadDivider.input_activity(model.unread, unread_offset(model))
+    }
 
     context = %{
       composing?: model.composing?,
@@ -1306,7 +1354,18 @@ defmodule Raxol.Harness.Surface do
     else
       current = model.focused_index || if delta > 0, do: -1, else: total
       next = (current + delta) |> max(0) |> min(total - 1)
-      %{model | focused_index: next}
+
+      # Load-bearing identity: `UnreadDivider`'s boundary is a block
+      # COUNT (sampled from `length(projection.blocks)`), while `next`
+      # is a 0-based block INDEX -- "count of seen blocks == index of
+      # the first unseen block" holds precisely because `focused_index`
+      # is 0-based over a densely-indexed block list. A move to 1-based
+      # focus or sparse block ids must revisit this comparison.
+      %{
+        model
+        | focused_index: next,
+          unread: UnreadDivider.viewed(model.unread, next)
+      }
     end
   end
 
@@ -1329,6 +1388,57 @@ defmodule Raxol.Harness.Surface do
   def focus_composer(model) do
     {composer, _cmds} = Composer.update(%{focused: true}, model.composer)
     %{model | composing?: true, composer: composer}
+  end
+
+  # The offset the unread-divider policy is a pure function of: the
+  # count of already-committed blocks (see `UnreadDivider`'s "offsets,
+  # not clocks" doc). Blocks, not events -- the divider marks completed
+  # content, not raw fixture traffic.
+  defp unread_offset(model), do: length(model.projection.blocks)
+
+  # Reconciles the unread-divider state against the just-rebuilt
+  # projection (`UnreadDivider.reconcile/2`, retire-only -- counts are
+  # clamped at display time by `divider/2`, never into state) --
+  # `advance/2` is the only place `projection.blocks` is ever replaced,
+  # so threading here means a shrunken rebuild can never leave a stuck
+  # span whose boundary no navigation index can reach. A no-op under
+  # fixture mode's monotone growth (every existing suite proves that);
+  # it exists for the replay/reattach shapes a future producer can hit.
+  defp reconcile_unread(model) do
+    %{
+      model
+      | unread: UnreadDivider.reconcile(model.unread, unread_offset(model))
+    }
+  end
+
+  @doc """
+  Records that the operator has looked away, for the unread-divider
+  policy (`Raxol.Harness.UnreadDivider.blur/2`). This is the explicit
+  attention API a later focus-event unit (a real terminal focus-out
+  signal) wires directly -- see `UnreadDivider`'s "mode-1004 seam" doc.
+  No production caller exists yet (the divider is dormant at runtime
+  until that unit lands); tests and future drivers invoke this
+  directly, same as `focus_transcript/1`.
+  A no-op in `:flat` mode's own honest sense: `paint_footer/1` never
+  repaints there, so nothing visibly changes, but the policy state
+  itself still tracks the boundary (harmless, since flat mode has no
+  footer for a divider to ever reach).
+  """
+  @spec blur(t()) :: t()
+  def blur(model) do
+    %{model | unread: UnreadDivider.blur(model.unread, unread_offset(model))}
+    |> paint_footer()
+  end
+
+  @doc """
+  Records that the operator has returned, for the unread-divider policy
+  (`Raxol.Harness.UnreadDivider.focus/2`). See `blur/1`'s doc and
+  `UnreadDivider`'s "mode-1004 seam".
+  """
+  @spec focus(t()) :: t()
+  def focus(model) do
+    %{model | unread: UnreadDivider.focus(model.unread, unread_offset(model))}
+    |> paint_footer()
   end
 
   # -- overlay picker (see the moduledoc's "The overlay picker" section) ---
@@ -1469,9 +1579,11 @@ defmodule Raxol.Harness.Surface do
     status_line = StatusStrip.render(model.status, model.width)
     overlay_lines = overlay_lines(model)
 
-    # The pending/live-tail preview is suppressed while an overlay is
-    # open -- the overlay claims that space (see the moduledoc's
-    # precondition #5 update, "The overlay picker" section).
+    # Both the divider and the pending/live-tail preview are suppressed
+    # while an overlay is open -- the overlay claims that space (see the
+    # moduledoc's precondition #5 update, "The overlay picker" section,
+    # and the "unread divider" section for why it yields the same way).
+    divider_lines = if model.overlay, do: [], else: unread_divider_lines(model)
     preview_lines = if model.overlay, do: [], else: pending_preview_lines(model)
 
     composer_lines =
@@ -1484,13 +1596,42 @@ defmodule Raxol.Harness.Surface do
     notice_lines = notice_line(model.stub_notice, model.width)
 
     status_line ++
-      overlay_lines ++ preview_lines ++ composer_lines ++ notice_lines
+      overlay_lines ++
+      divider_lines ++ preview_lines ++ composer_lines ++ notice_lines
   end
 
   defp overlay_lines(%{overlay: nil}), do: []
 
   defp overlay_lines(%{overlay: %{picker: picker}, width: width}),
     do: ViewText.lines(OverlayPicker.render(picker), width, :styled)
+
+  # Renders the unread divider (see `UnreadDivider`'s moduledoc) as one
+  # dim footer line through the SAME `ViewText` sanitize/truncate seam
+  # every other footer line goes through -- the divider is module-built
+  # inert text (rule glyphs, digits, a fixed label), but this module
+  # takes no shortcuts around that seam for it.
+  defp unread_divider_lines(model) do
+    # The RECONCILED read (`divider/2`, not `/1`): paints only what the
+    # live block count can honestly support, so a stale span can never
+    # render past reality even on a paint that precedes the state's own
+    # reconciliation (see `UnreadDivider`'s "Defensive boundaries and
+    # reconciliation").
+    case UnreadDivider.divider(model.unread, unread_offset(model)) do
+      nil ->
+        []
+
+      span ->
+        ViewText.lines(
+          %{
+            type: :text,
+            content: UnreadDivider.line(span, model.width),
+            style: %{dim: true}
+          },
+          model.width,
+          :styled
+        )
+    end
+  end
 
   defp notice_line(nil, _width), do: []
 
