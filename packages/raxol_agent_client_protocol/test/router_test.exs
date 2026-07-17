@@ -60,6 +60,37 @@ defmodule Raxol.AgentClientProtocol.RouterTest do
       assert {:error, {:missing_field, "sessionId"}} =
                Router.decode(:agent, :request, "session/prompt", %{})
     end
+
+    test "G6 finding-14 (C6): a wrong-typed sessionId propagates {:invalid_field, ...}, not {:ok, _}" do
+      # session/prompt with a non-string sessionId (acpx case
+      # acp.v1.errors.invalid_prompt_session_type / 011): used to decode fine
+      # and only fail downstream at the handler's session-registry lookup
+      # (-32603 Unknown session). `Connection` maps any non-method_not_found
+      # decode error here to -32602 (§4.1, see connection.ex + Inv-6 in
+      # connection_test.exs for the missing-field case of this same mapping).
+      assert {:error, {:invalid_field, "sessionId", 12_345}} =
+               Router.decode(:agent, :request, "session/prompt", %{
+                 "sessionId" => 12_345,
+                 "prompt" => []
+               })
+    end
+
+    test "G6 finding-14 (C6): session/new with a wrong-typed or null cwd propagates {:invalid_field, ...}" do
+      # acpx cases 006 (cwd: 12345) and 015 (cwd: null).
+      assert {:error, {:invalid_field, "cwd", 12_345}} =
+               Router.decode(:agent, :request, "session/new", %{"cwd" => 12_345})
+
+      assert {:error, {:invalid_field, "cwd", nil}} =
+               Router.decode(:agent, :request, "session/new", %{"cwd" => nil})
+    end
+
+    # session/cancel is layer: :session_control, excluded from Router entirely
+    # (see the "session/cancel falls through to method_not_found" test below
+    # -- `Connection` decodes it directly via
+    # `AgentTypes.CancelNotification.from_json/1`, not `Router.decode/4`).
+    # Its own {:invalid_field, "sessionId", _} case is covered at the
+    # `from_json/1` unit level in `AgentTypesTest` (`test/schema/
+    # agent_types_test.exs`), not here.
   end
 
   # -- decode/4 happy paths: :client side ---------------------------------------

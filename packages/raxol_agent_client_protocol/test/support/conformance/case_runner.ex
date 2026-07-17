@@ -33,28 +33,26 @@ defmodule Raxol.AgentClientProtocol.Test.Conformance.CaseRunner do
   `README.md` fixture file, for the two cases that `read` it), exactly
   mirroring the upstream runner spawning a fresh agent process per case.
 
-  ## Compliance notes (found while porting, not fixed here -- out of this
-  coder's assigned files)
+  ## Compliance notes (found while porting)
 
-    * `Schema.AgentTypes.NewSessionRequest.from_json/1` (and, by the same
-      `AgentTypes.fetch/2` pattern, several sibling `from_json/1`s across
-      `agent_types.ex`) fetches a field's *presence* but never checks its
-      *type* against the oracle schema -- `cwd: 12345` and `cwd: null`
-      both decode successfully as `%NewSessionRequest{cwd: 12345 | nil}`
-      instead of failing at `Router.decode/4` with `-32602` the way a
-      schema-validating peer (the upstream TS SDK's own Zod-validated
-      `AgentSideConnection`, which is what actually rejects
-      `acp.v1.errors.invalid_params` / `.invalid_params.cwd_null` upstream
-      -- the *reference* `mock-agent.ts`'s own `newSession` handler doesn't
-      inspect `cwd` at all) would. `MockAgent.new_session/2` compensates
-      with its own `is_binary/1` guard so these two cases still exercise a
-      real, machine-readable `-32602` from *this* package's stack -- but
-      the schema layer's own leniency here is worth another coder's look;
-      it likely affects other typed string fields the same way (see
-      `acp.v1.errors.invalid_prompt_session_type`, which happens to still
-      pass because a non-string `session_id` simply fails this fixture's
-      own session-registry lookup instead, landing on the *same*
-      `-32603 Unknown session` path used for a truly-unknown id).
+    * FIXED (G6 finding-14, C6 -- STRICT ruling): `Schema.AgentTypes.
+      NewSessionRequest.from_json/1` (and several sibling `from_json/1`s
+      across `agent_types.ex` + `LifecycleExtras.SessionNotification`) used
+      to fetch a field's *presence* but never check its *type* against the
+      oracle schema -- `cwd: 12345` and `cwd: null` decoded successfully as
+      `%NewSessionRequest{cwd: 12345 | nil}` instead of failing at
+      `Router.decode/4` with `-32602` the way a schema-validating peer (the
+      upstream TS SDK's own Zod-validated `AgentSideConnection`) would.
+      `AgentTypes.fetch/3` (mirroring the `WireFields.require/3` pattern
+      `ClientTypes`/`Content` already used) now type-checks `cwd`,
+      `sessionId`, `modeId`, and `methodId` on every struct the ruling
+      named as load-bearing, so `acp.v1.errors.invalid_params` /
+      `.invalid_params.cwd_null` / `.invalid_prompt_session_type` (cases
+      006, 011, 015) now pass for the *right* reason -- a real `-32602` at
+      decode, before any handler is invoked. `MockAgent.new_session/2`'s
+      own `valid_cwd?/1` guard is kept as a belt (it still catches the
+      empty-string edge `is_binary/1` alone doesn't reject), not the sole
+      defense it used to be.
 
     * `acp.v1.session.prompt.post_success_drain` assumes an agent that
       violates protocol ordering (emits `session/update` notifications

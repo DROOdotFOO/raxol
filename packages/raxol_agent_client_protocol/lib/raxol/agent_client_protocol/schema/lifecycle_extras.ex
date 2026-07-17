@@ -270,7 +270,7 @@ defmodule Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification d
 
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
-    with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId"),
+    with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId", &is_binary/1),
          {:ok, raw_update} <- AgentTypes.fetch(map, "update"),
          {:ok, update} <- SessionUpdate.from_json(raw_update) do
       {:ok,

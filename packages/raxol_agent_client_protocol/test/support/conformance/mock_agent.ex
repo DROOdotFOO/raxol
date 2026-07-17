@@ -108,15 +108,15 @@ defmodule Raxol.AgentClientProtocol.Test.Conformance.MockAgent do
 
   # -- session/new validation --------------------------------------------------
   #
-  # `Schema.AgentTypes.NewSessionRequest.from_json/1` fetches `cwd` without a
-  # type check (`AgentTypes.fetch/2` -- present-or-missing only, per package
-  # convention "total decode": never raise, but that does not imply
-  # schema-level type validation against the oracle's `cwd: string`). A
-  # non-string `cwd` therefore reaches this handler rather than being
-  # rejected at -32602 by `Router.decode/4` -- see the case-runner's
-  # moduledoc "compliance notes" for why this is flagged, not silently
-  # patched here (out of this fixture's scope, and out of this coder's
-  # assigned files).
+  # `Schema.AgentTypes.NewSessionRequest.from_json/1` now type-checks `cwd`
+  # (`AgentTypes.fetch/3` with `&is_binary/1`, G6 finding-14 STRICT ruling):
+  # a non-string or `nil` `cwd` is rejected at `Router.decode/4` with
+  # `-32602` before this handler is ever invoked. This `valid_cwd?/1` guard
+  # is now redundant belt-and-suspenders (a handler-level defense in depth,
+  # not the sole gate it used to be while the schema layer was
+  # presence-only) -- kept because a handler that trusts its params struct
+  # should still be defensive about the empty-string edge the oracle schema
+  # doesn't itself reject at the wire-type level.
 
   defp valid_cwd?(cwd), do: is_binary(cwd) and cwd != ""
 

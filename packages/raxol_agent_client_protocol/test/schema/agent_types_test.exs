@@ -463,4 +463,88 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypesTest do
       assert ClientRequest.method({:set_session_mode, nil}) == "session/set_mode"
     end
   end
+
+  # -- G6 Finding-14 (C6): STRICT type-checking on known load-bearing fields --
+  #
+  # `AgentTypes.fetch/2` was presence-only: `cwd: 12345`, `sessionId: 12345`,
+  # `modeId: 12345`, `methodId: 12345` all decoded to `{:ok, _}` with the raw
+  # non-string value riding along in the struct. A schema-validating peer
+  # (the upstream TS SDK's Zod-validated `AgentSideConnection`) rejects these
+  # with `-32602` at decode; this package only matched that when a *handler*
+  # happened to re-validate (see `MockAgent.new_session/2`'s `valid_cwd?/1`
+  # guard). Wrong types change error class down the pipe: a non-string
+  # `sessionId` used to decode fine, then fail the *handler's* session
+  # registry lookup as `-32603 Unknown session` instead of `-32602 Invalid
+  # params` at decode; a non-string `session/cancel` `sessionId` decoded fine
+  # and silently no-op'd. Fixed: `AgentTypes.fetch/3` (mirroring the sibling
+  # `ClientTypes`/`Content` decode path's `WireFields.require/3`) type-checks
+  # these fields and returns `{:error, {:invalid_field, key, value}}`, which
+  # `Router.decode/4` propagates and `Connection` maps to `-32602` (§4.1) --
+  # the same generic non-`:method_not_found`-decode-error path already
+  # pinned for missing fields in `connection_test.exs`'s Inv-6.
+  describe "Finding-14 (G6 C6): STRICT type-checking on load-bearing fields" do
+    test "NewSessionRequest.from_json/1 rejects a non-string cwd (was: silently accepted)" do
+      assert {:error, {:invalid_field, "cwd", 12_345}} =
+               NewSessionRequest.from_json(%{"cwd" => 12_345})
+    end
+
+    test "NewSessionRequest.from_json/1 rejects a null cwd (acpx case 015)" do
+      assert {:error, {:invalid_field, "cwd", nil}} = NewSessionRequest.from_json(%{"cwd" => nil})
+    end
+
+    test "LoadSessionRequest.from_json/1 rejects a non-string cwd" do
+      assert {:error, {:invalid_field, "cwd", 12_345}} =
+               LoadSessionRequest.from_json(%{"sessionId" => "s1", "cwd" => 12_345})
+    end
+
+    test "LoadSessionRequest.from_json/1 rejects a non-string sessionId" do
+      assert {:error, {:invalid_field, "sessionId", 12_345}} =
+               LoadSessionRequest.from_json(%{"sessionId" => 12_345, "cwd" => "/home"})
+    end
+
+    test "PromptRequest.from_json/1 rejects a non-string sessionId (acpx case 011)" do
+      assert {:error, {:invalid_field, "sessionId", 12_345}} =
+               PromptRequest.from_json(%{"sessionId" => 12_345, "prompt" => []})
+    end
+
+    test "SetSessionModeRequest.from_json/1 rejects a non-string sessionId" do
+      assert {:error, {:invalid_field, "sessionId", 12_345}} =
+               SetSessionModeRequest.from_json(%{"sessionId" => 12_345, "modeId" => "ask"})
+    end
+
+    test "SetSessionModeRequest.from_json/1 rejects a non-string modeId" do
+      assert {:error, {:invalid_field, "modeId", 12_345}} =
+               SetSessionModeRequest.from_json(%{"sessionId" => "s1", "modeId" => 12_345})
+    end
+
+    test "CancelNotification.from_json/1 rejects a non-string sessionId (was: silent cancel drop)" do
+      assert {:error, {:invalid_field, "sessionId", 12_345}} =
+               CancelNotification.from_json(%{"sessionId" => 12_345})
+    end
+
+    test "AuthenticateRequest.from_json/1 rejects a non-string methodId" do
+      assert {:error, {:invalid_field, "methodId", 12_345}} =
+               AuthenticateRequest.from_json(%{"methodId" => 12_345})
+    end
+
+    test "LifecycleExtras.SessionNotification.from_json/1 rejects a non-string sessionId" do
+      update = %{
+        "sessionUpdate" => "agent_message_chunk",
+        "content" => %{"type" => "text", "text" => "hi"}
+      }
+
+      assert {:error, {:invalid_field, "sessionId", 12_345}} =
+               Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification.from_json(%{
+                 "sessionId" => 12_345,
+                 "update" => update
+               })
+    end
+
+    test "unknown keys still fold to _meta (strict typing does not narrow forward-compat)" do
+      assert {:ok, decoded} =
+               NewSessionRequest.from_json(%{"cwd" => "/home", "futureField" => "x"})
+
+      assert decoded._meta == %{"futureField" => "x"}
+    end
+  end
 end

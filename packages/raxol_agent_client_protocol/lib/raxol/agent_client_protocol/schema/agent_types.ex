@@ -14,6 +14,18 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes do
   library doesn't fully understand never loses data. `from_json/1` never
   raises; it always returns `{:ok, t}` or `{:error, reason}`.
 
+  Known load-bearing string fields (`cwd`, `sessionId`, `modeId`,
+  `methodId`) are type-checked via `fetch/3`, not just presence-checked via
+  `fetch/2`: a wrong-typed value returns `{:error, {:invalid_field, key,
+  value}}` rather than decoding the raw value through, matching the STRICT
+  ruling on G6 finding-14 (a lenient presence-only decode on these fields
+  let e.g. a non-string `sessionId` reach a handler, changing error class
+  from `-32602 Invalid params` at decode to whatever the handler's own
+  lookup produced). Unknown wire keys are unaffected -- they still fold
+  into `_meta` via `extract_meta/2` -- so this does not narrow
+  forward-compat, only reject nonsense on fields this module already
+  claims to understand.
+
   ## Cross-module references
 
   `PromptRequest.prompt` is a list of
@@ -56,6 +68,41 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes do
     case Map.fetch(map, key) do
       {:ok, value} -> {:ok, value}
       :error -> {:error, {:missing_field, key}}
+    end
+  end
+
+  @doc false
+  # Fetch a required wire field, type-checking it against `valid?`. A
+  # missing key returns `{:missing_field, key}` (as `fetch/2` above); a
+  # present-but-wrong-type value returns `{:invalid_field, key, value}`
+  # instead of decoding the raw value straight through. Mirrors
+  # `Raxol.AgentClientProtocol.Schema.WireFields.require/3`, the decode
+  # helper `ClientTypes`/`Content` already use for their own typed known
+  # fields (`sessionId`, `path`, `content`, ...) -- this closes the
+  # accidental agent-vs-client decode split G6 finding-14 flagged: without
+  # it, `cwd: 12345` / `sessionId: 12345` / `modeId: 12345` /
+  # `methodId: 12345` decoded fine here, then either bypassed a *handler's*
+  # own re-validation or changed error class further down the pipe (a
+  # non-string `sessionId` landing on a session-registry miss, `-32603`,
+  # instead of `-32602 Invalid params` at decode; a non-string
+  # `session/cancel` `sessionId` decoding fine and silently no-op'ing).
+  # Reserved for the specific load-bearing fields the finding-14 ruling
+  # named as STRICT; unknown wire keys are never run through this and still
+  # fold into `_meta` via `extract_meta/2`, so forward-compat is untouched.
+  @spec fetch(map(), String.t(), (term() -> boolean())) ::
+          {:ok, term()}
+          | {:error, {:missing_field, String.t()} | {:invalid_field, String.t(), term()}}
+  def fetch(map, key, valid?) when is_map(map) and is_function(valid?, 1) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        if valid?.(value) do
+          {:ok, value}
+        else
+          {:error, {:invalid_field, key, value}}
+        end
+
+      :error ->
+        {:error, {:missing_field, key}}
     end
   end
 
@@ -476,7 +523,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.AuthenticateRequest do
 
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
-    with {:ok, method_id} <- AgentTypes.fetch(map, "methodId") do
+    with {:ok, method_id} <- AgentTypes.fetch(map, "methodId", &is_binary/1) do
       {:ok, %__MODULE__{method_id: method_id, _meta: AgentTypes.extract_meta(map, @known_keys)}}
     end
   end
@@ -558,7 +605,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.NewSessionRequest do
 
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
-    with {:ok, cwd} <- AgentTypes.fetch(map, "cwd"),
+    with {:ok, cwd} <- AgentTypes.fetch(map, "cwd", &is_binary/1),
          {:ok, mcp_servers} <-
            AgentTypes.decode_list(Map.get(map, "mcpServers", []), &McpServer.from_json/1) do
       {:ok,
@@ -705,8 +752,8 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.LoadSessionRequest do
 
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
-    with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId"),
-         {:ok, cwd} <- AgentTypes.fetch(map, "cwd"),
+    with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId", &is_binary/1),
+         {:ok, cwd} <- AgentTypes.fetch(map, "cwd", &is_binary/1),
          {:ok, mcp_servers} <-
            AgentTypes.decode_list(Map.get(map, "mcpServers", []), &McpServer.from_json/1) do
       {:ok,
@@ -959,8 +1006,8 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.SetSessionModeRequest do
 
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
-    with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId"),
-         {:ok, mode_id} <- AgentTypes.fetch(map, "modeId") do
+    with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId", &is_binary/1),
+         {:ok, mode_id} <- AgentTypes.fetch(map, "modeId", &is_binary/1) do
       {:ok,
        %__MODULE__{
          session_id: session_id,
@@ -1046,7 +1093,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.PromptRequest do
 
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
-    with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId"),
+    with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId", &is_binary/1),
          {:ok, raw_prompt} <- AgentTypes.fetch(map, "prompt"),
          {:ok, prompt} <- AgentTypes.decode_list(raw_prompt, &ContentBlock.from_json/1) do
       {:ok,
@@ -1172,7 +1219,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes.CancelNotification do
 
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
-    with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId") do
+    with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId", &is_binary/1) do
       {:ok, %__MODULE__{session_id: session_id, _meta: AgentTypes.extract_meta(map, @known_keys)}}
     end
   end
