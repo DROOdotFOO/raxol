@@ -780,18 +780,27 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     }
   end
 
-  # `next_row >= old_bottom` (steady state, or overflow past the bottom
-  # row) is ambiguous about exactly which rows hold real content -- the
-  # bottom row may already be filled -- so the conservative reading takes
-  # the FULL reclaimed range as occupied. Otherwise, only the rows
-  # actually written so far (`next_row - 1`) that fall inside the
-  # reclaimed range count.
-  defp grow_reclaim_count(next_row, old_bottom, new_bottom) do
-    if next_row >= old_bottom do
-      old_bottom - new_bottom
-    else
-      max(next_row - 1 - new_bottom, 0)
-    end
+  # `append_sealed/2` maintains one loop invariant unconditionally: rows
+  # `1..(next_row - 1)` hold real content, and row `next_row` itself is
+  # ALWAYS blank -- either genuinely never written yet, or (once `next_row`
+  # reaches the bottom margin) freshly re-blanked by the terminal's own
+  # index-at-region-boundary scroll that every `\r\n`-terminated seal ends
+  # with. Reclaiming down to `new_bottom` must reproduce that SAME
+  # invariant for the shrunk region: after evicting the oldest `k` rows,
+  # row `new_bottom` must land inside the blank tail, i.e.
+  # `new_bottom >= (next_row - 1 - k) + 1`, i.e. `k >= next_row - new_bottom`.
+  # `max(next_row - new_bottom, 0)` is exactly that minimal `k` -- and it
+  # subsumes the old "steady state" special case (`next_row == old_bottom`)
+  # for free, since `next_row` never exceeds `old_bottom` to begin with.
+  # A smaller `k` (the previous `max(next_row - 1 - new_bottom, 0)` formula
+  # used for the non-steady-state branch) under-scrolls by exactly one row
+  # whenever real content reaches all the way to the new boundary: row
+  # `new_bottom` ends up holding genuine content instead of the blank the
+  # rest of this module assumes, and the very next `seal/2` silently
+  # overwrites it instead of scrolling -- pinned by the "grow over a
+  # PARTIALLY-filled history" regression in overlay_picker_surface_test.exs.
+  defp grow_reclaim_count(next_row, _old_bottom, new_bottom) do
+    max(next_row - new_bottom, 0)
   end
 
   # Scrolls `k` rows out of the OLD (still wider) DECSTBM region by

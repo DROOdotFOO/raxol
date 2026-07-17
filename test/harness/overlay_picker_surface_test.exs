@@ -576,6 +576,44 @@ defmodule Raxol.Harness.OverlayPickerSurfaceTest do
       refute SealOracle.emits_full_clear?(raw(device))
     end
 
+    test "grow over a PARTIALLY-filled history keeps the boundary row blank: the next seal appends, never overwrites" do
+      # Regression: `grow_reclaim_count/3`'s pre-fix formula
+      # (`max(next_row - 1 - new_bottom, 0)`) under-scrolled by exactly
+      # one row whenever content reached the new boundary without filling
+      # the OLD region -- leaving real content ON row `new_bottom` while
+      # `next_row` claimed it blank, so the very next `seal/2` silently
+      # overwrote it. `append_sealed/2`'s loop invariant (row `next_row`
+      # is ALWAYS blank) must survive a grow.
+      {auth, device} = new_authority()
+
+      auth =
+        Enum.reduce(1..6, auth, fn i, a ->
+          InlineAuthority.seal(a, "sealed line #{i}\r\n")
+        end)
+
+      # partial fill: content stops short of the old history bottom
+      assert auth.next_row == 7
+      assert auth.next_row < @region_top
+
+      history_before = history_at(raw(device), @region_top)
+
+      assert {:ok, auth} =
+               InlineAuthority.set_footer_rows(auth, @grown_footer_rows)
+
+      _auth = InlineAuthority.seal(auth, "sealed after grow\r\n")
+
+      history_after = history_at(raw(device), @grown_region_top)
+
+      assert :ok ==
+               SealOracle.immutable_prefix?(history_before, history_after),
+             "a seal right after a partial-fill grow must scroll, never overwrite the boundary row"
+
+      text = history_after |> Enum.map(&row_text/1) |> Enum.join("\n")
+      assert text =~ "sealed line 6"
+      assert text =~ "sealed after grow"
+      refute SealOracle.emits_full_clear?(raw(device))
+    end
+
     test "shrink clears the vacated rows and re-pins; the next repaint self-promotes to a keyframe" do
       {auth, device} = new_authority()
 

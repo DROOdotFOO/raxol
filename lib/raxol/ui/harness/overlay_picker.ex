@@ -35,7 +35,9 @@ defmodule Raxol.UI.Harness.OverlayPicker do
   substring matching (`label_fn.(item)` downcased, `query` downcased,
   `String.contains?/2`), substring-first rather than fuzzy-first, because
   a wrong ranking in a filterable list is a worse failure than a merely
-  literal one.
+  literal one. `fuzzy_filter/3` is that ranker, shipped: a `Raxol.UI.ListScorer`
+  adapter a host opts into via `filter_fn: &OverlayPicker.fuzzy_filter/3`,
+  the substring default staying exactly as-is for hosts that never opt in.
 
   ## Fixed claimed height -- no per-keystroke footer re-pin
 
@@ -92,6 +94,7 @@ defmodule Raxol.UI.Harness.OverlayPicker do
   """
 
   alias Raxol.UI.Harness.InputEvent
+  alias Raxol.UI.ListScorer
 
   @type item :: term()
   @type label_fn :: (item() -> String.t())
@@ -143,6 +146,19 @@ defmodule Raxol.UI.Harness.OverlayPicker do
       max_visible: Keyword.get(opts, :max_visible, @default_max_visible),
       title: Keyword.get(opts, :title)
     }
+  end
+
+  @doc """
+  The fuzzy seam cashing in: a `filter_fn`-shaped adapter over
+  `Raxol.UI.ListScorer.rank/3` -- ranked (score-descending, original-order
+  tiebreak) subsequence matching instead of the default's plain substring
+  test. Hosts opt in via `filter_fn: &OverlayPicker.fuzzy_filter/3`; the
+  default filter stays substring-only on purpose (see the moduledoc's
+  "`filter_fn` is the fuzzy seam" section).
+  """
+  @spec fuzzy_filter(String.t(), [item()], label_fn()) :: [item()]
+  def fuzzy_filter(query, items, label_fn) do
+    items |> ListScorer.rank(query, label_fn) |> Enum.map(& &1.item)
   end
 
   @doc "The current query's matches -- `filter_fn` applied to `items`."
