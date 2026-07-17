@@ -291,7 +291,11 @@ defmodule Raxol.Harness.LiveSessionDriver do
         # DSR-probed the cursor via InlineDriver.probe_cursor/2 before
         # starting this driver). The probe itself stays the embedder's
         # job -- it owns the InlineDriver and the pre-claim byte order.
-        :boot
+        :boot,
+        # The boot greeting (Surface's ephemeral "welcome back,
+        # operator" line; erased at the first seal). Default stays off;
+        # the demos opt in.
+        :greeting
       ])
       |> Keyword.put(:command_sink, fn cmd ->
         send(driver_pid, {:surface_command, cmd})
@@ -339,6 +343,11 @@ defmodule Raxol.Harness.LiveSessionDriver do
       session_over?: false,
       steer_task: nil,
       quit_armed?: false,
+      # A liveness bound on THIS driver's own steering resource (not a
+      # latency claim about the lane): a steer Task that neither replies
+      # nor crashes -- a genuinely wedged lane call -- must not hold the
+      # single-in-flight guard forever. See `handle_steer_timeout/2`.
+      steer_timeout_ms: Keyword.get(opts, :steer_timeout_ms, 5_000),
       clock: clock,
       tick_ms: tick_ms,
       notify: Keyword.get(opts, :notify)
