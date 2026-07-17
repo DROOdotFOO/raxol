@@ -197,6 +197,160 @@ defmodule Raxol.Harness.RecencyPolicyTest do
   end
 
   # ---------------------------------------------------------------------
+  # D2. grade_blocks/2 -- the batch path: one event walk for a whole
+  #     projection (the bulk-paint / reattach-rebuild consumer)
+  # ---------------------------------------------------------------------
+
+  describe "grade_blocks/2 batch-grades a projection in one event walk" do
+    defp five_turn_projection do
+      events =
+        Enum.flat_map(1..5, fn n ->
+          base = (n - 1) * 3
+
+          [
+            %{
+              id: base + 1,
+              turn_id: "t#{n}",
+              ts: n * 1000,
+              family: :loop,
+              type: :turn_started,
+              tier: :durable,
+              payload: %{}
+            },
+            %{
+              id: base + 2,
+              turn_id: "t#{n}",
+              ts: n * 1000 + 10,
+              family: :loop,
+              type: :item_started,
+              tier: :durable,
+              payload: %{"item_id" => "i#{n}", "item_type" => "message"}
+            },
+            %{
+              id: base + 3,
+              turn_id: "t#{n}",
+              ts: n * 1000 + 20,
+              family: :loop,
+              type: :item_completed,
+              tier: :durable,
+              payload: %{
+                "item_id" => "i#{n}",
+                "item_type" => "message",
+                "content" => "turn #{n} reply"
+              }
+            }
+          ]
+        end)
+
+      Projection.project(events)
+    end
+
+    test "matches per-block grade_block/2 exactly (the equivalence law)" do
+      projection = five_turn_projection()
+
+      batch =
+        RecencyPolicy.grade_blocks(projection.blocks, projection.source_events)
+
+      singles =
+        Enum.map(
+          projection.blocks,
+          &RecencyPolicy.grade_block(&1, projection.source_events)
+        )
+
+      assert batch == singles
+      assert batch == [0.4, 0.4, 0.6, 0.8, 1.0]
+    end
+
+    test "empty blocks and empty events degrade safely" do
+      projection = five_turn_projection()
+
+      assert RecencyPolicy.grade_blocks([], projection.source_events) == []
+
+      assert RecencyPolicy.grade_blocks(projection.blocks, []) ==
+               [1.0, 1.0, 1.0, 1.0, 1.0]
+    end
+
+    test "a block with unresolvable refs grades 1.0 in the batch too" do
+      projection = five_turn_projection()
+
+      orphan =
+        Block.from_events(:message, [
+          %{id: 9_991, type: :item_completed, content: "orphan"}
+        ])
+
+      grades =
+        RecencyPolicy.grade_blocks(
+          projection.blocks ++ [orphan],
+          projection.source_events
+        )
+
+      assert List.last(grades) == 1.0
+      assert Enum.take(grades, 5) == [0.4, 0.4, 0.6, 0.8, 1.0]
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # D3. The anti-inversion invariant, made self-defending: every block a
+  #     projection builds resolves its turn against that projection's own
+  #     source_events. This is the tripwire for the retention decision at
+  #     Raxol.Harness.Projection (source_events = every durable event,
+  #     un-windowed; ephemeral item_delta traffic never enters a block's
+  #     event_refs). The day someone bounds source_events for memory, THIS
+  #     test goes red before old scrollback can silently grade loud.
+  # ---------------------------------------------------------------------
+
+  describe "the anti-inversion invariant (blocks always resolve against source_events)" do
+    @session_fixtures ~w(simple-chat long-folds multi-tool-turn markdown-stream
+                         taint-propagation unicode-heavy adversarial)
+
+    test "every shipped fixture's blocks resolve their event_refs in source_events" do
+      for name <- @session_fixtures do
+        path = "test/fixtures/harness/sessions/#{name}.jsonl"
+        {:ok, session} = Raxol.Harness.Fixture.load(path)
+        projection = Projection.project(session)
+
+        source_ids =
+          projection.source_events
+          |> Enum.map(&Map.get(&1, :id))
+          |> MapSet.new()
+
+        for block <- projection.blocks do
+          resolvable =
+            Enum.any?(block.event_refs, &MapSet.member?(source_ids, &1))
+
+          assert resolvable,
+                 "#{name}: block #{inspect(block.event_refs)} resolves no " <>
+                   "ref in source_events -- the un-windowed durable " <>
+                   "retention invariant broke (see Projection's " <>
+                   "source_events construction); recency grading would " <>
+                   "silently return 1.0 (loud) for this block"
+        end
+      end
+    end
+
+    test "negative control: a windowed source_events degrades old blocks to 1.0 (loud), the documented failure mode" do
+      # This is the exact behavior the invariant above protects against
+      # becoming reachable: grading against a WINDOWED tail of events
+      # (here: only the newest turn retained) resolves an old block's
+      # turn to nothing, and the ratified never-darker rule grades it
+      # 1.0. Correct per the unknown-turn spec; wrong as an attention
+      # signal -- which is why retention must stay un-windowed while
+      # this policy feeds on source_events.
+      projection = five_turn_projection()
+      [oldest_block | _] = projection.blocks
+
+      windowed_tail = Enum.take(projection.source_events, -3)
+
+      assert RecencyPolicy.grade_block(oldest_block, windowed_tail) == 1.0
+
+      assert RecencyPolicy.grade_block(
+               oldest_block,
+               projection.source_events
+             ) == 0.4
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # E. a five-turn fixture renders the documented ladder byte-exact
   # ---------------------------------------------------------------------
 

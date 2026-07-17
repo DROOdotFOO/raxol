@@ -74,6 +74,15 @@ defmodule Raxol.Harness.RecencyPolicy do
   an approval outranks its own ladder tier automatically, with no
   needs-input branch anywhere in this module.
 
+  Scope note: on today's sole wiring point (the fixture-replay
+  surface's seal path) this composition is dormant -- the block builder
+  constructs every block already `:sealed`, and the seal frontier holds
+  a live approval back from painting at all, so a live approval never
+  reaches the graded path there; it lives in the repaintable footer
+  instead. The floor composition is real and tested at the `Prominence`
+  layer, and engages the moment a live-rendering surface grades live
+  blocks.
+
   ## Coverage today (an honest scope note)
 
   The grade is threaded through `Raxol.UI.Components.Harness.BlockBody`'s
@@ -222,6 +231,38 @@ defmodule Raxol.Harness.RecencyPolicy do
 
   def grade_block(_block, _events), do: 1.0
 
+  @doc """
+  Batch form of `grade_block/2`: grades EVERY block in `blocks` against
+  `events` with a SINGLE walk over the event list -- `O(events +
+  total_refs)` for the whole batch, where the per-block form re-derives
+  the (identical) turn order and current turn from the full event list
+  on every call.
+
+  Equivalence law (tested): `grade_blocks(blocks, events)` is exactly
+  `Enum.map(blocks, &grade_block(&1, events))` -- same input contract,
+  same defensive fallbacks, only the cost differs. This is the entry
+  point a bulk paint should use: a full re-render, a reattach rebuild,
+  or any pass that grades a whole projection at once. The incremental
+  seal path (`Raxol.Harness.Surface.render_block_lines/3`) keeps the
+  per-block form because its hold-back-one design seals a bounded
+  number of blocks per advance.
+  """
+  @spec grade_blocks([map()], [map()]) :: [prominence()]
+  def grade_blocks(blocks, events) when is_list(blocks) and is_list(events) do
+    {rev_order, current_turn, turn_by_id} = index_events(events)
+    order = Enum.reverse(rev_order)
+    current_position = position(order, current_turn)
+
+    Enum.map(blocks, fn
+      %{event_refs: refs} ->
+        block_turn = first_ref_turn(refs, turn_by_id)
+        grade_one(order, current_position, block_turn, current_turn)
+
+      _other ->
+        1.0
+    end)
+  end
+
   # -- grade/2 + grade_block/2 shared core --------------------------------
 
   # Never darker than 1.0 when either side of the comparison is
@@ -270,22 +311,18 @@ defmodule Raxol.Harness.RecencyPolicy do
   # opaque turn id can never collide with "not found yet"). Non-map
   # entries fall through the guard and are skipped, never raised on.
   defp scan_events(events, refs) do
+    ref_set = MapSet.new(refs)
+
     {_seen, rev_order, current_turn, block_turn} =
       Enum.reduce(events, {MapSet.new(), [], nil, :none}, fn
         event, {seen, rev_order, current, found} when is_map(event) ->
           turn = Map.get(event, :turn_id)
-
-          {seen, rev_order} =
-            if is_nil(turn) or MapSet.member?(seen, turn) do
-              {seen, rev_order}
-            else
-              {MapSet.put(seen, turn), [turn | rev_order]}
-            end
-
+          {seen, rev_order} = note_turn(seen, rev_order, turn)
           current = if is_nil(turn), do: current, else: turn
 
           found =
-            if found == :none and Map.get(event, :id) in refs do
+            if found == :none and
+                 MapSet.member?(ref_set, Map.get(event, :id)) do
               {:found, turn}
             else
               found
@@ -302,4 +339,60 @@ defmodule Raxol.Harness.RecencyPolicy do
 
   defp unwrap_block_turn({:found, turn}), do: turn
   defp unwrap_block_turn(:none), do: nil
+
+  # First-seen turn-order accumulation, shared by both event walks:
+  # skip nil and already-seen turns, otherwise prepend (the caller
+  # reverses back to first-seen order once, at the end).
+  defp note_turn(seen, rev_order, turn) do
+    if is_nil(turn) or MapSet.member?(seen, turn) do
+      {seen, rev_order}
+    else
+      {MapSet.put(seen, turn), [turn | rev_order]}
+    end
+  end
+
+  # -- grade_blocks/2 batch helpers ----------------------------------------
+
+  # The batch counterpart of scan_events/2: ONE walk over `events`
+  # deriving the turn order, the current turn, AND an id -> {position,
+  # turn} index -- so each block afterwards resolves its own turn in
+  # O(its refs) instead of re-walking the event list. `Map.put_new/3`
+  # keeps the FIRST occurrence per id (filter_ids guarantees unique ids
+  # on the intended feed; first-wins preserves grade_block/2's
+  # first-matching-event semantics on a contract-violating one).
+  defp index_events(events) do
+    {_seen, rev_order, current_turn, turn_by_id, _pos} =
+      Enum.reduce(events, {MapSet.new(), [], nil, %{}, 0}, fn
+        event, {seen, rev_order, current, by_id, pos} when is_map(event) ->
+          turn = Map.get(event, :turn_id)
+          {seen, rev_order} = note_turn(seen, rev_order, turn)
+          current = if is_nil(turn), do: current, else: turn
+          by_id = Map.put_new(by_id, Map.get(event, :id), {pos, turn})
+          {seen, rev_order, current, by_id, pos + 1}
+
+        _non_map, acc ->
+          acc
+      end)
+
+    {rev_order, current_turn, turn_by_id}
+  end
+
+  # The turn of the FIRST event (by event position, not ref position)
+  # whose id appears in `refs` -- exactly grade_block/2's derivation,
+  # answered from the prebuilt index. `nil` when nothing resolves.
+  defp first_ref_turn(refs, turn_by_id) when is_list(refs) do
+    refs
+    |> Enum.flat_map(fn ref ->
+      case Map.fetch(turn_by_id, ref) do
+        {:ok, {pos, turn}} -> [{pos, turn}]
+        :error -> []
+      end
+    end)
+    |> case do
+      [] -> nil
+      found -> found |> Enum.min_by(&elem(&1, 0)) |> elem(1)
+    end
+  end
+
+  defp first_ref_turn(_refs, _turn_by_id), do: nil
 end
