@@ -394,6 +394,19 @@ defmodule Raxol.UI.Components.Harness.Block do
   def sealed?(%__MODULE__{seal: :sealed}), do: true
   def sealed?(%__MODULE__{}), do: false
 
+  @doc """
+  The speaker of a `:message` block: `:user` when the block's extracted
+  content carries an explicit `role: :user` (see `extract_content/2`'s
+  role normalization), `:assistant` for every other message and for
+  every non-message kind (machinery has no speaker; the unmarked voice
+  is the safe default). This is the one derivation the folded header
+  glyph and `Raxol.Harness.Surface`'s user-echo seam both read, so the
+  two can never disagree about who spoke.
+  """
+  @spec role(t()) :: :user | :assistant
+  def role(%__MODULE__{kind: :message, content: %{role: :user}}), do: :user
+  def role(%__MODULE__{}), do: :assistant
+
   @spec folded?(t()) :: boolean()
   def folded?(%__MODULE__{fold: :folded}), do: true
   def folded?(%__MODULE__{}), do: false
@@ -466,7 +479,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   end
 
   defp header_view(block, width, fg) do
-    prefix = "#{fold_icon(block.fold)} #{kind_glyph(block.kind)} "
+    prefix = "#{fold_icon(block.fold)} #{glyph(block)} "
     budget = max(width - TextMeasure.display_width(prefix), 1)
     summary_text = block |> summary() |> TextLayout.truncate(budget, :ellipsis)
 
@@ -487,7 +500,18 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp apply_fg(style, nil), do: style
   defp apply_fg(style, fg), do: Map.put(style, :fg, fg)
 
-  defp prominence_fg(block, context) do
+  @doc """
+  The block's resolved prominence fade colour (`"#RRGGBB"`), or `nil`
+  when `context[:prominence]` is absent, `1.0`, or not a number -- the
+  neutral case every row helper leaves styles untouched for. This is the
+  ONE solver call every faded row of a block shares (see the moduledoc's
+  "Prominence" section). Public so `Raxol.Harness.Surface`'s user-echo
+  sigil can carry the SAME resolved colour as the block it prefixes
+  (single-fg rule: the chevron fades with its block, never staying
+  anchor-bright over demoted text).
+  """
+  @spec prominence_fg(t(), map()) :: String.t() | nil
+  def prominence_fg(block, context) do
     case Map.get(context, :prominence, 1.0) do
       p when is_number(p) and p >= 1.0 ->
         nil
@@ -536,6 +560,22 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp fold_icon(:folded), do: "▸"
   defp fold_icon(_fold), do: "▾"
+
+  # The folded-header glyph is role-aware for `:message` blocks: a folded
+  # USER turn reads `▸ ❯ first line…` (the prompt-echo sigil standing in
+  # for the kind glyph, so a folded prompt is still recognisably the
+  # user's voice), a folded assistant message keeps `▸ » summary`. The
+  # header itself stays at the ordinary margined header column -- only
+  # the EXPANDED user echo's chevron enters the margin, and that happens
+  # at `Raxol.Harness.Surface`'s margin/chevron seam, never here.
+  defp glyph(%__MODULE__{kind: :message} = block) do
+    case role(block) do
+      :user -> "❯"
+      :assistant -> kind_glyph(:message)
+    end
+  end
+
+  defp glyph(%__MODULE__{kind: kind}), do: kind_glyph(kind)
 
   defp kind_glyph(:message), do: "»"
   defp kind_glyph(:reasoning), do: "∴"
@@ -1035,6 +1075,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   @cost_paths [[:cost], [:usage, :cost], [:content, :cost]]
   @duration_paths [[:duration_ms], [:content, :duration_ms]]
   @text_paths [[:content], [:text], [:output], [:diff]]
+  @role_paths [[:role], [:content, :role]]
   @name_paths [[:name], [:content, :name]]
   @args_paths [[:args], [:content, :args]]
   @action_paths [[:action]]
@@ -1095,7 +1136,27 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp extract_content(:approval, events), do: extract_approval_content(events)
   defp extract_content(:diff, events), do: extract_diff_content(events)
+
+  defp extract_content(:message, events),
+    do: %{text: extract_text(events), role: extract_role(events)}
+
   defp extract_content(_kind, events), do: %{text: extract_text(events)}
+
+  # Speaker attribution for `:message` blocks, read defensively from the
+  # source events' payloads (`role` -- contract-only-grows: producers that
+  # never send it keep working). The normalization direction is a safety
+  # decision, not a convenience: the user echo is a claim of AUTHORSHIP
+  # ("you said this"), so mislabeling machine output as the user is the
+  # harmful direction. Anything that is not an exact user marker --
+  # absent, unknown, or hostile (`"\e[2Juser"`) -- resolves `:assistant`,
+  # the unmarked voice.
+  defp extract_role(events) do
+    events |> find_in_events(@role_paths) |> normalize_role()
+  end
+
+  defp normalize_role(:user), do: :user
+  defp normalize_role("user"), do: :user
+  defp normalize_role(_other), do: :assistant
 
   defp extract_text(events) do
     events

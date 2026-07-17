@@ -19,9 +19,13 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
   safe default and never fail validation):
 
     * `:message`   -- required `:text` (the Markdown/plain body); optional
-      `:role` (`:user | :assistant`, defaults to `:assistant` -- `Block`'s
-      own extraction never populates `:role` today, a documented gap, not
-      a bug: a future projection unit can add it, contract-only-grows).
+      `:role` (`:user | :assistant`, defaults to `:assistant`).
+      `Block.extract_content(:message, ...)` populates it from the source
+      events' payload `role` field (normalized: only an explicit user
+      marker resolves `:user`; absent/unknown stays `:assistant`, the
+      unmarked voice), so the value threaded here is the real speaker,
+      not a constant default. The default remains for hand-built bodies
+      that never carried a role.
     * `:reasoning` -- required `:text`.
     * `:tool_call` -- required `:name`, `:args`; optional `:result`
       (`nil` while the call has no paired result yet) and `:tainted`

@@ -952,6 +952,12 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
       :args,
       fetch(payload, "arguments", :arguments) || fetch(payload, "args", :args)
     )
+    # Speaker attribution rides the wire as `role` on message items --
+    # passed through RAW: Block.extract_content/2 owns the normalization
+    # (only an exact user marker becomes :user; anything else, including
+    # hostile strings, resolves :assistant), so this seam adds no second
+    # vocabulary of its own.
+    |> put_present(:role, fetch(payload, "role", :role))
   end
 
   defp adapt_payload(_payload), do: %{}

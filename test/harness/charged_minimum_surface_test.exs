@@ -240,8 +240,11 @@ defmodule Raxol.Harness.ChargedMinimumSurfaceTest do
       second = Enum.find_index(history, &String.contains?(&1, "second block body"))
       assert first != nil and second != nil
 
-      # Every non-blank sealed row is margined (chevron lives in the
-      # footer, never in history).
+      # Every non-blank sealed row is margined. (This fixture is
+      # assistant-only: the ONE margin-dweller, the user-echo chevron of
+      # an expanded user message, is pinned separately in
+      # speaker_separation_surface_test.exs -- no chevron ever fronts
+      # ASSISTANT or machinery history.)
       for row <- history, row != "" do
         assert String.starts_with?(row, " "),
                "sealed history row missing its left margin: #{inspect(row)}"

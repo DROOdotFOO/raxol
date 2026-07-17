@@ -11,7 +11,8 @@
         "completion": {
           "evidence": "none"
         },
-        "text": "Hello!"
+        "text": "Hello!",
+        "role": "assistant"
       },
       "event_refs": [
         2,

@@ -11,7 +11,8 @@
         "completion": {
           "evidence": "none"
         },
-        "text": "# Diagnostic Report\n\nSummary of the **run**: all checks passed, one _warning_ noted.\n\n## Steps\n\n1. Compile the project\n2. Run the test suite\n3. Collect timing\n\n## Code\n\n```elixir\ndefmodule Raxol.Diagnostic do\n  def run do\n    :ok\n  end\nend\n```\n\n## Results\n\n| check | status | ms |\n|---|---|---|\n| compile | ok | 812 |\n| test | ok | 4021 |\n| lint | warn | 233 |\n\nDone.\n"
+        "text": "# Diagnostic Report\n\nSummary of the **run**: all checks passed, one _warning_ noted.\n\n## Steps\n\n1. Compile the project\n2. Run the test suite\n3. Collect timing\n\n## Code\n\n```elixir\ndefmodule Raxol.Diagnostic do\n  def run do\n    :ok\n  end\nend\n```\n\n## Results\n\n| check | status | ms |\n|---|---|---|\n| compile | ok | 812 |\n| test | ok | 4021 |\n| lint | warn | 233 |\n\nDone.\n",
+        "role": "assistant"
       },
       "event_refs": [
         2,

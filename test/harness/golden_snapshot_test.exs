@@ -28,7 +28,7 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
   alias Raxol.Harness.Surface.{Golden, GoldenDiff, ViewText}
   alias Raxol.Harness.Test.SealOracle
   alias Raxol.Test.CrossTerminal.SequenceScanner
-  alias Raxol.UI.Components.Harness.BlockBody
+  alias Raxol.UI.Components.Harness.{Block, BlockBody}
   alias Raxol.UI.Rendering.PaintAuthority.ContentGuard
 
   # Geometry shared with `Golden.render/2` (see that module's determinism
@@ -308,10 +308,29 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
         block
         |> BlockBody.render(%{width: content_width})
         |> ViewText.lines(content_width, :styled)
-        |> Enum.map(&[" ", &1, "\r\n"])
+        |> decorate_lines(block)
+        |> Enum.map(&[&1, "\r\n"])
         |> IO.iodata_to_binary()
       end
     end
+
+    # Mirrors `Surface.sealed_history_lines/4`'s margin/chevron seam: an
+    # EXPANDED user :message block is the prompt echo (`❯ ` first line,
+    # 2-space hang on the rest -- plain prefixes here; the real sigil's
+    # bold SGR is orthogonal to both the fixed-point and the plain-text
+    # anti-drift comparison), everything else takes the 1-column margin.
+    defp decorate_lines(lines, %Block{kind: :message, fold: :expanded} = block) do
+      if Block.role(block) == :user do
+        case lines do
+          [] -> []
+          [first | rest] -> ["❯ " <> first | Enum.map(rest, &("  " <> &1))]
+        end
+      else
+        Enum.map(lines, &(" " <> &1))
+      end
+    end
+
+    defp decorate_lines(lines, _block), do: Enum.map(lines, &(" " <> &1))
 
     defp plain_lines(styled_binary) do
       styled_binary

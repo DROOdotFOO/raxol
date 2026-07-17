@@ -76,7 +76,8 @@
         "completion": {
           "evidence": "none"
         },
-        "text": "Root has mix.exs, lib/, test/, README.md."
+        "text": "Root has mix.exs, lib/, test/, README.md.",
+        "role": "assistant"
       },
       "event_refs": [
         12,

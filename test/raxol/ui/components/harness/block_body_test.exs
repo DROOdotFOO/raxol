@@ -66,12 +66,19 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   # (folded/expanded is a Block construction option, not a different
   # events shape -- these come from a real producer, not a synthetic map) --
 
+  # Two lines on purpose: with the [assistant] tagline dead (speaker
+  # separation), a single-line message's expanded body would be
+  # indistinguishable from Block's own folded first-line summary -- the
+  # second line is what only the expanded mount can show.
   defp events(:message) do
     [
       %{
         id: 1,
         type: :item_completed,
-        payload: %{item_type: :message, content: "Deploy is done."}
+        payload: %{
+          item_type: :message,
+          content: "Deploy is done.\nAll checks green."
+        }
       }
     ]
   end
@@ -154,14 +161,15 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   # expanded render, never in Block's own folded header+outcome summary
   # -- proves "unfolding renders the full body" isn't tautological.
   #
-  # `message`/`reasoning` content here is a single short line, so Block's
-  # OWN folded summary (`first_line/1`, always computed regardless of
-  # fold) already shows that whole line verbatim -- the genuinely
-  # expanded-ONLY thing is what the rich component adds on top: the role
-  # prefix (`MessageBlock`) and the "N line(s)" affordance
-  # (`ReasoningBlock`), neither of which Block's plain summary ever emits.
+  # `reasoning` content here is a single short line, so Block's OWN
+  # folded summary (`first_line/1`, always computed regardless of fold)
+  # already shows that whole line verbatim -- the genuinely expanded-ONLY
+  # thing is the "N line(s)" affordance the rich component adds on top.
+  # `message` has no tagline anymore (speaker separation: bare prose), so
+  # its expanded-only content is simply its SECOND body line, which the
+  # folded first-line summary never shows.
   @expanded_only_marker %{
-    message: "[assistant]",
+    message: "All checks green.",
     reasoning: "1 line",
     tool_call: "⚠ untrusted",
     diff: "Proposed change",
@@ -395,9 +403,16 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   describe "live markdown message bodies stream safely end-to-end" do
     test "a live expanded message with a trailing unclosed construct never leaks markers" do
       block = message_block("streaming **bold", seal: :live)
-      texts = flat_texts(BlockBody.render(block, default_context()))
+      rendered = BlockBody.render(block, default_context())
+      texts = flat_texts(rendered)
 
-      assert Enum.any?(texts, &(&1 =~ "[assistant]")),
+      # Mount-proof (the tagline is dead, so it can't serve as the
+      # marker anymore): only the real MessageBlock's streaming path
+      # provisionally closes the construct and renders the span BOLD --
+      # Block.render/2's plain fallback has no styled leaves at all.
+      assert Enum.any?(flat_leaves(rendered), fn {content, style} ->
+               content =~ "bold" and style[:bold] == true
+             end),
              "the real MessageBlock must mount (not the Block.render fallback)"
 
       assert Enum.any?(texts, &(&1 =~ "bold"))

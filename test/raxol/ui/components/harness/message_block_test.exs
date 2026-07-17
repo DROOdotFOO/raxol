@@ -55,8 +55,25 @@ defmodule Raxol.UI.Components.Harness.MessageBlockTest do
     end
   end
 
-  describe "render/2" do
-    test "renders a column with a dim role prefix above the markdown body" do
+  describe "render/2 (speaker separation: no tagline, bare prose)" do
+    # The [assistant]/[user] tagline is DEAD (speaker-separation option A,
+    # harness-speaker-separation.md §4): it was role-colored -- doctrine
+    # §4.1 forbids color-as-speaker -- and spent a row. Authorship is
+    # carried by the prompt-echo grammar at the Surface's margin/chevron
+    # seam instead; this component renders the body alone for BOTH roles.
+    test "the tagline never renders, for either role" do
+      for role <- [:assistant, :user] do
+        {:ok, state} =
+          MessageBlock.init(id: :m_render, role: role, content: "hello")
+
+        rendered = MessageBlock.render(state, default_context())
+
+        refute Enum.any?(flat_texts(rendered), &(&1 =~ ~r/\[(assistant|user)\]/)),
+               "the #{role} tagline row must never render"
+      end
+    end
+
+    test "renders the body as the ONLY child -- bare prose, no header row" do
       {:ok, state} =
         MessageBlock.init(id: :m_render, role: :assistant, content: "hello")
 
@@ -64,28 +81,26 @@ defmodule Raxol.UI.Components.Harness.MessageBlockTest do
 
       assert rendered.type == :column
       assert rendered.gap == 0
-      assert length(rendered.children) == 2
-
-      [role_el, body_el] = rendered.children
-      assert role_el.content == "[assistant]"
-      assert role_el.style == %{dim: true, fg: :cyan}
+      assert [body_el] = rendered.children
       assert body_el.type == :column
     end
 
-    test "colors the user role prefix distinctly from assistant" do
-      {:ok, user_state} = MessageBlock.init(id: :m_user, role: :user)
-      {:ok, asst_state} = MessageBlock.init(id: :m_asst, role: :assistant)
+    test "both roles render an identical view for identical content -- the chevron echo is the Surface's job, not this component's" do
+      {:ok, user_state} =
+        MessageBlock.init(id: :m_same, role: :user, content: "same words")
 
-      user_rendered = MessageBlock.render(user_state, default_context())
-      asst_rendered = MessageBlock.render(asst_state, default_context())
+      {:ok, asst_state} =
+        MessageBlock.init(id: :m_same, role: :assistant, content: "same words")
 
-      [user_role_el | _] = user_rendered.children
-      [asst_role_el | _] = asst_rendered.children
+      assert MessageBlock.render(user_state, default_context()) ==
+               MessageBlock.render(asst_state, default_context()),
+             "role must not change this component's own view -- speaker " <>
+               "grammar lives at the Surface margin/chevron seam"
+    end
 
-      assert user_role_el.content == "[user]"
-      assert user_role_el.style.fg == :green
-      assert asst_role_el.style.fg == :cyan
-      assert user_role_el.style.fg != asst_role_el.style.fg
+    test "keeps the role in state as the speaker record" do
+      {:ok, state} = MessageBlock.init(id: :m_role, role: :user)
+      assert state.role == :user
     end
 
     test "reuses MarkdownRenderer verbatim for the message body" do
@@ -93,7 +108,7 @@ defmodule Raxol.UI.Components.Harness.MessageBlockTest do
       {:ok, state} = MessageBlock.init(id: :m_md, content: content, width: 40)
 
       rendered = MessageBlock.render(state, default_context())
-      [_role_el, body_el] = rendered.children
+      [body_el] = rendered.children
 
       {:ok, md_state} =
         MarkdownRenderer.init(%{markdown_text: content, width: 40})

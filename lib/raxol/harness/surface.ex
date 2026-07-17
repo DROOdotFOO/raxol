@@ -1113,14 +1113,21 @@ defmodule Raxol.Harness.Surface do
   #
   # V's charged-minimum ruling (harness-visual-doctrine §1.2/§4.2): all
   # sealed-history and footer content sits inside a 1-column margin on
-  # both sides; the ONE flush-left thing on screen is the composer's
-  # chevron -- the prompt sigil, the anchor of an idle frame. Implemented
-  # here, at the single seam where lines meet the paint authorities,
-  # never as per-component string prefixes. Two documented exemptions:
-  # the overlay picker and the diff expansion are FRAMED transient claims
-  # pre-rendered at full width by their own modules -- margining them
-  # here would truncate their right bezels; bringing them inside the
-  # margin is their own follow-up, not a string-prefix hack at this seam.
+  # both sides; the chevron -- the prompt sigil -- is the ONLY entity
+  # that enters that margin, in exactly two places: the composer's live
+  # prompt row (the anchor of an idle frame) and its sealed twin, the
+  # user-echo first line of an expanded user `:message` block
+  # (speaker-separation ruling, `harness-speaker-separation.md` option A:
+  # the live sigil collapses into a `❯`-echo in history; see
+  # `echo_lines/4`). Both take the SAME `model.sigil`, decided once from
+  # the capability record, so echo and prompt can never drift.
+  # Implemented here, at the single seam where lines meet the paint
+  # authorities, never as per-component string prefixes. Two documented
+  # exemptions: the overlay picker and the diff expansion are FRAMED
+  # transient claims pre-rendered at full width by their own modules --
+  # margining them here would truncate their right bezels; bringing them
+  # inside the margin is their own follow-up, not a string-prefix hack at
+  # this seam.
 
   # Left margin (1 col) + right margin (1 col) around margined content.
   @margin " "
@@ -1833,7 +1840,12 @@ defmodule Raxol.Harness.Surface do
   # is the honest flat behavior, so the flat emit stays infallible-shaped.
   defp seal_block(%{mode: :flat} = model, block) do
     model = clear_greeting(model)
-    lines = block |> render_block_lines(model, :plain) |> margin_lines()
+
+    lines =
+      block
+      |> render_block_lines(model, :plain)
+      |> sealed_history_lines(block, model, :plain)
+
     iodata = Enum.map(block_separator(model) ++ lines, &(&1 <> "\n"))
     authority = FlatAuthority.seal(model.authority, iodata)
 
@@ -1858,7 +1870,11 @@ defmodule Raxol.Harness.Surface do
     # The greeting's erase bytes must precede this seal's bytes in the
     # SAME frame (the ephemeral-element law) -- clear first.
     model = clear_greeting(model)
-    lines = block |> render_block_lines(model, :styled) |> margin_lines()
+
+    lines =
+      block
+      |> render_block_lines(model, :styled)
+      |> sealed_history_lines(block, model, :styled)
 
     iodata = Enum.map(block_separator(model) ++ lines, &[&1, "\r\n"])
 
@@ -1896,16 +1912,101 @@ defmodule Raxol.Harness.Surface do
   # (Recovery.filter_ids/1 id-monotonicity; un-windowed durable-only
   # retention); see RecencyPolicy.grade_block/2's input contract.
   defp render_block_lines(block, model, mode) do
-    prominence =
-      RecencyPolicy.grade_block(block, model.projection.source_events)
-
     # Rendered at the margined content width -- `seal_block/2` adds the
     # 1-column margin around these lines, and the budget must shrink
     # BEFORE truncation, never after (a full-width line prefixed with a
-    # margin would overflow the terminal by exactly the margin).
+    # margin would overflow the terminal by exactly the margin). The
+    # user-echo prefix is width-honest by the same arithmetic: its 2
+    # cells over the SAME budget mirror the composer's chevron rows
+    # exactly (`chevron_lines/2`).
     block
-    |> BlockBody.render(%{width: content_width(model), prominence: prominence})
+    |> BlockBody.render(%{
+      width: content_width(model),
+      prominence: block_prominence(block, model)
+    })
     |> ViewText.lines(content_width(model), mode)
+  end
+
+  defp block_prominence(block, model),
+    do: RecencyPolicy.grade_block(block, model.projection.source_events)
+
+  # -- the user-echo chevron (speaker separation, option A) ----------------
+  #
+  # V's margin ruling: the chevron is the ONLY entity that enters the
+  # 1-cell margin area. An EXPANDED user `:message` block seals as a
+  # prompt echo -- its first line is prefixed with the SAME sigil the
+  # composer's live prompt row carries (`model.sigil`: chosen once from
+  # the capability record, `unicode: :none` degrades it to `>` -- echo
+  # and live prompt can never drift), flush left in the margin column;
+  # its remaining lines hang-align to the echo's text column with two
+  # spaces, the composer's own continuation-row convention
+  # (`chevron_lines/2` is the template). Everything else -- assistant
+  # prose, machinery blocks, and FOLDED user headers (`▸ ❯ ...`, which
+  # keep the ordinary margined header column) -- takes the plain margin.
+  defp sealed_history_lines(lines, block, model, mode) do
+    if echo_block?(block) do
+      echo_lines(lines, block, model, mode)
+    else
+      margin_lines(lines)
+    end
+  end
+
+  # Only an EXPANDED user message is the echo: a folded one renders as a
+  # `▸ ❯ summary` header line, and prefixing THAT with a second chevron
+  # would stutter (`❯ ▸ ❯ ...`) -- the fold guard keeps folded headers at
+  # their existing column convention.
+  defp echo_block?(%Block{kind: :message, fold: :expanded} = block),
+    do: Block.role(block) == :user
+
+  defp echo_block?(_block), do: false
+
+  defp echo_lines([], _block, _model, _mode), do: []
+
+  defp echo_lines([first | rest], block, model, mode) do
+    [echo_first_line(first, block, model, mode) | Enum.map(rest, &hang_line/1)]
+  end
+
+  # A blank first line gets the bare sigil (no trailing space injected --
+  # same no-phantom-whitespace rule as `margin_line/1`).
+  defp echo_first_line("", block, model, mode),
+    do: echo_sigil(block, model, mode)
+
+  defp echo_first_line(line, block, model, mode),
+    do: echo_sigil(block, model, mode) <> " " <> line
+
+  defp hang_line(""), do: ""
+  defp hang_line(line), do: "  " <> line
+
+  # Bold (structure channel, doctrine §4.3) through the SAME ViewText SGR
+  # path as the composer's sigil -- and carrying the block's OWN resolved
+  # prominence fade (`Block.prominence_fg/2`, the block's single-fg rule):
+  # a demoted user turn's chevron dims with its text instead of staying
+  # anchor-bright over faded prose. `:plain` is the flat tier -- zero
+  # escape bytes, the bare sigil.
+  defp echo_sigil(_block, model, :plain), do: model.sigil
+
+  defp echo_sigil(block, model, :styled) do
+    [line] =
+      ViewText.lines(
+        %{
+          type: :text,
+          content: model.sigil,
+          style: echo_sigil_style(block, model)
+        },
+        @sigil_cols,
+        :styled
+      )
+
+    line
+  end
+
+  defp echo_sigil_style(block, model) do
+    case Block.prominence_fg(block, %{
+           prominence: block_prominence(block, model)
+         }) do
+      nil -> %{bold: true}
+      fg -> %{bold: true, fg: fg}
+    end
   end
 
   # -- status/turn derivation (precondition #4) ----------------------------

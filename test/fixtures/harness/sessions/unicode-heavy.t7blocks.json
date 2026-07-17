@@ -8,7 +8,8 @@
         "cost": null
       },
       "content": {
-        "text": "你好世界 👨‍👩‍👧‍👦 école مرحبا שלום 🎉 done!"
+        "text": "你好世界 👨‍👩‍👧‍👦 école مرحبا שלום 🎉 done!",
+        "role": "assistant"
       },
       "event_refs": [
         2,

@@ -229,7 +229,7 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
   end
 
   describe "mount/3 -- real end-to-end per kind (drives the REAL merged component)" do
-    test ":message mounts MessageBlock and shows the role prefix + content" do
+    test ":message mounts MessageBlock as bare prose -- content, no tagline" do
       block = fixture_block(:message)
 
       assert {:ok, view} =
@@ -238,8 +238,11 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
                )
 
       texts = flat_texts(view)
-      assert Enum.any?(texts, &(&1 == "[assistant]"))
       assert Enum.any?(texts, &(&1 =~ "Deploy is done."))
+
+      refute Enum.any?(texts, &(&1 =~ ~r/\[(assistant|user)\]/)),
+             "the role tagline is dead (speaker separation) -- a message " <>
+               "body mounts as bare prose"
     end
 
     test ":reasoning mounts ReasoningBlock expanded, showing the full content" do

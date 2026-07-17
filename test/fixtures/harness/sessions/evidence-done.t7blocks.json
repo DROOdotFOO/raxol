@@ -46,7 +46,8 @@
             }
           ]
         },
-        "text": "All 42 tests passed."
+        "text": "All 42 tests passed.",
+        "role": "assistant"
       },
       "event_refs": [
         6,
@@ -66,7 +67,8 @@
         "completion": {
           "evidence": "none"
         },
-        "text": "Sounds good, wrapping up now."
+        "text": "Sounds good, wrapping up now.",
+        "role": "assistant"
       },
       "event_refs": [
         10,

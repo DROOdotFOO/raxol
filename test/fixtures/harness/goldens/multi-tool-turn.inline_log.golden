@@ -21,8 +21,7 @@
  defmodule Raxol.MixProject do
    use Mix.Project
  end
-8[?25l7[15;1H[K Input: clear | Stage: item_completed | Ctx: — | Cost: —[16;1H[K [assistant][17;1H[K Root has mix.exs, lib/, test/, README.md.8[18;3H[?25h7[14;1H
- [2m[assistant][0m
+8[?25l7[15;1H[K Input: clear | Stage: item_completed | Ctx: — | Cost: —[16;1H[K Root has mix.exs, lib/, test/, README.md.[17;1H[K[1m❯[0m  [18;1H[K8[17;3H[?25h7[14;1H
  Root has mix.exs, lib/, test/, README.md.
  [2mno evidence provided[0m
-8[?25l7[15;1H[K[1m❯[0m  [16;1H[K[17;1H[K[18;1H[K8[15;3H[?25h
+8[?25l7[15;1H[K[1m❯[0m  [16;1H[K[17;1H[K8[15;3H[?25h

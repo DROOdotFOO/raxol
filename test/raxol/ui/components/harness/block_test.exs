@@ -262,6 +262,86 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
     end
   end
 
+  describe "speaker role (message blocks: extraction, role/1, folded glyph)" do
+    defp role_message_events(role_value) do
+      [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{
+            item_type: :message,
+            content: "why is the build red?",
+            role: role_value
+          }
+        }
+      ]
+    end
+
+    test "extract_content(:message) populates :role from the payload" do
+      block = Block.from_events(:message, role_message_events(:user))
+      assert block.content.role == :user
+      assert Block.role(block) == :user
+    end
+
+    test "a wire-string role normalizes: exactly \"user\" and nothing else" do
+      assert Block.from_events(:message, role_message_events("user"))
+             |> Block.role() == :user
+
+      # Anything but an explicit user marker resolves :assistant -- the
+      # echo is an authorship claim, and mislabeling machine output as
+      # the user is the harmful direction (absence-semantics: restrictive
+      # default). Hostile/garbled markers included.
+      for other <- ["assistant", :assistant, "USER", "\e[2Juser", 42, nil, %{}] do
+        assert Block.from_events(:message, role_message_events(other))
+               |> Block.role() == :assistant,
+               "role #{inspect(other)} must resolve :assistant"
+      end
+    end
+
+    test "an absent role defaults to :assistant (contract-only-grows)" do
+      block = Block.from_events(:message, message_events("hello"))
+      assert block.content.role == :assistant
+      assert Block.role(block) == :assistant
+    end
+
+    test "role/1 is :assistant for every non-message kind -- machinery has no speaker" do
+      reasoning =
+        Block.from_events(:reasoning, [
+          %{
+            id: 1,
+            type: :item_completed,
+            payload: %{item_type: :reasoning, content: "hm", role: :user}
+          }
+        ])
+
+      assert Block.role(reasoning) == :assistant
+    end
+
+    test "folded USER header carries the echo glyph: `▸ ❯ first line…`" do
+      block =
+        Block.from_events(:message, role_message_events(:user), fold: :folded)
+
+      rendered = Block.render(block, %{width: 80})
+      [header] = flat_texts(rendered)
+
+      assert String.starts_with?(header, "▸ ❯ "),
+             "folded user header must open `▸ ❯ `, got #{inspect(header)}"
+
+      assert header =~ "why is the build red?"
+    end
+
+    test "folded ASSISTANT header keeps `▸ » summary` unchanged" do
+      block =
+        Block.from_events(:message, message_events("all done"), fold: :folded)
+
+      rendered = Block.render(block, %{width: 80})
+      [header] = flat_texts(rendered)
+
+      assert String.starts_with?(header, "▸ » ")
+      assert header =~ "all done"
+    end
+  end
+
   describe "outcome row" do
     test "absent outcome data renders no outcome row" do
       block = Block.from_events(:message, message_events("no outcome here"))
