@@ -633,5 +633,101 @@ defmodule Raxol.UI.Components.Harness.ComposerTest do
       assert cmds == []
       assert Composer.value(new_state) == "line one\n"
     end
+
+    # -- control keys over the real wires (the live-demo defect) --------
+    #
+    # T27 fixed Enter and printable chars INSIDE the Composer, but every
+    # other special key (:backspace/:delete/arrows/home/end) still
+    # delegates the raw event onward to MultiLineInput -- whose
+    # EventHandler matched only `%{key: _, modifiers: _}`, the
+    # `Event.key_event/3` test-API shape. Neither real driver shape
+    # carries `:modifiers`, so backspace and arrow keys were dead on a
+    # real terminal (harness live/fixture demos) while passing every
+    # test-API-shaped test. These drive the REAL parser/translator
+    # emitters through the delegation path.
+
+    test "a real ANSI backspace (DEL byte) deletes the char before the cursor" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "hi")
+
+      {new_state, _cmds} =
+        Composer.handle_event(
+          parser_key_event(<<127>>),
+          state,
+          default_context()
+        )
+
+      assert Composer.value(new_state) == "h"
+    end
+
+    test "a real termbox backspace (TB key 127) deletes too" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "hi")
+
+      {new_state, _cmds} =
+        Composer.handle_event(
+          translator_key_event(127),
+          state,
+          default_context()
+        )
+
+      assert Composer.value(new_state) == "h"
+    end
+
+    test "a real ANSI left-arrow moves the cursor (next insert lands mid-draft)" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "ab")
+
+      {state, _cmds} =
+        Composer.handle_event(
+          # CSI D -- left arrow on the raw-ANSI wire
+          parser_key_event("\e[D"),
+          state,
+          default_context()
+        )
+
+      {state, _cmds} =
+        Composer.handle_event(parser_key_event("X"), state, default_context())
+
+      assert Composer.value(state) == "aXb"
+    end
+
+    test "a real ANSI delete (CSI 3~) removes the char under the cursor" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "ab")
+
+      {state, _cmds} =
+        Composer.handle_event(
+          parser_key_event("\e[D"),
+          state,
+          default_context()
+        )
+
+      {state, _cmds} =
+        Composer.handle_event(
+          parser_key_event("\e[3~"),
+          state,
+          default_context()
+        )
+
+      assert Composer.value(state) == "a"
+    end
+
+    test "a real ANSI Home (CSI H) moves the cursor to the line start" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "ab")
+
+      {state, _cmds} =
+        Composer.handle_event(
+          parser_key_event("\e[H"),
+          state,
+          default_context()
+        )
+
+      {state, _cmds} =
+        Composer.handle_event(parser_key_event("X"), state, default_context())
+
+      assert Composer.value(state) == "Xab"
+    end
   end
 end
