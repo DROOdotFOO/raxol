@@ -109,6 +109,20 @@ defmodule Raxol.UI.Rendering.PaintAuthority do
     def cursor_position(row) when is_integer(row) and row >= 1 do
       "\e[#{row};1H"
     end
+
+    @doc """
+    DEC 2026 synchronized-update begin: `CSI ? 2026 h`. Paired with
+    `sync_end/0` by `InlineAuthority.sync_open/1`/`sync_close/1`; defined
+    here (not inline at the emit site) so the mode number and set/reset
+    finals live in the shared wire vocabulary, pinned by a raw-byte test
+    rather than duplicated per call site.
+    """
+    @spec sync_begin() :: binary()
+    def sync_begin, do: "\e[?2026h"
+
+    @doc "DEC 2026 synchronized-update end: `CSI ? 2026 l`. See `sync_begin/0`."
+    @spec sync_end() :: binary()
+    def sync_end, do: "\e[?2026l"
   end
 
   defmodule IOAuthority do

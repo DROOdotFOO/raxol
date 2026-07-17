@@ -30,10 +30,19 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
      at least one block AND repaints the footer is wrapped in
      `\\e[?2026h` ... `\\e[?2026l` so multi-block seals present
      atomically -- gated on the terminal capability record
-     (`Capabilities.sync_output`); capability absent/unknown emits
-     nothing. Brackets stay balanced even when a seal write fails
-     mid-frame, and the O1 byte oracle models the bracket tokens rather
-     than halting unverifiable.
+     (`Capabilities.sync_output`, strict struct match); capability
+     absent/unknown emits nothing. Brackets stay balanced even when a
+     seal write fails mid-frame; a CLOSE write the device refuses is
+     latched as owed and re-attempted at the next frame of any kind (the
+     dangling-open wedge heals -- describe 4). The O1 byte oracle models
+     the bracket tokens rather than halting unverifiable.
+
+  Describe block 4 covers the adversarial-review hardening pass on the
+  above: device-error classification by origin
+  (`InlineAuthority.device_io_error?/2` -- a logic bug raising the same
+  exception class must stay loud, never become a silent retry loop), the
+  `Dialect`-owned sync wire vocabulary, the strict capability-record
+  match, and the dangling-close heal.
   """
 
   use ExUnit.Case, async: true
@@ -61,23 +70,24 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
   # A device that fails exactly one targeted write, then recovers.
   #
   # Implements the Erlang I/O protocol. Replies `{:error, :enospc}` to the
-  # FIRST `put_chars` request whose bytes contain `marker` AND a `\r\n`
-  # (only SEAL writes are `\r\n`-terminated -- the footer's pending
-  # preview carries the same content but is CUP-positioned, never
-  # newline-carrying, so the failure targets exactly the seal write). With
-  # `fail_first: true` it instead fails the very first request of any
-  # kind. Every other request delegates to an inner StringIO sink -- so
-  # the sink holds exactly the bytes the device CONFIRMED, which is what a
-  # real terminal would have received. `IO.write/2` surfaces the error
-  # reply as a raised `ArgumentError` (and a dead device as `ErlangError`)
-  # -- the two error classes `InlineAuthority.try_seal/2` must catch.
+  # FIRST `put_chars` request whose bytes satisfy the `fail_when`
+  # predicate, and delegates every other request to an inner StringIO sink
+  # -- so the sink holds exactly the bytes the device ACCEPTED, which is
+  # what a real terminal would have received. `IO.write/2` surfaces the
+  # error reply as a raised `ArgumentError` (and a dead device as
+  # `ErlangError`) -- the two device-error classes the authority's seam
+  # must classify (see `InlineAuthority.device_io_error?/2`).
+  #
+  # `seal_write_with/1` builds the predicate the retry tests use: only
+  # SEAL writes are `\r\n`-terminated (the footer's pending preview
+  # carries the same content but is CUP-positioned, never
+  # newline-carrying), so marker + `\r\n` targets exactly the seal write.
   # ---------------------------------------------------------------------
   defmodule FailingDevice do
     def start(opts) do
       {:ok, sink} = StringIO.open("")
-      marker = Keyword.get(opts, :marker)
-      fail_first? = Keyword.get(opts, :fail_first, false)
-      pid = spawn_link(fn -> loop(sink, marker, fail_first?, false) end)
+      fail_when = Keyword.fetch!(opts, :fail_when)
+      pid = spawn_link(fn -> loop(sink, fail_when, false) end)
       {pid, sink}
     end
 
@@ -86,30 +96,30 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
       out
     end
 
-    defp loop(sink, marker, fail_first?, failed?) do
+    defp loop(sink, fail_when, failed?) do
       receive do
         {:io_request, from, ref, {:put_chars, _enc, chars}} ->
           bytes = IO.iodata_to_binary(chars)
 
-          fail_now? =
-            not failed? and
-              (fail_first? or
-                 (marker != nil and String.contains?(bytes, marker) and
-                    String.contains?(bytes, "\r\n")))
-
-          if fail_now? do
+          if not failed? and fail_when.(bytes) do
             send(from, {:io_reply, ref, {:error, :enospc}})
-            loop(sink, marker, fail_first?, true)
+            loop(sink, fail_when, true)
           else
             IO.write(sink, bytes)
             send(from, {:io_reply, ref, :ok})
-            loop(sink, marker, fail_first?, failed?)
+            loop(sink, fail_when, failed?)
           end
 
         {:io_request, from, ref, _other} ->
           send(from, {:io_reply, ref, {:error, :request}})
-          loop(sink, marker, fail_first?, failed?)
+          loop(sink, fail_when, failed?)
       end
+    end
+  end
+
+  defp seal_write_with(marker) do
+    fn bytes ->
+      String.contains?(bytes, marker) and String.contains?(bytes, "\r\n")
     end
   end
 
@@ -226,7 +236,8 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
             {cur + TextMeasure.display_width(first), max_w}
 
           _ ->
-            widths = [cur + TextMeasure.display_width(first)] ++
+            widths =
+              [cur + TextMeasure.display_width(first)] ++
                 Enum.map(rest, &TextMeasure.display_width/1)
 
             {List.last(widths), Enum.max([max_w | widths])}
@@ -244,7 +255,7 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
 
   describe "1. two-phase seal (write -> confirm -> mark)" do
     test "a failed device write leaves the block unsealed and the next advance retries it (retry-not-vanish)" do
-      {device, sink} = FailingDevice.start(marker: @marker)
+      {device, sink} = FailingDevice.start(fail_when: seal_write_with(@marker))
 
       # The marker sits on the block's THIRD body line: the footer's
       # pending-preview (a legitimately repaintable surface, NOT sealed
@@ -299,7 +310,7 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
       # Construction bytes (the DECSTBM set) carry no marker, so they
       # succeed; the seal content write is the first marker-bearing
       # request and gets the {:error, :enospc} reply.
-      {device, sink} = FailingDevice.start(marker: "line")
+      {device, sink} = FailingDevice.start(fail_when: seal_write_with("line"))
       authority = InlineAuthority.new(device, 40, 10, 3)
 
       assert {:error, :write_failed, returned} =
@@ -421,7 +432,9 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
       assert SealOracle.region_sets(flush_bytes) ==
                [{1, new_rows - @footer_rows}]
 
-      {region_at, _} = :binary.match(flush_bytes, "\e[1;#{new_rows - @footer_rows}r")
+      {region_at, _} =
+        :binary.match(flush_bytes, "\e[1;#{new_rows - @footer_rows}r")
+
       {seal_at, _} = :binary.match(flush_bytes, @marker)
 
       assert region_at < seal_at,
@@ -526,7 +539,7 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
     end
 
     test "a seal failure inside the bracket still emits the closing bracket (balanced)" do
-      {device, sink} = FailingDevice.start(marker: @marker)
+      {device, sink} = FailingDevice.start(fail_when: seal_write_with(@marker))
 
       model =
         new_model(message_events(@marker <> " body"),
@@ -568,6 +581,137 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
 
       assert SequenceScanner.capability({:csi, "?2026", "h"}) ==
                :synchronized_output
+    end
+  end
+
+  # =======================================================================
+  # 4. Adversarial-review hardening (PR review round 1)
+  # =======================================================================
+
+  describe "4. review hardening: device-error classification" do
+    test "device_io_error?/2 recognizes the two device classes and rejects local raises" do
+      # Class 1: an io server replying {:error, reason} -- IO.write raises
+      # ArgumentError FROM :io.put_chars (the stack head names the origin).
+      {device, _sink} = FailingDevice.start(fail_when: fn _bytes -> true end)
+
+      {reply_error, reply_stack} =
+        try do
+          IO.write(device, "x")
+          flunk("expected the failing device to raise")
+        rescue
+          e -> {e, __STACKTRACE__}
+        end
+
+      assert %ArgumentError{} = reply_error
+      assert InlineAuthority.device_io_error?(reply_error, reply_stack)
+
+      # Class 2: a dead device -- ErlangError{original: :terminated},
+      # same :io origin.
+      {:ok, dead} = StringIO.open("")
+      StringIO.close(dead)
+
+      {dead_error, dead_stack} =
+        try do
+          IO.write(dead, "x")
+          flunk("expected the dead device to raise")
+        rescue
+          e -> {e, __STACKTRACE__}
+        end
+
+      assert %ErlangError{original: :terminated} = dead_error
+      assert InlineAuthority.device_io_error?(dead_error, dead_stack)
+
+      # A logic bug raising the SAME exception class from NON-device code
+      # must NOT classify as a device error -- it must stay loud (the
+      # over-broad-rescue finding: masking it would turn a code bug into
+      # an unbounded silent retry loop).
+      {local_error, local_stack} =
+        try do
+          raise ArgumentError, "logic bug, not a device"
+        rescue
+          e -> {e, __STACKTRACE__}
+        end
+
+      refute InlineAuthority.device_io_error?(local_error, local_stack)
+    end
+
+    test "the Dialect owns the sync-bracket wire vocabulary (raw-byte oracle)" do
+      # The raw bytes here are DELIBERATELY duplicated rather than read
+      # from the constant under test: this is the drift guard -- a typo in
+      # the Dialect (2026 vs 2027, h vs l) fails here instead of
+      # propagating silently into every emit site.
+      alias Raxol.UI.Rendering.PaintAuthority.Dialect
+
+      assert Dialect.sync_begin() == "\e[?2026h"
+      assert Dialect.sync_end() == "\e[?2026l"
+    end
+
+    test "a plain map masquerading as a capability record does not enable sync emission" do
+      {:ok, device} = StringIO.open("")
+
+      model =
+        new_model(message_events("hello"),
+          device: device,
+          capabilities: %{sync_output: true}
+        )
+
+      model = advance_to_pending_flush(model)
+
+      {_result, flush_bytes} =
+        frame_bytes(fn -> raw(device) end, fn -> Surface.advance(model) end)
+
+      refute flush_bytes =~ "2026",
+             "only a %Capabilities{} record may enable sync emission -- " <>
+               "a stray map with the right key must not"
+    end
+  end
+
+  describe "4. review hardening: dangling sync bracket heals" do
+    test "a close-write failure does not wedge the terminal: the owed close is re-attempted on the next frame" do
+      # The device accepts the OPEN but faults exactly on the CLOSE write
+      # -- the wedge case: ?2026h landed on the wire with no matching
+      # ?2026l, terminal frozen in synchronized mode. The authority must
+      # remember the owed close and re-attempt it on the next frame of any
+      # kind (here: a plain tick), healing as soon as the device accepts a
+      # byte again.
+      {device, sink} =
+        FailingDevice.start(
+          fail_when: fn bytes -> String.contains?(bytes, "\e[?2026l") end
+        )
+
+      model =
+        new_model(message_events("hello"),
+          device: device,
+          capabilities: %Capabilities{sync_output: true}
+        )
+
+      model = advance_to_pending_flush(model)
+      {model, :done} = Surface.advance(model)
+
+      confirmed = FailingDevice.confirmed_bytes(sink)
+
+      assert occurrences(confirmed, @sync_open) == 1
+
+      assert occurrences(confirmed, @sync_close) == 0,
+             "precondition: the close write was rejected by the device"
+
+      # The next frame -- a plain ticker frame, no seal -- must emit the
+      # owed close.
+      _model = Surface.tick(model, 1)
+
+      healed = FailingDevice.confirmed_bytes(sink)
+
+      assert occurrences(healed, @sync_close) == 1,
+             "the owed close must be re-attempted on the next frame -- " <>
+               "a dangling ?2026h wedges the terminal in synchronized mode"
+
+      assert occurrences(healed, @sync_open) ==
+               occurrences(healed, @sync_close)
+
+      # And the close landed AFTER the open (ordering sanity).
+      {open_at, _} = :binary.match(healed, @sync_open)
+      {close_at, _} = :binary.match(healed, @sync_close)
+      assert close_at > open_at
     end
   end
 end

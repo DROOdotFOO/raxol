@@ -809,6 +809,7 @@ defmodule Raxol.Harness.Surface do
   end
 
   defp do_advance(model, now) do
+    model = heal_sync(model)
     revealed = min(model.revealed + 1, length(model.events))
     events_so_far = Enum.take(model.events, revealed)
 
@@ -831,25 +832,44 @@ defmodule Raxol.Harness.Surface do
   end
 
   # A frame that seals at least one block AND repaints the footer
-  # presents atomically: seal + status + footer run inside one DEC 2026
-  # synchronized-update bracket (InlineAuthority.with_sync/3, gated on
-  # the capability record). The bracket condition is the pre-seal scan's
-  # will_commit -- it exactly predicts "this frame seals >= 1 block"
-  # except when the first emit fails, in which case an empty bracket is
-  # emitted (harmless: a sync frame with no visible change; the
-  # balanced-bracket case in test/harness/surface_seal_pipeline_test.exs
-  # covers the failure path). Frames that seal nothing (early reveals,
-  # tick, handle_input) never open a bracket. :flat has no footer and no
-  # cursor vocabulary -- never bracketed.
+  # presents atomically: seal + status + footer run between
+  # InlineAuthority.sync_open/1 and sync_close/1 -- one DEC 2026
+  # synchronized-update bracket, gated on the capability record. The
+  # bracket condition is the pre-seal scan's will_commit -- it exactly
+  # predicts "this frame seals >= 1 block" except when the first emit
+  # fails, in which case an empty bracket is emitted (harmless: a sync
+  # frame with no visible change; the balanced-bracket case in
+  # test/harness/surface_seal_pipeline_test.exs covers the failure path).
+  # Frames that seal nothing (early reveals, tick, handle_input) never
+  # open a bracket -- but every frame entry point calls heal_sync/1
+  # first, so a close the device refused in an EARLIER frame (the
+  # dangling-open wedge) is re-attempted at the first opportunity of any
+  # kind. :flat has no footer and no cursor vocabulary -- never
+  # bracketed.
+  #
+  # If run_seal_frame/3 raises mid-bracket (a logic bug -- device
+  # failures are tuples, not raises, on this path), the rescue below
+  # makes one best-effort close attempt before re-raising, so a crashing
+  # frame does not also leave the terminal synchronized. The authority
+  # state update is lost with the crash either way; the byte is what
+  # matters to the terminal.
   defp seal_frame(%{mode: :flat} = model, events_so_far, now) do
     run_seal_frame(model, events_so_far, now)
   end
 
   defp seal_frame(model, events_so_far, now) do
     if frontier_scan(model).will_commit do
-      InlineAuthority.with_sync(model.authority, model, fn m ->
-        run_seal_frame(m, events_so_far, now)
-      end)
+      opened = update_authority(model, &InlineAuthority.sync_open/1)
+
+      try do
+        opened
+        |> run_seal_frame(events_so_far, now)
+        |> update_authority(&InlineAuthority.sync_close/1)
+      rescue
+        e ->
+          _ = InlineAuthority.sync_close(opened.authority)
+          reraise e, __STACKTRACE__
+      end
     else
       run_seal_frame(model, events_so_far, now)
     end
@@ -862,6 +882,20 @@ defmodule Raxol.Harness.Surface do
     |> paint_footer()
   end
 
+  # Re-attempts a sync close the device refused in an earlier frame (see
+  # InlineAuthority.sync_close/1's latch contract) -- a byte-free no-op
+  # when nothing is owed, so every frame entry point (do_advance, tick,
+  # handle_input, resize) calls it unconditionally: a dangling ?2026h
+  # heals at the FIRST frame after the device accepts a byte again,
+  # never later.
+  defp heal_sync(%{mode: :flat} = model), do: model
+
+  defp heal_sync(model),
+    do: update_authority(model, &InlineAuthority.sync_close/1)
+
+  defp update_authority(model, fun),
+    do: %{model | authority: fun.(model.authority)}
+
   @doc """
   Advances the elapsed-since-last-event ticker (the status strip's
   `Stage` slot) without revealing a new fixture event -- elapsed ticks
@@ -872,6 +906,7 @@ defmodule Raxol.Harness.Surface do
   @spec tick(t(), integer()) :: t()
   def tick(model, now) when is_integer(now) do
     model
+    |> heal_sync()
     |> put_in([:status, :now], now)
     |> paint_footer()
   end
@@ -999,12 +1034,14 @@ defmodule Raxol.Harness.Surface do
     # The ONE mutating frontier walk (SealFrontier's moduledoc): emit
     # each newly-committable block via seal_block/2, which advances
     # painted_count -- the committed marker frontier_entries/1 reads.
-    # The emit is write-confirming (`InlineAuthority.try_seal/2`): write ->
-    # confirm -> mark. A failed device write halts the walk with
+    # The emit is write-checked (`InlineAuthority.try_seal/2`): write ->
+    # confirm -> mark, where "confirmed" means the device's io server
+    # ACCEPTED the write (see try_seal/2's doc for what that does and
+    # does not promise). A refused write halts the walk with
     # painted_count (the cursor) strictly before the failed entry, and the
     # next advance retries the same block, so a block can never be marked
-    # painted without its bytes confirmed on the device (retry-not-vanish;
-    # covered by test/harness/surface_seal_pipeline_test.exs).
+    # painted for bytes the device refused (retry-not-vanish; covered by
+    # test/harness/surface_seal_pipeline_test.exs).
     result =
       SealFrontier.commit_walk(
         entries,
@@ -1193,6 +1230,7 @@ defmodule Raxol.Harness.Surface do
   """
   @spec handle_input(t(), term()) :: t()
   def handle_input(model, raw_event) do
+    model = heal_sync(model)
     norm = InputEvent.normalize(raw_event)
 
     # Every keystroke is presence evidence for the unread divider's
@@ -2173,7 +2211,7 @@ defmodule Raxol.Harness.Surface do
     do: adopt_resize(model, width, rows)
 
   def resize(model, width, rows) do
-    model = adopt_resize(model, width, rows)
+    model = model |> heal_sync() |> adopt_resize(width, rows)
     lines = footer_lines(model)
     authority = InlineAuthority.keyframe(model.authority, lines)
     %{model | authority: authority, stub_notice: nil}
