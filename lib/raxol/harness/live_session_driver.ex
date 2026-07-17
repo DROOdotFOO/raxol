@@ -279,6 +279,12 @@ defmodule Raxol.Harness.LiveSessionDriver do
         # terminal queue, never paint" test.
         :editor_session,
         :editor_opts,
+        # The paint FAMILY: `:inline_hybrid` (default) or `:full_viewport`
+        # (V's endgame pivot -- the alternate-screen, owned-scrollback
+        # surface). Pass-through to `Surface.new/2`'s `:surface_mode`; the
+        # degradation ladder still floors it to `:flat` when headless or
+        # geometry is degenerate.
+        :surface_mode,
         # The adaptive pin (footer-follows-content): pass-through to
         # `Surface.new/2`'s `:pin` option. Default stays `:immediate`
         # (Surface's own default) so byte-golden embedders are

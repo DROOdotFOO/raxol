@@ -265,6 +265,9 @@ defmodule Raxol.UI.Harness.Keymap do
           | :expand_diff
           | :open_search_picker
           | :approval_answer
+          | :scroll_up
+          | :scroll_down
+          | :scroll_to_tail
 
   @type command :: %{type: command_type(), payload: map()}
 
@@ -354,7 +357,19 @@ defmodule Raxol.UI.Harness.Keymap do
              command_type: :edit_draft,
              guard: :always,
              label: "edit draft in external editor"
-           }
+           },
+           # Scrollback for the `:full_viewport` surface's owned virtual
+           # scrollback (inert in the inline/flat tiers, which use the
+           # terminal's OWN native scrollback). PgUp/PgDn are ALWAYS live
+           # (non-printable named keys -- they can never be typed text, and
+           # transcript scroll takes priority over a multi-line draft's own
+           # paging while composing, V's ruling). No `label:` -- they are
+           # live keys, not palette entries (a palette entry inert in three
+           # of four modes would be dishonest). See
+           # `Raxol.Harness.Surface`'s `:scroll_up`/`:scroll_down`/
+           # `:scroll_to_tail` dispatch.
+           %{key: :page_up, command_type: :scroll_up, guard: :always},
+           %{key: :page_down, command_type: :scroll_down, guard: :always}
            # The live-approval answer binds are spliced in HERE, ahead of every
            # `:not_composing` letter bind below. Order is load-bearing for exactly
            # one collision: `n` is also the plan-panel bind further down. First
@@ -448,7 +463,15 @@ defmodule Raxol.UI.Harness.Keymap do
                command_type: :open_search_picker,
                guard: :not_composing,
                label: "search transcript"
-             }
+             },
+             # Return the `:full_viewport` scroll window to the tail. `End`
+             # and vim-style `G`, both `:not_composing` so the composer
+             # keeps `End` (end-of-line) and a typed `G` while the composer
+             # has focus -- scroll-to-tail while composing is served by
+             # PgDn (always-live) above. No `label:`, same rationale as the
+             # PgUp/PgDn binds.
+             %{key: :end, command_type: :scroll_to_tail, guard: :not_composing},
+             %{char: "G", command_type: :scroll_to_tail, guard: :not_composing}
            ]
 
   # Structural guard for the one load-bearing ordering above: the

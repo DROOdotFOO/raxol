@@ -273,9 +273,16 @@ defmodule Raxol.UI.Harness.KeymapTest do
       approval_answer_binds =
         Enum.count(Keymap.binds(), &(&1.command_type == :approval_answer))
 
+      # A third shared-type family: `:scroll_to_tail` is emitted by BOTH
+      # `End` and vim-style `G` (see the full-viewport scrollback binds),
+      # so it contributes its own (count - 1) to the residual gap, exactly
+      # like the panel and approval families above.
+      scroll_to_tail_binds =
+        Enum.count(Keymap.binds(), &(&1.command_type == :scroll_to_tail))
+
       assert length(Keymap.binds()) ==
                MapSet.size(declared) + (open_panel_binds - 1) +
-                 (approval_answer_binds - 1)
+                 (approval_answer_binds - 1) + (scroll_to_tail_binds - 1)
     end
 
     # The `guard: :overlay` bind's own context requirement differs from
@@ -640,4 +647,47 @@ defmodule Raxol.UI.Harness.KeymapTest do
   # this module touched -- this is the precise inversion Drew's review
   # named: a caller that omits `composing?` must get guarded (dead)
   # navigation, not silently-armed guarded binds.
+
+  describe "full-viewport scrollback binds" do
+    test "PgUp is ALWAYS live (fires even while composing) -> :scroll_up" do
+      assert resolve_from(parser_event("\e[5~"), %{composing?: true}) ==
+               %{type: :scroll_up, payload: %{}}
+
+      assert resolve_from(Event.key_event(:page_up, :pressed, []), %{
+               composing?: true
+             }) == %{type: :scroll_up, payload: %{}}
+    end
+
+    test "PgDn is ALWAYS live (fires even while composing) -> :scroll_down" do
+      assert resolve_from(parser_event("\e[6~"), %{composing?: true}) ==
+               %{type: :scroll_down, payload: %{}}
+
+      assert resolve_from(Event.key_event(:page_down, :pressed, []), %{
+               composing?: true
+             }) == %{type: :scroll_down, payload: %{}}
+    end
+
+    test "End is :not_composing -> :scroll_to_tail off the composer, passthrough on it" do
+      assert resolve_from(Event.key_event(:end, :pressed, []), %{
+               composing?: false,
+               overlay_open?: false
+             }) == %{type: :scroll_to_tail, payload: %{}}
+
+      # While composing, End stays the composer's own end-of-line key.
+      assert resolve_from(Event.key_event(:end, :pressed, []), %{
+               composing?: true
+             }) == :passthrough
+    end
+
+    test "G is :not_composing -> :scroll_to_tail off the composer, passthrough on it" do
+      assert resolve_from(parser_event("G"), %{
+               composing?: false,
+               overlay_open?: false
+             }) == %{type: :scroll_to_tail, payload: %{}}
+
+      # While composing, a typed "G" is text, never a scroll command.
+      assert resolve_from(parser_event("G"), %{composing?: true}) ==
+               :passthrough
+    end
+  end
 end

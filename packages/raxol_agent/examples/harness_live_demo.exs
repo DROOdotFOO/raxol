@@ -50,6 +50,16 @@
 # which mechanism is currently holding it, live from
 # InlineDriver.isig_report/1.
 #
+# Surface mode (V's endgame pivot): the live demo DEFAULTS to the
+# FULL-VIEWPORT surface -- it claims the alternate screen (smcup/rmcup)
+# and repaints the whole viewport each event, owning its own virtual
+# scrollback (PgUp/PgDn/End/G). The session leaves NOTHING in native
+# scrollback: rmcup restores the primary screen on exit (the trade V
+# accepted). Pass `--inline` to run the honest inline-hybrid substrate
+# instead (in-place DECSTBM footer + print-once seals into native
+# scrollback) for a side-by-side compare. A headless/piped/CI run or a
+# too-small terminal still degrades to flat/plain output in either mode.
+#
 # Default boot (V's ruling): ONE ephemeral greeting -- "welcome back,
 # operator", dim, centered in the unclaimed span above the footer. It
 # is never sealed: the Surface erases it (targeted EL, same frame) the
@@ -111,6 +121,11 @@
 #               refuses with :no_steer_channel (no shipped runtime owns a
 #               live TurnState) -- the footer shows "steer NOT delivered".
 #   z/j/k       fold/jump, once off the composer (Surface.focus_transcript/1)
+#   PgUp/PgDn   scroll the owned virtual scrollback (full-viewport mode);
+#               always live, even while composing. An honest "N below"
+#               indicator shows when scrolled off the tail, and new
+#               content never yanks the view (scroll-anchor rule).
+#   End / G     jump the scroll window back to the tail (off the composer)
 #   q           quits cleanly WHEN THE COMPOSER BUFFER IS EMPTY (the
 #               LiveSessionDriver owns this check, same convention as the
 #               fixture demo)
@@ -202,7 +217,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
   def run(argv) do
     ensure_agent_package!()
-    {one_shot, debug?, system_arg, yolo?} = parse_args(argv)
+    {one_shot, debug?, system_arg, yolo?, surface_mode} = parse_args(argv)
 
     # Resolved pre-claim (stderr still lands visibly) and exactly once --
     # the same text then governs every turn this session runs.
@@ -325,7 +340,12 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     # -- never `\e[2J`. A guest boot starts at the prompt instead --
     # pushing first would move the cursor out from under the probed
     # position.
-    if boot == :top, do: Surface.startup_push_up(:stdio, rows)
+    # Push-up is the INLINE substrate's top-boot discipline (scroll the
+    # shell's screen into native scrollback before pinning the footer).
+    # Full-viewport claims the alternate screen instead, so it neither
+    # needs nor wants a push-up on the primary screen.
+    if boot == :top and surface_mode == :inline_hybrid,
+      do: Surface.startup_push_up(:stdio, rows)
 
     # The live driver: builds Surface + StreamCadence + the subscription
     # forwarder inside its own process; `notify: self()` tells this
@@ -348,6 +368,12 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         # the one path that still floats the footer at the top of a
         # fresh screen -- pin immediately there (push-up already
         # scrolled the shell's content into scrollback).
+        # V's endgame pivot (default): the full-viewport surface. The
+        # inline positioning options below (pin/entry/boot/greeting) still
+        # ride along -- Surface ignores the inline-only ones in
+        # full-viewport mode, and `greeting` becomes the centered
+        # welcome line -- so `--inline` flips back with zero other change.
+        surface_mode: surface_mode,
         pin: if(boot == :top, do: :immediate, else: :adaptive),
         # Chat entry (V ruling, second half): sealed content enters at
         # the region BOTTOM and scrolls upward -- the conversation
@@ -461,6 +487,19 @@ defmodule Raxol.Examples.HarnessLiveDemo do
       # release, modes off, cooked stty) -- the LiveSessionDriver emits no
       # teardown bytes of its own, per its moduledoc.
       GenServer.stop(inline, :normal)
+
+      # Full-viewport's alt-screen LEAVE must be the LAST byte to the tty
+      # (see `ViewportAuthority`'s teardown-order law): emitted AFTER the
+      # InlineDriver's own teardown so its bottom-park can't scroll the
+      # freshly-restored PRIMARY screen. rmcup restores the primary screen
+      # with its saved cursor -- the trade V accepted: the session leaves
+      # NOTHING in native scrollback.
+      if surface_mode == :full_viewport do
+        IO.write(
+          :stdio,
+          Raxol.UI.Rendering.PaintAuthority.ViewportAuthority.leave()
+        )
+      end
     end
   end
 
@@ -927,12 +966,21 @@ defmodule Raxol.Examples.HarnessLiveDemo do
           prompt: :string,
           debug: :boolean,
           system: :string,
-          yolo: :boolean
+          yolo: :boolean,
+          inline: :boolean
         ]
       )
 
+    # V's endgame pivot: full-viewport is the DEFAULT for the live demo
+    # (occupy the whole viewport, owned scrollback). `--inline` opts back
+    # into the honest inline-hybrid substrate for a side-by-side compare.
+    surface_mode =
+      if Keyword.get(opts, :inline, false),
+        do: :inline_hybrid,
+        else: :full_viewport
+
     {Keyword.get(opts, :prompt), Keyword.get(opts, :debug, false),
-     Keyword.get(opts, :system), Keyword.get(opts, :yolo, false)}
+     Keyword.get(opts, :system), Keyword.get(opts, :yolo, false), surface_mode}
   end
 
   # -- system prompt (--system bonded|none|<path>) ---------------------------

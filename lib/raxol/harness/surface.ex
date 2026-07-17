@@ -645,7 +645,8 @@ defmodule Raxol.Harness.Surface do
   alias Raxol.UI.Rendering.PaintAuthority.{
     FlatAuthority,
     InlineAuthority,
-    ModeSelect
+    ModeSelect,
+    ViewportAuthority
   }
 
   @default_footer_rows 6
@@ -678,7 +679,35 @@ defmodule Raxol.Harness.Surface do
     :expansion
   ]
 
-  @type mode :: :inline_log | :tmux_conservative | :flat
+  @type mode :: :inline_log | :tmux_conservative | :flat | :full_viewport
+
+  @typedoc """
+  A frozen seal record — the owned virtual-scrollback element for
+  `:full_viewport` mode (see `paint_viewport/1`). Each record captures a
+  committed transcript item at SEAL time so a normal repaint re-renders it
+  BYTE-IDENTICALLY (logical immutability — a `:block`'s prominence grade is
+  frozen here, never re-graded as later turns arrive), while a resize
+  reflows it (the record re-renders at the new width). The three kinds
+  mirror the three inline seal paths:
+
+    * `{:block, block, prominence}` — a projection block, `seal_block/2`.
+    * `{:marker, text}` — a loss/notice marker, `seal_marker/2`.
+    * `{:echo, text}` — a live submit prompt echo, `seal_prompt_echo/2`.
+  """
+  @type seal_record ::
+          {:block, Block.t(), RecencyPolicy.prominence()}
+          | {:marker, String.t()}
+          | {:echo, String.t()}
+
+  @typedoc """
+  The `:full_viewport` scroll window's bottom edge: `:tail` (pinned to the
+  newest line, the default) or a 1-based absolute index into the frozen
+  transcript naming the line shown at the window's bottom. Held stable
+  under bottom-append so new content while scrolled-back never yanks the
+  view (the scroll-anchor rule); clamped into range every paint so a
+  drop-from-front (compaction) degrades gracefully rather than crashing.
+  """
+  @type scroll_anchor :: :tail | pos_integer()
 
   @typedoc """
   A footer group key the DevTools debug highlight can target -- see
@@ -695,7 +724,8 @@ defmodule Raxol.Harness.Surface do
           | :expansion
   @type t :: %{
           mode: mode(),
-          authority: InlineAuthority.t() | FlatAuthority.t(),
+          authority:
+            InlineAuthority.t() | FlatAuthority.t() | ViewportAuthority.t(),
           events: [map()],
           revealed: non_neg_integer(),
           projection: Projection.t(),
@@ -725,7 +755,13 @@ defmodule Raxol.Harness.Surface do
           sigil: String.t(),
           reply_sigil: String.t(),
           sealed_any?: boolean(),
-          greeting_rows: [pos_integer()] | nil
+          greeting_rows: [pos_integer()] | nil,
+          # `:full_viewport` only (empty/`nil` in the inline/flat family):
+          # the owned virtual scrollback (frozen seal records, oldest
+          # first) and the scroll window's bottom edge.
+          transcript_records: [seal_record()],
+          scroll_anchor: scroll_anchor(),
+          greeting?: boolean()
         }
 
   @typedoc """
@@ -948,7 +984,23 @@ defmodule Raxol.Harness.Surface do
       sealed_any?: false,
       # The boot greeting's on-screen rows (nil = none painted / already
       # erased) -- see `maybe_paint_greeting/2` and `clear_greeting/1`.
-      greeting_rows: nil
+      # `:full_viewport` never uses this transient (its greeting is a
+      # centered line the repaint clears on first content, not an
+      # authority-painted transient).
+      greeting_rows: nil,
+      # `:full_viewport`'s owned virtual scrollback: frozen seal records
+      # (oldest first), windowed bottom-anchored by `paint_viewport/1`.
+      # Stays `[]` in every inline/flat tier (they print history into the
+      # terminal, never hold it).
+      transcript_records: [],
+      # The scroll window's bottom edge; `:tail` follows the newest line.
+      scroll_anchor: :tail,
+      # Whether the boot greeting is enabled. In `:full_viewport` this
+      # drives the centered "welcome back, operator" line the repaint
+      # shows while the transcript is empty (cleared on first content);
+      # the inline family instead paints it as a transient via
+      # `maybe_paint_greeting/2`.
+      greeting?: Keyword.get(opts, :greeting, false)
     }
 
     model
@@ -983,6 +1035,12 @@ defmodule Raxol.Harness.Surface do
 
   defp maybe_paint_greeting(model, false), do: model
   defp maybe_paint_greeting(%{mode: :flat} = model, _on), do: model
+
+  # `:full_viewport` has no transient authority paint -- its greeting is a
+  # centered line `paint_viewport/1` renders while the transcript is empty
+  # (gated on `model.greeting?`, set at construction), cleared the instant
+  # the first content lands. Nothing to paint here.
+  defp maybe_paint_greeting(%{mode: :full_viewport} = model, _on), do: model
 
   defp maybe_paint_greeting(model, true) do
     case InlineAuthority.unclaimed_span(model.authority) do
@@ -1035,12 +1093,34 @@ defmodule Raxol.Harness.Surface do
         {explicit_mode, nil}
 
       :error ->
-        ModeSelect.select_with_reason(caps, env,
-          rows: rows,
-          footer_rows: footer_rows
+        {base_mode, reason} =
+          ModeSelect.select_with_reason(caps, env,
+            rows: rows,
+            footer_rows: footer_rows
+          )
+
+        apply_surface_mode(
+          Keyword.get(opts, :surface_mode, :inline_hybrid),
+          base_mode,
+          reason
         )
     end
   end
+
+  # The `:surface_mode` axis (paint FAMILY) resolved on top of the
+  # degradation ladder (paint TIER): `:full_viewport` is honored only when
+  # the ladder did NOT floor to `:flat`. A headless (`TERM=dumb`/pipe/CI)
+  # or degenerate-geometry session still degrades honestly to `:flat` --
+  # the alternate screen belongs to neither a pipe nor a footerless
+  # terminal, so the request yields to the same floor an inline session
+  # would hit. `:inline_hybrid` (the default) keeps whatever tier the
+  # ladder picked, unchanged: every byte-golden embedder is untouched.
+  defp apply_surface_mode(:full_viewport, base_mode, reason)
+       when base_mode != :flat,
+       do: {:full_viewport, reason}
+
+  defp apply_surface_mode(_surface_mode, base_mode, reason),
+    do: {base_mode, reason}
 
   # -- startup mode notice (see `new/2`'s moduledoc section) ---------------
 
@@ -1113,6 +1193,26 @@ defmodule Raxol.Harness.Surface do
          _entry
        ),
        do: FlatAuthority.new(device, width, rows)
+
+  # `:full_viewport` claims the whole alternate screen and repaints every
+  # frame -- no footer pin, no scroll region, no guest-boot cursor, so the
+  # inline positioning options (`pin`/`boot`/`entry`/`guest_placement`)
+  # simply do not engage (they are the inline substrate's vocabulary).
+  # Entering the alternate screen happens at construction, inside
+  # `ViewportAuthority.new/3`.
+  defp build_authority(
+         :full_viewport,
+         device,
+         width,
+         rows,
+         _footer_rows,
+         _caps,
+         _pin,
+         _boot,
+         _guest_placement,
+         _entry
+       ),
+       do: ViewportAuthority.new(device, width, rows)
 
   defp build_authority(
          _mode,
@@ -1355,6 +1455,14 @@ defmodule Raxol.Harness.Surface do
     run_seal_frame(model, events_so_far, now)
   end
 
+  # `:full_viewport` owns its OWN atomicity: every frame is one full
+  # `ViewportAuthority.repaint/3` already wrapped in a DEC 2026 bracket,
+  # so there is no per-block inline sync bracket to open here (and the
+  # inline `sync_open/1` would not even match a `ViewportAuthority`).
+  defp seal_frame(%{mode: :full_viewport} = model, events_so_far, now) do
+    run_seal_frame(model, events_so_far, now)
+  end
+
   defp seal_frame(model, events_so_far, now) do
     if frontier_scan(model).will_commit do
       opened = update_authority(model, &InlineAuthority.sync_open/1)
@@ -1387,6 +1495,11 @@ defmodule Raxol.Harness.Surface do
   # heals at the FIRST frame after the device accepts a byte again,
   # never later.
   defp heal_sync(%{mode: :flat} = model), do: model
+
+  # `:full_viewport` has no dangling inline sync latch to heal -- its sync
+  # bracket opens and closes within a single `ViewportAuthority.repaint/3`,
+  # never spanning frames.
+  defp heal_sync(%{mode: :full_viewport} = model), do: model
 
   defp heal_sync(model),
     do: update_authority(model, &InlineAuthority.sync_close/1)
@@ -1839,6 +1952,14 @@ defmodule Raxol.Harness.Surface do
     }
   end
 
+  def seal_marker(%{mode: :full_viewport} = model, text) do
+    %{
+      model
+      | transcript_records: [{:marker, text} | model.transcript_records],
+        sealed_any?: true
+    }
+  end
+
   def seal_marker(model, text) do
     model = clear_greeting(model)
     lines = marker_lines(model, text, :styled)
@@ -1919,6 +2040,14 @@ defmodule Raxol.Harness.Surface do
     %{
       model
       | authority: FlatAuthority.seal(model.authority, iodata),
+        sealed_any?: true
+    }
+  end
+
+  defp seal_prompt_echo(%{mode: :full_viewport} = model, text) do
+    %{
+      model
+      | transcript_records: [{:echo, text} | model.transcript_records],
         sealed_any?: true
     }
   end
@@ -2255,6 +2384,26 @@ defmodule Raxol.Harness.Surface do
      %{
        model
        | authority: authority,
+         painted_count: model.painted_count + 1,
+         sealed_any?: true
+     }}
+  end
+
+  # `:full_viewport` emits NO bytes at seal time -- the whole-frame
+  # `ViewportAuthority.repaint/3` at the end of the frame renders the
+  # transcript. Sealing FREEZES the block into a `seal_record` with its
+  # seal-time prominence grade, so a later repaint (after more turns
+  # arrive) re-renders it byte-identically (logical immutability -- the
+  # grade never drifts), while a resize reflows it at the new width. The
+  # write can never fail (an append to a list), so this always returns
+  # `{:ok, _}`.
+  defp seal_block(%{mode: :full_viewport} = model, block) do
+    record = {:block, block, block_prominence(block, model)}
+
+    {:ok,
+     %{
+       model
+       | transcript_records: [record | model.transcript_records],
          painted_count: model.painted_count + 1,
          sealed_any?: true
      }}
@@ -3081,7 +3230,67 @@ defmodule Raxol.Harness.Surface do
     %{model | composer: composer}
   end
 
+  # -- scrollback (the :full_viewport window; inert elsewhere) --------------
+
+  # PgUp/PgDn/End/G drive the owned virtual scrollback in `:full_viewport`.
+  # In every inline/flat tier they are inert: those tiers print history
+  # into the terminal, so scrollback is the TERMINAL's own (mouse/native),
+  # never the harness's to move.
+  defp dispatch_command(%{mode: :full_viewport} = model, %{type: :scroll_up}),
+    do: scroll_page(model, :up)
+
+  defp dispatch_command(%{mode: :full_viewport} = model, %{type: :scroll_down}),
+    do: scroll_page(model, :down)
+
+  defp dispatch_command(%{mode: :full_viewport} = model, %{
+         type: :scroll_to_tail
+       }),
+       do: %{model | scroll_anchor: :tail}
+
+  defp dispatch_command(model, %{type: type})
+       when type in [:scroll_up, :scroll_down, :scroll_to_tail],
+       do: model
+
   defp dispatch_command(model, _other), do: model
+
+  # Moves the scroll window one page (`transcript_h - 1` lines) up or down.
+  # `:up` off the tail pins a concrete bottom index (the scroll-anchor:
+  # new content will not yank it); reaching the tail again normalizes back
+  # to `:tail`. A no-op when the whole transcript already fits.
+  defp scroll_page(model, dir) do
+    {transcript_h, total} = viewport_scroll_geometry(model)
+
+    if total <= transcript_h do
+      %{model | scroll_anchor: :tail}
+    else
+      page = max(transcript_h - 1, 1)
+
+      current =
+        case model.scroll_anchor do
+          :tail -> total
+          n when is_integer(n) -> n |> max(transcript_h) |> min(total)
+        end
+
+      new_bottom =
+        case dir do
+          :up -> max(current - page, transcript_h)
+          :down -> min(current + page, total)
+        end
+
+      anchor = if new_bottom >= total, do: :tail, else: new_bottom
+      %{model | scroll_anchor: anchor}
+    end
+  end
+
+  # The transcript window height and total line count, recomputed the same
+  # way `paint_viewport/1` does (footer fit -> rows above it), so scroll
+  # math and paint never disagree about the window.
+  defp viewport_scroll_geometry(model) do
+    {footer_lines, _cursor} = footer_frame(model)
+    transcript_h = max(model.rows - length(footer_lines), 0)
+    total = length(viewport_transcript_lines(model))
+    {transcript_h, total}
+  end
 
   # -- external editor handoff (the :edit_draft command) -------------------
   #
@@ -3098,6 +3307,15 @@ defmodule Raxol.Harness.Surface do
       model,
       "» external editor requires the footer composer (flat mode)"
     )
+  end
+
+  # The external-editor handoff is not wired for `:full_viewport` v1: the
+  # `$EDITOR` suspend/resume bracket emits the INLINE substrate's
+  # DECSTBM-release bytes (`EditorSuspend`), which would corrupt the
+  # alternate screen. Honest stub notice rather than a corrupted frame;
+  # bracketing the editor with an alt-screen leave/re-enter is a follow-up.
+  defp run_editor(%{mode: :full_viewport} = model) do
+    %{model | stub_notice: "» external editor not wired in full-viewport mode"}
   end
 
   defp run_editor(%{editor_session: nil} = model) do
@@ -3433,6 +3651,15 @@ defmodule Raxol.Harness.Surface do
 
   def open_overlay(%{mode: :flat}, _items, _opts), do: {:error, :no_footer}
 
+  # `:full_viewport` v1 gates the footer-GROWING transient claims
+  # (overlay pickers, panels, diff expansion): they grow the inline
+  # DECSTBM region via `InlineAuthority.set_footer_rows/2`, which the
+  # alternate-screen authority does not implement. Honest refusal (routed
+  # to `picker_refusal/2`'s notice) rather than a crash; re-homing the
+  # claim into the model-owned footer height is a follow-up.
+  def open_overlay(%{mode: :full_viewport}, _items, _opts),
+    do: {:error, :no_footer}
+
   def open_overlay(model, items, opts) do
     max_overlay_rows = max_overlay_rows(model.rows, model.footer_rows)
 
@@ -3558,6 +3785,11 @@ defmodule Raxol.Harness.Surface do
     do: {:error, :overlay_already_open}
 
   def open_panel(%{mode: :flat}, _kind, _opts), do: {:error, :no_footer}
+
+  # See `open_overlay/3`'s `:full_viewport` clause -- panels grow the same
+  # inline region and are gated the same way in this mode.
+  def open_panel(%{mode: :full_viewport}, _kind, _opts),
+    do: {:error, :no_footer}
 
   def open_panel(model, kind, opts) do
     max_overlay_rows = max_overlay_rows(model.rows, model.footer_rows)
@@ -4019,6 +4251,11 @@ defmodule Raxol.Harness.Surface do
 
   defp expand_block_at(%{mode: :flat}, _index), do: {:error, :no_footer}
 
+  # See `open_overlay/3`'s `:full_viewport` clause -- the full-screen diff
+  # expansion grows the same inline region and is gated the same way here.
+  defp expand_block_at(%{mode: :full_viewport}, _index),
+    do: {:error, :no_footer}
+
   defp expand_block_at(_model, nil), do: {:error, :no_focus}
 
   defp expand_block_at(model, index) do
@@ -4154,12 +4391,175 @@ defmodule Raxol.Harness.Surface do
 
   defp paint_footer(%{mode: :flat} = model), do: model
 
+  defp paint_footer(%{mode: :full_viewport} = model), do: paint_viewport(model)
+
   defp paint_footer(model) do
     model = refresh_panel_overlay(model)
     {lines, cursor} = footer_frame(model)
     authority = InlineAuthority.repaint(model.authority, lines, cursor: cursor)
     %{model | authority: authority, stub_notice: nil}
   end
+
+  # -- the full-viewport frame (V's endgame pivot) --------------------------
+
+  # The single emit for `:full_viewport`: compose the WHOLE screen and hand
+  # it to `ViewportAuthority.repaint/3`. Two stacked regions:
+  #
+  #   * TRANSCRIPT (top) -- the owned virtual scrollback (frozen seal
+  #     records), windowed bottom-anchored so the newest sealed content
+  #     hugs the footer; scrolled by `scroll_anchor`, with an honest
+  #     "N below" indicator when scrolled off the tail.
+  #   * FOOTER (bottom) -- the SAME `footer_frame/1` the inline path pins
+  #     (status, lane, live-tail preview, unread divider, composer,
+  #     notice). The streaming tail and input zone stay pinned above the
+  #     bottom edge while the transcript scrolls behind them.
+  #
+  # The footer height is whatever `footer_frame/1` fitted; the transcript
+  # fills the rows above it. Same one-frame `stub_notice` clear as the
+  # inline `paint_footer/1`.
+  defp paint_viewport(model) do
+    model = refresh_panel_overlay(model)
+    {footer_lines, footer_cursor} = footer_frame(model)
+    footer_h = length(footer_lines)
+    transcript_h = max(model.rows - footer_h, 0)
+
+    transcript = viewport_transcript_lines(model)
+    window = viewport_window(transcript, transcript_h, model)
+
+    frame_rows = window ++ footer_lines
+    cursor = viewport_cursor(footer_cursor, transcript_h)
+
+    # The authority is always a `ViewportAuthority` here (built by
+    # `build_authority(:full_viewport, ...)`), but the module-wide
+    # `authority`-field type inference collapses to the inline struct, so
+    # the direct typed call trips a spurious set-theoretic mismatch.
+    # Dynamic dispatch (the same escape `overlay_mod/1` uses for the
+    # overlay modules) sidesteps it -- the runtime target is unchanged.
+    authority =
+      apply(ViewportAuthority, :repaint, [
+        model.authority,
+        frame_rows,
+        [cursor: cursor]
+      ])
+
+    %{model | authority: authority, stub_notice: nil}
+  end
+
+  # The frozen transcript rendered to styled lines, oldest first. Records
+  # are held newest-first (O(1) append at seal time), so reverse once
+  # here. Each `:block`/`:echo` record takes the one-blank-row separator
+  # when anything precedes it (the same rhythm `block_separator/1` gives
+  # the inline path); a `:marker` attaches tightly (loss reports hug the
+  # content they interrupt). While the transcript is empty, an enabled
+  # greeting renders as one dim centered line, cleared the instant the
+  # first record lands.
+  defp viewport_transcript_lines(%{transcript_records: []} = model),
+    do: viewport_greeting_lines(model)
+
+  defp viewport_transcript_lines(model) do
+    model.transcript_records
+    |> Enum.reverse()
+    |> Enum.reduce({[], false}, fn record, {acc, any?} ->
+      sep = if any? and separated_record?(record), do: [""], else: []
+      {acc ++ sep ++ render_seal_record(record, model), true}
+    end)
+    |> elem(0)
+  end
+
+  defp separated_record?({:marker, _text}), do: false
+  defp separated_record?(_record), do: true
+
+  defp render_seal_record({:block, block, prominence}, model) do
+    block
+    |> BlockBody.render(%{
+      width: content_width(model),
+      prominence: prominence,
+      turn_has_tools?: turn_has_tools?(block, model)
+    })
+    |> ViewText.lines(content_width(model), :styled)
+    |> sealed_history_lines(block, model, :styled)
+  end
+
+  defp render_seal_record({:marker, text}, model),
+    do: marker_lines(model, text, :styled)
+
+  defp render_seal_record({:echo, text}, model),
+    do: prompt_echo_lines(model, text, :styled)
+
+  defp viewport_greeting_lines(%{greeting?: false}), do: []
+
+  defp viewport_greeting_lines(model) do
+    centered =
+      @greeting_text
+      |> ViewText.truncate(content_width(model))
+      |> center(content_width(model))
+
+    ViewText.lines(
+      %{type: :text, content: centered, style: %{dim: true}},
+      content_width(model),
+      :styled
+    )
+    |> margin_lines()
+  end
+
+  defp center(text, width) do
+    pad = max(div(width - Raxol.UI.TextMeasure.display_width(text), 2), 0)
+    String.duplicate(" ", pad) <> text
+  end
+
+  # Windows `transcript` to exactly `height` rows, bottom-anchored. When
+  # the transcript is shorter than the window it is padded at the TOP
+  # (content hugs the footer); when longer, `scroll_anchor` names the
+  # bottom edge (`:tail` = the newest line). Scrolled off the tail
+  # (`below > 0`), the window's bottom row becomes an honest "N below"
+  # indicator rather than hiding the gap.
+  defp viewport_window(_transcript, 0, _model), do: []
+
+  defp viewport_window(transcript, height, model) do
+    total = length(transcript)
+
+    if total <= height do
+      List.duplicate("", height - total) ++ transcript
+    else
+      bottom = clamp_anchor(model.scroll_anchor, height, total)
+      below = total - bottom
+      window = Enum.slice(transcript, (bottom - height)..(bottom - 1)//1)
+      apply_below_indicator(window, below, model)
+    end
+  end
+
+  # `:tail` pins to the newest line; a stored anchor is clamped into
+  # `[height, total]` every paint so a drop-from-front (compaction) or a
+  # shrunk transcript degrades gracefully instead of slicing out of range.
+  defp clamp_anchor(:tail, _height, total), do: total
+
+  defp clamp_anchor(anchor, height, total) when is_integer(anchor),
+    do: anchor |> max(height) |> min(total)
+
+  defp apply_below_indicator(window, 0, _model), do: window
+
+  defp apply_below_indicator(window, below, model) do
+    label = "  ↓ #{below} more below — End to jump  "
+
+    [indicator] =
+      ViewText.lines(
+        %{type: :text, content: label, style: %{dim: true}},
+        content_width(model),
+        :styled
+      )
+
+    List.replace_at(window, -1, margin_line(indicator))
+  end
+
+  # `footer_frame/1`'s cursor park is `{row_offset, col}` relative to the
+  # footer's first row; in `:full_viewport` the footer starts at absolute
+  # row `transcript_h + 1`, so shift the offset into an absolute
+  # `{row, col}` for `ViewportAuthority.repaint/3` (which parks a visible
+  # cursor there, or hides it on `nil`).
+  defp viewport_cursor(nil, _transcript_h), do: nil
+
+  defp viewport_cursor({row_offset, col}, transcript_h),
+    do: {transcript_h + row_offset + 1, col}
 
   # This is the whole live-update mechanism for an open projection panel:
   # `advance/2` (fixture reveal) and `handle_input/2` (keystrokes) both
@@ -4513,6 +4913,13 @@ defmodule Raxol.Harness.Surface do
   # never a hand-maintained constant. #620's frame pipeline keeps this
   # geometry-fixed per frame (never a function of post-seal state), so
   # reading it here is stable within a paint.
+  # `:full_viewport` has no DECSTBM footer range to read -- its footer is
+  # a fixed `footer_rows`-tall region at the screen bottom, and
+  # `paint_viewport/1` gives the transcript whatever rows remain above it.
+  # (Overlays/panels/expansion, which grow the inline region, are gated off
+  # in this mode -- see `open_overlay/3` etc.)
+  defp footer_budget(%{mode: :full_viewport} = model), do: model.footer_rows
+
   defp footer_budget(model),
     do: InlineAuthority.footer_row_count(model.authority)
 
@@ -4690,6 +5097,14 @@ defmodule Raxol.Harness.Surface do
   def resize(%{mode: :flat} = model, width, rows),
     do: adopt_resize(model, width, rows)
 
+  # `:full_viewport` resize is a FULL REFLOW (the pivot's headline win): a
+  # width change re-wraps every frozen record at the new width the next
+  # time `paint_viewport/1` renders them. Just adopt the geometry and
+  # repaint the whole frame -- no DECSTBM re-set, no footer keyframe.
+  def resize(%{mode: :full_viewport} = model, width, rows) do
+    model |> adopt_resize(width, rows) |> paint_viewport()
+  end
+
   def resize(model, width, rows) do
     model = model |> heal_sync() |> adopt_resize(width, rows)
     {lines, cursor} = footer_frame(model)
@@ -4710,6 +5125,25 @@ defmodule Raxol.Harness.Surface do
         width: width,
         rows: rows
     }
+  end
+
+  # `:full_viewport`: adopt geometry + composer width, and close any open
+  # overlay/expansion (a full reflow starts the footer clean rather than
+  # re-deriving an inline-substrate claim that has no meaning here). The
+  # frozen transcript re-wraps for free -- its records re-render at the new
+  # `content_width/1` on the next `paint_viewport/1`. `scroll_anchor` is
+  # left as-is; `viewport_window/3` re-clamps it into range every paint.
+  defp adopt_resize(%{mode: :full_viewport} = model, width, rows) do
+    model = if model.overlay, do: close_overlay(model), else: model
+    model = if model.expansion, do: close_expansion(model), else: model
+    model = %{model | width: width, rows: rows}
+
+    model = %{
+      model
+      | composer: Composer.set_width(model.composer, content_width(model))
+    }
+
+    %{model | authority: ViewportAuthority.resize(model.authority, width, rows)}
   end
 
   defp adopt_resize(model, width, rows) do
@@ -4831,6 +5265,25 @@ defmodule Raxol.Harness.Surface do
   @spec degenerate?(t()) :: boolean()
   def degenerate?(%{mode: :flat}), do: false
 
+  # `:full_viewport` owns the whole screen and never carves a footer out
+  # of a DECSTBM region, so the inline degenerate-geometry notion does not
+  # apply (a too-small terminal degrades to `:flat` at construction, in
+  # `apply_surface_mode/3`, before this mode is ever entered).
+  def degenerate?(%{mode: :full_viewport}), do: false
+
   def degenerate?(%{authority: authority}),
     do: InlineAuthority.degenerate?(authority)
+
+  @doc """
+  Leaves the alternate screen (the `:full_viewport` teardown), restoring
+  the primary screen. A no-op in every inline/flat tier (they never
+  entered the alternate screen). See `ViewportAuthority`'s teardown-order
+  law: an embedder that lets an input driver (`InlineDriver`) tear down
+  first should instead emit `ViewportAuthority.leave/0` as its LAST byte.
+  """
+  @spec teardown(t()) :: t()
+  def teardown(%{mode: :full_viewport, authority: authority} = model),
+    do: %{model | authority: ViewportAuthority.teardown(authority)}
+
+  def teardown(model), do: model
 end
