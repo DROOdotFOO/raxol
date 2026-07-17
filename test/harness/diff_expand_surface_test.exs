@@ -558,6 +558,125 @@ defmodule Raxol.Harness.DiffExpandSurfaceTest do
   end
 
   # ---------------------------------------------------------------------
+  # 7. The honest-notice law under footer overflow (integration finding)
+  # ---------------------------------------------------------------------
+  #
+  # `InlineAuthority.repaint/2` pads/TRUNCATES the line list to the footer
+  # row count position-blind (`Enum.take/2` -- the tail is the casualty).
+  # With the notice as the LAST footer group, any composed footer that
+  # overflows the row budget silently eats the honest refusal/degradation
+  # notice first: an honest-notice-law violation that only manifests when
+  # sibling footer content (evidence rows, previews, extra slots) pushes
+  # the list past the budget. The fix is a priority-ordered fit inside
+  # `footer_lines/1` itself: discretionary rows (preview, divider,
+  # composer tail) yield; a notice is NEVER the line that silently drops.
+
+  describe "7. honest-notice law under footer overflow" do
+    test "a refusal notice survives a footer too small to hold everything (composer yields, never the notice)" do
+      {:ok, device} = StringIO.open("")
+
+      # footer_rows 2: status + composer already exceed the budget, so a
+      # tail-truncating repaint would eat the notice appended after them.
+      model =
+        Surface.new([],
+          device: device,
+          width: @width,
+          rows: 7,
+          footer_rows: 2,
+          mode: :inline_log
+        )
+
+      model = Surface.focus_transcript(model)
+      assert model.focused_index == nil
+
+      model = Surface.handle_input(model, Event.key("e"))
+
+      assert model.expansion == nil
+
+      assert strip_ansi(raw(device)) =~ "no block focused",
+             "the honest refusal notice must never be the row an " <>
+               "overflowing footer silently drops"
+    end
+
+    test "the notice outranks even the status line at a 1-row budget" do
+      {:ok, device} = StringIO.open("")
+
+      model =
+        Surface.new([],
+          device: device,
+          width: @width,
+          rows: 7,
+          footer_rows: 1,
+          mode: :inline_log
+        )
+
+      model = Surface.focus_transcript(model)
+      model = Surface.handle_input(model, Event.key("e"))
+
+      assert strip_ansi(raw(device)) =~ "no block focused",
+             "at the degenerate 1-row budget the notice is the one row " <>
+               "that must win"
+    end
+
+    test "a notice survives when a pending preview competes for the same rows (the preview yields)" do
+      {:ok, device} = StringIO.open("")
+
+      # footer_rows 4 with a pending-block preview present: status +
+      # preview (2) + composer already meet/exceed the budget before the
+      # notice is appended.
+      model =
+        Surface.new(bulk_events(2),
+          device: device,
+          width: @width,
+          rows: 10,
+          footer_rows: 4,
+          mode: :inline_log
+        )
+
+      # advance far enough that a completed block sits in the pending
+      # (not-yet-painted) preview slot, but not to completion
+      {model, :ok} = Surface.advance(model)
+      {model, :ok} = Surface.advance(model)
+      {model, :ok} = Surface.advance(model)
+
+      model = Surface.focus_transcript(model)
+      prior = byte_size(raw(device))
+      model = Surface.handle_input(model, Event.key("e"))
+
+      assert model.expansion == nil
+
+      assert strip_ansi(delta_since(device, prior)) =~ "no block focused",
+             "a discretionary preview row must yield before an honest " <>
+               "notice is ever dropped"
+    end
+
+    test "footer_lines never hands repaint more rows than the budget (the clamp is priority-aware, not repaint's position-blind tail-drop)" do
+      {:ok, device} = StringIO.open("")
+
+      model =
+        Surface.new([],
+          device: device,
+          width: @width,
+          rows: 7,
+          footer_rows: 2,
+          mode: :inline_log
+        )
+
+      model = Surface.focus_transcript(model)
+      prior = byte_size(raw(device))
+      _model = Surface.handle_input(model, Event.key("e"))
+
+      delta = delta_since(device, prior)
+      assert :ok == full_walk!(delta)
+      rows = explicit_cup_rows(delta)
+      assert rows != []
+
+      assert Enum.all?(rows, &(&1 > 7 - 2)),
+             "an overflowing footer must never paint outside its region: #{inspect(rows)}"
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # 6. Interactions with the rest of the surface
   # ---------------------------------------------------------------------
 

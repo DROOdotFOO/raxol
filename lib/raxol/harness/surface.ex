@@ -137,7 +137,23 @@ defmodule Raxol.Harness.Surface do
   module truncates every individual LINE to `width` via `ViewText.lines/3`
   (which uses `TextMeasure`, never `String.length`) before that call --
   the caller contract `InlineAuthority.repaint/2`'s moduledoc documents as
-  NOT enforced by that function itself. On resize, `resize/2` composes
+  NOT enforced by that function itself.
+
+  ### The honest-notice law (priority fit before repaint's truncation)
+
+  `repaint/2`'s own pad/truncate is POSITION-BLIND (a tail-drop) -- and
+  the one-shot stub notice is the LAST footer group, so a composed footer
+  that overflows the row budget would silently eat exactly the honest
+  refusal/degradation report the notice channel exists to carry (an
+  integration finding: the overflow only manifests once sibling footer
+  content stacks up). `footer_lines/1` therefore fits the list itself
+  BEFORE the handoff (`fit_footer_lines/3`): display order preserved,
+  discretionary groups yield first (preview, then divider, then the
+  composer's tail, then an overlay's tail, then status -- each trimmed
+  from its tail so a group's leading row survives a partial trim), and a
+  notice is NEVER the row that silently drops -- at a 1-row budget the
+  notice is the row that wins. Pinned by the "honest-notice law under
+  footer overflow" describe in `diff_expand_surface_test.exs`. On resize, `resize/2` composes
   `InlineAuthority.resize/3 |> InlineAuthority.keyframe/2` explicitly (the
   documented composition -- `resize/3` alone never repaints the footer).
   `degenerate?/1` is checked before assuming a pin: a degenerate geometry
@@ -2638,15 +2654,22 @@ defmodule Raxol.Harness.Surface do
   # (rather than a branch inside the clause below) keeps this diff
   # surgical against the existing footer_lines/1 body.
   defp footer_lines(%{expansion: expansion} = model) when expansion != nil do
-    status_line = StatusStrip.render(model.status, model.width)
-    notice_lines = notice_line(model.stub_notice, model.width)
-    status_line ++ notice_lines ++ DiffExpansion.render_lines(expansion)
+    # Same honest-notice law as the normal clause below: the expansion's
+    # body rows are the discretionary tail (its header stays first-in-
+    # group so position/dismiss hints survive a trim), status yields
+    # next, the notice never.
+    fit_footer_lines(
+      [
+        status: StatusStrip.render(model.status, model.width),
+        notice: notice_line(model.stub_notice, model.width),
+        expansion: DiffExpansion.render_lines(expansion)
+      ],
+      [:expansion, :status],
+      footer_budget(model)
+    )
   end
 
   defp footer_lines(model) do
-    status_line = StatusStrip.render(model.status, model.width)
-    overlay_lines = overlay_lines(model)
-
     # Both the divider and the pending/live-tail preview are suppressed
     # while an overlay is open -- the overlay claims that space (see the
     # moduledoc's precondition #5 update, "The overlay picker" section,
@@ -2661,12 +2684,71 @@ defmodule Raxol.Harness.Surface do
         :styled
       )
 
-    notice_lines = notice_line(model.stub_notice, model.width)
-
-    status_line ++
-      overlay_lines ++
-      divider_lines ++ preview_lines ++ composer_lines ++ notice_lines
+    fit_footer_lines(
+      [
+        status: StatusStrip.render(model.status, model.width),
+        overlay: overlay_lines(model),
+        divider: divider_lines,
+        preview: preview_lines,
+        composer: composer_lines,
+        notice: notice_line(model.stub_notice, model.width)
+      ],
+      [:preview, :divider, :composer, :overlay, :status],
+      footer_budget(model)
+    )
   end
+
+  # -- footer fit: the honest-notice law ------------------------------
+  #
+  # `InlineAuthority.repaint/2` pads/TRUNCATES the handed list to the
+  # footer row count POSITION-BLIND (`pad_rows/2` is an `Enum.take/2` --
+  # the tail is the casualty). With the notice as the last footer group,
+  # any composed footer that overflows the budget would silently eat the
+  # honest refusal/degradation notice first -- the exact fail-safe
+  # inversion the notice channel exists to rule out (a notice IS the
+  # honest report that something was refused or degraded; a dropped one
+  # reads as "nothing happened"). So THIS module owns a priority-aware
+  # fit before repaint ever truncates: display order is preserved,
+  # `drop_order` names the discretionary groups from most to least
+  # droppable (each trimmed from its TAIL, so a group's leading line --
+  # the composer's prompt row, the expansion's position header --
+  # survives a partial trim), and the notice group is deliberately
+  # absent from every drop order: as the last resort (notices alone
+  # exceeding the budget) the final head-take keeps the EARLIEST notice
+  # lines rather than crashing. Pinned by the "honest-notice law under
+  # footer overflow" describe in diff_expand_surface_test.exs.
+  defp fit_footer_lines(groups, drop_order, budget) do
+    total =
+      groups |> Enum.map(fn {_key, lines} -> length(lines) end) |> Enum.sum()
+
+    groups
+    |> shed_overflow(drop_order, total - budget)
+    |> Enum.flat_map(fn {_key, lines} -> lines end)
+    |> Enum.take(budget)
+  end
+
+  defp shed_overflow(groups, _drop_order, overflow) when overflow <= 0,
+    do: groups
+
+  defp shed_overflow(groups, [], _overflow), do: groups
+
+  defp shed_overflow(groups, [key | rest], overflow) do
+    lines = Keyword.fetch!(groups, key)
+    shed = min(length(lines), overflow)
+    kept = Enum.take(lines, length(lines) - shed)
+
+    groups
+    |> List.keyreplace(key, 0, {key, kept})
+    |> shed_overflow(rest, overflow - shed)
+  end
+
+  # The row budget the current pin actually provides -- the authority's
+  # own footer range (grown while an overlay/expansion holds a claim),
+  # never a hand-maintained constant. #620's frame pipeline keeps this
+  # geometry-fixed per frame (never a function of post-seal state), so
+  # reading it here is stable within a paint.
+  defp footer_budget(model),
+    do: InlineAuthority.footer_row_count(model.authority)
 
   defp overlay_lines(%{overlay: nil}), do: []
 
