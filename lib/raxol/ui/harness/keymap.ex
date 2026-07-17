@@ -239,6 +239,7 @@ defmodule Raxol.UI.Harness.Keymap do
           | :open_palette
           | :open_jump_picker
           | :open_session_picker
+          | :open_panel
 
   @type command :: %{type: command_type(), payload: map()}
 
@@ -250,7 +251,8 @@ defmodule Raxol.UI.Harness.Keymap do
           optional(:char) => String.t(),
           optional(:guard) => guard(),
           optional(:mods) => InputEvent.mods(),
-          optional(:label) => String.t()
+          optional(:label) => String.t(),
+          optional(:payload) => map()
         }
 
   # Plain keys only (v1) -- see moduledoc's "tui-steal rule": a future chord
@@ -324,6 +326,34 @@ defmodule Raxol.UI.Harness.Keymap do
       command_type: :open_session_picker,
       guard: :not_composing,
       label: "switch session"
+    },
+    # Printable-letter binds, same guard class as z/j/k: they only resolve
+    # in transcript-browse mode, never stealing a letter out of the
+    # composer's typed text. The `label:` makes them palette entries
+    # automatically (palette_binds/0 derives from labels). "p" is NOT
+    # used for plan -- Ctrl+P is the palette chord, and a bare "p" beside
+    # it invites slips -- so "n" is used instead. The payload discriminates
+    # which panel kind one shared :open_panel command type opens.
+    %{
+      char: "w",
+      command_type: :open_panel,
+      guard: :not_composing,
+      payload: %{panel: :worktracks},
+      label: "worktracks panel"
+    },
+    %{
+      char: "m",
+      command_type: :open_panel,
+      guard: :not_composing,
+      payload: %{panel: :memory},
+      label: "memory panel"
+    },
+    %{
+      char: "n",
+      command_type: :open_panel,
+      guard: :not_composing,
+      payload: %{panel: :plan},
+      label: "plan panel"
     }
   ]
 
@@ -498,7 +528,7 @@ defmodule Raxol.UI.Harness.Keymap do
     }
   end
 
-  defp build_command(%{command_type: type}, _context) do
-    %{type: type, payload: %{}}
+  defp build_command(%{command_type: type} = bind, _context) do
+    %{type: type, payload: Map.get(bind, :payload, %{})}
   end
 end

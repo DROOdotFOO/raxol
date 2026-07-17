@@ -448,6 +448,33 @@ defmodule Raxol.Harness.Surface do
   new session's events append below whatever is already sealed, and the
   composer draft plus authority/geometry survive the switch untouched.
 
+  ## Projection panels (read-only footer overlays)
+
+  Three more overlays ride the same hosted-overlay footer slot, but are
+  `Raxol.UI.Harness.OverlayPanel` instances (never `OverlayPicker`) --
+  summonable via the labeled `w`/`m`/`n` panel binds (worktracks/memory/
+  plan; `Keymap`'s `:open_panel` command, discriminated by
+  `payload.panel`), and therefore via the command palette too, same
+  invocation-parity guarantee as every other labeled bind. Content is a
+  read-model folded by `Raxol.Harness.PanelProjection` from the
+  projection's retained *durable* `extract` meta events, recomputed both
+  at summon (`open_panel/3`) and on every footer repaint while open
+  (`refresh_panel_overlay/1`, called from `paint_footer/1`) -- a live
+  projection, not a one-shot snapshot. Same refusal ladder as
+  `open_overlay/3` (`:overlay_already_open`/`:no_footer`/
+  `:insufficient_footer_capacity`), surfaced through the same
+  `picker_refusal/2` notice path. Dismissal releases the claimed footer
+  rows and discards only UI-local panel state (scroll offset); re-summoning
+  folds the CURRENT retained events without ever touching the block
+  projection itself.
+
+  Merge caveat (see `PanelProjection`'s own moduledoc for the full
+  statement): the panels build against the frozen meta-event contract
+  shapes and a contract-shape fixture
+  (`test/fixtures/harness/sessions/projection-panels.jsonl`); the
+  per-class item shapes are ASSUMPTIONS pending verification against real
+  agent-emitted `extract` events before this unit's PR merges.
+
   ## Precondition #7 -- teardown ownership (this module owns NONE)
 
   `new/2` sets the DECSTBM history/footer split via
@@ -478,6 +505,7 @@ defmodule Raxol.Harness.Surface do
 
   alias Raxol.Harness.Fixture
   alias Raxol.Harness.Fixture.Session
+  alias Raxol.Harness.PanelProjection
   alias Raxol.Harness.Projection
   alias Raxol.Harness.RecencyPolicy
   alias Raxol.Harness.SealFrontier
@@ -487,7 +515,7 @@ defmodule Raxol.Harness.Surface do
   alias Raxol.Harness.UnreadDivider
 
   alias Raxol.UI.Components.Harness.{Block, BlockBody, Composer}
-  alias Raxol.UI.Harness.{InputEvent, Keymap, OverlayPicker}
+  alias Raxol.UI.Harness.{InputEvent, Keymap, OverlayPanel, OverlayPicker}
 
   alias Raxol.UI.Rendering.PaintAuthority.{
     FlatAuthority,
@@ -528,14 +556,20 @@ defmodule Raxol.Harness.Surface do
         }
 
   @typedoc """
-  The hosted overlay picker's state: the pure `OverlayPicker.t()` plus the
-  caller-supplied (or default) commit callback. `on_pick` is invoked as
+  The hosted overlay's state: `mod` names which module owns `picker` (
+  `Raxol.UI.Harness.OverlayPicker` for the filterable pickers,
+  `Raxol.UI.Harness.OverlayPanel` for the read-only projection panels --
+  see `overlay_mod/1`), `picker` holds THAT module's own state (a picker
+  or a panel, despite the field name predating panels), and `on_pick` is
+  the caller-supplied (or default) commit callback, invoked as
   `on_pick.(model, item)` AFTER `close_overlay/1` has already restored the
   footer to its base row count -- see `handle_input/2`'s `:passthrough`
-  routing.
+  routing. A hosted `OverlayPanel` never produces a pick (see
+  `open_panel/3`), so its `on_pick` is shape-compatible filler only.
   """
   @type overlay :: %{
-          picker: OverlayPicker.t(),
+          mod: module(),
+          picker: OverlayPicker.t() | OverlayPanel.t(),
           on_pick: (t(), term() -> t())
         }
 
@@ -1129,13 +1163,21 @@ defmodule Raxol.Harness.Surface do
     }
   end
 
+  # The hosted overlay's own module (see the `overlay()` typedoc) --
+  # `OverlayPicker` for the filterable pickers, or an explicitly-stamped
+  # `mod` (currently only `OverlayPanel`, the read-only projection
+  # panels) for anything else. One source of truth for "which module owns
+  # this overlay's state," consulted at every dispatch site instead of
+  # hardcoding `OverlayPicker`.
+  defp overlay_mod(overlay), do: Map.get(overlay, :mod, OverlayPicker)
+
   # While an overlay is open, EVERY :passthrough event (typed characters,
-  # arrows, Enter, an unrecognized special key) is routed to the overlay
-  # picker instead of the Composer -- the composer's buffer is frozen
+  # arrows, Enter, an unrecognized special key) is routed to the hosted
+  # overlay instead of the Composer -- the composer's buffer is frozen
   # mid-pick (see the moduledoc's command-bifurcation note on `:steer`).
   defp route_passthrough(%{overlay: overlay} = model, norm, _raw_event)
        when overlay != nil do
-    case OverlayPicker.handle_key(overlay.picker, norm) do
+    case overlay_mod(overlay).handle_key(overlay.picker, norm) do
       {:continue, picker} ->
         %{model | overlay: %{overlay | picker: picker}}
 
@@ -1220,6 +1262,13 @@ defmodule Raxol.Harness.Surface do
 
   defp dispatch_command(model, %{type: :open_session_picker}),
     do: open_session_picker(model)
+
+  # `handle_open_result/2` already routes an `open_panel/3` refusal
+  # through `picker_refusal/2` -- panels reuse it verbatim, same honest
+  # refusal vocabulary as the pickers above.
+  defp dispatch_command(model, %{type: :open_panel, payload: %{panel: kind}}) do
+    model |> open_panel(kind) |> handle_open_result(model)
+  end
 
   defp dispatch_command(model, %{type: :focus_transcript}),
     do: focus_transcript(model)
@@ -1640,7 +1689,7 @@ defmodule Raxol.Harness.Surface do
          ) do
       {:ok, authority} ->
         on_pick = Keyword.get(opts, :on_pick, default_on_pick(picker))
-        overlay = %{picker: picker, on_pick: on_pick}
+        overlay = %{mod: OverlayPicker, picker: picker, on_pick: on_pick}
         model = %{model | authority: authority, overlay: overlay}
         {:ok, paint_footer(model)}
 
@@ -1680,6 +1729,98 @@ defmodule Raxol.Harness.Surface do
 
     %{model | authority: authority, overlay: nil}
     |> paint_footer()
+  end
+
+  # -- projection panels (see the moduledoc's "Projection panels" section) -
+
+  @doc """
+  Opens a read-only projection panel (`kind`: `:worktracks`, `:memory`, or
+  `:plan`) over the same hosted-overlay footer slot `open_overlay/3` uses --
+  growing the footer viewport by `Raxol.UI.Harness.OverlayPanel.height/1`
+  rows and repainting immediately. Summon shows the LIVE projection: the
+  panel's initial content is `Raxol.Harness.PanelProjection.render_lines/2`
+  folded over `model.projection.source_events` (the retained *durable*
+  meta events) at the moment of opening, not a stale snapshot.
+
+  Dismissal (`close_overlay/1`, same as any other hosted overlay) discards
+  only UI-local state -- scroll offset, claimed footer rows. The fold
+  source is the projection's retained events, so re-summoning a panel
+  folds current state without ever touching the block projection itself
+  (see `PanelProjection`'s moduledoc, "Recompute, not incrementally
+  cached").
+
+  ## Options
+
+    * `:max_visible` (default `OverlayPanel.default_max_visible/0`) --
+      clamped to the available footer capacity, same narrowing rule
+      `open_overlay/3` applies (a taller request is narrowed, never
+      refused).
+
+  ## Errors
+
+  Identical refusal ladder to `open_overlay/3`:
+  `{:error, :overlay_already_open}`, `{:error, :no_footer}` (`:flat`
+  mode), `{:error, :insufficient_footer_capacity}`. Zero bytes written,
+  model untouched on every refusal.
+  """
+  @spec open_panel(t(), PanelProjection.kind(), keyword()) ::
+          {:ok, t()}
+          | {:error,
+             :overlay_already_open | :no_footer | :insufficient_footer_capacity}
+  def open_panel(model, kind, opts \\ [])
+
+  def open_panel(%{overlay: overlay}, _kind, _opts) when overlay != nil,
+    do: {:error, :overlay_already_open}
+
+  def open_panel(%{mode: :flat}, _kind, _opts), do: {:error, :no_footer}
+
+  def open_panel(model, kind, opts) do
+    max_overlay_rows = max_overlay_rows(model.rows, model.footer_rows)
+
+    if max_overlay_rows < 2 or degenerate?(model) do
+      {:error, :insufficient_footer_capacity}
+    else
+      do_open_panel(model, kind, opts, max_overlay_rows)
+    end
+  end
+
+  defp do_open_panel(model, kind, opts, max_overlay_rows) do
+    max_visible =
+      min(
+        Keyword.get(opts, :max_visible, OverlayPanel.default_max_visible()),
+        max_overlay_rows - 1
+      )
+
+    panel =
+      OverlayPanel.new(kind: kind, max_visible: max_visible)
+      |> OverlayPanel.put_lines(
+        PanelProjection.render_lines(kind, model.projection.source_events)
+      )
+
+    claimed_rows = OverlayPanel.height(panel)
+
+    case InlineAuthority.set_footer_rows(
+           model.authority,
+           model.footer_rows + claimed_rows
+         ) do
+      {:ok, authority} ->
+        # A panel never produces {:picked, _} (see OverlayPanel's
+        # moduledoc) -- `on_pick` here is shape-compat filler only, never
+        # actually invoked.
+        overlay = %{
+          mod: OverlayPanel,
+          picker: panel,
+          on_pick: fn m, _item -> m end
+        }
+
+        model = %{model | authority: authority, overlay: overlay}
+        {:ok, paint_footer(model)}
+
+      # Unreachable given the capacity check above (belt and braces), same
+      # reasoning as `do_open_overlay/4`'s own unreachable clause.
+      {:error, :degenerate} ->
+        {:error, :insufficient_footer_capacity}
+    end
   end
 
   # -- pickers (command palette, jump, session) ----------------------------
@@ -1927,10 +2068,32 @@ defmodule Raxol.Harness.Surface do
   defp paint_footer(%{mode: :flat} = model), do: model
 
   defp paint_footer(model) do
+    model = refresh_panel_overlay(model)
     lines = footer_lines(model)
     authority = InlineAuthority.repaint(model.authority, lines)
     %{model | authority: authority, stub_notice: nil}
   end
+
+  # This is the whole live-update mechanism for an open projection panel:
+  # `advance/2` (fixture reveal) and `handle_input/2` (keystrokes) both
+  # end in this module's own `paint_footer/1` call, so an open panel
+  # refreshes its content as new `extract` events reveal, without any
+  # separate subscription or polling path. Recompute-per-paint is the
+  # documented decision -- see `PanelProjection`'s moduledoc, "Recompute,
+  # not incrementally cached."
+  defp refresh_panel_overlay(
+         %{overlay: %{mod: OverlayPanel, picker: panel} = overlay} = model
+       ) do
+    lines =
+      PanelProjection.render_lines(panel.kind, model.projection.source_events)
+
+    %{
+      model
+      | overlay: %{overlay | picker: OverlayPanel.put_lines(panel, lines)}
+    }
+  end
+
+  defp refresh_panel_overlay(model), do: model
 
   defp footer_lines(model) do
     status_line = StatusStrip.render(model.status, model.width)
@@ -1959,8 +2122,13 @@ defmodule Raxol.Harness.Surface do
 
   defp overlay_lines(%{overlay: nil}), do: []
 
-  defp overlay_lines(%{overlay: %{picker: picker}, width: width}),
-    do: ViewText.lines(OverlayPicker.render(picker), width, :styled)
+  defp overlay_lines(%{overlay: overlay, width: width}),
+    do:
+      ViewText.lines(
+        overlay_mod(overlay).render(overlay.picker),
+        width,
+        :styled
+      )
 
   # Renders the unread divider (see `UnreadDivider`'s moduledoc) as one
   # dim footer line through the SAME `ViewText` sanitize/truncate seam
@@ -2104,7 +2272,7 @@ defmodule Raxol.Harness.Surface do
     # Same capacity rule `open_overlay/3` admits with -- one helper, one
     # threshold (routed through `ScrollRegionManager.degenerate?/2`),
     # never a re-encoded literal that could drift.
-    OverlayPicker.height(overlay.picker) >
+    overlay_mod(overlay).height(overlay.picker) >
       max_overlay_rows(new_rows, footer_rows)
   end
 
