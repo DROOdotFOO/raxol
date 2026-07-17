@@ -373,19 +373,38 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
                "footer preview -- invisible-but-retrying is under-reporting"
     end
 
-    test "a refused-write block carrying a clear-screen escape is neutralized in the footer preview (not a live \\e[2J)" do
-      # The display half above pins that a refused block stays VISIBLE in
-      # the footer. This pins that it stays visible HONESTLY. The refused
-      # block reaches the terminal ONLY via the footer preview (its seal
-      # write is refused), and here its content carries a raw CSI
-      # clear-screen -- `\e[2J`, the exact sequence the seal-frontier laws
-      # forbid from ever reaching the wire (it would wipe native
-      # scrollback / the immutable prefix). The footer repaint's
-      # `ContentGuard` must strip the leading ESC, so the operator sees the
-      # literal `[2J` residue, never a live escape. Presence alone (the
-      # test above) does not cover this: a newly-LIVE display path needs a
-      # neutralization pin, same as the seal path has.
+    test "no full-clear reaches the wire through the refused-write footer-preview path (end-to-end, independent oracle)" do
+      # The display half above pins that a refused block stays VISIBLE in the
+      # footer preview. This pins that it stays visible HONESTLY: content that
+      # smuggles a raw CSI full-screen clear (`\e[2J` -- forbidden on the
+      # inline surface, it wipes native scrollback / the immutable prefix)
+      # must never reach the wire as a live escape through this path.
+      #
+      # SCOPE + attribution (the #635-R1 correction). This is an END-TO-END
+      # integration pin over the whole refused-write -> footer-preview
+      # pipeline, NOT a single-seam pin -- and it does not attribute to one
+      # layer. TWO layers neutralize here, so this path has genuine defense
+      # in depth (traced: the raw `\e[2J` is already gone from the rendered
+      # view before ContentGuard ever runs):
+      #   1. the message-body renderer strips ESC/C0 while building the
+      #      display view, so footer content arrives already de-escaped;
+      #   2. the footer paint routes EVERY line through
+      #      `ContentGuard.sanitize_line/1` (`inline_authority.ex:436,860`).
+      # The two SEAM guarantees are pinned directly and red-first ELSEWHERE:
+      # `ContentGuard.sanitize_line(<<0x1B, "[2J">>) == "[2J"` in
+      # `test/raxol/harness/c1_sanitizer_test.exs`, and the footer-paint seam
+      # against the same independent full-clear oracle in
+      # `test/property/renderer_t2c_review_fixes_test.exs`. This test proves
+      # they COMPOSE over the refused-write preview surface, judged by that
+      # independent oracle (`SealOracle.emits_full_clear?/1`) rather than a
+      # brittle byte-substring match.
       hostile = @marker <> " \e[2J HOSTILE"
+
+      # Fail-first (the t2c discipline): the oracle must be ABLE to catch a
+      # raw full-clear, or the GREEN refute below is vacuous.
+      assert SealOracle.emits_full_clear?("composer " <> hostile),
+             "fail-first: the full-clear oracle must catch a raw \\e[2J, " <>
+               "or the clean result below is meaningless"
 
       {device, sink} =
         FailingDevice.start(fail_when: seal_write_with(@marker), mode: :always)
@@ -404,15 +423,13 @@ defmodule Raxol.Harness.SurfaceSealPipelineTest do
       assert occurrences(keyframe_bytes, @marker) >= 1,
              "the refused block must still be visible in the footer preview"
 
-      assert occurrences(keyframe_bytes, "\e[2J") == 0,
-             "a hostile clear-screen in refused-write content must never " <>
-               "reach the wire as a live escape -- the footer's newly-live " <>
-               "display path must neutralize the ESC, same as the seal path"
+      refute SealOracle.emits_full_clear?(keyframe_bytes),
+             "no \\e[2J may reach the wire through the refused-write footer " <>
+               "preview -- the independent full-clear oracle must stay silent"
 
       assert occurrences(keyframe_bytes, "[2J") >= 1,
-             "the neutralized clear-screen must remain visible as literal " <>
-               "`[2J` residue in the footer preview (honest-visible, not " <>
-               "silently dropped)"
+             "the neutralized clear-screen stays honestly visible as literal " <>
+               "`[2J` residue in the footer preview (not silently dropped)"
     end
 
     test "post-seal fill protection: a fold override on an already-painted block is rejected and stores nothing" do
