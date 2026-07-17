@@ -569,6 +569,21 @@ defmodule Raxol.Harness.LiveSessionDriver do
     %{state | model: Surface.put_lane_notice(state.model, text)}
   end
 
+  # DevTools bridge seam (graduated from the react-devtools spike): a
+  # display-only footer-group highlight -- hover/select in the DevTools
+  # Elements panel paints a pale-blue bg under that group's footer rows,
+  # `nil` clears it. Same `{:surface_command, ...}` envelope as
+  # `:lane_notice` above; `Surface.put_debug_highlight/2` owns every
+  # honesty law (footer-only, display-only, vocabulary-validated --
+  # an unknown group clears, fail-safe).
+  defp handle_surface_command(state, %{
+         type: :debug_highlight,
+         payload: %{group: group}
+       })
+       when is_atom(group) do
+    %{state | model: Surface.put_debug_highlight(state.model, group)}
+  end
+
   defp handle_surface_command(state, _other), do: state
 
   defp interrupt_payload(nil), do: %{}

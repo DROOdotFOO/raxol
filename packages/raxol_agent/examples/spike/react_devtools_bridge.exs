@@ -57,14 +57,25 @@
 # seal status per block are approximated here (sealed = turn bracket
 # seen), not read from the Surface.
 #
-# Highlight payoff: on `highlightHostInstance` the bridge sends
-# `{:surface_command, %{type: :lane_notice, payload: %{text: ...}}}` to
-# the live driver, which repaints the footer's persistent lane-notice
-# row. Sealed history rows CANNOT be repainted (seal-once is a Surface
-# invariant), so a history block hover renders an honest footer notice
-# naming the block instead; footer children get the same notice channel
-# with an inverted-arrow marker (a true per-row inverted repaint needs a
-# Surface-side seam that does not exist yet — graduation work).
+# Highlight payoff (the REAL painted one — the Surface-side seam the
+# spike's first pass lacked now exists): hover OR select
+# (`highlightHostInstance` / `inspectElement`, last-writer-wins, one
+# highlight at a time) on a FOOTER-region element sends
+# `{:surface_command, %{type: :debug_highlight, payload: %{group: g}}}`
+# to the live driver, and `Surface.put_debug_highlight/2` paints a
+# pale-blue background under exactly that footer group's rows
+# (StatusStrip -> :status, LaneNotice -> :lane, Composer -> :composer,
+# the live tail -> :preview — the footer's own group vocabulary). The
+# tint is a palette role (`Raxol.UI.Theming.Palette.debug_highlight_bg/1`,
+# capability-tiered) — no color literal on this side of the wire.
+# `clearHostInstanceHighlight` clears it (group `nil`).
+#
+# Sealed history rows CANNOT be repainted (seal-once is a Surface
+# invariant), so a history block hover/select still renders an honest
+# footer notice naming the block instead — the lane-notice channel keeps
+# that job, and a history hover also CLEARS any active footer highlight
+# (the hover has moved; keeping a stale tint would lie about where it
+# is).
 
 defmodule Raxol.Spike.ReactDevtools.Wire do
   @moduledoc false
@@ -614,13 +625,12 @@ defmodule Raxol.Spike.ReactDevtools.Bridge do
   # Silence = "no unsupported renderer" — the real backend only replies
   # when a renderer IS unsupported.
   defp dispatch("getIfHasUnsupportedRendererVersion", _p, state),
-    do:
-      log_line(state, "<- getIfHasUnsupportedRendererVersion (no reply needed)")
+    do: log_line(state, "<- getIfHasUnsupportedRendererVersion (no reply needed)")
 
   # THE PAYOFF: hover in the DevTools Elements panel lands here.
   defp dispatch("highlightHostInstance", %{"id" => id} = p, state) do
     state = log_line(state, "<- highlightHostInstance id=#{id}")
-    notify_driver(state, highlight_notice(state, id))
+    apply_highlight(state, id)
     if Map.get(p, "scrollIntoView"), do: :ok
     state
   end
@@ -631,6 +641,7 @@ defmodule Raxol.Spike.ReactDevtools.Bridge do
     do: dispatch("highlightHostInstance", p, state)
 
   defp dispatch("clearHostInstanceHighlight", _p, state) do
+    send_debug_highlight(state, nil)
     notify_driver(state, nil)
     log_line(state, "<- clearHostInstanceHighlight")
   end
@@ -638,8 +649,13 @@ defmodule Raxol.Spike.ReactDevtools.Bridge do
   defp dispatch("clearNativeElementHighlight", p, state),
     do: dispatch("clearHostInstanceHighlight", p, state)
 
+  # Selection is treated exactly like hover (last-writer-wins, one
+  # highlight at a time): `inspectElement` IS the frontend's select
+  # signal, so a selected footer element keeps its painted highlight
+  # after the hover's own clear event fires.
   defp dispatch("inspectElement", %{"id" => id, "requestID" => rid}, state) do
     state = log_line(state, "<- inspectElement id=#{id} requestID=#{rid}")
+    apply_highlight(state, id)
     send_wall(state, "inspectedElement", inspected_payload(state, id, rid))
   end
 
@@ -656,16 +672,48 @@ defmodule Raxol.Spike.ReactDevtools.Bridge do
 
   # -- highlight payoff --------------------------------------------------------
 
-  defp highlight_notice(state, devtools_id) do
+  # Both channels, every hover/select: the debug-highlight group (a real
+  # painted bg for footer elements; `nil` — which also CLEARS a stale
+  # tint — for sealed history/unknown) and the lane notice (the honest
+  # descriptive line). Last-writer-wins by construction: one group field
+  # on the Surface, one notice row.
+  defp apply_highlight(state, devtools_id) do
     case Map.get(state.by_id, devtools_id) do
       nil ->
-        "» [devtools] hover on unknown element ##{devtools_id}"
+        send_debug_highlight(state, nil)
+
+        notify_driver(
+          state,
+          "» [devtools] hover on unknown element ##{devtools_id}"
+        )
 
       key ->
         node = Map.fetch!(state.nodes, key)
-        describe_for_highlight(key, node)
+        send_debug_highlight(state, highlight_group(key))
+        notify_driver(state, describe_for_highlight(key, node))
     end
+
+    :ok
   end
+
+  # Footer-region element -> the Surface footer-group vocabulary
+  # `Surface.put_debug_highlight/2` accepts. Everything else (sealed
+  # blocks/turns, the root, unknowns) maps to `nil`: sealed history
+  # cannot be repainted (seal-once), so those get the honest notice only.
+  defp highlight_group(:status_strip), do: :status
+  defp highlight_group(:lane_notice), do: :lane
+  defp highlight_group(:composer), do: :composer
+  defp highlight_group({:tail, _turn_id}), do: :preview
+  defp highlight_group(_sealed_or_other), do: nil
+
+  defp send_debug_highlight(%{driver: pid}, group) when is_pid(pid) do
+    send(
+      pid,
+      {:surface_command, %{type: :debug_highlight, payload: %{group: group}}}
+    )
+  end
+
+  defp send_debug_highlight(_state, _group), do: :ok
 
   # Sealed history cannot be repainted (seal-once invariant) — the honest
   # notice names the block instead of pretending to flash it.
@@ -806,8 +854,7 @@ defmodule Raxol.Spike.ReactDevtools.Bridge do
           {"ToolResult", %{"tool" => get_in(ev.payload, ["name"])}}
 
         "message" ->
-          {"AssistantMessage",
-           %{"excerpt" => excerpt(get_in(ev.payload, ["content"]) || "")}}
+          {"AssistantMessage", %{"excerpt" => excerpt(get_in(ev.payload, ["content"]) || "")}}
 
         other ->
           {"Item", %{"item_type" => inspect(other)}}

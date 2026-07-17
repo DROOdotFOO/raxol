@@ -34,11 +34,31 @@ defmodule Raxol.Harness.Surface.ViewText do
       zero escape bytes, ever (mirrors `FlatAuthority`'s own "zero escape
       bytes, full stop" contract) -- content only.
     * `:styled` -- `InlineAuthority`'s destination: content wrapped in a
-      minimal SGR run (24-bit `:fg`, `:dim`) when the source view node
-      carries a `:style` map with those keys, `\\e[0m` reset at the end of
-      any styled line. A style-free node (no `:fg`/`:dim`) round-trips
-      byte-identical to plain -- neutral by default, matching every
-      harness Component's own "absent prominence = zero change" contract.
+      minimal SGR run (24-bit `:fg`, `:dim`, and the `:bg` tint vocabulary
+      below) when the source view node carries a `:style` map with those
+      keys, `\\e[0m` reset at the end of any styled line. A style-free node
+      (no `:fg`/`:dim`/`:bg`) round-trips byte-identical to plain --
+      neutral by default, matching every harness Component's own "absent
+      prominence = zero change" contract.
+
+  ## The `:bg` tint vocabulary (and `highlight_bg/3`)
+
+  `:bg` accepts the terminal-neutral tint encoding
+  `Raxol.UI.Theming.Palette`'s role tints resolve to: `"#RRGGBB"`
+  (`48;2;r;g;b`), `{:xterm256, 0..255}` (`48;5;n`), or `{:ansi16, 0..15}`
+  (`40+n` / `100+(n-8)`). Components never pick the value -- they name a
+  role and the palette layer decides per capability tier ("roles, never
+  colors").
+
+  `highlight_bg/3` is the FULL-ROW variant for the DevTools hover
+  highlight: it wraps an ALREADY-styled line (this module's own `:styled`
+  output -- the one kind of SGR-bearing string this module itself
+  produced) in a bg run, re-asserting the bg after every embedded
+  `\\e[0m` so an inner styled run's reset cannot drop the tint mid-row,
+  and pads with spaces to the full width budget so the tint reads as a
+  row highlight, not a text-shaped smear. This is still styling applied
+  at THIS byte-emission seam -- never bg bytes embedded upstream in
+  content strings (the repo's ANSI-at-the-final-stage law).
 
   ## This module is the trust boundary: sanitize content here, not downstream
 
@@ -101,6 +121,13 @@ defmodule Raxol.Harness.Surface.ViewText do
   alias Raxol.UI.TextMeasure
 
   @type mode :: :plain | :styled
+
+  @typedoc """
+  A background tint in the terminal-neutral encoding the palette layer's
+  role tints resolve to (`Raxol.UI.Theming.Palette.bg_tint/0`) -- see the
+  moduledoc's "`:bg` tint vocabulary" section.
+  """
+  @type bg :: String.t() | {:xterm256, 0..255} | {:ansi16, 0..15}
 
   @doc """
   Flattens `view` (a `Raxol.View.Components`-shaped map, or a list of
@@ -289,6 +316,7 @@ defmodule Raxol.Harness.Surface.ViewText do
     |> maybe_code(Map.get(style, :bold), "1")
     |> maybe_code(Map.get(style, :dim), "2")
     |> maybe_fg(Map.get(style, :fg))
+    |> maybe_bg(Map.get(style, :bg))
     |> Enum.reverse()
   end
 
@@ -311,4 +339,87 @@ defmodule Raxol.Harness.Surface.ViewText do
   end
 
   defp maybe_fg(reversed_codes, _other), do: reversed_codes
+
+  defp maybe_bg(reversed_codes, spec) do
+    case bg_codes(spec) do
+      [] -> reversed_codes
+      codes -> Enum.reverse(codes) ++ reversed_codes
+    end
+  end
+
+  # The `:bg` tint vocabulary (see moduledoc): "#RRGGBB", {:xterm256, n},
+  # {:ansi16, n}. Anything else -- including a malformed hex -- resolves
+  # to NO codes, mirroring `maybe_fg/2`'s own silent-neutral convention.
+  defp bg_codes("#" <> hex) when byte_size(hex) == 6 do
+    case Integer.parse(hex, 16) do
+      {value, ""} ->
+        r = value |> Bitwise.bsr(16) |> Bitwise.band(0xFF)
+        g = value |> Bitwise.bsr(8) |> Bitwise.band(0xFF)
+        b = Bitwise.band(value, 0xFF)
+
+        [
+          "48",
+          "2",
+          Integer.to_string(r),
+          Integer.to_string(g),
+          Integer.to_string(b)
+        ]
+
+      _other ->
+        []
+    end
+  end
+
+  defp bg_codes({:xterm256, n}) when is_integer(n) and n in 0..255,
+    do: ["48", "5", Integer.to_string(n)]
+
+  defp bg_codes({:ansi16, n}) when is_integer(n) and n in 0..7,
+    do: [Integer.to_string(40 + n)]
+
+  defp bg_codes({:ansi16, n}) when is_integer(n) and n in 8..15,
+    do: [Integer.to_string(100 + (n - 8))]
+
+  defp bg_codes(_other), do: []
+
+  @doc """
+  The bg tint as a ready-to-emit SGR prefix (`"\\e[48;5;24m"`-shaped), or
+  `nil` for a spec outside the vocabulary (including `nil` itself).
+  Public so `highlight_bg/3` callers/tests share one encoding source.
+  """
+  @spec bg_prefix(bg() | nil) :: String.t() | nil
+  def bg_prefix(spec) do
+    case bg_codes(spec) do
+      [] -> nil
+      codes -> "\e[" <> Enum.join(codes, ";") <> "m"
+    end
+  end
+
+  @doc """
+  Full-row background highlight over an ALREADY-styled line (see the
+  moduledoc's "`:bg` tint vocabulary" section): prefixes the bg run,
+  re-asserts it after every embedded `\\e[0m` (an inner styled run's
+  reset must not drop the tint mid-row), pads with spaces to `width`
+  display columns (measured on the SGR-stripped content -- the input is
+  this module's own `:styled` output, whose only escape bytes are the
+  SGR runs it emitted itself) so the tint covers the whole row, and
+  closes with one final reset. A `nil`/unknown spec is the identity --
+  zero byte change, matching the "absent prominence = zero change"
+  contract.
+  """
+  @spec highlight_bg(String.t(), bg() | nil, non_neg_integer()) :: String.t()
+  def highlight_bg(line, spec, width) do
+    case bg_prefix(spec) do
+      nil ->
+        line
+
+      prefix ->
+        pad = max(width - TextMeasure.display_width(strip_sgr(line)), 0)
+
+        prefix <>
+          String.replace(line, "\e[0m", "\e[0m" <> prefix) <>
+          String.duplicate(" ", pad) <> "\e[0m"
+    end
+  end
+
+  defp strip_sgr(line), do: String.replace(line, ~r/\e\[[0-9;]*m/, "")
 end

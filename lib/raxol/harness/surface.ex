@@ -146,8 +146,8 @@ defmodule Raxol.Harness.Surface do
   that overflows the row budget would silently eat exactly the honest
   refusal/degradation report the notice channel exists to carry (an
   integration finding: the overflow only manifests once sibling footer
-  content stacks up). `footer_lines/1` therefore fits the list itself
-  BEFORE the handoff (`fit_footer_lines/3`): display order preserved,
+  content stacks up). `footer_frame/1` therefore fits the list itself
+  BEFORE the handoff (`fit_footer_groups/3`): display order preserved,
   discretionary groups yield first (preview, then divider, then the
   composer's tail, then an overlay's tail, then status -- each trimmed
   from its tail so a group's leading row survives a partial trim), and a
@@ -199,6 +199,21 @@ defmodule Raxol.Harness.Surface do
   section for the full evidence trail). Until that unit lands, the
   divider never renders outside the test suites; the keystroke fallback
   only ever CLOSES an away state, never opens one.
+
+  ## The DevTools debug highlight (display-only footer tint)
+
+  `put_debug_highlight/2` paints a pale-blue BACKGROUND under every line
+  of exactly one footer group (the same group keys `footer_frame/1`
+  composes: status/lane/overlay/divider/preview/composer/notice, plus
+  `:expansion`) -- the react-devtools bridge's hover/select payoff. It is
+  display-only observer state: applied post-fit through
+  `ViewText.highlight_bg/3` (row counts and the cursor park are untouched
+  by construction), never on any seal path (sealed history hovers render
+  the bridge's honest notice instead), cleared by `close_stream/1`, and a
+  `nil` highlight is a zero-byte no-op so goldens can never see it. The
+  tint itself is a palette ROLE (`Raxol.UI.Theming.Palette`'s
+  `:debug_highlight_bg`, capability-tiered) -- no color literal in this
+  module. See `put_debug_highlight/2`'s doc for the full law list.
 
   ## The overlay picker (footer-region overlay)
 
@@ -622,6 +637,7 @@ defmodule Raxol.Harness.Surface do
   alias Raxol.Harness.StatusStrip
   alias Raxol.Harness.Surface.ViewText
   alias Raxol.Harness.UnreadDivider
+  alias Raxol.UI.Theming.Palette
 
   alias Raxol.UI.Components.Harness.{Block, BlockBody, Composer}
   alias Raxol.UI.Harness.{InputEvent, Keymap, OverlayPanel, OverlayPicker}
@@ -647,7 +663,35 @@ defmodule Raxol.Harness.Surface do
   @search_label_cap 400
   @stub_interrupt_notice "» interrupt requested (stub — no agent lane in fixture mode)"
 
+  # The footer-group vocabulary `put_debug_highlight/2` accepts -- exactly
+  # the group keys `footer_frame/1` composes (both clauses), one highlight
+  # at a time, last-writer-wins.
+  @debug_highlight_groups [
+    :status,
+    :lane,
+    :overlay,
+    :divider,
+    :preview,
+    :composer,
+    :notice,
+    :expansion
+  ]
+
   @type mode :: :inline_log | :tmux_conservative | :flat
+
+  @typedoc """
+  A footer group key the DevTools debug highlight can target -- see
+  `put_debug_highlight/2`.
+  """
+  @type debug_highlight_group ::
+          :status
+          | :lane
+          | :overlay
+          | :divider
+          | :preview
+          | :composer
+          | :notice
+          | :expansion
   @type t :: %{
           mode: mode(),
           authority: InlineAuthority.t() | FlatAuthority.t(),
@@ -673,7 +717,9 @@ defmodule Raxol.Harness.Surface do
           sessions_dir: Path.t(),
           command_sink: (map() -> term()) | nil,
           lane_notice: String.t() | [String.t()] | nil,
-          stream_open?: boolean()
+          stream_open?: boolean(),
+          debug_highlight: debug_highlight_group() | nil,
+          debug_highlight_bg: ViewText.bg()
         }
 
   @typedoc """
@@ -825,7 +871,13 @@ defmodule Raxol.Harness.Surface do
       sessions_dir: Keyword.get(opts, :sessions_dir, @default_sessions_dir),
       command_sink: Keyword.get(opts, :command_sink),
       lane_notice: nil,
-      stream_open?: Keyword.get(opts, :stream_open, false)
+      stream_open?: Keyword.get(opts, :stream_open, false),
+      debug_highlight: nil,
+      # Role token, resolved ONCE per session at the palette layer ("roles,
+      # never colors") -- the component only ever names the role; the
+      # palette decides what the tint IS per capability tier, including
+      # the category-preserving 256/ANSI16 downgrades.
+      debug_highlight_bg: Palette.debug_highlight_bg_for(caps)
     }
 
     model
@@ -1139,7 +1191,10 @@ defmodule Raxol.Harness.Surface do
   """
   @spec close_stream(t()) :: t()
   def close_stream(model) do
-    %{model | stream_open?: false}
+    # `debug_highlight` is display-only observer state -- a closing
+    # stream is the teardown boundary, so an active highlight is cleared
+    # here rather than surviving into the session's final frames.
+    %{model | stream_open?: false, debug_highlight: nil}
     |> paint_pending_blocks()
     |> paint_footer()
   end
@@ -1184,6 +1239,48 @@ defmodule Raxol.Harness.Surface do
   @spec put_lane_notice(t(), String.t() | [String.t()] | nil) :: t()
   def put_lane_notice(model, text) do
     %{model | lane_notice: text}
+    |> paint_footer()
+  end
+
+  @doc """
+  Sets (or clears, with `nil`) the DevTools debug highlight: a
+  DISPLAY-ONLY pale-blue background painted under every line of one
+  footer group (the `t:debug_highlight_group/0` vocabulary -- the exact
+  group keys `footer_frame/1` composes). Driven by the react-devtools
+  bridge's hover/select events (`highlightHostInstance` /
+  `clearHostInstanceHighlight`); one highlight at a time,
+  last-writer-wins. Repaints the footer before returning.
+
+  ## Honesty constraints (the laws the test suite pins byte-level)
+
+    * Display-only, footer-only: the bg is applied AFTER the footer fit
+      (`fit_footer_groups/3`), through `ViewText.highlight_bg/3` at the
+      byte-emission seam -- it can never change a group's row count, move
+      the cursor park, or reach the seal path. Sealed history is
+      untouched by construction (a hover on a sealed block renders the
+      bridge's honest notice instead -- seal-once).
+    * Never persisted: cleared by `close_stream/1` (teardown honesty),
+      and `nil` on a model that has no highlight is a zero-byte no-op
+      (the repaint diff sees no changed rows), so goldens can never be
+      perturbed by an idle highlight channel.
+    * The tint is a palette ROLE (`Raxol.UI.Theming.Palette`'s
+      `:debug_highlight_bg`), resolved per capability tier at `new/2` --
+      truecolor / 256-cube / ANSI16-blue, category-preserving. No color
+      literal lives here.
+
+  A group outside the vocabulary clears the highlight (fail-safe: never
+  paint the wrong region, never keep a stale one for an out-of-process
+  caller's typo).
+  """
+  @spec put_debug_highlight(t(), debug_highlight_group() | nil) :: t()
+  def put_debug_highlight(model, group)
+      when group in @debug_highlight_groups do
+    %{model | debug_highlight: group}
+    |> paint_footer()
+  end
+
+  def put_debug_highlight(model, _nil_or_unknown) do
+    %{model | debug_highlight: nil}
     |> paint_footer()
   end
 
@@ -3066,16 +3163,18 @@ defmodule Raxol.Harness.Surface do
     # next, the notice never. No composer is on screen while expanded,
     # so there is no edit point to park at -- the cursor stays wherever
     # the last composer park left it.
+    budget = footer_budget(model)
+
     lines =
-      fit_footer_lines(
-        [
-          status: StatusStrip.render(model.status, model.width),
-          notice: notice_line(model.stub_notice, model.width),
-          expansion: DiffExpansion.render_lines(expansion)
-        ],
-        [:expansion, :status],
-        footer_budget(model)
-      )
+      [
+        status: StatusStrip.render(model.status, model.width),
+        notice: notice_line(model.stub_notice, model.width),
+        expansion: DiffExpansion.render_lines(expansion)
+      ]
+      |> fit_footer_groups([:expansion, :status], budget)
+      |> apply_debug_highlight(model)
+      |> Enum.flat_map(fn {_key, lines} -> lines end)
+      |> Enum.take(budget)
 
     {lines, nil}
   end
@@ -3121,10 +3220,41 @@ defmodule Raxol.Harness.Surface do
 
     lines =
       kept
+      |> apply_debug_highlight(model)
       |> Enum.flat_map(fn {_key, lines} -> lines end)
       |> Enum.take(budget)
 
+    # The cursor park reads the PRE-highlight `kept` -- highlight_bg/3
+    # never changes a group's line count, so the two agree by
+    # construction; reading the un-highlighted list keeps that
+    # independence explicit.
     {lines, composer_cursor(model, kept, length(lines))}
+  end
+
+  # The DevTools debug highlight (see `put_debug_highlight/2`): wraps the
+  # targeted group's already-fitted, already-styled lines in the palette-
+  # resolved bg tint via `ViewText.highlight_bg/3` -- applied AFTER the
+  # fit (row counts already settled; bg style only, never extra rows) and
+  # at the same byte-emission seam every other footer SGR comes from. A
+  # group absent from this frame's composition (e.g. `:composer` while an
+  # expansion claims the footer) is honestly a no-op -- there is nothing
+  # of it on screen to tint.
+  defp apply_debug_highlight(kept, %{debug_highlight: nil}), do: kept
+
+  defp apply_debug_highlight(kept, model) do
+    case List.keyfind(kept, model.debug_highlight, 0) do
+      nil ->
+        kept
+
+      {key, lines} ->
+        highlighted =
+          Enum.map(
+            lines,
+            &ViewText.highlight_bg(&1, model.debug_highlight_bg, model.width)
+          )
+
+        List.keyreplace(kept, key, 0, {key, highlighted})
+    end
   end
 
   # The park target for the composer's edit point (see
@@ -3177,16 +3307,12 @@ defmodule Raxol.Harness.Surface do
   # exceeding the budget) the final head-take keeps the EARLIEST notice
   # lines rather than crashing. Pinned by the "honest-notice law under
   # footer overflow" describe in diff_expand_surface_test.exs.
-  defp fit_footer_lines(groups, drop_order, budget) do
-    groups
-    |> fit_footer_groups(drop_order, budget)
-    |> Enum.flat_map(fn {_key, lines} -> lines end)
-    |> Enum.take(budget)
-  end
-
-  # The group-preserving half of the fit: sheds overflow per the drop
-  # order but keeps the keyword structure, so `footer_frame/1` can read
-  # the composer group's post-fit offset/length for the cursor park.
+  #
+  # Group-preserving by design: sheds overflow per the drop order but
+  # keeps the keyword structure, so `footer_frame/1` can read the
+  # composer group's post-fit offset/length for the cursor park, and
+  # `apply_debug_highlight/2` can tint one group's rows post-fit (both
+  # clauses flatten + head-take themselves).
   defp fit_footer_groups(groups, drop_order, budget) do
     total =
       groups |> Enum.map(fn {_key, lines} -> length(lines) end) |> Enum.sum()

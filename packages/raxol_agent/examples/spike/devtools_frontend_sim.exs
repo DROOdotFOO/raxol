@@ -18,12 +18,22 @@
 #      sends `highlightHostInstance` for each (hover simulation), then
 #      `clearHostInstanceHighlight`, then `inspectElement` on the block;
 #   5. logs the `inspectedElement` reply and every other message as JSON
-#      lines to --log (default /tmp/raxol_devtools_sim.log).
+#      lines to --log (default /tmp/raxol_devtools_sim.log);
+#   6. with --tty-capture PATH (a file the demo's tty byte stream is
+#      being redirected/teed into), the verdict additionally asserts the
+#      PAINTED highlight end-to-end: the palette-resolved debug-highlight
+#      bg SGR must appear in the captured tty bytes after the Composer
+#      hover (bg_seen), and must NOT appear after the clear was sent
+#      (bg_cleared) — the byte-level proof that hover paints and clear
+#      unpaints. The expected prefixes are derived from
+#      `Raxol.UI.Theming.Palette.debug_highlight_bg/1` through
+#      `Raxol.Harness.Surface.ViewText.bg_prefix/1` (all three capability
+#      tiers accepted), never hardcoded here.
 #
 # Run (from packages/raxol_agent):
 #
 #   mix run --no-start examples/spike/devtools_frontend_sim.exs \
-#     --port 8123 --duration 30000
+#     --port 8123 --duration 30000 [--tty-capture /tmp/raxol_tty.bin]
 
 Code.require_file("react_devtools_bridge.exs", __DIR__)
 
@@ -38,12 +48,18 @@ defmodule Raxol.Spike.ReactDevtools.FrontendSim do
 
     {opts, _, _} =
       OptionParser.parse(argv,
-        strict: [port: :integer, duration: :integer, log: :string]
+        strict: [
+          port: :integer,
+          duration: :integer,
+          log: :string,
+          tty_capture: :string
+        ]
       )
 
     port = Keyword.get(opts, :port, 8123)
     duration = Keyword.get(opts, :duration, 30_000)
     log = Keyword.get(opts, :log, "/tmp/raxol_devtools_sim.log")
+    tty_capture = Keyword.get(opts, :tty_capture)
     File.write!(log, "")
 
     {:ok, listener} =
@@ -73,7 +89,9 @@ defmodule Raxol.Spike.ReactDevtools.FrontendSim do
               highlighted: MapSet.new(),
               inspected?: false,
               inspected_ok?: false,
-              handshake: MapSet.new()
+              handshake: MapSet.new(),
+              tty_capture: tty_capture,
+              clear_offset: nil
             }
 
             state = loop(state, deadline)
@@ -288,6 +306,7 @@ defmodule Raxol.Spike.ReactDevtools.FrontendSim do
         log_line(state.log, "SIM select -> inspectElement ##{id}")
 
         state
+        |> pin_clear_offset()
         |> send_wall("clearHostInstanceHighlight", nil)
         |> send_wall("inspectElement", %{
           "forceFullData" => true,
@@ -307,6 +326,60 @@ defmodule Raxol.Spike.ReactDevtools.FrontendSim do
     Enum.find(state.nodes, fn {_id, n} -> n.name == name end)
   end
 
+  # -- tty-capture verdict (the painted-highlight proof) ------------------------
+
+  # Pins the byte offset everything-after-which must be bg-free. Called
+  # right before the clear is sent; the sleep lets the in-flight hover
+  # repaints (Composer hover paints the bg; the sealed-block hover
+  # already clears it) land in the capture first, so the offset honestly
+  # separates "highlight era" from "cleared era".
+  defp pin_clear_offset(%{tty_capture: nil} = state), do: state
+
+  defp pin_clear_offset(state) do
+    Process.sleep(500)
+
+    offset =
+      case File.stat(state.tty_capture) do
+        {:ok, %{size: size}} -> size
+        _other -> 0
+      end
+
+    log_line(state.log, "SIM clear-offset pinned at #{offset} bytes")
+    %{state | clear_offset: offset}
+  end
+
+  # The palette-resolved bg prefixes for all three capability tiers --
+  # derived through the SAME role/encoding modules the Surface paints
+  # with, never hardcoded bytes (roles, never colors; the demo's
+  # capabilities-nil default resolves to the :xterm256 tier).
+  defp bg_prefixes do
+    for tier <- [:truecolor, :xterm256, :ansi16] do
+      Raxol.Harness.Surface.ViewText.bg_prefix(Raxol.UI.Theming.Palette.debug_highlight_bg(tier))
+    end
+  end
+
+  defp tty_verdict(%{tty_capture: nil}), do: {nil, nil}
+
+  defp tty_verdict(state) do
+    bytes =
+      case File.read(state.tty_capture) do
+        {:ok, bytes} -> bytes
+        _other -> ""
+      end
+
+    prefixes = bg_prefixes()
+    seen? = Enum.any?(prefixes, &String.contains?(bytes, &1))
+
+    offset = min(state.clear_offset || byte_size(bytes), byte_size(bytes))
+    tail = binary_part(bytes, offset, byte_size(bytes) - offset)
+
+    cleared? =
+      seen? and state.clear_offset != nil and
+        not Enum.any?(prefixes, &String.contains?(tail, &1))
+
+    {seen?, cleared?}
+  end
+
   # -- verdict -----------------------------------------------------------------
 
   defp verdict(state) do
@@ -318,14 +391,20 @@ defmodule Raxol.Spike.ReactDevtools.FrontendSim do
 
     tree_ok? = map_size(state.nodes) > 0 and find_node(state, "Composer") != nil
     hover_ok? = MapSet.size(state.highlighted) > 0
+    {bg_seen?, bg_cleared?} = tty_verdict(state)
 
     log_line(
       state.log,
       "VERDICT handshake=#{handshake_ok?} tree=#{tree_ok?} " <>
-        "hover_sent=#{hover_ok?} inspect_ok=#{state.inspected_ok?}"
+        "hover_sent=#{hover_ok?} inspect_ok=#{state.inspected_ok?} " <>
+        "bg_seen=#{inspect(bg_seen?)} bg_cleared=#{inspect(bg_cleared?)}"
     )
 
-    if handshake_ok? and tree_ok?, do: System.halt(0), else: System.halt(1)
+    tty_ok? = state.tty_capture == nil or (bg_seen? and bg_cleared?)
+
+    if handshake_ok? and tree_ok? and tty_ok?,
+      do: System.halt(0),
+      else: System.halt(1)
   end
 
   # -- wire helpers --------------------------------------------------------------
