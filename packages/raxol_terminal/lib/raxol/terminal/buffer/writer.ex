@@ -102,7 +102,6 @@ defmodule Raxol.Terminal.Buffer.Writer do
           TextFormatting.text_style()
         ) :: :ok
   def log_char_write(_char, _x, _y, _cell_style) do
-
     Raxol.Core.Runtime.Log.debug(
       # {char}" at {#{x}, #{y}} with style: #{inspect(cell_style)}"
       "[Buffer.Writer] Writing char "
@@ -191,6 +190,161 @@ defmodule Raxol.Terminal.Buffer.Writer do
       _ ->
         List.update_at(row, x, fn _ -> new_cell end)
     end
+  end
+
+  @typedoc """
+  One bulk write: `{x, y, char, style}` with the same per-cell semantics
+  as `write_char/5`.
+  """
+  @type cell_write ::
+          {non_neg_integer(), non_neg_integer(), String.t() | nil,
+           TextFormatting.text_style() | map() | nil}
+
+  @doc """
+  Bulk-writes a list of cells into the buffer in one pass per touched row.
+
+  `cells` are applied IN LIST ORDER and the result is exactly the buffer
+  that folding `write_char/5` over the list produces -- overwrites,
+  wide-char placeholders, and bounds handling included -- at O(row)
+  instead of O(cells x row) cost. Rows the list does not touch keep
+  their original cell terms.
+
+  `style_resolver` (optional) is invoked per in-bounds write with the
+  cell's raw style and the cell currently at the target position --
+  including cells written earlier in the same batch, matching the
+  sequential fold where every write sees the buffer its predecessors
+  built. Its return value is the style used for the write. Out-of-bounds
+  writes are skipped without consulting the resolver (the sequential
+  fold resolved and then discarded; resolution is pure, so skipping is
+  unobservable).
+
+  Two per-cell allocation sources of the sequential fold are shared
+  here: cells with equal resolved styles share one merged style term
+  (`create_cell_style/1` runs once per distinct style), and character
+  widths are memoized per distinct character.
+  """
+  @spec fill_cells(
+          ScreenBuffer.t() | map(),
+          [cell_write()],
+          (TextFormatting.text_style() | map() | nil, Cell.t() ->
+             TextFormatting.text_style() | map() | nil)
+          | nil
+        ) :: ScreenBuffer.t() | map()
+  def fill_cells(buffer, cells, style_resolver \\ nil)
+
+  def fill_cells(buffer, [], _style_resolver) when is_map(buffer), do: buffer
+
+  def fill_cells(buffer, cells, style_resolver)
+      when is_map(buffer) and is_list(cells) do
+    by_row =
+      Enum.group_by(cells, fn {_x, y, _char, _style}
+                              when is_integer(y) and y >= 0 ->
+        y
+      end)
+
+    height = buffer.height
+    width = buffer.width
+
+    {new_grid, _memo} =
+      Enum.map_reduce(buffer.cells, {0, %{}}, fn row, {y, memo} ->
+        case by_row do
+          %{^y => row_cells} when y < height ->
+            {new_row, memo} = fill_row(row, row_cells, width, style_resolver, memo)
+            {new_row, {y + 1, memo}}
+
+          _ ->
+            {row, {y + 1, memo}}
+        end
+      end)
+
+    %{buffer | cells: new_grid}
+  end
+
+  # One row: fold the row's writes (in input order) into a map keyed by x,
+  # then materialize the row list in a single pass. The map IS the
+  # interleaved buffer state `write_char` folds through -- a later write
+  # sees (and overwrites) earlier writes, and the resolver reads it.
+  defp fill_row(row, row_cells, width, style_resolver, memo) do
+    original = List.to_tuple(row)
+
+    {written, memo} =
+      Enum.reduce(row_cells, {%{}, memo}, fn {x, _y, char, style}, {written, memo}
+                                             when is_integer(x) and x >= 0 ->
+        case x < width do
+          true ->
+            write_into(written, memo, original, x, char, style, width, style_resolver)
+
+          false ->
+            {written, memo}
+        end
+      end)
+
+    case map_size(written) do
+      0 -> {row, memo}
+      _ -> {materialize_row(tuple_size(original) - 1, original, written, []), memo}
+    end
+  end
+
+  defp write_into(written, memo, original, x, char, style, width, style_resolver) do
+    style = resolve_style(style_resolver, style, current_cell(written, original, x))
+    {cell_style, memo} = memoized_style(style, memo)
+    {char_width, memo} = memoized_width(char, memo)
+
+    written = Map.put(written, x, Cell.new(char, cell_style))
+
+    case char_width == 2 and x + 1 < width do
+      true -> {Map.put(written, x + 1, Cell.new_wide_placeholder(cell_style)), memo}
+      false -> {written, memo}
+    end
+  end
+
+  defp current_cell(written, original, x) do
+    case written do
+      %{^x => cell} -> cell
+      _ -> elem(original, x)
+    end
+  end
+
+  defp resolve_style(nil, style, _current), do: style
+  defp resolve_style(style_resolver, style, current), do: style_resolver.(style, current)
+
+  defp memoized_style(style, memo) do
+    key = {:style, style}
+
+    case memo do
+      %{^key => cell_style} ->
+        {cell_style, memo}
+
+      _ ->
+        cell_style = create_cell_style(style)
+        {cell_style, Map.put(memo, key, cell_style)}
+    end
+  end
+
+  defp memoized_width(char, memo) do
+    key = {:width, char}
+
+    case memo do
+      %{^key => char_width} ->
+        {char_width, memo}
+
+      _ ->
+        codepoint = hd(String.to_charlist(char))
+        char_width = Raxol.Terminal.CharacterHandling.get_char_width(codepoint)
+        {char_width, Map.put(memo, key, char_width)}
+    end
+  end
+
+  defp materialize_row(i, _original, _written, acc) when i < 0, do: acc
+
+  defp materialize_row(i, original, written, acc) do
+    cell =
+      case written do
+        %{^i => cell} -> cell
+        _ -> elem(original, i)
+      end
+
+    materialize_row(i - 1, original, written, [cell | acc])
   end
 
   @doc """

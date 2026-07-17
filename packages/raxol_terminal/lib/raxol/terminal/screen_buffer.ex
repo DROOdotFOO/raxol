@@ -31,7 +31,6 @@ defmodule Raxol.Terminal.ScreenBuffer do
   * `Formatting` - Text formatting and styling
   """
 
-
   @default_width Raxol.Core.Defaults.terminal_width()
   @default_height Raxol.Core.Defaults.terminal_height()
   @default_scrollback Raxol.Core.Defaults.scrollback_limit()
@@ -154,6 +153,19 @@ defmodule Raxol.Terminal.ScreenBuffer do
   @impl Raxol.Terminal.ScreenBufferBehaviour
   def write_char(buffer, x, y, char, style),
     do: WriteOps.write_char(buffer, x, y, char, style)
+
+  @doc """
+  Bulk-writes `{x, y, char, style}` cells in one pass per touched row.
+
+  Result-identical to folding `write_char/5` over the list (ordering,
+  overwrites, wide-char placeholders, bounds), at O(row) instead of
+  O(cells x row) cost. The optional `style_resolver` is called per
+  in-bounds write with `(style, cell_currently_at_position)` -- earlier
+  writes of the same batch included -- and returns the style to write.
+  See `Raxol.Terminal.Buffer.Writer.fill_cells/3`.
+  """
+  def fill_cells(buffer, cells, style_resolver \\ nil),
+    do: WriteOps.fill_cells(buffer, cells, style_resolver)
 
   def write_string(buffer, x, y, string),
     do: WriteOps.write_string(buffer, x, y, string)
@@ -572,12 +584,13 @@ defmodule Raxol.Terminal.ScreenBuffer do
 
   # === Private Helpers ===
 
+  # All cells of a fresh grid are equal, so build ONE default cell and one
+  # row and share them (immutable terms; indistinguishable from per-cell
+  # construction except in allocation count). A 200x60 grid goes from 12k
+  # cell + 12k style allocations to 1 + 1 -- this runs once per rendered
+  # frame on the `Backends.apply_cells_to_buffer/2` path.
   defp create_empty_grid(width, height) when width > 0 and height > 0 do
-    for _y <- 0..(height - 1) do
-      for _x <- 0..(width - 1) do
-        Cell.new()
-      end
-    end
+    List.duplicate(List.duplicate(Cell.new(), width), height)
   end
 
   defp create_empty_grid(_width, _height), do: []

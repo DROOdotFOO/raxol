@@ -413,61 +413,42 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   @doc """
   Transforms raw cells and writes them into a fresh ScreenBuffer.
 
-  A new buffer is created each frame so stale cells from previous views don't persist.
+  A new buffer is created each frame so stale cells from previous views don't
+  persist. The fill goes through `ScreenBuffer.fill_cells/3` -- one pass per
+  touched row instead of one `write_char` row-rebuild per cell -- with
+  `inherit_background/2` as the per-write style resolver, preserving the
+  sequential fold's semantics exactly (F0-buffer).
   """
   def apply_cells_to_buffer(cells, state) do
     screen_buffer = ScreenBuffer.new(state.width, state.height)
-    transformed_cells = transform_cells_for_update(cells)
 
-    Enum.reduce(transformed_cells, screen_buffer, fn {x, y, cell}, buffer ->
-      style =
-        cell
-        |> extract_cell_style()
-        |> inherit_background(buffer, x, y)
-
-      ScreenBuffer.write_char(buffer, x, y, cell.char || " ", style)
-    end)
+    ScreenBuffer.fill_cells(
+      screen_buffer,
+      cell_writes(cells),
+      &inherit_background/2
+    )
   end
 
   # Cells do not composite -- writing one replaces what was there -- so a cell
   # with an unpainted background would ERASE the background already beneath it,
   # punching a hole through a filled parent (a button drawn on a modal would
   # show the desktop through it). An unpainted background means "show what is
-  # beneath", so inherit the background already at that coordinate. At the top
-  # there is nothing beneath, so it stays nil and the terminal shows through --
-  # which is what keeps a transparent terminal transparent.
-  defp inherit_background(style, buffer, x, y) when is_map(style) do
+  # beneath", so inherit the background already at that coordinate -- including
+  # from a cell written earlier in this same batch, which is how a child's
+  # transparent cells pick up the background run its parent just painted.
+  # At the top there is nothing beneath, so it stays nil and the terminal shows
+  # through -- which is what keeps a transparent terminal transparent.
+  defp inherit_background(style, current_cell) when is_map(style) do
     case Map.get(style, :background) do
-      nil -> Map.put(style, :background, background_at(buffer, x, y))
+      nil -> Map.put(style, :background, cell_background(current_cell))
       _painted -> style
     end
   end
 
-  defp inherit_background(style, _buffer, _x, _y), do: style
+  defp inherit_background(style, _current_cell), do: style
 
-  defp background_at(buffer, x, y) do
-    case ScreenBuffer.get_cell(buffer, x, y) do
-      %{style: %{background: bg}} -> bg
-      _ -> nil
-    end
-  end
-
-  @doc false
-  def extract_cell_style(cell) do
-    case Map.get(cell, :style) do
-      nil ->
-        %{
-          foreground: Map.get(cell, :foreground),
-          background: Map.get(cell, :background)
-        }
-
-      cell_style when is_map(cell_style) ->
-        cell_style
-
-      _ ->
-        nil
-    end
-  end
+  defp cell_background(%{style: %{background: bg}}), do: bg
+  defp cell_background(_), do: nil
 
   # --- Color Conversion ---
 
@@ -506,12 +487,16 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
 
   # --- Private Helpers ---
 
-  defp transform_cells_for_update(cells) when is_list(cells) do
+  # Raw renderer cells -> `{x, y, char, style}` write tuples for
+  # `ScreenBuffer.fill_cells/3`. Same transform the old per-cell fold ran
+  # (sanitize, fg/bg, bold/underline/italic, hyperlink), minus the
+  # intermediate Cell struct it built only to unpack again.
+  defp cell_writes(cells) when is_list(cells) do
     Enum.map(cells, fn {x, y, char, fg, bg, attrs_list} ->
       {hyperlink, style_atoms} = split_hyperlink(attrs_list || [])
       attrs_map = Enum.into(style_atoms, %{}, fn atom -> {atom, true} end)
 
-      cell_attrs =
+      style =
         %{
           foreground: fg,
           background: bg
@@ -519,8 +504,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
         |> Map.merge(Map.take(attrs_map, [:bold, :underline, :italic]))
         |> put_hyperlink(hyperlink)
 
-      cell = %Raxol.Terminal.Cell{char: sanitize_char(char), style: cell_attrs}
-      {x, y, cell}
+      {x, y, sanitize_char(char) || " ", style}
     end)
   end
 
