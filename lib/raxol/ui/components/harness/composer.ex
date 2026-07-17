@@ -72,13 +72,26 @@ defmodule Raxol.UI.Components.Harness.Composer do
   newlines are inserted verbatim in one edit and never pass through the
   Enter/submit decision above, no matter how many lines the paste contains.
 
-  ## History recall
+  ## Editing model: logical truth, visual projection
 
-  Up at the first (visual) line, or Down at the last (visual) line, walks a
-  bounded ring (default 100) of past submissions, newest first. The
-  in-progress draft is saved on the first Up so Down can restore it. Any
-  other cursor position forwards Up/Down to MultiLineInput unchanged (normal
-  cursor movement / shift-selection).
+  The embedded MultiLineInput is the EDIT SUBSTRATE and always runs
+  `wrap: :none`: its `lines` are the logical `"\\n"`-split lines of the
+  draft, its `cursor_pos` a logical `{row, grapheme col}`. Every edit
+  (insert/backspace/delete/left/right/home/end) operates on that logical
+  truth. Display wrapping is derived ONE-WAY per render/park through
+  `Raxol.UI.Components.Harness.Composer.WrapMap` (content-preserving
+  `TextLayout` `:pre_wrap`) and never written back -- see that module
+  for the corruption class this rules out.
+
+  ## History recall + vertical navigation
+
+  Up/Down move the cursor across the wrapped VISUAL rows of the draft
+  (goal-column rule, display cells). Up at the first visual row walks a
+  bounded ring (default 100) of past submissions, newest first; Down at
+  the last visual row while browsing walks back. The in-progress draft
+  is saved on the first recalling Up so Down can restore it.
+  Shift+Up/Down still forwards to MultiLineInput (shift-selection over
+  logical lines).
 
   ## Queued-steer banner
 
@@ -97,8 +110,10 @@ defmodule Raxol.UI.Components.Harness.Composer do
   """
 
   alias Raxol.Core.Events.Event
+  alias Raxol.UI.Components.Harness.Composer.WrapMap
   alias Raxol.UI.Components.Input.MultiLineInput
-  alias Raxol.UI.Components.Input.MultiLineInput.TextHelper
+  alias Raxol.UI.Components.Input.MultiLineInput.RenderHelper
+  alias Raxol.UI.FocusHelper
   alias Raxol.UI.Harness.InputEvent
   alias Raxol.UI.StyleHelper
   alias Raxol.UI.TextMeasure
@@ -109,6 +124,7 @@ defmodule Raxol.UI.Components.Harness.Composer do
   @default_width 80
   @default_height 3
   @default_max_history 100
+  @default_wrap :word
   @steer_prefix "⏸ steer queued for next boundary: "
 
   @type queued_steer :: %{text: String.t(), queued_at: term()} | nil
@@ -121,6 +137,8 @@ defmodule Raxol.UI.Components.Harness.Composer do
           draft: String.t() | nil,
           queued_steer: queued_steer(),
           max_history: pos_integer(),
+          wrap: :none | :char | :word,
+          goal_col: non_neg_integer() | nil,
           style: map(),
           theme: map()
         }
@@ -137,6 +155,16 @@ defmodule Raxol.UI.Components.Harness.Composer do
         "harness-composer-#{:erlang.unique_integer([:positive])}"
       )
 
+    # The embedded MultiLineInput is the EDIT SUBSTRATE and is always
+    # `wrap: :none`: its `lines` are the logical `"\n"`-split lines of
+    # the draft and its `cursor_pos` a logical {row, grapheme col} --
+    # the single source of truth every edit operates on. Display
+    # wrapping is the composer's job (`state.wrap` + `WrapMap`), derived
+    # one-way at render/park time and never stored back. Before this
+    # split the substrate itself carried display-wrapped lines, and the
+    # word-wrapper's whitespace trimming corrupted the draft on every
+    # rewrap (V's field repro: " ab" + Backspace x2 deleted the SPACE,
+    # not the 'a' -- see the WrapMap moduledoc).
     {:ok, mli} =
       MultiLineInput.init(%{
         id: "#{id}-input",
@@ -144,7 +172,7 @@ defmodule Raxol.UI.Components.Harness.Composer do
         placeholder: Map.get(props, :placeholder, ""),
         width: Map.get(props, :width, @default_width),
         height: Map.get(props, :height, @default_height),
-        wrap: Map.get(props, :wrap, :word),
+        wrap: :none,
         focused: Map.get(props, :focused, true)
       })
 
@@ -156,6 +184,8 @@ defmodule Raxol.UI.Components.Harness.Composer do
       draft: nil,
       queued_steer: Map.get(props, :queued_steer),
       max_history: Map.get(props, :max_history, @default_max_history),
+      wrap: Map.get(props, :wrap, @default_wrap),
+      goal_col: nil,
       style: Map.get(props, :style, %{}),
       theme: Map.get(props, :theme, %{})
     }
@@ -185,68 +215,43 @@ defmodule Raxol.UI.Components.Harness.Composer do
 
   This is the terminal-cursor park target for an assembling surface
   (`Raxol.Harness.Surface.paint_footer/1` -> `InlineAuthority`'s
-  `:cursor` option): the native cursor should sit where the next typed
-  grapheme lands. Minimal honest version, deliberately: the reported
-  point is the END OF THE TYPED DRAFT (last visible input row, one
-  column past its content) -- not the mid-draft caret MultiLineInput
-  tracks internally. Re-deriving the caret's visual position under
-  `render/2`'s own re-wrap-at-`avail_width` is real work
-  (`size_mli_for_render/2` re-splits the buffer, invalidating
-  `cursor_pos`'s row/col against the rendered lines); end-of-draft is
-  exact for the common case (typing appends) and honestly approximate
-  after mid-draft cursor movement. Columns are measured with
-  `Raxol.UI.TextMeasure` (CJK double-width), never `String.length/1`.
-  Trailing whitespace the word-wrapper trims from the visual line is
-  added back from the logical draft, so typing a space visibly advances
-  the parked cursor (see the inline comment for the defect this fixes).
+  `:cursor` option): the native cursor sits where the next typed
+  grapheme lands. The point is the LOGICAL cursor projected through the
+  same `WrapMap` `render/2` derives its rows from -- exact for
+  mid-draft positions (after arrow navigation, Home/End, visual
+  up/down), not just for end-of-draft typing. Columns are display
+  cells (`Raxol.UI.TextMeasure`, CJK/emoji double-width), never
+  `String.length/1`; a typed space advances the park because the wrap
+  is content-preserving (`TextLayout` `:pre_wrap`), with no trimmed-line
+  compensation needed.
   """
   @spec edit_point(t(), pos_integer()) ::
           {non_neg_integer(), pos_integer()}
   def edit_point(state, avail_width)
       when is_integer(avail_width) and avail_width > 0 do
-    mli = size_mli_for_render(state.mli, avail_width)
+    %{map: map, vrow: vrow, gcol: gcol, vscroll: vscroll} =
+      visual_geometry(state, avail_width)
+
     banner = if state.queued_steer, do: 1, else: 0
-
-    {scroll_row, _scroll_col} = mli.scroll_offset
-    line_count = max(length(mli.lines), 1)
-    last_visible = min(line_count - 1, scroll_row + mli.height - 1)
-    row = banner + max(last_visible - scroll_row, 0)
-
-    # The spacebar park defect: `mli.lines` comes from
-    # `TextHelper.split_into_lines/3`, whose word-wrap `String.trim`s
-    # every produced line -- a draft of "ab " wraps to ["ab"]. A space is
-    # invisible, so the parked terminal cursor is the ONLY visible
-    # feedback for typing one; measuring the trimmed line froze the
-    # cursor until the next visible character arrived. Compute the column
-    # as trimmed-visual-line + the trailing-whitespace run of the draft's
-    # last LOGICAL line (from `mli.value`, which wrap never touches).
-    # Trimming the visual line first prevents double-counting under a
-    # wrap mode that DOES preserve trailing whitespace.
-    last_line = String.trim_trailing(List.last(mli.lines) || "")
-
-    col =
-      min(
-        TextMeasure.display_width(last_line) +
-          TextMeasure.display_width(trailing_whitespace(mli.value)) + 1,
-        avail_width
-      )
+    row = banner + (vrow - vscroll)
+    col = min(WrapMap.cell_col(map, {vrow, gcol}) + 1, avail_width)
 
     {row, max(col, 1)}
   end
 
-  # The trailing space/tab run of the draft's last logical line. Trailing
-  # whitespace of the whole value IS that run (and a value ending in
-  # "\n" correctly yields "" -- the fresh logical line is empty).
-  defp trailing_whitespace(value) do
-    value
-    |> String.split("\n")
-    |> List.last()
-    |> Kernel.||("")
-    |> String.graphemes()
-    |> Enum.reverse()
-    |> Enum.take_while(&(&1 in [" ", "\t"]))
-    |> Enum.join()
+  @doc """
+  Syncs the edit substrate's stored width -- the width event-time
+  projections (visual up/down, history-recall gating) measure against.
+  `render/2` and `edit_point/2` always re-derive at the caller-supplied
+  width; a resizing consumer calls this so the event-time map agrees
+  with what is on screen.
+  """
+  @spec set_width(t(), integer()) :: t()
+  def set_width(state, width) when is_integer(width) and width > 0 do
+    %{state | mli: %{state.mli | width: width}}
   end
+
+  def set_width(state, _width), do: state
 
   @doc """
   Unconditional submit, bypassing the single-line gate -- for a consumer
@@ -313,7 +318,16 @@ defmodule Raxol.UI.Components.Harness.Composer do
   @impl true
   def handle_event(%Event{} = event, state, context) do
     norm = InputEvent.normalize(event)
+    {new_state, cmds} = handle_normalized(norm, event, state, context)
+    {maybe_reset_goal(new_state, norm), cmds}
+  end
 
+  def handle_event(event, state, context) do
+    {new_mli, cmds} = delegate_to_mli(event, state.mli, context)
+    {%{state | mli: new_mli, goal_col: nil}, cmds}
+  end
+
+  defp handle_normalized(norm, event, state, context) do
     cond do
       norm.kind == :paste ->
         {new_mli, _cmds} =
@@ -336,10 +350,19 @@ defmodule Raxol.UI.Components.Harness.Composer do
     end
   end
 
-  def handle_event(event, state, context) do
-    {new_mli, cmds} = delegate_to_mli(event, state.mli, context)
-    {%{state | mli: new_mli}, cmds}
+  # The visual up/down goal column survives only consecutive plain
+  # up/down presses (the standard goal-column rule: horizontal movement
+  # or any edit re-anchors it). Every other event clears it.
+  defp maybe_reset_goal(state, %{kind: :key, key: key, mods: mods})
+       when key in [:up, :down] do
+    if mods.ctrl or mods.alt or mods.meta or mods.shift do
+      %{state | goal_col: nil}
+    else
+      state
+    end
   end
+
+  defp maybe_reset_goal(state, _norm), do: %{state | goal_col: nil}
 
   # Alt+Enter is `shortcut?` (alt held) but is still "insert a newline",
   # not a generic keyboard shortcut -- recognize it here and fall back to
@@ -382,7 +405,7 @@ defmodule Raxol.UI.Components.Harness.Composer do
     if mods.shift do
       delegate(event, state, context)
     else
-      handle_history_nav(:up, event, state, context)
+      handle_vertical(:up, state)
     end
   end
 
@@ -390,7 +413,7 @@ defmodule Raxol.UI.Components.Harness.Composer do
     if mods.shift do
       delegate(event, state, context)
     else
-      handle_history_nav(:down, event, state, context)
+      handle_vertical(:down, state)
     end
   end
 
@@ -408,8 +431,6 @@ defmodule Raxol.UI.Components.Harness.Composer do
   @spec render(t(), map()) :: map()
   def render(state, context) do
     avail_width = context[:available_width] || state.mli.width
-    mli = size_mli_for_render(state.mli, avail_width)
-    mli_context = Map.put_new(context, :theme, %{})
 
     base_style =
       StyleHelper.merge_component_styles(state, context, :harness_composer)
@@ -417,7 +438,7 @@ defmodule Raxol.UI.Components.Harness.Composer do
     children =
       [
         queued_steer_banner(state.queued_steer, avail_width),
-        MultiLineInput.render(mli, mli_context)
+        render_input(state, avail_width, context)
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -428,6 +449,76 @@ defmodule Raxol.UI.Components.Harness.Composer do
       children: children
     }
   end
+
+  # The draft rendered ONE-WAY through the wrap map: visual rows derived
+  # from the logical value at `avail_width`, the logical cursor (and any
+  # selection endpoints) projected onto them, the scroll window derived
+  # -- nothing here is ever written back to the edit substrate. Each
+  # visual row is wrapped in its own node so the line-collection seam
+  # (`Raxol.Harness.Surface.ViewText`'s all-tuple-children rule) keeps
+  # one visual row per collected line; MultiLineInput's own `render/2`
+  # flattens every row's run tuples into a single children list, which
+  # that seam would join into one line.
+  defp render_input(state, avail_width, context) do
+    mli = state.mli
+    focused = FocusHelper.focused?(mli.id, context) or mli.focused
+
+    merged_theme =
+      Map.merge(
+        Map.get(context[:theme] || %{}, :multi_line_input, %{}),
+        mli.theme || %{}
+      )
+
+    if mli.value == "" and not focused and mli.placeholder != "" do
+      %{
+        type: :column,
+        style: merged_theme,
+        children: [
+          Components.text(
+            content: mli.placeholder,
+            style: %{color: merged_theme[:placeholder_color] || :gray}
+          )
+        ]
+      }
+    else
+      render_draft_rows(state, mli, focused, merged_theme, avail_width)
+    end
+  end
+
+  defp render_draft_rows(state, mli, focused, merged_theme, avail_width) do
+    %{map: map, vrow: vrow, gcol: gcol, vscroll: vscroll, height: height} =
+      visual_geometry(state, max(avail_width, 1))
+
+    display = %{
+      mli
+      | width: max(avail_width, 1),
+        lines: WrapMap.lines(map),
+        cursor_pos: {vrow, gcol},
+        scroll_offset: {vscroll, 0},
+        focused: focused,
+        selection_start: project_selection(map, mli.selection_start),
+        selection_end: project_selection(map, mli.selection_end)
+    }
+
+    rows =
+      display.lines
+      |> Enum.slice(vscroll, height)
+      |> Enum.with_index(vscroll)
+      |> Enum.map(fn {line, index} ->
+        %{
+          type: :composer_input_row,
+          children:
+            RenderHelper.render_line(index, line, display, %{
+              components: %{multi_line_input: merged_theme}
+            })
+        }
+      end)
+
+    %{type: :column, style: merged_theme, children: rows}
+  end
+
+  defp project_selection(_map, nil), do: nil
+  defp project_selection(map, pos), do: WrapMap.to_visual(map, pos)
 
   # -- private: enter / submit --
 
@@ -517,30 +608,95 @@ defmodule Raxol.UI.Components.Harness.Composer do
     {new_state, [{:component_event, state.id, {:submit, text}}]}
   end
 
-  # -- private: history navigation --
+  # -- private: visual vertical navigation + history recall --
+  #
+  # Up/Down move the LOGICAL cursor across the wrapped VISUAL rows of
+  # the draft (goal-column rule: the first vertical press anchors a
+  # display-cell column, later presses aim for it, clamped per row --
+  # `maybe_reset_goal/2` clears it on anything non-vertical). Only Up
+  # at the very first visual row recalls history, and only Down at the
+  # very last visual row while already browsing recalls newer -- so
+  # mid-draft navigation never swaps the buffer out from under the
+  # cursor. Widths: event-time projections use the substrate's stored
+  # width (`set_width/2` keeps it synced to the rendered width).
 
-  defp handle_history_nav(:up, event, state, context) do
-    {row, _col} = state.mli.cursor_pos
+  defp handle_vertical(:up, state) do
+    geometry = visual_geometry(state, state.mli.width)
 
-    if row == 0 and state.history != [] do
-      recall_older(state)
-    else
-      {new_mli, cmds} = delegate_to_mli(event, state.mli, context)
-      {%{state | mli: new_mli}, cmds}
+    cond do
+      geometry.vrow > 0 ->
+        move_to_visual_row(state, geometry, geometry.vrow - 1)
+
+      state.history != [] ->
+        recall_older(state)
+
+      true ->
+        {state, []}
     end
   end
 
-  defp handle_history_nav(:down, event, state, context) do
-    last_row = max(length(state.mli.lines) - 1, 0)
-    {row, _col} = state.mli.cursor_pos
+  defp handle_vertical(:down, state) do
+    geometry = visual_geometry(state, state.mli.width)
 
-    if row == last_row and state.history_index != nil do
-      recall_newer(state)
-    else
-      {new_mli, cmds} = delegate_to_mli(event, state.mli, context)
-      {%{state | mli: new_mli}, cmds}
+    cond do
+      geometry.vrow < geometry.rows - 1 ->
+        move_to_visual_row(state, geometry, geometry.vrow + 1)
+
+      state.history_index != nil ->
+        recall_newer(state)
+
+      true ->
+        {state, []}
     end
   end
+
+  defp move_to_visual_row(state, geometry, target_vrow) do
+    goal =
+      state.goal_col ||
+        WrapMap.cell_col(geometry.map, {geometry.vrow, geometry.gcol})
+
+    {lrow, lcol} = WrapMap.to_logical(geometry.map, target_vrow, goal)
+
+    mli =
+      %{
+        state.mli
+        | cursor_pos: {lrow, lcol},
+          selection_start: nil,
+          selection_end: nil,
+          desired_col: nil
+      }
+      |> MultiLineInput.ensure_cursor_visible()
+
+    {%{state | mli: mli, goal_col: goal}, []}
+  end
+
+  # The shared logical->visual projection under `render/2`,
+  # `edit_point/2`, and vertical navigation: ONE derivation so the
+  # rendered rows, the park target, and the row arithmetic can never
+  # disagree. `vscroll` is derived (not stored): the window of
+  # `mli.height` visual rows containing the cursor, bottom-preferring.
+  defp visual_geometry(state, width) do
+    map = WrapMap.build(state.mli.value, width, state.wrap)
+    {vrow, gcol} = WrapMap.to_visual(map, state.mli.cursor_pos)
+    rows = WrapMap.row_count(map)
+    height = max(state.mli.height, 1)
+
+    vscroll =
+      (vrow - height + 1)
+      |> max(0)
+      |> min(max(rows - height, 0))
+
+    %{
+      map: map,
+      vrow: vrow,
+      gcol: gcol,
+      rows: rows,
+      height: height,
+      vscroll: vscroll
+    }
+  end
+
+  # -- private: history recall --
 
   defp recall_older(state) do
     next_index =
@@ -617,15 +773,6 @@ defmodule Raxol.UI.Components.Harness.Composer do
   defp wrap_cmd(cmd), do: [cmd]
 
   # -- private: render helpers --
-
-  defp size_mli_for_render(mli, avail_width)
-       when is_integer(avail_width) and avail_width > 0 and
-              avail_width != mli.width do
-    lines = TextHelper.split_into_lines(mli.value, avail_width, mli.wrap)
-    %{mli | width: avail_width, lines: lines}
-  end
-
-  defp size_mli_for_render(mli, _avail_width), do: mli
 
   defp queued_steer_banner(nil, _avail_width), do: nil
 

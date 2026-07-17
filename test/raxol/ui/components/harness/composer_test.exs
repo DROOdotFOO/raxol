@@ -2,6 +2,7 @@ defmodule Raxol.UI.Components.Harness.ComposerTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Core.Events.Event
+  alias Raxol.Harness.Surface.ViewText
   alias Raxol.UI.Components.Harness.Composer
   alias Raxol.UI.TextMeasure
 
@@ -737,6 +738,371 @@ defmodule Raxol.UI.Components.Harness.ComposerTest do
         Composer.handle_event(parser_key_event("X"), state, default_context())
 
       assert Composer.value(state) == "Xab"
+    end
+  end
+
+  # -- the logical/visual split (V's field repro: leading-space drafts) --
+  #
+  # The disease being pinned: MultiLineInput keeps two mutually-corrupting
+  # representations. Edit ops treat `state.lines` as truth and re-derive
+  # `value = Enum.join(lines, "\n")` (`TextHelper.with_lines/3`), while
+  # `ensure_cursor_visible/1` re-derives `lines` from `value` through the
+  # DISPLAY word-wrapper -- whose `wrap_line_by_word` drops the
+  # leading-space run (`String.split(line, " ")` discards the empty first
+  # word) and `String.trim`s every produced line. After the first rewrap
+  # (any backspace/arrow/enter), `lines` is a trimmed display artifact;
+  # the next edit consults it at the LOGICAL cursor col -- shifted right
+  # by the eaten leading run -- and joins it back into `value`, deleting
+  # whitespace from the logical draft. Observed corruption before the fix:
+  # " ab" + Backspace + Backspace left "a" (deleted the space, kept the
+  # 'a' -- "removes the second-to-last char instead of the last one").
+  #
+  # The contract these tests pin: the LOGICAL draft (`mli.value`) plus the
+  # logical cursor are the single source of truth; every visual artifact
+  # (wrapped display rows, park column) is derived ONE-WAY from them and
+  # never feeds back into an edit.
+
+  defp display(state, width) do
+    ViewText.lines(
+      Composer.render(state, %{theme: %{}, available_width: width}),
+      width,
+      :plain
+    )
+  end
+
+  describe "leading-whitespace drafts (V's field repro)" do
+    test "backspace on ' ab' deletes the 'b' -- draft becomes ' a'" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, " ab")
+
+      {state, _cmds} = press(state, :backspace)
+
+      assert Composer.value(state) == " a"
+    end
+
+    test "the SECOND backspace deletes the 'a', never the leading space" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, " ab")
+
+      {state, _cmds} = press(state, :backspace)
+      {state, _cmds} = press(state, :backspace)
+
+      assert Composer.value(state) == " "
+
+      {state, _cmds} = press(state, :backspace)
+      assert Composer.value(state) == ""
+    end
+
+    test "the display keeps the leading space after a rewrapping edit" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, " ab")
+
+      {state, _cmds} = press(state, :backspace)
+
+      # The draft row must show the logical draft (cursor cell padding
+      # aside), not a trimmed artifact ("a").
+      assert [row] = display(state, 40)
+      assert String.starts_with?(row, " a")
+    end
+
+    test "edit_point counts the leading space after a rewrapping edit" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, " ab")
+
+      {state, _cmds} = press(state, :backspace)
+
+      # Draft " a", cursor at its end: 2 cells -> 1-based col 3. The
+      # pre-fix defect reported {0, 2} (the trimmed line "a" measured).
+      assert Composer.edit_point(state, 40) == {0, 3}
+    end
+
+    test "mid-draft insert after Left lands at the logical cursor" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, " ab")
+
+      {state, _cmds} = press(state, :left)
+      {state, _cmds} = press(state, "x")
+
+      # Pre-fix this produced "abx": the rewrap on Left dropped the
+      # leading space and the insert landed off-by-the-leading-run.
+      assert Composer.value(state) == " axb"
+    end
+
+    test "interior whitespace runs survive an edit cycle" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, " a  b")
+
+      {state, _cmds} = press(state, :backspace)
+      assert Composer.value(state) == " a  "
+
+      {state, _cmds} = press(state, "c")
+      assert Composer.value(state) == " a  c"
+    end
+  end
+
+  describe "arrow navigation: grapheme steps and logical boundaries" do
+    test "Left steps over a wide grapheme (CJK) as one cursor step" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "你好")
+
+      {state, _cmds} = press(state, :left)
+      {state, _cmds} = press(state, "x")
+
+      assert Composer.value(state) == "你x好"
+    end
+
+    test "Left/Right round-trip returns to the end of the draft" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "abc")
+
+      {state, _cmds} = press(state, :left)
+      {state, _cmds} = press(state, :left)
+      {state, _cmds} = press(state, :right)
+      {state, _cmds} = press(state, :right)
+      {state, _cmds} = press(state, "!")
+
+      assert Composer.value(state) == "abc!"
+    end
+
+    test "Home then End bracket the logical line, leading space included" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, " hi")
+
+      {state, _cmds} = press(state, :home)
+      {state, _cmds} = press(state, "<")
+      assert Composer.value(state) == "< hi"
+
+      {state, _cmds} = press(state, :end)
+      {state, _cmds} = press(state, ">")
+      assert Composer.value(state) == "< hi>"
+    end
+
+    test "backspace at Home is a no-op on the draft" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "hi")
+
+      {state, _cmds} = press(state, :home)
+      {state, _cmds} = press(state, :backspace)
+
+      assert Composer.value(state) == "hi"
+    end
+  end
+
+  describe "visual up/down across wrapped rows" do
+    # Width 10: "aaaa bbbb cccc" wraps (content-preserving) to the visual
+    # rows ["aaaa bbbb ", "cccc"] -- the trailing space stays on row 0,
+    # "cccc" starts at logical col 10.
+    defp wrapped_draft do
+      {:ok, state} = Composer.init(%{id: :c, width: 10, focused: true})
+      type(state, "aaaa bbbb cccc")
+    end
+
+    test "Up moves from the wrapped second row into the first at the goal column" do
+      state = wrapped_draft()
+
+      # Cursor ends at logical col 14 -> visual row 1, cell 4.
+      {state, _cmds} = press(state, :up)
+      {state, _cmds} = press(state, "X")
+
+      # Landed at cell 4 of visual row 0 -> logical col 4.
+      assert Composer.value(state) == "aaaaX bbbb cccc"
+    end
+
+    test "Up mid-wrap moves; only Up at the TOP visual row recalls history" do
+      {:ok, state} = Composer.init(%{id: :c, width: 10, focused: true})
+      state = type(state, "old")
+      {state, _cmds} = press(state, :enter)
+      state = type(state, "aaaa bbbb cccc")
+
+      # First Up: cursor is on visual row 1 -> plain movement, no recall.
+      {state, []} = press(state, :up)
+      assert Composer.value(state) == "aaaa bbbb cccc"
+      assert state.history_index == nil
+
+      # Second Up: now at the top visual row -> history recall.
+      {state, []} = press(state, :up)
+      assert Composer.value(state) == "old"
+      assert state.history_index == 0
+    end
+
+    test "Down remembers the goal column across a shorter row" do
+      state = wrapped_draft()
+
+      {state, _cmds} = press(state, :up)
+      {state, _cmds} = press(state, :down)
+      {state, _cmds} = press(state, "!")
+
+      # Back on visual row 1 at the goal cell (4 == end of "cccc").
+      assert Composer.value(state) == "aaaa bbbb cccc!"
+    end
+
+    test "Up at the top row with no history, and Down at the bottom row with no recall, are no-ops" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "hi")
+
+      {up_state, []} = press(state, :up)
+      assert Composer.value(up_state) == "hi"
+      assert up_state.mli.cursor_pos == state.mli.cursor_pos
+
+      {down_state, []} = press(state, :down)
+      assert Composer.value(down_state) == "hi"
+      assert down_state.mli.cursor_pos == state.mli.cursor_pos
+    end
+  end
+
+  describe "multi-line drafts (backslash continuation) navigation" do
+    test "Up from the second logical line lands in the first; edits land there" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "one\\")
+      {state, []} = press(state, :enter)
+      state = type(state, "two")
+      assert Composer.value(state) == "one\ntwo"
+
+      {state, _cmds} = press(state, :up)
+      {state, _cmds} = press(state, "X")
+
+      assert Composer.value(state) == "oneX\ntwo"
+    end
+
+    test "Down returns to the second logical line" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "one\\")
+      {state, []} = press(state, :enter)
+      state = type(state, "two")
+
+      {state, _cmds} = press(state, :up)
+      {state, _cmds} = press(state, :down)
+      {state, _cmds} = press(state, "!")
+
+      assert Composer.value(state) == "one\ntwo!"
+    end
+  end
+
+  describe "WrapMap alignment laws (the projection's oracle)" do
+    alias Raxol.UI.Components.Harness.Composer.WrapMap
+
+    # A corpus of the whitespace/width shapes that broke the old dual
+    # representation, crossed with widths that force wraps at awkward
+    # boundaries.
+    @corpus [
+      "",
+      " ",
+      "   ",
+      " ab",
+      "ab ",
+      " a  b ",
+      "aaaa bbbb cccc",
+      "a verylongwordthatmustsplit b",
+      "你好 世界",
+      "a你b好c",
+      "e🎉mo ji🎉 end",
+      "one\ntwo three\n four"
+    ]
+
+    test "every segment is an EXACT substring of its logical line at its start offset" do
+      for value <- @corpus, width <- [3, 4, 7, 10, 40] do
+        map = WrapMap.build(value, width, :word)
+        logical = String.split(value, "\n")
+
+        for %{text: text, row: row, start: start} <- map.segments do
+          line = Enum.at(logical, row)
+
+          assert String.slice(line, start, String.length(text)) == text,
+                 "segment #{inspect(text)} misaligned at #{inspect({row, start})} " <>
+                   "in #{inspect(line)} (width #{width})"
+        end
+      end
+    end
+
+    test "only whitespace is ever absent between consecutive segments (nothing else is dropped)" do
+      for value <- @corpus, width <- [3, 4, 7, 10, 40] do
+        map = WrapMap.build(value, width, :word)
+        logical = String.split(value, "\n")
+
+        map.segments
+        |> Enum.group_by(& &1.row)
+        |> Enum.each(fn {row, segments} ->
+          line = Enum.at(logical, row)
+
+          # Walk the gaps: before the first segment, between segments,
+          # and after the last -- each must be pure whitespace.
+          covered =
+            Enum.map(segments, fn %{start: start, text: text} ->
+              {start, start + String.length(text)}
+            end)
+
+          gaps =
+            Enum.zip([{0, 0} | covered], covered ++ [{String.length(line), 0}])
+            |> Enum.map(fn {{_s1, e1}, {s2, _e2}} ->
+              String.slice(line, e1, max(s2 - e1, 0))
+            end)
+
+          for gap <- gaps, gap != "" do
+            assert String.trim(gap) == "",
+                   "non-whitespace #{inspect(gap)} dropped from " <>
+                     "#{inspect(line)} (width #{width})"
+          end
+        end)
+      end
+    end
+
+    test "to_visual is total and lands inside a real segment for every logical position" do
+      for value <- @corpus, width <- [3, 4, 7, 10, 40] do
+        map = WrapMap.build(value, width, :word)
+        logical = String.split(value, "\n")
+
+        for {line, row} <- Enum.with_index(logical),
+            col <- 0..String.length(line) do
+          {vrow, gcol} = WrapMap.to_visual(map, {row, col})
+          segment = Enum.at(map.segments, vrow)
+
+          assert segment != nil
+          assert segment.row == row
+          assert gcol >= 0 and gcol <= String.length(segment.text)
+        end
+      end
+    end
+  end
+
+  describe "edit_point follows the logical cursor (park generalization)" do
+    test "after Left the park sits before the last char, not at the draft end" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "abc")
+
+      {state, _cmds} = press(state, :left)
+
+      assert Composer.edit_point(state, 40) == {0, 3}
+    end
+
+    test "a CJK draft parks by display cells, not graphemes" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "你好")
+
+      assert Composer.edit_point(state, 40) == {0, 5}
+
+      {state, _cmds} = press(state, :left)
+      assert Composer.edit_point(state, 40) == {0, 3}
+    end
+
+    test "on a wrapped draft the park sits on the cursor's visual row" do
+      {:ok, state} = Composer.init(%{id: :c, width: 10, focused: true})
+      state = type(state, "aaaa bbbb cccc")
+
+      assert Composer.edit_point(state, 10) == {1, 5}
+
+      {state, _cmds} = press(state, :up)
+      assert Composer.edit_point(state, 10) == {0, 5}
+    end
+
+    test "a mid-draft edit_point on a multi-line draft reports the cursor's row" do
+      {:ok, state} = Composer.init(id: :c)
+      state = type(state, "one\\")
+      {state, []} = press(state, :enter)
+      state = type(state, "two")
+
+      {state, _cmds} = press(state, :up)
+
+      assert Composer.edit_point(state, 40) == {0, 4}
     end
   end
 end

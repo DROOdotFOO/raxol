@@ -176,6 +176,56 @@ defmodule Raxol.Harness.SurfaceCursorParkTest do
              "burst tail must be park CUP then cursor-show"
     end
 
+    test "a leading-space draft parks honestly through backspace (V's field repro)" do
+      {model, device} = new_model()
+
+      model =
+        [" ", "a", "b"]
+        |> Enum.flat_map(&InputParser.parse/1)
+        |> Enum.reduce(model, &Surface.handle_input(&2, &1))
+
+      # " ab" = 3 cells -> park one past its end.
+      assert_parked_at(raw(device), @composer_row, @sigil_cols + 4)
+
+      [backspace] = InputParser.parse(<<127>>)
+
+      prior = byte_size(raw(device))
+      model = Surface.handle_input(model, backspace)
+      assert Raxol.UI.Components.Harness.Composer.value(model.composer) == " a"
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 3)
+
+      # The second backspace deletes the 'a', never the leading space.
+      prior = byte_size(raw(device))
+      model = Surface.handle_input(model, backspace)
+      assert Raxol.UI.Components.Harness.Composer.value(model.composer) == " "
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 2)
+    end
+
+    test "a mid-draft left arrow parks the cursor inside the draft" do
+      {model, device} = new_model()
+
+      model =
+        InputParser.parse("ab")
+        |> Enum.reduce(model, &Surface.handle_input(&2, &1))
+
+      [left] = InputParser.parse("\e[D")
+
+      prior = byte_size(raw(device))
+      _model = Surface.handle_input(model, left)
+
+      # Cursor now sits between 'a' and 'b' -> cell 1 -> col 2.
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 2)
+    end
+
+    test "a wide grapheme (CJK) advances the park by two cells" do
+      {model, device} = new_model()
+
+      prior = byte_size(raw(device))
+      _model = Surface.handle_input(model, Event.key("你"))
+
+      assert_parked_at(delta(device, prior), @composer_row, @sigil_cols + 3)
+    end
+
     test "a no-op input frame emits zero bytes (park included)" do
       {model, device} = new_model()
 

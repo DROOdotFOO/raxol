@@ -4673,6 +4673,19 @@ defmodule Raxol.Harness.Surface do
       end
 
     model = %{model | width: width, rows: rows}
+
+    # Keep the composer's event-time width in step with the rendered
+    # width: its visual up/down + history-recall gating project the
+    # draft through a wrap map at the STORED substrate width, while
+    # `footer_frame/1` renders (and parks) at `content_width/1`. Same
+    # value at init (`new/2` passes `width - 2`); this keeps them equal
+    # across a resize so the on-screen rows and the navigation rows can
+    # never disagree.
+    model = %{
+      model
+      | composer: Composer.set_width(model.composer, content_width(model))
+    }
+
     authority = InlineAuthority.resize(model.authority, width, rows)
 
     # A still-open expansion re-derives its maximal claim at the new
