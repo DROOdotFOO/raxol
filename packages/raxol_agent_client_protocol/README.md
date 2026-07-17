@@ -111,7 +111,12 @@ to a client over the ACP stdio transport. This is the same shape a Zed-style
 editor host uses to launch and speak to a real coding agent subprocess.
 
 ```elixir
-# my_agent.ex — runs as its own OS process, speaking on its own stdio.
+# my_agent.exs — runs as its own OS process, speaking on its own stdio.
+# Boot it directly with `elixir --no-halt my_agent.exs` (without --no-halt
+# the script's last expression returns, the VM halts, and the process this
+# file speaks FOR dies before the client ever gets a byte) — see
+# `Raxol.AgentClientProtocol.Transport.Stdio`'s moduledoc "Modes" section
+# for exactly which boot forms are safe for `start_self/1`.
 defmodule MyAgent do
   use Raxol.AgentClientProtocol.Agent
 
@@ -151,37 +156,69 @@ end
 
 # Boot: adopt this BEAM's own stdin/stdout as the wire. `transport:` takes a
 # `{module, handle}` pair (per `Raxol.AgentClientProtocol.Transport`), not
-# the bare handle `start_self/1` returns.
+# the bare handle `start_self/1` returns. `Agent.start_link/2` is the
+# "Standalone start" convenience -- it returns the `ConnectionSupervisor`
+# pid directly (not wrapped in a supervisor of your own), which is what
+# `Agent.connection/1` needs if you ever want to reach this side's
+# Connection pid too.
 {:ok, handle} = Raxol.AgentClientProtocol.Transport.Stdio.start_self()
 
 {:ok, _sup} =
-  Raxol.AgentClientProtocol.Agent.child_spec(
-    handler: MyAgent,
+  Raxol.AgentClientProtocol.Agent.start_link(MyAgent,
     transport: {Raxol.AgentClientProtocol.Transport.Stdio, handle}
   )
-  |> then(&Supervisor.start_link([&1], strategy: :one_for_one))
 ```
 
 ```elixir
 # A client that spawns the agent above as a subprocess and drives one turn.
+# `use Client` alone only wires the protocol plumbing (this quickstart keeps
+# the GENERATED default `session_update/2`, which broadcasts to `subscribe/3`
+# subscribers -- see `Client.prompt/3`'s "Precondition" doc: override
+# `session_update/2` yourself and `prompt/3` silently returns `[]` forever).
 defmodule MyClient do
   use Raxol.AgentClientProtocol.Client
-
-  @impl true
-  def session_update(%{update: update}, _ctx) do
-    IO.inspect(update, label: "agent said")
-  end
 end
 
-{:ok, handle} =
-  Raxol.AgentClientProtocol.Transport.Stdio.start_spawn("elixir", ["my_agent.ex"])
+alias Raxol.AgentClientProtocol.Client
+alias Raxol.AgentClientProtocol.Connection
+alias Raxol.AgentClientProtocol.Schema.AgentTypes.{InitializeRequest, NewSessionRequest}
+alias Raxol.AgentClientProtocol.Schema.AgentTypes.PromptRequest
+alias Raxol.AgentClientProtocol.Schema.ContentBlock
 
-{:ok, _sup} =
-  Raxol.AgentClientProtocol.Client.child_spec(
-    handler: MyClient,
-    transport: {Raxol.AgentClientProtocol.Transport.Stdio, handle}
-  )
-  |> then(&Supervisor.start_link([&1], strategy: :one_for_one))
+{:ok, handle} =
+  Raxol.AgentClientProtocol.Transport.Stdio.start_spawn("elixir", [
+    "--no-halt",
+    "my_agent.exs"
+  ])
+
+{:ok, sup} =
+  Client.start_link(MyClient, transport: {Raxol.AgentClientProtocol.Transport.Stdio, handle})
+
+# `sup` is the ConnectionSupervisor, not the Connection -- every request
+# needs the Connection pid, so resolve it via the public accessor first
+# (the same one the package's own end-to-end test uses internally). This
+# only works because we booted via `start_link/2` above: wrapping
+# `child_spec/1` in a supervisor of your own (the "library-mode wiring"
+# pattern -- see that section below) makes `sup` YOUR supervisor instead,
+# one level further out; resolve the `ConnectionSupervisor` child from
+# `Supervisor.which_children(your_sup)` first in that case, then call
+# `connection/1` on THAT pid.
+{:ok, conn} = Client.connection(sup)
+
+# The mandatory handshake: no other request is legal before `initialize`.
+{:ok, _init_response} =
+  Connection.request(conn, "initialize", InitializeRequest.new(1), 5_000)
+
+{:ok, new_session_response} =
+  Connection.request(conn, "session/new", NewSessionRequest.new(File.cwd!()), 5_000)
+
+session_id = new_session_response.session_id
+
+prompt = PromptRequest.new(session_id, [ContentBlock.from_string("hello, agent")])
+
+{:ok, {updates, _prompt_response}} = Client.prompt(conn, prompt)
+
+for update <- updates, do: IO.inspect(update, label: "agent said")
 ```
 
 For BEAM-local wiring (no subprocess, e.g. tests or an in-process agent
@@ -335,3 +372,60 @@ site):
 
 See `docs/proposals/acp-package-adr.md` for how these gates shaped the
 package's structure.
+
+## Glossary
+
+Moduledocs and inline comments throughout this package cite short tags
+(`IC-2`, `CDI-5`, `J7a`, `G5`, `I8`, `D1-6`, `W17`, `P-JS5`, `R-C14`, `T-24`,
+`AD-U`, `NC-12`, and similar) back to the design docs that ratified each
+decision (`acp-{connection,supervision,reattach,attachpolicy,methodtable}-design.md`).
+**Those design docs are external** — they live in this project's working
+scratchpad (`scratchpad/specs/`), not in this repository, so a tag is only
+a traceability breadcrumb here, not a link you can click. This section
+resolves the tag *families* well enough to read the code without them;
+it does not attempt to enumerate every individual tag.
+
+- **`IC-*`** ("invariant/contract", connection design) — `Connection`-level
+  contracts: `IC-2` is the per-dispatch `Ctx` struct shape, `IC-3` is the
+  primitive-`async_request`-vs-wrapper-`request` split, `IC-4` is the
+  `:deferred`/`delegate_reply` early-reply protocol, `IC-5` (and `IC-5a`
+  /`IC-5b`/`IC-5c`) are the cancellation-id-ownership rules, `IC-8` is the
+  `ConnectionSupervisor` subtree shape `Agent`/`Client`'s library-mode
+  wiring builds (see "Library-mode wiring" in both moduledocs).
+- **`CDI-*`** ("cross-device/durable-identity", reattach + attach-policy
+  design) — the reattach/attach contract: `CDI-1` is the one-funnel
+  authorization rule, `CDI-2` is the attach `ctx` shape, `CDI-5`/`CDI-6`
+  are the wire envelopes for a denied attach and a mid-stream
+  `_raxol/session.closed`.
+- **`G1`..`G6`** ("gates") — the named design-review gates a change to
+  the affected surface must keep passing; `G2`, `G5`, `G6` are documented
+  in full above under "Danger-zone gates".
+- **`I1`..`I17`** ("invariant") — numbered protocol invariants (e.g. `I3`
+  "no `session/update` after its turn's response", `I8`/`I9` "a turn
+  cancel fails closed / aborts open permission asks").
+- **`J1`..`J12`** (and lettered variants like `J7a`) — journal/durability
+  invariants for `Ext.Journal.Writer` (append-then-publish ordering,
+  offset monotonicity, turn-boundary bookkeeping).
+- **`D1-*`** — `MethodTable`-derived invariants (e.g. `D1-6`: a
+  `params: nil` row generates an arity-1 callback).
+- **`W17`..`W20`** — client/ergonomics-layer decisions (`W17` is the
+  `subscribe/3`/`prompt/3`/`prompt_stream/4` design this README's
+  quickstart uses).
+- **`P-JS*`**, **`P-BUS*`** — named correctness *properties* (as in
+  property-based tests), e.g. `P-JS5`: replayed history plus live tail
+  equals the durable stream, no gap, no dup.
+- **`R-C*`** — Writer-restart/recovery rulings (e.g. `R-C14`: what the
+  Writer does with its latch on restart, before honoring the first
+  `append`/`subscribe`).
+- **`T-*`**, **`AD-*`**, **`NC-*`** — individual numbered test/finding
+  IDs from the design docs' own review process; these are the most
+  breadcrumb-only of the tags (no family-level summary applies).
+
+One naming note while we're here: `Connection.Ctx` (`IC-2`, the per-dispatch
+struct every handler callback receives) and `Raxol.AgentClientProtocol.Ctx`
+(a separate ergonomic DX layer of plain pid-taking wrapper functions for
+code running *inside* a `session/prompt` turn task) share the "Ctx" name
+but are deliberately two different things — a turn task cannot structurally
+reach the dispatch-time `Connection.Ctx` at all, so `Raxol.AgentClientProtocol.Ctx`
+does not compete with it as a second struct; `ctx.ex`'s own moduledoc has
+the full "why this isn't built on `Connection.Ctx`" rationale.

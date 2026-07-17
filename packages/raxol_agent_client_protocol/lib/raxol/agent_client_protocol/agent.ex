@@ -407,4 +407,46 @@ defmodule Raxol.AgentClientProtocol.Agent do
 
     ConnectionSupervisor.start_link({handler, handler_arg, transport}, sup_opts)
   end
+
+  @doc """
+  Resolve the `Connection` pid out of a started connection subtree. `sup`
+  must be the **`ConnectionSupervisor`'s own pid** -- this is the ONLY
+  supported way to reach the pid `Connection.request/4`, `async_request/6`,
+  and `notify/3` need, since `start_link/2`/`child_spec/1` deliberately
+  return/register the `ConnectionSupervisor`, not the `Connection` child
+  itself (IC-8 §1.2: the supervisor is the stable handle across the
+  child's `:temporary` restart policy).
+
+  Getting `sup`:
+
+    * `start_link/2` returns it directly -- pass that return value straight in.
+    * Any starter that hands you back the STARTED CHILD's pid also works
+      unchanged -- `start_supervised!/1` (ExUnit) and
+      `DynamicSupervisor.start_child/2` both do this for a `child_spec/1`
+      entry.
+    * A plain `Supervisor.start_link(children, ...)` where a `child_spec/1`
+      entry is one of several `children` does NOT hand you the
+      `ConnectionSupervisor` pid directly -- that call returns YOUR OWN
+      supervisor's pid, one level further out. Resolve the
+      `ConnectionSupervisor` child from
+      `Supervisor.which_children(your_sup)` yourself first, then pass THAT
+      pid here.
+
+  Returns `{:error, :not_found}` if `sup` has no live `Connection` child
+  (already torn down, or `sup` isn't a `ConnectionSupervisor` at all --
+  e.g. you passed your own outer supervisor's pid from the last bullet
+  above by mistake).
+  """
+  @spec connection(pid()) :: {:ok, pid()} | {:error, :not_found}
+  def connection(sup) when is_pid(sup) do
+    sup
+    |> Supervisor.which_children()
+    |> Enum.find_value({:error, :not_found}, fn
+      {_id, pid, _type, mods} when is_pid(pid) and is_list(mods) ->
+        if Connection in mods, do: {:ok, pid}
+
+      _ ->
+        nil
+    end)
+  end
 end

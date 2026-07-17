@@ -27,8 +27,13 @@ defmodule RaxolAgentClientProtocol.Application do
        correct but useless for a legitimate attach.
 
   It also starts `Raxol.AgentClientProtocol.ConnectionsSupervisor`, the
-  standalone-mode `DynamicSupervisor` under which `mix acp.serve` /
-  programmatic `connect/3` place a `ConnectionSupervisor` (§1.3/§1.4).
+  standalone-mode `DynamicSupervisor` an embedder `DynamicSupervisor.start_child/2`s
+  a `ConnectionSupervisor` under (`Agent.child_spec/1` / `Client.child_spec/1`'s
+  start MFA, wrapped in a plain child spec) when they want this module's shared
+  tree to also host the connection subtree itself, rather than splicing
+  `Agent.child_spec/1`/`Client.child_spec/1` into their own supervisor (§1.3/§1.4).
+  There is no `mix acp.serve` task and no `connect/3` function today -- a
+  packaged one-line standalone launcher is planned, not yet implemented.
 
   ## Test opt-out
 

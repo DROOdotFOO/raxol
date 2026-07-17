@@ -211,9 +211,11 @@ defmodule Raxol.AgentClientProtocol.Client do
   registered for `{conn, session_id}` -- `update` is always an
   already-decoded `Raxol.AgentClientProtocol.Schema.SessionUpdate.t()`
   (see `decode_update/1`'s doc for why an undecodable variant never
-  reaches this path). Idempotent: subscribing the same pid twice for the
-  same key registers it twice in the underlying `:bag` (harmless -- it
-  just receives the broadcast twice); prefer subscribing once.
+  reaches this path). NOT idempotent: subscribing the same pid twice for
+  the same key registers it twice in the underlying `:bag` -- each
+  registration receives its own copy of every broadcast, so the pid gets
+  the update twice. Subscribe once per `{conn, session_id, pid}`, or
+  dedupe on receipt if you can't guarantee that.
   """
   @spec subscribe(pid(), String.t(), pid()) :: :ok
   def subscribe(conn, session_id, subscriber \\ self())
@@ -341,6 +343,13 @@ defmodule Raxol.AgentClientProtocol.Client do
   because it never leaves the receive loop.
 
   Always subscribes and unsubscribes around the call, including on error.
+
+  **Precondition:** requires the generated default `c:session_update/2`
+  (the one `use Raxol.AgentClientProtocol.Client` installs). If your
+  handler module overrides `session_update/2` and does not itself call
+  `broadcast_update/3`, `subscribe/3` never fires and `updates` is `[]`
+  for every turn, forever -- see the moduledoc's "Session-consumer
+  ergonomics" section.
   """
   @spec prompt(pid(), struct(), pos_integer()) ::
           {:ok, {[update()], struct() | {:ext, map()}}} | {:error, term()}
@@ -398,6 +407,10 @@ defmodule Raxol.AgentClientProtocol.Client do
   `{:error, term()}` for the terminal outcome, same vocabulary as
   `Connection.async_request/6`'s `outcome`. Always subscribes and
   unsubscribes around the call, including on error.
+
+  **Precondition:** same as `prompt/3` -- requires the generated default
+  `c:session_update/2`; an overridden `session_update/2` that doesn't call
+  `broadcast_update/3` means `on_update` is never invoked.
   """
   @spec prompt_stream(pid(), struct(), (update() -> any()), pos_integer()) ::
           {:ok, struct() | {:ext, map()}} | {:error, term()}
@@ -607,6 +620,49 @@ defmodule Raxol.AgentClientProtocol.Client do
     sup_opts = Keyword.take(opts, [:name])
 
     ConnectionSupervisor.start_link({handler, handler_arg, transport}, sup_opts)
+  end
+
+  @doc """
+  Resolve the `Connection` pid out of a started connection subtree. `sup`
+  must be the **`ConnectionSupervisor`'s own pid** -- this is the ONLY
+  supported way to reach the pid `Connection.request/4`, `async_request/6`,
+  `notify/3`, and this module's own `subscribe/3`/`prompt/3`/`prompt_stream/4`
+  need, since `start_link/2`/`child_spec/1` deliberately return/register the
+  `ConnectionSupervisor`, not the `Connection` child itself (IC-8 §1.2: the
+  supervisor is the stable handle across the child's `:temporary` restart
+  policy).
+
+  Getting `sup`:
+
+    * `start_link/2` returns it directly -- pass that return value straight in.
+    * Any starter that hands you back the STARTED CHILD's pid also works
+      unchanged -- `start_supervised!/1` (ExUnit) and
+      `DynamicSupervisor.start_child/2` both do this for a `child_spec/1`
+      entry.
+    * A plain `Supervisor.start_link(children, ...)` where a `child_spec/1`
+      entry is one of several `children` does NOT hand you the
+      `ConnectionSupervisor` pid directly -- that call returns YOUR OWN
+      supervisor's pid, one level further out. Resolve the
+      `ConnectionSupervisor` child from
+      `Supervisor.which_children(your_sup)` yourself first, then pass THAT
+      pid here.
+
+  Returns `{:error, :not_found}` if `sup` has no live `Connection` child
+  (already torn down, or `sup` isn't a `ConnectionSupervisor` at all --
+  e.g. you passed your own outer supervisor's pid from the last bullet
+  above by mistake).
+  """
+  @spec connection(pid()) :: {:ok, pid()} | {:error, :not_found}
+  def connection(sup) when is_pid(sup) do
+    sup
+    |> Supervisor.which_children()
+    |> Enum.find_value({:error, :not_found}, fn
+      {_id, pid, _type, mods} when is_pid(pid) and is_list(mods) ->
+        if Connection in mods, do: {:ok, pid}
+
+      _ ->
+        nil
+    end)
   end
 end
 
