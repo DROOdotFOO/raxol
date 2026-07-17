@@ -27,10 +27,13 @@ defmodule Raxol.Harness.SealFrontier do
       scrollback this frame;
     * the footer/tail composition -- which blocks still render in the
       pinned live region (the trailing "pending" preview);
-    * (future, documented seam, not yet built) the resize path's
-      `will_commit` gate and post-commit viewport sizing -- the frame-order
-      unit that must decide sizing at the width a possibly-just-committed
-      block was laid out at.
+    * the synchronized-output bracket decision -- `Raxol.Harness.Surface`'s
+      `seal_frame/3` reads the SAME `will_commit` projection, per-frame, to
+      decide whether this frame's seal + footer repaint needs wrapping in
+      a DEC 2026 bracket (see that module's moduledoc). The post-commit
+      viewport-sizing seam remains future work: this substrate's footer
+      row count is geometry-fixed (never a function of post-seal state),
+      so there is no viewport-sizing decision left to make here.
 
   Consumers never inline their own walk over entries. The consumer table
   today:
@@ -39,11 +42,10 @@ defmodule Raxol.Harness.SealFrontier do
       walk, via `commit_walk/5`.
     * `Raxol.Harness.Surface`'s footer pending-preview (`pending_block/1`,
       via `frontier_scan/1`, itself `scan_frontier/3`) -- read-only.
-
-  Documented seams (not yet built, but must call `scan_frontier/3` before
-  the commit pass in the frame and mirror its stop condition exactly when
-  they land): the resize-path `will_commit` gate, and post-commit viewport
-  sizing.
+    * `Raxol.Harness.Surface`'s synchronized-output bracket gate
+      (`seal_frame/3`, also via `frontier_scan/1`) -- read-only, consulted
+      BEFORE the commit pass to decide whether to open a bracket around
+      it.
 
   ## The entry contract
 
@@ -170,11 +172,13 @@ defmodule Raxol.Harness.SealFrontier do
   it, so the very next pass retries that same entry rather than silently
   skipping past a block that was marked but never actually printed (which
   would make it vanish forever, since a print-once surface cannot re-emit
-  a committed entry). This emit-then-mark contract is the seam a future
-  two-phase seal (a write-confirming substrate) will build on; today's
-  Surface emit (`InlineAuthority.seal/2`) has no error path, so the
-  `{:error, :write_failed, _}` branch is exercised only by this module's
-  own corpus until such a substrate lands.
+  a committed entry). This emit-then-mark contract is the seam a
+  write-confirming substrate builds on -- and that substrate now exists:
+  `Raxol.Harness.Surface.seal_block/2` emits through
+  `InlineAuthority.try_seal/2` (write -> confirm -> mark), and the
+  `{:error, :write_failed, _}` branch is exercised both by this module's
+  own corpus and end-to-end through a real failing device in
+  `test/harness/surface_seal_pipeline_test.exs`.
 
   ## The cursor
 

@@ -39,7 +39,17 @@ defmodule Raxol.Terminal.InlineDriver.Sequences do
   # crashed session may have left it on, which would otherwise clamp the
   # step-4 absolute cursor move (`move_bottom/1`) inside whatever margins
   # were active instead of the real bottom row.
-  @modes_off "\e[?2004l\e[?1004l\e[?1003l\e[?1006l\e[?1000l\e[?6l"
+  #
+  # DEC 2026 (synchronized update) end is the teardown backstop for the
+  # harness's sync bracket (`InlineAuthority.sync_open/1`/`sync_close/1`):
+  # a close the device refused on the session's FINAL frame has no later
+  # frame to heal on, and a terminal left in synchronized mode is frozen.
+  # DEC private modes are set/reset, so an unconditional `?2026l` is
+  # harmless when nothing is owed and un-wedges the terminal when a close
+  # was stranded -- same defensive shape as the mouse/DECOM resets above.
+  # Also covers the editor-suspend path (`suspend_bytes/1` shares step 1):
+  # an editor must never inherit a synchronized-frozen screen.
+  @modes_off "\e[?2026l\e[?2004l\e[?1004l\e[?1003l\e[?1006l\e[?1000l\e[?6l"
   @release_region "\e[r"
   @autowrap_cursor "\e[?7h\e[?25h"
 
