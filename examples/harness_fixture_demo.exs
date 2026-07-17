@@ -116,6 +116,12 @@ defmodule Raxol.Examples.HarnessFixtureDemo do
         # fresh screen -- pin immediately there (push-up already
         # scrolled the shell's content into scrollback).
         pin: if(boot == :top, do: :immediate, else: :adaptive),
+        # Chat entry (V ruling, second half): sealed content enters at
+        # the region BOTTOM and scrolls upward -- the conversation
+        # sticks to the input, never hops to the top of the region.
+        # The guest bottom-pin boot sets this itself; passing it here
+        # covers the :top fallback (pin: :immediate) identically.
+        entry: :scroll_entry,
         boot: boot,
         # The boot greeting ("welcome back, operator"): ephemeral,
         # erased by the Surface the instant the first sealed content

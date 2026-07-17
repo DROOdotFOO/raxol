@@ -430,7 +430,7 @@ defmodule Raxol.Harness.GuestBootTest do
   # ------------------------------------------------------------------
 
   describe "shell content is never repainted (emulator oracle)" do
-    test "mid-screen prompt: shell lines + sealed lines read back contiguously" do
+    test "mid-screen prompt: shell lines read back intact; sealed lines enter at the region bottom" do
       {shell, cursor_row} = shell_bytes(4)
       assert cursor_row == 5
 
@@ -445,15 +445,25 @@ defmodule Raxol.Harness.GuestBootTest do
       _auth = InlineAuthority.repaint(auth, footer_lines())
 
       # Independent oracle: replay the SHELL's own bytes followed by
-      # ours; the combined history must be shell lines then sealed
-      # lines, contiguously -- any repaint, blank gap, or misplacement
-      # breaks the equality.
+      # ours. Under the bottom-pin boot's CHAT ENTRY (V field ruling --
+      # sealed content enters at the region BOTTOM and scrolls upward,
+      # never fills down from the prompt row), the combined history is
+      # shell lines IN ORDER, then the fixed blank gap that sat between
+      # the prompt row and the entry row (the documented, one-screenful-
+      # bounded dirty-scrollback cost), then the sealed lines intact.
+      # Any shell repaint, reordering, or sealed-row rewrite breaks the
+      # equality. The pre-ruling contiguous layout (sealed lines
+      # directly under the prompt) is exactly the retired fill-down
+      # behavior -- see test/harness/scroll_entry_test.exs for the
+      # entry-position pins.
       combined = shell <> raw(device)
 
-      history = history_texts(combined, @bottom, high_water: 6)
+      history = history_texts(combined, @bottom, high_water: @bottom - 1 + 2)
 
       assert history ==
-               Enum.map(1..4, &"shell-#{&1}") ++ ["line-1", "line-2"]
+               Enum.map(1..4, &"shell-#{&1}") ++
+                 List.duplicate("", @bottom - 1 - 4) ++
+                 ["line-1", "line-2"]
     end
 
     test "bottom prompt: scroll-entry evicts shell rows into scrollback intact, seals directly above the footer" do

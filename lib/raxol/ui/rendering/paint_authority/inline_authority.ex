@@ -48,8 +48,13 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   a different, also-invalid violation class) to prove `SealOracle`
   catches a real immutable-prefix violation instead of rubber-stamping
   every input. It does not reproduce, and was never meant to reproduce,
-  the filler bug described above. There is no code path in this module
-  that CUPs to any row other than `min(next_row, history_bottom)`.
+  the filler bug described above. A pinned seal CUPs to exactly one
+  row: `min(next_row, history_bottom)` under `:fill_down` (the default
+  described above), or `history_bottom` itself under `:scroll_entry`
+  (chat semantics -- see the `entry_mode` typedoc; the front-loaded
+  filler that mode admits into scrollback is its DOCUMENTED, bounded
+  dirty-scrollback cost, and its oracle accounting offsets the fixed
+  junk prefix instead of relying on fill-down's zero-filler property).
 
   ## The cursor-ownership protocol
 
@@ -353,7 +358,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     sync_output?: false,
     sync_close_pending?: false,
     cursor_park: nil,
-    pin_state: :pinned
+    pin_state: :pinned,
+    entry_mode: :fill_down
   ]
 
   @type cursor_park :: {pos_integer(), pos_integer()} | nil
@@ -379,6 +385,38 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   """
   @type pin_state :: :pinned | :floating
 
+  @typedoc """
+  How a PINNED seal enters the history region (V field ruling: chat
+  semantics -- the conversation sticks to the bottom):
+
+    * `:fill_down` -- today's default and every byte-golden world's
+      model: a seal CUPs to `min(next_row, history_bottom)` and fills
+      downward; the region scrolls only once full. This is the
+      load-bearing model for oracle high-water accounting on streams
+      that boot over a blank region (see the moduledoc's "Seal-once, by
+      construction" section).
+    * `:scroll_entry` -- sealed content enters at the region's BOTTOM
+      row from the first seal on: the seal CUPs to `history_bottom` and
+      every `\\r\\n` is an index-at-region-boundary scroll. In the
+      under-filled phase (`next_row < history_bottom` -- a guest boot
+      pinned mid-screen) the rows above (shell content, then blanks)
+      scroll up and evict into native scrollback: shell content
+      preserved in order, blank rows evicted as blanks -- the
+      documented dirty-scrollback cost, bounded by ONE screenful (the
+      `history_bottom - 1` rows that sat above the entry row at the
+      first seal). Sealed bytes are still never re-addressed: the
+      terminal relocates rows; this module rewrites nothing. After the
+      first scroll-entry seal `next_row == history_bottom` and every
+      subsequent seal is byte-identical to `:fill_down`'s own steady
+      state (the two modes only ever diverge while under-filled).
+
+  The guest bottom-pin boot (`:boot_cursor` + `:guest_placement`
+  `:bottom_pin`) sets `:scroll_entry` automatically -- input at the
+  screen bottom implies content enters there too. Floating seals ignore
+  this (the floating footer is content-anchored by construction).
+  """
+  @type entry_mode :: :fill_down | :scroll_entry
+
   @type t :: %__MODULE__{
           region: ScrollRegionManager.t(),
           width: pos_integer(),
@@ -390,7 +428,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
           sync_output?: boolean(),
           sync_close_pending?: boolean(),
           cursor_park: cursor_park(),
-          pin_state: pin_state()
+          pin_state: pin_state(),
+          entry_mode: entry_mode()
         }
 
   @doc """
@@ -441,6 +480,14 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       Placement is only honest if nothing wrote to the device between
       the probe reply and this call. Default `nil` — byte-identical to
       today's boot.
+    * `:entry` — how a PINNED seal enters the history region (see the
+      `entry_mode` typedoc): `:fill_down` (default — every byte-golden
+      world) or `:scroll_entry` (chat semantics — sealed content enters
+      at the region bottom and scrolls upward; the under-filled void
+      between conversation and footer becomes unrepresentable). The
+      guest bottom-pin boot sets `:scroll_entry` itself; this option is
+      for pinned-from-boot embedders that want chat entry too (the
+      demos' probe-failed fallback).
   """
   @spec new(
           IO.device(),
@@ -460,6 +507,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
     pin = Keyword.get(opts, :pin, :immediate)
     boot_cursor = validate_boot_cursor!(pin, Keyword.get(opts, :boot_cursor))
+    entry_mode = validate_entry_mode!(Keyword.get(opts, :entry, :fill_down))
 
     guest_placement =
       validate_guest_placement!(
@@ -481,12 +529,24 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       reflow_capable?: reflow_capable?(caps),
       next_row: 1,
       pin_state: pin_state,
+      entry_mode: entry_mode,
       # Strict struct match, mirroring `reflow_capable?/1`'s own idiom: a
       # stray plain map carrying a `sync_output: true` key must never
       # enable emission -- only the probe-built capability record may.
       sync_output?: match?(%Capabilities{sync_output: true}, caps)
     }
     |> boot_at_cursor(boot_cursor, guest_placement)
+  end
+
+  defp validate_entry_mode!(mode) when mode in [:fill_down, :scroll_entry],
+    do: mode
+
+  defp validate_entry_mode!(other) do
+    raise ArgumentError,
+          "InlineAuthority.new/5's :entry must be :fill_down (default -- " <>
+            "every byte-golden world's model) or :scroll_entry (chat " <>
+            "semantics: pinned seals enter at the region bottom); got " <>
+            inspect(other)
   end
 
   defp validate_guest_placement!(placement)
@@ -544,7 +604,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
     cond do
       row > ScrollRegionManager.history_bottom(region) ->
-        # SCROLL-ENTRY: the floating window cannot exist below the
+        # SCROLL-ENTRY BOOT: the floating window cannot exist below the
         # prompt (prompt at/near the screen bottom). The existing
         # one-way transition does exactly the honest thing: plain
         # `\n`s at the physical bottom scroll the shell's own history
@@ -552,7 +612,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         # repaint), one region write claims the pin, and the surface is
         # bottom-anchored from the first frame with `next_row` directly
         # above the pinned footer.
-        transition_to_pin(t)
+        t |> chat_entry(placement) |> transition_to_pin()
 
       placement == :float ->
         # LEGACY float-at-probe-row (opt-in via `guest_placement:
@@ -568,12 +628,21 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         # transition -- with the probe row at or above the history
         # bottom this emits zero scroll newlines (nothing below the
         # prompt to push) and one region write; shell content above the
-        # probe row is preserved untouched, the footer (and chevron)
-        # sits at the true bottom, and content appends downward from
-        # the probe row exactly like any program printing lines.
-        transition_to_pin(t)
+        # probe row is preserved untouched, and the footer (and
+        # chevron) sits at the true bottom. Sealed content enters at
+        # the region bottom too (`chat_entry/2` -> `:scroll_entry`, the
+        # V ruling's second half): the first seal must not hop back up
+        # to the probe row and fill downward into a void.
+        t |> chat_entry(placement) |> transition_to_pin()
     end
   end
+
+  # The bottom-pin guest placement implies chat entry semantics: input
+  # at the screen bottom AND content entering there. The legacy `:float`
+  # placement keeps whatever `:entry` the caller chose (shell-join
+  # semantics fill down from the prompt by design).
+  defp chat_entry(t, :bottom_pin), do: %{t | entry_mode: :scroll_entry}
+  defp chat_entry(t, _placement), do: t
 
   defp cached_caps do
     case Capabilities.cached() do
@@ -1037,14 +1106,25 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   def append_sealed(%__MODULE__{region: region, next_row: next_row} = t, iodata) do
     bottom = ScrollRegionManager.history_bottom(region)
     device = region.device
-    target_row = min(next_row, bottom)
 
-    # One CUP to the next unfilled history row (or the bottom row, once
-    # full) then the content. Every `\r\n` inside `iodata` that lands ON
-    # the bottom row is an index-at-region-boundary: the DECSTBM region
-    # scrolls up (oldest history row evicted toward scrollback), the
-    # cursor stays on that same bottom row. No other code path in this
-    # module ever addresses any other row.
+    # One CUP, then the content. `:fill_down` (default): the next
+    # unfilled history row, clamped to the region bottom once full.
+    # `:scroll_entry` (chat semantics, see the `entry_mode` typedoc):
+    # ALWAYS the region bottom -- while under-filled the rows above
+    # (shell content, blanks) scroll up honestly instead of content
+    # filling down into a void; once `next_row` reaches the bottom the
+    # two modes are the same CUP by arithmetic. Every `\r\n` inside
+    # `iodata` that lands ON the bottom row is an
+    # index-at-region-boundary: the DECSTBM region scrolls up (oldest
+    # history row evicted toward scrollback), the cursor stays on that
+    # same bottom row. No pinned code path ever addresses a row above
+    # its target.
+    target_row =
+      case t.entry_mode do
+        :scroll_entry -> bottom
+        :fill_down -> min(next_row, bottom)
+      end
+
     IO.write(device, Dialect.cursor_position(target_row))
     IO.write(device, iodata)
 

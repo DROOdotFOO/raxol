@@ -284,6 +284,10 @@ defmodule Raxol.Harness.LiveSessionDriver do
         # (Surface's own default) so byte-golden embedders are
         # untouched; the live demo opts into `:adaptive`.
         :pin,
+        # Chat entry (V ruling): pass-through to `Surface.new/2`'s
+        # `:entry` option (`:fill_down` default; the live demo passes
+        # `:scroll_entry` so pinned seals enter at the region bottom).
+        :entry,
         # GUEST-BOOT: pass-through to `Surface.new/2`'s `:boot` option
         # (`:top` default, `{:guest, {row, col}}` from an embedder that
         # DSR-probed the cursor via InlineDriver.probe_cursor/2 before

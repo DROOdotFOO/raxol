@@ -829,6 +829,14 @@ defmodule Raxol.Harness.Surface do
       wherever the cursor is (flat IS guest boot by nature). Any other
       value raises `ArgumentError` -- an unrecognized boot must never
       silently become `:top`.
+    * `:entry` (default `:fill_down`) -- forwarded to
+      `InlineAuthority.new/5`: how a pinned seal enters history.
+      `:scroll_entry` is chat semantics (content enters at the region
+      bottom, right above the footer, and scrolls upward -- V's
+      bottom-anchor ruling); the guest bottom-pin boot sets it by
+      itself, so this option matters for the pinned-from-boot paths
+      (the demos' probe-failed `:top` fallback). `:fill_down` keeps
+      every byte-golden world untouched. Ignored in `:flat` mode.
 
   ## Startup mode notice (the degradation ladder's `select_with_reason/3` seam)
 
@@ -883,7 +891,8 @@ defmodule Raxol.Harness.Surface do
         caps,
         Keyword.get(opts, :pin, :immediate),
         validate_boot!(Keyword.get(opts, :boot, :top)),
-        Keyword.get(opts, :guest_placement, :bottom_pin)
+        Keyword.get(opts, :guest_placement, :bottom_pin),
+        Keyword.get(opts, :entry, :fill_down)
       )
 
     {:ok, composer} =
@@ -1100,7 +1109,8 @@ defmodule Raxol.Harness.Surface do
          _caps,
          _pin,
          _boot,
-         _guest_placement
+         _guest_placement,
+         _entry
        ),
        do: FlatAuthority.new(device, width, rows)
 
@@ -1113,12 +1123,14 @@ defmodule Raxol.Harness.Surface do
          caps,
          pin,
          boot,
-         guest_placement
+         guest_placement,
+         entry
        ),
        do:
          InlineAuthority.new(device, width, rows, footer_rows,
            capabilities: caps,
            pin: pin,
+           entry: entry,
            boot_cursor: boot_cursor(boot),
            # :bottom_pin default (V ruling: input at the screen bottom
            # from frame one); :float stays reachable for embedders that
