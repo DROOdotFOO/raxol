@@ -258,8 +258,8 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
     end
   end
 
-  describe "boundary hazard: open fence — no boundary inside an unterminated fence" do
-    test "the checkpoint holds at the fence opener until the matching closer arrives" do
+  describe "boundary hazard: open fence — committed content lines freeze; the still-open frame does not" do
+    test "a still-open fence freezes each committed content line, and closing resumes normal freezing" do
       opener = "```\n"
       chunks = [opener, "code | with pipe\n", "**not bold**\n", "```\n", "\n"]
 
@@ -268,17 +268,26 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
       offsets =
         Enum.map(steps, fn {_acc, _view, cp} -> cp.frozen_byte_offset end)
 
-      # while the fence is open (steps 1..3) nothing freezes...
-      assert Enum.take(offsets, 3) == [0, 0, 0],
-             "checkpoint advanced inside an open fence: #{inspect(offsets)}"
+      # after the opener alone there is no committed CONTENT line yet --
+      # nothing to freeze (the zero-content fence block has no stable
+      # element prefix).
+      assert hd(offsets) == 0,
+             "froze at a fence opener with no content: #{inspect(offsets)}"
 
-      # ...and once the matching closer has arrived, the closed fence
-      # block becomes freezable.
-      assert List.last(offsets) > 0,
-             "checkpoint never advanced after the fence closed: #{inspect(offsets)}"
+      # each committed content line inside the still-open fence freezes
+      # (pipes and markers inside fence content are inert -- both parse
+      # stages treat them as literal code).
+      assert Enum.at(offsets, 1) > 0,
+             "a committed fence-content line did not freeze: #{inspect(offsets)}"
+
+      assert Enum.at(offsets, 2) > Enum.at(offsets, 1)
+
+      # and the matching closer transitions back to normal freezing.
+      assert Enum.at(offsets, 3) > Enum.at(offsets, 2),
+             "checkpoint did not advance past the fence closer: #{inspect(offsets)}"
     end
 
-    test "a mismatched ~~~ line inside a ``` fence does not create a boundary" do
+    test "a mismatched ~~~ line inside a ``` fence is fence CONTENT and freezes as such" do
       chunks = ["```\n", "~~~\n", "still code\n", "```\n", "\nafter\n"]
 
       {_acc, _cp, steps} = assert_stream_equivalence(chunks)
@@ -286,7 +295,123 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyStablePrefixTest do
       offsets =
         Enum.map(steps, fn {_acc, _view, cp} -> cp.frozen_byte_offset end)
 
-      assert Enum.take(offsets, 3) == [0, 0, 0]
+      # the interior ~~~ line is a committed content line of the open
+      # ``` fence -- freezable, never a (mismatched) closer.
+      assert Enum.at(offsets, 1) > 0
+      assert Enum.at(offsets, 2) > Enum.at(offsets, 1)
+    end
+  end
+
+  # --- adversarial review round, HIGH: a still-open fence (the most
+  # common large streamed payload -- an LLM typing out a code block)
+  # must not defeat the optimization. A closed fence's already-committed
+  # content lines are immutable (the parser is forward-only and each
+  # content line maps to exactly one code element), so they freeze even
+  # while the fence frame itself is still open. ---
+
+  # Total bytes actually re-parsed across a stream: per step, the live
+  # tail is byte_size(acc) - previous frozen_byte_offset. Deterministic
+  # and runner-independent (same metric as the perf pin below).
+  defp parse_work(steps) do
+    offsets_before =
+      [0 | Enum.map(steps, fn {_acc, _view, cp} -> cp.frozen_byte_offset end)]
+
+    steps
+    |> Enum.zip(offsets_before)
+    |> Enum.map(fn {{acc, _view, _cp}, offset} -> byte_size(acc) - offset end)
+    |> Enum.sum()
+  end
+
+  describe "review round, HIGH — streaming code blocks keep parse work linear" do
+    test "a 200-line streaming ```elixir block: equivalence at every step, work bounded by the live tail" do
+      opener = "```elixir\n"
+
+      content =
+        for i <- 1..200, do: "line #{i} of code with *stars* and | pipes |\n"
+
+      chunks = [opener | content]
+      doc = Enum.join(chunks)
+
+      {_acc, cp, steps} = assert_stream_equivalence(chunks)
+
+      # the checkpoint tracks the stream INSIDE the still-open fence --
+      # within one line of the end, not pinned at the opener.
+      assert cp.frozen_byte_offset >= byte_size(doc) - 60,
+             "checkpoint pinned inside an open fence: frozen " <>
+               "#{cp.frozen_byte_offset} of #{byte_size(doc)} bytes"
+
+      # pre-fix this sums prefix sizes (~100x the doc); with fence-
+      # interior freezing the re-parsed tail stays one line, so the sum
+      # is ~1-2x. 4x is the same order-of-magnitude separator the perf
+      # pin uses.
+      work = parse_work(steps)
+
+      assert work < 4 * byte_size(doc),
+             "cumulative re-parsed tail bytes #{work} exceed 4x the doc " <>
+               "size (#{byte_size(doc)}) -- open fences defeat the checkpoint"
+    end
+
+    test "a streaming ~~~ fence freezes its committed content lines too" do
+      chunks = ["~~~\n", "alpha\n", "beta\n", "gamma\n"]
+
+      {_acc, cp, steps} = assert_stream_equivalence(chunks)
+
+      offsets =
+        Enum.map(steps, fn {_acc, _view, cp} -> cp.frozen_byte_offset end)
+
+      assert Enum.at(offsets, 1) > 0
+      assert cp.frozen_byte_offset > 0
+    end
+
+    test "an opener with live inline state before it is ineligible (provisional close may still edit across it)" do
+      # "**bold" leaves an open bold frame on the stack; the fence
+      # content is inert but the PROSE around the fence is one inline
+      # stream -- erasures/closers for that bold can land after the
+      # fence, so nothing (including fence content) may freeze.
+      chunks = ["**bold\n", "```\n", "code one\n", "code two\n"]
+
+      {_acc, cp, _steps} = assert_stream_equivalence(chunks)
+
+      assert cp.frozen_byte_offset == 0,
+             "froze past an opener with a live inline frame"
+    end
+
+    test "an indented opener (renderer/provisional fence machines diverge) is ineligible" do
+      # "  ```" opens provisional-close's trimmed fence machine but NOT
+      # the renderer's raw-prefix one -- the two stages disagree on what
+      # is fence content, so no boundary of either kind is safe.
+      chunks = ["  ```\n", "*text\n", "words\n"]
+
+      {_acc, cp, _steps} = assert_stream_equivalence(chunks)
+
+      assert cp.frozen_byte_offset == 0,
+             "froze while the two fence machines disagreed"
+    end
+
+    test "newline-free content never freezes (documented residual: no committed line boundary exists)" do
+      # A single ever-growing line has no committed "\n" to freeze at,
+      # and mid-line freezing is semantically impossible (the line's own
+      # parse -- wrapping, emphasis pairing, table detection -- changes
+      # as it grows). This degrades to the pre-optimization full
+      # re-parse, bounded by the 256KB cap. Asserted here so the
+      # moduledoc's residual-degradation claim maps to a named test.
+      chunks = for _ <- 1..10, do: String.duplicate("word ", 10)
+
+      {_acc, cp, steps} = assert_stream_equivalence(chunks)
+
+      assert cp.frozen_byte_offset == 0
+
+      # the honest ceiling, pinned with the same work metric as the perf
+      # suite: with no boundary to freeze at, every delta re-parses the
+      # full accumulated text, so work equals the sum of ALL prefix
+      # sizes -- exactly the pre-optimization shape (never worse), with
+      # the 256KB render cap as the absolute bound.
+      naive_work =
+        steps
+        |> Enum.map(fn {acc, _view, _cp} -> byte_size(acc) end)
+        |> Enum.sum()
+
+      assert parse_work(steps) == naive_work
     end
   end
 

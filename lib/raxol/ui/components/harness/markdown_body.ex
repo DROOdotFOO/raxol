@@ -19,20 +19,31 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody.Checkpoint do
     whenever non-empty).
   - `width` -- the width the frozen elements were rendered at; a change
     invalidates the checkpoint (frozen elements are width-dependent).
+  - `open_fence` -- `nil` when the frozen prefix ends balanced (no fence
+    open), or `{opener_line, drop_count}` when it ends INSIDE a still-open
+    fence eligible for content freezing: `opener_line` is the sanitized
+    opener line verbatim (no trailing newline), and `drop_count` is the
+    number of leading elements (`fenced_code_elements/2`'s blank plus an
+    optional language label) that a fresh re-parse of just `opener_line`
+    would produce before its first content element -- structurally
+    coupled to `MarkdownRenderer.fenced_code_elements/2`'s element shape;
+    the stable-prefix property tests guard this coupling.
   """
 
   defstruct frozen_byte_offset: 0,
             frozen_elements: [],
             raw_prefix: "",
             sanitized_prefix: "",
-            width: nil
+            width: nil,
+            open_fence: nil
 
   @type t :: %__MODULE__{
           frozen_byte_offset: non_neg_integer(),
           frozen_elements: [map()],
           raw_prefix: binary(),
           sanitized_prefix: binary(),
-          width: pos_integer() | nil
+          width: pos_integer() | nil,
+          open_fence: {String.t(), pos_integer()} | nil
         }
 end
 
@@ -130,7 +141,13 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
   element-for-element, at every prefix. The full re-parse remains the
   correctness oracle; the checkpoint only changes how much work gets
   redone, never what the result is. `new_checkpoint/0` builds the initial
-  (empty) checkpoint; `nil` is also accepted as fresh.
+  (empty) checkpoint; `nil` is also accepted as fresh. Per delta, PARSE
+  work is O(live tail); assembling the returned view is Theta(total
+  elements) regardless -- a flat `:children` list equal to the full
+  parse must be materialized, and `frozen ++ tail` recopies the frozen
+  spine -- and each freeze recopies the frozen-elements list once. The
+  optimization removes the quadratic PARSE term; the element-list terms
+  are inherent to the view contract and dwarfed by parsing in practice.
 
   ### The checkpoint rule
 
@@ -142,9 +159,16 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
     matching-marker fence machine AND provisional-close's trimmed-prefix
     fence machine must be closed. A fence parser is forward-only: once a
     matching-marker line closes it, no later byte can reopen it, so a
-    closed fence's extent is permanently fixed -- but an OPEN fence's
-    extent is not yet known, so nothing inside or at its still-open
-    boundary may freeze.
+    closed fence's extent is permanently fixed. An open fence's committed
+    CONTENT lines are themselves immutable (each maps to exactly one code
+    element, appended in order; only the block's trailing blank line
+    moves), so they freeze too -- provided the fence was opened by a
+    raw-prefix marker line with an empty inline scan stack (both fence
+    machines in sync, no live inline frame whose erasure could cross the
+    fence) and at least one content line has been committed (a
+    zero-content fence block has no stable element prefix). An indented
+    opener or closer desynchronizes the two machines and blocks all
+    freezing until they re-sync.
   - **table** -- the line immediately before the boundary must contain no
     `"|"`. A committed `"|"`-line can still become a table HEADER once
     the next line arrives (the header+separator lookahead is 2 lines),
@@ -168,6 +192,26 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
     preserves both `"\\r"` and `"\\n"`, so a CRLF split lands like any
     other chunk boundary.
 
+  ### Scope of the immutability proof
+
+  The proof above is relative to the BUILTIN line-local grammar
+  (`MarkdownRenderer.render_with_builtin/2`) -- the oracle deliberately
+  has no setext headings, link-reference definitions, lazy continuation,
+  or list tightness; each line parses independently, and the only
+  multi-line constructs are fences and tables. Against a full CommonMark
+  parser the boundary rule would be UNSOUND (a later `===` line, a
+  reference definition, or lazy continuation can rewrite earlier
+  output). That is exactly why `render_streaming_incremental/3` delegates
+  to the full render whenever `EarmarkParser` is loadable (dev pulls it
+  via ex_doc; downstream consumers often load earmark): the frozen
+  elements come from the builtin parser, but the full render prefers
+  Earmark there, so the two could disagree. In such environments the
+  optimization is intentionally inert -- behavior is exactly the
+  pre-optimization full re-parse. Forcing the builtin renderer everywhere
+  would instead make streaming and sealed renders disagree in
+  Earmark-loaded environments (a visible reformat at seal time), which is
+  worse than a missing optimization.
+
   ### Cap interaction
 
   The 256KB cap (`@render_byte_cap`) applies to the TOTAL sanitized text
@@ -187,13 +231,20 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
   checkpoint and a full parse -- the output is always oracle-correct,
   never corrupted by a misused checkpoint.
 
-  ### Garbage degradation
+  ### Residual degradations
 
-  A genuinely-invalid byte permanently blocks the checkpoint from
-  advancing past it (the UTF-8 rule above), so a message containing
-  arbitrary garbage degrades to the pre-optimization behavior: a full
-  re-parse of the accumulated text on every delta, still capped at
-  `@render_byte_cap` bytes like any other streaming render.
+  Two shapes still degrade to the pre-optimization full re-parse (still
+  capped at `@render_byte_cap` bytes like any other streaming render):
+
+  - **garbage bytes** -- a genuinely-invalid byte permanently blocks the
+    checkpoint from advancing past it (the UTF-8 rule above), so a
+    message containing arbitrary garbage degrades to a full re-parse of
+    the accumulated text on every delta.
+  - **newline-free content** -- a single ever-growing line has no
+    committed line boundary, and mid-line freezing is semantically
+    impossible (the line's own wrapping/emphasis-pairing/table detection
+    changes as it grows), so it also degrades to the capped full
+    re-parse.
 
   ### Follow-up seam
 
@@ -353,64 +404,244 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
       closed_total = cp.sanitized_prefix <> sanitized_tail
       {fallback_view(closed_total), new_checkpoint()}
     else
-      closed_tail = do_provisional_close(sanitized_tail)
+      render_incremental_tail(cp, text, raw_tail, sanitized_tail, width)
+    end
+  end
 
-      if byte_size(cp.sanitized_prefix) + byte_size(closed_tail) >
-           @render_byte_cap do
-        {fallback_view(cp.sanitized_prefix <> closed_tail), new_checkpoint()}
-      else
-        tail_elements = MarkdownRenderer.render_with_builtin(closed_tail, width)
+  defp render_incremental_tail(
+         %Checkpoint{open_fence: nil} = cp,
+         text,
+         raw_tail,
+         sanitized_tail,
+         width
+       ) do
+    closed_tail = do_provisional_close(sanitized_tail)
 
-        view = %{
-          type: :column,
-          children: cp.frozen_elements ++ tail_elements,
-          style: %{},
-          gap: 0
-        }
+    if byte_size(cp.sanitized_prefix) + byte_size(closed_tail) >
+         @render_byte_cap do
+      {fallback_view(cp.sanitized_prefix <> closed_tail), new_checkpoint()}
+    else
+      tail_elements = MarkdownRenderer.render_with_builtin(closed_tail, width)
 
-        new_cp = advance_checkpoint(cp, text, raw_tail, sanitized_tail, width)
-        {view, new_cp}
-      end
+      view = %{
+        type: :column,
+        children: cp.frozen_elements ++ tail_elements,
+        style: %{},
+        gap: 0
+      }
+
+      new_cp = advance_checkpoint(cp, text, raw_tail, sanitized_tail, width)
+      {view, new_cp}
+    end
+  end
+
+  defp render_incremental_tail(
+         %Checkpoint{open_fence: {opener, drop}} = cp,
+         text,
+         raw_tail,
+         sanitized_tail,
+         width
+       ) do
+    synthetic = opener <> "\n" <> sanitized_tail
+    closed_syn = do_provisional_close(synthetic)
+
+    # Safe: `do_provisional_close/1` never edits the opener line itself
+    # (`strip_ambiguous_fence_opener/1` only ever touches the LAST line,
+    # and a fence-tagged line is otherwise copied byte-for-byte; the
+    # fence closer, if appended, lands at the very END) -- so the first
+    # `byte_size(opener) + 1` bytes of `closed_syn` are byte-identical to
+    # `synthetic`'s own prefix, and slicing them off recovers exactly the
+    # closed FORM of the live tail, keeping cap accounting byte-exact
+    # against the oracle (which closes the same tail from the same
+    # opener, just via the full accumulated prefix instead of this
+    # reconstruction).
+    closed_tail_equiv =
+      binary_part(
+        closed_syn,
+        byte_size(opener) + 1,
+        byte_size(closed_syn) - byte_size(opener) - 1
+      )
+
+    if byte_size(cp.sanitized_prefix) + byte_size(closed_tail_equiv) >
+         @render_byte_cap do
+      {fallback_view(cp.sanitized_prefix <> closed_tail_equiv),
+       new_checkpoint()}
+    else
+      tail_elements =
+        closed_syn
+        |> MarkdownRenderer.render_with_builtin(width)
+        |> Enum.drop(drop)
+        |> drop_zero_content_phantom(opener, sanitized_tail)
+
+      view = %{
+        type: :column,
+        children: cp.frozen_elements ++ tail_elements,
+        style: %{},
+        gap: 0
+      }
+
+      new_cp = advance_checkpoint(cp, text, raw_tail, sanitized_tail, width)
+      {view, new_cp}
     end
   end
 
   defp advance_checkpoint(cp, text, raw_tail, sanitized_tail, width) do
     lines = String.split(sanitized_tail, "\n")
     complete_line_count = length(lines) - 1
+    initial_state = initial_scan_state(cp.open_fence)
 
-    case find_safe_boundary(lines, complete_line_count, raw_tail) do
+    case find_safe_boundary(lines, complete_line_count, raw_tail, initial_state) do
       nil ->
         cp
 
-      {raw_delta, san_delta} ->
+      {raw_delta, san_delta, mode} ->
         segment_sanitized = binary_part(sanitized_tail, 0, san_delta)
         seg_parse_text = binary_part(segment_sanitized, 0, san_delta - 1)
 
+        {prefix_text, drop_count} =
+          case cp.open_fence do
+            nil -> {"", 0}
+            {opener, drop} -> {opener <> "\n", drop}
+          end
+
+        full_seg_text = prefix_text <> seg_parse_text
+
         seg_elements =
-          MarkdownRenderer.render_with_builtin(seg_parse_text, width)
+          full_seg_text
+          |> MarkdownRenderer.render_with_builtin(width)
+          |> Enum.drop(drop_count)
+          |> drop_zero_content_phantom_segment(cp.open_fence, segment_sanitized)
+          |> drop_open_fence_trailing_blank(mode)
+
+        new_open_fence =
+          case mode do
+            {:fence, opener} -> {opener, fence_drop_count(opener, width)}
+            :normal -> nil
+          end
 
         %Checkpoint{
           frozen_byte_offset: cp.frozen_byte_offset + raw_delta,
           frozen_elements: cp.frozen_elements ++ seg_elements,
           raw_prefix: binary_part(text, 0, cp.frozen_byte_offset + raw_delta),
           sanitized_prefix: cp.sanitized_prefix <> segment_sanitized,
-          width: width
+          width: width,
+          open_fence: new_open_fence
         }
     end
   end
 
+  defp initial_scan_state(nil), do: {false, false, [], nil}
+
+  defp initial_scan_state({opener, _drop}) do
+    marker = raw_fence_marker_of(opener)
+    {marker, marker, [], opener}
+  end
+
+  # The trailing blank line of an OPEN fence's `fenced_code_elements/2`
+  # output moves as content grows, so it must never freeze -- drop it
+  # from a segment that ENTERS the next call still inside the (same or a
+  # newly-opened) fence. A segment that closes the fence (`:normal`)
+  # keeps every element: a closed fence's trailing blank is permanently
+  # fixed, exactly like any other closed construct.
+  defp drop_open_fence_trailing_blank(seg_elements, {:fence, _opener}),
+    do: Enum.drop(seg_elements, -1)
+
+  defp drop_open_fence_trailing_blank(seg_elements, :normal), do: seg_elements
+
+  # ZERO-CONTENT PHANTOM guard for the checkpoint-advance path. When this
+  # segment enters an ALREADY-open fence (`cp.open_fence != nil`) and its
+  # own newly-committed lines close that fence on their very FIRST line
+  # (zero real content lines of its own -- the rest of the block's
+  # content already lives in `cp.frozen_elements`, invisible to this
+  # local re-parse of just `opener <> segment`), `fenced_code_elements/2`
+  # still fabricates one spurious `"  "` element from `"" |> String.split
+  # ("\n")`. Drop it. A segment whose first line is itself a real (even
+  # blank) content line before any close is unaffected -- `fenced_
+  # code_elements/2`'s single `"  "` for a genuine blank content line
+  # must NOT be dropped.
+  defp drop_zero_content_phantom_segment(seg_elements, nil, _segment_sanitized),
+    do: seg_elements
+
+  defp drop_zero_content_phantom_segment(
+         seg_elements,
+         {opener, _drop},
+         segment_sanitized
+       ) do
+    marker = raw_fence_marker_of(opener)
+    body_lines = String.split(segment_sanitized, "\n")
+
+    if fence_zero_own_content?(marker, body_lines) do
+      Enum.drop(seg_elements, 1)
+    else
+      seg_elements
+    end
+  end
+
+  # Same guard as `drop_zero_content_phantom_segment/3`, for the VIEW
+  # path (`render_incremental_tail/5`'s fence branch): `sanitized_tail`
+  # here is the live (not-yet-frozen) tail, and its first line -- even a
+  # still-partial one with no trailing `"\n"` yet -- is what determines
+  # whether `do_provisional_close/1`'s fence scan treats this fence as
+  # closing: that scan matches a closer via `fence_marker_of/1` on
+  # WHATEVER line sits there, complete or not (it has no notion of
+  # "committed" the way `find_safe_boundary/4` does), so an in-progress
+  # `` ``` `` typed as the very first new line closes the reconstruction
+  # exactly as it would close a genuinely-final one.
+  defp drop_zero_content_phantom(tail_elements, opener, sanitized_tail) do
+    marker = raw_fence_marker_of(opener)
+    body_lines = String.split(sanitized_tail, "\n")
+
+    if fence_zero_own_content?(marker, body_lines) do
+      Enum.drop(tail_elements, 1)
+    else
+      tail_elements
+    end
+  end
+
+  # `true` iff `body_lines` (a fence's OWN newly-reconstructed content
+  # lines, split by "\n", EXCLUDING the opener) closes the fence at its
+  # very FIRST line -- contributing zero real content lines of its own
+  # before the close. `take_until_fence/3` (the renderer's fence content
+  # scanner) recognizes a closer via a RAW `String.starts_with?/2` check
+  # against the exact opening marker, so this mirrors that exactly;
+  # `do_provisional_close/1`'s own fence scan uses the equivalent
+  # trimmed-prefix check (`fence_marker_of/1`), which agrees with the raw
+  # check whenever the marker itself is raw-prefix (guaranteed here,
+  # since `open_fence` is only ever set for a raw-prefix-eligible
+  # opener -- see the checkpoint rule's fence bullet).
+  defp fence_zero_own_content?(_marker, []), do: false
+
+  defp fence_zero_own_content?(marker, [first | _]),
+    do: String.starts_with?(first, marker)
+
+  # Probes the element shape of a fresh, standalone parse of just
+  # `opener_line` (no trailing newline) to derive how many LEADING
+  # elements (`fenced_code_elements/2`'s blank, plus an optional language
+  # label) precede its first content element. Parsing `opener_line`
+  # alone yields `[blank, label?, <one phantom content element from the
+  # zero-content parse>, blank]` -- length minus 2 is exactly the leading
+  # count. Structurally coupled to `fenced_code_elements/2`'s element
+  # shape; the stable-prefix equivalence property tests guard this
+  # coupling against drift.
+  defp fence_drop_count(opener_line, width) do
+    length(MarkdownRenderer.render_with_builtin(opener_line, width)) - 2
+  end
+
   # Finds the LAST safe boundary among `sanitized_tail`'s complete lines
   # (the first `complete_line_count` entries of `lines` -- the final,
-  # still-partial line is never a candidate). Threads four pieces of
-  # state left-to-right, all starting clean per the invariant that the
-  # frozen prefix always ends balanced: the renderer's raw-prefix fence
-  # machine, provisional-close's trimmed-prefix fence machine, and the
-  # inline scan stack (updated only on lines the trimmed machine tags
-  # `:prose`). Returns `{raw_delta, san_delta}` for the winning candidate
-  # or `nil` if none survive.
-  defp find_safe_boundary(_lines, 0, _raw_tail), do: nil
+  # still-partial line is never a candidate). Threads scan state
+  # left-to-right, seeded from `initial_state` (derived from the
+  # checkpoint's `open_fence`, so a fence already open in the frozen
+  # prefix carries forward rather than restarting clean): the renderer's
+  # raw-prefix fence machine, provisional-close's trimmed-prefix fence
+  # machine, the inline scan stack (updated only on lines the trimmed
+  # machine tags `:prose`), and the still-open fence's ELIGIBLE opener
+  # line (or `nil`). Returns `{raw_delta, san_delta, mode}` for the
+  # winning candidate -- `mode` is `:normal` or `{:fence, opener_line}`
+  # -- or `nil` if none survive.
+  defp find_safe_boundary(_lines, 0, _raw_tail, _initial_state), do: nil
 
-  defp find_safe_boundary(lines, complete_line_count, raw_tail) do
+  defp find_safe_boundary(lines, complete_line_count, raw_tail, initial_state) do
     {valid_prefix, _rest} = longest_valid_utf8_prefix(raw_tail)
     max_raw_delta = byte_size(valid_prefix)
 
@@ -427,16 +658,22 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
       lines
       |> Enum.take(complete_line_count)
       |> Enum.zip(raw_newline_positions)
-      |> Enum.reduce({{false, false, []}, nil, 0}, fn {line, raw_pos},
-                                                      {state, best, san_offset} ->
-        {new_state, safe?} = step_scan_state(state, line)
+      |> Enum.reduce({initial_state, nil, 0}, fn {line, raw_pos},
+                                                 {state, best, san_offset} ->
+        {new_state, candidate} = step_scan_state(state, line)
         san_offset = san_offset + byte_size(line) + 1
         raw_delta = raw_pos + 1
 
         best =
-          if safe? and raw_delta <= max_raw_delta,
-            do: {raw_delta, san_offset},
-            else: best
+          case candidate do
+            nil ->
+              best
+
+            mode ->
+              if raw_delta <= max_raw_delta,
+                do: {raw_delta, san_offset, mode},
+                else: best
+          end
 
         {new_state, best, san_offset}
       end)
@@ -444,7 +681,24 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
     best
   end
 
-  defp step_scan_state({m1, m2, stack}, line) do
+  # One line's contribution to the four-part scan state `{m1, m2, stack,
+  # eligible}`: `m1` is provisional-close's TRIMMED-prefix fence machine
+  # (via `fence_marker_of/1`, same as `fence_scan/1`), `m2` is the
+  # renderer's RAW-prefix machine (via `raw_fence_marker_of/1`, same as
+  # `parse_blocks`/`take_until_fence`), `stack` is the inline
+  # scan stack, and `eligible` is the still-open fence's opener line (or
+  # `nil`) -- set only when a fence opens IN SYNC (raw-prefix, both
+  # machines agreeing, empty inline stack going in), carried forward
+  # unchanged while the SAME fence stays open, and cleared the instant
+  # either machine closes.
+  #
+  # Returns `{new_state, candidate}` where `candidate` is `nil` (no safe
+  # boundary at this line), `:normal` (both fence machines closed, no
+  # live inline state, no pipe -- the existing boundary rule), or
+  # `{:fence, opener}` (this line is a committed CONTENT line of a still-
+  # open, eligible fence -- safe to freeze because every such line maps
+  # to exactly one immutable code element, appended in order).
+  defp step_scan_state({m1, m2, stack, eligible}, line) do
     {new_m1, tag1} = fence_step(m1, fence_marker_of(line))
     {new_m2, _tag2} = fence_step(m2, raw_fence_marker_of(line))
 
@@ -455,11 +709,38 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
         stack
       end
 
-    safe? =
-      new_m1 == false and new_m2 == false and new_stack == [] and
-        not String.contains?(line, "|")
+    new_eligible =
+      cond do
+        new_m1 == false ->
+          nil
 
-    {{new_m1, new_m2, new_stack}, safe?}
+        m1 == false ->
+          if m2 == false and new_m2 == new_m1 and
+               raw_fence_marker_of(line) == new_m1 and stack == [] do
+            line
+          else
+            nil
+          end
+
+        true ->
+          eligible
+      end
+
+    candidate =
+      cond do
+        new_m1 == false and new_m2 == false and new_stack == [] and
+            not String.contains?(line, "|") ->
+          :normal
+
+        m1 != false and new_eligible != nil and new_m1 == m1 and
+            new_stack == [] ->
+          {:fence, new_eligible}
+
+        true ->
+          nil
+      end
+
+    {{new_m1, new_m2, new_stack, new_eligible}, candidate}
   end
 
   # The renderer's own fence detector (`parse_blocks`/`take_until_fence`)
