@@ -306,7 +306,14 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
 
       for block <- model.projection.blocks do
         block
-        |> BlockBody.render(%{width: content_width})
+        |> BlockBody.render(%{
+          width: content_width,
+          # Mirrors Surface.render_block_lines/3's absence-row
+          # suppression flag (V ruling; policy seat
+          # Block.completion_rows/3) -- the reconstruction must render
+          # under the same policy the real seal path did.
+          turn_has_tools?: reconstructed_turn_has_tools?(block, model)
+        })
         |> ViewText.lines(content_width, :styled)
         |> decorate_lines(block)
         |> Enum.map(&[&1, "\r\n"])
@@ -331,6 +338,32 @@ defmodule Raxol.Harness.Surface.GoldenSnapshotTest do
     end
 
     defp decorate_lines(lines, _block), do: Enum.map(lines, &(" " <> &1))
+
+    # An INDEPENDENT re-derivation of the Surface's window fact (same
+    # referent -- the block's own turn's events -- computed here from
+    # scratch so the reconstruction never just echoes the module under
+    # test).
+    defp reconstructed_turn_has_tools?(block, model) do
+      events = model.projection.source_events
+      refs = MapSet.new(block.event_refs || [])
+
+      turn_id =
+        Enum.find_value(events, fn event ->
+          if MapSet.member?(refs, Map.get(event, :id)),
+            do: Map.get(event, :turn_id)
+        end)
+
+      turn_id == nil or
+        Enum.any?(events, fn event ->
+          payload = Map.get(event, :payload)
+
+          Map.get(event, :turn_id) == turn_id and is_map(payload) and
+            (Map.get(payload, "item_type") || Map.get(payload, :item_type)) in [
+              "tool_use",
+              "tool_result"
+            ]
+        end)
+    end
 
     defp plain_lines(styled_binary) do
       styled_binary

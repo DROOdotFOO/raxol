@@ -300,7 +300,13 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         # below the last content row instead of claiming the whole
         # screen -- it pins itself at the bottom once content reaches
         # it (immediately, on a guest boot from a bottom-row prompt).
-        pin: :adaptive,
+        # V ruling: input at the SCREEN BOTTOM always. A guest boot
+        # bottom-pins at construction (the authority's default
+        # placement); the :top fallback (probe off/failed) must not be
+        # the one path that still floats the footer at the top of a
+        # fresh screen -- pin immediately there (push-up already
+        # scrolled the shell's content into scrollback).
+        pin: if(boot == :top, do: :immediate, else: :adaptive),
         boot: boot,
         # The boot greeting ("welcome back, operator", centered in the
         # unclaimed span, dim) -- ephemeral: the Surface erases it the
@@ -392,6 +398,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         turn_task: nil,
         queue: [],
         tap: debug && debug.tap,
+        debug?: debug?,
         mode: if(one_shot, do: :one_shot, else: :interactive)
       }
 
@@ -461,7 +468,13 @@ defmodule Raxol.Examples.HarnessLiveDemo do
   # a persistent lane notice so the pilot SEES the flip happen (and a
   # field report of the session carries it), instead of silently winning
   # or silently losing the fight.
-  defp handle_msg(state, {:inline_isig_reasserted}) do
+  # Rendered as a lane notice ONLY under --debug (V ruling): the guard
+  # catching prim_tty's re-init is EXPECTED at boot -- a notice that
+  # fires constantly is diagnostics, not operator-facing honesty; the
+  # honesty contract is satisfied by the ^C path WORKING. The default
+  # frame stays silent; the re-assert count still lands on the --debug
+  # POST card via InlineDriver.isig_report/1.
+  defp handle_msg(%{debug?: true} = state, {:inline_isig_reasserted}) do
     send(
       state.driver,
       {:surface_command,
@@ -476,6 +489,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
 
     {:cont, state}
   end
+
+  defp handle_msg(state, {:inline_isig_reasserted}), do: {:cont, state}
 
   # The driver ended its loop (q on empty composer) -- teardown runs in
   # the caller's `after` block.

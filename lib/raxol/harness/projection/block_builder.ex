@@ -215,20 +215,29 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   side and are untrusted exactly like any other tool-call/tool-result
   payload this module already folds.
 
-  ## Known conflation (fail-open wire)
+  ## Known conflation (fail-open wire) -- and where V's ruling lives
 
   The producer emits `final: true` with NO `refs` key for at least THREE
   indistinguishable states: gate-rejected evidence, a "done" citing
   nothing at all, and a trivial tool-free turn with nothing to cite. The
-  wire carries no rejection marker distinguishing them, so the absence
-  row (`%{evidence: :none}`, "no evidence provided") is INTENTIONALLY
-  unconditional -- per the ratified design creed, absence renders "no
-  evidence provided" explicitly regardless of WHICH of the three states
-  produced it. Disambiguating them needs a producer-side wire change
-  (tracked cross-lane, not this module's concern); the zero-tool-turn
-  policy question is deliberately parked in the producer's gate. Do not
-  weaken the absence row trying to guess which of the three states it
-  was.
+  wire carries no rejection marker distinguishing them, so at THIS layer
+  the absence marker (`%{evidence: :none}`) stays UNCONDITIONAL -- the
+  projection is governed by the frozen offset/assembly law (P-ASM,
+  P-DET-04: two surfaces attaching at different offsets must converge to
+  one transcript identity), and any window-dependent attach decision
+  (e.g. "did this turn carry tool events?") diverges under a mid-turn
+  attach that cannot see the turn's earlier events. V's field ruling
+  (2026-07-17: "no evidence provided" on a pure chat turn is noise --
+  no tool ran, so no evidence could ever have existed) is therefore
+  implemented one layer up, at RENDER time: the Surface derives
+  `turn_has_tools?` from its own window and threads it into
+  `Block.completion_rows/3`, which suppresses the absence ROW (never
+  the attached marker) for tool-free turns. Identity untouched, display
+  de-noised; the row remains fail-safe-visible for any renderer that
+  does not pass the flag. The remaining conflated states (gate-rejected
+  vs cited-nothing on a tool-bearing turn) stay pending the
+  producer-side wire change (tracked cross-lane, not this module's
+  concern).
 
   ## Staleness under compaction
 

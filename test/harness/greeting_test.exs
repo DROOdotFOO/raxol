@@ -113,14 +113,15 @@ defmodule Raxol.Harness.GreetingTest do
   end
 
   # Pinned boot at this geometry: unclaimed span is rows 1..@region_top
-  # (next_row 1, history bottom 14), so the greeting row is
-  # 1 + div(14 - 1, 2) = 7; the 22-col text centers at col
-  # div(60 - 22, 2) + 1 = 20.
-  @greeting_row 1 + div(@region_top - 1, 2)
-  @greeting_col div(@width - 22, 2) + 1
+  # (next_row 1, history bottom 14). The intro line sits at the BOTTOM
+  # of the span, one blank row above the footer (V mock: transcript
+  # position, directly above the chevron) -- row 13 -- at column 2
+  # (after the 1-column transcript margin, never centered).
+  @greeting_row @region_top - 1
+  @greeting_col 2
 
-  describe "painted centered on the boot frame" do
-    test "the greeting lands at the span center, dim, via one positioned write" do
+  describe "painted as an in-flow intro line above the chevron" do
+    test "the greeting lands at the transcript position, dim, via one positioned write" do
       {_model, device} = new_model([], greeting: true)
       bytes = raw(device)
 
@@ -129,12 +130,18 @@ defmodule Raxol.Harness.GreetingTest do
       # dim channel through the normal SGR path
       assert bytes =~ "\e[2m#{@text}\e[0m"
 
-      # And on the replayed screen it sits exactly there.
-      row_text = Enum.at(screen_rows(device), @greeting_row - 1)
+      # And on the replayed screen it sits exactly there -- margined
+      # like transcript content, with a blank row between it and the
+      # footer (the chevron row).
+      rows = screen_rows(device)
+      row_text = Enum.at(rows, @greeting_row - 1)
       assert row_text =~ @text
 
       col = :binary.match(row_text, @text) |> elem(0) |> Kernel.+(1)
       assert col == @greeting_col
+
+      assert Enum.at(rows, @region_top - 1) == "",
+             "one blank row must sit between the intro line and the footer"
     end
 
     test "the text itself is width-honest (22 single-width columns)" do

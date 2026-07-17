@@ -69,7 +69,7 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   def render(%Block{fold: :expanded} = block, context) do
     case mount_body(block, context) do
       {:ok, view} ->
-        wrap_with_completion(view, block)
+        wrap_with_completion(view, block, context)
 
       {:error, reason} ->
         emit_recovered(block.kind, reason)
@@ -89,8 +89,12 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   # what keeps this module's own "byte-identical when there is nothing to
   # add" promise honest for that unrecognised-shape case too -- see the
   # moduledoc.
-  defp wrap_with_completion(view, %Block{} = block) do
-    case Block.completion_rows(block) do
+  # `context` is threaded so the absence-row suppression flag
+  # (`turn_has_tools?`, see Block.completion_rows/3) reaches the row on
+  # the mounted-component path too -- both fold states must obey one
+  # policy.
+  defp wrap_with_completion(view, %Block{} = block, context) do
+    case Block.completion_rows(block, nil, context) do
       [] -> view
       rows -> Components.column(gap: 0, children: [view | rows])
     end

@@ -4,5 +4,4 @@
  The ledger fold consulted the seal frontier after the fold
  ran; it now starts at the frontier offset, so the debit
  replays exactly once.
- [2mno evidence provided[0m
 8[?25l7[15;1H[K[1m❯[0m  [16;1H[K[17;1H[K[18;1H[K8[15;3H[?25h

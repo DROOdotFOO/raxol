@@ -11,4 +11,3 @@
 " · mix_test — 42 tests, 0 failures\n"
 "\n"
 " Sounds good, wrapping up now.\n"
-" no evidence provided\n"

@@ -5,4 +5,3 @@
 " The ledger fold consulted the seal frontier after the fold\n"
 " ran; it now starts at the frontier offset, so the debit\n"
 " replays exactly once.\n"
-" no evidence provided\n"

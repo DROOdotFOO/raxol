@@ -452,7 +452,7 @@ defmodule Raxol.UI.Components.Harness.Block do
     fg = prominence_fg(block, context)
     header = header_view(block, width, fg)
     outcome_children = outcome_row_view(block.outcome, fg)
-    completion_children = completion_rows(block, fg)
+    completion_children = completion_rows(block, fg, context)
 
     body_children =
       case block.fold do
@@ -917,13 +917,34 @@ defmodule Raxol.UI.Components.Harness.Block do
   Returns `[]` when the key is absent or its shape isn't recognised --
   byte-identical to a render that never carries a `:completion` key at
   all.
+
+  Suppression policy (V field ruling, 2026-07-17): the caller may pass a
+  render context carrying `turn_has_tools?: false` -- the Surface's own
+  window-derived "no tool ran in this turn" fact -- and the ABSENCE row
+  (only that row; evidence rows are never suppressed) renders as `[]`:
+  on a pure chat turn no evidence could ever have existed, so "no
+  evidence provided" is noise, not honesty. The policy lives HERE (the
+  render layer) and never in the projection: the attached
+  `%{evidence: :none}` marker is part of the offset-law-governed
+  transcript identity and stays unconditional there. Absent the flag
+  (or `turn_has_tools?: true`) the row renders -- fail-safe toward
+  showing the alarm.
   """
-  @spec completion_rows(t(), String.t() | nil) :: [map()]
-  def completion_rows(block, fg \\ nil)
+  @spec completion_rows(t(), String.t() | nil, map()) :: [map()]
+  def completion_rows(block, fg \\ nil, context \\ %{})
 
   def completion_rows(
         %__MODULE__{content: %{completion: %{evidence: :none}}},
-        fg
+        _fg,
+        %{turn_has_tools?: false}
+      ) do
+    []
+  end
+
+  def completion_rows(
+        %__MODULE__{content: %{completion: %{evidence: :none}}},
+        fg,
+        _context
       ) do
     [completion_text("no evidence provided", fg)]
   end
@@ -939,7 +960,8 @@ defmodule Raxol.UI.Components.Harness.Block do
               } = completion
           }
         },
-        fg
+        fg,
+        _context
       )
       when is_list(entries) do
     cross_turn_count = Map.get(completion, :cross_turn_count)
@@ -957,7 +979,7 @@ defmodule Raxol.UI.Components.Harness.Block do
       completion_more_row(total, entries, cross_turn_count, fg)
   end
 
-  def completion_rows(%__MODULE__{}, _fg), do: []
+  def completion_rows(%__MODULE__{}, _fg, _context), do: []
 
   defp completion_text(content, fg) do
     Components.text(content: content, style: apply_fg(%{dim: true}, fg))

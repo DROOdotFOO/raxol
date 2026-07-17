@@ -109,7 +109,13 @@ defmodule Raxol.Examples.HarnessFixtureDemo do
         # FOOTER-FOLLOWS-CONTENT: start with the footer floating directly
         # below the (empty) history instead of claiming the whole screen
         # -- it pins itself at the bottom once content reaches it.
-        pin: :adaptive,
+        # V ruling: input at the SCREEN BOTTOM always. A guest boot
+        # bottom-pins at construction (the authority's default
+        # placement); the :top fallback (probe off/failed) must not be
+        # the one path that still floats the footer at the top of a
+        # fresh screen -- pin immediately there (push-up already
+        # scrolled the shell's content into scrollback).
+        pin: if(boot == :top, do: :immediate, else: :adaptive),
         boot: boot,
         # The boot greeting ("welcome back, operator"): ephemeral,
         # erased by the Surface the instant the first sealed content

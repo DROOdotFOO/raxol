@@ -5,5 +5,4 @@
 " The ledger fold consulted the seal frontier after the fold\r\n"
 " ran; it now starts at the frontier offset, so the debit\r\n"
 " replays exactly once.\r\n"
-" \e[2mno evidence provided\e[0m\r\n"
 "\e8\e[?25l\e7\e[15;1H\e[K\e[1m❯\e[0m  \e[16;1H\e[K\e[17;1H\e[K\e[18;1H\e[K\e8\e[15;3H\e[?25h"

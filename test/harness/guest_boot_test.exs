@@ -133,13 +133,20 @@ defmodule Raxol.Harness.GuestBootTest do
   end
 
   # ------------------------------------------------------------------
-  # Placement math: the floating boot (prompt mid-screen)
+  # Placement math: the LEGACY float (opt-in via guest_placement: :float
+  # -- V's ruling made bottom-pin the default; see the next describe)
   # ------------------------------------------------------------------
 
-  describe "guest boot, prompt mid-screen (floating)" do
+  describe "guest boot, prompt mid-screen (legacy :float opt-in)" do
     test "construction emits zero bytes; the footer floats at the probe row" do
       device = new_device()
-      auth = new_auth(device, pin: :adaptive, boot_cursor: {5, 1})
+
+      auth =
+        new_auth(device,
+          pin: :adaptive,
+          boot_cursor: {5, 1},
+          guest_placement: :float
+        )
 
       assert raw(device) == ""
       assert auth.pin_state == :floating
@@ -159,7 +166,11 @@ defmodule Raxol.Harness.GuestBootTest do
 
       auth =
         device
-        |> new_auth(pin: :adaptive, boot_cursor: {5, 1})
+        |> new_auth(
+          pin: :adaptive,
+          boot_cursor: {5, 1},
+          guest_placement: :float
+        )
         |> InlineAuthority.keyframe(footer_lines())
 
       auth = InlineAuthority.seal(auth, seal_lines(2))
@@ -179,7 +190,11 @@ defmodule Raxol.Harness.GuestBootTest do
 
       {auth, bytes} =
         frame_bytes(device, fn ->
-          new_auth(device, pin: :adaptive, boot_cursor: {5, 9})
+          new_auth(device,
+            pin: :adaptive,
+            boot_cursor: {5, 9},
+            guest_placement: :float
+          )
         end)
 
       # One native \r\n -- never an overwrite of the partial line -- and
@@ -194,7 +209,11 @@ defmodule Raxol.Harness.GuestBootTest do
 
       auth =
         device
-        |> new_auth(pin: :adaptive, boot_cursor: {3, 1})
+        |> new_auth(
+          pin: :adaptive,
+          boot_cursor: {3, 1},
+          guest_placement: :float
+        )
         |> InlineAuthority.keyframe(footer_lines())
 
       # 6 rows starting at row 3: next_row 3 -> 9 > bottom 8, so the
@@ -208,6 +227,60 @@ defmodule Raxol.Harness.GuestBootTest do
       assert SealOracle.region_sets(transition_bytes) == [{1, @bottom}]
       assert auth.pin_state == :pinned
       assert auth.next_row == @bottom
+    end
+  end
+
+  # ------------------------------------------------------------------
+  # Placement math: the DEFAULT bottom-pin (V ruling -- input at the
+  # screen bottom from frame one; supersedes shell-join)
+  # ------------------------------------------------------------------
+
+  describe "guest boot, prompt mid-screen (DEFAULT: bottom-pin)" do
+    test "construction pins at the bottom with zero scroll bytes; content start stays at the probe row" do
+      device = new_device()
+
+      {auth, bytes} =
+        frame_bytes(device, fn ->
+          new_auth(device, pin: :adaptive, boot_cursor: {5, 1})
+        end)
+
+      # One region write, no newline scroll (nothing below the prompt to
+      # push), nothing repainted.
+      assert SealOracle.region_sets(bytes) == [{1, @bottom}]
+      refute bytes =~ "\n\n"
+      assert auth.pin_state == :pinned
+      assert auth.next_row == 5
+    end
+
+    test "the first footer keyframe paints at the TRUE bottom rows, never at the probe row" do
+      device = new_device()
+
+      auth = new_auth(device, pin: :adaptive, boot_cursor: {5, 1})
+
+      {_auth, bytes} =
+        frame_bytes(device, fn ->
+          InlineAuthority.keyframe(auth, footer_lines())
+        end)
+
+      assert Enum.sort(Enum.uniq(cup_h_rows(bytes))) ==
+               Enum.to_list((@bottom + 1)..@rows)
+    end
+
+    test "shell rows above the probe row are never addressed" do
+      device = new_device()
+
+      auth =
+        device
+        |> new_auth(pin: :adaptive, boot_cursor: {5, 1})
+        |> InlineAuthority.keyframe(footer_lines())
+
+      auth = InlineAuthority.seal(auth, seal_lines(2))
+      _auth = InlineAuthority.repaint(auth, footer_lines())
+
+      rows_addressed = cup_h_rows(raw(device))
+      assert rows_addressed != []
+      assert Enum.min(rows_addressed) >= 5
+      refute SealOracle.emits_full_clear?(raw(device))
     end
   end
 
@@ -496,19 +569,20 @@ defmodule Raxol.Harness.GuestBootTest do
       {model, device}
     end
 
-    test "mid-screen guest boot: the first frame paints AT the prompt, nothing above it" do
+    test "mid-screen guest boot: pinned at the bottom from frame one, shell rows untouched" do
       {_model, device} =
         new_surface(pin: :adaptive, boot: {:guest, {10, 1}})
 
       bytes = raw(device)
-      assert SealOracle.region_sets(bytes) == []
+      # V ruling: input at the screen bottom always -- the region pins
+      # at construction (20 rows / 6 footer -> split at 14) and the
+      # footer paints at the true bottom rows; shell rows 1..9 are
+      # never addressed.
+      assert SealOracle.region_sets(bytes) == [{1, 14}]
 
       rows_addressed = cup_h_rows(bytes)
       assert rows_addressed != []
-      # The floating footer hugs the probe row: rows 10..15 on a 6-row
-      # footer, shell rows 1..9 untouched.
       assert Enum.min(rows_addressed) >= 10
-      assert Enum.max(rows_addressed) <= 15
     end
 
     test "bottom-row guest boot: bottom-anchored from the first frame" do

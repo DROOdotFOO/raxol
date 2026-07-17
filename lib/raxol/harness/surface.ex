@@ -637,7 +637,6 @@ defmodule Raxol.Harness.Surface do
   alias Raxol.Harness.StatusStrip
   alias Raxol.Harness.Surface.ViewText
   alias Raxol.Harness.UnreadDivider
-  alias Raxol.UI.TextMeasure
   alias Raxol.UI.Theming.Palette
 
   alias Raxol.UI.Components.Harness.{Block, BlockBody, Composer}
@@ -881,7 +880,8 @@ defmodule Raxol.Harness.Surface do
         footer_rows,
         caps,
         Keyword.get(opts, :pin, :immediate),
-        validate_boot!(Keyword.get(opts, :boot, :top))
+        validate_boot!(Keyword.get(opts, :boot, :top)),
+        Keyword.get(opts, :guest_placement, :bottom_pin)
       )
 
     {:ok, composer} =
@@ -941,17 +941,28 @@ defmodule Raxol.Harness.Surface do
     |> maybe_paint_greeting(Keyword.get(opts, :greeting, false))
   end
 
-  # -- the boot greeting (V's ruling: charm, not evidence) -----------------
+  # -- the boot greeting (V's ruling with mock: an in-flow intro line) -----
   #
-  # One dim, centered `welcome back, operator` line in the UNCLAIMED
-  # history span -- an ephemeral region element: painted after the
-  # construction frame, erased by `clear_greeting/1` immediately before
-  # the FIRST seal's bytes (same frame), and therefore never part of
-  # sealed history (print-once untouched -- it was never sealed at all).
-  # Doctrine check: a greeting claims nothing, so the unearned-ceremony
-  # falsifier does not fire; it stays one line, no art. Opt-in
-  # (`greeting: true`, the demos) so byte-golden embedders are
-  # untouched; flat mode has no positioning and never paints it.
+  # One dim `welcome back, operator` line rendered LIKE TRANSCRIPT
+  # CONTENT -- margined (the same 1-column left margin every sealed line
+  # carries), low prominence (§4.3 dim = supporting), sitting in the
+  # transcript position directly above the chevron:
+  #
+  #      welcome back, operator
+  #
+  #     ❯
+  #
+  # (one blank row between it and the footer when the unclaimed span has
+  # the room; flush against it when bottom-anchored to a single row).
+  # Still an EPHEMERAL region element, not a sealed block -- painted
+  # after the construction frame, erased by `clear_greeting/1`
+  # immediately before the FIRST seal's bytes (same frame), never part
+  # of print-once history. Kept as a transient (rather than an in-flow
+  # sealed block) deliberately: sealing it would make it permanent
+  # history and scroll it away -- the mock's intro sits at the input,
+  # then yields to real content. Opt-in (`greeting: true`, the demos) so
+  # byte-golden embedders are untouched; flat mode has no positioning
+  # and never paints it.
   @greeting_text "welcome back, operator"
 
   defp maybe_paint_greeting(model, false), do: model
@@ -963,13 +974,10 @@ defmodule Raxol.Harness.Surface do
         model
 
       {:ok, {from, to}} ->
-        row = from + div(to - from, 2)
-
-        col =
-          max(
-            div(model.width - TextMeasure.display_width(@greeting_text), 2),
-            0
-          ) + 1
+        # Bottom of the unclaimed span, one blank row above the footer
+        # when there is room -- the transcript position at a
+        # bottom-anchored layout.
+        row = max(to - 1, from)
 
         [styled] =
           ViewText.lines(
@@ -978,8 +986,10 @@ defmodule Raxol.Harness.Surface do
             :styled
           )
 
+        # Column 2 = after the 1-column left margin, exactly where every
+        # margined transcript line starts.
         authority =
-          InlineAuthority.paint_transient(model.authority, row, col, styled)
+          InlineAuthority.paint_transient(model.authority, row, 2, styled)
 
         %{model | authority: authority, greeting_rows: [row]}
     end
@@ -1082,7 +1092,8 @@ defmodule Raxol.Harness.Surface do
          _footer_rows,
          _caps,
          _pin,
-         _boot
+         _boot,
+         _guest_placement
        ),
        do: FlatAuthority.new(device, width, rows)
 
@@ -1094,13 +1105,18 @@ defmodule Raxol.Harness.Surface do
          footer_rows,
          caps,
          pin,
-         boot
+         boot,
+         guest_placement
        ),
        do:
          InlineAuthority.new(device, width, rows, footer_rows,
            capabilities: caps,
            pin: pin,
-           boot_cursor: boot_cursor(boot)
+           boot_cursor: boot_cursor(boot),
+           # :bottom_pin default (V ruling: input at the screen bottom
+           # from frame one); :float stays reachable for embedders that
+           # want the legacy shell-join placement.
+           guest_placement: guest_placement
          )
 
   defp boot_cursor(:top), do: nil
@@ -2229,7 +2245,8 @@ defmodule Raxol.Harness.Surface do
     block
     |> BlockBody.render(%{
       width: content_width(model),
-      prominence: block_prominence(block, model)
+      prominence: block_prominence(block, model),
+      turn_has_tools?: turn_has_tools?(block, model)
     })
     |> ViewText.lines(content_width(model), mode)
   end
@@ -2313,6 +2330,48 @@ defmodule Raxol.Harness.Surface do
          }) do
       nil -> %{bold: true}
       fg -> %{bold: true, fg: fg}
+    end
+  end
+
+  # The absence-row suppression referent (V field ruling; policy seat is
+  # `Block.completion_rows/3`, layering rationale in `BlockBuilder`'s
+  # "Known conflation" section): whether the block's OWN turn carried
+  # any tool activity, derived from THIS surface's window
+  # (`projection.source_events`) -- a display fact, deliberately outside
+  # the offset-law-governed transcript identity. Unknown turn (no source
+  # event matches the block's refs) fails toward `true`: over-reporting
+  # the absence alarm is the safe direction, suppressing it is not.
+  defp turn_has_tools?(block, model) do
+    events = model.projection.source_events
+
+    case block_turn_id(block, events) do
+      nil ->
+        true
+
+      turn_id ->
+        Enum.any?(events, fn event ->
+          Map.get(event, :turn_id) == turn_id and
+            event_item_type(event) in ["tool_use", "tool_result"]
+        end)
+    end
+  end
+
+  defp block_turn_id(block, events) do
+    refs = MapSet.new(block.event_refs || [])
+
+    Enum.find_value(events, fn event ->
+      if MapSet.member?(refs, Map.get(event, :id)),
+        do: Map.get(event, :turn_id)
+    end)
+  end
+
+  defp event_item_type(event) do
+    case Map.get(event, :payload) do
+      %{} = payload ->
+        Map.get(payload, "item_type") || Map.get(payload, :item_type)
+
+      _other ->
+        nil
     end
   end
 
@@ -4219,7 +4278,10 @@ defmodule Raxol.Harness.Surface do
       {block, index} ->
         block
         |> apply_fold_override(index, model.fold_overrides)
-        |> BlockBody.render(%{width: content_width(model)})
+        |> BlockBody.render(%{
+          width: content_width(model),
+          turn_has_tools?: turn_has_tools?(block, model)
+        })
         |> ViewText.lines(content_width(model), :plain)
         |> Enum.take(2)
     end

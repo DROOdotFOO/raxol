@@ -126,7 +126,14 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
 
   # -- 2. absence arm -----------------------------------------------------
 
-  describe "projection: absence arm" do
+  describe "projection: absence arm (unconditional at THIS layer -- offset law)" do
+    # The projection attaches `%{evidence: :none}` unconditionally: the
+    # transcript identity is governed by the frozen offset/assembly law
+    # (P-ASM / P-DET-04), and any window-dependent attach decision
+    # diverges under a mid-turn attach. V's field ruling ("no evidence
+    # provided" on a chat turn is noise) is implemented at RENDER time
+    # -- see the "render: absence-row suppression" describe below.
+
     test "final:true with no refs key attaches :none" do
       events =
         List.flatten([
@@ -161,6 +168,83 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
 
       proj = Projection.project(events)
       assert last_block(proj).content.completion == %{evidence: :none}
+    end
+  end
+
+  # -- 2b. render-layer suppression (V field ruling) ------------------------
+
+  describe "render: absence-row suppression (V field ruling, 2026-07-17)" do
+    # "no evidence provided" on a pure chat turn is noise -- no tool ran,
+    # so no evidence could ever have existed. The policy seat is
+    # `Block.completion_rows/3`: a render context with
+    # `turn_has_tools?: false` suppresses the ABSENCE row only; without
+    # the flag the row renders (fail-safe toward the alarm), and
+    # evidence rows are never suppressed.
+
+    defp chat_absence_block do
+      events =
+        List.flatten([
+          loop(1, "t1", 100, :turn_started, %{}),
+          message(2, "t1", 200, "Done."),
+          turn_completed(4, "t1", 300, %{})
+        ])
+
+      last_block(Projection.project(events))
+    end
+
+    test "chat-only turn: the absence row is suppressed under turn_has_tools?: false" do
+      assert Block.completion_rows(chat_absence_block(), nil, %{
+               turn_has_tools?: false
+             }) == []
+    end
+
+    test "the folded/expanded render drops the row under the flag, keeps it without" do
+      block = chat_absence_block()
+
+      for fold <- [:folded, :expanded] do
+        with_flag =
+          flat_texts(
+            Block.render(%{block | fold: fold}, %{turn_has_tools?: false})
+          )
+
+        without_flag = flat_texts(Block.render(%{block | fold: fold}, %{}))
+
+        refute Enum.any?(with_flag, &(&1 == "no evidence provided"))
+        assert Enum.any?(without_flag, &(&1 == "no evidence provided"))
+      end
+    end
+
+    test "tool-bearing turn: turn_has_tools?: true keeps the absence row" do
+      events =
+        List.flatten([
+          loop(1, "t1", 100, :turn_started, %{}),
+          tool_round_trip(2, "t1", 200, "mix_test", "ok"),
+          message(6, "t1", 300, "Done."),
+          turn_completed(8, "t1", 400, %{})
+        ])
+
+      block = last_block(Projection.project(events))
+
+      texts =
+        Block.render(block, %{turn_has_tools?: true}) |> flat_texts()
+
+      assert Enum.any?(texts, &(&1 == "no evidence provided"))
+    end
+
+    test "evidence rows are NEVER suppressed, whatever the flag says" do
+      events =
+        List.flatten([
+          loop(1, "t1", 100, :turn_started, %{}),
+          tool_round_trip(2, "t1", 200, "mix_test", "42 tests, 0 failures"),
+          turn_completed(6, "t1", 300, %{"refs" => [5]})
+        ])
+
+      block = last_block(Projection.project(events))
+
+      texts =
+        Block.render(block, %{turn_has_tools?: false}) |> flat_texts()
+
+      assert Enum.any?(texts, &(&1 =~ "mix_test"))
     end
   end
 
@@ -612,11 +696,17 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
 
   describe "the honesty pin: absence and unresolvable refs must render literal text, never blank or a checkmark" do
     setup do
+      # Tool-bearing (evidence was possible) but refs-absent -- the one
+      # state where the absence row still exists post-V-ruling; the
+      # honesty pin (literal text, never blank or a checkmark) holds
+      # THERE. A chat-only turn now renders no completion row at all
+      # (see the absence-arm describe).
       absence_events =
         List.flatten([
           loop(1, "t1", 100, :turn_started, %{}),
-          message(2, "t1", 200, "Done."),
-          turn_completed(4, "t1", 300, %{})
+          tool_round_trip(2, "t1", 150, "mix_test", "42 tests, 0 failures"),
+          message(6, "t1", 200, "Done."),
+          turn_completed(8, "t1", 300, %{})
         ])
 
       evidence_events =
@@ -708,7 +798,7 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       # t1: tool_use+tool_result merge into one :tool_call block, then a
       # :message block (the turn's last, carrying the evidence
       # completion). t2: a single :message block (the turn's last,
-      # carrying the absence completion).
+      # carrying the absence marker -- suppressed at render, not here).
       assert [_tool_call, t1_last, t2_last] = proj.blocks
 
       assert %{
@@ -719,6 +809,8 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
                type_counts: [%{type: :tool_result, count: 1}]
              } = t1_last.content.completion
 
+      # Projection-level: unconditional (offset law) -- t2's chat-only
+      # de-noising happens at render time, not here.
       assert t2_last.content.completion == %{evidence: :none}
     end
 

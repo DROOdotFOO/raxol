@@ -461,6 +461,11 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     pin = Keyword.get(opts, :pin, :immediate)
     boot_cursor = validate_boot_cursor!(pin, Keyword.get(opts, :boot_cursor))
 
+    guest_placement =
+      validate_guest_placement!(
+        Keyword.get(opts, :guest_placement, :bottom_pin)
+      )
+
     {region, pin_state} =
       case pin do
         :immediate ->
@@ -481,7 +486,19 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       # enable emission -- only the probe-built capability record may.
       sync_output?: match?(%Capabilities{sync_output: true}, caps)
     }
-    |> boot_at_cursor(boot_cursor)
+    |> boot_at_cursor(boot_cursor, guest_placement)
+  end
+
+  defp validate_guest_placement!(placement)
+       when placement in [:bottom_pin, :float],
+       do: placement
+
+  defp validate_guest_placement!(other) do
+    raise ArgumentError,
+          "InlineAuthority.new/5's :guest_placement must be :bottom_pin " <>
+            "(default -- V ruling: input at the screen bottom from frame " <>
+            "one) or :float (the legacy float-at-probe-row placement); " <>
+            "got #{inspect(other)}"
   end
 
   defp validate_boot_cursor!(_pin, nil), do: nil
@@ -502,9 +519,9 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   # GUEST-BOOT placement (see `new/5`'s `:boot_cursor` doc). Runs at
   # construction, after the floating state is built with the default
   # `next_row: 1`.
-  defp boot_at_cursor(t, nil), do: t
+  defp boot_at_cursor(t, nil, _placement), do: t
 
-  defp boot_at_cursor(%__MODULE__{region: region} = t, {row, col}) do
+  defp boot_at_cursor(%__MODULE__{region: region} = t, {row, col}, placement) do
     rows = ScrollRegionManager.rows(region)
     # A CPR past the physical screen is a device lie -- clamp to the
     # referent (the screen the region math runs against).
@@ -525,18 +542,36 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
     t = %{t | next_row: row}
 
-    if row > ScrollRegionManager.history_bottom(region) do
-      # SCROLL-ENTRY: the floating window cannot exist below the prompt
-      # (the normal shell case -- prompt at/near the screen bottom).
-      # The existing one-way transition does exactly the honest thing:
-      # plain `\n`s at the physical bottom scroll the shell's own
-      # history up by `row - history_bottom` rows (native flow, never a
-      # repaint), one region write claims the pin, and the surface is
-      # bottom-anchored from the first frame with `next_row` directly
-      # above the pinned footer.
-      transition_to_pin(t)
-    else
-      t
+    cond do
+      row > ScrollRegionManager.history_bottom(region) ->
+        # SCROLL-ENTRY: the floating window cannot exist below the
+        # prompt (prompt at/near the screen bottom). The existing
+        # one-way transition does exactly the honest thing: plain
+        # `\n`s at the physical bottom scroll the shell's own history
+        # up by `row - history_bottom` rows (native flow, never a
+        # repaint), one region write claims the pin, and the surface is
+        # bottom-anchored from the first frame with `next_row` directly
+        # above the pinned footer.
+        transition_to_pin(t)
+
+      placement == :float ->
+        # LEGACY float-at-probe-row (opt-in via `guest_placement:
+        # :float`): the footer floats mid-screen under the prompt. V's
+        # ruling retired this as the default -- a fresh screen put the
+        # input at the TOP -- but the placement stays reachable for
+        # embedders that want shell-join over bottom anchoring.
+        t
+
+      true ->
+        # DEFAULT (V ruling, supersedes shell-join): input at the
+        # SCREEN BOTTOM always. Pin from frame one via the same
+        # transition -- with the probe row at or above the history
+        # bottom this emits zero scroll newlines (nothing below the
+        # prompt to push) and one region write; shell content above the
+        # probe row is preserved untouched, the footer (and chevron)
+        # sits at the true bottom, and content appends downward from
+        # the probe row exactly like any program printing lines.
+        transition_to_pin(t)
     end
   end
 

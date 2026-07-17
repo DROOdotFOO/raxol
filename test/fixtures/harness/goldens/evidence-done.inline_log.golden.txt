@@ -11,5 +11,4 @@
 " \e[2m· mix_test — 42 tests, 0 failures\e[0m\r\n"
 "\e8\e[?25l\e7\e[15;1H\e[K Input: clear | Stage: item_completed | Ctx: —\e[16;1H\e[K Sounds good, wrapping up now.\e[17;1H\e[K\e[1m❯\e[0m  \e[18;1H\e[K\e8\e[17;3H\e[?25h\e7\e[11;1H\r\n"
 " Sounds good, wrapping up now.\r\n"
-" \e[2mno evidence provided\e[0m\r\n"
 "\e8\e[?25l\e7\e[15;1H\e[K\e[1m❯\e[0m  \e[16;1H\e[K\e[17;1H\e[K\e8\e[15;3H\e[?25h"
