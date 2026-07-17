@@ -274,6 +274,26 @@ defmodule Raxol.Harness.LiveApprovalTest do
 
   defp collect_text(_node), do: []
 
+  # The Pierre diff engine emits one FLAT `:row` per physical diff line
+  # (gutter bar span + line-number span + syntax-split content spans +
+  # trailing wash pad). These helpers read that structure the way
+  # `diff_viewer_test.exs` reads `render/2`'s own rows -- by the `▌` gutter
+  # bar and the per-span bg wash -- so the approval's diff is asserted as
+  # the SAME engine's output, not a hand-rolled ± format.
+  defp diff_rows(block) do
+    %{children: children} = Block.render(block, %{width: 80})
+    Enum.filter(children, &match?(%{type: :row}, &1))
+  end
+
+  defp row_text(%{children: spans}),
+    do: Enum.map_join(spans, "", &Map.get(&1, :content, ""))
+
+  defp changed_row?(%{children: spans}),
+    do: Enum.any?(spans, &(Map.get(&1, :content) == "▌"))
+
+  defp row_bg?(%{children: spans}),
+    do: Enum.any?(spans, &is_binary(Map.get(Map.get(&1, :style, %{}), :bg)))
+
   describe "the live approval renders the referent and the answer keys" do
     test "the body shows the actual tool + args and numbered options with y/n aliases" do
       block = only_approval_block([turn_started(), approval_requested()])
@@ -590,7 +610,7 @@ defmodule Raxol.Harness.LiveApprovalTest do
   # -- 4e. the proposed diff (gap 2.2): the operator sees what y will do ----
 
   describe "an edit/write approval renders the PROPOSED DIFF, not truncated args" do
-    test "the block shows the ± diff of the proposed change, path first" do
+    test "the block renders the proposed change through the Pierre engine, path first" do
       block =
         only_approval_block([
           turn_started(),
@@ -607,26 +627,73 @@ defmodule Raxol.Harness.LiveApprovalTest do
       assert Enum.any?(lines, &(&1 == "± /lib/x.ex")),
              "the path leads the diff (the referent)"
 
-      assert Enum.member?(lines, "- old line")
-      assert Enum.member?(lines, "+ new line")
-
-      assert Enum.member?(lines, "  common"),
-             "unchanged lines render as context"
-
+      # NOT the compact one-line register, NOT the raw args -- byte-sweep:
+      # no truncated `new_string:`/`args:` arg reaches a diff-approval render.
       refute Enum.any?(lines, &(&1 =~ "args:")),
              "a diff approval shows the diff, never a truncated args line"
+
+      refute Enum.any?(lines, &(&1 =~ "new_string")),
+             "a diff approval never leaks the raw new_string arg"
+
+      # The Pierre engine's own signatures (mirroring diff_viewer_test.exs):
+      # a `▌` gutter bar on each changed row, the syntax-split content, and
+      # the diff bg wash under it.
+      rows = diff_rows(block)
+      changed = Enum.filter(rows, &changed_row?/1)
+
+      assert Enum.any?(changed, &(row_text(&1) =~ "old line")),
+             "the removed line renders through the engine, gutter bar and all"
+
+      assert Enum.any?(changed, &(row_text(&1) =~ "new line")),
+             "the added line renders through the engine"
+
+      assert Enum.all?(changed, &row_bg?/1),
+             "every changed row carries the diff bg wash (Pierre styling)"
+
+      assert Enum.any?(rows, &(row_text(&1) =~ "common")),
+             "unchanged lines render as context rows"
+    end
+
+    test "intra-line word emphasis: the changed word gets a distinct bg tier" do
+      # "old line" -> "new line": only the FIRST word changed. The Pierre
+      # engine paints the changed word on the brighter emphasis bg tier and
+      # the unchanged tail on the calmer (chroma-reduced) row wash -- two
+      # DIFFERENT backgrounds within one changed line.
+      block =
+        only_approval_block([
+          turn_started(),
+          diff_approval_requested("req-w", "/lib/x.ex", "old line", "new line")
+        ])
+
+      del_row =
+        block
+        |> diff_rows()
+        |> Enum.find(fn row -> changed_row?(row) and row_text(row) =~ "old" end)
+
+      assert del_row, "the removed line renders as a changed row"
+
+      bgs =
+        del_row.children
+        |> Enum.map(&Map.get(Map.get(&1, :style, %{}), :bg))
+        |> Enum.filter(&is_binary/1)
+        |> Enum.uniq()
+
+      assert length(bgs) >= 2,
+             "the changed word and the unchanged tail sit on distinct bg tiers"
     end
 
     test "write_file on a new file is an all-adds diff" do
-      lines =
+      rows =
         only_approval_block([
           turn_started(),
           diff_approval_requested("req-n", "/new.ex", "", "line a\nline b")
         ])
-        |> render_lines()
+        |> diff_rows()
 
-      assert Enum.member?(lines, "+ line a")
-      assert Enum.member?(lines, "+ line b")
+      added = Enum.filter(rows, &changed_row?/1)
+
+      assert Enum.any?(added, &(row_text(&1) =~ "line a"))
+      assert Enum.any?(added, &(row_text(&1) =~ "line b"))
     end
 
     test "shown == done: the approved diff image equals the sealed diff block's image" do

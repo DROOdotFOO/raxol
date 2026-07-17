@@ -182,6 +182,69 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     resolve_mode(state, context, ops, gutter_width_for(ops))
   end
 
+  # Default width budget for `diff_rows/1` when the caller supplies none --
+  # the inline block render path always passes one, so this is only the
+  # degenerate no-width fallback.
+  @default_diff_row_width 80
+
+  @doc """
+  The pure, flat-row form of the Pierre diff engine -- the diff-row
+  computation + styling extracted so it can be called from the harness
+  block render / `Raxol.Harness.Surface.ViewText` row path WITHOUT dragging
+  the Component runtime (or `render/2`'s NESTED gutter+content rows, which
+  `ViewText.lines/3` cannot flatten -- see
+  `Raxol.Harness.DiffExpansion`'s moduledoc) into the projection layer.
+
+  Returns one FLAT `%{type: :row}` view node per physical diff line (plus a
+  dim fold-marker row where a long unchanged run collapses), whose children
+  are ALL `:text` leaves -- exactly the shape `ViewText.lines/3` joins into
+  ONE styled line with per-segment fg/bg. Every tier of the merged visual
+  language rides along: the syntax token's own fg over the diff bg wash, the
+  brighter emphasis bg on word-diff-changed sub-ranges, and the `▌` gutter
+  bar (`render/2`'s own machinery -- `diff_rows/1` reuses it verbatim, then
+  inlines the gutter's own sub-row so the whole physical row is one flat run
+  of text leaves).
+
+  Unified mode only: an inline block is a single column, so there is no
+  split decision to make. Accepts the same `:path`/`:old`/`:new`/
+  `:language`/`:syntax_theme`/`:context`/`:width` props `init/1` reads;
+  `:width` is the display-column budget (defaults to
+  `#{@default_diff_row_width}` when absent). Pure; well-shaped string
+  `:old`/`:new` never raise (the caller guards the content shape).
+  """
+  @spec diff_rows(keyword()) :: [map()]
+  def diff_rows(props) do
+    {:ok, state} = init(props)
+    ops = LineDiff.diff(state.old, state.new)
+    gutter_width = gutter_width_for(ops)
+    avail_width = state.width || @default_diff_row_width
+
+    state
+    |> build_render_context(ops, gutter_width, avail_width)
+    |> render_unified()
+    |> Enum.map(&flatten_diff_row/1)
+  end
+
+  # `render_unified/1` builds each physical row as an OUTER row wrapping a
+  # gutter sub-row and a content sub-row (both themselves rows of text
+  # leaves), laid out horizontally by the real Preparer -> LayoutEngine
+  # pipeline. `ViewText.lines/3` has no such pipeline -- it only joins a row
+  # whose children are ALL direct text leaves. Inlining exactly one level of
+  # nested rows turns `row(row(bar,nums), row(leader,spans,pad))` into
+  # `row(bar, nums, leader, spans..., pad)` -- one flat run of text leaves,
+  # which `ViewText` then joins into one line, each segment keeping its own
+  # fg/bg. Fold rows are already flat text leaves, so they pass through
+  # unchanged.
+  defp flatten_diff_row(%{type: :row, children: children} = row) do
+    flat =
+      Enum.flat_map(children, fn
+        %{type: :row, children: sub_children} -> sub_children
+        other -> [other]
+      end)
+
+    Map.put(row, :children, flat)
+  end
+
   defp resolve_mode(%{mode: :auto} = state, context, ops, gutter_width) do
     width = state.width || context_width(context)
 

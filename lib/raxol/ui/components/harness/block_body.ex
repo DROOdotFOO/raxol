@@ -78,7 +78,32 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
       when kind in [:tool_call, :reasoning],
       do: Block.render(block, context)
 
-  def render(%Block{fold: :expanded} = block, context) do
+  # An edit/write approval carrying a proposed diff (`old`/`new`) is
+  # Block.render/2's own in the expanded state too: `Block`'s `:approval`
+  # content_lines_view renders the FULL proposed diff through the ONE Pierre
+  # engine (`DiffViewer.diff_rows/1`) plus the live answer prompt -- the
+  # operator's question is "what will `y` do", and the answer is the diff,
+  # never `ApprovalPrompt`'s modal action line (which would show a truncated
+  # args gloss, not the change). A bash / non-diff approval has no image to
+  # show and keeps its mounted `ApprovalPrompt` via the general clause below.
+  def render(%Block{fold: :expanded, kind: :approval} = block, context) do
+    if approval_has_diff?(block) do
+      Block.render(block, context)
+    else
+      expanded_mount(block, context)
+    end
+  end
+
+  def render(%Block{fold: :expanded} = block, context),
+    do: expanded_mount(block, context)
+
+  defp approval_has_diff?(%Block{content: %{old: old, new: new}})
+       when is_binary(old) and is_binary(new),
+       do: true
+
+  defp approval_has_diff?(_block), do: false
+
+  defp expanded_mount(block, context) do
     case mount_body(block, context) do
       {:ok, view} ->
         wrap_with_completion(view, block, context)

@@ -165,6 +165,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   branch, so a multi-line body never re-runs the solver per line.
   """
 
+  alias Raxol.UI.Components.Harness.DiffViewer
   alias Raxol.UI.Components.Harness.LineDiff
   alias Raxol.UI.Components.Harness.MarkdownBody
   alias Raxol.UI.Harness.Prominence
@@ -1085,8 +1086,78 @@ defmodule Raxol.UI.Components.Harness.Block do
     end
   end
 
+  # An edit/write approval carries the PROPOSED DIFF (`old`/`new`), so its
+  # expanded body is the diff itself -- rendered through the ONE Pierre diff
+  # engine (`DiffViewer.diff_rows/1`: syntax fg under diff bg, intra-line
+  # word emphasis, gutter bars, hunk folding), NOT the compact one-line
+  # register and NOT truncated args. The `± path` line leads (the referent,
+  # path first), then the Pierre diff rows, then the tail (blast radius +
+  # the live answer prompt / sealed receipt). Every other approval (bash,
+  # ...) keeps its plain `tool:`/`args:` referent via `plain_content_lines`.
+  # The diff render is block-level and mode-agnostic: the same flat rows
+  # flatten identically in inline_log and full-viewport.
+  defp content_lines_view(%__MODULE__{kind: :approval} = block, width, _ctx, fg) do
+    case approval_proposed_diff(block, width) do
+      [] ->
+        plain_content_lines(block, fg)
+
+      diff_rows ->
+        [approval_diff_header(block, fg) | diff_rows] ++
+          approval_tail_lines(block, fg)
+    end
+  end
+
   defp content_lines_view(block, _width, _context, fg),
     do: plain_content_lines(block, fg)
+
+  # The Pierre diff rows for a proposed edit/write approval, or `[]` when
+  # the approval carries no before/after image (bash and every other
+  # non-file tool). Shared engine with the sealed `:diff` block's own
+  # z-expanded body, so the diff the operator APPROVES is rendered by the
+  # exact same code that renders the diff that gets SEALED after it runs.
+  defp approval_proposed_diff(
+         %__MODULE__{content: %{old: old, new: new} = content},
+         width
+       )
+       when is_binary(old) and is_binary(new) do
+    DiffViewer.diff_rows(
+      path: to_display_text(Map.get(content, :path)),
+      old: old,
+      new: new,
+      language: Map.get(content, :language),
+      width: width
+    )
+  end
+
+  defp approval_proposed_diff(_block, _width), do: []
+
+  # `± path` leads the proposed diff (path-first, the referent), matching
+  # the sealed `:diff` block's own `± path · +N -M` compact identity so the
+  # two lifecycle stages of one edit read as the same thing.
+  defp approval_diff_header(%__MODULE__{content: content}, fg) do
+    path =
+      case content |> Map.get(:path) |> to_display_text() do
+        "" -> "(no path)"
+        p -> p
+      end
+
+    Components.text(
+      content: "#{kind_glyph(:diff)} #{path}",
+      style: apply_fg(%{}, fg)
+    )
+  end
+
+  # The non-diff tail of a diff approval's body: the blast radius and then
+  # the live answer prompt (numbered options + y/n aliases) or the sealed
+  # decision receipt -- the same lines `body_lines(:approval)` builds for a
+  # bash approval, minus the referent (the diff IS the referent here).
+  defp approval_tail_lines(%__MODULE__{seal: seal, content: content}, fg) do
+    (split_lines(Map.get(content, :blast_radius)) ++
+       approval_resolution_lines(seal, content))
+    |> Enum.map(fn line ->
+      Components.text(content: line, style: apply_fg(%{}, fg))
+    end)
+  end
 
   defp markdown_source(%__MODULE__{content: %{text: text}}),
     do: to_display_text(text)
@@ -1157,17 +1228,15 @@ defmodule Raxol.UI.Components.Harness.Block do
   # omitted when the producer did not carry that field (a producer that
   # only supplied a human-readable `action` shows no tool/args lines,
   # rather than empty "tool: " chrome).
-  # For an edit/write approval the producer lifts the before/after image
-  # (`old`/`new`), so the referent is the PROPOSED DIFF itself -- the
-  # operator sees exactly the change `y` will make, path first, never
-  # truncated args. Every other approval (bash, ...) keeps its tool + args
-  # line as the referent.
-  defp referent_lines(content) do
-    case proposed_diff_lines(content) do
-      [] -> plain_referent_lines(content)
-      diff -> diff
-    end
-  end
+  #
+  # This is the PLAIN referent (tool + args) for a bash/other approval. An
+  # edit/write approval carries the before/after image (`old`/`new`) and is
+  # never routed here: its referent is the PROPOSED DIFF, rendered through
+  # the Pierre engine as styled view rows by `content_lines_view/4`'s own
+  # `:approval` clause (a string-line `body_lines` path could not carry the
+  # diff's syntax fg / bg wash / gutter bars). So a diff approval never
+  # reaches `body_lines(:approval)` at all.
+  defp referent_lines(content), do: plain_referent_lines(content)
 
   defp plain_referent_lines(content) do
     [
@@ -1180,46 +1249,6 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp referent_line(_label, nil), do: nil
   defp referent_line(_label, ""), do: nil
   defp referent_line(label, value), do: label <> to_display_text(value)
-
-  # The ± diff rows for a proposed edit/write, path leading. A new file
-  # (`old == ""`) yields an all-adds diff. Shared with the sealed `:diff`
-  # block via `diff_rows/2`, so the diff the operator APPROVES renders
-  # byte-identically to the diff that gets SEALED after it executes.
-  defp proposed_diff_lines(%{old: old, new: new} = content)
-       when is_binary(old) and is_binary(new) do
-    ["± " <> to_display_text(Map.get(content, :path)) | diff_rows(old, new)]
-  end
-
-  defp proposed_diff_lines(_content), do: []
-
-  # A line-level ± diff (`List.myers_difference/2`): deletions `- `,
-  # insertions `+ `, unchanged context `  `. Long unchanged runs collapse
-  # to a `  …` marker so a big file's change stays legible. A new file
-  # (`old == ""`) is one deletion of the empty line and all insertions --
-  # i.e. an all-adds diff, which is exactly right.
-  @diff_context_keep 3
-
-  defp diff_rows(old, new) do
-    old_lines = String.split(old, "\n")
-    new_lines = String.split(new, "\n")
-
-    old_lines
-    |> List.myers_difference(new_lines)
-    |> Enum.flat_map(fn
-      {:eq, lines} -> collapse_context(lines)
-      {:del, lines} -> Enum.map(lines, &("- " <> &1))
-      {:ins, lines} -> Enum.map(lines, &("+ " <> &1))
-    end)
-  end
-
-  defp collapse_context(lines) when length(lines) <= 2 * @diff_context_keep + 1,
-    do: Enum.map(lines, &("  " <> &1))
-
-  defp collapse_context(lines) do
-    head = lines |> Enum.take(@diff_context_keep) |> Enum.map(&("  " <> &1))
-    tail = lines |> Enum.take(-@diff_context_keep) |> Enum.map(&("  " <> &1))
-    head ++ ["  …"] ++ tail
-  end
 
   # LIVE: the question is still open -- render the choices with their
   # answer keys so the operator can see exactly what pressing each key
