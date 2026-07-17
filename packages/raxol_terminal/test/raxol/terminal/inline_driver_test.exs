@@ -330,6 +330,50 @@ defmodule Raxol.Terminal.InlineDriverTest do
       GenServer.stop(pid)
     end
 
+    test "raw_sink receives the PRE-parse chunk verbatim, alongside the parsed event",
+         %{sio: sio} do
+      {:ok, pid} =
+        InlineDriver.start_link(
+          device: sio,
+          subscriber: self(),
+          raw_sink: self(),
+          tty?: false,
+          stty_enabled?: false,
+          install_reader?: false,
+          probe?: false
+        )
+
+      chunk = "a\e[A"
+      send(pid, {:trace, self(), :send, {make_ref(), {:data, chunk}}, self()})
+
+      # The raw chunk arrives exactly as read, before parsing split it.
+      assert_receive {:inline_raw_input, ^chunk}, 1_000
+      # And the parsed event path is unchanged.
+      assert_receive {:inline_input, %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
+                     1_000
+
+      GenServer.stop(pid)
+    end
+
+    test "no raw_sink (the default): no raw message is ever sent", %{sio: sio} do
+      {:ok, pid} =
+        InlineDriver.start_link(
+          device: sio,
+          subscriber: self(),
+          tty?: false,
+          stty_enabled?: false,
+          install_reader?: false,
+          probe?: false
+        )
+
+      send(pid, {:trace, self(), :send, {make_ref(), {:data, "a"}}, self()})
+
+      assert_receive {:inline_input, _event}, 1_000
+      refute_received {:inline_raw_input, _chunk}
+
+      GenServer.stop(pid)
+    end
+
     test "no subscriber: input is parsed and silently dropped, no crash", %{
       sio: sio
     } do

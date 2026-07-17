@@ -20,6 +20,11 @@ defmodule Raxol.Terminal.InlineDriver do
       (see below). May be `nil` (headless use).
     * `:subscriber` -- overrides `:dispatcher_pid` as the input-event
       target, for tests that want a separate collector.
+    * `:raw_sink` -- optional pid that receives every PRE-parse input
+      chunk as `{:inline_raw_input, binary()}`, exactly as it arrived
+      from the tty reader, before `InputParser` sees it. Debug/observability
+      seam (byte-level input tracing); default `nil` -- when unset, nothing
+      changes on the input path.
     * `:device` -- output sink. Default `:stdio`. Accepts `:stdio` or any
       `t:IO.device/0` (a `StringIO` pid works great in tests -- everything
       here is written via plain `IO.write/2`, never raw port writes).
@@ -136,6 +141,7 @@ defmodule Raxol.Terminal.InlineDriver do
     @moduledoc false
     defstruct dispatcher_pid: nil,
               subscriber: nil,
+              raw_sink: nil,
               device: :stdio,
               stty_module: Raxol.Terminal.Driver.Stty,
               stty_enabled?: false,
@@ -147,6 +153,7 @@ defmodule Raxol.Terminal.InlineDriver do
     @type t :: %__MODULE__{
             dispatcher_pid: pid() | nil,
             subscriber: pid() | nil,
+            raw_sink: pid() | nil,
             device: IO.device(),
             stty_module: module(),
             stty_enabled?: boolean(),
@@ -173,6 +180,7 @@ defmodule Raxol.Terminal.InlineDriver do
 
     dispatcher_pid = extract_pid(Keyword.get(opts, :dispatcher_pid))
     subscriber = extract_pid(Keyword.get(opts, :subscriber, dispatcher_pid))
+    raw_sink = extract_pid(Keyword.get(opts, :raw_sink))
     device = Keyword.get(opts, :device, :stdio)
     stty_module = Keyword.get(opts, :stty, Stty)
 
@@ -184,6 +192,7 @@ defmodule Raxol.Terminal.InlineDriver do
     state = %State{
       dispatcher_pid: dispatcher_pid,
       subscriber: subscriber,
+      raw_sink: raw_sink,
       device: device,
       stty_module: stty_module,
       stty_enabled?: stty_enabled?,
@@ -195,8 +204,7 @@ defmodule Raxol.Terminal.InlineDriver do
       if stty_enabled? do
         %{
           state
-          | original_stty:
-              normalize_saved_stty(safe_stty_call(stty_module, :save, []))
+          | original_stty: normalize_saved_stty(safe_stty_call(stty_module, :save, []))
         }
       else
         state
@@ -332,12 +340,19 @@ defmodule Raxol.Terminal.InlineDriver do
   defp dispatch_input(<<>>, state), do: {:noreply, state}
 
   defp dispatch_input(data, state) do
+    notify_raw(state.raw_sink, data)
+
     data
     |> safe_parse()
     |> Enum.each(&notify(state.subscriber, &1))
 
     {:noreply, state}
   end
+
+  defp notify_raw(nil, _data), do: :ok
+
+  defp notify_raw(pid, data) when is_pid(pid),
+    do: send(pid, {:inline_raw_input, data})
 
   defp notify(nil, _event), do: :ok
 
