@@ -144,6 +144,7 @@ defmodule Raxol.Terminal.InlineDriver do
   # answered within this bound (a pipe, a dumb terminal) is treated as
   # one that never will, and the caller falls back honestly.
   @default_cursor_probe_budget_ms 300
+  @isig_confirmations 3
 
   defmodule State do
     @moduledoc false
@@ -156,7 +157,12 @@ defmodule Raxol.Terminal.InlineDriver do
               tty?: false,
               rows: 24,
               original_stty: nil,
-              torn_down?: false
+              torn_down?: false,
+              isig_guard_every: 0,
+              isig_guard_count: 0,
+              isig_flags_reader: nil,
+              isig_boot_confirmed?: false,
+              isig_reasserts: 0
 
     @type t :: %__MODULE__{
             dispatcher_pid: pid() | nil,
@@ -168,7 +174,12 @@ defmodule Raxol.Terminal.InlineDriver do
             tty?: boolean(),
             rows: pos_integer(),
             original_stty: String.t() | nil,
-            torn_down?: boolean()
+            torn_down?: boolean(),
+            isig_guard_every: non_neg_integer(),
+            isig_guard_count: non_neg_integer(),
+            isig_flags_reader: (-> boolean()) | nil,
+            isig_boot_confirmed?: boolean(),
+            isig_reasserts: non_neg_integer()
           }
   end
 
@@ -197,6 +208,21 @@ defmodule Raxol.Terminal.InlineDriver do
     stty_enabled? = Keyword.get(opts, :stty_enabled?, tty?)
     rows = Keyword.get(opts, :rows, detect_rows(stty_module))
 
+    # The event-clocked isig guard (see maybe_guard_isig/1): defaults to
+    # checking on EVERY input chunk when a real reader owns the tty --
+    # V's field data showed prim_tty can re-own the termios with ISIG on
+    # at any point, so the cadence must win within one keypress-to-
+    # keypress window. `0` disables (the readerless/test default).
+    isig_guard_every =
+      Keyword.get(
+        opts,
+        :isig_guard_every,
+        if(install_reader? and stty_enabled?, do: 1, else: 0)
+      )
+
+    isig_flags_reader =
+      Keyword.get(opts, :isig_flags_reader, &Stty.isig_off?/0)
+
     state = %State{
       dispatcher_pid: dispatcher_pid,
       subscriber: subscriber,
@@ -205,7 +231,9 @@ defmodule Raxol.Terminal.InlineDriver do
       stty_module: stty_module,
       stty_enabled?: stty_enabled?,
       tty?: tty?,
-      rows: rows
+      rows: rows,
+      isig_guard_every: isig_guard_every,
+      isig_flags_reader: isig_flags_reader
     }
 
     state =
@@ -220,7 +248,7 @@ defmodule Raxol.Terminal.InlineDriver do
 
     if stty_enabled?, do: safe_stty_call(stty_module, :raw!, [])
 
-    run_post_raw_setup(opts, device, subscriber, install_reader?, state)
+    state = run_post_raw_setup(opts, device, subscriber, install_reader?, state)
 
     {:ok, state}
   end
@@ -242,29 +270,39 @@ defmodule Raxol.Terminal.InlineDriver do
     # No \e[?1049h anywhere on this path -- LC-P-NOALT.
     IO.write(device, Sequences.init_bytes())
 
-    if install_reader? do
-      start_stdin_reader()
+    state =
+      if install_reader? do
+        start_stdin_reader()
 
-      # Re-assert raw termios AFTER the reader is armed: user_drv's
-      # `{:start_shell, %{input: :raw}}` makes prim_tty re-initialize
-      # the termios with ITS raw settings, which keep ISIG ENABLED --
-      # silently clobbering the `-isig` this module's moduledoc
-      # promises. With ISIG back on, ^C becomes SIGINT (the VM BREAK
-      # menu printed over the frame, or a silent drop under +Bi)
-      # instead of byte 0x03 to the subscriber -- observed live as "the
-      # pilot cannot exit". prim_tty applies its termios ASYNCHRONOUSLY
-      # after the call returns, so a single immediate re-assert loses
-      # the race: verify-then-assert with a bounded budget instead,
-      # reading the LIVE flags (the referent, not this module's own
-      # bookkeeping) until `-isig` sticks. If the budget ends without it
-      # sticking, nothing is written to the tty here (no bytes may leak
-      # into the claimed frame) -- an embedder's own probe (e.g. the
-      # live demo's boot POST termios line) is the honest reporting
-      # channel for that case.
-      if state.stty_enabled? do
-        reassert_raw_until_isig_off(state.stty_module)
+        # Re-assert raw termios AFTER the reader is armed: user_drv's
+        # `{:start_shell, %{input: :raw}}` makes prim_tty re-initialize
+        # the termios with ITS raw settings, which keep ISIG ENABLED --
+        # silently clobbering the `-isig` this module's moduledoc
+        # promises. With ISIG back on, ^C becomes SIGINT (the VM BREAK
+        # menu printed over the frame, or a silent drop under +Bi)
+        # instead of byte 0x03 to the subscriber -- observed live as
+        # "the pilot cannot exit". prim_tty applies its termios
+        # ASYNCHRONOUSLY after the call returns, so a single immediate
+        # re-assert loses the race: verify-then-assert with a bounded
+        # budget instead, reading the LIVE flags (the referent, not this
+        # module's own bookkeeping) until `-isig` sticks. The outcome is
+        # RECORDED (isig_boot_confirmed?) for `isig_report/1`, and the
+        # event-clocked guard (maybe_guard_isig/1) keeps watching from
+        # here on -- nothing is ever written to the tty on the give-up
+        # path (no bytes may leak into the claimed frame); an embedder's
+        # probe (the live demo's boot POST line) is the honest reporting
+        # channel.
+        if state.stty_enabled? do
+          confirmed? =
+            reassert_raw_until_isig_off(state.stty_module) == :confirmed
+
+          %{state | isig_boot_confirmed?: confirmed?}
+        else
+          state
+        end
+      else
+        state
       end
-    end
 
     opts
     |> maybe_run_probe(device, subscriber)
@@ -272,6 +310,8 @@ defmodule Raxol.Terminal.InlineDriver do
       nil -> :ok
       caps -> Capabilities.cache(caps)
     end
+
+    state
   rescue
     error ->
       restore_stranded_raw_mode(
@@ -505,6 +545,38 @@ defmodule Raxol.Terminal.InlineDriver do
     :ok
   end
 
+  # --- The isig diagnosis (the ^C byte-path report) ---
+
+  @doc """
+  The isig diagnosis for embedder-level reporting (the live demo's boot
+  POST line): which mechanism last held `-isig` and how often the
+  event-clocked guard has had to re-assert it.
+
+    * `boot_confirmed?` -- the post-reader-arm verify loop saw `-isig`
+      hold for #{@isig_confirmations} consecutive reads at claim time;
+    * `reasserts` -- how many times the per-input-event guard found
+      ISIG flipped back ON mid-session and re-asserted;
+    * `isig_off?` -- the LIVE flags right now, read through the same
+      injectable reader the guard uses.
+  """
+  @spec isig_report(GenServer.server()) :: %{
+          boot_confirmed?: boolean(),
+          reasserts: non_neg_integer(),
+          isig_off?: boolean()
+        }
+  def isig_report(server), do: GenServer.call(server, :isig_report)
+
+  @impl true
+  def handle_manager_call(:isig_report, _from, state) do
+    report = %{
+      boot_confirmed?: state.isig_boot_confirmed?,
+      reasserts: state.isig_reasserts,
+      isig_off?: state.isig_flags_reader && state.isig_flags_reader.()
+    }
+
+    {:reply, report, state}
+  end
+
   # --- Input dispatch ---
 
   defp dispatch_input(<<>>, state), do: {:noreply, state}
@@ -516,7 +588,9 @@ defmodule Raxol.Terminal.InlineDriver do
     |> safe_parse()
     |> Enum.each(&notify(state.subscriber, &1))
 
-    {:noreply, state}
+    # AFTER forwarding: the guard's stty spawn must never delay the
+    # keystroke that carried us here -- it protects the NEXT one.
+    {:noreply, maybe_guard_isig(state)}
   end
 
   defp notify_raw(nil, _data), do: :ok
@@ -686,47 +760,70 @@ defmodule Raxol.Terminal.InlineDriver do
   # guarantee (see run_post_raw_setup/5's comment). prim_tty's termios
   # write lands asynchronously, so ONE successful read is not proof the
   # race is won -- it may simply not have landed yet. This therefore
-  # demands `@isig_confirmations` CONSECUTIVE 40ms-spaced reads showing
+  # demands `@isig_confirmations` CONSECUTIVE 50ms-spaced reads showing
   # `-isig`, re-asserting raw! and restarting the confirmation count on
-  # any flip-back, bounded by `attempts` total iterations (~1s worst
-  # case; two-three passes in practice). Only reachable with
-  # `install_reader?: true` on a real tty; the injected-stty test paths
-  # all run readerless. On a device where the flags never confirm
+  # any flip-back, bounded by `attempts` total iterations (~3s boot-
+  # window liveness bound; two-three passes in practice). Only reachable
+  # with `install_reader?: true` on a real tty; the injected-stty test
+  # paths all run readerless. On a device where the flags never confirm
   # (e.g. no controlling tty, where stty cannot run at all), this gives
   # up silently -- nothing here may write bytes to the claimed frame;
-  # an embedder-level probe (the live demo's boot POST termios line) is
-  # the honest reporting channel.
-  @isig_confirmations 3
-
-  defp reassert_raw_until_isig_off(stty_module, attempts \\ 25) do
+  # the result is recorded for `isig_report/1` and the embedder's probe
+  # (the live demo's boot POST termios line) is the honest reporting
+  # channel.
+  defp reassert_raw_until_isig_off(stty_module, attempts \\ 60) do
     do_reassert_isig(stty_module, attempts, 0)
   end
 
-  defp do_reassert_isig(_stty_module, 0, _confirmed), do: :ok
+  defp do_reassert_isig(_stty_module, 0, _confirmed), do: :gave_up
 
   defp do_reassert_isig(_stty_module, _attempts, @isig_confirmations),
-    do: :ok
+    do: :confirmed
 
   defp do_reassert_isig(stty_module, attempts, confirmed) do
     confirmed =
-      if isig_off?() do
+      if Stty.isig_off?() do
         confirmed + 1
       else
         safe_stty_call(stty_module, :raw!, [])
         0
       end
 
-    Process.sleep(40)
+    Process.sleep(50)
     do_reassert_isig(stty_module, attempts - 1, confirmed)
   end
 
-  # Reads the LIVE flags from the controlling terminal -- the referent
-  # for "will ^C be a byte or a SIGINT", never a cached snapshot.
-  defp isig_off? do
-    ~c"stty -a < /dev/tty 2>/dev/null"
-    |> :os.cmd()
-    |> List.to_string()
-    |> String.contains?("-isig")
+  # The event-clocked isig guard: every `isig_guard_every` input chunks
+  # (V's field data -- prim_tty can re-own the termios with ISIG on at
+  # any point, so the default cadence is EVERY chunk: the flip is
+  # caught within one keypress-to-keypress window), read the LIVE flags
+  # through the injectable reader; on a flip, re-assert raw! and tell
+  # the subscriber (`{:inline_isig_reasserted}`) so the embedder can
+  # render an honest notice and the pilot sees it happen. `0` disables.
+  defp maybe_guard_isig(%State{isig_guard_every: every} = state)
+       when is_integer(every) and every > 0 do
+    count = state.isig_guard_count + 1
+
+    if count >= every do
+      guard_isig_now(%{state | isig_guard_count: 0})
+    else
+      %{state | isig_guard_count: count}
+    end
+  end
+
+  defp maybe_guard_isig(state), do: state
+
+  defp guard_isig_now(state) do
+    if state.isig_flags_reader.() do
+      state
+    else
+      safe_stty_call(state.stty_module, :raw!, [])
+
+      if is_pid(state.subscriber),
+        do: send(state.subscriber, {:inline_isig_reasserted})
+
+      %{state | isig_reasserts: state.isig_reasserts + 1}
+    end
   end
 
   # --- Small helpers ---

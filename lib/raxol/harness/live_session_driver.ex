@@ -463,22 +463,24 @@ defmodule Raxol.Harness.LiveSessionDriver do
     norm = InputEvent.normalize(event)
 
     cond do
-      # Empty composer: one press of `q` OR ^C quits immediately --
-      # nothing composed, nothing to protect, no arming needed.
+      # `q` on an empty composer quits immediately -- a deliberate
+      # letter key, a different contract from ^C (V's ruling: node
+      # semantics for ^C are UNCONDITIONAL, no single-press fast path).
       quit_key?(norm, state.model) ->
         finish(state)
 
       # Second CONSECUTIVE ^C: exit REGARDLESS of composer state -- the
       # user must never be trapped in the loop. The honesty half of
-      # "regardless of state": the unsent draft is sealed into
-      # scrollback first, never silently vanished.
+      # "regardless of state": an unsent draft is sealed into scrollback
+      # first, never silently vanished (an empty draft has nothing to
+      # preserve and seals nothing).
       ctrl_c?(norm) and state.quit_armed? ->
         finish(preserve_draft(state))
 
-      # First ^C while not immediately quittable (a draft is composed):
-      # ARM the exit and say exactly what the next press will do. The
-      # ^C itself is consumed by the exit protocol -- it is never
-      # forwarded to the composer as a shortcut mid-offer.
+      # First ^C, ALWAYS (empty composer included): ARM the exit and
+      # say exactly what the next press will do. The ^C itself is
+      # consumed by the exit protocol -- it is never forwarded to the
+      # composer as a shortcut mid-offer.
       ctrl_c?(norm) ->
         loop(arm_quit(state))
 
@@ -495,31 +497,34 @@ defmodule Raxol.Harness.LiveSessionDriver do
   # LOOP only -- terminal teardown stays the embedder's job (see the
   # moduledoc's teardown-ownership section).
   #
-  # Ctrl-C rides the same gate: raw mode runs `-isig`, so ^C arrives
-  # here as the plain byte 0x03 (normalized to char "c" + ctrl) and
-  # NEVER reaches the VM as a break -- mapping it to the quit gate makes
-  # muscle-memory ^C work exactly like `q` (quit on an empty composer).
-  # With a non-empty composer, ^C escalates through the node-style
-  # double-press protocol in `dispatch_inline_input/2` above: first
-  # press arms + notices, a second CONSECUTIVE press exits with the
-  # draft preserved in scrollback, and ANY other input event disarms
-  # (event-clocked reset -- no wall-time window, per the doctrine's
-  # timer-clocked-motion falsifier).
+  # Ctrl-C is a SEPARATE contract (V's ruling): node-style double-press,
+  # unconditional -- the first press always arms + notices "ctrl-c again
+  # to exit", a second CONSECUTIVE press exits regardless of composer
+  # state (unsent draft sealed into scrollback first), and ANY other
+  # input event disarms (event-clocked reset -- no wall-time window, per
+  # the doctrine's timer-clocked-motion falsifier). See
+  # `dispatch_inline_input/2`.
   defp quit_key?(norm, model) do
-    (InputEvent.printable_char(norm) == "q" or ctrl_c?(norm)) and
+    InputEvent.printable_char(norm) == "q" and
       String.trim(Composer.value(model.composer)) == ""
   end
 
   defp ctrl_c?(%{char: "c", mods: %{ctrl: true}}), do: true
   defp ctrl_c?(_norm), do: false
 
+  # The armed-offer notice is the "custom message" of a terminal app
+  # (the C-level BREAK menu is not restylable; this is what renders
+  # instead once ^C reaches the byte path). Draft-aware so it never
+  # promises a preservation that cannot happen (unbound-pixel rule).
   defp arm_quit(state) do
-    model =
-      Surface.put_lane_notice(
-        state.model,
+    notice =
+      if String.trim(Composer.value(state.model.composer)) == "" do
+        "» ctrl-c again to exit"
+      else
         "» ctrl-c again to exit — draft preserved in scrollback on quit"
-      )
+      end
 
+    model = Surface.put_lane_notice(state.model, notice)
     %{state | model: model, quit_armed?: true}
   end
 

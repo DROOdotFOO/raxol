@@ -391,4 +391,95 @@ defmodule Raxol.Terminal.InlineDriverTest do
       GenServer.stop(pid)
     end
   end
+
+  # ---------------------------------------------------------------------
+  # The event-clocked isig guard (the real-terminal ^C trap):
+  # prim_tty can re-own the termios with ISIG on at times no boot-window
+  # poll can bound, so the driver re-checks the LIVE flags every
+  # `isig_guard_every` input chunks (event-clocked -- no wall-time
+  # timer), re-asserts raw! on a flip, and tells the subscriber so an
+  # embedder can render an honest notice.
+  # ---------------------------------------------------------------------
+
+  describe "event-clocked isig guard" do
+    defp feed(pid, n) do
+      for _ <- 1..n do
+        send(pid, {:trace, self(), :send, {make_ref(), {:data, "x"}}, self()})
+      end
+    end
+
+    test "a flipped-on ISIG is re-asserted after the guard interval and the subscriber is told",
+         %{sio: sio} do
+      {:ok, pid} =
+        InlineDriver.start_link(
+          device: sio,
+          subscriber: self(),
+          tty?: false,
+          stty_enabled?: true,
+          stty: InlineDriverMockStty,
+          install_reader?: false,
+          probe?: false,
+          isig_guard_every: 3,
+          # Injected flags reader: the tty reports ISIG ON (isig_off? false).
+          isig_flags_reader: fn -> false end
+        )
+
+      calls_before = Enum.count(InlineDriverMockStty.calls(), &(&1 == {:raw!}))
+
+      feed(pid, 3)
+
+      assert_receive {:inline_isig_reasserted}, 1_000
+
+      assert Enum.count(InlineDriverMockStty.calls(), &(&1 == {:raw!})) >
+               calls_before
+
+      GenServer.stop(pid)
+    end
+
+    test "a healthy tty (isig already off) is never re-asserted and never notified",
+         %{sio: sio} do
+      {:ok, pid} =
+        InlineDriver.start_link(
+          device: sio,
+          subscriber: self(),
+          tty?: false,
+          stty_enabled?: true,
+          stty: InlineDriverMockStty,
+          install_reader?: false,
+          probe?: false,
+          isig_guard_every: 2,
+          isig_flags_reader: fn -> true end
+        )
+
+      calls_before = Enum.count(InlineDriverMockStty.calls(), &(&1 == {:raw!}))
+
+      feed(pid, 6)
+      refute_receive {:inline_isig_reasserted}, 300
+
+      assert Enum.count(InlineDriverMockStty.calls(), &(&1 == {:raw!})) ==
+               calls_before
+
+      GenServer.stop(pid)
+    end
+
+    test "guard off by default when readerless: no flags reads on the input path",
+         %{sio: sio} do
+      {:ok, pid} =
+        InlineDriver.start_link(
+          device: sio,
+          subscriber: self(),
+          tty?: false,
+          stty_enabled?: true,
+          stty: InlineDriverMockStty,
+          install_reader?: false,
+          probe?: false,
+          isig_flags_reader: fn -> raise "flags reader must not run" end
+        )
+
+      feed(pid, 8)
+      refute_receive {:inline_isig_reasserted}, 200
+      assert Process.alive?(pid)
+      GenServer.stop(pid)
+    end
+  end
 end

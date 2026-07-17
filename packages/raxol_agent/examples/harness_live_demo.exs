@@ -17,26 +17,38 @@
 # dependency graph in CLAUDE.md), so this script must run under the
 # raxol_agent Mix project, which path-depends on main raxol:
 #
-#   cd packages/raxol_agent
-#   mix run --no-start examples/harness_live_demo.exs
-#   mix run --no-start examples/harness_live_demo.exs --prompt "hello world"
+# CANONICAL RUN RECIPE (the wrapper is the supported entry point):
+#
+#   packages/raxol_agent/examples/harness-live-demo.sh
+#   packages/raxol_agent/examples/harness-live-demo.sh --prompt "hello world"
+#
+# The wrapper sets two pre-BEAM locks field-validated on a real macOS
+# terminal: `stty -f /dev/tty -isig` (kernel never turns ^C into
+# SIGINT, from before the BEAM even starts) and
+# ELIXIR_ERL_OPTIONS="+Bi" (VM backstop: a signal-path ^C that slips
+# through during a mid-session termios flip is ignored rather than
+# painting the C-level BREAK menu over the frame), plus an exit trap
+# restoring the terminal. A bare `mix run --no-start
+# examples/harness_live_demo.exs` still works; without the wrapper the
+# boot window can reach the VM break handler on ^C, and the boot POST
+# will say so.
 #
 # `--no-start` avoids interleaving application boot logs into the byte
 # stream, exactly as the fixture demo documents -- everything this demo
 # needs (SessionStreamer, telemetry) is started explicitly below.
 #
-# Ctrl-C: while the terminal is claimed, ^C arrives as plain byte 0x03
-# (InlineDriver re-asserts `-isig` after arming its reader -- prim_tty's
-# own raw re-init used to leave ISIG on, turning ^C into the VM BREAK
-# menu printed over the frame; the boot POST probes the live termios
-# and reports the actual state). The byte feeds LiveSessionDriver's
-# node-style exit protocol: quits immediately on an empty composer;
-# with a draft composed, the first press arms and notices "ctrl-c again
-# to exit", a second consecutive press quits with the draft sealed into
-# scrollback, and any other keypress withdraws the offer. Only OUTSIDE
-# the claimed window (a few seconds of boot, or a Ctrl+E editor
-# suspend) can ^C still reach the VM break handler; add
-# ELIXIR_ERL_OPTIONS="+Bi" if that window matters to you.
+# Ctrl-C (node semantics, unconditional): the first press ALWAYS arms
+# and notices "ctrl-c again to exit" (with "— draft preserved in
+# scrollback on quit" when a draft exists); a second CONSECUTIVE press
+# exits regardless of composer state, sealing any unsent draft into
+# scrollback first; any other keypress withdraws the offer. `q` on an
+# empty composer stays a single-press quit (deliberate letter key,
+# different contract). Delivery: ^C is byte 0x03 while the terminal is
+# claimed -- InlineDriver holds `-isig` with a boot-window verify loop
+# PLUS a per-keypress event-clocked guard (prim_tty re-owns the termios
+# with ISIG on otherwise; V's field data), and the boot POST reports
+# which mechanism is currently holding it, live from
+# InlineDriver.isig_report/1.
 #
 # Boot POST: before the first prompt, the demo seals one small
 # self-check block into history through the driver's normal seal path
@@ -91,13 +103,12 @@
 #   q           quits cleanly WHEN THE COMPOSER BUFFER IS EMPTY (the
 #               LiveSessionDriver owns this check, same convention as the
 #               fixture demo)
-#   Ctrl-C      empty composer: quits immediately, same as q. With a
-#               draft composed: first press arms + notices "ctrl-c again
-#               to exit", second consecutive press quits with the draft
-#               sealed into scrollback; any other key withdraws the
-#               offer. (Raw byte 0x03 to the driver -- InlineDriver
-#               re-asserts -isig after arming its reader; the boot POST
-#               probes and reports the live termios state.)
+#   Ctrl-C      node semantics, unconditional: FIRST press always arms
+#               + notices "ctrl-c again to exit" (draft-aware wording);
+#               second consecutive press quits regardless of composer
+#               state, sealing any unsent draft into scrollback; any
+#               other key withdraws the offer. (Raw byte 0x03 to the
+#               driver -- see the Ctrl-C delivery note above.)
 #
 # The REPL seam (why this demo keeps a mirror Composer): on this branch
 # `Raxol.Harness.Surface` has no live submit channel -- its own composer
@@ -339,7 +350,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         rows: rows,
         boot: boot,
         debug: debug,
-        devtools: devtools
+        devtools: devtools,
+        inline: inline
       })
 
       {:ok, mirror} =
@@ -420,6 +432,27 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     end
 
     {:cont, feed_mirror(state, event, resolution)}
+  end
+
+  # InlineDriver's event-clocked isig guard caught the termios flipped
+  # back to ISIG-on mid-session and re-asserted `-isig` -- surface it as
+  # a persistent lane notice so the pilot SEES the flip happen (and a
+  # field report of the session carries it), instead of silently winning
+  # or silently losing the fight.
+  defp handle_msg(state, {:inline_isig_reasserted}) do
+    send(
+      state.driver,
+      {:surface_command,
+       %{
+         type: :lane_notice,
+         payload: %{
+           text:
+             "» isig flipped on mid-session — re-asserted; ^C exit path restored"
+         }
+       }}
+    )
+
+    {:cont, state}
   end
 
   # The driver ended its loop (q on empty composer) -- teardown runs in
@@ -568,7 +601,8 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         # GUEST-BOOT evidence: the actual probe outcome this boot -- a
         # real CPR row on success, or the honest fallback note.
         "  " <> cursor_probe_post_line(ctx.boot),
-        "  " <> sigint_post_line()
+        "  " <> sigint_post_line(ctx.inline),
+        "  " <> vm_break_post_line()
       ] ++ debug_post_lines(ctx.debug, ctx.devtools)
 
     send(
@@ -600,20 +634,43 @@ defmodule Raxol.Examples.HarnessLiveDemo do
     end
   end
 
-  # A REAL termios probe, not an assumption: reads the tty's live flags
-  # and reports whether ISIG is actually off (InlineDriver re-asserts
-  # `-isig` after arming its reader -- prim_tty's own raw re-init keeps
-  # ISIG on, which is exactly how ^C used to become the VM BREAK menu
-  # instead of byte 0x03 into the exit gate). If the probe cannot
-  # confirm, the line says so -- an honest warning, never a claimed
-  # guarantee.
-  defp sigint_post_line do
-    flags = :os.cmd(~c"stty -a < /dev/tty 2>/dev/null") |> List.to_string()
+  # A REAL termios diagnosis via `InlineDriver.isig_report/1` -- live
+  # flags PLUS which mechanism last held `-isig` (claim-time boot loop
+  # vs the per-keypress guard, with the re-assert count), so a field
+  # report of this line carries the whole story of who won the termios
+  # fight on that terminal. Never a claimed guarantee: the WARNING arm
+  # names the exact failure state.
+  defp sigint_post_line(inline) do
+    report = Raxol.Terminal.InlineDriver.isig_report(inline)
 
-    if flags =~ "-isig" do
-      "ctrl-c: byte 0x03 to the exit gate (-isig verified on the tty)"
+    cond do
+      report.isig_off? and report.boot_confirmed? and report.reasserts == 0 ->
+        "ctrl-c: byte 0x03 to the exit gate (-isig held since claim)"
+
+      report.isig_off? ->
+        boot = if report.boot_confirmed?, do: "boot ok", else: "boot gave up"
+
+        "ctrl-c: byte 0x03 to the exit gate (-isig via guard — #{boot}, " <>
+          "re-asserted x#{report.reasserts})"
+
+      true ->
+        boot = if report.boot_confirmed?, do: "boot ok", else: "boot gave up"
+
+        "ctrl-c: WARNING — isig on right now (#{boot}, re-asserts " <>
+          "x#{report.reasserts}); the guard re-checks on every keypress"
+    end
+  end
+
+  # The VM backstop, reported from the emulator's own record: with the
+  # byte path held by the guard, +Bi only matters for a ^C that slips
+  # through as SIGINT anyway (mid-flip) -- ignored beats the BREAK menu
+  # painted over the frame. The wrapper script sets it; a bare mix run
+  # is pointed at the wrapper rather than at env-var surgery.
+  defp vm_break_post_line do
+    if :erlang.system_info(:break_ignored) do
+      "vm break: ignored (+Bi) — a signal-path ^C can never paint the break menu"
     else
-      "ctrl-c: WARNING — isig still on; ^C may hit the vm break handler"
+      "vm break: live — prefer examples/harness-live-demo.sh (sets +Bi backstop)"
     end
   end
 

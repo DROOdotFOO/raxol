@@ -936,12 +936,60 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
   # 15. Ctrl-C rides the quit gate (raw mode -isig: ^C is byte 0x03)
   # ---------------------------------------------------------------------
 
-  describe "15. ctrl-c quits like q on an empty composer" do
-    test "0x03 with an empty composer ends the loop and notifies" do
-      %{driver: driver} = new_driver(%{})
+  describe "15. ctrl-c: node-style double-press, unconditional (V's ruling)" do
+    test "first 0x03 with an EMPTY composer arms + notices -- never a single-press exit" do
+      %{driver: driver, device: device} = new_driver(%{})
 
       [ctrl_c] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
       send(driver, {:inline_input, ctrl_c})
+
+      refute_receive {:live_session_driver, _pid, :halted}, 300
+
+      eventually(fn ->
+        footer_text(raw(device)) =~ "ctrl-c again to exit"
+      end)
+
+      # Empty draft: the notice must NOT promise a preservation that
+      # cannot happen.
+      refute footer_text(raw(device)) =~ "draft preserved"
+    end
+
+    test "second consecutive 0x03 on an EMPTY composer exits -- and seals no draft marker" do
+      %{driver: driver, device: device} = new_driver(%{})
+
+      [c1] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
+      send(driver, {:inline_input, c1})
+      [c2] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
+      send(driver, {:inline_input, c2})
+
+      assert_receive {:live_session_driver, ^driver, :halted}, 1_000
+      refute history_text(raw(device)) =~ "unsent draft"
+    end
+
+    test "an interleaved keypress disarms an empty-composer arm too" do
+      %{driver: driver, device: device} = new_driver(%{})
+
+      [c1] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
+      send(driver, {:inline_input, c1})
+
+      eventually(fn -> footer_text(raw(device)) =~ "ctrl-c again to exit" end)
+
+      # The keypress both disarms and becomes draft content -- the next
+      # ^C is a FIRST press again (now with a draft to protect).
+      [a] = Raxol.Terminal.ANSI.InputParser.parse("a")
+      send(driver, {:inline_input, a})
+
+      [c2] = Raxol.Terminal.ANSI.InputParser.parse(<<3>>)
+      send(driver, {:inline_input, c2})
+
+      refute_receive {:live_session_driver, _pid, :halted}, 300
+    end
+
+    test "q on an empty composer still quits in ONE press (letter key, different contract)" do
+      %{driver: driver} = new_driver(%{})
+
+      [q] = Raxol.Terminal.ANSI.InputParser.parse("q")
+      send(driver, {:inline_input, q})
 
       assert_receive {:live_session_driver, ^driver, :halted}, 1_000
     end

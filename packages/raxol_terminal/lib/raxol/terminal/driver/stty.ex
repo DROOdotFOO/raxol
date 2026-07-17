@@ -1,35 +1,75 @@
 defmodule Raxol.Terminal.Driver.Stty do
   @moduledoc false
 
-  # Thin wrapper around `:os.cmd/1` (and, for `restore/1`, `System.cmd/3`)
-  # for stty operations on /dev/tty.
+  # stty operations against /dev/tty, ALL in the argv form
+  # `stty -f|-F /dev/tty ...` via `System.cmd/3` -- never a
+  # `sh -c "stty ... < /dev/tty"` shell redirect. Two reasons, both
+  # learned the hard way (the real-terminal ^C trap):
   #
-  # `save/0`, `raw!/0`, `sane!/0`, and `size/0` take no user-controlled
-  # input at all -- their commands are hardcoded charlists, so `:os.cmd/1`
-  # (which runs them through `/bin/sh -c`) is safe as-is. Centralizes the
-  # Credo.Check.Warning.UnsafeExec suppression for those to one place.
+  #   * the shell-redirect form silently no-ops wherever the /bin/sh
+  #     child cannot open a controlling tty (some pty harnesses; any
+  #     environment where the BEAM's session lost its ctty) -- the argv
+  #     device flag targets the device explicitly and fails LOUDLY into
+  #     the `{output, nonzero}` return instead;
+  #   * argv means no shell in the loop at all, which is also why
+  #     `restore/1`'s untrusted saved value was already using it.
   #
-  # `restore/1`'s argument is different in kind: it is whatever `save/0`
-  # last captured, round-tripped through `InlineDriver`'s GenServer state
-  # (and, in tests, an arbitrary injected `:stty` module) -- so it is
-  # untrusted by the time it reaches here and must never be spliced into a
-  # shell command line. See `restore/1` below.
+  # `command_args/1` is the single constructor for every operation's
+  # argv, public so the invocation form itself is pinned by test
+  # (stty_test.exs, "command construction" describe).
+
+  @raw_flags ~w(raw -echo -icanon -isig)
+
+  @doc """
+  The argv for each stty operation -- always `[device_flag, "/dev/tty" |
+  operation_args]`. Public: the invocation form (device flag, never a
+  shell redirect) is itself a pinned regression surface.
+  """
+  @spec command_args(:raw | :save | :sane | :size | :flags) :: [String.t()]
+  def command_args(:raw), do: [file_flag(), "/dev/tty" | @raw_flags]
+  def command_args(:save), do: [file_flag(), "/dev/tty", "-g"]
+  def command_args(:sane), do: [file_flag(), "/dev/tty", "sane"]
+  def command_args(:size), do: [file_flag(), "/dev/tty", "size"]
+  def command_args(:flags), do: [file_flag(), "/dev/tty", "-a"]
+
+  # Runs one constructed command. `{output, exit_status}`; never raises
+  # (a missing binary or an un-openable /dev/tty degrades to `{"", 1}` --
+  # callers treat any nonzero status as "cannot confirm").
+  defp run(op) do
+    System.cmd("stty", command_args(op), stderr_to_stdout: true)
+  rescue
+    _error -> {"", 1}
+  end
 
   @doc "Save current TTY settings (stty -g). Returns empty string on failure."
   @spec save :: String.t()
   def save do
-    # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-    :os.cmd(~c"stty -g < /dev/tty 2>/dev/null")
-    |> List.to_string()
-    |> String.trim()
+    case run(:save) do
+      {out, 0} -> String.trim(out)
+      _failed -> ""
+    end
   end
 
   @doc "Enter raw mode: no echo, no line buffering, no signals."
   @spec raw! :: :ok
   def raw! do
-    # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-    _ = :os.cmd(~c"stty raw -echo -icanon -isig < /dev/tty 2>/dev/null")
+    _ = run(:raw)
     :ok
+  end
+
+  @doc """
+  Whether ISIG is currently OFF on /dev/tty -- read from the LIVE flags
+  (`stty -f /dev/tty -a`), the referent for "will ^C arrive as byte 0x03
+  or become a SIGINT". `false` when the flags cannot be read at all
+  (no controlling tty): the honest answer is "cannot confirm", never a
+  raise and never an assumed yes.
+  """
+  @spec isig_off? :: boolean()
+  def isig_off? do
+    case run(:flags) do
+      {out, 0} -> String.contains?(out, "-isig")
+      _failed -> false
+    end
   end
 
   # Conservative allowlist for a `save/0` dump: `stty -g` output (GNU and
