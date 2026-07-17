@@ -323,6 +323,31 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   defp del_emphasis_bg, do: @diff_palette.del_emphasis_bg
   defp del_gutter_bg, do: @diff_palette.del_gutter_bg
 
+  @doc """
+  The single source of the merged diff visual language's hex tiers (row
+  wash, intra-line emphasis, gutter tint -- see the comment above
+  `@diff_palette`): `add_base`/`add_row_bg`/`add_emphasis_bg`/`add_gutter_bg`
+  and their `del_*` counterparts, each an `"#RRGGBB"` string. This
+  Component's own grid rendering (`render/2`) always reads it through the
+  private per-tier accessors above; `diff_palette/0` exposes the SAME map
+  publicly so a second renderer of this diff visual language never forks
+  its own copy of these hexes. `Raxol.Harness.DiffExpansion`'s per-row
+  line renderer (the full-screen diff expansion's row-level tier of this
+  same visual language -- gutter bar plus row wash, no word-level
+  emphasis or syntax highlighting) is the first such caller.
+  """
+  @spec diff_palette() :: %{
+          add_base: String.t(),
+          add_row_bg: String.t(),
+          add_emphasis_bg: String.t(),
+          add_gutter_bg: String.t(),
+          del_base: String.t(),
+          del_row_bg: String.t(),
+          del_emphasis_bg: String.t(),
+          del_gutter_bg: String.t()
+        }
+  def diff_palette, do: @diff_palette
+
   # -- Perceptual transforms (H-K solver, Raxol.UI.Theming.Salience) --
   #
   # Ground lightness is the reference near-black; pairing this with the
