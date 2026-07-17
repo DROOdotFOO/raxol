@@ -5,14 +5,22 @@
       "name": "parent_traversal",
       "root": "root",
       "requested": "../../etc/passwd",
-      "setup": [{ "dir": "root" }],
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
       "expect": "path_traversal"
     },
     {
       "name": "interior_traversal_escapes",
       "root": "root",
       "requested": "a/../../x",
-      "setup": [{ "dir": "root" }],
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
       "expect": "path_traversal"
     },
     {
@@ -20,7 +28,11 @@
       "root": "root",
       "requested": "blobs/../../etc/x",
       "ref_format": "^(blobs|snapshots)/[0-9a-f]{64}(\\.json)?$",
-      "setup": [{ "dir": "root" }],
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
       "expect": "malformed_ref"
     },
     {
@@ -28,7 +40,11 @@
       "root": "root",
       "requested": "snapshots/../blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "ref_format": "^(blobs|snapshots)/[0-9a-f]{64}(\\.json)?$",
-      "setup": [{ "dir": "root" }],
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
       "expect": "malformed_ref"
     },
     {
@@ -36,7 +52,11 @@
       "root": "root",
       "requested": "blobs/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "ref_format": "^(blobs|snapshots)/[0-9a-f]{64}(\\.json)?$",
-      "setup": [{ "dir": "root" }],
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
       "expect": "malformed_ref"
     },
     {
@@ -44,7 +64,11 @@
       "root": "root",
       "requested": "blobs/abc123",
       "ref_format": "^(blobs|snapshots)/[0-9a-f]{64}(\\.json)?$",
-      "setup": [{ "dir": "root" }],
+      "setup": [
+        {
+          "dir": "root"
+        }
+      ],
       "expect": "malformed_ref"
     },
     {
@@ -52,10 +76,20 @@
       "root": "root",
       "requested": "link",
       "setup": [
-        { "dir": "root" },
-        { "dir": "outside" },
-        { "file": "outside/secret.txt", "content": "TOP SECRET" },
-        { "symlink": "root/link", "target": "../outside/secret.txt" }
+        {
+          "dir": "root"
+        },
+        {
+          "dir": "outside"
+        },
+        {
+          "file": "outside/secret.txt",
+          "content": "TOP SECRET"
+        },
+        {
+          "symlink": "root/link",
+          "target": "../outside/secret.txt"
+        }
       ],
       "expect": "symlink_escape"
     },
@@ -64,10 +98,20 @@
       "root": "root",
       "requested": "esc/secret.txt",
       "setup": [
-        { "dir": "root" },
-        { "dir": "outside" },
-        { "file": "outside/secret.txt", "content": "TOP SECRET" },
-        { "symlink": "root/esc", "target": "../outside" }
+        {
+          "dir": "root"
+        },
+        {
+          "dir": "outside"
+        },
+        {
+          "file": "outside/secret.txt",
+          "content": "TOP SECRET"
+        },
+        {
+          "symlink": "root/esc",
+          "target": "../outside"
+        }
       ],
       "expect": "symlink_escape"
     },
@@ -76,11 +120,42 @@
       "root": "root",
       "requested": "a",
       "setup": [
-        { "dir": "root" },
-        { "symlink": "root/a", "target": "b" },
-        { "symlink": "root/b", "target": "a" }
+        {
+          "dir": "root"
+        },
+        {
+          "symlink": "root/a",
+          "target": "b"
+        },
+        {
+          "symlink": "root/b",
+          "target": "a"
+        }
       ],
       "expect": "too_many_symlinks"
+    },
+    {
+      "name": "relative_symlink_under_symlinked_ancestor_escape",
+      "root": "root",
+      "requested": "loop/loop/esc",
+      "setup": [
+        {
+          "dir": "root"
+        },
+        {
+          "file": "secret.txt",
+          "content": "TOP SECRET"
+        },
+        {
+          "symlink": "root/loop",
+          "target": "."
+        },
+        {
+          "symlink": "root/esc",
+          "target": "../secret.txt"
+        }
+      ],
+      "expect": "symlink_escape"
     }
   ]
 }
