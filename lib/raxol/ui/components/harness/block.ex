@@ -117,7 +117,11 @@ defmodule Raxol.UI.Components.Harness.Block do
          `" [cross-turn]"` when that entry carries `cross_turn: true`
          (a ref the producer's own gate would never have accepted as
          same-turn evidence -- shown, not hidden);
-      3. a trailing `"+N more"` line when `n` exceeds `length(entries)`.
+      3. a trailing `"+N more"` line when `n` exceeds `length(entries)`,
+         itself suffixed `" (M cross-turn)"` when M of the hidden
+         (never-rendered) refs are cross-turn -- so the summary's
+         session-wide cross-turn tally is never left pointing at zero
+         visibly marked lines.
 
   Key absent or unrecognised shape renders no row at all -- byte-identical
   to a block that never went through the completion-evidence fold.
@@ -767,7 +771,8 @@ defmodule Raxol.UI.Components.Harness.Block do
     entry_rows =
       Enum.map(entries, &completion_text(completion_entry_line(&1), fg))
 
-    [summary | entry_rows] ++ completion_more_row(total, entries, fg)
+    [summary | entry_rows] ++
+      completion_more_row(total, entries, cross_turn_count, fg)
   end
 
   def completion_rows(%__MODULE__{}, _fg), do: []
@@ -806,15 +811,33 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp pluralize(word, 1), do: word
   defp pluralize(word, _other_count), do: word <> "s"
 
-  defp completion_more_row(total, entries, fg) do
+  defp completion_more_row(total, entries, cross_turn_count, fg) do
     remaining = total - length(entries)
 
     if remaining > 0 do
-      [completion_text("+#{remaining} more", fg)]
+      suffix = hidden_cross_turn_suffix(entries, cross_turn_count)
+      [completion_text("+#{remaining} more" <> suffix, fg)]
     else
       []
     end
   end
+
+  # A cross-turn ref pushed past the entry cap is tallied in the summary
+  # line but carries no visible "[cross-turn]" entry line of its own --
+  # without this suffix the render would read as internally inconsistent
+  # (a cross-turn count with zero marked lines). Hidden = the session-
+  # wide tally minus the SHOWN entries that already carry their own
+  # marker; when every cross-turn ref is visible (or there are none),
+  # the tail row stays exactly "+N more".
+  defp hidden_cross_turn_suffix(entries, cross_turn_count)
+       when is_integer(cross_turn_count) do
+    hidden =
+      cross_turn_count - Enum.count(entries, &Map.get(&1, :cross_turn))
+
+    if hidden > 0, do: " (#{hidden} cross-turn)", else: ""
+  end
+
+  defp hidden_cross_turn_suffix(_entries, _absent), do: ""
 
   defp outcome_row_view(outcome, fg) do
     case outcome_parts(outcome) do

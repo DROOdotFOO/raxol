@@ -106,18 +106,57 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   producer's evidence gate: the honest producer
   (`Raxol.Agent.Contract.gated_done_payload/4` / the evidence gate it
   consults) only ever emits gate-accepted, SAME-turn refs -- the gate is
-  the sole acceptance authority, and this module deliberately does not
-  duplicate its predicates (a duplicated predicate drifts from the one
-  true source). It could not call back into the gate even if it wanted
-  to: `raxol_agent` depends on main `raxol`, never the reverse. Session-
-  scope resolution here is a deliberate display-side SUPERSET of what an
-  honest producer emits -- a claim citing a ref the gate would have
-  rejected as foreign-turn is SHOWN, marked `cross_turn: true` (see
-  below), rather than hidden or silently resolved as if unremarkable. A
-  ref resolving to a non-evidence-class item (a `:message`, not a
-  `:tool_result`) is already disclosed by the type breakdown (renders
-  "1 message", never "1 tool result") -- `type` carries the "what kind"
+  the sole acceptance authority. A direct call back into the gate is
+  impossible (`raxol_agent` depends on main `raxol`, never the reverse),
+  but that only rules out CALLING it -- WHICH of its predicates to
+  re-derive locally is a decision, made on predicate stability:
+
+    * **Closed predicates are mirrored.** Index existence (a rejected
+      `missing_ref` renders `"unresolvable evidence ref"`), item_type
+      (a rejected `not_evidence` is disclosed by the type breakdown --
+      renders "1 message", never "1 tool result"), and turn_id equality
+      (a rejected `foreign_turn` renders marked `cross_turn: true`, see
+      below) are decidable from frozen wire facts and can never diverge
+      from the gate's own reading of them.
+    * **Open predicates are knowingly NOT mirrored** -- see "Knowingly
+      unmarked" below.
+
+  Session-scope resolution here is a deliberate display-side SUPERSET of
+  what an honest producer emits -- a claim citing a ref the gate would
+  have rejected as foreign-turn is SHOWN, marked, rather than hidden or
+  silently resolved as if unremarkable. `type` carries the "what kind"
   signal, `cross_turn` the orthogonal "which turn" signal.
+
+  ## Knowingly unmarked: stale and mutation-echo
+
+  A same-turn ref the gate would reject as `stale_evidence` (the cited
+  result predates a later mutation in the claiming turn) or as
+  `mutation_echo` (the last mutation's own result echo, verifying
+  nothing) renders as ordinary, UNMARKED evidence. This is a conscious
+  decision, pinned by tests, not an oversight. Both predicates consume
+  the gate's mutation predicate, which is an OPEN predicate: today it is
+  fail-safe ("every completed `tool_use` is a mutation ... and not
+  `classified_effect_free?`", where `classified_effect_free?/1` is
+  constantly false), but that private function is an explicit, designed
+  refinement seam -- a structural effect classification is planned to
+  remove effect-free tools from the mutation set. Mirroring today's
+  everything-mutates reading into this renderer would freeze it here:
+  once the seam is filled, gate-ACCEPTED evidence (accepted precisely
+  because the intervening tools were classified effect-free) would
+  render with false stale/echo marks -- the display would accuse honest
+  evidence, which burns trust in the marks that ARE reliable. The
+  closed-predicate marks above never have that failure mode.
+
+  Bound on the residual: the current gate is fail-closed on journals
+  without effect classification, and the producer attaches `refs` ONLY
+  on gate-accept -- so today's honest wire never carries refs at all,
+  and an unmarked stale/echo render is reachable only through a
+  tampered or synthetic journal. Even there, the closed-predicate marks
+  and the projection's `damaged` flag still catch most tampering
+  shapes; what remains unmarked is exactly a same-turn, evidence-class,
+  index-resolvable ref whose only defect is ordering relative to
+  mutations -- a defect only the gate's evolving mutation predicate can
+  judge without false accusations.
 
   ## Cross-turn disclosure
 

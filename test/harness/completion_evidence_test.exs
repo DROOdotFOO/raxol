@@ -342,6 +342,164 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       assert Enum.any?(texts, &(&1 == "5 evidence refs: 5 tool results")),
              "expected the summary line to break down all 5 refs by type, got: #{inspect(texts)}"
     end
+
+    test "a cross-turn ref hidden beyond the entry cap is disclosed on the +N more tail row" do
+      events =
+        List.flatten([
+          loop(1, "t0", 100, :turn_started, %{}),
+          tool_round_trip(2, "t0", 200, "earlier_tool", "earlier result"),
+          turn_completed(6, "t0", 300, %{}),
+          loop(7, "t1", 400, :turn_started, %{}),
+          tool_round_trip(8, "t1", 500, "tool_a", "result a"),
+          tool_round_trip(12, "t1", 600, "tool_b", "result b"),
+          tool_round_trip(16, "t1", 700, "tool_c", "result c"),
+          message(20, "t1", 800, "all four ran"),
+          # The cross-turn ref (t0's tool_result, id 5) sits BEYOND the
+          # cap: no visible entry line carries "[cross-turn]", so the
+          # tail row must carry the disclosure instead -- a summary
+          # count with zero visibly marked lines would otherwise read
+          # as internally inconsistent.
+          turn_completed(22, "t1", 900, %{"refs" => [11, 15, 19, 5]})
+        ])
+
+      proj = Projection.project(events)
+      texts = last_block(proj) |> Block.render(%{}) |> flat_texts()
+
+      assert Enum.any?(texts, &(&1 == "+1 more (1 cross-turn)")),
+             "expected the tail row to disclose the hidden cross-turn ref, got: #{inspect(texts)}"
+
+      assert Enum.any?(texts, &(&1 == "4 evidence refs: 4 tool results (1 cross-turn)")),
+             "expected the summary to keep the session-wide tally, got: #{inspect(texts)}"
+
+      refute Enum.any?(texts, &(&1 =~ "[cross-turn]")),
+             "no SHOWN entry is cross-turn here; only the tail row should disclose"
+    end
+
+    test "a cross-turn ref within the shown entries leaves the +N more tail row plain" do
+      events =
+        List.flatten([
+          loop(1, "t0", 100, :turn_started, %{}),
+          tool_round_trip(2, "t0", 200, "earlier_tool", "earlier result"),
+          turn_completed(6, "t0", 300, %{}),
+          loop(7, "t1", 400, :turn_started, %{}),
+          tool_round_trip(8, "t1", 500, "tool_a", "result a"),
+          tool_round_trip(12, "t1", 600, "tool_b", "result b"),
+          tool_round_trip(16, "t1", 700, "tool_c", "result c"),
+          message(20, "t1", 800, "all four ran"),
+          # The cross-turn ref is FIRST (shown, line-marked); the hidden
+          # fourth ref (tool_c's result, id 19) is same-turn -- the tail
+          # row must stay exactly "+1 more", no suffix.
+          turn_completed(22, "t1", 900, %{"refs" => [5, 11, 15, 19]})
+        ])
+
+      proj = Projection.project(events)
+      texts = last_block(proj) |> Block.render(%{}) |> flat_texts()
+
+      assert Enum.any?(texts, &(&1 == "+1 more")),
+             "expected a plain tail row (the hidden ref is same-turn), got: #{inspect(texts)}"
+
+      assert Enum.any?(texts, &(&1 =~ "[cross-turn]")),
+             "the shown cross-turn entry keeps its own line marker"
+    end
+  end
+
+  # -- knowingly unmarked: stale and mutation-echo ---------------------------
+  #
+  # Behavior PINS, green by design: a same-turn ref the producer's
+  # evidence gate would reject as stale (cited result predates a later
+  # mutation) or as the last mutation's own result echo renders as
+  # ordinary, UNMARKED evidence. This is a documented decision, not an
+  # oversight -- see `Raxol.Harness.Projection.BlockBuilder`'s moduledoc,
+  # "Knowingly unmarked: stale and mutation-echo" (the gate's mutation
+  # predicate is an open predicate with a designed refinement seam;
+  # mirroring it display-side would false-flag gate-accepted evidence
+  # once that seam is filled). If either pin breaks, the change must be
+  # a conscious decision made against that moduledoc section.
+
+  describe "knowingly unmarked: stale and mutation-echo refs render as ordinary evidence" do
+    test "a same-turn ref the gate would reject as stale (result predates a later tool call) renders unmarked (knowingly -- see moduledoc)" do
+      events =
+        List.flatten([
+          loop(1, "t1", 100, :turn_started, %{}),
+          # tool_result item_completed lands at id 5 ...
+          tool_round_trip(2, "t1", 200, "mix_test", "42 tests, 0 failures"),
+          # ... then a LATER completed tool_use (a mutation under the
+          # gate's fail-safe predicate) at id 7 ...
+          loop(6, "t1", 300, :item_started, %{
+            "item_id" => "im",
+            "item_type" => "tool_use"
+          }),
+          loop(7, "t1", 400, :item_completed, %{
+            "item_id" => "im",
+            "item_type" => "tool_use",
+            "name" => "rm_rf",
+            "arguments" => %{}
+          }),
+          # ... and the done cites the now-stale earlier result.
+          turn_completed(8, "t1", 500, %{"refs" => [5]})
+        ])
+
+      proj = Projection.project(events)
+      completion = last_block(proj).content.completion
+
+      # Exact equality: no cross_turn key, no stale marker of any kind.
+      assert completion == %{
+               evidence: [
+                 %{
+                   ref: 5,
+                   type: :tool_result,
+                   label: "mix_test — 42 tests, 0 failures"
+                 }
+               ],
+               total: 1,
+               type_counts: [%{type: :tool_result, count: 1}]
+             }
+
+      completion_texts =
+        last_block(proj)
+        |> Block.completion_rows()
+        |> Enum.flat_map(&flat_texts/1)
+
+      assert "· mix_test — 42 tests, 0 failures" in completion_texts
+      assert "1 evidence ref: 1 tool result" in completion_texts
+      refute Enum.any?(completion_texts, &(&1 =~ "["))
+    end
+
+    test "a same-turn ref the gate would reject as the last mutation's own result echo renders unmarked (knowingly -- see moduledoc)" do
+      events =
+        List.flatten([
+          loop(1, "t1", 100, :turn_started, %{}),
+          # A single tool round-trip: under the gate's fail-safe
+          # predicate the tool_use is the turn's last mutation and its
+          # own result (id 5) is that mutation's echo.
+          tool_round_trip(2, "t1", 200, "mix_test", "42 tests, 0 failures"),
+          turn_completed(6, "t1", 300, %{"refs" => [5]})
+        ])
+
+      proj = Projection.project(events)
+      completion = last_block(proj).content.completion
+
+      assert completion == %{
+               evidence: [
+                 %{
+                   ref: 5,
+                   type: :tool_result,
+                   label: "mix_test — 42 tests, 0 failures"
+                 }
+               ],
+               total: 1,
+               type_counts: [%{type: :tool_result, count: 1}]
+             }
+
+      completion_texts =
+        last_block(proj)
+        |> Block.completion_rows()
+        |> Enum.flat_map(&flat_texts/1)
+
+      assert "· mix_test — 42 tests, 0 failures" in completion_texts
+      assert "1 evidence ref: 1 tool result" in completion_texts
+      refute Enum.any?(completion_texts, &(&1 =~ "["))
+    end
   end
 
   # -- summary line breakdown (accord-example literal strings) -------------
