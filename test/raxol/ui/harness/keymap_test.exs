@@ -125,10 +125,10 @@ defmodule Raxol.UI.Harness.KeymapTest do
              }) == :passthrough
     end
 
-    test "plain 'e' while NOT composing is also :passthrough ('e' is not a nav bind)" do
+    test "plain 'e' while NOT composing is :expand_diff (the full-screen diff expansion nav bind)" do
       assert resolve_from(Event.key_event("e", :pressed, []), %{
                composing?: false
-             }) == :passthrough
+             }) == %{type: :expand_diff, payload: %{block_id: nil}}
     end
 
     test "Ctrl+Alt+E -> :passthrough (chord binds require an EXACT mods match)" do
