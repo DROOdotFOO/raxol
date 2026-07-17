@@ -276,6 +276,101 @@ Today's journal store (`Ext.Journal.Mem`) is in-memory — durable across
 disk-backed store is future work; see [Danger-zone gates](#danger-zone-gates)
 below for what must be true before one ships.
 
+**The moat ships opt-in, not turnkey.** `Ext.*` (journal, `Reattach`,
+`AttachPolicy`) is a set of primitives your agent handler wires together —
+`use Agent` alone gives you `method_not_found` on `session/load`'s
+`_meta["raxol.io"]` rider and on `_raxol/session.load`, because no default
+`Agent`/`Client` callback body can know your session-to-journal mapping or
+which `AttachPolicy` you want. Turning it on is the ~30 lines below in your
+own `new_session`/`raxol_load_session` callbacks, plus the three shared
+processes in [`RaxolAgentClientProtocol.Application.children/0`](lib/raxol/agent_client_protocol/application.ex)
+started somewhere in your supervision tree.
+
+### Enabling durable resumable sessions
+
+Two things have to be true before an attach can succeed: (1) the shared
+`Ext.Journal.WriterRegistry`/`WriterSupervisor` and `Ext.AttachPolicy.TaskSupervisor`
+processes are running (splice `RaxolAgentClientProtocol.Application.children/0`
+into your own supervisor, or let the package's own `Application` auto-start
+them — see its moduledoc), and (2) your agent handler implements `new_session/2`
+to open a journal + start the durable `Session`, and `raxol_load_session/2` to
+route `_raxol/session.load` through `Reattach.attach/1`. Adapted from the
+end-to-end test's `RefAgent` (`test/integration/end_to_end_test.exs`), the
+real public-API sequence:
+
+```elixir
+defmodule MyDurableAgent do
+  use Raxol.AgentClientProtocol.Agent
+  alias Raxol.AgentClientProtocol.Ext.{Journal, Reattach}
+  alias Raxol.AgentClientProtocol.Ext.AttachPolicy.LocalNode
+  alias Raxol.AgentClientProtocol.Session
+  alias Raxol.AgentClientProtocol.Session.Emitter.Journal, as: JournalEmitter
+  alias Raxol.AgentClientProtocol.Schema.AgentTypes.NewSessionResponse
+
+  # handler_arg = %{session_id: sid, journal: {Mem, ref}} — open the journal
+  # (`Ext.Journal.Mem.open/1`) before starting the connection, pass it in via
+  # `handler_arg:`; `init/1` just threads it into `ctx.handler_state`.
+  @impl true
+  def init(arg), do: {:ok, arg}
+
+  @impl true
+  def new_session(_req, ctx) do
+    %{session_id: sid, journal: journal} = ctx.handler_state
+    {:ok, _writer} = Journal.ensure_writer(sid, journal)
+
+    {:ok, _session} =
+      Session.Supervisor.start_session(ctx.session_sup,
+        session_id: sid,
+        conn: ctx.conn,
+        task_sup: ctx.task_sup,
+        turn_runner: &my_turn_runner/2,
+        emitter: JournalEmitter,
+        journal: journal
+      )
+
+    {:ok, NewSessionResponse.new(sid)}
+  end
+
+  # `_raxol/session.load` — the one attach seam every reattach converges on.
+  @impl true
+  def raxol_load_session(%{session_id: sid, _meta: meta}, ctx) do
+    %{journal: journal} = ctx.handler_state
+    rider = Reattach.parse_rider(get_in(meta, ["raxol.io"]))
+
+    Reattach.attach(%{
+      conn: ctx.conn,
+      session_id: sid,
+      reply_ref: ctx.reply_ref,
+      journal: journal,
+      from_offset: rider.from_offset,
+      history_policy: rider.history_policy,
+      capability: rider.capability,
+      offset_aware?: true,
+      surface: :process,
+      transport: %{kind: :process, peer: nil},
+      # LocalNode grants any in-BEAM :process attach; swap in
+      # `Ext.AttachPolicy.Token` for signed RXC1 capability tokens instead.
+      policy: LocalNode
+    })
+  end
+end
+```
+
+Splice the three shared processes into your supervision tree once, at the
+app level, not per-connection — required for `Journal.ensure_writer/2` and
+`Reattach.attach/1` to work at all:
+
+```elixir
+children = RaxolAgentClientProtocol.Application.children() ++ [my_other_children]
+Supervisor.start_link(children, strategy: :one_for_one, name: MyApp.Supervisor)
+```
+
+Without a `start_subscriber:` override in the `attach/1` call above, the
+Reattach `Subscriber` links to the ephemeral dispatch task and is torn down
+when it exits — fine for a demo, but see `RefAgent`'s `start_subscriber:`
+(starts the subscriber under `ctx.session_sup` instead) if you need its
+lifetime tied to the connection rather than the single dispatch.
+
 ## Provenance
 
 See `NOTICE.md` for the full attribution. Summary:
