@@ -17,8 +17,8 @@
 # raxol_agent Mix project, which path-depends on main raxol:
 #
 #   cd packages/raxol_agent
-#   mix run --no-start ../../examples/harness_live_demo.exs
-#   mix run --no-start ../../examples/harness_live_demo.exs --prompt "hello world"
+#   mix run --no-start examples/harness_live_demo.exs
+#   mix run --no-start examples/harness_live_demo.exs --prompt "hello world"
 #
 # `--no-start` avoids interleaving application boot logs into the byte
 # stream, exactly as the fixture demo documents -- everything this demo
@@ -88,7 +88,7 @@
 #
 #   cd packages/raxol_agent
 #   script -q /tmp/live_demo.out \
-#     mix run --no-start ../../examples/harness_live_demo.exs --prompt "hello world"
+#     mix run --no-start examples/harness_live_demo.exs --prompt "hello world"
 
 defmodule Raxol.Examples.HarnessLiveDemo do
   @moduledoc false
@@ -471,7 +471,7 @@ defmodule Raxol.Examples.HarnessLiveDemo do
         "raxol_agent is not on the code path -- run this demo from the " <>
           "raxol_agent package (main raxol does not depend on it):\n\n" <>
           "  cd packages/raxol_agent\n" <>
-          "  mix run --no-start ../../examples/harness_live_demo.exs"
+          "  mix run --no-start examples/harness_live_demo.exs"
       )
 
       System.halt(1)
