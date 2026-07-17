@@ -68,7 +68,10 @@ defmodule Raxol.UI.Components.Harness.MessageBlockTest do
 
         rendered = MessageBlock.render(state, default_context())
 
-        refute Enum.any?(flat_texts(rendered), &(&1 =~ ~r/\[(assistant|user)\]/)),
+        refute Enum.any?(
+                 flat_texts(rendered),
+                 &(&1 =~ ~r/\[(assistant|user)\]/)
+               ),
                "the #{role} tagline row must never render"
       end
     end
@@ -207,6 +210,131 @@ defmodule Raxol.UI.Components.Harness.MessageBlockTest do
 
       assert new_state == state
       assert commands == []
+    end
+  end
+
+  # -- U1-a re-host: controlled fold vocabulary + TreeWalker stamping ------
+
+  describe "controlled fold vocabulary (z / enter / space)" do
+    # `z` is today's transcript fold key (Keymap binds char "z" ->
+    # :fold_toggle, guard :not_composing); enter/space mirror
+    # ReasoningBlock's activation keys. The component stays CONTROLLED:
+    # it owns no fold state of its own -- it emits the wired `:on_toggle`
+    # message out and leaves folding to the model that hosts it.
+    defp char_event(char),
+      do: %Event{type: :key, data: %{key: :char, char: char}}
+
+    test "z emits the wired on_toggle message, state untouched" do
+      {:ok, state} =
+        MessageBlock.init(
+          id: :m_z,
+          content: "hi",
+          on_toggle: {:toggle_fold, :m_z}
+        )
+
+      {new_state, commands} =
+        MessageBlock.handle_event(char_event("z"), state, %{})
+
+      assert new_state == state
+      assert commands == [{:toggle_fold, :m_z}]
+    end
+
+    test "enter and space emit the wired on_toggle message" do
+      {:ok, state} =
+        MessageBlock.init(id: :m_act, content: "hi", on_toggle: :folded!)
+
+      for key <- [:enter, :space] do
+        event = %Event{type: :key, data: %{key: key}}
+        {new_state, commands} = MessageBlock.handle_event(event, state, %{})
+
+        assert new_state == state
+        assert commands == [:folded!], "#{key} must emit the on_toggle message"
+      end
+    end
+
+    test "fold keys emit nothing when on_toggle is not wired" do
+      {:ok, state} = MessageBlock.init(id: :m_unwired, content: "hi")
+
+      for event <- [char_event("z"), %Event{type: :key, data: %{key: :space}}] do
+        assert {^state, []} = MessageBlock.handle_event(event, state, %{})
+      end
+    end
+
+    test "modified z (ctrl/alt) passes through without emitting" do
+      {:ok, state} =
+        MessageBlock.init(id: :m_mod, content: "hi", on_toggle: :nope)
+
+      for modifier <- [:ctrl, :alt] do
+        event = %Event{
+          type: :key,
+          data: Map.put(%{key: :char, char: "z"}, modifier, true)
+        }
+
+        assert {^state, []} = MessageBlock.handle_event(event, state, %{})
+      end
+    end
+  end
+
+  describe "TreeWalker stamping (F0-mcp requirements)" do
+    test "root node carries id, role-invariant attrs, and the wired on_click" do
+      {:ok, state} =
+        MessageBlock.init(
+          id: "msg-1",
+          role: :user,
+          content: "hello",
+          on_toggle: {:toggle_fold, "msg-1"}
+        )
+
+      rendered = MessageBlock.render(state, default_context())
+
+      assert rendered.id == "msg-1"
+      assert rendered.on_click == {:toggle_fold, "msg-1"}
+      assert rendered.attrs.kind == :message
+      assert rendered.attrs.mode == :sealed
+
+      refute Map.has_key?(rendered.attrs, :role),
+             "attrs must stay role-invariant -- speaker grammar is the host's"
+    end
+
+    test "attrs carry the component_module marker for tool derivation" do
+      {:ok, state} = MessageBlock.init(id: "msg-2", content: "hi")
+      rendered = MessageBlock.render(state, default_context())
+
+      assert rendered.attrs.component_module == MessageBlock
+      assert rendered.on_click == nil
+    end
+  end
+
+  describe "ToolProvider derivation" do
+    test "mcp_tools/1 derives a toggle action only when on_toggle is wired" do
+      {:ok, wired} =
+        MessageBlock.init(id: "msg-3", content: "hi", on_toggle: :flip)
+
+      {:ok, unwired} = MessageBlock.init(id: "msg-4", content: "hi")
+
+      wired_node = MessageBlock.render(wired, default_context())
+      unwired_node = MessageBlock.render(unwired, default_context())
+
+      assert [%{name: "toggle"}] = MessageBlock.mcp_tools(wired_node)
+
+      assert MessageBlock.mcp_tools(unwired_node) == [],
+             "an unwired block must not advertise a toggle it cannot honor"
+    end
+
+    test "handle_tool_call/3 toggle dispatches a widget-targeted click" do
+      context = %{widget_id: "msg-5", widget_state: %{}, dispatcher_pid: nil}
+
+      assert {:ok, _result, [event]} =
+               MessageBlock.handle_tool_call("toggle", %{}, context)
+
+      assert %Event{type: :click, data: %{widget_id: "msg-5"}} = event
+    end
+
+    test "unknown actions error" do
+      context = %{widget_id: "msg-6", widget_state: %{}, dispatcher_pid: nil}
+
+      assert {:error, _reason} =
+               MessageBlock.handle_tool_call("explode", %{}, context)
     end
   end
 end

@@ -221,4 +221,70 @@ defmodule Raxol.MCP.TreeWalkerTest do
       assert names1 == names2
     end
   end
+
+  describe "attrs.component_module marker (harness U1 seam)" do
+    # Components whose root emits a plain layout type (:column, :row)
+    # declare their provider explicitly -- the seam that lets app-side
+    # components derive tools without teaching this package their types.
+
+    test "a layout-typed node with a provider marker derives its tools" do
+      tree = %{
+        type: :column,
+        id: "blk-1",
+        attrs: %{component_module: TestButton, label: "Fold"},
+        children: [%{type: :text, content: "body"}]
+      }
+
+      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+
+      assert [%{name: "blk-1.click"}] = tools
+    end
+
+    test "an explicit marker wins over the built-in type map" do
+      tree = %{
+        type: :button,
+        id: "btn-m",
+        attrs: %{component_module: TestInput, value: "v"}
+      }
+
+      names =
+        TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+        |> Enum.map(& &1.name)
+        |> Enum.sort()
+
+      assert names == ["btn-m.get_value", "btn-m.type_into"]
+    end
+
+    test "mcp_exclude still suppresses a marker node" do
+      tree = %{
+        type: :column,
+        id: "blk-2",
+        attrs: %{component_module: TestButton, mcp_exclude: true}
+      }
+
+      assert TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map}) == []
+    end
+
+    test "a marker naming a non-provider module derives nothing" do
+      tree = %{
+        type: :column,
+        id: "blk-3",
+        attrs: %{component_module: Enum}
+      }
+
+      assert TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map}) == []
+    end
+
+    test "a non-atom marker is ignored, falling back to the type map" do
+      tree = %{
+        type: :button,
+        id: "blk-4",
+        attrs: %{component_module: "not a module", label: "Go", disabled: false}
+      }
+
+      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+
+      assert [%{name: "blk-4.click"}] = tools
+    end
+  end
 end

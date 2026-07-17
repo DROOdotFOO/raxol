@@ -141,4 +141,115 @@ defmodule Raxol.UI.Components.Harness.ReasoningBlockTest do
       assert new_state == state
     end
   end
+
+  # -- U1-a re-host: fold vocabulary + TreeWalker stamping -----------------
+
+  describe "controlled fold vocabulary (z + on_toggle emission)" do
+    defp char_event(char),
+      do: %Event{type: :key, data: %{key: :char, char: char}}
+
+    test "z toggles expanded state (today's transcript fold key)" do
+      {:ok, state} = ReasoningBlock.init(id: :r_z, content: "x")
+
+      {expanded_state, []} =
+        ReasoningBlock.handle_event(char_event("z"), state, %{})
+
+      assert expanded_state.expanded == true
+
+      {collapsed_state, []} =
+        ReasoningBlock.handle_event(char_event("z"), expanded_state, %{})
+
+      assert collapsed_state.expanded == false
+    end
+
+    test "toggle keys emit the wired on_toggle message alongside the local flip" do
+      {:ok, state} =
+        ReasoningBlock.init(id: :r_emit, content: "x", on_toggle: :peek!)
+
+      for event <- [char_event("z"), key_event(:enter), key_event(:space)] do
+        {new_state, commands} = ReasoningBlock.handle_event(event, state, %{})
+
+        assert new_state.expanded == true
+        assert commands == [:peek!]
+      end
+    end
+
+    test "modified z (ctrl/alt) passes through without toggling" do
+      {:ok, state} =
+        ReasoningBlock.init(id: :r_mod, content: "x", on_toggle: :nope)
+
+      for modifier <- [:ctrl, :alt] do
+        event = %Event{
+          type: :key,
+          data: Map.put(%{key: :char, char: "z"}, modifier, true)
+        }
+
+        assert {^state, []} = ReasoningBlock.handle_event(event, state, %{})
+      end
+    end
+  end
+
+  describe "TreeWalker stamping (F0-mcp requirements)" do
+    test "root node carries id, attrs, and the wired on_click" do
+      {:ok, state} =
+        ReasoningBlock.init(
+          id: "reasoning-1",
+          content: "one\ntwo",
+          on_toggle: :toggle_reasoning
+        )
+
+      rendered = ReasoningBlock.render(state, default_context())
+
+      assert rendered.id == "reasoning-1"
+      assert rendered.on_click == :toggle_reasoning
+      assert rendered.attrs.kind == :reasoning
+      assert rendered.attrs.expanded == false
+      assert rendered.attrs.lines == 2
+      assert rendered.attrs.component_module == ReasoningBlock
+    end
+
+    test "attrs.expanded tracks the prop" do
+      {:ok, state} =
+        ReasoningBlock.init(id: "reasoning-2", content: "x", expanded: true)
+
+      rendered = ReasoningBlock.render(state, default_context())
+
+      assert rendered.attrs.expanded == true
+      assert rendered.on_click == nil
+    end
+  end
+
+  describe "ToolProvider derivation" do
+    test "mcp_tools/1 derives a toggle action only when on_toggle is wired" do
+      {:ok, wired} =
+        ReasoningBlock.init(id: "r-w", content: "x", on_toggle: :flip)
+
+      {:ok, unwired} = ReasoningBlock.init(id: "r-u", content: "x")
+
+      assert [%{name: "toggle"}] =
+               ReasoningBlock.mcp_tools(
+                 ReasoningBlock.render(wired, default_context())
+               )
+
+      assert ReasoningBlock.mcp_tools(
+               ReasoningBlock.render(unwired, default_context())
+             ) == []
+    end
+
+    test "handle_tool_call/3 toggle dispatches a widget-targeted click" do
+      context = %{widget_id: "r-t", widget_state: %{}, dispatcher_pid: nil}
+
+      assert {:ok, _result, [event]} =
+               ReasoningBlock.handle_tool_call("toggle", %{}, context)
+
+      assert %Event{type: :click, data: %{widget_id: "r-t"}} = event
+    end
+
+    test "unknown actions error" do
+      context = %{widget_id: "r-x", widget_state: %{}, dispatcher_pid: nil}
+
+      assert {:error, _reason} =
+               ReasoningBlock.handle_tool_call("explode", %{}, context)
+    end
+  end
 end

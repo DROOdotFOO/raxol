@@ -502,6 +502,7 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
           background: bg
         }
         |> Map.merge(Map.take(attrs_map, [:bold, :underline, :italic]))
+        |> put_faint(attrs_map)
         |> put_hyperlink(hyperlink)
 
       {x, y, sanitize_char(char) || " ", style}
@@ -526,4 +527,13 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
 
   defp put_hyperlink(style, nil), do: style
   defp put_hyperlink(style, url), do: Map.put(style, :hyperlink, url)
+
+  # The View-DSL attribute is `:dim`; the cell's `TextFormatting` field is
+  # `:faint` (SGR 2's name). Without this translation the prominence
+  # channel silently died at the buffer-write boundary: a `%{dim: true}`
+  # element rendered, but `get_buffer` cell styles showed `faint: false`,
+  # making buffer-level dim asserts (harness §7 prominence pins)
+  # unfalsifiable. Pinned by the harness block demo headless tests.
+  defp put_faint(style, %{dim: true}), do: Map.put(style, :faint, true)
+  defp put_faint(style, _attrs_map), do: style
 end

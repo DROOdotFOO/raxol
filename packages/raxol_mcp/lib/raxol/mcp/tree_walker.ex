@@ -25,6 +25,18 @@ defmodule Raxol.MCP.TreeWalker do
 
   The widget and its children still render normally -- only MCP tool
   exposure is suppressed. Useful for decorative or internal widgets.
+
+  ## Explicit provider marker (`attrs.component_module`)
+
+  Components whose root emits a plain layout type (`:column`, `:row`) can
+  declare their providing module explicitly instead of growing this
+  package's type map (the harness block Components do this):
+
+      %{type: :column, id: "blk", attrs: %{component_module: MyBlock}}
+
+  An explicit marker wins over the built-in type map; the same
+  `ToolProvider` guard applies, so a module that does not implement the
+  behaviour still derives nothing, and a non-atom marker is ignored.
   """
 
   alias Raxol.MCP.ToolProvider
@@ -125,7 +137,7 @@ defmodule Raxol.MCP.TreeWalker do
   end
 
   defp derive_widget_tools(node, type, id, context, type_map) do
-    case Map.get(type_map, type) do
+    case resolve_module(node, type, type_map) do
       nil ->
         []
 
@@ -136,6 +148,20 @@ defmodule Raxol.MCP.TreeWalker do
         else
           []
         end
+    end
+  end
+
+  # An explicit `attrs.component_module` declaration wins over the
+  # built-in type map (the marker exists precisely for nodes whose :type
+  # is a plain layout container). `ToolProvider.tool_provider?/1` guards
+  # both paths, so an arbitrary/unloaded module still derives nothing.
+  defp resolve_module(node, type, type_map) do
+    case node do
+      %{attrs: %{component_module: module}} when is_atom(module) and not is_nil(module) ->
+        module
+
+      _no_marker ->
+        Map.get(type_map, type)
     end
   end
 

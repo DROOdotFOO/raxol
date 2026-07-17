@@ -512,6 +512,50 @@ defmodule Raxol.Playground.Catalog do
       ToolCallBlock.init(name: "Bash", args: %{command: "ls"}, status: :running)
       ToolResultBlock.init(output: fetched_page, taint: true)  # composes TaintBadge
       """
+    },
+    # --- Harness TEA blocks (migration §7: one demo per block kind) ---
+    %{
+      name: "Harness Message Block",
+      module: Demos.HarnessMessageBlockDemo,
+      category: :harness,
+      description:
+        "Transcript message blocks as controlled Components: mirrored speaker sigils (user ❯ / assistant ❮), fold toggle, MCP toggle tool",
+      complexity: :intermediate,
+      tags: ["harness", "message", "transcript", "sigil", "controlled", "mcp"],
+      code_snippet: """
+      {:ok, s} =
+        MessageBlock.init(
+          id: "msg-1", role: :user, content: "hi",
+          on_toggle: {:toggle_fold, "msg-1"}
+        )
+
+      MessageBlock.render(s, %{})  # root stamped id/attrs/on_click for MCP
+      """
+    },
+    %{
+      name: "Harness Reasoning Block",
+      module: Demos.HarnessReasoningBlockDemo,
+      category: :harness,
+      description:
+        "The quiet reasoning register: collapsed by default, dim, peekable — component body plus the sealed ∴ transcript line",
+      complexity: :intermediate,
+      tags: [
+        "harness",
+        "reasoning",
+        "transcript",
+        "collapsible",
+        "controlled",
+        "mcp"
+      ],
+      code_snippet: """
+      {:ok, s} =
+        ReasoningBlock.init(
+          id: "reasoning", content: thought, expanded: false,
+          on_toggle: :toggle_reasoning
+        )
+
+      ReasoningBlock.render(s, %{})  # z/enter/space peek; emits on_toggle
+      """
     }
   ]
 
