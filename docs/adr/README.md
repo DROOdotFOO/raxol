@@ -34,6 +34,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0026](0026-execute-code-pipeline-collapse.md) | `execute_code` programmatic tool-calling | Proposed | 2026-06-18 |
 | [0027](0027-delegate-task-subagents.md) | `delegate_task` summary-only subagents | Proposed | 2026-06-18 |
 | [0028](0028-auxiliary-model-routing.md) | Auxiliary-model routing | Proposed | 2026-06-18 |
+| [0030](0030-acp-session-update-delivery-ordering.md) | ACP session/update delivery ordering contract | Proposed | 2026-07-18 |
 
 ## Template
 
@@ -113,6 +114,7 @@ They preserve context for why decisions were made, help new contributors underst
 - [0016: raxol_acp Job migration to Workflow](0016-acp-job-workflow.md)
 - [0017: Workflow paused-run query and pause-checkpoint contract](0017-acp-workflow-paused-jobs.md)
 - [0018: Operator-flow contract for paused runs](0018-operator-flow-contract.md)
+- [0030: ACP session/update delivery ordering contract](0030-acp-session-update-delivery-ordering.md)
 - [0019: Workflow concurrency (joins + channels)](0019-workflow-concurrency.md)
 
 ### Agent stack
