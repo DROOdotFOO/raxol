@@ -196,12 +196,20 @@ defmodule Raxol.Harness.DiffExpansion do
 
   ## Options
 
-    * `:width` (required) -- display-width budget, `>= 1`.
+    * `:width` (required) -- display-width budget. Floored at
+      `@gutter_width + 1` (3): every rendered body row prepends a fixed
+      `@gutter_width`-column gutter (`"▌" <> " "`, or two spaces for an
+      `:equal` row), so a narrower budget can never fit even a
+      zero-content row -- the gutter alone would overflow the column
+      count and wrap onto the next row (which `InlineAuthority.repaint/2`
+      does NOT re-truncate). Below the floor there is also no content
+      column left to show, so a sub-floor width is degenerate twice over.
     * `:view_rows` (required) -- visible content rows (excluding the
       header), `>= 1`.
 
-  Refuses with `{:error, :degenerate_view}` when either geometry value is
-  missing or `< 1` -- checked BEFORE content validation, since a
+  Refuses with `{:error, :degenerate_view}` when `view_rows` is missing
+  or `< 1`, or when `width` is missing or below the gutter floor
+  (`< @gutter_width + 1`) -- checked BEFORE content validation, since a
   degenerate viewport can never render anything regardless of content.
   Refuses with `{:error, {:invalid_content, reason}}` when `content` is
   missing a required `:diff` key (`Raxol.UI.Components.Harness.BodyProvider.validate/2`,
@@ -219,8 +227,8 @@ defmodule Raxol.Harness.DiffExpansion do
   end
 
   defp validate_geometry(width, view_rows)
-       when is_integer(width) and width >= 1 and is_integer(view_rows) and
-              view_rows >= 1,
+       when is_integer(width) and width >= @gutter_width + 1 and
+              is_integer(view_rows) and view_rows >= 1,
        do: :ok
 
   defp validate_geometry(_width, _view_rows), do: {:error, :degenerate_view}
@@ -375,8 +383,8 @@ defmodule Raxol.Harness.DiffExpansion do
   @spec resize_view(t(), pos_integer(), pos_integer()) ::
           {:ok, t()} | {:error, :degenerate_view}
   def resize_view(t, width, view_rows)
-      when is_integer(width) and width >= 1 and is_integer(view_rows) and
-             view_rows >= 1 do
+      when is_integer(width) and width >= @gutter_width + 1 and
+             is_integer(view_rows) and view_rows >= 1 do
     lines = render_diff_lines(t.content, width)
     total = length(lines)
 

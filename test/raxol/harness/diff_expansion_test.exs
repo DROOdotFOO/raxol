@@ -133,6 +133,40 @@ defmodule Raxol.Harness.DiffExpansionTest do
     end
   end
 
+  describe "gutter width floor (honest refusal, never overflow bytes)" do
+    # Every body row prepends a fixed 2-column gutter (`▌` + gap, or two
+    # spaces for an `:equal` row), so a row is at least 2 display columns
+    # regardless of `width`. `InlineAuthority.repaint/2` does NOT truncate
+    # an over-wide line -- it wraps onto the next row (or past the screen
+    # bottom on the last footer row), overwriting content. The only honest
+    # behavior below the gutter floor is to REFUSE, not to render bytes
+    # wider than the column count. Red-first: before the floor,
+    # `new(width: 1)` returned `{:ok, _}` whose body rows rendered 2
+    # display columns into a 1-column budget.
+    test "refuses width 1 -- the exact case where a 2-col gutter overflows a 1-col budget" do
+      assert {:error, :degenerate_view} =
+               DiffExpansion.new(content("a", "b"), width: 1, view_rows: 4)
+    end
+
+    test "refuses width 2 -- fits the gutter but leaves zero content columns" do
+      assert {:error, :degenerate_view} =
+               DiffExpansion.new(content("a", "b"), width: 2, view_rows: 4)
+    end
+
+    test "admits width 3 (the floor: gutter + one content column) and no line overflows it" do
+      # A changed diff exercises the widest row shape (gutter bar + padded
+      # wash). At the floor width EVERY rendered line -- header included --
+      # must fit the column budget exactly, never wrap.
+      {:ok, exp} =
+        DiffExpansion.new(content("a", "b"), width: 3, view_rows: 4)
+
+      for line <- DiffExpansion.render_lines(exp) do
+        assert TextMeasure.display_width(strip_sgr(line)) <= 3,
+               "a rendered line overflowed the floor width: #{inspect(line)}"
+      end
+    end
+  end
+
   describe "scroll/2 clamped line math" do
     setup do
       old = Enum.map_join(1..30, "\n", &"line #{&1}")
@@ -313,6 +347,18 @@ defmodule Raxol.Harness.DiffExpansionTest do
       exp = new!("a", "b")
       assert {:error, _} = DiffExpansion.resize_view(exp, @width, 0)
       assert {:error, _} = DiffExpansion.resize_view(exp, 0, @view_rows)
+    end
+
+    test "refuses a resize below the gutter width floor, leaving t untouched" do
+      # A resize down to a sub-floor width must refuse exactly like `new/2`
+      # rather than re-render body rows wider than the new column count.
+      exp = new!("a", "b")
+
+      assert {:error, :degenerate_view} =
+               DiffExpansion.resize_view(exp, 1, @view_rows)
+
+      assert {:error, :degenerate_view} =
+               DiffExpansion.resize_view(exp, 2, @view_rows)
     end
   end
 end

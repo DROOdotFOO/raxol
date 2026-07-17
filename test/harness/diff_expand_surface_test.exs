@@ -528,6 +528,64 @@ defmodule Raxol.Harness.DiffExpandSurfaceTest do
       assert strip_ansi(raw(device)) =~ "too small"
     end
 
+    test "sub-gutter width: direct call refuses with zero bytes (never grows an over-wide footer)" do
+      {:ok, device} = StringIO.open("")
+
+      # A 2-column-wide terminal has ample ROWS -- the row-degeneracy gate
+      # (`claim < 2 or degenerate?`) passes -- but every diff body row
+      # prepends a fixed 2-column gutter, so a viewport narrower than the
+      # gutter floor could only render rows wider than the column count
+      # (which `InlineAuthority.repaint/2` does NOT truncate -- it would
+      # wrap past the footer region). The width floor must refuse here the
+      # same honest way the row gate refuses a too-short terminal, and
+      # BEFORE `set_footer_rows/2` writes a single byte. Red-first: before
+      # the floor, `DiffExpansion.new/2` accepted `width: 2`, the footer
+      # grew, and `repaint/2` emitted over-wide rows.
+      model =
+        Surface.new([],
+          device: device,
+          width: 2,
+          rows: @rows,
+          footer_rows: @footer_rows,
+          mode: :inline_log
+        )
+
+      model = with_focused_diff(model)
+      prior = byte_size(raw(device))
+
+      assert {:error, :insufficient_footer_capacity} =
+               Surface.expand_focused_diff(model)
+
+      assert byte_size(raw(device)) == prior,
+             "a width-refused expansion must write zero bytes (no footer grow)"
+    end
+
+    test "sub-gutter width: the keybind refuses to open (notice text itself truncates at width 2)" do
+      {:ok, device} = StringIO.open("")
+
+      model =
+        Surface.new([],
+          device: device,
+          width: 2,
+          rows: @rows,
+          footer_rows: @footer_rows,
+          mode: :inline_log
+        )
+
+      model = with_focused_diff(model)
+      model = Surface.handle_input(model, Event.key("e"))
+
+      # The refusal maps through the SAME `:insufficient_footer_capacity`
+      # -> "too small" notice the rows-degenerate keybind test above pins;
+      # at width 2 that notice string is itself width-truncated, so this
+      # variant only asserts the observable invariant: the expansion never
+      # opened (no full-screen diff was rendered at an unrenderable width).
+      assert model.expansion == nil
+
+      refute strip_ansi(raw(device)) =~ "▌",
+             "no diff body row (gutter bar) may render at a sub-gutter width"
+    end
+
     test "flat mode has no footer to grow: refuses" do
       {model, _device} = new_model([], mode: :flat)
       model = with_focused_diff(model)
@@ -611,7 +669,7 @@ defmodule Raxol.Harness.DiffExpandSurfaceTest do
         )
 
       model = Surface.focus_transcript(model)
-      model = Surface.handle_input(model, Event.key("e"))
+      _model = Surface.handle_input(model, Event.key("e"))
 
       assert strip_ansi(raw(device)) =~ "no block focused",
              "at the degenerate 1-row budget the notice is the one row " <>
@@ -754,6 +812,68 @@ defmodule Raxol.Harness.DiffExpandSurfaceTest do
 
       assert model.expansion == nil
       assert InlineAuthority.footer_row_count(model.authority) == @footer_rows
+    end
+
+    test "sealed history survives the resize-grow-then-dismiss bracket (no clear, no paint over history)" do
+      # Closes the coverage gap the two resize tests above leave open: they
+      # assert `expansion != nil` / `footer_row_count` / offset clamp, but
+      # nothing about the sealed-history invariant across the DECSTBM
+      # RE-GROW that `resize_expansion/3` drives (a `set_footer_rows/2` grow
+      # -- the substrate-sensitive path).
+      #
+      # This asserts the invariant with BYTE-LEVEL seal-adjacent checks
+      # (region re-set, CUP targets, full-clear), NOT `SealOracle`'s
+      # cell-level `immutable_prefix?`. That is deliberate: the re-grow is
+      # only reachable via a terminal HEIGHT change, and `SealOracle.replay`
+      # walks the byte stream at ONE fixed height -- so a cell-level prefix
+      # comparison across a mid-stream height change compares two
+      # differently-sized canvases and returns an artifact, not a real
+      # violation (the same mismatch that made the adversarial probe
+      # inconclusive). The open+scroll+dismiss immutable-prefix bracket in
+      # describe "3" already pins the cell-level invariant at constant
+      # height for the far larger OPEN grow (footer 4 -> rows-2). Note too
+      # that while expanded the footer is always `rows - 2` (history pinned
+      # at its 2-row minimum), so a taller resize claims the terminal's NEW
+      # bottom rows, never additional history -- the re-grow evicts nothing.
+      {model, device} = new_model(bulk_events(4))
+      model = drive_to_completion(model)
+      model = with_focused_diff(model)
+
+      assert model.authority.next_row > @expanded_region_top
+
+      assert {:ok, model} = Surface.expand_focused_diff(model)
+      assert model.expansion != nil
+
+      prior = byte_size(raw(device))
+
+      # Grow the terminal taller WHILE expanded: `resize_expansion/3`
+      # re-derives the maximal claim and re-grows the DECSTBM footer.
+      model = Surface.resize(model, @width, 14)
+      assert model.expansion != nil
+      assert InlineAuthority.footer_row_count(model.authority) == 14 - 2
+
+      grow_delta = delta_since(device, prior)
+
+      # The re-grow must not blank the screen, and every explicit CUP it
+      # emits must land in the footer region (row > region_top), never in
+      # the 2 pinned history rows above it. region_top stays 2 while
+      # expanded, so history is wire rows 1..2 and the footer is 3..14.
+      refute SealOracle.emits_full_clear?(grow_delta),
+             "a resize re-grow must never clear the screen"
+
+      assert Enum.all?(
+               explicit_cup_rows(grow_delta),
+               &(&1 > @expanded_region_top)
+             ),
+             "the re-grow addressed a history row instead of the footer region"
+
+      # Dismiss: footer shrinks back to the base split at the new height.
+      model = Surface.handle_input(model, Event.key(:escape))
+      assert model.expansion == nil
+      assert InlineAuthority.footer_row_count(model.authority) == @footer_rows
+
+      refute SealOracle.emits_full_clear?(raw(device)),
+             "the whole resize-grow + dismiss bracket must never clear the screen"
     end
   end
 end

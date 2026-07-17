@@ -2518,9 +2518,29 @@ defmodule Raxol.Harness.Surface do
     end
   end
 
+  # The grown footer's top two rows are chrome the expansion always
+  # reserves: one status row plus one expansion header row (the file
+  # path + scroll position line `DiffExpansion.render_lines/1` prepends).
+  # Everything below them is scrollable content, so the content viewport
+  # is `total_footer - @expansion_chrome_rows`. Named once and derived
+  # through `expansion_view_rows/2` so the `build_expansion/3` open path
+  # and the `resize_expansion/3` re-grow path can never drift apart.
+  # NOTE: distinct from the `claim < 2` gate below (that `2` is a minimum
+  # footer GROWTH, not this chrome subtraction -- see `do_expand/2`) and
+  # from `DiffExpansion`'s own `@gutter_width 2` (a per-row column count).
+  @expansion_chrome_rows 2
+
+  defp expansion_view_rows(footer_rows, claim),
+    do: footer_rows + claim - @expansion_chrome_rows
+
   defp do_expand(model, block) do
     claim = max_overlay_rows(model.rows, model.footer_rows)
 
+    # `claim` is the footer GROWTH beyond the base `model.footer_rows`
+    # that still leaves history its 2-row minimum (what
+    # `max_overlay_rows/2` maximizes). A growth below 2 cannot host the
+    # expansion's own two chrome rows, so refuse with the honest notice
+    # rather than open a viewport with no room for content.
     if claim < 2 or degenerate?(model) do
       {:error, :insufficient_footer_capacity}
     else
@@ -2532,7 +2552,7 @@ defmodule Raxol.Harness.Surface do
   # ever touches the authority -- a content-validation error propagates
   # with zero bytes written, exactly like every other refusal above.
   defp build_expansion(model, block, claim) do
-    view_rows = model.footer_rows + claim - 2
+    view_rows = expansion_view_rows(model.footer_rows, claim)
 
     case DiffExpansion.new(block.content,
            width: model.width,
@@ -2552,6 +2572,14 @@ defmodule Raxol.Harness.Surface do
           {:error, :degenerate} ->
             {:error, :insufficient_footer_capacity}
         end
+
+      # A sub-gutter-floor width (`DiffExpansion` refuses `width <
+      # @gutter_width + 1`, since every body row's fixed gutter would
+      # overflow a narrower budget and wrap past the footer region) is a
+      # terminal-too-small refusal, mapped to the same honest notice the
+      # row-degenerate gate above uses -- never emitted as wrapping bytes.
+      {:error, :degenerate_view} ->
+        {:error, :insufficient_footer_capacity}
 
       {:error, reason} ->
         {:error, reason}
@@ -2962,11 +2990,15 @@ defmodule Raxol.Harness.Surface do
       max_overlay_rows(new_rows, footer_rows)
   end
 
-  # A diff expansion's claim is "the maximum non-degenerate footer", not
-  # a fixed height -- so unlike the overlay, force-close is the ONLY
-  # geometry below which it cannot be hosted at all: `max_overlay_rows/2`
-  # returning `< 2` means even the expansion's own 2-row minimum (one
-  # status row, one expansion header row) no longer fits.
+  # A diff expansion's claim is "the maximum non-degenerate footer
+  # GROWTH", not a fixed height -- so unlike the overlay, force-close is
+  # the ONLY geometry below which it cannot be hosted at all. When
+  # `max_overlay_rows/2` (the maximal growth still leaving history its
+  # 2-row minimum) drops below 2, that growth can no longer host the
+  # expansion's own two chrome rows (`@expansion_chrome_rows`: one status
+  # row, one expansion header row), so the expansion must close. The `2`
+  # here is that minimum growth, NOT the chrome subtraction it happens to
+  # equal -- see `expansion_view_rows/2` and `do_expand/2`.
   defp force_close_expansion?(%{expansion: nil}, _new_rows), do: false
 
   defp force_close_expansion?(%{footer_rows: footer_rows}, new_rows),
@@ -2986,7 +3018,7 @@ defmodule Raxol.Harness.Surface do
            model.footer_rows + claim
          ) do
       {:ok, authority} ->
-        view_rows = model.footer_rows + claim - 2
+        view_rows = expansion_view_rows(model.footer_rows, claim)
 
         case DiffExpansion.resize_view(model.expansion, width, view_rows) do
           {:ok, expansion} ->
