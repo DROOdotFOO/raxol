@@ -254,7 +254,19 @@ defmodule Raxol.UI.Harness.KeymapTest do
         |> MapSet.new()
 
       assert declared == emitted
-      assert MapSet.size(declared) == length(Keymap.binds())
+
+      # Every bind still emits a declared type, but binds/0 is no longer
+      # guaranteed 1:1 with command_types/0: :open_panel is intentionally
+      # shared by three binds (the w/m/n panel binds), discriminated by
+      # payload.panel rather than by a distinct command_type -- one
+      # command type covers all three (see Keymap's moduledoc). The
+      # residual gap between bind count and declared-type count is
+      # exactly that: (open_panel bind count - 1).
+      open_panel_binds =
+        Enum.count(Keymap.binds(), &(&1.command_type == :open_panel))
+
+      assert length(Keymap.binds()) ==
+               MapSet.size(declared) + (open_panel_binds - 1)
     end
 
     # The `guard: :overlay` bind's own context requirement differs from
@@ -361,6 +373,69 @@ defmodule Raxol.UI.Harness.KeymapTest do
 
     test "command_types/0 includes :overlay_dismiss" do
       assert :overlay_dismiss in Keymap.command_types()
+    end
+  end
+
+  # -- panel binds (w/m/n -- worktracks/memory/plan projection panels) ----
+
+  describe "panel binds (w/m/n)" do
+    @panel_chars [{"w", :worktracks}, {"m", :memory}, {"n", :plan}]
+
+    test "resolve to :open_panel with the discriminating payload, not composing, no overlay" do
+      for {char, kind} <- @panel_chars do
+        assert resolve_from(Event.key(char), %{
+                 composing?: false,
+                 overlay_open?: false
+               }) == %{type: :open_panel, payload: %{panel: kind}}
+      end
+    end
+
+    test "pass through while composing" do
+      for {char, _kind} <- @panel_chars do
+        assert resolve_from(Event.key(char), %{composing?: true}) ==
+                 :passthrough
+      end
+    end
+
+    test "pass through while an overlay is open, even from transcript-browse mode" do
+      for {char, _kind} <- @panel_chars do
+        assert resolve_from(Event.key(char), %{
+                 composing?: false,
+                 overlay_open?: true
+               }) == :passthrough
+      end
+    end
+
+    test "pass through under ctrl/alt/meta (not a bare printable keypress)" do
+      for {char, _kind} <- @panel_chars,
+          mod <- [:ctrl, :alt, :meta] do
+        assert resolve_from(Event.key_event(char, :pressed, [mod]), %{
+                 composing?: false
+               }) == :passthrough
+      end
+    end
+
+    test "command_types/0 includes :open_panel" do
+      assert :open_panel in Keymap.command_types()
+    end
+
+    test "the three panel binds appear in palette_binds/0 with their labels" do
+      labels =
+        Keymap.palette_binds() |> Enum.map(& &1.label) |> MapSet.new()
+
+      assert "worktracks panel" in labels
+      assert "memory panel" in labels
+      assert "plan panel" in labels
+    end
+
+    test "command_for/2 yields the same payload-carrying command as a live keypress (palette invocation parity)" do
+      for {char, kind} <- @panel_chars do
+        bind = Enum.find(Keymap.binds(), &(Map.get(&1, :char) == char))
+        assert bind.command_type == :open_panel
+
+        assert Keymap.command_for(bind, %{composing?: false}) ==
+                 %{type: :open_panel, payload: %{panel: kind}}
+      end
     end
   end
 
