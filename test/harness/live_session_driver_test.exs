@@ -200,6 +200,24 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
     }
   end
 
+  # The first response item beginning. `:turn_started` is the silent pre-stream
+  # WAIT (a bare spinner, no "thinking" word -- 2026-07-18); the strip only
+  # speaks "thinking" once a response item starts. Tests that gate on "thinking"
+  # to know the turn is live drive one step past the wait -- the real
+  # turn_started -> item_started sequence, same turn_id, so interrupt/steer/
+  # cancel still target the same in-flight turn.
+  defp item_started_event(turn_id, id) do
+    %{
+      id: id,
+      turn_id: turn_id,
+      ts: id * 1_000,
+      family: :loop,
+      type: :item_started,
+      tier: :durable,
+      payload: %{item_id: "#{turn_id}-i1", item_type: :message}
+    }
+  end
+
   # `base_id` lets a test stream a SECOND turn with session-scoped
   # monotonic ids (the id authority in the real stack is the per-session
   # journal, so a later turn's ids continue, never restart).
@@ -426,6 +444,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
 
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      send(forwarder, {:session_event, "s1", item_started_event("t1", 2)})
       eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       send(driver, {:inline_input, Event.key(:escape)})
@@ -441,6 +460,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       %{device: device, driver: driver, forwarder: forwarder} = new_driver(%{})
 
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      send(forwarder, {:session_event, "s1", item_started_event("t1", 2)})
       eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       send(driver, {:inline_input, Event.key(:escape)})
@@ -494,7 +514,10 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       %{device: device, forwarder: forwarder} = new_driver(%{})
 
       send(forwarder, {:session_event, "s1", turn_started_event("t1", 1)})
-      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
+      # t1 is live (footer painting the bare-spinner wait) -- the readiness
+      # signal here, not the "thinking" word (which only lands at item_started;
+      # this test keeps t1 at the pre-item wait so the cancel targets it).
+      eventually(fn -> footer_text(raw(device)) != "" end)
 
       # Belief advances to t2.
       send(forwarder, {:session_event, "s1", turn_started_event("t2", 2)})
@@ -538,6 +561,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
         })
 
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      send(forwarder, {:session_event, "s1", item_started_event("t1", 2)})
       eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       Enum.each(["h", "i"], fn ch ->
@@ -563,6 +587,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
         new_driver(%{steer_reply: {:error, {:stale_turn, "turn-1", "turn-2"}}})
 
       send(forwarder, {:session_event, "s1", turn_started_event("turn-1")})
+      send(forwarder, {:session_event, "s1", item_started_event("turn-1", 2)})
       eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       send(driver, {:inline_input, Event.key("h")})
@@ -600,6 +625,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
         new_driver(%{steer_reply: :hang}, steer_timeout_ms: 150)
 
       send(forwarder, {:session_event, "s1", turn_started_event("turn-1")})
+      send(forwarder, {:session_event, "s1", item_started_event("turn-1", 2)})
       eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       # First steer: dispatched to the lane, then hangs there forever.
@@ -1069,6 +1095,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       # A progress observation seeds last_activity_at -- the detector's
       # honesty floor never alarms on an empty window.
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      send(forwarder, {:session_event, "s1", item_started_event("t1", 2)})
       eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       Agent.update(clock_agent, fn _ -> 1_000 end)
@@ -1322,6 +1349,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
 
       # A turn is running (current_turn_id set from the event).
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      send(forwarder, {:session_event, "s1", item_started_event("t1", 2)})
       eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       type_into(driver, "save this draft")

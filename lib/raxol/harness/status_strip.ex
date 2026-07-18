@@ -342,11 +342,14 @@ defmodule Raxol.Harness.StatusStrip do
 
   defp phase_or_activity(phase, _state), do: phase
 
-  # Generating = "waiting for the response" -> a bare braille spinner (empty
-  # phase word) + elapsed, NOT a duplicate "thinking" label. The live thinking
-  # display now belongs to the ShadowStream in the tail; the strip just says
-  # "still working" (the spinner) and how long (elapsed/SLOW/HUNG).
-  defp activity_phase(:generating), do: ""
+  # `:generating` as the AUTHORITATIVE phase (no turn_stage names one) is the
+  # blocking `complete/2` round: the model is actively thinking with NO stream
+  # events to reveal it, so the strip is the only "is the model still thinking?"
+  # signal and says "thinking" + spinner (V's own charged-minimum test). This
+  # is distinct from the STREAMING pre-stream WAIT, where a `:turn_started`
+  # event IS present and TAKES PRECEDENCE (`phase_word/2`), rendering the bare
+  # spinner V asked for -- so `:generating` never overrides that silent wait.
+  defp activity_phase(:generating), do: "thinking"
   defp activity_phase(:running_tool), do: "running tool"
   defp activity_phase(:responding), do: "responding"
   defp activity_phase(_absent_or_idle), do: nil

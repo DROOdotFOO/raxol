@@ -451,14 +451,16 @@ defmodule Raxol.Harness.T10StatusStripTest do
     # only ever prepends whatever glyph it is given.
     @spin "⠴"
 
-    test "a :generating turn with NO events shows a bare spinner + elapsed -- the blocking-round signal" do
+    test "a :generating turn with NO events shows thinking + elapsed -- the blocking-round signal" do
       # No turn_stage at all (a blocking complete/2 round: zero events), only
-      # the raised activity flag. The phase falls back to the empty
-      # (bare-spinner) wait -- the still-working signal is the spinner +
-      # elapsed, not a "thinking" word (which the ShadowStream now owns).
+      # the raised activity flag. This is the model ACTIVELY thinking with no
+      # stream events to reveal it, so the strip is the only "still thinking?"
+      # signal -- phase "thinking" (V's charged-minimum intent). Distinct from
+      # the STREAMING pre-stream WAIT, where a :turn_started EVENT is present
+      # and TAKES PRECEDENCE, rendering the bare spinner (see phase_word/2).
       state = %{activity: :generating, now: 5_000, last_event_at: 0}
-      assert StatusStrip.phase_value(state) == ""
-      assert StatusStrip.render(state, 200) == ["5s"]
+      assert StatusStrip.phase_value(state) == "thinking"
+      assert StatusStrip.render(state, 200) == ["thinking 5s"]
     end
 
     test "animating? is true while :generating and the injected spinner leads the phase" do
@@ -470,15 +472,15 @@ defmodule Raxol.Harness.T10StatusStripTest do
       }
 
       assert StatusStrip.animating?(state)
-      assert StatusStrip.render(state, 200) == ["#{@spin} 5s"]
+      assert StatusStrip.render(state, 200) == ["#{@spin} thinking 5s"]
     end
 
     test "the spinner ADVANCES across frames (a caller ticking the frame glyph)" do
       base = %{activity: :generating, now: 5_000, last_event_at: 0}
       [line_a] = StatusStrip.render(Map.put(base, :spinner, "⠋"), 200)
       [line_b] = StatusStrip.render(Map.put(base, :spinner, "⠙"), 200)
-      assert line_a == "⠋ 5s"
-      assert line_b == "⠙ 5s"
+      assert line_a == "⠋ thinking 5s"
+      assert line_b == "⠙ thinking 5s"
       refute line_a == line_b
     end
 
@@ -549,7 +551,7 @@ defmodule Raxol.Harness.T10StatusStripTest do
       }
 
       assert StatusStrip.animating?(state)
-      assert StatusStrip.render(state, 200) == ["#{@spin} 4s"]
+      assert StatusStrip.render(state, 200) == ["#{@spin} thinking 4s"]
     end
 
     test "with no activity flag (fixture/replay) the strip never animates" do
