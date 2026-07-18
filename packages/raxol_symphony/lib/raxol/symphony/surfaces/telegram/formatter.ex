@@ -22,6 +22,8 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
   This keeps the surface decoupled from any specific bot framework.
   """
 
+  alias Raxol.Symphony.{PauseReason, SurfaceFormat}
+
   @max_runs_displayed 8
   @max_retries_displayed 8
   @max_paused_displayed 8
@@ -70,7 +72,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
         "<b>Run #{escape(run.issue_identifier)}</b>",
         "state: <code>#{escape(run.state)}</code>",
         "turns: <b>#{run.turn_count}</b>",
-        "runtime: #{format_ms(run.started_ms_ago)}",
+        "runtime: #{SurfaceFormat.format_ms(run.started_ms_ago)}",
         "last event: <code>#{escape(format_event(run.last_event))}</code>"
       ]
       |> Enum.join("\n")
@@ -88,8 +90,8 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
   @doc "Detailed message for a single paused entry, with Approve/Reject buttons."
   @spec paused_run_message(map()) :: message()
   def paused_run_message(entry) when is_map(entry) do
-    reason = format_reason(entry[:interrupt_reason])
-    paused_ago = format_ms(entry[:paused_ms_ago] || 0)
+    reason = PauseReason.format(entry[:interrupt_reason])
+    paused_ago = SurfaceFormat.format_ms(entry[:paused_ms_ago] || 0)
 
     text =
       [
@@ -181,7 +183,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
 
     body =
       if head do
-        reason = format_reason(head[:interrupt_reason])
+        reason = PauseReason.format(head[:interrupt_reason])
 
         "<b>Symphony</b>\n<b>A run is paused.</b> #{escape(head.issue_identifier)} -- " <>
           "<code>#{escape(reason)}</code>\n\n" <> counts_line(snapshot)
@@ -228,7 +230,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
       Enum.map_join(runs, "\n", fn run ->
         "• #{escape(run.issue_identifier)} -- " <>
           "<code>#{escape(run.state)}</code> t=#{run.turn_count} " <>
-          "(#{format_ms(run.started_ms_ago)})"
+          "(#{SurfaceFormat.format_ms(run.started_ms_ago)})"
       end)
 
     "<b>Active runs</b>\n" <> rows
@@ -239,8 +241,8 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
   defp paused_section(paused) do
     rows =
       Enum.map_join(paused, "\n", fn entry ->
-        reason = format_reason(entry[:interrupt_reason])
-        paused_ago = format_ms(entry[:paused_ms_ago] || 0)
+        reason = PauseReason.format(entry[:interrupt_reason])
+        paused_ago = SurfaceFormat.format_ms(entry[:paused_ms_ago] || 0)
 
         "• #{escape(entry.issue_identifier)} -- " <>
           "<code>#{escape(reason)}</code> paused #{paused_ago}"
@@ -255,7 +257,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
     rows =
       Enum.map_join(retries, "\n", fn r ->
         "• #{escape(r.issue_identifier)} -- attempt #{r.attempt}, " <>
-          "due in #{format_ms(r.due_in_ms)}"
+          "due in #{SurfaceFormat.format_ms(r.due_in_ms)}"
       end)
 
     "\n<b>Pending retries</b>\n" <> rows
@@ -309,21 +311,6 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
   defp format_event(atom) when is_atom(atom), do: Atom.to_string(atom)
   defp format_event(b) when is_binary(b), do: b
   defp format_event(other), do: inspect(other)
-
-  defp format_reason(reason), do: Raxol.Symphony.PauseReason.format(reason)
-
-  defp format_ms(ms) when is_integer(ms) and ms < 1_000, do: "#{ms}ms"
-
-  defp format_ms(ms) when is_integer(ms) and ms < 60_000,
-    do: "#{div(ms, 1000)}s"
-
-  defp format_ms(ms) when is_integer(ms) do
-    mins = div(ms, 60_000)
-    secs = div(rem(ms, 60_000), 1000)
-    "#{mins}m#{secs}s"
-  end
-
-  defp format_ms(_), do: "?"
 
   # Telegram HTML parse mode requires escaping <, >, &
   defp escape(nil), do: ""

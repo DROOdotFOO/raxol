@@ -37,6 +37,8 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     use Phoenix.LiveView
 
     alias Raxol.Symphony.{Orchestrator, OrchestratorClient}
+    alias Raxol.Symphony.PauseReason
+    alias Raxol.Symphony.SurfaceFormat
 
     @poll_ms 1_000
 
@@ -172,7 +174,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
                     <td style="padding: 4px;">{run.state}</td>
                     <td style="padding: 4px;">{run.turn_count}</td>
                     <td style="padding: 4px;">{format_event(run.last_event)}</td>
-                    <td style="padding: 4px;">{format_ms(run.started_ms_ago)}</td>
+                    <td style="padding: 4px;">{SurfaceFormat.format_ms(run.started_ms_ago)}</td>
                     <td style="padding: 4px;">
                       <button
                         phx-click="stop_run"
@@ -211,8 +213,8 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
                 <%= for paused <- @snapshot[:paused] || [] do %>
                   <tr style="border-bottom: 1px solid #222;">
                     <td style="padding: 4px;">{paused.issue_identifier}</td>
-                    <td style="padding: 4px;">{format_reason(paused[:interrupt_reason])}</td>
-                    <td style="padding: 4px;">{format_ms(paused[:paused_ms_ago] || 0)}</td>
+                    <td style="padding: 4px;">{PauseReason.format(paused[:interrupt_reason])}</td>
+                    <td style="padding: 4px;">{SurfaceFormat.format_ms(paused[:paused_ms_ago] || 0)}</td>
                     <td style="padding: 4px;">{format_event(paused[:last_event])}</td>
                     <td style="padding: 4px;">{paused[:last_message] || ""}</td>
                     <td style="padding: 4px;">
@@ -253,7 +255,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
                   <tr style="border-bottom: 1px solid #222;">
                     <td style="padding: 4px;">{retry.issue_identifier}</td>
                     <td style="padding: 4px;">{retry.attempt}</td>
-                    <td style="padding: 4px;">{format_ms(retry.due_in_ms)}</td>
+                    <td style="padding: 4px;">{SurfaceFormat.format_ms(retry.due_in_ms)}</td>
                     <td style="padding: 4px;">{retry.error || ""}</td>
                   </tr>
                 <% end %>
@@ -342,20 +344,5 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     defp format_event(atom) when is_atom(atom), do: Atom.to_string(atom)
     defp format_event(binary) when is_binary(binary), do: binary
     defp format_event(other), do: inspect(other)
-
-    defp format_reason(reason), do: Raxol.Symphony.PauseReason.format(reason)
-
-    defp format_ms(ms) when is_integer(ms) and ms < 1_000, do: "#{ms}ms"
-
-    defp format_ms(ms) when is_integer(ms) and ms < 60_000,
-      do: "#{div(ms, 1000)}s"
-
-    defp format_ms(ms) when is_integer(ms) do
-      mins = div(ms, 60_000)
-      secs = div(rem(ms, 60_000), 1000)
-      "#{mins}m#{secs}s"
-    end
-
-    defp format_ms(_), do: "?"
   end
 end

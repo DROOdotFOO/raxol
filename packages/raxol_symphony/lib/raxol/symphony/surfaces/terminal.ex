@@ -41,6 +41,8 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     use Raxol.Core.Runtime.Application
 
     alias Raxol.Symphony.{Orchestrator, OrchestratorClient}
+    alias Raxol.Symphony.PauseReason
+    alias Raxol.Symphony.SurfaceFormat
 
     @poll_ms 500
 
@@ -300,7 +302,7 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
 
     defp running_row(entry, selected?) do
       marker = if selected?, do: ">", else: " "
-      runtime = format_ms(entry.started_ms_ago)
+      runtime = SurfaceFormat.format_ms(entry.started_ms_ago)
       last_event = format_event(entry.last_event)
 
       text(
@@ -335,8 +337,8 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     defp paused_rows(model), do: Enum.map(model.snapshot.paused, &paused_row/1)
 
     defp paused_row(entry) do
-      reason = format_reason(entry[:interrupt_reason])
-      paused_ago = format_ms(entry[:paused_ms_ago] || 0)
+      reason = PauseReason.format(entry[:interrupt_reason])
+      paused_ago = SurfaceFormat.format_ms(entry[:paused_ms_ago] || 0)
       last_event = format_event(entry[:last_event])
 
       text(
@@ -372,7 +374,7 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
       text(
         "  #{pad(entry.issue_identifier, 8)} " <>
           "attempt=#{pad(to_string(entry.attempt), 2)}  " <>
-          "due in #{pad(format_ms(entry.due_in_ms), 8)}  " <>
+          "due in #{pad(SurfaceFormat.format_ms(entry.due_in_ms), 8)}  " <>
           "#{entry.error || ""}",
         fg: :magenta
       )
@@ -425,21 +427,6 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     defp format_event(atom) when is_atom(atom), do: Atom.to_string(atom)
     defp format_event(binary) when is_binary(binary), do: binary
     defp format_event(other), do: inspect(other)
-
-    defp format_reason(reason), do: Raxol.Symphony.PauseReason.format(reason)
-
-    defp format_ms(ms) when is_integer(ms) and ms < 1_000, do: "#{ms}ms"
-
-    defp format_ms(ms) when is_integer(ms) and ms < 60_000,
-      do: "#{div(ms, 1000)}s"
-
-    defp format_ms(ms) when is_integer(ms) do
-      mins = div(ms, 60_000)
-      secs = div(rem(ms, 60_000), 1000)
-      "#{mins}m#{secs}s"
-    end
-
-    defp format_ms(_), do: "?"
 
     defp pad(s, width) when is_binary(s) do
       if byte_size(s) >= width do

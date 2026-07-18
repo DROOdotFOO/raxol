@@ -34,6 +34,8 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   - `sym:dismiss` -- dismiss the notification (no orchestrator side effects)
   """
 
+  alias Raxol.Symphony.PauseReason
+
   @max_body_length 160
 
   @type notification :: %{
@@ -131,7 +133,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   end
 
   defp paused_event_body(head, _count) do
-    reason = format_reason(head[:interrupt_reason])
+    reason = PauseReason.format(head[:interrupt_reason])
 
     body =
       "#{head.issue_identifier} paused -- #{reason}. " <>
@@ -181,7 +183,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   """
   @spec paused_notification(map()) :: notification()
   def paused_notification(entry) when is_map(entry) do
-    reason = format_reason(entry[:interrupt_reason])
+    reason = PauseReason.format(entry[:interrupt_reason])
 
     %{
       title: "Symphony PAUSED: #{entry.issue_identifier}",
@@ -233,8 +235,6 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
 
   defp refresh_action, do: %{id: "sym:refresh", label: "Refresh"}
   defp dismiss_action, do: %{id: "sym:dismiss", label: "Dismiss"}
-
-  defp format_reason(reason), do: Raxol.Symphony.PauseReason.format(reason)
 
   defp truncate(text) when is_binary(text) do
     if String.length(text) <= @max_body_length do
