@@ -8,6 +8,8 @@ defmodule Raxol.Terminal.ScreenBuffer.Manager do
 
   alias Raxol.Terminal.ScreenBuffer.Core
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   defstruct [
     :main_buffer,
     :alternate_buffer,
@@ -414,8 +416,8 @@ defmodule Raxol.Terminal.ScreenBuffer.Manager do
   @spec constrain_position(t(), integer(), integer()) :: {integer(), integer()}
   def constrain_position(manager, x, y) do
     buffer = get_active_buffer(manager)
-    x = max(0, min(x, buffer.width - 1))
-    y = max(0, min(y, buffer.height - 1))
+    x = clamp_to_bounds(x, buffer.width)
+    y = clamp_to_bounds(y, buffer.height)
     {x, y}
   end
 
