@@ -41,11 +41,6 @@ defmodule Raxol.UI.Components.CodeBlock do
   @impl true
   def update(_message, state), do: state
 
-  @doc "Handles events for the component. No events are handled by default."
-  @spec handle_event(term(), map(), map()) :: {map(), list()}
-  @impl true
-  def handle_event(_event, state, _context), do: {state, []}
-
   @doc """
   Mount hook - called when component is mounted.
   No special setup needed for CodeBlock.

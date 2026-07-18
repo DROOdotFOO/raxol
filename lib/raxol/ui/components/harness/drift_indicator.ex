@@ -47,9 +47,6 @@ defmodule Raxol.UI.Components.Harness.DriftIndicator do
   end
 
   @impl true
-  def handle_event(_event, state, _context), do: {state, []}
-
-  @impl true
   @spec render(t(), map()) :: map()
   def render(state, context) do
     base_style =

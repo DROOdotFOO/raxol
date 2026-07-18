@@ -72,10 +72,6 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   @spec update(term(), map()) :: map()
   def update(_message, state), do: state
 
-  @impl true
-  @spec handle_event(term(), map(), map()) :: {map(), list()}
-  def handle_event(_event, state, _context), do: {state, []}
-
   @spec render(map(), map()) :: map()
   @impl true
   def render(state, _context) do
