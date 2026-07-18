@@ -38,6 +38,7 @@ defmodule Raxol.ACP.Wallet.SCA.Bundler do
       {:unexpected, value}       # response shape we don't recognize
   """
 
+  alias Raxol.ACP.Onchain.Hex
   alias Raxol.ACP.Wallet.SCA.UserOp
 
   @type address :: String.t()
@@ -175,7 +176,7 @@ defmodule Raxol.ACP.Wallet.SCA.Bundler do
     <<factory::binary-size(20), factory_data::binary>> = init_code
 
     map
-    |> Map.put("factory", "0x" <> Base.encode16(factory, case: :lower))
+    |> Map.put("factory", Hex.encode(factory))
     |> Map.put("factoryData", hex_bytes(factory_data))
   end
 
@@ -226,18 +227,14 @@ defmodule Raxol.ACP.Wallet.SCA.Bundler do
 
   @doc "Encode a non-negative integer as a JSON-RPC quantity hex string."
   @spec encode_quantity(non_neg_integer()) :: hex()
-  def encode_quantity(0), do: "0x0"
-
-  def encode_quantity(n) when is_integer(n) and n > 0 do
-    "0x" <> (n |> Integer.to_string(16) |> String.downcase())
-  end
+  def encode_quantity(n) when is_integer(n) and n >= 0, do: Hex.encode_quantity(n)
 
   @doc "Decode a JSON-RPC quantity hex string into an integer."
   @spec decode_quantity(hex()) :: non_neg_integer()
-  def decode_quantity("0x" <> rest), do: String.to_integer(rest, 16)
+  def decode_quantity(hex), do: Hex.decode_quantity!(hex)
 
   defp hex_bytes(<<>>), do: "0x"
-  defp hex_bytes(bin) when is_binary(bin), do: "0x" <> Base.encode16(bin, case: :lower)
+  defp hex_bytes(bin) when is_binary(bin), do: Hex.encode(bin)
 
   defp decode_gas_map(map) do
     keys = [

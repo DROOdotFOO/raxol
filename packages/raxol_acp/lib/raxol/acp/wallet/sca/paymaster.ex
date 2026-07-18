@@ -40,6 +40,7 @@ defmodule Raxol.ACP.Wallet.SCA.Paymaster do
   `Raxol.ACP.Wallet.SCA.UserOp`, leaving only the signature to fill.
   """
 
+  alias Raxol.ACP.Onchain.Hex
   alias Raxol.ACP.Wallet.SCA.{Bundler, ModularAccount, UserOp}
 
   @rpc_method "alchemy_requestGasAndPaymasterAndData"
@@ -69,7 +70,7 @@ defmodule Raxol.ACP.Wallet.SCA.Paymaster do
       "policyId" => policy_id,
       "entryPoint" => entry_point,
       "userOperation" => request_user_op(op),
-      "dummySignature" => "0x" <> Base.encode16(dummy_sig, case: :lower)
+      "dummySignature" => Hex.encode(dummy_sig)
     }
 
     request = maybe_put_overrides(request, Keyword.get(opts, :overrides))

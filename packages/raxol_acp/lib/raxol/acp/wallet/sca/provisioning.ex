@@ -55,6 +55,7 @@ defmodule Raxol.ACP.Wallet.SCA.Provisioning do
   """
 
   alias Raxol.ACP.ABI
+  alias Raxol.ACP.Onchain.Hex
   alias Raxol.ACP.Wallet.SCA.ModularAccount
 
   # MAv2 factory hard-codes this entity id for the SMA fallback signer.
@@ -99,7 +100,7 @@ defmodule Raxol.ACP.Wallet.SCA.Provisioning do
       ExKeccak.hash_256(<<0xFF>> <> factory_bytes <> combined_salt <> init_code_hash)
       |> binary_part(12, 20)
 
-    "0x" <> Base.encode16(addr, case: :lower)
+    Hex.encode(addr)
   end
 
   @doc """
