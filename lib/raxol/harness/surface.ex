@@ -4932,16 +4932,6 @@ defmodule Raxol.Harness.Surface do
   # receipt lives in the line itself, and history never animates.
   @spinner_frames ~w(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
 
-  # The harness's own cognition signature (V, 2026-07-18): while the model
-  # THINKS (not while a tool runs), the status pulse cycles the dotted
-  # because/therefore family instead of the braille everyone else uses --
-  # `∴ ஃ ⁂ ⛬` rotating. Braille stays the TOOL-execution register (the
-  # running-tool margin cell + a `running <tool>` status), so the two
-  # registers -- cognition vs machinery -- read distinctly. All width-1,
-  # text-presentation (see `glyph_inventory/0`). Advanced at half the tick
-  # rate so each of the four glyphs holds long enough to read as a morph.
-  @thinking_frames ~w(∴ ஃ ⁂ ⛬)
-
   defp preview_margin_lines(lines, model) do
     if spinner_active?(model) do
       spin_first_margin(lines, model)
@@ -5074,28 +5064,20 @@ defmodule Raxol.Harness.Surface do
   # an activity flag, so their strip lines are byte-unchanged.
   defp maybe_put_spinner(status, model) do
     if StatusStrip.animating?(status) do
-      Map.put(status, :spinner, current_spinner_frame(model, status))
+      Map.put(status, :spinner, current_spinner_frame(model))
     else
       status
     end
   end
 
-  # Cognition (thinking/responding) pulses the triforce set; a running tool
-  # keeps the braille register so the two are visually distinct. The frame
-  # rides the SAME tick-advanced `spinner_frame` counter both margin and
-  # strip share -- the triforce just steps at half rate (each of its four
-  # glyphs holds two ticks) so the morph is readable.
-  defp current_spinner_frame(model, status) do
-    frame = Map.get(model, :spinner_frame, 0)
-
-    case Map.get(status, :activity) do
-      :running_tool -> spinner_at(@spinner_frames, frame)
-      _cognition -> spinner_at(@thinking_frames, div(frame, 2))
-    end
+  # The status strip's "still working / waiting" spinner is the braille
+  # register (the ShadowStream now owns the live "thinking" display in the
+  # tail, so the strip is a generic work indicator, not a cognition glyph).
+  defp current_spinner_frame(model) do
+    frame_count = length(@spinner_frames)
+    index = rem(Map.get(model, :spinner_frame, 0), frame_count)
+    Enum.at(@spinner_frames, index)
   end
-
-  defp spinner_at(frames, index),
-    do: Enum.at(frames, rem(index, length(frames)))
 
   # The strip is visible during a live turn, an approval wait, a stall
   # alarm, OR whenever the turn-in-flight `:activity` is animating -- the

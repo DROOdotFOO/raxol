@@ -58,6 +58,7 @@ defmodule Raxol.UI.Components.Harness.ShadowStream do
 
   alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.TextMeasure
+  alias Raxol.UI.TextLayout
   alias Raxol.UI.Components.Harness.Indication
 
   # The transcript's neutral chrome colour (matches block.ex) — everything
@@ -104,13 +105,15 @@ defmodule Raxol.UI.Components.Harness.ShadowStream do
   end
 
   defp normalize(props) do
+    width = Map.get(props, :width, 80)
+
     %{
       primitive: Map.get(props, :primitive, "thinking"),
-      lines: props |> Map.get(:lines, []) |> to_lines(),
+      lines: props |> Map.get(:lines, []) |> to_lines(width),
       state: Map.get(props, :state, :peek),
       collapsed_icon: Map.get(props, :collapsed_icon, "▸"),
       expanded_icon: Map.get(props, :expanded_icon, "▾"),
-      width: Map.get(props, :width, 80),
+      width: width,
       base: Map.get(props, :base, @base),
       height: max(Map.get(props, :height, @height), 1),
       floor: Map.get(props, :floor, @floor),
@@ -119,11 +122,31 @@ defmodule Raxol.UI.Components.Harness.ShadowStream do
     }
   end
 
-  defp to_lines(text) when is_binary(text),
-    do: text |> String.split("\n") |> Enum.reject(&(&1 == ""))
+  # Reasoning arrives as prose that often has NO newlines (one long line);
+  # windowing on `\n` alone would leave it a single line the peek then
+  # truncates to `… ellipsis` instead of the 3-line shadow-cast. So wrap
+  # each segment to `width` through the pretty (Knuth-Plass) wrapper — the
+  # same balancer the transcript uses — then window the wrapped lines.
+  defp to_lines(text, width) when is_binary(text) do
+    text
+    |> String.split("\n")
+    |> Enum.flat_map(&TextLayout.wrap(&1, max(width, 1), :normal, :pretty))
+    |> Enum.reject(&(&1 == ""))
+  end
 
-  defp to_lines(lines) when is_list(lines), do: lines
-  defp to_lines(_other), do: []
+  defp to_lines(lines, width) when is_list(lines) do
+    lines
+    |> Enum.flat_map(fn
+      line when is_binary(line) ->
+        TextLayout.wrap(line, max(width, 1), :normal, :pretty)
+
+      other ->
+        [other]
+    end)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp to_lines(_other, _width), do: []
 
   # ---- states -------------------------------------------------------------
 

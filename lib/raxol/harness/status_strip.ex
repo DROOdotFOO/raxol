@@ -342,7 +342,11 @@ defmodule Raxol.Harness.StatusStrip do
 
   defp phase_or_activity(phase, _state), do: phase
 
-  defp activity_phase(:generating), do: "thinking"
+  # Generating = "waiting for the response" -> a bare braille spinner (empty
+  # phase word) + elapsed, NOT a duplicate "thinking" label. The live thinking
+  # display now belongs to the ShadowStream in the tail; the strip just says
+  # "still working" (the spinner) and how long (elapsed/SLOW/HUNG).
+  defp activity_phase(:generating), do: ""
   defp activity_phase(:running_tool), do: "running tool"
   defp activity_phase(:responding), do: "responding"
   defp activity_phase(_absent_or_idle), do: nil
@@ -374,7 +378,10 @@ defmodule Raxol.Harness.StatusStrip do
   defp phase_word(:turn_completed, _last_item_type), do: nil
   defp phase_word(:turn_canceled, _last_item_type), do: nil
   defp phase_word(:item_delta, _last_item_type), do: "responding"
-  defp phase_word(:turn_started, _last_item_type), do: "thinking"
+  # The pre-stream WAIT (request in flight, nothing streamed yet): a bare
+  # braille spinner + elapsed, no "thinking" word -- the live thinking display
+  # is the ShadowStream in the tail, not a duplicate label here. (V, 2026-07-18)
+  defp phase_word(:turn_started, _last_item_type), do: ""
   defp phase_word(:item_started, _last_item_type), do: "thinking"
   defp phase_word(:approval_requested, _last_item_type), do: "awaiting approval"
   defp phase_word(:approval_decided, _last_item_type), do: "thinking"
@@ -488,6 +495,19 @@ defmodule Raxol.Harness.StatusStrip do
       _ -> nil
     end
   end
+
+  # Empty phase (the generating "bare spinner" state): no leading space, just
+  # the elapsed (+ SLOW/HUNG). Keeps the strip a clean `⠋ 4s`, never `⠋  4s`.
+  defp render_phase_elapsed("", ms, _warn_after, hung_after)
+       when ms >= hung_after,
+       do: "HUNG #{format_elapsed(ms)}"
+
+  defp render_phase_elapsed("", ms, warn_after, _hung_after)
+       when ms >= warn_after,
+       do: "#{format_elapsed(ms)} SLOW"
+
+  defp render_phase_elapsed("", ms, _warn_after, _hung_after),
+    do: format_elapsed(ms)
 
   defp render_phase_elapsed(phase, ms, _warn_after, hung_after)
        when ms >= hung_after do

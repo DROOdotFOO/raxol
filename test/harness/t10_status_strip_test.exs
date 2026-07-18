@@ -88,8 +88,11 @@ defmodule Raxol.Harness.T10StatusStripTest do
       assert StatusStrip.phase_value(%{turn_stage: :item_delta}) == "responding"
     end
 
-    test "turn_started / item_started map to thinking" do
-      assert StatusStrip.phase_value(%{turn_stage: :turn_started}) == "thinking"
+    test "turn_started is the bare-spinner wait; item_started maps to thinking" do
+      # The pre-stream wait carries no phase word (a bare spinner + elapsed) --
+      # the live thinking display is the ShadowStream in the tail, not a
+      # duplicate label here.
+      assert StatusStrip.phase_value(%{turn_stage: :turn_started}) == ""
       assert StatusStrip.phase_value(%{turn_stage: :item_started}) == "thinking"
     end
 
@@ -448,12 +451,14 @@ defmodule Raxol.Harness.T10StatusStripTest do
     # only ever prepends whatever glyph it is given.
     @spin "⠴"
 
-    test "a :generating turn with NO events shows 'thinking Ns' -- the blocking-round signal" do
-      # No turn_stage at all (a blocking complete/2 round: zero events),
-      # only the raised activity flag. The phase falls back to the activity.
+    test "a :generating turn with NO events shows a bare spinner + elapsed -- the blocking-round signal" do
+      # No turn_stage at all (a blocking complete/2 round: zero events), only
+      # the raised activity flag. The phase falls back to the empty
+      # (bare-spinner) wait -- the still-working signal is the spinner +
+      # elapsed, not a "thinking" word (which the ShadowStream now owns).
       state = %{activity: :generating, now: 5_000, last_event_at: 0}
-      assert StatusStrip.phase_value(state) == "thinking"
-      assert StatusStrip.render(state, 200) == ["thinking 5s"]
+      assert StatusStrip.phase_value(state) == ""
+      assert StatusStrip.render(state, 200) == ["5s"]
     end
 
     test "animating? is true while :generating and the injected spinner leads the phase" do
@@ -465,15 +470,15 @@ defmodule Raxol.Harness.T10StatusStripTest do
       }
 
       assert StatusStrip.animating?(state)
-      assert StatusStrip.render(state, 200) == ["#{@spin} thinking 5s"]
+      assert StatusStrip.render(state, 200) == ["#{@spin} 5s"]
     end
 
     test "the spinner ADVANCES across frames (a caller ticking the frame glyph)" do
       base = %{activity: :generating, now: 5_000, last_event_at: 0}
       [line_a] = StatusStrip.render(Map.put(base, :spinner, "⠋"), 200)
       [line_b] = StatusStrip.render(Map.put(base, :spinner, "⠙"), 200)
-      assert line_a == "⠋ thinking 5s"
-      assert line_b == "⠙ thinking 5s"
+      assert line_a == "⠋ 5s"
+      assert line_b == "⠙ 5s"
       refute line_a == line_b
     end
 
@@ -544,7 +549,7 @@ defmodule Raxol.Harness.T10StatusStripTest do
       }
 
       assert StatusStrip.animating?(state)
-      assert StatusStrip.render(state, 200) == ["#{@spin} thinking 4s"]
+      assert StatusStrip.render(state, 200) == ["#{@spin} 4s"]
     end
 
     test "with no activity flag (fixture/replay) the strip never animates" do

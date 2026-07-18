@@ -135,8 +135,10 @@ defmodule Raxol.Playground.Demos.HarnessStatusStripDemo do
   # threshold. The `activity` flag drives the spinner pulse.
 
   defp status_for(:thinking) do
+    # `:item_started` is the phase that carries the "thinking" word; the
+    # pre-stream `:turn_started` wait is now a bare spinner (V, 2026-07-18).
     %{
-      turn_stage: :turn_started,
+      turn_stage: :item_started,
       activity: :generating,
       last_event_at: 0,
       now: 3000

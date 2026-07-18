@@ -17,7 +17,8 @@ defmodule Raxol.UI.Components.Harness.StatusStripComponentTest do
     test "a live turn renders the phase" do
       status = %{turn_stage: :turn_started, last_event_at: 0, now: 3000}
       assert [%{type: :text}] = StatusStrip.lines(status, 44)
-      assert ["thinking 3s"] = content(StatusStrip.lines(status, 44))
+      # turn_started is the pre-stream WAIT: bare spinner + elapsed, no word.
+      assert ["3s"] = content(StatusStrip.lines(status, 44))
     end
 
     test "running <tool> and awaiting approval render their phases" do
