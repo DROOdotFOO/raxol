@@ -115,7 +115,7 @@ defmodule Raxol.Agent.Backend.HTTP do
               provider: provider,
               content: "",
               usage: %{},
-              tool_calls: []
+              tool_calls_acc: %{}
             }
           end,
           &stream_next/1,
@@ -195,11 +195,11 @@ defmodule Raxol.Agent.Backend.HTTP do
             nil -> state.usage
           end
 
-        new_tool_calls =
-          case Enum.find(events, &match?({:tool_calls, _}, &1)) do
-            {:tool_calls, tc} -> tc
-            nil -> state.tool_calls
-          end
+        new_acc =
+          Enum.reduce(events, state.tool_calls_acc, fn
+            {:tool_call_delta, frags}, acc -> merge_tool_call_frags(acc, frags)
+            _other, acc -> acc
+          end)
 
         {out,
          %{
@@ -207,7 +207,7 @@ defmodule Raxol.Agent.Backend.HTTP do
            | buffer: new_buffer,
              content: new_content,
              usage: new_usage,
-             tool_calls: new_tool_calls
+             tool_calls_acc: new_acc
          }}
 
       {:sse_error, ^ref, error} ->
@@ -219,7 +219,7 @@ defmodule Raxol.Agent.Backend.HTTP do
            %{
              content: state.content,
              usage: state.usage,
-             tool_calls: state.tool_calls,
+             tool_calls: finalize_tool_calls(state.tool_calls_acc),
              metadata: %{
                backend: :http,
                provider: state.provider,
@@ -352,13 +352,15 @@ defmodule Raxol.Agent.Backend.HTTP do
     |> maybe_append(reasoning && {:reasoning_delta, reasoning})
     |> maybe_append(text != "" && {:text_delta, text})
     |> maybe_append(
-      # LongCat streams the FULL message per chunk (`delta: null`), so a
-      # completed `tool_calls` array arrives whole -- no cross-chunk
-      # accumulation needed for this provider. Surfaced as one terminal-ish
-      # event the stream folds into `:done` (the OpenAI incremental
-      # `delta.tool_calls[]` accumulation is a separate, later concern).
-      is_list(tool_calls) and tool_calls != [] and
-        {:tool_calls, parse_openai_tool_calls(tool_calls)}
+      # RAW tool-call fragments -- the stream accumulates them by index
+      # (`merge_tool_call_frags/2`), because OpenAI-compatible providers
+      # (incl. LongCat) stream `delta.tool_calls[]` incrementally: the id +
+      # `function.name` arrive on the first fragment for an index, the
+      # `function.arguments` as string fragments across later chunks. Reading
+      # the whole array per chunk + last-wins loses the name (the final
+      # fragment is args-only). A single full-message tool_calls array is just
+      # the degenerate one-fragment case, so this handles both.
+      is_list(tool_calls) and tool_calls != [] and {:tool_call_delta, tool_calls}
     )
     |> maybe_append(finish == "length" && {:marker, truncation_marker(choice)})
   end
@@ -639,6 +641,84 @@ defmodule Raxol.Agent.Backend.HTTP do
         "arguments" => args
       }
     end)
+  end
+
+  # Merge streamed tool-call fragments into the accumulator, keyed by the
+  # provider's `index` (falling back to list position for a full-message array
+  # with no index). `id`/`name` are taken from the first fragment that carries
+  # them; `function.arguments` string fragments are concatenated (a whole JSON
+  # string in one fragment is just the length-1 case). A fragment carrying
+  # `arguments` as an already-parsed map overrides the string buffer.
+  defp merge_tool_call_frags(acc, frags) when is_list(frags) do
+    frags
+    |> Enum.with_index()
+    |> Enum.reduce(acc, fn {frag, pos}, acc ->
+      idx = frag["index"] || pos
+      cur = Map.get(acc, idx, %{"id" => nil, "name" => nil, "args" => ""})
+      fun = frag["function"] || %{}
+
+      args =
+        case fun["arguments"] do
+          s when is_binary(s) ->
+            (if is_binary(cur["args"]), do: cur["args"], else: "") <> s
+
+          m when is_map(m) ->
+            m
+
+          _ ->
+            cur["args"]
+        end
+
+      Map.put(acc, idx, %{
+        "id" => frag["id"] || cur["id"],
+        "name" => fun["name"] || cur["name"],
+        "args" => args
+      })
+    end)
+  end
+
+  defp merge_tool_call_frags(acc, _frags), do: acc
+
+  # Finalize the accumulator to the downstream tool_calls contract (index
+  # order, arguments JSON-decoded), matching `parse_openai_tool_calls/1`.
+  defp finalize_tool_calls(acc) when map_size(acc) == 0, do: []
+
+  defp finalize_tool_calls(acc) do
+    acc
+    |> Enum.sort_by(fn {idx, _} -> idx end)
+    |> Enum.map(fn {_idx, tc} ->
+      args =
+        case tc["args"] do
+          "" ->
+            %{}
+
+          s when is_binary(s) ->
+            case Jason.decode(s) do
+              {:ok, map} -> map
+              _ -> %{}
+            end
+
+          m when is_map(m) ->
+            m
+
+          _ ->
+            %{}
+        end
+
+      %{"id" => tc["id"], "name" => tc["name"], "arguments" => args}
+    end)
+  end
+
+  @doc false
+  # Test seam: fold a sequence of streamed tool-call fragment batches (one
+  # list per SSE chunk) into the finalized tool_calls, exactly as
+  # `stream_next/1` accumulates them across chunks. Lets the incremental
+  # merge be pinned without a live HTTP stream.
+  @spec accumulate_tool_calls([list()]) :: [map()]
+  def accumulate_tool_calls(frag_batches) do
+    frag_batches
+    |> Enum.reduce(%{}, fn frags, acc -> merge_tool_call_frags(acc, frags) end)
+    |> finalize_tool_calls()
   end
 
   # -- OpenAI-compatible field extraction (shared by complete + stream) --------

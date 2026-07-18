@@ -267,4 +267,46 @@ defmodule Raxol.Agent.Backend.HTTPTest do
       refute Map.has_key?(body, :system)
     end
   end
+
+  describe "streamed tool-call accumulation" do
+    test "incremental deltas merge: name from the first fragment, args across chunks" do
+      # OpenAI-compatible providers (incl. LongCat) stream tool_calls
+      # incrementally: id + function.name on the first fragment for an index,
+      # function.arguments as string fragments after. Reading each chunk whole
+      # with last-wins loses the name (the final fragment is args-only) --
+      # the :missing_tool_name bug. Accumulation by index fixes it.
+      batches = [
+        [%{"index" => 0, "id" => "c1", "function" => %{"name" => "edit_file", "arguments" => ""}}],
+        [%{"index" => 0, "function" => %{"arguments" => "{\"path\":\"mix.exs\","}}],
+        [%{"index" => 0, "function" => %{"arguments" => "\"old\":\"a\",\"new\":\"b\"}"}}]
+      ]
+
+      assert [
+               %{
+                 "id" => "c1",
+                 "name" => "edit_file",
+                 "arguments" => %{"path" => "mix.exs", "old" => "a", "new" => "b"}
+               }
+             ] = HTTP.accumulate_tool_calls(batches)
+    end
+
+    test "a single full-message tool_call (name + whole args string in one chunk) also works" do
+      batches = [
+        [
+          %{
+            "index" => 0,
+            "id" => "c9",
+            "function" => %{"name" => "read_file", "arguments" => "{\"path\":\"a.txt\"}"}
+          }
+        ]
+      ]
+
+      assert [%{"id" => "c9", "name" => "read_file", "arguments" => %{"path" => "a.txt"}}] =
+               HTTP.accumulate_tool_calls(batches)
+    end
+
+    test "no tool-call fragments -> empty list" do
+      assert [] = HTTP.accumulate_tool_calls([])
+    end
+  end
 end
