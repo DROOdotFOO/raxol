@@ -565,19 +565,5 @@ defmodule Raxol.UI.Charts.BarChart do
     do: {:error, "Unknown action: #{action}"}
 
   @impl Raxol.Core.Accessibility.Provider
-  def a11y_node(node) do
-    %{
-      role: :img,
-      label:
-        node[:aria_label] || node[:title] || a11y_chart_id(node[:id]) ||
-          "bar chart"
-    }
-  end
-
-  defp a11y_chart_id(id) when is_binary(id), do: id
-
-  defp a11y_chart_id(id) when is_atom(id) and not is_nil(id),
-    do: Atom.to_string(id)
-
-  defp a11y_chart_id(_id), do: nil
+  def a11y_node(node), do: ChartUtils.a11y_node(node, "bar chart")
 end

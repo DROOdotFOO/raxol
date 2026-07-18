@@ -47,7 +47,7 @@ defmodule Raxol.UI.Charts.ScatterChart do
       render_optional_axes(show_axes, x, y, plot.axes_w, plot.h, y_range)
 
     legend_cells =
-      render_optional_legend(show_legend, x, y + plot.h, normalized)
+      ChartUtils.render_optional_legend(show_legend, x, y + plot.h, normalized)
 
     axes_cells ++ chart_cells ++ legend_cells
   end
@@ -86,11 +86,6 @@ defmodule Raxol.UI.Charts.ScatterChart do
 
   defp render_optional_axes(true, x, y, w, h, y_range),
     do: ChartUtils.render_axes({x, y, w, h}, y_range)
-
-  defp render_optional_legend(false, _x, _y, _normalized), do: []
-
-  defp render_optional_legend(true, x, y, normalized),
-    do: ChartUtils.render_legend(x, y, normalized)
 
   # -- Private --
 
@@ -201,21 +196,7 @@ defmodule Raxol.UI.Charts.ScatterChart do
     do: {:error, "Unknown action: #{action}"}
 
   @impl Raxol.Core.Accessibility.Provider
-  def a11y_node(node) do
-    %{
-      role: :img,
-      label:
-        node[:aria_label] || node[:title] || a11y_chart_id(node[:id]) ||
-          "scatter chart"
-    }
-  end
-
-  defp a11y_chart_id(id) when is_binary(id), do: id
-
-  defp a11y_chart_id(id) when is_atom(id) and not is_nil(id),
-    do: Atom.to_string(id)
-
-  defp a11y_chart_id(_id), do: nil
+  def a11y_node(node), do: ChartUtils.a11y_node(node, "scatter chart")
 
   defp series_cluster_stats(s) do
     points = ChartUtils.normalize_data_2d(s[:data] || [])
