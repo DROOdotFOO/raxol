@@ -171,4 +171,79 @@ defmodule Raxol.Terminal.Buffer.ScrollTest do
       assert scroll.memory_usage == 0
     end
   end
+
+  describe "get_view/2 idempotence" do
+    test ~c"returns consistent view results across repeated calls" do
+      scroll = Scroll.new(1000)
+      scroll = Scroll.add_line(scroll, [Cell.new("A")])
+
+      assert Scroll.get_view(scroll, 1) == Scroll.get_view(scroll, 1)
+    end
+  end
+
+  describe "scroll/3" do
+    test ~c"scrolls up" do
+      scroll = Scroll.new(1000)
+      scroll = Scroll.add_line(scroll, [Cell.new("A")])
+      scroll = Scroll.add_line(scroll, [Cell.new("B")])
+      scroll = Scroll.scroll(scroll, 1)
+
+      scroll = Scroll.scroll(scroll, :up, 1)
+      assert scroll.position == 0
+    end
+
+    test ~c"scrolls down" do
+      scroll = Scroll.new(1000)
+      scroll = Scroll.add_line(scroll, [Cell.new("A")])
+      scroll = Scroll.add_line(scroll, [Cell.new("B")])
+
+      scroll = Scroll.scroll(scroll, :down, 1)
+      assert scroll.position == 1
+    end
+  end
+
+  describe "set_scroll_region/3" do
+    test "sets valid scroll region" do
+      scroll = Scroll.new(1000)
+      scroll = Scroll.set_scroll_region(scroll, 1, 5)
+      assert scroll.scroll_region == {1, 5}
+    end
+
+    test "ignores invalid scroll region" do
+      scroll = Scroll.new(1000)
+      scroll = Scroll.set_scroll_region(scroll, 5, 1)
+      assert scroll.scroll_region == nil
+    end
+  end
+
+  describe "clear_scroll_region/1" do
+    test "clears scroll region" do
+      scroll = Scroll.new(1000)
+      scroll = Scroll.set_scroll_region(scroll, 1, 5)
+      scroll = Scroll.clear_scroll_region(scroll)
+      assert scroll.scroll_region == nil
+    end
+  end
+
+  describe "set_max_height/2" do
+    test ~c"updates max height and trims buffer if needed" do
+      scroll = Scroll.new(3)
+      scroll = Scroll.add_line(scroll, [Cell.new("A")])
+      scroll = Scroll.add_line(scroll, [Cell.new("B")])
+      scroll = Scroll.add_line(scroll, [Cell.new("C")])
+
+      scroll = Scroll.set_max_height(scroll, 2)
+      assert scroll.max_height == 2
+      assert scroll.height == 2
+      assert scroll.buffer == [[Cell.new("C")], [Cell.new("B")]]
+    end
+  end
+
+  describe "resize/2" do
+    test ~c"updates height" do
+      scroll = Scroll.new(1000)
+      scroll = Scroll.resize(scroll, 50)
+      assert scroll.height == 50
+    end
+  end
 end

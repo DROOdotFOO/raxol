@@ -5,6 +5,8 @@ defmodule Raxol.Terminal.Emulator.Struct do
 
   alias Raxol.Terminal.ScreenBuffer
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   @default_width Raxol.Core.Defaults.terminal_width()
   @default_height Raxol.Core.Defaults.terminal_height()
   @default_scrollback Raxol.Core.Defaults.scrollback_limit()
@@ -286,8 +288,8 @@ defmodule Raxol.Terminal.Emulator.Struct do
   """
   @spec move_cursor(t(), integer(), integer()) :: t()
   def move_cursor(emulator, row, col) do
-    row = max(0, min(row, emulator.height - 1))
-    col = max(0, min(col, emulator.width - 1))
+    row = clamp_to_bounds(row, emulator.height)
+    col = clamp_to_bounds(col, emulator.width)
 
     moved_cursor =
       call_cursor_operation(

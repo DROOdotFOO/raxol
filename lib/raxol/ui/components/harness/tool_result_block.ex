@@ -19,6 +19,7 @@ defmodule Raxol.UI.Components.Harness.ToolResultBlock do
   """
 
   alias Raxol.Core.Events.Event
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.Components.Harness.{TaintBadge, ToolCallBlock}
   alias Raxol.UI.StyleHelper
 
@@ -43,12 +44,7 @@ defmodule Raxol.UI.Components.Harness.ToolResultBlock do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "tool-result-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "tool-result"),
       output: Keyword.get(props, :output, ""),
       status: Keyword.get(props, :status, :done),
       taint: Keyword.get(props, :taint, false),

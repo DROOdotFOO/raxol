@@ -51,6 +51,7 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
   for colorblind readers: `✗` delete, `▲` run, `ℹ` network, `•` write.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.StyleHelper
   alias Raxol.View.Components
 
@@ -82,12 +83,7 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "blast-radius-preview-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "blast-radius-preview"),
       blast_radius: Keyword.get(props, :blast_radius, %{}),
       style: Keyword.get(props, :style, %{}),
       theme: Keyword.get(props, :theme, %{})
@@ -95,9 +91,6 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
 
     {:ok, state}
   end
-
-  @impl true
-  def handle_event(_event, state, _context), do: {state, []}
 
   @impl true
   @spec render(t(), map()) :: map()

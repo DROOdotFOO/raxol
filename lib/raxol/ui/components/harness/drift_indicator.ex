@@ -8,6 +8,7 @@ defmodule Raxol.UI.Components.Harness.DriftIndicator do
   `Raxol.UI.Components.Harness.SpendMeter`.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.Components.Progress.Bar
   alias Raxol.UI.StyleHelper
 
@@ -28,12 +29,7 @@ defmodule Raxol.UI.Components.Harness.DriftIndicator do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "drift-indicator-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "drift-indicator"),
       score: Keyword.get(props, :score, 0),
       family: Keyword.get(props, :family, ""),
       width: Keyword.get(props, :width, 20),
@@ -45,9 +41,6 @@ defmodule Raxol.UI.Components.Harness.DriftIndicator do
 
     {:ok, state}
   end
-
-  @impl true
-  def handle_event(_event, state, _context), do: {state, []}
 
   @impl true
   @spec render(t(), map()) :: map()

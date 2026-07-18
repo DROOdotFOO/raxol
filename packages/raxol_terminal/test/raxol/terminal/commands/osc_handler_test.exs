@@ -136,4 +136,27 @@ defmodule Raxol.Terminal.Commands.OSCHandlerTest do
       assert result.notification == "c;SGVsbG8="
     end
   end
+
+  describe "ColorParser.parse/1 hex" do
+    test "parses a 6-digit hex" do
+      assert OSCHandler.ColorParser.parse("#ff8800") == {:ok, {255, 136, 0}}
+    end
+
+    test "parses a 3-digit hex with nibble expansion" do
+      assert OSCHandler.ColorParser.parse("#f80") == {:ok, {255, 136, 0}}
+    end
+
+    test "invalid hex digits at valid length" do
+      assert OSCHandler.ColorParser.parse("#gg0000") ==
+               {:error, :invalid_hex_format}
+    end
+
+    test "invalid length" do
+      assert OSCHandler.ColorParser.parse("#12345") ==
+               {:error, :invalid_hex_length}
+
+      assert OSCHandler.ColorParser.parse("#1234567") ==
+               {:error, :invalid_hex_length}
+    end
+  end
 end

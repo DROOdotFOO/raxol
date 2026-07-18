@@ -60,6 +60,7 @@ defmodule Raxol.ACP.ProviderAdapter.SCA do
   @behaviour Raxol.ACP.ProviderAdapter
 
   alias Raxol.ACP.ABI
+  alias Raxol.ACP.Onchain.Hex
   alias Raxol.ACP.Onchain.RPC
   alias Raxol.ACP.Wallet.SCA.{EntryPoint, ModularAccount, Provisioner, UserOp}
 
@@ -282,7 +283,7 @@ defmodule Raxol.ACP.ProviderAdapter.SCA do
     end)
   end
 
-  defp encode_block(n) when is_integer(n) and n >= 0, do: "0x" <> Integer.to_string(n, 16)
+  defp encode_block(n) when is_integer(n) and n >= 0, do: Hex.encode_quantity(n)
   defp encode_block(b) when is_binary(b), do: b
 
   defp normalize_data("0x" <> hex), do: Base.decode16!(hex, case: :mixed)

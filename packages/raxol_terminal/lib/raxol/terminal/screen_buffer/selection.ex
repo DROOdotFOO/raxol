@@ -8,6 +8,8 @@ defmodule Raxol.Terminal.ScreenBuffer.Selection do
   alias Raxol.Terminal.ScreenBuffer.Core
   alias Raxol.Terminal.ScreenBuffer.SharedOperations
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   @type selection ::
           {non_neg_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()}
           | nil
@@ -135,8 +137,8 @@ defmodule Raxol.Terminal.ScreenBuffer.Selection do
   """
   @spec select_lines(Core.t(), integer(), integer()) :: Core.t()
   def select_lines(buffer, start_y, end_y) do
-    start_y = max(0, min(start_y, buffer.height - 1))
-    end_y = max(0, min(end_y, buffer.height - 1))
+    start_y = clamp_to_bounds(start_y, buffer.height)
+    end_y = clamp_to_bounds(end_y, buffer.height)
     %{buffer | selection: {0, start_y, buffer.width - 1, end_y}}
   end
 

@@ -444,26 +444,20 @@ defmodule Raxol.Terminal.Renderer do
   defp parse_hex_color(hex) when is_binary(hex), do: parse_hex_digits(hex)
 
   defp parse_hex_digits(
-         <<r::binary-size(2), g::binary-size(2), b::binary-size(2)>>
+         <<_::binary-size(2), _::binary-size(2), _::binary-size(2)>> = hex
        ) do
-    with {r_val, ""} <- Integer.parse(r, 16),
-         {g_val, ""} <- Integer.parse(g, 16),
-         {b_val, ""} <- Integer.parse(b, 16) do
-      {:ok, r_val, g_val, b_val}
-    else
-      _ -> :error
+    case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_6(hex) do
+      {:ok, r, g, b, _a} -> {:ok, r, g, b}
+      {:error, _} -> :error
     end
   end
 
   defp parse_hex_digits(
-         <<r::binary-size(1), g::binary-size(1), b::binary-size(1)>>
+         <<_::binary-size(1), _::binary-size(1), _::binary-size(1)>> = hex
        ) do
-    with {r_val, ""} <- Integer.parse(r <> r, 16),
-         {g_val, ""} <- Integer.parse(g <> g, 16),
-         {b_val, ""} <- Integer.parse(b <> b, 16) do
-      {:ok, r_val, g_val, b_val}
-    else
-      _ -> :error
+    case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_3(hex) do
+      {:ok, r, g, b, _a} -> {:ok, r, g, b}
+      {:error, _} -> :error
     end
   end
 

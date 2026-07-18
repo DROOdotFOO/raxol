@@ -1,6 +1,12 @@
 defmodule Raxol.UI.VisualTest do
+  @moduledoc deprecated:
+               "Scheduled for removal in Raxol 3.0; no replacement planned."
   @moduledoc """
   Visual regression testing utilities for Raxol applications.
+
+  > #### Deprecated {: .warning}
+  >
+  > This module has no callers and is scheduled for removal in Raxol 3.0.
 
   Provides helpers for capturing screenshots, comparing renders,
   and detecting visual regressions in component output.

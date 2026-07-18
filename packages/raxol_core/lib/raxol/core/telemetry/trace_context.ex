@@ -318,6 +318,91 @@ defmodule Raxol.Core.Telemetry.TraceContext do
     current()
   end
 
+  @doc """
+  Converts the current context to telemetry metadata.
+
+  Returns `extra` unchanged when no trace is active; otherwise merges
+  `trace_id`/`span_id`/`parent_span_id` into it.
+
+  ## Examples
+
+      metadata = TraceContext.to_metadata(%{component: :button})
+      :telemetry.execute([:raxol, :render], measurements, metadata)
+  """
+  @spec to_metadata(map()) :: map()
+  def to_metadata(extra \\ %{}) do
+    case current() do
+      %{trace_id: nil} ->
+        extra
+
+      ctx ->
+        Map.merge(extra, %{
+          trace_id: ctx.trace_id,
+          span_id: ctx.span_id,
+          parent_span_id: ctx.parent_span_id
+        })
+    end
+  end
+
+  @doc """
+  Executes a telemetry event with the current trace context injected
+  into its metadata.
+
+  ## Examples
+
+      TraceContext.execute([:raxol, :render, :stop], %{duration: 1234}, %{component: :button})
+  """
+  @spec execute([atom()], map(), map()) :: :ok
+  def execute(event, measurements, metadata \\ %{}) when is_list(event) do
+    :telemetry.execute(event, measurements, to_metadata(metadata))
+  end
+
+  @doc """
+  Wraps a function with telemetry span instrumentation.
+
+  Emits `event_prefix ++ [:start]`, then `[:stop]` on success or
+  `[:exception]` on failure (re-raising), each carrying the current
+  trace context. The span is started before the function and ended
+  after, even on exception.
+
+  ## Examples
+
+      result = TraceContext.span([:raxol, :render], %{component: :button}, fn ->
+        render_component()
+      end)
+  """
+  @spec span([atom()], map(), (-> result)) :: result when result: any()
+  def span(event_prefix, metadata, fun)
+      when is_list(event_prefix) and is_function(fun, 0) do
+    span_name = event_prefix |> List.last() |> to_string()
+    _ = start_span(span_name)
+    start_time = System.monotonic_time()
+    enriched = to_metadata(metadata)
+
+    _ = execute(event_prefix ++ [:start], %{system_time: System.system_time()}, enriched)
+
+    try do
+      result = fun.()
+      duration = System.monotonic_time() - start_time
+      _ = execute(event_prefix ++ [:stop], %{duration: duration}, Map.put(enriched, :result, :ok))
+      result
+    rescue
+      exception ->
+        duration = System.monotonic_time() - start_time
+
+        _ =
+          execute(
+            event_prefix ++ [:exception],
+            %{duration: duration},
+            Map.merge(enriched, %{exception: exception, stacktrace: __STACKTRACE__})
+          )
+
+        reraise exception, __STACKTRACE__
+    after
+      _ = end_span()
+    end
+  end
+
   # Private functions
 
   @spec generate_id() :: String.t()

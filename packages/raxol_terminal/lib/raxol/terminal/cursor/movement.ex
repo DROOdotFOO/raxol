@@ -6,6 +6,8 @@ defmodule Raxol.Terminal.Cursor.Movement do
 
   alias Raxol.Terminal.Cursor.Manager
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   @doc """
   Moves the cursor up by the specified number of lines.
   """
@@ -143,7 +145,7 @@ defmodule Raxol.Terminal.Cursor.Movement do
           non_neg_integer()
         ) :: Manager.t()
   def move_to_column(cursor, column, width, _height) do
-    clamped_col = max(0, min(column, width - 1))
+    clamped_col = clamp_to_bounds(column, width)
     %{cursor | col: clamped_col, position: {cursor.row, clamped_col}}
   end
 
@@ -153,8 +155,8 @@ defmodule Raxol.Terminal.Cursor.Movement do
   @spec constrain_position(Manager.t(), non_neg_integer(), non_neg_integer()) ::
           Manager.t()
   def constrain_position(cursor, width, height) do
-    clamped_row = max(0, min(cursor.row, height - 1))
-    clamped_col = max(0, min(cursor.col, width - 1))
+    clamped_row = clamp_to_bounds(cursor.row, height)
+    clamped_col = clamp_to_bounds(cursor.col, width)
 
     %{
       cursor
@@ -200,8 +202,8 @@ defmodule Raxol.Terminal.Cursor.Movement do
   Moves the cursor to a specific position with bounds clamping.
   """
   def move_to_bounded(cursor, row, col, width, height) do
-    clamped_row = max(0, min(row, height - 1))
-    clamped_col = max(0, min(col, width - 1))
+    clamped_row = clamp_to_bounds(row, height)
+    clamped_col = clamp_to_bounds(col, width)
 
     %{
       cursor

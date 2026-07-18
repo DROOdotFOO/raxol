@@ -7,6 +7,7 @@ defmodule Raxol.UI.Components.Harness.ErrorBlock do
   transcript.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.StyleHelper
   alias Raxol.View.Components
 
@@ -24,12 +25,7 @@ defmodule Raxol.UI.Components.Harness.ErrorBlock do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "harness-error-block-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "harness-error-block"),
       where: Keyword.get(props, :where, ""),
       reason: Keyword.get(props, :reason, ""),
       style: Keyword.get(props, :style, %{}),
@@ -38,9 +34,6 @@ defmodule Raxol.UI.Components.Harness.ErrorBlock do
 
     {:ok, state}
   end
-
-  @impl true
-  def handle_event(_event, state, _context), do: {state, []}
 
   @impl true
   @spec render(t(), map()) :: map()

@@ -106,10 +106,9 @@ defmodule Raxol.Terminal.Driver.BackgroundQuery do
   end
 
   def parse_color("#" <> hex) when byte_size(hex) == 6 do
-    with {:ok, r} <- hex_channel(binary_part(hex, 0, 2)),
-         {:ok, g} <- hex_channel(binary_part(hex, 2, 2)),
-         {:ok, b} <- hex_channel(binary_part(hex, 4, 2)) do
-      {:ok, {r, g, b}}
+    case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_6(hex) do
+      {:ok, r, g, b, _a} -> {:ok, {r, g, b}}
+      {:error, _} -> :error
     end
   end
 
@@ -142,11 +141,4 @@ defmodule Raxol.Terminal.Driver.BackgroundQuery do
   end
 
   defp scale_channel(_), do: :error
-
-  defp hex_channel(digits) do
-    case Integer.parse(digits, 16) do
-      {value, ""} -> {:ok, value}
-      _ -> :error
-    end
-  end
 end

@@ -76,9 +76,6 @@ defmodule Raxol.UI.Components.Display.Text do
   end
 
   @impl true
-  def handle_event(_event, state, _context), do: {state, []}
-
-  @impl true
   @spec render(t(), map()) :: map()
   def render(state, context) do
     style = StyleHelper.merge_component_styles(state, context, :text)

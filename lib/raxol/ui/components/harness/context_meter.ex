@@ -9,6 +9,7 @@ defmodule Raxol.UI.Components.Harness.ContextMeter do
   that module renders raw terminal cells rather than View DSL elements.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.Components.Progress.Bar
   alias Raxol.UI.StyleHelper
 
@@ -29,12 +30,7 @@ defmodule Raxol.UI.Components.Harness.ContextMeter do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "context-meter-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "context-meter"),
       used: Keyword.get(props, :used, 0),
       total: Keyword.get(props, :total, 1),
       width: Keyword.get(props, :width, 20),
@@ -46,9 +42,6 @@ defmodule Raxol.UI.Components.Harness.ContextMeter do
 
     {:ok, state}
   end
-
-  @impl true
-  def handle_event(_event, state, _context), do: {state, []}
 
   @impl true
   @spec render(t(), map()) :: map()

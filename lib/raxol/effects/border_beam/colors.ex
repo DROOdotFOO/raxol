@@ -72,6 +72,17 @@ defmodule Raxol.Effects.BorderBeam.Colors do
   @spec palette_tuple(variant()) :: tuple()
   def palette_tuple(variant), do: Map.fetch!(@palette_tuples, variant)
 
+  @doc """
+  Returns `{palette_tuple, length}` for a variant in one call. Convenience
+  for per-cell hot loops that need both the O(1)-access tuple and its size,
+  avoiding a separate `tuple_size/1` at each call site.
+  """
+  @spec palette_tuple_with_len(variant()) :: {tuple(), non_neg_integer()}
+  def palette_tuple_with_len(variant) do
+    tup = palette_tuple(variant)
+    {tup, tuple_size(tup)}
+  end
+
   @doc "Returns the CSS hex palette for a variant."
   @spec css_palette(variant()) :: [String.t()]
   def css_palette(variant), do: Map.fetch!(@css_palettes, variant)

@@ -1,6 +1,12 @@
 defmodule Raxol.UI.ComponentTest do
+  @moduledoc deprecated:
+               "Scheduled for removal in Raxol 3.0; no replacement planned."
   @moduledoc """
   Test utilities for Raxol UI components.
+
+  > #### Deprecated {: .warning}
+  >
+  > This module has no callers and is scheduled for removal in Raxol 3.0.
 
   Provides helpers for rendering components in isolation, simulating events,
   and asserting on component output.

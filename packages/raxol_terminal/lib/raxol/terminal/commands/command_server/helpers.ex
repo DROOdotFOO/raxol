@@ -5,6 +5,8 @@ defmodule Raxol.Terminal.Commands.CommandServer.Helpers do
   alias Raxol.Terminal.Cursor.Manager, as: CursorManager
   alias Raxol.Terminal.Emulator
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   def get_param(params, index, default) do
     case Enum.at(params, index) do
       nil -> default
@@ -36,8 +38,8 @@ defmodule Raxol.Terminal.Commands.CommandServer.Helpers do
   end
 
   def set_cursor_position(emulator, {row, col}) do
-    clamped_row = max(0, min(row, emulator.height - 1))
-    clamped_col = max(0, min(col, emulator.width - 1))
+    clamped_row = clamp_to_bounds(row, emulator.height)
+    clamped_col = clamp_to_bounds(col, emulator.width)
 
     case emulator.cursor do
       pid when is_pid(pid) ->

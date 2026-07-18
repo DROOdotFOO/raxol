@@ -9,6 +9,7 @@ defmodule Raxol.UI.Components.Harness.AdvisoryFeed do
   conversation.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.StyleHelper
 
   use Raxol.UI.Components.Base.Component
@@ -31,12 +32,7 @@ defmodule Raxol.UI.Components.Harness.AdvisoryFeed do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "advisory-feed-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "advisory-feed"),
       entries: Keyword.get(props, :entries, []),
       style: Keyword.get(props, :style, %{}),
       theme: Keyword.get(props, :theme, %{})
@@ -44,9 +40,6 @@ defmodule Raxol.UI.Components.Harness.AdvisoryFeed do
 
     {:ok, state}
   end
-
-  @impl true
-  def handle_event(_event, state, _context), do: {state, []}
 
   @impl true
   @spec render(t(), map()) :: map()

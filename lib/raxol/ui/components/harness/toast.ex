@@ -11,6 +11,7 @@ defmodule Raxol.UI.Components.Harness.Toast do
   dialog surface is positioned by its caller rather than positioning itself.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.StyleHelper
 
   use Raxol.UI.Components.Base.Component
@@ -30,8 +31,7 @@ defmodule Raxol.UI.Components.Harness.Toast do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(props, :id, "toast-#{:erlang.unique_integer([:positive])}"),
+      id: Ids.default_id(props, "toast"),
       message: Keyword.get(props, :message, ""),
       level: Keyword.get(props, :level, :info),
       ttl_ms: Keyword.get(props, :ttl_ms, 4_000),
@@ -41,9 +41,6 @@ defmodule Raxol.UI.Components.Harness.Toast do
 
     {:ok, state}
   end
-
-  @impl true
-  def handle_event(_event, state, _context), do: {state, []}
 
   @impl true
   @spec render(t(), map()) :: map()

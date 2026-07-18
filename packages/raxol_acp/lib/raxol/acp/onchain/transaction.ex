@@ -28,6 +28,7 @@ defmodule Raxol.ACP.Onchain.Transaction do
   `address_bytes/1` to canonicalize.
   """
 
+  alias Raxol.ACP.Onchain.Hex
   alias Raxol.ACP.Onchain.Rlp
 
   @type address :: <<_::160>>
@@ -137,7 +138,7 @@ defmodule Raxol.ACP.Onchain.Transaction do
   @doc "Convert a 20-byte address binary to its `0x`-prefixed lowercase hex form."
   @spec address_hex(address()) :: String.t()
   def address_hex(<<addr::binary-size(20)>>) do
-    "0x" <> Base.encode16(addr, case: :lower)
+    Hex.encode(addr)
   end
 
   # -- Private --

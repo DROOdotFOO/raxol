@@ -45,6 +45,7 @@ defmodule Raxol.ACP.Wallet.SCA.Provisioner do
   """
 
   alias Raxol.ACP.ABI
+  alias Raxol.ACP.Onchain.Hex
   alias Raxol.ACP.Onchain.RPC
   alias Raxol.ACP.Wallet.SCA.{EntryPoint, ModularAccount, UserOp}
 
@@ -179,7 +180,7 @@ defmodule Raxol.ACP.Wallet.SCA.Provisioner do
   defp registered?("0x" <> hex, owner) do
     case Base.decode16(hex, case: :mixed) do
       {:ok, <<_::binary-size(12), addr::binary-size(20)>>} ->
-        "0x" <> Base.encode16(addr, case: :lower) == String.downcase(owner)
+        Hex.encode(addr) == String.downcase(owner)
 
       _ ->
         false

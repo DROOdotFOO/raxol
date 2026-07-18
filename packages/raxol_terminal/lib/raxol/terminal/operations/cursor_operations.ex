@@ -5,6 +5,8 @@ defmodule Raxol.Terminal.Operations.CursorOperations do
 
   alias Raxol.Terminal.Cursor.Manager, as: CursorManager
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   def get_cursor_position(emulator) do
     # Returns {row, col} format for consistency
     {row, col} = CursorManager.get_position(emulator.cursor)
@@ -17,8 +19,8 @@ defmodule Raxol.Terminal.Operations.CursorOperations do
     height = Raxol.Terminal.Emulator.get_height(emulator)
 
     # Clamp position to screen bounds
-    clamped_row = max(0, min(row, height - 1))
-    clamped_col = max(0, min(col, width - 1))
+    clamped_row = clamp_to_bounds(row, height)
+    clamped_col = clamp_to_bounds(col, width)
 
     # CursorManager.set_position expects {row, col} tuple and returns updated cursor
     updated_cursor =

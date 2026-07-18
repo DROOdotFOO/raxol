@@ -11,6 +11,7 @@ defmodule Raxol.UI.Components.Harness.RulesPanel do
   standing constraint, not an error.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.StyleHelper
   alias Raxol.View.Components
 
@@ -30,12 +31,7 @@ defmodule Raxol.UI.Components.Harness.RulesPanel do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "rules-panel-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "rules-panel"),
       title: Keyword.get(props, :title, "Rules"),
       rules: Keyword.get(props, :rules, []),
       style: Keyword.get(props, :style, %{}),
@@ -44,9 +40,6 @@ defmodule Raxol.UI.Components.Harness.RulesPanel do
 
     {:ok, state}
   end
-
-  @impl true
-  def handle_event(_event, state, _context), do: {state, []}
 
   @impl true
   @spec render(t(), map()) :: map()

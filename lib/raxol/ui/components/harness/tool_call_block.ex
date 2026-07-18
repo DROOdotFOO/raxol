@@ -14,9 +14,10 @@ defmodule Raxol.UI.Components.Harness.ToolCallBlock do
   width-bounded rendering of `args`.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
+  alias Raxol.UI.Components.Harness.TextUtil
   alias Raxol.UI.Components.Progress.Spinner
   alias Raxol.UI.StyleHelper
-  alias Raxol.UI.TextMeasure
 
   use Raxol.UI.Components.Base.Component
 
@@ -40,12 +41,7 @@ defmodule Raxol.UI.Components.Harness.ToolCallBlock do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "tool-call-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "tool-call"),
       name: Keyword.get(props, :name, ""),
       args: Keyword.get(props, :args, %{}),
       status: Keyword.get(props, :status, :pending),
@@ -56,9 +52,6 @@ defmodule Raxol.UI.Components.Harness.ToolCallBlock do
 
     {:ok, state}
   end
-
-  @impl true
-  def handle_event(_event, state, _context), do: {state, []}
 
   @impl true
   @spec render(t(), map()) :: map()
@@ -137,14 +130,5 @@ defmodule Raxol.UI.Components.Harness.ToolCallBlock do
 
   defp wrap_parens(text), do: "(" <> text <> ")"
 
-  defp truncate(text) do
-    if TextMeasure.display_width(text) > @max_args_width do
-      {left, _rest} =
-        TextMeasure.split_at_display_width(text, @max_args_width - 1)
-
-      left <> "…"
-    else
-      text
-    end
-  end
+  defp truncate(text), do: TextUtil.truncate_to_width(text, @max_args_width)
 end

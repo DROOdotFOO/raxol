@@ -358,39 +358,19 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
     defp parse_hex(hex_string) do
       case String.length(hex_string) do
         6 ->
-          with {:ok, r} <- parse_hex_pair(String.slice(hex_string, 0, 2)),
-               {:ok, g} <- parse_hex_pair(String.slice(hex_string, 2, 2)),
-               {:ok, b} <- parse_hex_pair(String.slice(hex_string, 4, 2)) do
-            {:ok, {r, g, b}}
-          else
-            _ -> {:error, :invalid_hex_format}
+          case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_6(hex_string) do
+            {:ok, r, g, b, _a} -> {:ok, {r, g, b}}
+            {:error, _} -> {:error, :invalid_hex_format}
           end
 
         3 ->
-          with {:ok, r} <- parse_hex_char(String.at(hex_string, 0)),
-               {:ok, g} <- parse_hex_char(String.at(hex_string, 1)),
-               {:ok, b} <- parse_hex_char(String.at(hex_string, 2)) do
-            {:ok, {r * 17, g * 17, b * 17}}
-          else
-            _ -> {:error, :invalid_hex_format}
+          case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_3(hex_string) do
+            {:ok, r, g, b, _a} -> {:ok, {r, g, b}}
+            {:error, _} -> {:error, :invalid_hex_format}
           end
 
         _ ->
           {:error, :invalid_hex_length}
-      end
-    end
-
-    defp parse_hex_pair(pair) do
-      case Integer.parse(pair, 16) do
-        {value, ""} -> {:ok, value}
-        _ -> {:error, :invalid_hex}
-      end
-    end
-
-    defp parse_hex_char(char) do
-      case Integer.parse(char, 16) do
-        {value, ""} -> {:ok, value}
-        _ -> {:error, :invalid_hex}
       end
     end
 

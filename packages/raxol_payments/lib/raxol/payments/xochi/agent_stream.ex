@@ -70,7 +70,6 @@ defmodule Raxol.Payments.Xochi.AgentStream do
 
   require Logger
 
-  @eip191_prefix "\x19Ethereum Signed Message:\n"
   @default_jitter_ms 250
   @announce_path "/api/agent/announce"
 
@@ -181,9 +180,10 @@ defmodule Raxol.Payments.Xochi.AgentStream do
   Sign `digest_message(topic_id, event)` with `wallet` using EIP-191
   `personal_sign`. Returns `{:ok, "0x" <> hex}` (65-byte `r || s || v`).
   """
-  @spec sign_event(module(), String.t(), event()) :: {:ok, String.t()} | {:error, term()}
+  @spec sign_event(module(), String.t(), event()) ::
+          {:ok, String.t()} | {:error, term()}
   def sign_event(wallet, topic_id, event) do
-    digest = eip191_digest(digest_message(topic_id, event))
+    digest = Raxol.Payments.Eip191.digest(digest_message(topic_id, event))
 
     case wallet.sign_hash(digest) do
       {:ok, sig} when byte_size(sig) == 65 ->
@@ -202,14 +202,17 @@ defmodule Raxol.Payments.Xochi.AgentStream do
   and event. This is exactly the check viem `verifyMessage` runs, so a match
   guarantees the Xochi client accepts the announce.
   """
-  @spec recover_signer(String.t(), event(), String.t()) :: {:ok, String.t()} | {:error, term()}
-  def recover_signer(topic_id, event, "0x" <> hex), do: recover_signer(topic_id, event, hex)
+  @spec recover_signer(String.t(), event(), String.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def recover_signer(topic_id, event, "0x" <> hex),
+    do: recover_signer(topic_id, event, hex)
 
-  def recover_signer(topic_id, event, hex) when is_binary(hex) and byte_size(hex) == 130 do
+  def recover_signer(topic_id, event, hex)
+      when is_binary(hex) and byte_size(hex) == 130 do
     with {:ok, {r, s, recovery_id}} <- decode_signature(hex),
-         digest = eip191_digest(digest_message(topic_id, event)),
+         digest = Raxol.Payments.Eip191.digest(digest_message(topic_id, event)),
          {:ok, pubkey} <- ExSecp256k1.recover(digest, r, s, recovery_id) do
-      {:ok, address_from_pubkey(pubkey)}
+      {:ok, Raxol.Payments.EIP712.address_from_pubkey(pubkey)}
     else
       _ -> {:error, :invalid_signature}
     end
@@ -220,7 +223,8 @@ defmodule Raxol.Payments.Xochi.AgentStream do
   @doc """
   Verify `signature` over `topic_id`/`event` recovers to `expected_wallet`.
   """
-  @spec verify(String.t(), event(), String.t(), String.t()) :: :ok | {:error, term()}
+  @spec verify(String.t(), event(), String.t(), String.t()) ::
+          :ok | {:error, term()}
   def verify(topic_id, event, signature, expected_wallet) do
     case recover_signer(topic_id, event, signature) do
       {:ok, recovered} ->
@@ -293,7 +297,10 @@ defmodule Raxol.Payments.Xochi.AgentStream do
   end
 
   defp handle_response({:error, reason}, config) do
-    Logger.warning("[agent-stream] announce transport error: #{inspect(reason)}")
+    Logger.warning(
+      "[agent-stream] announce transport error: #{inspect(reason)}"
+    )
+
     emit_dropped(config, reason)
     {:error, reason}
   end
@@ -325,11 +332,6 @@ defmodule Raxol.Payments.Xochi.AgentStream do
     }
   end
 
-  defp eip191_digest(message) do
-    prefixed = @eip191_prefix <> Integer.to_string(byte_size(message)) <> message
-    ExKeccak.hash_256(prefixed)
-  end
-
   # secp256k1 group order halved. A canonical (low-s) signature has
   # 1 <= s <= n/2. Because (r, n - s) recovers the same key, accepting a high-s
   # signature would let a third party malleate a posted announce into a second
@@ -343,7 +345,8 @@ defmodule Raxol.Payments.Xochi.AgentStream do
   # rejected rather than recovered. ExSecp256k1.recover wants a 0/1 recovery id.
   defp decode_signature(hex) do
     case Base.decode16(hex, case: :mixed) do
-      {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>} when v in [27, 28] ->
+      {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>}
+      when v in [27, 28] ->
         if low_s?(s),
           do: {:ok, {r, s, v - 27}},
           else: {:error, :malleable_signature}
@@ -355,12 +358,6 @@ defmodule Raxol.Payments.Xochi.AgentStream do
 
   defp low_s?(<<s::unsigned-big-256>>), do: s >= 1 and s <= @secp256k1_half_n
 
-  # address = last 20 bytes of keccak256(uncompressed pubkey without the 0x04 tag).
-  defp address_from_pubkey(<<_prefix::8, xy::binary-size(64)>>) do
-    <<_first12::binary-size(12), addr::binary-size(20)>> = ExKeccak.hash_256(xy)
-    "0x" <> Base.encode16(addr, case: :lower)
-  end
-
   defp addr_eq?(a, b), do: String.downcase(a) == String.downcase(b)
 
   defp validate_base_url!("https://" <> _), do: :ok
@@ -368,6 +365,7 @@ defmodule Raxol.Payments.Xochi.AgentStream do
   defp validate_base_url!("http://127.0.0.1" <> _), do: :ok
 
   defp validate_base_url!(url) do
-    raise ArgumentError, "Xochi agent-stream requires HTTPS base_url, got: #{inspect(url)}"
+    raise ArgumentError,
+          "Xochi agent-stream requires HTTPS base_url, got: #{inspect(url)}"
   end
 end

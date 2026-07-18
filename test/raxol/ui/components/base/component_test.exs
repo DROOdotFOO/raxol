@@ -293,6 +293,26 @@ defmodule Raxol.UI.Components.Base.ComponentTest do
     end
   end
 
+  describe "macro-injected handle_event default" do
+    defmodule NoEventComponent do
+      use Raxol.UI.Components.Base.Component
+      def init(props), do: props
+      def render(_state, _context), do: %{type: :none}
+      # intentionally defines NO handle_event/3
+    end
+
+    test "use-macro component with no handle_event returns {state, []}" do
+      state = %{a: 1}
+
+      assert NoEventComponent.handle_event(%{type: :anything}, state, %{}) ==
+               {state, []}
+    end
+
+    test "a component that defines handle_event overrides the default" do
+      assert {:handle_event, 3} in TestComponent.__info__(:functions)
+    end
+  end
+
   # Minimal test theme for rendering tests
   defp test_theme do
     %Raxol.UI.Theming.Theme{

@@ -362,4 +362,75 @@ defmodule Raxol.Core.Telemetry.TraceContextTest do
       refute ctx.parent_span_id == ctx.causation_id
     end
   end
+
+  describe "to_metadata/1" do
+    test "returns extra unchanged when inactive" do
+      assert TraceContext.to_metadata(%{a: 1}) == %{a: 1}
+    end
+
+    test "merges trace_id/span_id/parent_span_id when active" do
+      ctx = TraceContext.start_trace()
+      meta = TraceContext.to_metadata(%{component: :button})
+      assert meta.component == :button
+      assert meta.trace_id == ctx.trace_id
+      assert meta.span_id == ctx.span_id
+      assert meta.parent_span_id == ctx.parent_span_id
+    end
+  end
+
+  describe "telemetry emission (equivalence with the retired Context)" do
+    setup do
+      test_pid = self()
+      ref = make_ref()
+
+      events = [
+        [:raxol, :test, :op, :start],
+        [:raxol, :test, :op, :stop],
+        [:raxol, :test, :op, :exception],
+        [:raxol, :test, :evt]
+      ]
+
+      :telemetry.attach_many(
+        "tc-equiv-#{inspect(ref)}",
+        events,
+        fn event, measurements, metadata, _ ->
+          send(test_pid, {ref, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("tc-equiv-#{inspect(ref)}") end)
+      %{ref: ref}
+    end
+
+    test "execute/3 emits with trace context merged into metadata", %{ref: ref} do
+      ctx = TraceContext.start_trace()
+      TraceContext.execute([:raxol, :test, :evt], %{count: 1}, %{k: :v})
+      assert_receive {^ref, [:raxol, :test, :evt], %{count: 1}, meta}
+      assert meta.k == :v
+      assert meta.trace_id == ctx.trace_id
+      assert meta.span_id == ctx.span_id
+    end
+
+    test "span/3 emits start then stop, returns fun result, injects trace", %{ref: ref} do
+      TraceContext.start_trace()
+      result = TraceContext.span([:raxol, :test, :op], %{c: :x}, fn -> :ok_result end)
+      assert result == :ok_result
+      assert_receive {^ref, [:raxol, :test, :op, :start], %{system_time: _}, m_start}
+      assert is_binary(m_start.trace_id) and is_binary(m_start.span_id)
+      assert_receive {^ref, [:raxol, :test, :op, :stop], %{duration: _}, m_stop}
+      assert m_stop.result == :ok
+    end
+
+    test "span/3 emits :exception and reraises on failure", %{ref: ref} do
+      TraceContext.start_trace()
+
+      assert_raise RuntimeError, "boom", fn ->
+        TraceContext.span([:raxol, :test, :op], %{}, fn -> raise "boom" end)
+      end
+
+      assert_receive {^ref, [:raxol, :test, :op, :exception], %{duration: _}, meta}
+      assert %RuntimeError{} = meta.exception
+    end
+  end
 end

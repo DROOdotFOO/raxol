@@ -26,6 +26,7 @@ defmodule Raxol.ACP.Hooks.FundTransfer do
   """
 
   alias Raxol.ACP.ABI
+  alias Raxol.ACP.Onchain.Hex
 
   @type transfer_amount :: non_neg_integer()
   @type address :: String.t()
@@ -58,7 +59,7 @@ defmodule Raxol.ACP.Hooks.FundTransfer do
     {:ok,
      %{
        transfer_amount: transfer_amount,
-       destination: "0x" <> Base.encode16(addr_bytes, case: :lower)
+       destination: Hex.encode(addr_bytes)
      }}
   end
 

@@ -30,6 +30,7 @@ defmodule Raxol.ACP.HookClient do
   variants -- that's the offering's job.
   """
 
+  alias Raxol.ACP.Onchain.Hex
   alias Raxol.ACP.ProviderAdapter
 
   @type chain_id :: pos_integer()
@@ -214,7 +215,7 @@ defmodule Raxol.ACP.HookClient do
   # `Raxol.ACP.ABI.encode_bytes32` accepts hex (with or without 0x);
   # normalize raw 32-byte binaries to hex so both representations work.
   defp encode_bytes32(<<_::binary-size(32)>> = bytes),
-    do: "0x" <> Base.encode16(bytes, case: :lower)
+    do: Hex.encode(bytes)
 
   defp encode_bytes32("0x" <> hex = full) when byte_size(hex) == 64, do: full
 

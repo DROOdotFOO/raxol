@@ -7,10 +7,11 @@ defmodule Raxol.Terminal.Commands.CursorHandler do
   returning the updated emulator state.
   """
 
-
   alias Raxol.Terminal.Commands.CursorUtils
   alias Raxol.Terminal.Cursor.Manager, as: CursorManager
   alias Raxol.Terminal.Emulator
+
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
 
   @spec handle_cursor_movement(
           Emulator.t(),
@@ -46,8 +47,8 @@ defmodule Raxol.Terminal.Commands.CursorHandler do
     col_0 = col - 1
 
     # Clamp to screen bounds
-    row_clamped = max(0, min(row_0, emulator.height - 1))
-    col_clamped = max(0, min(col_0, emulator.width - 1))
+    row_clamped = clamp_to_bounds(row_0, emulator.height)
+    col_clamped = clamp_to_bounds(col_0, emulator.width)
 
     # Pass {row, col} to match new convention
     updated_cursor =
@@ -163,7 +164,7 @@ defmodule Raxol.Terminal.Commands.CursorHandler do
     column_0 = column - 1
 
     # Clamp to screen width
-    column_clamped = max(0, min(column_0, emulator.width - 1))
+    column_clamped = clamp_to_bounds(column_0, emulator.width)
 
     cursor = emulator.cursor
     {current_row, _} = get_cursor_position(cursor)
@@ -188,7 +189,7 @@ defmodule Raxol.Terminal.Commands.CursorHandler do
     row_0 = row - 1
 
     # Clamp to screen height
-    row_clamped = max(0, min(row_0, emulator.height - 1))
+    row_clamped = clamp_to_bounds(row_0, emulator.height)
 
     cursor = emulator.cursor
     {_, current_col} = get_cursor_position(cursor)
@@ -209,8 +210,8 @@ defmodule Raxol.Terminal.Commands.CursorHandler do
   def move_cursor_to(emulator, position, width, height) do
     {row, col} = position
     # Clamp coordinates to screen bounds
-    row_clamped = max(0, min(row, height - 1))
-    col_clamped = max(0, min(col, width - 1))
+    row_clamped = clamp_to_bounds(row, height)
+    col_clamped = clamp_to_bounds(col, width)
 
     updated_cursor =
       set_cursor_position(emulator.cursor, {row_clamped, col_clamped})
@@ -357,7 +358,7 @@ defmodule Raxol.Terminal.Commands.CursorHandler do
   def move_cursor_to_column(emulator, column, width, _height) do
     cursor = emulator.cursor
     {row, _col} = get_cursor_position(cursor)
-    new_col = max(0, min(width - 1, column))
+    new_col = clamp_to_bounds(column, width)
     updated_cursor = set_cursor_position(cursor, {row, new_col})
     %{emulator | cursor: updated_cursor}
   end

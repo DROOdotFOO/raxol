@@ -7,6 +7,8 @@ defmodule Raxol.Terminal.Cursor.Callbacks do
 
   alias Raxol.Terminal.Cursor.Movement
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   @cursor_blink_interval_ms 500
 
   @doc """
@@ -251,7 +253,7 @@ defmodule Raxol.Terminal.Cursor.Callbacks do
   """
   def handle_move_to_column_bounded(state, column, width, _height) do
     # Move cursor to specific column with bounds clamping
-    clamped_col = max(0, min(column, width - 1))
+    clamped_col = clamp_to_bounds(column, width)
     new_state = %{state | col: clamped_col, position: {state.row, clamped_col}}
     {new_state, new_state}
   end
@@ -261,8 +263,8 @@ defmodule Raxol.Terminal.Cursor.Callbacks do
   """
   def handle_move_to_bounded(state, row, col, width, height) do
     # Move cursor to specific position with bounds clamping
-    clamped_row = max(0, min(row, height - 1))
-    clamped_col = max(0, min(col, width - 1))
+    clamped_row = clamp_to_bounds(row, height)
+    clamped_col = clamp_to_bounds(col, width)
 
     new_state = %{
       state
@@ -279,8 +281,8 @@ defmodule Raxol.Terminal.Cursor.Callbacks do
   """
   def handle_move_to_bounded_position(state, row, col, width, height) do
     # Move cursor to specific position with bounds clamping
-    clamped_row = max(0, min(row, height - 1))
-    clamped_col = max(0, min(col, width - 1))
+    clamped_row = clamp_to_bounds(row, height)
+    clamped_col = clamp_to_bounds(col, width)
 
     new_state = %{
       state

@@ -88,7 +88,10 @@ defmodule Raxol.UI.Charts.ScatterChartTest do
 
     test "show_legend includes series name" do
       data = [{1.0, 2.0}]
-      cells = ScatterChart.render(@region, single_series(data), show_legend: true)
+
+      cells =
+        ScatterChart.render(@region, single_series(data), show_legend: true)
+
       chars = Enum.map_join(cells, fn {_x, _y, c, _fg, _bg, _a} -> c end)
       assert String.contains?(chars, "Test")
     end
@@ -100,6 +103,38 @@ defmodule Raxol.UI.Charts.ScatterChartTest do
         ScatterChart.render(@region, [%{name: "CB", data: cb, color: :green}])
 
       assert [_ | _] = cells
+    end
+  end
+
+  describe "a11y_node/1" do
+    test "binary id is used verbatim as label" do
+      assert ScatterChart.a11y_node(%{id: "cpu"}) ==
+               %{role: :img, label: "cpu"}
+    end
+
+    test "atom id is stringified" do
+      assert ScatterChart.a11y_node(%{id: :cpu}) ==
+               %{role: :img, label: "cpu"}
+    end
+
+    test "nil id falls back to default label" do
+      assert ScatterChart.a11y_node(%{id: nil}) ==
+               %{role: :img, label: "scatter chart"}
+    end
+
+    test "missing id falls back to default label" do
+      assert ScatterChart.a11y_node(%{}) ==
+               %{role: :img, label: "scatter chart"}
+    end
+
+    test "aria_label wins over title and id" do
+      assert ScatterChart.a11y_node(%{aria_label: "A", title: "T", id: "x"}) ==
+               %{role: :img, label: "A"}
+    end
+
+    test "title wins over id" do
+      assert ScatterChart.a11y_node(%{title: "T", id: "x"}) ==
+               %{role: :img, label: "T"}
     end
   end
 end

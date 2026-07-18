@@ -11,6 +11,8 @@ defmodule Raxol.Terminal.Integration.Buffer do
 
   alias Raxol.Terminal.Cursor.Manager, as: CursorManager
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   @doc """
   Writes text to the terminal buffer.
   """
@@ -176,8 +178,8 @@ defmodule Raxol.Terminal.Integration.Buffer do
         cursor when is_map(cursor) ->
           {x, y} = CursorManager.get_position(cursor)
           # Constrain to new bounds
-          new_x = max(0, min(x, width - 1))
-          new_y = max(0, min(y, height - 1))
+          new_x = clamp_to_bounds(x, width)
+          new_y = clamp_to_bounds(y, height)
           CursorManager.set_position(cursor, {new_x, new_y})
 
         cursor ->

@@ -38,7 +38,7 @@ defmodule Raxol.Symphony.Surfaces.MCP do
   -- when raxol_mcp is not present, `register/1` is a no-op returning `:ok`.
   """
 
-  alias Raxol.Symphony.{Evidence, Orchestrator, PathSafety}
+  alias Raxol.Symphony.{Evidence, Orchestrator, OrchestratorClient, PathSafety}
   alias Raxol.Symphony.Evidence.Subject
 
   @compile {:no_warn_undefined, [Raxol.MCP.Registry]}
@@ -248,7 +248,7 @@ defmodule Raxol.Symphony.Surfaces.MCP do
       """,
       inputSchema: %{type: "object", properties: %{}},
       callback: fn _args ->
-        _ = safe_call(fn -> Orchestrator.refresh(orch) end)
+        _ = OrchestratorClient.safe_call(fn -> Orchestrator.refresh(orch) end)
         %{status: "refreshed"}
       end
     }
@@ -371,7 +371,7 @@ defmodule Raxol.Symphony.Surfaces.MCP do
   end
 
   defp safe_get_config(orch) do
-    case safe_call(fn -> Orchestrator.get_config(orch) end) do
+    case OrchestratorClient.safe_call(fn -> Orchestrator.get_config(orch) end) do
       {:ok, %_{} = config} -> {:ok, config}
       _ -> {:error, :orchestrator_unavailable}
     end
@@ -459,7 +459,9 @@ defmodule Raxol.Symphony.Surfaces.MCP do
   defp fetch_decision(_), do: nil
 
   defp resume_run_response(orch, id, decision) do
-    case safe_call(fn -> Orchestrator.resume_run(orch, id, decision) end) do
+    case OrchestratorClient.safe_call(fn ->
+           Orchestrator.resume_run(orch, id, decision)
+         end) do
       {:ok, :ok} ->
         %{status: "resumed", issue_id: id}
 
@@ -472,7 +474,7 @@ defmodule Raxol.Symphony.Surfaces.MCP do
   end
 
   defp stop_run_response(orch, id) do
-    case safe_call(fn -> Orchestrator.stop_run(orch, id) end) do
+    case OrchestratorClient.safe_call(fn -> Orchestrator.stop_run(orch, id) end) do
       {:ok, :ok} ->
         %{status: "stopped", issue_id: id}
 
@@ -485,7 +487,7 @@ defmodule Raxol.Symphony.Surfaces.MCP do
   end
 
   defp safe_snapshot(orch) do
-    case safe_call(fn -> Orchestrator.snapshot(orch) end) do
+    case OrchestratorClient.safe_call(fn -> Orchestrator.snapshot(orch) end) do
       {:ok, %{} = snap} ->
         snap
 
@@ -506,12 +508,5 @@ defmodule Raxol.Symphony.Surfaces.MCP do
           orchestrator_unavailable: true
         }
     end
-  end
-
-  defp safe_call(fun) do
-    {:ok, fun.()}
-  catch
-    :exit, _ -> :error
-    :error, _ -> :error
   end
 end

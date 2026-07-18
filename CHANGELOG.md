@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### Deprecated
+
+- **`Raxol.UI.VisualTest`, `Raxol.UI.ComponentTest`, `Raxol.UI.IntegrationTest`, `Raxol.UI.PerformanceTest`** are deprecated and scheduled for removal in 3.0. They have no callers; no replacement is planned.
+
+### Removed
+
+- **`Raxol.UI.ThemeResolverCached`** (delegating shim) removed. Use `Raxol.UI.ThemeResolver.<fn>(..., cache: true)` -- a one-to-one replacement documented in that module.
+
 ## [2.6.0] - 2026-07-11
 
 ### Added
