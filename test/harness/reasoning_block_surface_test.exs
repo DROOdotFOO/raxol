@@ -8,7 +8,7 @@ defmodule Raxol.Harness.ReasoningBlockSurfaceTest do
        transcript block — a blank row above it and a blank row below it
        (the `block_separator/1` law, not a reasoning special-case).
     2. **Peekable compact register.** It seals as the folded
-       `∴ reasoning · N lines` one-line register, ahead of the answer.
+       `⁖ thinking · N lines` one-line register, ahead of the answer.
 
   Low prominence (dim, machinery register) is pinned at the Block level
   in `Raxol.UI.Components.Harness.BlockTest` ("the folded reasoning line
@@ -137,14 +137,14 @@ defmodule Raxol.Harness.ReasoningBlockSurfaceTest do
     |> List.flatten()
   end
 
-  test "reasoning seals as the folded `∴ reasoning · N lines` register" do
+  test "reasoning seals as the folded `⁖ thinking · N lines` register" do
     {model, device} = new_model(think_answer_events())
     _model = drive_to_completion(model)
 
     history = history_rows(device)
 
-    assert Enum.any?(history, &(&1 =~ "∴ reasoning · 1 line")),
-           "no folded ∴ reasoning register in history: #{inspect(history)}"
+    assert Enum.any?(history, &(&1 =~ "⁖ thinking" and &1 =~ "1 line")),
+           "no folded ⁖ thinking register in history: #{inspect(history)}"
   end
 
   test "the reasoning block gets the one-blank-row rhythm above AND below it" do
@@ -153,7 +153,7 @@ defmodule Raxol.Harness.ReasoningBlockSurfaceTest do
 
     history = history_rows(device)
 
-    reasoning_index = Enum.find_index(history, &(&1 =~ "∴ reasoning"))
+    reasoning_index = Enum.find_index(history, &(&1 =~ "⁖ thinking"))
     assert reasoning_index != nil, "no reasoning row: #{inspect(history)}"
 
     # Blank row ABOVE the reasoning block (its separator from the user echo).

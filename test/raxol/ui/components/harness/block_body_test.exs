@@ -163,7 +163,7 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   #
   # `message` (speaker separation: bare prose) shows its SECOND body line
   # only when expanded. `reasoning` and `tool_call` are the MACHINERY
-  # register: folded is a compact count/receipt line (`∴ reasoning · N
+  # register: folded is a compact count/receipt line (`⁖ thinking · N
   # lines` / `⚙ name(args) · receipt`) that never previews the content,
   # so their expanded-only marker is a line of the BODY itself (the
   # reasoning text / a tool-result line).
@@ -178,12 +178,13 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   # The substring present in BOTH fold states. For message/diff/approval
   # the folded summary previews a first-line/path/action identifier that
   # the expanded body repeats. For the machinery kinds the shared token is
-  # the compact-line identity itself -- `reasoning` folds to `∴ reasoning
+  # the compact-line identity itself -- `reasoning` folds to `⁖ thinking
   # · N lines` (and the expanded render keeps that same header line above
-  # the body), `tool_call` folds to `⚙ Bash(...) · ...` (name preserved).
+  # the ∵…∴ bracketed body), `tool_call` folds to `⚙ Bash(...) · ...`
+  # (name preserved).
   @parity_marker %{
     message: "Deploy is done.",
-    reasoning: "reasoning",
+    reasoning: "thinking",
     tool_call: "Bash",
     diff: "lib/orders/total.ex",
     approval: "rm -rf build/"

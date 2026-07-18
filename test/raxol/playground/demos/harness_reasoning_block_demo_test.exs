@@ -3,7 +3,7 @@ defmodule Raxol.Playground.Demos.HarnessReasoningBlockDemoTest do
   Headless pins for `HarnessReasoningBlockDemo` -- the U1-a autotest
   contract for the re-hosted REASONING block (harness TEA migration §7):
   collapsed-by-default in both real registers (the component's `▸ N
-  lines` peek line and the sealed transcript's `∴ reasoning · N lines`
+  lines` peek line and the sealed transcript's `⁖ thinking · N lines`
   compact line), dim prominence buffer-verified, peek toggle on
   z/Enter/Space, blank-row rhythm.
   """
@@ -62,12 +62,12 @@ defmodule Raxol.Playground.Demos.HarnessReasoningBlockDemoTest do
   end
 
   describe "collapsed default (both registers)" do
-    test "component peek line and transcript ∴ line render collapsed; the body stays hidden" do
+    test "component peek line and transcript ⁖ line render collapsed; the body stays hidden" do
       session = start_demo(:r_collapsed)
       {:ok, text} = Headless.screenshot(session)
 
       assert text =~ "▸ 4 lines — Phase 1"
-      assert text =~ "∴ reasoning · 4 lines"
+      assert text =~ "⁖ thinking"
       assert text =~ "expanded: false"
 
       refute text =~ "Phase 2",
@@ -81,10 +81,10 @@ defmodule Raxol.Playground.Demos.HarnessReasoningBlockDemoTest do
       rows = lines(session)
 
       peek_row = Enum.find(rows, &String.contains?(&1, "▸ 4 lines"))
-      compact_row = Enum.find(rows, &String.contains?(&1, "∴ reasoning"))
+      compact_row = Enum.find(rows, &String.contains?(&1, "⁖ thinking"))
 
       assert String.starts_with?(peek_row, "  ▸")
-      assert String.starts_with?(compact_row, "  ∴")
+      assert String.starts_with?(compact_row, "  ⁖")
 
       Headless.stop(session)
     end
@@ -94,7 +94,7 @@ defmodule Raxol.Playground.Demos.HarnessReasoningBlockDemoTest do
       rows = lines(session)
 
       peek_y = Enum.find_index(rows, &String.contains?(&1, "▸ 4 lines"))
-      compact_y = Enum.find_index(rows, &String.contains?(&1, "∴ reasoning"))
+      compact_y = Enum.find_index(rows, &String.contains?(&1, "⁖ thinking"))
 
       peek_cell = cell(session, 2, peek_y)
       compact_cell = cell(session, 2, compact_y)
@@ -103,7 +103,7 @@ defmodule Raxol.Playground.Demos.HarnessReasoningBlockDemoTest do
       assert peek_cell.style.faint == true
       assert peek_cell.style.bold == false
 
-      assert compact_cell.char == "∴"
+      assert compact_cell.char == "⁖"
       assert compact_cell.style.faint == true
       assert compact_cell.style.bold == false
 

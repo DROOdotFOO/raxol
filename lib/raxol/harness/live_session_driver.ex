@@ -335,7 +335,10 @@ defmodule Raxol.Harness.LiveSessionDriver do
     clock =
       Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end)
 
-    tick_ms = Keyword.get(opts, :tick_ms, 1_000)
+    # 100ms: a smooth spinner/elapsed pulse (1s read as a stutter). The tick
+    # only advances `spinner_frame` + recomputes elapsed; the ScreenBuffer
+    # diff means an idle pulse repaints just the spinner cell, not the frame.
+    tick_ms = Keyword.get(opts, :tick_ms, 100)
     detector = StallDetector.new(Keyword.get(opts, :stall_opts, []))
 
     Process.send_after(driver_pid, :tick, tick_ms)

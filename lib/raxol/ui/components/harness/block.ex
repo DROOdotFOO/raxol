@@ -230,6 +230,18 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   @known_kinds [:message, :reasoning, :tool_call, :diff, :approval, :error]
 
+  # The reasoning register's own signature (V, 2026-07-18) -- the harness
+  # marks cognition with the dotted "because/therefore" family instead of
+  # the braille everyone else uses. A COLLAPSED thought is prefixed `⁖`;
+  # an EXPANDED thought is bracketed `∵` (premises, first line) ... `∴`
+  # (conclusion, last line), reading like an arrow through the reasoning.
+  # The ACTIVE cycling set (`∴ ஃ ⁂ ⛬`) is the tick-clocked pulse and lives
+  # in `Raxol.Harness.Surface` (the animation clock is there). All are
+  # width-1, text-presentation (see `glyph_inventory/0`).
+  @reasoning_collapsed_glyph "⁖"
+  @reasoning_open_glyph "∵"
+  @reasoning_close_glyph "∴"
+
   # Machinery kinds (tool_call/reasoning/diff) default FOLDED: their
   # default form is the one-line compact register (glyph + referent +
   # receipt), per the low-prominence execution-block ruling -- tool output
@@ -308,18 +320,19 @@ defmodule Raxol.UI.Components.Harness.Block do
     }
   rescue
     e ->
-      emit_recovered(kind, e)
+      emit_recovered(kind, e, __STACKTRACE__)
       opaque_fallback(kind, events, opts)
   end
 
   defp normalize_kind(kind) when kind in @known_kinds, do: kind
   defp normalize_kind(_kind), do: :opaque
 
-  defp emit_recovered(kind, exception) do
+  defp emit_recovered(kind, exception, stacktrace) do
     reason = Exception.message(exception)
 
     Logger.warning(
-      "Harness.Block recovered from #{inspect(kind)} projection failure: #{reason}"
+      "Harness.Block recovered from #{inspect(kind)} render/projection failure: " <>
+        "#{reason}\n" <> Exception.format_stacktrace(stacktrace)
     )
 
     :telemetry.execute(@recovered_telemetry_event, %{}, %{
@@ -481,7 +494,7 @@ defmodule Raxol.UI.Components.Harness.Block do
     interactive_wrap(build_render(block, width, context), block, context)
   rescue
     e ->
-      emit_recovered(block.kind, e)
+      emit_recovered(block.kind, e, __STACKTRACE__)
       interactive_wrap(render_fallback(block), block, context)
   end
 
@@ -706,16 +719,30 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp approval_node_id(_block), do: "approval-prompt"
 
+  # The moduledoc promise: a render fault is NEVER a dead cell. Even when
+  # `build_render/3` raises on an unexpected content shape, the block still
+  # shows its honest one-line summary (`safe_summary/1` can never itself
+  # raise) so the operator sees WHAT the block is (the tool + action of an
+  # approval, the first line of a message), plus a visible recovery marker
+  # so the fault is not silently swallowed. The real exception + stacktrace
+  # is logged at the rescue site (`emit_recovered/3`).
   defp render_fallback(block) do
     Components.column(
       gap: 0,
       children: [
+        Components.text(content: safe_summary(block), style: %{}),
         Components.text(
-          content: "[unrenderable #{inspect(block.kind)} block]",
+          content: "(render recovered — see log)",
           style: %{dim: true}
         )
       ]
     )
+  end
+
+  defp safe_summary(block) do
+    summary(block)
+  rescue
+    _ -> "#{block.kind} block"
   end
 
   # -- machinery compact headers (the low-prominence execution register) --
@@ -738,10 +765,18 @@ defmodule Raxol.UI.Components.Harness.Block do
     )
   end
 
+  # The collapsed thought: `⁖ thinking` flush left, the honest quantity
+  # (`N lines · <duration>`) flush right -- a space-between register line
+  # so the eye reads the marker and the cost at the two edges. Duration is
+  # shown only when the block genuinely carries one (never fabricated).
   defp header_view(%__MODULE__{kind: :reasoning} = block, width, fg, _context) do
     Components.text(
       content:
-        TextLayout.truncate(reasoning_line(block), max(width, 1), :ellipsis),
+        justify_between(
+          "#{@reasoning_collapsed_glyph} thinking",
+          reasoning_meta(block),
+          max(width, 1)
+        ),
       style: apply_fg(%{dim: true}, fg)
     )
   end
@@ -884,6 +919,9 @@ defmodule Raxol.UI.Components.Harness.Block do
       "±",
       "⚑",
       "◆",
+      # reasoning register (collapsed prefix + expanded ∵/∴ brackets)
+      @reasoning_collapsed_glyph,
+      @reasoning_open_glyph,
       # message role
       "❯",
       # tool receipt / outcome markers
@@ -1016,16 +1054,43 @@ defmodule Raxol.UI.Components.Harness.Block do
     is_integer(exit_code) and exit_code != 0
   end
 
-  # `∴ reasoning · N lines` -- the peekable one-line register. The line
-  # count is the honest quantity (never the first line of the thought:
-  # collapsed means collapsed).
-  defp reasoning_line(%__MODULE__{content: content}) do
-    case content |> Map.get(:text) |> split_lines() do
-      [] -> "#{kind_glyph(:reasoning)} reasoning · empty"
-      [_line] -> "#{kind_glyph(:reasoning)} reasoning · 1 line"
-      lines -> "#{kind_glyph(:reasoning)} reasoning · #{length(lines)} lines"
+  # The right-edge meta of a collapsed thought: the honest line count and,
+  # when the block carries one, the thinking duration. The `⁖ thinking`
+  # left edge is built in `header_view/4`; the count is the honest quantity
+  # (never the first line of the thought: collapsed means collapsed).
+  defp reasoning_meta(%__MODULE__{content: content, outcome: outcome}) do
+    count = (content || %{}) |> Map.get(:text) |> split_lines() |> length()
+    line_part = "#{count} #{if count == 1, do: "line", else: "lines"}"
+
+    case (outcome || %{}) |> Map.get(:duration_ms) |> reasoning_duration() do
+      nil -> line_part
+      dur -> line_part <> " · " <> dur
     end
   end
+
+  defp reasoning_duration(ms) when is_integer(ms) and ms >= 1000,
+    do: "#{Float.round(ms / 1000, 1)}s"
+
+  defp reasoning_duration(ms) when is_integer(ms) and ms >= 0, do: "#{ms}ms"
+  defp reasoning_duration(_absent), do: nil
+
+  # Space-between: `left` flush start, `right` flush end, padded to `width`.
+  # When they cannot both fit the right meta is dropped and the left is
+  # truncated -- the marker survives, the meta is the expendable part (it
+  # re-appears when the terminal is wider).
+  defp justify_between(left, right, width)
+       when is_binary(right) and right != "" do
+    gap = width - TextMeasure.display_width(left) - TextMeasure.display_width(right)
+
+    if gap >= 1 do
+      left <> String.duplicate(" ", gap) <> right
+    else
+      TextLayout.truncate(left, width, :ellipsis)
+    end
+  end
+
+  defp justify_between(left, _right, width),
+    do: TextLayout.truncate(left, width, :ellipsis)
 
   # `± path · +N -M` -- the diff block's compact line; the ± body stays
   # the expanded form. Counts come from the same LCS the expanded
@@ -1308,16 +1373,24 @@ defmodule Raxol.UI.Components.Harness.Block do
          fg
        )
        when kind in [:message, :reasoning] do
-    if Map.get(context, :markdown, false) do
-      body =
-        MarkdownBody.render(markdown_source(block), %{
-          width: width,
-          mode: markdown_mode(block)
-        })
+    body =
+      if Map.get(context, :markdown, false) do
+        [
+          fade_view(
+            MarkdownBody.render(markdown_source(block), %{
+              width: width,
+              mode: markdown_mode(block)
+            }),
+            fg
+          )
+        ]
+      else
+        plain_content_lines(block, fg)
+      end
 
-      [fade_view(body, fg)]
-    else
-      plain_content_lines(block, fg)
+    case kind do
+      :reasoning -> bracket_reasoning(body, fg)
+      _message -> body
     end
   end
 
@@ -1344,6 +1417,19 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp content_lines_view(block, _width, _context, fg),
     do: plain_content_lines(block, fg)
+
+  # An EXPANDED thought is bracketed by the because/therefore arrows: `∵`
+  # opens (premises), `∴` closes (conclusion) -- reading like an arrow
+  # through the reasoning. Both dim (the low-prominence cognition register,
+  # matching the collapsed `⁖` header), each on its own line so the pair
+  # frames the body exactly the way a folded thought's `⁖` marks it.
+  defp bracket_reasoning(body, fg) do
+    marker = fn glyph ->
+      Components.text(content: glyph, style: apply_fg(%{dim: true}, fg))
+    end
+
+    [marker.(@reasoning_open_glyph) | body] ++ [marker.(@reasoning_close_glyph)]
+  end
 
   # The Pierre diff rows for a proposed edit/write approval, or `[]` when
   # the approval carries no before/after image (bash and every other
@@ -1377,10 +1463,24 @@ defmodule Raxol.UI.Components.Harness.Block do
       end
 
     Components.text(
-      content: "#{kind_glyph(:diff)} #{path}",
+      content:
+        "#{kind_glyph(:diff)} #{path}" <>
+          preview_match_note(Map.get(content, :preview_match)),
       style: apply_fg(%{}, fg)
     )
   end
+
+  # When the producer could not locate the edit target exactly, the diff is
+  # a PROPOSED change that will not apply as-is -- say so on the header,
+  # honestly, rather than let a clean diff imply a clean apply. Plain text
+  # (no emoji glyph -- the no-emoji register rule, see `glyph_inventory/0`).
+  defp preview_match_note(m) when m in [:not_found, "not_found"],
+    do: " · target not located (proposed)"
+
+  defp preview_match_note(m) when m in [:ambiguous, "ambiguous"],
+    do: " · target not unique (proposed)"
+
+  defp preview_match_note(_exact), do: ""
 
   # The non-diff tail of a diff approval's body: the blast radius and then
   # the live answer prompt (numbered options + y/n aliases) or the sealed
@@ -1853,6 +1953,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   @old_paths [[:old], [:content, :old]]
   @new_paths [[:new], [:content, :new]]
   @language_paths [[:language], [:content, :language]]
+  @preview_match_paths [[:preview_match], [:content, :preview_match]]
 
   defp event_refs(events) when is_list(events) do
     Enum.map(events, fn
@@ -2027,6 +2128,12 @@ defmodule Raxol.UI.Components.Harness.Block do
       old: find_in_events(events, @old_paths),
       new: find_in_events(events, @new_paths),
       language: find_in_events(events, @language_paths),
+      # `:exact | :not_found | :ambiguous` -- when the producer could not
+      # locate the edit target exactly, the diff is a PROPOSED change that
+      # will NOT apply as-is; the approval body says so rather than showing
+      # a clean diff that lies about what `y` will do (see
+      # `approval_diff_header/2`).
+      preview_match: find_in_events(events, @preview_match_paths),
       decision: find_in_events(events, @decision_paths),
       option_id: find_in_events(events, @option_id_paths),
       scope: find_in_events(events, @scope_paths),

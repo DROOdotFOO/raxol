@@ -507,10 +507,11 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert style[:dim] == true
     end
 
-    test "the folded reasoning line is DIM (machinery register) and shows ∴ + line count" do
-      # A sealed reasoning block inherits the low-prominence machinery
-      # register set for reasoning items by the compaction unit: `∴
-      # reasoning · N lines`, dim, folded — never full-weight speech.
+    test "the folded reasoning line is DIM (machinery register) and shows ⁖ + line count" do
+      # A sealed reasoning block inherits the low-prominence cognition
+      # register (V 2026-07-18): `⁖ thinking` flush left, the honest line
+      # count flush right (space-between), dim, folded — never full-weight
+      # speech.
       block =
         Block.from_events(
           :reasoning,
@@ -522,7 +523,8 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert [{content, style}] =
                styled_texts(Block.render(block, %{width: 120}))
 
-      assert content =~ "∴ reasoning · 2 lines"
+      assert content =~ "⁖ thinking"
+      assert content =~ "2 lines"
       assert style[:dim] == true
     end
 
@@ -683,7 +685,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert Enum.any?(texts, &(&1 == "line2"))
     end
 
-    test "reasoning collapses to one dim '∴ reasoning · N lines' line, peekable" do
+    test "reasoning collapses to one dim '⁖ thinking … N lines' line, peekable" do
       events = [
         %{
           id: 1,
@@ -696,13 +698,18 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
         Block.from_events(:reasoning, events, fold: :folded, seal: :sealed)
 
       assert [{line, style}] = styled_texts(Block.render(folded, %{width: 120}))
-      assert line =~ "∴ reasoning · 3 lines"
+      assert line =~ "⁖ thinking"
+      assert line =~ "3 lines"
       assert style[:dim] == true
 
+      # Expanded: the thought is bracketed by the because/therefore arrows
+      # (`∵` opens, `∴` closes) around the real body lines.
       expanded = %{folded | fold: :expanded}
       texts = flat_texts(Block.render(expanded, %{width: 120}))
       assert Enum.any?(texts, &(&1 == "first"))
       assert Enum.any?(texts, &(&1 == "third"))
+      assert Enum.any?(texts, &(&1 == "∵"))
+      assert Enum.any?(texts, &(&1 == "∴"))
     end
 
     test "a diff block folds to a compact '± path · +N -M' line" do
@@ -1201,7 +1208,10 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
       rendered = Block.render(block, %{width: 80})
       assert %{type: :column} = rendered
-      assert Enum.any?(flat_texts(rendered), &(&1 =~ "unrenderable"))
+      # The moduledoc promise: a render fault is never a dead cell. The
+      # fallback shows the block's honest summary plus a visible recovery
+      # marker (the real exception + stacktrace go to the log).
+      assert Enum.any?(flat_texts(rendered), &(&1 =~ "render recovered"))
 
       assert_received {^ref, [:raxol, :harness, :block, :recovered], meta}
       assert meta.kind == :tool_call

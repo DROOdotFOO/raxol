@@ -279,10 +279,10 @@ defmodule Raxol.Harness.T13aSurfaceTest do
       joined = Enum.join(history_text, "\n")
 
       # in-order: reasoning before both tool calls before the final
-      # message. Reasoning seals as its collapsed machinery line (`∴
-      # reasoning · N lines`), not its content preview -- collapsed means
+      # message. Reasoning seals as its collapsed machinery line (`⁖
+      # thinking · N lines`), not its content preview -- collapsed means
       # collapsed; the ordering is what this test pins.
-      reasoning_idx = index_of_substring(joined, "∴ reasoning")
+      reasoning_idx = index_of_substring(joined, "⁖ thinking")
       tool_idx = index_of_substring(joined, "list_dir")
       message_idx = index_of_substring(joined, "Root has mix.exs")
 
