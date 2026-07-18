@@ -1,6 +1,6 @@
 defmodule Raxol.Terminal.Emulator.Telemetry do
   alias Raxol.Core.Runtime.Log
-  alias Raxol.Core.Telemetry.Context
+  alias Raxol.Core.Telemetry.TraceContext, as: Context
 
   @moduledoc """
   Telemetry instrumentation for the terminal emulator.
@@ -9,7 +9,7 @@ defmodule Raxol.Terminal.Emulator.Telemetry do
   for terminal emulation operations.
 
   All events include trace_id and span_id for request correlation.
-  Use `Raxol.Core.Telemetry.Context` to manage trace context.
+  Use `Raxol.Core.Telemetry.TraceContext` to manage trace context.
   """
   @emulator_events [
     [:raxol, :emulator, :input, :start],
