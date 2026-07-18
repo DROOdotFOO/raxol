@@ -139,4 +139,115 @@ defmodule Raxol.Harness.HarnessAppViewTest do
       assert shrunk.overlay == nil
     end
   end
+
+  # ── the footer preview channel (U6-shadow) ─────────────────────────────
+
+  # Events flow through the REAL fold (Model.fold_batch/2) so the
+  # projection builds real blocks/tails -- the preview assertions then
+  # cover the same shapes the live pump will deliver.
+  defp loop_ev(id, turn_id, ts, type, payload, opts \\ []) do
+    %{
+      id: id,
+      turn_id: turn_id,
+      ts: ts,
+      family: :loop,
+      type: type,
+      tier: Keyword.get(opts, :tier, :durable),
+      payload: payload
+    }
+  end
+
+  defp stream_model(items) do
+    Model.build(width: 60, rows: 24, stream_open: true)
+    |> Model.fold_batch(Enum.map(items, &{:event, &1}))
+  end
+
+  describe "the footer preview channel (U6-shadow parity with the shelved surface)" do
+    test "streaming reasoning renders as the ShadowStream peek window" do
+      model =
+        stream_model([
+          loop_ev(1, "t1", 100, :turn_started, %{}),
+          loop_ev(2, "t1", 110, :item_started, %{
+            "item_id" => "i1",
+            "item_type" => "reasoning"
+          }),
+          loop_ev(3, "t1", 120, :item_delta, %{
+            "item_id" => "i1",
+            "chunk" => "weighing the tradeoffs"
+          })
+        ])
+
+      text = flatten_text(View.render(model))
+      assert text =~ "thinking"
+      assert text =~ "weighing the tradeoffs"
+      refute text =~ "❮ …streaming…"
+    end
+
+    test "streaming answer text keeps the plain » preview" do
+      model =
+        stream_model([
+          loop_ev(1, "t1", 100, :turn_started, %{}),
+          loop_ev(2, "t1", 110, :item_started, %{
+            "item_id" => "i1",
+            "item_type" => "message"
+          }),
+          loop_ev(3, "t1", 120, :item_delta, %{
+            "item_id" => "i1",
+            "chunk" => "drafting the reply"
+          })
+        ])
+
+      assert flatten_text(View.render(model)) =~ "» drafting the reply"
+    end
+
+    test "a pending completed block outranks the live tail" do
+      # The completed message sits pending (turn still running, stream
+      # open -- the frontier holds it), so the preview shows the BLOCK,
+      # not the reasoning tail still accumulating behind it.
+      model =
+        stream_model([
+          loop_ev(1, "t1", 100, :turn_started, %{}),
+          loop_ev(2, "t1", 110, :item_started, %{
+            "item_id" => "i1",
+            "item_type" => "message"
+          }),
+          loop_ev(3, "t1", 120, :item_completed, %{
+            "item_id" => "i1",
+            "item_type" => "message",
+            "content" => "BLOCKTEXT"
+          }),
+          loop_ev(4, "t1", 130, :item_started, %{
+            "item_id" => "i2",
+            "item_type" => "reasoning"
+          }),
+          loop_ev(5, "t1", 140, :item_delta, %{
+            "item_id" => "i2",
+            "chunk" => "TAILTEXT"
+          })
+        ])
+
+      text = flatten_text(View.render(model))
+      assert text =~ "BLOCKTEXT"
+      refute text =~ "TAILTEXT"
+    end
+
+    test "an open overlay suppresses the preview entirely (the suppressed-preview law)" do
+      model =
+        [
+          loop_ev(1, "t1", 100, :turn_started, %{}),
+          loop_ev(2, "t1", 110, :item_started, %{
+            "item_id" => "i1",
+            "item_type" => "reasoning"
+          }),
+          loop_ev(3, "t1", 120, :item_delta, %{
+            "item_id" => "i1",
+            "chunk" => "weighing the tradeoffs"
+          })
+        ]
+        |> stream_model()
+
+      overlaid = %{model | overlay: {:panel, :memory}}
+      refute flatten_text(View.render(overlaid)) =~ "thinking"
+    end
+  end
 end

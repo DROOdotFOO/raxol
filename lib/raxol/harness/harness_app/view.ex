@@ -26,12 +26,14 @@ defmodule Raxol.Harness.HarnessApp.View do
   alias Raxol.UI.Components.AbsoluteLayer
 
   alias Raxol.UI.Components.Harness.{
+    BlockBody,
     Composer,
     FooterStack,
     MemoryPanel,
     Notice,
     Picker,
     RulesPanel,
+    ShadowStream,
     StatusStrip,
     TranscriptView,
     WorktracksPanel
@@ -138,14 +140,150 @@ defmodule Raxol.Harness.HarnessApp.View do
 
   defp submitting_lines(_model, _cw), do: []
 
-  # The live-tail preview, suppressed under an open overlay (spec §5 law 3 /
-  # the suppressed-preview law).
+  # The footer preview channel (U6-shadow: surface.ex
+  # `pending_preview_lines/1` ported). Precedence mirrors the shelved
+  # surface: the trailing completed-but-unsealed block while one pends,
+  # else the live tail of a still-accumulating item. Suppressed under an
+  # open overlay (spec §5 law 3 / the suppressed-preview law).
   defp preview_lines(%{overlay: overlay}, _cw) when overlay != nil, do: []
 
-  defp preview_lines(%{projection: %{tail: tail}}, _cw) when map_size(tail) > 0,
-    do: [dim_text("❮ …streaming…")]
+  defp preview_lines(model, cw) do
+    case pending_block(model) do
+      nil -> live_tail_lines(model, cw)
+      {block, index} -> pending_block_lines(model, block, index, cw)
+    end
+  end
 
-  defp preview_lines(_model, _cw), do: []
+  # The pending block is the first projection block at/after the committed
+  # cursor (surface.ex pending_block/1: keyed on `painted_count`, the
+  # post-walk cursor -- never on the pre-commit scan, which diverges from
+  # it exactly on a refused seal write).
+  defp pending_block(model) do
+    case Enum.slice(model.projection.blocks, model.painted_count..-1//1) do
+      [] -> nil
+      [block | _rest] -> {block, model.painted_count}
+    end
+  end
+
+  # The pending block renders with its current fold override applied (a
+  # fold toggle is visible in the preview BEFORE seal -- the old surface's
+  # own acceptance), capped at two rows like the shelved `Enum.take(2)`.
+  defp pending_block_lines(model, block, index, cw) do
+    rendered =
+      block
+      |> Model.apply_fold_override(index, model.fold_overrides)
+      |> BlockBody.render(%{
+        width: cw,
+        turn_has_tools?: turn_has_tools?(block, model),
+        # The footer live tail is the ONE place a resultless tool renders
+        # `running…` (seal-on-result-only) -- but only while a result may
+        # still arrive. After the reveal finishes, the preview shows the
+        # final `⊘ no result` form, matching what will seal.
+        pending?: not Model.reveal_finished?(model)
+      })
+
+    rendered
+    |> row_children()
+    |> take_rows(2)
+  end
+
+  # The live tail: only the first entry renders (surface.ex
+  # live_tail_preview_lines/1). Reasoning streams as the ShadowStream peek
+  # window -- the same component the shelved surface wired, re-hosted the
+  # U1 way: the element tree goes into the real pipeline (no ViewText
+  # flattening), so the per-char prominence fade actually paints. It seals
+  # to the folded ⁖ block when the reasoning item completes.
+  defp live_tail_lines(%{projection: %{tail: tail}}, _cw)
+       when map_size(tail) == 0,
+       do: []
+
+  defp live_tail_lines(model, cw) do
+    case model.projection.tail |> Map.values() |> List.first() do
+      nil ->
+        []
+
+      %{item_type: :reasoning, chunks: chunks} ->
+        # ShadowStream's children are row-level BY CONSTRUCTION (base text
+        # nodes, faded text nodes, and the one :row shadow node) -- they
+        # are exactly the group lines, and the FooterStack fit law's
+        # height = length(lines) stays honest.
+        shadow =
+          ShadowStream.render(%{
+            primitive: "thinking",
+            lines: Enum.join(chunks, ""),
+            state: :peek,
+            width: cw
+          })
+
+        Map.get(shadow, :children, [shadow])
+
+      %{chunks: chunks} ->
+        # Answer text keeps the plain `» ` streaming preview.
+        [dim_text("» " <> Enum.join(chunks, ""))]
+    end
+  end
+
+  # A block render root is a :column whose children are its visible rows
+  # (compact header first, then body rows) -- take them as the group
+  # lines. A non-column root (never produced today) counts as one line.
+  defp row_children(%{children: children}) when is_list(children), do: children
+  defp row_children(other), do: [other]
+
+  # Row-honest cap: accumulate children while their MEASURED heights (the
+  # TranscriptView estimator) fit the cap, always keeping the first -- a
+  # nested body column counts its real height, so the FooterStack budget
+  # never under-charges a tall preview.
+  defp take_rows(children, cap) do
+    {kept, _used} =
+      Enum.reduce_while(children, {[], 0}, fn child, {acc, used} ->
+        height = TranscriptView.element_height(child)
+
+        cond do
+          acc == [] -> {:cont, {[child], height}}
+          used + height > cap -> {:halt, {acc, used}}
+          true -> {:cont, {[child | acc], used + height}}
+        end
+      end)
+
+    Enum.reverse(kept)
+  end
+
+  # Ported verbatim from surface.ex turn_has_tools?/3 + block_turn_id/2 +
+  # event_item_type/1: whether the block's own turn carried tool activity
+  # (the compact tool header renders its receipt only when it did).
+  defp turn_has_tools?(block, model) do
+    events = model.projection.source_events
+
+    case block_turn_id(block, events) do
+      nil ->
+        true
+
+      turn_id ->
+        Enum.any?(events, fn event ->
+          Map.get(event, :turn_id) == turn_id and
+            event_item_type(event) in ["tool_use", "tool_result"]
+        end)
+    end
+  end
+
+  defp block_turn_id(block, events) do
+    refs = MapSet.new(block.event_refs || [])
+
+    Enum.find_value(events, fn event ->
+      if MapSet.member?(refs, Map.get(event, :id)),
+        do: Map.get(event, :turn_id)
+    end)
+  end
+
+  defp event_item_type(event) do
+    case Map.get(event, :payload) do
+      %{} = payload ->
+        Map.get(payload, "item_type") || Map.get(payload, :item_type)
+
+      _other ->
+        nil
+    end
+  end
 
   # One blank row above the composer (surface.ex composer_sep, full-viewport).
   defp composer_sep_lines(_model), do: [%{type: :text, content: ""}]

@@ -321,7 +321,12 @@ defmodule Raxol.Harness.HarnessApp.Model do
 
   defp detach_binaries(other), do: other
 
-  defp apply_fold_override(block, index, overrides) do
+  # Public (`@doc false`) for HarnessApp.View: the footer preview renders
+  # the pending block with the SAME override the seal walk would apply, so
+  # a fold toggle shows in the preview before the block seals (the old
+  # surface's pending_preview_lines/1 parity).
+  @doc false
+  def apply_fold_override(block, index, overrides) do
     case Map.get(overrides, index) do
       nil -> block
       :folded -> Block.fold(block, fold_after_seal: :allow)
@@ -352,7 +357,12 @@ defmodule Raxol.Harness.HarnessApp.Model do
     end)
   end
 
-  defp reveal_finished?(model),
+  # Public (`@doc false`) for HarnessApp.View: the pending-block preview's
+  # `pending?` context flag is `not reveal_finished?(model)` -- while the
+  # reveal may still deliver a result, a resultless tool renders `running…`
+  # (seal-on-result-only), and only afterwards the final `⊘ no result`.
+  @doc false
+  def reveal_finished?(model),
     do: not model.stream_open? and model.revealed >= length(model.events)
 
   defp block_sealed?(model, index) when is_integer(index),
