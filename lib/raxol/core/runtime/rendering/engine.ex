@@ -45,7 +45,14 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
               # Force the next terminal frame to be a full keyframe (first frame,
               # resize, or Ctrl-L recovery). Set true so the first render always
               # paints a full frame; the terminal backend clears it after one frame.
-              force_repaint: true
+              force_repaint: true,
+              # The harness SessionPump's paint gate (Raxol.Harness.PumpContract
+              # section 7): while false, scheduled :render_frame casts are
+              # dropped so no frame byte can race the pump's editor bracket or
+              # teardown -- the pump is the sole tty writer at those moments.
+              # True by default: only the pump ever suspends, and only the
+              # synchronous suspend/resume calls below change it.
+              painting?: true
   end
 
   # --- Public API ---
@@ -106,6 +113,16 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
     )
 
     {:ok, new_state}
+  end
+
+  @impl true
+  def handle_cast(:render_frame, %{painting?: false} = state) do
+    # Paint-gated (PumpContract section 7). The frame is DROPPED, not
+    # queued: the model keeps folding while the pump owns the tty, so a
+    # deferred frame would paint a stale lie the moment the gate lifted.
+    # Resume marks force_repaint instead -- the first post-bracket frame
+    # repaints the then-current model as a full keyframe.
+    {:noreply, state}
   end
 
   @impl true
@@ -183,6 +200,26 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   @impl true
   def handle_call({:get_state}, _from, state) do
     {:reply, state, state}
+  end
+
+  @impl true
+  def handle_call(:suspend_painting, _from, state) do
+    # These two are CALLS, not casts, on purpose (PumpContract section 7,
+    # "synchronous is load-bearing"): when :suspend_painting replies, every
+    # :render_frame cast already in this mailbox has been processed (FIFO)
+    # and no new one will paint, so the pump KNOWS the tty is quiescent
+    # before handing it to $EDITOR or to the teardown byte sequence. A
+    # cast could not give that knowledge.
+    {:reply, :ok, %{state | painting?: false}}
+  end
+
+  @impl true
+  def handle_call(:resume_painting, _from, state) do
+    # force_repaint on resume: frames cast while gated were dropped, so
+    # the backend's buffer may lag the model arbitrarily -- the first
+    # frame after the bracket must be a full keyframe, never a diff
+    # against what the operator last saw before $EDITOR owned the screen.
+    {:reply, :ok, %{state | painting?: true, force_repaint: true}}
   end
 
   @impl true
