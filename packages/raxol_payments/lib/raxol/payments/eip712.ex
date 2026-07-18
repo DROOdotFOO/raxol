@@ -63,7 +63,10 @@ defmodule Raxol.Payments.EIP712 do
     with {:ok, domain_separator} <-
            hash_struct("EIP712Domain", domain, eip712_domain_types(domain)),
          {:ok, message_hash} <- hash_struct(primary_type(types), message, types) do
-      {:ok, ExKeccak.hash_256(<<0x19, 0x01, domain_separator::binary, message_hash::binary>>)}
+      {:ok,
+       ExKeccak.hash_256(
+         <<0x19, 0x01, domain_separator::binary, message_hash::binary>>
+       )}
     end
   end
 
@@ -84,6 +87,29 @@ defmodule Raxol.Payments.EIP712 do
     <<r::binary-size(32), s::binary-size(32), canonical_v(v)::8>>
   end
 
+  @doc """
+  Derive the `0x`-prefixed, lowercase Ethereum address from a 65-byte
+  uncompressed secp256k1 public key (`0x04 || X || Y`): the last 20 bytes of
+  `keccak256(X || Y)`.
+  """
+  @spec address_from_pubkey(<<_::520>>) :: String.t()
+  def address_from_pubkey(<<_prefix::8, xy::binary-size(64)>>) do
+    <<_first12::binary-size(12), addr::binary-size(20)>> = ExKeccak.hash_256(xy)
+    "0x" <> Base.encode16(addr, case: :lower)
+  end
+
+  @doc """
+  Canonicalize an EVM address for comparison: trim, downcase, and strip a
+  leading `0x`. Returns the lowercase hex body (no `0x`).
+  """
+  @spec normalize_address(binary()) :: binary()
+  def normalize_address(addr) when is_binary(addr) do
+    addr
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace_prefix("0x", "")
+  end
+
   # -- Private --
 
   defp canonical_v(v) when v in [0, 1], do: v + 27
@@ -93,7 +119,8 @@ defmodule Raxol.Payments.EIP712 do
   # (an EIP-155 chain-encoded v, or a buggy signer) would silently pack a
   # non-recovering signature, so fail loud rather than emit one.
   defp canonical_v(v),
-    do: raise(ArgumentError, "non-canonical secp256k1 recovery id: #{inspect(v)}")
+    do:
+      raise(ArgumentError, "non-canonical secp256k1 recovery id: #{inspect(v)}")
 
   # EIP-712 defines exactly five domain fields, in this order: name, version,
   # chainId, verifyingContract, salt. Only the keys present in the domain map are
@@ -110,7 +137,9 @@ defmodule Raxol.Payments.EIP712 do
         if(Map.has_key?(domain, :chainId) || Map.has_key?(domain, :chain_id),
           do: {"chainId", "uint256"}
         ),
-        if(Map.has_key?(domain, :verifyingContract) || Map.has_key?(domain, :verifying_contract),
+        if(
+          Map.has_key?(domain, :verifyingContract) ||
+            Map.has_key?(domain, :verifying_contract),
           do: {"verifyingContract", "address"}
         ),
         if(Map.has_key?(domain, :salt), do: {"salt", "bytes32"})
@@ -161,8 +190,11 @@ defmodule Raxol.Payments.EIP712 do
     type_hash = encode_type(type_name, types)
 
     case encode_data(type_name, data, types) do
-      {:error, _} = err -> err
-      encoded_data -> {:ok, ExKeccak.hash_256(<<type_hash::binary, encoded_data::binary>>)}
+      {:error, _} = err ->
+        err
+
+      encoded_data ->
+        {:ok, ExKeccak.hash_256(<<type_hash::binary, encoded_data::binary>>)}
     end
   end
 
@@ -245,7 +277,8 @@ defmodule Raxol.Payments.EIP712 do
   # value at this slot. Required for Permit2 PermitWitnessTransferFrom
   # (`TokenPermissions permitted`, `OriginPullWitness witness`) and any
   # other EIP-712 type that references another struct.
-  defp encode_value(type, value, types) when is_binary(type) and is_map(value) do
+  defp encode_value(type, value, types)
+       when is_binary(type) and is_map(value) do
     if Map.has_key?(types, type) do
       hash_struct(type, value, types)
     else
@@ -259,7 +292,8 @@ defmodule Raxol.Payments.EIP712 do
   # Array of structs: each element is hashed via hash_struct/3, the
   # resulting 32-byte hashes are concatenated, and the concatenation is
   # hashed once more (EIP-712 dynamic array rule).
-  defp encode_value(type, value, types) when is_binary(type) and is_list(value) do
+  defp encode_value(type, value, types)
+       when is_binary(type) and is_list(value) do
     case array_element_type(type) do
       {:ok, element_type} ->
         cond do
