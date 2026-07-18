@@ -229,6 +229,29 @@ defmodule Raxol.Playground.Catalog do
       ErrorBlock.render(error_state, %{})
       """
     },
+    %{
+      name: "Harness Assembled (TEA)",
+      module: Demos.HarnessAssembledDemo,
+      category: :harness,
+      description:
+        "The fully assembled TEA harness (U4): HarnessApp replaying a golden fixture — " <>
+          "windowed transcript blocks, the fit-law footer with a live composer, parked cursor",
+      complexity: :advanced,
+      tags: [
+        "harness",
+        "tea",
+        "transcript",
+        "footer",
+        "cursor",
+        "assembled",
+        "agent"
+      ],
+      code_snippet: """
+      Model.build(events: session, pump: nil) |> Model.reveal_all()   # HarnessApp model
+      View.render(model)                                              # windowed transcript + footer + :cursor
+      Model.handle_key(model, event)                                  # folds / jumps / overlay picker
+      """
+    },
     # --- Navigation/Layout widgets ---
     %{
       name: "Tabs",
