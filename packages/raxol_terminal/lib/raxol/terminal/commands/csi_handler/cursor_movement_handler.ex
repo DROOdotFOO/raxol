@@ -17,6 +17,9 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
   alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Commands.CSIHandler.Cursor
   alias Raxol.Terminal.Emulator
+
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   @type emulator :: Emulator.t()
   @type cursor_amount :: non_neg_integer()
   @type cursor_position :: {non_neg_integer(), non_neg_integer()}
@@ -155,8 +158,8 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
         ) :: {:ok, emulator()}
   def handle_cursor_position_direct(emulator, row, col) do
     # Ensure coordinates are within bounds
-    bounded_row = max(0, min(row, emulator.height - 1))
-    bounded_col = max(0, min(col, emulator.width - 1))
+    bounded_row = clamp_to_bounds(row, emulator.height)
+    bounded_col = clamp_to_bounds(col, emulator.width)
 
     # Update cursor position directly using the established pattern
     new_cursor = %{
@@ -184,7 +187,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
   @spec handle_cursor_column(emulator(), non_neg_integer()) :: {:ok, emulator()}
   def handle_cursor_column(emulator, column) do
     # Convert 1-indexed to 0-indexed and bound check
-    target_col = max(0, min(column - 1, emulator.width - 1))
+    target_col = clamp_to_bounds(column - 1, emulator.width)
     {_current_col, current_row} = emulator.cursor.position
 
     # Set position to new column, same row
@@ -202,7 +205,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
   @spec handle_cursor_row(emulator(), non_neg_integer()) :: {:ok, emulator()}
   def handle_cursor_row(emulator, row) do
     # Convert 1-indexed to 0-indexed and bound check
-    target_row = max(0, min(row - 1, emulator.height - 1))
+    target_row = clamp_to_bounds(row - 1, emulator.height)
     {current_col, _current_row} = emulator.cursor.position
 
     # Set position to same column, new row

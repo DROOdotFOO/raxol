@@ -5,6 +5,8 @@ defmodule Raxol.Terminal.Commands.CommandServer.CursorOps do
   alias Raxol.Terminal.Commands.CommandServer.Helpers
   alias Raxol.Terminal.Commands.CursorUtils
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   def handle_cursor_up(emulator, %{params: params}, _context) do
     amount = Helpers.get_param(params, 0, 1)
     move_cursor(emulator, :up, amount)
@@ -75,7 +77,7 @@ defmodule Raxol.Terminal.Commands.CommandServer.CursorOps do
 
   defp move_cursor_to_column(emulator, col) do
     {row, _} = Helpers.get_cursor_position(emulator)
-    clamped_col = max(0, min(col, emulator.width - 1))
+    clamped_col = clamp_to_bounds(col, emulator.width)
     Helpers.set_cursor_position(emulator, {row, clamped_col})
   end
 end

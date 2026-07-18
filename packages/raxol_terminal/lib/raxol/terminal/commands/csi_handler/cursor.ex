@@ -3,6 +3,8 @@ defmodule Raxol.Terminal.Commands.CSIHandler.Cursor do
   Handles cursor-related CSI sequences.
   """
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   @doc """
   Handles cursor movement commands.
   """
@@ -64,8 +66,8 @@ defmodule Raxol.Terminal.Commands.CSIHandler.Cursor do
     col = get_param(params, 1, 1) - 1
 
     # Clamp to valid ranges
-    bounded_row = max(0, min(emulator.height - 1, row))
-    bounded_col = max(0, min(emulator.width - 1, col))
+    bounded_row = clamp_to_bounds(row, emulator.height)
+    bounded_col = clamp_to_bounds(col, emulator.width)
 
     cursor = emulator.cursor
 
@@ -94,7 +96,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.Cursor do
     cursor = emulator.cursor
     {current_row, _current_col} = get_cursor_position(cursor)
     # Convert to 0-based
-    new_col = max(0, min(emulator.width - 1, column - 1))
+    new_col = clamp_to_bounds(column - 1, emulator.width)
     updated_cursor = update_cursor_position(cursor, current_row, new_col)
     {:ok, %{emulator | cursor: updated_cursor}}
   end
