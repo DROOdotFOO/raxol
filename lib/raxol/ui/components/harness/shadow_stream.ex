@@ -191,7 +191,7 @@ defmodule Raxol.UI.Components.Harness.ShadowStream do
       gap: 0,
       children:
         [
-          %{type: :text, content: p.primitive, fg: fg(p.base)},
+          %{type: :text, content: p.primitive, style: %{fg: fg(p.base)}},
           %{type: :text, content: String.duplicate(" ", @gap)}
         ] ++ spans
     }
@@ -223,7 +223,7 @@ defmodule Raxol.UI.Components.Harness.ShadowStream do
       %{
         type: :text,
         content: group |> Enum.map(&elem(&1, 0)) |> Enum.join(),
-        fg: group |> hd() |> elem(1)
+        style: %{fg: group |> hd() |> elem(1)}
       }
     end)
   end
@@ -254,5 +254,5 @@ defmodule Raxol.UI.Components.Harness.ShadowStream do
   defp fg(prominence), do: Prominence.resolve(@chrome, prominence, [])
 
   defp line_node(content, prominence),
-    do: %{type: :text, content: content, fg: fg(prominence)}
+    do: %{type: :text, content: content, style: %{fg: fg(prominence)}}
 end

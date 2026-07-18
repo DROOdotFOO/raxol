@@ -1211,7 +1211,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       # The moduledoc promise: a render fault is never a dead cell. The
       # fallback shows the block's honest summary plus a visible recovery
       # marker (the real exception + stacktrace go to the log).
-      assert Enum.any?(flat_texts(rendered), &(&1 =~ "render recovered"))
+      assert Enum.any?(flat_texts(rendered), &(&1 =~ "render error:"))
 
       assert_received {^ref, [:raxol, :harness, :block, :recovered], meta}
       assert meta.kind == :tool_call

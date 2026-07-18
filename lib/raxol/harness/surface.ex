@@ -639,7 +639,7 @@ defmodule Raxol.Harness.Surface do
   alias Raxol.Harness.UnreadDivider
   alias Raxol.UI.Theming.Palette
 
-  alias Raxol.UI.Components.Harness.{Block, BlockBody, Composer}
+  alias Raxol.UI.Components.Harness.{Block, BlockBody, Composer, ShadowStream}
   alias Raxol.UI.Harness.{InputEvent, Keymap, OverlayPanel, OverlayPicker}
 
   alias Raxol.UI.Rendering.PaintAuthority.{
@@ -5377,6 +5377,24 @@ defmodule Raxol.Harness.Surface do
       nil ->
         []
 
+      # Live thinking renders as the shadow-cast stream: the dominating
+      # "thinking" primitive holds the faintest row while newer reasoning
+      # lines fade up toward it, the oldest dissolving into a per-char
+      # shadow (`ShadowStream`, :peek). It seals to the folded ⁖ block when
+      # the reasoning item completes. STYLED mode is mandatory here -- the
+      # per-char prominence fade IS the effect; :plain would drop the colour.
+      %{item_type: :reasoning, chunks: chunks} ->
+        view =
+          ShadowStream.render(%{
+            primitive: "thinking",
+            lines: Enum.join(chunks, ""),
+            state: :peek,
+            width: content_width(model)
+          })
+
+        ViewText.lines(view, content_width(model), :styled)
+
+      # Answer text keeps the plain `» ` streaming preview.
       %{chunks: chunks} = entry ->
         ViewText.lines(
           live_tail_preview_element(entry, Enum.join(chunks, "")),
@@ -5385,14 +5403,6 @@ defmodule Raxol.Harness.Surface do
         )
     end
   end
-
-  # Streaming reasoning renders provisionally in the tail with the ∴
-  # marker and dim style (§4.3 low prominence) AS it streams — the
-  # claim-becomes-fact beat: it shows dim/live here, then freezes to the
-  # sealed folded ∴ block when the reasoning item completes. Answer text
-  # keeps the plain `» ` streaming preview.
-  defp live_tail_preview_element(%{item_type: :reasoning}, text),
-    do: %{type: :text, content: "∴ " <> text, style: %{dim: true}}
 
   defp live_tail_preview_element(_entry, text),
     do: %{type: :text, content: "» " <> text}

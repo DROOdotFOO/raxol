@@ -495,7 +495,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   rescue
     e ->
       emit_recovered(block.kind, e, __STACKTRACE__)
-      interactive_wrap(render_fallback(block), block, context)
+      interactive_wrap(render_fallback(block, e), block, context)
   end
 
   # -- the interactive re-hosting stamp (harness TEA migration U1) ----------
@@ -726,13 +726,13 @@ defmodule Raxol.UI.Components.Harness.Block do
   # approval, the first line of a message), plus a visible recovery marker
   # so the fault is not silently swallowed. The real exception + stacktrace
   # is logged at the rescue site (`emit_recovered/3`).
-  defp render_fallback(block) do
+  defp render_fallback(block, exception) do
     Components.column(
       gap: 0,
       children: [
         Components.text(content: safe_summary(block), style: %{}),
         Components.text(
-          content: "(render recovered — see log)",
+          content: "(render error: #{safe_reason(exception)})",
           style: %{dim: true}
         )
       ]
@@ -743,6 +743,14 @@ defmodule Raxol.UI.Components.Harness.Block do
     summary(block)
   rescue
     _ -> "#{block.kind} block"
+  end
+
+  # The exception's message, surfaced inline so a render fault shows WHY on
+  # screen (dev-facing), not only in the log. Never itself raises.
+  defp safe_reason(exception) do
+    Exception.message(exception)
+  rescue
+    _ -> "unknown"
   end
 
   # -- machinery compact headers (the low-prominence execution register) --

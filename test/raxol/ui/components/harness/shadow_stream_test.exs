@@ -20,7 +20,8 @@ defmodule Raxol.UI.Components.Harness.ShadowStreamTest do
 
   # Flatten every text node's {content, fg}. Descends both :children
   # (containers) and :content (the indication node's body is a map there).
-  defp leaves(%{type: :text} = n), do: [{n.content, n[:fg]}]
+  defp leaves(%{type: :text} = n),
+    do: [{n.content, n[:fg] || get_in(n, [:style, :fg])}]
 
   defp leaves(node) when is_map(node) do
     from_content =
@@ -90,8 +91,8 @@ defmodule Raxol.UI.Components.Harness.ShadowStreamTest do
       assert [%{type: :text, content: "thinking"} | _] = shadow.children
 
       # the two lower rows: middle dimmer than newest; newest == base.
-      assert %{content: "middle one", fg: mid_fg} = mid
-      assert %{content: "newest one", fg: new_fg} = new
+      assert %{content: "middle one", style: %{fg: mid_fg}} = mid
+      assert %{content: "newest one", style: %{fg: new_fg}} = new
       assert gray(mid_fg) < gray(new_fg)
     end
 
@@ -104,15 +105,15 @@ defmodule Raxol.UI.Components.Harness.ShadowStreamTest do
       tail = Enum.drop(shadow.children, 2)
 
       # prefix consumed marker present and faintest.
-      assert [%{content: "…", fg: first_fg} | _] = tail
-      last_fg = tail |> List.last() |> Map.get(:fg)
+      assert [%{content: "…", style: %{fg: first_fg}} | _] = tail
+      last_fg = tail |> List.last() |> get_in([:style, :fg])
 
       # monotonic fade-in: the tail brightens toward the right.
       assert gray(first_fg) < gray(last_fg)
 
       # the fade never exceeds the shadow cap (~0.4), staying below the
       # newest line's base prominence.
-      base_fg = view.children |> List.last() |> Map.get(:fg)
+      base_fg = view.children |> List.last() |> get_in([:style, :fg])
       assert gray(last_fg) <= gray(base_fg)
     end
   end
