@@ -12,16 +12,7 @@ defmodule Raxol.Terminal.Color.TrueColor.Conversion do
     x = c * (1 - abs(rem(trunc(h / 60), 2) - 1))
     m = l - c / 2
 
-    {r_prime, g_prime, b_prime} =
-      case div(h, 60) do
-        0 -> {c, x, 0}
-        1 -> {x, c, 0}
-        2 -> {0, c, x}
-        3 -> {0, x, c}
-        4 -> {x, 0, c}
-        5 -> {c, 0, x}
-        _ -> {0, 0, 0}
-      end
+    {r_prime, g_prime, b_prime} = hue_segment(h, c, x)
 
     {r_prime + m, g_prime + m, b_prime + m}
   end
@@ -48,16 +39,7 @@ defmodule Raxol.Terminal.Color.TrueColor.Conversion do
     x = c * (1 - abs(rem(trunc(h / 60), 2) - 1))
     m = v - c
 
-    {r_prime, g_prime, b_prime} =
-      case div(h, 60) do
-        0 -> {c, x, 0}
-        1 -> {x, c, 0}
-        2 -> {0, c, x}
-        3 -> {0, x, c}
-        4 -> {x, 0, c}
-        5 -> {c, 0, x}
-        _ -> {0, 0, 0}
-      end
+    {r_prime, g_prime, b_prime} = hue_segment(h, c, x)
 
     {r_prime + m, g_prime + m, b_prime + m}
   end
@@ -144,6 +126,20 @@ defmodule Raxol.Terminal.Color.TrueColor.Conversion do
 
   defp linear_xyz(s) when s > 0.04045, do: :math.pow((s + 0.055) / 1.055, 2.4)
   defp linear_xyz(s), do: s / 12.92
+
+  # Maps the hue sextant div(h, 60) to the RGB-prime ordering shared by
+  # HSL and HSV conversion. h outside 0..359 falls through to {0, 0, 0}.
+  defp hue_segment(h, c, x) do
+    case div(h, 60) do
+      0 -> {c, x, 0}
+      1 -> {x, c, 0}
+      2 -> {0, c, x}
+      3 -> {0, x, c}
+      4 -> {x, 0, c}
+      5 -> {c, 0, x}
+      _ -> {0, 0, 0}
+    end
+  end
 
   defp calculate_hsl_values(delta, l, max_val, min_val, r, g, b) do
     if delta == 0.0 do
