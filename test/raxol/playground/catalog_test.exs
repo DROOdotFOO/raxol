@@ -6,7 +6,7 @@ defmodule Raxol.Playground.CatalogTest do
   describe "list_components/0" do
     test "returns all registered components" do
       components = Catalog.list_components()
-      assert length(components) == 49
+      assert length(components) == 51
       assert Enum.all?(components, &is_map/1)
     end
 
@@ -24,9 +24,12 @@ defmodule Raxol.Playground.CatalogTest do
                  :layout,
                  :visualization,
                  :effects,
-                 # Harness block Components (TEA migration section 7:
-                 # "one @components row each, category: :harness").
-                 :harness
+                 # Harness structure (shell, regions, indication, footer,
+                 # composer, overlay) vs the chat-message widgets the body
+                 # iterator routes into (message/reasoning/tool/diff/error/
+                 # approval) -- split 2026-07-18.
+                 :harness,
+                 :harness_chat_widgets
                ]
 
         assert is_binary(comp.description)

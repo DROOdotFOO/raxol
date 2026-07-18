@@ -28,6 +28,7 @@ defmodule Raxol.Playground.Demos.HarnessAssembledDemo do
   """
 
   use Raxol.Core.Runtime.Application
+  require Logger
 
   alias Raxol.Harness.Fixture
   alias Raxol.Harness.HarnessApp.{Model, View}
@@ -83,15 +84,50 @@ defmodule Raxol.Playground.Demos.HarnessAssembledDemo do
   defp as_keyword(%{} = m), do: Map.to_list(m)
   defp as_keyword(_), do: []
 
+  # NEVER raises: a demo whose `init/1` raises makes the playground's
+  # `select_current` crash, which the Lifecycle swallows -- the model stays
+  # unchanged and the entry reads as "Enter does nothing" (it never opens).
+  # On any load failure the demo degrades to an empty session so it still
+  # opens (an honest empty transcript) rather than becoming un-pickable.
   defp load_fixture(name) do
-    path = Path.join(@sessions_dir, name <> ".jsonl")
+    case fixture_file(name) do
+      nil ->
+        Logger.warning(
+          "HarnessAssembledDemo: fixture #{name}.jsonl not found; empty session"
+        )
 
-    case Fixture.load(path) do
-      {:ok, session} ->
-        session
+        []
 
-      {:error, reason} ->
-        raise "HarnessAssembledDemo: failed to load fixture #{path}: #{inspect(reason)}"
+      path ->
+        case Fixture.load(path) do
+          {:ok, session} ->
+            session
+
+          {:error, reason} ->
+            Logger.warning(
+              "HarnessAssembledDemo: fixture #{path} failed (#{inspect(reason)}); empty session"
+            )
+
+            []
+        end
     end
+  end
+
+  # Resolve the golden fixture cwd-INDEPENDENTLY. The fixtures live under the
+  # repo's `test/` tree, so a cwd-relative path only resolves when the
+  # playground was launched from the repo root -- launch it from anywhere
+  # else and the load fails (the "Enter does nothing" report). Try the
+  # SOURCE-relative location first (`__DIR__` is the compiled absolute path,
+  # so it resolves from any cwd in dev), then the cwd-relative path, then
+  # `nil` (a release ships no `test/` -- the empty-session fallback keeps the
+  # demo pickable there too).
+  defp fixture_file(name) do
+    file = name <> ".jsonl"
+
+    [
+      Path.expand(Path.join([__DIR__, "..", "..", "..", "..", @sessions_dir, file])),
+      Path.join(@sessions_dir, file)
+    ]
+    |> Enum.find(&File.exists?/1)
   end
 end

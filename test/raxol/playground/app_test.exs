@@ -3,6 +3,25 @@ defmodule Raxol.Playground.AppTest do
 
   alias Raxol.Playground.App
 
+  # A demo whose init/1 raises. Before the guard, selecting it made
+  # `select_current` crash, the Lifecycle swallowed it, and the entry read
+  # as "Enter does nothing" -- see the "resilience" describe below.
+  defmodule RaisingInitDemo do
+    def init(_context), do: raise("boom-init")
+    def view(_model), do: %{type: :text, content: "unreachable"}
+    def update(_msg, model), do: {model, []}
+    def subscribe(_model), do: []
+  end
+
+  # A demo whose view/1 raises: the frame must degrade to an error line,
+  # not crash the whole playground.
+  defmodule RaisingViewDemo do
+    def init(_context), do: %{ok: true}
+    def view(_model), do: raise("boom-view")
+    def update(_msg, model), do: {model, []}
+    def subscribe(_model), do: []
+  end
+
   defp key_event(char) do
     %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: char}}
   end
@@ -11,12 +30,33 @@ defmodule Raxol.Playground.AppTest do
     %Raxol.Core.Events.Event{type: :key, data: Map.merge(%{key: key}, extra)}
   end
 
+  defp fake_component(module) do
+    %{
+      module: module,
+      name: "Boom",
+      category: :input,
+      description: "",
+      complexity: :basic,
+      tags: [],
+      code_snippet: ""
+    }
+  end
+
+  defp flat_texts(view) when is_map(view) do
+    own = case Map.get(view, :content) do t when is_binary(t) -> [t]; _ -> [] end
+    own ++ flat_texts(Map.get(view, :children))
+  end
+
+  defp flat_texts(list) when is_list(list), do: Enum.flat_map(list, &flat_texts/1)
+  defp flat_texts(_other), do: []
+
   describe "init/1" do
     test "initializes with components and first selected" do
       model = App.init(nil)
-      # 49 = 44 (through U1-c approval) + 1 (U3 overlay)
-      # + 3 (U2 footer_stack/status_strip/composer) + 1 (U4 assembled).
-      assert length(model.components) == 49
+      # 51 = 44 (through U1-c approval) + 1 (U3 overlay)
+      # + 3 (U2 footer_stack/status_strip/composer) + 1 (U4 assembled)
+      # + 1 (indication primitive).
+      assert length(model.components) == 51
       assert model.cursor == 0
       assert model.selected != nil
       assert model.focus == :sidebar
@@ -191,9 +231,10 @@ defmodule Raxol.Playground.AppTest do
       # After cycling through all categories, next press returns to nil
       {model, []} = App.update(key_event("f"), model)
       assert model.category_filter == nil
-      # 49 = 44 (through U1-c approval) + 1 (U3 overlay)
-      # + 3 (U2 footer_stack/status_strip/composer) + 1 (U4 assembled).
-      assert length(model.components) == 49
+      # 51 = 44 (through U1-c approval) + 1 (U3 overlay)
+      # + 3 (U2 footer_stack/status_strip/composer) + 1 (U4 assembled)
+      # + 1 (indication primitive).
+      assert length(model.components) == 51
     end
 
     test "f resets cursor to 0" do
@@ -412,6 +453,47 @@ defmodule Raxol.Playground.AppTest do
       {model, []} = App.update(key_event("x"), model)
       view = App.view(model)
       assert is_map(view)
+    end
+  end
+
+  describe "demo failure resilience (Enter never silently no-ops)" do
+    test "a demo whose init raises selects into an honest error, not a no-op" do
+      model = App.init(nil)
+      model = %{model | components: [fake_component(RaisingInitDemo)], cursor: 0}
+
+      # Enter on the sidebar selects the (raising) demo.
+      {model, _cmds} = App.update(special_key(:enter), model)
+
+      # Selection ADVANCED (not swallowed) and the demo_model is the honest
+      # error placeholder rather than a crash-induced unchanged model.
+      assert model.selected.module == RaisingInitDemo
+      assert match?(%{__demo_error__: _}, model.demo_model)
+
+      # The preview renders the error text, never a blank/frozen pane.
+      texts = flat_texts(App.view(model))
+      assert Enum.any?(texts, &(&1 =~ "failed to load"))
+    end
+
+    test "a demo whose view raises degrades to an error line, not a frame crash" do
+      model = App.init(nil)
+      model = %{model | components: [fake_component(RaisingViewDemo)], cursor: 0}
+      {model, _cmds} = App.update(special_key(:enter), model)
+
+      # init succeeded, so the model is real; the view raises at render time.
+      assert model.selected.module == RaisingViewDemo
+      texts = flat_texts(App.view(model))
+      assert Enum.any?(texts, &(&1 =~ "render error"))
+    end
+
+    test "the assembled harness demo inits without raising (cwd-independent fixture)" do
+      # Regression: the demo loaded its fixture via a cwd-RELATIVE path and
+      # raised when launched from anywhere but the repo root, which made the
+      # entry read as "Enter does nothing". It must resolve the fixture
+      # source-relative and never raise.
+      model =
+        Raxol.Playground.Demos.HarnessAssembledDemo.init(%{width: 60, height: 20})
+
+      assert %Raxol.Harness.HarnessApp.Model{} = model
     end
   end
 end

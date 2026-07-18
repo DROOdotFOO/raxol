@@ -19,6 +19,7 @@ defmodule Raxol.Playground.App do
   """
 
   use Raxol.Core.Runtime.Application
+  require Logger
 
   alias Raxol.Playground.Catalog
   alias Raxol.UI.ScrollWindow
@@ -47,7 +48,8 @@ defmodule Raxol.Playground.App do
     layout: 5,
     visualization: 6,
     effects: 7,
-    harness: 8
+    harness: 8,
+    harness_chat_widgets: 9
   }
 
   @impl true
@@ -474,9 +476,26 @@ defmodule Raxol.Playground.App do
 
   defp demo_content(model) do
     case model.demo_model do
-      nil -> text(" (no demo loaded)", style: [:dim])
-      demo_model -> model.selected.module.view(demo_model)
+      nil ->
+        text(" (no demo loaded)", style: [:dim])
+
+      %{__demo_error__: msg} ->
+        text(" " <> msg, fg: :red)
+
+      demo_model ->
+        safe_demo_view(model.selected.module, demo_model)
     end
+  end
+
+  # A demo whose `view/1` raises must not take down the whole playground
+  # frame -- rescue into a visible error line so the catalog stays usable
+  # and the failure is legible rather than a blank/frozen preview.
+  defp safe_demo_view(module, demo_model) do
+    module.view(demo_model)
+  rescue
+    e ->
+      Logger.error("Playground: demo view failed: #{Exception.message(e)}")
+      text(" demo render error: #{Exception.message(e)}", fg: :red)
   end
 
   defp code_panel(comp) do
@@ -568,6 +587,7 @@ defmodule Raxol.Playground.App do
   defp category_label(:visualization), do: "CHARTS"
   defp category_label(:effects), do: "EFFECTS"
   defp category_label(:harness), do: "HARNESS"
+  defp category_label(:harness_chat_widgets), do: "HARNESS CHAT"
   defp category_label(cat), do: cat |> to_string() |> String.upcase()
 
   # -- State helpers --
@@ -584,14 +604,28 @@ defmodule Raxol.Playground.App do
         %{model | demo_model: nil}
 
       comp ->
-        demo_model = comp.module.init(nil)
-
-        %{
-          model
-          | demo_model:
-              Map.put(demo_model, :available_width, model.available_width)
-        }
+        %{model | demo_model: build_demo_model(comp, model.available_width)}
     end
+  end
+
+  # A demo whose `init/1` RAISES must never silently no-op the playground:
+  # an unguarded raise here propagates through `update/2`, the Lifecycle
+  # swallows it, the model is left unchanged, and the entry reads as "Enter
+  # does nothing" (it never opens). Rescue into an honest error placeholder
+  # instead -- the preview shows WHAT failed, and selection always advances.
+  defp build_demo_model(comp, available_width) do
+    comp.module.init(nil)
+    |> Map.put(:available_width, available_width)
+  rescue
+    e ->
+      Logger.error(
+        "Playground: demo #{comp.name} init failed: #{Exception.message(e)}"
+      )
+
+      %{
+        __demo_error__: "#{comp.name} failed to load: #{Exception.message(e)}",
+        available_width: available_width
+      }
   end
 
   defp move_cursor(model, delta) do
@@ -607,13 +641,10 @@ defmodule Raxol.Playground.App do
         model
 
       comp ->
-        demo_model = comp.module.init(nil)
-
         %{
           model
           | selected: comp,
-            demo_model:
-              Map.put(demo_model, :available_width, model.available_width)
+            demo_model: build_demo_model(comp, model.available_width)
         }
     end
   end

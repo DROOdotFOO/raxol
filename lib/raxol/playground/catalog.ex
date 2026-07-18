@@ -203,7 +203,7 @@ defmodule Raxol.Playground.Catalog do
     %{
       name: "Harness Diff Viewer",
       module: Demos.HarnessDiffDemo,
-      category: :harness,
+      category: :harness_chat_widgets,
       description:
         "Pre-apply file diff (Pierre engine): unified/split body, word-diff emphasis, " <>
           "hunk folding, Enter/Space fold to the compact ± path · +N -M line",
@@ -250,6 +250,29 @@ defmodule Raxol.Playground.Catalog do
       Model.build(events: session, pump: nil) |> Model.reveal_all()   # HarnessApp model
       View.render(model)                                              # windowed transcript + footer + :cursor
       Model.handle_key(model, event)                                  # folds / jumps / overlay picker
+      """
+    },
+    %{
+      name: "Harness Indication",
+      module: Demos.HarnessIndicationDemo,
+      category: :harness,
+      description:
+        "The left-edge indication primitive: content at column 2, gutter " <>
+          "strategies (speaker sigil, ∵…∴ bracket, vertical rule) at column 0",
+      complexity: :intermediate,
+      tags: [
+        "harness",
+        "layout",
+        "indication",
+        "gutter",
+        "contour",
+        "primitive"
+      ],
+      code_snippet: """
+      Indication.speaker("user turn", "❯")      # top-left sigil
+      Indication.bracket("thought", "∵", "∴")   # first + last row
+      Indication.rule("range", "·")             # every row
+      Indication.plain("indented, no gutter")
       """
     },
     # --- Navigation/Layout widgets ---
@@ -526,7 +549,7 @@ defmodule Raxol.Playground.Catalog do
     %{
       name: "Harness Approval Block",
       module: Demos.HarnessApprovalBlockDemo,
-      category: :harness,
+      category: :harness_chat_widgets,
       description:
         "Agent-harness approval BLOCK (transcript form): live referent + Pierre proposed diff + answer affordances; y/n/digits seal it to a receipt",
       complexity: :intermediate,
@@ -541,7 +564,7 @@ defmodule Raxol.Playground.Catalog do
     %{
       name: "Harness Tool Block",
       module: Demos.HarnessToolBlockDemo,
-      category: :harness,
+      category: :harness_chat_widgets,
       description:
         "Tool-call blocks on the compact render contract: outcome-on-glyph lines, " <>
           "tight clustering, spinner margin, fold-to-full-body, taint marker",
@@ -556,7 +579,7 @@ defmodule Raxol.Playground.Catalog do
     %{
       name: "Harness Error Block",
       module: Demos.HarnessErrorBlockDemo,
-      category: :harness,
+      category: :harness_chat_widgets,
       description:
         "Error blocks as first-class alarm lines (real message, honest fallbacks, " <>
           "expand-to-full-fault) plus the opaque forward-compat fallback",
@@ -572,7 +595,7 @@ defmodule Raxol.Playground.Catalog do
     %{
       name: "Harness Message Block",
       module: Demos.HarnessMessageBlockDemo,
-      category: :harness,
+      category: :harness_chat_widgets,
       description:
         "Transcript message blocks as controlled Components: mirrored speaker sigils (user ❯ / assistant ❮), fold toggle, MCP toggle tool",
       complexity: :intermediate,
@@ -590,7 +613,7 @@ defmodule Raxol.Playground.Catalog do
     %{
       name: "Harness Reasoning Block",
       module: Demos.HarnessReasoningBlockDemo,
-      category: :harness,
+      category: :harness_chat_widgets,
       description:
         "The quiet reasoning register: collapsed by default, dim, peekable — component body plus the sealed ∴ transcript line",
       complexity: :intermediate,
@@ -610,6 +633,32 @@ defmodule Raxol.Playground.Catalog do
         )
 
       ReasoningBlock.render(s, %{})  # z/enter/space peek; emits on_toggle
+      """
+    },
+    %{
+      name: "Harness Thinking Stream",
+      module: Demos.HarnessThinkingStreamDemo,
+      category: :harness_chat_widgets,
+      description:
+        "Live shadow-cast reasoning: the dominating primitive holds the " <>
+          "faintest row while newer lines fade up; per-char shadow fade; " <>
+          "3 states (fully_collapsed/peek/expanded), click or z/enter/space",
+      complexity: :advanced,
+      tags: [
+        "harness",
+        "reasoning",
+        "thinking",
+        "prominence",
+        "streaming",
+        "shadow",
+        "animated"
+      ],
+      code_snippet: """
+      ShadowStream.render(%{
+        primitive: "thinking", lines: reasoning, state: :peek,
+        width: 60, id: "thinking", on_click: :cycle
+      })
+      # :fully_collapsed → :peek (shadow window) → :expanded (∵…∴ bracket)
       """
     },
     %{
