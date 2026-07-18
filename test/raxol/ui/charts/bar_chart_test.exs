@@ -48,14 +48,22 @@ defmodule Raxol.UI.Charts.BarChartTest do
       ]
 
       cells = BarChart.render(@region, series)
-      colors = cells |> Enum.map(fn {_x, _y, _c, fg, _bg, _a} -> fg end) |> Enum.uniq()
+
+      colors =
+        cells |> Enum.map(fn {_x, _y, _c, fg, _bg, _a} -> fg end) |> Enum.uniq()
+
       assert :red in colors
       assert :blue in colors
     end
 
     test "show_values renders value text" do
       # Use a tall region so partial bars leave room for labels
-      cells = BarChart.render({0, 0, 40, 20}, single_series([5]), show_values: true, max: 100)
+      cells =
+        BarChart.render({0, 0, 40, 20}, single_series([5]),
+          show_values: true,
+          max: 100
+        )
+
       chars = Enum.map_join(cells, fn {_x, _y, c, _fg, _bg, _a} -> c end)
       assert String.contains?(chars, "5")
     end
@@ -64,14 +72,18 @@ defmodule Raxol.UI.Charts.BarChartTest do
   describe "render/3 horizontal" do
     test "renders horizontal bars" do
       cells =
-        BarChart.render(@region, single_series([10, 20, 30]), orientation: :horizontal)
+        BarChart.render(@region, single_series([10, 20, 30]),
+          orientation: :horizontal
+        )
 
       assert [_ | _] = cells
       assert Enum.all?(cells, fn cell -> tuple_size(cell) == 6 end)
     end
 
     test "horizontal empty data returns empty" do
-      assert BarChart.render(@region, single_series([]), orientation: :horizontal) == []
+      assert BarChart.render(@region, single_series([]),
+               orientation: :horizontal
+             ) == []
     end
 
     test "horizontal multi-series" do
@@ -81,7 +93,10 @@ defmodule Raxol.UI.Charts.BarChartTest do
       ]
 
       cells = BarChart.render(@region, series, orientation: :horizontal)
-      colors = cells |> Enum.map(fn {_x, _y, _c, fg, _bg, _a} -> fg end) |> Enum.uniq()
+
+      colors =
+        cells |> Enum.map(fn {_x, _y, _c, fg, _bg, _a} -> fg end) |> Enum.uniq()
+
       assert :red in colors
       assert :blue in colors
     end
@@ -108,7 +123,9 @@ defmodule Raxol.UI.Charts.BarChartTest do
     end
 
     test "show_legend includes series name" do
-      cells = BarChart.render(@region, single_series([10, 20]), show_legend: true)
+      cells =
+        BarChart.render(@region, single_series([10, 20]), show_legend: true)
+
       chars = Enum.map_join(cells, fn {_x, _y, c, _fg, _bg, _a} -> c end)
       assert String.contains?(chars, "Test")
     end
@@ -122,6 +139,35 @@ defmodule Raxol.UI.Charts.BarChartTest do
       cb = Enum.into([10, 20, 30], CircularBuffer.new(10))
       cells = BarChart.render(@region, [%{name: "CB", data: cb, color: :green}])
       assert [_ | _] = cells
+    end
+  end
+
+  describe "a11y_node/1" do
+    test "binary id is used verbatim as label" do
+      assert BarChart.a11y_node(%{id: "cpu"}) == %{role: :img, label: "cpu"}
+    end
+
+    test "atom id is stringified" do
+      assert BarChart.a11y_node(%{id: :cpu}) == %{role: :img, label: "cpu"}
+    end
+
+    test "nil id falls back to default label" do
+      assert BarChart.a11y_node(%{id: nil}) ==
+               %{role: :img, label: "bar chart"}
+    end
+
+    test "missing id falls back to default label" do
+      assert BarChart.a11y_node(%{}) == %{role: :img, label: "bar chart"}
+    end
+
+    test "aria_label wins over title and id" do
+      assert BarChart.a11y_node(%{aria_label: "A", title: "T", id: "x"}) ==
+               %{role: :img, label: "A"}
+    end
+
+    test "title wins over id" do
+      assert BarChart.a11y_node(%{title: "T", id: "x"}) ==
+               %{role: :img, label: "T"}
     end
   end
 end
