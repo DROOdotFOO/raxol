@@ -356,10 +356,14 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   end
 
   # The proposed before/after image for the tools that mutate a file --
-  # computed WITHOUT writing, so the approval can render the exact diff. A
-  # preview that fails (missing/non-unique edit target) falls back to `:none`
-  # (the approval shows args, and execution surfaces the real error). Every
-  # other tool has no diff to show.
+  # computed WITHOUT writing, so the approval can render a diff instead of raw
+  # args. `edit_file` ALWAYS yields a `{:ok, diff}` image: an exact-unique
+  # target gives the faithful full-file diff (`match: :exact`); a missing or
+  # non-unique target degrades to the proposed hunk with an honest
+  # `match: :not_found`/`:ambiguous` signal (never `:none`, so the operator
+  # always sees SOMETHING to approve). `write_file` yields `{:ok, diff}`
+  # unless the path itself is rejected (outside cwd / too large), which stays
+  # `:none`. Every other tool has no diff to show.
   defp tool_preview("write_file", args),
     do: preview_or_none(Workspace.preview_write(arg(args, "path"), arg(args, "content")))
 
@@ -384,7 +388,10 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   # The approval payload: the base fields plus, when a diff was previewed,
   # the `{path, old, new, language}` image the harness block renders as ±
   # rows (`base_hash` stays here in the executor -- it is the staleness
-  # anchor, not something the operator needs to see).
+  # anchor, not something the operator needs to see). `preview_match` tells
+  # the surface whether this is a faithful image (`:exact`) or a best-effort
+  # hunk whose target was not located (`:not_found`/`:ambiguous`), so it can
+  # render an honest "target not located -- proposed change shown" note.
   defp approval_payload(request_id, name, arguments, options, {:ok, diff}) do
     %{
       request_id: request_id,
@@ -396,7 +403,8 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       path: diff.path,
       old: diff.old,
       new: diff.new,
-      language: diff.language
+      language: diff.language,
+      preview_match: diff.match
     }
   end
 
@@ -415,6 +423,8 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   # NEVER silently apply something other than what was approved: emit an
   # honest stale result and ask the model to re-run (which re-previews the
   # current diff). This is the label-vs-binding guarantee made real.
+  # An exact / write preview carries a real `base_hash`: verify the target
+  # still hashes to what it did at approval time before applying.
   defp apply_after_allow(tc, name, {:ok, %{path: path, base_hash: base_hash}}, st) do
     case Workspace.verify_unchanged(path, base_hash) do
       :ok ->
@@ -431,6 +441,19 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
     end
   end
 
+  # A best-effort preview (the edit target could not be located, or was
+  # ambiguous) carries NO `base_hash` — there is no faithful image to anchor a
+  # staleness check to. Don't verify; attempt execution directly. `do_edit`
+  # STILL requires an exact-unique match, so a genuinely missing/ambiguous
+  # target fails loudly there rather than silently applying — the operator is
+  # never served something other than what the preview implied.
+  defp apply_after_allow(tc, name, {:ok, %{match: match}}, st)
+       when match in [:not_found, :ambiguous] do
+    execute(tc, name, st)
+  end
+
+  # A preview-less tool (`:none`) or any other shape: nothing to verify,
+  # execute directly (its own execution surfaces any error honestly).
   defp apply_after_allow(tc, name, _no_preview, st), do: execute(tc, name, st)
 
   defp await(fun, request_id, meta) when is_function(fun, 2) do

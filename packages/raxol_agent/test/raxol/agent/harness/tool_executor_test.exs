@@ -313,7 +313,7 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
     end
 
     test "write_file on a NEW file previews an all-adds diff (old is empty)", %{
-      tmp: tmp
+      tmp: _tmp
     } do
       events =
         run(
@@ -334,6 +334,86 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
 
       assert {:approval_requested, %{diff: true, old: "", new: "a\nb\n"}} =
                Enum.find(events, &match?({:approval_requested, _}, &1))
+    end
+
+    test "a NON-MATCHING edit STILL lifts old/new/path into the approval (best-effort, marked not_found)",
+         %{tmp: tmp} do
+      path = Path.join(tmp, "code.ex")
+      File.write!(path, "def x, do: 1\n")
+
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "edit_file",
+                 "arguments" => %{
+                   "path" => "code.ex",
+                   # This target is NOT in the file — the old failure mode
+                   # returned :none and the operator saw raw args, no diff.
+                   "old_string" => "def NOPE, do: 0",
+                   "new_string" => "def y, do: 2"
+                 },
+                 "id" => "e1"
+               }
+             ]},
+            {:content, "tried"}
+          ],
+          actions: Workspace.all(),
+          await_decision: fn _rid, _meta -> {:deny, "deny", :nope} end
+        )
+
+      assert {:approval_requested, payload} =
+               Enum.find(events, &match?({:approval_requested, _}, &1))
+
+      # The operator sees a renderable diff — the proposed hunk — not raw args.
+      assert payload.diff == true
+      assert payload.path == "code.ex"
+      assert payload.old == "def NOPE, do: 0"
+      assert payload.new == "def y, do: 2"
+      # ...honestly marked as an un-located target so the UI can note it.
+      assert payload.preview_match == :not_found
+    end
+
+    test "allowing a non-matching edit executes STRICTLY: honest error result, file untouched, no crash on the absent base_hash",
+         %{tmp: tmp} do
+      path = Path.join(tmp, "code.ex")
+      File.write!(path, "def x, do: 1\n")
+
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "edit_file",
+                 "arguments" => %{
+                   "path" => "code.ex",
+                   "old_string" => "def NOPE, do: 0",
+                   "new_string" => "def y, do: 2"
+                 },
+                 "id" => "e1"
+               }
+             ]},
+            {:content, "tried"}
+          ],
+          actions: Workspace.all(),
+          await_decision: fn _rid, _meta -> {:allow, "allow"} end
+        )
+
+      # The approval carried the best-effort diff...
+      assert {:approval_requested, %{preview_match: :not_found}} =
+               Enum.find(events, &match?({:approval_requested, _}, &1))
+
+      # ...and apply_after_allow handled the missing base_hash without crashing
+      # (a stale-check would have raised) — falling through to a strict
+      # execution that fails loudly instead of silently applying.
+      assert {:tool_result, %{name: "edit_file", result: {:error, _reason}}} =
+               Enum.find(events, &match?({:tool_result, _}, &1))
+
+      # File is untouched — never served something other than the preview.
+      assert File.read!(path) == "def x, do: 1\n"
     end
   end
 

@@ -1084,7 +1084,7 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   # keys carry the approval referent + decision receipt through to
   # `Block.extract_approval_content/1` (`request_id` is consumed earlier,
   # for correlation, and is not needed in the rendered payload).
-  @direct_payload_keys ~w(content name action blast_radius options exit_code cost duration_ms where reason tool_name request_id decision option_id scope decided_by decided_at path old new language)a
+  @direct_payload_keys ~w(content name action blast_radius options exit_code cost duration_ms where reason tool_name request_id decision option_id scope decided_by decided_at path old new language preview_match)a
 
   defp adapt_payload(payload) when is_map(payload) do
     base =

@@ -3,6 +3,7 @@ defmodule Raxol.Agent.Actions.WorkspaceTest do
 
   use ExUnit.Case, async: false
 
+  alias Raxol.Agent.Actions.Workspace
   alias Raxol.Agent.Actions.Workspace.{EditFile, Glob, Grep, WriteFile}
 
   setup do
@@ -90,6 +91,121 @@ defmodule Raxol.Agent.Actions.WorkspaceTest do
                  old_string: "absent",
                  new_string: "x"
                })
+    end
+  end
+
+  # The approval PREVIEW must always be renderable (so the operator sees a
+  # diff, never raw truncated args), while EXECUTION stays strict (an edit
+  # only applies against an exact-unique target). These two guarantees are
+  # tested as a pair: the preview may degrade; do_edit may not.
+  describe "preview_edit (renderable preview / strict execution)" do
+    test "exact-unique match returns the full-file diff with a real base_hash",
+         %{tmp: tmp} do
+      File.write!(Path.join(tmp, "c.ex"), "a\nTARGET\nb\n")
+
+      assert {:ok, diff} = Workspace.preview_edit("c.ex", "TARGET", "DONE")
+
+      assert diff.match == :exact
+      assert diff.path == "c.ex"
+      assert diff.old == "a\nTARGET\nb\n"
+      assert diff.new == "a\nDONE\nb\n"
+      assert diff.language == "elixir"
+      assert is_binary(diff.base_hash)
+      assert diff.base_hash == Workspace.content_hash("a\nTARGET\nb\n")
+
+      # Previewing must NOT write.
+      assert File.read!(Path.join(tmp, "c.ex")) == "a\nTARGET\nb\n"
+    end
+
+    test "a NON-MATCHING old_string returns a best-effort not_found hunk, not :error",
+         %{tmp: tmp} do
+      File.write!(Path.join(tmp, "c.ex"), "nothing here\n")
+
+      assert {:ok, diff} = Workspace.preview_edit("c.ex", "absent", "replacement")
+
+      assert diff.match == :not_found
+      assert diff.path == "c.ex"
+      # The proposed hunk stands in for the un-locatable full-file image.
+      assert diff.old == "absent"
+      assert diff.new == "replacement"
+      # A best-effort preview carries NO staleness anchor (deliberately).
+      refute Map.has_key?(diff, :base_hash)
+    end
+
+    test "a NON-UNIQUE old_string returns a best-effort ambiguous hunk", %{
+      tmp: tmp
+    } do
+      File.write!(Path.join(tmp, "c.ex"), "dup\ndup\n")
+
+      assert {:ok, diff} = Workspace.preview_edit("c.ex", "dup", "x")
+
+      assert diff.match == :ambiguous
+      assert diff.old == "dup"
+      assert diff.new == "x"
+      refute Map.has_key?(diff, :base_hash)
+    end
+
+    test "a missing file still previews the proposed hunk, marked not_found" do
+      assert {:ok, diff} =
+               Workspace.preview_edit("does_not_exist.ex", "foo", "bar")
+
+      assert diff.match == :not_found
+      assert diff.old == "foo"
+      assert diff.new == "bar"
+      refute Map.has_key?(diff, :base_hash)
+    end
+
+    test "the preview degrades but do_edit stays STRICT: a non-matching edit errors and writes nothing",
+         %{tmp: tmp} do
+      File.write!(Path.join(tmp, "c.ex"), "nothing here\n")
+
+      # The preview is best-effort (renderable)...
+      assert {:ok, %{match: :not_found}} =
+               Workspace.preview_edit("c.ex", "absent", "x")
+
+      # ...but EXECUTION refuses the same edit and leaves the file untouched.
+      assert {:error, :edit_target_not_found} =
+               Workspace.do_edit("c.ex", "absent", "x")
+
+      assert File.read!(Path.join(tmp, "c.ex")) == "nothing here\n"
+    end
+
+    test "an ambiguous preview also stays strict at execution", %{tmp: tmp} do
+      File.write!(Path.join(tmp, "c.ex"), "dup\ndup\n")
+
+      assert {:ok, %{match: :ambiguous}} =
+               Workspace.preview_edit("c.ex", "dup", "x")
+
+      assert {:error, :edit_target_not_unique} =
+               Workspace.do_edit("c.ex", "dup", "x")
+
+      assert File.read!(Path.join(tmp, "c.ex")) == "dup\ndup\n"
+    end
+  end
+
+  describe "preview_write (renderable preview)" do
+    test "an overwrite previews the current content as old, marked exact", %{
+      tmp: tmp
+    } do
+      File.write!(Path.join(tmp, "a.txt"), "before\n")
+
+      assert {:ok, diff} = Workspace.preview_write("a.txt", "after\n")
+
+      assert diff.match == :exact
+      assert diff.old == "before\n"
+      assert diff.new == "after\n"
+      assert is_binary(diff.base_hash)
+      # Preview must not write.
+      assert File.read!(Path.join(tmp, "a.txt")) == "before\n"
+    end
+
+    test "a new file previews an empty old with an :absent base_hash" do
+      assert {:ok, diff} = Workspace.preview_write("brand_new.ex", "x\n")
+
+      assert diff.match == :exact
+      assert diff.old == ""
+      assert diff.new == "x\n"
+      assert diff.base_hash == :absent
     end
   end
 

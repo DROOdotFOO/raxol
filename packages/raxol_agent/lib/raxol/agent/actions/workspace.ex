@@ -283,10 +283,13 @@ defmodule Raxol.Agent.Actions.Workspace do
     do: :crypto.hash(:sha256, content) |> Base.encode16(case: :lower)
 
   @doc """
-  Compute the `{path, old, new, language, base_hash}` image of a proposed
-  `write_file` WITHOUT writing -- so the approval can show the operator the
-  exact diff `y` will produce. `old` is the current file (or `""` for a new
-  file, whose `base_hash` is `:absent`).
+  Compute the `{path, old, new, language, base_hash, match}` image of a
+  proposed `write_file` WITHOUT writing -- so the approval can show the
+  operator the exact diff `y` will produce. `old` is the current file (or
+  `""` for a new file, whose `base_hash` is `:absent`). `match` is always
+  `:exact`: a write is a full overwrite, so the shown before/after is exactly
+  what applies (the `base_hash` still anchors the staleness re-check). A
+  rejected path (outside cwd / too large) returns `{:error, _}`.
   """
   @spec preview_write(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def preview_write(path, content) when is_binary(content) do
@@ -300,33 +303,108 @@ defmodule Raxol.Agent.Actions.Workspace do
          old: old,
          new: content,
          language: language_of(path),
-         base_hash: base_hash
+         base_hash: base_hash,
+         match: :exact
        }}
     end
   end
 
   @doc """
-  Compute the `{path, old, new, language, base_hash}` image of a proposed
-  `edit_file` WITHOUT writing. Fails exactly as `do_edit/3` would (missing/
-  non-unique target), so an unshowable edit is refused before the question.
+  Compute a renderable before/after image of a proposed `edit_file` WITHOUT
+  writing, so the approval can ALWAYS show the operator a diff to review.
+
+  Two shapes, distinguished by `:match`:
+
+    * `match: :exact` -- the `old_string` occurred exactly once. `old` is the
+      current full file, `new` is the post-edit file, and `base_hash` anchors
+      the staleness re-check. The faithful, will-apply-as-shown image.
+    * `match: :not_found | :ambiguous` -- the target could not be located
+      (zero occurrences, or the file was unreadable / too large / outside
+      cwd) or was ambiguous (more than one occurrence). There is no faithful
+      whole-file image, so the preview degrades to the PROPOSED HUNK
+      (`old: old_string`, `new: new_string`) and carries NO `base_hash`.
+
+  Only the PREVIEW degrades. `do_edit/3` (execution) still requires an
+  exact-unique match and fails loudly otherwise -- so the operator is never
+  shown one change and served another (the label-vs-binding guarantee).
   """
-  @spec preview_edit(String.t(), String.t(), String.t()) ::
-          {:ok, map()} | {:error, term()}
-  def preview_edit(path, old_string, new_string) do
-    with {:ok, abs} <- Fs.resolve(path),
-         {:ok, content} <- File.read(abs),
-         :ok <- guard_size(content),
-         {:ok, replaced} <- replace_unique(content, old_string, new_string) do
-      {:ok,
-       %{
-         path: path,
-         old: content,
-         new: replaced,
-         language: language_of(path),
-         base_hash: content_hash(content)
-       }}
+  @spec preview_edit(String.t(), String.t(), String.t()) :: {:ok, map()}
+  def preview_edit(path, old_string, new_string)
+      when is_binary(old_string) and is_binary(new_string) do
+    case read_for_preview(path) do
+      {:ok, content} ->
+        preview_edit_against(path, content, old_string, new_string)
+
+      {:error, _reason} ->
+        # Missing / outside-cwd / too-large file: still show the proposed hunk
+        # so the operator sees the change, marked as an un-located target.
+        {:ok, best_effort_edit(path, old_string, new_string, :not_found)}
     end
   end
+
+  def preview_edit(path, old_string, new_string) do
+    # Malformed call (non-string edit args): degrade to a hunk of whatever was
+    # proposed, coerced to strings so the diff renderer always gets strings.
+    {:ok,
+     best_effort_edit(
+       path,
+       to_preview_string(old_string),
+       to_preview_string(new_string),
+       :not_found
+     )}
+  end
+
+  # The faithful path: replace_unique decides exact vs. degraded.
+  defp preview_edit_against(path, content, old_string, new_string) do
+    case replace_unique(content, old_string, new_string) do
+      {:ok, replaced} ->
+        {:ok,
+         %{
+           path: path,
+           old: content,
+           new: replaced,
+           language: language_of(path),
+           base_hash: content_hash(content),
+           match: :exact
+         }}
+
+      {:error, :edit_target_not_found} ->
+        {:ok, best_effort_edit(path, old_string, new_string, :not_found)}
+
+      {:error, :edit_target_not_unique} ->
+        {:ok, best_effort_edit(path, old_string, new_string, :ambiguous)}
+    end
+  end
+
+  # A best-effort edit preview: the proposed hunk on its own, with an honest
+  # `:match` signal and deliberately NO `base_hash`. The absence of a
+  # base_hash is the seam the executor reads to SKIP the staleness check and
+  # attempt execution directly -- where `do_edit/3` still fails loudly if the
+  # target isn't exact-unique. Never a real anchor, so never a false "stale".
+  defp best_effort_edit(path, old_string, new_string, match)
+       when match in [:not_found, :ambiguous] do
+    %{
+      path: path,
+      old: old_string,
+      new: new_string,
+      language: language_of(path),
+      match: match
+    }
+  end
+
+  # Read a file for previewing: resolve within cwd, read, size-guard. Any
+  # failure means there is no faithful image to build.
+  defp read_for_preview(path) do
+    with {:ok, abs} <- Fs.resolve(path),
+         {:ok, content} <- File.read(abs),
+         :ok <- guard_size(content) do
+      {:ok, content}
+    end
+  end
+
+  defp to_preview_string(value) when is_binary(value), do: value
+  defp to_preview_string(nil), do: ""
+  defp to_preview_string(value), do: inspect(value)
 
   @doc """
   Verify the file at `path` still hashes to `base_hash` (the image captured
