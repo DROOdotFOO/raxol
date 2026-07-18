@@ -186,4 +186,129 @@ defmodule Raxol.Harness.LiveAssemblyTest do
 
     assert_receive {:submit_dispatched, %{text: "hi"}}, 2_000
   end
+
+  # -- U6-e: the ordering residual, made real --------------------------------
+
+  # The contract's honest residual (PumpContract §2): one FIFO segment
+  # remains INSIDE the Dispatcher -- a keystroke forwarded BEHIND an
+  # already-forwarded batch waits one update/2 fold. The pump-seam half
+  # (input enters ahead of anything pending WITH it) is the A0 falsifier
+  # in pump_contract_test.exs; this is the end-to-end half over the
+  # assembled stack. Construction: a :sys.suspend wedge on the Dispatcher
+  # lets the exact mailbox order [batch1, key, batch2] be built
+  # deterministically through the REAL pump+shim path; the time-travel
+  # recorder then proves the fold order: the key folds immediately after
+  # the batch that beat it and before the batch that followed it --
+  # exactly one fold of waiting, never more.
+  test "U6-e: a key forwarded behind an already-forwarded batch waits exactly one fold" do
+    test_pid = self()
+    {:ok, device} = StringIO.open("")
+    {:ok, fake_session} = Agent.start(fn -> nil end)
+
+    writer = fn bytes -> send(test_pid, {:frame, IO.iodata_to_binary(bytes)}) end
+
+    {:ok, %{pump: pump, lifecycle: lifecycle}} =
+      Live.start_link(
+        lane: {FakeLane, %{session_id: "s1", pid: fake_session, test: test_pid}},
+        device: device,
+        io_writer: writer,
+        greeting?: false,
+        width: 60,
+        rows: 20,
+        cadence_opts: [flush_interval_ms: 0],
+        tick_ms: 60_000,
+        sigwinch?: false,
+        time_travel: true,
+        notify: test_pid
+      )
+
+    assert_receive {:subscribed, forwarder}, 2_000
+    %{dispatcher: dispatcher} = Lifecycle.child_pids(lifecycle)
+    Raxol.Debug.TimeTravel.clear()
+
+    # Wedge the Dispatcher so queue construction is exact: every cast the
+    # shim sends just accumulates until we choose the fold order.
+    :sys.suspend(dispatcher)
+
+    enqueue = fn send_fun, want_len ->
+      send_fun.()
+
+      # Poll the mailbox, not a sleep: the assertion is about what ARRIVED,
+      # so wait until the shim's cast is provably queued.
+      wait_until(
+        fn ->
+          {:message_queue_len, n} = Process.info(dispatcher, :message_queue_len)
+          n >= want_len
+        end,
+        2_000,
+        "dispatcher mailbox never reached length #{want_len}"
+      )
+    end
+
+    # batch1 is "already forwarded" before the key exists at the pump: the
+    # residual's only legal waiter.
+    enqueue.(
+      fn -> send(forwarder, {:session_event, "s1", turn_event(1, "t1", :turn_started)}) end,
+      1
+    )
+
+    enqueue.(fn -> send(pump, {:inline_input, Event.key("z")}) end, 2)
+
+    enqueue.(
+      fn -> send(forwarder, {:session_event, "s1", turn_event(2, "t2", :turn_started)}) end,
+      3
+    )
+
+    :sys.resume(dispatcher)
+
+    # Three folds land; the recorder sees them all.
+    wait_until(fn -> Raxol.Debug.TimeTravel.count() >= 3 end, 2_000, "folds not recorded")
+
+    # The pump's stall mechanics interleave a verdict per batch (pump-side
+    # data, not stream content) -- the ordering claim is about stream
+    # messages, so verdicts are filtered out of the sequence.
+    messages =
+      for i <- 0..(Raxol.Debug.TimeTravel.count() - 1) do
+        {:ok, snap} = Raxol.Debug.TimeTravel.jump_to(i)
+        snap.message
+      end
+      |> Enum.reject(&match?({:stall_verdict, _}, &1))
+
+    assert [
+             {:batch, _},
+             {:key, %{char: "z"}},
+             {:batch, _}
+           ] = Enum.take(messages, 3)
+  end
+
+  defp turn_event(id, turn_id, type) do
+    %{
+      id: id,
+      turn_id: turn_id,
+      ts: id * 1_000,
+      family: :loop,
+      type: type,
+      tier: :durable,
+      payload: %{}
+    }
+  end
+
+  defp wait_until(predicate, timeout, error) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_until(predicate, deadline, error)
+  end
+
+  defp do_wait_until(predicate, deadline, error) do
+    cond do
+      predicate.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk(error)
+
+      true ->
+        Process.sleep(5)
+        do_wait_until(predicate, deadline, error)
+    end
+  end
 end
