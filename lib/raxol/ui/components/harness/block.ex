@@ -495,7 +495,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   rescue
     e ->
       emit_recovered(block.kind, e, __STACKTRACE__)
-      interactive_wrap(render_fallback(block, e), block, context)
+      interactive_wrap(render_fallback(block, e, __STACKTRACE__), block, context)
   end
 
   # -- the interactive re-hosting stamp (harness TEA migration U1) ----------
@@ -726,18 +726,53 @@ defmodule Raxol.UI.Components.Harness.Block do
   # approval, the first line of a message), plus a visible recovery marker
   # so the fault is not silently swallowed. The real exception + stacktrace
   # is logged at the rescue site (`emit_recovered/3`).
-  defp render_fallback(block, exception) do
+  defp render_fallback(block, exception, stacktrace) do
     Components.column(
       gap: 0,
       children: [
         Components.text(content: safe_summary(block), style: %{}),
         Components.text(
-          content: "(render error: #{safe_reason(exception)})",
+          content:
+            "(render error: #{safe_reason(exception)}#{safe_site(stacktrace)})",
           style: %{dim: true}
         )
       ]
     )
   end
+
+  # The first in-repo stack frame of the render fault, appended to the inline
+  # message as ` @ Module.fun/arity (file:line)` -- so the on-screen fallback
+  # names WHERE the crash was, not only WHY, without waiting on the log. Skips
+  # this module's own rescue frames to point at the real culprit (usually a
+  # DiffViewer / MarkdownBody child). Never itself raises.
+  defp safe_site([_ | _] = stacktrace) do
+    frame =
+      Enum.find(stacktrace, fn
+        {__MODULE__, name, _arity, _loc} when name in [:render_fallback, :render] ->
+          false
+
+        {mod, _fun, _arity, _loc} ->
+          mod |> to_string() |> String.starts_with?("Elixir.Raxol")
+
+        _ ->
+          false
+      end) || List.first(stacktrace)
+
+    case frame do
+      {mod, fun, arity, loc} ->
+        file = loc |> Keyword.get(:file, ~c"") |> to_string() |> Path.basename()
+        line = Keyword.get(loc, :line)
+        arity = if is_integer(arity), do: arity, else: length(List.wrap(arity))
+        " @ #{inspect(mod)}.#{fun}/#{arity} (#{file}:#{line})"
+
+      _ ->
+        ""
+    end
+  rescue
+    _ -> ""
+  end
+
+  defp safe_site(_), do: ""
 
   defp safe_summary(block) do
     summary(block)
@@ -1885,7 +1920,13 @@ defmodule Raxol.UI.Components.Harness.Block do
     end
   end
 
-  defp outcome_parts(outcome) do
+  # A live block that has not completed yet carries NO outcome (the struct
+  # default is `nil`, and only a sealed round-trip fills the
+  # `%{exit_code, duration_ms, cost}` map). `nil` -- or any non-map -- means
+  # "no receipt to show", which renders as no outcome row, never a crash: a
+  # `Map.get(nil, _)` here is `BadMapError: expected a map`, and an awaiting
+  # `:approval` reaches this path with exactly that nil outcome.
+  defp outcome_parts(outcome) when is_map(outcome) do
     [
       exit_part(Map.get(outcome, :exit_code)),
       duration_part(Map.get(outcome, :duration_ms)),
@@ -1893,6 +1934,8 @@ defmodule Raxol.UI.Components.Harness.Block do
     ]
     |> Enum.reject(&is_nil/1)
   end
+
+  defp outcome_parts(_absent), do: []
 
   defp exit_part(nil), do: nil
   defp exit_part(code) when is_integer(code), do: "exit #{code}"
