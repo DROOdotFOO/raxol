@@ -1100,4 +1100,175 @@ defmodule Raxol.Harness.SessionPumpTest do
       assert Process.alive?(pump)
     end
   end
+
+  # ---------------------------------------------------------------------
+  # 12. runtime_boot (the U6 live wiring: the pump BOOTS its Lifecycle)
+  # ---------------------------------------------------------------------
+
+  # Fakes for the runtime the boot callback "starts": the dispatcher
+  # records casts (the shim's work), the engine records the paint-gate
+  # calls, the lifecycle records the stop cast. Each is a minimal
+  # GenServer -- the pump's rewired closures call them by pid, exactly as
+  # they will call the real Dispatcher/Engine/Lifecycle in production.
+  defmodule FakeRuntimeDispatcher do
+    @moduledoc false
+    use GenServer
+
+    def start_link(recorder), do: GenServer.start_link(__MODULE__, recorder)
+    @impl true
+    def init(recorder), do: {:ok, recorder}
+
+    @impl true
+    def handle_cast(message, recorder) do
+      send(recorder, {:dispatched, message})
+      {:noreply, recorder}
+    end
+  end
+
+  defmodule FakeRuntimeEngine do
+    @moduledoc false
+    use GenServer
+
+    def start_link(recorder), do: GenServer.start_link(__MODULE__, recorder)
+    @impl true
+    def init(recorder), do: {:ok, recorder}
+
+    @impl true
+    def handle_call(phase, _from, recorder)
+        when phase in [:suspend_painting, :resume_painting] do
+      send(recorder, {:paint_gate, phase})
+      {:reply, :ok, recorder}
+    end
+  end
+
+  defmodule FakeRuntimeLifecycle do
+    @moduledoc false
+    use GenServer
+
+    def start_link(recorder), do: GenServer.start_link(__MODULE__, recorder)
+    @impl true
+    def init(recorder), do: {:ok, recorder}
+
+    @impl true
+    def handle_cast(:shutdown, recorder) do
+      send(recorder, :lifecycle_stopped)
+      {:noreply, recorder}
+    end
+  end
+
+  # new_pump with :runtime_boot instead of a :consumer: the callback
+  # captures the device bytes AT INVOCATION TIME (the enter-before-boot
+  # proof) and returns the fake runtime pids.
+  defp new_booted_pump(session_overrides \\ %{}, pump_overrides \\ []) do
+    test_pid = self()
+    {:ok, device} = StringIO.open("")
+
+    boot = fn pump_pid ->
+      {:ok, dispatcher} = FakeRuntimeDispatcher.start_link(test_pid)
+      {:ok, engine} = FakeRuntimeEngine.start_link(test_pid)
+      {:ok, lifecycle} = FakeRuntimeLifecycle.start_link(test_pid)
+
+      {_in, out} = StringIO.contents(device)
+      send(test_pid, {:boot_invoked, pump_pid, out})
+
+      {:ok, %{dispatcher: dispatcher, engine: engine, lifecycle: lifecycle}}
+    end
+
+    fake_session_pid = start_fake_session()
+
+    session =
+      Map.merge(
+        %{
+          session_id: "s1",
+          pid: fake_session_pid,
+          test: test_pid,
+          steer_reply: {:error, :unused}
+        },
+        session_overrides
+      )
+
+    {:ok, pump} =
+      SessionPump.start_link(
+        Keyword.merge(
+          [
+            lane: {FakeLane, session},
+            device: device,
+            width: @width,
+            rows: @rows,
+            cadence_opts: [flush_interval_ms: 0],
+            tick_ms: 60_000,
+            notify: test_pid,
+            runtime_boot: boot
+          ],
+          pump_overrides
+        )
+      )
+
+    assert_receive {:subscribed, forwarder}, 2_000
+
+    on_exit(fn -> SessionPump.halt(pump) end)
+
+    %{pump: pump, device: device, forwarder: forwarder}
+  end
+
+  describe "12. runtime_boot (U6)" do
+    test "requires :consumer or :runtime_boot" do
+      assert_raise ArgumentError, ~r/requires :consumer or :runtime_boot/, fn ->
+        SessionPump.start_link(lane: {FakeLane, %{test: self(), pid: nil}})
+      end
+    end
+
+    test "writes the alt-screen enter bytes BEFORE the boot callback runs" do
+      new_booted_pump()
+
+      assert_receive {:boot_invoked, _pump_pid, bytes_at_boot}, 2_000
+      assert String.ends_with?(bytes_at_boot, ViewportAuthority.enter())
+    end
+
+    test "rewires delivery: batches ride {:harness, _}, resize rides the system path" do
+      %{forwarder: forwarder, pump: pump} = new_booted_pump()
+
+      send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      assert_receive {:dispatched, {:dispatch, {:harness, {:batch, items}}}}, 2_000
+      assert Enum.any?(items, &match?({:event, %{type: :turn_started}}, &1))
+
+      SessionPump.notify_resize(pump, 100, 40)
+
+      assert_receive {:dispatched,
+                      {:dispatch, %Event{type: :resize, data: %{width: 100, height: 40}}}},
+                     2_000
+    end
+
+    test "rewires the paint gate around the editor bracket" do
+      editor = fn _draft, _opts ->
+        {:ok, %{text: "e", width: @width, rows: @rows, degraded: []}}
+      end
+
+      %{pump: pump} = new_booted_pump(%{}, editor_session: editor)
+
+      Executor.execute(Directive.edit_draft(pump, "d"), %{})
+
+      assert_receive {:paint_gate, :suspend_painting}, 2_000
+      assert_receive {:paint_gate, :resume_painting}, 2_000
+      # The editor result travels the rewired delivery path, too.
+      assert_receive {:dispatched,
+                      {:dispatch, {:harness, {:editor_result, {:ok, %{text: "e"}}}}}},
+                     2_000
+    end
+
+    test "halt runs teardown against the rewired runtime" do
+      %{pump: pump, device: device} = new_booted_pump()
+
+      SessionPump.halt(pump)
+
+      # gate -> alt-leave LAST -> lifecycle stop (PumpContract §8).
+      assert_receive {:paint_gate, :suspend_painting}, 2_000
+      assert_receive :lifecycle_stopped, 2_000
+
+      {_in, out} = StringIO.contents(device)
+      assert String.ends_with?(out, ViewportAuthority.leave())
+
+      assert_receive {:session_pump, ^pump, :halted}, 2_000
+    end
+  end
 end

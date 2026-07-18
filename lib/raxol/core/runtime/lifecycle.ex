@@ -132,6 +132,25 @@ defmodule Raxol.Core.Runtime.Lifecycle do
     GenServer.cast(pid_or_name, :shutdown)
   end
 
+  @doc """
+  The pids of the runtime children this Lifecycle started and owns:
+  `%{dispatcher: pid, engine: pid, driver: pid | nil}`.
+
+  Embedders that wire their own IO boundary around a running Lifecycle
+  need these without reaching into State internals: the harness
+  SessionPump (U6) learns the Dispatcher it feeds and the Rendering
+  Engine it paint-gates through this seam (`environment: :harness`
+  starts no driver, so `driver` is nil there).
+  """
+  @spec child_pids(GenServer.server()) :: %{
+          dispatcher: pid() | nil,
+          engine: pid() | nil,
+          driver: pid() | nil
+        }
+  def child_pids(pid_or_name) do
+    GenServer.call(pid_or_name, :child_pids)
+  end
+
   # GenServer callbacks
 
   @impl GenServer
@@ -422,6 +441,16 @@ defmodule Raxol.Core.Runtime.Lifecycle do
   @impl true
   def handle_call(:get_full_state, _from, state) do
     {:reply, state, state}
+  end
+
+  @impl true
+  def handle_call(:child_pids, _from, state) do
+    {:reply,
+     %{
+       dispatcher: state.dispatcher_pid,
+       engine: state.rendering_engine_pid,
+       driver: state.driver_pid
+     }, state}
   end
 
   @impl true

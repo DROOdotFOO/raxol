@@ -9,17 +9,16 @@ defmodule Raxol.Harness.SessionPump do
   executing `Raxol.Harness.Directive.{Lane,Editor}` commands back out,
   and the sole tty bracket owner (alt-screen, editor handoff, teardown).
 
-  **Status: SEAM — unwired until U4/U6.** No `HarnessApp` exists and no
-  Dispatcher consumes this pump yet; `Raxol.Harness.LiveSessionDriver`
-  stays untouched and drives the CURRENT live demo until U4/U6 swap
-  over. The pump's only caller today is its own suite (plus the
-  contract's ordering falsifier in `test/harness/pump_contract_test.exs`).
-  The `:consumer` it feeds is a plain pid — a test process now, the
-  Dispatcher's verbatim-delivery seam when U4 lands (that transport is
-  deliberately NOT frozen, PumpContract §3). One consumer note for U4:
-  the `%Raxol.Core.Events.Event{type: :resize}` message must be routed
-  through the Dispatcher's system-event path, not the verbatim seam —
-  the Engine's size sync rides it (PumpContract §3).
+  **Status: wired by U6.** `Raxol.Harness.Live` assembles the live stack:
+  this pump (with `:runtime_boot`) + `Lifecycle(environment: :harness)`
+  running `HarnessApp`. `Raxol.Harness.LiveSessionDriver` stays untouched
+  and drives the OLD live demo until the U6-d swap. Without
+  `:runtime_boot`, the `:consumer` this pump feeds is a plain pid — a
+  test process, or `Raxol.Harness.DeliveryShim` once the boot rewires it
+  (that transport is deliberately NOT frozen, PumpContract §3). The shim
+  owns the one delivery fork: `%Raxol.Core.Events.Event{type: :resize}`
+  is routed through the Dispatcher's system-event path, not the verbatim
+  seam — the Engine's size sync rides it (PumpContract §3).
 
   ## What ported from the driver, what died
 
@@ -126,8 +125,15 @@ defmodule Raxol.Harness.SessionPump do
 
   ## Options
 
-    * `:consumer` (required) — the pid every `Raxol.Harness.PumpContract`
-      message is sent to, verbatim.
+    * `:consumer` (required UNLESS `:runtime_boot` is given) — the pid
+      every `Raxol.Harness.PumpContract` message is sent to, verbatim.
+    * `:runtime_boot` (U6) — `(pump_pid -> {:ok, %{dispatcher, engine,
+      lifecycle}} | {:error, reason})`. When given, the pump BOOTS its
+      own runtime post-build: writes the alt-screen enter bytes, calls
+      the callback, and rewires consumer/paint_gate/lifecycle_stop from
+      the returned pids before entering the loop. `:consumer`,
+      `:paint_gate`, and `:lifecycle_stop` are placeholders in this
+      mode; the boot owns them.
     * `:lane` (required) — `{lane_module, session}` per
       `Raxol.Harness.SessionLane`.
     * `:device` — IO device for the pump's OWN bytes (alt-screen +
@@ -172,6 +178,7 @@ defmodule Raxol.Harness.SessionPump do
   """
 
   alias Raxol.Core.Events.Event
+  alias Raxol.Harness.DeliveryShim
   alias Raxol.Harness.Directive.Editor
   alias Raxol.Harness.Directive.Lane
   alias Raxol.Harness.EventBoundary
@@ -191,6 +198,7 @@ defmodule Raxol.Harness.SessionPump do
   """
   @spec start_link(keyword()) :: {:ok, pid()}
   def start_link(opts) do
+    validate_opts!(opts)
     pid = spawn_link(__MODULE__, :run, [opts])
     {:ok, pid}
   end
@@ -203,7 +211,20 @@ defmodule Raxol.Harness.SessionPump do
   @spec run(keyword()) :: :ok
   def run(opts) do
     Process.flag(:trap_exit, true)
-    opts |> build() |> loop()
+    validate_opts!(opts)
+    opts |> build() |> boot_runtime() |> loop()
+  end
+
+  # Option validation lives at the ENTRY POINTS (not only in build/1)
+  # because start_link spawns: a raise inside the spawned process would
+  # reach the caller as an untyped EXIT, not as the ArgumentError that
+  # names the missing option. Validating pre-spawn keeps caller-facing
+  # failures synchronous and honest.
+  defp validate_opts!(opts) do
+    if is_nil(Keyword.get(opts, :consumer)) and is_nil(Keyword.get(opts, :runtime_boot)) do
+      raise ArgumentError,
+            "Raxol.Harness.SessionPump requires :consumer or :runtime_boot"
+    end
   end
 
   @doc "Ends the pump: runs the frozen teardown sequence. Never blocks."
@@ -270,7 +291,14 @@ defmodule Raxol.Harness.SessionPump do
   # -- construction -------------------------------------------------------
 
   defp build(opts) do
-    consumer = Keyword.fetch!(opts, :consumer)
+    # :consumer may be nil here ONLY because :runtime_boot rewires it
+    # post-build (validate_opts!/1 guaranteed one of the two at entry):
+    # the U6 live wiring has the pump boot the Lifecycle itself, so the
+    # Dispatcher it must feed does not exist at option time. The rewire
+    # lands before the loop starts, so no forwarded message ever meets a
+    # placeholder consumer -- cadence/tick deliveries only get PROCESSED
+    # inside loop/1, even though they may queue earlier.
+    consumer = Keyword.get(opts, :consumer)
     {lane_mod, session} = Keyword.fetch!(opts, :lane)
     pump = self()
 
@@ -305,6 +333,7 @@ defmodule Raxol.Harness.SessionPump do
       tick_ms: tick_ms,
       device: Keyword.get(opts, :device, :stdio),
       alt_screen?: false,
+      runtime_boot: Keyword.get(opts, :runtime_boot),
       paint_gate: Keyword.get(opts, :paint_gate, fn _phase -> :ok end),
       lifecycle_stop: Keyword.get(opts, :lifecycle_stop, fn -> :ok end),
       editor_session: Keyword.get(opts, :editor_session),
@@ -313,6 +342,48 @@ defmodule Raxol.Harness.SessionPump do
       rows: Keyword.get(opts, :rows, 24),
       notify: Keyword.get(opts, :notify)
     }
+  end
+
+  # -- the U6 runtime boot (the pump BOOTS its Lifecycle) -------------------
+
+  # "Seeded into the model at init/1 by the pump that booted the Lifecycle"
+  # (Directive.Lane's addressing law): the `:runtime_boot` callback receives
+  # the pump pid and starts the Lifecycle(environment: :harness) running
+  # HarnessApp with `pump:` set to it, returning the runtime pids. The
+  # ordering here is PumpContract §7's byte law, and it is load-bearing:
+  #
+  #   1. The alt-screen ENTER bytes are written BEFORE the callback runs.
+  #      The Rendering Engine starts inside the callback, so its first
+  #      frame can never land in the user's scrollback.
+  #   2. The three seams rewire from the returned pids BEFORE the loop
+  #      starts: consumer becomes a DeliveryShim bound to the Dispatcher
+  #      (verbatim {:harness, _} ingress; resize rides the system path),
+  #      paint_gate becomes the Engine's synchronous calls (U6-b), and
+  #      lifecycle_stop becomes the real Lifecycle stop.
+  #
+  # A boot failure is fatal and loud: the pump cannot feed an app that does
+  # not exist, so it raises and lets the link take the embedder down --
+  # before the loop starts, there is no session to tear down honestly.
+  defp boot_runtime(%{runtime_boot: nil} = state), do: state
+
+  defp boot_runtime(%{runtime_boot: boot} = state) do
+    IO.write(state.device, ViewportAuthority.enter())
+
+    case boot.(self()) do
+      {:ok, %{dispatcher: dispatcher, engine: engine, lifecycle: lifecycle}} ->
+        {:ok, shim} = DeliveryShim.start_link(dispatcher)
+
+        %{
+          state
+          | alt_screen?: true,
+            consumer: shim,
+            paint_gate: fn phase -> GenServer.call(engine, phase) end,
+            lifecycle_stop: fn -> Raxol.Core.Runtime.Lifecycle.stop(lifecycle) end
+        }
+
+      {:error, reason} ->
+        raise "harness runtime boot failed: #{inspect(reason)}"
+    end
   end
 
   defp start_inline_driver(opts, pump) do
