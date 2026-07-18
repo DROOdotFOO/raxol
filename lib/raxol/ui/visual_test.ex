@@ -1,5 +1,6 @@
 defmodule Raxol.UI.VisualTest do
-  @moduledoc deprecated: "Scheduled for removal in Raxol 3.0; no replacement planned."
+  @moduledoc deprecated:
+               "Scheduled for removal in Raxol 3.0; no replacement planned."
   @moduledoc """
   Visual regression testing utilities for Raxol applications.
 

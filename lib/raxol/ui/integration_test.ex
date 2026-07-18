@@ -1,5 +1,6 @@
 defmodule Raxol.UI.IntegrationTest do
-  @moduledoc deprecated: "Scheduled for removal in Raxol 3.0; no replacement planned."
+  @moduledoc deprecated:
+               "Scheduled for removal in Raxol 3.0; no replacement planned."
   @moduledoc """
   Integration testing utilities for Raxol applications.
 

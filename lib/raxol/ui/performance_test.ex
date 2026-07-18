@@ -1,5 +1,6 @@
 defmodule Raxol.UI.PerformanceTest do
-  @moduledoc deprecated: "Scheduled for removal in Raxol 3.0; no replacement planned."
+  @moduledoc deprecated:
+               "Scheduled for removal in Raxol 3.0; no replacement planned."
   @moduledoc """
   Performance testing utilities for Raxol UI components.
 
