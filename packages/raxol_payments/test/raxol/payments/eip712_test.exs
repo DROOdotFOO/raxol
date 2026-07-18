@@ -40,8 +40,14 @@ defmodule Raxol.Payments.EIP712Test do
     end
 
     test "differs when type field name changes (typeHash captures field names)" do
-      other_types = %{"Transfer" => [{"recipient", "address"}, {"amount", "uint256"}]}
-      other_message = %{recipient: "0x" <> String.duplicate("cd", 20), amount: 1000}
+      other_types = %{
+        "Transfer" => [{"recipient", "address"}, {"amount", "uint256"}]
+      }
+
+      other_message = %{
+        recipient: "0x" <> String.duplicate("cd", 20),
+        amount: 1000
+      }
 
       assert {:ok, h1} = EIP712.hash(@domain, @types, @valid_message)
       assert {:ok, h2} = EIP712.hash(@domain, other_types, other_message)
@@ -70,7 +76,11 @@ defmodule Raxol.Payments.EIP712Test do
 
     test "invalid uint256 string returns error" do
       types = %{"Transfer" => [{"to", "address"}, {"amount", "uint256"}]}
-      message = %{to: "0x" <> String.duplicate("cd", 20), amount: "not_a_number"}
+
+      message = %{
+        to: "0x" <> String.duplicate("cd", 20),
+        amount: "not_a_number"
+      }
 
       assert {:error, {:invalid_uint256, "not_a_number"}} =
                EIP712.hash(@domain, types, message)
@@ -88,6 +98,7 @@ defmodule Raxol.Payments.EIP712Test do
       # Use a field name unlikely to exist as an atom
       novel_field = "zzz_never_atomized_#{System.unique_integer([:positive])}"
       types = %{"Foo" => [{novel_field, "uint256"}]}
+
       # Data keyed by string -- safe_atom_get rescues ArgumentError, returns nil,
       # nil is then encoded as 32 zero bytes.
       message = %{}
@@ -164,7 +175,9 @@ defmodule Raxol.Payments.EIP712Test do
 
     test "rejects a non-array type given a list value" do
       types = %{"X" => [{"name", "string"}]}
-      assert {:error, _} = EIP712.hash(%{name: "Test"}, types, %{name: ["a", "b"]})
+
+      assert {:error, _} =
+               EIP712.hash(%{name: "Test"}, types, %{name: ["a", "b"]})
     end
   end
 
@@ -210,7 +223,8 @@ defmodule Raxol.Payments.EIP712Test do
       "nonce" => 1,
       "deadline" => 1_900_000_000,
       "witness" => %{
-        "orderId" => "0xdeadbeef00000000000000000000000000000000000000000000000000000000"
+        "orderId" =>
+          "0xdeadbeef00000000000000000000000000000000000000000000000000000000"
       }
     }
 
@@ -303,7 +317,12 @@ defmodule Raxol.Payments.EIP712Test do
     }
 
     @xochi_salt "0x50c4e63fec78d6897bf2f854fbe944310903876e56027940293bb80e79f75fe2"
-    @xochi_domain %{name: "Xochi", version: "1-prod", chainId: 8453, salt: @xochi_salt}
+    @xochi_domain %{
+      name: "Xochi",
+      version: "1-prod",
+      chainId: 8453,
+      salt: @xochi_salt
+    }
 
     @xochi_message %{
       "intentId" => "xi_c3d0ee6c0b69d86f60965ac521dedba9",
@@ -322,20 +341,27 @@ defmodule Raxol.Payments.EIP712Test do
     @xochi_digest "0x2250ca7332932abfec5b02ad59a540ed60f03b5a33bdac4f23699b72fe38ba11"
 
     test "XochiIntent digest matches viem byte-for-byte (salt participates)" do
-      assert {:ok, digest} = EIP712.hash(@xochi_domain, @xochi_types, @xochi_message)
+      assert {:ok, digest} =
+               EIP712.hash(@xochi_domain, @xochi_types, @xochi_message)
+
       assert "0x" <> Base.encode16(digest, case: :lower) == @xochi_digest
     end
 
     test "dropping salt produces a different digest" do
       no_salt = Map.delete(@xochi_domain, :salt)
 
-      assert {:ok, with_salt} = EIP712.hash(@xochi_domain, @xochi_types, @xochi_message)
-      assert {:ok, without_salt} = EIP712.hash(no_salt, @xochi_types, @xochi_message)
+      assert {:ok, with_salt} =
+               EIP712.hash(@xochi_domain, @xochi_types, @xochi_message)
+
+      assert {:ok, without_salt} =
+               EIP712.hash(no_salt, @xochi_types, @xochi_message)
+
       assert with_salt != without_salt
     end
 
     test "salt is encoded as bytes32 in the domain separator" do
-      other_salt = Map.put(@xochi_domain, :salt, "0x" <> String.duplicate("11", 32))
+      other_salt =
+        Map.put(@xochi_domain, :salt, "0x" <> String.duplicate("11", 32))
 
       assert {:ok, a} = EIP712.hash(@xochi_domain, @xochi_types, @xochi_message)
       assert {:ok, b} = EIP712.hash(other_salt, @xochi_types, @xochi_message)
@@ -373,6 +399,25 @@ defmodule Raxol.Payments.EIP712Test do
       assert_raise ArgumentError, ~r/non-canonical/, fn ->
         EIP712.pack_signature({@r, @s, 2})
       end
+    end
+  end
+
+  describe "address_from_pubkey/1" do
+    test "derives the canonical privkey=1 Ethereum address" do
+      # Well-known vector: secp256k1 private key 1 -> this address.
+      {:ok, pubkey} = ExSecp256k1.create_public_key(<<1::256>>)
+      assert byte_size(pubkey) == 65
+      assert <<0x04, _xy::binary-size(64)>> = pubkey
+
+      assert Raxol.Payments.EIP712.address_from_pubkey(pubkey) ==
+               "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+    end
+
+    test "normalize_address trims, downcases and strips a leading 0x" do
+      assert Raxol.Payments.EIP712.normalize_address("  0xAbCdEf0123456789  ") ==
+               "abcdef0123456789"
+
+      assert Raxol.Payments.EIP712.normalize_address("deadBEEF") == "deadbeef"
     end
   end
 end
