@@ -478,6 +478,24 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   end
 
   @impl true
+  def handle_manager_cast({:dispatch, {:harness, msg}}, state) do
+    # The SessionPump's verbatim ingress (unit U6-a of the harness TEA
+    # migration; Raxol.Harness.PumpContract §3): every pump message reaches
+    # update/2 UNWRAPPED -- no Event struct, no Bubbler walk -- because the
+    # frozen PumpContract vocabulary IS HarnessApp's update vocabulary
+    # (`{:batch, _}`, `{:key, _}`, `{:tick, _}`, ...). The {:harness, msg}
+    # tag exists only to route the cast to this clause ahead of the generic
+    # {:dispatch, event} path below; it is stripped here and never crosses
+    # into the model. Ordering: the pump (through its delivery shim) is the
+    # SOLE sender on this channel, and this GenServer's mailbox is FIFO, so
+    # the input-first order the pump establishes in its own selective
+    # receive survives end-to-end (PumpContract §2). The one PumpContract
+    # message that must NOT use this seam is resize: it rides the
+    # system-event path because the Engine's size sync lives there.
+    dispatch_raw_message(msg, state)
+  end
+
+  @impl true
   def handle_manager_cast({:dispatch, event}, state) do
     dispatch_full_event(event, state)
   end
