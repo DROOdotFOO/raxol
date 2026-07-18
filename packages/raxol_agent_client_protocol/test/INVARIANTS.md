@@ -121,7 +121,7 @@ enforcing test is cited.
 | IC-7 | The Connection never blocks — no `GenServer.call` to itself, no synchronous wait on tasks, no transport call that waits on peer progress. | `connection_test.exs:765` (Inv-8) |
 | IC-8 | Sibling supervision tree: `task_sup`/`session_sup` resolved from the parent supervisor by module/type heuristic (injectable in tests); Connection is `:temporary`. | `connection_test.exs:88`; `integration/end_to_end_test.exs:300` |
 
-## Family `F` — NDJSON framing / transport (F1..F6) — **[NEW registration]**
+## Family `F` — NDJSON framing / transport (F1..F7) — **[NEW registration]**
 
 Home: `test/transport/framer_test.exs`. These IDs *name what the existing
 thorough framer tests already prove* — no test behavior was rewritten; each
@@ -136,6 +136,12 @@ carries the family legend.
 | F4 | Oversized-frame rejection + resync: a line exceeding `max_frame_bytes` yields `{:frame_too_large, size}` WITHOUT unbounded buffering and resyncs at the next terminator (surrounding frames intact, exactly-at-limit passes, default 64MiB, `new/1` rejects non-positive max). | `framer_test.exs` `describe "F4 oversized-frame rejection + resync ..."` |
 | F5 | Volume / no-loss: no data loss or reordering across 10k frames fed in randomly sized chunks; the buffer drains empty. | `framer_test.exs` `describe "F5 volume ..."` |
 | F6 | Re-chunking invariance (property): any re-chunking of concatenated JSON lines yields the original frames in order; CRLF and LF terminators are equivalent; an oversized frame errors then resyncs (totality). | `framer_test.exs` `describe "F6 re-chunking invariance ..."` |
+| F7 | **[NEW]** Transport ordered delivery (T-ORD, `transport.ex` "Delivery guarantees"): per direction, frames delivered to the owner as `{:message, frame}` arrive in EXACTLY the order the peer's send path accepted them — pinned against `Transport.Paired`; a deliberately-reordering fake transport run through the identical check FAILS it (falsifier proof: the check is sensitive to reordering, not vacuous). | `test/transport/ordering_contract_test.exs` `describe "F7 T-ORD conformance: Transport.Paired"` (green) + `describe "F7 red variant: the conformance check is a real falsifier"` (red) |
+
+*Note (F7):* lives in its own file (`ordering_contract_test.exs`), not
+`framer_test.exs` — it exercises the `Transport` behaviour contract
+(acceptance-order delivery across a whole transport), not the Framer's
+byte-splitting, so it does not belong beside F1-F6.
 
 ---
 
