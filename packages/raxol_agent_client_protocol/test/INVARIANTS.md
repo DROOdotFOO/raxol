@@ -136,6 +136,7 @@ carries the family legend.
 | F4 | Oversized-frame rejection + resync: a line exceeding `max_frame_bytes` yields `{:frame_too_large, size}` WITHOUT unbounded buffering and resyncs at the next terminator (surrounding frames intact, exactly-at-limit passes, default 64MiB, `new/1` rejects non-positive max). | `framer_test.exs` `describe "F4 oversized-frame rejection + resync ..."` |
 | F5 | Volume / no-loss: no data loss or reordering across 10k frames fed in randomly sized chunks; the buffer drains empty. | `framer_test.exs` `describe "F5 volume ..."` |
 | F6 | Re-chunking invariance (property): any re-chunking of concatenated JSON lines yields the original frames in order; CRLF and LF terminators are equivalent; an oversized frame errors then resyncs (totality). | `framer_test.exs` `describe "F6 re-chunking invariance ..."` |
+| F8 | Unordered-transport design-stub: `Envelope.wrap/2`/`unwrap/1` round-trip for any frame/tseq (the tseq never leaks into the unwrapped frame); `Reassembly.push/3` releases a tseq-enveloped frame sequence in original order for ANY arrival permutation (property), cascades a contiguous buffered run in one call, drops duplicates (already-released or already-buffered) silently, and crosses either watermark (frame-count or byte) as `{:closed, {:transport, :reassembly_overflow}}` — never growing past it, never timer-bounded. | `transport/reassembly_test.exs` `describe "F8a Envelope ..."` / `"F8b Reassembly ..."` |
 
 ---
 
