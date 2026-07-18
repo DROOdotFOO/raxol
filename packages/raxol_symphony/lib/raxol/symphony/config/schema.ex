@@ -15,6 +15,8 @@ defmodule Raxol.Symphony.Config.Schema do
   obvious misconfiguration fails at startup rather than mid-dispatch.
   """
 
+  import Raxol.Symphony.Util, only: [blank?: 1]
+
   alias Raxol.Symphony.Config
 
   @supported_tracker_kinds ~w(linear github memory)
@@ -143,9 +145,4 @@ defmodule Raxol.Symphony.Config.Schema do
 
   defp positive_integer(value, _name) when is_integer(value) and value > 0, do: :ok
   defp positive_integer(value, name), do: {:error, {:invalid_value, name, value}}
-
-  defp blank?(nil), do: true
-  defp blank?(""), do: true
-  defp blank?(s) when is_binary(s), do: String.trim(s) == ""
-  defp blank?(_), do: false
 end

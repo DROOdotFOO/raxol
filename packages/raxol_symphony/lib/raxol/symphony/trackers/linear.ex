@@ -45,6 +45,8 @@ defmodule Raxol.Symphony.Trackers.Linear do
 
   @behaviour Raxol.Symphony.Tracker
 
+  import Raxol.Symphony.Util, only: [blank?: 1]
+
   alias Raxol.Symphony.{Config, Issue}
 
   @max_pages 20
@@ -97,11 +99,6 @@ defmodule Raxol.Symphony.Trackers.Linear do
         :ok
     end
   end
-
-  defp blank?(nil), do: true
-  defp blank?(""), do: true
-  defp blank?(s) when is_binary(s), do: String.trim(s) == ""
-  defp blank?(_), do: false
 
   # -- Pagination -------------------------------------------------------------
 
