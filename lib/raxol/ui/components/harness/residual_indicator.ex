@@ -8,6 +8,7 @@ defmodule Raxol.UI.Components.Harness.ResidualIndicator do
   renders nothing when it's `nil` (resolved / never raised).
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.StyleHelper
   alias Raxol.View.Components
 
@@ -24,12 +25,7 @@ defmodule Raxol.UI.Components.Harness.ResidualIndicator do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "residual-indicator-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "residual-indicator"),
       residual: Keyword.get(props, :residual, nil),
       style: Keyword.get(props, :style, %{}),
       theme: Keyword.get(props, :theme, %{})

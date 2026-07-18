@@ -54,6 +54,7 @@ defmodule Raxol.UI.Components.Harness.ApprovalPrompt do
   """
 
   alias Raxol.UI.Components.Harness.BlastRadiusPreview
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.Components.Modal.Rendering, as: ModalRendering
   alias Raxol.UI.StyleHelper
   alias Raxol.View.Components
@@ -114,12 +115,7 @@ defmodule Raxol.UI.Components.Harness.ApprovalPrompt do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "approval-prompt-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "approval-prompt"),
       action: Keyword.get(props, :action, nil),
       blast_radius: Keyword.get(props, :blast_radius, %{}),
       options: Keyword.get(props, :options, @default_options),

@@ -8,6 +8,7 @@ defmodule Raxol.UI.Components.Harness.SpendMeter do
   `Raxol.UI.Components.Harness.ContextMeter`.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.Components.Progress.Bar
   alias Raxol.UI.StyleHelper
 
@@ -28,12 +29,7 @@ defmodule Raxol.UI.Components.Harness.SpendMeter do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "spend-meter-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "spend-meter"),
       spent: Keyword.get(props, :spent, 0),
       cap: Keyword.get(props, :cap, 1),
       width: Keyword.get(props, :width, 20),

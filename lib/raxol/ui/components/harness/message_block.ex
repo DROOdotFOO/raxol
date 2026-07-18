@@ -22,6 +22,7 @@ defmodule Raxol.UI.Components.Harness.MessageBlock do
   identically.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.Components.Harness.MarkdownBody
   alias Raxol.UI.StyleHelper
   alias Raxol.View.Components
@@ -45,12 +46,7 @@ defmodule Raxol.UI.Components.Harness.MessageBlock do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "harness-message-block-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "harness-message-block"),
       role: Keyword.get(props, :role, :assistant),
       content: Keyword.get(props, :content, ""),
       width: Keyword.get(props, :width, Raxol.Core.Defaults.terminal_width()),

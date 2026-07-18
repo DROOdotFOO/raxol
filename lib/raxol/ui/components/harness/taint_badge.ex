@@ -13,6 +13,7 @@ defmodule Raxol.UI.Components.Harness.TaintBadge do
   Composed inline by `Raxol.UI.Components.Harness.ToolResultBlock`.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.StyleHelper
 
   use Raxol.UI.Components.Base.Component
@@ -30,12 +31,7 @@ defmodule Raxol.UI.Components.Harness.TaintBadge do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "taint-badge-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "taint-badge"),
       taint: Keyword.get(props, :taint, false),
       style: Keyword.get(props, :style, %{}),
       theme: Keyword.get(props, :theme, %{})

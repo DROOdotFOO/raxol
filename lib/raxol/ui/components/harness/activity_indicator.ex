@@ -15,6 +15,7 @@ defmodule Raxol.UI.Components.Harness.ActivityIndicator do
   died but still *looks* like it is working.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.Components.Progress.Spinner
   alias Raxol.UI.StyleHelper
 
@@ -38,12 +39,7 @@ defmodule Raxol.UI.Components.Harness.ActivityIndicator do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "activity-indicator-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "activity-indicator"),
       state: Keyword.get(props, :state, :idle),
       since_ms: Keyword.get(props, :since_ms, 0),
       frame: Keyword.get(props, :frame, 0),

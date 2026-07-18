@@ -9,6 +9,7 @@ defmodule Raxol.UI.Components.Harness.WorktracksPanel do
   what's handed in via props.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.StyleHelper
   alias Raxol.View.Components
 
@@ -29,12 +30,7 @@ defmodule Raxol.UI.Components.Harness.WorktracksPanel do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "worktracks-panel-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "worktracks-panel"),
       title: Keyword.get(props, :title, "Worktracks"),
       lanes: Keyword.get(props, :lanes, []),
       style: Keyword.get(props, :style, %{}),

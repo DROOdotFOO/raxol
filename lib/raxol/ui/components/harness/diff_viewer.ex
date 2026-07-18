@@ -74,6 +74,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   """
   use Raxol.UI.Components.Base.Component
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.Components.Harness.LineDiff
   alias Raxol.UI.Components.Harness.WordDiff
   alias Raxol.UI.StyleHelper
@@ -103,12 +104,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "diff-viewer-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "diff-viewer"),
       path: Keyword.get(props, :path, ""),
       old: Keyword.get(props, :old, ""),
       new: Keyword.get(props, :new, ""),

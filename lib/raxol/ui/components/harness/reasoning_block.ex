@@ -9,6 +9,7 @@ defmodule Raxol.UI.Components.Harness.ReasoningBlock do
   """
 
   alias Raxol.Core.Events.Event
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.StyleHelper
   alias Raxol.UI.TextLayout
   alias Raxol.UI.TextMeasure
@@ -32,12 +33,7 @@ defmodule Raxol.UI.Components.Harness.ReasoningBlock do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "harness-reasoning-block-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "harness-reasoning-block"),
       content: Keyword.get(props, :content, ""),
       expanded: Keyword.get(props, :expanded, false),
       width: Keyword.get(props, :width, Raxol.Core.Defaults.terminal_width()),

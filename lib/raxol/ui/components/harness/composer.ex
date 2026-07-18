@@ -96,11 +96,12 @@ defmodule Raxol.UI.Components.Harness.Composer do
   """
 
   alias Raxol.Core.Events.Event
+  alias Raxol.UI.Components.Harness.Ids
+  alias Raxol.UI.Components.Harness.TextUtil
   alias Raxol.UI.Components.Input.MultiLineInput
   alias Raxol.UI.Components.Input.MultiLineInput.TextHelper
   alias Raxol.UI.Harness.InputEvent
   alias Raxol.UI.StyleHelper
-  alias Raxol.UI.TextMeasure
   alias Raxol.View.Components
 
   use Raxol.UI.Components.Base.Component
@@ -130,12 +131,7 @@ defmodule Raxol.UI.Components.Harness.Composer do
   def init(props) do
     props = Map.new(props)
 
-    id =
-      Map.get(
-        props,
-        :id,
-        "harness-composer-#{:erlang.unique_integer([:positive])}"
-      )
+    id = Ids.default_id(props, "harness-composer")
 
     {:ok, mli} =
       MultiLineInput.init(%{
@@ -575,7 +571,7 @@ defmodule Raxol.UI.Components.Harness.Composer do
   defp queued_steer_banner(nil, _avail_width), do: nil
 
   defp queued_steer_banner(%{text: text}, avail_width) do
-    content = truncate_to_width(@steer_prefix <> text, avail_width)
+    content = TextUtil.truncate_to_width(@steer_prefix <> text, avail_width)
 
     Components.text(
       id: "queued-steer-banner",
@@ -583,17 +579,4 @@ defmodule Raxol.UI.Components.Harness.Composer do
       style: %{dim: true}
     )
   end
-
-  defp truncate_to_width(text, width) when is_integer(width) and width > 0 do
-    if TextMeasure.display_width(text) <= width do
-      text
-    else
-      {left, _rest} =
-        TextMeasure.split_at_display_width(text, max(width - 1, 0))
-
-      left <> "…"
-    end
-  end
-
-  defp truncate_to_width(text, _width), do: text
 end

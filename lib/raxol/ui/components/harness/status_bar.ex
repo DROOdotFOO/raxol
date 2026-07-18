@@ -10,6 +10,7 @@ defmodule Raxol.UI.Components.Harness.StatusBar do
   """
 
   alias Raxol.UI.Components.Display.StatusBar, as: DisplayStatusBar
+  alias Raxol.UI.Components.Harness.Ids
 
   use Raxol.UI.Components.Base.Component
 
@@ -30,12 +31,7 @@ defmodule Raxol.UI.Components.Harness.StatusBar do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "harness-status-bar-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "harness-status-bar"),
       model: Keyword.get(props, :model, ""),
       turn_state: Keyword.get(props, :turn_state, :idle),
       context_pct: Keyword.get(props, :context_pct, 0),

@@ -8,6 +8,7 @@ defmodule Raxol.UI.Components.Harness.MemoryPanel do
   handed in via props.
   """
 
+  alias Raxol.UI.Components.Harness.Ids
   alias Raxol.UI.StyleHelper
   alias Raxol.View.Components
 
@@ -27,12 +28,7 @@ defmodule Raxol.UI.Components.Harness.MemoryPanel do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(
-          props,
-          :id,
-          "memory-panel-#{:erlang.unique_integer([:positive])}"
-        ),
+      id: Ids.default_id(props, "memory-panel"),
       title: Keyword.get(props, :title, "Memory"),
       items: Keyword.get(props, :items, []),
       style: Keyword.get(props, :style, %{}),
