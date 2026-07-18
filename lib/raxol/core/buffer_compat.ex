@@ -31,10 +31,7 @@ defmodule Raxol.Core.Buffer do
       for _y <- 0..(height - 1) do
         cells =
           for _x <- 0..(width - 1) do
-            %{
-              char: " ",
-              style: %{fg_color: nil, bg_color: nil, bold: false}
-            }
+            blank_cell()
           end
 
         %{cells: cells}
@@ -86,7 +83,7 @@ defmodule Raxol.Core.Buffer do
   end
 
   def get_cell(_buffer, _x, _y) do
-    %{char: " ", style: %{fg_color: nil, bg_color: nil, bold: false}}
+    blank_cell()
   end
 
   @doc "Set cell at coordinates"
@@ -148,5 +145,9 @@ defmodule Raxol.Core.Buffer do
       true -> List.replace_at(cells, cell_x, %{char: char, style: style})
       false -> cells
     end
+  end
+
+  defp blank_cell do
+    %{char: " ", style: %{fg_color: nil, bg_color: nil, bold: false}}
   end
 end
