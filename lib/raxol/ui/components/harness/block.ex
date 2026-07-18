@@ -732,8 +732,13 @@ defmodule Raxol.UI.Components.Harness.Block do
       children: [
         Components.text(content: safe_summary(block), style: %{}),
         Components.text(
+          # Site LEADS the message so it survives a narrow terminal's
+          # truncation: `Exception.message/1` for a BadMapError carries a
+          # multi-line inspected value that would otherwise push the
+          # `file:line` off the visible row (exactly what hid this crash's
+          # location in the field). Reason is capped to one short line.
           content:
-            "(render error: #{safe_reason(exception)}#{safe_site(stacktrace)})",
+            "(render error#{safe_site(stacktrace)}: #{safe_reason(exception)})",
           style: %{dim: true}
         )
       ]
@@ -783,7 +788,12 @@ defmodule Raxol.UI.Components.Harness.Block do
   # The exception's message, surfaced inline so a render fault shows WHY on
   # screen (dev-facing), not only in the log. Never itself raises.
   defp safe_reason(exception) do
-    Exception.message(exception)
+    exception
+    |> Exception.message()
+    |> String.split("\n", parts: 2)
+    |> hd()
+    |> String.trim()
+    |> String.slice(0, 80)
   rescue
     _ -> "unknown"
   end
