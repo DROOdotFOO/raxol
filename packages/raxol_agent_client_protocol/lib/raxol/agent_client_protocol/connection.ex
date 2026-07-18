@@ -13,7 +13,10 @@ defmodule Raxol.AgentClientProtocol.Connection.Ctx do
   `reply_ref` is present (`reference()`) for requests and `nil` for
   notifications. `rx_seq` is the inbound frame's monotone sequence stamp
   (IC-5c) — `begin_prompt` forwards it to the Session so cancel-vs-prompt
-  commutes by wire order.
+  commutes by wire order. `delivery_stamp` is the receiver-assigned
+  ordering key (`Raxol.AgentClientProtocol.Delivery.t()`) for a
+  `session/update` dispatch — `nil` for every other dispatch (transport-
+  ordering design §4.5).
   """
 
   @enforce_keys [:conn, :role]
@@ -23,6 +26,7 @@ defmodule Raxol.AgentClientProtocol.Connection.Ctx do
             handler_state: nil,
             reply_ref: nil,
             rx_seq: 0,
+            delivery_stamp: nil,
             session_sup: nil,
             task_sup: nil
 
@@ -33,8 +37,35 @@ defmodule Raxol.AgentClientProtocol.Connection.Ctx do
           handler_state: term(),
           reply_ref: reference() | nil,
           rx_seq: non_neg_integer(),
+          delivery_stamp: Raxol.AgentClientProtocol.Delivery.t() | nil,
           session_sup: pid() | nil,
           task_sup: pid() | nil
+        }
+end
+
+defmodule Raxol.AgentClientProtocol.Connection.TurnState do
+  @moduledoc """
+  Per-session open-turn state, populated only on a client-role Connection
+  (transport-ordering design §4.2, ADR-0030 clauses 1/5).
+
+  Opened by `Connection`'s outbound submit path at a successful
+  `session/prompt` async-owner submission (`reply_to = {:owner, ...}`);
+  closed by whichever of response / timeout / cancel / transport-down
+  resolves the request first. `token` is minted fresh (`make_ref/0`) at
+  open and never derived from any peer-supplied id (clause 5): a peer that
+  replays or reuses a session/request id cannot alias a stale turn's
+  straggler into a new turn, because the tokens differ by construction.
+  """
+
+  @enforce_keys [:token, :owner, :tag, :out_id]
+  defstruct token: nil, owner: nil, tag: nil, out_id: nil, next_ordinal: 0
+
+  @type t :: %__MODULE__{
+          token: reference(),
+          owner: pid(),
+          tag: term(),
+          out_id: term(),
+          next_ordinal: non_neg_integer()
         }
 end
 
@@ -121,8 +152,8 @@ defmodule Raxol.AgentClientProtocol.Connection do
   use GenServer
   require Logger
 
-  alias Raxol.AgentClientProtocol.{Capabilities, Error, Router}
-  alias Raxol.AgentClientProtocol.Connection.Ctx
+  alias Raxol.AgentClientProtocol.{Capabilities, Delivery, Error, Router}
+  alias Raxol.AgentClientProtocol.Connection.{Ctx, TurnState}
   alias Raxol.AgentClientProtocol.Rpc.{Message, Notification, Request, RequestId, Response}
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.CancelNotification
   alias Raxol.AgentClientProtocol.Schema.LifecycleExtras.CancelRequestNotification
@@ -158,7 +189,19 @@ defmodule Raxol.AgentClientProtocol.Connection do
             handler: nil,
             handler_state: nil,
             task_sup: nil,
-            max_in: @default_max_inbound
+            max_in: @default_max_inbound,
+            # Client-role-only turn-delivery state (transport-ordering design
+            # §4.2). `turns`: session_id => %TurnState{} for the session's
+            # currently open `session/prompt` turn. `turn_ids`: the reverse
+            # index, out_id => session_id, so the response/timeout/cancel
+            # paths can pop a turn by the wire id they already have in hand.
+            # `oot_seq`: session_id => count of out-of-turn (no open turn)
+            # `session/update` notifications stamped so far — receiver-
+            # assigned, monotone, never reset (clause 5's out-of-turn
+            # namespace).
+            turns: %{},
+            turn_ids: %{},
+            oot_seq: %{}
 
   @type role :: :agent | :client
 
@@ -249,6 +292,26 @@ defmodule Raxol.AgentClientProtocol.Connection do
   def close(conn) when is_pid(conn) do
     reject_self!(conn)
     GenServer.call(conn, :close)
+  end
+
+  @doc """
+  Race-free base-ordinal accessor for a session's delivery stream
+  (transport-ordering design §4.5). Because this is a `GenServer.call`
+  (serialized with the demux point that assigns ordinals), a caller that
+  subscribes to the broadcast path THEN calls this learns an exact base:
+  every stamp assigned after this call returns is guaranteed to reach a
+  live subscriber, and every stamp `<= ordinal` is pre-subscription.
+  `turn: nil` means the session currently has no open `session/prompt`
+  turn (the out-of-turn namespace applies). NOTE: this accessor is the
+  seam the bounded Reorder engine (a later unit) consumes to compute its
+  `:next` base; the primary direct-delivery path (`Client.prompt/3`,
+  `prompt_stream/4`) does not need it at all.
+  """
+  @spec update_watermark(pid(), String.t()) ::
+          {:ok, %{turn: reference() | nil, ordinal: non_neg_integer()}}
+  def update_watermark(conn, session_id) when is_pid(conn) and is_binary(session_id) do
+    reject_self!(conn)
+    GenServer.call(conn, {:update_watermark, session_id})
   end
 
   defp reject_self!(conn) do
@@ -399,8 +462,25 @@ defmodule Raxol.AgentClientProtocol.Connection do
         {entry, pending_out} = Map.pop(state.pending_out, id)
         if entry && entry.timer_ref, do: Process.cancel_timer(entry.timer_ref)
         best_effort_cancel_notify(id, state)
-        {:reply, :ok, %{state | pending_out: pending_out, out_tags: out_tags}}
+        # §4.6: pop any open turn SILENTLY — no `:acp_turn_end` — IC-3's
+        # "delivers nothing" contract for a consumed entry is preserved.
+        state = pop_turn_silent(id, %{state | pending_out: pending_out, out_tags: out_tags})
+        {:reply, :ok, state}
     end
+  end
+
+  # §4.5: race-free watermark accessor. A `GenServer.call`, so it is
+  # serialized with the demux point (`dispatch_inbound_notification/3`) —
+  # every ordinal assigned after this reply is observed is guaranteed not
+  # yet delivered to any pre-existing broadcast subscriber.
+  def handle_call({:update_watermark, session_id}, _from, state) do
+    watermark =
+      case Map.get(state.turns, session_id) do
+        %TurnState{token: token, next_ordinal: n} -> %{turn: token, ordinal: max(n - 1, 0)}
+        nil -> %{turn: nil, ordinal: Map.get(state.oot_seq, session_id, 0)}
+      end
+
+    {:reply, {:ok, watermark}, state}
   end
 
   # -- Delegated reply (§4.6, IC-4) --
@@ -487,9 +567,95 @@ defmodule Raxol.AgentClientProtocol.Connection do
                     out_tags: add_tag(state.out_tags, reply_to, id)
                 }
 
+                st = maybe_open_turn(method, reply_to, params, id, st)
+
                 {:parked, st}
             end
         end
+    end
+  end
+
+  # ===========================================================================
+  # Turn open (§4.3) — a `session/prompt` submitted via `async_request`
+  # (reply_to = {:owner, owner, tag}) opens a turn: a receiver-minted token
+  # namespacing every subsequent `session/update` for its session until the
+  # turn closes (§4.6). A SYNC `Connection.request/4` caller (`{:call,
+  # from}`) is blocked in `GenServer.call` and cannot receive a `send/2`
+  # delivery anyway (the existing rationale at the top of this module,
+  # §5/§7), so its session's updates are stamped out-of-turn instead
+  # (`oot_seq`) — there is no owner pid to open a turn for.
+  # ===========================================================================
+
+  defp maybe_open_turn("session/prompt", {:owner, owner, tag}, params, id, state) do
+    case prompt_session_id(params) do
+      nil ->
+        state
+
+      session_id ->
+        state = close_replaced_turn(state, session_id)
+        turn = %TurnState{token: make_ref(), owner: owner, tag: tag, out_id: id, next_ordinal: 0}
+
+        %{
+          state
+          | turns: Map.put(state.turns, session_id, turn),
+            turn_ids: Map.put(state.turn_ids, id, session_id)
+        }
+    end
+  end
+
+  defp maybe_open_turn(_method, _reply_to, _params, _id, state), do: state
+
+  defp prompt_session_id(%{session_id: session_id}) when is_binary(session_id), do: session_id
+  defp prompt_session_id(%{"sessionId" => session_id}) when is_binary(session_id), do: session_id
+  defp prompt_session_id(_other), do: nil
+
+  # "One turn per session" (§4.3): a second `session/prompt` for a session
+  # with an already-open turn REPLACES it — the OLD turn's owner is sent its
+  # `{:acp_turn_end, old_tag, count}` companion first. Session invariant I12
+  # rejects this agent-side anyway; receiver behavior here is defined, not
+  # undefined.
+  defp close_replaced_turn(state, session_id) do
+    case Map.get(state.turns, session_id) do
+      nil ->
+        state
+
+      %TurnState{tag: old_tag, owner: old_owner, out_id: old_out_id, next_ordinal: count} ->
+        send(old_owner, {:acp_turn_end, old_tag, count})
+
+        %{
+          state
+          | turns: Map.delete(state.turns, session_id),
+            turn_ids: Map.delete(state.turn_ids, old_out_id)
+        }
+    end
+  end
+
+  # §4.6: pop turn state for `out_id` and send its `{:acp_turn_end, ...}`
+  # companion, if one is open. Called immediately BEFORE `deliver_outcome/2`
+  # on both the response and timeout paths, from this same process, so the
+  # owner's mailbox order is updates 0..count-1, then turn_end, then result
+  # — one sender, FIFO by construction.
+  defp close_turn_for(out_id, state) do
+    case Map.pop(state.turn_ids, out_id) do
+      {nil, _} ->
+        state
+
+      {session_id, turn_ids} ->
+        {turn, turns} = Map.pop(state.turns, session_id)
+        if turn, do: send(turn.owner, {:acp_turn_end, turn.tag, turn.next_ordinal})
+        %{state | turns: turns, turn_ids: turn_ids}
+    end
+  end
+
+  # §4.6: `cancel_request/2`'s silent pop — no `:acp_turn_end` (a cancelled
+  # entry delivers nothing, IC-3).
+  defp pop_turn_silent(out_id, state) do
+    case Map.pop(state.turn_ids, out_id) do
+      {nil, _} ->
+        state
+
+      {session_id, turn_ids} ->
+        %{state | turns: Map.delete(state.turns, session_id), turn_ids: turn_ids}
     end
   end
 
@@ -516,6 +682,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
         {:noreply, state}
 
       {%{reply_to: rt}, pending_out} ->
+        state = close_turn_for(id, state)
         deliver_outcome(rt, {:error, :timeout})
         best_effort_cancel_notify(id, state)
         {:noreply, %{state | pending_out: pending_out, out_tags: drop_tag(state.out_tags, rt)}}
@@ -984,47 +1151,91 @@ defmodule Raxol.AgentClientProtocol.Connection do
         route_session_cancel(notif.params, rx_seq, state)
 
       true ->
-        dispatch_inbound_notification(notif, state)
+        dispatch_inbound_notification(notif, rx_seq, state)
     end
   end
 
-  defp dispatch_inbound_notification(%Notification{method: method, params: params}, state) do
+  defp dispatch_inbound_notification(%Notification{method: method, params: params}, rx_seq, state) do
     case Router.decode(state.role, :notification, method, params) do
       {:error, _reason} ->
         Logger.debug("ACP: unknown/invalid notification #{method} dropped")
         emit_telemetry([:raxol, :acp, :unknown_notification], %{method: method})
         {:noreply, state}
 
+      # §4.4: this is the actual demux-point fix. `session/update` is
+      # stamped AND delivered directly to the open turn's owner (or stamped
+      # out-of-turn) BEFORE the handler dispatch task is spawned below —
+      # the same `send/2`-from-this-process operation `deliver_outcome/2`
+      # already performs for the terminal result, never user code running
+      # on the Connection loop (that was round 1's mistake, not this one).
+      {:ok, {:session_update, notif} = dispatchable} ->
+        {stamp, state} = stamp_and_deliver_update(notif, rx_seq, state)
+        dispatch_notification_task(method, dispatchable, stamp, state)
+
       {:ok, dispatchable} ->
-        ctx = %Ctx{
-          conn: self(),
-          role: state.role,
-          caps: state.caps,
-          handler_state: state.handler_state,
-          reply_ref: nil,
-          rx_seq: 0,
-          session_sup: state.session_sup,
-          task_sup: state.task_sup
-        }
+        dispatch_notification_task(method, dispatchable, nil, state)
+    end
+  end
 
-        # A notification carries no reply obligation, so an over-capacity spawn is
-        # DROPPED (log + telemetry), never a wire frame — and never a raise that
-        # would take the Connection down (§4.4, flood-DoS guard symmetry).
-        case start_dispatch_task(state, fn ->
-               run_dispatch(state.role, state.handler, dispatchable, ctx)
-             end) do
-          {:error, reason} ->
-            Logger.warning(
-              "ACP: notification #{method} dropped — dispatch task_sup saturated (#{inspect(reason)})"
-            )
+  # §4.4/§4.5: the receiver-assigned contiguous per-turn ordinal, and the
+  # direct single-sender delivery to the turn owner. `notif.session_id` has
+  # an open turn ⇒ deliver `{:acp_turn_update, tag, ordinal, notif}` to its
+  # owner and advance `next_ordinal`; no open turn ⇒ stamp out-of-turn
+  # (`oot_seq`, per-session, monotone, never reset — clause 5's out-of-turn
+  # namespace). Returns the `Delivery.Stamp` for the broadcast path's `Ctx`.
+  defp stamp_and_deliver_update(%{session_id: session_id} = notif, rx_seq, state) do
+    case Map.get(state.turns, session_id) do
+      %TurnState{owner: owner, tag: tag, token: token, next_ordinal: n} ->
+        send(owner, {:acp_turn_update, tag, n, notif})
 
-            emit_telemetry([:raxol, :acp, :notification_shed], %{method: method})
-            {:noreply, state}
+        Delivery.emit(%{
+          session: session_id,
+          turn: token,
+          decision: :emit,
+          buffered: 0,
+          ordinal: n
+        })
 
-          {:ok, task} ->
-            {:noreply,
-             %{state | task_index: Map.put(state.task_index, task.ref, {:notification, method})}}
-        end
+        state = put_in(state.turns[session_id].next_ordinal, n + 1)
+        {Delivery.new(token, n, rx_seq), state}
+
+      nil ->
+        ordinal = Map.get(state.oot_seq, session_id, 0)
+        state = %{state | oot_seq: Map.put(state.oot_seq, session_id, ordinal + 1)}
+        {Delivery.new(nil, ordinal, rx_seq), state}
+    end
+  end
+
+  defp dispatch_notification_task(method, dispatchable, stamp, state) do
+    ctx = %Ctx{
+      conn: self(),
+      role: state.role,
+      caps: state.caps,
+      handler_state: state.handler_state,
+      reply_ref: nil,
+      rx_seq: 0,
+      delivery_stamp: stamp,
+      session_sup: state.session_sup,
+      task_sup: state.task_sup
+    }
+
+    # A notification carries no reply obligation, so an over-capacity spawn is
+    # DROPPED (log + telemetry), never a wire frame — and never a raise that
+    # would take the Connection down (§4.4, flood-DoS guard symmetry).
+    case start_dispatch_task(state, fn ->
+           run_dispatch(state.role, state.handler, dispatchable, ctx)
+         end) do
+      {:error, reason} ->
+        Logger.warning(
+          "ACP: notification #{method} dropped — dispatch task_sup saturated (#{inspect(reason)})"
+        )
+
+        emit_telemetry([:raxol, :acp, :notification_shed], %{method: method})
+        {:noreply, state}
+
+      {:ok, task} ->
+        {:noreply,
+         %{state | task_index: Map.put(state.task_index, task.ref, {:notification, method})}}
     end
   end
 
@@ -1081,6 +1292,7 @@ defmodule Raxol.AgentClientProtocol.Connection do
 
       {%{reply_to: rt, method: method, timer_ref: timer}, pending_out} ->
         if timer, do: Process.cancel_timer(timer)
+        state = close_turn_for(id, state)
         outcome = decode_response(resp, method)
         deliver_outcome(rt, outcome)
 
@@ -1180,6 +1392,9 @@ defmodule Raxol.AgentClientProtocol.Connection do
         pending_in: %{},
         task_index: %{},
         reply_refs: %{},
+        turns: %{},
+        turn_ids: %{},
+        oot_seq: %{},
         phase: :closed
     }
   end
