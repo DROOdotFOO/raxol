@@ -137,6 +137,34 @@ carries the family legend.
 | F5 | Volume / no-loss: no data loss or reordering across 10k frames fed in randomly sized chunks; the buffer drains empty. | `framer_test.exs` `describe "F5 volume ..."` |
 | F6 | Re-chunking invariance (property): any re-chunking of concatenated JSON lines yields the original frames in order; CRLF and LF terminators are equivalent; an oversized frame errors then resyncs (totality). | `framer_test.exs` `describe "F6 re-chunking invariance ..."` |
 
+## Family `D` — delivery / transport ordering (D1..D9) — **[NEW registration]**
+
+Home: `test/connection_delivery_test.exs` (D1/D2/D3/D5/D7/D9 — the Connection
+unit + `Client.prompt/3`/`prompt_stream/4`'s direct turn-delivery channel);
+`client_ergonomics_test.exs`'s `prompt_stream/4` describe block already covers
+D6's positive case. D4 (the bounded broadcast-path Reorder engine) is
+**RESERVED** here — no `Delivery.Reorder` module exists yet; a later unit owns
+it. Registered per the transport-ordering design
+(`TRANSPORT_ORDERING_DESIGN.md` §4/§8, ADR-0030 clauses 1/2/3/5/9): the
+Connection stamps a receiver-assigned, contiguous per-turn ordinal at the
+demux point (`dispatch_inbound_notification/3`) and delivers
+`{:acp_turn_update, tag, ordinal, notification}` to the turn's owner DIRECTLY,
+itself — the same single-sender operation `deliver_outcome/2` already uses for
+the terminal result — so the owner's mailbox order is wire order with no
+reorder buffer and no settle timer needed on this path.
+
+| ID | Canonical property | Enforcing test (`file:line`) |
+|----|--------------------|------------------------------|
+| D1 | Order: the turn owner observes a turn's updates in stamped order 0..N-1 for ANY interleaving/delay of the per-notification dispatch tasks (direct delivery happens at demux time, before any task is spawned). | `connection_delivery_test.exs` `describe "D1 order"` |
+| D2 | No silent drop: `delivered < turn_end count` at an ok-result ⇒ `{:error, {:delivery_gap, _}}`, never a silent partial list (the real single-sender Connection cannot produce a gap at all — D1 is the proof; a fault-injected fake Connection double manufactures it here). | `connection_delivery_test.exs` `describe "D2 no silent drop / fail-the-turn"` |
+| D3 | No timer in the guarantee: `Client.prompt/3`'s and `prompt_stream/4`'s receive loops (and `Delivery`) contain no wall-clock `after`/`Process.send_after` — the Connection's own terminal-result guarantee (exactly one `{:acp_result, tag, _}` per accepted submission) bounds the loop instead. | `connection_delivery_test.exs` `describe "D3 no wall-clock timer (grep-gate)"` |
+| D4 | **RESERVED** — bounded Reorder-engine occupancy; no `Delivery.Reorder` module exists yet (a later unit's scope). | — |
+| D5 | Peer cannot wedge or steer delivery: a hostile agent that replays/freezes/garbles `_meta` (incl. the retired `update_seq` shape) changes NOTHING about stamped order or delivery; `_meta` reaches the handler byte-identical (opaque, never read for ordering). | `connection_delivery_test.exs` `describe "D5 hostile peer cannot steer delivery"` |
+| D6 | Streaming live: `prompt_stream/4` invokes `on_update` synchronously at receipt, strictly before the terminal result, with no accumulation (O(1) — the loop keeps no update list at all). | `client_ergonomics_test.exs:209` (positive case); `connection_delivery_test.exs` D2's `prompt_stream/4` gap test re-confirms the no-settle-timer half |
+| D7 | Recursive namespace: a straggler demuxed after a turn's result is stamped out-of-turn and never reaches the departed owner as a turn message; a fresh turn for the same session gets a fresh receiver-minted token with ordinals reset to 0 (no cross-turn aliasing); two sessions' concurrent turns never cross-deliver. | `connection_delivery_test.exs` `describe "D7 recursive turn namespace"` |
+| D8 | **RESERVED** — replay idempotence across reconnect (reattach/journal integration); a later unit's scope. | — |
+| D9 | Telemetry contract: every delivery decision emits `[:raxol, :acp, :delivery]` with `%{session, turn, decision, buffered, ordinal}` (direct path: `decision: :emit, buffered: 0`); the client's fail-the-turn gap emits exactly one `:fail` decision. Asserted via a test-local literal `:telemetry` module (the package has no real `:telemetry` dependency, deviation #5). | `connection_delivery_test.exs` `describe "D9 telemetry contract"` |
+
 ---
 
 # EXTENSION
