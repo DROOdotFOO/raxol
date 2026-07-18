@@ -26,7 +26,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
   use Raxol.Core.Behaviours.BaseManager
   require Logger
 
-  alias Raxol.Symphony.Orchestrator
+  alias Raxol.Symphony.{Orchestrator, OrchestratorClient}
   alias Raxol.Symphony.Surfaces.Telegram.Formatter
 
   @compile {:no_warn_undefined, [Telegex]}
@@ -34,7 +34,8 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
   @type state :: %{
           orchestrator: GenServer.server(),
           chat_ids: [integer() | String.t()],
-          send_fn: (integer() | String.t(), String.t(), Formatter.keyboard() -> any()),
+          send_fn: (integer() | String.t(), String.t(), Formatter.keyboard() ->
+                      any()),
           include_ticks?: boolean()
         }
 
@@ -90,7 +91,8 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
              | {:resumed, binary()}
              | {:run_pushed, binary()}}
           | {:error, atom()}
-  def handle_callback(callback_data, opts \\ []) when is_binary(callback_data) do
+  def handle_callback(callback_data, opts \\ [])
+      when is_binary(callback_data) do
     orch = Keyword.get(opts, :orchestrator, Raxol.Symphony.Orchestrator)
     notifier = Keyword.get(opts, :notifier, __MODULE__)
 
@@ -99,52 +101,40 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
     |> dispatch(orch, notifier)
   end
 
-  defp dispatch(:refresh, orch, _notifier), do: do_refresh(orch)
+  defp dispatch(:refresh, orch, _notifier), do: OrchestratorClient.refresh(orch)
   defp dispatch(:list, orch, notifier), do: do_list(orch, notifier)
   defp dispatch(:dismiss, _orch, _notifier), do: :noop
-  defp dispatch({:stop, id}, orch, _notifier), do: do_stop(orch, id)
-  defp dispatch({:run_detail, id}, orch, notifier), do: do_run_detail(orch, notifier, id)
-  defp dispatch({:approve, _id}, _orch, _notifier), do: :noop
-  defp dispatch({:resume, id, decision}, orch, _notifier), do: do_resume(orch, id, decision)
-  defp dispatch({:unknown, _raw}, _orch, _notifier), do: :noop
 
-  defp do_refresh(orch) do
-    _ = safe_call(fn -> Orchestrator.refresh(orch) end)
-    {:ok, :refresh}
-  end
+  defp dispatch({:stop, id}, orch, _notifier),
+    do: OrchestratorClient.stop(orch, id)
+
+  defp dispatch({:run_detail, id}, orch, notifier),
+    do: do_run_detail(orch, notifier, id)
+
+  defp dispatch({:approve, _id}, _orch, _notifier), do: :noop
+
+  defp dispatch({:resume, id, decision}, orch, _notifier),
+    do: OrchestratorClient.resume(orch, id, decision)
+
+  defp dispatch({:unknown, _raw}, _orch, _notifier), do: :noop
 
   defp do_list(_orch, nil), do: :noop
 
   defp do_list(_orch, notifier) do
-    case safe_call(fn -> push_snapshot(notifier) end) do
+    case OrchestratorClient.safe_call(fn -> push_snapshot(notifier) end) do
       {:ok, _} -> {:ok, :listed}
       _ -> {:error, :notifier_unavailable}
-    end
-  end
-
-  defp do_stop(orch, id) do
-    case safe_call(fn -> Orchestrator.stop_run(orch, id) end) do
-      {:ok, :ok} -> {:ok, :stopped}
-      {:ok, {:error, reason}} -> {:error, reason}
-      _ -> {:error, :orchestrator_unavailable}
-    end
-  end
-
-  defp do_resume(orch, id, decision) do
-    case safe_call(fn -> Orchestrator.resume_run(orch, id, decision) end) do
-      {:ok, :ok} -> {:ok, {:resumed, decision}}
-      {:ok, {:error, reason}} -> {:error, reason}
-      _ -> {:error, :orchestrator_unavailable}
     end
   end
 
   defp do_run_detail(_orch, nil, _id), do: :noop
 
   defp do_run_detail(orch, notifier, id) do
-    case safe_call(fn -> Orchestrator.snapshot(orch) end) do
+    case OrchestratorClient.safe_call(fn -> Orchestrator.snapshot(orch) end) do
       {:ok, snapshot} ->
         entry =
-          (snapshot[:running] || []) ++ (snapshot[:paused] || []) ++ (snapshot[:retrying] || [])
+          ((snapshot[:running] || []) ++
+             (snapshot[:paused] || []) ++ (snapshot[:retrying] || []))
           |> Enum.find(&(Map.get(&1, :issue_id) == id))
 
         if entry do
@@ -176,7 +166,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
 
     # Subscribe synchronously in init/1 so callers can race-free trigger
     # orchestrator events as soon as start_link returns.
-    case safe_call(fn -> Orchestrator.subscribe(orch) end) do
+    case OrchestratorClient.safe_call(fn -> Orchestrator.subscribe(orch) end) do
       {:ok, :ok} ->
         :ok
 
@@ -259,17 +249,18 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
   end
 
   defp safe_snapshot(orch) do
-    case safe_call(fn -> Orchestrator.snapshot(orch) end) do
-      {:ok, %{} = snap} -> snap
-      _ -> %{counts: %{running: 0, retrying: 0}, running: [], retrying: [], generated_at: nil}
-    end
-  end
+    case OrchestratorClient.safe_call(fn -> Orchestrator.snapshot(orch) end) do
+      {:ok, %{} = snap} ->
+        snap
 
-  defp safe_call(fun) do
-    {:ok, fun.()}
-  catch
-    :exit, _ -> :error
-    :error, _ -> :error
+      _ ->
+        %{
+          counts: %{running: 0, retrying: 0},
+          running: [],
+          retrying: [],
+          generated_at: nil
+        }
+    end
   end
 
   defp default_send(chat_id, text, keyboard) do

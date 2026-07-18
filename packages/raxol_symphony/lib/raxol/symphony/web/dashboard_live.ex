@@ -36,7 +36,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
 
     use Phoenix.LiveView
 
-    alias Raxol.Symphony.Orchestrator
+    alias Raxol.Symphony.{Orchestrator, OrchestratorClient}
 
     @poll_ms 1_000
 
@@ -73,7 +73,10 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
 
     @impl true
     def handle_event("refresh", _params, socket) do
-      _ = safe_call(fn -> Orchestrator.refresh(socket.assigns.orchestrator) end)
+      _ =
+        OrchestratorClient.safe_call(fn ->
+          Orchestrator.refresh(socket.assigns.orchestrator)
+        end)
 
       {:noreply,
        socket
@@ -82,7 +85,11 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     end
 
     def handle_event("stop_run", %{"issue_id" => id}, socket) do
-      result = safe_call(fn -> Orchestrator.stop_run(socket.assigns.orchestrator, id) end)
+      result =
+        OrchestratorClient.safe_call(fn ->
+          Orchestrator.stop_run(socket.assigns.orchestrator, id)
+        end)
+
       msg = stop_run_message(id, result)
 
       {:noreply,
@@ -109,6 +116,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     defp format_callback_result(_raw, {:ok, :refresh}), do: "refresh requested"
     defp format_callback_result(_raw, {:ok, :listed}), do: "snapshot refreshed"
     defp format_callback_result(_raw, {:ok, :stopped}), do: "stopped"
+
     defp format_callback_result(_raw, {:ok, {:resumed, decision}}),
       do: "resumed (#{decision})"
 
@@ -263,17 +271,23 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     Refreshes the snapshot in the assigns map by re-querying the orchestrator.
     Used internally and exposed for unit tests.
     """
-    @spec refresh_assigns(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+    @spec refresh_assigns(Phoenix.LiveView.Socket.t()) ::
+            Phoenix.LiveView.Socket.t()
     def refresh_assigns(socket) do
       assign(socket, :snapshot, safe_snapshot(socket.assigns.orchestrator))
     end
 
     @doc "Resolve the orchestrator reference from session or fallback to default."
-    @spec resolve_orchestrator(map(), Phoenix.LiveView.Socket.t()) :: GenServer.server()
+    @spec resolve_orchestrator(map(), Phoenix.LiveView.Socket.t()) ::
+            GenServer.server()
     def resolve_orchestrator(session, _socket) do
       case Map.get(session, "orchestrator") do
         nil ->
-          Application.get_env(:raxol_symphony, :liveview_orchestrator, Orchestrator)
+          Application.get_env(
+            :raxol_symphony,
+            :liveview_orchestrator,
+            Orchestrator
+          )
 
         atom when is_atom(atom) ->
           atom
@@ -311,21 +325,17 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     defp counts(_), do: %{running: 0, retrying: 0}
 
     defp safe_snapshot(orch) do
-      case safe_call(fn -> Orchestrator.snapshot(orch) end) do
+      case OrchestratorClient.safe_call(fn -> Orchestrator.snapshot(orch) end) do
         {:ok, %{} = snap} -> snap
         _ -> empty_snapshot()
       end
     end
 
-    defp safe_call(fun) do
-      {:ok, fun.()}
-    catch
-      :exit, _ -> :error
-      :error, _ -> :error
-    end
-
     defp stop_run_message(id, {:ok, :ok}), do: "stopped #{id}"
-    defp stop_run_message(id, {:ok, {:error, :not_running}}), do: "#{id} not running"
+
+    defp stop_run_message(id, {:ok, {:error, :not_running}}),
+      do: "#{id} not running"
+
     defp stop_run_message(id, _), do: "stop #{id} failed"
 
     defp format_event(nil), do: "(no events yet)"
@@ -336,7 +346,9 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     defp format_reason(reason), do: Raxol.Symphony.PauseReason.format(reason)
 
     defp format_ms(ms) when is_integer(ms) and ms < 1_000, do: "#{ms}ms"
-    defp format_ms(ms) when is_integer(ms) and ms < 60_000, do: "#{div(ms, 1000)}s"
+
+    defp format_ms(ms) when is_integer(ms) and ms < 60_000,
+      do: "#{div(ms, 1000)}s"
 
     defp format_ms(ms) when is_integer(ms) do
       mins = div(ms, 60_000)

@@ -35,7 +35,7 @@ if Code.ensure_loaded?(Plug.Router) do
 
     use Plug.Router
 
-    alias Raxol.Symphony.Orchestrator
+    alias Raxol.Symphony.{Orchestrator, OrchestratorClient}
 
     plug(Plug.Parsers,
       parsers: [:json],
@@ -66,14 +66,16 @@ if Code.ensure_loaded?(Plug.Router) do
 
     post "/api/v1/refresh" do
       orch = orchestrator(conn)
-      _ = safe_call(fn -> Orchestrator.refresh(orch) end)
+      _ = OrchestratorClient.safe_call(fn -> Orchestrator.refresh(orch) end)
       send_json(conn, 200, %{status: "refreshed"})
     end
 
     post "/api/v1/runs/:issue_id/stop" do
       orch = orchestrator(conn)
 
-      case safe_call(fn -> Orchestrator.stop_run(orch, issue_id) end) do
+      case OrchestratorClient.safe_call(fn ->
+             Orchestrator.stop_run(orch, issue_id)
+           end) do
         {:ok, :ok} ->
           send_json(conn, 200, %{status: "stopped", issue_id: issue_id})
 
@@ -81,7 +83,10 @@ if Code.ensure_loaded?(Plug.Router) do
           send_json(conn, 404, %{status: "not_running", issue_id: issue_id})
 
         _ ->
-          send_json(conn, 503, %{status: "error", message: "orchestrator unavailable"})
+          send_json(conn, 503, %{
+            status: "error",
+            message: "orchestrator unavailable"
+          })
       end
     end
 
@@ -120,7 +125,7 @@ if Code.ensure_loaded?(Plug.Router) do
     end
 
     defp safe_snapshot(orch) do
-      case safe_call(fn -> Orchestrator.snapshot(orch) end) do
+      case OrchestratorClient.safe_call(fn -> Orchestrator.snapshot(orch) end) do
         {:ok, %{} = snap} ->
           snap
 
@@ -140,13 +145,6 @@ if Code.ensure_loaded?(Plug.Router) do
             orchestrator_unavailable: true
           }
       end
-    end
-
-    defp safe_call(fun) do
-      {:ok, fun.()}
-    catch
-      :exit, _ -> :error
-      :error, _ -> :error
     end
   end
 end

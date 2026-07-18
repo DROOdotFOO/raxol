@@ -35,7 +35,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
   use Raxol.Core.Behaviours.BaseManager
   require Logger
 
-  alias Raxol.Symphony.Orchestrator
+  alias Raxol.Symphony.{Orchestrator, OrchestratorClient}
   alias Raxol.Symphony.Surfaces.Watch.Formatter
 
   @compile {:no_warn_undefined, [Raxol.Watch.Notifier]}
@@ -86,39 +86,21 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
     |> dispatch_action(orch)
   end
 
-  defp dispatch_action(:refresh, orch), do: do_refresh(orch)
-  defp dispatch_action(:list, orch), do: do_refresh(orch)
+  defp dispatch_action(:refresh, orch), do: OrchestratorClient.refresh(orch)
+  defp dispatch_action(:list, orch), do: OrchestratorClient.refresh(orch)
   defp dispatch_action(:dismiss, _orch), do: :noop
-  defp dispatch_action({:stop, id}, orch), do: do_stop(orch, id)
+  defp dispatch_action({:stop, id}, orch), do: OrchestratorClient.stop(orch, id)
   defp dispatch_action({:run_detail, _id}, _orch), do: :noop
   defp dispatch_action({:approve, _id}, orch), do: do_approve(orch)
-  defp dispatch_action({:resume, id, decision}, orch), do: do_resume(orch, id, decision)
+
+  defp dispatch_action({:resume, id, decision}, orch),
+    do: OrchestratorClient.resume(orch, id, decision)
+
   defp dispatch_action({:unknown, _raw}, _orch), do: :noop
 
-  defp do_refresh(orch) do
-    _ = safe_call(fn -> Orchestrator.refresh(orch) end)
-    {:ok, :refresh}
-  end
-
   defp do_approve(orch) do
-    _ = safe_call(fn -> Orchestrator.refresh(orch) end)
+    _ = OrchestratorClient.safe_call(fn -> Orchestrator.refresh(orch) end)
     {:ok, :approve_acknowledged}
-  end
-
-  defp do_stop(orch, id) do
-    case safe_call(fn -> Orchestrator.stop_run(orch, id) end) do
-      {:ok, :ok} -> {:ok, :stopped}
-      {:ok, {:error, reason}} -> {:error, reason}
-      _ -> {:error, :orchestrator_unavailable}
-    end
-  end
-
-  defp do_resume(orch, id, decision) do
-    case safe_call(fn -> Orchestrator.resume_run(orch, id, decision) end) do
-      {:ok, :ok} -> {:ok, {:resumed, decision}}
-      {:ok, {:error, reason}} -> {:error, reason}
-      _ -> {:error, :orchestrator_unavailable}
-    end
   end
 
   # -- GenServer callbacks ----------------------------------------------------
@@ -130,7 +112,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
 
     state = %{orchestrator: orch, push_fn: push_fn}
 
-    case safe_call(fn -> Orchestrator.subscribe(orch) end) do
+    case OrchestratorClient.safe_call(fn -> Orchestrator.subscribe(orch) end) do
       {:ok, :ok} ->
         :ok
 
@@ -180,17 +162,10 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
   end
 
   defp safe_snapshot(orch) do
-    case safe_call(fn -> Orchestrator.snapshot(orch) end) do
+    case OrchestratorClient.safe_call(fn -> Orchestrator.snapshot(orch) end) do
       {:ok, %{} = snap} -> snap
       _ -> %{counts: %{running: 0, retrying: 0}, running: [], retrying: []}
     end
-  end
-
-  defp safe_call(fun) do
-    {:ok, fun.()}
-  catch
-    :exit, _ -> :error
-    :error, _ -> :error
   end
 
   defp default_push(notification) do
