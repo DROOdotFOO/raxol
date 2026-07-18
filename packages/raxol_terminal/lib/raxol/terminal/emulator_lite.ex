@@ -14,6 +14,8 @@ defmodule Raxol.Terminal.EmulatorLite do
   alias Raxol.Terminal.ModeManager
   alias Raxol.Terminal.ScreenBuffer
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   @default_width Raxol.Core.Defaults.terminal_width()
   @default_height Raxol.Core.Defaults.terminal_height()
   @default_scrollback Raxol.Core.Defaults.scrollback_limit()
@@ -286,8 +288,8 @@ defmodule Raxol.Terminal.EmulatorLite do
   Moves the cursor to a specific position.
   """
   def move_cursor(%__MODULE__{} = emulator, x, y) do
-    new_x = max(0, min(x, emulator.width - 1))
-    new_y = max(0, min(y, emulator.height - 1))
+    new_x = clamp_to_bounds(x, emulator.width)
+    new_y = clamp_to_bounds(y, emulator.height)
     new_cursor = %{emulator.cursor | position: {new_x, new_y}}
     %{emulator | cursor: new_cursor}
   end
@@ -330,8 +332,8 @@ defmodule Raxol.Terminal.EmulatorLite do
 
   defp constrain_cursor(cursor, width, height) do
     {x, y} = cursor.position
-    new_x = max(0, min(x, width - 1))
-    new_y = max(0, min(y, height - 1))
+    new_x = clamp_to_bounds(x, width)
+    new_y = clamp_to_bounds(y, height)
     %{cursor | position: {new_x, new_y}}
   end
 end

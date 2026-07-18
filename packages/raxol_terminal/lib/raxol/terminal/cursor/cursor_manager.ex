@@ -6,11 +6,12 @@ defmodule Raxol.Terminal.Cursor.Manager do
 
   use Raxol.Core.Behaviours.BaseManager
 
-
   alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Cursor.{Callbacks, Movement}
   alias Raxol.Terminal.Cursor.CursorState, as: State
   alias Raxol.Terminal.Emulator
+
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
 
   defstruct row: 0,
             col: 0,
@@ -200,8 +201,8 @@ defmodule Raxol.Terminal.Cursor.Manager do
   Moves the cursor to a specific position with bounds clamping.
   """
   def move_to(%__MODULE__{} = cursor, row, col, width, height) do
-    clamped_row = max(0, min(row, height - 1))
-    clamped_col = max(0, min(col, width - 1))
+    clamped_row = clamp_to_bounds(row, height)
+    clamped_col = clamp_to_bounds(col, width)
 
     %{
       cursor
@@ -404,8 +405,8 @@ defmodule Raxol.Terminal.Cursor.Manager do
           non_neg_integer()
         ) :: Emulator.t()
   def set_emulator_position(emulator, x, y) do
-    x = max(0, min(x, emulator.width - 1))
-    y = max(0, min(y, emulator.height - 1))
+    x = clamp_to_bounds(x, emulator.width)
+    y = clamp_to_bounds(y, emulator.height)
     %{emulator | cursor: %{emulator.cursor | position: {x, y}}}
   end
 
