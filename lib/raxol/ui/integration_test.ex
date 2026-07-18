@@ -1,6 +1,11 @@
 defmodule Raxol.UI.IntegrationTest do
+  @moduledoc deprecated: "Scheduled for removal in Raxol 3.0; no replacement planned."
   @moduledoc """
   Integration testing utilities for Raxol applications.
+
+  > #### Deprecated {: .warning}
+  >
+  > This module has no callers and is scheduled for removal in Raxol 3.0.
 
   Provides helpers for testing complete application flows including
   component interactions, state management, and event handling.
