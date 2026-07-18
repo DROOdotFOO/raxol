@@ -54,8 +54,7 @@ defmodule Raxol.Effects.BorderBeam.Effects.Clouds do
     variant = Map.get(opts, :variant, :mono)
     strength = Map.get(opts, :strength, 0.7)
     softness = Map.get(opts, :softness, 0.55) |> max(0.0) |> min(1.0)
-    palette_tup = Colors.palette_tuple(variant)
-    pal_len = tuple_size(palette_tup)
+    {palette_tup, pal_len} = Colors.palette_tuple_with_len(variant)
 
     base_intensity = strength * (1.0 - softness)
     wave_amplitude = strength * softness

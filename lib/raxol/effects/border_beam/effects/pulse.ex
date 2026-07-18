@@ -41,8 +41,7 @@ defmodule Raxol.Effects.BorderBeam.Effects.Pulse do
 
     variant = Map.get(opts, :variant, :ocean)
     strength = Map.get(opts, :strength, 0.95)
-    palette_tup = Colors.palette_tuple(variant)
-    pal_len = tuple_size(palette_tup)
+    {palette_tup, pal_len} = Colors.palette_tuple_with_len(variant)
 
     # At wave=1 (peak) -> palette[0] (brightest). At wave=0 (trough) -> last.
     pal_idx = max(0, min(pal_len - 1, trunc((1.0 - wave) * pal_len)))

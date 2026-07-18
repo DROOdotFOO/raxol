@@ -34,8 +34,7 @@ defmodule Raxol.Effects.BorderBeam.Effects.Flames do
     variant = Map.get(opts, :variant, :sunset)
     strength = Map.get(opts, :strength, 0.9)
     density = Map.get(opts, :density, 0.75)
-    palette_tup = Colors.palette_tuple(variant)
-    pal_len = tuple_size(palette_tup)
+    {palette_tup, pal_len} = Colors.palette_tuple_with_len(variant)
 
     cells
     |> apply_edge(

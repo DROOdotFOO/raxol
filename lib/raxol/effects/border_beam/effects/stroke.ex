@@ -42,8 +42,7 @@ defmodule Raxol.Effects.BorderBeam.Effects.Stroke do
     min_trail = if size == :line, do: 2, else: 6
     trail_len = max(trunc(ratio * p_len), min_trail)
 
-    palette_tup = Colors.palette_tuple(variant)
-    pal_len = tuple_size(palette_tup)
+    {palette_tup, pal_len} = Colors.palette_tuple_with_len(variant)
     head_color = elem(palette_tup, 0)
     decay_tup = decay_table(trail_len, strength)
     fade_denom = max(trail_len - 1, 1)
