@@ -85,4 +85,22 @@ defmodule Raxol.Terminal.Driver.BackgroundQueryTest do
       assert BackgroundQuery.detected_background() == {:ok, {43, 43, 43}}
     end
   end
+
+  describe "parse_color/1 hex" do
+    test "parses a valid 6-digit hex" do
+      assert BackgroundQuery.parse_color("#1a1a2e") == {:ok, {26, 26, 46}}
+    end
+
+    test "returns :error for invalid hex digits" do
+      assert BackgroundQuery.parse_color("#zzzzzz") == :error
+    end
+
+    test "returns :error for a 5-length hex (guard rejects)" do
+      assert BackgroundQuery.parse_color("#12345") == :error
+    end
+
+    test "returns :error for a 7-length hex (guard rejects)" do
+      assert BackgroundQuery.parse_color("#1234567") == :error
+    end
+  end
 end

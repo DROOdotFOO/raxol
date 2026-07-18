@@ -359,4 +359,26 @@ defmodule Raxol.Terminal.RendererIntegrationTest do
       end)
     end
   end
+
+  describe "binary hex colors resolve to 24-bit SGR" do
+    test "6-digit hex foreground", %{buffer: buffer} do
+      buffer =
+        ScreenBuffer.write_char(buffer, 0, 0, "A", %{foreground: "#1a2b3c"})
+
+      output = Renderer.render(Renderer.new(buffer))
+      assert output =~ "\e[38;2;26;43;60m"
+    end
+
+    test "3-digit hex foreground expands each nibble", %{buffer: buffer} do
+      buffer = ScreenBuffer.write_char(buffer, 0, 0, "A", %{foreground: "#fff"})
+      output = Renderer.render(Renderer.new(buffer))
+      assert output =~ "\e[38;2;255;255;255m"
+    end
+
+    test "3-digit hex background expands each nibble", %{buffer: buffer} do
+      buffer = ScreenBuffer.write_char(buffer, 0, 0, "A", %{background: "#048"})
+      output = Renderer.render(Renderer.new(buffer))
+      assert output =~ "\e[48;2;0;68;136m"
+    end
+  end
 end
