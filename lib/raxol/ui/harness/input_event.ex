@@ -202,8 +202,22 @@ defmodule Raxol.UI.Harness.InputEvent do
   struct OR passed as a bare `data` map) into the canonical form above.
 
   Total: never raises. Anything unrecognized normalizes to `kind: :other`.
+
+  IDEMPOTENT by contract (the SessionPump's PumpContract §4): the live
+  pump normalizes at its boundary, and `HarnessApp.Model.handle_key/2`
+  normalizes again for its own Keymap routing -- so a second pass must
+  return the input UNCHANGED. Without idempotence, re-normalizing an
+  already-normalized map reads `mods` as all-false (extract_mods looks
+  for top-level `:ctrl`/`:alt` fields, which the canonical shape nests
+  under `:mods`) -- silently un-pressing Ctrl on every live chord,
+  breaking the quit protocol -- and buries the original `%Event{}` one
+  `:raw` level deeper than component dispatch can find it.
   """
   @spec normalize(term()) :: t()
+  def normalize(%{kind: kind, mods: %{}} = already_normalized)
+      when kind in [:char, :key, :paste, :other],
+      do: already_normalized
+
   def normalize(
         %Raxol.Core.Events.Event{type: :paste, data: %{text: text}} = raw
       )

@@ -842,9 +842,21 @@ defmodule Raxol.Harness.HarnessApp.Model do
       quit_on_empty?(model, norm) -> quit(model)
       second_ctrl_c?(model, norm) -> preserve_and_quit(model)
       ctrl_c?(norm) -> {arm_quit(model), []}
-      true -> model |> disarm_quit() |> route_key(norm, raw_event)
+      true -> model |> disarm_quit() |> route_key(norm, component_event(raw_event))
     end
   end
+
+  # Components (Composer, Picker) pattern-match `%Event{}` structs, but
+  # the live pump path delivers the contract's normalized MAP
+  # (PumpContract §4) -- which preserves the original Event in `:raw`
+  # (InputEvent.normalize/1 is idempotent, so the map arrives here with
+  # `:raw` intact exactly once). Prefer the original struct so a live
+  # keystroke drives the same component path a fixture/headless one does;
+  # anything else passes through untouched and the components' own total
+  # fallbacks degrade on it.
+  defp component_event(%Raxol.Core.Events.Event{} = event), do: event
+  defp component_event(%{raw: %Raxol.Core.Events.Event{} = original}), do: original
+  defp component_event(other), do: other
 
   defp quit_on_empty?(model, norm),
     do: InputEvent.printable_char(norm) == "q" and composer_empty?(model)

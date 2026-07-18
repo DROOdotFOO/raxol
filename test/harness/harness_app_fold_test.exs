@@ -161,6 +161,32 @@ defmodule Raxol.Harness.HarnessAppFoldTest do
     assert Composer.value(m.composer) =~ "x"
   end
 
+  test "the contract's {:key, normalized} shape types the same (live pump path)" do
+    # The SessionPump normalizes at its boundary (PumpContract §4), so
+    # update/2 receives {:key, normalized_map} -- never the raw Event.
+    # Before the idempotence/component-event fix, this shape silently
+    # dropped text (the Composer pattern-matches %Event{}, and the
+    # normalized map hit its fallback): the U6 live wiring's first
+    # end-to-end bug.
+    norm = Raxol.UI.Harness.InputEvent.normalize(Event.key("z"))
+    {m, cmds} = HarnessApp.update({:key, norm}, model())
+    assert cmds == []
+    assert Composer.value(m.composer) =~ "z"
+  end
+
+  test "the contract's normalized ctrl chord still arms the quit protocol" do
+    # The double-normalization that used to un-press Ctrl would have
+    # broken every live chord; the arm proves ctrl survived the fold.
+    norm =
+      Raxol.UI.Harness.InputEvent.normalize(%Event{
+        type: :key,
+        data: %{key: "c", state: :pressed, modifiers: [:ctrl]}
+      })
+
+    {m, []} = HarnessApp.update({:key, norm}, model())
+    assert m.quit_armed? == true
+  end
+
   test "q on an empty composer requests a halt directive (only when a pump is wired)" do
     {_m, cmds} =
       HarnessApp.update(Event.key_event("q", :pressed, []), model(pump: self()))
