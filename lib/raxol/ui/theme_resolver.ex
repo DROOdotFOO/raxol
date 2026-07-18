@@ -15,13 +15,11 @@ defmodule Raxol.UI.ThemeResolver do
 
       ThemeResolver.resolve_styles(attrs, component_type, theme, cache: true)
 
-  ## Migration from ThemeResolverCached
+  ## Caching (formerly Raxol.UI.ThemeResolverCached)
 
-  Replace:
-      Raxol.UI.ThemeResolverCached.resolve_styles(attrs, component_type, theme)
-      Raxol.UI.ThemeResolverCached.get_default_theme()
+  The removed `Raxol.UI.ThemeResolverCached` shim mapped one-to-one onto
+  cached calls here:
 
-  With:
       Raxol.UI.ThemeResolver.resolve_styles(attrs, component_type, theme, cache: true)
       Raxol.UI.ThemeResolver.get_default_theme(cache: true)
 
