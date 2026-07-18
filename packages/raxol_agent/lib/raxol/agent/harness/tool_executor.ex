@@ -133,7 +133,13 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       tool_context: tool_context,
       max_iterations: max_iterations,
       gate?: Keyword.get(opts, :gate?, true),
-      await_decision: Keyword.get(opts, :await_decision, &default_allow/2)
+      await_decision: Keyword.get(opts, :await_decision, &default_allow/2),
+      # `stream: true` drives each round off `backend.stream/2` instead of the
+      # blocking `complete/2` -- reasoning + answer text are forwarded to the
+      # tail LIVE (the ShadowStream preview + streaming answer), and the final
+      # `tool_calls` come off the stream's `:done`. Default off: every existing
+      # caller/test keeps the blocking path unchanged.
+      stream?: Keyword.get(opts, :stream, false)
     }
 
     messages = build_messages(prompt, Keyword.get(opts, :system_prompt))
@@ -186,37 +192,119 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
     emit(st, {:error, :max_iterations_reached})
   end
 
-  defp loop(messages, iteration, %{config: config} = st) do
-    case config.backend.complete(messages, config.opts) do
-      {:ok, %{tool_calls: tool_calls} = response}
-      when is_list(tool_calls) and tool_calls != [] ->
-        # This round's thinking seals FIRST, ahead of the tool it reasoned
-        # toward (`Contract.pump/3` sequences it as a ∴ block before the
-        # tool_use item).
-        emit_reasoning(st, response)
-        handle_tools(messages, iteration, st, response, tool_calls)
+  # Streaming round (`stream: true`): reasoning + answer text are forwarded to
+  # the tail LIVE as they arrive; the terminal response (content + tool_calls)
+  # comes off the stream's `:done`, then runs the SAME branch logic as the
+  # blocking path via `dispatch_response/5`.
+  defp loop(messages, iteration, %{config: %{stream?: true} = config} = st) do
+    case drain_round(config, messages, st) do
+      {:ok, response} ->
+        dispatch_response(messages, iteration, st, response, streamed: true)
 
-      {:ok, %{content: content} = response} ->
-        # Reasoning first (its own ∴ block), then the answer text, then —
-        # for a length-truncated round — an honest ⚠ marker AFTER the
-        # partial answer it qualifies. Ordering is what pump's first-
-        # appearance fold renders: ∴, answer, ⚠.
-        emit_reasoning(st, response)
-
-        if is_binary(content) and content != "" do
-          emit(st, {:text_delta, content})
-        end
-
-        maybe_emit_truncation(st, response)
-
-        emit(
-          st,
-          {:done, %{content: content || "", tool_results: [], usage: usage(response)}}
-        )
+      # Backend can't start a stream this round (e.g. Mock, or Req absent) ->
+      # fall back to the blocking path. `stream: true` is a PREFERENCE, not a
+      # hard requirement, so a non-streaming backend still works.
+      {:stream_unavailable, _reason} ->
+        run_blocking(messages, iteration, config, st)
 
       {:error, reason} ->
         emit(st, {:error, reason})
     end
+  end
+
+  # Blocking round (default): the whole response lands at once from
+  # `complete/2`.
+  defp loop(messages, iteration, %{config: config} = st) do
+    run_blocking(messages, iteration, config, st)
+  end
+
+  defp run_blocking(messages, iteration, config, st) do
+    case config.backend.complete(messages, config.opts) do
+      {:ok, response} ->
+        dispatch_response(messages, iteration, st, response, streamed: false)
+
+      {:error, reason} ->
+        emit(st, {:error, reason})
+    end
+  end
+
+  # Drain the backend stream, forwarding reasoning/text/marker deltas to the
+  # caller as they arrive; return the terminal `:done` response (accumulated
+  # content + tool_calls). Halts on the first `:done`/`:error`.
+  defp drain_round(config, messages, st) do
+    case config.backend.stream(messages, config.opts) do
+      {:ok, stream} ->
+        Enum.reduce_while(stream, {:error, :stream_ended_without_done}, fn
+          {:reasoning, text}, acc ->
+            emit(st, {:reasoning, text})
+            {:cont, acc}
+
+          {:chunk, text}, acc ->
+            emit(st, {:text_delta, text})
+            {:cont, acc}
+
+          {:marker, text}, acc ->
+            emit(st, {:marker, text})
+            {:cont, acc}
+
+          {:done, response}, _acc ->
+            {:halt, {:ok, response}}
+
+          {:error, reason}, _acc ->
+            {:halt, {:error, reason}}
+
+          _other, acc ->
+            {:cont, acc}
+        end)
+
+      {:error, reason} ->
+        {:stream_unavailable, reason}
+    end
+  end
+
+  # One response -> the tool round or the answer round. On the STREAMED path
+  # reasoning/text/marker were already forwarded live, so they are not
+  # re-emitted here; only tool handling / the `:done` seal remain. On the
+  # BLOCKING path they are emitted here, after the fact.
+  #
+  # Ordering (blocking answer round): reasoning (its own ∴ block), then the
+  # answer text, then — for a length-truncated round — an honest ⚠ marker
+  # AFTER the partial answer it qualifies (pump's first-appearance fold).
+  defp dispatch_response(
+         messages,
+         iteration,
+         st,
+         %{tool_calls: tool_calls} = response,
+         opts
+       )
+       when is_list(tool_calls) and tool_calls != [] do
+    # This round's thinking seals FIRST, ahead of the tool it reasoned toward
+    # (`Contract.pump/3` sequences it as a ∴ block before the tool_use item).
+    unless opts[:streamed], do: emit_reasoning(st, response)
+    handle_tools(messages, iteration, st, response, tool_calls)
+  end
+
+  defp dispatch_response(
+         _messages,
+         _iteration,
+         st,
+         %{content: content} = response,
+         opts
+       ) do
+    unless opts[:streamed] do
+      emit_reasoning(st, response)
+
+      if is_binary(content) and content != "" do
+        emit(st, {:text_delta, content})
+      end
+
+      maybe_emit_truncation(st, response)
+    end
+
+    emit(
+      st,
+      {:done, %{content: content || "", tool_results: [], usage: usage(response)}}
+    )
   end
 
   # The model's chain-of-thought for this round, surfaced from

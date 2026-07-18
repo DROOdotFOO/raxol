@@ -195,7 +195,11 @@ defmodule Raxol.Agent.Harness.SessionInbox do
       gate?: state.gate?,
       max_iterations: state.max_iterations,
       await_decision: await_fun,
-      shell_tool_ref_sink: sink
+      shell_tool_ref_sink: sink,
+      # Drive the loop off the backend stream: reasoning + answer stream to
+      # the tail LIVE (the ShadowStream thinking preview + streaming answer),
+      # tool_calls come off the stream's :done.
+      stream: true
     ]
 
     task =

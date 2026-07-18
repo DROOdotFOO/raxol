@@ -114,7 +114,8 @@ defmodule Raxol.Agent.Backend.HTTP do
               buffer: "",
               provider: provider,
               content: "",
-              usage: %{}
+              usage: %{},
+              tool_calls: []
             }
           end,
           &stream_next/1,
@@ -194,7 +195,20 @@ defmodule Raxol.Agent.Backend.HTTP do
             nil -> state.usage
           end
 
-        {out, %{state | buffer: new_buffer, content: new_content, usage: new_usage}}
+        new_tool_calls =
+          case Enum.find(events, &match?({:tool_calls, _}, &1)) do
+            {:tool_calls, tc} -> tc
+            nil -> state.tool_calls
+          end
+
+        {out,
+         %{
+           state
+           | buffer: new_buffer,
+             content: new_content,
+             usage: new_usage,
+             tool_calls: new_tool_calls
+         }}
 
       {:sse_error, ^ref, error} ->
         {[{:error, error}], %{state | buffer: :halt}}
@@ -205,6 +219,7 @@ defmodule Raxol.Agent.Backend.HTTP do
            %{
              content: state.content,
              usage: state.usage,
+             tool_calls: state.tool_calls,
              metadata: %{
                backend: :http,
                provider: state.provider,
@@ -331,10 +346,20 @@ defmodule Raxol.Agent.Backend.HTTP do
     reasoning = choice_reasoning(msg)
     text = choice_text(msg)
     finish = finish_reason(choice)
+    tool_calls = msg["tool_calls"]
 
     []
     |> maybe_append(reasoning && {:reasoning_delta, reasoning})
     |> maybe_append(text != "" && {:text_delta, text})
+    |> maybe_append(
+      # LongCat streams the FULL message per chunk (`delta: null`), so a
+      # completed `tool_calls` array arrives whole -- no cross-chunk
+      # accumulation needed for this provider. Surfaced as one terminal-ish
+      # event the stream folds into `:done` (the OpenAI incremental
+      # `delta.tool_calls[]` accumulation is a separate, later concern).
+      is_list(tool_calls) and tool_calls != [] and
+        {:tool_calls, parse_openai_tool_calls(tool_calls)}
+    )
     |> maybe_append(finish == "length" && {:marker, truncation_marker(choice)})
   end
 
@@ -523,36 +548,12 @@ defmodule Raxol.Agent.Backend.HTTP do
            body
        )
        when is_list(tool_calls) and tool_calls != [] do
-    parsed_calls =
-      Enum.map(tool_calls, fn tc ->
-        args =
-          case tc["function"]["arguments"] do
-            s when is_binary(s) ->
-              case Jason.decode(s) do
-                {:ok, map} -> map
-                _ -> %{}
-              end
-
-            map when is_map(map) ->
-              map
-
-            _ ->
-              %{}
-          end
-
-        %{
-          "id" => tc["id"],
-          "name" => tc["function"]["name"],
-          "arguments" => args
-        }
-      end)
-
     msg = choice_message(hd(body["choices"]))
 
     {:ok,
      %{
        content: choice_text(msg),
-       tool_calls: parsed_calls,
+       tool_calls: parse_openai_tool_calls(tool_calls),
        usage: Map.get(body, "usage", %{}),
        metadata: %{backend: :http, provider: :openai, model: Map.get(body, "model")}
      }
@@ -609,6 +610,35 @@ defmodule Raxol.Agent.Backend.HTTP do
   # payload -- possibly carrying secrets -- is never leaked into a transcript.
   defp parse_response(provider, body) do
     {:error, unparseable_marker(provider, body)}
+  end
+
+  # Normalize an OpenAI-shape `tool_calls` list to the downstream contract
+  # (STRING keys `"id"/"name"/"arguments"`, arguments JSON-decoded). Shared
+  # by the blocking `parse_response/2` and the streaming path so both surface
+  # the identical shape -- a tool call must round-trip the stream unchanged.
+  defp parse_openai_tool_calls(tool_calls) when is_list(tool_calls) do
+    Enum.map(tool_calls, fn tc ->
+      args =
+        case get_in(tc, ["function", "arguments"]) do
+          s when is_binary(s) ->
+            case Jason.decode(s) do
+              {:ok, map} -> map
+              _ -> %{}
+            end
+
+          map when is_map(map) ->
+            map
+
+          _ ->
+            %{}
+        end
+
+      %{
+        "id" => tc["id"],
+        "name" => get_in(tc, ["function", "name"]),
+        "arguments" => args
+      }
+    end)
   end
 
   # -- OpenAI-compatible field extraction (shared by complete + stream) --------

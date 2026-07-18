@@ -63,6 +63,42 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
     def capabilities, do: [:completion, :tool_use]
   end
 
+  # A backend whose `stream/2` pops a scripted LIST of stream events per
+  # round (reasoning/text deltas + a terminal `{:done, response}` carrying
+  # content + tool_calls) — exercises the `stream: true` path: reasoning and
+  # text must be forwarded LIVE, and a tool call must survive the stream
+  # round-trip (the correctness the blocking `complete/2` choice was
+  # protecting).
+  defmodule StreamBackend do
+    @behaviour Raxol.Agent.AIBackend
+
+    @impl true
+    def complete(_messages, _opts),
+      do: {:ok, %{content: "(complete unused)", usage: %{}}}
+
+    @impl true
+    def stream(_messages, opts) do
+      agent = Keyword.fetch!(opts, :script)
+
+      events =
+        Agent.get_and_update(agent, fn
+          [round | tail] -> {round, tail}
+          [] -> {[{:done, %{content: "(end)", tool_calls: [], usage: %{}}}], []}
+        end)
+
+      {:ok, events}
+    end
+
+    @impl true
+    def available?, do: true
+
+    @impl true
+    def name, do: "stream-script"
+
+    @impl true
+    def capabilities, do: [:completion, :streaming, :tool_use]
+  end
+
   setup do
     tmp =
       Path.join(
@@ -702,5 +738,66 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
 
   defp index(events, type) do
     Enum.find_index(events, fn e -> elem(e, 0) == type end)
+  end
+
+  describe "streaming round (stream: true)" do
+    test "forwards reasoning + text deltas LIVE and a tool call survives the round-trip",
+         %{tmp: tmp} do
+      File.write!(Path.join(tmp, "a.txt"), "hello world")
+
+      steps = [
+        # round 1: reasoning streams token-by-token, then :done carries a tool call
+        [
+          {:reasoning, "let me read "},
+          {:reasoning, "the file"},
+          {:done,
+           %{
+             content: "",
+             tool_calls: [
+               %{
+                 "id" => "c1",
+                 "name" => "read_file",
+                 "arguments" => %{"path" => "a.txt"}
+               }
+             ],
+             usage: %{}
+           }}
+        ],
+        # round 2: reasoning + answer text stream live, no tool call
+        [
+          {:reasoning, "got it"},
+          {:chunk, "the file says "},
+          {:chunk, "hello world"},
+          {:done, %{content: "the file says hello world", tool_calls: [], usage: %{}}}
+        ]
+      ]
+
+      events =
+        ToolExecutor.stream("read a.txt",
+          backend: StreamBackend,
+          backend_opts: [script: script(steps)],
+          actions: Fs.all(),
+          gate?: false,
+          stream: true
+        )
+        |> Enum.to_list()
+
+      ts = types(events)
+
+      # reasoning forwarded LIVE -- multiple deltas, not one whole blob
+      assert Enum.count(events, &match?({:reasoning, _}, &1)) >= 3
+
+      # answer text streamed LIVE, per chunk (not re-emitted whole at :done)
+      assert Enum.any?(events, &match?({:text_delta, "the file says "}, &1))
+      assert Enum.any?(events, &match?({:text_delta, "hello world"}, &1))
+
+      # the tool call survived the stream round-trip -> it executed
+      assert :tool_use in ts
+      assert :tool_result in ts
+      assert :done in ts
+
+      # ordering: reasoning precedes the tool it reasoned toward
+      assert index(events, :reasoning) < index(events, :tool_use)
+    end
   end
 end
