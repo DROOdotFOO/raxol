@@ -119,6 +119,26 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
     }
   end
 
+  # The first item beginning inside the open turn. `:turn_started` is now the
+  # silent pre-stream WAIT (a bare spinner, no word -- 2026-07-18); the strip
+  # only speaks "thinking" once a response item starts (`turn_stage` reads the
+  # last :loop event's type, surface.ex). These steer tests gate on that
+  # "thinking" to know the footer is live before sending steer keys, so they
+  # drive the turn one step past the wait -- exactly the real turn_started ->
+  # item_started sequence, same turn_id, so the CAS subject is unchanged.
+  defp item_started_event(session_id, turn_id) do
+    %Contract.Event{
+      id: System.unique_integer([:positive, :monotonic]),
+      session_id: session_id,
+      turn_id: turn_id,
+      ts: System.system_time(:microsecond),
+      family: :loop,
+      type: :item_started,
+      tier: :durable,
+      payload: %{item_type: "message"}
+    }
+  end
+
   # ---------------------------------------------------------------------
   # a. interrupt dispatch reaches a real staged supervised kill
   # ---------------------------------------------------------------------
@@ -349,6 +369,7 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
       eventually(fn -> session_id in SessionStreamer.list_sessions() end)
 
       SessionStreamer.emit(session_id, turn_started_event(session_id, "turn-1"))
+      SessionStreamer.emit(session_id, item_started_event(session_id, "turn-1"))
       eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       send(driver, {:inline_input, Event.key("h")})
@@ -373,6 +394,7 @@ defmodule Raxol.Agent.Harness.LiveSessionAgentTest do
       eventually(fn -> session_id in SessionStreamer.list_sessions() end)
 
       SessionStreamer.emit(session_id, turn_started_event(session_id, "turn-1"))
+      SessionStreamer.emit(session_id, item_started_event(session_id, "turn-1"))
       eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
 
       send(driver, {:inline_input, Event.key("h")})
