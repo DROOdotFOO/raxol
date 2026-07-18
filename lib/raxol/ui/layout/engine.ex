@@ -30,6 +30,11 @@ defmodule Raxol.UI.Layout.Engine do
     :dim
   ]
 
+  # The indication container's fixed content indent: gutter at column 0, a
+  # blank at column 1, content from column 2 (see
+  # `Raxol.UI.Components.Harness.Indication`).
+  @indication_indent 2
+
   @typedoc """
   Terminal viewport dimensions in cells.
   """
@@ -573,6 +578,35 @@ defmodule Raxol.UI.Layout.Engine do
     flow_elements ++ overlay_elements ++ acc
   end
 
+  # Indication container (`Raxol.UI.Components.Harness.Indication`): the
+  # left-edge primitive. Position the content at column +2, measure the
+  # laid-out height, then stamp the gutter down column 0 for that full
+  # height per the strategy. The gutter glyphs are positioned through this
+  # module's own `:text` clause, so their cell shape can never drift from a
+  # normal text node. Content is polymorphic: a binary lays out as one text
+  # node (fast), a map lays out as a normal sub-tree.
+  def process_element(%{type: :indication} = ind, space, acc) do
+    content = indication_content_element(Map.get(ind, :content))
+
+    content_space = %{
+      space
+      | x: space.x + @indication_indent,
+        width: max(space.width - @indication_indent, 0)
+    }
+
+    content_elements = process_element(content, content_space, [])
+    height = indication_content_height(content_elements, space.y)
+    style = Map.get(ind, :gutter_style, %{})
+
+    gutter_elements =
+      indication_gutter_elements(Map.get(ind, :gutter, :none), space, height, style)
+
+    # Content first, gutter after -- they never share a column (content at
+    # +2, gutter at 0), so order is cosmetic, but this matches the
+    # flow-then-overlay convention of `:absolute_layer`.
+    content_elements ++ gutter_elements ++ acc
+  end
+
   def process_element(%{type: :table} = table_element, space, acc) do
     # Delegate table measurement and positioning to the dedicated module
     Table.measure_and_position(table_element, space, acc)
@@ -792,6 +826,27 @@ defmodule Raxol.UI.Layout.Engine do
   # their nodes carry no :attrs). Mirror of the process-side rewrite.
   def measure_element(%{type: :approval_prompt} = element, available_space) do
     measure_element(%{element | type: :column}, available_space)
+  end
+
+  # Indication container measures as its content + the 2-cell gutter indent;
+  # the gutter is non-flow (stamped in process_element/3) and adds no
+  # intrinsic size. MUST precede the generic `%{type, attrs}` clause below --
+  # the node carries `:attrs` (for DevTools) and would otherwise route to the
+  # widget-by-type path, which has no `:indication` case.
+  def measure_element(%{type: :indication} = ind, available_space) do
+    content = indication_content_element(Map.get(ind, :content))
+
+    inner = %{
+      available_space
+      | width: max(available_space.width - @indication_indent, 0)
+    }
+
+    measured = measure_element(content, inner)
+
+    %{
+      width: Map.get(measured, :width, 0) + @indication_indent,
+      height: Map.get(measured, :height, 1)
+    }
   end
 
   # Handles valid elements (maps with :type and :attrs)
@@ -1061,6 +1116,64 @@ defmodule Raxol.UI.Layout.Engine do
 
   defp style_to_map(styles) when is_map(styles), do: styles
   defp style_to_map(_), do: %{}
+
+  # -- indication container helpers (see process_element(:indication)) -------
+
+  # Polymorphic content: a binary lays out as one text node (fast path); a
+  # map is a normal sub-tree; anything else is an empty text node.
+  defp indication_content_element(content) when is_binary(content),
+    do: %{type: :text, content: content}
+
+  defp indication_content_element(content) when is_map(content), do: content
+  defp indication_content_element(_content), do: %{type: :text, content: ""}
+
+  # The laid-out height of the positioned content, measured from `top`
+  # (the container's y). Floors at 1 so an empty container still shows a
+  # single top gutter glyph (a bare sigil), matching the Surface contour.
+  defp indication_content_height([], _top), do: 1
+
+  defp indication_content_height(elements, top) do
+    bottom =
+      elements
+      |> Enum.map(fn e -> Map.get(e, :y, top) + Map.get(e, :height, 1) end)
+      |> Enum.max()
+
+    max(bottom - top, 1)
+  end
+
+  defp indication_gutter_elements(:none, _space, _height, _style), do: []
+
+  defp indication_gutter_elements({:top, glyph}, space, _height, style),
+    do: gutter_glyph(glyph, space.x, space.y, style)
+
+  defp indication_gutter_elements({:corners, top, bottom}, space, height, style) do
+    top_el = if top, do: gutter_glyph(top, space.x, space.y, style), else: []
+
+    bottom_el =
+      if bottom && height > 1,
+        do: gutter_glyph(bottom, space.x, space.y + height - 1, style),
+        else: []
+
+    top_el ++ bottom_el
+  end
+
+  defp indication_gutter_elements({:rule, glyph}, space, height, style) do
+    Enum.flat_map(0..(height - 1), fn i ->
+      gutter_glyph(glyph, space.x, space.y + i, style)
+    end)
+  end
+
+  defp indication_gutter_elements(_other, _space, _height, _style), do: []
+
+  # Position a single gutter glyph through the module's own :text clause, so
+  # its cell shape matches every other text node exactly.
+  defp gutter_glyph(glyph, x, y, style) do
+    process_element(
+      %{type: :text, content: glyph, style: style},
+      %{x: x, y: y, width: 1, height: 1},
+      []
+    )
+  end
 
   # Resolve style map from an element, defaulting to empty map.
   defp resolve_style(element) do

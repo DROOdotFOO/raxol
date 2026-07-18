@@ -129,6 +129,25 @@ defmodule Raxol.UI.Layout.Preparer do
     }
   end
 
+  # Indication container: prepare the content only when it is a view node;
+  # a binary content is the fast path (no sub-tree to measure).
+  def prepare(%{type: :indication} = element) do
+    prepared_content =
+      case Map.get(element, :content) do
+        content when is_map(content) -> prepare(content)
+        _binary_or_nil -> nil
+      end
+
+    %PreparedElement{
+      type: :indication,
+      element: element,
+      measured_width: 0,
+      measured_height: 0,
+      children: [prepared_content] |> Enum.reject(&is_nil/1),
+      animation_hints: Map.get(element, :animation_hints, [])
+    }
+  end
+
   def prepare(%{type: type} = element) do
     %PreparedElement{
       type: type,
