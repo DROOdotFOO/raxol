@@ -709,7 +709,7 @@ defmodule Raxol.Harness.LiveApprovalTest do
   # -- 4e. the proposed diff (gap 2.2): the operator sees what y will do ----
 
   describe "an edit/write approval renders the PROPOSED DIFF, not truncated args" do
-    test "the block renders the proposed change through the Pierre engine, path first" do
+    test "the block renders the proposed change through the Pierre engine, identity at the bottom" do
       block =
         only_approval_block([
           turn_started(),
@@ -723,8 +723,8 @@ defmodule Raxol.Harness.LiveApprovalTest do
 
       lines = render_lines(block)
 
-      assert Enum.any?(lines, &(&1 == "± /lib/x.ex")),
-             "the path leads the diff (the referent)"
+      assert Enum.any?(lines, &(&1 == "± edit /lib/x.ex")),
+             "the `± <verb> <path>` identity line names what y will do"
 
       # NOT the compact one-line register, NOT the raw args -- byte-sweep:
       # no truncated `new_string:`/`args:` arg reaches a diff-approval render.
@@ -751,6 +751,44 @@ defmodule Raxol.Harness.LiveApprovalTest do
 
       assert Enum.any?(rows, &(row_text(&1) =~ "common")),
              "unchanged lines render as context rows"
+    end
+
+    test "bottom-identity reading order: diff rows first, then `± edit <path>`, and no ⚑ header at all" do
+      # V's bottom-identity ruling: the diff IS the identity, so a
+      # diff-carrying approval renders NO generic `⚑ <tool>` header row,
+      # and the `± <verb> <path>` line reads at the BOTTOM -- rows, then
+      # identity, then (in the hosting footer, not this block) the answer.
+      block =
+        only_approval_block([
+          turn_started(),
+          diff_approval_requested(
+            "req-e",
+            "/lib/x.ex",
+            "old line\ncommon",
+            "new line\ncommon"
+          )
+        ])
+
+      # One flattened string per physical child (a Pierre `:row`'s spans
+      # join into its full line text), so index order IS reading order.
+      %{children: children} = Block.render(block, %{width: 80})
+
+      rows =
+        Enum.map(children, fn child ->
+          child |> collect_text() |> Enum.join()
+        end)
+
+      refute Enum.any?(rows, &(&1 =~ "⚑")),
+             "a diff-carrying approval renders no ⚑ header -- the diff IS the identity"
+
+      diff_idx = Enum.find_index(rows, &(&1 =~ "old line"))
+      identity_idx = Enum.find_index(rows, &(&1 =~ "± edit /lib/x.ex"))
+
+      assert diff_idx, "the diff rows must render in the block body"
+      assert identity_idx, "the ± edit identity line must render"
+
+      assert diff_idx < identity_idx,
+             "the diff rows read BEFORE the ± edit identity line (bottom-identity)"
     end
 
     test "intra-line word emphasis: the changed word gets a distinct bg tier" do

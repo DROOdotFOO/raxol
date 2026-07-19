@@ -676,7 +676,7 @@ defmodule Raxol.UI.Components.Harness.Block do
     body_children =
       case block.fold do
         :folded -> [header]
-        :expanded -> [header | content_lines_view(block, width, context, fg)]
+        :expanded -> expanded_body_children(block, header, width, context, fg)
       end
 
     column =
@@ -687,6 +687,39 @@ defmodule Raxol.UI.Components.Harness.Block do
 
     stamp_component(block, column)
   end
+
+  # The bottom-identity ruling (V): a diff-carrying approval contributes NO
+  # generic `▾ ⚑ <tool>` header row -- the tool-name line only restates
+  # what the diff already shows, so the diff IS the block's visual
+  # identity. Reading order: the Pierre diff rows first, then the one
+  # `± <verb> <path>` identity line (`approval_diff_identity/2`), then the
+  # tail (blast radius + live prompt / sealed receipt) -- the answer
+  # choices live in the hosting footer, never in this block. Suppression
+  # is EXPANDED-only: a folded approval keeps its compact one-line `⚑`
+  # form (the `:folded` arm in `build_render/3`, untouched). A non-diff
+  # (bash/...) approval and every other kind keep header-then-content.
+  defp expanded_body_children(
+         %__MODULE__{kind: :approval} = block,
+         header,
+         width,
+         context,
+         fg
+       ) do
+    case approval_proposed_diff(block, width) do
+      [] ->
+        [header | plain_content_lines(block, fg, context)]
+
+      diff_rows ->
+        diff_rows ++
+          [
+            approval_diff_identity(block, fg)
+            | approval_tail_lines(block, fg, context)
+          ]
+    end
+  end
+
+  defp expanded_body_children(block, header, width, context, fg),
+    do: [header | content_lines_view(block, width, context, fg)]
 
   # An approval block's render root is stamped as an `:approval_prompt`
   # component node -- it carries the `id` + `attrs` the MCP TreeWalker and
@@ -1478,27 +1511,14 @@ defmodule Raxol.UI.Components.Harness.Block do
     end
   end
 
-  # An edit/write approval carries the PROPOSED DIFF (`old`/`new`), so its
-  # expanded body is the diff itself -- rendered through the ONE Pierre diff
-  # engine (`DiffViewer.diff_rows/1`: syntax fg under diff bg, intra-line
-  # word emphasis, gutter bars, hunk folding), NOT the compact one-line
-  # register and NOT truncated args. The `± path` line leads (the referent,
-  # path first), then the Pierre diff rows, then the tail (blast radius +
-  # the live answer prompt / sealed receipt). Every other approval (bash,
-  # ...) keeps its plain `tool:`/`args:` referent via `plain_content_lines`.
-  # The diff render is block-level and mode-agnostic: the same flat rows
-  # flatten identically in inline_log and full-viewport.
-  defp content_lines_view(%__MODULE__{kind: :approval} = block, width, ctx, fg) do
-    case approval_proposed_diff(block, width) do
-      [] ->
-        plain_content_lines(block, fg, ctx)
-
-      diff_rows ->
-        [approval_diff_header(block, fg) | diff_rows] ++
-          approval_tail_lines(block, fg, ctx)
-    end
-  end
-
+  # An approval's expanded body never routes through this dispatch:
+  # `expanded_body_children/5` owns the whole approval composition -- a
+  # diff-carrying approval renders the Pierre rows + the bottom
+  # `± <verb> <path>` identity (header suppressed, a `build_render/3`
+  # decision this per-kind dispatch cannot make), and a plain (bash/...)
+  # approval renders `plain_content_lines/3` under its `⚑` header. Both
+  # need the render context (`selector_hosted?`) threaded, which the
+  # generic fallback below deliberately drops.
   defp content_lines_view(block, _width, _context, fg),
     do: plain_content_lines(block, fg)
 
@@ -1536,22 +1556,53 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp approval_proposed_diff(_block, _width), do: []
 
-  # `± path` leads the proposed diff (path-first, the referent), matching
-  # the sealed `:diff` block's own `± path · +N -M` compact identity so the
-  # two lifecycle stages of one edit read as the same thing.
-  defp approval_diff_header(%__MODULE__{content: content}, fg) do
+  # The identity line -- `± <verb> <path>` -- reads at the BOTTOM of the
+  # proposed diff (V's bottom-identity ruling): the rows first, then the
+  # one line naming what `y` will do to which file, and the answer
+  # choices follow in the hosting footer. Same `±` vocabulary as the
+  # sealed `:diff` block's `± path · +N -M` compact line (two lifecycle
+  # stages of one edit, one visual family), but the LIVE stage carries the
+  # action verb -- there is no count receipt yet, only an intent. The
+  # `preview_match` honesty note stays on this line: a diff that will not
+  # apply as-is says so at its identity, never in fine print elsewhere.
+  defp approval_diff_identity(%__MODULE__{content: content}, fg) do
     path =
       case content |> Map.get(:path) |> to_display_text() do
         "" -> "(no path)"
         p -> p
       end
 
+    line =
+      [kind_glyph(:diff), approval_action_verb(content), path]
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join(" ")
+
     Components.text(
-      content:
-        "#{kind_glyph(:diff)} #{path}" <>
-          preview_match_note(Map.get(content, :preview_match)),
+      content: line <> preview_match_note(Map.get(content, :preview_match)),
       style: apply_fg(%{}, fg)
     )
+  end
+
+  # The identity verb: what `y` will DO. Derived from the exact tool name
+  # (the referent, never a gloss): `edit_file` -> "edit", `write_file` ->
+  # "write"; any other producer vocabulary shows its raw tool/action
+  # string -- honest over pretty. Falls back to the human-readable
+  # `action` when the producer carried no `tool_name`; either way only
+  # line 1, trimmed (an identity line is ONE row), and a producer that
+  # named neither yields "" so the join above degrades to a bare
+  # `± <path>` -- no fabricated verb, no `(empty)` chrome.
+  defp approval_action_verb(content) do
+    raw =
+      case content |> Map.get(:tool_name) |> to_display_text() do
+        "" -> content |> Map.get(:action) |> to_display_text()
+        name -> name
+      end
+
+    case raw |> String.split("\n", parts: 2) |> hd() |> String.trim() do
+      "edit_file" -> "edit"
+      "write_file" -> "write"
+      other -> other
+    end
   end
 
   # When the producer could not locate the edit target exactly, the diff is
@@ -1657,9 +1708,9 @@ defmodule Raxol.UI.Components.Harness.Block do
   # This is the PLAIN referent (tool + args) for a bash/other approval. An
   # edit/write approval carries the before/after image (`old`/`new`) and is
   # never routed here: its referent is the PROPOSED DIFF, rendered through
-  # the Pierre engine as styled view rows by `content_lines_view/4`'s own
-  # `:approval` clause (a string-line `body_lines` path could not carry the
-  # diff's syntax fg / bg wash / gutter bars). So a diff approval never
+  # the Pierre engine as styled view rows by `expanded_body_children/5`'s
+  # own `:approval` clause (a string-line `body_lines` path could not carry
+  # the diff's syntax fg / bg wash / gutter bars). So a diff approval never
   # reaches `body_lines(:approval)` at all.
   defp referent_lines(content), do: plain_referent_lines(content)
 
@@ -2245,7 +2296,7 @@ defmodule Raxol.UI.Components.Harness.Block do
       # locate the edit target exactly, the diff is a PROPOSED change that
       # will NOT apply as-is; the approval body says so rather than showing
       # a clean diff that lies about what `y` will do (see
-      # `approval_diff_header/2`).
+      # `approval_diff_identity/2`).
       preview_match: find_in_events(events, @preview_match_paths),
       decision: find_in_events(events, @decision_paths),
       option_id: find_in_events(events, @option_id_paths),

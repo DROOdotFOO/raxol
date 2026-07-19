@@ -345,13 +345,19 @@ defmodule Raxol.Harness.HarnessAppViewTest do
 
       {body, footer} = body_and_footer(View.render(model))
 
-      # the ± diff BODY lands in the transcript (the special tool render)
-      assert body =~ "± mix.exs", "the ± diff header must render in the body"
+      # the ± diff BODY lands in the transcript (the special tool render);
+      # its identity line is the bottom `± <verb> <path>` form (V's
+      # bottom-identity ruling -- no `⚑ edit_file` header row above it)
+      assert body =~ "± edit mix.exs",
+             "the ± identity line must render in the body"
+
       assert body =~ "OLDLINE", "the removed line must render in the body"
       assert body =~ "NEWLINE", "the added line must render in the body"
 
       # ... and NOT in the footer (no clipped 2-line stub, no double-render)
-      refute footer =~ "± mix.exs", "the diff must NOT render in the footer"
+      refute footer =~ "± edit mix.exs",
+             "the diff must NOT render in the footer"
+
       refute footer =~ "OLDLINE", "the diff body must NOT render in the footer"
     end
 

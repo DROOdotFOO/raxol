@@ -86,13 +86,16 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
       do: Block.render(block, context)
 
   # An edit/write approval carrying a proposed diff (`old`/`new`) is
-  # Block.render/2's own in the expanded state too: `Block`'s `:approval`
-  # content_lines_view renders the FULL proposed diff through the ONE Pierre
-  # engine (`DiffViewer.diff_rows/1`) plus the live answer prompt -- the
-  # operator's question is "what will `y` do", and the answer is the diff,
-  # never `ApprovalPrompt`'s modal action line (which would show a truncated
-  # args gloss, not the change). A bash / non-diff approval has no image to
-  # show and keeps its mounted `ApprovalPrompt` via the general clause below.
+  # Block.render/2's own in the expanded state too: `Block`'s
+  # `expanded_body_children/5` renders the FULL proposed diff through the
+  # ONE Pierre engine (`DiffViewer.diff_rows/1`), the bottom
+  # `± <verb> <path>` identity line (no `⚑` header row -- the diff IS the
+  # identity, per the bottom-identity ruling) and the live answer prompt --
+  # the operator's question is "what will `y` do", and the answer is the
+  # diff, never `ApprovalPrompt`'s modal action line (which would show a
+  # truncated args gloss, not the change). A bash / non-diff approval has no
+  # image to show and keeps its mounted `ApprovalPrompt` via the general
+  # clause below.
   def render(%Block{fold: :expanded, kind: :approval} = block, context) do
     # `selector_hosted?` (the TEA harness): the hosting view runs its own
     # footer answer prompt, so the bash/non-diff approval must NOT mount

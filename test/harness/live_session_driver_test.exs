@@ -717,7 +717,12 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
          }}
       )
 
-      eventually(fn -> strip_ansi(raw(device)) =~ "±" end)
+      # The falsifier is the diff ROWS themselves (the change the operator
+      # approves), not the ± glyph: the `± edit mix.exs` identity line sits
+      # at the BOTTOM of the block (bottom-identity ruling -- rows first,
+      # identity last) and the footer preview trims from its TAIL under a
+      # tight row budget, so the leading diff rows are what must survive.
+      eventually(fn -> strip_ansi(raw(device)) =~ "line-one" end)
       plain = strip_ansi(raw(device))
       assert plain =~ "line-one", "the diff must show the removed line"
       assert plain =~ "line-two", "the diff must show the added line"
