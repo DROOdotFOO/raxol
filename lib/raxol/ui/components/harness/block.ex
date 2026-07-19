@@ -873,22 +873,36 @@ defmodule Raxol.UI.Components.Harness.Block do
         ]
 
       {:expanded, diff_rows} ->
-        [
+        exception =
           IndentationException.wrap(
             Components.column(gap: 0, children: diff_rows)
-          ),
-          Indication.container(
-            Components.column(
-              gap: 0,
-              children: [
-                approval_diff_identity(block, fg)
-                | approval_tail_lines(block, fg, context)
-              ]
-            ),
-            gutter: {:top, kind_glyph(:diff)},
-            gutter_style: apply_fg(%{dim: true}, fg)
           )
-        ]
+
+        # Happy path: the thing that appeared is the thing that stays
+        # (V's ruling). A SEALED-ALLOWED diff approval renders the BARE
+        # image — the identity line and the ✓ receipt added nothing over
+        # the diff itself. Live keeps identity + tail (the question needs
+        # its referent); denied/canceled keep the receipt (a refusal is a
+        # first-class record, never silence).
+        if block.seal == :sealed and
+             normalize_decision(Map.get(block.content, :decision)) == :allow do
+          [exception]
+        else
+          [
+            exception,
+            Indication.container(
+              Components.column(
+                gap: 0,
+                children: [
+                  approval_diff_identity(block, fg)
+                  | approval_tail_lines(block, fg, context)
+                ]
+              ),
+              gutter: {:top, kind_glyph(:diff)},
+              gutter_style: apply_fg(%{dim: true}, fg)
+            )
+          ]
+        end
     end
   end
 

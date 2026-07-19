@@ -112,7 +112,7 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
         List.duplicate(:pad, height)
 
       true ->
-        ordered = state.records
+        ordered = spaced_records(state.records)
         total = length(ordered)
         bottom = bottom_index(state.anchor, total)
 
@@ -121,18 +121,17 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
             record = Enum.at(ordered, index)
             element = record_element(record, width, state)
             h = element |> clip_tail_if_first(acc, height) |> element_height()
+            entry = if record == :spacer, do: :pad, else: {:record, record}
 
             cond do
               acc == [] ->
-                {:cont,
-                 {List.duplicate({:record, record}, min(h, height)),
-                  min(h, height)}}
+                {:cont, {List.duplicate(entry, min(h, height)), min(h, height)}}
 
               used + h > height ->
                 {:halt, {acc, used}}
 
               true ->
-                {:cont, {List.duplicate({:record, record}, h) ++ acc, used + h}}
+                {:cont, {List.duplicate(entry, h) ++ acc, used + h}}
             end
           end)
 
@@ -151,7 +150,7 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
   # records upward until the next would overflow `height`, pad the top so
   # content hugs the bottom. Returns exactly `height` rows.
   defp windowed_rows(state, width, height) do
-    ordered = state.records
+    ordered = spaced_records(state.records)
     total = length(ordered)
     bottom = bottom_index(state.anchor, total)
 
@@ -228,12 +227,46 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
   @sigil_cols 2
   @live_peek_lines 3
 
+  # Breathing rows (V's rhythm ruling): machinery lines squeeze together;
+  # a SPACIOUS record — an expanded message, a diff image (sealed :diff
+  # or a diff-carrying approval) — gets one blank row against any
+  # neighbor. One pure interleave, shared by the render walk AND the
+  # hit-test row map, so a click can never land one row off the paint.
+  defp spaced_records(records) do
+    records
+    |> Enum.reduce([], fn record, acc ->
+      case acc do
+        [] ->
+          [record]
+
+        [prev | _] = acc ->
+          if spacious?(record) or spacious?(prev),
+            do: [record, :spacer | acc],
+            else: [record | acc]
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp spacious?({:block, %{kind: :message, fold: :expanded}, _p}), do: true
+  defp spacious?({:block, %{kind: :diff}, _p}), do: true
+
+  defp spacious?(
+         {:block, %{kind: :approval, content: %{old: old, new: new}}, _p}
+       )
+       when is_binary(old) and is_binary(new),
+       do: true
+
+  defp spacious?(_record), do: false
+
   # THE LAW (V's general rule): every record element leaving this
   # function is an `Indication`, an `IndentationException`, or a
   # composite whose top-level children each are — `normalize_record/1`
   # auto-wraps anything else in `Indication.plain/2` (the safe 2-indent
   # default), so a non-compliant producer gets a VISIBLE nudge, never a
   # silent col-0 violation.
+  defp record_element(:spacer, _width, _state), do: blank()
+
   defp record_element(record, width, state) do
     record |> raw_record_element(width, state) |> normalize_record()
   end

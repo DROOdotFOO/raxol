@@ -579,6 +579,92 @@ defmodule Raxol.Harness.HarnessAppViewTest do
       assert ebody =~ "alpha"
     end
 
+    test "happy path: a SEALED-ALLOWED diff approval is the bare image — no identity, no receipt" do
+      model =
+        stream_model([
+          loop_ev(1, "t1", 100, :turn_started, %{}),
+          loop_ev(2, "t1", 110, :approval_requested, %{
+            "request_id" => "hp-1",
+            "tool_name" => "edit_file",
+            "action" => "edit_file",
+            "path" => "mix.exs",
+            "old" => "keep\nOLD\n",
+            "new" => "keep\nNEW\n",
+            "diff" => true,
+            "options" => [
+              %{"option_id" => "a", "name" => "Allow", "kind" => "allow_once"}
+            ]
+          }),
+          loop_ev(3, "t1", 120, :approval_decided, %{
+            "request_id" => "hp-1",
+            "decision" => "allow",
+            "option_id" => "a"
+          }),
+          loop_ev(4, "t1", 130, :turn_completed, %{})
+        ])
+
+      {body, _footer} = body_and_footer(View.render(model))
+
+      # the image stays...
+      assert body =~ "OLD"
+      assert body =~ "NEW"
+      # ...and NOTHING restates it (V: the block brought no value)
+      refute body =~ "✓ allowed"
+      refute body =~ "± edit"
+      refute body =~ "+1 -1"
+    end
+
+    test "breathing rows: spacious blocks get one blank neighbor row; machinery squeezes" do
+      records = [
+        {:marker, "» one"},
+        {:marker, "» two"},
+        {:block,
+         Raxol.UI.Components.Harness.Block.from_events(
+           :message,
+           [
+             %{
+               id: 1,
+               type: :item_completed,
+               payload: %{item_type: :message, content: "speech"}
+             }
+           ],
+           fold: :expanded,
+           seal: :sealed
+         ), 1.0},
+        {:marker, "» three"}
+      ]
+
+      {:ok, state} =
+        TranscriptView.init(
+          records: records,
+          height: 12,
+          anchor: :tail,
+          width: 40
+        )
+
+      rows =
+        TranscriptView.render(state, %{available_width: 40}).children
+
+      texts =
+        Enum.map(rows, fn
+          %{type: :indication, content: %{content: c}} -> c
+          %{type: :indication, content: %{children: _}} -> :block
+          %{content: c} when is_binary(c) -> c
+          _ -> :block
+        end)
+
+      # machinery pair squeezed (no blank between one/two); one blank
+      # BEFORE and AFTER the message block
+      i_two = Enum.find_index(texts, &(&1 == "two"))
+      i_one = Enum.find_index(texts, &(&1 == "one"))
+      assert i_two == i_one + 1
+
+      i_block = Enum.find_index(texts, &(&1 == :block))
+      assert Enum.at(texts, i_block - 1) == ""
+      i_three = Enum.find_index(texts, &(&1 == "three"))
+      assert Enum.at(texts, i_three - 1) == ""
+    end
+
     test "the ACTIVE thought sits in the QUIET register: dim + fade, never white" do
       model =
         stream_model([

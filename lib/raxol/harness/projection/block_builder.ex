@@ -337,7 +337,11 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
       drop_empty_assistant_messages(completed_groups)
 
     {blocks, block_diags} = build_blocks(completed_groups, fold_defaults)
-    blocks = suppress_approval_covered_tool_calls(blocks)
+
+    blocks =
+      blocks
+      |> suppress_approval_covered_tool_calls()
+      |> suppress_allowed_approval_result_diffs()
 
     {blocks, completion_diags} =
       attach_final_completion(blocks, events, session_index)
@@ -439,6 +443,38 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
 
   defp resultless_tool_call?(%{content: content}),
     do: Map.get(content, :result) in [nil, ""]
+
+  # Happy path: the thing that appeared is the thing that stays (V's
+  # ruling). An ALLOWED diff approval already showed the exact image the
+  # apply then wrote — the tool_result's own `:diff` block (`± path ·
+  # +N -M`) restates it and is suppressed. A denied/canceled approval
+  # covers nothing (no apply happened), and a diff with no covering
+  # approval (--yolo) stays — it is the only record of the change.
+  defp suppress_allowed_approval_result_diffs(blocks) do
+    covered_paths =
+      for %{kind: :approval, content: %{old: old, new: new} = content} <-
+            blocks,
+          is_binary(old) and is_binary(new),
+          allowed_decision?(Map.get(content, :decision)),
+          path = Map.get(content, :path),
+          is_binary(path) and path != "",
+          into: MapSet.new(),
+          do: path
+
+    if MapSet.size(covered_paths) == 0 do
+      blocks
+    else
+      Enum.reject(blocks, fn block ->
+        block.kind == :diff and
+          MapSet.member?(covered_paths, Map.get(block.content, :path))
+      end)
+    end
+  end
+
+  defp allowed_decision?(d) when d in [:allow, "allow", :approved, "approved"],
+    do: true
+
+  defp allowed_decision?(_d), do: false
 
   # -- pass 1: item/turn streaming fold -------------------------------------
 

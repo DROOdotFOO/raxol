@@ -120,6 +120,76 @@ defmodule Raxol.Harness.ProjectionDiffDedupTest do
     assert kinds(events) == [:tool_call]
   end
 
+  test "an ALLOWED diff approval also covers the RESULT :diff block — the image stays once" do
+    events =
+      [ev(1, :turn_started, %{})] ++
+        tool_use(2, "i1", "edit_file", %{"path" => "mix.exs"}) ++
+        [
+          ev(4, :approval_requested, %{
+            "request_id" => "r9",
+            "tool_name" => "edit_file",
+            "action" => "edit_file",
+            "path" => "mix.exs",
+            "old" => "a\nOLD\n",
+            "new" => "a\nNEW\n",
+            "diff" => true,
+            "options" => [
+              %{"option_id" => "a", "name" => "Allow", "kind" => "allow_once"}
+            ]
+          }),
+          ev(5, :approval_decided, %{
+            "request_id" => "r9",
+            "decision" => "allow",
+            "option_id" => "a"
+          })
+        ] ++
+        tool_result(6, "i2", "edit_file", "ok", %{
+          "diff" => true,
+          "path" => "mix.exs",
+          "old" => "a\nOLD\n",
+          "new" => "a\nNEW\n"
+        }) ++
+        [ev(8, :turn_completed, %{})]
+
+    # happy path: the approval IS the record — no second ± block
+    assert kinds(events) == [:approval]
+  end
+
+  test "a DENIED approval does NOT cover a result diff (nothing was applied by it)" do
+    events =
+      [ev(1, :turn_started, %{})] ++
+        [
+          ev(2, :approval_requested, %{
+            "request_id" => "r10",
+            "tool_name" => "edit_file",
+            "action" => "edit_file",
+            "path" => "other.exs",
+            "old" => "x\n",
+            "new" => "y\n",
+            "diff" => true,
+            "options" => [
+              %{"option_id" => "d", "name" => "Deny", "kind" => "reject_once"}
+            ]
+          }),
+          ev(3, :approval_decided, %{
+            "request_id" => "r10",
+            "decision" => "deny",
+            "option_id" => "d"
+          })
+        ] ++
+        tool_result(4, "i9", "edit_file", "ok", %{
+          "diff" => true,
+          "path" => "other.exs",
+          "old" => "x\n",
+          "new" => "z\n"
+        }) ++
+        [ev(6, :turn_completed, %{})]
+
+    kinds = kinds(events)
+    assert :approval in kinds
+    assert :diff in kinds
+  end
+
   test "a bash approval (no diff image) does NOT suppress its tool_call" do
     events =
       [ev(1, :turn_started, %{})] ++
