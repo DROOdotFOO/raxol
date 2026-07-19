@@ -5,6 +5,37 @@ Parent: `f0-capability-detection.md` (the batched-probe substrate this rides on)
 Sibling: `tui-steal-list.md` #7c/#8 (H-K solver + color-ladder foundation)
 Depends on: the salience sign-flip fix (in flight, do **not** re-derive here)
 
+**§7/§4 downgrade seam — LANDED (2026-07-19).** `Raxol.UI.ColorResolver`
+(main raxol, `lib/raxol/ui/color_resolver.ex`) now performs the §3.3 step-5
+downgrade routing per the §4 tiers table, gated on a guarded lazy read of
+`Raxol.Terminal.Capabilities.color_depth/0` (defaults `:truecolor` when no
+capability record is cached -- the existing-suite neutrality contract,
+not that function's own `:ansi16` no-record default). `:truecolor` is the
+identity; `:ansi256` quantizes truecolor hex/`{r,g,b}` via
+`Colors.find_closest_256_color/1` (already-discrete literals pass
+through); `:ansi16` role-tagged intents pin through `Ansi16Salience.slot/3`
+(polarity from the detected ground, prominence bucket from the composed
+`effective_p`), role-less colors chroma-gate (`0.03`, see
+`color_resolver.ex`'s `@ansi16_gray_chroma_gate` comment for the
+derivation against the PIN test's misroute band) before quantizing via
+`Colors.find_closest_basic_color/1`; `:none` strips fg/bg to `nil`. The
+`:ansi16` rung always emits one of the 16 standard atom names (never a raw
+slot integer) so `packages/raxol_terminal`'s renderer needs no new encode
+logic -- audited (§7's "renderer only encodes, never chooses"): the atom/
+integer/nil encode clauses already in `renderer.ex` handle every shape the
+resolver now emits, and the live pipeline (`backends.ex`) constructs the
+renderer with an empty `%{}` theme, so the atom path's theme-lookup
+fallback (a separate, pre-existing feature for named theme colors) never
+intercepts an ANSI16 downgrade decision. The region-prominence-
+propagation.md §3.1 grid-bg TODO closed in the same pass (see that doc's
+updated note). Test coverage: `test/raxol/ui/color_resolver_test.exs`
+("capability-tier downgrade", "grid-bg fg floor"),
+`test/raxol/ui/theming/colors_test.exs` (resolver-level gray-misroute fix
++ role-pin-bypasses-quantizer), `test/raxol/ui/region_prominence_test.exs`
+(RP-N-02 golden updated to stay grid-aware). Not yet done: rungs 5/6 (OSC
+4 known-palette 16-color, live ground re-solve) -- unrelated to this seam,
+still tracked at §8/§9.
+
 Thesis: the terminal already *is* a theme. Its background color is the ground the H-K
 salience solver was built to solve against; its foreground and 16 palette slots are a
 user-chosen, user-trusted color foundation. Raxol should **ride that native palette** —

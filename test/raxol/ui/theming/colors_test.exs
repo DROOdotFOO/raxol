@@ -1,6 +1,7 @@
 defmodule Raxol.UI.Theming.ColorsTest do
   use ExUnit.Case, async: true
 
+  alias Raxol.UI.{ColorResolver, ColorIntent}
   alias Raxol.UI.Theming.Colors
 
   describe "to_rgb/1" do
@@ -175,7 +176,7 @@ defmodule Raxol.UI.Theming.ColorsTest do
     # (232..255). Any *other* index in 16..231 is a chromatic (non-gray)
     # cube cell.
     @achromatic_256_indices [0, 7, 8, 15, 16, 59, 102, 145, 188, 231] ++
-                               Enum.to_list(232..255)
+                              Enum.to_list(232..255)
 
     test "pure grays never quantize to a chromatic cube entry (the classic RGB-distance failure)" do
       for v <- [0, 1, 15, 40, 64, 90, 128, 160, 200, 230, 254, 255] do
@@ -264,6 +265,59 @@ defmodule Raxol.UI.Theming.ColorsTest do
         assert idx in [1, 4, 6],
                "expected the known chromatic misroute for v=#{v}, got slot #{idx}"
       end
+    end
+
+    # FIXED at the resolver level (native-palette-riding.md §4,
+    # region-prominence-propagation.md §7): the PIN test above documents
+    # that the raw quantizer this module ships (`find_closest_basic_color/1`)
+    # still misroutes on its own -- deliberately unchanged, it is a
+    # general-purpose nearest-color function with legitimate non-gray
+    # callers. `Raxol.UI.ColorResolver`'s `:ansi16` downgrade rung never
+    # calls it directly on a role-less color without first gating on
+    # chroma (`@ansi16_gray_chroma_gate`, ~0.03) -- exactly the same
+    # v=30/50/90 grays that misroute here land on one of the 4 achromatic
+    # ANSI16 slots (black/gray/silver/white) once routed through the
+    # resolver, never on the chromatic slots this PIN documents.
+    test "the resolver's chroma gate FIXES the PIN's misroute for the same grays" do
+      for v <- [30, 50, 90] do
+        hex =
+          "#" <>
+            (v
+             |> Integer.to_string(16)
+             |> String.pad_leading(2, "0")
+             |> String.duplicate(3))
+
+        cells = [{0, 0, "x", hex, nil, []}]
+
+        [{_x, _y, _c, fg, _bg, _a}] =
+          ColorResolver.resolve_cells(cells, ground: 0.2, color_depth: :ansi16)
+
+        assert fg in [:black, :white, :bright_black, :bright_white],
+               "expected v=#{v} (#{hex}) to land on a neutral ANSI16 atom, got #{inspect(fg)}"
+
+        refute fg in [
+                 :red,
+                 :blue,
+                 :cyan,
+                 :bright_red,
+                 :bright_blue,
+                 :bright_cyan
+               ],
+               "gate failed to prevent the chromatic misroute for v=#{v} (#{hex}), got #{inspect(fg)}"
+      end
+    end
+
+    test "a role-pinned ColorIntent still reaches Ansi16Salience even when its resolved hex would have misrouted" do
+      # error's resolved fg on a dark ground could plausibly land near a
+      # gray-adjacent hue -- doesn't matter what the raw hex is, a `role:`
+      # intent must NEVER take the chroma-gate/nearest-color path at all.
+      intent = %ColorIntent{tier: :alarm, c: 0.02, h: 0, role: :error}
+      cells = [{0, 0, "x", intent, nil, []}]
+
+      [{_x, _y, _c, fg, _bg, _a}] =
+        ColorResolver.resolve_cells(cells, ground: 0.2, color_depth: :ansi16)
+
+      assert fg in [:red, :bright_red]
     end
   end
 end

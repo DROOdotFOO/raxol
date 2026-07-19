@@ -16,10 +16,34 @@ defmodule Raxol.UI.ColorResolverTest do
   use ExUnit.Case, async: true
 
   alias Raxol.UI.{ColorIntent, ColorResolver, Renderer}
-  alias Raxol.UI.Theming.Salience
+  alias Raxol.UI.Theming.{Ansi16Salience, Colors, Salience}
+  alias Raxol.Terminal.Capabilities
 
   @dark_ground Salience.reference_ground()
   @light_ground 0.92
+
+  # Slot -> atom, the standard ANSI16 numbering (matches
+  # `Raxol.UI.ColorResolver`'s private `@ansi16_codes`/`@ansi16_atoms`
+  # reverse map -- duplicated here, not imported, so a resolver-side typo
+  # would actually be caught rather than agreeing with itself).
+  @ansi16_atoms %{
+    0 => :black,
+    1 => :red,
+    2 => :green,
+    3 => :yellow,
+    4 => :blue,
+    5 => :magenta,
+    6 => :cyan,
+    7 => :white,
+    8 => :bright_black,
+    9 => :bright_red,
+    10 => :bright_green,
+    11 => :bright_yellow,
+    12 => :bright_blue,
+    13 => :bright_magenta,
+    14 => :bright_cyan,
+    15 => :bright_white
+  }
 
   # ---- fixtures ----
 
@@ -576,5 +600,294 @@ defmodule Raxol.UI.ColorResolverTest do
   defp ap_lightness(hex) do
     {l, c, h} = Salience.hex_to_oklch(hex)
     Salience.apparent_lightness(l, c, h)
+  end
+
+  # ---- grid-bg fg floor (region-prominence-propagation.md §3.1 TODO, closed
+  # by native-palette-riding.md §7) ----
+
+  describe "grid-bg fg floor" do
+    test "a nil-fg/nil-bg cell painted over an earlier opaque bg gets the baseline :text-floored intent" do
+      opaque = {0, 0, " ", :default, "#101010", []}
+      transparent = {0, 0, "x", nil, nil, []}
+
+      [_, {_, _, _, fg, bg, _}] =
+        ColorResolver.resolve_cells([opaque, transparent], ground: @dark_ground)
+
+      # this cell's OWN bg is still nil (never painted, never writes the grid) ...
+      assert bg == nil
+
+      # ... but its fg is no longer nil -- it resolved against the earlier
+      # painted bg (the paint-order grid's `under`), at the :text AA floor.
+      assert is_binary(fg)
+
+      ratio = Raxol.UI.Harness.Prominence.wcag_ratio(fg, "#101010")
+      assert ratio >= 4.5 - 1.0e-6
+    end
+
+    test "a nil-fg/nil-bg cell with nothing painted underneath stays nil (ratified PRIMARY case, untouched)" do
+      cells = [{0, 0, "x", nil, nil, []}]
+
+      [{_, _, _, fg, bg, _}] =
+        ColorResolver.resolve_cells(cells, ground: @dark_ground)
+
+      assert fg == nil
+      assert bg == nil
+    end
+
+    test "an explicit literal fg (not nil) is never promoted, even over a painted bg" do
+      opaque = {0, 0, " ", :default, "#101010", []}
+      explicit = {0, 0, "x", :cyan, nil, []}
+
+      [_, {_, _, _, fg, _, _}] =
+        ColorResolver.resolve_cells([opaque, explicit], ground: @dark_ground)
+
+      assert fg == :cyan
+    end
+  end
+
+  # ---- capability-tier downgrade (native-palette-riding.md §4/§7, A3;
+  # region-prominence-propagation.md §7) ----
+
+  describe "capability-tier downgrade" do
+    setup do
+      Capabilities.reset_cache()
+      on_exit(fn -> Capabilities.reset_cache() end)
+    end
+
+    test "neutrality: with no capability record cached, resolution is byte-identical to :truecolor (no color_depth opt)" do
+      cells = [
+        {0, 0, "a", "#c1712c", "#101010", []},
+        {1, 0, "b", {10, 200, 90}, nil, []},
+        {2, 0, "c", :bright_yellow, :blue, []},
+        {3, 0, "d", 196, 232, []}
+      ]
+
+      assert ColorResolver.resolve_cells(cells, ground: @dark_ground) == cells
+    end
+
+    test "color_depth: :truecolor is the identity on every literal shape" do
+      cells = [
+        {0, 0, "a", "#c1712c", "#101010", []},
+        {1, 0, "b", {10, 200, 90}, nil, []},
+        {2, 0, "c", :bright_yellow, :blue, []},
+        {3, 0, "d", 196, 232, []}
+      ]
+
+      assert ColorResolver.resolve_cells(cells,
+               ground: @dark_ground,
+               color_depth: :truecolor
+             ) == cells
+    end
+
+    test "color_depth: :none strips both fg and bg to nil regardless of shape" do
+      cells = [
+        {0, 0, "a", "#c1712c", "#101010", []},
+        {1, 0, "b", {10, 200, 90}, nil, []},
+        {2, 0, "c", :bright_yellow, :blue, []},
+        {3, 0, "d", 196, 232, []}
+      ]
+
+      resolved =
+        ColorResolver.resolve_cells(cells,
+          ground: @dark_ground,
+          color_depth: :none
+        )
+
+      for {_x, _y, _c, fg, bg, _a} <- resolved do
+        assert fg == nil
+        assert bg == nil
+      end
+    end
+
+    test "color_depth: :ansi256 quantizes truecolor hex/{r,g,b} but passes atoms/integers through unchanged" do
+      cells = [
+        {0, 0, "a", "#c1712c", nil, []},
+        {1, 0, "b", nil, {10, 200, 90}, []},
+        {2, 0, "c", :bright_yellow, nil, []},
+        {3, 0, "d", 196, nil, []}
+      ]
+
+      [a, b, c, d] =
+        ColorResolver.resolve_cells(cells,
+          ground: @dark_ground,
+          color_depth: :ansi256
+        )
+
+      {_, _, _, a_fg, _, _} = a
+      {_, _, _, _, b_bg, _} = b
+      {_, _, _, c_fg, _, _} = c
+      {_, _, _, d_fg, _, _} = d
+
+      assert a_fg == Colors.find_closest_256_color({0xC1, 0x71, 0x2C})
+      assert b_bg == Colors.find_closest_256_color({10, 200, 90})
+      # already-discrete literals pass through -- nothing to requantize
+      assert c_fg == :bright_yellow
+      assert d_fg == 196
+    end
+
+    test "color_depth: :ansi16 role-pin resolves via Ansi16Salience for a role-tagged intent, both polarities" do
+      for {ground, polarity} <- [{0.2, :dark}, {0.9, :light}] do
+        intent = %ColorIntent{tier: :alarm, c: 0.15, h: 20, role: :error}
+        cells = [{0, 0, "x", intent, nil, []}]
+
+        [{_, _, _, fg, _, _}] =
+          ColorResolver.resolve_cells(cells,
+            ground: ground,
+            color_depth: :ansi16
+          )
+
+        expected_slot = Ansi16Salience.slot(:error, polarity, 1.0)
+        assert fg == Map.fetch!(@ansi16_atoms, expected_slot)
+      end
+    end
+
+    test "color_depth: :ansi16 role-pin's prominence bucket follows effective_p (loud vs soft)" do
+      loud = %ColorIntent{
+        tier: :alarm,
+        c: 0.15,
+        h: 20,
+        role: :error,
+        prominence: 1.0
+      }
+
+      soft = %ColorIntent{
+        tier: :alarm,
+        c: 0.15,
+        h: 20,
+        role: :error,
+        prominence: 0.5
+      }
+
+      [{_, _, _, loud_fg, _, _}] =
+        ColorResolver.resolve_cells([{0, 0, "x", loud, nil, []}],
+          ground: @dark_ground,
+          color_depth: :ansi16
+        )
+
+      [{_, _, _, soft_fg, _, _}] =
+        ColorResolver.resolve_cells([{0, 0, "x", soft, nil, []}],
+          ground: @dark_ground,
+          color_depth: :ansi16
+        )
+
+      assert loud_fg ==
+               Map.fetch!(
+                 @ansi16_atoms,
+                 Ansi16Salience.slot(:error, :dark, 1.0)
+               )
+
+      assert soft_fg ==
+               Map.fetch!(
+                 @ansi16_atoms,
+                 Ansi16Salience.slot(:error, :dark, 0.5)
+               )
+
+      assert loud_fg != soft_fg
+    end
+
+    test "color_depth: :ansi16 role-less resolved colors chroma-gate before quantizing (gray-misroute fix)" do
+      # v=30/50/90 are exactly the sRGB grays `Colors.find_closest_basic_color/1`
+      # is PIN-documented to misroute onto navy/maroon/teal
+      # (test/raxol/ui/theming/colors_test.exs). At the resolver, the same
+      # grays must land on one of the 4 achromatic ANSI16 atoms.
+      for v <- [30, 50, 90] do
+        hex =
+          "#" <>
+            (v
+             |> Integer.to_string(16)
+             |> String.pad_leading(2, "0")
+             |> String.duplicate(3))
+
+        cells = [{0, 0, "x", hex, nil, []}]
+
+        [{_, _, _, fg, _, _}] =
+          ColorResolver.resolve_cells(cells,
+            ground: @dark_ground,
+            color_depth: :ansi16
+          )
+
+        assert fg in [:black, :white, :bright_black, :bright_white],
+               "v=#{v} (#{hex}) should chroma-gate to a neutral, got #{inspect(fg)}"
+      end
+    end
+
+    test "color_depth: :ansi16 role-less chromatic colors still quantize via nearest-color" do
+      cells = [{0, 0, "x", "#FF0000", nil, []}]
+
+      [{_, _, _, fg, _, _}] =
+        ColorResolver.resolve_cells(cells,
+          ground: @dark_ground,
+          color_depth: :ansi16
+        )
+
+      assert fg ==
+               Map.fetch!(
+                 @ansi16_atoms,
+                 Colors.find_closest_basic_color({255, 0, 0})
+               )
+    end
+
+    test "color_depth: :ansi16 downgraded bg still resolves as a valid LOCAL ground for a nested fg" do
+      # A bg intent downgrades to an ANSI16 atom; a role-less fg intent
+      # painted into that same cell's bg must still be able to read its
+      # apparent lightness back out (via `literal_ref_unsafe`'s atom
+      # clause) to compute the :text floor clamp correctly.
+      bg_intent = %ColorIntent{tier: :anchor, c: 0.0, h: nil}
+      fg_intent = %ColorIntent{tier: :baseline, c: 0.0, h: nil, floor: :text}
+
+      cells = [{0, 0, "x", fg_intent, bg_intent, []}]
+
+      [{_, _, _, fg, bg, _}] =
+        ColorResolver.resolve_cells(cells,
+          ground: @dark_ground,
+          color_depth: :ansi16
+        )
+
+      assert is_atom(bg)
+      assert is_atom(fg)
+    end
+
+    test "256-color quantization tier collapse guard: prominence 1.0 and 0.6 quantize to distinct indices" do
+      for {ground, seeds} <- %{
+            @dark_ground => [{57, 0.1}, {210, 0.08}],
+            @light_ground => [{57, 0.1}]
+          },
+          {h, c} <- seeds do
+        full = %ColorIntent{tier: :baseline, c: c, h: h, prominence: 1.0}
+        faded = %ColorIntent{tier: :baseline, c: c, h: h, prominence: 0.6}
+
+        [{_, _, _, full_idx, _, _}] =
+          ColorResolver.resolve_cells([{0, 0, "x", full, nil, []}],
+            ground: ground,
+            color_depth: :ansi256
+          )
+
+        [{_, _, _, faded_idx, _, _}] =
+          ColorResolver.resolve_cells([{0, 0, "x", faded, nil, []}],
+            ground: ground,
+            color_depth: :ansi256
+          )
+
+        assert full_idx != faded_idx,
+               "prominence 1.0 (##{full_idx}) and 0.6 (##{faded_idx}) collapsed to " <>
+                 "the same 256-color index for h=#{h} c=#{c} ground=#{ground}"
+      end
+    end
+
+    # NOTE: the "a cached capability record's color_depth is honored /
+    # overridden" leg of this contract is deliberately NOT exercised here
+    # via `Raxol.Terminal.Capabilities.cache/1` -- that record lives in
+    # `:persistent_term` (session-global, write-once), and this test FILE
+    # is `async: true`. Mutating it races every OTHER async test in the
+    # whole `test/raxol/ui/` run that resolves cells without an explicit
+    # `:color_depth` opt (several exist in this very file, relying on the
+    # neutrality default) -- confirmed empirically: adding such a test
+    # here produced intermittent failures in unrelated pre-existing tests
+    # elsewhere in this module when run as part of the full suite, not in
+    # isolation. `default_color_depth/0`'s `cached/0`-then-fallback logic
+    # is simple enough to read directly (`color_resolver.ex`); the
+    # `:color_depth` option itself (the part every other test in this
+    # describe exercises) is what actually needs the regression net, and
+    # is race-free (a plain function argument, no global state).
   end
 end

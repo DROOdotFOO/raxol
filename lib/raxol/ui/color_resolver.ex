@@ -154,7 +154,16 @@ defmodule Raxol.UI.ColorResolver do
 
   alias Raxol.UI.ColorIntent
   alias Raxol.UI.Harness.Prominence
-  alias Raxol.UI.Theming.{Colors, Salience, SalienceTheme}
+  alias Raxol.UI.Theming.{Ansi16Salience, Colors, Salience, SalienceTheme}
+
+  # Cross-package read of the terminal's classified color depth
+  # (native-palette-riding.md §4/§7, amendment A3: the DECISION lives
+  # here, byte emission stays in raxol_terminal's renderer). `raxol_agent`
+  # is a downstream package; `raxol_terminal` is a same-repo dependency of
+  # main raxol, not a guaranteed-loaded sibling in every build (headless
+  # test runs, LiveView, doc generation) -- guarded per CLAUDE.md's
+  # cross-package discipline.
+  @compile {:no_warn_undefined, Raxol.Terminal.Capabilities}
 
   @text_floor_ratio 4.5
   @clamp_iterations 24
@@ -207,6 +216,61 @@ defmodule Raxol.UI.ColorResolver do
   # fallback, mirroring `Raxol.UI.CellDim.atom_to_rgb/1`.
   @unknown_atom_rgb {128, 128, 128}
 
+  # --- capability-tier downgrade (native-palette-riding.md §4/§7, A3;
+  # region-prominence-propagation.md §7) ---
+
+  # Slot -> atom, the exact inverse of `@ansi16_codes` above. The `:ansi16`
+  # downgrade rung always emits one of these 16 atoms (never a raw
+  # `0..15` integer) so `packages/raxol_terminal`'s renderer needs no new
+  # encode logic: its existing `resolve_fg_ansi/2`/`resolve_bg_ansi/2`
+  # atom clause already emits the narrow `30-37`/`90-97` SGR form for
+  # every one of these names, which is exactly what a genuine 16-color
+  # terminal needs (an integer would hit the renderer's `0..255` clause
+  # instead and emit the wide `38;5;n` form -- not guaranteed understood
+  # by a true ANSI16-only terminal). This is the one representational
+  # choice that keeps A3's "renderer only encodes, never chooses" true
+  # without adding any color-depth awareness to the renderer at all.
+  @ansi16_atoms Map.new(@ansi16_codes, fn {atom, code} -> {code, atom} end)
+
+  # The 4 achromatic ANSI16 slots (black/gray/silver/white), precomputed
+  # to their OKLab lightness at compile time -- the only legal landing
+  # zone for a role-less color the chroma gate below classifies as gray.
+  @ansi16_neutral_slots [0, 7, 8, 15]
+
+  @ansi16_neutral_oklab (for slot <- @ansi16_neutral_slots do
+                           {r, g, b} = Colors.ansi_to_rgb(slot)
+
+                           {l, _c, _h} =
+                             Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
+
+                           {slot, l}
+                         end)
+
+  # Gray-misroute fix (native-palette-riding.md §4, region-prominence-
+  # propagation.md §7): pure OKLab ΔE nearest-basic-color quantization
+  # (`Colors.find_closest_basic_color/1`) routes a real slice of the gray
+  # ramp (sRGB v in 23..97, ~30% of 0..255) onto CHROMATIC slots -- navy
+  # (slot 4, chroma ~0.188), maroon (slot 1, chroma ~0.155), teal (slot 6,
+  # chroma ~0.093) -- because OKLab Euclidean distance has no notion that
+  # grayness should beat hue proximity, and the achromatic slots leave a
+  # wide OKLab-lightness gap (black L=0, gray L=0.60, silver L=0.81, white
+  # L=1.0) those chromatic slots happen to sit inside. See the PIN test in
+  # `test/raxol/ui/theming/colors_test.exs`.
+  #
+  # A true achromatic gray's own OKLab chroma computes to exactly `0.0`
+  # (verified: `Salience.rgb_to_oklch/3` on the full sRGB `v in 0..255`
+  # diagonal sweep, no float noise measured above `1.0e-9`) -- so ANY
+  # threshold strictly between `0.0` and the smallest misrouting
+  # neighbor's chroma (teal, `~0.093`) closes the gap with zero false
+  # negatives on true grays. `0.03` is chosen with headroom on both
+  # sides: comfortably above the float-noise floor (by ~7 orders of
+  # magnitude) so it never misses a genuine gray, and comfortably below
+  # (less than a third of) the nearest chromatic neighbor's chroma, so a
+  # near-neutral but intentionally tinted color (chroma above the gate)
+  # still routes to its true hue family via `find_closest_basic_color/1`
+  # rather than being flattened to a neutral it doesn't belong to.
+  @ansi16_gray_chroma_gate 0.03
+
   # Compile-time dev/test vs prod split -- the pattern already used by
   # `Raxol.Performance.DevHints`/`DevProfiler` (`@mix_env Mix.env()`) and
   # `Dispatcher.test_env?/0`. `enforce_resolved!/2`'s explicit-flag arity
@@ -236,17 +300,50 @@ defmodule Raxol.UI.ColorResolver do
       hardcoded constant (this is the F1 discipline the design doc opens
       with; a caller that needs a fixed ground for a test passes it
       explicitly here rather than this module defaulting to one).
+    * `:color_depth` - the capability-tier downgrade rung
+      (`:truecolor | :ansi256 | :ansi16 | :none`, native-palette-riding.md
+      §4). Default: a guarded lazy read of
+      `Raxol.Terminal.Capabilities.color_depth/0` that falls back to
+      `:truecolor` (NOT that function's own `:ansi16` no-record default)
+      whenever no capability record has been cached for this session --
+      see `default_color_depth/0` for the full rationale. A caller that
+      needs to force a rung (tests; an app that already knows its
+      terminal) passes it explicitly here.
   """
   @spec resolve_cells([cell()], keyword()) :: [cell()]
   def resolve_cells(cells, opts \\ []) do
     ground = Keyword.get_lazy(opts, :ground, &SalienceTheme.detect_ground/0)
+    color_depth = Keyword.get_lazy(opts, :color_depth, &default_color_depth/0)
 
     {resolved, _grid} =
       Enum.map_reduce(cells, %{}, fn cell, grid ->
-        resolve_cell(cell, grid, ground)
+        resolve_cell(cell, grid, ground, color_depth)
       end)
 
     enforce_resolved!(resolved)
+  end
+
+  # The `:color_depth` lazy default. Deliberately does NOT delegate
+  # straight to `Raxol.Terminal.Capabilities.color_depth/0` -- that
+  # function's own no-record answer is `:ansi16` (the struct's documented
+  # Core-floor default), which would downgrade every render the instant
+  # this module started calling it, breaking every existing golden/test
+  # that never primes a capability record (the overwhelmingly common case
+  # in `MIX_ENV=test`, headless sessions, and LiveView). This resolver
+  # must stay byte-identical to Phases 0-3 whenever nothing has actually
+  # been detected -- so it checks presence first via `cached/0` and only
+  # asks `color_depth/0` when a real record exists; absence defaults to
+  # `:truecolor`, matching what every prior phase already assumed
+  # unconditionally. Only an ACTUALLY cached record (a real detected
+  # terminal) can downgrade the tier.
+  @spec default_color_depth() :: atom()
+  defp default_color_depth do
+    with true <- Code.ensure_loaded?(Raxol.Terminal.Capabilities),
+         {:ok, caps} <- Raxol.Terminal.Capabilities.cached() do
+      Map.get(caps, :color_depth, :truecolor)
+    else
+      _ -> :truecolor
+    end
   end
 
   @doc """
@@ -270,11 +367,17 @@ defmodule Raxol.UI.ColorResolver do
 
   # --- the whole-list fold (§3.5) ---
 
-  defp resolve_cell({x, y, char, fg, bg, attrs}, grid, ground) do
+  defp resolve_cell({x, y, char, fg, bg, attrs}, grid, ground, color_depth) do
     region_p = clamp01(region_prominence_of(attrs))
     clean_attrs = strip_region_marker(attrs)
 
     under = Map.get(grid, {x, y})
+
+    # region-prominence-propagation.md §3.1's deferred "grid-bg" TODO /
+    # native-palette-riding.md §7 -- see `grid_bg_floor_fg/3` for the full
+    # rationale. Must run BEFORE the `match?(%ColorIntent{}, fg)` check
+    # below so a promoted `nil` participates in intent resolution.
+    fg = grid_bg_floor_fg(fg, bg, under)
 
     # `ref_al`/`ref_hex` decompose a literal color back into OKLCH -- real
     # work, and (per `literal_ref/1`'s moduledoc note) not fully total over
@@ -287,11 +390,15 @@ defmodule Raxol.UI.ColorResolver do
     enclosing_al =
       if match?(%ColorIntent{}, bg), do: ref_al(under) || ground, else: nil
 
-    # `resolve_bg/4` layers the region dim on top of intent resolution (or
-    # straight onto a literal) -- the RESULT is what actually gets painted,
-    # so it is what the grid records and what `fg`'s local ground reads
-    # (§3.5's "LOCAL ground is by definition the bg the compositor lands").
-    bg_resolved = resolve_bg(bg, enclosing_al, ground, region_p)
+    # `resolve_bg/5` layers the region dim and the capability-tier
+    # downgrade on top of intent resolution (or straight onto a literal) --
+    # the RESULT is what actually gets painted, so it is what the grid
+    # records and what `fg`'s local ground reads (§3.5's "LOCAL ground is
+    # by definition the bg the compositor lands"). Downgrading BEFORE the
+    # grid write is deliberate: a descendant's local-ground read should
+    # reflect what will actually be painted on THIS terminal, not an
+    # idealized truecolor value nothing downstream will ever show.
+    bg_resolved = resolve_bg(bg, enclosing_al, ground, region_p, color_depth)
 
     {local_al, local_bg_hex} =
       if match?(%ColorIntent{}, fg) do
@@ -303,7 +410,8 @@ defmodule Raxol.UI.ColorResolver do
         {nil, nil}
       end
 
-    fg_resolved = resolve_fg(fg, local_al, local_bg_hex, ground, region_p)
+    fg_resolved =
+      resolve_fg(fg, local_al, local_bg_hex, ground, region_p, color_depth)
 
     grid =
       if is_nil(bg_resolved),
@@ -312,6 +420,33 @@ defmodule Raxol.UI.ColorResolver do
 
     {{x, y, char, fg_resolved, bg_resolved, clean_attrs}, grid}
   end
+
+  # region-prominence-propagation.md §3.1's ratified degenerate case only
+  # covers an element's OWN resolved `bg` attr (`style_processor.ex`'s
+  # `default_fg_intent/2` cannot see the flattened paint-order grid; it
+  # only ever sees this one element's own bg). An element whose own bg is
+  # unpainted but that sits visually OVER an ancestor's/sibling's already-
+  # painted bg (the grid's `under` entry at this coordinate) still fell to
+  # the nil-fg-passthrough case before this change -- terminal-default fg
+  # over a raxol-painted bg, the accepted interim the doc's TODO names.
+  #
+  # This is the one line the doc reserved for this module: promote a
+  # nil/nil cell's fg to the SAME baseline-tier, `:text`-floored intent
+  # `default_fg_intent/2` already emits for an explicitly painted own bg.
+  # Resolution then falls through the EXISTING local-ground fallback chain
+  # in `resolve_cell/4` unmodified -- `bg_resolved` is still nil here (this
+  # cell paints nothing), so `ref_hex(bg_resolved) || ref_hex(under)`
+  # already lands on `under`, and `ref_al` the same way.
+  #
+  # The nil-fg-over-nil-bg-over-NOTHING-painted case (`under` also `nil`)
+  # is left untouched -- the ratified PRIMARY case (terminal-default fg
+  # passthrough) must keep holding even when no ground was ever
+  # detected/cached, per the design doc's "Rules" (§3.1).
+  defp grid_bg_floor_fg(nil, nil, under) when not is_nil(under) do
+    %ColorIntent{h: nil, c: 0.0, tier: :baseline, floor: :text}
+  end
+
+  defp grid_bg_floor_fg(fg, _bg, _under), do: fg
 
   # The `{:region_prominence, p}` marker `Raxol.UI.Renderer` stamps into a
   # cell's `attrs` (Phase 1, see moduledoc) -- resolver-internal, never a
@@ -328,43 +463,81 @@ defmodule Raxol.UI.ColorResolver do
     Enum.reject(attrs, &match?({:region_prominence, _}, &1))
   end
 
-  # --- bg resolution (§3.3 step 1 / C5), region-dimmed (§4 C1/C2) ---
+  # --- bg resolution (§3.3 step 1 / C5), region-dimmed (§4 C1/C2), then
+  # capability-tier downgraded (native-palette-riding.md §4/§7) ---
 
-  defp resolve_bg(nil, _enclosing_al, _ground, _region_p), do: nil
-  defp resolve_bg({:fixed, color}, _enclosing_al, _ground, _region_p), do: color
+  defp resolve_bg(nil, _enclosing_al, _ground, _region_p, _color_depth),
+    do: nil
 
-  defp resolve_bg(%ColorIntent{} = intent, enclosing_al, ground, region_p) do
+  defp resolve_bg(
+         {:fixed, color},
+         _enclosing_al,
+         ground,
+         _region_p,
+         color_depth
+       ),
+       do: downgrade_color(color, nil, 1.0, color_depth, ground)
+
+  defp resolve_bg(
+         %ColorIntent{} = intent,
+         enclosing_al,
+         ground,
+         region_p,
+         color_depth
+       ) do
     tier = intent.tier || :baseline
     c = intent.c || 0.0
     h = intent.h || 0
 
-    tier
-    |> Salience.solve(c, h, ground: enclosing_al, polarity: :auto)
-    |> region_dim_bg(region_p, ground)
+    resolved =
+      tier
+      |> Salience.solve(c, h, ground: enclosing_al, polarity: :auto)
+      |> region_dim_bg(region_p, ground)
+
+    # bg intents carry no `role` -- §7's role-pin path is documented for
+    # fg only (a semantic role names what TEXT means, not what a surface
+    # wash is); a bg role-less-quantize path also matches the design
+    # doc's own worked example ("a modal surface one step off the
+    # ground") having nothing to pin against.
+    downgrade_color(resolved, nil, 1.0, color_depth, ground)
   end
 
-  defp resolve_bg(literal, _enclosing_al, ground, region_p),
-    do: region_dim_bg(literal, region_p, ground)
+  defp resolve_bg(literal, _enclosing_al, ground, region_p, color_depth) do
+    literal
+    |> region_dim_bg(region_p, ground)
+    |> downgrade_color(nil, 1.0, color_depth, ground)
+  end
 
-  # --- fg resolution (§3.3 steps 2-4 / C1-C3, F2), region-composed (§4 C1) ---
+  # --- fg resolution (§3.3 steps 2-4 / C1-C3, F2), region-composed (§4 C1),
+  # then capability-tier downgraded (native-palette-riding.md §4/§7) ---
 
-  defp resolve_fg(nil, _local_al, _local_bg_hex, _ground, _region_p), do: nil
+  defp resolve_fg(
+         nil,
+         _local_al,
+         _local_bg_hex,
+         _ground,
+         _region_p,
+         _color_depth
+       ),
+       do: nil
 
   defp resolve_fg(
          {:fixed, color},
          _local_al,
          _local_bg_hex,
-         _ground,
-         _region_p
+         ground,
+         _region_p,
+         color_depth
        ),
-       do: color
+       do: downgrade_color(color, nil, 1.0, color_depth, ground)
 
   defp resolve_fg(
          %ColorIntent{} = intent,
          local_al,
          local_bg_hex,
          ground,
-         region_p
+         region_p,
+         color_depth
        ) do
     tier = intent.tier || :baseline
     c = intent.c || 0.0
@@ -373,7 +546,12 @@ defmodule Raxol.UI.ColorResolver do
     # §4 C1: effective_p composes the component's own prominence with the
     # per-cell region prominence (Phase 0: region_p was always 1.0, an
     # implicit identity -- Phase 1 threads the real value from the cell's
-    # `attrs` marker, see `region_prominence_of/1`).
+    # `attrs` marker, see `region_prominence_of/1`). Reused below as the
+    # ANSI16 role-pin's "prominence bucket" (`Ansi16Salience.slot/3`'s
+    # loud/soft threshold) -- the same composed value that decided how
+    # far this color faded decides which tier of the role's slot pair it
+    # pins to, so the two degradations (fade vs. tier-fold) never
+    # disagree about how prominent this cell currently is.
     own_p = clamp01(intent.prominence || 1.0)
     effective_p = clamp01(own_p * region_p)
 
@@ -392,18 +570,138 @@ defmodule Raxol.UI.ColorResolver do
     # region dim can never push an already-floored color back under its
     # floor (§3.4), because the floor check happens after this
     # composition, not before it.
-    clamp_output(
-      faded_hex,
-      target_hex,
-      local_al,
-      against_hex,
-      effective_p,
-      intent.floor
-    )
+    resolved =
+      clamp_output(
+        faded_hex,
+        target_hex,
+        local_al,
+        against_hex,
+        effective_p,
+        intent.floor
+      )
+
+    downgrade_color(resolved, intent.role, effective_p, color_depth, ground)
   end
 
-  defp resolve_fg(literal, _local_al, _local_bg_hex, ground, region_p),
-    do: region_dim_fg(literal, region_p, ground)
+  defp resolve_fg(
+         literal,
+         _local_al,
+         _local_bg_hex,
+         ground,
+         region_p,
+         color_depth
+       ) do
+    literal
+    |> region_dim_fg(region_p, ground)
+    |> downgrade_color(nil, 1.0, color_depth, ground)
+  end
+
+  # --- capability-tier downgrade (native-palette-riding.md §4/§7, A3;
+  # region-prominence-propagation.md §7) ---
+  #
+  # The DECISION of which slot/index/hex a color downgrades to lives here,
+  # at the resolver choke point -- byte EMISSION stays in raxol_terminal's
+  # renderer (A3). Runs as the LAST step of fg/bg resolution, after every
+  # region-prominence fade and legibility-floor clamp has already produced
+  # the color that would paint on a truecolor terminal -- downgrading
+  # operates on that ground truth, exactly the "honest" contract the
+  # design doc opens with (the tiers below only choose how to EXPRESS the
+  # resolved color on a smaller palette, never a different color).
+
+  defp downgrade_color(nil, _role, _effective_p, _color_depth, _ground),
+    do: nil
+
+  defp downgrade_color(color, _role, _effective_p, :truecolor, _ground),
+    do: color
+
+  defp downgrade_color(_color, _role, _effective_p, :none, _ground),
+    do: nil
+
+  defp downgrade_color(color, _role, _effective_p, :ansi256, _ground),
+    do: downgrade_ansi256(color)
+
+  defp downgrade_color(color, role, effective_p, :ansi16, ground),
+    do: downgrade_ansi16(color, role, effective_p, ground)
+
+  # :ansi256 rung -- only a truecolor hex/{r,g,b} SOURCE shape is
+  # requantized (design doc §4 table: "truecolor hex -> nearest-256
+  # (OKLab)" names the truecolor source, not every literal shape reaching
+  # this stage). An ANSI atom or an already-256-indexed integer is already
+  # a valid, renderable literal on a 256-color terminal --
+  # `packages/raxol_terminal/renderer.ex`'s atom/integer encode clauses
+  # handle either unchanged -- so requantizing it would spend a lossy
+  # RGB round-trip for no benefit.
+  defp downgrade_ansi256(color) do
+    case rgb_of(color) do
+      nil -> color
+      {r, g, b} -> Colors.find_closest_256_color({r, g, b})
+    end
+  end
+
+  # :ansi16 rung -- same "only requantize a truecolor shape" rule as
+  # `downgrade_ansi256/1` above, one rung down.
+  defp downgrade_ansi16(color, role, effective_p, ground) do
+    case rgb_of(color) do
+      nil -> color
+      rgb -> ansi16_slot(rgb, role, effective_p, ground)
+    end
+  end
+
+  # A `role` present means this color came from a `%ColorIntent{}` a
+  # producer explicitly tagged as semantic (`:error`, `:accent`, ...) --
+  # the honest 16-color path per native-palette-riding.md §4: nearest-RGB
+  # against a genuinely unknown user palette is a category lie (the
+  # user's slot 1 could be any hue), so semantic colors are PINNED by
+  # category + polarity + prominence-bucket instead of measured by
+  # distance. `Ansi16Salience.slot/3` intentionally has no clause for a
+  # role outside its closed `roles/0` set -- raises rather than guessing,
+  # matching that module's own documented fail-loud contract.
+  defp ansi16_slot(_rgb, role, effective_p, ground) when not is_nil(role) do
+    polarity = Ansi16Salience.polarity(ground)
+    slot = Ansi16Salience.slot(role, polarity, effective_p)
+    ansi16_atom(slot)
+  end
+
+  # Role-less: the chroma gate (see `@ansi16_gray_chroma_gate`'s comment
+  # for the full derivation) -- a near-achromatic color NEVER lands on a
+  # chromatic slot (the gray-misroute this whole rung exists to fix);
+  # anything with real chroma quantizes normally via nearest-color OKLab
+  # ΔE (`Colors.find_closest_basic_color/1`), which IS honest here because
+  # the ANSI16 basic-color RGB values are fixed constants, not a per-user
+  # unknown (the "known palette" the design doc's §4 table distinguishes
+  # from a genuinely-unknown user-themed slot).
+  defp ansi16_slot({r, g, b}, nil, _effective_p, _ground) do
+    {l, c, _h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
+
+    if c < @ansi16_gray_chroma_gate do
+      ansi16_atom(nearest_neutral_slot(l))
+    else
+      ansi16_atom(Colors.find_closest_basic_color({r, g, b}))
+    end
+  end
+
+  defp nearest_neutral_slot(target_l) do
+    @ansi16_neutral_oklab
+    |> Enum.min_by(fn {_slot, l} -> abs(l - target_l) end)
+    |> elem(0)
+  end
+
+  defp ansi16_atom(slot), do: Map.fetch!(@ansi16_atoms, slot)
+
+  # A hex string or `{r, g, b}` tuple is the only "truecolor source" shape
+  # this stage requantizes (mirrors `literal_ref_unsafe/1`'s scope --
+  # 3-digit shorthand hex and `"#RRGGBBAA"` alpha hex are out of scope
+  # there too). Everything else (an ANSI atom, an already-indexed
+  # integer, or any other literal shape) returns `nil` so the caller
+  # passes it through unchanged -- it is already a discrete-palette
+  # literal with nothing to quantize.
+  defp rgb_of("#" <> hex_digits = full) when byte_size(hex_digits) == 6,
+    do: Colors.hex_to_rgb(full)
+
+  defp rgb_of({r, g, b}) when is_integer(r) and is_integer(g) and is_integer(b),
+    do: {r, g, b}
+
+  defp rgb_of(_other), do: nil
 
   # --- F2 output-contrast clamp (§3.4), adapted from
   # `Prominence.clamp_to_floor/7` -- the same bisection-along-the-fade-line

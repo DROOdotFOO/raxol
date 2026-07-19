@@ -150,14 +150,20 @@ defmodule Raxol.UI.StyleProcessor do
   #       floor (4.5) -- no producer change needed there, the machinery
   #       already reads local bg off the cell it's attached to.
   #
-  # TODO(region-prominence-propagation.md §3.5, grid-bg case): this only
-  # covers an element's OWN resolved `bg` attr. A transparent element
-  # (bg: nil here) painted OVER an unrelated surface elsewhere in the
-  # paint-order grid still falls to case (a) -- terminal-default fg over a
-  # raxol-painted bg, an acceptable interim per the doc. Closing that gap
-  # needs a one-line `Raxol.UI.ColorResolver` change (nil-fg cells whose
-  # LOCAL grid bg is non-nil also get the baseline intent), deliberately
-  # deferred: this producer must not touch `color_resolver.ex`.
+  # CLOSED (region-prominence-propagation.md §3.5 grid-bg case; landed via
+  # native-palette-riding.md §7): this producer only ever sees an
+  # element's OWN resolved `bg` attr -- it genuinely cannot see the
+  # flattened paint-order grid (containment is already erased by the time
+  # cells reach that stage), so a transparent element (bg: nil here)
+  # painted OVER an unrelated surface elsewhere in the grid correctly
+  # falls to case (a) here. The gap that used to leave -- terminal-default
+  # fg over a raxol-painted bg -- is closed one layer down instead:
+  # `Raxol.UI.ColorResolver.resolve_cell/4`'s `grid_bg_floor_fg/3`
+  # promotes exactly that nil/nil-over-painted-grid case to this same
+  # baseline `:text`-floored intent, using the LOCAL grid's `under` entry
+  # this producer has no visibility into. This producer was deliberately
+  # never touched to land that fix -- see `color_resolver.ex` for the
+  # actual one-liner.
   defp default_fg_intent(nil, nil), do: nil
 
   defp default_fg_intent(nil, _painted_bg) do
