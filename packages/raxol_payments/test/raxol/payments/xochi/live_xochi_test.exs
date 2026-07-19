@@ -55,8 +55,8 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
   read-only first (no funds), asserting `can_solve` and the pinned solver.
 
   Runner + full env/corridor reference (auth modes, all `XOCHI_LIVE_*` overrides,
-  cross-asset Robinhood/USDG corridors, matrix bounds): the runner runs preflight
-  then matrix -- `examples/run_live_xochi_gate.sh`.
+  cross-asset Robinhood/USDG corridors, matrix bounds): the unified gate at the
+  repo root, `scripts/run_live_gates.sh --route xochi`, runs preflight then matrix.
   """
 
   use ExUnit.Case, async: false
@@ -610,7 +610,7 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
           permit2_origin?(from, token) and System.get_env("XOCHI_LIVE_SETTLE_PERMIT2") != "true" ->
             {:permit2_allowance,
              "#{token} pulls via Permit2 and needs a standing allowance. Order it through " <>
-               "raxol_acp (run_live_acp_order_gate.sh), or set XOCHI_LIVE_SETTLE_PERMIT2=true " <>
+               "the acp route (run_live_gates.sh --route acp), or set XOCHI_LIVE_SETTLE_PERMIT2=true " <>
                "once the allowance is in place."}
 
           true ->
