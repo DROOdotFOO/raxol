@@ -523,7 +523,40 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   # unlike the old clear-every-frame path nothing repaints the victim row. Blank
   # it at the write boundary so the invalid cell is unrepresentable downstream.
   defp sanitize_char(<<c::utf8>>) when c < 0x20 or c == 0x7F, do: " "
+
+  # A STANDALONE zero-width character has the same problem from the other
+  # direction: it occupies a cell (so the buffer budgets a column for it) but
+  # paints nothing (so the terminal advances zero), and the row ends up a
+  # column short of its own width. That is the writer/renderer disagreement
+  # that produces creeping misalignment.
+  #
+  # The fix is to refuse the character rather than to answer "how wide is
+  # it?". Width is the wrong question for something that cannot occupy a
+  # cell, and answering 0 would require a cell model where a grapheme can
+  # live inside its neighbour -- a much larger change (see
+  # docs/proposals/in-flight/unicode-width-table.md §7).
+  #
+  # This is deliberately STANDALONE-only. A ZWJ *inside* an emoji cluster is
+  # load-bearing -- it is what makes 👨‍👩‍👧‍👦 one glyph -- and never reaches
+  # here as its own char, because cells hold whole grapheme clusters.
+  defp sanitize_char(char) when is_binary(char) do
+    if zero_width_only?(char), do: " ", else: char
+  end
+
   defp sanitize_char(char), do: char
+
+  # U+200B..U+200F (ZWSP, ZWNJ, ZWJ, LRM, RLM), U+00AD soft hyphen,
+  # U+FEFF BOM/ZWNBSP, and the variation selectors when they arrive bare.
+  defp zero_width_only?(char) do
+    codepoints = String.to_charlist(char)
+
+    codepoints != [] and Enum.all?(codepoints, &zero_width_codepoint?/1)
+  end
+
+  defp zero_width_codepoint?(cp) do
+    cp in 0x200B..0x200F or cp == 0x00AD or cp == 0xFEFF or
+      cp in 0xFE00..0xFE0F
+  end
 
   # Pull a tagged `{:hyperlink, url}` entry out of the cell attrs list; the
   # remaining entries are plain style atoms. Returns {url_or_nil, atoms}.
