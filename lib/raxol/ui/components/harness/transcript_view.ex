@@ -31,6 +31,7 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
   use Raxol.UI.Components.Base.Component
 
   alias Raxol.UI.Components.Harness.{Block, BlockBody, Indication}
+  alias Raxol.UI.Harness.Prominence
 
   @impl true
   def init(props) do
@@ -282,16 +283,21 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
     shown =
       if expanded?, do: lines, else: Enum.take(lines, -@live_peek_lines)
 
+    # The quiet cognition register (V's ruling: a streaming thought is
+    # LOW-prominent): :dim alone reads near-white on many terminals, so
+    # the rows carry the same fade ramp sealed machinery uses.
+    quiet = %{dim: true, fg: Prominence.resolve("#B4B4B4", 0.5)}
+
     rows =
-      [%{type: :text, content: "thinking", attrs: %{style: [:dim]}}] ++
+      [%{type: :text, content: "thinking", style: quiet}] ++
         Enum.map(shown, fn line ->
-          %{type: :text, content: line, attrs: %{style: [:dim]}}
+          %{type: :text, content: line, style: quiet}
         end)
 
     Indication.container(
       %{type: :column, gap: 0, style: %{}, children: rows},
       gutter: {:corners, "∵", nil},
-      gutter_style: %{dim: true}
+      gutter_style: quiet
     )
   end
 

@@ -143,6 +143,17 @@ defmodule Raxol.Harness.HarnessAppChoiceTest do
     assert denied.stub_notice =~ "would answer the approval"
   end
 
+  test "an :ok answer result is SILENT — the decision receipt is the record (V's ruling)" do
+    model = approval_model()
+    answered = Model.approval_answer_result(model, :ok)
+
+    assert answered.lane_notice == nil
+    assert answered == model
+
+    failed = Model.approval_answer_result(model, {:error, :lane_down})
+    assert failed.lane_notice =~ "approval answer dispatch failed"
+  end
+
   test "resize remounts the prompt at the new width, draft preserved" do
     model = approval_model() |> type("keep me")
     resized = Model.resize(model, 100, 30)

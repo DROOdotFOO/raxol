@@ -82,7 +82,6 @@ defmodule Raxol.Harness.HarnessApp.Model do
   @busy_notice "» a turn is already running — wait for it, then resend"
   @steer_in_flight_notice "» steer already in flight — wait for its decision"
   @interrupt_sent_notice "interrupt sent — awaiting confirmation"
-  @approval_sent_notice "approval answer sent"
   @degraded_notice "» warning: input reader failed to re-enable — keyboard may be dead"
 
   defstruct events: [],
@@ -1105,8 +1104,11 @@ defmodule Raxol.Harness.HarnessApp.Model do
       put_lane_notice(model, "» interrupt dispatch failed: #{inspect(reason)}")
 
   @doc false
-  def approval_answer_result(model, :ok),
-    do: put_lane_notice(model, @approval_sent_notice)
+  # Happy path is SILENT (V's ruling): the answered approval's own
+  # decision receipt (`✓ allowed` / `✗ denied`, folded from the
+  # approval_decided event) is the record — a "sent" notice on top is
+  # noise. Only a dispatch FAILURE renders.
+  def approval_answer_result(model, :ok), do: model
 
   def approval_answer_result(model, {:error, reason}),
     do:

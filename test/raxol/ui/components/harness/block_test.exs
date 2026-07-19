@@ -690,7 +690,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert %{type: :indication, gutter: {:top, "⁖"}} = rendered
 
       assert [{"thought", style} | _] = styled_texts(rendered)
-      assert style[:dim] == true and style[:italic] == true
+      assert style[:dim] == true and style[:bold] == true
 
       live =
         Block.from_events(:reasoning, message_events("a\nb"), fold: :folded)
@@ -881,7 +881,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert %{type: :indication, gutter: {:top, "⁖"}} = folded_render
 
       assert [{"thought", style} | _] = styled_texts(folded_render)
-      assert style[:dim] == true and style[:italic] == true
+      assert style[:dim] == true and style[:bold] == true
 
       # Expanded (V's icon-column convention): the render root IS the one
       # Indication.bracket — `∵` stamps the header row, `∴` the last,

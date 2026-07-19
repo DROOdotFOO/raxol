@@ -1070,7 +1070,7 @@ defmodule Raxol.UI.Components.Harness.Block do
         [
           Components.text(
             content: "thought",
-            style: apply_fg(%{dim: true, italic: true}, fg)
+            style: apply_fg(%{dim: true, bold: true}, fg)
           ),
           Components.text(content: duration, style: apply_fg(%{dim: true}, fg))
         ] ++ right

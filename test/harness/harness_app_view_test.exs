@@ -578,5 +578,40 @@ defmodule Raxol.Harness.HarnessAppViewTest do
       {ebody, _} = body_and_footer(View.render(expanded))
       assert ebody =~ "alpha"
     end
+
+    test "the ACTIVE thought sits in the QUIET register: dim + fade, never white" do
+      model =
+        stream_model([
+          loop_ev(1, "t1", 100, :turn_started, %{}),
+          loop_ev(2, "t1", 110, :item_started, %{
+            "item_id" => "i1",
+            "item_type" => "reasoning"
+          }),
+          loop_ev(3, "t1", 120, :item_delta, %{
+            "item_id" => "i1",
+            "chunk" => "quiet line"
+          })
+        ])
+
+      view = View.render(model)
+      [transcript | _] = unframe(view).children
+
+      thinking =
+        Enum.find(transcript.children, fn
+          %{type: :indication, gutter: {:corners, "∵", nil}} -> true
+          _ -> false
+        end)
+
+      assert thinking, "no live-thinking record on screen"
+
+      for row <- thinking.content.children do
+        assert row.style[:dim] == true
+
+        assert is_binary(row.style[:fg]) and
+                 String.starts_with?(row.style[:fg], "#")
+      end
+
+      assert is_binary(thinking.gutter_style[:fg])
+    end
   end
 end
