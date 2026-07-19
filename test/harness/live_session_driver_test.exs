@@ -677,7 +677,7 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
     end
 
     test "a diff approval renders its ± diff body through the driver, not just the action" do
-      # The harness_live_demo path V tests: an edit_file approval carrying the
+      # The live harness path (mix raxol.harness): an edit_file approval carrying the
       # before/after image (`old`/`new`) must show the ± diff so the operator
       # sees the change they're approving -- not the bare "edit_file" action.
       # The existing approval fixtures carry no old/new, so this path was

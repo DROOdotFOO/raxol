@@ -219,8 +219,9 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   end
 
   @doc """
-  Environment-driven `ExecutorConfig` detection — the
-  `examples/harness_live_demo.exs` precedent, as a library helper:
+  Environment-driven `ExecutorConfig` detection — the same convention
+  `mix raxol.harness` uses (`Mix.Tasks.Raxol.Harness.detect_backend/0`),
+  as a library helper:
 
     * `LM_STUDIO=true|1` → the `:lm_studio` harness (local LM Studio,
       OpenAI-compatible), model `AI_MODEL` or `"local-model"`;
