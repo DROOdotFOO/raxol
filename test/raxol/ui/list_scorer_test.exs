@@ -264,39 +264,46 @@ defmodule Raxol.UI.ListScorerTest do
              "pathological all-match case regressed badly: #{millis}ms"
     end
 
-    test "a single ~1,000,000-grapheme adversarial label stays bounded and still matches" do
-      # Nothing else in this suite exercises a long K: the realistic
-      # corpus above caps out around ~20 chars/label. Without the
-      # `@max_score_graphemes` clamp in `ListScorer`, the O(query length
-      # * key length) DP (and its two-pointer subsequence pre-check)
-      # would cost proportional to this label's full length -- an
-      # unbounded paste or a log line used as a list key would make a
-      # single keystroke's filter pass arbitrarily slow.
+    test "a ~1,000,000-grapheme adversarial label still matches and keeps its full key" do
+      # Nothing else in this suite exercises a long K: the realistic corpus
+      # above caps out around ~20 chars/label. The `@max_score_graphemes` clamp
+      # in `ListScorer` bounds the O(query length * key length) DP (and its
+      # two-pointer subsequence pre-check) so an unbounded paste, or a log line
+      # used as a list key, can't make a single keystroke's filter pass
+      # arbitrarily slow. The clamp only bounds the internal scoring lists;
+      # `key:` itself is never truncated, so callers (Picker's `render_row`)
+      # keep highlighting the real label, not a truncated stand-in. This is the
+      # deterministic half; the wall-clock guard lives in the :slow test below.
       long_label = "prefix-match-" <> String.duplicate("x", 1_000_000)
       items = ["short-one", long_label, "short-two"]
       query = "prefix-match"
 
-      {micros, results} =
+      assert [%{item: matched, key: key}] = ListScorer.rank(items, query, &key_fn/1)
+      assert matched == long_label
+      assert key == long_label
+      assert String.length(key) == String.length(long_label)
+    end
+
+    @tag :bench
+    @tag :slow
+    test "a single ~1,000,000-grapheme adversarial label stays bounded" do
+      # Perf regression guard for the clamp: without `@max_score_graphemes`, the
+      # O(query * key) DP over a 1M-grapheme label costs seconds. This is a
+      # wall-clock assertion on a shared runner, so it carries :slow/:bench
+      # (excluded from PR CI) like the sibling benchmarks above -- a 200ms target
+      # still flaked on loaded macOS CI at ~25ms with the clamp working. Runs
+      # locally and on the nightly slow suite.
+      long_label = "prefix-match-" <> String.duplicate("x", 1_000_000)
+      items = ["short-one", long_label, "short-two"]
+      query = "prefix-match"
+
+      {micros, _results} =
         :timer.tc(fn -> ListScorer.rank(items, query, &key_fn/1) end)
 
       millis = micros / 1000
 
-      # Order-of-magnitude blowup guard, matching the sibling test's
-      # convention above: without the clamp, the O(query * key) DP over a
-      # 1M-grapheme label costs seconds — 200ms catches that class while
-      # absorbing shared-CI-runner load (a 16ms wall-clock target flaked
-      # on loaded runners at ~25ms with the clamp working correctly).
       assert millis < 200.0,
              "expected the 1M-grapheme adversarial label to stay bounded, took #{millis}ms"
-
-      assert [%{item: matched, key: key}] = results
-      assert matched == long_label
-      # The full untruncated label must still be in the result -- only
-      # the internal scoring lists are clamped, never `key:` itself --
-      # so callers (Picker's `render_row`) keep highlighting the real
-      # label, not a truncated stand-in.
-      assert key == long_label
-      assert String.length(key) == String.length(long_label)
     end
   end
 end
