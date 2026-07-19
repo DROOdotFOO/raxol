@@ -120,6 +120,11 @@ defmodule Raxol.MCP.ToolSynchronizer do
     # Register session-level resources (context tree, widget tree)
     resource_uris = register_session_resources(state)
 
+    # No initial pull here: the session owner seeds the first view tree.
+    # Raxol.Headless forces one synchronous engine render right after this
+    # synchronizer starts, which re-emits [:raxol, :runtime,
+    # :view_tree_updated] into the freshly attached handler -- so derived
+    # tools never wait for an event-driven re-render.
     {:ok, %{state | current_resource_uris: resource_uris}}
   end
 

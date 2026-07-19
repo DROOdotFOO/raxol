@@ -25,6 +25,18 @@ defmodule Raxol.MCP.TreeWalker do
 
   The widget and its children still render normally -- only MCP tool
   exposure is suppressed. Useful for decorative or internal widgets.
+
+  ## Explicit provider marker (`attrs.component_module`)
+
+  Components whose root emits a plain layout type (`:column`, `:row`) can
+  declare their providing module explicitly instead of growing this
+  package's type map (the harness block Components do this):
+
+      %{type: :column, id: "blk", attrs: %{component_module: MyBlock}}
+
+  An explicit marker wins over the built-in type map; the same
+  `ToolProvider` guard applies, so a module that does not implement the
+  behaviour still derives nothing, and a non-atom marker is ignored.
   """
 
   alias Raxol.MCP.ToolProvider
@@ -47,7 +59,8 @@ defmodule Raxol.MCP.TreeWalker do
               Raxol.UI.Components.Table,
               Raxol.UI.Charts.BarChart,
               Raxol.UI.Charts.LineChart,
-              Raxol.UI.Charts.ScatterChart
+              Raxol.UI.Charts.ScatterChart,
+              Raxol.UI.Components.Harness.ApprovalPrompt
             ]}
 
   @default_type_map %{
@@ -65,7 +78,8 @@ defmodule Raxol.MCP.TreeWalker do
     table: Raxol.UI.Components.Table,
     bar_chart: Raxol.UI.Charts.BarChart,
     line_chart: Raxol.UI.Charts.LineChart,
-    scatter_chart: Raxol.UI.Charts.ScatterChart
+    scatter_chart: Raxol.UI.Charts.ScatterChart,
+    approval_prompt: Raxol.UI.Components.Harness.ApprovalPrompt
   }
 
   @type context :: %{
@@ -84,7 +98,9 @@ defmodule Raxol.MCP.TreeWalker do
     * `:dispatcher_pid` - pid of the session's Dispatcher (for message dispatch)
     * `:type_map` - optional override for widget type -> module mapping
   """
-  @spec derive_tools(map() | [map()], context()) :: [Raxol.MCP.Registry.tool_def()]
+  @spec derive_tools(map() | [map()], context()) :: [
+          Raxol.MCP.Registry.tool_def()
+        ]
   def derive_tools(tree, context) do
     type_map = Map.get(context, :type_map, @default_type_map)
     do_walk(tree, context, type_map, [])
@@ -103,18 +119,70 @@ defmodule Raxol.MCP.TreeWalker do
         derive_widget_tools(node, type, id, context, type_map)
       end
 
-    children_acc = do_walk(node[:children] || [], context, type_map, acc)
+    children_acc = do_walk(child_nodes(node), context, type_map, acc)
     widget_tools ++ children_acc
   end
 
-  defp do_walk(%{children: children}, context, type_map, acc) when is_list(children) do
-    do_walk(children, context, type_map, acc)
+  defp do_walk(%{children: _} = node, context, type_map, acc) do
+    do_walk(child_nodes(node), context, type_map, acc)
+  end
+
+  # An `:absolute_layer` (Raxol.UI.Components.AbsoluteLayer) parents its
+  # subtree through `:flow_child` + `:overlays[].element`, not `:children`,
+  # and carries no `:id` of its own -- so without these clauses the walker
+  # would stop at it and every overlay Component hosted over the transcript
+  # (pickers, panels, dialogs) would derive zero tools. Walk into both so an
+  # overlay Component's stamped root is reached exactly as a flow child's is.
+  defp do_walk(%{flow_child: _} = node, context, type_map, acc) do
+    do_walk(child_nodes(node), context, type_map, acc)
+  end
+
+  defp do_walk(%{overlays: _} = node, context, type_map, acc) do
+    do_walk(child_nodes(node), context, type_map, acc)
   end
 
   defp do_walk(_node, _context, _type_map, acc), do: acc
 
+  # The View DSL allows :children to be a list or a single element map
+  # (e.g. a box whose do-block is one column). Mirror the Bubbler's
+  # path-finding, which treats both shapes as first-class. An
+  # `:absolute_layer` also contributes its flow child + overlay elements
+  # (see the flow_child/overlays clauses above).
+  defp child_nodes(node) do
+    direct =
+      case Map.get(node, :children) do
+        kids when is_list(kids) -> kids
+        kid when is_map(kid) -> [kid]
+        _ -> []
+      end
+
+    direct ++ absolute_layer_children(node)
+  end
+
+  # The `:absolute_layer` overlay wiring: the flow child plus each
+  # overlay's `:element`. Absent on ordinary nodes (both default to []), so
+  # this is a no-op everywhere except an absolute layer.
+  defp absolute_layer_children(node) do
+    flow =
+      case Map.get(node, :flow_child) do
+        child when is_map(child) -> [child]
+        _ -> []
+      end
+
+    overlay_elements =
+      node
+      |> Map.get(:overlays, [])
+      |> List.wrap()
+      |> Enum.flat_map(fn
+        %{element: element} when is_map(element) -> [element]
+        _ -> []
+      end)
+
+    flow ++ overlay_elements
+  end
+
   defp derive_widget_tools(node, type, id, context, type_map) do
-    case Map.get(type_map, type) do
+    case resolve_module(node, type, type_map) do
       nil ->
         []
 
@@ -125,6 +193,20 @@ defmodule Raxol.MCP.TreeWalker do
         else
           []
         end
+    end
+  end
+
+  # An explicit `attrs.component_module` declaration wins over the
+  # built-in type map (the marker exists precisely for nodes whose :type
+  # is a plain layout container). `ToolProvider.tool_provider?/1` guards
+  # both paths, so an arbitrary/unloaded module still derives nothing.
+  defp resolve_module(node, type, type_map) do
+    case node do
+      %{attrs: %{component_module: module}} when is_atom(module) and not is_nil(module) ->
+        module
+
+      _no_marker ->
+        Map.get(type_map, type)
     end
   end
 
@@ -157,7 +239,8 @@ defmodule Raxol.MCP.TreeWalker do
     }
   end
 
-  defp dispatch_messages(messages, dispatcher_pid) when is_pid(dispatcher_pid) do
+  defp dispatch_messages(messages, dispatcher_pid)
+       when is_pid(dispatcher_pid) do
     for msg <- messages, msg != nil do
       GenServer.cast(dispatcher_pid, {:dispatch, msg})
     end

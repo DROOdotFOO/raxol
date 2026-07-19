@@ -221,4 +221,144 @@ defmodule Raxol.MCP.TreeWalkerTest do
       assert names1 == names2
     end
   end
+
+  describe "attrs.component_module marker (harness U1 seam)" do
+    # Components whose root emits a plain layout type (:column, :row)
+    # declare their provider explicitly -- the seam that lets app-side
+    # components derive tools without teaching this package their types.
+
+    test "a layout-typed node with a provider marker derives its tools" do
+      tree = %{
+        type: :column,
+        id: "blk-1",
+        attrs: %{component_module: TestButton, label: "Fold"},
+        children: [%{type: :text, content: "body"}]
+      }
+
+      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+
+      assert [%{name: "blk-1.click"}] = tools
+    end
+
+    test "an explicit marker wins over the built-in type map" do
+      tree = %{
+        type: :button,
+        id: "btn-m",
+        attrs: %{component_module: TestInput, value: "v"}
+      }
+
+      names =
+        TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+        |> Enum.map(& &1.name)
+        |> Enum.sort()
+
+      assert names == ["btn-m.get_value", "btn-m.type_into"]
+    end
+
+    test "mcp_exclude still suppresses a marker node" do
+      tree = %{
+        type: :column,
+        id: "blk-2",
+        attrs: %{component_module: TestButton, mcp_exclude: true}
+      }
+
+      assert TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map}) == []
+    end
+
+    test "a marker naming a non-provider module derives nothing" do
+      tree = %{
+        type: :column,
+        id: "blk-3",
+        attrs: %{component_module: Enum}
+      }
+
+      assert TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map}) == []
+    end
+
+    test "a non-atom marker is ignored, falling back to the type map" do
+      tree = %{
+        type: :button,
+        id: "blk-4",
+        attrs: %{component_module: "not a module", label: "Go", disabled: false}
+      }
+
+      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+
+      assert [%{name: "blk-4.click"}] = tools
+    end
+  end
+
+  describe "absolute_layer descent (harness U3 overlay seam)" do
+    # An AbsoluteLayer parents through :flow_child + :overlays[].element and
+    # carries no :id -- the walker must not stop at it, or every
+    # overlay-hosted Component derives zero tools.
+
+    test "a provider inside an overlay element is derived" do
+      tree = %{
+        type: :absolute_layer,
+        flow_child: %{type: :column, children: [%{type: :text, content: "bg"}]},
+        overlays: [
+          %{
+            x: 0,
+            y: 0,
+            dialog: true,
+            element: %{
+              type: :column,
+              id: "ov-btn",
+              attrs: %{component_module: TestButton, label: "Pick"}
+            }
+          }
+        ]
+      }
+
+      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+
+      assert [%{name: "ov-btn.click"}] = tools
+    end
+
+    test "a provider in the flow child is still derived alongside overlay tools" do
+      tree = %{
+        type: :absolute_layer,
+        flow_child: %{
+          type: :button,
+          id: "flow-btn",
+          attrs: %{label: "Flow", disabled: false}
+        },
+        overlays: [
+          %{
+            x: 0,
+            y: 0,
+            element: %{
+              type: :column,
+              id: "ov-btn",
+              attrs: %{component_module: TestButton, label: "Pick"}
+            }
+          }
+        ]
+      }
+
+      names =
+        TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+        |> Enum.map(& &1.name)
+        |> Enum.sort()
+
+      assert names == ["flow-btn.click", "ov-btn.click"]
+    end
+
+    test "an absolute_layer with no overlays derives only its flow tools" do
+      tree = %{
+        type: :absolute_layer,
+        flow_child: %{
+          type: :button,
+          id: "flow-btn",
+          attrs: %{label: "Flow", disabled: false}
+        },
+        overlays: []
+      }
+
+      tools = TreeWalker.derive_tools(tree, %{dispatcher_pid: nil, type_map: @type_map})
+
+      assert [%{name: "flow-btn.click"}] = tools
+    end
+  end
 end
