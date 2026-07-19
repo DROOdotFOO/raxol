@@ -95,6 +95,16 @@ defmodule Raxol.UI.SyntaxHighlighter do
       {:ok, entry} -> {:ok, entry}
       :error -> Registry.fetch_lexer_by_extension(name)
     end
+  rescue
+    # `Code.ensure_loaded?(Makeup)` only proves the MODULE is loadable, not
+    # that its lexer registry is populated. Makeup stores that registry in
+    # `Application.get_env(:makeup, ...)` and fills it only when the Makeup
+    # application starts and each lexer self-registers. In a headless/:agent
+    # environment that app boot is skipped, so `get_env` returns nil and
+    # Makeup's own `Map.fetch(nil, name)` raises BadMapError. A missing
+    # highlighter must degrade to plain source, never crash the diff (and the
+    # whole block) render -- the same contract `highlight_with_lexer/4` keeps.
+    _ -> :error
   end
 
   defp highlight_with_lexer(source, lexer, opts, theme) do
