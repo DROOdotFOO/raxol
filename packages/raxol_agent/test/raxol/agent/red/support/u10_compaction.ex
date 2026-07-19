@@ -2,8 +2,7 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
   @moduledoc """
   Support for the U10 "Compaction = Resume" (AD-3b) red suite.
 
-  Three responsibilities, all in service of the freeze contract in
-  `docs/proposals/in-flight/harness-freeze-contracts.md` §1 (JS-FREEZE) — the
+  Three responsibilities, all in service of the frozen JS-FREEZE
   one-artifact thesis: a compaction IS a `checkpoint{reason: "compaction"}`
   record, resume IS the ordinary checkpoint-restore path.
 
@@ -26,13 +25,14 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
        law so the matching checker MUST reject it (meta-inv m4 negative
        controls; m1 fired-counters via `FaultCounter`).
 
-  The production `Raxol.Agent.Compaction` module stays `:not_implemented` — the
-  reference lives here, in test support, never in `lib/`.
+  The reference codec, checkers, and dead injectors stay here in test
+  support; the production `Raxol.Agent.Compaction` (in `lib/`) is exercised
+  directly by the red suite, never by this reference.
   """
 
   alias Raxol.Agent.Journal.FileStore
 
-  # --- CONVERSATIONAL whitelist (JS-FREEZE §1.1-tip, frozen closure rule) -----
+  # --- CONVERSATIONAL whitelist (JS-FREEZE's frozen closure rule) -----------
   @conversational ~w(turn_started item_started item_completed turn_completed
                      turn_canceled error approval_requested)
 
@@ -58,7 +58,8 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
   lands). The `op`/`amount`/`text` payloads the seeder writes are inert to the
   fold — only the record `id` matters, exactly as in FileBackend.
   """
-  def apply_event(model, %{"kind" => kind}) when kind not in [nil, "event"], do: model
+  def apply_event(model, %{"kind" => kind}) when kind not in [nil, "event"],
+    do: model
 
   def apply_event(model, %{"family" => "loop", "type" => type, "id" => id})
       when type in @conversational,
@@ -101,7 +102,8 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
   # ===========================================================================
 
   @doc "sha256 of `bytes`, lowercase hex (the freeze's `snapshot_hash` shape)."
-  def sha256_hex(bytes), do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+  def sha256_hex(bytes),
+    do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
 
   @doc """
   Write a snapshot file for `slice` under `<dir>/snapshots/<sha>.json`, content
@@ -156,7 +158,8 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
   def raw_ids(dir), do: dir |> raw_records() |> Enum.map(& &1["id"])
 
   @doc "The record at a given offset (or nil)."
-  def raw_record_at(dir, offset), do: dir |> raw_records() |> Enum.find(&(&1["id"] == offset))
+  def raw_record_at(dir, offset),
+    do: dir |> raw_records() |> Enum.find(&(&1["id"] == offset))
 
   @doc "All checkpoint records, newest-first."
   def checkpoints(dir) do
@@ -246,7 +249,12 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
   exactly (nothing silently dropped, nothing fabricated).
   """
   def omission_accounted?(model, slice, manifest) do
-    omitted = MapSet.difference(MapSet.new(Map.keys(model)), MapSet.new(Map.keys(slice)))
+    omitted =
+      MapSet.difference(
+        MapSet.new(Map.keys(model)),
+        MapSet.new(Map.keys(slice))
+      )
+
     accounted = MapSet.new(manifest.dropped ++ manifest.redacted)
     MapSet.equal?(omitted, accounted)
   end
@@ -261,7 +269,10 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
   newest checkpoint was corrupt, the fallback names it in `skipped` with a typed
   reason. A silent fallback (empty `skipped`) is the violation.
   """
-  def resume_selection_surfaced?({:ok, _model, %{skipped: skipped}}, corrupt_offset) do
+  def resume_selection_surfaced?(
+        {:ok, _model, %{skipped: skipped}},
+        corrupt_offset
+      ) do
     Enum.any?(skipped, fn {off, reason} ->
       off == corrupt_offset and reason in [:snapshot_corrupt, :snapshot_missing]
     end)
@@ -276,12 +287,19 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
   defmodule FaultCounter do
     @moduledoc "Armed-site set + per-site fire counters (dead-injector detection, m1)."
 
-    @sites [:separate_kind, :pre_checkpoint_truncation, :lossy_summarizer, :silent_stale_restore]
+    @sites [
+      :separate_kind,
+      :pre_checkpoint_truncation,
+      :lossy_summarizer,
+      :silent_stale_restore
+    ]
 
     def sites, do: @sites
 
     def new do
-      {:ok, pid} = Agent.start_link(fn -> %{armed: MapSet.new(), fired: %{}} end)
+      {:ok, pid} =
+        Agent.start_link(fn -> %{armed: MapSet.new(), fired: %{}} end)
+
       pid
     end
 
@@ -291,18 +309,23 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
     end
 
     def record_fired(counter, site) when site in @sites do
-      Agent.update(counter, fn s -> %{s | fired: Map.update(s.fired, site, 1, &(&1 + 1))} end)
+      Agent.update(counter, fn s ->
+        %{s | fired: Map.update(s.fired, site, 1, &(&1 + 1))}
+      end)
+
       :ok
     end
 
-    def fired(counter, site), do: Agent.get(counter, &Map.get(&1.fired, site, 0))
+    def fired(counter, site),
+      do: Agent.get(counter, &Map.get(&1.fired, site, 0))
 
     def assert_fired!(counter, site) do
       count = fired(counter, site)
 
       if count == 0 do
         raise ExUnit.AssertionError,
-          message: "dead injector never fired: #{inspect(site)} (armed but silent = green lies)"
+          message:
+            "dead injector never fired: #{inspect(site)} (armed but silent = green lies)"
       end
 
       :ok
@@ -369,11 +392,16 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
       {:ok, records} = FileStore.read(journal)
 
       cps =
-        records |> Enum.filter(&(&1["kind"] == "checkpoint")) |> Enum.sort_by(& &1["id"], :desc)
+        records
+        |> Enum.filter(&(&1["kind"] == "checkpoint"))
+        |> Enum.sort_by(& &1["id"], :desc)
 
       case Keyword.get(opts, :at) do
-        nil -> select_latest_healthy(dir, records, cps, [])
-        offset -> restore_from(dir, records, Enum.find(cps, &(&1["id"] == offset)))
+        nil ->
+          select_latest_healthy(dir, records, cps, [])
+
+        offset ->
+          restore_from(dir, records, Enum.find(cps, &(&1["id"] == offset)))
       end
     end
 
@@ -383,10 +411,13 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
     defp select_latest_healthy(dir, records, [cp | rest], skipped) do
       case restore_from(dir, records, cp) do
         {:ok, model, _info} ->
-          {:ok, model, %{selected_offset: cp["id"], skipped: Enum.reverse(skipped)}}
+          {:ok, model,
+           %{selected_offset: cp["id"], skipped: Enum.reverse(skipped)}}
 
         {:error, reason} ->
-          select_latest_healthy(dir, records, rest, [{cp["id"], reason} | skipped])
+          select_latest_healthy(dir, records, rest, [
+            {cp["id"], reason} | skipped
+          ])
       end
     end
 
@@ -400,7 +431,10 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
         {:ok, slice} ->
           tip = cp["tip_offset"]
           after_tip = Enum.filter(records, &(&1["id"] > tip))
-          model = Enum.reduce(after_tip, slice, fn r, m -> S.apply_event(m, r) end)
+
+          model =
+            Enum.reduce(after_tip, slice, fn r, m -> S.apply_event(m, r) end)
+
           {:ok, model, %{selected_offset: cp["id"], skipped: []}}
       end
     end
@@ -500,17 +534,24 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
       {:ok, records} = FileStore.read(journal)
 
       cps =
-        records |> Enum.filter(&(&1["kind"] == "checkpoint")) |> Enum.sort_by(& &1["id"], :desc)
+        records
+        |> Enum.filter(&(&1["kind"] == "checkpoint"))
+        |> Enum.sort_by(& &1["id"], :desc)
 
       # Skip corrupt checkpoints silently; report no skips at all.
-      healthy = Enum.find(cps, fn cp -> S.checkpoint_healthy?(dir, atomize(cp)) end)
+      healthy =
+        Enum.find(cps, fn cp -> S.checkpoint_healthy?(dir, atomize(cp)) end)
+
       {:ok, model, _} = RefCompactor.resume(journal, at: healthy["id"])
       FaultCounter.record_fired(counter, :silent_stale_restore)
       {:ok, model, %{selected_offset: healthy["id"], skipped: []}}
     end
 
     defp atomize(cp),
-      do: %{snapshot_ref: cp["snapshot_ref"], snapshot_hash: cp["snapshot_hash"]}
+      do: %{
+        snapshot_ref: cp["snapshot_ref"],
+        snapshot_hash: cp["snapshot_hash"]
+      }
   end
 
   # ===========================================================================
@@ -546,5 +587,6 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
   end
 
   @doc "Corrupt a snapshot file so its bytes no longer hash to `snapshot_hash`."
-  def corrupt_snapshot!(dir, ref), do: File.write!(Path.join(dir, ref), "corrupted-not-the-slice")
+  def corrupt_snapshot!(dir, ref),
+    do: File.write!(Path.join(dir, ref), "corrupted-not-the-slice")
 end

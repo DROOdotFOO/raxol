@@ -1,7 +1,7 @@
 defmodule Raxol.Agent.KillLab do
   @moduledoc """
-  Real OS-process ground truth for the U5-R interrupt reds (spike topology from
-  `docs/proposals/in-flight/harness-research/spike-u5-kill.md`).
+  Real OS-process ground truth for the U5-R interrupt reds (spike topology
+  from the staged-kill research spike).
 
   U5's load-bearing claim is an **OS-level** one — a hostile tool survives BEAM
   teardown and only dies to a process-group SIGKILL, and `:exit_status` lies.
@@ -102,7 +102,9 @@ defmodule Raxol.Agent.KillLab do
   @doc "True iff `ps` reports `pid` in a zombie (`Z*`) state."
   @spec zombie?(non_neg_integer()) :: boolean()
   def zombie?(pid) when is_integer(pid) do
-    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
+    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)],
+           stderr_to_stdout: true
+         ) do
       {out, 0} -> out |> String.trim() |> String.starts_with?("Z")
       _ -> false
     end
@@ -142,7 +144,9 @@ defmodule Raxol.Agent.KillLab do
   @doc "True iff `ps -p <pid>` reports the process alive (a single, non-polling check)."
   @spec alive?(non_neg_integer()) :: boolean()
   def alive?(pid) when is_integer(pid) do
-    {_out, status} = System.cmd("ps", ["-p", Integer.to_string(pid)], stderr_to_stdout: true)
+    {_out, status} =
+      System.cmd("ps", ["-p", Integer.to_string(pid)], stderr_to_stdout: true)
+
     status == 0
   end
 
@@ -185,7 +189,8 @@ defmodule Raxol.Agent.KillLab do
   `:group` when the group-kill fired, `{:fallback, ...}` when it declined and
   swept the tool + its enumerated children individually instead.
   """
-  @spec group_kill(non_neg_integer()) :: :group | {:fallback, [non_neg_integer()]}
+  @spec group_kill(non_neg_integer()) ::
+          :group | {:fallback, [non_neg_integer()]}
   def group_kill(os_pid), do: group_signal(os_pid, "-9")
 
   @doc """
@@ -196,7 +201,8 @@ defmodule Raxol.Agent.KillLab do
   gotcha #4) — that's why this, like `group_kill/1`, always targets `-os_pid`.
   Guarded identically (see moduledoc).
   """
-  @spec signal_group(non_neg_integer()) :: :group | {:fallback, [non_neg_integer()]}
+  @spec signal_group(non_neg_integer()) ::
+          :group | {:fallback, [non_neg_integer()]}
   def signal_group(os_pid), do: group_signal(os_pid, "-TERM")
 
   defp group_signal(os_pid, signal)
@@ -252,7 +258,9 @@ defmodule Raxol.Agent.KillLab do
   end
 
   defp pgid_of(pid) do
-    case System.cmd("ps", ["-o", "pgid=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
+    case System.cmd("ps", ["-o", "pgid=", "-p", Integer.to_string(pid)],
+           stderr_to_stdout: true
+         ) do
       {out, 0} -> out |> String.trim() |> parse_int()
       _ -> nil
     end
@@ -267,7 +275,10 @@ defmodule Raxol.Agent.KillLab do
            stderr_to_stdout: true
          ) do
       {out, 0} ->
-        out |> String.split("\n", trim: true) |> Enum.map(&parse_int/1) |> Enum.reject(&is_nil/1)
+        out
+        |> String.split("\n", trim: true)
+        |> Enum.map(&parse_int/1)
+        |> Enum.reject(&is_nil/1)
 
       _ ->
         # BSD ps (macOS) lacks --ppid; fall back to a full-table scan.
@@ -281,7 +292,9 @@ defmodule Raxol.Agent.KillLab do
         out
         |> String.split("\n", trim: true)
         |> Enum.flat_map(fn line ->
-          case line |> String.split(~r/\s+/, trim: true) |> Enum.map(&parse_int/1) do
+          case line
+               |> String.split(~r/\s+/, trim: true)
+               |> Enum.map(&parse_int/1) do
             [pid, ^ppid] when is_integer(pid) -> [pid]
             _ -> []
           end

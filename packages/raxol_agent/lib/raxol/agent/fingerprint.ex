@@ -1,8 +1,6 @@
 defmodule Raxol.Agent.Fingerprint do
   @moduledoc """
-  Model / params fingerprint — the replay-identity of a provider call
-  (`docs/proposals/in-flight/harness-freeze-contracts.md` §2.1, "Model/params
-  fingerprint").
+  Model / params fingerprint — the replay-identity of a provider call.
 
   Two things are frozen and real here:
 

@@ -3,11 +3,11 @@ defmodule Raxol.Agent.Contract do
   Harness contract v0 — the typed event contract between the agent core and
   any surface (CLI, TUI, LiveView, remote).
 
-  This is the minimal loop-family slice of the contract in
-  `docs/proposals/in-flight/harness-spec-protocol.md`: every observable step
-  of an agent run becomes a `Raxol.Agent.Contract.Event` and is published
-  through `Raxol.Agent.SessionStreamer`. Surfaces subscribe to the streamer
-  and render; they never reach into the loop.
+  This is the minimal loop-family slice of the contract described in
+  `docs/harness/architecture.md` ("The event contract"): every observable
+  step of an agent run becomes a `Raxol.Agent.Contract.Event` and is
+  published through `Raxol.Agent.SessionStreamer`. Surfaces subscribe to the
+  streamer and render; they never reach into the loop.
 
   (Distinct from `Raxol.Agent.Protocol`, which is agent-to-agent cockpit
   messaging — this module is the core↔surface boundary.)
@@ -15,19 +15,39 @@ defmodule Raxol.Agent.Contract do
   ## v0 vocabulary (family `:loop` only)
 
     * `:turn_started`   — a prompt was accepted; payload `%{prompt}`
-    * `:item_delta`     — streaming text chunk; payload `%{chunk}`;
+    * `:item_started`   — an item opened; payload `%{item_id, item_type}`.
+      Emitted at an item's first NON-BLANK delta (message and reasoning
+      items are both lazily opened — blank-only text opens nothing, so a
+      tool-call round whose assistant "message" is empty/whitespace seals
+      no empty ❮ block) and before every tool_use / tool_result
+      completion, so the live producer speaks the same item lifecycle the
+      fixture corpus does — the projection's live tail
+      (`Raxol.Harness.Projection.BlockBuilder.build_tail/2`) only
+      surfaces deltas for an item with a started group, which is what
+      makes mid-turn streaming render at all.
+    * `:item_delta`     — streaming text chunk; payload `%{item_id, chunk}`;
       the one **ephemeral** event (live render only, never for replay)
     * `:item_completed` — a finished item; payload
-      `%{item_type: :message | :tool_use | :tool_result, ...}`
+      `%{item_id, item_type: :message | :reasoning | :tool_use | :tool_result, ...}`.
+      A `:reasoning` item carries the model's chain-of-thought (`content`)
+      and seals as a durable, foldable/peekable ∴ block — reasoning is a
+      first-class transcript fact once sealed, never silently dropped.
+      `item_id`s are turn-scoped (`"i1"`, `"i2"`, …) and distinct per
+      item — without them every completion folds into one (nil-keyed)
+      projection group and later completions are dropped as duplicates.
     * `:turn_completed` — a turn boundary; payload
       `%{usage, iteration, final}` (`final: true` closes the run)
     * `:error`          — fault; payload `%{reason}`
+
+  Growth note (the contract only grows): `:item_started` and the
+  `item_id` payload keys are additive — both were already in the frozen
+  loop vocabulary and the fixture wire shape.
 
   The meta family (probe swarm), `steer`/`approval` commands, and the
   durable journal sink attach behind this same boundary in later steps —
   producers change, the contract does not.
 
-  ## U21 evidence tri-state wire marker (#619 residual)
+  ## U21 evidence tri-state wire marker
 
   On a `turn_completed{final: true}` produced by `gated_done_payload/4`, the
   payload grows one optional discriminator plus one optional detail —
@@ -69,13 +89,13 @@ defmodule Raxol.Agent.Contract do
   :done_gate, :rejected_evidence]` telemetry stay exactly as they were —
   this marker is the durable/replay view; telemetry remains the live-ops
   view. `refs` is untouched. The journal `schema_version` default bumps
-  1.0.0 -> 1.1.0 (`Raxol.Agent.Journal.FileStore.Writer`, additive per AD-11
+  1.0.0 -> 1.1.0 (`Raxol.Agent.Journal.FileStore.Writer`, additive per
   upcast-on-read) alongside this payload growth; the pinned `v1.0.0` golden
   corpus stays literal "1.0.0" and unrewritten (an old journal's records are
   never rewritten in place, only decoded — covered by the grandfather rule
   above).
 
-  ## Trust boundary (S2, PR #631) — producer-stamped, journal-trusted
+  ## Trust boundary — producer-stamped, journal-trusted
 
   `evidence_status/1` is a **decode**, not a **re-derivation**. It reports the
   enum the producer stamped; it does NOT re-run `DoneGate.gate/3` over the
@@ -99,23 +119,22 @@ defmodule Raxol.Agent.Contract do
        threat model as `refs` themselves and every other durable field: a
        journal that can be forged can fabricate tool results, refs, and verdicts
        directly. The marker adds no trust surface the journal did not already
-       assume (append-only, single-writer integrity per harness-spec-backend).
-       It is sound only on a trusted, append-only journal.
+       assume (append-only, single-writer integrity). It is sound only on a
+       trusted, append-only journal.
 
-  What the decoder *does* defend, after the S1 fix: an `evidence` value it
-  cannot understand — a forged string, a future enum value, a garbage type —
-  fails safe to `:unknown`, never `:accepted` (see `normalize_evidence/1`). A
-  forged non-legacy line thus cannot launder a bogus marker into acceptance.
+  What the decoder *does* defend: an `evidence` value it cannot understand —
+  a forged string, a future enum value, a garbage type — fails safe to
+  `:unknown`, never `:accepted` (see `normalize_evidence/1`). A forged
+  non-legacy line thus cannot launder a bogus marker into acceptance.
 
   **Read-side re-derivation was considered and deliberately rejected.**
   Re-running `DoneGate.gate/3` at decode time would (a) require the whole
   journal + turn + refs, coupling a pure single-record decode to journal state
   it does not carry, and (b) resurrect exactly the display-side re-evaluation of
-  *open* gate predicates (staleness relative to *later* mutations) that the #619
-  round-2 ledger settled must NOT be frozen or recomputed at the display surface.
-  Documenting the append-only trust assumption is the honest, #619-consistent
-  close; a hostile-journal re-check is out of scope for a producer-stamped
-  durable marker.
+  *open* gate predicates (staleness relative to *later* mutations) that must
+  NOT be frozen or recomputed at the display surface. Documenting the
+  append-only trust assumption is the honest close; a hostile-journal re-check
+  is out of scope for a producer-stamped durable marker.
 
   ## Producers
 
@@ -145,10 +164,11 @@ defmodule Raxol.Agent.Contract do
               type: nil,
               tier: :durable,
               payload: %{},
-              # --- U11 envelope growth (harness-freeze-contracts.md §2.1) -----
+              # --- U11 envelope growth (see docs/harness/architecture.md, "The
+              # event contract") -----------------------------------------------
               # All defaulted; every landed v0 event and every journal record
               # without these keys decodes to these values — the grandfather
-              # clause. The I9 "contract only grows" rule is honored: new fields
+              # clause. The contract-only-grows rule is honored: new fields
               # are optional-with-default, never required (removal / rename /
               # optional→required is forbidden). The EmitBridge / Writer / Reader
               # carry-through of these fields (`durable_record/1` AND
@@ -266,48 +286,143 @@ defmodule Raxol.Agent.Contract do
         prompt: prompt
       })
 
-    # The accumulator carries the run result plus the durable journal emitted
-    # so far this turn, so the done site can consult DoneGate.gate/3 over the
-    # real journal (ephemeral `item_delta`s are never journaled).
-    {result, _journal} =
-      Enum.reduce(stream, {{:error, :no_result}, [started]}, fn stream_event, acc ->
-        handle_stream_event(session_id, turn_id, counter, stream_event, acc)
-      end)
+    # The accumulator carries the run result, the durable journal emitted so
+    # far this turn (so the done site can consult DoneGate.gate/3 over the
+    # real journal — ephemeral `item_delta`s are never journaled), and the
+    # item lifecycle bookkeeping: a turn-scoped item sequence plus the one
+    # lazily-opened message item (id + its accumulated chunks). The item
+    # lifecycle is what makes live streaming render: without `item_started`
+    # + per-item `item_id`s the projection's live tail never materializes
+    # and every completion collapses into one nil-keyed group.
+    final_acc =
+      Enum.reduce(
+        stream,
+        %{
+          result: {:error, :no_result},
+          journal: [started],
+          item_seq: 0,
+          msg_item: nil,
+          msg_chunks: [],
+          reasoning_item: nil,
+          reasoning_chunks: []
+        },
+        fn stream_event, acc ->
+          handle_stream_event(session_id, turn_id, counter, stream_event, acc)
+        end
+      )
 
-    result
+    final_acc.result
   end
 
-  defp handle_stream_event(session_id, turn_id, counter, event, {result, journal}) do
+  defp handle_stream_event(session_id, turn_id, counter, event, acc) do
     case event do
-      {:text_delta, chunk} ->
-        emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
-          chunk: chunk
-        })
+      # Chain-of-thought / thinking text. Reasoning gets the SAME item
+      # lifecycle a message does (lazily-opened durable item, its own
+      # turn-scoped item_id, ephemeral deltas streaming into the live
+      # tail), so what the machine actually thought seals as a durable,
+      # peekable ∴ block instead of evaporating from the live tail when
+      # the answer's message item seals. See `stream_reasoning/5`.
+      {:reasoning, chunk} when is_binary(chunk) ->
+        stream_reasoning(session_id, turn_id, counter, acc, chunk)
 
-        {result, journal}
+      {:text_delta, chunk} ->
+        # First delta of the answer: the reasoning→answer transition
+        # seals the open reasoning item as its own durable block, ordered
+        # before this message (its item_started was emitted first).
+        acc = close_reasoning_item(session_id, turn_id, counter, acc)
+        stream_message(session_id, turn_id, counter, acc, chunk)
 
       {:tool_use, %{name: name} = tool_use} ->
-        ev =
-          emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
-            item_type: :tool_use,
-            name: name,
-            arguments: Map.get(tool_use, :arguments, %{}),
-            call_id: Map.get(tool_use, :id)
-          })
+        # A text run interrupted by a tool call is a real assistant
+        # message: seal it as its own item (ordered before the tool
+        # items) rather than leaking it into the final answer's item.
+        # Any open reasoning (think→tool, no intervening answer text)
+        # seals first as its own ∴ block, ahead of the tool.
+        acc = close_reasoning_item(session_id, turn_id, counter, acc)
+        acc = close_message_item(session_id, turn_id, counter, acc)
 
-        {result, journal ++ [ev]}
+        complete_item(session_id, turn_id, counter, acc, :tool_use, %{
+          name: name,
+          arguments: Map.get(tool_use, :arguments, %{}),
+          call_id: Map.get(tool_use, :id)
+        })
 
       {:tool_result, %{name: name} = tool_result} ->
-        ev =
-          emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
-            item_type: :tool_result,
-            name: name,
-            result: Map.get(tool_result, :result)
-          })
+        complete_item(
+          session_id,
+          turn_id,
+          counter,
+          acc,
+          :tool_result,
+          tool_result_extra(name, Map.get(tool_result, :result))
+        )
 
-        {result, journal ++ [ev]}
+      # A consequential tool is holding for a keyboard answer. Emitted
+      # through pump (not out-of-band) so it shares the run's id sequence
+      # and the surface's BlockBuilder folds it — with its later
+      # `approval_decided` answer — into ONE approval block that holds the
+      # seal frontier between the tool_use and its result (correct ordering).
+      {:approval_requested, payload} when is_map(payload) ->
+        ev =
+          emit_event(
+            session_id,
+            turn_id,
+            counter,
+            :approval_requested,
+            :durable,
+            payload
+          )
+
+        %{acc | journal: acc.journal ++ [ev]}
+
+      {:approval_decided, payload} when is_map(payload) ->
+        ev =
+          emit_event(
+            session_id,
+            turn_id,
+            counter,
+            :approval_decided,
+            :durable,
+            payload
+          )
+
+        %{acc | journal: acc.journal ++ [ev]}
+
+      # The honesty marker: a tool call the model made that produced no
+      # receipt. A claim of action with zero receipts is NEVER silent — it
+      # seals a visible ⚠ message item into the transcript (full item
+      # lifecycle, like every other completed item).
+      {:tool_unexecuted, payload} when is_map(payload) ->
+        complete_item(session_id, turn_id, counter, acc, :message, %{
+          content: tool_unexecuted_marker(payload)
+        })
+
+      # An honest wire-boundary marker: a length-truncated round that still
+      # produced partial answer text (complete/2 loop), or an unparseable /
+      # again-degraded chunk forwarded on the streaming path. A truncated or
+      # unparseable marker seals as a durable ⚠ message so the notice is a
+      # peekable transcript fact. Any OPEN reasoning seals FIRST (∴ ahead of
+      # the warning); an open message is LEFT open, so its own `done` seal
+      # keeps the partial answer a single, un-duplicated block that (by
+      # pump's first-appearance order) renders BEFORE the marker qualifying
+      # it. Blank marker → no-op.
+      {:marker, text} when is_binary(text) ->
+        if blank?(text) do
+          acc
+        else
+          acc = close_reasoning_item(session_id, turn_id, counter, acc)
+
+          complete_item(session_id, turn_id, counter, acc, :message, %{
+            content: text
+          })
+        end
 
       {:turn_complete, info} ->
+        # Close any reasoning that ran this round (think with no answer
+        # text before the round boundary) so it seals as a durable block
+        # rather than dangling in the live tail into the next round.
+        acc = close_reasoning_item(session_id, turn_id, counter, acc)
+
         ev =
           emit_event(session_id, turn_id, counter, :turn_completed, :durable, %{
             iteration: Map.get(info, :iteration, 0),
@@ -315,16 +430,42 @@ defmodule Raxol.Agent.Contract do
             final: false
           })
 
-        {result, journal ++ [ev]}
+        %{acc | journal: acc.journal ++ [ev]}
 
       {:done, %{content: content} = info} ->
-        message_ev =
-          emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
-            item_type: :message,
-            content: content
-          })
+        # A pure-thinking tail (reasoning with no answer text) seals as
+        # its own durable ∴ block before the final message closes.
+        acc = close_reasoning_item(session_id, turn_id, counter, acc)
 
-        journal = journal ++ [message_ev]
+        # The final message closes the open (streamed) message item when
+        # one exists — the SAME item the deltas accumulated into, so the
+        # tail hands off to the sealed block. The done content is
+        # authoritative for the sealed record. A turn ending with NO open
+        # item and BLANK done content (a tool-only or answerless turn)
+        # resolves to no item at all — sealing an empty message would
+        # paint a blank ❮ block, and an empty message is not information.
+        {item_id, acc} =
+          done_message_item(session_id, turn_id, counter, acc, content)
+
+        journal =
+          case item_id do
+            nil ->
+              acc.journal
+
+            item_id ->
+              message_ev =
+                emit_event(
+                  session_id,
+                  turn_id,
+                  counter,
+                  :item_completed,
+                  :durable,
+                  %{item_id: item_id, item_type: :message, content: content}
+                )
+
+              acc.journal ++ [message_ev]
+          end
+
         refs = DoneGate.evidence_refs(journal, turn_id)
 
         final_ev =
@@ -337,18 +478,276 @@ defmodule Raxol.Agent.Contract do
             gated_done_payload(journal, turn_id, refs, info)
           )
 
-        {{:ok, %{content: content, usage: Map.get(info, :usage, %{})}}, journal ++ [final_ev]}
+        %{
+          acc
+          | result: {:ok, %{content: content, usage: Map.get(info, :usage, %{})}},
+            journal: journal ++ [final_ev]
+        }
 
       {:error, reason} ->
         emit_event(session_id, turn_id, counter, :error, :durable, %{
           reason: reason
         })
 
-        {{:error, reason}, journal}
+        %{acc | result: {:error, reason}}
 
       _other ->
-        {result, journal}
+        acc
     end
+  end
+
+  # -- item lifecycle bookkeeping -------------------------------------------
+
+  # Turn-scoped item ids, mirroring the fixture corpus ("i1", "i2", …).
+  # Uniqueness only matters within the turn: the projection keys its
+  # live tail by `{turn_id, item_id}`.
+  defp next_item_id(acc),
+    do: {"i#{acc.item_seq + 1}", %{acc | item_seq: acc.item_seq + 1}}
+
+  # -- message item lifecycle -------------------------------------------------
+  #
+  # The answer mirrors the reasoning lifecycle below, with the same
+  # deliberate laziness: the item is opened at the first NON-BLANK
+  # accumulated text — never at a whitespace-only delta. A provider round
+  # that carries tool calls ships its assistant "message" with empty or
+  # whitespace content next to the real tool_calls (the standard
+  # OpenAI/Anthropic tool-round shape; LM Studio-served models stream a
+  # bare "\n\n" between thinking and the tool call). Opening the item on
+  # that blank delta made the tool_use boundary seal an EMPTY message
+  # item, which rendered as a blank ❮ block in the transcript. An empty
+  # message is not information — it gets no item, no event, no block (the
+  # "empty thinking → no ∴ block" rule, applied to the answer channel).
+  # Raw chunks still accumulate untouched while unopened, so leading
+  # whitespace lands in the eventual sealed content when real text follows.
+
+  # Buffer this chunk, then open-or-stream (mirrors `stream_reasoning/5`).
+  defp stream_message(session_id, turn_id, counter, acc, chunk) do
+    acc = %{acc | msg_chunks: [chunk | acc.msg_chunks]}
+    open_or_stream_message(session_id, turn_id, counter, acc, chunk)
+  end
+
+  # Not yet opened: open on the FIRST non-blank accumulated content. The
+  # opener's own `item_delta` carries the full accumulated-so-far text (so
+  # the live tail is whole even if leading blank chunks preceded it);
+  # every later delta carries just its own chunk.
+  defp open_or_stream_message(
+         session_id,
+         turn_id,
+         counter,
+         %{msg_item: nil} = acc,
+         _chunk
+       ) do
+    content = acc.msg_chunks |> Enum.reverse() |> Enum.join("")
+
+    if blank?(content) do
+      acc
+    else
+      {item_id, acc} = next_item_id(acc)
+
+      started_ev =
+        emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+          item_id: item_id,
+          item_type: :message
+        })
+
+      emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
+        item_id: item_id,
+        chunk: content
+      })
+
+      %{acc | journal: acc.journal ++ [started_ev], msg_item: item_id}
+    end
+  end
+
+  defp open_or_stream_message(session_id, turn_id, counter, acc, chunk) do
+    emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
+      item_id: acc.msg_item,
+      chunk: chunk
+    })
+
+    acc
+  end
+
+  # Seals an open message item with its accumulated streamed text — the
+  # mid-turn (pre-tool) close. When NO item is open (nothing streamed, or
+  # only blank text that never opened one) there is nothing to seal — but
+  # the buffer is always cleared, so a blank pre-tool run never leaks its
+  # whitespace into a later round's message.
+  defp close_message_item(
+         _session_id,
+         _turn_id,
+         _counter,
+         %{msg_item: nil} = acc
+       ),
+       do: %{acc | msg_chunks: []}
+
+  defp close_message_item(session_id, turn_id, counter, acc) do
+    content = acc.msg_chunks |> Enum.reverse() |> Enum.join("")
+
+    ev =
+      emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
+        item_id: acc.msg_item,
+        item_type: :message,
+        content: content
+      })
+
+    %{acc | journal: acc.journal ++ [ev], msg_item: nil, msg_chunks: []}
+  end
+
+  # -- reasoning item lifecycle ---------------------------------------------
+  #
+  # Reasoning mirrors the message lifecycle with one deliberate difference:
+  # the item is opened LAZILY at the first NON-BLANK thought — a
+  # whitespace-only reasoning stream opens no `item_started`, so it seals
+  # no block (the "empty thinking → no ∴ block" rule). Until then the raw
+  # chunks accumulate untouched, so leading whitespace still lands in the
+  # eventual sealed content, just never as its own opener.
+
+  # Buffer this chunk, then open-or-stream. The buffer is prepended (arrival
+  # order restored on read) exactly like `msg_chunks`.
+  defp stream_reasoning(session_id, turn_id, counter, acc, chunk) do
+    acc = %{acc | reasoning_chunks: [chunk | acc.reasoning_chunks]}
+    open_or_stream_reasoning(session_id, turn_id, counter, acc, chunk)
+  end
+
+  # Not yet opened: open on the FIRST non-blank accumulated content. The
+  # opener's own `item_delta` carries the full accumulated-so-far text (so
+  # the live tail is whole even if leading blank chunks preceded it); every
+  # later delta carries just its own chunk. `thought: true` marks the
+  # ephemeral delta as reasoning for the live tail.
+  defp open_or_stream_reasoning(
+         session_id,
+         turn_id,
+         counter,
+         %{reasoning_item: nil} = acc,
+         _chunk
+       ) do
+    content = acc.reasoning_chunks |> Enum.reverse() |> Enum.join("")
+
+    if blank?(content) do
+      acc
+    else
+      {item_id, acc} = next_item_id(acc)
+
+      started_ev =
+        emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+          item_id: item_id,
+          item_type: :reasoning
+        })
+
+      emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
+        item_id: item_id,
+        chunk: content,
+        thought: true
+      })
+
+      %{acc | journal: acc.journal ++ [started_ev], reasoning_item: item_id}
+    end
+  end
+
+  defp open_or_stream_reasoning(session_id, turn_id, counter, acc, chunk) do
+    emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
+      item_id: acc.reasoning_item,
+      chunk: chunk,
+      thought: true
+    })
+
+    acc
+  end
+
+  # Seals an open reasoning item with its accumulated thought as a durable
+  # ∴ block. A no-op when nothing is open — either the thought was blank
+  # (never opened) or an earlier boundary already sealed it — but the
+  # buffer is always cleared so a later reasoning segment starts fresh.
+  defp close_reasoning_item(
+         _session_id,
+         _turn_id,
+         _counter,
+         %{reasoning_item: nil} = acc
+       ),
+       do: %{acc | reasoning_chunks: []}
+
+  defp close_reasoning_item(session_id, turn_id, counter, acc) do
+    content = acc.reasoning_chunks |> Enum.reverse() |> Enum.join("")
+
+    ev =
+      emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
+        item_id: acc.reasoning_item,
+        item_type: :reasoning,
+        content: content
+      })
+
+    %{
+      acc
+      | journal: acc.journal ++ [ev],
+        reasoning_item: nil,
+        reasoning_chunks: []
+    }
+  end
+
+  defp blank?(text), do: String.trim(text) == ""
+
+  # The done site's item resolution: reuse the open streamed item when
+  # there is one (its deltas ARE this message); otherwise open a fresh
+  # started pair for a NON-BLANK answer, so even a non-streamed answer
+  # carries the full lifecycle the fixtures pin. Blank done content with
+  # nothing open resolves to NO item (`nil` — the caller then emits no
+  # item_completed): an answerless turn seals no empty ❮ message block.
+  defp done_message_item(
+         _session_id,
+         _turn_id,
+         _counter,
+         %{msg_item: id} = acc,
+         _content
+       )
+       when not is_nil(id),
+       do: {id, %{acc | msg_item: nil, msg_chunks: []}}
+
+  defp done_message_item(session_id, turn_id, counter, acc, content) do
+    if blank_content?(content) do
+      {nil, %{acc | msg_chunks: []}}
+    else
+      {item_id, acc} = next_item_id(acc)
+
+      ev =
+        emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+          item_id: item_id,
+          item_type: :message
+        })
+
+      {item_id, %{acc | journal: acc.journal ++ [ev]}}
+    end
+  end
+
+  # `nil` (a backend that produced no content field) counts as blank; any
+  # other non-binary shape does NOT — an unexpected term stays visible in
+  # the sealed record (fail-visible) rather than being silently dropped.
+  defp blank_content?(nil), do: true
+  defp blank_content?(text) when is_binary(text), do: blank?(text)
+  defp blank_content?(_other), do: false
+
+  # One completed item (tool_use / tool_result): a fresh id, its
+  # `item_started` sibling, then the completion carrying `extra`.
+  defp complete_item(session_id, turn_id, counter, acc, item_type, extra) do
+    {item_id, acc} = next_item_id(acc)
+
+    started_ev =
+      emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+        item_id: item_id,
+        item_type: item_type
+      })
+
+    completed_ev =
+      emit_event(
+        session_id,
+        turn_id,
+        counter,
+        :item_completed,
+        :durable,
+        Map.merge(%{item_id: item_id, item_type: item_type}, extra)
+      )
+
+    %{acc | journal: acc.journal ++ [started_ev, completed_ev]}
   end
 
   # Consult the evidence gate on the real done path in observe-only mode (see
@@ -450,8 +849,8 @@ defmodule Raxol.Agent.Contract do
   defp normalize_evidence(value) when value in [:rejected, "rejected"], do: :rejected
   defp normalize_evidence(value) when value in [:absent, "absent"], do: :absent
 
-  # Total fallthrough (S1, PR #631). The `evidence` enum is grow-only (AD-11
-  # upcast-on-read): a reader on 1.1.0 WILL meet a future 1.2.0 journal carrying
+  # Total fallthrough. The `evidence` enum is grow-only (upcast-on-read): a
+  # reader on 1.1.0 WILL meet a future 1.2.0 journal carrying
   # a 4th value — exactly the grow-forward case the enum promises — and must
   # degrade, not `FunctionClauseError` on the replay surface. A corrupt or
   # forged line (`evidence: "bogus"`, a number, nil) lands here too. Every
@@ -469,6 +868,89 @@ defmodule Raxol.Agent.Contract do
       Map.has_key?(map, Atom.to_string(key)) -> {:ok, Map.get(map, Atom.to_string(key))}
       true -> :error
     end
+  end
+
+  # A tool result whose payload carries a before/after image of a file
+  # (write_file / edit_file) is flattened so the surface renders it as a
+  # foldable ± DIFF block, not an opaque tool row: `path`/`old`/`new`/
+  # `language` are lifted to the payload top level (where
+  # `Raxol.UI.Components.Harness.Block.extract_diff_content/1` reads them)
+  # and a `diff: true` marker tells the projection's BlockBuilder to resolve
+  # this block's kind to `:diff`. A non-diff result is unchanged.
+  # The `extra` fields `complete_item/6` merges onto a tool_result item.
+  # `item_id`/`item_type` are added by `complete_item` itself.
+  defp tool_result_extra(name, %{path: path, old: old, new: new} = result)
+       when is_binary(path) and is_binary(old) and is_binary(new) do
+    %{
+      name: name,
+      result: result,
+      diff: true,
+      path: path,
+      old: old,
+      new: new,
+      language: Map.get(result, :language)
+    }
+  end
+
+  # A non-diff tool result: lift a human-readable `content` SUMMARY so the
+  # harness block renders a real receipt (entries count / bytes / matches /
+  # excerpt) instead of an empty row -- the structured result sits nested
+  # under `result`, where the block's `[:content]` extraction never looked.
+  defp tool_result_extra(name, result) do
+    base = %{name: name, result: result}
+
+    case result_summary(result) do
+      nil -> base
+      summary -> Map.put(base, :content, summary)
+    end
+  end
+
+  # Per-tool result receipts. Read defensively (a tool may return an error
+  # tuple or an unexpected shape); an unrecognised result gets no summary
+  # (the block falls back to its own honest empty rendering rather than
+  # inspecting an arbitrary term into the transcript).
+  defp result_summary(%{entries: entries}) when is_list(entries) do
+    n = length(entries)
+    preview = entries |> Enum.take(20) |> Enum.map_join(", ", &to_string/1)
+    count = "#{n} #{plural(n, "entry", "entries")}"
+    if preview == "", do: count, else: count <> ": " <> preview
+  end
+
+  defp result_summary(%{content: content, truncated: truncated})
+       when is_binary(content) do
+    "#{byte_size(content)} bytes" <>
+      if(truncated, do: " (truncated)", else: "") <> result_excerpt(content)
+  end
+
+  defp result_summary(%{count: count}) when is_integer(count),
+    do: "#{count} #{plural(count, "match", "matches")}"
+
+  defp result_summary(%{matches: matches}) when is_list(matches),
+    do: "#{length(matches)} #{plural(length(matches), "match", "matches")}"
+
+  defp result_summary(%{type: type, size: size}) when is_integer(size),
+    do: "#{type}, #{size} bytes"
+
+  defp result_summary(%{stdout: out}) when is_binary(out),
+    do: "#{byte_size(out)} bytes" <> result_excerpt(out)
+
+  defp result_summary(_result), do: nil
+
+  defp result_excerpt(""), do: ""
+
+  defp result_excerpt(text) when is_binary(text) do
+    first = text |> String.split("\n", parts: 2) |> hd() |> String.slice(0, 80)
+    if first == "", do: "", else: " · " <> first
+  end
+
+  defp plural(1, singular, _plural), do: singular
+  defp plural(_n, _singular, plural), do: plural
+
+  defp tool_unexecuted_marker(payload) do
+    name = Map.get(payload, :name) || Map.get(payload, "name") || "unknown"
+    reason = Map.get(payload, :reason) || Map.get(payload, "reason") || :unknown
+
+    "⚠ tool call `#{name}` was recognized but never executed (#{inspect(reason)})"
   end
 
   defp emit_event(session_id, turn_id, counter, type, tier, payload) do

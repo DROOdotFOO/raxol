@@ -1,7 +1,7 @@
 defmodule Raxol.Agent.Journal.FileStore.Writer do
   @moduledoc """
-  The single-writer GenServer for one session's journal (harness-spec-backend
-  §4, component 1 — the Writer).
+  The single-writer GenServer for one session's journal (see
+  `docs/harness/architecture.md`, "Journal and projection").
 
   Exactly one Writer per session enforces the single-writer invariant. It:
 
@@ -65,9 +65,9 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   Writer, so no other append can interleave between the check and the append.
 
   Closes the read-then-append race of a caller that validates against its own
-  (possibly stale) `read` snapshot: e.g. the checkpoint turn-boundary rule
-  (N-JS2), where a concurrent `turn_started` through a shared joiner handle
-  must not slip in between validation and commit.
+  (possibly stale) `read` snapshot: e.g. the checkpoint turn-boundary rule,
+  where a concurrent `turn_started` through a shared joiner handle must not
+  slip in between validation and commit.
 
   `check` receives the current record list and returns `:ok` or `{:error,
   reason}` (relayed verbatim; nothing appended). A raising `check` replies

@@ -40,6 +40,13 @@ defmodule Raxol.Agent.Stream.Event do
     @type t :: %__MODULE__{text: String.t()}
   end
 
+  defmodule Reasoning do
+    @moduledoc "Streaming chain-of-thought / thinking chunk from the LLM."
+    @enforce_keys [:text]
+    defstruct [:text]
+    @type t :: %__MODULE__{text: String.t()}
+  end
+
   defmodule ToolUse do
     @moduledoc "LLM is requesting a tool call."
     @enforce_keys [:name]
@@ -92,6 +99,7 @@ defmodule Raxol.Agent.Stream.Event do
 
   @type t ::
           TextDelta.t()
+          | Reasoning.t()
           | ToolUse.t()
           | ToolResult.t()
           | TurnComplete.t()
@@ -109,6 +117,9 @@ defmodule Raxol.Agent.Stream.Event do
   @spec from_tuple(tuple_event() | term()) :: t()
   def from_tuple({:text_delta, text}) when is_binary(text),
     do: %TextDelta{text: text}
+
+  def from_tuple({:reasoning, text}) when is_binary(text),
+    do: %Reasoning{text: text}
 
   def from_tuple({:tool_use, %{name: name} = info}) when is_binary(name) do
     %ToolUse{
@@ -154,6 +165,9 @@ defmodule Raxol.Agent.Stream.Event do
   @spec to_payload(t() | tuple_event()) :: map()
   def to_payload(%TextDelta{text: text}),
     do: base(:text_delta, text)
+
+  def to_payload(%Reasoning{text: text}),
+    do: base(:reasoning, text)
 
   def to_payload(%ToolUse{name: name} = ev) do
     base(:tool_use, "tool: #{name}")

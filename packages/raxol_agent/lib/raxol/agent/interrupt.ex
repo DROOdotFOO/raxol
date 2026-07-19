@@ -37,8 +37,7 @@ defmodule Raxol.Agent.Interrupt do
       trailing `:turn_canceled` (the turn is over either way; what changed is
       the truthfulness of the kill claim).
     * `:turn_canceled`      — the terminal turn bracket carrying `%{reason}`
-      (already frozen into the journal's CONVERSATIONAL tip set by
-      `harness-freeze-contracts.md`).
+      (already frozen into the journal's CONVERSATIONAL tip set).
 
   ## The two laws the red suite pins
 

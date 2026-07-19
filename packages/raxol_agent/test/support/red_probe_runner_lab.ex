@@ -1,8 +1,7 @@
 defmodule Raxol.Agent.Red.ProbeRunnerLab do
   @moduledoc """
-  Support harness for the U12-R red suite — the probe Runner interface
-  (`harness-freeze-contracts.md` §3). Everything the red suite folds and the
-  negative controls mutate lives here:
+  Support harness for the U12-R red suite — the probe Runner interface.
+  Everything the red suite folds and the negative controls mutate lives here:
 
     * **meta-event bus** — the injectable `opts[:emit]` sink and the fold source.
       A serialized recorder (Agent) so concurrent runs still yield a
@@ -64,7 +63,8 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
   A re-serializing prefix builder's output: byte-divergent from `primary_prefix`
   by exactly one byte (the double space collapsed to one) — the N-U12.5 mutation.
   """
-  def reserialized_prefix, do: String.replace(@primary_prefix, "hi  there", "hi there")
+  def reserialized_prefix,
+    do: String.replace(@primary_prefix, "hi  there", "hi there")
 
   # ---------------------------------------------------------------------------
   # meta-event bus (injectable emit sink + fold source)
@@ -236,7 +236,9 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
         cond do
           openings != 1 or terminals != 1 ->
-            {:halt, {:error, {:lifecycle, run_id, %{openings: openings, terminals: terminals}}}}
+            {:halt,
+             {:error,
+              {:lifecycle, run_id, %{openings: openings, terminals: terminals}}}}
 
           post_terminal?(events, run_id) ->
             {:halt, {:error, {:post_terminal, run_id}}}
@@ -265,13 +267,17 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
         false
 
       tseq ->
-        Enum.any?(events, fn e -> Map.get(e, :run_id) == run_id and e.seq > tseq end)
+        Enum.any?(events, fn e ->
+          Map.get(e, :run_id) == run_id and e.seq > tseq
+        end)
     end
   end
 
   defp terminal_seq(events, run_id) do
     events
-    |> Enum.filter(&(&1.kind == :probe_run and &1.run_id == run_id and &1.status in @terminal))
+    |> Enum.filter(
+      &(&1.kind == :probe_run and &1.run_id == run_id and &1.status in @terminal)
+    )
     |> Enum.map(& &1.seq)
     |> case do
       [] -> nil
@@ -324,17 +330,24 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
   the primary's. On divergence, names the first divergent byte offset.
   """
   def prefix_identity(captures, primary) do
-    Enum.reduce_while(captures, :ok, fn %{run_id: run_id, prefix: prefix}, :ok ->
+    Enum.reduce_while(captures, :ok, fn %{run_id: run_id, prefix: prefix},
+                                        :ok ->
       if prefix == primary,
         do: {:cont, :ok},
         else:
-          {:halt, {:error, {:prefix_divergence, first_divergent_offset(primary, prefix), run_id}}}
+          {:halt,
+           {:error,
+            {:prefix_divergence, first_divergent_offset(primary, prefix),
+             run_id}}}
     end)
   end
 
   @doc "First byte offset at which `a` and `b` differ (or their common length)."
   def first_divergent_offset(a, b), do: divergent(a, b, 0)
-  defp divergent(<<x, ra::binary>>, <<x, rb::binary>>, i), do: divergent(ra, rb, i + 1)
+
+  defp divergent(<<x, ra::binary>>, <<x, rb::binary>>, i),
+    do: divergent(ra, rb, i + 1)
+
   defp divergent(_, _, i), do: i
 
   @doc "N-U12.1 — every emitted `meta_result` is `family: :meta`; a loop draft leaked otherwise."
@@ -357,16 +370,18 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     |> Enum.filter(&(&1.kind == :meta_result))
     |> Enum.reduce_while(:ok, fn m, :ok ->
       expected_trust =
-        if ctx_taint == :tainted or Enum.any?(m.refs, &MapSet.member?(tainted, &1)),
-          do: :tainted,
-          else: :trusted
+        if ctx_taint == :tainted or
+             Enum.any?(m.refs, &MapSet.member?(tainted, &1)),
+           do: :tainted,
+           else: :trusted
 
       cond do
         m.source != expected_source ->
           {:halt, {:error, {:bad_source, m.run_id, m.source}}}
 
         m.trust != expected_trust ->
-          {:halt, {:error, {:trust_not_absorbed, m.run_id, m.trust, expected_trust}}}
+          {:halt,
+           {:error, {:trust_not_absorbed, m.run_id, m.trust, expected_trust}}}
 
         true ->
           {:cont, :ok}
@@ -380,11 +395,16 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
   """
   def output_atomic(events) do
     nonhappy_runs =
-      for %{kind: :probe_run, run_id: run_id, status: s} <- events, s in @nonhappy, do: run_id
+      for %{kind: :probe_run, run_id: run_id, status: s} <- events,
+          s in @nonhappy,
+          do: run_id
 
     Enum.reduce_while(Enum.uniq(nonhappy_runs), :ok, fn run_id, :ok ->
       k = Enum.count(events, &(&1.kind == :meta_result and &1.run_id == run_id))
-      if k == 0, do: {:cont, :ok}, else: {:halt, {:error, {:partial_output, run_id, k}}}
+
+      if k == 0,
+        do: {:cont, :ok},
+        else: {:halt, {:error, {:partial_output, run_id, k}}}
     end)
   end
 
@@ -408,7 +428,9 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
         {parked, max(peak, MapSet.size(parked))}
       end)
 
-    if peak <= max_parked, do: :ok, else: {:error, {:parked_overflow, peak, max_parked}}
+    if peak <= max_parked,
+      do: :ok,
+      else: {:error, {:parked_overflow, peak, max_parked}}
   end
 
   @doc """
@@ -437,13 +459,19 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
   @doc "The primary-loop projection (labels in seq order) of a mixed stream."
   def loop_projection(events) do
-    events |> Enum.filter(&(&1.kind == :loop)) |> Enum.sort_by(& &1.seq) |> Enum.map(& &1.label)
+    events
+    |> Enum.filter(&(&1.kind == :loop))
+    |> Enum.sort_by(& &1.seq)
+    |> Enum.map(& &1.label)
   end
 
   @doc "P-U12.4 — the primary loop trace is identical with or without probes."
   def loop_fold_independence(with_probes, baseline_labels) do
     got = loop_projection(with_probes)
-    if got == baseline_labels, do: :ok, else: {:error, {:isolation_breach, got, baseline_labels}}
+
+    if got == baseline_labels,
+      do: :ok,
+      else: {:error, {:isolation_breach, got, baseline_labels}}
   end
 
   # ===========================================================================
@@ -464,7 +492,10 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
   @doc "Record that an injector site fired (called by the injectors below)."
   def fire(fireset, site) do
-    Agent.update(fireset, fn s -> %{s | fired: Map.update(s.fired, site, 1, &(&1 + 1))} end)
+    Agent.update(fireset, fn s ->
+      %{s | fired: Map.update(s.fired, site, 1, &(&1 + 1))}
+    end)
+
     :ok
   end
 
@@ -514,12 +545,23 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     @impl true
     def build(_context) do
       {:ok,
-       %{suffix: [%{role: "user", content: "gate?"}], output: :structured, max_output_tokens: 256}}
+       %{
+         suffix: [%{role: "user", content: "gate?"}],
+         output: :structured,
+         max_output_tokens: 256
+       }}
     end
 
     @impl true
     def interpret(_response, context) do
-      {:ok, [%{type: :gate_decision, refs: [context.tip_offset], payload: %{choice: :allow}}]}
+      {:ok,
+       [
+         %{
+           type: :gate_decision,
+           refs: [context.tip_offset],
+           payload: %{choice: :allow}
+         }
+       ]}
     end
   end
 
@@ -557,7 +599,15 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def interpret(_response, context),
-      do: {:ok, [%{type: :gate_decision, refs: [context.tip_offset], payload: %{choice: :allow}}]}
+      do:
+        {:ok,
+         [
+           %{
+             type: :gate_decision,
+             refs: [context.tip_offset],
+             payload: %{choice: :allow}
+           }
+         ]}
   end
 
   defmodule UnregisteredSourceProbe do
@@ -592,11 +642,23 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     def build(_context),
       do:
         {:ok,
-         %{suffix: [%{role: "user", content: "x"}], output: :structured, max_output_tokens: 64}}
+         %{
+           suffix: [%{role: "user", content: "x"}],
+           output: :structured,
+           max_output_tokens: 64
+         }}
 
     @impl true
     def interpret(_response, context),
-      do: {:ok, [%{type: :gate_decision, refs: [context.tip_offset], payload: %{choice: :allow}}]}
+      do:
+        {:ok,
+         [
+           %{
+             type: :gate_decision,
+             refs: [context.tip_offset],
+             payload: %{choice: :allow}
+           }
+         ]}
   end
 
   defmodule HangingProbe do
@@ -629,7 +691,15 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def interpret(_response, context),
-      do: {:ok, [%{type: :gate_decision, refs: [context.tip_offset], payload: %{choice: :allow}}]}
+      do:
+        {:ok,
+         [
+           %{
+             type: :gate_decision,
+             refs: [context.tip_offset],
+             payload: %{choice: :allow}
+           }
+         ]}
   end
 
   defmodule MultiCallProbe do
@@ -653,11 +723,17 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     def build(_context),
       do:
         {:ok,
-         %{suffix: [%{role: "user", content: "rules?"}], output: :text, max_output_tokens: 128}}
+         %{
+           suffix: [%{role: "user", content: "rules?"}],
+           output: :text,
+           max_output_tokens: 128
+         }}
 
     @impl true
     def interpret(_response, context),
-      do: {:ok, [%{type: :extract, op: :add, item: "rule", refs: [context.tip_offset]}]}
+      do:
+        {:ok,
+         [%{type: :extract, op: :add, item: "rule", refs: [context.tip_offset]}]}
   end
 
   defmodule SlowMultiCallProbe do
@@ -692,12 +768,18 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       Process.sleep(@per_call_ms)
 
       {:ok,
-       %{suffix: [%{role: "user", content: "rules?"}], output: :text, max_output_tokens: 128}}
+       %{
+         suffix: [%{role: "user", content: "rules?"}],
+         output: :text,
+         max_output_tokens: 128
+       }}
     end
 
     @impl true
     def interpret(_response, context),
-      do: {:ok, [%{type: :extract, op: :add, item: "rule", refs: [context.tip_offset]}]}
+      do:
+        {:ok,
+         [%{type: :extract, op: :add, item: "rule", refs: [context.tip_offset]}]}
   end
 
   defmodule LoopDraftProbe do
@@ -721,7 +803,11 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     def build(_context),
       do:
         {:ok,
-         %{suffix: [%{role: "user", content: "x"}], output: :structured, max_output_tokens: 64}}
+         %{
+           suffix: [%{role: "user", content: "x"}],
+           output: :structured,
+           max_output_tokens: 64
+         }}
 
     @impl true
     def interpret(_response, _context),
@@ -749,11 +835,17 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     def build(_context),
       do:
         {:ok,
-         %{suffix: [%{role: "user", content: "x"}], output: :structured, max_output_tokens: 64}}
+         %{
+           suffix: [%{role: "user", content: "x"}],
+           output: :structured,
+           max_output_tokens: 64
+         }}
 
     @impl true
     def interpret(_response, context),
-      do: {:ok, [%{type: :gate_decision, trust: :trusted, refs: [context.tip_offset]}]}
+      do:
+        {:ok,
+         [%{type: :gate_decision, trust: :trusted, refs: [context.tip_offset]}]}
   end
 
   # ===========================================================================
@@ -770,11 +862,22 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     def run(%{bus: bus, fireset: fs}, run_id) do
       L.fire(fs, :family_check_removed)
       L.emit(bus, L.opening(run_id, :started))
-      L.emit(bus, L.meta_result(run_id, family: :loop, source: :probe_c1_gate, trust: :trusted))
 
       L.emit(
         bus,
-        L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge())
+        L.meta_result(run_id,
+          family: :loop,
+          source: :probe_c1_gate,
+          trust: :trusted
+        )
+      )
+
+      L.emit(
+        bus,
+        L.terminal(run_id, :completed,
+          fingerprint: L.fingerprint(),
+          charge: L.charge()
+        )
       )
     end
   end
@@ -787,13 +890,21 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       L.fire(fs, :settle_only)
       L.emit(bus, L.opening(run_id, :started))
       # VIOLATION: the call happens before any reserve.
-      _ = L.provider_call(provider, run_id, %{prefix: L.primary_prefix(), suffix: []})
+      _ =
+        L.provider_call(provider, run_id, %{
+          prefix: L.primary_prefix(),
+          suffix: []
+        })
+
       L.emit(bus, L.acct(run_id, :call))
       L.emit(bus, L.acct(run_id, :settle, actual: 80))
 
       L.emit(
         bus,
-        L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge())
+        L.terminal(run_id, :completed,
+          fingerprint: L.fingerprint(),
+          charge: L.charge()
+        )
       )
     end
   end
@@ -812,14 +923,24 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     @moduledoc "N-U12.4: the leash lives inside the probe, so the Runner makes max_calls+1 calls."
     alias Raxol.Agent.Red.ProbeRunnerLab, as: L
 
-    def run(%{bus: bus, provider: provider, budget: budget, fireset: fs}, run_id, max_calls) do
+    def run(
+          %{bus: bus, provider: provider, budget: budget, fireset: fs},
+          run_id,
+          max_calls
+        ) do
       L.fire(fs, :probe_leash)
       L.emit(bus, L.opening(run_id, :started))
 
       for _ <- 1..(max_calls + 1) do
         _ = L.try_reserve(budget, 10)
         L.emit(bus, L.acct(run_id, :reserve, estimate: 10))
-        _ = L.provider_call(provider, run_id, %{prefix: L.primary_prefix(), suffix: []})
+
+        _ =
+          L.provider_call(provider, run_id, %{
+            prefix: L.primary_prefix(),
+            suffix: []
+          })
+
         L.emit(bus, L.acct(run_id, :call))
         L.emit(bus, L.acct(run_id, :settle, actual: 10))
       end
@@ -843,13 +964,21 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       L.emit(bus, L.opening(run_id, :started))
       L.emit(bus, L.acct(run_id, :reserve, estimate: 100))
       # VIOLATION: a re-serialized prefix, byte-divergent from the primary's.
-      _ = L.provider_call(provider, run_id, %{prefix: L.reserialized_prefix(), suffix: []})
+      _ =
+        L.provider_call(provider, run_id, %{
+          prefix: L.reserialized_prefix(),
+          suffix: []
+        })
+
       L.emit(bus, L.acct(run_id, :call))
       L.emit(bus, L.acct(run_id, :settle, actual: 90))
 
       L.emit(
         bus,
-        L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge())
+        L.terminal(run_id, :completed,
+          fingerprint: L.fingerprint(),
+          charge: L.charge()
+        )
       )
     end
   end
@@ -862,11 +991,21 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       L.fire(fs, :honors_probe_trust)
       L.emit(bus, L.opening(run_id, :started))
       # Context is tainted, but the Runner honors the probe's :trusted draft.
-      L.emit(bus, L.meta_result(run_id, family: :meta, source: :probe_c1_gate, trust: :trusted))
+      L.emit(
+        bus,
+        L.meta_result(run_id,
+          family: :meta,
+          source: :probe_c1_gate,
+          trust: :trusted
+        )
+      )
 
       L.emit(
         bus,
-        L.terminal(run_id, :completed, fingerprint: L.fingerprint(), charge: L.charge())
+        L.terminal(run_id, :completed,
+          fingerprint: L.fingerprint(),
+          charge: L.charge()
+        )
       )
     end
   end
@@ -880,7 +1019,14 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       L.emit(bus, L.opening(run_id, :started))
       L.emit(bus, L.terminal(run_id, :killed, fingerprint: L.fingerprint()))
       # VIOLATION: an in-flight interpret emit that outran the kill.
-      L.emit(bus, L.meta_result(run_id, family: :meta, source: :probe_c1_gate, trust: :trusted))
+      L.emit(
+        bus,
+        L.meta_result(run_id,
+          family: :meta,
+          source: :probe_c1_gate,
+          trust: :trusted
+        )
+      )
     end
   end
 
@@ -912,7 +1058,11 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
       L.emit(bus, L.opening(run_id, :started))
 
       for _ <- 1..k,
-          do: L.emit(bus, L.meta_result(run_id, source: :probe_c1_gate, trust: :trusted))
+          do:
+            L.emit(
+              bus,
+              L.meta_result(run_id, source: :probe_c1_gate, trust: :trusted)
+            )
 
       # VIOLATION: the k drafts already left the building when exhaustion hit.
       L.emit(bus, L.terminal(run_id, :exhausted, fingerprint: L.fingerprint()))
@@ -935,11 +1085,19 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     def run(%{bus: bus, fireset: fs}, run_id, baseline_labels) do
       L.fire(fs, :loop_perturb)
-      Enum.each(baseline_labels, fn label -> L.emit(bus, L.loop_event(label)) end)
+
+      Enum.each(baseline_labels, fn label ->
+        L.emit(bus, L.loop_event(label))
+      end)
+
       # VIOLATION: the crashing probe pushed an event into the primary trace.
       L.emit(bus, L.loop_event(:probe_injected))
       L.emit(bus, L.opening(run_id, :started))
-      L.emit(bus, L.terminal(run_id, :error, reason: :crash, fingerprint: L.fingerprint()))
+
+      L.emit(
+        bus,
+        L.terminal(run_id, :error, reason: :crash, fingerprint: L.fingerprint())
+      )
     end
   end
 
@@ -974,7 +1132,10 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
       L.emit(
         bus,
-        L.terminal(run_id, :exhausted, fingerprint: L.fingerprint(), charge: L.charge(calls: 0))
+        L.terminal(run_id, :exhausted,
+          fingerprint: L.fingerprint(),
+          charge: L.charge(calls: 0)
+        )
       )
     end
   end
@@ -986,11 +1147,22 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     """
     alias Raxol.Agent.Red.ProbeRunnerLab, as: L
 
-    def run(%{bus: bus, provider: provider, budget: budget}, run_id, ctx_taint, tip) do
+    def run(
+          %{bus: bus, provider: provider, budget: budget},
+          run_id,
+          ctx_taint,
+          tip
+        ) do
       L.emit(bus, L.opening(run_id, :started))
       _ = L.try_reserve(budget, 100)
       L.emit(bus, L.acct(run_id, :reserve, estimate: 100))
-      _ = L.provider_call(provider, run_id, %{prefix: L.primary_prefix(), suffix: []})
+
+      _ =
+        L.provider_call(provider, run_id, %{
+          prefix: L.primary_prefix(),
+          suffix: []
+        })
+
       L.emit(bus, L.acct(run_id, :call))
       L.emit(bus, L.acct(run_id, :settle, actual: 90))
 

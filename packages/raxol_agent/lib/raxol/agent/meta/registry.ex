@@ -1,8 +1,7 @@
 defmodule Raxol.Agent.Meta.Registry do
   @moduledoc """
-  U11 meta-event type registry — the **frozen** type table as data
-  (`docs/proposals/in-flight/harness-freeze-contracts.md` §2.1, "Meta type
-  registry (v1, grow-only)").
+  U11 meta-event type registry — the **frozen** type table as data (see
+  `docs/harness/architecture.md`, "The event contract").
 
   This is the U11 *enabler*: the table is real, checked-in data so the U11-R
   red suite (and, later, the U11-I implementation) both read one source of

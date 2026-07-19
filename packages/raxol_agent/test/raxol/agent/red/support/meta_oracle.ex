@@ -1,7 +1,6 @@
 defmodule Raxol.Agent.Red.MetaOracle do
   @moduledoc """
-  Independent reference oracle for the U11 meta family (FI-5) —
-  `docs/proposals/in-flight/harness-freeze-contracts.md` §2.
+  Independent reference oracle for the U11 meta family (FI-5).
 
   This is the **independent decoder** (meta-invariant m6, oracle independence):
   a small, hand-written model of the frozen contract that the U11-R red suite

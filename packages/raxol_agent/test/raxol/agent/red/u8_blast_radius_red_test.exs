@@ -1,7 +1,6 @@
 # U8-R — permanent failing-first red suite for BlastRadiusGate + approvals
-# (AD-6b / AD-14), authored against the ratified freeze contracts
-# (docs/proposals/in-flight/harness-freeze-contracts.md §1.1 / §2.1 / §5.2 and
-# harness-yolo-safe-research.md §2/§5/§7) BEFORE any implementation exists.
+# (AD-6b / AD-14), authored against the ratified freeze contracts and the
+# yolo-safe research BEFORE any implementation exists.
 #
 # Two modules, one file, by design:
 #
@@ -104,7 +103,8 @@ defmodule Raxol.Agent.Red.U8BlastRadiusRedTest do
     end
 
     test "C19 — the §5.2 predicate fails closed on a call MISSING effect_class/egress instead of raising (adversarial-review LOW)" do
-      assert :ok = Contours.predicate_missing_fields_fail_closed(BlastRadiusGate)
+      assert :ok =
+               Contours.predicate_missing_fields_fail_closed(BlastRadiusGate)
     end
 
     test "C20 — a :once grant is bound to the vetted lineage: the same (tool, call_id) re-issued with tainted lineage re-escalates (adversarial-review LOW)" do
@@ -243,13 +243,17 @@ defmodule Raxol.Agent.Red.U8BlastRadiusControlsTest do
 
   # {site, injector, contour id, signature-predicate function name}
   @injector_table [
-    {:executes_while_pending, ExecutesWhilePending, :c1, :sig_executed_while_locked},
+    {:executes_while_pending, ExecutesWhilePending, :c1,
+     :sig_executed_while_locked},
     {:emits_meta_family, EmitsMetaFamily, :c2, :sig_not_loop_family},
     {:forgets_deny, ForgetsDeny, :c4, :sig_proceeded_after_deny},
-    {:accepts_forged_decision, AcceptsForgedDecision, :c7, :sig_forged_accepted},
+    {:accepts_forged_decision, AcceptsForgedDecision, :c7,
+     :sig_forged_accepted},
     {:in_memory_only, InMemoryOnly, :c6, :sig_rebuild_diverged},
-    {:reads_destructive_hint_c8, ReadsDestructiveHint, :c8, :sig_predicate_wrong},
-    {:reads_destructive_hint_c9, ReadsDestructiveHint, :c9, :sig_trusted_self_report},
+    {:reads_destructive_hint_c8, ReadsDestructiveHint, :c8,
+     :sig_predicate_wrong},
+    {:reads_destructive_hint_c9, ReadsDestructiveHint, :c9,
+     :sig_trusted_self_report},
     {:ignores_taint, IgnoresTaint, :c10, :sig_tainted_auto_proceeded},
     {:reads_stamped_trust, ReadsStampedTrust, :c10, :sig_mis_stamped_proceeded}
   ]

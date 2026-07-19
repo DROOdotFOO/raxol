@@ -8,7 +8,7 @@ defmodule Raxol.Agent.Compaction do
   from a compaction is the *ordinary checkpoint-restore path*. There is no
   second record kind and no side-channel state (AD-3b, the one-artifact thesis).
 
-  ## The one-artifact thesis (AD-3b, `harness-freeze-contracts.md` §1.1)
+  ## The one-artifact thesis (AD-3b)
 
   Compaction is **not** a separate record kind and **not** a lossy summarizer
   side-channel. Compacting a session is writing a **`checkpoint` record with

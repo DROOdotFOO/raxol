@@ -2,7 +2,6 @@ defmodule Raxol.Agent.DoneGate do
   @moduledoc """
   U21 — Evidence-gated done (FI-6). A pure read/decision function over a turn
   journal: it never touches a shared write path (see
-  `docs/proposals/in-flight/harness-roadmap.md` §U21 + FI-6 and
   `packages/raxol_agent/test/raxol/agent/red/u21_evidence_done_red_test.exs`).
 
   ## What U21 gates
@@ -40,8 +39,8 @@ defmodule Raxol.Agent.DoneGate do
 
   **Every completed `:tool_use` is a mutation.** The real producer
   (`Raxol.Agent.Contract.pump/3`) stamps no effect metadata on tool calls, and
-  the frozen effect taxonomy (`harness-freeze-contracts.md` §5.2:
-  `:reversible_local | :bounded_sandboxable | :irreversible_external`) contains
+  the frozen effect taxonomy (`:reversible_local | :bounded_sandboxable |
+  :irreversible_external`) contains
   only effect-BEARING classes and rules that effect enforcement is *structural,
   compiled in our own tree — never self-reported*. So:
 
@@ -88,8 +87,8 @@ defmodule Raxol.Agent.DoneGate do
 
   Promoting this to a hard block is the U21-I impl unit, which follows U8 and
   the refs-citation seam (how an agent names its own evidence offsets). Both
-  are tracked in `docs/proposals/in-flight/harness-parked.md` (U21
-  gating-strength ruling; wiring debt).
+  remain open: the U21 gating-strength ruling and the wiring itself are
+  undecided.
 
   The gate never transitions the turn to done on a rejected claim; the turn
   stays open and the typed error is surfaced.
@@ -143,10 +142,10 @@ defmodule Raxol.Agent.DoneGate do
   Labels like `H2` and `M1` in this module and its red suite are finding ids
   from PR #570's adversarial review rounds — severity (High/Medium/Low) plus
   index — kept so each fix stays traceable to the finding it closes. `§0
-  decision-time-fold law` = `docs/proposals/in-flight/harness-freeze-contracts.md`
-  §0 clause 7; `§5.2` = the effect-class taxonomy in the same document; `FI-6`
-  = the roadmap future-invariant this unit implements; `meta-inv N` = the
-  red-suite meta-invariants in `docs/proposals/in-flight/harness-invariants.md`.
+  decision-time-fold law` names the rule that admission gates fold truth
+  synchronously at decision time, never re-derived later; `§5.2` names the
+  effect-class taxonomy; `FI-6` is the future-invariant this unit implements;
+  `meta-inv N` refers to the red suite's own meta-invariants.
   """
 
   alias Raxol.Agent.Contract.Event

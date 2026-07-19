@@ -1,10 +1,10 @@
 defmodule Raxol.Agent.Probe.Runner do
   @moduledoc """
-  U12 — the probe Runner (frozen observables, `harness-freeze-contracts.md`
-  §3.1/§3.3). The in-BEAM Runner Pool (roadmap D2 — no Oban/Postgres; D1
-  stayed on files; an UNSUPERVISED lazy singleton today — see
-  `Raxol.Agent.Probe.Runner.Pool` for the process model + supervision follow-up)
-  that drives a `Raxol.Agent.Probe` through its lifecycle and
+  U12 — the probe Runner (frozen observables). The in-BEAM Runner Pool
+  (roadmap D2 — no Oban/Postgres; D1 stayed on files; an UNSUPERVISED lazy
+  singleton today — see `Raxol.Agent.Probe.Runner.Pool` for the process model
+  + supervision follow-up) that drives a `Raxol.Agent.Probe` through its
+  lifecycle and
   emits the frozen `probe_run` / result meta events, owning everything the pure
   probe does not.
 

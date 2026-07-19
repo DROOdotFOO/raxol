@@ -26,7 +26,11 @@ defmodule Raxol.Agent.StreamTest do
       description: "Format a number as text",
       schema: [
         input: [
-          value: [type: :integer, required: true, description: "Value to format"]
+          value: [
+            type: :integer,
+            required: true,
+            description: "Value to format"
+          ]
         ]
       ]
 
@@ -59,7 +63,60 @@ defmodule Raxol.Agent.StreamTest do
     def capabilities, do: [:completion, :tool_use]
   end
 
+  # -- Capturing Mock Backend ---------------------------------------------------
+
+  defmodule CapturingBackend do
+    @moduledoc "Sends the exact messages it was handed to the test process."
+    @behaviour Raxol.Agent.AIBackend
+
+    @impl true
+    def complete(messages, opts) do
+      send(Keyword.fetch!(opts, :owner), {:backend_saw, messages})
+      {:ok, %{content: "ok", usage: %{}, metadata: %{}}}
+    end
+
+    @impl true
+    def available?, do: true
+    @impl true
+    def name, do: "Capturing Mock"
+    @impl true
+    def capabilities, do: [:completion]
+  end
+
+  # -- Reasoning-emitting streaming backend -----------------------------------
+
+  defmodule ReasoningStreamMock do
+    @moduledoc "A streaming backend that surfaces reasoning before the answer."
+    @behaviour Raxol.Agent.AIBackend
+
+    @impl true
+    def complete(_messages, _opts),
+      do: {:ok, %{content: "answer", usage: %{}, metadata: %{}}}
+
+    @impl true
+    def stream(_messages, _opts) do
+      {:ok,
+       [
+         {:reasoning, "let me "},
+         {:reasoning, "think"},
+         {:chunk, "answer"},
+         {:done, %{content: "answer", usage: %{}, metadata: %{}}}
+       ]}
+    end
+
+    @impl true
+    def available?, do: true
+    @impl true
+    def name, do: "Reasoning Stream Mock"
+    @impl true
+    def capabilities, do: [:completion]
+  end
+
   # -- Helpers ----------------------------------------------------------------
+
+  defp capturing_opts do
+    [backend: CapturingBackend, backend_opts: [owner: self()], stream: false]
+  end
 
   defp mock_opts(response) do
     [backend: Raxol.Agent.Backend.Mock, backend_opts: [response: response]]
@@ -93,10 +150,26 @@ defmodule Raxol.Agent.StreamTest do
 
   # -- run/2 tests ------------------------------------------------------------
 
+  describe "run/2 reasoning passthrough" do
+    test "backend reasoning events surface as {:reasoning, text}, distinct from text deltas" do
+      events =
+        AgentStream.run("Hello", backend: ReasoningStreamMock)
+        |> Enum.to_list()
+
+      assert events == [
+               {:reasoning, "let me "},
+               {:reasoning, "think"},
+               {:text_delta, "answer"},
+               {:done, %{content: "answer", tool_results: [], usage: %{}}}
+             ]
+    end
+  end
+
   describe "run/2" do
     test "streams a simple completion" do
       assert [{:text_delta, "Hi there!"}, {:done, done}] =
-               AgentStream.run("Hello", mock_opts("Hi there!")) |> Enum.to_list()
+               AgentStream.run("Hello", mock_opts("Hi there!"))
+               |> Enum.to_list()
 
       assert done.content == "Hi there!"
       assert done.tool_results == []
@@ -135,13 +208,78 @@ defmodule Raxol.Agent.StreamTest do
     end
   end
 
+  # A silently-dropped system prompt is a trust bug: the operator believes a
+  # prompt governs the turn while the backend never saw it. These tests pin
+  # that :system_prompt reaches the backend on EVERY message-entry form.
+  describe "run/2 system prompt threading" do
+    test "string prompt: system_prompt arrives as the leading system message" do
+      opts = capturing_opts() ++ [system_prompt: "You are terse."]
+      AgentStream.run("Hello", opts) |> Enum.to_list()
+
+      assert_received {:backend_saw, messages}
+
+      assert [
+               %{role: :system, content: "You are terse."},
+               %{role: :user, content: "Hello"}
+             ] = messages
+    end
+
+    test "system_prompt is not dropped when the :messages opt is given" do
+      opts =
+        capturing_opts() ++
+          [
+            system_prompt: "You are terse.",
+            messages: [%{role: :user, content: "Hi"}]
+          ]
+
+      AgentStream.run("ignored", opts) |> Enum.to_list()
+
+      assert_received {:backend_saw, messages}
+
+      assert [
+               %{role: :system, content: "You are terse."},
+               %{role: :user, content: "Hi"}
+             ] = messages
+    end
+
+    test "system_prompt is not dropped when the prompt is a pre-built list" do
+      opts = capturing_opts() ++ [system_prompt: "You are terse."]
+
+      AgentStream.run([%{role: :user, content: "Hi"}], opts) |> Enum.to_list()
+
+      assert_received {:backend_saw, messages}
+
+      assert [
+               %{role: :system, content: "You are terse."},
+               %{role: :user, content: "Hi"}
+             ] = messages
+    end
+
+    test "an explicit system message in the list wins; never duplicated" do
+      opts = capturing_opts() ++ [system_prompt: "opt-level prompt"]
+
+      messages = [
+        %{role: :system, content: "list-level prompt"},
+        %{role: :user, content: "Hi"}
+      ]
+
+      AgentStream.run(messages, opts) |> Enum.to_list()
+
+      assert_received {:backend_saw, seen}
+      assert Enum.count(seen, &(&1.role == :system)) == 1
+      assert [%{role: :system, content: "list-level prompt"} | _] = seen
+    end
+  end
+
   # -- react/2 tests ----------------------------------------------------------
 
   describe "react/2" do
     test "returns done when LLM responds with text immediately" do
       opts = mock_opts("The answer is 42.") ++ [actions: [AddNumbers]]
 
-      assert [{:done, done}] = AgentStream.react("Hello", opts) |> Enum.to_list()
+      assert [{:done, done}] =
+               AgentStream.react("Hello", opts) |> Enum.to_list()
+
       assert done.content == "The answer is 42."
     end
 
@@ -151,7 +289,9 @@ defmodule Raxol.Agent.StreamTest do
         text_response("The sum is 7.", %{usage: %{input_tokens: 10}})
       ]
 
-      events = AgentStream.react("Add 3 and 4", sequence_opts(responses)) |> Enum.to_list()
+      events =
+        AgentStream.react("Add 3 and 4", sequence_opts(responses))
+        |> Enum.to_list()
 
       assert [
                {:tool_use, tu},
@@ -176,7 +316,10 @@ defmodule Raxol.Agent.StreamTest do
       ]
 
       events =
-        AgentStream.react("Add then format", sequence_opts(responses, [AddNumbers, FormatResult]))
+        AgentStream.react(
+          "Add then format",
+          sequence_opts(responses, [AddNumbers, FormatResult])
+        )
         |> Enum.to_list()
 
       assert length(Enum.filter(events, &match?({:tool_use, _}, &1))) == 2
@@ -188,7 +331,9 @@ defmodule Raxol.Agent.StreamTest do
     end
 
     test "respects max_iterations" do
-      infinite = tool_response([tool_call("c", "add_numbers", %{"a" => 1, "b" => 1})])
+      infinite =
+        tool_response([tool_call("c", "add_numbers", %{"a" => 1, "b" => 1})])
+
       opts = sequence_opts(List.duplicate(infinite, 10)) ++ [max_iterations: 2]
 
       events = AgentStream.react("Loop forever", opts) |> Enum.to_list()
@@ -204,9 +349,13 @@ defmodule Raxol.Agent.StreamTest do
     end
 
     test "with system prompt" do
-      opts = mock_opts("I'm helpful.") ++ [actions: [], system_prompt: "You are helpful."]
+      opts =
+        mock_opts("I'm helpful.") ++
+          [actions: [], system_prompt: "You are helpful."]
 
-      assert [{:done, done}] = AgentStream.react("Hello", opts) |> Enum.to_list()
+      assert [{:done, done}] =
+               AgentStream.react("Hello", opts) |> Enum.to_list()
+
       assert done.content == "I'm helpful."
     end
   end
@@ -328,13 +477,17 @@ defmodule Raxol.Agent.StreamTest do
 
     test "works with Enum.reduce" do
       responses = [
-        tool_response([tool_call("c1", "add_numbers", %{"a" => 10, "b" => 20})]),
+        tool_response([
+          tool_call("c1", "add_numbers", %{"a" => 10, "b" => 20})
+        ]),
         text_response("30")
       ]
 
       tool_count =
         AgentStream.react("Add", sequence_opts(responses))
-        |> Enum.count(&(match?({:tool_use, _}, &1) or match?({:tool_result, _}, &1)))
+        |> Enum.count(
+          &(match?({:tool_use, _}, &1) or match?({:tool_result, _}, &1))
+        )
 
       assert tool_count == 2
     end
@@ -347,7 +500,12 @@ defmodule Raxol.Agent.StreamTest do
 
     @impl true
     def complete(_messages, opts) do
-      {:ok, %{content: "model=#{inspect(Keyword.get(opts, :model))}", usage: %{}, metadata: %{}}}
+      {:ok,
+       %{
+         content: "model=#{inspect(Keyword.get(opts, :model))}",
+         usage: %{},
+         metadata: %{}
+       }}
     end
 
     @impl true
@@ -391,7 +549,11 @@ defmodule Raxol.Agent.StreamTest do
 
       {:ok, info} =
         "hi"
-        |> AgentStream.run(executor: cfg, backend_opts: [response: "from-mock"], stream: false)
+        |> AgentStream.run(
+          executor: cfg,
+          backend_opts: [response: "from-mock"],
+          stream: false
+        )
         |> AgentStream.collect()
 
       assert info.content == "from-mock"
@@ -445,7 +607,12 @@ defmodule Raxol.Agent.StreamTest do
     @impl true
     def stream(_messages, opts) do
       report(opts)
-      {:ok, [{:chunk, "native answer"}, {:done, %{content: "native answer", usage: %{}}}]}
+
+      {:ok,
+       [
+         {:chunk, "native answer"},
+         {:done, %{content: "native answer", usage: %{}}}
+       ]}
     end
 
     @impl true

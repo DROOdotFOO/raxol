@@ -11,7 +11,7 @@ defmodule Raxol.Agent.Steer do
   text at the next boundary — is the session runtime's job; it drives this pure
   function.
 
-  ## Not an atomic CAS — the caller's serialization obligation (U6-I)
+  ## Not an atomic CAS — the caller's serialization obligation
 
   `resolve/2` is a **pure decision function**, not an atomic compare-and-swap:
   the "compare" (`expected != turn_id`) and the "swap" (issuing the next token)
@@ -29,8 +29,8 @@ defmodule Raxol.Agent.Steer do
       events in one turn — the exact misdirection this seam exists to prevent.
 
   That runtime read-modify-write atomicity is a SEPARATE, currently-unshipped
-  obligation belonging to **U6-I** (the session-runtime integration unit): the
-  single-writer seam is `Agent.Session`'s turn process, which must own the
+  obligation belonging to the session-runtime integration: the single-writer
+  seam is `Agent.Session`'s turn process, which must own the
   `TurnState` and call `resolve/2` from its own `handle_*` only. See also
   `Raxol.Agent.Red.SteerContours` (its serialized-CAS checker documents the
   same boundary).
@@ -98,19 +98,17 @@ defmodule Raxol.Agent.Steer do
   keeps a SHA-256 fingerprint of the steering text, never the text itself, so a
   client cannot grow resident memory by the byte-size of what it sends. The
   index therefore grows 1:1 with durable journal appends; bounding THAT (ingest
-  quota / backpressure on accepted steers) is the runtime's U6-I concern.
+  quota / backpressure on accepted steers) is the session runtime's concern.
   Evicting entries any earlier than session end would break the frozen §5.1
   window (a replayed `client_msg_id` past eviction would journal a second
   durable event).
 
   ## Contract references
 
-  Section marks like "§5.1" refer to the frozen harness contract:
-  `docs/proposals/in-flight/harness-freeze-contracts.md` on the
-  `docs/harness-freeze-constitution` branch (docs PR #569). "AD-13" is the
-  ratified architecture decision for the steer CAS seam in the same document
-  set; "U6-I" is the session-runtime integration unit that consumes this
-  decision core.
+  Section marks like "§5.1" refer to the frozen harness contract, described in
+  `docs/harness/architecture.md`. "AD-13" is the ratified architecture decision
+  for the steer CAS seam in the same document set. The session runtime is what
+  integrates this decision core end to end (see "Not an atomic CAS" above).
 
   ## Status
 

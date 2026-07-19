@@ -1,7 +1,7 @@
 defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
   @moduledoc """
-  Tier-1 storage invariants I5–I8 + I10
-  (docs/proposals/in-flight/harness-invariants.md).
+  Tier-1 storage invariants I5–I8 + I10 (see `docs/harness/architecture.md`'s
+  "Journal and projection" section for the durable-journal model).
 
     * I5  — recovery beyond byte-cut: truncation fuzz, multi-segment, corrupt
       interior, corrupt HEAD, mid-UTF-8 cut, empty file, zero-length segment.
@@ -58,7 +58,8 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
     {j, session, dir} = session!(base, segment_cap: cap)
 
     for k <- 1..n do
-      {:ok, ^k} = FileStore.append(j, %{"type" => "chunk", "n" => k, "pad" => "xxxxxxxx"})
+      {:ok, ^k} =
+        FileStore.append(j, %{"type" => "chunk", "n" => k, "pad" => "xxxxxxxx"})
     end
 
     :ok = FileStore.close(j)
@@ -141,7 +142,10 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
 
         # Resume continues densely after the recovered prefix.
         next = List.last(expected, 0) + 1
-        assert {:ok, ^next} = FileStore.append(j, %{"type" => "chunk", "n" => next})
+
+        assert {:ok, ^next} =
+                 FileStore.append(j, %{"type" => "chunk", "n" => next})
+
         :ok = FileStore.close(j)
       end
     end
@@ -171,7 +175,10 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
 
         {:ok, j} = FileStore.open(session_of(dir), base_dir: Path.dirname(dir))
         assert {:ok, records} = FileStore.read(j)
-        assert Enum.map(records, & &1["id"]) == expected, "exhaustive cut at #{pos}"
+
+        assert Enum.map(records, & &1["id"]) == expected,
+               "exhaustive cut at #{pos}"
+
         :ok = FileStore.close(j)
       end
     end
@@ -262,7 +269,8 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       :ok = FileStore.close(j)
     end
 
-    test "corrupt HEAD (valid JSON, wrong offset type) is ignored the same way", %{base: base} do
+    test "corrupt HEAD (valid JSON, wrong offset type) is ignored the same way",
+         %{base: base} do
       {session, dir, _} = seeded_journal!(base, 4)
       File.write!(Path.join(dir, "HEAD"), ~s({"offset": "not-an-int"}))
 
@@ -272,12 +280,18 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       :ok = FileStore.close(j)
     end
 
-    test "a cut mid-UTF-8-codepoint in the torn tail recovers the prefix without crashing", %{
-      base: base
-    } do
+    test "a cut mid-UTF-8-codepoint in the torn tail recovers the prefix without crashing",
+         %{
+           base: base
+         } do
       {j, session, dir} = session!(base)
-      {:ok, 1} = FileStore.append(j, %{"type" => "chunk", "text" => "héllo 日本語 ünïcode"})
-      {:ok, 2} = FileStore.append(j, %{"type" => "chunk", "text" => "日本語だけの行です"})
+
+      {:ok, 1} =
+        FileStore.append(j, %{"type" => "chunk", "text" => "héllo 日本語 ünïcode"})
+
+      {:ok, 2} =
+        FileStore.append(j, %{"type" => "chunk", "text" => "日本語だけの行です"})
+
       :ok = FileStore.close(j)
 
       [seg] = FaultJournal.segment_paths(dir)
@@ -301,7 +315,9 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       :ok = FileStore.close(j2)
     end
 
-    test "an entirely empty journal dir reads as [] and appends from 1", %{base: base} do
+    test "an entirely empty journal dir reads as [] and appends from 1", %{
+      base: base
+    } do
       {j, _session, dir} = session!(base)
       assert {:ok, []} = FileStore.read(j)
       assert {:ok, 1} = FileStore.append(j, %{"type" => "chunk"})
@@ -309,12 +325,17 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       :ok = FileStore.close(j)
     end
 
-    test "a zero-length trailing segment (crash right after rotation) is harmless", %{base: base} do
+    test "a zero-length trailing segment (crash right after rotation) is harmless",
+         %{base: base} do
       {session, dir, _} = seeded_journal!(base, 12)
       segs = FaultJournal.segment_paths(dir)
 
       last_num =
-        segs |> List.last() |> Path.basename() |> String.slice(0, 6) |> String.to_integer()
+        segs
+        |> List.last()
+        |> Path.basename()
+        |> String.slice(0, 6)
+        |> String.to_integer()
 
       empty = Path.join([dir, "journal", segment_name(last_num + 1)])
       File.write!(empty, "")
@@ -326,10 +347,12 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       :ok = FileStore.close(j)
     end
 
-    test "a zero-length MIDDLE segment does not break replay of its neighbors", %{base: base} do
+    test "a zero-length MIDDLE segment does not break replay of its neighbors",
+         %{base: base} do
       {session, dir, _} = seeded_journal!(base, 12)
       segs = FaultJournal.segment_paths(dir)
       assert length(segs) >= 2
+
       # A middle segment that never received bytes (crash between open and write).
       # Simulate by emptying an EXISTING middle segment is data loss (I6 damaged);
       # a genuinely empty extra file between numbers cannot exist under ascending
@@ -354,11 +377,20 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
     property "forced rotations keep ids strictly continuous across segments; concat(segments) == journal" do
       base = tmp_base_for_property()
 
-      check all(n <- integer(20..60), cap <- member_of([128, 256, 512]), max_runs: 15) do
+      check all(
+              n <- integer(20..60),
+              cap <- member_of([128, 256, 512]),
+              max_runs: 15
+            ) do
         {j, _session, dir} = session!(base, segment_cap: cap)
 
         for k <- 1..n do
-          {:ok, ^k} = FileStore.append(j, %{"type" => "chunk", "n" => k, "pad" => "xxxxxxxxxxxx"})
+          {:ok, ^k} =
+            FileStore.append(j, %{
+              "type" => "chunk",
+              "n" => k,
+              "pad" => "xxxxxxxxxxxx"
+            })
         end
 
         segs = FaultJournal.segment_paths(dir)
@@ -391,9 +423,10 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       end
     end
 
-    test "a missing MIDDLE segment is damaged — not a silent skip fabricating continuity", %{
-      base: base
-    } do
+    test "a missing MIDDLE segment is damaged — not a silent skip fabricating continuity",
+         %{
+           base: base
+         } do
       {session, dir, _} = seeded_journal!(base, 50)
       segs = FaultJournal.segment_paths(dir)
       assert length(segs) >= 3
@@ -424,7 +457,11 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       # Corrupt an interior line, then hammer open/read/status/reopen cycles.
       [first | _] = segs
       lines = File.read!(first) |> String.split("\n", trim: true)
-      File.write!(first, Enum.join(List.replace_at(lines, 0, "{bad"), "\n") <> "\n")
+
+      File.write!(
+        first,
+        Enum.join(List.replace_at(lines, 0, "{bad"), "\n") <> "\n"
+      )
 
       capture_log(fn ->
         for _ <- 1..3 do
@@ -449,9 +486,10 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
   # ===========================================================================
 
   describe "I7 — single writer" do
-    test "N concurrent opens race to exactly one Writer; interleaved appends stay dense", %{
-      base: base
-    } do
+    test "N concurrent opens race to exactly one Writer; interleaved appends stay dense",
+         %{
+           base: base
+         } do
       session = "inv-race-#{System.unique_integer([:positive])}"
       test_pid = self()
 
@@ -481,7 +519,10 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
         end
 
       writers = handles |> Enum.map(& &1.writer) |> Enum.uniq()
-      assert length(writers) == 1, "concurrent opens produced #{length(writers)} writers"
+
+      assert length(writers) == 1,
+             "concurrent opens produced #{length(writers)} writers"
+
       assert Enum.count(handles, & &1.owner?) == 1, "exactly one owner handle"
 
       # Interleave appends through every handle from concurrent tasks (handles
@@ -498,7 +539,9 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
 
       dir = Path.join(base, session)
       ids = FaultJournal.raw_ids!(dir)
-      assert ids == Enum.to_list(1..64), "single writer must serialize to dense ids"
+
+      assert ids == Enum.to_list(1..64),
+             "single writer must serialize to dense ids"
 
       owner = Enum.find(handles, & &1.owner?)
       :ok = FileStore.close(owner)
@@ -563,7 +606,10 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
 
       # The successor resumes past the survivors: appends stay dense on disk.
       pre = FaultJournal.raw_ids!(dir)
-      assert pre == Enum.to_list(1..length(pre)), "pre-kill journal must be dense"
+
+      assert pre == Enum.to_list(1..length(pre)),
+             "pre-kill journal must be dense"
+
       assert pre != [], "some appends must have landed before the kill"
 
       {:ok, next} = FileStore.append(s1, %{"type" => "chunk"})
@@ -571,7 +617,9 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
 
       ids = FaultJournal.raw_ids!(dir)
       assert ids == Enum.to_list(1..next)
-      assert ids == Enum.uniq(ids), "no duplicate ids across the writer succession"
+
+      assert ids == Enum.uniq(ids),
+             "no duplicate ids across the writer succession"
 
       owner = if s1.owner?, do: s1, else: s2
       :ok = FileStore.close(owner)
@@ -592,7 +640,8 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
         FaultJournal.arm(harness, :writer_down)
         {j, _session, dir} = session!(base)
 
-        for k <- 1..n, do: {:ok, ^k} = FileStore.append(j, %{"type" => "chunk", "n" => k})
+        for k <- 1..n,
+            do: {:ok, ^k} = FileStore.append(j, %{"type" => "chunk", "n" => k})
 
         FaultJournal.kill_writer_brutal(harness, j.writer, dir)
 
@@ -613,16 +662,19 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
             :ok
 
           {:error, reason} ->
-            flunk("HEAD torn after kill: #{inspect(reason)} — atomic write violated")
+            flunk(
+              "HEAD torn after kill: #{inspect(reason)} — atomic write violated"
+            )
         end
 
         FaultJournal.assert_all_fired!(harness, {:kill_after, n})
       end
     end
 
-    test "resume = max(HEAD, journal), never HEAD alone (stale HEAD cannot cause id reuse)", %{
-      base: base
-    } do
+    test "resume = max(HEAD, journal), never HEAD alone (stale HEAD cannot cause id reuse)",
+         %{
+           base: base
+         } do
       harness = FaultJournal.new()
       FaultJournal.arm(harness, :kill_after_write_before_head)
       {j, session, dir} = session!(base)
@@ -648,10 +700,15 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       FaultJournal.assert_all_fired!(harness)
     end
 
-    test "HEAD and meta keys stay inside the allowlist — model state never leaks", %{base: base} do
+    test "HEAD and meta keys stay inside the allowlist — model state never leaks",
+         %{base: base} do
       # Deliberately poison the append payloads with model-looking keys.
       {j, _session, dir} =
-        session!(base, title: "inv", cwd: "/tmp/inv-wd", git_branch: "inv-branch")
+        session!(base,
+          title: "inv",
+          cwd: "/tmp/inv-wd",
+          git_branch: "inv-branch"
+        )
 
       for k <- 1..5 do
         {:ok, ^k} =
@@ -668,14 +725,17 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       :ok = FileStore.close(j)
 
       head_allow = MapSet.new(~w(offset segment segment_cap schema_version))
-      meta_allow = MapSet.new(~w(created_at cwd git_branch title schema_version))
+
+      meta_allow =
+        MapSet.new(~w(created_at cwd git_branch title schema_version))
 
       {:ok, head} = FaultJournal.raw_head(dir)
 
       assert MapSet.subset?(MapSet.new(Map.keys(head)), head_allow),
              "HEAD grew keys outside the allowlist: #{inspect(Map.keys(head))}"
 
-      {:ok, meta} = Path.join(dir, "meta.json") |> File.read!() |> Jason.decode()
+      {:ok, meta} =
+        Path.join(dir, "meta.json") |> File.read!() |> Jason.decode()
 
       assert MapSet.subset?(MapSet.new(Map.keys(meta)), meta_allow),
              "meta.json grew keys outside the allowlist: #{inspect(Map.keys(meta))}"
@@ -705,7 +765,8 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
           end)
         end)
 
-      for k <- 2..200, do: {:ok, ^k} = FileStore.append(j, %{"type" => "chunk", "n" => k})
+      for k <- 2..200,
+          do: {:ok, ^k} = FileStore.append(j, %{"type" => "chunk", "n" => k})
 
       assert Task.await(reader, 10_000) == :ok
       :ok = FileStore.close(j)
@@ -723,7 +784,9 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       {:ok, j} = FileStore.open(session, base_dir: base)
 
       names = File.ls!(dir)
-      refute Enum.any?(names, &String.contains?(&1, ".tmp.")), "tmp debris not swept"
+
+      refute Enum.any?(names, &String.contains?(&1, ".tmp.")),
+             "tmp debris not swept"
 
       {:ok, head_after} = FaultJournal.raw_head(dir)
       assert head_after["offset"] == head_before["offset"]
@@ -742,8 +805,11 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       FaultJournal.arm(harness, :writer_down)
       {j, session, dir} = session!(base)
 
-      {:ok, 1} = FileStore.append(j, %{"type" => "tool_result", "result" => "42"})
-      {:ok, 2} = FileStore.append(j, %{"type" => "approval", "approved" => true})
+      {:ok, 1} =
+        FileStore.append(j, %{"type" => "tool_result", "result" => "42"})
+
+      {:ok, 2} =
+        FileStore.append(j, %{"type" => "approval", "approved" => true})
 
       # m3 branch probe: the immediate-sync arm's SPECIFIC observable — at the
       # moment the {:ok, offset} reply lands, an independent raw read already
@@ -782,7 +848,8 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
 
       results =
         for _ <- 1..10 do
-          {:ok, off} = FileStore.append(j, %{"type" => "tool_result", "result" => "x"})
+          {:ok, off} =
+            FileStore.append(j, %{"type" => "tool_result", "result" => "x"})
 
           on_disk =
             FaultJournal.raw_scan(dir)
@@ -797,7 +864,8 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
       Enum.each(storm, &Task.await(&1, 10_000))
 
       for {off, on_disk} <- results do
-        assert on_disk, "tool_result #{off} not on disk at reply time under load"
+        assert on_disk,
+               "tool_result #{off} not on disk at reply time under load"
       end
 
       :ok = FileStore.close(j)
@@ -829,7 +897,8 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
 
   defp session_of(dir), do: Path.basename(dir)
 
-  defp segment_name(num), do: :io_lib.format(~c"~6..0B.jsonl", [num]) |> List.to_string()
+  defp segment_name(num),
+    do: :io_lib.format(~c"~6..0B.jsonl", [num]) |> List.to_string()
 
   # Properties outlive the per-test setup block's tmp dir only within the test,
   # which is fine — but each property wants its own base to keep session dirs
