@@ -1,12 +1,11 @@
 defmodule Raxol.Terminal.InlineDriver.Sequences do
   @moduledoc """
   Pure ANSI byte-sequence constants + builders for the inline driver
-  profile (unit T2d, `docs/proposals/in-flight/harness-ui-roadmap.md`).
+  profile (unit T2d).
 
   Kept separate from the GenServer (`Raxol.Terminal.InlineDriver`) so the
-  Tier A suite (`harness-ui-testing/03-lifecycle.md`) can assert on exact
-  bytes without a process, a device, or the OS tty -- this module has no
-  side effects at all.
+  Tier A suite can assert on exact bytes without a process, a device, or
+  the OS tty -- this module has no side effects at all.
 
   ## The canonical teardown order (pinned, load-bearing)
 
@@ -61,6 +60,32 @@ defmodule Raxol.Terminal.InlineDriver.Sequences do
   """
   @spec init_bytes() :: binary()
   def init_bytes, do: @mouse_reset <> @focus_report_on <> @bracketed_paste_on
+
+  # Click reporting: press/release only (?1000) in SGR encoding (?1006) —
+  # never ?1003 (any-motion), which floods the input path with move
+  # events. Opt-in via the driver's `mouse?:` option (the harness enables
+  # it for click-to-fold); `modes_off/0` already reverses both.
+  @mouse_on "\e[?1000h\e[?1006h"
+
+  @doc """
+  Enable click reporting (SGR encoding, press/release only). Written by
+  the driver AFTER `init_bytes/0` when its `mouse?:` option is set; the
+  teardown's `modes_off/0` disables it unconditionally either way.
+  """
+  @spec mouse_on() :: binary()
+  def mouse_on, do: @mouse_on
+
+  @doc """
+  DSR-6 (`CSI 6n`): ask the terminal where its cursor is. The terminal
+  replies on the INPUT stream with a CPR (`CSI row ; col R`), which
+  `Raxol.Terminal.InlineDriver.probe_cursor/2` consumes via
+  `Raxol.Terminal.InlineDriver.CursorReport` — the reply is never
+  allowed to reach the app's input path. Emitted only by that opt-in
+  probe, never by `init_bytes/0`: a probe writes bytes to the device,
+  so callers must ask for it.
+  """
+  @spec cursor_position_request() :: binary()
+  def cursor_position_request, do: "\e[6n"
 
   @doc "Step 1: disable bracketed paste, focus reporting, and all mouse modes."
   @spec modes_off() :: binary()

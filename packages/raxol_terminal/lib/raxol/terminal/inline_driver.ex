@@ -1,8 +1,6 @@
 defmodule Raxol.Terminal.InlineDriver do
   @moduledoc """
-  Inline driver profile (unit T2d,
-  `docs/proposals/in-flight/harness-ui-roadmap.md`; suite design in
-  `harness-ui-testing/03-lifecycle.md`).
+  Inline driver profile (unit T2d).
 
   A sibling of `Raxol.Terminal.Driver`, not a replacement: today's driver
   enters the alternate screen at init (`\\e[?1049h`) and termbox owns the
@@ -20,13 +18,17 @@ defmodule Raxol.Terminal.InlineDriver do
       (see below). May be `nil` (headless use).
     * `:subscriber` -- overrides `:dispatcher_pid` as the input-event
       target, for tests that want a separate collector.
+    * `:raw_sink` -- optional pid that receives every PRE-parse input
+      chunk as `{:inline_raw_input, binary()}`, exactly as it arrived
+      from the tty reader, before `InputParser` sees it. Debug/observability
+      seam (byte-level input tracing); default `nil` -- when unset, nothing
+      changes on the input path.
     * `:device` -- output sink. Default `:stdio`. Accepts `:stdio` or any
       `t:IO.device/0` (a `StringIO` pid works great in tests -- everything
       here is written via plain `IO.write/2`, never raw port writes).
       **This is the suite design's hard requirement**: the output device
-      is a parameter, not a hardcoded `:stdio` write, so Tier A
-      (`harness-ui-testing/03-lifecycle.md` §1.1) can capture bytes with
-      no pty and no termbox.
+      is a parameter, not a hardcoded `:stdio` write, so Tier A can
+      capture bytes with no pty and no termbox.
     * `:stty` -- module implementing `save/0`, `raw!/0`, `restore/1`
       (default `Raxol.Terminal.Driver.Stty`). Inject a recording stub in
       tests so OS-level tty state is never touched by a pure test run.
@@ -127,33 +129,62 @@ defmodule Raxol.Terminal.InlineDriver do
   alias Raxol.Terminal.Capabilities
   alias Raxol.Terminal.Capabilities.Probe
   alias Raxol.Terminal.Driver.Stty
+  alias Raxol.Terminal.InlineDriver.CursorReport
   alias Raxol.Terminal.InlineDriver.Sequences
   alias Raxol.Terminal.TerminalUtils
 
   @default_rows 24
+  # The DSR cursor probe's default reply deadline. This is a LIVENESS
+  # bound on a real device round-trip (write `CSI 6n`, read the CPR off
+  # the same fd) -- not a rendering clock: a local terminal answers in
+  # single-digit milliseconds, an SSH hop in tens; a device that has not
+  # answered within this bound (a pipe, a dumb terminal) is treated as
+  # one that never will, and the caller falls back honestly.
+  @default_cursor_probe_budget_ms 300
+  @isig_confirmations 3
 
   defmodule State do
     @moduledoc false
     defstruct dispatcher_pid: nil,
               subscriber: nil,
+              raw_sink: nil,
               device: :stdio,
               stty_module: Raxol.Terminal.Driver.Stty,
               stty_enabled?: false,
               tty?: false,
               rows: 24,
               original_stty: nil,
-              torn_down?: false
+              torn_down?: false,
+              isig_guard_every: 0,
+              isig_guard_count: 0,
+              isig_flags_reader: nil,
+              isig_boot_confirmed?: false,
+              isig_reasserts: 0,
+              reader_mode: :prim_tty,
+              reader_port: nil,
+              paste_pending: <<>>
 
     @type t :: %__MODULE__{
             dispatcher_pid: pid() | nil,
             subscriber: pid() | nil,
+            raw_sink: pid() | nil,
             device: IO.device(),
             stty_module: module(),
             stty_enabled?: boolean(),
             tty?: boolean(),
             rows: pos_integer(),
             original_stty: String.t() | nil,
-            torn_down?: boolean()
+            torn_down?: boolean(),
+            isig_guard_every: non_neg_integer(),
+            isig_guard_count: non_neg_integer(),
+            isig_flags_reader: (-> boolean()) | nil,
+            isig_boot_confirmed?: boolean(),
+            isig_reasserts: non_neg_integer(),
+            reader_mode: :fd_port | :prim_tty,
+            reader_port: port() | nil,
+            # Held bytes of a bracketed paste whose `ESC[201~` close has not
+            # arrived yet -- see `dispatch_input/2`'s reassembly note.
+            paste_pending: binary()
           }
   end
 
@@ -173,6 +204,7 @@ defmodule Raxol.Terminal.InlineDriver do
 
     dispatcher_pid = extract_pid(Keyword.get(opts, :dispatcher_pid))
     subscriber = extract_pid(Keyword.get(opts, :subscriber, dispatcher_pid))
+    raw_sink = extract_pid(Keyword.get(opts, :raw_sink))
     device = Keyword.get(opts, :device, :stdio)
     stty_module = Keyword.get(opts, :stty, Stty)
 
@@ -181,22 +213,61 @@ defmodule Raxol.Terminal.InlineDriver do
     stty_enabled? = Keyword.get(opts, :stty_enabled?, tty?)
     rows = Keyword.get(opts, :rows, detect_rows(stty_module))
 
+    # The event-clocked isig guard (see maybe_guard_isig/1): defaults to
+    # checking on EVERY input chunk when a real reader owns the tty --
+    # prim_tty can re-own the termios with ISIG on at any point, so the
+    # re-assert must win within one keypress-to-keypress window. `0`
+    # disables (the readerless/test default).
+    isig_guard_every =
+      Keyword.get(
+        opts,
+        :isig_guard_every,
+        if(install_reader? and stty_enabled?, do: 1, else: 0)
+      )
+
+    isig_flags_reader =
+      Keyword.get(opts, :isig_flags_reader, &Stty.isig_off?/0)
+
+    # Which stdin reader to arm (`install_reader?` true):
+    #
+    #   * `:fd_port` — an `{:fd, 0, 1}` port reading fd 0 directly,
+    #     BYPASSING the BEAM io system. prim_tty never engages, so the
+    #     `stty -isig` set at boot HOLDS: ^C arrives as byte 0x03 to the
+    #     parser and the arm-quit protocol owns it. This alone is not the
+    #     durable ^C contract, though: prim_tty re-applies ISIG-on raw
+    #     mode at unbounded points and wins any stty race regardless of
+    #     which reader is installed; `:os.set_signal/2` cannot trap
+    #     `:sigint` — it is VM-reserved on every OTP — so once the
+    #     kernel eats the byte the BREAK menu is unavoidable.
+    #   * `:prim_tty` — the trace hook on `:user_drv_reader` (starts a
+    #     raw shell reader inside the BEAM io system). The DEFAULT:
+    #     with a bare `:fd_port` and prim_tty left in its noshell state,
+    #     the io system re-cooks the termios on write activity, so input
+    #     can degrade mid-session with nothing watching for it -- the
+    #     trace reader at least keeps prim_tty pinned to ITS raw mode.
+    #     `:fd_port` stays available for embedders that own their whole
+    #     io path.
+    reader_mode = Keyword.get(opts, :reader, :prim_tty)
+
     state = %State{
       dispatcher_pid: dispatcher_pid,
       subscriber: subscriber,
+      raw_sink: raw_sink,
       device: device,
       stty_module: stty_module,
       stty_enabled?: stty_enabled?,
       tty?: tty?,
-      rows: rows
+      rows: rows,
+      isig_guard_every: isig_guard_every,
+      isig_flags_reader: isig_flags_reader,
+      reader_mode: reader_mode
     }
 
     state =
       if stty_enabled? do
         %{
           state
-          | original_stty:
-              normalize_saved_stty(safe_stty_call(stty_module, :save, []))
+          | original_stty: normalize_saved_stty(safe_stty_call(stty_module, :save, []))
         }
       else
         state
@@ -204,7 +275,7 @@ defmodule Raxol.Terminal.InlineDriver do
 
     if stty_enabled?, do: safe_stty_call(stty_module, :raw!, [])
 
-    run_post_raw_setup(opts, device, subscriber, install_reader?, state)
+    state = run_post_raw_setup(opts, device, subscriber, install_reader?, state)
 
     {:ok, state}
   end
@@ -226,7 +297,46 @@ defmodule Raxol.Terminal.InlineDriver do
     # No \e[?1049h anywhere on this path -- LC-P-NOALT.
     IO.write(device, Sequences.init_bytes())
 
-    if install_reader?, do: start_stdin_reader()
+    # Click reporting (SGR press/release) is OPT-IN: an embedder that
+    # wants click events (the harness's click-to-fold) trades away the
+    # terminal's native text selection while running, so the default
+    # stays off. Teardown's modes_off covers it unconditionally.
+    if Keyword.get(opts, :mouse?, false),
+      do: IO.write(device, Sequences.mouse_on())
+
+    state =
+      if install_reader? do
+        state = start_stdin_reader(state)
+
+        # Re-assert raw termios AFTER the reader is armed: user_drv's
+        # `{:start_shell, %{input: :raw}}` makes prim_tty re-initialize
+        # the termios with ITS raw settings, which keep ISIG ENABLED --
+        # silently clobbering the `-isig` this module's moduledoc
+        # promises. With ISIG back on, ^C becomes SIGINT (the VM BREAK
+        # menu printed over the frame, or a silent drop under +Bi)
+        # instead of byte 0x03 to the subscriber, so ^C no longer exits
+        # cleanly through this driver. prim_tty applies its termios
+        # ASYNCHRONOUSLY after the call returns, so a single immediate
+        # re-assert loses the race: verify-then-assert with a bounded
+        # budget instead, reading the LIVE flags (the referent, not this
+        # module's own bookkeeping) until `-isig` sticks. The outcome is
+        # RECORDED (isig_boot_confirmed?) for `isig_report/1`, and the
+        # event-clocked guard (maybe_guard_isig/1) keeps watching from
+        # here on -- nothing is ever written to the tty on the give-up
+        # path (no bytes may leak into the claimed frame); an embedder's
+        # probe (the live demo's boot POST line) is the honest reporting
+        # channel.
+        if state.stty_enabled? do
+          confirmed? =
+            reassert_raw_until_isig_off(state.stty_module) == :confirmed
+
+          %{state | isig_boot_confirmed?: confirmed?}
+        else
+          state
+        end
+      else
+        state
+      end
 
     opts
     |> maybe_run_probe(device, subscriber)
@@ -234,6 +344,8 @@ defmodule Raxol.Terminal.InlineDriver do
       nil -> :ok
       caps -> Capabilities.cache(caps)
     end
+
+    state
   rescue
     error ->
       restore_stranded_raw_mode(
@@ -252,6 +364,38 @@ defmodule Raxol.Terminal.InlineDriver do
       )
 
       :erlang.raise(kind, reason, __STACKTRACE__)
+  end
+
+  @impl true
+  def handle_manager_call({:probe_cursor, budget_ms}, _from, %State{} = state) do
+    {:reply, run_cursor_probe(state, budget_ms), state}
+  end
+
+  # NOTE: every handle_manager_call clause must sit ABOVE the catch-all
+  # below -- a clause defined after it is unreachable: an :isig_report
+  # landing in the catch-all would feed {:error, :not_implemented} to
+  # the demo's POST line instead of a real report.
+  def handle_manager_call(:isig_report, _from, state) do
+    report = %{
+      boot_confirmed?: state.isig_boot_confirmed?,
+      reasserts: state.isig_reasserts,
+      isig_off?: state.isig_flags_reader && state.isig_flags_reader.()
+    }
+
+    {:reply, report, state}
+  end
+
+  # BaseManager's default (warn + {:error, :not_implemented}) is replaced
+  # the moment any handle_manager_call clause is defined -- restore it
+  # for every request this driver does not understand.
+  @impl true
+  def handle_manager_call(request, _from, state) do
+    Log.warning_with_context(
+      "[InlineDriver] unhandled call: #{inspect(request)}",
+      %{}
+    )
+
+    {:reply, {:error, :not_implemented}, state}
   end
 
   @impl true
@@ -300,6 +444,7 @@ defmodule Raxol.Terminal.InlineDriver do
     # -- it MUST thread the returned state back into the GenServer state so
     # this terminate/2 call sees `torn_down?: true` and the idempotency
     # guard fires (otherwise CSI r / cursor reposition double-emits).
+    if is_port(state.reader_port), do: safe_port_close(state.reader_port)
     _ = emit_teardown(state.device, state)
     :ok
   end
@@ -327,17 +472,233 @@ defmodule Raxol.Terminal.InlineDriver do
     %{state | torn_down?: true}
   end
 
-  # --- Input dispatch ---
+  # --- The DSR cursor probe (GUEST-BOOT seam) ---
 
-  defp dispatch_input(<<>>, state), do: {:noreply, state}
+  @doc """
+  Asks the real terminal where the shell left the cursor: writes DSR-6
+  (`Sequences.cursor_position_request/0`, `CSI 6n`) to the driver's
+  device and reads the CPR reply (`CSI row ; col R`) off the driver's
+  own input stream. This is the substrate for GUEST-BOOT placement
+  (`Raxol.UI.Rendering.PaintAuthority.InlineAuthority`'s `:boot_cursor`
+  option): boot the surface exactly where the user's shell stopped,
+  instead of pushing a blank screen first.
 
-  defp dispatch_input(data, state) do
-    data
+  Returns:
+
+    * `{:ok, {row, col}}` — 1-based, straight from the terminal's reply.
+    * `{:error, :no_tty}` — the driver was constructed with
+      `tty?: false` (piped/CI). ZERO bytes are written: a device that
+      cannot answer must not be probed at all.
+    * `{:error, :timeout}` — no CPR arrived within `:budget_ms`
+      (default #{@default_cursor_probe_budget_ms}ms). The budget is a
+      LIVENESS bound on the device round-trip, not a rendering clock —
+      see the module attribute note. On timeout every byte read while
+      waiting has already been forwarded to the subscriber as ordinary
+      input; nothing is dropped.
+
+  ## The consumption contract (why this lives on the driver)
+
+  The CPR reply arrives interleaved with real keystrokes on the same
+  fd this driver already owns. Scanning happens INSIDE the driver
+  process (`Raxol.Terminal.InlineDriver.CursorReport`, the pure
+  scanner), before `InputParser` ever sees the bytes, because a CPR is
+  not representable as "just another event": `InputParser` decodes a
+  row-1 reply (`\\e[1;<n>R`) as a modified F3 keypress — the classic
+  DSR/F3 wire collision — so letting it through would deliver a
+  phantom key event to the app. Keystrokes interleaved with (or split
+  around) the reply are forwarded to the subscriber in arrival order,
+  never dropped.
+
+  ## Caller discipline
+
+    * Probe BEFORE the first paint, at most once per claim: this writes
+      bytes to the device, so it is strictly opt-in (nothing in
+      `init_manager/1` ever emits it).
+    * The result is only placement-honest while nothing else has
+      written to the device between the reply and the boot that
+      consumes it.
+    * Residual: a reply that arrives AFTER the deadline lapses flows
+      down the ordinary input path, where `InputParser` consumes it
+      silently — except the row-1 form, which surfaces as a phantom
+      modified-F3 keypress. Bound the exposure by probing when the
+      terminal is idle (boot), which is the only supported call site.
+  """
+  @spec probe_cursor(GenServer.server(), keyword()) ::
+          {:ok, CursorReport.position()} | {:error, :timeout | :no_tty}
+  def probe_cursor(server, opts \\ []) do
+    budget_ms =
+      Keyword.get(opts, :budget_ms, @default_cursor_probe_budget_ms)
+
+    GenServer.call(server, {:probe_cursor, budget_ms}, budget_ms + 5_000)
+  end
+
+  defp run_cursor_probe(%State{tty?: false}, _budget_ms),
+    do: {:error, :no_tty}
+
+  defp run_cursor_probe(%State{} = state, budget_ms) do
+    IO.write(state.device, Sequences.cursor_position_request())
+    deadline = System.monotonic_time(:millisecond) + budget_ms
+    cursor_probe_loop(<<>>, deadline, state)
+  end
+
+  # Absolute-deadline receive loop (same discipline as probe_loop/3
+  # below: re-derive `remaining` every iteration so a flooding terminal
+  # can never extend the probe). Runs inside the driver's own
+  # handle_manager_call, so the reader's trace/port messages land in
+  # this process's mailbox and the selective receive picks them up.
+  defp cursor_probe_loop(buffer, deadline, state) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:trace, _reader, :send, {_ref, {:data, data}}, _to} ->
+        cursor_probe_ingest(buffer, to_binary_data(data), deadline, state)
+
+      {port, {:data, data}} when is_port(port) ->
+        cursor_probe_ingest(buffer, to_binary_data(data), deadline, state)
+    after
+      remaining ->
+        forward_probe_leftover(buffer, state)
+        {:error, :timeout}
+    end
+  end
+
+  defp cursor_probe_ingest(buffer, chunk, deadline, state) do
+    # The raw tap sees every chunk exactly as it arrived (its documented
+    # contract) -- only the PARSED path is CPR-free. Forwarded leftovers
+    # below go through the parse-only path so the tap never sees a byte
+    # twice.
+    notify_raw(state.raw_sink, chunk)
+
+    case CursorReport.scan(buffer <> chunk) do
+      {:reply, pos, leading, trailing} ->
+        forward_probe_leftover(leading, state)
+        forward_probe_leftover(trailing, state)
+        {:ok, pos}
+
+      {:pending, forward, keep} ->
+        forward_probe_leftover(forward, state)
+        cursor_probe_loop(keep, deadline, state)
+    end
+  end
+
+  # Parse-only forward (raw_sink already saw these bytes at arrival):
+  # keystrokes interleaved with the CPR reply still reach the subscriber
+  # in order -- the leak-free rule.
+  defp forward_probe_leftover(<<>>, _state), do: :ok
+
+  defp forward_probe_leftover(bytes, state) do
+    bytes
     |> safe_parse()
     |> Enum.each(&notify(state.subscriber, &1))
 
-    {:noreply, state}
+    :ok
   end
+
+  # --- The isig diagnosis (the ^C byte-path report) ---
+
+  @doc """
+  The isig diagnosis for embedder-level reporting (the live demo's boot
+  POST line): which mechanism last held `-isig` and how often the
+  event-clocked guard has had to re-assert it.
+
+    * `boot_confirmed?` -- the post-reader-arm verify loop saw `-isig`
+      hold for #{@isig_confirmations} consecutive reads at claim time;
+    * `reasserts` -- how many times the per-input-event guard found
+      ISIG flipped back ON mid-session and re-asserted;
+    * `isig_off?` -- the LIVE flags right now, read through the same
+      injectable reader the guard uses.
+  """
+  @spec isig_report(GenServer.server()) :: %{
+          boot_confirmed?: boolean(),
+          reasserts: non_neg_integer(),
+          isig_off?: boolean()
+        }
+  def isig_report(server), do: GenServer.call(server, :isig_report)
+
+  # (Its handle_manager_call clause lives with the other call clauses,
+  # ABOVE the module's catch-all -- see the ordering note there.)
+
+  # --- Input dispatch ---
+
+  defp dispatch_input(<<>>, %State{paste_pending: <<>>} = state),
+    do: {:noreply, state}
+
+  defp dispatch_input(data, state) do
+    # The raw tap always sees the verbatim, pre-parse chunk exactly as read
+    # -- never the reassembly buffer (which is a parse-layer concern).
+    notify_raw(state.raw_sink, data)
+
+    # `InputParser.parse/1` is stateless per call: a bracketed paste
+    # (`ESC[200~ ... ESC[201~`) is only atomic when its close lands in the
+    # SAME chunk. A large multi-line paste split across OS reads would
+    # otherwise have its tail re-parsed as raw keys -- a pasted `\r` firing
+    # :enter (a spurious SUBMIT), `\t` firing :tab (steer), `ESC` firing
+    # :escape (interrupt). So the driver carries any unterminated paste
+    # tail in `paste_pending` and only parses once the close arrives.
+    buffer = state.paste_pending <> data
+    {to_parse, pending} = split_pending_paste(buffer)
+
+    to_parse
+    |> safe_parse()
+    |> Enum.each(&notify(state.subscriber, &1))
+
+    # AFTER forwarding: the guard's stty spawn must never delay the
+    # keystroke that carried us here -- it protects the NEXT one.
+    {:noreply, maybe_guard_isig(%{state | paste_pending: pending})}
+  end
+
+  @paste_open <<27, 91, 50, 48, 48, 126>>
+  @paste_close <<27, 91, 50, 48, 49, 126>>
+  # Safety valve: a terminal that opens a paste and never closes it (or a
+  # multi-megabyte paste) must not pin memory unbounded. Past this, flush
+  # what we have -- `InputParser`'s own open-without-close branch still
+  # emits it as one :paste event, so even the flush never fragments.
+  @max_paste_buffer 4_000_000
+
+  # Splits `buffer` into `{to_parse, pending}`: everything safe to parse now
+  # vs. the tail of an unterminated bracketed paste to hold for the next
+  # chunk. Complete pastes earlier in the buffer stay in `to_parse` (the
+  # parser handles them); only a trailing `ESC[200~` with no following
+  # `ESC[201~` is held.
+  defp split_pending_paste(buffer) do
+    case unterminated_open(buffer) do
+      nil ->
+        {buffer, <<>>}
+
+      open_pos when byte_size(buffer) - open_pos > @max_paste_buffer ->
+        {buffer, <<>>}
+
+      open_pos ->
+        {binary_part(buffer, 0, open_pos),
+         binary_part(buffer, open_pos, byte_size(buffer) - open_pos)}
+    end
+  end
+
+  # Byte offset of the LAST paste-open that has no paste-close after it, or
+  # nil when every open is terminated (or there is no open). Only the final
+  # open can be unterminated -- an earlier open without a close would have
+  # consumed the bytes that a later open sits in.
+  defp unterminated_open(buffer) do
+    case :binary.matches(buffer, @paste_open) do
+      [] ->
+        nil
+
+      opens ->
+        {open_pos, open_len} = List.last(opens)
+        after_open = open_pos + open_len
+        tail = binary_part(buffer, after_open, byte_size(buffer) - after_open)
+
+        case :binary.match(tail, @paste_close) do
+          :nomatch -> open_pos
+          _found -> nil
+        end
+    end
+  end
+
+  defp notify_raw(nil, _data), do: :ok
+
+  defp notify_raw(pid, data) when is_pid(pid),
+    do: send(pid, {:inline_raw_input, data})
 
   defp notify(nil, _event), do: :ok
 
@@ -473,7 +834,19 @@ defmodule Raxol.Terminal.InlineDriver do
   # shell and drops user_drv into a JCL prompt that swallows all input)
   # arms it, and tracing the reader's sends intercepts input data before
   # user_drv forwards it anywhere else.
-  defp start_stdin_reader do
+  # `:fd_port`: read fd 0 directly — no prim_tty, no termios war, byte
+  # 0x03 stays a byte. `:prim_tty`: the legacy trace hook (see the
+  # `reader_mode` decision note in init_manager/1).
+  defp start_stdin_reader(%State{reader_mode: :fd_port} = state) do
+    port = :erlang.open_port({:fd, 0, 1}, [:binary, :eof, :stream])
+    %{state | reader_port: port}
+  rescue
+    # An environment where the fd port cannot open (no fd 0) degrades to
+    # the legacy reader rather than a dead keyboard.
+    _ -> start_stdin_reader(%{state | reader_mode: :prim_tty})
+  end
+
+  defp start_stdin_reader(%State{reader_mode: :prim_tty} = state) do
     user_drv = Process.whereis(:user_drv)
 
     if user_drv do
@@ -494,10 +867,97 @@ defmodule Raxol.Terminal.InlineDriver do
       send(reader, {:read, :infinity})
     end
 
-    :ok
+    state
+  end
+
+  # Bounded verify-then-assert for the post-reader-arm `-isig`
+  # guarantee (see run_post_raw_setup/5's comment). prim_tty's termios
+  # write lands asynchronously, so ONE successful read is not proof the
+  # race is won -- it may simply not have landed yet. This therefore
+  # demands `@isig_confirmations` CONSECUTIVE 50ms-spaced reads showing
+  # `-isig`, re-asserting raw! and restarting the confirmation count on
+  # any flip-back, bounded by `attempts` total iterations (~3s boot-
+  # window liveness bound; two-three passes in practice). Only reachable
+  # with `install_reader?: true` on a real tty; the injected-stty test
+  # paths all run readerless. On a device where the flags never confirm
+  # (e.g. no controlling tty, where stty cannot run at all), this gives
+  # up silently -- nothing here may write bytes to the claimed frame;
+  # the result is recorded for `isig_report/1` and the embedder's probe
+  # (the live demo's boot POST termios line) is the honest reporting
+  # channel.
+  defp reassert_raw_until_isig_off(stty_module, attempts \\ 60) do
+    do_reassert_isig(stty_module, attempts, 0)
+  end
+
+  defp do_reassert_isig(_stty_module, 0, _confirmed), do: :gave_up
+
+  defp do_reassert_isig(_stty_module, _attempts, @isig_confirmations),
+    do: :confirmed
+
+  defp do_reassert_isig(stty_module, attempts, confirmed) do
+    confirmed =
+      if Stty.isig_off?() do
+        confirmed + 1
+      else
+        safe_stty_call(stty_module, :raw!, [])
+        0
+      end
+
+    Process.sleep(50)
+    do_reassert_isig(stty_module, attempts - 1, confirmed)
+  end
+
+  # The event-clocked isig guard: every `isig_guard_every` input chunks
+  # (prim_tty can re-own the termios with ISIG on at any point, so the
+  # default cadence is EVERY chunk: the re-assert must win within one
+  # keypress-to-keypress window), read the LIVE flags
+  # through the injectable reader; on a flip, re-assert raw! silently --
+  # best-effort janitorial work, counted in `isig_reasserts` and surfaced
+  # only on request via `isig_report/1` (no live subscriber notice).
+  # `0` disables.
+  defp maybe_guard_isig(%State{isig_guard_every: every} = state)
+       when is_integer(every) and every > 0 do
+    count = state.isig_guard_count + 1
+
+    if count >= every do
+      guard_isig_now(%{state | isig_guard_count: 0})
+    else
+      %{state | isig_guard_count: count}
+    end
+  end
+
+  defp maybe_guard_isig(state), do: state
+
+  defp guard_isig_now(state) do
+    if state.isig_flags_reader.() do
+      state
+    else
+      safe_stty_call(state.stty_module, :raw!, [])
+
+      # Janitorial, never news: prim_tty re-applies its termios (ISIG on)
+      # at unbounded points and wins any stty race -- the verify-after-
+      # reassert read can flip back before the subprocess even returns.
+      # The re-assert is best-effort and silent -- there is no
+      # signal-trap fallback: `:os.set_signal/2` cannot intercept
+      # `:sigint`, the BEAM reserves it for itself, so a re-assert that
+      # genuinely fails to stick means a live ^C hits the OS's own SIGINT
+      # delivery, not this driver's key-event path. The only record of a
+      # miss is the count kept here, read on request via `isig_report/1`;
+      # this driver emits no live subscriber notice for it.
+      %{state | isig_reasserts: state.isig_reasserts + 1}
+    end
   end
 
   # --- Small helpers ---
+
+  defp safe_port_close(port) do
+    Port.close(port)
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
 
   defp extract_pid(pid) when is_pid(pid), do: pid
   defp extract_pid(_), do: nil

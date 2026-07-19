@@ -56,4 +56,36 @@ defmodule Raxol.Terminal.Driver.SttyTest do
   test "empty string falls through to sane!/0" do
     assert :ok = Stty.restore("")
   end
+
+  describe "command construction targets /dev/tty by device flag, never a shell redirect" do
+    # The real-terminal ^C trap regression class: a `sh -c "stty ... <
+    # /dev/tty"` invocation silently no-ops wherever the shell child
+    # cannot open a controlling tty, and rides through /bin/sh where the
+    # argv form needs no shell at all. Every mutating/reading stty
+    # command must be the argv form `stty -f|-F /dev/tty ...` (BSD/GNU
+    # device flag -- the same form restore/1 already uses).
+    test "raw! argv includes the device flag, /dev/tty, and -isig" do
+      args = Stty.command_args(:raw)
+
+      assert Enum.take(args, 2) in [["-f", "/dev/tty"], ["-F", "/dev/tty"]]
+      assert "-isig" in args
+      assert "raw" in args
+    end
+
+    test "save/sane/size/flags argv all carry the device flag + /dev/tty" do
+      for op <- [:save, :sane, :size, :flags] do
+        args = Stty.command_args(op)
+
+        assert Enum.take(args, 2) in [["-f", "/dev/tty"], ["-F", "/dev/tty"]],
+               "#{op} must operate on /dev/tty via the device flag, got #{inspect(args)}"
+      end
+    end
+
+    @tag :unix_only
+    test "isig_off?/0 answers from the live flags without raising" do
+      # On a CI/pty-less host `stty -f /dev/tty` fails and the honest
+      # answer is `false` (cannot confirm) -- never a raise.
+      assert Stty.isig_off?() in [true, false]
+    end
+  end
 end

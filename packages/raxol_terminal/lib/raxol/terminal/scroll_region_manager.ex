@@ -303,14 +303,32 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   def start(device, rows, footer_rows)
       when is_integer(rows) and rows > 0 and is_integer(footer_rows) and
              footer_rows >= 0 do
-    top = history_bottom(rows, footer_rows)
     IO.write(device, region_set_bytes(rows, footer_rows))
+    plan(device, rows, footer_rows)
+  end
 
+  @doc """
+  The PURE constructor: the same state `start/3` builds, with ZERO bytes
+  written -- no DECSTBM is claimed. This is the geometry record for a
+  caller that tracks the history/footer split WITHOUT pinning it yet
+  (`Raxol.UI.Rendering.PaintAuthority.InlineAuthority`'s FLOATING state,
+  the adaptive-pin model: the footer follows content until it reaches
+  the pinned position). All the pure row-range math (`history_bottom/1`,
+  `footer_range/1`, `degenerate?/1`, ...) works identically on a planned
+  state; the one thing a planned state does NOT mean is "the terminal is
+  enforcing this split." The caller pins later with `reassert/1` (the
+  unconditional single-write emitter), which is exactly the float->pin
+  transition's region byte.
+  """
+  @spec plan(IO.device(), pos_integer(), non_neg_integer()) :: t()
+  def plan(device, rows, footer_rows)
+      when is_integer(rows) and rows > 0 and is_integer(footer_rows) and
+             footer_rows >= 0 do
     %__MODULE__{
       device: device,
       rows: rows,
       footer_rows: footer_rows,
-      history_bottom: top,
+      history_bottom: history_bottom(rows, footer_rows),
       degenerate?: degenerate?(rows, footer_rows)
     }
   end
@@ -362,7 +380,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   Recomputes the region for a new `footer_rows`, holding `rows` (`H`)
   constant -- the counterpart to `resize/2`, which holds `footer_rows`
   constant and varies `rows`. This is the seam a footer-hosted overlay
-  (`Raxol.UI.Harness.OverlayPicker`, via
+  (the retired `Raxol.UI.Harness.OverlayPicker`, via
   `Raxol.UI.Rendering.PaintAuthority.InlineAuthority.set_footer_rows/2`)
   uses to grow or shrink the pinned footer viewport without a real
   terminal resize.

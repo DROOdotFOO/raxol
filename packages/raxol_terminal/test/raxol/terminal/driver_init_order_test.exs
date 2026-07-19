@@ -26,7 +26,7 @@ defmodule Raxol.Terminal.DriverInitOrderTest do
                  ])
                  |> Path.expand()
 
-  test "OSC 11 background query is written after the stdin reader is activated" do
+  test "the capabilities probe is started after the stdin reader is activated" do
     source = File.read!(@driver_source)
 
     reader_index =
@@ -34,21 +34,20 @@ defmodule Raxol.Terminal.DriverInitOrderTest do
       |> elem(0)
 
     query_write_index =
-      case :binary.match(source, "write_background_query()") do
+      case :binary.match(source, "start_capabilities_probe(state)") do
         {index, _len} ->
           index
 
         :nomatch ->
-          # Fall back to the raw IO.write call in case the helper is
-          # inlined again in the future — either way, it must come after.
-          {index, _len} =
-            :binary.match(source, "BackgroundQuery.query_sequence()")
-
+          # Fall back to the raw Probe call in case the helper is inlined
+          # again in the future — either way, it must come after.
+          {index, _len} = :binary.match(source, "Probe.query_sequence()")
           index
       end
 
     assert query_write_index > reader_index,
-           "The OSC 11 background query must be written after start_stdin_reader/1 " <>
+           "The capabilities probe (OSC 11/10 + kitty keyboard + DECRQM 2026 + " <>
+             "XTVERSION + DA1) must be started after start_stdin_reader/1 " <>
              "activates the prim_tty reader. Writing it earlier races the tty reinit " <>
              "and can crash the whole node on startup under a real terminal (see " <>
              "commit history around the H-K salience / OSC 11 background detection merge)."

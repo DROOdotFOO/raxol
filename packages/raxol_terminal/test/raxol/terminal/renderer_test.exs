@@ -310,4 +310,132 @@ defmodule Raxol.Terminal.RendererTest do
       assert Renderer.render_row(renderer, 99) == ""
     end
   end
+
+  # A wide character occupies two buffer columns: the glyph, then a
+  # `wide_placeholder` cell. The terminal advances two columns for the glyph
+  # itself, so emitting the placeholder too spent a THIRD column -- wide text
+  # rendered as glyph-gap-glyph-gap and overran whatever framed it.
+  describe "wide characters" do
+    defp visible(ansi), do: String.replace(ansi, ~r/\e\[[0-9;]*[A-Za-z]/, "")
+
+    test "a wide char emits no padding cell after its glyph" do
+      buffer =
+        default_buffer(20, 1)
+        |> ScreenBuffer.write_string(0, 0, "日本語x")
+
+      row = Renderer.render_row(Renderer.new(buffer), 0)
+
+      assert visible(row) |> String.trim_trailing() == "日本語x"
+      refute visible(row) =~ "日 "
+    end
+
+    test "the rendered row is exactly as wide as the buffer" do
+      buffer =
+        default_buffer(20, 1)
+        |> ScreenBuffer.write_string(0, 0, "日本語x")
+
+      row = Renderer.render_row(Renderer.new(buffer), 0)
+
+      # 3 ideographs (2 columns each) + "x" + 13 blanks = 20 columns.
+      assert Raxol.Terminal.CharacterHandling.get_string_width(visible(row)) ==
+               20
+    end
+
+    test "placeholders are dropped under style batching too" do
+      buffer =
+        default_buffer(20, 1)
+        |> ScreenBuffer.write_string(0, 0, "日本")
+
+      batched = Renderer.render_row(Renderer.new(buffer, %{}, %{}, true), 0)
+      individual = Renderer.render_row(Renderer.new(buffer, %{}, %{}, false), 0)
+
+      assert visible(batched) == visible(individual)
+      assert visible(batched) |> String.trim_trailing() == "日本"
+    end
+
+    # End-to-end guard: width must agree between the WRITER (which reserves
+    # the placeholder) and the RENDERER (which drops it). A flag exposed a
+    # disagreement -- the writer reduced each grapheme to its first
+    # codepoint, so it reserved one column while the renderer measured two.
+    test "a painted row is exactly as wide as the buffer, for every wide form" do
+      for text <- ["🇯🇵 x", "日本 x", "🎉 x", "👨‍👩‍👧‍👦 x", "🇯🇵🇺🇸 x"] do
+        buffer =
+          default_buffer(20, 1)
+          |> ScreenBuffer.write_string(0, 0, text)
+
+        row = Renderer.render_row(Renderer.new(buffer), 0)
+
+        assert Raxol.Terminal.CharacterHandling.get_string_width(visible(row)) ==
+                 20,
+               "#{text} painted a row that was not 20 columns"
+      end
+    end
+
+    test "a flag keeps the single space that follows it" do
+      buffer =
+        default_buffer(20, 1)
+        |> ScreenBuffer.write_string(0, 0, "a 🇯🇵 b")
+
+      row = Renderer.render_row(Renderer.new(buffer), 0)
+
+      assert visible(row) |> String.trim_trailing() == "a 🇯🇵 b"
+    end
+
+    # A wide glyph in the LAST column has nowhere to put its second half.
+    # Writing it anyway made the terminal draw two columns into one, so the
+    # row painted wider than its own buffer.
+    test "a wide char with no room for its placeholder is not half-placed" do
+      buffer =
+        default_buffer(5, 1)
+        |> ScreenBuffer.write_string(4, 0, "日")
+
+      row = Renderer.render_row(Renderer.new(buffer), 0)
+
+      assert Raxol.Terminal.CharacterHandling.get_string_width(visible(row)) ==
+               5
+    end
+
+    # Both halves of a wide pair must die together. Overwriting either one
+    # alone left the other half-alive and the row painted the wrong width.
+    test "overwriting a placeholder clears its orphaned lead glyph" do
+      buffer =
+        default_buffer(6, 1)
+        |> ScreenBuffer.write_string(0, 0, "日本")
+        |> ScreenBuffer.write_string(1, 0, "x")
+
+      row = Renderer.render_row(Renderer.new(buffer), 0)
+
+      assert Raxol.Terminal.CharacterHandling.get_string_width(visible(row)) ==
+               6
+
+      refute visible(row) =~ "日"
+    end
+
+    test "overwriting a lead glyph clears its orphaned placeholder" do
+      buffer =
+        default_buffer(6, 1)
+        |> ScreenBuffer.write_string(0, 0, "日本")
+        |> ScreenBuffer.write_string(0, 0, "x")
+
+      row = Renderer.render_row(Renderer.new(buffer), 0)
+
+      assert Raxol.Terminal.CharacterHandling.get_string_width(visible(row)) ==
+               6
+
+      refute visible(row) =~ "日"
+    end
+
+    test "narrow text is untouched" do
+      buffer =
+        default_buffer(10, 1)
+        |> ScreenBuffer.write_string(0, 0, "abc")
+
+      row = Renderer.render_row(Renderer.new(buffer), 0)
+
+      assert visible(row) |> String.trim_trailing() == "abc"
+
+      assert Raxol.Terminal.CharacterHandling.get_string_width(visible(row)) ==
+               10
+    end
+  end
 end

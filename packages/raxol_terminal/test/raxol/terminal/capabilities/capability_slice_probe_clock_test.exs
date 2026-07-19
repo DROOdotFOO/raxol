@@ -183,6 +183,48 @@ defmodule Raxol.Terminal.Capabilities.CapabilitySliceProbeClockTest do
     end
   end
 
+  describe "native-palette-riding amendment A1: OSC 10 in the batched write" do
+    test "the query includes both OSC 11 and OSC 10, DA1 sentinel LAST" do
+      query = Probe.query_sequence()
+
+      assert query =~ "\e]11;?\a"
+      assert query =~ "\e]10;?\a"
+      assert String.ends_with?(query, "\e[c")
+    end
+
+    test "the tmux passthrough payload carries OSC 10 alongside OSC 11" do
+      env = %{"TMUX" => "/tmp/tmux-501/default,1,0"}
+      p = Probe.new(env, budget_ms: 100, tmux_passthrough?: true)
+      {_p, actions} = Probe.step(p, :start)
+
+      assert [{:passthrough, wrapped}] =
+               Enum.filter(actions, &match?({:passthrough, _}, &1))
+
+      wrapped = IO.iodata_to_binary(wrapped)
+      assert wrapped =~ "11;?"
+      assert wrapped =~ "10;?"
+    end
+
+    test "OSC 10 reply flows through the probe into a classified foreground" do
+      p = Probe.new(%{}, budget_ms: 100)
+      {p, _} = Probe.step(p, :start)
+
+      {p, _} =
+        Probe.step(
+          p,
+          {:input, "\e]10;rgb:e8e8/e8e8/e8e8\a\e]11;rgb:1010/1010/1010\a\e[?62;c"}
+        )
+
+      {p, _} = Probe.step(p, {:clock, 10})
+
+      assert {:done, caps} = Probe.result(p)
+      assert caps.foreground == {232, 232, 232}
+      assert caps.source.foreground == :osc10
+      assert caps.background == {16, 16, 16}
+      assert caps.source.background == :osc11
+    end
+  end
+
   describe "reducer hygiene" do
     test "empty input chunk is a no-op (no scan, no extension)" do
       p = Probe.new(%{}, budget_ms: 100)
