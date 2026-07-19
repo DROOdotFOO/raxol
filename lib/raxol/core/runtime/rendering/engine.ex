@@ -133,7 +133,9 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
     # Fetch the latest model AND theme context from the Dispatcher
     case GenServer.call(state.dispatcher_pid, :get_render_context) do
-      {:ok, %{model: current_model, theme_id: current_theme_id}} ->
+      {:ok,
+       %{model: current_model, theme_id: current_theme_id} =
+           dispatcher_context} ->
         Raxol.Core.Runtime.Log.debug(
           "Rendering Engine got render context: Model=#{inspect(current_model)}, Theme=#{inspect(current_theme_id)}"
         )
@@ -153,7 +155,9 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
         theme =
           Theme.get(current_theme_id) || Theme.get(Theme.default_theme_id())
 
-        case do_render_frame(animated_model, theme, state) do
+        layout_context = layout_render_context(dispatcher_context)
+
+        case do_render_frame(animated_model, theme, state, layout_context) do
           {:ok, new_state} ->
             {:noreply, new_state}
 
@@ -225,7 +229,9 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   @impl true
   def handle_call(:render_frame_sync, _from, state) do
     case GenServer.call(state.dispatcher_pid, :get_render_context) do
-      {:ok, %{model: current_model, theme_id: current_theme_id}} ->
+      {:ok,
+       %{model: current_model, theme_id: current_theme_id} =
+           dispatcher_context} ->
         animated_model =
           try do
             Raxol.Animation.Framework.apply_animations_to_state(current_model)
@@ -236,7 +242,9 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
         theme =
           Theme.get(current_theme_id) || Theme.get(Theme.default_theme_id())
 
-        case do_render_frame(animated_model, theme, state) do
+        layout_context = layout_render_context(dispatcher_context)
+
+        case do_render_frame(animated_model, theme, state, layout_context) do
           {:ok, new_state} ->
             {:reply, :ok, new_state}
 
@@ -257,7 +265,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   # --- Private Helpers ---
 
   # Functional rendering pipeline replacing try/catch
-  defp do_render_frame(model, theme, state) do
+  defp do_render_frame(model, theme, state, layout_context) do
     Raxol.Core.Runtime.Log.debug(
       "Rendering Engine do_render_frame for #{inspect(state.app_module)}, theme=#{inspect(Map.get(theme, :id))}"
     )
@@ -274,13 +282,27 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
           t1,
           mem_before,
           theme,
-          state
+          state,
+          layout_context
         )
 
       {:error, reason} ->
         log_render_error(reason, state)
     end
   end
+
+  # Region-prominence Phase 4 (region-prominence-propagation.md §9): pulls
+  # just `:focused_element` out of the Dispatcher's render context (the
+  # SAME map `reduced_motion`/`focused_element` already ride, see
+  # `Raxol.UI.FocusHelper`'s moduledoc) into the shape
+  # `Raxol.UI.Layout.Engine.apply_layout/4` accepts. Absent key -> `%{}` ->
+  # `apply_layout/4`'s own default (no focus, neutrality/RP-P-09).
+  defp layout_render_context(%{focused_element: focused_element})
+       when not is_nil(focused_element) do
+    %{focused_element: focused_element}
+  end
+
+  defp layout_render_context(_dispatcher_context), do: %{}
 
   defp prepare_view_tree(model, state) do
     mem_before = profiler_memory(state.cycle_profiler)
@@ -306,10 +328,11 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
          t1,
          mem_before,
          theme,
-         state
+         state,
+         layout_context
        ) do
     with {:ok, positioned_elements} <-
-           safe_apply_layout(view, state, prepared_tree),
+           safe_apply_layout(view, state, prepared_tree, layout_context),
          t2 <- profiler_now(state.cycle_profiler),
          :ok <- sync_dispatcher(state.dispatcher_pid, view, positioned_elements),
          :continue <- agent_short_circuit(state),
@@ -486,7 +509,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
   end
 
   # Safe layout application using functional error handling
-  defp safe_apply_layout(view, state, prepared_tree) do
+  defp safe_apply_layout(view, state, prepared_tree, layout_context) do
     dimensions = %{width: state.width, height: state.height}
 
     Raxol.Core.Runtime.Log.debug(
@@ -495,7 +518,12 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
     Raxol.Core.ErrorHandling.safe_call(fn ->
       positioned_elements =
-        LayoutEngine.apply_layout(view, dimensions, prepared_tree)
+        LayoutEngine.apply_layout(
+          view,
+          dimensions,
+          prepared_tree,
+          layout_context
+        )
 
       Raxol.Core.Runtime.Log.debug(
         "Rendering Engine: Got positioned elements: #{inspect(positioned_elements)}"

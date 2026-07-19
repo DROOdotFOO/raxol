@@ -21,6 +21,8 @@ defmodule Raxol.UI.Layout.Engine do
     Table
   }
 
+  alias Raxol.UI.RegionPolicy
+
   @known_style_attrs [
     :bold,
     :italic,
@@ -93,6 +95,18 @@ defmodule Raxol.UI.Layout.Engine do
           required(:height) => non_neg_integer()
         }
 
+  @typedoc """
+  Region-prominence Phase 4 (region-prominence-propagation.md §9): the
+  optional focus context threaded into `apply_layout/4`, the same render
+  context `focused_element`/`reduced_motion` already ride (Dispatcher's
+  `:get_render_context`, `Raxol.UI.FocusHelper`'s moduledoc). Either key is
+  optional and both default to no-focus (neutrality, RP-P-09).
+  """
+  @type render_context :: %{
+          optional(:focused_element) => term(),
+          optional(:focused_region) => RegionPolicy.region_path()
+        }
+
   @doc """
   Applies layout to a view, calculating absolute positions for all elements.
 
@@ -104,14 +118,31 @@ defmodule Raxol.UI.Layout.Engine do
     measurements from the prepare phase (Pretext two-phase architecture).
     When provided, `measure_element` will use cached `measured_width` /
     `measured_height` instead of re-calling `TextMeasure.display_width`.
+  * `render_context` - Region-prominence Phase 4 (§9): an optional map
+    carrying `:focused_region` (a region path, taking precedence when
+    present) or `:focused_element` (a widget id, resolved to that widget's
+    OWN element's `region_path` -- the "widget's enclosing region is the
+    focused region" interim per the design doc's Q6). Absent/empty (the
+    default) means no focus, which is the neutrality case: every region
+    resolves to `1.0` (RP-P-09) and output is byte-identical to a build
+    with no region markers at all.
 
   ## Returns
 
   A list of positioned elements with absolute coordinates.
   """
-  @spec apply_layout(element(), dimensions(), PreparedElement.t() | nil) ::
-          [positioned_element()]
-  def apply_layout(view, dimensions, prepared_tree \\ nil) do
+  @spec apply_layout(
+          element(),
+          dimensions(),
+          PreparedElement.t() | nil,
+          render_context()
+        ) :: [positioned_element()]
+  def apply_layout(
+        view,
+        dimensions,
+        prepared_tree \\ nil,
+        render_context \\ %{}
+      ) do
     # Start with the full screen as available space; carry the prepared
     # measurement cache through the recursion so leaf measure functions
     # can look up cached widths/heights instead of re-measuring.
@@ -123,49 +154,137 @@ defmodule Raxol.UI.Layout.Engine do
       prepared_cache: build_measurement_cache(prepared_tree)
     }
 
-    view
-    |> process_element(available_space, [])
-    |> List.flatten()
-    |> stamp_region_prominence()
+    positioned =
+      view
+      |> process_element(available_space, [])
+      |> List.flatten()
+
+    focus_path = resolve_focus_path(positioned, render_context)
+    stamp_region_prominence(positioned, focus_path)
   end
 
-  # The `region_prominence` a non-dialog element gets while a dialog overlay
-  # is mounted -- the modal dim's first special case of the general region-
-  # prominence mechanism (design doc §5 OVERLAID state). Matches
-  # `Raxol.UI.CellDim`'s `@contrast_keep`, so the shipped modal appearance
-  # is what `Raxol.UI.ColorResolver` reproduces (RP-N-02, §4 C2 chroma-
-  # exponent note in that module).
-  @overlay_keep 0.45
+  # The synthetic region id every element inside an active dialog overlay's
+  # subtree implicitly belongs to (design doc §3.2 "each `:absolute_layer`
+  # overlay is a region ... `dialog: true` additionally marks the overlay a
+  # dimming region" -- the implicit-region case, as opposed to the explicit
+  # `region:` marker `process_element/3`'s first clause reads). Prefixed
+  # onto any explicit `region:` sub-marker a dialog's own content also
+  # carries (`element_region_path/1`), so nesting still composes.
+  @dialog_region_id :__dialog_overlay__
 
-  # Global post-pass: generalizes the modal-only `dim_behind_dialog/1` into
-  # a `region_prominence` float stamped on every positioned element (design
-  # doc §3.2/§9 Phase 1) -- `1.0` (full prominence) by default, or
-  # `@overlay_keep` for every element not on the active dialog's path.
+  # Global post-pass: generalizes the modal-only Phase 1 mechanism into a
+  # `region_prominence` float stamped on every positioned element via the
+  # general `Raxol.UI.RegionPolicy.region_prominence/4` policy (design doc
+  # §3.2/§9 Phase 4), consulted with:
+  #
+  #   * `region_paths` -- every element's `element_region_path/1` (an
+  #     explicit `region:` marker's threaded path, defaulting to `[]` --
+  #     the implicit, unmarked root region -- prefixed with
+  #     `@dialog_region_id` when the element is `:in_dialog`).
+  #   * `focus` -- `focus_path`, resolved by the caller (`apply_layout/4`)
+  #     via `resolve_focus_path/2` from the optional render context.
+  #     `nil` (no context passed) is the neutrality case.
+  #   * `overlays` -- `[[@dialog_region_id]]` when any element is
+  #     `:in_dialog`, else `[]` (design doc §3.2 implicit overlay region).
+  #
   # `:in_dialog` marking (`stamp_in_dialog/1`) is unchanged; the boolean
   # `:dim_behind_modal` stamp is KEPT alongside the float for compat --
   # `Raxol.UI.Renderer.maybe_dim/2` no longer reads it (Phase 1 moved that
   # work into `Raxol.UI.ColorResolver`), but `test/cross_terminal/modal_overlay_test.exs`
-  # still asserts on it directly against `apply_layout/3`'s own output, and
-  # it costs nothing to keep alongside the float. No-op split if no dialog
-  # is active: every element still gets `region_prominence: 1.0` (§9 Phase 1
-  # -- "every positioned element carries region_prominence").
-  defp stamp_region_prominence(elements) do
-    if Enum.any?(elements, &Map.get(&1, :in_dialog, false)) do
-      Enum.map(elements, fn element ->
-        case Map.pop(element, :in_dialog, false) do
-          {true, stripped} ->
-            Map.put(stripped, :region_prominence, 1.0)
+  # still asserts on it directly against `apply_layout/4`'s own output, and
+  # it costs nothing to keep alongside the float.
+  #
+  # Byte-neutrality (RP-P-01) is preserved by construction: with no
+  # `region:` markers anywhere, no active dialog, and no focus, every
+  # element's region path is `[]` and `RegionPolicy.region_prominence/4`
+  # returns `%{[] => 1.0}` for it -- `region_prominence: 1.0` everywhere,
+  # identical to Phase 0-3. With a mounted dialog and no focus, the general
+  # policy composes to EXACTLY the old hardcoded split (RP-N-02 golden,
+  # `test/raxol/ui/region_prominence_test.exs`; see `Raxol.UI.RegionPolicy`'s
+  # moduledoc "Neutrality" section for why) -- generalizing the mechanism
+  # changes nothing about the output for the case Phase 1 already shipped.
+  defp stamp_region_prominence(elements, focus_path) do
+    dialog_active? = Enum.any?(elements, &Map.get(&1, :in_dialog, false))
+    overlays = if dialog_active?, do: [[@dialog_region_id]], else: []
+    region_paths = Enum.map(elements, &element_region_path/1)
 
-          {false, stripped} ->
-            stripped
-            |> Map.put(:region_prominence, @overlay_keep)
-            |> Map.put(:dim_behind_modal, true)
+    prominence_map =
+      RegionPolicy.region_prominence(region_paths, focus_path, overlays)
+
+    Enum.map(elements, fn element ->
+      in_dialog? = Map.get(element, :in_dialog, false)
+      path = element_region_path(element)
+      p = Map.get(prominence_map, path, 1.0)
+
+      stripped =
+        element
+        |> Map.delete(:in_dialog)
+        |> Map.put(:region_prominence, p)
+
+      if dialog_active? and not in_dialog?,
+        do: Map.put(stripped, :dim_behind_modal, true),
+        else: stripped
+    end)
+  end
+
+  # An element's region path for policy purposes (§3.2, §9 Phase 4): its
+  # own explicit `:region_path` (threaded root-first by the `%{region: _}`
+  # `process_element/3` clause, defaulting to `[]` -- the implicit,
+  # unmarked root region), prefixed with `@dialog_region_id` when the
+  # element sits inside an active dialog overlay's subtree.
+  #
+  # `[]` genuinely means "outside every region" for content outside every
+  # dialog too -- never rewritten to `[@dialog_region_id]` unless
+  # `:in_dialog` is actually set. `RegionPolicy`'s lineage/overlay
+  # relations treat `[]` as related only to itself (see that module's
+  # `lineage_related?/2`), so the unmarked "everything else" region is
+  # never mistaken for an ancestor of a real region and is correctly
+  # dimmed by an active overlay it has no relation to.
+  defp element_region_path(element) do
+    base = Map.get(element, :region_path, [])
+
+    if Map.get(element, :in_dialog, false),
+      do: [@dialog_region_id | base],
+      else: base
+  end
+
+  # Resolves the focused region path from the optional render context
+  # threaded into `apply_layout/4` (design doc §9 Phase 4, Q6 interim:
+  # "widget's enclosing region is the focused region"). `:focused_region`
+  # (already a region path) wins when present; otherwise `:focused_element`
+  # (a widget id -- the SAME render-context key
+  # `Raxol.UI.FocusHelper`/the Dispatcher's `:get_render_context` already
+  # use) is resolved to the region path of the positioned element whose
+  # `:id` matches it. No match, no context, or neither key present all
+  # resolve to `nil` -- no focus, the neutrality case (RP-P-09).
+  defp resolve_focus_path(elements, render_context)
+       when is_map(render_context) do
+    case Map.get(render_context, :focused_region) do
+      path when is_list(path) ->
+        path
+
+      _ ->
+        case Map.get(render_context, :focused_element) do
+          nil -> nil
+          widget_id -> find_focused_region(elements, widget_id)
         end
-      end)
-    else
-      Enum.map(elements, &Map.put(&1, :region_prominence, 1.0))
     end
   end
+
+  defp resolve_focus_path(_elements, _render_context), do: nil
+
+  defp find_focused_region(elements, widget_id) do
+    Enum.find_value(elements, fn element ->
+      if Map.get(element, :id) == widget_id,
+        do: element_region_path(element)
+    end)
+  end
+
+  defp prepend_region_path(element, region_id) when is_map(element) do
+    Map.update(element, :region_path, [region_id], &[region_id | &1])
+  end
+
+  defp prepend_region_path(other, _region_id), do: other
 
   # Build a flat map from element content hash to {measured_width, measured_height}.
   defp build_measurement_cache(nil), do: %{}
@@ -205,6 +324,29 @@ defmodule Raxol.UI.Layout.Engine do
   """
   @spec process_element(element() | any(), space(), [positioned_element()]) ::
           [positioned_element()]
+  # Region marker (design doc §3.2/§9 Phase 4): any container may carry
+  # `region: id` regardless of its `:type` -- this clause MUST come first
+  # (textually, before every other `process_element/3` clause in the
+  # module -- Elixir matches multi-clause functions in definition order)
+  # so a regioned container is intercepted here before its type-specific
+  # clause ever sees it. Strips `:region`, dispatches the stripped element
+  # through the NORMAL type-specific recursion in total isolation
+  # (`acc: []`) -- mirroring `stamp_in_dialog/1`'s own-subtree isolation,
+  # for the same reason: only THIS container's own new elements get the
+  # region stamp, not whatever already sits in the caller's `acc`. Then
+  # prepends `region_id` to every descendant's `:region_path` (default
+  # `[]`). Root-first falls out of the recursion shape for free: a
+  # descendant region's OWN clause runs to completion (and stamps itself)
+  # BEFORE this ancestor clause's `Enum.map` wraps the result, so an outer
+  # `region: :a` containing an inner `region: :b` yields `[:a, :b]`.
+  def process_element(%{region: region_id} = element, space, acc)
+      when not is_nil(region_id) do
+    inner = Map.delete(element, :region)
+    own_elements = process_element(inner, space, [])
+    stamped = Enum.map(own_elements, &prepend_region_path(&1, region_id))
+    stamped ++ acc
+  end
+
   # Process a view element
   def process_element(%{type: :view, children: children}, space, acc)
       when is_list(children) do

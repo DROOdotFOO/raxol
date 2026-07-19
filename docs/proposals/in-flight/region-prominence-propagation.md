@@ -1,6 +1,6 @@
 # Region Prominence Propagation — intent colors resolved at the render choke point
 
-Date: 2026-07-19 · Status: **Phases 0–2 LANDED** (2026-07-19: P0 `9ddb74167`, P1 `d9ae0ebc7`, P2 `cfa1e6eb7`; γ_region pinned closed-form `ln(0.65)/ln(0.45)` by byte-exact modal parity — component-own fades stay γ=1 pending the eye pass). Phases 3–4 pending owner's eye-matrix gate.
+Date: 2026-07-19 · Status: **Phases 0–3 LANDED** (2026-07-19: P0 `9ddb74167`, P1 `d9ae0ebc7`, P2 `cfa1e6eb7`, P3 `b335f91fa`; γ_region pinned closed-form `ln(0.65)/ln(0.45)` by byte-exact modal parity — component-own fades stay γ=1 pending the eye pass). **Phase 4 LANDED-PENDING-REVIEW** (`Raxol.UI.RegionPolicy` + `Raxol.UI.Layout.Engine`'s `region:` marker/focus wiring — see §9 Phase 4 for scope, Q6 answered as an interim per that section). Human-eye matrix (§8 RP-H-*) still outstanding for the whole design.
 
 **Ratification log (V, 2026-07-19):**
 - **Engine-core placement ratified.** Prominence propagation is a rendering-engine-core
@@ -199,13 +199,22 @@ Rules:
   through (`packages/raxol_terminal/.../renderer.ex`'s `nil`-fg path emits
   no fg SGR). This is the PRIMARY case and holds even when no ground was
   ever detected/cached, since a `nil` fg short-circuits before any ground
-  read. **TODO (deferred):** an element with an unpainted OWN bg that sits
-  visually over an ancestor's/sibling's painted bg (paint-order grid,
-  §3.5) still falls to this `nil` case today -- terminal-default fg over a
-  raxol-painted bg, an accepted interim. Closing that gap needs a one-line
-  `Raxol.UI.ColorResolver` change (a `nil`-fg cell whose LOCAL grid bg is
-  non-`nil` also gets the baseline intent), deliberately not implemented
-  as part of Phase 3 (kept out of `color_resolver.ex` entirely).
+  read. **CLOSED (landed via native-palette-riding.md §7):** an element
+  with an unpainted OWN bg that sits visually over an ancestor's/sibling's
+  painted bg (paint-order grid, §3.5) used to fall to this `nil` case --
+  terminal-default fg over a raxol-painted bg, an accepted interim while
+  the gap stayed open. `Raxol.UI.ColorResolver.resolve_cell/4`'s
+  `grid_bg_floor_fg/3` is the one-line fix this section reserved: a
+  `nil`-fg cell whose LOCAL grid bg (the paint-order grid's `under` entry
+  at that coordinate) is non-`nil` now gets the SAME baseline-tier,
+  `:text`-floored intent this section's producer already emits for an
+  explicitly painted own bg, before resolution proceeds. The producer
+  (`style_processor.ex`'s `default_fg_intent/2`) is unchanged -- it still
+  cannot see the grid and still correctly returns `nil` for its own
+  nil/nil case; the promotion happens one layer down, inside the
+  resolver, where the grid actually lives. The PRIMARY nil-fg-over-
+  nothing-painted case (no grid entry at all) is untouched and still
+  holds with no ground ever detected/cached.
 - **Backward compat / escape hatch — literal colors remain valid.** Hex
   strings, `{r,g,b}` tuples, ANSI atoms, and 256 palette integers pass
   through the resolver as today. They still participate in **region**
@@ -635,11 +644,41 @@ Phased so RP-P-01 (neutrality) holds at every merge:
   visible change in the plan; gated on RP-P-06 + the eye matrix + a
   playground sweep (53 demos). Escape: components that *want* literal white
   say `fg: {:fixed, :white}`.
-- **Phase 4 — focus policy live.** Region markers on the playground's
-  split-pane/panels demos + harness panels; `region_prominence` policy wired
-  into the render context; `focus_ring`/`panel_highlights` demos gain the
-  de-prominence behavior. Themes (`SalienceTheme`) optionally re-expressed as
-  intent tables rather than pre-solved hex.
+- **Phase 4 — focus policy live. LANDED-PENDING-REVIEW.** `Raxol.UI.RegionPolicy`
+  (`lib/raxol/ui/region_policy.ex`) is the pure `region_prominence(region_tree,
+  focus, overlays, opts) :: %{region_path => float}` function §3.2 specifies:
+  focus weight is bidirectional (a focused path's whole ancestor/descendant
+  lineage lights up to `1.0`; everyone else drops to `@peer_level` `0.8`, or
+  the opt-in `depth_falloff: true` proportional variant, default off);
+  overlay weight is one-directional (only an overlay's own subtree is exempt
+  from its own dim — an overlay still dims its own ANCESTOR regions, which is
+  what makes nested modals compose to "top LIT, mid overlaid once, base app
+  overlaid twice", §5); the composed regional product floors at `0.4`
+  (RP-P-10). `Raxol.UI.Layout.Engine` generalizes: any container may now
+  carry `region: id`, threaded root-first into a `:region_path` field during
+  the layout walk (a new `process_element/3` clause, matched before every
+  type-specific clause, mirroring `stamp_in_dialog/1`'s own-subtree-isolation
+  shape); `stamp_region_prominence/2` (formerly the Phase 1 hardcoded
+  1.0/`@overlay_keep` binary split) now builds the full set of region paths
+  present (dialog overlays get an implicit path, `@dialog_region_id`,
+  prefixed the same way `dialog: true` already worked) and consults
+  `RegionPolicy.region_prominence/4` instead — **the modal case's output is
+  unchanged by construction** (RP-N-02 golden still byte-exact, verified):
+  with no focus and one dialog overlay, the general policy composes to
+  exactly the old hardcoded split (`focus: nil` ⇒ every region's focus
+  weight is `1.0`; the dialog's own overlay weight is `1.0` on-path,
+  `@overlay_keep` off-path — identical to Phase 1's two-branch code, just
+  derived instead of hardcoded). `apply_layout/4` accepts an optional
+  render-context map (`:focused_region`, a region path directly, or
+  `:focused_element`, a widget id — see Q6 below) threaded through
+  `lib/raxol/core/runtime/rendering/engine.ex` from the SAME Dispatcher
+  render context `focused_element`/`reduced_motion` already ride
+  (`:get_render_context`). Absent context (every existing caller) is the
+  neutrality case: `region_prominence: 1.0` everywhere, byte-identical to
+  Phases 0-3. Playground demo wiring (`focus_ring`/`panel_highlights`) and
+  the `SalienceTheme` intent-table re-expression are NOT part of this
+  landing — deferred, no shipped demo currently declares `region:` markers,
+  so the mechanism is live but dormant pending a follow-up demo/theme pass.
 - **Order rationale:** first migrants are the components already
   intent-shaped (harness), then the mechanism that already exists (modal),
   then defaults, then new behavior (focus) — each phase has a shipped
@@ -662,9 +701,19 @@ Phased so RP-P-01 (neutrality) holds at every merge:
 5. ~~**Should literal (non-intent) colors participate in region fading by
    default**~~ — **ANSWERED (see ratification log): yes**, matching today's
    modal dim of literals; `{:fixed, color}` is the opt-out.
-6. **Focus source of truth:** reuse `focused_element` (widget-level) and
-   derive the focused *region* as the widget's enclosing region — or make
-   region focus a first-class, separately-navigable concept?
+6. ~~**Focus source of truth**~~ — **ANSWERED, interim (Phase 4):** reuse
+   `focused_element` (widget-level) and derive the focused *region* as that
+   widget's OWN positioned element's `region_path` — "the widget's enclosing
+   region is the focused region." `Raxol.UI.Layout.Engine.resolve_focus_path/2`
+   implements the lookup (scan the positioned list for the element whose
+   `:id` matches `:focused_element`, read its `element_region_path/1`);
+   `:focused_region` (an explicit region path) is also accepted and takes
+   precedence when present, for callers that want to name a region directly
+   without an intermediate widget id. Marked interim, not final ratification:
+   a first-class, separately-navigable region-focus concept (the "or" branch
+   of this question) remains open if a future surface needs to focus a
+   region with no single representative widget (e.g. an empty panel, or a
+   region spanning several unrelated widgets).
 7. **Prominence transitions animation** (fade over ~150ms via hints):
    worth a v2 slot, or does instant switching read better in terminals?
 8. **MCP surface:** expose pre-resolution intents in `StructuredScreenshot`

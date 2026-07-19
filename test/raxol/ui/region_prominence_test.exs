@@ -28,7 +28,7 @@ defmodule Raxol.UI.RegionProminenceTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Playground.Demos.ModalDemo
-  alias Raxol.UI.{CellDim, ColorIntent, ColorResolver}
+  alias Raxol.UI.{CellDim, ColorIntent, ColorResolver, RegionPolicy}
   alias Raxol.UI.Layout.Engine, as: LayoutEngine
   alias Raxol.UI.Renderer, as: UIRenderer
 
@@ -179,6 +179,224 @@ defmodule Raxol.UI.RegionProminenceTest do
     end
   end
 
+  # ---- Phase 4 (§9): explicit `region:` markers + focus-driven policy ----
+  #
+  # Two sibling containers, each carrying its own stable `region:` marker
+  # AND `id:` (so `:focused_element` resolution -- Q6 interim -- has a
+  # widget id to resolve). No dialog anywhere -- these tests are purely
+  # about the general focus/region mechanism `Raxol.UI.RegionPolicy`
+  # brings online for Phase 4, layered onto the SAME
+  # `element[:region_prominence]` marker/`ColorResolver` fade path Phase 1
+  # already shipped (no changes needed there -- it already fades an
+  # arbitrary composed `p`, not just the modal's hardcoded 0.45).
+
+  defp two_region_view do
+    %{
+      type: :row,
+      children: [
+        %{
+          type: :box,
+          id: :sidebar_box,
+          region: :sidebar,
+          children: [%{type: :text, content: "SIDE", fg: :white}]
+        },
+        %{
+          type: :box,
+          id: :main_box,
+          region: :main,
+          children: [%{type: :text, content: "MAIN", fg: :white}]
+        }
+      ]
+    }
+  end
+
+  # Same shape, same ids, but with no `region:` markers at all -- the
+  # RP-P-01-style neutrality oracle: region markers with no focus must
+  # render byte-identically to no markers ever having existed.
+  defp two_region_view_bare do
+    %{
+      type: :row,
+      children: [
+        %{
+          type: :box,
+          id: :sidebar_box,
+          children: [%{type: :text, content: "SIDE", fg: :white}]
+        },
+        %{
+          type: :box,
+          id: :main_box,
+          children: [%{type: :text, content: "MAIN", fg: :white}]
+        }
+      ]
+    }
+  end
+
+  describe "Phase 4 -- explicit region markers, no focus (neutrality)" do
+    test "region: markers alone (no focus, no dialog) stamp region_prominence: 1.0 on every element" do
+      elements = LayoutEngine.apply_layout(two_region_view(), @dimensions)
+
+      assert Enum.all?(elements, &(Map.get(&1, :region_prominence) == 1.0))
+    end
+
+    test "region-marked, unfocused render is byte-identical to a render with no region markers at all" do
+      regioned_cells =
+        two_region_view()
+        |> LayoutEngine.apply_layout(@dimensions)
+        |> UIRenderer.render_to_cells()
+
+      bare_cells =
+        two_region_view_bare()
+        |> LayoutEngine.apply_layout(@dimensions)
+        |> UIRenderer.render_to_cells()
+
+      assert Enum.sort(regioned_cells) == Enum.sort(bare_cells)
+    end
+
+    test "an explicit empty render_context (%{}) matches the 3-arity default" do
+      three_arity = LayoutEngine.apply_layout(two_region_view(), @dimensions)
+
+      four_arity =
+        LayoutEngine.apply_layout(two_region_view(), @dimensions, nil, %{})
+
+      assert three_arity == four_arity
+    end
+  end
+
+  describe "Phase 4 -- focused_region dims the sibling to the peer level" do
+    test "the focused region stays 1.0, its sibling drops to RegionPolicy.peer_level/0" do
+      elements =
+        LayoutEngine.apply_layout(two_region_view(), @dimensions, nil, %{
+          focused_region: [:sidebar]
+        })
+
+      sidebar_el = Enum.find(elements, &(Map.get(&1, :id) == :sidebar_box))
+      main_el = Enum.find(elements, &(Map.get(&1, :id) == :main_box))
+
+      refute is_nil(sidebar_el)
+      refute is_nil(main_el)
+      assert sidebar_el.region_prominence == 1.0
+      assert main_el.region_prominence == RegionPolicy.peer_level()
+    end
+
+    test "every element under the focused region (not just its own container) reads 1.0" do
+      elements =
+        LayoutEngine.apply_layout(two_region_view(), @dimensions, nil, %{
+          focused_region: [:sidebar]
+        })
+
+      # The "SIDE" text leaf is a DESCENDANT of the :sidebar_box container,
+      # not the box element itself -- both must be 1.0 (§3.2 "the focused
+      # region and every ancestor and descendant of it").
+      side_text = Enum.find(elements, &(Map.get(&1, :text) == "SIDE"))
+      main_text = Enum.find(elements, &(Map.get(&1, :text) == "MAIN"))
+
+      refute is_nil(side_text)
+      refute is_nil(main_text)
+      assert side_text.region_prominence == 1.0
+      assert main_text.region_prominence == RegionPolicy.peer_level()
+    end
+
+    test "the cell-level fade actually happens: the unfocused sibling's fg is no longer literal :white" do
+      cells =
+        two_region_view()
+        |> LayoutEngine.apply_layout(@dimensions, nil, %{
+          focused_region: [:sidebar]
+        })
+        |> UIRenderer.render_to_cells()
+
+      side_cell = Enum.find(cells, fn {_x, _y, c, _fg, _bg, _a} -> c == "S" end)
+      main_cell = Enum.find(cells, fn {_x, _y, c, _fg, _bg, _a} -> c == "M" end)
+
+      refute is_nil(side_cell)
+      refute is_nil(main_cell)
+
+      {_, _, _, side_fg, _, _} = side_cell
+      {_, _, _, main_fg, _, _} = main_cell
+
+      assert side_fg == :white
+      refute main_fg == :white
+    end
+
+    test "focus: nil (explicit) is the same as no context at all -- byte-identical cells" do
+      no_context =
+        two_region_view()
+        |> LayoutEngine.apply_layout(@dimensions)
+        |> UIRenderer.render_to_cells()
+
+      explicit_nil_focus =
+        two_region_view()
+        |> LayoutEngine.apply_layout(@dimensions, nil, %{focused_region: nil})
+        |> UIRenderer.render_to_cells()
+
+      assert Enum.sort(no_context) == Enum.sort(explicit_nil_focus)
+    end
+  end
+
+  describe "Phase 4 -- :focused_element (widget id) resolves to its enclosing region (Q6 interim)" do
+    test "focusing a widget id dims its sibling region exactly like focusing the region path directly" do
+      by_element =
+        LayoutEngine.apply_layout(two_region_view(), @dimensions, nil, %{
+          focused_element: :sidebar_box
+        })
+
+      by_region =
+        LayoutEngine.apply_layout(two_region_view(), @dimensions, nil, %{
+          focused_region: [:sidebar]
+        })
+
+      assert Enum.map(by_element, &Map.get(&1, :region_prominence)) ==
+               Enum.map(by_region, &Map.get(&1, :region_prominence))
+    end
+
+    test "an unresolvable focused_element (no matching id) is treated as no focus -- neutrality" do
+      elements =
+        LayoutEngine.apply_layout(two_region_view(), @dimensions, nil, %{
+          focused_element: :no_such_widget
+        })
+
+      assert Enum.all?(elements, &(Map.get(&1, :region_prominence) == 1.0))
+    end
+
+    test ":focused_region takes precedence over :focused_element when both are present" do
+      elements =
+        LayoutEngine.apply_layout(two_region_view(), @dimensions, nil, %{
+          focused_element: :sidebar_box,
+          focused_region: [:main]
+        })
+
+      sidebar_el = Enum.find(elements, &(Map.get(&1, :id) == :sidebar_box))
+      main_el = Enum.find(elements, &(Map.get(&1, :id) == :main_box))
+
+      assert main_el.region_prominence == 1.0
+      assert sidebar_el.region_prominence == RegionPolicy.peer_level()
+    end
+  end
+
+  describe "Phase 4 -- modal golden is unaffected by the general policy generalization (regression)" do
+    test "the RP-N-02 modal golden's region_prominence split (1.0 / @overlay_keep) is reproduced by the general policy with no region markers or focus involved" do
+      model = %{show: true, confirmed: 0, cancelled: 0}
+      view = ModalDemo.view(model)
+
+      elements = LayoutEngine.apply_layout(view, @dimensions)
+
+      dialog_elements =
+        Enum.reject(elements, &Map.get(&1, :dim_behind_modal, false))
+
+      dimmed_elements =
+        Enum.filter(elements, &Map.get(&1, :dim_behind_modal, false))
+
+      refute dialog_elements == []
+      refute dimmed_elements == []
+
+      assert Enum.all?(dialog_elements, &(&1.region_prominence == 1.0))
+
+      assert Enum.all?(
+               dimmed_elements,
+               &(&1.region_prominence == RegionPolicy.overlay_keep())
+             )
+    end
+  end
+
   # ---- helpers ----
 
   defp index_by_xy(cells) do
@@ -258,38 +476,47 @@ defmodule Raxol.UI.RegionProminenceTest do
   defp old_pipeline_cells(elements, theme) do
     ground_al = CellDim.ground_apparent_lightness()
 
-    elements
-    |> UIRenderer.render_to_cells_unresolved(theme)
-    |> Enum.map(fn {x, y, char, fg, bg, attrs} ->
-      dimmed? =
+    raw_cells = UIRenderer.render_to_cells_unresolved(elements, theme)
+
+    dimmed_flags =
+      Enum.map(raw_cells, fn {_x, _y, _c, _fg, _bg, attrs} ->
         Enum.any?(attrs, fn
           {:region_prominence, p} -> p < 1.0
           _ -> false
         end)
+      end)
 
-      clean_attrs = Enum.reject(attrs, &match?({:region_prominence, _}, &1))
+    clean_cells =
+      Enum.map(raw_cells, fn {x, y, char, fg, bg, attrs} ->
+        clean_attrs = Enum.reject(attrs, &match?({:region_prominence, _}, &1))
+        {x, y, char, fg, bg, clean_attrs}
+      end)
 
-      # region-prominence-propagation.md §9 Phase 3: an attr-less cell over
-      # a painted bg may now carry a `%ColorIntent{}` fg
-      # (`Raxol.UI.StyleProcessor.promote_colors/2`'s case-b producer)
-      # instead of a literal. `CellDim` predates intents (see its moduledoc
-      # "superseded" note) and has no clause for one -- it would pass the
-      # struct through unchanged, and the golden comparison below would
-      # then compare a `%ColorIntent{}` against the new path's fully
-      # resolved hex, a shape mismatch that says nothing about dim-MATH
-      # parity (the actual RP-N-02 claim). So: resolve any intent to its
-      # literal FIRST, via `ColorResolver`'s own intent-resolution step
-      # with region prominence forced to the identity (no `{:region_prominence,
-      # _}` marker passed in -- defaults to `1.0`, i.e. no region dim yet,
-      # since dim math is exactly what the branch below tests). A literal
-      # fg/bg round-trips through this call unchanged (Phase 0's
-      # byte-identity contract), so this is a no-op for every cell this
-      # golden already covered pre-Phase-3.
-      [{_x, _y, _c, fg_literal, bg_literal, _a}] =
-        ColorResolver.resolve_cells([{x, y, char, fg, bg, []}],
-          ground: ground_al
-        )
+    # region-prominence-propagation.md §9 Phase 3 (and now the grid-bg
+    # fix, §3.1's deferred TODO, native-palette-riding.md §7): an
+    # attr-less cell over a painted bg may carry a `%ColorIntent{}` fg
+    # (`Raxol.UI.StyleProcessor.promote_colors/2`'s case-b producer), OR
+    # -- since the grid-bg fix -- get ONE synthesized by `ColorResolver`
+    # itself from a nil/nil cell sitting over an earlier-painted grid
+    # entry (`grid_bg_floor_fg/3`). `CellDim` predates both: it would
+    # pass an explicit intent through unchanged, and never sees the
+    # synthesized case at all. Both need the SAME whole-list grid the new
+    # pipeline builds (a per-cell resolve, as this helper used to do,
+    # starts every cell with an empty grid and can never see `under`) --
+    # so: resolve the WHOLE list at once, with region prominence forced
+    # to the identity (the `{:region_prominence, _}` markers are stripped
+    # above, before this call) so this step stays dim-MATH-neutral -- the
+    # branch below applies CellDim's OWN dim math, which is the actual
+    # RP-N-02 claim, on top of grid-aware literals that now match the new
+    # path's grid resolution exactly. A literal fg/bg with nothing to
+    # promote round-trips through this call unchanged (Phase 0's
+    # byte-identity contract), so this remains a no-op for every cell
+    # this golden already covered pre-Phase-3.
+    resolved_cells = ColorResolver.resolve_cells(clean_cells, ground: ground_al)
 
+    [resolved_cells, dimmed_flags]
+    |> Enum.zip()
+    |> Enum.map(fn {{x, y, char, fg_literal, bg_literal, clean_attrs}, dimmed?} ->
       {fg2, bg2} =
         if dimmed? do
           {CellDim.dim_fg(fg_literal, ground_al),
