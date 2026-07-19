@@ -748,17 +748,22 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert line =~ "3 lines"
       assert style[:dim] == true
 
-      # Expanded (V's icon-column convention): the HEADER carries the
-      # opening `∵` (down-dots = expanded start — never a second lone-∵
-      # row), body rows sit at cell 3 ("  " indent off the cell-1 icon
-      # column), and a bare `∴` (up-dots = expanded end) closes.
+      # Expanded (V's icon-column convention): ONE Indication.bracket
+      # container spans the block — `∵` stamps the first row (the
+      # thinking header), `∴` the last, content at the 2-cell indent.
+      # The engine owns the columns; the render tree carries the
+      # :indication node, never a hand-rolled indent/closer pair.
       expanded = %{folded | fold: :expanded}
-      texts = flat_texts(Block.render(expanded, %{width: 120}))
-      assert hd(texts) =~ "∵ thinking"
-      assert Enum.any?(texts, &(&1 == "  first"))
-      assert Enum.any?(texts, &(&1 == "  third"))
-      assert List.last(texts) == "∴"
-      refute Enum.any?(texts, &(&1 == "∵"))
+      rendered = Block.render(expanded, %{width: 120})
+
+      assert [%{type: :indication, gutter: {:corners, "∵", "∴"}} = ind] =
+               rendered.children
+
+      inner = flat_texts(ind.content)
+      assert hd(inner) =~ "thinking"
+      refute hd(inner) =~ "∵"
+      assert Enum.any?(inner, &(&1 == "first"))
+      assert Enum.any?(inner, &(&1 == "third"))
     end
 
     test "an expanded thought trims edge-blank rows (the redundant spacing V flagged)" do
@@ -773,11 +778,12 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       block =
         Block.from_events(:reasoning, events, fold: :expanded, seal: :sealed)
 
-      texts = flat_texts(Block.render(block, %{width: 120}))
+      [%{type: :indication} = ind] = Block.render(block, %{width: 120}).children
+      texts = flat_texts(ind.content)
 
-      assert Enum.any?(texts, &(&1 == "  real thought"))
-      # no blank rows between the header, the body, and the ∴ closer
-      refute Enum.any?(texts, &(String.trim(&1) == "" and &1 != ""))
+      assert Enum.any?(texts, &(&1 == "real thought"))
+      # no blank rows inside the bracket — the ∴ corner lands on the
+      # LAST CONTENT row, so an edge blank would carry the closer
       assert Enum.filter(texts, &(String.trim(&1) == "")) == []
     end
 

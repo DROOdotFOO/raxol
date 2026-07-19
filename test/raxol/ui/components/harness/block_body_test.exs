@@ -11,6 +11,14 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
 
   defp flat_texts(%{type: :text, content: content}), do: [content]
 
+  # the Indication container (expanded thoughts) holds its tree in :content
+  defp flat_texts(%{type: :indication, content: content})
+       when is_binary(content),
+       do: [content]
+
+  defp flat_texts(%{type: :indication, content: content}),
+    do: flat_texts(content)
+
   defp flat_texts(%{children: children}) when is_list(children),
     do: Enum.flat_map(children, &flat_texts/1)
 

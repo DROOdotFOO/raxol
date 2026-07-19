@@ -230,7 +230,61 @@ defmodule Raxol.Harness.Surface.ViewText do
     Enum.reduce(children, acc, &collect/2)
   end
 
+  # The `:indication` container (the harness's left-edge primitive): its
+  # content flattens normally, then the gutter re-applies as a text
+  # PREFIX per line — top glyph on the first row, bottom glyph on the
+  # last, the 2-cell indent on every other — so this byte-path bridge
+  # renders the same contour the LayoutEngine stamps as columns.
+  defp collect(%{type: :indication} = node, acc) do
+    inner =
+      node
+      |> indication_content_lines()
+      |> apply_indication_gutter(Map.get(node, :gutter, :none))
+
+    Enum.reduce(inner, acc, fn segments, acc2 -> [segments | acc2] end)
+  end
+
   defp collect(_node, acc), do: acc
+
+  defp indication_content_lines(%{content: content}) when is_binary(content) do
+    content
+    |> String.split("\n")
+    |> Enum.map(fn line -> [{sanitize_line(line), %{}}] end)
+  end
+
+  defp indication_content_lines(%{content: content}) when is_map(content) do
+    content |> collect([]) |> Enum.reverse()
+  end
+
+  defp indication_content_lines(_node), do: []
+
+  defp apply_indication_gutter([], _gutter), do: []
+
+  defp apply_indication_gutter(lines, gutter) do
+    last = length(lines) - 1
+
+    Enum.with_index(lines, fn segments, index ->
+      prefix =
+        case gutter do
+          {:corners, top, _bottom} when index == 0 and is_binary(top) ->
+            top <> " "
+
+          {:corners, _top, bottom} when index == last and is_binary(bottom) ->
+            bottom <> " "
+
+          {:top, glyph} when index == 0 and is_binary(glyph) ->
+            glyph <> " "
+
+          {:rule, glyph} when is_binary(glyph) ->
+            glyph <> " "
+
+          _none_or_middle ->
+            "  "
+        end
+
+      [{prefix, %{dim: true}} | segments]
+    end)
+  end
 
   defp text_leaf?(%{type: :text, content: content}), do: is_binary(content)
   defp text_leaf?(_other), do: false

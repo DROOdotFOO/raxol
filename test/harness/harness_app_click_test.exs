@@ -108,6 +108,10 @@ defmodule Raxol.Harness.HarnessAppClickTest do
 
   defp row_text(%{type: :text, content: c}) when is_binary(c), do: c
 
+  # the Indication container holds its subtree under :content
+  defp row_text(%{type: :indication, content: c}) when is_binary(c), do: c
+  defp row_text(%{type: :indication, content: c}), do: row_text(c)
+
   defp row_text(%{children: children}) when is_list(children),
     do: Enum.map_join(children, "", &row_text/1)
 

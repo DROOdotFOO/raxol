@@ -376,6 +376,17 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
     fixed_height(el) || inner + border + padding
   end
 
+  # An `:indication` container is its CONTENT's height — the gutter
+  # renders alongside, never adding rows (the engine's own layout law
+  # for the node). Missing this clause re-opens the footer-push defect:
+  # an expanded thought counted as 1 row shoves the composer off-screen.
+  def element_height(%{type: :indication, content: content})
+      when is_binary(content),
+      do: 1 + count_newlines(content)
+
+  def element_height(%{type: :indication, content: content}),
+    do: element_height(content)
+
   def element_height(%{type: :text, content: content}) when is_binary(content),
     do: 1 + count_newlines(content)
 

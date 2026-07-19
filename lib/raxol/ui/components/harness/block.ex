@@ -181,6 +181,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.TextLayout
   alias Raxol.UI.TextMeasure
+  alias Raxol.UI.Components.Harness.Indication
   alias Raxol.View.Components
 
   require Logger
@@ -719,6 +720,44 @@ defmodule Raxol.UI.Components.Harness.Block do
     end
   end
 
+  # An expanded thought is ONE `Indication.bracket/4` container — the
+  # generalized left-edge primitive (V's ruling: never a hand-rolled
+  # indent/closer pair). The engine stamps `∵` at the container's first
+  # row (the header — down-dots = expanded start ON the thinking line),
+  # `∴` at its last, and every content row at the 2-cell indent. The
+  # header is rebuilt glyph-less at the INNER width so its right-edge
+  # meta still lands on the block's true right edge.
+  defp expanded_body_children(
+         %__MODULE__{kind: :reasoning} = block,
+         _header,
+         width,
+         context,
+         fg
+       ) do
+    inner_width = max(width - 2, 1)
+
+    header =
+      Components.text(
+        content:
+          justify_between("thinking", reasoning_meta(block), inner_width),
+        style: apply_fg(%{dim: true}, fg)
+      )
+
+    body =
+      block
+      |> content_lines_view(inner_width, context, fg)
+      |> trim_blank_edge_rows()
+
+    [
+      Indication.bracket(
+        Components.column(gap: 0, children: [header | body]),
+        @reasoning_open_glyph,
+        @reasoning_close_glyph,
+        gutter_style: apply_fg(%{dim: true}, fg)
+      )
+    ]
+  end
+
   defp expanded_body_children(block, header, width, context, fg),
     do: [header | content_lines_view(block, width, context, fg)]
 
@@ -858,21 +897,15 @@ defmodule Raxol.UI.Components.Harness.Block do
     )
   end
 
-  # The thought header: `⁖ thinking` (collapsed) / `∵ thinking` (expanded
-  # -- the down-pointing dots ARE the expanded-start marker, V's icon-
-  # column convention: cell 1 is the indication column, the word starts
-  # at cell 3) flush left, the honest quantity (`N lines · <duration>`)
-  # flush right. Duration only when the block genuinely carries one.
+  # The FOLDED thought header: `⁖ thinking` flush left, the honest
+  # quantity flush right. The EXPANDED form never routes here — it is
+  # one `Indication.bracket` container (`expanded_body_children/5`) whose
+  # top corner carries the `∵` expanded-start marker on the thinking line.
   defp header_view(%__MODULE__{kind: :reasoning} = block, width, fg, _context) do
-    glyph =
-      if block.fold == :expanded,
-        do: @reasoning_open_glyph,
-        else: @reasoning_collapsed_glyph
-
     Components.text(
       content:
         justify_between(
-          "#{glyph} thinking",
+          "#{@reasoning_collapsed_glyph} thinking",
           reasoning_meta(block),
           max(width, 1)
         ),
@@ -1183,7 +1216,18 @@ defmodule Raxol.UI.Components.Harness.Block do
   # left edge is built in `header_view/4`; the count is the honest quantity
   # (never the first line of the thought: collapsed means collapsed).
   defp reasoning_meta(%__MODULE__{content: content, outcome: outcome}) do
-    count = (content || %{}) |> Map.get(:text) |> split_lines() |> length()
+    # Honest count: the VISIBLE thought lines — edge-blank padding (an
+    # LLM's leading/trailing newlines) is trimmed at render, so it must
+    # not inflate the number either.
+    count =
+      (content || %{})
+      |> Map.get(:text)
+      |> split_lines()
+      |> Enum.drop_while(&(String.trim(&1) == ""))
+      |> Enum.reverse()
+      |> Enum.drop_while(&(String.trim(&1) == ""))
+      |> length()
+
     line_part = "#{count} #{if count == 1, do: "line", else: "lines"}"
 
     case (outcome || %{}) |> Map.get(:duration_ms) |> reasoning_duration() do
@@ -1513,10 +1557,9 @@ defmodule Raxol.UI.Components.Harness.Block do
         plain_content_lines(block, fg)
       end
 
-    case kind do
-      :reasoning -> close_reasoning(body, fg)
-      _message -> body
-    end
+    # :reasoning's bracket/indent layout is the Indication container's
+    # job (`expanded_body_children/5`) — the body returns raw here.
+    body
   end
 
   # An approval's expanded body never routes through this dispatch:
@@ -1529,44 +1572,6 @@ defmodule Raxol.UI.Components.Harness.Block do
   # generic fallback below deliberately drops.
   defp content_lines_view(block, _width, _context, fg),
     do: plain_content_lines(block, fg)
-
-  # An EXPANDED thought reads like an arrow through the reasoning: the
-  # HEADER carries the opening `∵` (down-pointing dots = expanded start,
-  # `header_view/4`'s own glyph swap -- never a second lone-`∵` row), the
-  # body rows sit at cell 3 (one-cell gap off the cell-1 icon column,
-  # V's convention), and a bare `∴` (up-pointing = expanded end) closes.
-  # Edge-blank rows are trimmed -- an LLM thought regularly starts/ends
-  # with newline padding, and those blanks rendered as the "redundant
-  # spacing blocks" V flagged; interior blanks are content and stay.
-  defp close_reasoning(body, fg) do
-    closer =
-      Components.text(
-        content: @reasoning_close_glyph,
-        style: apply_fg(%{dim: true}, fg)
-      )
-
-    indented =
-      body
-      |> trim_blank_edge_rows()
-      |> Enum.map(&indent_reasoning_row/1)
-
-    indented ++ [closer]
-  end
-
-  # Body rows are :text leaves on the plain path; the markdown path hands
-  # one column element -- shift it whole via a 2-cell row wrap so every
-  # rendered line lands at the content indent.
-  defp indent_reasoning_row(%{type: :text, content: content} = node)
-       when is_binary(content) do
-    %{node | content: "  " <> content}
-  end
-
-  defp indent_reasoning_row(node) do
-    Components.row(
-      gap: 0,
-      children: [Components.text(content: "  "), node]
-    )
-  end
 
   defp trim_blank_edge_rows(rows) do
     rows
@@ -2061,9 +2066,14 @@ defmodule Raxol.UI.Components.Harness.Block do
   #   * everything else -- as before.
   defp outcome_children(%__MODULE__{kind: :tool_call}, _fg), do: []
 
-  defp outcome_children(%__MODULE__{kind: kind, fold: :folded}, _fg)
-       when kind in [:reasoning, :diff],
-       do: []
+  # A thought's duration lives in its header meta (`reasoning_meta/1`)
+  # in BOTH fold states — a second bare `954ms` row under the bracket
+  # says the same number twice (V's field frame). :diff keeps its
+  # expanded outcome row (the compact header drops the receipt there).
+  defp outcome_children(%__MODULE__{kind: :reasoning}, _fg), do: []
+
+  defp outcome_children(%__MODULE__{kind: :diff, fold: :folded}, _fg),
+    do: []
 
   defp outcome_children(block, fg), do: outcome_row_view(block.outcome, fg)
 
