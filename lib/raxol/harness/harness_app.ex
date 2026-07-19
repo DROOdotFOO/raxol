@@ -95,6 +95,14 @@ defmodule Raxol.Harness.HarnessApp do
   # place that legitimately holds both halves. `View.hit_test/3` is pure
   # geometry; `Model.click/2` is the pure fold. A left PRESS acts;
   # releases/moves/other buttons fold away silently.
+  # The LIVE shape: the pump normalizes every input event
+  # (`PumpContract.key/1` → `InputEvent.normalize/1`), and a mouse Event
+  # classifies `%{kind: :other, raw: %Event{type: :mouse}}` — the struct
+  # rides in `:raw`. The bare-struct clauses below serve the fixture/
+  # headless drivers, which deliver the Event unwrapped.
+  def update({:key, %{kind: :other, raw: %Event{type: :mouse} = event}}, model),
+    do: handle_mouse(event, model)
+
   def update({:key, %Event{type: :mouse} = event}, model),
     do: handle_mouse(event, model)
 

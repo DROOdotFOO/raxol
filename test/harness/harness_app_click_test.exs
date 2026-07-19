@@ -52,14 +52,19 @@ defmodule Raxol.Harness.HarnessAppClickTest do
     ])
   end
 
+  # The LIVE wire shape: the pump normalizes every event, so a click
+  # arrives as {:key, %{kind: :other, raw: %Event{type: :mouse}}} — the
+  # envelope the first live defect hid behind (the bare-struct clause
+  # matched fixtures, never the pump).
   defp click(model, x, y) do
+    event = %Event{
+      type: :mouse,
+      data: %{action: :press, button: :left, x: x, y: y}
+    }
+
     {m, []} =
       HarnessApp.update(
-        {:key,
-         %Event{
-           type: :mouse,
-           data: %{action: :press, button: :left, x: x, y: y}
-         }},
+        {:key, Raxol.UI.Harness.InputEvent.normalize(event)},
         model
       )
 

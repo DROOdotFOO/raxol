@@ -84,8 +84,32 @@ defmodule Raxol.Harness.T10StatusStripTest do
   end
 
   describe "ruling 2: operator phases, never raw event vocabulary" do
-    test "streaming maps to responding" do
+    test "streaming maps to the STREAMING ITEM's phase: message → responding, reasoning → thinking" do
       assert StatusStrip.phase_value(%{turn_stage: :item_delta}) == "responding"
+
+      # V's field report: the word flashed "responding" mid-thought on
+      # every reasoning delta — a streaming thought is thinking.
+      assert StatusStrip.phase_value(%{
+               turn_stage: :item_delta,
+               last_item_type: :reasoning
+             }) == "thinking"
+
+      assert StatusStrip.phase_value(%{
+               turn_stage: :item_delta,
+               last_item_type: "reasoning"
+             }) == "thinking"
+    end
+
+    test "a finished thought stays thinking — only a completed message earns responding" do
+      assert StatusStrip.phase_value(%{
+               turn_stage: :item_completed,
+               last_item_type: :reasoning
+             }) == "thinking"
+
+      assert StatusStrip.phase_value(%{
+               turn_stage: :item_completed,
+               last_item_type: :message
+             }) == "responding"
     end
 
     test "turn_started is the bare-spinner wait; item_started maps to thinking" do

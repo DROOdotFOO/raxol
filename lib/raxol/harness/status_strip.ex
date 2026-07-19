@@ -380,6 +380,13 @@ defmodule Raxol.Harness.StatusStrip do
   defp phase_word(nil, _last_item_type), do: nil
   defp phase_word(:turn_completed, _last_item_type), do: nil
   defp phase_word(:turn_canceled, _last_item_type), do: nil
+
+  # A delta names the phase of the ITEM it belongs to: a streaming
+  # thought is "thinking", never "responding" (V's field report: the
+  # word flashed "responding" mid-thought on every reasoning delta).
+  defp phase_word(:item_delta, t) when t in [:reasoning, "reasoning"],
+    do: "thinking"
+
   defp phase_word(:item_delta, _last_item_type), do: "responding"
   # The pre-stream WAIT (request in flight, nothing streamed yet): a bare
   # braille spinner + elapsed, no "thinking" word -- the live thinking display
@@ -395,6 +402,11 @@ defmodule Raxol.Harness.StatusStrip do
   defp phase_word(:item_completed, last_item_type) do
     case last_item_type do
       t when t in [:tool_result, "tool_result"] -> "thinking"
+      # A finished thought does NOT mean the model is answering: the
+      # inter-item gap after a reasoning completion is still cognition
+      # (the next item may be another thought or a tool call) — only a
+      # completed MESSAGE item earns "responding".
+      t when t in [:reasoning, "reasoning"] -> "thinking"
       # A tool_use completion whose producer carried no tool name (the
       # `running_tool` branch above owns the named case): a generic
       # word, never a raw event name and never a void.
