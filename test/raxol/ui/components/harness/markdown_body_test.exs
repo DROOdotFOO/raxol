@@ -1134,7 +1134,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
     # even as an operator watches a large message stream in), not a CI
     # gate.
     @tag :slow
-    test "N incremental streaming prefixes of a large document stay within budget" do
+    test "N streaming prefixes of a large document stay within budget" do
       doc = String.duplicate("some **bold** text and *italic* text.\n", 8_000)
 
       prefixes =
@@ -1149,7 +1149,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
         end)
 
       assert elapsed_us < 2_000_000,
-             "20 incremental large-doc renders took #{elapsed_us}us"
+             "20 per-prefix large-doc streaming renders took #{elapsed_us}us"
     end
   end
 

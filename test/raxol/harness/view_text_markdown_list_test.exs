@@ -135,10 +135,11 @@ defmodule Raxol.Harness.ViewTextMarkdownListTest do
     end
   end
 
-  describe "streaming stable-prefix path" do
-    test "incremental render matches the oracle and keeps items on one row" do
+  describe "streaming render path" do
+    test "per-delta streaming renders keep items on one row" do
       # Deltas deliberately split MID-ITEM (inside the code span, inside
-      # the em-dash tail) to catch a freezer that commits a half-item.
+      # the em-dash tail) to catch a render that leaks a half-item's
+      # markers at a prefix.
       chunks = [
         "* `re",
         "ad` — file",
@@ -146,22 +147,26 @@ defmodule Raxol.Harness.ViewTextMarkdownListTest do
         "ite` — create or overwrite files\n"
       ]
 
-      {final_view, _cp} =
-        Enum.reduce(chunks, {"", MarkdownBody.new_checkpoint()}, fn chunk,
-                                                                    {acc, cp} ->
+      final_view =
+        Enum.reduce(chunks, "", fn chunk, acc ->
           acc = acc <> chunk
 
-          {view, cp} =
-            MarkdownBody.render_streaming_incremental(acc, @width, cp)
+          view = MarkdownBody.render(acc, %{mode: :streaming, width: @width})
+          lines = ViewText.lines(view, @width, :plain)
 
-          oracle = MarkdownBody.render(acc, %{mode: :streaming, width: @width})
+          # Committed lines (everything above the still-growing tail) are
+          # stable: no marker may leak into them. A transient marker ghost
+          # at the GROWING TAIL is the provisional-close's documented
+          # erasure behavior on a mid-construct prefix — it self-heals on
+          # the next delta and is not corruption.
+          for line <- Enum.drop(lines, -1) do
+            refute line =~ "*",
+                   "marker leaked into a committed line at #{inspect(acc)}: #{inspect(line)}"
+          end
 
-          assert view == oracle,
-                 "incremental view diverged from oracle at #{inspect(acc)}"
-
-          {acc, {view, cp}}
+          acc
         end)
-        |> then(fn {_acc, result} -> result end)
+        |> then(&MarkdownBody.render(&1, %{mode: :streaming, width: @width}))
 
       lines = ViewText.lines(final_view, @width, :plain)
 
