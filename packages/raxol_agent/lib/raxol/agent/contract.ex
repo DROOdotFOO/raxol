@@ -16,10 +16,12 @@ defmodule Raxol.Agent.Contract do
 
     * `:turn_started`   — a prompt was accepted; payload `%{prompt}`
     * `:item_started`   — an item opened; payload `%{item_id, item_type}`.
-      Emitted before an item's first delta (a lazily-opened message
-      item) and before every tool_use / tool_result completion, so the
-      live producer speaks the same item lifecycle the fixture corpus
-      does — the projection's live tail
+      Emitted at an item's first NON-BLANK delta (message and reasoning
+      items are both lazily opened — blank-only text opens nothing, so a
+      tool-call round whose assistant "message" is empty/whitespace seals
+      no empty ❮ block) and before every tool_use / tool_result
+      completion, so the live producer speaks the same item lifecycle the
+      fixture corpus does — the projection's live tail
       (`Raxol.Harness.Projection.BlockBuilder.build_tail/2`) only
       surfaces deltas for an item with a started group, which is what
       makes mid-turn streaming render at all.
@@ -239,14 +241,7 @@ defmodule Raxol.Agent.Contract do
         # seals the open reasoning item as its own durable block, ordered
         # before this message (its item_started was emitted first).
         acc = close_reasoning_item(session_id, turn_id, counter, acc)
-        acc = open_message_item(session_id, turn_id, counter, acc)
-
-        emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
-          item_id: acc.msg_item,
-          chunk: chunk
-        })
-
-        %{acc | msg_chunks: [chunk | acc.msg_chunks]}
+        stream_message(session_id, turn_id, counter, acc, chunk)
 
       {:tool_use, %{name: name} = tool_use} ->
         # A text run interrupted by a tool call is a real assistant
@@ -356,17 +351,32 @@ defmodule Raxol.Agent.Contract do
         # The final message closes the open (streamed) message item when
         # one exists — the SAME item the deltas accumulated into, so the
         # tail hands off to the sealed block. The done content is
-        # authoritative for the sealed record.
-        {item_id, acc} = done_message_item(session_id, turn_id, counter, acc)
+        # authoritative for the sealed record. A turn ending with NO open
+        # item and BLANK done content (a tool-only or answerless turn)
+        # resolves to no item at all — sealing an empty message would
+        # paint a blank ❮ block, and an empty message is not information.
+        {item_id, acc} =
+          done_message_item(session_id, turn_id, counter, acc, content)
 
-        message_ev =
-          emit_event(session_id, turn_id, counter, :item_completed, :durable, %{
-            item_id: item_id,
-            item_type: :message,
-            content: content
-          })
+        journal =
+          case item_id do
+            nil ->
+              acc.journal
 
-        journal = acc.journal ++ [message_ev]
+            item_id ->
+              message_ev =
+                emit_event(
+                  session_id,
+                  turn_id,
+                  counter,
+                  :item_completed,
+                  :durable,
+                  %{item_id: item_id, item_type: :message, content: content}
+                )
+
+              acc.journal ++ [message_ev]
+          end
+
         refs = DoneGate.evidence_refs(journal, turn_id)
 
         final_ev =
@@ -405,35 +415,82 @@ defmodule Raxol.Agent.Contract do
   defp next_item_id(acc),
     do: {"i#{acc.item_seq + 1}", %{acc | item_seq: acc.item_seq + 1}}
 
-  # Lazily opens the message item at the FIRST delta of a text run:
-  # `item_started` (durable) precedes every delta of the item, which is
-  # the projection's condition for surfacing those deltas as the live
-  # tail.
-  defp open_message_item(_session_id, _turn_id, _counter, %{msg_item: id} = acc)
-       when not is_nil(id),
-       do: acc
+  # -- message item lifecycle -------------------------------------------------
+  #
+  # The answer mirrors the reasoning lifecycle below, with the same
+  # deliberate laziness: the item is opened at the first NON-BLANK
+  # accumulated text — never at a whitespace-only delta. A provider round
+  # that carries tool calls ships its assistant "message" with empty or
+  # whitespace content next to the real tool_calls (the standard
+  # OpenAI/Anthropic tool-round shape; LM Studio-served models stream a
+  # bare "\n\n" between thinking and the tool call). Opening the item on
+  # that blank delta made the tool_use boundary seal an EMPTY message
+  # item, which rendered as a blank ❮ block in the transcript. An empty
+  # message is not information — it gets no item, no event, no block (the
+  # "empty thinking → no ∴ block" rule, applied to the answer channel).
+  # Raw chunks still accumulate untouched while unopened, so leading
+  # whitespace lands in the eventual sealed content when real text follows.
 
-  defp open_message_item(session_id, turn_id, counter, acc) do
-    {item_id, acc} = next_item_id(acc)
+  # Buffer this chunk, then open-or-stream (mirrors `stream_reasoning/5`).
+  defp stream_message(session_id, turn_id, counter, acc, chunk) do
+    acc = %{acc | msg_chunks: [chunk | acc.msg_chunks]}
+    open_or_stream_message(session_id, turn_id, counter, acc, chunk)
+  end
 
-    ev =
-      emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+  # Not yet opened: open on the FIRST non-blank accumulated content. The
+  # opener's own `item_delta` carries the full accumulated-so-far text (so
+  # the live tail is whole even if leading blank chunks preceded it);
+  # every later delta carries just its own chunk.
+  defp open_or_stream_message(
+         session_id,
+         turn_id,
+         counter,
+         %{msg_item: nil} = acc,
+         _chunk
+       ) do
+    content = acc.msg_chunks |> Enum.reverse() |> Enum.join("")
+
+    if blank?(content) do
+      acc
+    else
+      {item_id, acc} = next_item_id(acc)
+
+      started_ev =
+        emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+          item_id: item_id,
+          item_type: :message
+        })
+
+      emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
         item_id: item_id,
-        item_type: :message
+        chunk: content
       })
 
-    %{acc | journal: acc.journal ++ [ev], msg_item: item_id, msg_chunks: []}
+      %{acc | journal: acc.journal ++ [started_ev], msg_item: item_id}
+    end
+  end
+
+  defp open_or_stream_message(session_id, turn_id, counter, acc, chunk) do
+    emit_event(session_id, turn_id, counter, :item_delta, :ephemeral, %{
+      item_id: acc.msg_item,
+      chunk: chunk
+    })
+
+    acc
   end
 
   # Seals an open message item with its accumulated streamed text — the
-  # mid-turn (pre-tool) close. A no-op when no message item is open.
+  # mid-turn (pre-tool) close. When NO item is open (nothing streamed, or
+  # only blank text that never opened one) there is nothing to seal — but
+  # the buffer is always cleared, so a blank pre-tool run never leaks its
+  # whitespace into a later round's message.
   defp close_message_item(
          _session_id,
          _turn_id,
          _counter,
          %{msg_item: nil} = acc
        ),
-       do: acc
+       do: %{acc | msg_chunks: []}
 
   defp close_message_item(session_id, turn_id, counter, acc) do
     content = acc.msg_chunks |> Enum.reverse() |> Enum.join("")
@@ -542,24 +599,43 @@ defmodule Raxol.Agent.Contract do
   defp blank?(text), do: String.trim(text) == ""
 
   # The done site's item resolution: reuse the open streamed item when
-  # there is one (its deltas ARE this message), otherwise open a fresh
-  # started/completed pair so even a non-streamed answer carries the
-  # full lifecycle the fixtures pin.
-  defp done_message_item(_session_id, _turn_id, _counter, %{msg_item: id} = acc)
+  # there is one (its deltas ARE this message); otherwise open a fresh
+  # started pair for a NON-BLANK answer, so even a non-streamed answer
+  # carries the full lifecycle the fixtures pin. Blank done content with
+  # nothing open resolves to NO item (`nil` — the caller then emits no
+  # item_completed): an answerless turn seals no empty ❮ message block.
+  defp done_message_item(
+         _session_id,
+         _turn_id,
+         _counter,
+         %{msg_item: id} = acc,
+         _content
+       )
        when not is_nil(id),
        do: {id, %{acc | msg_item: nil, msg_chunks: []}}
 
-  defp done_message_item(session_id, turn_id, counter, acc) do
-    {item_id, acc} = next_item_id(acc)
+  defp done_message_item(session_id, turn_id, counter, acc, content) do
+    if blank_content?(content) do
+      {nil, %{acc | msg_chunks: []}}
+    else
+      {item_id, acc} = next_item_id(acc)
 
-    ev =
-      emit_event(session_id, turn_id, counter, :item_started, :durable, %{
-        item_id: item_id,
-        item_type: :message
-      })
+      ev =
+        emit_event(session_id, turn_id, counter, :item_started, :durable, %{
+          item_id: item_id,
+          item_type: :message
+        })
 
-    {item_id, %{acc | journal: acc.journal ++ [ev]}}
+      {item_id, %{acc | journal: acc.journal ++ [ev]}}
+    end
   end
+
+  # `nil` (a backend that produced no content field) counts as blank; any
+  # other non-binary shape does NOT — an unexpected term stays visible in
+  # the sealed record (fail-visible) rather than being silently dropped.
+  defp blank_content?(nil), do: true
+  defp blank_content?(text) when is_binary(text), do: blank?(text)
+  defp blank_content?(_other), do: false
 
   # One completed item (tool_use / tool_result): a fresh id, its
   # `item_started` sibling, then the completion carrying `extra`.

@@ -333,14 +333,82 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
       |> Enum.filter(& &1.completed)
       |> Enum.map(&resolve_approval_seal(&1, turn_ended?))
 
+    {completed_groups, empty_msg_diags} =
+      drop_empty_assistant_messages(completed_groups)
+
     {blocks, block_diags} = build_blocks(completed_groups, fold_defaults)
     blocks = suppress_approval_covered_tool_calls(blocks)
 
     {blocks, completion_diags} =
       attach_final_completion(blocks, events, session_index)
 
-    {blocks, tail, item_diags ++ block_diags ++ completion_diags}
+    {blocks, tail,
+     item_diags ++ empty_msg_diags ++ block_diags ++ completion_diags}
   end
+
+  # An assistant `:message` item whose sealed content is empty or
+  # whitespace-only builds NO block: an empty message is not information
+  # — nothing was said, so there is nothing to render, and building it
+  # seals a blank ❮ line into the transcript (the live defect: an
+  # OpenAI/Anthropic-shaped provider round carrying tool_calls ships its
+  # assistant message with content "" — or a bare "\n\n" — next to the
+  # real calls). The honest producer now suppresses the item at emission
+  # (`Raxol.Agent.Contract.pump/3`'s lazy message open, mirroring its
+  # "empty thinking → no ∴ block" rule); this is the projection-side
+  # guard for journals recorded before that fix and for producers that
+  # lack it. Deliberately NARROW: ONLY assistant messages — an empty USER
+  # echo is a producer bug worth seeing, an empty tool_result is a real
+  # receipt ("the tool returned nothing" IS information), and reasoning /
+  # approval / error / diff groups are untouched. Never fully silent:
+  # each suppression emits an `:empty_message_suppressed` diagnostic.
+  # Dropping the group BEFORE the lookahead walk also means a
+  # tool_use / empty-message / tool_result sandwich merges back into the
+  # ONE `:tool_call` block it would have been had the empty item never
+  # existed.
+  defp drop_empty_assistant_messages(groups) do
+    {kept, diags} =
+      Enum.reduce(groups, {[], []}, fn group, {kept, diags} ->
+        if empty_assistant_message?(group) do
+          diag =
+            Recovery.emit(
+              :empty_message_suppressed,
+              Map.get(group.completed, :id)
+            )
+
+          {kept, [diag | diags]}
+        else
+          {[group | kept], diags}
+        end
+      end)
+
+    {Enum.reverse(kept), Enum.reverse(diags)}
+  end
+
+  defp empty_assistant_message?(%{
+         singleton: false,
+         kind_override: nil,
+         item_type: :message,
+         completed: %{} = completed
+       }) do
+    blank_text?(payload_fetch(completed, "content", :content)) and
+      not user_role?(payload_fetch(completed, "role", :role))
+  end
+
+  defp empty_assistant_message?(_group), do: false
+
+  # A message item_completed with NO content key at all extracts to the
+  # same empty text a `content: ""` does, so nil counts as blank; any
+  # non-binary shape does NOT (an unexpected term stays fail-visible).
+  defp blank_text?(nil), do: true
+  defp blank_text?(text) when is_binary(text), do: String.trim(text) == ""
+  defp blank_text?(_other), do: false
+
+  # Mirrors `Raxol.UI.Components.Harness.Block`'s role normalization:
+  # ONLY the exact user marker counts; everything else (including absent)
+  # resolves assistant.
+  defp user_role?(:user), do: true
+  defp user_role?("user"), do: true
+  defp user_role?(_other), do: false
 
   # A RESULTLESS tool_call whose referent a diff-carrying approval block
   # (same turn — this builder is per-turn) already renders: the approval

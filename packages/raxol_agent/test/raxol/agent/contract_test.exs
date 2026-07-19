@@ -321,6 +321,152 @@ defmodule Raxol.Agent.ContractTest do
     end
   end
 
+  describe "empty message suppression (no empty ❮ block, ever)" do
+    # RED-FIRST (live harness defect, real LLM backend): a provider round
+    # that carries tool calls ships its assistant "message" with empty or
+    # whitespace content next to the real tool_calls (LM Studio-served
+    # models stream a bare "\n\n" between thinking and the tool call).
+    # pump/3 opened a message item on that blank delta, and the tool_use
+    # boundary then SEALED it empty — an empty ❮ block in the transcript.
+    # The message lifecycle now mirrors the reasoning lifecycle: lazily
+    # opened at the first NON-BLANK text, so a blank run emits NO item at
+    # all (no item_started, no item_completed, no block).
+
+    defp completed_messages(events) do
+      for %Event{type: :item_completed, payload: %{item_type: :message} = p} <-
+            events,
+          do: p
+    end
+
+    defp message_starteds(events) do
+      Enum.filter(
+        events,
+        &(&1.type == :item_started and &1.payload[:item_type] == :message)
+      )
+    end
+
+    test "a tool-call-only round emits NO message item for its blank pre-tool text" do
+      session_id = "contract-empty-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      # The reported live shape: thinking, a whitespace-only text delta,
+      # then the tool round, then the real final answer.
+      stream = [
+        {:reasoning, "let me look at the project"},
+        {:text_delta, "\n\n"},
+        {:tool_use, %{name: "read_file", arguments: %{"path" => "mix.exs"}, id: "c1"}},
+        {:tool_result, %{name: "read_file", result: "defmodule..."}},
+        {:text_delta, "the answer"},
+        {:done, %{content: "the answer", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      # Exactly ONE sealed message — the real answer. The blank pre-tool
+      # run sealed nothing (no empty ❮ block between the ∴ and the tool).
+      assert [%{content: "the answer"}] = completed_messages(events)
+      assert [_one] = message_starteds(events)
+
+      # The reasoning block still seals ahead of the tool_use.
+      reasoning_seal =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :reasoning)
+        )
+
+      tool_use =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :tool_use)
+        )
+
+      assert reasoning_seal.id < tool_use.id
+    end
+
+    test "a whitespace-only answer stream seals NO message item" do
+      session_id = "contract-empty-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:text_delta, " "},
+        {:text_delta, "\n\t"},
+        {:done, %{content: " \n\t", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      assert completed_messages(events) == []
+      assert message_starteds(events) == []
+
+      # The turn still closes honestly.
+      final = List.last(events)
+      assert final.type == :turn_completed
+      assert final.payload.final == true
+    end
+
+    test "a blank done after a tool round emits no empty final message item" do
+      session_id = "contract-empty-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:tool_use, %{name: "list_dir", arguments: %{}, id: "c1"}},
+        {:tool_result, %{name: "list_dir", result: "mix.exs"}},
+        {:done, %{content: "", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      assert completed_messages(events) == []
+
+      # The tool items and the final turn_completed are untouched.
+      assert Enum.any?(
+               events,
+               &(&1.type == :item_completed and
+                   &1.payload[:item_type] == :tool_result)
+             )
+
+      assert %Event{type: :turn_completed, payload: %{final: true}} =
+               List.last(events)
+    end
+
+    test "leading blank text still lands in the pre-tool sealed message when real text follows" do
+      session_id = "contract-empty-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:text_delta, "\n"},
+        {:text_delta, "checking"},
+        {:tool_use, %{name: "list_dir", arguments: %{}, id: "c1"}},
+        {:tool_result, %{name: "list_dir", result: "mix.exs"}},
+        {:done, %{content: "final", usage: %{}}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "q")
+      events = drain_events(session_id)
+
+      # The lazily-opened item's sealed content keeps the leading blank
+      # chunk (accumulated untouched before the open), mirroring the
+      # reasoning lifecycle's documented behavior.
+      assert Enum.map(completed_messages(events), & &1.content) == [
+               "\nchecking",
+               "final"
+             ]
+
+      # The opener's own delta carries the full accumulated-so-far text.
+      [opener | _] =
+        Enum.filter(
+          events,
+          &(&1.type == :item_delta and &1.payload[:chunk] != nil and
+              &1.payload[:thought] == nil)
+        )
+
+      assert opener.payload.chunk == "\nchecking"
+    end
+  end
+
   describe "reasoning item lifecycle (durable ∴ blocks)" do
     # RED-FIRST (Grok-Build-style peekable thinking): reasoning/thought
     # deltas used to stream into the live tail and evaporate when the
