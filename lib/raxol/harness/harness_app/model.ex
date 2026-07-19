@@ -125,6 +125,13 @@ defmodule Raxol.Harness.HarnessApp.Model do
             # the live approval's ChoicePrompt (the footer input while a
             # question is open); nil otherwise — see sync_choice/1
             choice: nil,
+            # click-to-fold overrides for SEALED records, keyed by the
+            # block's event_refs (its stable identity) — the record itself
+            # stays frozen (law 1); the override is a render-time lens
+            # (fold_after_seal: :allow). See click/2.
+            record_fold: %{},
+            # click on the live reasoning preview toggles peek ⇄ expanded
+            tail_expanded?: false,
             # the sole lane client (pid) or nil in fixture mode
             pump: nil
 
@@ -724,6 +731,100 @@ defmodule Raxol.Harness.HarnessApp.Model do
   # A minimal overlay needs a border + title + one row; below that we close.
   defp overlay_fits?(%{overlay: nil}), do: true
   defp overlay_fits?(%{rows: rows, width: width}), do: rows >= 6 and width >= 24
+
+  # ── click-to-fold (V's ruling: thinking blocks toggle on click) ─────────
+
+  @doc """
+  Folds a resolved click target (`Raxol.Harness.HarnessApp.View.hit_test/3`
+  does the geometry; this is the pure state half):
+
+    * `{:block, block}` — a SEALED reasoning/tool/diff record toggles its
+      render-time fold lens (`record_fold`, keyed by the block's stable
+      `event_refs`; the frozen record itself never mutates — law 1). The
+      LIVE approval block routes through the existing pending-index
+      override instead (the same store `z` writes).
+    * `:tail` — the streaming reasoning preview toggles peek ⇄ expanded.
+    * `:none` — no-op.
+  """
+  @spec click(t(), {:block, Block.t()} | :tail | :none) :: t()
+  def click(model, {:block, block}) do
+    live = live_approval_block(model)
+
+    cond do
+      live != nil and live.event_refs == block.event_refs ->
+        store_fold_override(model, model.painted_count)
+
+      block.kind in [:reasoning, :tool_call, :diff] ->
+        toggle_record_fold(model, block)
+
+      true ->
+        model
+    end
+  end
+
+  def click(model, :tail),
+    do: %{model | tail_expanded?: not model.tail_expanded?}
+
+  def click(model, _none), do: model
+
+  defp toggle_record_fold(model, block) do
+    key = block.event_refs
+
+    current =
+      Map.get(model.record_fold, key) || block.fold
+
+    next = if current == :folded, do: :expanded, else: :folded
+    %{model | record_fold: Map.put(model.record_fold, key, next)}
+  end
+
+  @doc """
+  The body records the view renders AND hit-tests — one list, one truth:
+  sealed history (oldest-first) with the click-fold lens applied, then
+  the live frontier (an awaiting approval) at the very bottom.
+  """
+  @spec body_records(t()) :: [seal_record()]
+  def body_records(model) do
+    sealed =
+      model.transcript_records
+      |> Enum.reverse()
+      |> Enum.map(&apply_record_fold(&1, model.record_fold))
+
+    sealed ++ live_frontier_records(model)
+  end
+
+  defp apply_record_fold({:block, block, prominence} = record, overrides) do
+    case Map.get(overrides, block.event_refs) do
+      nil ->
+        record
+
+      :folded ->
+        {:block, Block.fold(block, fold_after_seal: :allow), prominence}
+
+      :expanded ->
+        {:block, Block.unfold(block, fold_after_seal: :allow), prominence}
+    end
+  end
+
+  defp apply_record_fold(record, _overrides), do: record
+
+  @doc """
+  The live frontier as trailing body records: an awaiting approval rides
+  the transcript bottom at full prominence (the special tool render),
+  with the operator's pending fold override applied.
+  """
+  @spec live_frontier_records(t()) :: [seal_record()]
+  def live_frontier_records(model) do
+    case live_approval_block(model) do
+      nil ->
+        []
+
+      block ->
+        block =
+          apply_fold_override(block, model.painted_count, model.fold_overrides)
+
+        [{:block, block, 1.0}]
+    end
+  end
 
   # ── result-message folds (PumpContract §4/§5) ────────────────────────────
 

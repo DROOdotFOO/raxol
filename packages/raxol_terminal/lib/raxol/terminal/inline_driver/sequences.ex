@@ -62,6 +62,20 @@ defmodule Raxol.Terminal.InlineDriver.Sequences do
   @spec init_bytes() :: binary()
   def init_bytes, do: @mouse_reset <> @focus_report_on <> @bracketed_paste_on
 
+  # Click reporting: press/release only (?1000) in SGR encoding (?1006) —
+  # never ?1003 (any-motion), which floods the input path with move
+  # events. Opt-in via the driver's `mouse?:` option (the harness enables
+  # it for click-to-fold); `modes_off/0` already reverses both.
+  @mouse_on "\e[?1000h\e[?1006h"
+
+  @doc """
+  Enable click reporting (SGR encoding, press/release only). Written by
+  the driver AFTER `init_bytes/0` when its `mouse?:` option is set; the
+  teardown's `modes_off/0` disables it unconditionally either way.
+  """
+  @spec mouse_on() :: binary()
+  def mouse_on, do: @mouse_on
+
   @doc """
   DSR-6 (`CSI 6n`): ask the terminal where its cursor is. The terminal
   replies on the INPUT stream with a CPR (`CSI row ; col R`), which

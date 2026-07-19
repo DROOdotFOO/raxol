@@ -301,6 +301,13 @@ defmodule Raxol.Terminal.InlineDriver do
     # No \e[?1049h anywhere on this path -- LC-P-NOALT.
     IO.write(device, Sequences.init_bytes())
 
+    # Click reporting (SGR press/release) is OPT-IN: an embedder that
+    # wants click events (the harness's click-to-fold) trades away the
+    # terminal's native text selection while running, so the default
+    # stays off. Teardown's modes_off covers it unconditionally.
+    if Keyword.get(opts, :mouse?, false),
+      do: IO.write(device, Sequences.mouse_on())
+
     state =
       if install_reader? do
         state = start_stdin_reader(state)

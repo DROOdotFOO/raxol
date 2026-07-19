@@ -88,6 +88,19 @@ defmodule Raxol.Harness.HarnessApp do
       when is_integer(w) and is_integer(h),
       do: {Model.resize(model, w, h), []}
 
+  # -- mouse (click-to-fold; V's ruling) --
+  #
+  # Resolved HERE, not in the Model: hit-testing needs the view's own
+  # geometry (footer fit, transcript window), and this module is the one
+  # place that legitimately holds both halves. `View.hit_test/3` is pure
+  # geometry; `Model.click/2` is the pure fold. A left PRESS acts;
+  # releases/moves/other buttons fold away silently.
+  def update({:key, %Event{type: :mouse} = event}, model),
+    do: handle_mouse(event, model)
+
+  def update(%Event{type: :mouse} = event, model),
+    do: handle_mouse(event, model)
+
   # -- input (the one path that returns directives) --
   def update({:key, event}, model), do: Model.handle_key(model, event)
 
@@ -134,6 +147,19 @@ defmodule Raxol.Harness.HarnessApp do
 
   # -- anything else is ignored (never crash the fold on an unknown term) --
   def update(_message, model), do: {model, []}
+
+  defp handle_mouse(
+         %Event{
+           type: :mouse,
+           data: %{action: :press, button: :left, x: x, y: y}
+         },
+         model
+       )
+       when is_integer(x) and is_integer(y) do
+    {Model.click(model, View.hit_test(model, x, y)), []}
+  end
+
+  defp handle_mouse(_event, model), do: {model, []}
 
   # ── view ─────────────────────────────────────────────────────────────────
 

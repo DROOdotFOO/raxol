@@ -221,7 +221,8 @@ defmodule Raxol.Harness.SessionPump do
   # names the missing option. Validating pre-spawn keeps caller-facing
   # failures synchronous and honest.
   defp validate_opts!(opts) do
-    if is_nil(Keyword.get(opts, :consumer)) and is_nil(Keyword.get(opts, :runtime_boot)) do
+    if is_nil(Keyword.get(opts, :consumer)) and
+         is_nil(Keyword.get(opts, :runtime_boot)) do
       raise ArgumentError,
             "Raxol.Harness.SessionPump requires :consumer or :runtime_boot"
     end
@@ -378,7 +379,9 @@ defmodule Raxol.Harness.SessionPump do
           | alt_screen?: true,
             consumer: shim,
             paint_gate: fn phase -> GenServer.call(engine, phase) end,
-            lifecycle_stop: fn -> Raxol.Core.Runtime.Lifecycle.stop(lifecycle) end
+            lifecycle_stop: fn ->
+              Raxol.Core.Runtime.Lifecycle.stop(lifecycle)
+            end
         }
 
       {:error, reason} ->
@@ -398,7 +401,11 @@ defmodule Raxol.Harness.SessionPump do
       {nil, driver_opts} when is_list(driver_opts) ->
         {:ok, pid} =
           Raxol.Terminal.InlineDriver.start_link(
-            Keyword.put(driver_opts, :subscriber, pump)
+            driver_opts
+            |> Keyword.put(:subscriber, pump)
+            # Click-to-fold: the harness wants click events (SGR
+            # press/release). put_new — an embedder may still opt out.
+            |> Keyword.put_new(:mouse?, true)
           )
 
         pid

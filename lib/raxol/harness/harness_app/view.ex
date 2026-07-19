@@ -153,54 +153,90 @@ defmodule Raxol.Harness.HarnessApp.View do
 
   # ── transcript ────────────────────────────────────────────────────────
 
+  # The record list comes from ONE source (`Model.body_records/1`: sealed
+  # history with the click-fold lens + the live frontier approval at the
+  # bottom) so render and `hit_test/3` can never disagree about what sits
+  # on a row. The live approval is the "special tool render": its FULL
+  # Pierre diff rides INLINE here (never the 2-line footer stub), and
+  # `preview_lines/2` suppresses it in the footer.
   defp transcript_element(model, cw, transcript_h) do
-    {:ok, state} =
-      TranscriptView.init(
-        id: "harness-transcript",
-        # held newest-first; the view renders oldest-first, then the live
-        # frontier block (an awaiting approval) appended at the very bottom
-        records:
-          Enum.reverse(model.transcript_records) ++ live_body_records(model),
-        height: transcript_h,
-        anchor: model.scroll_anchor,
-        width: cw,
-        source_events: model.projection.source_events,
-        greeting?: model.greeting? and model.transcript_records == [],
-        sigil: model.sigil,
-        reply_sigil: model.reply_sigil,
-        # This view hosts the footer ChoicePrompt for a live approval
-        # (`choice_lines/2`), so the block body must not repeat the
-        # option list — the prompt owns the answer affordance.
-        selector_hosted?: true
-      )
-
+    {:ok, state} = transcript_state(model, cw, transcript_h)
     TranscriptView.render(state, %{available_width: cw})
   end
 
-  # A live approval (awaiting the operator) is the "special tool render": its
-  # FULL Pierre diff renders INLINE at the bottom of the body, not the 2-line
-  # footer stub `pending_block_lines/4` produced. It is unsealed (holds the
-  # seal frontier at `painted_count`), so it can't be a real transcript_record
-  # yet -- instead it rides as a trailing TranscriptView record, windowed at
-  # the bottom exactly like sealed history, and `preview_lines/2` suppresses it
-  # in the footer so it never double-renders. The operator's fold override
-  # still applies (z toggles it). Full prominence -- it's the current focus.
-  defp live_body_records(model) do
-    case Model.live_approval_block(model) do
-      nil ->
-        []
+  defp transcript_state(model, cw, transcript_h) do
+    TranscriptView.init(
+      id: "harness-transcript",
+      records: Model.body_records(model),
+      height: transcript_h,
+      anchor: model.scroll_anchor,
+      width: cw,
+      source_events: model.projection.source_events,
+      greeting?: model.greeting? and model.transcript_records == [],
+      sigil: model.sigil,
+      reply_sigil: model.reply_sigil,
+      # This view hosts the footer ChoicePrompt for a live approval
+      # (`choice_lines/2`), so the block body must not repeat the
+      # option list — the prompt owns the answer affordance.
+      selector_hosted?: true
+    )
+  end
 
-      block ->
-        block =
-          Model.apply_fold_override(
-            block,
-            model.painted_count,
-            model.fold_overrides
-          )
+  @doc """
+  Resolves a click at 1-based terminal `{x, y}` (the SGR mouse report's
+  own coordinates) against THIS view's geometry — the same groups/budget/
+  window `render/1` lays out, recomputed from the model so the answer
+  can never drift from the paint:
 
-        [{:block, block, 1.0}]
+    * a transcript row over a block record → `{:block, block}`
+    * a footer row inside the live-tail preview group → `:tail`
+    * anything else → `:none`
+
+  Pure geometry only — `Raxol.Harness.HarnessApp.Model.click/2` owns the
+  state fold.
+  """
+  @spec hit_test(Model.t(), pos_integer(), pos_integer()) ::
+          {:block, term()} | :tail | :none
+  def hit_test(model, _x, y) when is_integer(y) and y >= 1 do
+    cw = Model.content_width(model)
+    inset = Model.frame_inset(model)
+
+    groups = footer_groups(model, cw)
+    budget_cap = max(model.rows - 1 - inset, 1)
+    natural = FooterStack.total_height(groups)
+    budget = natural |> min(budget_cap) |> max(1)
+    transcript_h = max(model.rows - budget - inset, 0)
+
+    row = y - 1
+
+    cond do
+      model.overlay != nil ->
+        :none
+
+      row < transcript_h ->
+        {:ok, state} = transcript_state(model, cw, transcript_h)
+
+        case state |> TranscriptView.row_records(cw) |> Enum.at(row) do
+          {:record, {:block, block, _prominence}} -> {:block, block}
+          _pad_or_marker -> :none
+        end
+
+      true ->
+        preview_offset =
+          FooterStack.group_offset(groups, @drop_order, budget, :preview)
+
+        preview_rows = groups |> Keyword.get(:preview, []) |> length()
+        footer_row = row - transcript_h
+
+        if is_integer(preview_offset) and preview_rows > 0 and
+             footer_row >= preview_offset and
+             footer_row < preview_offset + preview_rows,
+           do: :tail,
+           else: :none
     end
   end
+
+  def hit_test(_model, _x, _y), do: :none
 
   # ── footer (FooterStack + its groups) ───────────────────────────────────
 
@@ -347,19 +383,35 @@ defmodule Raxol.Harness.HarnessApp.View do
         []
 
       %{item_type: :reasoning, chunks: chunks} ->
-        # ShadowStream's children are row-level BY CONSTRUCTION (base text
-        # nodes, faded text nodes, and the one :row shadow node) -- they
-        # are exactly the group lines, and the FooterStack fit law's
-        # height = length(lines) stays honest.
-        shadow =
-          ShadowStream.render(%{
-            primitive: "thinking",
-            lines: Enum.join(chunks, ""),
-            state: :peek,
-            width: cw
-          })
+        # A click on the preview toggles the ACTIVE thought between the
+        # 3-line peek and the full text (V's click-to-expand ruling;
+        # `Model.click/2` flips `tail_expanded?`). Expanded renders FLAT
+        # here — one text node per row — because a footer group's lines
+        # must each be one physical row (the FooterStack fit law);
+        # ShadowStream's own `:expanded` shape nests a column+bracket the
+        # stack cannot measure honestly.
+        if model.tail_expanded? do
+          body =
+            chunks
+            |> Enum.join("")
+            |> String.split("\n")
+            |> Enum.map(&dim_text/1)
 
-        Map.get(shadow, :children, [shadow])
+          [dim_text("▾ thinking") | body]
+        else
+          # ShadowStream's peek children are row-level BY CONSTRUCTION
+          # (base text nodes, faded text nodes, the one :row shadow
+          # node) -- exactly the group lines; height stays honest.
+          shadow =
+            ShadowStream.render(%{
+              primitive: "thinking",
+              lines: Enum.join(chunks, ""),
+              state: :peek,
+              width: cw
+            })
+
+          Map.get(shadow, :children, [shadow])
+        end
 
       %{chunks: chunks} ->
         # Answer text keeps the plain `» ` streaming preview.

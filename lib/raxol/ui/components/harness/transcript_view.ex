@@ -90,6 +90,60 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
   @impl true
   def handle_event(_event, state, _context), do: {state, []}
 
+  @doc """
+  The row → record map for hit-testing (click-to-fold): exactly `height`
+  entries, top-first, each `:pad` or `{:record, record}` — the SAME
+  window `render/2` paints (same `take_upward/5` walk, same measured
+  heights, same top padding), so a clicked row resolves to the record
+  actually under the pointer, never a drifted second computation. A
+  record spanning N rows contributes N consecutive entries.
+  """
+  @spec row_records(map(), pos_integer()) ::
+          [:pad | {:record, term()}]
+  def row_records(state, width) do
+    height = state.height
+
+    cond do
+      height <= 0 ->
+        []
+
+      state.records == [] ->
+        List.duplicate(:pad, height)
+
+      true ->
+        ordered = state.records
+        total = length(ordered)
+        bottom = bottom_index(state.anchor, total)
+
+        {rows, used} =
+          Enum.reduce_while(bottom..0//-1, {[], 0}, fn index, {acc, used} ->
+            record = Enum.at(ordered, index)
+            element = record_element(record, width, state)
+            h = element |> clip_tail_if_first(acc, height) |> element_height()
+
+            cond do
+              acc == [] ->
+                {:cont,
+                 {List.duplicate({:record, record}, min(h, height)),
+                  min(h, height)}}
+
+              used + h > height ->
+                {:halt, {acc, used}}
+
+              true ->
+                {:cont, {List.duplicate({:record, record}, h) ++ acc, used + h}}
+            end
+          end)
+
+        List.duplicate(:pad, max(height - used, 0)) ++ rows
+    end
+  end
+
+  defp clip_tail_if_first(element, [], max_rows),
+    do: clip_tail(element, max_rows)
+
+  defp clip_tail_if_first(element, _acc, _max_rows), do: element
+
   # ── windowing ─────────────────────────────────────────────────────────
 
   # Records arrive oldest-first. Bottom-anchor by `anchor`, take whole
