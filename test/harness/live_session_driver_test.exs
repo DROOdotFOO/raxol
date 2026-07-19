@@ -675,6 +675,53 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       # Acknowledgment is footer-visible (event-observed seal aside).
       eventually(fn -> strip_ansi(raw(device)) =~ "approval answer sent" end)
     end
+
+    test "a diff approval renders its ± diff body through the driver, not just the action" do
+      # The harness_live_demo path V tests: an edit_file approval carrying the
+      # before/after image (`old`/`new`) must show the ± diff so the operator
+      # sees the change they're approving -- not the bare "edit_file" action.
+      # The existing approval fixtures carry no old/new, so this path was
+      # never exercised end-to-end through the driver.
+      %{device: device, forwarder: forwarder} = new_driver(%{})
+
+      send(forwarder, {:session_event, "s1", turn_started_event("t1")})
+      send(forwarder, {:session_event, "s1", item_started_event("t1", 2)})
+      eventually(fn -> strip_ansi(raw(device)) =~ "thinking" end)
+
+      send(
+        forwarder,
+        {:session_event, "s1",
+         %{
+           id: 3,
+           turn_id: "t1",
+           family: :loop,
+           type: :approval_requested,
+           tier: :durable,
+           ts: 3_000_000,
+           payload: %{
+             request_id: "appr-3",
+             tool_name: "edit_file",
+             action: "edit_file",
+             args: %{"path" => "mix.exs"},
+             diff: true,
+             path: "mix.exs",
+             old: "line-one\nline-two\n",
+             new: "line-two\nline-one\n",
+             language: "elixir",
+             preview_match: :exact,
+             options: [
+               %{option_id: "allow", name: "Allow", kind: :allow_once},
+               %{option_id: "deny", name: "Deny", kind: :reject_once}
+             ]
+           }
+         }}
+      )
+
+      eventually(fn -> strip_ansi(raw(device)) =~ "±" end)
+      plain = strip_ansi(raw(device))
+      assert plain =~ "line-one", "the diff must show the removed line"
+      assert plain =~ "line-two", "the diff must show the added line"
+    end
   end
 
   # ---------------------------------------------------------------------

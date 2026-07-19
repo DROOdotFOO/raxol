@@ -5306,19 +5306,27 @@ defmodule Raxol.Harness.Surface do
         live_tail_preview_lines(model)
 
       {block, index} ->
-        block
-        |> apply_fold_override(index, model.fold_overrides)
-        |> BlockBody.render(%{
-          width: content_width(model),
-          turn_has_tools?: turn_has_tools?(block, model),
-          # The footer live tail is the ONE place a resultless tool renders
-          # `running…` (seal-on-result-only) -- but only while a result may
-          # still arrive. Once the reveal is finished the preview shows the
-          # final `⊘ no result` form, matching what will seal.
-          pending?: not reveal_finished?(model)
-        })
-        |> ViewText.lines(content_width(model), :plain)
-        |> Enum.take(2)
+        lines =
+          block
+          |> apply_fold_override(index, model.fold_overrides)
+          |> BlockBody.render(%{
+            width: content_width(model),
+            turn_has_tools?: turn_has_tools?(block, model),
+            # The footer live tail is the ONE place a resultless tool renders
+            # `running…` (seal-on-result-only) -- but only while a result may
+            # still arrive. Once the reveal is finished the preview shows the
+            # final `⊘ no result` form, matching what will seal.
+            pending?: not reveal_finished?(model)
+          })
+          |> ViewText.lines(content_width(model), :plain)
+
+        # A streaming/pending block gets a 2-line compact preview. A LIVE
+        # APPROVAL is different: it is the operator's interactive question
+        # holding the frontier, so its FULL body -- the ± diff to review AND
+        # the answer prompt -- must render, never a 2-line stub that hid both
+        # and left only "awaiting approval". (The fold override still lets the
+        # operator collapse it.)
+        if awaiting_input?(block), do: lines, else: Enum.take(lines, 2)
     end
   end
 
