@@ -30,13 +30,15 @@ defmodule Raxol.Terminal.Capabilities.Probe do
   @ssh_budget_ms 1000
   @ssh_env_keys ["SSH_TTY", "SSH_CONNECTION", "SSH_CLIENT"]
 
-  # One batched write (F0 §3 order, 2026 slice), DA1 sentinel LAST:
-  # OSC 11 background - kitty keyboard - DECRQM 2026 - XTVERSION - DA1.
-  @query "\e]11;?\a\e[?u\e[?2026$p\e[>0q\e[c"
+  # One batched write (F0 §3 order, 2026 slice; native-palette-riding
+  # amendment A1 adds OSC 10 next to OSC 11), DA1 sentinel LAST:
+  # OSC 11 background - OSC 10 foreground - kitty keyboard - DECRQM 2026
+  # - XTVERSION - DA1.
+  @query "\e]11;?\a\e]10;?\a\e[?u\e[?2026$p\e[>0q\e[c"
 
   # tmux passthrough payload (F0 §7 step 4): identity + color queries
   # only, kept well under the ~60 char truncation limit.
-  @passthrough_payload "\e]11;?\a\e[>0q"
+  @passthrough_payload "\e]11;?\a\e]10;?\a\e[>0q"
 
   @type event :: :start | {:input, binary()} | {:clock, integer()}
   @type action ::

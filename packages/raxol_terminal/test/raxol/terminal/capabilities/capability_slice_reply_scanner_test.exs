@@ -40,6 +40,36 @@ defmodule Raxol.Terminal.Capabilities.CapabilitySliceReplyScannerTest do
     end
   end
 
+  describe "native-palette-riding amendment A1: OSC 10 (native foreground)" do
+    test "BEL-terminated and ST-terminated OSC 10 replies parse identically" do
+      {bel, ""} = scan("\e]10;rgb:e0e0/e0e0/e0e0\a")
+      {st, ""} = scan("\e]10;rgb:e0e0/e0e0/e0e0\e\\")
+
+      assert bel.osc10 == st.osc10
+      assert bel.osc10 == {:ok, {224, 224, 224}}
+    end
+
+    test "OSC 10 and OSC 11 are captured independently in the same chunk" do
+      {acc, leak} =
+        scan("\e]11;rgb:1e1e/1e1e/1e1e\a\e]10;rgb:d0d0/d0d0/d0d0\a")
+
+      assert leak == ""
+      assert acc.osc11 == {:ok, {30, 30, 30}}
+      assert acc.osc10 == {:ok, {208, 208, 208}}
+    end
+
+    test "a malformed OSC 10 payload is recorded invalid, never crashes" do
+      {acc, leak} = scan("\e]10;not-a-color\a")
+      assert acc.osc10 == {:invalid, "not-a-color"}
+      assert leak == ""
+    end
+
+    test "an echoed bare OSC 10 query (no color) is invalid, never a cap" do
+      {acc, ""} = scan("\e]10;?\a")
+      assert acc.osc10 == {:invalid, "?"}
+    end
+  end
+
   describe "CAP-P-05: grammar dispatch, not position" do
     test "scrambled reply order attributes each cap by echoed params" do
       # XTVERSION first, DECRQM in the middle, OSC 11 late, kbd, DA1
@@ -156,8 +186,9 @@ defmodule Raxol.Terminal.Capabilities.CapabilitySliceReplyScannerTest do
       assert acc.mode == %{}
       assert acc.kitty_kbd == nil
       refute acc.sentinel_seen?
-      # the echoed OSC query is captured as an invalid color, never a cap
+      # the echoed OSC queries are captured as invalid colors, never caps
       assert acc.osc11 == {:invalid, "?"}
+      assert acc.osc10 == {:invalid, "?"}
       # residual is only well-formed CSI the key parser consumes silently
       assert leak == "\e[>0q\e[c"
     end

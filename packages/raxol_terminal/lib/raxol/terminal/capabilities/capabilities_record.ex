@@ -22,6 +22,9 @@ defmodule Raxol.Terminal.Capabilities do
   @type grapheme_width :: :mode_2027 | :measured | :assumed
   @type multiplexer :: :none | :tmux | :screen
   @type identity :: {String.t(), String.t() | nil} | nil
+  @type rgb :: {0..255, 0..255, 0..255}
+  @type color_depth :: :truecolor | :ansi256 | :ansi16 | :none
+  @type polarity :: :dark | :light
   @type provenance ::
           :decrqm
           | :xtversion
@@ -31,6 +34,12 @@ defmodule Raxol.Terminal.Capabilities do
           | :env
           | :tmux_clamp
           | :platform
+          | :osc11
+          | :osc10
+          | :colorterm
+          | :no_color
+          | :term
+          | :colorfgbg
           | :default
 
   @type t :: %__MODULE__{
@@ -50,6 +59,10 @@ defmodule Raxol.Terminal.Capabilities do
           cell_px: {pos_integer(), pos_integer()} | nil,
           styled_underline: boolean(),
           multiplexer: multiplexer(),
+          background: rgb() | nil,
+          foreground: rgb() | nil,
+          color_depth: color_depth(),
+          polarity_seed: polarity() | nil,
           quirks: [atom()],
           source: %{optional(atom()) => provenance()}
         }
@@ -70,6 +83,10 @@ defmodule Raxol.Terminal.Capabilities do
             cell_px: nil,
             styled_underline: false,
             multiplexer: :none,
+            background: nil,
+            foreground: nil,
+            color_depth: :ansi16,
+            polarity_seed: nil,
             quirks: [],
             source: %{}
 
@@ -135,5 +152,57 @@ defmodule Raxol.Terminal.Capabilities do
     :persistent_term.erase(@record_key)
     :persistent_term.erase(@mode_key)
     :ok
+  end
+
+  # ---- native-palette-riding detection-seam readers (pure, no I/O) ----
+  #
+  # Wire bytes only: raw {r,g,b} from OSC 11/10, the classified color
+  # depth, and the $COLORFGBG polarity SEED. Deliberately no OKLab/OKLCH
+  # math, no computed ground lightness, no final polarity decision --
+  # that color science lives in main raxol's Salience module (see
+  # `docs/proposals/in-flight/native-palette-riding.md` §7 / amendment
+  # A3). Nil-safe when no record has been cached yet (headless, tests).
+
+  @doc "Detected native background color (`OSC 11`), if any."
+  @spec background() :: rgb() | nil
+  def background do
+    case cached() do
+      {:ok, caps} -> caps.background
+      :error -> nil
+    end
+  end
+
+  @doc "Detected native foreground color (`OSC 10`), if any."
+  @spec foreground() :: rgb() | nil
+  def foreground do
+    case cached() do
+      {:ok, caps} -> caps.foreground
+      :error -> nil
+    end
+  end
+
+  @doc """
+  The classified color depth. Defaults to `:ansi16` (the Core floor) when
+  no record has been cached, mirroring the struct default.
+  """
+  @spec color_depth() :: color_depth()
+  def color_depth do
+    case cached() do
+      {:ok, caps} -> caps.color_depth
+      :error -> :ansi16
+    end
+  end
+
+  @doc """
+  The `$COLORFGBG` polarity SEED (`:dark` | `:light` | `nil`). A seed
+  only -- used downstream iff OSC 11 is silent (native-palette-riding §2
+  rung 2).
+  """
+  @spec polarity_seed() :: polarity() | nil
+  def polarity_seed do
+    case cached() do
+      {:ok, caps} -> caps.polarity_seed
+      :error -> nil
+    end
   end
 end

@@ -29,6 +29,7 @@ defmodule Raxol.Terminal.Capabilities.ReplyScanner do
 
   @type t :: %__MODULE__{
           osc11: {:ok, BackgroundQuery.rgb()} | {:invalid, binary()} | nil,
+          osc10: {:ok, BackgroundQuery.rgb()} | {:invalid, binary()} | nil,
           kitty_kbd: non_neg_integer() | nil,
           mode: %{optional(non_neg_integer()) => mode_value()},
           xtversion: {String.t(), String.t() | nil} | nil,
@@ -45,6 +46,7 @@ defmodule Raxol.Terminal.Capabilities.ReplyScanner do
         }
 
   defstruct osc11: nil,
+            osc10: nil,
             kitty_kbd: nil,
             mode: %{},
             xtversion: nil,
@@ -253,6 +255,7 @@ defmodule Raxol.Terminal.Capabilities.ReplyScanner do
       {payload, after_seq} ->
         case payload do
           "11;" <> color -> {:reply, :osc11, color, after_seq}
+          "10;" <> color -> {:reply, :osc10, color, after_seq}
           _ -> {:drain, after_seq}
         end
     end
@@ -331,6 +334,15 @@ defmodule Raxol.Terminal.Capabilities.ReplyScanner do
     case BackgroundQuery.parse_color(color) do
       {:ok, rgb} -> %{acc | osc11: {:ok, rgb}}
       :error -> %{acc | osc11: {:invalid, color}}
+    end
+  end
+
+  # OSC 10 (native foreground query, native-palette-riding amendment A1):
+  # same X11 color-spec grammar and parser as OSC 11.
+  defp absorb(acc, :osc10, color) do
+    case BackgroundQuery.parse_color(color) do
+      {:ok, rgb} -> %{acc | osc10: {:ok, rgb}}
+      :error -> %{acc | osc10: {:invalid, color}}
     end
   end
 
