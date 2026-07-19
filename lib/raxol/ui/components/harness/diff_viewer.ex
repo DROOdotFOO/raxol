@@ -567,10 +567,9 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   Component's own grid rendering (`render/2`) always reads it through the
   private per-tier accessors above; `diff_palette/0` exposes the SAME map
   publicly so a second renderer of this diff visual language never forks
-  its own copy of these hexes. `Raxol.Harness.DiffExpansion`'s per-row
-  line renderer (the full-screen diff expansion's row-level tier of this
-  same visual language -- gutter bar plus row wash, no word-level
-  emphasis or syntax highlighting) is the first such caller.
+  its own copy of these hexes. (The first such caller was the retired
+  `Raxol.Harness.DiffExpansion`'s per-row line renderer -- gutter bar
+  plus row wash, no word-level emphasis or syntax highlighting.)
   """
   @spec diff_palette() :: %{
           add_base: String.t(),
