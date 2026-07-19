@@ -98,16 +98,63 @@ defmodule Raxol.UI.TextLayout.PrettyTest do
       for line <- pretty, do: assert(TextMeasure.display_width(line) <= width)
     end
 
+    # The previous golden here was impossible: it declared `width = 10` and
+    # then expected lines of 14 and 16 display cells (each ideograph is 2
+    # cells wide, so "日本語のテキス" is 7 graphemes = 14 columns). It was
+    # counting graphemes and calling them columns. Corrected to 5
+    # ideographs per line, which is what 10 columns actually holds -- and
+    # asserted against the width so the two can't drift apart again.
     test "CJK paragraph breaks between ideographs with no spaces" do
       text = "日本語のテキストです今日はとても良い天気ですね"
       width = 10
 
-      assert Pretty.wrap(text, width) == [
-               "日本語のテキス",
-               "トです今日はとて",
-               "も良い天気です",
-               "ね"
+      lines = Pretty.wrap(text, width)
+
+      assert lines == [
+               "日本語のテ",
+               "キストです",
+               "今日はとて",
+               "も良い天気",
+               "ですね"
              ]
+
+      for line <- lines, do: assert(TextMeasure.display_width(line) <= width)
+      assert Enum.join(lines) == text
+    end
+
+    # Regression: a break AFTER a CJK grapheme is not a break AT a space,
+    # so the space that followed it was stranded at the head of the next
+    # line -- indenting it one column and narrowing its budget by one.
+    test "a break after a CJK grapheme does not strand a leading space" do
+      text = "inline with 太字 bold, 斜体 italic, and more words after"
+
+      for width <- 20..48 do
+        for line <- Pretty.wrap(text, width) do
+          refute String.starts_with?(line, " "),
+                 "width #{width} produced a space-led line: #{inspect(line)}"
+
+          assert TextMeasure.display_width(line) <= width
+        end
+      end
+    end
+
+    # Regression: `word_id` was assigned per whitespace-run, so an entire
+    # CJK paragraph counted as ONE word and every candidate last line
+    # tripped the single-word orphan penalty. The DP then paid for absurd
+    # raggedness to dodge it -- here, an 11-cell first line when 38 were
+    # available.
+    test "CJK wrapping packs lines full instead of dodging an orphan" do
+      text = "引用文に 太字 が入ります。とても長い引用文です。"
+      width = 38
+
+      lines = Pretty.wrap(text, width)
+
+      assert TextMeasure.display_width(hd(lines)) == 38
+      for line <- lines, do: assert(TextMeasure.display_width(line) <= width)
+
+      # Identical to what disabling the orphan penalty produces -- the
+      # penalty must no longer influence a CJK layout at all.
+      assert lines == Pretty.wrap(text, width, orphan_penalty: 0)
     end
 
     test "hyphenated word breaks after the hyphen" do

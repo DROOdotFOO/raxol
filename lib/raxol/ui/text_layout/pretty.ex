@@ -110,8 +110,8 @@ defmodule Raxol.UI.TextLayout.Pretty do
         token = %{text: " ", width: 1, kind: :space, word_id: nil}
         {word_id, [token | tokens]}
       else
-        word_tokens = tokenize_word(part, word_id)
-        {word_id + 1, Enum.reverse(word_tokens) ++ tokens}
+        {word_tokens, next_word_id} = tokenize_word(part, word_id)
+        {next_word_id, Enum.reverse(word_tokens) ++ tokens}
       end
     end)
     |> elem(1)
@@ -120,24 +120,37 @@ defmodule Raxol.UI.TextLayout.Pretty do
 
   defp whitespace?(part), do: String.trim(part) == ""
 
-  @spec tokenize_word(String.t(), non_neg_integer()) :: [token()]
+  # Returns `{tokens, next_word_id}`.
+  #
+  # Each CJK grapheme is its OWN word, not a fragment of the surrounding
+  # whitespace-delimited run. `word_id` exists only to feed the last-line
+  # orphan rule ("does this line end with a single dangling word?"), and
+  # CJK has no spaces -- a whole CJK paragraph is one whitespace-run, so
+  # numbering it as one word made EVERY candidate last line a 1-word line.
+  # The orphan penalty (`width * width`) then fired on every layout, and
+  # the DP bought its way out with absurd raggedness: for a 48-cell CJK
+  # line in a 38-cell budget it chose 11/37 over the available 38/10.
+  # Hyphen pieces deliberately keep sharing one id -- leaving "known"
+  # alone off "well-known" IS a real orphan.
+  @spec tokenize_word(String.t(), non_neg_integer()) ::
+          {[token()], non_neg_integer()}
   defp tokenize_word(word, word_id) do
-    {buffer, tokens} =
+    {buffer, tokens, next_id} =
       word
       |> String.graphemes()
-      |> Enum.reduce({[], []}, fn grapheme, {buffer, tokens} ->
+      |> Enum.reduce({[], [], word_id}, fn grapheme, {buffer, tokens, id} ->
         cond do
           cjk_grapheme?(grapheme) ->
-            tokens = flush_buffer(buffer, word_id, tokens)
+            {tokens, id} = flush_buffer_with_id(buffer, id, tokens)
 
             cjk = %{
               text: grapheme,
               width: TextMeasure.display_width(grapheme),
               kind: :cjk,
-              word_id: word_id
+              word_id: id
             }
 
-            {[], [cjk | tokens]}
+            {[], [cjk | tokens], id + 1}
 
           grapheme == "-" ->
             text = buffer |> Enum.reverse() |> Enum.join() |> Kernel.<>("-")
@@ -146,22 +159,27 @@ defmodule Raxol.UI.TextLayout.Pretty do
               text: text,
               width: TextMeasure.display_width(text),
               kind: :hyphen_piece,
-              word_id: word_id
+              word_id: id
             }
 
-            {[], [piece | tokens]}
+            {[], [piece | tokens], id}
 
           true ->
-            {[grapheme | buffer], tokens}
+            {[grapheme | buffer], tokens, id}
         end
       end)
 
-    buffer
-    |> flush_buffer(word_id, tokens)
-    |> Enum.reverse()
+    {tokens, next_id} = flush_buffer_with_id(buffer, next_id, tokens)
+
+    {Enum.reverse(tokens), next_id + 1}
   end
 
-  defp flush_buffer([], _word_id, tokens), do: tokens
+  # Flushes a pending run of non-CJK graphemes as one `:word` token,
+  # consuming an id only when there was something to flush.
+  defp flush_buffer_with_id([], word_id, tokens), do: {tokens, word_id}
+
+  defp flush_buffer_with_id(buffer, word_id, tokens),
+    do: {flush_buffer(buffer, word_id, tokens), word_id + 1}
 
   defp flush_buffer(buffer, word_id, tokens) do
     text = buffer |> Enum.reverse() |> Enum.join()
@@ -442,7 +460,7 @@ defmodule Raxol.UI.TextLayout.Pretty do
     break_gaps
     |> Enum.chunk_every(2, 1, :discard)
     |> Enum.map(fn [g_start, g_end] ->
-      start_idx = g_start
+      start_idx = drop_leading_space(tokens_t, g_start, g_end)
       end_idx = end_index(tokens_t, g_end)
 
       if end_idx < start_idx do
@@ -452,6 +470,22 @@ defmodule Raxol.UI.TextLayout.Pretty do
         |> Enum.map_join("", &elem(tokens_t, &1).text)
       end
     end)
+  end
+
+  # `end_index/2` drops the space at a break only when the break gap is
+  # ITSELF a space token. A break after a `:cjk` (or `:hyphen_piece`)
+  # token strands any following space at the head of the next line -- so a
+  # CJK/latin mix such as "...斜体 italic," wrapped between 体 and the
+  # space rendered the next line as " italic,", indented by one column and
+  # one column narrower than its budget. Whitespace at the head of a
+  # wrapped line is never wanted in `:normal` mode; the modes that do
+  # preserve whitespace never reach this function.
+  defp drop_leading_space(tokens_t, start_idx, g_end) do
+    if start_idx < g_end and elem(tokens_t, start_idx).kind == :space do
+      drop_leading_space(tokens_t, start_idx + 1, g_end)
+    else
+      start_idx
+    end
   end
 
   defp fallback_wrap(tokens_t, n) do
