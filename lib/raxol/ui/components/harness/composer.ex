@@ -285,9 +285,11 @@ defmodule Raxol.UI.Components.Harness.Composer do
   `Raxol.UI.Components.Harness.FooterStack` (which measures + fits line
   lists) and lets a `view/1` declare the caret via the F0-cursor root
   `:cursor` key: the host renders these rows, then parks the cursor at
-  `edit_point/2`. `render/2`'s own `:composer_input_row` tree targets the
-  shelved `ViewText` substrate and is not a LayoutEngine element, so this
-  is the TEA-path render surface.
+  `edit_point/2`. `render/2`'s own tree (a `:column` of `:row`-of-text
+  elements) is substrate-neutral -- ViewText joins each row into one
+  line, the LayoutEngine lays it out natively -- but it renders the
+  SCROLLED window with cursor/selection runs; this function is the
+  plain-strings variant a TEA host feeds `FooterStack` directly.
 
   A queued-steer banner, when present, is the first row (matching
   `edit_point/2`'s banner accounting). An empty, unfocused draft with a
@@ -616,11 +618,10 @@ defmodule Raxol.UI.Components.Harness.Composer do
   # from the logical value at `avail_width`, the logical cursor (and any
   # selection endpoints) projected onto them, the scroll window derived
   # -- nothing here is ever written back to the edit substrate. Each
-  # visual row is wrapped in its own node so the line-collection seam
-  # (`Raxol.Harness.Surface.ViewText`'s all-tuple-children rule) keeps
-  # one visual row per collected line; MultiLineInput's own `render/2`
-  # flattens every row's run tuples into a single children list, which
-  # that seam would join into one line.
+  # visual row IS `RenderHelper.render_line/4`'s own element -- a `:row`
+  # of styled `:text` segments -- the direct declaration both substrates
+  # speak: `ViewText`'s inline-`:row` rule joins the segments into one
+  # collected line, and the LayoutEngine lays the same row out natively.
   defp render_input(state, avail_width, context) do
     mli = state.mli
     focused = FocusHelper.focused?(mli.id, context) or mli.focused
@@ -667,13 +668,9 @@ defmodule Raxol.UI.Components.Harness.Composer do
       |> Enum.slice(vscroll, height)
       |> Enum.with_index(vscroll)
       |> Enum.map(fn {line, index} ->
-        %{
-          type: :composer_input_row,
-          children:
-            RenderHelper.render_line(index, line, display, %{
-              components: %{multi_line_input: merged_theme}
-            })
-        }
+        RenderHelper.render_line(index, line, display, %{
+          components: %{multi_line_input: merged_theme}
+        })
       end)
 
     %{type: :column, style: merged_theme, children: rows}

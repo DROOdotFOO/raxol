@@ -162,27 +162,12 @@ defmodule Raxol.Harness.Surface.ViewText do
   piece sanitized. A `:row` with any non-text child falls through to
   the normal recursive walk.
 
-  ## The one exception: `MultiLineInput`'s per-run tuple leaves
-
-  `Composer.render/2` mounts `Raxol.UI.Components.Input.MultiLineInput`
-  directly (a general-purpose input Component, not one of this package's
-  own harness Components) for the actual typed buffer. That component
-  renders each VISIBLE LINE as cursor/selection-aware RUN SEGMENTS --
-  bare `{:text, content, style}` tuples, one per styling run (e.g.
-  `[{:text, "hel", %{}}, {:text, " ", %{background: :red}}]` for a
-  3-character buffer with the cursor at the end) -- never the
-  `%{type: :text, content:}` map shape every harness Component uses. A
-  naive `collect/2` walk either drops these silently (no clause matches a
-  bare tuple) or, worse, would treat each RUN as its own line if a clause
-  matched tuples individually -- splitting one visual row into N. This
-  module's `collect/2` special-cases a `children:` list that is ENTIRELY
-  bare text-tuples: it joins their content into ONE line (a single style,
-  same as every other line here -- this module has never supported
-  per-segment styling within one line, and `style_line/2` has no
-  `:background` handling regardless, so the cursor-highlight run's style
-  is dropped the same way it always would be). Any other `children:` shape
-  (including a MIX of tuples and maps) falls through to the normal
-  recursive walk unchanged.
+  `MultiLineInput`'s cursor/selection run segments arrive through this
+  same `:row` rule: `RenderHelper.render_line/4` emits each visible line
+  as one `:row` of styled `:text` segments (the legacy bare
+  `{:text, content, style}` tuple vocabulary is retired -- no producer
+  emits it), so the composer draft, a cursor split, and a selection run
+  are all just inline rows here, per-segment styles included.
   """
   @spec lines(map() | [map()], non_neg_integer(), mode()) :: [String.t()]
   def lines(view, width, mode \\ :plain) when is_integer(width) do
@@ -237,13 +222,8 @@ defmodule Raxol.Harness.Surface.ViewText do
 
       add_segment_lines(acc, segments)
     else
-      collect_generic_children(children, acc)
+      Enum.reduce(children, acc, &collect/2)
     end
-  end
-
-  defp collect(%{children: children}, acc)
-       when is_list(children) and children != [] do
-    collect_generic_children(children, acc)
   end
 
   defp collect(%{children: children}, acc) when is_list(children) do
@@ -251,21 +231,6 @@ defmodule Raxol.Harness.Surface.ViewText do
   end
 
   defp collect(_node, acc), do: acc
-
-  # MultiLineInput's per-run tuple leaves (see moduledoc, "The one
-  # exception"): when a node's ENTIRE children list is bare
-  # `{:text, content, style}` tuples, they are run-segments of ONE visual
-  # line -- join them into a single line entry rather than recursing (a
-  # bare tuple matches no other `collect/2` clause, so recursing would
-  # silently drop them; treating each as its own line would wrongly split
-  # one row into N).
-  defp collect_generic_children(children, acc) do
-    if Enum.all?(children, &text_tuple?/1) do
-      add_lines(acc, join_text_tuples(children), %{})
-    else
-      Enum.reduce(children, acc, &collect/2)
-    end
-  end
 
   defp text_leaf?(%{type: :text, content: content}), do: is_binary(content)
   defp text_leaf?(_other), do: false
@@ -288,12 +253,6 @@ defmodule Raxol.Harness.Surface.ViewText do
   defp intersperse_gap(segments, gap) do
     Enum.intersperse(segments, {String.duplicate(" ", gap), %{}})
   end
-
-  defp text_tuple?({:text, content, _style}), do: is_binary(content)
-  defp text_tuple?(_other), do: false
-
-  defp join_text_tuples(tuples),
-    do: Enum.map_join(tuples, "", fn {:text, content, _style} -> content end)
 
   # The trust boundary (see moduledoc): splits `content` on embedded `\n`
   # into one collected entry PER LINE (correct row accounting -- not

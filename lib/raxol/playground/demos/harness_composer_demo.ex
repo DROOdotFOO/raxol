@@ -10,10 +10,11 @@ defmodule Raxol.Playground.Demos.HarnessComposerDemo do
   `Composer.handle_event/3`, stores the result) and closes the two TEA-path
   seams the Composer needs:
 
-    * **render** -- `Composer.render/2`'s `:composer_input_row` tree targets
-      the shelved `ViewText` substrate (not a LayoutEngine element), so the
-      draft is drawn from `Composer.visual_lines/2` (the same `WrapMap`
-      projection, as `%{type: :text}` rows the LayoutEngine paints);
+    * **render** -- `Composer.render/2` now emits substrate-neutral
+      `:row`-of-text elements, but it renders the SCROLLED window with
+      cursor/selection runs; this demo draws the plain draft instead from
+      `Composer.visual_lines/2` (the same `WrapMap` projection, as
+      `%{type: :text}` rows the LayoutEngine paints);
     * **cursor** (§5 law 6) -- the composer declares its edit point via
       `Composer.edit_point/2`; the demo lowers that to the F0-cursor root
       `:cursor` key `{row, col, visible?}` (absolute, 0-based buffer
