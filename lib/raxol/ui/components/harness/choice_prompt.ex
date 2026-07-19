@@ -6,8 +6,8 @@ defmodule Raxol.UI.Components.Harness.ChoicePrompt do
   replaced).
 
   ```
-  ❯ confirm [enter]                 ← low prominence
-  ❯ cancel [escape]                 ← low prominence
+  ❯ confirm [enter]                 ← label quiet, hint bold
+  ❯ cancel [escape]                 ← label quiet, hint bold
   ❯ ▏explain what to do instead     ← chevron high prominence, caret at
                                       the start, placeholder low
   ```
@@ -32,11 +32,13 @@ defmodule Raxol.UI.Components.Harness.ChoicePrompt do
 
   ## Prominence
 
-  The focused row's chevron is bold at full strength; everything
-  discretionary — unfocused rows, the key hints, the placeholder — sits
-  at the same faded low-prominence register sealed machinery uses
-  (`Raxol.UI.Harness.Prominence.resolve/3`): the question is the loud
-  part, the affordances are quiet until chosen.
+  The focused row's chevron is bold at full strength — and so are the
+  `[enter]`/`[escape]` key hints: they are the answer affordances and
+  must read at a glance (V's ruling). Everything discretionary —
+  unfocused rows, the placeholder — sits at the faded low-prominence
+  register sealed machinery uses
+  (`Raxol.UI.Harness.Prominence.resolve/3`): the question and its ways
+  out are the loud part, the rest is quiet until chosen.
 
   ## Controlled (§2 doctrine)
 
@@ -302,7 +304,8 @@ defmodule Raxol.UI.Components.Harness.ChoicePrompt do
   # An option row: chevron + label (+ the key hint while the draft is
   # empty). The focused row's chevron is bold full-strength and its label
   # full-strength; an unfocused row sits at the faded register. The hint
-  # is ALWAYS quiet — it is an affordance note, never content.
+  # is ALWAYS bold full-strength — it is the answer affordance and must
+  # be visible at a glance (V's ruling), whichever row holds focus.
   defp option_row(label, hint, focused?, show_hint?, faded) do
     {sigil_style, label_style} =
       if focused? do
@@ -313,9 +316,7 @@ defmodule Raxol.UI.Components.Harness.ChoicePrompt do
 
     hint_segment =
       if show_hint?,
-        do: [
-          %{type: :text, content: " " <> hint, style: %{dim: true, fg: faded}}
-        ],
+        do: [%{type: :text, content: " " <> hint, style: %{bold: true}}],
         else: []
 
     %{

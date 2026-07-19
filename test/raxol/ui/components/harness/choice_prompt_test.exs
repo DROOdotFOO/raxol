@@ -69,11 +69,12 @@ defmodule Raxol.UI.Components.Harness.ChoicePromptTest do
       assert {_, %{bold: true}} = hd(input)
     end
 
-    test "the placeholder and the key hints sit at the faded register" do
+    test "the placeholder sits faded; the key hints are bold full-strength affordances" do
       state = new()
-      [confirm, _cancel, input] = rows(state)
+      [confirm, cancel, input] = rows(state)
 
-      assert {" [enter]", %{dim: true, fg: "#" <> _}} = List.last(confirm)
+      assert {" [enter]", %{bold: true}} = List.last(confirm)
+      assert {" [escape]", %{bold: true}} = List.last(cancel)
 
       assert {"explain what to do instead", %{dim: true, fg: "#" <> _}} =
                List.last(input)
