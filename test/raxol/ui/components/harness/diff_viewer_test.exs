@@ -3,6 +3,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
 
   alias Raxol.Core.Events.Event
   alias Raxol.UI.Components.Harness.DiffViewer
+  alias Raxol.UI.Harness.Prominence
+  alias Raxol.UI.Theming.Salience
 
   defp default_context, do: %{theme: Raxol.UI.Theming.Theme.default_theme()}
 
@@ -269,6 +271,160 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       refute gutter_text(equal_c) =~ "▌"
       [_leader, span_c] = content_c.children
       assert span_c.content == "c"
+    end
+  end
+
+  # C4 (docs/proposals/in-flight/region-prominence-propagation.md §4):
+  # gutter prominence used to ride its row's content prominence ADDITIVELY
+  # (`content_p - 0.2`, floored at 0.4); Phase 2 re-expresses it
+  # MULTIPLICATIVELY (`own_p = ride_factor * parent_own_p`,
+  # `@gutter_ride_factor 0.8`) so it composes under C1 instead of fighting
+  # it. The anchor (content 1.0 -> gutter 0.8, both the ":changed" bar-row
+  # tier and distance-0 ":context" rows) and the floor (content 0.4,
+  # distance 3+, -> gutter 0.4) are BYTE-IDENTICAL before and after --
+  # already covered by the untouched goldens above (`#919191` at 232) and
+  # by `prominence/4`'s own floor. Only the middle two rungs deviate:
+  #
+  #   dist   content_p   OLD gutter_p (additive)   NEW gutter_p (C4, multiplicative)
+  #   0      1.0         0.8                       0.8   (unchanged, the anchor)
+  #   1      0.8         0.6                       0.64  (DEVIATES -- expected, doc-sanctioned)
+  #   2      0.6         0.4                       0.48  (DEVIATES -- expected, doc-sanctioned)
+  #   3+     0.4         0.4  (floor)               0.4  (floor -- 0.8*0.4=0.32 clamps to 0.4)
+  #
+  # Asserted against `Prominence.fade/3` directly (not a hand-typed hex)
+  # so the test pins the FORMULA (ride_factor * content_p, floored at
+  # 0.4) rather than duplicating the OKLCH math as a brittle literal.
+  describe "C4 gutter ladder (multiplicative riding replaces the additive one)" do
+    test "context-row gutter numbers at distance 1 and 2 re-bake to the new multiplicative values" do
+      context_lines = Enum.map_join(1..6, "\n", fn _ -> "x = 1" end)
+      old = context_lines <> "\nremoved_line"
+      new = context_lines <> "\nadded_line"
+
+      {:ok, state} =
+        DiffViewer.init(old: old, new: new, mode: :unified, context: :all)
+
+      rendered = DiffViewer.render(state, default_context())
+      [_header, _divider | rows] = rendered.children
+      equal_rows = Enum.take(rows, 6)
+
+      # distances (the change is right after row 6): 6, 5, 4, 3, 2, 1
+      dist1_row = Enum.at(equal_rows, 5)
+      dist2_row = Enum.at(equal_rows, 4)
+      dist3_row = Enum.at(equal_rows, 3)
+
+      # No `context[:ground]` override -- the default test env has no
+      # cached terminal capabilities, so `SalienceTheme.detect_ground/0`
+      # degrades to the same `Salience.reference_ground/0` the OLD
+      # hardcoded `fade_toward_ground/2` always used (RP-P-01 neutrality).
+      ground = Salience.reference_ground()
+
+      assert gutter_numbers(dist1_row).style.fg ==
+               Prominence.fade("#B4B4B4", 0.64, ground)
+
+      assert gutter_numbers(dist2_row).style.fg ==
+               Prominence.fade("#B4B4B4", 0.48, ground)
+
+      # distance 3 is past the old and new ladders' floor -- both land at
+      # 0.4, so this rung stays byte-identical (not part of the delta).
+      assert gutter_numbers(dist3_row).style.fg ==
+               Prominence.fade("#B4B4B4", 0.4, ground)
+    end
+  end
+
+  # RP-P-03 (§8): monotonicity at BOTH grounds -- the falsifier that would
+  # catch ANY surviving hardcoded-ground site (F1's shape exactly: a fade
+  # that silently ignores the real ground and always interpolates toward
+  # a fixed reference reads as "monotone" on a dark ground by ACCIDENT,
+  # because the hardcoded reference happens to be dark, but breaks
+  # monotonicity -- or worse, direction -- on a light one). Runs the SAME
+  # ladder assertion against `context[:ground]` explicitly set to a dark
+  # ground (0.2) and a light one (0.92): as prominence rises 0.4 -> 1.0,
+  # contrast against the LOCAL ground must never decrease, on EITHER side.
+  describe "RP-P-03: fade monotonicity holds at both dark and light grounds" do
+    @dark_ground 0.2
+    @light_ground 0.92
+
+    defp gutter_fg_for_ground(ground) do
+      old = Enum.map_join(1..6, "\n", fn _ -> "x = 1" end) <> "\nremoved_line"
+      new = Enum.map_join(1..6, "\n", fn _ -> "x = 1" end) <> "\nadded_line"
+
+      {:ok, state} =
+        DiffViewer.init(old: old, new: new, mode: :unified, context: :all)
+
+      context = Map.put(default_context(), :ground, ground)
+      rendered = DiffViewer.render(state, context)
+      [_header, _divider | rows] = rendered.children
+      equal_rows = Enum.take(rows, 6)
+
+      # dist 1 (gutter_p 0.64), dist 2 (gutter_p 0.48), dist 3 (floor 0.4)
+      # -- rising prominence order: dist3 (0.4) < dist2 (0.48) < dist1 (0.64)
+      [
+        gutter_numbers(Enum.at(equal_rows, 3)).style.fg,
+        gutter_numbers(Enum.at(equal_rows, 4)).style.fg,
+        gutter_numbers(Enum.at(equal_rows, 5)).style.fg
+      ]
+    end
+
+    for {label, ground} <- [
+          {"dark ground (0.2)", @dark_ground},
+          {"light ground (0.92)", @light_ground}
+        ] do
+      test "on #{label}, contrast against the ground rises monotonically as gutter prominence rises" do
+        ground = unquote(ground)
+        ground_hex = Salience.oklch_to_hex(ground, 0.0, 0.0)
+
+        [floor_fg, mid_fg, near_fg] = gutter_fg_for_ground(ground)
+
+        floor_ratio = Prominence.wcag_ratio(floor_fg, ground_hex)
+        mid_ratio = Prominence.wcag_ratio(mid_fg, ground_hex)
+        near_ratio = Prominence.wcag_ratio(near_fg, ground_hex)
+
+        assert near_ratio >= mid_ratio - 1.0e-9
+        assert mid_ratio >= floor_ratio - 1.0e-9
+      end
+    end
+  end
+
+  # A direct F1 regression (docs/proposals/in-flight/region-prominence-propagation.md,
+  # "F1 -- fades hardcoded to the near-black reference ground ... live
+  # instance: diff_viewer.ex:535"). Before this fix, EVERY fade in this
+  # module interpolated toward `Salience.reference_ground/0` (~0.2,
+  # near-black) regardless of the real terminal ground -- on a light
+  # terminal (ground close to 1.0), a faded color moved the WRONG
+  # direction (toward black, away from the actual background) instead of
+  # toward the real ground. This pins the fix directly: on an explicit
+  # light ground (0.92), a faded gutter color's apparent lightness must
+  # land CLOSER to 0.92 than to the old hardcoded 0.2 fallback -- proof
+  # the real ground is what the fade now targets, not the dead reference.
+  describe "F1 regression: fades target the REAL ground, not the hardcoded reference" do
+    test "on a light terminal ground, a faded chrome color moves toward the real (light) ground" do
+      old = Enum.map_join(1..6, "\n", fn _ -> "x = 1" end) <> "\nremoved_line"
+      new = Enum.map_join(1..6, "\n", fn _ -> "x = 1" end) <> "\nadded_line"
+
+      {:ok, state} =
+        DiffViewer.init(old: old, new: new, mode: :unified, context: :all)
+
+      light_ground = 0.92
+      context = Map.put(default_context(), :ground, light_ground)
+      rendered = DiffViewer.render(state, context)
+      [_header, _divider | rows] = rendered.children
+
+      # distance-3+ row: gutter prominence floors at 0.4, the strongest
+      # fade in the ladder -- the clearest signal of which ground the
+      # fade actually targeted.
+      floor_row = Enum.at(rows, 0)
+      faded_hex = gutter_numbers(floor_row).style.fg
+
+      {faded_l, faded_c, faded_h} = Salience.hex_to_oklch(faded_hex)
+      faded_apparent = Salience.apparent_lightness(faded_l, faded_c, faded_h)
+
+      dead_reference_ground = Salience.reference_ground()
+
+      assert abs(faded_apparent - light_ground) <
+               abs(faded_apparent - dead_reference_ground),
+             "faded apparent lightness #{faded_apparent} should sit closer to " <>
+               "the real ground #{light_ground} than to the dead hardcoded " <>
+               "reference #{dead_reference_ground} (F1 must not resurface)"
     end
   end
 

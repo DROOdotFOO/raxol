@@ -60,6 +60,13 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       a folded hunk, or `:all` to disable folding entirely (default `3`).
     * `:folded` - `true` renders the compact one-line form instead of the
       full Pierre body (default `false`, see below).
+    * `:ground` - overrides the detected terminal background (OKLCH `L`,
+      `0.0..1.0`) every prominence fade in this render resolves against
+      (see "Perceptual transforms" below). Default `nil` -- the render
+      boundary falls back to `context[:ground]`, then
+      `Raxol.UI.Theming.SalienceTheme.detect_ground/0`. Mirrors `Block`'s
+      own `context[:ground]` escape hatch (`block.ex:150`); exposed as a
+      prop too since `diff_rows/1` callers don't thread a render context.
     * `:id`, `:style`, `:theme` - standard component props.
 
   ## Fold vocabulary (controlled)
@@ -105,10 +112,12 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   alias Raxol.Core.Events.Event
   alias Raxol.UI.Components.Harness.LineDiff
   alias Raxol.UI.Components.Harness.WordDiff
+  alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.StyleHelper
   alias Raxol.UI.SyntaxHighlighter
   alias Raxol.UI.TextMeasure
   alias Raxol.UI.Theming.Salience
+  alias Raxol.UI.Theming.SalienceTheme
   alias Raxol.View.Components
 
   @type mode :: :unified | :split | :auto
@@ -126,7 +135,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
           context: fold_context(),
           folded: boolean(),
           style: map(),
-          theme: map()
+          theme: map(),
+          ground: float() | nil
         }
 
   @impl true
@@ -149,7 +159,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       context: normalize_context(Keyword.get(props, :context, 3)),
       folded: Keyword.get(props, :folded, false) == true,
       style: Keyword.get(props, :style, %{}),
-      theme: Keyword.get(props, :theme, %{})
+      theme: Keyword.get(props, :theme, %{}),
+      ground: Keyword.get(props, :ground)
     }
 
     {:ok, state}
@@ -209,21 +220,39 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   defp expanded_children(state, context, ops, added, removed) do
     gutter_width = gutter_width_for(ops)
     avail_width = state.width || context_width(context)
+    ground = resolve_ground(context, state)
 
     body =
       case resolve_mode(state, context, ops, gutter_width) do
         :split ->
           render_split(
-            build_render_context(state, ops, gutter_width, avail_width)
+            build_render_context(state, ops, gutter_width, avail_width, ground)
           )
 
         :unified ->
           render_unified(
-            build_render_context(state, ops, gutter_width, avail_width)
+            build_render_context(state, ops, gutter_width, avail_width, ground)
           )
       end
 
     [header(state, added, removed), Components.divider() | body]
+  end
+
+  # F1 (docs/proposals/in-flight/region-prominence-propagation.md): the
+  # real terminal ground, resolved ONCE per render and threaded through
+  # `build_render_context/5` as `ctx.ground` -- never a hardcoded
+  # reference (that was the bug: `fade_toward_ground/3` used to read
+  # `Salience.reference_ground/0` unconditionally, fading the wrong
+  # direction on a light terminal). Precedence: an explicit
+  # `context[:ground]` (the `Block`-established override, `block.ex:150`)
+  # wins, then the `:ground` prop (`state.ground`, for `diff_rows/1`'s
+  # direct callers with no render context), then the live default --
+  # `SalienceTheme.detect_ground/0` degrades to
+  # `Salience.reference_ground/0` exactly as before when nothing is
+  # cached (headless/test, RP-P-01 neutrality: byte-identical to
+  # pre-Phase-2 output whenever no ground has actually been detected).
+  defp resolve_ground(context, state) do
+    Map.get(context, :ground) || state.ground || SalienceTheme.detect_ground()
   end
 
   # `± path · +N -M` -- the compact folded form: the path-first identity
@@ -301,9 +330,10 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     ops = LineDiff.diff(state.old, state.new)
     gutter_width = gutter_width_for(ops)
     avail_width = state.width || @default_diff_row_width
+    ground = resolve_ground(%{}, state)
 
     state
-    |> build_render_context(ops, gutter_width, avail_width)
+    |> build_render_context(ops, gutter_width, avail_width, ground)
     |> render_unified()
     |> Enum.map(&flatten_diff_row/1)
   end
@@ -496,9 +526,20 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   # -- Perceptual transforms (H-K solver, Raxol.UI.Theming.Salience) --
   #
-  # Ground lightness is the reference near-black; pairing this with the
-  # OSC 11-queried terminal ground is a natural follow-up (the Salience
-  # API already takes it as an input).
+  # Ground is the REAL terminal ground (`ctx.ground`, resolved once per
+  # render by `resolve_ground/2` -- see `expanded_children/5`), never a
+  # hardcoded reference (F1,
+  # docs/proposals/in-flight/region-prominence-propagation.md). Every fade
+  # below routes through `Raxol.UI.Harness.Prominence.fade/3` rather than
+  # reimplementing the ground-aware interpolation locally ("Reuse, not
+  # reimplementation", same discipline `Raxol.UI.ColorResolver` follows) --
+  # this is a component-OWN fade (this module's own recency/distance
+  # ladder, not the engine-core region-prominence pass Phase 1 wired at
+  # the `ui_renderer.ex` choke point), so it keeps the doc's γ=1 profile
+  # (`Prominence.fade/3`'s chroma scales linearly with `t`), distinct from
+  # `Raxol.UI.ColorResolver`'s `@region_gamma` (~0.5395, used only for
+  # region/overlay dims) -- the doc's two-profile policy, ratified pending
+  # the owner's eye-pass unification (§4 C2 "one profile must win").
 
   # Chroma factor for the row wash under the UNCHANGED parts of a
   # partially-changed line: visibly calmer than the full wash, same
@@ -526,20 +567,18 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     Salience.oklch_to_hex(solved_l, reduced_c, h)
   end
 
-  # Fade a foreground toward the ground by interpolating APPARENT
-  # lightness (not nominal L) and scaling chroma with prominence -- the
-  # H-K compensation keeps the fade perceptually even across hues.
-  defp fade_toward_ground(hex, prominence) when prominence >= 1.0, do: hex
+  # Fade a foreground toward `ground` -- `Prominence.fade/3` does the
+  # actual interpolation (APPARENT lightness, not nominal L, with chroma
+  # scaled linearly by prominence -- the H-K compensation keeps the fade
+  # perceptually even across hues); this is a thin wrapper that names the
+  # module's own call-site vocabulary and keeps the `>= 1.0` identity
+  # short-circuit local (matches `Prominence.fade/3`'s own, so the guard
+  # here is redundant defense, not a second contract).
+  defp fade_toward_ground(hex, prominence, _ground) when prominence >= 1.0,
+    do: hex
 
-  defp fade_toward_ground(hex, prominence) do
-    ground = Salience.reference_ground()
-    {l, c, h} = Salience.hex_to_oklch(hex)
-    apparent = Salience.apparent_lightness(l, c, h)
-    faded_apparent = ground + (apparent - ground) * prominence
-    faded_c = c * prominence
-    solved_l = Salience.solve_lightness(faded_apparent, faded_c, h)
-    Salience.oklch_to_hex(solved_l, faded_c, h)
-  end
+  defp fade_toward_ground(hex, prominence, ground),
+    do: Prominence.fade(hex, prominence, ground)
 
   defp dechroma_row_bg(:delete),
     do: dechroma(del_row_bg(), @unchanged_part_chroma)
@@ -553,20 +592,36 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   # baseline-tier neutral, faded per element by prominence.
   @chrome_base_fg "#B4B4B4"
 
-  # Line-number prominence rides 20pp under its row's content prominence
-  # (never below the 40% floor); rows with a wash present (changed rows)
-  # hold the numbers at 80% so they anchor against the tinted background.
-  defp gutter_prominence(:changed, _content_prominence), do: 0.8
+  # Line-number ("gutter") prominence RIDES its row's content prominence
+  # (C4, region-prominence-propagation.md §4): `own_p = ride_factor *
+  # parent_own_p`, composing multiplicatively instead of the old additive
+  # `content_p - 0.2 (clamp 0.4)` ladder, which fought C1's multiplicative
+  # composition law once region prominence entered the picture.
+  # `@gutter_ride_factor 0.8` reproduces the shipped anchor EXACTLY
+  # (content 1.0 -> gutter 0.8, both :changed rows and dist-0 :context
+  # rows); every step below that deviates from the old additive values by
+  # construction (0.8 -> 0.6 becomes 0.8 -> 0.64, 0.6 -> 0.4 becomes
+  # 0.6 -> 0.48) -- expected per the doc's own note, and re-baked in
+  # diff_viewer_test.exs (see that file's "C4 gutter ladder" describe
+  # block for the full old->new table). The 0.4 floor clamp is preserved
+  # (below it reads "broken terminal", same as `prominence/1`'s own
+  # floor). `:changed` and `:context` share one formula now -- the old
+  # code special-cased `:changed` to a hardcoded 0.8 ignoring its second
+  # argument, which happened to already equal `ride_factor * 1.0` (every
+  # `:changed` call site always passes content prominence `1.0`), so
+  # unifying the two clauses changes no `:changed` output.
+  @gutter_ride_factor 0.8
+  @gutter_floor 0.4
 
-  defp gutter_prominence(:context, content_prominence),
-    do: max(content_prominence - 0.2, 0.4)
+  defp gutter_prominence(_kind, content_prominence),
+    do: max(@gutter_ride_factor * content_prominence, @gutter_floor)
 
-  defp chrome_fg(prominence),
-    do: fade_toward_ground(@chrome_base_fg, prominence)
+  defp chrome_fg(prominence, ground),
+    do: fade_toward_ground(@chrome_base_fg, prominence, ground)
 
   # -- Render context: precomputed per-render inputs shared by both modes --
 
-  defp build_render_context(state, ops, gutter_width, avail_width) do
+  defp build_render_context(state, ops, gutter_width, avail_width, ground) do
     ops_with_ranges = annotate_word_ranges(ops)
 
     %{
@@ -577,7 +632,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       pane_budget: pane_budget(avail_width, gutter_width),
       unified_budget: unified_budget(avail_width, gutter_width),
       avail_width: avail_width,
-      context: state.context
+      context: state.context,
+      ground: ground
     }
   end
 
@@ -856,7 +912,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp unified_line({:fold, count}, ctx) do
-    [fold_row(count, unified_row_width(ctx))]
+    [fold_row(count, unified_row_width(ctx), ctx.ground)]
   end
 
   defp unified_line({:equal, line, _ranges, old_no, new_no, dist}, ctx) do
@@ -868,7 +924,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
         ctx.gutter_width,
         nil,
         nil,
-        gutter_prominence(:context, prominence(dist))
+        gutter_prominence(:context, prominence(dist)),
+        ctx.ground
       )
 
     content =
@@ -896,7 +953,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
           ctx.gutter_width,
           del_base(),
           del_gutter_bg(),
-          gutter_prominence(:changed, 1.0)
+          gutter_prominence(:changed, 1.0),
+          ctx.ground
         )
       end
     )
@@ -918,7 +976,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
           ctx.gutter_width,
           add_base(),
           add_gutter_bg(),
-          gutter_prominence(:changed, 1.0)
+          gutter_prominence(:changed, 1.0),
+          ctx.ground
         )
       end
     )
@@ -990,7 +1049,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
           do: gutter_fn.(line_no),
           else: gutter_fn.(nil)
 
-      content = pieces_row(kind, ranges, row_pieces, budget, 1.0)
+      content = pieces_row(kind, ranges, row_pieces, budget, 1.0, ctx.ground)
       Components.row(gap: 0, children: [gutter, content])
     end)
   end
@@ -1072,24 +1131,33 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     tail = %{text: tail_text, fg: nil, styles: [], changed: false}
 
     row_pieces = Enum.reverse(head_rev) ++ [ellipsis, tail]
-    pieces_row(kind, ranges, row_pieces, budget, 1.0)
+    pieces_row(kind, ranges, row_pieces, budget, 1.0, ctx.ground)
   end
 
   # Gutter = two spans: the bar keeps its full-strength identity color;
   # the line numbers are chrome, faded to their own prominence.
-  defp unified_gutter(bar, old_no, new_no, width, bar_fg, bg, number_prom) do
+  defp unified_gutter(
+         bar,
+         old_no,
+         new_no,
+         width,
+         bar_fg,
+         bg,
+         number_prom,
+         ground
+       ) do
     numbers = pad(old_no, width) <> " " <> pad(new_no, width)
-    gutter_spans(bar, numbers, bar_fg, bg, number_prom)
+    gutter_spans(bar, numbers, bar_fg, bg, number_prom, ground)
   end
 
-  defp gutter_spans(bar, numbers, bar_fg, bg, number_prom) do
+  defp gutter_spans(bar, numbers, bar_fg, bg, number_prom, ground) do
     Components.row(
       gap: 0,
       children: [
         Components.text(content: bar, style: gutter_style(bar_fg, bg)),
         Components.text(
           content: numbers,
-          style: gutter_style(chrome_fg(number_prom), bg)
+          style: gutter_style(chrome_fg(number_prom, ground), bg)
         )
       ]
     )
@@ -1220,7 +1288,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp split_old_line({:fold, count}, ctx) do
-    fold_row(count, split_row_width(ctx))
+    fold_row(count, split_row_width(ctx), ctx.ground)
   end
 
   defp split_old_line(
@@ -1234,7 +1302,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
         ctx.gutter_width,
         nil,
         nil,
-        gutter_prominence(:context, prominence(dist))
+        gutter_prominence(:context, prominence(dist)),
+        ctx.ground
       )
 
     content =
@@ -1247,7 +1316,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp split_old_line({:change, nil, nil, _new_no, _new_line, _, _}, ctx) do
-    gutter = split_gutter(" ", nil, ctx.gutter_width, nil, nil, 0.4)
+    gutter = split_gutter(" ", nil, ctx.gutter_width, nil, nil, 0.4, ctx.ground)
     Components.row(gap: 0, children: [gutter, filler_row()])
   end
 
@@ -1262,7 +1331,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
         ctx.gutter_width,
         del_base(),
         del_gutter_bg(),
-        gutter_prominence(:changed, 1.0)
+        gutter_prominence(:changed, 1.0),
+        ctx.ground
       )
 
     content =
@@ -1274,7 +1344,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp split_new_line({:fold, count}, ctx) do
-    fold_row(count, split_row_width(ctx))
+    fold_row(count, split_row_width(ctx), ctx.ground)
   end
 
   defp split_new_line(
@@ -1288,7 +1358,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
         ctx.gutter_width,
         nil,
         nil,
-        gutter_prominence(:context, prominence(dist))
+        gutter_prominence(:context, prominence(dist)),
+        ctx.ground
       )
 
     content =
@@ -1301,7 +1372,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   defp split_new_line({:change, _old_no, _old_line, nil, nil, _, _}, ctx) do
-    gutter = split_gutter(" ", nil, ctx.gutter_width, nil, nil, 0.4)
+    gutter = split_gutter(" ", nil, ctx.gutter_width, nil, nil, 0.4, ctx.ground)
     Components.row(gap: 0, children: [gutter, filler_row()])
   end
 
@@ -1316,7 +1387,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
         ctx.gutter_width,
         add_base(),
         add_gutter_bg(),
-        gutter_prominence(:changed, 1.0)
+        gutter_prominence(:changed, 1.0),
+        ctx.ground
       )
 
     content =
@@ -1327,8 +1399,8 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     Components.row(gap: 0, children: [gutter, content])
   end
 
-  defp split_gutter(bar, no, width, bar_fg, bg, number_prom) do
-    gutter_spans(bar, pad(no, width), bar_fg, bg, number_prom)
+  defp split_gutter(bar, no, width, bar_fg, bg, number_prom, ground) do
+    gutter_spans(bar, pad(no, width), bar_fg, bg, number_prom, ground)
   end
 
   # An absent line renders as plain blank space -- the row exists only to
@@ -1346,7 +1418,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   # rule the whole line at 20% prominence, the "N unchanged lines" label
   # sits centered at 40%.
 
-  defp fold_row(count, row_width) do
+  defp fold_row(count, row_width, ground) do
     label = fold_label(count)
     label_width = TextMeasure.display_width(label)
 
@@ -1368,12 +1440,12 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       children: [
         Components.text(
           content: String.duplicate("─", left),
-          style: %{fg: chrome_fg(0.2)}
+          style: %{fg: chrome_fg(0.2, ground)}
         ),
-        Components.text(content: label, style: %{fg: chrome_fg(0.4)}),
+        Components.text(content: label, style: %{fg: chrome_fg(0.4, ground)}),
         Components.text(
           content: String.duplicate("─", right),
-          style: %{fg: chrome_fg(0.2)}
+          style: %{fg: chrome_fg(0.2, ground)}
         )
       ]
     )
@@ -1397,7 +1469,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
       |> line_pieces(line, ranges, line_no, ctx)
       |> truncate_pieces(budget)
 
-    pieces_row(kind, ranges, pieces, budget, prominence)
+    pieces_row(kind, ranges, pieces, budget, prominence, ctx.ground)
   end
 
   defp line_pieces(kind, line, ranges, line_no, ctx) do
@@ -1407,7 +1479,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     |> Enum.reject(fn piece -> piece.text == "" end)
   end
 
-  defp pieces_row(kind, ranges, pieces, budget, prominence) do
+  defp pieces_row(kind, ranges, pieces, budget, prominence, ground) do
     row_bg = row_bg_for(kind)
     emphasis_bg = emphasis_bg_for(kind)
     fallback_fg = fallback_fg_for(kind)
@@ -1426,7 +1498,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     spans =
       Enum.map(pieces, fn piece ->
         bg = if piece.changed, do: emphasis_bg, else: plain_bg
-        fg = span_fg(piece.fg, fallback_fg, prominence)
+        fg = span_fg(piece.fg, fallback_fg, prominence, ground)
 
         Components.text(
           content: piece.text,
@@ -1445,12 +1517,12 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
 
   # Fade only real (hex) token colors; atom fallbacks like :dim have no
   # colorimetric identity to fade.
-  defp span_fg(nil, fallback_fg, _prominence), do: fallback_fg
+  defp span_fg(nil, fallback_fg, _prominence, _ground), do: fallback_fg
 
-  defp span_fg(fg, _fallback_fg, prominence) when is_binary(fg),
-    do: fade_toward_ground(fg, prominence)
+  defp span_fg(fg, _fallback_fg, prominence, ground) when is_binary(fg),
+    do: fade_toward_ground(fg, prominence, ground)
 
-  defp span_fg(fg, _fallback_fg, _prominence), do: fg
+  defp span_fg(fg, _fallback_fg, _prominence, _ground), do: fg
 
   defp trailing_pad(nil, _used, _bg), do: []
   defp trailing_pad(_budget, _used, nil), do: []
