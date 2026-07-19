@@ -150,8 +150,11 @@ defmodule Raxol.Playground.Demos.HarnessStatusStripDemo do
   end
 
   defp status_for(:responding) do
+    # "responding" is claimed ONLY on a positive :message signal — a delta
+    # without one renders the bare spinner, never a guessed word.
     %{
       turn_stage: :item_delta,
+      last_item_type: :message,
       activity: :responding,
       last_event_at: 0,
       now: 1000

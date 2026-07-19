@@ -137,7 +137,10 @@ defmodule Raxol.Playground.Demos.HarnessMessageBlockDemoTest do
       {:ok, text} = Headless.screenshot(session)
 
       assert text =~ "renderer_test.exs — the scroll anchor drops"
-      assert text =~ "golden drift after the palette"
+      # The bullet wraps under display-column width: assert wrap-stable
+      # fragments, not a substring that spans the wrap point.
+      assert text =~ "golden drift after the"
+      assert text =~ "palette change"
       assert text =~ "Starting with the anchor;"
 
       refute text =~ "`", "code-span backticks must be consumed by the parse"
