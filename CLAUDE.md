@@ -61,6 +61,24 @@ Adaptive examples: `adaptive_ui_demo.exs` (behavior tracking, layout recommendat
 
 Playground: `mix raxol.playground` is an interactive Component catalog with 30 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Demos are self-contained TEA apps in `lib/raxol/playground/demos/`. Chart demos use View DSL functions directly. SSH mode: `mix raxol.playground --ssh` serves the playground over SSH (port 2222 by default). Production SSH enabled via `RAXOL_SSH_PLAYGROUND=true` env var in fly.toml.
 
+### Live Settlement Gates (go-live sequence)
+
+`scripts/run_live_gates.sh` is the single launcher for the stablecoin cross-chain go-live checks. It drives every asset (USDC, USDT, USDG) across every route (`xochi` direct pay, `acp` order-through-the-storefront, `relay` EVM->Tron) from one `--asset` / `--route` flag pair, so the full launch matrix is one command. It replaces the four old per-package gate scripts.
+
+```bash
+# rehearse the whole grid, NO funds (read-only preflight per cell)
+GATE_FROM_ADDRESS=0x<addr> ./scripts/run_live_gates.sh --asset all --dry-run
+
+# funded USDC across all routes (prints plan + spend ceiling, asks to confirm)
+GATE_KEY=0x<funded> GATE_FROM_ADDRESS=0x<addr> GATE_RPC_8453=https://mainnet.base.org \
+  ./scripts/run_live_gates.sh --asset USDC
+
+# just the ACP storefront path (raxol as seller) for one asset
+GATE_KEY=0x<funded> ./scripts/run_live_gates.sh --asset USDC --route acp
+```
+
+Each cell runs isolated: one failure does not abort the rest, and a PASS/SKIP/FAIL matrix prints at the end (non-zero exit on any FAIL). A funded run prints the plan + worst-case spend ceiling and requires confirmation (`yes`, or `--yes`/`GATE_YES=1` for CI). Secrets/inputs via env: `GATE_KEY`, `GATE_XOCHI_TOKEN`, `GATE_RELAY_TOKEN` (both auto-read from 1Password), `GATE_RPC_<chainid>`, `GATE_FROM_ADDRESS`. Per-asset corridors, pull method, and the server-gate warnings are fixed in the script to what Riddler/Xochi support; the full flag/secret reference is the file header. Under the hood it drives the package live tests (`live_xochi*` in raxol_payments, `live_xochi_order*` / `live_relay` in raxol_acp), which are tag-excluded by default.
+
 ### Development
 
 ```bash

@@ -11,3 +11,10 @@ secret:
   ignored-paths:
     - "packages/raxol_payments/test/fixtures/stealth_vectors.json"
     - "packages/raxol_payments/scripts/gen_reverse_stealth_vectors.exs"
+  ignored-matches:
+    # Tron USDT (TRC-20) public contract address. Used as the relay destination
+    # in scripts/run_live_gates.sh and as the @usdt_tron constant across the repo.
+    # A public on-chain contract address, tied to no wallet -- not a credential.
+    # The high-entropy base58 form trips the generic detector; ignore the value.
+    - name: Tron USDT public contract address
+      match: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t

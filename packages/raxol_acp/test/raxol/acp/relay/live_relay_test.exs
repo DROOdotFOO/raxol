@@ -25,7 +25,7 @@ defmodule Raxol.ACP.Relay.LiveRelayTest do
   address that overrides the token list), RELAY_LIVE_TO_TOKEN, RELAY_LIVE_TO_ADDRESS,
   RELAY_LIVE_AMOUNT.
 
-  Or use the runner: ../raxol_payments/examples/run_live_relay_gate.sh
+  Or use the unified gate at the repo root: scripts/run_live_gates.sh --route relay
   """
 
   use ExUnit.Case, async: false
