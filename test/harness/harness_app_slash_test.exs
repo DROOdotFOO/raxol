@@ -139,7 +139,7 @@ defmodule Raxol.Harness.HarnessAppSlashTest do
       assert View.render(new_model()).type != :absolute_layer
     end
 
-    test "the popup wins over the approval selector (V's canonical footer)" do
+    test "a live approval owns the input: '/' is choice-draft text, never the slash popup" do
       model =
         new_model(stream_open: true)
         |> Model.fold_batch([
@@ -176,14 +176,20 @@ defmodule Raxol.Harness.HarnessAppSlashTest do
            }}
         ])
 
-      # selector present while idle
-      assert flatten_text(View.render(model)) =~ "1 Allow"
+      # the ChoicePrompt idles with its key hints
+      assert flatten_text(View.render(model)) =~ "[enter]"
 
-      # ... and suppressed the moment a slash draft goes live
+      # "/" lands in the choice draft (the free-text third way), the
+      # hints yield, and NO slash popup floats over the question
       slashed = type(model, "/")
-      text = flatten_text(View.render(slashed))
-      refute text =~ "1 Allow"
-      assert View.render(slashed).type == :absolute_layer
+      view = View.render(slashed)
+      text = flatten_text(view)
+
+      assert view.type != :absolute_layer
+      refute text =~ "[enter]"
+
+      assert Raxol.UI.Components.Harness.ChoicePrompt.value(slashed.choice) ==
+               "/"
     end
   end
 

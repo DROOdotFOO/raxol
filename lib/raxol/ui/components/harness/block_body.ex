@@ -94,7 +94,12 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   # args gloss, not the change). A bash / non-diff approval has no image to
   # show and keeps its mounted `ApprovalPrompt` via the general clause below.
   def render(%Block{fold: :expanded, kind: :approval} = block, context) do
-    if approval_has_diff?(block) do
+    # `selector_hosted?` (the TEA harness): the hosting view runs its own
+    # footer answer prompt, so the bash/non-diff approval must NOT mount
+    # `ApprovalPrompt` (whose "Choose a response" list is a second answer
+    # surface) — `Block.render/2` shows referent + blast radius and its
+    # `approval_resolution_lines/3` already yields under the same flag.
+    if approval_has_diff?(block) or Map.get(context, :selector_hosted?, false) do
       Block.render(block, context)
     else
       expanded_mount(block, context)

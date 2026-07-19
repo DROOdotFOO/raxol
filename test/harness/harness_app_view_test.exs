@@ -355,15 +355,17 @@ defmodule Raxol.Harness.HarnessAppViewTest do
       refute footer =~ "OLDLINE", "the diff body must NOT render in the footer"
     end
 
-    test "the footer becomes selector-and-prompt: the answer row shows the REAL options" do
+    test "the footer becomes the ChoicePrompt: option rows from the REAL names + the free-text way" do
       model = live_approval_model()
       {_body, footer} = body_and_footer(View.render(model))
 
-      # the selector row: digits by position, y/n aliases from real kinds
-      assert footer =~ "1 Allow"
-      assert footer =~ "2 Deny"
-      assert footer =~ "y allow"
-      assert footer =~ "n deny"
+      # the chevron pair carries the block's real option names + key hints
+      assert footer =~ "Allow"
+      assert footer =~ "[enter]"
+      assert footer =~ "Deny"
+      assert footer =~ "[escape]"
+      # the third way idles as the quiet placeholder
+      assert footer =~ "explain what to do instead"
     end
 
     test "the strip's redundant `awaiting approval` line yields to the selector (V's ruling)" do
@@ -374,25 +376,25 @@ defmodule Raxol.Harness.HarnessAppViewTest do
              "the strip's awaiting-approval phase line is redundant next to the selector"
     end
 
-    test "the body drops its in-body option list when the footer selector hosts the answer" do
+    test "the body drops its in-body option list when the footer prompt hosts the answer" do
       model = live_approval_model()
       {body, _footer} = body_and_footer(View.render(model))
 
       # the question stays (the ± diff), the answer affordance moves to the
-      # footer selector -- no double render of the option list
+      # footer ChoicePrompt -- no double render of the option list
       refute body =~ "answer:",
-             "the in-body answer hint must yield to the footer selector"
+             "the in-body answer hint must yield to the footer prompt"
 
       refute body =~ "[1] Allow",
-             "the in-body numbered options must yield to the footer selector"
+             "the in-body numbered options must yield to the footer prompt"
     end
 
-    test "no selector row without a live approval" do
+    test "no choice prompt without a live approval — the plain composer chevron returns" do
       model = stream_model([loop_ev(1, "t1", 100, :turn_started, %{})])
       {_body, footer} = body_and_footer(View.render(model))
 
-      refute footer =~ "y allow"
-      refute footer =~ "1 Allow"
+      refute footer =~ "[enter]"
+      refute footer =~ "explain what to do instead"
     end
 
     defp live_approval_model do

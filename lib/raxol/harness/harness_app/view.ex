@@ -27,6 +27,7 @@ defmodule Raxol.Harness.HarnessApp.View do
 
   alias Raxol.UI.Components.Harness.{
     BlockBody,
+    ChoicePrompt,
     CommandAutocomplete,
     Composer,
     FooterStack,
@@ -95,7 +96,9 @@ defmodule Raxol.Harness.HarnessApp.View do
   # leaves the input; the popup's selection is a separate register).
   # Anchored so its bottom edge sits directly above the composer row.
   defp with_slash_popup(base, model, cw, groups, budget, transcript_h, inset) do
-    if Model.slash_active?(model) do
+    # A stale slash draft can sit in the (hidden) composer while the
+    # ChoicePrompt owns the footer — the popup must not float over it.
+    if Model.slash_active?(model) and not Model.choice_active?(model) do
       {:ok, popup} =
         CommandAutocomplete.init(
           id: "harness-slash-popup",
@@ -165,9 +168,9 @@ defmodule Raxol.Harness.HarnessApp.View do
         greeting?: model.greeting? and model.transcript_records == [],
         sigil: model.sigil,
         reply_sigil: model.reply_sigil,
-        # This view renders the footer answer selector for a live approval
-        # (`selector_lines/2`), so the block body must not repeat the
-        # option list — the selector owns the answer affordance.
+        # This view hosts the footer ChoicePrompt for a live approval
+        # (`choice_lines/2`), so the block body must not repeat the
+        # option list — the prompt owns the answer affordance.
         selector_hosted?: true
       )
 
@@ -215,10 +218,9 @@ defmodule Raxol.Harness.HarnessApp.View do
 
   # Display order (surface.ex footer_frame normal clause). Overlays are now
   # layout children, so the `:overlay` footer group is always empty; the
-  # `:divider` channel is dormant until the focus-event unit lands. The
-  # `:selector` group is the approval answer row (V's canonical footer:
-  # `[...❯ options...]` directly above the input) -- protected, like the
-  # notices: while a question is live, its affordance is never shed.
+  # `:divider` channel is dormant until the focus-event unit lands; the
+  # `:selector` slot is reserved (the live approval's answer surface is
+  # the ChoicePrompt hosted in the `:composer` group).
   defp footer_groups(model, cw) do
     [
       status: status_lines(model, cw),
@@ -228,14 +230,28 @@ defmodule Raxol.Harness.HarnessApp.View do
       divider: [],
       preview: preview_lines(model, cw),
       composer_sep: composer_sep_lines(model),
-      # V's canonical footer: the autocomplete popup WINS over the choice
-      # selector while a slash draft is live ("even if there are choices,
-      # but we're focused on the input").
-      selector:
-        if(Model.slash_active?(model), do: [], else: selector_lines(model, cw)),
-      composer: composer_lines(model, cw),
+      selector: [],
+      # While a live approval holds the frontier the footer input IS the
+      # ChoicePrompt (V's selector-and-prompt: allow/deny rows + the
+      # free-text third way) — it replaces the composer wholesale; the
+      # ordinary prompt returns when the question seals.
+      composer: composer_group_lines(model, cw),
       notice: Notice.lines(model.stub_notice, cw)
     ]
+  end
+
+  defp composer_group_lines(model, cw) do
+    if Model.choice_active?(model),
+      do: choice_lines(model, cw),
+      else: composer_lines(model, cw)
+  end
+
+  # The ChoicePrompt rendered to footer line elements: its own render is
+  # a column of one-physical-row nodes, exactly the line-list shape
+  # FooterStack measures and fits.
+  defp choice_lines(model, cw) do
+    ChoicePrompt.render(model.choice, %{available_width: cw})
+    |> Map.get(:children, [])
   end
 
   # While a live approval holds the frontier, the strip's `awaiting
@@ -252,83 +268,6 @@ defmodule Raxol.Harness.HarnessApp.View do
       StatusStrip.lines(status, cw, model.spinner_frame)
     end
   end
-
-  # ── the approval selector row (V's `...❯ options...`) ──────────────────
-
-  # One footer row naming every answerable option, built from the REAL
-  # options on the live block (referent-honest, mirrors
-  # `Model.resolve_approval_answer/2`'s own resolution): digits pick by
-  # position, `y`/`n` alias the first allow/deny-class option and are
-  # shown only when such an option exists.
-  defp selector_lines(model, _cw) do
-    case Model.live_approval_block(model) do
-      nil -> []
-      block -> [selector_row(Map.get(block.content, :options, []), model)]
-    end
-  end
-
-  defp selector_row([], _model) do
-    %{
-      type: :text,
-      content: "awaiting approval — no options offered",
-      attrs: %{style: [:dim]}
-    }
-  end
-
-  defp selector_row(options, model) do
-    numbered =
-      options
-      |> Enum.with_index(1)
-      |> Enum.map_join("  ", fn {opt, index} ->
-        "#{index} #{selector_label(opt)}"
-      end)
-
-    aliases =
-      selector_alias("y", options, :allow) ++
-        selector_alias("n", options, :deny)
-
-    hint = if aliases == [], do: "", else: "  — " <> Enum.join(aliases, " · ")
-
-    %{
-      type: :row,
-      style: %{},
-      gap: 0,
-      children: [
-        %{type: :text, content: model.sigil <> " ", style: %{bold: true}},
-        %{type: :text, content: numbered <> hint}
-      ]
-    }
-  end
-
-  defp selector_alias(key, options, want) do
-    if Enum.any?(options, &(selector_decision(&1) == want)),
-      do: ["#{key} #{if want == :allow, do: "allow", else: "deny"}"],
-      else: []
-  end
-
-  defp selector_label(%{name: name}) when is_binary(name) and name != "",
-    do: name
-
-  defp selector_label(%{"name" => name}) when is_binary(name) and name != "",
-    do: name
-
-  defp selector_label(%{option_id: id}) when is_binary(id), do: id
-  defp selector_label(%{"option_id" => id}) when is_binary(id), do: id
-  defp selector_label(option) when is_binary(option), do: option
-  defp selector_label(_option), do: "option"
-
-  defp selector_decision(%{kind: kind}), do: selector_decision_from_kind(kind)
-
-  defp selector_decision(%{"kind" => kind}),
-    do: selector_decision_from_kind(kind)
-
-  defp selector_decision(_option), do: :deny
-
-  defp selector_decision_from_kind(kind)
-       when kind in [:allow_once, :allow_always, "allow_once", "allow_always"],
-       do: :allow
-
-  defp selector_decision_from_kind(_kind), do: :deny
 
   defp submitting_lines(%{pending_submit: %{text: text}}, _cw),
     do: [dim_text("↑ sending: " <> String.slice(text, 0, 40))]
@@ -543,16 +482,30 @@ defmodule Raxol.Harness.HarnessApp.View do
   defp cursor_decl(model, groups, budget, cw, transcript_h, inset) do
     with true <- cw > 0,
          offset when is_integer(offset) <-
-           FooterStack.group_offset(groups, @drop_order, budget, :composer) do
-      {row_in_composer, col} = Composer.edit_point(model.composer, cw)
-      abs_row = transcript_h + offset + row_in_composer
-      # Past the chevron prefix ("❯ " / "  " -- `composer_lines/2`), then
-      # the frame inset -- mirrors surface.ex `composer_cursor/3`.
-      col0 = col - 1 + Model.sigil_cols() + inset
-
+           FooterStack.group_offset(groups, @drop_order, budget, :composer),
+         {row_in_group, col0} when is_integer(row_in_group) <-
+           group_edit_point(model, cw, inset) do
+      abs_row = transcript_h + offset + row_in_group
       {abs_row, col0 |> max(0) |> min(model.width - 1), true}
     else
       _ -> nil
+    end
+  end
+
+  # The edit point of whatever the :composer group hosts. ChoicePrompt's
+  # own edit_point/2 already accounts for the chevron cells and returns
+  # nil while an option row holds focus (the caret must never point at
+  # state the keys don't reach); the plain composer shifts past its
+  # chevron prefix here -- mirrors surface.ex `composer_cursor/3`.
+  defp group_edit_point(model, cw, inset) do
+    if Model.choice_active?(model) do
+      case ChoicePrompt.edit_point(model.choice, cw) do
+        nil -> nil
+        {row, col} -> {row, col - 1 + inset}
+      end
+    else
+      {row, col} = Composer.edit_point(model.composer, cw)
+      {row, col - 1 + Model.sigil_cols() + inset}
     end
   end
 

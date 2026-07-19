@@ -45,7 +45,7 @@ defmodule Raxol.Harness.HarnessApp.Model do
     UnreadDivider
   }
 
-  alias Raxol.UI.Components.Harness.{Block, Composer, Picker}
+  alias Raxol.UI.Components.Harness.{Block, ChoicePrompt, Composer, Picker}
   alias Raxol.UI.Harness.{CommandRegistry, InputEvent, Keymap}
 
   # -- geometry constants (mirror surface.ex:1285-1310) --------------------
@@ -122,6 +122,9 @@ defmodule Raxol.Harness.HarnessApp.Model do
             session_over?: false,
             # slash-command popup selection (reset on every query change)
             slash_selected: 0,
+            # the live approval's ChoicePrompt (the footer input while a
+            # question is open); nil otherwise — see sync_choice/1
+            choice: nil,
             # the sole lane client (pid) or nil in fixture mode
             pump: nil
 
@@ -242,6 +245,7 @@ defmodule Raxol.Harness.HarnessApp.Model do
     |> reconcile_unread()
     |> seal_pending()
     |> update_status(events_so_far, now)
+    |> sync_choice()
   end
 
   defp bump_spinner(model),
@@ -694,7 +698,27 @@ defmodule Raxol.Harness.HarnessApp.Model do
       | composer: Composer.set_width(model.composer, content_width(model))
     }
 
+    model = resize_choice(model)
+
     if overlay_fits?(model), do: model, else: %{model | overlay: nil}
+  end
+
+  # An open ChoicePrompt remounts at the new width, draft preserved (its
+  # embedded composer wraps at init width; focus resets to the input —
+  # the resume point after a reflow anyway).
+  defp resize_choice(%{choice: nil} = model), do: model
+
+  defp resize_choice(model) do
+    case live_approval_block(model) do
+      nil ->
+        %{model | choice: nil}
+
+      block ->
+        %{
+          model
+          | choice: mount_choice(block, model, ChoicePrompt.value(model.choice))
+        }
+    end
   end
 
   # A minimal overlay needs a border + title + one row; below that we close.
@@ -821,7 +845,11 @@ defmodule Raxol.Harness.HarnessApp.Model do
 
   @doc false
   def isig_reasserted(model),
-    do: put_lane_notice(model, "» terminal signal handling (-isig) re-asserted")
+    do:
+      put_lane_notice(
+        model,
+        "» terminal signal handling (-isig) could not be restored — Ctrl-C may kill the session"
+      )
 
   # ── input (the {:key, ev} fold — returns {model, directives}) ────────────
 
@@ -916,15 +944,134 @@ defmodule Raxol.Harness.HarnessApp.Model do
     do: (Composer.value(model.composer) || "") |> String.trim() == ""
 
   defp route_key(model, norm, raw_event) do
-    if slash_active?(model) do
-      route_slash(model, norm, raw_event)
-    else
-      case Keymap.resolve(norm, keymap_context(model)) do
-        :passthrough -> route_passthrough(model, norm, raw_event)
-        command -> dispatch_command(model, command)
-      end
+    cond do
+      choice_active?(model) ->
+        route_choice(model, raw_event)
+
+      slash_active?(model) ->
+        route_slash(model, norm, raw_event)
+
+      true ->
+        case Keymap.resolve(norm, keymap_context(model)) do
+          :passthrough -> route_passthrough(model, norm, raw_event)
+          command -> dispatch_command(model, command)
+        end
     end
   end
+
+  # ── the live-approval choice prompt (V's selector-and-prompt footer) ───
+  #
+  # While a live approval holds the frontier, the footer input IS a
+  # `ChoicePrompt` (the confirm/cancel pair + the free-text third way);
+  # it owns EVERY key — including Enter/Escape/y/n, which the Keymap's
+  # approval binds and the interrupt bind would otherwise claim — so a
+  # typed 'y' inserts into the draft instead of answering (the prompt's
+  # empty-draft Enter/Escape are the blessed answer keys). The prompt is
+  # mounted/unmounted by `sync_choice/1`, a pure projection of the live
+  # approval block: it can never outlive (or lag) the question.
+
+  @doc "True when the live-approval ChoicePrompt owns the footer input."
+  @spec choice_active?(t()) :: boolean()
+  def choice_active?(%{overlay: overlay}) when overlay != nil, do: false
+  def choice_active?(model), do: model.choice != nil
+
+  defp route_choice(model, raw_event) do
+    {choice, cmds} =
+      ChoicePrompt.handle_event(
+        component_event(raw_event),
+        model.choice,
+        %{}
+      )
+
+    Enum.reduce(cmds, {%{model | choice: choice}, []}, &apply_choice_command/2)
+  end
+
+  # confirm → the first allow-class option; cancel → deny. The dispatch
+  # layer resolves against the block's REAL options and refuses honestly
+  # when the shape offers no such choice.
+  defp apply_choice_command({:component_event, _id, :confirm}, {model, dirs}) do
+    {m, d} =
+      dispatch_command(model, %{
+        type: :approval_answer,
+        payload: %{answer: :allow}
+      })
+
+    {m, dirs ++ d}
+  end
+
+  defp apply_choice_command({:component_event, _id, :cancel}, {model, dirs}) do
+    {m, d} =
+      dispatch_command(model, %{
+        type: :approval_answer,
+        payload: %{answer: :deny}
+      })
+
+    {m, dirs ++ d}
+  end
+
+  # The free-text third way: "explain what to do instead" = DENY the tool
+  # AND queue the explanation as a steer for the next boundary — the
+  # agent must not run the proposed action and must hear why. Two
+  # existing rails, one gesture.
+  defp apply_choice_command(
+         {:component_event, _id, {:submit, text}},
+         {model, dirs}
+       ) do
+    {denied, deny_dirs} =
+      dispatch_command(model, %{
+        type: :approval_answer,
+        payload: %{answer: :deny}
+      })
+
+    staged = %{denied | composer: Composer.set_value(denied.composer, text)}
+    {steered, steer_dirs} = dispatch_command(staged, %{type: :steer})
+    cleared = %{steered | composer: Composer.set_value(steered.composer, "")}
+
+    {cleared, dirs ++ deny_dirs ++ steer_dirs}
+  end
+
+  defp apply_choice_command(_other, acc), do: acc
+
+  # Mount/unmount as a pure projection of the live approval block. The
+  # labels are the block's REAL option names (referent-honest: what
+  # Enter/Escape will resolve against); a resize remounts at the new
+  # width preserving the draft.
+  @doc false
+  @spec sync_choice(t()) :: t()
+  def sync_choice(model) do
+    case {live_approval_block(model), model.choice} do
+      {nil, nil} -> model
+      {nil, _open} -> %{model | choice: nil}
+      {block, nil} -> %{model | choice: mount_choice(block, model, "")}
+      {_block, _open} -> model
+    end
+  end
+
+  defp mount_choice(block, model, draft) do
+    options = Map.get(block.content, :options) || []
+
+    {:ok, choice} =
+      ChoicePrompt.init(
+        id: "approval-choice",
+        width: content_width(model),
+        confirm_label: option_label_for(options, :allow) || "confirm",
+        cancel_label: option_label_for(options, :deny) || "cancel",
+        placeholder: "explain what to do instead",
+        value: draft
+      )
+
+    choice
+  end
+
+  defp option_label_for(options, want) do
+    Enum.find_value(options, fn option ->
+      if decision_of(option) == want, do: name_of(option)
+    end)
+  end
+
+  defp name_of(%{name: name}) when is_binary(name) and name != "", do: name
+  defp name_of(%{"name" => name}) when is_binary(name) and name != "", do: name
+  defp name_of(_option), do: nil
 
   # ── slash commands (the typed inlet into dispatch_command/2) ────────────
   #
