@@ -32,6 +32,7 @@ defmodule Raxol.Search.Fuzzy do
   require Logger
 
   alias Raxol.Core.Buffer
+  alias Raxol.UI.TextMeasure
 
   @type position :: {non_neg_integer(), non_neg_integer()}
   @type match :: %{
@@ -305,12 +306,22 @@ defmodule Raxol.Search.Fuzzy do
         []
 
       matches ->
+        # `return: :index` gives BYTE offsets, but `position`/`highlight`
+        # are cell indices into `Core.Buffer`, which stores one cell per
+        # GRAPHEME -- and that is also the unit `exact_search_line/4` and
+        # `fuzzy_search_line/4` already report in. Without the conversion
+        # this one mode disagreed with the other two, and a line with any
+        # multi-byte character before the match highlighted a range past
+        # it, drifting one cell per extra byte.
         Enum.map(matches, fn [{start, length}] ->
+          start_col = TextMeasure.byte_offset_to_index(text, start)
+          end_col = TextMeasure.byte_offset_to_index(text, start + length)
+
           %{
-            position: {start, y},
+            position: {start_col, y},
             text: original_text,
             score: 1.0,
-            highlight: Enum.to_list(start..(start + length - 1))
+            highlight: highlight_columns(start_col, end_col)
           }
         end)
     end
@@ -319,6 +330,13 @@ defmodule Raxol.Search.Fuzzy do
       Logger.warning("Regex search failed: #{Exception.message(e)}")
       []
   end
+
+  # A zero-width match (e.g. the pattern `a*` against "b") highlights
+  # nothing rather than the inverted range `start..start - 1`.
+  defp highlight_columns(start_col, end_col) when end_col > start_col,
+    do: Enum.to_list(start_col..(end_col - 1))
+
+  defp highlight_columns(_start_col, _end_col), do: []
 
   @doc """
   Highlight search results in buffer.

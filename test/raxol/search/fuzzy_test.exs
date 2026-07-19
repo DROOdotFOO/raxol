@@ -288,4 +288,44 @@ defmodule Raxol.Search.FuzzyTest do
       assert search.matches == []
     end
   end
+  # `Regex.scan(return: :index)` reports BYTE offsets, but `position` and
+  # `highlight` index `Core.Buffer` cells, one per GRAPHEME -- the same
+  # unit the :exact and :fuzzy modes report in. Without conversion, :regex
+  # disagreed with the other two modes and any multi-byte character before
+  # the match pushed the highlight past it, one cell per extra byte.
+  describe "match positions with multi-byte text" do
+    test "an em dash before the match does not shift the highlight" do
+      buffer = Buffer.create_blank_buffer(80, 1)
+      buffer = Buffer.write_at(buffer, 0, 0, "a — target")
+
+      # "a — " is 4 graphemes but 6 bytes.
+      [regex_match | _] = Fuzzy.search(buffer, "target", :regex)
+
+      assert {4, 0} = regex_match.position
+      assert regex_match.highlight == Enum.to_list(4..9)
+    end
+
+    test "CJK before the match does not shift the highlight" do
+      buffer = Buffer.create_blank_buffer(80, 1)
+      buffer = Buffer.write_at(buffer, 0, 0, "日本語 hit")
+
+      # 3 ideographs are 3 cells but 9 bytes.
+      [regex_match | _] = Fuzzy.search(buffer, "hit", :regex)
+
+      assert {4, 0} = regex_match.position
+      assert regex_match.highlight == [4, 5, 6]
+    end
+
+    # The three modes must agree on where a match starts -- that agreement
+    # is what the byte/grapheme mixup silently broke for :regex only.
+    test "all three modes report the same position for the same match" do
+      buffer = Buffer.create_blank_buffer(80, 1)
+      buffer = Buffer.write_at(buffer, 0, 0, "日本語 hit")
+
+      for mode <- [:exact, :regex] do
+        [match | _] = Fuzzy.search(buffer, "hit", mode)
+        assert {4, 0} = match.position, "mode #{mode} disagreed"
+      end
+    end
+  end
 end

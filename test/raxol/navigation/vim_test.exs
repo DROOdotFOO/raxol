@@ -266,4 +266,45 @@ defmodule Raxol.Navigation.VimTest do
       assert new_vim == vim
     end
   end
+  # `find_in_line/2` gets BYTE offsets from `Regex.scan(return: :index)`
+  # but `search_matches` holds `{x, y}` cursor positions into
+  # `Core.Buffer`, which stores one cell per GRAPHEME.
+  describe "search positions with multi-byte text" do
+    defp search_for(vim, pattern) do
+      {:ok, vim} = Vim.handle_key("/", vim)
+
+      vim =
+        pattern
+        |> String.graphemes()
+        |> Enum.reduce(vim, fn key, acc ->
+          {:ok, acc} = Vim.handle_key(key, acc)
+          acc
+        end)
+
+      {:ok, vim} = Vim.handle_key("Enter", vim)
+      vim
+    end
+
+    test "a multi-byte character before the match does not shift x" do
+      buffer = Buffer.create_blank_buffer(80, 2)
+      buffer = Buffer.write_at(buffer, 0, 0, "a — target")
+      vim = Vim.new(buffer)
+
+      vim = search_for(vim, "target")
+
+      # "a — " is 4 cells but 6 bytes.
+      assert {4, 0} in vim.search_matches
+    end
+
+    test "CJK before the match does not shift x" do
+      buffer = Buffer.create_blank_buffer(80, 2)
+      buffer = Buffer.write_at(buffer, 0, 0, "日本語 hit")
+      vim = Vim.new(buffer)
+
+      vim = search_for(vim, "hit")
+
+      # 3 ideographs are 3 cells but 9 bytes.
+      assert {4, 0} in vim.search_matches
+    end
+  end
 end
