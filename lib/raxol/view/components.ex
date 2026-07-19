@@ -27,13 +27,19 @@ defmodule Raxol.View.Components do
   end
 
   def text(%{content: content} = opts) do
+    style = Map.get(opts, :style, %{})
+    # Allow link on the element top-level OR inside style (markdown segments
+    # put OSC-8 targets on the style map; layout/renderer read both).
+    link = Map.get(opts, :link) || Map.get(style, :link) || Map.get(style, :hyperlink)
+
     %{
       type: :text,
       content: content,
-      fg: Map.get(opts, :fg),
-      bg: Map.get(opts, :bg),
-      style: Map.get(opts, :style, %{}),
-      id: Map.get(opts, :id)
+      fg: Map.get(opts, :fg) || Map.get(style, :fg),
+      bg: Map.get(opts, :bg) || Map.get(style, :bg),
+      style: style,
+      id: Map.get(opts, :id),
+      link: link
     }
   end
 
