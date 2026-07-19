@@ -92,10 +92,9 @@ defmodule Raxol.AgentClientProtocol.Client do
   `{:acp_session_update, session_id, update}` -- `update` is always an
   already-decoded `Raxol.AgentClientProtocol.Schema.SessionUpdate.t()` (see
   `decode_update/1`'s doc for why an undecodable variant never reaches
-  this path at all).
-
-  `prompt/3` and `prompt_stream/4` build on `subscribe/3` to give a
-  synchronous-feeling API over the inherently asynchronous protocol:
+  this path at all). `subscribe/3` remains useful for a custom
+  `session_update/2` override that wants a broadcast fan-out, but it is
+  NOT how `prompt/3`/`prompt_stream/4` get their updates (see below).
 
       {:ok, {updates, response}} =
         Client.prompt(client_conn, PromptRequest.new(session_id, prompt_blocks))
@@ -105,11 +104,23 @@ defmodule Raxol.AgentClientProtocol.Client do
           IO.inspect(update, label: "update")
         end)
 
-  Both drive the request through `Connection.async_request/6` (not the
-  blocking `Connection.request/4` wrapper) specifically so the calling
-  process can `receive` session/update deliveries *and* the terminal
-  result in one loop -- see their docs for the exact mechanics and the
-  ordering caveat.
+  `prompt/3` and `prompt_stream/4` drive the request through
+  `Connection.async_request/6` and then consume the **direct turn-delivery
+  channel** (`Raxol.AgentClientProtocol.Delivery`'s moduledoc):
+  `Connection` opens a turn at submit time and, for every `session/update`
+  belonging to that turn, sends the calling process
+  `{:acp_turn_update, tag, ordinal, notification}` directly, itself --
+  the same single-sender operation it uses for the terminal
+  `{:acp_result, tag, outcome}`. Because one process sends every update,
+  the turn-end companion, and the result, BEAM's pairwise FIFO guarantees
+  they arrive in wire order with NO reorder buffer, NO settle timer, and a
+  synchronous, deterministic failure (`{:error, {:delivery_gap, _}}`) if
+  the turn-end count and the delivered-update count ever disagree. This
+  is the actual fix for the drop/reorder bug the previous
+  `subscribe/3`-based implementation of these two functions had (a
+  separate handler task per notification vs. the Connection's own
+  terminal-result send -- two different senders, no cross-sender FIFO
+  guarantee).
 
   ## `fs_sandbox`: a working filesystem client with zero callbacks
 
@@ -148,6 +159,7 @@ defmodule Raxol.AgentClientProtocol.Client do
   require Raxol.AgentClientProtocol.Handler.Codegen
 
   alias Raxol.AgentClientProtocol.Connection
+  alias Raxol.AgentClientProtocol.Delivery
   alias Raxol.AgentClientProtocol.Error
   alias Raxol.AgentClientProtocol.Handler.Codegen
   alias Raxol.AgentClientProtocol.Schema.SessionUpdate
@@ -216,6 +228,13 @@ defmodule Raxol.AgentClientProtocol.Client do
   registration receives its own copy of every broadcast, so the pid gets
   the update twice. Subscribe once per `{conn, session_id, pid}`, or
   dedupe on receipt if you can't guarantee that.
+
+  This broadcast path still fans out through a per-notification dispatch
+  task (one task per `session/update`), so it has no cross-notification
+  ordering guarantee on its own -- it is NOT what `prompt/3`/
+  `prompt_stream/4` use (see the moduledoc's "Session-consumer ergonomics"
+  section); it remains here for custom `session_update/2` overrides that
+  want a simple fan-out primitive.
   """
   @spec subscribe(pid(), String.t(), pid()) :: :ok
   def subscribe(conn, session_id, subscriber \\ self())
@@ -308,145 +327,127 @@ defmodule Raxol.AgentClientProtocol.Client do
 
   # ===========================================================================
   # prompt/3, prompt_stream/4 -- session-consumer convenience over
-  # Connection.async_request/6 (IC-3). Both subscribe the CALLING process
-  # for the turn's session_id and drive the request asynchronously
-  # specifically so that same process can `receive` both
-  # `{:acp_session_update, ...}` and the terminal `{:acp_result, ...}` in
-  # one loop -- `Connection.request/4`'s blocking `GenServer.call` would
-  # queue those update messages, unread, until the call returns, which
-  # buys nothing over this loop and would force a settle-drain regardless.
+  # Connection.async_request/6 (IC-3), consuming the DIRECT turn-delivery
+  # channel (Raxol.AgentClientProtocol.Delivery's moduledoc), not the
+  # multi-sender subscribe/3 broadcast. `Connection` opens a turn at
+  # submit time and sends every `session/update` belonging to it, the
+  # turn-end companion, and the terminal result FROM ITSELF -- one sender,
+  # so this process's mailbox order is exactly wire order. No settle
+  # timer, no reorder buffer: a real gap is a synchronous, deterministic
+  # `{:error, {:delivery_gap, _}}` observed at the terminal result, never
+  # a race against a not-yet-scheduled task.
   # ===========================================================================
 
-  @typedoc "A decoded session/update payload delivered via `subscribe/3` (always successfully decoded -- see `decode_update/1`)."
+  @typedoc "A decoded session/update payload (always successfully decoded -- see `decode_update/1`)."
   @type update :: SessionUpdate.t()
 
   @doc """
   Send `session/prompt` and collect every `session/update` delivered for
-  its `session_id` until the response resolves. Returns
+  the turn until the response resolves. Returns
   `{:ok, {updates, response}}` -- `updates` is the list of decoded
   `SessionUpdate.t()` payloads observed during the turn, oldest first;
   `response` is the decoded result struct (or `{:ext, map()}` for a
   non-table result marker) -- or `{:error, term()}` on timeout/transport
-  failure/decode failure, same vocabulary as `Connection.async_request/6`'s
-  `outcome`.
+  failure/decode failure/delivery gap, same vocabulary as
+  `Connection.async_request/6`'s `outcome` plus
+  `{:error, {:delivery_gap, %{delivered:, expected:}}}` when the
+  Connection's own turn-end count disagrees with what this process
+  actually received (a definite loss signal, not a heuristic).
 
-  Ordering caveat: `session/update` forwarding to the subscribed process
-  runs in a separate handler task per notification (Connection design
-  §4.4), while the terminal `session/prompt` response is delivered
-  directly by `Connection` itself -- the WIRE order between them is
-  invariant (I3: no update after its turn's response), but the two
-  deliveries landing in *this* process's mailbox are two different
-  senders, so BEAM gives no cross-sender guarantee. This function does one
-  short best-effort settle pass after the terminal message arrives to
-  absorb same-turn stragglers; treat `updates` as "very likely complete,
-  not protocol-guaranteed complete" -- `prompt_stream/4` has no such gap
-  because it never leaves the receive loop.
-
-  Always subscribes and unsubscribes around the call, including on error.
-
-  **Precondition:** requires the generated default `c:session_update/2`
-  (the one `use Raxol.AgentClientProtocol.Client` installs). If your
-  handler module overrides `session_update/2` and does not itself call
-  `broadcast_update/3`, `subscribe/3` never fires and `updates` is `[]`
-  for every turn, forever -- see the moduledoc's "Session-consumer
-  ergonomics" section.
+  No settle pass, no timer: the direct channel makes updates, the turn-end
+  count, and the result all arrive from the Connection itself, so mailbox
+  order already equals wire order (transport-ordering design §4.4/§4.8).
   """
   @spec prompt(pid(), struct(), pos_integer()) ::
           {:ok, {[update()], struct() | {:ext, map()}}} | {:error, term()}
   def prompt(conn, request, timeout_ms \\ 60_000)
       when is_pid(conn) and is_integer(timeout_ms) and timeout_ms > 0 do
-    session_id = request.session_id
     tag = make_ref()
-    :ok = subscribe(conn, session_id, self())
 
-    try do
-      case Connection.async_request(
-             conn,
-             "session/prompt",
-             request,
-             self(),
-             tag,
-             timeout_ms
-           ) do
-        :ok -> collect_prompt(session_id, tag, [])
-        {:error, _} = err -> err
-      end
-    after
-      unsubscribe(conn, session_id, self())
+    case Connection.async_request(conn, "session/prompt", request, self(), tag, timeout_ms) do
+      :ok -> prompt_loop(tag, 0, [], nil)
+      {:error, _} = err -> err
     end
   end
 
-  defp collect_prompt(session_id, tag, acc) do
+  defp prompt_loop(tag, next, acc, count) do
     receive do
-      {:acp_session_update, ^session_id, update} ->
-        collect_prompt(session_id, tag, [update | acc])
+      {:acp_turn_update, ^tag, ordinal, notif} when ordinal == next ->
+        prompt_loop(tag, next + 1, [notif.update | acc], count)
+
+      {:acp_turn_update, ^tag, ordinal, _notif} ->
+        # Single-sender FIFO (the Connection is the ONE sender of updates,
+        # turn_end, and result for this tag) makes this branch unreachable
+        # in practice -- a defensive tripwire, never a silent skip.
+        fail_turn(:delivery_order, %{expected: next, got: ordinal})
+
+      {:acp_turn_end, ^tag, n} ->
+        prompt_loop(tag, next, acc, n)
 
       {:acp_result, ^tag, {:ok, response}} ->
-        {:ok, {settle_updates(session_id, acc), response}}
+        if count != nil and next < count do
+          fail_turn(:delivery_gap, %{delivered: next, expected: count})
+        else
+          {:ok, {Enum.reverse(acc), response}}
+        end
 
       {:acp_result, ^tag, {:error, _} = error} ->
         error
     end
   end
 
-  defp settle_updates(session_id, acc) do
-    receive do
-      {:acp_session_update, ^session_id, update} ->
-        settle_updates(session_id, [update | acc])
-    after
-      5 -> Enum.reverse(acc)
-    end
-  end
-
   @doc """
   Streaming-callback variant of `prompt/3`: `on_update.(update)` is invoked
   synchronously, in this process, for each `session/update` as it is
-  received -- no accumulation, no post-hoc settle pass (this variant's
-  receive loop never exits until the terminal message arrives, so there is
-  no window for a straggler to be missed). Returns `{:ok, response}` /
-  `{:error, term()}` for the terminal outcome, same vocabulary as
-  `Connection.async_request/6`'s `outcome`. Always subscribes and
-  unsubscribes around the call, including on error.
-
-  **Precondition:** same as `prompt/3` -- requires the generated default
-  `c:session_update/2`; an overridden `session_update/2` that doesn't call
-  `broadcast_update/3` means `on_update` is never invoked.
+  received -- no accumulation (O(1) memory: this loop keeps no update
+  list at all). Returns `{:ok, response}` / `{:error, term()}` for the
+  terminal outcome, same vocabulary as `prompt/3` (including the
+  `{:error, {:delivery_gap, _}}` fail-the-turn case).
   """
   @spec prompt_stream(pid(), struct(), (update() -> any()), pos_integer()) ::
           {:ok, struct() | {:ext, map()}} | {:error, term()}
   def prompt_stream(conn, request, on_update, timeout_ms \\ 60_000)
       when is_pid(conn) and is_function(on_update, 1) and is_integer(timeout_ms) and
              timeout_ms > 0 do
-    session_id = request.session_id
     tag = make_ref()
-    :ok = subscribe(conn, session_id, self())
 
-    try do
-      case Connection.async_request(
-             conn,
-             "session/prompt",
-             request,
-             self(),
-             tag,
-             timeout_ms
-           ) do
-        :ok -> stream_prompt(session_id, tag, on_update)
-        {:error, _} = err -> err
-      end
-    after
-      unsubscribe(conn, session_id, self())
+    case Connection.async_request(conn, "session/prompt", request, self(), tag, timeout_ms) do
+      :ok -> stream_loop(tag, 0, nil, on_update)
+      {:error, _} = err -> err
     end
   end
 
-  defp stream_prompt(session_id, tag, on_update) do
+  defp stream_loop(tag, next, count, on_update) do
     receive do
-      {:acp_session_update, ^session_id, update} ->
-        on_update.(update)
-        stream_prompt(session_id, tag, on_update)
+      {:acp_turn_update, ^tag, ordinal, notif} when ordinal == next ->
+        on_update.(notif.update)
+        stream_loop(tag, next + 1, count, on_update)
 
-      {:acp_result, ^tag, outcome} ->
-        outcome
+      {:acp_turn_update, ^tag, ordinal, _notif} ->
+        fail_turn(:delivery_order, %{expected: next, got: ordinal})
+
+      {:acp_turn_end, ^tag, n} ->
+        stream_loop(tag, next, n, on_update)
+
+      {:acp_result, ^tag, {:ok, response}} ->
+        if count != nil and next < count do
+          fail_turn(:delivery_gap, %{delivered: next, expected: count})
+        else
+          {:ok, response}
+        end
+
+      {:acp_result, ^tag, {:error, _} = error} ->
+        error
     end
+  end
+
+  # ADR-0030 clause 3's fail-the-turn default: emit exactly one `:fail`
+  # telemetry event (D9) and return the error tuple -- never a silent
+  # partial list, never a timer/retry.
+  @spec fail_turn(atom(), map()) :: {:error, {atom(), map()}}
+  defp fail_turn(reason, meta) do
+    Delivery.emit(Map.merge(%{decision: :fail}, meta))
+    {:error, {reason, meta}}
   end
 
   defmacro __using__(opts) do
