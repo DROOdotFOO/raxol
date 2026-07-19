@@ -273,6 +273,113 @@ defmodule Raxol.ACP.Xochi.Offering do
     }
   end
 
+  @doc """
+  Requirement schema narrowed to a settlement mode.
+
+  `:public` fixes `settlement_preference` to `"public"`. `:stealth` fixes it to
+  `"stealth"`, pins `dst_chain_id` to Ethereum L1 (`1`), and requires the
+  ERC-5564 `stealth_meta_address`. Built from `requirement_schema/0` so the two
+  variants never drift from the shared corridor/intent fields.
+  """
+  @spec requirement_schema(:public | :stealth) :: map()
+  def requirement_schema(:public) do
+    put_in(requirement_schema(), ["properties", "settlement_preference"], %{
+      "type" => "string",
+      "enum" => ["public"],
+      "default" => "public",
+      "description" => "Public settlement: the payout lands in a wallet on the destination chain."
+    })
+  end
+
+  def requirement_schema(:stealth) do
+    requirement_schema()
+    |> put_in(["properties", "settlement_preference"], %{
+      "type" => "string",
+      "enum" => ["stealth"],
+      "default" => "stealth",
+      "description" =>
+        "Stealth settlement (ERC-5564): the payout lands at a one-time address on " <>
+          "Ethereum L1 that only the recipient controls."
+    })
+    |> put_in(["properties", "dst_chain_id"], %{
+      "type" => "integer",
+      "const" => 1,
+      "description" =>
+        "Destination chain. Stealth settles on Ethereum L1, so this must be 1 " <>
+          "(cross-chain stealth is not yet live)."
+    })
+    |> put_in(["properties", "stealth_meta_address"], %{
+      "type" => "object",
+      "required" => ["spending_pub_key", "viewing_pub_key"],
+      "additionalProperties" => false,
+      "description" =>
+        "ERC-5564 stealth meta-address keys the buyer also signed into their intent, " <>
+          "surfaced here so the offering can validate them before escrow and the " <>
+          "deliverable can carry the on-chain announcement.",
+      "properties" => %{
+        "spending_pub_key" => %{"type" => "string", "pattern" => "^0x[0-9a-fA-F]+$"},
+        "viewing_pub_key" => %{"type" => "string", "pattern" => "^0x[0-9a-fA-F]+$"}
+      }
+    })
+    |> update_in(["required"], &(&1 ++ ["stealth_meta_address"]))
+  end
+
+  @doc """
+  Deliverable schema narrowed to a settlement mode. `:public` drops the stealth
+  announcement fields; `:stealth` promotes them to `required`.
+  """
+  @spec deliverable_schema(:public | :stealth) :: map()
+  def deliverable_schema(:public) do
+    update_in(deliverable_schema(), ["properties"], fn props ->
+      Map.drop(props, ["settlement_type", "stealth_address", "ephemeral_pub_key", "view_tag"])
+    end)
+  end
+
+  def deliverable_schema(:stealth) do
+    update_in(deliverable_schema(), ["required"], fn required ->
+      required ++ ["settlement_type", "stealth_address", "ephemeral_pub_key", "view_tag"]
+    end)
+  end
+
+  @doc "Marketplace metadata for a mode-specific offering (`:public` | `:stealth`)."
+  @spec offering_metadata(:public | :stealth) :: map()
+  def offering_metadata(:public) do
+    %{
+      name: "xochi_stable_public",
+      display_name: "Xochi Stablecoin Transfer (Public)",
+      description:
+        "Cross-chain stablecoin settlement to a wallet on the destination chain. The " <>
+          "buyer signs a Xochi intent, the storefront relays it and returns the " <>
+          "settlement tx hashes; the buyer escrows only the storefront fee (a plain " <>
+          "job, no fund hook).",
+      required_funds: true,
+      hook_kind: "none",
+      sla_minutes: 10,
+      requirement_schema: requirement_schema(:public),
+      deliverable_schema: deliverable_schema(:public),
+      tags: ["payments", "cross-chain", "stablecoin", "xochi", "public"]
+    }
+  end
+
+  def offering_metadata(:stealth) do
+    %{
+      name: "xochi_stable_stealth",
+      display_name: "Xochi Stablecoin Transfer (Stealth, Ethereum L1)",
+      description:
+        "Cross-chain stablecoin settlement to a one-time ERC-5564 stealth address on " <>
+          "Ethereum L1 that only the recipient controls. Destination must be Ethereum " <>
+          "(chain 1); cross-chain stealth is not yet live. The buyer signs a Xochi " <>
+          "intent, the storefront relays it and returns the settlement tx hashes plus " <>
+          "the stealth announcement for on-chain verification.",
+      required_funds: true,
+      hook_kind: "none",
+      sla_minutes: 10,
+      requirement_schema: requirement_schema(:stealth),
+      deliverable_schema: deliverable_schema(:stealth),
+      tags: ["payments", "cross-chain", "stablecoin", "xochi", "stealth", "privacy"]
+    }
+  end
+
   @doc "Default SLA in minutes -- max time from `job.funded` to `job.submitted`."
   @spec sla_minutes() :: pos_integer()
   def sla_minutes, do: 10
