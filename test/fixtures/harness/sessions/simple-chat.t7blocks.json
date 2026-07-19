@@ -5,6 +5,7 @@
       "outcome": {
         "exit_code": null,
         "duration_ms": 300,
+        "completed_at_us": 1752580800400000,
         "cost": null
       },
       "content": {

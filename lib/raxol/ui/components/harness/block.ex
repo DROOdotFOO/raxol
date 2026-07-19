@@ -182,7 +182,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.TextLayout
   alias Raxol.UI.TextMeasure
-  alias Raxol.UI.Components.Harness.Indication
+  alias Raxol.UI.Components.Harness.{IndentationException, Indication}
   alias Raxol.View.Components
 
   require Logger
@@ -672,101 +672,225 @@ defmodule Raxol.UI.Components.Harness.Block do
     end
   end
 
+  # The transcript law (V's general rule): every rendered block is an
+  # `Indication` container — its glyph IS the gutter (cell 1), its rows
+  # sit at the 2-cell indent — or a composition of Indications and
+  # explicit `IndentationException`s (the Pierre diff rows, whose own
+  # gutter bars are their left contour). No third state: the glyph-as-
+  # string-prefix form is retired, and expanded machinery bodies land at
+  # the content indent instead of the old col-1 violation.
   defp build_render(block, width, context) do
     # Resolve the prominence fade colour ONCE per render (nil = neutral,
-    # no fade), then thread it into every text-producing branch --
-    # header, content, and outcome all carry the SAME `:fg`, and the
-    # per-line content map never re-runs the H-K solver.
+    # no fade), then thread it into every text-producing branch.
     fg = prominence_fg(block, context)
-    header = header_view(block, width, fg, context)
-    outcome_children = outcome_children(block, fg)
-    completion_children = completion_rows(block, fg, context)
+    inner = max(width - 2, 1)
+    tail = outcome_children(block, fg) ++ completion_rows(block, fg, context)
 
-    body_children =
-      case block.fold do
-        :folded -> [header]
-        :expanded -> expanded_body_children(block, header, width, context, fg)
-      end
+    case block_shape(block, inner, width, context, fg) do
+      {:gutter, gutter, gutter_style, rows} ->
+        Indication.container(
+          Components.column(gap: 0, children: rows ++ tail),
+          gutter: gutter,
+          gutter_style: gutter_style
+        )
 
-    column =
-      Components.column(
-        gap: 0,
-        children: body_children ++ outcome_children ++ completion_children
-      )
+      {:node, node} ->
+        node
 
-    stamp_component(block, column)
-  end
-
-  # The bottom-identity ruling (V): a diff-carrying approval contributes NO
-  # generic `▾ ⚑ <tool>` header row -- the tool-name line only restates
-  # what the diff already shows, so the diff IS the block's visual
-  # identity. Reading order: the Pierre diff rows first, then the one
-  # `± <verb> <path>` identity line (`approval_diff_identity/2`), then the
-  # tail (blast radius + live prompt / sealed receipt) -- the answer
-  # choices live in the hosting footer, never in this block. Suppression
-  # is EXPANDED-only: a folded approval keeps its compact one-line `⚑`
-  # form (the `:folded` arm in `build_render/3`, untouched). A non-diff
-  # (bash/...) approval and every other kind keep header-then-content.
-  defp expanded_body_children(
-         %__MODULE__{kind: :approval} = block,
-         header,
-         width,
-         context,
-         fg
-       ) do
-    case approval_proposed_diff(block, width) do
-      [] ->
-        [header | plain_content_lines(block, fg, context)]
-
-      diff_rows ->
-        diff_rows ++
-          [
-            approval_diff_identity(block, fg)
-            | approval_tail_lines(block, fg, context)
-          ]
+      {:composite, children} ->
+        stamp_component(
+          block,
+          Components.column(gap: 0, children: children ++ tail)
+        )
     end
   end
 
-  # An expanded thought is ONE `Indication.bracket/4` container — the
-  # generalized left-edge primitive (V's ruling: never a hand-rolled
-  # indent/closer pair). The engine stamps `∵` at the container's first
-  # row (the header — down-dots = expanded start ON the thinking line),
-  # `∴` at its last, and every content row at the 2-cell indent. The
-  # header is rebuilt glyph-less at the INNER width so its right-edge
-  # meta still lands on the block's true right edge.
-  defp expanded_body_children(
-         %__MODULE__{kind: :reasoning} = block,
-         _header,
-         width,
+  # -- per-kind shapes ------------------------------------------------------
+
+  defp block_shape(
+         %__MODULE__{kind: :tool_call} = block,
+         inner,
+         _w,
          context,
          fg
        ) do
-    inner_width = max(width - 2, 1)
+    style = if tool_failed?(block.outcome), do: %{}, else: %{dim: true}
 
-    header =
-      Components.text(
-        content:
-          justify_between("thinking", reasoning_meta(block), inner_width),
-        style: apply_fg(%{dim: true}, fg)
-      )
+    rows =
+      case block.fold do
+        :folded ->
+          [tool_header_row(block, inner, style, fg, context)]
 
+        :expanded ->
+          [
+            tool_header_row(block, inner, style, fg, context)
+            | content_lines_view(block, inner, context, fg)
+          ]
+      end
+
+    glyph = tool_glyph(block.content, block.outcome, context)
+    {:gutter, {:top, glyph}, apply_fg(style, fg), rows}
+  end
+
+  defp block_shape(
+         %__MODULE__{kind: :reasoning, fold: :folded} = block,
+         inner,
+         _w,
+         _ctx,
+         fg
+       ) do
+    {:gutter, {:top, @reasoning_collapsed_glyph}, apply_fg(%{dim: true}, fg),
+     [reasoning_header_row(block, inner, fg)]}
+  end
+
+  # An expanded thought is ONE `Indication.bracket/4` (its documented
+  # canonical instance): ∵ stamps the header row, ∴ the last content row,
+  # everything at the 2-cell indent. Completion rows ride INSIDE the
+  # bracket — they are content, and a sibling would break the law.
+  defp block_shape(
+         %__MODULE__{kind: :reasoning, fold: :expanded} = block,
+         inner,
+         _w,
+         context,
+         fg
+       ) do
     body =
       block
-      |> content_lines_view(inner_width, context, fg)
+      |> content_lines_view(inner, context, fg)
       |> trim_blank_edge_rows()
 
-    [
+    completion = completion_rows(block, fg, context)
+
+    node =
       Indication.bracket(
-        Components.column(gap: 0, children: [header | body]),
+        Components.column(
+          gap: 0,
+          children:
+            [reasoning_header_row(block, inner, fg) | body] ++ completion
+        ),
         @reasoning_open_glyph,
         @reasoning_close_glyph,
         gutter_style: apply_fg(%{dim: true}, fg)
       )
-    ]
+
+    {:node, node}
   end
 
-  defp expanded_body_children(block, header, width, context, fg),
-    do: [header | content_lines_view(block, width, context, fg)]
+  defp block_shape(%__MODULE__{kind: :diff} = block, inner, _w, context, fg) do
+    rows =
+      case block.fold do
+        :folded ->
+          [diff_header_row(block, inner, fg)]
+
+        :expanded ->
+          [
+            diff_header_row(block, inner, fg)
+            | content_lines_view(block, inner, context, fg)
+          ]
+      end
+
+    {:gutter, {:top, kind_glyph(:diff)}, apply_fg(%{dim: true}, fg), rows}
+  end
+
+  defp block_shape(%__MODULE__{kind: :error} = block, inner, _w, context, fg) do
+    rows =
+      case block.fold do
+        :folded ->
+          [error_header_row(block, inner, fg)]
+
+        :expanded ->
+          [
+            error_header_row(block, inner, fg)
+            | content_lines_view(block, inner, context, fg)
+          ]
+      end
+
+    # A fault is signal: the ✗ gutter and the message keep full strength.
+    {:gutter, {:top, "✗"}, apply_fg(%{}, fg), rows}
+  end
+
+  defp block_shape(
+         %__MODULE__{kind: :approval} = block,
+         inner,
+         width,
+         context,
+         fg
+       ) do
+    {:composite, approval_children(block, inner, width, context, fg)}
+  end
+
+  # message / opaque / unknown: the fold arrow is the gutter icon, the
+  # role/kind glyph stays inline with the summary (content, not chrome).
+  defp block_shape(block, inner, _w, context, fg) do
+    rows =
+      case block.fold do
+        :folded ->
+          [generic_header_row(block, inner, fg)]
+
+        :expanded ->
+          [
+            generic_header_row(block, inner, fg)
+            | content_lines_view(block, inner, context, fg)
+          ]
+      end
+
+    {:gutter, {:top, fold_icon(block.fold)}, apply_fg(%{dim: true}, fg), rows}
+  end
+
+  # The bottom-identity ruling (V) inside the law: the Pierre rows are a
+  # DECLARED IndentationException (their gutter bars/numbers are their own
+  # left contour — a second indent would misalign the panes), followed by
+  # one ± Indication carrying the identity line and the tail. A non-diff
+  # (bash) approval is one ⚑ Indication of header + referent.
+  defp approval_children(block, inner, width, context, fg) do
+    case {block.fold,
+          block.fold == :expanded && approval_proposed_diff(block, width)} do
+      {:folded, _} ->
+        [
+          Indication.container(
+            Components.column(
+              gap: 0,
+              children: [generic_header_row(block, inner, fg)]
+            ),
+            gutter: {:top, fold_icon(:folded)},
+            gutter_style: apply_fg(%{dim: true}, fg)
+          )
+        ]
+
+      {:expanded, []} ->
+        [
+          Indication.container(
+            Components.column(
+              gap: 0,
+              children: [
+                generic_header_row(block, inner, fg)
+                | plain_content_lines(block, fg, context)
+              ]
+            ),
+            gutter: {:top, glyph(block)},
+            gutter_style: apply_fg(%{dim: true}, fg)
+          )
+        ]
+
+      {:expanded, diff_rows} ->
+        [
+          IndentationException.wrap(
+            Components.column(gap: 0, children: diff_rows)
+          ),
+          Indication.container(
+            Components.column(
+              gap: 0,
+              children: [
+                approval_diff_identity(block, fg)
+                | approval_tail_lines(block, fg, context)
+              ]
+            ),
+            gutter: {:top, kind_glyph(:diff)},
+            gutter_style: apply_fg(%{dim: true}, fg)
+          )
+        ]
+    end
+  end
 
   # An approval block's render root is stamped as an `:approval_prompt`
   # component node -- it carries the `id` + `attrs` the MCP TreeWalker and
@@ -792,8 +916,6 @@ defmodule Raxol.UI.Components.Harness.Block do
       options: Map.get(content, :options, [])
     })
   end
-
-  defp stamp_component(_block, view), do: view
 
   # The node id keys the derived tools (`<id>.answer_allow`) and the event
   # route -- the request_id (the referent) when present, a stable fallback
@@ -894,65 +1016,127 @@ defmodule Raxol.UI.Components.Harness.Block do
   # Machinery is dim by default (tool output subordinate to speech); a
   # FAILED tool keeps alarm prominence (never dim -- a failed tool is a
   # signal, not machinery noise).
-  defp header_view(%__MODULE__{kind: :tool_call} = block, width, fg, context) do
-    style = if tool_failed?(block.outcome), do: %{}, else: %{dim: true}
-
+  # Glyph-less under the law: the state glyph rides the Indication gutter
+  # (`block_shape/5`), so the row carries only the verb line.
+  defp tool_header_row(block, inner, style, fg, context) do
     case tool_line_segments(block, context) do
       nil ->
         Components.text(
           content:
             TextLayout.truncate(
               tool_line(block, context),
-              max(width, 1),
+              max(inner, 1),
               :ellipsis
             ),
           style: apply_fg(style, fg)
         )
 
       segments ->
-        tool_segment_row(segments, block, context, width, style, fg)
+        tool_segment_row(segments, block, context, inner, style, fg)
     end
   end
 
-  # The FOLDED thought header: `⁖ thinking` flush left, the honest
-  # quantity flush right. The EXPANDED form never routes here — it is
-  # one `Indication.bracket` container (`expanded_body_children/5`) whose
-  # top corner carries the `∵` expanded-start marker on the thinking line.
-  defp header_view(%__MODULE__{kind: :reasoning} = block, width, fg, _context) do
+  # The thought header row (under the ⁖ gutter when folded, inside the
+  # ∵…∴ bracket when expanded). A SEALED thought reads `*thought* for Ns`
+  # (rounded up, never ms — V's ruling) with the wall-clock completion
+  # instant flush right (05:10 AM); a LIVE thought keeps `thinking` and
+  # the honest line count.
+  defp reasoning_header_row(%__MODULE__{seal: :sealed} = block, inner, fg) do
+    duration = block.outcome |> outcome_duration_ms() |> thought_duration()
+    left_width = TextMeasure.display_width("thought" <> duration)
+    clock = completed_clock(block.outcome)
+
+    right =
+      case clock do
+        "" ->
+          []
+
+        clock ->
+          pad =
+            max(
+              max(inner, 1) - left_width - TextMeasure.display_width(clock),
+              1
+            )
+
+          [
+            Components.text(content: String.duplicate(" ", pad)),
+            Components.text(content: clock, style: apply_fg(%{dim: true}, fg))
+          ]
+      end
+
+    Components.row(
+      gap: 0,
+      children:
+        [
+          Components.text(
+            content: "thought",
+            style: apply_fg(%{dim: true, italic: true}, fg)
+          ),
+          Components.text(content: duration, style: apply_fg(%{dim: true}, fg))
+        ] ++ right
+    )
+  end
+
+  defp reasoning_header_row(block, inner, fg) do
     Components.text(
       content:
-        justify_between(
-          "#{@reasoning_collapsed_glyph} thinking",
-          reasoning_meta(block),
-          max(width, 1)
-        ),
+        justify_between("thinking", reasoning_meta(block), max(inner, 1)),
       style: apply_fg(%{dim: true}, fg)
     )
   end
 
-  defp header_view(%__MODULE__{kind: :diff} = block, width, fg, _context) do
+  defp outcome_duration_ms(%{duration_ms: ms}) when is_integer(ms), do: ms
+  defp outcome_duration_ms(_outcome), do: nil
+
+  defp thought_duration(nil), do: ""
+
+  defp thought_duration(ms) when is_integer(ms) and ms >= 0 do
+    " for #{max(div(ms + 999, 1000), 1)}s"
+  end
+
+  # The completion instant as a LOCAL wall clock (05:10 AM). An absent
+  # timestamp renders nothing — never a fabricated time.
+  defp completed_clock(%{completed_at_us: us}) when is_integer(us) do
+    {{_y, _mo, _d}, {h, m, _sec}} =
+      us
+      |> div(1_000_000)
+      |> Kernel.+(62_167_219_200)
+      |> :calendar.gregorian_seconds_to_datetime()
+      |> :calendar.universal_time_to_local_time()
+
+    {h12, ampm} =
+      cond do
+        h == 0 -> {12, "AM"}
+        h < 12 -> {h, "AM"}
+        h == 12 -> {12, "PM"}
+        true -> {h - 12, "PM"}
+      end
+
+    :io_lib.format("~2..0B:~2..0B ~s", [h12, m, ampm]) |> IO.iodata_to_binary()
+  rescue
+    _ -> ""
+  end
+
+  defp completed_clock(_outcome), do: ""
+
+  defp diff_header_row(block, inner, fg) do
     Components.text(
-      content: TextLayout.truncate(diff_line(block), max(width, 1), :ellipsis),
+      content: TextLayout.truncate(diff_line(block), max(inner, 1), :ellipsis),
       style: apply_fg(%{dim: true}, fg)
     )
   end
 
-  # An error is an ALARM line, never a foldable machinery block: NO fold
-  # arrow, NEVER dim (a fault is signal, per the compaction ruling), and it
-  # shows its REAL message (`error_line/1` reads the honest error text, with
-  # an honest specific fallback when the fault genuinely carries none --
-  # never a bare `(empty)`). The compact line is line 1 of the fault; `z`
-  # peeks the full body (a multi-line fault) via `content_lines_view/4`.
-  defp header_view(%__MODULE__{kind: :error} = block, width, fg, _context) do
+  # An error is an ALARM: the ✗ gutter and this row keep full strength.
+  defp error_header_row(block, inner, fg) do
     Components.text(
-      content: TextLayout.truncate(error_line(block), max(width, 1), :ellipsis),
+      content: TextLayout.truncate(error_line(block), max(inner, 1), :ellipsis),
       style: apply_fg(%{}, fg)
     )
   end
 
-  defp header_view(block, width, fg, _context) do
-    prefix = "#{fold_icon(block.fold)} #{glyph(block)} "
-    budget = max(width - TextMeasure.display_width(prefix), 1)
+  defp generic_header_row(block, inner, fg) do
+    prefix = "#{glyph(block)} "
+    budget = max(inner - TextMeasure.display_width(prefix), 1)
     summary_text = block |> summary() |> TextLayout.truncate(budget, :ellipsis)
 
     Components.text(
@@ -968,12 +1152,11 @@ defmodule Raxol.UI.Components.Harness.Block do
   # the plain truncated form (`tool_line/2`'s verb path), trading the
   # highlight for the honest ellipsis.
   defp tool_segment_row(segments, block, context, width, style, fg) do
-    prefix = "#{tool_glyph(block.content, block.outcome, context)} "
     suffix = tool_taint_suffix(block.content)
 
     total =
       TextMeasure.display_width(
-        prefix <> Enum.map_join(segments, "", &elem(&1, 0)) <> suffix
+        Enum.map_join(segments, "", &elem(&1, 0)) <> suffix
       )
 
     if total > max(width, 1) do
@@ -990,14 +1173,13 @@ defmodule Raxol.UI.Components.Harness.Block do
       base = apply_fg(style, fg)
 
       children =
-        [Components.text(content: prefix, style: base)] ++
-          Enum.map(segments, fn
-            {text, :base} ->
-              Components.text(content: text, style: base)
+        Enum.map(segments, fn
+          {text, :base} ->
+            Components.text(content: text, style: base)
 
-            {text, :quiet} ->
-              Components.text(content: text, style: quiet_style(base))
-          end) ++
+          {text, :quiet} ->
+            Components.text(content: text, style: quiet_style(base))
+        end) ++
           if(suffix == "",
             do: [],
             else: [Components.text(content: suffix, style: base)]
@@ -1182,14 +1364,12 @@ defmodule Raxol.UI.Components.Harness.Block do
   # "running" there, so no `running…` text is needed. The one surviving
   # suffix is the taint marker: `⚠︎ untrusted` is a security provenance
   # signal, not a receipt, so it is never dropped.
-  defp tool_line(%__MODULE__{content: content} = block, context) do
-    glyph = tool_glyph(content, block.outcome, context)
-
+  defp tool_line(%__MODULE__{content: content}, _context) do
     body =
       tool_verb_line(content) ||
         "#{tool_name(content)}#{format_args(Map.get(content, :args))}"
 
-    "#{glyph} #{body}#{tool_taint_suffix(content)}"
+    "#{body}#{tool_taint_suffix(content)}"
   end
 
   # The humanized verb form (V's ruling): the line says what the agent is
@@ -1327,9 +1507,9 @@ defmodule Raxol.UI.Components.Harness.Block do
     where = content |> Map.get(:where) |> to_display_text() |> String.trim()
 
     cond do
-      message != "" -> "✗ " <> first_line(message)
-      where != "" -> "✗ error from " <> first_line(where)
-      true -> "✗ error (no message)"
+      message != "" -> first_line(message)
+      where != "" -> "error from " <> first_line(where)
+      true -> "error (no message)"
     end
   end
 
@@ -1409,7 +1589,7 @@ defmodule Raxol.UI.Components.Harness.Block do
       end
 
     {added, removed} = diff_stat(content)
-    "#{kind_glyph(:diff)} #{path} · +#{added} -#{removed}"
+    "#{path} · +#{added} -#{removed}"
   end
 
   defp diff_stat(content) do
@@ -1761,8 +1941,9 @@ defmodule Raxol.UI.Components.Harness.Block do
         p -> p
       end
 
+    # Glyph-less under the law: the ± rides this line's Indication gutter.
     line =
-      [kind_glyph(:diff), approval_action_verb(content), path]
+      [approval_action_verb(content), path]
       |> Enum.reject(&(&1 == ""))
       |> Enum.join(" ")
 

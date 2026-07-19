@@ -69,7 +69,7 @@ defmodule Raxol.UI.Components.Harness.BlockInteractiveTest do
       stamped = Block.render(block, %{width: 80, id: "tool_ok"})
 
       # Same node shape (a column), now carrying identity + the seam attrs.
-      assert stamped.type == :column
+      assert stamped.type == :indication
       assert stamped.id == "tool_ok"
       assert stamped.attrs.component_module == Block
       assert stamped.attrs.kind == :tool_call
@@ -77,12 +77,12 @@ defmodule Raxol.UI.Components.Harness.BlockInteractiveTest do
       assert stamped.attrs.seal == :sealed
       assert stamped.on_click == {:harness_block, :toggle_fold, "tool_ok"}
       # The body is unchanged -- only identity/attrs/on_click were added.
-      assert stamped.children == legacy.children
+      assert stamped.content.children == legacy.content.children
     end
 
-    test "without context[:id] the render is the legacy column, unstamped" do
+    test "without context[:id] the render is the bare law container, unstamped" do
       view = Block.render(completed_tool_block(), %{width: 80})
-      assert view.type == :column
+      assert view.type == :indication
       refute Map.get(view, :id)
       refute Map.get(view, :on_click)
     end

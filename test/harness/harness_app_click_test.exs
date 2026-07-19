@@ -87,8 +87,11 @@ defmodule Raxol.Harness.HarnessAppClickTest do
       |> View.render()
       |> flatten_rows()
 
-    index = Enum.find_index(rows, &(&1 =~ "thinking"))
-    assert index != nil, "no reasoning header on screen:\n#{inspect(rows)}"
+    index = Enum.find_index(rows, &(&1 =~ "thought" or &1 =~ "thinking"))
+
+    assert index != nil,
+           "no thought/thinking header on screen:\n#{inspect(rows)}"
+
     index + 1
   end
 

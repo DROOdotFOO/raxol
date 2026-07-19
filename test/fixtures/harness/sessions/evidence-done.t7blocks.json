@@ -5,6 +5,7 @@
       "outcome": {
         "exit_code": null,
         "duration_ms": 300,
+        "completed_at_us": 1752750000400000,
         "cost": null
       },
       "content": {
@@ -27,6 +28,7 @@
       "outcome": {
         "exit_code": null,
         "duration_ms": 100,
+        "completed_at_us": 1752750000600000,
         "cost": null
       },
       "content": {
@@ -61,6 +63,7 @@
       "outcome": {
         "exit_code": null,
         "duration_ms": 100,
+        "completed_at_us": 1752750001000000,
         "cost": null
       },
       "content": {

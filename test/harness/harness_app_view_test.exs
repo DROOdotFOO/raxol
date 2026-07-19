@@ -18,8 +18,31 @@ defmodule Raxol.Harness.HarnessAppViewTest do
     flow = el |> Map.get(:flow_child) |> List.wrap()
     overlays = el |> Map.get(:overlays, []) |> Enum.map(&Map.get(&1, :element))
     children = el |> Map.get(:children, []) |> List.wrap()
-    (flow ++ children ++ overlays) |> Enum.map_join(" ", &flatten_text/1)
+
+    # the law containers hold their subtree under :content; emulate the
+    # gutter glyph so painted-string pins read as on screen
+    {gutter_prefix, content} =
+      case el do
+        %{type: :indication, content: c} ->
+          {case Map.get(el, :gutter) do
+             {:top, g} when is_binary(g) -> [g]
+             {:corners, g, b} -> Enum.filter([g, b], &is_binary/1)
+             {:rule, g} when is_binary(g) -> [g]
+             _ -> []
+           end, List.wrap(c)}
+
+        %{type: :indentation_exception, content: c} ->
+          {[], List.wrap(c)}
+
+        _ ->
+          {[], []}
+      end
+
+    (gutter_prefix ++ flow ++ children ++ content ++ overlays)
+    |> Enum.map_join(" ", &flatten_text/1)
   end
+
+  defp flatten_text(g) when is_binary(g), do: g
 
   defp flatten_text(list) when is_list(list),
     do: Enum.map_join(list, " ", &flatten_text/1)
@@ -33,6 +56,8 @@ defmodule Raxol.Harness.HarnessAppViewTest do
     do: inner
 
   defp unframe(view), do: view
+
+  defp unwrap_frame(view), do: unframe(view)
 
   defp body_and_footer(view) do
     [body, footer | _] = unframe(view).children
@@ -55,7 +80,7 @@ defmodule Raxol.Harness.HarnessAppViewTest do
 
       el = TranscriptView.render(state, %{available_width: 40})
 
-      contents = Enum.map(el.children, &Map.get(&1, :content))
+      contents = Enum.map(el.children, &row_content/1)
       assert length(el.children) == 5
       assert "line 50" in contents
       refute "line 1" in contents
@@ -69,7 +94,7 @@ defmodule Raxol.Harness.HarnessAppViewTest do
 
       el = TranscriptView.render(state, %{available_width: 40})
 
-      contents = Enum.map(el.children, &Map.get(&1, :content))
+      contents = Enum.map(el.children, &row_content/1)
       assert "line 10" in contents
       refute "line 50" in contents
     end
@@ -85,10 +110,16 @@ defmodule Raxol.Harness.HarnessAppViewTest do
 
       el = TranscriptView.render(state, %{available_width: 40})
       assert length(el.children) == 6
-      assert List.last(el.children).content == "only"
-      assert hd(el.children).content == ""
+      assert row_content(List.last(el.children)) == "only"
+      assert row_content(hd(el.children)) == ""
     end
   end
+
+  # a record row under the law is an Indication whose content carries the
+  # text node; window PADS stay bare text
+  defp row_content(%{type: :indication, content: %{content: c}}), do: c
+  defp row_content(%{content: c}) when is_binary(c), do: c
+  defp row_content(_), do: nil
 
   test "View.render puts only the windowed slice into the tree (the F0-perf pin)" do
     records = for i <- 1..40, do: {:marker, "m#{i}"}
@@ -103,7 +134,7 @@ defmodule Raxol.Harness.HarnessAppViewTest do
 
     in_tree =
       transcript.children
-      |> Enum.map(&Map.get(&1, :content))
+      |> Enum.map(&row_content/1)
       |> Enum.reject(&(&1 in [nil, ""]))
 
     assert in_tree != []
@@ -308,9 +339,12 @@ defmodule Raxol.Harness.HarnessAppViewTest do
           })
         ])
 
-      text = flatten_text(View.render(model))
-      assert text =~ "BLOCKTEXT"
-      refute text =~ "TAILTEXT"
+      {body, footer} = body_and_footer(View.render(model))
+      assert footer =~ "BLOCKTEXT"
+      # the live thought now rides the BODY as its ∵ record — only the
+      # FOOTER must prefer the pending block over the tail
+      refute footer =~ "TAILTEXT"
+      assert body =~ "TAILTEXT"
     end
 
     test "an open overlay suppresses the preview entirely (the suppressed-preview law)" do
@@ -329,7 +363,14 @@ defmodule Raxol.Harness.HarnessAppViewTest do
         |> stream_model()
 
       overlaid = %{model | overlay: {:panel, :memory}}
-      refute flatten_text(View.render(overlaid)) =~ "thinking"
+      view = View.render(overlaid)
+
+      # the law moved the live thought into the BODY (its ∵ record may
+      # render under the overlay backdrop); the suppressed-preview law
+      # now guards the FOOTER channel specifically
+      %{flow_child: base} = view
+      [_transcript, footer | _] = unwrap_frame(base).children
+      refute flatten_text(footer) =~ "thinking"
     end
   end
 
@@ -447,6 +488,95 @@ defmodule Raxol.Harness.HarnessAppViewTest do
           ]
         })
       ])
+    end
+  end
+
+  # ── THE TRANSCRIPT LAW (V's general rule) ────────────────────────────────
+
+  describe "the indication law: every record is an Indication or a declared exception" do
+    defp law_compliant?(%{type: :indication}), do: true
+    defp law_compliant?(%{type: :indentation_exception}), do: true
+
+    defp law_compliant?(%{type: type, children: children})
+         when type in [:column, :approval_prompt],
+         do: Enum.all?(children, &law_compliant?/1)
+
+    defp law_compliant?(_node), do: false
+
+    test "every record kind renders law-compliant: blocks, markers, echoes, live thinking" do
+      model =
+        stream_model([
+          loop_ev(1, "t1", 100, :turn_started, %{}),
+          loop_ev(2, "t1", 110, :item_started, %{
+            "item_id" => "i1",
+            "item_type" => "reasoning"
+          }),
+          loop_ev(3, "t1", 115, :item_completed, %{
+            "item_id" => "i1",
+            "item_type" => "reasoning",
+            "content" => "done thought"
+          }),
+          loop_ev(4, "t1", 120, :item_started, %{
+            "item_id" => "i2",
+            "item_type" => "reasoning"
+          }),
+          loop_ev(5, "t1", 125, :item_delta, %{
+            "item_id" => "i2",
+            "chunk" => "live thought line"
+          })
+        ])
+
+      model =
+        model
+        |> Model.seal_marker("» a machinery notice")
+        |> Model.seal_marker("plain marker")
+
+      model = %{
+        model
+        | transcript_records: [{:echo, "user words"} | model.transcript_records]
+      }
+
+      view = View.render(model)
+      [transcript | _] = unframe(view).children
+
+      # every non-pad row of the window is law-compliant
+      for child <- transcript.children,
+          not match?(%{type: :text, content: ""}, child) do
+        assert law_compliant?(child),
+               "record violated the indication law: #{inspect(child, limit: 8)}"
+      end
+    end
+
+    test "the ACTIVE thought is a ∵-cornered Indication record in the BODY (live thinking speaks the law)" do
+      model =
+        stream_model([
+          loop_ev(1, "t1", 100, :turn_started, %{}),
+          loop_ev(2, "t1", 110, :item_started, %{
+            "item_id" => "i1",
+            "item_type" => "reasoning"
+          }),
+          loop_ev(3, "t1", 120, :item_delta, %{
+            "item_id" => "i1",
+            "chunk" => "alpha\nbeta\ngamma\ndelta"
+          })
+        ])
+
+      {body, footer} = body_and_footer(View.render(model))
+
+      # body: the ∵ open bracket + peek (newest 3) — the oldest line is
+      # windowed out until a click expands
+      assert body =~ "∵"
+      assert body =~ "thinking"
+      assert body =~ "delta"
+      refute body =~ "alpha"
+
+      # footer: no reasoning copy (the body owns the live thought)
+      refute footer =~ "thinking"
+
+      # click-to-expand reveals the whole thought
+      expanded = Model.click(model, :tail)
+      {ebody, _} = body_and_footer(View.render(expanded))
+      assert ebody =~ "alpha"
     end
   end
 end

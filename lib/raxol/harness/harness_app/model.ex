@@ -1025,8 +1025,30 @@ defmodule Raxol.Harness.HarnessApp.Model do
   the transcript bottom at full prominence (the special tool render),
   with the operator's pending fold override applied.
   """
-  @spec live_frontier_records(t()) :: [seal_record()]
+  @spec live_frontier_records(t()) :: [
+          seal_record() | {:live_thinking, String.t(), boolean()}
+        ]
   def live_frontier_records(model) do
+    thinking_frontier_records(model) ++ approval_frontier_records(model)
+  end
+
+  # The ACTIVE thought rides the transcript bottom as an Indication
+  # record (V's ruling: live thinking uses the same generalized layout as
+  # completed) — a ∵-cornered container, peek (last 3 lines) or expanded
+  # per the click toggle. Footer preview no longer renders reasoning.
+  defp thinking_frontier_records(model) do
+    case model.projection.tail
+         |> Map.values()
+         |> Enum.find(&(&1.item_type == :reasoning)) do
+      %{chunks: chunks} when chunks != [] ->
+        [{:live_thinking, Enum.join(chunks, ""), model.tail_expanded?}]
+
+      _none ->
+        []
+    end
+  end
+
+  defp approval_frontier_records(model) do
     case live_approval_block(model) do
       nil ->
         []

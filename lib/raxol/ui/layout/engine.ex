@@ -783,6 +783,15 @@ defmodule Raxol.UI.Layout.Engine do
     content_elements ++ gutter_elements ++ acc
   end
 
+  # The transcript law's escape hatch (`Raxol.UI.Components.Harness.
+  # IndentationException`): declared full-bleed — content laid out
+  # exactly at the wrapper's space, no indent, no gutter. Chrome-free by
+  # design; the node's value is the declaration.
+  def process_element(%{type: :indentation_exception} = ex, space, acc) do
+    content = indication_content_element(Map.get(ex, :content))
+    process_element(content, space, []) ++ acc
+  end
+
   def process_element(%{type: :table} = table_element, space, acc) do
     # Delegate table measurement and positioning to the dedicated module
     Table.measure_and_position(table_element, space, acc)
@@ -1023,6 +1032,13 @@ defmodule Raxol.UI.Layout.Engine do
       width: Map.get(measured, :width, 0) + @indication_indent,
       height: Map.get(measured, :height, 1)
     }
+  end
+
+  def measure_element(%{type: :indentation_exception} = ex, available_space) do
+    ex
+    |> Map.get(:content)
+    |> indication_content_element()
+    |> measure_element(available_space)
   end
 
   # Handles valid elements (maps with :type and :attrs)

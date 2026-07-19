@@ -25,6 +25,15 @@ defmodule Raxol.Harness.RecencyPolicyTest do
   # A. prominence/1 -- the documented ladder
   # ---------------------------------------------------------------------
 
+  # unwrap the law container (V's general rule): render roots are
+  # Indication / approval composites; these pins address the content rows
+  defp unwrap_law(%{type: :indication, content: content}), do: content
+
+  defp unwrap_law(%{type: :approval_prompt, children: [first | _]}),
+    do: unwrap_law(first)
+
+  defp unwrap_law(node), do: node
+
   describe "prominence/1 steps the documented ladder and floors at 0.4" do
     test "the table: 0/1/2/3/4/10/nil/-1" do
       table = [
@@ -407,7 +416,9 @@ defmodule Raxol.Harness.RecencyPolicyTest do
 
       for {block, grade} <- Enum.zip(projection.blocks, grades) do
         %{children: [header | _]} =
-          Block.render(block, %{width: 80, prominence: grade, ground: 0.2})
+          unwrap_law(
+            Block.render(block, %{width: 80, prominence: grade, ground: 0.2})
+          )
 
         if grade >= 1.0 do
           refute Map.has_key?(header.style, :fg),
@@ -444,7 +455,9 @@ defmodule Raxol.Harness.RecencyPolicyTest do
       assert Block.live?(block)
 
       %{children: [header | _]} =
-        Block.render(block, %{width: 80, prominence: 0.4, ground: 0.2})
+        unwrap_law(
+          Block.render(block, %{width: 80, prominence: 0.4, ground: 0.2})
+        )
 
       floored_fg =
         Prominence.resolve("#B4B4B4", 0.4, needs_input: true, ground: 0.2)

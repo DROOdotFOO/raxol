@@ -802,6 +802,7 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
       kind
       |> Block.from_events(events, fold: fold, seal: seal)
       |> fix_duration(kind, events)
+      |> stamp_completed_at(events)
       |> flag_recovered(reasons)
 
     {block, unknown_type_diagnostics(unknown_type?, groups)}
@@ -881,6 +882,23 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   end
 
   defp fix_duration(block, _kind, _events), do: block
+
+  # The block's wall-clock completion instant (max source-event ts, µs) —
+  # the sealed reasoning header's right-edge clock (V's "05:10 AM"
+  # ruling) reads it. Absent timestamps stamp nothing (the clock simply
+  # does not render — never a fabricated time).
+  defp stamp_completed_at(block, events) do
+    case events |> Enum.map(&Map.get(&1, :ts)) |> Enum.filter(&is_integer/1) do
+      [] ->
+        block
+
+      ts ->
+        %{
+          block
+          | outcome: Map.put(block.outcome, :completed_at_us, Enum.max(ts))
+        }
+    end
+  end
 
   defp flag_recovered(block, []), do: block
 

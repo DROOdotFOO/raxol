@@ -35,7 +35,6 @@ defmodule Raxol.Harness.HarnessApp.View do
     Notice,
     Picker,
     RulesPanel,
-    ShadowStream,
     StatusStrip,
     TranscriptView,
     WorktracksPanel
@@ -218,6 +217,7 @@ defmodule Raxol.Harness.HarnessApp.View do
 
         case state |> TranscriptView.row_records(cw) |> Enum.at(row) do
           {:record, {:block, block, _prominence}} -> {:block, block}
+          {:record, {:live_thinking, _text, _expanded?}} -> :tail
           _pad_or_marker -> :none
         end
 
@@ -377,41 +377,16 @@ defmodule Raxol.Harness.HarnessApp.View do
        when map_size(tail) == 0,
        do: []
 
-  defp live_tail_lines(model, cw) do
+  defp live_tail_lines(model, _cw) do
     case model.projection.tail |> Map.values() |> List.first() do
       nil ->
         []
 
-      %{item_type: :reasoning, chunks: chunks} ->
-        # A click on the preview toggles the ACTIVE thought between the
-        # 3-line peek and the full text (V's click-to-expand ruling;
-        # `Model.click/2` flips `tail_expanded?`). Expanded renders FLAT
-        # here — one text node per row — because a footer group's lines
-        # must each be one physical row (the FooterStack fit law);
-        # ShadowStream's own `:expanded` shape nests a column+bracket the
-        # stack cannot measure honestly.
-        if model.tail_expanded? do
-          body =
-            chunks
-            |> Enum.join("")
-            |> String.split("\n")
-            |> Enum.map(&dim_text/1)
-
-          [dim_text("▾ thinking") | body]
-        else
-          # ShadowStream's peek children are row-level BY CONSTRUCTION
-          # (base text nodes, faded text nodes, the one :row shadow
-          # node) -- exactly the group lines; height stays honest.
-          shadow =
-            ShadowStream.render(%{
-              primitive: "thinking",
-              lines: Enum.join(chunks, ""),
-              state: :peek,
-              width: cw
-            })
-
-          Map.get(shadow, :children, [shadow])
-        end
+      %{item_type: :reasoning, chunks: _chunks} ->
+        # The ACTIVE thought renders in the BODY as its ∵-cornered
+        # Indication record (V's ruling — `Model.live_frontier_records/1`);
+        # a footer copy would double-render it.
+        []
 
       %{chunks: chunks} ->
         # Answer text keeps the plain `» ` streaming preview.

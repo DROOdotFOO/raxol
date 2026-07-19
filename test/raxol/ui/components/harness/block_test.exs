@@ -9,7 +9,9 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
   defp flat_texts(%{type: :text, content: content}), do: [content]
 
   defp flat_texts(%{type: :row, children: children}),
-    do: Enum.flat_map(children, &flat_texts/1)
+    do: [
+      Enum.map_join(children, "", fn c -> c |> flat_texts() |> Enum.join("") end)
+    ]
 
   defp flat_texts(%{type: :column, children: children}),
     do: Enum.flat_map(children, &flat_texts/1)
@@ -18,6 +20,41 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
   # re-hosting) but keeps its column children -- walk them the same way.
   defp flat_texts(%{type: :approval_prompt, children: children}),
     do: Enum.flat_map(children, &flat_texts/1)
+
+  # The law containers: emulate the engine's paint — an Indication's
+  # gutter glyph prefixes its first line ("⚙ verb…" reads exactly as the
+  # terminal shows it), corners put the bottom glyph on the last line,
+  # every other row takes the 2-cell indent; an IndentationException is
+  # its content verbatim.
+  defp flat_texts(%{type: :indication} = node) do
+    lines =
+      case Map.get(node, :content) do
+        content when is_binary(content) -> String.split(content, "\n")
+        content when is_map(content) -> flat_texts(content)
+        _ -> []
+      end
+
+    gutter = Map.get(node, :gutter, :none)
+    last = length(lines) - 1
+
+    lines
+    |> Enum.with_index()
+    |> Enum.map(fn {line, index} ->
+      prefix =
+        case gutter do
+          {:top, g} when index == 0 -> g <> " "
+          {:corners, g, _b} when index == 0 and is_binary(g) -> g <> " "
+          {:corners, _t, g} when index == last and is_binary(g) -> g <> " "
+          {:rule, g} when is_binary(g) -> g <> " "
+          _ -> "  "
+        end
+
+      prefix <> line
+    end)
+  end
+
+  defp flat_texts(%{type: :indentation_exception, content: content}),
+    do: flat_texts(content)
 
   defp flat_texts(_), do: []
 
@@ -29,6 +66,11 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
            "#{type} container missing explicit gap: 0 -> #{inspect(node)}"
 
     node |> Map.get(:children, []) |> Enum.each(&assert_zero_gaps/1)
+  end
+
+  defp assert_zero_gaps(%{type: type, content: content})
+       when type in [:indication, :indentation_exception] and is_map(content) do
+    assert_zero_gaps(content)
   end
 
   defp assert_zero_gaps(%{children: children}) when is_list(children) do
@@ -225,14 +267,14 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert %Block{} = block
 
       rendered = Block.render(block)
-      assert %{type: :column} = rendered
+      assert %{type: :indication} = rendered
     end
 
     test "a from_events call whose events aren't a list still can't crash the renderer" do
       # from_events/3 requires a list (typed contract); an unknown kind with
       # well-formed-but-minimal events must still render safely.
       block = Block.from_events(:mystery, [])
-      assert Block.render(block).type == :column
+      assert Block.render(block).type == :indication
     end
   end
 
@@ -248,9 +290,11 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
       assert length(texts) == 3
       [header, line1, line2] = texts
+      # gutter emulation: ▾ (the fold arrow) rides cell 1, content cell 3
       assert header =~ "first line"
-      assert line1 == "first line"
-      assert line2 == "second line"
+      assert String.starts_with?(header, "▾ ")
+      assert line1 == "  first line"
+      assert line2 == "  second line"
     end
 
     test "folded message block: one summary line only (no outcome present)" do
@@ -442,14 +486,20 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       # Fix 1: args are unquoted `key: value`, never `(key: "value")`.
       assert Enum.any?(texts, &(&1 =~ "command: ls"))
       refute Enum.any?(texts, &(&1 =~ "command: \"ls\""))
-      assert Enum.any?(texts, &(&1 == "file1"))
-      assert Enum.any?(texts, &(&1 == "file2"))
+      assert Enum.any?(texts, &(&1 == "  file1"))
+      assert Enum.any?(texts, &(&1 == "  file2"))
     end
   end
 
   describe "compact machinery lines (the low-prominence execution register)" do
     defp styled_texts(%{type: :text} = node),
       do: [{Map.get(node, :content), Map.get(node, :style, %{})}]
+
+    defp styled_texts(%{type: :indication, content: content}),
+      do: styled_texts(content)
+
+    defp styled_texts(%{type: :indentation_exception, content: content}),
+      do: styled_texts(content)
 
     defp styled_texts(%{children: children}) when is_list(children),
       do: Enum.flat_map(children, &styled_texts/1)
@@ -537,12 +587,15 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
           seal: :sealed
         )
 
-      [row] = Block.render(block, %{width: 120}).children
+      %{type: :indication, gutter: {:top, "⚙"}, content: content} =
+        Block.render(block, %{width: 120})
+
+      [row] = content.children
       assert row.type == :row
 
       segs = Enum.map(row.children, &{&1.content, &1.style})
       joined = Enum.map_join(segs, "", &elem(&1, 0))
-      assert joined == "⚙ looking for lib/**/*.ex"
+      assert joined == "looking for lib/**/*.ex"
 
       # the wildcards sit one register QUIETER than the literal pieces:
       # a sealed tool line already carries the machinery fade, so the
@@ -621,9 +674,10 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
     test "the folded reasoning line is DIM (machinery register) and shows ⁖ + line count" do
       # A sealed reasoning block inherits the low-prominence cognition
-      # register (V 2026-07-18): `⁖ thinking` flush left, the honest line
-      # count flush right (space-between), dim, folded — never full-weight
-      # speech.
+      # register: the ⁖ gutter carries the icon, the row reads *thought*
+      # (italic dim; V's done-block ruling — no line count, and this
+      # fixture has no ts so no duration/clock). A LIVE folded thought
+      # keeps `thinking` + the honest line count.
       block =
         Block.from_events(
           :reasoning,
@@ -632,12 +686,21 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
           seal: :sealed
         )
 
-      assert [{content, style}] =
-               styled_texts(Block.render(block, %{width: 120}))
+      rendered = Block.render(block, %{width: 120})
+      assert %{type: :indication, gutter: {:top, "⁖"}} = rendered
 
-      assert content =~ "⁖ thinking"
-      assert content =~ "2 lines"
-      assert style[:dim] == true
+      assert [{"thought", style} | _] = styled_texts(rendered)
+      assert style[:dim] == true and style[:italic] == true
+
+      live =
+        Block.from_events(:reasoning, message_events("a\nb"), fold: :folded)
+
+      [{live_line, live_style} | _] =
+        styled_texts(Block.render(live, %{width: 120}))
+
+      assert live_line =~ "thinking"
+      assert live_line =~ "2 lines"
+      assert live_style[:dim] == true
     end
 
     test "a tool with multi-line output renders the clean ⚙ line, no `N lines` receipt" do
@@ -718,10 +781,12 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       block =
         Block.from_events(:tool_call, events, fold: :folded, seal: :sealed)
 
-      assert [{content, style}] =
-               styled_texts(Block.render(block, %{width: 120}))
+      rendered = Block.render(block, %{width: 120})
+      assert %{type: :indication, gutter: {:top, "✗"}} = rendered
+      refute rendered.gutter_style[:dim] == true
 
-      assert content =~ "✗ sh"
+      assert [{content, style} | _] = styled_texts(rendered)
+      assert content =~ "sh"
       refute style[:dim] == true
     end
 
@@ -793,8 +858,8 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
       texts = flat_texts(Block.render(block, %{width: 120}))
       assert Enum.any?(texts, &(&1 =~ "⚙ cat"))
-      assert Enum.any?(texts, &(&1 == "line1"))
-      assert Enum.any?(texts, &(&1 == "line2"))
+      assert Enum.any?(texts, &(&1 == "  line1"))
+      assert Enum.any?(texts, &(&1 == "  line2"))
     end
 
     test "reasoning collapses to one dim '⁖ thinking … N lines' line, peekable" do
@@ -809,24 +874,25 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       folded =
         Block.from_events(:reasoning, events, fold: :folded, seal: :sealed)
 
-      assert [{line, style}] = styled_texts(Block.render(folded, %{width: 120}))
-      assert line =~ "⁖ thinking"
-      assert line =~ "3 lines"
-      assert style[:dim] == true
+      # Sealed + folded: the ⁖ gutter carries the icon; the row reads
+      # *thought* (italic) — this fixture carries no event ts, so there
+      # is honestly no duration and no clock.
+      folded_render = Block.render(folded, %{width: 120})
+      assert %{type: :indication, gutter: {:top, "⁖"}} = folded_render
 
-      # Expanded (V's icon-column convention): ONE Indication.bracket
-      # container spans the block — `∵` stamps the first row (the
-      # thinking header), `∴` the last, content at the 2-cell indent.
-      # The engine owns the columns; the render tree carries the
-      # :indication node, never a hand-rolled indent/closer pair.
+      assert [{"thought", style} | _] = styled_texts(folded_render)
+      assert style[:dim] == true and style[:italic] == true
+
+      # Expanded (V's icon-column convention): the render root IS the one
+      # Indication.bracket — `∵` stamps the header row, `∴` the last,
+      # content at the 2-cell indent.
       expanded = %{folded | fold: :expanded}
       rendered = Block.render(expanded, %{width: 120})
 
-      assert [%{type: :indication, gutter: {:corners, "∵", "∴"}} = ind] =
-               rendered.children
+      assert %{type: :indication, gutter: {:corners, "∵", "∴"}} = rendered
 
-      inner = flat_texts(ind.content)
-      assert hd(inner) =~ "thinking"
+      inner = flat_texts(rendered.content)
+      assert hd(inner) =~ "thought"
       refute hd(inner) =~ "∵"
       assert Enum.any?(inner, &(&1 == "first"))
       assert Enum.any?(inner, &(&1 == "third"))
@@ -844,7 +910,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       block =
         Block.from_events(:reasoning, events, fold: :expanded, seal: :sealed)
 
-      [%{type: :indication} = ind] = Block.render(block, %{width: 120}).children
+      %{type: :indication} = ind = Block.render(block, %{width: 120})
       texts = flat_texts(ind.content)
 
       assert Enum.any?(texts, &(&1 == "real thought"))
@@ -973,7 +1039,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
       texts = flat_texts(Block.render(block, %{width: 120}))
       assert Enum.any?(texts, &(&1 =~ "✗ line one"))
-      assert Enum.any?(texts, &(&1 == "line three"))
+      assert Enum.any?(texts, &(&1 == "  line three"))
     end
   end
 
@@ -996,7 +1062,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       texts = flat_texts(rendered)
 
       assert Enum.any?(texts, &(&1 =~ "rm -rf /tmp/scratch"))
-      assert Enum.any?(texts, &(&1 == "deletes 3 files"))
+      assert Enum.any?(texts, &(&1 == "  deletes 3 files"))
       assert Enum.any?(texts, &(&1 =~ "allow"))
     end
 
@@ -1106,7 +1172,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
         Block.from_events(:reasoning, message_events(mixed), fold: :folded)
 
       rendered = Block.render(block, %{width: 6})
-      assert %{type: :column} = rendered
+      assert %{type: :indication} = rendered
     end
   end
 
@@ -1348,7 +1414,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       refute_received {^ref, _event, _meta}
 
       rendered = Block.render(block, %{width: 80})
-      assert %{type: :column} = rendered
+      assert rendered.type in [:indication, :column]
       # The moduledoc promise: a render fault is never a dead cell. The
       # fallback shows the block's honest summary plus a visible recovery
       # marker naming the crash SITE first (so a narrow terminal can't

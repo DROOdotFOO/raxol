@@ -235,6 +235,11 @@ defmodule Raxol.Harness.Surface.ViewText do
   # PREFIX per line — top glyph on the first row, bottom glyph on the
   # last, the 2-cell indent on every other — so this byte-path bridge
   # renders the same contour the LayoutEngine stamps as columns.
+  defp collect(%{type: :indentation_exception, content: content}, acc)
+       when is_map(content) do
+    content |> collect([]) |> Enum.reverse() |> Enum.reduce(acc, &[&1 | &2])
+  end
+
   defp collect(%{type: :indication} = node, acc) do
     inner =
       node

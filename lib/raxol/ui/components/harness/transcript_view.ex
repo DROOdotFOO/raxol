@@ -30,7 +30,7 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
 
   use Raxol.UI.Components.Base.Component
 
-  alias Raxol.UI.Components.Harness.{Block, BlockBody}
+  alias Raxol.UI.Components.Harness.{Block, BlockBody, Indication}
 
   @impl true
   def init(props) do
@@ -225,8 +225,19 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
   # ── record → element ──────────────────────────────────────────────────
 
   @sigil_cols 2
+  @live_peek_lines 3
 
-  defp record_element({:block, block, prominence}, width, state) do
+  # THE LAW (V's general rule): every record element leaving this
+  # function is an `Indication`, an `IndentationException`, or a
+  # composite whose top-level children each are — `normalize_record/1`
+  # auto-wraps anything else in `Indication.plain/2` (the safe 2-indent
+  # default), so a non-compliant producer gets a VISIBLE nudge, never a
+  # silent col-0 violation.
+  defp record_element(record, width, state) do
+    record |> raw_record_element(width, state) |> normalize_record()
+  end
+
+  defp raw_record_element({:block, block, prominence}, width, state) do
     dialogue? = dialogue_block?(block)
     body_width = if dialogue?, do: max(width - @sigil_cols, 1), else: width
 
@@ -239,16 +250,75 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
         selector_hosted?: state.selector_hosted?
       })
 
-    if dialogue?, do: sigil_front(rendered, block, state), else: rendered
+    if dialogue?,
+      do: Indication.speaker(rendered, speaker_sigil(block, state)),
+      else: rendered
   end
 
-  defp record_element({:marker, text}, _width, _state),
-    do: %{type: :text, content: text, attrs: %{style: [:dim]}}
+  # A marker is machinery: its `»` (when it carries one) IS the icon —
+  # gutter, not string prefix.
+  defp raw_record_element({:marker, "» " <> text}, _width, _state) do
+    Indication.container(
+      %{type: :text, content: text, attrs: %{style: [:dim]}},
+      gutter: {:top, "»"},
+      gutter_style: %{dim: true}
+    )
+  end
 
-  defp record_element({:echo, text}, _width, state),
-    do: %{type: :text, content: echo_line(text, state), attrs: %{}}
+  defp raw_record_element({:marker, text}, _width, _state),
+    do: Indication.plain(%{type: :text, content: text, attrs: %{style: [:dim]}})
 
-  defp echo_line(text, state), do: state.sigil <> " " <> text
+  defp raw_record_element({:echo, text}, _width, state),
+    do:
+      Indication.speaker(%{type: :text, content: text, attrs: %{}}, state.sigil)
+
+  # The ACTIVE thought (V's ruling: live thinking speaks Indication too):
+  # a ∵-cornered container — down-dots mark the open start, NO closer
+  # until the thought seals — peeking the newest #{@live_peek_lines}
+  # lines, or everything when the click toggle expanded it.
+  defp raw_record_element({:live_thinking, text, expanded?}, _width, _state) do
+    lines = text |> String.split("\n") |> Enum.reject(&(String.trim(&1) == ""))
+
+    shown =
+      if expanded?, do: lines, else: Enum.take(lines, -@live_peek_lines)
+
+    rows =
+      [%{type: :text, content: "thinking", attrs: %{style: [:dim]}}] ++
+        Enum.map(shown, fn line ->
+          %{type: :text, content: line, attrs: %{style: [:dim]}}
+        end)
+
+    Indication.container(
+      %{type: :column, gap: 0, style: %{}, children: rows},
+      gutter: {:corners, "∵", nil},
+      gutter_style: %{dim: true}
+    )
+  end
+
+  defp normalize_record(%{type: :indication} = node), do: node
+  defp normalize_record(%{type: :indentation_exception} = node), do: node
+
+  # composite roots whose children each satisfy the law pass through
+  # (the stamped approval; a bare column of law nodes)
+  defp normalize_record(%{type: type, children: children} = node)
+       when type in [:column, :approval_prompt] and is_list(children) do
+    if Enum.all?(children, &law_child?/1),
+      do: node,
+      else: Indication.plain(node)
+  end
+
+  defp normalize_record(node), do: Indication.plain(node)
+
+  defp law_child?(%{type: :indication}), do: true
+  defp law_child?(%{type: :indentation_exception}), do: true
+  defp law_child?(_node), do: false
+
+  defp speaker_sigil(block, state) do
+    case Block.role(block) do
+      :user -> state.sigil
+      :assistant -> state.reply_sigil
+    end
+  end
 
   # Only an EXPANDED message speaks with a sigil (surface.ex
   # `dialogue_block?/1` ported): a folded one renders as a `▸ ❯/❮ summary`
@@ -256,28 +326,6 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
   # with a second chevron would stutter.
   defp dialogue_block?(%{kind: :message, fold: :expanded}), do: true
   defp dialogue_block?(_block), do: false
-
-  # The speaker chevron fronts the block as a `:row`: the bold 2-cell sigil
-  # column, then the body -- every body row lands at the content indent, so
-  # continuation lines hang-align exactly like the composer's (V's margin
-  # ruling; surface.ex `echo_lines/4` reborn as layout).
-  defp sigil_front(rendered, block, state) do
-    sigil =
-      case Block.role(block) do
-        :user -> state.sigil
-        :assistant -> state.reply_sigil
-      end
-
-    %{
-      type: :row,
-      style: %{},
-      gap: 0,
-      children: [
-        %{type: :text, content: sigil <> " ", style: %{bold: true}},
-        rendered
-      ]
-    }
-  end
 
   defp blank, do: %{type: :text, content: ""}
 
@@ -385,6 +433,9 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
       do: 1 + count_newlines(content)
 
   def element_height(%{type: :indication, content: content}),
+    do: element_height(content)
+
+  def element_height(%{type: :indentation_exception, content: content}),
     do: element_height(content)
 
   def element_height(%{type: :text, content: content}) when is_binary(content),

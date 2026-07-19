@@ -266,6 +266,43 @@ defmodule Raxol.Harness.LiveApprovalTest do
 
   defp collect_text(%{type: :text, content: content}), do: [content]
 
+  defp collect_text(%{type: :indication} = node) do
+    lines =
+      case Map.get(node, :content) do
+        c when is_binary(c) -> String.split(c, "\n")
+        c when is_map(c) -> collect_text(c)
+        _ -> []
+      end
+
+    last = length(lines) - 1
+
+    lines
+    |> Enum.with_index()
+    |> Enum.map(fn {line, index} ->
+      case Map.get(node, :gutter, :none) do
+        {:top, g} when index == 0 ->
+          g <> " " <> line
+
+        {:corners, g, _b} when index == 0 and is_binary(g) ->
+          g <> " " <> line
+
+        {:corners, _t, g} when index == last and is_binary(g) ->
+          g <> " " <> line
+
+        _ ->
+          line
+      end
+    end)
+  end
+
+  defp collect_text(%{type: :indentation_exception, content: content}),
+    do: collect_text(content)
+
+  defp collect_text(%{type: :row, children: spans}),
+    do: [
+      Enum.map_join(spans, "", fn s -> s |> collect_text() |> Enum.join("") end)
+    ]
+
   defp collect_text(%{children: children}),
     do: Enum.flat_map(children, &collect_text/1)
 
@@ -279,7 +316,13 @@ defmodule Raxol.Harness.LiveApprovalTest do
   # the SAME engine's output, not a hand-rolled ± format.
   defp diff_rows(block) do
     %{children: children} = Block.render(block, %{width: 80})
-    Enum.filter(children, &match?(%{type: :row}, &1))
+
+    children
+    |> Enum.flat_map(fn
+      %{type: :indentation_exception, content: %{children: rows}} -> rows
+      other -> [other]
+    end)
+    |> Enum.filter(&match?(%{type: :row}, &1))
   end
 
   defp row_text(%{children: spans}),
@@ -402,8 +445,9 @@ defmodule Raxol.Harness.LiveApprovalTest do
       block = Enum.find(blocks, &(&1.kind == :message))
 
       root = Block.render(block, %{width: 80})
-      assert root.type == :column
-      refute Map.has_key?(root, :attrs)
+      assert root.type == :indication
+      # never stamped with the approval answer surface
+      refute root |> Map.get(:attrs, %{}) |> Map.has_key?(:answer_mode)
     end
   end
 
@@ -427,6 +471,10 @@ defmodule Raxol.Harness.LiveApprovalTest do
 
     defp collect_fg(%{type: :text, content: content, style: style}),
       do: [{content, Map.get(style, :fg)}]
+
+    defp collect_fg(%{type: type, content: content})
+         when type in [:indication, :indentation_exception] and is_map(content),
+         do: collect_fg(content)
 
     defp collect_fg(%{children: children}) when is_list(children),
       do: Enum.flat_map(children, &collect_fg/1)

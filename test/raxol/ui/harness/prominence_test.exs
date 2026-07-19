@@ -46,9 +46,25 @@ defmodule Raxol.UI.Harness.ProminenceTest do
       Map.has_key?(style, :fg)
     end
 
+    defp style_fg_anywhere?(%{type: type, content: content})
+         when type in [:indication, :indentation_exception] do
+      style_fg_anywhere?(content)
+    end
+
     defp style_fg_anywhere?(%{children: children}) do
       Enum.any?(children, &style_fg_anywhere?/1)
     end
+
+    # The law container (V's general rule): a block render root is an
+    # Indication (or an approval composite) — these row-shape pins care
+    # about the CONTENT column, so unwrap before matching children.
+    defp unwrap_law(%{type: :indication, content: content}), do: content
+
+    # an approval composite: its first child is the (only) Indication
+    defp unwrap_law(%{type: :approval_prompt, children: [first | _]}),
+      do: unwrap_law(first)
+
+    defp unwrap_law(node), do: node
 
     defp style_fg_anywhere?(_other), do: false
   end
@@ -402,7 +418,7 @@ defmodule Raxol.UI.Harness.ProminenceTest do
       block = Block.from_events(:tool_call, events, fold: :expanded)
 
       %{children: [header | body]} =
-        Block.render(block, %{prominence: 0.6, ground: 0.2})
+        unwrap_law(Block.render(block, %{prominence: 0.6, ground: 0.2}))
 
       expected_fg = Prominence.resolve("#B4B4B4", 0.6, ground: 0.2)
 
@@ -432,7 +448,7 @@ defmodule Raxol.UI.Harness.ProminenceTest do
       block = Block.from_events(:message, events, fold: :folded)
 
       %{children: [header, outcome]} =
-        Block.render(block, %{prominence: 0.6, ground: 0.2})
+        unwrap_law(Block.render(block, %{prominence: 0.6, ground: 0.2}))
 
       expected_fg = Prominence.resolve("#B4B4B4", 0.6, ground: 0.2)
 
@@ -446,7 +462,8 @@ defmodule Raxol.UI.Harness.ProminenceTest do
           %{type: :item_completed, content: "hi"}
         ])
 
-      %{children: [header | _]} = Block.render(block, %{prominence: 0.6})
+      %{children: [header | _]} =
+        unwrap_law(Block.render(block, %{prominence: 0.6}))
 
       assert header.style.fg == Prominence.resolve("#B4B4B4", 0.6, [])
     end
@@ -721,7 +738,9 @@ defmodule Raxol.UI.Harness.ProminenceTest do
       assert Block.live?(block)
 
       %{children: [header | _]} =
-        Block.render(block, %{prominence: 0.2, ground: @dark_ground})
+        unwrap_law(
+          Block.render(block, %{prominence: 0.2, ground: @dark_ground})
+        )
 
       assert header.style.fg ==
                Prominence.resolve("#B4B4B4", Prominence.needs_input_floor(),
@@ -736,7 +755,9 @@ defmodule Raxol.UI.Harness.ProminenceTest do
         ])
 
       %{children: [header | _]} =
-        Block.render(message, %{prominence: 0.2, ground: @dark_ground})
+        unwrap_law(
+          Block.render(message, %{prominence: 0.2, ground: @dark_ground})
+        )
 
       assert header.style.fg ==
                Prominence.resolve("#B4B4B4", 0.2, ground: @dark_ground)
@@ -759,11 +780,13 @@ defmodule Raxol.UI.Harness.ProminenceTest do
         ])
 
       %{children: [header | _]} =
-        Block.render(message, %{
-          prominence: 0.2,
-          ground: @dark_ground,
-          needs_input: true
-        })
+        unwrap_law(
+          Block.render(message, %{
+            prominence: 0.2,
+            ground: @dark_ground,
+            needs_input: true
+          })
+        )
 
       assert header.style.fg ==
                Prominence.resolve("#B4B4B4", Prominence.needs_input_floor(),
@@ -777,7 +800,9 @@ defmodule Raxol.UI.Harness.ProminenceTest do
       block = :approval |> Block.from_events(@approval_events) |> Block.seal()
 
       %{children: [header | _]} =
-        Block.render(block, %{prominence: 0.2, ground: @dark_ground})
+        unwrap_law(
+          Block.render(block, %{prominence: 0.2, ground: @dark_ground})
+        )
 
       assert header.style.fg ==
                Prominence.resolve("#B4B4B4", 0.2, ground: @dark_ground)

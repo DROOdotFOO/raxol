@@ -91,6 +91,10 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
 
   # --- seal -> mode vocabulary bridge ---
 
+  # unwrap the law container: block render roots are Indications now
+  defp unwrap_law(%{type: :indication, content: content}), do: content
+  defp unwrap_law(node), do: node
+
   describe "mode_for_seal/1 -- the single seal->mode vocabulary bridge" do
     test "maps :live to :streaming and :sealed to :sealed" do
       assert MarkdownBody.mode_for_seal(:live) == :streaming
@@ -166,7 +170,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
 
       for prefix <- prefixes do
         rendered = MarkdownBody.render(prefix, %{mode: :streaming, width: 80})
-        assert %{type: :column} = rendered
+        assert %{type: :column} = unwrap_law(rendered)
         assert_no_raw_marker_leak(full_text(rendered))
       end
     end
@@ -178,7 +182,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
       for n <- 0..length do
         prefix = String.slice(final, 0, n)
         rendered = MarkdownBody.render(prefix, %{mode: :streaming, width: 80})
-        assert %{type: :column} = rendered
+        assert %{type: :column} = unwrap_law(rendered)
         assert_no_raw_marker_leak(full_text(rendered))
       end
     end
@@ -193,7 +197,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
         prefix = binary_part(final, 0, cut)
 
         rendered = MarkdownBody.render(prefix, %{mode: :streaming, width: 80})
-        assert %{type: :column} = rendered
+        assert %{type: :column} = unwrap_law(rendered)
         # a split multi-byte grapheme can legitimately alter which glyphs
         # show up, but the fence delimiter itself is pure ASCII and must
         # never survive as literal text regardless of the cut point.
@@ -464,7 +468,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
         prefix = binary_part(doc, 0, min(cut, byte_size(doc)))
 
         rendered = MarkdownBody.render(prefix, %{mode: :streaming, width: 80})
-        assert %{type: :column} = rendered
+        assert %{type: :column} = unwrap_law(rendered)
         refute full_text(rendered) =~ "```"
       end
     end
@@ -481,7 +485,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
           MarkdownBody.render(pathological, %{mode: :streaming, width: 80})
         end)
 
-      assert %{type: :column} = rendered
+      assert %{type: :column} = unwrap_law(rendered)
       # generous bound -- the point is "doesn't hang", not a perf budget
       assert elapsed_us < 2_000_000
     end
@@ -491,7 +495,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
         String.duplicate("*", 500) <> "center" <> String.duplicate("_", 500)
 
       rendered = MarkdownBody.render(deep, %{mode: :streaming, width: 80})
-      assert %{type: :column} = rendered
+      assert %{type: :column} = unwrap_law(rendered)
     end
   end
 
@@ -512,7 +516,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
           MarkdownBody.render(doc, %{mode: :streaming, width: 80})
         end)
 
-      assert %{type: :column} = rendered
+      assert %{type: :column} = unwrap_law(rendered)
 
       assert elapsed_us < @perf_bound_us,
              "20k-bracket render took #{elapsed_us}us (bound #{@perf_bound_us})"
@@ -529,7 +533,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
           MarkdownBody.render(doc, %{mode: :streaming, width: 80})
         end)
 
-      assert %{type: :column} = rendered
+      assert %{type: :column} = unwrap_law(rendered)
 
       assert elapsed_us < @perf_bound_us,
              "50k-bracket render took #{elapsed_us}us (bound #{@perf_bound_us})"
@@ -549,7 +553,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
           MarkdownBody.render(doc, %{mode: :streaming, width: 80})
         end)
 
-      assert %{type: :column} = rendered
+      assert %{type: :column} = unwrap_law(rendered)
 
       assert elapsed_us < @perf_bound_us,
              "mixed-opener render took #{elapsed_us}us (bound #{@perf_bound_us})"
@@ -594,7 +598,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
         "| emoji | plain |\n|---|---|\n| 👨‍👩‍👧‍👦 | ​zero​ |\n"
 
       rendered = MarkdownBody.render_sealed(adversarial, 40)
-      assert %{type: :column} = rendered
+      assert %{type: :column} = unwrap_law(rendered)
       assert full_text(rendered) =~ "plain"
     end
 
@@ -605,7 +609,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
       rendered =
         MarkdownBody.render(adversarial, %{mode: :streaming, width: 20})
 
-      assert %{type: :column} = rendered
+      assert %{type: :column} = unwrap_law(rendered)
     end
   end
 
@@ -744,7 +748,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
     test "never raises even with markdown: true and malformed content" do
       block = Block.from_events(:message, message_events(nil), fold: :expanded)
       rendered = Block.render(block, %{width: 80, markdown: true})
-      assert %{type: :column} = rendered
+      assert %{type: :column} = unwrap_law(rendered)
     end
   end
 
@@ -759,6 +763,10 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
   describe "markdown body fades with prominence" do
     # every :fg value carried by a text node anywhere in the tree
     defp text_node_fgs(%{type: :text, style: style}), do: [Map.get(style, :fg)]
+
+    defp text_node_fgs(%{type: type, content: content})
+         when type in [:indication, :indentation_exception] and is_map(content),
+         do: text_node_fgs(content)
 
     defp text_node_fgs(%{children: children}),
       do: Enum.flat_map(children, &text_node_fgs/1)
@@ -1073,7 +1081,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
       for cut <- 0..byte_len do
         prefix = binary_part(doc, 0, cut)
         rendered = MarkdownBody.render(prefix, %{mode: :streaming, width: 80})
-        assert %{type: :column} = rendered
+        assert %{type: :column} = unwrap_law(rendered)
         text = full_text(rendered)
         refute text =~ "Ã"
       end

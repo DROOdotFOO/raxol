@@ -94,6 +94,12 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
   defp last_block(proj), do: List.last(proj.blocks)
 
   defp flat_texts(%{type: :text, content: content}), do: [content]
+
+  # the law containers hold their subtree under :content
+  defp flat_texts(%{type: type, content: content})
+       when type in [:indication, :indentation_exception] and is_map(content),
+       do: flat_texts(content)
+
   defp flat_texts(%{children: children}) when is_list(children),
     do: Enum.flat_map(children, &flat_texts/1)
 
@@ -116,7 +122,11 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
 
       assert %{
                evidence: [
-                 %{ref: 5, type: :tool_result, label: "mix_test — 42 tests, 0 failures"}
+                 %{
+                   ref: 5,
+                   type: :tool_result,
+                   label: "mix_test — 42 tests, 0 failures"
+                 }
                ],
                total: 1,
                type_counts: [%{type: :tool_result, count: 1}]
@@ -362,7 +372,9 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       proj = Projection.project(events)
 
       assert %{
-               evidence: [%{ref: 3, type: :message, label: "the message content"}],
+               evidence: [
+                 %{ref: 3, type: :message, label: "the message content"}
+               ],
                total: 1,
                type_counts: [%{type: :message, count: 1}]
              } = last_block(proj).content.completion
@@ -380,7 +392,11 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
 
       assert %{
                evidence: [
-                 %{ref: 999, type: :unresolvable, label: "unresolvable evidence ref"}
+                 %{
+                   ref: 999,
+                   type: :unresolvable,
+                   label: "unresolvable evidence ref"
+                 }
                ],
                total: 1,
                type_counts: [%{type: :unresolvable, count: 1}]
@@ -452,7 +468,10 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       assert Enum.any?(texts, &(&1 == "+1 more (1 cross-turn)")),
              "expected the tail row to disclose the hidden cross-turn ref, got: #{inspect(texts)}"
 
-      assert Enum.any?(texts, &(&1 == "4 evidence refs: 4 tool results (1 cross-turn)")),
+      assert Enum.any?(
+               texts,
+               &(&1 == "4 evidence refs: 4 tool results (1 cross-turn)")
+             ),
              "expected the summary to keep the session-wide tally, got: #{inspect(texts)}"
 
       refute Enum.any?(texts, &(&1 =~ "[cross-turn]")),
@@ -602,11 +621,17 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       proj = Projection.project(events)
       completion = last_block(proj).content.completion
 
-      assert completion.type_counts == [%{type: :tool_result, count: 2}, %{type: :message, count: 1}]
+      assert completion.type_counts == [
+               %{type: :tool_result, count: 2},
+               %{type: :message, count: 1}
+             ]
 
       texts = last_block(proj) |> Block.render(%{}) |> flat_texts()
 
-      assert Enum.any?(texts, &(&1 == "3 evidence refs: 2 tool results, 1 message"))
+      assert Enum.any?(
+               texts,
+               &(&1 == "3 evidence refs: 2 tool results, 1 message")
+             )
     end
 
     test "2 refs, one unresolvable: \"2 evidence refs: 1 tool result, 1 unresolvable\"" do
@@ -620,11 +645,17 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       proj = Projection.project(events)
       completion = last_block(proj).content.completion
 
-      assert completion.type_counts == [%{type: :tool_result, count: 1}, %{type: :unresolvable, count: 1}]
+      assert completion.type_counts == [
+               %{type: :tool_result, count: 1},
+               %{type: :unresolvable, count: 1}
+             ]
 
       texts = last_block(proj) |> Block.render(%{}) |> flat_texts()
 
-      assert Enum.any?(texts, &(&1 == "2 evidence refs: 1 tool result, 1 unresolvable"))
+      assert Enum.any?(
+               texts,
+               &(&1 == "2 evidence refs: 1 tool result, 1 unresolvable")
+             )
     end
 
     test "a cross-turn ref's rendered line carries the literal \"[cross-turn]\" marker; the summary carries \"(1 cross-turn)\"" do
@@ -644,7 +675,10 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       assert Enum.any?(texts, &(&1 =~ "[cross-turn]")),
              "expected the cross-turn entry line to carry the literal marker, got: #{inspect(texts)}"
 
-      assert Enum.any?(texts, &(&1 == "1 evidence ref: 1 tool result (1 cross-turn)")),
+      assert Enum.any?(
+               texts,
+               &(&1 == "1 evidence ref: 1 tool result (1 cross-turn)")
+             ),
              "expected the summary line to carry the cross-turn suffix, got: #{inspect(texts)}"
     end
   end
@@ -672,7 +706,8 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       refute String.contains?(label, <<0x7F>>)
 
       for <<byte <- label>> do
-        assert byte >= 0x20, "label #{inspect(label)} carried a control byte #{inspect(byte)}"
+        assert byte >= 0x20,
+               "label #{inspect(label)} carried a control byte #{inspect(byte)}"
       end
 
       assert Raxol.UI.TextMeasure.display_width(label) <= 32
@@ -682,12 +717,19 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       # pre-existing) tool name verbatim, which is out of this feature's
       # scope; `completion_rows/2` is the seam this feature owns.
       completion_texts =
-        last_block(proj) |> Block.completion_rows() |> Enum.flat_map(&flat_texts/1)
+        last_block(proj)
+        |> Block.completion_rows()
+        |> Enum.flat_map(&flat_texts/1)
 
       for text <- completion_texts do
-        refute text =~ "\e", "rendered completion row leaked ESC: #{inspect(text)}"
-        refute text =~ "\x07", "rendered completion row leaked BEL: #{inspect(text)}"
-        refute String.contains?(text, "\r"), "rendered completion row leaked CR: #{inspect(text)}"
+        refute text =~ "\e",
+               "rendered completion row leaked ESC: #{inspect(text)}"
+
+        refute text =~ "\x07",
+               "rendered completion row leaked BEL: #{inspect(text)}"
+
+        refute String.contains?(text, "\r"),
+               "rendered completion row leaked CR: #{inspect(text)}"
       end
     end
   end
@@ -730,9 +772,10 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       }
     end
 
-    test "folded render of the absence arm contains the literal text \"no evidence provided\"", %{
-      absence_block: block
-    } do
+    test "folded render of the absence arm contains the literal text \"no evidence provided\"",
+         %{
+           absence_block: block
+         } do
       folded = %{block | fold: :folded}
       texts = flat_texts(Block.render(folded, %{}))
 
@@ -740,9 +783,10 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
              "expected the literal absence text in folded render, got: #{inspect(texts)}"
     end
 
-    test "expanded render of the absence arm contains the literal text \"no evidence provided\"", %{
-      absence_block: block
-    } do
+    test "expanded render of the absence arm contains the literal text \"no evidence provided\"",
+         %{
+           absence_block: block
+         } do
       expanded = %{block | fold: :expanded}
       texts = flat_texts(Block.render(expanded, %{}))
 
@@ -750,9 +794,10 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
              "expected the literal absence text in expanded render, got: #{inspect(texts)}"
     end
 
-    test "folded render of a dangling ref contains the literal text \"unresolvable evidence ref\"", %{
-      unresolvable_block: block
-    } do
+    test "folded render of a dangling ref contains the literal text \"unresolvable evidence ref\"",
+         %{
+           unresolvable_block: block
+         } do
       folded = %{block | fold: :folded}
       texts = flat_texts(Block.render(folded, %{}))
 
@@ -760,9 +805,10 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
              "expected the literal unresolvable text in folded render, got: #{inspect(texts)}"
     end
 
-    test "expanded render of a dangling ref contains the literal text \"unresolvable evidence ref\"", %{
-      unresolvable_block: block
-    } do
+    test "expanded render of a dangling ref contains the literal text \"unresolvable evidence ref\"",
+         %{
+           unresolvable_block: block
+         } do
       expanded = %{block | fold: :expanded}
       texts = flat_texts(Block.render(expanded, %{}))
 
@@ -770,14 +816,16 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
              "expected the literal unresolvable text in expanded render, got: #{inspect(texts)}"
     end
 
-    test "the evidence arm and the absence arm render different completion rows", %{
-      absence_block: absence_block,
-      evidence_block: evidence_block
-    } do
+    test "the evidence arm and the absence arm render different completion rows",
+         %{
+           absence_block: absence_block,
+           evidence_block: evidence_block
+         } do
       absence_texts = flat_texts(Block.render(absence_block, %{}))
       evidence_texts = flat_texts(Block.render(evidence_block, %{}))
 
       assert Enum.any?(absence_texts, &(&1 == "no evidence provided"))
+
       refute Enum.any?(evidence_texts, &(&1 == "no evidence provided")),
              "the evidence arm must never render the absence text"
 
@@ -850,7 +898,8 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
 
       assert Enum.any?(
                proj.diagnostics,
-               &(&1.reason == :final_completion_without_blocks and &1.event_id == 2)
+               &(&1.reason == :final_completion_without_blocks and
+                   &1.event_id == 2)
              )
     end
   end
@@ -865,11 +914,16 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
           tool_round_trip(2, "t1", 200, "mix_test", "42 tests, 0 failures")
         ])
 
-      with_refs = shared_prefix ++ [turn_completed(6, "t1", 300, %{"refs" => [5]})]
+      with_refs =
+        shared_prefix ++ [turn_completed(6, "t1", 300, %{"refs" => [5]})]
+
       without_refs = shared_prefix ++ [turn_completed(6, "t1", 300, %{})]
 
-      identity_with = Projection.transcript_identity(Projection.project(with_refs))
-      identity_without = Projection.transcript_identity(Projection.project(without_refs))
+      identity_with =
+        Projection.transcript_identity(Projection.project(with_refs))
+
+      identity_without =
+        Projection.transcript_identity(Projection.project(without_refs))
 
       refute identity_with == identity_without
     end
