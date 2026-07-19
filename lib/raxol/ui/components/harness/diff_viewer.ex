@@ -78,7 +78,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   same `LineDiff` LCS, so the two can never disagree.
 
   `handle_event/3` toggles the fold on Enter or Space (mirrors
-  `ReasoningBlock`/`Tree` activation keys). The component is CONTROLLED
+  `Tree` activation keys). The component is CONTROLLED
   (TEA migration doctrine, section 2): it never stores its own state --
   the host app owns this state map in its model and forwards key events
   into `handle_event/3`, keeping the returned state
@@ -174,7 +174,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   defp normalize_context(n) when is_integer(n) and n >= 0, do: n
   defp normalize_context(_other), do: 3
 
-  # Enter/Space -- toggle the compact fold (mirrors ReasoningBlock/Tree
+  # Enter/Space -- toggle the compact fold (mirrors Tree
   # activation keys). Controlled: the caller keeps the returned state.
   @impl true
   def handle_event(%Event{type: :key, data: %{key: :enter}}, state, _context),

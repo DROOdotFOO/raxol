@@ -2,13 +2,10 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
   use ExUnit.Case, async: true
 
   alias Raxol.UI.Components.Harness.{
-    ApprovalPrompt,
     Block,
     BodyProvider,
     DiffViewer,
-    MessageBlock,
-    ReasoningBlock,
-    ToolCallBlock
+    MessageBlock
   }
 
   defp default_context,
@@ -39,46 +36,6 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
     )
   end
 
-  defp fixture_block(:reasoning) do
-    Block.from_events(
-      :reasoning,
-      [
-        %{
-          id: 1,
-          type: :item_completed,
-          payload: %{
-            item_type: :reasoning,
-            content: "Considering the rollback plan."
-          }
-        }
-      ],
-      fold: :expanded
-    )
-  end
-
-  defp fixture_block(:tool_call) do
-    Block.from_events(
-      :tool_call,
-      [
-        %{
-          id: 1,
-          type: :item_completed,
-          payload: %{
-            item_type: :tool_use,
-            content: %{name: "Bash", args: %{command: "ls -la"}}
-          }
-        },
-        %{
-          id: 2,
-          type: :item_completed,
-          payload: %{item_type: :tool_result, content: "total 0\ndrwxr-xr-x"},
-          provenance: %{trust: :tainted}
-        }
-      ],
-      fold: :expanded
-    )
-  end
-
   defp fixture_block(:diff) do
     Block.from_events(
       :diff,
@@ -97,49 +54,16 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
     )
   end
 
-  defp fixture_block(:approval) do
-    Block.from_events(
-      :approval,
-      [
-        %{
-          id: 1,
-          type: :approval_requested,
-          payload: %{
-            action: "rm -rf build/",
-            blast_radius: %{
-              writes: [],
-              deletes: ["build/"],
-              commands: [],
-              network: [],
-              reversible: false
-            },
-            options: [
-              %{
-                key: :allow_once,
-                label: "Allow once",
-                decision: :allow,
-                scope: :once
-              },
-              %{key: :deny, label: "Deny", decision: :deny, scope: :once}
-            ]
-          }
-        }
-      ],
-      fold: :expanded
-    )
-  end
-
   defp valid_body(kind), do: fixture_block(kind).content
 
   describe "known_kinds/0 + required_keys/1 -- the schema surface" do
-    test "matches Block's mountable kinds (excludes :opaque and :error)" do
-      # `:error` is a Block kind but has NO mounted component -- it renders
-      # as a compact alarm line via `Block.render/2` (see `BlockBody`'s
-      # `:error` clause), so `BodyProvider` never mounts it, exactly like
-      # `:opaque`. The schema surface therefore covers Block's known kinds
-      # MINUS `:error`.
-      assert Enum.sort(BodyProvider.known_kinds()) ==
-               Enum.sort(Block.known_kinds() -- [:error])
+    test "covers exactly the kinds with a real mounted component" do
+      # Post-cull: only `:message` (MessageBlock) and `:diff` (DiffViewer)
+      # mount. The machinery register (`:tool_call`/`:reasoning`/`:error`)
+      # and `:approval` are `Block.render/2`'s own in BOTH fold states via
+      # `BlockBody`'s short-circuit -- that IS the production path, so this
+      # seam has no schema for them.
+      assert Enum.sort(BodyProvider.known_kinds()) == [:diff, :message]
     end
 
     test "every known kind has at least one required key" do
@@ -152,6 +76,12 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
     test ":opaque and other unknown kinds have no schema" do
       assert BodyProvider.required_keys(:opaque) == []
       assert BodyProvider.required_keys(:something_undreamed_of) == []
+    end
+
+    test "the short-circuited kinds have no schema either" do
+      for kind <- [:reasoning, :tool_call, :error, :approval] do
+        assert BodyProvider.required_keys(kind) == []
+      end
     end
   end
 
@@ -192,15 +122,19 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
   describe "component_for/1 -- kind to merged-component mapping" do
     test "each known kind names its real merged component" do
       assert BodyProvider.component_for(:message) == {:ok, MessageBlock}
-      assert BodyProvider.component_for(:reasoning) == {:ok, ReasoningBlock}
-      assert BodyProvider.component_for(:tool_call) == {:ok, ToolCallBlock}
       assert BodyProvider.component_for(:diff) == {:ok, DiffViewer}
-      assert BodyProvider.component_for(:approval) == {:ok, ApprovalPrompt}
     end
 
     test ":opaque and unknown kinds have no component" do
       assert {:error, _reason} = BodyProvider.component_for(:opaque)
       assert {:error, _reason} = BodyProvider.component_for(:not_a_real_kind)
+    end
+
+    test "the short-circuited kinds have no component (Block.render/2 owns them)" do
+      for kind <- [:reasoning, :tool_call, :error, :approval] do
+        assert {:error, reason} = BodyProvider.component_for(kind)
+        assert reason =~ inspect(kind)
+      end
     end
   end
 
@@ -217,17 +151,24 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
     test "mounting through an explicitly wrong component refuses instead of silently rendering" do
       assert {:error, message} =
                BodyProvider.mount(:diff, valid_body(:diff),
-                 component: ApprovalPrompt,
+                 component: MessageBlock,
                  context: default_context()
                )
 
-      assert message =~ "ApprovalPrompt"
+      assert message =~ "MessageBlock"
       assert message =~ "DiffViewer"
     end
 
     test "an unknown/:opaque kind refuses to mount (no component to refuse INTO, just refuses)" do
       assert {:error, _reason} =
                BodyProvider.mount(:opaque, %{text: "x"},
+                 context: default_context()
+               )
+    end
+
+    test "a short-circuited kind refuses to mount (BlockBody falls back to Block.render/2)" do
+      assert {:error, _reason} =
+               BodyProvider.mount(:tool_call, %{name: "Bash", args: %{}},
                  context: default_context()
                )
     end
@@ -250,67 +191,6 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
                "body mounts as bare prose"
     end
 
-    test ":reasoning mounts ReasoningBlock expanded, showing the full content" do
-      block = fixture_block(:reasoning)
-
-      assert {:ok, view} =
-               BodyProvider.mount(block.kind, block.content,
-                 context: default_context()
-               )
-
-      texts = flat_texts(view)
-      assert Enum.any?(texts, &(&1 == "Considering the rollback plan."))
-    end
-
-    test ":tool_call composes ToolCallBlock + ToolResultBlock (with taint badge) when a result is present" do
-      block = fixture_block(:tool_call)
-
-      assert {:ok, view} =
-               BodyProvider.mount(block.kind, block.content,
-                 context: default_context(),
-                 outcome: block.outcome
-               )
-
-      texts = flat_texts(view)
-      assert Enum.any?(texts, &(&1 == "Bash"))
-      assert Enum.any?(texts, &(&1 =~ "command: \"ls -la\""))
-      assert Enum.any?(texts, &(&1 =~ "total 0"))
-      assert Enum.any?(texts, &(&1 == "⚠ untrusted"))
-    end
-
-    test ":tool_call mounts ToolCallBlock ALONE when no result has landed yet (still pending)" do
-      pending_block =
-        Block.from_events(
-          :tool_call,
-          [
-            %{
-              id: 1,
-              type: :item_started,
-              payload: %{item_type: :tool_use}
-            },
-            %{
-              id: 2,
-              type: :item_completed,
-              payload: %{
-                item_type: :tool_use,
-                content: %{name: "Grep", args: %{}}
-              }
-            }
-          ],
-          fold: :expanded
-        )
-
-      assert {:ok, view} =
-               BodyProvider.mount(pending_block.kind, pending_block.content,
-                 context: default_context(),
-                 outcome: pending_block.outcome
-               )
-
-      texts = flat_texts(view)
-      assert Enum.any?(texts, &(&1 == "Grep"))
-      refute Enum.any?(texts, &(&1 == "⚠ untrusted"))
-    end
-
     test ":diff mounts DiffViewer, showing the path chrome and the proposed-change framing" do
       block = fixture_block(:diff)
 
@@ -324,37 +204,6 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
       assert Enum.any?(texts, &(&1 == "Proposed change"))
       assert Enum.any?(texts, &(&1 =~ "Not yet applied"))
       assert Enum.any?(texts, &(&1 =~ "total"))
-    end
-
-    test ":approval mounts ApprovalPrompt (embedding BlastRadiusPreview), showing action + blast radius + options" do
-      block = fixture_block(:approval)
-
-      assert {:ok, view} =
-               BodyProvider.mount(block.kind, block.content,
-                 context: default_context()
-               )
-
-      texts = flat_texts(view)
-      assert Enum.any?(texts, &(&1 =~ "rm -rf build/"))
-      assert Enum.any?(texts, &(&1 =~ "IRREVERSIBLE"))
-      assert Enum.any?(texts, &(&1 =~ "build/"))
-      assert Enum.any?(texts, &(&1 =~ "Allow once"))
-      assert Enum.any?(texts, &(&1 =~ "Deny"))
-    end
-
-    test ":approval with a nil (undeclared) blast_radius still mounts, validate/2 stays presence-only, and BlastRadiusPreview renders the explicit unsafe-warning" do
-      body = %{action: "rm -rf /", blast_radius: nil, options: [:allow, :deny]}
-
-      assert BodyProvider.validate(:approval, body) == :ok,
-             "a present key with a nil value must still pass presence-only validation"
-
-      assert {:ok, view} =
-               BodyProvider.mount(:approval, body, context: default_context())
-
-      texts = flat_texts(view)
-      assert Enum.any?(texts, &(&1 =~ "rm -rf /"))
-      assert Enum.any?(texts, &(&1 =~ "not declared"))
-      refute Enum.any?(texts, &(&1 =~ "No tracked effects."))
     end
   end
 
@@ -403,8 +252,8 @@ defmodule Raxol.UI.Components.Harness.BodyProviderTest do
     test "seal is accepted and harmless for non-message kinds" do
       assert {:ok, _view} =
                BodyProvider.mount(
-                 :tool_call,
-                 %{name: "Bash", args: %{command: "ls"}},
+                 :diff,
+                 %{path: "lib/foo.ex", old: "a\n", new: "b\n"},
                  context: default_context(),
                  seal: :live
                )

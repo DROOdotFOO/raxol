@@ -152,7 +152,7 @@ defmodule Raxol.UI.Components.Harness.PickerTest do
     end
 
     # EventBuilder.key/2 (the Headless autotest harness), Event.key_match/1,
-    # and the re-hosted ReasoningBlock/MessageBlock all put the printable in
+    # and the re-hosted MessageBlock all put the printable in
     # `data.char` with `data.key == :char`. Without a clause for this shape
     # the picker cannot filter under Headless -- the whole U3 overlay
     # autotest story. (Regression pin for the harness TEA re-hosting.)

@@ -10,7 +10,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
 
   # --- shared tree helpers (same conventions as markdown_renderer_test.exs
   # and block_test.exs: a local recursive flattener over the
-  # `%{type: :column | :row | :text, ...}` element tree) ---
+  # `%{type: :column | :row | :text | :indication, ...}` element tree) ---
 
   defp flat_texts(%{type: :text, content: content}), do: [content]
 
@@ -27,6 +27,16 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
 
   defp flat_texts(%{type: :column, children: children}),
     do: Enum.flat_map(children, &flat_texts/1)
+
+  # An :indication container (the expanded thought's ∵…∴ bracket) keeps
+  # its child tree under `:content`, not `:children` -- descend the rich
+  # (view-node) shape, project the pre-formatted binary fast path.
+  defp flat_texts(%{type: :indication, content: content})
+       when is_binary(content),
+       do: [content]
+
+  defp flat_texts(%{type: :indication, content: content}),
+    do: flat_texts(content)
 
   defp flat_texts(_), do: []
 

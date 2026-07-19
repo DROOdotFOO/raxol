@@ -235,7 +235,7 @@ defmodule Raxol.Harness.ViewTextMarkdownListTest do
     end
 
     test "a :row's gap becomes literal spaces between joined segments" do
-      # ToolCallBlock's header shape: glyph + name + args, gap: 1.
+      # a tool-call header's shape: glyph + name + args, gap: 1.
       view = %{
         type: :row,
         gap: 1,
@@ -253,7 +253,7 @@ defmodule Raxol.Harness.ViewTextMarkdownListTest do
     end
 
     test "a :row carrying gap only in style still spaces its segments" do
-      # ToolResultBlock's header_row shape: %{type: :row, style: %{gap: 1}}.
+      # the style-carried header_row shape: %{type: :row, style: %{gap: 1}}.
       view = %{
         type: :row,
         style: %{gap: 1},

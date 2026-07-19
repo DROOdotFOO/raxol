@@ -20,7 +20,7 @@ defmodule Raxol.UI.Components.Harness.FooterStack do
   element is one physical row (a `Raxol.View.Components.text/1`-shaped map or
   any single-line node the child produced); the caller -- a demo or the
   endgame `HarnessApp` -- renders the child Components (StatusStrip,
-  LaneNotice, Composer, Notice) to their line lists and hands the ordered
+  Composer, Notice) to their line lists and hands the ordered
   keyword list in.
 
   ## The fit law (ported verbatim from the retired `Raxol.Harness.Surface`)

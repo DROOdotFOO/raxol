@@ -57,8 +57,8 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   @doc """
   Renders `block`'s body. `context` is threaded to `Block.render/2` (folded
   case) and to `BodyProvider.mount/3` (expanded case) unchanged; the
-  expanded case also passes `block.outcome` through for `:tool_call`'s
-  status derivation (see `BodyProvider.mount/3`'s `:outcome` option).
+  expanded case also passes `block.outcome` through (accepted and ignored
+  by the post-cull mount seam -- only `:message` and `:diff` mount).
   """
   @spec render(Block.t(), map()) :: map()
   def render(block, context \\ %{})
@@ -78,9 +78,7 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   # `:error` is Block.render/2's own too: its compact alarm line (`✗
   # <message>`, no fold arrow, non-dim) has no mounted-component form -- a
   # fault is a visible line, never a foldable widget, and expanded just
-  # appends the full multi-line message. (`ErrorBlock`, the bordered-box
-  # component, is a separate standalone widget, not this transcript's
-  # inline fault render.)
+  # appends the full multi-line message.
   def render(%Block{kind: kind} = block, context)
       when kind in [:tool_call, :reasoning, :error],
       do: Block.render(block, context)
@@ -92,15 +90,13 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   # `± <verb> <path>` identity line (no `⚑` header row -- the diff IS the
   # identity, per the bottom-identity ruling) and the live answer prompt --
   # the operator's question is "what will `y` do", and the answer is the
-  # diff, never `ApprovalPrompt`'s modal action line (which would show a
-  # truncated args gloss, not the change). A bash / non-diff approval has no
-  # image to show and keeps its mounted `ApprovalPrompt` via the general
-  # clause below.
+  # diff. A bash / non-diff approval has no image to show; the general
+  # clause below now refuses `:approval` (no mounted component survives the
+  # cull) and falls back to this same `Block.render/2` form.
   def render(%Block{fold: :expanded, kind: :approval} = block, context) do
     # `selector_hosted?` (the TEA harness): the hosting view runs its own
-    # footer answer prompt, so the bash/non-diff approval must NOT mount
-    # `ApprovalPrompt` (whose "Choose a response" list is a second answer
-    # surface) — `Block.render/2` shows referent + blast radius and its
+    # footer answer prompt, so the bash/non-diff approval renders through
+    # `Block.render/2` directly — it shows referent + blast radius and its
     # `approval_resolution_lines/3` already yields under the same flag.
     if approval_has_diff?(block) or Map.get(context, :selector_hosted?, false) do
       Block.render(block, context)

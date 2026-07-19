@@ -1,19 +1,18 @@
 defmodule Raxol.Playground.Demos.HarnessPanelsDemo do
   @moduledoc """
-  Playground demo: harness projection panels (worktracks / rules / memory /
-  residual) laid out as one dashboard.
+  Playground demo: harness projection panels (worktracks / rules / memory)
+  laid out as one dashboard.
 
   Exercises the real `Raxol.UI.Components.Harness.*` panel modules -- each
   `init/1` + `render/2` directly, the same way `DemoHelpers.rich_text/2`
   mounts `Display.Text` -- with sample data shaped like the materialized
-  views these panels fold from `extract{class, op, item}` / `residual` meta
-  events (see `docs/proposals/in-flight/harness-spec-frontend.md` §3).
+  views these panels fold from `extract{class, op, item}` meta events
+  (see `docs/proposals/in-flight/harness-spec-frontend.md` §3).
   """
   use Raxol.Core.Runtime.Application
 
   alias Raxol.UI.Components.Harness.{
     MemoryPanel,
-    ResidualIndicator,
     RulesPanel,
     WorktracksPanel
   }
@@ -66,26 +65,14 @@ defmodule Raxol.Playground.Demos.HarnessPanelsDemo do
     %{key: "trust", value: "trusted"}
   ]
 
-  @residual_text "which retry class covers a stalled probe_c2 extraction"
+  @impl true
+  def init(_context), do: %{}
 
   @impl true
-  def init(_context) do
-    %{show_residual: true}
-  end
+  def update(_message, model), do: {model, []}
 
   @impl true
-  def update(message, model) do
-    case message do
-      key_match("r") ->
-        {%{model | show_residual: not model.show_residual}, []}
-
-      _ ->
-        {model, []}
-    end
-  end
-
-  @impl true
-  def view(model) do
+  def view(_model) do
     column style: %{gap: 1} do
       [
         text("Harness Panels Demo", style: [:bold]),
@@ -96,21 +83,13 @@ defmodule Raxol.Playground.Demos.HarnessPanelsDemo do
             panel(RulesPanel, id: "demo-rules", rules: @rules),
             panel(MemoryPanel, id: "demo-memory", items: @memory)
           ]
-        end,
-        panel(ResidualIndicator,
-          id: "demo-residual",
-          residual: residual(model)
-        ),
-        text("[r] toggle residual", style: [:dim])
+        end
       ]
     end
   end
 
   @impl true
   def subscribe(_model), do: []
-
-  defp residual(%{show_residual: true}), do: @residual_text
-  defp residual(_model), do: nil
 
   # Mounts a real Harness panel component the same way
   # `Raxol.Playground.DemoHelpers.rich_text/2` mounts `Display.Text`: a fresh

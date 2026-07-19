@@ -475,13 +475,12 @@ defmodule Raxol.Playground.Catalog do
       module: Demos.HarnessTranscriptDemo,
       category: :display,
       description:
-        "Agent-harness transcript blocks: completed message, collapsible reasoning, error",
+        "Agent-harness transcript message block: a completed assistant message, bare prose",
       complexity: :intermediate,
-      tags: ["harness", "display", "transcript", "agent", "collapsible"],
+      tags: ["harness", "display", "transcript", "agent"],
       code_snippet: """
-      MessageBlock.render(message_state, %{})
-      ReasoningBlock.render(reasoning_state, %{})  # collapsible, Enter/Space toggles
-      ErrorBlock.render(error_state, %{})
+      {:ok, s} = MessageBlock.init(id: "msg", role: :assistant, content: text)
+      MessageBlock.render(s, %{})
       """
     },
     %{
@@ -770,46 +769,19 @@ defmodule Raxol.Playground.Catalog do
     },
     # --- Harness widgets ---
     %{
-      name: "Harness Status",
-      module: Demos.HarnessStatusDemo,
-      category: :feedback,
-      description:
-        "Agent harness status bar, context/spend meters, activity indicator, advisory feed, and drift gauge",
-      complexity: :intermediate,
-      tags: [
-        "harness",
-        "status",
-        "meter",
-        "activity",
-        "advisory",
-        "drift",
-        "toast"
-      ],
-      code_snippet: """
-      {:ok, s} = ContextMeter.init(used: 13_000, total: 16_000)
-      ContextMeter.render(s, %{})
-
-      {:ok, s} = ActivityIndicator.init(state: :working, since_ms: 0, frame: 0)
-      ActivityIndicator.render(s, %{})
-      """
-    },
-    %{
       name: "Harness Notice",
       module: Demos.HarnessNoticeDemo,
       category: :harness,
       description:
-        "Footer honest-report channels: Notice (refusal/degradation) + LaneNotice " <>
-          "(live-session status) — nil / string / multi-line / list vocabulary",
+        "Footer honest-report channel: Notice (refusal/degradation) — " <>
+          "nil / string / multi-line / list vocabulary",
       complexity: :basic,
-      tags: ["harness", "notice", "lane", "footer", "report", "controlled"],
+      tags: ["harness", "notice", "footer", "report", "controlled"],
       code_snippet: """
       {:ok, n} = Notice.init(id: "notice", notice: "no block focused", width: 40)
       Notice.render(n, %{})
 
-      {:ok, l} = LaneNotice.init(id: "lane", notice: "interrupt sent", width: 40)
-      LaneNotice.render(l, %{})
-
-      # shared line vocabulary (nil → []; string → rows; list → flat concat)
+      # line vocabulary (nil → []; string → rows; list → flat concat)
       Notice.lines(["degraded", "composer disabled"], 40)
       """
     },
@@ -818,7 +790,7 @@ defmodule Raxol.Playground.Catalog do
       module: Demos.HarnessPanelsDemo,
       category: :display,
       description:
-        "Read-only harness projection panels: worktracks kanban, rules (hard vs soft), memory, residual",
+        "Read-only harness projection panels: worktracks kanban, rules (hard vs soft), memory",
       complexity: :intermediate,
       tags: ["harness", "display", "kanban", "rules", "memory", "projection"],
       code_snippet: """
@@ -826,74 +798,6 @@ defmodule Raxol.Playground.Catalog do
         %{name: "doing", items: [%{title: "Fold extract into board", status: "doing"}]}
       ])
       WorktracksPanel.render(state, %{})
-      """
-    },
-    %{
-      name: "Harness Approval",
-      module: Demos.HarnessApprovalDemo,
-      category: :overlay,
-      description:
-        "Agent-harness approval gate: blast-radius preview and keyboard-driven allow/deny scope choice",
-      complexity: :intermediate,
-      tags: ["harness", "approval", "overlay", "blast-radius"],
-      code_snippet: """
-      {:ok, approval} =
-        ApprovalPrompt.init(
-          id: "harness-approval",
-          action: %{description: "Clear stale build cache", tool: "shell.exec"},
-          blast_radius: %{deletes: ["/tmp/build/artifact.tar"], reversible: false}
-        )
-
-      AbsoluteLayer.dialog_overlay(
-        approval.width,
-        ApprovalPrompt.estimate_height(approval),
-        ApprovalPrompt.render(approval, %{})
-      )
-      """
-    },
-    %{
-      name: "Harness Approval Block",
-      module: Demos.HarnessApprovalBlockDemo,
-      category: :harness_chat_widgets,
-      description:
-        "Agent-harness approval BLOCK (transcript form): live referent + Pierre proposed diff + answer affordances; y/n/digits seal it to a receipt",
-      complexity: :intermediate,
-      tags: ["harness", "approval", "display", "agent", "transcript", "diff"],
-      code_snippet: """
-      # a LIVE approval block renders the referent + answer affordances;
-      # y/n/1-9 route through the block's handle_event (answer_mode: :direct)
-      # and the model transitions it to a sealed decision receipt
-      Block.render(%Block{kind: :approval, seal: :live, content: content}, %{width: 72})
-      """
-    },
-    %{
-      name: "Harness Tool Block",
-      module: Demos.HarnessToolBlockDemo,
-      category: :harness_chat_widgets,
-      description:
-        "Tool-call blocks on the compact render contract: outcome-on-glyph lines, " <>
-          "tight clustering, spinner margin, fold-to-full-body, taint marker",
-      complexity: :intermediate,
-      tags: ["harness", "agent", "tool", "taint", "provenance", "fold"],
-      code_snippet: """
-      block = Block.from_events(:tool_call, events) |> Block.seal()
-      Block.render(block, %{width: 76, id: "tool_ok"})
-      # ⚙ mix task: test      ✗ failed      ⊘ no result      · ⚠︎ untrusted
-      """
-    },
-    %{
-      name: "Harness Error Block",
-      module: Demos.HarnessErrorBlockDemo,
-      category: :harness_chat_widgets,
-      description:
-        "Error blocks as first-class alarm lines (real message, honest fallbacks, " <>
-          "expand-to-full-fault) plus the opaque forward-compat fallback",
-      complexity: :intermediate,
-      tags: ["harness", "agent", "error", "opaque", "alarm", "fold"],
-      code_snippet: """
-      block = Block.from_events(:error, [%{type: :error, payload: %{reason: msg}}])
-      Block.render(block, %{width: 76, id: "err_1"})
-      # ✗ Connection refused by upstream (attempt 3)
       """
     },
     # --- Harness TEA blocks (migration §7: one demo per block kind) ---
@@ -913,31 +817,6 @@ defmodule Raxol.Playground.Catalog do
         )
 
       MessageBlock.render(s, %{})  # root stamped id/attrs/on_click for MCP
-      """
-    },
-    %{
-      name: "Harness Reasoning Block",
-      module: Demos.HarnessReasoningBlockDemo,
-      category: :harness_chat_widgets,
-      description:
-        "The quiet reasoning register: collapsed by default, dim, peekable — component body plus the sealed ∴ transcript line",
-      complexity: :intermediate,
-      tags: [
-        "harness",
-        "reasoning",
-        "transcript",
-        "collapsible",
-        "controlled",
-        "mcp"
-      ],
-      code_snippet: """
-      {:ok, s} =
-        ReasoningBlock.init(
-          id: "reasoning", content: thought, expanded: false,
-          on_toggle: :toggle_reasoning
-        )
-
-      ReasoningBlock.render(s, %{})  # z/enter/space peek; emits on_toggle
       """
     },
     %{

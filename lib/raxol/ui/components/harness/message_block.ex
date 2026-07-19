@@ -51,7 +51,7 @@ defmodule Raxol.UI.Components.Harness.MessageBlock do
   state -- folded rendering is `Block.render/2`'s seat (and the future
   TranscriptBlock's). What it owns is the fold *vocabulary*: `z` (today's
   transcript fold key, Keymap `char: "z" -> :fold_toggle`) plus
-  Enter/Space (`ReasoningBlock`/Tree activation-key precedent) emit the
+  Enter/Space (Tree activation-key precedent) emit the
   wired `:on_toggle` prop as an outgoing message and leave the state
   untouched; the hosting model decides what folding means. A modified
   chord (ctrl/alt) never toggles. With no `:on_toggle` wired every fold

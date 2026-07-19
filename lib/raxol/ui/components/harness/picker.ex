@@ -291,7 +291,7 @@ defmodule Raxol.UI.Components.Harness.Picker do
   # EventBuilder / native-terminal / U1-blessed shape: the printable
   # character rides `data.char` with `data.key == :char` -- what
   # `Raxol.Headless.EventBuilder.key/2`, `Event.key_match/1`, and the
-  # re-hosted ReasoningBlock/MessageBlock components all use. Without this
+  # re-hosted MessageBlock component all use. Without this
   # clause the picker cannot filter under the Headless autotest harness
   # (the whole re-hosting test story, migration §6 F0-mcp), since the bare
   # `%{key: char}` clause below only matches `input_parser.ex`'s shape.

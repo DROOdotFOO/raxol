@@ -1,13 +1,11 @@
 defmodule Raxol.UI.Components.Harness.NoticeTest do
   @moduledoc """
-  The footer's honest report channels as Components (harness TEA migration
-  §4, unit U2): `Notice` (refusal/degradation) and `LaneNotice` (the
-  live-session channel that shares Notice's line vocabulary). Both are the
-  re-hosting of `Surface.notice_line/2`.
+  The footer's honest report channel as a Component (harness TEA migration
+  §4, unit U2): `Notice` (refusal/degradation), the re-hosting of
+  `Surface.notice_line/2`.
   """
   use ExUnit.Case, async: true
 
-  alias Raxol.UI.Components.Harness.LaneNotice
   alias Raxol.UI.Components.Harness.Notice
 
   defp content(lines), do: Enum.map(lines, & &1.content)
@@ -65,34 +63,10 @@ defmodule Raxol.UI.Components.Harness.NoticeTest do
     end
   end
 
-  describe "LaneNotice (the live-session channel)" do
-    test "lines/2 shares Notice's vocabulary exactly (no drift)" do
-      for notice <- [nil, "reconnecting", ["a", "b"], "x\ny"] do
-        assert LaneNotice.lines(notice, 40) == Notice.lines(notice, 40)
-      end
-    end
-
-    test "render/2 stamps the :lane kind" do
-      {:ok, state} =
-        LaneNotice.init(
-          id: "lane",
-          notice: "reconnecting to session",
-          width: 40
-        )
-
-      view = LaneNotice.render(state, %{})
-      assert view.attrs.kind == :lane
-      assert view.attrs.component_module == LaneNotice
-      assert content(view.children) == ["reconnecting to session"]
-    end
-  end
-
-  describe "handle_event/3 (report channels have nothing to click)" do
-    test "both return state unchanged with no commands" do
+  describe "handle_event/3 (a report channel has nothing to click)" do
+    test "returns state unchanged with no commands" do
       {:ok, n} = Notice.init([])
-      {:ok, l} = LaneNotice.init([])
       assert {^n, []} = Notice.handle_event(:x, n, %{})
-      assert {^l, []} = LaneNotice.handle_event(:x, l, %{})
     end
   end
 end

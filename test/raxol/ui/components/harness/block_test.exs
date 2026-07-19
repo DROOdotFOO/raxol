@@ -947,7 +947,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
       assert block.content.blast_radius == nil,
              "an undeclared blast radius must stay nil so " <>
-               "BlastRadiusPreview can render its explicit unsafe-warning " <>
+               "the render layer can treat it as explicitly unsafe " <>
                "instead of silently defaulting to a false-safe %{}"
     end
   end

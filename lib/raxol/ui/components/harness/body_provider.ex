@@ -2,7 +2,7 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
   @moduledoc """
   The T5 seam: an explicit per-kind content-map contract, plus the mapping
   from a `%Raxol.UI.Components.Harness.Block{}`'s `kind` to the merged
-  component (or pair of components) that renders its EXPANDED body.
+  component that renders its EXPANDED body.
 
   Per `docs/proposals/in-flight/harness-ui-STATE.md`'s binding advisory
   note, this contract is defined BEFORE mounting: `Block.content` (T4) is
@@ -12,6 +12,18 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
   (T5's fold-aware entry point) is the only caller in production code;
   this module is also directly test-facing so the schema and the
   kind-to-component mapping are independently exercisable.
+
+  ## Which kinds mount here (and which never did / no longer do)
+
+  Only two kinds have a real mounted component: `:message`
+  (`MessageBlock`) and `:diff` (`DiffViewer`). Every other kind is
+  `Block.render/2`'s own in BOTH fold states — `BlockBody` short-circuits
+  `:tool_call`, `:reasoning`, and `:error` to `Block.render/2` (the
+  machinery register / alarm line is `Block`'s compact form, and that
+  short-circuit IS the production path), and an `:approval` block renders
+  its referent + proposed diff + answer affordances through
+  `Block.render/2` as well. `component_for/1` and `mount/2` refuse those
+  kinds; `BlockBody` converts the refusal into its usual safe fallback.
 
   ## Per-kind content-map schema
 
@@ -26,31 +38,11 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
       unmarked voice), so the value threaded here is the real speaker,
       not a constant default. The default remains for hand-built bodies
       that never carried a role.
-    * `:reasoning` -- required `:text`.
-    * `:tool_call` -- required `:name`, `:args`; optional `:result`
-      (`nil` while the call has no paired result yet) and `:tainted`
-      (boolean, defaults `false`). Mirrors exactly what
-      `Block.extract_content(:tool_call, ...)` already produces.
     * `:diff`      -- required `:path`, `:old`, `:new`; optional
       `:language`. Mirrors `Raxol.UI.Components.Harness.DiffViewer`'s own
       prop names -- see `Block`'s `extract_diff_content/1` (T5 extension:
       no prior producer resolved `:diff` kind, so there was no existing
       shape to preserve).
-    * `:approval`  -- required `:action`, `:blast_radius`, `:options`.
-      `:blast_radius` must be shaped like
-      `Raxol.UI.Components.Harness.BlastRadiusPreview.blast_radius()`, or
-      `nil` when no producer ever supplied one -- `nil` is a real,
-      distinct value here, not a validation failure: `BlastRadiusPreview`
-      renders it as an explicit "not declared, treat as unsafe" warning,
-      never as its `%{}` "No tracked effects." line (a producer-declared
-      empty blast radius is a different, calmer claim than one nobody
-      declared at all). `:options` must be shaped like
-      `Raxol.UI.Components.Harness.ApprovalPrompt.option()` for the
-      mounted render to be meaningful -- `validate/2` only checks key
-      PRESENCE (a cheap, always-safe check), not the value's inner shape;
-      a wrongly-shaped value is the producer's bug, not something this
-      seam can catch without becoming a second type-checker for every
-      component's props.
 
   `:opaque` (Block's forward-compat fallback for an unrecognised kind) has
   no schema and no mountable component -- `component_for/1` and `mount/2`
@@ -63,25 +55,13 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
   rendering (one-line summary + outcome row) is `Block.render/2`'s own
   proven code path -- `BlockBody` reuses it directly rather than
   reimplementing a second summary renderer here.
-
-  ## `:reasoning` stays plain through this path, by design
-
-  Unlike `:message`, a `:reasoning` body is never threaded through
-  `Harness.MarkdownBody` here -- `ReasoningBlock` renders dim plain text
-  on purpose (reasoning is meant to read as quieter, secondary content).
-  Styled Markdown reasoning is an explicit opt-in that lives entirely in
-  `Block.render/2`'s own `context[:markdown]` path, not in this seam.
   """
 
   alias Raxol.UI.Components.Harness.{
-    ApprovalPrompt,
     Block,
     DiffViewer,
     MarkdownBody,
-    MessageBlock,
-    ReasoningBlock,
-    ToolCallBlock,
-    ToolResultBlock
+    MessageBlock
   }
 
   @type kind :: Block.kind()
@@ -89,18 +69,12 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
 
   @required_keys %{
     message: [:text],
-    reasoning: [:text],
-    tool_call: [:name, :args],
-    diff: [:path, :old, :new],
-    approval: [:action, :blast_radius, :options]
+    diff: [:path, :old, :new]
   }
 
   @components %{
     message: MessageBlock,
-    reasoning: ReasoningBlock,
-    tool_call: ToolCallBlock,
-    diff: DiffViewer,
-    approval: ApprovalPrompt
+    diff: DiffViewer
   }
 
   @doc "Every kind this seam has a schema + mountable component for (excludes `:opaque`)."
@@ -118,10 +92,9 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
 
   @doc """
   Validates `body`'s keys against `kind`'s schema. Presence-only (never
-  inspects a value's shape -- see the moduledoc's `:approval` note): a
-  content map that has every required key always passes, regardless of
-  what those keys hold. Missing keys are named explicitly, in schema
-  order, never a bare "invalid".
+  inspects a value's shape): a content map that has every required key
+  always passes, regardless of what those keys hold. Missing keys are
+  named explicitly, in schema order, never a bare "invalid".
   """
   @spec validate(kind() | term(), body()) :: :ok | {:error, String.t()}
   def validate(kind, body) when is_map(body) do
@@ -142,9 +115,9 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
   end
 
   @doc """
-  The canonical merged component for `kind`'s expanded body. `:tool_call`
-  composes a second component (`ToolResultBlock`, only when a result is
-  present) internally in `mount/2` -- this always names the primary one.
+  The canonical merged component for `kind`'s expanded body. Only
+  `:message` and `:diff` have one; every other kind is `Block.render/2`'s
+  own through `BlockBody`'s short-circuit/fallback (see the moduledoc).
   """
   @spec component_for(kind() | term()) :: {:ok, module()} | {:error, String.t()}
   def component_for(kind) do
@@ -159,20 +132,21 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
   returning the rendered view map (`{:ok, view}`), or `{:error, reason}`
   when:
 
-    * `kind` has no known component (`:opaque`, or anything else outside
+    * `kind` has no known component (`:opaque`, the short-circuited
+      machinery/approval kinds, or anything else outside
       `known_kinds/0`);
     * `opts[:component]` is given and disagrees with `component_for/1` --
       refuses rather than silently rendering `kind`'s content through the
       wrong component (the "wrong-kind mount" guard: a caller asking to
-      render a `:diff` body through `ApprovalPrompt` is a programming
+      render a `:diff` body through `MessageBlock` is a programming
       error, not a fallback case);
     * `body` fails `validate/2`.
 
   ## Options
 
     * `:context` -- render context passed to every mounted component's
-      `render/2` (default `%{}`); `:width` inside it sizes `:message`,
-      `:reasoning`, and `:diff` bodies.
+      `render/2` (default `%{}`); `:width` inside it sizes `:message`
+      and `:diff` bodies.
     * `:seal` -- `:live | :sealed` (default `:sealed`), the block's own
       seal state. Threaded only into the `:message` body, as
       `MessageBlock`'s render `:mode` (`:live` -> `:streaming`, `:sealed`
@@ -181,11 +155,6 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
       to `:sealed` means existing direct callers of `mount/3` see zero
       behavior change; `BlockBody` is the one caller that passes the
       block's real `seal`. Every other kind accepts and ignores it.
-    * `:outcome` -- a `Block.outcome()` map (default `%{}`), consulted
-      only for `:tool_call` to derive the mounted status glyph
-      (`:pending` with no result yet, `:failed` on a non-zero
-      `exit_code`, `:done` otherwise) -- `Block.content` itself carries
-      no status field of its own.
     * `:component` -- override the component actually mounted (for
       testing the wrong-kind refusal above); defaults to
       `component_for(kind)`.
@@ -196,29 +165,27 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
   (unknown kind, wrong-kind override, schema validation) -- it does not
   catch an exception raised inside the mounted component's own `init/1`
   or `render/2` (a schema-valid but wrong-SHAPED prop reaching a
-  component's internal guard/pattern match, see the `:approval` schema
-  note above). This module keeps no try/rescue of its own, by design --
-  see `Raxol.UI.Components.Harness.BlockBody`'s moduledoc ("the rescue
-  lives HERE, not inside `BodyProvider.mount/3`"). Production code never
-  calls `mount/3` directly for exactly that reason: only
-  `BlockBody.render/2` does, and it wraps the call so a component raise
-  recovers to the same `{:error, reason}` shape this function returns for
-  its own failures. A caller that reaches `mount/3` directly (as this
-  module's own tests do) gets an uncaught raise on that path, not an
-  `{:error, _}` tuple.
+  component's internal guard/pattern match). This module keeps no
+  try/rescue of its own, by design -- see
+  `Raxol.UI.Components.Harness.BlockBody`'s moduledoc ("the rescue lives
+  HERE, not inside `BodyProvider.mount/3`"). Production code never calls
+  `mount/3` directly for exactly that reason: only `BlockBody.render/2`
+  does, and it wraps the call so a component raise recovers to the same
+  `{:error, reason}` shape this function returns for its own failures. A
+  caller that reaches `mount/3` directly (as this module's own tests do)
+  gets an uncaught raise on that path, not an `{:error, _}` tuple.
   """
   @spec mount(kind() | term(), body(), keyword()) ::
           {:ok, map()} | {:error, String.t()}
   def mount(kind, body, opts \\ []) do
     context = Keyword.get(opts, :context, %{})
-    outcome = Keyword.get(opts, :outcome, %{})
     seal = Keyword.get(opts, :seal, :sealed)
 
     with {:ok, expected_component} <- component_for(kind),
          component = Keyword.get(opts, :component, expected_component),
          :ok <- ensure_component(kind, component, expected_component),
          :ok <- validate(kind, body) do
-      {:ok, build_view(kind, component, body, outcome, context, seal)}
+      {:ok, build_view(kind, component, body, context, seal)}
     end
   end
 
@@ -232,43 +199,12 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
 
   # -- per-kind view construction ---------------------------------------
 
-  defp build_view(:message, component, body, _outcome, context, seal) do
+  defp build_view(:message, component, body, context, seal) do
     mount_one(component, message_props(body, context, seal), context)
   end
 
-  defp build_view(:reasoning, component, body, _outcome, context, _seal) do
-    mount_one(component, reasoning_props(body, context), context)
-  end
-
-  defp build_view(:diff, component, body, _outcome, context, _seal) do
+  defp build_view(:diff, component, body, context, _seal) do
     mount_one(component, diff_props(body, context), context)
-  end
-
-  defp build_view(:approval, component, body, _outcome, context, _seal) do
-    mount_one(component, approval_props(body), context)
-  end
-
-  defp build_view(:tool_call, component, body, outcome, context, _seal) do
-    call_view = mount_one(component, tool_call_props(body, outcome), context)
-
-    case Map.get(body, :result) do
-      nil ->
-        call_view
-
-      result ->
-        result_view =
-          mount_one(
-            ToolResultBlock,
-            tool_result_props(body, result, outcome),
-            context
-          )
-
-        # gap: 0 is load-bearing (matches every other harness component's
-        # convention in this package): the layout engine defaults an
-        # unset gap to 1, which would insert a blank row between the call
-        # and its result.
-        %{type: :column, style: %{}, gap: 0, children: [call_view, result_view]}
-    end
   end
 
   defp mount_one(component, props, context) do
@@ -285,16 +221,6 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
     ]
   end
 
-  defp reasoning_props(body, context) do
-    [
-      content: Map.fetch!(body, :text),
-      # BlockBody only reaches mount/2 for the expanded fold state --
-      # folded rendering is Block.render/2's own summary line, never this.
-      expanded: true,
-      width: width_from(context)
-    ]
-  end
-
   defp diff_props(body, context) do
     [
       path: Map.fetch!(body, :path),
@@ -303,44 +229,6 @@ defmodule Raxol.UI.Components.Harness.BodyProvider do
       language: Map.get(body, :language),
       width: width_from(context)
     ]
-  end
-
-  defp approval_props(body) do
-    [
-      action: Map.fetch!(body, :action),
-      blast_radius: Map.fetch!(body, :blast_radius),
-      options: Map.fetch!(body, :options)
-    ]
-  end
-
-  defp tool_call_props(body, outcome) do
-    [
-      name: Map.fetch!(body, :name),
-      args: Map.fetch!(body, :args),
-      status: tool_status(body, outcome)
-    ]
-  end
-
-  defp tool_result_props(body, result, outcome) do
-    [
-      output: result,
-      status: tool_status(body, outcome),
-      taint: Map.get(body, :tainted, false),
-      collapsed: false
-    ]
-  end
-
-  defp tool_status(body, outcome) do
-    case {Map.get(body, :result), Map.get(outcome, :exit_code)} do
-      {nil, _exit_code} ->
-        :pending
-
-      {_result, exit_code} when is_integer(exit_code) and exit_code != 0 ->
-        :failed
-
-      _result_present_not_failed ->
-        :done
-    end
   end
 
   defp width_from(context),

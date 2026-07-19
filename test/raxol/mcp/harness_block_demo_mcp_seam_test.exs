@@ -16,7 +16,6 @@ defmodule Raxol.MCP.HarnessBlockDemoMcpSeamTest do
 
   alias Raxol.Headless
   alias Raxol.Playground.Demos.HarnessMessageBlockDemo
-  alias Raxol.Playground.Demos.HarnessReasoningBlockDemo
 
   # Covers dispatcher cast + engine re-render + the ToolSynchronizer's
   # 50ms debounce on slow CI machines (same budget as the button seam test).
@@ -42,44 +41,6 @@ defmodule Raxol.MCP.HarnessBlockDemoMcpSeamTest do
     end)
 
     :ok
-  end
-
-  test "reasoning demo derives its toggle live; the MCP toggle drives model, tree, and frame" do
-    session =
-      start_session(HarnessReasoningBlockDemo,
-        width: 100,
-        height: 30,
-        settle_ms: @settle_ms
-      )
-
-    names = session |> get_tools() |> Enum.map(& &1[:name])
-
-    assert "reasoning.toggle" in names,
-           "expected a live-derived toggle, got: #{inspect(names)}"
-
-    assert "discover_tools" in names
-
-    # StructuredScreenshot sanity: the stamped root surfaces in the
-    # widgets resource with its children.
-    session
-    |> assert_component("reasoning", fn c ->
-      c[:type] == :column and is_list(c[:children]) and c[:children] != []
-    end)
-
-    # Toggle through the full MCP pipeline -- no shortcuts.
-    session
-    |> toggle("reasoning")
-    |> assert_model(fn m -> m.expanded == true end)
-
-    assert screenshot(session) =~ "▾ 4 lines"
-
-    session
-    |> toggle("reasoning")
-    |> assert_model(fn m -> m.expanded == false end)
-
-    assert screenshot(session) =~ "▸ 4 lines — Phase 1"
-
-    stop_session(session)
   end
 
   test "message demo derives one toggle per turn; MCP fold and unfold round-trip" do

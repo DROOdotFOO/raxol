@@ -16,7 +16,7 @@ defmodule Raxol.Playground.Demos.HarnessOverlayDemo do
   layout child. This demo hosts the picker, the read-only projection
   panels, and the scrollable diff-expansion as
   `AbsoluteLayer.dialog_overlay/3` children painted OVER the transcript --
-  the exact `Modal`/`HarnessApprovalDemo` idiom -- with zero footer-grow,
+  the exact `Modal` dialog idiom -- with zero footer-grow,
   zero `set_footer_rows`. The `view/1` result is an `:absolute_layer`
   whose overlay is a centered, backdrop-dimming `dialog: true` child; the
   LayoutEngine positions it. That is the gap closing: the full-viewport

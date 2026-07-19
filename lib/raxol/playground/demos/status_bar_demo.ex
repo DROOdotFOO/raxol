@@ -7,9 +7,7 @@ defmodule Raxol.Playground.Demos.StatusBarDemo do
   Display.StatusBar has no keyboard handlers (`handle_event/3` is a
   passthrough). This demo keeps editor-ish fields in the model (mode,
   file, cursor, uptime tick) and rebuilds the bar's `items` on every
-  change so the mounted component reflects live state. Prefer this over
-  `Harness.StatusBar`, which is a specialized agent-turn status strip
-  that itself delegates render to Display.StatusBar.
+  change so the mounted component reflects live state.
   """
   use Raxol.Core.Runtime.Application
 
@@ -64,7 +62,9 @@ defmodule Raxol.Playground.Demos.StatusBarDemo do
         apply_fields(model, %{col: col}, "col -> #{col}")
 
       key_match("f") ->
-        file = if model.fields.file == "demo.ex", do: "table.ex", else: "demo.ex"
+        file =
+          if model.fields.file == "demo.ex", do: "table.ex", else: "demo.ex"
+
         apply_fields(model, %{file: file}, "file -> #{file}")
 
       :tick ->
@@ -121,7 +121,9 @@ defmodule Raxol.Playground.Demos.StatusBarDemo do
 
     column style: %{gap: 1} do
       [
-        text("StatusBar — Raxol.UI.Components.Display.StatusBar", style: [:bold]),
+        text("StatusBar — Raxol.UI.Components.Display.StatusBar",
+          style: [:bold]
+        ),
         text(
           " non-interactive key/label items; demo rebuilds items on key/tick",
           style: [:dim]

@@ -1,45 +1,40 @@
 defmodule Raxol.Playground.Demos.HarnessNoticeDemo do
   @moduledoc """
-  Playground demo: the harness footer's two honest report channels —
+  Playground demo: the harness footer's honest report channel —
 
     * `Raxol.UI.Components.Harness.Notice` — refusal / degradation /
       charged-minimum absence reports
-    * `Raxol.UI.Components.Harness.LaneNotice` — live-session status
-      ("interrupt sent", "reconnecting…")
 
-  Both are controlled Components (props in, pure line-list out, no MCP
-  actions). They share line vocabulary via `Notice.lines/2`:
+  A controlled Component (props in, pure line-list out, no MCP actions).
+  Its line vocabulary via `Notice.lines/2`:
 
     * `nil`        → no rows (honest silence)
     * binary       → one row per `\\n`-split physical line, width-truncated
     * list of bins → flat concat, so a long first notice never truncates
                      away a later one
 
-  FooterStack never sheds either channel; this demo only shows the rows
-  they produce. Scenes cycle with `n` / `p`.
+  FooterStack never sheds the notice channel; this demo only shows the
+  rows it produces. Scenes cycle with `n` / `p`.
   """
   use Raxol.Core.Runtime.Application
 
-  alias Raxol.UI.Components.Harness.LaneNotice
   alias Raxol.UI.Components.Harness.Notice
 
   @width 42
 
-  # Each scene: {label, notice_payload, lane_payload}
+  # Each scene: {label, notice_payload}
   @scenes [
-    {"nil / silence (both empty)", nil, nil},
-    {"single string", "no block focused", "interrupt sent"},
+    {"nil / silence", nil},
+    {"single string", "no block focused"},
     {"multi-line string (\\n split)",
-     "line one of a refusal\nline two kept separate",
-     "reconnecting to live session\nretry 2/5"},
+     "line one of a refusal\nline two kept separate"},
     {"list of strings (flat concat)",
      [
        "degraded resume: partial transcript",
        "composer disabled until reconnect"
-     ], ["session process exited", "transcript preserved"]},
+     ]},
     {"width truncation (#{@width} cells)",
-     "this notice is deliberately longer than the display width so TextMeasure ellipsis kicks in",
-     "lane notices also truncate with an ellipsis when over width"}
+     "this notice is deliberately longer than the display width so TextMeasure ellipsis kicks in"}
   ]
 
   @impl true
@@ -63,7 +58,7 @@ defmodule Raxol.Playground.Demos.HarnessNoticeDemo do
 
   @impl true
   def view(model) do
-    {label, notice_payload, lane_payload} = Enum.at(@scenes, model.scene_index)
+    {label, notice_payload} = Enum.at(@scenes, model.scene_index)
 
     {:ok, notice} =
       Notice.init(
@@ -72,20 +67,12 @@ defmodule Raxol.Playground.Demos.HarnessNoticeDemo do
         width: @width
       )
 
-    {:ok, lane} =
-      LaneNotice.init(
-        id: "harness-lane-notice",
-        notice: lane_payload,
-        width: @width
-      )
-
     notice_view = Notice.render(notice, %{available_width: @width})
-    lane_view = LaneNotice.render(lane, %{available_width: @width})
 
     column style: %{gap: 0} do
       [
-        text("Harness Notice + LaneNotice", style: [:bold]),
-        text(" honest footer report channels (controlled Components)",
+        text("Harness Notice", style: [:bold]),
+        text(" honest footer report channel (controlled Component)",
           style: [:dim]
         ),
         text(
@@ -95,9 +82,6 @@ defmodule Raxol.Playground.Demos.HarnessNoticeDemo do
         divider(),
         text(" Notice (refusal / degradation):", style: [:bold]),
         empty_or(notice_view, notice_payload),
-        text(""),
-        text(" LaneNotice (live-session channel):", style: [:bold]),
-        empty_or(lane_view, lane_payload),
         divider(),
         text(" lines/2 vocabulary: nil → [] · string → rows · list → flat",
           style: [:dim]

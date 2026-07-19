@@ -217,8 +217,8 @@ defmodule Raxol.UI.Components.Harness.MessageBlockTest do
 
   describe "controlled fold vocabulary (z / enter / space)" do
     # `z` is today's transcript fold key (Keymap binds char "z" ->
-    # :fold_toggle, guard :not_composing); enter/space mirror
-    # ReasoningBlock's activation keys. The component stays CONTROLLED:
+    # :fold_toggle, guard :not_composing); enter/space mirror Tree's
+    # activation keys. The component stays CONTROLLED:
     # it owns no fold state of its own -- it emits the wired `:on_toggle`
     # message out and leaves folding to the model that hosts it.
     defp char_event(char),

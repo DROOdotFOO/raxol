@@ -23,7 +23,16 @@ defmodule Raxol.Harness.TFFixtureTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Harness.Fixture
-  alias Raxol.Harness.Fixture.{Bless, DecodeError, Envelope, Header, Session, Upcast}
+
+  alias Raxol.Harness.Fixture.{
+    Bless,
+    DecodeError,
+    Envelope,
+    Header,
+    Session,
+    Upcast
+  }
+
   alias Raxol.Harness.Fixture.Projectors.Identity
 
   # Standalone test-only projector (defined at file scope, not inside a
@@ -154,7 +163,7 @@ defmodule Raxol.Harness.TFFixtureTest do
       assert message.provenance == %{source: "primary", trust: :tainted}
 
       # the taint is not decorative: the message literally quotes the
-      # tainted tool output — the TaintBadge substrate
+      # tainted tool output — the taint-provenance substrate
       assert message.payload["content"] =~ tool_result.payload["content"]
 
       # the ephemeral delta of the quoting message is stamped too
@@ -248,23 +257,59 @@ defmodule Raxol.Harness.TFFixtureTest do
       assert map_size(by_class) == 7
 
       # seek each named corruption through the data, not hardcoded lines
-      [orphan] = Session.range(session, by_class["orphan_item_completed"], by_class["orphan_item_completed"])
+      [orphan] =
+        Session.range(
+          session,
+          by_class["orphan_item_completed"],
+          by_class["orphan_item_completed"]
+        )
+
       assert orphan.body.payload["item_id"] == "i-orphan"
 
-      [late_delta] = Session.range(session, by_class["late_delta_after_seal"], by_class["late_delta_after_seal"])
+      [late_delta] =
+        Session.range(
+          session,
+          by_class["late_delta_after_seal"],
+          by_class["late_delta_after_seal"]
+        )
+
       assert late_delta.body.type == :item_delta
       assert late_delta.body.payload["item_id"] == "i1"
 
-      [unknown] = Session.range(session, by_class["unknown_item_type"], by_class["unknown_item_type"])
+      [unknown] =
+        Session.range(
+          session,
+          by_class["unknown_item_type"],
+          by_class["unknown_item_type"]
+        )
+
       assert unknown.body.payload["item_type"] == "custom_widget"
 
-      [out_of_order] = Session.range(session, by_class["out_of_order_id"], by_class["out_of_order_id"])
+      [out_of_order] =
+        Session.range(
+          session,
+          by_class["out_of_order_id"],
+          by_class["out_of_order_id"]
+        )
+
       assert out_of_order.body.id == 7
 
-      [missing_ts] = Session.range(session, by_class["missing_turn_started"], by_class["missing_turn_started"])
+      [missing_ts] =
+        Session.range(
+          session,
+          by_class["missing_turn_started"],
+          by_class["missing_turn_started"]
+        )
+
       assert missing_ts.body.turn_id == "t2"
 
-      [trailing] = Session.range(session, by_class["trailing_meta"], by_class["trailing_meta"])
+      [trailing] =
+        Session.range(
+          session,
+          by_class["trailing_meta"],
+          by_class["trailing_meta"]
+        )
+
       assert trailing.body.family == :meta
 
       # goldens carry no pathologies
@@ -692,6 +737,7 @@ defmodule Raxol.Harness.TFFixtureTest do
         # comparison is separator-agnostic on Windows.
         assert Path.expand(result.blocks_path) ==
                  Path.expand(Path.join(dir, name <> ".blocks.json"))
+
         assert File.exists?(result.blocks_path)
         assert result.count > 0
       end
@@ -766,7 +812,8 @@ defmodule Raxol.Harness.TFFixtureTest do
       snapshot_path = Path.join(dir, "simple-chat.blocks.json")
       File.write!(snapshot_path, "{\"stale\": true}\n")
 
-      assert {:error, {:drift, ["simple-chat"]}} = Bless.run(dir: dir, check: true)
+      assert {:error, {:drift, ["simple-chat"]}} =
+               Bless.run(dir: dir, check: true)
 
       # and drift never overwrites — the mutation is still on disk
       assert File.read!(snapshot_path) == "{\"stale\": true}\n"
@@ -776,7 +823,8 @@ defmodule Raxol.Harness.TFFixtureTest do
       assert {:ok, _} = Bless.run(dir: dir)
       File.rm!(Path.join(dir, "long-folds.blocks.json"))
 
-      assert {:error, {:drift, ["long-folds"]}} = Bless.run(dir: dir, check: true)
+      assert {:error, {:drift, ["long-folds"]}} =
+               Bless.run(dir: dir, check: true)
     end
 
     test "the mix task --check exits non-zero on drift, passes when current", %{
@@ -787,7 +835,10 @@ defmodule Raxol.Harness.TFFixtureTest do
       # current -> no raise
       Mix.Task.rerun("raxol.harness.fixtures.bless", ["--check", "--dir", dir])
 
-      File.write!(Path.join(dir, "simple-chat.blocks.json"), "{\"stale\": true}\n")
+      File.write!(
+        Path.join(dir, "simple-chat.blocks.json"),
+        "{\"stale\": true}\n"
+      )
 
       assert_raise Mix.Error, ~r/snapshot drift: simple-chat/, fn ->
         Mix.Task.rerun("raxol.harness.fixtures.bless", ["--check", "--dir", dir])

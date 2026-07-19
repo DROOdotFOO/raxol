@@ -88,11 +88,12 @@ defmodule Raxol.UI.Components.Harness.Block do
   the Bubbler's existing inline `on_click` path -- see `interactive_wrap/3`.
   Without an id nothing changes: the legacy render is byte- and
   map-identical, which is what the shelved Surface substrate keeps
-  consuming. T5 mounts the rich per-kind components (already merged:
-  `Harness.MessageBlock`, `Harness.ReasoningBlock`, `Harness.ToolCallBlock`,
-  `Harness.ToolResultBlock`, `Harness.DiffViewer`, `Harness.ApprovalPrompt`,
-  ...) as the fold-aware block bodies; this module is the data + text-only
-  fallback layer underneath that.
+  consuming. T5 mounts the rich per-kind components that survive the
+  demo-component cull (`Harness.MessageBlock`, `Harness.DiffViewer`) as
+  the fold-aware block bodies; this module is the data + text-only
+  fallback layer underneath that -- and, for the machinery register
+  (`:tool_call`/`:reasoning`/`:error`) and approvals, the one render
+  path outright (see `BlockBody`'s short-circuit).
 
   Expanded render = header line (fold glyph + kind glyph + first-line
   summary) + full content lines + an outcome row + a completion row.
@@ -626,7 +627,7 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   # The `toggle_fold` action is derived ONLY when the node carries an
   # `on_click` toggle message (the render stamped one for a block with an
-  # id) -- mirrors Button/ReasoningBlock's `on_click`-gated derivation.
+  # id) -- mirrors Button's `on_click`-gated derivation.
   @impl Raxol.MCP.ToolProvider
   def mcp_tools(%{on_click: handler} = node) when not is_nil(handler) do
     attrs = Map.get(node, :attrs, %{})
@@ -2327,10 +2328,9 @@ defmodule Raxol.UI.Components.Harness.Block do
     action = events |> find_in_events(@action_paths) |> to_display_text()
     # No `|| %{}` fallback here: a blast radius no producer ever supplied
     # must stay distinguishable from one a producer explicitly declares
-    # empty. `nil` means "not declared" --
-    # `Raxol.UI.Components.Harness.BlastRadiusPreview` renders that as its
-    # own explicit "not declared, treat as unsafe" warning rather than the
-    # calm "No tracked effects." line it renders for a genuine `%{}`.
+    # empty. `nil` means "not declared" -- the render layer treats it as
+    # an explicit "not declared, treat as unsafe" case rather than the
+    # calm empty state a genuine `%{}` would describe.
     blast_radius = find_in_events(events, @blast_radius_paths)
     options = find_in_events(events, @options_paths) || []
 

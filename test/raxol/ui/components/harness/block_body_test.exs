@@ -174,28 +174,28 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   # register: folded is a compact count/receipt line (`⁖ thinking · N
   # lines` / `⚙ name(args) · receipt`) that never previews the content,
   # so their expanded-only marker is a line of the BODY itself (the
-  # reasoning text / a tool-result line).
+  # reasoning text / a tool-result line). `:approval` is absent: post-cull
+  # its expanded form has no mounted component at all (it falls back to
+  # Block.render/2 -- pinned below), so it has no component-only marker.
   @expanded_only_marker %{
     message: "All checks green.",
     reasoning: "Considering",
     tool_call: "drwxr-xr-x",
-    diff: "Proposed change",
-    approval: "IRREVERSIBLE"
+    diff: "Proposed change"
   }
 
-  # The substring present in BOTH fold states. For message/diff/approval
-  # the folded summary previews a first-line/path/action identifier that
-  # the expanded body repeats. For the machinery kinds the shared token is
-  # the compact-line identity itself -- `reasoning` folds to `⁖ thinking
-  # · N lines` (and the expanded render keeps that same header line above
-  # the ∵…∴ bracketed body), `tool_call` folds to `⚙ Bash(...) · ...`
-  # (name preserved).
+  # The substring present in BOTH fold states. For message/diff the folded
+  # summary previews a first-line/path identifier that the expanded body
+  # repeats. For the machinery kinds the shared token is the compact-line
+  # identity itself -- `reasoning` folds to `⁖ thinking · N lines` (and
+  # the expanded render keeps that same header line above the ∵…∴
+  # bracketed body), `tool_call` folds to `⚙ Bash(...) · ...` (name
+  # preserved).
   @parity_marker %{
     message: "Deploy is done.",
     reasoning: "thinking",
     tool_call: "Bash",
-    diff: "lib/orders/total.ex",
-    approval: "rm -rf build/"
+    diff: "lib/orders/total.ex"
   }
 
   describe "fold round-trip: folded delegates to Block.render/2 verbatim" do
@@ -211,7 +211,7 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   end
 
   describe "fold round-trip: expanded mounts the real component, folded does not" do
-    for kind <- [:message, :reasoning, :tool_call, :diff, :approval] do
+    for kind <- [:message, :reasoning, :tool_call, :diff] do
       test "#{kind}: expanded shows the component-only content; folded hides it" do
         folded =
           Block.from_events(unquote(kind), events(unquote(kind)), fold: :folded)
@@ -316,48 +316,44 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
       assert_receive {^ref, [:raxol, :harness, :block_body, :recovered],
                       %{kind: :opaque}}
     end
+
+    # Post-cull: an expanded bash/non-diff approval has NO mounted
+    # component (the standalone gate components were demo-only). The
+    # general clause's mount refuses :approval, and the block recovers to
+    # the same Block.render/2 form the short-circuited kinds use -- the
+    # referent still reaches the screen, and the fallback is never silent.
+    test "an expanded bash approval falls back to Block.render/2 with recovered telemetry" do
+      ref = make_ref()
+      handler_id = {__MODULE__, ref}
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:raxol, :harness, :block_body, :recovered],
+        fn event, _measurements, metadata, _config ->
+          send(parent, {ref, event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      block = Block.from_events(:approval, events(:approval), fold: :expanded)
+      rendered = BlockBody.render(block, default_context())
+      texts = flat_texts(rendered)
+
+      assert Enum.any?(texts, &(&1 =~ "rm -rf build/")),
+             "the approval's action must still reach the screen via the fallback"
+
+      assert_receive {^ref, [:raxol, :harness, :block_body, :recovered],
+                      %{kind: :approval}}
+    end
   end
 
   # -- RED-1: a component that RAISES during expanded mount must recover
   # exactly like a mount `{:error, reason}` -- never escape BlockBody.render/2
-  # (see the moduledoc's total-safety claim, block_body.ex:20-23). Two
-  # independently reachable vectors, per the T5 Opus review:
+  # (see the moduledoc's total-safety claim, block_body.ex:20-23).
   describe "expanded mount raise recovers to the same fallback as a mount error" do
-    test "a real :approval producer with no blast_radius renders an explicit unsafe-warning, not a false-safe empty state" do
-      # Real producer shape: `approval_requested` with no `blast_radius`
-      # key at all. `Block.extract_approval_content/1` leaves that `nil`
-      # rather than defaulting it to `%{}` -- a defaulted `%{}` would have
-      # mounted `BlastRadiusPreview` straight into its "No tracked
-      # effects." line, an authoritative safety claim that is FALSE here:
-      # this action has no declared blast radius at all, not a
-      # confirmed-empty one. `ApprovalPrompt` still mounts (no raise), but
-      # `BlastRadiusPreview` renders its own explicit "not declared" warning
-      # instead.
-      events = [
-        %{
-          id: 1,
-          type: :approval_requested,
-          payload: %{action: "rm -rf /"}
-        }
-      ]
-
-      block = Block.from_events(:approval, events, fold: :expanded)
-      rendered = BlockBody.render(block, default_context())
-      texts = flat_texts(rendered)
-
-      assert Enum.any?(texts, &(&1 =~ "rm -rf /")),
-             "expected the real ApprovalPrompt to mount and show the action"
-
-      assert Enum.any?(texts, &(&1 =~ "not declared")),
-             "expected an undeclared blast radius to render an explicit " <>
-               "unsafe-warning, not a raise"
-
-      refute Enum.any?(texts, &(&1 =~ "No tracked effects.")),
-             "an undeclared blast radius must never render as the calm " <>
-               "empty-state line -- that would read a destructive, " <>
-               "undeclared action as harmless"
-    end
-
     test "a :diff body with non-string old/new raises inside DiffViewer/LineDiff and recovers" do
       # `BodyProvider.mount/3` validates key PRESENCE only (see its
       # moduledoc's `:approval` note) -- a present-but-wrong-shaped value
