@@ -457,5 +457,4 @@ defmodule Raxol.Harness.RecencyPolicyTest do
       refute header.style.fg == plain_fg
     end
   end
-
 end
