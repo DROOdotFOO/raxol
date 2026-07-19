@@ -119,7 +119,11 @@ defmodule Raxol.Harness.HarnessApp.View do
         source_events: model.projection.source_events,
         greeting?: model.greeting? and model.transcript_records == [],
         sigil: model.sigil,
-        reply_sigil: model.reply_sigil
+        reply_sigil: model.reply_sigil,
+        # This view renders the footer answer selector for a live approval
+        # (`selector_lines/2`), so the block body must not repeat the
+        # option list — the selector owns the answer affordance.
+        selector_hosted?: true
       )
 
     TranscriptView.render(state, %{available_width: cw})
@@ -166,7 +170,10 @@ defmodule Raxol.Harness.HarnessApp.View do
 
   # Display order (surface.ex footer_frame normal clause). Overlays are now
   # layout children, so the `:overlay` footer group is always empty; the
-  # `:divider` channel is dormant until the focus-event unit lands.
+  # `:divider` channel is dormant until the focus-event unit lands. The
+  # `:selector` group is the approval answer row (V's canonical footer:
+  # `[...❯ options...]` directly above the input) -- protected, like the
+  # notices: while a question is live, its affordance is never shed.
   defp footer_groups(model, cw) do
     [
       status: status_lines(model, cw),
@@ -176,15 +183,103 @@ defmodule Raxol.Harness.HarnessApp.View do
       divider: [],
       preview: preview_lines(model, cw),
       composer_sep: composer_sep_lines(model),
+      selector: selector_lines(model, cw),
       composer: composer_lines(model, cw),
       notice: Notice.lines(model.stub_notice, cw)
     ]
   end
 
+  # While a live approval holds the frontier, the strip's `awaiting
+  # approval <elapsed>` line is redundant (V's ruling): the inline block
+  # shows the question and the footer selector shows the answer keys. The
+  # strip keeps the floor ONLY for an alert (a stall is never silenced).
   defp status_lines(model, cw) do
     status = Map.put(model.status, :spinner_frame, model.spinner_frame)
-    StatusStrip.lines(status, cw, model.spinner_frame)
+
+    if Model.live_approval_block(model) != nil and
+         not StatusStrip.alerting?(status) do
+      []
+    else
+      StatusStrip.lines(status, cw, model.spinner_frame)
+    end
   end
+
+  # ── the approval selector row (V's `...❯ options...`) ──────────────────
+
+  # One footer row naming every answerable option, built from the REAL
+  # options on the live block (referent-honest, mirrors
+  # `Model.resolve_approval_answer/2`'s own resolution): digits pick by
+  # position, `y`/`n` alias the first allow/deny-class option and are
+  # shown only when such an option exists.
+  defp selector_lines(model, _cw) do
+    case Model.live_approval_block(model) do
+      nil -> []
+      block -> [selector_row(Map.get(block.content, :options, []), model)]
+    end
+  end
+
+  defp selector_row([], _model) do
+    %{
+      type: :text,
+      content: "awaiting approval — no options offered",
+      attrs: %{style: [:dim]}
+    }
+  end
+
+  defp selector_row(options, model) do
+    numbered =
+      options
+      |> Enum.with_index(1)
+      |> Enum.map_join("  ", fn {opt, index} ->
+        "#{index} #{selector_label(opt)}"
+      end)
+
+    aliases =
+      selector_alias("y", options, :allow) ++
+        selector_alias("n", options, :deny)
+
+    hint = if aliases == [], do: "", else: "  — " <> Enum.join(aliases, " · ")
+
+    %{
+      type: :row,
+      style: %{},
+      gap: 0,
+      children: [
+        %{type: :text, content: model.sigil <> " ", style: %{bold: true}},
+        %{type: :text, content: numbered <> hint}
+      ]
+    }
+  end
+
+  defp selector_alias(key, options, want) do
+    if Enum.any?(options, &(selector_decision(&1) == want)),
+      do: ["#{key} #{if want == :allow, do: "allow", else: "deny"}"],
+      else: []
+  end
+
+  defp selector_label(%{name: name}) when is_binary(name) and name != "",
+    do: name
+
+  defp selector_label(%{"name" => name}) when is_binary(name) and name != "",
+    do: name
+
+  defp selector_label(%{option_id: id}) when is_binary(id), do: id
+  defp selector_label(%{"option_id" => id}) when is_binary(id), do: id
+  defp selector_label(option) when is_binary(option), do: option
+  defp selector_label(_option), do: "option"
+
+  defp selector_decision(%{kind: kind}), do: selector_decision_from_kind(kind)
+
+  defp selector_decision(%{"kind" => kind}),
+    do: selector_decision_from_kind(kind)
+
+  defp selector_decision(_option), do: :deny
+
+  defp selector_decision_from_kind(kind)
+       when kind in [:allow_once, :allow_always, "allow_once", "allow_always"],
+       do: :allow
+
+  defp selector_decision_from_kind(_kind), do: :deny
 
   defp submitting_lines(%{pending_submit: %{text: text}}, _cw),
     do: [dim_text("↑ sending: " <> String.slice(text, 0, 40))]

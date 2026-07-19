@@ -309,5 +309,67 @@ defmodule Raxol.Harness.HarnessAppViewTest do
       refute footer =~ "± mix.exs", "the diff must NOT render in the footer"
       refute footer =~ "OLDLINE", "the diff body must NOT render in the footer"
     end
+
+    test "the footer becomes selector-and-prompt: the answer row shows the REAL options" do
+      model = live_approval_model()
+      {_body, footer} = body_and_footer(View.render(model))
+
+      # the selector row: digits by position, y/n aliases from real kinds
+      assert footer =~ "1 Allow"
+      assert footer =~ "2 Deny"
+      assert footer =~ "y allow"
+      assert footer =~ "n deny"
+    end
+
+    test "the strip's redundant `awaiting approval` line yields to the selector (V's ruling)" do
+      model = live_approval_model()
+      text = flatten_text(View.render(model))
+
+      refute text =~ "awaiting approval",
+             "the strip's awaiting-approval phase line is redundant next to the selector"
+    end
+
+    test "the body drops its in-body option list when the footer selector hosts the answer" do
+      model = live_approval_model()
+      {body, _footer} = body_and_footer(View.render(model))
+
+      # the question stays (the ± diff), the answer affordance moves to the
+      # footer selector -- no double render of the option list
+      refute body =~ "answer:",
+             "the in-body answer hint must yield to the footer selector"
+
+      refute body =~ "[1] Allow",
+             "the in-body numbered options must yield to the footer selector"
+    end
+
+    test "no selector row without a live approval" do
+      model = stream_model([loop_ev(1, "t1", 100, :turn_started, %{})])
+      {_body, footer} = body_and_footer(View.render(model))
+
+      refute footer =~ "y allow"
+      refute footer =~ "1 Allow"
+    end
+
+    defp live_approval_model do
+      stream_model([
+        loop_ev(1, "t1", 100, :turn_started, %{}),
+        loop_ev(2, "t1", 110, :approval_requested, %{
+          "request_id" => "appr-2",
+          "tool_name" => "edit_file",
+          "action" => "edit_file",
+          "path" => "mix.exs",
+          "old" => "a\n",
+          "new" => "b\n",
+          "options" => [
+            %{
+              "option_id" => "allow",
+              "name" => "Allow",
+              "kind" => "allow_once"
+            },
+            %{"option_id" => "deny", "name" => "Deny", "kind" => "reject_once"}
+          ]
+        })
+      ])
+    end
   end
 end

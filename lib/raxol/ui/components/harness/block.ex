@@ -495,7 +495,12 @@ defmodule Raxol.UI.Components.Harness.Block do
   rescue
     e ->
       emit_recovered(block.kind, e, __STACKTRACE__)
-      interactive_wrap(render_fallback(block, e, __STACKTRACE__), block, context)
+
+      interactive_wrap(
+        render_fallback(block, e, __STACKTRACE__),
+        block,
+        context
+      )
   end
 
   # -- the interactive re-hosting stamp (harness TEA migration U1) ----------
@@ -753,7 +758,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp safe_site([_ | _] = stacktrace) do
     frame =
       Enum.find(stacktrace, fn
-        {__MODULE__, name, _arity, _loc} when name in [:render_fallback, :render] ->
+        {__MODULE__, name, _arity, _loc}
+        when name in [:render_fallback, :render] ->
           false
 
         {mod, _fun, _arity, _loc} ->
@@ -1133,7 +1139,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   # re-appears when the terminal is wider).
   defp justify_between(left, right, width)
        when is_binary(right) and right != "" do
-    gap = width - TextMeasure.display_width(left) - TextMeasure.display_width(right)
+    gap =
+      width - TextMeasure.display_width(left) - TextMeasure.display_width(right)
 
     if gap >= 1 do
       left <> String.duplicate(" ", gap) <> right
@@ -1457,14 +1464,14 @@ defmodule Raxol.UI.Components.Harness.Block do
   # ...) keeps its plain `tool:`/`args:` referent via `plain_content_lines`.
   # The diff render is block-level and mode-agnostic: the same flat rows
   # flatten identically in inline_log and full-viewport.
-  defp content_lines_view(%__MODULE__{kind: :approval} = block, width, _ctx, fg) do
+  defp content_lines_view(%__MODULE__{kind: :approval} = block, width, ctx, fg) do
     case approval_proposed_diff(block, width) do
       [] ->
-        plain_content_lines(block, fg)
+        plain_content_lines(block, fg, ctx)
 
       diff_rows ->
         [approval_diff_header(block, fg) | diff_rows] ++
-          approval_tail_lines(block, fg)
+          approval_tail_lines(block, fg, ctx)
     end
   end
 
@@ -1539,9 +1546,9 @@ defmodule Raxol.UI.Components.Harness.Block do
   # the live answer prompt (numbered options + y/n aliases) or the sealed
   # decision receipt -- the same lines `body_lines(:approval)` builds for a
   # bash approval, minus the referent (the diff IS the referent here).
-  defp approval_tail_lines(%__MODULE__{seal: seal, content: content}, fg) do
+  defp approval_tail_lines(%__MODULE__{seal: seal, content: content}, fg, ctx) do
     (split_lines(Map.get(content, :blast_radius)) ++
-       approval_resolution_lines(seal, content))
+       approval_resolution_lines(seal, content, ctx))
     |> Enum.map(fn line ->
       Components.text(content: line, style: apply_fg(%{}, fg))
     end)
@@ -1571,9 +1578,9 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp fade_view(node, _fg), do: node
 
-  defp plain_content_lines(block, fg) do
+  defp plain_content_lines(block, fg, ctx \\ %{}) do
     block
-    |> body_lines()
+    |> body_lines(ctx)
     |> Enum.with_index()
     |> Enum.map(fn {line, idx} ->
       Components.text(
@@ -1589,7 +1596,10 @@ defmodule Raxol.UI.Components.Harness.Block do
     "block-#{refs}-line-#{idx}"
   end
 
-  defp body_lines(%__MODULE__{kind: :tool_call, content: %{result: result}}) do
+  defp body_lines(
+         %__MODULE__{kind: :tool_call, content: %{result: result}},
+         _ctx
+       ) do
     split_lines(result)
   end
 
@@ -1600,17 +1610,20 @@ defmodule Raxol.UI.Components.Harness.Block do
   # a turn was canceled while the question was still live, an honest
   # "canceled before answer" line. `seal` is the whole discriminator, so
   # this clause matches the full struct rather than the content map.
-  defp body_lines(%__MODULE__{kind: :approval, seal: seal, content: content}) do
+  defp body_lines(
+         %__MODULE__{kind: :approval, seal: seal, content: content},
+         ctx
+       ) do
     referent_lines(content) ++
       split_lines(Map.get(content, :blast_radius)) ++
-      approval_resolution_lines(seal, content)
+      approval_resolution_lines(seal, content, ctx)
   end
 
-  defp body_lines(%__MODULE__{content: %{text: text}}) do
+  defp body_lines(%__MODULE__{content: %{text: text}}, _ctx) do
     split_lines(text)
   end
 
-  defp body_lines(_block), do: []
+  defp body_lines(_block, _ctx), do: []
 
   # The referent: what the agent will actually execute. Each line is
   # omitted when the producer did not carry that field (a producer that
@@ -1643,15 +1656,23 @@ defmodule Raxol.UI.Components.Harness.Block do
   # does. Numbered options are the producer's actual options (the ACP
   # `PermissionOption` list); the y/n aliases pick the first allow/deny
   # option (see `Raxol.Harness.Surface`'s answer resolution).
-  defp approval_resolution_lines(:live, content) do
-    approval_option_lines(Map.get(content, :options))
+  # When the hosting view runs its own footer selector (the TEA harness:
+  # `selector_hosted?: true` in the render context), the in-body option
+  # list would say the same thing twice — the block keeps the QUESTION
+  # (referent/diff) and the selector owns the ANSWER affordance. Every
+  # other host (Surface, standalone renders) keeps the in-body prompt.
+  defp approval_resolution_lines(:live, content, ctx) do
+    if Map.get(ctx, :selector_hosted?, false),
+      do: [],
+      else: approval_option_lines(Map.get(content, :options))
   end
 
   # SEALED: an answered (or canceled) question -- one receipt line. Deny is
   # as first-class as allow; a turn canceled before the answer (decision
   # `:cancel`, or absent because the turn ended without one) renders its
-  # resolution honestly rather than pretending it was answered.
-  defp approval_resolution_lines(:sealed, content),
+  # resolution honestly rather than pretending it was answered. The receipt
+  # is never suppressed — it is the permanent record, not an affordance.
+  defp approval_resolution_lines(:sealed, content, _ctx),
     do: [approval_receipt_line(content)]
 
   defp approval_option_lines(options) when is_list(options) and options != [] do
@@ -1705,8 +1726,15 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp kind_decision(_other), do: nil
 
+  # Options arrive atom-keyed from internal producers AND string-keyed off
+  # the wire (`%{"name" => "Allow", ...}`) — both shapes must label, or the
+  # answer hint degrades to an inspect dump of the raw map.
   defp option_label(%{name: name}) when is_binary(name), do: name
+  defp option_label(%{"name" => name}) when is_binary(name), do: name
   defp option_label(%{label: label}) when is_binary(label), do: label
+  defp option_label(%{"label" => label}) when is_binary(label), do: label
+  defp option_label(%{option_id: id}) when is_binary(id), do: id
+  defp option_label(%{"option_id" => id}) when is_binary(id), do: id
   defp option_label(opt) when is_binary(opt), do: opt
   defp option_label(opt), do: to_display_text(opt)
 

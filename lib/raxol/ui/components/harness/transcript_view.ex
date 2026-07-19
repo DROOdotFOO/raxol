@@ -50,7 +50,11 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
        # passes the capability-degraded pair from the model so the sealed
        # chevrons can never drift from the live composer's.
        sigil: Map.get(props, :sigil, "❯"),
-       reply_sigil: Map.get(props, :reply_sigil, "❮")
+       reply_sigil: Map.get(props, :reply_sigil, "❮"),
+       # True when the hosting view renders its own footer answer selector
+       # for a live approval — threaded into BlockBody so the block body
+       # drops its in-body option list (the selector owns the affordance).
+       selector_hosted?: Map.get(props, :selector_hosted?, false)
      }}
   end
 
@@ -118,12 +122,51 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
       h = element_height(element)
 
       cond do
-        acc == [] -> {:cont, {[element], h}}
+        acc == [] -> {:cont, {[clip_tail(element, height)], min(h, height)}}
         used + h > height -> {:halt, {acc, used}}
         true -> {:cont, {[element | acc], used + h}}
       end
     end)
   end
+
+  # The bottom record always shows — but the TEA column does NOT clip, so
+  # a record taller than the whole window (a live approval mid-diff) must
+  # be trimmed here or it pushes the footer off-screen. Trim from the TOP,
+  # keeping the tail rows: on a live approval that tail is the answer
+  # prompt — the actionable end. Containers trim their child list; a
+  # non-container taller than the window is left as-is (nothing row-wise
+  # to trim).
+  # A `:row` is horizontal — its height is its tallest child, so clip each
+  # child down instead of dropping siblings (which would drop the sigil
+  # cell off a chevroned message, not save any rows).
+  defp clip_tail(%{type: :row, children: children} = el, max_rows)
+       when is_list(children) do
+    if element_height(el) <= max_rows,
+      do: el,
+      else: %{el | children: Enum.map(children, &clip_tail(&1, max_rows))}
+  end
+
+  defp clip_tail(%{children: children} = el, max_rows)
+       when is_list(children) do
+    if element_height(el) <= max_rows do
+      el
+    else
+      {kept, _used} =
+        children
+        |> Enum.reverse()
+        |> Enum.reduce_while({[], 0}, fn kid, {acc, used} ->
+          h = element_height(kid)
+
+          if used + h > max_rows,
+            do: {:halt, {acc, used}},
+            else: {:cont, {[kid | acc], used + h}}
+        end)
+
+      %{el | children: kept}
+    end
+  end
+
+  defp clip_tail(el, _max_rows), do: el
 
   # ── record → element ──────────────────────────────────────────────────
 
@@ -138,7 +181,8 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
         width: body_width,
         prominence: prominence,
         turn_has_tools?: turn_has_tools?(block, state.source_events),
-        id: stable_block_id(block)
+        id: stable_block_id(block),
+        selector_hosted?: state.selector_hosted?
       })
 
     if dialogue?, do: sigil_front(rendered, block, state), else: rendered
@@ -281,6 +325,17 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
     do: list |> Enum.map(&element_height/1) |> Enum.sum()
 
   def element_height(nil), do: 0
+
+  # Any other container stacks like a column (`:approval_prompt` — the
+  # stamped approval root — lands here). Estimating these as 1 row is the
+  # footer-push defect: an 8-row approval counted as 1 overflows the
+  # window and shoves the composer off-screen.
+  def element_height(%{children: children} = el) when is_list(children) do
+    gap = style_gap(el)
+    sum = children |> Enum.map(&element_height/1) |> Enum.sum()
+    sum + gap * max(length(children) - 1, 0)
+  end
+
   def element_height(_other), do: 1
 
   defp children_of(el), do: Map.get(el, :children, []) |> List.wrap()
