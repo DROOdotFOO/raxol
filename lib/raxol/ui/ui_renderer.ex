@@ -312,7 +312,10 @@ defmodule Raxol.UI.Renderer do
          _parent_style
        ) do
     style = Map.get(element, :style, %{})
-    fg = Map.get(style, :fg, :white)
+    # nil, not :white -- attr-less default (region-prominence-propagation.md
+    # §9 Phase 3). Dividers bypass StyleProcessor.flatten_merged_style
+    # entirely, so this default is the PRIMARY site for them, not a backstop.
+    fg = Map.get(style, :fg)
     bg = Map.get(style, :bg)
     ch = String.at(char || "-", 0) || "-"
 
@@ -337,8 +340,13 @@ defmodule Raxol.UI.Renderer do
   defp render_image_placeholder(x, y, w) do
     truncated = String.slice("[image]", 0, w)
 
+    # fg nil, not :white -- attr-less default (region-prominence-propagation.md
+    # §9 Phase 3). bg stays the explicit literal :black (a real, intended
+    # placeholder backdrop, not an attr-less default), so this is
+    # deliberately NOT case-b territory (that decision lives in
+    # StyleProcessor.promote_colors/2, upstream of this path anyway).
     for {ch, i} <- Enum.with_index(String.graphemes(truncated)) do
-      {x + i, y, ch, :white, :black, []}
+      {x + i, y, ch, nil, :black, []}
     end
   end
 
@@ -381,7 +389,12 @@ defmodule Raxol.UI.Renderer do
   defp render_box_title(_box_element, _x, _y, _w, _style), do: []
 
   defp resolve_title_style(style) do
-    fg = Map.get(style, :fg, Map.get(style, :fg_color, :white))
+    # fg default nil, not :white -- attr-less default (region-prominence-
+    # propagation.md §9 Phase 3). `style` here is already the box's
+    # `merged_style` from StyleProcessor.flatten_merged_style/promote_colors,
+    # so in practice `:fg` is already present (possibly nil, possibly a
+    # baseline ColorIntent per case b); this default is a backstop.
+    fg = Map.get(style, :fg, Map.get(style, :fg_color))
     bg = Map.get(style, :bg, Map.get(style, :bg_color, :black))
     attrs = if Map.get(style, :bold, false), do: [:bold], else: []
     {fg, bg, attrs}

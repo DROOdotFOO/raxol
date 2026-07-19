@@ -32,8 +32,11 @@ defmodule Raxol.UI.BasicRenderingTest do
              {0, 0, " ", fg, bg, attrs}
            ] = cells
 
-    # Accept :default, named atom colors, or Color structs
-    assert fg == :default or fg == :white or fg == :black or
+    # Accept :default, named atom colors, Color structs, or nil -- an
+    # attr-less box with no painted bg resolves fg to nil, not a forced
+    # default (region-prominence-propagation.md §9 Phase 3, case a): the
+    # terminal's own default fg shows through.
+    assert is_nil(fg) or fg == :default or fg == :white or fg == :black or
              is_struct(fg, Raxol.Style.Colors.Color)
 
     assert is_nil(bg) or bg == :default or bg == :black or bg == :white or

@@ -122,12 +122,49 @@ defmodule Raxol.UI.StyleProcessor do
     final_bg =
       Map.get(all_attrs, :background) || Map.get(all_attrs, :bg) || resolved_bg
 
+    final_fg = default_fg_intent(final_fg, final_bg)
+
     all_attrs
     |> Map.put(:foreground, final_fg)
     |> Map.put(:background, final_bg)
     |> Map.put(:fg, final_fg)
     |> Map.put(:bg, final_bg)
   end
+
+  # Region-prominence-propagation.md §3.1/§9 Phase 3 -- the attr-less
+  # default producer. By the time we get here `final_fg` is `nil` only when
+  # NOTHING in the chain (explicit attrs, variant, theme) supplied a color
+  # (ThemeResolver.resolve_fg_color no longer force-feeds the theme's
+  # global `colors.foreground`, see its moduledoc). Two cases, per the
+  # doc's ratified degenerate-case bullet:
+  #
+  #   (a) `final_bg` is also unpainted (`nil`) -- stays `nil`. The
+  #       terminal renderer already emits no fg SGR for a `nil` fg, so the
+  #       terminal's own default foreground shows through. This is the
+  #       PRIMARY case and must work with no ground ever detected/cached.
+  #   (b) `final_bg` is painted (an explicit `:bg`/`:background` attr, OR
+  #       one cascaded from a parent via `@inheritable_properties`) --
+  #       emit the baseline-tier `ColorIntent`. `Raxol.UI.ColorResolver`
+  #       resolves it against this SAME cell's resolved bg (`bg_resolved`
+  #       in `resolve_cell/3`), i.e. the LOCAL ground, at the `:text` AA
+  #       floor (4.5) -- no producer change needed there, the machinery
+  #       already reads local bg off the cell it's attached to.
+  #
+  # TODO(region-prominence-propagation.md §3.5, grid-bg case): this only
+  # covers an element's OWN resolved `bg` attr. A transparent element
+  # (bg: nil here) painted OVER an unrelated surface elsewhere in the
+  # paint-order grid still falls to case (a) -- terminal-default fg over a
+  # raxol-painted bg, an acceptable interim per the doc. Closing that gap
+  # needs a one-line `Raxol.UI.ColorResolver` change (nil-fg cells whose
+  # LOCAL grid bg is non-nil also get the baseline intent), deliberately
+  # deferred: this producer must not touch `color_resolver.ex`.
+  defp default_fg_intent(nil, nil), do: nil
+
+  defp default_fg_intent(nil, _painted_bg) do
+    %Raxol.UI.ColorIntent{h: nil, c: 0.0, tier: :baseline, floor: :text}
+  end
+
+  defp default_fg_intent(fg, _bg), do: fg
 
   @doc """
   Merges parent and child styles for inheritance.

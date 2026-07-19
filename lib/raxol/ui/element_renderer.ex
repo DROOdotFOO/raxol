@@ -343,8 +343,16 @@ defmodule Raxol.UI.ElementRenderer do
     Map.put(child, :clip_bounds, clip_bounds)
   end
 
+  # nil, not :white -- region-prominence-propagation.md §3.1/§9 Phase 3.
+  # attr-less text (no :fg/:foreground anywhere in the chain) resolves to
+  # nil, not a forced default; `Raxol.UI.StyleProcessor.promote_colors/2`
+  # is the actual producer (case a stays nil, case b emits a baseline-tier
+  # ColorIntent when the element has a painted bg) -- by the time a style
+  # map reaches here it normally already carries an explicit `:fg` key
+  # (even if its value is `nil`), so this default is a defensive fallback
+  # for style maps built outside that pipeline, not the primary site.
   defp resolve_fg(style),
-    do: Map.get(style, :fg) || Map.get(style, :foreground, :white)
+    do: Map.get(style, :fg) || Map.get(style, :foreground)
 
   # nil, not :black -- an unpainted background stays unpainted, so the cell
   # keeps the terminal default and a transparent terminal stays transparent.

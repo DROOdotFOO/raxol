@@ -3,6 +3,8 @@ defmodule Raxol.UI.ThemeHandlingTest do
   alias Raxol.Test.RendererTestHelper, as: Helper
   alias Raxol.UI.Renderer
   alias Raxol.UI.Theming.Theme
+  alias Raxol.UI.ColorResolver
+  alias Raxol.UI.Harness.Prominence
 
   setup do
     # Ensure UserPreferences is started for tests
@@ -26,9 +28,11 @@ defmodule Raxol.UI.ThemeHandlingTest do
     IO.puts("DEBUG: Cells rendered: #{length(cells)}")
     IO.puts("DEBUG: First few cells: #{inspect(Enum.take(cells, 5))}")
 
-    # Should use default theme
+    # Should use default theme. Attr-less text over an unpainted bg is nil,
+    # not :white (region-prominence-propagation.md §3.1/§9 Phase 3, case a)
+    # -- the terminal's own default fg shows through.
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :white, nil)
+    Helper.assert_cell_style(cell, nil, nil)
   end
 
   test "handles missing theme colors" do
@@ -36,9 +40,10 @@ defmodule Raxol.UI.ThemeHandlingTest do
     element = Helper.create_test_box(0, 0, 5, 5, %{theme: theme})
     cells = Renderer.render_to_cells(element)
 
-    # Should use default colors
+    # Should use default colors. Attr-less, no bg painted: fg stays nil
+    # (region-prominence-propagation.md §9 Phase 3, case a).
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :white, nil)
+    Helper.assert_cell_style(cell, nil, nil)
   end
 
   test "handles style overrides" do
@@ -77,9 +82,11 @@ defmodule Raxol.UI.ThemeHandlingTest do
 
     cells = Renderer.render_to_cells(element)
 
-    # Border style should be overridden (test theme has white fg on black bg)
+    # Border style should be overridden. Attr-less: no bg painted here, so
+    # fg stays nil, not a theme-fed default (region-prominence-propagation.md
+    # §9 Phase 3, case a).
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :white, nil, [:single])
+    Helper.assert_cell_style(cell, nil, nil, [:single])
   end
 
   test "handles default border styles" do
@@ -88,18 +95,22 @@ defmodule Raxol.UI.ThemeHandlingTest do
     element = Helper.create_test_box(0, 0, 5, 5, %{border: :single})
     cells = Renderer.render_to_cells(element)
 
-    # Should use default border style (black on white from default theme)
+    # Should use default border style. Attr-less, no bg painted: fg is nil,
+    # not the theme's global foreground (region-prominence-propagation.md
+    # §9 Phase 3, case a) -- the theme-global-foreground catch-all this test
+    # used to exercise is exactly the forcing-chain link Phase 3 dismantles.
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :black, nil, [:single])
+    Helper.assert_cell_style(cell, nil, nil, [:single])
   end
 
   test "handles no borders" do
     element = Helper.create_test_box(0, 0, 5, 5, %{border: false})
     cells = Renderer.render_to_cells(element)
 
-    # Should not have border style (black on white from default theme)
+    # Should not have border style. Attr-less, no bg painted: fg is nil
+    # (region-prominence-propagation.md §9 Phase 3, case a).
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :black, nil, [])
+    Helper.assert_cell_style(cell, nil, nil, [])
   end
 
   test "handles theme inheritance" do
@@ -122,9 +133,16 @@ defmodule Raxol.UI.ThemeHandlingTest do
 
     cells = Renderer.render_to_cells(element)
 
-    # Should inherit background from parent
+    # No style override on the element itself, and no bg painted anywhere
+    # in the chain -- attr-less fg stays nil (region-prominence-propagation.md
+    # §9 Phase 3, case a). Theme.colors.foreground is no longer force-fed to
+    # plain elements; only an explicit style/variant reference gets a theme
+    # color (see "handles theme variants" below, and "theme inheritance"
+    # further down for the merge-semantics-only coverage of this fixture's
+    # actual claim: parent/child color inheritance on the Theme struct
+    # itself, independent of rendering).
     cell = Helper.get_cell_at(cells, 0, 0)
-    Helper.assert_cell_style(cell, :green, nil)
+    Helper.assert_cell_style(cell, nil, nil)
   end
 
   test "handles theme variants" do
@@ -270,5 +288,79 @@ defmodule Raxol.UI.ThemeHandlingTest do
     assert Theme.get(theme, [:colors, :primary]) == "#FF0000"
     assert Theme.get(theme, [:styles, :button, :background]) == "#000000"
     assert Theme.get(theme, [:fonts, :default, :family]) == "monospace"
+  end
+
+  describe "RP-P-06 -- attr-less default (region-prominence-propagation.md §9 Phase 3)" do
+    # The two grounds the doc's own falsifier names: near-black (a typical
+    # dark terminal) and near-white (a typical light terminal). Chosen wide
+    # apart on purpose -- this is exactly the F1 axis (`05-salience.md`)
+    # a hardcoded-ground bug would fail on one side of.
+    @grounds [0.2, 0.92]
+
+    test "unpainted bg: attr-less fg is nil end-to-end, at both grounds, with no ground ever cached" do
+      element = Helper.create_test_text(0, 0, "hi")
+
+      for ground <- @grounds do
+        cells =
+          element
+          |> Renderer.render_to_cells_unresolved(nil)
+          |> ColorResolver.resolve_cells(ground: ground)
+
+        cell = Helper.get_cell_at(cells, 0, 0)
+        Helper.assert_cell_style(cell, nil, nil)
+      end
+
+      # "with no ground ever cached": the ordinary entry point
+      # (`Renderer.render_to_cells/1`) lets `ColorResolver` fall back to
+      # `SalienceTheme.detect_ground/0` instead of an explicit value --
+      # case (a) must not depend on any ground ever having been
+      # detected/cached; it never even LOOKS at ground, since a `nil` fg
+      # short-circuits before any ground read (`ColorResolver.resolve_fg/5`'s
+      # first clause).
+      cells = Renderer.render_to_cells(element)
+      cell = Helper.get_cell_at(cells, 0, 0)
+      Helper.assert_cell_style(cell, nil, nil)
+    end
+
+    test "painted bg: attr-less fg resolves via the baseline-tier ColorIntent, meeting the AA :text floor against the LOCAL bg" do
+      painted_bg = "#3355AA"
+
+      panel =
+        Helper.create_test_panel(
+          0,
+          0,
+          10,
+          3,
+          [Helper.create_test_text(1, 1, "hi")],
+          %{style: %{background: painted_bg}}
+        )
+
+      for ground <- @grounds do
+        cells =
+          panel
+          |> Renderer.render_to_cells_unresolved(nil)
+          |> ColorResolver.resolve_cells(ground: ground)
+
+        cell = Helper.get_cell_at(cells, 1, 1)
+        assert cell != nil
+        {_x, _y, _char, fg, bg, _attrs} = cell
+
+        # bg cascaded from the panel down to the text cell
+        # (StyleProcessor's `@inheritable_properties`) -- this IS the
+        # element-painted-bg case (a: unpainted stays nil; b: painted gets
+        # the intent), driven purely by style-flatten-time cascading, no
+        # `color_resolver.ex` grid change needed.
+        assert bg == painted_bg
+
+        assert is_binary(fg) and String.starts_with?(fg, "#"),
+               "expected a resolved hex fg (baseline intent solved against " <>
+                 "the LOCAL bg), got #{inspect(fg)} at ground #{ground}"
+
+        assert Prominence.wcag_ratio(fg, bg) >= 4.5,
+               "attr-less text over a painted bg must meet the AA :text " <>
+                 "floor (4.5) against its LOCAL bg, got " <>
+                 "#{Prominence.wcag_ratio(fg, bg)} at ground #{ground}"
+      end
+    end
   end
 end

@@ -298,12 +298,22 @@ defmodule Raxol.UI.ThemeResolver do
 
   @doc """
   Resolves foreground color with proper fallbacks.
+
+  Region-prominence-propagation.md §3.1/§9 Phase 3: no theme-global
+  catch-all fallback. An explicit `fg`/`foreground` attr wins; failing
+  that, a variant that genuinely references a theme color wins (a
+  component/variant *asking* for a theme color keeps getting it); failing
+  BOTH, the result is `nil` -- attr-less text is no longer force-fed the
+  theme's global `colors.foreground`. `nil` flows to
+  `Raxol.UI.StyleProcessor.promote_colors/2`, which is the one place that
+  decides between case (a) (stays `nil`, unpainted bg) and case (b) (a
+  baseline-tier `ColorIntent`, painted bg) per the doc's ratified
+  degenerate-case bullet.
   """
   def resolve_fg_color(attrs, _component_styles, theme) do
     attrs
     |> get_explicit_color([:fg, :foreground])
     |> fallback_to_variant_color(attrs, theme, :foreground)
-    |> fallback_to_theme_color(theme, :foreground, :white)
     |> convert_color_to_atom()
   end
 
@@ -363,6 +373,19 @@ defmodule Raxol.UI.ThemeResolver do
     hex_to_color_atom(String.downcase(color))
   end
 
+  # region-prominence-propagation.md §3.1 -- a `%ColorIntent{}` or a
+  # `{:fixed, color}` escape hatch is a first-class value in the fg/bg
+  # slot now, not a literal this atom-normalization step knows how to
+  # touch. Pass both through unchanged rather than falling into the `:white`
+  # catch-all below, which would silently corrupt an intent or unwrap a
+  # `{:fixed, _}` into a mangled default. (In practice `StyleProcessor.
+  # promote_colors/2`'s `final_fg`/`final_bg` always prefer the raw attrs
+  # value over this function's output when one is present, so this guards
+  # a currently-unreachable-in-production path -- cheap insurance against
+  # a future direct caller of `resolve_fg_color/3`/`resolve_bg_color/3`.)
+  defp convert_color_to_atom(%Raxol.UI.ColorIntent{} = intent), do: intent
+  defp convert_color_to_atom({:fixed, _} = fixed), do: fixed
+
   defp convert_color_to_atom(%{r: r, g: g, b: b}) do
     # Convert RGB color struct to hex and then to atom
     hex =
@@ -399,25 +422,6 @@ defmodule Raxol.UI.ThemeResolver do
   end
 
   defp fallback_to_variant_color(color, _attrs, _theme, _color_type), do: color
-
-  defp fallback_to_theme_color(nil, theme, color_type, default) do
-    get_theme_color(theme, color_type, default)
-  end
-
-  defp fallback_to_theme_color(color, _theme, _color_type, _default), do: color
-
-  defp get_theme_color(nil, _color_type, default), do: default
-
-  defp get_theme_color(theme, _color_type, default) when not is_map(theme),
-    do: default
-
-  defp get_theme_color(theme, color_type, default) do
-    case Map.get(theme, :colors) do
-      nil -> default
-      colors when is_map(colors) -> Map.get(colors, color_type, default)
-      _ -> default
-    end
-  end
 
   ## Pattern matching helper functions for if statement elimination
 

@@ -269,11 +269,33 @@ defmodule Raxol.UI.RegionProminenceTest do
 
       clean_attrs = Enum.reject(attrs, &match?({:region_prominence, _}, &1))
 
+      # region-prominence-propagation.md §9 Phase 3: an attr-less cell over
+      # a painted bg may now carry a `%ColorIntent{}` fg
+      # (`Raxol.UI.StyleProcessor.promote_colors/2`'s case-b producer)
+      # instead of a literal. `CellDim` predates intents (see its moduledoc
+      # "superseded" note) and has no clause for one -- it would pass the
+      # struct through unchanged, and the golden comparison below would
+      # then compare a `%ColorIntent{}` against the new path's fully
+      # resolved hex, a shape mismatch that says nothing about dim-MATH
+      # parity (the actual RP-N-02 claim). So: resolve any intent to its
+      # literal FIRST, via `ColorResolver`'s own intent-resolution step
+      # with region prominence forced to the identity (no `{:region_prominence,
+      # _}` marker passed in -- defaults to `1.0`, i.e. no region dim yet,
+      # since dim math is exactly what the branch below tests). A literal
+      # fg/bg round-trips through this call unchanged (Phase 0's
+      # byte-identity contract), so this is a no-op for every cell this
+      # golden already covered pre-Phase-3.
+      [{_x, _y, _c, fg_literal, bg_literal, _a}] =
+        ColorResolver.resolve_cells([{x, y, char, fg, bg, []}],
+          ground: ground_al
+        )
+
       {fg2, bg2} =
         if dimmed? do
-          {CellDim.dim_fg(fg, ground_al), CellDim.dim_bg(bg, ground_al)}
+          {CellDim.dim_fg(fg_literal, ground_al),
+           CellDim.dim_bg(bg_literal, ground_al)}
         else
-          {fg, bg}
+          {fg_literal, bg_literal}
         end
 
       {x, y, char, fg2, bg2, clean_attrs}
