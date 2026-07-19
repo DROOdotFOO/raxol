@@ -30,7 +30,7 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
 
   use Raxol.UI.Components.Base.Component
 
-  alias Raxol.UI.Components.Harness.BlockBody
+  alias Raxol.UI.Components.Harness.{Block, BlockBody}
 
   @impl true
   def init(props) do
@@ -44,7 +44,13 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
        anchor: Map.get(props, :anchor, :tail),
        width: Map.get(props, :width, 0),
        source_events: Map.get(props, :source_events, []),
-       greeting?: Map.get(props, :greeting?, false)
+       greeting?: Map.get(props, :greeting?, false),
+       # The mirrored dialogue pair (V's margin ruling): `sigil` echoes the
+       # user, `reply_sigil` fronts expanded assistant messages. The host
+       # passes the capability-degraded pair from the model so the sealed
+       # chevrons can never drift from the live composer's.
+       sigil: Map.get(props, :sigil, "❯"),
+       reply_sigil: Map.get(props, :reply_sigil, "❮")
      }}
   end
 
@@ -91,7 +97,7 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
     bottom = bottom_index(state.anchor, total)
 
     {visible, used} =
-      take_upward(ordered, bottom, width, height, state.source_events)
+      take_upward(ordered, bottom, width, height, state)
 
     pad = max(height - used, 0)
     List.duplicate(blank(), pad) ++ visible
@@ -106,9 +112,9 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
   # measuring each record, accumulating until the next record would push
   # the total past `height`. Always includes the bottom record (even if it
   # alone exceeds height — the box clips it). Returns {elements_top_first, rows}.
-  defp take_upward(records, bottom, width, height, source_events) do
+  defp take_upward(records, bottom, width, height, state) do
     Enum.reduce_while(bottom..0//-1, {[], 0}, fn index, {acc, used} ->
-      element = record_element(Enum.at(records, index), width, source_events)
+      element = record_element(Enum.at(records, index), width, state)
       h = element_height(element)
 
       cond do
@@ -121,22 +127,59 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
 
   # ── record → element ──────────────────────────────────────────────────
 
-  defp record_element({:block, block, prominence}, width, source_events) do
-    BlockBody.render(block, %{
-      width: width,
-      prominence: prominence,
-      turn_has_tools?: turn_has_tools?(block, source_events),
-      id: stable_block_id(block)
-    })
+  @sigil_cols 2
+
+  defp record_element({:block, block, prominence}, width, state) do
+    dialogue? = dialogue_block?(block)
+    body_width = if dialogue?, do: max(width - @sigil_cols, 1), else: width
+
+    rendered =
+      BlockBody.render(block, %{
+        width: body_width,
+        prominence: prominence,
+        turn_has_tools?: turn_has_tools?(block, state.source_events),
+        id: stable_block_id(block)
+      })
+
+    if dialogue?, do: sigil_front(rendered, block, state), else: rendered
   end
 
-  defp record_element({:marker, text}, _width, _events),
+  defp record_element({:marker, text}, _width, _state),
     do: %{type: :text, content: text, attrs: %{style: [:dim]}}
 
-  defp record_element({:echo, text}, _width, _events),
-    do: %{type: :text, content: echo_line(text), attrs: %{}}
+  defp record_element({:echo, text}, _width, state),
+    do: %{type: :text, content: echo_line(text, state), attrs: %{}}
 
-  defp echo_line(text), do: "❯ " <> text
+  defp echo_line(text, state), do: state.sigil <> " " <> text
+
+  # Only an EXPANDED message speaks with a sigil (surface.ex
+  # `dialogue_block?/1` ported): a folded one renders as a `▸ ❯/❮ summary`
+  # header via `Block.render/2`'s own role-aware glyph, and fronting THAT
+  # with a second chevron would stutter.
+  defp dialogue_block?(%{kind: :message, fold: :expanded}), do: true
+  defp dialogue_block?(_block), do: false
+
+  # The speaker chevron fronts the block as a `:row`: the bold 2-cell sigil
+  # column, then the body -- every body row lands at the content indent, so
+  # continuation lines hang-align exactly like the composer's (V's margin
+  # ruling; surface.ex `echo_lines/4` reborn as layout).
+  defp sigil_front(rendered, block, state) do
+    sigil =
+      case Block.role(block) do
+        :user -> state.sigil
+        :assistant -> state.reply_sigil
+      end
+
+    %{
+      type: :row,
+      style: %{},
+      gap: 0,
+      children: [
+        %{type: :text, content: sigil <> " ", style: %{bold: true}},
+        rendered
+      ]
+    }
+  end
 
   defp blank, do: %{type: :text, content: ""}
 

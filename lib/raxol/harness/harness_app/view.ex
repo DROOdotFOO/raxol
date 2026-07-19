@@ -56,16 +56,20 @@ defmodule Raxol.Harness.HarnessApp.View do
     budget = natural |> min(budget_cap) |> max(1)
     transcript_h = max(model.rows - budget - inset, 0)
 
-    base = %{
-      type: :column,
-      id: "harness-app",
-      style: %{},
-      gap: 0,
-      children: [
-        transcript_element(model, cw, transcript_h),
-        footer_element(groups, budget, cw)
-      ]
-    }
+    base =
+      frame(
+        %{
+          type: :column,
+          id: "harness-app",
+          style: %{},
+          gap: 0,
+          children: [
+            transcript_element(model, cw, transcript_h),
+            footer_element(groups, budget, cw)
+          ]
+        },
+        inset
+      )
 
     case overlay_surface(model, cw) do
       nil ->
@@ -81,6 +85,24 @@ defmodule Raxol.Harness.HarnessApp.View do
     end
   end
 
+  # The full-viewport frame inset PAINTED (V's margin ruling, surface.ex
+  # `inset_prefix/2` reborn as layout): a borderless box pads the whole
+  # surface one cell left, so markers leave column 0 and the cursor park's
+  # `+ inset` shift points at real glyph positions. A no-op wrapper is
+  # skipped entirely when the geometry can't afford the inset.
+  defp frame(tree, 0), do: tree
+
+  defp frame(tree, inset) do
+    %{
+      type: :box,
+      id: "harness-frame",
+      style: %{},
+      border: :none,
+      padding: {0, 0, 0, inset},
+      children: [tree]
+    }
+  end
+
   # ── transcript ────────────────────────────────────────────────────────
 
   defp transcript_element(model, cw, transcript_h) do
@@ -89,12 +111,15 @@ defmodule Raxol.Harness.HarnessApp.View do
         id: "harness-transcript",
         # held newest-first; the view renders oldest-first, then the live
         # frontier block (an awaiting approval) appended at the very bottom
-        records: Enum.reverse(model.transcript_records) ++ live_body_records(model),
+        records:
+          Enum.reverse(model.transcript_records) ++ live_body_records(model),
         height: transcript_h,
         anchor: model.scroll_anchor,
         width: cw,
         source_events: model.projection.source_events,
-        greeting?: model.greeting? and model.transcript_records == []
+        greeting?: model.greeting? and model.transcript_records == [],
+        sigil: model.sigil,
+        reply_sigil: model.reply_sigil
       )
 
     TranscriptView.render(state, %{available_width: cw})
@@ -114,7 +139,13 @@ defmodule Raxol.Harness.HarnessApp.View do
         []
 
       block ->
-        block = Model.apply_fold_override(block, model.painted_count, model.fold_overrides)
+        block =
+          Model.apply_fold_override(
+            block,
+            model.painted_count,
+            model.fold_overrides
+          )
+
         [{:block, block, 1.0}]
     end
   end
@@ -318,10 +349,38 @@ defmodule Raxol.Harness.HarnessApp.View do
   # One blank row above the composer (surface.ex composer_sep, full-viewport).
   defp composer_sep_lines(_model), do: [%{type: :text, content: ""}]
 
+  # The composer rows, chevron applied (surface.ex `chevron_lines/2` ported
+  # to elements). Row indexing mirrors `Composer.edit_point/2`'s banner
+  # accounting: a queued-steer banner (when present) is row 0, the draft's
+  # first input row follows and carries the bold `❯ `; hang continuations
+  # take two aligning spaces so the draft column stays fixed. The cursor
+  # park shifts by `Model.sigil_cols/0` to match (`cursor_decl/6`).
   defp composer_lines(model, cw) do
+    sigil_row = if model.composer.queued_steer, do: 1, else: 0
+
     model.composer
     |> Composer.visual_lines(cw)
-    |> Enum.map(&%{type: :text, content: &1})
+    |> Enum.with_index()
+    |> Enum.map(fn
+      {line, ^sigil_row} -> sigil_row_element(model.sigil, line)
+      {line, index} when index < sigil_row -> %{type: :text, content: line}
+      {line, _index} -> %{type: :text, content: "  " <> line}
+    end)
+  end
+
+  # One physical footer row: the bold chevron cell pair + the draft text.
+  # A `:row` keeps the sigil's bold confined to the sigil (the H-K anchor
+  # of an idle frame) without SGR-styling the whole draft.
+  defp sigil_row_element(sigil, line) do
+    %{
+      type: :row,
+      style: %{},
+      gap: 0,
+      children: [
+        %{type: :text, content: sigil <> " ", style: %{bold: true}},
+        %{type: :text, content: line}
+      ]
+    }
   end
 
   defp dim_text(content),
@@ -339,7 +398,9 @@ defmodule Raxol.Harness.HarnessApp.View do
            FooterStack.group_offset(groups, @drop_order, budget, :composer) do
       {row_in_composer, col} = Composer.edit_point(model.composer, cw)
       abs_row = transcript_h + offset + row_in_composer
-      col0 = col - 1 + inset
+      # Past the chevron prefix ("❯ " / "  " -- `composer_lines/2`), then
+      # the frame inset -- mirrors surface.ex `composer_cursor/3`.
+      col0 = col - 1 + Model.sigil_cols() + inset
 
       {abs_row, col0 |> max(0) |> min(model.width - 1), true}
     else

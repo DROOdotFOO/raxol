@@ -26,10 +26,16 @@ defmodule Raxol.Harness.HarnessAppViewTest do
 
   defp flatten_text(_), do: ""
 
-  # The root tree is `[transcript_element, footer_element]` (View.render/1);
-  # split the two so a test can assert WHICH region a widget landed in.
+  # The root is the frame-inset box wrapping `[transcript, footer]`
+  # (View.render/1 `frame/2`); unwrap it, then split the two so a test can
+  # assert WHICH region a widget landed in.
+  defp unframe(%{type: :box, id: "harness-frame", children: [inner]}),
+    do: inner
+
+  defp unframe(view), do: view
+
   defp body_and_footer(view) do
-    [body, footer | _] = view.children
+    [body, footer | _] = unframe(view).children
     {flatten_text(body), flatten_text(footer)}
   end
 
@@ -93,7 +99,7 @@ defmodule Raxol.Harness.HarnessAppViewTest do
     }
 
     view = View.render(model)
-    transcript = hd(view.children)
+    transcript = view |> unframe() |> Map.fetch!(:children) |> hd()
 
     in_tree =
       transcript.children
@@ -278,8 +284,16 @@ defmodule Raxol.Harness.HarnessAppViewTest do
             "preview_match" => "exact",
             "diff" => true,
             "options" => [
-              %{"option_id" => "allow", "name" => "Allow", "kind" => "allow_once"},
-              %{"option_id" => "deny", "name" => "Deny", "kind" => "reject_once"}
+              %{
+                "option_id" => "allow",
+                "name" => "Allow",
+                "kind" => "allow_once"
+              },
+              %{
+                "option_id" => "deny",
+                "name" => "Deny",
+                "kind" => "reject_once"
+              }
             ]
           })
         ])
