@@ -20,7 +20,7 @@ defmodule Raxol.UI.Components.Table do
   - `:columns` (required): List of column definitions. Each column is a map with:
     - `:id` (atom, required): Key for the column.
     - `:label` (string, required): Header label.
-    - `:width` (integer or `:auto`, optional): Column width.
+    - `:width` (integer or `:auto`, optional): Column width in display cells.
     - `:align` (`:left` | `:center` | `:right`, optional): Text alignment.
     - `:format` (function, optional): Custom formatting function for cell values.
     - `:style` (map, optional): Style overrides for all cells in this column.
@@ -29,8 +29,17 @@ defmodule Raxol.UI.Components.Table do
   - `:options` (map, optional):
     - `:paginate` (boolean): Enable pagination.
     - `:searchable` (boolean): Enable filtering.
-    - `:sortable` (boolean): Enable sorting.
+    - `:sortable` (boolean): Enable sorting (header shows ↑/↓; sort via
+      `update({:sort, col}, …)` or header click ids).
     - `:page_size` (integer): Rows per page.
+    - `:border` (`:grid` | `:inner` | `:none`): table chrome (default `:grid`).
+      - `:grid` — outer frame + column + header rules (full box-drawing).
+      - `:inner` — column separators + header mid-rule only (no top/bottom).
+      - `:none` — padded content only; optional header rule via
+        `:header_separator`.
+    - `:header_separator` (boolean): when `border: :none`, draw a single
+      `─` rule under the header (default `true`). Ignored for `:grid`/
+      `:inner` (those always draw the header mid-rule).
   - `:style` (map, optional): Style overrides for the table box and header (see below).
     - `:header` (map, optional): Style overrides for all header cells.
   - `:theme` (map, optional): Theme map for the table. Keys can include:
@@ -73,15 +82,19 @@ defmodule Raxol.UI.Components.Table do
 
   """
 
+  @default_options %{
+    paginate: false,
+    searchable: false,
+    sortable: false,
+    page_size: Raxol.Core.Defaults.page_size(),
+    border: :grid,
+    header_separator: true
+  }
+
   defstruct id: nil,
             columns: [],
             data: [],
-            options: %{
-              paginate: false,
-              searchable: false,
-              sortable: false,
-              page_size: Raxol.Core.Defaults.page_size()
-            },
+            options: @default_options,
             current_page: 1,
             page_size: Raxol.Core.Defaults.page_size(),
             filter_term: "",
@@ -100,11 +113,15 @@ defmodule Raxol.UI.Components.Table do
           format: (term() -> String.t()) | nil
         }
 
+  @type border_mode :: :grid | :inner | :none
+
   @type options :: %{
           paginate: boolean(),
           searchable: boolean(),
           sortable: boolean(),
-          page_size: non_neg_integer()
+          page_size: non_neg_integer(),
+          border: border_mode(),
+          header_separator: boolean()
         }
 
   @behaviour Raxol.UI.Components.Base.Component
@@ -121,12 +138,9 @@ defmodule Raxol.UI.Components.Table do
     data = Map.get(props, :data, [])
 
     options =
-      Map.get(props, :options, %{
-        paginate: false,
-        searchable: false,
-        sortable: false,
-        page_size: Raxol.Core.Defaults.page_size()
-      })
+      @default_options
+      |> Map.merge(Map.get(props, :options, %{}))
+      |> normalize_options()
 
     style = Map.get(props, :style, %{})
     theme = Map.get(props, :theme, nil)
@@ -148,6 +162,24 @@ defmodule Raxol.UI.Components.Table do
     }
 
     {:ok, state}
+  end
+
+  defp normalize_options(opts) do
+    border =
+      case Map.get(opts, :border, :grid) do
+        b when b in [:grid, :inner, :none] -> b
+        _ -> :grid
+      end
+
+    sep = Map.get(opts, :header_separator, true) == true
+
+    opts
+    |> Map.put(:border, border)
+    |> Map.put(:header_separator, sep)
+    |> Map.put_new(:paginate, false)
+    |> Map.put_new(:searchable, false)
+    |> Map.put_new(:sortable, false)
+    |> Map.put_new(:page_size, Raxol.Core.Defaults.page_size())
   end
 
   @impl Raxol.UI.Components.Base.Component
@@ -187,6 +219,12 @@ defmodule Raxol.UI.Components.Table do
 
   @doc """
   Renders the table component.
+
+  Draws a fixed-width character grid. Border chrome is controlled by
+  `options.border` (`:grid` | `:inner` | `:none`) — see the moduledoc.
+  Header cells are plain text (with a sort indicator when sortable), never
+  bordered buttons; that was the old accidental chrome that broke column
+  alignment.
   """
   @impl true
   def render(state, context) do
@@ -196,47 +234,54 @@ defmodule Raxol.UI.Components.Table do
     box_style =
       Map.merge(
         Map.get(theme, :box, %{}),
-        style
+        # Drop the per-header map from the root style so it doesn't leak
+        # into the box attrs; header styling is applied on the header line.
+        Map.drop(style, [:header])
       )
 
-    # Ensure both :available_width and :available_height are present in context
     layout_context =
       context
-      # ensure it's a map
       |> Map.new()
       |> Map.put_new(:available_width, nil)
       |> Map.put_new(:available_height, nil)
 
-    # Apply filtering
     filtered_data = filter_data(state.data, state.filter_term)
-
-    # Apply sorting
     sorted_data = sort_data(filtered_data, state.sort_by, state.sort_direction)
 
-    # Apply pagination
     paginated_data =
       paginate_data(sorted_data, state.current_page, state.page_size)
 
-    # Create header
-    header = create_header(state.columns, state, layout_context)
+    # Absolute index of the first row on this page — selection is absolute.
+    page_offset = (state.current_page - 1) * state.page_size
 
-    # Create rows
-    rows = create_rows(paginated_data, state.columns, state, layout_context)
+    mode = border_mode(state)
+    widths = column_widths(state.columns, sorted_data)
+    header_cells = header_cell_strings(state.columns, widths, state)
+    body_rows = body_row_strings(paginated_data, state.columns, widths)
 
-    # Create pagination controls if enabled
+    table_lines =
+      build_table_lines(mode, header_separator?(state, mode), widths, header_cells, body_rows)
+
+    line_elements =
+      Enum.map(table_lines, fn
+        {:rule, text} ->
+          Raxol.Core.Renderer.View.text(text, style: rule_style(theme, style))
+
+        {:header, text} ->
+          Raxol.Core.Renderer.View.text(text,
+            style: header_line_style(theme, style)
+          )
+
+        {:row, text, page_index} ->
+          abs_index = page_offset + page_index
+
+          Raxol.Core.Renderer.View.text(text,
+            style: row_line_style(theme, style, abs_index, state.selected_row)
+          )
+      end)
+
     pagination = get_pagination(state.options.paginate, state, layout_context)
 
-    # Compose header and rows into a single flex container using the macro
-    header_and_rows =
-      Raxol.Core.Renderer.View.flex direction: :column,
-                                    available_width:
-                                      layout_context[:available_width],
-                                    available_height:
-                                      layout_context[:available_height] do
-        [header | rows]
-      end
-
-    # Compose pagination as a separate flex container using the macro
     pagination_flex =
       Raxol.Core.Renderer.View.flex direction: :row,
                                     justify: :space_between,
@@ -247,16 +292,208 @@ defmodule Raxol.UI.Components.Table do
         pagination
       end
 
-    # Render the box with the new children structure
-    box =
-      Raxol.Core.Renderer.View.box(
-        border: :single,
-        style: Map.to_list(box_style),
-        children: [header_and_rows, pagination_flex]
+    body =
+      Raxol.Core.Renderer.View.flex direction: :column,
+                                    available_width:
+                                      layout_context[:available_width],
+                                    available_height:
+                                      layout_context[:available_height] do
+        line_elements
+      end
+
+    # No View.box border — chrome is drawn as characters so :grid/:inner/:none
+    # share one path. Root keeps type: :box so style/theme tests that assert
+    # on rendered.style still have a home.
+    %{
+      type: :box,
+      border: :none,
+      padding: {0, 0, 0, 0},
+      style: box_style,
+      children: [body, pagination_flex]
+    }
+  end
+
+  # ── Border modes ─────────────────────────────────────────────────────────
+
+  defp border_mode(%{options: %{border: b}}) when b in [:grid, :inner, :none],
+    do: b
+
+  defp border_mode(_), do: :grid
+
+  defp header_separator?(_state, mode) when mode in [:grid, :inner], do: true
+
+  defp header_separator?(%{options: %{header_separator: sep}}, :none),
+    do: sep == true
+
+  defp header_separator?(_state, :none), do: true
+
+  # widths :: [pos_integer()] — one per column, resolved from :width or content
+  defp column_widths(columns, data) do
+    Enum.map(columns, fn col ->
+      case Map.get(col, :width, :auto) do
+        w when is_integer(w) and w > 0 ->
+          w
+
+        _auto ->
+          label_w =
+            col
+            |> Map.get(:label, "")
+            |> to_string()
+            |> Raxol.UI.TextMeasure.display_width()
+
+          data_w =
+            data
+            |> Enum.map(fn row ->
+              row
+              |> Map.get(col.id)
+              |> format_value(col)
+              |> Raxol.UI.TextMeasure.display_width()
+            end)
+            |> Enum.max(fn -> 0 end)
+
+          max(label_w, data_w) |> max(1)
+      end
+    end)
+  end
+
+  defp header_cell_strings(columns, widths, state) do
+    columns
+    |> Enum.zip(widths)
+    |> Enum.map(fn {col, width} ->
+      label =
+        if Map.get(state.options, :sortable, false) do
+          get_column_content(true, col, state.sort_by, state.sort_direction)
+        else
+          get_column_content(false, col, nil, nil)
+        end
+
+      pad_cell(label, width, Map.get(col, :align, :left))
+    end)
+  end
+
+  defp body_row_strings(rows, columns, widths) do
+    Enum.map(rows, fn row ->
+      columns
+      |> Enum.zip(widths)
+      |> Enum.map(fn {col, width} ->
+        row
+        |> Map.get(col.id)
+        |> format_value(col)
+        |> pad_cell(width, Map.get(col, :align, :left))
+      end)
+    end)
+  end
+
+  # One-space gutters on both sides so content never sits flush against a
+  # neighbour cell or a `│` rule — the old width-exact pad produced
+  # "1│Raxol" / "#│Framework". Width is the full cell including gutters;
+  # content is fitted into max(width - 2, 1).
+  defp pad_cell(content, width, align) when is_integer(width) and width > 0 do
+    if width >= 3 do
+      " " <> pad_content(content, width - 2, align) <> " "
+    else
+      pad_content(content, width, align)
+    end
+  end
+
+  defp format_value(value, column) do
+    case Map.get(column, :format) do
+      nil -> to_string(value)
+      fun when is_function(fun, 1) -> to_string(fun.(value))
+      _ -> to_string(value)
+    end
+  end
+
+  # Returns [{:rule, bin} | {:header, bin} | {:row, bin, page_index}]
+  #
+  #   :grid  — top + header + mid + body + bottom (full frame)
+  #   :inner — header + mid + body only (column/header rules; no top/bottom)
+  #   :none  — header + optional ─ sep + body
+  defp build_table_lines(mode, header_sep?, widths, header_cells, body_rows) do
+    header_line = {:header, join_cells(header_cells, mode)}
+
+    top =
+      case mode do
+        :grid -> [{:rule, rule_line(widths, :grid, :top)}]
+        _ -> []
+      end
+
+    mid =
+      cond do
+        not header_sep? -> []
+        mode == :none -> [{:rule, none_header_rule(widths)}]
+        mode == :grid -> [{:rule, rule_line(widths, :grid, :mid)}]
+        mode == :inner -> [{:rule, rule_line(widths, :inner, :mid)}]
+      end
+
+    body =
+      body_rows
+      |> Enum.with_index()
+      |> Enum.map(fn {cells, idx} -> {:row, join_cells(cells, mode), idx} end)
+
+    bottom =
+      case mode do
+        :grid -> [{:rule, rule_line(widths, :grid, :bottom)}]
+        _ -> []
+      end
+
+    top ++ [header_line] ++ mid ++ body ++ bottom
+  end
+
+  defp join_cells(cells, :grid), do: "│" <> Enum.join(cells, "│") <> "│"
+  defp join_cells(cells, :inner), do: Enum.join(cells, "│")
+  defp join_cells(cells, :none), do: Enum.join(cells, "")
+
+  defp rule_line(widths, :grid, :top),
+    do: "┌" <> Enum.map_join(widths, "┬", &String.duplicate("─", &1)) <> "┐"
+
+  defp rule_line(widths, :grid, :mid),
+    do: "├" <> Enum.map_join(widths, "┼", &String.duplicate("─", &1)) <> "┤"
+
+  defp rule_line(widths, :grid, :bottom),
+    do: "└" <> Enum.map_join(widths, "┴", &String.duplicate("─", &1)) <> "┘"
+
+  # :inner never draws top/bottom — only the header mid-rule (┼) and
+  # per-row column separators (│ via join_cells/2).
+  defp rule_line(widths, :inner, :mid),
+    do: Enum.map_join(widths, "┼", &String.duplicate("─", &1))
+
+  defp none_header_rule(widths),
+    do: String.duplicate("─", Enum.sum(widths))
+
+  defp header_line_style(theme, style) do
+    header =
+      Map.merge(
+        Map.get(theme, :header, %{}),
+        Map.get(style, :header, %{})
       )
 
-    # Convert style back to map for test compatibility
-    %{box | style: Enum.into(box.style, %{})}
+    [:bold | convert_style_to_list(header)]
+  end
+
+  defp rule_style(theme, style) do
+    # Rules inherit box border color when provided.
+    color =
+      get_in(style, [:border_color]) ||
+        get_in(theme, [:box, :border_color])
+
+    case color do
+      nil -> [:dim]
+      c -> [:dim, {:fg, c}, c]
+    end
+  end
+
+  defp row_line_style(theme, _style, abs_index, selected_row) do
+    row_style = Map.get(theme, :row, %{})
+
+    selected_style =
+      Map.get(theme, :selected_row, %{bg: :blue, fg: :white})
+
+    if abs_index == selected_row do
+      convert_style_to_list(Map.merge(row_style, selected_style))
+    else
+      convert_style_to_list(row_style)
+    end
   end
 
   @doc """
@@ -264,25 +501,25 @@ defmodule Raxol.UI.Components.Table do
   """
   @impl Raxol.UI.Components.Base.Component
   def handle_event({:key, {:arrow_down, _}}, state, _context) do
-    new_index = min(state.selected_row + 1, length(state.data) - 1)
-    {:ok, %{state | selected_row: new_index}}
+    max_i = max(length(state.data) - 1, 0)
+    cur = state.selected_row || -1
+    {:ok, %{state | selected_row: min(cur + 1, max_i)}}
   end
 
   def handle_event({:key, {:arrow_up, _}}, state, _context) do
-    new_index = max(state.selected_row - 1, 0)
-    {:ok, %{state | selected_row: new_index}}
+    cur = state.selected_row || 0
+    {:ok, %{state | selected_row: max(cur - 1, 0)}}
   end
 
   def handle_event({:key, {:page_down, _}}, state, _context) do
-    new_index =
-      min(state.selected_row + state.page_size, length(state.data) - 1)
-
-    {:ok, %{state | selected_row: new_index}}
+    max_i = max(length(state.data) - 1, 0)
+    cur = state.selected_row || 0
+    {:ok, %{state | selected_row: min(cur + state.page_size, max_i)}}
   end
 
   def handle_event({:key, {:page_up, _}}, state, _context) do
-    new_index = max(state.selected_row - state.page_size, 0)
-    {:ok, %{state | selected_row: new_index}}
+    cur = state.selected_row || 0
+    {:ok, %{state | selected_row: max(cur - state.page_size, 0)}}
   end
 
   def handle_event({:key, {:home, _}}, state, _context) do
@@ -476,30 +713,16 @@ defmodule Raxol.UI.Components.Table do
   defp get_pagination(false, _state, _context), do: []
 
   defp get_column_content(true, column, sort_by, sort_direction) do
-    "#{column.label} #{sort_indicator(sort_by, sort_direction, column.id)}"
+    indicator = sort_indicator(sort_by, sort_direction, column.id)
+
+    case indicator do
+      "" -> to_string(column.label)
+      ind -> "#{column.label} #{ind}"
+    end
   end
 
   defp get_column_content(false, column, _sort_by, _sort_direction),
-    do: column.label
-
-  defp create_header_cell(true, content, column, style_list) do
-    # Create a clickable button for sorting
-    Raxol.Core.Renderer.View.button(
-      content,
-      id: "test_table_sort_#{column.id}",
-      style: [:bold | style_list],
-      align: column.align
-    )
-  end
-
-  defp create_header_cell(false, content, column, style_list) do
-    # Just text when not sortable
-    Raxol.Core.Renderer.View.text(
-      content,
-      style: [:bold | style_list],
-      align: column.align
-    )
-  end
+    do: to_string(column.label)
 
   defp filter_data(data, term) when term == "", do: data
 
@@ -532,129 +755,20 @@ defmodule Raxol.UI.Components.Table do
     Enum.slice(data, start_index, page_size)
   end
 
-  defp create_header(columns, state, context) do
-    theme = state.theme || %{}
-
-    header_style =
-      Map.merge(
-        Map.get(theme, :header, %{}),
-        Map.get(state.style, :header, %{})
-      )
-
-    header_cells =
-      Enum.map(columns, fn column ->
-        content =
-          get_column_content(
-            state.options.sortable,
-            column,
-            state.sort_by,
-            state.sort_direction
-          )
-
-        cell_style =
-          Map.merge(header_style, Map.get(column, :header_style, %{}))
-
-        # Convert style map to list of style attributes
-        style_list = convert_style_to_list(cell_style)
-
-        create_header_cell(state.options.sortable, content, column, style_list)
-      end)
-
-    Raxol.Core.Renderer.View.flex available_width: context[:available_width],
-                                  available_height: context[:available_height],
-                                  direction: :row do
-      header_cells
-    end
-  end
-
-  defp create_rows(data, columns, state, context) do
-    theme = state.theme || %{}
-    row_style = Map.get(theme, :row, %{})
-    selected_row_style = Map.get(theme, :selected_row, %{bg: :blue, fg: :white})
-
-    Enum.map(Enum.with_index(data), fn {row, index} ->
-      cells =
-        create_cells(
-          row,
-          columns,
-          index,
-          state.selected_row,
-          row_style,
-          selected_row_style,
-          context
-        )
-
-      Raxol.Core.Renderer.View.flex available_width: context[:available_width],
-                                    available_height:
-                                      context[:available_height],
-                                    direction: :row do
-        cells
-      end
-    end)
-  end
-
-  defp create_cells(
-         row,
-         columns,
-         index,
-         selected_row,
-         row_style,
-         selected_row_style,
-         _context
-       ) do
-    Enum.map(columns, fn column ->
-      value = row[column.id]
-
-      formatted =
-        case Map.get(column, :format) do
-          nil -> to_string(value)
-          fun -> fun.(value)
-        end
-
-      # Apply padding based on column width and alignment
-      padded_content = pad_content(formatted, column.width, column.align)
-
-      style =
-        determine_cell_style(
-          column,
-          row_style,
-          selected_row_style,
-          index,
-          selected_row
-        )
-
-      # Convert style map to list of style attributes
-      style_list = convert_style_to_list(style)
-
-      Raxol.Core.Renderer.View.text(
-        padded_content,
-        align: column.align,
-        style: style_list
-      )
-    end)
-  end
-
-  defp pad_content(content, width, alignment) do
+  # Fixed-width pad/truncate — no +1 fudge. Column widths are the law.
+  defp pad_content(content, width, alignment) when is_integer(width) and width > 0 do
     content_str = to_string(content)
     content_length = Raxol.UI.TextMeasure.display_width(content_str)
 
-    adjusted_width =
-      case alignment do
-        # For center, use width - 1
-        :center -> width - 1
-        # For left/right, add 1
-        _ -> width + 1
-      end
-
     format_content_with_width(
-      content_length >= adjusted_width,
+      content_length >= width,
       content_str,
-      adjusted_width,
-      alignment
+      width,
+      alignment || :left
     )
   end
 
-  defp convert_style_to_list(style_map) do
+  defp convert_style_to_list(style_map) when is_map(style_map) do
     style_map
     |> Enum.flat_map(fn
       {:fg, color} -> [{:fg, color}, :fg, color]
@@ -663,26 +777,14 @@ defmodule Raxol.UI.Components.Table do
       {:italic, true} -> [:italic]
       {:underline, true} -> [:underline]
       {:color, color} -> [color, {:color, color}]
-      {key, _value} when is_atom(key) -> [key]
+      {key, true} when is_atom(key) -> [key]
+      {key, _value} when is_atom(key) -> []
       _ -> []
     end)
     |> Enum.filter(&(&1 != nil))
   end
 
-  defp determine_cell_style(
-         column,
-         row_style,
-         selected_row_style,
-         index,
-         selected_row
-       ) do
-    base_style = Map.merge(row_style, Map.get(column, :style, %{}))
-
-    case index == selected_row do
-      true -> Map.merge(base_style, selected_row_style)
-      false -> base_style
-    end
-  end
+  defp convert_style_to_list(_), do: []
 
   defp create_pagination(state, context) do
     filtered_data = filter_data(state.data, state.filter_term)
@@ -724,19 +826,23 @@ defmodule Raxol.UI.Components.Table do
     render(state, %{})
   end
 
-  # Helper function for if statement elimination
-  defp format_content_with_width(true, content_str, adjusted_width, _alignment) do
-    String.slice(content_str, 0, adjusted_width)
+  # Truncate to `width` display cells (not graphemes) when content overflows.
+  defp format_content_with_width(true, content_str, width, _alignment) do
+    content_str
+    |> Raxol.UI.TextMeasure.split_at_display_width(width)
+    |> elem(0)
+    |> then(fn truncated ->
+      # split may land short of width if a wide char was dropped; right-pad.
+      pad = width - Raxol.UI.TextMeasure.display_width(truncated)
+      truncated <> String.duplicate(" ", max(pad, 0))
+    end)
   end
 
-  defp format_content_with_width(false, content_str, adjusted_width, alignment) do
+  defp format_content_with_width(false, content_str, width, alignment) do
     content_length = Raxol.UI.TextMeasure.display_width(content_str)
-    padding_needed = adjusted_width - content_length
+    padding_needed = width - content_length
 
     case alignment do
-      :left ->
-        content_str <> String.duplicate(" ", padding_needed)
-
       :right ->
         String.duplicate(" ", padding_needed) <> content_str
 
@@ -747,7 +853,7 @@ defmodule Raxol.UI.Components.Table do
         String.duplicate(" ", left_padding) <>
           content_str <> String.duplicate(" ", right_padding)
 
-      _ ->
+      _left_or_other ->
         content_str <> String.duplicate(" ", padding_needed)
     end
   end

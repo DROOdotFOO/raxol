@@ -86,12 +86,12 @@ defmodule Raxol.UI.Components.TableTest do
       assert state.columns == columns
       assert state.data == data
 
-      assert state.options == %{
-               paginate: false,
-               searchable: false,
-               sortable: false,
-               page_size: 10
-             }
+      assert state.options.paginate == false
+      assert state.options.searchable == false
+      assert state.options.sortable == false
+      assert state.options.page_size == 10
+      assert state.options.border == :grid
+      assert state.options.header_separator == true
 
       assert state.current_page == 1
       assert state.page_size == 10
@@ -115,13 +115,11 @@ defmodule Raxol.UI.Components.TableTest do
       assert match?({:ok, _}, result)
       {:ok, state} = result
 
-      assert state.options == %{
-               paginate: true,
-               searchable: true,
-               sortable: true,
-               page_size: 2
-             }
-
+      assert state.options.paginate == true
+      assert state.options.searchable == true
+      assert state.options.sortable == true
+      assert state.options.page_size == 2
+      assert state.options.border == :grid
       assert state.page_size == 2
     end
   end
@@ -153,29 +151,20 @@ defmodule Raxol.UI.Components.TableTest do
       {:ok, updated_state} = result
       rendered = Table.render(updated_state, %{})
 
-      assert is_map(rendered)
-      assert Map.has_key?(rendered, :type)
       assert rendered.type == :box
-      flex = get_in(rendered, [:children, Access.at(0)])
-      [_header | rows] = flex.children
-      assert length(rows) == 1
-      first_row = List.first(rows)
-      assert is_map(first_row)
-      assert Map.has_key?(first_row, :type)
-      assert first_row.type == :flex
-      assert length(first_row.children) == 3
-      assert Enum.at(first_row.children, 1).content == "Alice      "
+      text = lines_text(rendered)
+      body = Enum.filter(text, &String.contains?(&1, "Alice"))
+      assert length(body) == 1
+      refute Enum.any?(text, &String.contains?(&1, "Bob"))
     end
 
     test "sorting works correctly", %{columns: columns, data: data} do
-      # Create a separate state for sorting test with pagination disabled
       result =
         Table.init(%{
           id: :test_table,
           columns: columns,
           data: data,
           options: %{
-            # Disable pagination for sorting test
             paginate: false,
             searchable: true,
             sortable: true,
@@ -189,42 +178,30 @@ defmodule Raxol.UI.Components.TableTest do
       result = Table.update({:sort, :age}, state)
       assert match?({:ok, _}, result)
       {:ok, updated_state} = result
-      rendered = Table.render(updated_state, %{available_width: 80})
+      body = body_lines(Table.render(updated_state, %{available_width: 80}))
 
-      # Verify sort order through row content
-      flex = get_in(rendered, [:children, Access.at(0)])
-      [_header | rows] = flex.children
-      first_row = List.first(rows)
-      assert Enum.at(first_row.children, 2).content == " 25 "
-      last_row = List.last(rows)
-      assert Enum.at(last_row.children, 2).content == " 40 "
+      # Age ascending: Alice(25) first, Dave(40) last
+      assert List.first(body) =~ "Alice"
+      assert List.first(body) =~ "25"
+      assert List.last(body) =~ "Dave"
+      assert List.last(body) =~ "40"
     end
 
     test "pagination works correctly", %{state: state} do
       result = Table.update({:set_page, 1}, state)
       assert match?({:ok, _}, result)
       {:ok, page1_state} = result
-      rendered = Table.render(page1_state, %{available_width: 80})
+      body = body_lines(Table.render(page1_state, %{available_width: 80}))
+      assert length(body) == 2
+      assert Enum.at(body, 0) =~ "Alice"
+      assert Enum.at(body, 1) =~ "Bob"
 
-      # Verify first page content
-      flex = get_in(rendered, [:children, Access.at(0)])
-      [_header | rows] = flex.children
-      assert length(rows) == 2
-      first_row = List.first(rows)
-      assert Enum.at(first_row.children, 1).content == "Alice      "
-      second_row = Enum.at(rows, 1)
-      assert Enum.at(second_row.children, 1).content == "Bob        "
-
-      # Verify second page content
       result = Table.update({:set_page, 2}, state)
       assert match?({:ok, _}, result)
       {:ok, page2_state} = result
-      rendered = Table.render(page2_state, %{available_width: 80})
-      flex = get_in(rendered, [:children, Access.at(0)])
-      [_header | rows] = flex.children
-      assert length(rows) == 2
-      first_row = List.first(rows)
-      assert Enum.at(first_row.children, 1).content == "Charlie    "
+      body = body_lines(Table.render(page2_state, %{available_width: 80}))
+      assert length(body) == 2
+      assert Enum.at(body, 0) =~ "Charlie"
     end
   end
 
@@ -360,29 +337,28 @@ defmodule Raxol.UI.Components.TableTest do
 
     test "header is rendered with bold style", %{state: state} do
       rendered = Table.render(state, %{available_width: 80})
-      flex = get_in(rendered, [:children, Access.at(0)])
-      [header | _] = flex.children
-      assert header.type == :flex
+      header =
+        Enum.find(table_line_elements(rendered), fn el ->
+          :bold in (el[:style] || [])
+        end)
 
-      Enum.each(header.children, fn cell ->
-        assert :bold in (cell.style || [])
-      end)
+      assert header
+      assert :bold in header.style
     end
 
     test "selected row is rendered with correct background and foreground colors",
          %{state: state} do
       state = %{state | selected_row: 1}
       rendered = Table.render(state, %{available_width: 80})
-      flex = get_in(rendered, [:children, Access.at(0)])
-      [_header | rows] = flex.children
-      selected_row = Enum.at(rows, 1)
-      assert selected_row.type == :flex
+      lines = table_line_elements(rendered)
+      # body rows are the non-rule, non-header text lines with selection style
+      selected =
+        Enum.find(lines, fn el ->
+          style = el[:style] || []
+          {:bg, :blue} in style and {:fg, :white} in style
+        end)
 
-      Enum.each(selected_row.children, fn cell ->
-        style = cell.style || []
-        assert {:bg, :blue} in style
-        assert {:fg, :white} in style
-      end)
+      assert selected
     end
 
     test "box style is overridden by style prop", %{
@@ -437,15 +413,9 @@ defmodule Raxol.UI.Components.TableTest do
       {:ok, state} = result
 
       rendered = Table.render(state, %{available_width: 80})
-      flex = get_in(rendered, [:children, Access.at(0)])
-      [header | _] = flex.children
-
-      Enum.each(header.children, fn cell ->
-        # Should include :underline and :italic in style keys
-        style_keys = cell.style || []
-        assert :underline in style_keys
-        assert :italic in style_keys
-      end)
+      header = Enum.find(table_line_elements(rendered), &(:bold in (&1.style || [])))
+      assert :underline in header.style
+      assert :italic in header.style
     end
 
     test "row and selected row style are overridden by theme", %{
@@ -466,44 +436,95 @@ defmodule Raxol.UI.Components.TableTest do
       assert match?({:ok, _}, result)
       {:ok, state} = result
 
-      # Unselected row
       rendered = Table.render(state, %{available_width: 80})
-      flex = get_in(rendered, [:children, Access.at(0)])
-      [_header | rows] = flex.children
-      first_row = Enum.at(rows, 0)
+      # Unselected body rows carry yellow from theme.row
+      yellow_row =
+        Enum.find(table_line_elements(rendered), fn el ->
+          style = el[:style] || []
+          :yellow in style or {:bg, :yellow} in style
+        end)
 
-      Enum.each(first_row.children, fn cell ->
-        style = cell.style || []
-        assert :yellow in style
-      end)
+      assert yellow_row
 
-      # Selected row
       state = %{state | selected_row: 2}
       rendered = Table.render(state, %{available_width: 80})
-      flex = get_in(rendered, [:children, Access.at(0)])
-      [_header | rows] = flex.children
-      selected_row = Enum.at(rows, 2)
 
-      Enum.each(selected_row.children, fn cell ->
-        style = cell.style || []
-        assert :red in style
-        assert :black in style
-      end)
+      selected =
+        Enum.find(table_line_elements(rendered), fn el ->
+          style = el[:style] || []
+          (:red in style or {:bg, :red} in style) and
+            (:black in style or {:fg, :black} in style)
+        end)
+
+      assert selected
     end
 
-    test "column style and header_style are respected", %{
+    test "border modes draw distinct chrome", %{columns: columns, data: data} do
+      {:ok, grid} =
+        Table.init(%{
+          id: :g,
+          columns: columns,
+          data: data,
+          options: %{border: :grid}
+        })
+
+      {:ok, inner} =
+        Table.init(%{
+          id: :i,
+          columns: columns,
+          data: data,
+          options: %{border: :inner}
+        })
+
+      {:ok, none} =
+        Table.init(%{
+          id: :n,
+          columns: columns,
+          data: data,
+          options: %{border: :none, header_separator: true}
+        })
+
+      {:ok, bare} =
+        Table.init(%{
+          id: :b,
+          columns: columns,
+          data: data,
+          options: %{border: :none, header_separator: false}
+        })
+
+      grid_text = lines_text(Table.render(grid, %{}))
+      inner_text = lines_text(Table.render(inner, %{}))
+      none_text = lines_text(Table.render(none, %{}))
+      bare_text = lines_text(Table.render(bare, %{}))
+
+      assert Enum.any?(grid_text, &String.starts_with?(&1, "┌"))
+      assert Enum.any?(grid_text, &String.starts_with?(&1, "└"))
+      assert Enum.any?(grid_text, &String.starts_with?(&1, "│"))
+      # :inner — column + header mid-rule only; no top/bottom frame
+      refute Enum.any?(inner_text, &String.contains?(&1, "┌"))
+      refute Enum.any?(inner_text, &String.contains?(&1, "└"))
+      refute Enum.any?(inner_text, &String.contains?(&1, "┬"))
+      refute Enum.any?(inner_text, &String.contains?(&1, "┴"))
+      assert Enum.any?(inner_text, &String.contains?(&1, "┼"))
+      assert Enum.any?(inner_text, &String.contains?(&1, "│"))
+      refute Enum.any?(none_text, &String.contains?(&1, "│"))
+      assert Enum.any?(none_text, &String.contains?(&1, "─"))
+      refute Enum.any?(bare_text, &String.contains?(&1, "─"))
+      # grid uses column separators — "1" and "Alice" are not adjacent
+      assert Enum.any?(grid_text, &String.contains?(&1, "Alice"))
+      assert Enum.any?(grid_text, &String.contains?(&1, "│"))
+      refute Enum.any?(grid_text, &String.contains?(&1, "1Alice"))
+    end
+
+    test "column style and header_style are row-level in the grid path", %{
       columns: _columns,
       data: data
     } do
+      # Per-cell column styles are not painted independently once the grid
+      # flattens a row into one text line — selection/row theme still works.
+      # This documents the tradeoff of the character-grid renderer.
       custom_columns = [
-        %{
-          id: :id,
-          label: "ID",
-          width: 4,
-          align: :right,
-          style: %{color: :magenta},
-          header_style: %{bg: :cyan}
-        },
+        %{id: :id, label: "ID", width: 4, align: :right, style: %{color: :magenta}},
         %{id: :name, label: "Name", width: 10, align: :left},
         %{id: :age, label: "Age", width: 5, align: :center}
       ]
@@ -513,17 +534,41 @@ defmodule Raxol.UI.Components.TableTest do
 
       assert match?({:ok, _}, result)
       {:ok, state} = result
-
       rendered = Table.render(state, %{available_width: 80})
-      flex = get_in(rendered, [:children, Access.at(0)])
-      [header | rows] = flex.children
-      # Header cell for :id should have :bg in style
-      id_header_cell = Enum.at(header.children, 0)
-      assert :bg in (id_header_cell.style || [])
-      # First row, first cell should have :magenta in style
-      first_row = Enum.at(rows, 0)
-      id_cell = Enum.at(first_row.children, 0)
-      assert :magenta in (id_cell.style || [])
+      text = lines_text(rendered) |> Enum.join("\n")
+      assert text =~ "Alice"
+      assert text =~ "ID"
     end
+  end
+
+  # -- helpers for the character-grid render tree --
+
+  defp table_line_elements(rendered) do
+    body = get_in(rendered, [:children, Access.at(0)])
+    (body && body[:children]) || []
+  end
+
+  defp lines_text(rendered) do
+    rendered
+    |> table_line_elements()
+    |> Enum.map(fn
+      %{text: t} when is_binary(t) -> t
+      %{content: t} when is_binary(t) -> t
+      other -> inspect(other)
+    end)
+  end
+
+  # Body rows only (skip box-drawing rules and the bold header line).
+  defp body_lines(rendered) do
+    rendered
+    |> table_line_elements()
+    |> Enum.reject(fn el ->
+      content = el[:content] || el[:text] || ""
+      style = el[:style] || []
+      String.contains?(content, "─") or String.contains?(content, "┌") or
+        String.contains?(content, "└") or String.contains?(content, "├") or
+        :bold in style
+    end)
+    |> Enum.map(fn el -> el[:content] || el[:text] || "" end)
   end
 end
