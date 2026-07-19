@@ -506,7 +506,7 @@ defmodule Raxol.Terminal.InlineDriverTest do
       end
     end
 
-    test "a flipped-on ISIG is re-asserted after the guard interval and the subscriber is told",
+    test "the FIRST re-assert is silent boot settling; the SECOND is announced",
          %{sio: sio} do
       {:ok, pid} =
         InlineDriver.start_link(
@@ -524,18 +524,27 @@ defmodule Raxol.Terminal.InlineDriverTest do
 
       calls_before = Enum.count(InlineDriverMockStty.calls(), &(&1 == {:raw!}))
 
+      # First guard hit: the predictable prim_tty handshake — re-asserted
+      # and COUNTED, but never announced (no footer notice on first input).
       feed(pid, 3)
-
-      assert_receive {:inline_isig_reasserted}, 1_000
+      refute_receive {:inline_isig_reasserted}, 300
 
       assert Enum.count(InlineDriverMockStty.calls(), &(&1 == {:raw!})) >
                calls_before
+
+      report = InlineDriver.isig_report(pid)
+      assert report.reasserts == 1
+      assert report.isig_off? == false
+
+      # Second guard hit: something touched the tty mid-session — loud.
+      feed(pid, 3)
+      assert_receive {:inline_isig_reasserted}, 1_000
 
       # The report goes through the REAL GenServer call path (regression:
       # a clause defined below the module's catch-all was unreachable and
       # returned {:error, :not_implemented} to the demo's POST line).
       report = InlineDriver.isig_report(pid)
-      assert report.reasserts >= 1
+      assert report.reasserts >= 2
       assert report.isig_off? == false
       assert is_boolean(report.boot_confirmed?)
 

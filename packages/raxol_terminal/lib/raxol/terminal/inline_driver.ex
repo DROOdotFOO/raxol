@@ -889,11 +889,18 @@ defmodule Raxol.Terminal.InlineDriver do
       state
     else
       safe_stty_call(state.stty_module, :raw!, [])
+      reasserts = state.isig_reasserts + 1
 
-      if is_pid(state.subscriber),
+      # The FIRST re-assert is boot settling — prim_tty re-applies its own
+      # termios (ISIG on) when the reader engages, at a time no boot-window
+      # poll can bound, so the first guard hit is the predictable BEAM
+      # handshake, not an external surprise. It is counted (isig_report/1
+      # stays truthful) but not announced. Any LATER re-assert means
+      # something touched the tty mid-session and stays loud.
+      if reasserts > 1 and is_pid(state.subscriber),
         do: send(state.subscriber, {:inline_isig_reasserted})
 
-      %{state | isig_reasserts: state.isig_reasserts + 1}
+      %{state | isig_reasserts: reasserts}
     end
   end
 
