@@ -1,7 +1,0 @@
-[1;14r7[15;1H[K[1m❯[0m  8[15;3H[?25l7[15;1H[K[16;1H[K[1m❯[0m  8[16;3H[?25h[?25l7[15;1H[K thinking[16;1H[K » [17;1H[K[1m❯[0m  8[17;3H[?25h[?25l7[15;1H[K responding[16;1H[K why does the settle step double-debit the ledger when the[17;1H[K run resumes after a crash?[18;1H[K[1m❯[0m  8[18;3H[?25h7[15;1H[K thinking8[18;3H7[15;1H[K responding8[18;3H7[1;1H[1m❯[0m why does the settle step double-debit the ledger when the
-  run resumes after a crash?
-8[?25l7[16;1H[K The ledger fold consulted the seal frontier after the fold[17;1H[K ran; it now starts at the frontier offset, so the debit8[18;3H[?25h7[3;1H
-[1m❮[0m The ledger fold consulted the seal frontier after the fold
-  ran; it now starts at the frontier offset, so the debit
-  replays exactly once.
-8[?25l7[15;1H[K[1m❯[0m  [16;1H[K[17;1H[K[18;1H[K8[15;3H[?25h
