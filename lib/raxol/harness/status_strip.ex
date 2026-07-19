@@ -247,7 +247,12 @@ defmodule Raxol.Harness.StatusStrip do
         context_value(state),
         cost_value(state)
       ]
-      |> Enum.reject(&is_nil/1)
+      # Reject voids, not just absences: an empty phase word (the
+      # bare-spinner wait with no clock and no animation) has nothing
+      # true to say, and joining it would paint a leading-separator
+      # void (` | $0.00`) — the charged-minimum violation the segment
+      # law exists to ban.
+      |> Enum.reject(&(&1 in [nil, ""]))
 
     segments =
       case stall_notice(state) do

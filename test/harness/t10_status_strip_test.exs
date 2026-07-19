@@ -127,6 +127,19 @@ defmodule Raxol.Harness.T10StatusStripTest do
       assert StatusStrip.phase_value(%{turn_stage: :item_started}) == "thinking"
     end
 
+    test "an empty phase composes no leading-separator void against cost" do
+      # The charged minimum at the JOIN: a wordless phase (no clock, no
+      # animation) must drop from the segment list, not join a separator —
+      # ` | $0.00` is the banned void.
+      assert StatusStrip.render(%{turn_stage: :turn_started, cost: 0.0}, 80) ==
+               ["$0.00"]
+
+      assert StatusStrip.render(
+               %{turn_stage: :item_delta, last_item_type: :reasoning, cost: 0.5},
+               80
+             ) == ["$0.50"]
+    end
+
     test "a dispatched tool maps to running + the tool name" do
       state = %{turn_stage: :item_completed, running_tool: "list_dir"}
       assert StatusStrip.phase_value(state) == "running list_dir"
