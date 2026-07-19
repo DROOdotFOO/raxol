@@ -126,23 +126,44 @@ defmodule Raxol.UI.Layout.Engine do
     view
     |> process_element(available_space, [])
     |> List.flatten()
-    |> dim_behind_dialog()
+    |> stamp_region_prominence()
   end
 
-  # Global post-pass: dim every non-`:in_dialog` element once the whole
-  # tree is flat, since dialog scope can span siblings outside the
-  # hosting `:absolute_layer` (e.g. a sidebar/header). No-op if no dialog
-  # is active.
-  defp dim_behind_dialog(elements) do
+  # The `region_prominence` a non-dialog element gets while a dialog overlay
+  # is mounted -- the modal dim's first special case of the general region-
+  # prominence mechanism (design doc §5 OVERLAID state). Matches
+  # `Raxol.UI.CellDim`'s `@contrast_keep`, so the shipped modal appearance
+  # is what `Raxol.UI.ColorResolver` reproduces (RP-N-02, §4 C2 chroma-
+  # exponent note in that module).
+  @overlay_keep 0.45
+
+  # Global post-pass: generalizes the modal-only `dim_behind_dialog/1` into
+  # a `region_prominence` float stamped on every positioned element (design
+  # doc §3.2/§9 Phase 1) -- `1.0` (full prominence) by default, or
+  # `@overlay_keep` for every element not on the active dialog's path.
+  # `:in_dialog` marking (`stamp_in_dialog/1`) is unchanged; the boolean
+  # `:dim_behind_modal` stamp is KEPT alongside the float for compat --
+  # `Raxol.UI.Renderer.maybe_dim/2` no longer reads it (Phase 1 moved that
+  # work into `Raxol.UI.ColorResolver`), but `test/cross_terminal/modal_overlay_test.exs`
+  # still asserts on it directly against `apply_layout/3`'s own output, and
+  # it costs nothing to keep alongside the float. No-op split if no dialog
+  # is active: every element still gets `region_prominence: 1.0` (§9 Phase 1
+  # -- "every positioned element carries region_prominence").
+  defp stamp_region_prominence(elements) do
     if Enum.any?(elements, &Map.get(&1, :in_dialog, false)) do
       Enum.map(elements, fn element ->
         case Map.pop(element, :in_dialog, false) do
-          {true, stripped} -> stripped
-          {false, stripped} -> Map.put(stripped, :dim_behind_modal, true)
+          {true, stripped} ->
+            Map.put(stripped, :region_prominence, 1.0)
+
+          {false, stripped} ->
+            stripped
+            |> Map.put(:region_prominence, @overlay_keep)
+            |> Map.put(:dim_behind_modal, true)
         end
       end)
     else
-      elements
+      Enum.map(elements, &Map.put(&1, :region_prominence, 1.0))
     end
   end
 
@@ -546,8 +567,8 @@ defmodule Raxol.UI.Layout.Engine do
   #
   # An overlay descriptor may carry `dialog: true` (see
   # `Raxol.UI.Components.AbsoluteLayer.dialog_overlay/3`) to stamp its
-  # whole subtree `:in_dialog`; `dim_behind_dialog/1` dims everything else
-  # once the tree is flat (dialog scope is global, see that function).
+  # whole subtree `:in_dialog`; `stamp_region_prominence/1` dims everything
+  # else once the tree is flat (dialog scope is global, see that function).
   def process_element(%{type: :absolute_layer} = layer, space, acc) do
     flow_child = Map.get(layer, :flow_child)
     overlays = Map.get(layer, :overlays, [])
@@ -599,7 +620,12 @@ defmodule Raxol.UI.Layout.Engine do
     style = Map.get(ind, :gutter_style, %{})
 
     gutter_elements =
-      indication_gutter_elements(Map.get(ind, :gutter, :none), space, height, style)
+      indication_gutter_elements(
+        Map.get(ind, :gutter, :none),
+        space,
+        height,
+        style
+      )
 
     # Content first, gutter after -- they never share a column (content at
     # +2, gutter at 0), so order is cosmetic, but this matches the
@@ -757,7 +783,7 @@ defmodule Raxol.UI.Layout.Engine do
 
   defp process_overlay(_, _, acc), do: acc
 
-  # Marks a dialog overlay's elements `:in_dialog` so dim_behind_dialog/1 exempts them.
+  # Marks a dialog overlay's elements `:in_dialog` so stamp_region_prominence/1 exempts them.
   defp stamp_in_dialog(elements) when is_list(elements) do
     Enum.map(elements, &stamp_in_dialog/1)
   end

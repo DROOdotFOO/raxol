@@ -7,12 +7,42 @@ defmodule Raxol.UI.ColorResolver do
   the terminal writer as this codebase gets.
 
   See `docs/proposals/in-flight/region-prominence-propagation.md` §3.3/§3.5
-  for the full design. This module implements **Phase 0** only (§9): the
-  resolver is wired into `Raxol.UI.Renderer.render_to_cells/2`, but no
-  producer in this codebase emits a `ColorIntent` yet and there is no region
-  prominence map. Every real render is therefore 100% literal colors, and
-  `resolve_cells/2` is the identity transform on such input by construction
-  -- literal terms flow through every clause here unchanged.
+  for the full design. Phase 0 (§9) wired the resolver into
+  `Raxol.UI.Renderer.render_to_cells/2` dormant -- no producer emitted a
+  `ColorIntent` and there was no region prominence map, so every real render
+  was 100% literal colors and `resolve_cells/2` was the identity transform
+  by construction.
+
+  **Phase 1** adds the first live region-prominence producer: the modal
+  dialog dim, generalized from a boolean (`:dim_behind_modal`) into a
+  per-element `region_prominence` float stamped by
+  `Raxol.UI.Layout.Engine`'s `stamp_region_prominence/1` (formerly
+  `dim_behind_dialog/1`) and carried into this pass as a transient
+  `{:region_prominence, p}` marker in each cell's `attrs` list (see
+  `Raxol.UI.Renderer`'s per-element render step). This module reads that
+  marker, composes it into `effective_p` per §4 C1 (`own_p * region_p`),
+  and fades **both fg and bg, literal or intent-resolved**, toward the
+  frame's terminal ground -- mirroring `Raxol.UI.CellDim.dim_fg/2` /
+  `dim_bg/2` exactly (including the `:black` fg-vs-bg sentinel asymmetry
+  documented there) but parametrized by the composed `p` and a module
+  chroma exponent `@region_gamma` instead of CellDim's fixed
+  `(contrast_keep 0.45, chroma_keep 0.65)` pair. `@region_gamma` is the
+  closed-form solve `ln(0.65) / ln(0.45)` (~0.5395) -- the design doc's own
+  "γ ≈ 0.55" approximation, refined to reproduce CellDim's `chroma_keep`
+  to floating-point precision at the one `p` (`Raxol.UI.Layout.Engine`'s
+  `@overlay_keep`, 0.45) Phase 1 actually composes. See the
+  `@region_gamma` module attribute comment for the full rationale and
+  `test/raxol/ui/region_prominence_test.exs` for the golden (RP-N-02: 0 of
+  964 painted cells differ on the modal_demo fixture).
+
+  The `{:region_prominence, p}` marker is a resolver-internal implementation
+  detail, never a real cell attribute: `resolve_cells/2` always strips it
+  before a cell leaves this pass (see `resolve_cell/3`), so no downstream
+  consumer (buffer diff, terminal writer, MCP structured screenshot, ...)
+  ever sees it. `p == 1.0` (the default, and every cell's value absent a
+  mounted dialog) short-circuits every dimming clause to identity, so
+  Phase 1 is neutral (RP-P-01) exactly like Phase 0 whenever no region
+  drops below full prominence.
 
   ## Local-ground bookkeeping (§3.5)
 
@@ -40,22 +70,65 @@ defmodule Raxol.UI.ColorResolver do
     * `%Raxol.UI.ColorIntent{}` in a `bg` slot -- resolved via
       `Raxol.UI.Theming.Salience.solve/4` against the **enclosing** ground
       (the grid's under-layer at this coordinate, else the terminal
-      ground) -- the resolved bg becomes the **local** ground for this
-      cell's `fg` and for every later cell painted at the same coordinate.
-      Per the documented step-1 formula (§3.3), bg resolution has no
-      prominence term -- it always resolves at the intent's own tier's
-      full-strength target (`tier` defaults to `:baseline` when unset).
+      ground), then region-dimmed (below) -- the RESULT becomes the
+      **local** ground for this cell's `fg` and for every later cell
+      painted at the same coordinate. Per the documented step-1 formula
+      (§3.3), bg *intent* resolution itself has no prominence term -- it
+      always resolves at the intent's own tier's full-strength target
+      (`tier` defaults to `:baseline` when unset); the region term is
+      layered on after, identically to a literal bg (below).
     * `%Raxol.UI.ColorIntent{}` in a `fg` slot -- resolved at
-      `effective_p = intent.prominence || 1.0` (Phase 0 has no region/
-      overlay map, so `effective_p` is `own_p` alone -- see §3.3 step 2 and
-      §9's Phase 0 scope note) against the **local** ground (this cell's own
-      resolved `bg`, else the grid's under-layer, else terminal ground),
-      then clamped to the intent's `:floor` class against the **local
-      resolved bg's actual color** (not a synthesized gray of its
-      lightness -- F2, §3.4) via bisection along the same fade line.
+      `effective_p = clamp(intent.prominence || 1.0) * clamp(region_p)`
+      (§4 C1 -- Phase 0's `own_p` alone, now composed with the per-cell
+      region prominence, §3.3 step 2) against the **local** ground (this
+      cell's own region-dimmed `bg`, else the grid's under-layer, else
+      terminal ground), then clamped to the intent's `:floor` class against
+      the **local resolved bg's actual color** (not a synthesized gray of
+      its lightness -- F2, §3.4) via bisection along the same fade line.
+      The floor clamp runs *after* the full `effective_p` composition, so a
+      region dim can never push an already-floored color back under its
+      floor (§3.4).
     * Any other term (atom, hex string, `{r, g, b}`, integer, ...) -- a
-      literal, passes through completely unchanged. This is the byte-
-      identity contract Phase 0 is graded on (RP-P-01).
+      literal. Phase 0: passes through completely unchanged (RP-P-01, the
+      byte-identity contract Phase 0 is graded on). Phase 1: unchanged
+      when this cell's region prominence is `1.0` (still RP-P-01 -- see
+      "Region prominence" below); region-dimmed otherwise, exactly like
+      `Raxol.UI.CellDim` dims literals for the modal case today (design
+      doc §3.1 "Backward compat", ratified: literals participate).
+
+  ## Region prominence (Phase 1, §4 C1/C2, §9)
+
+  Each cell's `attrs` list may carry a transient `{:region_prominence, p}`
+  marker (`p :: float() in 0.0..1.0`), stamped per-element by
+  `Raxol.UI.Renderer` from `Raxol.UI.Layout.Engine`'s
+  `stamp_region_prominence/1` output before cells reach this module.
+  `region_prominence_of/1` reads it (default `1.0` when absent); the marker
+  is *always* stripped from the emitted cell's `attrs` before it leaves
+  `resolve_cell/3` -- it is never a real terminal/buffer attribute like
+  `:bold` or `:dim`, only a resolver-internal composition input.
+
+  At `p == 1.0` every dimming clause below is the identity (an explicit
+  guard, not just an arithmetic no-op) -- byte-identical output, same as
+  Phase 0's neutrality contract. At `p < 1.0`:
+
+    * **fg** -- an intent's `effective_p` folds in `p` (C1) before the
+      existing fade+clamp pipeline runs (so the F2 floor sees the fully
+      composed prominence, per §3.4's "no upstream stage can push a floored
+      class back under the floor"). A literal fg fades via `region_dim_fg/3`
+      -- the fg-flavored half of the CellDim mirror: a painted `fg: :black`
+      is dimmed as a real color (`CellDim.dim_fg/2`'s documented asymmetry).
+    * **bg** -- both an intent-resolved bg and a literal bg pass through
+      `region_dim_bg/3` -- `nil` (the unpainted sentinel) and the literal
+      atom `:black` (the unpainted-bg sentinel, see `CellDim` moduledoc)
+      both pass through completely untouched, matching `CellDim.dim_bg/2`
+      exactly.
+    * Both dimming paths fade **apparent lightness toward the terminal
+      ground** (`ground + (apparent - ground) * p`) and **chroma by
+      `p ** @region_gamma`** (§4 C2) -- the same two-channel OKLCH
+      interpolation `CellDim.dim_oklch/4` performs, parametrized instead of
+      hardcoded. `@region_gamma` is chosen so the shipped modal look
+      survives through the unified formula exactly (see moduledoc intro
+      and the `@region_gamma` attribute comment).
 
   ## Reuse, not reimplementation
 
@@ -85,6 +158,27 @@ defmodule Raxol.UI.ColorResolver do
 
   @text_floor_ratio 4.5
   @clamp_iterations 24
+
+  # §4 C2's chroma exponent, module-parametrized per the design doc's open
+  # Q1 ("the resolver takes γ per call-class ... until ratified"). Region
+  # dimming is one call-class. The design doc's own approximation is
+  # "γ ≈ 0.55" (`0.45 ** 0.55 ~= 0.645`, close to `Raxol.UI.CellDim`'s
+  # fixed `chroma_keep` 0.65 at `p = @overlay_keep` (the
+  # `Raxol.UI.Layout.Engine` modal-dim constant, 0.45)) -- but 0.55 alone
+  # is not tight: a synthetic sweep across the RGB cube at p = 0.45 shows
+  # per-RGB-channel deviations up to 6 against CellDim's exact output.
+  # Refined here to the CLOSED-FORM solve for that one anchor point
+  # instead of the rounded approximation -- `ln(0.65) / ln(0.45)`
+  # reproduces `chroma_keep` to floating-point precision at `p = 0.45`
+  # (0 deviation across the same sweep, and 0/964 painted cells differ on
+  # the modal_demo golden, RP-N-02 -- see `test/raxol/ui/region_prominence_test.exs`).
+  # This is licensed by the design doc's own methodology ("the byte-exact
+  # goldens pin whichever [γ] survives", §4 C2): the doc's "≈ 0.55" was a
+  # napkin estimate pending exactly this kind of check. There is no
+  # CellDim ground truth for any OTHER p (nested modals, future
+  # depth-falloff), so anchoring the exponent to the one p Phase 1
+  # actually composes is the most defensible choice there too.
+  @region_gamma :math.log(0.65) / :math.log(0.45)
 
   # ANSI-16 atom -> code, matching `Raxol.Core.Renderer.Color`'s
   # `@ansi_16_map` ordering (same duplication pattern `Raxol.UI.CellDim`
@@ -120,6 +214,15 @@ defmodule Raxol.UI.ColorResolver do
   @dev_guard? Mix.env() in [:dev, :test]
 
   @type cell :: {integer(), integer(), term(), term(), term(), list()}
+
+  @doc """
+  The chroma exponent (§4 C2) region-prominence dimming uses -- see the
+  `@region_gamma` module attribute comment for the RP-N-02 rationale.
+  Exposed so tests/callers can compute the exact expected region-dimmed
+  chroma for a given `p` without duplicating the constant.
+  """
+  @spec region_gamma() :: float()
+  def region_gamma, do: @region_gamma
 
   @doc """
   Resolves every `ColorIntent`/`{:fixed, _}` in `cells`' `fg`/`bg` slots to
@@ -168,6 +271,9 @@ defmodule Raxol.UI.ColorResolver do
   # --- the whole-list fold (§3.5) ---
 
   defp resolve_cell({x, y, char, fg, bg, attrs}, grid, ground) do
+    region_p = clamp01(region_prominence_of(attrs))
+    clean_attrs = strip_region_marker(attrs)
+
     under = Map.get(grid, {x, y})
 
     # `ref_al`/`ref_hex` decompose a literal color back into OKLCH -- real
@@ -181,7 +287,11 @@ defmodule Raxol.UI.ColorResolver do
     enclosing_al =
       if match?(%ColorIntent{}, bg), do: ref_al(under) || ground, else: nil
 
-    bg_resolved = resolve_bg(bg, enclosing_al)
+    # `resolve_bg/4` layers the region dim on top of intent resolution (or
+    # straight onto a literal) -- the RESULT is what actually gets painted,
+    # so it is what the grid records and what `fg`'s local ground reads
+    # (§3.5's "LOCAL ground is by definition the bg the compositor lands").
+    bg_resolved = resolve_bg(bg, enclosing_al, ground, region_p)
 
     {local_al, local_bg_hex} =
       if match?(%ColorIntent{}, fg) do
@@ -193,45 +303,79 @@ defmodule Raxol.UI.ColorResolver do
         {nil, nil}
       end
 
-    fg_resolved = resolve_fg(fg, local_al, local_bg_hex, ground)
+    fg_resolved = resolve_fg(fg, local_al, local_bg_hex, ground, region_p)
 
     grid =
       if is_nil(bg_resolved),
         do: grid,
         else: Map.put(grid, {x, y}, bg_resolved)
 
-    {{x, y, char, fg_resolved, bg_resolved, attrs}, grid}
+    {{x, y, char, fg_resolved, bg_resolved, clean_attrs}, grid}
   end
 
-  # --- bg resolution (§3.3 step 1 / C5) ---
+  # The `{:region_prominence, p}` marker `Raxol.UI.Renderer` stamps into a
+  # cell's `attrs` (Phase 1, see moduledoc) -- resolver-internal, never a
+  # real cell attribute. Defaults to `1.0` (full prominence, the identity)
+  # when absent, matching every element's default before any dialog mounts.
+  defp region_prominence_of(attrs) do
+    Enum.find_value(attrs, 1.0, fn
+      {:region_prominence, p} when is_number(p) -> p
+      _ -> nil
+    end)
+  end
 
-  defp resolve_bg(nil, _enclosing_al), do: nil
-  defp resolve_bg({:fixed, color}, _enclosing_al), do: color
+  defp strip_region_marker(attrs) do
+    Enum.reject(attrs, &match?({:region_prominence, _}, &1))
+  end
 
-  defp resolve_bg(%ColorIntent{} = intent, enclosing_al) do
+  # --- bg resolution (§3.3 step 1 / C5), region-dimmed (§4 C1/C2) ---
+
+  defp resolve_bg(nil, _enclosing_al, _ground, _region_p), do: nil
+  defp resolve_bg({:fixed, color}, _enclosing_al, _ground, _region_p), do: color
+
+  defp resolve_bg(%ColorIntent{} = intent, enclosing_al, ground, region_p) do
     tier = intent.tier || :baseline
     c = intent.c || 0.0
     h = intent.h || 0
 
-    Salience.solve(tier, c, h, ground: enclosing_al, polarity: :auto)
+    tier
+    |> Salience.solve(c, h, ground: enclosing_al, polarity: :auto)
+    |> region_dim_bg(region_p, ground)
   end
 
-  defp resolve_bg(literal, _enclosing_al), do: literal
+  defp resolve_bg(literal, _enclosing_al, ground, region_p),
+    do: region_dim_bg(literal, region_p, ground)
 
-  # --- fg resolution (§3.3 steps 2-4 / C1-C3, F2) ---
+  # --- fg resolution (§3.3 steps 2-4 / C1-C3, F2), region-composed (§4 C1) ---
 
-  defp resolve_fg(nil, _local_al, _local_bg_hex, _ground), do: nil
-  defp resolve_fg({:fixed, color}, _local_al, _local_bg_hex, _ground), do: color
+  defp resolve_fg(nil, _local_al, _local_bg_hex, _ground, _region_p), do: nil
 
-  defp resolve_fg(%ColorIntent{} = intent, local_al, local_bg_hex, ground) do
+  defp resolve_fg(
+         {:fixed, color},
+         _local_al,
+         _local_bg_hex,
+         _ground,
+         _region_p
+       ),
+       do: color
+
+  defp resolve_fg(
+         %ColorIntent{} = intent,
+         local_al,
+         local_bg_hex,
+         ground,
+         region_p
+       ) do
     tier = intent.tier || :baseline
     c = intent.c || 0.0
     h = intent.h || 0
 
-    # Phase 0: no region/overlay map exists yet, so effective_p is own_p
-    # alone (§3.3's Π region_p / Π overlay_p terms are both 1.0 -- see the
-    # design doc §9 Phase 0 scope note).
-    effective_p = clamp01(intent.prominence || 1.0)
+    # §4 C1: effective_p composes the component's own prominence with the
+    # per-cell region prominence (Phase 0: region_p was always 1.0, an
+    # implicit identity -- Phase 1 threads the real value from the cell's
+    # `attrs` marker, see `region_prominence_of/1`).
+    own_p = clamp01(intent.prominence || 1.0)
+    effective_p = clamp01(own_p * region_p)
 
     # The full-strength (t = 1.0) target -- solved once against the LOCAL
     # ground, per §3.3 step 3's `AL(bg or ground)`.
@@ -244,6 +388,10 @@ defmodule Raxol.UI.ColorResolver do
 
     against_hex = local_bg_hex || ground_hex(ground)
 
+    # The F2 floor clamp runs against the FULLY composed effective_p -- a
+    # region dim can never push an already-floored color back under its
+    # floor (§3.4), because the floor check happens after this
+    # composition, not before it.
     clamp_output(
       faded_hex,
       target_hex,
@@ -254,7 +402,8 @@ defmodule Raxol.UI.ColorResolver do
     )
   end
 
-  defp resolve_fg(literal, _local_al, _local_bg_hex, _ground), do: literal
+  defp resolve_fg(literal, _local_al, _local_bg_hex, ground, region_p),
+    do: region_dim_fg(literal, region_p, ground)
 
   # --- F2 output-contrast clamp (§3.4), adapted from
   # `Prominence.clamp_to_floor/7` -- the same bisection-along-the-fade-line
@@ -331,6 +480,89 @@ defmodule Raxol.UI.ColorResolver do
   # achromatic hex at `ground`.
   defp ground_hex(ground), do: Prominence.fade("#000000", 0.0, ground)
 
+  # --- region-prominence dimming (§4 C1/C2, Phase 1) ---
+  #
+  # Mirrors `Raxol.UI.CellDim.dim_fg/2` / `dim_bg/2` exactly -- same
+  # `:black` fg-vs-bg sentinel asymmetry, same OKLCH two-channel
+  # interpolation -- but parametrized by the composed region prominence `p`
+  # and `@region_gamma` instead of CellDim's fixed (0.45, 0.65) pair, and
+  # faded toward the frame's terminal `ground` (the SAME ground CellDim's
+  # `ground_apparent_lightness/0` reads, not the per-cell local-ground grid
+  # §3.5 builds for intent resolution -- CellDim has no local-ground concept
+  # either, so this is the correct parity target for RP-N-02).
+
+  # `p >= 1.0` is the identity for every color shape, including shapes the
+  # clauses below don't special-case -- checked first so no OKLCH round-trip
+  # runs when a cell's region prominence is full (the common case absent an
+  # active dialog, RP-P-01/neutrality).
+  defp region_dim_fg(color, p, _ground) when p >= 1.0, do: color
+
+  # A painted `fg: :black` is a real color under CellDim's documented
+  # asymmetry -- dimmed, not passed through (see `CellDim.dim_fg/2`).
+  defp region_dim_fg(:black, p, ground) do
+    {r, g, b} = ansi16_rgb(:black)
+    region_dim_rgb(r, g, b, p, ground)
+  end
+
+  defp region_dim_fg(color, p, ground), do: region_dim_literal(color, p, ground)
+
+  # `nil` (unpainted bg) and `:black` (the unpainted-bg sentinel,
+  # `CellDim`'s moduledoc) both pass through unconditionally -- there is
+  # nothing to dim, and painting one would turn a transparent cell opaque.
+  defp region_dim_bg(nil, _p, _ground), do: nil
+  defp region_dim_bg(:black, _p, _ground), do: :black
+  defp region_dim_bg(color, p, _ground) when p >= 1.0, do: color
+  defp region_dim_bg(color, p, ground), do: region_dim_literal(color, p, ground)
+
+  defp region_dim_literal(nil, _p, _ground), do: nil
+
+  defp region_dim_literal({r, g, b}, p, ground)
+       when is_integer(r) and is_integer(g) and is_integer(b) do
+    region_dim_rgb(r, g, b, p, ground)
+  end
+
+  # 256-color palette indices have no general reverse mapping to a hue
+  # without inventing one -- pass through unchanged, matching
+  # `CellDim.dim_color/2`'s integer clause (via its `other` catch-all).
+  defp region_dim_literal(code, _p, _ground) when is_integer(code), do: code
+
+  defp region_dim_literal(color, p, ground) when is_atom(color) do
+    {r, g, b} = ansi16_rgb(color)
+    region_dim_rgb(r, g, b, p, ground)
+  end
+
+  defp region_dim_literal("#" <> _ = hex, p, ground) do
+    {l, c, h} = Salience.hex_to_oklch(hex)
+    {new_l, new_c, new_h} = region_dim_oklch(l, c, h, p, ground)
+    Salience.oklch_to_hex(new_l, new_c, new_h)
+  end
+
+  defp region_dim_literal(other, _p, _ground), do: other
+
+  defp region_dim_rgb(r, g, b, p, ground) do
+    {l, c, h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
+    {new_l, new_c, new_h} = region_dim_oklch(l, c, h, p, ground)
+    Salience.oklch_to_rgb(new_l, new_c, new_h)
+  end
+
+  # §4 C2: `faded_AL = g + (a - g) * p`, `faded_C = C * p ** γ`. Solves
+  # back to a nominal `l` landing on the new apparent lightness, exactly as
+  # `CellDim.dim_oklch/4` does.
+  defp region_dim_oklch(l, c, h, p, ground) do
+    apparent_l = Salience.apparent_lightness(l, c, h)
+    new_apparent_l = ground + (apparent_l - ground) * p
+    new_c = c * :math.pow(p, @region_gamma)
+    new_l = Salience.solve_lightness(new_apparent_l, new_c, h)
+    {new_l, new_c, h}
+  end
+
+  defp ansi16_rgb(atom) do
+    case Map.fetch(@ansi16_codes, atom) do
+      {:ok, code} -> Colors.ansi_to_rgb(code)
+      :error -> @unknown_atom_rgb
+    end
+  end
+
   # --- literal color -> {hex, apparent_lightness} (grid reads) ---
 
   defp ref_al(nil), do: nil
@@ -372,15 +604,8 @@ defmodule Raxol.UI.ColorResolver do
   end
 
   defp literal_ref_unsafe(atom) when is_atom(atom) and not is_nil(atom) do
-    case Map.fetch(@ansi16_codes, atom) do
-      {:ok, code} ->
-        {r, g, b} = Colors.ansi_to_rgb(code)
-        rgb_ref(r, g, b)
-
-      :error ->
-        {r, g, b} = @unknown_atom_rgb
-        rgb_ref(r, g, b)
-    end
+    {r, g, b} = ansi16_rgb(atom)
+    rgb_ref(r, g, b)
   end
 
   defp literal_ref_unsafe(_other), do: nil

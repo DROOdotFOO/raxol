@@ -46,9 +46,12 @@ defmodule Raxol.UI.Renderer do
     # ★ RESOLUTION PASS (region-prominence-propagation.md §3.3/§3.5) ★ --
     # the only place, post-clip/pre-buffer, where every element's cells are
     # already flattened into one paint-order list -- the sole spot local
-    # ground can be read back from what will actually be painted. Phase 0:
-    # no producer emits `Raxol.UI.ColorIntent` yet, so this is the identity
-    # transform on today's all-literal cell lists (RP-P-01).
+    # ground can be read back from what will actually be painted, and the
+    # sole spot region prominence (the `{:region_prominence, p}` markers
+    # `stamp_region_prominence_attrs/2` left in each cell's attrs above) can
+    # be composed and faded. Phase 0: no producer emits `Raxol.UI.ColorIntent`
+    # yet. Phase 1 (§9): the modal dim rides this pass -- see
+    # `Raxol.UI.ColorResolver`'s moduledoc.
     |> ColorResolver.resolve_cells()
   end
 
@@ -124,22 +127,41 @@ defmodule Raxol.UI.Renderer do
         # Layout-stamped overflow clipping applies to every element type
         # generically; type-specific render paths that clip themselves are
         # unaffected (intersection is idempotent). Same choke point for
-        # modal-backdrop dimming: `:dim_behind_modal` is global, stamped on
-        # every non-`:in_dialog` element while a dialog overlay is active,
-        # not just the hosting `:absolute_layer`'s flow content.
+        # region-prominence stamping: `region_prominence` is global, stamped
+        # on every positioned element by `Raxol.UI.Layout.Engine`
+        # (`1.0` by default, lower for every non-`:in_dialog` element while
+        # a dialog overlay is active -- not just the hosting
+        # `:absolute_layer`'s flow content). The actual fade/dim math no
+        # longer runs here (Phase 1, region-prominence-propagation.md §9) --
+        # `stamp_region_prominence_attrs/2` only carries the element's
+        # `region_prominence` onto its cells as a transient attrs marker;
+        # `Raxol.UI.ColorResolver.resolve_cells/2` (called once, over the
+        # whole flattened list, in `render_to_cells/2` below) does the
+        # actual fading, since only it has the paint-order local-ground
+        # bookkeeping (§3.5) the fade math needs.
         element_with_dims
         |> render_visible_element(theme, parent_style)
         |> CellManager.clip_cells_to_bounds(
           Map.get(element_with_dims, :clip_bounds)
         )
-        |> maybe_dim(element_with_dims)
+        |> stamp_region_prominence_attrs(element_with_dims)
     end
   end
 
-  defp maybe_dim(cells, %{dim_behind_modal: true}),
-    do: Raxol.UI.CellDim.dim_cells(cells)
+  # `region_prominence: 1.0` (the default -- no active dialog, or this
+  # element is on the dialog's own path) is the identity: skip the marker
+  # entirely so an unaffected render's cell list is untouched (RP-P-01).
+  defp stamp_region_prominence_attrs(cells, element) do
+    case Map.get(element, :region_prominence, 1.0) do
+      p when p >= 1.0 ->
+        cells
 
-  defp maybe_dim(cells, _element), do: cells
+      p ->
+        Enum.map(cells, fn {x, y, char, fg, bg, attrs} ->
+          {x, y, char, fg, bg, [{:region_prominence, p} | attrs]}
+        end)
+    end
+  end
 
   # --- Element Dimension Calculation ---
 

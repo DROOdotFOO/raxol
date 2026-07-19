@@ -21,6 +21,30 @@ defmodule Raxol.UI.CellDim do
   `:black` (see their `resolve_bg/1`), so `:black` is the de facto
   unpainted-bg sentinel and passes through undimmed for backgrounds --
   `dim_fg/2` treats a painted `fg: :black` as a real color and dims it.
+
+  ## Phase 1: superseded as the live render-pipeline mechanism
+
+  As of `docs/proposals/in-flight/region-prominence-propagation.md` §9
+  Phase 1, `Raxol.UI.Renderer.render_to_cells/2` no longer calls this
+  module -- modal-backdrop dimming is now one case of the general
+  region-prominence mechanism, resolved by `Raxol.UI.ColorResolver` at the
+  same choke point this moduledoc describes, fed by a per-cell
+  `region_prominence` float (`Raxol.UI.Layout.Engine.stamp_region_prominence/1`)
+  instead of the boolean `:dim_behind_modal` this module used to key off of
+  via `Raxol.UI.Renderer.maybe_dim/2` (removed). `ColorResolver` mirrors
+  this module's `dim_fg/2`/`dim_bg/2` math (including the `:black`
+  fg-vs-bg asymmetry documented above) but with the chroma exponent as a
+  module parameter (`@region_gamma`, ~0.55) rather than this module's fixed
+  `@chroma_keep` (0.65) -- the two agree to within a fraction of an RGB
+  channel at the shipped `@contrast_keep` (0.45), not bit-for-bit (see
+  `Raxol.UI.ColorResolver`'s moduledoc and RP-N-02).
+
+  This module's own public API (`dim_cells/1`, `dim_color/1,2`, `dim_fg/2`,
+  `dim_bg/2`, `ground_apparent_lightness/0`) is UNCHANGED and remains fully
+  functional standalone -- every function below still computes the exact
+  same `(contrast_keep 0.45, chroma_keep 0.65)` transform it always has, for
+  any direct caller (tests reference it directly today; a plugin or
+  narrower dimming need could too).
   """
 
   alias Raxol.UI.Theming.Colors, as: ThemeColors
