@@ -154,13 +154,25 @@ defmodule Raxol.Terminal.Buffer.WriterFillCellsTest do
     assert cell_at(filled, 3, 0).wide_placeholder == false
   end
 
-  test "wide char at the last column writes no placeholder" do
+  # BEHAVIOR CHANGE: this used to assert the glyph was written anyway (with
+  # no placeholder). That left the terminal drawing a two-column glyph into
+  # a one-column space, so the row painted one column wider than its own
+  # buffer and shoved whatever framed it out of alignment -- the same class
+  # of corruption as the renderer emitting placeholders. A wide glyph with
+  # nowhere to put its second half is now dropped to a blank instead of
+  # being half-placed, which is what a terminal does when it cannot fit
+  # one. (`fill_cells/3` writes at explicit coordinates and has no
+  # authority to wrap to the next row, so dropping is the only option here.)
+  test "wide char at the last column is dropped, not half-placed" do
     buffer = ScreenBuffer.new(8, 1)
     cells = [{7, 0, "字", %{foreground: :red}}]
 
     filled = Writer.fill_cells(buffer, cells)
     assert filled == oracle(buffer, cells)
-    assert cell_at(filled, 7, 0).char == "字"
+    assert cell_at(filled, 7, 0).char == " "
+    assert cell_at(filled, 7, 0).wide_placeholder == false
+    # The style still lands, so a painted background is not punched through.
+    assert cell_at(filled, 7, 0).style.foreground == :red
   end
 
   test "emoji from the pictographs range is wide" do

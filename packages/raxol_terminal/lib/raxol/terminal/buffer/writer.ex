@@ -25,8 +25,8 @@ defmodule Raxol.Terminal.Buffer.Writer do
       when x >= 0 and y >= 0 and is_map(buffer) do
     case within_bounds?(y, x, buffer.height, buffer.width) do
       true ->
-        codepoint = hd(String.to_charlist(char))
-        width = Raxol.Terminal.CharacterHandling.get_char_width(codepoint)
+        # Whole grapheme, not its first codepoint -- see `memoized_width/2`.
+        width = Raxol.Terminal.CharacterHandling.get_char_width(char)
         cell_style = create_cell_style(style)
         log_char_write(char, x, y, cell_style)
         cells = update_cells(buffer, x, y, char, cell_style, width)
@@ -178,6 +178,9 @@ defmodule Raxol.Terminal.Buffer.Writer do
         ) :: list(Cell.t())
   def update_row(row, x, char, cell_style, width, buffer_width) do
     new_cell = Cell.new(char, cell_style)
+    # Same half-of-a-wide-pair cleanup `fill_cells/3` does -- the two paths
+    # are documented to produce identical buffers.
+    row = clear_wide_neighbour_in_row(row, x, buffer_width)
 
     case {width == 2, x + 1 < buffer_width} do
       {true, true} ->
@@ -187,10 +190,48 @@ defmodule Raxol.Terminal.Buffer.Writer do
           Cell.new_wide_placeholder(cell_style)
         end)
 
+      # A wide character in the LAST column has nowhere to put its second
+      # half. Writing the glyph anyway made the terminal draw two columns
+      # into a one-column space, so the row painted one column wider than
+      # the buffer and shoved whatever framed it out of alignment. A real
+      # terminal never half-places a wide glyph: the cell is left blank
+      # (the character is dropped here rather than wrapped, because this
+      # function writes one cell at an explicit coordinate and has no
+      # authority to move to the next row).
+      {true, false} ->
+        List.update_at(row, x, fn _ -> Cell.new(" ", cell_style) end)
+
       _ ->
         List.update_at(row, x, fn _ -> new_cell end)
     end
   end
+
+  # List-based twin of `clear_wide_neighbour/4` (see its comment for why
+  # both halves of a wide pair must die together).
+  defp clear_wide_neighbour_in_row(row, x, buffer_width) do
+    row
+    |> clear_lead_in_row(x)
+    |> clear_placeholder_in_row(x, buffer_width)
+  end
+
+  defp clear_lead_in_row(row, x) when x > 0 do
+    case wide_placeholder?(Enum.at(row, x)) do
+      true -> List.update_at(row, x - 1, &Cell.new(" ", &1.style))
+      false -> row
+    end
+  end
+
+  defp clear_lead_in_row(row, _x), do: row
+
+  defp clear_placeholder_in_row(row, x, buffer_width)
+       when x + 1 < buffer_width do
+    case wide_placeholder?(Enum.at(row, x + 1)) do
+      true -> List.update_at(row, x + 1, &Cell.new(" ", &1.style))
+      false -> row
+    end
+  end
+
+  defp clear_placeholder_in_row(row, _x, _buffer_width), do: row
 
   @typedoc """
   One bulk write: `{x, y, char, style}` with the same per-cell semantics
@@ -249,7 +290,9 @@ defmodule Raxol.Terminal.Buffer.Writer do
       Enum.map_reduce(buffer.cells, {0, %{}}, fn row, {y, memo} ->
         case by_row do
           %{^y => row_cells} when y < height ->
-            {new_row, memo} = fill_row(row, row_cells, width, style_resolver, memo)
+            {new_row, memo} =
+              fill_row(row, row_cells, width, style_resolver, memo)
+
             {new_row, {y + 1, memo}}
 
           _ ->
@@ -272,7 +315,16 @@ defmodule Raxol.Terminal.Buffer.Writer do
                                              when is_integer(x) and x >= 0 ->
         case x < width do
           true ->
-            write_into(written, memo, original, x, char, style, width, style_resolver)
+            write_into(
+              written,
+              memo,
+              original,
+              x,
+              char,
+              style,
+              width,
+              style_resolver
+            )
 
           false ->
             {written, memo}
@@ -280,21 +332,57 @@ defmodule Raxol.Terminal.Buffer.Writer do
       end)
 
     case map_size(written) do
-      0 -> {row, memo}
-      _ -> {materialize_row(tuple_size(original) - 1, original, written, []), memo}
+      0 ->
+        {row, memo}
+
+      _ ->
+        {materialize_row(tuple_size(original) - 1, original, written, []), memo}
     end
   end
 
-  defp write_into(written, memo, original, x, char, style, width, style_resolver) do
-    style = resolve_style(style_resolver, style, current_cell(written, original, x))
+  defp write_into(
+         written,
+         memo,
+         original,
+         x,
+         char,
+         style,
+         width,
+         style_resolver
+       ) do
+    style =
+      resolve_style(style_resolver, style, current_cell(written, original, x))
+
     {cell_style, memo} = memoized_style(style, memo)
     {char_width, memo} = memoized_width(char, memo)
 
+    # Clearing runs for EVERY write, including the dropped-glyph branch --
+    # `update_row/6` clears unconditionally too, and `fill_cells/3` is
+    # documented to produce exactly the buffer that folding `write_char/5`
+    # produces. Skipping it here made the two paths disagree whenever a
+    # last-column wide write landed on half of an existing wide pair.
+    written = clear_wide_neighbour(written, original, x, width)
+
+    case {char_width == 2, x + 1 < width} do
+      # A wide glyph with no room for its placeholder is dropped, not
+      # half-placed -- see `update_row/6` for the reasoning.
+      {true, false} ->
+        {Map.put(written, x, Cell.new(" ", cell_style)), memo}
+
+      _ ->
+        write_glyph(written, memo, x, char, cell_style, char_width, width)
+    end
+  end
+
+  defp write_glyph(written, memo, x, char, cell_style, char_width, width) do
     written = Map.put(written, x, Cell.new(char, cell_style))
 
     case char_width == 2 and x + 1 < width do
-      true -> {Map.put(written, x + 1, Cell.new_wide_placeholder(cell_style)), memo}
-      false -> {written, memo}
+      true ->
+        {Map.put(written, x + 1, Cell.new_wide_placeholder(cell_style)), memo}
+
+      false ->
+        {written, memo}
     end
   end
 
@@ -305,8 +393,57 @@ defmodule Raxol.Terminal.Buffer.Writer do
     end
   end
 
+  # A wide character owns TWO columns: its glyph and the `wide_placeholder`
+  # after it. Writing over EITHER half must clear the other, or the pair is
+  # left half-alive and the row no longer paints its own width:
+  #
+  #   * overwrite the placeholder -> the lead glyph is orphaned but still
+  #     drawn, and still two columns wide, so the row paints one column
+  #     TOO WIDE (`日本` then "x" at the placeholder painted `日x本`).
+  #   * overwrite the lead glyph with a narrow one -> the placeholder is
+  #     orphaned, and since the renderer drops placeholders the row paints
+  #     one column TOO NARROW.
+  #
+  # Both are cleared to a blank, which is what a terminal does when a write
+  # lands inside a wide character.
+  defp clear_wide_neighbour(written, original, x, width) do
+    written
+    |> clear_orphaned_lead(original, x)
+    |> clear_orphaned_placeholder(original, x, width)
+  end
+
+  defp clear_orphaned_lead(written, original, x) when x > 0 do
+    case wide_placeholder?(current_cell(written, original, x)) do
+      true -> Map.put(written, x - 1, blank_like(written, original, x - 1))
+      false -> written
+    end
+  end
+
+  defp clear_orphaned_lead(written, _original, _x), do: written
+
+  defp clear_orphaned_placeholder(written, original, x, width)
+       when x + 1 < width do
+    case wide_placeholder?(current_cell(written, original, x + 1)) do
+      true -> Map.put(written, x + 1, blank_like(written, original, x + 1))
+      false -> written
+    end
+  end
+
+  defp clear_orphaned_placeholder(written, _original, _x, _width), do: written
+
+  defp wide_placeholder?(%{wide_placeholder: true}), do: true
+  defp wide_placeholder?(_cell), do: false
+
+  # Blanks a cell while keeping its style, so clearing half of a wide pair
+  # does not punch a hole through a painted background.
+  defp blank_like(written, original, x) do
+    Cell.new(" ", current_cell(written, original, x).style)
+  end
+
   defp resolve_style(nil, style, _current), do: style
-  defp resolve_style(style_resolver, style, current), do: style_resolver.(style, current)
+
+  defp resolve_style(style_resolver, style, current),
+    do: style_resolver.(style, current)
 
   defp memoized_style(style, memo) do
     key = {:style, style}
@@ -329,8 +466,13 @@ defmodule Raxol.Terminal.Buffer.Writer do
         {char_width, memo}
 
       _ ->
-        codepoint = hd(String.to_charlist(char))
-        char_width = Raxol.Terminal.CharacterHandling.get_char_width(codepoint)
+        # The whole GRAPHEME, not its first codepoint. Width is not always a
+        # property of the leading codepoint: a flag is a pair of regional
+        # indicators that is two columns wide, while each indicator alone is
+        # one. Reducing to `hd/1` here asked an unanswerable question and got
+        # 1, so no wide placeholder was reserved and the flag's second column
+        # was painted over by the next character.
+        char_width = Raxol.Terminal.CharacterHandling.get_char_width(char)
         {char_width, Map.put(memo, key, char_width)}
     end
   end
@@ -408,8 +550,8 @@ defmodule Raxol.Terminal.Buffer.Writer do
           {ScreenBuffer.t() | map(), non_neg_integer()}
   def write_segment(buffer, x, y, segment, style \\ nil) do
     Enum.reduce(String.graphemes(segment), {buffer, x}, fn char, {acc_buffer, acc_x} ->
-      codepoint = hd(String.to_charlist(char))
-      width = Raxol.Terminal.CharacterHandling.get_char_width(codepoint)
+      # Whole grapheme, not its first codepoint -- see `memoized_width/2`.
+      width = Raxol.Terminal.CharacterHandling.get_char_width(char)
       {write_char(acc_buffer, acc_x, y, char, style), acc_x + width}
     end)
   end
