@@ -447,33 +447,16 @@ defmodule Raxol.UI.Harness.KeymapTest do
       assert :open_panel in Keymap.command_types()
     end
 
-    test "the three panel binds appear in palette_binds/0 with their labels" do
+    test "the three panel binds carry their labels" do
       labels =
-        Keymap.palette_binds() |> Enum.map(& &1.label) |> MapSet.new()
+        Keymap.binds()
+        |> Enum.filter(&(&1.command_type == :open_panel))
+        |> Enum.map(& &1.label)
+        |> MapSet.new()
 
       assert "worktracks panel" in labels
       assert "memory panel" in labels
       assert "plan panel" in labels
-    end
-
-    test "command_for/2 yields the same payload-carrying command as a live keypress (palette invocation parity)" do
-      for {char, kind} <- @panel_chars do
-        # Filter by command_type too: the live-approval answer binds (Track
-        # D) share `n` with the plan-panel bind (an answer while a question
-        # is live wins; see Keymap's `@approval_binds` ordering note), so a
-        # bare char lookup would find the approval bind first. This parity
-        # check is about the PANEL bind specifically.
-        bind =
-          Enum.find(
-            Keymap.binds(),
-            &(Map.get(&1, :char) == char and &1.command_type == :open_panel)
-          )
-
-        assert bind.command_type == :open_panel
-
-        assert Keymap.command_for(bind, %{composing?: false}) ==
-                 %{type: :open_panel, payload: %{panel: kind}}
-      end
     end
   end
 

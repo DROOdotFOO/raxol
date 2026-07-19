@@ -38,13 +38,11 @@ defmodule Raxol.UI.Harness.Keymap do
       `InputEvent.printable_char/1` already returns `nil` whenever
       ctrl/alt/meta is held, so a modifier-qualified letter never reaches
       the char-kind match branch in the first place.
-    * **Invocation parity with the command palette**: the palette
-      enumerates `palette_binds/0` (the labeled subset of `binds/0`) and
-      invokes `command_for/2` on any entry directly (a command palette is
-      just another way to select a bind, not a second source of truth for
-      what commands exist). `command_types/0` is the exact union this
-      module can ever emit -- there are no commands hiding outside the
-      table.
+    * **One command vocabulary**: `command_types/0` is the exact union
+      this module can ever emit -- there are no commands hiding outside
+      the table. (The legacy Surface palette's derive/invoke pair,
+      `palette_binds/0` + `command_for/2`, retired with it; the TEA
+      palette is `Raxol.UI.Components.Harness.Picker`-driven.)
 
   ## The composer-focus guard
 
@@ -79,10 +77,9 @@ defmodule Raxol.UI.Harness.Keymap do
       a composing?-only guard would fire them (see the "overlay-open ESC
       capture" section). `e` (expand the focused diff block full-screen)
       rides the exact same guard for the exact same reason: it is plain
-      typed text while composing, and `Raxol.Harness.Surface` reports its
-      own footer-region expansion through the SAME `overlay_open?` context
-      flag an open overlay picker already uses (see that module's "Full-
-      screen diff expansion" section) -- so `e` is suppressed while an
+      typed text while composing, and `HarnessApp` reports its own
+      expansion overlay through the SAME `overlay_open?` context flag an
+      open overlay picker already uses -- so `e` is suppressed while an
       expansion is already open too, not just while an overlay is. It
       cannot collide with the Ctrl+E editor-handoff chord below:
       `InputEvent.printable_char/1` is `nil` whenever ctrl is held, so a
@@ -97,8 +94,8 @@ defmodule Raxol.UI.Harness.Keymap do
 
   ## The overlay-open ESC capture (order is load-bearing)
 
-  An open `Raxol.UI.Harness.OverlayPicker` (hosted by
-  `Raxol.Harness.Surface.open_overlay/3`) needs ESC to close ITSELF, not
+  An open overlay picker (hosted by the TEA `Raxol.Harness.HarnessApp`
+  as an `:absolute_layer` child) needs ESC to close ITSELF, not
   fire the global interrupt -- an overlay is transient UI-local state, and
   a stray ESC-while-picking must never look like a supervised kill of the
   running turn. `binds/0`'s FIRST entry (`%{key: :escape, command_type:
@@ -116,9 +113,9 @@ defmodule Raxol.UI.Harness.Keymap do
   behind the overlay. Enter/printable chars/arrows
   are deliberately NOT added to the table for the overlay: they stay
   `:passthrough` even with `context.overlay_open?: true` (see
-  `matches?/3`'s test coverage) -- the assembly layer (`Surface`) is the
-  one that already has the picker's state and routes those to
-  `Raxol.UI.Harness.OverlayPicker.handle_key/2` itself.
+  `matches?/3`'s test coverage) -- the assembly layer (`HarnessApp`) is
+  the one that already has the picker's state and routes those to the
+  picker Component itself.
 
   The `guard: :overlay` fail-safe direction is the OPPOSITE of
   `:not_composing`'s, and deliberately so: `guard_passes?/2` reads
@@ -226,17 +223,14 @@ defmodule Raxol.UI.Harness.Keymap do
   `:open_session_picker` (`g`/`s`): transcript-browse only, filter text
   while an overlay is open, typed text while composing.
 
-  ## Palette derivation (the `label` field)
+  ## The `label` field
 
-  A bind opts into the command palette by declaring a `label:` -- a short,
-  human-readable string. `palette_binds/0` is exactly the labeled subset
-  of `binds/0`, in table order; nothing else decides what appears in the
-  palette. The overlay-only `:overlay_dismiss` bind is deliberately left
-  unlabeled: the palette IS itself an overlay, so listing "dismiss the
-  overlay" as something the palette can invoke on itself would be
-  nonsensical. Every other bind that names a discrete, invokable action
-  carries a label; adding a new labeled bind to the table is the only
-  change needed to make it appear in the palette.
+  A bind that names a discrete, invokable action carries a `label:` -- a
+  short, human-readable string describing it. The label is descriptive
+  metadata only; nothing in the runtime derives from it. (It once fed
+  the legacy Surface palette's `palette_binds/0` listing; that derive
+  seam retired with the map-machine. The overlay-only `:overlay_dismiss`
+  bind is deliberately left unlabeled.)
   """
 
   alias Raxol.UI.Harness.InputEvent
@@ -358,16 +352,15 @@ defmodule Raxol.UI.Harness.Keymap do
              guard: :always,
              label: "edit draft in external editor"
            },
-           # Scrollback for the `:full_viewport` surface's owned virtual
+           # Scrollback for the full-viewport mode's owned virtual
            # scrollback (inert in the inline/flat tiers, which use the
            # terminal's OWN native scrollback). PgUp/PgDn are ALWAYS live
            # (non-printable named keys -- they can never be typed text, and
            # transcript scroll takes priority over a multi-line draft's own
            # paging while composing, V's ruling). No `label:` -- they are
-           # live keys, not palette entries (a palette entry inert in three
-           # of four modes would be dishonest). See
-           # `Raxol.Harness.Surface`'s `:scroll_up`/`:scroll_down`/
-           # `:scroll_to_tail` dispatch.
+           # live keys, not pick-list entries (a pick-list entry inert in
+           # three of four modes would be dishonest). See HarnessApp's
+           # `:scroll_up`/`:scroll_down`/`:scroll_to_tail` dispatch.
            %{key: :page_up, command_type: :scroll_up, guard: :always},
            %{key: :page_down, command_type: :scroll_down, guard: :always}
            # The live-approval answer binds are spliced in HERE, ahead of every
@@ -432,11 +425,10 @@ defmodule Raxol.UI.Harness.Keymap do
              },
              # Printable-letter binds, same guard class as z/j/k: they only resolve
              # in transcript-browse mode, never stealing a letter out of the
-             # composer's typed text. The `label:` makes them palette entries
-             # automatically (palette_binds/0 derives from labels). "p" is NOT
-             # used for plan -- Ctrl+P is the palette chord, and a bare "p" beside
-             # it invites slips -- so "n" is used instead. The payload discriminates
-             # which panel kind one shared :open_panel command type opens.
+             # composer's typed text. "p" is NOT used for plan -- Ctrl+P is the
+             # palette chord, and a bare "p" beside it invites slips -- so "n"
+             # is used instead. The payload discriminates which panel kind one
+             # shared :open_panel command type opens.
              %{
                char: "w",
                command_type: :open_panel,
@@ -495,44 +487,18 @@ defmodule Raxol.UI.Harness.Keymap do
   end
 
   @doc """
-  The keymap as data -- one entry per v1 bind. Exposed so T15's command
-  palette can enumerate every invokable command without a second table.
+  The keymap as data -- one entry per v1 bind. Exposed so hosts can
+  enumerate every invokable command without a second table.
   """
   @spec binds() :: [bind()]
   def binds, do: @binds
 
   @doc """
   The exact set of command types this module can ever emit -- the union
-  `binds/0` declares, nothing hidden outside the table. Used by the
-  invocation-parity test and available to T15 for the same reason.
+  `binds/0` declares, nothing hidden outside the table.
   """
   @spec command_types() :: [command_type()]
   def command_types, do: @binds |> Enum.map(& &1.command_type) |> Enum.uniq()
-
-  @doc """
-  The labeled subset of `binds/0` -- a bind opts into palette listing by
-  declaring a `label:`; derived from the table, never a parallel list.
-  See `picker_binds_test.exs`'s "palette derivation" describe.
-  """
-  @spec palette_binds() :: [bind()]
-  def palette_binds, do: Enum.filter(@binds, &Map.has_key?(&1, :label))
-
-  @doc """
-  Emits the exact command `resolve/2` would dispatch for an event matching
-  `bind`, without needing a live `InputEvent.t()` -- this is what makes the
-  command palette's invocation parity real: it can invoke any
-  `palette_binds/0` entry directly instead of needing to fabricate a
-  matching keypress. A bare `nil` context normalizes to `%{}`, same as
-  `resolve/2`. `:fold_toggle` threads `context.focused_block_id` into the
-  payload exactly like a live keypress would (see
-  `picker_binds_test.exs`'s "command_for/2 threads context into
-  :fold_toggle's payload" case).
-  """
-  @spec command_for(bind(), context() | nil) :: command()
-  def command_for(bind, context \\ %{})
-
-  def command_for(bind, nil), do: command_for(bind, %{})
-  def command_for(bind, context), do: build_command(bind, context)
 
   @doc """
   Resolve a normalized `InputEvent.t()` (see `Raxol.UI.Harness.InputEvent`
