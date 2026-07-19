@@ -472,7 +472,7 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       ]
     end
 
-    test "a FOLDED tool renders exactly ONE line: glyph + name + unquoted args, NO receipt, no result body" do
+    test "a FOLDED tool renders exactly ONE humanized verb line: NO receipt, no result body" do
       block =
         Block.from_events(
           :tool_call,
@@ -484,14 +484,80 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       texts = flat_texts(Block.render(block, %{width: 120}))
 
       assert [line] = texts
-      assert line =~ "⚙ list_dir"
-      # Fix 1: unquoted `key: value`, no braces/quotes; NO `· ✓ N lines`
-      # receipt suffix.
-      assert line =~ "path: ."
-      refute line =~ "path: \".\""
+      # V's verb ruling: what the agent is DOING to WHAT, never the raw
+      # tool vocabulary.
+      assert line == "⚙ looking through ."
+      refute line =~ "list_dir"
       refute line =~ "✓ 4 lines"
       refute line =~ "Tool Result"
       refute Enum.any?(texts, &(&1 == "a"))
+    end
+
+    test "the verb vocabulary (V's ruling): every wired tool reads as a doing-phrase" do
+      line = fn name, args ->
+        [l | _] =
+          Block.from_events(
+            :tool_call,
+            tool_events(name, args, "ok"),
+            fold: :folded,
+            seal: :sealed
+          )
+          |> Block.render(%{width: 120})
+          |> flat_texts()
+
+        l
+      end
+
+      assert line.("read_file", %{path: "./lib/a.ex"}) ==
+               "⚙ reading ./lib/a.ex"
+
+      assert line.("file_stat", %{path: "mix.exs"}) ==
+               "⚙ checking metadata of mix.exs"
+
+      assert line.("grep", %{pattern: "defmodule", path: "lib/a.ex"}) ==
+               ~s(⚙ searching for "defmodule" in lib/a.ex)
+
+      assert line.("run_shell", %{command: "mix test"}) ==
+               "⚙ execute mix test"
+
+      assert line.("write_file", %{path: "out.txt"}) == "⚙ writing out.txt"
+      assert line.("edit_file", %{path: "mix.exs"}) == "⚙ editing mix.exs"
+
+      # unknown tools keep the honest raw fallback — never a verb with a
+      # hole in it
+      assert line.("mystery_tool", %{x: 1}) =~ "mystery_tool"
+    end
+
+    test "glob renders as a segment row: wildcards one register quieter than the literal pieces" do
+      block =
+        Block.from_events(
+          :tool_call,
+          tool_events("glob", %{pattern: "lib/**/*.ex"}, "a.ex"),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      [row] = Block.render(block, %{width: 120}).children
+      assert row.type == :row
+
+      segs = Enum.map(row.children, &{&1.content, &1.style})
+      joined = Enum.map_join(segs, "", &elem(&1, 0))
+      assert joined == "⚙ looking for lib/**/*.ex"
+
+      # the wildcards sit one register QUIETER than the literal pieces:
+      # a sealed tool line already carries the machinery fade, so the
+      # discriminator is a DIFFERENT (darker) fg on the stars, never the
+      # mere presence of one
+      [star_fg | _] =
+        star_fgs = for {t, st} <- segs, t in ["**", "*"], do: st[:fg]
+
+      assert star_fgs != []
+      assert Enum.all?(star_fgs, &is_binary/1)
+      assert Enum.uniq(star_fgs) == [star_fg]
+
+      literal_fgs = for {t, st} <- segs, t in ["lib/", ".ex"], do: st[:fg]
+      assert literal_fgs != []
+      assert Enum.all?(literal_fgs, &(&1 != star_fg))
     end
 
     test "the folded tool line is DIM (machinery register), never full-weight" do

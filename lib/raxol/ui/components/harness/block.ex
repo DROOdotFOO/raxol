@@ -241,6 +241,12 @@ defmodule Raxol.UI.Components.Harness.Block do
   # in `HarnessApp.Model`'s spinner frame (the animation clock lived in
   # the retired `Raxol.Harness.Surface`). All are
   # width-1, text-presentation (see `glyph_inventory/0`).
+  # Chrome neutral baseline (matches DiffViewer's neutral chrome colour)
+  # faded per `context[:prominence]`. Absent or 1.0 prominence resolves to
+  # a nil fade colour (see `prominence_fg/1`), which `apply_fg/2` leaves
+  # the style untouched for -- neutral by default.
+  @chrome_fg "#B4B4B4"
+
   @reasoning_collapsed_glyph "⁖"
   @reasoning_open_glyph "∵"
   @reasoning_close_glyph "∴"
@@ -889,13 +895,23 @@ defmodule Raxol.UI.Components.Harness.Block do
   # FAILED tool keeps alarm prominence (never dim -- a failed tool is a
   # signal, not machinery noise).
   defp header_view(%__MODULE__{kind: :tool_call} = block, width, fg, context) do
-    line = tool_line(block, context)
     style = if tool_failed?(block.outcome), do: %{}, else: %{dim: true}
 
-    Components.text(
-      content: TextLayout.truncate(line, max(width, 1), :ellipsis),
-      style: apply_fg(style, fg)
-    )
+    case tool_line_segments(block, context) do
+      nil ->
+        Components.text(
+          content:
+            TextLayout.truncate(
+              tool_line(block, context),
+              max(width, 1),
+              :ellipsis
+            ),
+          style: apply_fg(style, fg)
+        )
+
+      segments ->
+        tool_segment_row(segments, block, context, width, style, fg)
+    end
   end
 
   # The FOLDED thought header: `⁖ thinking` flush left, the honest
@@ -945,11 +961,58 @@ defmodule Raxol.UI.Components.Harness.Block do
     )
   end
 
-  # Chrome neutral baseline (matches DiffViewer's neutral chrome colour)
-  # faded per `context[:prominence]`. Absent or 1.0 prominence resolves to
-  # a nil fade colour (see `prominence_fg/1`), which `apply_fg/2` leaves
-  # the style untouched for -- neutral by default.
-  @chrome_fg "#B4B4B4"
+  # The humanized tool line as STYLED SEGMENTS (V's verb-render ruling:
+  # glob's wildcards render one register quieter than the literal path
+  # pieces). Emitted as one physical :row of text leaves only when the
+  # whole line fits the width budget — an overflowing line falls back to
+  # the plain truncated form (`tool_line/2`'s verb path), trading the
+  # highlight for the honest ellipsis.
+  defp tool_segment_row(segments, block, context, width, style, fg) do
+    prefix = "#{tool_glyph(block.content, block.outcome, context)} "
+    suffix = tool_taint_suffix(block.content)
+
+    total =
+      TextMeasure.display_width(
+        prefix <> Enum.map_join(segments, "", &elem(&1, 0)) <> suffix
+      )
+
+    if total > max(width, 1) do
+      Components.text(
+        content:
+          TextLayout.truncate(
+            tool_line(block, context),
+            max(width, 1),
+            :ellipsis
+          ),
+        style: apply_fg(style, fg)
+      )
+    else
+      base = apply_fg(style, fg)
+
+      children =
+        [Components.text(content: prefix, style: base)] ++
+          Enum.map(segments, fn
+            {text, :base} ->
+              Components.text(content: text, style: base)
+
+            {text, :quiet} ->
+              Components.text(content: text, style: quiet_style(base))
+          end) ++
+          if(suffix == "",
+            do: [],
+            else: [Components.text(content: suffix, style: base)]
+          )
+
+      Components.row(gap: 0, children: children)
+    end
+  end
+
+  # One register quieter than the (already dim) machinery line: the same
+  # fade ramp everything quiet uses, so the wildcards read as syntax
+  # around the literal pieces rather than content of their own.
+  defp quiet_style(base) do
+    Map.put(base, :fg, Prominence.resolve(@chrome_fg, 0.45))
+  end
 
   # Applies an already-resolved fade colour to a style map. `nil` (the
   # neutral / no-prominence case) leaves the style byte-identical.
@@ -1120,12 +1183,85 @@ defmodule Raxol.UI.Components.Harness.Block do
   # suffix is the taint marker: `⚠︎ untrusted` is a security provenance
   # signal, not a receipt, so it is never dropped.
   defp tool_line(%__MODULE__{content: content} = block, context) do
-    name = tool_name(content)
     glyph = tool_glyph(content, block.outcome, context)
-    args = format_args(Map.get(content, :args))
 
-    "#{glyph} #{name}#{args}#{tool_taint_suffix(content)}"
+    body =
+      tool_verb_line(content) ||
+        "#{tool_name(content)}#{format_args(Map.get(content, :args))}"
+
+    "#{glyph} #{body}#{tool_taint_suffix(content)}"
   end
+
+  # The humanized verb form (V's ruling): the line says what the agent is
+  # DOING to WHAT — "reading ./mix.exs", never "read_file path: mix.exs".
+  # Unknown tools and missing referents fall back to the raw name+args
+  # gloss (honest, never a verb with a hole in it).
+  defp tool_verb_line(content) do
+    args = Map.get(content, :args) || %{}
+
+    case tool_name(content) do
+      "read_file" -> verb_with(args, "path", "reading")
+      "list_dir" -> verb_with(args, "path", "looking through")
+      "file_stat" -> verb_with(args, "path", "checking metadata of")
+      "grep" -> grep_verb_line(args)
+      "run_shell" -> verb_with(args, "command", "execute")
+      "write_file" -> verb_with(args, "path", "writing")
+      "edit_file" -> verb_with(args, "path", "editing")
+      _other -> nil
+    end
+  end
+
+  defp verb_with(args, key, verb) do
+    case arg_value(args, key) do
+      nil -> nil
+      value -> "#{verb} #{value}"
+    end
+  end
+
+  defp grep_verb_line(args) do
+    with pattern when is_binary(pattern) <- arg_value(args, "pattern") do
+      case arg_value(args, "path") do
+        nil -> ~s(searching for "#{pattern}")
+        path -> ~s(searching for "#{pattern}" in #{path})
+      end
+    end
+  end
+
+  # glob gets the SEGMENT form: wildcards (*, **, ?, [..]) one register
+  # quieter than the literal path pieces — the gentle syntax highlight.
+  # Every other tool renders a plain verb string (nil here).
+  defp tool_line_segments(%__MODULE__{content: content}, _context) do
+    args = Map.get(content, :args) || %{}
+
+    with "glob" <- tool_name(content),
+         pattern when is_binary(pattern) and pattern != "" <-
+           arg_value(args, "pattern") do
+      [{"looking for ", :base} | glob_pattern_segments(pattern)]
+    else
+      _other -> nil
+    end
+  end
+
+  defp glob_pattern_segments(pattern) do
+    ~r/(\*\*|\*|\?|\[[^\]]*\])/
+    |> Regex.split(pattern, include_captures: true, trim: true)
+    |> Enum.map(fn piece ->
+      if piece =~ ~r/^(\*\*|\*|\?|\[[^\]]*\])$/,
+        do: {piece, :quiet},
+        else: {piece, :base}
+    end)
+  end
+
+  defp arg_value(args, key) when is_map(args) do
+    case Map.get(args, key) || Map.get(args, String.to_existing_atom(key)) do
+      value when is_binary(value) and value != "" -> value
+      _other -> nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp arg_value(_args, _key), do: nil
 
   defp tool_name(content) do
     case Map.get(content, :name) do
