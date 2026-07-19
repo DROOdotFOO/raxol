@@ -1,7 +1,6 @@
 # T0 runbook — running the keystone matrix
 
 Date: 2026-07-15 · Status: **v1**. Companion to
-`harness-ui-testing/01-t0-matrix.md` (the test design this runs),
 `t0-verdict-schema.md` (the file this writes to), and
 `scripts/harness/t0/` (everything referenced below lives there).
 
