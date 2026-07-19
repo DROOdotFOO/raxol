@@ -87,8 +87,9 @@ defmodule Raxol.Harness.HarnessApp.View do
     {:ok, state} =
       TranscriptView.init(
         id: "harness-transcript",
-        # held newest-first; the view renders oldest-first
-        records: Enum.reverse(model.transcript_records),
+        # held newest-first; the view renders oldest-first, then the live
+        # frontier block (an awaiting approval) appended at the very bottom
+        records: Enum.reverse(model.transcript_records) ++ live_body_records(model),
         height: transcript_h,
         anchor: model.scroll_anchor,
         width: cw,
@@ -97,6 +98,25 @@ defmodule Raxol.Harness.HarnessApp.View do
       )
 
     TranscriptView.render(state, %{available_width: cw})
+  end
+
+  # A live approval (awaiting the operator) is the "special tool render": its
+  # FULL Pierre diff renders INLINE at the bottom of the body, not the 2-line
+  # footer stub `pending_block_lines/4` produced. It is unsealed (holds the
+  # seal frontier at `painted_count`), so it can't be a real transcript_record
+  # yet -- instead it rides as a trailing TranscriptView record, windowed at
+  # the bottom exactly like sealed history, and `preview_lines/2` suppresses it
+  # in the footer so it never double-renders. The operator's fold override
+  # still applies (z toggles it). Full prominence -- it's the current focus.
+  defp live_body_records(model) do
+    case Model.live_approval_block(model) do
+      nil ->
+        []
+
+      block ->
+        block = Model.apply_fold_override(block, model.painted_count, model.fold_overrides)
+        [{:block, block, 1.0}]
+    end
   end
 
   # ── footer (FooterStack + its groups) ───────────────────────────────────
@@ -148,9 +168,19 @@ defmodule Raxol.Harness.HarnessApp.View do
   defp preview_lines(%{overlay: overlay}, _cw) when overlay != nil, do: []
 
   defp preview_lines(model, cw) do
-    case pending_block(model) do
-      nil -> live_tail_lines(model, cw)
-      {block, index} -> pending_block_lines(model, block, index, cw)
+    # A live approval renders INLINE in the body now (transcript tail, full
+    # diff -- see `live_body_records/1`), so it must NOT also appear in the
+    # footer preview. When one is live it IS the pending block (it holds the
+    # frontier at `painted_count`), so drop to the streaming tail here: the
+    # footer preview keeps only a still-accumulating reasoning/answer item,
+    # never the approval.
+    if Model.live_approval_block(model) do
+      live_tail_lines(model, cw)
+    else
+      case pending_block(model) do
+        nil -> live_tail_lines(model, cw)
+        {block, index} -> pending_block_lines(model, block, index, cw)
+      end
     end
   end
 

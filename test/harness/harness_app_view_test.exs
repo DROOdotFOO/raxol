@@ -26,6 +26,13 @@ defmodule Raxol.Harness.HarnessAppViewTest do
 
   defp flatten_text(_), do: ""
 
+  # The root tree is `[transcript_element, footer_element]` (View.render/1);
+  # split the two so a test can assert WHICH region a widget landed in.
+  defp body_and_footer(view) do
+    [body, footer | _] = view.children
+    {flatten_text(body), flatten_text(footer)}
+  end
+
   # ── windowing (law 7 + perf) ────────────────────────────────────────────
 
   describe "TranscriptView row-aware windowing" do
@@ -248,6 +255,45 @@ defmodule Raxol.Harness.HarnessAppViewTest do
 
       overlaid = %{model | overlay: {:panel, :memory}}
       refute flatten_text(View.render(overlaid)) =~ "thinking"
+    end
+  end
+
+  describe "a live approval renders its diff INLINE in the body, not the footer" do
+    # The canonical layout: the diff is the SPECIAL TOOL RENDER, in the main
+    # log (body) -- not a footer preview clipped to 2 rows. A live edit
+    # approval carrying old/new must show its full ± Pierre diff in the
+    # transcript and NOT in the footer.
+    test "the ± diff shows in the transcript body, never the footer" do
+      model =
+        stream_model([
+          loop_ev(1, "t1", 100, :turn_started, %{}),
+          loop_ev(2, "t1", 110, :approval_requested, %{
+            "request_id" => "appr-1",
+            "tool_name" => "edit_file",
+            "action" => "edit_file",
+            "path" => "mix.exs",
+            "old" => "keep-a\nOLDLINE\nkeep-b\n",
+            "new" => "keep-a\nNEWLINE\nkeep-b\n",
+            "language" => "elixir",
+            "preview_match" => "exact",
+            "diff" => true,
+            "options" => [
+              %{"option_id" => "allow", "name" => "Allow", "kind" => "allow_once"},
+              %{"option_id" => "deny", "name" => "Deny", "kind" => "reject_once"}
+            ]
+          })
+        ])
+
+      {body, footer} = body_and_footer(View.render(model))
+
+      # the ± diff BODY lands in the transcript (the special tool render)
+      assert body =~ "± mix.exs", "the ± diff header must render in the body"
+      assert body =~ "OLDLINE", "the removed line must render in the body"
+      assert body =~ "NEWLINE", "the added line must render in the body"
+
+      # ... and NOT in the footer (no clipped 2-line stub, no double-render)
+      refute footer =~ "± mix.exs", "the diff must NOT render in the footer"
+      refute footer =~ "OLDLINE", "the diff body must NOT render in the footer"
     end
   end
 end
