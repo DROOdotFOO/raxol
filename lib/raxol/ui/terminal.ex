@@ -256,7 +256,13 @@ defmodule Raxol.UI.Terminal do
   end
 
   defp calculate_box_dimensions(lines, opts) do
-    content_width = Enum.max_by(lines, &String.length/1) |> String.length()
+    # Display columns, not grapheme count -- a box sized by `String.length/1`
+    # is half the width it needs the moment its content contains CJK or emoji.
+    content_width =
+      lines
+      |> Enum.map(&Raxol.UI.TextMeasure.display_width/1)
+      |> Enum.max(fn -> 0 end)
+
     content_height = length(lines)
     width = Keyword.get(opts, :width, content_width + 4)
     height = Keyword.get(opts, :height, content_height + 2)
