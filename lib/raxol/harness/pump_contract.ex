@@ -95,7 +95,7 @@ defmodule Raxol.Harness.PumpContract do
   | `{:approval_answer_result, result}` | fifo | pump, one per executed approval-answer directive | `:ok`: "approval answer sent"; error: dispatch-failure notice. The decision receipt folds from the `approval_decided` batch event |
   | `{:stall_verdict, verdict}` | fifo | pump (StallDetector mechanics: observations scanned from forwarded items + the ticker) | model owns the RENDER decision: suppress while `needs_input` (operator-paced ≠ stalled), clear on `:ok` class, else show |
   | `{:editor_result, outcome}` | fifo | pump, exactly one per executed editor directive (§7) | `:ok`: replace composer draft; `:kept`: kept-notice; `:error`: abort notice; non-empty `degraded` MUST surface a footer warning |
-  | `{:isig_reasserted}` | fifo | pump ← `InlineDriver` `{:inline_isig_reasserted}` | honest footer notice: the tty's `-isig` was re-asserted after an external flip |
+  | `{:isig_reasserted}` | fifo | pump ← `InlineDriver` `{:inline_isig_reasserted}` | honest footer warning: a `-isig` re-assert did NOT stick (the driver only reports the failure case; a re-assert that sticks is silent janitorial work) |
   | `{:lane_notice, text_or_nil}` | fifo | embedder (DevTools bridge) via pump | set/clear the persistent footer lane notice |
   | `{:debug_highlight, group_or_nil}` | fifo | embedder (DevTools bridge) via pump | display-only footer-group highlight; unknown group clears (fail-safe) |
   | `{:seal_lines, lines}` | fifo | embedder (boot POST) via pump | seal each line into history via the marker path; non-binaries seal as `inspect/1` (never dropped) |
@@ -501,10 +501,13 @@ defmodule Raxol.Harness.PumpContract do
     do: {:editor_result, {:error, {:invalid_editor_outcome, inspect(other)}}}
 
   @doc """
-  FIFO · pump ← `InlineDriver` `{:inline_isig_reasserted}` — the tty's
-  `-isig` was flipped back on by something external and the driver
-  re-asserted raw mode. Fold: honest footer notice so the pilot sees it
-  happen.
+  FIFO · pump ← `InlineDriver` `{:inline_isig_reasserted}` — the driver
+  found `isig` flipped back on, re-asserted raw mode, and the re-assert
+  did NOT stick (verified against the live flags). A re-assert that
+  sticks is silent janitorial work (prim_tty re-owns the termios at
+  unbounded points; that churn is counted in `isig_report/1`, never
+  announced). Fold: honest footer warning — Ctrl-C may genuinely kill
+  the session.
   """
   @spec isig_reasserted() :: isig_msg()
   def isig_reasserted, do: {:isig_reasserted}

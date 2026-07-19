@@ -299,7 +299,8 @@ defmodule Raxol.Terminal.InlineDriverTest do
 
       send(pid, {:trace, self(), :send, {make_ref(), {:data, "a"}}, self()})
 
-      assert_receive {:inline_input, %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
                      1_000
 
       GenServer.stop(pid)
@@ -323,7 +324,8 @@ defmodule Raxol.Terminal.InlineDriverTest do
 
       send(pid, {port, {:data, "q"}})
 
-      assert_receive {:inline_input, %Raxol.Core.Events.Event{type: :key, data: %{char: "q"}}},
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{type: :key, data: %{char: "q"}}},
                      1_000
 
       Port.close(port)
@@ -349,7 +351,8 @@ defmodule Raxol.Terminal.InlineDriverTest do
       # The raw chunk arrives exactly as read, before parsing split it.
       assert_receive {:inline_raw_input, ^chunk}, 1_000
       # And the parsed event path is unchanged.
-      assert_receive {:inline_input, %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
                      1_000
 
       GenServer.stop(pid)
@@ -416,7 +419,8 @@ defmodule Raxol.Terminal.InlineDriverTest do
     end
 
     defp feed_chunk(pid, data),
-      do: send(pid, {:trace, self(), :send, {make_ref(), {:data, data}}, self()})
+      do:
+        send(pid, {:trace, self(), :send, {make_ref(), {:data, data}}, self()})
 
     test "a paste split mid-body (before its first newline) does not submit",
          %{pid: pid} do
@@ -461,7 +465,8 @@ defmodule Raxol.Terminal.InlineDriverTest do
       # hostage by the pending paste tail.
       feed_chunk(pid, "a\e[200~partial")
 
-      assert_receive {:inline_input, %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
                      1_000
 
       feed_chunk(pid, " rest\e[201~")
@@ -506,7 +511,7 @@ defmodule Raxol.Terminal.InlineDriverTest do
       end
     end
 
-    test "the FIRST re-assert is silent boot settling; the SECOND is announced",
+    test "re-asserts are silent janitorial work — counted, never announced (the SIGINT trap owns ^C)",
          %{sio: sio} do
       {:ok, pid} =
         InlineDriver.start_link(
@@ -518,33 +523,31 @@ defmodule Raxol.Terminal.InlineDriverTest do
           install_reader?: false,
           probe?: false,
           isig_guard_every: 3,
-          # Injected flags reader: the tty reports ISIG ON (isig_off? false).
+          # ISIG reads ON at every guard check (the prim_tty flip-war's
+          # steady state on some hosts — it wins any stty race). Not
+          # news: ^C reaches the subscriber via the trapped-signal path
+          # regardless, so NO round ever notifies — the counter alone
+          # records the churn (the first-N-threshold approach failed
+          # exactly here in the field: round 2 was still noise).
           isig_flags_reader: fn -> false end
         )
 
       calls_before = Enum.count(InlineDriverMockStty.calls(), &(&1 == {:raw!}))
 
-      # First guard hit: the predictable prim_tty handshake — re-asserted
-      # and COUNTED, but never announced (no footer notice on first input).
       feed(pid, 3)
       refute_receive {:inline_isig_reasserted}, 300
 
       assert Enum.count(InlineDriverMockStty.calls(), &(&1 == {:raw!})) >
                calls_before
 
-      report = InlineDriver.isig_report(pid)
-      assert report.reasserts == 1
-      assert report.isig_off? == false
-
-      # Second guard hit: something touched the tty mid-session — loud.
       feed(pid, 3)
-      assert_receive {:inline_isig_reasserted}, 1_000
+      refute_receive {:inline_isig_reasserted}, 300
 
       # The report goes through the REAL GenServer call path (regression:
       # a clause defined below the module's catch-all was unreachable and
       # returned {:error, :not_implemented} to the demo's POST line).
       report = InlineDriver.isig_report(pid)
-      assert report.reasserts >= 2
+      assert report.reasserts == 2
       assert report.isig_off? == false
       assert is_boolean(report.boot_confirmed?)
 

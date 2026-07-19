@@ -163,6 +163,8 @@ defmodule Raxol.Terminal.InlineDriver do
               isig_flags_reader: nil,
               isig_boot_confirmed?: false,
               isig_reasserts: 0,
+              reader_mode: :prim_tty,
+              reader_port: nil,
               paste_pending: <<>>
 
     @type t :: %__MODULE__{
@@ -181,6 +183,8 @@ defmodule Raxol.Terminal.InlineDriver do
             isig_flags_reader: (-> boolean()) | nil,
             isig_boot_confirmed?: boolean(),
             isig_reasserts: non_neg_integer(),
+            reader_mode: :fd_port | :prim_tty,
+            reader_port: port() | nil,
             # Held bytes of a bracketed paste whose `ESC[201~` close has not
             # arrived yet -- see `dispatch_input/2`'s reassembly note.
             paste_pending: binary()
@@ -227,6 +231,27 @@ defmodule Raxol.Terminal.InlineDriver do
     isig_flags_reader =
       Keyword.get(opts, :isig_flags_reader, &Stty.isig_off?/0)
 
+    # Which stdin reader to arm (`install_reader?` true):
+    #
+    #   * `:fd_port` — an `{:fd, 0, 1}` port reading fd 0 directly,
+    #     BYPASSING the BEAM io system. prim_tty never engages, so the
+    #     `stty -isig` set at boot HOLDS: ^C arrives as byte 0x03 to the
+    #     parser and the arm-quit protocol owns it. This is the durable
+    #     ^C contract — the prim_tty trace reader provably loses the
+    #     termios war (prim_tty re-applies ISIG-on raw mode at unbounded
+    #     points and wins any stty race; `:os.set_signal/2` cannot trap
+    #     `:sigint` — it is VM-reserved on every OTP — so once the
+    #     kernel eats the byte the BREAK menu is unavoidable).
+    #   * `:prim_tty` — the trace hook on `:user_drv_reader` (starts a
+    #     raw shell reader inside the BEAM io system). The DEFAULT: the
+    #     fd port looked like the war's clean exit, but with prim_tty
+    #     left in its noshell state the io system re-cooks the termios
+    #     on write activity (field run: input degraded mid-session and
+    #     the BREAK menu fired anyway) — the trace reader at least keeps
+    #     prim_tty pinned to ITS raw mode. `:fd_port` stays available
+    #     for embedders that own their whole io path.
+    reader_mode = Keyword.get(opts, :reader, :prim_tty)
+
     state = %State{
       dispatcher_pid: dispatcher_pid,
       subscriber: subscriber,
@@ -237,14 +262,16 @@ defmodule Raxol.Terminal.InlineDriver do
       tty?: tty?,
       rows: rows,
       isig_guard_every: isig_guard_every,
-      isig_flags_reader: isig_flags_reader
+      isig_flags_reader: isig_flags_reader,
+      reader_mode: reader_mode
     }
 
     state =
       if stty_enabled? do
         %{
           state
-          | original_stty: normalize_saved_stty(safe_stty_call(stty_module, :save, []))
+          | original_stty:
+              normalize_saved_stty(safe_stty_call(stty_module, :save, []))
         }
       else
         state
@@ -276,7 +303,7 @@ defmodule Raxol.Terminal.InlineDriver do
 
     state =
       if install_reader? do
-        start_stdin_reader()
+        state = start_stdin_reader(state)
 
         # Re-assert raw termios AFTER the reader is armed: user_drv's
         # `{:start_shell, %{input: :raw}}` makes prim_tty re-initialize
@@ -414,6 +441,7 @@ defmodule Raxol.Terminal.InlineDriver do
     # -- it MUST thread the returned state back into the GenServer state so
     # this terminate/2 call sees `torn_down?: true` and the idempotency
     # guard fires (otherwise CSI r / cursor reposition double-emits).
+    if is_port(state.reader_port), do: safe_port_close(state.reader_port)
     _ = emit_teardown(state.device, state)
     :ok
   end
@@ -803,7 +831,19 @@ defmodule Raxol.Terminal.InlineDriver do
   # shell and drops user_drv into a JCL prompt that swallows all input)
   # arms it, and tracing the reader's sends intercepts input data before
   # user_drv forwards it anywhere else.
-  defp start_stdin_reader do
+  # `:fd_port`: read fd 0 directly — no prim_tty, no termios war, byte
+  # 0x03 stays a byte. `:prim_tty`: the legacy trace hook (see the
+  # `reader_mode` decision note in init_manager/1).
+  defp start_stdin_reader(%State{reader_mode: :fd_port} = state) do
+    port = :erlang.open_port({:fd, 0, 1}, [:binary, :eof, :stream])
+    %{state | reader_port: port}
+  rescue
+    # An environment where the fd port cannot open (no fd 0) degrades to
+    # the legacy reader rather than a dead keyboard.
+    _ -> start_stdin_reader(%{state | reader_mode: :prim_tty})
+  end
+
+  defp start_stdin_reader(%State{reader_mode: :prim_tty} = state) do
     user_drv = Process.whereis(:user_drv)
 
     if user_drv do
@@ -824,7 +864,7 @@ defmodule Raxol.Terminal.InlineDriver do
       send(reader, {:read, :infinity})
     end
 
-    :ok
+    state
   end
 
   # Bounded verify-then-assert for the post-reader-arm `-isig`
@@ -889,22 +929,31 @@ defmodule Raxol.Terminal.InlineDriver do
       state
     else
       safe_stty_call(state.stty_module, :raw!, [])
-      reasserts = state.isig_reasserts + 1
 
-      # The FIRST re-assert is boot settling — prim_tty re-applies its own
-      # termios (ISIG on) when the reader engages, at a time no boot-window
-      # poll can bound, so the first guard hit is the predictable BEAM
-      # handshake, not an external surprise. It is counted (isig_report/1
-      # stays truthful) but not announced. Any LATER re-assert means
-      # something touched the tty mid-session and stays loud.
-      if reasserts > 1 and is_pid(state.subscriber),
-        do: send(state.subscriber, {:inline_isig_reasserted})
-
-      %{state | isig_reasserts: reasserts}
+      # Janitorial, never news: prim_tty re-applies its termios (ISIG on)
+      # at unbounded points and wins any stty race (field-verified — the
+      # verify-after-reassert read flipped back before the subprocess
+      # returned). The re-assert is counted in isig_report/1, and the ^C
+      # contract no longer depends on it at all: the SIGINT trap
+      # (`sigint_trapped?`) delivers a trapped ^C as the same ctrl-c key
+      # event, so EITHER tty state routes ^C to the subscriber. The
+      # `{:inline_isig_reasserted}` message survives in the PumpContract
+      # vocabulary for an embedder without the trap; this driver no
+      # longer emits it.
+      %{state | isig_reasserts: state.isig_reasserts + 1}
     end
   end
 
   # --- Small helpers ---
+
+  defp safe_port_close(port) do
+    Port.close(port)
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
 
   defp extract_pid(pid) when is_pid(pid), do: pid
   defp extract_pid(_), do: nil
