@@ -899,4 +899,46 @@ defmodule Raxol.UI.Harness.InputEventTest do
       refute String.contains?(norm.text, "\e")
     end
   end
+
+  describe "normalize/1 -- idempotence (the SessionPump contract)" do
+    # PumpContract §4: the live pump normalizes at its boundary, and
+    # HarnessApp.Model.handle_key/2 normalizes again for its own routing.
+    # A second pass must be a no-op -- before this property held, the
+    # second pass read mods as all-false (un-pressing Ctrl on every live
+    # chord) and buried the original Event one :raw level too deep for
+    # component dispatch.
+
+    test "a normalized char map passes through unchanged" do
+      norm = InputEvent.normalize(Event.key("x"))
+      assert InputEvent.normalize(norm) == norm
+      assert norm.raw != nil
+    end
+
+    test "ctrl chords survive the double pass (the quit-protocol bug)" do
+      norm =
+        InputEvent.normalize(%Event{
+          type: :key,
+          data: %{key: "c", state: :pressed, modifiers: [:ctrl]}
+        })
+
+      twice = InputEvent.normalize(norm)
+      assert twice.mods.ctrl == true
+      assert twice == norm
+    end
+
+    test "a normalized special key keeps its key atom and :raw Event" do
+      event = Event.key_event(:enter, :pressed, [])
+      norm = InputEvent.normalize(event)
+      twice = InputEvent.normalize(norm)
+
+      assert twice.kind == :key
+      assert twice.key == :enter
+      assert twice.raw == event
+    end
+
+    test "the paste shape is idempotent too" do
+      norm = InputEvent.normalize(Event.paste_event("hello", {0, 0}))
+      assert InputEvent.normalize(norm) == norm
+    end
+  end
 end

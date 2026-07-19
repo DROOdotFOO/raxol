@@ -6,8 +6,8 @@ defmodule Raxol.UI.Harness.InputEvent do
 
   The terminal driver reaches component `handle_event/3` callbacks through
   THREE incompatible key-event shapes depending on which layer produced the
-  event, plus a fourth paste shape. Two harness components (`T11` composer,
-  `T14` picker) independently hit this gap and each grew inline defensive
+  event, plus a fourth paste shape. Two harness components (the composer,
+  the picker) independently hit this gap and each grew inline defensive
   reshaping. `Raxol.UI.Components.Input.TextInput` also copes with it ad
   hoc (`data[:modifiers] || []`). This module is the single normalizer all
   of them should converge on.
@@ -122,13 +122,13 @@ defmodule Raxol.UI.Harness.InputEvent do
       F5-F12/Insert/Delete/PageUp/PageDown are agreement-tested unmodified
       only (their ANSI tilde encoding here has no modifier parameter).
 
-  ## What T11/T14 (and T12/T13a) migrate to
+  ## The shared shortcut/text-input predicate
 
   Composer (`lib/raxol/ui/components/harness/composer.ex`) and picker
-  (`lib/raxol/ui/components/harness/picker.ex`, `feat/harness-ui-T14`)
-  each hand-rolled a `text_input?/1`-style predicate reading
+  (`lib/raxol/ui/components/harness/picker.ex`) both use the pattern below
+  instead of hand-rolling a `text_input?/1`-style predicate that reads
   `data[:modifiers] || []` alongside `data[:ctrl]`/`data[:alt]` booleans.
-  Both retire that inline logic in favor of the pattern below. Note the
+  Note the
   ordering: `shortcut?/1` is checked FIRST, because a shortcut is
   ALSO a `kind: :char` (Ctrl+A) or `kind: :key` (Ctrl+Up) -- routing on
   `text?/1`/`key/1` first would drop char-shortcuts into the no-op branch
@@ -202,8 +202,22 @@ defmodule Raxol.UI.Harness.InputEvent do
   struct OR passed as a bare `data` map) into the canonical form above.
 
   Total: never raises. Anything unrecognized normalizes to `kind: :other`.
+
+  IDEMPOTENT by contract (the SessionPump's PumpContract §4): the live
+  pump normalizes at its boundary, and `HarnessApp.Model.handle_key/2`
+  normalizes again for its own Keymap routing -- so a second pass must
+  return the input UNCHANGED. Without idempotence, re-normalizing an
+  already-normalized map reads `mods` as all-false (extract_mods looks
+  for top-level `:ctrl`/`:alt` fields, which the canonical shape nests
+  under `:mods`) -- silently un-pressing Ctrl on every live chord,
+  breaking the quit protocol -- and buries the original `%Event{}` one
+  `:raw` level deeper than component dispatch can find it.
   """
   @spec normalize(term()) :: t()
+  def normalize(%{kind: kind, mods: %{}} = already_normalized)
+      when kind in [:char, :key, :paste, :other],
+      do: already_normalized
+
   def normalize(
         %Raxol.Core.Events.Event{type: :paste, data: %{text: text}} = raw
       )
