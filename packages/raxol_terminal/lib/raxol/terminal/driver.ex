@@ -20,6 +20,8 @@ defmodule Raxol.Terminal.Driver do
   alias Raxol.Core.Events.Event
   alias Raxol.Core.Runtime.Backpressure
   alias Raxol.Terminal.ANSI.InputParser
+  alias Raxol.Terminal.Capabilities
+  alias Raxol.Terminal.Capabilities.Probe
   alias Raxol.Terminal.Driver.BackgroundQuery
   alias Raxol.Terminal.Driver.Dispatch
   alias Raxol.Terminal.Driver.EventTranslator
@@ -60,7 +62,8 @@ defmodule Raxol.Terminal.Driver do
               input_buffer: <<>>,
               flush_timer: nil,
               sigwinch_handler: nil,
-              bg_query_pending: false
+              capabilities_probe: nil,
+              capabilities_probe_timer: nil
   end
 
   # --- Public API ---
@@ -211,19 +214,21 @@ defmodule Raxol.Terminal.Driver do
         # and sets up trace interception of the reader's output.
         start_stdin_reader(self())
 
-        # Query the terminal background (OSC 11) with a DA probe as the
-        # unsupported-terminal sentinel; replies are extracted from the
-        # input stream in dispatch_raw_input/2. Must run after
-        # start_stdin_reader: writing it earlier races prim_tty's tty=>true
-        # reinit and can corrupt job control before a frame ever renders.
-        # Any failure here degrades to "no background detected" rather than
-        # crashing init.
-        bg_query_pending = write_background_query()
+        # Query the terminal's capabilities (OSC 11 background + OSC 10
+        # foreground + kitty keyboard flags + DECRQM 2026 sync-output +
+        # XTVERSION identity) with a DA1 probe as the unsupported-terminal
+        # sentinel -- the F0 capabilities pipeline (Probe -> ReplyScanner ->
+        # Classifier). Replies are extracted from the input stream in
+        # dispatch_raw_input/2 via route_capabilities_input/2. Must run
+        # after start_stdin_reader: writing it earlier races prim_tty's
+        # tty=>true reinit and can corrupt job control before a frame ever
+        # renders. Any failure here degrades to "no capabilities detected"
+        # rather than crashing init.
+        state = start_capabilities_probe(state)
 
         state = %{
           state
           | termbox_state: :initialized,
-            bg_query_pending: bg_query_pending,
             original_stty: original_stty,
             sigwinch_handler: sigwinch_handler,
             io_terminal_state: %{
@@ -451,6 +456,26 @@ defmodule Raxol.Terminal.Driver do
     {:noreply, state}
   end
 
+  # The capabilities probe's clock seam (Probe's moduledoc §1b): the ONE
+  # deadline timer scheduled by schedule_capabilities_clock/1 (rescheduled
+  # at most once, on the probe's own extend-once rule). Firing this feeds
+  # a `{:clock, now}` event to the pure reducer, which finalizes
+  # classification whether the probe is still silently :awaiting (past its
+  # deadline: silence = defaults, the guard against a terminal that
+  # answers nothing at all) or in the post-sentinel :draining window
+  # (closes unconditionally on the next clock tick, regardless of the
+  # deadline -- same discipline the probe's own clock-seam tests exercise).
+  @impl true
+  def handle_manager_info(
+        :capabilities_probe_clock,
+        %{capabilities_probe: %Probe{}} = state
+      ) do
+    {:noreply, step_capabilities_clock(state)}
+  end
+
+  @impl true
+  def handle_manager_info(:capabilities_probe_clock, state), do: {:noreply, state}
+
   @impl true
   def handle_manager_info(unhandled_message, state) do
     Raxol.Core.Runtime.Log.warning_with_context(
@@ -476,7 +501,7 @@ defmodule Raxol.Terminal.Driver do
   end
 
   defp dispatch_raw_input(data, state) do
-    {data, state} = handle_bg_query_reply(data, state)
+    {data, state} = route_capabilities_input(data, state)
     events = parse_input_safely(data)
 
     Enum.each(events, fn event ->
@@ -515,79 +540,223 @@ defmodule Raxol.Terminal.Driver do
       []
   end
 
-  # Writes the OSC 11 background query and returns whether a reply should
-  # be awaited. On any failure, skip the query rather than leave the driver
-  # waiting on a reply that never comes; background detection falls back to
-  # "no background detected" (BackgroundQuery.detected_background/0 :error).
-  defp write_background_query do
-    IO.write(BackgroundQuery.query_sequence())
-    true
+  # --- Capabilities probe (F0 pipeline): Probe -> ReplyScanner -> Classifier ---
+  #
+  # Bridges the live driver to the pure `Raxol.Terminal.Capabilities.Probe`
+  # reducer -- the same clock-seam design InlineDriver drives synchronously
+  # at init, but here async and non-blocking: init returns immediately
+  # after the batched write, and replies (interleaved with real keystrokes)
+  # arrive as ordinary `handle_manager_info` messages on the same trace/port
+  # path that already feeds `dispatch_raw_input/2`. The ONE deadline timer
+  # is the sole clock source (see the `:capabilities_probe_clock` handler
+  # above); Probe's own extend-once rule is honored via
+  # reschedule_capabilities_clock/1 on `{:extend_deadline, _}`.
+
+  # Builds the probe, writes its batched query (+ tmux passthrough re-issue
+  # when $TMUX is set -- Probe's own opt-in gate), and arms the deadline
+  # timer. Any failure degrades to "no capabilities detected" -- the same
+  # fail-open discipline the old OSC 11-only write had -- rather than
+  # crashing init or leaving a stray timer/probe behind.
+  defp start_capabilities_probe(state) do
+    env = System.get_env()
+
+    probe_opts = [
+      now_ms: System.monotonic_time(:millisecond),
+      tmux_passthrough?: true
+    ]
+
+    probe = Probe.new(env, probe_opts)
+    {probe, actions} = Probe.step(probe, :start)
+
+    {_leak, state} =
+      apply_probe_actions(actions, %{state | capabilities_probe: probe})
+
+    schedule_capabilities_clock(state)
   rescue
     error ->
       Raxol.Core.Runtime.Log.warning_with_context(
-        "[Driver] Failed to write OSC 11 background query, skipping background detection: " <>
+        "[Driver] Failed to start capabilities probe, skipping capability detection: " <>
           inspect(error),
         %{}
       )
 
-      false
+      state
   catch
     kind, reason ->
       Raxol.Core.Runtime.Log.warning_with_context(
-        "[Driver] OSC 11 background query write raised #{inspect(kind)}, skipping background detection: " <>
+        "[Driver] Capabilities probe start raised #{inspect(kind)}, skipping capability detection: " <>
           inspect(reason),
         %{}
       )
 
-      false
+      state
   end
 
-  # While an OSC 11 background query is pending, extract its reply (and the
-  # DA probe reply) from the input stream so they never reach the key parser.
-  # Any exception here degrades to "no background detected" and passes the
-  # chunk through untouched -- a malformed reply can't crash the driver or
-  # block real input.
-  defp handle_bg_query_reply(data, %{bg_query_pending: true} = state) do
-    case BackgroundQuery.scan(data) do
-      {{:ok, rgb}, cleaned} ->
+  # While a probe is live (`:awaiting`, `:draining`, or even `:done` --
+  # Probe.step/2 keeps draining late replies losslessly forever, CAP-N-03),
+  # route each raw input chunk through it. Returns `{clean_data, state}`
+  # where `clean_data` is exactly the leak-free residual: real keystrokes
+  # interleaved with reply bytes, in original order, with every recognized
+  # reply frame stripped -- safe to hand to `parse_input_safely/1`. Any
+  # exception abandons capability detection (drops the probe from state so
+  # later chunks pass straight through) and degrades to passing this chunk
+  # through untouched, exactly as the old OSC 11-only scan did.
+  defp route_capabilities_input(data, %{capabilities_probe: %Probe{} = probe} = state) do
+    {probe, actions} = Probe.step(probe, {:input, data})
+    apply_probe_actions(actions, %{state | capabilities_probe: probe})
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] Capabilities probe reply scan failed, falling back to no capability detection: " <>
+          inspect(error),
+        %{}
+      )
+
+      {data, %{state | capabilities_probe: nil, capabilities_probe_timer: nil}}
+  catch
+    kind, reason ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] Capabilities probe reply scan raised #{inspect(kind)}, falling back to no capability detection: " <>
+          inspect(reason),
+        %{}
+      )
+
+      {data, %{state | capabilities_probe: nil, capabilities_probe_timer: nil}}
+  end
+
+  defp route_capabilities_input(data, state), do: {data, state}
+
+  # The clock tick: advances the reducer, then applies whatever actions
+  # come back (typically just `{:done, caps}` the first time it fires; a
+  # stray extra tick after :done is a documented no-op). Any failure
+  # abandons capability detection rather than leaving a stale probe/timer.
+  defp step_capabilities_clock(%{capabilities_probe: probe} = state) do
+    {probe, actions} =
+      Probe.step(probe, {:clock, System.monotonic_time(:millisecond)})
+
+    {_leak, state} =
+      apply_probe_actions(actions, %{
+        state
+        | capabilities_probe: probe,
+          capabilities_probe_timer: nil
+      })
+
+    state
+  rescue
+    error ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] Capabilities probe clock step failed, capability detection abandoned: " <>
+          inspect(error),
+        %{}
+      )
+
+      %{state | capabilities_probe: nil, capabilities_probe_timer: nil}
+  catch
+    kind, reason ->
+      Raxol.Core.Runtime.Log.warning_with_context(
+        "[Driver] Capabilities probe clock step raised #{inspect(kind)}, capability detection abandoned: " <>
+          inspect(reason),
+        %{}
+      )
+
+      %{state | capabilities_probe: nil, capabilities_probe_timer: nil}
+  end
+
+  # Applies a Probe action list left-to-right, threading state and
+  # accumulating the leak-free residual. Returns `{leak_free_binary, state}`.
+  defp apply_probe_actions(actions, state) do
+    Enum.reduce(actions, {<<>>, state}, &apply_probe_action/2)
+  end
+
+  defp apply_probe_action({:write, iodata}, {leak, state}) do
+    IO.write(iodata)
+    {leak, state}
+  end
+
+  defp apply_probe_action({:passthrough, iodata}, {leak, state}) do
+    IO.write(iodata)
+    {leak, state}
+  end
+
+  defp apply_probe_action({:extend_deadline, _extend_ms}, {leak, state}) do
+    {leak, reschedule_capabilities_clock(state)}
+  end
+
+  # CAP-N-03: bytes the scanner determined are NOT part of a capability
+  # reply (interleaved real keystrokes) flow into the leak-free residual
+  # instead of being silently dropped.
+  defp apply_probe_action({:leak_free, binary}, {leak, state}) do
+    {leak <> binary, state}
+  end
+
+  defp apply_probe_action({:done, caps}, {leak, state}) do
+    {leak, finalize_capabilities(caps, state)}
+  end
+
+  # Classification completed: cache the session record (write-once,
+  # CAP-P-13), preserve both pre-existing OSC 11 side effects for compat
+  # (BackgroundQuery.store/1 -- the old persistent_term consumers and the
+  # W2c shim fallback both still read through it -- and the
+  # `:terminal_background` event), and additionally emit
+  # `:terminal_capabilities` carrying the full classified record. Cancels
+  # the now-moot deadline timer.
+  defp finalize_capabilities(%Capabilities{} = caps, state) do
+    Capabilities.cache(caps)
+
+    case caps.background do
+      {_, _, _} = rgb ->
         BackgroundQuery.store(rgb)
 
-        if state.dispatcher_pid do
-          Dispatch.send_event_to_dispatcher(
-            state.dispatcher_pid,
-            %Event{type: :terminal_background, data: %{color: rgb}}
-          )
-        end
+        dispatch_capabilities_event(state, %Event{
+          type: :terminal_background,
+          data: %{color: rgb}
+        })
 
-        {cleaned, %{state | bg_query_pending: false}}
-
-      {:unsupported, cleaned} ->
-        {cleaned, %{state | bg_query_pending: false}}
-
-      {:pending, data} ->
-        {data, state}
+      nil ->
+        :ok
     end
-  rescue
-    error ->
-      Raxol.Core.Runtime.Log.warning_with_context(
-        "[Driver] OSC 11 reply scan failed, falling back to no background detected: " <>
-          inspect(error),
-        %{}
-      )
 
-      {data, %{state | bg_query_pending: false}}
-  catch
-    kind, reason ->
-      Raxol.Core.Runtime.Log.warning_with_context(
-        "[Driver] OSC 11 reply scan raised #{inspect(kind)}, falling back to no background detected: " <>
-          inspect(reason),
-        %{}
-      )
+    dispatch_capabilities_event(state, %Event{
+      type: :terminal_capabilities,
+      data: %{capabilities: caps}
+    })
 
-      {data, %{state | bg_query_pending: false}}
+    cancel_capabilities_timer(state)
   end
 
-  defp handle_bg_query_reply(data, state), do: {data, state}
+  defp dispatch_capabilities_event(%{dispatcher_pid: nil}, _event), do: :ok
+
+  defp dispatch_capabilities_event(%{dispatcher_pid: pid}, event) do
+    Dispatch.send_event_to_dispatcher(pid, event)
+  end
+
+  # Arms the ONE deadline timer at the probe's current (absolute,
+  # monotonic-ms) deadline. A no-op when there is no live probe (e.g. the
+  # write failed and start_capabilities_probe/1 left capabilities_probe nil).
+  defp schedule_capabilities_clock(%{capabilities_probe: %Probe{deadline: deadline}} = state)
+       when is_integer(deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+    timer = Process.send_after(self(), :capabilities_probe_clock, remaining)
+    %{state | capabilities_probe_timer: timer}
+  end
+
+  defp schedule_capabilities_clock(state), do: state
+
+  # Probe's extend-once rule (F0 §7 step 3) already updated
+  # `probe.deadline` before returning the `{:extend_deadline, _}` action --
+  # this just re-arms the ONE timer against that new deadline.
+  defp reschedule_capabilities_clock(state) do
+    state
+    |> cancel_capabilities_timer()
+    |> schedule_capabilities_clock()
+  end
+
+  defp cancel_capabilities_timer(%{capabilities_probe_timer: nil} = state), do: state
+
+  defp cancel_capabilities_timer(%{capabilities_probe_timer: timer} = state) do
+    Process.cancel_timer(timer)
+    %{state | capabilities_probe_timer: nil}
+  end
 
   # Forward cast messages to handle_info for test_input
   @impl true
