@@ -6,7 +6,13 @@ defmodule Raxol.UI.Renderer do
   including panels, boxes, text, and tables with theme support.
   """
 
-  alias Raxol.UI.{CellManager, ElementRenderer, StyleProcessor, ThemeResolver}
+  alias Raxol.UI.{
+    CellManager,
+    ColorResolver,
+    ElementRenderer,
+    StyleProcessor,
+    ThemeResolver
+  }
 
   @doc """
   Renders a single element or list of elements to cells using the default theme.
@@ -35,6 +41,27 @@ defmodule Raxol.UI.Renderer do
   def render_to_cells(nil, _theme), do: []
 
   def render_to_cells(element_or_elements, theme) do
+    element_or_elements
+    |> render_to_cells_unresolved(theme)
+    # ★ RESOLUTION PASS (region-prominence-propagation.md §3.3/§3.5) ★ --
+    # the only place, post-clip/pre-buffer, where every element's cells are
+    # already flattened into one paint-order list -- the sole spot local
+    # ground can be read back from what will actually be painted. Phase 0:
+    # no producer emits `Raxol.UI.ColorIntent` yet, so this is the identity
+    # transform on today's all-literal cell lists (RP-P-01).
+    |> ColorResolver.resolve_cells()
+  end
+
+  @doc false
+  # Pre-resolution cell list -- the exact input `ColorResolver.resolve_cells/2`
+  # receives in `render_to_cells/2`. Exposed (not private) purely so
+  # RP-P-01's neutrality tests can compare "resolver present" vs "resolver
+  # bypassed" against the SAME flattened list the pipeline itself produces,
+  # rather than a hand-duplicated reimplementation of this pipeline.
+  @spec render_to_cells_unresolved(term(), map() | nil) :: [tuple()]
+  def render_to_cells_unresolved(nil, _theme), do: []
+
+  def render_to_cells_unresolved(element_or_elements, theme) do
     # Ensure we have a list of elements
     elements = CellManager.ensure_list(element_or_elements)
 
