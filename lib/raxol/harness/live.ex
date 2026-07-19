@@ -82,6 +82,13 @@ defmodule Raxol.Harness.Live do
   """
   @spec start_link(keyword()) :: {:ok, t()}
   def start_link(opts) do
+    # The syntax registries live in Makeup's OTP app env — a bare embedder
+    # boot (mix raxol.harness starts only logger/telemetry) leaves them
+    # empty, so every diff span degrades to the plain fallback: no syntax
+    # fg, and since `span_fg/4` fades only real hex token colors, no
+    # insignificant-line fade either. One idempotent start fixes both.
+    _ = Application.ensure_all_started(:makeup_elixir)
+
     {width, rows} = geometry(opts)
     caller = self()
 

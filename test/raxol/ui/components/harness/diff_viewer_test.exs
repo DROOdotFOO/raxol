@@ -180,6 +180,62 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
     end
   end
 
+  describe "diff_rows/1 (flat side-by-side when it fits — V's prefer-split ruling)" do
+    defp flat_rows(width) do
+      DiffViewer.diff_rows(
+        path: "a.ex",
+        old: "alpha\nBETA\ngamma\n",
+        new: "alpha\nDELTA\ngamma\n",
+        width: width
+      )
+    end
+
+    defp row_texts(rows) do
+      Enum.map(rows, fn row ->
+        Enum.map_join(row.children, "", &(Map.get(&1, :content) || ""))
+      end)
+    end
+
+    test "wide budget: old and new render side by side on ONE flat row" do
+      rows = flat_rows(120)
+      texts = row_texts(rows)
+
+      # the changed pair shares a physical row, old pane first
+      changed = Enum.find(texts, &(&1 =~ "BETA"))
+      assert changed =~ "DELTA"
+
+      {beta_at, _} = :binary.match(changed, "BETA")
+      {delta_at, _} = :binary.match(changed, "DELTA")
+      assert beta_at < delta_at
+
+      # an equal line shows in BOTH panes of its row
+      alpha_row = Enum.find(texts, &(&1 =~ "alpha"))
+      assert length(String.split(alpha_row, "alpha")) == 3
+    end
+
+    test "every split row stays ViewText-joinable: all children are text leaves" do
+      for row <- flat_rows(120) do
+        assert row.type == :row
+
+        for child <- row.children do
+          assert child.type == :text
+        end
+      end
+    end
+
+    test "narrow budget keeps unified: old and new on separate rows" do
+      # both panes need ~18 cells for this fixture; 12 cannot host them
+      texts = row_texts(flat_rows(12))
+
+      changed = Enum.find(texts, &(&1 =~ "BETA"))
+      refute changed =~ "DELTA"
+    end
+
+    test "deterministic: same input renders byte-identically" do
+      assert flat_rows(120) == flat_rows(120)
+    end
+  end
+
   describe "render/2 (unified mode)" do
     setup do
       {:ok, state} =

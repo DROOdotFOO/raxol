@@ -299,6 +299,16 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   # degenerate no-width fallback.
   @default_diff_row_width 80
 
+  # A split pane renders borderless: gutter (bar glyph + numbers), then a
+  # 1-column row gap before the line content -- that gap is the only
+  # chrome left now that the pane's border box and OLD/NEW header are
+  # gone. The `+`/`-` text marker lives in the 1-column gutter bar,
+  # counted separately as `@bar_width` so it composes cleanly with
+  # `gutter_width_for/1`. Two panes sit in a row with gap 2.
+  @pane_chrome 1
+  @bar_width 1
+  @pane_gap 2
+
   @doc """
   The pure, flat-row form of the Pierre diff engine -- the diff-row
   computation + styling extracted so it can be called from the harness
@@ -331,12 +341,71 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
     gutter_width = gutter_width_for(ops)
     avail_width = state.width || @default_diff_row_width
     ground = resolve_ground(%{}, state)
+    ctx = build_render_context(state, ops, gutter_width, avail_width, ground)
 
-    state
-    |> build_render_context(ops, gutter_width, avail_width, ground)
-    |> render_unified()
-    |> Enum.map(&flatten_diff_row/1)
+    # Side-by-side is PREFERRED (V's ruling): when both panes fit the
+    # width budget (the same percentile fit `render/2`'s :auto uses),
+    # each physical row carries the old pane and the new pane as one
+    # flat run of text leaves — no flex, deterministic padding — so the
+    # block path and ViewText both get the split for free. Too narrow →
+    # unified, exactly as before.
+    case resolve_mode(state, %{}, ops, gutter_width) do
+      :split -> render_split_flat(ctx)
+      :unified -> ctx |> render_unified() |> Enum.map(&flatten_diff_row/1)
+    end
   end
+
+  # The flat side-by-side: one `%{type: :row}` of ALL-text leaves per
+  # physical line — old gutter+content padded to a fixed pane width, a
+  # 2-cell gap, then the new gutter+content. Reuses `split_old_line/2` /
+  # `split_new_line/2` verbatim (gutter glyphs, word-emphasis, fades),
+  # flattened one level like the unified rows; the pad is computed from
+  # measured display width, so the two columns align without the layout
+  # engine's flex. A fold spans the full row — one marker, not two.
+  defp render_split_flat(ctx) do
+    old_pane_width =
+      ctx.gutter_width + @bar_width + @pane_chrome + (ctx.pane_budget || 0)
+
+    ctx.ops_with_ranges
+    |> pair_rows()
+    |> annotate_pairs()
+    |> fold_rows(ctx.context, &split_classify/1)
+    |> Enum.map(fn
+      {:fold, count} ->
+        fold_row(count, ctx.avail_width, ctx.ground)
+
+      pair ->
+        old = pair |> split_old_line(ctx) |> flat_row_children()
+        new = pair |> split_new_line(ctx) |> flat_row_children()
+
+        Components.row(
+          gap: 0,
+          children:
+            pad_segments(old, old_pane_width) ++ [pane_gap_segment() | new]
+        )
+    end)
+  end
+
+  defp flat_row_children(row),
+    do: row |> flatten_diff_row() |> Map.get(:children)
+
+  defp pad_segments(segments, target_width) do
+    used =
+      Enum.reduce(segments, 0, fn seg, acc ->
+        acc + TextMeasure.display_width(Map.get(seg, :content) || "")
+      end)
+
+    case target_width - used do
+      pad when pad > 0 ->
+        segments ++ [Components.text(content: String.duplicate(" ", pad))]
+
+      _fits ->
+        segments
+    end
+  end
+
+  defp pane_gap_segment,
+    do: Components.text(content: String.duplicate(" ", @pane_gap))
 
   # `render_unified/1` builds each physical row as an OUTER row wrapping a
   # gutter sub-row and a content sub-row (both themselves rows of text
@@ -380,16 +449,6 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
        do: w
 
   defp context_width(_context), do: nil
-
-  # A split pane renders borderless: gutter (bar glyph + numbers), then a
-  # 1-column row gap before the line content -- that gap is the only
-  # chrome left now that the pane's border box and OLD/NEW header are
-  # gone. The `+`/`-` text marker lives in the 1-column gutter bar,
-  # counted separately as `@bar_width` so it composes cleanly with
-  # `gutter_width_for/1`. Two panes sit in a row with gap 2.
-  @pane_chrome 1
-  @bar_width 1
-  @pane_gap 2
 
   # Auto-fit is percentile-based, not max-based: one 200-char outlier
   # line shouldn't veto side-by-side for the whole file. Split is chosen

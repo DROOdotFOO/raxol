@@ -334,12 +334,43 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
       |> Enum.map(&resolve_approval_seal(&1, turn_ended?))
 
     {blocks, block_diags} = build_blocks(completed_groups, fold_defaults)
+    blocks = suppress_approval_covered_tool_calls(blocks)
 
     {blocks, completion_diags} =
       attach_final_completion(blocks, events, session_index)
 
     {blocks, tail, item_diags ++ block_diags ++ completion_diags}
   end
+
+  # A RESULTLESS tool_call whose referent a diff-carrying approval block
+  # (same turn — this builder is per-turn) already renders: the approval
+  # shows the exact proposed change as the ± Pierre image, so the raw
+  # `⊘ name args…` line is a duplicate saying the same thing worse (V's
+  # ruling). Only resultless calls are covered — a call that DID produce
+  # a non-diff result carries information the approval does not (and a
+  # failed one is an alarm, which stays regardless).
+  defp suppress_approval_covered_tool_calls(blocks) do
+    covered =
+      for %{kind: :approval, content: %{old: old, new: new} = content} <-
+            blocks,
+          is_binary(old) and is_binary(new),
+          name = Map.get(content, :tool_name) || Map.get(content, :action),
+          is_binary(name),
+          into: MapSet.new(),
+          do: name
+
+    if MapSet.size(covered) == 0 do
+      blocks
+    else
+      Enum.reject(blocks, fn block ->
+        block.kind == :tool_call and resultless_tool_call?(block) and
+          MapSet.member?(covered, Map.get(block.content, :name))
+      end)
+    end
+  end
+
+  defp resultless_tool_call?(%{content: content}),
+    do: Map.get(content, :result) in [nil, ""]
 
   # -- pass 1: item/turn streaming fold -------------------------------------
 
@@ -610,14 +641,28 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   defp build_blocks([], _fold_defaults), do: {[], []}
 
   defp build_blocks([g1, g2 | rest], fold_defaults) do
-    if mergeable_pair?(g1, g2) do
-      {block, diag} = build_block([g1, g2], fold_defaults)
-      {more_blocks, more_diags} = build_blocks(rest, fold_defaults)
-      {[block | more_blocks], diag ++ more_diags}
-    else
-      {block, diag} = build_block([g1], fold_defaults)
-      {more_blocks, more_diags} = build_blocks([g2 | rest], fold_defaults)
-      {[block | more_blocks], diag ++ more_diags}
+    cond do
+      mergeable_pair?(g1, g2) ->
+        {block, diag} = build_block([g1, g2], fold_defaults)
+        {more_blocks, more_diags} = build_blocks(rest, fold_defaults)
+        {[block | more_blocks], diag ++ more_diags}
+
+      diff_covered_pair?(g1, g2) ->
+        # The tool_use whose result IS the ± diff: the diff block is the
+        # complete render of that action (path-first identity, before/
+        # after image) — a separate `⊘ name args…` raw line would say the
+        # same thing worse (V's no-raw-output-next-to-the-nice-diff
+        # ruling). Only the diff block is built; the tool_use group's
+        # events still ride the projection (turn_has_tools?/evidence scan
+        # events, never blocks).
+        {block, diag} = build_block([g2], fold_defaults)
+        {more_blocks, more_diags} = build_blocks(rest, fold_defaults)
+        {[block | more_blocks], diag ++ more_diags}
+
+      true ->
+        {block, diag} = build_block([g1], fold_defaults)
+        {more_blocks, more_diags} = build_blocks([g2 | rest], fold_defaults)
+        {[block | more_blocks], diag ++ more_diags}
     end
   end
 
@@ -635,6 +680,14 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   defp mergeable_pair?(g1, g2) do
     well_formed?(g1) and well_formed?(g2) and g1.item_type == :tool_use and
       g2.item_type == :tool_result and Map.get(g2, :kind_override) != :diff
+  end
+
+  # The un-mergeable half of the same adjacency: a well-formed tool_use
+  # whose well-formed result carries the diff override. The diff block
+  # covers the referent, so the tool_use builds no block of its own.
+  defp diff_covered_pair?(g1, g2) do
+    well_formed?(g1) and well_formed?(g2) and g1.item_type == :tool_use and
+      g2.item_type == :tool_result and Map.get(g2, :kind_override) == :diff
   end
 
   # Stamp a completed tool_result group as a `:diff` block when its event
