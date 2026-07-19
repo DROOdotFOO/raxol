@@ -179,6 +179,149 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
     end
   end
 
+  describe "outside-cwd read: escalates to the operator (V's ruling), never a silent escape" do
+    # An outside-cwd read_file used to hard-refuse (:outside_cwd). It now
+    # ASKS — same gate an edit uses — and only the allow for THIS call
+    # grants the one-shot unconfined resolve.
+    test "allow → the approval fires and the read returns the outside content" do
+      outside_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "rx-outside-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(outside_dir)
+      outside = Path.join(outside_dir, "secret.txt")
+      File.write!(outside, "OUTSIDE-CONTENT")
+      on_exit(fn -> File.rm_rf!(outside_dir) end)
+
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "read_file",
+                 "arguments" => %{"path" => outside},
+                 "id" => "r1"
+               }
+             ]},
+            {:content, "done"}
+          ],
+          actions: Fs.all(),
+          await_decision: fn _rid, _meta -> {:allow, "allow"} end
+        )
+
+      assert {:approval_requested, %{tool_name: "read_file"}} =
+               Enum.find(events, &match?({:approval_requested, _}, &1))
+
+      assert {:tool_result, %{name: "read_file", result: %{content: content}}} =
+               Enum.find(events, &match?({:tool_result, _}, &1))
+
+      assert content =~ "OUTSIDE-CONTENT"
+    end
+
+    test "deny → refused, file never read" do
+      outside_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "rx-outside-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(outside_dir)
+      outside = Path.join(outside_dir, "secret.txt")
+      File.write!(outside, "OUTSIDE-CONTENT")
+      on_exit(fn -> File.rm_rf!(outside_dir) end)
+
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "read_file",
+                 "arguments" => %{"path" => outside},
+                 "id" => "r2"
+               }
+             ]},
+            {:content, "done"}
+          ],
+          actions: Fs.all(),
+          await_decision: fn _rid, _meta -> {:deny, "deny", :nope} end
+        )
+
+      assert :approval_requested in types(events)
+
+      {:tool_result, %{result: result}} =
+        Enum.find(events, &match?({:tool_result, _}, &1))
+
+      refute match?(%{content: _}, result)
+    end
+
+    test "gate OFF (--yolo) keeps the HARD sandbox: no ask, no escape" do
+      outside_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "rx-outside-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(outside_dir)
+      outside = Path.join(outside_dir, "secret.txt")
+      File.write!(outside, "OUTSIDE-CONTENT")
+      on_exit(fn -> File.rm_rf!(outside_dir) end)
+
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "read_file",
+                 "arguments" => %{"path" => outside},
+                 "id" => "r3"
+               }
+             ]},
+            {:content, "done"}
+          ],
+          actions: Fs.all(),
+          gate?: false
+        )
+
+      refute :approval_requested in types(events)
+
+      {:tool_result, %{result: result}} =
+        Enum.find(events, &match?({:tool_result, _}, &1))
+
+      assert match?({:error, :outside_cwd}, result)
+    end
+
+    test "an inside-cwd read stays ungated (no new friction)", %{tmp: tmp} do
+      File.write!(Path.join(tmp, "in.txt"), "inside")
+
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "read_file",
+                 "arguments" => %{"path" => "in.txt"},
+                 "id" => "r4"
+               }
+             ]},
+            {:content, "done"}
+          ],
+          actions: Fs.all(),
+          await_decision: fn _rid, _meta -> raise "must not ask" end
+        )
+
+      refute :approval_requested in types(events)
+
+      assert {:tool_result, %{result: %{content: "inside"}}} =
+               Enum.find(events, &match?({:tool_result, _}, &1))
+    end
+  end
+
   describe "consequential tool: approval gate" do
     test "allow → edit runs, tool_result carries the ± diff payload", %{
       tmp: tmp
@@ -207,7 +350,8 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
           await_decision: fn _rid, _meta -> {:allow, "allow"} end
         )
 
-      assert {:approval_requested, %{tool_name: "edit_file", request_id: rid, options: opts}} =
+      assert {:approval_requested,
+              %{tool_name: "edit_file", request_id: rid, options: opts}} =
                Enum.find(events, &match?({:approval_requested, _}, &1))
 
       assert is_list(opts) and Enum.any?(opts, &(&1.kind == :allow_once))
@@ -358,7 +502,10 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
              [
                %{
                  "name" => "write_file",
-                 "arguments" => %{"path" => "brand_new.ex", "content" => "a\nb\n"},
+                 "arguments" => %{
+                   "path" => "brand_new.ex",
+                   "content" => "a\nb\n"
+                 },
                  "id" => "w1"
                }
              ]},
@@ -487,7 +634,8 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
           end
         )
 
-      assert {:tool_result, %{name: "edit_file", result: {:error, :stale_approval}}} =
+      assert {:tool_result,
+              %{name: "edit_file", result: {:error, :stale_approval}}} =
                Enum.find(events, &match?({:tool_result, _}, &1))
 
       # Our edit was NEVER applied -- the file keeps the drifted content.
@@ -501,7 +649,8 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
       events =
         run(
           [
-            {:tool_calls, [%{"name" => "delete_everything", "arguments" => %{}, "id" => "x"}]},
+            {:tool_calls,
+             [%{"name" => "delete_everything", "arguments" => %{}, "id" => "x"}]},
             {:content, "ok"}
           ],
           actions: Workspace.all(),
@@ -566,14 +715,18 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
                usage: %{},
                reasoning: "first I plan the read"
              }},
-            {:response, %{content: "the answer", usage: %{}, reasoning: "now I conclude"}}
+            {:response,
+             %{content: "the answer", usage: %{}, reasoning: "now I conclude"}}
           ],
           actions: Fs.all(),
           gate?: false
         )
 
       # Both rounds' thoughts surfaced, in true order.
-      assert reasoning_texts(events) == ["first I plan the read", "now I conclude"]
+      assert reasoning_texts(events) == [
+               "first I plan the read",
+               "now I conclude"
+             ]
 
       [r1, r2] = indices_of(events, :reasoning)
       [tool_use_i] = indices_of(events, :tool_use)
@@ -615,7 +768,8 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
                metadata: %{
                  finish_reason: :length,
                  truncated: true,
-                 marker: "⚠ response truncated — hit token limit; raise AI_MAX_TOKENS"
+                 marker:
+                   "⚠ response truncated — hit token limit; raise AI_MAX_TOKENS"
                }
              }}
           ],
@@ -670,7 +824,8 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
              usage: %{},
              reasoning: "first, read the file"
            }},
-          {:response, %{content: "done reading", usage: %{}, reasoning: "now, answer"}}
+          {:response,
+           %{content: "done reading", usage: %{}, reasoning: "now, answer"}}
         ])
 
       stream =
@@ -768,7 +923,8 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
           {:reasoning, "got it"},
           {:chunk, "the file says "},
           {:chunk, "hello world"},
-          {:done, %{content: "the file says hello world", tool_calls: [], usage: %{}}}
+          {:done,
+           %{content: "the file says hello world", tool_calls: [], usage: %{}}}
         ]
       ]
 

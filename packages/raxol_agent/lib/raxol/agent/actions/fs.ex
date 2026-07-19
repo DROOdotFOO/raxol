@@ -76,15 +76,25 @@ defmodule Raxol.Agent.Actions.Fs do
     @max_bytes 16_384
 
     @impl true
-    def run(%{path: path}, _context) do
-      with {:ok, abs} <- Raxol.Agent.Actions.Fs.resolve(path),
+    def run(%{path: path}, context) do
+      # `allow_outside_cwd` exists only on the post-approval execute of
+      # an escalated outside-cwd read (the executor sets it after the
+      # operator's allow for THIS call) — every other caller stays
+      # confined by resolve/1.
+      resolver =
+        if is_map(context) && Map.get(context, :allow_outside_cwd),
+          do: &Raxol.Agent.Actions.Fs.resolve_unconfined/1,
+          else: &Raxol.Agent.Actions.Fs.resolve/1
+
+      with {:ok, abs} <- resolver.(path),
            {:ok, content} <- File.read(abs) do
         truncated = byte_size(content) > @max_bytes
 
         {:ok,
          %{
            path: path,
-           content: binary_part(content, 0, min(byte_size(content), @max_bytes)),
+           content:
+             binary_part(content, 0, min(byte_size(content), @max_bytes)),
            truncated: truncated
          }}
       else
@@ -132,6 +142,30 @@ defmodule Raxol.Agent.Actions.Fs do
   @doc "All read-only fs actions, for passing as `actions:` to a ReAct run."
   @spec all() :: [module()]
   def all, do: [ListDir, ReadFile, FileStat]
+
+  @doc """
+  Whether `path` lands outside the sandbox root — the executor's
+  escalation predicate (an outside-cwd `read_file` asks the operator
+  instead of hard-refusing; V's ruling). Same expansion `resolve/1`
+  performs, decision only.
+  """
+  @spec outside_cwd?(String.t() | nil) :: boolean()
+  def outside_cwd?(path) when is_binary(path) do
+    cwd = working_dir()
+    abs = Path.expand(path, cwd)
+    not (abs == cwd or String.starts_with?(abs, cwd <> "/"))
+  end
+
+  def outside_cwd?(_path), do: false
+
+  @doc """
+  Expansion WITHOUT the sandbox check — only reachable through an
+  operator-approved escalation (`allow_outside_cwd` in the tool context,
+  set by the executor strictly after an allow decision for THIS call).
+  """
+  @spec resolve_unconfined(String.t()) :: {:ok, String.t()}
+  def resolve_unconfined(path),
+    do: {:ok, Path.expand(path, working_dir())}
 
   @doc """
   Expand `path` against the working directory and require the result to

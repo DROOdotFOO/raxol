@@ -71,6 +71,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   """
 
   alias Raxol.Agent.Action.ToolConverter
+  alias Raxol.Agent.Actions.Fs
   alias Raxol.Agent.Actions.Workspace
   alias Raxol.Agent.Harness.ToolClassifier
 
@@ -303,7 +304,8 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
     emit(
       st,
-      {:done, %{content: content || "", tool_results: [], usage: usage(response)}}
+      {:done,
+       %{content: content || "", tool_results: [], usage: usage(response)}}
     )
   end
 
@@ -379,7 +381,8 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
         emit(
           st,
-          {:tool_result, %{name: "unknown", result: {:error, :missing_tool_name}}}
+          {:tool_result,
+           %{name: "unknown", result: {:error, :missing_tool_name}}}
         )
 
         %{role: :user, content: "[Tool error]: tool call had no name"}
@@ -387,10 +390,24 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       config.gate? and ToolClassifier.consequential?(name) ->
         gated_run(tc, name, arguments, st)
 
+      # An outside-cwd read is not destructive but IS a boundary cross:
+      # it escalates to the operator like an edit does (V's ruling),
+      # instead of the old hard :outside_cwd refusal. Gate off (--yolo)
+      # keeps the hard sandbox — auto-allowing an escape would widen the
+      # blast radius exactly when the operator opted out of questions.
+      config.gate? and name == "read_file" and
+          Fs.outside_cwd?(read_path(arguments)) ->
+        gated_run(tc, name, arguments, st)
+
       true ->
         execute(tc, name, st)
     end
   end
+
+  defp read_path(arguments) when is_map(arguments),
+    do: Map.get(arguments, "path") || Map.get(arguments, :path)
+
+  defp read_path(_arguments), do: nil
 
   defp gated_run(tc, name, arguments, %{config: config} = st) do
     request_id =
@@ -406,7 +423,8 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
     emit(
       st,
-      {:approval_requested, approval_payload(request_id, name, arguments, options, preview)}
+      {:approval_requested,
+       approval_payload(request_id, name, arguments, options, preview)}
     )
 
     decision =
@@ -420,7 +438,8 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       {:allow, option_id} ->
         emit(
           st,
-          {:approval_decided, %{request_id: request_id, option_id: option_id, decision: :allow}}
+          {:approval_decided,
+           %{request_id: request_id, option_id: option_id, decision: :allow}}
         )
 
         apply_after_allow(tc, name, preview, st)
@@ -428,7 +447,8 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       {:deny, option_id, reason} ->
         emit(
           st,
-          {:approval_decided, %{request_id: request_id, option_id: option_id, decision: :deny}}
+          {:approval_decided,
+           %{request_id: request_id, option_id: option_id, decision: :deny}}
         )
 
         emit(
@@ -453,7 +473,10 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   # unless the path itself is rejected (outside cwd / too large), which stays
   # `:none`. Every other tool has no diff to show.
   defp tool_preview("write_file", args),
-    do: preview_or_none(Workspace.preview_write(arg(args, "path"), arg(args, "content")))
+    do:
+      preview_or_none(
+        Workspace.preview_write(arg(args, "path"), arg(args, "content"))
+      )
 
   defp tool_preview("edit_file", args),
     do:
@@ -513,13 +536,21 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   # current diff). This is the label-vs-binding guarantee made real.
   # An exact / write preview carries a real `base_hash`: verify the target
   # still hashes to what it did at approval time before applying.
-  defp apply_after_allow(tc, name, {:ok, %{path: path, base_hash: base_hash}}, st) do
+  defp apply_after_allow(
+         tc,
+         name,
+         {:ok, %{path: path, base_hash: base_hash}},
+         st
+       ) do
     case Workspace.verify_unchanged(path, base_hash) do
       :ok ->
         execute(tc, name, st)
 
       {:error, :stale} ->
-        emit(st, {:tool_result, %{name: name, result: {:error, :stale_approval}}})
+        emit(
+          st,
+          {:tool_result, %{name: name, result: {:error, :stale_approval}}}
+        )
 
         %{
           role: :user,
@@ -541,7 +572,17 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   end
 
   # A preview-less tool (`:none`) or any other shape: nothing to verify,
-  # execute directly (its own execution surfaces any error honestly).
+  # execute directly (its own execution surfaces any error honestly). An
+  # approved OUTSIDE-CWD read carries the one-shot unconfined context —
+  # granted strictly by the allow decision for THIS call, never ambient.
+  defp apply_after_allow(tc, "read_file" = name, _no_preview, st) do
+    if Fs.outside_cwd?(read_path(Map.get(tc, "arguments", %{}))) do
+      execute(tc, name, st, %{allow_outside_cwd: true})
+    else
+      execute(tc, name, st)
+    end
+  end
+
   defp apply_after_allow(tc, name, _no_preview, st), do: execute(tc, name, st)
 
   defp await(fun, request_id, meta) when is_function(fun, 2) do
@@ -556,11 +597,20 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       {:deny, "deny", :await_error}
   end
 
-  defp execute(tc, name, %{config: config} = st) do
+  defp execute(tc, name, st, extra_context \\ %{})
+
+  defp execute(tc, name, %{config: config} = st, extra_context) do
+    tool_context =
+      case {config.tool_context, extra_context} do
+        {ctx, extra} when map_size(extra) == 0 -> ctx
+        {ctx, extra} when is_map(ctx) -> Map.merge(ctx, extra)
+        {_nil, extra} -> extra
+      end
+
     case ToolConverter.dispatch_tool_call(
            tc,
            config.actions,
-           config.tool_context
+           tool_context
          ) do
       {:ok, result} ->
         emit_result(st, name, result)
