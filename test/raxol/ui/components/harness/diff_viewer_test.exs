@@ -294,7 +294,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert Enum.any?(
                del_spans,
                &(&1.content == "hello " and
-                   Map.get(&1.style, :bg) == "#201819")
+                   Map.get(&1.style, :bg) == "#211a1b")
              )
 
       [_gutter, insert_content] = insert_row.children
@@ -308,7 +308,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewerTest do
       assert Enum.any?(
                ins_spans,
                &(&1.content == "hello " and
-                   Map.get(&1.style, :bg) == "#1c221f")
+                   Map.get(&1.style, :bg) == "#1d231f")
              )
     end
   end

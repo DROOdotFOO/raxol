@@ -9,11 +9,10 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
   the solved salience palette collapses 8 of 11 harness-painted semantic
   fields to a gray slot on the dark reference ground (success, accent,
   emphasis, diff add/del, chrome, ...) and commits category lies on what
-  survives: solved `error` lands on ANSI 3 (yellow), and on a light ground
-  solved `emphasis` lands on ANSI 1 (red) and `foreground` on ANSI 6
-  (cyan). The dedicated role table below is the fix: each semantic role is
-  PINNED to a hue-preserving ANSI slot, polarity-aware, and nearest-RGB is
-  never consulted for semantic colors.
+  survives: on a light ground, solved `emphasis` lands on ANSI 1 (red) and
+  `foreground` on ANSI 6 (cyan). The dedicated role table below is the fix:
+  each semantic role is PINNED to a hue-preserving ANSI slot, polarity-aware,
+  and nearest-RGB is never consulted for semantic colors.
 
   ## The audit tripwires
 
@@ -511,18 +510,25 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
       assert grays >= 5
     end
 
-    test "nearest-RGB commits a category lie on the solved error color" do
-      # Measured at design time: solved error on dark ground (#bd413f)
-      # nearest-RGB-quantizes to ANSI 3 (yellow) -- not any red slot.
-      palette = Salience.solve_palette(SalienceTheme.seeds(), ground: 0.2)
-      naive_slot = naive_slot(palette.error)
+    test "nearest-RGB commits a category lie on the solved emphasis color (light ground)" do
+      # Measured at design time (post H-K sign-flip fix, which corrected
+      # `apparent_lightness`/`solve_lightness` -- see
+      # Raxol.UI.Theming.SalienceTest): solved error on dark ground now
+      # naive-quantizes to a genuine red slot, retiring it as a tripwire
+      # example. Solved emphasis on light ground still commits the
+      # documented category lie: it nearest-RGB-quantizes to ANSI 1 (red),
+      # not any neutral/warm slot -- emphasis's yellow-adjacent seed hue
+      # (h=77) has nothing to do with red.
+      palette = Salience.solve_palette(SalienceTheme.seeds(), ground: 0.97)
+      naive_slot = naive_slot(palette.emphasis)
 
-      refute naive_slot in [1, 9],
-             "solved error now quantizes to a red slot (#{naive_slot}) -- " <>
-               "re-evaluate whether the pinned table is still needed"
+      assert naive_slot in [1, 9],
+             "solved emphasis no longer commits the documented category " <>
+               "lie (slot #{naive_slot}) -- re-evaluate whether the pinned " <>
+               "table is still needed"
 
       # The pinned path never lies:
-      assert Ansi16Salience.slot(:error, :dark, @full) in [1, 9]
+      refute Ansi16Salience.slot(:emphasis, :light, @full) in [1, 9]
     end
 
     defp naive_gray_count(ground) do

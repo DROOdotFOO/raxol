@@ -6,13 +6,13 @@ defmodule Raxol.UI.Theming.Salience do
   Instead of hand-picking lightness per color, a palette is expressed as
   `(hue, chroma, tier)` seeds. Each tier is an apparent-lightness *contrast
   delta* away from the ground (background) lightness; the solver compensates
-  for the H-K effect (chromatic colors — especially blues — read darker than
-  their nominal OKLCH `L` suggests) so every color on one tier appears equally
-  bright to the eye.
+  for the H-K effect (chromatic colors — especially reds and blues — read
+  brighter than their nominal OKLCH `L` suggests, since OKLab does not model
+  H-K) so every color on one tier appears equally bright to the eye.
 
   The two-lobe formulation:
 
-      apparent_L = L - 0.14 * C * hue_factor(h)
+      apparent_L = L + 0.14 * C * hue_factor(h)
 
   Tiers generalize to any ground: on dark grounds tiers solve *up* (lighter
   than ground), on light grounds *down*, chosen automatically by headroom.
@@ -69,14 +69,14 @@ defmodule Raxol.UI.Theming.Salience do
   @spec hue_factor(number()) :: float()
   def hue_factor(h) do
     hn = h / 360
-    warm = :math.cos((hn * 3 - 1) * 2 * :math.pi()) * 0.45 + 0.75
+    warm = :math.cos((hn - 30 / 360) * 2 * :math.pi()) * 0.45 + 0.75
     blue = 0.25 * :math.exp(-:math.pow(abs(h - 255) / 35, 2))
     min(1.2, max(0.3, warm + blue))
   end
 
   @doc "Apparent lightness of an OKLCH color under the two-lobe H-K model."
   @spec apparent_lightness(number(), number(), number()) :: float()
-  def apparent_lightness(l, c, h), do: l - @hk_k * c * hue_factor(h)
+  def apparent_lightness(l, c, h), do: l + @hk_k * c * hue_factor(h)
 
   @doc """
   Nominal OKLCH `L` that lands a `(C, h)` color on a target apparent
@@ -84,7 +84,7 @@ defmodule Raxol.UI.Theming.Salience do
   """
   @spec solve_lightness(number(), number(), number()) :: float()
   def solve_lightness(target_al, c, h),
-    do: target_al + @hk_k * c * hue_factor(h)
+    do: target_al - @hk_k * c * hue_factor(h)
 
   @doc """
   Solves a `(C, h)` seed on a salience tier against a ground lightness and
@@ -100,7 +100,7 @@ defmodule Raxol.UI.Theming.Salience do
   ## Examples
 
       iex> Raxol.UI.Theming.Salience.solve(:differentiate, 0.13, 57)
-      "#c1712c"
+      "#b96922"
 
       iex> Raxol.UI.Theming.Salience.solve(:baseline, 0.0, 250)
       "#b4b4b4"
@@ -111,8 +111,42 @@ defmodule Raxol.UI.Theming.Salience do
     polarity = Keyword.get(opts, :polarity, :auto)
 
     target = tier_target(tier, ground, polarity)
-    l = solve_lightness(target, c, h)
+    {l, c} = solve_lightness_for_achievable_chroma(target, c, h)
     oklch_to_hex(l, c, h)
+  end
+
+  # Gamut-mapping shrinks chroma at a fixed L (see shrink_chroma/3), but
+  # apparent_lightness/3 depends on C -- so a color whose chroma got shrunk
+  # to fit sRGB no longer lands on the solved apparent-lightness target.
+  # Re-solve L against the chroma actually achievable at that L/h and
+  # iterate; this converges in 2-3 steps, capped at 4.
+  @chroma_resolve_iterations 4
+  @chroma_resolve_epsilon 1.0e-6
+
+  defp solve_lightness_for_achievable_chroma(target, c, h) do
+    l = solve_lightness(target, c, h)
+    resolve_chroma_step(target, l, c, h, @chroma_resolve_iterations)
+  end
+
+  defp resolve_chroma_step(_target, l, c, _h, 0), do: {l, c}
+
+  defp resolve_chroma_step(target, l, c, h, iterations_left) do
+    actual_c = achieved_chroma(l, c, h)
+
+    if abs(actual_c - c) < @chroma_resolve_epsilon do
+      {l, c}
+    else
+      new_l = solve_lightness(target, actual_c, h)
+      resolve_chroma_step(target, new_l, actual_c, h, iterations_left - 1)
+    end
+  end
+
+  # The chroma oklch_to_rgb/3 would actually render at (l, c, h) after
+  # gamut-mapping, without paying for the rest of the rgb/hex conversion.
+  defp achieved_chroma(l, c, h_deg) do
+    h = h_deg * :math.pi() / 180
+    l = min(0.999, max(0.001, l))
+    shrink_chroma(l, c, h)
   end
 
   @doc """

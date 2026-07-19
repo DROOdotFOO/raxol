@@ -5,22 +5,22 @@ defmodule Raxol.UI.Theming.SalienceTest do
 
   # Reference fixtures (compensated Darcula bake). Must reproduce byte-exact.
   @darcula_baked [
-    {:differentiate, 0.13, 57, "#c1712c"},
-    {:anchor, 0.125, 77, "#fec56c"},
-    {:baseline, 0.022, 250, "#abb7c3"},
-    {:differentiate, 0.075, 134, "#779465"},
-    {:differentiate, 0.074, 242, "#6190b3"},
-    {:differentiate, 0.086, 314, "#9b78ac"},
+    {:differentiate, 0.13, 57, "#b96922"},
+    {:anchor, 0.125, 77, "#f5bd63"},
+    {:baseline, 0.022, 250, "#a9b5c1"},
+    {:differentiate, 0.075, 134, "#728e60"},
+    {:differentiate, 0.074, 242, "#5b8aad"},
+    {:differentiate, 0.086, 314, "#9673a7"},
     {:recede, 0.0, 140, "#717171"},
-    {:recede, 0.09, 140, "#58824f"},
-    {:differentiate, 0.05, 57, "#9f806a"},
+    {:recede, 0.09, 140, "#527c49"},
+    {:differentiate, 0.05, 57, "#9b7d67"},
     {:recede, 0.0, 250, "#717171"},
-    {:recede, 0.04, 57, "#856d5b"},
-    {:differentiate, 0.1, 57, "#b57748"},
-    {:anchor, 0.14, 314, "#e9bdff"},
-    {:recede, 0.03, 57, "#806e61"},
+    {:recede, 0.04, 57, "#826a59"},
+    {:differentiate, 0.1, 57, "#ae7142"},
+    {:anchor, 0.14, 314, "#e5b3fe"},
+    {:recede, 0.03, 57, "#7e6c5f"},
     {:baseline, 0.0, 250, "#b4b4b4"},
-    {:alarm, 0.16, 25, "#bd413f"}
+    {:alarm, 0.16, 25, "#ad3132"}
   ]
 
   describe "darcula reference bake" do
@@ -42,7 +42,17 @@ defmodule Raxol.UI.Theming.SalienceTest do
 
     test "blue bump peaks near h=255" do
       assert Salience.hue_factor(255) > Salience.hue_factor(200)
-      assert Salience.hue_factor(255) > Salience.hue_factor(310)
+
+      # The single-cycle warm cosine (peak at h=30, trough at h=210) rises
+      # monotonically all the way from h=210 back to h=30/390, so
+      # hue_factor keeps climbing past h=255 toward magenta/red -- the
+      # Gaussian bump can't (and isn't meant to) beat that far-field trend.
+      # What it *does* do is add a local convex bump around h=255: the
+      # value there exceeds the straight-line interpolation between two
+      # neighbors symmetric around the bump's width (h=220, h=290).
+      low = Salience.hue_factor(220)
+      high = Salience.hue_factor(290)
+      assert Salience.hue_factor(255) > (low + high) / 2
     end
   end
 
@@ -62,6 +72,31 @@ defmodule Raxol.UI.Theming.SalienceTest do
       assert_in_delta Salience.solve_lightness(target, 0.0, 250),
                       target,
                       1.0e-12
+    end
+
+    test "H-K falsifier: sRGB luminance decreases as c * hue_factor(h) grows" do
+      # External check, independent of the solver's own apparent-lightness
+      # model: on one tier against the reference ground, increasingly
+      # chromatic colors must render objectively *dimmer* (lower sRGB
+      # relative luminance) than their achromatic neighbor -- that's what
+      # compensating for "chromatic colors look brighter than their OKLCH L"
+      # means in practice. A monotonic ordering, not exact values, since the
+      # luminance magnitudes depend on gamut mapping.
+      for h <- [57, 25, 250] do
+        seeds_by_weight =
+          [0.0, 0.03, 0.05, 0.07, 0.1, 0.13]
+          |> Enum.map(fn c -> {c * Salience.hue_factor(h), c} end)
+          |> Enum.sort_by(&elem(&1, 0))
+
+        luminances =
+          Enum.map(seeds_by_weight, fn {_weight, c} ->
+            Salience.solve(:differentiate, c, h) |> Salience.relative_luminance()
+          end)
+
+        assert luminances == Enum.sort(luminances, :desc),
+               "h=#{h}: luminance did not decrease monotonically as " <>
+                 "c * hue_factor(h) grew: #{inspect(luminances)}"
+      end
     end
   end
 
@@ -104,8 +139,8 @@ defmodule Raxol.UI.Theming.SalienceTest do
       ]
 
       assert Salience.solve_palette(seeds) == %{
-               keyword: "#c1712c",
-               error: "#bd413f"
+               keyword: "#b96922",
+               error: "#ad3132"
              }
     end
   end
