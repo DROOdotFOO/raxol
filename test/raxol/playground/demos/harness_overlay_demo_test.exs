@@ -4,18 +4,16 @@ defmodule Raxol.Playground.Demos.HarnessOverlayDemoTest do
   the overlays (picker / projection panels / diff-expansion) re-hosted as
   LayoutEngine children.
 
-  The gap-closing pin lives here: the map-machine `Raxol.Harness.Surface`
-  REFUSES an overlay in `:full_viewport` (`open_overlay/open_panel/
-  expand_focused_diff` -> `{:error, :no_footer}`, surface.ex:3805/3936/4401,
-  asserted below as the documented contrast); under the TEA pipeline the
-  same overlay is just an `:absolute_layer` dialog child over the transcript
-  -- no footer to grow, no refusal. Pure-`update/2`/`view/1` pins carry the
-  laws; headless pins prove it actually paints through the real pipeline.
+  The gap this closed: the retired map-machine `Raxol.Harness.Surface`
+  REFUSED an overlay in `:full_viewport` (`{:error, :no_footer}`); under
+  the TEA pipeline the same overlay is just an `:absolute_layer` dialog
+  child over the transcript -- no footer to grow, no refusal.
+  Pure-`update/2`/`view/1` pins carry the laws; headless pins prove it
+  actually paints through the real pipeline.
   """
   use ExUnit.Case, async: false
 
   alias Raxol.Core.Events.Event
-  alias Raxol.Harness.Surface
   alias Raxol.Headless
   alias Raxol.Headless.EventBuilder
   alias Raxol.Playground.Demos.HarnessOverlayDemo, as: Demo
@@ -85,25 +83,6 @@ defmodule Raxol.Playground.Demos.HarnessOverlayDemoTest do
 
       refute has_id?(flow, "overlay-picker"),
              "...not in the transcript flow child"
-    end
-
-    test "the map-machine still refuses the SAME overlay in :full_viewport (documented contrast)" do
-      # The shelved footer-grow substrate has no alt-screen equivalent for
-      # `InlineAuthority.set_footer_rows/2`, so `open_overlay/open_panel/
-      # expand_focused_diff` refuse in :full_viewport (surface.ex:3805/3936/
-      # 4401). The refusal clauses read only mode/overlay/expansion, so a
-      # minimal model exercises the exact real clause -- the gap the TEA
-      # overlay-as-layout-child path (this demo) closes.
-      model = %{
-        mode: :full_viewport,
-        overlay: nil,
-        expansion: nil,
-        focused_index: 0
-      }
-
-      assert {:error, :no_footer} = Surface.open_overlay(model, ["a", "b"])
-      assert {:error, :no_footer} = Surface.open_panel(model, :memory)
-      assert {:error, :no_footer} = Surface.expand_focused_diff(model)
     end
 
     test "panels and the diff-expansion host as dialog children too" do

@@ -12,23 +12,20 @@ defmodule Raxol.Harness.LiveApprovalTest do
       and folds a correlated `approval_decided` answer into the SAME block,
       sealing it with the decision receipt (deny is as first-class as
       allow; a turn that ends unanswered renders "canceled before answer");
-    * a live approval holds the seal frontier (G3): nothing seals at or
-      past it until it is answered;
-    * `status.needs_input` reads the REFERENT (a live approval block on
-      screen), not the retired last-event-type proxy;
     * the answer keys (`y`/`n`/digits) resolve to an answer ONLY against a
       live question and only when the composer is not focused -- they never
-      steal a letter from typed text;
-    * the surface resolves an answer HINT into a concrete `option_id` and
-      routes it through `command_sink`, refusing honestly when it cannot.
+      steal a letter from typed text.
+
+  (The surface-half describes — the G3 frontier hold, the `needs_input`
+  referent status, and the `command_sink` answer routing — retired with
+  the legacy `Raxol.Harness.Surface` map-machine; the TEA `HarnessApp`
+  owns that wiring now.)
   """
 
   use ExUnit.Case, async: true
 
   alias Raxol.Harness.Projection
-  alias Raxol.Harness.Surface
   alias Raxol.UI.Components.Harness.Block
-  alias Raxol.UI.Components.Harness.Composer
   alias Raxol.UI.Harness.InputEvent
   alias Raxol.UI.Harness.Keymap
   alias Raxol.Core.Events.Event
@@ -328,221 +325,6 @@ defmodule Raxol.Harness.LiveApprovalTest do
 
       lines = only_approval_block(events) |> render_lines()
       assert Enum.any?(lines, &(&1 =~ "✗ denied"))
-    end
-  end
-
-  # -- 3. Surface: G3 frontier hold + proxy retirement ----------------------
-
-  defp real_model(events) do
-    {:ok, device} = StringIO.open("")
-
-    Surface.new(events,
-      device: device,
-      width: 80,
-      rows: 24,
-      footer_rows: 6,
-      mode: :inline_log,
-      capabilities: nil
-    )
-  end
-
-  defp advance_all(model) do
-    Enum.reduce(1..(length(model.events) * 2 + 10), model, fn _i, m ->
-      {m, _} = Surface.advance(m)
-      m
-    end)
-  end
-
-  describe "G3: a live approval holds the seal frontier" do
-    test "nothing seals at or past the live approval block" do
-      # message (sealable) then the live approval -- the approval and
-      # everything after it must be stranded behind the frontier.
-      events =
-        [turn_started()] ++
-          message(2, "i1", "before") ++ [approval_requested(20, "req-1")]
-
-      model = events |> real_model() |> advance_all()
-
-      blocks = model.projection.blocks
-      approval_index = Enum.find_index(blocks, &(&1.kind == :approval))
-      assert approval_index != nil
-      assert Block.live?(Enum.at(blocks, approval_index))
-
-      scan = Surface.frontier_scan(model)
-
-      assert scan.tail_start == approval_index,
-             "the frontier must land exactly at the live approval block"
-
-      # The approval block is never painted into print-once history.
-      assert model.painted_count <= approval_index,
-             "a live approval must never seal past the frontier (G3)"
-    end
-
-    test "answering the approval releases the frontier and seals the block" do
-      base =
-        [turn_started()] ++
-          message(2, "i1", "before") ++ [approval_requested(20, "req-1")]
-
-      live = base |> real_model() |> advance_all()
-      assert Block.live?(Surface.live_approval_block(live))
-
-      # Fold the answer in as a new stream event -- the seal is
-      # event-observed, exactly as the live lane will drive it.
-      answered =
-        live
-        |> Surface.append_events([
-          approval_decided(30, "req-1", :allow, "allow-once")
-        ])
-        |> advance_all()
-
-      approval =
-        Enum.find(answered.projection.blocks, &(&1.kind == :approval))
-
-      assert Block.sealed?(approval)
-      assert Surface.live_approval_block(answered) == nil
-    end
-  end
-
-  describe "the needs_input status reads the referent, not the retired proxy" do
-    test "needs_input stays true while a live approval sits behind a later event" do
-      # The exact divergence the old `last_loop == :approval_requested`
-      # proxy got wrong: a message arrives AFTER the unanswered approval,
-      # so the last event is no longer the request -- yet the question is
-      # still live and still holding the frontier.
-      events =
-        [turn_started(), approval_requested(10, "req-1")] ++
-          message(20, "i9", "later")
-
-      model = events |> real_model() |> advance_all()
-
-      assert model.status.needs_input == true,
-             "needs_input must track the live approval block, not the last event"
-    end
-
-    test "needs_input clears once the approval is answered" do
-      events = [
-        turn_started(),
-        approval_requested(10, "req-1"),
-        approval_decided(11, "req-1", :allow, "allow-once")
-      ]
-
-      model = events |> real_model() |> advance_all()
-      assert model.status.needs_input == false
-    end
-  end
-
-  # -- 4. Surface: answering through command_sink ---------------------------
-
-  defp sink_model(events) do
-    test_pid = self()
-    {:ok, device} = StringIO.open("")
-
-    model =
-      Surface.new(events,
-        device: device,
-        width: 80,
-        rows: 24,
-        footer_rows: 6,
-        mode: :inline_log,
-        capabilities: nil,
-        command_sink: fn cmd -> send(test_pid, {:sink, cmd}) end
-      )
-
-    advance_all(model)
-  end
-
-  defp answer(model, char) do
-    Surface.handle_input(model, Event.key(char))
-  end
-
-  describe "answering routes a concrete option_id through command_sink" do
-    test "y resolves to the first allow option and sends the referent triple" do
-      model =
-        [turn_started(), approval_requested(10, "req-1")]
-        |> sink_model()
-        |> Surface.focus_transcript()
-
-      _ = answer(model, "y")
-
-      assert_receive {:sink,
-                      %{
-                        type: :approval_answer,
-                        payload: %{
-                          request_id: "req-1",
-                          option_id: "allow-once",
-                          decision: :allow
-                        }
-                      }}
-    end
-
-    test "n resolves to the first reject option (deny)" do
-      model =
-        [turn_started(), approval_requested(10, "req-1")]
-        |> sink_model()
-        |> Surface.focus_transcript()
-
-      _ = answer(model, "n")
-
-      assert_receive {:sink,
-                      %{
-                        type: :approval_answer,
-                        payload: %{option_id: "reject", decision: :deny}
-                      }}
-    end
-
-    test "a digit selects the Nth option by position" do
-      model =
-        [turn_started(), approval_requested(10, "req-1")]
-        |> sink_model()
-        |> Surface.focus_transcript()
-
-      _ = answer(model, "2")
-
-      assert_receive {:sink,
-                      %{
-                        type: :approval_answer,
-                        payload: %{option_id: "allow-always"}
-                      }}
-    end
-
-    test "an answer with no live approval never reaches the sink" do
-      model =
-        ([turn_started()] ++ message(2, "i1", "hi"))
-        |> sink_model()
-        |> Surface.focus_transcript()
-
-      _ = answer(model, "y")
-      refute_receive {:sink, _}, 50
-    end
-  end
-
-  # -- 4b. the empty-draft reachability fix (the field focus trap) ----------
-
-  describe "the answer keys are reachable with the composer focused when the draft is empty" do
-    test "y answers a live approval even with the composer focused, as long as the draft is empty" do
-      # No focus_transcript: after a submit the composer keeps focus, which
-      # is exactly the state V hit -- pressing y typed \"y\" into the draft
-      # instead of answering. An EMPTY draft now routes y to the answer.
-      model = sink_model([turn_started(), approval_requested(10, "req-1")])
-
-      _ = answer(model, "y")
-
-      assert_receive {:sink,
-                      %{
-                        type: :approval_answer,
-                        payload: %{option_id: "allow-once"}
-                      }}
-    end
-
-    test "once there is a draft, y is typed into it -- never a phantom answer" do
-      model = sink_model([turn_started(), approval_requested(10, "req-1")])
-
-      # "h"/"e" are not answer keys -> they build the draft; by the time "y"
-      # arrives the draft is non-empty, so y is text too.
-      typed = model |> answer("h") |> answer("e") |> answer("y")
-
-      assert Composer.value(typed.composer) == "hey"
-      refute_receive {:sink, _}, 50
     end
   end
 

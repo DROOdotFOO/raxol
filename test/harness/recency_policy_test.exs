@@ -1,8 +1,9 @@
 defmodule Raxol.Harness.RecencyPolicyTest do
   @moduledoc """
   Acceptance tests for `Raxol.Harness.RecencyPolicy` (turn recency ->
-  per-block prominence) and its one wiring point in
-  `Raxol.Harness.Surface.render_block_lines/3`.
+  per-block prominence). (Its one wiring point was the retired
+  `Raxol.Harness.Surface.render_block_lines/3`; the seal-time wiring
+  section retired with that map-machine.)
 
   Written RED-FIRST: this file was run against the codebase BEFORE
   `lib/raxol/harness/recency_policy.ex` existed and before
@@ -17,8 +18,6 @@ defmodule Raxol.Harness.RecencyPolicyTest do
 
   alias Raxol.Harness.Projection
   alias Raxol.Harness.RecencyPolicy
-  alias Raxol.Harness.Surface
-  alias Raxol.Harness.Surface.ViewText
   alias Raxol.UI.Components.Harness.Block
   alias Raxol.UI.Harness.Prominence
 
@@ -459,163 +458,4 @@ defmodule Raxol.Harness.RecencyPolicyTest do
     end
   end
 
-  # ---------------------------------------------------------------------
-  # G. the wiring: surface seals blocks at their seal-time grade
-  # ---------------------------------------------------------------------
-
-  describe "surface seals blocks at their seal-time grade" do
-    defp two_turn_wire_events do
-      [
-        %{
-          id: 1,
-          turn_id: "t1",
-          ts: 100,
-          family: :loop,
-          type: :turn_started,
-          tier: :durable,
-          payload: %{}
-        },
-        %{
-          id: 2,
-          turn_id: "t1",
-          ts: 110,
-          family: :loop,
-          type: :item_started,
-          tier: :durable,
-          payload: %{"item_id" => "i1", "item_type" => "message"}
-        },
-        %{
-          id: 3,
-          turn_id: "t1",
-          ts: 120,
-          family: :loop,
-          type: :item_completed,
-          tier: :durable,
-          payload: %{
-            "item_id" => "i1",
-            "item_type" => "message",
-            "content" => "turn 1 reply"
-          }
-        },
-        %{
-          id: 4,
-          turn_id: "t2",
-          ts: 200,
-          family: :loop,
-          type: :turn_started,
-          tier: :durable,
-          payload: %{}
-        },
-        %{
-          id: 5,
-          turn_id: "t2",
-          ts: 210,
-          family: :loop,
-          type: :item_started,
-          tier: :durable,
-          payload: %{"item_id" => "i2", "item_type" => "message"}
-        },
-        %{
-          id: 6,
-          turn_id: "t2",
-          ts: 220,
-          family: :loop,
-          type: :item_completed,
-          tier: :durable,
-          payload: %{
-            "item_id" => "i2",
-            "item_type" => "message",
-            "content" => "turn 2 reply"
-          }
-        }
-      ]
-    end
-
-    defp advance_until_done(model) do
-      case Surface.advance(model) do
-        {advanced, :done} -> advanced
-        {advanced, :ok} -> advance_until_done(advanced)
-      end
-    end
-
-    # "#rrggbb" -> "38;2;R;G;B" (decimal), the 24-bit truecolor SGR
-    # fragment `Raxol.Harness.Surface.ViewText`'s `maybe_fg/2` emits.
-    defp hex_to_sgr_fragment("#" <> hex) do
-      {value, ""} = Integer.parse(hex, 16)
-      r = value |> Bitwise.bsr(16) |> Bitwise.band(0xFF)
-      g = value |> Bitwise.bsr(8) |> Bitwise.band(0xFF)
-      b = Bitwise.band(value, 0xFF)
-      "38;2;#{r};#{g};#{b}"
-    end
-
-    test "turn-1's block seals at its seal-time grade; the newest block stays neutral" do
-      events = two_turn_wire_events()
-      {:ok, device} = StringIO.open("")
-
-      # message defaults to :expanded fold (Block.default_fold/1), which
-      # routes through BlockBody -> BodyProvider -> MessageBlock -- a rich
-      # T5 body component that does not (yet) thread context[:prominence]
-      # at all (out of scope for this unit; only Block.render/2 honors
-      # prominence today). Forcing message blocks :folded routes
-      # BlockBody.render/2 through its `:folded` clause, which delegates
-      # straight to Block.render/2 -- the path this policy actually feeds.
-      _final_model =
-        events
-        |> Surface.new(
-          device: device,
-          width: 80,
-          rows: 24,
-          mode: :inline_log,
-          fold_defaults: %{message: :folded}
-        )
-        |> advance_until_done()
-
-      {_in, out} = StringIO.contents(device)
-
-      # Seal timing (see Surface.frontier_entries/1): turn-1's block
-      # completes on event 3, but paint_pending_blocks/1 holds the newest
-      # completed block back for exactly one more advance/2 call unless
-      # the fixture reveal has finished. Turn-2's own item_completed
-      # (event 6) is simultaneously the event that both completes turn-2's
-      # block AND finishes the reveal (revealed == length(events)) -- so
-      # `reveal_finished?` flips true in the SAME advance/2 step that
-      # produces the second block, and both blocks clear the frontier's
-      # hold-back-one-block gate together, sealing in the same
-      # paint_pending_blocks/1 pass. At that moment
-      # model.projection.source_events already contains both turns'
-      # events; current turn = "t2" (the last event's turn_id), and
-      # turn-1's block is exactly one turn behind -> ladder step 0.8.
-      expected_grade = 0.8
-      expected_hex = Prominence.resolve("#B4B4B4", expected_grade, [])
-      expected_fragment = hex_to_sgr_fragment(expected_hex)
-
-      assert out =~ expected_fragment,
-             "expected the seal-time-graded fragment #{expected_fragment} " <>
-               "(from #{expected_hex}) in sealed output, got:\n#{out}"
-
-      # The last (current-turn) block seals at grade 1.0 -- neutral, no
-      # :fg touched. Reconstruct its own bare (unstyled) header line via
-      # the SAME Block.render + ViewText.lines path seal_block/2 uses, and
-      # confirm it appears in the sealed output immediately followed by
-      # "\r\n" with no "\e[0m" reset in between -- which is only possible
-      # if no SGR wrapping was ever added (a styled line always inserts
-      # "\e[0m" between content and the "\r\n" seal_block/2 appends).
-      final_projection =
-        Projection.project(events, fold_defaults: %{message: :folded})
-
-      last_block = List.last(final_projection.blocks)
-
-      neutral_line =
-        last_block
-        |> Block.render(%{width: 80, prominence: 1.0})
-        |> ViewText.lines(80, :styled)
-        |> hd()
-
-      refute neutral_line =~ "38;2",
-             "the newest block's own reconstructed neutral line must carry no fg"
-
-      assert out =~ neutral_line <> "\r\n",
-             "expected the newest block's bare, unstyled header line in sealed output"
-    end
-  end
 end
